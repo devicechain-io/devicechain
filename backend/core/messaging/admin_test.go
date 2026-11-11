@@ -59,6 +59,92 @@ func drift(t *testing.T, err error) *BrokerDriftError {
 	return d
 }
 
+func TestStreamDriftSubjects(t *testing.T) {
+	nmgr := &NatsManager{Microservice: &core.Microservice{InstanceId: "test"}}
+	for _, suffix := range []string{streams.MaxDeliveries, streams.InboundEvents} {
+		t.Run(suffix, func(t *testing.T) {
+			want := nmgr.expectedStream(suffix)
+			advisory := suffix == streams.MaxDeliveries
+			require.Equal(t, advisory, want.subjectsMayGrow)
+			// Two declared subjects make order observable even for a single-subject stream.
+			want.subjects = []string{"declared.first", "declared.second"}
+			for label, subjects := range map[string][]string{
+				"exact":           {"declared.first", "declared.second"},
+				"extra":           {"declared.first", "declared.second", "future.subject"},
+				"reordered":       {"declared.second", "declared.first"},
+				"reordered extra": {"future.subject", "declared.second", "declared.first"},
+				"missing":         {"declared.second", "future.subject"},
+			} {
+				t.Run(label, func(t *testing.T) {
+					cfg := nats.StreamConfig{
+						Subjects: subjects, Retention: want.retention,
+						Duplicates: want.duplicates, AllowDirect: want.allowDirect,
+					}
+					problems := streamDrift(cfg, want)
+					if label == "exact" || (advisory && label != "missing") {
+						require.Empty(t, problems)
+					} else {
+						require.Len(t, problems, 1)
+						require.Contains(t, problems[0], "declared.first")
+						if advisory {
+							require.Contains(t, problems[0], "missing declared subjects")
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestADeployedServiceAcceptsANewerAdvisorySubjectList(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	admin := adminOn(t, srv)
+	name, err := admin.ensureStream(streams.MaxDeliveries)
+	require.NoError(t, err)
+	info, err := admin.js.StreamInfo(name)
+	require.NoError(t, err)
+	declared := append([]string(nil), info.Config.Subjects...)
+	require.NotEmpty(t, declared)
+	future := AdvisorySubject(StreamName("test", "future-stream"), "*")
+	// Model the next release's hook writing its longer catalog list, in a different order.
+	cfg := info.Config
+	cfg.Subjects = append([]string{future}, declared...)
+	cfg.Subjects[1], cfg.Subjects[len(cfg.Subjects)-1] = cfg.Subjects[len(cfg.Subjects)-1], cfg.Subjects[1]
+	_, err = admin.js.UpdateStream(&cfg)
+	require.NoError(t, err)
+
+	svc := deployedOn(t, srv, "event-sources")
+	require.False(t, svc.mayReconcile())
+	got, err := svc.ensureStream(streams.MaxDeliveries)
+	require.NoError(t, err)
+	require.Equal(t, name, got)
+	info, err = admin.js.StreamInfo(name)
+	require.NoError(t, err)
+	require.Equal(t, cfg.Subjects, info.Config.Subjects, "verification must not shrink the newer list")
+
+	missing := declared[0]
+	cfg.Subjects = append([]string{future}, declared[1:]...)
+	_, err = admin.js.UpdateStream(&cfg)
+	require.NoError(t, err)
+	_, err = svc.ensureStream(streams.MaxDeliveries)
+	d := drift(t, err)
+	require.Equal(t, name, d.Name)
+	require.Len(t, d.Problems, 1)
+	require.Contains(t, d.Problems[0], "missing declared subjects")
+	require.Contains(t, d.Problems[0], missing)
+
+	// Restore all declared subjects plus the extra; another property must still be strict.
+	cfg.Subjects = append([]string{future}, declared...)
+	cfg.Duplicates += time.Second
+	_, err = admin.js.UpdateStream(&cfg)
+	require.NoError(t, err)
+	_, err = svc.ensureStream(streams.MaxDeliveries)
+	d = drift(t, err)
+	require.Equal(t, name, d.Name)
+	require.Len(t, d.Problems, 1)
+	require.Contains(t, d.Problems[0], "duplicate window")
+}
+
 func TestADeployedServiceDoesNotCreateWhatTheAdministratorHasNot(t *testing.T) {
 	srv := startEmbeddedServer(t)
 	svc := deployedOn(t, srv, "event-sources")

@@ -80,13 +80,12 @@ type Reader struct {
 	Mode ReadMode
 }
 
-// durableReaderAreas are the areas with a consuming reader on any stream but the advisory
-// capture: exactly the areas that run a max-delivery recorder (core/messaging starts one for
-// any manager with a reader, and refuses to start without it).
+// durableReaderAreas are the areas with a consuming reader on a stream whose
+// max-delivery advisories are captured: exactly the areas that run a recorder.
 func durableReaderAreas() []string {
 	var out []string
 	for _, s := range All {
-		if s.Shape == ShapeAdvisory {
+		if !MaxDeliveriesCaptured(s.Suffix) {
 			continue
 		}
 		for _, r := range s.Readers {

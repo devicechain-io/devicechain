@@ -1,0 +1,211 @@
+{
+  "retired": {
+    "infrastructure.metrics.httpPort": "Metrics are served on the GraphQL/HTTP port (8080) at /metrics through the shared mux; there is no separate metrics listener and this port was never bound. Delete the key. Scrape discovery is controlled by the chart's metrics.enabled value, which renders the ServiceMonitor against the graphql port."
+  },
+  "tree": {
+    "fields": {
+      "Infrastructure": {
+        "fields": {
+          "AiInference": {
+            "fields": {
+              "Hostname": {},
+              "Port": {}
+            }
+          },
+          "Blob": {
+            "fields": {
+              "Backend": {},
+              "Bucket": {},
+              "Directory": {},
+              "Endpoint": {},
+              "Region": {},
+              "UsePathStyle": {}
+            }
+          },
+          "CommandDelivery": {
+            "fields": {
+              "Hostname": {},
+              "Port": {}
+            }
+          },
+          "DeviceManagement": {
+            "fields": {
+              "Hostname": {},
+              "Port": {}
+            }
+          },
+          "DeviceState": {
+            "fields": {
+              "Hostname": {},
+              "Port": {}
+            }
+          },
+          "Egress": {
+            "fields": {
+              "AllowedDestinations": {
+                "elem": {}
+              }
+            }
+          },
+          "EventProcessing": {
+            "fields": {
+              "Hostname": {},
+              "Port": {}
+            }
+          },
+          "GraphQL": {
+            "fields": {
+              "MaxSubscriptionMessageBytes": {}
+            }
+          },
+          "Http": {
+            "fields": {
+              "TrustedProxies": {
+                "elem": {}
+              }
+            }
+          },
+          "Logging": {
+            "fields": {
+              "Level": {}
+            }
+          },
+          "Messaging": {
+            "fields": {
+              "Envelopes": {
+                "fields": {
+                  "Inbound": {},
+                  "InboundLingerMillis": {},
+                  "Resolved": {}
+                }
+              },
+              "WireFormat": {}
+            }
+          },
+          "Metrics": {
+            "fields": {
+              "Enabled": {}
+            }
+          },
+          "Nats": {
+            "fields": {
+              "Affinity": {
+                "fields": {
+                  "ConsumerLeaders": {},
+                  "PublishToLeader": {}
+                }
+              },
+              "Auth": {
+                "fields": {
+                  "AreaLogins": {},
+                  "AreaPasswords": {
+                    "map": {}
+                  },
+                  "CalloutIssuerPublic": {},
+                  "CalloutIssuerSeed": {},
+                  "CalloutXKeyPublic": {},
+                  "CalloutXKeySeed": {},
+                  "IdentityAccount": {},
+                  "IdentityPassword": {},
+                  "Password": {},
+                  "SysPassword": {},
+                  "SysUser": {},
+                  "User": {}
+                }
+              },
+              "Fetch": {
+                "fields": {
+                  "Ahead": {},
+                  "AheadHoldBudgetMillis": {},
+                  "Batch": {}
+                }
+              },
+              "Hostname": {},
+              "KvCacheMaxBytes": {},
+              "KvStateMaxBytes": {},
+              "MqttFailClosed": {},
+              "MqttQoS2StoreMaxBytes": {},
+              "MqttStoreMaxBytes": {},
+              "Port": {},
+              "StreamDesignRate": {},
+              "StreamMaxBytes": {},
+              "StreamMaxBytesCold": {},
+              "StreamMaxMsgSize": {},
+              "StreamMaxMsgs": {},
+              "StreamReplicas": {},
+              "StreamRunwayMinutes": {},
+              "Tls": {
+                "fields": {
+                  "Ca": {},
+                  "Enabled": {}
+                }
+              }
+            }
+          },
+          "Secrets": {
+            "fields": {
+              "Backend": {},
+              "KEKProvider": {},
+              "RootKey": {}
+            }
+          },
+          "ServiceAuth": {
+            "fields": {
+              "Secret": {}
+            }
+          },
+          "Shutdown": {
+            "fields": {
+              "DrainSeconds": {},
+              "TerminationGracePeriodSeconds": {}
+            }
+          },
+          "TokenAudience": {
+            "fields": {
+              "AreaBaseUrl": {},
+              "Enforcement": {},
+              "ExternalResources": {
+                "elem": {}
+              },
+              "McpResources": {
+                "elem": {}
+              },
+              "UnscopedClientCredentials": {}
+            }
+          },
+          "UserManagement": {
+            "fields": {
+              "Hostname": {},
+              "InternalPort": {},
+              "Port": {}
+            }
+          }
+        }
+      },
+      "Persistence": {
+        "fields": {
+          "Rdb": {
+            "fields": {
+              "Configuration": {
+                "map": {
+                  "any": true
+                }
+              },
+              "Type": {}
+            }
+          },
+          "Tsdb": {
+            "fields": {
+              "Configuration": {
+                "map": {
+                  "any": true
+                }
+              },
+              "Type": {}
+            }
+          }
+        }
+      }
+    }
+  }
+}
