@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package streamprobe supplies the same embedded broker and message census to isolation tests
-// and their deliberately publishing negative control. It is test support, not service wiring.
+// and their deliberately publishing negative control. It is test support, not service wiring,
+// and it lives under testdata so the repository scans (catalog usage, log sinks) never treat
+// its writers as the service's own stream use.
 package streamprobe
 
 import (

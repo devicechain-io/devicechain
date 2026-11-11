@@ -15,7 +15,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/evaluate"
 	"github.com/devicechain-io/dc-event-processing/internal/nightshift"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
-	"github.com/devicechain-io/dc-event-processing/internal/streamprobe"
+	"github.com/devicechain-io/dc-event-processing/internal/testdata/streamprobe"
 	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ruletest"
 	"github.com/devicechain-io/dc-microservice/streams"
