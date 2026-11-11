@@ -155,8 +155,13 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 			if err := s.Notifier.Escalate(tctx, state, policies, now, s.defaultMax); err != nil {
 				log.Warn().Err(err).Str("tenant", tenant).Str("alarm", state.AlarmToken).
 					Msg("Escalation scheduler: re-notification failed; will retry next tick")
-				escalationFailed = true
-				lastErr = err
+				if errors.Is(err, core.ErrPassPartial) {
+					partialTenants[tenant] = true
+					partialErr = err
+				} else {
+					escalationFailed = true
+					lastErr = err
+				}
 			}
 		}
 		pickup()
@@ -187,7 +192,7 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 		}
 	}
 	if len(failedTenants) == 0 && len(partialTenants) > 0 {
-		return fmt.Errorf("%d of %d tenants left clears for the next tick (last: %v): %w",
+		return fmt.Errorf("%d of %d tenants not fully served (last: %v): %w",
 			len(partialTenants), visited, partialErr, core.ErrPassPartial)
 	}
 	return core.PassResult(visited, len(failedTenants), lastErr)
