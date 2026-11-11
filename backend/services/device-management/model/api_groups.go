@@ -12,7 +12,6 @@ import (
 	"github.com/devicechain-io/dc-device-management/internal/selector"
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/entity"
-	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -186,6 +185,7 @@ func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 	}
 
 	updated := matches[0]
+	assignments := make(map[string]any)
 	// A dynamic group's selector is live-editable (SD-4 — a browse/filter consumer needs
 	// no frozen version yet); a provided selector is re-compiled + cost-gated before it
 	// replaces the stored one. It is REQUIRED rather than nullable: a dynamic group with
@@ -206,32 +206,55 @@ func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 		if err != nil {
 			return nil, err
 		}
-		updated.Selector = sql.NullString{String: sel.Source(), Valid: true}
-		updated.SelectorSchema = selector.SchemaVersion
+		assignments["selector"] = sql.NullString{String: sel.Source(), Valid: true}
+		assignments["selector_schema"] = selector.SchemaVersion
 	}
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	updated.ImageUrl = request.ImageUrl.ApplyToNullString(updated.ImageUrl)
-	updated.Icon = request.Icon.ApplyToNullString(updated.Icon)
-	updated.BackgroundColor = request.BackgroundColor.ApplyToNullString(updated.BackgroundColor)
-	updated.ForegroundColor = request.ForegroundColor.ApplyToNullString(updated.ForegroundColor)
-	updated.BorderColor = request.BorderColor.ApplyToNullString(updated.BorderColor)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
-	if err != nil {
-		return nil, err
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(updated.Name)
 	}
-	updated.Metadata = metadataJSON
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(updated.Description)
+	}
+	if request.ImageUrl.Set {
+		assignments["image_url"] = request.ImageUrl.ApplyToNullString(updated.ImageUrl)
+	}
+	if request.Icon.Set {
+		assignments["icon"] = request.Icon.ApplyToNullString(updated.Icon)
+	}
+	if request.BackgroundColor.Set {
+		assignments["background_color"] = request.BackgroundColor.ApplyToNullString(updated.BackgroundColor)
+	}
+	if request.ForegroundColor.Set {
+		assignments["foreground_color"] = request.ForegroundColor.ApplyToNullString(updated.ForegroundColor)
+	}
+	if request.BorderColor.Set {
+		assignments["border_color"] = request.BorderColor.ApplyToNullString(updated.BorderColor)
+	}
+	if request.Metadata.Set {
+		metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.Value)
+		if err != nil {
+			return nil, err
+		}
+		assignments["metadata"] = metadataJSON
+	}
+	if len(assignments) == 0 {
+		return updated, nil
+	}
 
-	// Omit active_version: a draft edit must never write the version pointer back.
-	// The struct was loaded before this Save, so writing it whole would let an edit
-	// racing a concurrent PublishEntityGroup/RollbackEntityGroup silently revert the
-	// active pointer to its stale value — a rule-load-bearing field once S2/S3 read it
-	// (ADR-062). The pointer is moved only by publish/rollback.
-	result := api.RDB.DB(ctx).Omit("ActiveVersion").Save(updated)
+	// Write only named mutable columns: omitted values may already be stale.
+	// In particular, only publish/rollback may move active_version (ADR-062).
+	result := api.RDB.DB(ctx).Model(updated).Omit(clause.Associations).Updates(assignments)
 	if result.Error != nil {
 		return nil, result.Error
 	}
-	return updated, nil
+	reloaded, err := api.EntityGroupsById(ctx, []uint{updated.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(reloaded) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return reloaded[0], nil
 }
 
 // EntityGroupsById gets entity groups by id.
