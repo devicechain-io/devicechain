@@ -620,7 +620,8 @@ instance:
         # never admit the cloud metadata addresses, loopback, link-local, multicast or the unspecified
         # address, and every service that reads it logs a warning at startup. A prefix overlapping
         # one of those fails the service at startup.
-        devAllowedDestinations: []
+        # Left out unless set: a pod of an earlier release refuses a key it does not know.
+        # devAllowedDestinations: []
       blob:
         # Object/asset-store backend for opaque binaries that do not belong in
         # Postgres (branding logos and firmware/OTA update artifacts; exports later, ADR-058).

@@ -41,13 +41,17 @@ const payloadOverhead = 4 << 10
 // (Producer.TenantDeleted), the same rule every sink the producer builds applies; a manager
 // whose only reader is on dead-letters never asks, because it writes no letters.
 //
-// It refuses to build when a reader's stream declares no DeadLetterKind or an undeclared
+// It skips streams excluded by MaxDeliveriesCaptured, whose declarations explain their
+// settlement. It refuses to build when a captured reader's stream declares no DeadLetterKind or an undeclared
 // one: that is a stream whose abandoned deliveries would be neither lettered nor counted.
 func MaxDeliveryRecorder(p *Producer) func(*messaging.NatsManager) (messaging.MaxDeliveryFunc, error) {
 	p.mustBeBuilt("MaxDeliveryRecorder")
 	return func(nmgr *messaging.NatsManager) (messaging.MaxDeliveryFunc, error) {
 		r := &maxDeliveryRecorder{producer: p, copies: map[string]Writer{}}
 		for _, suffix := range nmgr.ReaderSuffixes() {
+			if !streams.MaxDeliveriesCaptured(suffix) {
+				continue
+			}
 			switch kind := streams.DeadLetterKindFor(suffix); {
 			case kind == streams.NotLettered:
 				continue

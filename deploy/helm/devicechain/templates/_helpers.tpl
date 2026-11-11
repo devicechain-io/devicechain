@@ -1689,6 +1689,11 @@ honest message ("not enabled on this deployment") fires only when the drafter is
 nil, so it could never appear on the profile that needed it. Unsetting the key
 restores that path.
 
+WHY AN EMPTY devAllowedDestinations IS LEFT OUT. v1.3.0 services decode this
+document strictly, so a key they do not know stops a pod of that release that
+restarts mid-upgrade. A setting added after a release is therefore written into
+the document only when it is set.
+
 WHY THE SHUTDOWN BUDGET IS INJECTED RATHER THAN WRITTEN. The graceful-shutdown
 window and the pod's grace period are ONE budget checked against itself: a service
 refuses to start if its drain window does not leave room, inside the grace period,
@@ -1714,6 +1719,12 @@ the filtered document by accident.
   {{- $_ := set $cfg "infrastructure" dict -}}
 {{- end -}}
 {{- $infra := index $cfg "infrastructure" -}}
+{{- if hasKey $infra "egress" -}}
+  {{- $egress := index $infra "egress" -}}
+  {{- if and $egress (empty (get $egress "devAllowedDestinations")) -}}
+    {{- $_ := unset $egress "devAllowedDestinations" -}}
+  {{- end -}}
+{{- end -}}
 {{- include "devicechain.validateShutdownNotHandSet" . -}}
 {{- $_ := set $infra "shutdown" (dict
     "drainSeconds" (int .Values.shutdownDrainSeconds)
