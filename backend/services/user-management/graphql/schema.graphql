@@ -935,6 +935,14 @@ enum AgentPolicyOrigin {
     ACTUATION
 }
 
+"""(Preview: may change in a minor release.) The caller's own approvals inbox standing; grants no authority."""
+type AgentApprovalAccess {
+    """(Preview: may change in a minor release.) Whether this instance enables agent actions."""
+    instanceEnabled: Boolean!
+    """(Preview: may change in a minor release.) Whether the caller currently has approver standing for this release's alarm proposals."""
+    canApprove: Boolean!
+}
+
 """(Preview: may change in a minor release.) One published version of this tenant's agent policy. Versions are never changed or removed."""
 type AgentPolicyVersion {
     """(Preview: may change in a minor release.) The version number. It only grows: a rollback publishes a new, higher version."""
@@ -1263,6 +1271,8 @@ type Query {
     actions are in effect. Requires agent:admin.
     """
     agentPolicy: AgentPolicy!
+    """(Preview: may change in a minor release.) Answers only the caller's OWN standing, without agent:admin. Requires a person's own session; agent-origin tokens and scoped sessions are refused. Reveals no other principals or policy document."""
+    agentApprovalAccess: AgentApprovalAccess!
     """(Preview: may change in a minor release.) The published versions of this tenant's agent policy, newest first. Requires agent:admin."""
     agentPolicyVersions(
         """(Preview: may change in a minor release.) How many versions to return: 1 to 100. Defaults to 20."""

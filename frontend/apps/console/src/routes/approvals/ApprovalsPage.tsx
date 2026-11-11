@@ -1,6 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { hasAuthority } from '@devicechain/client';
+import { useAuth } from '@/auth/AuthProvider';
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -73,6 +75,8 @@ function KillSwitch({ onChanged }: { onChanged: () => void }) {
   </SectionPanel>;
 }
 function Inbox() {
+  const { claims } = useAuth();
+  const isAdmin = hasAuthority(claims, 'agent:admin');
   const { t, i18n } = useTranslation('approvals');
   const [state, setState] = useState<AgentProposalState>('PROPOSED');
   const [pageNumber, setPageNumber] = useState(1);
@@ -82,7 +86,7 @@ function Inbox() {
   const { current: data, loading, error } = useQuery(() => listAgentProposals({ pageNumber, pageSize, state }), [pageNumber, state, version]);
   return <PageShell title={t('title')} titleAdornment={<Badge variant="secondary">{t('preview')}</Badge>}>
     <div className="space-y-4">
-      <KillSwitch onChanged={reload} />
+      {isAdmin && <KillSwitch onChanged={reload} />}
       <Combobox value={state} allowClear={false} aria-label={t('state')} options={STATES.map(value => ({ value, label: t(value) }))}
         onChange={value => { setState(value as AgentProposalState); setPageNumber(1); }} />
       {loading ? <LoadingState description={t('loading')} /> : error ? <ErrorState description={error} />
