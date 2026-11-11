@@ -6,6 +6,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -68,12 +69,13 @@ func TestStreamDriftSubjects(t *testing.T) {
 			require.Equal(t, advisory, want.subjectsMayGrow)
 			// Two declared subjects make order observable even for a single-subject stream.
 			want.subjects = []string{"declared.first", "declared.second"}
+			future := AdvisorySubject(StreamName("test", "future-stream"), "*")
 			for label, subjects := range map[string][]string{
 				"exact":           {"declared.first", "declared.second"},
-				"extra":           {"declared.first", "declared.second", "future.subject"},
+				"extra":           {"declared.first", "declared.second", future},
 				"reordered":       {"declared.second", "declared.first"},
-				"reordered extra": {"future.subject", "declared.second", "declared.first"},
-				"missing":         {"declared.second", "future.subject"},
+				"reordered extra": {future, "declared.second", "declared.first"},
+				"missing":         {"declared.second", future},
 			} {
 				t.Run(label, func(t *testing.T) {
 					cfg := nats.StreamConfig{
@@ -94,6 +96,38 @@ func TestStreamDriftSubjects(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The advisory list may grow only by what a newer release adds: one stream's max-delivery
+// advisories for THIS instance. Any other extra subject is drift, because nothing consumes it and
+// it would crowd the bounded work-queue stream.
+func TestAdvisoryStreamRefusesAForeignExtraSubject(t *testing.T) {
+	nmgr := &NatsManager{Microservice: &core.Microservice{InstanceId: "test"}}
+	want := nmgr.expectedStream(streams.MaxDeliveries)
+	require.True(t, want.subjectsMayGrow)
+	for _, extra := range []string{
+		"$JS.EVENT.ADVISORY.CONSUMER.CREATED.>",
+		maxDeliveriesAdvisoryPrefix + ".>",
+		AdvisorySubject(StreamName("other", "future-stream"), "*"),
+		AdvisorySubject(StreamName("test", "future-stream"), "some-durable"),
+		maxDeliveriesAdvisoryPrefix + "." + StreamName("test", "") + ".*",
+		"test.*.inbound-events",
+	} {
+		t.Run(extra, func(t *testing.T) {
+			cfg := nats.StreamConfig{
+				Subjects: append(slices.Clone(want.subjects), extra), Retention: want.retention,
+				Duplicates: want.duplicates, AllowDirect: want.allowDirect,
+			}
+			problems := streamDrift(cfg, want)
+			require.Len(t, problems, 1)
+			require.Contains(t, problems[0], extra)
+		})
+	}
+	ok := nats.StreamConfig{
+		Subjects:  append(slices.Clone(want.subjects), AdvisorySubject(StreamName("test", "future-stream"), "*")),
+		Retention: want.retention, Duplicates: want.duplicates, AllowDirect: want.allowDirect,
+	}
+	require.Empty(t, streamDrift(ok, want))
 }
 
 func TestADeployedServiceAcceptsANewerAdvisorySubjectList(t *testing.T) {
