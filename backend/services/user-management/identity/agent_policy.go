@@ -562,29 +562,36 @@ func (m *Manager) AgentActuationDecision(ctx context.Context, claims *auth.Claim
 	if !holdsProposalAuthority(claims) {
 		return agentpolicy.Decision{}, fmt.Errorf("%w: agentActuationDecision answers only an agent's token", auth.ErrForbidden)
 	}
-	req.Client = claims.ClientId
-	req.Attested = false
-	st := agentpolicy.State{InstanceEnabled: m.agentActuation}
-	suspended, off, doc, version, err := m.publishedPolicy(ctx, claims.Tenant)
-	if err != nil {
-		return agentpolicy.Decision{}, err
-	}
-	st.OperatorSuspended, st.TenantActuationOff, st.Policy, st.Version = suspended, off, doc, version
-	// Decide as though approvers were plentiful: a refusal for any other reason needs no count.
-	st.EligibleApprovers = 2
-	if pre := agentpolicy.Decide(st, req); pre.Verdict == agentpolicy.VerdictRefuse {
-		return pre, nil
-	}
-	if req.Attested, err = m.clientAttested(ctx, req.Client); err != nil {
-		return agentpolicy.Decision{}, err
-	}
-	st.EligibleApprovers = 0
-	if w, ok := kindSource[req.Kind]; ok && doc.Approvers != nil {
-		if st.EligibleApprovers, err = m.eligibleApprovers(ctx, claims.Tenant, doc.Approvers.Roles, w); err != nil {
-			return agentpolicy.Decision{}, err
+	var result agentpolicy.Decision
+	err := m.iam.ReadSnapshot(ctx, func(ctx context.Context) error {
+		req.Client = claims.ClientId
+		req.Attested = false
+		// The instance switch is process configuration, outside the database snapshot.
+		st := agentpolicy.State{InstanceEnabled: m.agentActuation}
+		suspended, off, doc, version, err := m.publishedPolicy(ctx, claims.Tenant)
+		if err != nil {
+			return err
 		}
-	}
-	return agentpolicy.Decide(st, req), nil
+		st.OperatorSuspended, st.TenantActuationOff, st.Policy, st.Version = suspended, off, doc, version
+		// Decide as though approvers were plentiful: a refusal for any other reason needs no count.
+		st.EligibleApprovers = 2
+		if pre := agentpolicy.Decide(st, req); pre.Verdict == agentpolicy.VerdictRefuse {
+			result = pre
+			return nil
+		}
+		if req.Attested, err = m.clientAttested(ctx, req.Client); err != nil {
+			return err
+		}
+		st.EligibleApprovers = 0
+		if w, ok := kindSource[req.Kind]; ok && doc.Approvers != nil {
+			if st.EligibleApprovers, err = m.eligibleApprovers(ctx, claims.Tenant, doc.Approvers.Roles, w); err != nil {
+				return err
+			}
+		}
+		result = agentpolicy.Decide(st, req)
+		return nil
+	})
+	return result, err
 }
 
 // holdsProposalAuthority reports whether claims are an agent's: agent-origin, and literally

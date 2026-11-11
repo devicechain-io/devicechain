@@ -1075,11 +1075,20 @@ var errTenantAccessDenied = errors.New("tenant access denied")
 // scoped. A stored scope that does not parse is a DENIAL, never the whole tenant: a
 // membership whose bound cannot be read must not be minted unbounded.
 func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, amr *signIn, err error) {
+	rec, err := m.loadSession(sid, id.Email)
+	if err != nil {
+		return nil, nil, auth.Scope{}, nil, err
+	}
+	return m.resolveTenantGrantRecord(ctx, rec, id, tenant, mem, su)
+}
+
+// resolveTenantGrantRecord reuses the sign-in read before a decision's snapshot.
+func (m *Manager) resolveTenantGrantRecord(ctx context.Context, rec *sessionRecord, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, amr *signIn, err error) {
 	// The sign-in's own terms come first: a session that may not enter this tenant gets no
 	// grant from the identity's memberships, superuser or not (admitTenant says which
 	// sessions a superuser's break-glass still applies to). It also hands back the sign-in's
 	// amr, which the caller mints into every token.
-	amr, err = m.admitTenant(ctx, sid, id, tenant, su)
+	amr, err = m.admitTenantRecord(ctx, rec, id, tenant, su)
 	if err != nil {
 		return nil, nil, auth.Scope{}, nil, err
 	}
