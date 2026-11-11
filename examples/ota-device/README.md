@@ -94,7 +94,7 @@ Two more rules protect the device from the platform side of the wire:
 
 ## Running it
 
-Use the Go toolchain selected by the repository's `go.work` (Go 1.27.3).
+Use the Go toolchain selected by the repository's `go.work` (Go 1.27.4).
 
 Build the two binaries and put the first image in slot `a`:
 
