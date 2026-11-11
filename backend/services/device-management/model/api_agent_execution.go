@@ -51,7 +51,7 @@ func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Ap
 
 func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval, retried bool) (*AgentProposal, error) {
 	attrCtx := rdb.WithAgentAttribution(ctx, rdb.AgentAttribution{ClientID: p.ProposerClient, OnBehalfOf: p.ProposerSub, Proposal: p.Token})
-	reenableVersion := 0
+	reenableGeneration := 0
 	err := api.RDB.DB(attrCtx).Transaction(func(tx *gorm.DB) error {
 		if err := setAgentExecutionTimeouts(tx); err != nil {
 			return err
@@ -188,8 +188,8 @@ func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver action
 		if api.KillFeed == nil || !api.KillFeed.Fresh(api.KillFeed.Now()) {
 			return actiongate.ErrFenceUnavailable
 		}
-		if err := fenceCheckTx(tx, fresh.PolicyVersion); err != nil {
-			reenableVersion = fresh.PolicyVersion
+		if err := fenceCheckTx(tx, fresh.ActuationGeneration); err != nil {
+			reenableGeneration = fresh.ActuationGeneration
 			return err
 		}
 		if api.afterFenceForTest != nil {
@@ -230,7 +230,7 @@ func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver action
 		if retried {
 			return nil, actiongate.ErrFenceClosed
 		}
-		if err := api.reenableFence(ctx, reenableVersion); err != nil {
+		if err := api.reenableFence(ctx, reenableGeneration); err != nil {
 			return nil, err
 		}
 		return api.executeAlarmProposalAttempt(ctx, approver, p, next, true)

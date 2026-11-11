@@ -168,7 +168,7 @@ func IsCode(err error, code string) bool {
 	return errors.As(err, &ge) && ge.Code == code
 }
 
-// ErrFenceClosed refuses a decision at or before the local kill version.
+// ErrFenceClosed refuses a decision at or before the local kill generation.
 var ErrFenceClosed = Refusal(CodeFenceClosed, "the local agent actuation fence is closed", false)
 
 // ErrFenceUnavailable refuses execution until the local fence can be read.

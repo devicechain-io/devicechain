@@ -125,7 +125,7 @@ func (r *proposalRig) stored(t *testing.T, token string) *AgentProposal {
 }
 
 func execApprove(required int, valid ...string) actiongate.ExecutionDecision {
-	return actiongate.ExecutionDecision{Verdict: actiongate.VerdictApprove, RequiredApprovals: required, ValidApprovers: valid,
+	return actiongate.ExecutionDecision{ActuationGeneration: 3, Verdict: actiongate.VerdictApprove, RequiredApprovals: required, ValidApprovers: valid,
 		StepUp: auth.StepUp{MaxAge: 15 * time.Minute}, AllowSelfConfirm: required == 1, PolicyVersion: 4}
 }
 

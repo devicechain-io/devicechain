@@ -22,11 +22,11 @@ const (
 
 // KillEvent applies a one-way brake to a tenant's area fences.
 type KillEvent struct {
-	EventID       string    `json:"eventId"`
-	Tenant        string    `json:"tenant"`
-	Cause         KillCause `json:"cause"`
-	PolicyVersion int       `json:"policyVersion"`
-	At            time.Time `json:"at"`
+	EventID             string    `json:"eventId"`
+	Tenant              string    `json:"tenant"`
+	Cause               KillCause `json:"cause"`
+	ActuationGeneration int       `json:"actuationGeneration"`
+	At                  time.Time `json:"at"`
 }
 
 // Validate checks the wire event before it can affect a fence.
@@ -37,8 +37,8 @@ func (e KillEvent) Validate() error {
 	if e.Cause != KillCauseTenantDisabled && e.Cause != KillCauseOperatorSuspended {
 		return fmt.Errorf("unknown kill cause %q", e.Cause)
 	}
-	if e.PolicyVersion < 0 {
-		return fmt.Errorf("kill policyVersion must be non-negative")
+	if e.ActuationGeneration < 0 {
+		return fmt.Errorf("kill actuationGeneration must be non-negative")
 	}
 	if e.At.IsZero() {
 		return fmt.Errorf("kill event requires at")
@@ -80,9 +80,9 @@ func DecodeKillEvent(b []byte) (KillEvent, error) {
 
 // FenceState is an area's local kill fence, independent of storage.
 type FenceState struct {
-	Present               bool
-	Enabled               bool
-	KilledAtPolicyVersion int
+	Present            bool
+	Enabled            bool
+	KilledAtGeneration int
 }
 
 // FenceVerdict tells an area whether execution may proceed or needs a fence update.
@@ -96,11 +96,11 @@ const (
 
 // CheckFence compares a fresh decision with the last local kill.
 // FenceReenable requires the caller to persist the newer enabled state atomically.
-func CheckFence(s FenceState, decisionPolicyVersion int) FenceVerdict {
+func CheckFence(s FenceState, decisionGeneration int) FenceVerdict {
 	if !s.Present {
 		return FenceOpen
 	}
-	if decisionPolicyVersion > s.KilledAtPolicyVersion {
+	if decisionGeneration > s.KilledAtGeneration {
 		if s.Enabled {
 			return FenceOpen
 		}

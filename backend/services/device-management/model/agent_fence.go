@@ -17,17 +17,17 @@ import (
 )
 
 type AgentActuationFence struct {
-	TenantId              string    `gorm:"primaryKey;not null;size:128"`
-	Enabled               bool      `gorm:"not null"`
-	KilledAtPolicyVersion int       `gorm:"not null"`
-	Epoch                 int64     `gorm:"not null"`
-	UpdatedAt             time.Time `gorm:"not null"`
+	TenantId           string    `gorm:"primaryKey;not null;size:128"`
+	Enabled            bool      `gorm:"not null"`
+	KilledAtGeneration int       `gorm:"not null"`
+	Epoch              int64     `gorm:"not null"`
+	UpdatedAt          time.Time `gorm:"not null"`
 }
 
 // Kill fences are safety bookkeeping; the policy change is already audited by its author.
 func (AgentActuationFence) AuditExempt() bool { return true }
 
-// ApplyKillEvent only stops execution. Replays bump the epoch and never lower the kill version.
+// ApplyKillEvent only stops execution. Replays bump the epoch and never lower the kill generation.
 func (api *Api) ApplyKillEvent(ctx context.Context, ev actiongate.KillEvent) error {
 	if err := ev.Validate(); err != nil {
 		return err
@@ -42,17 +42,17 @@ func (api *Api) ApplyKillEvent(ctx context.Context, ev actiongate.KillEvent) err
 // applyKillEventDB is ApplyKillEvent on a handle already scoped to the tenant: the consumer's
 // own connection, or (in tests) the execution transaction itself.
 func applyKillEventDB(db *gorm.DB, tenant string, ev actiongate.KillEvent) error {
-	maxExpr := "GREATEST(?, excluded.killed_at_policy_version)"
+	maxExpr := "GREATEST(?, excluded.killed_at_generation)"
 	if db.Dialector.Name() == "sqlite" {
-		maxExpr = "MAX(?, excluded.killed_at_policy_version)"
+		maxExpr = "MAX(?, excluded.killed_at_generation)"
 	}
 	return db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "tenant_id"}},
 		DoUpdates: clause.Assignments(map[string]any{
 			"enabled": false, "epoch": gorm.Expr("? + 1", clause.Column{Table: clause.CurrentTable, Name: "epoch"}),
-			"killed_at_policy_version": gorm.Expr(maxExpr, clause.Column{Table: clause.CurrentTable, Name: "killed_at_policy_version"}), "updated_at": time.Now().UTC(),
+			"killed_at_generation": gorm.Expr(maxExpr, clause.Column{Table: clause.CurrentTable, Name: "killed_at_generation"}), "updated_at": time.Now().UTC(),
 		}),
-	}).Create(&[]AgentActuationFence{{KilledAtPolicyVersion: ev.PolicyVersion, Epoch: 1, UpdatedAt: time.Now().UTC()}}).Error
+	}).Create(&[]AgentActuationFence{{KilledAtGeneration: ev.ActuationGeneration, Epoch: 1, UpdatedAt: time.Now().UTC()}}).Error
 }
 
 var errFenceNeedsReenable = errors.New("agent fence needs reenable")
@@ -63,7 +63,7 @@ var errFenceNeedsReenable = errors.New("agent fence needs reenable")
 // Without a row to lock, a kill arriving between this read and the commit would insert a fresh
 // row, conflict with nothing, and commit ahead of an execution that saw "no row": exactly the
 // window the fence exists to close. With the row present, the kill's upsert waits on the share lock.
-func fenceCheckTx(tx *gorm.DB, decisionPolicyVersion int) error {
+func fenceCheckTx(tx *gorm.DB, decisionGeneration int) error {
 	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
 		Create(&[]AgentActuationFence{{Enabled: true, UpdatedAt: time.Now().UTC()}}).Error; err != nil {
 		return err
@@ -77,7 +77,7 @@ func fenceCheckTx(tx *gorm.DB, decisionPolicyVersion int) error {
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	switch actiongate.CheckFence(actiongate.FenceState{Present: err == nil && row.Epoch > 0, Enabled: row.Enabled, KilledAtPolicyVersion: row.KilledAtPolicyVersion}, decisionPolicyVersion) {
+	switch actiongate.CheckFence(actiongate.FenceState{Present: err == nil && row.Epoch > 0, Enabled: row.Enabled, KilledAtGeneration: row.KilledAtGeneration}, decisionGeneration) {
 	case actiongate.FenceClosed:
 		return actiongate.ErrFenceClosed
 	case actiongate.FenceReenable:
@@ -86,9 +86,9 @@ func fenceCheckTx(tx *gorm.DB, decisionPolicyVersion int) error {
 	return nil
 }
 
-func (api *Api) reenableFence(ctx context.Context, decisionPolicyVersion int) error {
+func (api *Api) reenableFence(ctx context.Context, decisionGeneration int) error {
 	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		return tx.Model(&AgentActuationFence{}).Where("enabled = ? AND killed_at_policy_version < ?", false, decisionPolicyVersion).
+		return tx.Model(&AgentActuationFence{}).Where("enabled = ? AND killed_at_generation < ?", false, decisionGeneration).
 			Updates(map[string]any{"enabled": true, "epoch": gorm.Expr("epoch + 1"), "updated_at": time.Now().UTC()}).Error
 	})
 }

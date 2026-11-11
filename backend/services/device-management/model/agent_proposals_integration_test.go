@@ -392,7 +392,7 @@ func TestAgentFenceKillSerializesAgainstInFlightExecution(t *testing.T) {
 	<-inFence
 	killDone := make(chan error, 1)
 	go func() {
-		killDone <- api.ApplyKillEvent(ctx, actiongate.KillEvent{EventID: "k1", Tenant: tenant, Cause: actiongate.KillCauseTenantDisabled, PolicyVersion: 5, At: time.Now().UTC()})
+		killDone <- api.ApplyKillEvent(ctx, actiongate.KillEvent{EventID: "k1", Tenant: tenant, Cause: actiongate.KillCauseTenantDisabled, ActuationGeneration: 5, At: time.Now().UTC()})
 	}()
 	select {
 	case err := <-killDone:
@@ -408,5 +408,5 @@ func TestAgentFenceKillSerializesAgainstInFlightExecution(t *testing.T) {
 	var fence AgentActuationFence
 	require.NoError(t, api.RDB.DB(ctx).First(&fence).Error)
 	require.False(t, fence.Enabled)
-	require.EqualValues(t, 5, fence.KilledAtPolicyVersion)
+	require.EqualValues(t, 5, fence.KilledAtGeneration)
 }

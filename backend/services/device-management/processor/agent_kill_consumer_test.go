@@ -44,7 +44,7 @@ func TestAgentKillConsumerValidatesAndSettles(t *testing.T) {
 			api := &killAPI{}
 			ack := &killAck{}
 			subject := messaging.ScopedSubject("test", "acme", streams.AgentActuationKills)
-			body, err := actiongate.EncodeKillEvent(actiongate.KillEvent{EventID: "one", Tenant: "acme", PolicyVersion: 4, Cause: actiongate.KillCauseTenantDisabled, At: now})
+			body, err := actiongate.EncodeKillEvent(actiongate.KillEvent{EventID: "one", Tenant: "acme", ActuationGeneration: 4, Cause: actiongate.KillCauseTenantDisabled, At: now})
 			require.NoError(t, err)
 			switch mode {
 			case "malformed":

@@ -30,7 +30,7 @@ func (w *killMessageWriter) WriteMessages(ctx context.Context, msgs ...messaging
 func TestKillWriter(t *testing.T) {
 	w := &killMessageWriter{}
 	p := NewKillWriter(w, "instance")
-	e := actiongate.KillEvent{EventID: "id", Tenant: "acme", Cause: actiongate.KillCauseTenantDisabled, PolicyVersion: 2, At: time.Now().UTC()}
+	e := actiongate.KillEvent{EventID: "id", Tenant: "acme", Cause: actiongate.KillCauseTenantDisabled, ActuationGeneration: 2, At: time.Now().UTC()}
 	require.NoError(t, p.PublishKill(context.Background(), e))
 	require.Len(t, w.messages, 1)
 	require.Equal(t, "acme", w.tenant)

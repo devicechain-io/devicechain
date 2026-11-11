@@ -12,12 +12,14 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/actiongate"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
-func killFor(tenant string, version int) actiongate.KillEvent {
-	return actiongate.KillEvent{EventID: "kill", Tenant: tenant, Cause: actiongate.KillCauseTenantDisabled, PolicyVersion: version, At: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)}
+func killFor(tenant string, generation int) actiongate.KillEvent {
+	return actiongate.KillEvent{EventID: "kill", Tenant: tenant, Cause: actiongate.KillCauseTenantDisabled, ActuationGeneration: generation, At: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)}
 }
 
 func effectRows(t *testing.T, api *Api, ctx context.Context) []AgentEffectOutbox {
@@ -62,7 +64,7 @@ func TestAgentFenceKillDuringDecisionRollsBack(t *testing.T) {
 	// is open. Apply through that transaction here; the Postgres test commits a real
 	// concurrent kill on a separate connection.
 	r.api.afterDecisionForTest = func(tx *gorm.DB) error {
-		return applyKillEventDB(tx, rigTenant, killFor(rigTenant, r.decider.exec.PolicyVersion))
+		return applyKillEventDB(tx, rigTenant, killFor(rigTenant, r.decider.exec.ActuationGeneration))
 	}
 	_, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
 	require.ErrorIs(t, err, actiongate.ErrFenceClosed)
@@ -71,22 +73,28 @@ func TestAgentFenceKillDuringDecisionRollsBack(t *testing.T) {
 
 func TestAgentFenceReenableRequiresNewerFreshDecision(t *testing.T) {
 	r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1")
-	v := r.decider.exec.PolicyVersion
+	policyVersion := r.decider.exec.PolicyVersion
+	v := r.decider.exec.ActuationGeneration + 1
+	r.decider.exec.ActuationGeneration = v
 	require.NoError(t, r.api.ApplyKillEvent(ctx, killFor(rigTenant, v)))
 	_, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
 	require.ErrorIs(t, err, actiongate.ErrFenceClosed)
 	requireUnexecuted(t, r, p, ctx)
-	r.decider.exec.PolicyVersion = v + 1
+	r.decider.exec.ActuationGeneration = v + 1
 	before := len(r.decider.execReqs)
 	got, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
 	require.NoError(t, err)
 	require.Equal(t, string(actiongate.StateExecuted), got.State)
+	require.Equal(t, policyVersion, r.decider.exec.PolicyVersion, "restoring actuation does not publish a policy")
 	require.Equal(t, 3, len(r.decider.execReqs)-before, "approval, execution, then one fresh execution retry")
 	require.Len(t, effectRows(t, r.api, ctx), 1)
 	var fence AgentActuationFence
 	require.NoError(t, r.api.RDB.DB(ctx).First(&fence).Error)
 	require.True(t, fence.Enabled)
 	require.EqualValues(t, 2, fence.Epoch)
+	_, err = r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
+	require.Error(t, err)
+	require.Len(t, effectRows(t, r.api, ctx), 1, "the restored proposal executes only once")
 	require.NoError(t, r.api.ApplyKillEvent(ctx, killFor(rigTenant, v+1)))
 	p2 := r.propose(t, rigAgent, clearReq("after-rekill", "a1")).Proposal
 	_, err = r.api.ApproveAgentProposal(ctx, person, p2.Token, p2.Digest)
@@ -104,14 +112,14 @@ func TestApplyKillEventMonotonicAndTenantScoped(t *testing.T) {
 		require.NoError(t, r.api.RDB.DB(ctx).First(&row).Error)
 		require.False(t, row.Enabled)
 		require.EqualValues(t, i+1, row.Epoch)
-		require.Equal(t, max(7, v), row.KilledAtPolicyVersion)
+		require.Equal(t, max(7, v), row.KilledAtGeneration)
 	}
 	require.NoError(t, r.api.reenableFence(ctx, 10))
 	require.NoError(t, r.api.ApplyKillEvent(ctx, killFor(rigTenant, 1)))
 	var row AgentActuationFence
 	require.NoError(t, r.api.RDB.DB(ctx).First(&row).Error)
 	require.False(t, row.Enabled)
-	require.Equal(t, 9, row.KilledAtPolicyVersion)
+	require.Equal(t, 9, row.KilledAtGeneration)
 	require.EqualValues(t, 6, row.Epoch)
 	require.Error(t, r.api.ApplyKillEvent(tenantCtx("other"), killFor(rigTenant, 50)))
 	require.Error(t, r.api.ApplyKillEvent(context.Background(), killFor(rigTenant, 50)))
@@ -239,11 +247,49 @@ func TestAgentEffectsPoisonDoesNotBlockLaterPage(t *testing.T) {
 	require.Len(t, effectRows(t, r.api, ctx), 1)
 }
 
+func TestAgentEffectsStopAtAttemptCapWithoutBlockingOtherRows(t *testing.T) {
+	r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1", "a2")
+	_, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
+	require.NoError(t, err)
+	pub := &dedupEffectPublisher{fail: map[string]bool{"a1": true, "a2": true}}
+	r.api.AlarmPublisher = pub
+	r.api.AgentEffectsExhausted = prometheus.NewCounter(prometheus.CounterOpts{Name: "test_agent_effects_exhausted_total"})
+	for i := 0; i < MaxAgentEffectAttempts; i++ {
+		_, err = r.api.DrainAgentEffects(ctx, 10)
+		require.Error(t, err)
+		if i == 0 {
+			pub.fail["a2"] = false
+		}
+	}
+	require.Len(t, pub.ids, MaxAgentEffectAttempts+2, "a2 retries once while a1 exhausts the cap")
+	require.Len(t, pub.seen, 1)
+	rows := effectRows(t, r.api, ctx)
+	require.Len(t, rows, 1)
+	require.Equal(t, MaxAgentEffectAttempts, rows[0].Attempts)
+	require.NotNil(t, rows[0].LastError)
+	require.Equal(t, 1.0, testutil.ToFloat64(r.api.AgentEffectsExhausted))
+	for i := 0; i < 3; i++ {
+		res, err := r.api.DrainAgentEffects(ctx, 10)
+		require.NoError(t, err)
+		require.Zero(t, res.Published)
+	}
+	require.Len(t, pub.ids, MaxAgentEffectAttempts+2)
+	require.Equal(t, 1.0, testutil.ToFloat64(r.api.AgentEffectsExhausted), "exhaustion is counted only once")
+	// New work continues even with a retained exhausted row.
+	require.NoError(t, r.api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		return queueAgentEffect(tx, p.Token, &AlarmStateChangeEvent{AlarmToken: "a2", EventType: AlarmEventAcknowledged})
+	}))
+	res, err := r.api.DrainAgentEffects(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Published)
+	require.Len(t, effectRows(t, r.api, ctx), 1)
+}
+
 // A kill that lands between the execution's abort and the re-enable must win: the re-enable only
-// ever reopens a fence killed at an OLDER policy version than the decision that justifies it.
-func TestReenableFenceNeverReopensAKillAtTheSameVersion(t *testing.T) {
+// ever reopens a fence killed at an OLDER generation than the decision that justifies it.
+func TestReenableFenceNeverReopensAKillAtTheSameGeneration(t *testing.T) {
 	r, _, ctx, _ := executionSetup(t, AlarmProposalAck, "a1")
-	v := r.decider.exec.PolicyVersion
+	v := r.decider.exec.ActuationGeneration
 	require.NoError(t, r.api.ApplyKillEvent(ctx, killFor(rigTenant, v)))
 	require.NoError(t, r.api.reenableFence(ctx, v))
 	var fence AgentActuationFence

@@ -24,7 +24,7 @@ func (approvingDecider) Actuation(context.Context, actiongate.ActuationRequest) 
 }
 
 func (approvingDecider) Execution(context.Context, actiongate.ExecutionRequest) (actiongate.ExecutionDecision, error) {
-	return actiongate.ExecutionDecision{Verdict: actiongate.VerdictApprove, RequiredApprovals: 1,
+	return actiongate.ExecutionDecision{ActuationGeneration: 3, Verdict: actiongate.VerdictApprove, RequiredApprovals: 1,
 		ValidApprovers: []string{"boss@example.invalid"}, StepUp: auth.StepUp{MaxAge: 15 * time.Minute}, AllowSelfConfirm: true}, nil
 }
 

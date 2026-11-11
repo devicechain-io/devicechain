@@ -733,7 +733,7 @@ CREATE SEQUENCE "device-management".semantic_contexts_id_seq
 CREATE TABLE "device-management".agent_actuation_fences (
  tenant_id character varying(128) NOT NULL,
  enabled boolean NOT NULL,
- killed_at_policy_version bigint NOT NULL,
+ killed_at_generation bigint NOT NULL,
  epoch bigint NOT NULL,
  updated_at timestamp with time zone NOT NULL
 );

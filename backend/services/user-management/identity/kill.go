@@ -28,7 +28,7 @@ func (e *KillNotificationError) Error() string {
 }
 func (e *KillNotificationError) Unwrap() error { return e.Err }
 
-func (m *Manager) publishKill(ctx context.Context, tenant string, version int, cause actiongate.KillCause) error {
+func (m *Manager) publishKill(ctx context.Context, tenant string, generation int, cause actiongate.KillCause) error {
 	if m.killPublisher == nil {
 		return nil
 	}
@@ -36,7 +36,7 @@ func (m *Manager) publishKill(ctx context.Context, tenant string, version int, c
 	if _, err := rand.Read(id[:]); err != nil {
 		return &KillNotificationError{Err: err}
 	}
-	e := actiongate.KillEvent{EventID: hex.EncodeToString(id[:]), Tenant: tenant, Cause: cause, PolicyVersion: version, At: m.clock()}
+	e := actiongate.KillEvent{EventID: hex.EncodeToString(id[:]), Tenant: tenant, Cause: cause, ActuationGeneration: generation, At: m.clock()}
 	if err := m.killPublisher.PublishKill(ctx, e); err != nil {
 		return &KillNotificationError{Err: err}
 	}

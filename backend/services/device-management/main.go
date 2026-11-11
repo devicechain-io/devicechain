@@ -127,6 +127,7 @@ var (
 	// transactions (ADR-081, model/ownership_outbox.go), one replica at a time.
 	AgentEffectsDrain        *core.PeriodicTask
 	AgentEffectsDrainMetrics *core.PeriodicTaskMetrics
+	AgentEffectsExhausted    prometheus.Counter
 	AgentKillConsumer        *processor.AgentKillConsumer
 	OwnershipDrain           *core.PeriodicTask
 	OwnershipDrainMetrics    *core.PeriodicTaskMetrics
@@ -253,6 +254,8 @@ func buildMetrics() {
 	}
 	OwnershipDrainMetrics = Microservice.NewPeriodicTaskMetrics("ownership_drain")
 	AgentEffectsDrainMetrics = Microservice.NewPeriodicTaskMetrics("agent_effects_drain")
+	AgentEffectsExhausted = Microservice.NewCounter("agent_effects_exhausted_total",
+		"Agent effect outbox rows retained after exhausting their publication attempts.")
 	SessionKickDrainMetrics = Microservice.NewPeriodicTaskMetrics("session_kick_drain")
 	SessionKicksPending = Microservice.NewGauge("session_kicks_pending",
 		"Devices whose broker sessions a provisioning revoke or reset still owes an ended-session "+
@@ -417,6 +420,7 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	// Wrap api around rdb manager, then wrap a caching decorator over it for the hot
 	// inbound-event resolution path.
 	api := model.NewApi(rdbm)
+	api.AgentEffectsExhausted = AgentEffectsExhausted
 	api.EnableCeilingMetrics(nmgr.Microservice)
 	api.DeviceSecretKey = key
 	api.EnrollmentKeys = enrollment

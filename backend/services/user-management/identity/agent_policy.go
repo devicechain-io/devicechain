@@ -171,7 +171,7 @@ func (m *Manager) SetTenantAgentActuation(ctx context.Context, claims *auth.Clai
 		})
 		if err == nil {
 			m.recordAuthLabeled(ctx, rdb.AuditOpAgentActuationDisabled, principalOf(claims), claims.Tenant, claims.Tenant)
-			err = m.publishKill(ctx, claims.Tenant, view.Head.PublishedVersion, actiongate.KillCauseTenantDisabled)
+			err = m.publishKill(ctx, claims.Tenant, view.Head.ActuationGeneration, actiongate.KillCauseTenantDisabled)
 		}
 		return view, err
 	}
@@ -203,6 +203,9 @@ func (m *Manager) publishAgentPolicy(ctx context.Context, claims *auth.Claims, p
 		choice, err := pick(head, current)
 		if err != nil {
 			return "", "", false, err
+		}
+		if choice.killFlag || choice.enableActuation {
+			head.ActuationGeneration++
 		}
 		if choice.killFlag {
 			by := principalOf(claims)
@@ -296,7 +299,11 @@ func (m *Manager) SetTenantAgentActuationSuspended(ctx context.Context, tenant s
 	if _, err := m.iam.TenantByToken(ctx, tenant); err != nil {
 		return nil, err
 	}
-	head, err := m.iam.SetAgentPolicySuspended(ctx, tenant, suspended, by)
+	_, err := m.iam.SetAgentPolicySuspended(ctx, tenant, suspended, by)
+	if err != nil {
+		return nil, err
+	}
+	head, err := m.iam.AgentPolicyHead(ctx, tenant)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +315,7 @@ func (m *Manager) SetTenantAgentActuationSuspended(ctx context.Context, tenant s
 	}
 	m.recordAuthLabeled(ctx, op, by, tenant, tenant)
 	if suspended {
-		err = m.publishKill(ctx, tenant, head.PublishedVersion, actiongate.KillCauseOperatorSuspended)
+		err = m.publishKill(ctx, tenant, head.ActuationGeneration, actiongate.KillCauseOperatorSuspended)
 	}
 	return head, err
 }
@@ -323,24 +330,29 @@ func principalOf(c *auth.Claims) string {
 
 // publishedPolicy reads the tenant's state for the act:* checks and decisions. A store error is
 // returned; a document that cannot be parsed is logged and read as NO policy (fail closed).
-func (m *Manager) publishedPolicy(ctx context.Context, tenant string) (suspended, off bool, doc *agentpolicy.Document, version int, err error) {
+func (m *Manager) publishedPolicy(ctx context.Context, tenant string) (bool, bool, *agentpolicy.Document, int, error) {
+	suspended, off, doc, version, _, err := m.publishedPolicyState(ctx, tenant)
+	return suspended, off, doc, version, err
+}
+
+func (m *Manager) publishedPolicyState(ctx context.Context, tenant string) (suspended, off bool, doc *agentpolicy.Document, version, generation int, err error) {
 	head, v, err := m.iam.PublishedAgentPolicy(ctx, tenant)
 	if err != nil {
-		return false, false, nil, 0, err
+		return false, false, nil, 0, 0, err
 	}
 	if head != nil {
-		suspended, off = head.OperatorSuspended, head.TenantActuationOff
+		suspended, off, generation = head.OperatorSuspended, head.TenantActuationOff, head.ActuationGeneration
 	}
 	if v == nil {
-		return suspended, off, nil, 0, nil
+		return suspended, off, nil, 0, generation, nil
 	}
 	d, perr := agentpolicy.ParseStored([]byte(v.Document))
 	if perr != nil {
 		log.Error().Err(perr).Str("tenant", tenant).Int("version", v.Version).
 			Msg("The published agent policy cannot be read; agent actuation is refused in this tenant.")
-		return suspended, off, nil, 0, nil
+		return suspended, off, nil, 0, generation, nil
 	}
-	return suspended, off, d, v.Version, nil
+	return suspended, off, d, v.Version, generation, nil
 }
 
 // errActRefused is the one description every act:* admission refusal carries to the client: it

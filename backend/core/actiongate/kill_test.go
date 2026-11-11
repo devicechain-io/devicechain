@@ -12,7 +12,7 @@ import (
 )
 
 func TestKillEventCodec(t *testing.T) {
-	e := KillEvent{EventID: "abc", Tenant: "acme", Cause: KillCauseTenantDisabled, PolicyVersion: 3, At: time.Now().UTC()}
+	e := KillEvent{EventID: "abc", Tenant: "acme", Cause: KillCauseTenantDisabled, ActuationGeneration: 3, At: time.Now().UTC()}
 	for _, cause := range []KillCause{KillCauseTenantDisabled, KillCauseOperatorSuspended} {
 		e.Cause = cause
 		b, err := EncodeKillEvent(e)
@@ -24,7 +24,7 @@ func TestKillEventCodec(t *testing.T) {
 	for name, mutate := range map[string]func(*KillEvent){
 		"id": func(e *KillEvent) { e.EventID = "" }, "tenant": func(e *KillEvent) { e.Tenant = " " },
 		"blank id": func(e *KillEvent) { e.EventID = " " }, "empty tenant": func(e *KillEvent) { e.Tenant = "" },
-		"cause": func(e *KillEvent) { e.Cause = "other" }, "version": func(e *KillEvent) { e.PolicyVersion = -1 },
+		"cause": func(e *KillEvent) { e.Cause = "other" }, "generation": func(e *KillEvent) { e.ActuationGeneration = -1 },
 		"time": func(e *KillEvent) { e.At = time.Time{} },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -63,7 +63,7 @@ func TestCheckFence(t *testing.T) {
 		want FenceVerdict
 	}{
 		{"absent", FenceState{}, 0, FenceOpen},
-		{"absent ignores fields", FenceState{Enabled: true, KilledAtPolicyVersion: 9}, 0, FenceOpen},
+		{"absent ignores fields", FenceState{Enabled: true, KilledAtGeneration: 9}, 0, FenceOpen},
 		{"enabled newer", FenceState{true, true, 4}, 5, FenceOpen},
 		{"disabled newer", FenceState{true, false, 4}, 5, FenceReenable},
 		{"enabled equal", FenceState{true, true, 4}, 4, FenceClosed},

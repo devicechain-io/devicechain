@@ -83,6 +83,8 @@ type Api struct {
 	// KillFeed is the liveness of the kill-event consumer that feeds the local actuation fence.
 	// Nil refuses every agent execution (fail closed).
 	KillFeed *KillFeed
+	// AgentEffectsExhausted counts committed transitions to the outbox attempt cap.
+	AgentEffectsExhausted prometheus.Counter
 	// afterDecisionForTest runs inside the execution transaction between the policy decision and
 	// the fence check. Tests use it to land a kill in exactly that window; production leaves it nil.
 	afterDecisionForTest func(tx *gorm.DB) error

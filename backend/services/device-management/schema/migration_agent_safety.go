@@ -14,11 +14,11 @@ import (
 // These are this migration's snapshots. Both carry tenant_id and are erased by
 // the catalog-driven tenant purge without an exemption.
 type agentActuationFence struct {
-	TenantId              string    `gorm:"primaryKey;not null;size:128"`
-	Enabled               bool      `gorm:"not null"`
-	KilledAtPolicyVersion int       `gorm:"not null"`
-	Epoch                 int64     `gorm:"not null"`
-	UpdatedAt             time.Time `gorm:"not null"`
+	TenantId           string    `gorm:"primaryKey;not null;size:128"`
+	Enabled            bool      `gorm:"not null"`
+	KilledAtGeneration int       `gorm:"not null"`
+	Epoch              int64     `gorm:"not null"`
+	UpdatedAt          time.Time `gorm:"not null"`
 }
 type agentEffectOutbox struct {
 	Id            string         `gorm:"primaryKey;size:32"`
