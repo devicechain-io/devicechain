@@ -603,13 +603,10 @@ func (api *Api) Dashboards(ctx context.Context, criteria DashboardSearchCriteria
 // whether a row was deleted (false when no dashboard has that token). The
 // tenant-scope callback confines the delete to the caller's tenant.
 //
-// The delete is Unscoped (a real DELETE, not a soft-delete). A dashboard has no
-// trash/restore semantics, and — critically — the token unique index does not
-// exclude soft-deleted rows, so a soft-delete would lock the token forever and a
-// later create of the same token would fail with a duplicate-key error. Hard
-// delete frees the token immediately. (The platform-wide fix — a per-tenant
-// partial unique index that ignores soft-deleted rows — is tracked separately in
-// the "entity addressing & token policy" ADR.)
+// The delete is Unscoped (a real DELETE, not a soft-delete) because a dashboard
+// has no trash/restore semantics. The per-tenant partial unique index excludes
+// soft-deleted rows, so token reuse works with either kind of deletion; hard
+// deletion also removes the stored dashboard and its version history.
 func (api *Api) DeleteDashboard(ctx context.Context, token string) (bool, error) {
 	// Resolve the dashboard first (tenant-scoped) so we can drop its version history
 	// too — DashboardVersion.DashboardID is a plain column with no FK cascade, so a
@@ -624,9 +621,9 @@ func (api *Api) DeleteDashboard(ctx context.Context, token string) (bool, error)
 	dashboardID := matches[0].ID
 
 	// Delete the versions and the dashboard atomically so a delete can't half-succeed
-	// and orphan rows. Hard deletes (Unscoped): a dashboard has no trash/restore, and
-	// the token unique index counts soft-deleted rows (see the rationale above); the
-	// tenant-scope callback still confines both statements to the caller's tenant.
+	// and orphan rows. Hard deletes (Unscoped) remove the stored rows because a
+	// dashboard has no trash/restore; the tenant-scope callback still confines both
+	// statements to the caller's tenant.
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Unscoped().Where("dashboard_id = ?", dashboardID).Delete(&DashboardVersion{}).Error; err != nil {
 			return err
