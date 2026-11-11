@@ -1,0 +1,23 @@
+# Exported Update* methods on a service model Api that call .Save(...) on a loaded row.
+# Format: <path relative to backend/services> <Func> # <reason>
+# Each line is a debt or a justified whole-object replacement; fix PRs delete their line
+# (a line that stops offending fails TestNoWholeRowSaveInUpdateMethods).
+device-management/model/api_devices.go UpdateDeviceType # tracked: batch5 #2
+device-management/model/api_detection_rules.go UpdateDetectionRule # tracked: batch5 #4
+device-management/model/api_commands.go UpdateCommandDefinition # tracked: batch5 #5
+device-management/model/api_maintenance_window.go UpdateMaintenanceWindow # tracked: Codex-only lane (PR #2461)
+device-management/model/api_groups.go UpdateEntityGroup # tracked: Codex-only lane
+device-management/model/api_assets.go UpdateAsset # tracked: Codex-only lane
+device-management/model/api_assets.go UpdateAssetType # tracked: batch5
+device-management/model/api_profiles.go UpdateDeviceProfile # tracked: batch5
+device-management/model/api_metrics.go UpdateMetricDefinition # tracked: batch5
+notification-management/model/api_channels.go UpdateNotificationChannel # tracked: #2459 (open fix PR)
+device-management/model/api_areas.go UpdateAreaType # tracked: batch5 follow-up, not yet audited
+device-management/model/api_customers.go UpdateCustomerType # tracked: batch5 follow-up, not yet audited
+device-management/model/api_common.go UpdateEntityRelationshipType # tracked: batch5 follow-up, not yet audited
+device-management/model/api_credentials.go UpdateDeviceCredential # tracked: batch5 follow-up, not yet audited
+device-management/model/api_devices.go UpdateDevice # tracked: batch5 follow-up, not yet audited
+device-management/model/api_geofences.go UpdateGeoFence # tracked: batch5 follow-up, not yet audited
+device-management/model/api_integrations.go UpdateIntegration # tracked: batch5 follow-up, row re-read under lock (audit)
+device-management/model/api_provisioning.go UpdateProvisioningProfile # tracked: batch5 follow-up, row re-read under lock (audit)
+device-management/model/api_trust_anchors.go UpdateDeviceTrustAnchor # tracked: batch5 follow-up, row re-read under lock (audit)

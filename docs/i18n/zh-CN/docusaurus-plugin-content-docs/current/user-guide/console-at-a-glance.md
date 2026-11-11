@@ -37,7 +37,7 @@ import GuideShot from '@site/src/components/GuideShot';
 | **Access**（访问） | **Members**（成员）、**Service Accounts**（服务账号）、**Roles**（角色）、**Sign-in Security**（登录安全）和 **Audit**（审计，租户内“谁修改了什么”的记录）。 |
 | **Settings**（设置） | **Branding**（品牌）、**Map**（地图）和 **Language**（语言）。 |
 
-[批准收件箱（预览版）](../concepts/mcp.md#approvals-inbox)需要 `agent:admin` 和不受范围限制的租户成员身份。运维人员还必须先启用代理操作，你才能使用它。
+[批准收件箱（预览版）](../concepts/mcp.md#approvals-inbox)需要 `agent:admin`或当前批准者资格（批准者角色、`alarm:write` 和已激活的第二因素） 和不受范围限制的租户成员身份。运维人员还必须先启用代理操作，你才能使用它。
 
 你只会看到角色允许访问的条目。例如，如果你的角色无权读取告警，侧边栏中就没有 **Alarms**。只有当你的安装环境运行了更新服务时，才会出现 **Updates**。**Access** 和 **Settings** 两个分区主要面向租户管理员；其中每个条目是否出现取决于你自己的权限。
 
