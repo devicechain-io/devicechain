@@ -7,9 +7,9 @@ title: Guía de alertas
 
 # Guía de alertas
 
-Cada alerta que incluye el chart tiene un `runbook_url` que lleva a su entrada aquí. Cada entrada indica la gravedad de la alerta, qué le está diciendo y qué hacer al respecto. El texto es la propia descripción de la alerta, de modo que la notificación y esta página nunca se contradicen.
+Cada alerta que incluye el chart tiene un `runbook_url` que lleva a su entrada aquí. Cada entrada indica la gravedad de la alerta, qué te está diciendo y qué hacer al respecto. El texto es la propia descripción de la alerta, de modo que la notificación y esta página nunca se contradicen.
 
-Las alertas solo llegan a una persona cuando Alertmanager tiene un receptor. Consulte [Enrutar las alertas a una persona](./observability.md#alert-routing) para configurarlo con `dcctl install --alert-webhook`, `--alert-email` o `--alert-config`.
+Las alertas solo llegan a una persona cuando Alertmanager tiene un receptor. Consulta [Enrutar las alertas a una persona](./observability.md#alert-routing) para configurarlo con `dcctl install --alert-webhook`, `--alert-email` o `--alert-config`.
 
 ## `devicechain.area-availability`
 

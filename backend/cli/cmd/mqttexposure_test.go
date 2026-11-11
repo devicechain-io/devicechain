@@ -34,7 +34,7 @@ func TestBootstrapCarriesTheMQTTExposureFromArgvToTheState(t *testing.T) {
 	if err := bootstrapCmd.ParseFlags([]string{"--mqtt-exposure", "gateway", "--mqtt-host", "mqtt.example.com"}); err != nil {
 		t.Fatal(err)
 	}
-	opts := bootstrapOptions("prod", nil, nil)
+	opts := bootstrapOptions("prod", nil, nil, nil)
 	if opts.MQTTExposure != "gateway" || opts.MQTTHost != "mqtt.example.com" {
 		t.Fatalf("options = %q %q", opts.MQTTExposure, opts.MQTTHost)
 	}
@@ -49,7 +49,7 @@ func TestUpgradeCarriesTheMQTTExposureFromArgvToTheOptions(t *testing.T) {
 	if err := upgradeCmd.ParseFlags([]string{"--mqtt-exposure=loadbalancer", "--mqtt-host=mqtt.example.com"}); err != nil {
 		t.Fatal(err)
 	}
-	opts := upgradeOptions("prod", nil, nil)
+	opts := upgradeOptions("prod", nil, nil, nil)
 	if opts.MQTTExposure != "loadbalancer" || opts.MQTTHost != "mqtt.example.com" {
 		t.Fatalf("options = %q %q", opts.MQTTExposure, opts.MQTTHost)
 	}
@@ -135,7 +135,7 @@ func TestBrokerMaxConnectionsReachesTheOptionsOnlyWhenGiven(t *testing.T) {
 	}
 	bootstrapBrokerMaxConnections, bootstrapBrokerMaxConnectionsGiven = 20000, true
 	t.Cleanup(func() { bootstrapBrokerMaxConnections, bootstrapBrokerMaxConnectionsGiven = 0, false })
-	opts := bootstrapOptions("prod", nil, nil)
+	opts := bootstrapOptions("prod", nil, nil, nil)
 	if opts.BrokerMaxConnections == nil || *opts.BrokerMaxConnections != 20000 {
 		t.Fatalf("bootstrap options dropped the cap: %v", opts.BrokerMaxConnections)
 	}

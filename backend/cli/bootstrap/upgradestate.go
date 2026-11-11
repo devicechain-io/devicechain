@@ -423,6 +423,11 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	// stays on the platform default. A flag overrides it, and is marked for recording below
 	// (recordUpgradedVersion) so the NEXT flagless upgrade keeps it. Judged against the area set
 	// the instance will have, here, while nothing has been written.
+	st.MqttDeviceUplinksGiven = opts.MqttDeviceUplinks != nil
+	if opts.MqttDeviceUplinks != nil {
+		st.MqttDeviceUplinksChange = !sameBoolPtr(st.MqttDeviceUplinks, opts.MqttDeviceUplinks)
+		st.MqttDeviceUplinks = copyBoolPtr(opts.MqttDeviceUplinks)
+	}
 	if opts.MqttFailClosed != nil {
 		if err := ValidateMqttFailClosed(opts.MqttFailClosed, st.Profile, st.EnableAreas); err != nil {
 			return err

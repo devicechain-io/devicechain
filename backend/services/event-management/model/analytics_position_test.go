@@ -233,7 +233,8 @@ func TestPerTenantReadersAreConvergedAndGrantedNothing(t *testing.T) {
 // inside a gate that runs.
 func TestEveryEnumeratedRoleIsInTheConvergencePlan(t *testing.T) {
 	reader := AnalyticsRolePrefix + "acme"
-	roles := []string{AnalyticsReaderRole, AnalyticsLocationReaderRole, reader}
+	member := "bi_tool_without_a_tenant"
+	roles := []string{AnalyticsReaderRole, AnalyticsLocationReaderRole, reader, member}
 
 	plan := analyticsGrantees(roles)
 
@@ -257,12 +258,12 @@ func TestEveryEnumeratedRoleIsInTheConvergencePlan(t *testing.T) {
 				"survives every boot", want)
 		}
 	}
-	// And the per-tenant reader is in the plan WITHOUT being granted anything, which is
-	// the distinction the plan exists to carry.
+	// Readers and arbitrarily named members get no direct grants; both read through
+	// membership, which is the distinction the plan exists to carry.
 	for _, g := range plan {
-		if g.token == quoteIdent(reader) && g.grantRole != "" {
-			t.Errorf("the per-tenant reader %q is granted %q directly; it must read through "+
-				"membership", reader, g.grantRole)
+		if (g.token == quoteIdent(reader) || g.token == quoteIdent(member)) && g.grantRole != "" {
+			t.Errorf("the member %s is granted %q directly; it must read through "+
+				"membership", g.token, g.grantRole)
 		}
 	}
 }
@@ -343,8 +344,8 @@ func TestRoleQueryNamesEveryGroupRole(t *testing.T) {
 	query := analyticsRolesQuery()
 	args := analyticsRolesQueryArgs()
 
-	if want := len(analyticsGroupRoles()) + 1; len(args) != want {
-		t.Fatalf("the role query binds %d arguments, want %d (one per group role plus the prefix)",
+	if want := 2*len(analyticsGroupRoles()) + 2; len(args) != want {
+		t.Fatalf("the role query binds %d arguments, want %d (groups, prefix, membership groups, area schema)",
 			len(args), want)
 	}
 	if got := strings.Count(query, "?"); got != len(args) {
@@ -354,10 +355,28 @@ func TestRoleQueryNamesEveryGroupRole(t *testing.T) {
 		if args[i] != group {
 			t.Errorf("argument %d is %v, want the group role %q", i, args[i], group)
 		}
+		if got := args[len(analyticsGroupRoles())+1+i]; got != group {
+			t.Errorf("membership argument %d is %v, want the group role %q", i, got, group)
+		}
 	}
-	if args[len(args)-1] != analyticsRolePattern() {
-		t.Errorf("the last argument is %v, want the reader prefix pattern %q",
-			args[len(args)-1], analyticsRolePattern())
+	if args[len(args)-1] != AnalyticsAreaSchema {
+		t.Errorf("the last argument is %v, want the area schema %q", args[len(args)-1], AnalyticsAreaSchema)
+	}
+	if args[len(analyticsGroupRoles())] != analyticsRolePattern() {
+		t.Errorf("the prefix argument is %v, want the reader prefix pattern %q",
+			args[len(analyticsGroupRoles())], analyticsRolePattern())
+	}
+	for _, clause := range []string{
+		"WHERE rolname IN (", "OR rolname LIKE ? ESCAPE '='",
+		"OR (oid IN (SELECT m.member FROM pg_auth_members m",
+		"JOIN pg_roles g ON g.oid = m.roleid WHERE g.rolname IN (",
+		"AND NOT rolsuper AND rolname <> current_user",
+		"AND oid NOT IN (SELECT nspowner FROM pg_namespace WHERE nspname = ?)",
+		"ORDER BY rolname",
+	} {
+		if !strings.Contains(query, clause) {
+			t.Errorf("the role query is missing %q: %s", clause, query)
+		}
 	}
 }
 
@@ -375,6 +394,7 @@ func TestOnlyTheGroupRolesAreTreatedAsGroups(t *testing.T) {
 		"analytics_location_reader_acme", // a reader whose tenant STARTS with a group name
 		"analytics_reader2",              // a near-miss on the group name
 		"postgres",
+		"bi_tool_without_a_tenant", // an arbitrarily named group member
 	} {
 		if isAnalyticsGroupRole(notAGroup) {
 			t.Errorf("%q is not a group role but is treated as one, so it would be granted the "+

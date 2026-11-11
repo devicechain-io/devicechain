@@ -7,12 +7,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 
+	assets "github.com/devicechain-io/dc-deploy"
+	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/fatih/color"
 	"github.com/hashicorp/terraform-exec/tfexec"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -211,6 +216,14 @@ func checkHaNodeCapacity(ctx context.Context, st *State) error {
 	if !ha.Replicated() {
 		return nil
 	}
+	// Preset brokers must each fit one eligible node's allocatable resources.
+	req, unchecked, err := brokerRequestFor(st, func(name string) bool { return operatorStatesVar(st, name) })
+	if err != nil {
+		return err
+	}
+	if unchecked != "" {
+		fmt.Println(color.YellowString("  broker requests stated by the operator were not checked against node capacity: %s", unchecked))
+	}
 	unreachable := func(err error) error {
 		if st.DryRun {
 			fmt.Println(color.YellowString(
@@ -230,7 +243,17 @@ func checkHaNodeCapacity(ctx context.Context, st *State) error {
 	// passes an undersized cluster on a dry run, and it SURVIVED the package's
 	// whole test suite when a reviewer tried it — because the only way to reach
 	// this line was against a real cluster. Hence listNodes.
-	return schedulableShortfall(ha, nodes)
+	return schedulableShortfall(ha, nodes, req)
+}
+
+// operatorStatesVar uses the same instance root and precedence check as the apply.
+var operatorStatesVar = func(st *State, name string) bool {
+	instanceDir, err := dcdir.Instance(st.Instance)
+	if err != nil {
+		// An empty directory cannot supply files; TF_VAR statements still count.
+		return statedByOperator("", name)
+	}
+	return statedByOperator(filepath.Join(instanceDir, "infra", assets.InstanceRootDir), name)
 }
 
 // listNodes reads the cluster's nodes, for this guard and for the database placement
@@ -255,11 +278,13 @@ var listNodes = func(ctx context.Context, kubeContext string) ([]corev1.Node, er
 // schedulableShortfall is the counting rule, split from the cluster access above
 // so it can be asserted on without a cluster — the arithmetic is where the guard
 // can be wrong, and it is the half that would otherwise go untested.
-func schedulableShortfall(ha haTopology, nodes []corev1.Node) error {
+func schedulableShortfall(ha haTopology, nodes []corev1.Node, req *brokerRequest) error {
 	if !ha.Replicated() {
 		return nil
 	}
 	schedulable := 0
+	eligible := 0
+	var largestCPU, largestMemory resource.Quantity
 	for _, n := range nodes {
 		if n.Spec.Unschedulable {
 			continue
@@ -269,10 +294,66 @@ func schedulableShortfall(ha haTopology, nodes []corev1.Node) error {
 		}) {
 			continue
 		}
+		eligible++
+		if req != nil {
+			cpu := n.Status.Allocatable[corev1.ResourceCPU]
+			memory := n.Status.Allocatable[corev1.ResourceMemory]
+			if cpu.Cmp(largestCPU) > 0 {
+				largestCPU = cpu.DeepCopy()
+			}
+			if memory.Cmp(largestMemory) > 0 {
+				largestMemory = memory.DeepCopy()
+			}
+			if (req.CPU != nil && cpu.Cmp(*req.CPU) < 0) || (req.Memory != nil && memory.Cmp(*req.Memory) < 0) {
+				continue
+			}
+		}
 		schedulable++
 	}
 	if schedulable >= ha.ServerReplicas {
 		return nil
+	}
+	if req != nil && schedulable < eligible {
+		var requests, maxima, resources, variables, envVariables []string
+		if req.CPU != nil {
+			requests = append(requests, req.CPUText+" CPU")
+			maxima = append(maxima, "the largest allocatable CPU on any eligible node is "+largestCPU.String()+" CPU")
+			resources = append(resources, "CPU")
+			variables = append(variables, "nats_cpu_request")
+			envVariables = append(envVariables, "TF_VAR_nats_cpu_request")
+		}
+		if req.Memory != nil {
+			requests = append(requests, req.MemText+" memory")
+			maxima = append(maxima, "the largest allocatable memory is "+largestMemory.String())
+			resources = append(resources, "memory")
+			variables = append(variables, "nats_memory_request")
+			envVariables = append(envVariables, "TF_VAR_nats_memory_request")
+		}
+		maximaText := strings.Join(maxima, ", and ")
+		if len(maxima) > 1 {
+			maximaText += " (these maxima may be on different nodes)"
+		}
+		remediation := "use a smaller --size (base asks for less)"
+		if smaller := smallerBrokerPreset(req.Preset); smaller != nil {
+			var smallerRequests []string
+			if req.CPU != nil {
+				smallerRequests = append(smallerRequests, smaller.NatsCPURequest+" CPU")
+			}
+			if req.Memory != nil {
+				smallerRequests = append(smallerRequests, smaller.NatsMemoryRequest)
+			}
+			remediation = fmt.Sprintf("use a smaller --size (%s asks %s per broker; base asks for less)", smaller.Name, strings.Join(smallerRequests, " / "))
+		}
+		return fmt.Errorf(
+			"--ha with size %s places %d NATS servers one per node, each requesting %s; "+
+				"%d of %d otherwise-eligible node(s) can hold one broker. For the checked resources, %s. "+
+				"This is an allocatable check, not a free-capacity check or scheduler simulation. "+
+				"To fix this, state the environment variables %s (these work on a first bootstrap), "+
+				"or state %s in the instance root's terraform.tfvars (only read once the instance root exists, on a re-run); "+
+				"a stated request is not checked here. Or %s, or use larger nodes with at least that much allocatable %s",
+			req.Preset, ha.ServerReplicas, strings.Join(requests, " and "), schedulable, eligible,
+			maximaText, strings.Join(envVariables, " / "), strings.Join(variables, " / "),
+			remediation, strings.Join(resources, " and "))
 	}
 	return fmt.Errorf(
 		"--ha places %d NATS servers one per node, and this cluster has %d node(s) that can "+

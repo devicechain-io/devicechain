@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/tracing"
 	"os"
 	"time"
 
@@ -1461,7 +1462,11 @@ func buildInboundMessage(source string, tenant string, event *model.UnresolvedEv
 		countBuildDropped(source, buildDropNoTenant)
 		return nil, messaging.Message{}, false
 	}
-	ctx := core.WithTenant(context.Background(), tenant)
+	base := context.Background()
+	if tracing.Enabled() && event.TraceContext != nil {
+		base = event.TraceContext
+	}
+	ctx := core.WithTenant(base, tenant)
 
 	if cause := sealPresentedSecret(tenant, event); cause != "" {
 		countBuildDropped(source, cause)

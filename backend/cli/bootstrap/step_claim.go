@@ -28,6 +28,7 @@ import (
 // producing two different specs on one object, with the loser's values lingering
 // in whichever fields the winner did not set.
 func stepDeclareInstance(ctx context.Context, st *State) error {
+	st.MqttDeviceUplinksGiven = st.MqttDeviceUplinks != nil
 	// 🔴 THE DECLARED STORE IS CARRIED FORWARD WHEN THIS RUN NAMED NO STORE, the way the restore
 	// fact is. A re-run over a live instance (a restore retry, --allow-legacy-db-removal, the
 	// finish of a bootstrap that never completed) builds its declaration from FLAGS, and a
@@ -61,6 +62,9 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 				return err
 			}
 		}
+		if existing != nil && st.MqttDeviceUplinks == nil {
+			st.MqttDeviceUplinks = copyBoolPtr(existing.Spec.MQTTDeviceUplinks)
+		}
 		if existing != nil && st.MqttFailClosed == nil {
 			st.MqttFailClosed = copyBoolPtr(existing.Spec.MQTTFailClosed)
 		}
@@ -69,6 +73,15 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		if err := adoptRecordedValuesOverlay(st, existing); err != nil {
 			return err
 		}
+	}
+	// Refuse before the declaration write: a re-run keeps the recorded size via
+	// adoptRecordedSize, so writing first would turn "use a smaller --size" into
+	// a second refusal. The size is settled here, including on dry runs.
+	if err := checkHaNodeCapacity(ctx, st); err != nil {
+		return err
+	}
+	if err := checkDeviceUplinksOverlay(st); err != nil {
+		return err
 	}
 	if err := settleBootstrapTrustedProxies(ctx, st); err != nil {
 		return err
@@ -112,6 +125,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	}
 	spec := InstanceSpecFrom(st, st.Binding, st.Provider)
 	sayMqttFailClosed(st)
+	sayMqttDeviceUplinks(st)
 	sayUpdateStoreMountless(st)
 
 	if st.DryRun {
@@ -168,6 +182,9 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		// something deleting declarations underneath a running bootstrap.
 		return fmt.Errorf("the declaration for instance %q was not there immediately after being written; "+
 			"something else is deleting it", st.Instance)
+	}
+	if err := verifyDeviceUplinksRecorded(st.MqttDeviceUplinks, inst.Spec.MQTTDeviceUplinks); err != nil {
+		return err
 	}
 	if err := verifyFailClosedRecorded(st.MqttFailClosed, inst.Spec.MQTTFailClosed); err != nil {
 		return err
@@ -263,6 +280,7 @@ func applyDeclaration(st *State, spec dcv1beta1.InstanceSpec) {
 	// real answer (never chose), taken as one -- an instance declared before this field
 	// existed keeps the platform default rather than being handed a decision.
 	st.MqttFailClosed = copyBoolPtr(spec.MQTTFailClosed)
+	st.MqttDeviceUplinks = copyBoolPtr(spec.MQTTDeviceUplinks)
 	st.TrustedProxies = append([]string(nil), spec.TrustedProxies...)
 	st.TrustedProxiesExplicit = spec.TrustedProxiesExplicit
 	st.MQTTExposure, st.MQTTHost = spec.MQTTExposure, spec.MQTTHost

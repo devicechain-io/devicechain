@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -73,6 +74,9 @@ type InstallOptions struct {
 	// MaxConnections is the relational store's connection budget. Zero keeps what the
 	// cluster was installed with, or the default on a first install.
 	MaxConnections int
+	// RelationalStoreMaxWALMiB is nil to retain the recorded choice, 0 for the
+	// root stock default, or at least 64 MiB. Never inferred from a size preset.
+	RelationalStoreMaxWALMiB *int
 	// Restore recovers the CLUSTER's shared relational store from an archive instead
 	// of initialising an empty one (ADR-028). The zero plan is an ordinary install.
 	//
@@ -108,6 +112,9 @@ type InstallOptions struct {
 // prerequisites that are not there. markInstallApplying brackets the apply for exactly
 // that reason.
 func Install(ctx context.Context, provider Provider, opts InstallOptions) error {
+	if err := ValidateRelationalStoreWAL(opts.RelationalStoreMaxWALMiB); err != nil {
+		return err
+	}
 	opts.CreateCluster = true
 	binding, err := provider.EnsureCluster(ctx, opts.Options)
 	if err != nil {
@@ -303,7 +310,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 			return fmt.Errorf("settling the Alertmanager's routing: %w", err)
 		}
 	}
-	if err := markInstallApplying(ctx, typed, st.ClusterUID, st.DcctlVersion, time.Now); err != nil {
+	if err := markInstallApplying(ctx, typed, st.ClusterUID, st.DcctlVersion, time.Now, st.RelationalStoreMaxWALMiB); err != nil {
 		return err
 	}
 	// 🔴 AFTER markInstallApplying, BECAUSE THAT CALL IS THE LAST REFUSAL AND A
@@ -372,7 +379,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	return finishInstall(ctx, st, provider.Name(), typed, dyn, InstallRecord{
 		ClusterUID:   st.ClusterUID,
 		DcctlVersion: st.DcctlVersion,
-		Settings:     settings,
+		Settings:     installSettingsFor(st),
 		Outputs:      outputs,
 	}, cnpgClusterReadyTimeout, rolloutPollInterval)
 }
@@ -473,15 +480,16 @@ func installState(binding ClusterBinding, provider string, opts InstallOptions) 
 		HA:                opts.HA,
 		BackupDestination: opts.BackupDestination,
 		// Read through backupSnapshotClass, which drops it when backups are off.
-		BackupSnapshotClass: opts.BackupSnapshotClass,
-		DatabasePlacement:   opts.DatabasePlacement,
-		MaxConnections:      opts.MaxConnections,
-		Restore:             opts.Restore,
-		RemoveLegacyIngress: opts.RemoveLegacyIngress,
-		AWSNLB:              opts.AWSNLB,
-		MQTTGateway:         opts.MQTTGateway,
-		AlertRouting:        opts.AlertRouting,
-		Values:              map[string]string{},
+		BackupSnapshotClass:      opts.BackupSnapshotClass,
+		DatabasePlacement:        opts.DatabasePlacement,
+		MaxConnections:           opts.MaxConnections,
+		RelationalStoreMaxWALMiB: opts.RelationalStoreMaxWALMiB,
+		Restore:                  opts.Restore,
+		RemoveLegacyIngress:      opts.RemoveLegacyIngress,
+		AWSNLB:                   opts.AWSNLB,
+		MQTTGateway:              opts.MQTTGateway,
+		AlertRouting:             opts.AlertRouting,
+		Values:                   map[string]string{},
 	}
 }
 
@@ -630,6 +638,10 @@ func connectAndRefuse(ctx context.Context, st *State, settings InstallSettings,
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := restoreRelationalStoreWAL(st, prev); err != nil {
+		return nil, nil, err
+	}
+	settings.RelationalStoreMaxWALMiB = st.RelationalStoreMaxWALMiB
 	if st.MaxConnections == 0 {
 		st.MaxConnections = defaultMaxConnections
 		if last := prev.lastCompleted(); last != nil && last.Outputs.Rdb.MaxConnections > 0 {
@@ -686,7 +698,8 @@ func localClusterStateExists(uid string) (bool, error) {
 //     it found — its HA, its sizing, whether it archives — and none of them is
 //     re-applied when the cluster's change. Turning backups off or HA down underneath
 //     them leaves instances that believe in a cluster that no longer exists. Raising
-//     the connection budget is the one change that cannot hurt them, so it is allowed.
+//     the connection budget or changing the reload-only WAL target cannot hurt them,
+//     so those changes are allowed.
 func refuseAReinstallThatWouldHurt(ctx context.Context, st *State, prev *InstallRecord, settings InstallSettings,
 	stateExists func(uid string) (bool, error)) error {
 	last := prev.lastCompleted()
@@ -705,8 +718,23 @@ func refuseAReinstallThatWouldHurt(ctx context.Context, st *State, prev *Install
 			st.Binding.Describe(), last.DcctlVersion, last.UpdatedAt.Format(time.RFC3339), st.ClusterUID)
 	}
 
+	// WAL is reload-only and may change while instances run. Compare settings
+	// without it, retaining the original choices for the run's change summary.
+	previousSettings, nextSettings := last.Settings, settings
+	previousSettings.RelationalStoreMaxWALMiB = nil
+	nextSettings.RelationalStoreMaxWALMiB = nil
+	if !reflect.DeepEqual(last.Settings.RelationalStoreMaxWALMiB, settings.RelationalStoreMaxWALMiB) {
+		describeWAL := func(value *int) string {
+			if value == nil {
+				return "unrecorded (root default)"
+			}
+			return fmt.Sprintf("%d MiB (0: stock default)", *value)
+		}
+		fmt.Printf("  Relational store max_wal_size: %s → %s (reload-only)\n",
+			describeWAL(last.Settings.RelationalStoreMaxWALMiB), describeWAL(settings.RelationalStoreMaxWALMiB))
+	}
 	var changed []string
-	if last.Settings != settings {
+	if !reflect.DeepEqual(previousSettings, nextSettings) {
 		changed = append(changed, fmt.Sprintf("settings %s → %s",
 			describeInstallSettings(last.Settings), describeInstallSettings(settings)))
 	}
@@ -770,6 +798,9 @@ func describeInstallSettings(s InstallSettings) string {
 	}
 	if !s.DatabasePlacement.IsZero() {
 		parts = append(parts, "databases on "+s.DatabasePlacement.describe())
+	}
+	if s.RelationalStoreMaxWALMiB != nil {
+		parts = append(parts, fmt.Sprintf("relational max_wal_size %d MiB (0: stock default)", *s.RelationalStoreMaxWALMiB))
 	}
 	return strings.Join(parts, ", ")
 }

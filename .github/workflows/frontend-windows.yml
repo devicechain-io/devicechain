@@ -89,5 +89,5 @@ jobs:
         run: npm run typecheck
 
       # Through npm, so the scripts run under cmd.exe exactly as a contributor's do.
-      - name: Lint
+      - name: Lint (app JSX strings, library correctness, brand verification)
         run: npm run lint

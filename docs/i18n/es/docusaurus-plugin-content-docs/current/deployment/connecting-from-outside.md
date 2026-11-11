@@ -96,7 +96,7 @@ Usa un registro `A` para una dirección IP y un `CNAME` para un nombre, tal como
 | --- | --- | --- |
 | TCP 8883 | Dispositivos, a la dirección del controlador o del balanceador del bróker | Las redes donde están tus dispositivos |
 
-No hace falta abrir nada más para MQTT. La nube crea la regla de un Service `LoadBalancer` en GKE y AKS. En AWS, comprueba que el grupo de seguridad del balanceador, y el de los nodos detrás de él, permita TCP 8883 desde tus dispositivos. Se necesitan balanceadores de la nube que pasen la conexión en la capa 4: un balanceador HTTP de capa 7 no puede transportar MQTT.
+No hace falta abrir nada más para MQTT. La nube crea la regla de un Service `LoadBalancer` en GKE y AKS. En AWS, comprueba que el grupo de seguridad del balanceador, y el de los nodos detrás de él, permite TCP 8883 desde tus dispositivos. Se necesitan balanceadores de la nube que pasen la conexión en la capa 4: un balanceador HTTP de capa 7 no puede transportar MQTT.
 
 En modo gateway, el bróker ve la dirección del controlador de ingreso como origen de todos los dispositivos, no la del propio dispositivo. Todo lo que se base en la dirección de origen de un dispositivo en el bróker se comparte, por tanto, entre todos los dispositivos que están detrás de un controlador. El modo balanceador de carga con un balanceador que conserva la dirección del cliente (un Network Load Balancer en AWS, el balanceador de red de Google Cloud) no tiene este límite.
 

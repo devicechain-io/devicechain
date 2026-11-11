@@ -433,6 +433,8 @@ When it ships, it will authenticate with a credential stored on the connector, a
 connectors do, never with the pod's identity.
 :::
 
+`updateConnector` refuses a stale `expectedUpdatedAt` with `errors[*].extensions.code` set to `STALE_WRITE`. Nothing is written; the message remains "connector was modified by another writer; reload and try again". This code applies only to connector updates. `CONFLICT` continues to mean a uniqueness collision; errors from other operations are unchanged. Classify by code rather than message text. The console keeps unsaved edits and shows a localized hint to copy them before reloading, then reapply them and retry saving.
+
 Separately from connectors, [notification channels](../guides/notification-channels.md) reach
 people rather than systems, over SMTP and webhook.
 

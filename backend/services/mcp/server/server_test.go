@@ -65,6 +65,13 @@ func TestServerNew_AuthMiddlewareGatesRequests(t *testing.T) {
 		t.Errorf("wrong scope: status = %d, want 403", resp.StatusCode)
 	}
 	resp.Body.Close()
+	actOnly, _ := iss.IssueOAuthAccess("acme", "a@b.c", nil, []string{"alarm:propose"}, coreauth.ScopeActAlarms, []string{testResource}, false, "mcp", "j-act-only")
+	resp = post("Bearer " + actOnly.Token)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("act without read-only: status=%d want 403", resp.StatusCode)
+	}
+	resp.Body.Close()
+
 }
 
 // callerToken fails closed when the request carries no verified token info.

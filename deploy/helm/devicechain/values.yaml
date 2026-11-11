@@ -392,6 +392,17 @@ instance:
         # file, or a pre-created instance Secret — logs a warning naming the key and
         # starts, rather than being refused as unknown.
         enabled: true
+      # OpenTelemetry is off by default. Restart services after changing FIXED config.
+      # OTLP gRPC: collector.observability.svc:4317; HTTP: http://collector.observability.svc:4318
+      # An HTTP endpoint without a path posts to /v1/traces; give a path to use another.
+      # The OTEL_EXPORTER_OTLP_* environment variables, if set on a pod, still apply to the exporter.
+      # Set insecure: true only for plaintext transport. TLS is the default.
+      # samplingRatio may be omitted (0.1 when enabled); explicit 0 samples no roots.
+      tracing:
+        enabled: false
+        protocol: grpc
+        endpoint: ""
+        insecure: false
       graphql:
         # The largest single inbound WebSocket message the GraphQL subscription
         # endpoint will read, in bytes.
@@ -2379,6 +2390,9 @@ functionalAreas:
     strategy: Recreate
     config: {}
       # resourceUrl: https://<host>/api/mcp
+      # Preview proposal tools: off by default. The user-management AS-side instance
+      # switch (agentActuation.enabled) must also be on and a tenant policy published.
+      # agentActuation: {enabled: false}
       # issuerUrl: https://<host>/api/user-management
   outbound-connectors:
     # The outbound-connectors service (ADR-060): a durable consumer of the

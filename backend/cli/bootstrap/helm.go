@@ -520,6 +520,7 @@ func helmValues(st *State) map[string]interface{} {
 		natsVals[k] = v
 	}
 	applyMqttFailClosed(natsVals, st)
+	applyMqttDeviceUplinks(natsVals, st)
 	infraVals := map[string]interface{}{}
 	if len(natsVals) > 0 {
 		infraVals["nats"] = natsVals

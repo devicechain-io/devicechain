@@ -6,6 +6,7 @@ package payloadencode
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -288,17 +289,77 @@ func TestTransformPrecision(t *testing.T) {
 		{"default offset", `{"param":"x","type":"u32be","scale":1e-9}`, ""},
 		{"default scale", `{"param":"x","type":"i32le","offset":1e9}`, ""},
 		{"no transform", `{"param":"x","type":"u32be"}`, ""},
+		{"identity transform", `{"param":"x","type":"u32be","scale":1,"offset":0}`, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e, err := Parse([]byte(`{"fPort":1,"fields":[` + c.field + `]}`))
 			if c.wantError != "" {
-				if err == nil || e != nil || err.Error() != c.wantError {
+				var refusal *EncodeError
+				if !errors.As(err, &refusal) || e != nil || refusal.Param != "x" || refusal.Reason != c.wantError || !strings.Contains(err.Error(), `parameter "x"`) {
 					t.Fatalf("got encoder %v, error %v; want %q", e, err, c.wantError)
 				}
 			} else if err != nil || e == nil {
 				t.Fatalf("expected valid transform: %v", err)
 			}
 		})
+	}
+}
+
+func TestTransformPrecisionBoundary(t *testing.T) {
+	// At scale 1e-9, the full 32-bit extent is below 8. Immediately
+	// below offset 8 the ULP is 2^-50 (< 1e-15); at 8 it doubles
+	// to 2^-49 (> 1e-15). These adjacent float64 offsets straddle the rule.
+	for _, typ := range []string{"u32be", "i32le"} {
+		for _, c := range []struct {
+			offset float64
+			valid  bool
+		}{
+			{math.Nextafter(8, 0), true},
+			{8, false},
+		} {
+			raw := fmt.Sprintf(`{"fPort":1,"fields":[{"param":"setpoint","type":%q,"scale":1e-9,"offset":%.17g}]}`, typ, c.offset)
+			e, err := Parse([]byte(raw))
+			if c.valid {
+				if err != nil || e == nil {
+					t.Fatalf("%s offset %.17g should pass: %v", typ, c.offset, err)
+				}
+			} else {
+				var refusal *EncodeError
+				if e != nil || !errors.As(err, &refusal) || refusal.Param != "setpoint" {
+					t.Fatalf("%s offset %.17g should refuse setpoint: %v", typ, c.offset, err)
+				}
+			}
+		}
+	}
+}
+
+func TestRefusedTransformCollapsesAdjacentRawSteps(t *testing.T) {
+	e, err := Parse([]byte(`{"fPort":1,"fields":[{"param":"setpoint","type":"u32be"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Install the refused transform directly to demonstrate what Encode would
+	// do without Parse's guard. Production callers cannot mutate this document.
+	scale, offset := 1e-9, 1e9
+	e.doc.Fields[0].Scale = &scale
+	e.doc.Fields[0].Offset = &offset
+	var previous []byte
+	for raw := 0; raw <= 1; raw++ {
+		value := float64(raw)*scale + offset
+		if value != offset {
+			t.Fatalf("expected raw %d to collapse to offset, got %.17g", raw, value)
+		}
+		r, err := e.Encode([]byte(fmt.Sprintf(`{"setpoint":%.17g}`, value)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(r.Data, []byte{0, 0, 0, 0}) {
+			t.Fatalf("raw %d encoded as %x; want raw 0", raw, r.Data)
+		}
+		if raw == 1 && !bytes.Equal(previous, r.Data) {
+			t.Fatalf("adjacent raw steps should encode to identical bytes: %x vs %x", previous, r.Data)
+		}
+		previous = r.Data
 	}
 }
 

@@ -7,7 +7,7 @@ go 1.26.0
 // The image is built from this file alone (GOWORK=off, see build_paths_test.go), so go.work's
 // toolchain line does not reach it: this one does, and must equal it. It is what carries the
 // standard library's security fixes into the broker.
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1

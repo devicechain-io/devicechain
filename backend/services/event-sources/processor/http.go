@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/tracing"
 	"io"
 	"net"
 	"net/http"
@@ -201,6 +202,10 @@ func (es *HttpEventSource) handler() http.Handler {
 // duplicate it). The tenant's ceiling is checked first, so a tenant over it gets 429
 // even while the pipeline is refusing.
 func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
+	tracing.HTTP(w, r, "ingest.http", es.handleTracedEvent)
+}
+
+func (es *HttpEventSource) handleTracedEvent(w http.ResponseWriter, r *http.Request) {
 	tenant := r.PathValue("tenant")
 	if tenant == "" {
 		http.Error(w, "missing tenant in path", http.StatusBadRequest)
@@ -301,6 +306,10 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// told the caller its data was safe when it had been dropped — the same silent
 	// loss ADR-030 removes from the MQTT path, on the one transport that can
 	// actually say so. A client that retries on 503 now loses nothing.
+	if tracing.Enabled() {
+		event.TraceContext = r.Context()
+		tracing.Operation(r.Context(), "", tenant, false)
+	}
 	if err := es.decoded(es.Id, tenant, event, payload, ""); err != nil {
 		// The gate can close between the admit check and the publish; that refusal is
 		// the same answer as the one above.

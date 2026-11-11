@@ -4,8 +4,11 @@
 package processor
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/tracing"
+	"go.opentelemetry.io/otel/trace"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
@@ -19,8 +22,9 @@ import (
 // the payload is enqueued, so it travels with the payload to the producer, which
 // publishes to the tenant-scoped subject.
 type rawMessage struct {
-	tenant  string
-	payload []byte
+	traceContext context.Context
+	tenant       string
+	payload      []byte
 	// device is the device token the TRANSPORT addressed, when the transport
 	// carries one (the MQTT events topic does; HTTP does not). It is the
 	// broker-authorized identity — a device may only publish to its own events
@@ -188,7 +192,24 @@ func (wrk *DecodeWorker) Process() {
 				u.run(wrk.SourceId, raw, raw.assertion.mark)
 				continue
 			}
+			base := raw.traceContext
+			if base == nil {
+				base = context.Background()
+			}
+			traceCtx, span := tracing.Start(base, "ingest.mqtt", "mqtt", raw.tenant, trace.SpanKindServer)
+			if span != nil {
+				settle := raw.done
+				raw.done = func(err error) {
+					defer span.End()
+					if settle != nil {
+						settle(err)
+					}
+				}
+			}
 			event, payload, err := wrk.Decoder.Decode(raw.payload, raw.receivedAt)
+			if event != nil && span != nil {
+				event.TraceContext = traceCtx
+			}
 			if err == nil {
 				err = checkDeviceMatchesTransport(raw, event)
 			}

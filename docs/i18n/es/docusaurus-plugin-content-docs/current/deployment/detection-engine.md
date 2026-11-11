@@ -11,7 +11,7 @@ una **única instancia activa** y evalúa sobre el **tiempo del evento** en luga
 Esta página es el contrato del operador: qué se gana con eso, qué cuesta y cómo distinguir un
 motor sano de uno atascado.
 
-Si lo que busca es qué puede expresar una regla o cómo autorarla, empiece por
+Si lo que buscas es qué puede expresar una regla o cómo autorarla, empieza por
 [Procesamiento de eventos y alarmas](../concepts/event-processing.md).
 
 ## Un solo motor activo, a propósito
@@ -47,8 +47,8 @@ despliegue deliberado a drenar el nodo en el que casualmente está el motor.
 
 ### Ejecutar un standby en caliente
 
-Puede ejecutar más de una réplica, y las réplicas adicionales son **standbys, no escritores**.
-Establezca ambos valores:
+Puedes ejecutar más de una réplica, y las réplicas adicionales son **standbys, no escritores**.
+Establece ambos valores:
 
 ```yaml
 functionalAreas:
@@ -98,10 +98,10 @@ traspaso y reproduce el flujo, porque nada registra que se detuvo limpiamente.
 |---|---|
 | **Eventos ya procesados y confirmados** | No se pierde nada. Solo se acusa recibo de los mensajes *después* de que se confirme el punto de control que los incluye, así que todo lo que no llegó a confirmarse se vuelve a entregar. |
 | **Alarmas y comandos ya enviados** | Se vuelven a derivar y se reenvían, y luego se colapsan: una alarma es una actualización idempotente, y un comando lleva una clave que impide un segundo encolado. |
-| **Webhooks salientes y publicaciones a conectores ya enviados** | También se colapsan. Una detección que se vuelve a derivar dentro de 30 minutos la reconoce el bus de mensajes y no se despacha otra vez, y una solicitud que el motor vuelve a enviar en unos diez minutos (una detección que estaba en curso cuando el pod se detuvo) se almacena una sola vez. Tras una interrupción más larga, una solicitud puede **enviarse de nuevo**; vea la sección de entrega más abajo. |
-| **Conteos de disparo de las reglas** | **Pueden contarse de más.** Un reprocesamiento puede volver a incrementarlos, así que un conteo es una estadística operativa inflada por el reprocesamiento, no un conteo de auditoría exacto. Puede ser mayor que el número de disparos distintos, y también puede quedarse corto (vea [los recuentos de salud de reglas son aproximados](#rule-health-counts-are-approximate)). La hora del *último disparo* sí es correcta. Para una cuenta exacta, use las propias alarmas y comandos, que se colapsan por identidad. |
+| **Webhooks salientes y publicaciones a conectores ya enviados** | También se colapsan. Una detección que se vuelve a derivar dentro de 30 minutos la reconoce el bus de mensajes y no se despacha otra vez, y una solicitud que el motor vuelve a enviar en unos diez minutos (una detección que estaba en curso cuando el pod se detuvo) se almacena una sola vez. Tras una interrupción más larga, una solicitud puede **enviarse de nuevo**; ve la sección de entrega más abajo. |
+| **Conteos de disparo de las reglas** | **Pueden contarse de más.** Un reprocesamiento puede volver a incrementarlos, así que un conteo es una estadística operativa inflada por el reprocesamiento, no un conteo de auditoría exacto. Puede ser mayor que el número de disparos distintos, y también puede quedarse corto (ve [los recuentos de salud de reglas son aproximados](#rule-health-counts-are-approximate)). La hora del *último disparo* sí es correcta. Para una cuenta exacta, usa las propias alarmas y comandos, que se colapsan por identidad. |
 | **Ventanas abiertas, sostenimientos y temporizadores** | Se restauran desde el punto de control. Un sostenimiento que iba a medias sigue a medias. |
-| **Reglas que usan un umbral dinámico (basado en atributos)** | Vea la advertencia de abajo. |
+| **Reglas que usan un umbral dinámico (basado en atributos)** | Ve la advertencia de abajo. |
 
 :::caution Umbrales dinámicos y reprocesamiento
 Una regla cuyo umbral lee un **atributo de dispositivo** no es del todo segura ante
@@ -109,14 +109,14 @@ reprocesamiento. Al reprocesar, el atributo se lee con su valor *actual* y no co
 tiempo del evento original. Si el atributo cambió en el intervalo, puede perderse un disparo o
 producirse uno de más. Las reglas con umbral **fijo** no se ven afectadas. Si depende del
 comportamiento exacto del reprocesamiento —para auditar un borrado o reproducir un incidente—,
-prefiera umbrales fijos.
+prefiere umbrales fijos.
 
 Por eso las reglas también difieren en cuándo publican. Una regla de umbral o de repetición con
 límite fijo es **estáticamente** determinista ante el reprocesamiento: un reprocesamiento deriva de
 nuevo la misma detección, de modo que el motor puede publicarla antes del punto de control. Todas
 las demás clases de regla, incluida cualquier regla con umbral dinámico, están **ligadas al punto
 de control**: su detección espera al punto de control que confirma el estado que la respalda,
-porque un reprocesamiento podría no reproducirla (vea
+porque un reprocesamiento podría no reproducirla (ve
 [¿con qué rapidez llega una detección a sus acciones?](#how-quickly-does-a-detection-reach-its-actions)).
 :::
 
@@ -126,13 +126,13 @@ de comando o una solicitud publicada se **almacena** una sola vez. Eso es una af
 registros de la plataforma, no sobre el mundo. No prueba que un dispositivo ejecutara un comando una
 sola vez ni que un endpoint receptor viera una solicitud una sola vez: un comando cuyo acuse se
 pierde puede llegar de nuevo al dispositivo, y una solicitud saliente puede llegar dos veces a su
-destino (vea [la sección de entrega](#delivery-everything-is-at-least-once)). Haga que los
+destino (ve [la sección de entrega](#delivery-everything-is-at-least-once)). Haz que los
 dispositivos y los receptores sean idempotentes en lugar de confiar en una sola fila almacenada.
 :::
 
 ## Entrega: todo es al menos una vez {#delivery-everything-is-at-least-once}
 
-La vía de la telemetría es «al menos una vez» de extremo a extremo, así que planifique contando con
+La vía de la telemetría es «al menos una vez» de extremo a extremo, así que planifica contando con
 una repetición y no con exactamente una entrega.
 
 - Una **detección** puede producirse más de una vez y se colapsa por su identidad.
@@ -164,7 +164,7 @@ Nada vuelve a ejecutar un mensaje de esa cola. El registro existe para que un fa
 diagnosticable en lugar de silencioso; las consecuencias del propio fallo se mantienen igualmente.
 Un *levantamiento* que no se despachó no volverá a aparecer hasta que la condición se despeje y se
 vuelva a incumplir, y una *resolución* que no se despachó deja activa una alarma que debería
-haberse limpiado. Trate un mensaje de esta cola como algo que investigar, no como algo que se
+haberse limpiado. Trata un mensaje de esta cola como algo que investigar, no como algo que se
 vaciará por sí solo.
 :::
 
@@ -203,7 +203,7 @@ intentos de entrega](./observability.md#max-delivery-records)).
 Consúltelos con `dcctl dead-letters list`, que se autentica como una identidad de operador:
 
 ```bash
-dcctl dead-letters list --server <host> --email <usted> --password <secreto> \
+dcctl dead-letters list --server <host> --email <tu-correo> --password <secreto> \
   --tenant acme --since 2026-09-04T00:00:00Z
 ```
 
@@ -231,7 +231,7 @@ El motor trabaja sobre el **tiempo del evento** —la marca de tiempo de la lect
 momento en que llegó el mensaje. De ahí se derivan dos ajustes.
 
 **La tolerancia a eventos tardíos** es cuánto espera el motor a los eventos fuera de orden antes de
-dar un instante por asentado. Súbala si su flota almacena lecturas y las sube por lotes, o si un
+dar un instante por asentado. Súbela si tu flota almacena lecturas y las sube por lotes, o si un
 salto aguas arriba puede atascarse; el costo es que toda decisión basada en el tiempo se retrasa
 otro tanto.
 
@@ -344,13 +344,13 @@ la arrastran hasta aproximadamente «ahora» por mucho tiempo que uno silencioso
 subir la tolerancia para cubrir una subida acumulada de media hora significaría retrasar media hora
 toda decisión basada en el tiempo, para todos los inquilinos. Donde ese intercambio no funcione, la
 respuesta es acortar los lotes de subida o mantener las reglas con ventana fuera de esas métricas —
-vea [conectar un dispositivo](../guides/connecting-a-device.md).
+ve [conectar un dispositivo](../guides/connecting-a-device.md).
 
 La frontera compartida también afecta a los **relojes de los dispositivos**. Un dispositivo cuyas
 marcas de tiempo van sistemáticamente por detrás del resto de la flota más que el tiempo de
 sostenimiento de una regla de duración más la tolerancia de retraso, ya sea por un reloj lento o por
 un camino lento hasta la plataforma, nunca eleva esa regla: cada lectura suya que cumple la condición se descarta por tardía
-y se cuenta en `detect_late_samples_total`. Corrija el reloj del dispositivo o dé a la regla un
+y se cuenta en `detect_late_samples_total`. Corrige el reloj del dispositivo o da a la regla un
 tiempo de sostenimiento mayor que el retraso.
 
 Lo mismo se aplica a las lecturas que esperaron **dentro de la plataforma**. Mientras
@@ -373,8 +373,8 @@ calla: no llega nada que active la evaluación. El mínimo es:
 > intervalo de comprobación de inactividad y el intervalo de punto de control **+** un tick
 
 Con los valores predeterminados de fábrica, eso son aproximadamente **el tiempo de espera de la
-regla más unos quince segundos**. Fije ese tiempo de espera al silencio que realmente le importa y
-espere la detección poco después, no exactamente en ese instante.
+regla más unos quince segundos**. Fija ese tiempo de espera al silencio que realmente te importa y
+espera la detección poco después, no exactamente en ese instante.
 
 Hay dos maneras en que se dispara una regla de ausencia, y solo una de ellas espera al broker. Si un
 *evento posterior* mueve el sentido del tiempo del evento del motor más allá del plazo de la regla,
@@ -448,7 +448,7 @@ Cuatro causas más que conviene revisar:
   silencio no tiene siguiente evento.
 - **La regla que la levantó ya no se ejecuta.** Una regla que se omite al cargarse —la pestaña
   **Rule Health** del perfil la muestra como un error de compilación— no se evalúa, así que nada
-  resuelve la alarma que levantó antes. Limpie la alarma a mano cuando haya corregido o retirado la
+  resuelve la alarma que levantó antes. Limpia la alarma a mano cuando hayas corregido o retirado la
   regla.
 - **Una alarma de silencio (ausencia) que sigue levantada después de que cambió el dispositivo o la
   regla.** A diferencia de los tipos de regla anteriores, una alarma de ausencia se cierra sola cuando
@@ -468,7 +468,7 @@ Por orden de frecuencia con la que resulta ser la respuesta:
    simplemente no se evalúan contra nada.
 3. **El nombre de la métrica no coincide con lo que envía el dispositivo.** Una condición que nombra
    una métrica que nunca aparece es válida y compila sin problemas; simplemente nunca llega a ser
-   cierta. Revise los eventos recientes del dispositivo para ver la clave exacta.
+   cierta. Revisa los eventos recientes del dispositivo para ver la clave exacta.
 4. **La regla está delimitada a un grupo en el que el dispositivo no está actualmente.** La
    membresía se registra en cada evento a medida que se resuelve, así que un dispositivo recién
    añadido se incorpora en su siguiente evento (en todas las réplicas de `device-management`; una réplica que no recibió el aviso del cambio se pone al día cuando caduca su copia en caché, en cinco minutos como máximo por defecto).
@@ -477,10 +477,10 @@ Por orden de frecuencia con la que resulta ser la respuesta:
    `SERVER` o `SHARED` para él no dispara. Un valor que no es un número, o uno establecido con
    alcance `CLIENT`, cuenta como no definido. Una expresión CEL con un
    [respaldo](../concepts/event-processing.md#dynamic-thresholds-in-cel) dispara según su respaldo.
-6. **La regla falla en el momento de la evaluación.** Este es el caso difícil; vea más abajo.
+6. **La regla falla en el momento de la evaluación.** Este es el caso difícil; ve más abajo.
 7. **Un cambio todavía no había llegado al motor.** Una publicación, una reversión, o un cambio de
    dispositivo o de atributo del que no se avisó al motor se recoge en su siguiente comparación con
-   device-management (vea más abajo).
+   device-management (ve más abajo).
 8. **La regla dejó de compilar tras una actualización.** Una actualización puede rechazar una regla
    que una versión anterior aceptaba. Esa regla se omite cuando el motor la carga, y la pestaña
    **Rule Health** del perfil la muestra como un error de compilación con el motivo. Las notas de la
@@ -508,7 +508,7 @@ indistinguible de una regla cuya condición simplemente nunca es cierta, y la m�
 que cuenta esos errores no está desglosada por regla.
 
 Si la alerta `DetectFanoutEvalErrors` está activa y no consigue saber qué regla es la responsable,
-use la **previsualización del lienzo** en cada regla sospechosa: la previsualización es el único
+usa la **previsualización del lienzo** en cada regla sospechosa: la previsualización es el único
 sitio donde un error de evaluación se atribuye a la regla que lo causó.
 :::
 
@@ -533,7 +533,7 @@ explican casi todos los resultados sorprendentes:
   duración.
 
 Cuando la previsualización se trunca —porque la ventana quedó fuera de la retención o porque se
-alcanzó un límite de escaneo— o aparta lecturas por tardías, se lo indica en lugar de devolver en silencio un resultado corto. Lea
+alcanzó un límite de escaneo— o aparta lecturas por tardías, se lo indica en lugar de devolver en silencio un resultado corto. Lee
 ese aviso antes de concluir que una regla no se dispara.
 
 ## Configuración {#configuration}
@@ -560,7 +560,7 @@ Un **valor negativo se rechaza al arrancar**, y conviene saber qué habría sign
 límite por completo. Un evento fechado años en el futuro fija entonces la hora de última actividad
 del dispositivo — todas las proyecciones de aquí conservan solo el valor estrictamente más nuevo —,
 así que su barrido de inactividad no vuelve a dispararse y el dispositivo nunca puede darse por
-fuera de línea. No hay forma admitida de desactivar el límite; suba el número si los relojes de una
+fuera de línea. No hay forma admitida de desactivar el límite; sube el número si los relojes de una
 flota se desvían de verdad.
 
 `watermarkLatenessSeconds`, más abajo, es otro ajuste para otra dirección: el desfase acota cuánto
@@ -569,14 +569,14 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 
 | Ajuste | Predeterminado | Qué hace |
 |---|---|---|
-| `watermarkLatenessSeconds` | 5 | Cuánto esperar a los eventos fuera de orden antes de dar un instante por asentado. **Súbalo** si los eventos llegan por lotes o si un salto aguas arriba puede atascarse; es la principal defensa frente a una falsa alarma de ausencia. También tolera el pequeño desorden entre los eventos de un mismo dispositivo que introduce la resolución, y que crece con el número de réplicas de `device-management`: una regla con ventana sigue contando un evento que llega dentro de este margen, las reglas de duración, de ventana de conteo y de tasa lo colocan según su propia hora, y una regla de umbral en alarma descarta una lectura más antigua que la más reciente del dispositivo, mientras que una sin alarma descarta una lectura que cumple la condición y llega más tarde que este margen solo si se reintentó o se retuvo por el camino. No cubre un evento cuya publicación falló y se reintentó, que llega al menos 60 segundos tarde. |
+| `watermarkLatenessSeconds` | 5 | Cuánto esperar a los eventos fuera de orden antes de dar un instante por asentado. **Súbelo** si los eventos llegan por lotes o si un salto aguas arriba puede atascarse; es la principal defensa frente a una falsa alarma de ausencia. También tolera el pequeño desorden entre los eventos de un mismo dispositivo que introduce la resolución, y que crece con el número de réplicas de `device-management`: una regla con ventana sigue contando un evento que llega dentro de este margen, las reglas de duración, de ventana de conteo y de tasa lo colocan según su propia hora, y una regla de umbral en alarma descarta una lectura más antigua que la más reciente del dispositivo, mientras que una sin alarma descarta una lectura que cumple la condición y llega más tarde que este margen solo si se reintentó o se retuvo por el camino. No cubre un evento cuya publicación falló y se reintentó, que llega al menos 60 segundos tarde. |
 | `idleAdvanceGuardSeconds` | 5 | Cuánto tiempo debe estar el motor sin actividad antes de disparar una regla según el reloj de pared. Un valor negativo desactiva esa vía: las reglas de ausencia solo se disparan entonces cuando un *evento posterior* mueve el tiempo del evento más allá de su plazo, de modo que un dispositivo que se queda en silencio y sigue en silencio nunca levanta ninguna. Del mismo modo, las reglas de ventana de conteo y de tasa deciden la última lectura antes de un periodo de silencio solo cuando llega un evento posterior. |
-| `detectShards` | 1 | En cuántas partes se divide el estado del motor, según la serie de cada regla (un dispositivo, o el ancla en una regla de correlación), de 1 a 64 (0 o sin definir significa 1; cualquier otro valor se rechaza al arrancar). Las detecciones, el reloj del tiempo del evento y el punto de control guardado son idénticos con cualquier valor, así que puede cambiarse en cualquier reinicio, al alza o a la baja, sin nada que migrar. Con un valor superior a 1, cada parte se ejecuta en su propia goroutine, de modo que el motor puede usar más de un núcleo; el bucle que lee y planifica los mensajes sigue siendo uno solo, así que la mejora queda limitada por ese bucle y por los núcleos que se le den al pod (véase [Ejecutar el motor en más núcleos](#detect-shards)). Déjelo en 1 salvo que haya medido que el límite es el motor y no el bucle ni la base de datos. El valor en vigor es la métrica `devicechain_eventprocessing_detect_shards`. |
+| `detectShards` | 1 | En cuántas partes se divide el estado del motor, según la serie de cada regla (un dispositivo, o el ancla en una regla de correlación), de 1 a 64 (0 o sin definir significa 1; cualquier otro valor se rechaza al arrancar). Las detecciones, el reloj del tiempo del evento y el punto de control guardado son idénticos con cualquier valor, así que puede cambiarse en cualquier reinicio, al alza o a la baja, sin nada que migrar. Con un valor superior a 1, cada parte se ejecuta en su propia goroutine, de modo que el motor puede usar más de un núcleo; el bucle que lee y planifica los mensajes sigue siendo uno solo, así que la mejora queda limitada por ese bucle y por los núcleos que se le den al pod (véase [Ejecutar el motor en más núcleos](#detect-shards)). Déjalo en 1 salvo que haya medido que el límite es el motor y no el bucle ni la base de datos. El valor en vigor es la métrica `devicechain_eventprocessing_detect_shards`. |
 | `checkpointEvents` | 1000 | Máximo de eventos procesados entre puntos de control. |
 | `checkpointIntervalSeconds` | 10 | Tiempo máximo entre puntos de control, para que un flujo tranquilo también confirme. **Como máximo 30**: un punto de control es lo que confirma el flujo, así que un intervalo cercano o superior a la ventana de confirmación de 60 segundos del broker hace que los mensajes de un flujo tranquilo se vuelvan a entregar. 30 deja margen para el propio punto de control, y el servicio rechaza al arrancar cualquier valor mayor. |
-| `checkpointTimeoutSeconds` | 10 | Cuánto puede tardar una llamada de un punto de control (publicar detecciones, guardar la instantánea) antes de abandonarla y contar el punto de control como fallido, en lugar de bloquear la detección con una base de datos o un bróker que ha dejado de responder. Máximo 120. El límite del guardado de la instantánea crece solo, hasta cuatro veces el último guardado completado (con tope de dos minutos), de modo que un motor grande sobre una base de datos lenta no se queda fallando; súbalo solo si el primer guardado ya es más lento que este valor. |
-| `maxRuleDurationSeconds` | 86400 | Lapso de tiempo máximo que puede declarar una regla: ventana, retención, tiempo de espera de silencio o hueco de sesión. **Se aplica**: una regla más larga se rechaza al publicar. Vea más abajo. |
-| `maxRulesPerTenant` | 500 | Techo de reglas por inquilino. **Se mide y se reporta, no se aplica**; vea más abajo. |
+| `checkpointTimeoutSeconds` | 10 | Cuánto puede tardar una llamada de un punto de control (publicar detecciones, guardar la instantánea) antes de abandonarla y contar el punto de control como fallido, en lugar de bloquear la detección con una base de datos o un bróker que ha dejado de responder. Máximo 120. El límite del guardado de la instantánea crece solo, hasta cuatro veces el último guardado completado (con tope de dos minutos), de modo que un motor grande sobre una base de datos lenta no se queda fallando; súbelo solo si el primer guardado ya es más lento que este valor. |
+| `maxRuleDurationSeconds` | 86400 | Lapso de tiempo máximo que puede declarar una regla: ventana, retención, tiempo de espera de silencio o hueco de sesión. **Se aplica**: una regla más larga se rechaza al publicar. Ve más abajo. |
+| `maxRulesPerTenant` | 500 | Techo de reglas por inquilino. **Se mide y se reporta, no se aplica**; ve más abajo. |
 | `maxLiveKeysPerTenant` | 1000000 | Techo por inquilino de ventanas y temporizadores vivos. También se mide, no se aplica. |
 | `maxRetainedSamplesPerTenant` | 5000000 | Techo por inquilino de lecturas retenidas dentro de las ventanas abiertas. También se mide, no se aplica. |
 | `outboundCallsPerSecond` | 100 | Tasa por inquilino a la que se despachan las acciones de conector de salida, medida según el momento en que la telemetría que las desencadenó llegó a la plataforma. |
@@ -625,7 +625,7 @@ Lo que eso significa para las cifras:
   confirmado su evento derivado; una detección descartada o que aún espera publicarse no cuenta.
 
 El último flanco disparado es el más reciente que vieron los contadores, no el estado actual de la
-alarma de la regla. Para eso, use la propia alarma o el flujo de detecciones.
+alarma de la regla. Para eso, usa la propia alarma o el flujo de detecciones.
 
 Contabilidad de los dos presupuestos: una entrada pendiente es una regla con disparos aún sin escribir,
 esté donde esté (acumulando disparos, apartada para la siguiente escritura o dentro de una escritura
@@ -673,7 +673,7 @@ Solo ayuda cuando la fase `publish` es una parte grande del tiempo del bucle (v�
 dispositivos. Un único dispositivo muy activo no gana nada, porque sus detecciones se siguen enviando
 de una en una. `devicechain_eventprocessing_detect_derived_publish_window_full_seconds_total` es el
 tiempo que los puntos de control pasaron esperando con otra detección lista para enviar; si se acerca
-al tiempo en `publish`, una ventana más ancha puede ayudar. Deje el valor por defecto salvo que esté
+al tiempo en `publish`, una ventana más ancha puede ayudar. Deja el valor por defecto salvo que esté
 midiendo.
 
 ### El techo de duración de regla sí se aplica
@@ -715,8 +715,8 @@ Hay dos situaciones que producen esto, y ambas son silenciosas:
   actualizado.
 
 Antes de bajar el límite o de actualizar, inventaríe las reglas publicadas con lapsos superiores al
-nuevo valor y acórtelas o retírelas de forma deliberada. Después, revise el registro del motor en
-busca de `failed to compile; skipping` y confirme en la pestaña **Rule Health** del perfil que se
+nuevo valor y acórtelas o retíralas de forma deliberada. Después, revisa el registro del motor en
+busca de `failed to compile; skipping` y confirma en la pestaña **Rule Health** del perfil que se
 están ejecutando las reglas que espera.
 :::
 
@@ -732,16 +732,16 @@ comprueban contra el mismo valor al guardar un grupo.
 El techo es el mismo para todos los inquilinos, y no hay ningún ajuste para subirlo, ni para un
 inquilino ni para la instancia. Acota cuánto trabajo puede costar una sola lectura al motor único
 que comparten todos los inquilinos. Una expresión que recorre las mediciones de una lectura
-(`m.all(...)`, `m.exists(...)`) es la forma habitual de alcanzarlo; nombre en su lugar las
+(`m.all(...)`, `m.exists(...)`) es la forma habitual de alcanzarlo; nombra en su lugar las
 mediciones que necesita.
 
 :::note Los presupuestos de estado por inquilino se miden, no se aplican
 Los tres techos por inquilino —reglas, claves vivas y lecturas retenidas— levantan una métrica y una
 línea de registro cuando un inquilino los supera. **Nada detiene al inquilino.** Un solo inquilino
-que autore reglas patológicas puede agotar la memoria del motor compartido. Vigile
-`DetectTenantOverStateBudget` y actúe en consecuencia: la alerta *es* la aplicación del límite.
+que autore reglas patológicas puede agotar la memoria del motor compartido. Vigila
+`DetectTenantOverStateBudget` y actúa en consecuencia: la alerta *es* la aplicación del límite.
 
-Vigile **las tres** dimensiones de memoria. Fallan en direcciones distintas y ninguna implica a las
+Vigila **las tres** dimensiones de memoria. Fallan en direcciones distintas y ninguna implica a las
 otras, así que cualquiera de ellas leída por separado puede parecer sana mientras el motor se llena:
 
 | Métrica | Cuenta | Se mueve cuando |
@@ -767,7 +767,7 @@ detrás de ese tope.
 
 | Ajuste (en `device-management`) | Valor por defecto | Qué hace |
 |---|---|---|
-| `raiseAlarm.workers` | 8, reducido para que este y `resolution.workers` dejen libres al menos 4 conexiones del pool (6 con el pool predeterminado de 20), y nunca menos de 1 | Cuántos cambios de alarma se aplican a la vez, de 1 a uno menos que `rdbConfiguration.maxOpenConnections` (20 si no se establece). Cualquier valor fuera de ese rango detiene el servicio al arrancar y nombra el ajuste. Cada trabajador retiene una conexión a la base de datos mientras escribe, por lo que un valor superior a la mitad del pool se registra en el log. Un valor explícito se comprueba por separado, no frente a `resolution.workers`, así que elija ambos a la vez. Los valores en vigor se registran al arrancar. Se lee una sola vez al arrancar. |
+| `raiseAlarm.workers` | 8, reducido para que este y `resolution.workers` dejen libres al menos 4 conexiones del pool (6 con el pool predeterminado de 20), y nunca menos de 1 | Cuántos cambios de alarma se aplican a la vez, de 1 a uno menos que `rdbConfiguration.maxOpenConnections` (20 si no se establece). Cualquier valor fuera de ese rango detiene el servicio al arrancar y nombra el ajuste. Cada trabajador retiene una conexión a la base de datos mientras escribe, por lo que un valor superior a la mitad del pool se registra en el log. Un valor explícito se comprueba por separado, no frente a `resolution.workers`, así que elige ambos a la vez. Los valores en vigor se registran al arrancar. Se lee una sola vez al arrancar. |
 
 Dentro de una réplica, los cambios de **una** misma alarma se aplican en el orden en que llegan,
 sea cual sea el ajuste; solo se solapan los cambios de alarmas distintas. El resultado nunca
@@ -776,8 +776,8 @@ ignora, así que un cambio reentregado, o aplicado por otra réplica, no puede d
 reciente. Con 1 se aplican de uno en uno.
 
 El pool de conexiones del que toman estos trabajadores también lo usan `resolution.workers` y la API,
-y cada número de trabajadores se comprueba contra el pool por separado, no en conjunto, así que deje
-margen para el otro cuando aumente uno. En una base de datos local en Docker (una cifra orientativa,
+y cada número de trabajadores se comprueba contra el pool por separado, no en conjunto, así que deja
+margen para el otro cuando aumentes uno. En una base de datos local en Docker (una cifra orientativa,
 no una afirmación de capacidad), ocho trabajadores aplicaron entre cuatro y siete veces más cambios
 de alarma por segundo que uno.
 
@@ -787,29 +787,29 @@ de alarma por segundo que uno.
 |---|---|
 | `DetectCheckpointsStalledWithBacklog` | **La alerta más importante de esta página.** Los puntos de control se han detenido mientras hay trabajo esperando: el motor no puede alcanzar su base de datos o el bróker, o su bucle está atascado. No se está detectando nada. |
 | `DetectShardSaturated` | Se instala siempre, pero solo puede dispararse con `detectShards` superior a 1: con 1 no hay series de partes. Una parte de la detección ha estado ocupada más del 90 % del tiempo durante diez minutos, así que es el límite de la velocidad de detección. Véase [Ejecutar el motor en más núcleos](#detect-shards). |
-| `DetectShardInvariantViolated` | Se instala siempre, pero solo puede dispararse con `detectShards` superior a 1. Las partes discreparon en el reloj o en la posición durante un punto de control y este se rechazó. No se guardó nada incorrecto, pero los puntos de control siguen fallando en ese pod hasta reiniciarlo. Es un defecto: reinicie el pod indicado en la alerta e infórmelo. |
-| `DetectLoopStalled` | El bucle de detección de la réplica que posee la partición lleva más de dos minutos sin avanzar, aunque la réplica sigue declarándose activa. El bucle está atascado dentro de una llamada, normalmente a una conexión de base de datos o de bróker que ha dejado de responder. Todas las demás métricas de esta página se leen en ese mismo bucle, así que permanecen congeladas en su último valor y parecen sanas. No se está detectando nada; reinicie el pod indicado en la alerta. Una réplica en espera nunca la dispara. |
+| `DetectShardInvariantViolated` | Se instala siempre, pero solo puede dispararse con `detectShards` superior a 1. Las partes discreparon en el reloj o en la posición durante un punto de control y este se rechazó. No se guardó nada incorrecto, pero los puntos de control siguen fallando en ese pod hasta reiniciarlo. Es un defecto: reinicia el pod indicado en la alerta e infórmalo. |
+| `DetectLoopStalled` | El bucle de detección de la réplica que posee la partición lleva más de dos minutos sin avanzar, aunque la réplica sigue declarándose activa. El bucle está atascado dentro de una llamada, normalmente a una conexión de base de datos o de bróker que ha dejado de responder. Todas las demás métricas de esta página se leen en ese mismo bucle, así que permanecen congeladas en su último valor y parecen sanas. No se está detectando nada; reinicia el pod indicado en la alerta. Una réplica en espera nunca la dispara. |
 | `DetectConsumerBacklogHigh` | El motor va con retraso. Mientras lo esté, queda suprimida la detección de ausencias **por silencio**; un evento posterior sigue disparando una ausencia vencida, como se explica arriba. |
 | `DetectWatermarkLagHigh` | El sentido del tiempo del evento del motor se está quedando atrás respecto al tiempo real. |
-| `DetectFanoutEvalErrors` | Una o más reglas publicadas están fallando al evaluarse. Vea la advertencia de arriba. |
-| `ReactPoisonDropping` | Algunas acciones de una detección fallaron en todos los intentos de entrega; normalmente command-delivery o el bus de mensajes estuvo sin servicio varios minutos. Las demás acciones se intentaron en cada entrega; cada mensaje de la cola nombra las que fallaron. Nada las reprocesa. Trátelo como urgente. |
-| `DeadLetterWriteLost` | Algo se abandonó **y** no se pudo escribir en el flujo de mensajes no entregados. Revise el bróker y el registro del servicio: una carta que el propio servicio se negó a escribir también termina aquí, igual que un evento entrante cuyo registro de fallo device-management no pudo codificar (el evento se confirma y nada de lo publicado dice que falló), igual que un mensaje de esa cola en el que el almacén de mensajes no entregados o la reconciliación de comandos agotó sus intentos. |
-| `DeadLetterStoreLosing` | Los mensajes llegaron al flujo pero no se pudieron escribir en el almacén, así que caducarán sin quedar registrados. Revise la base de datos del operador. |
+| `DetectFanoutEvalErrors` | Una o más reglas publicadas están fallando al evaluarse. Ve la advertencia de arriba. |
+| `ReactPoisonDropping` | Algunas acciones de una detección fallaron en todos los intentos de entrega; normalmente command-delivery o el bus de mensajes estuvo sin servicio varios minutos. Las demás acciones se intentaron en cada entrega; cada mensaje de la cola nombra las que fallaron. Nada las reprocesa. Trátalo como urgente. |
+| `DeadLetterWriteLost` | Algo se abandonó **y** no se pudo escribir en el flujo de mensajes no entregados. Revisa el bróker y el registro del servicio: una carta que el propio servicio se negó a escribir también termina aquí, igual que un evento entrante cuyo registro de fallo device-management no pudo codificar (el evento se confirma y nada de lo publicado dice que falló), igual que un mensaje de esa cola en el que el almacén de mensajes no entregados o la reconciliación de comandos agotó sus intentos. |
+| `DeadLetterStoreLosing` | Los mensajes llegaron al flujo pero no se pudieron escribir en el almacén, así que caducarán sin quedar registrados. Revisa la base de datos del operador. |
 | `ReactConnectorEgressShedding` | Un inquilino supera su tasa de salida en la línea de tiempo en que su telemetría llegó a la plataforma, y sus acciones de salida se están descartando. Cada una se envía a la cola de mensajes no entregados con motivo `shed`, dentro de un presupuesto; léalas con `dcctl dead-letters`. Una puesta al día tras un reinicio no causa esta alerta. |
 | `ReactShedLettersOverBudget` | Un inquilino descarta acciones de salida más rápido de lo que se registran una a una, así que el exceso se resume en un mensaje no entregado por inquilino y minuto. |
-| `RateMeteringClockFallback` | Durante una hora, las acciones de salida se han medido según la hora del bróker o de llegada porque no llevaban hora de desencadenamiento, así que una puesta al día puede volver a descartarse como una inundación. Compruebe que event-processing y outbound-connectors ejecutan la misma versión. Una hora de desencadenamiento posterior a la hora del bróker de su mensaje se cuenta aparte, con el origen `capped`, y no dispara este aviso: es un desfase de reloj entre el pod y el bróker, no una hora que falte. |
+| `RateMeteringClockFallback` | Durante una hora, las acciones de salida se han medido según la hora del bróker o de llegada porque no llevaban hora de desencadenamiento, así que una puesta al día puede volver a descartarse como una inundación. Comprueba que event-processing y outbound-connectors ejecutan la misma versión. Una hora de desencadenamiento posterior a la hora del bróker de su mensaje se cuenta aparte, con el origen `capped`, y no dispara este aviso: es un desfase de reloj entre el pod y el bróker, no una hora que falte. |
 | `DetectFactReconcileFailing` | El motor no puede comparar sus reglas, versiones de perfil, dispositivos y umbrales con device-management. Mientras falla no se elimina nada, pero un cambio perdido sigue perdido hasta que se recupere. |
-| `DetectRuleStatWriteFailing` | No se pueden escribir los contadores de salud de reglas. La detección no se ve afectada, pero los recuentos de disparos por regla de la consola se quedan cortos: cada escritura fallida se descarta, no se reintenta, y los disparos que llevaba se cuentan en `devicechain_eventprocessing_detect_rule_stat_updates_discarded_total`. El error está en el registro de event-processing; revise su conexión a la base de datos. |
-| `DetectLiveGapFillFailing` | La detección en vivo se ha detenido porque no se puede leer una parte del flujo de eventos. El motor no salta eventos que no ha visto, así que no aplica nada nuevo hasta que el broker responda; mientras tanto crece el retraso. Los cambios de reglas y de tenants se siguen aplicando y no se pierde nada. Revise el broker y la conexión del motor con él. Si pasados diez minutos sigue sin poder leerse el mismo rango, el motor reinicia su periodo de detección y lo vuelve a leer desde el flujo. Si el flujo sigue sin poder leerse, la reconstrucción también falla y, tras cinco reconstrucciones fallidas, el pod se reinicia: una caída de JetStream de más de diez minutos, con el arrendamiento intacto, termina en un reinicio del pod. |
+| `DetectRuleStatWriteFailing` | No se pueden escribir los contadores de salud de reglas. La detección no se ve afectada, pero los recuentos de disparos por regla de la consola se quedan cortos: cada escritura fallida se descarta, no se reintenta, y los disparos que llevaba se cuentan en `devicechain_eventprocessing_detect_rule_stat_updates_discarded_total`. El error está en el registro de event-processing; revisa su conexión a la base de datos. |
+| `DetectLiveGapFillFailing` | La detección en vivo se ha detenido porque no se puede leer una parte del flujo de eventos. El motor no salta eventos que no ha visto, así que no aplica nada nuevo hasta que el broker responda; mientras tanto crece el retraso. Los cambios de reglas y de tenants se siguen aplicando y no se pierde nada. Revisa el broker y la conexión del motor con él. Si pasados diez minutos sigue sin poder leerse el mismo rango, el motor reinicia su periodo de detección y lo vuelve a leer desde el flujo. Si el flujo sigue sin poder leerse, la reconstrucción también falla y, tras cinco reconstrucciones fallidas, el pod se reinicia: una caída de JetStream de más de diez minutos, con el arrendamiento intacto, termina en un reinicio del pod. |
 | `DetectLiveDeliveriesRecovered` | Eventos que el broker entregó nunca llegaron al motor, y este los leyó del flujo y los aplicó en orden. La detección es correcta. Si se repite, las conexiones con el broker se están cayendo o dos motores consumen a la vez. |
 | `DetectFactsRepaired` | El motor corrigió un estado del que no se le había avisado. La detección vuelve a ser correcta; si se repite, se están perdiendo avisos. |
 | `DeviceFactPublishFailing` | device-management no puede enviar avisos de cambio. Los cambios siguen llegando al motor, con unos minutos de retraso. |
 | `DetectTenantOverStateBudget` | Un inquilino ha superado un techo que no se aplica: su número de reglas, sus ventanas y temporizadores vivos, o las lecturas que retienen sus ventanas abiertas. |
-| `DetectLeaderIsNotConsuming` | Una réplica es dueña de la partición pero no está dentro de un turno activo y no ha confirmado ningún punto de control en diez minutos. Está atascada construyendo un turno, lo que retiene la partición frente a todas las standby mientras no se detecta nada. Una reproducción larga no la dispara, porque una reproducción va confirmando puntos de control. Lea el log de la réplica alrededor de la construcción de su turno y reinicie ese pod para que una standby pueda tomar el relevo. |
-| `GeoFenceSetPublishFailing` | device-management no pudo publicar un manifiesto de conjunto de geocercas: un error de serialización, un rechazo del broker o un fallo de transporte. La edición de la geocerca en sí tuvo éxito y es duradera; lo que falló es avisar al motor, así que la contención conserva el conjunto de geocercas anterior hasta que la pasada de reconciliación de cinco minutos lo repare. Una tasa sostenida significa que cada edición de geocercas tarda minutos en surtir efecto. Si empezó tras un cambio de configuración del broker, compruebe que `infrastructure.nats.streamMaxMsgSize` no esté fijado por debajo de lo que necesita un manifiesto; device-management registra al arrancar un aviso que nombra ambos tamaños. |
+| `DetectLeaderIsNotConsuming` | Una réplica es dueña de la partición pero no está dentro de un turno activo y no ha confirmado ningún punto de control en diez minutos. Está atascada construyendo un turno, lo que retiene la partición frente a todas las standby mientras no se detecta nada. Una reproducción larga no la dispara, porque una reproducción va confirmando puntos de control. Lee el log de la réplica alrededor de la construcción de su turno y reinicia ese pod para que una standby pueda tomar el relevo. |
+| `GeoFenceSetPublishFailing` | device-management no pudo publicar un manifiesto de conjunto de geocercas: un error de serialización, un rechazo del broker o un fallo de transporte. La edición de la geocerca en sí tuvo éxito y es duradera; lo que falló es avisar al motor, así que la contención conserva el conjunto de geocercas anterior hasta que la pasada de reconciliación de cinco minutos lo repare. Una tasa sostenida significa que cada edición de geocercas tarda minutos en surtir efecto. Si empezó tras un cambio de configuración del broker, comprueba que `infrastructure.nats.streamMaxMsgSize` no esté fijado por debajo de lo que necesita un manifiesto; device-management registra al arrancar un aviso que nombra ambos tamaños. |
 | `DetectFenceArchiveSkew` | El motor pidió a device-management un manifiesto de conjunto de geocercas y se le dijo que la consulta no existe, así que los dos servicios ejecutan versiones a ambos lados del cambio de entrega de manifiestos. Es lo esperado durante un momento mientras avanza una actualización, porque los dos Deployments no se esperan entre sí. Si se sostiene, device-management va por detrás, lo más probable es que se haya revertido por su cuenta, y las ediciones de geocercas no llegan al motor hasta que avance de nuevo. |
-| `DetectFenceGeometryUnresolved` | Un conjunto de geocercas nombra geocercas cuya geometría el motor no pudo obtener del archivo de device-management. Esas geocercas se instalan llevando su error, así que la contención las informa como irresolubles en lugar de responder, lo que también se ve en `DetectFanoutEvalErrors`. Se repara en la siguiente pasada de reconciliación si la causa era transitoria; si se sostiene, la lectura del archivo está fallando, así que revise la salud de device-management y su conexión con el token de servicio. El inquilino y la geocerca se nombran en el log de errores del motor, nunca en el contador. |
-| `DetectFenceGeometryHashMismatch` | **Crítica.** Un documento de geometría no tuvo el hash de la dirección bajo la que se pidió. Una dirección es el SHA-256 del documento almacenado bajo ella, así que esto nunca es transitorio ni benigno: device-management sirvió la fila equivocada, algo recodificó el documento en tránsito, o el archivo está corrupto. Las geocercas afectadas se rechazan en lugar de compilarse, así que la contención se degrada en lugar de responder mal. Investigue antes de reiniciar nada; un reinicio oculta el síntoma y no cambia nada. |
+| `DetectFenceGeometryUnresolved` | Un conjunto de geocercas nombra geocercas cuya geometría el motor no pudo obtener del archivo de device-management. Esas geocercas se instalan llevando su error, así que la contención las informa como irresolubles en lugar de responder, lo que también se ve en `DetectFanoutEvalErrors`. Se repara en la siguiente pasada de reconciliación si la causa era transitoria; si se sostiene, la lectura del archivo está fallando, así que revisa la salud de device-management y su conexión con el token de servicio. El inquilino y la geocerca se nombran en el log de errores del motor, nunca en el contador. |
+| `DetectFenceGeometryHashMismatch` | **Crítica.** Un documento de geometría no tuvo el hash de la dirección bajo la que se pidió. Una dirección es el SHA-256 del documento almacenado bajo ella, así que esto nunca es transitorio ni benigno: device-management sirvió la fila equivocada, algo recodificó el documento en tránsito, o el archivo está corrupto. Las geocercas afectadas se rechazan en lugar de compilarse, así que la contención se degrada en lugar de responder mal. Investiga antes de reiniciar nada; un reinicio oculta el síntoma y no cambia nada. |
 
 :::note Un motor que pierde una carrera de cerebro dividido termina
 Si alguna vez dos motores actúan a la vez como escritor, aquel cuyo punto de control se rechaza por
@@ -895,7 +895,7 @@ números de 0 a K-1):
 
 Las tres series con etiqueta solo existen mientras el motor tiene partes. `detect_barrier_wait_seconds` y `detect_shard_invariant_violations_total` no llevan etiqueta y se exportan a 0 incluso con `detectShards` en 1.
 
-Memoria: cada parte tiene una cola de hasta 1024 mensajes, así que un valor superior a 1 puede retener en el pod hasta `detectShards` veces esa cantidad de mensajes en cola (con las lecturas que llevan) mientras el bucle va por delante de la parte más lenta. Dimensione el límite de memoria del pod al subir el ajuste.
+Memoria: cada parte tiene una cola de hasta 1024 mensajes, así que un valor superior a 1 puede retener en el pod hasta `detectShards` veces esa cantidad de mensajes en cola (con las lecturas que llevan) mientras el bucle va por delante de la parte más lenta. Dimensiona el límite de memoria del pod al subir el ajuste.
 
 Un detalle de las marcas de tiempo difiere de `detectShards` en 1. Una detección producida sin un mensaje detrás, que es solo la resolución que genera retirar un dispositivo de una regla de ausencia, se marca con la hora en que el motor la recoge; con 1 recibe la hora del siguiente mensaje o avance. Esa hora solo mide las acciones salientes y no forma parte de la identidad de la detección, así que los duplicados siguen colapsando como antes.
 

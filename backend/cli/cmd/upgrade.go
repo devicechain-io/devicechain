@@ -23,10 +23,11 @@ var (
 
 	upgradeAllowEnvelopeDowngrade bool
 
-	upgradeMqttFailClosed bool
-	upgradeTrustedProxies []string
-	upgradeMQTTExposure   string
-	upgradeMQTTHost       string
+	upgradeMqttFailClosed    bool
+	upgradeMqttDeviceUplinks bool
+	upgradeTrustedProxies    []string
+	upgradeMQTTExposure      string
+	upgradeMQTTHost          string
 	// upgradeDevAllowEgress is --dev-allow-egress; upgradeDevAllowEgressList its parsed form.
 	upgradeDevAllowEgress     []string
 	upgradeDevAllowEgressList []string
@@ -90,7 +91,7 @@ func eventStoreStringFlag(given bool, v string) *string {
 
 // upgradeOptions is the UpgradeOptions the upgrade flags describe, split out of RunE so
 // the copy of each flag into its field can be tested.
-func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[string]interface{}) bootstrap.UpgradeOptions {
+func upgradeOptions(instance string, mqttFailClosed, mqttDeviceUplinks *bool, valuesOverlay map[string]interface{}) bootstrap.UpgradeOptions {
 	return bootstrap.UpgradeOptions{
 		Options: bootstrap.Options{
 			Instance:      instance,
@@ -100,11 +101,12 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 			ImageRegistry: upgradeRegistry,
 			ImageVersion:  upgradeVersion,
 
-			MqttFailClosed: mqttFailClosed,
-			TrustedProxies: upgradeTrustedProxies,
-			MQTTExposure:   upgradeMQTTExposure,
-			MQTTHost:       upgradeMQTTHost,
-			DevAllowEgress: upgradeDevAllowEgressList,
+			MqttFailClosed:    mqttFailClosed,
+			MqttDeviceUplinks: mqttDeviceUplinks,
+			TrustedProxies:    upgradeTrustedProxies,
+			MQTTExposure:      upgradeMQTTExposure,
+			MQTTHost:          upgradeMQTTHost,
+			DevAllowEgress:    upgradeDevAllowEgressList,
 
 			BrokerMaxConnections: bootstrap.BrokerMaxConnectionsFromFlag(upgradeBrokerMaxConnectionsGiven, upgradeBrokerMaxConnections),
 			ValuesOverlay:        valuesOverlay,
@@ -343,7 +345,7 @@ store), says so when it rises, and warns when the volume has less free space tha
 		if err := bootstrap.CheckSparkplugFlags(upgradeSparkplugSources, upgradeWithdrawSparkplug); err != nil {
 			return err
 		}
-		opts := upgradeOptions(args[1], mqttFailClosed, valuesOverlay)
+		opts := upgradeOptions(args[1], mqttFailClosed, mqttDeviceUplinksFlag(cmd.Flags().Changed, upgradeMqttDeviceUplinks), valuesOverlay)
 		return bootstrap.Upgrade(cmd.Context(), provider, opts)
 	},
 	SilenceUsage: true,
@@ -363,6 +365,7 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeWithdrawLwm2m, "withdraw-lwm2m-identities", false, withdrawLwm2mUsage)
 	upgradeCmd.Flags().StringVar(&upgradeSparkplugSource, "sparkplug-source", "", sparkplugSourceUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeWithdrawSparkplug, "withdraw-sparkplug-sources", false, withdrawSparkplugUsage)
+	upgradeCmd.Flags().BoolVar(&upgradeMqttDeviceUplinks, "mqtt-device-uplinks", false, mqttDeviceUplinksUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	upgradeCmd.Flags().StringSliceVar(&upgradeTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
 	upgradeCmd.Flags().IntVar(&upgradeBrokerMaxConnections, "broker-max-connections", 0, brokerMaxConnectionsUsage)

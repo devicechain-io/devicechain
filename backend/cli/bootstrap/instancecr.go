@@ -84,6 +84,7 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 	spec.ObjectStore = st.ObjectStore.DeepCopy()
 	// The fail-closed choice as made: nil is "never chose" and is recorded as that.
 	spec.MQTTFailClosed = copyBoolPtr(st.MqttFailClosed)
+	spec.MQTTDeviceUplinks = copyBoolPtr(st.MqttDeviceUplinks)
 	recordTrustedProxies(&spec, st)
 	recordMQTTExposure(&spec, st)
 	spec.BrokerMaxConnections = int32(st.BrokerMaxConnections)

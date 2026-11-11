@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/tracing"
 	"io"
 	"net/http"
 	"os"
@@ -83,7 +84,8 @@ const (
 // A fixture that needs one of those sets the single field it needs, or calls
 // NewMicroservice.
 type Microservice struct {
-	StartTime time.Time
+	tracingShutdown func(context.Context) error
+	StartTime       time.Time
 
 	// Passed from environment
 	InstanceId       string
@@ -1002,10 +1004,17 @@ func (ms *Microservice) ExecuteInitialize(ctx context.Context) error {
 		return err
 	}
 	log.Info().Msg("Successfully loaded instance configuration.")
+	ms.tracingShutdown, err = tracing.Setup(ctx, ms.InstanceConfiguration.Infrastructure.Tracing, os.Getenv(ENV_MS_FUNCTIONAL_AREA))
+	if err != nil {
+		return fmt.Errorf("initialize tracing: %w", err)
+	}
 
 	// Load microservice configuration.
 	err = ms.LoadMicroserviceConfiguration()
 	if err != nil {
+		flush, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = ms.tracingShutdown(flush)
 		return err
 	}
 	log.Info().Msg("Successfully loaded microservice configuration.")
@@ -1047,5 +1056,10 @@ func (ms *Microservice) Terminate(ctx context.Context) error {
 
 // Terminate microservice (as called by lifecycle manager)
 func (ms *Microservice) ExecuteTerminate(ctx context.Context) error {
+	if ms.tracingShutdown != nil {
+		flush, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return ms.tracingShutdown(flush)
+	}
 	return nil
 }

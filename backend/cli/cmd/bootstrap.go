@@ -22,6 +22,8 @@ import (
 // (Changed), because "not given" and "given false" are different things to record.
 var bootstrapMqttFailClosed bool
 
+var bootstrapMqttDeviceUplinks bool
+
 // bootstrapMQTTExposure and bootstrapMQTTHost are --mqtt-exposure and --mqtt-host. See mqttExposureUsage.
 var (
 	bootstrapMQTTExposure string
@@ -172,7 +174,7 @@ func restoreFlagsFromArgv(backupsEnabled bool) bootstrap.RestoreFlags {
 // bootstrapOptions is the Options the bootstrap flags describe. Split out of RunE so the
 // copy of each flag into its field can be tested: a deleted line is otherwise invisible,
 // and --mqtt-fail-closed would quietly stop reaching the declaration.
-func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed *bool) bootstrap.Options {
+func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed, mqttDeviceUplinks *bool) bootstrap.Options {
 	return bootstrap.Options{
 		Instance:             instance,
 		KubeContext:          bootstrapKubeContext,
@@ -188,6 +190,7 @@ func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed *boo
 		AllowLegacyDbRemoval: bootstrapAllowLegacyDb,
 		EnableAreas:          enableAreas,
 		MqttFailClosed:       mqttFailClosed,
+		MqttDeviceUplinks:    mqttDeviceUplinks,
 		Size:                 bootstrapSize,
 		TrustedProxies:       bootstrapTrustedProxies,
 		MQTTExposure:         bootstrapMQTTExposure,
@@ -231,6 +234,7 @@ func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding,
 		SparkplugSources:          opts.SparkplugSources,
 		SparkplugSourcesGiven:     len(opts.SparkplugSources) > 0 || opts.WithdrawSparkplugSources,
 		MqttFailClosed:            opts.MqttFailClosed,
+		MqttDeviceUplinks:         opts.MqttDeviceUplinks,
 		Size:                      bootstrap.StateSizeFrom(opts.Size),
 		MQTTExposureGiven:         opts.MQTTExposure,
 		BrokerMaxConnectionsGiven: opts.BrokerMaxConnections,
@@ -243,6 +247,11 @@ func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding,
 		Escrow:                    escrowPlan,
 		Values:                    map[string]string{},
 	}
+}
+
+// mqttDeviceUplinksFlag preserves the distinction between omitted and explicit false.
+func mqttDeviceUplinksFlag(changed func(string) bool, value bool) *bool {
+	return bootstrap.MqttDeviceUplinksFromFlag(changed("mqtt-device-uplinks"), value)
 }
 
 // mqttFailClosedFlag reads --mqtt-fail-closed off a command's flag set: nil when the flag
@@ -429,7 +438,7 @@ var bootstrapCmd = &cobra.Command{
 			return err
 		}
 
-		opts := bootstrapOptions(args[1], enableAreas, mqttFailClosed)
+		opts := bootstrapOptions(args[1], enableAreas, mqttFailClosed, mqttDeviceUplinksFlag(cmd.Flags().Changed, bootstrapMqttDeviceUplinks))
 
 		// WHAT CAN BE SETTLED FROM THE ARGUMENTS ALONE IS SETTLED HERE, BEFORE THE RUN
 		// TOUCHES ANYTHING.
@@ -765,6 +774,7 @@ func init() {
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapEnableAreas, "enable-area", nil, "additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with the cluster's --compact setting; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)")
 	bootstrapCmd.Flags().StringArrayVar(&bootstrapValues, "values", nil, valuesUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapSize, "size", "", sizeUsage)
+	bootstrapCmd.Flags().BoolVar(&bootstrapMqttDeviceUplinks, "mqtt-device-uplinks", false, mqttDeviceUplinksUsage)
 	bootstrapCmd.Flags().BoolVar(&bootstrapMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
 	bootstrapCmd.Flags().IntVar(&bootstrapBrokerMaxConnections, "broker-max-connections", 0, brokerMaxConnectionsUsage)
@@ -911,3 +921,9 @@ const sparkplugSourceUsage = "path to a YAML or JSON file of Sparkplug sources t
 // withdrawSparkplugUsage is the help text of --withdraw-sparkplug-sources on both verbs.
 const withdrawSparkplugUsage = "remove the instance's Sparkplug sources and the Secret holding their broker passwords. " +
 	"Not combinable with --sparkplug-source"
+
+// mqttDeviceUplinksUsage is shared by bootstrap and upgrade.
+const mqttDeviceUplinksUsage = "let a device publish its own payload to its raw-payload MQTT topic for the decoder on its device type's profile (infrastructure.nats.mqttDeviceUplinks). " +
+	"Off by default; turn it on only after every event-sources and device-management replica runs a release that knows the topic, in an upgrade of its own. " +
+	"=false turns it off; a connected device keeps its grant until it reconnects or its session token expires. " +
+	"Recorded on the instance and kept by upgrade when omitted"
