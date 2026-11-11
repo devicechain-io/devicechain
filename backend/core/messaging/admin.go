@@ -128,25 +128,45 @@ func (e *BrokerDriftError) Error() string {
 // may trust. Ceilings and replicas are not in it: they are sizing, the administrator reconciles
 // them, and a service that stopped over a ceiling would turn a tuning change into an outage.
 type streamExpectation struct {
-	subjects    []string
-	retention   nats.RetentionPolicy
-	duplicates  time.Duration
-	allowDirect bool
+	subjects []string
+
+	// 🔴 ONLY THE ADVISORY SUBJECT LIST MAY GROW. It has one subject per captured catalog
+	// stream, so it is the one list every release grows. A newer release's administrator
+	// hook writes the longer list during a rolling upgrade; an older pod that restarts
+	// must accept it. Extra advisories are harmless: each area's recorder durable filters
+	// exactly its own durables' advisory subjects (see recorder.go), so an advisory for a
+	// stream this release does not know is never handed to it. Other streams stay exact:
+	// adding a subject to a data stream changes what a reader is handed.
+	subjectsMayGrow bool
+	retention       nats.RetentionPolicy
+	duplicates      time.Duration
+	allowDirect     bool
 }
 
 func (nmgr *NatsManager) expectedStream(suffix string) streamExpectation {
 	return streamExpectation{
-		subjects:    nmgr.streamSubjects(suffix),
-		retention:   retentionPolicy(streams.RetentionFor(suffix)),
-		duplicates:  time.Duration(streams.DuplicateWindowSecondsFor(suffix)) * time.Second,
-		allowDirect: streams.AllowDirectFor(suffix),
+		subjects:        nmgr.streamSubjects(suffix),
+		subjectsMayGrow: streams.ShapeOf(suffix) == streams.ShapeAdvisory,
+		retention:       retentionPolicy(streams.RetentionFor(suffix)),
+		duplicates:      time.Duration(streams.DuplicateWindowSecondsFor(suffix)) * time.Second,
+		allowDirect:     streams.AllowDirectFor(suffix),
 	}
 }
 
 // streamDrift lists how cfg differs from w. Each entry reads as a sentence fragment.
 func streamDrift(cfg nats.StreamConfig, w streamExpectation) []string {
 	var out []string
-	if !slices.Equal(cfg.Subjects, w.subjects) {
+	if w.subjectsMayGrow {
+		var missing []string
+		for _, subject := range w.subjects {
+			if !slices.Contains(cfg.Subjects, subject) {
+				missing = append(missing, subject)
+			}
+		}
+		if len(missing) > 0 {
+			out = append(out, fmt.Sprintf("it is missing declared subjects %v", missing))
+		}
+	} else if !slices.Equal(cfg.Subjects, w.subjects) {
 		out = append(out, fmt.Sprintf("it captures subjects %v, not the declared %v", cfg.Subjects, w.subjects))
 	}
 	if cfg.Retention != w.retention {
