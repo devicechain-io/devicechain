@@ -185,15 +185,16 @@ func (api *Api) UpdateArea(ctx context.Context, token string, request *AreaUpdat
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	updated := matches[0]
+	current := matches[0]
+	assignments := map[string]any{}
 
 	// The type hop resolves BEFORE anything is written, so an unknown area type
 	// refuses the WHOLE update rather than applying the fields it liked first. The
 	// nil guard is not decoration: the preload comes back nil for a dangling FK, and
 	// the comparison this replaces dereferenced it unconditionally.
 	currentTypeToken := ""
-	if updated.AreaType != nil {
-		currentTypeToken = updated.AreaType.Token
+	if current.AreaType != nil {
+		currentTypeToken = current.AreaType.Token
 	}
 	retypeTo, retype, err := resolveRequiredTypeRef(request.AreaTypeToken, currentTypeToken, "areaTypeToken")
 	if err != nil {
@@ -207,30 +208,38 @@ func (api *Api) UpdateArea(ctx context.Context, token string, request *AreaUpdat
 		if len(types) == 0 {
 			return nil, gorm.ErrRecordNotFound
 		}
-		updated.AreaType = types[0]
-		// Belt-and-braces: gorm's Save syncs a belongs-to FK from the association it is
-		// given, so this is not load-bearing the way the device version is (that one is
-		// READ back by the post-commit roster resolve). It is set anyway so the in-memory
-		// value the caller is handed back agrees with the row.
-		updated.AreaTypeId = types[0].ID
+		assignments["area_type_id"] = types[0].ID
 	}
 
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
-	if err != nil {
-		return nil, err
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(current.Name)
 	}
-	updated.Metadata = metadataJSON
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(current.Description)
+	}
+	if request.Metadata.Set {
+		metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(current.Metadata)))
+		if err != nil {
+			return nil, err
+		}
+		assignments["metadata"] = metadataJSON
+	}
 
 	// A NEW link is checked, and the area written, in one transaction holding the fence's row lock
 	// (see DeleteGeoFence); an unknown fence refuses the whole update.
 	linkTo := ""
-	if proposed := request.BoundaryFenceToken.ApplyToNullString(updated.BoundaryFenceToken); proposed != updated.BoundaryFenceToken {
+	if request.BoundaryFenceToken.Set {
+		proposed := request.BoundaryFenceToken.ApplyToNullString(current.BoundaryFenceToken)
+		assignments["boundary_fence_token"] = nil
+		if proposed.Valid {
+			assignments["boundary_fence_token"] = proposed.String
+		}
 		if proposed.Valid {
 			linkTo = proposed.String
 		}
-		updated.BoundaryFenceToken = proposed
+	}
+	if len(assignments) == 0 {
+		return current, nil
 	}
 
 	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
@@ -239,11 +248,28 @@ func (api *Api) UpdateArea(ctx context.Context, token string, request *AreaUpdat
 				return err
 			}
 		}
-		return tx.Save(updated).Error
+		// Only requested columns are written: an omitted boundary must never restore
+		// a stale link after another writer unlinked the area and deleted the fence.
+		res := rdb.AdvancingFrom(tx, current.UpdatedAt).Model(current).Omit(clause.Associations).
+			Where("id = ?", current.ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
 	}); err != nil {
 		return nil, err
 	}
-	return updated, nil
+	matches, err = api.AreasByToken(ctx, []string{token})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // Get areas by id.

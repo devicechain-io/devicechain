@@ -128,7 +128,7 @@ func TestTheRulesWalkHalvesAPageTooLargeForTheCap(t *testing.T) {
 // the client reports it as version skew, so the log sends an operator to what is deployed.
 func TestAnOlderDeviceManagementIsReportedAsSkew(t *testing.T) {
 	c := &deviceManagementFactsClient{transport: func(context.Context, factService, string, string, map[string]any, any) error {
-		return errors.New(`graphql: Cannot query field "deviceRosterPage" on type "Query".`)
+		return &svcclient.GraphQLError{Messages: []string{`Cannot query field "deviceRosterPage" on type "Query".`}}
 	}}
 	if _, err := c.Roster(context.Background(), "acme"); !errors.Is(err, errFactsSkew) {
 		t.Fatalf("an unknown-field refusal was not reported as skew: %v", err)
