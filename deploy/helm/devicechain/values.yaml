@@ -393,6 +393,8 @@ instance:
         # starts, rather than being refused as unknown.
         enabled: true
       # OpenTelemetry is off by default. Restart services after changing FIXED config.
+      # While enabled is false the chart leaves this block out of the instance document, so a
+      # pod of an earlier release, which does not know the key, still starts during an upgrade.
       # OTLP gRPC: collector.observability.svc:4317; HTTP: http://collector.observability.svc:4318
       # An HTTP endpoint without a path posts to /v1/traces; give a path to use another.
       # The OTEL_EXPORTER_OTLP_* environment variables, if set on a pod, still apply to the exporter.
