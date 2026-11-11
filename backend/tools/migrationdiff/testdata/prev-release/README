@@ -1,0 +1,10 @@
+These are the verbatim, LF pg_dump schema goldens from v1.3.0.
+Refresh to the previous released minor on EVERY release (replace v1.3.0 below):
+
+mkdir -p backend/tools/migrationdiff/testdata/prev-release/v1.3.0
+for f in $(git ls-tree --name-only v1.3.0 backend/tools/migrationdiff/golden/); do git show v1.3.0:$f > backend/tools/migrationdiff/testdata/prev-release/v1.3.0/$(basename $f); done
+
+Run the commands from the repository root.
+Old pods keep writing during rolling upgrades; the integration tests compare these
+columns with the CURRENT migrated catalog and replay frozen previous-release writers.
+Update the test fixture path and writer snapshots together when advancing the minor.
