@@ -70,7 +70,8 @@ func TestAggregateResetFullHorizonAndGate(t *testing.T) {
 					t.Fatal(got)
 				}
 				reading.At = epoch.Add(-8 * time.Minute)
-				if got := startState(s, evaluate.Result{}, []evaluate.Event{reading}, "d1", lo, start); got != Unknown {
+				// Start inside the first pane so it is partial for tumbling too.
+				if got := startState(s, evaluate.Result{}, []evaluate.Event{reading}, "d1", lo.Add(time.Minute), start); got != Unknown {
 					t.Fatal("partial horizon proved clear", got)
 				}
 				reading.At = epoch.Add(-4 * time.Minute)

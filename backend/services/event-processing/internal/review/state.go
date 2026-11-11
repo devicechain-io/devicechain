@@ -49,6 +49,13 @@ func startState(s side, r evaluate.Result, events []evaluate.Event, dev string, 
 		// Cold-start partial aggregates do not establish the live window's state.
 		edgeStart = lo.Add(s.fidelity.Horizon)
 	}
+	var last *evaluate.Edge
+	for i := range r.Edges {
+		e := &r.Edges[i]
+		if e.Series == dev && !e.At.Before(lo) && e.At.Before(start) && (last == nil || !e.At.Before(last.At)) {
+			last = e
+		}
+	}
 	for _, e := range r.Edges {
 		if e.Series == dev && !e.At.Before(edgeStart) && e.At.Before(start) {
 			state = Clear
@@ -56,6 +63,11 @@ func startState(s side, r evaluate.Result, events []evaluate.Event, dev string, 
 				state = Raised
 			}
 		}
+	}
+	// An unresolved cold-start raise still latches the engine; reset evidence
+	// cannot establish CLEAR while that latch remains set.
+	if last != nil && last.Raise && state != Raised {
+		return Unknown
 	}
 	if state != Unknown {
 		return state
@@ -91,8 +103,10 @@ func startState(s side, r evaluate.Result, events []evaluate.Event, dev string, 
 		}
 		return Unknown
 	}
-	// A trailing full-window test is deliberately also used for tumbling windows.
-	// It requires a complete observed horizon, rather than inventing a partial pane.
+	if f.WindowMode == rules.ModeTumbling {
+		return tumblingResetState(samples, f, lo, start)
+	}
+	// Sliding reset evidence uses a complete trailing horizon.
 	sort.SliceStable(samples, func(i, j int) bool { return samples[i].At.Before(samples[j].At) })
 	left := 0
 	sum := 0.0
@@ -155,6 +169,50 @@ func startState(s side, r evaluate.Result, events []evaluate.Event, dev string, 
 
 	return Unknown
 }
+
+// tumblingResetState uses the same Time.Truncate alignment as core.applyAggregate.
+func tumblingResetState(samples []evaluate.Event, f rules.Fidelity, lo, start time.Time) State {
+	type pane struct {
+		count         int
+		sum, min, max float64
+	}
+	panes := map[time.Time]pane{}
+	for _, e := range samples {
+		at := e.At.Truncate(f.Horizon)
+		if at.Before(lo) || at.Add(f.Horizon).After(start) {
+			continue
+		}
+		v, _ := metric(e, f.Metric)
+		p := panes[at]
+		if p.count == 0 || v < p.min {
+			p.min = v
+		}
+		if p.count == 0 || v > p.max {
+			p.max = v
+		}
+		p.count++
+		p.sum += v
+		panes[at] = p
+	}
+	for _, p := range panes {
+		v := p.sum
+		switch f.Agg {
+		case rules.AggCount:
+			v = float64(p.count)
+		case rules.AggAvg:
+			v /= float64(p.count)
+		case rules.AggMin:
+			v = p.min
+		case rules.AggMax:
+			v = p.max
+		}
+		if !compare(v, f.Op, f.Threshold) {
+			return Clear
+		}
+	}
+	return Unknown
+}
+
 func canonicalJSON(s string) string {
 	var v any
 	dec := json.NewDecoder(strings.NewReader(s))

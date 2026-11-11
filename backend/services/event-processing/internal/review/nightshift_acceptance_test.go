@@ -318,6 +318,8 @@ func TestNightShiftBrokerHasZeroSideEffects(t *testing.T) {
 	p, c := nightParams(t)
 	p.Draft = nightDraft(t, p.Base, 25.5, 5*time.Minute)
 	probe := streamprobe.New(t)
+	httpProbe := streamprobe.NewHTTP(t)
+	require.Zero(t, httpProbe.CommandEnqueues())
 	ctx := core.WithTenant(context.Background(), p.Tenant)
 	require.NoError(t, probe.Writers[streams.ResolvedEvents].WriteMessages(ctx, c.Messages...))
 	before := probe.Counts(t)
@@ -331,4 +333,5 @@ func TestNightShiftBrokerHasZeroSideEffects(t *testing.T) {
 	}
 	require.Positive(t, intents)
 	require.Equal(t, before, probe.Counts(t), "review published to a live stream")
+	require.Zero(t, httpProbe.CommandEnqueues(), "review enqueued a command over HTTP")
 }

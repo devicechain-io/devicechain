@@ -26,6 +26,7 @@ type Fidelity struct {
 	GateMetric      string        `json:"gateMetric"`
 	GateOp          CompareOp     `json:"gateOp"`
 	GateThreshold   float64       `json:"gateThreshold"`
+	WindowMode      WindowMode    `json:"windowMode"`
 	Agg             AggFunc       `json:"agg"`
 }
 
@@ -41,6 +42,7 @@ func ReplayFidelity(def Rule, compiled *CompiledRule) Fidelity {
 		f.ResetKind = ResetReading
 	case TypeAggregate:
 		f.Horizon = def.Window.D()
+		f.WindowMode = def.Mode
 		f.ResetKind = ResetAggregate
 		if def.Mode != ModeTumbling && def.Mode != ModeSliding {
 			reject("the rule uses a " + string(def.Mode) + " aggregate window, which recorded-input review does not support")

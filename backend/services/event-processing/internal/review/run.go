@@ -49,6 +49,9 @@ func (s side) metrics() []string {
 }
 func validate(p Params) error {
 	bad := func(s string) error { return &InputError{Msg: s} }
+	if p.Base == nil && p.Draft == nil {
+		return bad("there is no rule to compare")
+	}
 	if p.Tenant == "" || p.ProfileToken == "" || p.Source == nil || p.Now.IsZero() {
 		return bad("tenant, profile, source and now are required")
 	}
@@ -212,6 +215,9 @@ func Run(ctx context.Context, p Params) (Result, error) {
 			return Result{}, err
 		}
 		for _, r := range []evaluate.Result{br, dr} {
+			if lateAttributionGap(r) {
+				addReason(&wr.Degraded, "late readings could not be attributed to devices; evaluation is incomplete for this window")
+			}
 			for _, g := range r.Degradations {
 				if g.Reason != evaluate.DegradedLateReadings {
 					addReason(&wr.Degraded, "evaluation is incomplete: "+g.Reason)
@@ -288,12 +294,22 @@ func Run(ctx context.Context, p Params) (Result, error) {
 	out.InputDigest = digest(digests.String())
 	return out, nil
 }
+func lateAttributionGap(r evaluate.Result) bool {
+	total := 0
+	for _, n := range r.LateByDevice {
+		total += n
+	}
+	return total != r.Stats.LateReadings
+}
+
+var evaluateRun = evaluate.Run
+
 func evaluateSide(ctx context.Context, p Params, s side, evs []evaluate.Event, end time.Time) (evaluate.Result, error) {
 	if !s.enabled() || len(evs) == 0 {
 		return evaluate.Result{}, nil
 	}
 	// Scan already applied the guard using the original recorded event identities.
-	return evaluate.Run(ctx, evaluate.Params{Tenant: p.Tenant, ProfileVersion: p.ProfileToken + "@review", Rules: []evaluate.Rule{{Token: s.env.Token, Def: s.def}}, Events: evs, AdvanceTo: end, Lateness: p.Lateness, AppliedGuard: false, AttributeLate: true, MaxEvents: evaluate.HardMaxEvents, MaxEdges: evaluate.HardMaxEdges, MaxIntents: evaluate.HardMaxIntents})
+	return evaluateRun(ctx, evaluate.Params{Tenant: p.Tenant, ProfileVersion: p.ProfileToken + "@review", Rules: []evaluate.Rule{{Token: s.env.Token, Def: s.def}}, Events: evs, AdvanceTo: end, Lateness: p.Lateness, AppliedGuard: false, AttributeLate: true, MaxEvents: evaluate.HardMaxEvents, MaxEdges: evaluate.HardMaxEdges, MaxIntents: evaluate.HardMaxIntents})
 }
 func readWindow(ctx context.Context, p Params, w Window, lead time.Duration, devices []string) (WindowResult, []evaluate.Event, error) {
 	wr := WindowResult{Role: w.Role, Start: w.Start, End: w.End, LeadInStart: w.Start.Add(-lead)}

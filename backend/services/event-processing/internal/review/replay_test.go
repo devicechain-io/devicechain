@@ -6,6 +6,7 @@ package review
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -134,8 +135,16 @@ func TestOutcomeRequiresBothWindowsAndFailWithoutInconclusive(t *testing.T) {
 
 func TestAbsentSidesCannotPassOnNoReadings(t *testing.T) {
 	p := fixture(t)
+	// Both sides absent is refused outright (there is nothing to compare); with one side
+	// absent and no readings, nothing may pass.
 	p.Base = nil
 	p.Draft = nil
+	var ie *InputError
+	if _, err := Run(context.Background(), p); !errors.As(err, &ie) {
+		t.Fatalf("both sides absent: err = %v, want an InputError", err)
+	}
+	p.Base = nil
+	p.Draft = fixture(t).Draft
 	p.Source = &source{}
 	p.Expectations = []Expectation{{Incident, ruletest.Expect{NeverRaised: &ruletest.EdgeExpect{Device: "d1"}}}, {Normal, ruletest.Expect{NeverIntent: &ruletest.IntentExpect{Device: "d1"}}}}
 	r := run(t, p)

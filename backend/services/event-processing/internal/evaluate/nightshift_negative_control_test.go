@@ -22,11 +22,12 @@ import (
 func TestNightShiftProbeDetectsPublishingSinks(t *testing.T) {
 	c := nightshift.Load(t)
 	probe := streamprobe.New(t)
+	httpProbe := streamprobe.NewHTTP(t)
 	before := probe.Counts(t)
 	original := newSinks
 	t.Cleanup(func() { newSinks = original })
 	newSinks = func(rec *recorder) (react.CommandSink, react.AlarmSink, react.ConnectorSink) {
-		return rec, processor.NewAlarmClient(probe.Writers[streams.RaiseAlarm]), processor.NewConnectorClient(probe.Writers[streams.ConnectorDispatch])
+		return processor.NewCommandClient(httpProbe.Client, httpProbe.URL), processor.NewAlarmClient(probe.Writers[streams.RaiseAlarm]), processor.NewConnectorClient(probe.Writers[streams.ConnectorDispatch])
 	}
 	def, err := rules.Decode(c.Header.R1.Definition)
 	require.NoError(t, err)
@@ -47,6 +48,7 @@ func TestNightShiftProbeDetectsPublishingSinks(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, out.Edges)
 	require.Empty(t, out.Degradations, "publishing sinks must successfully reach the broker")
+	require.GreaterOrEqual(t, httpProbe.CommandEnqueues(), int64(1), "negative control: probe missed a real command enqueue")
 	after := probe.Counts(t)
 	require.Greater(t, after[streams.RaiseAlarm], before[streams.RaiseAlarm], "negative control: probe missed a real alarm publish")
 	for _, suffix := range streamprobe.Suffixes {

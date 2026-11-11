@@ -135,3 +135,22 @@ func TestCompareRuleVersionsUnsupportedNeverOpensHistory(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out.Result), &result))
 	require.Empty(t, result.Windows)
 }
+
+func TestCompareRuleVersionsNoRulesIsInvalidInput(t *testing.T) {
+	r, input, _ := compareFixture(t)
+	r.Replay = neverCompareOpener{t}
+	delete(input, "base")
+	delete(input, "draft")
+	resp := gql.MustParseSchema(SchemaContent, r).Exec(compareContext(compareServiceClaims()), compareQuery, "", map[string]any{"input": input})
+	require.Empty(t, resp.Errors)
+	var wire struct {
+		CompareRuleVersions struct {
+			Ok      bool
+			Refusal struct{ Reason, Message string }
+		}
+	}
+	require.NoError(t, json.Unmarshal(resp.Data, &wire))
+	require.False(t, wire.CompareRuleVersions.Ok)
+	require.Equal(t, "INVALID_INPUT", wire.CompareRuleVersions.Refusal.Reason)
+	require.Equal(t, "there is no rule to compare", wire.CompareRuleVersions.Refusal.Message)
+}

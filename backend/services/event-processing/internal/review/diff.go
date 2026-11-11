@@ -4,6 +4,7 @@
 package review
 
 import (
+	"encoding/json"
 	"sort"
 	"time"
 
@@ -72,10 +73,12 @@ func elements(edges []evaluate.Edge, intents []evaluate.Intent, s side) []elemen
 				c.ExpiryLabel = "synthetic"
 			}
 		case evaluate.KindHTTPCall:
+			c.ConfigDigest = actionConfigDigest(s, in)
 			disc = in.URL
 			c.BodyDigest = digest(in.Body)
 			c.Method = in.Method
 		case evaluate.KindPublish:
+			c.ConfigDigest = actionConfigDigest(s, in)
 			disc = in.Connector
 			c.BodyDigest = digest(in.Body)
 			c.Method = in.Method
@@ -84,6 +87,23 @@ func elements(edges []evaluate.Edge, intents []evaluate.Intent, s side) []elemen
 	}
 	return out
 }
+func actionConfigDigest(s side, in evaluate.Intent) string {
+	var configs []string
+	for _, a := range s.def.Actions {
+		if (in.Kind == evaluate.KindHTTPCall && a.Type == rules.ActionHTTPCall && a.HTTPCall != nil && a.HTTPCall.URL == in.URL) ||
+			(in.Kind == evaluate.KindPublish && a.Type == rules.ActionPublish && a.Publish != nil && a.Publish.ConnectorRef == in.Connector) {
+			raw, _ := json.Marshal(a)
+			configs = append(configs, canonicalJSON(string(raw)))
+		}
+	}
+	if len(configs) == 0 {
+		return ""
+	}
+	sort.Strings(configs)
+	raw, _ := json.Marshal(configs)
+	return digest(string(raw))
+}
+
 func changeTime(c Change) time.Time {
 	if c.Base == nil {
 		return *c.Draft
@@ -243,7 +263,7 @@ func absDuration(d time.Duration) time.Duration {
 	return d
 }
 func contentKey(c Content) string {
-	return c.Severity + "\x00" + c.Payload + "\x00" + c.RelativeExpiry.String() + "\x00" + c.ExpiryLabel + "\x00" + c.BodyDigest + "\x00" + c.Method
+	return c.Severity + "\x00" + c.Payload + "\x00" + c.RelativeExpiry.String() + "\x00" + c.ExpiryLabel + "\x00" + c.BodyDigest + "\x00" + c.Method + "\x00" + c.ConfigDigest
 }
 func contentKeyValue(c *Content) string {
 	if c == nil {

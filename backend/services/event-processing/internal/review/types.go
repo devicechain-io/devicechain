@@ -129,6 +129,7 @@ type Content struct {
 	Payload        string        `json:"payload,omitempty"`
 	RelativeExpiry time.Duration `json:"relativeExpiry,omitempty"`
 	ExpiryLabel    string        `json:"expiryLabel,omitempty"`
+	ConfigDigest   string        `json:"configDigest,omitempty"`
 	BodyDigest     string        `json:"bodyDigest,omitempty"`
 	Method         string        `json:"method,omitempty"`
 }
