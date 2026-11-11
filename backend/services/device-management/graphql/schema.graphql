@@ -5231,7 +5231,8 @@ type Query {
     """
     Lists the distinct values currently in use for a free-text classification field across
     the tenant's device types or profiles, sorted, without empty values. An authoring form
-    can offer them as suggestions. Requires device:read.
+    can offer them as suggestions. More than 1000 distinct values are refused with
+    LIMIT_EXCEEDED rather than listed in part. Requires device:read.
     """
     facetValues(
         """The field whose values to list."""
