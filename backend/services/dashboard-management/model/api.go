@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -25,8 +26,19 @@ import (
 const maxDefinitionBytes = 1 << 20
 
 // ErrInvalidDefinition is returned when a create/update carries a Definition that
-// is not a well-formed JSON object. The document is otherwise stored opaquely.
+// is not a well-formed JSON object or has an invalid device selector.
 var ErrInvalidDefinition = errors.New("dashboard definition must be a JSON object")
+
+// selectorError is an invalid device selector. It matches ErrInvalidDefinition with
+// errors.Is, but carries its own text: the document IS a JSON object, so the
+// sentinel's wording would contradict the actual problem.
+type selectorError struct{ widget, detail string }
+
+func (e *selectorError) Error() string {
+	return fmt.Sprintf("invalid dashboard definition: widget %q datasource: %s", e.widget, e.detail)
+}
+
+func (e *selectorError) Is(target error) bool { return target == ErrInvalidDefinition }
 
 // ErrDefinitionTooLarge is returned when a Definition exceeds maxDefinitionBytes.
 var ErrDefinitionTooLarge = errors.New("dashboard definition exceeds the maximum size")
@@ -89,8 +101,9 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 // helper (which drops invalid input silently) a bad definition is rejected — a
 // dashboard with a corrupt document is a client bug, not a value to swallow. The
 // object requirement rejects well-formed-but-nonsense scalars ("42", true, an
-// array) that would only fail later at render time. The backend still treats the
-// document's *contents* opaquely; the @devicechain/dashboards types own the shape.
+// array) that would only fail later at render time. Explicit device selectors must
+// have a string deviceToken and an array of string measurements. Other contents
+// remain opaque; the @devicechain/dashboards types own the document shape.
 func definitionJSON(raw string) (datatypes.JSON, error) {
 	b := []byte(raw)
 	// Length-check before parsing so an oversized payload can't cost a full scan.
@@ -102,6 +115,44 @@ func definitionJSON(raw string) (datatypes.JSON, error) {
 	}
 	if trimmed := bytes.TrimSpace(b); len(trimmed) == 0 || trimmed[0] != '{' {
 		return nil, ErrInvalidDefinition
+	}
+	// Exact-key lookup: a struct decode would also match "Widgets", which the runtime does not.
+	var definition map[string]json.RawMessage
+	if err := json.Unmarshal(b, &definition); err != nil {
+		return datatypes.JSON(b), nil
+	}
+	// A non-array widgets field is outside this narrow selector check.
+	var widgets []json.RawMessage
+	_ = json.Unmarshal(definition["widgets"], &widgets)
+	for _, rawWidget := range widgets {
+		var widget map[string]json.RawMessage
+		if err := json.Unmarshal(rawWidget, &widget); err != nil || widget == nil {
+			continue
+		}
+		var datasource map[string]json.RawMessage
+		if err := json.Unmarshal(widget["datasource"], &datasource); err != nil || datasource == nil {
+			continue
+		}
+		var kind string
+		if err := json.Unmarshal(datasource["kind"], &kind); err != nil || kind != "device" {
+			continue
+		}
+		var id string
+		_ = json.Unmarshal(widget["id"], &id)
+		var deviceToken *string
+		if err := json.Unmarshal(datasource["deviceToken"], &deviceToken); err != nil || deviceToken == nil {
+			return nil, &selectorError{widget: id, detail: "deviceToken must be a string"}
+		}
+		var measurements []json.RawMessage
+		if err := json.Unmarshal(datasource["measurements"], &measurements); err != nil || measurements == nil {
+			return nil, &selectorError{widget: id, detail: "measurements must be an array of strings"}
+		}
+		for _, rawMeasurement := range measurements {
+			var measurement *string
+			if err := json.Unmarshal(rawMeasurement, &measurement); err != nil || measurement == nil {
+				return nil, &selectorError{widget: id, detail: "measurements must be an array of strings"}
+			}
+		}
 	}
 	return datatypes.JSON(b), nil
 }
