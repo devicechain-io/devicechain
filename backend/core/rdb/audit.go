@@ -85,6 +85,8 @@ const (
 	AuditOpMfaEnrolled = "mfa_enrolled"
 	AuditOpMfaDisabled = "mfa_disabled"
 	AuditOpMfaReset    = "mfa_reset"
+	// AuditOpStepUp records an in-session authenticator verification.
+	AuditOpStepUp = "step_up"
 	// AuditOpMfaFailed records a code that was evaluated and refused. AuditOpMfaLocked records
 	// an attempt that armed the identity-wide lock, which is evidence the password is in use by
 	// someone failing the second factor.

@@ -1436,7 +1436,7 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 		return err
 	}
 	for i := range msgs {
-		nm := natsMsg(subject, msgs[i])
+		nm, spans := startPublishMessage(ctx, subject, w.suffix, msgs[i])
 		// A fresh ceiling for each message: a batch is not one publish, and the
 		// ceiling bounds how long ONE unanswered request is waited on.
 		pctx, callerBound, cancel := publishContext(ctx)
@@ -1463,6 +1463,7 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 			}
 		}
 		cancel()
+		finishPublish(spans, err)
 		if err != nil && !callerBound && errors.Is(err, context.DeadlineExceeded) {
 			// Our ceiling fired, not the caller's deadline, which has not passed:
 			// report it as the broker timeout it has always been.

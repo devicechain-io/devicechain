@@ -8,10 +8,9 @@
 //
 // The WIDGETS package already gates this boundary — but that scan walks
 // `packages/widgets/src` and nothing else, so it could not see the console at
-// all. (Nor can either scan see `packages/dashboards/src` or
-// `packages/client/src`, which also bundle into this entry chunk; neither
-// touches MapLibre today, and closing that remaining gap is its own task rather
-// than something this file can reach with a relative glob.)
+// all. This scan also covers `packages/dashboards/src` and `packages/client/src`,
+// which bundle into the console entry chunk too. Only the static-import rule
+// applies to those libraries; the loader/provider rules remain console-specific.
 // The geofence editor is the first console code to touch
 // MapLibre, which means that until this file existed, one ordinary top-level
 // import here would have folded ~200 KB gzipped of map renderer into the entry
@@ -41,6 +40,23 @@ const SOURCES = import.meta.glob('./**/*.{ts,tsx}', {
 /** Every non-test source file in the console, as [path, contents]. */
 const FILES = Object.entries(SOURCES).filter(([path]) => !/\.test\.tsx?$/.test(path));
 
+const SHARED_SOURCES = import.meta.glob(
+  [
+    '../../../packages/dashboards/src/**/*.{ts,tsx}',
+    '../../../packages/client/src/**/*.{ts,tsx}',
+    '!../../../packages/*/src/**/*.{test,spec,typetest,d}.{ts,tsx}',
+    '!../../../packages/*/src/**/{testing,typetests,__tests__,fixtures,__fixtures__}/**',
+  ],
+  {
+    eager: true,
+    query: '?raw',
+    import: 'default',
+  },
+) as Record<string, string>;
+
+/** Production sources contributing to the console, without widening its host rules. */
+const IMPORT_FILES = [...FILES, ...Object.entries(SHARED_SOURCES)];
+
 /**
  * A top-level import of the module that is NOT type-only: `import x from …`,
  * `import { a } from …`, `import * as x from …`, bare `import '…'`, and
@@ -62,13 +78,42 @@ function staticValueImport(module: string): RegExp {
 
 const MAPLIBRE = staticValueImport('maplibre-gl');
 
+function staticMapLibreImports(files: [string, string][]): string[] {
+  return files.filter(([, source]) => MAPLIBRE.test(source)).map(([path]) => path);
+}
+
 describe('the MapLibre lazy boundary', () => {
-  it('is not crossed by any static import in the console', () => {
-    const offenders = FILES.filter(([, source]) => MAPLIBRE.test(source)).map(([path]) => path);
+  it('is not crossed by any static import in the console or its shared packages', () => {
+    const offenders = staticMapLibreImports(IMPORT_FILES);
     expect(
       offenders,
       'a static import of maplibre-gl folds the whole map renderer into the console entry chunk for every operator',
     ).toEqual([]);
+  });
+
+  describe.each(['dashboards', 'client'])('the %s package scan', (name) => {
+    const root = `../../../packages/${name}/src/`;
+
+    it('includes production files and the package entry point', () => {
+      const paths = IMPORT_FILES.map(([path]) => path).filter((path) => path.startsWith(root));
+      expect(paths.length).toBeGreaterThan(0);
+      expect(paths).toContain(`${root}index.ts`);
+    });
+
+    it.each([
+      ["import maplibregl from 'maplibre-gl';", true],
+      ["export * from 'maplibre-gl';", true],
+      ["import type { Map } from 'maplibre-gl';", false],
+      ["export type { Map } from 'maplibre-gl';", false],
+      ["const load = () => import('maplibre-gl');", false],
+    ])('checks a planted source: %s', (source, rejected) => {
+      const path = `${root}index.ts`;
+      const planted: [string, string][] = IMPORT_FILES.map(([file, contents]) => [
+        file,
+        file === path ? source : contents,
+      ]);
+      expect(staticMapLibreImports(planted).includes(path)).toBe(rejected);
+    });
   });
 
   // 🔴 The negative control. The check above is an ABSENCE claim over a file

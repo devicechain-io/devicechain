@@ -205,6 +205,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	}
 	sayValuesOverlay(st)
 	sayMqttFailClosed(st)
+	sayMqttDeviceUplinks(st)
 	sayUpdateStoreMountless(st)
 	// 🔴 THE OPERATOR IS NOT LISTED AS SOMETHING THIS RUN WILL MOVE, because it is
 	// not. hydrateUpgradeState has already refused unless the cluster's operator is
@@ -709,6 +710,9 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 			wouldDo(fmt.Sprintf("record %s as enabled in the instance declaration",
 				strings.Join(st.AreaChange.Added, ", ")))
 		}
+		if st.MqttDeviceUplinksChange && st.MqttDeviceUplinks != nil {
+			wouldDo(fmt.Sprintf("record mqttDeviceUplinks=%t in the instance declaration", *st.MqttDeviceUplinks))
+		}
 		if st.MqttFailClosedChange && st.MqttFailClosed != nil {
 			wouldDo(fmt.Sprintf("record mqttFailClosed=%t in the instance declaration", *st.MqttFailClosed))
 		}
@@ -740,6 +744,7 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 
 	areasMove := st.AreaChange != nil && !slices.Equal(inst.Spec.ExtraFunctionalAreas, st.EnableAreas)
 	if inst.Spec.ImageRegistry == st.ImageRegistry && inst.Spec.ImageVersion == st.ImageVersion && !areasMove &&
+		!(st.MqttDeviceUplinksChange && !sameBoolPtr(inst.Spec.MQTTDeviceUplinks, st.MqttDeviceUplinks)) &&
 		!(st.MqttFailClosedChange && !sameBoolPtr(inst.Spec.MQTTFailClosed, st.MqttFailClosed)) &&
 		!(st.TrustedProxiesChange && !trustedProxiesRecorded(inst.Spec, st)) &&
 		!(st.MQTTExposureChange && !mqttExposureRecorded(inst.Spec, st)) &&
@@ -768,6 +773,9 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	// area delta is: a run that dies half-way leaves the choice declared and the flagless re-run
 	// finishes it instead of rolling it back. ONLY when this run was given one -- a State that
 	// merely read the declaration back never writes it away.
+	if st.MqttDeviceUplinksChange {
+		spec.MQTTDeviceUplinks = copyBoolPtr(st.MqttDeviceUplinks)
+	}
 	if st.MqttFailClosedChange {
 		spec.MQTTFailClosed = copyBoolPtr(st.MqttFailClosed)
 	}
@@ -793,7 +801,7 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	if err := writeInstanceCR(ctx, dyn, instance, spec, st.DcctlVersion, dcv1beta1.PhaseUpgrading); err != nil {
 		return err
 	}
-	if !st.MqttFailClosedChange {
+	if !st.MqttFailClosedChange && !st.MqttDeviceUplinksChange {
 		return nil
 	}
 	// 🔴 READ BACK WHAT THIS RUN ASKED TO KEEP. See verifyFailClosedRecorded.
@@ -804,7 +812,15 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	if back == nil {
 		return nil
 	}
-	return verifyFailClosedRecorded(st.MqttFailClosed, back.Spec.MQTTFailClosed)
+	if st.MqttFailClosedChange {
+		if err := verifyFailClosedRecorded(st.MqttFailClosed, back.Spec.MQTTFailClosed); err != nil {
+			return err
+		}
+	}
+	if st.MqttDeviceUplinksChange {
+		return verifyDeviceUplinksRecorded(st.MqttDeviceUplinks, back.Spec.MQTTDeviceUplinks)
+	}
+	return nil
 }
 
 // finishUpgradePhase records how this upgrade ENDED on the declaration, and gives

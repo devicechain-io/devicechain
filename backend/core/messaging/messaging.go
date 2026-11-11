@@ -341,6 +341,9 @@ type Message struct {
 	// split is set on a message read from inbound-events that is a member republished alone
 	// out of an envelope; see HeaderRetry.
 	split *splitOrigin
+	// Trace state (see tracing.go): reader/producer-side, nil when tracing is off.
+	traceContext context.Context
+	traceMembers []TraceMember
 }
 
 // AckDeadline is when the broker will redeliver this message if it has not been acked: its

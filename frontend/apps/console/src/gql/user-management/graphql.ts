@@ -582,6 +582,14 @@ export type TenantTokenMasksQueryVariables = Exact<{ [key: string]: never; }>;
 
 export type TenantTokenMasksQuery = { tokenMasks: string };
 
+export type StepUpMutationVariables = Exact<{
+  refreshToken: string;
+  code: string;
+}>;
+
+
+export type StepUpMutation = { stepUp: { accessToken: string, refreshToken: string, expiresAt: string } };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -1353,3 +1361,12 @@ export const TenantTokenMasksDocument = new TypedDocumentString(`
   tokenMasks
 }
     `) as unknown as TypedDocumentString<TenantTokenMasksQuery, TenantTokenMasksQueryVariables>;
+export const StepUpDocument = new TypedDocumentString(`
+    mutation StepUp($refreshToken: String!, $code: String!) {
+  stepUp(refreshToken: $refreshToken, code: $code) {
+    accessToken
+    refreshToken
+    expiresAt
+  }
+}
+    `) as unknown as TypedDocumentString<StepUpMutation, StepUpMutationVariables>;

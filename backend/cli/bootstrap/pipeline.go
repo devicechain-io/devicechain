@@ -208,6 +208,12 @@ type State struct {
 	// MqttFailClosedChange says this upgrade was given --mqtt-fail-closed with a value the
 	// declaration does not hold, so recordUpgradedVersion must write it.
 	MqttFailClosedChange bool
+	// MqttDeviceUplinks is the settled choice, carried forward from the declaration.
+	MqttDeviceUplinks *bool
+	// MqttDeviceUplinksGiven says this run was given --mqtt-device-uplinks.
+	MqttDeviceUplinksGiven bool
+	// MqttDeviceUplinksChange records a flag choice different from the declaration.
+	MqttDeviceUplinksChange bool
 	// MQTTExposure and MQTTHost are the settled exposure of the MQTT broker to devices outside the
 	// cluster (none, gateway or loadbalancer, and the DNS name they dial): the flags, else the
 	// declaration's, see mqttexposure.go. MQTTExposureChange says an upgrade must record them, and
@@ -408,6 +414,8 @@ type State struct {
 	// MaxConnections is the relational store's connection budget an install asks for.
 	// Zero keeps what the cluster was installed with.
 	MaxConnections int
+	// RelationalStoreMaxWALMiB is the optional install choice, restored before apply.
+	RelationalStoreMaxWALMiB *int
 	// NATSTLS is the broker's authority and the leaf it signs, minted here rather
 	// than during the apply so the private half never reaches the infrastructure
 	// state. Only the public CA is passed to OpenTofu.
@@ -581,7 +589,7 @@ func ResolveImageSource(registry, version string, build bool) (ImageSource, erro
 	// Only the published registry is normalized: a registry the operator named holds
 	// whatever tags they pushed (the upgrade drill pushes 0.24.0-drill.1 to
 	// localhost:5000), and rewriting those would break exactly that.
-	if !build && registry == DefaultImageRegistry && bareSemver.MatchString(version) {
+	if !build && isPublishedRegistry(registry) && bareSemver.MatchString(version) {
 		version = "v" + version
 	}
 	// Deploying an image tag that was never published fails as an

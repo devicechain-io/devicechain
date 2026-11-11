@@ -122,6 +122,43 @@
               "type": "object",
               "description": "Settings shared by every service in the instance: messaging, secrets and the HTTP edge. The chart validates only the keys named below; each service validates the rest at startup.",
               "properties": {
+                "tracing": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Opt-in OpenTelemetry export to an operator-managed OTLP collector. No credentials or headers are accepted.",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Turn tracing on. Off by default; when off no exporter is created and messages are unchanged.",
+                      "default": false
+                    },
+                    "protocol": {
+                      "type": "string",
+                      "description": "OTLP transport to the collector: grpc (default, usually port 4317) or http (usually port 4318).",
+                      "enum": [
+                        "grpc",
+                        "http"
+                      ],
+                      "default": "grpc"
+                    },
+                    "endpoint": {
+                      "type": "string",
+                      "description": "OTLP collector address: host:port for grpc, a full http(s) URL for http. Required when enabled; the services validate it at startup and refuse to start on a malformed one.",
+                      "default": ""
+                    },
+                    "insecure": {
+                      "type": "boolean",
+                      "description": "Send to the collector without TLS. Off by default; set it only for a collector reached over a trusted in-cluster network.",
+                      "default": false
+                    },
+                    "samplingRatio": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1,
+                      "description": "Root trace sample ratio; absent uses 0.1 when enabled. Zero samples no roots; upstream sampling is respected."
+                    }
+                  }
+                },
                 "http": {
                   "type": "object",
                   "description": "How the services' HTTP endpoints read the caller's address.",

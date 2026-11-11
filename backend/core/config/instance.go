@@ -760,6 +760,7 @@ type BlobConfiguration struct {
 
 // Infrastructure configuration section
 type InfrastructureConfiguration struct {
+	Tracing          TracingConfiguration
 	Nats             NatsConfiguration
 	Metrics          MetricsConfiguration
 	UserManagement   UserManagementConfiguration
@@ -1545,6 +1546,7 @@ func (c *InstanceConfiguration) RetiredConfigKeys() map[string]string {
 // instance document that omits them is still well-formed (ADR-022 decision 1 /
 // review E3). It is applied after decoding and before Validate.
 func (c *InstanceConfiguration) ApplyDefaults() {
+	c.Infrastructure.Tracing.ApplyDefaults()
 	nats := &c.Infrastructure.Nats
 	if nats.StreamReplicas == 0 {
 		nats.StreamReplicas = 1
@@ -1653,6 +1655,9 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 // against. A misrendered config Secret then surfaces at startup rather than as a
 // confusing downstream connection failure.
 func (c *InstanceConfiguration) Validate() error {
+	if err := c.Infrastructure.Tracing.Validate(); err != nil {
+		return err
+	}
 	if c.Infrastructure.Nats.Hostname == "" || c.Infrastructure.Nats.Port == 0 {
 		return fmt.Errorf("infrastructure.nats hostname and port are required")
 	}
@@ -1816,6 +1821,7 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 	defaultDrain := DefaultShutdownDrainSeconds
 	return &InstanceConfiguration{
 		Infrastructure: InfrastructureConfiguration{
+			Tracing: TracingConfiguration{Protocol: "grpc"},
 			Nats: NatsConfiguration{
 				// In the instance's own namespace, beside the services that dial it.
 				Hostname:           "dc-nats",

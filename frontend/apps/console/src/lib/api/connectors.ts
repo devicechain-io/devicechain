@@ -132,7 +132,7 @@ export async function createConnector(opts: {
 // the store's write-only contract: omit it to PRESERVE the stored credential, send a
 // value to ROTATE it, or send null (or "") to DELETE it. expectedUpdatedAt is the
 // optimistic-concurrency precondition: pass the updatedAt the editor loaded so a save
-// fails (CONFLICT) if another writer changed the connector since.
+// fails (STALE_WRITE) if another writer changed the connector since.
 const UPDATE_CONNECTOR = graphql(`
   mutation UpdateConnector(
     $token: String!
@@ -194,9 +194,8 @@ export async function renameConnector(
   return data.renameConnector;
 }
 
-// CONFLICT_MARKER matches the backend's optimistic-concurrency error text (the
-// outbound-connectors model mirrors dashboard-management's ErrConflict). A save
-// that fails the precondition surfaces as a GraphQL error carrying this text.
+// Legacy prose marker retained for callers. Connector updates now also carry
+// extensions.code STALE_WRITE; classify their failures by that code instead.
 export const CONFLICT_MARKER = 'modified by another writer';
 
 // ── Versioning (ADR-039) ──────────────────────────────────────────────────
@@ -238,8 +237,8 @@ const PUBLISH_CONNECTOR = graphql(`
 `);
 
 // publishConnector freezes the current (saved) draft into a new immutable version.
-// expectedUpdatedAt is the same precondition as updateConnector: publish fails with
-// CONFLICT if the server draft moved on since.
+// expectedUpdatedAt is the same precondition as updateConnector: publish fails if
+// the server draft moved on since.
 export async function publishConnector(
   token: string,
   input: { label?: string; description?: string; expectedUpdatedAt?: string | null },
