@@ -73,7 +73,11 @@ type Params struct {
 	VersionRules         VersionRules
 	Now                  time.Time
 }
-type InputError struct{ Msg string }
+type InputError struct {
+	Msg string
+	// RuleRejected distinguishes a definition/compile refusal from malformed request input.
+	RuleRejected bool
+}
 
 func (e *InputError) Error() string { return e.Msg }
 

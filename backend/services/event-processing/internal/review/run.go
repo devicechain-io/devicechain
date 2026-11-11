@@ -134,12 +134,12 @@ func prepare(p Params, env *RuleEnvelope, name string) (side, error) {
 	}
 	def, err := rules.Decode(env.Definition)
 	if err != nil {
-		return s, &InputError{Msg: name + ": " + err.Error()}
+		return s, &InputError{Msg: name + ": " + err.Error(), RuleRejected: true}
 	}
 	def.ID = runtime.PublishedRuleID(p.Tenant, p.ProfileToken+"@review", env.Token)
 	c, err := rules.Compile(def, rules.DefaultLimits())
 	if err != nil {
-		return s, &InputError{Msg: name + ": " + err.Error()}
+		return s, &InputError{Msg: name + ": " + err.Error(), RuleRejected: true}
 	}
 	s.def = def
 	s.compiled = c
@@ -240,7 +240,18 @@ func Run(ctx context.Context, p Params) (Result, error) {
 		}
 		rs := results[e.Window]
 		v, reason, evidence, name := judge(e.Expect, *w, b, d, rs[1], true)
-		bv, breason, _, _ := judge(e.Expect, *w, b, d, rs[0], false)
+		// Baseline is judged against its own recorded command history. Draft command
+		// divergence bounds the draft's counterfactual evidence, not the observed baseline.
+		// Still check historical command provenance: unavailable/different recorded rules
+		// must not turn baseline absence into a confident verdict.
+		baseline := *w
+		baseline.Devices = append([]DeviceCoverage(nil), w.Devices...)
+		for j := range baseline.Devices {
+			c := &baseline.Devices[j]
+			c.Divergence = divergence(ctx, p, b, b, rs[0], rs[0], *c, w.LeadInStart)
+			c.StateDraft, c.LateDraft = c.StateBase, c.LateBase
+		}
+		bv, breason, _, _ := judge(e.Expect, baseline, b, b, rs[0], false)
 		out.Expectations = append(out.Expectations, ExpectationResult{Index: i, Name: name, Window: e.Window, Verdict: v, Baseline: bv, Reason: reason, BaselineReason: breason, Evidence: evidence})
 	}
 	fail, inc := false, false

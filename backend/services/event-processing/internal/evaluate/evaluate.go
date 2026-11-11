@@ -344,7 +344,8 @@ func Run(ctx context.Context, p Params) (Result, error) {
 	pub := runtime.NewPublisher(nil, reg, nopRuntimeMetrics{})
 	rec := &recorder{}
 	run := &runState{pub: pub, rec: rec, maxIntents: maxIntents, maxEdges: maxEdges, drops: map[string]int{}}
-	run.disp = react.NewDispatcher(defResolver(defs), rec, alarmSink{rec}, connectorSink{rec}, nil, nopReactMetrics{},
+	commands, alarms, connectors := newSinks(rec)
+	run.disp = react.NewDispatcher(defResolver(defs), commands, alarms, connectors, nil, nopReactMetrics{},
 		react.WithClock(func() time.Time { return run.clock }),
 		// Quiet: a tenant's malformed rule is reported in the result, not logged once per edge.
 		react.WithLogger(zerolog.Nop()),
