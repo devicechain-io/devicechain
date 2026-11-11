@@ -5,9 +5,9 @@
 device-management/model/api_devices.go UpdateDeviceType # tracked: batch5 #2
 device-management/model/api_detection_rules.go UpdateDetectionRule # tracked: batch5 #4
 device-management/model/api_commands.go UpdateCommandDefinition # tracked: batch5 #5
-device-management/model/api_maintenance_window.go UpdateMaintenanceWindow # tracked: batch5 #3 (codex lane)
-device-management/model/api_groups.go UpdateEntityGroup # tracked: batch5
-device-management/model/api_assets.go UpdateAsset # tracked: batch5
+device-management/model/api_maintenance_window.go UpdateMaintenanceWindow # tracked: Codex-only lane (PR #2461)
+device-management/model/api_groups.go UpdateEntityGroup # tracked: Codex-only lane
+device-management/model/api_assets.go UpdateAsset # tracked: Codex-only lane
 device-management/model/api_assets.go UpdateAssetType # tracked: batch5
 device-management/model/api_profiles.go UpdateDeviceProfile # tracked: batch5
 device-management/model/api_metrics.go UpdateMetricDefinition # tracked: batch5
