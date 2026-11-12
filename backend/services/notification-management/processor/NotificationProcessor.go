@@ -25,6 +25,10 @@ const (
 	// holds no more alarms than there are dispatchers to start them, so none waits in a queue
 	// while the broker's redelivery clock runs.
 	WORKER_COUNT = 5
+
+	// settleMargin reserves the post-delivery storehold.Settle record write's full
+	// recordTimeout plus one second for the worker's ack to flush before process teardown.
+	settleMargin = recordTimeout + time.Second
 )
 
 // NotificationProcessor is a durable, load-balanced consumer of the alarm-events
@@ -74,7 +78,7 @@ type NotificationProcessor struct {
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups let
 	// ExecuteStop drain the reader before closing the channel it feeds, so the reader
 	// can never send on a closed channel at SIGTERM, and the workers drain the
-	// remaining backlog before exiting, unless Stop's context expires and cancels dispatch.
+	// remaining backlog before exiting, unless Stop's settlement cutoff cancels dispatch.
 	// Hold keeps an alarm event unacked, outside its delivery budget, while the relational
 	// store cannot take writes (core/storehold). Without it an outage past the delivery budget
 	// (about four minutes) dead-lettered the event and acked it: nobody was paged. Only the
@@ -225,8 +229,8 @@ func (np *NotificationProcessor) initializeWorkers() {
 	np.dispatchCancel = cancel
 	for w := 1; w <= WORKER_COUNT; w++ {
 		np.workerWG.Add(1)
-		// Reader cancellation starts graceful draining. Only expiration of Stop's
-		// context cancels dispatch, so completed deliveries can still be acknowledged.
+		// Reader cancellation starts graceful draining. Stop cancels dispatch ahead of
+		// its deadline so completed deliveries can finish recording and be acknowledged.
 		go func() {
 			defer np.workerWG.Done()
 			np.processMessages(dispatchCtx)
@@ -290,7 +294,7 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 	// disposition exactly once on whichever path it leaves by.
 	done := np.metrics.Start()
 	if ctx.Err() != nil {
-		// Buffered work abandoned at the drain deadline has not been attempted.
+		// Buffered work abandoned at the settlement cutoff has not been attempted.
 		done(core.ResultRetry)
 		return
 	}
@@ -344,6 +348,9 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 	}); err != nil {
 		// A partial delivery is final: retrying would repeat the channels that sent.
 		// In particular, cancellation after a delivery must not turn it into a retry.
+		// This is a Notifier-contract funnel for other implementations: PolicyNotifier
+		// returns nil once any channel delivered, and announceClear maps ErrPassPartial
+		// to nil (clear_notify.go). Neither reaches this branch itself.
 		if errors.Is(err, core.ErrPassPartial) {
 			msg.Ack()
 			done(core.ResultOK)
@@ -371,8 +378,11 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 			return
 		}
 		if ctx.Err() != nil {
-			// Shutdown abandoned this attempt, even at MaxDeliver. It is not an
-			// exhausted delivery failure and must remain unacked and unlettered.
+			// Shutdown abandoned this attempt; leave it unacked for redelivery below
+			// MaxDeliver. At NumDelivered >= MaxDeliver the broker does not redeliver:
+			// alarm-events max-delivery advisories are captured and the platform's
+			// deadletter.MaxDeliveryRecorder (wired in core/service/service.go)
+			// dead-letters the message. This worker must not letter it as a failure.
 			done(core.ResultRetry)
 			return
 		}
@@ -429,15 +439,30 @@ func (np *NotificationProcessor) ExecuteStop(ctx context.Context) error {
 			close(np.stopDone)
 		}()
 	})
-	select {
-	case <-ctx.Done():
-		np.dispatchCancel()
-		return fmt.Errorf("draining notification dispatch: %w", ctx.Err())
-	case <-np.stopDone:
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("draining notification dispatch: %w", err)
+	// Stop shares the process teardown deadline. Cancel dispatch early enough for
+	// irreversible deliveries to settle their records and ack within that same budget.
+	// A budget shorter than the margin cancels dispatch immediately. Without a deadline,
+	// dispatch keeps draining until completion or explicit context cancellation.
+	var cutoff <-chan time.Time
+	if deadline, ok := ctx.Deadline(); ok {
+		timer := time.NewTimer(time.Until(deadline) - settleMargin)
+		defer timer.Stop()
+		cutoff = timer.C
+	}
+	for {
+		select {
+		case <-cutoff:
+			np.dispatchCancel()
+			cutoff = nil
+		case <-ctx.Done():
+			np.dispatchCancel()
+			return fmt.Errorf("draining notification dispatch: %w", ctx.Err())
+		case <-np.stopDone:
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("draining notification dispatch: %w", err)
+			}
+			return nil
 		}
-		return nil
 	}
 }
 
