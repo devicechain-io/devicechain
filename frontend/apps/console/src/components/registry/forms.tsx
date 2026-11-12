@@ -262,7 +262,7 @@ export function RegistryInstanceForm<T extends NamedEntity>({
         typeToken,
       };
       if (editing) {
-        await update(entity.token, { token: entity.token, ...fields });
+        if (await update(entity.token, { token: entity.token, ...fields }) === false) return;
         onDone(e('UpdatedToast', { token: entity.token }));
       } else {
         const trimmed = token.trim();

@@ -140,6 +140,14 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 // Explicit null clears a nullable field; an empty request performs no write.
 func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 	request *DeviceTypeUpdateRequest) (*DeviceType, error) {
+	return api.UpdateDeviceTypeWithBreakGlass(ctx, token, request, nil)
+}
+
+// UpdateDeviceTypeWithBreakGlass is UpdateDeviceType with the reason a re-point to or from a
+// protected device profile is made outside review. The reason is not part of the request:
+// it says why this one call bypasses review, not what the type should look like.
+func (api *Api) UpdateDeviceTypeWithBreakGlass(ctx context.Context, token string,
+	request *DeviceTypeUpdateRequest, breakGlassReason *string) (*DeviceType, error) {
 	matches, err := api.DeviceTypesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -237,6 +245,19 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 
 	repointed := !uintPtrEqual(oldProfileId, profileId)
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if repointed {
+			var ids []uint
+			if oldProfileId != nil {
+				ids = append(ids, *oldProfileId)
+			}
+			if profileId != nil {
+				ids = append(ids, *profileId)
+			}
+			if err := api.guardProfileBreakGlass(ctx, tx, ids, "REPOINT_TYPE", found.Token, breakGlassReason); err != nil {
+				return err
+			}
+		}
+
 		res := rdb.AdvancingFrom(tx, found.UpdatedAt).Model(found).Omit(clause.Associations).
 			Where("id = ?", found.ID).Updates(assignments)
 		if res.Error != nil {
@@ -257,7 +278,7 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 			UpdateColumn("expected_since", time.Now().UTC().Truncate(time.Microsecond)).Error
 	})
 	if err != nil {
-		return nil, err
+		return nil, mapAutomationReviewGuard(err)
 	}
 	// Re-roster POST-COMMIT when the type's adopted profile changed (ADR-051 slice 4c-2):
 	// re-pointing a type's profile silently re-binds EVERY device of that type, so the
@@ -791,6 +812,12 @@ func (api *Api) emitDeviceRosterForType(ctx context.Context, deviceTypeId uint) 
 // device in the argument and another in the payload silently updated the second and
 // got a 200 for it. The payload no longer carries a token at all.
 func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceUpdateRequest) (*Device, error) {
+	return api.UpdateDeviceWithBreakGlass(ctx, token, request, nil)
+}
+
+// UpdateDeviceWithBreakGlass is UpdateDevice with the reason a device is moved out of a type
+// bound to a protected device profile outside review.
+func (api *Api) UpdateDeviceWithBreakGlass(ctx context.Context, token string, request *DeviceUpdateRequest, breakGlassReason *string) (*Device, error) {
 	matches, err := api.DevicesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -800,6 +827,7 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	}
 
 	updated := matches[0]
+	oldTypeId := updated.DeviceTypeId
 
 	// The type hop resolves BEFORE anything is written, so an unknown device type
 	// refuses the WHOLE update rather than applying the fields it liked first. The
@@ -920,6 +948,18 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// (CONFLICT) refuses the whole update rather than applying the fields it liked first.
 	storedDisabled := false
 	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if retyped && !api.skipReviewGuardForOldPodTest {
+			var oldType DeviceType
+			if err := tx.First(&oldType, oldTypeId).Error; err != nil {
+				return err
+			}
+			if oldType.ProfileId != nil {
+				if err := api.guardProfileBreakGlass(ctx, tx, []uint{*oldType.ProfileId}, "MOVE_DEVICE", updated.Token, breakGlassReason); err != nil {
+					return err
+				}
+			}
+		}
+
 		if len(assignments) == 0 && aliasesSet {
 			// No UPDATE takes the device row's lock, and the alias replacement is serialized by it.
 			if err := lockDeviceRow(tx, updated.ID); err != nil {
@@ -970,7 +1010,7 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 		}
 		return replaceAliasesOnTx(tx, updated.ID, aliases)
 	}); err != nil {
-		return nil, err
+		return nil, mapAutomationReviewGuard(err)
 	}
 	// A credentialed event takes its device from the credential cache, which holds the
 	// device as it was read: drop it so the next event sees the new type, external id and

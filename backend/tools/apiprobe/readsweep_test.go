@@ -139,6 +139,36 @@ func TestReadSweepDocumentsAreValidAgainstTheServedSchemas(t *testing.T) {
 	}
 }
 
+// The policy and its empty break-glass ledger must both read the seeded profile,
+// even when an older baseline receipt has no policy row of its own.
+func TestAutomationProtectionReadsUseTheSeededProfile(t *testing.T) {
+	schema, err := loadServedSchema(filepath.Join("..", "..", "services"), "device-management")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, withPolicy := range []bool{false, true} {
+		tokens := probeTokens()
+		if !withPolicy {
+			delete(tokens, "automation-review-policy")
+		}
+		calls, _ := planReadSweep("device-management", schema, tokens)
+		for _, field := range []string{"automationReviewPolicy", "automationReviewBreakGlass"} {
+			found := false
+			for _, call := range calls {
+				if call.Field == field {
+					found = true
+					if got := call.Vars["profileToken"]; got != tokens["device-profile"] {
+						t.Errorf("%s profileToken = %v, want %s", field, got, tokens["device-profile"])
+					}
+				}
+			}
+			if !found {
+				t.Errorf("%s was not swept (policy in receipt: %v)", field, withPolicy)
+			}
+		}
+	}
+}
+
 // A declaration that names something the schema no longer has is worse than no
 // declaration: it reads as coverage, or as a considered exemption, and is neither.
 func TestSweepDeclarationsNameThingsThatExist(t *testing.T) {
