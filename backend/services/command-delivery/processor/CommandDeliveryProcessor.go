@@ -122,6 +122,11 @@ func normalizeReach(r model.Reach) model.Reach {
 // UNANSWERED for rolling upgrades. The subject identifies the device, so this only ever
 // withholds evidence on the responder's own command: a device sending this payload can only
 // under-claim, never forge delivery evidence.
+//
+// Remove in v1.6: the v1.5.0 outbound-connectors adapter sends reach UNANSWERED on a queued
+// unconfirmed downlink itself, so once v1.5 is the previous minor (upgrades go one minor at a
+// time) no pod still sends the reach-less shape this maps. Delete this and its legacy test
+// cases, and call normalizeReach directly.
 func responseReach(response responseEnvelope) model.Reach {
 	if response.Success && response.Reach == "" && response.Payload != nil {
 		payload := []byte(*response.Payload)
