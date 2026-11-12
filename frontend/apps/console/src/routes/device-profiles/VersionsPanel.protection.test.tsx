@@ -31,27 +31,30 @@ afterEach(cleanup);
 function show() { render(<MemoryRouter><VersionsPanel profileToken="profile" activeVersion={3} deviceTypeCount={1} onChanged={h.changed} /></MemoryRouter>); }
 async function publish() {
   fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
-  const buttons = await screen.findAllByRole('button', { name: 'Publish' }); fireEvent.click(buttons[buttons.length - 1]);
+  const buttons = await screen.findAllByRole('button', { name: 'Publish' }, { timeout: 5000 }); fireEvent.click(buttons[buttons.length - 1]);
 }
+// Slow CI runners: the publish path goes through lazy imports.
+const SLOW = { timeout: 5000 };
+
 describe('protected profile publishing', () => {
   it('passes the selected review and refreshes reviews after publishing', async () => {
-    show(); await screen.findByRole('option', { name: /approved-rev/ });
+    show(); await screen.findByRole('option', { name: /approved-rev/ }, SLOW);
     fireEvent.change(screen.getByLabelText('Approved review'), { target: { value: 'approved-review' } });
     await publish();
-    await waitFor(() => expect(h.publish).toHaveBeenCalledExactlyOnceWith('profile', undefined, undefined, 'approved-review'));
-    await waitFor(() => expect(h.reviews).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(h.publish).toHaveBeenCalledExactlyOnceWith('profile', undefined, undefined, 'approved-review'), SLOW);
+    await waitFor(() => expect(h.reviews).toHaveBeenCalledTimes(2), SLOW);
   });
   it('explains the missing review, links to review, and blocks publishing', async () => {
     h.reviews.mockResolvedValue({ results: [] }); show();
-    await screen.findByText(/There are no approved reviews/);
+    await screen.findByText(/There are no approved reviews/, undefined, SLOW);
     expect(screen.getByRole('link', { name: 'Change review' }).getAttribute('href')).toBe('/device-profiles/profile?tab=change-review');
     await publish();
-    await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Select an approved review of the current draft.', 'error'));
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Select an approved review of the current draft.', 'error'), SLOW);
     expect(h.publish).not.toHaveBeenCalled();
   });
   it('preserves publishing when the policy cannot be read', async () => {
     h.policy.mockRejectedValue(new Error('Unavailable')); show();
-    await waitFor(() => expect(h.policy).toHaveBeenCalled()); await publish();
-    await waitFor(() => expect(h.publish).toHaveBeenCalledExactlyOnceWith('profile', undefined, undefined));
+    await waitFor(() => expect(h.policy).toHaveBeenCalled(), SLOW); await publish();
+    await waitFor(() => expect(h.publish).toHaveBeenCalledExactlyOnceWith('profile', undefined, undefined), SLOW);
   });
 });

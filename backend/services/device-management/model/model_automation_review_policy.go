@@ -6,12 +6,10 @@ package model
 import (
 	"database/sql"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
-	"gorm.io/gorm/schema"
 )
 
 type ReviewPolicySettings struct {
@@ -98,11 +96,5 @@ type AutomationReviewPolicyView struct {
 	Effective ReviewPolicySettings
 }
 
-// TableName preserves the configured schema prefix while using the history table's name.
-func (AutomationReviewBreakGlass) TableName(namer schema.Namer) string {
-	name := namer.TableName("AutomationReviewBreakGlass")
-	if strings.HasSuffix(name, "glasses") {
-		return strings.TrimSuffix(name, "glasses") + "glass"
-	}
-	return name
-}
+// TableName is a literal because gorm's plural would be "automation_review_break_glasses".
+func (AutomationReviewBreakGlass) TableName() string { return "automation_review_break_glass" }

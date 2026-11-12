@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
@@ -62,9 +61,16 @@ type automationReviewBreakGlass struct {
 	Txid            int64 `gorm:"not null;index"`
 }
 
+// TableName is a literal: gorm's plural would be "...break_glasses". Like the ai-inference
+// snapshots, the area's search_path supplies the schema.
+func (automationReviewBreakGlass) TableName() string { return "automation_review_break_glass" }
+
 type enforcementProfileVersion struct {
 	AutomationReviewToken *string `gorm:"size:64"`
 }
+
+// TableName names the existing table this snapshot adds one column to.
+func (enforcementProfileVersion) TableName() string { return "device_profile_versions" }
 
 // NewAutomationReviewEnforcementSchema is replayable: AutoMigrate, catalog-checked
 // constraints, replaced functions and dropped/recreated triggers tolerate interrupted runs.
@@ -81,16 +87,11 @@ func NewAutomationReviewEnforcementSchema() *gormigrate.Migration {
 		if err := tx.AutoMigrate(&automationReviewPolicy{}, &automationReviewPolicyChange{}); err != nil {
 			return err
 		}
-		name := tx.NamingStrategy.TableName("automationReviewBreakGlass")
-		if strings.HasSuffix(name, "glasses") {
-			name = strings.TrimSuffix(name, "glasses") + "glass"
-		}
-		if err := tx.Table(name).AutoMigrate(&automationReviewBreakGlass{}); err != nil {
+		if err := tx.AutoMigrate(&automationReviewBreakGlass{}); err != nil {
 			return err
 		}
-		versions := tx.NamingStrategy.TableName("deviceProfileVersion")
-		if !tx.Migrator().HasColumn(versions, "automation_review_token") {
-			if err := tx.Table(versions).Migrator().AddColumn(&enforcementProfileVersion{}, "AutomationReviewToken"); err != nil {
+		if !tx.Migrator().HasColumn(&enforcementProfileVersion{}, "AutomationReviewToken") {
+			if err := tx.Migrator().AddColumn(&enforcementProfileVersion{}, "AutomationReviewToken"); err != nil {
 				return err
 			}
 		}
