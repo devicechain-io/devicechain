@@ -869,7 +869,7 @@ A noncanonical instance id logs a warning and sets its per-area gauge (for examp
 
 #### Concurrent edits preserved {#v150-concurrent-edits}
 
-Partial updates write only named fields for customers, notification channels, device profile drafts, asset types, assets, maintenance windows, metric definitions, device types, detection-rule drafts, command definitions, area types, customer types, relationship types, credentials, devices and geofences. Omitted fields no longer revert a concurrent edit; an empty update writes nothing. A stale area rename no longer restores a concurrently removed boundary-fence link. A credential edit that would overwrite a concurrent password rotation is refused with a retry error.
+Partial updates write only named fields for customers, notification channels, device profile drafts, asset types, assets, entity groups, maintenance windows, metric definitions, device types, detection-rule drafts, command definitions, area types, customer types, relationship types, credentials, devices and geofences. Omitted fields no longer revert a concurrent edit; an empty update writes nothing. A stale area rename no longer restores a concurrently removed boundary-fence link. A credential edit that would overwrite a concurrent password rotation is refused with a retry error.
 
 #### Other changes {#v150-other-changes}
 

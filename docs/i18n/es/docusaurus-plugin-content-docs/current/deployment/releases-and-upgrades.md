@@ -914,7 +914,7 @@ Un id de instancia no canónico genera una advertencia y establece el indicador 
 
 #### Ediciones simultáneas conservadas {#v150-concurrent-edits}
 
-Las actualizaciones parciales escriben solo los campos nombrados para clientes, canales de notificación, borradores de perfil de dispositivo, tipos de activo, activos, ventanas de mantenimiento, definiciones de métricas, tipos de dispositivo, borradores de reglas, definiciones de comandos, tipos de área, tipos de cliente, tipos de relación, credenciales, dispositivos y geocercas. Los campos omitidos ya no revierten una edición simultánea; una actualización vacía no escribe nada. Un renombrado de área obsoleto ya no restaura un vínculo de cerca eliminado simultáneamente. Una edición de credencial que sobrescribiría una rotación simultánea de contraseña se rechaza con un error para reintentar.
+Las actualizaciones parciales escriben solo los campos nombrados para clientes, canales de notificación, borradores de perfil de dispositivo, tipos de activo, activos, grupos de entidades, ventanas de mantenimiento, definiciones de métricas, tipos de dispositivo, borradores de reglas, definiciones de comandos, tipos de área, tipos de cliente, tipos de relación, credenciales, dispositivos y geocercas. Los campos omitidos ya no revierten una edición simultánea; una actualización vacía no escribe nada. Un renombrado de área obsoleto ya no restaura un vínculo de cerca eliminado simultáneamente. Una edición de credencial que sobrescribiría una rotación simultánea de contraseña se rechaza con un error para reintentar.
 
 #### Otros cambios {#v150-other-changes}
 
