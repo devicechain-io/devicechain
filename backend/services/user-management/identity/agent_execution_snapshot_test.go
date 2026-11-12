@@ -117,12 +117,16 @@ func TestEveryDecisionReadRunsInOneTransaction(t *testing.T) {
 
 type sessionCountingKV struct {
 	nats.KeyValue
-	key   string
-	gets  int
-	fault error
+	counts map[string]int
+	key    string
+	gets   int
+	fault  error
 }
 
 func (kv *sessionCountingKV) Get(key string) (nats.KeyValueEntry, error) {
+	if kv.counts != nil {
+		kv.counts[key]++
+	}
 	if key == kv.key {
 		kv.gets++
 		if kv.fault != nil {
@@ -135,12 +139,26 @@ func (kv *sessionCountingKV) Get(key string) (nats.KeyValueEntry, error) {
 // Normal approval reaches tenant admission; previously it loaded the same KV record twice.
 func TestProposerSessionReadOnceAndPassedThrough(t *testing.T) {
 	x := newExecEnv(t)
-	kv := &sessionCountingKV{KeyValue: x.kvr, key: sessionKey(x.sid)}
+	x.addApprover(t, "second@example.invalid")
+	kv := &sessionCountingKV{KeyValue: x.kvr, key: sessionKey(x.sid), counts: map[string]int{}}
 	x.m.refreshKV = kv
-	d := x.decide(t, x.request("boss@example.invalid"))
+	req := x.request("boss@example.invalid", "second@example.invalid")
+	// Every named session must already have been read when the first snapshot SQL runs.
+	const callback = "test:sessions-before-snapshot"
+	require.NoError(t, x.m.db.Database.Callback().Query().Before("gorm:query").Register(callback, func(*gorm.DB) {
+		require.Equal(t, 1, kv.gets)
+		for _, s := range req.ApproverSessions {
+			require.Equal(t, 1, kv.counts[sessionKey(auth.SessionID(s.Sid))])
+		}
+	}))
+	defer func() { require.NoError(t, x.m.db.Database.Callback().Query().Remove(callback)) }()
+	d := x.decide(t, req)
 	require.Equal(t, agentpolicy.VerdictApprove, d.Verdict)
-	require.Equal(t, []string{"boss@example.invalid"}, d.ValidApprovers)
+	require.Equal(t, req.Approvers, d.ValidApprovers)
 	require.Equal(t, 1, kv.gets)
+	for _, s := range req.ApproverSessions {
+		require.Equal(t, 1, kv.counts[sessionKey(auth.SessionID(s.Sid))])
+	}
 }
 
 // An early KV error must still lose to a policy refusal, despite being loaded first.

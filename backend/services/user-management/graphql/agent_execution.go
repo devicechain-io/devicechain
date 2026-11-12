@@ -44,8 +44,12 @@ func (r *AgentExecutionDecisionResolver) AcceptRecoveryCodes() bool {
 }
 func (r *AgentExecutionDecisionResolver) AllowSelfConfirm() bool { return r.d.AllowSelfConfirm }
 
+// AgentApproverSessionInput names the sign-in that gave an approval.
+type AgentApproverSessionInput struct{ Principal, Sid string }
+
 // AgentExecutionDecisionInput is the GraphQL input.
 type AgentExecutionDecisionInput struct {
+	ApproverSessions  *[]AgentApproverSessionInput
 	ProposalToken     string
 	Kind              string
 	Impact            *string
@@ -90,6 +94,11 @@ func (r *SchemaResolver) AgentExecutionDecision(ctx context.Context, args struct
 	req := identity.ExecutionRequest{
 		Kind: kind, TargetCount: int(in.TargetCount), ProposerPrincipal: in.ProposerPrincipal,
 		ProposerClient: in.ProposerClient, Approvers: in.Approvers,
+	}
+	if in.ApproverSessions != nil {
+		for _, s := range *in.ApproverSessions {
+			req.ApproverSessions = append(req.ApproverSessions, identity.ApproverSession{Principal: s.Principal, Sid: s.Sid})
+		}
 	}
 	if in.Impact != nil {
 		req.Impact = agentpolicy.Impact(*in.Impact)
