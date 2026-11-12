@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
 )
@@ -113,6 +115,14 @@ func (c *AgentKillConsumer) handle(ctx context.Context, msg messaging.Message) {
 		return
 	}
 	if err := c.Api.ApplyKillEvent(msgctx, ev); err != nil {
+		if errors.Is(err, rdb.ErrTenantPurged) {
+			// Erasure already reclaimed this tenant, so there is no fence to close.
+			// Keeping its kill unacked would stop the caught-up beat and fail every
+			// other tenant's executions closed.
+			log.Info().Err(err).Str("tenant", tenant).Msg("Acknowledging agent kill for a purged tenant")
+			_ = msg.Ack()
+			return
+		}
 		// A storage failure is never acknowledged, even after the redelivery cap.
 		log.Warn().Err(err).Str("tenant", tenant).Msg("Agent kill was not applied; leaving it unacknowledged")
 		return

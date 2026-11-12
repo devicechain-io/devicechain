@@ -49,11 +49,12 @@ func configureMfa(m *identity.Manager, challenges nats.KeyValue, metrics identit
 // account secrets are digested under the key) hold only if the Service main runs was handed the
 // collaborators, and nothing else exercises main.go.
 func newAdminService(store *iam.Store, settle, tokenHold time.Duration, letters *deadletters.Store,
-	serviceAccountKey *credential.DeviceSecretKey, secretStore secrets.SecretStore) *admin.Service {
+	serviceAccountKey *credential.DeviceSecretKey, secretStore secrets.SecretStore, notifier admin.TenantActuation) *admin.Service {
 	svc := admin.NewService(store, settle, tokenHold, letters)
 	svc.SetViewerBaseline(identity.ViewerAuthorities())
 	svc.SetServiceAccountSecretKey(serviceAccountKey)
 	svc.SetSecretStore(secretStore)
+	svc.SetTenantActuation(notifier)
 	return svc
 }
 

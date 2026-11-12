@@ -65,7 +65,7 @@ export function GeoFenceForm({
   entity?: GeoFence;
   onDone: (message: string) => void;
 }) {
-  const { t } = useTranslation(['entities', 'common']);
+  const { t } = useTranslation(['entities', 'common', 'basemap']);
   const tenantBasemap = useTenantBasemap();
   const editing = entity != null;
 
@@ -126,6 +126,11 @@ export function GeoFenceForm({
   };
 
   const check = checkGeometry(vertices);
+  const tilePairProblem = tileUrlDraft.trim() !== '' && attributionDraft.trim() === ''
+    ? 'entities:geofenceTileUncredited'
+    : tileUrlDraft.trim() === '' && attributionDraft.trim() !== ''
+      ? 'basemap:errAttributionOrphan'
+      : null;
 
   const submit = async () => {
     setFormError(null);
@@ -173,19 +178,21 @@ export function GeoFenceForm({
   // pastes a tile URL, presses tab, and the map goes on showing the tenant's tiles
   // with no indication that what they typed was set aside. Saying so is the whole
   // difference between a licence rule and a bug report.
-  const tileUrlUncredited = tileUrl.trim() !== '' && attribution.trim() === '';
   // The tenant's centre is a FALLBACK, used only when there is no ring to fit to. An
   // existing fence always wins — editing a fence in Rome from a tenant centred on
   // Atlanta would otherwise open on Atlanta every time.
   const initialView = vertices.length === 0 ? fallbackView(tenantBasemap) : null;
 
-  const commitTileUrl = () => {
-    setTileUrl(tileUrlDraft);
-    writePreference(TILE_URL_KEY, tileUrlDraft);
-  };
-  const commitAttribution = () => {
-    setAttribution(attributionDraft);
-    writePreference(TILE_ATTRIBUTION_KEY, attributionDraft);
+  const commitBasemap = () => {
+    // Keep the last complete pair while either draft is incomplete. Applying on
+    // blur still avoids rebuilding the map on every keystroke.
+    if (tilePairProblem) return;
+    const nextUrl = tileUrlDraft.trim();
+    const nextAttribution = attributionDraft.trim();
+    setTileUrl(nextUrl);
+    setAttribution(nextAttribution);
+    writePreference(TILE_URL_KEY, nextUrl);
+    writePreference(TILE_ATTRIBUTION_KEY, nextAttribution);
   };
 
   if (unreadable) {
@@ -314,7 +321,7 @@ export function GeoFenceForm({
               id="gf-tile-url"
               value={tileUrlDraft}
               onChange={(ev) => setTileUrlDraft(ev.target.value)}
-              onBlur={commitTileUrl}
+              onBlur={commitBasemap}
               placeholder={t('entities:geofenceTileUrlPlaceholder')}
             />
           </FormField>
@@ -327,12 +334,12 @@ export function GeoFenceForm({
               id="gf-tile-attribution"
               value={attributionDraft}
               onChange={(ev) => setAttributionDraft(ev.target.value)}
-              onBlur={commitAttribution}
+              onBlur={commitBasemap}
             />
           </FormField>
-          {tileUrlUncredited && (
-            <p className="text-destructive text-xs" data-testid="geofence-tile-uncredited">
-              {t('entities:geofenceTileUncredited')}
+          {tilePairProblem && (
+            <p className="text-destructive text-xs" data-testid={tilePairProblem === 'entities:geofenceTileUncredited' ? 'geofence-tile-uncredited' : 'geofence-tile-orphan-attribution'}>
+              {t(tilePairProblem)}
             </p>
           )}
         </div>

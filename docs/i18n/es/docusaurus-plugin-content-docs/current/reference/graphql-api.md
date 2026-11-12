@@ -1073,11 +1073,13 @@ trunca nada ni se aplica nada a medias, así que reduce la solicitud y envíala 
 
 | Límite | Valor | Se aplica a |
 | --- | --- | --- |
+| Filtro de actor de auditoría | 256 B | `actor` en `AuditEventSearchCriteria` (plano de inquilino) y `AdminAuditEventSearchCriteria` (plano de administración). |
 | Texto de búsqueda de nombre de dashboard | 256 B | `DashboardSearchCriteria.name` en `dashboards`, medido en bytes UTF-8 antes de recortar espacios. |
 | Clave de atributo | 128 B | `attrKey` de `setEntityAttribute`. |
 | Valor de atributo | 64 KiB | `value` de `setEntityAttribute`, sea cual sea su tipo declarado. |
 | Definición de regla | 256 KiB | `definition` de una regla de detección, al crear y al actualizar. |
 | Grafo de autoría de regla | 256 KiB | `authoringGraph` de una regla de detección, al crear y al actualizar. |
+| Reglas por validación | 1000 | `validateDetectionRules` `rules`. Publicar un perfil de dispositivo con más de 1000 reglas de detección habilitadas se rechaza del mismo modo. |
 | Historial de versiones | 1000 por llamada | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: las más recientes primero. Reduce con `limit` (al menos 1) y pagina con `offset` (no negativo); un valor fuera de ese rango se rechaza con `INVALID_VALUE`. |
 | Intervalos por agregación | 10 000 | `bucketedMeasurements`: el rango dividido por `intervalSeconds`, redondeado hacia arriba. |
 | Filas por agregación | 50 000 | `bucketedMeasurements`: los intervalos multiplicados por los nombres de medición devueltos. Con un filtro `name` es un solo nombre; sin él, cada nombre de medición distinto que coincide con los filtros de la lectura. |
@@ -1085,6 +1087,7 @@ trunca nada ni se aplica nada a medias, así que reduce la solicitud y envíala 
 | Tamaño de entrada JSON | 64 KiB | Cada valor de metadatos, propiedades, configuración, carga útil o destinatarios enviado como JSON. Las cargas útiles y los metadatos de comandos se rechazan con `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` (consulta [Enviar comandos](../guides/sending-commands.md)). |
 | Estados de recálculo de métricas calculadas | 5 entradas | `statuses` de `calculatedMetricBackfills`, contando duplicados. Las listas más largas se rechazan antes de cualquier consulta; se eliminan los duplicados de las listas aceptadas. |
 | Destinatarios por regla de notificación | 100 | La lista `recipients` de una regla de una política de notificación. |
+| Reglas por política de notificación | 100 | Una lista `rules` enviada al crear o actualizar una política. Las actualizaciones que omiten `rules` conservan el conjunto de reglas almacenado. |
 | URI de redirección de cliente OAuth | 16 entradas, 2048 B cada una | `redirectUris` de `createOauthClient` y `updateOauthClient`. |
 | Ámbitos de cliente OAuth | 16 entradas, 64 B cada una | `scopes` de `createOauthClient` y `updateOauthClient`. |
 | Niveles de inquilino | 100 niveles, 128 B por token | El catálogo de niveles (`createTenantTier` rechaza un nivel 101) y `orderedTokens` de `reorderTenantTiers`, que debe nombrar todos los niveles. |

@@ -74,6 +74,9 @@ type GeoFenceCapRefusalCounter interface {
 }
 
 type Api struct {
+	// RuleComparer is nil when recorded comparison is unavailable; runs fail closed.
+	RuleComparer RuleComparer
+
 	RDB *rdb.RdbManager
 
 	// AgentDecider asks user-management for the tenant's decisions on agent proposals, under the

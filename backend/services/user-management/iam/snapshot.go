@@ -7,11 +7,19 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 )
 
 type snapshotKey struct{}
+
+// ReadSnapshotTimeout bounds one snapshot, whatever deadline its caller brought (a caller with
+// none would otherwise hold the transaction, and its pooled connection, for as long as it
+// liked). A decision's reads take milliseconds; one that has not finished in this long is
+// refused, and the caller treats that error as a refusal. A variable only so a test can
+// shorten it.
+var ReadSnapshotTimeout = 5 * time.Second
 
 // ErrOutsideSnapshot means a store operation cannot honor the caller's snapshot.
 var ErrOutsideSnapshot = errors.New("store operation cannot run in a read snapshot")
@@ -31,6 +39,9 @@ func (s *Store) ReadSnapshot(ctx context.Context, fn func(ctx context.Context) e
 	if InSnapshot(ctx) {
 		return fn(ctx)
 	}
+	// The outer snapshot alone sets the bound; a nested call reuses its context, deadline included.
+	ctx, cancel := context.WithTimeout(ctx, ReadSnapshotTimeout)
+	defer cancel()
 	// sys, not a second system-context call site: ctx carries no snapshot here, so this is the
 	// instance-global pool handle every store read already uses.
 	db := s.sys(ctx)

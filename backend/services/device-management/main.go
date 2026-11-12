@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/automationreview"
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/graphql"
 	"github.com/devicechain-io/dc-device-management/model"
@@ -1072,6 +1073,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
 			// its draft rules against event-processing and fails closed on an uncompilable one.
 			wireDetectionRuleValidator(Api, Microservice.InstanceConfiguration.Infrastructure, safetyGates)
+			wireRuleComparer(Api, Microservice.InstanceConfiguration.Infrastructure)
 
 			// Wire the per-tenant geofence caps and the counter that reports their refusals. The
 			// counter is set unconditionally, unlike the resolver: with no resolver the platform
@@ -1381,4 +1383,19 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 // one setting, not two that can disagree.
 func resolvedEnvelopesOn() bool {
 	return Microservice.InstanceConfiguration.Infrastructure.Messaging.Envelopes.Resolved
+}
+
+// wireRuleComparer owns a separate long-query client: comparisons may consume two
+// 45-second windows, without changing the validation client's ordinary timeout.
+func wireRuleComparer(api *model.Api, infra mscfg.InfrastructureConfiguration) {
+	api.RuleComparer = nil
+	if infra.ServiceAuth.Secret == "" || infra.EventProcessing.Hostname == "" || infra.EventProcessing.Port == 0 {
+		log.Warn().Msg("Automation comparison disabled: service secret or event-processing endpoint is not configured.")
+		return
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",
+		[]string{string(auth.DeviceRead)}, svcclient.WithQueryTimeout(110*time.Second))
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.EventProcessing.Hostname, infra.EventProcessing.Port)
+	api.RuleComparer = automationreview.NewClient(client, url)
+	log.Info().Str("eventProcessing", url).Msg("Automation comparison enabled.")
 }

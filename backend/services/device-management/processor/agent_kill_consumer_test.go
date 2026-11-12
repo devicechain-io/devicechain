@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/actiongate"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/stretchr/testify/require"
 )
@@ -142,4 +144,35 @@ func TestAlarmEventDedupReturnsBrokerAckError(t *testing.T) {
 	require.Len(t, w.messages, 2)
 	require.Equal(t, "0123456789abcdef0123456789abcdef", w.messages[0].DedupID)
 	require.Equal(t, w.messages[0].DedupID, w.messages[1].DedupID)
+}
+
+// An erased tenant cannot close a fence; ACK its kill so it cannot stall other tenants' feed.
+// Ordinary storage failures remain unacknowledged, including wrapped errors.
+func TestKillForAPurgedTenantIsAcknowledged(t *testing.T) {
+	for _, purged := range []bool{true, false} {
+		t.Run(map[bool]string{true: "purged", false: "storage failure"}[purged], func(t *testing.T) {
+			now := time.Now()
+			storageErr := fmt.Errorf("apply kill: %w", errors.New("database unavailable"))
+			if purged {
+				storageErr = fmt.Errorf("apply kill: %w", rdb.ErrTenantPurged)
+			}
+			api := &killAPI{err: storageErr}
+			ack := &killAck{}
+			feed := model.NewKillFeed(0, func() time.Time { return now })
+			body, err := actiongate.EncodeKillEvent(actiongate.KillEvent{
+				EventID: "purged", Tenant: "acme", Cause: actiongate.KillCauseOperatorSuspended, At: now,
+			})
+			require.NoError(t, err)
+			c := &AgentKillConsumer{Api: api, Feed: feed}
+			c.handle(context.Background(), messaging.NewConsumedMessage(
+				messaging.ScopedSubject("test", "acme", streams.AgentActuationKills), body, 1, nil, ack))
+			require.Equal(t, 1, api.calls)
+			if purged {
+				require.Equal(t, 1, ack.calls)
+			} else {
+				require.Zero(t, ack.calls)
+			}
+			require.False(t, feed.Fresh(now), "only a caught-up poll may beat the feed")
+		})
+	}
 }

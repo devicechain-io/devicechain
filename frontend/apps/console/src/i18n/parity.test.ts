@@ -119,6 +119,7 @@ describe('the shipped registries carry every namespace', () => {
     trustAnchors: () => import('@/routes/trust-anchors/catalog'),
     adminNav: () => import('@/routes/admin/catalog'),
     aiProviders: () => import('@/routes/admin/ai-providers/catalog'),
+    automationReview: () => import('@/i18n/lazy/automationReview'),
     commandBatches: () => import('@/i18n/lazy/commandBatches'),
     dashboards: () => import('@/i18n/lazy/dashboards'),
     deviceProfiles: () => import('@/i18n/lazy/deviceProfiles'),
