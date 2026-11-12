@@ -1026,6 +1026,7 @@ characters.
 | Attribute value | 64 KiB | `setEntityAttribute` `value`, whatever its declared type. |
 | Rule definition | 256 KiB | `definition` of a detection rule, on create and update. |
 | Rule authoring graph | 256 KiB | `authoringGraph` of a detection rule, on create and update. |
+| Rules per validation | 1,000 | `validateDetectionRules` `rules`. Publishing a device profile with more than 1,000 enabled detection rules is refused the same way. |
 | Version history | 1,000 per call | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: newest first. Narrow with `limit` (at least 1) and page with `offset` (not negative); a value outside that range is refused with `INVALID_VALUE`. |
 | Buckets per aggregation | 10,000 | `bucketedMeasurements`: the range divided by `intervalSeconds`, rounded up. |
 | Rows per aggregation | 50,000 | `bucketedMeasurements`: the buckets multiplied by the measurement names returned. With a `name` filter that is one name; without one it is every distinct measurement name that matches the read's filters. |
