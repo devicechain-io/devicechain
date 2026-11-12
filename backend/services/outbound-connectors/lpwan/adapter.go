@@ -25,7 +25,9 @@ import (
 
 // Result labels for lpwan_downlinks_total. A fixed enum: never a per-tenant or per-device value.
 const (
-	ResultQueued          = "queued"           // the network server queued the downlink; the command is answered success
+	// ResultQueued: success carries UNANSWERED because the transport has no answer from the
+	// device, so it records no delivery evidence.
+	ResultQueued          = "queued"
 	ResultQueuedConfirmed = "queued_confirmed" // a confirmed downlink was queued; the command waits for the acknowledgement
 	ResultPendingFailed   = "pending_failed"   // a confirmed downlink was queued but could not be tracked; answered unanswered
 	ResultRefusedParams   = "refused_params"   // the command's parameters are not a valid downlink
@@ -469,7 +471,7 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 	a.count(ResultQueued)
 	body, _ := json.Marshal(map[string]string{"stage": "queued", "queueItemId": queueID})
 	a.finish(msg, j, cmddownlink.ResponseEnvelope{
-		CommandToken: j.token, Success: true, DispatchNonce: j.nonce, Payload: strPtr(string(body)),
+		CommandToken: j.token, Success: true, Reach: cmddownlink.ReachUnanswered, DispatchNonce: j.nonce, Payload: strPtr(string(body)),
 	})
 }
 

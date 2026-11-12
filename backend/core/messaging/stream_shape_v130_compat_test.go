@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,12 +46,36 @@ func TestDefaultStreamShapesMatchV130(t *testing.T) {
 				t.Fatalf("%s is no longer declared: %s", suffix, why)
 			}
 			got := nmgr.expectedStream(suffix)
-			if !slices.Equal(got.subjects, want.Subjects) {
-				if suffix == streams.MaxDeliveries {
-					t.Errorf("%s subjects = %v, want %v: the advisory list v1.4.0 pods verify must not change shape", suffix, got.subjects, want.Subjects)
-				} else {
-					t.Errorf("%s subjects = %v, want %v: %s", suffix, got.subjects, want.Subjects, why)
+			if suffix == streams.MaxDeliveries {
+				// The shared advisory stream gains one subject per capturing stream a release adds. A v1.4.0
+				// pod tolerates extra advisory subjects of exactly one stream's shape (streamDrift), so a later
+				// release may declare new streams; what must never move is every subject v1.4.0 already listed,
+				// every EXTRA subject must have that accepted shape, and it must belong to a stream this snapshot
+				// does not know (a v1.4.0 stream's advisory cannot change).
+				for _, w := range want.Subjects {
+					if !slices.Contains(got.subjects, w) {
+						t.Errorf("%s lost advisory subject %q that v1.4.0 declared", suffix, w)
+					}
 				}
+				for _, g := range got.subjects {
+					if slices.Contains(want.Subjects, g) {
+						continue
+					}
+					known := false
+					for other := range snapshot {
+						if other != suffix && strings.Contains(g, StreamName("inst", other)) {
+							known = true
+						}
+					}
+					if known {
+						t.Errorf("%s gained advisory subject %q for a stream v1.4.0 already declared", suffix, g)
+					}
+					if !isStreamAdvisorySubject(g, got.advisoryPrefix) {
+						t.Errorf("%s gained advisory subject %q, which v1.4.0 pods refuse: not one stream's max-delivery advisory for this instance", suffix, g)
+					}
+				}
+			} else if !slices.Equal(got.subjects, want.Subjects) {
+				t.Errorf("%s subjects = %v, want %v: %s", suffix, got.subjects, want.Subjects, why)
 			}
 			if got.retention.String() != want.Retention {
 				t.Errorf("%s retention = %s, want %s: %s", suffix, got.retention.String(), want.Retention, why)

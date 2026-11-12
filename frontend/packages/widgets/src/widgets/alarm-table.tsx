@@ -171,10 +171,11 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
         ) : null}
         <div
           ref={sizeRef}
+          tabIndex={0}
           style={{ flex: 1, minHeight: 0, overflow: 'auto' }}
           {...(stripShown
             ? { role: 'tabpanel', id: panelDomId(idBase), 'aria-labelledby': tabDomId(idBase, dropped ? null : selectedType) }
-            : {})}
+            : { role: 'region', 'aria-label': rowStrings.scrollLabel })}
         >
           <table
             style={{

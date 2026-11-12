@@ -375,7 +375,7 @@ func buildOwned() []fnSpec {
 		},
 		fnSpec{
 			sizeDependent: true, costDoc: costPerByte, name: "base64.decode", overload: "payloaddecode_base64_decode", sig: "base64.decode(string) -> bytes",
-			doc:  "Decodes standard padded base64 text of at most 8192 bytes into at most 4096 bytes.",
+			doc:  "Decodes standard padded base64 text into at most 4096 bytes. The text itself may be at most 5467 bytes, line breaks included, so base64 split across many lines can be refused even when it would decode to 4096 bytes or fewer.",
 			args: []*cel.Type{cel.StringType}, ret: cel.BytesType,
 			bind: cel.UnaryBinding(func(v ref.Val) ref.Val {
 				s, ok := asString(v)

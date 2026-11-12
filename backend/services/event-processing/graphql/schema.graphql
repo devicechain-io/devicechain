@@ -22,7 +22,8 @@ type Query {
     Checks a batch of detection-rule definitions by decoding, compiling and cost-checking each
     one, without saving anything. Returns valid=false with one error per rejected rule; rules
     that compile may still produce advisory warnings. Pure validation: no state is read or
-    written, so it is safe to call repeatedly. Requires device:read.
+    written, so it is safe to call repeatedly. Requires device:read. At most 1,000 rules per
+    call; a longer list is refused with LIMIT_EXCEEDED before any rule is compiled.
     """
     # Validate a batch of detection-rule definitions (opaque rules.Rule JSON) by
     # decoding, compiling, and cost-gating each through the DETECT compiler — the
@@ -33,7 +34,7 @@ type Query {
     # if any of them does not compile (a disabled rule is inert and is not submitted).
     # Pure validation — no state is read or written, so it is safe to call repeatedly.
     validateDetectionRules(
-        """The rules to check, in order; the index in each error and warning refers to this list."""
+        """The rules to check, in order; the index in each error and warning refers to this list. At most 1,000."""
         rules: [DetectionRuleInput!]!
     ): DetectionRuleValidationResult!
 

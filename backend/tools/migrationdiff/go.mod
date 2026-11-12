@@ -18,6 +18,7 @@ require (
 	github.com/go-gormigrate/gormigrate/v2 v2.1.7
 	github.com/nats-io/nats.go v1.55.0
 	github.com/stretchr/testify v1.12.1
+	gorm.io/datatypes v1.2.7
 	gorm.io/driver/postgres v1.6.3
 	gorm.io/gorm v1.31.2
 )
@@ -99,7 +100,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
-	gorm.io/datatypes v1.2.7 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
 )
 

@@ -9,12 +9,13 @@
 // natural key (memberType, key). The dynamic-group browse consumer that uses these
 // axes lands in G4.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2 } from 'lucide-react';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
   listFacetKeys,
+  findFacetKey,
   setFacetKey,
   deleteFacetKey,
   FACET_MEMBER_TYPES,
@@ -208,6 +209,33 @@ function FacetKeyForm({ onDone }: { onDone: () => void }) {
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const trimmedKey = key.trim();
+  const [typeCheck, setTypeCheck] = useState<{
+    memberType: string;
+    key: string;
+    facet: FacetKey | null;
+    failed: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    setTypeCheck(null);
+    if (!trimmedKey) return;
+    let stale = false;
+    void findFacetKey(memberType, trimmedKey).then(
+      (facet) => {
+        if (!stale) setTypeCheck({ memberType, key: trimmedKey, facet, failed: false });
+      },
+      () => {
+        if (!stale) setTypeCheck({ memberType, key: trimmedKey, facet: null, failed: true });
+      },
+    );
+    return () => { stale = true; };
+  }, [memberType, trimmedKey]);
+
+  const currentCheck = typeCheck?.memberType === memberType && typeCheck.key === trimmedKey
+    ? typeCheck
+    : null;
+
   const submit = async () => {
     setFormError(null);
     const trimmedKey = key.trim();
@@ -270,6 +298,14 @@ function FacetKeyForm({ onDone }: { onDone: () => void }) {
           allowClear={false}
         />
       </FormField>
+      {currentCheck?.failed && (
+        <p role="status" className="text-sm text-amber-600">{t('typeCheckFailed')}</p>
+      )}
+      {currentCheck?.facet && currentCheck.facet.valueType !== valueType && (
+        <p role="status" className="text-sm text-amber-600">
+          {t('typeChangeWarning', { existing: currentCheck.facet.valueType, requested: valueType })}
+        </p>
+      )}
       <FormField label={t('colValues')} htmlFor="fk-values" description={t('valuesDescription')}>
         <Input
           id="fk-values"

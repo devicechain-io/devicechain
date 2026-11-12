@@ -50,3 +50,30 @@ func TestFarEndOptOutWarnsInEveryModeAndSaysSomethingDifferent(t *testing.T) {
 		t.Error("an unnormalized empty mode produces no warning")
 	}
 }
+
+// Catches accepting unsupported server/ack combinations or an explicit ack flag without a listener.
+func TestDownlinkFlagValidation(t *testing.T) {
+	for _, tc := range []struct {
+		ns, listen, ack string
+		explicit        bool
+		message         string
+	}{
+		{"chirpstack", ":8085", "ack", true, ""},
+		{"chirpstack", ":8085", "nack", true, ""},
+		{"chirpstack", ":8085", "none", true, ""},
+		{"", "", "ack", false, ""},
+		{"tts", ":8085", "ack", false, "requires --lorawan-ns chirpstack"},
+		{"", ":8085", "ack", false, "requires --lorawan-ns chirpstack"},
+		{"chirpstack", "", "ack", true, "--lorawan-ack shapes the downlink reports of --lorawan-downlink-listen"},
+		{"chirpstack", ":8085", "bad", false, "must be ack, nack or none"},
+	} {
+		err := validateDownlinkFlags(tc.ns, tc.listen, tc.ack, tc.explicit)
+		if tc.message == "" {
+			if err != nil {
+				t.Errorf("%+v: %v", tc, err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), tc.message) {
+			t.Errorf("%+v: got %v", tc, err)
+		}
+	}
+}

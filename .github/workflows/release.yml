@@ -351,6 +351,10 @@ jobs:
           # The chart version/appVersion are SemVer WITHOUT the leading 'v'.
           # OCI tags follow chart version, so strip the prefix for the chart only.
           chart_version="${VERSION#v}"
+          # Artifact Hub reads the prerelease flag from an annotation, and
+          # helm package cannot set annotations, so stamp it here: an rc must
+          # not be listed as an ordinary release.
+          hack/stamp-chart-prerelease.sh deploy/helm/devicechain/Chart.yaml "$chart_version"
 
           # Pin every rendered image to this release tag. `helm package` cannot
           # override values, so the chart defaults image.tag to .Chart.AppVersion
