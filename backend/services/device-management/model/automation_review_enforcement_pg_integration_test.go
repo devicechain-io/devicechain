@@ -608,6 +608,33 @@ func TestPGOldPodStatementsOnProtectedProfile(t *testing.T) {
 			}
 		})
 	}
+	// A version that was once published with a review stays consumed by it; that must not
+	// license an old pod to make it active again later. Only the publishing transaction's
+	// own consumption counts, so re-activating it outside that transaction is a rollback,
+	// which needs break-glass.
+	t.Run("reactivate a reviewed version", func(t *testing.T) {
+		r := newPGEnforcementRig(t)
+		protectReviewRig(t, r, DefaultReviewPolicySettings())
+		row := approveRigReview(t, r, r.run(t), "reviewer")
+		published, err := publishRigReview(r, row)
+		require.NoError(t, err)
+		reason := "revert for the test"
+		_, err = r.api.RollbackDeviceProfileWithReason(r.ctx, "profile", published.Version-1, &reason)
+		require.NoError(t, err)
+		tx := r.api.RDB.DB(r.ctx).Begin()
+		require.NoError(t, tx.Error)
+		defer tx.Rollback()
+		res := tx.Exec(`UPDATE "device-management".device_profiles SET active_version=? WHERE id=?`, published.Version, r.profile.ID)
+		pgGuardCode(t, res.Error, "DCR01")
+		require.NoError(t, tx.Rollback().Error)
+		r.api.skipReviewGuardForOldPodTest = true
+		_, err = r.api.RollbackDeviceProfile(r.ctx, "profile", published.Version)
+		reviewErrorCode(t, err, "REVIEW_REQUIRED")
+		r.api.skipReviewGuardForOldPodTest = false
+		var stored DeviceProfile
+		require.NoError(t, r.api.RDB.DB(r.ctx).First(&stored, r.profile.ID).Error)
+		require.EqualValues(t, published.Version-1, stored.ActiveVersion.Int32)
+	})
 	t.Run("forged txid", func(t *testing.T) {
 		r := newPGEnforcementRig(t)
 		protectReviewRig(t, r, DefaultReviewPolicySettings())

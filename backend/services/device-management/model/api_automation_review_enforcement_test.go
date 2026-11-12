@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 type fakePrincipalStanding struct {
@@ -514,4 +515,241 @@ func TestPolicyDoesNotRequireEventRead(t *testing.T) {
 	reason := "restore safe settings"
 	_, err = r.api.RollbackDeviceProfileWithReason(ctx, "profile", 1, &reason)
 	require.NoError(t, err)
+}
+
+func TestProtectedPublishStoredExpiryWinsOverLaterLoosening(t *testing.T) {
+	r := newAutomationReviewRig(t, true)
+	settings := DefaultReviewPolicySettings()
+	settings.ApprovalTtlSeconds = 3600
+	view := protectReviewRig(t, r, settings)
+	r.changeRule(t, "author")
+	row := approveRigReview(t, r, r.run(t), "reviewer")
+	require.NotNil(t, row.ApprovedAt)
+	require.NotNil(t, row.ExpiresAt)
+	require.WithinDuration(t, row.ApprovedAt.Add(time.Hour), *row.ExpiresAt, time.Millisecond)
+
+	want := view.Effective
+	want.ApprovalTtlSeconds = 7 * 24 * 3600
+	view, applied, err := r.api.SetAutomationReviewPolicy(r.ctx, "profile", want)
+	require.NoError(t, err)
+	require.False(t, applied)
+	require.NotNil(t, view.Pending)
+	ctx, _ := reviewIdentity("second")
+	view, err = r.api.ApproveAutomationReviewPolicyChange(ctx, view.Pending.Token)
+	require.NoError(t, err)
+	require.Nil(t, view.Pending)
+	require.Equal(t, want, view.Effective)
+
+	now := row.ApprovedAt.Add(2 * time.Hour)
+	require.True(t, now.Before(row.ApprovedAt.Add(time.Duration(view.Effective.ApprovalTtlSeconds)*time.Second)))
+	oldNow := reviewNow
+	reviewNow = func() time.Time { return now }
+	t.Cleanup(func() { reviewNow = oldNow })
+	var before, after int64
+	db := r.api.RDB.DB(r.ctx)
+	require.NoError(t, db.Model(&DeviceProfileVersion{}).Where("device_profile_id = ?", r.profile.ID).Count(&before).Error)
+	_, err = publishRigReview(r, row)
+	reviewErrorCode(t, err, "REVIEW_EXPIRED")
+	require.NoError(t, db.Model(&DeviceProfileVersion{}).Where("device_profile_id = ?", r.profile.ID).Count(&after).Error)
+	require.Equal(t, before, after)
+}
+
+func TestProtectedPublishRefusesWhenValidatedBytesDifferFromApproved(t *testing.T) {
+	r := newAutomationReviewRig(t, true)
+	protectReviewRig(t, r, DefaultReviewPolicySettings())
+	r.changeRule(t, "author")
+	row := approveRigReview(t, r, r.run(t), "reviewer")
+	approvedDefinition := string(r.rule.Definition)
+	r.rule.Definition = datatypes.JSON(`{"metric":"temp_c","threshold":24}`)
+	require.NoError(t, r.api.RDB.DB(r.ctx).Save(r.rule).Error)
+
+	var before, after int64
+	db := r.api.RDB.Database
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(&DeviceProfileVersion{}).Where("device_profile_id = ?", r.profile.ID).Count(&before).Error)
+	armed, restored := false, false
+	// The detection_rules read is the last child read in the pre-transaction
+	// snapshot build. Arm only after it completes, so neither the initial token
+	// lookup nor that snapshot's device_profiles read can trigger the restore.
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("test:review_snapshot_read", func(tx *gorm.DB) {
+		if tx.Statement.Table == "detection_rules" && !restored {
+			armed = true
+		}
+	}))
+	defer func() { require.NoError(t, db.Callback().Query().Remove("test:review_snapshot_read")) }()
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("test:review_restore_draft", func(tx *gorm.DB) {
+		if !armed || restored || tx.Statement.Table != "device_profiles" {
+			return
+		}
+		// This is the in-transaction profile lock, after the gates saw draft E.
+		// Restore D without changing bookkeeping, so the rebuilt digest matches
+		// the approval and only the first frozen-draft check can refuse E.
+		restored = true
+		tx.AddError(tx.Session(&gorm.Session{NewDB: true}).Exec("UPDATE detection_rules SET definition = ? WHERE id = ?", approvedDefinition, r.rule.ID).Error)
+	}))
+	defer func() { require.NoError(t, db.Callback().Query().Remove("test:review_restore_draft")) }()
+
+	_, err := publishRigReview(r, row)
+	require.True(t, restored, "the draft must be restored after the pre-transaction snapshot was read")
+	reviewErrorCode(t, err, "REVIEW_STALE_DRAFT_CHANGED")
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(&DeviceProfileVersion{}).Where("device_profile_id = ?", r.profile.ID).Count(&after).Error)
+	require.Equal(t, before, after)
+}
+
+func TestProtectedPublishLosesToAConcurrentReject(t *testing.T) {
+	r := newAutomationReviewRig(t, true)
+	protectReviewRig(t, r, DefaultReviewPolicySettings())
+	r.changeRule(t, "author")
+	row := approveRigReview(t, r, r.run(t), "reviewer")
+	var before, after int64
+	db := r.api.RDB.Database
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(&DeviceProfileVersion{}).Where("device_profile_id = ?", r.profile.ID).Count(&before).Error)
+	rejected := false
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("test:review_consume_reject", func(tx *gorm.DB) {
+		if rejected || tx.Statement.Table != "automation_reviews" {
+			return
+		}
+		set, ok := tx.Statement.Dest.(map[string]any)
+		if !ok || set["state"] != ReviewStateConsumed {
+			return
+		}
+		rejected = true
+		// SQLite cannot run a second writer while this transaction holds its
+		// read locks. Simulate the committed reject on this connection, then
+		// start the losing publish's transaction again: its rollback must not
+		// undo the reject. No publish writes have happened at this point.
+		// Raw SQL bypasses Update callbacks, avoiding recursion.
+		raw := tx.Session(&gorm.Session{NewDB: true})
+		if err := raw.Exec("UPDATE automation_reviews SET state = ?, revision = revision + 1 WHERE id = ?", ReviewStateRejected, row.ID).Error; err != nil {
+			tx.AddError(err)
+			return
+		}
+		if err := raw.Exec("COMMIT").Error; err != nil {
+			tx.AddError(err)
+			return
+		}
+		tx.AddError(raw.Exec("BEGIN").Error)
+	}))
+	defer func() { require.NoError(t, db.Callback().Update().Remove("test:review_consume_reject")) }()
+
+	_, err := publishRigReview(r, row)
+	require.True(t, rejected, "the competing reject must run at the consume CAS")
+	reviewErrorCode(t, err, "REVIEW_ALREADY_USED")
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(&DeviceProfileVersion{}).Where("device_profile_id = ?", r.profile.ID).Count(&after).Error)
+	require.Equal(t, before, after)
+	stored, err := r.api.AutomationReviewByToken(r.ctx, row.Token)
+	require.NoError(t, err)
+	require.Equal(t, ReviewStateRejected, stored.State)
+	require.Equal(t, row.Revision+1, stored.Revision)
+	require.Nil(t, stored.ConsumedVersion)
+}
+
+func TestBreakGlassRollbackRefusesIneligibleVersion(t *testing.T) {
+	r := newAutomationReviewRig(t, false)
+	r.rule.Enabled = true
+	r.rule.Definition = datatypes.JSON(`{"metric":"temp_c","thresholdAttr":"limit"}`)
+	require.NoError(t, r.api.RDB.DB(r.ctx).Save(r.rule).Error)
+	bad, err := r.api.PublishDeviceProfile(r.ctx, "profile", nil, nil, "publisher")
+	require.NoError(t, err)
+	r.rule.Definition = datatypes.JSON(`{"metric":"temp_c","threshold":26}`)
+	require.NoError(t, r.api.RDB.DB(r.ctx).Save(r.rule).Error)
+	good, err := r.api.PublishDeviceProfile(r.ctx, "profile", nil, nil, "publisher")
+	require.NoError(t, err)
+	protectReviewRig(t, r, DefaultReviewPolicySettings())
+	var before, after int64
+	db := r.api.RDB.DB(r.ctx)
+	require.NoError(t, db.Model(&DeviceProfileVersion{}).Where("device_profile_id = ?", r.profile.ID).Count(&before).Error)
+	reason := "restore previous settings during incident"
+	ctx, _ := reviewIdentity("operator")
+	_, err = r.api.RollbackDeviceProfileWithReason(ctx, "profile", bad.Version, &reason)
+	reviewErrorCode(t, err, "PROTECTION_INELIGIBLE")
+	var profile DeviceProfile
+	require.NoError(t, db.First(&profile, r.profile.ID).Error)
+	require.True(t, profile.ActiveVersion.Valid)
+	require.Equal(t, good.Version, profile.ActiveVersion.Int32)
+	require.NoError(t, db.Model(&DeviceProfileVersion{}).Where("device_profile_id = ?", r.profile.ID).Count(&after).Error)
+	require.Equal(t, before, after)
+	var breakGlassCount int64
+	require.NoError(t, db.Model(&AutomationReviewBreakGlass{}).Where("device_profile_id = ?", r.profile.ID).Count(&breakGlassCount).Error)
+	require.Zero(t, breakGlassCount)
+}
+
+func TestEveryLooseningDimensionIsPending(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		stricter func(*ReviewPolicySettings)
+		looser   func(*ReviewPolicySettings)
+	}{
+		{"approvals", func(p *ReviewPolicySettings) { p.RequiredApprovals = 2 }, func(p *ReviewPolicySettings) { p.RequiredApprovals = 1 }},
+		{"self approval", func(p *ReviewPolicySettings) { p.AllowSelfApproval = false }, func(p *ReviewPolicySettings) { p.AllowSelfApproval = true }},
+		{"approval TTL", func(p *ReviewPolicySettings) { p.ApprovalTtlSeconds = 3600 }, func(p *ReviewPolicySettings) { p.ApprovalTtlSeconds = 604800 }},
+		{"step-up age", func(p *ReviewPolicySettings) { p.StepUpMaxAgeSeconds = 60 }, func(p *ReviewPolicySettings) { p.StepUpMaxAgeSeconds = 3600 }},
+		{"unprotect", func(p *ReviewPolicySettings) { p.Required = true }, func(p *ReviewPolicySettings) { p.Required = false }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			strict := DefaultReviewPolicySettings()
+			strict.Required = true
+			tc.stricter(&strict)
+			loose := strict
+			tc.looser(&loose)
+			t.Run("loosening", func(t *testing.T) {
+				r := newAutomationReviewRig(t, true)
+				original := protectReviewRig(t, r, strict)
+				view, applied, err := r.api.SetAutomationReviewPolicy(r.ctx, "profile", loose)
+				require.NoError(t, err)
+				require.False(t, applied)
+				require.NotNil(t, view.Pending)
+				require.Equal(t, "PENDING", view.Pending.State)
+				require.Equal(t, strict, view.Effective)
+				require.Equal(t, strict, view.Stored.Settings())
+				require.Equal(t, original.Stored.Revision, view.Stored.Revision)
+				stored, err := r.api.AutomationReviewPolicyFor(r.ctx, "profile")
+				require.NoError(t, err)
+				require.NotNil(t, stored.Pending)
+				require.Equal(t, view.Pending.Token, stored.Pending.Token)
+				require.Equal(t, "PENDING", stored.Pending.State)
+				require.Equal(t, strict, stored.Effective)
+				require.Equal(t, strict, stored.Stored.Settings())
+			})
+			if tc.name == "unprotect" {
+				return // Enabling protection is already exercised by protectReviewRig.
+			}
+			t.Run("tightening", func(t *testing.T) {
+				r := newAutomationReviewRig(t, true)
+				original := protectReviewRig(t, r, loose)
+				view, applied, err := r.api.SetAutomationReviewPolicy(r.ctx, "profile", strict)
+				require.NoError(t, err)
+				require.True(t, applied)
+				require.Nil(t, view.Pending)
+				require.Equal(t, strict, view.Effective)
+				require.Equal(t, strict, view.Stored.Settings())
+				require.Equal(t, original.Stored.Revision+1, view.Stored.Revision)
+				stored, err := r.api.AutomationReviewPolicyFor(r.ctx, "profile")
+				require.NoError(t, err)
+				require.Nil(t, stored.Pending)
+				require.Equal(t, strict, stored.Effective)
+				require.Equal(t, strict, stored.Stored.Settings())
+			})
+		})
+	}
+}
+
+// A self-approval counted while the policy allowed it stops counting once the policy forbids
+// it: the publish re-tallies the approvals under the policy in force, not the one at approval.
+func TestProtectedPublishRetalliesSelfApprovalUnderTheCurrentPolicy(t *testing.T) {
+	r := newAutomationReviewRig(t, true)
+	settings := DefaultReviewPolicySettings()
+	settings.AllowSelfApproval = true
+	protectReviewRig(t, r, settings)
+	row := r.run(t)
+	approved := approveRigReview(t, r, row, "creator")
+	require.Equal(t, ReviewStateApproved, approved.State)
+	settings.AllowSelfApproval = false
+	view := protectReviewRig(t, r, settings)
+	require.False(t, view.Effective.AllowSelfApproval)
+	var before, after int64
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(&DeviceProfileVersion{}).Count(&before).Error)
+	_, err := publishRigReview(r, approved)
+	reviewErrorCode(t, err, "REVIEW_STALE_POLICY_CHANGED")
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(&DeviceProfileVersion{}).Count(&after).Error)
+	require.Equal(t, before, after)
 }

@@ -9,8 +9,8 @@ import { GraphQLRequestError } from '@devicechain/client';
 import type { AutomationReview } from '@/lib/api/automation-reviews';
 
 const h = vi.hoisted(() => ({ get: vi.fn(), list: vi.fn(), matching: vi.fn(), run: vi.fn(), approve: vi.fn(), reject: vi.fn(),
-  rules: vi.fn(), toast: vi.fn(), clipboard: vi.fn(), authorities: ['device:write'] as string[] }));
-vi.mock('@/lib/api/automation-reviews', () => ({ getAutomationReview: h.get, listAutomationReviews: h.list, matchingDraftReviewTokens: h.matching,
+  policy: vi.fn(), records: vi.fn(), rules: vi.fn(), toast: vi.fn(), clipboard: vi.fn(), authorities: ['device:write'] as string[] }));
+vi.mock('@/lib/api/automation-reviews', () => ({ getAutomationReviewPolicy: h.policy, listAutomationReviewBreakGlass: h.records, getAutomationReview: h.get, listAutomationReviews: h.list, matchingDraftReviewTokens: h.matching,
   runAutomationReview: h.run, approveAutomationReview: h.approve, rejectAutomationReview: h.reject }));
 vi.mock('@/lib/api/device-management', () => ({ listDetectionRules: h.rules }));
 vi.mock('@/auth/AuthProvider', () => ({ useAuth: () => ({ claims: { tenant: 'tenant', username: 'ann', authorities: h.authorities, scopeAnchors: [] }, identityToken: 'session' }) }));
@@ -20,7 +20,7 @@ import { AutomationReviewPanel } from './AutomationReviewPanel';
 
 const at = '2026-11-10T10:00:00Z';
 const review: AutomationReview = {
-  token: 'review-1', profileToken: 'profile-1', ruleToken: 'rule-1', kind: 'RULE_CHANGE', state: 'RAN', outcome: 'PASSED',
+  consumedVersion: null, token: 'review-1', profileToken: 'profile-1', ruleToken: 'rule-1', kind: 'RULE_CHANGE', state: 'RAN', outcome: 'PASSED',
   reviewDigest: 'sha256:review-evidence', draftDigest: 'draft-digest', baselineDigest: 'base-digest', baselineVersion: 3,
   createdBy: 'bob', createdAt: at, requiredApprovals: 2, approvals: [], draftAuthors: ['bob'], profileChanges: [], reasons: [],
   approvedAt: null, expiresAt: null, decidedBy: null, decidedAt: null, note: null, shiftWindowSeconds: null, resultDigest: null, result: null,
@@ -42,6 +42,7 @@ const listReview = { token: review.token, profileToken: review.profileToken, rul
   state: review.state, outcome: review.outcome, createdBy: review.createdBy, createdAt: review.createdAt };
 beforeEach(() => {
   vi.resetAllMocks(); h.authorities = ['device:write'];
+  h.policy.mockResolvedValue(null); h.records.mockResolvedValue([]);
   h.get.mockResolvedValue(review); h.list.mockResolvedValue({ results: [listReview], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } });
   h.matching.mockResolvedValue(new Set([review.token]));
   h.rules.mockResolvedValue([]); h.approve.mockResolvedValue({ token: review.token, state: 'APPROVED' });
@@ -57,6 +58,10 @@ function show(panel = false) {
 }
 
 describe('review detail', () => {
+  it('shows the version that consumed the review', async () => {
+    h.get.mockResolvedValue({ ...review, consumedVersion: 4 }); show();
+    await screen.findByText('Consumed by version 4');
+  });
   it('renders the outcome, comparative expectation, and changed payloads', async () => {
     show(); await screen.findByText('PASSED');
     expect(screen.getByText('was FAIL, now PASS')).toBeTruthy();
