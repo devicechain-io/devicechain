@@ -375,7 +375,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// tenant-administration methods (ADR-081), which take the tenant from the caller's own
 	// token. One instance, so the two planes cannot be wired to different stores.
 	AdminService = newAdminService(iam.NewStore(RdbManager), Configuration.TenantPurgeSettle(),
-		Configuration.TenantPurgeTokenHold(), DeadLetterStore, serviceAccountKey, secretStore)
+		Configuration.TenantPurgeTokenHold(), DeadLetterStore, serviceAccountKey, secretStore, IdentityManager)
 	AdminService.SetAgentActuation(Configuration.AgentActuation.Enabled)
 
 	// Map of providers injected into the graphql http context.
