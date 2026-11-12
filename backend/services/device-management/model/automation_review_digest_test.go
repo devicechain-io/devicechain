@@ -6,6 +6,7 @@ package model
 import (
 	"database/sql"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -70,7 +71,6 @@ func TestSnapshotDigestNormalizesStorageOnly(t *testing.T) {
 		{"expression", func(s *ProfileSnapshot) { s.Metrics[0].Expression.String = "raw * 3.0" }},
 		{"command", func(s *ProfileSnapshot) { s.Commands[0].Impact = "DISRUPTIVE" }},
 		{"decoder", func(s *ProfileSnapshot) { s.Decoder = json.RawMessage(`{"language":"javascript"}`) }},
-		{"order", func(s *ProfileSnapshot) { s.Metrics[0], s.Metrics[1] = s.Metrics[1], s.Metrics[0] }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := reviewSnapshot()
@@ -160,12 +160,82 @@ func TestReviewDigestBinding(t *testing.T) {
 		DraftDigest: "sha256:draft", BaselineActivationId: 7, BaselineDigest: "sha256:base", ScopeDigest: "sha256:scope",
 		StreamBounds:       datatypes.JSON(`[{"role":"INCIDENT","stream":"resolved","firstSeq":"12","lastSeq":"19"}]`),
 		ExpectationsDigest: "sha256:expect", ResultDigest: "sha256:result", InputDigest: "sha256:input", Outcome: ReviewOutcomePassed,
-		ProfileChanges: datatypes.JSON(`[{"area":"RULE","key":"r1","change":"MODIFIED","automation":true}]`)}
+		ProfileChanges: datatypes.JSON(`[{"area":"RULE","key":"r1","change":"MODIFIED","automation":true}]`),
+		DraftAuthors:   datatypes.JSON(`["alice"]`)}
 	got, err := reviewDigestOf(r, "profile")
 	require.NoError(t, err)
-	require.Equal(t, "sha256:4aef3536c1b032b49e0379ca35460a22476f95636028e61be3c86079ac75ddc7", got)
+	require.Equal(t, "sha256:da1ac28609e8d7e91a8594a61907427e4ae51750a0c720c9db2fecec56ea8645", got)
 	r.BaselineActivationId++
 	changed, err := reviewDigestOf(r, "profile")
 	require.NoError(t, err)
 	require.NotEqual(t, got, changed)
+}
+
+func TestSnapshotDigestIgnoresDefinitionRowOrder(t *testing.T) {
+	s := reviewSnapshot()
+	s.Rules = append(s.Rules, &DetectionRule{TokenReference: rdb.TokenReference{Token: "r2"}, Definition: datatypes.JSON(`{}`)})
+	s.Commands = append(s.Commands, &CommandDefinition{CommandKey: "stop"})
+	want, err := SnapshotDigest(reviewSnapshotBytes(t, s))
+	require.NoError(t, err)
+	for _, list := range []string{"rules", "metrics", "commands"} {
+		t.Run(list, func(t *testing.T) {
+			switch list {
+			case "rules":
+				slices.Reverse(s.Rules)
+			case "metrics":
+				slices.Reverse(s.Metrics)
+			case "commands":
+				slices.Reverse(s.Commands)
+			}
+			got, err := SnapshotDigest(reviewSnapshotBytes(t, s))
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+		})
+	}
+	for _, list := range []string{"rules", "metrics", "commands"} {
+		t.Run("key "+list, func(t *testing.T) {
+			switch list {
+			case "rules":
+				original := s.Rules[0].Token
+				s.Rules[0].Token += "changed"
+				defer func() { s.Rules[0].Token = original }()
+			case "metrics":
+				original := s.Metrics[0].MetricKey
+				s.Metrics[0].MetricKey += "changed"
+				defer func() { s.Metrics[0].MetricKey = original }()
+			case "commands":
+				original := s.Commands[0].CommandKey
+				s.Commands[0].CommandKey += "changed"
+				defer func() { s.Commands[0].CommandKey = original }()
+			}
+			got, err := SnapshotDigest(reviewSnapshotBytes(t, s))
+			require.NoError(t, err)
+			require.NotEqual(t, want, got)
+		})
+	}
+}
+
+func TestReviewDependenciesCoverBothSnapshotsAndCommands(t *testing.T) {
+	for _, side := range []string{"baseline", "draft"} {
+		t.Run(side, func(t *testing.T) {
+			base, draft := reviewSnapshot(), reviewSnapshot()
+			if side == "baseline" {
+				base.Rules[0].Definition = datatypes.JSON(`{"nested":[{"cel":"m[key]"}]}`)
+			} else {
+				draft.Rules[0].Definition = datatypes.JSON(`{"nested":[{"cel":"m[key]"}]}`)
+			}
+			base.Metrics = append(base.Metrics, &MetricDefinition{MetricKey: "removed"})
+			draft.Commands = append(draft.Commands, &CommandDefinition{CommandKey: "added"})
+			draft.Commands[0].Impact = "DISRUPTIVE"
+			got, err := classifyAutomationReview(base, draft)
+			require.NoError(t, err)
+			require.Equal(t, ReviewKindUnreviewable, got.Kind)
+			require.Equal(t, []ProfileChange{
+				{Area: "COMMAND", Key: "added", Change: "ADDED", Automation: true},
+				{Area: "COMMAND", Key: "boost", Change: "MODIFIED", Automation: true},
+				{Area: "METRIC", Key: "removed", Change: "REMOVED", Automation: true},
+				{Area: "RULE", Key: "r1", Change: "MODIFIED", Automation: true},
+			}, got.Changes)
+		})
+	}
 }

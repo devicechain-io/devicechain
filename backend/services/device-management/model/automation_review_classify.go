@@ -68,13 +68,15 @@ func snapshotRules(s *ProfileSnapshot) map[string]*DetectionRule {
 	return out
 }
 
-// reviewDependencies intentionally over-includes textual matches: a false positive
-// makes a change unreviewable, never reviewable. Its limit is a key assembled at
-// runtime from pieces, which cannot be seen without parsing the rule language.
+// reviewDependencies scans decoded, canonical definitions so JSON escapes cannot
+// hide keys. CEL, escapes and templates can assemble keys at runtime, so they make
+// every metric and command a dependency: edits to them are UNREVIEWABLE rather
+// than reviewable. False positives safely exclude more changes from approval.
 func reviewDependencies(snapshots ...*ProfileSnapshot) map[string]bool {
 	deps := map[string]bool{}
 	keys := map[string]bool{}
 	var definitions []string
+	all := false
 	var metrics []*MetricDefinition
 	for _, s := range snapshots {
 		metrics = append(metrics, s.Metrics...)
@@ -85,10 +87,25 @@ func reviewDependencies(snapshots ...*ProfileSnapshot) map[string]bool {
 			keys[c.CommandKey] = true
 		}
 		for _, r := range s.Rules {
-			definitions = append(definitions, string(r.Definition))
+			value, err := reviewJSON(r.Definition)
+			if err != nil {
+				all = true
+				continue
+			}
+			canonical, err := reviewCanonical(value)
+			if err != nil {
+				all = true
+				continue
+			}
+			definition := string(canonical)
+			definitions = append(definitions, definition)
+			all = all || reviewHasCEL(value) || strings.ContainsAny(definition, `\`) || strings.Contains(definition, "{{")
 		}
 	}
 	for k := range keys {
+		if all {
+			deps[k] = true
+		}
 		for _, d := range definitions {
 			if k != "" && strings.Contains(d, k) {
 				deps[k] = true
@@ -110,6 +127,28 @@ func reviewDependencies(snapshots ...*ProfileSnapshot) map[string]bool {
 		}
 	}
 	return deps
+}
+
+// CEL may be nested in conditions or actions, including arrays.
+func reviewHasCEL(value any) bool {
+	switch x := value.(type) {
+	case map[string]any:
+		for key, v := range x {
+			if text, ok := v.(string); key == "cel" && ok && text != "" {
+				return true
+			}
+			if reviewHasCEL(v) {
+				return true
+			}
+		}
+	case []any:
+		for _, v := range x {
+			if reviewHasCEL(v) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // classifyReviewRules keeps envelope changes separate from authoring annotations.

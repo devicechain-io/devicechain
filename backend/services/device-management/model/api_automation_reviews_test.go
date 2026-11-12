@@ -530,11 +530,11 @@ func TestDraftAuthorsDeletedRowsAndMissingBoundary(t *testing.T) {
 	require.NoError(t, err)
 	draft, err := parseProfileSnapshot(draftRaw)
 	require.NoError(t, err)
-	authors, err := r.api.draftAuthors(r.ctx, r.profile, activation.ID, base, draft)
+	authors, err := r.api.draftAuthors(r.ctx, r.profile, activation.Version, base, draft)
 	require.NoError(t, err)
 	require.Equal(t, []string{"deleted-author"}, authors)
-	// Simulate an older activation with no journal entry: the pre-baseline writer is included.
-	authors, err = r.api.draftAuthors(r.ctx, r.profile, activation.ID+100, base, draft)
+	// A missing baseline publish has no safe lower bound, so include the earlier writer.
+	authors, err = r.api.draftAuthors(r.ctx, r.profile, activation.Version+100, base, draft)
 	require.NoError(t, err)
 	require.Equal(t, []string{"before", "deleted-author"}, authors)
 }
@@ -640,4 +640,127 @@ func TestDraftAuthorsFollowBaselineRowsAndSkipSystem(t *testing.T) {
 	var authors []string
 	require.NoError(t, json.Unmarshal(row.DraftAuthors, &authors))
 	require.Equal(t, []string{"editor"}, authors)
+}
+
+func TestDraftAuthorsAfterRollbackUseBaselinePublish(t *testing.T) {
+	r := newAutomationReviewRig(t, true)
+	r.changeRule(t, "alice")
+	ctx, _ := reviewIdentity("before")
+	_, err := r.api.PublishDeviceProfile(ctx, "profile", nil, nil, "before")
+	require.NoError(t, err)
+	ctx, _ = reviewIdentity("carol")
+	_, err = r.api.RollbackDeviceProfile(ctx, "profile", 1)
+	require.NoError(t, err)
+	activation, err := r.api.latestReviewActivation(r.ctx, r.profile.ID)
+	require.NoError(t, err)
+	row := r.run(t)
+	require.Equal(t, activation.ID, row.BaselineActivationId)
+	require.Equal(t, int32(1), row.BaselineVersion)
+	var authors []string
+	require.NoError(t, json.Unmarshal(row.DraftAuthors, &authors))
+	require.Contains(t, authors, "alice")
+	ctx, alice := reviewIdentity("alice")
+	_, err = r.api.ApproveAutomationReview(ctx, alice, row.Token, row.ReviewDigest)
+	reviewErrorCode(t, err, "SELF_APPROVAL_REFUSED")
+}
+
+func TestApproveAutomationReviewVerifiesStoredEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		column string
+		value  any
+	}{
+		{"result", `{"outcome":"PASSED","tampered":true}`},
+		{"scope", datatypes.JSON(`{"devices":["other"]}`)},
+		{"expectations", datatypes.JSON(`[]`)},
+		{"draft_authors", datatypes.JSON(`[]`)},
+	} {
+		t.Run(tc.column, func(t *testing.T) {
+			r := newAutomationReviewRig(t, true)
+			r.changeRule(t, "author")
+			row := r.run(t)
+			digest := row.ReviewDigest
+			require.NoError(t, r.api.RDB.DB(r.ctx).Model(row).Update(tc.column, tc.value).Error)
+			ctx, third := reviewIdentity("third")
+			_, err := r.api.ApproveAutomationReview(ctx, third, row.Token, digest)
+			reviewErrorCode(t, err, "DIGEST_MISMATCH")
+			stored, err := r.api.AutomationReviewByToken(r.ctx, row.Token)
+			require.NoError(t, err)
+			require.Equal(t, ReviewStateRan, stored.State)
+			require.Equal(t, "[]", string(stored.Approvals))
+			require.Equal(t, 0, stored.Revision)
+		})
+	}
+}
+
+func TestRunAutomationReviewRequestBindsProfileAndRule(t *testing.T) {
+	for _, field := range []string{"profile", "rule", "absent rule"} {
+		t.Run(field, func(t *testing.T) {
+			r := newAutomationReviewRig(t, true)
+			in := reviewRunInput()
+			rule := "r1"
+			in.RuleToken = &rule
+			_, creator := reviewIdentity("creator")
+			row, err := r.api.RunAutomationReview(r.ctx, creator, in)
+			require.NoError(t, err)
+			switch field {
+			case "profile":
+				seedProfileWithRule(t, r.api, r.ctx, "other", "r2", true)
+				in.ProfileToken = "other"
+			case "rule":
+				other := "r2"
+				in.RuleToken = &other
+			case "absent rule":
+				in.RuleToken = nil
+			}
+			_, err = r.api.RunAutomationReview(r.ctx, creator, in)
+			reviewErrorCode(t, err, "CONFLICT")
+			require.EqualValues(t, 1, r.count(t))
+			stored, err := r.api.AutomationReviewByToken(r.ctx, row.Token)
+			require.NoError(t, err)
+			require.Equal(t, string(row.Scope), string(stored.Scope))
+		})
+	}
+}
+
+func TestRunAutomationReviewHiddenDependenciesFailClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name, definition, key, kind string
+		changeRule                  bool
+	}{
+		{"CEL escape", `{"condition":{"cel":"m[\"te\\u006dp_c\"] > 1"}}`, "temp_c", ReviewKindUnreviewable, false},
+		{"CEL variable", `{"conditions":[{"cel":"m[key] > 1"}]}`, "unread", ReviewKindUnreviewable, false},
+		{"CEL concatenation", `{"cel":"m['te' + 'mp_c'] > 1"}`, "temp_c", ReviewKindUnreviewable, false},
+		{"JSON escape", `{"metric":"te\u006dp_c"}`, "temp_c", ReviewKindUnreviewable, false},
+		{"template", `{"metric":"{{key}}"}`, "unread", ReviewKindUnreviewable, false},
+		{"backslash", `{"expression":"m[\"temp\"]"}`, "unread", ReviewKindUnreviewable, false},
+		{"structured ride along", `{"metric":"temp_c","threshold":26}`, "unread", ReviewKindRuleChange, true},
+		{"structured unread", `{"metric":"temp_c","threshold":26}`, "unread", ReviewKindNoAutomationChange, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newAutomationReviewRig(t, false)
+			ctx, _ := reviewIdentity("before")
+			r.rule.Definition = datatypes.JSON(tc.definition)
+			require.NoError(t, r.api.RDB.DB(ctx).Save(r.rule).Error)
+			metric := &MetricDefinition{DeviceProfileId: r.profile.ID, MetricKey: tc.key, DataType: "DOUBLE",
+				TokenReference: rdb.TokenReference{Token: "metric"}}
+			require.NoError(t, r.api.RDB.DB(ctx).Create(metric).Error)
+			_, err := r.api.PublishDeviceProfile(ctx, "profile", nil, nil, "before")
+			require.NoError(t, err)
+			ctx, _ = reviewIdentity("alice")
+			metric.Expression = sql.NullString{String: "2.0", Valid: true}
+			require.NoError(t, r.api.RDB.DB(ctx).Save(metric).Error)
+			if tc.changeRule {
+				r.changeRule(t, "alice")
+			}
+			row := r.run(t)
+			require.Equal(t, tc.kind, row.Kind)
+			var changes []ProfileChange
+			require.NoError(t, json.Unmarshal(row.ProfileChanges, &changes))
+			want := []ProfileChange{{Area: "METRIC", Key: tc.key, Change: "MODIFIED", Automation: tc.kind == ReviewKindUnreviewable}}
+			if tc.changeRule {
+				want = append(want, ProfileChange{Area: "RULE", Key: "r1", Change: "MODIFIED", Automation: true})
+			}
+			require.Equal(t, want, changes)
+		})
+	}
 }

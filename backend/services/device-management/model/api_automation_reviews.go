@@ -117,7 +117,8 @@ func normalizeReviewInput(in RunAutomationReviewInput) (RunAutomationReviewInput
 			return invalid("expectations require a valid window and 1..8192 bytes of expectation text")
 		}
 	}
-	scope, err := actiongate.Canonical(map[string]any{"devices": in.DeviceTokens, "windows": in.Windows, "shiftWindowSeconds": in.ShiftWindowSeconds})
+	scope, err := actiongate.Canonical(map[string]any{"profileToken": in.ProfileToken, "ruleToken": in.RuleToken,
+		"devices": in.DeviceTokens, "windows": in.Windows, "shiftWindowSeconds": in.ShiftWindowSeconds})
 	if err != nil {
 		return in, nil, nil, err
 	}
@@ -228,7 +229,7 @@ func (api *Api) RunAutomationReview(ctx context.Context, person actiongate.Appro
 			return nil, &InvalidArgumentError{Msg: "ruleToken names no baseline or draft rule"}
 		}
 	}
-	authors, err := api.draftAuthors(ctx, profile, activation.ID, base, draft)
+	authors, err := api.draftAuthors(ctx, profile, activation.Version, base, draft)
 	if err != nil {
 		return nil, err
 	}
@@ -437,6 +438,9 @@ func (api *Api) ApproveAutomationReview(ctx context.Context, approver actiongate
 		if !actiongate.DigestEqual(r.ReviewDigest, digest) {
 			return nil, reviewRefusal(actiongate.CodeDigestMismatch, "the digest does not match the stored review")
 		}
+		if !reviewEvidenceVerifies(r) {
+			return nil, reviewRefusal(actiongate.CodeDigestMismatch, "the stored review evidence does not verify")
+		}
 		var profile DeviceProfile
 		if err := api.RDB.DB(ctx).First(&profile, r.DeviceProfileId).Error; err != nil {
 			return nil, err
@@ -446,7 +450,7 @@ func (api *Api) ApproveAutomationReview(ctx context.Context, approver actiongate
 			return nil, err
 		}
 		if !actiongate.DigestEqual(computed, r.ReviewDigest) {
-			return nil, reviewRefusal(actiongate.CodeDigestMismatch, "the stored review digest does not verify")
+			return nil, reviewRefusal(actiongate.CodeDigestMismatch, "the stored review evidence does not verify")
 		}
 		if err := api.checkReviewCurrent(ctx, r); err != nil {
 			return nil, err

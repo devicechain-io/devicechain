@@ -11,12 +11,13 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"sort"
 
 	"github.com/devicechain-io/dc-microservice/actiongate"
 )
 
-// SnapshotDigest excludes row identity and save timestamps, but keeps list order
-// and all semantic fields. Numeric normalization also survives PostgreSQL jsonb.
+// SnapshotDigest excludes row identity, save timestamps and database row order,
+// but keeps all semantic fields. Numeric normalization also survives PostgreSQL jsonb.
 func SnapshotDigest(raw []byte) (string, error) {
 	x, err := reviewJSON(raw)
 	if err != nil {
@@ -34,8 +35,32 @@ func SnapshotDigest(raw []byte) (string, error) {
 		if !ok {
 			return "", fmt.Errorf("snapshot %s must be a list", key)
 		}
-		for _, item := range list {
+		identity := map[string]string{"rules": "Token", "metrics": "MetricKey", "commands": "CommandKey"}[key]
+		type element struct {
+			value any
+			key   string
+			bytes []byte
+		}
+		elements := make([]element, len(list))
+		for i, item := range list {
 			stripReviewBookkeeping(item)
+			canonical, err := reviewCanonical(item)
+			if err != nil {
+				return "", err
+			}
+			m, _ := item.(map[string]any)
+			k, _ := m[identity].(string)
+			elements[i] = element{value: item, key: k, bytes: canonical}
+		}
+		// Loader order is incidental; canonical bytes also stabilize duplicate keys.
+		sort.Slice(elements, func(i, j int) bool {
+			if elements[i].key != elements[j].key {
+				return elements[i].key < elements[j].key
+			}
+			return bytes.Compare(elements[i].bytes, elements[j].bytes) < 0
+		})
+		for i, element := range elements {
+			list[i] = element.value
 		}
 	}
 	b, err := actiongate.Canonical(m)
@@ -143,6 +168,7 @@ func reviewDigestOf(r *AutomationReview, profileToken string) (string, error) {
 		"scopeDigest": r.ScopeDigest, "streamBounds": r.StreamBounds,
 		"expectationsDigest": r.ExpectationsDigest, "resultDigest": r.ResultDigest,
 		"inputDigest": r.InputDigest, "outcome": r.Outcome, "profileChanges": r.ProfileChanges,
+		"draftAuthors": r.DraftAuthors,
 	})
 	if err != nil {
 		return "", err
@@ -153,4 +179,22 @@ func reviewDigestOf(r *AutomationReview, profileToken string) (string, error) {
 // ReviewDigestOf exposes the same binding to callers outside the model package.
 func ReviewDigestOf(r *AutomationReview, profileToken string) (string, error) {
 	return reviewDigestOf(r, profileToken)
+}
+
+// The binding covers digest fields, so approval must also verify the evidence
+// those fields describe rather than trusting a digest beside altered text.
+func reviewEvidenceVerifies(r *AutomationReview) bool {
+	if !reviewResultDigestEqual(reviewHash([]byte(r.Result)), r.ResultDigest) {
+		return false
+	}
+	for _, evidence := range []struct {
+		raw    []byte
+		digest string
+	}{{r.Scope, r.ScopeDigest}, {r.Expectations, r.ExpectationsDigest}} {
+		canonical, err := actiongate.Canonical(json.RawMessage(evidence.raw))
+		if err != nil || !actiongate.DigestEqual(reviewHash(canonical), evidence.digest) {
+			return false
+		}
+	}
+	return true
 }

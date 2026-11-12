@@ -22,17 +22,26 @@ func journalTable(db *gorm.DB, model any) (string, error) {
 	return s.Table, nil
 }
 
-func (api *Api) draftAuthors(ctx context.Context, profile *DeviceProfile, baselineActivationId uint, baselineSnap, draftSnap *ProfileSnapshot) ([]string, error) {
+func (api *Api) draftAuthors(ctx context.Context, profile *DeviceProfile, baselineVersion int32, baselineSnap, draftSnap *ProfileSnapshot) ([]string, error) {
 	db := api.RDB.DB(ctx)
+	// A rollback leaves the draft intact. Only the publish that froze this version
+	// is a safe author boundary; the latest activation still binds review staleness.
+	var publishes []DeviceProfileActivation
+	if err := db.Where("device_profile_id = ? AND version = ? AND kind = ?", profile.ID, baselineVersion, ActivationKindPublish).
+		Order("id ASC").Limit(1).Find(&publishes).Error; err != nil {
+		return nil, err
+	}
 	activationTable, err := journalTable(db, &DeviceProfileActivation{})
 	if err != nil {
 		return nil, err
 	}
 	var boundary []rdb.AuditEvent
-	if err := db.Where("category = ? AND table_name = ? AND entity_pk = ? AND operation = ?",
-		rdb.AuditCategoryMutation, activationTable, strconv.FormatUint(uint64(baselineActivationId), 10), "create").
-		Order("id DESC").Limit(1).Find(&boundary).Error; err != nil {
-		return nil, err
+	if len(publishes) != 0 {
+		if err := db.Where("category = ? AND table_name = ? AND entity_pk = ? AND operation = ?",
+			rdb.AuditCategoryMutation, activationTable, strconv.FormatUint(uint64(publishes[0].ID), 10), "create").
+			Order("id DESC").Limit(1).Find(&boundary).Error; err != nil {
+			return nil, err
+		}
 	}
 	// Older activations were audit-exempt. With no journal boundary, no lower
 	// bound is safe: over-including authors excludes more people from approval.
