@@ -34,6 +34,7 @@ func TestATTSDownlinkIsAddressedByTheDeviceIDAndNotTheDevEUI(t *testing.T) {
 	require.Equal(t, "sensor-1", r.send.calls[0].eui, "the identity the network server addresses it by, read from the device")
 	require.Len(t, r.resp.envs, 1)
 	require.True(t, r.resp.envs[0].Success, "unconfirmed: answered at acceptance, as for ChirpStack")
+	require.Equal(t, cmddownlink.ReachUnanswered, r.resp.envs[0].Reach)
 }
 
 func TestAConfirmedTTSDownlinkWaitsAndIsStoredWithItsDeviceRefAndCorrelationKey(t *testing.T) {

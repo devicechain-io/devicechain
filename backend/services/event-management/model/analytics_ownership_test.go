@@ -114,7 +114,7 @@ func TestAnalyticsOwnershipStopsReconciliation(t *testing.T) {
 			mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_unlock($1)")).
 				WithArgs(key).WillReturnResult(sqlmock.NewResult(0, 1))
 
-			err := ReconcileAnalyticsSurface(context.Background(), &rdb.RdbManager{Database: db})
+			err := ReconcileAnalyticsSurface(context.Background(), &rdb.RdbManager{Database: db}, newTestAnalyticsMetrics())
 			require.ErrorContains(t, err, "measurement_rollups")
 			require.ErrorContains(t, err, "ownership")
 			require.ErrorContains(t, err, "operator")

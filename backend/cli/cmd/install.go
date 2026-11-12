@@ -243,6 +243,10 @@ shared by every instance, so the release a cluster is prepared at is chosen here
 --version, and moving it is this command's job rather than a side effect of building
 or upgrading one instance.
 
+An install by a dcctl older than the one that last installed the cluster is refused:
+the operator and its definitions are shared by every instance, and there is no downgrade.
+Use that release's dcctl or newer.
+
 --database-node-selector places the relational store, and the event store of every
 instance bootstrapped on the cluster, on the nodes it names; --database-toleration lets
 them onto nodes tainted to keep other workloads off.
@@ -362,8 +366,7 @@ the cluster, with one exception: the connection budget may be raised.`,
 		// The recorded install is what `dcctl upgrade` trusts to say which controller the cluster
 		// runs, so it must not name this dcctl for an older one. Only an explicit --version.
 		if installVersion != "" && !installBuild {
-			if err := bootstrap.RefuseForeignRelease(imageSource.Version, imageSource.Registry,
-				fmt.Sprintf("dcctl install %s --version %s", args[0], imageSource.Version)); err != nil {
+			if err := bootstrap.RefuseForeignRelease(imageSource.Version, imageSource.Registry); err != nil {
 				return err
 			}
 		}

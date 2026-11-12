@@ -308,11 +308,14 @@ A command carries `deliveredTime` and `deliveryEvidence` once the platform has e
 
 ### Who reports the outcome {#who-reports-the-outcome}
 
-Only the device can report success. `SUCCESSFUL` and a device-reported `FAILED` are the two
-outcomes only the device can produce. (The exception is a Sparkplug write, whose success the
-platform infers from the node's reported state, which can mean the value was already there; see
-[Sparkplug B](./sparkplug.md).) Every other terminal state is one the platform writes on its
-own:
+A command is normally settled by the device: it reports `SUCCESSFUL` or a device-reported
+`FAILED`. The exceptions are a Sparkplug write, whose success the platform infers from the node's
+reported state, which can mean the value was already there (see [Sparkplug B](./sparkplug.md)),
+and a channel that has no device answer to wait for, such as an
+[unconfirmed LoRaWAN downlink](../guides/inbound-integrations.md#lorawan-downlink). An unconfirmed
+downlink is marked `SUCCESSFUL` once the network server queues it, without evidence that the device
+received it. A confirmed downlink is settled from the device's acknowledgement. Every other terminal
+state is one the platform writes on its own:
 
 - `TIMEOUT`, `EXPIRED` or `CANCELLED`;
 - `FAILED` because the transport cannot carry the command at all;

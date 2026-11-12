@@ -36,6 +36,9 @@ func NewStore(db *rdb.RdbManager) *Store { return &Store{db: db} }
 
 // sys returns a gorm handle scoped to the instance-global system context.
 func (s *Store) sys(ctx context.Context) *gorm.DB {
+	if tx, ok := ctx.Value(snapshotKey{}).(*gorm.DB); ok {
+		return tx.WithContext(core.WithSystemContext(ctx))
+	}
 	return s.db.DB(core.WithSystemContext(ctx))
 }
 
@@ -46,6 +49,9 @@ func (s *Store) sys(ctx context.Context) *gorm.DB {
 // surface tenant-less auth events and every tenant's administrative changes. The
 // query itself is the core-owned RdbManager.AuditEvents helper.
 func (s *Store) AuditEvents(ctx context.Context, criteria rdb.AuditEventSearchCriteria) (*rdb.AuditEventSearchResults, error) {
+	if InSnapshot(ctx) {
+		return nil, fmt.Errorf("AuditEvents: %w", ErrOutsideSnapshot)
+	}
 	return s.db.AuditEvents(core.WithSystemContext(ctx), criteria)
 }
 
@@ -473,7 +479,38 @@ func (s *Store) UpdateTenantFields(ctx context.Context, t *Tenant, fields map[st
 
 // SetTenantEnabled flips a tenant's enabled flag in place.
 func (s *Store) SetTenantEnabled(ctx context.Context, t *Tenant, enabled bool) error {
-	return s.sys(ctx).Model(t).Update("enabled", enabled).Error
+	return setTenantEnabled(s.sys(ctx), t, enabled)
+}
+
+func setTenantEnabled(tx *gorm.DB, t *Tenant, enabled bool) error {
+	return tx.Model(t).Update("enabled", enabled).Error
+}
+
+// SetTenantEnabledAndBumpGeneration writes the enabled flag and advances the fence in
+// one transaction, even for an unchanged value. Separate transactions could disable,
+// re-enable and bump, then bump the disable: its late kill would close the fence at
+// the enabled tenant's newest generation indefinitely.
+// The head is locked FIRST to serialize lifecycle changes for this tenant before
+// either write. A kill must carry this transaction's generation, so a later re-enable
+// has a strictly greater generation and reopens the fence regardless of publish order.
+func (s *Store) SetTenantEnabledAndBumpGeneration(ctx context.Context, t *Tenant, enabled bool) (int, error) {
+	var generation int
+	err := s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		head, err := lockAgentPolicyHead(tx, t.Token)
+		if err != nil {
+			return err
+		}
+		if err := setTenantEnabled(tx, t, enabled); err != nil {
+			return err
+		}
+		head.ActuationGeneration++
+		if err := tx.Save(head).Error; err != nil {
+			return err
+		}
+		generation = head.ActuationGeneration
+		return nil
+	})
+	return generation, err
 }
 
 // BeginTenantPurge cuts a tenant's access and starts its ADR-077 purge: disabled, in
