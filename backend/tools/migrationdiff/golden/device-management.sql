@@ -96,12 +96,12 @@ ALTER TABLE ONLY "device-management".automation_review_break_glass ALTER COLUMN 
 ALTER TABLE ONLY "device-management".automation_review_policies
  ADD CONSTRAINT automation_review_policies_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".automation_review_policies
- ADD CONSTRAINT fk_automation_review_policies_profile FOREIGN KEY (device_profile_id) REFERENCES "device-management".device_profiles(id) ON DELETE RESTRICT;
+ ADD CONSTRAINT fk_automation_review_policies_profile FOREIGN KEY (device_profile_id) REFERENCES "device-management".device_profiles(id) ON DELETE CASCADE;
 ALTER TABLE ONLY "device-management".automation_review_policies ALTER COLUMN id SET DEFAULT nextval('"device-management".automation_review_policies_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".automation_review_policy_changes
  ADD CONSTRAINT automation_review_policy_changes_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".automation_review_policy_changes
- ADD CONSTRAINT fk_automation_review_policy_changes_profile FOREIGN KEY (device_profile_id) REFERENCES "device-management".device_profiles(id) ON DELETE RESTRICT;
+ ADD CONSTRAINT fk_automation_review_policy_changes_profile FOREIGN KEY (device_profile_id) REFERENCES "device-management".device_profiles(id) ON DELETE CASCADE;
 ALTER TABLE ONLY "device-management".automation_review_policy_changes ALTER COLUMN id SET DEFAULT nextval('"device-management".automation_review_policy_changes_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".automation_reviews
  ADD CONSTRAINT automation_reviews_pkey PRIMARY KEY (id);
