@@ -7,6 +7,7 @@ ALTER SEQUENCE "device-management".asset_type_versions_id_seq OWNED BY "device-m
 ALTER SEQUENCE "device-management".asset_types_id_seq OWNED BY "device-management".asset_types.id;
 ALTER SEQUENCE "device-management".assets_id_seq OWNED BY "device-management".assets.id;
 ALTER SEQUENCE "device-management".audit_events_id_seq OWNED BY "device-management".audit_events.id;
+ALTER SEQUENCE "device-management".automation_reviews_id_seq OWNED BY "device-management".automation_reviews.id;
 ALTER SEQUENCE "device-management".command_definitions_id_seq OWNED BY "device-management".command_definitions.id;
 ALTER SEQUENCE "device-management".customer_types_id_seq OWNED BY "device-management".customer_types.id;
 ALTER SEQUENCE "device-management".customers_id_seq OWNED BY "device-management".customers.id;
@@ -86,6 +87,9 @@ ALTER TABLE ONLY "device-management".assets ALTER COLUMN id SET DEFAULT nextval(
 ALTER TABLE ONLY "device-management".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".audit_events ALTER COLUMN id SET DEFAULT nextval('"device-management".audit_events_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".automation_reviews
+ ADD CONSTRAINT automation_reviews_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".automation_reviews ALTER COLUMN id SET DEFAULT nextval('"device-management".automation_reviews_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".command_definitions
  ADD CONSTRAINT command_definitions_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".command_definitions ALTER COLUMN id SET DEFAULT nextval('"device-management".command_definitions_id_seq'::regclass);
@@ -297,6 +301,9 @@ CREATE INDEX "idx_device-management_asset_types_token" ON "device-management".as
 CREATE INDEX "idx_device-management_assets_deleted_at" ON "device-management".assets USING btree (deleted_at);
 CREATE INDEX "idx_device-management_assets_tenant_id" ON "device-management".assets USING btree (tenant_id);
 CREATE INDEX "idx_device-management_assets_token" ON "device-management".assets USING btree (token);
+CREATE INDEX "idx_device-management_automation_reviews_device_profile_id" ON "device-management".automation_reviews USING btree (device_profile_id);
+CREATE INDEX "idx_device-management_automation_reviews_state" ON "device-management".automation_reviews USING btree (state);
+CREATE INDEX "idx_device-management_automation_reviews_tenant_id" ON "device-management".automation_reviews USING btree (tenant_id);
 CREATE INDEX "idx_device-management_command_definitions_deleted_at" ON "device-management".command_definitions USING btree (deleted_at);
 CREATE INDEX "idx_device-management_command_definitions_tenant_id" ON "device-management".command_definitions USING btree (tenant_id);
 CREATE INDEX "idx_device-management_command_definitions_token" ON "device-management".command_definitions USING btree (token);
@@ -485,6 +492,12 @@ CREATE SEQUENCE "device-management".assets_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".audit_events_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".automation_reviews_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -918,6 +931,49 @@ CREATE TABLE "device-management".audit_events (
  session_id text,
  on_behalf_of text,
  proposal text
+);
+CREATE TABLE "device-management".automation_reviews (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ token character varying(64) NOT NULL,
+ device_profile_id bigint NOT NULL,
+ kind character varying(32) NOT NULL,
+ rule_token character varying(128),
+ request_id character varying(128) NOT NULL,
+ baseline_activation_id bigint NOT NULL,
+ baseline_version integer NOT NULL,
+ baseline_digest character varying(80) NOT NULL,
+ draft_digest character varying(80) NOT NULL,
+ base_envelope jsonb,
+ draft_envelope jsonb,
+ draft_authors jsonb NOT NULL,
+ profile_changes jsonb NOT NULL,
+ scope jsonb NOT NULL,
+ scope_digest character varying(80) NOT NULL,
+ stream_bounds jsonb NOT NULL,
+ expectations jsonb NOT NULL,
+ expectations_digest character varying(80) NOT NULL,
+ result text NOT NULL,
+ result_digest character varying(80) NOT NULL,
+ input_digest character varying(80) NOT NULL,
+ engine_build character varying(128) NOT NULL,
+ outcome character varying(32) NOT NULL,
+ review_digest character varying(80) NOT NULL,
+ state character varying(16) NOT NULL,
+ approvals jsonb NOT NULL,
+ required_approvals bigint DEFAULT 1 NOT NULL,
+ approved_policy_revision integer,
+ approved_at timestamp with time zone,
+ expires_at timestamp with time zone,
+ consumed_version integer,
+ consumed_txid bigint,
+ created_by character varying(320) NOT NULL,
+ decided_by character varying(320),
+ decided_note character varying(512),
+ decided_at timestamp with time zone,
+ revision bigint DEFAULT 0 NOT NULL
 );
 CREATE TABLE "device-management".command_definitions (
  id bigint NOT NULL,
@@ -1588,6 +1644,8 @@ CREATE UNIQUE INDEX uix_areas_tenant_token ON "device-management".areas USING bt
 CREATE UNIQUE INDEX uix_asset_type_versions_type_version ON "device-management".asset_type_versions USING btree (asset_type_id, version);
 CREATE UNIQUE INDEX uix_asset_types_tenant_token ON "device-management".asset_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_assets_tenant_token ON "device-management".assets USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_automation_reviews_request ON "device-management".automation_reviews USING btree (tenant_id, request_id);
+CREATE UNIQUE INDEX uix_automation_reviews_tenant_token ON "device-management".automation_reviews USING btree (tenant_id, token);
 CREATE UNIQUE INDEX uix_command_definitions_tenant_profile_key ON "device-management".command_definitions USING btree (tenant_id, device_profile_id, command_key) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_command_definitions_tenant_token ON "device-management".command_definitions USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_customer_types_tenant_token ON "device-management".customer_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);

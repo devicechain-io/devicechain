@@ -50,6 +50,5 @@ type DeviceProfileActivation struct {
 // TableName is NOT declared: a TableName() bypasses this area's TablePrefix (see
 // schema/migration_list_order_indexes.go), and the type name derives device_profile_activations.
 
-// AuditExempt opts the log out of the audit journal: each row restates a publish or a
-// rollback the journal already records on the version and the profile.
-func (DeviceProfileActivation) AuditExempt() bool { return true }
+// Activations are journaled so draft authors can be bounded by the activation's
+// journal ID, even when timestamps coincide across replicas.
