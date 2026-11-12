@@ -83,6 +83,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	Svc = service.New(Microservice, service.Spec{Nats: &service.NatsSpec{OnCreate: createNatsComponents}})
 	ctx := context.Background()
 	require.NoError(t, Svc.Initialize(ctx), "initialize under the catalog")
+	dctest.UseFreeTCPPort(t, &service.ProbesPort)
 	nm := Svc.Nats
 	t.Cleanup(func() {
 		// A refused start leaves no reconciler to stop; do not let a nil deref mask the refusal.
