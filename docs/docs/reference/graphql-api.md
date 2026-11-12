@@ -1021,6 +1021,7 @@ characters.
 
 | Bound | Limit | Applies to |
 | --- | --- | --- |
+| Dashboard name search text | 256 B | `DashboardSearchCriteria.name` on `dashboards`, measured in UTF-8 bytes before any trimming. |
 | Attribute key | 128 B | `setEntityAttribute` `attrKey`. |
 | Attribute value | 64 KiB | `setEntityAttribute` `value`, whatever its declared type. |
 | Rule definition | 256 KiB | `definition` of a detection rule, on create and update. |
