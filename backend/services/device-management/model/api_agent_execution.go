@@ -14,6 +14,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/actiongate"
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/datatypes"
@@ -44,14 +45,17 @@ func agentExecutionLockError(err error) error {
 	return err
 }
 
+var errRefusedAtCommitPoint = errors.New("agent proposal refused at commit point")
+
 // executeAlarmProposal consumes the final approval and its effects atomically.
-func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval) (*AgentProposal, error) {
-	return api.executeAlarmProposalAttempt(ctx, approver, p, next, false)
+func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval, preRequired int) (*AgentProposal, error) {
+	return api.executeAlarmProposalAttempt(ctx, approver, p, next, preRequired, false)
 }
 
-func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval, retried bool) (*AgentProposal, error) {
+func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval, preRequired int, retried bool) (*AgentProposal, error) {
 	attrCtx := rdb.WithAgentAttribution(ctx, rdb.AgentAttribution{ClientID: p.ProposerClient, OnBehalfOf: p.ProposerSub, Proposal: p.Token})
 	reenableGeneration := 0
+	var reasons []string
 	err := api.RDB.DB(attrCtx).Transaction(func(tx *gorm.DB) error {
 		if err := setAgentExecutionTimeouts(tx); err != nil {
 			return err
@@ -68,9 +72,13 @@ func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver action
 			return errProposalExpired
 		}
 		p = &locked
-		// Parse the stored action and LOCK every target alarm BEFORE asking the policy: a wait for an
-		// alarm row must not sit between the decision and the effect, or a switch thrown during the
-		// wait would be answered by a decision that is already stale.
+		// Take all locks first and run every statement before the commit-point decision.
+		// The tail rule requires no SQL after that decision, only in-memory checks until COMMIT.
+		// ReadFenceIfEnforced explicitly reads the erasure fence before effects: their fence
+		// read is memoised for this transaction, so this makes the order explicit and fails
+		// closed before any effect is written. A commit-point refusal rolls everything back
+		// and is recorded in a separate transaction, keeping the tail SQL-free and reading
+		// the erasure fence afresh. A refusal written here would reuse the earlier clear memo.
 		var targets []string
 		var payload struct {
 			Action AlarmProposalAction `json:"action"`
@@ -119,21 +127,6 @@ func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver action
 				byToken[alarm.Token] = alarm
 			}
 		}
-		sid := ""
-		if p.ProposerSid != nil {
-			sid = *p.ProposerSid
-		}
-		fresh, err := api.AgentDecider.Execution(ctx, actiongate.ExecutionRequest{
-			ProposalToken: p.Token, Kind: actiongate.Kind(p.Kind), Impact: p.Impact, TargetCount: p.TargetCount,
-			ProposerPrincipal: p.ProposerSub, ProposerClient: p.ProposerClient, ProposerSid: sid, Approvers: actiongate.Principals(next),
-		})
-		if err != nil {
-			if errors.Is(err, auth.ErrForbidden) {
-				return err
-			}
-			return actiongate.ErrPolicyUnavailable
-		}
-		now = time.Now().UTC()
 		refuse := func(reasons []string) error {
 			raw, err := json.Marshal(actiongate.PersistedReasons(reasons))
 			if err != nil {
@@ -141,25 +134,6 @@ func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver action
 			}
 			return actiongate.Transition(tx, &AgentProposal{}, p.Token, actiongate.StateProposed, actiongate.StateRefused, now,
 				map[string]any{"decided_at": now, "decided_by": approver.Principal, "reasons": datatypes.JSON(raw)})
-		}
-		if fresh.Verdict != actiongate.VerdictApprove {
-			reasons := actiongate.PersistedReasons(fresh.Reasons)
-			if fresh.Verdict == actiongate.VerdictAuto {
-				reasons = append(reasons, actiongate.ReasonAutoNotAvailable)
-			}
-			return refuse(reasons)
-		}
-		if !slices.Contains(fresh.ValidApprovers, approver.Principal) {
-			return errNotAnApprover
-		}
-		if err := actiongate.CheckStepUp(approver, fresh.StepUp, now); err != nil {
-			return err
-		}
-		if approver.Principal == p.ProposerSub && (!fresh.AllowSelfConfirm || fresh.RequiredApprovals > 1) {
-			return errSelfApproval
-		}
-		if fresh.RequiredApprovals < 1 || actiongate.Tally(next, fresh.ValidApprovers, p.ProposerSub, fresh.RequiredApprovals, fresh.AllowSelfConfirm, fresh.StepUp, now) < fresh.RequiredApprovals {
-			return errConcurrentApproval
 		}
 
 		changed := len(raised) != len(targets) || len(byToken) != len(targets)
@@ -172,24 +146,23 @@ func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver action
 		if changed {
 			return refuse([]string{actiongate.ReasonDependencyChanged})
 		}
-		// The clock again: the checks above are only as fresh as the moment they ran.
-		now = time.Now().UTC()
-		if !p.ExpiresAt.After(now) {
-			return errProposalExpired
-		}
-		if actiongate.Tally(next, fresh.ValidApprovers, p.ProposerSub, fresh.RequiredApprovals, fresh.AllowSelfConfirm, fresh.StepUp, now) < fresh.RequiredApprovals {
-			return errConcurrentApproval
-		}
-		if api.afterDecisionForTest != nil {
-			if err := api.afterDecisionForTest(tx); err != nil {
+		if api.beforeFenceForTest != nil {
+			if err := api.beforeFenceForTest(tx); err != nil {
 				return err
 			}
+		}
+		tenant, ok := core.TenantFromContext(ctx)
+		if !ok || tenant == "" {
+			return errors.New("agent execution requires tenant context")
+		}
+		if err := rdb.ReadFenceIfEnforced(attrCtx, tx, tenant); err != nil {
+			return err
 		}
 		if api.KillFeed == nil || !api.KillFeed.Fresh(api.KillFeed.Now()) {
 			return actiongate.ErrFenceUnavailable
 		}
-		if err := fenceCheckTx(tx, fresh.ActuationGeneration); err != nil {
-			reenableGeneration = fresh.ActuationGeneration
+		state, err := fenceReadTx(tx)
+		if err != nil {
 			return err
 		}
 		if api.afterFenceForTest != nil {
@@ -218,14 +191,77 @@ func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver action
 		if err != nil {
 			return err
 		}
+		now = time.Now().UTC()
 		if err := actiongate.Transition(tx, &AgentProposal{}, p.Token, actiongate.StateProposed, actiongate.StateExecuted, now, map[string]any{
 			"decided_at": now, "decided_by": approver.Principal, "executed_at": now, "result_ref": p.EffectToken,
-			"approvals": datatypes.JSON(raw), "revision": p.Revision + 1, "required_approvals": fresh.RequiredApprovals,
+			"approvals": datatypes.JSON(raw), "revision": p.Revision + 1, "required_approvals": preRequired,
 		}); err != nil {
+			return err
+		}
+		sid := ""
+		if p.ProposerSid != nil {
+			sid = *p.ProposerSid
+		}
+		fresh, err := actiongate.CommitPoint(ctx, tx, func(dctx context.Context) (actiongate.ExecutionDecision, error) {
+			return api.AgentDecider.Execution(dctx, actiongate.ExecutionRequest{
+				ProposalToken: p.Token, Kind: actiongate.Kind(p.Kind), Impact: p.Impact, TargetCount: p.TargetCount,
+				ProposerPrincipal: p.ProposerSub, ProposerClient: p.ProposerClient, ProposerSid: sid, Approvers: actiongate.Principals(next),
+			})
+		})
+		if api.afterDecisionForTest != nil {
+			if hookErr := api.afterDecisionForTest(tx); hookErr != nil {
+				return hookErr
+			}
+		}
+		// SQL-free tail: no transaction operations may follow the commit-point decision.
+		if err != nil {
+			if errors.Is(err, actiongate.ErrCommitPointSetup) || errors.Is(err, auth.ErrForbidden) {
+				return err
+			}
+			return actiongate.ErrPolicyUnavailable
+		}
+		if fresh.Verdict != actiongate.VerdictApprove {
+			reasons = actiongate.PersistedReasons(fresh.Reasons)
+			if fresh.Verdict == actiongate.VerdictAuto {
+				reasons = append(reasons, actiongate.ReasonAutoNotAvailable)
+			}
+			return errRefusedAtCommitPoint
+		}
+		if !slices.Contains(fresh.ValidApprovers, approver.Principal) {
+			return errNotAnApprover
+		}
+		if err := actiongate.CheckStepUp(approver, fresh.StepUp, time.Now().UTC()); err != nil {
+			return err
+		}
+		if approver.Principal == p.ProposerSub && (!fresh.AllowSelfConfirm || fresh.RequiredApprovals > 1) {
+			return errSelfApproval
+		}
+		if fresh.RequiredApprovals < 1 || fresh.RequiredApprovals != preRequired {
+			return errConcurrentApproval
+		}
+		now2 := time.Now().UTC()
+		if actiongate.Tally(next, fresh.ValidApprovers, p.ProposerSub, fresh.RequiredApprovals, fresh.AllowSelfConfirm, fresh.StepUp, now2) < fresh.RequiredApprovals {
+			return errConcurrentApproval
+		}
+		if !p.ExpiresAt.After(now2) {
+			return errProposalExpired
+		}
+		if api.KillFeed == nil || !api.KillFeed.Fresh(api.KillFeed.Now()) {
+			return actiongate.ErrFenceUnavailable
+		}
+		if err := fenceVerdictErr(state, fresh.ActuationGeneration); err != nil {
+			if errors.Is(err, errFenceNeedsReenable) {
+				reenableGeneration = fresh.ActuationGeneration
+			}
 			return err
 		}
 		return nil
 	})
+	// Postgres terminated the idle transaction before the decision could commit.
+	var pgerr *pgconn.PgError
+	if errors.As(err, &pgerr) && pgerr.Code == "25P03" {
+		return nil, actiongate.ErrPolicyUnavailable
+	}
 	if errors.Is(err, errFenceNeedsReenable) {
 		if retried {
 			return nil, actiongate.ErrFenceClosed
@@ -233,7 +269,10 @@ func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver action
 		if err := api.reenableFence(ctx, reenableGeneration); err != nil {
 			return nil, err
 		}
-		return api.executeAlarmProposalAttempt(ctx, approver, p, next, true)
+		return api.executeAlarmProposalAttempt(ctx, approver, p, next, preRequired, true)
+	}
+	if errors.Is(err, errRefusedAtCommitPoint) {
+		return api.endProposal(attrCtx, p.Token, actiongate.StateRefused, approver.Principal, nil, reasons, time.Now().UTC())
 	}
 	if err != nil {
 		return nil, err

@@ -58,12 +58,13 @@ func TestAgentFenceFeedFailsClosed(t *testing.T) {
 	}
 }
 
-func TestAgentFenceKillDuringDecisionRollsBack(t *testing.T) {
+func TestAgentFenceKillBeforeFenceReadRollsBack(t *testing.T) {
 	r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1")
 	// SQLite cannot commit a second writer while its in-memory execution transaction
 	// is open. Apply through that transaction here; the Postgres test commits a real
 	// concurrent kill on a separate connection.
-	r.api.afterDecisionForTest = func(tx *gorm.DB) error {
+	// The kill must precede the fence read now that it is held before the decision.
+	r.api.beforeFenceForTest = func(tx *gorm.DB) error {
 		return applyKillEventDB(tx, rigTenant, killFor(rigTenant, r.decider.exec.ActuationGeneration))
 	}
 	_, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)

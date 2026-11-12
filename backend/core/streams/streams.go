@@ -275,7 +275,7 @@ type Stream struct {
 	// MaxDeliveriesUncaptured, when non-empty, is the reason the max-deliveries advisory
 	// stream does not capture this stream's max-delivery advisories.
 	//
-	// ?? The advisory stream's subject list is checked EXACTLY by every service of every
+	// 🔴 The advisory stream's subject list is checked EXACTLY by every service of every
 	// earlier release. A stream added after v1.3.0 that joins the list would stop every
 	// pod of the previous release that restarts during a rolling upgrade. A stream added
 	// to a minor release therefore declares itself uncaptured, until a release whose

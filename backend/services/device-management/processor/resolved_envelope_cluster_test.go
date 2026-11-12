@@ -101,10 +101,22 @@ type identity struct {
 // envelopes and legacy are how many of each shape it saw.
 func storedIdentities(t testing.TB, js nats.JetStreamContext, stream string) (seen map[identity]int, envelopes, legacy, members int) {
 	t.Helper()
-	info, err := js.StreamInfo(stream)
-	require.NoError(t, err)
-	sub, err := js.PullSubscribe("", "", nats.BindStream(stream), nats.DeliverAll(), nats.AckNone())
-	require.NoError(t, err)
+	deadline := time.Now().Add(5 * time.Second)
+	var info *nats.StreamInfo
+	retryWhileGroupSettles(t, "resolved stream info", deadline, func(ctx context.Context) error {
+		var err error
+		info, err = js.StreamInfo(stream, nats.Context(ctx))
+		return err
+	})
+	var sub *nats.Subscription
+	// The subscription must outlive this setup step: nats.Context would bind its lifetime to the
+	// retry's per-attempt context, which is cancelled as soon as setup returns, and every Fetch
+	// would then fail with "invalid subscription". The retry's deadline still bounds the attempts.
+	retryWhileGroupSettles(t, "resolved readback subscription setup", deadline, func(context.Context) error {
+		var err error
+		sub, err = js.PullSubscribe("", "", nats.BindStream(stream), nats.DeliverAll(), nats.AckNone())
+		return err
+	})
 	defer func() { _ = sub.Unsubscribe() }()
 	seen = map[identity]int{}
 	count := func(b []byte) {
@@ -145,16 +157,27 @@ func storedIdentities(t testing.TB, js nats.JetStreamContext, stream string) (se
 func publishInbound(t testing.TB, js nats.JetStreamContext, instance string, events []*esmodel.UnresolvedEvent) {
 	t.Helper()
 	subject := messaging.ScopedSubject(instance, "acme", streams.InboundEvents)
+	futures := make([]nats.PubAckFuture, 0, len(events))
 	for _, ev := range events {
 		body, err := esproto.MarshalUnresolvedEvent(ev)
 		require.NoError(t, err)
-		_, err = js.PublishAsync(subject, body)
+		future, err := js.PublishAsync(subject, body)
 		require.NoError(t, err)
+		futures = append(futures, future)
 	}
-	select {
-	case <-js.PublishAsyncComplete():
-	case <-time.After(60 * time.Second):
-		t.Fatal("publishing the inbound events did not complete")
+	// Completion alone does not mean success. Never retry a publish here: an
+	// ambiguous outcome must fail rather than risk changing the input batch.
+	timer := time.NewTimer(60 * time.Second)
+	defer timer.Stop()
+	for i, future := range futures {
+		select {
+		case ack := <-future.Ok():
+			require.NotNil(t, ack, "inbound publish %d returned no acknowledgement", i)
+		case err := <-future.Err():
+			t.Fatalf("inbound publish %d failed: %v", i, err)
+		case <-timer.C:
+			t.Fatalf("inbound publish %d did not complete", i)
+		}
 	}
 }
 
@@ -237,8 +260,7 @@ func TestKillBetweenRoundZeroPubAckAndAckLosesAndDuplicatesNothing(t *testing.T)
 			// moment more, then kill it: connection cut, whatever it holds left unacked.
 			deadline := time.Now().Add(30 * time.Second)
 			for dying.dropped.Load() == 0 && time.Now().Before(deadline) {
-				ci, err := a.js.ConsumerInfo(a.inboundStream, durable)
-				require.NoError(t, err)
+				ci := consumerInfoWhileSettling(t, a.js, a.inboundStream, durable, deadline)
 				if ci.NumPending == 0 && ci.NumAckPending == 0 {
 					break // finished before the kill point: an unkilled trial
 				}
@@ -271,8 +293,7 @@ func TestKillBetweenRoundZeroPubAckAndAckLosesAndDuplicatesNothing(t *testing.T)
 			last := uint64((trial + 1) * perTrial)
 			deadline = time.Now().Add(90 * time.Second)
 			for {
-				ci, err := b.js.ConsumerInfo(b.inboundStream, durable)
-				require.NoError(t, err)
+				ci := consumerInfoWhileSettling(t, b.js, b.inboundStream, durable, deadline)
 				if ci.NumPending == 0 && ci.NumAckPending == 0 && ci.AckFloor.Stream == last {
 					break
 				}

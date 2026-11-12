@@ -804,6 +804,9 @@ func (api *Api) emitDeviceRosterForType(ctx context.Context, deviceTypeId uint) 
 
 // Update an existing device, applying only the fields the caller actually sent.
 //
+// Only named columns are written; omitted fields stay untouched even when
+// another writer changes them after the read.
+//
 // The device is located by the `token` ARGUMENT. It used to be located by
 // request.Token with the argument ignored outright, so a caller who named one
 // device in the argument and another in the payload silently updated the second and
@@ -847,9 +850,8 @@ func (api *Api) UpdateDeviceWithBreakGlass(ctx context.Context, token string, re
 			return nil, gorm.ErrRecordNotFound
 		}
 		updated.DeviceType = types[0]
-		// The association is what gorm writes; the FK is set explicitly because the
-		// post-commit roster resolve below reads DeviceTypeId directly, before any
-		// reload would have refreshed it from the association.
+		// The FK is set explicitly for the named-column update and for the
+		// post-commit roster resolve below, which reads DeviceTypeId directly.
 		updated.DeviceTypeId = types[0].ID
 	}
 
@@ -887,6 +889,11 @@ func (api *Api) UpdateDeviceWithBreakGlass(ctx context.Context, token string, re
 	// disabled device is rostered with no profile so no absence rule raises "device silent"
 	// for the traffic it is refused (rosterEntries), and an enabled one is rostered under its
 	// profile again. Disabling a device that is already disabled changes nothing.
+	//
+	// Known and accepted: `toggled` is decided from the unlocked read, so an enable/disable that races
+	// an opposite toggle can skip the expected_since stamp and the post-enable publish for this call.
+	// disabled_at itself is written from the request, so the stored state is never wrong; only the
+	// roster nudge and the configuration resend are, and the next reconcile repairs them.
 	toggled := disabledAt.Valid != updated.DisabledAt.Valid
 	updated.DisabledAt = disabledAt
 	if retyped || toggled {
@@ -915,12 +922,27 @@ func (api *Api) UpdateDeviceWithBreakGlass(ctx context.Context, token string, re
 	// and a profile's delete clears it in the database (ON DELETE SET NULL). Written whole, an
 	// edit that loaded the device before the profile was deleted would write back an earmark for
 	// a profile that no longer exists, and be refused by the constraint for it.
-	omit := []string{"GatewayId", "ExpectedProvisioningProfileId"}
-	if !retyped && !toggled {
-		omit = append(omit, "ExpectedSince")
+	assignments := map[string]any{}
+	if request.ExternalId.Set {
+		assignments["external_id"] = updated.ExternalId
 	}
-	if !request.Enabled.Set {
-		omit = append(omit, "DisabledAt")
+	if request.Name.Set {
+		assignments["name"] = updated.Name
+	}
+	if request.Description.Set {
+		assignments["description"] = updated.Description
+	}
+	if request.Metadata.Set {
+		assignments["metadata"] = updated.Metadata
+	}
+	if retyped {
+		assignments["device_type_id"] = updated.DeviceTypeId
+	}
+	if retyped || toggled {
+		assignments["expected_since"] = updated.ExpectedSince
+	}
+	if request.Enabled.Set {
+		assignments["disabled_at"] = updated.DisabledAt
 	}
 	// The row and its alias set are written in ONE transaction, so an alias another device holds
 	// (CONFLICT) refuses the whole update rather than applying the fields it liked first.
@@ -938,8 +960,21 @@ func (api *Api) UpdateDeviceWithBreakGlass(ctx context.Context, token string, re
 			}
 		}
 
-		if err := tx.Omit(omit...).Save(updated).Error; err != nil {
-			return err
+		if len(assignments) == 0 && aliasesSet {
+			// No UPDATE takes the device row's lock, and the alias replacement is serialized by it.
+			if err := lockDeviceRow(tx, updated.ID); err != nil {
+				return err
+			}
+		}
+		if len(assignments) != 0 {
+			res := rdb.AdvancingFrom(tx, updated.UpdatedAt).Model(updated).Omit(clause.Associations).
+				Where("id = ?", updated.ID).Updates(assignments)
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				return gorm.ErrRecordNotFound
+			}
 		}
 		// 🔴 THE KICK IS RECORDED WITH THE DISABLE, in this transaction, the way a trust anchor's
 		// is: a kick that could not be confirmed after the commit is then retried by the background
@@ -1026,7 +1061,17 @@ func (api *Api) UpdateDeviceWithBreakGlass(ctx context.Context, token string, re
 	if toggled && !updated.DisabledAt.Valid {
 		api.publishLatestConfiguration(ctx, updated)
 	}
-	return updated, nil
+	if len(assignments) == 0 && !aliasesSet {
+		return updated, nil
+	}
+	matches, err = api.DevicesById(ctx, []uint{updated.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // nextMembershipInstant is the expected_since a re-type or an enable/disable stores: now, at

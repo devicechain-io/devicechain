@@ -35,7 +35,7 @@ func (d *pausedKillDecider) Execution(context.Context, actiongate.ExecutionReque
 	return d.exec, nil
 }
 
-func TestAgentFenceConcurrentKillBeforeCommit(t *testing.T) {
+func TestAgentFenceKillDuringCommitPointWaitsForTheExecution(t *testing.T) {
 	api, ctx := newPostgresIntegrationApi(t)
 	now := time.Now()
 	api.KillFeed = NewKillFeed(0, func() time.Time { return now })
@@ -55,18 +55,33 @@ func TestAgentFenceConcurrentKillBeforeCommit(t *testing.T) {
 		result <- err
 	}()
 	<-d.decision
-	// The alarm and proposal are locked by execution, but a kill takes neither.
-	err = api.ApplyKillEvent(ctx, killFor(proposer.Tenant, d.exec.PolicyVersion))
+	// A kill here either precedes execution's share lock (refused) or waits for its
+	// commit. A kill committed in user-management before the commit-point decision
+	// is caught by the decision itself (TestKillCommittedInUmBeforeEventConsumedRefuses).
+	kill := killFor(proposer.Tenant, d.exec.ActuationGeneration)
+	killed := make(chan error, 1)
+	go func() { killed <- api.ApplyKillEvent(ctx, kill) }()
+	// The fence share lock now precedes the decision, so the concurrent kill must wait.
+	select {
+	case err := <-killed:
+		close(d.resume)
+		t.Fatalf("kill returned before execution resumed: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
 	close(d.resume)
-	require.NoError(t, err)
-	require.ErrorIs(t, <-result, actiongate.ErrFenceClosed)
+	require.NoError(t, <-result)
 	row, err := api.AgentProposalByToken(ctx, out.Proposal.Token, nil)
 	require.NoError(t, err)
-	require.Equal(t, string(actiongate.StateProposed), row.State)
+	require.Equal(t, string(actiongate.StateExecuted), row.State)
 	alarms, err := api.AlarmsByToken(ctx, []string{"kill-target"})
 	require.NoError(t, err)
-	require.False(t, alarms[0].Acknowledged)
-	require.Empty(t, effectRows(t, api, ctx))
+	require.True(t, alarms[0].Acknowledged)
+	require.Len(t, effectRows(t, api, ctx), 1)
+	require.NoError(t, <-killed)
+	var fence AgentActuationFence
+	require.NoError(t, api.RDB.DB(ctx).First(&fence).Error)
+	require.False(t, fence.Enabled)
+	require.Equal(t, kill.ActuationGeneration, fence.KilledAtGeneration)
 }
 
 func TestAgentEffectsPostgresSkipLockedAndPurgeClassification(t *testing.T) {
