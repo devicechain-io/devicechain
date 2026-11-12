@@ -74,6 +74,20 @@ func TestApproverDisabledThenReenabledDoesNotReviveApproval(t *testing.T) {
 	assertApprovalLapsed(t, x, req)
 }
 
+// The approver's sign-in must still be one the tenant admits: a password sign-in stops counting
+// once the tenant requires single sign-on, as it would stop minting tokens there.
+func TestApproverSignInTheTenantNoLongerAdmitsIsNotCounted(t *testing.T) {
+	x := newExecEnv(t)
+	// An agent service account proposes, so the tenant's sign-in rule touches only the approver.
+	req := tenantServiceAccountRequest(t, x)
+	require.Contains(t, x.decide(t, req).ValidApprovers, approvalBoss)
+	ctx := context.Background()
+	tenant, err := x.store.TenantByToken(ctx, agentTenant)
+	require.NoError(t, err)
+	require.NoError(t, x.store.SetTenantSsoEnforced(ctx, tenant, true))
+	assertApprovalLapsed(t, x, req)
+}
+
 func TestApproverWithoutSessionIsNotCounted(t *testing.T) {
 	x := newExecEnv(t)
 	req := x.request(approvalBoss)
