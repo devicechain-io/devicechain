@@ -582,6 +582,22 @@ func backlogHarness(t *testing.T, rps float64, burst int) *captureHarness {
 	return h
 }
 
+// frozenBacklogHarness freezes the limiter's clock so elapsed wall time cannot
+// earn tokens. At 100/s, a 1000-message loop accrues one token per 10ms; on a
+// loaded host or under -race it can earn more than the 2 spare tokens the old
+// bound allowed, failing for reasons unrelated to the metering behaviour.
+func frozenBacklogHarness(t *testing.T, rps float64, burst int) *captureHarness {
+	t.Helper()
+	frozen := time.Now()
+	h := newCaptureHarness(t)
+	limiter := core.NewTenantRateLimiter(core.StaticCeiling(rps, burst),
+		core.WithClock(func() time.Time { return frozen }))
+	h.gate = func(_ string, tenant string, sentAt time.Time, _ bool, _ Origin) bool {
+		return limiter.AllowAt(tenant, sentAt)
+	}
+	return h
+}
+
 // drain feeds count messages whose send times are `spacing` apart ending an hour
 // ago — a backlog that accumulated during an outage and is now arriving all at
 // once — and returns how many the gate admitted.
@@ -650,8 +666,12 @@ func TestRecoveredBacklogAboveTheCeilingIsStillShed(t *testing.T) {
 // A message with no broker metadata (AppendTime zero) must degrade to metering at
 // now — the pre-I4 behaviour — rather than to unmetered. Getting this backwards
 // would turn a metadata gap into a free pass past the tenant's ceiling.
+// The clock is frozen because a wall-clock loop earns one token per 10ms at
+// 100/s, and the old bound had about 20ms of slack. Treating zero append time as
+// unmetered would still admit all 1000 messages, so this test still discriminates.
 func TestCapturedMessageWithNoAppendTimeIsStillMetered(t *testing.T) {
-	h := backlogHarness(t, 100, 10)
+	// See frozenBacklogHarness for why elapsed wall time must not earn tokens.
+	h := frozenBacklogHarness(t, 100, 10)
 
 	for i := 0; i < 1000; i++ {
 		h.source.handle(capturedMsgAt(captureSubject, validEvent, uint64(i+1),
@@ -659,7 +679,7 @@ func TestCapturedMessageWithNoAppendTimeIsStillMetered(t *testing.T) {
 	}
 	_, _, admitted, _ := h.counts()
 
-	require.LessOrEqual(t, admitted, 12,
+	require.LessOrEqual(t, admitted, 10,
 		"a message with no send time must meter at now, not bypass the ceiling")
 }
 
@@ -667,17 +687,8 @@ func TestCapturedMessageWithNoAppendTimeIsStillMetered(t *testing.T) {
 // messages as sent in the future. The send time is clamped to now, so a future
 // append time buys at most the burst that was already available.
 func TestFutureAppendTimeCannotMintTokens(t *testing.T) {
-	// The limiter's clock is FROZEN. Read from the wall clock, the 1000-message loop
-	// below accrues one token per 10ms of elapsed time at 100/s, so on a loaded host
-	// (or under -race) the run itself earned more than the 2 spare tokens the bound
-	// allows and the test failed for reasons unrelated to the clamp.
-	frozen := time.Now()
-	h := newCaptureHarness(t)
-	limiter := core.NewTenantRateLimiter(core.StaticCeiling(100, 10),
-		core.WithClock(func() time.Time { return frozen }))
-	h.gate = func(_ string, tenant string, sentAt time.Time, _ bool, _ Origin) bool {
-		return limiter.AllowAt(tenant, sentAt)
-	}
+	// See frozenBacklogHarness for why elapsed wall time must not earn tokens.
+	h := frozenBacklogHarness(t, 100, 10)
 
 	// ADVANCING through the future, not a constant future time. A constant one
 	// accrues nothing after the first call with or without the clamp, so it cannot

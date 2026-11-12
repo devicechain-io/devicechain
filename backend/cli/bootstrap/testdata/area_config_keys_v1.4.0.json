@@ -314,7 +314,8 @@
               "Burst": {},
               "ReadingsPerSecond": {}
             }
-          }
+          },
+          "LpwanDownlink": {}
         }
       }
     },
@@ -520,6 +521,11 @@
       "retired": {},
       "tree": {
         "fields": {
+          "AgentActuation": {
+            "fields": {
+              "Enabled": {}
+            }
+          },
           "Auth": {
             "fields": {
               "AccessTokenTtlSeconds": {},

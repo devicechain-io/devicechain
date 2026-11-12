@@ -98,6 +98,7 @@ type Endpoints struct {
 // exact wire shape agreed between the two lanes — do not add required fields
 // without updating both sides.
 type Handshake struct {
+	Episode     string    `json:"episode,omitempty"`
 	Tenant      string    `json:"tenant"`
 	SimEmail    string    `json:"simEmail"`
 	SimPassword string    `json:"simPassword"`
@@ -243,6 +244,9 @@ func LoadHandshake(path string) (*Handshake, error) {
 // Validate reports the first missing required field. Every field here is load-
 // bearing — Bootstrap/Tick cannot proceed without it.
 func (h *Handshake) Validate() error {
+	if err := ValidateEpisode(h.ManifestId, h.Episode); err != nil {
+		return err
+	}
 	missing := make([]string, 0, 8)
 	if strings.TrimSpace(h.Tenant) == "" {
 		missing = append(missing, "tenant")

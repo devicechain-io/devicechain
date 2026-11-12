@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 )
 
 // GeoFenceCapsResolver reads a tenant's three RESOLVED geofence caps — the per-tenant
@@ -79,6 +80,16 @@ type Api struct {
 	// caller's own token (actiongate.CallerDecider). Nil refuses every proposal and approval with
 	// POLICY_UNAVAILABLE: without the policy nothing is decided.
 	AgentDecider actiongate.Decider
+	// KillFeed is the liveness of the kill-event consumer that feeds the local actuation fence.
+	// Nil refuses every agent execution (fail closed).
+	KillFeed *KillFeed
+	// AgentEffectsExhausted counts committed transitions to the outbox attempt cap.
+	AgentEffectsExhausted prometheus.Counter
+	// afterDecisionForTest runs inside the execution transaction between the policy decision and
+	// the fence check. Tests use it to land a kill in exactly that window; production leaves it nil.
+	afterDecisionForTest func(tx *gorm.DB) error
+	// afterFenceForTest runs after the fence check passed and before commit (tests only).
+	afterFenceForTest func(tx *gorm.DB) error
 
 	// ceilings exports the observed size of the ceilinged collections (ceilings.go). Nil
 	// disables it.
