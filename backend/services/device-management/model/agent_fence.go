@@ -57,16 +57,16 @@ func applyKillEventDB(db *gorm.DB, tenant string, ev actiongate.KillEvent) error
 
 var errFenceNeedsReenable = errors.New("agent fence needs reenable")
 
-// fenceCheckTx takes the tenant's fence row FOR SHARE and judges the decision against it.
+// fenceReadTx seeds and reads the tenant's fence row, taking FOR SHARE on Postgres.
 //
 // The row is SEEDED first (insert, do nothing on conflict; Epoch 0 means no kill has ever landed).
 // Without a row to lock, a kill arriving between this read and the commit would insert a fresh
 // row, conflict with nothing, and commit ahead of an execution that saw "no row": exactly the
 // window the fence exists to close. With the row present, the kill's upsert waits on the share lock.
-func fenceCheckTx(tx *gorm.DB, decisionGeneration int) error {
+func fenceReadTx(tx *gorm.DB) (actiongate.FenceState, error) {
 	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
 		Create(&[]AgentActuationFence{{Enabled: true, UpdatedAt: time.Now().UTC()}}).Error; err != nil {
-		return err
+		return actiongate.FenceState{}, err
 	}
 	var row AgentActuationFence
 	q := tx
@@ -75,9 +75,14 @@ func fenceCheckTx(tx *gorm.DB, decisionGeneration int) error {
 	}
 	err := q.First(&row).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return err
+		return actiongate.FenceState{}, err
 	}
-	switch actiongate.CheckFence(actiongate.FenceState{Present: err == nil && row.Epoch > 0, Enabled: row.Enabled, KilledAtGeneration: row.KilledAtGeneration}, decisionGeneration) {
+	return actiongate.FenceState{Present: err == nil && row.Epoch > 0, Enabled: row.Enabled, KilledAtGeneration: row.KilledAtGeneration}, nil
+}
+
+// fenceVerdictErr judges a previously read fence without touching the transaction.
+func fenceVerdictErr(state actiongate.FenceState, decisionGeneration int) error {
+	switch actiongate.CheckFence(state, decisionGeneration) {
 	case actiongate.FenceClosed:
 		return actiongate.ErrFenceClosed
 	case actiongate.FenceReenable:
