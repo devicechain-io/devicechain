@@ -1018,6 +1018,24 @@
                 "type": "number",
                 "minimum": 0,
                 "description": "command-delivery: the fraction of the held-command ceiling reserved for the platform's own delivery. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+              },
+              "auth": {
+                "type": "object",
+                "description": "user-management: authentication settings. Only the signing-key keys below are checked here; the service checks the rest at startup.",
+                "properties": {
+                  "signingKeyMaxAgeDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 106751,
+                    "description": "user-management: rotate the token signing key at startup once it is older than this many days. 0 or absent turns age-based rotation off; a negative value, or one above 106751, is refused here and by the service at startup."
+                  },
+                  "signingKeyRetentionDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 106751,
+                    "description": "user-management: how many days a rotated-out signing key stays published so the tokens it signed keep verifying. 0 or absent takes the service default (8); a negative value, or one above 106751, is refused here and by the service at startup."
+                  }
+                }
               }
             }
           },
