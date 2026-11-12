@@ -109,9 +109,12 @@ func storedIdentities(t testing.TB, js nats.JetStreamContext, stream string) (se
 		return err
 	})
 	var sub *nats.Subscription
-	retryWhileGroupSettles(t, "resolved readback subscription setup", deadline, func(ctx context.Context) error {
+	// The subscription must outlive this setup step: nats.Context would bind its lifetime to the
+	// retry's per-attempt context, which is cancelled as soon as setup returns, and every Fetch
+	// would then fail with "invalid subscription". The retry's deadline still bounds the attempts.
+	retryWhileGroupSettles(t, "resolved readback subscription setup", deadline, func(context.Context) error {
 		var err error
-		sub, err = js.PullSubscribe("", "", nats.BindStream(stream), nats.DeliverAll(), nats.AckNone(), nats.Context(ctx))
+		sub, err = js.PullSubscribe("", "", nats.BindStream(stream), nats.DeliverAll(), nats.AckNone())
 		return err
 	})
 	defer func() { _ = sub.Unsubscribe() }()
