@@ -824,6 +824,8 @@ Invalid values listed in [Before you upgrade](#v150-before-you-upgrade) are refu
 - `calculatedMetricBackfills(statuses:)` refuses more than five entries with `LIMIT_EXCEEDED`; repeats in an accepted list are ignored.
 - Device and device-type substring searches refuse `nameContains` over 256 UTF-8 bytes, measured before trimming, with `LIMIT_EXCEEDED`.
 - Command searches refuse `statuses` or `outcomes` lists over 1,000 entries, including duplicates, with `LIMIT_EXCEEDED`.
+- Event pages and measurement aggregations refuse more than 1,000 `eventTypes` entries, including duplicates, with `LIMIT_EXCEEDED`.
+- `facetValues` refuses more than 1,000 distinct values with `LIMIT_EXCEEDED`, returning no partial list.
 - One GraphQL WebSocket connection permits at most 1,000 concurrent subscription operations. A further `subscribe` receives `LIMIT_EXCEEDED`; the connection stays open.
 
 #### Stricter checks on existing operations {#v150-tightenings}

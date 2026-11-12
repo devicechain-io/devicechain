@@ -580,6 +580,8 @@ HA 性能规格 bootstrap（包括 dry run）现在会在创建任何内容前�
 - `calculatedMetricBackfills(statuses:)` 超过五项时返回 `LIMIT_EXCEEDED`；已接受列表中的重复项会被忽略。
 - 设备和设备类型子串搜索的 `nameContains` 超过 256 个 UTF-8 字节时返回 `LIMIT_EXCEEDED`，长度在去除首尾空白前计算。
 - 命令搜索的 `statuses` 或 `outcomes` 列表超过 1,000 项（含重复项）时返回 `LIMIT_EXCEEDED`。
+- 事件页面和测量聚合的 `eventTypes` 超过 1,000 项（含重复项）时返回 `LIMIT_EXCEEDED`。
+- `facetValues` 超过 1,000 个不同值时返回 `LIMIT_EXCEEDED`，不返回部分列表。
 - 每个 GraphQL WebSocket 连接最多允许 1,000 个并发订阅操作。后续 `subscribe` 返回 `LIMIT_EXCEEDED`，连接保持打开。
 
 #### 现有操作的更严格检查 {#v150-tightenings}
