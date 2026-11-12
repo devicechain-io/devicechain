@@ -42,3 +42,29 @@ func (m *Manager) publishKill(ctx context.Context, tenant string, generation int
 	}
 	return nil
 }
+
+// TenantDisabled publishes the generation captured by the transaction that disabled
+// the tenant and bumped its head. A later re-enable bumps to a strictly greater
+// generation, reopening the fence regardless of the order in which publishes land.
+// During a rolling upgrade, an old pod re-enabling after a new pod disabled does not
+// bump, so the fence stays closed (fail closed) until re-enabled again through a new
+// pod. Every new-pod call bumps even an unchanged value, making that retry the remedy.
+func (m *Manager) TenantDisabled(ctx context.Context, tenant string, generation int) error {
+	return m.publishKill(ctx, tenant, generation, actiongate.KillCauseOperatorSuspended)
+}
+
+// TenantPurgeBegan follows the committed purge row write, so intervening decisions
+// already refuse through tenantLive. Purge is permanent: unlike a reversible disable,
+// it needs no generation bump to reopen a fence and must not create a policy head in
+// a tenant being erased. Retries publish again using the current head, if any.
+func (m *Manager) TenantPurgeBegan(ctx context.Context, tenant string) error {
+	head, err := m.iam.AgentPolicyHead(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	generation := 0
+	if head != nil {
+		generation = head.ActuationGeneration
+	}
+	return m.publishKill(ctx, tenant, generation, actiongate.KillCauseOperatorSuspended)
+}
