@@ -301,7 +301,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 **3. 发送。** 设备必须带有 `lorawan.deveui` [别名](#aliases)：DevEUI 取自设备，绝不取自命令。命令经由设备**最近一次上报所用**的集成发出。
 
-**结果的含义。** 对未确认的下行，`SUCCEEDED` 表示网络服务器已**排入**该下行（结果带有 `{"stage":"queued","queueItemId":...}`）。这并不表示设备已收到：A 类设备只在下一次上行之后才会收听下行，而未确认的下行不会得到应答。对[确认下行](#lorawan-confirmed)，`SUCCEEDED` 表示设备已应答。其他结果：
+**结果的含义。** 对未确认的下行，`SUCCEEDED` 表示网络服务器已**排入**该下行（结果带有 `{"stage":"queued","queueItemId":...}`）。这并不表示设备已收到：A 类设备只在下一次上行之后才会收听下行，而未确认的下行不会得到应答。此类命令不记录投递证据（`deliveredTime` 和 `deliveryEvidence` 保持为 null）；确认下行的应答会记录 `DEVICE_RESPONSE`。对[确认下行](#lorawan-confirmed)，`SUCCEEDED` 表示设备已应答。其他结果：
 
 | 发生了什么 | 结果 |
 | --- | --- |
