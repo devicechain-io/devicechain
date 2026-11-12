@@ -8,7 +8,6 @@ device-management/model/api_assets.go UpdateAsset # tracked: Codex-only lane
 device-management/model/api_assets.go UpdateAssetType # tracked: batch5
 device-management/model/api_profiles.go UpdateDeviceProfile # tracked: batch5
 device-management/model/api_metrics.go UpdateMetricDefinition # tracked: batch5
-notification-management/model/api_channels.go UpdateNotificationChannel # tracked: #2459 (open fix PR)
 device-management/model/api_areas.go UpdateAreaType # tracked: batch5 follow-up, not yet audited
 device-management/model/api_customers.go UpdateCustomerType # tracked: batch5 follow-up, not yet audited
 device-management/model/api_common.go UpdateEntityRelationshipType # tracked: batch5 follow-up, not yet audited
