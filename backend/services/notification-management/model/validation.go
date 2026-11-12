@@ -156,3 +156,14 @@ func validateStringArray(s *string, field string) error {
 
 // MaxRecipientsPerRule is the most recipients one notification rule may list.
 const MaxRecipientsPerRule = 100
+
+// MaxRulesPerPolicy is the most rules one supplied policy rule set may contain.
+const MaxRulesPerPolicy = 100
+
+// validatePolicyRuleCount bounds a supplied rule set before any per-rule work.
+func validatePolicyRuleCount(rules []*NotificationRuleCreateRequest) error {
+	if n := len(rules); n > MaxRulesPerPolicy {
+		return limit.Exceeded("rules", n, MaxRulesPerPolicy)
+	}
+	return nil
+}
