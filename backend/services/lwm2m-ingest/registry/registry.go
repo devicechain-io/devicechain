@@ -153,6 +153,8 @@ type Registry struct {
 	// leadership gate BEFORE the term was cancelled finishes its out-of-lock resolve+emit and would
 	// otherwise install an entry — arming a lifetime timer that fires in a dead term on a standby.
 	stopped bool
+	// stopCh wakes the tenant sweep on Stop without waiting for its next interval.
+	stopCh chan struct{}
 	// bg tracks the background goroutines this term started through Go, so the term's unwind can
 	// wait for them (Wait) before it releases the lease and the broker connection is drained.
 	bg sync.WaitGroup
@@ -250,6 +252,7 @@ func New(resolver deviceResolver, emitter presenceEmitter, epoch *adapter.EpochS
 	return &Registry{
 		byRegId:        map[string]*entry{},
 		byIdentity:     map[string]*entry{},
+		stopCh:         make(chan struct{}),
 		resolver:       resolver,
 		emitter:        emitter,
 		epoch:          epoch,
@@ -765,6 +768,12 @@ func (r *Registry) SweepDeletedTenants() {
 	}
 }
 
+// StartTenantSweep starts the tenant sweep through Go so Wait joins its session-end
+// callbacks before the term releases its lease. It returns false if already stopped.
+func (r *Registry) StartTenantSweep(ctx context.Context, every time.Duration) bool {
+	return r.Go(func() { r.RunTenantSweep(ctx, every) })
+}
+
 // RunTenantSweep calls SweepDeletedTenants every interval until ctx ends or the registry is
 // stopped. The service runs it for each leadership term, beside the registry it sweeps.
 func (r *Registry) RunTenantSweep(ctx context.Context, every time.Duration) {
@@ -773,6 +782,8 @@ func (r *Registry) RunTenantSweep(ctx context.Context, every time.Duration) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-r.stopCh:
 			return
 		case <-t.C:
 			if r.isStopped() {
@@ -1115,7 +1126,11 @@ func (r *Registry) Wait() {
 func (r *Registry) Stop() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.stopped {
+		return
+	}
 	r.stopped = true
+	close(r.stopCh)
 	for _, e := range r.byRegId {
 		if e.timer != nil {
 			e.timer.Stop()

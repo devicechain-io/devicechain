@@ -82,11 +82,12 @@ type responseEnvelope struct {
 	Payload      *json.RawMessage `json:"payload,omitempty"`
 	Error        *string          `json:"error,omitempty"`
 
-	// Reach says how far a FAILED command got, as the reporting transport saw it: empty when the
+	// Reach says how far a command got, as the reporting transport saw it: empty when the
 	// device answered (every native device, which never sends it), UNANSWERED when the exchange
 	// was run and nothing came back, UNSENT when the transport refused it before the wire. It is
-	// read only when Success is false, and it must stay byte-identical with the LwM2M adapter's
-	// envelope. A device can only mis-class its OWN command with it, never another's.
+	// also read on success to withhold delivery evidence without a device answer, and must
+	// stay byte-identical with the LwM2M adapter's envelope. A device can only mis-class its
+	// OWN command with it, never another's.
 	Reach model.Reach `json:"reach,omitempty"`
 
 	// DispatchNonce is the value the device echoes from the delivery envelope it acted on,
@@ -115,6 +116,26 @@ func normalizeReach(r model.Reach) model.Reach {
 		return r
 	}
 	return model.ReachUnanswered
+}
+
+// responseReach maps the previous release's LPWAN adapter's successful queued response to
+// UNANSWERED for rolling upgrades. The subject identifies the device, so this only ever
+// withholds evidence on the responder's own command: a device sending this payload can only
+// under-claim, never forge delivery evidence.
+func responseReach(response responseEnvelope) model.Reach {
+	if response.Success && response.Reach == "" && response.Payload != nil {
+		payload := []byte(*response.Payload)
+		var text string
+		if json.Unmarshal(payload, &text) == nil {
+			payload = []byte(text)
+		}
+		var queued map[string]string
+		if json.Unmarshal(payload, &queued) == nil && len(queued) == 2 &&
+			queued["stage"] == "queued" && queued["queueItemId"] != "" {
+			return model.ReachUnanswered
+		}
+	}
+	return normalizeReach(response.Reach)
 }
 
 // CommandDeliveryProcessor owns the command delivery lifecycle: it delivers
@@ -959,7 +980,7 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 	// redelivery has always done.
 	if err := cproc.Hold.RunCtx(ctx, tenantCtx, []messaging.Message{msg}, func(c context.Context) error {
 		_, e := cproc.Api.MarkResponse(c, response.CommandToken, responder,
-			response.DispatchNonce, response.Success, normalizeReach(response.Reach), responsePayloadText(response.Payload), response.Error)
+			response.DispatchNonce, response.Success, responseReach(response), responsePayloadText(response.Payload), response.Error)
 		return e
 	}); err != nil {
 		// A device answering for a command it does not own is refused, and the refusal is
