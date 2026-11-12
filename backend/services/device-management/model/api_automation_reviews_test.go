@@ -158,7 +158,7 @@ func TestRunAutomationReviewCapturesEvidenceAndAuthors(t *testing.T) {
 	require.Equal(t, "INCIDENT", req.Windows[0].Role)
 	require.Equal(t, time.UTC, req.Windows[0].Start.Location())
 	require.Equal(t, reviewRunInput().Expectations, req.Expectations)
-	require.JSONEq(t, `["author","creator"]`, string(row.DraftAuthors))
+	require.JSONEq(t, `["author","before","creator"]`, string(row.DraftAuthors))
 	require.JSONEq(t, `[{"role":"INCIDENT","stream":"resolved","firstSeq":"12","lastSeq":"19"},{"role":"NORMAL","stream":"resolved","firstSeq":"20","lastSeq":"25"}]`, string(row.StreamBounds))
 	r.journal(t, row, "create", "creator")
 	computed, err := reviewDigestOf(row, "profile")
@@ -544,7 +544,7 @@ func TestDraftAuthorsDeletedRowsAndMissingBoundary(t *testing.T) {
 	require.NoError(t, err)
 	authors, err := r.api.draftAuthors(r.ctx, r.profile, activation.Version, base, draft)
 	require.NoError(t, err)
-	require.Equal(t, []string{"deleted-author"}, authors)
+	require.Equal(t, []string{"before", "deleted-author"}, authors)
 	// A missing baseline publish has no safe lower bound, so include the earlier writer.
 	authors, err = r.api.draftAuthors(r.ctx, r.profile, activation.Version+100, base, draft)
 	require.NoError(t, err)
@@ -657,7 +657,7 @@ func TestDraftAuthorsFollowBaselineRowsAndSkipSystem(t *testing.T) {
 	row := r.run(t)
 	var authors []string
 	require.NoError(t, json.Unmarshal(row.DraftAuthors, &authors))
-	require.Equal(t, []string{"editor"}, authors)
+	require.Equal(t, []string{"before", "editor"}, authors)
 }
 
 func TestDraftAuthorsAfterRollbackUseBaselinePublish(t *testing.T) {

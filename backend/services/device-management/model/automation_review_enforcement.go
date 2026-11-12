@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type PrincipalStandingChecker interface {
@@ -100,7 +101,9 @@ func (api *Api) checkProtectedPublish(ctx context.Context, tx *gorm.DB, profile 
 		return nil, reviewRefusal("REVIEW_REQUIRED", "this device profile requires an approved automation review to publish")
 	}
 	var r AutomationReview
-	if err := tx.Where("token = ?", *token).First(&r).Error; err != nil {
+	// Lock order is profile -> review -> journal. Reject takes review -> journal,
+	// so we must lock the review before taking the journal lock to avoid a deadlock.
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("token = ?", *token).First(&r).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, reviewRefusal("REVIEW_NOT_FOUND", "the automation review was not found")
 		}

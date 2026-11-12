@@ -24,8 +24,25 @@ func journalTable(db *gorm.DB, model any) (string, error) {
 
 func (api *Api) draftAuthors(ctx context.Context, profile *DeviceProfile, baselineVersion int32, baselineSnap, draftSnap *ProfileSnapshot) ([]string, error) {
 	db := api.RDB.DB(ctx)
-	// A rollback leaves the draft intact. Only the publish that froze this version
-	// is a safe author boundary; the latest activation still binds review staleness.
+	var baseline DeviceProfileVersion
+	// A missing historical version cannot establish an exact boundary either.
+	if err := db.Where("device_profile_id = ? AND version = ?", profile.ID, baselineVersion).Limit(1).Find(&baseline).Error; err != nil {
+		return nil, err
+	}
+	changed := make([][]string, 4)
+	if baseline.AutomationReviewToken == nil {
+		// Only reviewed publishes hold the journal lock: otherwise an in-flight edit
+		// can get an id below the publish boundary without being in its snapshot.
+		// For differing rows, include all historical writers. This over-includes
+		// authors, which only excludes more people from approving.
+		var err error
+		changed, err = changedReviewAuthorRows(profile.ID, baselineSnap, draftSnap)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// A rollback leaves the draft intact. Use the publish that froze this version
+	// for the boundary; the latest activation still binds review staleness.
 	var publishes []DeviceProfileActivation
 	if err := db.Where("device_profile_id = ? AND version = ? AND kind = ?", profile.ID, baselineVersion, ActivationKindPublish).
 		Order("id ASC").Limit(1).Find(&publishes).Error; err != nil {
@@ -78,8 +95,15 @@ func (api *Api) draftAuthors(ctx context.Context, profile *DeviceProfile, baseli
 		// ruled out. It counts: over-including excludes more people from approval, never fewer.
 		keys = append(keys, "")
 		var rows []rdb.AuditEvent
-		if err := db.Where("category = ? AND table_name = ? AND id > ?", rdb.AuditCategoryMutation, table, after).
-			Where("entity_pk IN ?", keys).Find(&rows).Error; err != nil {
+		query := db.Where("category = ? AND table_name = ?", rdb.AuditCategoryMutation, table).
+			Where("entity_pk IN ?", keys)
+		if len(changed[i]) == 0 {
+			query = query.Where("id > ?", after)
+		} else {
+			// Unknown keys may have affected a differing row, so include their history too.
+			query = query.Where("(id > ? OR entity_pk IN ?)", after, append(changed[i], ""))
+		}
+		if err := query.Find(&rows).Error; err != nil {
 			return nil, err
 		}
 		for _, row := range rows {
@@ -94,4 +118,56 @@ func (api *Api) draftAuthors(ctx context.Context, profile *DeviceProfile, baseli
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// Compare row content with the same canonicalization used by snapshot digests;
+// timestamps, tenant scope and other bookkeeping must not make a row differ.
+func changedReviewAuthorRows(profileID uint, baseline, draft *ProfileSnapshot) ([][]string, error) {
+	versions := make([][]map[string]string, 0, 2)
+	for _, snap := range []*ProfileSnapshot{baseline, draft} {
+		rows := []map[string]string{{}, {}, {}, {}}
+		add := func(kind int, id uint, value any) error {
+			canonical, err := reviewElement(value)
+			if err != nil {
+				return err
+			}
+			rows[kind][strconv.FormatUint(uint64(id), 10)] = string(canonical)
+			return nil
+		}
+		for _, metric := range snap.Metrics {
+			if err := add(0, metric.ID, metric); err != nil {
+				return nil, err
+			}
+		}
+		for _, command := range snap.Commands {
+			if err := add(1, command.ID, command); err != nil {
+				return nil, err
+			}
+		}
+		for _, rule := range snap.Rules {
+			if err := add(2, rule.ID, rule); err != nil {
+				return nil, err
+			}
+		}
+		declarations := &ProfileSnapshot{Location: snap.Location, Configuration: snap.Configuration, Decoder: snap.Decoder}
+		if err := add(3, profileID, declarations); err != nil {
+			return nil, err
+		}
+		versions = append(versions, rows)
+	}
+	changed := make([][]string, 4)
+	for i, before := range versions[0] {
+		after := versions[1][i]
+		for id, value := range before {
+			if other, ok := after[id]; !ok || other != value {
+				changed[i] = append(changed[i], id)
+			}
+		}
+		for id := range after {
+			if _, ok := before[id]; !ok {
+				changed[i] = append(changed[i], id)
+			}
+		}
+	}
+	return changed, nil
 }

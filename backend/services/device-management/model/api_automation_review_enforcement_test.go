@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -67,6 +68,64 @@ func withoutReviewMFA(name string) context.Context {
 	claims.Amr = []string{"pwd"}
 	claims.MfaTime = nil
 	return auth.WithClaims(ctx, claims)
+}
+
+func TestDraftAuthorsInexactBoundaryIncludesEarlierChangedRowWriters(t *testing.T) {
+	r := newAutomationReviewRig(t, false)
+	r.changeRule(t, "person-a")
+	baseline, err := r.api.PublishDeviceProfile(r.ctx, "profile", nil, nil, "publisher")
+	require.NoError(t, err)
+	require.Nil(t, baseline.AutomationReviewToken)
+	ctx, _ := reviewIdentity("person-b")
+	require.NoError(t, r.api.RDB.DB(ctx).Model(r.rule).
+		Update("definition", datatypes.JSON(`{"metric":"temp_c","threshold":24}`)).Error)
+	row := r.run(t)
+	var authors []string
+	require.NoError(t, json.Unmarshal(row.DraftAuthors, &authors))
+	require.Contains(t, authors, "person-a")
+	require.Contains(t, authors, "person-b")
+}
+
+func TestDraftAuthorsInexactBoundaryKeepsBoundForUnchangedRows(t *testing.T) {
+	r := newAutomationReviewRig(t, false)
+	r.changeRule(t, "person-a")
+	other := &DetectionRule{DeviceProfileId: r.profile.ID, Enabled: true,
+		Definition: datatypes.JSON(`{"metric":"temp_c","threshold":27}`)}
+	other.Token = "r2"
+	require.NoError(t, r.api.RDB.DB(r.ctx).Create(other).Error)
+	baseline, err := r.api.PublishDeviceProfile(r.ctx, "profile", nil, nil, "publisher")
+	require.NoError(t, err)
+	require.Nil(t, baseline.AutomationReviewToken)
+	ctx, _ := reviewIdentity("person-b")
+	require.NoError(t, r.api.RDB.DB(ctx).Model(other).
+		Update("definition", datatypes.JSON(`{"metric":"temp_c","threshold":24}`)).Error)
+	row := r.run(t)
+	var authors []string
+	require.NoError(t, json.Unmarshal(row.DraftAuthors, &authors))
+	require.Contains(t, authors, "person-b")
+	require.NotContains(t, authors, "person-a")
+}
+
+func TestDraftAuthorsExactBoundaryExcludesEarlierChangedRowWriters(t *testing.T) {
+	r := newAutomationReviewRig(t, true)
+	protectReviewRig(t, r, DefaultReviewPolicySettings())
+	r.changeRule(t, "person-a")
+	approved := approveRigReview(t, r, r.run(t), "reviewer")
+	baseline, err := publishRigReview(r, approved)
+	require.NoError(t, err)
+	require.NotNil(t, baseline.AutomationReviewToken)
+	ctx, _ := reviewIdentity("person-b")
+	require.NoError(t, r.api.RDB.DB(ctx).Model(r.rule).
+		Update("definition", datatypes.JSON(`{"metric":"temp_c","threshold":24}`)).Error)
+	in := reviewRunInput()
+	in.RequestId = "after-reviewed-publish"
+	_, person := reviewIdentity("creator")
+	row, err := r.api.RunAutomationReview(r.ctx, person, in)
+	require.NoError(t, err)
+	var authors []string
+	require.NoError(t, json.Unmarshal(row.DraftAuthors, &authors))
+	require.Contains(t, authors, "person-b")
+	require.NotContains(t, authors, "person-a")
 }
 
 func TestPublishUnprotectedIgnoresReviewToken(t *testing.T) {

@@ -1036,3 +1036,90 @@ func TestPGDeleteKeepsConsumedReviews(t *testing.T) {
 	require.Equal(t, consumed.Token, reviews[0].Token)
 	require.NotEqual(t, ran.Token, reviews[0].Token)
 }
+
+func TestPGPreviousReleaseDeleteWithPolicyHistory(t *testing.T) {
+	for _, protected := range []bool{false, true} {
+		t.Run(fmt.Sprintf("protected=%t", protected), func(t *testing.T) {
+			r := newPGEnforcementRig(t)
+			policy := &AutomationReviewPolicy{DeviceProfileId: r.profile.ID, Required: protected, UpdatedBy: "operator"}
+			require.NoError(t, r.api.RDB.DB(r.ctx).Create(policy).Error)
+			change := &AutomationReviewPolicyChange{DeviceProfileId: r.profile.ID, Token: "pending-delete-test",
+				BaseRevision: policy.Revision, Proposed: datatypes.JSON(`{"required":false}`), ProposedBy: "operator", State: "PENDING"}
+			require.NoError(t, r.api.RDB.DB(r.ctx).Create(change).Error)
+			// Read back PostgreSQL's timestamp/JSON representation before comparing.
+			require.NoError(t, r.api.RDB.DB(r.ctx).First(policy, policy.ID).Error)
+			require.NoError(t, r.api.RDB.DB(r.ctx).First(change, change.ID).Error)
+			versions := pgVersionCount(t, r)
+			r.api.skipReviewGuardForOldPodTest = true
+			deleted, err := r.api.DeleteDeviceProfile(r.ctx, "profile")
+			if protected {
+				reviewErrorCode(t, err, "PROFILE_PROTECTED")
+				require.False(t, deleted)
+				var storedPolicy AutomationReviewPolicy
+				var storedChange AutomationReviewPolicyChange
+				require.NoError(t, r.api.RDB.DB(r.ctx).First(&storedPolicy, policy.ID).Error)
+				require.NoError(t, r.api.RDB.DB(r.ctx).First(&storedChange, change.ID).Error)
+				require.Equal(t, *policy, storedPolicy)
+				require.Equal(t, *change, storedChange)
+				require.Equal(t, versions, pgVersionCount(t, r))
+			} else {
+				require.NoError(t, err)
+				require.True(t, deleted)
+			}
+			for _, model := range []any{&DeviceProfile{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}} {
+				query := r.api.RDB.DB(r.ctx).Unscoped().Model(model)
+				if _, ok := model.(*DeviceProfile); ok {
+					query = query.Where("id = ?", r.profile.ID)
+				} else {
+					query = query.Where("device_profile_id = ?", r.profile.ID)
+				}
+				var count int64
+				require.NoError(t, query.Count(&count).Error)
+				if protected {
+					require.EqualValues(t, 1, count)
+				} else {
+					require.Zero(t, count)
+				}
+			}
+		})
+	}
+}
+
+func TestPGProtectedPublishWaitsForRejectBeforeJournalLock(t *testing.T) {
+	r := newPGEnforcementRig(t)
+	protectReviewRig(t, r, DefaultReviewPolicySettings())
+	row := pgEnforcementApproved(t, r)
+	before := pgVersionCount(t, r)
+	ctx, _ := reviewIdentity("rejector")
+	tx := r.api.RDB.DB(ctx).Begin()
+	require.NoError(t, tx.Error)
+	defer tx.Rollback()
+	var blocker int
+	require.NoError(t, tx.Raw("SELECT pg_backend_pid()").Scan(&blocker).Error)
+	// Hold just the review row first; the journaled part of rejection follows later.
+	require.NoError(t, tx.Exec(`UPDATE "device-management".automation_reviews
+		SET state=?, revision=revision+1 WHERE id=?`, ReviewStateRejected, row.ID).Error)
+	done := make(chan error, 1)
+	go func() {
+		_, err := publishRigReview(r, row)
+		done <- err
+	}()
+	pgWaitBlockedBy(t, r, blocker)
+	time.Sleep(300 * time.Millisecond)
+	writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	require.NoError(t, tx.WithContext(writeCtx).Model(row).Update("decided_note", "rejected concurrently").Error,
+		"reject must journal without waiting for the publish's journal lock")
+	table, err := journalTable(tx, &AutomationReview{})
+	require.NoError(t, err)
+	var journalCount int64
+	require.NoError(t, tx.Model(&rdb.AuditEvent{}).Where("table_name = ? AND actor = ? AND operation = ?", table, "rejector", "update").Count(&journalCount).Error)
+	require.EqualValues(t, 1, journalCount)
+	require.NoError(t, tx.Commit().Error)
+	reviewErrorCode(t, pgReceive(t, done), "REVIEW_NOT_APPROVED")
+	require.Equal(t, before, pgVersionCount(t, r))
+	stored, err := r.api.AutomationReviewByToken(r.ctx, row.Token)
+	require.NoError(t, err)
+	require.Equal(t, ReviewStateRejected, stored.State)
+	require.Equal(t, row.Revision+1, stored.Revision)
+}

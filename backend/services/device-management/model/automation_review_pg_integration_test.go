@@ -73,7 +73,7 @@ func TestAutomationReviewPostgresEvidenceAndPublication(t *testing.T) {
 	require.Equal(t, reviewHash([]byte(readBack.Result)), readBack.ResultDigest)
 	var authors []string
 	require.NoError(t, json.Unmarshal(readBack.DraftAuthors, &authors))
-	require.Equal(t, []string{"rule-editor"}, authors, "pre-baseline edits must not exclude an otherwise independent approver")
+	require.Equal(t, []string{"before-baseline", "rule-editor"}, authors, "an unprotected baseline conservatively includes historical writers of changed rows")
 
 	third, approver := reviewIdentity("third-person")
 	approved, err := api.ApproveAutomationReview(third, approver, readBack.Token, readBack.ReviewDigest)

@@ -69,7 +69,10 @@ type enforcementProfileVersion struct {
 // NewAutomationReviewEnforcementSchema is replayable: AutoMigrate, catalog-checked
 // constraints, replaced functions and dropped/recreated triggers tolerate interrupted runs.
 // It seeds no rows. All four affected tables carry tenant_id; policies and policy
-// changes reference device_profiles, so tenant purge sweeps them before profiles.
+// changes reference device_profiles, so tenant purge still deletes children first
+// in foreign-key order. ON DELETE CASCADE lets old pods delete unprotected profiles
+// with policy history. The profile's BEFORE DELETE guard refuses protected deletes
+// before the foreign-key cascade runs as an AFTER trigger.
 // During rolling upgrades old pods never write these tables. Triggers refuse their
 // writes on protected profiles and permit everything on unprotected profiles.
 func NewAutomationReviewEnforcementSchema() *gormigrate.Migration {
@@ -95,7 +98,7 @@ func NewAutomationReviewEnforcementSchema() *gormigrate.Migration {
 		}
 		for _, table := range []string{"automation_review_policies", "automation_review_policy_changes"} {
 			constraint := "fk_" + table + "_profile"
-			if err := addForeignKeyIfAbsent(tx, table, constraint, fmt.Sprintf(`ALTER TABLE "device-management".%s ADD CONSTRAINT %s FOREIGN KEY (device_profile_id) REFERENCES "device-management".device_profiles(id) ON DELETE RESTRICT NOT VALID`, table, constraint)); err != nil {
+			if err := addForeignKeyIfAbsent(tx, table, constraint, fmt.Sprintf(`ALTER TABLE "device-management".%s ADD CONSTRAINT %s FOREIGN KEY (device_profile_id) REFERENCES "device-management".device_profiles(id) ON DELETE CASCADE NOT VALID`, table, constraint)); err != nil {
 				return err
 			}
 		}
