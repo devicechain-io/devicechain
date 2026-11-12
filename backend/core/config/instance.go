@@ -362,7 +362,7 @@ func (c NatsFetchConfiguration) ValidateAgainst(ackWait time.Duration) error {
 		return err
 	}
 	if limit := ackWait / fetchAheadBudgetDivisor; c.AheadHoldBudgetMillis > 0 &&
-		time.Duration(c.AheadHoldBudgetMillis)*time.Millisecond > limit {
+		int64(c.AheadHoldBudgetMillis) > limit.Milliseconds() {
 		return fmt.Errorf("infrastructure.nats.fetch.aheadHoldBudgetMillis is %d, which is more than a "+
 			"tenth of the %s acknowledgement window (%d ms at most). A batch fetched ahead waits about "+
 			"one budget before it is handed out, and that wait comes out of the window the handler "+
