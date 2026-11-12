@@ -14,6 +14,10 @@
       "sourceSha256": "76b7977d63ce794a1e4cac8e91d58fa9c6291d3f98d7ae64dca6d8060a450c48",
       "translationSha256": "79313e9c6c9aefec6ad32d3a923b9ddd538a8b526e1bbe41495ba630cad7d89b"
     },
+    "concepts/automation-change-review.md": {
+      "sourceSha256": "28a4e4b9133c132b3ed769fe08c0914c926091307b5fec02f27a613036a6b0d6",
+      "translationSha256": "1ec8ec40ecad51159dfff95ee4fe275935bbe2d66c0faef4ea23bafc63681246"
+    },
     "concepts/basemaps.md": {
       "sourceSha256": "61971b3c52b6d9a9f6b3acf9be14492c243f648c5e796f21708aa96f6358fef7",
       "translationSha256": "d722fe86e28c1535d64d9d38d00b4f0aae1cac5c6fbe1a8bc5ca7a4e313fc228"
@@ -253,6 +257,10 @@
     "guides/product-as-code.md": {
       "sourceSha256": "1cadedbcf6605b579a43352368dc42bd72d0d641554ac70e1376309de620c3f4",
       "translationSha256": "7446b1074ff6720199a25b08b40693d41a20cc813947e215fdc252a13d903c6f"
+    },
+    "guides/reviewing-a-rule-change.md": {
+      "sourceSha256": "f78d3e4090190a11002cc2794635f7d40d854fe55da491acecd4ebc850f05746",
+      "translationSha256": "77abd218ac6ff1eaa71d0851713c5f93de81497c018b8877b4ad93495566da02"
     },
     "guides/scheduling-a-fleet.md": {
       "sourceSha256": "d7287a63ae6e57a6f1ecc72efd0e298e85c6212fab2e8b541ead56f7787a4753",
