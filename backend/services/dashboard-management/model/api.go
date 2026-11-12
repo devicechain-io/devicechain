@@ -13,6 +13,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -650,8 +651,23 @@ func (api *Api) DashboardsByToken(ctx context.Context, tokens []string) ([]*Dash
 	return found, nil
 }
 
+// MaxNameContainsBytes generously allows 256 UTF-8 bytes of substring search text while
+// bounding escaping and LIKE pattern construction. Measure the original input so
+// whitespace padding cannot evade the work bound.
+const MaxNameContainsBytes = 256
+
+func validateNameContains(text *string) error {
+	if text != nil && len(*text) > MaxNameContainsBytes {
+		return limit.Exceeded("name bytes", len(*text), MaxNameContainsBytes)
+	}
+	return nil
+}
+
 // Dashboards searches dashboards by criteria (name substring + pagination).
 func (api *Api) Dashboards(ctx context.Context, criteria DashboardSearchCriteria) (*DashboardSearchResults, error) {
+	if err := validateNameContains(criteria.Name); err != nil {
+		return nil, err
+	}
 	results := make([]Dashboard, 0)
 	db, pag := api.RDB.ListOf(ctx, &Dashboard{}, func(result *gorm.DB) *gorm.DB {
 		if criteria.Name != nil {

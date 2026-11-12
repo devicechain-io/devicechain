@@ -59,7 +59,7 @@ func TestIngestRateLimitDefaulting(t *testing.T) {
 	// NewLwm2mConfiguration (which runs ApplyDefaults) is positive too.
 	assert.Positive(t, NewLwm2mConfiguration().IngestRateLimit.ReadingsPerSecond)
 
-	// An explicit ceiling is preserved; a non-positive one floors to the default.
+	// An explicit ceiling is preserved; a negative one is left for Validate to refuse.
 	explicit := &Lwm2mConfiguration{IngestRateLimit: IngestRateLimit{ReadingsPerSecond: 5, Burst: 10}}
 	explicit.ApplyDefaults()
 	assert.Equal(t, float64(5), explicit.IngestRateLimit.ReadingsPerSecond)
@@ -67,8 +67,9 @@ func TestIngestRateLimitDefaulting(t *testing.T) {
 
 	bad := &Lwm2mConfiguration{IngestRateLimit: IngestRateLimit{ReadingsPerSecond: -1, Burst: -1}}
 	bad.ApplyDefaults()
-	assert.Equal(t, float64(DefaultIngestReadingsPerSecond), bad.IngestRateLimit.ReadingsPerSecond)
-	assert.Equal(t, DefaultIngestBurst, bad.IngestRateLimit.Burst)
+	assert.Equal(t, float64(-1), bad.IngestRateLimit.ReadingsPerSecond)
+	assert.Equal(t, -1, bad.IngestRateLimit.Burst)
+	require.ErrorContains(t, bad.Validate(), "ingestRateLimit.readingsPerSecond")
 }
 
 func TestApplyDefaultsDoesNotOverrideSetValues(t *testing.T) {

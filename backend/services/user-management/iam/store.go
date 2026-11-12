@@ -36,6 +36,9 @@ func NewStore(db *rdb.RdbManager) *Store { return &Store{db: db} }
 
 // sys returns a gorm handle scoped to the instance-global system context.
 func (s *Store) sys(ctx context.Context) *gorm.DB {
+	if tx, ok := ctx.Value(snapshotKey{}).(*gorm.DB); ok {
+		return tx.WithContext(core.WithSystemContext(ctx))
+	}
 	return s.db.DB(core.WithSystemContext(ctx))
 }
 
@@ -46,6 +49,9 @@ func (s *Store) sys(ctx context.Context) *gorm.DB {
 // surface tenant-less auth events and every tenant's administrative changes. The
 // query itself is the core-owned RdbManager.AuditEvents helper.
 func (s *Store) AuditEvents(ctx context.Context, criteria rdb.AuditEventSearchCriteria) (*rdb.AuditEventSearchResults, error) {
+	if InSnapshot(ctx) {
+		return nil, fmt.Errorf("AuditEvents: %w", ErrOutsideSnapshot)
+	}
 	return s.db.AuditEvents(core.WithSystemContext(ctx), criteria)
 }
 
