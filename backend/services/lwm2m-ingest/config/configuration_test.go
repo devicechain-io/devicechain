@@ -169,6 +169,34 @@ func TestValidateAcceptsAutoRegisterWithDeviceType(t *testing.T) {
 	require.NoError(t, loaded(c))
 }
 
+func TestDeviceTypeTokenMustMatchTheTokenGrammar(t *testing.T) {
+	cases := []struct {
+		name            string
+		autoRegister    bool
+		deviceTypeToken string
+		wantError       bool
+	}{
+		{"invalid type with autoRegister", true, "bad/type", true},
+		{"invalid type without autoRegister", false, "bad type", true},
+		{"valid type with autoRegister", true, "sensor-v2", false},
+		{"empty type without autoRegister", false, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validConfig()
+			c.Security.Identities[0].AutoRegister = tc.autoRegister
+			c.Security.Identities[0].DeviceTypeToken = tc.deviceTypeToken
+			err := loaded(c)
+			if tc.wantError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "deviceTypeToken")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 // Bindings maps each identity to its resolved tenancy binding — what a registration
 // handler resolves through after recovering the authenticated PSK identity (ADR-075 D1).
 func TestBindingsResolveEachIdentity(t *testing.T) {
