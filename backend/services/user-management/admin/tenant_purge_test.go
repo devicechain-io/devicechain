@@ -199,6 +199,27 @@ func TestCreateTenantStillCollidesOnAnActiveToken(t *testing.T) {
 	require.True(t, conflict.Is(err), "an active duplicate must be a conflict: %v", err)
 }
 
+func TestSetTenantEnabledRefusesADeletedTenant(t *testing.T) {
+	s, db := newPurgeTestServiceDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.AutoMigrate(&iam.AgentPolicy{}))
+	createTenant(t, s, "acme")
+	removed, err := s.DeleteTenant(ctx, "acme")
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	for _, enabled := range []bool{true, false} {
+		_, err := s.SetTenantEnabled(ctx, "acme", enabled)
+		require.ErrorIs(t, err, ErrTenantDeleted)
+		after, err := s.iam.TenantByToken(ctx, "acme")
+		require.NoError(t, err)
+		require.False(t, after.Enabled)
+		head, err := s.iam.AgentPolicyHead(ctx, "acme")
+		require.NoError(t, err)
+		require.Nil(t, head)
+	}
+}
+
 // A deleted tenant takes no new members. Without this, DeleteTenant's zero-membership
 // precondition holds only at the instant of the cut: an operator could attach a user
 // afterwards, get a success toast, and hand them a tenant that answers every login
