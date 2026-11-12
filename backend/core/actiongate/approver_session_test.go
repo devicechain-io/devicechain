@@ -29,6 +29,22 @@ func TestTallyRequiresApproverSession(t *testing.T) {
 	require.Equal(t, 1, tally())
 }
 
+// Only the entry under the sign-in user-management was asked about may count: a principal's live
+// sign-in must not lend its standing to a fresher second factor recorded under an ended one.
+func TestTallyCountsOnlyTheNamedSession(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-20 * time.Minute)
+	su := auth.StepUp{MaxAge: 15 * time.Minute}
+	approvals := []Approval{
+		{Sub: "boss", Sid: "live", Amr: auth.AmrPasswordOTP(), MfaTime: &old},
+		{Sub: "boss", Sid: "ended", Amr: auth.AmrPasswordOTP(), MfaTime: &now},
+	}
+	require.Equal(t, []ApproverSession{{Principal: "boss", Sid: "live"}}, ApproverSessions(approvals))
+	require.Zero(t, Tally(approvals, []string{"boss"}, "proposer", 1, false, su, now))
+	approvals[1].Sid = "live"
+	require.Equal(t, 1, Tally(approvals, []string{"boss"}, "proposer", 1, false, su, now), "control: the same sign-in's fresh entry counts")
+}
+
 func TestApproverSessions(t *testing.T) {
 	require.Equal(t, []ApproverSession{}, ApproverSessions(nil))
 	require.Equal(t, []ApproverSession{{Principal: "b", Sid: "b1"}, {Principal: "a", Sid: "a1"}}, ApproverSessions([]Approval{

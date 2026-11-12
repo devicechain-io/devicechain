@@ -120,8 +120,18 @@ func ApproverSessions(approvals []Approval) []ApproverSession {
 // not allowed. A principal approving twice counts once, and an approval made by someone who has
 // since lost the role, the authority or the membership does not count at all: EVERY counted
 // approval is re-validated, not only the latest. An approval whose second factor is older than
-// the CURRENT policy's step-up at the moment of the tally does not count. An empty Sid never counts.
+// the CURRENT policy's step-up at the moment of the tally does not count.
+//
+// 🔴 AN APPROVAL COUNTS ONLY THROUGH THE SIGN-IN USER-MANAGEMENT JUDGED. valid says a principal's
+// NAMED sign-in (ApproverSessions: their first entry with a sid) is still open, so only an entry
+// recorded under that same sid may count: otherwise a principal's live sign-in could lend its
+// standing to another entry's fresher second factor given from a sign-in that has ended. An entry
+// with no sid (recorded before approvals were bound) never counts.
 func Tally(approvals []Approval, valid []string, proposer string, required int, selfConfirm bool, su auth.StepUp, now time.Time) int {
+	named := map[string]string{}
+	for _, s := range ApproverSessions(approvals) {
+		named[s.Principal] = s.Sid
+	}
 	n := 0
 	for _, p := range Principals(approvals) {
 		if !slices.Contains(valid, p) {
@@ -131,7 +141,7 @@ func Tally(approvals []Approval, valid []string, proposer string, required int, 
 			continue
 		}
 		for _, a := range approvals {
-			if a.Sub == p && a.Sid != "" && auth.StepUpFreshAt(a.Amr, a.MfaTime, su, now) {
+			if a.Sub == p && a.Sid != "" && a.Sid == named[p] && auth.StepUpFreshAt(a.Amr, a.MfaTime, su, now) {
 				n++
 				break
 			}
