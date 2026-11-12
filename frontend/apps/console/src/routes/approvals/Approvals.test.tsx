@@ -12,17 +12,17 @@ import type { AgentProposal } from '@/lib/api/agent-proposals';
 import type { AgentPolicy } from '@/lib/api/agent-policy';
 
 const h = vi.hoisted(() => ({
-  list: vi.fn(), get: vi.fn(), approve: vi.fn(), reject: vi.fn(), policy: vi.fn(), setActuation: vi.fn(),
-  logout: vi.fn(), toast: vi.fn(), authorities: ['agent:admin'] as string[],
+  list: vi.fn(), get: vi.fn(), approve: vi.fn(), reject: vi.fn(), policy: vi.fn(), access: vi.fn(), setActuation: vi.fn(),
+  stepUp: vi.fn(), logout: vi.fn(), toast: vi.fn(), authorities: ['agent:admin'] as string[],
   tenant: 'tenant-a', username: 'ann', identityToken: 'session-a',
 }));
 vi.mock('@/lib/api/agent-proposals', () => ({
   listAgentProposals: h.list, getAgentProposal: h.get, approveAgentProposal: h.approve, rejectAgentProposal: h.reject,
 }));
-vi.mock('@/lib/api/agent-policy', () => ({ getAgentPolicy: h.policy, setAgentActuation: h.setActuation }));
+vi.mock('@/lib/api/agent-policy', () => ({ getAgentApprovalAccess: h.access, getAgentPolicy: h.policy, setAgentActuation: h.setActuation }));
 vi.mock('@/auth/AuthProvider', () => ({ useAuth: () => ({
   claims: { tenant: h.tenant, username: h.username, authorities: h.authorities, scopeAnchors: [] },
-  identityToken: h.identityToken, logout: h.logout,
+  identityToken: h.identityToken, logout: h.logout, stepUp: h.stepUp,
 }) }));
 vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: h.toast }) }));
 import ApprovalsPage from './ApprovalsPage';
@@ -43,8 +43,10 @@ beforeEach(() => {
   h.tenant = 'tenant-a'; h.username = 'ann'; h.identityToken = 'session-a';
   policy = { published: null, operatorSuspended: false, actuationOff: false, instanceEnabled: true, actuationInEffect: true };
   h.policy.mockImplementation(async () => ({ ...policy }));
+  h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
   h.get.mockResolvedValue(proposal);
   h.list.mockResolvedValue({ results: [proposal], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } });
+  h.stepUp.mockResolvedValue(undefined);
   h.approve.mockResolvedValue({ ...proposal, approvals: [...proposal.approvals, { principal: 'ann', approvedAt: '2026-11-10T11:00:00Z' }] }); h.reject.mockResolvedValue(undefined);
   h.setActuation.mockImplementation(async (enabled: boolean) => { policy = { ...policy, actuationOff: !enabled }; return policy; });
 });
@@ -90,6 +92,13 @@ describe.each(['/approvals', '/approvals/proposal-17'])('session changes on %s',
     expect(screen.queryByText(proposal.rationale!)).toBeNull();
   });
 });
+
+async function verifyStepUp() {
+  fireEvent.click(screen.getByRole('button', { name: 'Verify code' }));
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.change(within(dialog).getByLabelText('Authenticator code'), { target: { value: '123456' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Verify code' }));
+}
 
 describe('proposal decisions', () => {
   it.each(['ALARM_ACK', 'ALARM_CLEAR'] as const)('warns that final approval carries out %s as the approver', async kind => {
@@ -151,13 +160,48 @@ describe('proposal decisions', () => {
     await waitFor(() => expect(h.approve).toHaveBeenCalledExactlyOnceWith('proposal-17', proposal.digest));
     await waitFor(() => expect(h.get).toHaveBeenCalledTimes(2));
   });
-  it('prompts for step-up, saves the detail return path and logs out', async () => {
+  it('falls back to sign-in only when step-up is unavailable and saves the detail return path', async () => {
+    h.stepUp.mockRejectedValue(new GraphQLRequestError('unavailable', 503));
     h.approve.mockRejectedValue(serverError('STEP_UP_REQUIRED'));
     show(); await approve();
     await screen.findByText('Approving needs a fresh second factor');
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }));
+    await verifyStepUp();
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in again' }));
     expect(h.logout).toHaveBeenCalledTimes(1);
     expect(consumeStepUpReturn()).toBe('/approvals/proposal-17');
+  });
+  it('verifies in the dialog, stays signed in and lets the user retry the approval', async () => {
+    h.approve.mockRejectedValueOnce(serverError('STEP_UP_REQUIRED'));
+    show(); await approve();
+    await screen.findByText('Approving needs a fresh second factor');
+    expect(screen.queryByRole('button', { name: 'Sign in again' })).toBeNull();
+    await verifyStepUp();
+    await screen.findByText('Second factor verified. Retry your action.');
+    expect(h.stepUp).toHaveBeenCalledExactlyOnceWith('123456');
+    expect(h.logout).not.toHaveBeenCalled();
+    await approve();
+    await waitFor(() => expect(h.approve).toHaveBeenCalledTimes(2));
+  });
+  it('shows a wrong-code error without offering sign-in or ending the session', async () => {
+    h.approve.mockRejectedValue(serverError('STEP_UP_REQUIRED'));
+    h.stepUp.mockRejectedValue(new GraphQLRequestError('invalid code', 200, [{ message: 'invalid code' }]));
+    show(); await approve();
+    await screen.findByText('Approving needs a fresh second factor');
+    await verifyStepUp();
+    expect((await screen.findByRole('alert')).textContent).toContain('Code not accepted');
+    expect(screen.queryByRole('button', { name: 'Sign in again' })).toBeNull();
+    expect(h.logout).not.toHaveBeenCalled();
+    expect((screen.getByLabelText('Authenticator code') as HTMLInputElement).value).toBe('');
+  });
+  it('offers sign-in when the server schema does not have stepUp', async () => {
+    h.approve.mockRejectedValue(serverError('STEP_UP_REQUIRED'));
+    h.stepUp.mockRejectedValue(new GraphQLRequestError('Cannot query field "stepUp" on type "Mutation".', 200,
+      [{ message: 'Cannot query field "stepUp" on type "Mutation".' }]));
+    show(); await approve();
+    await screen.findByText('Approving needs a fresh second factor');
+    await verifyStepUp();
+    await screen.findByRole('button', { name: 'Sign in again' });
+    expect(h.logout).not.toHaveBeenCalled();
   });
   it('rejects with the exact note and refetches the proposal', async () => {
     show(); fireEvent.click(await screen.findByRole('button', { name: 'Reject' }));
@@ -224,14 +268,16 @@ describe('inbox and kill switch', () => {
     expect(screen.queryByText('Approving needs a fresh second factor')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Sign in again' })).toBeNull();
   });
-  it('turning on with STEP_UP_REQUIRED prompts and returns to the inbox', async () => {
+  it('turning on with STEP_UP_REQUIRED falls back for an SSO session and returns to the inbox', async () => {
+    h.stepUp.mockRejectedValue(serverError('STEP_UP_SSO'));
     policy.actuationOff = true;
     h.setActuation.mockRejectedValue(serverError('STEP_UP_REQUIRED'));
     show('/approvals');
     fireEvent.click(await screen.findByRole('button', { name: 'Turn agent actions back on' }));
     await screen.findByText('Approving needs a fresh second factor');
     expect(h.setActuation).toHaveBeenCalledExactlyOnceWith(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }));
+    await verifyStepUp();
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in again' }));
     expect(consumeStepUpReturn()).toBe('/approvals'); expect(h.logout).toHaveBeenCalledTimes(1);
   });
   it('never queries proposals when the instance is disabled', async () => {
@@ -261,3 +307,25 @@ describe('inbox and kill switch', () => {
     expect(screen.getByText(proposal.rationale!).querySelector('a')).toBeNull();
   });
 });
+
+describe('approver inbox visibility', () => {
+  it('loads proposals for an approver without agent:admin, without policy or kill switch', async () => {
+    h.authorities = ['alarm:write', 'alarm:read'];
+    h.access.mockResolvedValue({ instanceEnabled: true, canApprove: true });
+    show('/approvals');
+    await screen.findByText(proposal.rationale!);
+    expect(h.list).toHaveBeenCalledTimes(1);
+    expect(h.access).toHaveBeenCalledTimes(1);
+    expect(h.policy).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Turn agent actions off' })).toBeNull();
+  });
+  it.each([false, true])('refuses a non-approver or disabled instance (%s)', async disabled => {
+    h.authorities = ['alarm:write'];
+    h.access.mockResolvedValue({ instanceEnabled: !disabled, canApprove: disabled });
+    show('/approvals');
+    await waitFor(() => expect(h.access).toHaveBeenCalledTimes(1));
+    await screen.findByText('You are not authorized to review agent proposals.');
+    expect(h.list).not.toHaveBeenCalled();
+    expect(h.policy).not.toHaveBeenCalled();
+  });
+ });

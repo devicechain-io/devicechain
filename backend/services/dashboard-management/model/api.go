@@ -13,6 +13,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -24,6 +25,40 @@ import (
 // widgets carry URLs, not embedded data — so 1 MiB is already generous. The cap
 // keeps a single tenant from exhausting shared storage with an oversized document.
 const maxDefinitionBytes = 1 << 20
+
+// maxDashboardVersions bounds immutable history per dashboard. Capacity is a row
+// count, independent of the monotonic version numbers (history may be sparse).
+const maxDashboardVersions = 1000
+
+// maxDashboardsPerTenant bounds the live dashboards stored for one tenant.
+const maxDashboardsPerTenant = 10000
+
+// ErrDashboardLimit refuses only creation; existing dashboards remain usable.
+var ErrDashboardLimit = &dashboardLimitError{}
+
+type dashboardLimitError struct{}
+
+func (*dashboardLimitError) Error() string {
+	return fmt.Sprintf("tenant has reached the limit of %d dashboards; delete an unused dashboard to create another; existing dashboards remain fully usable", maxDashboardsPerTenant)
+}
+
+func (*dashboardLimitError) Extensions() map[string]any {
+	return map[string]any{"code": "DASHBOARD_LIMIT"}
+}
+
+// ErrVersionLimit is returned only when publishing would exceed the history cap.
+// Existing history and the draft remain available at and above the cap.
+var ErrVersionLimit = &versionLimitError{}
+
+type versionLimitError struct{}
+
+func (*versionLimitError) Error() string {
+	return fmt.Sprintf("dashboard has reached the limit of %d published versions; publish a new dashboard to continue; existing history and draft remain available", maxDashboardVersions)
+}
+
+func (*versionLimitError) Extensions() map[string]any {
+	return map[string]any{"code": "DASHBOARD_VERSION_LIMIT"}
+}
 
 // ErrInvalidDefinition is returned when a create/update carries a Definition that
 // is not a well-formed JSON object or has an invalid device selector.
@@ -68,6 +103,8 @@ func (*TenantDeletedError) Extensions() map[string]any {
 
 type Api struct {
 	RDB *rdb.RdbManager
+	// dashboardLimit is a test seam; zero uses the fixed production cap.
+	dashboardLimit int64
 	// TenantDeleted reports whether a tenant has been through the delete door. When set,
 	// every write that creates or changes a dashboard (create, update, publish, rollback)
 	// is refused for such a tenant, so a still-valid access token cannot re-land rows
@@ -175,11 +212,54 @@ func (api *Api) CreateDashboard(ctx context.Context, request *DashboardCreateReq
 		},
 		Definition: def,
 	}
-	result := api.RDB.DB(ctx).Create(created)
-	if result.Error != nil {
-		return nil, result.Error
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockTenantForDashboardCreate(ctx, tx); err != nil {
+			return err
+		}
+		// Keep the tenant lock through count and insert so only one creator can
+		// consume the final slot. Tenant scoping and soft-delete filters apply.
+		var count int64
+		if err := tx.Model(&Dashboard{}).Count(&count).Error; err != nil {
+			return err
+		}
+		if count >= api.dashboardCreateLimit() {
+			// A duplicate token keeps its normal conflict outcome at capacity: let the
+			// insert hit the unique constraint instead of masking it with the limit.
+			var same int64
+			if err := tx.Model(&Dashboard{}).Where("token = ?", request.Token).Count(&same).Error; err != nil {
+				return err
+			}
+			if same == 0 {
+				return ErrDashboardLimit
+			}
+		}
+		return tx.Create(created).Error
+	})
+	if err != nil {
+		return nil, err
 	}
 	return created, nil
+}
+
+func (api *Api) dashboardCreateLimit() int64 {
+	if api.dashboardLimit != 0 {
+		return api.dashboardLimit
+	}
+	return maxDashboardsPerTenant
+}
+
+// lockTenantForDashboardCreate serializes admission per tenant until commit.
+// It is a no-op on SQLite (and other non-Postgres dialects); SQLite unit tests
+// do not exercise the concurrency guarantee. That requires PostgreSQL.
+func lockTenantForDashboardCreate(ctx context.Context, tx *gorm.DB) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return fmt.Errorf("cannot lock for dashboard creation: %w", core.ErrNoTenant)
+	}
+	return tx.Exec("SELECT pg_advisory_xact_lock(?)", rdb.AdvisoryLockKey("dashboard-create:"+tenant)).Error
 }
 
 // UpdateDashboard applies a PARTIAL update to the dashboard (the mutable draft) with the
@@ -363,6 +443,17 @@ func (api *Api) PublishDashboard(ctx context.Context, token string, label *strin
 		// own view. Checked against the locked row, so no writer can slip in after it.
 		if err := rdb.RefuseIfMoved(locked.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
 			return err
+		}
+
+		// Hold the parent lock across the capacity check and insert so concurrent
+		// publishes cannot both consume the final slot. Refusal writes nothing.
+		var count int64
+		if err := tx.Model(&DashboardVersion{}).
+			Where("dashboard_id = ?", locked.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count >= maxDashboardVersions {
+			return ErrVersionLimit
 		}
 
 		var maxVersion int32
@@ -621,8 +712,23 @@ func (api *Api) DashboardsByToken(ctx context.Context, tokens []string) ([]*Dash
 	return found, nil
 }
 
+// MaxNameContainsBytes generously allows 256 UTF-8 bytes of substring search text while
+// bounding escaping and LIKE pattern construction. Measure the original input so
+// whitespace padding cannot evade the work bound.
+const MaxNameContainsBytes = 256
+
+func validateNameContains(text *string) error {
+	if text != nil && len(*text) > MaxNameContainsBytes {
+		return limit.Exceeded("name bytes", len(*text), MaxNameContainsBytes)
+	}
+	return nil
+}
+
 // Dashboards searches dashboards by criteria (name substring + pagination).
 func (api *Api) Dashboards(ctx context.Context, criteria DashboardSearchCriteria) (*DashboardSearchResults, error) {
+	if err := validateNameContains(criteria.Name); err != nil {
+		return nil, err
+	}
 	results := make([]Dashboard, 0)
 	db, pag := api.RDB.ListOf(ctx, &Dashboard{}, func(result *gorm.DB) *gorm.DB {
 		if criteria.Name != nil {

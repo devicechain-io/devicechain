@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/devicechain-io/dc-update-management/model"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -66,6 +67,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	Svc = service.New(Microservice, service.Spec{Nats: &service.NatsSpec{OnCreate: createNatsComponents}})
 	ctx := context.Background()
 	require.NoError(t, Svc.Initialize(ctx), "initializing under the catalog")
+	dctest.UseFreeTCPPort(t, &service.ProbesPort)
 	NatsManager = Svc.Nats
 	DeadLetters = Svc.DeadLetters
 	t.Cleanup(func() {

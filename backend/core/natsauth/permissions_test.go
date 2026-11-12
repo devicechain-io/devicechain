@@ -749,3 +749,13 @@ func TestServiceLoginsCannotPublishToADevicesUplinkSubject(t *testing.T) {
 		require.False(t, p.publishes(messaging.MqttMsgsSubject(uplink)), area)
 	}
 }
+
+// An uncaptured stream grants no fetch/delete permission for a recorder that cannot read it.
+func TestUncapturedReaderHasNoRecorderMessagePermissions(t *testing.T) {
+	p, err := AreaPermissions(permInstance, "outbound-connectors")
+	require.NoError(t, err)
+	name := messaging.StreamName(permInstance, streams.LpwanDownlinkEvents)
+	for _, verb := range []string{"STREAM.MSG.GET.", "DIRECT.GET.", "STREAM.MSG.DELETE."} {
+		require.False(t, p.publishes("$JS.API."+verb+name), "uncaptured stream grants %s", verb)
+	}
+}

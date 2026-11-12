@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
@@ -632,7 +633,9 @@ func analyticsGrantees(roles []string) []analyticsGrantee {
 // in pg_roles, that grant survived every boot forever. PUBLIC is not a role and does
 // not appear in pg_roles; it has to be revoked by name. Doing so is safe here because
 // the application role OWNS these relations and is never PUBLIC. (An owner's privileges
-// CAN be revoked from itself, which is why analyticsRolesQuery never selects it.)
+// CAN be revoked from itself, so platform roles are never converged: membership skips
+// them and their descendants; a reader or group name collision refuses the boot after
+// every other selected role has been converged.)
 //
 // It takes the grantee as a rendered SQL token rather than a bare identifier because
 // PUBLIC is a keyword rather than something that can be quoted — see analyticsGrantees.
@@ -647,10 +650,48 @@ func revokeAreaStatements(role string) []string {
 	}
 }
 
+// AnalyticsMetrics counts superuser naming collisions skipped during reconciliation.
+// Role names belong in logs rather than unbounded metric labels.
+type AnalyticsMetrics struct {
+	PlatformCollisions prometheus.Counter
+}
+
+// NewAnalyticsMetrics registers the instruments once for the process.
+func NewAnalyticsMetrics(ms *core.Microservice) *AnalyticsMetrics {
+	return &AnalyticsMetrics{
+		PlatformCollisions: ms.NewCounter("analytics_reconcile_platform_collisions_total",
+			"Superuser reader-name collisions skipped during analytics reconciliation."),
+	}
+}
+
+// analyticsRoleRow classifies roles selected by the query's name arms.
+type analyticsRoleRow struct {
+	Rolname   string
+	Refuse    bool
+	Superuser bool
+}
+
+// partitionAnalyticsRoles preserves catalog order within each class. Refusal wins
+// over superuser status; the membership walk never selects either class.
+func partitionAnalyticsRoles(rows []analyticsRoleRow) (converge, skipped, refused []string) {
+	for _, row := range rows {
+		switch {
+		case row.Refuse:
+			refused = append(refused, row.Rolname)
+		case row.Superuser:
+			skipped = append(skipped, row.Rolname)
+		default:
+			converge = append(converge, row.Rolname)
+		}
+	}
+	return converge, skipped, refused
+}
+
 // analyticsRolesQuery finds every role that participates in the read surface: the group
-// roles, direct members of either group regardless of name, and every role carrying
-// the naming convention. All are converged, because a grant made directly to a
-// member would not be caught by converging the groups alone.
+// roles, every role carrying the naming convention, and every member of either group at
+// ANY depth regardless of name. All are converged, because a grant made directly to a
+// member — including a member of a member, which inherits the group just the same —
+// would not be caught by converging the groups alone.
 //
 // The group roles are named explicitly even though both happen to match the prefix LIKE
 // below. That redundancy is deliberate: the prefix is a naming convention for READERS, so
@@ -662,37 +703,55 @@ func revokeAreaStatements(role string) []string {
 // in AnalyticsRolePrefix matches literally rather than as LIKE's single-character
 // wildcard.
 //
-// 🔴 THE MEMBERSHIP ARM NEVER SELECTS THE PLATFORM'S OWN ROLE. Postgres lets an owner
-// revoke its ordinary privileges from ITSELF, and the reconciler runs as the owner of the
-// area schema — so a single hand-run `GRANT analytics_reader TO <app role>` would, without
-// the exclusion, make every boot strip the service's own access to its event tables and
-// undo any manual re-grant on the next restart. The session user, superusers and the area
-// schema's owner are therefore never selected by membership (measured: an owner that is a
-// member lost SELECT and INSERT on its own hypertables).
+// 🔴 THE PLATFORM'S OWN ROLE IS NEVER CONVERGED. Postgres lets an owner revoke its
+// ordinary privileges from ITSELF, and the reconciler runs as the owner of the area
+// schema (measured: an owner that was converged lost SELECT and INSERT on its own
+// hypertables). "Platform" is a superuser, current_user, or the area schema's owner.
+//   - The membership walk excludes them at EVERY level, the group roles it starts from
+//     included, and does not walk through them,
+//     so a hand-run `GRANT analytics_reader TO <app role>` changes nothing. UNION (not
+//     UNION ALL) keeps the walk finite whatever the membership graph looks like.
+//   - The NAME arms cannot exclude them silently, because a platform role called
+//     `analytics_*` is a naming collision. current_user and the area schema's owner
+//     REFUSE the boot (after every other role is converged): converging either strips
+//     the service's own access, so such an install never worked. Any other superuser is
+//     SKIPPED with a WARN and analytics_reconcile_platform_collisions_total: a revoke
+//     from a superuser is a no-op, so earlier releases booted with one, and refusing
+//     would crash-loop new pods in an in-place minor upgrade — see
+//     partitionAnalyticsRoles.
 func analyticsRolesQuery() string {
 	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(analyticsGroupRoles())), ", ")
-	return fmt.Sprintf(`SELECT rolname FROM pg_roles `+
-		`WHERE rolname IN (%s) OR rolname LIKE ? ESCAPE '=' `+
-		`OR (oid IN (SELECT m.member FROM pg_auth_members m `+
-		`JOIN pg_roles g ON g.oid = m.roleid WHERE g.rolname IN (%s)) `+
-		`AND NOT rolsuper AND rolname <> current_user `+
-		`AND oid NOT IN (SELECT nspowner FROM pg_namespace WHERE nspname = ?)) `+
-		`ORDER BY rolname`, placeholders, placeholders)
+	return fmt.Sprintf(`WITH RECURSIVE platform AS (
+		SELECT oid FROM pg_roles WHERE rolsuper OR rolname = current_user
+		UNION SELECT nspowner FROM pg_namespace WHERE nspname = ?
+	), members AS (
+		SELECT m.member AS oid FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid
+		WHERE g.rolname IN (%s) AND g.oid NOT IN (SELECT oid FROM platform)
+		AND m.member NOT IN (SELECT oid FROM platform)
+		UNION
+		SELECT m.member FROM pg_auth_members m JOIN members p ON m.roleid = p.oid
+		WHERE m.member NOT IN (SELECT oid FROM platform)
+	)
+	SELECT r.rolname,
+	       (r.rolname = current_user OR r.oid IN (SELECT nspowner FROM pg_namespace WHERE nspname = ?)) AS refuse,
+	       r.rolsuper AS superuser FROM pg_roles r
+	WHERE r.rolname IN (%s) OR r.rolname LIKE ? ESCAPE '=' OR r.oid IN (SELECT oid FROM members)
+	ORDER BY r.rolname`, placeholders, placeholders)
 }
 
-// analyticsRolesQueryArgs binds analyticsRolesQuery: the group roles, then the reader
-// prefix pattern, then the membership group roles, then the area schema whose owner the
-// membership arm excludes, in placeholder order.
+// analyticsRolesQueryArgs binds the area schema for platform classification, membership
+// group names, area owner, explicit group names, and reader prefix, in placeholder order.
 func analyticsRolesQueryArgs() []any {
-	args := make([]any, 0, 2*len(analyticsGroupRoles())+2)
+	args := make([]any, 0, 2*len(analyticsGroupRoles())+3)
+	args = append(args, AnalyticsAreaSchema)
 	for _, role := range analyticsGroupRoles() {
 		args = append(args, role)
 	}
-	args = append(args, analyticsRolePattern())
+	args = append(args, AnalyticsAreaSchema)
 	for _, role := range analyticsGroupRoles() {
 		args = append(args, role)
 	}
-	return append(args, AnalyticsAreaSchema)
+	return append(args, analyticsRolePattern())
 }
 
 // analyticsRolePattern renders the LIKE pattern matching every per-tenant reader.
@@ -727,7 +786,10 @@ func analyticsRolePattern() string {
 // group role means the surface has no readers, which is the fail-closed outcome, so
 // it is reported and startup continues. A failed rebuild or REVOKE is different —
 // each leaves a way to read another tenant's rows — so both refuse the boot.
-func ReconcileAnalyticsSurface(ctx context.Context, mgr *rdb.RdbManager) error {
+func ReconcileAnalyticsSurface(ctx context.Context, mgr *rdb.RdbManager, metrics *AnalyticsMetrics) error {
+	if metrics == nil || metrics.PlatformCollisions == nil {
+		return fmt.Errorf("analytics reconciliation requires metrics with a platform collision counter")
+	}
 	// Checked before the lock is taken, because it is a property of this BUILD rather
 	// than of the database: a view with no grantee is a mistake made in this file, and
 	// nothing a database round trip could add would change the answer.
@@ -785,15 +847,26 @@ func ReconcileAnalyticsSurface(ctx context.Context, mgr *rdb.RdbManager) error {
 			}
 		}
 
-		var roles []string
+		var rows []analyticsRoleRow
 		if err := db.Raw(analyticsRolesQuery(), analyticsRolesQueryArgs()...).
-			Scan(&roles).Error; err != nil {
+			Scan(&rows).Error; err != nil {
 			return fmt.Errorf("listing the analytics reader roles: %w", err)
+		}
+
+		roles, skipped, refused := partitionAnalyticsRoles(rows)
+		// 🔴 Earlier releases booted with these superusers: revoking their privileges
+		// is a no-op. Refusing now would crash-loop new pods during an in-place minor
+		// upgrade, which the post-1.0 compatibility rules forbid.
+		if len(skipped) != 0 {
+			log.Warn().Strs("roles", skipped).Msg("Skipping superuser analytics reader-name collisions.")
+			for range skipped {
+				metrics.PlatformCollisions.Inc()
+			}
 		}
 
 		// The plan decides WHO is converged and the statements decide WHAT to; both are
 		// pure functions, so both are testable without a database. This loop only
-		// executes them, in order, and stops at the first refusal — a boot that is
+		// executes them, in order, and stops at the first SQL error — a boot that is
 		// going to fail must fail with the dangerous privilege already gone.
 		granted := 0
 		for _, g := range analyticsGrantees(roles) {
@@ -806,6 +879,12 @@ func ReconcileAnalyticsSurface(ctx context.Context, mgr *rdb.RdbManager) error {
 			if g.grantRole != "" {
 				granted++
 			}
+		}
+
+		if len(refused) != 0 {
+			return fmt.Errorf("refusing to converge platform role(s) %q: the platform's own role carries "+
+				"the analytics reader naming convention or a group role name; rename it or the reader",
+				refused)
 		}
 
 		if len(roles) == 0 {
@@ -838,10 +917,14 @@ func analyticsSurfaceStatements() []string {
 }
 
 // surfaceIntegrityQuery reads back what one view actually IS: its storage options, its
-// definition as PostgreSQL reconstructs it, and its column list in order.
+// definition as PostgreSQL reconstructs it, its column list in order, and whether
+// the current platform role has the owner's privileges without SET ROLE.
 const surfaceIntegrityQuery = `
 	SELECT coalesce(array_to_string(c.reloptions, ','), '') AS opts,
 	       pg_get_viewdef(c.oid) AS def,
+	       pg_get_userbyid(c.relowner) AS owner,
+	       current_user AS platform_role,
+	       pg_has_role(current_user, c.relowner, 'USAGE') AS owner_privileges,
 	       coalesce((SELECT string_agg(a.attname, ',' ORDER BY a.attnum)
 	                   FROM pg_attribute a
 	                  WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped), '') AS cols
@@ -851,7 +934,9 @@ const surfaceIntegrityQuery = `
 
 // analyticsSurfaceIntact reports whether every view is present, carries its frozen
 // projection, still filters on the reader's tenant, and is still a security barrier. The
-// second return value names the first thing found wrong, for the log line.
+// second return value names repairable drift for the log line. Ownership without
+// privileges available to the platform role is an error: reconciliation must stop
+// before attempting view replacement or privilege changes that require an owner.
 //
 // 🔴 IT EXISTS TO KEEP THE STEADY STATE LOCK-FREE, WHICH IS AN AVAILABILITY PROPERTY
 // RATHER THAN AN OPTIMISATION. `CREATE OR REPLACE VIEW` takes ACCESS EXCLUSIVE on the
@@ -871,15 +956,35 @@ const surfaceIntegrityQuery = `
 // rebuild unconditionally — the exact behaviour this avoids. The PREDICATE, though, is
 // compared exactly, for the reason below.
 func analyticsSurfaceIntact(db *gorm.DB) (bool, string, error) {
-	for _, v := range analyticsViews {
-		var row struct {
-			Opts string
-			Def  string
-			Cols string
-		}
-		if err := db.Raw(surfaceIntegrityQuery, AnalyticsSchema, v.name).Scan(&row).Error; err != nil {
+	type viewIntegrity struct {
+		Opts            string
+		Def             string
+		Cols            string
+		Owner           string
+		PlatformRole    string
+		OwnerPrivileges bool
+	}
+	rows := make([]viewIntegrity, len(analyticsViews))
+	// Diagnose ownership across the whole surface before reporting repairable
+	// drift: an earlier missing or damaged view must not trigger a rebuild that
+	// the platform cannot finish on a later, foreign-owned view.
+	for i, v := range analyticsViews {
+		row := &rows[i]
+		if err := db.Raw(surfaceIntegrityQuery, AnalyticsSchema, v.name).Scan(row).Error; err != nil {
 			return false, "", fmt.Errorf("reading the %s analytics view: %w", v.name, err)
 		}
+		// USAGE includes deliberately inherited ownership privileges (and the
+		// owner's own role). Membership requiring SET ROLE is not enough for the
+		// DDL this reconciler issues under its current identity.
+		if row.Cols != "" && !row.OwnerPrivileges {
+			return false, "", fmt.Errorf("analytics view %s.%s has an ownership problem: owned by %q; "+
+				"platform role %q does not have the owner's privileges; an operator with ownership "+
+				"authority must repair ownership before startup can continue",
+				AnalyticsSchema, v.name, row.Owner, row.PlatformRole)
+		}
+	}
+	for i, v := range analyticsViews {
+		row := rows[i]
 		switch {
 		case row.Cols == "":
 			return false, fmt.Sprintf("the %s view is missing", v.name), nil

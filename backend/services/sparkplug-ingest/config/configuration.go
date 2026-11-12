@@ -15,6 +15,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
 	"time"
@@ -209,8 +210,9 @@ type SparkplugConfiguration struct {
 // A Sparkplug DATA message's numeric metrics are charged against it before they are
 // ingested; readings over it are dropped and counted (a clean-session Host gets no
 // redelivery). Births, deaths and the message rate are not metered: the session machine
-// must observe every message. It is fail-safe: an unset, non-positive or NaN value falls
-// back to the platform default, never to unlimited and never to zero.
+// must observe every message. A zero/unset value or NaN rate takes the platform default,
+// never unlimited. Validate refuses negative values rather than silently replacing
+// the ceiling the operator was trying to change.
 type IngestRateLimit struct {
 	// ReadingsPerSecond is the sustained per-tenant rate, in readings per second. The key
 	// matches event-sources' and lwm2m-ingest's.
@@ -504,8 +506,10 @@ func NewSparkplugConfiguration() *SparkplugConfiguration {
 // ApplyDefaults fills unset fields (ADR-022 decision 1). Only a source's HostId
 // has a universal default; an empty Groups list is a meaningful value (subscribe
 // to all groups), not an unset one, so it is left alone. An empty Sources list is
-// likewise meaningful (connect to nothing). The ingest ceiling is floored per field to
-// the platform default, written `!(x > 0)` so a NaN rate floors too.
+// likewise meaningful (connect to nothing). A zero/unset ingest ceiling or NaN rate
+// takes the platform default, never unlimited. A negative is an operator mistake
+// that Validate refuses rather than silently replacing with the platform ceiling
+// the operator was trying to change.
 func (c *SparkplugConfiguration) ApplyDefaults() {
 	for i := range c.Sources {
 		if strings.TrimSpace(c.Sources[i].HostId) == "" {
@@ -513,10 +517,10 @@ func (c *SparkplugConfiguration) ApplyDefaults() {
 		}
 		c.Sources[i].Commands.applyDefaults()
 	}
-	if !(c.IngestRateLimit.ReadingsPerSecond > 0) {
+	if c.IngestRateLimit.ReadingsPerSecond == 0 || math.IsNaN(c.IngestRateLimit.ReadingsPerSecond) {
 		c.IngestRateLimit.ReadingsPerSecond = DefaultIngestReadingsPerSecond
 	}
-	if c.IngestRateLimit.Burst <= 0 {
+	if c.IngestRateLimit.Burst == 0 {
 		c.IngestRateLimit.Burst = DefaultIngestBurst
 	}
 	if c.Ingest.PublishWindow == nil {
@@ -540,6 +544,12 @@ func (c *SparkplugConfiguration) ApplyDefaults() {
 // misconfiguration from silently mis-routing telemetry, leaking one tenant's data
 // into another, or fighting itself for a STATE identity at the broker.
 func (c *SparkplugConfiguration) Validate() error {
+	if r := c.IngestRateLimit.ReadingsPerSecond; math.IsNaN(r) || math.IsInf(r, 0) || r < 0 {
+		return fmt.Errorf("ingestRateLimit.readingsPerSecond must be a positive number (got %v)", r)
+	}
+	if c.IngestRateLimit.Burst < 0 {
+		return fmt.Errorf("ingestRateLimit.burst must be positive (got %d)", c.IngestRateLimit.Burst)
+	}
 	if w := c.Ingest.PublishWindowSize(); w < 1 || w > messaging.MaxOrderedWindow {
 		return fmt.Errorf("ingest.publishWindow must be between 1 and %d (got %d)", messaging.MaxOrderedWindow, w)
 	}

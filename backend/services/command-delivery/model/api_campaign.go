@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -137,7 +138,8 @@ func DecodeTrigger(doc []byte) (*schedule.Trigger, error) {
 	if err := dec.Decode(&spec); err != nil {
 		return nil, fmt.Errorf("%w: %v", schedule.ErrInvalid, err)
 	}
-	if dec.More() {
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
 		return nil, fmt.Errorf("%w: trailing data after the trigger document", schedule.ErrInvalid)
 	}
 	return schedule.New(spec)

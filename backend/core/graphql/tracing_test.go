@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -44,31 +45,57 @@ func TestGraphQLRequestProducesNamedSpan(t *testing.T) {
 }
 
 func TestDisabledGraphQLTracingAddsZeroAllocations(t *testing.T) {
+	if tracing.Enabled() {
+		t.Fatal("allocation comparison requires disabled tracing")
+	}
 	h := NewHttpHandler(MustParseSchema(`schema { query: Query } type Query { hello: String! }`, &tracingQuery{}), nil, nil)
 	r := httptest.NewRequest(http.MethodPost, "/graphql", nil)
+	request := func(handler http.HandlerFunc) {
+		r.Body = io.NopCloser(strings.NewReader(`{"query":"{ hello }"}`))
+		w := httptest.NewRecorder()
+		handler(w, r)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"hello":"hello"`) {
+			t.Fatal("GraphQL execution behavior changed")
+		}
+	}
+	// Warm schema execution and lazy initialization on both paths before measuring.
+	request(h.serveHTTP)
+	request(h.ServeHTTP)
 	measure := func(handler http.HandlerFunc) float64 {
-		return testing.AllocsPerRun(100, func() {
-			r.Body = io.NopCloser(strings.NewReader(`{"query":"{ hello }"}`))
-			w := httptest.NewRecorder()
-			handler(w, r)
-			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"hello":"hello"`) {
-				t.Fatal("GraphQL execution behavior changed")
-			}
+		return mallocsPerRequest(1000, func() {
+			request(handler)
 		})
 	}
-	// The race detector randomly drops sync.Pool entries, which makes one run's count a
-	// sample, not a constant; the least of several runs is the code's own cost.
-	least := func(handler http.HandlerFunc) float64 {
-		best := measure(handler)
-		for i := 0; i < 8; i++ {
-			if v := measure(handler); v < best {
-				best = v
-			}
-		}
-		return best
+	// Under -race, sync.Pool drops a random share of what is put back, so the misses make
+	// the per-request count a non-integer that moves by a few tenths between trials.
+	// AllocsPerRun floors it, so with the mean near an integer each handler's floor fell on
+	// either side of it independently: the test failed in both directions, and taking the
+	// minimum of several trials could not help. So: unfloored means, trials interleaved
+	// so drift over the run reaches both handlers alike.
+	var base, actual float64
+	for i := 0; i < 10; i++ {
+		base += measure(h.serveHTTP)
+		actual += measure(h.ServeHTTP)
 	}
-	base, actual := least(h.serveHTTP), least(h.ServeHTTP)
-	if actual != base {
-		t.Fatalf("GraphQL tracing adds %g allocations", actual-base)
+	base /= 10
+	actual /= 10
+	// An allocation the disabled path makes on every request adds about 1.0 (measured:
+	// 0.998 without -race, 0.91 to 0.95 with it); the noise moves the difference by
+	// about 0.1. Half an allocation separates the two.
+	if actual-base >= 0.5 {
+		t.Fatalf("disabled GraphQL tracing adds %.3f allocations per request (bare=%.3f, wrapped=%.3f)", actual-base, base, actual)
 	}
+}
+
+func mallocsPerRequest(n int, f func()) float64 {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	f()
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	before := stats.Mallocs
+	for i := 0; i < n; i++ {
+		f()
+	}
+	runtime.ReadMemStats(&stats)
+	return float64(stats.Mallocs-before) / float64(n)
 }

@@ -85,6 +85,8 @@ const (
 	AuditOpMfaEnrolled = "mfa_enrolled"
 	AuditOpMfaDisabled = "mfa_disabled"
 	AuditOpMfaReset    = "mfa_reset"
+	// AuditOpStepUp records an in-session authenticator verification.
+	AuditOpStepUp = "step_up"
 	// AuditOpMfaFailed records a code that was evaluated and refused. AuditOpMfaLocked records
 	// an attempt that armed the identity-wide lock, which is evidence the password is in use by
 	// someone failing the second factor.
@@ -186,7 +188,7 @@ type AuditEvent struct {
 	ClientId *string
 	// SessionId is the sign-in session the acting token descends from (the "sid" claim),
 	// which ties a row to the grant that produced it. NULL when the token carries none —
-	// every console token, and every OAuth token minted before the claim existed. A NULL
+	// console and OAuth access tokens minted before their session binding existed. A NULL
 	// here means "unknown", never "the same session as another NULL row".
 	//
 	// It is an opaque random value and names no person on its own, but it correlates every

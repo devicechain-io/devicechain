@@ -14,7 +14,7 @@ partida para una pregunta, y cada uno enlaza con el siguiente que abriría. El a
 ejecuta fuera del clúster y tiene en su lugar su propio [archivo de panel](#edge-agent-dashboard).
 
 Todo lo que muestran los paneles se construye con las métricas que los servicios ya exportan
-(consulte la [referencia de métricas](./metrics-reference.md)) y con las series estándar de
+(consulta la [referencia de métricas](./metrics-reference.md)) y con las series estándar de
 Kubernetes, de la base de datos y del broker de mensajes que recoge la pila de monitoreo. No hay
 que activar nada para tenerlas.
 
@@ -22,7 +22,7 @@ Las imágenes de esta página se tomaron en una instancia local de un solo nodo 
 
 ## Dónde encontrar los paneles {#finding-the-boards}
 
-[Abra Grafana](./observability.md#acceder-a-grafana) y busque la carpeta
+[Abra Grafana](./observability.md#acceder-a-grafana) y busca la carpeta
 `devicechain-<instancia>`. Cada instancia tiene su propia carpeta y su propia copia de cada panel,
 con el título `DeviceChain — <nombre> [<instancia>]`. Un panel solo lee los datos de su propia
 instancia: no hay selector de instancia, y los paneles de una instancia no pueden mostrar los de
@@ -46,11 +46,11 @@ cuenta el panel, cómo es un valor normal y qué hacer ante uno anómalo. Las co
 valen para todos los paneles.
 
 - **Los indicadores se colorean según lo que significan.** Verde es sano, amarillo significa
-  "mire pronto" y rojo significa "actúe". Un indicador cuyo nombre dice "over the range" o
-  "selected range" cuenta lo ocurrido en el intervalo de tiempo elegido, así que amplíe el
+  "mira pronto" y rojo significa "actúa". Un indicador cuyo nombre dice "over the range" o
+  "selected range" cuenta lo ocurrido en el intervalo de tiempo elegido, así que amplía el
   intervalo para mirar más atrás; uno sin esa indicación muestra el valor actual.
 - **Un indicador que debe mantenerse en cero muestra `0`, no "No data".** Cuando un recuento no
-  tiene nada que contar, el panel sustituye cero a propósito. Un panel que muestra "No data" le
+  tiene nada que contar, el panel sustituye cero a propósito. Un panel que muestra "No data" te
   está diciendo que la serie aún no se ha reportado, lo cual es distinto de que no haya pasado
   nada.
 
@@ -59,7 +59,7 @@ valen para todos los paneles.
 Estos paneles de **retraso acumulado** (backlog) cuentan los mensajes que esperan ser
 entregados a un lector más los ya entregados pero aún no confirmados. Un panel separado de
 pendientes o en vuelo cuenta solo la parte que indica su título. Es la señal de alerta temprana más útil de la plataforma, porque un lector
-más lento que sus productores se retrasa mucho antes de que algo falle. Consulte
+más lento que sus productores se retrasa mucho antes de que algo falle. Consulta
 [Un consumidor que se queda atrás](./observability.md#consumer-backlog) para saber qué significa
 el retraso y cómo se mide.
 
@@ -105,7 +105,7 @@ que no tiene una fuente del lector a la que recurrir.
 Conviene conocer dos límites:
 
 - **La alternativa necesita las métricas del broker.** La pila de monitoreo recoge las métricas del
-  broker, así que en una instalación por defecto la alternativa funciona. Si usa su propio
+  broker, así que en una instalación por defecto la alternativa funciona. Si usas tu propio
   Prometheus sin recoger las del broker, un panel de retraso se queda en blanco cuando su lector se
   detiene, como antes.
 - **Los contadores de pérdida no tienen alternativa.** Los indicadores y líneas que cuentan los
@@ -115,15 +115,15 @@ Conviene conocer dos límites:
   (range)* y *Messages lost unread /s*; y *Messages lost* del resumen. Mientras el lector está
   caído, estos indicadores marcan 0, y eso no demuestra que no se haya perdido nada. Los mensajes
   descartados durante la interrupción se cuentan solo cuando el lector vuelve, como cota inferior
-  y con la hora de su regreso. Durante una interrupción, juzgue el riesgo con *Share of stream
+  y con la hora de su regreso. Durante una interrupción, juzga el riesgo con *Share of stream
   capacity left unread*, que sigue funcionando: al 100 % el flujo empieza a descartar mensajes que
-  el lector no ha visto. Consulte [Mensajes que un consumidor nunca leyó](./observability.md#unread-loss).
+  el lector no ha visto. Consulta [Mensajes que un consumidor nunca leyó](./observability.md#unread-loss).
 
 ![El grupo de lectores del panel de messaging durante la misma interrupción: el retraso sin leer y la proporción de la capacidad del flujo suben juntos para el lector detenido.](/img/grafana/fault-messaging-readers.webp)
 
 *Messaging durante la misma interrupción, en **Readers of streams**. **Unread backlog per reader** sube para el lector detenido (la leyenda lista todos los lectores; pase el cursor sobre la línea para ver su nombre), y **Share of stream capacity left unread** muestra cuánto del límite del flujo ocupa ese retraso: aquí menos del 1 %, lejos del límite.*
 
-Una serie ausente significa "no medido", nunca "nada esperando". Si un panel de retraso está vacío, ninguna de las dos fuentes ha reportado: compruebe que el
+Una serie ausente significa "no medido", nunca "nada esperando". Si un panel de retraso está vacío, ninguna de las dos fuentes ha reportado: comprueba que el
 broker se está recolectando (Messaging, *Broker servers up*) y que existe el durable del lector.
 
 ## El resumen {#overview-board}
@@ -132,7 +132,7 @@ broker se está recolectando (Messaging, *Broker servers up*) y que existe el du
 
 *El resumen con una carga constante. Todos los indicadores de **Is everything up?** están en verde, y las líneas de **Events through the pipeline** se superponen: los eventos recibidos, asociados a un dispositivo, almacenados, aplicados al estado del dispositivo y entregados a las reglas avanzan al mismo ritmo. La etapa cuya línea se separa de las demás es el panel por etapa que hay que abrir.*
 
-**Úselo para responder de un vistazo a "¿está todo en marcha y se está perdiendo algo?".** Empiece
+**Úselo para responder de un vistazo a "¿está todo en marcha y se está perdiendo algo?".** Empieza
 aquí y siga el enlace al panel por etapa de lo que no esté en verde.
 
 | Grupo | Qué muestra |
@@ -163,8 +163,8 @@ diciendo qué se quiere y qué hay:
 La diferencia es la intención. Un área en cero se redujo a mano
 (`kubectl scale … --replicas=0`), por ejemplo en pausa por mantenimiento, así que se muestra como
 un estado propio y no como una caída, y nunca genera alertas. Los dos indicadores nunca cuentan la misma
-área. Si un área aparece en *Areas scaled to 0* y usted no la escaló, vuelva a escalarla: no está
-sirviendo, y nada le avisará de ello. Los indicadores cuentan las áreas y la consola, que también
+área. Si un área aparece en *Areas scaled to 0* y tú no la escalaste, vuelve a escalarla: no está
+sirviendo, y nada te avisará de ello. Los indicadores cuentan las áreas y la consola, que también
 es un deployment de la instancia; el pod de depuración del broker de mensajes queda fuera de ambos,
 y de la alerta, porque no es un área.
 
@@ -187,7 +187,7 @@ aún no reenviados (en espera o en curso).
 
 | Grupo | Qué muestra |
 | --- | --- |
-| Backlog of MQTT messages waiting to be forwarded | El retraso del flujo de captura frente a su límite, su ocupación, los mensajes perdidos antes de ser leídos y los cambios de líder. Sus paneles de retraso tienen la [alternativa del broker](#backlog-panels), salvo la línea de brecha sin leer de *Capture backlog in messages*. Por encima del 10 % y subiendo, añada réplicas de `event-sources`; al 100 % se descartan los mensajes sin leer más antiguos. |
+| Backlog of MQTT messages waiting to be forwarded | El retraso del flujo de captura frente a su límite, su ocupación, los mensajes perdidos antes de ser leídos y los cambios de líder. Sus paneles de retraso tienen la [alternativa del broker](#backlog-panels), salvo la línea de brecha sin leer de *Capture backlog in messages*. Por encima del 10 % y subiendo, añade réplicas de `event-sources`; al 100 % se descartan los mensajes sin leer más antiguos. |
 | Refused or lost at the door | Mensajes rechazados para proteger datos sin leer, retenidos por límites de tasa, rechazados por mal formados, rechazados por un tenant eliminado o por una credencial en el cuerpo MQTT, y publicaciones externas fallidas. |
 | Protection of the MQTT message store | Consumidores requeridos presentes, ajustes del almacén restituidos, flujos de pasarela sin límite de tamaño y conexiones rechazadas porque el almacén está lleno u ocupado. |
 | Device presence and external sources | Cambios de conexión y desconexión no registrados, fuentes MQTT externas sin exactamente un lector y la caché de inicio de sesión de dispositivos. |
@@ -281,7 +281,7 @@ ejecutan.** Vigila el motor de detección y reacción descrito en
 | Rule health and derived publish | Actualizaciones de salud de reglas descartadas, retraso y latencia de escritura, y la proporción de tiempo dedicada a publicar eventos derivados. |
 
 Alertas que lo respaldan: las alertas `Detect*` y `React*`, `GeoFenceSetPublishFailing` y
-`DeviceFactPublishFailing`. Consulte [Cómo operar el motor de detección](./detection-engine.md)
+`DeviceFactPublishFailing`. Consulta [Cómo operar el motor de detección](./detection-engine.md)
 para saber cómo se ejecuta y se escala el consumidor del motor.
 
 ## Command delivery {#command-delivery-board}
@@ -322,7 +322,7 @@ opcionales: en una instancia que no ejecuta uno de ellos, su grupo sigue en el p
 Los cuatro paneles de retraso usan la [alternativa del broker](#backlog-panels).
 
 Alertas que lo respaldan: `ConnectorDispatchRateLimited`, `ReactConnectorEgressShedding` y
-`ReactShedLettersOverBudget`. El grupo de notificaciones no tiene alerta propia; léalo en este
+`ReactShedLettersOverBudget`. El grupo de notificaciones no tiene alerta propia; léelo en este
 panel. El de actualizaciones de software tiene cuatro: `UpdateDownloadsNotConfigured`,
 `UpdateReportsMostlyRefused`, `UpdateRolloutStepsFailing` y `UpdateAttemptsGoingUnknown`.
 
@@ -414,7 +414,7 @@ remote_write:
   - url: https://prometheus.example.com/api/v1/write
 ```
 
-Los paneles de proceso del tablero (memoria, CPU, goroutines, archivos abiertos) seleccionan el job `dc-edge-agent`, así que conserve ese `job_name`: con otro nombre esos paneles aparecen vacíos.
+Los paneles de proceso del tablero (memoria, CPU, goroutines, archivos abiertos) seleccionan el job `dc-edge-agent`, así que conserva ese `job_name`: con otro nombre esos paneles aparecen vacíos.
 
 El puerto por defecto del agente, 9090, es también el puerto de escucha por defecto de Prometheus, así
 que cambia uno de los dos: arranca el colector en otro, como abajo, o define `local.metricsPort` en la

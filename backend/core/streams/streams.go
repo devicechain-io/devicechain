@@ -249,7 +249,7 @@ type Stream struct {
 	Writers []string
 	// RecorderWrites declares that every area that runs the max-delivery recorder writes this
 	// stream, and so replaces a hand-kept list of them (see RecorderAreas). The recorder runs
-	// in any area with a durable reader, and it letters that area's give-ups here, so "which
+	// in any area with a captured durable reader, and it letters that area's give-ups here, so "which
 	// areas write dead letters" and "which areas read" are one fact stated twice - and were two
 	// lists, which disagreed: dashboard-management reads entity-deleted, runs the recorder, and
 	// was in neither Areas list. Deriving the writers makes the disagreement unrepresentable.
@@ -258,7 +258,7 @@ type Stream struct {
 	// the mode decides what the area may do and what the consumer is called (see ReadMode).
 	// An area absent from the list has no reader on the stream.
 	//
-	// A MaxDeliveries stream (ShapeAdvisory) declares none: each area with a durable reader
+	// A MaxDeliveries stream (ShapeAdvisory) declares none: each area with a captured durable reader
 	// reads it through its max-delivery recorder, so they are derived the same way
 	// RecorderWrites derives its writers (see ReadersOf).
 	Readers []Reader
@@ -272,6 +272,15 @@ type Stream struct {
 	DurabilityWhy string
 	// Shape decides the subject the stream captures and that producers publish to.
 	Shape Shape
+	// MaxDeliveriesUncaptured, when non-empty, is the reason the max-deliveries advisory
+	// stream does not capture this stream's max-delivery advisories.
+	//
+	// 🔴 The advisory stream's subject list is checked EXACTLY by every service of every
+	// earlier release. A stream added after v1.3.0 that joins the list would stop every
+	// pod of the previous release that restarts during a rolling upgrade. A stream added
+	// to a minor release therefore declares itself uncaptured, until a release whose
+	// services tolerate a longer list has been the previous release.
+	MaxDeliveriesUncaptured string
 	// MaxBytesCap, when positive, is an upper bound on this stream's disk ceiling,
 	// applied ON TOP of its tier's rather than instead of it. It exists for a stream
 	// whose tier is right but whose tier ceiling would reserve far more than it can
@@ -562,9 +571,12 @@ const (
 	// may have changed which tracked relationships it has, so a projection keyed by device
 	// (device-state's live view) can keep a customer-scoped stamp current between events.
 	DeviceOwnership = "device-ownership"
-	AlarmEvents     = "alarm-events"
-	RaiseAlarm      = "raise-alarm"
-	FailedDecode    = "failed-decode"
+
+	// AgentActuationKills carries tenant kill facts to local area fences.
+	AgentActuationKills = "agent-actuation-kills"
+	AlarmEvents         = "alarm-events"
+	RaiseAlarm          = "raise-alarm"
+	FailedDecode        = "failed-decode"
 
 	// FailedEvents carries an event the resolve/persist pipeline could not process:
 	// device-management publishes one when resolution fails, event-management when
@@ -604,8 +616,8 @@ const (
 	// apart by subject, which the envelope carries anyway (core/deadletter).
 	DeadLetters = "dead-letters"
 
-	// MaxDeliveries captures the broker's max-delivery advisory for every platform
-	// durable: the notice nats-server publishes when it stops redelivering a message
+	// MaxDeliveries captures the broker's max-delivery advisory for platform
+	// durables whose streams MaxDeliveriesCaptured includes: the notice nats-server publishes when it stops redelivering a message
 	// because every delivery ran out. A message that ends that way with no outcome
 	// recorded — a pod stopped mid-handling, a handler that ran past its window — never
 	// reaches a service's own dead-letter arm, so this capture is the only place its
@@ -705,6 +717,11 @@ const integrationUplinksMaxBytesCap = 32 << 20
 // thousands. It is small and fixed because every install creates the stream whether or not anything
 // reads it, and an uncapped Cold stream reserves 128 MiB, which moves the published sizing table.
 const lpwanDownlinkEventsMaxBytesCap = 8 << 20
+
+// agentActuationKillsMaxBytesCap is the ceiling of the agent-actuation-kills stream. A kill is a
+// few hundred bytes and an operator throws one by hand, so 1 MiB holds thousands; the cap keeps the
+// stream from reserving a full cold-stream ceiling up front (see MaxBytesCap).
+const agentActuationKillsMaxBytesCap = 1 << 20
 
 // DeadLetter returns the dead-letter suffix derived from a base suffix.
 //
@@ -1031,7 +1048,7 @@ var All = []Stream{
 	// Transient. With the adapter off nothing reads it and the broker's age limit trims it.
 	// Window: event-sources publishes it with no Nats-Msg-Id; the consumer is idempotent.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: LpwanDownlinkEvents, Durability: durability.Transient, DurabilityWhy: "a network-server report not yet matched to its command; a lost report is settled by the pending record's deadline as unanswered", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources"}, Readers: []Reader{{"outbound-connectors", ReadDurable}}, Tier: Cold, MaxBytesCap: lpwanDownlinkEventsMaxBytesCap, DeadLetterKind: kindControlFact, Why: "network-server downlink reports — scale with commands sent"},
+	{Suffix: LpwanDownlinkEvents, MaxDeliveriesUncaptured: "added after v1.3.0, whose services check the advisory stream's subjects exactly; a report that exhausts its deliveries is settled by its pending record's deadline as unanswered, so no dead letter is needed to repair it", Durability: durability.Transient, DurabilityWhy: "a network-server report not yet matched to its command; a lost report is settled by the pending record's deadline as unanswered", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources"}, Readers: []Reader{{"outbound-connectors", ReadDurable}}, Tier: Cold, MaxBytesCap: lpwanDownlinkEventsMaxBytesCap, DeadLetterKind: kindControlFact, Why: "network-server downlink reports — scale with commands sent"},
 
 	// Emitted post-commit on profile publish and rollback, carrying the ENABLED
 	// rules of the now-active version, keyed on profile-version token, and the
@@ -1088,6 +1105,9 @@ var All = []Stream{
 	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
 	{Suffix: DeviceOwnership, Durability: durability.Rebuildable, DurabilityWhy: "ownership changes are projected from the stored relationships", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a relationship edit — an operator assigning or claiming a device"},
+
+	// Small control facts; the window deduplicates retries of the same EventID.
+	{Suffix: AgentActuationKills, Durability: durability.Rebuildable, DurabilityWhy: "the policy head retains the kill state and operators can repeat a kill", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"user-management"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Cold, MaxBytesCap: agentActuationKillsMaxBytesCap, DeadLetterKind: kindControlFact, Why: "tenant agent actuation kills"},
 
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).
@@ -1161,14 +1181,12 @@ var All = []Stream{
 	//     the next pull of the exhausted durable, and only if something is subscribed to
 	//     its subject at that moment. This stream is that something, so an advisory for a
 	//     stream this capture does not list (yet) is produced into nothing.
-	//  2. AN OLD POD CAN FLIP THE SUBJECT LIST BACK. Every area reconciles this stream's
-	//     subjects on start, so during a rollout a restarting old pod can drop a stream
-	//     newly declared here; that stream's advisories have no interest until a new pod
-	//     restarts. The same flip applies to each area's recorder durable, whose filter is
-	//     reconciled to the starting pod's readers: an old pod of an area restarting
-	//     mid-rollout drops a newly added reader's advisory subject from it. Those
-	//     advisories are still captured and wait on this queue until a new pod of the area
-	//     restarts, so they are late, not lost (the alert over this stream sees the wait).
+	//  2. THE SUBJECT LIST MUST SURVIVE OLD PODS RESTARTING. Services of earlier releases
+	//     verify the list exactly rather than reconciling it. Streams added in a minor
+	//     release declare MaxDeliveriesUncaptured so this list stays unchanged. Each
+	//     area's recorder durable still follows that starting pod's captured readers:
+	//     an old pod can drop a newly added reader's filter. Its advisories wait on this
+	//     queue until a new pod restores the filter, so they are late, not lost.
 	//  3. IT IS A WORK QUEUE, so an acked advisory leaves the stream and its message count
 	//     is the unrecorded backlog. That is what the MaxDeliveryRecordsWaiting alert
 	//     reads, and why nothing may read this stream's cursor gaps as unread loss.
@@ -1227,6 +1245,13 @@ func TierFor(suffix string) Tier {
 // error, no delivery, nothing to indicate the addressing was wrong.
 func ShapeOf(suffix string) Shape {
 	return bySuffix[suffix].Shape
+}
+
+// MaxDeliveriesCaptured reports whether a declared stream's max-delivery advisories
+// are captured. Advisory-shaped and explicitly uncaptured streams are excluded.
+func MaxDeliveriesCaptured(suffix string) bool {
+	s, ok := bySuffix[suffix]
+	return ok && s.Shape != ShapeAdvisory && s.MaxDeliveriesUncaptured == ""
 }
 
 // IsPerDevice reports whether a suffix's concrete subject appends a device token.

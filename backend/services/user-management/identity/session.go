@@ -87,16 +87,16 @@ type sessionRecord struct {
 	ConnectionKind iam.IdpKind `json:"connection_kind,omitempty"`
 	Anchor         time.Time   `json:"anchor"`
 	// Amr is how a PASSWORD sign-in proved who the person is (auth.AmrPasswordOnly,
-	// AmrPasswordOTP, AmrPasswordRecovery). It is written once, by startSession, and every
-	// token minted from this sign-in takes its "amr" claim from HERE and nowhere else: never
+	// AmrPasswordOTP, AmrPasswordRecovery). Written by startSession and advanced by StepUp,
+	// every token minted from this sign-in takes its "amr" claim from HERE and nowhere else: never
 	// from a token the caller presented, which a forged or older refresh token could
 	// overstate. A record written by a build that predates it has none and reads as no
 	// second factor, so a tenant that requires one refuses it. A single sign-on records none.
 	Amr []string `json:"amr,omitempty"`
 	// MfaAt is when this sign-in last VERIFIED a second factor: the code that completed it. Every
 	// token minted from the sign-in carries it as "mfa_time", copied unchanged through every
-	// refresh, so a step-up check reads how long ago a person actually presented a factor rather
-	// than how long ago a token was minted. Nil when the sign-in presented none, and for a record
+	// refresh until StepUp advances it. A step-up check reads when a person presented a factor,
+	// rather than when a token was minted. Nil when the sign-in presented none, and for a record
 	// written before it existed, which reads as "no recent factor".
 	MfaAt *time.Time `json:"mfa_at,omitempty"`
 }
@@ -212,7 +212,22 @@ func (m *Manager) loadSession(sid auth.SessionID, email string) (*sessionRecord,
 	if rec.Email != email {
 		return nil, errSessionEnded
 	}
+	// A password sign-in has an absolute lifetime of one refresh TTL from its anchor. The
+	// record's own expiry is a per-message KV TTL that any rewrite (a step-up) restarts, so the
+	// ceiling is enforced HERE, on every load, and not left to the bucket. Single sign-on
+	// carries its own ceiling (admitSsoSession).
+	if rec.Method == SessionMethodPassword && !rec.Anchor.IsZero() && m.clock().Sub(rec.Anchor) > m.sessionCeiling() {
+		return nil, errSessionEnded
+	}
 	return &rec, nil
+}
+
+// sessionCeiling is the absolute lifetime of a password sign-in.
+func (m *Manager) sessionCeiling() time.Duration {
+	if m.refreshTTL <= 0 {
+		return auth.DefaultRefreshTTL
+	}
+	return m.refreshTTL
 }
 
 // sessionLive reports whether the sign-in a credential names is still open.
@@ -258,6 +273,14 @@ func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.I
 	rec, err := m.loadSession(sid, id.Email)
 	if err != nil {
 		return nil, err
+	}
+	return m.admitTenantRecord(ctx, rec, id, tenant, su)
+}
+
+// admitTenantRecord applies admission to a sign-in already loaded by the caller.
+func (m *Manager) admitTenantRecord(ctx context.Context, rec *sessionRecord, id *iam.Identity, tenant string, su bool) (*signIn, error) {
+	if rec == nil || rec.Email != id.Email {
+		return nil, errSessionEnded
 	}
 	if rec.Method != SessionMethodSso {
 		if err := m.admitPasswordSession(ctx, rec, id, tenant, su); err != nil {

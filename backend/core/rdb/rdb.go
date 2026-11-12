@@ -80,7 +80,12 @@ func (rdb *RdbManager) countAndOrder(ctx context.Context, mdl Sortable,
 	if filters != nil {
 		result = filters(result)
 	}
-	_ = result.Count(&count)
+	result = result.Count(&count)
+	if result.Error != nil {
+		// Keep the failed handle so callers' existing Error checks see the cause.
+		// A failed COUNT cannot supply a total or authorize a data SELECT.
+		return result, 0
+	}
 	total := int32(count)
 
 	// Execute data query.

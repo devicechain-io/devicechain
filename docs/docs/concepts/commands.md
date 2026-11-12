@@ -272,12 +272,12 @@ lowered per tenant.
 
 #### Retrying a ceiling refusal {#retrying-a-ceiling-refusal}
 
-`HELD_CEILING_EXCEEDED` is the **only temporary coded refusal** the enqueue path produces. (If a service the
-enqueue depends on is unreachable, the enqueue fails with an uncoded `validation is unavailable` error,
-which can succeed on a retry once the service is back.) Every other coded
-rejection describes a request that will be exactly as wrong on the next attempt; this one clears on
-its own as the backlog goes out. It is the one code worth retrying, and the rest are worth
-surfacing to a person. See
+`HELD_CEILING_EXCEEDED` is the **only temporary coded rejection** the enqueue path produces.
+It clears on its own as the backlog goes out. A dependency outage instead fails the enqueue
+with a GraphQL error whose `extensions.code` is `UNAVAILABLE`; no command was created and
+you can retry the request unchanged once the dependency is back. Other dependency failures
+remain uncoded. Every other coded rejection describes a request that will be exactly as wrong
+on the next attempt and should be surfaced to a person. See
 [Sending a command](../guides/sending-commands.md#when-an-enqueue-is-refused).
 
 ### Devices that fetch their commands over HTTP {#http-command-pull}
@@ -308,11 +308,14 @@ A command carries `deliveredTime` and `deliveryEvidence` once the platform has e
 
 ### Who reports the outcome {#who-reports-the-outcome}
 
-Only the device can report success. `SUCCESSFUL` and a device-reported `FAILED` are the two
-outcomes only the device can produce. (The exception is a Sparkplug write, whose success the
-platform infers from the node's reported state, which can mean the value was already there; see
-[Sparkplug B](./sparkplug.md).) Every other terminal state is one the platform writes on its
-own:
+A command is normally settled by the device: it reports `SUCCESSFUL` or a device-reported
+`FAILED`. The exceptions are a Sparkplug write, whose success the platform infers from the node's
+reported state, which can mean the value was already there (see [Sparkplug B](./sparkplug.md)),
+and a channel that has no device answer to wait for, such as an
+[unconfirmed LoRaWAN downlink](../guides/inbound-integrations.md#lorawan-downlink). An unconfirmed
+downlink is marked `SUCCESSFUL` once the network server queues it, without evidence that the device
+received it. A confirmed downlink is settled from the device's acknowledgement. Every other terminal
+state is one the platform writes on its own:
 
 - `TIMEOUT`, `EXPIRED` or `CANCELLED`;
 - `FAILED` because the transport cannot carry the command at all;

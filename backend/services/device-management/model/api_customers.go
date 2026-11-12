@@ -60,10 +60,8 @@ func (api *Api) CreateCustomerType(ctx context.Context, request *CustomerTypeCre
 // type in the argument and another in the payload silently updated the second and
 // got a 200 back for it.
 //
-// Each assignment folds the field's three states onto the stored value: absent
-// keeps it, null clears it, a value sets it. Reading `found.X` as the "current"
-// argument is what makes an omitted field a no-op, so these must stay assignments
-// FROM the loaded record rather than from the request alone.
+// Only named columns are written; omitted fields remain untouched even when
+// another writer changes them after the read. Null clears a nullable field.
 func (api *Api) UpdateCustomerType(ctx context.Context, token string,
 	request *CustomerTypeUpdateRequest) (*CustomerType, error) {
 	matches, err := api.CustomerTypesByToken(ctx, []string{token})
@@ -75,28 +73,68 @@ func (api *Api) UpdateCustomerType(ctx context.Context, token string,
 	}
 
 	found := matches[0]
-	found.Name = request.Name.ApplyToNullString(found.Name)
-	found.Description = request.Description.ApplyToNullString(found.Description)
-	found.ImageUrl = request.ImageUrl.ApplyToNullString(found.ImageUrl)
-	found.Icon = request.Icon.ApplyToNullString(found.Icon)
-	found.BackgroundColor = request.BackgroundColor.ApplyToNullString(found.BackgroundColor)
-	found.ForegroundColor = request.ForegroundColor.ApplyToNullString(found.ForegroundColor)
-	found.BorderColor = request.BorderColor.ApplyToNullString(found.BorderColor)
+	assignments := map[string]any{}
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(found.Name)
+	}
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(found.Description)
+	}
+	if request.ImageUrl.Set {
+		assignments["image_url"] = request.ImageUrl.ApplyToNullString(found.ImageUrl)
+	}
+	if request.Icon.Set {
+		assignments["icon"] = request.Icon.ApplyToNullString(found.Icon)
+	}
+	if request.BackgroundColor.Set {
+		assignments["background_color"] = request.BackgroundColor.ApplyToNullString(found.BackgroundColor)
+	}
+	if request.ForegroundColor.Set {
+		assignments["foreground_color"] = request.ForegroundColor.ApplyToNullString(found.ForegroundColor)
+	}
+	if request.BorderColor.Set {
+		assignments["border_color"] = request.BorderColor.ApplyToNullString(found.BorderColor)
+	}
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
 	if err != nil {
 		return nil, err
 	}
-	found.Metadata = metadataJSON
-	found.SemanticTypes, err = api.semanticTypesOnUpdate(ctx, request.SemanticTypes, found.SemanticTypes)
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
+	semanticTypes, err := api.semanticTypesOnUpdate(ctx, request.SemanticTypes, found.SemanticTypes)
 	if err != nil {
 		return nil, err
 	}
 
-	result := api.RDB.DB(ctx).Save(found)
-	if result.Error != nil {
-		return nil, result.Error
+	if request.SemanticTypes.Set {
+		assignments["semantic_types"] = semanticTypes
 	}
-	return found, nil
+
+	if len(assignments) == 0 {
+		return found, nil
+	}
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		res := rdb.AdvancingFrom(tx, found.UpdatedAt).Model(found).Omit(clause.Associations).
+			Where("id = ?", found.ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	matches, err = api.CustomerTypesById(ctx, []uint{found.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // Get customer types by id.
@@ -254,16 +292,11 @@ func (api *Api) UpdateCustomer(ctx context.Context, token string, request *Custo
 	}
 
 	updated := matches[0]
+	assignments := make(map[string]any)
 
-	// The type hop resolves BEFORE anything is written, so an unknown customer type
-	// refuses the WHOLE update rather than applying the fields it liked first. The
-	// nil guard is not decoration: the preload comes back nil for a dangling FK, and
-	// the comparison this replaces dereferenced it unconditionally.
-	currentTypeToken := ""
-	if updated.CustomerType != nil {
-		currentTypeToken = updated.CustomerType.Token
-	}
-	retypeTo, retype, err := resolveRequiredTypeRef(request.CustomerTypeToken, currentTypeToken, "customerTypeToken")
+	// Resolve every explicitly named type before writing anything, including a
+	// request naming the type read above. Omitted references are left alone.
+	retypeTo, retype, err := resolveRequiredTypeRef(request.CustomerTypeToken, "", "customerTypeToken")
 	if err != nil {
 		return nil, err
 	}
@@ -275,27 +308,40 @@ func (api *Api) UpdateCustomer(ctx context.Context, token string, request *Custo
 		if len(types) == 0 {
 			return nil, gorm.ErrRecordNotFound
 		}
-		updated.CustomerType = types[0]
-		// Belt-and-braces: gorm's Save syncs a belongs-to FK from the association it is
-		// given, so this is not load-bearing the way the device version is (that one is
-		// READ back by the post-commit roster resolve). It is set anyway so the in-memory
-		// value the caller is handed back agrees with the row.
-		updated.CustomerTypeId = types[0].ID
+		assignments["customer_type_id"] = types[0].ID
 	}
 
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
-	if err != nil {
-		return nil, err
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(updated.Name)
 	}
-	updated.Metadata = metadataJSON
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(updated.Description)
+	}
+	if request.Metadata.Set {
+		metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.Value)
+		if err != nil {
+			return nil, err
+		}
+		assignments["metadata"] = metadataJSON
+	}
+	if len(assignments) == 0 {
+		return updated, nil
+	}
 
-	result := api.RDB.DB(ctx).Save(updated)
+	// Only named columns are written: values read above for omitted fields may
+	// already be stale. The preloaded type must not be saved as an association.
+	result := api.RDB.DB(ctx).Model(updated).Omit(clause.Associations).Updates(assignments)
 	if result.Error != nil {
 		return nil, result.Error
 	}
-	return updated, nil
+	reloaded, err := api.CustomersById(ctx, []uint{updated.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(reloaded) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return reloaded[0], nil
 }
 
 // Get customers by id.

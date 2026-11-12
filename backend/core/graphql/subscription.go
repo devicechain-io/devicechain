@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/gorilla/websocket"
 	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/rs/zerolog/log"
@@ -27,6 +28,14 @@ import (
 // legacy `graphql-ws` (subscriptions-transport-ws) subprotocol, which we do not
 // speak. Clients MUST negotiate exactly this subprotocol (ADR-037).
 const wsSubprotocol = "graphql-transport-ws"
+
+// MaxSubscriptionsPerConnection is the fixed per-connection ceiling on concurrent
+// subscription operations. It is generous on purpose: the dashboard hub opens one
+// subscription per distinct device on a shared per-area socket, and an anchor-bound
+// widget can expand to a full member page (500 devices), so no first-party client
+// reaches 1000. It is not a per-tenant ceiling across sockets. It is not
+// configurable and not rendered in any config document, so old pods start unchanged.
+const MaxSubscriptionsPerConnection = 1000
 
 const (
 	// connectionInitWait bounds how long the server waits for the client's
@@ -137,6 +146,9 @@ type SubscriptionHandler struct {
 	// one.
 	MaxMessageBytes int64
 
+	// maxOps overrides the operation ceiling for tests; zero uses the fixed default.
+	maxOps int
+
 	// mu guards conns, the set of connections that have been upgraded and have not
 	// yet finished. It is what makes Shutdown possible at all: net/http's Shutdown
 	// neither closes nor waits for HIJACKED connections, and every WebSocket here is
@@ -219,6 +231,14 @@ func (h *SubscriptionHandler) readLimit() int64 {
 		return h.MaxMessageBytes
 	}
 	return config.DefaultGraphQLMaxSubscriptionMessageBytes
+}
+
+// operationLimit resolves the per-connection ceiling, including for zero-value handlers.
+func (h *SubscriptionHandler) operationLimit() int {
+	if h.maxOps > 0 {
+		return h.maxOps
+	}
+	return MaxSubscriptionsPerConnection
 }
 
 // ServeHTTP upgrades the request to a WebSocket and runs the connection.
@@ -606,6 +626,12 @@ func (c *wsConnection) startOperation(authedCtx context.Context, msg wsMessage) 
 		c.closeCode(closeSubscriberExists, "subscriber for "+msg.ID+" already exists")
 		return
 	}
+	maxOps := c.handler.operationLimit()
+	if len(c.ops) >= maxOps {
+		c.mu.Unlock()
+		c.writeErrorCode(msg.ID, limit.Exceeded("subscriptions per connection", maxOps+1, maxOps).Error(), limit.Code)
+		return
+	}
 	opCtx, cancel := context.WithCancel(authedCtx)
 	c.ops[msg.ID] = cancel
 	c.mu.Unlock()
@@ -707,6 +733,15 @@ func (c *wsConnection) writeError(id, message string) {
 	payload, _ := json.Marshal([]struct {
 		Message string `json:"message"`
 	}{{Message: message}})
+	c.write(wsMessage{ID: id, Type: msgError, Payload: payload})
+}
+
+// writeErrorCode sends an operation-level error with a machine-readable code.
+func (c *wsConnection) writeErrorCode(id, message, code string) {
+	payload, _ := json.Marshal([]struct {
+		Message    string            `json:"message"`
+		Extensions map[string]string `json:"extensions"`
+	}{{Message: message, Extensions: map[string]string{"code": code}}})
 	c.write(wsMessage{ID: id, Type: msgError, Payload: payload})
 }
 

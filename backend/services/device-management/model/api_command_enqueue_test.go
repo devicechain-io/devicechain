@@ -25,7 +25,7 @@ func newEnqueueTestApi(t *testing.T) *Api {
 	}
 	// PublishDeviceProfile snapshots every definition list and reconciles rule scope
 	// refs, so all of those tables must exist even though this gate only reads commands.
-	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
+	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{},
 		&CommandDefinition{}, &MetricDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
