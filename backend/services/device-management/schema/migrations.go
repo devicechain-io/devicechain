@@ -70,5 +70,6 @@ var (
 		NewAgentProposalsSchema(),
 		NewCommandEncoderSchema(),
 		NewAgentSafetySchema(),
+		NewAutomationReviewsSchema(),
 	}
 )
