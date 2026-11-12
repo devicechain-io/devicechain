@@ -746,6 +746,82 @@ byte. The printed decoder declares one saved vector; set it on a profile that de
 `humidity` and `battery.voltage` as doubles and `door` as a boolean (the same metrics default mode
 stores), publish, and the stored values are the ones default mode would have stored.
 
+### Downlinks and the acknowledgement feed (`--lorawan-downlink-listen`)
+
+In `--lorawan-ns chirpstack` mode, `--lorawan-downlink-listen :8085` also plays
+ChirpStack v4's REST queue. The equivalent env var is
+`DC_SIM_LORAWAN_DOWNLINK_LISTEN`. Set the queue's API key in
+`DC_SIM_LORAWAN_API_KEY`; it has no command-line flag. Configure the platform's
+outbound connector with this base URL and API key. The listener starts before
+the first uplink and shuts down when the run ends. TTS mode refuses this listener.
+
+The endpoint is `POST /api/devices/{devEui}/queue`; a base URL path prefix is
+also accepted. It takes ChirpStack's envelope:
+
+```json
+{"queueItem":{"devEui":"70B3D57ED0050004","fPort":12,"confirmed":true,"data":"ANcD","expiresAt":"2030-01-01T00:00:00Z"}}
+```
+
+It answers `200 {"id":"<uuid>"}`. `expiresAt` is optional and logged; the
+simulator does not expire queued items. Empty data is allowed. Requests are
+limited to 64 KiB. Missing or wrong bearer keys get HTTP 401 with gRPC code 16;
+devices outside `--deveui` get 404 with code 5; malformed bodies, mismatched
+DevEUIs, ports outside 1..223 or invalid standard padded base64 get 400 with
+code 3. Other paths get 404 with code 5; other methods get 405. Refusals carry
+JSON `{"code":N,"message":"..."}` and never queue an item.
+Once the run has stopped taking downlinks, the queue refuses with HTTP 409 (gRPC code 9).
+
+Confirmed items follow class A timing. Before each device uplink POST, the
+simulator snapshots that device's pending items. After that POST, it sends a
+`?event=txack` report followed by `?event=ack` for each item in the snapshot.
+An item queued during an uplink POST waits for the next uplink. Both reports
+carry the queue response's ID and the same per-device `fCntDown`, starting at 0
+and increasing for each reported item. Reports use the integration bearer token
+and honor `--integration-host`, just like uplinks.
+
+`--lorawan-ack ack|nack|none` (or `DC_SIM_LORAWAN_ACK`, default `ack`) controls
+these reports. `ack` reports `acknowledged:true`; `nack` sends txack then an ack
+with `acknowledged:false`, as when ChirpStack gives up waiting. `none` accepts
+items but never reports them, to exercise the platform's deadline path.
+Unconfirmed items are accepted and logged but never reported in any mode.
+An explicit `--lorawan-ack` requires the listener.
+
+After `--uplinks` rounds, the run stays up until every pending confirmed item
+has been answered in ack or nack mode. It sends additional real uplinks at
+`--emit-interval`, keeping their counters increasing; a zero interval uses 1s
+while waiting. `--uplinks 0` is allowed with the listener and keeps uplinking
+until interrupted. With a listener, SIGINT or SIGTERM prints the summary and exits 0;
+an uplink-only run keeps its previous behaviour, returning the cancellation error.
+Transport errors still make the run fail.
+
+The listener writes JSON lines to stdout, followed by the usual run summary (a real run against an
+instance whose rule sent one confirmed command; a refusal is logged as
+`{"event":"downlink_refused","reason":"invalid bearer key","status":401}`):
+
+```json
+{"ack":"ack","addr":"127.0.0.1:8085","event":"downlink_listening"}
+{"event":"downlink_queued","devEui":"70B3D57ED0050004","id":"3ffed47b-dfa3-4d57-a4a9-4ce59dc03d31","fPort":12,"hex":"00d703","confirmed":true,"expiresAt":"2026-11-11T17:30:19Z"}
+{"devEui":"70B3D57ED0050004","event":"downlink_reported","id":"3ffed47b-dfa3-4d57-a4a9-4ce59dc03d31","report":"txack","status":202}
+{"acknowledged":true,"devEui":"70B3D57ED0050004","event":"downlink_reported","id":"3ffed47b-dfa3-4d57-a4a9-4ce59dc03d31","report":"ack","status":202}
+{"ns":"chirpstack","sent":12,"resent":0,"statuses":{"202":12},"errors":0,"queued":1,"reported":{"ack":{"202":1},"txack":{"202":1}},"runId":"1794418086190782000"}
+```
+
+Queued lines include `expiresAt` when supplied. Refusals never log the presented
+key. The summary adds `"queued":1` and
+`"reported":{"txack":{"202":1},"ack":{"202":1}}` when a listener is used.
+Report transport failures use status `"0"` in `reported`, increment `errors`,
+and set `firstError`, as uplink failures do. `statuses` continues to count only
+uplink responses. Without a listener the summary has no new fields.
+
+For example, with `DC_SIM_INTEGRATION_TOKEN` and `DC_SIM_LORAWAN_API_KEY` set:
+
+```sh
+dc-simulator --lorawan-ns chirpstack \
+  --integration-url https://host/api/integrations/acme/lora \
+  --deveui 70B3D57ED0050004 --lorawan-downlink-listen :8085 \
+  --lorawan-ack ack --uplinks 0 --emit-interval 1s
+```
+
 ### X.509 (mTLS) device mode (`--x509`)
 
 `--x509` plays devices that authenticate with a client certificate instead of a token. It is a

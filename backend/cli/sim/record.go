@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dcctl/dcdir"
 )
@@ -45,15 +46,18 @@ type Endpoints struct {
 // ignores the dcctl-only name/controlAddr. Keep the shared fields' json tags in
 // lockstep with dc-simulator/sim/handshake.go.
 type Record struct {
-	Name        string    `json:"name"`
-	Tenant      string    `json:"tenant"`
-	SimEmail    string    `json:"simEmail"`
-	SimPassword string    `json:"simPassword"`
-	Endpoints   Endpoints `json:"endpoints"`
-	ManifestId  string    `json:"manifestId"`
-	Seed        int64     `json:"seed"`
-	InstanceId  string    `json:"instanceId"`
-	ControlAddr string    `json:"controlAddr"`
+	Episode     string          `json:"episode,omitempty"`
+	StartedAt   *time.Time      `json:"startedAt,omitempty"`
+	Windows     []EpisodeWindow `json:"windows,omitempty"`
+	Name        string          `json:"name"`
+	Tenant      string          `json:"tenant"`
+	SimEmail    string          `json:"simEmail"`
+	SimPassword string          `json:"simPassword"`
+	Endpoints   Endpoints       `json:"endpoints"`
+	ManifestId  string          `json:"manifestId"`
+	Seed        int64           `json:"seed"`
+	InstanceId  string          `json:"instanceId"`
+	ControlAddr string          `json:"controlAddr"`
 	// MqttTLSInsecure skips verification of the MQTT gateway's server certificate.
 	// A local bring-up terminates TLS with a self-signed cert, so a sim's command far
 	// end cannot connect there without it; a deployment reachable at its cert's SAN
