@@ -22,6 +22,10 @@ import (
 // for the max age reads as rotation disabled or an arbitrary age.
 const MaxSigningKeyDays = int(math.MaxInt64 / int64(24*time.Hour))
 
+// MaxDurationSeconds is the largest whole number of seconds a time.Duration can hold;
+// a larger value overflows when converted.
+const MaxDurationSeconds = int(math.MaxInt64 / int64(time.Second))
+
 // AuthConfiguration controls JWT issuance, signing-key rotation, and the
 // one-time bootstrap admin.
 type AuthConfiguration struct {
@@ -374,6 +378,16 @@ func (c *UserManagementConfiguration) Validate() error {
 	}
 	if c.Auth.SigningKeyRetentionDays < 0 || c.Auth.SigningKeyRetentionDays > MaxSigningKeyDays {
 		return fmt.Errorf("auth.signingKeyRetentionDays must be between 0 and %d (got %d): 0 takes the default of 8 days", MaxSigningKeyDays, c.Auth.SigningKeyRetentionDays)
+	}
+	// Bound the raw seconds before the settle-floor check converts them to durations.
+	if c.TenantPurge.IntervalSeconds > MaxDurationSeconds {
+		return fmt.Errorf("tenantPurge.intervalSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.TenantPurge.IntervalSeconds)
+	}
+	if c.TenantPurge.SettleSeconds > MaxDurationSeconds {
+		return fmt.Errorf("tenantPurge.settleSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.TenantPurge.SettleSeconds)
+	}
+	if c.TenantPurge.TokenHoldSeconds > MaxDurationSeconds {
+		return fmt.Errorf("tenantPurge.tokenHoldSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.TenantPurge.TokenHoldSeconds)
 	}
 	// A negative interval disables the coordinator, which is a supported lever. A
 	// negative SETTLE is not the same kind of knob: it would mean "complete the purge

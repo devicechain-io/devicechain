@@ -1389,6 +1389,7 @@ note "an explicit 0 renders the default threshold, and a set hold is still doubl
 # two windows (never under 30m), from the same service setting the coordinator ticks on.
 # 0 means the default and a negative means disabled, and both must render the default
 # rather than a zero-length window, which promtool would reject or which would never fire.
+# The largest interval the schema accepts must still render durations Prometheus accepts.
 say "rendering TenantPurgeCoordinatorFailing from the pass interval"
 purge_fail_window() { # <intervalSeconds> -> "<window> <for>", or nothing
   helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=$root_key" \
@@ -1396,7 +1397,7 @@ purge_fail_window() { # <intervalSeconds> -> "<window> <for>", or nothing
     -s templates/prometheusrule-tenant-purge.yaml |
     awk '/alert: TenantPurgeCoordinatorFailing/{f=1} f&&/expr:/{match($0,/\[[0-9]+s\]/); w=substr($0,RSTART+1,RLENGTH-3)} f&&/for:/{sub(/.*for: /,""); sub(/s$/,""); print w" "$0; f=0}'
 }
-for want in "0:600 1800" "-1:600 1800" "60:600 1800" "600:1800 3600"; do
+for want in "0:600 1800" "-1:600 1800" "60:600 1800" "600:1800 3600" "1537228672:4611686016 9223372032" "9223372036:9223372036 9223372036"; do
   got="$(purge_fail_window "${want%%:*}")"
   [ "$got" = "${want#*:}" ] ||
     fail "intervalSeconds: ${want%%:*} rendered TenantPurgeCoordinatorFailing's window/for as '${got}', not '${want#*:}'"
