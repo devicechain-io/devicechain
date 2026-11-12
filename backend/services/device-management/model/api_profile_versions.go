@@ -13,6 +13,7 @@ import (
 	"time"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
@@ -124,6 +125,13 @@ func parseProfileSnapshot(raw datatypes.JSON) (*ProfileSnapshot, error) {
 	return snap, nil
 }
 
+// MaxEnabledDetectionRulesPerPublish is the most rules event-processing's validation
+// gate compiles per call (graphql.MaxRulesPerValidation there); it refuses a longer
+// list. Checking it here first gives the author a LIMIT_EXCEEDED that names the bound
+// instead of the fail-closed "validation is unavailable" a refused call would otherwise
+// surface as. The two numbers must move together.
+const MaxEnabledDetectionRulesPerPublish = 1000
+
 // validateSnapshotDetectionRules compiles the ENABLED detection rules carried in a
 // just-built profile snapshot against event-processing (ADR-044 sync gate), returning a
 // fail-closed error if any rule is rejected or the check cannot be performed. It parses the
@@ -131,17 +139,20 @@ func parseProfileSnapshot(raw datatypes.JSON) (*ProfileSnapshot, error) {
 // what is frozen (no TOCTOU with a separate draft read). Only enabled rules are gated: a
 // disabled rule is inert (the runtime skips it at the fact-emit boundary) and a parked,
 // still-WIP rule must not block publishing the rest — it is re-validated when a later draft
-// enables it. With no validator wired (service secret unset) the gate is skipped.
+// enables it. With no validator wired (service secret unset) the compile is skipped, but the
+// MaxEnabledDetectionRulesPerPublish bound still applies.
 func (api *Api) validateSnapshotDetectionRules(ctx context.Context, snapshot datatypes.JSON) error {
-	if api.DetectionRuleValidator == nil {
-		return nil
-	}
 	snap, err := parseProfileSnapshot(snapshot)
 	if err != nil {
 		return err
 	}
 	toValidate := enabledRulesToValidate(snap.Rules)
-	if len(toValidate) == 0 {
+	// The count bound is checked before the no-validator skip, so the documented publish
+	// limit holds whether or not event-processing's gate is wired.
+	if len(toValidate) > MaxEnabledDetectionRulesPerPublish {
+		return limit.Exceeded("enabled detection rules on one profile", len(toValidate), MaxEnabledDetectionRulesPerPublish)
+	}
+	if api.DetectionRuleValidator == nil || len(toValidate) == 0 {
 		return nil
 	}
 

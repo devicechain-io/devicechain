@@ -4,12 +4,14 @@
 package config
 
 import (
-	"github.com/devicechain-io/dc-microservice/messaging"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
@@ -81,6 +83,59 @@ func TestValidateRejectsNonPositiveRefreshTtl(t *testing.T) {
 		},
 	}
 	assert.Error(t, cfg.Validate())
+}
+
+// A negative signing-key age, or one whose day count overflows the Duration conversion in
+// main.go, reached MaybeRotateOnAge as a non-positive age, which reads as "rotation off":
+// the instance then signed with one key indefinitely without a word. Each row loaded with
+// no error before this check existed.
+func TestSigningKeyAgesOutOfRangeAreRefusedAtLoad(t *testing.T) {
+	for _, key := range []string{"signingKeyMaxAgeDays", "signingKeyRetentionDays"} {
+		for _, days := range []int{-1, MaxSigningKeyDays + 1, 200000} {
+			t.Run(fmt.Sprintf("%s/%d", key, days), func(t *testing.T) {
+				cfg := &UserManagementConfiguration{}
+				doc := fmt.Sprintf(`{"auth":{"%s":%d}}`, key, days)
+				err := core.LoadConfiguration([]byte(doc), cfg)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "auth."+key)
+			})
+		}
+	}
+}
+
+// 0 still means "rotation off" for the max age and "the default" for the retention, and
+// every value up to the overflow bound still loads unchanged.
+func TestSigningKeyAgesInRangeStillLoad(t *testing.T) {
+	cases := []struct {
+		key  string
+		days int
+		want int
+	}{
+		{"signingKeyMaxAgeDays", 0, 0},
+		{"signingKeyMaxAgeDays", 90, 90},
+		{"signingKeyMaxAgeDays", MaxSigningKeyDays, MaxSigningKeyDays},
+		{"signingKeyRetentionDays", 0, 8},
+		{"signingKeyRetentionDays", 30, 30},
+		{"signingKeyRetentionDays", MaxSigningKeyDays, MaxSigningKeyDays},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%s/%d", tc.key, tc.days), func(t *testing.T) {
+			cfg := &UserManagementConfiguration{}
+			doc := fmt.Sprintf(`{"auth":{"%s":%d}}`, tc.key, tc.days)
+			require.NoError(t, core.LoadConfiguration([]byte(doc), cfg))
+			if tc.key == "signingKeyMaxAgeDays" {
+				assert.Equal(t, tc.want, cfg.Auth.SigningKeyMaxAgeDays)
+			} else {
+				assert.Equal(t, tc.want, cfg.Auth.SigningKeyRetentionDays)
+			}
+		})
+	}
+}
+
+// The bound is exactly the largest day count whose Duration does not wrap.
+func TestMaxSigningKeyDaysIsTheLargestDurationThatFits(t *testing.T) {
+	assert.Greater(t, time.Duration(MaxSigningKeyDays)*24*time.Hour, time.Duration(0))
+	assert.Greater(t, int64(MaxSigningKeyDays+1), int64(math.MaxInt64)/int64(24*time.Hour))
 }
 
 // OAuth is off by default (no issuer configured) — the AS surface stays

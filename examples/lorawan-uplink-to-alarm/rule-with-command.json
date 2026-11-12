@@ -1,0 +1,14 @@
+{
+  "name": "Room too warm",
+  "description": "Above 25 degrees: raise a warning alarm and set the room's thermostat to 21.5 degrees. The alarm clears by itself when the reading drops back to 25 or below.",
+  "type": "threshold",
+  "severity": "warning",
+  "when": { "metric": "temperature", "op": "gt", "threshold": 25 },
+  "actions": [
+    { "type": "raiseAlarm", "raiseAlarm": { "alarmKey": "room-too-warm" } },
+    {
+      "type": "sendCommand",
+      "sendCommand": { "command": "set-setpoint", "payload": "{\"setpoint\":21.5,\"mode\":3}", "expiresAfter": "2m" }
+    }
+  ]
+}

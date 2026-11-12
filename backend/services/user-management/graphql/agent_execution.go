@@ -32,6 +32,9 @@ func (r *AgentExecutionDecisionResolver) Reasons() []string {
 	}
 	return r.d.Reasons
 }
+func (r *AgentExecutionDecisionResolver) ActuationGeneration() int32 {
+	return int32(r.d.ActuationGeneration)
+}
 func (r *AgentExecutionDecisionResolver) PolicyVersion() int32 { return int32(r.d.PolicyVersion) }
 func (r *AgentExecutionDecisionResolver) StepUpMaxAgeSeconds() int32 {
 	return int32(r.d.StepUp.MaxAge / time.Second)

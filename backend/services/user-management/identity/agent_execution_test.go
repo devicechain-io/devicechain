@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-user-management/agentpolicy"
 	"github.com/devicechain-io/dc-user-management/iam"
@@ -30,7 +31,12 @@ type execEnv struct {
 
 func newExecEnv(t *testing.T) *execEnv {
 	t.Helper()
-	e := newAgentEnv(t, string(auth.AlarmWrite))
+	return newExecEnvOn(t, nil)
+}
+
+func newExecEnvOn(t *testing.T, rdbm *rdb.RdbManager) *execEnv {
+	t.Helper()
+	e := newAgentEnvOn(t, rdbm, string(auth.AlarmWrite))
 	e.publish(t, openPolicyJS)
 	role := &iam.Role{Scope: iam.ScopeTenant, Token: "approvers", Authorities: []string{string(auth.AlarmWrite)}}
 	require.NoError(t, e.store.CreateRole(context.Background(), role))

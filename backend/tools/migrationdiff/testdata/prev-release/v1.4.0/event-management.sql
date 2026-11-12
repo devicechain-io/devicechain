@@ -1,0 +1,363 @@
+ALTER SEQUENCE "event-management".audit_events_id_seq OWNED BY "event-management".audit_events.id;
+ALTER SEQUENCE "event-management".calculated_backfills_id_seq OWNED BY "event-management".calculated_backfills.id;
+ALTER TABLE ONLY "event-management".audit_events
+ ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "event-management".audit_events ALTER COLUMN id SET DEFAULT nextval('"event-management".audit_events_id_seq'::regclass);
+ALTER TABLE ONLY "event-management".calculated_backfills
+ ADD CONSTRAINT calculated_backfills_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "event-management".calculated_backfills ALTER COLUMN id SET DEFAULT nextval('"event-management".calculated_backfills_id_seq'::regclass);
+ALTER TABLE ONLY "event-management".event_management_migrations
+ ADD CONSTRAINT event_management_migrations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "event-management".events
+ ADD CONSTRAINT events_pkey PRIMARY KEY (tenant_id, occurred_time, event_id);
+ALTER TABLE ONLY "event-management".purged_tenants
+ ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
+ALTER TABLE ONLY "event-management".tenant_usage_daily
+ ADD CONSTRAINT tenant_usage_daily_pkey PRIMARY KEY (tenant_id, day);
+ALTER TABLE ONLY "event-management".tenant_usage_devices
+ ADD CONSTRAINT tenant_usage_devices_pkey PRIMARY KEY (tenant_id, day, device_token);
+ALTER TABLE ONLY "event-management".tenant_usage_hourly
+ ADD CONSTRAINT tenant_usage_hourly_pkey PRIMARY KEY (tenant_id, hour);
+ALTER TABLE ONLY "event-management".tenant_usage_ledger
+ ADD CONSTRAINT tenant_usage_ledger_pkey PRIMARY KEY (day);
+ALTER TABLE ONLY "event-management".tenant_usage_state
+ ADD CONSTRAINT tenant_usage_state_pkey PRIMARY KEY (name);
+CREATE FUNCTION analytics.reader_tenant() RETURNS text
+ LANGUAGE sql STABLE
+ AS $$
+ SELECT CASE
+ WHEN session_user::text NOT IN ('analytics_reader', 'analytics_location_reader')
+ AND session_user::text LIKE 'analytics=_%' ESCAPE '='
+ THEN substring(session_user::text from 11)
+ END
+ $$;
+CREATE INDEX idx_audit_tenant_time ON "event-management".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_calculated_backfills_status_updated ON "event-management".calculated_backfills USING btree (status, updated_at);
+CREATE INDEX idx_calculated_backfills_tenant_profile ON "event-management".calculated_backfills USING btree (tenant_id, profile_token, created_at DESC);
+CREATE INDEX idx_event_anchors_lookup ON "event-management".event_anchors USING btree (tenant_id, anchor_type, anchor_token, occurred_time DESC);
+CREATE INDEX idx_events_processed_time_brin ON "event-management".events USING brin (processed_time);
+CREATE INDEX idx_events_tenant_device_time ON "event-management".events USING btree (tenant_id, device_token, occurred_time DESC);
+CREATE INDEX idx_failed_event_records_device ON "event-management".failed_event_records USING btree (tenant_id, device_token, reason, occurred_time DESC);
+CREATE INDEX idx_failed_event_records_tenant_time ON "event-management".failed_event_records USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_measurement_tenant_device_name_time ON "event-management".measurement_events USING btree (tenant_id, device_token, name, occurred_time DESC);
+CREATE INDEX measurement_events_occurred_time_idx ON "event-management".measurement_events USING btree (occurred_time DESC);
+CREATE SCHEMA "event-management";
+CREATE SCHEMA analytics;
+CREATE SEQUENCE "event-management".audit_events_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "event-management".calculated_backfills_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE TABLE "event-management".alert_events (
+ tenant_id character varying(128) NOT NULL,
+ event_id bytea NOT NULL,
+ payload_id bytea NOT NULL,
+ device_token character varying(128) NOT NULL COLLATE pg_catalog."C",
+ event_type bigint NOT NULL,
+ occurred_time timestamp with time zone NOT NULL,
+ type text NOT NULL,
+ level bigint NOT NULL,
+ message text,
+ source text
+);
+CREATE TABLE "event-management".audit_events (
+ id bigint NOT NULL,
+ occurred_time timestamp with time zone NOT NULL,
+ tenant_id text,
+ category text NOT NULL,
+ actor text,
+ table_name text,
+ operation text NOT NULL,
+ entity_pk text,
+ entity_label text,
+ rows_affected bigint,
+ client_id text,
+ session_id text,
+ on_behalf_of text,
+ proposal text
+);
+CREATE TABLE "event-management".calculated_backfills (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ token text NOT NULL,
+ profile_token text NOT NULL,
+ profile_version_token text NOT NULL,
+ profile_version bigint NOT NULL,
+ metric_keys jsonb NOT NULL,
+ plan jsonb NOT NULL,
+ warnings jsonb DEFAULT '[]'::jsonb NOT NULL,
+ device_filter jsonb,
+ range_from timestamp with time zone NOT NULL,
+ range_to timestamp with time zone NOT NULL,
+ status text NOT NULL,
+ claim_epoch bigint DEFAULT 0 NOT NULL,
+ phase text DEFAULT 'FILL'::text NOT NULL,
+ roster_after_id bigint DEFAULT 0 NOT NULL,
+ cursor_window timestamp with time zone,
+ refresh_cursor timestamp with time zone,
+ devices_total bigint,
+ devices_done bigint DEFAULT 0 NOT NULL,
+ samples bigint DEFAULT 0 NOT NULL,
+ computed bigint DEFAULT 0 NOT NULL,
+ written bigint DEFAULT 0 NOT NULL,
+ already_present bigint DEFAULT 0 NOT NULL,
+ windows_compressed bigint DEFAULT 0 NOT NULL,
+ windows_beyond_retention bigint DEFAULT 0 NOT NULL,
+ windows_refreshed bigint DEFAULT 0 NOT NULL,
+ skipped jsonb DEFAULT '{}'::jsonb NOT NULL,
+ failure text,
+ created_by text,
+ created_at timestamp with time zone NOT NULL,
+ updated_at timestamp with time zone NOT NULL,
+ started_at timestamp with time zone,
+ finished_at timestamp with time zone,
+ cancel_requested_at timestamp with time zone,
+ CONSTRAINT chk_calculated_backfills_phase CHECK ((phase = ANY (ARRAY['FILL'::text, 'REFRESH'::text]))),
+ CONSTRAINT chk_calculated_backfills_status CHECK ((status = ANY (ARRAY['QUEUED'::text, 'RUNNING'::text, 'SUCCEEDED'::text, 'CANCELLED'::text, 'FAILED'::text])))
+);
+CREATE TABLE "event-management".event_anchors (
+ tenant_id character varying(128) NOT NULL,
+ event_id bytea NOT NULL,
+ device_token character varying(128) NOT NULL COLLATE pg_catalog."C",
+ event_type bigint NOT NULL,
+ occurred_time timestamp with time zone NOT NULL,
+ anchor_type text NOT NULL,
+ anchor_token character varying(128) NOT NULL COLLATE pg_catalog."C"
+);
+CREATE TABLE "event-management".event_management_migrations (
+ id character varying(255) NOT NULL
+);
+CREATE TABLE "event-management".events (
+ tenant_id character varying(128) NOT NULL,
+ event_id bytea NOT NULL,
+ device_token character varying(128) NOT NULL COLLATE pg_catalog."C",
+ event_type bigint NOT NULL,
+ occurred_time timestamp with time zone NOT NULL,
+ source text,
+ alt_id text,
+ processed_time timestamp with time zone
+);
+CREATE TABLE "event-management".failed_event_records (
+ tenant_id character varying(128) NOT NULL,
+ row_id character varying(32) NOT NULL,
+ occurred_time timestamp with time zone NOT NULL,
+ record_seq bigint NOT NULL,
+ source_area character varying(64) NOT NULL,
+ reason integer NOT NULL,
+ device_token character varying(128) DEFAULT ''::character varying NOT NULL COLLATE pg_catalog."C",
+ event_type bigint,
+ error character varying(512) DEFAULT ''::character varying NOT NULL,
+ correlation character varying(128) DEFAULT ''::character varying NOT NULL,
+ payload_retained boolean NOT NULL,
+ suppressed bigint DEFAULT 0 NOT NULL
+);
+CREATE TABLE "event-management".location_events (
+ tenant_id character varying(128) NOT NULL,
+ event_id bytea NOT NULL,
+ payload_id bytea NOT NULL,
+ device_token character varying(128) NOT NULL COLLATE pg_catalog."C",
+ event_type bigint NOT NULL,
+ occurred_time timestamp with time zone NOT NULL,
+ latitude numeric(10,8),
+ longitude numeric(11,8),
+ elevation numeric(12,4),
+ accuracy numeric(12,4),
+ speed numeric(12,4),
+ heading numeric(7,4)
+);
+CREATE TABLE "event-management".measurement_events (
+ tenant_id character varying(128) NOT NULL,
+ event_id bytea NOT NULL,
+ payload_id bytea NOT NULL,
+ device_token character varying(128) NOT NULL COLLATE pg_catalog."C",
+ event_type bigint NOT NULL,
+ occurred_time timestamp with time zone NOT NULL,
+ name text NOT NULL,
+ value numeric(20,8),
+ classifier bigint,
+ unit text,
+ data_type character varying(32)
+);
+CREATE TABLE "event-management".purged_tenants (
+ token character varying(128) NOT NULL,
+ epoch timestamp with time zone NOT NULL,
+ planted_at timestamp with time zone NOT NULL,
+ completed_at timestamp with time zone
+);
+CREATE TABLE "event-management".state_change_events (
+ tenant_id character varying(128) NOT NULL,
+ event_id bytea NOT NULL,
+ device_token character varying(128) NOT NULL COLLATE pg_catalog."C",
+ event_type bigint NOT NULL,
+ occurred_time timestamp with time zone NOT NULL,
+ state character varying(16) NOT NULL,
+ reason text,
+ session_id bigint DEFAULT 0 NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_daily (
+ tenant_id character varying(128) NOT NULL,
+ day date NOT NULL,
+ events_ingested bigint DEFAULT 0 NOT NULL,
+ devices_active integer DEFAULT 0 NOT NULL,
+ devices_peak integer DEFAULT 0 NOT NULL,
+ device_hours bigint DEFAULT 0 NOT NULL,
+ rolled_up_at timestamp with time zone NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_devices (
+ tenant_id character varying(128) NOT NULL,
+ day date NOT NULL,
+ device_token character varying(128) NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_hourly (
+ tenant_id character varying(128) NOT NULL,
+ hour timestamp with time zone NOT NULL,
+ events bigint DEFAULT 0 NOT NULL,
+ devices integer DEFAULT 0 NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_ledger (
+ day date NOT NULL,
+ hours integer DEFAULT 0 NOT NULL,
+ updated_at timestamp with time zone NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_state (
+ name character varying(64) NOT NULL,
+ next_hour timestamp with time zone NOT NULL,
+ scan_floor timestamp with time zone,
+ updated_at timestamp with time zone NOT NULL
+);
+CREATE UNIQUE INDEX idx_events_tenant_device_alt_id ON "event-management".events USING btree (tenant_id, device_token, alt_id, occurred_time) WHERE (alt_id IS NOT NULL);
+CREATE UNIQUE INDEX uix_calculated_backfills_tenant_active ON "event-management".calculated_backfills USING btree (tenant_id) WHERE (status = ANY (ARRAY['QUEUED'::text, 'RUNNING'::text]));
+CREATE UNIQUE INDEX uix_calculated_backfills_tenant_token ON "event-management".calculated_backfills USING btree (tenant_id, token);
+CREATE UNIQUE INDEX uq_alert_events_idem ON "event-management".alert_events USING btree (tenant_id, occurred_time, payload_id);
+CREATE UNIQUE INDEX uq_event_anchors_idem ON "event-management".event_anchors USING btree (tenant_id, occurred_time, event_id, anchor_type, anchor_token);
+CREATE UNIQUE INDEX uq_failed_event_records_seq ON "event-management".failed_event_records USING btree (tenant_id, record_seq, occurred_time);
+CREATE UNIQUE INDEX uq_location_events_idem ON "event-management".location_events USING btree (tenant_id, occurred_time, payload_id);
+CREATE UNIQUE INDEX uq_measurement_events_idem ON "event-management".measurement_events USING btree (tenant_id, occurred_time, payload_id);
+CREATE UNIQUE INDEX uq_state_change_events_idem ON "event-management".state_change_events USING btree (tenant_id, device_token, occurred_time, state, session_id);
+CREATE VIEW "event-management".measurement_rollups AS
+ SELECT _materialized_hypertable_N.tenant_id,
+ _materialized_hypertable_N.device_token,
+ _materialized_hypertable_N.event_type,
+ _materialized_hypertable_N.name,
+ _materialized_hypertable_N.bucket,
+ _materialized_hypertable_N.sum_value,
+ _materialized_hypertable_N.min_value,
+ _materialized_hypertable_N.max_value,
+ _materialized_hypertable_N.count_value
+ FROM _timescaledb_internal._materialized_hypertable_N
+ WHERE (_materialized_hypertable_N.bucket < COALESCE(_timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(N)), '-infinity'::timestamp with time zone))
+UNION ALL
+ SELECT measurement_events.tenant_id,
+ measurement_events.device_token,
+ measurement_events.event_type,
+ measurement_events.name,
+ public.time_bucket('00:01:00'::interval, measurement_events.occurred_time) AS bucket,
+ sum(measurement_events.value) AS sum_value,
+ min(measurement_events.value) AS min_value,
+ max(measurement_events.value) AS max_value,
+ count(measurement_events.value) AS count_value
+ FROM "event-management".measurement_events
+ WHERE (measurement_events.occurred_time >= COALESCE(_timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(N)), '-infinity'::timestamp with time zone))
+ GROUP BY measurement_events.tenant_id, measurement_events.device_token, measurement_events.event_type, measurement_events.name, (public.time_bucket('00:01:00'::interval, measurement_events.occurred_time));
+CREATE VIEW analytics.alert_events WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ event_id,
+ payload_id,
+ device_token,
+ event_type,
+ occurred_time,
+ type,
+ level,
+ message,
+ source
+ FROM "event-management".alert_events
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
+CREATE VIEW analytics.event_anchors WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ event_id,
+ device_token,
+ event_type,
+ occurred_time,
+ anchor_type,
+ anchor_token
+ FROM "event-management".event_anchors
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
+CREATE VIEW analytics.events WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ event_id,
+ device_token,
+ event_type,
+ occurred_time,
+ source,
+ alt_id,
+ processed_time
+ FROM "event-management".events
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
+CREATE VIEW analytics.location_events WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ event_id,
+ payload_id,
+ device_token,
+ event_type,
+ occurred_time,
+ latitude,
+ longitude,
+ elevation,
+ accuracy,
+ speed,
+ heading
+ FROM "event-management".location_events
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
+CREATE VIEW analytics.measurement_events WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ event_id,
+ payload_id,
+ device_token,
+ event_type,
+ occurred_time,
+ name,
+ value,
+ classifier,
+ unit,
+ data_type
+ FROM "event-management".measurement_events
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
+CREATE VIEW analytics.measurement_rollups WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ device_token,
+ event_type,
+ name,
+ bucket,
+ sum_value,
+ min_value,
+ max_value,
+ count_value
+ FROM "event-management".measurement_rollups
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
+CREATE VIEW analytics.state_change_events WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ event_id,
+ device_token,
+ event_type,
+ occurred_time,
+ state,
+ reason,
+ session_id
+ FROM "event-management".state_change_events
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
+TIMESCALE CONTINUOUS AGGREGATE measurement_rollups MATERIALIZED_ONLY f MATERIALIZATION _materialized_hypertable_N;
+TIMESCALE HYPERTABLE alert_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE HYPERTABLE event_anchors DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE HYPERTABLE events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE HYPERTABLE failed_event_records DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE HYPERTABLE location_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE HYPERTABLE measurement_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE HYPERTABLE state_change_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE POLICY policy_refresh_continuous_aggregate ON measurement_rollups SCHEDULE 00:01:00 CONFIG {"end_offset": "00:01:00", "start_offset": "30 days", "mat_hypertable_id": N};

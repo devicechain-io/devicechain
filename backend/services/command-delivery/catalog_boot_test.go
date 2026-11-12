@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
 // TestStartsUnderItsDeclaredCatalog starts this service's real broker wiring with
@@ -70,6 +71,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, Svc.Initialize(ctx), "initialize under the catalog")
+	dctest.UseFreeTCPPort(t, &service.ProbesPort)
 	NatsManager = Svc.Nats
 	t.Cleanup(func() {
 		_ = Svc.Stop(ctx)

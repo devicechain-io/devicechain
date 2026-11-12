@@ -660,14 +660,30 @@ func ParseConfigJSON(s *string) (map[string]any, error) {
 	return cfg, nil
 }
 
-// SetTenantEnabled enables or disables a tenant.
+// SetTenantEnabled enables or disables a tenant and bumps its generation atomically.
+// Every call bumps, even with an unchanged value. During a rolling upgrade, an old
+// pod's re-enable after a new pod's disable does not bump and leaves the fence closed
+// (fail closed); repeating the re-enable through a new pod remedies this.
 func (s *Service) SetTenantEnabled(ctx context.Context, token string, enabled bool) (*iam.Tenant, error) {
 	t, err := s.loadTenant(ctx, token)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.iam.SetTenantEnabled(ctx, t, enabled); err != nil {
+	// Refuse unwired notification BEFORE the write, so a misconfigured service changes nothing.
+	if err := s.requireTenantActuation(); err != nil {
 		return nil, err
+	}
+	gen, err := s.iam.SetTenantEnabledAndBumpGeneration(ctx, t, enabled)
+	if err != nil {
+		return nil, err
+	}
+	// The kill carries the disabling transaction's generation, so a later re-enable
+	// reopens the fence with its strictly greater generation regardless of publish order.
+	// Both writes stay committed on notification failure; repeating a disable resends.
+	if !enabled && s.tenantActuation != nil {
+		if err := s.tenantActuation.TenantDisabled(ctx, token, gen); err != nil {
+			return nil, err
+		}
 	}
 	return s.iam.TenantByToken(ctx, token)
 }
@@ -696,6 +712,9 @@ func (s *Service) DeleteTenant(ctx context.Context, token string) (bool, error) 
 		return false, err
 	}
 	if t.PurgeState.Deleted() {
+		if t.PurgeState == iam.PurgePurging {
+			return false, s.notifyTenantPurgeBegan(ctx, token)
+		}
 		return false, nil
 	}
 	n, err := s.iam.CountMembershipsInTenant(ctx, token)
@@ -705,10 +724,28 @@ func (s *Service) DeleteTenant(ctx context.Context, token string) (bool, error) 
 	if n > 0 {
 		return false, ErrTenantHasMemberships
 	}
+	if err := s.requireTenantActuation(); err != nil {
+		return false, err
+	}
 	if err := s.iam.BeginTenantPurge(ctx, t, time.Now().UTC()); err != nil {
 		return false, err
 	}
+	// Purge is committed even if notification fails. The purging retry path above
+	// resends the kill; GraphQL surfaces the error so the operator can repeat it.
+	if err := s.notifyTenantPurgeBegan(ctx, token); err != nil {
+		return false, err
+	}
 	return true, nil
+}
+
+func (s *Service) notifyTenantPurgeBegan(ctx context.Context, token string) error {
+	if err := s.requireTenantActuation(); err != nil {
+		return err
+	}
+	if s.tenantActuation != nil {
+		return s.tenantActuation.TenantPurgeBegan(ctx, token)
+	}
+	return nil
 }
 
 // TierInput is the data to create a tenant tier (ADR-065). Config is the settings

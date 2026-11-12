@@ -34,7 +34,8 @@ import (
 //     An implementation that must not e.g. mail "cleared" before "raised" must order
 //     on the event's OccurredTime/RaisedTime itself.
 //   - Bounded execution, and the bound is the implementation's job. Notify runs on the
-//     worker's background context (drain-on-shutdown), so it has NO inherited deadline:
+//     worker's owned context (graceful drain until Stop expires), so it has NO
+//     inherited deadline:
 //     every step it takes — the store reads, the secret lookup, each adapter call, the
 //     state write — must carry its own. It must also bound the WHOLE call against
 //     messaging.AckWait, not just each step: a Notify that outlives AckWait is handed to
@@ -56,6 +57,10 @@ import (
 // at the dead-letter stream dressed as an undelivered page. A real channel adapter should
 // own its own retry/backoff/durability rather than rely on processor redelivery for
 // reliability.
+//
+// A context cancelled by shutdown abandons unfinished work without acknowledging or
+// dead-lettering it, including on the final delivery. A partial delivery must still
+// return nil (or core.ErrPassPartial) so channels that succeeded are not sent again.
 type Notifier interface {
 	Notify(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error
 }

@@ -12,6 +12,7 @@ import esUserMenu from './userMenu.json';
 import esTheme from './theme.json';
 import esDevices from './devices.json';
 import esApprovals from './approvals.json';
+import esAutomationReview from './automationReview.json';
 import esAlarms from './alarms.json';
 import esDashboards from './dashboards.json';
 import esDeviceProfiles from './deviceProfiles.json';
@@ -52,7 +53,8 @@ const es = {
     theme: esTheme,
     devices: esDevices,
     alarms: esAlarms,
-  approvals: esApprovals,
+    approvals: esApprovals,
+    automationReview: esAutomationReview,
     dashboards: esDashboards,
     deviceProfiles: esDeviceProfiles,
     tenants: esTenants,

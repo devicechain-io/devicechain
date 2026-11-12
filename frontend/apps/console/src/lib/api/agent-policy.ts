@@ -5,6 +5,15 @@ import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/user-management';
 import type { AgentPolicyQuery } from '@/gql/user-management/graphql';
 
+const APPROVAL_ACCESS = graphql(`
+  query AgentApprovalAccess {
+    agentApprovalAccess { instanceEnabled canApprove }
+  }
+`);
+export async function getAgentApprovalAccess() {
+  return (await gql('user-management', APPROVAL_ACCESS)).agentApprovalAccess;
+}
+
 export type AgentPolicy = AgentPolicyQuery['agentPolicy'];
 const POLICY = graphql(`
   query AgentPolicy {

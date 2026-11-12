@@ -5,6 +5,7 @@ package config_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-update-management/config"
@@ -129,4 +130,40 @@ func TestObjectStoreModeDefaultsAndFailsClosed(t *testing.T) {
 		c := &config.UpdateManagementConfiguration{}
 		require.Error(t, core.LoadConfiguration([]byte(`{"updates":{"objectStore":"`+bad+`"}}`), c), bad)
 	}
+}
+
+// Overflowing seconds must be refused before conversion, even when they wrap positive.
+func TestASecondsSettingThatOverflowsADurationIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		key string
+		doc string
+	}{
+		{"updates.sweepIntervalSeconds", `{"updates":{"sweepIntervalSeconds":9223372037}}`},
+		{"updates.deadlines.acknowledgeSeconds", `{"updates":{"deadlines":{"acknowledgeSeconds":9223372037}}}`},
+		{"updates.deadlines.downloadSeconds", `{"updates":{"deadlines":{"downloadSeconds":9223372037}}}`},
+		{"updates.deadlines.verifySeconds", `{"updates":{"deadlines":{"verifySeconds":9223372037}}}`},
+		{"updates.deadlines.installSeconds", `{"updates":{"deadlines":{"installSeconds":9223372037}}}`},
+		{"updates.deadlines.confirmSeconds", `{"updates":{"deadlines":{"confirmSeconds":9223372037}}}`},
+		{"updates.sweepIntervalSeconds", `{"updates":{"sweepIntervalSeconds":18446744074}}`},
+		{"updates.deadlines.acknowledgeSeconds", `{"updates":{"deadlines":{"acknowledgeSeconds":18446744074}}}`},
+	} {
+		t.Run(tc.doc, func(t *testing.T) {
+			cfg := &config.UpdateManagementConfiguration{}
+			err := core.LoadConfiguration([]byte(tc.doc), cfg)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.key)
+		})
+	}
+}
+
+// The largest safe sweep interval stays positive, and zero still selects the default.
+func TestSafeSweepIntervalsStillLoad(t *testing.T) {
+	cfg := &config.UpdateManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte(`{"updates":{"sweepIntervalSeconds":9223372036}}`), cfg))
+	require.Equal(t, 9223372036, cfg.Updates.SweepIntervalSeconds)
+	require.Positive(t, time.Duration(cfg.Updates.SweepIntervalSeconds)*time.Second)
+
+	cfg = &config.UpdateManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte(`{"updates":{"sweepIntervalSeconds":0}}`), cfg))
+	require.Equal(t, config.DefaultSweepIntervalSeconds, cfg.Updates.SweepIntervalSeconds)
 }

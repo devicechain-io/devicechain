@@ -6,6 +6,7 @@ package model
 import (
 	"encoding/json"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -34,6 +35,14 @@ func loadPreSemanticFixture(t *testing.T) preSemanticFixtureDoc {
 	return doc
 }
 
+var updatedAtField = regexp.MustCompile(`"UpdatedAt":"[^"]*"`)
+
+// maskUpdatedAt blanks the row-version timestamps inside a snapshot. A definition edit now
+// advances updated_at strictly past the version it read (rdb.AdvancingFrom), so under this
+// fixture's frozen clock the edited metric stores one microsecond later than the pre-change
+// binary did. The timestamp is clock data; what this test pins is the snapshot FORMAT.
+func maskUpdatedAt(s string) string { return updatedAtField.ReplaceAllString(s, `"UpdatedAt":"-"`) }
+
 // The same history, replayed by today's code with nothing bound, stores the same bytes.
 func TestAnUnboundPublishStoresThePreChangeSnapshotBytes(t *testing.T) {
 	want := loadPreSemanticFixture(t)
@@ -42,7 +51,7 @@ func TestAnUnboundPublishStoresThePreChangeSnapshotBytes(t *testing.T) {
 	got := readIdentityHistory(t, api, ctx)
 
 	for i, v := range want.ProfileVersions {
-		require.Equal(t, v.Snapshot, got.ProfileVersions[i].Snapshot, "profile version %d snapshot moved", v.Version)
+		require.Equal(t, maskUpdatedAt(v.Snapshot), maskUpdatedAt(got.ProfileVersions[i].Snapshot), "profile version %d snapshot moved", v.Version)
 		require.Equal(t, v.ThingModel, got.ProfileVersions[i].ThingModel, "profile version %d Thing Model moved", v.Version)
 	}
 	for i, v := range want.AssetTypeVersions {
