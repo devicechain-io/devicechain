@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -123,7 +124,7 @@ func LoadConfiguration(raw []byte, into any) error {
 		if err := dec.Decode(into); err != nil {
 			return fmt.Errorf("config: decode failed: %w", err)
 		}
-		if dec.More() {
+		if err := dec.Decode(&struct{}{}); err != io.EOF {
 			return fmt.Errorf("config: unexpected trailing data after configuration document")
 		}
 	}
