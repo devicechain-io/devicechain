@@ -1019,6 +1019,23 @@
                 "minimum": 0,
                 "description": "command-delivery: the fraction of the held-command ceiling reserved for the platform's own delivery. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
               },
+              "deadLetters": {
+                "type": "object",
+                "description": "user-management: the stored dead-letter record's retention. Unset settings take the service defaults.",
+                "properties": {
+                  "retentionDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 106751,
+                    "description": "user-management: how many days a stored dead letter is kept. 0 or absent takes the service default (30); the service also refuses 1 to 7, since the dead-letter stream itself ages out at 7 days. A negative value, or one above 106751 (the longest a duration can hold), is refused here and by the service at startup."
+                  },
+                  "sweepSeconds": {
+                    "type": "integer",
+                    "maximum": 9223372036,
+                    "description": "user-management: how often, in seconds, the retention sweep runs. 0 or absent takes the service default (3600); a negative value turns the sweep off. A value above 9223372036 is refused here and by the service at startup."
+                  }
+                }
+              },
               "auth": {
                 "type": "object",
                 "description": "user-management: authentication settings. Only the signing-key keys below are checked here; the service checks the rest at startup.",

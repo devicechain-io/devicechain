@@ -87,3 +87,44 @@ func TestDcctlOverlayStillRefusesUserManagementAuth(t *testing.T) {
 		t.Fatalf("dcctl must keep refusing an overlay that sets user-management's auth block, got: %v", err)
 	}
 }
+
+// dcctl allows dead-letter tuning, so its overlay validation must enforce the duration bounds.
+func TestChartSchemaRefusesDeadLetterSettingsThatOverflowADuration(t *testing.T) {
+	// These mirror config.MaxDurationDays and config.MaxDurationSeconds in user-management.
+	const maxDurationDays = 106751
+	const maxDurationSeconds = 9223372036
+	for _, tc := range []struct {
+		key      string
+		refused  []int
+		accepted []int
+	}{
+		{"retentionDays", []int{maxDurationDays + 1, -1}, []int{maxDurationDays, 0}},
+		{"sweepSeconds", []int{maxDurationSeconds + 1}, []int{maxDurationSeconds, 0, -1}},
+	} {
+		overlay := func(value int) map[string]interface{} {
+			return map[string]interface{}{"functionalAreas": map[string]interface{}{
+				"user-management": map[string]interface{}{"config": map[string]interface{}{
+					"deadLetters": map[string]interface{}{tc.key: value},
+				}},
+			}}
+		}
+		for _, value := range tc.refused {
+			t.Run(fmt.Sprintf("%s/%d/refused", tc.key, value), func(t *testing.T) {
+				err := ValidateValuesOverlay(overlay(value))
+				if err == nil {
+					t.Fatalf("deadLetters.%s = %d passed the chart schema; it must be refused", tc.key, value)
+				}
+				if !strings.Contains(err.Error(), "/deadLetters/"+tc.key) {
+					t.Fatalf("the refusal must name /deadLetters/%s, got: %v", tc.key, err)
+				}
+			})
+		}
+		for _, value := range tc.accepted {
+			t.Run(fmt.Sprintf("%s/%d/accepted", tc.key, value), func(t *testing.T) {
+				if err := ValidateValuesOverlay(overlay(value)); err != nil {
+					t.Fatalf("deadLetters.%s = %d must pass the chart schema: %v", tc.key, value, err)
+				}
+			})
+		}
+	}
+}

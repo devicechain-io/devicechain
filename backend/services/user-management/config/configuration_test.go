@@ -466,3 +466,61 @@ func TestANegativeSweepIntervalDisablesTheSweepRatherThanFailing(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 	assert.Zero(t, cfg.DeadLetterSweepInterval())
 }
+
+// A wrapped negative retention moves the sweep's prune cutoff into the future.
+func TestDeadLetterRetentionThatOverflowsADurationIsRefusedAtLoad(t *testing.T) {
+	days := MaxDurationDays + 1
+	require.Less(t, time.Duration(days)*24*time.Hour, time.Duration(0), "the regression value must wrap negative, moving the prune cutoff into the future")
+	for _, days := range []int{MaxDurationDays + 1, math.MaxInt} {
+		t.Run(fmt.Sprint(days), func(t *testing.T) {
+			cfg := &UserManagementConfiguration{}
+			doc := fmt.Sprintf(`{"deadLetters":{"retentionDays":%d}}`, days)
+			err := core.LoadConfiguration([]byte(doc), cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "deadLetters.retentionDays")
+		})
+	}
+}
+
+// Sweep seconds must be refused before their duration conversion overflows.
+func TestDeadLetterSweepSecondsThatOverflowADurationAreRefusedAtLoad(t *testing.T) {
+	for _, seconds := range []int{MaxDurationSeconds + 1, math.MaxInt} {
+		t.Run(fmt.Sprint(seconds), func(t *testing.T) {
+			cfg := &UserManagementConfiguration{}
+			doc := fmt.Sprintf(`{"deadLetters":{"sweepSeconds":%d}}`, seconds)
+			err := core.LoadConfiguration([]byte(doc), cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "deadLetters.sweepSeconds")
+		})
+	}
+}
+
+// The largest safe values load unchanged, 0 takes the defaults, and -1 disables sweeping.
+func TestDeadLetterDurationBoundsAndDefaultsStillLoad(t *testing.T) {
+	for _, tc := range []struct {
+		key          string
+		values       []int
+		defaultValue int
+		read         func(*UserManagementConfiguration) int
+	}{
+		{"retentionDays", []int{MaxDurationDays, 0}, 30, func(c *UserManagementConfiguration) int { return c.DeadLetters.RetentionDays }},
+		{"sweepSeconds", []int{MaxDurationSeconds, 0, -1}, 3600, func(c *UserManagementConfiguration) int { return c.DeadLetters.SweepSeconds }},
+	} {
+		for _, value := range tc.values {
+			t.Run(fmt.Sprintf("%s/%d", tc.key, value), func(t *testing.T) {
+				cfg := &UserManagementConfiguration{}
+				doc := fmt.Sprintf(`{"deadLetters":{"%s":%d}}`, tc.key, value)
+				require.NoError(t, core.LoadConfiguration([]byte(doc), cfg))
+				require.NoError(t, cfg.Validate())
+				want := value
+				if value == 0 {
+					want = tc.defaultValue
+				}
+				assert.Equal(t, want, tc.read(cfg))
+				if value < 0 {
+					assert.Zero(t, cfg.DeadLetterSweepInterval())
+				}
+			})
+		}
+	}
+}

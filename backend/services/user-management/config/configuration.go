@@ -22,6 +22,13 @@ import (
 // for the max age reads as rotation disabled or an arbitrary age.
 const MaxSigningKeyDays = int(math.MaxInt64 / int64(24*time.Hour))
 
+// MaxDurationSeconds is the largest whole number of seconds a time.Duration can hold;
+// a larger value overflows when converted.
+const MaxDurationSeconds = int(math.MaxInt64 / int64(time.Second))
+
+// MaxDurationDays is the largest whole number of days a time.Duration can hold.
+const MaxDurationDays = int(math.MaxInt64 / int64(24*time.Hour))
+
 // AuthConfiguration controls JWT issuance, signing-key rotation, and the
 // one-time bootstrap admin.
 type AuthConfiguration struct {
@@ -384,6 +391,13 @@ func (c *UserManagementConfiguration) Validate() error {
 		return fmt.Errorf("tenantPurge.tokenHoldSeconds must not be negative (got %d): it is what "+
 			"keeps a token reserved until no pre-deletion device session can still write under it",
 			c.TenantPurge.TokenHoldSeconds)
+	}
+	// Bound the raw values before the retention sweep converts them to durations.
+	if c.DeadLetters.RetentionDays > MaxDurationDays {
+		return fmt.Errorf("deadLetters.retentionDays must be at most %d days, the longest a duration can hold (got %d)", MaxDurationDays, c.DeadLetters.RetentionDays)
+	}
+	if c.DeadLetters.SweepSeconds > MaxDurationSeconds {
+		return fmt.Errorf("deadLetters.sweepSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.DeadLetters.SweepSeconds)
 	}
 	// 🔴 A RETENTION AT OR BELOW THE STREAM'S BUYS NOTHING. The stream ages out in seven
 	// days; the store exists to outlive it. Accepting a shorter retention would leave an
