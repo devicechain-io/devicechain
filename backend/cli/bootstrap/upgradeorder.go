@@ -113,6 +113,98 @@ type installWitness struct {
 	DcctlVersion string
 }
 
+// releaseTagOnAnyRegistry reports whether a tag reads as a release wherever it was pushed: a
+// final release (v1.4.0) or a release candidate (v1.4.0-rc.2).
+//
+// 🔴 A MIRROR CARRIES RELEASES TOO. A mirrored or air-gapped instance runs the published tags
+// from a registry of its own, so "not the published registry" cannot mean "not a release":
+// that exemption let a mirror instance at v1.4.0 be moved to v1.3.0, and let
+// `--registry <mirror> --version v1.3.0` move a ghcr instance back. Only a tag that does not
+// read as a release (another pre-release such as 0.24.0-drill.1, a local build's free-form tag)
+// is whatever the operator pushed, and stays unordered on a registry of their own.
+func releaseTagOnAnyRegistry(v string) bool {
+	r, ok := parseRelease(v)
+	if !ok {
+		return false
+	}
+	switch {
+	case len(r.pre) == 0:
+		return true
+	case len(r.pre) == 2 && r.pre[0] == "rc":
+		_, err := strconv.Atoi(r.pre[1])
+		return err == nil
+	}
+	return false
+}
+
+// orderableOn reports whether a tag on a registry can be ordered as a release: anything
+// parseable on the published registry, and only a release tag on any other.
+func orderableOn(registry, v string) bool {
+	if registry == "" || isPublishedRegistry(registry) {
+		return true
+	}
+	return releaseTagOnAnyRegistry(v)
+}
+
+// noDowngradeRemedy is the one remedy every forward-only refusal names.
+const noDowngradeRemedy = "there is no downgrade (see https://docs.devicechain.io/deployment/versioning-policy#upgrade-paths). " +
+	"If an upgrade went wrong, roll forward to a fixed release with that release's dcctl, or restore a backup " +
+	"with the current dcctl, which migrates the older data forward, in place or onto a new cluster"
+
+// refuseADowngrade orders the instance's declared and target releases, independently
+// of this dcctl's own version. A tag that is not a release, on a registry of the operator's
+// own, cannot be ordered (see releaseTagOnAnyRegistry).
+func refuseADowngrade(instance, declaredRegistry, declaredVersion, targetRegistry, targetVersion string) error {
+	for _, version := range []string{declaredVersion, targetVersion} {
+		if version == "" || IsUnpublishedImageVersion(version) {
+			return nil
+		}
+	}
+	if !orderableOn(declaredRegistry, declaredVersion) || !orderableOn(targetRegistry, targetVersion) {
+		return nil
+	}
+	declared, declaredOK := parseRelease(declaredVersion)
+	target, targetOK := parseRelease(targetVersion)
+	if !declaredOK || !targetOK || target.compare(declared) >= 0 {
+		return nil
+	}
+	return fmt.Errorf("instance %q is declared at %s, and %s is older. dcctl does not move an instance "+
+		"to an earlier release: %s. Nothing has been changed", instance, declaredVersion, targetVersion, noDowngradeRemedy)
+}
+
+// refuseAnOlderInstall checks both the current attempt and the last completed install:
+// even an unfinished install may already have applied newer operator definitions.
+func refuseAnOlderInstall(prev *InstallRecord, dcctlVersion string) error {
+	if prev == nil || dcctlVersion == "dev" || IsUnpublishedImageVersion(dcctlVersion) {
+		return nil
+	}
+	ours, ok := parseRelease(dcctlVersion)
+	if !ok {
+		return nil
+	}
+	versions := []string{prev.DcctlVersion}
+	if last := prev.lastCompleted(); last != nil {
+		versions = append(versions, last.DcctlVersion)
+	}
+	newest, newestVersion := ours, ""
+	for _, version := range versions {
+		// A source build's stamp (dev, -dev.) is not a release, here as on the caller's side.
+		if version == "dev" || IsUnpublishedImageVersion(version) {
+			continue
+		}
+		if release, ok := parseRelease(version); ok && release.compare(newest) > 0 {
+			newest, newestVersion = release, version
+		}
+	}
+	if newestVersion == "" {
+		return nil
+	}
+	return fmt.Errorf("this cluster was installed by dcctl %s and this dcctl is %s. An install by an older dcctl "+
+		"would replace the operator and its definitions, which every instance on the cluster shares, with older ones, "+
+		"and there is no downgrade (see https://docs.devicechain.io/deployment/versioning-policy#upgrade-paths). "+
+		"Run the install with the dcctl of release %s or newer. Nothing has been changed", newestVersion, dcctlVersion, newestVersion)
+}
+
 // readInstallWitness reads only what the order check needs, and deliberately not through
 // readInstallRecord: that one validates the whole record against the live cluster (schema,
 // outputs, cluster UID), and a record from an older dcctl is exactly the one that must still
@@ -141,8 +233,9 @@ func readInstallWitness(ctx context.Context, typed kubernetes.Interface) (instal
 
 // judgeInstallOrder refuses an upgrade by a dcctl that is newer than the one that last completed
 // the cluster-level install, or when that cannot be told. Equal is fine (a re-run at the same
-// version), and so is an install by a NEWER dcctl (an older one going back is the documented
-// downgrade path). A dcctl built from source carries no release to compare and is let through.
+// version), and so is an install by a NEWER dcctl: the declared-version check separately
+// refuses moving an instance back. A dcctl built from source carries no release to compare
+// and is let through.
 func judgeInstallOrder(w installWitness, dcctlVersion, installCommand string) error {
 	if dcctlVersion == "dev" || IsUnpublishedImageVersion(dcctlVersion) {
 		return nil
@@ -197,9 +290,8 @@ var requireInstallOrderFor = func(ctx context.Context, typed kubernetes.Interfac
 // something this dcctl can be told apart from, in either direction.
 //
 // 🔴 THE CHART AND THE INFRASTRUCTURE CONFIGURATION ARE THIS DCCTL'S, so asking it for older
-// images plans its newer chart around services that have never seen its configuration; to go
-// back, where that release's notes allow it, use the older release's own dcctl, which carries
-// the matching chart.
+// images plans its newer chart around services that have never seen its configuration.
+// A dcctl only moves an instance to its own release, and there is no downgrade.
 //
 // 🔴 A NEWER ONE IS REFUSED FOR A DIFFERENT REASON, AND ITS REMEDY IS NOT `dcctl install`. The
 // install record names the dcctl that ran the install (this binary's own version), never the
@@ -212,19 +304,20 @@ var requireInstallOrderFor = func(ctx context.Context, typed kubernetes.Interfac
 // Equal to this dcctl's release is the ordinary case; a tag that is not a release (a local
 // build, any tag on a registry of the operator's own) and a dcctl built from source are not
 // compared.
-func refuseForeignRelease(requested, ownRelease, registry, retry string) error {
-	return judgeForeignRelease("--version "+requested, requested, ownRelease, registry, retry, false)
+func refuseForeignRelease(requested, ownRelease, registry string) error {
+	return judgeForeignRelease("--version "+requested, requested, ownRelease, registry, false)
 }
 
 // judgeForeignRelease is refuseForeignRelease for a version that may not have been asked for with
 // --version: subject names where it came from, and olderOK lets a version older than this dcctl
 // through (an instance's declared version, which a flagless upgrade keeps).
-func judgeForeignRelease(subject, requested, ownRelease, registry, retry string, olderOK bool) error {
+func judgeForeignRelease(subject, requested, ownRelease, registry string, olderOK bool) error {
 	// 🔴 A TAG ON A REGISTRY OF THE OPERATOR'S OWN IS WHATEVER THEY PUSHED, and the upgrade drill
-	// pushes semver-shaped ones (0.24.0-drill.1). Only the published registry's tags are releases,
-	// and it is recognised by every spelling of it (ghcr.io:443/..., a trailing slash), not only
-	// the literal constant.
-	if requested == "" || (registry != "" && !isPublishedRegistry(registry)) {
+	// pushes semver-shaped ones (0.24.0-drill.1), so such a tag is not ordered — UNLESS it reads
+	// as a release (v1.3.0, v1.4.0-rc.2), which is what a mirror carries; see
+	// releaseTagOnAnyRegistry. The published registry is recognised by every spelling of it
+	// (ghcr.io:443/..., a trailing slash), not only the literal constant.
+	if requested == "" || !orderableOn(registry, requested) {
 		return nil
 	}
 	want, ok := parseRelease(requested)
@@ -251,15 +344,15 @@ func judgeForeignRelease(subject, requested, ownRelease, registry, retry string,
 	case c < 0 && !olderOK:
 		return fmt.Errorf("%s is older than this dcctl (release %s) and a dcctl only moves an instance "+
 			"to its own release: it would plan its own newer chart and infrastructure configuration "+
-			"around the older images. To go back, where that release's notes allow it, use the dcctl "+
-			"of release %s (`%s` with that binary). Nothing has been changed",
-			subject, ownRelease, requested, retry)
+			"around the older images. There is no downgrade "+
+			"(see https://docs.devicechain.io/deployment/versioning-policy#upgrade-paths). Nothing has been changed",
+			subject, ownRelease)
 	}
 	return nil
 }
 
 // RefuseForeignRelease is refuseForeignRelease for this build's own release, for the command
 // layer (`dcctl install --version`).
-func RefuseForeignRelease(requested, registry, retry string) error {
-	return refuseForeignRelease(requested, DefaultImageVersion, registry, retry)
+func RefuseForeignRelease(requested, registry string) error {
+	return refuseForeignRelease(requested, DefaultImageVersion, registry)
 }

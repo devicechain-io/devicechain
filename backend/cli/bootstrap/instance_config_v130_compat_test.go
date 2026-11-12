@@ -12,9 +12,9 @@ import (
 	"testing"
 )
 
-// v130ConfigSnapshot was produced by reflection over v1.3.0's config.InstanceConfiguration,
+// v130ConfigSnapshot was produced by reflection over v1.4.0's config.InstanceConfiguration,
 // following encoding/json rules, plus its RetiredConfigKeys. This snapshot is of the
-// release an upgrade starts from: when v1.4.0 becomes the oldest release that can be
+// release an upgrade starts from: when v1.5.0 becomes the oldest release that can be
 // rolled from, regenerate it from that tag.
 type v130ConfigSnapshot struct {
 	Retired map[string]string `json:"retired"`
@@ -30,7 +30,7 @@ type v130ConfigNode struct {
 
 func loadV130ConfigSnapshot(t *testing.T) v130ConfigSnapshot {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/instance_config_keys_v1.3.0.json")
+	raw, err := os.ReadFile("testdata/instance_config_keys_v1.4.0.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func loadV130ConfigSnapshot(t *testing.T) v130ConfigSnapshot {
 		t.Fatal(err)
 	}
 	if len(snapshot.Tree.Fields) == 0 {
-		t.Fatal("v1.3.0 config snapshot has no root fields")
+		t.Fatal("v1.4.0 config snapshot has no root fields")
 	}
 	return snapshot
 }
@@ -122,7 +122,7 @@ func TestDefaultInstanceConfigDocumentDecodesOnV130(t *testing.T) {
 			t.Fatal("empty instance configuration document")
 		}
 		if paths := unknownV130ConfigPaths(document, snapshot.Tree, snapshot.Retired, ""); len(paths) != 0 {
-			t.Errorf("unknown v1.3.0 configuration keys: %s; a pod of v1.3.0 decodes this document strictly and refuses an unknown key, so a key added after v1.3.0 must be left out of the document while at its default", strings.Join(paths, ", "))
+			t.Errorf("unknown v1.4.0 configuration keys: %s; a pod of v1.4.0 decodes this document strictly and refuses an unknown key, so a key added after v1.4.0 must be left out of the document while at its default", strings.Join(paths, ", "))
 		}
 	}
 	t.Run("bare defaults", func(t *testing.T) {
@@ -156,7 +156,7 @@ func TestDefaultInstanceConfigDocumentDecodesOnV130(t *testing.T) {
 	// an instance it installs: it composes the document itself (releaseValues ->
 	// composeInstanceConfig) and installs it as the instance's existing Secret, so the document
 	// checked here is the one releaseValues returns, not a render of the install values. A
-	// future profile deliberately opting into a post-v1.3.0 setting needs an explicit allowlist
+	// future profile deliberately opting into a post-v1.4.0 setting needs an explicit allowlist
 	// entry with its setting and reason.
 	for i, p := range renderProfiles {
 		t.Run(p.name, func(t *testing.T) {
@@ -175,7 +175,8 @@ func TestV130ConfigWalker(t *testing.T) {
 		name, document string
 		want           []string
 	}{
-		{"unknown", `{"infrastructure":{"egress":{"devAllowedDestinations":[]}}}`, []string{"infrastructure.egress.devAllowedDestinations"}},
+		{"unknown", `{"infrastructure":{"egress":{"noSuchKeyPlanted":[]}}}`, []string{"infrastructure.egress.noSuchKeyPlanted"}},
+		{"added in v1.4.0 and so known", `{"infrastructure":{"egress":{"devAllowedDestinations":[]}}}`, nil},
 		{"known case insensitive", `{"INFRASTRUCTURE":{"egress":{"allowedDestinations":[]}}}`, nil},
 		{"all unknown paths", `{"unknownA":0,"unknownB":0}`, []string{"unknownA", "unknownB"}},
 		{"retired case insensitive", `{"INFRASTRUCTURE":{"metrics":{"HTTPPORT":123}}}`, nil},

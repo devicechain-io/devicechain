@@ -99,8 +99,10 @@ func CanTransition(from, to State) bool {
 // platform-authored; it never carries text a tenant, a device or an agent wrote.
 type Error struct {
 	Code string
-	msg  string
-	err  error
+	// Retryable reports whether the refusal can clear when a dependency recovers.
+	Retryable bool
+	msg       string
+	err       error
 }
 
 func (e *Error) Error() string { return e.msg }
@@ -109,8 +111,10 @@ func (e *Error) Error() string { return e.msg }
 // refusals).
 func (e *Error) Unwrap() error { return e.err }
 
-// Extensions is the GraphQL error extensions: the code.
-func (e *Error) Extensions() map[string]any { return map[string]any{"code": e.Code} }
+// Extensions carries the stable code and retryability to GraphQL clients.
+func (e *Error) Extensions() map[string]any {
+	return map[string]any{"code": e.Code, "retryable": e.Retryable}
+}
 
 func gateErr(code string, wrap error, format string, a ...any) *Error {
 	return &Error{Code: code, msg: fmt.Sprintf(format, a...), err: wrap}
@@ -131,6 +135,8 @@ const (
 	CodeSelfApproval          = "SELF_APPROVAL_REFUSED"
 	CodeExecutionNotAvailable = "EXECUTION_NOT_AVAILABLE"
 	CodePolicyUnavailable     = "POLICY_UNAVAILABLE"
+	CodeFenceClosed           = "FENCE_CLOSED"
+	CodeFenceUnavailable      = "FENCE_UNAVAILABLE"
 	CodeRequestConflict       = "CONFLICT"
 	CodeConcurrentApproval    = "CONCURRENT_APPROVAL"
 )
@@ -161,3 +167,13 @@ func IsCode(err error, code string) bool {
 	var ge *Error
 	return errors.As(err, &ge) && ge.Code == code
 }
+
+// ErrFenceClosed refuses a decision at or before the local kill generation.
+var ErrFenceClosed = Refusal(CodeFenceClosed, "the local agent actuation fence is closed", false)
+
+// ErrFenceUnavailable refuses execution until the local fence can be read.
+var ErrFenceUnavailable = func() *Error {
+	e := Refusal(CodeFenceUnavailable, "the local agent actuation fence could not be read", false)
+	e.Retryable = true
+	return e
+}()

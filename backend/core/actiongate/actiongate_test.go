@@ -396,3 +396,11 @@ func TestCallerDeciderRefusesRedirect(t *testing.T) {
 	require.ErrorContains(t, err, "HTTP 307")
 	require.Zero(t, hits.Load())
 }
+
+func TestFenceRefusals(t *testing.T) {
+	require.True(t, IsCode(ErrFenceClosed, CodeFenceClosed))
+	require.False(t, ErrFenceClosed.Retryable)
+	require.True(t, IsCode(ErrFenceUnavailable, CodeFenceUnavailable))
+	require.True(t, ErrFenceUnavailable.Retryable)
+	require.Equal(t, true, ErrFenceUnavailable.Extensions()["retryable"])
+}
