@@ -6652,7 +6652,7 @@ type Query {
 
 # Contains mutations executed against model.
 type Mutation {
-    """(Preview: may change in a minor release.) Set automation protection. Protecting requires every enabled rule of the active version to read only recorded telemetry: no device attributes, no calculated metric reading device constants and no group scope. Tightening applies at once. Loosening (removing protection, fewer approvals, allowing self-approval, a longer approval lifetime or step-up age) waits for a second person's approval, or for 24 hours when self-approval is allowed. Requires device:write and a person's own unscoped session."""
+    """(Preview: may change in a minor release.) Set automation protection. Protecting requires every enabled rule of the active version to read only recorded telemetry: no device attributes, no calculated metric reading device constants, no group scope, no relationship anchors (anchors[...], anchorType) and no geofence position (geo / inFence). Tightening applies at once. Loosening (removing protection, fewer approvals, allowing self-approval, a longer approval lifetime or step-up age) waits for a second person's approval, or for 24 hours when self-approval is allowed. Requires device:write and a person's own unscoped session."""
     setAutomationReviewPolicy(
         """(Preview: may change in a minor release.) The profile token."""
         profileToken: String!
