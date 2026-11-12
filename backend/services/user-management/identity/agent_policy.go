@@ -548,8 +548,9 @@ func (m *Manager) clientAttested(ctx context.Context, clientID string) (bool, er
 
 // AgentActuationDecision answers agentActuationDecision: the tenant's verdict on a prospective
 // agent action, for the caller's OWN tenant and the client id in the caller's OWN token (never an
-// argument). It reads everything now, with no cache, and a store error is returned rather than
-// answered: a caller must treat an error as a refusal.
+// argument). It reads everything now, including whether the tenant itself is enabled and not
+// being purged, with no cache, and a store error is returned rather than answered: a caller must
+// treat an error as a refusal.
 //
 // Only an AGENT may ask: an agent-origin token that carries at least one proposal authority. A
 // person's console token, or an integration's, is refused with ErrForbidden rather than answered,
@@ -572,7 +573,11 @@ func (m *Manager) AgentActuationDecision(ctx context.Context, claims *auth.Claim
 		if err != nil {
 			return err
 		}
-		st.OperatorSuspended, st.TenantActuationOff, st.Policy, st.Version = suspended, off, doc, version
+		live, err := m.tenantLive(ctx, claims.Tenant)
+		if err != nil {
+			return err
+		}
+		st.OperatorSuspended, st.TenantActuationOff, st.Policy, st.Version = suspended || !live, off, doc, version
 		// Decide as though approvers were plentiful: a refusal for any other reason needs no count.
 		st.EligibleApprovers = 2
 		if pre := agentpolicy.Decide(st, req); pre.Verdict == agentpolicy.VerdictRefuse {
