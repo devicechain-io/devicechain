@@ -190,6 +190,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// exactly this reason; this now does the same.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(),
 		func(nmgr *messaging.NatsManager) error {
+			writer, err := nmgr.NewWriter(streams.AgentActuationKills)
+			if err != nil {
+				return err
+			}
+			IdentityManager.SetKillPublisher(identity.NewKillWriter(writer, Microservice.InstanceId))
 			reader, err := nmgr.NewReader(streams.DeadLetters)
 			if err != nil {
 				return err
