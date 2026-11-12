@@ -60,10 +60,10 @@ type DeliveryEnvelope struct {
 	DispatchNonce string `json:"dispatchNonce,omitempty"`
 }
 
-// Reach says how far a failed command got, as the reporting transport saw it. The values MUST
+// Reach says how far a command got, as the reporting transport saw it. The values MUST
 // match command-delivery/model.Reach.
 const (
-	// ReachUnanswered: the exchange ran and nothing came back. Recorded as TIMEOUT / UNKNOWN.
+	// ReachUnanswered: the exchange ran and nothing came back. On failure, TIMEOUT / UNKNOWN.
 	ReachUnanswered = "UNANSWERED"
 	// ReachUnsent: the transport refused the command before the wire. Recorded as FAILED /
 	// NOT_DELIVERED, the proven-safe-to-retry class.
@@ -79,7 +79,8 @@ type ResponseEnvelope struct {
 	Payload      *string `json:"payload,omitempty"`
 	Error        *string `json:"error,omitempty"`
 
-	// Reach is omitted on success and empty when the device itself answered no.
+	// Reach is empty when the device answered. A successful answer carries UNANSWERED when
+	// the transport has no answer from the device, so it records no delivery evidence.
 	Reach string `json:"reach,omitempty"`
 
 	// DispatchNonce names the dispatch this outcome answers, and command-delivery REFUSES a
