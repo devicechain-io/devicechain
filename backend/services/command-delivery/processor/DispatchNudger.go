@@ -130,13 +130,15 @@ type nudgeRequest struct {
 
 // dispatchNudger is a bounded queue drained by a small pool of workers.
 type dispatchNudger struct {
-	drainer  NudgeDrainer
-	queue    chan nudgeRequest
-	metrics  NudgeMetrics
-	wg       sync.WaitGroup
-	stop     chan struct{}
-	started  sync.Once
-	stopOnce sync.Once
+	drainer     NudgeDrainer
+	queue       chan nudgeRequest
+	metrics     NudgeMetrics
+	wg          sync.WaitGroup
+	stop        chan struct{}
+	started     sync.Once
+	stopOnce    sync.Once
+	lifecycleMu sync.Mutex // serializes worker creation with Stop
+	cancel      context.CancelFunc
 }
 
 // newDispatchNudger builds the queue WITHOUT starting its workers.
@@ -170,6 +172,11 @@ func (n *dispatchNudger) NudgeDevice(tenant, deviceToken string) {
 		return
 	}
 	select {
+	case <-n.stop:
+		return
+	default:
+	}
+	select {
 	case n.queue <- nudgeRequest{tenant: tenant, deviceToken: deviceToken}:
 		incr(n.metrics.Requested, 1)
 	default:
@@ -178,51 +185,69 @@ func (n *dispatchNudger) NudgeDevice(tenant, deviceToken string) {
 }
 
 // Start launches the workers. Safe to call more than once; only the first starts anything.
-func (n *dispatchNudger) Start() {
+func (n *dispatchNudger) Start(parent context.Context) {
 	if n == nil {
 		return
 	}
 	n.started.Do(func() {
+		n.lifecycleMu.Lock()
+		defer n.lifecycleMu.Unlock()
+		select {
+		case <-n.stop:
+			return
+		default:
+		}
+		ctx, cancel := context.WithCancel(parent)
+		n.cancel = cancel
 		for i := 0; i < NudgeWorkers; i++ {
 			n.wg.Add(1)
-			go n.run()
+			go n.run(ctx)
 		}
 	})
 }
 
-// Stop drains the workers. Safe to call more than once, and safe to call on a nudger that
-// was never started — the WaitGroup is empty, so the wait returns immediately.
+// Stop cancels in-flight drains and joins the workers. Safe to call more than once,
+// and safe to call on a nudger that was never started — the WaitGroup is empty, so the wait returns immediately.
 func (n *dispatchNudger) Stop() {
 	if n == nil {
 		return
 	}
 	n.stopOnce.Do(func() {
+		n.lifecycleMu.Lock()
 		close(n.stop)
+		if n.cancel != nil {
+			n.cancel()
+		}
+		n.lifecycleMu.Unlock()
 		n.wg.Wait()
 	})
 }
 
 // run is one worker.
 //
-// 🔴 IT CHECKS stop FIRST AND SEPARATELY. A single select over both channels picks
+// 🔴 IT CHECKS cancellation FIRST AND SEPARATELY. A single select over both channels picks
 // uniformly between a ready stop and a ready queue, so a shutdown behind a full queue would
 // take an unbounded number of extra dispatches to be noticed in the worst case — one extra
 // per worker in expectation, which is the honest figure, but nothing bounds the tail. Draining what is buffered is
 // explicitly NOT wanted at shutdown: every buffered nudge is a row the sweep will dispatch
 // anyway, and publishing during a rolling restart is the one thing worth avoiding.
-func (n *dispatchNudger) run() {
+func (n *dispatchNudger) run(ctx context.Context) {
 	defer n.wg.Done()
 	for {
 		select {
-		case <-n.stop:
+		case <-ctx.Done():
 			return
 		default:
 		}
 		select {
-		case <-n.stop:
+		case <-ctx.Done():
 			return
 		case req := <-n.queue:
-			n.drainer.DrainDevice(context.Background(), req.tenant, req.deviceToken)
+			// Cancellation can race a ready queue in the select above.
+			if ctx.Err() != nil {
+				return
+			}
+			n.drainer.DrainDevice(ctx, req.tenant, req.deviceToken)
 		}
 	}
 }

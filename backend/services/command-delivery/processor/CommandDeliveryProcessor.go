@@ -609,6 +609,11 @@ func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, b
 	// Impacts are resolved for the whole batch before the first claim; see resolveImpacts.
 	cproc.resolveImpacts(tenantCtx, batch, states)
 	for _, cmd := range batch.commands {
+		// Every path finishes a started claim without cancellation; stop here
+		// before the next claim so shutdown does not drain the remaining batch.
+		if ctx.Err() != nil {
+			return
+		}
 		// 🔴 A MISSING KEY READS AS State{Known:false}, WHICH Decide ANSWERS Dispatch.
 		// That is the fail-open, and it carries three separate cases on one line: a
 		// device the projection has never seen, a device whose chunk of the read failed,
@@ -777,9 +782,16 @@ func (cproc *CommandDeliveryProcessor) tenantDeleted(tenant string) bool {
 // the API's, not this function's — see releaseFailedClaim and model.ReleaseClaim.
 func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *model.Command,
 	path dispatchPath, route routing) error {
-	// Publish to the command's tenant subject and mark it SENT under the same
-	// tenant context.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Cancellation is observed only before the claim starts. An autocommit UPDATE
+	// can commit even when cancellation makes the driver report an error, so the
+	// claim itself and every subsequent publish/release step must finish on every
+	// dispatch path, including the sweep. The batch loop stops further claims.
+	// Retain tenant values and the writer's own publish bound during shutdown.
 	tenantCtx := core.WithTenant(ctx, cmd.TenantId)
+	tenantCtx = context.WithoutCancel(tenantCtx)
 	// Published to the TARGET DEVICE's subject, not the tenant's. Before this, every
 	// command went to one tenant-wide subject that every device in the tenant was
 	// granted to subscribe to, so isolation between devices rested entirely on each
@@ -1372,7 +1384,7 @@ func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 	// ExecuteStop. Nudges enqueued before this point are already in the buffer and are
 	// picked up now; nudges enqueued after ExecuteStop are dropped, which costs a sweep
 	// tick of latency and nothing else.
-	cproc.nudger.Start()
+	cproc.nudger.Start(ctx)
 
 	// The two reconcile nets, each on its own slower ticker. Extracted from here for the
 	// same reason the sweep ticker was: inline, neither the cadence nor the shutdown
@@ -1415,10 +1427,10 @@ func (cproc *CommandDeliveryProcessor) Stop(ctx context.Context) error {
 // also why no deadline is taken from ExecuteStop's own context: it is context.Background(),
 // so a bounded wait on it could never fire — a guard that cannot fire is worse than none.
 //
-// ⚠️ THAT BOUND COVERS cproc.periodic AND NOT nudger.Stop(). A nudge worker drains under
-// context.Background() by deliberate choice — see dispatchNudger.run — so its wait is
-// bounded by the work itself finishing, not by any cancellation. Both waits are here, and
-// only one of them is answerable to the root context.
+// Both waits are answerable to the root context. Stop also cancels the nudge's child
+// context before joining, even when the root has not yet been cancelled. A nudge that
+// already claimed a command finishes its publish/release as before; cancellation must
+// not turn a claimed actuation into an uncertain resend (see deliverCommand).
 func (cproc *CommandDeliveryProcessor) ExecuteStop(context.Context) error {
 	cproc.nudger.Stop()
 	close(cproc.quit)
