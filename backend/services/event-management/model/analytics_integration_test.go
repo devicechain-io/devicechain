@@ -34,7 +34,6 @@
 package model
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -44,8 +43,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-microservice/config"
@@ -1304,10 +1301,7 @@ func TestIntegrationAnalyticsSuperuserNamedLikeAReaderIsSkippedNotRefused(t *tes
 	}
 	require.True(t, readerHasSelect(), "control: the ordinary reader must carry the stray grant")
 
-	var output bytes.Buffer
-	previous := log.Logger
-	log.Logger = zerolog.New(&output).Level(zerolog.WarnLevel)
-	t.Cleanup(func() { log.Logger = previous })
+	output := logSink.Capture(t)
 	metrics := newTestAnalyticsMetrics()
 	for pass := 1; pass <= 2; pass++ {
 		require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr, metrics))
