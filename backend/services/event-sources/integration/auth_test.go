@@ -26,6 +26,8 @@ type fakeBackend struct {
 	down     bool
 
 	authCalls    atomic.Int64
+	block        chan struct{}
+	entered      chan struct{}
 	resolveCalls atomic.Int64
 	failures     atomic.Int64
 	undecoded    []undecodedCall
@@ -42,8 +44,21 @@ func newFakeBackend() *fakeBackend {
 	return &fakeBackend{good: map[string]string{"acme/cs": "right-token"}, disabled: map[string]bool{}}
 }
 
-func (f *fakeBackend) Auth(_ context.Context, tenant, integration, bearer string) (*integrationcodec.Descriptor, error) {
+func (f *fakeBackend) Auth(ctx context.Context, tenant, integration, bearer string) (*integrationcodec.Descriptor, error) {
 	f.authCalls.Add(1)
+	if f.entered != nil {
+		select {
+		case f.entered <- struct{}{}:
+		default:
+		}
+	}
+	if f.block != nil {
+		select {
+		case <-f.block:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.down {
@@ -124,6 +139,50 @@ func TestARightTokenIsServedFromMemoryUntilItIsStale(t *testing.T) {
 	_, err = a.Check(ctx, "acme", "cs", "right-token")
 	require.NoError(t, err)
 	require.EqualValues(t, 2, f.authCalls.Load(), "past the window it is asked again")
+}
+
+// A caller whose request is cancelled stops waiting at once, while the flight it started is
+// detached from that cancellation, finishes, and its answer serves the next caller.
+func TestAWaiterWhoseRequestIsCancelledStopsWaitingAndTheFlightCarriesOn(t *testing.T) {
+	f, c := newFakeBackend(), newClock()
+	f.block = make(chan struct{})
+	f.entered = make(chan struct{}, 1)
+	var once sync.Once
+	release := func() { once.Do(func() { close(f.block) }) }
+	t.Cleanup(release)
+	a := newAuth(f, c)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	aDone := make(chan error, 1)
+	go func() {
+		_, err := a.Check(ctx, "acme", "cs", "right-token")
+		aDone <- err
+	}()
+	select {
+	case <-f.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("device-management Auth was not entered")
+	}
+	cancel()
+	select {
+	case err := <-aDone:
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, context.Canceled, err, "cancellation is returned unwrapped")
+	case <-time.After(2 * time.Second):
+		t.Fatal("a cancelled caller stayed blocked on the device-management flight")
+	}
+
+	release()
+	require.Eventually(t, func() bool {
+		e, ok := a.lookup(cacheKey("acme", "cs", "right-token"), c.now())
+		return ok && e.desc != nil
+	}, 5*time.Second, 5*time.Millisecond, "the flight was cancelled with the caller that stopped waiting; nothing was remembered")
+
+	got, err := a.Check(context.Background(), "acme", "cs", "right-token")
+	require.NoError(t, err)
+	require.NotNil(t, got.Descriptor)
+	require.False(t, got.Stale)
+	require.EqualValues(t, 1, f.authCalls.Load(), "the remembered answer serves the next caller; the flight was asked once")
 }
 
 func TestAWrongOrUnknownTokenIsOneAnswer(t *testing.T) {
