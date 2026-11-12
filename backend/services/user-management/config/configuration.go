@@ -22,6 +22,10 @@ import (
 // for the max age reads as rotation disabled or an arbitrary age.
 const MaxSigningKeyDays = int(math.MaxInt64 / int64(24*time.Hour))
 
+// MaxDurationSeconds is the largest whole number of seconds a time.Duration can hold;
+// a larger value overflows when converted.
+const MaxDurationSeconds = int(math.MaxInt64 / int64(time.Second))
+
 // AuthConfiguration controls JWT issuance, signing-key rotation, and the
 // one-time bootstrap admin.
 type AuthConfiguration struct {
@@ -363,8 +367,14 @@ func (c *UserManagementConfiguration) Validate() error {
 	if c.Auth.AccessTokenTtlSeconds <= 0 {
 		return fmt.Errorf("auth.accessTokenTtlSeconds must be positive (got %d)", c.Auth.AccessTokenTtlSeconds)
 	}
+	if c.Auth.AccessTokenTtlSeconds > MaxDurationSeconds {
+		return fmt.Errorf("auth.accessTokenTtlSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.Auth.AccessTokenTtlSeconds)
+	}
 	if c.Auth.RefreshTokenTtlSeconds <= 0 {
 		return fmt.Errorf("auth.refreshTokenTtlSeconds must be positive (got %d)", c.Auth.RefreshTokenTtlSeconds)
+	}
+	if c.Auth.RefreshTokenTtlSeconds > MaxDurationSeconds {
+		return fmt.Errorf("auth.refreshTokenTtlSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.Auth.RefreshTokenTtlSeconds)
 	}
 	// A negative max age, or one that overflows main.go's Duration conversion, can
 	// reach MaybeRotateOnAge as a non-positive age, which it reads as disabled.
