@@ -40,8 +40,9 @@ func (r *SchemaResolver) CreateDeviceType(ctx context.Context, args struct {
 // the right contract anyway: an update naming no fields at all is a caller error,
 // not a no-op to be absorbed silently.
 func (r *SchemaResolver) UpdateDeviceType(ctx context.Context, args struct {
-	Token   string
-	Request model.DeviceTypeUpdateRequest
+	Token            string
+	Request          model.DeviceTypeUpdateRequest
+	BreakGlassReason *string
 }) (*DeviceTypeResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
@@ -51,7 +52,7 @@ func (r *SchemaResolver) UpdateDeviceType(ctx context.Context, args struct {
 	// profile (ADR-045) changes what the ingest path resolves for this type, so
 	// the update must evict the type's cached metric definitions.
 	api := r.GetCachedApi(ctx)
-	updated, err := api.UpdateDeviceType(ctx, args.Token, &args.Request)
+	updated, err := api.UpdateDeviceTypeWithBreakGlass(ctx, args.Token, &args.Request, args.BreakGlassReason)
 	if err != nil {
 		return nil, err
 	}
@@ -123,15 +124,16 @@ func (r *SchemaResolver) CreateDevices(ctx context.Context, args struct {
 // update naming no fields was a caller error; nothing enforced that, and nothing
 // should.
 func (r *SchemaResolver) UpdateDevice(ctx context.Context, args struct {
-	Token   string
-	Request model.DeviceUpdateRequest
+	Token            string
+	Request          model.DeviceUpdateRequest
+	BreakGlassReason *string
 }) (*DeviceResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateDevice(ctx, args.Token, &args.Request)
+	updated, err := api.UpdateDeviceWithBreakGlass(ctx, args.Token, &args.Request, args.BreakGlassReason)
 	if err != nil {
 		return nil, err
 	}

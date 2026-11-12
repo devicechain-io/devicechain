@@ -391,6 +391,10 @@ definitions and its position declaration. Versions are never deleted while the p
 exists; rollbackDeviceProfile makes an earlier one active again.
 """
 type DeviceProfileVersion {
+    """(Preview: may change in a minor release.) The automation review this version consumed when it was published, or null when it was published without one."""
+    automationReviewToken: String
+    """(Preview: may change in a minor release.) The review consumed by this version, or null when none was consumed. Requires device:read and event:read and an unscoped caller; authorization failures affect only this field."""
+    automationReview: AutomationReview
     """Version number: 1 for the first publish of the profile, increasing by one with each publish."""
     version: Int!
     """Optional label given at publish time, such as a release name. Not interpreted."""
@@ -2243,6 +2247,7 @@ input AuditEventSearchCriteria {
     endTime: String
     category: String
     operation: String
+    """Only entries whose actor contains this text. The match ignores case. At most 256 bytes; longer input is refused with LIMIT_EXCEEDED."""
     actor: String
     tableName: String
     entityPk: String
@@ -5170,7 +5175,583 @@ type AgentProposalSearchResults {
     pagination: SearchResultsPagination!
 }
 
+"""(Preview: may change in a minor release.) Automation review Kind vocabulary."""
+enum AutomationReviewKind {
+    """(Preview: may change in a minor release.) Rule change."""
+    RULE_CHANGE
+    """(Preview: may change in a minor release.) No automation change."""
+    NO_AUTOMATION_CHANGE
+    """(Preview: may change in a minor release.) Unreviewable."""
+    UNREVIEWABLE
+}
+
+"""(Preview: may change in a minor release.) Automation review Outcome vocabulary."""
+enum AutomationReviewOutcome {
+    """(Preview: may change in a minor release.) Passed."""
+    PASSED
+    """(Preview: may change in a minor release.) Failed."""
+    FAILED
+    """(Preview: may change in a minor release.) Inconclusive."""
+    INCONCLUSIVE
+    """(Preview: may change in a minor release.) No automation change."""
+    NO_AUTOMATION_CHANGE
+}
+
+"""(Preview: may change in a minor release.) Automation review State vocabulary."""
+enum AutomationReviewState {
+    """(Preview: may change in a minor release.) Ran."""
+    RAN
+    """(Preview: may change in a minor release.) Approved."""
+    APPROVED
+    """(Preview: may change in a minor release.) Rejected."""
+    REJECTED
+    """(Preview: may change in a minor release.) Consumed."""
+    CONSUMED
+    """(Preview: may change in a minor release.) Expired."""
+    EXPIRED
+}
+
+"""(Preview: may change in a minor release.) Automation review WindowRole vocabulary."""
+enum AutomationReviewWindowRole {
+    """(Preview: may change in a minor release.) Incident."""
+    INCIDENT
+    """(Preview: may change in a minor release.) Normal."""
+    NORMAL
+}
+
+"""(Preview: may change in a minor release.) Automation review Verdict vocabulary."""
+enum AutomationReviewVerdict {
+    """(Preview: may change in a minor release.) Pass."""
+    PASS
+    """(Preview: may change in a minor release.) Fail."""
+    FAIL
+    """(Preview: may change in a minor release.) Inconclusive."""
+    INCONCLUSIVE
+}
+
+"""(Preview: may change in a minor release.) Automation review ChangeKind vocabulary."""
+enum AutomationReviewChangeKind {
+    """(Preview: may change in a minor release.) An intent exists only in the draft."""
+    ADDED
+    """(Preview: may change in a minor release.) An intent exists only in the baseline."""
+    REMOVED
+    """(Preview: may change in a minor release.) A paired intent occurs at a different time."""
+    SHIFTED
+    """(Preview: may change in a minor release.) Content changed."""
+    CONTENT_CHANGED
+}
+
+"""(Preview: may change in a minor release.) Automation review StartState vocabulary."""
+enum AutomationReviewStartState {
+    """(Preview: may change in a minor release.) Unknown."""
+    UNKNOWN
+    """(Preview: may change in a minor release.) Clear."""
+    CLEAR
+    """(Preview: may change in a minor release.) Raised."""
+    RAISED
+}
+
+"""(Preview: may change in a minor release.) Automation review ProfileChangeArea vocabulary."""
+enum AutomationReviewProfileChangeArea {
+    """(Preview: may change in a minor release.) Rule."""
+    RULE
+    """(Preview: may change in a minor release.) Metric."""
+    METRIC
+    """(Preview: may change in a minor release.) Command."""
+    COMMAND
+    """(Preview: may change in a minor release.) Decoder."""
+    DECODER
+    """(Preview: may change in a minor release.) Location."""
+    LOCATION
+    """(Preview: may change in a minor release.) Configuration."""
+    CONFIGURATION
+    """(Preview: may change in a minor release.) Semantics."""
+    SEMANTICS
+}
+
+"""(Preview: may change in a minor release.) Automation review ProfileChangeType vocabulary."""
+enum AutomationReviewProfileChangeType {
+    """(Preview: may change in a minor release.) A profile element was added."""
+    ADDED
+    """(Preview: may change in a minor release.) A profile element was removed."""
+    REMOVED
+    """(Preview: may change in a minor release.) Modified."""
+    MODIFIED
+}
+
+"""(Preview: may change in a minor release.) Frozen evidence and approval history for a profile draft."""
+type AutomationReview {
+    """(Preview: may change in a minor release.) The version this review was consumed by, or null while it has not been."""
+    consumedVersion: Int
+    """(Preview: may change in a minor release.) The stable token identifying this review."""
+    token: String!
+    """(Preview: may change in a minor release.) The profile token, resolved from its stored id; lookup failures return null and an error."""
+    profileToken: String
+    """(Preview: may change in a minor release.) How the draft changes automation."""
+    kind: AutomationReviewKind!
+    """(Preview: may change in a minor release.) The changed rule token, when one rule is compared."""
+    ruleToken: String
+    """(Preview: may change in a minor release.) The current review lifecycle state."""
+    state: AutomationReviewState!
+    """(Preview: may change in a minor release.) The frozen comparison outcome."""
+    outcome: AutomationReviewOutcome!
+    """(Preview: may change in a minor release.) The frozen evidence digest the approver must be shown."""
+    reviewDigest: String!
+    """(Preview: may change in a minor release.) The digest of the reviewed draft snapshot."""
+    draftDigest: String!
+    """(Preview: may change in a minor release.) The digest of the published baseline snapshot."""
+    baselineDigest: String!
+    """(Preview: may change in a minor release.) The published baseline version."""
+    baselineVersion: Int!
+    """(Preview: may change in a minor release.) The person who ran the review."""
+    createdBy: String!
+    """(Preview: may change in a minor release.) When the review was created, in RFC3339 format."""
+    createdAt: String!
+    """(Preview: may change in a minor release.) The number of independent approvals required."""
+    requiredApprovals: Int!
+    """(Preview: may change in a minor release.) Approvals. Parsed from stored JSON; parse failures return null and an error."""
+    approvals: [AutomationReviewApproval!]
+    """(Preview: may change in a minor release.) When the approval threshold was reached, in RFC3339 format."""
+    approvedAt: String
+    """(Preview: may change in a minor release.) When approval expires, in RFC3339 format."""
+    expiresAt: String
+    """(Preview: may change in a minor release.) The person who rejected the review."""
+    decidedBy: String
+    """(Preview: may change in a minor release.) When the review was rejected, in RFC3339 format."""
+    decidedAt: String
+    """(Preview: may change in a minor release.) The optional rejection note."""
+    note: String
+    """(Preview: may change in a minor release.) People whose edits contributed after the baseline publication. Parsed from stored JSON; parse failures return null and an error."""
+    draftAuthors: [String!]
+    """(Preview: may change in a minor release.) The differences between the baseline and reviewed draft. Parsed from stored JSON; parse failures return null and an error."""
+    profileChanges: [AutomationReviewProfileChange!]
+    """(Preview: may change in a minor release.) Stored UNREVIEWABLE reasons; an empty list otherwise. Invalid stored JSON returns null and an error."""
+    reasons: [String!]
+    """(Preview: may change in a minor release.) The device tokens selected for replay. Parsed from stored JSON; parse failures return null and an error."""
+    deviceTokens: [String!]
+    """(Preview: may change in a minor release.) The incident and normal replay windows. Parsed from stored JSON; parse failures return null and an error."""
+    windows: [AutomationReviewWindowSpec!]
+    """(Preview: may change in a minor release.) The maximum pairing shift, in seconds; null uses the engine default. Parsed from stored JSON; parse failures return null and an error."""
+    shiftWindowSeconds: Int
+    """(Preview: may change in a minor release.) The expectations supplied when the review ran. Parsed from stored JSON; parse failures return null and an error."""
+    expectationInputs: [AutomationReviewExpectationInput!]
+    """(Preview: may change in a minor release.) The recorded-input fidelity assessment. Parsed from stored JSON; parse failures return null and an error."""
+    fidelity: AutomationReviewFidelity
+    """(Preview: may change in a minor release.) The verdicts for the supplied expectations. Parsed from stored JSON; parse failures return null and an error."""
+    expectations: [AutomationReviewExpectationResult!]
+    """(Preview: may change in a minor release.) The recorded comparison evidence for each window. Parsed from stored JSON; parse failures return null and an error."""
+    windowResults: [AutomationReviewWindowResult!]
+    """(Preview: may change in a minor release.) The digest of the recorded comparison inputs."""
+    inputDigest: String
+    """(Preview: may change in a minor release.) The digest of the stored result bytes."""
+    resultDigest: String
+    """(Preview: may change in a minor release.) The comparison engine build identifier."""
+    engineBuild: String
+    """(Preview: may change in a minor release.) The stored canonical comparison JSON, preserved byte for byte."""
+    result: String
+    """(Preview: may change in a minor release.) Whether the current draft digest matches this review; computation failures return null and an error."""
+    matchesCurrentDraft: Boolean
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewApproval evidence."""
+type AutomationReviewApproval {
+    """(Preview: may change in a minor release.) The approving person."""
+    principal: String!
+    """(Preview: may change in a minor release.) When this approval was recorded, in RFC3339 format."""
+    approvedAt: String!
+    """(Preview: may change in a minor release.) The policy revision recorded with this approval."""
+    policyRevision: Int!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewProfileChange evidence."""
+type AutomationReviewProfileChange {
+    """(Preview: may change in a minor release.) The part of the profile that changed."""
+    area: AutomationReviewProfileChangeArea!
+    """(Preview: may change in a minor release.) The stable key of the changed profile element."""
+    key: String!
+    """(Preview: may change in a minor release.) Whether the profile element was added, removed or modified."""
+    change: AutomationReviewProfileChangeType!
+    """(Preview: may change in a minor release.) Whether this change affects automation behavior."""
+    automation: Boolean!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewWindowSpec evidence."""
+type AutomationReviewWindowSpec {
+    """(Preview: may change in a minor release.) Whether this is the incident or normal window."""
+    role: AutomationReviewWindowRole!
+    """(Preview: may change in a minor release.) The start of the window, in RFC3339 format."""
+    start: String!
+    """(Preview: may change in a minor release.) The end of the window, in RFC3339 format."""
+    end: String!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewExpectationInput evidence."""
+type AutomationReviewExpectationInput {
+    """(Preview: may change in a minor release.) The window to which this expectation applies."""
+    window: AutomationReviewWindowRole!
+    """(Preview: may change in a minor release.) The expectation name."""
+    name: String
+    """(Preview: may change in a minor release.) The stored rule-test expectation as JSON."""
+    expect: String!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewFidelity evidence."""
+type AutomationReviewFidelity {
+    """(Preview: may change in a minor release.) The engine fidelity status."""
+    status: String!
+    """(Preview: may change in a minor release.) The reasons supporting the fidelity assessment."""
+    reasons: [String!]!
+    """(Preview: may change in a minor release.) The human-readable fidelity label."""
+    label: String!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewExpectationResult evidence."""
+type AutomationReviewExpectationResult {
+    """(Preview: may change in a minor release.) The zero-based expectation index."""
+    index: Int!
+    """(Preview: may change in a minor release.) The expectation name."""
+    name: String!
+    """(Preview: may change in a minor release.) The window to which this expectation applies."""
+    window: AutomationReviewWindowRole!
+    """(Preview: may change in a minor release.) The draft verdict for this expectation."""
+    verdict: AutomationReviewVerdict!
+    """(Preview: may change in a minor release.) The baseline verdict for this expectation."""
+    baseline: AutomationReviewVerdict!
+    """(Preview: may change in a minor release.) The reason for the draft verdict."""
+    reason: String!
+    """(Preview: may change in a minor release.) The reason for the baseline verdict."""
+    baselineReason: String!
+    """(Preview: may change in a minor release.) The readings supporting this verdict."""
+    evidence: [AutomationReviewReading!]!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewReading evidence."""
+type AutomationReviewReading {
+    """(Preview: may change in a minor release.) The device token."""
+    device: String!
+    """(Preview: may change in a minor release.) The reading time, in RFC3339 format."""
+    at: String!
+    """(Preview: may change in a minor release.) The recorded value, or null when the reading has no value."""
+    value: Float
+    """(Preview: may change in a minor release.) The reading span converted from nanoseconds to seconds."""
+    spanSeconds: Float!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewWindowResult evidence."""
+type AutomationReviewWindowResult {
+    """(Preview: may change in a minor release.) Whether this is the incident or normal window."""
+    role: AutomationReviewWindowRole!
+    """(Preview: may change in a minor release.) The start of the window, in RFC3339 format."""
+    start: String!
+    """(Preview: may change in a minor release.) The end of the window, in RFC3339 format."""
+    end: String!
+    """(Preview: may change in a minor release.) The replay lead-in start, in RFC3339 format."""
+    leadInStart: String!
+    """(Preview: may change in a minor release.) The recorded input stream."""
+    stream: String!
+    """(Preview: may change in a minor release.) The first stream sequence as a decimal string, without numeric narrowing."""
+    firstSeq: String!
+    """(Preview: may change in a minor release.) The last stream sequence as a decimal string, without numeric narrowing."""
+    lastSeq: String!
+    """(Preview: may change in a minor release.) The digest of the recorded comparison inputs."""
+    inputDigest: String!
+    """(Preview: may change in a minor release.) The window degradation reasons."""
+    degraded: [String!]!
+    """(Preview: may change in a minor release.) The total change counts before truncation."""
+    counts: AutomationReviewChangeCounts!
+    """(Preview: may change in a minor release.) Whether the engine limited the listed changes."""
+    changesTruncated: Boolean!
+    """(Preview: may change in a minor release.) The replay coverage for each selected device."""
+    devices: [AutomationReviewDeviceCoverage!]!
+    """(Preview: may change in a minor release.) The listed automation intent differences."""
+    changes: [AutomationReviewChange!]!
+}
+
+"""(Preview: may change in a minor release.) Total intent change counts for one window."""
+type AutomationReviewChangeCounts {
+    """(Preview: may change in a minor release.) The number of unchanged paired intents."""
+    unchanged: Int!
+    """(Preview: may change in a minor release.) The number of added intents."""
+    added: Int!
+    """(Preview: may change in a minor release.) The number of removed intents."""
+    removed: Int!
+    """(Preview: may change in a minor release.) The number of shifted paired intents."""
+    shifted: Int!
+    """(Preview: may change in a minor release.) The number of paired intents whose content changed."""
+    contentChanged: Int!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewDeviceCoverage evidence."""
+type AutomationReviewDeviceCoverage {
+    """(Preview: may change in a minor release.) The device token."""
+    device: String!
+    """(Preview: may change in a minor release.) Reading counts by metric key, sorted by key."""
+    readings: [AutomationReviewMetricCount!]!
+    """(Preview: may change in a minor release.) Reading counts by profile version token, sorted by key."""
+    versions: [AutomationReviewMetricCount!]!
+    """(Preview: may change in a minor release.) The baseline starting state."""
+    stateBase: AutomationReviewStartState!
+    """(Preview: may change in a minor release.) The draft starting state."""
+    stateDraft: AutomationReviewStartState!
+    """(Preview: may change in a minor release.) When replay first diverged, in RFC3339 format, if it diverged."""
+    divergence: String
+    """(Preview: may change in a minor release.) The number of late baseline readings."""
+    lateBase: Int!
+    """(Preview: may change in a minor release.) The number of late draft readings."""
+    lateDraft: Int!
+    """(Preview: may change in a minor release.) The first covered reading time, or null if none."""
+    first: String
+    """(Preview: may change in a minor release.) The last covered reading time, or null if none."""
+    last: String
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewMetricCount evidence."""
+type AutomationReviewMetricCount {
+    """(Preview: may change in a minor release.) The metric key, or profile version token for version counts. Entries are sorted by key."""
+    key: String!
+    """(Preview: may change in a minor release.) The number of recorded occurrences."""
+    count: Int!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewChange evidence."""
+type AutomationReviewChange {
+    """(Preview: may change in a minor release.) How the draft changes automation."""
+    kind: AutomationReviewChangeKind!
+    """(Preview: may change in a minor release.) The device token."""
+    device: String!
+    """(Preview: may change in a minor release.) The automation intent subject."""
+    subject: String!
+    """(Preview: may change in a minor release.) The intent discriminator used for pairing."""
+    discriminator: String!
+    """(Preview: may change in a minor release.) The baseline intent time, in RFC3339 format, if present."""
+    baseAt: String
+    """(Preview: may change in a minor release.) The draft intent time, in RFC3339 format, if present."""
+    draftAt: String
+    """(Preview: may change in a minor release.) The signed paired-intent shift converted from nanoseconds to seconds."""
+    shiftSeconds: Float!
+    """(Preview: may change in a minor release.) The baseline intent content, if present."""
+    baseContent: AutomationReviewIntentContent
+    """(Preview: may change in a minor release.) The draft intent content, if present."""
+    draftContent: AutomationReviewIntentContent
+    """(Preview: may change in a minor release.) Whether paired intent content changed."""
+    contentChanged: Boolean!
+    """(Preview: may change in a minor release.) The reading that caused this intent difference."""
+    reading: AutomationReviewReading!
+    """(Preview: may change in a minor release.) Whether this difference follows the first state divergence."""
+    afterDivergence: Boolean!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewIntentContent evidence."""
+type AutomationReviewIntentContent {
+    """(Preview: may change in a minor release.) The alarm severity, when applicable."""
+    severity: String
+    """(Preview: may change in a minor release.) The command payload, when applicable."""
+    payload: String
+    """(Preview: may change in a minor release.) The relative expiry converted from nanoseconds to seconds, if present."""
+    relativeExpirySeconds: Float
+    """(Preview: may change in a minor release.) The expiry label, when applicable."""
+    expiryLabel: String
+    """(Preview: may change in a minor release.) The configuration digest, when applicable."""
+    configDigest: String
+    """(Preview: may change in a minor release.) The request body digest, when applicable."""
+    bodyDigest: String
+    """(Preview: may change in a minor release.) The request method, when applicable."""
+    method: String
+}
+
+"""(Preview: may change in a minor release.) RunAutomationReviewInput parameters."""
+input RunAutomationReviewInput {
+    """(Preview: may change in a minor release.) The profile whose draft is reviewed."""
+    profileToken: String!
+    """(Preview: may change in a minor release.) The changed rule token, when one rule is compared."""
+    ruleToken: String
+    """(Preview: may change in a minor release.) The device tokens selected for replay."""
+    deviceTokens: [String!]!
+    """(Preview: may change in a minor release.) The incident and normal replay windows."""
+    windows: [AutomationReviewWindowInput!]!
+    """(Preview: may change in a minor release.) The expectations to evaluate against the comparison."""
+    expectations: [AutomationReviewExpectationInputValue!]
+    """(Preview: may change in a minor release.) The maximum pairing shift, in seconds; null uses the engine default."""
+    shiftWindowSeconds: Int
+    """(Preview: may change in a minor release.) A caller-generated idempotency key for this review request."""
+    requestId: String!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewWindowInput parameters."""
+input AutomationReviewWindowInput {
+    """(Preview: may change in a minor release.) Whether this is the incident or normal window."""
+    role: AutomationReviewWindowRole!
+    """(Preview: may change in a minor release.) RFC3339 timestamp; invalid timestamps are invalid arguments."""
+    start: String!
+    """(Preview: may change in a minor release.) RFC3339 timestamp; invalid timestamps are invalid arguments."""
+    end: String!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewExpectationInputValue parameters."""
+input AutomationReviewExpectationInputValue {
+    """(Preview: may change in a minor release.) The window to which this expectation applies."""
+    window: AutomationReviewWindowRole!
+    """(Preview: may change in a minor release.) The expectation name."""
+    name: String
+    """(Preview: may change in a minor release.) One rule-test expectation as JSON, using the event-processing expectation vocabulary."""
+    expect: String!
+}
+
+"""(Preview: may change in a minor release.) Profile, lifecycle, draft matching and paging filters."""
+input AutomationReviewSearchCriteria {
+    """(Preview: may change in a minor release.) The profile whose draft is reviewed."""
+    profileToken: String!
+    """(Preview: may change in a minor release.) The current review lifecycle state."""
+    state: AutomationReviewState
+    """(Preview: may change in a minor release.) Only reviews whose draft digest matches, or does not match, the current draft."""
+    matchingCurrentDraft: Boolean
+    """(Preview: may change in a minor release.) The page to return, starting at 1."""
+    pageNumber: Int!
+    """(Preview: may change in a minor release.) The number of reviews per page."""
+    pageSize: Int!
+}
+
+"""(Preview: may change in a minor release.) One page of automation reviews."""
+type AutomationReviewSearchResults {
+    """(Preview: may change in a minor release.) The reviews on this page, newest first."""
+    results: [AutomationReview!]!
+    """(Preview: may change in a minor release.) Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
+}
+
+"""(Preview: may change in a minor release.) Effective automation publish protection settings."""
+type AutomationReviewPolicySettings {
+    """(Preview: may change in a minor release.) Whether publishing requires an approved review."""
+    required: Boolean!
+    """(Preview: may change in a minor release.) Number of distinct approvals required."""
+    requiredApprovals: Int!
+    """(Preview: may change in a minor release.) Whether review creators and draft authors may approve."""
+    allowSelfApproval: Boolean!
+    """(Preview: may change in a minor release.) Approval lifetime in seconds."""
+    approvalTtlSeconds: Int!
+    """(Preview: may change in a minor release.) Maximum age of the second factor in seconds."""
+    stepUpMaxAgeSeconds: Int!
+}
+
+"""(Preview: may change in a minor release.) The lifecycle of a proposed policy change."""
+enum AutomationReviewPolicyChangeState {
+    """(Preview: may change in a minor release.) Waiting for approval or a permitted delay."""
+    PENDING
+    """(Preview: may change in a minor release.) The proposal has taken effect."""
+    APPLIED
+    """(Preview: may change in a minor release.) The proposal was cancelled."""
+    CANCELLED
+    """(Preview: may change in a minor release.) A later policy change replaced this proposal."""
+    SUPERSEDED
+}
+
+"""(Preview: may change in a minor release.) A proposed loosening of automation protection."""
+type AutomationReviewPolicyChange {
+    """(Preview: may change in a minor release.) The policy change token."""
+    token: String!
+    """(Preview: may change in a minor release.) The proposed settings; unreadable stored JSON returns null and an error."""
+    proposed: AutomationReviewPolicySettings
+    """(Preview: may change in a minor release.) The person proposing the change."""
+    proposedBy: String!
+    """(Preview: may change in a minor release.) When proposed, as an RFC 3339 timestamp."""
+    proposedAt: String!
+    """(Preview: may change in a minor release.) When the change may take effect without a second person, as an RFC 3339 timestamp."""
+    effectiveAt: String
+    """(Preview: may change in a minor release.) The proposal lifecycle state."""
+    state: AutomationReviewPolicyChangeState!
+    """(Preview: may change in a minor release.) Who decided the proposal, when decided."""
+    decidedBy: String
+    """(Preview: may change in a minor release.) When decided, as an RFC 3339 timestamp."""
+    decidedAt: String
+}
+
+"""(Preview: may change in a minor release.) Automation publish protection for a profile."""
+type AutomationReviewPolicy {
+    """(Preview: may change in a minor release.) The protected profile token."""
+    profileToken: String!
+    """(Preview: may change in a minor release.) The settings currently enforced; defaults apply when no policy is stored."""
+    effective: AutomationReviewPolicySettings!
+    """(Preview: may change in a minor release.) The stored revision, or zero when no policy is stored."""
+    revision: Int!
+    """(Preview: may change in a minor release.) Who last updated the stored policy, or null when none is stored."""
+    updatedBy: String
+    """(Preview: may change in a minor release.) When the stored policy was updated, as an RFC 3339 timestamp, or null when none is stored."""
+    updatedAt: String
+    """(Preview: may change in a minor release.) The pending loosening proposal, if any."""
+    pendingChange: AutomationReviewPolicyChange
+}
+
+"""(Preview: may change in a minor release.) Requested automation protection settings; omitted optional fields use their defaults."""
+input AutomationReviewPolicyInput {
+    """(Preview: may change in a minor release.) Whether publishing requires review."""
+    required: Boolean!
+    """(Preview: may change in a minor release.) Required approvals; defaults to 1."""
+    requiredApprovals: Int
+    """(Preview: may change in a minor release.) Whether creators and authors may approve; defaults to false."""
+    allowSelfApproval: Boolean
+    """(Preview: may change in a minor release.) Approval lifetime in seconds; defaults to 86400."""
+    approvalTtlSeconds: Int
+    """(Preview: may change in a minor release.) Maximum second-factor age in seconds; defaults to 900."""
+    stepUpMaxAgeSeconds: Int
+}
+
+"""(Preview: may change in a minor release.) Whether the policy was applied immediately and its resulting view."""
+type SetAutomationReviewPolicyResult {
+    """(Preview: may change in a minor release.) True when applied immediately; false when approval or a delay is pending."""
+    applied: Boolean!
+    """(Preview: may change in a minor release.) The resulting policy."""
+    policy: AutomationReviewPolicy
+}
+
+"""(Preview: may change in a minor release.) An activation change made outside review."""
+enum AutomationReviewBreakGlassAction {
+    """(Preview: may change in a minor release.) Changing the active profile version."""
+    ROLLBACK
+    """(Preview: may change in a minor release.) Changing the profile bound to a type."""
+    REPOINT_TYPE
+    """(Preview: may change in a minor release.) Moving a device out of a protected type."""
+    MOVE_DEVICE
+}
+
+"""(Preview: may change in a minor release.) The recorded reason and person for a protected activation change."""
+type AutomationReviewBreakGlass {
+    """(Preview: may change in a minor release.) The activation change action."""
+    action: AutomationReviewBreakGlassAction!
+    """(Preview: may change in a minor release.) The affected target token."""
+    target: String!
+    """(Preview: may change in a minor release.) Why the change was necessary."""
+    reason: String!
+    """(Preview: may change in a minor release.) The person making the change."""
+    actor: String!
+    """(Preview: may change in a minor release.) When recorded, as an RFC 3339 timestamp."""
+    at: String!
+}
+
 type Query {
+    """(Preview: may change in a minor release.) Read automation protection settings. Requires device:read and an unscoped caller; an unknown profile returns NOT_FOUND."""
+    automationReviewPolicy(
+        """(Preview: may change in a minor release.) The profile token."""
+        profileToken: String!
+    ): AutomationReviewPolicy
+    """(Preview: may change in a minor release.) Read at most 200 activation changes made outside review, newest first. Requires device:read and an unscoped caller; an unknown profile returns NOT_FOUND."""
+    automationReviewBreakGlass(
+        """(Preview: may change in a minor release.) The profile token."""
+        profileToken: String!
+    ): [AutomationReviewBreakGlass!]
+
+    """(Preview: may change in a minor release.) Read frozen automation evidence. Requires device:read and event:read and an unscoped caller."""
+    automationReview(
+        """(Preview: may change in a minor release.) The review token."""
+        token: String!
+    ): AutomationReview
+
+    """(Preview: may change in a minor release.) List automation reviews. Requires device:read and event:read and an unscoped caller."""
+    automationReviews(
+        """(Preview: may change in a minor release.) Profile, state, draft matching and paging filters."""
+        criteria: AutomationReviewSearchCriteria!
+    ): AutomationReviewSearchResults
+
+
     """
     Returns the device types with the given ids. Ids that match no device type are
     omitted, an id that is not a number fails the request, and more than 1000 ids are
@@ -6072,6 +6653,47 @@ type Query {
 
 # Contains mutations executed against model.
 type Mutation {
+    """(Preview: may change in a minor release.) Set automation protection. Protecting requires every enabled rule of the active version to read only recorded telemetry: no device attributes, no calculated metric reading device constants and no group scope. Tightening applies at once. Loosening (removing protection, fewer approvals, allowing self-approval, a longer approval lifetime or step-up age) waits for a second person's approval, or for 24 hours when self-approval is allowed. Requires device:write and a person's own unscoped session."""
+    setAutomationReviewPolicy(
+        """(Preview: may change in a minor release.) The profile token."""
+        profileToken: String!
+        """(Preview: may change in a minor release.) The protection settings to request."""
+        settings: AutomationReviewPolicyInput!
+    ): SetAutomationReviewPolicyResult
+    """(Preview: may change in a minor release.) Approve a pending policy change. Requires device:write, a second person's own unscoped session and a recently verified second factor; the proposer is refused."""
+    approveAutomationReviewPolicyChange(
+        """(Preview: may change in a minor release.) The policy change token."""
+        token: String!
+    ): AutomationReviewPolicy
+    """(Preview: may change in a minor release.) Cancel a pending policy change. Requires device:write and a person's own unscoped session."""
+    cancelAutomationReviewPolicyChange(
+        """(Preview: may change in a minor release.) The policy change token."""
+        token: String!
+    ): AutomationReviewPolicy
+
+    """(Preview: may change in a minor release.) Compare a profile draft with its published baseline. Requires an unscoped person with device:write and event:read."""
+    runAutomationReview(
+        """(Preview: may change in a minor release.) The draft, devices, windows and expectations to review."""
+        input: RunAutomationReviewInput!
+    ): AutomationReview
+
+    """(Preview: may change in a minor release.) Approve frozen evidence. Requires an unscoped person with device:write and event:read and a recent second factor; refuses the review creator and draft authors."""
+    approveAutomationReview(
+        """(Preview: may change in a minor release.) The review token."""
+        token: String!
+        """(Preview: may change in a minor release.) The reviewDigest the approver was shown."""
+        digest: String!
+    ): AutomationReview
+
+    """(Preview: may change in a minor release.) Reject a review. Requires an unscoped person with device:write and event:read."""
+    rejectAutomationReview(
+        """(Preview: may change in a minor release.) The review token."""
+        token: String!
+        """(Preview: may change in a minor release.) An optional decision note."""
+        note: String
+    ): AutomationReview
+
+
     """
     (Preview: may change in a minor release.) An AI agent asks for alarms to be acknowledged or
     cleared. Only an agent's token holding alarm:propose may call it; a person's own session is
@@ -6140,6 +6762,8 @@ type Mutation {
         token: String!
         """The fields to change."""
         request: DeviceTypeUpdateRequest!
+        """(Preview: may change in a minor release.) Why the device type is being re-pointed outside review. Required (with a second factor verified recently) on a profile re-point to or from a protected profile, where it is recorded with the person; ignored otherwise."""
+        breakGlassReason: String
     ): DeviceType!
     """
     Deletes a device type. Returns true when it was deleted and false when no device type
@@ -6280,6 +6904,7 @@ type Mutation {
     use. The draft's enabled detection rules are checked first; a rejected
     rule, or a check that cannot be completed, fails the publish and nothing is stored.
     Fails if no profile has the token. Returns the new version. Requires device:write.
+    On a protected profile the approved review must still match the draft, the active version, the policy and its approvers' standing.
     """
     publishDeviceProfile(
         """Token of the profile to publish."""
@@ -6288,6 +6913,8 @@ type Mutation {
         label: String
         """Optional notes for the version, up to 1024 characters."""
         description: String
+        """(Preview: may change in a minor release.) The approved automation review this publish consumes. Required when the profile is protected by an automation review policy, where a publish without one is refused with REVIEW_REQUIRED; ignored otherwise."""
+        automationReviewToken: String
     ): DeviceProfileVersion!
     """
     Makes an existing published version the one devices use again. The draft and the version
@@ -6301,6 +6928,8 @@ type Mutation {
         token: String!
         """Number of the published version to make active."""
         version: Int!
+        """(Preview: may change in a minor release.) Why the active version of a protected profile is being changed outside review. Required (with a second factor verified recently) on a protected profile, where it is recorded with the person; ignored otherwise."""
+        breakGlassReason: String
     ): DeviceProfile!
     """
     Adds a metric definition to a profile's draft and returns it. It reaches devices when
@@ -6498,6 +7127,8 @@ type Mutation {
         token: String!
         """The fields to change."""
         request: DeviceUpdateRequest!
+        """(Preview: may change in a minor release.) Why the device is being moved outside review. Required (with a second factor verified recently) on moving a device out of a type bound to a protected profile, where it is recorded with the person; ignored otherwise."""
+        breakGlassReason: String
     ): Device!
     """
     Deletes a device together with its credentials, replacement history, relationships,

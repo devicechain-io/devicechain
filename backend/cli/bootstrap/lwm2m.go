@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/devicechain-io/dc-microservice/core"
 )
 
 // minLwm2mPSKBytes mirrors lwm2m-ingest's ResolveCredentials floor (config
@@ -59,9 +61,10 @@ type Lwm2mIdentity struct {
 
 // ParseLwm2mIdentities reads and validates the --lwm2m-identities file. It validates
 // up front — before any cluster exists — so a short PSK, a missing tenancy field, or
-// an autoRegister without a device type fails as a one-line CLI error rather than a
-// ten-minute helm-timeout (a bad PSK crashes lwm2m-ingest at Init) or a half-configured
-// deployment. An empty path returns (nil, nil): the feature is off.
+// an autoRegister without a device type or a type outside the token grammar fails
+// as a one-line CLI error rather than a ten-minute helm-timeout (a bad PSK crashes
+// lwm2m-ingest at Init) or a half-configured deployment. An empty path returns
+// (nil, nil): the feature is off.
 func ParseLwm2mIdentities(path string) ([]Lwm2mIdentity, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
@@ -112,6 +115,13 @@ func ParseLwm2mIdentities(path string) ([]Lwm2mIdentity, error) {
 		}
 		if id.AutoRegister && blank(id.DeviceTypeToken) {
 			return nil, fmt.Errorf("%s (%q): deviceTypeToken is required when autoRegister is true", where, id.Identity)
+		}
+		// Mirror the service's token rule so the file is refused before any cluster
+		// or Secret exists.
+		if id.DeviceTypeToken != "" {
+			if err := core.ValidateToken(id.DeviceTypeToken); err != nil {
+				return nil, fmt.Errorf("%s (%q): deviceTypeToken: %w", where, id.Identity, err)
+			}
 		}
 		key, err := base64.StdEncoding.DecodeString(id.PSK)
 		if err != nil {

@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // decodeSlots reads a window's slots document STRICTLY: an unrecognised key is refused rather
@@ -101,31 +102,72 @@ func (api *Api) UpdateMaintenanceWindow(ctx context.Context, token string,
 	}
 	updated := matches[0]
 
-	timezone, err := request.Timezone.ApplyToRequired("timezone", updated.Timezone)
+	assignments := make(map[string]any)
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(updated.Name)
+	}
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(updated.Description)
+	}
+	if request.Metadata.Set {
+		metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
+		if err != nil {
+			return nil, err
+		}
+		assignments["metadata"] = metadataJSON
+	}
+	scheduleEdit := request.Timezone.Set || request.Slots.Set
+	if len(assignments) == 0 && !scheduleEdit {
+		return updated, nil
+	}
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if scheduleEdit {
+			// Validate against the current schedule under the write's row lock, not
+			// the earlier snapshot. Concurrent schedule edits must validate in order.
+			var current MaintenanceWindow
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, updated.ID).Error; err != nil {
+				return err
+			}
+			timezone, err := request.Timezone.ApplyToRequired("timezone", current.Timezone)
+			if err != nil {
+				return err
+			}
+			slotsJSON, err := request.Slots.ApplyToRequired("slots", string(current.Slots))
+			if err != nil {
+				return err
+			}
+			slots, err := validateWindow(timezone, slotsJSON)
+			if err != nil {
+				return err
+			}
+			if request.Timezone.Set {
+				assignments["timezone"] = strings.TrimSpace(timezone)
+			}
+			if request.Slots.Set {
+				assignments["slots"] = slots
+			}
+		}
+		// Omitted columns may have changed since the read. In particular, a label
+		// edit must never write the schedule it happened to read back to storage.
+		result := tx.Model(updated).Omit(clause.Associations).Updates(assignments)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	reloaded, err := api.MaintenanceWindowsById(ctx, []uint{updated.ID})
 	if err != nil {
 		return nil, err
 	}
-	slotsJSON, err := request.Slots.ApplyToRequired("slots", string(updated.Slots))
-	if err != nil {
-		return nil, err
+	if len(reloaded) == 0 {
+		return nil, gorm.ErrRecordNotFound
 	}
-	slots, err := validateWindow(timezone, slotsJSON)
-	if err != nil {
-		return nil, err
-	}
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
-	if err != nil {
-		return nil, err
-	}
-	updated.Timezone = strings.TrimSpace(timezone)
-	updated.Slots = slots
-	updated.Metadata = metadataJSON
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	if err := api.RDB.DB(ctx).Save(updated).Error; err != nil {
-		return nil, err
-	}
-	return updated, nil
+	return reloaded[0], nil
 }
 
 // MaintenanceWindowsById gets windows by id.

@@ -46,7 +46,7 @@ func newDecoderWire(t *testing.T) *decoderWire {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.DeviceProfileActivation{},
+	require.NoError(t, db.AutoMigrate(&model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{}, &model.DeviceProfileActivation{},
 		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{}, &model.DeviceType{},
 		&model.DetectionRuleScopeRef{}, &model.ProfileDecoderSample{}, &model.Integration{}, &model.IntegrationDeviceType{}))
 	return &decoderWire{t: t, api: model.NewApi(&rdb.RdbManager{Database: db}),

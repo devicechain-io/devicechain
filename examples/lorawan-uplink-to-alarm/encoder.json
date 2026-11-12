@@ -1,0 +1,10 @@
+{
+  "fPort": 12,
+  "confirmed": true,
+  "fields": [
+    {"param": "setpoint", "type": "i16be", "scale": 0.1},
+    {"bits": {"type": "u8", "fields": [
+      {"param": "mode", "shift": 0, "width": 3}
+    ]}}
+  ]
+}

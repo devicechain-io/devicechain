@@ -188,7 +188,7 @@ type AuditEvent struct {
 	ClientId *string
 	// SessionId is the sign-in session the acting token descends from (the "sid" claim),
 	// which ties a row to the grant that produced it. NULL when the token carries none —
-	// every console token, and every OAuth token minted before the claim existed. A NULL
+	// console and OAuth access tokens minted before their session binding existed. A NULL
 	// here means "unknown", never "the same session as another NULL row".
 	//
 	// It is an opaque random value and names no person on its own, but it correlates every

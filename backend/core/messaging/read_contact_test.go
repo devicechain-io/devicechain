@@ -247,6 +247,13 @@ func TestAnIdleConsumerSurvivesTwoBrokerRestartsFarApart(t *testing.T) {
 	srv = startBrokerKeepingStore(t, port, storeDir)
 	waitFor(t, "the client to reconnect", nmgr.nc.IsConnected)
 
+	// Settle the restart's fallout on the clock it happened on before the three idle
+	// minutes begin. The probe runs on the read goroutine, so its answer means all
+	// reconnect errors have been handed out and paced. Without this, takeDown's
+	// settle can clear the reconnect's evidence while its error is still in flight,
+	// and that error is then paced three minutes late.
+	l.settle(t, reader)
+
 	l.advance(3 * time.Minute)
 	// takeDown first waits for the idle reader's probe to be answered: the evidence that
 	// makes the second restart a failure of its own.

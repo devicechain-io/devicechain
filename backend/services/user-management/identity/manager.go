@@ -161,11 +161,12 @@ type SeedOAuthClient struct {
 // Manager owns native auth for the instance. Build it with NewManager, then
 // call Initialize once the database and NATS KV are available.
 type Manager struct {
-	ms        *core.Microservice
-	db        *rdb.RdbManager
-	iam       *iam.Store
-	locker    *messaging.DistributedLock
-	accessTTL time.Duration
+	killPublisher KillPublisher
+	ms            *core.Microservice
+	db            *rdb.RdbManager
+	iam           *iam.Store
+	locker        *messaging.DistributedLock
+	accessTTL     time.Duration
 	// secrets holds the private half of the active JWT signing key, sealed under the
 	// instance root key. The signing_keys table holds public halves only.
 	secrets secrets.SecretStore
@@ -1074,11 +1075,20 @@ var errTenantAccessDenied = errors.New("tenant access denied")
 // scoped. A stored scope that does not parse is a DENIAL, never the whole tenant: a
 // membership whose bound cannot be read must not be minted unbounded.
 func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, amr *signIn, err error) {
+	rec, err := m.loadSession(sid, id.Email)
+	if err != nil {
+		return nil, nil, auth.Scope{}, nil, err
+	}
+	return m.resolveTenantGrantRecord(ctx, rec, id, tenant, mem, su)
+}
+
+// resolveTenantGrantRecord reuses the sign-in read before a decision's snapshot.
+func (m *Manager) resolveTenantGrantRecord(ctx context.Context, rec *sessionRecord, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, amr *signIn, err error) {
 	// The sign-in's own terms come first: a session that may not enter this tenant gets no
 	// grant from the identity's memberships, superuser or not (admitTenant says which
 	// sessions a superuser's break-glass still applies to). It also hands back the sign-in's
 	// amr, which the caller mints into every token.
-	amr, err = m.admitTenant(ctx, sid, id, tenant, su)
+	amr, err = m.admitTenantRecord(ctx, rec, id, tenant, su)
 	if err != nil {
 		return nil, nil, auth.Scope{}, nil, err
 	}
@@ -1225,9 +1235,9 @@ func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoc
 	var access auth.IssuedToken
 	var err error
 	if scope.IsScoped() && !sudo {
-		access, err = issuer.IssueScopedTenantAccess(tenant, email, roles, authorities, scope, uuid.NewString(), amr.options()...)
+		access, err = issuer.IssueScopedTenantAccess(tenant, email, roles, authorities, scope, uuid.NewString(), append(amr.options(), auth.WithSessionID(sid))...)
 	} else {
-		access, err = issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString(), amr.options()...)
+		access, err = issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString(), append(amr.options(), auth.WithSessionID(sid))...)
 	}
 	if err != nil {
 		return nil, err

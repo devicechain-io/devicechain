@@ -117,6 +117,9 @@ func (w Window) validate() error {
 	return nil
 }
 
+// Validate checks the expectation shape for callers that construct it in Go.
+func (e Expect) Validate() error { return e.validate() }
+
 func (e Expect) validate() error {
 	if n := e.blocks(); n != 1 {
 		return fmt.Errorf("name exactly one of raised, cleared, neverRaised, intent and neverIntent (found %d)", n)
