@@ -164,8 +164,10 @@ func (api *Api) RunAutomationReview(ctx context.Context, person actiongate.Appro
 	if err != nil {
 		return nil, err
 	}
+	// The bound is in the same zone gorm stamps created_at with, so a store that compares
+	// timestamps as text (sqlite) orders them the same way PostgreSQL does.
 	var count int64
-	if err := api.RDB.DB(ctx).Model(&AutomationReview{}).Where("created_at >= ?", time.Now().UTC().Add(-time.Hour)).Count(&count).Error; err != nil {
+	if err := api.RDB.DB(ctx).Model(&AutomationReview{}).Where("created_at >= ?", time.Now().Add(-time.Hour)).Count(&count).Error; err != nil {
 		return nil, err
 	}
 	if count >= MaxReviewsPerHour {

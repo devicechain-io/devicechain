@@ -40,6 +40,13 @@ func TestIsolationSweep(t *testing.T) {
 		}
 	}
 	t.Logf("swept %d operations as acme's member: %v", len(out), counts)
+	// Review evidence has no scope rule. Both reads must refuse before looking
+	// up the requested profile or token and preserve the explicit actiongate code.
+	for _, op := range []string{"query automationReview", "query automationReviews"} {
+		if o, ok := isolationsweep.OutcomeOf(out, op); !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "SCOPED_GRANT_NOT_SUPPORTED" {
+			t.Errorf("%s: %+v (reached=%v), want SCOPED_GRANT_NOT_SUPPORTED", op, o, ok)
+		}
+	}
 	for _, o := range out {
 		if !o.Data && (len(o.Codes) == 0 || o.Codes[0] == "-") {
 			t.Logf("  answered with no code: %s %v", o.Operation, o.Codes)
