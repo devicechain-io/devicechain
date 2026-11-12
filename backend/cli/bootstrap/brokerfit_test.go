@@ -114,6 +114,7 @@ func TestBrokerFitListError(t *testing.T) {
 }
 
 func TestBrokerFitRequests(t *testing.T) {
+	t.Parallel()
 	for _, stated := range []string{"nats_cpu_request", "nats_memory_request", "both"} {
 		req, unchecked, err := brokerRequestFor(&State{Size: SizePerf16k}, func(name string) bool {
 			return name == stated || stated == "both"
@@ -141,24 +142,24 @@ func TestBrokerFitRequests(t *testing.T) {
 	}
 	for _, field := range []string{"cpu", "memory"} {
 		t.Run("invalid "+field, func(t *testing.T) {
-			original := sizePresets[SizePerf16k]
-			t.Cleanup(func() { sizePresets[SizePerf16k] = original })
-			invalid := original
+			t.Parallel()
+			st := &State{HA: true, Size: SizePerf16k, DryRun: true}
+			invalid := *sizeFor(st)
 			if field == "cpu" {
 				invalid.NatsCPURequest = "invalid"
 			} else {
 				invalid.NatsMemoryRequest = "invalid"
 			}
-			sizePresets[SizePerf16k] = invalid
-			originalList, originalStates := listNodes, operatorStatesVar
-			t.Cleanup(func() { listNodes, operatorStatesVar = originalList, originalStates })
-			listNodes = func(context.Context, string) ([]corev1.Node, error) {
-				t.Fatal("listed nodes before refusing invalid requests")
-				return nil, nil
+			// Invalid fixtures must not affect concurrent readers of the built-in preset.
+			stated := func(string) bool { return false }
+			req, _, err := brokerRequestFor(st, stated)
+			if err != nil || req == nil || req.CPUText != "6" || req.MemText != "6Gi" {
+				t.Fatalf("invalid fixture changed the built-in requests: %+v, %v", req, err)
 			}
-			operatorStatesVar = func(*State, string) bool { return false }
-			if err := checkHaNodeCapacity(context.Background(), &State{HA: true, Size: SizePerf16k, DryRun: true}); err == nil {
-				t.Fatal("invalid preset request did not fail closed")
+			_, _, err = invalid.brokerRequestFor(st, stated)
+			want := "parsing " + SizePerf16k + " nats_" + field + "_request:"
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("invalid preset request: got %v, want error containing %q", err, want)
 			}
 		})
 	}
