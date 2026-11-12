@@ -139,21 +139,21 @@ const MaxEnabledDetectionRulesPerPublish = 1000
 // what is frozen (no TOCTOU with a separate draft read). Only enabled rules are gated: a
 // disabled rule is inert (the runtime skips it at the fact-emit boundary) and a parked,
 // still-WIP rule must not block publishing the rest — it is re-validated when a later draft
-// enables it. With no validator wired (service secret unset) the gate is skipped.
+// enables it. With no validator wired (service secret unset) the compile is skipped, but the
+// MaxEnabledDetectionRulesPerPublish bound still applies.
 func (api *Api) validateSnapshotDetectionRules(ctx context.Context, snapshot datatypes.JSON) error {
-	if api.DetectionRuleValidator == nil {
-		return nil
-	}
 	snap, err := parseProfileSnapshot(snapshot)
 	if err != nil {
 		return err
 	}
 	toValidate := enabledRulesToValidate(snap.Rules)
-	if len(toValidate) == 0 {
-		return nil
-	}
+	// The count bound is checked before the no-validator skip, so the documented publish
+	// limit holds whether or not event-processing's gate is wired.
 	if len(toValidate) > MaxEnabledDetectionRulesPerPublish {
 		return limit.Exceeded("enabled detection rules on one profile", len(toValidate), MaxEnabledDetectionRulesPerPublish)
+	}
+	if api.DetectionRuleValidator == nil || len(toValidate) == 0 {
+		return nil
 	}
 
 	failures, err := api.DetectionRuleValidator.ValidateDetectionRules(ctx, toValidate)

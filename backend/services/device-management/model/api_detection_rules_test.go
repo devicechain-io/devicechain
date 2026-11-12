@@ -315,6 +315,8 @@ func TestValidateDetectionRuleToken(t *testing.T) {
 	}
 }
 
+// event-processing's gate refuses more than 1,000 rules per call; publish checks the same
+// bound first so the author sees LIMIT_EXCEEDED naming it, not "validation is unavailable".
 func TestValidateSnapshotDetectionRules_RefusesMoreEnabledRulesThanTheGateCompiles(t *testing.T) {
 	rules := make([]*DetectionRule, 0, MaxEnabledDetectionRulesPerPublish+6)
 	for i := 0; i < MaxEnabledDetectionRulesPerPublish+1; i++ {
@@ -343,6 +345,23 @@ func TestValidateSnapshotDetectionRules_RefusesMoreEnabledRulesThanTheGateCompil
 	}
 }
 
+// The publish bound holds even where no validator is wired (service secret unset): the
+// documented limit is the profile's, not a property of event-processing being reachable.
+func TestValidateSnapshotDetectionRules_BoundHoldsWithoutAValidator(t *testing.T) {
+	rules := make([]*DetectionRule, 0, MaxEnabledDetectionRulesPerPublish+1)
+	for i := 0; i < MaxEnabledDetectionRulesPerPublish+1; i++ {
+		rules = append(rules, enabledRule(fmt.Sprintf("r%d", i)))
+	}
+	api := &Api{}
+	if _, ok := limit.As(api.validateSnapshotDetectionRules(context.Background(), snapshotOf(rules...))); !ok {
+		t.Fatal("expected a limit refusal with no validator wired")
+	}
+	if err := api.validateSnapshotDetectionRules(context.Background(), snapshotOf(rules[:MaxEnabledDetectionRulesPerPublish]...)); err != nil {
+		t.Fatalf("at the bound with no validator wired the gate must still skip, got: %v", err)
+	}
+}
+
+// Exactly the bound still reaches the gate, and disabled rules do not count toward it.
 func TestValidateSnapshotDetectionRules_AtTheBoundStillCallsTheGate(t *testing.T) {
 	rules := make([]*DetectionRule, 0, MaxEnabledDetectionRulesPerPublish+5)
 	for i := 0; i < MaxEnabledDetectionRulesPerPublish; i++ {
