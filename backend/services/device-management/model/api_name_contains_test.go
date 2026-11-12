@@ -7,9 +7,12 @@ import (
 	"context"
 	"database/sql"
 	"sort"
+	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // nameContainsFixture seeds devices and types whose names and tokens differ, so a match can be
@@ -111,8 +114,79 @@ func TestDeviceTypesNameContains(t *testing.T) {
 	require.Equal(t, []string{"bare-1-type"}, typeTokens(t, api, ctx, strPtr("bare")), "an unnamed type is found by its token")
 	require.Equal(t, []string{"q-7-type"}, typeTokens(t, api, ctx, strPtr("boiler")))
 	require.Empty(t, typeTokens(t, api, ctx, strPtr("%")))
+	require.Equal(t, []string{"Cam_Eleven-type"}, typeTokens(t, api, ctx, strPtr("_")))
+	require.Empty(t, typeTokens(t, api, ctx, strPtr(`\`)))
 	require.Len(t, typeTokens(t, api, ctx, strPtr("  ")), 9, "blank is no filter: the eight seeded and the fixture's own")
 	require.Len(t, typeTokens(t, api, ctx, nil), 9)
+}
+
+func TestNameContainsRefusesOversizedInputBeforeQueries(t *testing.T) {
+	api, ctx := nameContainsFixture(t)
+	queries := 0
+	cb := api.RDB.Database.Callback().Query()
+	require.NoError(t, cb.Before("gorm:query").Register("test:name_contains_queries", func(*gorm.DB) {
+		queries++
+	}))
+	t.Cleanup(func() { require.NoError(t, cb.Remove("test:name_contains_queries")) })
+
+	for _, tc := range []struct{ name, text string }{
+		{"ASCII", strings.Repeat("x", 257)},
+		{"UTF8", strings.Repeat("é", 129)},
+		{"whitespace", strings.Repeat(" ", 257)},
+		{"padded", strings.Repeat(" ", 256) + "pump"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := func(err error) {
+				t.Helper()
+				var refusal *limit.Error
+				require.ErrorAs(t, err, &refusal)
+				require.Equal(t, "nameContains bytes", refusal.What)
+				require.Equal(t, len(tc.text), refusal.Got)
+				require.Equal(t, 256, refusal.Max)
+				require.Equal(t, "LIMIT_EXCEEDED", refusal.Extensions()["code"])
+			}
+			queries = 0
+			devices, err := api.Devices(ctx, DeviceSearchCriteria{NameContains: &tc.text})
+			check(err)
+			require.Nil(t, devices)
+			require.Zero(t, queries, "device refusal must precede COUNT and data queries")
+			queries = 0
+			types, err := api.DeviceTypes(ctx, DeviceTypeSearchCriteria{NameContains: &tc.text})
+			check(err)
+			require.Nil(t, types)
+			require.Zero(t, queries, "type refusal must precede COUNT and data queries")
+		})
+	}
+
+	// Prove the observer sees both ordinary COUNT and data queries.
+	queries = 0
+	require.Equal(t, allDevices, deviceTokens(t, api, ctx, DeviceSearchCriteria{}))
+	require.GreaterOrEqual(t, queries, 2)
+	queries = 0
+	require.Len(t, typeTokens(t, api, ctx, nil), 9)
+	require.GreaterOrEqual(t, queries, 2)
+}
+
+func TestNameContainsAcceptsByteBoundary(t *testing.T) {
+	api, ctx := nameContainsFixture(t)
+	for _, tc := range []struct{ token, name string }{
+		{"ascii-boundary", strings.Repeat("x", 256)},
+		{"utf8-boundary", strings.Repeat("é", 128)},
+	} {
+		t.Run(tc.token, func(t *testing.T) {
+			require.Len(t, tc.name, 256)
+			dt := &DeviceType{}
+			dt.Token = tc.token + "-type"
+			dt.Name = sql.NullString{String: tc.name, Valid: true}
+			require.NoError(t, api.RDB.DB(ctx).Create(dt).Error)
+			_, err := api.CreateDevice(ctx, &DeviceCreateRequest{
+				Token: tc.token, DeviceTypeToken: dt.Token, Name: &tc.name,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{tc.token}, deviceTokens(t, api, ctx, DeviceSearchCriteria{NameContains: &tc.name}))
+			require.Equal(t, []string{dt.Token}, typeTokens(t, api, ctx, &tc.name))
+		})
+	}
 }
 
 // SQLite's LIKE ignores case by default and Postgres's does not, so on the default test database

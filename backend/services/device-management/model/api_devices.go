@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
@@ -326,6 +327,9 @@ func (api *Api) DeviceTypesByToken(ctx context.Context, tokens []string) ([]*Dev
 
 // Search for device types that meet criteria.
 func (api *Api) DeviceTypes(ctx context.Context, criteria DeviceTypeSearchCriteria) (*DeviceTypeSearchResults, error) {
+	if err := validateNameContains(criteria.NameContains); err != nil {
+		return nil, err
+	}
 	results := make([]DeviceType, 0)
 	db, pag := api.RDB.ListOf(ctx, &DeviceType{}, func(result *gorm.DB) *gorm.DB {
 		return whereNameContains(result, "device_types", criteria.NameContains)
@@ -1116,6 +1120,18 @@ func (api *Api) DevicesByExternalId(ctx context.Context, externalIds []string) (
 	return found, nil
 }
 
+// MaxNameContainsBytes generously allows 256 UTF-8 bytes of substring search text while
+// bounding normalization, escaping and LIKE pattern construction. Measure the original
+// input before trimming so whitespace padding cannot evade the work bound.
+const MaxNameContainsBytes = 256
+
+func validateNameContains(text *string) error {
+	if text != nil && len(*text) > MaxNameContainsBytes {
+		return limit.Exceeded("nameContains bytes", len(*text), MaxNameContainsBytes)
+	}
+	return nil
+}
+
 // whereNameContains narrows a list to rows whose name or token contains the text, ignoring
 // case. The token is searched as well because a name is optional: an unnamed row is shown
 // (and so looked for) by its token. A blank or absent filter is no filter. The text is escaped,
@@ -1134,6 +1150,9 @@ func whereNameContains(db *gorm.DB, table string, text *string) *gorm.DB {
 
 // Search for devices that meet criteria.
 func (api *Api) Devices(ctx context.Context, criteria DeviceSearchCriteria) (*DeviceSearchResults, error) {
+	if err := validateNameContains(criteria.NameContains); err != nil {
+		return nil, err
+	}
 	var aliasSearch *DeviceAliasInput
 	if criteria.Alias != nil {
 		normalized, err := normalizeAliasInputs([]DeviceAliasInput{*criteria.Alias})
