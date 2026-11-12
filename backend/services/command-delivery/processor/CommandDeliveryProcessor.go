@@ -609,6 +609,8 @@ func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, b
 	// Impacts are resolved for the whole batch before the first claim; see resolveImpacts.
 	cproc.resolveImpacts(tenantCtx, batch, states)
 	for _, cmd := range batch.commands {
+		// Every path finishes a started claim without cancellation; stop here
+		// before the next claim so shutdown does not drain the remaining batch.
 		if ctx.Err() != nil {
 			return
 		}
@@ -783,9 +785,13 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Publish to the command's tenant subject and mark it SENT under the same
-	// tenant context.
+	// Cancellation is observed only before the claim starts. An autocommit UPDATE
+	// can commit even when cancellation makes the driver report an error, so the
+	// claim itself and every subsequent publish/release step must finish on every
+	// dispatch path, including the sweep. The batch loop stops further claims.
+	// Retain tenant values and the writer's own publish bound during shutdown.
 	tenantCtx := core.WithTenant(ctx, cmd.TenantId)
+	tenantCtx = context.WithoutCancel(tenantCtx)
 	// Published to the TARGET DEVICE's subject, not the tenant's. Before this, every
 	// command went to one tenant-wide subject that every device in the tenant was
 	// granted to subscribe to, so isolation between devices rested entirely on each
@@ -811,15 +817,6 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 		log.Debug().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
 			Msg("Another dispatcher claimed this command first; not publishing it again.")
 		return nil
-	}
-
-	// The claim is the actuation handoff. Before it, cancellation leaves the row
-	// QUEUED. After it, finish the nudge's existing publish/release protocol: cancelling
-	// a publish can leave its outcome unknown, and a cancelled release strands SENT.
-	// Retain tenant values and the writer's own publish bound, just as the nudge's
-	// former Background context did. Shutdown alone must not count a failed dispatch.
-	if path == pathNudge {
-		tenantCtx = context.WithoutCancel(tenantCtx)
 	}
 
 	// 🔴 THE ENVELOPE IS BUILT AFTER THE CLAIM BECAUSE IT CARRIES THE CLAIM'S NONCE. A

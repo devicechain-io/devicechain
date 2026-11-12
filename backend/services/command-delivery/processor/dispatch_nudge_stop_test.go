@@ -15,6 +15,114 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
+func stopWithin(t *testing.T, n *dispatchNudger, d time.Duration) {
+	t.Helper()
+	stopped := make(chan struct{})
+	go func() {
+		n.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(d):
+		t.Fatalf("Stop did not return within %v", d)
+	}
+}
+
+func TestAlreadyCancelledDeliveryDoesNotClaim(t *testing.T) {
+	for _, path := range []dispatchPath{pathNudge, pathSweep} {
+		t.Run(string(path), func(t *testing.T) {
+			api := &fakeApi{}
+			writer := &recordingWriter{}
+			proc := procWith(api, writer)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if err := proc.deliverCommand(ctx, nudgeable(1, "c1", "pump-1"), path, routing{}); err != context.Canceled {
+				t.Fatalf("deliverCommand error = %v, want context.Canceled", err)
+			}
+			if len(api.markedSent) != 0 || writer.count() != 0 {
+				t.Fatalf("cancelled delivery claimed %v and published %d", api.markedSent, writer.count())
+			}
+		})
+	}
+}
+
+func TestAlreadyCancelledTenantBatchDoesNothing(t *testing.T) {
+	for _, path := range []dispatchPath{pathNudge, pathSweep} {
+		t.Run(string(path), func(t *testing.T) {
+			api := &fakeApi{}
+			writer := &recordingWriter{}
+			proc := procWith(api, writer)
+			// A held command also pins the loop check independently of the guard
+			// inside deliverCommand: removing the loop check would hold it.
+			proc.Presence = absentReader{"absent"}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			proc.deliverTenantBatch(ctx, tenantBatch{tenant: "acme", commands: []*model.Command{
+				nudgeable(1, "c1", "pump-1"), nudgeable(2, "c2", "absent"),
+			}}, path)
+			if len(api.markedSent) != 0 || len(api.held) != 0 || writer.count() != 0 {
+				t.Fatalf("cancelled batch claimed %v, held %v and published %d", api.markedSent, api.held, writer.count())
+			}
+		})
+	}
+}
+
+// inFlightClaimApi models an autocommit claim that lands before the driver
+// observes cancellation. A cancellable claim context would report an error even
+// though the row is already SENT, preventing the caller from publishing it.
+type inFlightClaimApi struct {
+	*fakeApi
+	entered   chan struct{}
+	cancelled <-chan struct{}
+	tenant    string
+}
+
+func (a *inFlightClaimApi) MarkSent(ctx context.Context, id uint) (string, bool, error) {
+	nonce, claimed, err := a.fakeApi.MarkSent(ctx, id)
+	a.tenant, _ = core.TenantFromContext(ctx)
+	close(a.entered)
+	<-a.cancelled
+	if ctx.Err() != nil {
+		return "", false, ctx.Err()
+	}
+	return nonce, claimed, err
+}
+
+func TestCancellationDuringClaimStillPublishesExactlyOnce(t *testing.T) {
+	for _, path := range []dispatchPath{pathNudge, pathSweep} {
+		t.Run(string(path), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			api := &inFlightClaimApi{fakeApi: &fakeApi{}, entered: make(chan struct{}), cancelled: ctx.Done()}
+			writer := &recordingWriter{}
+			proc := procWith(api, writer)
+			finished := make(chan error, 1)
+			go func() {
+				finished <- proc.deliverCommand(ctx, nudgeable(1, "c1", "pump-1"), path, routing{})
+			}()
+			select {
+			case <-api.entered:
+			case <-time.After(time.Second):
+				t.Fatal("MarkSent never started")
+			}
+			cancel()
+			select {
+			case err := <-finished:
+				if err != nil {
+					t.Fatalf("dispatch interrupted during claim: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("dispatch did not finish after cancellation during claim")
+			}
+			if api.tenant != "acme" || len(api.markedSent) != 1 || len(api.released) != 0 || writer.count() != 1 {
+				t.Fatalf("tenant=%q claims=%v releases=%v publishes=%d, want acme, one claim, no release, one publish",
+					api.tenant, api.markedSent, api.released, writer.count())
+			}
+		})
+	}
+}
+
 // cancelledNudgePresence returns the read error that a shutdown-interrupted projection
 // read produces. Presence fails open, so the delivery batch must still observe cancellation.
 type cancelledNudgePresence struct {
@@ -72,13 +180,7 @@ func TestCancelledNudgeRemainsQueuedAndAFreshNudgeSendsItOnce(t *testing.T) {
 					t.Fatal("nudge did not inherit root cancellation")
 				}
 			}
-			stopped := make(chan struct{})
-			go func() { nudger.Stop(); close(stopped) }()
-			select {
-			case <-stopped:
-			case <-time.After(time.Second):
-				t.Fatal("in-flight nudge outlived Stop")
-			}
+			stopWithin(t, nudger, time.Second)
 			if !rootCancellation {
 				if err := <-reader.err; err != context.Canceled {
 					t.Fatalf("Stop cancellation: %v", err)
@@ -165,20 +267,20 @@ func TestNudgeClaimedBeforeCancellationFinishesWithoutResending(t *testing.T) {
 }
 
 func TestStoppedNudgerCannotBeStarted(t *testing.T) {
-	drainer := &countingDrainer{done: make(chan struct{}, 1)}
+	drainer := &blockingDrainer{
+		entered: make(chan struct{}, NudgeWorkers),
+		errs:    make(chan error, NudgeWorkers),
+	}
 	nudger := newDispatchNudger(drainer, NudgeMetrics{})
 	nudger.NudgeDevice("acme", "before-stop")
-	nudger.Stop()
+	stopWithin(t, nudger, time.Second)
 	nudger.Start(context.Background())
 	nudger.NudgeDevice("acme", "after-stop")
-	nudger.Stop()
-	if len(nudger.queue) != 1 {
-		t.Fatalf("stopped queue accepted or drained work: %d", len(nudger.queue))
-	}
+	defer stopWithin(t, nudger, time.Second)
 	select {
-	case <-drainer.done:
+	case <-drainer.entered:
 		t.Fatal("a nudge started after Stop")
-	default:
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

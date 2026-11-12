@@ -434,7 +434,7 @@ func TestTheNudgeQueueActuallyDrains(t *testing.T) {
 	drainer := &countingDrainer{done: make(chan struct{}, 4)}
 	nudger := newDispatchNudger(drainer, NudgeMetrics{})
 	nudger.Start(context.Background())
-	defer nudger.Stop()
+	defer stopWithin(t, nudger, time.Second)
 
 	nudger.NudgeDevice("acme", "dev-7")
 
@@ -473,16 +473,7 @@ func TestStoppingTheNudgeQueueDoesNotWaitForItsBacklog(t *testing.T) {
 			t.Fatal("worker did not enter its drain")
 		}
 	}
-	stopped := make(chan struct{})
-	go func() {
-		nudger.Stop()
-		close(stopped)
-	}()
-	select {
-	case <-stopped:
-	case <-time.After(time.Second):
-		t.Fatal("Stop did not cancel its in-flight drains within 1s")
-	}
+	stopWithin(t, nudger, time.Second)
 	for i := 0; i < NudgeWorkers; i++ {
 		if err := <-drainer.errs; err != context.Canceled {
 			t.Fatalf("drainer context error = %v, want context.Canceled", err)
@@ -491,7 +482,7 @@ func TestStoppingTheNudgeQueueDoesNotWaitForItsBacklog(t *testing.T) {
 	if got := len(nudger.queue); got != NudgeWorkers*3 {
 		t.Fatalf("buffered nudges were drained during stop: %d remain", got)
 	}
-	nudger.Stop()
+	stopWithin(t, nudger, time.Second)
 }
 
 // A processor assembled by literal — which is every test in this package, and any future
@@ -506,7 +497,7 @@ func TestANudgerlessProcessorAcceptsNudgesSilently(t *testing.T) {
 	}
 	proc.nudger.NudgeDevice("acme", "dev-1")
 	proc.nudger.Start(context.Background())
-	proc.nudger.Stop()
+	stopWithin(t, proc.nudger, time.Second)
 }
 
 // eofReader ends the response-consumer loop immediately, so a test can drive the real
@@ -550,8 +541,15 @@ func TestTheLifecycleStartsAndStopsTheNudgeQueue(t *testing.T) {
 			"nudge lands in a buffer nothing reads and the feature is inert in production")
 	}
 
-	if err := proc.ExecuteStop(context.Background()); err != nil {
-		t.Fatalf("ExecuteStop: %v", err)
+	stopped := make(chan error, 1)
+	go func() { stopped <- proc.ExecuteStop(context.Background()) }()
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatalf("ExecuteStop: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteStop did not return within 1s")
 	}
 
 	// The counterweight: Stop must actually stop the workers. Enqueue again and require
@@ -618,7 +616,7 @@ func TestConstructorWiresTheDispatchNudge(t *testing.T) {
 	}
 
 	proc.nudger.Start(context.Background())
-	defer proc.nudger.Stop()
+	defer stopWithin(t, proc.nudger, time.Second)
 	nudger.NudgeDevice("acme", "dev-1")
 
 	deadline := time.Now().Add(5 * time.Second)
