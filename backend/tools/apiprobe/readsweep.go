@@ -681,6 +681,9 @@ var sweepExemptions = map[string]string{
 		"recorded-input comparison; the probe seeds neither replay inputs nor review evidence, so it has no token to supply",
 	"device-management.automationReviews": "requires a profile token inside its criteria, while the planner " +
 		"supplies seeded tokens only to top-level arguments; the probe also seeds no recorded-input comparison evidence",
+	"user-management.principalStanding": "answers only device-management's own SERVICE token, which asks it under a " +
+		"profile lock when a protected profile publishes; every other caller, the tenant administrator this probe runs " +
+		"as included, is refused by design. It holds no row of its own: it reads the memberships members already sweeps",
 	"user-management.identityMemberships": "takes the IDENTITY token login returns — a credential, not a " +
 		"stored row's token — so the sweep has no value it can defend; me and members are swept",
 	"user-management.member": "addressed by email, and a missing one is a NOT_FOUND error by design; " +
