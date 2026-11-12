@@ -507,6 +507,10 @@ func runReadSweep(ctx context.Context, argv []string) error {
 // A new entry is needed only when a door takes an ambiguous token; a door taking
 // `deviceToken`, or one that is an entity's own read-back, needs nothing.
 var sweepTokenArgs = map[string]string{
+	// Both protection reads are keyed by the protected profile, including the empty
+	// break-glass ledger. The policy receipt's own key is not a separate resource.
+	"device-management.automationReviewPolicy.profileToken":     "device-profile",
+	"device-management.automationReviewBreakGlass.profileToken": "device-profile",
 	// The asset-hierarchy reads take an ambiguous `token`, and it is an ASSET's.
 	// They belong in this sweep for the reason the version doors do: each reads a
 	// STORED RELATIONSHIP EDGE rather than the row the drill just wrote, so a
