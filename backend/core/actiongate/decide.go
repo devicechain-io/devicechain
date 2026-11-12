@@ -97,8 +97,9 @@ type ExecutionRequest struct {
 
 // ExecutionDecision is the answer.
 type ExecutionDecision struct {
-	Verdict           Verdict
-	RequiredApprovals int
+	ActuationGeneration int
+	Verdict             Verdict
+	RequiredApprovals   int
 	// ValidApprovers are the principals of Approvers that are still approvers now.
 	ValidApprovers   []string
 	Reasons          []string
@@ -150,7 +151,7 @@ const actuationQuery = `query AgentActuationDecision($kind: AgentActionKind!, $i
 
 const executionQuery = `query AgentExecutionDecision($input: AgentExecutionDecisionInput!) {
   agentExecutionDecision(input: $input) {
-    verdict requiredApprovals validApprovers reasons policyVersion stepUpMaxAgeSeconds acceptRecoveryCodes allowSelfConfirm
+    verdict requiredApprovals validApprovers reasons policyVersion actuationGeneration stepUpMaxAgeSeconds acceptRecoveryCodes allowSelfConfirm
   }
 }`
 
@@ -203,6 +204,7 @@ func (d *CallerDecider) Execution(ctx context.Context, req ExecutionRequest) (Ex
 	}
 	var out struct {
 		D *struct {
+			ActuationGeneration *int     `json:"actuationGeneration"`
 			Verdict             string   `json:"verdict"`
 			RequiredApprovals   int      `json:"requiredApprovals"`
 			ValidApprovers      []string `json:"validApprovers"`
@@ -216,7 +218,7 @@ func (d *CallerDecider) Execution(ctx context.Context, req ExecutionRequest) (Ex
 	if err := d.post(ctx, executionQuery, map[string]any{"input": input}, &out); err != nil {
 		return ExecutionDecision{}, err
 	}
-	if out.D == nil {
+	if out.D == nil || out.D.ActuationGeneration == nil || *out.D.ActuationGeneration < 0 {
 		return ExecutionDecision{}, errors.New("actiongate: the execution decision is missing")
 	}
 	v, err := parseVerdict(out.D.Verdict, out.D.RequiredApprovals)
@@ -224,7 +226,8 @@ func (d *CallerDecider) Execution(ctx context.Context, req ExecutionRequest) (Ex
 		return ExecutionDecision{}, err
 	}
 	return ExecutionDecision{
-		Verdict: v, RequiredApprovals: out.D.RequiredApprovals, ValidApprovers: out.D.ValidApprovers,
+		ActuationGeneration: *out.D.ActuationGeneration,
+		Verdict:             v, RequiredApprovals: out.D.RequiredApprovals, ValidApprovers: out.D.ValidApprovers,
 		Reasons: out.D.Reasons, PolicyVersion: out.D.PolicyVersion,
 		StepUp: auth.StepUp{
 			MaxAge:              time.Duration(out.D.StepUpMaxAgeSeconds) * time.Second,
