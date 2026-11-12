@@ -24,22 +24,12 @@ func journalTable(db *gorm.DB, model any) (string, error) {
 
 func (api *Api) draftAuthors(ctx context.Context, profile *DeviceProfile, baselineVersion int32, baselineSnap, draftSnap *ProfileSnapshot) ([]string, error) {
 	db := api.RDB.DB(ctx)
-	var baseline DeviceProfileVersion
-	// A missing historical version cannot establish an exact boundary either.
-	if err := db.Where("device_profile_id = ? AND version = ?", profile.ID, baselineVersion).Limit(1).Find(&baseline).Error; err != nil {
+	// Journal ids are assigned at insert, not commit, so no boundary is exact.
+	// Include every historical writer of differing rows for every baseline.
+	// Over-including authors only excludes more approvers, which fails closed.
+	changed, err := changedReviewAuthorRows(profile.ID, baselineSnap, draftSnap)
+	if err != nil {
 		return nil, err
-	}
-	changed := make([][]string, 4)
-	if baseline.AutomationReviewToken == nil {
-		// Only reviewed publishes hold the journal lock: otherwise an in-flight edit
-		// can get an id below the publish boundary without being in its snapshot.
-		// For differing rows, include all historical writers. This over-includes
-		// authors, which only excludes more people from approving.
-		var err error
-		changed, err = changedReviewAuthorRows(profile.ID, baselineSnap, draftSnap)
-		if err != nil {
-			return nil, err
-		}
 	}
 	// A rollback leaves the draft intact. Use the publish that froze this version
 	// for the boundary; the latest activation still binds review staleness.

@@ -243,7 +243,7 @@ func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
 	}
 
 	// Build the candidate bytes before opening the transaction. Protected publishes
-	// verify them under the profile lock and rebuild after acquiring the journal lock.
+	// rebuild and verify them again inside the transaction under the profile lock.
 	snapshot, err := api.buildProfileSnapshot(ctx, profile.ID)
 	if err != nil {
 		return nil, err
@@ -315,9 +315,6 @@ func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
 				if err != nil {
 					return err
 				}
-				if err = lockReviewJournal(tx); err != nil {
-					return err
-				}
 				rebuilt, err := api.buildProfileSnapshotDB(tx, profile.ID)
 				if err != nil {
 					return err
@@ -325,7 +322,7 @@ func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
 				if err = checkFrozenReviewDraft(rebuilt, review); err != nil {
 					return err
 				}
-				// Freeze precisely the rebuilt bytes whose digest was checked under the journal lock.
+				// Freeze precisely the rebuilt bytes whose digest was checked under the profile lock.
 				version.Snapshot = rebuilt
 				newSnap, err = parseProfileSnapshot(rebuilt)
 				if err != nil {

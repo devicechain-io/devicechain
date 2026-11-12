@@ -33,7 +33,7 @@ func policyPerson(ctx context.Context) (actiongate.Approver, error) {
 }
 
 // NO KEY UPDATE serializes policy and activation changes with the guards without
-// blocking draft foreign keys' KEY SHARE locks before the journal lock is taken.
+// blocking draft foreign keys' KEY SHARE locks.
 func lockProfile(tx *gorm.DB, id uint) (*DeviceProfile, error) {
 	var p DeviceProfile
 	err := tx.Clauses(clause.Locking{Strength: "NO KEY UPDATE"}).First(&p, id).Error

@@ -58,6 +58,8 @@ func (api *Api) guardProfileBreakGlass(ctx context.Context, tx *gorm.DB, ids []u
 		return nil
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	profiles := make([]*DeviceProfile, 0, len(ids))
+	// Acquire every profile lock before any policy or journal write.
 	for i, id := range ids {
 		if id == 0 || i > 0 && ids[i-1] == id {
 			continue
@@ -66,7 +68,11 @@ func (api *Api) guardProfileBreakGlass(ctx context.Context, tx *gorm.DB, ids []u
 		if err != nil {
 			return err
 		}
-		if err = applyMaturedPolicyChange(tx, id, reviewNow()); err != nil {
+		profiles = append(profiles, p)
+	}
+	for _, p := range profiles {
+		id := p.ID
+		if err := applyMaturedPolicyChange(tx, id, reviewNow()); err != nil {
 			return err
 		}
 		view, err := reviewPolicyView(tx, id, reviewNow())

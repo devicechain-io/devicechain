@@ -331,7 +331,7 @@ func pgEnforcementConn(t *testing.T, r *automationReviewRig) (*sql.Conn, context
 // a blocking assertion merely by not having issued its statement yet.
 func pgWaitBlockedBy(t *testing.T, r *automationReviewRig, blocker int) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		var blocked bool
 		require.NoError(t, r.api.RDB.DB(r.ctx).Raw(`SELECT EXISTS (
@@ -936,17 +936,14 @@ func TestPGPublishedVersionTracesToReview(t *testing.T) {
 	require.Equal(t, trace.DraftDigest, digest)
 }
 
-func TestPGJournalBoundaryWaitsForInFlightEdit(t *testing.T) {
+func TestPGInFlightEditAuthorIsCountedWithoutAJournalLock(t *testing.T) {
 	r := newPGEnforcementRig(t)
 	protectReviewRig(t, r, DefaultReviewPolicySettings())
 	row := pgEnforcementApproved(t, r)
-	before := pgVersionCount(t, r)
-	ctx, _ := reviewIdentity("in-flight-author")
+	ctx, _ := reviewIdentity("late-editor")
 	tx := r.api.RDB.DB(ctx).Begin()
 	require.NoError(t, tx.Error)
 	defer tx.Rollback()
-	var blocker int
-	require.NoError(t, tx.Raw("SELECT pg_backend_pid()").Scan(&blocker).Error)
 	res := tx.Model(&DetectionRule{}).Where("id = ?", r.rule.ID).
 		Update("definition", datatypes.JSON(`{"metric":"temp_c","threshold":24}`))
 	require.NoError(t, res.Error)
@@ -954,29 +951,62 @@ func TestPGJournalBoundaryWaitsForInFlightEdit(t *testing.T) {
 	table, err := journalTable(tx, &DetectionRule{})
 	require.NoError(t, err)
 	var journalCount int64
-	require.NoError(t, tx.Model(&rdb.AuditEvent{}).Where("table_name = ? AND actor = ? AND operation = ?", table, "in-flight-author", "update").Count(&journalCount).Error)
+	require.NoError(t, tx.Model(&rdb.AuditEvent{}).Where("table_name = ? AND actor = ? AND operation = ?", table, "late-editor", "update").Count(&journalCount).Error)
 	require.EqualValues(t, 1, journalCount)
-	started, done := make(chan struct{}), make(chan error, 1)
+	publishCtx, cancel := context.WithTimeout(r.ctx, 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
 	go func() {
-		close(started)
-		_, err := publishRigReview(r, row)
+		_, err := r.api.PublishDeviceProfileReviewed(publishCtx, "profile", nil, nil, "publisher", &row.Token)
 		done <- err
 	}()
-	<-started
-	pgWaitBlockedBy(t, r, blocker)
 	select {
 	case err := <-done:
-		t.Fatalf("publish did not wait for the journal transaction: %v", err)
-	case <-time.After(500 * time.Millisecond):
+		require.NoError(t, err)
+	case <-publishCtx.Done():
+		t.Fatal("protected publish waited for an in-flight edit")
 	}
+	var frozen DeviceProfileVersion
+	require.NoError(t, r.api.RDB.DB(r.ctx).Where("automation_review_token = ?", row.Token).First(&frozen).Error)
+	digest, err := SnapshotDigest(frozen.Snapshot)
+	require.NoError(t, err)
+	require.Equal(t, row.DraftDigest, digest)
 	require.NoError(t, tx.Commit().Error)
-	reviewErrorCode(t, pgReceive(t, done), "REVIEW_STALE_DRAFT_CHANGED")
-	pgApprovedUnchanged(t, r, row, before)
 	next := pgEnforcementRun(t, r)
 	var authors []string
 	require.NoError(t, json.Unmarshal(next.DraftAuthors, &authors))
-	require.Contains(t, authors, "in-flight-author")
+	require.Contains(t, authors, "late-editor")
 	require.NotEqual(t, row.DraftDigest, next.DraftDigest)
+}
+
+func TestPGProtectedPublishDoesNotBlockOtherTenantsJournal(t *testing.T) {
+	r := newPGEnforcementRig(t)
+	protectReviewRig(t, r, DefaultReviewPolicySettings())
+	row := pgEnforcementApproved(t, r)
+	ctxB, _ := reviewIdentity("tenant-b-editor")
+	ctxB = core.WithTenant(ctxB, "tenant-b")
+	profileB := seedProfileWithRule(t, r.api, ctxB, "profile-b", "rule-b", true)
+	tx := r.api.RDB.DB(ctxB).Begin()
+	require.NoError(t, tx.Error)
+	defer tx.Rollback()
+	require.NoError(t, tx.Model(profileB).Update("name", "pending tenant B write").Error)
+	var journalCount int64
+	require.NoError(t, tx.Model(&rdb.AuditEvent{}).Where("actor = ? AND operation = ?", "tenant-b-editor", "update").Count(&journalCount).Error)
+	require.Positive(t, journalCount)
+	publishCtx, cancel := context.WithTimeout(r.ctx, 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.api.PublishDeviceProfileReviewed(publishCtx, "profile", nil, nil, "publisher", &row.Token)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-publishCtx.Done():
+		t.Fatal("protected publish waited for another tenant's journaled write")
+	}
+	require.NoError(t, tx.Commit().Error)
 }
 
 func TestPGDeleteKeepsConsumedReviews(t *testing.T) {
@@ -1085,41 +1115,67 @@ func TestPGPreviousReleaseDeleteWithPolicyHistory(t *testing.T) {
 	}
 }
 
-func TestPGProtectedPublishWaitsForRejectBeforeJournalLock(t *testing.T) {
+func TestPGGuardRefusesNonReadCommitted(t *testing.T) {
 	r := newPGEnforcementRig(t)
-	protectReviewRig(t, r, DefaultReviewPolicySettings())
-	row := pgEnforcementApproved(t, r)
-	before := pgVersionCount(t, r)
-	ctx, _ := reviewIdentity("rejector")
-	tx := r.api.RDB.DB(ctx).Begin()
-	require.NoError(t, tx.Error)
-	defer tx.Rollback()
-	var blocker int
-	require.NoError(t, tx.Raw("SELECT pg_backend_pid()").Scan(&blocker).Error)
-	// Hold just the review row first; the journaled part of rejection follows later.
-	require.NoError(t, tx.Exec(`UPDATE "device-management".automation_reviews
-		SET state=?, revision=revision+1 WHERE id=?`, ReviewStateRejected, row.ID).Error)
-	done := make(chan error, 1)
-	go func() {
-		_, err := publishRigReview(r, row)
-		done <- err
-	}()
-	pgWaitBlockedBy(t, r, blocker)
-	time.Sleep(300 * time.Millisecond)
-	writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	require.NoError(t, tx.WithContext(writeCtx).Model(row).Update("decided_note", "rejected concurrently").Error,
-		"reject must journal without waiting for the publish's journal lock")
-	table, err := journalTable(tx, &AutomationReview{})
+	for _, isolation := range []string{"REPEATABLE READ", "SERIALIZABLE"} {
+		t.Run(isolation, func(t *testing.T) {
+			a, ctxA := pgEnforcementConn(t, r)
+			_, err := a.ExecContext(ctxA, "SET TRANSACTION ISOLATION LEVEL "+isolation)
+			require.NoError(t, err)
+			// Unrelated profile updates remain available at stronger isolation.
+			_, err = a.ExecContext(ctxA, `UPDATE "device-management".device_profiles SET name='renamed' WHERE id=$1`, r.profile.ID)
+			require.NoError(t, err)
+			for _, statement := range []string{
+				pgOldVersionInsert(r.profile.ID),
+				fmt.Sprintf(`UPDATE "device-management".device_profiles SET active_version=2 WHERE id=%d`, r.profile.ID),
+				fmt.Sprintf(`UPDATE "device-management".device_profile_versions SET snapshot='{}' WHERE device_profile_id=%d`, r.profile.ID),
+				fmt.Sprintf(`UPDATE "device-management".device_profiles SET deleted_at=clock_timestamp() WHERE id=%d`, r.profile.ID),
+				fmt.Sprintf(`DELETE FROM "device-management".device_profiles WHERE id=%d`, r.profile.ID),
+			} {
+				_, err = a.ExecContext(ctxA, "SAVEPOINT guarded_statement")
+				require.NoError(t, err)
+				_, err = a.ExecContext(ctxA, statement)
+				pgGuardCode(t, err, "DCR02")
+				var pg *pgconn.PgError
+				require.ErrorAs(t, err, &pg)
+				require.Equal(t, "PROFILE_PROTECTED: changing device profiles, their versions or bindings requires READ COMMITTED isolation", pg.Message)
+				_, err = a.ExecContext(ctxA, "ROLLBACK TO SAVEPOINT guarded_statement")
+				require.NoError(t, err)
+			}
+			_, err = a.ExecContext(ctxA, `UPDATE "device-management".device_profiles SET name='still allowed' WHERE id=$1`, r.profile.ID)
+			require.NoError(t, err)
+			_, err = a.ExecContext(ctxA, "ROLLBACK")
+			require.NoError(t, err)
+		})
+	}
+	// The same unprotected version insert succeeds in READ COMMITTED.
+	a, ctxA := pgEnforcementConn(t, r)
+	_, err := a.ExecContext(ctxA, "SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
 	require.NoError(t, err)
-	var journalCount int64
-	require.NoError(t, tx.Model(&rdb.AuditEvent{}).Where("table_name = ? AND actor = ? AND operation = ?", table, "rejector", "update").Count(&journalCount).Error)
-	require.EqualValues(t, 1, journalCount)
-	require.NoError(t, tx.Commit().Error)
-	reviewErrorCode(t, pgReceive(t, done), "REVIEW_NOT_APPROVED")
-	require.Equal(t, before, pgVersionCount(t, r))
-	stored, err := r.api.AutomationReviewByToken(r.ctx, row.Token)
+	res, err := a.ExecContext(ctxA, pgOldVersionInsert(r.profile.ID))
 	require.NoError(t, err)
-	require.Equal(t, ReviewStateRejected, stored.State)
-	require.Equal(t, row.Revision+1, stored.Revision)
+	count, err := res.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, count)
+	_, err = a.ExecContext(ctxA, "ROLLBACK")
+	require.NoError(t, err)
+
+	t.Run("stale policy snapshot", func(t *testing.T) {
+		a, ctxA := pgEnforcementConn(t, r)
+		_, err := a.ExecContext(ctxA, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+		require.NoError(t, err)
+		var one int
+		require.NoError(t, a.QueryRowContext(ctxA, "SELECT 1").Scan(&one))
+		b, ctxB := pgEnforcementConn(t, r)
+		_, err = b.ExecContext(ctxB, `SELECT 1 FROM "device-management".device_profiles WHERE id=$1 FOR NO KEY UPDATE`, r.profile.ID)
+		require.NoError(t, err)
+		_, err = b.ExecContext(ctxB, `INSERT INTO "device-management".automation_review_policies
+			(created_at,updated_at,tenant_id,device_profile_id,required,revision,updated_by)
+			VALUES (clock_timestamp(),clock_timestamp(),'acme',$1,true,1,'creator')`, r.profile.ID)
+		require.NoError(t, err)
+		_, err = b.ExecContext(ctxB, "COMMIT")
+		require.NoError(t, err)
+		_, err = a.ExecContext(ctxA, pgOldVersionInsert(r.profile.ID))
+		pgGuardCode(t, err, "DCR02")
+	})
 }

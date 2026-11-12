@@ -106,7 +106,7 @@ func TestDraftAuthorsInexactBoundaryKeepsBoundForUnchangedRows(t *testing.T) {
 	require.NotContains(t, authors, "person-a")
 }
 
-func TestDraftAuthorsExactBoundaryExcludesEarlierChangedRowWriters(t *testing.T) {
+func TestDraftAuthorsReviewedBaselineIncludesEarlierChangedRowWriters(t *testing.T) {
 	r := newAutomationReviewRig(t, true)
 	protectReviewRig(t, r, DefaultReviewPolicySettings())
 	r.changeRule(t, "person-a")
@@ -125,7 +125,7 @@ func TestDraftAuthorsExactBoundaryExcludesEarlierChangedRowWriters(t *testing.T)
 	var authors []string
 	require.NoError(t, json.Unmarshal(row.DraftAuthors, &authors))
 	require.Contains(t, authors, "person-b")
-	require.NotContains(t, authors, "person-a")
+	require.Contains(t, authors, "person-a")
 }
 
 func TestPublishUnprotectedIgnoresReviewToken(t *testing.T) {
@@ -243,6 +243,53 @@ func TestProtectedPublishRequiresApprovedOutcome(t *testing.T) {
 			require.NoError(t, r.api.RDB.DB(r.ctx).Model(row).Updates(map[string]any{"outcome": outcome, "state": state}).Error)
 			_, err := publishRigReview(r, row)
 			reviewErrorCode(t, err, "REVIEW_NOT_APPROVED")
+		})
+	}
+}
+
+func TestProtectionEligibilityRuleInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name, definition, reason string
+	}{
+		{"anchors CEL", `{"cel":"anchors [0]"}`, "correlates by relationship anchors"},
+		{"anchors CEL key", `{"anchors [0]":false}`, "correlates by relationship anchors"},
+		{"anchor type", `{"anchorType":"area"}`, "correlates by relationship anchors"},
+		{"non-string anchor type", `{"anchorType":false}`, "correlates by relationship anchors"},
+		{"null anchor type", `{"anchorType":null}`, "correlates by relationship anchors"},
+		{"anchors key", `{"anchors":[]}`, "correlates by relationship anchors"},
+		{"geo CEL", `{"cel":"geo.latitude > 1"}`, "reads geofence position"},
+		{"geo key", `{"geo":null}`, "reads geofence position"},
+		{"inFence CEL", `{"cel":"inFence('zone')"}`, "reads geofence position"},
+		{"geofence key", `{"geofence":null}`, "reads geofence position"},
+		{"fence key", `{"fence":null}`, "reads geofence position"},
+		{"fence token key", `{"fenceToken":null}`, "reads geofence position"},
+		{"inFence key", `{"inFence":null}`, "reads geofence position"},
+		{"nested anchor", `{"actions":[{"guard":"anchors[0]"}]}`, "correlates by relationship anchors"},
+		{"nested position", `{"actions":[{"guard":"geo.latitude > 1"}]}`, "reads geofence position"},
+		{"plain metric threshold", `{"metric":"temp_c","threshold":26}`, ""},
+		{"empty anchor type", `{"metric":"temp_c","threshold":26,"anchorType":""}`, ""},
+		{"whole word matching", `{"metric":"temp_c","threshold":26,"note":"geography inFences myanchors[0]"}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newAutomationReviewRig(t, true)
+			r.rule.Enabled = true
+			r.rule.Definition = datatypes.JSON(tc.definition)
+			require.NoError(t, r.api.RDB.DB(r.ctx).Save(r.rule).Error)
+			// Seed the historical active definition without parsing it as an executable rule.
+			raw, err := r.api.buildProfileSnapshot(r.ctx, r.profile.ID)
+			require.NoError(t, err)
+			require.NoError(t, r.api.RDB.DB(r.ctx).Model(&DeviceProfileVersion{}).
+				Where("device_profile_id = ? AND version = ?", r.profile.ID, 1).Update("snapshot", raw).Error)
+			want := DefaultReviewPolicySettings()
+			want.Required = true
+			_, applied, err := r.api.SetAutomationReviewPolicy(r.ctx, "profile", want)
+			if tc.reason == "" {
+				require.NoError(t, err)
+				require.True(t, applied)
+			} else {
+				reviewErrorCode(t, err, "PROTECTION_INELIGIBLE")
+				require.Contains(t, err.Error(), "rule r1 "+tc.reason)
+			}
 		})
 	}
 }

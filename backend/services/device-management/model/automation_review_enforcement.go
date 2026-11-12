@@ -15,7 +15,6 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/actiongate"
 	"github.com/devicechain-io/dc-microservice/auth"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -101,8 +100,7 @@ func (api *Api) checkProtectedPublish(ctx context.Context, tx *gorm.DB, profile 
 		return nil, reviewRefusal("REVIEW_REQUIRED", "this device profile requires an approved automation review to publish")
 	}
 	var r AutomationReview
-	// Lock order is profile -> review -> journal. Reject takes review -> journal,
-	// so we must lock the review before taking the journal lock to avoid a deadlock.
+	// Lock the review under the profile lock to serialize consumption and rejection.
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("token = ?", *token).First(&r).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, reviewRefusal("REVIEW_NOT_FOUND", "the automation review was not found")
@@ -162,28 +160,6 @@ func checkFrozenReviewDraft(snapshot datatypes.JSON, r *AutomationReview) error 
 	}
 	if !actiongate.DigestEqual(digest, r.DraftDigest) {
 		return reviewRefusal("REVIEW_STALE_DRAFT_CHANGED", "the draft changed after this review")
-	}
-	return nil
-}
-
-func lockReviewJournal(tx *gorm.DB) error {
-	if tx.Dialector.Name() != "postgres" {
-		return nil
-	}
-	table, err := journalTable(tx, &rdb.AuditEvent{})
-	if err != nil {
-		return err
-	}
-	stmt := &gorm.Statement{DB: tx}
-	if err = tx.Exec("SET LOCAL lock_timeout = '2s'").Error; err == nil {
-		// Journal ids are assigned at insert, not commit. This lock waits out all in-flight
-		// journaled transactions and blocks new ones until commit. Rebuilding then makes
-		// every journal id below our activation visible and every later edit's id higher:
-		// the draft-author boundary is exact.
-		err = tx.Exec("LOCK TABLE " + stmt.Quote(table) + " IN SHARE ROW EXCLUSIVE MODE").Error
-	}
-	if err != nil {
-		return reviewRefusal("REVIEW_UNAVAILABLE", "automation review publishing is busy, retry")
 	}
 	return nil
 }
