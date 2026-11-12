@@ -89,4 +89,4 @@ When an operator tests a provider's connectivity from the admin console, the cal
 
 - [Event Processing & Alarms](./event-processing.md) — the compiler and the engine the AI drafts against.
 - [Tenant Tiers & Packaging](./tenant-tiers.md) — how AI model entitlement is packaged.
-- [AI Access (MCP)](./mcp.md) — the separate, read-only surface for AI agents operating the platform.
+- [AI Access (MCP)](./mcp.md) — the separate surface for AI agents to read the platform and, when the mcp area's `agentActuation.enabled` is on, use [Preview proposal tools](./mcp.md#agent-proposals). People approve in the console; MCP executes nothing.

@@ -92,6 +92,7 @@ event-sources Pod 上设置 `EVENT_SOURCES_INGEST_METERING`。这不是 `instanc
 | `ingress.className`、`ingress.annotations`、`ingress.uploadMaxBodySize`、`ingress.gateway.className`、`ingress.gateway.annotations`、`networkPolicy.additionalAllowedCidrs`、`serviceAccount.annotations` | 入口如何对外提供，以及谁可以访问 Pod |
 | `mqttExposure.loadBalancer` | MQTT 负载均衡器的云相关设置，例如内部负载均衡器和允许的来源范围 |
 | `instance.config.infrastructure.nats.streamDesignRate`、`.streamRunwayMinutes`、`.streamMaxBytes`、`.streamMaxBytesCold`、`.streamMaxMsgs` | 事件流按其预留的中断缓冲时间，以及字节和消息数上限。写入任何内容之前，会用代理的卷检查预留量 |
+| `instance.config.infrastructure.tracing` | 分布式追踪（OpenTelemetry），默认关闭；参见[可观测性](./observability.md)。请在版本滚动发布完成后，通过一次独立升级启用：早期版本的 Pod 会拒绝此键 |
 | `instance.config.infrastructure.messaging.envelopes.resolved`、`.inbound`、`.inboundLingerMillis` | 事件是否以信封形式写入，默认关闭 |
 | `instance.config.infrastructure.tokenAudience.enforcement`、`.unscopedClientCredentials`、`.externalResources` | 令牌受众始终强制执行。enforcement 应未设置或为 `enforce`；`v1.4` 拒绝 `observe`。不同的设置 `unscopedClientCredentials: observe` 仍受支持。`externalResources` 列出平台外的资源服务器，另外两个键由 chart 派生和控制。 |
 | `eventSources.ingestMetering` | 可选的带延迟补偿额度的摄取计量；参见 [Ingest metering](#ingest-metering)。默认值为 `legacy` |
