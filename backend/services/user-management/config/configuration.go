@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
 	"time"
@@ -15,6 +16,11 @@ import (
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// MaxSigningKeyDays is the largest day count main.go's time.Duration(days) * 24 *
+// time.Hour conversion can hold. Above it the product overflows and wraps, which
+// for the max age reads as rotation disabled or an arbitrary age.
+const MaxSigningKeyDays = int(math.MaxInt64 / int64(24*time.Hour))
 
 // AuthConfiguration controls JWT issuance, signing-key rotation, and the
 // one-time bootstrap admin.
@@ -37,9 +43,11 @@ type AuthConfiguration struct {
 
 	// SigningKeyMaxAgeDays triggers an age-based signing-key rotation at startup
 	// when the active key is older than this. 0 disables age-based rotation
-	// (rotation can still be invoked explicitly). SigningKeyRetentionDays is how
-	// long a rotated-out key is kept (its public half stays in the JWKS) so
-	// tokens it signed keep verifying; it must exceed the refresh-token lifetime.
+	// (rotation can still be invoked explicitly). A negative value, or one above
+	// MaxSigningKeyDays, is refused at load. SigningKeyRetentionDays is how long a
+	// rotated-out key is kept (its public half stays in the JWKS) so tokens it signed
+	// keep verifying. 0 takes the default of 8 days; a negative value, or one above
+	// MaxSigningKeyDays, is refused at load.
 	SigningKeyMaxAgeDays    int
 	SigningKeyRetentionDays int
 
@@ -357,6 +365,15 @@ func (c *UserManagementConfiguration) Validate() error {
 	}
 	if c.Auth.RefreshTokenTtlSeconds <= 0 {
 		return fmt.Errorf("auth.refreshTokenTtlSeconds must be positive (got %d)", c.Auth.RefreshTokenTtlSeconds)
+	}
+	// A negative max age, or one that overflows main.go's Duration conversion, can
+	// reach MaybeRotateOnAge as a non-positive age, which it reads as disabled.
+	// Refusing these values at load is the fail-closed answer.
+	if c.Auth.SigningKeyMaxAgeDays < 0 || c.Auth.SigningKeyMaxAgeDays > MaxSigningKeyDays {
+		return fmt.Errorf("auth.signingKeyMaxAgeDays must be between 0 and %d (got %d): 0 turns age-based signing-key rotation off; a negative or larger value would turn it off silently", MaxSigningKeyDays, c.Auth.SigningKeyMaxAgeDays)
+	}
+	if c.Auth.SigningKeyRetentionDays < 0 || c.Auth.SigningKeyRetentionDays > MaxSigningKeyDays {
+		return fmt.Errorf("auth.signingKeyRetentionDays must be between 0 and %d (got %d): 0 takes the default of 8 days", MaxSigningKeyDays, c.Auth.SigningKeyRetentionDays)
 	}
 	// A negative interval disables the coordinator, which is a supported lever. A
 	// negative SETTLE is not the same kind of knob: it would mean "complete the purge

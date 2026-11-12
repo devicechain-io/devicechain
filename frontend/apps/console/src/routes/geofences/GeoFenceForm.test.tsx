@@ -508,12 +508,14 @@ describe('the basemap fields', () => {
   it('remembers the applied tile URL in this browser only', () => {
     render(<GeoFenceForm onDone={vi.fn()} />);
     const input = screen.getByLabelText('Tile URL');
+    fireEvent.change(screen.getByLabelText('Attribution'), { target: { value: '© Mine' } });
     fireEvent.change(input, { target: { value: 'https://tiles.example.com/a.png' } });
     expect(window.localStorage.getItem('dc.geofence.tileUrl')).toBeNull(); // not yet
     fireEvent.blur(input);
     expect(window.localStorage.getItem('dc.geofence.tileUrl')).toBe(
       'https://tiles.example.com/a.png',
     );
+    expect(window.localStorage.getItem('dc.geofence.tileAttribution')).toBe('© Mine');
   });
 });
 
@@ -583,6 +585,98 @@ describe('the edit hint', () => {
 
 const TENANT_TILES = 'https://tenant.example.invalid/{z}/{x}/{y}.png';
 const PERSONAL_TILES = 'https://personal.example.invalid/{z}/{x}/{y}.png';
+
+describe('the personal basemap pair', () => {
+  const missingCredit = "This tile URL has no credit line, so it is being ignored and the map is showing your tenant's basemap instead. Showing a provider's tiles without the attribution their licence requires is a licence violation, so the two are used together or not at all.";
+  const orphanCredit = 'An attribution with no tile URL would be shown against a map this tenant did not choose. Set both, or clear both.';
+
+  it.each([
+    ['URL-only', PERSONAL_TILES, '   ', missingCredit],
+    ['attribution-only', '', '© Mine', orphanCredit],
+  ])('keeps preferences and applied tiles unchanged on %s draft blur', async (_, tileUrl, attribution, message) => {
+    tenantBasemap.value = { tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' };
+    render(<GeoFenceForm entity={fence()} onDone={vi.fn()} />);
+    const url = await screen.findByLabelText('Tile URL');
+    const credit = screen.getByLabelText('Attribution');
+    fireEvent.change(url, { target: { value: tileUrl } });
+    fireEvent.change(credit, { target: { value: attribution } });
+    fireEvent.blur(url);
+    fireEvent.blur(credit);
+
+    expect(window.localStorage.getItem('dc.geofence.tileUrl')).toBeNull();
+    expect(window.localStorage.getItem('dc.geofence.tileAttribution')).toBeNull();
+    const map = screen.getByTestId('fake-map');
+    expect(map.getAttribute('data-tile-url')).toBe(TENANT_TILES);
+    expect(map.getAttribute('data-attribution')).toBe('© Tenant Tiles');
+    expect(screen.getByText(message)).toBeTruthy();
+  });
+
+  for (const editing of [false, true]) {
+    it.each([
+      ['URL-only', PERSONAL_TILES, '   '],
+      ['attribution-only', '', '© Mine'],
+    ])(`saves a fence with a %s basemap draft on ${editing ? 'edit' : 'create'}`, async (_, tileUrl, attribution) => {
+      const onDone = vi.fn();
+      render(<GeoFenceForm entity={editing ? fence() : undefined} onDone={onDone} />);
+      if (!editing) {
+        fireEvent.change(await screen.findByLabelText('Token'), { target: { value: 'rome-yard' } });
+        draw(ROME);
+      }
+      fireEvent.change(screen.getByLabelText('Tile URL'), { target: { value: tileUrl } });
+      fireEvent.change(screen.getByLabelText('Attribution'), { target: { value: attribution } });
+      // Exercise submit directly, without a blur changing the applied preference.
+      fireEvent.click(button(editing ? SAVE_ACTION : CREATE_ACTION));
+
+      await waitFor(() => expect(onDone).toHaveBeenCalled());
+      expect(fenceCalls()).toHaveLength(1);
+      expect(requestFrom(fenceCalls()[0]).geometry).toBe(polygonDoc([ROME_RING]));
+      expect(window.localStorage.getItem('dc.geofence.tileUrl')).toBeNull();
+      expect(window.localStorage.getItem('dc.geofence.tileAttribution')).toBeNull();
+    });
+  }
+
+  it('keeps the previous pair on partial blur and clears both together', async () => {
+    window.localStorage.setItem('dc.geofence.tileUrl', PERSONAL_TILES);
+    window.localStorage.setItem('dc.geofence.tileAttribution', '© Mine');
+    tenantBasemap.value = { tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' };
+    render(<GeoFenceForm entity={fence()} onDone={vi.fn()} />);
+    const url = await screen.findByLabelText('Tile URL');
+    const credit = screen.getByLabelText('Attribution');
+
+    fireEvent.change(url, { target: { value: '   ' } });
+    fireEvent.blur(url);
+    expect(window.localStorage.getItem('dc.geofence.tileUrl')).toBe(PERSONAL_TILES);
+    expect(window.localStorage.getItem('dc.geofence.tileAttribution')).toBe('© Mine');
+    expect(screen.getByTestId('fake-map').getAttribute('data-tile-url')).toBe(PERSONAL_TILES);
+    expect(screen.getByTestId('fake-map').getAttribute('data-attribution')).toBe('© Mine');
+
+    fireEvent.change(credit, { target: { value: '   ' } });
+    fireEvent.blur(credit);
+    expect(window.localStorage.getItem('dc.geofence.tileUrl')).toBeNull();
+    expect(window.localStorage.getItem('dc.geofence.tileAttribution')).toBeNull();
+    expect(screen.getByTestId('fake-map').getAttribute('data-tile-url')).toBe(TENANT_TILES);
+    expect(screen.getByTestId('fake-map').getAttribute('data-attribution')).toBe('© Tenant Tiles');
+    fireEvent.click(button(SAVE_ACTION));
+    await waitFor(() => expect(fenceCalls()).toHaveLength(1));
+  });
+
+  it.each(['Tile URL', 'Attribution'])('persists and applies a complete pair together on %s blur', async (field) => {
+    render(<GeoFenceForm entity={fence()} onDone={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText('Tile URL'), { target: { value: PERSONAL_TILES } });
+    fireEvent.change(screen.getByLabelText('Attribution'), { target: { value: '© Mine' } });
+    expect(window.localStorage.getItem('dc.geofence.tileUrl')).toBeNull();
+    expect(window.localStorage.getItem('dc.geofence.tileAttribution')).toBeNull();
+    fireEvent.blur(screen.getByLabelText(field));
+
+    expect(window.localStorage.getItem('dc.geofence.tileUrl')).toBe(PERSONAL_TILES);
+    expect(window.localStorage.getItem('dc.geofence.tileAttribution')).toBe('© Mine');
+    const map = screen.getByTestId('fake-map');
+    expect(map.getAttribute('data-tile-url')).toBe(PERSONAL_TILES);
+    expect(map.getAttribute('data-attribution')).toBe('© Mine');
+    expect(screen.queryByTestId('geofence-tile-uncredited')).toBeNull();
+    expect(screen.queryByTestId('geofence-tile-orphan-attribution')).toBeNull();
+  });
+});
 
 describe('the tenant basemap', () => {
   it('is used when this browser has no personal override', async () => {

@@ -42,6 +42,8 @@
   "strandedType": "stored as {{stored}}",
   "system": "system",
   "title": "Facets",
+  "typeChangeWarning": "Changing the declaration from {{existing}} to {{requested}} retains existing stored values. Those values may no longer match the declared axis.",
+  "typeCheckFailed": "The impact of this declaration could not be checked. You can still save.",
   "usedByGroups": "Changing this value moves this entity in or out of: {{groups}}",
   "valueCleared": "“{{key}}” cleared",
   "valueRequired": "Enter a value, or use Clear to remove it.",

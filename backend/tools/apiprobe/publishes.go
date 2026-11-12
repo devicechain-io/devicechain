@@ -228,6 +228,45 @@ var publishesNotCovered = map[string]string{
 // been published, because they reference a published VERSION NUMBER.
 var afterPublish = []entity{
 	{
+		// Depends on: device-profile, device-profile-version.
+		//
+		// An automation change review of the profile just published. It is FIRST in this
+		// phase on purpose: nothing has touched the profile's draft since the publish, so
+		// the draft equals the active version and the review is NO_AUTOMATION_CHANGE. That
+		// kind runs no replay, so the row is written without event-processing's comparison
+		// engine and without any recorded telemetry, which the drill deliberately has none
+		// of. The rows below (the scoped rule) change the draft, so a review placed after
+		// them would need a live comparison and a recorded window.
+		//
+		// The windows and device are literals the server stores and never replays. The
+		// requestId is fixed, so a re-run of the seed against the same tenant is answered
+		// with the stored review rather than a second row.
+		//
+		// matchesCurrentDraft is NOT selected: it is computed against the CURRENT draft,
+		// which the rows below change, so it is derived, not stored.
+		Name:     "automation-review",
+		Area:     "device-management",
+		Mutation: "runAutomationReview",
+		Input:    "RunAutomationReviewInput!",
+		Arg:      "input",
+		Read:     "automationReview",
+		Single:   true,
+		Requires: []string{"RunAutomationReviewInput.requestId"},
+		Fields: "token profileToken kind ruleToken state outcome reviewDigest draftDigest baselineDigest " +
+			"baselineVersion createdBy requiredApprovals deviceTokens windows{role start end}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"profileToken": s.tok("device-profile"),
+				"deviceTokens": []any{s.tok("device")},
+				"windows": []any{
+					map[string]any{"role": "INCIDENT", "start": "2026-01-01T00:00:00Z", "end": "2026-01-01T01:00:00Z"},
+					map[string]any{"role": "NORMAL", "start": "2026-01-02T00:00:00Z", "end": "2026-01-02T01:00:00Z"},
+				},
+				"requestId": "apiprobe-automation-review",
+			}}
+		},
+	},
+	{
 		// Depends on: asset-type-schema, asset-type-version.
 		//
 		// An asset under the SCHEMA-BEARING type, carrying properties — which is only

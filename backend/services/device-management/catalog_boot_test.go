@@ -27,6 +27,7 @@ import (
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
 // TestStartsUnderItsDeclaredCatalog starts this service's real broker wiring with Deployed
@@ -53,6 +54,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevMs, prevCfg, prevNats, prevRdb, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Svc
 	prevApi, prevCached, prevKey, prevTransit, prevGates := Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates
 	prevProc, prevRA, prevDR, prevDrain := InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain
+	prevEffects := AgentEffectsDrain
 	prevCallout, prevBackoff, prevKickDrain, prevTenants := CalloutResponder, MqttStoreBackoff, SessionKickDrain, ProvisioningTenants
 	prevReaper := AgentProposalReaper
 	prevPin := IssuerPin
@@ -62,6 +64,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		Microservice, Configuration, NatsManager, RdbManager, Svc = prevMs, prevCfg, prevNats, prevRdb, prevSvc
 		Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates = prevApi, prevCached, prevKey, prevTransit, prevGates
 		InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain = prevProc, prevRA, prevDR, prevDrain
+		AgentEffectsDrain = prevEffects
 		CalloutResponder, MqttStoreBackoff, SessionKickDrain = prevCallout, prevBackoff, prevKickDrain
 		AgentProposalReaper = prevReaper
 	})
@@ -109,6 +112,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 			if err != nil {
 				return err
 			}
+			if err = initAgentEffectsDrain(); err != nil {
+				return err
+			}
 			if err = initOwnershipDrain(); err != nil {
 				return err
 			}
@@ -130,6 +136,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, Svc.Initialize(ctx), "initialize under the catalog: entity-cache KV buckets")
+	dctest.UseFreeTCPPort(t, &service.ProbesPort)
 	NatsManager = Svc.Nats
 	t.Cleanup(func() {
 		_ = beforeMicroserviceStopped(ctx)

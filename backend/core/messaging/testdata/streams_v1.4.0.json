@@ -1,0 +1,216 @@
+{
+  "alarm-events": {
+    "subjects": [
+      "inst.*.alarm-events"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "command-responses": {
+    "subjects": [
+      "inst.*.command-responses.*"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "connector-dispatch": {
+    "subjects": [
+      "inst.*.connector-dispatch"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 600,
+    "allowDirect": false
+  },
+  "connector-dispatch.dead": {
+    "subjects": [
+      "inst.*.connector-dispatch.dead"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 1800,
+    "allowDirect": false
+  },
+  "dead-letters": {
+    "subjects": [
+      "inst.*.dead-letters"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 1800,
+    "allowDirect": false
+  },
+  "derived-events": {
+    "subjects": [
+      "inst.*.derived-events"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 1800,
+    "allowDirect": false
+  },
+  "detection-rules-published": {
+    "subjects": [
+      "inst.*.detection-rules-published"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "device-attribute": {
+    "subjects": [
+      "inst.*.device-attribute"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "device-commands": {
+    "subjects": [
+      "inst.*.device-commands.*"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "device-desired": {
+    "subjects": [
+      "inst.*.device-desired.*"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "device-events-capture": {
+    "subjects": [
+      "inst.*.devices.*.events",
+      "inst.*.gateways.*.devices.*.events"
+    ],
+    "retention": "WorkQueue",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "device-ownership": {
+    "subjects": [
+      "inst.*.device-ownership"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "device-reports": {
+    "subjects": [
+      "inst.*.device-reports.*"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "device-roster": {
+    "subjects": [
+      "inst.*.device-roster"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "entity-deleted": {
+    "subjects": [
+      "inst.*.entity-deleted"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "failed-decode": {
+    "subjects": [
+      "inst.*.failed-decode"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "failed-events": {
+    "subjects": [
+      "inst.*.failed-events"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 600,
+    "allowDirect": false
+  },
+  "geofence-set-manifest": {
+    "subjects": [
+      "inst.*.geofence-set-manifest"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "inbound-events": {
+    "subjects": [
+      "inst.*.inbound-events"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 600,
+    "allowDirect": false
+  },
+  "integration-uplinks": {
+    "subjects": [
+      "inst.*.integration-uplinks"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 600,
+    "allowDirect": false
+  },
+  "lpwan-downlink-events": {
+    "subjects": [
+      "inst.*.lpwan-downlink-events"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "max-deliveries": {
+    "subjects": [
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_inbound-events.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_integration-uplinks.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_resolved-events.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_derived-events.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_device-attribute.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_device-commands.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_device-desired.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_device-reports.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_device-events-capture.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_command-responses.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_connector-dispatch.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_detection-rules-published.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_device-roster.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_geofence-set-manifest.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_entity-deleted.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_device-ownership.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_alarm-events.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_raise-alarm.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_failed-decode.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_failed-events.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_connector-dispatch_dead.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_dead-letters.*"
+    ],
+    "retention": "WorkQueue",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
+  "raise-alarm": {
+    "subjects": [
+      "inst.*.raise-alarm"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 600,
+    "allowDirect": false
+  },
+  "resolved-events": {
+    "subjects": [
+      "inst.*.resolved-events"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 600,
+    "allowDirect": true
+  }
+}

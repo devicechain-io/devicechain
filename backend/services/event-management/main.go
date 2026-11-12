@@ -47,7 +47,8 @@ var (
 	// PersistMetrics is built ONCE, in the initialize phase, and shared by every
 	// EventPersistenceProcessor the NATS manager's oncreate callback builds. See
 	// buildMetrics.
-	PersistMetrics *processor.PersistMetrics
+	PersistMetrics   *processor.PersistMetrics
+	AnalyticsMetrics *model.AnalyticsMetrics
 
 	// FailedEventsReader and FailedEventsIndexer are the failed-events index: the durable reader
 	// of the stream this service also writes to, and the consumer that stores one row per
@@ -107,7 +108,8 @@ func parseConfiguration() error {
 	return nil
 }
 
-// buildMetrics creates this service's Prometheus instruments exactly once.
+// buildMetrics creates this service's Prometheus instruments exactly once, before
+// startup reconciliation uses them.
 //
 // 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE PROCESSOR IS BUILT.
 // The processor is built in createNatsComponents, which the NATS manager invokes on
@@ -116,6 +118,7 @@ func parseConfiguration() error {
 // registry panics. Initialize is where the process's own singletons are made, which is
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
+	AnalyticsMetrics = model.NewAnalyticsMetrics(Microservice)
 	PersistMetrics = processor.NewPersistMetrics(Microservice)
 	BackfillMetrics = backfill.NewMetrics(Microservice)
 	FailedEventMetrics = processor.NewFailedEventMetrics(Microservice)
@@ -409,6 +412,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				return err
 			}
 
+			// Build process instruments before reconciliation and the NATS manager use them.
+			buildMetrics()
+
 			// Converge the read-only SQL/BI surface — its tenant-filtered views and the
 			// privileges over them. It runs here rather than only in a migration for two
 			// reasons: the reader group role is created by the database cluster
@@ -419,13 +425,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// model/analytics.go. A returned error means the boundary could not be put back,
 			// which is not a state to serve from — and returning it here means the GraphQL
 			// server is never built, let alone started.
-			if err := model.ReconcileAnalyticsSurface(ctx, RdbManager); err != nil {
+			if err := model.ReconcileAnalyticsSurface(ctx, RdbManager, AnalyticsMetrics); err != nil {
 				return err
 			}
-
-			// Build every Prometheus instrument this service exports, before the NATS manager
-			// that consumes them.
-			buildMetrics()
 
 			// Build the reconciliation sweep (ADR-044 decision 3), the backstop for
 			// entity-deletion events missed by the primary consumer. It needs the Api and
