@@ -3,24 +3,24 @@
   "locale": "zh-CN",
   "pages": {
     "concepts/ai-authoring.md": {
-      "sourceSha256": "1ce874d5a2b4ff35d6bd5699a5dbef485d4c44318568ae1a3df6a5dfda3b7a80",
-      "translationSha256": "201ab6a01a80a6a84f55caa746325fc5702c9ff2fa52f27df196bdf74d236bcb"
+      "sourceSha256": "454470ce9e33be1285bf78cca11aca57f9dec7dec73bc833f7e31b42e40cd3d2",
+      "translationSha256": "94fa2f835ea343ecf7b46fcfe5c3c157711775348eed9da1a00fc7f423d18fad"
     },
     "concepts/architecture-at-a-glance.md": {
       "sourceSha256": "1c0528fa3ccc7f295e22b476d1cbc8523431a0eb40007e960a5be8f9e423cb53",
       "translationSha256": "b8960a6f84bce899c59136568d4e6c85605b17f38728d966c7eec7e21b297ed3"
     },
     "concepts/architecture.md": {
-      "sourceSha256": "76b7977d63ce794a1e4cac8e91d58fa9c6291d3f98d7ae64dca6d8060a450c48",
-      "translationSha256": "79313e9c6c9aefec6ad32d3a923b9ddd538a8b526e1bbe41495ba630cad7d89b"
+      "sourceSha256": "b96ec0fbe4efd450d7e7b08505db776130572c1bcaa3626e617f14918d509448",
+      "translationSha256": "ee874eeb6d34f67a2eb055142943cd74f52de8c54a80744efe400693bd163fa5"
     },
     "concepts/basemaps.md": {
       "sourceSha256": "61971b3c52b6d9a9f6b3acf9be14492c243f648c5e796f21708aa96f6358fef7",
       "translationSha256": "d722fe86e28c1535d64d9d38d00b4f0aae1cac5c6fbe1a8bc5ca7a4e313fc228"
     },
     "concepts/commands.md": {
-      "sourceSha256": "671e1f2cd2ac5073818c110f883c069ed720ca49430a4f99e7cdf6e0db37795b",
-      "translationSha256": "27284c9afd2837e9e6bff52bf58483bc64cfae66667b760ebc9b72771b66aa0f"
+      "sourceSha256": "ca52d674de468be76bc0600f4ba99d445bed1ac131e70f771512698f50c34452",
+      "translationSha256": "265d0af14089305f6a04d04f5bb215f7ddc749642af20e73334a1667ac1736f6"
     },
     "concepts/dashboards.md": {
       "sourceSha256": "53f565d8cd259ba527fa31cc58719632e8d7e84ea2a93a28ae46e8da9db48e7e",
@@ -55,8 +55,8 @@
       "translationSha256": "bff72e3e196bb4e20a637be9f639cd514aa54c6f73c99749ca7f5bd55688edcb"
     },
     "concepts/mcp.md": {
-      "sourceSha256": "aa203f707118508e11fad2e0c6e1e3aed7ca2c30f8ea49899e950723db011f3e",
-      "translationSha256": "6baad95fda34fab0d4023ec23ed6543f600ef91fc6bb96bcece48e8e49d1cbb3"
+      "sourceSha256": "354ee6a37c055940215a04753164999db567fb34459aa00544d9c734b5aa888a",
+      "translationSha256": "62627c6ff133ef7f49d575d88142730861435ad12b4673a03885c200d7b8bdf1"
     },
     "concepts/multi-tenancy.md": {
       "sourceSha256": "3210c3d842a42523f8122b1f639855ba714a3f48bf895331c533a7b59c6e1ec6",
@@ -167,8 +167,8 @@
       "translationSha256": "4f4b3c9bce2fd5380aec6b86225dd3b6a37c80f073ed84ce12fbad9e97cf42e0"
     },
     "deployment/tuning-an-instance.md": {
-      "sourceSha256": "e960d67938edb1025a7c7f61ff36aaa7fc1710717ca96ffae7e61510e2b6198e",
-      "translationSha256": "d35c8ea9fb22e5db7fa3c59adfa63e8d48fba0d71264a533e7035dcc5c71a876"
+      "sourceSha256": "a20e8324916f08f111bda69fa199c5088f9f010775ced9b527919c4b2a49bab6",
+      "translationSha256": "5cbdd30e681c90bf938c417c20687a93c22b2d01ac4d6bbb4bd8053c0cdab0dc"
     },
     "deployment/verifying-releases.md": {
       "sourceSha256": "1b70d412670e194507156c8c120341257d4dce4803f3321468547d7166b9e97a",
@@ -295,8 +295,8 @@
       "translationSha256": "161df67a0815f393d31cd8ab10191ddacd9c9b03f2b651156de9512d0714289a"
     },
     "intro.md": {
-      "sourceSha256": "4391b9a9f82f695e47de916ca3b058bfd3c109807a93ec3a466865268a62a554",
-      "translationSha256": "607c976c4f5ff11163c1cfd77afed0e025a253f79000fd274e7cb7abd3bbb149"
+      "sourceSha256": "af500b940eef8cfe0b300f8e46d5f08751bf758874edaf854076d8efc8826573",
+      "translationSha256": "88e1592fd166a547ba64dea3622bc2f8d64c7fd0081ab57bc3208330583e57c4"
     },
     "quickstart/feature-tour.md": {
       "sourceSha256": "ef233303d050d17df4655acc5cc3963f2f70ba1eb7238a0655f32baf4e9ff0c9",
