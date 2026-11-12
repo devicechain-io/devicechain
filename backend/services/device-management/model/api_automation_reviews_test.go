@@ -604,3 +604,40 @@ func TestReviewApprovalIsDistinctAndIdempotentWhileRan(t *testing.T) {
 	require.Equal(t, "third", approvals[0].Sub)
 	require.Equal(t, "fourth", approvals[1].Sub)
 }
+
+// A decided review is not approvable, and the refusal says so before any write is tried: the
+// compare-and-set would also refuse it, but as a concurrent approval, which tells the person to
+// retry something that can never succeed.
+func TestApproveDecidedReviewIsNotPending(t *testing.T) {
+	r := newAutomationReviewRig(t, true)
+	r.changeRule(t, "author")
+	row := r.run(t)
+	_, err := r.api.RejectAutomationReview(r.ctx, mustReviewPerson("creator"), row.Token, nil)
+	require.NoError(t, err)
+	ctx, third := reviewIdentity("third")
+	_, err = r.api.ApproveAutomationReview(ctx, third, row.Token, row.ReviewDigest)
+	reviewErrorCode(t, err, "REVIEW_NOT_PENDING")
+}
+
+func mustReviewPerson(name string) actiongate.Approver {
+	_, a := reviewIdentity(name)
+	return a
+}
+
+// A person who edited a baseline rule after the activation is an author even when the rule has
+// since been hard-deleted from the draft: only the BASELINE snapshot still carries its row id.
+// A system-context write is never an author.
+func TestDraftAuthorsFollowBaselineRowsAndSkipSystem(t *testing.T) {
+	r := newAutomationReviewRig(t, true)
+	r.changeRule(t, "editor")
+	sys := core.WithSystemContext(core.WithTenant(context.Background(), "acme"))
+	require.NoError(t, r.api.RDB.DB(sys).Model(&MetricDefinition{}).Where("device_profile_id = ?", r.profile.ID).
+		Update("description", "machine note").Error)
+	require.NoError(t, r.api.RDB.DB(sys).Model(&DeviceProfile{}).Where("id = ?", r.profile.ID).
+		Update("description", "machine note").Error)
+	require.NoError(t, r.api.RDB.DB(sys).Exec("DELETE FROM detection_rules WHERE id = ?", r.rule.ID).Error)
+	row := r.run(t)
+	var authors []string
+	require.NoError(t, json.Unmarshal(row.DraftAuthors, &authors))
+	require.Equal(t, []string{"editor"}, authors)
+}

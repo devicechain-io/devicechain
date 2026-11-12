@@ -49,6 +49,7 @@
   "deviceProfileDeletedToast": "Device profile “{{token}}” deleted",
   "deviceProfileColCategory": "Category",
   "deviceProfileColUsedBy": "Used by",
+  "deviceProfileChangeReviewTab": "Change review",
   "deviceProfileMetricsTab": "Metrics",
   "deviceProfileCommandsTab": "Commands",
   "deviceProfileDetectionRulesTab": "Detection Rules",

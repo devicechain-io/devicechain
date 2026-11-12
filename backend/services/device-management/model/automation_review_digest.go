@@ -96,7 +96,7 @@ func normalizeReviewNumbers(v any) any {
 		if n5 > n2 {
 			n2 = n5
 		}
-		return json.Number(r.FloatString(n2))
+		return x
 	case map[string]any:
 		for k, value := range x {
 			x[k] = normalizeReviewNumbers(value)

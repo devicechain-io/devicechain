@@ -9,7 +9,7 @@
 // profile-owned AlarmDefinition to the DETECT DetectionRule path (ADR-057); the
 // Detection Rules tab is that path's console form (slice 7a).
 
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -36,6 +36,12 @@ import { Lwm2mStandardCommands } from './Lwm2mStandardCommands';
 import { SparkplugStandardCommands } from './SparkplugStandardCommands';
 import { DetectionRuleAuthoring } from './DetectionRuleAuthoring';
 import { RuleHealthPanel } from './RuleHealthPanel';
+
+// The change-review panel and its catalog load only when the tab is opened, so the profile page's
+// first download does not carry a Preview feature most visits never open.
+const AutomationReviewPanel = lazy(() =>
+  import('@/routes/automation-reviews/AutomationReviewPanel').then((m) => ({ default: m.AutomationReviewPanel })),
+);
 import {
   listDeviceProfiles,
   getDeviceProfile,
@@ -364,6 +370,15 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
           deviceTypeCount={p.deviceTypeCount}
           onChanged={reload}
         />
+      ),
+    },
+    {
+      value: 'change-review',
+      label: 'entities:deviceProfileChangeReviewTab',
+      render: (p) => (
+        <Suspense fallback={null}>
+          <AutomationReviewPanel key={p.token} profileToken={p.token} />
+        </Suspense>
       ),
     },
   ],

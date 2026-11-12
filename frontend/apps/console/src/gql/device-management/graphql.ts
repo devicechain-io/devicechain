@@ -235,6 +235,135 @@ export type AuditEventSearchCriteria = {
   tableName?: string | null | undefined;
 };
 
+/** (Preview: may change in a minor release.) Automation review ChangeKind vocabulary. */
+export type AutomationReviewChangeKind =
+  /** (Preview: may change in a minor release.) The number of added intents. */
+  | 'ADDED'
+  /** (Preview: may change in a minor release.) Content changed. */
+  | 'CONTENT_CHANGED'
+  /** (Preview: may change in a minor release.) The number of removed intents. */
+  | 'REMOVED'
+  /** (Preview: may change in a minor release.) The number of shifted paired intents. */
+  | 'SHIFTED';
+
+/** (Preview: may change in a minor release.) AutomationReviewExpectationInputValue parameters. */
+export type AutomationReviewExpectationInputValue = {
+  /** (Preview: may change in a minor release.) One rule-test expectation as JSON, using the event-processing expectation vocabulary. */
+  expect: string;
+  /** (Preview: may change in a minor release.) The expectation name. */
+  name?: string | null | undefined;
+  /** (Preview: may change in a minor release.) The window to which this expectation applies. */
+  window: AutomationReviewWindowRole;
+};
+
+/** (Preview: may change in a minor release.) Automation review Kind vocabulary. */
+export type AutomationReviewKind =
+  /** (Preview: may change in a minor release.) No automation change. */
+  | 'NO_AUTOMATION_CHANGE'
+  /** (Preview: may change in a minor release.) Rule change. */
+  | 'RULE_CHANGE'
+  /** (Preview: may change in a minor release.) Unreviewable. */
+  | 'UNREVIEWABLE';
+
+/** (Preview: may change in a minor release.) Automation review Outcome vocabulary. */
+export type AutomationReviewOutcome =
+  /** (Preview: may change in a minor release.) Failed. */
+  | 'FAILED'
+  /** (Preview: may change in a minor release.) Inconclusive. */
+  | 'INCONCLUSIVE'
+  /** (Preview: may change in a minor release.) No automation change. */
+  | 'NO_AUTOMATION_CHANGE'
+  /** (Preview: may change in a minor release.) Passed. */
+  | 'PASSED';
+
+/** (Preview: may change in a minor release.) Automation review ProfileChangeArea vocabulary. */
+export type AutomationReviewProfileChangeArea =
+  /** (Preview: may change in a minor release.) Command. */
+  | 'COMMAND'
+  /** (Preview: may change in a minor release.) Configuration. */
+  | 'CONFIGURATION'
+  /** (Preview: may change in a minor release.) Decoder. */
+  | 'DECODER'
+  /** (Preview: may change in a minor release.) Location. */
+  | 'LOCATION'
+  /** (Preview: may change in a minor release.) Metric. */
+  | 'METRIC'
+  /** (Preview: may change in a minor release.) Rule. */
+  | 'RULE'
+  /** (Preview: may change in a minor release.) Semantics. */
+  | 'SEMANTICS';
+
+/** (Preview: may change in a minor release.) Automation review ProfileChangeType vocabulary. */
+export type AutomationReviewProfileChangeType =
+  /** (Preview: may change in a minor release.) The number of added intents. */
+  | 'ADDED'
+  /** (Preview: may change in a minor release.) Modified. */
+  | 'MODIFIED'
+  /** (Preview: may change in a minor release.) The number of removed intents. */
+  | 'REMOVED';
+
+/** (Preview: may change in a minor release.) Profile, lifecycle, draft matching and paging filters. */
+export type AutomationReviewSearchCriteria = {
+  /** (Preview: may change in a minor release.) Only reviews whose draft digest matches, or does not match, the current draft. */
+  matchingCurrentDraft?: boolean | null | undefined;
+  /** (Preview: may change in a minor release.) The page to return, starting at 1. */
+  pageNumber: number;
+  /** (Preview: may change in a minor release.) The number of reviews per page. */
+  pageSize: number;
+  /** (Preview: may change in a minor release.) The profile whose draft is reviewed. */
+  profileToken: string;
+  /** (Preview: may change in a minor release.) The current review lifecycle state. */
+  state?: AutomationReviewState | null | undefined;
+};
+
+/** (Preview: may change in a minor release.) Automation review StartState vocabulary. */
+export type AutomationReviewStartState =
+  /** (Preview: may change in a minor release.) Clear. */
+  | 'CLEAR'
+  /** (Preview: may change in a minor release.) Raised. */
+  | 'RAISED'
+  /** (Preview: may change in a minor release.) Unknown. */
+  | 'UNKNOWN';
+
+/** (Preview: may change in a minor release.) Automation review State vocabulary. */
+export type AutomationReviewState =
+  /** (Preview: may change in a minor release.) Approved. */
+  | 'APPROVED'
+  /** (Preview: may change in a minor release.) Consumed. */
+  | 'CONSUMED'
+  /** (Preview: may change in a minor release.) Expired. */
+  | 'EXPIRED'
+  /** (Preview: may change in a minor release.) Ran. */
+  | 'RAN'
+  /** (Preview: may change in a minor release.) Rejected. */
+  | 'REJECTED';
+
+/** (Preview: may change in a minor release.) Automation review Verdict vocabulary. */
+export type AutomationReviewVerdict =
+  /** (Preview: may change in a minor release.) Fail. */
+  | 'FAIL'
+  /** (Preview: may change in a minor release.) Inconclusive. */
+  | 'INCONCLUSIVE'
+  /** (Preview: may change in a minor release.) Pass. */
+  | 'PASS';
+
+/** (Preview: may change in a minor release.) AutomationReviewWindowInput parameters. */
+export type AutomationReviewWindowInput = {
+  /** (Preview: may change in a minor release.) RFC3339 timestamp; invalid timestamps are invalid arguments. */
+  end: string;
+  /** (Preview: may change in a minor release.) Whether this is the incident or normal window. */
+  role: AutomationReviewWindowRole;
+  /** (Preview: may change in a minor release.) RFC3339 timestamp; invalid timestamps are invalid arguments. */
+  start: string;
+};
+
+/** (Preview: may change in a minor release.) Automation review WindowRole vocabulary. */
+export type AutomationReviewWindowRole =
+  /** (Preview: may change in a minor release.) Incident. */
+  | 'INCIDENT'
+  /** (Preview: may change in a minor release.) Normal. */
+  | 'NORMAL';
+
 /**
  * How an anchor uses its issuers' OCSP responders at connect. A certificate a responder says is
  * revoked is always refused (a verified revoked answer for any certificate on any verified path
@@ -1522,6 +1651,24 @@ export type QueryParamInput = {
   value: string;
 };
 
+/** (Preview: may change in a minor release.) RunAutomationReviewInput parameters. */
+export type RunAutomationReviewInput = {
+  /** (Preview: may change in a minor release.) The device tokens selected for replay. */
+  deviceTokens: Array<string>;
+  /** (Preview: may change in a minor release.) The verdicts for the supplied expectations. */
+  expectations?: Array<AutomationReviewExpectationInputValue> | null | undefined;
+  /** (Preview: may change in a minor release.) The profile whose draft is reviewed. */
+  profileToken: string;
+  /** (Preview: may change in a minor release.) A caller-generated idempotency key for this review request. */
+  requestId: string;
+  /** (Preview: may change in a minor release.) The changed rule token, when one rule is compared. */
+  ruleToken?: string | null | undefined;
+  /** (Preview: may change in a minor release.) The maximum pairing shift, in seconds; null uses the engine default. */
+  shiftWindowSeconds?: number | null | undefined;
+  /** (Preview: may change in a minor release.) The incident and normal replay windows. */
+  windows: Array<AutomationReviewWindowInput>;
+};
+
 /** Which integration's unregistered devices to return, and the page. Most recently seen first. */
 export type UnregisteredIntegrationDeviceSearchCriteria = {
   /** Token of the integration. An unknown token matches nothing. */
@@ -1819,6 +1966,43 @@ export type AuditEventsQueryVariables = Exact<{
 
 
 export type AuditEventsQuery = { auditEvents: { results: Array<{ id: string, occurredTime: string, category: string, actor: string, operation: string, tableName: string | null, entityPk: string | null, entityLabel: string | null, rowsAffected: number }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type AutomationReviewsQueryVariables = Exact<{
+  criteria: AutomationReviewSearchCriteria;
+}>;
+
+
+export type AutomationReviewsQuery = { automationReviews: { results: Array<{ token: string, profileToken: string | null, ruleToken: string | null, kind: AutomationReviewKind, state: AutomationReviewState, outcome: AutomationReviewOutcome, createdBy: string, createdAt: string, matchesCurrentDraft: boolean | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } | null };
+
+export type AutomationReviewDetailQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type AutomationReviewDetailQuery = { automationReview: { token: string, profileToken: string | null, ruleToken: string | null, kind: AutomationReviewKind, state: AutomationReviewState, outcome: AutomationReviewOutcome, reviewDigest: string, draftDigest: string, baselineDigest: string, baselineVersion: number, createdBy: string, createdAt: string, requiredApprovals: number, approvedAt: string | null, expiresAt: string | null, decidedBy: string | null, decidedAt: string | null, note: string | null, draftAuthors: Array<string> | null, reasons: Array<string> | null, deviceTokens: Array<string> | null, shiftWindowSeconds: number | null, inputDigest: string | null, resultDigest: string | null, engineBuild: string | null, result: string | null, matchesCurrentDraft: boolean | null, profileChanges: Array<{ area: AutomationReviewProfileChangeArea, key: string, change: AutomationReviewProfileChangeType, automation: boolean }> | null, approvals: Array<{ principal: string, approvedAt: string, policyRevision: number }> | null, windows: Array<{ role: AutomationReviewWindowRole, start: string, end: string }> | null, expectationInputs: Array<{ window: AutomationReviewWindowRole, name: string | null, expect: string }> | null, fidelity: { status: string, reasons: Array<string>, label: string } | null, expectations: Array<{ index: number, name: string, window: AutomationReviewWindowRole, verdict: AutomationReviewVerdict, baseline: AutomationReviewVerdict, reason: string, baselineReason: string, evidence: Array<{ device: string, at: string, value: number | null, spanSeconds: number }> }> | null, windowResults: Array<{ role: AutomationReviewWindowRole, start: string, end: string, leadInStart: string, stream: string, firstSeq: string, lastSeq: string, inputDigest: string, degraded: Array<string>, changesTruncated: boolean, counts: { unchanged: number, added: number, removed: number, shifted: number, contentChanged: number }, devices: Array<{ device: string, stateBase: AutomationReviewStartState, stateDraft: AutomationReviewStartState, divergence: string | null, lateBase: number, lateDraft: number, first: string | null, last: string | null, readings: Array<{ key: string, count: number }>, versions: Array<{ key: string, count: number }> }>, changes: Array<{ kind: AutomationReviewChangeKind, device: string, subject: string, discriminator: string, baseAt: string | null, draftAt: string | null, shiftSeconds: number, contentChanged: boolean, afterDivergence: boolean, baseContent: { severity: string | null, payload: string | null, relativeExpirySeconds: number | null, expiryLabel: string | null, configDigest: string | null, bodyDigest: string | null, method: string | null } | null, draftContent: { severity: string | null, payload: string | null, relativeExpirySeconds: number | null, expiryLabel: string | null, configDigest: string | null, bodyDigest: string | null, method: string | null } | null, reading: { device: string, at: string, value: number | null, spanSeconds: number } }> }> | null } | null };
+
+export type RunAutomationReviewMutationVariables = Exact<{
+  input: RunAutomationReviewInput;
+}>;
+
+
+export type RunAutomationReviewMutation = { runAutomationReview: { token: string } | null };
+
+export type ApproveAutomationReviewMutationVariables = Exact<{
+  token: string;
+  digest: string;
+}>;
+
+
+export type ApproveAutomationReviewMutation = { approveAutomationReview: { token: string, state: AutomationReviewState } | null };
+
+export type RejectAutomationReviewMutationVariables = Exact<{
+  token: string;
+  note?: string | null | undefined;
+}>;
+
+
+export type RejectAutomationReviewMutation = { rejectAutomationReview: { token: string, state: AutomationReviewState } | null };
 
 export type PreviewSelectorQueryVariables = Exact<{
   memberType: string;
@@ -3498,6 +3682,197 @@ export const AuditEventsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<AuditEventsQuery, AuditEventsQueryVariables>;
+export const AutomationReviewsDocument = new TypedDocumentString(`
+    query AutomationReviews($criteria: AutomationReviewSearchCriteria!) {
+  automationReviews(criteria: $criteria) {
+    results {
+      token
+      profileToken
+      ruleToken
+      kind
+      state
+      outcome
+      createdBy
+      createdAt
+      matchesCurrentDraft
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AutomationReviewsQuery, AutomationReviewsQueryVariables>;
+export const AutomationReviewDetailDocument = new TypedDocumentString(`
+    query AutomationReviewDetail($token: String!) {
+  automationReview(token: $token) {
+    token
+    profileToken
+    ruleToken
+    kind
+    state
+    outcome
+    reviewDigest
+    draftDigest
+    baselineDigest
+    baselineVersion
+    createdBy
+    createdAt
+    requiredApprovals
+    approvedAt
+    expiresAt
+    decidedBy
+    decidedAt
+    note
+    draftAuthors
+    reasons
+    deviceTokens
+    profileChanges {
+      area
+      key
+      change
+      automation
+    }
+    approvals {
+      principal
+      approvedAt
+      policyRevision
+    }
+    windows {
+      role
+      start
+      end
+    }
+    shiftWindowSeconds
+    expectationInputs {
+      window
+      name
+      expect
+    }
+    fidelity {
+      status
+      reasons
+      label
+    }
+    expectations {
+      index
+      name
+      window
+      verdict
+      baseline
+      reason
+      baselineReason
+      evidence {
+        device
+        at
+        value
+        spanSeconds
+      }
+    }
+    windowResults {
+      role
+      start
+      end
+      leadInStart
+      stream
+      firstSeq
+      lastSeq
+      inputDigest
+      degraded
+      changesTruncated
+      counts {
+        unchanged
+        added
+        removed
+        shifted
+        contentChanged
+      }
+      devices {
+        device
+        readings {
+          key
+          count
+        }
+        versions {
+          key
+          count
+        }
+        stateBase
+        stateDraft
+        divergence
+        lateBase
+        lateDraft
+        first
+        last
+      }
+      changes {
+        kind
+        device
+        subject
+        discriminator
+        baseAt
+        draftAt
+        shiftSeconds
+        contentChanged
+        afterDivergence
+        baseContent {
+          severity
+          payload
+          relativeExpirySeconds
+          expiryLabel
+          configDigest
+          bodyDigest
+          method
+        }
+        draftContent {
+          severity
+          payload
+          relativeExpirySeconds
+          expiryLabel
+          configDigest
+          bodyDigest
+          method
+        }
+        reading {
+          device
+          at
+          value
+          spanSeconds
+        }
+      }
+    }
+    inputDigest
+    resultDigest
+    engineBuild
+    result
+    matchesCurrentDraft
+  }
+}
+    `) as unknown as TypedDocumentString<AutomationReviewDetailQuery, AutomationReviewDetailQueryVariables>;
+export const RunAutomationReviewDocument = new TypedDocumentString(`
+    mutation RunAutomationReview($input: RunAutomationReviewInput!) {
+  runAutomationReview(input: $input) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<RunAutomationReviewMutation, RunAutomationReviewMutationVariables>;
+export const ApproveAutomationReviewDocument = new TypedDocumentString(`
+    mutation ApproveAutomationReview($token: String!, $digest: String!) {
+  approveAutomationReview(token: $token, digest: $digest) {
+    token
+    state
+  }
+}
+    `) as unknown as TypedDocumentString<ApproveAutomationReviewMutation, ApproveAutomationReviewMutationVariables>;
+export const RejectAutomationReviewDocument = new TypedDocumentString(`
+    mutation RejectAutomationReview($token: String!, $note: String) {
+  rejectAutomationReview(token: $token, note: $note) {
+    token
+    state
+  }
+}
+    `) as unknown as TypedDocumentString<RejectAutomationReviewMutation, RejectAutomationReviewMutationVariables>;
 export const PreviewSelectorDocument = new TypedDocumentString(`
     query PreviewSelector($memberType: String!, $selector: String!, $pagination: PaginationInput!) {
   previewSelector(
