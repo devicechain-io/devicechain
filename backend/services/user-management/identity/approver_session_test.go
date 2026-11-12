@@ -164,12 +164,18 @@ func TestApproverSessionsAreValidated(t *testing.T) {
 		"non UUID":       {Principal: approvalBoss, Sid: "not-a-uuid"},
 		"URN UUID":       {Principal: approvalBoss, Sid: "urn:uuid:" + uuid.NewString()},
 		"undashed UUID":  {Principal: approvalBoss, Sid: strings.ReplaceAll(uuid.NewString(), "-", "")},
+		"36 non-hex":     {Principal: approvalBoss, Sid: strings.Repeat("z", 36)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			req := x.request(session.Principal)
 			req.ApproverSessions = []ApproverSession{session}
+			original := x.m.refreshKV
+			kv := &countingApproverKV{KeyValue: original}
+			x.m.refreshKV = kv
+			defer func() { x.m.refreshKV = original }()
 			_, err := x.m.AgentExecutionDecision(context.Background(), personClaims(approvalBoss, string(auth.AlarmWrite)), req)
 			require.ErrorContains(t, err, malformed)
+			require.Zero(t, kv.gets, "a malformed session is refused before any sign-in is read")
 		})
 	}
 	t.Run("maximum principal length", func(t *testing.T) {
@@ -185,13 +191,14 @@ func TestApproverSessionsAreValidated(t *testing.T) {
 
 type countingApproverKV struct {
 	nats.KeyValue
-	gets   int
-	cancel context.CancelFunc
+	gets     int
+	cancelAt int
+	cancel   context.CancelFunc
 }
 
 func (kv *countingApproverKV) Get(key string) (nats.KeyValueEntry, error) {
 	kv.gets++
-	if kv.cancel != nil {
+	if kv.cancel != nil && kv.gets == kv.cancelAt {
 		kv.cancel()
 	}
 	return kv.KeyValue.Get(key)
@@ -200,23 +207,22 @@ func (kv *countingApproverKV) Get(key string) (nats.KeyValueEntry, error) {
 func TestApproverSessionReadsStopOnCancellation(t *testing.T) {
 	x := newExecEnv(t)
 	x.addApprover(t, "other@example.invalid")
+	// The proposer's sign-in is read first, then each approver's: three reads in all.
 	req := x.request(approvalBoss, "other@example.invalid")
-	for _, preCancelled := range []bool{true, false} {
-		t.Run(map[bool]string{true: "before reads", false: "during first read"}[preCancelled], func(t *testing.T) {
+	for name, cancelAt := range map[string]int{"before reads": 0, "during the proposer read": 1, "during the first approver read": 2} {
+		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			original := x.m.refreshKV
-			kv := &countingApproverKV{KeyValue: original, cancel: cancel}
+			kv := &countingApproverKV{KeyValue: original, cancel: cancel, cancelAt: cancelAt}
 			x.m.refreshKV = kv
 			defer func() { x.m.refreshKV = original }()
-			wantGets := 1
-			if preCancelled {
+			if cancelAt == 0 {
 				cancel()
-				wantGets = 0
 			}
 			_, err := x.m.AgentExecutionDecision(ctx, personClaims(approvalBoss, string(auth.AlarmWrite)), req)
 			require.ErrorIs(t, err, context.Canceled)
-			require.Equal(t, wantGets, kv.gets)
+			require.Equal(t, cancelAt, kv.gets)
 		})
 	}
 }

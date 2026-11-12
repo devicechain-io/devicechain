@@ -59,8 +59,6 @@ const MaxExecutionApprovers = 10
 // so no real principal is longer.
 const maxApproverPrincipalLen = 256
 
-const maxApproverSidLen = 64
-
 // kindActScope is the act:* scope a proposal of each kind is derived through.
 var kindActScope = map[agentpolicy.Kind]string{
 	agentpolicy.KindAlarmAck:      auth.ScopeActAlarms,
@@ -182,7 +180,9 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 		if s.Principal == "" || s.Sid == "" || named[s.Principal] || !slices.Contains(req.Approvers, s.Principal) {
 			return ExecutionDecision{}, errors.New("approver sessions require distinct named approvers and non-empty principal and sid")
 		}
-		if _, err := uuid.Parse(s.Sid); len(s.Principal) > maxApproverPrincipalLen || len(s.Sid) > maxApproverSidLen || len(s.Sid) != 36 || err != nil {
+		// A sid is minted by uuid.NewString, so only the canonical 36-character form is one; the
+		// length test also refuses the urn:, braced and undashed forms uuid.Parse accepts.
+		if _, err := uuid.Parse(s.Sid); len(s.Principal) > maxApproverPrincipalLen || len(s.Sid) != 36 || err != nil {
 			return ExecutionDecision{}, errors.New("approver session principal or sid is malformed")
 		}
 		named[s.Principal] = true
