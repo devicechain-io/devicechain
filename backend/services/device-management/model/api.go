@@ -88,10 +88,12 @@ type Api struct {
 	KillFeed *KillFeed
 	// AgentEffectsExhausted counts committed transitions to the outbox attempt cap.
 	AgentEffectsExhausted prometheus.Counter
-	// afterDecisionForTest runs inside the execution transaction between the policy decision and
-	// the fence check. Tests use it to land a kill in exactly that window; production leaves it nil.
+	// beforeFenceForTest runs after the dependency check, before erasure and kill fence reads (tests only).
+	beforeFenceForTest func(tx *gorm.DB) error
+	// afterDecisionForTest runs right after the commit-point decision returns, before the
+	// in-memory checks; tests only; production SQL there would break the tail rule.
 	afterDecisionForTest func(tx *gorm.DB) error
-	// afterFenceForTest runs after the fence check passed and before commit (tests only).
+	// afterFenceForTest runs after the fence read and before effects (tests only).
 	afterFenceForTest func(tx *gorm.DB) error
 
 	// ceilings exports the observed size of the ceilinged collections (ceilings.go). Nil

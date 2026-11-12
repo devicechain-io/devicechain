@@ -248,7 +248,8 @@ func TestAgentExecutionMalformedStoredDataRollsBack(t *testing.T) {
 	}
 }
 
-func TestAgentExecutionPolicyTightensBeforeEffect(t *testing.T) {
+// The final decision now follows effects, so tightening must roll those effects back.
+func TestAgentExecutionPolicyTightensAtCommitPoint(t *testing.T) {
 	r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1")
 	r.decider.second = func() (actiongate.ExecutionDecision, error) { return execApprove(2, "boss", "carol"), nil }
 	_, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
@@ -300,8 +301,8 @@ func TestDependencySetMustMatchTargetsExactly(t *testing.T) {
 	}
 }
 
-// The policy is asked AFTER the alarm rows are read (and, on Postgres, locked), never before: a wait
-// for an alarm row must not sit between the decision and the effect.
+// The final policy decision now follows every statement, including alarm reads and effects.
+// Alarm lock waits must finish before that decision.
 func TestDecisionIsAskedAfterTheAlarmsAreLocked(t *testing.T) {
 	r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1")
 	var order []string
