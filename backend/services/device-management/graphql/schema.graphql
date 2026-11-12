@@ -391,6 +391,10 @@ definitions and its position declaration. Versions are never deleted while the p
 exists; rollbackDeviceProfile makes an earlier one active again.
 """
 type DeviceProfileVersion {
+    """(Preview: may change in a minor release.) The automation review this version consumed when it was published, or null when it was published without one."""
+    automationReviewToken: String
+    """(Preview: may change in a minor release.) The review consumed by this version, or null when none was consumed. Requires device:read and event:read and an unscoped caller; authorization failures affect only this field."""
+    automationReview: AutomationReview
     """Version number: 1 for the first publish of the profile, increasing by one with each publish."""
     version: Int!
     """Optional label given at publish time, such as a release name. Not interpreted."""
@@ -5277,6 +5281,8 @@ enum AutomationReviewProfileChangeType {
 
 """(Preview: may change in a minor release.) Frozen evidence and approval history for a profile draft."""
 type AutomationReview {
+    """(Preview: may change in a minor release.) The version this review was consumed by, or null while it has not been."""
+    consumedVersion: Int
     """(Preview: may change in a minor release.) The stable token identifying this review."""
     token: String!
     """(Preview: may change in a minor release.) The profile token, resolved from its stored id; lookup failures return null and an error."""
@@ -5613,7 +5619,126 @@ type AutomationReviewSearchResults {
     pagination: SearchResultsPagination!
 }
 
+"""(Preview: may change in a minor release.) Effective automation publish protection settings."""
+type AutomationReviewPolicySettings {
+    """(Preview: may change in a minor release.) Whether publishing requires an approved review."""
+    required: Boolean!
+    """(Preview: may change in a minor release.) Number of distinct approvals required."""
+    requiredApprovals: Int!
+    """(Preview: may change in a minor release.) Whether review creators and draft authors may approve."""
+    allowSelfApproval: Boolean!
+    """(Preview: may change in a minor release.) Approval lifetime in seconds."""
+    approvalTtlSeconds: Int!
+    """(Preview: may change in a minor release.) Maximum age of the second factor in seconds."""
+    stepUpMaxAgeSeconds: Int!
+}
+
+"""(Preview: may change in a minor release.) The lifecycle of a proposed policy change."""
+enum AutomationReviewPolicyChangeState {
+    """(Preview: may change in a minor release.) Waiting for approval or a permitted delay."""
+    PENDING
+    """(Preview: may change in a minor release.) The proposal has taken effect."""
+    APPLIED
+    """(Preview: may change in a minor release.) The proposal was cancelled."""
+    CANCELLED
+    """(Preview: may change in a minor release.) A later policy change replaced this proposal."""
+    SUPERSEDED
+}
+
+"""(Preview: may change in a minor release.) A proposed loosening of automation protection."""
+type AutomationReviewPolicyChange {
+    """(Preview: may change in a minor release.) The policy change token."""
+    token: String!
+    """(Preview: may change in a minor release.) The proposed settings; unreadable stored JSON returns null and an error."""
+    proposed: AutomationReviewPolicySettings
+    """(Preview: may change in a minor release.) The person proposing the change."""
+    proposedBy: String!
+    """(Preview: may change in a minor release.) When proposed, as an RFC 3339 timestamp."""
+    proposedAt: String!
+    """(Preview: may change in a minor release.) When the change may take effect without a second person, as an RFC 3339 timestamp."""
+    effectiveAt: String
+    """(Preview: may change in a minor release.) The proposal lifecycle state."""
+    state: AutomationReviewPolicyChangeState!
+    """(Preview: may change in a minor release.) Who decided the proposal, when decided."""
+    decidedBy: String
+    """(Preview: may change in a minor release.) When decided, as an RFC 3339 timestamp."""
+    decidedAt: String
+}
+
+"""(Preview: may change in a minor release.) Automation publish protection for a profile."""
+type AutomationReviewPolicy {
+    """(Preview: may change in a minor release.) The protected profile token."""
+    profileToken: String!
+    """(Preview: may change in a minor release.) The settings currently enforced; defaults apply when no policy is stored."""
+    effective: AutomationReviewPolicySettings!
+    """(Preview: may change in a minor release.) The stored revision, or zero when no policy is stored."""
+    revision: Int!
+    """(Preview: may change in a minor release.) Who last updated the stored policy, or null when none is stored."""
+    updatedBy: String
+    """(Preview: may change in a minor release.) When the stored policy was updated, as an RFC 3339 timestamp, or null when none is stored."""
+    updatedAt: String
+    """(Preview: may change in a minor release.) The pending loosening proposal, if any."""
+    pendingChange: AutomationReviewPolicyChange
+}
+
+"""(Preview: may change in a minor release.) Requested automation protection settings; omitted optional fields use their defaults."""
+input AutomationReviewPolicyInput {
+    """(Preview: may change in a minor release.) Whether publishing requires review."""
+    required: Boolean!
+    """(Preview: may change in a minor release.) Required approvals; defaults to 1."""
+    requiredApprovals: Int
+    """(Preview: may change in a minor release.) Whether creators and authors may approve; defaults to false."""
+    allowSelfApproval: Boolean
+    """(Preview: may change in a minor release.) Approval lifetime in seconds; defaults to 86400."""
+    approvalTtlSeconds: Int
+    """(Preview: may change in a minor release.) Maximum second-factor age in seconds; defaults to 900."""
+    stepUpMaxAgeSeconds: Int
+}
+
+"""(Preview: may change in a minor release.) Whether the policy was applied immediately and its resulting view."""
+type SetAutomationReviewPolicyResult {
+    """(Preview: may change in a minor release.) True when applied immediately; false when approval or a delay is pending."""
+    applied: Boolean!
+    """(Preview: may change in a minor release.) The resulting policy."""
+    policy: AutomationReviewPolicy
+}
+
+"""(Preview: may change in a minor release.) An activation change made outside review."""
+enum AutomationReviewBreakGlassAction {
+    """(Preview: may change in a minor release.) Changing the active profile version."""
+    ROLLBACK
+    """(Preview: may change in a minor release.) Changing the profile bound to a type."""
+    REPOINT_TYPE
+    """(Preview: may change in a minor release.) Moving a device out of a protected type."""
+    MOVE_DEVICE
+}
+
+"""(Preview: may change in a minor release.) The recorded reason and person for a protected activation change."""
+type AutomationReviewBreakGlass {
+    """(Preview: may change in a minor release.) The activation change action."""
+    action: AutomationReviewBreakGlassAction!
+    """(Preview: may change in a minor release.) The affected target token."""
+    target: String!
+    """(Preview: may change in a minor release.) Why the change was necessary."""
+    reason: String!
+    """(Preview: may change in a minor release.) The person making the change."""
+    actor: String!
+    """(Preview: may change in a minor release.) When recorded, as an RFC 3339 timestamp."""
+    at: String!
+}
+
 type Query {
+    """(Preview: may change in a minor release.) Read automation protection settings. Requires device:read and an unscoped caller; an unknown profile returns NOT_FOUND."""
+    automationReviewPolicy(
+        """(Preview: may change in a minor release.) The profile token."""
+        profileToken: String!
+    ): AutomationReviewPolicy
+    """(Preview: may change in a minor release.) Read at most 200 activation changes made outside review, newest first. Requires device:read and an unscoped caller; an unknown profile returns NOT_FOUND."""
+    automationReviewBreakGlass(
+        """(Preview: may change in a minor release.) The profile token."""
+        profileToken: String!
+    ): [AutomationReviewBreakGlass!]
+
     """(Preview: may change in a minor release.) Read frozen automation evidence. Requires device:read and event:read and an unscoped caller."""
     automationReview(
         """(Preview: may change in a minor release.) The review token."""
@@ -6527,6 +6652,24 @@ type Query {
 
 # Contains mutations executed against model.
 type Mutation {
+    """(Preview: may change in a minor release.) Set automation protection. Protecting requires every enabled rule of the active version to read only recorded telemetry: no device attributes, no calculated metric reading device constants and no group scope. Tightening applies at once. Loosening (removing protection, fewer approvals, allowing self-approval, a longer approval lifetime or step-up age) waits for a second person's approval, or for 24 hours when self-approval is allowed. Requires device:write and a person's own unscoped session."""
+    setAutomationReviewPolicy(
+        """(Preview: may change in a minor release.) The profile token."""
+        profileToken: String!
+        """(Preview: may change in a minor release.) The protection settings to request."""
+        settings: AutomationReviewPolicyInput!
+    ): SetAutomationReviewPolicyResult
+    """(Preview: may change in a minor release.) Approve a pending policy change. Requires device:write, a second person's own unscoped session and a recently verified second factor; the proposer is refused."""
+    approveAutomationReviewPolicyChange(
+        """(Preview: may change in a minor release.) The policy change token."""
+        token: String!
+    ): AutomationReviewPolicy
+    """(Preview: may change in a minor release.) Cancel a pending policy change. Requires device:write and a person's own unscoped session."""
+    cancelAutomationReviewPolicyChange(
+        """(Preview: may change in a minor release.) The policy change token."""
+        token: String!
+    ): AutomationReviewPolicy
+
     """(Preview: may change in a minor release.) Compare a profile draft with its published baseline. Requires an unscoped person with device:write and event:read."""
     runAutomationReview(
         """(Preview: may change in a minor release.) The draft, devices, windows and expectations to review."""
@@ -6618,6 +6761,8 @@ type Mutation {
         token: String!
         """The fields to change."""
         request: DeviceTypeUpdateRequest!
+        """(Preview: may change in a minor release.) Why the device type is being re-pointed outside review. Required (with a second factor verified recently) on a profile re-point to or from a protected profile, where it is recorded with the person; ignored otherwise."""
+        breakGlassReason: String
     ): DeviceType!
     """
     Deletes a device type. Returns true when it was deleted and false when no device type
@@ -6758,6 +6903,7 @@ type Mutation {
     use. The draft's enabled detection rules are checked first; a rejected
     rule, or a check that cannot be completed, fails the publish and nothing is stored.
     Fails if no profile has the token. Returns the new version. Requires device:write.
+    On a protected profile the approved review must still match the draft, the active version, the policy and its approvers' standing.
     """
     publishDeviceProfile(
         """Token of the profile to publish."""
@@ -6766,6 +6912,8 @@ type Mutation {
         label: String
         """Optional notes for the version, up to 1024 characters."""
         description: String
+        """(Preview: may change in a minor release.) The approved automation review this publish consumes. Required when the profile is protected by an automation review policy, where a publish without one is refused with REVIEW_REQUIRED; ignored otherwise."""
+        automationReviewToken: String
     ): DeviceProfileVersion!
     """
     Makes an existing published version the one devices use again. The draft and the version
@@ -6779,6 +6927,8 @@ type Mutation {
         token: String!
         """Number of the published version to make active."""
         version: Int!
+        """(Preview: may change in a minor release.) Why the active version of a protected profile is being changed outside review. Required (with a second factor verified recently) on a protected profile, where it is recorded with the person; ignored otherwise."""
+        breakGlassReason: String
     ): DeviceProfile!
     """
     Adds a metric definition to a profile's draft and returns it. It reaches devices when
@@ -6976,6 +7126,8 @@ type Mutation {
         token: String!
         """The fields to change."""
         request: DeviceUpdateRequest!
+        """(Preview: may change in a minor release.) Why the device is being moved outside review. Required (with a second factor verified recently) on moving a device out of a type bound to a protected profile, where it is recorded with the person; ignored otherwise."""
+        breakGlassReason: String
     ): Device!
     """
     Deletes a device together with its credentials, replacement history, relationships,

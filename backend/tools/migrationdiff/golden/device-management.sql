@@ -7,6 +7,9 @@ ALTER SEQUENCE "device-management".asset_type_versions_id_seq OWNED BY "device-m
 ALTER SEQUENCE "device-management".asset_types_id_seq OWNED BY "device-management".asset_types.id;
 ALTER SEQUENCE "device-management".assets_id_seq OWNED BY "device-management".assets.id;
 ALTER SEQUENCE "device-management".audit_events_id_seq OWNED BY "device-management".audit_events.id;
+ALTER SEQUENCE "device-management".automation_review_break_glass_id_seq OWNED BY "device-management".automation_review_break_glass.id;
+ALTER SEQUENCE "device-management".automation_review_policies_id_seq OWNED BY "device-management".automation_review_policies.id;
+ALTER SEQUENCE "device-management".automation_review_policy_changes_id_seq OWNED BY "device-management".automation_review_policy_changes.id;
 ALTER SEQUENCE "device-management".automation_reviews_id_seq OWNED BY "device-management".automation_reviews.id;
 ALTER SEQUENCE "device-management".command_definitions_id_seq OWNED BY "device-management".command_definitions.id;
 ALTER SEQUENCE "device-management".customer_types_id_seq OWNED BY "device-management".customer_types.id;
@@ -87,6 +90,19 @@ ALTER TABLE ONLY "device-management".assets ALTER COLUMN id SET DEFAULT nextval(
 ALTER TABLE ONLY "device-management".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".audit_events ALTER COLUMN id SET DEFAULT nextval('"device-management".audit_events_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".automation_review_break_glass
+ ADD CONSTRAINT automation_review_break_glass_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".automation_review_break_glass ALTER COLUMN id SET DEFAULT nextval('"device-management".automation_review_break_glass_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".automation_review_policies
+ ADD CONSTRAINT automation_review_policies_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".automation_review_policies
+ ADD CONSTRAINT fk_automation_review_policies_profile FOREIGN KEY (device_profile_id) REFERENCES "device-management".device_profiles(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY "device-management".automation_review_policies ALTER COLUMN id SET DEFAULT nextval('"device-management".automation_review_policies_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".automation_review_policy_changes
+ ADD CONSTRAINT automation_review_policy_changes_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".automation_review_policy_changes
+ ADD CONSTRAINT fk_automation_review_policy_changes_profile FOREIGN KEY (device_profile_id) REFERENCES "device-management".device_profiles(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY "device-management".automation_review_policy_changes ALTER COLUMN id SET DEFAULT nextval('"device-management".automation_review_policy_changes_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".automation_reviews
  ADD CONSTRAINT automation_reviews_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".automation_reviews ALTER COLUMN id SET DEFAULT nextval('"device-management".automation_reviews_id_seq'::regclass);
@@ -276,6 +292,21 @@ ALTER TABLE ONLY "device-management".purged_tenants
 ALTER TABLE ONLY "device-management".semantic_contexts
  ADD CONSTRAINT semantic_contexts_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".semantic_contexts ALTER COLUMN id SET DEFAULT nextval('"device-management".semantic_contexts_id_seq'::regclass);
+BEGIN
+ IF TG_TABLE_NAME = 'device_profile_versions' THEN
+ IF TG_OP = 'INSERT' THEN
+ PERFORM 1 FROM "device-management".device_profiles WHERE id = NEW.device_profile_id FOR NO KEY UPDATE;
+CREATE FUNCTION "device-management".automation_review_guard() RETURNS trigger
+ LANGUAGE plpgsql
+ AS $$
+DECLARE
+ p bigint;
+CREATE FUNCTION "device-management".automation_review_policy_required(p_profile bigint) RETURNS boolean
+ LANGUAGE sql
+ AS $$
+ SELECT EXISTS (SELECT 1 FROM "device-management".automation_review_policies
+ WHERE device_profile_id = p_profile AND required)
+$$;
 CREATE INDEX "idx_device-management_agent_effect_outboxes_created_at" ON "device-management".agent_effect_outboxes USING btree (created_at);
 CREATE INDEX "idx_device-management_agent_proposals_deleted_at" ON "device-management".agent_proposals USING btree (deleted_at);
 CREATE INDEX "idx_device-management_agent_proposals_expires_at" ON "device-management".agent_proposals USING btree (expires_at);
@@ -301,6 +332,10 @@ CREATE INDEX "idx_device-management_asset_types_token" ON "device-management".as
 CREATE INDEX "idx_device-management_assets_deleted_at" ON "device-management".assets USING btree (deleted_at);
 CREATE INDEX "idx_device-management_assets_tenant_id" ON "device-management".assets USING btree (tenant_id);
 CREATE INDEX "idx_device-management_assets_token" ON "device-management".assets USING btree (token);
+CREATE INDEX "idx_device-management_automation_review_policies_tenant_id" ON "device-management".automation_review_policies USING btree (tenant_id);
+CREATE INDEX "idx_device-management_automation_review_policy_changes_512898a9" ON "device-management".automation_review_policy_changes USING btree (device_profile_id);
+CREATE INDEX "idx_device-management_automation_review_policy_changes_55c51ee7" ON "device-management".automation_review_policy_changes USING btree (tenant_id);
+CREATE INDEX "idx_device-management_automation_review_policy_changes_state" ON "device-management".automation_review_policy_changes USING btree (state);
 CREATE INDEX "idx_device-management_automation_reviews_device_profile_id" ON "device-management".automation_reviews USING btree (device_profile_id);
 CREATE INDEX "idx_device-management_automation_reviews_state" ON "device-management".automation_reviews USING btree (state);
 CREATE INDEX "idx_device-management_automation_reviews_tenant_id" ON "device-management".automation_reviews USING btree (tenant_id);
@@ -410,6 +445,9 @@ CREATE INDEX idx_alarm_dispositions_tenant_raised ON "device-management".alarm_d
 CREATE INDEX idx_alarms_scope_anchors ON "device-management".alarms USING gin (scope_anchors);
 CREATE INDEX idx_areas_boundary_fence ON "device-management".areas USING btree (tenant_id, boundary_fence_token) WHERE (boundary_fence_token IS NOT NULL);
 CREATE INDEX idx_audit_tenant_time ON "device-management".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_automation_review_break_glass_device_profile_id ON "device-management".automation_review_break_glass USING btree (device_profile_id);
+CREATE INDEX idx_automation_review_break_glass_tenant_id ON "device-management".automation_review_break_glass USING btree (tenant_id);
+CREATE INDEX idx_automation_review_break_glass_txid ON "device-management".automation_review_break_glass USING btree (txid);
 CREATE INDEX idx_device_credentials_provisioning_profile ON "device-management".device_credentials USING btree (provisioning_profile_id) WHERE (provisioning_profile_id IS NOT NULL);
 CREATE INDEX idx_device_credentials_trust_anchor ON "device-management".device_credentials USING btree (trust_anchor_id) WHERE (trust_anchor_id IS NOT NULL);
 CREATE INDEX idx_devices_device_type ON "device-management".devices USING btree (tenant_id, device_type_id) WHERE (deleted_at IS NULL);
@@ -492,6 +530,24 @@ CREATE SEQUENCE "device-management".assets_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".audit_events_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".automation_review_break_glass_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".automation_review_policies_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".automation_review_policy_changes_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -932,6 +988,53 @@ CREATE TABLE "device-management".audit_events (
  on_behalf_of text,
  proposal text
 );
+CREATE TABLE "device-management".automation_review_break_glass (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ device_profile_id bigint NOT NULL,
+ action character varying(32) NOT NULL,
+ target character varying(128) NOT NULL,
+ reason character varying(512) NOT NULL,
+ actor character varying(320) NOT NULL,
+ amr jsonb NOT NULL,
+ mfa_time timestamp with time zone,
+ txid bigint NOT NULL
+);
+CREATE TABLE "device-management".automation_review_policies (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ device_profile_id bigint NOT NULL,
+ required boolean DEFAULT false NOT NULL,
+ required_approvals smallint DEFAULT 1 NOT NULL,
+ allow_self_approval boolean DEFAULT false NOT NULL,
+ approval_ttl_seconds integer DEFAULT 86400 NOT NULL,
+ step_up_max_age_seconds integer DEFAULT 900 NOT NULL,
+ revision integer DEFAULT 1 NOT NULL,
+ updated_by character varying(320) NOT NULL,
+ CONSTRAINT ck_automation_review_policies_approvals CHECK ((required_approvals = ANY (ARRAY[1, 2]))),
+ CONSTRAINT ck_automation_review_policies_step_up CHECK (((step_up_max_age_seconds >= 60) AND (step_up_max_age_seconds <= 3600))),
+ CONSTRAINT ck_automation_review_policies_ttl CHECK (((approval_ttl_seconds >= 900) AND (approval_ttl_seconds <= 604800)))
+);
+CREATE TABLE "device-management".automation_review_policy_changes (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ token character varying(64) NOT NULL,
+ device_profile_id bigint NOT NULL,
+ base_revision integer NOT NULL,
+ proposed jsonb NOT NULL,
+ proposed_by character varying(320) NOT NULL,
+ state character varying(16) NOT NULL,
+ effective_at timestamp with time zone,
+ decided_by character varying(320),
+ decided_at timestamp with time zone,
+ revision bigint DEFAULT 0 NOT NULL
+);
 CREATE TABLE "device-management".automation_reviews (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -1146,7 +1249,8 @@ CREATE TABLE "device-management".device_profile_versions (
  label character varying(128),
  description character varying(1024),
  snapshot jsonb NOT NULL,
- published_by character varying(256)
+ published_by character varying(256),
+ automation_review_token character varying(64)
 );
 CREATE TABLE "device-management".device_profiles (
  id bigint NOT NULL,
@@ -1630,6 +1734,12 @@ CREATE TABLE "device-management".semantic_contexts (
  custom_prefixes jsonb NOT NULL,
  pack_versions jsonb NOT NULL
 );
+CREATE TRIGGER automation_review_guard_device_update BEFORE UPDATE OF device_type_id ON "device-management".devices FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
+CREATE TRIGGER automation_review_guard_profile_delete BEFORE DELETE ON "device-management".device_profiles FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
+CREATE TRIGGER automation_review_guard_profile_update BEFORE UPDATE ON "device-management".device_profiles FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
+CREATE TRIGGER automation_review_guard_type_update BEFORE UPDATE OF profile_id ON "device-management".device_types FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
+CREATE TRIGGER automation_review_guard_version_insert BEFORE INSERT ON "device-management".device_profile_versions FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
+CREATE TRIGGER automation_review_guard_version_update BEFORE UPDATE ON "device-management".device_profile_versions FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
 CREATE UNIQUE INDEX idx_command_definition_profile_key ON "device-management".command_definitions USING btree (device_profile_id, command_key);
 CREATE UNIQUE INDEX idx_device_claim_device ON "device-management".device_claims USING btree (device_id);
 CREATE UNIQUE INDEX idx_device_credential_lookup ON "device-management".device_credentials USING btree (tenant_id, credential_type, credential_id) WHERE (deleted_at IS NULL);
@@ -1644,6 +1754,8 @@ CREATE UNIQUE INDEX uix_areas_tenant_token ON "device-management".areas USING bt
 CREATE UNIQUE INDEX uix_asset_type_versions_type_version ON "device-management".asset_type_versions USING btree (asset_type_id, version);
 CREATE UNIQUE INDEX uix_asset_types_tenant_token ON "device-management".asset_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_assets_tenant_token ON "device-management".assets USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_automation_review_policies_profile ON "device-management".automation_review_policies USING btree (tenant_id, device_profile_id);
+CREATE UNIQUE INDEX uix_automation_review_policy_changes_token ON "device-management".automation_review_policy_changes USING btree (tenant_id, token);
 CREATE UNIQUE INDEX uix_automation_reviews_request ON "device-management".automation_reviews USING btree (tenant_id, request_id);
 CREATE UNIQUE INDEX uix_automation_reviews_tenant_token ON "device-management".automation_reviews USING btree (tenant_id, token);
 CREATE UNIQUE INDEX uix_command_definitions_tenant_profile_key ON "device-management".command_definitions USING btree (tenant_id, device_profile_id, command_key) WHERE (deleted_at IS NULL);
@@ -1685,3 +1797,81 @@ CREATE UNIQUE INDEX uix_profile_decoder_healths_window ON "device-management".pr
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_provision_key ON "device-management".provisioning_profiles USING btree (tenant_id, provision_key) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_token ON "device-management".provisioning_profiles USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_semantic_contexts_tenant ON "device-management".semantic_contexts USING btree (tenant_id) WHERE (deleted_at IS NULL);
+END
+$$;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END LOOP;
+IF "device-management".automation_review_policy_required(NEW.device_profile_id) AND NOT EXISTS (
+ SELECT 1 FROM "device-management".automation_reviews r
+ WHERE r.token = NEW.automation_review_token AND r.tenant_id = NEW.tenant_id
+ AND r.device_profile_id = NEW.device_profile_id AND r.state = 'CONSUMED'
+ AND r.consumed_version = NEW.version AND r.consumed_txid = txid_current()) THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR01', MESSAGE = 'REVIEW_REQUIRED: this device profile requires an approved automation review to publish';
+IF "device-management".automation_review_policy_required(OLD.device_profile_id)
+ OR "device-management".automation_review_policy_required(NEW.device_profile_id) THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: published versions of a protected device profile cannot be changed';
+IF "device-management".automation_review_policy_required(p) AND NOT EXISTS (
+ SELECT 1 FROM "device-management".automation_review_break_glass b
+ WHERE b.device_profile_id = p AND b.tenant_id = NEW.tenant_id AND b.action = 'MOVE_DEVICE'
+ AND b.target = NEW.token AND b.txid = txid_current()) THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: moving a device out of a type bound to a protected device profile needs a break-glass reason';
+IF "device-management".automation_review_policy_required(p) AND NOT EXISTS (
+ SELECT 1 FROM "device-management".automation_review_break_glass b
+ WHERE b.device_profile_id = p AND b.tenant_id = NEW.tenant_id AND b.action = 'REPOINT_TYPE'
+ AND b.target = NEW.token AND b.txid = txid_current()) THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: re-pointing a device type to or from a protected device profile needs a break-glass reason';
+IF (OLD.active_version IS DISTINCT FROM NEW.active_version OR OLD.active_since IS DISTINCT FROM NEW.active_since)
+ AND "device-management".automation_review_policy_required(NEW.id)
+ AND NOT EXISTS (SELECT 1 FROM "device-management".automation_reviews r
+ WHERE r.device_profile_id = NEW.id AND r.tenant_id = NEW.tenant_id AND r.state = 'CONSUMED'
+ AND r.consumed_version = NEW.active_version AND r.consumed_txid = txid_current())
+ AND NOT EXISTS (SELECT 1 FROM "device-management".automation_review_break_glass b
+ WHERE b.device_profile_id = NEW.id AND b.tenant_id = NEW.tenant_id AND b.action = 'ROLLBACK'
+ AND b.target = NEW.active_version::text AND b.txid = txid_current()) THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR01', MESSAGE = 'REVIEW_REQUIRED: the active version of a protected device profile changes only through a reviewed publish or a break-glass rollback';
+IF OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL
+ AND "device-management".automation_review_policy_required(OLD.id) THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: a protected device profile cannot be deleted; remove its protection first';
+IF OLD.snapshot IS DISTINCT FROM NEW.snapshot
+ OR OLD.automation_review_token IS DISTINCT FROM NEW.automation_review_token
+ OR OLD.version IS DISTINCT FROM NEW.version
+ OR OLD.device_profile_id IS DISTINCT FROM NEW.device_profile_id
+ OR OLD.deleted_at IS DISTINCT FROM NEW.deleted_at THEN
+ PERFORM 1 FROM "device-management".device_profiles WHERE id IN (OLD.device_profile_id, NEW.device_profile_id) FOR SHARE;
+IF TG_TABLE_NAME = 'device_profiles' THEN
+ IF TG_OP = 'DELETE' THEN
+ IF "device-management".automation_review_policy_required(OLD.id) THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: a protected device profile cannot be deleted; remove its protection first';
+IF TG_TABLE_NAME = 'device_types' THEN
+ IF OLD.profile_id IS DISTINCT FROM NEW.profile_id THEN
+ FOREACH p IN ARRAY ARRAY[OLD.profile_id, NEW.profile_id] LOOP
+ CONTINUE WHEN p IS NULL;
+IF TG_TABLE_NAME = 'devices' THEN
+ IF OLD.device_type_id IS DISTINCT FROM NEW.device_type_id AND OLD.device_type_id IS NOT NULL THEN
+ SELECT t.profile_id INTO p FROM "device-management".device_types t WHERE t.id = OLD.device_type_id;
+IF p IS NOT NULL THEN
+ PERFORM 1 FROM "device-management".device_profiles WHERE id = p FOR SHARE;
+PERFORM 1 FROM "device-management".device_profiles WHERE id = p FOR SHARE;
+RETURN NEW;
+RETURN NEW;
+RETURN NEW;
+RETURN NEW;
+RETURN NEW;
+RETURN NEW;
+RETURN OLD;

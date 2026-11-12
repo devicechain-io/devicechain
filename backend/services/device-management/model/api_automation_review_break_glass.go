@@ -81,3 +81,16 @@ func (api *Api) guardProfileBreakGlass(ctx context.Context, tx *gorm.DB, ids []u
 	}
 	return nil
 }
+
+// AutomationReviewBreakGlassFor returns at most 200 tenant-scoped history rows,
+// newest first. Resolve the profile first so unknown profiles remain NOT_FOUND.
+func (api *Api) AutomationReviewBreakGlassFor(ctx context.Context, token string) ([]AutomationReviewBreakGlass, error) {
+	profile, err := api.deviceProfileByToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]AutomationReviewBreakGlass, 0)
+	err = api.RDB.DB(ctx).Where("device_profile_id = ?", profile.ID).
+		Order("created_at DESC, id DESC").Limit(200).Find(&rows).Error
+	return rows, err
+}
