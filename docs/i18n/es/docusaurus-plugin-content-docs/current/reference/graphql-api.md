@@ -1078,6 +1078,7 @@ trunca nada ni se aplica nada a medias, así que reduce la solicitud y envíala 
 | Valor de atributo | 64 KiB | `value` de `setEntityAttribute`, sea cual sea su tipo declarado. |
 | Definición de regla | 256 KiB | `definition` de una regla de detección, al crear y al actualizar. |
 | Grafo de autoría de regla | 256 KiB | `authoringGraph` de una regla de detección, al crear y al actualizar. |
+| Reglas por validación | 1000 | `validateDetectionRules` `rules`. Publicar un perfil de dispositivo con más de 1000 reglas de detección habilitadas se rechaza del mismo modo. |
 | Historial de versiones | 1000 por llamada | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: las más recientes primero. Reduce con `limit` (al menos 1) y pagina con `offset` (no negativo); un valor fuera de ese rango se rechaza con `INVALID_VALUE`. |
 | Intervalos por agregación | 10 000 | `bucketedMeasurements`: el rango dividido por `intervalSeconds`, redondeado hacia arriba. |
 | Filas por agregación | 50 000 | `bucketedMeasurements`: los intervalos multiplicados por los nombres de medición devueltos. Con un filtro `name` es un solo nombre; sin él, cada nombre de medición distinto que coincide con los filtros de la lectura. |

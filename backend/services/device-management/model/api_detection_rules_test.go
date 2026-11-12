@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -311,5 +312,55 @@ func TestValidateDetectionRuleToken(t *testing.T) {
 		if err := validateDetectionRuleToken(bad); err == nil {
 			t.Errorf("invalid token %q accepted", bad)
 		}
+	}
+}
+
+func TestValidateSnapshotDetectionRules_RefusesMoreEnabledRulesThanTheGateCompiles(t *testing.T) {
+	rules := make([]*DetectionRule, 0, MaxEnabledDetectionRulesPerPublish+6)
+	for i := 0; i < MaxEnabledDetectionRulesPerPublish+1; i++ {
+		rules = append(rules, enabledRule(fmt.Sprintf("r%d", i)))
+	}
+	for i := 0; i < 5; i++ {
+		disabled := enabledRule(fmt.Sprintf("off%d", i))
+		disabled.Enabled = false
+		rules = append(rules, disabled)
+	}
+	fake := &fakeRuleValidator{}
+	api := &Api{DetectionRuleValidator: fake}
+
+	// On main the validator was called with 1,001 rules; a real event-processing
+	// then refuses, which the gate reports as "validation is unavailable".
+	err := api.validateSnapshotDetectionRules(context.Background(), snapshotOf(rules...))
+	le, ok := limit.As(err)
+	if !ok {
+		t.Fatalf("expected a limit refusal, got: %v", err)
+	}
+	if le.Got != MaxEnabledDetectionRulesPerPublish+1 || le.Max != MaxEnabledDetectionRulesPerPublish {
+		t.Fatalf("unexpected limit refusal: %+v", le)
+	}
+	if fake.called {
+		t.Fatalf("validator called for an oversized enabled-rule set")
+	}
+}
+
+func TestValidateSnapshotDetectionRules_AtTheBoundStillCallsTheGate(t *testing.T) {
+	rules := make([]*DetectionRule, 0, MaxEnabledDetectionRulesPerPublish+5)
+	for i := 0; i < MaxEnabledDetectionRulesPerPublish; i++ {
+		rules = append(rules, enabledRule(fmt.Sprintf("r%d", i)))
+	}
+	for i := 0; i < 5; i++ {
+		disabled := enabledRule(fmt.Sprintf("off%d", i))
+		disabled.Enabled = false
+		rules = append(rules, disabled)
+	}
+	fake := &fakeRuleValidator{}
+	api := &Api{DetectionRuleValidator: fake}
+
+	if err := api.validateSnapshotDetectionRules(context.Background(), snapshotOf(rules...)); err != nil {
+		t.Fatalf("unexpected error at the bound: %v", err)
+	}
+	if !fake.called || len(fake.seen) != MaxEnabledDetectionRulesPerPublish {
+		t.Fatalf("expected exactly %d enabled rules at the gate: called=%v count=%d",
+			MaxEnabledDetectionRulesPerPublish, fake.called, len(fake.seen))
 	}
 }

@@ -832,6 +832,7 @@ mutation StepUp($refreshToken: String!, $code: String!) {
 | 属性值 | 64 KiB | `setEntityAttribute` 的 `value`，无论声明的类型是什么。 |
 | 规则定义 | 256 KiB | 检测规则的 `definition`，创建和更新时均适用。 |
 | 规则编排图 | 256 KiB | 检测规则的 `authoringGraph`，创建和更新时均适用。 |
+| 每次验证的规则数 | 1,000 | `validateDetectionRules` 的 `rules`。发布包含超过 1,000 条已启用检测规则的设备配置文件时，也会以相同方式拒绝。 |
 | 版本历史 | 每次调用 1,000 条 | `deviceProfileVersions`、`entityGroupVersions`、`assetTypeVersions`：最新的在前。用 `limit`（至少为 1）缩小范围，用 `offset`（不为负）翻页；超出此范围的值会被拒绝，`extensions.code` 为 `INVALID_VALUE`。 |
 | 每次聚合的时间桶数 | 10,000 | `bucketedMeasurements`：时间范围除以 `intervalSeconds`，向上取整。 |
 | 每次聚合的行数 | 50,000 | `bucketedMeasurements`：时间桶数乘以返回的测量名称数。指定 `name` 过滤时为一个名称；未指定时为符合该读取过滤条件的所有不同测量名称。 |

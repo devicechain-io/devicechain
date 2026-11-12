@@ -13,6 +13,7 @@ import (
 	"time"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
@@ -124,6 +125,13 @@ func parseProfileSnapshot(raw datatypes.JSON) (*ProfileSnapshot, error) {
 	return snap, nil
 }
 
+// MaxEnabledDetectionRulesPerPublish is the most rules event-processing's validation
+// gate compiles per call (graphql.MaxRulesPerValidation there); it refuses a longer
+// list. Checking it here first gives the author a LIMIT_EXCEEDED that names the bound
+// instead of the fail-closed "validation is unavailable" a refused call would otherwise
+// surface as. The two numbers must move together.
+const MaxEnabledDetectionRulesPerPublish = 1000
+
 // validateSnapshotDetectionRules compiles the ENABLED detection rules carried in a
 // just-built profile snapshot against event-processing (ADR-044 sync gate), returning a
 // fail-closed error if any rule is rejected or the check cannot be performed. It parses the
@@ -143,6 +151,9 @@ func (api *Api) validateSnapshotDetectionRules(ctx context.Context, snapshot dat
 	toValidate := enabledRulesToValidate(snap.Rules)
 	if len(toValidate) == 0 {
 		return nil
+	}
+	if len(toValidate) > MaxEnabledDetectionRulesPerPublish {
+		return limit.Exceeded("enabled detection rules on one profile", len(toValidate), MaxEnabledDetectionRulesPerPublish)
 	}
 
 	failures, err := api.DetectionRuleValidator.ValidateDetectionRules(ctx, toValidate)
