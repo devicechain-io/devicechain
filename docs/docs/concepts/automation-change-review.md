@@ -99,7 +99,7 @@ Approval is judged from the approver's own session token at approval time. Signi
 
 The lifecycle is `RAN` → `APPROVED` when enough people approve → `CONSUMED` when published. `consumedVersion` identifies the version. A `RAN` or `APPROVED` review can be rejected with `rejectAutomationReview(token, note)`, without step-up. Runs, approvals and rejections are journaled with the person as actor.
 
-Approval lifetime defaults to 24 hours. An expired approval stays in state `APPROVED`; check `expiresAt`. Publishing applies both the stored expiry and the current policy's lifetime, and refuses expired evidence with `REVIEW_EXPIRED`.
+Approval lifetime defaults to 24 hours. Reads and state filters report `EXPIRED` when either the stored `expiresAt` or the current policy's lifetime has elapsed, including at the exact expiry time. Publishing applies the same rule and refuses expired evidence with `REVIEW_EXPIRED`. Expiry is computed on demand without a background job or a ledger update; pending, rejected and consumed reviews retain their states.
 
 Approval also checks that draft, baseline and stored evidence still match. `matchesCurrentDraft` shows whether the draft is still the reviewed one; the console displays a banner after it changes. Share `/automation-reviews/<token>` with anyone permitted to read reviews.
 

@@ -80,3 +80,13 @@ func (AutomationReview) DefaultOrder() string {
 
 // AuditLabel identifies the evidence in the journal by its unguessable token.
 func (r AutomationReview) AuditLabel() string { return r.Token }
+
+// effectiveReviewState derives expiry without rewriting the approval ledger. A
+// missing approval timestamp fails closed. Pending and terminal states do not age.
+func effectiveReviewState(r *AutomationReview, p ReviewPolicySettings, now time.Time) string {
+	if r.State == ReviewStateApproved && (r.ExpiresAt == nil || r.ApprovedAt == nil ||
+		!now.Before(*r.ExpiresAt) || !now.Before(r.ApprovedAt.Add(time.Duration(p.ApprovalTtlSeconds)*time.Second))) {
+		return ReviewStateExpired
+	}
+	return r.State
+}

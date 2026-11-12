@@ -120,7 +120,9 @@ func (api *Api) checkProtectedPublish(ctx context.Context, tx *gorm.DB, profile 
 	if err != nil || !reviewEvidenceVerifies(&r) || !actiongate.DigestEqual(digest, r.ReviewDigest) {
 		return nil, reviewRefusal(actiongate.CodeDigestMismatch, "the stored review evidence does not verify")
 	}
-	if r.ExpiresAt == nil || r.ApprovedAt == nil || !now.Before(*r.ExpiresAt) || !now.Before(r.ApprovedAt.Add(time.Duration(p.ApprovalTtlSeconds)*time.Second)) {
+	// Preserve refusal precedence: approval eligibility and evidence verification
+	// must succeed before deriving expiry, just as before expiry-aware reads.
+	if effectiveReviewState(&r, p, now) == ReviewStateExpired {
 		return nil, reviewRefusal("REVIEW_EXPIRED", "the automation review approval has expired")
 	}
 	if err = checkFrozenReviewDraft(snapshot, &r); err != nil {
