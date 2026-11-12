@@ -68,8 +68,10 @@ type Record struct {
 	ExecutedAt *time.Time
 }
 
-// Approval is one person's approval of a proposal.
+// Approval is one person's approval of a proposal. It stands only while its sign-in is open
+// under the identity's current epoch. An empty Sid predates binding and never counts.
 type Approval struct {
+	Sid     string     `json:"sid,omitempty"`
 	Sub     string     `json:"sub"`
 	Amr     []string   `json:"amr,omitempty"`
 	MfaTime *time.Time `json:"mfaTime,omitempty"`
@@ -100,12 +102,25 @@ func Principals(approvals []Approval) []string {
 	return out
 }
 
+// ApproverSessions returns distinct principals' recorded sign-ins in order, skipping empty sids.
+func ApproverSessions(approvals []Approval) []ApproverSession {
+	out := []ApproverSession{}
+	seen := map[string]bool{}
+	for _, a := range approvals {
+		if a.Sub != "" && a.Sid != "" && !seen[a.Sub] {
+			out = append(out, ApproverSession{Principal: a.Sub, Sid: a.Sid})
+			seen[a.Sub] = true
+		}
+	}
+	return out
+}
+
 // Tally counts the approvals that stand: distinct principals that user-management still answers
 // as valid approvers (valid), never the proposer when two approvals are required or self-confirm is
 // not allowed. A principal approving twice counts once, and an approval made by someone who has
 // since lost the role, the authority or the membership does not count at all: EVERY counted
 // approval is re-validated, not only the latest. An approval whose second factor is older than
-// the CURRENT policy's step-up at the moment of the tally does not count.
+// the CURRENT policy's step-up at the moment of the tally does not count. An empty Sid never counts.
 func Tally(approvals []Approval, valid []string, proposer string, required int, selfConfirm bool, su auth.StepUp, now time.Time) int {
 	n := 0
 	for _, p := range Principals(approvals) {
@@ -116,7 +131,7 @@ func Tally(approvals []Approval, valid []string, proposer string, required int, 
 			continue
 		}
 		for _, a := range approvals {
-			if a.Sub == p && auth.StepUpFreshAt(a.Amr, a.MfaTime, su, now) {
+			if a.Sub == p && a.Sid != "" && auth.StepUpFreshAt(a.Amr, a.MfaTime, su, now) {
 				n++
 				break
 			}

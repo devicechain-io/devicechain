@@ -81,10 +81,17 @@ type ActuationDecision struct {
 	ClientAttested bool
 }
 
+// ApproverSession binds a principal to the sign-in that gave their approval.
+type ApproverSession struct {
+	Principal string `json:"principal"`
+	Sid       string `json:"sid"`
+}
+
 // ExecutionRequest asks user-management whether a stored proposal may still go ahead, from its
 // own records and with no cache: the original client, the proposer's standing and every counted
 // approver's standing, under the current policy.
 type ExecutionRequest struct {
+	ApproverSessions  []ApproverSession
 	ProposalToken     string
 	Kind              Kind
 	Impact            string
@@ -100,7 +107,7 @@ type ExecutionDecision struct {
 	ActuationGeneration int
 	Verdict             Verdict
 	RequiredApprovals   int
-	// ValidApprovers are the principals of Approvers that are still approvers now.
+	// ValidApprovers are current approvers whose named sign-ins remain open under the current epoch.
 	ValidApprovers   []string
 	Reasons          []string
 	PolicyVersion    int
@@ -191,8 +198,14 @@ func (d *CallerDecider) Actuation(ctx context.Context, req ActuationRequest) (Ac
 
 // Execution asks agentExecutionDecision.
 func (d *CallerDecider) Execution(ctx context.Context, req ExecutionRequest) (ExecutionDecision, error) {
+	// 🔴 Always send the session field, even empty: an older server must reject it.
+	sessions := req.ApproverSessions
+	if sessions == nil {
+		sessions = []ApproverSession{}
+	}
 	input := map[string]any{
-		"proposalToken": req.ProposalToken, "kind": string(req.Kind),
+		"approverSessions": sessions,
+		"proposalToken":    req.ProposalToken, "kind": string(req.Kind),
 		"targetCount": req.TargetCount, "proposerPrincipal": req.ProposerPrincipal,
 		"proposerClient": req.ProposerClient, "approvers": nonNil(req.Approvers),
 	}
