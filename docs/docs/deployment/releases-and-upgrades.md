@@ -824,8 +824,6 @@ Invalid values listed in [Before you upgrade](#v150-before-you-upgrade) are refu
 - `calculatedMetricBackfills(statuses:)` refuses more than five entries with `LIMIT_EXCEEDED`; repeats in an accepted list are ignored.
 - Device and device-type substring searches refuse `nameContains` over 256 UTF-8 bytes, measured before trimming, with `LIMIT_EXCEEDED`.
 - Command searches refuse `statuses` or `outcomes` lists over 1,000 entries, including duplicates, with `LIMIT_EXCEEDED`.
-- Event pages and measurement aggregations refuse more than 1,000 `eventTypes` entries, including duplicates, with `LIMIT_EXCEEDED`.
-- `facetValues` refuses more than 1,000 distinct values with `LIMIT_EXCEEDED`, returning no partial list.
 - One GraphQL WebSocket connection permits at most 1,000 concurrent subscription operations. A further `subscribe` receives `LIMIT_EXCEEDED`; the connection stays open.
 
 #### Stricter checks on existing operations {#v150-tightenings}
@@ -844,6 +842,8 @@ Reviews keep the input digests, stream bounds, expectations and result, can be s
 Protection is opt-in on a published, eligible profile. It can require one or two approvals. A protected publish must supply `automationReviewToken` and consumes an approved review once, checking the frozen draft, baseline, evidence, expiry, current policy and approvers' current standing. Missing reviews give `REVIEW_REQUIRED`; unavailable standing checks give `REVIEW_UNAVAILABLE`. Published versions link back to their review and evidence. Unprotected profiles retain their existing publish path.
 
 A protected rollback, re-pointing a device type to or from a protected profile, or moving a device out of its bound types needs a recorded break-glass reason and a recent second factor. A rollback changes the baseline and invalidates outstanding approvals. Protected profiles cannot be deleted. PostgreSQL guard triggers enforce these conditions even for previous-release pods: an old write is refused rather than bypassing protection. Tightening applies immediately; loosening needs a second person or, when self-approval is allowed, a 24-hour wait. Protect profiles only after the rollout.
+
+See [Automation change review](../concepts/automation-change-review.md) and [Reviewing a rule change](../guides/reviewing-a-rule-change.md).
 
 #### Agent actions (preview) {#v150-agent-actions}
 

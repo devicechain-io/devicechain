@@ -869,8 +869,6 @@ Los valores inválidos de [Antes de actualizar](#v150-before-you-upgrade) se rec
 - `calculatedMetricBackfills(statuses:)` rechaza más de cinco entradas con `LIMIT_EXCEEDED`; ignora las repetidas en una lista aceptada.
 - Las búsquedas por subcadena de dispositivos y tipos de dispositivo rechazan `nameContains` de más de 256 bytes UTF-8, medidos antes de recortar espacios, con `LIMIT_EXCEEDED`.
 - Las búsquedas de comandos rechazan listas `statuses` u `outcomes` de más de 1.000 entradas, incluidos duplicados, con `LIMIT_EXCEEDED`.
-- Las páginas de eventos y las agregaciones de mediciones rechazan más de 1.000 entradas `eventTypes`, incluidos duplicados, con `LIMIT_EXCEEDED`.
-- `facetValues` rechaza más de 1.000 valores distintos con `LIMIT_EXCEEDED`, sin devolver una lista parcial.
 - Una conexión WebSocket GraphQL permite hasta 1.000 operaciones de suscripción simultáneas. Un `subscribe` adicional recibe `LIMIT_EXCEEDED`; la conexión permanece abierta.
 
 #### Comprobaciones más estrictas en operaciones existentes {#v150-tightenings}
@@ -889,6 +887,8 @@ Las revisiones guardan los digests de entrada, límites del stream, expectativas
 La protección es opcional en un perfil publicado y apto. Puede exigir una o dos aprobaciones. Una publicación protegida debe aportar `automationReviewToken` y consume una revisión aprobada una sola vez, comprobando el borrador congelado, la referencia, las pruebas, la caducidad, la política actual y la habilitación actual de los aprobadores. Sin revisión devuelve `REVIEW_REQUIRED`; si no puede comprobar la habilitación, `REVIEW_UNAVAILABLE`. Las versiones publicadas enlazan a su revisión y pruebas. Los perfiles sin protección conservan su vía de publicación.
 
 Una vuelta atrás protegida, cambiar un tipo de dispositivo hacia o desde un perfil protegido, o sacar un dispositivo de sus tipos vinculados exige un motivo de emergencia registrado y un segundo factor reciente. Una vuelta atrás cambia la referencia e invalida las aprobaciones pendientes. Los perfiles protegidos no pueden eliminarse. Los triggers de PostgreSQL exigen estas condiciones incluso para pods anteriores: una escritura antigua se rechaza en lugar de eludir la protección. Endurecer se aplica inmediatamente; relajar exige una segunda persona o, cuando se permite autoaprobar, esperar 24 horas. Protege perfiles solo después del despliegue.
+
+Consulta [Revisión de cambios de automatización](../concepts/automation-change-review.md) y [Revisar un cambio de regla](../guides/reviewing-a-rule-change.md).
 
 #### Acciones de agentes (preview) {#v150-agent-actions}
 

@@ -580,8 +580,6 @@ HA 性能规格 bootstrap（包括 dry run）现在会在创建任何内容前�
 - `calculatedMetricBackfills(statuses:)` 超过五项时返回 `LIMIT_EXCEEDED`；已接受列表中的重复项会被忽略。
 - 设备和设备类型子串搜索的 `nameContains` 超过 256 个 UTF-8 字节时返回 `LIMIT_EXCEEDED`，长度在去除首尾空白前计算。
 - 命令搜索的 `statuses` 或 `outcomes` 列表超过 1,000 项（含重复项）时返回 `LIMIT_EXCEEDED`。
-- 事件页面和测量聚合的 `eventTypes` 超过 1,000 项（含重复项）时返回 `LIMIT_EXCEEDED`。
-- `facetValues` 超过 1,000 个不同值时返回 `LIMIT_EXCEEDED`，不返回部分列表。
 - 每个 GraphQL WebSocket 连接最多允许 1,000 个并发订阅操作。后续 `subscribe` 返回 `LIMIT_EXCEEDED`，连接保持打开。
 
 #### 现有操作的更严格检查 {#v150-tightenings}
@@ -600,6 +598,8 @@ HA 性能规格 bootstrap（包括 dry run）现在会在创建任何内容前�
 保护需要在已发布且符合条件的配置文件上主动启用，可以要求一或两次审批。受保护发布必须提供 `automationReviewToken`，只消费一次已批准评审，并检查冻结草稿、基线、证据、有效期、当前策略及审批者当前资格。缺少评审返回 `REVIEW_REQUIRED`；资格检查不可用返回 `REVIEW_UNAVAILABLE`。发布版本链接回评审和证据。未保护的配置文件沿用原发布路径。
 
 受保护回滚、将设备类型改为指向或不再指向受保护配置文件，或将设备移出其绑定类型，都需要记录紧急变更理由并完成近期第二因素验证。回滚改变基线，使待用审批失效。受保护配置文件不能删除。PostgreSQL 保护触发器对旧版本 pod 同样强制这些条件：旧写入被拒绝，不能绕过保护。收紧立即生效；放宽需要另一人批准，或在允许自我审批时等待 24 小时。仅在部署完成后保护配置文件。
+
+参见[自动化变更审查](../concepts/automation-change-review.md)和[审查规则变更](../guides/reviewing-a-rule-change.md)。
 
 #### 代理操作（preview） {#v150-agent-actions}
 
