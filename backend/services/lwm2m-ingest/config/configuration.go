@@ -21,6 +21,7 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 )
@@ -131,10 +132,9 @@ type DownlinkConfiguration struct {
 }
 
 // IngestRateLimit is the platform-default, per-tenant ingest ceiling every device is metered
-// against by an independent token bucket (ADR-023). It is fail-safe: an unset or non-positive
-// value falls back to the platform default (see ApplyDefaults), never to unlimited, so a
-// misconfiguration cannot silently remove the protection — and never to zero, which would be a
-// bucket that admits nothing.
+// against by an independent token bucket (ADR-023). A zero/unset value takes the platform
+// default (see ApplyDefaults), never unlimited. Validate refuses negative values rather
+// than silently replacing the ceiling the operator was trying to change.
 type IngestRateLimit struct {
 	// ReadingsPerSecond is the sustained per-tenant reading budget (STAGE 2, counted in
 	// decoded readings, as on every other transport). The pre-decode STAGE 1 message
@@ -261,13 +261,15 @@ func (c *Lwm2mConfiguration) ApplyDefaults() {
 	if c.Security.MaxSessions == 0 {
 		c.Security.MaxSessions = DefaultMaxSessions
 	}
-	// Fail safe: a non-positive ceiling (unset, or an out-of-band bad value) floors to the
-	// positive platform default. A zero here would hand the limiter a bucket that admits
-	// nothing, silently blacking out every device's telemetry — worse than no gate at all.
-	if c.IngestRateLimit.ReadingsPerSecond <= 0 {
+	// A zero/unset rate or burst takes the platform default, never unlimited and never
+	// zero: a zero here would hand the limiter a bucket that admits nothing, silently
+	// blacking out every device's telemetry. A negative is an operator mistake that
+	// Validate refuses rather than silently replacing it with the platform ceiling the
+	// operator was trying to change.
+	if c.IngestRateLimit.ReadingsPerSecond == 0 {
 		c.IngestRateLimit.ReadingsPerSecond = DefaultIngestReadingsPerSecond
 	}
-	if c.IngestRateLimit.Burst <= 0 {
+	if c.IngestRateLimit.Burst == 0 {
 		c.IngestRateLimit.Burst = DefaultIngestBurst
 	}
 	// Fail safe: a non-positive ceiling (unset, or an out-of-band bad value) takes the
@@ -294,6 +296,12 @@ func (c *Lwm2mConfiguration) ApplyDefaults() {
 // malformed / duplicate PSK credential. Rejecting here keeps a misconfiguration from
 // silently becoming a fail-open listener or an ambiguous cross-tenant identity.
 func (c *Lwm2mConfiguration) Validate() error {
+	if r := c.IngestRateLimit.ReadingsPerSecond; math.IsNaN(r) || math.IsInf(r, 0) || r < 0 {
+		return fmt.Errorf("ingestRateLimit.readingsPerSecond must be a positive number (got %v)", r)
+	}
+	if c.IngestRateLimit.Burst < 0 {
+		return fmt.Errorf("ingestRateLimit.burst must be positive (got %d)", c.IngestRateLimit.Burst)
+	}
 	if c.Listen.Port < 1 || c.Listen.Port > 65535 {
 		return fmt.Errorf("listen.port %d is out of range (1-65535)", c.Listen.Port)
 	}

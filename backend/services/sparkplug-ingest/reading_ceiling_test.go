@@ -47,17 +47,20 @@ func TestResolveSourcesGivesEachIngestingClientTheLimiter(t *testing.T) {
 	require.Error(t, err, "an ingest path with no ceiling must be refused, not built unmetered")
 }
 
-// The configuration defaults to the platform ceiling, floors a non-positive or NaN value to
-// it per field, keeps a positive one, and is read from the key the chart renders.
+// The configuration defaults zero/unset values and a NaN rate to the platform ceiling,
+// refuses negatives, keeps a positive ceiling, and is read from the key the chart renders.
 func TestSparkplugIngestRateLimitDefaults(t *testing.T) {
 	c := config.NewSparkplugConfiguration()
 	assert.Equal(t, config.IngestRateLimit{ReadingsPerSecond: 1000, Burst: 2000}, c.IngestRateLimit)
 
-	for _, bad := range []config.IngestRateLimit{{ReadingsPerSecond: -1, Burst: -1}, {ReadingsPerSecond: math.NaN()}} {
-		c := &config.SparkplugConfiguration{IngestRateLimit: bad}
-		c.ApplyDefaults()
-		assert.Equal(t, config.IngestRateLimit{ReadingsPerSecond: 1000, Burst: 2000}, c.IngestRateLimit, "%+v", bad)
-	}
+	bad := &config.SparkplugConfiguration{IngestRateLimit: config.IngestRateLimit{ReadingsPerSecond: -1, Burst: -1}}
+	bad.ApplyDefaults()
+	assert.Equal(t, config.IngestRateLimit{ReadingsPerSecond: -1, Burst: -1}, bad.IngestRateLimit)
+	require.ErrorContains(t, bad.Validate(), "ingestRateLimit.readingsPerSecond")
+
+	nan := &config.SparkplugConfiguration{IngestRateLimit: config.IngestRateLimit{ReadingsPerSecond: math.NaN()}}
+	nan.ApplyDefaults()
+	assert.Equal(t, config.IngestRateLimit{ReadingsPerSecond: 1000, Burst: 2000}, nan.IngestRateLimit)
 
 	var parsed config.SparkplugConfiguration
 	require.NoError(t, core.LoadConfiguration([]byte(`{"sources":[],"ingestRateLimit":{"readingsPerSecond":50,"burst":300}}`), &parsed))

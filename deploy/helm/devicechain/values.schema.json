@@ -956,7 +956,50 @@
           },
           "config": {
             "type": "object",
-            "description": "This area's own configuration, written to the dct-<id>-config object and mounted at /etc/dct-config/<area>. Empty means the service applies its typed defaults; an unknown key stops the service at startup."
+            "description": "This area's own configuration, written to the dct-<id>-config object and mounted at /etc/dct-config/<area>. Empty means the service applies its typed defaults; an unknown key stops the service at startup.",
+            "properties": {
+              "ingestRateLimit": {
+                "type": "object",
+                "description": "event-sources, lwm2m-ingest and sparkplug-ingest: the platform-default per-tenant ingest ceiling. A tenant's tier overrides it.",
+                "properties": {
+                  "readingsPerSecond": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Sustained per-tenant ingest rate, in readings per second. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+                  },
+                  "burst": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Burst allowance for the ingest ceiling, in readings. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+                  }
+                }
+              },
+              "defaultCommandTtlSeconds": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "command-delivery: the time-to-live, in seconds, stamped on a command created without one. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+              },
+              "heldCommandCeiling": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "command-delivery: the per-tenant bound on withheld commands when no tenant or tier ceiling applies. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+              },
+              "sweepIntervalSeconds": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "command-delivery: how often, in seconds, the expiry and delivery sweep runs. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+              },
+              "maxDispatchFailures": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "command-delivery: how many failed dispatches a command may accumulate before it is marked failed. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+              },
+              "deliveryMachineryReserve": {
+                "type": "number",
+                "minimum": 0,
+                "description": "command-delivery: the fraction of the held-command ceiling reserved for the platform's own delivery. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+              }
+            }
           },
           "extraPorts": {
             "type": "array",
