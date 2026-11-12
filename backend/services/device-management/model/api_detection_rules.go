@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // validateDetectionRuleToken enforces that a detection-rule token is present and
@@ -170,6 +171,7 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 // UpdateDetectionRule applies a PARTIAL update: a field the caller did not name keeps
 // its stored value, an explicit null clears a nullable one, and the required fields
 // (deviceProfileToken, definition, enabled) refuse a null.
+// Only named columns are written; an empty request performs no write.
 //
 // The rule's OWN token is not in the input and cannot be moved, so it is not
 // grammar-checked here; CreateDetectionRule is where it is set and therefore the only
@@ -236,28 +238,62 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 		return nil, err
 	}
 
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	updated.Metadata = metadataJSON
-	updated.Definition = datatypes.JSON(definition)
-	updated.AuthoringGraph = authoringGraphJSON(authoringGraph)
-	updated.Enabled = enabled
-	// Enrollment is NOT reconciled here — a draft edit is inert until published (see
-	// CreateDetectionRule).
-	updated.EntityGroupToken = scopeToken
-	updated.EntityGroupVersion = scopeVersion
-	if reparent != nil {
-		updated.DeviceProfile = reparent
-		updated.DeviceProfileId = reparent.ID
+	assignments := map[string]any{}
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(updated.Name)
 	}
-
-	// Save clears the scope columns to NULL when the edit un-scopes the rule (gorm Save
-	// writes zero-value pointer fields as NULL).
-	result := api.RDB.DB(ctx).Save(updated)
-	if result.Error != nil {
-		return nil, result.Error
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(updated.Description)
 	}
-	return updated, nil
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
+	if request.Definition.Set {
+		assignments["definition"] = datatypes.JSON(definition)
+	}
+	if request.AuthoringGraph.Set {
+		assignments["authoring_graph"] = authoringGraphJSON(authoringGraph)
+	}
+	if request.Enabled.Set {
+		assignments["enabled"] = enabled
+	}
+	// Scope columns form one unit, including NULL when normalization clears them.
+	// Enrollment remains unchanged until the draft is published.
+	if request.EntityGroupToken.Set || request.EntityGroupVersion.Set {
+		assignments["entity_group_token"] = scopeToken
+		assignments["entity_group_version"] = scopeVersion
+	}
+	if request.DeviceProfileToken.Set {
+		profileID := updated.DeviceProfileId
+		if reparent != nil {
+			profileID = reparent.ID
+		}
+		assignments["device_profile_id"] = profileID
+	}
+	if len(assignments) == 0 {
+		return updated, nil
+	}
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		res := rdb.AdvancingFrom(tx, updated.UpdatedAt).Model(updated).Omit(clause.Associations).
+			Where("id = ?", updated.ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	matches, err = api.DetectionRulesById(ctx, []uint{updated.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // Get detection rules by id.

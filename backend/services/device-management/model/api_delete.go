@@ -302,6 +302,9 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&DeviceProfileVersion{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("device_profile_id = ?", dp.ID).Delete(&AutomationReview{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("device_profile_id = ?", dp.ID).Delete(&DeviceProfileActivation{}).Error; err != nil {
 			return err
 		}

@@ -527,8 +527,8 @@ var (
 //     valid approver, with a second factor fresh by the policy's measure, and may be the proposer
 //     only when the policy allows self-confirmation of a
 //     single-approval, normal-impact proposal;
-//  5. the final approval executes atomically after another policy decision; earlier
-//     approvals are recorded with a compare-and-set on the row's revision.
+//  5. the final approval executes atomically with the decision asked again as the last act
+//     before commit; earlier approvals are recorded with a compare-and-set on the row's revision.
 func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Approver, token, digest string) (*AgentProposal, error) {
 	for attempt := 0; ; attempt++ {
 		now := time.Now().UTC()
@@ -602,7 +602,7 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 		}
 		next = append(next, actiongate.Approval{Sub: approver.Principal, Amr: approver.Amr, MfaTime: approver.MfaTime, At: now})
 		if actiongate.Tally(next, dec.ValidApprovers, p.ProposerSub, dec.RequiredApprovals, dec.AllowSelfConfirm, dec.StepUp, now) >= dec.RequiredApprovals {
-			result, execErr := api.executeAlarmProposal(ctx, approver, p, next)
+			result, execErr := api.executeAlarmProposal(ctx, approver, p, next, dec.RequiredApprovals)
 			if errors.Is(execErr, actiongate.ErrNotPending) {
 				if attempt == 0 {
 					continue
