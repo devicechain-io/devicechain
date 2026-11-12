@@ -20,7 +20,9 @@ const (
 	CommitPointDeadline  = 4 * time.Second
 )
 
-var commitPointIdleSQL = fmt.Sprintf("SET LOCAL idle_in_transaction_session_timeout = '%dms'", CommitPointIdleBound.Milliseconds())
+// commitPointIdleSQL installs CommitPointIdleBound. It is a literal so the raw-SQL guard can
+// read it; TestCommitPointBounds keeps it equal to the constant.
+const commitPointIdleSQL = "SET LOCAL idle_in_transaction_session_timeout = '5000ms'"
 
 // ErrCommitPointSetup distinguishes failure to install the idle bound from a decision RPC error.
 var ErrCommitPointSetup = errors.New("commit point setup failed")

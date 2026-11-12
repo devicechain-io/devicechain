@@ -6,6 +6,7 @@ package actiongate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,6 +19,8 @@ func TestCommitPointBounds(t *testing.T) {
 	require.Greater(t, CommitPointDeadline, time.Duration(0))
 	require.Less(t, CommitPointDeadline, CommitPointIdleBound)
 	require.Equal(t, "SET LOCAL idle_in_transaction_session_timeout = '5000ms'", commitPointIdleSQL)
+	require.Equal(t, fmt.Sprintf("SET LOCAL idle_in_transaction_session_timeout = '%dms'", CommitPointIdleBound.Milliseconds()), commitPointIdleSQL,
+		"the literal must install CommitPointIdleBound")
 }
 
 func TestCommitPointSQLite(t *testing.T) {
