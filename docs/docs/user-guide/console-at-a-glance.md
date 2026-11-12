@@ -46,7 +46,7 @@ pages. Select a section's heading to open or close it, and select a page inside 
 | **Access** | **Members**, **Service Accounts**, **Roles**, **Sign-in Security** and **Audit**, the tenant's record of who changed what. |
 | **Settings** | **Branding**, **Map** and **Language**. |
 
-The [Approvals inbox (preview)](../concepts/mcp.md#approvals-inbox) needs `agent:admin` and an unscoped tenant membership. Agent actions must also be enabled by the operator before you can use it.
+The [Approvals inbox (preview)](../concepts/mcp.md#approvals-inbox) needs an unscoped tenant membership and either `agent:admin` or current approver standing (an approver role, `alarm:write` and an active second factor). Agent actions must also be enabled by the operator before you can use it.
 
 You see only the entries your role allows. If your role cannot read alarms, for example,
 **Alarms** is not in your sidebar. **Updates** appears only when your installation runs the update service. The **Access**

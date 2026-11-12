@@ -145,10 +145,10 @@ An assistant **proposes** an action and people decide. In this **preview**, off 
 ### Reviewing proposals in the console (preview) {#approvals-inbox}
 
 Open **Monitor > Approvals**. The inbox requires an unscoped tenant membership with
-`agent:admin`, and the instance's agent-actions switch must be enabled. Listing proposals also
+`agent:admin` or current approver standing (an approver role, `alarm:write` and an active second factor), and the instance's agent-actions switch must be enabled. Listing proposals also
 needs `alarm:read`; approval still requires the approver role, `alarm:write` and fresh second
 factor described above. The inbox does not edit the policy document: use the policy API to
-configure clients, approver roles and action rules.
+configure clients, approver roles and action rules. The tenant kill switch is visible only to `agent:admin`.
 
 1. The inbox starts at **Pending**. Use **State** to inspect rejected, expired or refused proposals.
    Open a proposal through its client name. Review the action, target tokens, impact, canonical

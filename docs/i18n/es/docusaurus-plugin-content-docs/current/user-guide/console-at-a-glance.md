@@ -49,7 +49,7 @@ una página dentro de ella para ir allí.
 | **Acceso** | **Miembros**, **Cuentas de servicio**, **Roles**, **Seguridad de inicio de sesión** y **Auditoría**, el registro del inquilino de quién cambió qué. |
 | **Configuración** | **Marca**, **Mapa** e **Idioma**. |
 
-La [bandeja de aprobaciones (vista previa)](../concepts/mcp.md#approvals-inbox) necesita `agent:admin` y una membresía en el inquilino sin restricción de alcance. El operador también debe habilitar las acciones de agentes antes de que puedas usarla.
+La [bandeja de aprobaciones (vista previa)](../concepts/mcp.md#approvals-inbox) necesita `agent:admin` o un aprobador actual (rol aprobador, `alarm:write` y segundo factor activo) y una membresía en el inquilino sin restricción de alcance. El operador también debe habilitar las acciones de agentes antes de que puedas usarla.
 
 Solo ves las entradas que tu rol permite. Si tu rol no puede leer alarmas, por ejemplo,
 **Alarmas** no aparece en tu barra lateral. **Actualizaciones** solo aparece cuando tu instalación ejecuta el servicio
