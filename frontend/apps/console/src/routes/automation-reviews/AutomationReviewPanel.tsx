@@ -37,6 +37,9 @@ const newExpectation = (rule: string): ExpectationRow => ({
   id: crypto.randomUUID(), window: 'INCIDENT', shape: 'raised', name: '', rule, device: '', command: '', minutes: '5',
 });
 
+// A number input that accepts fractional minutes.
+const ANY_STEP = 'any';
+
 export function AutomationReviewPanel({ profileToken }: { profileToken: string }) {
   const { claims, identityToken } = useAuth();
   return <Panel key={JSON.stringify([profileToken, claims?.tenant, claims?.username, identityToken])} profileToken={profileToken} />;
@@ -45,6 +48,7 @@ export function AutomationReviewPanel({ profileToken }: { profileToken: string }
 function Panel({ profileToken }: { profileToken: string }) {
   const { t } = useTranslation('automationReview');
   const { claims } = useAuth();
+  const canWrite = hasAuthority(claims, 'device:write');
   const [pageNumber, setPageNumber] = useState(1);
   const { current: data, loading, error } = useQuery(() => listAutomationReviews({ profileToken, pageNumber, pageSize }), [profileToken, pageNumber]);
   const reviews = [...(data?.results ?? [])].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
@@ -61,7 +65,7 @@ function Panel({ profileToken }: { profileToken: string }) {
           {data && <Pagination pageNumber={pageNumber} pageSize={pageSize} pagination={data.pagination} onPageChange={setPageNumber} />}
         </>}
     </SectionPanel>
-    {hasAuthority(claims, 'device:write') && <RunForm profileToken={profileToken} />}
+    {canWrite && <RunForm profileToken={profileToken} />}
   </div>;
 }
 
@@ -131,7 +135,7 @@ function RunForm({ profileToken }: { profileToken: string }) {
         <FormField label={t('device')} htmlFor={`${prefix}-device`}><Input id={`${prefix}-device`} required value={row.device} onChange={e => update(row.id, { device: e.target.value })} /></FormField>
         {command ? <FormField label={t('command')} htmlFor={`${prefix}-command`}><Input id={`${prefix}-command`} required value={row.command} onChange={e => update(row.id, { command: e.target.value })} /></FormField>
           : <FormField label={t('expectationRule')} htmlFor={`${prefix}-rule`}><Input id={`${prefix}-rule`} value={row.rule} onChange={e => update(row.id, { rule: e.target.value })} /></FormField>}
-        {positive && <FormField label={t('minutes')} htmlFor={`${prefix}-minutes`}><Input id={`${prefix}-minutes`} type="number" min="0.01" step="any" required value={row.minutes} onChange={e => update(row.id, { minutes: e.target.value })} /></FormField>}
+        {positive && <FormField label={t('minutes')} htmlFor={`${prefix}-minutes`}><Input id={`${prefix}-minutes`} type="number" min="0.01" step={ANY_STEP} required value={row.minutes} onChange={e => update(row.id, { minutes: e.target.value })} /></FormField>}
         <Button type="button" variant="outline" onClick={() => setRows(old => old.filter(r => r.id !== row.id))}>{t('removeExpectation')}</Button>
       </fieldset>;
     })}<Button type="button" variant="outline" disabled={rows.length >= 10 || busy} onClick={() => setRows(old => [...old, newExpectation(rule)])}>{t('addExpectation')}</Button></fieldset>
