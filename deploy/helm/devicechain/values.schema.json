@@ -958,6 +958,22 @@
             "type": "object",
             "description": "This area's own configuration, written to the dct-<id>-config object and mounted at /etc/dct-config/<area>. Empty means the service applies its typed defaults; an unknown key stops the service at startup.",
             "properties": {
+              "ingestRateLimit": {
+                "type": "object",
+                "description": "event-sources, lwm2m-ingest and sparkplug-ingest: the platform-default per-tenant ingest ceiling. A tenant's tier overrides it.",
+                "properties": {
+                  "readingsPerSecond": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Sustained per-tenant ingest rate, in readings per second. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+                  },
+                  "burst": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Burst allowance for the ingest ceiling, in readings. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+                  }
+                }
+              },
               "defaultCommandTtlSeconds": {
                 "type": "integer",
                 "minimum": 0,

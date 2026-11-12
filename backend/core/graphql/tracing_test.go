@@ -44,23 +44,33 @@ func TestGraphQLRequestProducesNamedSpan(t *testing.T) {
 }
 
 func TestDisabledGraphQLTracingAddsZeroAllocations(t *testing.T) {
+	if tracing.Enabled() {
+		t.Fatal("allocation comparison requires disabled tracing")
+	}
 	h := NewHttpHandler(MustParseSchema(`schema { query: Query } type Query { hello: String! }`, &tracingQuery{}), nil, nil)
 	r := httptest.NewRequest(http.MethodPost, "/graphql", nil)
+	request := func(handler http.HandlerFunc) {
+		r.Body = io.NopCloser(strings.NewReader(`{"query":"{ hello }"}`))
+		w := httptest.NewRecorder()
+		handler(w, r)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"hello":"hello"`) {
+			t.Fatal("GraphQL execution behavior changed")
+		}
+	}
+	// Warm schema execution and lazy initialization on both paths before measuring.
+	request(h.serveHTTP)
+	request(h.ServeHTTP)
 	measure := func(handler http.HandlerFunc) float64 {
-		return testing.AllocsPerRun(100, func() {
-			r.Body = io.NopCloser(strings.NewReader(`{"query":"{ hello }"}`))
-			w := httptest.NewRecorder()
-			handler(w, r)
-			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"hello":"hello"`) {
-				t.Fatal("GraphQL execution behavior changed")
-			}
+		return testing.AllocsPerRun(1000, func() {
+			request(handler)
 		})
 	}
-	// The race detector randomly drops sync.Pool entries, which makes one run's count a
-	// sample, not a constant; the least of several runs is the code's own cost.
+	// Pool misses and runtime activity can inflate individual samples, especially
+	// under -race. Amortize them over many requests and compare the minimum of
+	// several trials in the same process, rather than pinning an absolute count.
 	least := func(handler http.HandlerFunc) float64 {
 		best := measure(handler)
-		for i := 0; i < 8; i++ {
+		for i := 1; i < 10; i++ {
 			if v := measure(handler); v < best {
 				best = v
 			}
@@ -69,6 +79,6 @@ func TestDisabledGraphQLTracingAddsZeroAllocations(t *testing.T) {
 	}
 	base, actual := least(h.serveHTTP), least(h.ServeHTTP)
 	if actual != base {
-		t.Fatalf("GraphQL tracing adds %g allocations", actual-base)
+		t.Fatalf("disabled GraphQL tracing adds %g allocations per request (bare=%g, wrapped=%g)", actual-base, base, actual)
 	}
 }
