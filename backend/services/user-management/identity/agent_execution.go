@@ -25,6 +25,7 @@ import (
 // recorded on the proposal and the approvers counted so far, and answers from this service's own
 // records, read now with no cache:
 //
+//   - the tenant itself: enabled and not being purged;
 //   - the three switches and the policy, with the original client's allowlisting (K1/K2/K3);
 //   - the proposer's standing: their sign-in still open, still a member holding the write the
 //     proposal was derived from, and the original client still one the tenant admits for them
@@ -117,6 +118,7 @@ type ExecutionRequest struct {
 
 // ExecutionDecision is the proposal-bound verdict.
 type ExecutionDecision struct {
+	ActuationGeneration int
 	agentpolicy.Decision
 	// ValidApprovers are the requested approvers who are approvers now.
 	ValidApprovers []string
@@ -149,16 +151,20 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 		return ExecutionDecision{}, fmt.Errorf("at most %d approvers may be named", MaxExecutionApprovers)
 	}
 	tenant := claims.Tenant
-	suspended, off, doc, version, err := m.publishedPolicy(ctx, tenant)
+	suspended, off, doc, version, generation, err := m.publishedPolicyState(ctx, tenant)
 	if err != nil {
 		return ExecutionDecision{}, err
 	}
-	st := agentpolicy.State{InstanceEnabled: m.agentActuation, OperatorSuspended: suspended, TenantActuationOff: off, Policy: doc, Version: version}
+	live, err := m.tenantLive(ctx, tenant)
+	if err != nil {
+		return ExecutionDecision{}, err
+	}
+	st := agentpolicy.State{InstanceEnabled: m.agentActuation, OperatorSuspended: suspended || !live, TenantActuationOff: off, Policy: doc, Version: version}
 	preq := agentpolicy.Request{
 		Kind: req.Kind, Impact: req.Impact, TargetCount: req.TargetCount, GroupTokens: req.GroupTokens,
 		Command: req.Command, Client: req.ProposerClient,
 	}
-	out := ExecutionDecision{ValidApprovers: []string{}}
+	out := ExecutionDecision{ActuationGeneration: generation, ValidApprovers: []string{}}
 	// The cheap checks first, as though approvers were plentiful.
 	st.EligibleApprovers = 2
 	if pre := agentpolicy.Decide(st, preq); pre.Verdict == agentpolicy.VerdictRefuse {
@@ -208,6 +214,23 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 	out.StepUp = auth.StepUp{MaxAge: doc.StepUpMaxAge(), AcceptRecoveryCodes: doc.AcceptRecoveryCodes()}
 	out.AllowSelfConfirm = doc.SelfConfirmAllowed() && out.RequiredApprovals == 1 && impact == agentpolicy.ImpactNormal
 	return out, nil
+}
+
+// tenantLive answers whether tenant is live NOW: its row present, enabled and not being purged.
+// A tenant that is not is suspended for a proposer of every kind and for every approver. The
+// token endpoint refuses such a tenant, but a token minted earlier lives on, so the decision reads
+// the row itself. It is reported as the operator's suspension because disabling and purging a
+// tenant are operator actions.
+func (m *Manager) tenantLive(ctx context.Context, tenant string) (bool, error) {
+	t, err := m.iam.TenantByToken(ctx, tenant)
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return false, nil
+	case err != nil:
+		return false, err
+	default:
+		return t.Enabled && !t.PurgeState.Deleted(), nil
+	}
 }
 
 // proposalOf is the proposal authority a proposal of kind is derived as.
