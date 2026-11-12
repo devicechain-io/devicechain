@@ -222,7 +222,6 @@ AuditEvent.operation
 AuditEvent.rowsAffected
 AuditEvent.tableName
 AuditEventSearchCriteria
-AuditEventSearchCriteria.actor
 AuditEventSearchCriteria.category
 AuditEventSearchCriteria.endTime
 AuditEventSearchCriteria.entityPk

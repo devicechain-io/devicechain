@@ -224,6 +224,7 @@ export type AssetUpdateRequest = {
 };
 
 export type AuditEventSearchCriteria = {
+  /** Only entries whose actor contains this text. The match ignores case. At most 256 bytes; longer input is refused with LIMIT_EXCEEDED. */
   actor?: string | null | undefined;
   category?: string | null | undefined;
   endTime?: string | null | undefined;

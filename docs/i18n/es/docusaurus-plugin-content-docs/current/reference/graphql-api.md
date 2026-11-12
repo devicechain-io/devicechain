@@ -1073,6 +1073,7 @@ trunca nada ni se aplica nada a medias, así que reduce la solicitud y envíala 
 
 | Límite | Valor | Se aplica a |
 | --- | --- | --- |
+| Filtro de actor de auditoría | 256 B | `actor` en `AuditEventSearchCriteria` (plano de inquilino) y `AdminAuditEventSearchCriteria` (plano de administración). |
 | Texto de búsqueda de nombre de dashboard | 256 B | `DashboardSearchCriteria.name` en `dashboards`, medido en bytes UTF-8 antes de recortar espacios. |
 | Clave de atributo | 128 B | `attrKey` de `setEntityAttribute`. |
 | Valor de atributo | 64 KiB | `value` de `setEntityAttribute`, sea cual sea su tipo declarado. |

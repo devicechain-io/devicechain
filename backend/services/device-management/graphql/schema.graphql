@@ -2243,6 +2243,7 @@ input AuditEventSearchCriteria {
     endTime: String
     category: String
     operation: String
+    """Only entries whose actor contains this text. The match ignores case. At most 256 bytes; longer input is refused with LIMIT_EXCEEDED."""
     actor: String
     tableName: String
     entityPk: String
