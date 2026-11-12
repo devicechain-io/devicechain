@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/integrity"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"gorm.io/gorm"
 )
 
@@ -34,6 +35,8 @@ const (
 	MaxBackfillSpan = 90 * 24 * time.Hour
 	// MaxBackfillDevices is the most devices a request may name.
 	MaxBackfillDevices = 1000
+	// MaxBackfillStatuses bounds the raw status list to the five-value vocabulary.
+	MaxBackfillStatuses = 5
 	// DefaultBackfillPageSize and MaxBackfillPageSize bound the job list.
 	DefaultBackfillPageSize = 25
 	MaxBackfillPageSize     = 100
@@ -403,6 +406,9 @@ type BackfillPage struct {
 // assigned in creation order, so a page boundary never skips or repeats a job that is created
 // while the list is walked.
 func (a *Api) ListBackfills(ctx context.Context, req ListBackfillsRequest) (*BackfillPage, error) {
+	if len(req.Statuses) > MaxBackfillStatuses {
+		return nil, limit.Exceeded("statuses", len(req.Statuses), MaxBackfillStatuses)
+	}
 	first := req.First
 	if first == 0 {
 		first = DefaultBackfillPageSize
@@ -410,9 +416,15 @@ func (a *Api) ListBackfills(ctx context.Context, req ListBackfillsRequest) (*Bac
 	if first < 1 || first > MaxBackfillPageSize {
 		return nil, invalid("first must be between 1 and %d", MaxBackfillPageSize)
 	}
+	statuses := make([]string, 0, len(req.Statuses))
+	seen := make(map[string]bool, len(req.Statuses))
 	for _, s := range req.Statuses {
 		switch s {
 		case BackfillQueued, BackfillRunning, BackfillSucceeded, BackfillCancelled, BackfillFailed:
+			if !seen[s] {
+				seen[s] = true
+				statuses = append(statuses, s)
+			}
 		default:
 			return nil, invalid("%q is not a backfill status", s)
 		}
@@ -428,8 +440,8 @@ func (a *Api) ListBackfills(ctx context.Context, req ListBackfillsRequest) (*Bac
 	if req.ProfileToken != "" {
 		q = q.Where("profile_token = ?", req.ProfileToken)
 	}
-	if len(req.Statuses) > 0 {
-		q = q.Where("status IN ?", req.Statuses)
+	if len(statuses) > 0 {
+		q = q.Where("status IN ?", statuses)
 	}
 	var jobs []CalculatedBackfill
 	if err := q.Order("id DESC").Limit(first + 1).Find(&jobs).Error; err != nil {
