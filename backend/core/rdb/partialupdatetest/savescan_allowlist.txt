@@ -1,0 +1,10 @@
+# Exported Update* methods on a service model Api that call .Save(...) on a loaded row.
+# Format: <path relative to backend/services> <Func> # <reason>
+# Each line is a debt or a justified whole-object replacement; fix PRs delete their line
+# (a line that stops offending fails TestNoWholeRowSaveInUpdateMethods).
+device-management/model/api_maintenance_window.go UpdateMaintenanceWindow # tracked: Codex-only lane (PR #2461)
+device-management/model/api_groups.go UpdateEntityGroup # tracked: Codex-only lane
+device-management/model/api_assets.go UpdateAsset # tracked: Codex-only lane
+device-management/model/api_integrations.go UpdateIntegration # safe: the row is read FOR UPDATE inside the transaction and the written copy IS that locked row (every field folded onto it), so no stale read is saved
+device-management/model/api_provisioning.go UpdateProvisioningProfile # safe: the row is read FOR UPDATE inside the transaction and the written copy IS that locked row (every field folded onto it), so no stale read is saved
+device-management/model/api_trust_anchors.go UpdateDeviceTrustAnchor # safe: loaded only under FOR UPDATE inside the transaction and that locked row is what is saved; there is no pre-lock read

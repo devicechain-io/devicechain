@@ -56,18 +56,17 @@ package preview
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/devicechain-io/dc-microservice/resolvedevent"
-	"io"
 	"sort"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
+	"github.com/devicechain-io/dc-event-processing/internal/replayinput"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/calcfield"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 )
 
 // DefaultMaxWindow is the GA cap on a preview's replay range (ADR-023 posture): a bounded window
@@ -78,14 +77,14 @@ const DefaultMaxWindow = 24 * time.Hour
 // DefaultMaxScan bounds how many in-scope events one preview will process, so a preview over a busy
 // tenant's window is a finite, self-limiting job rather than a self-inflicted DoS (ADR-023). Hitting
 // it degrades (truncates) the result rather than running unbounded.
-const DefaultMaxScan = 500_000
+const DefaultMaxScan = replayinput.DefaultMaxScan
 
 // DefaultMaxRead bounds how many DELIVERED messages a preview reads regardless of whether they are in
 // scope — the ceiling that actually bounds the work (ADR-023). The replay reader delivers EVERY
 // tenant's events over the window's publish-time span up to the stream head, so without this a
 // narrow-profile preview over a busy multi-tenant instance would decode the whole stream tail while
 // EventsScanned (in-scope only) stayed near zero and never tripped DefaultMaxScan. Hitting it degrades.
-const DefaultMaxRead = 5_000_000
+const DefaultMaxRead = replayinput.DefaultMaxRead
 
 // TimeRange is the preview's OCCURRED-time window [Start, End].
 type TimeRange struct {
@@ -207,11 +206,6 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		maxRead = DefaultMaxRead
 	}
 	engine := core.NewEngine(reg.Cores(), lateness)
-	// Live's rule exactly: a guard only when the instance runs one, and none otherwise.
-	var applied *runtime.AppliedGuard
-	if o.appliedGuard {
-		applied = runtime.NewAppliedGuard(0, 0)
-	}
 	// The fence-set resolver for this preview: one memoizing reader over the frozen snapshots,
 	// scoped to this tenant for its whole life, so no replayed event can reach another tenant's
 	// fences however it is stamped.
@@ -231,174 +225,52 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		addDegraded(&res.Degraded, "history before the earliest retained event is unavailable; previewing from the earliest retained event")
 	}
 
-	read := 0
-replay:
-	for {
-		if err := ctx.Err(); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				break // out of time: handled after the loop, as a degraded result
-			}
-			return Result{}, err
+	counts, stop, err := replayinput.Scan(ctx, reader, replayinput.Admission{
+		Tenant: tenant, AdmitVersion: func(v string) bool { return v == profileVersion },
+		Span: replayinput.TimeRange{Start: tr.Start, End: tr.End}, MaxScan: maxScan, MaxRead: maxRead, AppliedGuard: o.appliedGuard,
+	}, func(msg messaging.Message, event *resolvedevent.ResolvedEvent, enveloped bool) {
+		occurred := event.OccurredTime
+		if draft != nil {
+			event = recalculated(event, *draft, o.constants[event.SourceDeviceToken], &res.Stats)
 		}
-		msg, err := reader.Read(ctx)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				break
-			}
-			return Result{}, err
-		}
-		// Total-read bound (H1): the wildcard replay delivers every tenant's events over the window's
-		// publish-time span, so the in-scope EventsScanned cap alone does not bound the work — cap the
-		// raw delivered count too, before any per-message work, so a narrow-profile preview over a busy
-		// instance cannot decode the whole stream tail.
-		read++
-		if read > maxRead {
-			addDegraded(&res.Degraded, "the window spans more history than the preview read limit; the result is truncated")
-			break
-		}
-		// The wildcard replay delivers every tenant's events; keep only this tenant's.
-		subjectTenant, ok := messaging.ParseTenantFromSubject(msg.Subject)
-		if !ok || subjectTenant != tenant {
-			continue
-		}
-		// An event envelope replays as its members, in order, each the step a message of its
-		// own is (the live loop's applyEnvelope does the same), under the envelope's one
-		// sequence. A legacy message is its own single value.
-		values, enveloped := [][]byte{msg.Value}, msg.IsEnvelope()
+		// nil attr: a preview resolves no device attributes, so every device previews as having none.
+		// A structured dynamic threshold therefore does not fire (its positive presence guard reads
+		// absent state as a non-match), while a raw-CEL leaf written with a fallback for a missing
+		// attribute previews that fallback on EVERY device, including devices that do have the
+		// attribute live — documented.
+		//
+		// 🔴 FENCES DO NOT DEGRADE THE SAME WAY, AND THE ASYMMETRY IS THE POINT. attr degrades
+		// because a device attribute is CURRENT state with no historical record: there is no way to
+		// know what a threshold was last Tuesday, so the honest preview is "as if unset". A fence
+		// set is different in kind — the event NAMES the version it was resolved against, and that
+		// version's fences are frozen and still on record — so the exact set that was live is
+		// recoverable and the preview can be CORRECT. Copying attr's degradation here would render
+		// every geofence rule as never-firing, which for a preview whose entire job is "what would
+		// this rule have done" is worse than useless: it is a confident wrong answer about the
+		// headline feature.
+		plan := reg.Plan(msg.StreamSeq, tenant, event, occurred, nil, fenceSets.Resolve(ctx, event.FenceSetVersion))
+		res.Stats.EvalErrors += plan.EvalErrors
 		if enveloped {
-			units, _, uerr := messaging.SplitEnvelope(msg, subjectTenant, func(string) {}, nil)
-			if uerr != nil {
-				continue // an unreadable envelope is skipped like a corrupt payload
-			}
-			values = make([][]byte, len(units))
-			for i, u := range units {
-				values[i] = u.Msg.Value
-			}
+			engine.ProcessReceivedMember(msg.StreamSeq, occurred, runtime.ReceiptOf(event, msg.AppendTime), plan.Events)
+		} else {
+			engine.ProcessReceived(msg.StreamSeq, occurred, runtime.ReceiptOf(event, msg.AppendTime), plan.Events)
 		}
-		for _, value := range values {
-			event, derr := resolvedevent.UnmarshalResolvedEvent(value)
-			if derr != nil {
-				continue // a corrupt payload is skipped, never fails the whole preview
-			}
-			// A disabled device's presence transition feeds detection nothing, not even the
-			// watermark, exactly as the live loop skips it (applyResolved) — so it is not counted
-			// as scanned either.
-			if event.SourceDeviceDisabled {
-				continue
-			}
-			// Only events resolved against the previewed profile version feed the draft rule (the same
-			// scope key the live fan-out uses).
-			if event.ProfileVersionToken != profileVersion {
-				continue
-			}
-			// With the guard on (WithAppliedGuard: event envelopes enabled, as live) an event already
-			// applied inside the guard's retention is not applied again (runtime.AppliedGuard).
-			// With it off nothing is dropped here, because live drops nothing. Asked of the in-scope events only: the preview feeds one
-			// profile version's rules, so a copy stored under another version is not its duplicate.
-			//
-			// 🔴 THIS GUARD IS UNPRIMED AND VERSION-SCOPED, SO IT IS NOT LIVE'S. It starts empty at
-			// the window's lower edge (a duplicate whose original precedes the window is applied)
-			// and sees only the previewed version's events (live's sees all of them), so it can
-			// apply a duplicate that live would have refused. It errs toward applying, never toward
-			// dropping an event live applied; it exists so a replay of a window holding both
-			// copies does not count the event twice.
-			if applied != nil {
-				if id, ierr := runtime.EventIdentity(tenant, event); ierr == nil && !applied.Admit(msg.AppendTime, id) {
-					continue
-				}
-			}
-			// Already bounded at resolution and stored that way, so replay reads the SAME instant
-			// live detection read. It used to call the clamp with a tolerance of 0, which disables
-			// it — so the preview did not bound a device's clock skew at all while the live loop
-			// bounded it with the configured tolerance. Two consumers of one stream disagreeing
-			// about when an event happened, under the exact feature (replay preview) whose whole
-			// value is answering what the rule WOULD have done.
-			occurred := event.OccurredTime
-			// The reader started at the window's lower edge by PUBLISH time; filter to the OCCURRED-time
-			// window (a late-published-but-early-occurred event, or one occurring past the window, is out).
-			//
-			// 🔑 THE FILTER WIDENS; THE INSTANT HANDED TO THE ENGINE DOES NOT. `occurred` above stays
-			// the envelope and is what reg.Plan and ProcessResolved receive below, exactly as before —
-			// the plan fans a batch out per entry on its own, so changing the parent instant here would
-			// alter what the engine computes rather than merely which events reach it. This change is
-			// about ADMISSION only.
-			//
-			// 🔴🔴 THE ADMISSION TEST IS ON THE EVENT'S WHOLE SPAN, NOT ON ITS ENVELOPE, AND A BATCH IS WHY.
-			// An event's envelope carries ONE instant, but a batched event carries a sample's own time
-			// per entry — so a store-and-forward tracker that buffers 10:00–10:30 readings and uploads
-			// them at 11:05 has an envelope of 11:05 and samples entirely inside a 10:00–11:00 window.
-			// Filtering on the envelope dropped that event WHOLE: EventsScanned stayed 0, the preview
-			// reported the rule as never firing, and no degraded flag was raised. A preview whose entire
-			// job is "what would this rule have done" answered "nothing" about samples it never looked
-			// at, with no indication it had skipped them — the confident wrong answer this package's
-			// doc comment lists as the one failure mode worse than a truncation notice.
-			//
-			// 🔑 THIS IS AN ADMISSION FIX ONLY, AND DELIBERATELY NOT A CLAIM ABOUT THE LIVE ENGINE.
-			// Whether the samples then produce edges is the engine's business: it advances a watermark
-			// from the instant it is handed, so a batch's entries can still be dropped as LATE, and
-			// that behaviour is engine-wide and identical here and in production. Fixing it needs
-			// per-series watermarks and is not attempted here. What this change guarantees is narrower
-			// and worth having on its own: an event that overlaps the window REACHES the engine and is
-			// counted, so a preview's silence is the engine's answer rather than an artefact of the
-			// filter in front of it.
-			//
-			// occurredSpan returns the earliest and latest instant the event carries (the envelope
-			// twice, for an event that batches nothing), so this stays exactly the old comparison for
-			// an unbatched event and widens it to an overlap test for a batched one. Widening a filter
-			// is only safe while it still EXCLUDES: an event whose whole span sits outside the window
-			// is still dropped, which is what the second test below holds.
-			first, last := occurredSpan(event)
-			if last.Before(tr.Start) || first.After(tr.End) {
-				continue
-			}
-			// Check the in-scope cap BEFORE counting/processing, so EventsScanned reports events actually
-			// processed rather than one past the cap.
-			if res.Stats.EventsScanned >= maxScan {
-				addDegraded(&res.Degraded, "the window holds more in-scope events than the preview scan limit; the result is truncated")
-				break replay
-			}
-			res.Stats.EventsScanned++
-			if draft != nil {
-				event = recalculated(event, *draft, o.constants[event.SourceDeviceToken], &res.Stats)
-			}
-			// nil attr: a preview resolves no device attributes, so every device previews as having none.
-			// A structured dynamic threshold therefore does not fire (its positive presence guard reads
-			// absent state as a non-match), while a raw-CEL leaf written with a fallback for a missing
-			// attribute previews that fallback on EVERY device, including devices that do have the
-			// attribute live — documented.
-			//
-			// 🔴 FENCES DO NOT DEGRADE THE SAME WAY, AND THE ASYMMETRY IS THE POINT. attr degrades
-			// because a device attribute is CURRENT state with no historical record: there is no way to
-			// know what a threshold was last Tuesday, so the honest preview is "as if unset". A fence
-			// set is different in kind — the event NAMES the version it was resolved against, and that
-			// version's fences are frozen and still on record — so the exact set that was live is
-			// recoverable and the preview can be CORRECT. Copying attr's degradation here would render
-			// every geofence rule as never-firing, which for a preview whose entire job is "what would
-			// this rule have done" is worse than useless: it is a confident wrong answer about the
-			// headline feature.
-			plan := reg.Plan(msg.StreamSeq, tenant, event, occurred, nil, fenceSets.Resolve(ctx, event.FenceSetVersion))
-			res.Stats.EvalErrors += plan.EvalErrors
-			if enveloped {
-				engine.ProcessReceivedMember(msg.StreamSeq, occurred, runtime.ReceiptOf(event, msg.AppendTime), plan.Events)
-			} else {
-				engine.ProcessReceived(msg.StreamSeq, occurred, runtime.ReceiptOf(event, msg.AppendTime), plan.Events)
-			}
-			res.Firings = appendFirings(res.Firings, engine.Drain(), tr)
-		}
+		res.Firings = appendFirings(res.Firings, engine.Drain(), tr)
+	})
+	if err != nil {
+		return Result{}, err
 	}
-	// A cancellation mid-replay surfaces as io.EOF from the reader; re-check so a cancelled preview
-	// returns the error rather than a truncated result dressed up as complete (L1).
-	if err := ctx.Err(); err != nil {
-		if !errors.Is(err, context.DeadlineExceeded) {
-			return Result{}, err
-		}
-		// 🔴 A TIME BUDGET THAT RAN OUT IS A TRUNCATION, NOT A FAILURE: the firings found so
-		// far are real, the rest of the window was not replayed, and the author is told so
-		// the same way as for the read and scan caps — a cancelled preview (the caller went
-		// away) still returns the error.
+	res.Stats.EventsScanned = counts.Scanned
+	switch stop {
+	case replayinput.StopReadCap:
+		addDegraded(&res.Degraded, "the window spans more history than the preview read limit; the result is truncated")
+	case replayinput.StopScanCap:
+		addDegraded(&res.Degraded, "the window holds more in-scope events than the preview scan limit; the result is truncated")
+	case replayinput.StopDeadline:
+		addDegraded(&res.Degraded, "the preview ran out of time before the whole window was replayed; the result is truncated")
+	}
+
+	if ctx.Err() == context.DeadlineExceeded && stop != replayinput.StopDeadline {
 		addDegraded(&res.Degraded, "the preview ran out of time before the whole window was replayed; the result is truncated")
 	}
 
@@ -448,37 +320,6 @@ replay:
 	})
 	res.Stats.FiringCount = len(res.Firings)
 	return res, nil
-}
-
-// occurredSpan returns the earliest and latest instant an event carries: the span of its
-// samples' own times, or the envelope's time twice for an event that batches nothing.
-// Both bounds come from times the resolver already decided and bounded — nothing here
-// re-derives one.
-func occurredSpan(event *resolvedevent.ResolvedEvent) (time.Time, time.Time) {
-	first, last := event.OccurredTime, event.OccurredTime
-	observe := func(at time.Time) {
-		if at.Before(first) {
-			first = at
-		}
-		if at.After(last) {
-			last = at
-		}
-	}
-	switch payload := event.Payload.(type) {
-	case *resolvedevent.ResolvedMeasurementsPayload:
-		for _, entry := range payload.Entries {
-			observe(entry.OccurredTime)
-		}
-	case *resolvedevent.ResolvedLocationsPayload:
-		for _, entry := range payload.Entries {
-			observe(entry.OccurredTime)
-		}
-	case *resolvedevent.ResolvedAlertsPayload:
-		for _, entry := range payload.Entries {
-			observe(entry.OccurredTime)
-		}
-	}
-	return first, last
 }
 
 // recalculated returns event with its calculated values re-derived under draft, as a new event

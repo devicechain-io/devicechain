@@ -344,39 +344,44 @@ func TestRoleQueryNamesEveryGroupRole(t *testing.T) {
 	query := analyticsRolesQuery()
 	args := analyticsRolesQueryArgs()
 
-	if want := 2*len(analyticsGroupRoles()) + 2; len(args) != want {
-		t.Fatalf("the role query binds %d arguments, want %d (groups, prefix, membership groups, area schema)",
-			len(args), want)
+	wantArgs := []any{AnalyticsAreaSchema}
+	for i := range 2 {
+		if i == 1 {
+			wantArgs = append(wantArgs, AnalyticsAreaSchema)
+		}
+		for _, group := range analyticsGroupRoles() {
+			wantArgs = append(wantArgs, group)
+		}
+	}
+	wantArgs = append(wantArgs, analyticsRolePattern())
+	if len(args) != len(wantArgs) {
+		t.Fatalf("got %d arguments, want %d", len(args), len(wantArgs))
+	}
+	for i, want := range wantArgs {
+		if args[i] != want {
+			t.Errorf("argument %d = %v, want %v", i, args[i], want)
+		}
 	}
 	if got := strings.Count(query, "?"); got != len(args) {
 		t.Fatalf("the role query has %d placeholders for %d arguments", got, len(args))
 	}
-	for i, group := range analyticsGroupRoles() {
-		if args[i] != group {
-			t.Errorf("argument %d is %v, want the group role %q", i, args[i], group)
-		}
-		if got := args[len(analyticsGroupRoles())+1+i]; got != group {
-			t.Errorf("membership argument %d is %v, want the group role %q", i, got, group)
-		}
-	}
-	if args[len(args)-1] != AnalyticsAreaSchema {
-		t.Errorf("the last argument is %v, want the area schema %q", args[len(args)-1], AnalyticsAreaSchema)
-	}
-	if args[len(analyticsGroupRoles())] != analyticsRolePattern() {
-		t.Errorf("the prefix argument is %v, want the reader prefix pattern %q",
-			args[len(analyticsGroupRoles())], analyticsRolePattern())
-	}
+	query = strings.Join(strings.Fields(query), " ")
 	for _, clause := range []string{
-		"WHERE rolname IN (", "OR rolname LIKE ? ESCAPE '='",
-		"OR (oid IN (SELECT m.member FROM pg_auth_members m",
-		"JOIN pg_roles g ON g.oid = m.roleid WHERE g.rolname IN (",
-		"AND NOT rolsuper AND rolname <> current_user",
-		"AND oid NOT IN (SELECT nspowner FROM pg_namespace WHERE nspname = ?)",
-		"ORDER BY rolname",
+		"WITH RECURSIVE platform AS (",
+		"WHERE rolsuper OR rolname = current_user",
+		"UNION SELECT nspowner FROM pg_namespace WHERE nspname = ?",
+		"WHERE g.rolname IN (?, ?) AND g.oid NOT IN (SELECT oid FROM platform) AND m.member NOT IN (SELECT oid FROM platform) UNION SELECT",
+		"JOIN members p ON m.roleid = p.oid WHERE m.member NOT IN (SELECT oid FROM platform)",
+		"SELECT r.rolname, (r.rolname = current_user OR r.oid IN (SELECT nspowner FROM pg_namespace WHERE nspname = ?)) AS refuse, r.rolsuper AS superuser",
+		"WHERE r.rolname IN (?, ?) OR r.rolname LIKE ? ESCAPE '='",
+		"OR r.oid IN (SELECT oid FROM members)", "ORDER BY r.rolname",
 	} {
 		if !strings.Contains(query, clause) {
 			t.Errorf("the role query is missing %q: %s", clause, query)
 		}
+	}
+	if strings.Contains(query, "UNION ALL") {
+		t.Error("membership recursion must deduplicate to terminate cycles")
 	}
 }
 
@@ -400,5 +405,30 @@ func TestOnlyTheGroupRolesAreTreatedAsGroups(t *testing.T) {
 			t.Errorf("%q is not a group role but is treated as one, so it would be granted the "+
 				"surface directly rather than through membership", notAGroup)
 		}
+	}
+}
+
+func TestPartitionAnalyticsRoles(t *testing.T) {
+	rows := []analyticsRoleRow{
+		{Rolname: "analytics_acme"},
+		{Rolname: "analytics_platform", Refuse: true, Superuser: true},
+		{Rolname: "analytics_super1", Superuser: true},
+		{Rolname: AnalyticsReaderRole, Refuse: true},
+		{Rolname: "bi_member"},
+		{Rolname: "analytics_super2", Superuser: true},
+	}
+	converge, skipped, refused := partitionAnalyticsRoles(rows)
+	if strings.Join(converge, ",") != "analytics_acme,bi_member" {
+		t.Errorf("unexpected convergence order: %v", converge)
+	}
+	if strings.Join(skipped, ",") != "analytics_super1,analytics_super2" {
+		t.Errorf("unexpected skips: %v", skipped)
+	}
+	if strings.Join(refused, ",") != "analytics_platform,"+AnalyticsReaderRole {
+		t.Errorf("unexpected refusals: %v", refused)
+	}
+	converge, skipped, refused = partitionAnalyticsRoles(nil)
+	if len(converge) != 0 || len(skipped) != 0 || len(refused) != 0 {
+		t.Errorf("empty input produced %v, %v, %v", converge, skipped, refused)
 	}
 }

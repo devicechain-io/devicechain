@@ -225,6 +225,11 @@ export type TenantRoleUpdateRequest = {
   name?: string | null | undefined;
 };
 
+export type AgentApprovalAccessQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type AgentApprovalAccessQuery = { agentApprovalAccess: { instanceEnabled: boolean, canApprove: boolean } };
+
 export type AgentPolicyQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -651,6 +656,14 @@ export const TenantFieldsFragmentDoc = new TypedDocumentString(`
   localeOverride
 }
     `, {"fragmentName":"TenantFields"}) as unknown as TypedDocumentString<TenantFieldsFragment, unknown>;
+export const AgentApprovalAccessDocument = new TypedDocumentString(`
+    query AgentApprovalAccess {
+  agentApprovalAccess {
+    instanceEnabled
+    canApprove
+  }
+}
+    `) as unknown as TypedDocumentString<AgentApprovalAccessQuery, AgentApprovalAccessQueryVariables>;
 export const AgentPolicyDocument = new TypedDocumentString(`
     query AgentPolicy {
   agentPolicy {

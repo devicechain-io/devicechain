@@ -355,6 +355,7 @@ dcctl secrets escrow show ~/backups/my-instance-rootkey.escrow
 | `geofence-set-manifest` | stream | rebuildable | a fence edit is re-derived from the stored fence set |
 | `entity-deleted` | stream | transient | a deletion fan-out in flight; a deletion announced just before the restore point may not have reached every consumer |
 | `device-ownership` | stream | rebuildable | ownership changes are projected from the stored relationships |
+| `agent-actuation-kills` | stream | rebuildable | the policy head retains the kill state and operators can repeat a kill |
 | `alarm-events` | stream | rebuildable | alarm state is held in the database and notification re-derives from it |
 | `raise-alarm` | stream | transient | an in-flight request from detection, which evaluates again on the next event |
 | `failed-decode` | stream | transient | a diagnostic record of an event that could not be decoded |

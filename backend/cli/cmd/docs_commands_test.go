@@ -7,6 +7,9 @@ package cmd
 // docs must name a command that exists, with flags that command accepts and the number
 // of arguments it takes, and every `hack/` path in one must exist in the tree.
 // Local recursive patterns in go build/go vet must start inside a Go module.
+// Literal local Helm installs must render successfully, entirely offline.
+// Literal GraphQL curl documents are validated against each endpoint schema plane.
+// Literal psql SELECT columns are checked against the frozen analytics projection.
 //
 // WHY A TEST IN THIS PACKAGE. The source of truth for dcctl is the cobra tree, and this
 // is the one place that can ask it directly: rootCmd.Find resolves the command path the
@@ -30,9 +33,13 @@ package cmd
 //
 // 🔴 SCOPE, said up front so a green run is not read as more than it is: it proves a
 // dcctl command NAME, its FLAG names and its ARITY, and literal Go module locations.
-// It does not prove a flag's value parses,
+// Local Helm installs are rendered offline with supplied values and reported stand-ins
+// for whole environment references and image.tag placeholders.
+// SQL covers one analytics view and a small unqualified expression subset; other
+// syntax and release-history pages are visibly skipped. It never executes SQL.
+// It does not otherwise prove a flag's value parses,
 // that the command succeeds, or that the sentence beside it is true. Every other tool
-// (kubectl, helm, curl, ...) is counted, not checked, and the count is printed, so the
+// (kubectl, non-GraphQL curl, ...) is counted, not checked, and the count is printed, so the
 // uncovered surface is visible rather than implied:
 //
 //	cd backend/cli && go test ./cmd -run TestPublishedDocsCommandsExist -v -count=1
@@ -305,7 +312,9 @@ func splitSegments(s string) [][]string {
 }
 
 // shellSegments can retain subshell boundaries for working-directory tracking.
-func shellSegments(s string, groups bool) [][]string {
+// markDynamic annotates double-quoted shell expansions for the GraphQL body check;
+// callers checking other tools retain the original words.
+func shellSegments(s string, groups bool, markDynamic ...bool) [][]string {
 	var segs [][]string
 	var cur []string
 	var word strings.Builder
@@ -346,6 +355,11 @@ func shellSegments(s string, groups bool) [][]string {
 			for i++; i < len(s) && s[i] != '"'; i++ {
 				if s[i] == '\\' && i+1 < len(s) {
 					i++
+					word.WriteByte(s[i])
+					continue
+				}
+				if len(markDynamic) > 0 && markDynamic[0] && s[i] == '$' {
+					word.WriteString(substPlaceholder)
 				}
 				word.WriteByte(s[i])
 			}
@@ -666,7 +680,11 @@ func (s *docsScan) scanGoCommands(text, where string, wd *docsWorkingDir, stack 
 					next = wd.previous
 				} else if wd.dir != "" && literalDocsPath(args[0]) {
 					candidate := path.Join(wd.dir, args[0])
-					if s.goLayout.directory(candidate) {
+					layout := s.goLayout
+					if layout == nil {
+						layout = &docsGoLayout{repo: s.helmRepo}
+					}
+					if layout.directory(candidate) {
 						next = candidate
 					}
 				}
@@ -674,7 +692,11 @@ func (s *docsScan) scanGoCommands(text, where string, wd *docsWorkingDir, stack 
 			wd.previous, wd.dir = wd.dir, next
 			continue
 		}
-		if !docsGoRecursiveCommand(words) {
+		if docsHelmInstall(words) {
+			s.scanHelmInstall(words, where, wd.dir, *loops)
+			continue
+		}
+		if s.goLayout == nil || !docsGoRecursiveCommand(words) {
 			continue
 		}
 		invocation := strings.Join(words, " ")
@@ -735,13 +757,24 @@ func docsGoRecursiveCommand(words []string) bool {
 }
 
 type docsScan struct {
-	findings     []docsFinding
-	dcctlChecked int
-	dcctlSkipped []string // where: text, for templates
-	hackChecked  int
-	goChecked    int
-	goSkipped    []string
-	goLayout     *docsGoLayout
+	findings       []docsFinding
+	dcctlChecked   int
+	dcctlSkipped   []string // where: text, for templates
+	hackChecked    int
+	goChecked      int
+	goSkipped      []string
+	goLayout       *docsGoLayout
+	helmRepo       string
+	helmChecked    int
+	helmSkipped    []string
+	helmStandIns   []string
+	sqlChecked     int
+	sqlSkipped     []string
+	sqlRepo        string
+	graphqlChecked int
+	graphqlSkipped []string
+	graphqlRepo    string
+	graphqlSchemas map[string]docsGraphQLSchema
 
 	uncovered map[string]int // first word -> count
 }
@@ -765,27 +798,32 @@ func scanDocsText(root *cobra.Command, file, text string, exists func(string) bo
 			}
 
 			outer, inner := extractSubstitutions(stripComment(ln.text))
-			if s.goLayout != nil {
-				// Extraction separates substitutions from their position in the line.
-				// Their execution directory may follow an earlier cd on that line, so
-				// leave it unresolved rather than guess. They cannot change outer state.
-				for _, sub := range inner {
-					subWD, subLoops := wd, loops
-					subWD.dir = ""
-					var subStack []docsWorkingDir
-					s.scanGoCommands(sub, where, &subWD, &subStack, &subLoops)
-				}
-				s.scanGoCommands(outer, where, &wd, &stack, &loops)
+			// Extraction separates substitutions from their position in the line.
+			// Their execution directory may follow an earlier cd on that line, so
+			// leave it unresolved rather than guess. They cannot change outer state.
+			for _, sub := range inner {
+				subWD, subLoops := wd, loops
+				subWD.dir = ""
+				var subStack []docsWorkingDir
+				s.scanGoCommands(sub, where, &subWD, &subStack, &subLoops)
 			}
+			s.scanGoCommands(outer, where, &wd, &stack, &loops)
 			for _, cmdline := range append([]string{outer}, inner...) {
-				for _, seg := range splitSegments(cmdline) {
+				for segmentIndex, seg := range splitSegments(cmdline) {
 					words := commandWords(seg)
 					if len(words) == 0 {
 						continue
 					}
 					if !isDcctl(words[0]) {
-						if s.goLayout != nil && docsGoRecursiveCommand(words) {
-							continue // counted by the module-location check
+						if words[0] == "psql" {
+							s.scanPsql(words, where)
+							continue
+						}
+						if words[0] == "curl" && s.scanCurlGraphQL(commandWords(shellSegments(cmdline, false, true)[segmentIndex]), where) {
+							continue
+						}
+						if docsHelmInstall(words) || s.goLayout != nil && docsGoRecursiveCommand(words) {
+							continue // counted by the Helm or module-location check
 						}
 						if !hackPathRe.MatchString(words[0]) { // a hack/ script is checked above
 							s.uncovered[words[0]]++
@@ -811,7 +849,7 @@ func scanDocsText(root *cobra.Command, file, text string, exists func(string) bo
 }
 
 func newDocsScan() *docsScan {
-	return &docsScan{uncovered: map[string]int{}}
+	return &docsScan{uncovered: map[string]int{}, helmRepo: repoRoot, sqlRepo: repoRoot, graphqlRepo: repoRoot}
 }
 
 // docsTrees returns docs/docs and every locale's current tree under repo, relative to it.
@@ -868,6 +906,9 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 	for _, tree := range trees {
 		s := newDocsScan()
 		s.goLayout = layout
+		s.helmRepo = repo
+		s.sqlRepo = repo
+		s.graphqlRepo = repo
 		err := filepath.WalkDir(filepath.Join(repo, tree), func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -911,8 +952,21 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 		total.dcctlChecked += s.dcctlChecked
 		total.dcctlSkipped = append(total.dcctlSkipped, s.dcctlSkipped...)
 		total.hackChecked += s.hackChecked
+		report = append(report, fmt.Sprintf("%s: %d Helm installs checked, %d skipped", tree, s.helmChecked, len(s.helmSkipped)))
+		total.helmChecked += s.helmChecked
+		total.helmStandIns = append(total.helmStandIns, s.helmStandIns...)
+		total.helmSkipped = append(total.helmSkipped, s.helmSkipped...)
 		total.goChecked += s.goChecked
 		total.goSkipped = append(total.goSkipped, s.goSkipped...)
+		if floors[filepath.FromSlash(tree)] && s.graphqlChecked < minGraphQLChecksPerTree {
+			problems = append(problems, fmt.Sprintf("%s: found only %d GraphQL curl documents (floor %d); the extractor is losing blocks", tree, s.graphqlChecked, minGraphQLChecksPerTree))
+		}
+		report = append(report, fmt.Sprintf("%s: %d GraphQL curl documents checked, %d skipped", tree, s.graphqlChecked, len(s.graphqlSkipped)))
+		total.graphqlChecked += s.graphqlChecked
+		total.graphqlSkipped = append(total.graphqlSkipped, s.graphqlSkipped...)
+		report = append(report, fmt.Sprintf("%s: %d SQL SELECTs checked, %d skipped", tree, s.sqlChecked, len(s.sqlSkipped)))
+		total.sqlChecked += s.sqlChecked
+		total.sqlSkipped = append(total.sqlSkipped, s.sqlSkipped...)
 		for k, v := range s.uncovered {
 			total.uncovered[k] += v
 		}
@@ -924,10 +978,23 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 	for _, s := range total.dcctlSkipped {
 		report = append(report, "skipped (template): "+s)
 	}
+	for _, skipped := range total.graphqlSkipped {
+		report = append(report, "skipped (GraphQL curl): "+skipped)
+	}
+	report = append(report, fmt.Sprintf("GraphQL curl: %d checked, %d skipped", total.graphqlChecked, len(total.graphqlSkipped)))
+	for _, skipped := range total.sqlSkipped {
+		report = append(report, "skipped (SQL SELECT): "+skipped)
+	}
+	report = append(report, fmt.Sprintf("SQL SELECT: %d checked, %d skipped", total.sqlChecked, len(total.sqlSkipped)))
 	for _, s := range total.goSkipped {
 		report = append(report, "skipped (Go module location): "+s)
 	}
 	report = append(report, fmt.Sprintf("Go module location: %d checked, %d skipped", total.goChecked, len(total.goSkipped)))
+	report = append(report, total.helmStandIns...)
+	for _, skipped := range total.helmSkipped {
+		report = append(report, "skipped (Helm render): "+skipped)
+	}
+	report = append(report, fmt.Sprintf("Helm render: %d checked, %d skipped", total.helmChecked, len(total.helmSkipped)))
 	type kv struct {
 		k string
 		v int
@@ -987,8 +1054,18 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "hack", "real.sh"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	schemaDir := filepath.Join(repo, "backend", "services", "fixture", "graphql")
+	if err := os.MkdirAll(schemaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(schemaDir, "schema.graphql"), []byte("type Query { good: String }"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	var page strings.Builder
 	page.WriteString("```bash\n")
+	for i := 0; i < minGraphQLChecksPerTree; i++ {
+		page.WriteString("curl /api/fixture/graphql -d '{\"query\":\"{good}\"}'\n")
+	}
 	for i := 0; i < minDcctlInvocationsPerTree; i++ {
 		page.WriteString("dcctl bootstrap local prod --yes\n")
 	}
@@ -1013,6 +1090,18 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 		t.Fatalf("a clean tree failed: %v", problems)
 	}
 
+	graphqlBad := filepath.Join(repo, locales[1], "graphql-bad.md")
+	if err := os.WriteFile(graphqlBad, []byte("```bash\ncurl /api/fixture/graphql -d '{\"query\":\"{goood}\"}'\n```\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	problems, _, _ = checkPublishedDocs(rootCmd, repo)
+	if len(problems) != 1 || !strings.Contains(problems[0], "graphql-bad.md:2") || !strings.Contains(problems[0], `Cannot query field "goood"`) {
+		t.Fatalf("GraphQL whole-gate mutant: %v", problems)
+	}
+	if err := os.Remove(graphqlBad); err != nil {
+		t.Fatal(err)
+	}
+
 	// A bogus command in the Spanish tree only.
 	es := filepath.Join(repo, locales[1], "bad.md")
 	if err := os.WriteFile(es, []byte("```bash\ndcctl frobnicate --nope\n```\n"), 0o644); err != nil {
@@ -1028,7 +1117,7 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 
 	// The README goes through the same module-location verdict and skip reporting.
 	readme := filepath.Join(repo, "README.md")
-	if err := os.WriteFile(readme, []byte("```bash\ngo build ./...\ncd \"$module\"\ngo vet ./...\n```\n"), 0o644); err != nil {
+	if err := os.WriteFile(readme, []byte("```bash\ngo build ./...\ncd \"$module\"\ngo vet ./...\nhelm install dc external/chart\npsql -f query.sql\n```\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	problems, report, err := checkPublishedDocs(rootCmd, repo)
@@ -1041,6 +1130,12 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 	if got := strings.Join(report, "\n"); !strings.Contains(got, "Go module location: 1 checked, 1 skipped") || !strings.Contains(got, "README.md:4: go vet ./... (unresolved working directory)") {
 		t.Errorf("Go counts and skipped location missing from report:\n%s", got)
 	}
+	if got := strings.Join(report, "\n"); !strings.Contains(got, "Helm render: 0 checked, 1 skipped") || !strings.Contains(got, "skipped (Helm render): README.md:5:") {
+		t.Errorf("Helm counts and skipped location missing from report:\n%s", got)
+	}
+	if got := strings.Join(report, "\n"); !strings.Contains(got, "SQL SELECT: 0 checked, 1 skipped") || !strings.Contains(got, "skipped (SQL SELECT): README.md:6:") || strings.Contains(got, "psql=1") {
+		t.Errorf("SQL counts and skipped location missing from report:\n%s", got)
+	}
 	if err := os.Remove(readme); err != nil {
 		t.Fatal(err)
 	}
@@ -1051,8 +1146,8 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	problems, _, _ = checkPublishedDocs(rootCmd, repo)
-	if len(problems) != 2 || !strings.Contains(strings.Join(problems, "\n"), "zh-CN/docusaurus-plugin-content-docs/current: found only 0 dcctl") {
-		t.Errorf("an unreadable tree did not trip both floors: %v", problems)
+	if len(problems) != 3 || !strings.Contains(strings.Join(problems, "\n"), "zh-CN/docusaurus-plugin-content-docs/current: found only 0 dcctl") || !strings.Contains(strings.Join(problems, "\n"), "found only 0 GraphQL curl documents") {
+		t.Errorf("an unreadable tree did not trip all three floors: %v", problems)
 	}
 
 	// A missing translation tree.
@@ -1281,4 +1376,13 @@ func TestDocsGateDoesNotTouchRealFlags(t *testing.T) {
 			t.Errorf("--%s was written by the gate: %q -> %q", f.Name, before[f.Name], f.Value.String())
 		}
 	})
+}
+
+// This regression uses only the pre-existing scanner entry point and fields so
+// it also compiles on main, where Helm is merely counted as uncovered.
+func TestDocsHelmMissingRootKey(t *testing.T) {
+	s := scanOne(t, "```bash\nhelm install dc deploy/helm/devicechain --set instance.id=devicechain\n```\n")
+	if len(s.findings) != 1 || !strings.Contains(findingTexts(s), "instance.config.infrastructure.secrets.rootKey is required") || !strings.Contains(findingTexts(s), "page.md:2") {
+		t.Fatalf("missing root key must produce one located render finding; got %s; uncovered: %v", findingTexts(s), s.uncovered)
+	}
 }

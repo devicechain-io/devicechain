@@ -1021,16 +1021,21 @@ characters.
 
 | Bound | Limit | Applies to |
 | --- | --- | --- |
+| Audit actor filter | 256 B | `actor` in `AuditEventSearchCriteria` (tenant plane) and `AdminAuditEventSearchCriteria` (admin plane). |
+| Dashboard name search text | 256 B | `DashboardSearchCriteria.name` on `dashboards`, measured in UTF-8 bytes before any trimming. |
 | Attribute key | 128 B | `setEntityAttribute` `attrKey`. |
 | Attribute value | 64 KiB | `setEntityAttribute` `value`, whatever its declared type. |
 | Rule definition | 256 KiB | `definition` of a detection rule, on create and update. |
 | Rule authoring graph | 256 KiB | `authoringGraph` of a detection rule, on create and update. |
+| Rules per validation | 1,000 | `validateDetectionRules` `rules`. Publishing a device profile with more than 1,000 enabled detection rules is refused the same way. |
 | Version history | 1,000 per call | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: newest first. Narrow with `limit` (at least 1) and page with `offset` (not negative); a value outside that range is refused with `INVALID_VALUE`. |
 | Buckets per aggregation | 10,000 | `bucketedMeasurements`: the range divided by `intervalSeconds`, rounded up. |
 | Rows per aggregation | 50,000 | `bucketedMeasurements`: the buckets multiplied by the measurement names returned. With a `name` filter that is one name; without one it is every distinct measurement name that matches the read's filters. |
 | Keys per lookup | 1,000 | A list of tokens, external ids or alarm tokens passed to a `…ByToken`, `…ByExternalId` or similar batch query (device states, latest locations, commands, command batches, notification channels, policies and states). |
 | JSON input size | 64 KiB | Each metadata, properties, configuration, payload or recipients value sent as JSON. Command payloads and metadata are refused with `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` (see [Sending commands](../guides/sending-commands.md)). |
+| Calculated-metric backfill statuses | 5 entries | `calculatedMetricBackfills` `statuses`, counting duplicates. Longer lists are refused before any query; accepted lists are de-duplicated. |
 | Recipients per notification rule | 100 | The `recipients` list of a notification policy rule. |
+| Rules per notification policy | 100 | One supplied `rules` list when creating or updating a policy. Updates that omit `rules` preserve the stored rule set. |
 | OAuth client redirect URIs | 16 entries, 2,048 B each | `redirectUris` on `createOauthClient` and `updateOauthClient`. |
 | OAuth client scopes | 16 entries, 64 B each | `scopes` on `createOauthClient` and `updateOauthClient`. |
 | Tenant tiers | 100 tiers, 128 B per token | The tier catalog (`createTenantTier` refuses a 101st tier) and `orderedTokens` on `reorderTenantTiers`, which must name every tier. |
