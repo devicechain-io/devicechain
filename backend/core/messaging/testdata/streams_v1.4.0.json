@@ -160,6 +160,14 @@
     "duplicateWindowSeconds": 600,
     "allowDirect": false
   },
+  "lpwan-downlink-events": {
+    "subjects": [
+      "inst.*.lpwan-downlink-events"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
   "max-deliveries": {
     "subjects": [
       "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_inbound-events.*",

@@ -44,7 +44,14 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 			return err
 		}
 		// 🔴 A RE-RUN THAT MOVES THE IMAGE VERSION OF AN EXISTING DECLARATION is a version move like
-		// `dcctl upgrade`'s, and is refused the same way while event envelopes may remain.
+		// `dcctl upgrade`'s, and is refused the same way: never to an earlier release (there is no
+		// downgrade), and not while event envelopes may remain.
+		if existing != nil {
+			if err := refuseADowngrade(st.Instance, existing.Spec.ImageRegistry, existing.Spec.ImageVersion,
+				st.ImageRegistry, st.ImageVersion); err != nil {
+				return err
+			}
+		}
 		if err := precheckBootstrapEnvelopeDowngrade(ctx, st, existing); err != nil {
 			return err
 		}
