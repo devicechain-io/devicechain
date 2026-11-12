@@ -197,8 +197,9 @@ device reads online. The lever today is the lifetime the devices request.
   `readingsPerSecond` (default 1000) is the tenant's budget in readings (decoded
   samples), charged after decode as on every other transport, and `burst` (default 2000)
   the instantaneous allowance; the same numbers are the pre-decode stage-1 rate, counted
-  in Notify messages. Non-positive
-  values take the platform default, never *unlimited* and never *zero*.
+  in Notify messages. Unset or zero
+  values take the platform default, never *unlimited* and never *zero*; a negative value
+  is refused at startup.
 - **`maxLifetimeSeconds`** — the ceiling every registration lifetime is clamped down to,
   and *identically* the lifetime a failover-reconstruction shadow timer is armed for.
   Equal by construction so a shadow expiry is only ever late-true, never a false

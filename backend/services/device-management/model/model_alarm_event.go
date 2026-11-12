@@ -124,6 +124,7 @@ type AlarmStateChangeEvent struct {
 // dead-letters with a counter. Implementations must be safe for concurrent use.
 type AlarmEventPublisher interface {
 	PublishAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent)
+	PublishAlarmEventDedup(ctx context.Context, event *AlarmStateChangeEvent, dedupID string) error
 }
 
 // severityTransition classifies an in-place severity change on an ACTIVE alarm.

@@ -5,6 +5,7 @@ package identity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -89,7 +90,14 @@ func newMintTestEnv(t *testing.T) *mintTestEnv {
 		&iam.OAuthClient{}, &rdb.AuditEvent{}, &iam.ServiceAccount{}, &iam.ServiceAccountSecret{}, &iam.AgentPolicy{}, &iam.AgentPolicyVersion{},
 		&iam.MfaFactor{}, &iam.MfaSourceFailure{}, &iam.MfaRecoveryCode{},
 	))
-	rdbm := &rdb.RdbManager{Database: db}
+	return newMintTestEnvOn(t, &rdb.RdbManager{Database: db})
+}
+
+func newMintTestEnvOn(t *testing.T, rdbm *rdb.RdbManager) *mintTestEnv {
+	t.Helper()
+	if rdbm == nil {
+		return newMintTestEnv(t)
+	}
 	store := iam.NewStore(rdbm)
 
 	key, err := auth.GenerateKeyPair()
@@ -141,8 +149,12 @@ func (e *mintTestEnv) sidOf(t *testing.T, email string) auth.SessionID {
 func (e *mintTestEnv) seedTenant(t *testing.T, token string) {
 	t.Helper()
 	ctx := context.Background()
-	tier := &iam.TenantTier{Token: "silver"}
-	require.NoError(t, e.store.CreateTenantTier(ctx, tier))
+	tier, err := e.store.TenantTierByToken(ctx, "silver")
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		tier = &iam.TenantTier{Token: "silver"}
+		err = e.store.CreateTenantTier(ctx, tier)
+	}
+	require.NoError(t, err)
 	require.NoError(t, e.store.CreateTenant(ctx, &iam.Tenant{
 		Token: token, Enabled: true, TierID: tier.ID, PurgeState: iam.PurgeActive,
 	}))

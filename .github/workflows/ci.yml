@@ -305,6 +305,9 @@ jobs:
         module: ${{ fromJson(needs.discover.outputs.modules) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The bootstrap snapshot-currency test reads the release tags.
+          fetch-tags: true
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
@@ -854,6 +857,12 @@ jobs:
 
       - name: no bcrypt compare outside the credential primitive
         run: hack/check-credential-compare.sh
+
+      - name: Mojibake guard self-test
+        run: hack/check-mojibake.sh --self-test
+
+      - name: No mojibake in tracked text files
+        run: hack/check-mojibake.sh
 
       # Two red lines on what an AI agent can be made to do, enforced as parsed, tree-wide
       # properties. Declarative-only: no tenant code runtime (a script interpreter or a

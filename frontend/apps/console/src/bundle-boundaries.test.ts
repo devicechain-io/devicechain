@@ -8,9 +8,9 @@
 //
 // The WIDGETS package already gates this boundary — but that scan walks
 // `packages/widgets/src` and nothing else, so it could not see the console at
-// all. This scan also covers `packages/dashboards/src` and `packages/client/src`,
-// which bundle into the console entry chunk too. Only the static-import rule
-// applies to those libraries; the loader/provider rules remain console-specific.
+// all. This scan also covers `packages/dashboards/src`, `packages/client/src` and
+// `apps/host-widgets/src`, which bundle into the console entry chunk too. Only the
+// static-import rule applies there; the loader/provider rules remain console-specific.
 // The geofence editor is the first console code to touch
 // MapLibre, which means that until this file existed, one ordinary top-level
 // import here would have folded ~200 KB gzipped of map renderer into the entry
@@ -44,8 +44,9 @@ const SHARED_SOURCES = import.meta.glob(
   [
     '../../../packages/dashboards/src/**/*.{ts,tsx}',
     '../../../packages/client/src/**/*.{ts,tsx}',
-    '!../../../packages/*/src/**/*.{test,spec,typetest,d}.{ts,tsx}',
-    '!../../../packages/*/src/**/{testing,typetests,__tests__,fixtures,__fixtures__}/**',
+    '../../../apps/host-widgets/src/**/*.{ts,tsx}',
+    '!../../../{packages/*,apps/host-widgets}/src/**/*.{test,spec,typetest,d}.{ts,tsx}',
+    '!../../../{packages/*,apps/host-widgets}/src/**/{testing,typetests,__tests__,fixtures,__fixtures__}/**',
   ],
   {
     eager: true,
@@ -91,9 +92,11 @@ describe('the MapLibre lazy boundary', () => {
     ).toEqual([]);
   });
 
-  describe.each(['dashboards', 'client'])('the %s package scan', (name) => {
-    const root = `../../../packages/${name}/src/`;
-
+  describe.each([
+    ['dashboards', '../../../packages/dashboards/src/'],
+    ['client', '../../../packages/client/src/'],
+    ['host-widgets', '../../host-widgets/src/'],
+  ])('the %s package scan', (_name, root) => {
     it('includes production files and the package entry point', () => {
       const paths = IMPORT_FILES.map(([path]) => path).filter((path) => path.startsWith(root));
       expect(paths.length).toBeGreaterThan(0);

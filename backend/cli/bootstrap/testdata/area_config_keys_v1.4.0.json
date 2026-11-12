@@ -1,0 +1,584 @@
+{
+  "areas": {
+    "ai-inference": {
+      "retired": {},
+      "tree": {
+        "fields": {
+          "InferenceBurst": {},
+          "InferenceRequestsPerMinute": {},
+          "InferenceTimeoutMs": {},
+          "MaxOutputTokens": {},
+          "MaxPromptBytes": {},
+          "RdbConfiguration": {
+            "fields": {
+              "MaxIdleConnections": {},
+              "MaxOpenConnections": {},
+              "SqlDebug": {}
+            }
+          }
+        }
+      }
+    },
+    "command-delivery": {
+      "retired": {},
+      "tree": {
+        "fields": {
+          "DefaultCommandTTLSeconds": {},
+          "DeliveryMachineryReserve": {},
+          "HeldCommandCeiling": {},
+          "LpwanDownlink": {},
+          "MaxDispatchFailures": {},
+          "RdbConfiguration": {
+            "fields": {
+              "MaxIdleConnections": {},
+              "MaxOpenConnections": {},
+              "SqlDebug": {}
+            }
+          },
+          "SparkplugCommands": {},
+          "SweepIntervalSeconds": {}
+        }
+      }
+    },
+    "dashboard-management": {
+      "retired": {},
+      "tree": {
+        "fields": {
+          "RdbConfiguration": {
+            "fields": {
+              "MaxIdleConnections": {},
+              "MaxOpenConnections": {},
+              "SqlDebug": {}
+            }
+          }
+        }
+      }
+    },
+    "device-management": {
+      "retired": {},
+      "tree": {
+        "fields": {
+          "Callout": {
+            "fields": {
+              "IssuerPinDisabled": {},
+              "IssuerPinGatherWindow": {},
+              "IssuerPinMinRefresh": {},
+              "IssuerPinRefresh": {},
+              "JitMaxInFlight": {},
+              "JitSourceTrusted": {},
+              "Ocsp": {
+                "fields": {
+                  "AllowRequireCurrent": {},
+                  "CacheEntries": {},
+                  "Enabled": {},
+                  "FailureTtl": {},
+                  "FetchDeadline": {},
+                  "MaxAge": {},
+                  "MaxInFlight": {},
+                  "MaxResponderHostsPerTenant": {}
+                }
+              },
+              "Revocation": {
+                "fields": {
+                  "DefaultStaleGrace": {},
+                  "MaxConcurrentWrites": {},
+                  "MaxCrlBytes": {},
+                  "MaxCrlEntries": {},
+                  "MaxGraphqlCrlBytes": {},
+                  "MaxListsPerAnchor": {},
+                  "MaxManualEntriesPerTenant": {},
+                  "ResweepAfter": {}
+                }
+              }
+            }
+          },
+          "DeviceAuthMode": {},
+          "DeviceCacheTtlSeconds": {},
+          "InMemoryCache": {
+            "fields": {
+              "CredentialCacheMiB": {},
+              "PerDeviceCacheEntries": {},
+              "PerDeviceCacheMiB": {},
+              "ProfileResolutionCacheMiB": {},
+              "ProfileResolutionTenantSharePercent": {},
+              "TtlSeconds": {}
+            }
+          },
+          "MaxEventFutureSkewSeconds": {},
+          "MembershipCacheTtlSeconds": {},
+          "MetricDefCacheTtlSeconds": {},
+          "Provisioning": {
+            "fields": {
+              "MaxConcurrentRegistrations": {},
+              "MaxInFlight": {},
+              "ReadDeadline": {},
+              "SourceBurst": {},
+              "SourceEvery": {}
+            }
+          },
+          "RaiseAlarm": {
+            "fields": {
+              "Workers": {}
+            }
+          },
+          "RdbConfiguration": {
+            "fields": {
+              "MaxIdleConnections": {},
+              "MaxOpenConnections": {},
+              "SqlDebug": {}
+            }
+          },
+          "RelationshipCacheTtlSeconds": {},
+          "Resolution": {
+            "fields": {
+              "InboundReaders": {},
+              "PublishWindow": {},
+              "Workers": {}
+            }
+          }
+        }
+      }
+    },
+    "device-state": {
+      "retired": {},
+      "tree": {
+        "fields": {
+          "Projection": {
+            "fields": {
+              "LingerMillis": {},
+              "MaxBatch": {},
+              "Writers": {}
+            }
+          },
+          "RdbConfiguration": {
+            "fields": {
+              "MaxIdleConnections": {},
+              "MaxOpenConnections": {},
+              "SqlDebug": {}
+            }
+          }
+        }
+      }
+    },
+    "event-management": {
+      "retired": {},
+      "tree": {
+        "fields": {
+          "AnchorSweepIntervalSeconds": {},
+          "CalculatedBackfill": {
+            "fields": {
+              "Enabled": {},
+              "RowsPerSecond": {}
+            }
+          },
+          "Lifecycle": {
+            "fields": {
+              "ChunkIntervalHours": {},
+              "CompressAfterDays": {},
+              "DisableRollupReads": {},
+              "FailedEventRetentionDays": {},
+              "LocationRetentionDays": {},
+              "RetentionDays": {}
+            }
+          },
+          "Persistence": {
+            "fields": {
+              "LingerMillis": {},
+              "MaxBatch": {},
+              "Writers": {}
+            }
+          },
+          "TsdbConfiguration": {
+            "fields": {
+              "MaxIdleConnections": {},
+              "MaxOpenConnections": {},
+              "SqlDebug": {}
+            }
+          }
+        }
+      }
+    },
+    "event-processing": {
+      "retired": {
+        "maxEventFutureSkewSeconds": "Device clock skew is now bounded once, where the event time is decided: set functionalAreas.device-management.config.maxEventFutureSkewSeconds instead. The detection engine no longer has a bound of its own, and this instance is running with whatever device-management is configured for (300 seconds by default)."
+      },
+      "tree": {
+        "fields": {
+          "CheckpointEvents": {},
+          "CheckpointIntervalSeconds": {},
+          "CheckpointTimeoutSeconds": {},
+          "DerivedPublishing": {
+            "fields": {
+              "MaxBufferedBytes": {},
+              "MaxInFlight": {}
+            }
+          },
+          "DetectShards": {},
+          "IdleAdvanceGuardSeconds": {},
+          "MaxLiveKeysPerTenant": {},
+          "MaxRetainedSamplesPerTenant": {},
+          "MaxRuleDurationSeconds": {},
+          "MaxRulesPerTenant": {},
+          "OutboundBurst": {},
+          "OutboundCallsPerSecond": {},
+          "RdbConfiguration": {
+            "fields": {
+              "MaxIdleConnections": {},
+              "MaxOpenConnections": {},
+              "SqlDebug": {}
+            }
+          },
+          "React": {
+            "fields": {
+              "Workers": {}
+            }
+          },
+          "RuleHealth": {
+            "fields": {
+              "FlushIntervalMillis": {},
+              "MaxBatchRows": {},
+              "MaxPendingBytes": {},
+              "MaxPendingKeys": {},
+              "WriteTimeoutMillis": {}
+            }
+          },
+          "ShedLetterBurst": {},
+          "ShedLetterGlobalBurst": {},
+          "ShedLetterGlobalPerSecond": {},
+          "ShedLetterPerSecond": {},
+          "WatermarkLatenessSeconds": {}
+        }
+      }
+    },
+    "event-sources": {
+      "retired": {
+        "inboundEventBatching": "Inbound events are not batched by this service and never were — the key configured a Kafka producer this platform does not have, and no code read it. Remove it; there is no replacement setting.",
+        "maxReadingsPerMessage": "The readings one event may carry are now a fixed platform limit of 256, the same on every transport, and no longer configurable — a value above 256 is no longer honoured, and neither is a value below it. Remove the key. A device that sends more than 256 readings in one message is refused and counted on total_msg_too_many_readings; it must split them across messages."
+      },
+      "tree": {
+        "fields": {
+          "BrokerPresence": {
+            "fields": {
+              "CanaryDeadlineSeconds": {},
+              "CanarySeconds": {},
+              "Enabled": {},
+              "InventoryGatherSeconds": {},
+              "PublishWindow": {},
+              "ReconcileSeconds": {}
+            }
+          },
+          "Capture": {
+            "fields": {
+              "PublishWindow": {}
+            }
+          },
+          "Contention": {
+            "fields": {
+              "ManualFloor": {}
+            }
+          },
+          "EventSources": {
+            "elem": {
+              "fields": {
+                "Configuration": {
+                  "map": {}
+                },
+                "Decoder": {
+                  "fields": {
+                    "Configuration": {
+                      "map": {}
+                    },
+                    "Type": {}
+                  }
+                },
+                "Id": {},
+                "Type": {}
+              }
+            }
+          },
+          "ExternalMqtt": {
+            "fields": {
+              "PublishWindow": {}
+            }
+          },
+          "HttpIngest": {
+            "fields": {
+              "DeviceUplinks": {},
+              "HeaderTimeoutSeconds": {},
+              "MaxCommandPollsPerTenant": {},
+              "RequestTimeoutSeconds": {}
+            }
+          },
+          "IngestRateLimit": {
+            "fields": {
+              "Burst": {},
+              "ReadingsPerSecond": {}
+            }
+          },
+          "LpwanDownlink": {}
+        }
+      }
+    },
+    "lwm2m-ingest": {
+      "retired": {},
+      "tree": {
+        "fields": {
+          "downlink": {
+            "fields": {
+              "concurrency": {},
+              "timeoutSeconds": {}
+            }
+          },
+          "ingestRateLimit": {
+            "fields": {
+              "burst": {},
+              "readingsPerSecond": {}
+            }
+          },
+          "listen": {
+            "fields": {
+              "host": {},
+              "port": {}
+            }
+          },
+          "maxLifetimeSeconds": {},
+          "security": {
+            "fields": {
+              "connectionIdLength": {},
+              "handshakeTimeoutSeconds": {},
+              "identities": {
+                "elem": {
+                  "fields": {
+                    "autoRegister": {},
+                    "deviceTypeToken": {},
+                    "externalId": {},
+                    "identity": {},
+                    "pskEnv": {},
+                    "tenant": {}
+                  }
+                }
+              },
+              "idleTimeoutSeconds": {},
+              "maxSessions": {}
+            }
+          }
+        }
+      }
+    },
+    "mcp": {
+      "retired": {},
+      "tree": {
+        "fields": {
+          "CallsBurst": {},
+          "CallsPerSecond": {},
+          "IssuerUrl": {},
+          "MaxBatchEntries": {},
+          "ResourceUrl": {}
+        }
+      }
+    },
+    "notification-management": {
+      "retired": {},
+      "tree": {
+        "fields": {
+          "AttemptRetentionSeconds": {},
+          "DefaultMaxEscalations": {},
+          "DeliveryAttempts": {},
+          "DeliverySeconds": {},
+          "EscalationSweepSeconds": {},
+          "RdbConfiguration": {
+            "fields": {
+              "MaxIdleConnections": {},
+              "MaxOpenConnections": {},
+              "SqlDebug": {}
+            }
+          },
+          "RetentionSweepSeconds": {},
+          "StateRetentionSeconds": {}
+        }
+      }
+    },
+    "outbound-connectors": {
+      "retired": {},
+      "tree": {
+        "fields": {
+          "EgressWaitBudgetMs": {},
+          "LpwanDownlink": {
+            "fields": {
+              "Enabled": {}
+            }
+          },
+          "MaxConcurrentSends": {},
+          "OutboundBurst": {},
+          "OutboundCallsPerSecond": {},
+          "RdbConfiguration": {
+            "fields": {
+              "MaxIdleConnections": {},
+              "MaxOpenConnections": {},
+              "SqlDebug": {}
+            }
+          },
+          "SendTimeoutMs": {}
+        }
+      }
+    },
+    "sparkplug-ingest": {
+      "retired": {},
+      "tree": {
+        "fields": {
+          "Ingest": {
+            "fields": {
+              "PublishWindow": {}
+            }
+          },
+          "IngestRateLimit": {
+            "fields": {
+              "Burst": {},
+              "ReadingsPerSecond": {}
+            }
+          },
+          "Presence": {
+            "fields": {
+              "ProbeSeconds": {},
+              "ProbeWindowSeconds": {}
+            }
+          },
+          "Sources": {
+            "elem": {
+              "fields": {
+                "AutoRegister": {},
+                "Broker": {
+                  "fields": {
+                    "PasswordEnv": {},
+                    "URL": {},
+                    "Username": {}
+                  }
+                },
+                "Commands": {
+                  "fields": {
+                    "AllowReboot": {},
+                    "Burst": {},
+                    "ClockSkewSeconds": {},
+                    "ConfirmWindowSeconds": {},
+                    "Enabled": {},
+                    "HostRole": {},
+                    "PublishPerSecond": {},
+                    "RebootWindowSeconds": {},
+                    "WritableMetrics": {
+                      "elem": {}
+                    }
+                  }
+                },
+                "DeviceTypeToken": {},
+                "Groups": {
+                  "elem": {}
+                },
+                "HostId": {},
+                "Tenant": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "update-management": {
+      "retired": {},
+      "tree": {
+        "fields": {
+          "RdbConfiguration": {
+            "fields": {
+              "MaxIdleConnections": {},
+              "MaxOpenConnections": {},
+              "SqlDebug": {}
+            }
+          },
+          "Updates": {
+            "fields": {
+              "AllowUnverifiedArtifacts": {},
+              "CapabilityTTLSeconds": {},
+              "Deadlines": {
+                "fields": {
+                  "AcknowledgeSeconds": {},
+                  "ConfirmSeconds": {},
+                  "DownloadSeconds": {},
+                  "InstallSeconds": {},
+                  "VerifySeconds": {}
+                }
+              },
+              "DownloadBaseURL": {},
+              "MaxArtifactBytes": {},
+              "MaxConcurrentDownloads": {},
+              "MaxConcurrentUploads": {},
+              "MaxTenantArtifactBytes": {},
+              "ObjectStore": {},
+              "SweepIntervalSeconds": {}
+            }
+          }
+        }
+      }
+    },
+    "user-management": {
+      "retired": {},
+      "tree": {
+        "fields": {
+          "AgentActuation": {
+            "fields": {
+              "Enabled": {}
+            }
+          },
+          "Auth": {
+            "fields": {
+              "AccessTokenTtlSeconds": {},
+              "IssuerUrl": {},
+              "RefreshTokenTtlSeconds": {},
+              "SeedClients": {
+                "elem": {
+                  "fields": {
+                    "ClientId": {},
+                    "RedirectURIs": {
+                      "elem": {}
+                    },
+                    "Scopes": {
+                      "elem": {}
+                    },
+                    "SecretHash": {}
+                  }
+                }
+              },
+              "SigningKeyMaxAgeDays": {},
+              "SigningKeyRetentionDays": {},
+              "SuperuserEmail": {}
+            }
+          },
+          "DeadLetters": {
+            "fields": {
+              "RetentionDays": {},
+              "SweepSeconds": {}
+            }
+          },
+          "RdbConfiguration": {
+            "fields": {
+              "MaxIdleConnections": {},
+              "MaxOpenConnections": {},
+              "SqlDebug": {}
+            }
+          },
+          "TenantPurge": {
+            "fields": {
+              "IntervalSeconds": {},
+              "SettleSeconds": {},
+              "TokenHoldSeconds": {}
+            }
+          },
+          "TsdbConfiguration": {
+            "fields": {
+              "MaxIdleConnections": {},
+              "MaxOpenConnections": {},
+              "SqlDebug": {}
+            }
+          }
+        }
+      }
+    }
+  }
+}
