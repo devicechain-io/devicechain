@@ -935,6 +935,14 @@ enum AgentPolicyOrigin {
     ACTUATION
 }
 
+"""(Preview: may change in a minor release.) The caller's own approvals inbox standing; grants no authority."""
+type AgentApprovalAccess {
+    """(Preview: may change in a minor release.) Whether this instance enables agent actions."""
+    instanceEnabled: Boolean!
+    """(Preview: may change in a minor release.) Whether the caller currently has approver standing for this release's alarm proposals."""
+    canApprove: Boolean!
+}
+
 """(Preview: may change in a minor release.) One published version of this tenant's agent policy. Versions are never changed or removed."""
 type AgentPolicyVersion {
     """(Preview: may change in a minor release.) The version number. It only grows: a rollback publishes a new, higher version."""
@@ -1067,6 +1075,16 @@ input AgentExecutionDecisionInput {
     proposerSid: String
     """(Preview: may change in a minor release.) The principals who have approved so far, including the caller when the caller is approving. At most 10."""
     approvers: [String!]!
+    """(Preview: may change in a minor release.) An approver counts only through the sign-in named here, which must still be open and started under the identity's current session epoch. An approver in approvers with no session here does not count. At most 10."""
+    approverSessions: [AgentApproverSessionInput!]
+}
+
+"""(Preview: may change in a minor release.) The sign-in that gave a principal's approval."""
+input AgentApproverSessionInput {
+    """(Preview: may change in a minor release.) The approver's principal."""
+    principal: String!
+    """(Preview: may change in a minor release.) The approver's sign-in."""
+    sid: String!
 }
 
 """
@@ -1074,11 +1092,13 @@ input AgentExecutionDecisionInput {
 under what approval rules, read now from this service's records.
 """
 type AgentExecutionDecision {
+    """The current actuation generation, advanced by each tenant or operator switch call."""
+    actuationGeneration: Int!
     """(Preview: may change in a minor release.) What the current policy says. Never AUTO."""
     verdict: AgentActionVerdict!
     """(Preview: may change in a minor release.) How many distinct people must approve under the current policy: 0 for REFUSE, otherwise 1 or 2."""
     requiredApprovals: Int!
-    """(Preview: may change in a minor release.) The named approvers who are approvers now: enabled members in an approver role, holding the write the action needs, with an active second factor."""
+    """(Preview: may change in a minor release.) The named approvers who are approvers now: enabled members in an approver role, holding the write the action needs, with an active second factor and a named sign-in still open under the identity's current session epoch. Approvers without a named session do not count."""
     validApprovers: [String!]!
     """(Preview: may change in a minor release.) Platform-defined codes saying why, for example PROPOSER_LOST_AUTHORITY or CLIENT_NOT_ALLOWED."""
     reasons: [String!]!
@@ -1263,6 +1283,8 @@ type Query {
     actions are in effect. Requires agent:admin.
     """
     agentPolicy: AgentPolicy!
+    """(Preview: may change in a minor release.) Answers only the caller's OWN standing, without agent:admin. Requires a person's own session; agent-origin tokens and scoped sessions are refused. Reveals no other principals or policy document."""
+    agentApprovalAccess: AgentApprovalAccess!
     """(Preview: may change in a minor release.) The published versions of this tenant's agent policy, newest first. Requires agent:admin."""
     agentPolicyVersions(
         """(Preview: may change in a minor release.) How many versions to return: 1 to 100. Defaults to 20."""

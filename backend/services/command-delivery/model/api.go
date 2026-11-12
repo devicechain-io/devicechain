@@ -240,7 +240,7 @@ type Api struct {
 	// HELD) becomes EXPIRED, one that went out unanswered becomes TIMEOUT — see
 	// expiredTerminalFor. Zero disables stamping — the pre-config
 	// behavior, used by tests that construct the Api directly; production always sets
-	// it from CommandDeliveryConfiguration (floored positive in ApplyDefaults).
+	// it from CommandDeliveryConfiguration (positive once ApplyDefaults and Validate pass).
 	DefaultCommandTTL time.Duration
 	// MaxDispatchFailures is how many failed dispatches one command may accumulate before
 	// ReleaseClaim drives it to FAILED instead of returning it to the queue.
@@ -2110,10 +2110,10 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken, responder, dispa
 	}
 	// 🔴 AN ANSWER IS EVIDENCE OF DELIVERY ON EVERY TRANSPORT, and it is recorded here once, for all
 	// of them: a device that answered had the command. COALESCE keeps the first piece of evidence,
-	// so an acknowledgement that came earlier is never replaced by the answer. A failure the
-	// reporting transport says never reached the device (ReachUnsent) or got no answer
-	// (ReachUnanswered) is not evidence of anything and stamps nothing.
-	if success || reach == ReachAnswered {
+	// so an acknowledgement that came earlier is never replaced by the answer. Success alone
+	// is not evidence: a transport reporting ReachUnanswered or ReachUnsent stamps nothing,
+	// even when it reports success. A device's own failure answer still proves delivery.
+	if reach == ReachAnswered {
 		updates["delivered_time"] = gorm.Expr("COALESCE(delivered_time, ?)", time.Now())
 		updates["delivery_evidence"] = gorm.Expr("COALESCE(delivery_evidence, ?)", EvidenceDeviceResponse)
 	}

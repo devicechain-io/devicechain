@@ -265,6 +265,8 @@ func (api *Api) CreateGeoFence(ctx context.Context, request *GeoFenceCreateReque
 // explicit null clears a nullable one, and `geometry` — a NOT NULL column — refuses a
 // null. Omitting the geometry therefore means "leave the shape alone", which is what
 // makes a rename or a metadata edit provably not growth.
+// Only named columns are written; omitted fields remain untouched even when
+// another writer changes them after the read.
 func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 	request *GeoFenceUpdateRequest) (*GeoFence, error) {
 	// 🔴 THE ROW IS LOADED BEFORE THE GEOMETRY IS CHECKED AGAINST THE TENANT'S CEILING,
@@ -330,15 +332,8 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 	// blocking. An operator sizing an outage's blast radius needs the repeating version.
 	capsAttempt := api.geoFenceCaps(ctx)
 	updated := matches[0]
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
-	if err != nil {
-		return nil, err
-	}
-	updated.Metadata = metadataJSON
-	if replaceGeometry {
-		updated.Geometry = datatypes.JSON(canonicalGeometry)
+	if !request.Name.Set && !request.Description.Set && !request.Metadata.Set && !replaceGeometry {
+		return updated, nil
 	}
 
 	var minted *GeoFenceSetVersion
@@ -426,8 +421,30 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 						governance.GeoFencePositionCeilingBecause))
 			}
 		}
-		if err := tx.Save(updated).Error; err != nil {
-			return err
+		assignments := map[string]any{}
+		if request.Name.Set {
+			assignments["name"] = request.Name.ApplyToNullString(locked[0].Name)
+		}
+		if request.Description.Set {
+			assignments["description"] = request.Description.ApplyToNullString(locked[0].Description)
+		}
+		if request.Metadata.Set {
+			metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(locked[0].Metadata)))
+			if err != nil {
+				return err
+			}
+			assignments["metadata"] = metadataJSON
+		}
+		if replaceGeometry {
+			assignments["geometry"] = datatypes.JSON(canonicalGeometry)
+		}
+		res := rdb.AdvancingFrom(tx, locked[0].UpdatedAt).Model(&locked[0]).Omit(clause.Associations).
+			Where("id = ?", locked[0].ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
 		}
 		var err error
 		minted, err = api.mintGeoFenceSetVersion(tx, time.Now(), capsAttempt)
@@ -437,7 +454,14 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 		return nil, err
 	}
 	api.announceMintedGeoFenceSet(ctx, minted)
-	return updated, nil
+	matches, err = api.GeoFencesById(ctx, []uint{updated.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // DeleteGeoFence hard-deletes a geofence and mints a new fence-set version, following

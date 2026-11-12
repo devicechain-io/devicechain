@@ -320,11 +320,15 @@ Un comando lleva `deliveredTime` y `deliveryEvidence` cuando la plataforma tiene
 
 ### Quién informa del desenlace {#who-reports-the-outcome}
 
-Solo el dispositivo puede informar de un éxito. `SUCCESSFUL` y un `FAILED` informado por el
-dispositivo son los dos desenlaces que solo el dispositivo puede producir. (La excepción es una
-escritura Sparkplug, cuyo éxito la plataforma infiere del estado informado por el nodo, lo que puede
-significar que el valor ya estaba ahí; consulta [Sparkplug B](./sparkplug.md).) Cualquier otro estado
-terminal lo escribe la plataforma por su cuenta:
+Normalmente, el dispositivo resuelve el comando: informa de `SUCCESSFUL` o de un `FAILED`
+reportado por él. Las excepciones son una escritura Sparkplug, cuyo éxito la plataforma infiere del
+estado informado por el nodo, lo que puede significar que el valor ya estaba ahí (consulta
+[Sparkplug B](./sparkplug.md)), y un canal en el que no hay una respuesta del dispositivo que esperar,
+como un [downlink LoRaWAN no confirmado](../guides/inbound-integrations.md#lorawan-downlink).
+Un downlink no confirmado se marca como `SUCCESSFUL` en cuanto el servidor de red lo pone en cola,
+sin evidencia de que el dispositivo lo haya recibido. Un downlink confirmado se resuelve a partir
+del acuse de recibo del dispositivo. Cualquier otro estado terminal lo escribe la plataforma por su
+cuenta:
 
 - `TIMEOUT`, `EXPIRED` o `CANCELLED`;
 - `FAILED` porque el transporte no puede llevar el comando en absoluto;

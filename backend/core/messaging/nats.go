@@ -312,6 +312,10 @@ type NatsManager struct {
 	reconnectMu sync.Mutex
 	onReconnect []func()
 
+	// caches own delayed evictions that must run while the connection is still live.
+	cacheMu sync.Mutex
+	caches  []*Cache
+
 	// ackWaitOverride is the test seam behind SetAckWaitForTesting. Zero in production,
 	// where ackWait() answers the AckWait constant. Read it through ackWait(), never
 	// directly: the durable's configured AckWait and the AckDeadline a capacity reader
@@ -3547,6 +3551,9 @@ func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
 			}
 		}
 	}
+	// Follow-up deletes need the live connection, so flush before draining it; ctx
+	// bounds the deletes and the join of any follow-up already running.
+	nmgr.flushCacheFollowUps(ctx)
 	if nmgr.nc != nil {
 		nmgr.drainAndWait(ctx)
 	}

@@ -81,10 +81,17 @@ type ActuationDecision struct {
 	ClientAttested bool
 }
 
+// ApproverSession binds a principal to the sign-in that gave their approval.
+type ApproverSession struct {
+	Principal string `json:"principal"`
+	Sid       string `json:"sid"`
+}
+
 // ExecutionRequest asks user-management whether a stored proposal may still go ahead, from its
 // own records and with no cache: the original client, the proposer's standing and every counted
 // approver's standing, under the current policy.
 type ExecutionRequest struct {
+	ApproverSessions  []ApproverSession
 	ProposalToken     string
 	Kind              Kind
 	Impact            string
@@ -97,9 +104,10 @@ type ExecutionRequest struct {
 
 // ExecutionDecision is the answer.
 type ExecutionDecision struct {
-	Verdict           Verdict
-	RequiredApprovals int
-	// ValidApprovers are the principals of Approvers that are still approvers now.
+	ActuationGeneration int
+	Verdict             Verdict
+	RequiredApprovals   int
+	// ValidApprovers are current approvers whose named sign-ins remain open under the current epoch.
 	ValidApprovers   []string
 	Reasons          []string
 	PolicyVersion    int
@@ -150,7 +158,7 @@ const actuationQuery = `query AgentActuationDecision($kind: AgentActionKind!, $i
 
 const executionQuery = `query AgentExecutionDecision($input: AgentExecutionDecisionInput!) {
   agentExecutionDecision(input: $input) {
-    verdict requiredApprovals validApprovers reasons policyVersion stepUpMaxAgeSeconds acceptRecoveryCodes allowSelfConfirm
+    verdict requiredApprovals validApprovers reasons policyVersion actuationGeneration stepUpMaxAgeSeconds acceptRecoveryCodes allowSelfConfirm
   }
 }`
 
@@ -190,8 +198,14 @@ func (d *CallerDecider) Actuation(ctx context.Context, req ActuationRequest) (Ac
 
 // Execution asks agentExecutionDecision.
 func (d *CallerDecider) Execution(ctx context.Context, req ExecutionRequest) (ExecutionDecision, error) {
+	// 🔴 Always send the session field, even empty: an older server must reject it.
+	sessions := req.ApproverSessions
+	if sessions == nil {
+		sessions = []ApproverSession{}
+	}
 	input := map[string]any{
-		"proposalToken": req.ProposalToken, "kind": string(req.Kind),
+		"approverSessions": sessions,
+		"proposalToken":    req.ProposalToken, "kind": string(req.Kind),
 		"targetCount": req.TargetCount, "proposerPrincipal": req.ProposerPrincipal,
 		"proposerClient": req.ProposerClient, "approvers": nonNil(req.Approvers),
 	}
@@ -203,6 +217,7 @@ func (d *CallerDecider) Execution(ctx context.Context, req ExecutionRequest) (Ex
 	}
 	var out struct {
 		D *struct {
+			ActuationGeneration *int     `json:"actuationGeneration"`
 			Verdict             string   `json:"verdict"`
 			RequiredApprovals   int      `json:"requiredApprovals"`
 			ValidApprovers      []string `json:"validApprovers"`
@@ -216,7 +231,7 @@ func (d *CallerDecider) Execution(ctx context.Context, req ExecutionRequest) (Ex
 	if err := d.post(ctx, executionQuery, map[string]any{"input": input}, &out); err != nil {
 		return ExecutionDecision{}, err
 	}
-	if out.D == nil {
+	if out.D == nil || out.D.ActuationGeneration == nil || *out.D.ActuationGeneration < 0 {
 		return ExecutionDecision{}, errors.New("actiongate: the execution decision is missing")
 	}
 	v, err := parseVerdict(out.D.Verdict, out.D.RequiredApprovals)
@@ -224,7 +239,8 @@ func (d *CallerDecider) Execution(ctx context.Context, req ExecutionRequest) (Ex
 		return ExecutionDecision{}, err
 	}
 	return ExecutionDecision{
-		Verdict: v, RequiredApprovals: out.D.RequiredApprovals, ValidApprovers: out.D.ValidApprovers,
+		ActuationGeneration: *out.D.ActuationGeneration,
+		Verdict:             v, RequiredApprovals: out.D.RequiredApprovals, ValidApprovers: out.D.ValidApprovers,
 		Reasons: out.D.Reasons, PolicyVersion: out.D.PolicyVersion,
 		StepUp: auth.StepUp{
 			MaxAge:              time.Duration(out.D.StepUpMaxAgeSeconds) * time.Second,

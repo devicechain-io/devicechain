@@ -22,6 +22,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/sourcelimit"
+	"github.com/devicechain-io/dc-user-management/admin"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
@@ -161,6 +162,48 @@ func TestClientCredentialsMintsTheAccountsToken(t *testing.T) {
 	acct, err := e.store.ServiceAccountByClientId(context.Background(), id)
 	require.NoError(t, err)
 	require.NotNil(t, acct.Secrets[0].LastUsedAt)
+}
+
+func TestLegacyOAuthClientSecretIsNotAServiceAccountCredential(t *testing.T) {
+	e := newCCEnv(t)
+	ctx := context.Background()
+	const id, secret = "dcsa_legacy", "legacy-oauth-secret"
+	hash, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.MinCost)
+	require.NoError(t, err)
+	// Upgrade fixture: insert the OAuth row directly, bypassing current registration validation.
+	require.NoError(t, e.store.CreateOAuthClient(ctx, &iam.OAuthClient{
+		ClientId: id, Enabled: true, SecretHash: string(hash),
+		RedirectURIs: []string{"https://example.invalid/callback"}, Scopes: []string{"read-only"},
+	}))
+	s := admin.NewService(e.store, 300*time.Second, 12*time.Hour, nil)
+	check := func(t *testing.T, value string) {
+		t.Helper()
+		// Guards AuthenticateClient's OAuthClientByClientId lookup: the legacy secret is
+		// valid ordinary OAuth authentication, so the grant refusal cannot be a broken fixture.
+		require.NoError(t, e.m.AuthenticateClient(ctx, id, value, true))
+		rec := e.grant(t, id, value)
+		// Guards ClientCredentials's ServiceAccountByClientId/checkServiceAccountSecret lines:
+		// a dcsa_ label must never substitute OAuth credentials for a service-account record.
+		require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+		body := decode(t, rec)
+		require.Equal(t, "invalid_client", body.Error)
+		require.Empty(t, body.AccessToken)
+		require.Empty(t, body.RefreshToken)
+	}
+	t.Run("original secret", func(t *testing.T) { check(t, secret) })
+	_, fresh, err := s.RotateOAuthClientSecret(ctx, id)
+	require.NoError(t, err)
+	t.Run("rotated secret", func(t *testing.T) { check(t, fresh) })
+	// Guards the same OAuth authentication lookup after rotation: the previous secret is invalid.
+	require.Error(t, e.m.AuthenticateClient(ctx, id, secret, true))
+	// Positive control through the identical handler: genuine service-account records still mint.
+	accountID, accountSecret := e.account(t, "acme", "legacy-control", nil, "device:read")
+	rec := e.grant(t, accountID, accountSecret)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	claims, err := e.validator.Validate(decode(t, rec).AccessToken)
+	require.NoError(t, err)
+	require.Equal(t, auth.ServiceAccountSubject("legacy-control"), claims.Username)
+	require.Equal(t, accountID, claims.ClientId)
 }
 
 // Every authentication failure is the same invalid_client after one compare — against the

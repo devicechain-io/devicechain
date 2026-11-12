@@ -9,6 +9,7 @@ import (
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Create a new asset type.
@@ -64,10 +65,8 @@ func (api *Api) CreateAssetType(ctx context.Context, request *AssetTypeCreateReq
 // type in the argument and another in the payload silently updated the second and
 // got a 200 back for it.
 //
-// Each assignment folds the field's three states onto the stored value: absent
-// keeps it, null clears it, a value sets it. Reading `found.X` as the "current"
-// argument is what makes an omitted field a no-op, so these must stay assignments
-// FROM the loaded record rather than from the request alone.
+// Only named columns are written; omitted fields remain untouched even when
+// another writer changes them after the read. Null clears a nullable field.
 func (api *Api) UpdateAssetType(ctx context.Context, token string,
 	request *AssetTypeUpdateRequest) (*AssetType, error) {
 	matches, err := api.AssetTypesByToken(ctx, []string{token})
@@ -79,21 +78,42 @@ func (api *Api) UpdateAssetType(ctx context.Context, token string,
 	}
 
 	found := matches[0]
-	found.Name = request.Name.ApplyToNullString(found.Name)
-	found.Description = request.Description.ApplyToNullString(found.Description)
-	found.ImageUrl = request.ImageUrl.ApplyToNullString(found.ImageUrl)
-	found.Icon = request.Icon.ApplyToNullString(found.Icon)
-	found.BackgroundColor = request.BackgroundColor.ApplyToNullString(found.BackgroundColor)
-	found.ForegroundColor = request.ForegroundColor.ApplyToNullString(found.ForegroundColor)
-	found.BorderColor = request.BorderColor.ApplyToNullString(found.BorderColor)
+	assignments := map[string]any{}
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(found.Name)
+	}
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(found.Description)
+	}
+	if request.ImageUrl.Set {
+		assignments["image_url"] = request.ImageUrl.ApplyToNullString(found.ImageUrl)
+	}
+	if request.Icon.Set {
+		assignments["icon"] = request.Icon.ApplyToNullString(found.Icon)
+	}
+	if request.BackgroundColor.Set {
+		assignments["background_color"] = request.BackgroundColor.ApplyToNullString(found.BackgroundColor)
+	}
+	if request.ForegroundColor.Set {
+		assignments["foreground_color"] = request.ForegroundColor.ApplyToNullString(found.ForegroundColor)
+	}
+	if request.BorderColor.Set {
+		assignments["border_color"] = request.BorderColor.ApplyToNullString(found.BorderColor)
+	}
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
 	if err != nil {
 		return nil, err
 	}
-	found.Metadata = metadataJSON
-	found.SemanticTypes, err = api.semanticTypesOnUpdate(ctx, request.SemanticTypes, found.SemanticTypes)
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
+	semanticTypes, err := api.semanticTypesOnUpdate(ctx, request.SemanticTypes, found.SemanticTypes)
 	if err != nil {
 		return nil, err
+	}
+
+	if request.SemanticTypes.Set {
+		assignments["semantic_types"] = semanticTypes
 	}
 
 	// MetadataStr is the generic *datatypes.JSON -> *string projection; it is named for
@@ -103,19 +123,35 @@ func (api *Api) UpdateAssetType(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
-	found.PropertySchema = propertySchema
-
-	// Omit active_version: a draft edit must never write the version pointer back.
-	// `found` was loaded before this Save, so writing it whole would let an edit racing
-	// a concurrent PublishAssetType/RollbackAssetType silently revert the active
-	// pointer — the version every asset of this type is validated against — to its
-	// stale value. This is the third instance of the identical latent bug, after
-	// DeviceProfile and EntityGroup; the pointer is moved by publish/rollback only.
-	result := api.RDB.DB(ctx).Omit("ActiveVersion").Save(found)
-	if result.Error != nil {
-		return nil, result.Error
+	if request.PropertySchema.Set {
+		assignments["property_schema"] = propertySchema
 	}
-	return found, nil
+
+	// Publish/rollback own active_version; draft edits write only named columns.
+	if len(assignments) == 0 {
+		return found, nil
+	}
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		res := rdb.AdvancingFrom(tx, found.UpdatedAt).Model(found).Omit(clause.Associations).
+			Where("id = ?", found.ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	matches, err = api.AssetTypesById(ctx, []uint{found.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // Get asset types by id.
@@ -173,7 +209,7 @@ func (api *Api) CreateAsset(ctx context.Context, request *AssetCreateRequest) (*
 	// before anything is written, so a create either stores a conformant asset or
 	// stores nothing. A type declaring a required property therefore cannot have an
 	// asset created under it without that property.
-	if err := api.validateAssetProperties(ctx, matches[0], propertiesJSON); err != nil {
+	if err := api.validateAssetProperties(api.RDB.DB(ctx), matches[0], propertiesJSON); err != nil {
 		return nil, err
 	}
 	created := &Asset{
@@ -211,85 +247,96 @@ func (api *Api) UpdateAsset(ctx context.Context, token string, request *AssetUpd
 	}
 
 	updated := matches[0]
-
-	// The type hop resolves BEFORE anything is written, so an unknown asset type
-	// refuses the WHOLE update rather than applying the fields it liked first. The
-	// nil guard is not decoration: the preload comes back nil for a dangling FK, and
-	// the comparison this replaces dereferenced it unconditionally.
-	currentTypeToken := ""
-	if updated.AssetType != nil {
-		currentTypeToken = updated.AssetType.Token
-	}
-	retypeTo, retype, err := resolveRequiredTypeRef(request.AssetTypeToken, currentTypeToken, "assetTypeToken")
+	assignments := make(map[string]any)
+	retypeTo, retype, err := resolveRequiredTypeRef(request.AssetTypeToken, "", "assetTypeToken")
 	if err != nil {
 		return nil, err
 	}
-	if retype {
-		types, err := api.AssetTypesByToken(ctx, []string{retypeTo})
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(updated.Name)
+	}
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(updated.Description)
+	}
+	if request.Metadata.Set {
+		metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.Value)
 		if err != nil {
 			return nil, err
 		}
-		if len(types) == 0 {
-			return nil, gorm.ErrRecordNotFound
-		}
-		updated.AssetType = types[0]
-		// Belt-and-braces: gorm's Save syncs a belongs-to FK from the association it is
-		// given, so this is not load-bearing the way the device version is (that one is
-		// READ back by the post-commit roster resolve). It is set anyway so the in-memory
-		// value the caller is handed back agrees with the row.
-		updated.AssetTypeId = types[0].ID
+		assignments["metadata"] = metadataJSON
 	}
-
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
-	if err != nil {
-		return nil, err
-	}
-	updated.Metadata = metadataJSON
-
-	propertiesJSON, err := rdb.JSONInputOf("properties",
-		request.Properties.ApplyTo(dcgraphql.MetadataStr(updated.Properties)))
-	if err != nil {
-		return nil, err
-	}
-	propertiesJSON = jsonNullToNil(propertiesJSON)
-	// Validate the RESULTING pair whenever either half MOVES — the document was sent,
-	// or the type was re-pointed — and not otherwise.
-	//
-	// 🔴 THE `|| retype` IS THE POINT, and so is the absence of a third case. A retype
-	// re-points the contract while leaving the document alone, so checking only what
-	// the caller mentioned would let it strand an asset carrying properties its new
-	// type never declared. But an update that moves NEITHER half must not run the gate
-	// at all, and an earlier version of this ran it unconditionally.
-	//
-	// That was a trap rather than a stricter rule. Conformance is enforced when a
-	// document is WRITTEN, against the version active at that moment; a rollback then
-	// deliberately leaves stored documents that no longer satisfy the contract, which
-	// RollbackAssetType says in as many words. Re-checking on every write turned that
-	// documented state into an embargo: after rolling back from a contract that added
-	// `serial` to one declaring only `vendor`, RENAMING an asset that had filled
-	// `serial` was refused with `unknown property "serial"`. Worse, once assets
-	// diverge — some filled the new property, some did not — NO version unblocks
-	// everyone, so whichever the operator rolls to strands the other set on any write.
-	//
-	// And it bought no invariant for that cost. The stored non-conformance exists
-	// either way; refusing an unrelated rename does not remove it, it only makes the
-	// asset uneditable. Required-ness is still honestly enforced where it means
-	// something: at document-write time, where an absent document is validated as `{}`
-	// and a declared default does not satisfy a required field.
-	if request.Properties.Set || retype {
-		if err := api.validateAssetProperties(ctx, updated.AssetType, propertiesJSON); err != nil {
+	propertiesJSON := updated.Properties
+	if request.Properties.Set {
+		propertiesJSON, err = rdb.JSONInputOf("properties", request.Properties.Value)
+		if err != nil {
 			return nil, err
 		}
+		propertiesJSON = jsonNullToNil(propertiesJSON)
+		assignments["properties"] = propertiesJSON
 	}
-	updated.Properties = propertiesJSON
+	if len(assignments) == 0 && !retype {
+		return updated, nil
+	}
 
-	result := api.RDB.DB(ctx).Save(updated)
-	if result.Error != nil {
-		return nil, result.Error
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if request.Properties.Set || retype {
+			// Lock and reread the effective pair: either omitted half may have
+			// changed since the initial lookup. Never assign that retained half.
+			var current Asset
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				First(&current, updated.ID).Error; err != nil {
+				return err
+			}
+			if !request.Properties.Set {
+				propertiesJSON = current.Properties
+			}
+			typeQuery := tx.Clauses(clause.Locking{Strength: "SHARE"})
+			if retype {
+				typeQuery = typeQuery.Where("token = ?", retypeTo)
+			} else {
+				typeQuery = typeQuery.Where("id = ?", current.AssetTypeId)
+			}
+			// An omitted, dangling type retains the existing absent-document
+			// exemption. An explicitly named unknown type always refuses.
+			types := make([]*AssetType, 0)
+			if err := typeQuery.Find(&types).Error; err != nil {
+				return err
+			}
+			var effectiveType *AssetType
+			if len(types) != 0 {
+				effectiveType = types[0]
+			} else if retype {
+				return gorm.ErrRecordNotFound
+			}
+			if retype {
+				assignments["asset_type_id"] = effectiveType.ID
+			}
+			if err := api.validateAssetProperties(tx, effectiveType, propertiesJSON); err != nil {
+				return err
+			}
+		}
+		// Unrelated edits deliberately skip property validation: rollback can
+		// leave historical documents nonconforming, without making them uneditable.
+		result := tx.Model(updated).Omit(clause.Associations).Updates(assignments)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return updated, nil
+	reloaded, err := api.AssetsById(ctx, []uint{updated.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(reloaded) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return reloaded[0], nil
 }
 
 // Get assets by id.

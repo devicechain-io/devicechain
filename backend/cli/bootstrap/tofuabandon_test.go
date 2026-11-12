@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -50,28 +51,56 @@ func TestAnInterruptedCommandThatNeverReturnsIsAbandoned(t *testing.T) {
 
 // The other half of the interrupted case, and the one a naive watchdog gets wrong: an
 // interrupt normally ends with tofu stopping gracefully and RETURNING, and that result
-// must reach the caller unaltered. Nothing here sleeps — the command is made to return
-// on the cancellation itself, which is exactly the instant the two racers are closest.
+// must reach the caller unaltered. An hour budget is the production shape: the timer
+// is armed and never fires. Zero is the boundary where the timer has already fired
+// when the result is looked for, which is meaningful only with the result in hand.
+// synctest.Wait inside Done guarantees that the result has been sent before the
+// cancellation is observed. Without it, the zero budget case measures the scheduler:
+// a result still being computed when a zero budget expires is correctly abandoned.
 func TestAnInterruptedCommandThatFinishesReturnsItsOwnResult(t *testing.T) {
 	stopped := errors.New("tofu stopped gracefully and wrote its state")
 
-	// Both budgets, because they fail differently. An hour is the production shape: the
-	// timer is armed and never fires. Zero is the boundary: the timer has ALREADY fired
-	// by the time the result is looked for, so a result in hand has to beat an expired
-	// budget rather than lose a coin toss to it.
-	for _, budget := range []time.Duration{time.Hour, 0} {
-		ctx, cancel := context.WithCancel(context.Background())
-		err := runUntilAbandoned(ctx, budget, func() error {
-			cancel()
-			<-ctx.Done()
-			return stopped
-		})
-		if !errors.Is(err, stopped) {
-			t.Errorf("budget %s: a cancelled command that returned its own result was reported "+
-				"as abandoned instead: %v", budget, err)
-		}
+	budget := time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	err := runUntilAbandoned(ctx, budget, func() error {
 		cancel()
+		<-ctx.Done()
+		return stopped
+	})
+	if !errors.Is(err, stopped) {
+		t.Errorf("budget %s: a cancelled command that returned its own result was reported "+
+			"as abandoned instead: %v", budget, err)
 	}
+	cancel()
+
+	synctest.Test(t, func(t *testing.T) {
+		// Repetition exercises the ready select choices, including the expired timer
+		// path where the inner check must still return the result already in hand.
+		for range 200 {
+			done := make(chan struct{})
+			close(done)
+			ctx := resultInHandContext{Context: context.Background(), done: done}
+			err := runUntilAbandoned(ctx, 0, func() error { return stopped })
+			if !errors.Is(err, stopped) {
+				t.Errorf("budget 0s: a cancelled command that returned its own result was reported "+
+					"as abandoned instead: %v", err)
+			}
+		}
+	})
+}
+
+type resultInHandContext struct {
+	context.Context
+	done <-chan struct{}
+}
+
+func (ctx resultInHandContext) Done() <-chan struct{} {
+	synctest.Wait()
+	return ctx.done
+}
+
+func (ctx resultInHandContext) Err() error {
+	return context.Canceled
 }
 
 // 🔴 A LIVE RUN IS NOT ON A CLOCK. The whole reason the timer is armed only after the

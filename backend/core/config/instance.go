@@ -362,7 +362,7 @@ func (c NatsFetchConfiguration) ValidateAgainst(ackWait time.Duration) error {
 		return err
 	}
 	if limit := ackWait / fetchAheadBudgetDivisor; c.AheadHoldBudgetMillis > 0 &&
-		time.Duration(c.AheadHoldBudgetMillis)*time.Millisecond > limit {
+		int64(c.AheadHoldBudgetMillis) > limit.Milliseconds() {
 		return fmt.Errorf("infrastructure.nats.fetch.aheadHoldBudgetMillis is %d, which is more than a "+
 			"tenth of the %s acknowledgement window (%d ms at most). A batch fetched ahead waits about "+
 			"one budget before it is handed out, and that wait comes out of the window the handler "+
@@ -1112,6 +1112,10 @@ const (
 // is theirs to choose. The message names both keys and both remedies, because from
 // inside the process there is no way to tell which of the two was the typo.
 func (c ShutdownConfiguration) validate() error {
+	if c.TerminationGracePeriodSeconds < 0 {
+		return fmt.Errorf("infrastructure.shutdown.terminationGracePeriodSeconds is %d; must not be negative",
+			c.TerminationGracePeriodSeconds)
+	}
 	if c.DrainSeconds == nil {
 		// Absent, and ApplyDefaults has not run yet. Judging it here would report on a
 		// key the operator never wrote.
@@ -1123,7 +1127,7 @@ func (c ShutdownConfiguration) validate() error {
 			"negative. Use 0 to skip the drain entirely, or a positive number of seconds", drain)
 	}
 	grace := c.TerminationGracePeriodSeconds
-	if grace <= 0 {
+	if grace == 0 {
 		// Same reasoning as above: not defaulted yet, so there is nothing to compare against.
 		return nil
 	}
@@ -1617,17 +1621,16 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	if c.Infrastructure.Blob.Backend == "" {
 		c.Infrastructure.Blob.Backend = DefaultBlobBackend
 	}
-	// Default the graceful-shutdown budget. Unlike the ceilings above this one does
-	// NOT coerce a value it dislikes: only ABSENCE is defaulted, because 0 is a
-	// supported drain window and a negative one is refused in Validate rather than
-	// quietly rewritten. The grace period is defaulted to Kubernetes' own default,
-	// so an omitted key is judged against the budget the pod will really get.
+	// Default the graceful-shutdown budget. Only an absent drain window is
+	// defaulted: 0 is supported and a negative value is refused in Validate
+	// rather than quietly rewritten. An omitted or zero grace period takes Kubernetes' own
+	// default; a negative grace period is preserved for Validate to refuse.
 	shutdown := &c.Infrastructure.Shutdown
 	if shutdown.DrainSeconds == nil {
 		d := DefaultShutdownDrainSeconds
 		shutdown.DrainSeconds = &d
 	}
-	if shutdown.TerminationGracePeriodSeconds <= 0 {
+	if shutdown.TerminationGracePeriodSeconds == 0 {
 		shutdown.TerminationGracePeriodSeconds = DefaultTerminationGracePeriodSeconds
 	}
 	// Only ABSENCE is defaulted. A value that is present but is not a level is
@@ -1655,6 +1658,29 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 // against. A misrendered config Secret then surfaces at startup rather than as a
 // confusing downstream connection failure.
 func (c *InstanceConfiguration) Validate() error {
+	checkPort := func(name string, p uint32) error {
+		if p > 65535 {
+			return fmt.Errorf("%s is %d; must not exceed 65535", name, p)
+		}
+		return nil
+	}
+	for _, endpoint := range []struct {
+		name string
+		port uint32
+	}{
+		{"infrastructure.nats.port", c.Infrastructure.Nats.Port},
+		{"infrastructure.userManagement.port", c.Infrastructure.UserManagement.Port},
+		{"infrastructure.userManagement.internalPort", c.Infrastructure.UserManagement.InternalPort},
+		{"infrastructure.deviceManagement.port", c.Infrastructure.DeviceManagement.Port},
+		{"infrastructure.eventProcessing.port", c.Infrastructure.EventProcessing.Port},
+		{"infrastructure.commandDelivery.port", c.Infrastructure.CommandDelivery.Port},
+		{"infrastructure.deviceState.port", c.Infrastructure.DeviceState.Port},
+		{"infrastructure.aiInference.port", c.Infrastructure.AiInference.Port},
+	} {
+		if err := checkPort(endpoint.name, endpoint.port); err != nil {
+			return err
+		}
+	}
 	if err := c.Infrastructure.Tracing.Validate(); err != nil {
 		return err
 	}
