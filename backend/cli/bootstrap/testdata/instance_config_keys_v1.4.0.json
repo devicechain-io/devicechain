@@ -44,6 +44,9 @@
             "fields": {
               "AllowedDestinations": {
                 "elem": {}
+              },
+              "DevAllowedDestinations": {
+                "elem": {}
               }
             }
           },
@@ -123,6 +126,7 @@
               "Hostname": {},
               "KvCacheMaxBytes": {},
               "KvStateMaxBytes": {},
+              "MqttDeviceUplinks": {},
               "MqttFailClosed": {},
               "MqttQoS2StoreMaxBytes": {},
               "MqttStoreMaxBytes": {},

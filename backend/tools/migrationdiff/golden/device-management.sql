@@ -47,6 +47,10 @@ ALTER SEQUENCE "device-management".profile_decoder_healths_id_seq OWNED BY "devi
 ALTER SEQUENCE "device-management".profile_decoder_samples_id_seq OWNED BY "device-management".profile_decoder_samples.id;
 ALTER SEQUENCE "device-management".provisioning_profiles_id_seq OWNED BY "device-management".provisioning_profiles.id;
 ALTER SEQUENCE "device-management".semantic_contexts_id_seq OWNED BY "device-management".semantic_contexts.id;
+ALTER TABLE ONLY "device-management".agent_actuation_fences
+ ADD CONSTRAINT agent_actuation_fences_pkey PRIMARY KEY (tenant_id);
+ALTER TABLE ONLY "device-management".agent_effect_outboxes
+ ADD CONSTRAINT agent_effect_outboxes_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".agent_proposals
  ADD CONSTRAINT agent_proposals_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".agent_proposals ALTER COLUMN id SET DEFAULT nextval('"device-management".agent_proposals_id_seq'::regclass);
@@ -268,6 +272,7 @@ ALTER TABLE ONLY "device-management".purged_tenants
 ALTER TABLE ONLY "device-management".semantic_contexts
  ADD CONSTRAINT semantic_contexts_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".semantic_contexts ALTER COLUMN id SET DEFAULT nextval('"device-management".semantic_contexts_id_seq'::regclass);
+CREATE INDEX "idx_device-management_agent_effect_outboxes_created_at" ON "device-management".agent_effect_outboxes USING btree (created_at);
 CREATE INDEX "idx_device-management_agent_proposals_deleted_at" ON "device-management".agent_proposals USING btree (deleted_at);
 CREATE INDEX "idx_device-management_agent_proposals_expires_at" ON "device-management".agent_proposals USING btree (expires_at);
 CREATE INDEX "idx_device-management_agent_proposals_proposer_client" ON "device-management".agent_proposals USING btree (proposer_client);
@@ -725,6 +730,23 @@ CREATE SEQUENCE "device-management".semantic_contexts_id_seq
  NO MINVALUE
  NO MAXVALUE
  CACHE 1;
+CREATE TABLE "device-management".agent_actuation_fences (
+ tenant_id character varying(128) NOT NULL,
+ enabled boolean NOT NULL,
+ killed_at_generation bigint NOT NULL,
+ epoch bigint NOT NULL,
+ updated_at timestamp with time zone NOT NULL
+);
+CREATE TABLE "device-management".agent_effect_outboxes (
+ id character varying(32) NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ proposal_token character varying(128) NOT NULL,
+ kind character varying(32) NOT NULL,
+ payload jsonb NOT NULL,
+ created_at timestamp with time zone NOT NULL,
+ attempts bigint NOT NULL,
+ last_error text
+);
 CREATE TABLE "device-management".agent_proposals (
  id bigint NOT NULL,
  created_at timestamp with time zone,

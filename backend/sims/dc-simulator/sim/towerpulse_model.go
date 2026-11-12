@@ -174,7 +174,8 @@ type towerpulseMeter struct {
 type towerpulseModel struct {
 	mu sync.Mutex
 
-	simT float64
+	simT    float64
+	episode string
 
 	zones    []*towerpulseZone
 	ahus     []*towerpulseAHU
@@ -255,7 +256,9 @@ func (m *towerpulseModel) advanceTo(elapsed float64) {
 // stepLocked advances one sub-step. scripted says whether the presenter script applies.
 func (m *towerpulseModel) stepLocked(scripted bool) {
 	t := m.simT
-	if scripted {
+	if m.episode == EpisodeNightShift {
+		m.applyNightShift(t + towerpulseSubstepSeconds)
+	} else if scripted {
 		m.applyScript(t)
 	}
 	dt := towerpulseSubstepSeconds
@@ -379,7 +382,7 @@ func (m *towerpulseModel) applyScript(t float64) {
 func (m *towerpulseModel) filterPressureLocked(a *towerpulseAHU) float64 {
 	base := towerpulseFilterNominalPa + towerpulseFilterSpreadPa*stableUnit(a.seed, 4) +
 		towerpulseFilterNoiseWidth*math.Sin(m.simT/97+2*math.Pi*stableUnit(a.seed, 5))
-	if a.token != TowerpulseClogAHU || !m.script {
+	if a.token != TowerpulseClogAHU || !m.script || m.episode == EpisodeNightShift {
 		return base
 	}
 	switch {
