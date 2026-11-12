@@ -188,7 +188,14 @@ func assertResponsePrev(t *testing.T, api *model.Api, tc responseCasePrev) {
 	if !row.RespondedTime.Valid {
 		t.Errorf("%s response time absent", prevRelease)
 	}
-	if tc.success {
+	if tc.success && tc.name == "post_queued" {
+		// An unconfirmed downlink the network server only queued: the device never answered,
+		// so it settles SUCCESSFUL with no delivery evidence (the previous release's wire shape
+		// is mapped to UNANSWERED by the current command-delivery).
+		if row.DeliveredTime.Valid || row.DeliveryEvidence.Valid {
+			t.Errorf("%s queued unconfirmed downlink stamped delivery evidence=%v/%v; want none", prevRelease, row.DeliveredTime, row.DeliveryEvidence)
+		}
+	} else if tc.success {
 		if !row.DeliveredTime.Valid || !row.DeliveryEvidence.Valid || row.DeliveryEvidence.String != model.EvidenceDeviceResponse {
 			t.Errorf("%s success delivery evidence=%v/%v; want DEVICE_RESPONSE under current rules", prevRelease, row.DeliveredTime, row.DeliveryEvidence)
 		}
