@@ -1036,6 +1036,82 @@
                     "description": "user-management: how many days a rotated-out signing key stays published so the tokens it signed keep verifying. 0 or absent takes the service default (8); a negative value, or one above 106751, is refused here and by the service at startup."
                   }
                 }
+              },
+              "updates": {
+                "type": "object",
+                "description": "update-management: the over-the-air update settings. Unset settings take the service defaults.",
+                "properties": {
+                  "sweepIntervalSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9223372036,
+                    "description": "update-management: how often, in seconds, the deadline sweep looks for stalled update attempts. 0 or absent takes the service default; a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup."
+                  },
+                  "deadlines": {
+                    "type": "object",
+                    "description": "update-management: how long, in seconds, each phase of an update may go without a device report.",
+                    "properties": {
+                      "acknowledgeSeconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036,
+                        "description": "update-management: how long, in seconds, QUEUED and INITIATED attempts may wait for an offline device to return. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup."
+                      },
+                      "downloadSeconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036,
+                        "description": "update-management: how long, in seconds, DOWNLOADING and DOWNLOADED attempts may go since the last progress report. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup."
+                      },
+                      "verifySeconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036,
+                        "description": "update-management: how long, in seconds, VERIFIED attempts may go without a device report. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup."
+                      },
+                      "installSeconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036,
+                        "description": "update-management: how long, in seconds, UPDATING attempts may go without a device report; silence becomes UNKNOWN rather than failure. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup."
+                      },
+                      "confirmSeconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036,
+                        "description": "update-management: how long, in seconds, REBOOTING attempts may go without a device report; silence becomes UNKNOWN rather than failure. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup."
+                      }
+                    }
+                  }
+                }
+              },
+              "deliverySeconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036,
+                "description": "notification-management: how long, in seconds, a single channel delivery attempt (one SMTP send or webhook POST) may take. 0 or absent takes the service default; a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup."
+              },
+              "stateRetentionSeconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036,
+                "description": "notification-management: how long, in seconds, resolved per-alarm notification state is kept before the retention sweep prunes it. 0 or absent takes the service default; a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup."
+              },
+              "attemptRetentionSeconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036,
+                "description": "notification-management: how long, in seconds, a delivery-ledger row recording one channel delivery attempt is kept before the retention sweep deletes it. 0 or absent takes the service default; a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup."
+              },
+              "retentionSweepSeconds": {
+                "type": "integer",
+                "maximum": 9223372036,
+                "description": "notification-management: how often, in seconds, the retention sweep runs. 0 or absent takes the service default; a negative value turns the sweep off. A value above 9223372036 (the longest a duration can hold) is refused here and by the service at startup."
+              },
+              "escalationSweepSeconds": {
+                "type": "integer",
+                "maximum": 9223372036,
+                "description": "notification-management: how often, in seconds, the escalation scheduler checks open alarms for due re-notification. 0 or absent takes the service default; a negative value turns the sweep off, so alarms page only on event transitions. A value above 9223372036 (the longest a duration can hold) is refused here and by the service at startup."
               }
             }
           },
