@@ -526,9 +526,15 @@ func TestReplicationMetricsReportBrokerStateNotConfig(t *testing.T) {
 
 	// The sampler must not blow up on the two tracked sets, and buckets must be
 	// sampled for replication.
-	if _, err := nmgr.KeyValueStore("leases", "test_leases", time.Hour); err != nil {
-		t.Fatalf("KeyValueStore: %v", err)
-	}
+	// The first create of a replicated bucket places a new R3 group and meets the
+	// same settling window every other create on these clusters is retried through.
+	// A refusal outside that window still fails at once. KeyValueStore binds an
+	// existing bucket, so if the server completed a create after the client stopped
+	// waiting, a retry finds it rather than failing.
+	retryWhileGroupSettles(t, "create the bucket", func() error {
+		_, err := nmgr.KeyValueStore("leases", "test_leases", time.Hour)
+		return err
+	})
 	buckets := nmgr.trackedBuckets()
 	if len(buckets) != 1 || buckets[0] != kvStreamPrefix+"test_leases" {
 		t.Fatalf("trackedBuckets = %v, want exactly the leases bucket's backing stream", buckets)
