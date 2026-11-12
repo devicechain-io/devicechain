@@ -80,6 +80,7 @@ func TestAnUnconfirmedDownlinkIsAnsweredAtQueueAcceptanceAndStoresNothing(t *tes
 	require.Zero(t, pend.size(), "an unconfirmed downlink has no acknowledgement to wait for")
 	require.Len(t, r.resp.envs, 1)
 	require.True(t, r.resp.envs[0].Success)
+	require.Equal(t, cmddownlink.ReachUnanswered, r.resp.envs[0].Reach)
 	require.JSONEq(t, `{"stage":"queued","queueItemId":"q-1"}`, *r.resp.envs[0].Payload)
 	require.Equal(t, 1, r.m.get(ResultQueued))
 	require.Zero(t, r.m.get(ResultQueuedConfirmed))
