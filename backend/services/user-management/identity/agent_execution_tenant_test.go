@@ -30,7 +30,8 @@ func tenantServiceAccountRequest(t *testing.T, x *execEnv) ExecutionRequest {
 	req := ExecutionRequest{
 		Kind: agentpolicy.KindAlarmClear, TargetCount: 1,
 		ProposerPrincipal: auth.ServiceAccountSubject(acct.Token), ProposerClient: acct.ClientId,
-		Approvers: []string{"boss@example.invalid"},
+		Approvers:        []string{"boss@example.invalid"},
+		ApproverSessions: []ApproverSession{{Principal: "boss@example.invalid", Sid: x.approverSids["boss@example.invalid"]}},
 	}
 	reason, err := x.m.serviceAccountProposerStanding(ctx, agentTenant, req, auth.ScopeActAlarms, string(auth.AlarmPropose))
 	require.NoError(t, err)

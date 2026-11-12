@@ -101,7 +101,7 @@ type Claims struct {
 	// already issued keeps working there until it expires.
 	SessionEpoch SessionEpoch `json:"sep,omitempty"`
 	// SessionID (the "sid" claim) names the server-side record of the sign-in this token
-	// descends from. It rides the same two tiers as SessionEpoch: identity tokens and
+	// descends from. It rides identity tokens and
 	// refresh tokens (tenant and OAuth). Every refresh chain minted from one sign-in -
 	// the first tenant, each tenant switched to, each rotation - carries the sign-in's
 	// sid, so ending that record (logout) ends them all at once, where the epoch ends
@@ -109,10 +109,11 @@ type Claims struct {
 	// service looks it up, whenever one of those tokens is exchanged. A token without it
 	// is refused rather than treated as an older kind.
 	//
-	// OAuth ACCESS tokens carry it too (WithSessionID), so the audit journal and a gate can
-	// name the grant a data-plane call descends from. There it is a CORRELATION, not a
-	// check: nothing looks it up on the data plane, and an access token without one (minted
-	// before the claim existed) is read as "session unknown", never as a match (SameSession).
+	// OAuth and console tenant ACCESS tokens carry it too (WithSessionID), so the audit
+	// journal and a gate can name the sign-in a data-plane call descends from. Ordinary
+	// calls use it for correlation; approval decisions validate the named sign-in. An
+	// access token minted before its binding existed reads as "session unknown", never
+	// as a match (SameSession).
 	SessionID SessionID `json:"sid,omitempty"`
 	// Amr (the "amr" claim, RFC 8176) records how the sign-in this token descends from
 	// authenticated: ["pwd"], ["pwd","otp","mfa"] or ["pwd","mfa"] (a recovery code). It

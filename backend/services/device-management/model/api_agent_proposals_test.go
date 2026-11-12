@@ -28,6 +28,7 @@ import (
 // what the tenant's policy answered.
 
 type fakeDecider struct {
+	liveSids    map[string]bool
 	act         actiongate.ActuationDecision
 	actErr      error
 	exec        actiongate.ExecutionDecision
@@ -47,10 +48,23 @@ func (f *fakeDecider) Execution(ctx context.Context, req actiongate.ExecutionReq
 	f.execReqs = append(f.execReqs, req)
 	bearer, _ := auth.BearerFromContext(ctx)
 	f.execBearers = append(f.execBearers, bearer)
+	out, err := f.exec, f.execErr
 	if len(f.execReqs) == 2 && f.second != nil {
-		return f.second()
+		out, err = f.second()
 	}
-	return f.exec, f.execErr
+	if f.liveSids != nil {
+		valid := out.ValidApprovers
+		out.ValidApprovers = []string{}
+		for _, p := range valid {
+			for _, s := range req.ApproverSessions {
+				if s.Principal == p && f.liveSids[s.Sid] {
+					out.ValidApprovers = append(out.ValidApprovers, p)
+					break
+				}
+			}
+		}
+	}
+	return out, err
 }
 
 func approveOne() actiongate.ActuationDecision {
@@ -111,10 +125,10 @@ func clearReq(id string, tokens ...string) AlarmProposalRequest {
 
 // approver is a person with a TOTP sign-in verified at mfa.
 func approver(name string, mfa time.Time) actiongate.Approver {
-	c := &auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: rigTenant, Username: name,
+	c := &auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: rigTenant, Username: name, SessionID: auth.SessionID(name + "-sid"),
 		Authorities: []string{string(auth.AlarmWrite)}, Amr: auth.AmrPasswordOTP(), MfaTime: jwt.NewNumericDate(mfa)}
 	at := mfa
-	return actiongate.Approver{Principal: name, Amr: c.Amr, MfaTime: &at, Claims: c}
+	return actiongate.Approver{Sid: name + "-sid", Principal: name, Amr: c.Amr, MfaTime: &at, Claims: c}
 }
 
 func (r *proposalRig) stored(t *testing.T, token string) *AgentProposal {
@@ -323,7 +337,7 @@ func TestRevokedProposerProposalRefusedAtExecution(t *testing.T) {
 	got := r.decider.execReqs[0]
 	require.Equal(t, actiongate.ExecutionRequest{ProposalToken: p.Token, Kind: actiongate.KindAlarmClear, Impact: "NORMAL",
 		TargetCount: 1, ProposerPrincipal: "ana@example.invalid", ProposerClient: "agent-desktop", ProposerSid: "sid-1",
-		Approvers: []string{"boss"}}, got)
+		Approvers: []string{"boss"}, ApproverSessions: []actiongate.ApproverSession{{Principal: "boss", Sid: "boss-sid"}}}, got)
 }
 
 // A policy tightened to two approvers after the proposal keeps it pending: the first approval is

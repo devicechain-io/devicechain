@@ -246,7 +246,7 @@ func TestARenameRacingADisableDoesNotReEnableTheDevice(t *testing.T) {
 	db := f.api.RDB.Database
 	armed := true
 	if err := db.Callback().Update().Before("gorm:update").Register("test:racing-disable", func(d *gorm.DB) {
-		row, ok := d.Statement.Dest.(*Device)
+		row, ok := d.Statement.Model.(*Device)
 		if !armed || !ok || row.Token != "dev" {
 			return
 		}

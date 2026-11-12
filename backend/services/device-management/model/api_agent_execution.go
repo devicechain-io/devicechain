@@ -5,11 +5,15 @@ package model
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"slices"
 	"sort"
+	"syscall"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/actiongate"
@@ -45,6 +49,16 @@ func agentExecutionLockError(err error) error {
 	return err
 }
 
+// connectionLost recognizes transport loss, including pgx's closed-connection sentinel.
+func connectionLost(err error) bool {
+	for _, cause := range []error{driver.ErrBadConn, io.EOF, io.ErrUnexpectedEOF, net.ErrClosed, syscall.ECONNRESET, syscall.EPIPE, pgconn.ErrConnClosed} {
+		if errors.Is(err, cause) {
+			return true
+		}
+	}
+	return false
+}
+
 var errRefusedAtCommitPoint = errors.New("agent proposal refused at commit point")
 
 // executeAlarmProposal consumes the final approval and its effects atomically.
@@ -56,6 +70,7 @@ func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver action
 	attrCtx := rdb.WithAgentAttribution(ctx, rdb.AgentAttribution{ClientID: p.ProposerClient, OnBehalfOf: p.ProposerSub, Proposal: p.Token})
 	reenableGeneration := 0
 	var reasons []string
+	decisionAsked := false
 	err := api.RDB.DB(attrCtx).Transaction(func(tx *gorm.DB) error {
 		if err := setAgentExecutionTimeouts(tx); err != nil {
 			return err
@@ -205,9 +220,10 @@ func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver action
 		fresh, err := actiongate.CommitPoint(ctx, tx, func(dctx context.Context) (actiongate.ExecutionDecision, error) {
 			return api.AgentDecider.Execution(dctx, actiongate.ExecutionRequest{
 				ProposalToken: p.Token, Kind: actiongate.Kind(p.Kind), Impact: p.Impact, TargetCount: p.TargetCount,
-				ProposerPrincipal: p.ProposerSub, ProposerClient: p.ProposerClient, ProposerSid: sid, Approvers: actiongate.Principals(next),
+				ProposerPrincipal: p.ProposerSub, ProposerClient: p.ProposerClient, ProposerSid: sid, Approvers: actiongate.Principals(next), ApproverSessions: actiongate.ApproverSessions(next),
 			})
 		})
+		decisionAsked = !errors.Is(err, actiongate.ErrCommitPointSetup)
 		if api.afterDecisionForTest != nil {
 			if hookErr := api.afterDecisionForTest(tx); hookErr != nil {
 				return hookErr
@@ -259,7 +275,7 @@ func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver action
 	})
 	// Postgres terminated the idle transaction before the decision could commit.
 	var pgerr *pgconn.PgError
-	if errors.As(err, &pgerr) && pgerr.Code == "25P03" {
+	if (errors.As(err, &pgerr) && pgerr.Code == "25P03") || (decisionAsked && connectionLost(err)) {
 		return nil, actiongate.ErrPolicyUnavailable
 	}
 	if errors.Is(err, errFenceNeedsReenable) {

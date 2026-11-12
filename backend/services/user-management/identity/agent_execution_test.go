@@ -25,8 +25,9 @@ import (
 // and the proposer's grant session.
 type execEnv struct {
 	*agentEnv
-	role *iam.Role
-	sid  auth.SessionID
+	role         *iam.Role
+	sid          auth.SessionID
+	approverSids map[string]string
 }
 
 func newExecEnv(t *testing.T) *execEnv {
@@ -40,7 +41,8 @@ func newExecEnvOn(t *testing.T, rdbm *rdb.RdbManager) *execEnv {
 	e.publish(t, openPolicyJS)
 	role := &iam.Role{Scope: iam.ScopeTenant, Token: "approvers", Authorities: []string{string(auth.AlarmWrite)}}
 	require.NoError(t, e.store.CreateRole(context.Background(), role))
-	x := &execEnv{agentEnv: e, role: role, sid: e.sidOf(t, agentPerson)}
+	x := &execEnv{agentEnv: e, role: role, sid: e.sidOf(t, agentPerson), approverSids: map[string]string{}}
+	x.approverSids[agentPerson] = string(x.sid)
 	x.addApprover(t, "boss@example.invalid")
 	return x
 }
@@ -53,6 +55,7 @@ func (x *execEnv) addApprover(t *testing.T, email string) {
 		Memberships: []iam.Membership{{TenantId: agentTenant, Enabled: true, TenantRoles: []iam.Role{*x.role}}},
 	}))
 	x.enrollFactor(t, email)
+	x.approverSids[email] = string(x.sidOf(t, email))
 }
 
 func personClaims(email string, authorities ...string) *auth.Claims {
@@ -60,8 +63,17 @@ func personClaims(email string, authorities ...string) *auth.Claims {
 }
 
 func (x *execEnv) request(approvers ...string) ExecutionRequest {
+	sessions := []ApproverSession{}
+	seen := map[string]bool{}
+	for _, p := range approvers {
+		if sid := x.approverSids[p]; sid != "" && !seen[p] {
+			sessions = append(sessions, ApproverSession{Principal: p, Sid: sid})
+			seen[p] = true
+		}
+	}
 	return ExecutionRequest{
-		Kind: agentpolicy.KindAlarmClear, TargetCount: 1, ProposerPrincipal: agentPerson,
+		ApproverSessions: sessions,
+		Kind:             agentpolicy.KindAlarmClear, TargetCount: 1, ProposerPrincipal: agentPerson,
 		ProposerClient: agentClient, ProposerSid: string(x.sid), Approvers: approvers,
 	}
 }
