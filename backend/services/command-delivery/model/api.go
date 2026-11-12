@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -2451,6 +2452,15 @@ func (api *Api) CommandsByToken(ctx context.Context, tokens []string) ([]*Comman
 
 // Commands searches for commands matching the given criteria.
 func (api *Api) Commands(ctx context.Context, criteria CommandSearchCriteria) (*CommandSearchResults, error) {
+	// Each list generously allows rdb.MaxLookupKeys (1,000) raw entries, far more
+	// than the enum vocabulary needs. Count duplicates too: this bounds SQL IN
+	// expansion and request work, not distinct values. Refuse before ListOf's COUNT.
+	if criteria.Statuses != nil && len(*criteria.Statuses) > rdb.MaxLookupKeys {
+		return nil, limit.Exceeded("statuses", len(*criteria.Statuses), rdb.MaxLookupKeys)
+	}
+	if criteria.Outcomes != nil && len(*criteria.Outcomes) > rdb.MaxLookupKeys {
+		return nil, limit.Exceeded("outcomes", len(*criteria.Outcomes), rdb.MaxLookupKeys)
+	}
 	start, err := commandRangeBound("startTime", criteria.StartTime)
 	if err != nil {
 		return nil, err
