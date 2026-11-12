@@ -86,6 +86,8 @@ type responder struct {
 	status  atomic.Int32 // ocsp.Good / Revoked / Unknown
 	next    time.Duration
 	delay   time.Duration
+	entered chan struct{}
+	release chan struct{}
 	mangle  func(w http.ResponseWriter, body []byte) bool // true = handled
 	serial  *big.Int                                      // answer for this serial instead (wrong-serial test)
 	clk     *clock
@@ -101,6 +103,17 @@ func newResponder(t *testing.T, clk *clock, issuer *node) *responder {
 		if req.Method != http.MethodPost || req.Header.Get("Content-Type") != "application/ocsp-request" {
 			http.Error(w, "bad request", 400)
 			return
+		}
+		if r.release != nil {
+			select {
+			case r.entered <- struct{}{}:
+			default:
+			}
+			select {
+			case <-r.release:
+			case <-req.Context().Done():
+				return
+			}
 		}
 		if r.delay > 0 {
 			select {
@@ -274,25 +287,42 @@ func TestSaturationIsImmediateAndNeverQueues(t *testing.T) {
 	clk := &clock{t: base}
 	root := mk(t, nil, "root", true)
 	srv := newResponder(t, clk, root)
-	srv.delay = 400 * time.Millisecond
+	srv.entered = make(chan struct{}, 1)
+	srv.release = make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(srv.release) }) }
+	t.Cleanup(release) // Runs before newResponder's server cleanup (LIFO).
 	a := mk(t, root, "a", false, srv.URL)
 	b := mk(t, root, "b", false, srv.URL)
 	c := newClient(clk, Config{MaxInFlight: 1, FetchDeadline: 3 * time.Second}, Hooks{})
 	done := make(chan Outcome, 1)
 	go func() { done <- c.Check(context.Background(), req("t1", tgt(a, root))) }()
-	for i := 0; i < 200 && srv.hits.Load() == 0; i++ {
-		time.Sleep(5 * time.Millisecond)
+	select {
+	case <-srv.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first fetch never reached the responder")
 	}
-	start := time.Now()
-	out := c.Check(context.Background(), req("t1", tgt(b, root)))
-	if took := time.Since(start); took > 200*time.Millisecond {
-		t.Fatalf("the second connect queued for %v", took)
+	// The second call returns while the first is provably still blocked in the responder,
+	// so nothing depends on scheduling.
+	second := make(chan Outcome, 1)
+	go func() { second <- c.Check(context.Background(), req("t1", tgt(b, root))) }()
+	var out Outcome
+	select {
+	case out = <-second:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the second connect queued behind the first instead of being refused")
 	}
 	if out.Reasons[tgt(b, root).Key()] != ReasonSaturated {
 		t.Fatalf("reason = %q", out.Reasons[tgt(b, root).Key()])
 	}
-	if first := <-done; first.Results[tgt(a, root).Key()] != x509trust.OCSPGood {
-		t.Fatalf("the first fetch should finish: %+v", first)
+	release()
+	select {
+	case first := <-done:
+		if first.Results[tgt(a, root).Key()] != x509trust.OCSPGood {
+			t.Fatalf("the first fetch should finish: %+v", first)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first fetch never finished after release")
 	}
 }
 
