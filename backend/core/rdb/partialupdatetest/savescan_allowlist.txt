@@ -3,7 +3,6 @@
 # Each line is a debt or a justified whole-object replacement; fix PRs delete their line
 # (a line that stops offending fails TestNoWholeRowSaveInUpdateMethods).
 device-management/model/api_maintenance_window.go UpdateMaintenanceWindow # tracked: Codex-only lane (PR #2461)
-device-management/model/api_groups.go UpdateEntityGroup # tracked: Codex-only lane
 device-management/model/api_assets.go UpdateAsset # tracked: Codex-only lane
 device-management/model/api_areas.go UpdateAreaType # tracked: batch5 follow-up, not yet audited
 device-management/model/api_customers.go UpdateCustomerType # tracked: batch5 follow-up, not yet audited
