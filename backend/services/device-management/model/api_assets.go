@@ -65,10 +65,8 @@ func (api *Api) CreateAssetType(ctx context.Context, request *AssetTypeCreateReq
 // type in the argument and another in the payload silently updated the second and
 // got a 200 back for it.
 //
-// Each assignment folds the field's three states onto the stored value: absent
-// keeps it, null clears it, a value sets it. Reading `found.X` as the "current"
-// argument is what makes an omitted field a no-op, so these must stay assignments
-// FROM the loaded record rather than from the request alone.
+// Only named columns are written; omitted fields remain untouched even when
+// another writer changes them after the read. Null clears a nullable field.
 func (api *Api) UpdateAssetType(ctx context.Context, token string,
 	request *AssetTypeUpdateRequest) (*AssetType, error) {
 	matches, err := api.AssetTypesByToken(ctx, []string{token})
@@ -80,21 +78,42 @@ func (api *Api) UpdateAssetType(ctx context.Context, token string,
 	}
 
 	found := matches[0]
-	found.Name = request.Name.ApplyToNullString(found.Name)
-	found.Description = request.Description.ApplyToNullString(found.Description)
-	found.ImageUrl = request.ImageUrl.ApplyToNullString(found.ImageUrl)
-	found.Icon = request.Icon.ApplyToNullString(found.Icon)
-	found.BackgroundColor = request.BackgroundColor.ApplyToNullString(found.BackgroundColor)
-	found.ForegroundColor = request.ForegroundColor.ApplyToNullString(found.ForegroundColor)
-	found.BorderColor = request.BorderColor.ApplyToNullString(found.BorderColor)
+	assignments := map[string]any{}
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(found.Name)
+	}
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(found.Description)
+	}
+	if request.ImageUrl.Set {
+		assignments["image_url"] = request.ImageUrl.ApplyToNullString(found.ImageUrl)
+	}
+	if request.Icon.Set {
+		assignments["icon"] = request.Icon.ApplyToNullString(found.Icon)
+	}
+	if request.BackgroundColor.Set {
+		assignments["background_color"] = request.BackgroundColor.ApplyToNullString(found.BackgroundColor)
+	}
+	if request.ForegroundColor.Set {
+		assignments["foreground_color"] = request.ForegroundColor.ApplyToNullString(found.ForegroundColor)
+	}
+	if request.BorderColor.Set {
+		assignments["border_color"] = request.BorderColor.ApplyToNullString(found.BorderColor)
+	}
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
 	if err != nil {
 		return nil, err
 	}
-	found.Metadata = metadataJSON
-	found.SemanticTypes, err = api.semanticTypesOnUpdate(ctx, request.SemanticTypes, found.SemanticTypes)
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
+	semanticTypes, err := api.semanticTypesOnUpdate(ctx, request.SemanticTypes, found.SemanticTypes)
 	if err != nil {
 		return nil, err
+	}
+
+	if request.SemanticTypes.Set {
+		assignments["semantic_types"] = semanticTypes
 	}
 
 	// MetadataStr is the generic *datatypes.JSON -> *string projection; it is named for
@@ -104,19 +123,35 @@ func (api *Api) UpdateAssetType(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
-	found.PropertySchema = propertySchema
-
-	// Omit active_version: a draft edit must never write the version pointer back.
-	// `found` was loaded before this Save, so writing it whole would let an edit racing
-	// a concurrent PublishAssetType/RollbackAssetType silently revert the active
-	// pointer — the version every asset of this type is validated against — to its
-	// stale value. This is the third instance of the identical latent bug, after
-	// DeviceProfile and EntityGroup; the pointer is moved by publish/rollback only.
-	result := api.RDB.DB(ctx).Omit("ActiveVersion").Save(found)
-	if result.Error != nil {
-		return nil, result.Error
+	if request.PropertySchema.Set {
+		assignments["property_schema"] = propertySchema
 	}
-	return found, nil
+
+	// Publish/rollback own active_version; draft edits write only named columns.
+	if len(assignments) == 0 {
+		return found, nil
+	}
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		res := rdb.AdvancingFrom(tx, found.UpdatedAt).Model(found).Omit(clause.Associations).
+			Where("id = ?", found.ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	matches, err = api.AssetTypesById(ctx, []uint{found.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // Get asset types by id.

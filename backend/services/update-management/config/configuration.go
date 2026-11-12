@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"strings"
@@ -16,6 +17,10 @@ import (
 )
 
 const (
+	// MaxDurationSeconds is the largest whole number of seconds a time.Duration can hold;
+	// a larger value overflows when converted.
+	MaxDurationSeconds = int(math.MaxInt64 / int64(time.Second))
+
 	// DefaultMaxArtifactBytes is the largest single artifact a tenant may declare.
 	DefaultMaxArtifactBytes int64 = 512 << 20 // 512 MiB
 	// DefaultMaxTenantArtifactBytes is the most one tenant's artifacts may hold in total:
@@ -195,11 +200,31 @@ func (c *UpdateManagementConfiguration) Validate() error {
 	if c.Updates.SweepIntervalSeconds < 0 {
 		return fmt.Errorf("updates.sweepIntervalSeconds must not be negative (got %d)", c.Updates.SweepIntervalSeconds)
 	}
+	if c.Updates.SweepIntervalSeconds > MaxDurationSeconds {
+		return fmt.Errorf("updates.sweepIntervalSeconds must be at most %d seconds, the longest a duration can hold (got %d)",
+			MaxDurationSeconds, c.Updates.SweepIntervalSeconds)
+	}
 	if err := c.Updates.validateBaseURL(); err != nil {
 		return err
 	}
 	if c.Updates.ObjectStore != ObjectStoreInstance && c.Updates.ObjectStore != ObjectStoreNone {
 		return fmt.Errorf("updates.objectStore must be %q or %q (got %q)", ObjectStoreInstance, ObjectStoreNone, c.Updates.ObjectStore)
+	}
+	d := c.Updates.Deadlines
+	for _, deadline := range []struct {
+		key     string
+		seconds int
+	}{
+		{"acknowledgeSeconds", d.AcknowledgeSeconds},
+		{"downloadSeconds", d.DownloadSeconds},
+		{"verifySeconds", d.VerifySeconds},
+		{"installSeconds", d.InstallSeconds},
+		{"confirmSeconds", d.ConfirmSeconds},
+	} {
+		if deadline.seconds > MaxDurationSeconds {
+			return fmt.Errorf("updates.deadlines.%s must be at most %d seconds, the longest a duration can hold (got %d)",
+				deadline.key, MaxDurationSeconds, deadline.seconds)
+		}
 	}
 	if err := c.Policy().Validate(); err != nil {
 		return fmt.Errorf("updates.deadlines: %w", err)

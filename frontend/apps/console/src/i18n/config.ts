@@ -106,6 +106,7 @@ export const NAMESPACES = [
   'devices',
   'alarms',
   'approvals',
+  'automationReview',
   'dashboards',
   'deviceProfiles',
   'tenants',
