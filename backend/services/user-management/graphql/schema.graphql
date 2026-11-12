@@ -1082,6 +1082,8 @@ input AgentExecutionDecisionInput {
 under what approval rules, read now from this service's records.
 """
 type AgentExecutionDecision {
+    """The current actuation generation, advanced by each tenant or operator switch call."""
+    actuationGeneration: Int!
     """(Preview: may change in a minor release.) What the current policy says. Never AUTO."""
     verdict: AgentActionVerdict!
     """(Preview: may change in a minor release.) How many distinct people must approve under the current policy: 0 for REFUSE, otherwise 1 or 2."""

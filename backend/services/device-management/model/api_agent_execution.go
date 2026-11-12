@@ -46,9 +46,12 @@ func agentExecutionLockError(err error) error {
 
 // executeAlarmProposal consumes the final approval and its effects atomically.
 func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval) (*AgentProposal, error) {
+	return api.executeAlarmProposalAttempt(ctx, approver, p, next, false)
+}
+
+func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval, retried bool) (*AgentProposal, error) {
 	attrCtx := rdb.WithAgentAttribution(ctx, rdb.AgentAttribution{ClientID: p.ProposerClient, OnBehalfOf: p.ProposerSub, Proposal: p.Token})
-	var events []*AlarmStateChangeEvent
-	executed := false
+	reenableGeneration := 0
 	err := api.RDB.DB(attrCtx).Transaction(func(tx *gorm.DB) error {
 		if err := setAgentExecutionTimeouts(tx); err != nil {
 			return err
@@ -177,6 +180,23 @@ func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Ap
 		if actiongate.Tally(next, fresh.ValidApprovers, p.ProposerSub, fresh.RequiredApprovals, fresh.AllowSelfConfirm, fresh.StepUp, now) < fresh.RequiredApprovals {
 			return errConcurrentApproval
 		}
+		if api.afterDecisionForTest != nil {
+			if err := api.afterDecisionForTest(tx); err != nil {
+				return err
+			}
+		}
+		if api.KillFeed == nil || !api.KillFeed.Fresh(api.KillFeed.Now()) {
+			return actiongate.ErrFenceUnavailable
+		}
+		if err := fenceCheckTx(tx, fresh.ActuationGeneration); err != nil {
+			reenableGeneration = fresh.ActuationGeneration
+			return err
+		}
+		if api.afterFenceForTest != nil {
+			if err := api.afterFenceForTest(tx); err != nil {
+				return err
+			}
+		}
 		for _, token := range targets {
 			var ev *AlarmStateChangeEvent
 			switch payload.Action {
@@ -189,7 +209,9 @@ func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Ap
 				return err
 			}
 			if ev != nil {
-				events = append(events, ev)
+				if err := queueAgentEffect(tx, p.Token, ev); err != nil {
+					return err
+				}
 			}
 		}
 		raw, err := json.Marshal(next)
@@ -202,16 +224,19 @@ func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Ap
 		}); err != nil {
 			return err
 		}
-		executed = true
 		return nil
 	})
+	if errors.Is(err, errFenceNeedsReenable) {
+		if retried {
+			return nil, actiongate.ErrFenceClosed
+		}
+		if err := api.reenableFence(ctx, reenableGeneration); err != nil {
+			return nil, err
+		}
+		return api.executeAlarmProposalAttempt(ctx, approver, p, next, true)
+	}
 	if err != nil {
 		return nil, err
-	}
-	if executed {
-		for _, ev := range events {
-			api.emitAlarmEvent(ctx, ev)
-		}
 	}
 	return api.AgentProposalByToken(ctx, p.Token, nil)
 }

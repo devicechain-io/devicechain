@@ -243,19 +243,20 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		return identityReadError(binding.Describe(), err)
 	}
 	st.ClusterUID, st.Binding.ClusterUID = uid, uid
+	// The clients the first writes below go through come out of the refusals, so
+	// those writes cannot be reached without them. See connectAndRefuse.
+	dyn, typed, err := connectAndRefuse(ctx, st, settings, localClusterStateExists)
+	if err != nil {
+		return err
+	}
+	// After the refusals, so a refused install (an older dcctl over a newer cluster) does not
+	// restamp this machine's record of the cluster with the dcctl it refused.
 	if err := WriteClusterRecord(ClusterRecord{
 		UID: uid, Cluster: binding.Cluster, KubeContext: binding.KubeContext, Managed: binding.Managed,
 		FirstSeenAt: time.Now().UTC(), DcctlVersion: opts.DcctlVersion,
 	}); err != nil {
 		fmt.Println(color.YellowString("warning: could not record what is known about cluster %s (%v).",
 			binding.Describe(), err))
-	}
-
-	// The clients the first writes below go through come out of the refusals, so
-	// those writes cannot be reached without them. See connectAndRefuse.
-	dyn, typed, err := connectAndRefuse(ctx, st, settings, localClusterStateExists)
-	if err != nil {
-		return err
 	}
 
 	doing("settling the cluster's credentials")
@@ -320,22 +321,14 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	// fields out of a structural schema on its way to being told it may not touch
 	// this cluster at all.
 	//
-	// 🔑 THAT IS A NARROWER GUARD THAN IT LOOKS, AND THE GAP IS THE WHOLE REASON
-	// SLICE A EXISTS. The check is `old.Schema > installRecordSchema`, so a NEWER
-	// dcctl at the SAME record schema passes it — and an older install then
-	// server-side-applies its older CRDs with the same field manager and Force,
-	// removing whatever the newer release added. Ordering cannot fix that; only
-	// comparing what is on the cluster against what is about to be applied can,
-	// which is what the operator identity is for.
-	//
-	// 🔴 THOSE GUARDS EXIST NOW — in `dcctl bootstrap` and `dcctl upgrade`, which
-	// refuse a cluster whose operator is not the one they need. INSTALL ITSELF STILL
-	// HAS NONE, and that is deliberate rather than overlooked: install is the verb
-	// whose job is to MOVE the operator, so a guard refusing a difference would
-	// refuse the only command that can resolve one. The consequence is that an older
-	// dcctl's `install` still downgrades a newer cluster's CRDs silently, and closing
-	// that needs a comparison that can tell "older" from "different" — which the
-	// identity, being equality-only, cannot. Written down rather than left implied.
+	// The record schema alone cannot refuse an older dcctl at the same schema.
+	// connectAndRefuse now refuses that older-release case before any write by comparing
+	// release versions from the install record, including an unfinished install.
+	// The operator identity check cannot do this: it tests equality, not order, and
+	// install must be able to move the operator to a different, newer release. Releases
+	// can also change the controller without changing the definitions it digests.
+	// A dcctl built from source, an unparseable record version, or a hand-edited record
+	// can still leave the release ordering unknown or misrepresented.
 	if err := installOperator(ctx, st); err != nil {
 		return err
 	}
@@ -636,6 +629,9 @@ func connectAndRefuse(ctx context.Context, st *State, settings InstallSettings,
 	}
 	prev, err := previousInstall(ctx, typed)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := refuseAnOlderInstall(prev, st.DcctlVersion); err != nil {
 		return nil, nil, err
 	}
 	if err := restoreRelationalStoreWAL(st, prev); err != nil {

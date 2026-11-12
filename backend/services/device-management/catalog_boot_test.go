@@ -53,6 +53,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevMs, prevCfg, prevNats, prevRdb, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Svc
 	prevApi, prevCached, prevKey, prevTransit, prevGates := Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates
 	prevProc, prevRA, prevDR, prevDrain := InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain
+	prevEffects := AgentEffectsDrain
 	prevCallout, prevBackoff, prevKickDrain, prevTenants := CalloutResponder, MqttStoreBackoff, SessionKickDrain, ProvisioningTenants
 	prevReaper := AgentProposalReaper
 	prevPin := IssuerPin
@@ -62,6 +63,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		Microservice, Configuration, NatsManager, RdbManager, Svc = prevMs, prevCfg, prevNats, prevRdb, prevSvc
 		Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates = prevApi, prevCached, prevKey, prevTransit, prevGates
 		InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain = prevProc, prevRA, prevDR, prevDrain
+		AgentEffectsDrain = prevEffects
 		CalloutResponder, MqttStoreBackoff, SessionKickDrain = prevCallout, prevBackoff, prevKickDrain
 		AgentProposalReaper = prevReaper
 	})
@@ -107,6 +109,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 			var err error
 			Api, CachedApi, err = buildApis(m.Nats, RdbManager, DeviceSecretKey, EnrollmentKeys, Configuration)
 			if err != nil {
+				return err
+			}
+			if err = initAgentEffectsDrain(); err != nil {
 				return err
 			}
 			if err = initOwnershipDrain(); err != nil {

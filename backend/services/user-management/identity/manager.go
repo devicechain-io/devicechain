@@ -161,11 +161,12 @@ type SeedOAuthClient struct {
 // Manager owns native auth for the instance. Build it with NewManager, then
 // call Initialize once the database and NATS KV are available.
 type Manager struct {
-	ms        *core.Microservice
-	db        *rdb.RdbManager
-	iam       *iam.Store
-	locker    *messaging.DistributedLock
-	accessTTL time.Duration
+	killPublisher KillPublisher
+	ms            *core.Microservice
+	db            *rdb.RdbManager
+	iam           *iam.Store
+	locker        *messaging.DistributedLock
+	accessTTL     time.Duration
 	// secrets holds the private half of the active JWT signing key, sealed under the
 	// instance root key. The signing_keys table holds public halves only.
 	secrets secrets.SecretStore
