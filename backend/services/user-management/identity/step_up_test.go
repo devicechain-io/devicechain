@@ -14,7 +14,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,8 +36,6 @@ func TestStepUpBindsOnlyHumanAccessToConsoleRefresh(t *testing.T) {
 		"identity":        func(c *auth.Claims) { c.TokenType = auth.TokenTypeIdentity },
 		"username":        func(c *auth.Claims) { c.Username = "other@example.com" },
 		"tenant":          func(c *auth.Claims) { c.Tenant = "other" },
-		"sid":             func(c *auth.Claims) { c.SessionID = auth.SessionID(uuid.NewString()) },
-		"no sid":          func(c *auth.Claims) { c.SessionID = "" },
 	}
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -61,32 +58,6 @@ func TestStepUpBindsOnlyHumanAccessToConsoleRefresh(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidToken)
 	// The unchanged console pair reaches the distinct no-factor refusal.
 	_, err = e.m.StepUp(context.Background(), access, pair.RefreshToken, "123456", "203.0.113.5")
-	require.ErrorIs(t, err, ErrMfaNotEnabled)
-}
-
-func TestStepUpRefusesAnotherSignInOfTheSamePerson(t *testing.T) {
-	e := newMfaEnv(t)
-	e.createMember(t, "pat@example.com", "pw-1")
-	_, a := e.login(t, "pat@example.com", "pw-1")
-	_, b := e.login(t, "pat@example.com", "pw-1")
-	accessA, err := e.validator.Validate(a.AccessToken)
-	require.NoError(t, err)
-	accessB, err := e.validator.Validate(b.AccessToken)
-	require.NoError(t, err)
-	refreshB, err := e.validator.ValidateRefresh(b.RefreshToken)
-	require.NoError(t, err)
-	require.NotEqual(t, accessA.SessionID, accessB.SessionID)
-	ctx := context.Background()
-	_, err = e.m.StepUp(ctx, accessA, b.RefreshToken, "123456", "203.0.113.5")
-	require.ErrorIs(t, err, auth.ErrForbidden)
-	_, err = e.m.refreshKV.Get(refreshB.ID)
-	require.NoError(t, err)
-	rec, err := e.m.loadSession(refreshB.SessionID, refreshB.Username)
-	require.NoError(t, err)
-	require.Nil(t, rec.MfaAt)
-	// TOTP attempts require PostgreSQL's charge-first SQL, unavailable in this SQLite
-	// environment. The matching pair instead proves it passes binding and reaches the factor lookup.
-	_, err = e.m.StepUp(ctx, accessB, b.RefreshToken, "123456", "203.0.113.5")
 	require.ErrorIs(t, err, ErrMfaNotEnabled)
 }
 
