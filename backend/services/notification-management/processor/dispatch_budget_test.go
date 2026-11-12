@@ -134,11 +134,15 @@ func TestDispatchBudgetFitsUnderAckWait(t *testing.T) {
 type stallingAdapter struct {
 	calls    int
 	hardStop time.Duration
+	onEnter  func()
 }
 
 func (b *stallingAdapter) Deliver(ctx context.Context, _ *model.NotificationChannel, _ string,
 	_ []string, _ *RenderedNotification) error {
 	b.calls++
+	if b.onEnter != nil {
+		b.onEnter()
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -170,8 +174,22 @@ func TestDeliverAllStopsWhenTheBudgetIsSpent(t *testing.T) {
 		{channel: enabledChannel("smtp-3", model.ChannelTypeSMTP), recipients: []string{"c@x.com"}},
 	}
 
-	ctx, cancel := context.WithTimeout(tenantScoped(), 150*time.Millisecond)
+	// Arm the budget when channel one is entered, so a goroutine descheduled before
+	// the walk starts cannot spend it before channel one is tried. That would leave
+	// calls at zero and fail a correct implementation.
+	ctx, cancel := context.WithCancel(tenantScoped())
 	defer cancel()
+	var budgetTimer *time.Timer
+	defer func() {
+		if budgetTimer != nil {
+			budgetTimer.Stop()
+		}
+	}()
+	ba.onEnter = func() {
+		if ba.calls == 1 {
+			budgetTimer = time.AfterFunc(150*time.Millisecond, cancel)
+		}
+	}
 	start := time.Now()
 	tally := n.deliverAll(ctx, deliveries, &RenderedNotification{}, "a1", model.AttemptTriggerAlarm)
 	elapsed := time.Since(start)
