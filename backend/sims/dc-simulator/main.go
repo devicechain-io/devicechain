@@ -239,10 +239,12 @@ func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool, plane d
 	// NewSim resolves the scenario AND checks the load profile is legal against
 	// its manifest, so an impossible run is refused here rather than discovered
 	// as a wrong number at the end of a measurement.
-	driver, err := sim.NewSim(manifestId, hs.Seed, load)
+	driver, err := sim.NewSimEpisode(manifestId, hs.Episode, hs.Seed, load)
 	if err != nil {
 		return err
 	}
+
+	sim.RecordEpisodeStart(driver, handshakePath)
 
 	if plane.play {
 		var publishLog io.Writer

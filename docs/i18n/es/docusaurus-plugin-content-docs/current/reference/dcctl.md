@@ -1037,6 +1037,10 @@ shared by every instance, so the release a cluster is prepared at is chosen here
 --version, and moving it is this command's job rather than a side effect of building
 or upgrading one instance.
 
+An install by a dcctl older than the one that last installed the cluster is refused:
+the operator and its definitions are shared by every instance, and there is no downgrade.
+Use that release's dcctl or newer.
+
 --database-node-selector places the relational store, and the event store of every
 instance bootstrapped on the cluster, on the nodes it names; --database-toleration lets
 them onto nodes tainted to keep other workloads off.
@@ -1785,6 +1789,7 @@ instance was bootstrapped on).
 * [dcctl sim start](#dcctl-sim-start)	 - Start (resume) a stopped sim's emit loop
 * [dcctl sim status](#dcctl-sim-status)	 - Show a running sim's lifecycle state
 * [dcctl sim stop](#dcctl-sim-stop)	 - Stop a running sim's emit loop (tenant + data are kept)
+* [dcctl sim windows](#dcctl-sim-windows)	 - Print the recorded episode windows (role, start, end)
 
 ## dcctl sim create {#dcctl-sim-create}
 
@@ -1822,6 +1827,7 @@ dcctl sim create <name> [flags]
 ### Options
 
 ```
+      --episode string       towerpulse episode (classic or night-shift; default classic)
   -h, --help                 help for create
       --host-header string   Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host; the sim presents it too (default: the instance's recorded host)
       --ingress string       device-plane HTTP ingress base URL (default http(s)://<server>:8081)
@@ -2066,6 +2072,37 @@ dcctl sim stop <name> [flags]
 
 * [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
 
+## dcctl sim windows {#dcctl-sim-windows}
+
+Print the recorded episode windows (role, start, end)
+
+```
+dcctl sim windows <name> [flags]
+```
+
+### Options
+
+```
+  -h, --help   help for windows
+```
+
+### Options inherited from parent commands
+
+```
+      --admin-email string      superuser identity that mints the scoped sim identity (default "superuser@devicechain.local")
+      --admin-password string   superuser password (default: $DC_ADMIN_PASSWORD, else read from the instance's Secret on the cluster)
+      --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
+  -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
+      --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
+      --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+  -s, --server string           instance host for platform API calls (default "localhost")
+      --tls                     use https/wss for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
+
 ## dcctl tenant-deletion {#dcctl-tenant-deletion}
 
 Check whether a deleted tenant's data is established as erased
@@ -2251,19 +2288,24 @@ this dcctl, or cannot be shown to be current for it: the operator's definitions 
 the same across a release while its controller changes, so the check reads the install
 record in the cluster, which names the dcctl that last finished 'dcctl install'. A
 cluster with no usable record (an install that never finished, or never ran) is refused
-until 'dcctl install' has run. A re-run at the same version is not refused, and neither
-is a cluster installed by a newer dcctl. A dcctl built from source is not compared. From
+until 'dcctl install' has run. A re-run at the same version satisfies this install check,
+as does a cluster installed by a newer dcctl; the instance version checks below still apply.
+A dcctl built from source is not compared against the install record. From
 this release, a flag-less upgrade with a newer patch dcctl needs 'dcctl install' first.
 
 An explicit '--version' must be this dcctl's own release; the same holds for
 'dcctl install --version'. An OLDER release is refused: the chart and the infrastructure
 configuration this dcctl applies are its own release's, so they would be planned around
-images that have never seen them. To go back, where that release's notes allow it, use
-the dcctl of the older release. A NEWER release is refused too, and installing it with
+images that have never seen them. There is no downgrade (see
+https://docs.devicechain.io/deployment/versioning-policy#upgrade-paths). An upgrade to
+a release older than the one the instance is declared at is refused, whichever dcctl
+runs it. A NEWER release is refused too, and installing it with
 this dcctl would not help, because the install record names the dcctl that ran the
 install, not the --version it was given: get the dcctl of the newer release, run
-'dcctl install' with it, then upgrade. A tag on a registry of your own (--registry)
-and this dcctl's own release are not affected, and a flag-less upgrade is refused only when the
+'dcctl install' with it, then upgrade. A release tag (v1.4.0, v1.4.0-rc.1) is that
+release on any registry, a mirror included, so these checks apply to it there too; any
+other tag on a registry of your own (--registry), such as a local build's, is not compared.
+This dcctl's own release is not affected, and a flag-less upgrade is refused only when the
 instance is declared at a release newer than this dcctl.
 
 It replaces no credential. Every credential the instance is running on is read back
