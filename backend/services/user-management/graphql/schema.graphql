@@ -1117,6 +1117,14 @@ type ServiceAccountCredentials {
     tokenEndpoint: String
 }
 
+"""(Preview: may change in a minor release.) A named person's current standing in this tenant."""
+type PrincipalStanding {
+    """(Preview: may change in a minor release.) The requested person's sign-in name."""
+    principal: String!
+    """(Preview: may change in a minor release.) Whether the person has an enabled identity and an enabled, unscoped membership with every requested authority."""
+    qualifies: Boolean!
+}
+
 """
 Sign-in, session and self-service reads, and this tenant's own members, invitations and
 roles. Everything here is scoped to the caller's own tenant or identity; instance-level
@@ -1144,6 +1152,17 @@ type Query {
     # The ingest governance overrides for the caller's tenant (requires
     # tenant:read); read by the enforcing service over a service token.
     tenantGovernance: TenantGovernance!
+    """
+    (Preview: may change in a minor release.) Service-only: whether each named person still holds an
+    enabled, unscoped membership of this tenant with every listed authority. Answers only the
+    device-management service's own token; every other caller is refused.
+    """
+    principalStanding(
+        """(Preview: may change in a minor release.) The people's sign-in names, 1 to 10."""
+        principals: [String!]!
+        """(Preview: may change in a minor release.) The authorities each must hold, 1 to 8."""
+        authorities: [String!]!
+    ): [PrincipalStanding!]!
     """
     The token of every tenant on the instance. Returns tokens only, not tenant records.
     Requires tenant:read, which only an instance-level caller holds, so a tenant user,

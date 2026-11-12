@@ -75,7 +75,10 @@ type GeoFenceCapRefusalCounter interface {
 
 type Api struct {
 	// RuleComparer is nil when recorded comparison is unavailable; runs fail closed.
-	RuleComparer RuleComparer
+	RuleComparer      RuleComparer
+	PrincipalStanding PrincipalStandingChecker
+	// skipReviewGuardForOldPodTest is test-only: emulate previous-release writes so triggers can be tested.
+	skipReviewGuardForOldPodTest bool
 
 	RDB *rdb.RdbManager
 

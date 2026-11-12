@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/limit"
+	"github.com/devicechain-io/dc-microservice/payloaddecode"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
@@ -34,34 +36,48 @@ import (
 // back-reference to the profile is cleared on each definition so the blob stays tight
 // and acyclic. Disabled definitions are captured too (the flag travels with the version).
 func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datatypes.JSON, error) {
-	// The position declaration lives on the profile row itself (it is singular, so it
-	// has no table of its own), so capturing it means reading the profile back rather
-	// than a definition list. An undeclared profile yields a nil Location, which is a
-	// value the snapshot must carry faithfully — see ProfileSnapshot.Location.
-	location, err := api.locationDeclarationForProfile(ctx, profileId)
+	return api.buildProfileSnapshotDB(api.RDB.DB(ctx), profileId)
+}
+
+func (api *Api) buildProfileSnapshotDB(db *gorm.DB, profileId uint) (datatypes.JSON, error) {
+	var profile DeviceProfile
+	if err := db.First(&profile, profileId).Error; err != nil {
+		return nil, err
+	}
+	location, err := decodeLocationDeclaration(profile.LocationDeclaration)
 	if err != nil {
 		return nil, err
 	}
-	configuration, err := api.configurationDeclarationForProfile(ctx, profileId)
+	configuration, err := profile.ConfigurationKeys()
 	if err != nil {
 		return nil, err
 	}
-	decoder, err := api.decoderDeclarationForProfile(ctx, profileId)
-	if err != nil {
+	if err = ValidateConfigurationDeclaration(configuration); err != nil {
+		return nil, fmt.Errorf("cannot publish device profile: invalid configuration declaration: %w", err)
+	}
+	var decoder json.RawMessage
+	if d := profile.DecoderDeclaration; d != nil && len(*d) > 0 {
+		if len(*d) > payloaddecode.MaxDocumentBytes {
+			return nil, refuseDecoder("cannot publish device profile: the saved payload decoder is invalid", fmt.Errorf("the stored decoder is %d bytes, above the maximum of %d: save it again", len(*d), payloaddecode.MaxDocumentBytes))
+		}
+		decoder = json.RawMessage(*d)
+	}
+	metrics := make([]*MetricDefinition, 0)
+	commands := make([]*CommandDefinition, 0)
+	rules := make([]*DetectionRule, 0)
+	if err = db.Where("device_profile_id = ?", profileId).Find(&metrics).Error; err != nil {
 		return nil, err
 	}
-	metrics, err := api.MetricDefinitionsByDeviceProfile(ctx, profileId)
-	if err != nil {
+	if err = db.Where("device_profile_id = ?", profileId).Find(&commands).Error; err != nil {
 		return nil, err
 	}
-	commands, err := api.CommandDefinitionsByDeviceProfile(ctx, profileId)
-	if err != nil {
+	if err = db.Where("device_profile_id = ?", profileId).Find(&rules).Error; err != nil {
 		return nil, err
 	}
-	rules, err := api.DetectionRulesByDeviceProfile(ctx, profileId)
-	if err != nil {
-		return nil, err
-	}
+	api.ceilings.observeChildren(childKindMetric, len(metrics))
+	api.ceilings.observeChildren(childKindCommand, len(commands))
+	api.ceilings.observeChildren(childKindRule, len(rules))
+
 	for _, m := range metrics {
 		m.DeviceProfile = nil
 	}
@@ -216,14 +232,18 @@ func (api *Api) deviceProfileByToken(ctx context.Context, token string) (*Device
 // the unique (device_profile_id, version) index rejects a duplicate version number.
 func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 	label, description *string, publishedBy string) (*DeviceProfileVersion, error) {
+	return api.PublishDeviceProfileReviewed(ctx, token, label, description, publishedBy, nil)
+}
+
+func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
+	label, description *string, publishedBy string, automationReviewToken *string) (*DeviceProfileVersion, error) {
 	profile, err := api.deviceProfileByToken(ctx, token)
 	if err != nil {
 		return nil, err
 	}
 
-	// Snapshot the draft outside the write transaction: it is a read of the current
-	// definition rows, and a concurrent draft edit racing a publish is a benign,
-	// rare pre-GA edge (the publish simply captures the draft as of this read).
+	// Build the candidate bytes before opening the transaction. Protected publishes
+	// verify them under the profile lock and rebuild after acquiring the journal lock.
 	snapshot, err := api.buildProfileSnapshot(ctx, profile.ID)
 	if err != nil {
 		return nil, err
@@ -252,16 +272,9 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 		return nil, err
 	}
 
-	var maxVersion int32
-	if err := api.RDB.DB(ctx).Model(&DeviceProfileVersion{}).
-		Where("device_profile_id = ?", profile.ID).
-		Select("COALESCE(MAX(version), 0)").Scan(&maxVersion).Error; err != nil {
-		return nil, err
-	}
-
 	version := &DeviceProfileVersion{
 		DeviceProfileId: profile.ID,
-		Version:         maxVersion + 1,
+		Version:         0,
 		Label:           rdb.NullStrOf(label),
 		Description:     rdb.NullStrOf(description),
 		Snapshot:        snapshot,
@@ -282,6 +295,56 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 	var changed bool
 	var activeSince time.Time
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		locked, err := lockProfile(tx, profile.ID)
+		if err != nil {
+			return err
+		}
+		profile = locked
+		now := reviewNow().UTC()
+		var review *AutomationReview
+		if !api.skipReviewGuardForOldPodTest {
+			if err = applyMaturedPolicyChange(tx, profile.ID, now); err != nil {
+				return err
+			}
+			view, err := reviewPolicyView(tx, profile.ID, now)
+			if err != nil {
+				return err
+			}
+			if view.Effective.Required {
+				review, err = api.checkProtectedPublish(ctx, tx, profile, automationReviewToken, snapshot, view.Effective, now)
+				if err != nil {
+					return err
+				}
+				if err = lockReviewJournal(tx); err != nil {
+					return err
+				}
+				rebuilt, err := api.buildProfileSnapshotDB(tx, profile.ID)
+				if err != nil {
+					return err
+				}
+				if err = checkFrozenReviewDraft(rebuilt, review); err != nil {
+					return err
+				}
+				// Freeze precisely the rebuilt bytes whose digest was checked under the journal lock.
+				version.Snapshot = rebuilt
+				newSnap, err = parseProfileSnapshot(rebuilt)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		var maxVersion int32
+		if err = tx.Model(&DeviceProfileVersion{}).Where("device_profile_id = ?", profile.ID).Select("COALESCE(MAX(version), 0)").Scan(&maxVersion).Error; err != nil {
+			return err
+		}
+		version.Version = maxVersion + 1
+		if review != nil {
+			if err = consumeAutomationReview(tx, review, version.Version, now); err != nil {
+				return err
+			}
+			version.AutomationReviewToken = &review.Token
+		}
+
 		// The version row's creation time IS the activation instant, and both are stored: the
 		// fact below carries it, and the detection engine's reconcile reads it back. It is
 		// minted here, inside the transaction, from the floor the profile's own rows set — see
@@ -318,7 +381,7 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return nil, mapAutomationReviewGuard(err)
 	}
 	api.fireScopingEvictions(ctx, evictions, changed)
 
@@ -462,6 +525,9 @@ func nextActivationInstant(floor time.Time) time.Time {
 // rolled forward again. Returns gorm.ErrRecordNotFound if the profile or the target
 // version does not exist.
 func (api *Api) RollbackDeviceProfile(ctx context.Context, token string, version int32) (*DeviceProfile, error) {
+	return api.RollbackDeviceProfileWithReason(ctx, token, version, nil)
+}
+func (api *Api) RollbackDeviceProfileWithReason(ctx context.Context, token string, version int32, breakGlassReason *string) (*DeviceProfile, error) {
 	profile, err := api.deviceProfileByToken(ctx, token)
 	if err != nil {
 		return nil, err
@@ -508,6 +574,31 @@ func (api *Api) RollbackDeviceProfile(ctx context.Context, token string, version
 	var changed bool
 	var activeSince time.Time
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		locked, err := lockProfile(tx, profile.ID)
+		if err != nil {
+			return err
+		}
+		profile = locked
+		if !api.skipReviewGuardForOldPodTest {
+			if err = applyMaturedPolicyChange(tx, profile.ID, reviewNow()); err != nil {
+				return err
+			}
+			view, err := reviewPolicyView(tx, profile.ID, reviewNow())
+			if err != nil {
+				return err
+			}
+			if view.Effective.Required {
+				// A protected profile runs only rules that read recorded telemetry, so a
+				// break-glass rollback may not reactivate one that reads anything else.
+				if err = refuseProtectionIneligible(targetSnap); err != nil {
+					return err
+				}
+				if err = breakGlass(ctx, tx, profile, "ROLLBACK", strconv.FormatInt(int64(version), 10), breakGlassReason); err != nil {
+					return err
+				}
+			}
+		}
+
 		floor, err := activationFloor(tx, profile.ID)
 		if err != nil {
 			return err
@@ -531,7 +622,7 @@ func (api *Api) RollbackDeviceProfile(ctx context.Context, token string, version
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return nil, mapAutomationReviewGuard(err)
 	}
 	api.fireScopingEvictions(ctx, evictions, changed)
 	// Re-propagate the rolled-back-to version's rules POST-COMMIT (ADR-051 slice 4c-2):

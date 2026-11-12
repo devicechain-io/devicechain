@@ -53,7 +53,7 @@ func reviewIdentity(name string) (context.Context, actiongate.Approver) {
 func newAutomationReviewRig(t *testing.T, baseline bool) *automationReviewRig {
 	t.Helper()
 	api, _ := configTestApi(t)
-	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).AutoMigrate(&AutomationReview{}, &rdb.AuditEvent{}))
+	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).AutoMigrate(&AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{}, &rdb.AuditEvent{}))
 	require.NoError(t, api.RDB.Database.Exec("CREATE UNIQUE INDEX review_test_request ON automation_reviews(tenant_id, request_id)").Error)
 	require.NoError(t, api.RDB.Database.Exec("CREATE UNIQUE INDEX review_test_token ON automation_reviews(tenant_id, token)").Error)
 	require.NoError(t, rdb.RegisterAuditJournal(api.RDB.Database))
@@ -401,8 +401,8 @@ func TestAutomationReviewApprovalCAS(t *testing.T) {
 	ctx, _ := reviewIdentity("third")
 	now := time.Now().UTC()
 	a := []ReviewApproval{{Approval: actiongate.Approval{Sub: "third", At: now}}}
-	require.NoError(t, r.api.recordReviewApproval(ctx, row, a, now))
-	err := r.api.recordReviewApproval(ctx, &stale, []ReviewApproval{{Approval: actiongate.Approval{Sub: "fourth", At: now}}}, now)
+	require.NoError(t, r.api.recordReviewApproval(ctx, row, a, now, DefaultReviewPolicySettings(), 0))
+	err := r.api.recordReviewApproval(ctx, &stale, []ReviewApproval{{Approval: actiongate.Approval{Sub: "fourth", At: now}}}, now, DefaultReviewPolicySettings(), 0)
 	reviewErrorCode(t, err, "CONCURRENT_APPROVAL")
 	stored, err := r.api.AutomationReviewByToken(ctx, row.Token)
 	require.NoError(t, err)
@@ -599,7 +599,9 @@ func TestAutomationReviewRateLimit(t *testing.T) {
 func TestReviewApprovalIsDistinctAndIdempotentWhileRan(t *testing.T) {
 	r := newAutomationReviewRig(t, true)
 	row := r.run(t)
-	require.NoError(t, r.api.RDB.DB(r.ctx).Model(row).Update("required_approvals", 2).Error)
+	// The policy, not the row, decides how many approvals are needed.
+	require.NoError(t, r.api.RDB.DB(r.ctx).Create(&AutomationReviewPolicy{DeviceProfileId: row.DeviceProfileId,
+		RequiredApprovals: 2, ApprovalTtlSeconds: 86400, StepUpMaxAgeSeconds: 900, Revision: 1, UpdatedBy: "test"}).Error)
 	ctx, third := reviewIdentity("third")
 	first, err := r.api.ApproveAutomationReview(ctx, third, row.Token, row.ReviewDigest)
 	require.NoError(t, err)
