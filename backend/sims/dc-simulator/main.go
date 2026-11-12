@@ -20,10 +20,12 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -90,7 +92,7 @@ func main() {
 			"recording made from the platform can be checked against what the devices sent")
 	lorawanNS := flag.String("lorawan-ns", envOr("DC_SIM_LORAWAN_NS", ""),
 		"integration mode: play a LoRaWAN network server ("+lorawan.ChirpStack+" or "+lorawan.TTS+") posting uplinks to a "+
-			"tenant's inbound integration, then exit. Needs no handshake; see --integration-url")
+			"tenant's inbound integration, then exit (unless --uplinks 0). Needs no handshake; see --integration-url")
 	integrationURL := flag.String("integration-url", envOr("DC_SIM_INTEGRATION_URL", ""),
 		"integration mode: the integration's URL, https://<host>/api/integrations/<tenant>/<integration>")
 	integrationToken := flag.String("integration-token", "",
@@ -99,9 +101,13 @@ func main() {
 		"integration mode: send this as the request's Host, for an ingress host that does not resolve from here")
 	devEUIs := flag.String("deveui", envOr("DC_SIM_DEVEUIS", ""),
 		"integration mode: comma-separated DevEUIs (16 hex digits) of the devices that uplink")
-	uplinks := flag.Int("uplinks", envIntOr("DC_SIM_UPLINKS", 5), "integration mode: uplinks per device")
+	uplinks := flag.Int("uplinks", envIntOr("DC_SIM_UPLINKS", 5), "integration mode: uplinks per device (0 keeps uplinking until interrupted, requires --lorawan-downlink-listen)")
 	resend := flag.Bool("resend", envBoolOr("DC_SIM_RESEND", false),
 		"integration mode: post every uplink twice, byte for byte, as a network server retrying does")
+	downlinkListen := flag.String("lorawan-downlink-listen", envOr("DC_SIM_LORAWAN_DOWNLINK_LISTEN", ""),
+		"ChirpStack v4 queue listen address, e.g. :8085 (DC_SIM_LORAWAN_DOWNLINK_LISTEN); requires DC_SIM_LORAWAN_API_KEY")
+	lorawanAck := flag.String("lorawan-ack", envOr("DC_SIM_LORAWAN_ACK", "ack"),
+		"downlink reports: ack, nack or none (DC_SIM_LORAWAN_ACK; requires --lorawan-downlink-listen)")
 	lorawanBinary := flag.Bool("lorawan-binary", envBoolOr("DC_SIM_LORAWAN_BINARY", false),
 		"integration mode: send only the raw application frame (port 2, no decoded object), as a network server with no codec "+
 			"does; what is stored is what the device profile's payload decoder makes of it (see --lorawan-print-decoder)")
@@ -128,6 +134,15 @@ func main() {
 	showVersion := flag.Bool("version", false, "print the build version, commit and date, then exit")
 	flag.Parse()
 
+	ackExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "lorawan-ack" {
+			ackExplicit = true
+		}
+	})
+	if err := validateDownlinkFlags(*lorawanNS, *downlinkListen, *lorawanAck, ackExplicit); err != nil {
+		log.Fatal().Err(err).Msg("invalid downlink configuration")
+	}
 	if *showVersion {
 		fmt.Printf("dc-simulator %s (commit %s, built %s)\n", version, gitCommit, buildDate)
 		return
@@ -164,10 +179,17 @@ func main() {
 		if token == "" {
 			token = os.Getenv("DC_SIM_INTEGRATION_TOKEN")
 		}
-		if err := runLoRaWAN(lorawan.Config{
+		c := lorawan.Config{
 			NS: *lorawanNS, URL: *integrationURL, Token: token, HostHeader: *integrationHost, DevEUIs: lorawan.ParseDevEUIs(*devEUIs),
 			Uplinks: *uplinks, Interval: *emitInterval, Resend: *resend, Binary: *lorawanBinary,
-		}); err != nil {
+		}
+		if *downlinkListen != "" {
+			c.Downlink, err = lorawan.NewDownlink(os.Getenv("DC_SIM_LORAWAN_API_KEY"), *lorawanAck, c.DevEUIs, os.Stdout)
+			if err != nil {
+				log.Fatal().Err(err).Msg("invalid downlink configuration")
+			}
+		}
+		if err := runLoRaWANListening(c, *downlinkListen); err != nil {
 			log.Fatal().Err(err).Msg("dc-simulator integration mode failed")
 		}
 		return
@@ -198,11 +220,45 @@ func main() {
 // status that says only whether the run could be made. Whether the platform ANSWERED as expected is
 // for the caller to judge from the summary, because a refusal (a bad token) is a result here, not
 // a failure.
-func runLoRaWAN(c lorawan.Config) error {
+func runLoRaWAN(c lorawan.Config) error { return runLoRaWANListening(c, "") }
+
+func validateDownlinkFlags(ns, listen, ack string, explicit bool) error {
+	if ack != "ack" && ack != "nack" && ack != "none" {
+		return fmt.Errorf("--lorawan-ack must be ack, nack or none")
+	}
+	if listen != "" && ns != lorawan.ChirpStack {
+		return fmt.Errorf("--lorawan-downlink-listen requires --lorawan-ns chirpstack (ChirpStack v4 only)")
+	}
+	if explicit && listen == "" {
+		return fmt.Errorf("--lorawan-ack shapes the downlink reports of --lorawan-downlink-listen")
+	}
+	return nil
+}
+
+func runLoRaWANListening(c lorawan.Config, addr string) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if addr != "" {
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			return err
+		}
+		server := &http.Server{Handler: c.Downlink, ReadHeaderTimeout: 5 * time.Second}
+		c.Downlink.Listening(listener.Addr().String())
+		go func() { _ = server.Serve(listener) }()
+		defer func() {
+			shutdownCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+			defer stop()
+			if server.Shutdown(shutdownCtx) != nil {
+				_ = server.Close()
+			}
+		}()
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	sum, err := lorawan.Run(ctx, c)
-	if err != nil {
+	if err != nil && (addr == "" || !errors.Is(err, context.Canceled)) {
 		return err
 	}
 	out, err := json.Marshal(sum)
