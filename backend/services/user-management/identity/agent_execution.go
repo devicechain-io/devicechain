@@ -118,6 +118,7 @@ type ExecutionRequest struct {
 
 // ExecutionDecision is the proposal-bound verdict.
 type ExecutionDecision struct {
+	ActuationGeneration int
 	agentpolicy.Decision
 	// ValidApprovers are the requested approvers who are approvers now.
 	ValidApprovers []string
@@ -150,7 +151,7 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 		return ExecutionDecision{}, fmt.Errorf("at most %d approvers may be named", MaxExecutionApprovers)
 	}
 	tenant := claims.Tenant
-	suspended, off, doc, version, err := m.publishedPolicy(ctx, tenant)
+	suspended, off, doc, version, generation, err := m.publishedPolicyState(ctx, tenant)
 	if err != nil {
 		return ExecutionDecision{}, err
 	}
@@ -163,7 +164,7 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 		Kind: req.Kind, Impact: req.Impact, TargetCount: req.TargetCount, GroupTokens: req.GroupTokens,
 		Command: req.Command, Client: req.ProposerClient,
 	}
-	out := ExecutionDecision{ValidApprovers: []string{}}
+	out := ExecutionDecision{ActuationGeneration: generation, ValidApprovers: []string{}}
 	// The cheap checks first, as though approvers were plentiful.
 	st.EligibleApprovers = 2
 	if pre := agentpolicy.Decide(st, preq); pre.Verdict == agentpolicy.VerdictRefuse {
