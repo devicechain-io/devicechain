@@ -18,7 +18,7 @@ func TestAutomationReviewsMigrationIsReplayable(t *testing.T) {
 	require.NoError(t, err)
 	m := NewAutomationReviewsSchema()
 	require.Equal(t, "20261111150000", m.ID)
-	require.Equal(t, m.ID, Migrations[len(Migrations)-1].ID)
+	require.Equal(t, m.ID, Migrations[len(Migrations)-2].ID)
 	require.NoError(t, m.Migrate(db))
 	require.NoError(t, m.Migrate(db))
 	require.False(t, db.Migrator().HasColumn(&automationReview{}, "deleted_at"))

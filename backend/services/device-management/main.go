@@ -1074,6 +1074,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// its draft rules against event-processing and fails closed on an uncompilable one.
 			wireDetectionRuleValidator(Api, Microservice.InstanceConfiguration.Infrastructure, safetyGates)
 			wireRuleComparer(Api, Microservice.InstanceConfiguration.Infrastructure)
+			wirePrincipalStanding(Api, Microservice.InstanceConfiguration.Infrastructure)
 
 			// Wire the per-tenant geofence caps and the counter that reports their refusals. The
 			// counter is set unconditionally, unlike the resolver: with no resolver the platform
@@ -1398,4 +1399,16 @@ func wireRuleComparer(api *model.Api, infra mscfg.InfrastructureConfiguration) {
 	url := fmt.Sprintf("http://%s:%d/graphql", infra.EventProcessing.Hostname, infra.EventProcessing.Port)
 	api.RuleComparer = automationreview.NewClient(client, url)
 	log.Info().Str("eventProcessing", url).Msg("Automation comparison enabled.")
+}
+
+func wirePrincipalStanding(api *model.Api, infra mscfg.InfrastructureConfiguration) {
+	api.PrincipalStanding = nil
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("Automation approver standing unavailable: service secret or user-management endpoint is not configured; protected publishes will be refused.")
+		return
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", []string{string(auth.TenantRead)}, svcclient.WithQueryTimeout(2*time.Second))
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	api.PrincipalStanding = automationreview.NewStandingClient(client, url)
+	log.Info().Msg("Automation approver standing enabled.")
 }

@@ -122,6 +122,26 @@ func seedTenant(t *testing.T, db *gorm.DB, tenant string, base int) {
 	             VALUES (?, ?, ?, ?, 'token', ?)`,
 		base+4, tenant, tenant+"-cred", base+3, tenant+"-cid")
 
+	// A PROTECTED device profile, with its policy, a pending loosening and a break-glass
+	// record. The guard triggers refuse deleting a protected profile, so this proves the
+	// sweep's foreign-key order removes the policy (a child of the profile) first and the
+	// profile then deletes. The version and the type binding are written BEFORE the policy,
+	// because the triggers would refuse them afterwards.
+	mustExec(t, db, `INSERT INTO "device-management".device_profiles (id, tenant_id, token, active_version)
+	             VALUES (?, ?, ?, 1)`, base+5, tenant, tenant+"-profile")
+	mustExec(t, db, `INSERT INTO "device-management".device_profile_versions (id, tenant_id, device_profile_id, version, snapshot)
+	             VALUES (?, ?, ?, 1, '{}')`, base+6, tenant, base+5)
+	mustExec(t, db, `INSERT INTO "device-management".device_types (id, tenant_id, token, profile_id)
+	             VALUES (?, ?, ?, ?)`, base+7, tenant, tenant+"-type", base+5)
+	mustExec(t, db, `INSERT INTO "device-management".automation_review_policies (id, tenant_id, device_profile_id, required, updated_by)
+	             VALUES (?, ?, ?, true, 'drill')`, base+8, tenant, base+5)
+	mustExec(t, db, `INSERT INTO "device-management".automation_review_policy_changes
+	               (id, tenant_id, token, device_profile_id, base_revision, proposed, proposed_by, state)
+	             VALUES (?, ?, ?, ?, 1, '{"required":false}', 'drill', 'PENDING')`, base+9, tenant, tenant+"-change", base+5)
+	mustExec(t, db, `INSERT INTO "device-management".automation_review_break_glass
+	               (id, tenant_id, device_profile_id, action, target, reason, actor, amr, txid)
+	             VALUES (?, ?, ?, 'ROLLBACK', '1', 'drill', 'drill', '[]', 1)`, base+10, tenant, base+5)
+
 	// 🔴 THE JOURNAL HAS TO BE SEEDED BY HAND, and until it was, this drill certified
 	// the ADR-077 retention without a single row to retain. Every other row here is
 	// written by raw INSERT, which bypasses the GORM callbacks — so no audit row is ever
@@ -220,6 +240,12 @@ func tenantRowCounts() []seededLocation {
 		{"device-management.areas", `"device-management".areas`, "tenant_id = ?", 1},
 		{"device-management.devices", `"device-management".devices`, "tenant_id = ?", 1},
 		{"device-management.device_credentials", `"device-management".device_credentials`, "tenant_id = ?", 1},
+		{"device-management.device_profiles", `"device-management".device_profiles`, "tenant_id = ?", 1},
+		{"device-management.device_profile_versions", `"device-management".device_profile_versions`, "tenant_id = ?", 1},
+		{"device-management.device_types", `"device-management".device_types`, "tenant_id = ?", 1},
+		{"device-management.automation_review_policies", `"device-management".automation_review_policies`, "tenant_id = ?", 1},
+		{"device-management.automation_review_policy_changes", `"device-management".automation_review_policy_changes`, "tenant_id = ?", 1},
+		{"device-management.automation_review_break_glass", `"device-management".automation_review_break_glass`, "tenant_id = ?", 1},
 		{"event-processing.device_rosters", `"event-processing".device_rosters`, "tenant = ?", 1},
 		{"user-management.iam_memberships", `"user-management".iam_memberships`, "tenant_id = ?", 1},
 		{"event-management.measurement_events", `"event-management".measurement_events`, "tenant_id = ?", 3},

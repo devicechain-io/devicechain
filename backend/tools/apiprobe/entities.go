@@ -241,8 +241,12 @@ func (e entity) createDoc() string {
 			decl = append(decl, "$"+p.Name+":"+p.Type)
 			pass = append(pass, p.Name+":$"+p.Name)
 		}
+		selection := e.Fields
+		if e.Wrap != "" {
+			selection = e.Wrap + "{" + e.Fields + "} " + e.Reject
+		}
 		return "mutation(" + strings.Join(decl, ",") + "){" + e.Mutation + "(" +
-			strings.Join(pass, ",") + "){" + e.Fields + "}}"
+			strings.Join(pass, ",") + "){" + selection + "}}"
 	}
 	selection := e.Fields
 	if e.Wrap != "" {

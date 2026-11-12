@@ -193,3 +193,14 @@ func (r *DeviceProfileActivationResolver) ActivatedBy() *string {
 	}
 	return &r.M.ActivatedBy
 }
+
+func (r *DeviceProfileVersionResolver) AutomationReviewToken() *string {
+	return r.M.AutomationReviewToken
+}
+
+func (r *DeviceProfileVersionResolver) AutomationReview(ctx context.Context) (*AutomationReviewResolver, error) {
+	if r.M.AutomationReviewToken == nil {
+		return nil, nil
+	}
+	return r.S.AutomationReview(ctx, struct{ Token string }{Token: *r.M.AutomationReviewToken})
+}

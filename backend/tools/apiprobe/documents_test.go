@@ -195,6 +195,18 @@ func TestEveryEntityDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 	}
 }
 
+// After steps send their own documents, outside the generated entity documents.
+func TestAutomationPolicyLooseningDocumentValidatesAgainstTheServedSchema(t *testing.T) {
+	schema := servedSchema(t, "device-management", schemaplane.MountTenant)
+	vars := probeAutomationPolicyLooseningVars(newState("apiprobe"))
+	if errs := schema.ValidateWithVariables(probeAutomationPolicyLooseningMutation, vars); len(errs) > 0 {
+		t.Fatalf("automation policy loosening does not validate: %v", errs)
+	}
+	if err := gqlcore.CheckWork(probeAutomationPolicyLooseningMutation); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // An entity that unwraps a result envelope must select the envelope's rejection —
 // WHEN THE ENVELOPE HAS ONE.
 //
