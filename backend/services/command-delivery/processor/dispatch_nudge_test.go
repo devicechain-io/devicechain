@@ -348,18 +348,16 @@ func TestANudgeForADeviceWithNothingQueuedIsCounted(t *testing.T) {
 	}
 }
 
-// blockingDrainer parks every drain until it is released, so a test can fill the queue.
+// blockingDrainer parks every drain until its context is cancelled.
 type blockingDrainer struct {
-	release chan struct{}
-	mu      sync.Mutex
-	seen    []string
+	entered chan struct{}
+	errs    chan error
 }
 
-func (d *blockingDrainer) DrainDevice(_ context.Context, _, deviceToken string) {
-	d.mu.Lock()
-	d.seen = append(d.seen, deviceToken)
-	d.mu.Unlock()
-	<-d.release
+func (d *blockingDrainer) DrainDevice(ctx context.Context, _, _ string) {
+	d.entered <- struct{}{}
+	<-ctx.Done()
+	d.errs <- ctx.Err()
 }
 
 // countingDrainer just records.
@@ -435,7 +433,7 @@ func TestTheNudgeQueueDropsWhenFull(t *testing.T) {
 func TestTheNudgeQueueActuallyDrains(t *testing.T) {
 	drainer := &countingDrainer{done: make(chan struct{}, 4)}
 	nudger := newDispatchNudger(drainer, NudgeMetrics{})
-	nudger.Start()
+	nudger.Start(context.Background())
 	defer nudger.Stop()
 
 	nudger.NudgeDevice("acme", "dev-7")
@@ -456,16 +454,25 @@ func TestTheNudgeQueueActuallyDrains(t *testing.T) {
 // backlog to drain: a rolling restart is precisely when publishing is worth avoiding, and
 // every buffered nudge is a row the sweep will dispatch anyway.
 func TestStoppingTheNudgeQueueDoesNotWaitForItsBacklog(t *testing.T) {
-	drainer := &blockingDrainer{release: make(chan struct{})}
+	drainer := &blockingDrainer{
+		entered: make(chan struct{}, NudgeWorkers),
+		errs:    make(chan error, NudgeWorkers),
+	}
 	nudger := newDispatchNudger(drainer, NudgeMetrics{})
-	nudger.Start()
+	nudger.Start(context.Background())
 
 	for i := 0; i < NudgeWorkers*4; i++ {
 		nudger.NudgeDevice("acme", "dev-1")
 	}
-	// Let the workers pick up their blocking drains, then release them and stop.
-	close(drainer.release)
-
+	// All workers must be inside DrainDevice before Stop: releasing a separate
+	// test channel would let the old Background-context implementation pass.
+	for i := 0; i < NudgeWorkers; i++ {
+		select {
+		case <-drainer.entered:
+		case <-time.After(time.Second):
+			t.Fatal("worker did not enter its drain")
+		}
+	}
 	stopped := make(chan struct{})
 	go func() {
 		nudger.Stop()
@@ -473,10 +480,17 @@ func TestStoppingTheNudgeQueueDoesNotWaitForItsBacklog(t *testing.T) {
 	}()
 	select {
 	case <-stopped:
-	case <-time.After(10 * time.Second):
-		t.Fatal("Stop did not return")
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not cancel its in-flight drains within 1s")
 	}
-	// Safe to call twice — the processor's ExecuteStop may be reached more than once.
+	for i := 0; i < NudgeWorkers; i++ {
+		if err := <-drainer.errs; err != context.Canceled {
+			t.Fatalf("drainer context error = %v, want context.Canceled", err)
+		}
+	}
+	if got := len(nudger.queue); got != NudgeWorkers*3 {
+		t.Fatalf("buffered nudges were drained during stop: %d remain", got)
+	}
 	nudger.Stop()
 }
 
@@ -491,7 +505,7 @@ func TestANudgerlessProcessorAcceptsNudgesSilently(t *testing.T) {
 			"holding a nil pointer — a nil check that cannot detect nil is worse than none")
 	}
 	proc.nudger.NudgeDevice("acme", "dev-1")
-	proc.nudger.Start()
+	proc.nudger.Start(context.Background())
 	proc.nudger.Stop()
 }
 
@@ -507,7 +521,7 @@ func (eofReader) HandleResponse(error) {}
 
 // 🔴🔴 THE SECOND HALF OF THE PLUMBING, AND THE HALF A CONSTRUCTOR TEST CANNOT REACH. The
 // constructor BUILDS the queue; ExecuteStart is what gives it workers. Deleting
-// `cproc.nudger.Start()` leaves a perfectly wired nudger that accepts every nudge into a
+// `cproc.nudger.Start(ctx)` leaves a perfectly wired nudger that accepts every nudge into a
 // buffer nothing ever reads — the feature dead in production, no error, no log, and a suite
 // that stays green because every other test in this file starts the queue itself. This test
 // exists because the mutation harness found exactly that mutant surviving.
@@ -603,7 +617,7 @@ func TestConstructorWiresTheDispatchNudge(t *testing.T) {
 			"read \"No data\" instead of zero", got)
 	}
 
-	proc.nudger.Start()
+	proc.nudger.Start(context.Background())
 	defer proc.nudger.Stop()
 	nudger.NudgeDevice("acme", "dev-1")
 
