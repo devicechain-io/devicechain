@@ -239,7 +239,7 @@ type Api struct {
 	// HELD) becomes EXPIRED, one that went out unanswered becomes TIMEOUT — see
 	// expiredTerminalFor. Zero disables stamping — the pre-config
 	// behavior, used by tests that construct the Api directly; production always sets
-	// it from CommandDeliveryConfiguration (floored positive in ApplyDefaults).
+	// it from CommandDeliveryConfiguration (positive once ApplyDefaults and Validate pass).
 	DefaultCommandTTL time.Duration
 	// MaxDispatchFailures is how many failed dispatches one command may accumulate before
 	// ReleaseClaim drives it to FAILED instead of returning it to the queue.

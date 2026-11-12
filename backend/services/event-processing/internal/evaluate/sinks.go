@@ -55,6 +55,12 @@ type alarmSink struct{ r *recorder }
 
 type connectorSink struct{ r *recorder }
 
+// newSinks is deliberately private. Internal tests replace it with publishing sinks to prove
+// the stream probe detects an isolation breach; service callers cannot replace the sinks.
+var newSinks = func(rec *recorder) (react.CommandSink, react.AlarmSink, react.ConnectorSink) {
+	return rec, alarmSink{rec}, connectorSink{rec}
+}
+
 // Dispatch records a raise or a clear.
 func (a alarmSink) Dispatch(_ context.Context, req react.AlarmRequest) error {
 	kind := KindRaiseAlarm

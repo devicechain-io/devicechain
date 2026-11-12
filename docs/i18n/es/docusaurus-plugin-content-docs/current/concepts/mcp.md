@@ -123,7 +123,11 @@ La sesión de un superusuario nunca recibe un alcance de acción. Un operador qu
 
 **Quién cuenta como aprobador.** Un aprobador es un miembro habilitado, no limitado a un cliente o grupo, en uno de los roles aprobadores de la política, que tiene el permiso de escritura que necesita la acción y un segundo factor registrado. Por eso, cambiar quién tiene un rol aprobador cambia quién cuenta, y un veredicto que necesita más aprobadores de los que tiene el inquilino es un rechazo.
 
-**Asistentes que funcionan sin una persona.** Una cuenta de servicio puede crearse como **cuenta de agente** (`agent: true`, que no se puede cambiar después y que se rechaza salvo que el interruptor de la instancia esté encendido). Sus tokens llevan los permisos de lectura de sus roles y, cuando pide un alcance de acción que la política del inquilino permite para su identificador de cliente, los permisos de propuesta calculados a partir de los permisos de escritura de sus roles, nunca las escrituras mismas. Una cuenta de servicio ordinaria tiene los permisos de sus roles como antes; un asistente que funciona con una de ellas es una integración, no un agente gobernado. Un inquilino puede exigir la marca: enumerar permisos en `serviceAccounts.agentFlagRequiredFor` rechaza una cuenta ordinaria que tendría alguno de ellos, al crearla, al cambiar sus roles y en cada solicitud de token, así que un rol editado después no puede eludirlo. Los identificadores de cliente OAuth no pueden empezar por `dcsa_`, que usan las cuentas de servicio.
+**Asistentes que funcionan sin una persona.** Una cuenta de servicio puede crearse como **cuenta de agente** (`agent: true`, que no se puede cambiar después y que se rechaza salvo que el interruptor de la instancia esté encendido). Sus tokens llevan los permisos de lectura de sus roles y, cuando pide un alcance de acción que la política del inquilino permite para su identificador de cliente, los permisos de propuesta calculados a partir de los permisos de escritura de sus roles, nunca las escrituras mismas. Una cuenta de servicio ordinaria tiene los permisos de sus roles como antes; un asistente que funciona con una de ellas es una integración, no un agente gobernado. Un inquilino puede exigir la marca: enumerar permisos en `serviceAccounts.agentFlagRequiredFor` rechaza una cuenta ordinaria que tendría alguno de ellos, al crearla, al cambiar sus roles y en cada solicitud de token, así que un rol editado después no puede eludirlo.
+
+**Clientes OAuth heredados.** Los nuevos registros de clientes OAuth y la configuración precargada rechazan los identificadores que empiezan por `dcsa_`, sin distinguir mayúsculas de minúsculas; este prefijo está reservado para las cuentas de servicio. Los clientes existentes en la base de datos siguen funcionando y se pueden seguir manteniendo: se pueden actualizar su nombre, descripción, URI de redirección y alcances, rotar su secreto, habilitarlos, deshabilitarlos o eliminarlos. Siguen siendo clientes OAuth ordinarios: el prefijo no les otorga la confianza de una cuenta de servicio y su secreto no puede autenticar la concesión `client_credentials`. La configuración precargada existente que use un identificador reservado debe cambiarse antes del arranque; cambiarla no renombra ni elimina el cliente almacenado.
+
+Para dejar de usar un identificador heredado, registra un cliente de reemplazo con un identificador nuevo y no reservado, configura sus URI de redirección y alcances, y genera un secreto nuevo si hace falta. Migra las integraciones y las listas de clientes de las políticas de los inquilinos al reemplazo y vuelve a autorizar con el identificador nuevo. Una vez migradas las integraciones, deshabilita y después elimina el cliente anterior. **No elimines primero el cliente anterior: su identificador no se puede volver a registrar.** Los identificadores de cliente son inmutables; este proceso crea un reemplazo en lugar de renombrar el registro existente.
 
 **Actualizar y operar.**
 
@@ -145,11 +149,13 @@ El asistente **propone** una acción y las personas deciden. En esta **vista pre
 ### Reviewing proposals in the console (preview) {#approvals-inbox}
 
 Abre **Supervisión > Aprobaciones**. La bandeja requiere una membresía en el inquilino sin
-restricción de alcance con `agent:admin`, y el interruptor de acciones de agentes de la instancia
+restricción de alcance con `agent:admin` o un aprobador actual (rol aprobador, `alarm:write` y segundo factor activo), y el interruptor de acciones de agentes de la instancia
 debe estar habilitado. Listar propuestas también necesita `alarm:read`; aprobar sigue requiriendo
 el rol aprobador, `alarm:write` y el segundo factor reciente descritos arriba. La bandeja no edita
 el documento de política: usa la API de políticas para configurar clientes, roles aprobadores y
 reglas de acción.
+
+El interruptor de emergencia solo es visible con `agent:admin`.
 
 1. La bandeja empieza en **Pendiente**. Usa **Estado** para inspeccionar propuestas rechazadas,
    caducadas o denegadas. Abre una propuesta mediante el nombre de su cliente. Revisa la acción,

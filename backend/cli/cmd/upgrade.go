@@ -167,19 +167,24 @@ this dcctl, or cannot be shown to be current for it: the operator's definitions 
 the same across a release while its controller changes, so the check reads the install
 record in the cluster, which names the dcctl that last finished 'dcctl install'. A
 cluster with no usable record (an install that never finished, or never ran) is refused
-until 'dcctl install' has run. A re-run at the same version is not refused, and neither
-is a cluster installed by a newer dcctl. A dcctl built from source is not compared. From
+until 'dcctl install' has run. A re-run at the same version satisfies this install check,
+as does a cluster installed by a newer dcctl; the instance version checks below still apply.
+A dcctl built from source is not compared against the install record. From
 this release, a flag-less upgrade with a newer patch dcctl needs 'dcctl install' first.
 
 An explicit '--version' must be this dcctl's own release; the same holds for
 'dcctl install --version'. An OLDER release is refused: the chart and the infrastructure
 configuration this dcctl applies are its own release's, so they would be planned around
-images that have never seen them. To go back, where that release's notes allow it, use
-the dcctl of the older release. A NEWER release is refused too, and installing it with
+images that have never seen them. There is no downgrade (see
+https://docs.devicechain.io/deployment/versioning-policy#upgrade-paths). An upgrade to
+a release older than the one the instance is declared at is refused, whichever dcctl
+runs it. A NEWER release is refused too, and installing it with
 this dcctl would not help, because the install record names the dcctl that ran the
 install, not the --version it was given: get the dcctl of the newer release, run
-'dcctl install' with it, then upgrade. A tag on a registry of your own (--registry)
-and this dcctl's own release are not affected, and a flag-less upgrade is refused only when the
+'dcctl install' with it, then upgrade. A release tag (v1.4.0, v1.4.0-rc.1) is that
+release on any registry, a mirror included, so these checks apply to it there too; any
+other tag on a registry of your own (--registry), such as a local build's, is not compared.
+This dcctl's own release is not affected, and a flag-less upgrade is refused only when the
 instance is declared at a release newer than this dcctl.
 
 It replaces no credential. Every credential the instance is running on is read back

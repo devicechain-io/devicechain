@@ -322,6 +322,12 @@ func ownedGormConfig(functionalArea string) *gorm.Config {
 // the two do not have to agree on a message format to share the policy.
 func applyPoolSizing(db *gorm.DB, cfg config.MicroserviceDatastoreConfiguration,
 	event *zerolog.Event) error {
+	if cfg.MaxOpenConnections < 0 {
+		return fmt.Errorf("maxOpenConnections must be non-negative, got %d", cfg.MaxOpenConnections)
+	}
+	if cfg.MaxIdleConnections < 0 {
+		return fmt.Errorf("maxIdleConnections must be non-negative, got %d", cfg.MaxIdleConnections)
+	}
 	sqldb, err := db.DB()
 	if err != nil {
 		return err
@@ -412,8 +418,9 @@ func CheckWriterBatch(prefix string, maxBatch, lingerMillis int) error {
 }
 
 // poolSizing resolves the configured open/idle connection counts into the values
-// actually applied to the pool. An unset (zero or negative) value is never passed to
-// database/sql, where 0 open means unlimited and 0 idle means none.
+// actually applied to the pool. applyPoolSizing rejects negative values before calling
+// this helper. An unset (zero) value is never passed to database/sql, where 0 open means
+// unlimited and 0 idle means none.
 //
 // Unset idle is the open count: a pool allowed N connections keeps all N open between
 // uses. database/sql CLOSES a released connection when its idle pool is already full, and
