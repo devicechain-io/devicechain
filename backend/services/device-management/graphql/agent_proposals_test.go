@@ -24,7 +24,7 @@ func (approvingDecider) Actuation(context.Context, actiongate.ActuationRequest) 
 }
 
 func (approvingDecider) Execution(context.Context, actiongate.ExecutionRequest) (actiongate.ExecutionDecision, error) {
-	return actiongate.ExecutionDecision{Verdict: actiongate.VerdictApprove, RequiredApprovals: 1,
+	return actiongate.ExecutionDecision{ActuationGeneration: 3, Verdict: actiongate.VerdictApprove, RequiredApprovals: 1,
 		ValidApprovers: []string{"boss@example.invalid"}, StepUp: auth.StepUp{MaxAge: 15 * time.Minute}, AllowSelfConfirm: true}, nil
 }
 
@@ -36,7 +36,7 @@ func agentToken() *auth.Claims {
 }
 
 func personToken() *auth.Claims {
-	return &auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: "acme", Username: "boss@example.invalid",
+	return &auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: "acme", Username: "boss@example.invalid", SessionID: "boss-sid",
 		Authorities: []string{string(auth.AlarmRead), string(auth.AlarmWrite)}, Amr: auth.AmrPasswordOTP(),
 		MfaTime: jwt.NewNumericDate(time.Now())}
 }
@@ -44,7 +44,9 @@ func personToken() *auth.Claims {
 func proposalCtx(t *testing.T) (context.Context, *model.Api) {
 	t.Helper()
 	ctx, api := alarmAckTestCtx(t)
-	require.NoError(t, api.RDB.Database.AutoMigrate(&model.AgentProposal{}))
+	require.NoError(t, api.RDB.Database.AutoMigrate(&model.AgentProposal{}, &model.AgentActuationFence{}, &model.AgentEffectOutbox{}))
+	api.KillFeed = model.NewKillFeed(0, nil)
+	api.KillFeed.Beat(api.KillFeed.Now())
 	api.AgentDecider = approvingDecider{}
 	return ctx, api
 }

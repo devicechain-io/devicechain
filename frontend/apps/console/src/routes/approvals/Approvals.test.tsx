@@ -12,14 +12,14 @@ import type { AgentProposal } from '@/lib/api/agent-proposals';
 import type { AgentPolicy } from '@/lib/api/agent-policy';
 
 const h = vi.hoisted(() => ({
-  list: vi.fn(), get: vi.fn(), approve: vi.fn(), reject: vi.fn(), policy: vi.fn(), setActuation: vi.fn(),
+  list: vi.fn(), get: vi.fn(), approve: vi.fn(), reject: vi.fn(), policy: vi.fn(), access: vi.fn(), setActuation: vi.fn(),
   stepUp: vi.fn(), logout: vi.fn(), toast: vi.fn(), authorities: ['agent:admin'] as string[],
   tenant: 'tenant-a', username: 'ann', identityToken: 'session-a',
 }));
 vi.mock('@/lib/api/agent-proposals', () => ({
   listAgentProposals: h.list, getAgentProposal: h.get, approveAgentProposal: h.approve, rejectAgentProposal: h.reject,
 }));
-vi.mock('@/lib/api/agent-policy', () => ({ getAgentPolicy: h.policy, setAgentActuation: h.setActuation }));
+vi.mock('@/lib/api/agent-policy', () => ({ getAgentApprovalAccess: h.access, getAgentPolicy: h.policy, setAgentActuation: h.setActuation }));
 vi.mock('@/auth/AuthProvider', () => ({ useAuth: () => ({
   claims: { tenant: h.tenant, username: h.username, authorities: h.authorities, scopeAnchors: [] },
   identityToken: h.identityToken, logout: h.logout, stepUp: h.stepUp,
@@ -43,6 +43,7 @@ beforeEach(() => {
   h.tenant = 'tenant-a'; h.username = 'ann'; h.identityToken = 'session-a';
   policy = { published: null, operatorSuspended: false, actuationOff: false, instanceEnabled: true, actuationInEffect: true };
   h.policy.mockImplementation(async () => ({ ...policy }));
+  h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
   h.get.mockResolvedValue(proposal);
   h.list.mockResolvedValue({ results: [proposal], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } });
   h.stepUp.mockResolvedValue(undefined);
@@ -306,3 +307,25 @@ describe('inbox and kill switch', () => {
     expect(screen.getByText(proposal.rationale!).querySelector('a')).toBeNull();
   });
 });
+
+describe('approver inbox visibility', () => {
+  it('loads proposals for an approver without agent:admin, without policy or kill switch', async () => {
+    h.authorities = ['alarm:write', 'alarm:read'];
+    h.access.mockResolvedValue({ instanceEnabled: true, canApprove: true });
+    show('/approvals');
+    await screen.findByText(proposal.rationale!);
+    expect(h.list).toHaveBeenCalledTimes(1);
+    expect(h.access).toHaveBeenCalledTimes(1);
+    expect(h.policy).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Turn agent actions off' })).toBeNull();
+  });
+  it.each([false, true])('refuses a non-approver or disabled instance (%s)', async disabled => {
+    h.authorities = ['alarm:write'];
+    h.access.mockResolvedValue({ instanceEnabled: !disabled, canApprove: disabled });
+    show('/approvals');
+    await waitFor(() => expect(h.access).toHaveBeenCalledTimes(1));
+    await screen.findByText('You are not authorized to review agent proposals.');
+    expect(h.list).not.toHaveBeenCalled();
+    expect(h.policy).not.toHaveBeenCalled();
+  });
+ });

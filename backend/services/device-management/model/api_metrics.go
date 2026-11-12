@@ -13,6 +13,7 @@ import (
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Create a new metric definition.
@@ -166,29 +167,74 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 		return nil, err
 	}
 
-	updated.MetricKey = metricKey
-	updated.DataType = dataType
-	updated.SemanticProperty = semanticProperty
-	updated.SemanticPointClass = semanticPointClass
-	updated.Metadata = metadataJSON
-	updated.Enum = enumJSON
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	updated.Unit = request.Unit.ApplyToNullString(updated.Unit)
-	updated.MinValue = rdb.NullFloat64Of(request.MinValue.ApplyTo(dcgraphql.NullFloat64(updated.MinValue)))
-	updated.MaxValue = rdb.NullFloat64Of(request.MaxValue.ApplyTo(dcgraphql.NullFloat64(updated.MaxValue)))
-	updated.Descriptor = request.Descriptor.ApplyToNullString(updated.Descriptor)
-	updated.Expression = expression
+	assignments := map[string]any{}
+	if request.MetricKey.Set {
+		assignments["metric_key"] = metricKey
+	}
+	if request.DataType.Set {
+		assignments["data_type"] = dataType
+	}
+	if request.SemanticProperty.Set {
+		assignments["semantic_property"] = semanticProperty
+	}
+	if request.SemanticPointClass.Set {
+		assignments["semantic_point_class"] = semanticPointClass
+	}
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
+	if request.Enum.Set {
+		assignments["enum"] = enumJSON
+	}
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(updated.Name)
+	}
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(updated.Description)
+	}
+	if request.Unit.Set {
+		assignments["unit"] = request.Unit.ApplyToNullString(updated.Unit)
+	}
+	if request.MinValue.Set {
+		assignments["min_value"] = rdb.NullFloat64Of(request.MinValue.ApplyTo(dcgraphql.NullFloat64(updated.MinValue)))
+	}
+	if request.MaxValue.Set {
+		assignments["max_value"] = rdb.NullFloat64Of(request.MaxValue.ApplyTo(dcgraphql.NullFloat64(updated.MaxValue)))
+	}
+	if request.Descriptor.Set {
+		assignments["descriptor"] = request.Descriptor.ApplyToNullString(updated.Descriptor)
+	}
+	if request.Expression.Set {
+		assignments["expression"] = expression
+	}
 	if reparent != nil {
-		updated.DeviceProfile = reparent
-		updated.DeviceProfileId = reparent.ID
+		assignments["device_profile_id"] = reparent.ID
 	}
 
-	result := api.RDB.DB(ctx).Save(updated)
-	if result.Error != nil {
-		return nil, result.Error
+	if len(assignments) == 0 {
+		return updated, nil
 	}
-	return updated, nil
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		res := rdb.AdvancingFrom(tx, updated.UpdatedAt).Model(updated).Omit(clause.Associations).
+			Where("id = ?", updated.ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	matches, err = api.MetricDefinitionsById(ctx, []uint{updated.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // Get metric definitions by id.

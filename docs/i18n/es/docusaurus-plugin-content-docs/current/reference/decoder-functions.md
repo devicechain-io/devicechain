@@ -64,7 +64,7 @@ Un decodificador indica en `envVersion` la versión de la biblioteca para la que
 | Función | Firma | Qué hace | Coste |
 | --- | --- | --- | --- |
 | `hex.decode` | `hex.decode(string) -> bytes` | Decodes hexadecimal text (even length, no separators) of at most 8192 bytes. | 1 per byte of the text, at least 1 |
-| `base64.decode` | `base64.decode(string) -> bytes` | Decodes standard padded base64 text of at most 8192 bytes into at most 4096 bytes. | 1 per byte of the text, at least 1 |
+| `base64.decode` | `base64.decode(string) -> bytes` | Decodes standard padded base64 text into at most 4096 bytes. The text itself may be at most 5467 bytes, line breaks included, so base64 split across many lines can be refused even when it would decode to 4096 bytes or fewer. | 1 per byte of the text, at least 1 |
 
 ### Códecs {#decoder-functions-codecs}
 

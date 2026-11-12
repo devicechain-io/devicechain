@@ -172,7 +172,7 @@ DeviceChain 的命令是**双向且持久化**的。发出的命令会根据设�
 
 ### 谁报告结果 {#who-reports-the-outcome}
 
-只有设备可以报告成功。`SUCCESSFUL` 和设备报告的 `FAILED` 是只能由设备产生的两种结果。（例外是 Sparkplug 写入：其成功由平台根据节点上报的状态推断，可能意味着该值本来就已是目标值；参见 [Sparkplug B](./sparkplug.md)。）其他终态由平台自行写入：
+命令通常由设备来确定结果：设备报告 `SUCCESSFUL` 或设备报告的 `FAILED`。例外包括 Sparkplug 写入，其成功由平台根据节点上报的状态推断，可能意味着该值本来就已是目标值（参见 [Sparkplug B](./sparkplug.md)），以及没有设备应答可等待的通道，例如[未确认的 LoRaWAN 下行](../guides/inbound-integrations.md#lorawan-downlink)。未确认下行在网络服务器将其加入队列后就标记为 `SUCCESSFUL`，此时没有证据表明设备已收到它。确认下行则根据设备的确认来确定结果。其他终态由平台自行写入：
 
 - `TIMEOUT`、`EXPIRED` 或 `CANCELLED`；
 - 传输完全无法承载命令导致的 `FAILED`；

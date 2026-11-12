@@ -55,7 +55,7 @@ func TestDeviceCredentialsOrderLeadsWithMostRunway(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err, "open sqlite")
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
-	require.NoError(t, db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceCredential{}), "migrate")
+	require.NoError(t, db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &DeviceCredential{}), "migrate")
 	api := NewApi(&rdb.RdbManager{Database: db})
 	ctx := core.WithTenant(context.Background(), "acme")
 

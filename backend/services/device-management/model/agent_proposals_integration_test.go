@@ -24,6 +24,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/actiongate"
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -38,6 +39,8 @@ import (
 // alone and both could take the last slot.
 func TestAgentProposalCountersHoldUnderConcurrentProposals(t *testing.T) {
 	api, ctx := newPostgresIntegrationApi(t)
+	api.KillFeed = NewKillFeed(0, nil)
+	api.KillFeed.Beat(api.KillFeed.Now())
 	require.NoError(t, api.RDB.DB(ctx).Create(&Alarm{
 		TokenReference: rdb.TokenReference{Token: "a1"}, OriginatorType: string(entity.TypeDevice), OriginatorId: 1,
 		AlarmKey: "k", MetricKey: "m", State: string(AlarmStateActive), Severity: string(AlarmSeverityMajor), RaisedTime: time.Now(),
@@ -89,6 +92,8 @@ func TestAgentProposalCountersHoldUnderConcurrentProposals(t *testing.T) {
 // again on what is there, and the second executes with each principal recorded once.
 func TestAgentProposalApprovalsCompareAndSetUnderRace(t *testing.T) {
 	api, ctx := newPostgresIntegrationApi(t)
+	api.KillFeed = NewKillFeed(0, nil)
+	api.KillFeed.Beat(api.KillFeed.Now())
 	require.NoError(t, api.RDB.DB(ctx).Create(&Alarm{
 		TokenReference: rdb.TokenReference{Token: "a1"}, OriginatorType: string(entity.TypeDevice), OriginatorId: 1,
 		AlarmKey: "k", MetricKey: "m", State: string(AlarmStateActive), Severity: string(AlarmSeverityMajor), RaisedTime: time.Now(),
@@ -133,10 +138,17 @@ func TestAgentProposalApprovalsCompareAndSetUnderRace(t *testing.T) {
 }
 
 // concurrentAlarmPublisher is safe across the eight final-approval callers.
-type concurrentAlarmPublisher struct{ calls atomic.Int32 }
+// concurrentAlarmPublisher counts what it is handed. The relay drains EVERY tenant's queued effects,
+// and the integration database outlives each test, so a test names the one alarm it is counting.
+type concurrentAlarmPublisher struct {
+	calls atomic.Int32
+	only  string
+}
 
-func (p *concurrentAlarmPublisher) PublishAlarmEvent(context.Context, *AlarmStateChangeEvent) {
-	p.calls.Add(1)
+func (p *concurrentAlarmPublisher) PublishAlarmEvent(_ context.Context, e *AlarmStateChangeEvent) {
+	if p.only == "" || e.AlarmToken == p.only {
+		p.calls.Add(1)
+	}
 }
 
 // fixedExecutionDecider has no mutable request log, so the race tests do not race the fake.
@@ -148,13 +160,16 @@ func (d *fixedExecutionDecider) Execution(context.Context, actiongate.ExecutionR
 
 func TestExecuteConsumesApprovalOnce(t *testing.T) {
 	api, ctx := newPostgresIntegrationApi(t)
+	api.KillFeed = NewKillFeed(0, nil)
+	api.KillFeed.Beat(api.KillFeed.Now())
 	require.NoError(t, api.RDB.DB(ctx).Create(&Alarm{TokenReference: rdb.TokenReference{Token: "execute"}, OriginatorType: string(entity.TypeDevice), OriginatorId: 1, AlarmKey: "execute", MetricKey: "m", State: string(AlarmStateActive), Severity: string(AlarmSeverityMajor), RaisedTime: time.Now()}).Error)
 	api.AgentDecider = &fixedExecutionDecider{fakeDecider: fakeDecider{act: approveOne(), exec: execApprove(1, "boss")}}
 	out, err := api.ProposeAlarmAction(ctx, rigAgent, AlarmProposalRequest{Action: AlarmProposalAck, AlarmTokens: []string{"execute"}, RequestId: "execute"})
 	require.NoError(t, err)
 	replica := NewApi(api.RDB)
 	replica.AgentDecider = api.AgentDecider
-	pubs := []*concurrentAlarmPublisher{{}, {}}
+	replica.KillFeed = api.KillFeed
+	pubs := []*concurrentAlarmPublisher{{only: "execute"}, {only: "execute"}}
 	api.AlarmPublisher = pubs[0]
 	replica.AlarmPublisher = pubs[1]
 	apis := []*Api{api, replica}
@@ -180,6 +195,9 @@ func TestExecuteConsumesApprovalOnce(t *testing.T) {
 	close(start)
 	wg.Wait()
 	require.EqualValues(t, 1, executed.Load())
+	require.Zero(t, pubs[0].calls.Load()+pubs[1].calls.Load())
+	_, drainErr := api.DrainAgentEffects(ctx, AgentEffectsDrainPageSize)
+	require.NoError(t, drainErr)
 	require.EqualValues(t, 1, pubs[0].calls.Load()+pubs[1].calls.Load())
 	var n int64
 	require.NoError(t, api.RDB.DB(ctx).Model(&rdb.AuditEvent{}).Where("table_name = ? AND operation = ? AND proposal = ?", "alarms", "update", out.Proposal.Token).Count(&n).Error)
@@ -190,6 +208,8 @@ func TestAgentExecutionChangedCycleAndFailedEffect(t *testing.T) {
 	for _, mode := range []string{"cycle", "fault"} {
 		t.Run(mode, func(t *testing.T) {
 			api, ctx := newPostgresIntegrationApi(t)
+			api.KillFeed = NewKillFeed(0, nil)
+			api.KillFeed.Beat(api.KillFeed.Now())
 			require.NoError(t, api.RDB.DB(ctx).Create(&Alarm{TokenReference: rdb.TokenReference{Token: "a1"}, OriginatorType: string(entity.TypeDevice), OriginatorId: 1, AlarmKey: "k", MetricKey: "m", State: string(AlarmStateActive), Severity: string(AlarmSeverityMajor), RaisedTime: time.Now()}).Error)
 			api.AgentDecider = &fakeDecider{act: approveOne(), exec: execApprove(1, "boss")}
 			out, err := api.ProposeAlarmAction(ctx, rigAgent, AlarmProposalRequest{Action: AlarmProposalAck, AlarmTokens: []string{"a1"}, RequestId: "r"})
@@ -229,6 +249,8 @@ func TestAgentExecutionChangedCycleAndFailedEffect(t *testing.T) {
 
 func TestConcurrentFinalApprovalReturnsConcurrentApprovalFast(t *testing.T) {
 	api, ctx := newPostgresIntegrationApi(t)
+	api.KillFeed = NewKillFeed(0, nil)
+	api.KillFeed.Beat(api.KillFeed.Now())
 	require.NoError(t, api.RDB.DB(ctx).Create(&Alarm{
 		TokenReference: rdb.TokenReference{Token: "a1"}, OriginatorType: string(entity.TypeDevice), OriginatorId: 1,
 		AlarmKey: "k", MetricKey: "m", State: string(AlarmStateActive), Severity: string(AlarmSeverityMajor), RaisedTime: time.Now(),
@@ -254,6 +276,8 @@ func TestConcurrentFinalApprovalReturnsConcurrentApprovalFast(t *testing.T) {
 
 func TestAgentExecutionTimeouts(t *testing.T) {
 	api, ctx := newPostgresIntegrationApi(t)
+	api.KillFeed = NewKillFeed(0, nil)
+	api.KillFeed.Beat(api.KillFeed.Now())
 	require.NoError(t, api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := setAgentExecutionTimeouts(tx); err != nil {
 			return err
@@ -273,6 +297,8 @@ func TestAgentExecutionTimeouts(t *testing.T) {
 
 func TestOverlappingTargetExecutionsDoNotDeadlock(t *testing.T) {
 	api, ctx := newPostgresIntegrationApi(t)
+	api.KillFeed = NewKillFeed(0, nil)
+	api.KillFeed.Beat(api.KillFeed.Now())
 	for _, token := range []string{"a1", "a2"} {
 		require.NoError(t, api.RDB.DB(ctx).Create(&Alarm{
 			TokenReference: rdb.TokenReference{Token: token}, OriginatorType: string(entity.TypeDevice), OriginatorId: 1,
@@ -282,6 +308,7 @@ func TestOverlappingTargetExecutionsDoNotDeadlock(t *testing.T) {
 	api.AgentDecider = &fixedExecutionDecider{fakeDecider: fakeDecider{act: approveOne(), exec: execApprove(1, "boss")}}
 	replica := NewApi(api.RDB)
 	replica.AgentDecider = api.AgentDecider
+	replica.KillFeed = api.KillFeed
 	apis := []*Api{api, replica}
 	for iteration := 0; iteration < 20; iteration++ {
 		require.NoError(t, api.RDB.DB(ctx).Model(&Alarm{}).Where("token IN ?", []string{"a1", "a2"}).Update("acknowledged", false).Error)
@@ -325,4 +352,61 @@ func TestOverlappingTargetExecutionsDoNotDeadlock(t *testing.T) {
 			require.Equal(t, string(actiongate.StateExecuted), stored.State)
 		}
 	}
+}
+
+func (p *concurrentAlarmPublisher) PublishAlarmEventDedup(ctx context.Context, e *AlarmStateChangeEvent, _ string) error {
+	p.PublishAlarmEvent(ctx, e)
+	return nil
+}
+
+// The fence's whole point, on a real PostgreSQL: a kill that arrives while an execution holds the
+// fence row cannot commit ahead of it (it waits), so an execution either committed before the kill
+// or is refused; and with no row ever written (the first execution of a tenant) the kill still
+// serializes, because the execution seeds the row it then locks.
+func TestAgentFenceKillSerializesAgainstInFlightExecution(t *testing.T) {
+	api, ctx := newPostgresIntegrationApi(t)
+	api.KillFeed = NewKillFeed(0, nil)
+	api.KillFeed.Beat(api.KillFeed.Now())
+	tenant, ok := core.TenantFromContext(ctx)
+	require.True(t, ok)
+	require.NoError(t, api.RDB.DB(ctx).Create(&Alarm{
+		TokenReference: rdb.TokenReference{Token: "a1"}, OriginatorType: string(entity.TypeDevice), OriginatorId: 1,
+		AlarmKey: "k", MetricKey: "m", State: string(AlarmStateActive), Severity: string(AlarmSeverityMajor), RaisedTime: time.Now(),
+	}).Error)
+	api.AgentDecider = &fixedExecutionDecider{fakeDecider: fakeDecider{act: approveOne(), exec: execApprove(1, "boss")}}
+	out, err := api.ProposeAlarmAction(ctx, rigAgent, AlarmProposalRequest{Action: AlarmProposalAck, AlarmTokens: []string{"a1"}, RequestId: "r"})
+	require.NoError(t, err)
+
+	inFence := make(chan struct{})
+	release := make(chan struct{})
+	api.afterFenceForTest = func(*gorm.DB) error {
+		close(inFence)
+		<-release
+		return nil
+	}
+	execDone := make(chan error, 1)
+	go func() {
+		_, err := api.ApproveAgentProposal(ctx, approver("boss", time.Now()), out.Proposal.Token, out.Digest)
+		execDone <- err
+	}()
+	<-inFence
+	killDone := make(chan error, 1)
+	go func() {
+		killDone <- api.ApplyKillEvent(ctx, actiongate.KillEvent{EventID: "k1", Tenant: tenant, Cause: actiongate.KillCauseTenantDisabled, ActuationGeneration: 5, At: time.Now().UTC()})
+	}()
+	select {
+	case err := <-killDone:
+		t.Fatalf("the kill committed while an execution held the fence row (err=%v)", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-execDone, "the execution that took the fence first commits")
+	require.NoError(t, <-killDone)
+	p, err := api.AgentProposalByToken(ctx, out.Proposal.Token, nil)
+	require.NoError(t, err)
+	require.Equal(t, string(actiongate.StateExecuted), p.State)
+	var fence AgentActuationFence
+	require.NoError(t, api.RDB.DB(ctx).First(&fence).Error)
+	require.False(t, fence.Enabled)
+	require.EqualValues(t, 5, fence.KilledAtGeneration)
 }

@@ -40,9 +40,8 @@ func TestLoadDefaultsEventSources(t *testing.T) {
 	assert.NoError(t, cfg.Validate())
 }
 
-// A non-positive ingest limit falls back to the platform default (fail-safe: an
-// omitted or zeroed limit still meters every tenant, never unlimited). An
-// explicit positive value is preserved.
+// A zero/unset ingest limit takes the platform default, never unlimited.
+// An explicit positive value is preserved.
 func TestIngestRateLimitDefaulting(t *testing.T) {
 	// Zeroed (omitted in the document) => platform default.
 	zeroed := &EventSourcesConfiguration{}

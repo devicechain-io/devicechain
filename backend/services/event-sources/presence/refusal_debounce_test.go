@@ -7,9 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-event-sources/adapter"
 	corepresence "github.com/devicechain-io/dc-microservice/presence"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -29,6 +31,38 @@ func debounceMetrics() (Metrics, prometheus.Counter, prometheus.Counter) {
 	m.Deferred = prometheus.NewCounter(prometheus.CounterOpts{Name: "d"})
 	m.DeferredDropped = prometheus.NewCounter(prometheus.CounterOpts{Name: "x"})
 	return m, m.Deferred, m.DeferredDropped
+}
+
+// blockingAsync holds the writer call until released, optionally honouring cancellation.
+type blockingAsync struct {
+	entered   chan struct{}
+	release   chan struct{}
+	honourCtx bool
+	once      sync.Once
+	mu        sync.Mutex
+	ctx       context.Context
+	err       error
+}
+
+func (b *blockingAsync) EmitPresenceAsync(ctx context.Context, _, _, _ string,
+	_ adapter.PresenceEvent, done func(error)) {
+	b.mu.Lock()
+	b.ctx = ctx
+	b.mu.Unlock()
+	b.once.Do(func() { close(b.entered) })
+	var cancelled <-chan struct{}
+	if b.honourCtx {
+		cancelled = ctx.Done()
+	}
+	select {
+	case <-b.release:
+	case <-cancelled:
+	}
+	err := ctx.Err()
+	b.mu.Lock()
+	b.err = err
+	b.mu.Unlock()
+	done(err)
 }
 
 // 🔑 A REFUSAL-CLOSE IS HELD BACK, AND NOTHING ELSE IS. The broker closes a connection whose
@@ -132,6 +166,86 @@ func TestAStoppedTapDropsWhatItHeldBack(t *testing.T) {
 
 	tap.Handle(context.Background(), false, refusalAdvisoryFor("c", 1_000, 2_000, RefusalCloseReason))
 	require.Equal(t, 1, held.pending(), "a stopped tap must emit at once, not hold")
+}
+
+// A stop joins a held disconnect whose hold has already ended, even when the writer ignores
+// cancellation: the caller must be able to close the writer after the stop returns.
+//
+// GUARD: kills a stop that returns while a held disconnect is still being emitted (a stop that does not wait for it).
+func TestStopDeferredWaitsForAHeldDisconnectAlreadyBeingEmitted(t *testing.T) {
+	writer := &blockingAsync{entered: make(chan struct{}), release: make(chan struct{})}
+	m, _, _ := debounceMetrics()
+	tap := NewTap(testInstance, "mqtt1", failingEmitter{errors.New("sync")}, nil, m).
+		WithAsyncEmitter(writer).WithRefusalDebounce(time.Millisecond)
+	t.Cleanup(func() {
+		select {
+		case <-writer.release:
+		default:
+			close(writer.release)
+		}
+		tap.StopDeferred()
+	})
+	tap.Handle(context.Background(), false, refusalAdvisoryFor("a", 1_000, 2_000, RefusalCloseReason))
+	select {
+	case <-writer.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the held disconnect never entered the writer")
+	}
+
+	returned := make(chan struct{})
+	go func() {
+		tap.StopDeferred()
+		close(returned)
+	}()
+	select {
+	case <-returned:
+		t.Fatal("StopDeferred returned while a held disconnect was still being emitted")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(writer.release)
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StopDeferred did not return after the held emit finished")
+	}
+}
+
+// A stop cancels an in-flight held emit so a slow writer that honours its context cannot
+// hold shutdown indefinitely.
+//
+// GUARD: kills a stop that leaves the in-flight held emit on a context nothing cancels.
+func TestStopDeferredCancelsAHeldDisconnectBeingEmitted(t *testing.T) {
+	writer := &blockingAsync{
+		entered: make(chan struct{}), release: make(chan struct{}), honourCtx: true,
+	}
+	m, _, _ := debounceMetrics()
+	tap := NewTap(testInstance, "mqtt1", failingEmitter{errors.New("sync")}, nil, m).
+		WithAsyncEmitter(writer).WithRefusalDebounce(time.Millisecond)
+	t.Cleanup(func() {
+		close(writer.release)
+		tap.StopDeferred()
+	})
+	tap.Handle(context.Background(), false, refusalAdvisoryFor("a", 1_000, 2_000, RefusalCloseReason))
+	select {
+	case <-writer.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the held disconnect never entered the writer")
+	}
+
+	returned := make(chan struct{})
+	go func() {
+		tap.StopDeferred()
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a slow writer held the stop: the in-flight held emit was not cancelled")
+	}
+	writer.mu.Lock()
+	err := writer.err
+	writer.mu.Unlock()
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 // Past the ceiling a refusal-close is emitted at once, as before the debounce existed: the set is

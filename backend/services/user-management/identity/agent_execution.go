@@ -23,8 +23,11 @@ import (
 // person's console token the client id is empty, so re-running agentActuationDecision would check
 // nobody's client. agentExecutionDecision is told, by the area, the ORIGINAL client and proposer
 // recorded on the proposal and the approvers counted so far, and answers from this service's own
-// records, read now with no cache:
+// records, read from ONE read snapshot of this service's database. Two facts are outside it:
+// the proposer and approvers' sign-in records (NATS KV, each read once before the snapshot) and the
+// instance switch (process configuration). The decision combines these facts:
 //
+//   - the tenant itself: enabled and not being purged;
 //   - the three switches and the policy, with the original client's allowlisting (K1/K2/K3);
 //   - the proposer's standing: their sign-in still open, still a member holding the write the
 //     proposal was derived from, and the original client still one the tenant admits for them
@@ -32,7 +35,8 @@ import (
 //     the write). A proposer who has lost any of that has a dead proposal;
 //   - EVERY counted approver's standing, not only the caller's: still an enabled, unscoped member
 //     with an active second factor, in an approver role, holding the write. A first approval by
-//     someone who has since lost the role no longer counts;
+//     someone who has since lost the role no longer counts. Their named sign-in must remain open
+//     under the identity's current epoch;
 //   - how many approvals the CURRENT policy requires, and the step-up it requires.
 
 // Reasons of the proposal-bound decision, beside agentpolicy's.
@@ -83,27 +87,41 @@ func (m *Manager) AgentActuationDetail(ctx context.Context, claims *auth.Claims,
 	if !holdsProposalAuthority(claims) {
 		return ActuationDetail{}, fmt.Errorf("%w: agentActuationDecision answers only an agent's token", auth.ErrForbidden)
 	}
-	suspended, off, doc, version, err := m.publishedPolicy(ctx, claims.Tenant)
-	if err != nil {
-		return ActuationDetail{}, err
-	}
-	if !m.agentActuation || suspended || off || !doc.ActuationOn() {
-		return ActuationDetail{}, errors.New(errActRefused)
-	}
-	if version != policyVersion {
-		return ActuationDetail{}, errors.New("the agent policy changed while it was being read; ask again")
-	}
-	attested, err := m.clientAttested(ctx, claims.ClientId)
-	if err != nil {
-		return ActuationDetail{}, err
-	}
-	return ActuationDetail{
-		Expiry: doc.ExpiryFor(kind), ActionsPerHour: doc.ActionsPerHourFor(kind), ClientAttested: attested,
-	}, nil
+	var result ActuationDetail
+	err := m.iam.ReadSnapshot(ctx, func(ctx context.Context) error {
+		suspended, off, doc, version, err := m.publishedPolicy(ctx, claims.Tenant)
+		if err != nil {
+			return err
+		}
+		live, err := m.tenantLive(ctx, claims.Tenant)
+		if err != nil {
+			return err
+		}
+		// The instance switch is process configuration, outside the database snapshot.
+		if !m.agentActuation || suspended || !live || off || !doc.ActuationOn() {
+			return errors.New(errActRefused)
+		}
+		if version != policyVersion {
+			return errors.New("the agent policy changed while it was being read; ask again")
+		}
+		attested, err := m.clientAttested(ctx, claims.ClientId)
+		if err != nil {
+			return err
+		}
+		result = ActuationDetail{
+			Expiry: doc.ExpiryFor(kind), ActionsPerHour: doc.ActionsPerHourFor(kind), ClientAttested: attested,
+		}
+		return nil
+	})
+	return result, err
 }
+
+// ApproverSession names the sign-in that gave a principal's approval.
+type ApproverSession struct{ Principal, Sid string }
 
 // ExecutionRequest is what the owning area recorded on a proposal, and who has approved it.
 type ExecutionRequest struct {
+	ApproverSessions  []ApproverSession
 	Kind              agentpolicy.Kind
 	Impact            agentpolicy.Impact
 	TargetCount       int
@@ -117,8 +135,9 @@ type ExecutionRequest struct {
 
 // ExecutionDecision is the proposal-bound verdict.
 type ExecutionDecision struct {
+	ActuationGeneration int
 	agentpolicy.Decision
-	// ValidApprovers are the requested approvers who are approvers now.
+	// ValidApprovers are current approvers whose named sign-ins remain open under the current epoch.
 	ValidApprovers []string
 	// StepUp is the second-factor freshness an approval needs under the current policy.
 	StepUp auth.StepUp
@@ -148,66 +167,127 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 	if len(req.Approvers) > MaxExecutionApprovers {
 		return ExecutionDecision{}, fmt.Errorf("at most %d approvers may be named", MaxExecutionApprovers)
 	}
-	tenant := claims.Tenant
-	suspended, off, doc, version, err := m.publishedPolicy(ctx, tenant)
-	if err != nil {
-		return ExecutionDecision{}, err
+	if len(req.ApproverSessions) > MaxExecutionApprovers {
+		return ExecutionDecision{}, fmt.Errorf("at most %d approver sessions may be named", MaxExecutionApprovers)
 	}
-	st := agentpolicy.State{InstanceEnabled: m.agentActuation, OperatorSuspended: suspended, TenantActuationOff: off, Policy: doc, Version: version}
-	preq := agentpolicy.Request{
-		Kind: req.Kind, Impact: req.Impact, TargetCount: req.TargetCount, GroupTokens: req.GroupTokens,
-		Command: req.Command, Client: req.ProposerClient,
-	}
-	out := ExecutionDecision{ValidApprovers: []string{}}
-	// The cheap checks first, as though approvers were plentiful.
-	st.EligibleApprovers = 2
-	if pre := agentpolicy.Decide(st, preq); pre.Verdict == agentpolicy.VerdictRefuse {
-		out.Decision = pre
-		return out, nil
-	}
-	if reason, err := m.proposerStanding(ctx, tenant, req); err != nil {
-		return ExecutionDecision{}, err
-	} else if reason != "" {
-		// Why another principal lost standing is theirs (and an agent administrator's) to read;
-		// an approver who only needs the yes/no is told the coarse reason.
-		if claims.Username != req.ProposerPrincipal && !claims.HasAuthority(auth.AgentAdmin) {
-			reason = ReasonProposerStanding
+	named := map[string]bool{}
+	for _, s := range req.ApproverSessions {
+		if s.Principal == "" || s.Sid == "" || named[s.Principal] || !slices.Contains(req.Approvers, s.Principal) {
+			return ExecutionDecision{}, errors.New("approver sessions require distinct named approvers and non-empty principal and sid")
 		}
-		out.Decision = agentpolicy.Decision{Verdict: agentpolicy.VerdictRefuse, Reasons: []string{reason}, PolicyVersion: version}
-		return out, nil
+		named[s.Principal] = true
 	}
-	if preq.Attested, err = m.clientAttested(ctx, req.ProposerClient); err != nil {
-		return ExecutionDecision{}, err
+	// KV is outside the database snapshot. Carry errors into the standing checks so
+	// earlier policy refusals keep precedence.
+	var rec *sessionRecord
+	var recErr error
+	if !strings.HasPrefix(req.ProposerPrincipal, auth.ServiceAccountSubjectPrefix) && req.ProposerSid != "" {
+		rec, recErr = m.loadSession(auth.SessionID(req.ProposerSid), req.ProposerPrincipal)
 	}
-	roles := doc.ApproverRoles()
-	if st.EligibleApprovers, err = m.eligibleApprovers(ctx, tenant, roles, w); err != nil {
-		return ExecutionDecision{}, err
-	}
-	out.Decision = agentpolicy.Decide(st, preq)
-	if out.Verdict == agentpolicy.VerdictRefuse {
-		return out, nil
-	}
-	seen := map[string]bool{}
-	for _, p := range req.Approvers {
-		if p == "" || seen[p] {
-			continue
+	records := map[string]*sessionRecord{}
+	recordErrors := map[string]error{}
+	for _, s := range req.ApproverSessions {
+		if s.Principal == req.ProposerPrincipal && auth.SameSession(auth.SessionID(s.Sid), auth.SessionID(req.ProposerSid)) &&
+			!strings.HasPrefix(s.Principal, auth.ServiceAccountSubjectPrefix) {
+			// Self-confirmation can name the proposer's same sign-in; read it only once.
+			records[s.Principal], recordErrors[s.Principal] = rec, recErr
+		} else {
+			records[s.Principal], recordErrors[s.Principal] = m.loadSession(auth.SessionID(s.Sid), s.Principal)
 		}
-		seen[p] = true
-		ok, err := m.approverStanding(ctx, tenant, p, roles, w)
+	}
+	var result ExecutionDecision
+	err := m.iam.ReadSnapshot(ctx, func(ctx context.Context) error {
+		tenant := claims.Tenant
+		suspended, off, doc, version, generation, err := m.publishedPolicyState(ctx, tenant)
 		if err != nil {
-			return ExecutionDecision{}, err
+			return err
 		}
-		if ok {
-			out.ValidApprovers = append(out.ValidApprovers, p)
+		live, err := m.tenantLive(ctx, tenant)
+		if err != nil {
+			return err
 		}
+		// The instance switch is process configuration, outside the database snapshot.
+		st := agentpolicy.State{InstanceEnabled: m.agentActuation, OperatorSuspended: suspended || !live, TenantActuationOff: off, Policy: doc, Version: version}
+		preq := agentpolicy.Request{
+			Kind: req.Kind, Impact: req.Impact, TargetCount: req.TargetCount, GroupTokens: req.GroupTokens,
+			Command: req.Command, Client: req.ProposerClient,
+		}
+		out := ExecutionDecision{ActuationGeneration: generation, ValidApprovers: []string{}}
+		// The cheap checks first, as though approvers were plentiful.
+		st.EligibleApprovers = 2
+		if pre := agentpolicy.Decide(st, preq); pre.Verdict == agentpolicy.VerdictRefuse {
+			out.Decision = pre
+			result = out
+			return nil
+		}
+		if reason, err := m.proposerStanding(ctx, tenant, req, rec, recErr); err != nil {
+			return err
+		} else if reason != "" {
+			// Why another principal lost standing is theirs (and an agent administrator's) to read;
+			// an approver who only needs the yes/no is told the coarse reason.
+			if claims.Username != req.ProposerPrincipal && !claims.HasAuthority(auth.AgentAdmin) {
+				reason = ReasonProposerStanding
+			}
+			out.Decision = agentpolicy.Decision{Verdict: agentpolicy.VerdictRefuse, Reasons: []string{reason}, PolicyVersion: version}
+			result = out
+			return nil
+		}
+		if preq.Attested, err = m.clientAttested(ctx, req.ProposerClient); err != nil {
+			return err
+		}
+		roles := doc.ApproverRoles()
+		if st.EligibleApprovers, err = m.eligibleApprovers(ctx, tenant, roles, w); err != nil {
+			return err
+		}
+		out.Decision = agentpolicy.Decide(st, preq)
+		if out.Verdict == agentpolicy.VerdictRefuse {
+			result = out
+			return nil
+		}
+		seen := map[string]bool{}
+		for _, p := range req.Approvers {
+			if p == "" || seen[p] {
+				continue
+			}
+			seen[p] = true
+			ok, err := m.approverStanding(ctx, tenant, p, roles, w)
+			if err == nil && ok {
+				ok, err = m.approverSessionLive(ctx, tenant, p, records[p], recordErrors[p])
+			}
+			if err != nil {
+				return err
+			}
+			if ok {
+				out.ValidApprovers = append(out.ValidApprovers, p)
+			}
+		}
+		impact := req.Impact
+		if impact == "" {
+			impact = agentpolicy.ImpactNormal
+		}
+		out.StepUp = auth.StepUp{MaxAge: doc.StepUpMaxAge(), AcceptRecoveryCodes: doc.AcceptRecoveryCodes()}
+		out.AllowSelfConfirm = doc.SelfConfirmAllowed() && out.RequiredApprovals == 1 && impact == agentpolicy.ImpactNormal
+		result = out
+		return nil
+	})
+	return result, err
+}
+
+// tenantLive answers whether tenant is live NOW: its row present, enabled and not being purged.
+// A tenant that is not is suspended for a proposer of every kind and for every approver. The
+// token endpoint refuses such a tenant, but a token minted earlier lives on, so the decision reads
+// the row itself. It is reported as the operator's suspension because disabling and purging a
+// tenant are operator actions.
+func (m *Manager) tenantLive(ctx context.Context, tenant string) (bool, error) {
+	t, err := m.iam.TenantByToken(ctx, tenant)
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return false, nil
+	case err != nil:
+		return false, err
+	default:
+		return t.Enabled && !t.PurgeState.Deleted(), nil
 	}
-	impact := req.Impact
-	if impact == "" {
-		impact = agentpolicy.ImpactNormal
-	}
-	out.StepUp = auth.StepUp{MaxAge: doc.StepUpMaxAge(), AcceptRecoveryCodes: doc.AcceptRecoveryCodes()}
-	out.AllowSelfConfirm = doc.SelfConfirmAllowed() && out.RequiredApprovals == 1 && impact == agentpolicy.ImpactNormal
-	return out, nil
 }
 
 // proposalOf is the proposal authority a proposal of kind is derived as.
@@ -225,7 +305,7 @@ func proposalOf(kind agentpolicy.Kind) (string, bool) {
 
 // proposerStanding answers whether the proposer of req could still make the proposal now, with
 // the reason it could not ("" when it could). A store error is returned.
-func (m *Manager) proposerStanding(ctx context.Context, tenant string, req ExecutionRequest) (string, error) {
+func (m *Manager) proposerStanding(ctx context.Context, tenant string, req ExecutionRequest, rec *sessionRecord, recErr error) (string, error) {
 	scope := kindActScope[req.Kind]
 	proposal, ok := proposalOf(req.Kind)
 	if !ok {
@@ -240,12 +320,11 @@ func (m *Manager) proposerStanding(ctx context.Context, tenant string, req Execu
 		// tied to a sign-in that is still open.
 		return ReasonProposerSessionEnded, nil
 	}
-	rec, err := m.loadSession(sid, req.ProposerPrincipal)
-	if err != nil {
-		if errors.Is(err, errSessionEnded) {
+	if recErr != nil {
+		if errors.Is(recErr, errSessionEnded) {
 			return ReasonProposerSessionEnded, nil
 		}
-		return "", err
+		return "", recErr
 	}
 	id, err := m.iam.IdentityByEmail(ctx, req.ProposerPrincipal)
 	switch {
@@ -273,7 +352,7 @@ func (m *Manager) proposerStanding(ctx context.Context, tenant string, req Execu
 	if mem == nil || !mem.Enabled {
 		return ReasonProposerNotMember, nil
 	}
-	_, authorities, anchors, signIn, err := m.resolveTenantGrant(ctx, sid, id, tenant, mem, false)
+	_, authorities, anchors, signIn, err := m.resolveTenantGrantRecord(ctx, rec, id, tenant, mem, false)
 	if err != nil {
 		if errors.Is(err, errTenantAccessDenied) || errors.Is(err, errSessionEnded) {
 			return ReasonProposerNotMember, nil
@@ -335,6 +414,8 @@ func (m *Manager) serviceAccountProposerStanding(ctx context.Context, tenant str
 // approverStanding answers whether principal is an approver of tenant NOW: an enabled identity
 // with an active second factor, an enabled and unscoped membership in one of roles, holding the
 // raw write w (directly or through "*"). A superuser counts only through such a membership.
+// It says nothing about the sign-in an approval was given from: a decision that counts an
+// approval asks approverSessionLive as well.
 func (m *Manager) approverStanding(ctx context.Context, tenant, principal string, roles []string, w auth.Authority) (bool, error) {
 	if len(roles) == 0 {
 		return false, nil
@@ -371,4 +452,42 @@ func (m *Manager) approverStanding(ctx context.Context, tenant, principal string
 		return false, err
 	}
 	return ok[id.ID], nil
+}
+
+// approverSessionLive answers whether the sign-in an approval was given from (rec, loaded from
+// KV before the snapshot opened, or recErr) still stands for principal in tenant NOW: the record
+// open, started under the identity's CURRENT session epoch, and still admitted to tenant. It is the
+// proposer's rule (proposerStanding) applied to an approver.
+//
+// 🔴 A STORED APPROVAL BELONGS TO ONE SIGN-IN. Signing out, a password or second-factor reset,
+// an enrolment or disabling the identity ends it, and a later sign-in cannot revive it: the person
+// approves again. An approver named with no sign-in (an approval recorded before approvals were
+// bound) never counts. What this cannot see is a role removed and granted back while one sign-in
+// stays open; only a per-principal authorization generation would, and none was built.
+func (m *Manager) approverSessionLive(ctx context.Context, tenant, principal string, rec *sessionRecord, recErr error) (bool, error) {
+	id, err := m.iam.IdentityByEmail(ctx, principal)
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return false, nil
+	case err != nil:
+		return false, err
+	case !id.Enabled:
+		return false, nil
+	}
+	if recErr != nil {
+		if errors.Is(recErr, errSessionEnded) {
+			return false, nil
+		}
+		return false, recErr
+	}
+	if rec == nil || rec.Epoch == "" || id.SessionEpoch == "" || rec.Epoch != id.SessionEpoch {
+		return false, nil
+	}
+	if _, err := m.admitTenantRecord(ctx, rec, id, tenant, false); err != nil {
+		if errors.Is(err, errTenantAccessDenied) || errors.Is(err, errSessionEnded) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }

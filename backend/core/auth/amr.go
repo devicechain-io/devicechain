@@ -52,7 +52,7 @@ func WithAmr(amr []string) MintOption {
 }
 
 // WithSessionID stamps the "sid" claim on a token that does not carry one by construction (an
-// OAuth ACCESS token). The value must come from the server-side session record the grant
+// OAuth or console tenant ACCESS token). The value must come from the server-side session record the grant
 // descends from, never from a request. An empty value writes no claim: a missing sid means
 // "unknown" and is never read as a match (SameSession).
 func WithSessionID(sid SessionID) MintOption {

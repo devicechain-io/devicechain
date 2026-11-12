@@ -301,7 +301,7 @@ Cualquier otro nombre de parámetro se rechaza.
 
 **3. Envíalo.** El dispositivo debe tener un [alias](#aliases) `lorawan.deveui`: el DevEUI se lee del dispositivo, nunca del comando. El comando sale por la integración por la que el dispositivo **informó por última vez**.
 
-**Qué significa el resultado.** En un downlink sin confirmar, `SUCCEEDED` significa que el servidor de red **encoló** el downlink (el resultado incluye `{"stage":"queued","queueItemId":...}`). No significa que el dispositivo lo haya recibido: un dispositivo de clase A solo oye los downlinks después de su siguiente transmisión, y un downlink sin confirmar no recibe acuse. En un [downlink confirmado](#lorawan-confirmed), `SUCCEEDED` significa que el dispositivo lo acusó. Los demás resultados:
+**Qué significa el resultado.** En un downlink sin confirmar, `SUCCEEDED` significa que el servidor de red **encoló** el downlink (el resultado incluye `{"stage":"queued","queueItemId":...}`). No significa que el dispositivo lo haya recibido: un dispositivo de clase A solo oye los downlinks después de su siguiente transmisión, y un downlink sin confirmar no recibe acuse. Un comando así no registra evidencia de entrega (`deliveredTime` y `deliveryEvidence` permanecen en null); el acuse de un downlink confirmado registra `DEVICE_RESPONSE`. En un [downlink confirmado](#lorawan-confirmed), `SUCCEEDED` significa que el dispositivo lo acusó. Los demás resultados:
 
 | Qué ocurrió | Resultado |
 | --- | --- |

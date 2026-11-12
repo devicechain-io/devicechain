@@ -274,6 +274,14 @@ func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.I
 	if err != nil {
 		return nil, err
 	}
+	return m.admitTenantRecord(ctx, rec, id, tenant, su)
+}
+
+// admitTenantRecord applies admission to a sign-in already loaded by the caller.
+func (m *Manager) admitTenantRecord(ctx context.Context, rec *sessionRecord, id *iam.Identity, tenant string, su bool) (*signIn, error) {
+	if rec == nil || rec.Email != id.Email {
+		return nil, errSessionEnded
+	}
 	if rec.Method != SessionMethodSso {
 		if err := m.admitPasswordSession(ctx, rec, id, tenant, su); err != nil {
 			return nil, err

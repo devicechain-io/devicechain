@@ -285,3 +285,8 @@ func sameEvents(a, b []AlarmEventType) bool {
 	}
 	return true
 }
+
+func (c *captureAlarmPublisher) PublishAlarmEventDedup(ctx context.Context, e *AlarmStateChangeEvent, _ string) error {
+	c.PublishAlarmEvent(ctx, e)
+	return nil
+}
