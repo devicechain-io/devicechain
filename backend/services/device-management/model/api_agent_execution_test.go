@@ -55,6 +55,8 @@ func testFinalApproval(t *testing.T, action AlarmProposalAction) {
 	} else {
 		require.Equal(t, string(AlarmStateCleared), alarms[0].State)
 	}
+	_, drainErr := r.api.DrainAgentEffects(ctx, AgentEffectsDrainPageSize)
+	require.NoError(t, drainErr)
 	require.Len(t, pub.events, 1)
 	_, err = r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
 	require.ErrorIs(t, err, actiongate.ErrNotPending)
@@ -103,6 +105,7 @@ func TestChangedAlarmCycleRefusesExecution(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, string(actiongate.StateRefused), got.State)
 			require.JSONEq(t, `["DEPENDENCY_CHANGED"]`, string(got.Reasons))
+			require.Empty(t, effectRows(t, r.api, ctx))
 			alarms, err := r.api.AlarmsByToken(ctx, targets)
 			require.NoError(t, err)
 			for _, a := range alarms {
@@ -170,6 +173,7 @@ func testFailedAlarmEffect(t *testing.T) {
 	require.Zero(t, got.Revision)
 	require.JSONEq(t, `[]`, string(got.Approvals))
 	require.Empty(t, pub.events)
+	require.Empty(t, effectRows(t, r.api, ctx))
 	alarms, readErr := r.api.AlarmsByToken(ctx, []string{"a1", "a2"})
 	require.NoError(t, readErr)
 	for _, alarm := range alarms {
@@ -179,6 +183,8 @@ func testFailedAlarmEffect(t *testing.T) {
 	got, err = r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
 	require.NoError(t, err)
 	require.Equal(t, string(actiongate.StateExecuted), got.State)
+	_, drainErr := r.api.DrainAgentEffects(ctx, AgentEffectsDrainPageSize)
+	require.NoError(t, drainErr)
 	require.Len(t, pub.events, 2)
 }
 
@@ -191,6 +197,12 @@ func TestExecutedPublishesAfterCommit(t *testing.T) {
 	r.api.AlarmPublisher = pub
 	_, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
 	require.NoError(t, err)
+	require.Zero(t, pub.calls)
+	row, err := r.api.AgentProposalByToken(ctx, p.Token, nil)
+	require.NoError(t, err)
+	require.Equal(t, string(actiongate.StateExecuted), row.State)
+	_, err = r.api.DrainAgentEffects(ctx, AgentEffectsDrainPageSize)
+	require.NoError(t, err)
 	require.Equal(t, 2, pub.calls)
 }
 
@@ -202,9 +214,6 @@ type committedAlarmPublisher struct {
 }
 
 func (p *committedAlarmPublisher) PublishAlarmEvent(ctx context.Context, ev *AlarmStateChangeEvent) {
-	row, err := p.api.AgentProposalByToken(ctx, p.token, nil)
-	require.NoError(p.t, err)
-	require.Equal(p.t, string(actiongate.StateExecuted), row.State)
 	p.calls++
 }
 
@@ -257,6 +266,7 @@ func TestAgentExecutionAlreadyAcknowledgedIsConsumedWithoutEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, string(actiongate.StateExecuted), got.State)
 	require.Empty(t, pub.events)
+	require.Empty(t, effectRows(t, r.api, ctx))
 }
 
 // A stored dependency set that does not match the stored targets one for one (an extra or a
@@ -282,6 +292,7 @@ func TestDependencySetMustMatchTargetsExactly(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, string(actiongate.StateRefused), got.State)
 			require.JSONEq(t, `["DEPENDENCY_CHANGED"]`, string(got.Reasons))
+			require.Empty(t, effectRows(t, r.api, ctx))
 			alarms, err := r.api.AlarmsByToken(ctx, []string{"a1"})
 			require.NoError(t, err)
 			require.False(t, alarms[0].Acknowledged)
@@ -364,4 +375,9 @@ func TestAgentExecutionLocksSortedCopyAndPreservesEffectOrder(t *testing.T) {
 	require.GreaterOrEqual(t, len(lockTokens), 2)
 	require.Equal(t, []any{"a1", "a2"}, lockTokens[:2])
 	require.Equal(t, []string{"a2", "a1"}, effects)
+}
+
+func (p *committedAlarmPublisher) PublishAlarmEventDedup(ctx context.Context, ev *AlarmStateChangeEvent, dedupID string) error {
+	p.PublishAlarmEvent(ctx, ev)
+	return nil
 }

@@ -545,9 +545,11 @@ dcctl upgrade local devicechain --version v1.4.0
 - **务必先用新版本的 `dcctl` 运行 `dcctl install`，再运行 `dcctl upgrade`。** `dcctl upgrade` 现在读取集群的安装记录，并在以下情况下于写入任何内容之前拒绝升级：上次完成 `dcctl install` 的 `dcctl` 比执行升级的版本旧，安装已开始但从未完成，或记录缺失。补丁版本也适用：使用较新补丁版本的 `dcctl` 运行不带标志的 `dcctl upgrade`，也需要先用该 `dcctl` 运行 `dcctl install`。不带标志的 `dcctl upgrade` 会重新应用实例声明的版本；如果该版本比你运行的 `dcctl` 更新，同样会被拒绝。参见[强制检查升级顺序](#v140-ordering)。
 - **显式指定的 `--version` 必须是你的 `dcctl` 自身的版本，** 对 `install` 和 `upgrade` 都适用。要切换到其他版本，请使用该版本的 `dcctl`。自定义镜像仓库标签、`--build` 和 `enable-area` 不受影响。
 - **只有在发布完成后，才开启新的可选功能，并且每项都要单独进行一次升级。** 每项默认都关闭，仍在运行的 `v1.3.0` Pod 不认识它：
-  - 在 `v1.4.0` 安装就绪后，单独进行一次升级来设置 `infrastructure.nats.mqttDeviceUplinks`。旧 Pod 会如何处理此设置（包括流漂移错误），参见[通过 MQTT 发送设备自有载荷](#v140-mqtt-uplinks)。
+  - 在 `v1.4.0` 安装就绪后，单独进行一次升级来设置 `infrastructure.nats.mqttDeviceUplinks`。旧 Pod 会如何处理此设置：开启期间重启的旧 Pod 会在启动时停止，参见[通过 MQTT 发送设备自有载荷](#v140-mqtt-uplinks)。
   - 在 `v1.4.0` 发布完成后，单独进行一次升级来设置 `agentActuation.enabled`。参见[代理动作（预览）](#v140-agent-actions)。
   - 只有在所有 `event-sources` Pod 都是 `v1.4.0` 后，才设置 `eventSources.ingestMetering: lagCredit`。参见[带延迟补偿的接入计量](#v140-ingest-metering)。
+  - 仅在发布完成后开启 LoRaWAN 下行（`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled`），如果它尚未开启：开启期间重启的 `v1.3.0` `event-sources` Pod 会因 `v1.4.0` 由此派生的配置键而停止。
+  - 仅在发布完成后使用 `--dev-allow-egress`：任何条目都会向实例配置添加 `infrastructure.egress.devAllowedDestinations`，重启的 `v1.3.0` Pod 会拒绝该配置。参见[本地开发出站访问](#v140-dev-egress)。
 - **如果 LoRaWAN 下行已开启**（`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled`），在发布期间重启的 `v1.3.0` `event-sources` Pod 会因 `unknown field "lpwanDownlink"` 而停止。`v1.4.0` 会在 `event-sources` 收到的配置中加入该键（由 chart 推导，不可手动设置），而 `v1.3.0` Pod 会拒绝它不认识的键。未重启的 Pod 不受影响，发布过程会用可正常启动的 `v1.4.0` Pod 替换已停止的 Pod。下行保持关闭（默认）时，`event-sources` 没有任何变化。
 - **检查通用 webhook、Slack、Teams 和 PagerDuty 渠道的 `linkBaseUrl`。**现在保存渠道时会验证它（拒绝查询或片段），升级后投递时，已存储的无效值会使链接被省略，通知仍会发送。参见[标明设备的通知](#v140-notifications)。
 - **重命名以 `dcsa_` 开头的 OAuth 客户端 ID（不区分大小写），包括预置配置中的 ID。** 此前缀标识服务账号，可能与代理策略的客户端列表冲突。参见[现有操作的更严格检查](#v140-tightenings)。
@@ -602,7 +604,7 @@ dcctl upgrade local devicechain --version v1.4.0
 
 此功能需主动开启：`infrastructure.nats.mqttDeviceUplinks` 默认关闭，此时签发的授权与早期版本完全相同，消息代理会拒绝向该主题发布。载荷处理的终止性错误会连同原因记录为解码失败，并计入新的 `devicechain_eventsources_device_uplink_messages_total{result}`；限速丢弃会单独确认，消息阶段的丢弃不经过此计数器。还新增了一个服务平面查询 `brokerAssertedDeviceDecoder`。
 
-**在 `v1.4.0` 安装就绪后，单独进行一次升级来开启此功能。** 开启后，捕获流还会声明上行 subject。如果开启时仍有 `v1.3.0` Pod 运行：重启的 `event-sources` Pod 会因流漂移错误而停止（明确报错，且不会丢失任何数据）；已在运行的 Pod 会确认并丢弃其两个 subject 之外的 subject，因此到达它的原始载荷会丢失；`device-management` Pod 则会拒绝无法安置的上行，该上行会被重新投递。关闭时，捕获流与 `v1.3.0` 声明的完全相同，因此在发布过程中重启的 Pod 不受影响。现有发布授权会保留到重新连接或会话令牌过期，但关闭此设置会在协调时将上行从捕获范围中移除，因此继续发布可能丢失载荷。
+**在 `v1.4.0` 安装就绪后，单独进行一次升级来开启此功能。** 开启后，捕获流还会声明上行 subject。`mqttDeviceUplinks` 是共享实例配置文档中的一个键，因此开启期间，任何区域中启动或重启的 `v1.3.0` Pod 都会在启动时因 `unknown field "mqttDeviceUplinks"` 而停止，且发生在任何流检查之前。未重启的 `v1.3.0` Pod 会继续运行，影响如下：已在运行的 `event-sources` Pod 会确认并丢弃其两个 subject 之外的 subject，因此到达它的原始载荷会丢失；`device-management` Pod 则会拒绝无法安置的上行，该上行会被重新投递。关闭时，捕获流与 `v1.3.0` 声明的完全相同，因此在发布过程中重启的 Pod 不受影响。现有发布授权会保留到重新连接或会话令牌过期，但关闭此设置会在协调时将上行从捕获范围中移除，因此继续发布可能丢失载荷。
 
 使用 `dcctl` 时，在 `--values` 覆盖文件中设置：`instance.config.infrastructure.nats.mqttDeviceUplinks: true`；后续升级会保留它。参见[载荷解码器指南](../guides/payload-decoders.md)和[设备协议参考](../reference/device-protocol.md#raw-payload)。控制台中设备的**发送数据**标签页现在在事件 JSON 旁提供**原始载荷**选项，包含用于 HTTP 路由的 `curl` 和用于该主题的 `mosquitto_pub`。控制台无法判断运维人员是否启用了其中任一功能，因此每条命令都会标明所需设置。
 
@@ -636,7 +638,7 @@ dcctl upgrade local devicechain --version v1.4.0
 
 AI 代理可以提议确认或清除告警。此预览功能默认关闭，最终批准会在平台使用审批人自己的凭据再次询问代理策略后，**以审批人的身份执行 ACK 或 CLEAR**，整个过程在一个数据库事务中完成。如果告警再次触发或被删除、依赖发生变化，或策略拒绝（包括租户开关、实例开关或客户端准入），提案会以 `REFUSED` 结束，不改变任何告警。审计行记录审批人、所代表的人以及提案。控制台审批还会记录代理客户端；如果审批令牌有自己的 `client_id`，则该声明优先。没有自动模式。参见[提案与审批](../concepts/mcp.md#agent-proposals)。
 
-- **仅在发布完成后开启。** 实例开关 `agentActuation.enabled`、运维人员按租户设置的暂停以及租户的代理策略共同控制决策。`v1.3.0` 没有代理 API、策略表或暂停操作：代理请求在这些 Pod 上失败，不执行任何动作。`v1.4.0` Pod 遵守这些开关。请在所有 Pod 都是 `v1.4.0` 后，通过单独一次升级开启实例开关。
+- **仅在发布完成后开启。** 实例开关 `agentActuation.enabled`、运维人员按租户设置的暂停以及租户的代理策略共同控制决策。`v1.3.0` 没有代理 API、策略表或暂停操作：代理请求在这些 Pod 上失败，不执行任何动作。`v1.4.0` Pod 遵守这些开关。请在所有 Pod 都是 `v1.4.0` 后，通过单独一次升级开启实例开关。升级前已登录的人员必须重新登录，其代理才能提出提案：`v1.4.0` 之前开始的登录不带会话纪元，在其下提出的提案会以 `PROPOSER_SESSION_ENDED` 被拒绝。重新登录后，代理再次提出提案即可。
 - **控制台 Approvals 收件箱（预览）。** 用户可以列出提案、查看详情、批准或拒绝，并使用租户紧急关闭开关。需要强化认证时，控制台会提供重新登录，并返回提案。租户、用户或会话改变时，策略、提案及本地决策状态都会重置。 最终批准的确认提示会说明：批准即以你的身份执行该动作；之后收件箱显示结果：`EXECUTED` 及其结果、`REFUSED` 及原因（告警已变化时包括 `DEPENDENCY_CHANGED`），或在他人正在决定同一提案时显示 `CONCURRENT_APPROVAL` 并随后刷新。若服务器仍返回已弃用的 `EXECUTION_NOT_AVAILABLE`，收件箱会说明该批准未被记录，且没有任何告警发生变化。
 - **再次检查审批。** 审批人需要动作所需的写入权限、审批角色和刚验证过的第二因素。先前的批准只有在审批人仍符合资格且第二因素仍在有效时限内才计入。角色持有者变化会改变哪些批准计入。
 - **紧急关闭开关在下一次决策时生效。** 即使无法读取或验证策略，也会接受 `setAgentActuation(enabled: false)`。开关关闭时，尚未到达的决策点会拒绝执行；已通过该决策点的动作可能完成。开关不会撤销已执行的动作。重新开启需要刚验证过的第二因素。这是应用层面的控制。
@@ -647,7 +649,7 @@ AI 代理可以提议确认或清除告警。此预览功能默认关闭，最�
 
 #### 本地开发出站访问 {#v140-dev-egress}
 
-`dcctl bootstrap` 和 `dcctl upgrade` 接受 `--dev-allow-egress <address-or-CIDR>`（可重复指定，也可用逗号分隔；`none` 用于清空），让本地集群中的 webhook 或连接器能够访问你自己机器或局域网上的服务。除非 Kubernetes 上下文以 `kind-` 或 `k3d-` 开头，或为 `minikube`、`docker-desktop`、`rancher-desktop`（也接受带连字符及配置名称后缀的形式），否则会被拒绝。它使用独立的键 `infrastructure.egress.devAllowedDestinations`，运维控制器的 `allowedDestinations` 仍不可调整。无论列出什么，云元数据地址、回环、链路本地和组播范围，以及其他绝不允许的范围仍会被阻止；与其中任一范围重叠的条目都会使 `dcctl` 在开始时失败。该设置会记录在实例上，供后续升级保留；`dcctl instances` 将其显示为 `DEV EGRESS ALLOWED`，每个使用它的服务都会在启动时记录警告。参见[出站连接器](../concepts/outbound-connectors.md)。
+`dcctl bootstrap` 和 `dcctl upgrade` 接受 `--dev-allow-egress <address-or-CIDR>`（可重复指定，也可用逗号分隔；`none` 用于清空），让本地集群中的 webhook 或连接器能够访问你自己机器或局域网上的服务。除非 Kubernetes 上下文以 `kind-` 或 `k3d-` 开头，或为 `minikube`、`docker-desktop`、`rancher-desktop`（也接受带连字符及配置名称后缀的形式），否则会被拒绝。它使用独立的键 `infrastructure.egress.devAllowedDestinations`，运维控制器的 `allowedDestinations` 仍不可调整。无论列出什么，云元数据地址、回环、链路本地和组播范围，以及其他绝不允许的范围仍会被阻止；与其中任一范围重叠的条目都会使 `dcctl` 在开始时失败。该设置会记录在实例上，供后续升级保留；`dcctl instances` 将其显示为 `DEV EGRESS ALLOWED`，每个使用它的服务都会在启动时记录警告。参见[出站连接器](../concepts/outbound-connectors.md)。 请在所有 Pod 都是 `v1.4.0` 后再设置：重启的 `v1.3.0` Pod 会拒绝列出任何条目的配置。
 
 #### 本版本的其他变更 {#v140-other-changes}
 
@@ -660,6 +662,7 @@ AI 代理可以提议确认或清除告警。此预览功能默认关闭，最�
 - **本版本功能的面板和告警。** Ingest、Command Delivery 和 Delivery 看板新增面板，覆盖设备 MQTT 上行、LoRaWAN 确认与下行、集成下行报告、按延迟补偿的接入计量、OCSP 以及清除通知拾取；七个新告警都有[运行手册条目](./alert-runbook.md)：`LpwanAckReportsAnomalous`, `LpwanAckSettlementFailing`, `LpwanDownlinkTrackingFailing`, `IntegrationDownlinkReportsDiscarded`, `DeviceUplinkMessagesFailing`, `X509OcspUnavailableAllowed` and `NotificationClearPickupFailing`。
 - **被拒绝的数据库读取**会返回错误，而不是发生空指针 panic。
 - **代理令牌不能再更改某个人的个人资料名称：**`updateProfile` 拒绝代理令牌。
+- **使用 Go 1.27.4 构建。** `v1.4.0` 的二进制文件和镜像使用 Go 1.27.4 构建，修复了标准库 `net/http` 中的一个漏洞。
 
 #### 架构变更与回退 {#v140-going-back}
 

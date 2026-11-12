@@ -8,6 +8,7 @@ require (
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-gormigrate/gormigrate/v2 v2.1.7
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang/geo v0.0.0-20260713102120-857a528af641
 	github.com/google/cel-go v0.30.0
 	github.com/graph-gophers/graphql-go v1.10.3
@@ -39,7 +40,6 @@ require (
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-sql-driver/mysql v1.8.1 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect

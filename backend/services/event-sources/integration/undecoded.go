@@ -24,9 +24,15 @@ type Undecoded struct {
 	max      int
 	now      func() time.Time
 
-	mu      sync.Mutex
-	pending map[string]*undecodedEntry
-	dropped func()
+	mu        sync.Mutex
+	pending   map[string]*undecodedEntry
+	closed    bool
+	done      chan struct{}
+	closeDone chan struct{}
+	lifetime  context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	dropped   func()
 }
 
 type undecodedEntry struct {
@@ -46,17 +52,23 @@ func NewUndecoded(backend Backend, interval time.Duration, now func() time.Time,
 	if now == nil {
 		now = time.Now
 	}
+	lifetime, cancel := context.WithCancel(context.Background())
 	return &Undecoded{backend: backend, interval: interval, max: 1024, now: now,
+		lifetime: lifetime, cancel: cancel, done: make(chan struct{}), closeDone: make(chan struct{}),
 		pending: make(map[string]*undecodedEntry), dropped: dropped}
 }
 
 // Note records one undecoded uplink. The first one for an integration is written at once (an
 // operator looking at a new integration sees it), later ones are batched. The bearer token is
 // kept only until the batch is written, because device-management authenticates the write with
-// it.
+// it. Note is a no-op once Close starts.
 func (u *Undecoded) Note(tenant, integration, bearer, sampleHex string) {
 	key := tenant + "\x00" + integration
 	u.mu.Lock()
+	if u.closed {
+		u.mu.Unlock()
+		return
+	}
 	e, ok := u.pending[key]
 	if !ok {
 		if len(u.pending) >= u.max {
@@ -84,21 +96,35 @@ func (u *Undecoded) Note(tenant, integration, bearer, sampleHex string) {
 	due := !e.flushing && u.now().Sub(e.lastFlush) >= u.interval
 	if due {
 		e.flushing = true
+		u.wg.Add(1)
 	}
 	u.mu.Unlock()
 	if due {
-		go u.flush(e)
+		go func() {
+			defer u.wg.Done()
+			u.flush(u.lifetime, e)
+		}()
 	}
 }
 
 // Run flushes tallies that are due until ctx ends, so a tally noted just after a flush is
 // written without waiting for the next uplink.
 func (u *Undecoded) Run(ctx context.Context) {
+	u.mu.Lock()
+	if u.closed {
+		u.mu.Unlock()
+		return
+	}
+	u.wg.Add(1)
+	u.mu.Unlock()
+	defer u.wg.Done()
 	t := time.NewTicker(u.interval / 2)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-u.done:
 			return
 		case <-t.C:
 			u.flushDue()
@@ -108,24 +134,62 @@ func (u *Undecoded) Run(ctx context.Context) {
 
 func (u *Undecoded) flushDue() {
 	u.mu.Lock()
+	if u.closed {
+		u.mu.Unlock()
+		return
+	}
 	var due []*undecodedEntry
 	for _, e := range u.pending {
 		if e.count > 0 && !e.flushing && u.now().Sub(e.lastFlush) >= u.interval {
 			e.flushing = true
+			u.wg.Add(1)
 			due = append(due, e)
 		}
 	}
 	u.mu.Unlock()
 	for _, e := range due {
-		u.flush(e)
+		u.flush(u.lifetime, e)
+		u.wg.Done()
 	}
 }
 
-func (u *Undecoded) flush(e *undecodedEntry) {
+// Close stops admission and Run, waits for admitted writes, then writes the remaining tallies.
+// It is idempotent; ctx bounds both the wait and the final writes.
+func (u *Undecoded) Close(ctx context.Context) {
+	u.mu.Lock()
+	if !u.closed {
+		u.closed = true
+		close(u.done)
+		// Keep admitted writes alive while draining, but let the stop deadline cancel them.
+		stop := context.AfterFunc(ctx, u.cancel)
+		go func() {
+			defer close(u.closeDone)
+			defer u.cancel()
+			defer stop()
+			u.wg.Wait()
+			for _, e := range u.pending {
+				if ctx.Err() != nil {
+					return
+				}
+				if e.count > 0 {
+					u.flush(ctx, e)
+				}
+			}
+		}()
+	}
+	u.mu.Unlock()
+	select {
+	case <-u.closeDone:
+	case <-ctx.Done():
+		u.cancel()
+	}
+}
+
+func (u *Undecoded) flush(parent context.Context, e *undecodedEntry) {
 	u.mu.Lock()
 	count, sample, bearer := e.count, e.sample, e.bearer
 	u.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 	err := u.backend.RecordUndecoded(ctx, e.tenant, e.integration, bearer, count, sample)
 

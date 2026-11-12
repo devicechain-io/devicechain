@@ -123,7 +123,11 @@ A superuser's session is never given an action scope. An operator who wants an a
 
 **Who counts as an approver.** An approver is an enabled member, not limited to a customer or group, in one of the policy's approver roles, who holds the write permission the action needs and has a second factor enrolled. Changing who holds an approver role therefore changes who counts, and a verdict that needs more approvers than the tenant has is a refusal.
 
-**Assistants that run without a person.** A service account can be created as an **agent account** (`agent: true`, which cannot be changed later, and which is refused unless the instance switch is on). Its tokens carry its roles' read permissions and, when it asks for an action scope that the tenant's policy allows for its client id, the proposal permissions worked out from its roles' write permissions, never the writes themselves. An ordinary service account holds its roles' permissions as before; an assistant run under one is an integration, not a governed agent. A tenant can require the flag: listing permissions under `serviceAccounts.agentFlagRequiredFor` refuses an ordinary account that would hold any of them, at creation, when its roles change, and at every token request, so a role edited later cannot step around it. OAuth client ids may not begin with `dcsa_`, which service accounts use.
+**Assistants that run without a person.** A service account can be created as an **agent account** (`agent: true`, which cannot be changed later, and which is refused unless the instance switch is on). Its tokens carry its roles' read permissions and, when it asks for an action scope that the tenant's policy allows for its client id, the proposal permissions worked out from its roles' write permissions, never the writes themselves. An ordinary service account holds its roles' permissions as before; an assistant run under one is an integration, not a governed agent. A tenant can require the flag: listing permissions under `serviceAccounts.agentFlagRequiredFor` refuses an ordinary account that would hold any of them, at creation, when its roles change, and at every token request, so a role edited later cannot step around it.
+
+**Legacy OAuth clients.** New OAuth client registrations and seeded configuration refuse client ids beginning with `dcsa_`, case-insensitively; this prefix is reserved for service accounts. Existing clients stored in the database keep working and can still be maintained: their name, description, redirect URIs and scopes can be updated, their secret can be rotated, and they can be enabled, disabled or deleted. They remain ordinary OAuth clients: the prefix gives them no service-account trust, and their secret cannot authenticate the `client_credentials` grant. Existing seed configuration using a reserved id must be changed before startup; changing the seed configuration does not rename or remove the stored client.
+
+To move off a legacy id, register a replacement with a new, nonreserved id, configure its redirect URIs and scopes, and provision a fresh secret if needed. Move integrations and any tenant policy client lists to the replacement, then re-authorize under the new id. Once the integrations have moved, disable and then delete the old client. **Do not delete the old client first: its id cannot be recreated.** Client ids are immutable; this process creates a replacement rather than renaming the existing registration.
 
 **Upgrading and operating.**
 
@@ -145,10 +149,10 @@ An assistant **proposes** an action and people decide. In this **preview**, off 
 ### Reviewing proposals in the console (preview) {#approvals-inbox}
 
 Open **Monitor > Approvals**. The inbox requires an unscoped tenant membership with
-`agent:admin`, and the instance's agent-actions switch must be enabled. Listing proposals also
+`agent:admin` or current approver standing (an approver role, `alarm:write` and an active second factor), and the instance's agent-actions switch must be enabled. Listing proposals also
 needs `alarm:read`; approval still requires the approver role, `alarm:write` and fresh second
 factor described above. The inbox does not edit the policy document: use the policy API to
-configure clients, approver roles and action rules.
+configure clients, approver roles and action rules. The tenant kill switch is visible only to `agent:admin`.
 
 1. The inbox starts at **Pending**. Use **State** to inspect rejected, expired or refused proposals.
    Open a proposal through its client name. Review the action, target tokens, impact, canonical
