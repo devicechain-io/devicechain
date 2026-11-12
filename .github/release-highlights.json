@@ -58,15 +58,15 @@
     "site is a separate repository and nothing here reads its prose. Answering \"no site",
     "impact\" is a fine answer; not asking is not."
   ],
-  "version": "v1.4.0",
-  "theme": "commands are confirmed, devices send their own bytes, and alerts clear",
+  "version": "v1.5.0",
+  "theme": "reviewed automation changes and sign-in-bound agent approvals",
   "breaking": false,
   "highlights": [
-    "Upgrade in place from v1.3.0 with the new release's `dcctl`: `dcctl install` first, then one `dcctl upgrade` per instance. `dcctl` now refuses an upgrade in the wrong order or to another release than its own, and `tokenAudience.enforcement: observe` is refused, so remove it before upgrading. Turn on MQTT device uplinks, agent actions and lag-credited metering only after the rollout, each in an upgrade of its own.",
-    "LoRaWAN commands can be confirmed on ChirpStack v4 and The Things Stack v3, and a command definition can carry a declarative payload encoder that turns typed parameters into the device's bytes.",
-    "A device can publish its own payload over its MQTT connection for its profile's decoder (opt-in).",
-    "Alarm notifications name the device and can link to it, and a policy can notify when an alarm it paged clears.",
-    "Agent actions, a preview: an AI agent can propose acknowledging or clearing alarms, people approve from the console's Approvals inbox, and the final approval carries the action out as the approving person. Off by default, with no automatic mode.",
-    "A `perf-16k` size, corrections to `perf-12k`, a relational `max_wal_size` setting, and an opt-in ingest metering mode that credits the lag a platform stall causes."
+    "Upgrade in place from v1.4.0 with the v1.5.0 dcctl: install with your cluster settings, then upgrade each instance. Correct newly refused settings first, approve waiting agent proposals again, and enable new opt-ins and review protection only after the rollout.",
+    "Automation change review (Preview) compares rule changes against recorded incident and normal windows; protected profiles require an approved review, with audited break-glass actions and database guards.",
+    "Agent actions (Preview) bind approvals to an open sign-in, add MCP proposal tools and in-session step-up, and check authorization at the commit point with a local kill fence and effect outbox.",
+    "dcctl is forward-only with no downgrade override, and remembers MQTT device-uplink and relational WAL settings across later runs.",
+    "Configuration fails closed on invalid values; GraphQL inputs, subscriptions, dashboards and notification rule sets have explicit bounds. Partial updates preserve concurrent edits.",
+    "Opt-in OpenTelemetry tracing follows events across services; incoming trace context is linked to a new local root rather than adopted."
   ]
 }

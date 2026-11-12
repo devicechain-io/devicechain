@@ -8,7 +8,7 @@ title: 载荷解码器
 **载荷解码器**把设备或网络服务器发来的内容转换成测量。你只需在[设备配置文件](../user-guide/device-types-and-profiles.md)上写一次，它是一份简短的规则列表：把偏移 1 处的两个字节读作有符号数，除以 10，存为 `temperature`。它可以读取二进制帧、JSON 正文，或网络服务器已经解码出的对象，产生的测量与任何其他来源相同，并带有你所声明指标的单位和校验。
 
 :::note 实时解码已随 v1.2 提供
-你发布的解码器会在[入站集成](./inbound-integrations.md)的实时上行上运行：当上行所属的设备，其设备类型的配置文件版本带有解码器时，该上行会用它来解码，而不是按网络服务器解码出的内容存储。新发布的解码器可能需要约一分钟才会生效。没有解码器的设备类型照旧存储。升级时如何滚动部署见[发布与升级](../deployment/releases-and-upgrades.md#v120-payload-decoders)。
+你发布的解码器会在[入站集成](./inbound-integrations.md)的实时上行上运行：当上行所属的设备，其设备类型的配置文件版本带有解码器时，该上行会用它来解码，而不是按网络服务器解码出的内容存储。新发布的解码器可能需要约一分钟才会生效。没有解码器的设备类型照旧存储。升级时如何滚动部署见[发布与升级](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-payload-decoders)。
 
 同一个解码器也会读取设备通过自己的连接（HTTP 自 v1.3 起，MQTT 自 v1.4 起）发送的载荷，前提是运维人员已开启该功能。参见[设备自己的连接](#device-connection)。
 :::
@@ -501,4 +501,4 @@ The Things Stack 中的载荷格式化器已经解码了帧，但得到的是 `{
 - [设备协议参考](../reference/device-protocol.md#raw-payload)：原始载荷的主题和路由，以及每条消息的处理方式。
 - [设备类型与配置文件](../user-guide/device-types-and-profiles.md)：指标、草稿与发布。
 - [传输能力矩阵](../reference/transport-matrix.md#inbound-integrations)：每种接入方式支持什么。
-- [发布与升级](../deployment/releases-and-upgrades.md#v120-payload-decoders)：本版本有哪些变化。
+- [发布与升级](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-payload-decoders)：本版本有哪些变化。
