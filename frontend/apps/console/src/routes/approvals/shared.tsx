@@ -6,7 +6,7 @@ import { StepUpDialog } from '@/components/StepUpDialog';
 import { useTranslation } from 'react-i18next';
 import { hasAuthority, isScoped } from '@devicechain/client';
 import { useAuth } from '@/auth/AuthProvider';
-import { getAgentPolicy } from '@/lib/api/agent-policy';
+import { getAgentApprovalAccess, getAgentPolicy } from '@/lib/api/agent-policy';
 import { useQuery } from '@/lib/hooks/use-query';
 import { setStepUpReturn } from '@/lib/stepUpReturn';
 import { Button } from '@/components/ui/button';
@@ -54,12 +54,14 @@ export function StepUpPrompt({ path }: { path: string }) {
 export function ApprovalsGate({ children }: { children: ReactNode }) {
   const { claims, identityToken } = useAuth();
   const { t } = useTranslation('approvals');
-  if (!hasAuthority(claims, 'agent:admin') || isScoped(claims)) {
+  if (isScoped(claims)) {
     return <PageShell title={t('title')}><EmptyState description={t('notAuthorized')} /></PageShell>;
   }
   // Drop policy, proposals and local decision state when another tab changes the session.
   const sessionKey = JSON.stringify([claims?.tenant, claims?.username, identityToken]);
-  return <InstanceGate key={sessionKey}>{children}</InstanceGate>;
+  return hasAuthority(claims, 'agent:admin')
+    ? <InstanceGate key={sessionKey}>{children}</InstanceGate>
+    : <ApproverGate key={sessionKey}>{children}</ApproverGate>;
 }
 function InstanceGate({ children }: { children: ReactNode }) {
   const { t } = useTranslation('approvals');
@@ -69,5 +71,13 @@ function InstanceGate({ children }: { children: ReactNode }) {
   if (!current?.instanceEnabled) return <PageShell title={t('title')}>
     {error ? <ErrorState description={error} /> : <EmptyState description={t('notEnabled')} />}
   </PageShell>;
+  return children;
+}
+
+function ApproverGate({ children }: { children: ReactNode }) {
+  const { t } = useTranslation('approvals');
+  const { current, loading } = useQuery(getAgentApprovalAccess);
+  if (loading) return <PageShell title={t('title')}><LoadingState description={t('loading')} /></PageShell>;
+  if (!current?.canApprove || !current.instanceEnabled) return <PageShell title={t('title')}><EmptyState description={t('notAuthorized')} /></PageShell>;
   return children;
 }
