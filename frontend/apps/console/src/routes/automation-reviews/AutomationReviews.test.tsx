@@ -8,9 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GraphQLRequestError } from '@devicechain/client';
 import type { AutomationReview } from '@/lib/api/automation-reviews';
 
-const h = vi.hoisted(() => ({ get: vi.fn(), list: vi.fn(), run: vi.fn(), approve: vi.fn(), reject: vi.fn(),
+const h = vi.hoisted(() => ({ get: vi.fn(), list: vi.fn(), matching: vi.fn(), run: vi.fn(), approve: vi.fn(), reject: vi.fn(),
   rules: vi.fn(), toast: vi.fn(), clipboard: vi.fn(), authorities: ['device:write'] as string[] }));
-vi.mock('@/lib/api/automation-reviews', () => ({ getAutomationReview: h.get, listAutomationReviews: h.list,
+vi.mock('@/lib/api/automation-reviews', () => ({ getAutomationReview: h.get, listAutomationReviews: h.list, matchingDraftReviewTokens: h.matching,
   runAutomationReview: h.run, approveAutomationReview: h.approve, rejectAutomationReview: h.reject }));
 vi.mock('@/lib/api/device-management', () => ({ listDetectionRules: h.rules }));
 vi.mock('@/auth/AuthProvider', () => ({ useAuth: () => ({ claims: { tenant: 'tenant', username: 'ann', authorities: h.authorities, scopeAnchors: [] }, identityToken: 'session' }) }));
@@ -38,9 +38,12 @@ const review: AutomationReview = {
       reading: { device: 'device-1', at, value: 42, spanSeconds: 0 } }] }],
   inputDigest: 'input-digest', engineBuild: 'engine-1',
 };
+const listReview = { token: review.token, profileToken: review.profileToken, ruleToken: review.ruleToken, kind: review.kind,
+  state: review.state, outcome: review.outcome, createdBy: review.createdBy, createdAt: review.createdAt };
 beforeEach(() => {
   vi.resetAllMocks(); h.authorities = ['device:write'];
-  h.get.mockResolvedValue(review); h.list.mockResolvedValue({ results: [review], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } });
+  h.get.mockResolvedValue(review); h.list.mockResolvedValue({ results: [listReview], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } });
+  h.matching.mockResolvedValue(new Set([review.token]));
   h.rules.mockResolvedValue([]); h.approve.mockResolvedValue({ token: review.token, state: 'APPROVED' });
   h.reject.mockResolvedValue({ token: review.token, state: 'REJECTED' }); h.clipboard.mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: h.clipboard } });
@@ -96,6 +99,14 @@ describe('review detail', () => {
 });
 
 describe('run review panel', () => {
+  it('marks current rows using the filtered token set', async () => {
+    h.list.mockResolvedValue({ results: [listReview, { ...listReview, token: 'stale-review' }], pagination: { pageStart: 1, pageEnd: 2, totalRecords: 2 } });
+    show(true);
+    const current = await screen.findByRole('row', { name: /review-1/ });
+    expect(current.textContent).toContain('Matches current draft');
+    expect(screen.getByRole('row', { name: /stale-review/ }).textContent).toContain('Draft changed');
+    expect(h.matching).toHaveBeenCalledExactlyOnceWith('profile-1');
+  });
   it('refuses 51 devices', async () => {
     show(true); await screen.findByRole('link', { name: 'review-1' });
     fireEvent.change(screen.getByLabelText('Device tokens'), { target: { value: Array.from({ length: 51 }, (_, i) => `device-${i}`).join(',') } });

@@ -9,7 +9,7 @@ export type AutomationReview = NonNullable<AutomationReviewDetailQuery['automati
 const LIST = graphql(`
   query AutomationReviews($criteria: AutomationReviewSearchCriteria!) {
     automationReviews(criteria: $criteria) {
-      results { token profileToken ruleToken kind state outcome createdBy createdAt matchesCurrentDraft }
+      results { token profileToken ruleToken kind state outcome createdBy createdAt }
       pagination { pageStart pageEnd totalRecords }
     }
   }
@@ -57,6 +57,18 @@ const REJECT = graphql(`
 `);
 export async function listAutomationReviews(criteria: AutomationReviewSearchCriteria) {
   return (await gql('device-management', LIST, { criteria })).automationReviews;
+}
+// A filtered search computes the draft digest once per page instead of once per row.
+export async function matchingDraftReviewTokens(profileToken: string) {
+  const tokens = new Set<string>();
+  let pageNumber = 1;
+  for (;;) {
+    const page = await listAutomationReviews({ profileToken, matchingCurrentDraft: true, pageNumber, pageSize: 100 });
+    if (!page) throw new Error('Automation review search returned no result');
+    page.results.forEach(row => tokens.add(row.token));
+    if (!page.results.length || pageNumber * 100 >= (page.pagination.totalRecords ?? 0)) return tokens;
+    pageNumber += 1;
+  }
 }
 export async function getAutomationReview(token: string) {
   return (await gql('device-management', DETAIL, { token })).automationReview;

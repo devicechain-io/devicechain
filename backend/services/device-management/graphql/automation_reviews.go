@@ -25,7 +25,10 @@ func authorizeReviewRead(ctx context.Context) error {
 	if claims, ok := auth.ClaimsFromContext(ctx); ok && len(claims.ScopeAnchors) != 0 {
 		return actiongate.Refusal(actiongate.CodeScopedNotSupported, "automation review reads do not support scoped grants", true)
 	}
-	return auth.Authorize(ctx, auth.DeviceRead)
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return err
+	}
+	return auth.Authorize(ctx, auth.EventRead)
 }
 
 func (r *SchemaResolver) AutomationReview(ctx context.Context, args struct{ Token string }) (*AutomationReviewResolver, error) {

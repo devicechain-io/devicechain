@@ -46,7 +46,7 @@ func (automationWireComparer) CompareRuleVersions(context.Context, model.Compare
 
 func automationWireClaims(name string) *auth.Claims {
 	return &auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: "acme", Username: name,
-		Authorities: []string{string(auth.DeviceRead), string(auth.DeviceWrite)},
+		Authorities: []string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.EventRead)},
 		Amr:         auth.AmrPasswordOTP(), MfaTime: jwt.NewNumericDate(time.Now())}
 }
 
@@ -230,4 +230,48 @@ func TestAutomationReviewWireAuthorizationAndTimestamps(t *testing.T) {
 	var invalid *model.InvalidArgumentError
 	require.ErrorAs(t, res.Errors[0].ResolverError, &invalid)
 	require.Equal(t, "window start must be an RFC3339 timestamp", invalid.Msg)
+}
+
+func TestAutomationReviewWireRequiresEventRead(t *testing.T) {
+	ctx, _, schema := automationWireRig(t)
+	res := schema.Exec(ctx, automationRunDoc, "", map[string]any{"input": automationWireInput()})
+	require.Empty(t, res.Errors)
+	row := automationWireData(t, res.Data, "runAutomationReview")
+	claims := automationWireClaims("third")
+	claims.Authorities = []string{string(auth.DeviceRead), string(auth.DeviceWrite)}
+	for _, tc := range []struct {
+		field, doc string
+		vars       map[string]any
+	}{
+		{"automationReview", `query($token:String!) { automationReview(token:$token) { token } }`, map[string]any{"token": row["token"]}},
+		{"automationReviews", `{ automationReviews(criteria:{profileToken:"profile",pageNumber:1,pageSize:10}) { results { token } } }`, nil},
+		{"runAutomationReview", automationRunDoc, map[string]any{"input": automationWireInput()}},
+		{"approveAutomationReview", `mutation($token:String!,$digest:String!) { approveAutomationReview(token:$token,digest:$digest) { state } }`, map[string]any{"token": row["token"], "digest": row["reviewDigest"]}},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			claims.Authorities = []string{string(auth.DeviceRead), string(auth.DeviceWrite)}
+			res := schema.Exec(auth.WithClaims(ctx, claims), tc.doc, "", tc.vars)
+			require.Len(t, res.Errors, 1)
+			require.ErrorIs(t, res.Errors[0].ResolverError, auth.ErrForbidden)
+			claims.Authorities = append(claims.Authorities, string(auth.EventRead))
+			if tc.field == "runAutomationReview" {
+				input := automationWireInput()
+				input["requestId"] = "third-run"
+				tc.vars = map[string]any{"input": input}
+			}
+			res = schema.Exec(auth.WithClaims(ctx, claims), tc.doc, "", tc.vars)
+			require.Empty(t, res.Errors)
+			got := automationWireData(t, res.Data, tc.field)
+			switch tc.field {
+			case "automationReview":
+				require.Equal(t, row["token"], got["token"])
+			case "automationReviews":
+				require.Equal(t, []any{map[string]any{"token": row["token"]}}, got["results"])
+			case "runAutomationReview":
+				require.Equal(t, "PASSED", got["outcome"])
+			case "approveAutomationReview":
+				require.Equal(t, "APPROVED", got["state"])
+			}
+		})
+	}
 }

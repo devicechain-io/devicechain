@@ -37,11 +37,6 @@ import { SparkplugStandardCommands } from './SparkplugStandardCommands';
 import { DetectionRuleAuthoring } from './DetectionRuleAuthoring';
 import { RuleHealthPanel } from './RuleHealthPanel';
 
-// The change-review panel and its catalog load only when the tab is opened, so the profile page's
-// first download does not carry a Preview feature most visits never open.
-const AutomationReviewPanel = lazy(() =>
-  import('@/routes/automation-reviews/AutomationReviewPanel').then((m) => ({ default: m.AutomationReviewPanel })),
-);
 import {
   listDeviceProfiles,
   getDeviceProfile,
@@ -61,6 +56,12 @@ import {
   type DetectionRule,
 } from '@/lib/api/device-management';
 import '@/i18n/lazy/deviceProfiles';
+
+// The change-review panel and its catalog load only when the tab is opened, so the profile page's
+// first download does not carry a Preview feature most visits never open.
+const AutomationReviewPanel = lazy(() =>
+  import('@/routes/automation-reviews/AutomationReviewPanel').then((m) => ({ default: m.AutomationReviewPanel })),
+);
 
 // The rule type is inside the opaque definition JSON; read it defensively for the
 // list column (event-processing owns the taxonomy — the console only labels it).

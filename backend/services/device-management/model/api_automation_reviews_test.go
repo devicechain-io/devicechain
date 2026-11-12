@@ -45,7 +45,7 @@ type automationReviewRig struct {
 func reviewIdentity(name string) (context.Context, actiongate.Approver) {
 	now := time.Now().UTC().Truncate(time.Second)
 	claims := &auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: "acme", Username: name,
-		Authorities: []string{string(auth.DeviceWrite), string(auth.DeviceRead)}, Amr: auth.AmrPasswordOTP(), MfaTime: jwt.NewNumericDate(now)}
+		Authorities: []string{string(auth.DeviceWrite), string(auth.DeviceRead), string(auth.EventRead)}, Amr: auth.AmrPasswordOTP(), MfaTime: jwt.NewNumericDate(now)}
 	ctx := auth.WithClaims(core.WithTenant(context.Background(), "acme"), claims)
 	return ctx, actiongate.Approver{Principal: name, Amr: claims.Amr, MfaTime: &now, Claims: claims}
 }
@@ -126,10 +126,14 @@ func (r *automationReviewRig) journal(t *testing.T, row *AutomationReview, opera
 
 func TestRunAutomationReviewCapturesEvidenceAndAuthors(t *testing.T) {
 	r := newAutomationReviewRig(t, true)
-	r.changeRule(t, "author")
-	// A broken formula is conservatively constant-reading; an unread metric may ride along.
+	// A legacy baseline can contain a broken formula; only the rule changes in replay.
 	m := &MetricDefinition{DeviceProfileId: r.profile.ID, MetricKey: "calc", DataType: "DOUBLE", Expression: sql.NullString{String: "!!!", Valid: true}, TokenReference: rdb.TokenReference{Token: "calc"}}
 	require.NoError(t, r.api.RDB.DB(r.ctx).Create(m).Error)
+	snapshot, err := r.api.buildProfileSnapshot(r.ctx, r.profile.ID)
+	require.NoError(t, err)
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(&DeviceProfileVersion{}).
+		Where("device_profile_id = ? AND version = ?", r.profile.ID, 1).Update("snapshot", snapshot).Error)
+	r.changeRule(t, "author")
 	row := r.run(t)
 	require.Equal(t, ReviewKindRuleChange, row.Kind)
 	require.Equal(t, ReviewOutcomePassed, row.Outcome)
@@ -187,6 +191,14 @@ func TestRunAutomationReviewUnavailableWritesNothing(t *testing.T) {
 			r.comparer.response = &CompareResponse{RefusalReason: "BUSY", RefusalMessage: "try later"}
 		}},
 		{"digest", "REVIEW_UNAVAILABLE", func(r *automationReviewRig) { r.comparer.response.ResultDigest = "wrong" }},
+		{"missing outcome", "REVIEW_UNAVAILABLE", func(r *automationReviewRig) {
+			r.comparer.response.Result = `{}`
+			r.comparer.response.ResultDigest = reviewHash([]byte(r.comparer.response.Result))
+		}},
+		{"mismatched outcome", "REVIEW_UNAVAILABLE", func(r *automationReviewRig) {
+			r.comparer.response.Result = `{"outcome":"FAILED"}`
+			r.comparer.response.ResultDigest = reviewHash([]byte(r.comparer.response.Result))
+		}},
 		{"nil", "REVIEW_UNAVAILABLE", func(r *automationReviewRig) { r.api.RuleComparer = nil }},
 		{"empty", "REVIEW_UNAVAILABLE", func(r *automationReviewRig) { r.comparer.response = nil }},
 	} {
@@ -577,6 +589,10 @@ func TestAutomationReviewRateLimit(t *testing.T) {
 	_, person := reviewIdentity("creator")
 	_, err := r.api.RunAutomationReview(r.ctx, person, in)
 	reviewErrorCode(t, err, "RATE_LIMITED")
+	again, err := r.api.RunAutomationReview(r.ctx, person, reviewRunInput())
+	require.NoError(t, err)
+	require.Equal(t, row.Token, again.Token)
+	require.Equal(t, row.ReviewDigest, again.ReviewDigest)
 	require.EqualValues(t, MaxReviewsPerHour, r.count(t))
 }
 
@@ -733,8 +749,8 @@ func TestRunAutomationReviewHiddenDependenciesFailClosed(t *testing.T) {
 		{"JSON escape", `{"metric":"te\u006dp_c"}`, "temp_c", ReviewKindUnreviewable, false},
 		{"template", `{"metric":"{{key}}"}`, "unread", ReviewKindUnreviewable, false},
 		{"backslash", `{"expression":"m[\"temp\"]"}`, "unread", ReviewKindUnreviewable, false},
-		{"structured ride along", `{"metric":"temp_c","threshold":26}`, "unread", ReviewKindRuleChange, true},
-		{"structured unread", `{"metric":"temp_c","threshold":26}`, "unread", ReviewKindNoAutomationChange, false},
+		{"structured validation with rule change", `{"metric":"temp_c","threshold":26}`, "unread", ReviewKindUnreviewable, true},
+		{"structured unrelated validation", `{"metric":"temp_c","threshold":26}`, "unread", ReviewKindUnreviewable, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newAutomationReviewRig(t, false)
@@ -763,4 +779,29 @@ func TestRunAutomationReviewHiddenDependenciesFailClosed(t *testing.T) {
 			require.Equal(t, want, changes)
 		})
 	}
+}
+
+func TestReviewPersonRequiresEventRead(t *testing.T) {
+	r := newAutomationReviewRig(t, true)
+	row := r.run(t)
+	ctx, person := reviewIdentity("third")
+	person.Claims.Authorities = []string{string(auth.DeviceRead), string(auth.DeviceWrite)}
+	got, err := r.api.RunAutomationReview(ctx, person, reviewRunInput())
+	require.ErrorIs(t, err, auth.ErrForbidden)
+	require.Nil(t, got)
+	got, err = r.api.ApproveAutomationReview(ctx, person, row.Token, row.ReviewDigest)
+	require.ErrorIs(t, err, auth.ErrForbidden)
+	require.Nil(t, got)
+	got, err = r.api.RejectAutomationReview(ctx, person, row.Token, nil)
+	require.ErrorIs(t, err, auth.ErrForbidden)
+	require.Nil(t, got)
+	person.Claims.Authorities = append(person.Claims.Authorities, string(auth.EventRead))
+	in := reviewRunInput()
+	in.RequestId = "third-run"
+	got, err = r.api.RunAutomationReview(ctx, person, in)
+	require.NoError(t, err)
+	require.Equal(t, "third", got.CreatedBy)
+	got, err = r.api.ApproveAutomationReview(ctx, person, row.Token, row.ReviewDigest)
+	require.NoError(t, err)
+	require.Equal(t, ReviewStateApproved, got.State)
 }

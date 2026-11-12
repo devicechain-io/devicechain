@@ -71,7 +71,9 @@ func snapshotRules(s *ProfileSnapshot) map[string]*DetectionRule {
 // reviewDependencies scans decoded, canonical definitions so JSON escapes cannot
 // hide keys. CEL, escapes and templates can assemble keys at runtime, so they make
 // every metric and command a dependency: edits to them are UNREVIEWABLE rather
-// than reviewable. False positives safely exclude more changes from approval.
+// than reviewable. This scan approximates direct and calculated dependencies;
+// whole-event validation and decoder changes are guarded separately whenever an
+// enabled rule exists, including rules that read no metric key.
 func reviewDependencies(snapshots ...*ProfileSnapshot) map[string]bool {
 	deps := map[string]bool{}
 	keys := map[string]bool{}
@@ -200,8 +202,31 @@ func classifyReviewRules(base, draft *ProfileSnapshot, out *reviewClassification
 	return changedRules, nil
 }
 
-// reviewDefinitionChanges compares semantic elements without their row identity.
-func reviewDefinitionChanges(area string, base, draft map[string]any, deps map[string]bool) ([]ProfileChange, error) {
+// reviewMetricValidation excludes only known labels: unknown fields fail closed,
+// since any invalid declared metric dead-letters the entire measurement event.
+func reviewMetricValidation(element []byte) ([]byte, error) {
+	value, err := reviewJSON(element)
+	if err != nil {
+		return nil, err
+	}
+	if fields, ok := value.(map[string]any); ok {
+		for key := range fields {
+			switch key {
+			case "Name", "Description", "Metadata", "Descriptor", "Unit":
+				delete(fields, key)
+			default:
+				if strings.HasPrefix(key, "Semantic") {
+					delete(fields, key)
+				}
+			}
+		}
+	}
+	return reviewCanonical(value)
+}
+
+// reviewDefinitionChanges preserves dependency-based labels while guarding whole-event
+// validation for enabled automation, even when a rule reads a different metric.
+func reviewDefinitionChanges(area string, base, draft map[string]any, deps map[string]bool, enabled bool) ([]ProfileChange, error) {
 	var changes []ProfileChange
 	keys := map[string]bool{}
 	for k := range base {
@@ -220,8 +245,20 @@ func reviewDefinitionChanges(area string, base, draft map[string]any, deps map[s
 			return nil, err
 		}
 		if !bytes.Equal(b, d) {
+			automation := deps[k]
+			if area == "METRIC" && enabled {
+				bv, err := reviewMetricValidation(b)
+				if err != nil {
+					return nil, err
+				}
+				dv, err := reviewMetricValidation(d)
+				if err != nil {
+					return nil, err
+				}
+				automation = automation || base[k] == nil || draft[k] == nil || !bytes.Equal(bv, dv)
+			}
 			changes = append(changes, ProfileChange{Area: area, Key: k,
-				Change: reviewChangeType(base[k] == nil, draft[k] == nil), Automation: deps[k]})
+				Change: reviewChangeType(base[k] == nil, draft[k] == nil), Automation: automation})
 		}
 	}
 	return changes, nil
@@ -234,6 +271,12 @@ func classifyAutomationReview(base, draft *ProfileSnapshot) (*reviewClassificati
 		return nil, err
 	}
 	deps := reviewDependencies(base, draft)
+	enabled := false
+	for _, snapshot := range []*ProfileSnapshot{base, draft} {
+		for _, rule := range snapshot.Rules {
+			enabled = enabled || rule.Enabled
+		}
+	}
 	bm, dm, bc, dc := map[string]any{}, map[string]any{}, map[string]any{}, map[string]any{}
 	for _, m := range base.Metrics {
 		bm[m.MetricKey] = m
@@ -251,7 +294,7 @@ func classifyAutomationReview(base, draft *ProfileSnapshot) (*reviewClassificati
 		area string
 		b, d map[string]any
 	}{{"METRIC", bm, dm}, {"COMMAND", bc, dc}} {
-		changes, err := reviewDefinitionChanges(pair.area, pair.b, pair.d, deps)
+		changes, err := reviewDefinitionChanges(pair.area, pair.b, pair.d, deps, enabled)
 		if err != nil {
 			return nil, err
 		}
@@ -273,7 +316,7 @@ func classifyAutomationReview(base, draft *ProfileSnapshot) (*reviewClassificati
 			return nil, err
 		}
 		if !bytes.Equal(b, d) {
-			out.Changes = append(out.Changes, ProfileChange{Area: p.area, Change: reviewChangeType(string(b) == "null", string(d) == "null")})
+			out.Changes = append(out.Changes, ProfileChange{Area: p.area, Change: reviewChangeType(string(b) == "null", string(d) == "null"), Automation: p.area == "DECODER" && enabled})
 		}
 	}
 	sort.Slice(out.Changes, func(i, j int) bool {
@@ -294,6 +337,14 @@ func classifyAutomationReview(base, draft *ProfileSnapshot) (*reviewClassificati
 	for _, c := range out.Changes {
 		if c.Automation && c.Area != "RULE" {
 			out.Kind = ReviewKindUnreviewable
+			if c.Area == "DECODER" {
+				out.Reasons = append(out.Reasons, "decoder, which produces the values rules read, changes")
+				continue
+			}
+			if c.Area == "METRIC" && !deps[c.Key] {
+				out.Reasons = append(out.Reasons, fmt.Sprintf("metric %s, which affects whole-event validation, changes", c.Key))
+				continue
+			}
 			verb := "reads"
 			if c.Area == "COMMAND" {
 				verb = "sends"

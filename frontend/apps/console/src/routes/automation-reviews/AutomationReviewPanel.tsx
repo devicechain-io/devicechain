@@ -7,7 +7,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { hasAuthority } from '@devicechain/client';
 import { useAuth } from '@/auth/AuthProvider';
-import { listAutomationReviews, runAutomationReview } from '@/lib/api/automation-reviews';
+import { listAutomationReviews, matchingDraftReviewTokens, runAutomationReview } from '@/lib/api/automation-reviews';
 import { listDetectionRules } from '@/lib/api/device-management';
 import type { RunAutomationReviewInput } from '@/gql/device-management/graphql';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -50,7 +50,12 @@ function Panel({ profileToken }: { profileToken: string }) {
   const { claims } = useAuth();
   const canWrite = hasAuthority(claims, 'device:write');
   const [pageNumber, setPageNumber] = useState(1);
-  const { current: data, loading, error } = useQuery(() => listAutomationReviews({ profileToken, pageNumber, pageSize }), [profileToken, pageNumber]);
+  const { current: data, loading, error } = useQuery(async () => {
+    const [page, matchingTokens] = await Promise.all([
+      listAutomationReviews({ profileToken, pageNumber, pageSize }), matchingDraftReviewTokens(profileToken),
+    ]);
+    return page && { ...page, results: page.results.map(row => ({ ...row, matchesCurrentDraft: matchingTokens.has(row.token) })) };
+  }, [profileToken, pageNumber]);
   const reviews = [...(data?.results ?? [])].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return <div className="space-y-4">
     <SectionPanel title={t('tab')}><Badge variant="secondary">{t('preview')}</Badge>

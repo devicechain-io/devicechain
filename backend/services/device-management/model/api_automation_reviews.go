@@ -40,7 +40,8 @@ var errReviewConcurrentApproval = actiongate.Refusal(actiongate.CodeConcurrentAp
 
 func reviewRefusal(code, msg string) error { return actiongate.Refusal(code, msg, false) }
 
-// AuthorizeReviewPerson refuses machine principals even when they hold device:write.
+// AuthorizeReviewPerson requires reading authority because frozen evidence includes
+// event readings, and refuses machine principals even when they hold device:write.
 func AuthorizeReviewPerson(ctx context.Context, authority auth.Authority) (actiongate.Approver, error) {
 	a, err := actiongate.AuthorizeApprover(ctx, authority)
 	if err != nil {
@@ -48,6 +49,9 @@ func AuthorizeReviewPerson(ctx context.Context, authority auth.Authority) (actio
 	}
 	if strings.HasPrefix(a.Claims.Username, auth.ServiceAccountSubjectPrefix) || strings.HasPrefix(a.Claims.Subject, auth.ServiceAccountSubjectPrefix) {
 		return actiongate.Approver{}, actiongate.Refusal("NOT_A_PERSON", "automation reviews require a person's own session", true)
+	}
+	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+		return actiongate.Approver{}, err
 	}
 	return a, nil
 }
@@ -165,6 +169,14 @@ func (api *Api) RunAutomationReview(ctx context.Context, person actiongate.Appro
 	if err != nil {
 		return nil, err
 	}
+	scopeDigest, expectationsDigest := reviewHash(scope), reviewHash(expectations)
+	prior, err := api.reviewByRequest(ctx, in.RequestId)
+	if err != nil {
+		return nil, err
+	}
+	if prior != nil {
+		return existingReview(prior, person.Principal, scopeDigest, expectationsDigest)
+	}
 	// The bound is in the same zone gorm stamps created_at with, so a store that compares
 	// timestamps as text (sqlite) orders them the same way PostgreSQL does.
 	var count int64
@@ -173,14 +185,6 @@ func (api *Api) RunAutomationReview(ctx context.Context, person actiongate.Appro
 	}
 	if count >= MaxReviewsPerHour {
 		return nil, reviewRefusal("RATE_LIMITED", "at most 60 automation reviews may run per tenant per hour")
-	}
-	scopeDigest, expectationsDigest := reviewHash(scope), reviewHash(expectations)
-	prior, err := api.reviewByRequest(ctx, in.RequestId)
-	if err != nil {
-		return nil, err
-	}
-	if prior != nil {
-		return existingReview(prior, person.Principal, scopeDigest, expectationsDigest)
 	}
 	profile, err := api.deviceProfileByToken(ctx, in.ProfileToken)
 	if err != nil {
@@ -296,6 +300,12 @@ func (api *Api) fillReviewEvidence(ctx context.Context, r *AutomationReview, in 
 		}
 		if !json.Valid([]byte(res.Result)) || !reviewResultDigestEqual(reviewHash([]byte(res.Result)), res.ResultDigest) ||
 			!slices.Contains([]string{ReviewOutcomePassed, ReviewOutcomeFailed, ReviewOutcomeInconclusive}, res.Outcome) {
+			return ErrReviewUnavailable
+		}
+		var verified struct {
+			Outcome string `json:"outcome"`
+		}
+		if err := json.Unmarshal([]byte(res.Result), &verified); err != nil || verified.Outcome != res.Outcome {
 			return ErrReviewUnavailable
 		}
 		r.RuleToken = &classification.RuleToken

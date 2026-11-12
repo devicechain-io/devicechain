@@ -5226,11 +5226,11 @@ enum AutomationReviewVerdict {
 
 """(Preview: may change in a minor release.) Automation review ChangeKind vocabulary."""
 enum AutomationReviewChangeKind {
-    """(Preview: may change in a minor release.) The number of added intents."""
+    """(Preview: may change in a minor release.) An intent exists only in the draft."""
     ADDED
-    """(Preview: may change in a minor release.) The number of removed intents."""
+    """(Preview: may change in a minor release.) An intent exists only in the baseline."""
     REMOVED
-    """(Preview: may change in a minor release.) The number of shifted paired intents."""
+    """(Preview: may change in a minor release.) A paired intent occurs at a different time."""
     SHIFTED
     """(Preview: may change in a minor release.) Content changed."""
     CONTENT_CHANGED
@@ -5266,9 +5266,9 @@ enum AutomationReviewProfileChangeArea {
 
 """(Preview: may change in a minor release.) Automation review ProfileChangeType vocabulary."""
 enum AutomationReviewProfileChangeType {
-    """(Preview: may change in a minor release.) The number of added intents."""
+    """(Preview: may change in a minor release.) A profile element was added."""
     ADDED
-    """(Preview: may change in a minor release.) The number of removed intents."""
+    """(Preview: may change in a minor release.) A profile element was removed."""
     REMOVED
     """(Preview: may change in a minor release.) Modified."""
     MODIFIED
@@ -5350,7 +5350,7 @@ type AutomationReview {
 type AutomationReviewApproval {
     """(Preview: may change in a minor release.) The approving person."""
     principal: String!
-    """(Preview: may change in a minor release.) When the approval threshold was reached, in RFC3339 format."""
+    """(Preview: may change in a minor release.) When this approval was recorded, in RFC3339 format."""
     approvedAt: String!
     """(Preview: may change in a minor release.) The policy revision recorded with this approval."""
     policyRevision: Int!
@@ -5562,7 +5562,7 @@ input RunAutomationReviewInput {
     deviceTokens: [String!]!
     """(Preview: may change in a minor release.) The incident and normal replay windows."""
     windows: [AutomationReviewWindowInput!]!
-    """(Preview: may change in a minor release.) The verdicts for the supplied expectations."""
+    """(Preview: may change in a minor release.) The expectations to evaluate against the comparison."""
     expectations: [AutomationReviewExpectationInputValue!]
     """(Preview: may change in a minor release.) The maximum pairing shift, in seconds; null uses the engine default."""
     shiftWindowSeconds: Int
@@ -5613,13 +5613,13 @@ type AutomationReviewSearchResults {
 }
 
 type Query {
-    """(Preview: may change in a minor release.) Read frozen automation evidence. Requires device:read and an unscoped caller."""
+    """(Preview: may change in a minor release.) Read frozen automation evidence. Requires device:read and event:read and an unscoped caller."""
     automationReview(
         """(Preview: may change in a minor release.) The review token."""
         token: String!
     ): AutomationReview
 
-    """(Preview: may change in a minor release.) List automation reviews. Requires device:read and an unscoped caller."""
+    """(Preview: may change in a minor release.) List automation reviews. Requires device:read and event:read and an unscoped caller."""
     automationReviews(
         """(Preview: may change in a minor release.) Profile, state, draft matching and paging filters."""
         criteria: AutomationReviewSearchCriteria!
@@ -6526,13 +6526,13 @@ type Query {
 
 # Contains mutations executed against model.
 type Mutation {
-    """(Preview: may change in a minor release.) Compare a profile draft with its published baseline. Requires an unscoped person with device:write."""
+    """(Preview: may change in a minor release.) Compare a profile draft with its published baseline. Requires an unscoped person with device:write and event:read."""
     runAutomationReview(
         """(Preview: may change in a minor release.) The draft, devices, windows and expectations to review."""
         input: RunAutomationReviewInput!
     ): AutomationReview
 
-    """(Preview: may change in a minor release.) Approve frozen evidence. Requires an unscoped person with device:write and a recent second factor; refuses the review creator and draft authors."""
+    """(Preview: may change in a minor release.) Approve frozen evidence. Requires an unscoped person with device:write and event:read and a recent second factor; refuses the review creator and draft authors."""
     approveAutomationReview(
         """(Preview: may change in a minor release.) The review token."""
         token: String!
@@ -6540,7 +6540,7 @@ type Mutation {
         digest: String!
     ): AutomationReview
 
-    """(Preview: may change in a minor release.) Reject a review. Requires an unscoped person with device:write."""
+    """(Preview: may change in a minor release.) Reject a review. Requires an unscoped person with device:write and event:read."""
     rejectAutomationReview(
         """(Preview: may change in a minor release.) The review token."""
         token: String!

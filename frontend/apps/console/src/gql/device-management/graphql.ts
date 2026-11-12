@@ -237,13 +237,13 @@ export type AuditEventSearchCriteria = {
 
 /** (Preview: may change in a minor release.) Automation review ChangeKind vocabulary. */
 export type AutomationReviewChangeKind =
-  /** (Preview: may change in a minor release.) The number of added intents. */
+  /** (Preview: may change in a minor release.) An intent exists only in the draft. */
   | 'ADDED'
   /** (Preview: may change in a minor release.) Content changed. */
   | 'CONTENT_CHANGED'
-  /** (Preview: may change in a minor release.) The number of removed intents. */
+  /** (Preview: may change in a minor release.) An intent exists only in the baseline. */
   | 'REMOVED'
-  /** (Preview: may change in a minor release.) The number of shifted paired intents. */
+  /** (Preview: may change in a minor release.) A paired intent occurs at a different time. */
   | 'SHIFTED';
 
 /** (Preview: may change in a minor release.) AutomationReviewExpectationInputValue parameters. */
@@ -295,11 +295,11 @@ export type AutomationReviewProfileChangeArea =
 
 /** (Preview: may change in a minor release.) Automation review ProfileChangeType vocabulary. */
 export type AutomationReviewProfileChangeType =
-  /** (Preview: may change in a minor release.) The number of added intents. */
+  /** (Preview: may change in a minor release.) A profile element was added. */
   | 'ADDED'
   /** (Preview: may change in a minor release.) Modified. */
   | 'MODIFIED'
-  /** (Preview: may change in a minor release.) The number of removed intents. */
+  /** (Preview: may change in a minor release.) A profile element was removed. */
   | 'REMOVED';
 
 /** (Preview: may change in a minor release.) Profile, lifecycle, draft matching and paging filters. */
@@ -1655,7 +1655,7 @@ export type QueryParamInput = {
 export type RunAutomationReviewInput = {
   /** (Preview: may change in a minor release.) The device tokens selected for replay. */
   deviceTokens: Array<string>;
-  /** (Preview: may change in a minor release.) The verdicts for the supplied expectations. */
+  /** (Preview: may change in a minor release.) The expectations to evaluate against the comparison. */
   expectations?: Array<AutomationReviewExpectationInputValue> | null | undefined;
   /** (Preview: may change in a minor release.) The profile whose draft is reviewed. */
   profileToken: string;
@@ -1972,7 +1972,7 @@ export type AutomationReviewsQueryVariables = Exact<{
 }>;
 
 
-export type AutomationReviewsQuery = { automationReviews: { results: Array<{ token: string, profileToken: string | null, ruleToken: string | null, kind: AutomationReviewKind, state: AutomationReviewState, outcome: AutomationReviewOutcome, createdBy: string, createdAt: string, matchesCurrentDraft: boolean | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } | null };
+export type AutomationReviewsQuery = { automationReviews: { results: Array<{ token: string, profileToken: string | null, ruleToken: string | null, kind: AutomationReviewKind, state: AutomationReviewState, outcome: AutomationReviewOutcome, createdBy: string, createdAt: string }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } | null };
 
 export type AutomationReviewDetailQueryVariables = Exact<{
   token: string;
@@ -3694,7 +3694,6 @@ export const AutomationReviewsDocument = new TypedDocumentString(`
       outcome
       createdBy
       createdAt
-      matchesCurrentDraft
     }
     pagination {
       pageStart
