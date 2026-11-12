@@ -531,7 +531,7 @@ func waitCapacityPumps(t *testing.T, exited <-chan string, ids []string) {
 
 func TestSubscriptionCapacityDefaultAndReplacement(t *testing.T) {
 	h, res, url := serveLimits(t, nil)
-	require.Equal(t, 1000, h.operationLimit())
+	require.Equal(t, 100, h.operationLimit())
 	exited := make(chan string, MaxSubscriptionsPerConnection+1)
 	h.pumpExited = func(id string) { exited <- id }
 	conn := dialInit(t, url, nil)
@@ -540,7 +540,7 @@ func TestSubscriptionCapacityDefaultAndReplacement(t *testing.T) {
 		writeMsg(t, conn, subscribeMsg(fmt.Sprint(i), "subscription { held }", nil))
 		waitCapacityEntry(t, res, int64(i))
 	}
-	// 1000 sequential handshakes precede this read; dialInit's absolute deadline may be spent.
+	// Sequential handshakes precede this read; dialInit's absolute deadline may be spent.
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	writeMsg(t, conn, subscribeMsg(fmt.Sprint(MaxSubscriptionsPerConnection+1), "subscription { held }", nil))
 	got := readMsg(t, conn)
@@ -553,7 +553,7 @@ func TestSubscriptionCapacityDefaultAndReplacement(t *testing.T) {
 	require.NoError(t, json.Unmarshal(got.Payload, &errs))
 	require.Len(t, errs, 1)
 	assert.Contains(t, errs[0].Message, "subscriptions per connection")
-	assert.Equal(t, "limit exceeded for subscriptions per connection: 1001 requested, at most 1000 allowed", errs[0].Message)
+	assert.Equal(t, "limit exceeded for subscriptions per connection: 101 requested, at most 100 allowed", errs[0].Message)
 	assert.Equal(t, "LIMIT_EXCEEDED", errs[0].Extensions["code"])
 	require.Equal(t, int64(MaxSubscriptionsPerConnection), res.entries.Load())
 
@@ -574,9 +574,91 @@ func TestSubscriptionCapacityDefaultAndReplacement(t *testing.T) {
 	waitCapacityPumps(t, exited, ids)
 }
 
+func TestSubscriptionCapacityConfiguredAndPerConnection(t *testing.T) {
+	h, res, url := serveLimits(t, nil)
+	h.MaxSubscriptionsPerConnection = 1
+	exited := make(chan string, 3)
+	h.pumpExited = func(id string) { exited <- id }
+	first := dialInit(t, url, nil)
+	writeMsg(t, first, subscribeMsg("first", "subscription { held }", nil))
+	waitCapacityEntry(t, res, 1)
+	writeMsg(t, first, subscribeMsg("refused", "subscription { held }", nil))
+	got := readMsg(t, first)
+	require.Equal(t, msgError, got.Type)
+	require.Equal(t, "refused", got.ID)
+	assert.Contains(t, string(got.Payload), "subscriptions per connection: 2 requested, at most 1 allowed")
+	assert.Contains(t, string(got.Payload), "LIMIT_EXCEEDED")
+	require.Equal(t, int64(1), res.entries.Load())
+
+	second := dialInit(t, url, nil)
+	writeMsg(t, second, subscribeMsg("second", "subscription { held }", nil))
+	waitCapacityEntry(t, res, 2)
+	writeMsg(t, first, wsMessage{ID: "first", Type: msgComplete})
+	waitCapacityPump(t, exited, "first")
+	writeMsg(t, first, subscribeMsg("refused", "subscription { held }", nil))
+	waitCapacityEntry(t, res, 3)
+	writeMsg(t, first, wsMessage{Type: msgPing})
+	require.Equal(t, msgPong, readMsg(t, first).Type)
+	require.NoError(t, first.Close())
+	require.NoError(t, second.Close())
+	waitCapacityPumps(t, exited, []string{"refused", "second"})
+}
+
+func TestSubscriptionCapacityNonPositiveHandlerUsesDefault(t *testing.T) {
+	for _, value := range []int{0, -1} {
+		h := &SubscriptionHandler{MaxSubscriptionsPerConnection: value}
+		require.Equal(t, 100, h.operationLimit())
+	}
+}
+
+func TestSubscriptionCapacityIncludesPumpFinishingAWrite(t *testing.T) {
+	h, _, url := serveLimits(t, nil)
+	exited := make(chan string, 1)
+	h.pumpExited = func(id string) { exited <- id }
+	conn := dialInit(t, url, nil)
+	h.mu.Lock()
+	var c *wsConnection
+	for live := range h.conns {
+		c = live
+	}
+	h.mu.Unlock()
+	require.NotNil(t, c)
+
+	// Hold the writer so a naturally completed pump cannot return. Its operation
+	// id is removed before the complete frame is written, but it still owns a
+	// goroutine and must still occupy capacity.
+	c.writeMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			c.writeMu.Unlock()
+		}
+	}()
+	writeMsg(t, conn, subscribeMsg("finished", "subscription { finished }", nil))
+	require.Eventually(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.pumps == 1 && len(c.ops) == 0
+	}, 5*time.Second, time.Millisecond, "pump must remain allocated while its write is pending")
+	// Completing an already unregistered id must not free that pump's capacity.
+	c.stopOperation("finished")
+	c.mu.Lock()
+	pumps := c.pumps
+	c.mu.Unlock()
+	require.Equal(t, 1, pumps)
+	c.writeMu.Unlock()
+	locked = false
+	require.Equal(t, msgComplete, readMsg(t, conn).Type)
+	waitCapacityPump(t, exited, "finished")
+	c.mu.Lock()
+	pumps = c.pumps
+	c.mu.Unlock()
+	require.Zero(t, pumps, "capacity is released when the pump exits")
+}
+
 func TestSubscriptionCapacityCompletedAndInvalidSlots(t *testing.T) {
 	h, res, url := serveLimits(t, nil)
-	h.maxOps = 2
+	h.MaxSubscriptionsPerConnection = 2
 	exited := make(chan string, 4)
 	h.pumpExited = func(id string) { exited <- id }
 	conn := dialInit(t, url, nil)
@@ -618,7 +700,7 @@ func TestSubscriptionCapacityCompletedAndInvalidSlots(t *testing.T) {
 
 func TestSubscriptionCapacityDuplicateIDClosesConnection(t *testing.T) {
 	h, res, url := serveLimits(t, nil)
-	h.maxOps = 2
+	h.MaxSubscriptionsPerConnection = 2
 	exited := make(chan string, 2)
 	h.pumpExited = func(id string) { exited <- id }
 	conn := dialInit(t, url, nil)

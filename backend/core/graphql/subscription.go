@@ -29,13 +29,8 @@ import (
 // speak. Clients MUST negotiate exactly this subprotocol (ADR-037).
 const wsSubprotocol = "graphql-transport-ws"
 
-// MaxSubscriptionsPerConnection is the fixed per-connection ceiling on concurrent
-// subscription operations. It is generous on purpose: the dashboard hub opens one
-// subscription per distinct device on a shared per-area socket, and an anchor-bound
-// widget can expand to a full member page (500 devices), so no first-party client
-// reaches 1000. It is not a per-tenant ceiling across sockets. It is not
-// configurable and not rendered in any config document, so old pods start unchanged.
-const MaxSubscriptionsPerConnection = 1000
+// MaxSubscriptionsPerConnection is the default per-connection pump ceiling.
+const MaxSubscriptionsPerConnection = config.DefaultGraphQLMaxSubscriptionsPerConnection
 
 const (
 	// connectionInitWait bounds how long the server waits for the client's
@@ -146,8 +141,10 @@ type SubscriptionHandler struct {
 	// one.
 	MaxMessageBytes int64
 
-	// maxOps overrides the operation ceiling for tests; zero uses the fixed default.
-	maxOps int
+	// MaxSubscriptionsPerConnection bounds live pumps on each socket, including
+	// cancelled pumps still unwinding. Non-positive values use the platform default.
+	// Set before serving, from infrastructure.graphql.maxSubscriptionsPerConnection.
+	MaxSubscriptionsPerConnection int
 
 	// mu guards conns, the set of connections that have been upgraded and have not
 	// yet finished. It is what makes Shutdown possible at all: net/http's Shutdown
@@ -235,8 +232,8 @@ func (h *SubscriptionHandler) readLimit() int64 {
 
 // operationLimit resolves the per-connection ceiling, including for zero-value handlers.
 func (h *SubscriptionHandler) operationLimit() int {
-	if h.maxOps > 0 {
-		return h.maxOps
+	if h.MaxSubscriptionsPerConnection > 0 {
+		return h.MaxSubscriptionsPerConnection
 	}
 	return MaxSubscriptionsPerConnection
 }
@@ -371,6 +368,9 @@ type wsConnection struct {
 
 	mu  sync.Mutex                    // guards ops
 	ops map[string]context.CancelFunc // active operation id -> cancel
+	// pumps includes reservations in Subscribe and cancelled/unregistered pumps
+	// until they finish writing and return. Removing an id does not free capacity.
+	pumps int // guarded by mu
 
 	// closing is set once the server has decided to end the connection, before its
 	// close frame is written; from then on no pump reports `complete` (see terminate).
@@ -627,13 +627,14 @@ func (c *wsConnection) startOperation(authedCtx context.Context, msg wsMessage) 
 		return
 	}
 	maxOps := c.handler.operationLimit()
-	if len(c.ops) >= maxOps {
+	if c.pumps >= maxOps {
 		c.mu.Unlock()
 		c.writeErrorCode(msg.ID, limit.Exceeded("subscriptions per connection", maxOps+1, maxOps).Error(), limit.Code)
 		return
 	}
 	opCtx, cancel := context.WithCancel(authedCtx)
 	c.ops[msg.ID] = cancel
+	c.pumps++
 	c.mu.Unlock()
 
 	responses, err := c.handler.Schema.Subscribe(opCtx, payload.Query, payload.OperationName, payload.Variables)
@@ -642,6 +643,7 @@ func (c *wsConnection) startOperation(authedCtx context.Context, msg wsMessage) 
 		// surface it as an operation error and clear the slot.
 		cancel()
 		c.removeOp(msg.ID)
+		c.releasePump()
 		c.writeError(msg.ID, err.Error())
 		return
 	}
@@ -652,6 +654,7 @@ func (c *wsConnection) startOperation(authedCtx context.Context, msg wsMessage) 
 		if hook := c.handler.pumpExited; hook != nil {
 			defer hook(msg.ID)
 		}
+		defer c.releasePump()
 		defer cancel()
 		for resp := range responses {
 			r, ok := resp.(*graphql.Response)
@@ -681,6 +684,12 @@ func (c *wsConnection) startOperation(authedCtx context.Context, msg wsMessage) 
 			c.write(wsMessage{ID: msg.ID, Type: msgComplete})
 		}
 	}()
+}
+
+func (c *wsConnection) releasePump() {
+	c.mu.Lock()
+	c.pumps--
+	c.mu.Unlock()
 }
 
 // stopOperation handles a client `complete`: cancel the operation and drop its

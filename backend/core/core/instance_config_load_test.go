@@ -111,11 +111,12 @@ func TestLoadInstanceConfigurationRefusesAMisspelledKey(t *testing.T) {
 func TestLoadInstanceConfigurationAppliesACorrectlySpelledKey(t *testing.T) {
 	doc := `{"infrastructure":{"nats":{"hostname":"h","port":4222},
 	         "userManagement":{"hostname":"u","port":8080},
-	         "graphql":{"maxSubscriptionMessageBytes":8388608}}}`
+	         "graphql":{"maxSubscriptionMessageBytes":8388608,"maxSubscriptionsPerConnection":7}}}`
 
 	ms := &Microservice{}
 	require.NoError(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, doc)))
 
+	assert.Equal(t, 7, ms.InstanceConfiguration.Infrastructure.GraphQL.MaxSubscriptionsPerConnection)
 	assert.Equal(t, int64(8388608), ms.InstanceConfiguration.Infrastructure.GraphQL.MaxSubscriptionMessageBytes)
 	assert.NotEqual(t, config.DefaultGraphQLMaxSubscriptionMessageBytes,
 		ms.InstanceConfiguration.Infrastructure.GraphQL.MaxSubscriptionMessageBytes,

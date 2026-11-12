@@ -5,6 +5,21 @@ package config
 
 import "testing"
 
+func TestApplyDefaultsGraphQLSubscriptionCapacity(t *testing.T) {
+	for _, value := range []int{0, -1, 7} {
+		cfg := &InstanceConfiguration{}
+		cfg.Infrastructure.GraphQL.MaxSubscriptionsPerConnection = value
+		cfg.ApplyDefaults()
+		want := value
+		if want <= 0 {
+			want = 100
+		}
+		if got := cfg.Infrastructure.GraphQL.MaxSubscriptionsPerConnection; got != want {
+			t.Errorf("configured %d: subscription capacity = %d, want %d", value, got, want)
+		}
+	}
+}
+
 // The GraphQL subscription frame ceiling is fail-safe in the same never-unlimited
 // sense as the stream bounds, and for a sharper reason: gorilla/websocket gates its
 // own read-limit check on a POSITIVE value, so a 0 reaching it is not a small limit

@@ -152,6 +152,8 @@ func (gql *GraphQLManager) ExecuteInitialize(context.Context) error {
 		// (every test that builds a Microservice by hand) must not end up unbounded.
 		gql.subscriptions.MaxMessageBytes =
 			gql.Microservice.InstanceConfiguration.Infrastructure.GraphQL.MaxSubscriptionMessageBytes
+		gql.subscriptions.MaxSubscriptionsPerConnection =
+			gql.Microservice.InstanceConfiguration.Infrastructure.GraphQL.MaxSubscriptionsPerConnection
 		ws = gql.subscriptions
 	}
 

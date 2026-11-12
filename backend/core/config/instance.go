@@ -1146,6 +1146,12 @@ func (c ShutdownConfiguration) validate() error {
 // GraphQLConfiguration carries the request-shape ceilings that every service's
 // GraphQL server enforces and that an operator may need to move.
 type GraphQLConfiguration struct {
+	// MaxSubscriptionsPerConnection bounds concurrent live subscription pumps on
+	// one WebSocket, including cancelled pumps still unwinding. Starts beyond it
+	// receive a GraphQL error; existing subscriptions and the socket stay open.
+	// Non-positive or absent values use the platform default, never unlimited.
+	MaxSubscriptionsPerConnection int
+
 	// MaxSubscriptionMessageBytes bounds a single inbound WebSocket message on the
 	// subscription transport, in bytes.
 	//
@@ -1311,6 +1317,10 @@ const (
 //
 // See GraphQLConfiguration.MaxSubscriptionMessageBytes for the fail-safe rules.
 const DefaultGraphQLMaxSubscriptionMessageBytes int64 = 4 << 20
+
+// DefaultGraphQLMaxSubscriptionsPerConnection bounds goroutine and stream
+// allocation per socket. Operators with larger dashboards can raise this ceiling.
+const DefaultGraphQLMaxSubscriptionsPerConnection = 100
 
 // KvMaxBytesFor is the ceiling for the named KV bucket, keyed on its declared
 // tier (kv.All). An unregistered bucket takes the state ceiling — see kv.TierFor
@@ -1613,6 +1623,9 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	if c.Infrastructure.GraphQL.MaxSubscriptionMessageBytes <= 0 {
 		c.Infrastructure.GraphQL.MaxSubscriptionMessageBytes = DefaultGraphQLMaxSubscriptionMessageBytes
 	}
+	if c.Infrastructure.GraphQL.MaxSubscriptionsPerConnection <= 0 {
+		c.Infrastructure.GraphQL.MaxSubscriptionsPerConnection = DefaultGraphQLMaxSubscriptionsPerConnection
+	}
 	// Default the object-store backend so an instance document that omits it means
 	// "the zero-cloud default" (filesystem/PVC), not an invalid empty selection. The
 	// Directory is deliberately NOT defaulted — it is a deployment-specific mount
@@ -1883,7 +1896,8 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 				KEKProvider: DefaultSecretsKEKProvider,
 			},
 			GraphQL: GraphQLConfiguration{
-				MaxSubscriptionMessageBytes: DefaultGraphQLMaxSubscriptionMessageBytes,
+				MaxSubscriptionMessageBytes:   DefaultGraphQLMaxSubscriptionMessageBytes,
+				MaxSubscriptionsPerConnection: DefaultGraphQLMaxSubscriptionsPerConnection,
 			},
 			Shutdown: ShutdownConfiguration{
 				DrainSeconds:                  &defaultDrain,

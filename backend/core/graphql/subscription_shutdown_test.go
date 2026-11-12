@@ -429,6 +429,7 @@ func TestExecuteInitializeCarriesTheConfiguredReadLimit(t *testing.T) {
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "limit-wiring"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
 	ms.InstanceConfiguration.Infrastructure.GraphQL.MaxSubscriptionMessageBytes = configured
+	ms.InstanceConfiguration.Infrastructure.GraphQL.MaxSubscriptionsPerConnection = 7
 
 	gql := &GraphQLManager{
 		Microservice: ms,
@@ -437,6 +438,9 @@ func TestExecuteInitializeCarriesTheConfiguredReadLimit(t *testing.T) {
 	}
 	if err := gql.ExecuteInitialize(context.Background()); err != nil {
 		t.Fatalf("ExecuteInitialize: %v", err)
+	}
+	if got := gql.subscriptions.operationLimit(); got != 7 {
+		t.Errorf("subscription pump limit = %d, want configured 7", got)
 	}
 	if got := gql.subscriptions.readLimit(); got != configured {
 		t.Errorf("the subscription handler's read limit = %d, want the configured %d", got, configured)
