@@ -111,7 +111,7 @@ Lee `automationReviewPolicy(profileToken)` para ver `effective`, `revision` y `p
 
 Endurecer la protección se aplica al instante: activarla, exigir más aprobaciones, impedir la autoaprobación o acortar la duración o la antigüedad del segundo factor. Relajarla espera como `policy.pendingChange` con `applied: false`. Una segunda persona aprueba mediante `approveAutomationReviewPolicyChange(token)`, con su propia sesión sin restricciones de ámbito, `device:write` y un segundo factor reciente. Quien propone nunca puede aprobar su propio cambio.
 
-Si la política actual permite autoaprobación, la relajación entra en vigor 24 horas después, en `effectiveAt`, aplicada por la siguiente operación protegida. En ambos casos puedes cancelarla con `cancelAutomationReviewPolicyChange(token)`. El perfil sigue protegido mientras el cambio esté pendiente.
+Si la política actual permite autoaprobación, la relajación también entra en vigor por sí sola 24 horas después, en `effectiveAt`, aplicada por la siguiente operación protegida, salvo que una segunda persona la apruebe antes. En ambos casos puedes cancelarla con `cancelAutomationReviewPolicyChange(token)`. El perfil sigue protegido mientras el cambio esté pendiente.
 
 La pestaña **Change review** incluye **Publish protection**, **Edit protection**, la aprobación de cambios pendientes, **Cancel policy change** y **Break-glass record**. La pestaña **Versions** ofrece el selector **Approved review** para el borrador actual.
 
@@ -152,7 +152,7 @@ Eliminar un perfil protegido se rechaza con `PROFILE_PROTECTED`. Quita primero l
 | Elemento | Límite o valor predeterminado |
 | --- | --- |
 | Dispositivos | Entre 1 y 50 distintos. |
-| Ventanas | Exactamente una INCIDENT y una NORMAL; cada una positiva, de hasta 24 horas y terminada al menos dos minutos antes de ejecutar. |
+| Ventanas | Exactamente una INCIDENT y una NORMAL, cada una con duración positiva. Cuando se reproduce un cambio de regla, cada ventana dura como máximo 24 horas y termina al menos dos minutos antes de ejecutar. |
 | Historial previo automático | Hasta seis horas. |
 | Expectativas | Hasta 10; cada una de hasta 8.192 bytes. |
 | Cambios enumerados | Hasta 2.000 por ventana; los recuentos están completos. |

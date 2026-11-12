@@ -111,7 +111,7 @@ Read `automationReviewPolicy(profileToken)` for `effective` settings, `revision`
 
 Tightening protection applies at once: turn it on, require more approvals, disallow self-approval, or shorten the lifetime or step-up age. Loosening waits as `policy.pendingChange` with `applied: false`. A second person approves it through `approveAutomationReviewPolicyChange(token)` using their own unscoped session, `device:write` and a recent second factor. The proposer can never approve it.
 
-If the current policy allows self-approval, loosening instead takes effect 24 hours later at `effectiveAt`, applied by the next protected operation. Either path can be cancelled with `cancelAutomationReviewPolicyChange(token)`. The profile stays protected while the change is pending.
+If the current policy allows self-approval, loosening also takes effect on its own 24 hours later, at `effectiveAt`, applied by the next protected operation, unless a second person approves it sooner. Either path can be cancelled with `cancelAutomationReviewPolicyChange(token)`. The profile stays protected while the change is pending.
 
 The console's **Change review** tab has **Publish protection**, **Edit protection**, pending-change approval and **Cancel policy change**, and the **Break-glass record**. The **Versions** tab offers an **Approved review** picker for the current draft.
 
@@ -152,7 +152,7 @@ Deleting a protected profile is refused with `PROFILE_PROTECTED`. Remove protect
 | Item | Limit or default |
 | --- | --- |
 | Devices | 1–50 distinct devices. |
-| Windows | Exactly one INCIDENT and one NORMAL; each positive, at most 24 hours, ending at least two minutes before the run. |
+| Windows | Exactly one INCIDENT and one NORMAL, each with a positive duration. When a rule change is replayed, each window is at most 24 hours and ends at least two minutes before the run. |
 | Automatic lead-in | At most six hours. |
 | Expectations | At most 10; each at most 8,192 bytes. |
 | Listed changes | At most 2,000 per window; counts are complete. |

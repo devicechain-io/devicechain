@@ -111,7 +111,7 @@ GraphQL 类型和操作可能在次要版本中变更。保护需要主动启用
 
 收紧保护立即生效：开启保护、增加批准数、禁止自行批准，或缩短批准有效期或第二因素验证时限。放宽保护会以 `policy.pendingChange` 等待，且 `applied: false`。第二名人员使用自己的无范围限制会话、`device:write` 和近期验证的第二因素，通过 `approveAutomationReviewPolicyChange(token)` 批准。提议者绝不能批准自己的变更。
 
-如果当前策略允许自行批准，放宽保护则会在 24 小时后的 `effectiveAt` 生效，由下一次受保护操作应用。两种方式都可通过 `cancelAutomationReviewPolicyChange(token)` 取消。变更待处理期间，配置文件保持受保护状态。
+如果当前策略允许自行批准，放宽保护也会在 24 小时后的 `effectiveAt` 自动生效，由下一次受保护操作应用，除非第二名人员提前批准。两种方式都可通过 `cancelAutomationReviewPolicyChange(token)` 取消。变更待处理期间，配置文件保持受保护状态。
 
 控制台 **Change review** 标签页包含 **Publish protection**、**Edit protection**、待处理变更批准、**Cancel policy change** 和 **Break-glass record**。**Versions** 标签页提供当前草稿的 **Approved review** 选择器。
 
@@ -152,7 +152,7 @@ GraphQL 类型和操作可能在次要版本中变更。保护需要主动启用
 | 项目 | 限制或默认值 |
 | --- | --- |
 | 设备 | 1–50 台不同设备。 |
-| 窗口 | 恰好一个 INCIDENT 和一个 NORMAL；每个时长为正，最多 24 小时，结束时间至少早于运行两分钟。 |
+| 窗口 | 恰好一个 INCIDENT 和一个 NORMAL，每个时长为正。重放规则变更时，每个窗口最多 24 小时，结束时间至少早于运行两分钟。 |
 | 自动预热历史 | 最多六小时。 |
 | 期望 | 最多 10 个；每个最多 8,192 字节。 |
 | 列出的变更 | 每个窗口最多 2,000 项；计数完整。 |

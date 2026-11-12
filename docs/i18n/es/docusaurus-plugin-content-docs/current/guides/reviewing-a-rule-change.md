@@ -165,7 +165,7 @@ mutation ProtectProfile($profileToken: String!, $settings: AutomationReviewPolic
 
 Usa `required: true`. `requiredApprovals` es 1 o 2, `approvalTtlSeconds` va de 900 a 604800 y `stepUpMaxAgeSeconds` de 60 a 3600. Usa tu propia sesión sin restricciones de ámbito con `device:write`.
 
-Endurecer se aplica al instante. Relajar espera a la aprobación de una segunda persona con segundo factor reciente; quien propone no puede aprobar. Si la política actual permite autoaprobación, espera 24 horas y la siguiente operación protegida aplica el cambio. Usa **Cancel policy change** para cancelarlo. El perfil sigue protegido mientras esté pendiente. Si el endurecimiento hace insuficientes las aprobaciones existentes, obtén otra revisión y aprobaciones antes de publicar.
+Endurecer se aplica al instante. Relajar espera a la aprobación de una segunda persona con segundo factor reciente; quien propone no puede aprobar. Si la política actual permite autoaprobación, el cambio también entra en vigor por sí solo tras 24 horas, aplicado por la siguiente operación protegida, salvo que una segunda persona lo apruebe antes. Usa **Cancel policy change** para cancelarlo. El perfil sigue protegido mientras esté pendiente. Si el endurecimiento hace insuficientes las aprobaciones existentes, obtén otra revisión y aprobaciones antes de publicar.
 
 ## Publica con la revisión {#publish-with-the-review}
 

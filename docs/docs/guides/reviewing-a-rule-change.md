@@ -165,7 +165,7 @@ mutation ProtectProfile($profileToken: String!, $settings: AutomationReviewPolic
 
 Use `required: true`. `requiredApprovals` is 1 or 2, `approvalTtlSeconds` is 900–604800, and `stepUpMaxAgeSeconds` is 60–3600. Use your own unscoped session with `device:write`.
 
-Tightening applies immediately. Loosening waits for a second person's approval with a recent second factor; the proposer cannot approve. If the current policy allows self-approval, loosening instead waits 24 hours and is applied by the next protected operation. Use **Cancel policy change** to cancel it. The profile remains protected while pending. If tightening means existing approvals no longer satisfy policy, obtain a new review and approvals before publishing.
+Tightening applies immediately. Loosening waits for a second person's approval with a recent second factor; the proposer cannot approve. If the current policy allows self-approval, loosening also takes effect on its own after 24 hours, applied by the next protected operation, unless a second person approves it sooner. Use **Cancel policy change** to cancel it. The profile remains protected while pending. If tightening means existing approvals no longer satisfy policy, obtain a new review and approvals before publishing.
 
 ## Publish with the review {#publish-with-the-review}
 

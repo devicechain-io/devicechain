@@ -15,8 +15,8 @@
       "translationSha256": "4689f8db1c690cc48122ebe070680df8bcfe2bb6c25cf97cb7e8159178ae92c3"
     },
     "concepts/automation-change-review.md": {
-      "sourceSha256": "94bb03ee0b1714efa399f167eb1d0233cda88e3f176d5a963a348d2231469a5e",
-      "translationSha256": "7a4624ab90573a2661c17a268db5eb9fd462270facfc14ead9522c22f223e2ee"
+      "sourceSha256": "28a4e4b9133c132b3ed769fe08c0914c926091307b5fec02f27a613036a6b0d6",
+      "translationSha256": "2f3449314526481b2174e6eb01ebc6d6123b4afd89485478b2a67e05f5c45a0b"
     },
     "concepts/basemaps.md": {
       "sourceSha256": "61971b3c52b6d9a9f6b3acf9be14492c243f648c5e796f21708aa96f6358fef7",
@@ -259,8 +259,8 @@
       "translationSha256": "15f07cd77249f11bba93792cbba352ca8bdf66fb1b73b76c79364f944ea27acc"
     },
     "guides/reviewing-a-rule-change.md": {
-      "sourceSha256": "b58dc5b80a4a805e4336d71e43d02a1a050611a15dc18b0dd6aa159c1f71cb7e",
-      "translationSha256": "4bb19f2e75b4464f75c97a458d27c9f2131c8f6f9b804c9f51b387402810d680"
+      "sourceSha256": "f78d3e4090190a11002cc2794635f7d40d854fe55da491acecd4ebc850f05746",
+      "translationSha256": "732857a952b21fcf29925fe96532c3865824992a44c507103313bfd0a98dabca"
     },
     "guides/scheduling-a-fleet.md": {
       "sourceSha256": "d7287a63ae6e57a6f1ecc72efd0e298e85c6212fab2e8b541ead56f7787a4753",

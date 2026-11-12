@@ -165,7 +165,7 @@ mutation ProtectProfile($profileToken: String!, $settings: AutomationReviewPolic
 
 使用 `required: true`。`requiredApprovals` 为 1 或 2，`approvalTtlSeconds` 范围为 900–604800，`stepUpMaxAgeSeconds` 范围为 60–3600。使用你自己的无范围限制会话，并持有 `device:write`。
 
-收紧立即生效。放宽需等待第二名人员以近期验证的第二因素批准；提议者不能批准。如果当前策略允许自行批准，放宽则等待 24 小时，由下一次受保护操作应用。可使用 **Cancel policy change** 取消。待处理期间配置文件仍受保护。如果收紧使现有批准不再满足策略，请在发布前获取新审查和批准。
+收紧立即生效。放宽需等待第二名人员以近期验证的第二因素批准；提议者不能批准。如果当前策略允许自行批准，放宽也会在 24 小时后自动生效，由下一次受保护操作应用，除非第二名人员提前批准。可使用 **Cancel policy change** 取消。待处理期间配置文件仍受保护。如果收紧使现有批准不再满足策略，请在发布前获取新审查和批准。
 
 ## 使用审查发布 {#publish-with-the-review}
 
