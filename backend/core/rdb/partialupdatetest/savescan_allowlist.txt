@@ -4,12 +4,6 @@
 # (a line that stops offending fails TestNoWholeRowSaveInUpdateMethods).
 device-management/model/api_maintenance_window.go UpdateMaintenanceWindow # tracked: Codex-only lane (PR #2461)
 device-management/model/api_groups.go UpdateEntityGroup # tracked: Codex-only lane
-device-management/model/api_areas.go UpdateAreaType # tracked: batch5 follow-up, not yet audited
-device-management/model/api_customers.go UpdateCustomerType # tracked: batch5 follow-up, not yet audited
-device-management/model/api_common.go UpdateEntityRelationshipType # tracked: batch5 follow-up, not yet audited
-device-management/model/api_credentials.go UpdateDeviceCredential # tracked: batch5 follow-up, not yet audited
-device-management/model/api_devices.go UpdateDevice # tracked: batch5 follow-up, not yet audited
-device-management/model/api_geofences.go UpdateGeoFence # tracked: batch5 follow-up, not yet audited
-device-management/model/api_integrations.go UpdateIntegration # tracked: batch5 follow-up, row re-read under lock (audit)
-device-management/model/api_provisioning.go UpdateProvisioningProfile # tracked: batch5 follow-up, row re-read under lock (audit)
-device-management/model/api_trust_anchors.go UpdateDeviceTrustAnchor # tracked: batch5 follow-up, row re-read under lock (audit)
+device-management/model/api_integrations.go UpdateIntegration # safe: the row is read FOR UPDATE inside the transaction and the written copy IS that locked row (every field folded onto it), so no stale read is saved
+device-management/model/api_provisioning.go UpdateProvisioningProfile # safe: the row is read FOR UPDATE inside the transaction and the written copy IS that locked row (every field folded onto it), so no stale read is saved
+device-management/model/api_trust_anchors.go UpdateDeviceTrustAnchor # safe: loaded only under FOR UPDATE inside the transaction and that locked row is what is saved; there is no pre-lock read

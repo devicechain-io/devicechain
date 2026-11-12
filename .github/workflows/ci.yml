@@ -109,6 +109,11 @@ jobs:
       - name: release-highlights guard self-test
         run: hack/check-release-highlights.sh --self-test
 
+      # The chart stamp runs only on a tag; a broken flag mislabels a release in Artifact Hub.
+      # The self-test is the part that runs on every PR, before a release needs the stamp.
+      - name: chart prerelease stamp self-test
+        run: hack/stamp-chart-prerelease.sh --self-test
+
       # Same reasoning as the guard above, and the same blast radius: this builds the
       # header of the GitHub Release body, runs ONLY on a tag, and a break in it fails
       # the `cli` job after every image has already been pushed. The self-test is the
