@@ -295,7 +295,8 @@ ALTER TABLE ONLY "device-management".semantic_contexts ALTER COLUMN id SET DEFAU
 BEGIN
  IF TG_TABLE_NAME = 'device_profile_versions' THEN
  IF TG_OP = 'INSERT' THEN
- PERFORM 1 FROM "device-management".device_profiles WHERE id = NEW.device_profile_id FOR NO KEY UPDATE;
+ IF current_setting('transaction_isolation') <> 'read committed' THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: changing device profiles, their versions or bindings requires READ COMMITTED isolation';
 CREATE FUNCTION "device-management".automation_review_guard() RETURNS trigger
  LANGUAGE plpgsql
  AS $$
@@ -1816,16 +1817,39 @@ END IF;
 END IF;
 END IF;
 END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
 END LOOP;
+FOREACH p IN ARRAY ARRAY[OLD.profile_id, NEW.profile_id] LOOP
+ CONTINUE WHEN p IS NULL;
 IF "device-management".automation_review_policy_required(NEW.device_profile_id) AND NOT EXISTS (
  SELECT 1 FROM "device-management".automation_reviews r
  WHERE r.token = NEW.automation_review_token AND r.tenant_id = NEW.tenant_id
  AND r.device_profile_id = NEW.device_profile_id AND r.state = 'CONSUMED'
  AND r.consumed_version = NEW.version AND r.consumed_txid = txid_current()) THEN
  RAISE EXCEPTION USING ERRCODE = 'DCR01', MESSAGE = 'REVIEW_REQUIRED: this device profile requires an approved automation review to publish';
+IF "device-management".automation_review_policy_required(NEW.id)
+ AND NOT EXISTS (SELECT 1 FROM "device-management".automation_reviews r
+ WHERE r.device_profile_id = NEW.id AND r.tenant_id = NEW.tenant_id AND r.state = 'CONSUMED'
+ AND r.consumed_version = NEW.active_version AND r.consumed_txid = txid_current())
+ AND NOT EXISTS (SELECT 1 FROM "device-management".automation_review_break_glass b
+ WHERE b.device_profile_id = NEW.id AND b.tenant_id = NEW.tenant_id AND b.action = 'ROLLBACK'
+ AND b.target = NEW.active_version::text AND b.txid = txid_current()) THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR01', MESSAGE = 'REVIEW_REQUIRED: the active version of a protected device profile changes only through a reviewed publish or a break-glass rollback';
 IF "device-management".automation_review_policy_required(OLD.device_profile_id)
  OR "device-management".automation_review_policy_required(NEW.device_profile_id) THEN
  RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: published versions of a protected device profile cannot be changed';
+IF "device-management".automation_review_policy_required(OLD.id) THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: a protected device profile cannot be deleted; remove its protection first';
+IF "device-management".automation_review_policy_required(OLD.id) THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: a protected device profile cannot be deleted; remove its protection first';
 IF "device-management".automation_review_policy_required(p) AND NOT EXISTS (
  SELECT 1 FROM "device-management".automation_review_break_glass b
  WHERE b.device_profile_id = p AND b.tenant_id = NEW.tenant_id AND b.action = 'MOVE_DEVICE'
@@ -1836,38 +1860,36 @@ IF "device-management".automation_review_policy_required(p) AND NOT EXISTS (
  WHERE b.device_profile_id = p AND b.tenant_id = NEW.tenant_id AND b.action = 'REPOINT_TYPE'
  AND b.target = NEW.token AND b.txid = txid_current()) THEN
  RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: re-pointing a device type to or from a protected device profile needs a break-glass reason';
-IF (OLD.active_version IS DISTINCT FROM NEW.active_version OR OLD.active_since IS DISTINCT FROM NEW.active_since)
- AND "device-management".automation_review_policy_required(NEW.id)
- AND NOT EXISTS (SELECT 1 FROM "device-management".automation_reviews r
- WHERE r.device_profile_id = NEW.id AND r.tenant_id = NEW.tenant_id AND r.state = 'CONSUMED'
- AND r.consumed_version = NEW.active_version AND r.consumed_txid = txid_current())
- AND NOT EXISTS (SELECT 1 FROM "device-management".automation_review_break_glass b
- WHERE b.device_profile_id = NEW.id AND b.tenant_id = NEW.tenant_id AND b.action = 'ROLLBACK'
- AND b.target = NEW.active_version::text AND b.txid = txid_current()) THEN
- RAISE EXCEPTION USING ERRCODE = 'DCR01', MESSAGE = 'REVIEW_REQUIRED: the active version of a protected device profile changes only through a reviewed publish or a break-glass rollback';
-IF OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL
- AND "device-management".automation_review_policy_required(OLD.id) THEN
- RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: a protected device profile cannot be deleted; remove its protection first';
+IF OLD.active_version IS DISTINCT FROM NEW.active_version OR OLD.active_since IS DISTINCT FROM NEW.active_since THEN
+ IF current_setting('transaction_isolation') <> 'read committed' THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: changing device profiles, their versions or bindings requires READ COMMITTED isolation';
+IF OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL THEN
+ IF current_setting('transaction_isolation') <> 'read committed' THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: changing device profiles, their versions or bindings requires READ COMMITTED isolation';
 IF OLD.snapshot IS DISTINCT FROM NEW.snapshot
  OR OLD.automation_review_token IS DISTINCT FROM NEW.automation_review_token
  OR OLD.version IS DISTINCT FROM NEW.version
  OR OLD.device_profile_id IS DISTINCT FROM NEW.device_profile_id
  OR OLD.deleted_at IS DISTINCT FROM NEW.deleted_at THEN
- PERFORM 1 FROM "device-management".device_profiles WHERE id IN (OLD.device_profile_id, NEW.device_profile_id) FOR SHARE;
+ IF current_setting('transaction_isolation') <> 'read committed' THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: changing device profiles, their versions or bindings requires READ COMMITTED isolation';
 IF TG_TABLE_NAME = 'device_profiles' THEN
  IF TG_OP = 'DELETE' THEN
- IF "device-management".automation_review_policy_required(OLD.id) THEN
- RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: a protected device profile cannot be deleted; remove its protection first';
+ IF current_setting('transaction_isolation') <> 'read committed' THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: changing device profiles, their versions or bindings requires READ COMMITTED isolation';
 IF TG_TABLE_NAME = 'device_types' THEN
  IF OLD.profile_id IS DISTINCT FROM NEW.profile_id THEN
- FOREACH p IN ARRAY ARRAY[OLD.profile_id, NEW.profile_id] LOOP
- CONTINUE WHEN p IS NULL;
+ IF current_setting('transaction_isolation') <> 'read committed' THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: changing device profiles, their versions or bindings requires READ COMMITTED isolation';
 IF TG_TABLE_NAME = 'devices' THEN
  IF OLD.device_type_id IS DISTINCT FROM NEW.device_type_id AND OLD.device_type_id IS NOT NULL THEN
- SELECT t.profile_id INTO p FROM "device-management".device_types t WHERE t.id = OLD.device_type_id;
+ IF current_setting('transaction_isolation') <> 'read committed' THEN
+ RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: changing device profiles, their versions or bindings requires READ COMMITTED isolation';
 IF p IS NOT NULL THEN
  PERFORM 1 FROM "device-management".device_profiles WHERE id = p FOR SHARE;
+PERFORM 1 FROM "device-management".device_profiles WHERE id = NEW.device_profile_id FOR NO KEY UPDATE;
 PERFORM 1 FROM "device-management".device_profiles WHERE id = p FOR SHARE;
+PERFORM 1 FROM "device-management".device_profiles WHERE id IN (OLD.device_profile_id, NEW.device_profile_id) FOR SHARE;
 RETURN NEW;
 RETURN NEW;
 RETURN NEW;
@@ -1875,3 +1897,4 @@ RETURN NEW;
 RETURN NEW;
 RETURN NEW;
 RETURN OLD;
+SELECT t.profile_id INTO p FROM "device-management".device_types t WHERE t.id = OLD.device_type_id;
