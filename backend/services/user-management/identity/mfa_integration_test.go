@@ -49,7 +49,7 @@ type mfaPgEnv struct {
 	validator  *auth.Validator
 }
 
-func newMfaPgEnv(t *testing.T) *mfaPgEnv {
+func newIdentityPgDB(t *testing.T) *rdb.RdbManager {
 	t.Helper()
 	port := 5432
 	if raw := os.Getenv("DC_IT_PGPORT"); raw != "" {
@@ -62,7 +62,7 @@ func newMfaPgEnv(t *testing.T) *mfaPgEnv {
 		host = h
 	}
 	ctx := context.Background()
-	instance := fmt.Sprintf("idmfa%d", time.Now().UnixNano())
+	instance := fmt.Sprintf("idtest%d", time.Now().UnixNano())
 	require.NoError(t, rdbtest.EnsureDatabase(ctx, host, port, "postgres", "postgres", instance, ""))
 	mgr := &rdb.RdbManager{
 		Microservice: &core.Microservice{InstanceId: instance, FunctionalArea: "user-management"},
@@ -77,6 +77,13 @@ func newMfaPgEnv(t *testing.T) *mfaPgEnv {
 			_ = sqldb.Close()
 		}
 	})
+	return mgr
+}
+
+func newMfaPgEnv(t *testing.T) *mfaPgEnv {
+	t.Helper()
+	mgr := newIdentityPgDB(t)
+	ctx := context.Background()
 	raw := make([]byte, 32)
 	_, err := rand.Read(raw)
 	require.NoError(t, err)
