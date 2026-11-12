@@ -92,8 +92,12 @@ func (m *Manager) AgentActuationDetail(ctx context.Context, claims *auth.Claims,
 		if err != nil {
 			return err
 		}
+		live, err := m.tenantLive(ctx, claims.Tenant)
+		if err != nil {
+			return err
+		}
 		// The instance switch is process configuration, outside the database snapshot.
-		if !m.agentActuation || suspended || off || !doc.ActuationOn() {
+		if !m.agentActuation || suspended || !live || off || !doc.ActuationOn() {
 			return errors.New(errActRefused)
 		}
 		if version != policyVersion {
