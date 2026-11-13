@@ -48,14 +48,15 @@ type broker struct {
 	// hotSwaps counts reloads served by the hot path; tests read it.
 	hotSwaps atomic.Uint64
 
-	// started closes after Run returns, when startup and the client listener are ready.
+	// started closes when Run returns: startup has finished (or the server stopped during it).
 	// stopped releases deferred reloads if the server shuts down before then.
 	started     chan struct{}
 	stopped     chan struct{}
 	startedOnce sync.Once
 
-	// ldm records a lame duck request accepted after startup, before its goroutine runs.
-	// Upstream's SIGTERM handler reads the server's unexported flag; see signals_unix.go.
+	// ldm records a lame duck request accepted (the client listener was up), set before its
+	// goroutine runs. Upstream's SIGTERM handler reads the server's own unexported flag; see
+	// signals_unix.go for why this one is equivalent.
 	ldm atomic.Bool
 }
 

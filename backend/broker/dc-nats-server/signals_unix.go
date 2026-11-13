@@ -40,19 +40,32 @@ func (b *broker) handleSignals(c chan os.Signal) {
 	}()
 }
 
-// handleSignal follows upstream v2.15.3 with three changes:
+// handleSignal follows upstream v2.15.3, case for case, with three changes:
 //
-//   - SIGHUP calls b.reload, which keeps the device TLS setting and hot key-material path,
-//     then re-checks the listener. Server.Reload would drop the certificate request.
-//   - SIGTERM reads b.ldm instead of the server's unexported flag. SIGUSR2 sets it
-//     synchronously before launching the blocking LameDuckShutdown, replacing upstream's
-//     unexported startLameDuckMode. Requests during startup are refused, as upstream's
-//     enterLameDuckMode refuses when the client listener is nil. After startup the flags
-//     agree for subsequent SIGTERM handling: this binary only enters lame duck via SIGUSR2.
-//     A request during shutdown may differ, but that shutdown ends the process anyway.
-//   - The broker's started gate replaces the unexported startupComplete and waitForStartup.
-//     It also waits for the client listener (Run has returned), so lame duck can enter.
-//     A deferred reload returns on stopped if shutdown completes before startup.
+//   - SIGHUP calls b.reload, which re-applies the device TLS setting between parsing the config and
+//     handing it to the server (and takes the hot key-material path when that is all that changed),
+//     then re-checks the listener. Upstream calls Server.Reload, which would SUCCEED and leave the
+//     listener no longer requesting certificates (see applyDeviceTLS).
+//   - Upstream's "has startup finished?" reads the server's unexported startupComplete; this reads
+//     b.started, closed by main when Run returns. Since v2.15.3 Server.ReloadOptions blocks until
+//     startup has finished, and this loop starts BEFORE Run (main.go says why), so a SIGHUP during
+//     a long JetStream recovery is handed to a goroutine that waits for b.started, exactly as
+//     upstream waits outside its own loop, and SIGTERM, SIGINT and SIGUSR2 are still handled in the
+//     meantime. b.started closes a little later than startupComplete (after the client listener
+//     and, with ocsp_peer, the OCSP response cache are up); a reload in that interval only waits a
+//     little longer. Like upstream's, a deferred reload is abandoned if the server stops first
+//     (b.stopped), and is best effort against a shutdown that begins while it runs: the process is
+//     exiting then anyway.
+//   - SIGTERM's "is a lame duck shutdown already in progress?" reads b.ldm instead of the server's
+//     own unexported flag, and SIGUSR2 sets it before returning, in place of upstream's unexported
+//     startLameDuckMode, which enters lame duck mode before returning. Upstream's enterLameDuckMode
+//     refuses (sets nothing) when the client listener is nil, which is the whole of startup and
+//     any shutdown; this reads the same condition through s.Addr() and likewise sets nothing, so a
+//     preStop SIGUSR2 during a long recovery does not make the SIGTERM that follows a no-op. With
+//     the listener up the two flags agree for every SIGTERM that matters: lame duck mode is
+//     entered only through SIGUSR2 (all `-sl=ldm` sends, and what the chart's preStop runs). They
+//     could differ only if a shutdown began between the check and LameDuckShutdown, and then the
+//     shutdown in progress ends the process anyway.
 func (b *broker) handleSignal(sig os.Signal) {
 	s := b.s
 	s.Noticef("Trapped %q signal", sig)
@@ -72,12 +85,14 @@ func (b *broker) handleSignal(sig os.Signal) {
 		// File log re-open for rotating file logs.
 		s.ReOpenLogFile()
 	case syscall.SIGUSR2:
-		select {
-		case <-b.started:
+		switch {
+		case b.ldm.Load():
+			// Already in lame duck mode: upstream's enterLameDuckMode returns without a word.
+		case s.Addr() == nil:
+			s.Noticef("Lame duck mode is not entered: the client listener is not up (the server is still starting, or stopping)")
+		default:
 			b.ldm.Store(true)
 			go s.LameDuckShutdown()
-		default:
-			s.Noticef("Lame duck mode is not entered because the server is still starting")
 		}
 	case syscall.SIGHUP:
 		// Config reload, keeping the device TLS setting.
@@ -98,7 +113,7 @@ func (b *broker) handleSignal(sig os.Signal) {
 					return
 				case <-b.started:
 				}
-				// Run may return because the server shut down during startup.
+				// Run also returns when the server shut down during startup.
 				select {
 				case <-b.stopped:
 					return

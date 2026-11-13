@@ -507,7 +507,7 @@ func TestSIGUSR2DuringBlockedStartupDoesNotDisableSIGTERM(t *testing.T) {
 	if err := p.waitExit(t, 10*time.Second); err != nil {
 		t.Fatalf("SIGTERM after startup SIGUSR2: %v, want exit 0", err)
 	}
-	if !strings.Contains(string(mustRead(t, p.log)), "Lame duck mode is not entered because the server is still starting") {
+	if !strings.Contains(string(mustRead(t, p.log)), "Lame duck mode is not entered: the client listener is not up") {
 		t.Fatal("the lame duck request during startup was not reported")
 	}
 	if strings.Contains(string(mustRead(t, p.log)), "Entering lame duck mode") {
@@ -526,7 +526,7 @@ func TestDeferredSIGHUPRunsAfterStartup(t *testing.T) {
 	if err := p.cmd.Process.Signal(syscall.SIGUSR2); err != nil {
 		t.Fatal(err)
 	}
-	p.waitLog(t, "Lame duck mode is not entered because the server is still starting")
+	p.waitLog(t, "Lame duck mode is not entered: the client listener is not up")
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		fd, err := syscall.Open(meta, syscall.O_WRONLY|syscall.O_NONBLOCK, 0)
