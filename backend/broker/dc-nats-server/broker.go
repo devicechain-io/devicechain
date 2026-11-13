@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"net"
@@ -25,9 +26,11 @@ var errNoConfigFile = errors.New("can only reload config when a file is provided
 // broker is the running server plus what this binary adds to it: the reload that keeps the device
 // TLS setting, and the probe and metrics that watch it.
 type broker struct {
-	s          *server.Server
-	configFile string
-	metrics    *brokerMetrics
+	s           *server.Server
+	configFile  string
+	metrics     *brokerMetrics
+	metricsSrv  *http.Server
+	metricsDone chan struct{}
 
 	// mu serializes reloads and probes, so a probe never reads the TLS config of a reload that
 	// is half applied.
@@ -203,11 +206,29 @@ func (b *broker) serveMetrics(ln net.Listener) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", b.metrics)
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	b.metricsSrv = srv
+	b.metricsDone = make(chan struct{})
 	go func() {
+		defer close(b.metricsDone)
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			b.s.Errorf("Broker metrics endpoint stopped: %v", err)
 		}
 	}()
+}
+
+// stopMetrics shuts down the endpoint and joins Serve within the caller's deadline.
+// Like serveMetrics, it is called by the broker lifecycle after startup; repeated stops are safe.
+func (b *broker) stopMetrics(ctx context.Context) error {
+	if b.metricsSrv == nil {
+		return nil
+	}
+	err := b.metricsSrv.Shutdown(ctx)
+	select {
+	case <-b.metricsDone:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // watch checks the listener once the server is ready for connections (which on a broker

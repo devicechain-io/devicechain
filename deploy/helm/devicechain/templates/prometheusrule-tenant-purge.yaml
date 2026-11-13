@@ -40,11 +40,13 @@ obligation is being met. These two gauges are; this file is what watches them.
   increase(...[1h]) > 0 for 30m, a single failure fired it 30 minutes later.
   The interval reads 0 as the default and a negative (the coordinator disabled) the same
   way, since a disabled coordinator records no failures to alert on.
+  The interval may be as large as the longest duration the service accepts. Prometheus
+  refuses a range or `for` longer than that, so both derived durations are capped at it.
 */}}
 {{- $interval := dig "user-management" "config" "tenantPurge" "intervalSeconds" 60 .Values.functionalAreas | default 60 | int }}
 {{- if lt $interval 1 }}{{ $interval = 60 }}{{ end }}
-{{- $failWindow := max 600 (mul $interval 3) }}
-{{- $failFor := max 1800 (mul $failWindow 2) }}
+{{- $failWindow := min 9223372036 (max 600 (mul $interval 3)) }}
+{{- $failFor := min 9223372036 (max 1800 (mul $failWindow 2)) }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
