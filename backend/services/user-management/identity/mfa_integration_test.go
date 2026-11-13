@@ -235,9 +235,16 @@ func TestMfaPgAUsedCodeAndAnOlderCodeAreRefused(t *testing.T) {
 	seed, _ := e.enroll(t, "pat@example.com", "pw-1")
 	e.resetSteps(t)
 
-	newer := credential.GenerateTOTP(seed, at(1))
-	older := credential.GenerateTOTP(seed, at(-1))
-	_, err := e.m.VerifyMfa(ctx, e.challenge(t, "pat@example.com", "pw-1").Challenge, newer, "203.0.113.5")
+	// Pin both generation and verification after enrollment: crossing a wall-clock step
+	// would move the older code outside the window, reporting invalid rather than replay.
+	// A fixed historical time also guards against accidentally using the wall clock here.
+	now := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+	e.m.now = func() time.Time { return now }
+	newer := credential.GenerateTOTP(seed, now.Add(30*time.Second))
+	older := credential.GenerateTOTP(seed, now.Add(-30*time.Second))
+	_, err := e.m.VerifyMfa(ctx, e.challenge(t, "pat@example.com", "pw-1").Challenge, older, "203.0.113.5")
+	require.NoError(t, err, "the older code is in the window and works before a newer step is accepted")
+	_, err = e.m.VerifyMfa(ctx, e.challenge(t, "pat@example.com", "pw-1").Challenge, newer, "203.0.113.5")
 	require.NoError(t, err)
 	_, err = e.m.VerifyMfa(ctx, e.challenge(t, "pat@example.com", "pw-1").Challenge, newer, "203.0.113.5")
 	require.ErrorIs(t, err, ErrMfaInvalidCode, "a code that signed in once signs in once")

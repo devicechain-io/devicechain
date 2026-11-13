@@ -229,7 +229,11 @@ type brokerRequest struct {
 
 // brokerRequestFor checks only requests still supplied by the built-in preset.
 func brokerRequestFor(st *State, stated func(name string) bool) (req *brokerRequest, unchecked string, err error) {
-	p := sizeFor(st)
+	return sizeFor(st).brokerRequestFor(st, stated)
+}
+
+// brokerRequestFor parses a preset's requests without changing the built-in table.
+func (p *sizePreset) brokerRequestFor(st *State, stated func(name string) bool) (req *brokerRequest, unchecked string, err error) {
 	if p == nil {
 		return nil, "", nil
 	}

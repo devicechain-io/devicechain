@@ -90,6 +90,8 @@ For automation, either keep one superuser **without** a second factor and use it
 `LoginAsync` throws `MfaRequiredException` for such an account. Its `Challenge` goes to `VerifyMfaAsync` with the code:
 
 ```csharp
+using DeviceChain.Sdk.Auth;
+
 try
 {
     await client.LoginAsync(email, password);

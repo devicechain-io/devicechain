@@ -486,6 +486,9 @@ func setTenantEnabled(tx *gorm.DB, t *Tenant, enabled bool) error {
 	return tx.Model(t).Update("enabled", enabled).Error
 }
 
+// ErrTenantPurging is returned when a tenant's purge has begun.
+var ErrTenantPurging = errors.New("tenant is being deleted")
+
 // SetTenantEnabledAndBumpGeneration writes the enabled flag and advances the fence in
 // one transaction, even for an unchanged value. Separate transactions could disable,
 // re-enable and bump, then bump the disable: its late kill would close the fence at
@@ -493,12 +496,24 @@ func setTenantEnabled(tx *gorm.DB, t *Tenant, enabled bool) error {
 // The head is locked FIRST to serialize lifecycle changes for this tenant before
 // either write. A kill must carry this transaction's generation, so a later re-enable
 // has a strictly greater generation and reopens the fence regardless of publish order.
+// The tenant row is then locked and a tenant whose purge has begun is refused with
+// ErrTenantPurging; the refusal rolls back the whole transaction, a head row it
+// created included. Head before tenant is the order older pods take during a rolling
+// upgrade too, so the two cannot deadlock.
 func (s *Store) SetTenantEnabledAndBumpGeneration(ctx context.Context, t *Tenant, enabled bool) (int, error) {
 	var generation int
 	err := s.sys(ctx).Transaction(func(tx *gorm.DB) error {
 		head, err := lockAgentPolicyHead(tx, t.Token)
 		if err != nil {
 			return err
+		}
+		var tenant Tenant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("token = ?", t.Token).First(&tenant).Error; err != nil {
+			return err
+		}
+		if tenant.PurgeState.Deleted() {
+			return ErrTenantPurging
 		}
 		if err := setTenantEnabled(tx, t, enabled); err != nil {
 			return err
