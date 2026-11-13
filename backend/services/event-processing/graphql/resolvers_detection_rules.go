@@ -18,7 +18,7 @@ import (
 // rule budget, which only warns today: capping the gate at it would refuse profiles
 // that already publish. Device-management refuses a publish above the same number
 // itself (model.MaxEnabledDetectionRulesPerPublish) so an author sees the bound instead
-// of "validation unavailable". The two numbers must move together.
+// of "validation unavailable". The two numbers must move together; TestRuleCountBoundAgreesWithThePublishBound in event-processing pins them.
 const MaxRulesPerValidation = 1000
 
 // detectionRuleInput is one rule submitted to the validation gate: its authoring token
