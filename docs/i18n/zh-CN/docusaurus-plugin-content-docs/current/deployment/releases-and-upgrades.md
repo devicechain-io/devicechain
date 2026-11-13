@@ -527,6 +527,12 @@ dcctl bootstrap local devicechain
 - **同一 CA 下续期的 TLS 证书**保持自 `v0.27.0` 起的原有行为：无需重载即可应用于新连接。
 - **用于回退到上游代理的上游镜像现在是 `nats:2.15.3-alpine`**：按[设备证书](./device-certificates.md)所述，设置 `server_image_repository = "nats"` 和 `server_image_tag = "2.15.3-alpine"`。如果你保留了这种回退准备，请将新标签加入镜像同步列表。
 
+#### 重新投递的解码失败使用记录预算 {#v160-decoder-redelivery-budget}
+
+重新投递的载荷解码器失败（例如重启后积压了某个解码器持续失败的设备类型的上行消息）现在与其他失败一样，使用按设备类型分配的失败记录预算。预算耗尽后，该失败会计为已抑制，不会写入 failed-events 流，即使首次投递时从未生成记录也是如此。过去，重新投递的失败总会被记录，因此重启可能会记录积压的每一条上行消息。
+
+- **无需操作。**
+
 #### 代理操作的指标和告警（Preview） {#v160-agent-metrics}
 
 `device-management` 现在会报告代理操作：按类型和结果统计的提议、按结果统计的批准、按类型和结果统计的执行及其耗时，以及已过期的提议。Platform 看板新增 **Agent actions (preview)** 一行，并新增警告级告警 `AgentExecutionsFailing`，在最终批准持续无法完成时触发。拒绝不会触发该告警：依赖变化、策略拒绝、紧急停止栅栏关闭或批准人被拒绝都会计入各自的结果。这些指标列在[指标参考](./metrics-reference.md)中，该告警在[告警处理手册](./alert-runbook.md#agentexecutionsfailing)中有对应条目。与代理操作一样，它们属于 Preview：名称和标签仍可能在次要版本中变化。

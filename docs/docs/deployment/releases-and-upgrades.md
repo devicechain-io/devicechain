@@ -771,6 +771,12 @@ When a reload changes the server's own authentication settings (its configured u
 - **A renewed TLS certificate** under the same CA keeps its earlier behaviour, in place since `v0.27.0`: it is applied to new connections without a reload.
 - **The upstream image for going back to the upstream broker is now `nats:2.15.3-alpine`**: set `server_image_repository = "nats"` and `server_image_tag = "2.15.3-alpine"`, as described in [Device certificates](./device-certificates.md). Add the new tag to the images you mirror if you keep that rollback ready.
 
+#### A redelivered decoder failure uses the record budget {#v160-decoder-redelivery-budget}
+
+A payload decoder failure that is redelivered (for example after a restart with a backlog of a failing device type's uplinks) now uses the per-device-type failure-record budget like any other failure. Once the budget is spent it is counted as suppressed and not written to the failed-events stream, even if its first delivery never produced a record. Previously a redelivered failure was always recorded, so a restart could record every uplink of a backlog.
+
+- **Nothing needs doing.**
+
 #### Metrics and an alert for agent actions (Preview) {#v160-agent-metrics}
 
 `device-management` now reports agent actions: proposals by kind and outcome, approvals by outcome, executions by kind and result with their duration, and proposals that expired. The Platform board gains an **Agent actions (preview)** row, and a new warning alert, `AgentExecutionsFailing`, fires when final approvals keep failing to complete. Refusals do not raise it: a dependency change, a policy refusal, a closed kill fence or an approver refusal is counted under its own result. The metrics are listed in the [metrics reference](./metrics-reference.md), and the alert has an [alert runbook](./alert-runbook.md#agentexecutionsfailing) entry. Like agent actions, they are Preview: names and labels may still change in a minor release.

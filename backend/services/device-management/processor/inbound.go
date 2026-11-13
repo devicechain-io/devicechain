@@ -527,13 +527,15 @@ func NewInboundEventsProcessor(ms *core.Microservice, inbound []messaging.Messag
 //
 // A record that does not reach the stream leaves its source unacked, so the source is
 // redelivered and resolved again — or, at its last delivery, recorded by the platform's
-// max-delivery recorder from the source stream. Either way the failure is recorded
-// somewhere. Acking at hand-off, as this loop once did, lost it whenever the publish failed.
+// max-delivery recorder from the source stream. A redelivered decoder failure is held to its
+// device type's record budget: once spent, it is acked as suppressed, counted in the decoder
+// health tally without a record (see decode_accounting.go ObserveDecode). Acking at hand-off,
+// as this loop once did, lost the failure whenever the publish failed.
 //
-// The one exception is a record that cannot be encoded: it is not published, its source is
+// A record that cannot be encoded is also not published: its source is
 // acked, and the loss is counted on dead_letter_lost_total (see loseRecord).
 //
-// A record that was stored but whose PubAck was lost is published again when its source is
+// A record that was stored but whose PubAck was lost may be published again when its source is
 // redelivered; the dedup id (sourceDedupID) keeps that second copy out of the stream.
 func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) bool {
 	item, more := <-iproc.failed

@@ -816,6 +816,12 @@ Cuando una recarga cambia los ajustes de autenticación del propio servidor (sus
 - **Un certificado TLS renovado** bajo la misma CA mantiene su comportamiento anterior, vigente desde `v0.27.0`: se aplica a las conexiones nuevas sin recarga.
 - **La imagen de upstream para volver al broker original ahora es `nats:2.15.3-alpine`**: fija `server_image_repository = "nats"` y `server_image_tag = "2.15.3-alpine"`, como se describe en [Certificados de dispositivos](./device-certificates.md). Añade la nueva etiqueta a las imágenes que replicas si mantienes preparada esa vuelta atrás.
 
+#### Un fallo de decodificación reenviado usa el presupuesto de registros {#v160-decoder-redelivery-budget}
+
+Un fallo del decodificador de carga útil que se vuelve a entregar (por ejemplo, tras un reinicio con una acumulación de mensajes de enlace ascendente de un tipo de dispositivo cuyo decodificador falla) ahora usa el presupuesto de registros de fallos por tipo de dispositivo como cualquier otro fallo. Una vez agotado el presupuesto, se cuenta como suprimido y no se escribe en el flujo failed-events, aunque su primera entrega nunca haya generado un registro. Antes, un fallo reenviado siempre se registraba, por lo que un reinicio podía registrar todos los mensajes de enlace ascendente acumulados.
+
+- **No hay que hacer nada.**
+
 #### Métricas y una alerta para las acciones de agentes (Preview) {#v160-agent-metrics}
 
 `device-management` informa ahora de las acciones de agentes: propuestas por tipo y resultado, aprobaciones por resultado, ejecuciones por tipo y resultado con su duración, y propuestas que caducaron. El panel Platform incorpora una fila **Agent actions (preview)**, y una nueva alerta de aviso, `AgentExecutionsFailing`, se dispara cuando las aprobaciones finales no llegan a completarse de forma continuada. Las denegaciones no la disparan: un cambio de dependencia, una denegación de la política, una barrera de desactivación cerrada o una denegación del aprobador se cuentan con su propio resultado. Las métricas figuran en la [referencia de métricas](./metrics-reference.md), y la alerta tiene una entrada en el [manual de alertas](./alert-runbook.md#agentexecutionsfailing). Como las acciones de agentes, están en Preview: los nombres y las etiquetas aún pueden cambiar en una versión menor.
