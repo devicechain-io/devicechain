@@ -25,10 +25,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net"
 	"os"
+	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 )
@@ -181,4 +183,9 @@ func main() {
 	go b.watch()
 
 	s.WaitForShutdown()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := b.stopMetrics(ctx); err != nil {
+		s.Errorf("Broker metrics endpoint shutdown: %v", err)
+	}
 }
