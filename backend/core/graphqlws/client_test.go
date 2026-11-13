@@ -409,15 +409,52 @@ func TestClientCloseTellsServer(t *testing.T) {
 // deterministic attribution the safety monitor relies on at end-of-run. Before
 // the Close/readLoop reorder this was a reproduced flake; stress it.
 func TestClientCloseTerminatesLiveSubsWithClientClosed(t *testing.T) {
-	c, err := Dial(dialCtx(t), realServer(t), nil)
+	url := rawServer(t, func(conn *websocket.Conn) {
+		var m wsMessage
+		if err := conn.ReadJSON(&m); err != nil {
+			return
+		}
+		if err := conn.WriteJSON(wsMessage{Type: msgConnectionAck}); err != nil {
+			return
+		}
+		var sub wsMessage
+		if err := conn.ReadJSON(&sub); err != nil {
+			return
+		}
+		data, _ := json.Marshal(map[string]any{"data": map[string]int{"counter": 1}})
+		// Exactly one value prevents overflow; keep the subscription open until Close.
+		if err := conn.WriteJSON(wsMessage{ID: sub.ID, Type: msgNext, Payload: data}); err != nil {
+			return
+		}
+		for {
+			if err := conn.ReadJSON(&m); err != nil {
+				return
+			}
+		}
+	})
+
+	c, err := Dial(dialCtx(t), url, nil)
 	require.NoError(t, err)
-	sub, err := c.Subscribe(context.Background(), "subscription { counter(to: 1000000) }", nil)
+	defer c.Close()
+	sub, err := c.Subscribe(context.Background(), "subscription { counter(to: 1) }", nil)
 	require.NoError(t, err)
 
-	done := drainCount(sub) // drain concurrently so we never overflow first
-	time.Sleep(20 * time.Millisecond)
+	// Receiving the first value proves the subscription is live before closing the client.
+	select {
+	case _, ok := <-sub.C():
+		if !ok {
+			t.Fatalf("subscription ended while waiting for the first value: %v", sub.Err())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for the subscription's first value")
+	}
+
 	require.NoError(t, c.Close())
-	<-done
+	select {
+	case <-drainCount(sub):
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for the subscription channel to close after client Close")
+	}
 	assert.ErrorIs(t, sub.Err(), ErrClientClosed)
 }
 
