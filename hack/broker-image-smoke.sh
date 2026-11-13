@@ -18,9 +18,10 @@
 #      binary is named nats-server and on PATH — takes the server through lame duck mode to a
 #      clean exit (status 0);
 #   5. 🔴 THE NEGATIVE CONTROL: the identical check against the UPSTREAM image must FAIL, and
-#      pass only when told the listener requests nothing; the same rotation against it DOES drop the
-#      sessions. Without it, step 1 could be passing
-#      because the harness cannot tell a certificate request from its absence.
+#      pass only when told the listener requests nothing. Rotation keeps sessions on both images
+#      because the library carries the reload fix; killing the upstream broker under held sessions
+#      proves the session-loss counter can see a loss. Without these controls, the harness could
+#      miss an absent certificate request or dropped sessions.
 #
 # The module's own tests cover the same ground against an embedded server; this is the copy
 # that runs against the artifact the release publishes — ko's build, the base image, its user
@@ -216,11 +217,26 @@ grep -q '^FAIL  the MQTT listener sends a CertificateRequest' "$work/control.out
   fail "the harness could not drive the upstream broker at all, so its failure above proves nothing"
 echo "    the upstream image fails the checks, and passes only when told it requests nothing"
 
-# And the rotation: upstream's reload closes every session the auth callout admitted. This is the
-# control for the rotation step above (it must see the loss that step must not), and the canary for
-# the day the library carries the fix (hottls.go in the module says what to delete).
+# The library carries the reload fix, so rotation must keep sessions on both images. Killing
+# the upstream broker under held sessions below is the control that proves the counter sees loss.
 rotate_with_sessions "$up" "$umqtt" "$unats"
-[ "$lost" -gt 0 ] || fail "the rotation reload dropped no sessions on the upstream image: the rotation step proves nothing about the fix (the library may now carry it; see hottls.go)"
-echo "    the upstream image lost $lost of $fleet sessions to the same rotation"
+[ "$lost" = "0" ] || fail "the rotation reload dropped $lost of $fleet sessions on the upstream image, whose nats-server carries the reload fix: the library under the broker has regressed"
+echo "    the upstream library keeps all $fleet sessions across a reload too"
+
+say "DETECTOR CONTROL: killing the upstream broker under $fleet held MQTT sessions"
+rm -f "$work/hold.ready" "$work/hold.stop" "$work/hold.out"
+"$smoke" hold -dir "$work/pki" -nats "$unats" -mqtt "$umqtt" -n "$fleet" \
+  -ready "$work/hold.ready" -stop "$work/hold.stop" >"$work/hold.out" 2>&1 &
+hp=$!
+for _ in $(seq 1 120); do [ -e "$work/hold.ready" ] && break; sleep 0.5; done
+[ -e "$work/hold.ready" ] || { cat "$work/hold.out"; kill "$hp" 2>/dev/null || true; fail "$up: $fleet sessions did not open for the detector control"; }
+docker kill -s KILL "$up" >/dev/null
+sleep 3 # allow the asynchronous connection-loss handlers to count the dropped sessions
+touch "$work/hold.stop"
+wait "$hp" || true
+lost="$(sed -n 's/^lost=//p' "$work/hold.out")"
+[ -n "$lost" ] || { cat "$work/hold.out"; fail "$up: no session count was reported for the detector control"; }
+[ "$lost" -gt 0 ] || fail "the session counter saw no loss when the broker was killed under $fleet held sessions: the rotation step's lost=0 proves nothing"
+echo "    the detector saw $lost of $fleet sessions lost when the upstream broker was killed"
 
 say "broker image smoke passed"
