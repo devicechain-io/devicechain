@@ -72,6 +72,7 @@ tests:
               devicechain_instance: devicechain
               reason: unauthenticated
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#failedeventssustained"
               summary: "the platform has been refusing more than one event a second for the same reason for 15 minutes"
               description: "Events are being refused or could not be stored at more than one a second for the reason named by the reason label, and have been for 15 minutes. That can be a single device sending that fast (2 a second from one device is enough to fire it) or many devices failing together: a credential or certificate that is wrong across many devices (unauthenticated), devices that were never registered (device_not_found), a gateway publishing for devices it does not hold (not_gateway_child), or a failing dependency (api_call_failed). The tenants' failedEvents query and the Ingest failures view in the console show which devices and what the platform said, at most ten rows per device an hour with the rest counted. Nothing is re-sent: the events were not stored, and fixing the cause makes the devices' next events succeed."
       - eval_time: 55m

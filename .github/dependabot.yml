@@ -94,6 +94,11 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 10
+    # i18next >= 26.7 grows the board-replay initial-load bundle by ~1.9 KB gzip,
+    # past its size budget. Held here until the budget is revisited on purpose.
+    ignore:
+      - dependency-name: "i18next"
+        versions: [">= 26.6.0"]
     groups:
       npm-minor-patch:
         update-types:

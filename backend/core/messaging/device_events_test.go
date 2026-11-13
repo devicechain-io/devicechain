@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
@@ -120,7 +121,7 @@ func TestGatewayShapeDerivations(t *testing.T) {
 		t.Errorf("notices subject = %q, want %q", got, want)
 	}
 
-	// The capture stream stores exactly the two shapes.
+	// The capture stream stores exactly the two shapes (the raw-payload one only on opt-in, below).
 	got := StreamSubjects("inst", streams.DeviceEventsCapture)
 	want := []string{"inst.*.devices.*.events", "inst.*.gateways.*.devices.*.events"}
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
@@ -157,7 +158,8 @@ func TestGatewayShapeDerivations(t *testing.T) {
 // the broker for a successor at a reused token.
 func TestTenantPurgeFiltersCoverTheGatewayShape(t *testing.T) {
 	filters := TenantSubjectFilters("inst", "acme", streams.DeviceEventsCapture)
-	if len(filters) != 2 || filters[0] != "inst.acme.devices.*.events" || filters[1] != "inst.acme.gateways.*.devices.*.events" {
+	if len(filters) != 3 || filters[0] != "inst.acme.devices.*.events" || filters[1] != "inst.acme.gateways.*.devices.*.events" ||
+		filters[2] != "inst.acme.devices.*.uplink" {
 		t.Fatalf("capture purge filters = %v", filters)
 	}
 	if got := TenantSubjectFilters("inst", "acme", streams.InboundEvents); len(got) != 1 {
@@ -180,9 +182,89 @@ func TestFailClosedEventsDurableForwardsBothShapes(t *testing.T) {
 		MqttMsgsSubject(GatewayEventsSubject("other", "t1", "g1", "c1")):                  false,
 		MqttMsgsSubject(GatewayDeviceSubject("inst", "t1", "g1", "c1", SegmentResponses)): false,
 		MqttMsgsSubject(GatewayNoticesSubject("inst", "t1", "g1")):                        false,
+		MqttMsgsSubject(DeviceUplinkSubject("inst", "t1", "d1")):                          true,
+		MqttMsgsSubject(DeviceUplinkSubject("other", "t1", "d1")):                         false,
 	} {
 		if got := r.forwardsSubject(subject); got != want {
 			t.Errorf("forwardsSubject(%q) = %v, want %v", subject, got, want)
 		}
+	}
+}
+
+// The raw-payload shape is declared once and every derivation agrees with it: the subject builder,
+// the capture wildcard, the parser and the MQTT topic form. It is a sibling of the events leaf, and
+// the events parser never reads it as telemetry.
+func TestDeviceUplinkShapeDerivations(t *testing.T) {
+	subject := DeviceUplinkSubject("inst", "acme", "pump-1")
+	if got, want := subject, "inst.acme.devices.pump-1.uplink"; got != want {
+		t.Fatalf("uplink subject = %q, want %q", got, want)
+	}
+	if got, want := DeviceUplinkWildcard("inst"), "inst.*.devices.*.uplink"; got != want {
+		t.Errorf("uplink wildcard = %q, want %q", got, want)
+	}
+	if got, want := SubjectToMqttTopic(subject), "inst/acme/devices/pump-1/uplink"; got != want {
+		t.Errorf("uplink MQTT topic = %q, want %q", got, want)
+	}
+
+	cases := []struct {
+		subject, device string
+		ok              bool
+	}{
+		{subject, "pump-1", true},
+		{"inst.acme.devices.d1.events", "", false},
+		{"inst.acme.devices..uplink", "", false},
+		{"inst.acme.devices.d1.uplink.extra", "", false},
+		{"inst.acme.things.d1.uplink", "", false},
+		{"inst.acme.gateways.gw-1.devices.c1.uplink", "", false},
+	}
+	for _, c := range cases {
+		d, ok := ParseDeviceUplinkSubject(c.subject)
+		if d != c.device || ok != c.ok {
+			t.Errorf("ParseDeviceUplinkSubject(%q) = (%q, %v), want (%q, %v)", c.subject, d, ok, c.device, c.ok)
+		}
+	}
+	// The events parser is fixed to the events leaf: a caller that does not know the uplink leaf
+	// can never take a raw payload for telemetry.
+	if _, _, ok := ParseDeviceEventsSubject(subject); ok {
+		t.Errorf("ParseDeviceEventsSubject read %q as telemetry", subject)
+	}
+}
+
+// 🔴 OFF IS THE STREAM EVERY EARLIER BUILD DECLARED. A service refuses to start on a stream whose
+// subjects differ from its own expectation, so an instance that has not opted in to raw device
+// payloads must declare exactly the two subjects main does, or an old pod restarting mid-roll would
+// exit with a drift error. On adds the raw-payload subject and nothing else.
+func TestTheCaptureStreamDeclaresTheUplinkSubjectOnlyOnOptIn(t *testing.T) {
+	off := []string{"inst.*.devices.*.events", "inst.*.gateways.*.devices.*.events"}
+	for name, got := range map[string][]string{
+		"DeviceEventsSubjects":      DeviceEventsSubjects("inst"),
+		"DeviceEventsSubjectsWith":  DeviceEventsSubjectsWith("inst", false),
+		"StreamSubjects":            StreamSubjects("inst", streams.DeviceEventsCapture),
+		"StreamSubjectsWith(false)": StreamSubjectsWith("inst", streams.DeviceEventsCapture, false),
+	} {
+		if len(got) != 2 || got[0] != off[0] || got[1] != off[1] {
+			t.Errorf("%s = %v, want exactly %v", name, got, off)
+		}
+	}
+	on := StreamSubjectsWith("inst", streams.DeviceEventsCapture, true)
+	if len(on) != 3 || on[0] != off[0] || on[1] != off[1] || on[2] != "inst.*.devices.*.uplink" {
+		t.Errorf("opted-in capture subjects = %v", on)
+	}
+	// Another stream is unaffected by the setting.
+	if a, b := StreamSubjectsWith("inst", streams.InboundEvents, true), StreamSubjects("inst", streams.InboundEvents); len(a) != 1 || a[0] != b[0] {
+		t.Errorf("inbound-events subjects moved with the setting: %v vs %v", a, b)
+	}
+}
+
+// The manager's expectation and its capture reader's hand-out follow the setting.
+func TestTheManagersCaptureSubjectsFollowTheSetting(t *testing.T) {
+	ms := &core.Microservice{InstanceId: "inst"}
+	nmgr := &NatsManager{Microservice: ms}
+	if got := nmgr.expectedStream(streams.DeviceEventsCapture).subjects; len(got) != 2 {
+		t.Errorf("off: expected stream subjects = %v", got)
+	}
+	ms.InstanceConfiguration.Infrastructure.Nats.MqttDeviceUplinks = true
+	if got := nmgr.expectedStream(streams.DeviceEventsCapture).subjects; len(got) != 3 {
+		t.Errorf("on: expected stream subjects = %v", got)
 	}
 }

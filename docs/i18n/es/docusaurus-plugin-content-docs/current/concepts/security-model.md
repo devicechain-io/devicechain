@@ -5,7 +5,7 @@ title: Modelo de seguridad
 # Modelo de seguridad {#security-model}
 
 Esta página indica dónde traza DeviceChain sus límites de confianza, qué hace cumplir cada uno hoy y qué no hace cumplir
-todavía. Las carencias aceptadas están en su propia sección para que pueda planificar en torno a ellas.
+todavía. Las carencias aceptadas están en su propia sección para que puedas planificar en torno a ellas.
 
 Para notificar una vulnerabilidad, siga el proceso de la
 [política de seguridad](https://github.com/devicechain-io/devicechain/blob/main/SECURITY.md).
@@ -21,7 +21,7 @@ Para notificar una vulnerabilidad, siga el proceso de la
 | Secreto frente a lector | Los secretos se sellan y nunca se devuelven | Cifrado de sobre bajo la clave raíz de la instancia |
 | Inquilino frente a la red | Un destino aportado por un inquilino no puede alcanzar direcciones internas | Una comprobación en el momento de la conexión |
 | Internet frente a los endpoints propios de la plataforma | El emisor de tokens de servicio y el conjunto de claves de firma se sirven en un puerto al que no llega ninguna ruta | Un listener interno independiente, no una regla de ingress |
-| Servicios de la plataforma entre sí | Inicios de sesión separados en el broker y la base de datos | **Parcialmente.** Consulte [lo que aún no se hace cumplir](#accepted-gaps) |
+| Servicios de la plataforma entre sí | Inicios de sesión separados en el broker y la base de datos | **Parcialmente.** Consulta [lo que aún no se hace cumplir](#accepted-gaps) |
 
 ## Inquilinos {#tenants}
 
@@ -34,7 +34,7 @@ Un único conjunto de servicios atiende a todos los inquilinos, así que el aisl
   servicio que llama a otro: nombra el inquilino en una cabecera, que solo se acepta tras verificar la firma del
   token de servicio.
 
-Consulte [Multitenencia](./multi-tenancy.md).
+Consulta [Multitenencia](./multi-tenancy.md).
 
 ## Dispositivos {#devices}
 
@@ -50,7 +50,7 @@ Consulte [Multitenencia](./multi-tenancy.md).
   En el broker MQTT de la plataforma, el dispositivo se autentica al conectarse. Por HTTP, o a través de un broker propio, la credencial
   viaja en el cuerpo del evento. Una vez que una credencial ha autenticado un dispositivo, se rechaza un evento que nombre a otro
   dispositivo. Desactivar, rotar o eliminar una credencial rechaza de inmediato las nuevas conexiones y cierra las sesiones abiertas
-  del dispositivo. Consulte [Credenciales de dispositivo](../guides/device-credentials.md), incluida la rapidez con que una
+  del dispositivo. Consulta [Credenciales de dispositivo](../guides/device-credentials.md), incluida la rapidez con que una
   revocación alcanza a los eventos en curso.
 - **Credenciales en reposo.** La contraseña de una credencial `MQTT_BASIC` y el token de una credencial `ACCESS_TOKEN`
   se guardan solo como resúmenes unidireccionales con clave, bajo una clave derivada de la clave raíz de la instancia,
@@ -60,7 +60,7 @@ Consulte [Multitenencia](./multi-tenancy.md).
   presentarse como el token. Por tanto, una fuga de la base de datos o de una copia de seguridad no da ninguna
   contraseña, token, secreto de aprovisionamiento ni secreto de reclamación que funcione.
 - **Autorregistro.** Un dispositivo que aún no tiene credencial puede registrarse por sí mismo mediante HTTPS presentando la clave y el secreto compartidos de un perfil de aprovisionamiento ([cómo configurarlo](../guides/device-self-registration.md)). El secreto lo genera el servidor (256 bits aleatorios), se guarda solo como un resumen con clave y se compara en tiempo constante. Todas las formas en que puede fallar la autenticación, incluidos un inquilino o una clave desconocidos, un perfil deshabilitado o caducado y un inquilino en eliminación, reciben el mismo `401` con el mismo coste, de modo que la respuesta nunca dice qué parte era incorrecta. El trabajo que se hace para un desconocido está acotado antes de comprobar el secreto: un plazo para el cuerpo de la solicitud, un tope de 8 KiB, un límite de solicitudes en curso y una cuota por dirección de cliente. Esa dirección es la del cliente real solo cuando `infrastructure.http.trustedProxies` nombra los proxies situados delante de los servicios; véase [Direcciones de cliente y proxies de confianza](../deployment/bootstrap.md#trusted-proxies). Un límite por inquilino, tomado del nivel del inquilino o de un valor propio, se aplica una vez aceptado el secreto. El dispositivo elige su propia credencial y solo se conserva un resumen de ella. **El secreto de la flota es el ancla de confianza del primer contacto.** Quien lo tenga puede registrar cualquier número de serie que nadie haya registrado aún con `ALLOW_NEW`, o cualquier número de serie reservado que aún no se haya registrado con `CHECK_PRE_PROVISIONED`, hasta el `maxDevices` del perfil. Nunca puede apropiarse de un dispositivo que ya tiene una credencial ni de uno que no se reservó para el perfil. Si se filtra, [rótalo y revoca lo que registró](../guides/device-self-registration.md#compromise).
-- **Certificados de cliente.** Un dispositivo puede autenticarse en el broker MQTT de la plataforma con un certificado de cliente X.509, demostrando su clave en el handshake TLS, de modo que no se guarda ni se envía nada reproducible. La plataforma comprueba la cadena contra un ancla de confianza que el tenant añadió, en cada conexión, exigiendo un uso de clave clientAuth y rechazando SHA-1, claves débiles y CA con restricciones de nombre. **El ancla de confianza es el límite de la identidad:** quien pueda obtener un certificado de esa CA puede registrarse con un perfil de certificado, hasta su tope de dispositivos, así que ancla en la CA más estrecha y deshabilita el ancla ante un compromiso. El tenant sale del usuario MQTT, nunca del certificado. El client id de MQTT queda fijado al dispositivo, de modo que un certificado no puede apoderarse de la sesión de otro dispositivo, y una primera conexión cuyo client id no coincide se rechaza antes de escribir nada. Una sesión termina en la caducidad más temprana de la cadena. No hay OCSP ni descarga de CRL: sube la lista de revocación de una CA al ancla o revoca un certificado por huella para rechazarlo desde su siguiente conexión y terminar las sesiones abiertas que afecta, deshabilita la credencial o el ancla para terminar sesiones sin revocar un certificado, y usa certificados de corta duración. Consulta [Identidad por certificado](./device-certificates.md).
+- **Certificados de cliente.** Un dispositivo puede autenticarse en el broker MQTT de la plataforma con un certificado de cliente X.509, demostrando su clave en el handshake TLS, de modo que no se guarda ni se envía nada reproducible. La plataforma comprueba la cadena contra un ancla de confianza que el tenant añadió, en cada conexión, exigiendo un uso de clave clientAuth y rechazando SHA-1, claves débiles y CA con restricciones de nombre. **El ancla de confianza es el límite de la identidad:** quien pueda obtener un certificado de esa CA puede registrarse con un perfil de certificado, hasta su tope de dispositivos, así que ancla en la CA más estrecha y deshabilita el ancla ante un compromiso. El tenant sale del usuario MQTT, nunca del certificado. El client id de MQTT queda fijado al dispositivo, de modo que un certificado no puede apoderarse de la sesión de otro dispositivo, y una primera conexión cuyo client id no coincide se rechaza antes de escribir nada. Una sesión termina en la caducidad más temprana de la cadena. No hay descarga de CRL: sube la lista de revocación de una CA al ancla o revoca un certificado por huella para rechazarlo desde su siguiente conexión y terminar las sesiones abiertas que afecta, deshabilita la credencial o el ancla para terminar sesiones sin revocar un certificado, usa certificados de corta duración y, si quieres, activa una comprobación OCSP por ancla en la conexión (desactivada por defecto; una respuesta revocada rechaza esa conexión pero todavía no termina las sesiones abiertas). Consulta [Identidad por certificado](./device-certificates.md).
 - **Credenciales en el cuerpo de un evento.** En el broker MQTT de la plataforma la conexión ya ha autenticado al dispositivo, así que
   se rechaza un evento que además lleve una credencial en su cuerpo, nunca se acepta con la credencial
   eliminada: un dispositivo que aún la envía deja de informar, y el rechazo se cuenta para poder localizar el dispositivo y rotar su
@@ -76,7 +76,7 @@ Consulte [Multitenencia](./multi-tenancy.md).
   clave raíz de la instancia.
 - **Permisos.** Los roles llevan permisos, y la API los comprueba en cada llamada. Una pertenencia puede limitarse a los datos de un
   cliente, y los miembros, invitaciones y roles que un inquilino gestiona por sí mismo no pueden conceder más de lo que posee quien
-  los concede. Consulte [Gobernanza y cuotas](./governance.md).
+  los concede. Consulta [Gobernanza y cuotas](./governance.md).
 - **Integraciones.** Las [cuentas de servicio](../user-guide/service-accounts.md) de un inquilino intercambian un ID de
   cliente y un secreto por un token de acceso de 5 minutos (la concesión OAuth `client_credentials`), sin token de
   actualización y sin el inicio de sesión de ninguna persona. Una cuenta tiene exactamente los permisos de sus roles, su
@@ -86,7 +86,7 @@ Consulte [Multitenencia](./multi-tenancy.md).
   token se comprueba antes de leer el cuerpo y otra vez cuando se procesa el evento. Habla en nombre de todos los
   dispositivos de sus tipos en alcance que tengan un alias, así que limita bien el alcance de una
   [integración](../guides/inbound-integrations.md#trust) y rota su token si pudo filtrarse.
-- **Inicio de sesión único.** Un inquilino puede exigir el inicio de sesión mediante su propio proveedor de identidad. Consulte
+- **Inicio de sesión único.** Un inquilino puede exigir el inicio de sesión mediante su propio proveedor de identidad. Consulta
   [Inicio de sesión único](./single-sign-on.md).
 - **Agentes de IA.** El [servidor MCP](./mcp.md) opcional llama a la plataforma con el token del propio llamador. No tiene ningún token
   propio, así que un agente solo puede leer lo que puede leer su usuario.
@@ -105,19 +105,21 @@ Dos comprobaciones usan la audiencia. Son defensa en profundidad: las autoridade
 
 ### La lista de permitidos {#token-audience-allowlist}
 
-Estos son los recursos a los que el servidor de autorización vincula un token, y las audiencias que acepta una API, cuando la aplicación obligatoria está activada. Con `observe`, cualquier otro se cuenta y se registra, pero se atiende:
+Estos son los recursos a los que el servidor de autorización vincula un token y las audiencias que acepta una API:
 
 - **El servidor MCP**, cuando está desplegado: su URL de recurso, `<origin>/api/mcp`.
 - **La API de cada área**, en `<origin>/api/<área>` para todas las áreas salvo `mcp`, por ejemplo `https://iot.example.com/api/device-management`.
-- **Recursos externos**, que son las entradas que enumera en `externalResources`. Úselos para un servicio suyo, fuera de DeviceChain, que valida los tokens de DeviceChain con el conjunto de claves publicado (`/oauth/jwks`) y pide tokens vinculados a sí mismo. El servidor de autorización emite ese token, pero **ninguna API de DeviceChain lo acepta cuando la aplicación obligatoria está activada**, ni tampoco el endpoint `userinfo` del servidor de autorización.
+- **Recursos externos**, que son las entradas que enumera en `externalResources`. Úselos para un servicio suyo, fuera de DeviceChain, que valida los tokens de DeviceChain con el conjunto de claves publicado (`/oauth/jwks`) y pide tokens vinculados a sí mismo. El servidor de autorización emite ese token, pero **ninguna API de DeviceChain lo acepta con `enforce`**, ni tampoco el endpoint `userinfo` del servidor de autorización.
 
 La comparación es byte a byte. No hay conversión de mayúsculas ni tratamiento de la barra final, así que `https://IoT.example.com/api/mcp` no es `https://iot.example.com/api/mcp`. Por eso la configuración solo admite una grafía de cada identificador, y el cliente tiene que enviar exactamente esa grafía.
 
 ### Observar y aplicar {#token-audience-modes}
 
-`enforcement` decide qué ocurre con una solicitud que incumple alguna de las comprobaciones:
+Desde `v1.4`, las audiencias de tokens siempre se aplican. El servicio rechaza `infrastructure.tokenAudience.enforcement: observe` al arrancar y el esquema del chart lo rechaza. Quita la clave (sin ella se aplica `enforce`) o usa `enforce` antes de actualizar. En valores Helm y overlays de `dcctl`, quita `instance.config.infrastructure.tokenAudience.enforcement`, también de la anotación del overlay almacenado y de los valores aportados por el usuario al release anterior. Con `instance.existingSecret`, quita `infrastructure.tokenAudience.enforcement` del documento o usa `enforce`. `dcctl upgrade` comprueba estas fuentes antes de cualquier cambio.
 
-| Dónde | `observe` | `enforce` |
+La tabla compara el comportamiento histórico de `observe` en `v1.2`/`v1.3` con el de `enforce` en `v1.4`. Los tokens sin audiencia siguen aceptándose. `unscopedClientCredentials: observe` es una opción distinta y sigue admitida.
+
+| Dónde | `observe` (v1.2/v1.3) | `enforce` |
 | --- | --- | --- |
 | Endpoint de autorización | Se cuenta y se registra; la página de inicio de sesión se sirve como antes | El cliente vuelve a su dirección de redirección con `invalid_target` |
 | Concesión `client_credentials` | Se cuenta y se registra; se emite el token | `invalid_target`. Un recurso que no figura en la lista se juzga después de comprobar el secreto del cliente, de modo que un remitente no autenticado no averigua qué contiene la lista |
@@ -126,13 +128,9 @@ La comparación es byte a byte. No hay conversión de mayúsculas ni tratamiento
 | Un `resource` en una solicitud de código o de renovación que difiere de aquel al que está vinculada la concesión | Se cuenta y se registra; se atiende | `invalid_target`; un token de renovación no queda gastado |
 | Una API | Se cuenta como `would_reject` y se registra; se atiende | `401`, la misma respuesta que para un token no válido |
 
-`observe` es el valor por defecto en `v1.2`. `v1.3` hace de `enforce` el valor por defecto y mantiene `observe` como salida para esa versión menor. `v1.4` retira la salida: un servicio se niega a arrancar si el documento contiene `observe`, y el chart lo rechaza. Consulte las [notas de actualización](../deployment/releases-and-upgrades.md#v120-token-audience).
-
-Un token que no nombra ningún recurso es aceptado por la API de cualquier área, en ambos modos. Un cliente que nunca envía `resource` no se ve afectado por ninguna de las dos comprobaciones.
-
 ### Cómo leer los contadores {#token-audience-reading}
 
-Ejecute primero `observe` y vigile los contadores: una serie `would_reject` que nunca se mueve significa que pasar a `enforce` no cambia nada para sus clientes. Las series, las dos alertas y cómo encontrar el cliente que está detrás de una cuenta están en [Comprobaciones de la audiencia del token](../deployment/observability.md#token-audience-checks).
+Los rechazos de audiencia y recurso se cuentan como `rejected`. Las series `would_reject` y las dos alertas se conservan por compatibilidad y solo pueden activarse en instancias `v1.2`/`v1.3` con observe. Consulta [Comprobaciones de audiencia](../deployment/observability.md#token-audience-checks).
 
 ### Configuración {#token-audience-config}
 
@@ -140,15 +138,15 @@ La política es configuración de la instancia en `infrastructure.tokenAudience`
 
 | Clave | La escribe | Valor |
 | --- | --- | --- |
-| `enforcement` | Usted | `observe`, `enforce` o sin definir. Sin definir es el valor por defecto de la versión, `observe` en `v1.2`. Rige ambas comprobaciones a la vez. |
-| `unscopedClientCredentials` | Usted | Sin definir u `observe`. `enforce` se rechaza al arrancar en esta versión, porque la regla que activaría todavía no rechaza nada. Consulte [Cuentas de servicio](../user-guide/service-accounts.md#binding-a-token-to-a-resource). |
-| `externalResources` | Usted | Una lista de como máximo 8 identificadores de recursos fuera de la plataforma. |
+| `enforcement` | Tú | Sin definir o `enforce`; ambos aplican las comprobaciones. `v1.4` rechaza `observe`. |
+| `unscopedClientCredentials` | Tú | Sin definir u `observe`. `enforce` se rechaza al arrancar en esta versión, porque la regla que activaría todavía no rechaza nada. Consulta [Cuentas de servicio](../user-guide/service-accounts.md#binding-a-token-to-a-resource). |
+| `externalResources` | Tú | Una lista de como máximo 8 identificadores de recursos fuera de la plataforma. |
 | `areaBaseUrl` | El chart | `<origin>/api`, a partir del host del ingress. Solo se fija cuando el origen es https, o un host de loopback con http sin cifrar como `localhost`. Un ingress sin TLS en cualquier otro host no tiene recursos de área, igual que no tiene servidor de autorización. |
 | `mcpResources` | El chart | La `resourceUrl` resuelta del servidor MCP, cuando el área `mcp` está desplegada. |
 
 Un servicio se detiene al arrancar, nombrando la clave, cuando el bloque incumple alguna de estas reglas:
 
-- `enforcement` y `unscopedClientCredentials` deben ser `observe` o `enforce`, o estar sin definir. `unscopedClientCredentials` sin definir y `observe` son lo mismo, y `enforce` se rechaza como se ha dicho.
+- `enforcement` debe estar sin definir o ser `enforce`; `v1.4` rechaza `observe`. La opción distinta `unscopedClientCredentials` admite sin definir u `observe`, y rechaza `enforce`.
 - `areaBaseUrl` y cada entrada de lista deben ser una URL absoluta con esquema `https` (`http` solo para `localhost`, `127.0.0.1` o `::1`), con esquema y host en minúsculas, sin consulta, fragmento ni información de usuario, y sin barra final.
 - Cada lista contiene como máximo 8 entradas. Ninguna entrada puede aparecer dos veces, en ninguna de las dos listas, ni coincidir con el identificador propio de un área.
 - Una entrada de `externalResources` no puede estar bajo `areaBaseUrl`: con un `areaBaseUrl` de `https://iot.example.com/api`, tanto `https://iot.example.com/api` como `https://iot.example.com/api/x` se rechazan, y `https://iot.example.com/apiary` no. Así se evita que un área de la plataforma se reetiquete como externa.
@@ -156,7 +154,7 @@ Un servicio se detiene al arrancar, nombrando la clave, cuando el bloque incumpl
 
 El chart añade sus propias comprobaciones, de modo que un error detiene `helm upgrade` antes de reiniciar ningún pod. Establecer `areaBaseUrl` o `mcpResources` en `instance.config` hace fallar el renderizado, igual que una clave mal escrita o una entrada de `externalResources` que incumpla las reglas anteriores. `dcctl` acepta `enforcement`, `unscopedClientCredentials` y `externalResources` en una [superposición de valores](../deployment/tuning-an-instance.md#tunable) y rechaza las dos claves derivadas.
 
-En una instancia cuya configuración escribe usted mismo (`instance.existingSecret`), el chart no escribe el bloque. Añádalo al documento, con la `resourceUrl` del servidor MCP tal como esté configurada el área `mcp`, y actualice `instance.existingSecretChecksum`:
+En una instancia cuya configuración escribes tú mismo (`instance.existingSecret`), el chart no escribe el bloque. Añádelo al documento, con la `resourceUrl` del servidor MCP tal como esté configurada el área `mcp`, y actualiza `instance.existingSecretChecksum`:
 
 ```json
 "infrastructure": {
@@ -167,7 +165,7 @@ En una instancia cuya configuración escribe usted mismo (`instance.existingSecr
 }
 ```
 
-Sin él se desconocen los recursos de área y `mcp` no está registrado, así que cada llamada que reenvía el servidor MCP se cuenta como un rechazo que se habría producido. `dcctl upgrade` avisa de que falta la entrada de MCP y, con `enforce`, se niega a continuar.
+Sin este bloque no se conocen los recursos de las áreas ni está registrado MCP. MCP se niega a arrancar si falta su recurso; `dcctl upgrade` también rechaza el documento que omite la entrada MCP.
 
 ## Autenticación en dos pasos {#two-factor}
 
@@ -227,8 +225,8 @@ almacén de secretos cifrado. Cada valor se sella con su propia clave de datos A
 **clave raíz** de la instancia, que reside en el Secret de Kubernetes de la instancia. Un valor es de solo escritura a través de la API: se
 resuelve dentro del servidor cuando se usa y nunca se devuelve. Los cambios se auditan por quién, cuándo y qué identificador, nunca por valor.
 
-La clave raíz es lo único de lo que el almacén no puede recuperarse. Conserve una copia en custodia: sin ella, una instancia restaurada
-no puede descifrar sus secretos y nadie puede iniciar sesión. Consulte [Recuperación ante desastres](../deployment/disaster-recovery.md).
+La clave raíz es lo único de lo que el almacén no puede recuperarse. Conserva una copia en custodia: sin ella, una instancia restaurada
+no puede descifrar sus secretos y nadie puede iniciar sesión. Consulta [Recuperación ante desastres](../deployment/disaster-recovery.md).
 El almacén admite un proveedor de claves conectable, pero la clave raíz de la instancia es el único proveedor que se incluye hoy.
 
 ## Tráfico de salida {#egress}
@@ -237,7 +235,7 @@ Los webhooks, los relés de correo y los conectores de salida envían a destinos
 contra la dirección a la que el nombre se resolvió realmente, de modo que un nombre que cambia su respuesta entre una comprobación y una
 conexión no puede eludirla. Se rechazan las direcciones de bucle local, privadas, de NAT de operador, de enlace local y de metadatos de la nube, y un
 destino rechazado es un fallo permanente, no un reintento. Un operador puede permitir direcciones privadas
-concretas. El `networkPolicy` del chart es una segunda capa, desactivada por defecto. Consulte
+concretas. El `networkPolicy` del chart es una segunda capa, desactivada por defecto. Consulta
 [Conectores de salida](./outbound-connectors.md).
 
 ## Auditoría {#audit}
@@ -252,11 +250,11 @@ Una entrada del registro se escribe en la misma transacción que el cambio que d
 guarda ninguno. Si la entrada no puede escribirse, el cambio no se realiza y la llamada informa de un fallo, así que un cambio nunca
 queda sin registrar y un fallo notificado nunca corresponde a un cambio guardado. Un fallo al escribir una entrada de inicio de sesión se anota en el log y no bloquea el
 acceso. Las entradas nunca se editan, salvo que eliminar un inquilino vacía los nombres de sus entradas. El diario no se depura
-automáticamente. Consulte [Auditoría](../user-guide/audit.md).
+automáticamente. Consulta [Auditoría](../user-guide/audit.md).
 
 ## Lo que aún no se hace cumplir {#accepted-gaps}
 
-Estas carencias son conocidas y se aceptan en la versión actual. Planifique en torno a ellas.
+Estas carencias son conocidas y se aceptan en la versión actual. Planifica en torno a ellas.
 
 1. **Una instancia actualizada conserva el inicio de sesión compartido del broker hasta su siguiente actualización.** Cada área se conecta al broker con un
    inicio de sesión propio, limitado a los asuntos, flujos, consumidores y buckets que usa, y ningún servicio puede crear,
@@ -285,10 +283,10 @@ Estas carencias son conocidas y se aceptan en la versión actual. Planifique en 
    mientras no hay líder o su almacén de mensajes está lleno, y la instancia sostiene menos tráfico, así que es para instalaciones dimensionadas para
    mantenerse por debajo de ese techo. El ajuste está desactivado por defecto; `--mqtt-fail-closed` en `dcctl bootstrap` o `dcctl upgrade` lo activa, y
    [Observabilidad](../deployment/observability.md#mqtt-fail-closed) describe el equilibrio.
-4. **La clave raíz es legible para cualquiera que pueda leer el Secret de Kubernetes de la instancia.** Restrinja el acceso a ese
+4. **La clave raíz es legible para cualquiera que pueda leer el Secret de Kubernetes de la instancia.** Restringe el acceso a ese
    Secret y al etcd del clúster en consecuencia.
 5. **La autenticación en dos pasos protege la contraseña, y solo la contraseña.** No obliga al plano de administración de los operadores a cumplir la exigencia de un inquilino, un atacante que conoce una contraseña y sigue adivinando al límite de bloqueo tiene alrededor de un 10 % de probabilidad al año, y quien conoce una contraseña puede mantener bloqueado el autenticador de una cuenta renovando el bloqueo. Consulta [Autenticación en dos pasos](#two-factor).
 6. **No se ha publicado ninguna prueba de penetración externa.**
 
-Nada de esta página sustituye su propia revisión. Si una entrada de aquí es un problema para su despliegue, la sección
+Nada de esta página sustituye tu propia revisión. Si una entrada de aquí es un problema para tu despliegue, la sección
 correspondiente de arriba indica dónde está el control.

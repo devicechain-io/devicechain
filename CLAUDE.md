@@ -27,7 +27,11 @@ backend/
     event-sources/            inbound device transports (MQTT/NATS), decode → pipeline; per-tenant
                               ingest rate limiting w/ platform-default ceiling (ADR-023)
     device-state/             live last-known-state projection per device
-    command-delivery/         persistent two-way command dispatch (typed command defs on the profile, ADR-043)
+    command-delivery/         persistent two-way command dispatch (typed command defs on the profile, ADR-043);
+                              campaigns: scheduled, tracked fan-outs to a group (cron, calendar, holiday and
+                              per-device solar triggers from core/schedule + core/solar), planned as cycles of
+                              per-device elements dispatched through the batch path, claimed by compare-and-set
+                              so every replica ticks and none leads
     dashboard-management/     dashboard CRUD + versioning (draft/publish/rollback); definitions are
                               versioned tenant resources stored as opaque JSON (ADR-039)
     notification-management/  alarm→human last mile: per-tenant policy, SMTP + webhook adapters,
@@ -78,7 +82,7 @@ frontend/                     npm workspace (React 19 + Vite + Tailwind + shadcn
                               external embedder with its own login) + packages/{client,dashboards,widgets}
                               (SDK, dashboard runtime + slot/binding-manifest model, ECharts widgets; ADR-039)
 docs/                         Docusaurus site
-hack/                         license headers, dev scripts, and the five VALIDATION RIGS — `ha-rig.sh`
+hack/                         license headers, dev scripts, and the six VALIDATION RIGS — `ha-rig.sh`
                               (ADR-020 messaging HA), `dr-rig.sh` (ADR-028 root-key restore),
                               `tofu-rerun-rig.sh` (a failed install recovers on re-run; run it when
                               the kubernetes provider pin moves — needs kind, no DeviceChain images),
@@ -91,7 +95,18 @@ hack/                         license headers, dev scripts, and the five VALIDAT
                               instance on its own kind cluster and have their telemetry stored; nine
                               planted defects N1-N9, each judged by the callout's own counters, the
                               device's refusal and the store; run it whenever the broker image, the
-                              auth callout or core/x509trust changes).
+                              auth callout or core/x509trust changes)
+                              and `decoder-rig.sh` (a codec-less LoRaWAN network server posts raw frames
+                              through the ingress; a tenant payload decoder turns them into stored
+                              readings, a paired broken decoder records DECODE_FAILED and shows in the
+                              decoder health, a planted-broken-decoder control turns the stored-count
+                              check red, `mixed` parks uplinks while nothing reads their stream, and
+                              `mqtt` turns mqttDeviceUplinks on and off in upgrades of their own and
+                              proves a device's own payload on its broker connection: refused while
+                              off and on another device's topic, decoded exactly, over-cap and
+                              no-decoder payloads on failed-decode, and a hanging device-management
+                              not stalling ordinary events, each with a planted defect; run it
+                              whenever the decoder pipeline, its streams or the device grant change).
                               All are manual, all need a real cluster, and all carry a NEGATIVE
                               CONTROL: a check is worth nothing until it has been shown to fail
 _legacy/                      archived pre-migration SiteWhere code — NOT in the workspace, not built; do not edit

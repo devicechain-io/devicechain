@@ -1360,9 +1360,19 @@ func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.Unres
 	// on every device-facing publish), so one that arrives without the mark is a producer that
 	// is confused or forging. It is refused here, before any device lookup, and HandleEvent
 	// refuses it again for want of the authenticated integration the mark yields.
+	//
+	// The other producer is a device's own connection (event-sources' device uplink wire): no mark,
+	// but read from the integration-uplinks stream, which only event-sources writes. It is trusted
+	// no further than the device's own credential policy, so it may claim no other authority.
 	if unrez.EventType == eventtype.IntegrationUplink && unrez.Integration == "" && unrez.SealedIntegrationToken == nil {
-		return nil, uint(resolvedevent.FailureReason_Unauthenticated),
-			errors.New("an integration uplink must come from an authenticated integration")
+		if !fromUplinkStreamCtx(ctx) {
+			return nil, uint(resolvedevent.FailureReason_Unauthenticated),
+				errors.New("an integration uplink must come from an authenticated integration")
+		}
+		if unrez.Gateway != "" || unrez.AuthenticatedTransport || unrez.IntegrationIdentifier != "" {
+			return nil, uint(resolvedevent.FailureReason_Unauthenticated),
+				errors.New("a device's own uplink carries no other authority")
+		}
 	}
 	switch {
 	// An integration's event is decided by the integration's own authentication and device type
@@ -1452,6 +1462,12 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			// exactly once on every disposition path below. correlation ties the
 			// inbound message into the per-message log context (E15).
 			done := rez.metrics.Start()
+			traced, traceCtx, span := unresolved.Process(ctx, "inbound-events")
+			unresolved = traced
+			if span != nil {
+				finish := done
+				done = func(result string) { defer span.End(); finish(result) }
+			}
 			correlation := unresolved.CorrelationID()
 			// Fields, not a formatted message: a disabled level makes this a no-op, and it
 			// is reached for every event resolved.
@@ -1462,7 +1478,7 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			// not be processed safely (fail-closed) so it is skipped. The tenant
 			// string is carried onto the resolved/failed channels so the
 			// downstream producer can publish to the same tenant's subject.
-			msgctx, tenant, ok := messaging.TenantContextFromSubject(ctx, unresolved.Subject)
+			msgctx, tenant, ok := messaging.TenantContextFromSubject(traceCtx, unresolved.Subject)
 			if !ok {
 				log.Warn().Str("correlation", correlation).Msg(fmt.Sprintf("Skipping message with no parseable tenant in subject %q", unresolved.Subject))
 				// No tenant means the message can never be processed; ack it so it
@@ -1519,6 +1535,9 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			err = rez.hold.RunCtx(rez.holdContext(ctx), msgctx, []messaging.Message{unresolved}, func(c context.Context) error {
 				var rerr error
 				c = withDelivery(c, delivery)
+				if fromUplinkStream(unresolved) {
+					c = withUplinkStream(c)
+				}
 				resolved, reason, rerr = rez.ResolveEvent(c, event)
 				return rerr
 			})

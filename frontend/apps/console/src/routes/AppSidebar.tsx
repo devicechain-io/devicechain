@@ -40,6 +40,7 @@ import {
   LockKeyhole,
   PlugZap,
 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { Logomark, LogoHorizontal } from '@/components/brand/Logo';
 import {
@@ -58,6 +59,8 @@ import {
   SidebarRail,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { getAgentApprovalAccess } from '@/lib/api/agent-policy';
+import { useQuery } from '@/lib/hooks/use-query';
 import { useAuth } from '@/auth/AuthProvider';
 import { useCurrentTenant } from '@/auth/TenantProvider';
 import { useBrandingLogoSrc } from '@/lib/useBrandingLogo';
@@ -116,6 +119,7 @@ export const NAV: NavNode[] = [
     icon: LayoutDashboard,
     items: [
       { labelKey: 'dashboards', href: '/dashboards', icon: LayoutDashboard, requires: 'dashboard:read', scoped: true },
+      { labelKey: 'approvals', href: '/approvals', icon: ShieldCheck, requires: 'agent:admin' },
       { labelKey: 'alarms', href: '/alarms', icon: AlertTriangle, requires: 'alarm:read', scoped: true },
       // Events the platform refused (unknown device, bad credential...), for the members who manage devices
       // and so can act on one (device:write). A whole-tenant view with no
@@ -289,8 +293,9 @@ export function navLeaves(nodes: readonly NavNode[] = NAV): NavLeaf[] {
   return nodes.flatMap((n) => (isLeaf(n) ? [n] : n.items.flatMap((i) => (isLeaf(i) ? [i] : i.children))));
 }
 
-function canSee(leaf: NavLeaf, claims: DecodedClaims | null, updatesVisible: boolean): boolean {
+function canSee(leaf: NavLeaf, claims: DecodedClaims | null, updatesVisible: boolean, approverVisible: boolean): boolean {
   if (isScoped(claims) && !leaf.scoped) return false;
+  if (leaf.href === '/approvals' && approverVisible) return true;
   if (leaf.gate === 'updates' && !updatesVisible) return false;
   return !leaf.requires || hasAuthority(claims, leaf.requires);
 }
@@ -298,12 +303,12 @@ function canSee(leaf: NavLeaf, claims: DecodedClaims | null, updatesVisible: boo
 // Drop nav the user can't use: leaves they lack the authority for, then any sub-group and any
 // section left with nothing visible. Pages stay fail-closed server-side regardless; this just
 // avoids advertising what would only return "forbidden".
-export function visibleNav(claims: DecodedClaims | null, updatesVisible: boolean): NavNode[] {
+export function visibleNav(claims: DecodedClaims | null, updatesVisible: boolean, approverVisible = false): NavNode[] {
   return NAV.flatMap<NavNode>((node) => {
-    if (isLeaf(node)) return canSee(node, claims, updatesVisible) ? [node] : [];
+    if (isLeaf(node)) return canSee(node, claims, updatesVisible, approverVisible) ? [node] : [];
     const items = node.items.flatMap<NavItem>((item) => {
-      if (isLeaf(item)) return canSee(item, claims, updatesVisible) ? [item] : [];
-      const children = item.children.filter((c) => canSee(c, claims, updatesVisible));
+      if (isLeaf(item)) return canSee(item, claims, updatesVisible, approverVisible) ? [item] : [];
+      const children = item.children.filter((c) => canSee(c, claims, updatesVisible, approverVisible));
       return children.length > 0 ? [{ ...item, children }] : [];
     });
     return items.length > 0 ? [{ ...node, items }] : [];
@@ -339,12 +344,15 @@ const groupId = (g: NavGroupNode) => `group:${g.labelKey}`;
 export function AppSidebar() {
   const { pathname } = useLocation();
   const { t } = useTranslation('nav');
-  const { claims } = useAuth();
+  const { claims, identityToken } = useAuth();
+  const askApprovalAccess = !isScoped(claims) && !hasAuthority(claims, 'agent:admin') && hasAuthority(claims, 'alarm:write');
+  const approvalAccess = useQuery(() => askApprovalAccess ? getAgentApprovalAccess() : Promise.resolve(null),
+    [askApprovalAccess, claims?.tenant, claims?.username, identityToken]);
   const tenant = useCurrentTenant();
   const brandLogo = useBrandingLogoSrc(tenant?.branding?.logo);
   const brandHeight = tenant?.branding?.logoMaxHeight ?? 24;
   const updates = useUpdateAccess();
-  const nav = visibleNav(claims, updates.canRead);
+  const nav = visibleNav(claims, updates.canRead, !!approvalAccess.current?.instanceEnabled && approvalAccess.current.canApprove);
   // Remembered per browser; read once. Absent or unreadable storage yields {} and the defaults.
   const [stored, setStored] = useState<NavOpenState>(readNavState);
 
@@ -463,6 +471,9 @@ function NavLeafLink({ leaf, pathname }: { leaf: NavLeaf; pathname: string }) {
             </span>
           ) : (
             <span>{t(leaf.labelKey)}</span>
+          )}
+          {leaf.labelKey === 'approvals' && (
+            <Badge variant="secondary" className="text-[0.625rem]">{t('approvals:preview')}</Badge>
           )}
         </Link>
       </SidebarMenuSubButton>

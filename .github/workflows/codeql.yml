@@ -133,9 +133,11 @@ on:
 permissions:
   contents: read
 
+# Keep each pushed commit in its own group so later main pushes cannot replace it.
+# This fits the existing concurrency block; superseded PR runs still cancel.
 concurrency:
-  group: codeql-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: codeql-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   analyze:
@@ -174,7 +176,7 @@ jobs:
           echo "Modules to analyze: $(wc -l < "${RUNNER_TEMP}/modules.txt")"
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           languages: go
           build-mode: manual
@@ -200,6 +202,6 @@ jobs:
           exit "$rc"
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           category: "/language:go"

@@ -88,10 +88,41 @@ type NotificationChannel {
     # Whether a delivery secret (SMTP password, bearer token) is configured. The
     # secret itself is write-only and is never returned on read.
     hasSecret: Boolean!
+    """
+    True when a webhook signing secret is stored for the channel. The secret itself is never
+    returned. Deliveries are signed only when the channel's config also sets signing to true.
+    """
+    hasSigningSecret: Boolean!
+    """True while a signing-secret rotation is open: deliveries carry a signature under each of the current and previous secrets."""
+    signingRotationOpen: Boolean!
     """Whether the channel is in use. Notifications are not sent through a disabled channel."""
     enabled: Boolean!
     """Free-form caller-defined metadata as a JSON object serialized to a string, or null if none is set."""
     metadata: String
+    """
+    The channel's recent delivery record, read from the delivery ledger: when it last
+    delivered, when it last failed, and how many attempts have failed since. Records leave
+    the ledger after its retention period, so a channel that has sent nothing for that long
+    reads as never having sent. Null, with an error, for a caller without notification:read
+    (a channel returned by a mutation to a writer who cannot read) or when the ledger cannot
+    be read; the rest of the channel is returned either way.
+    """
+    deliveryHealth: NotificationChannelHealth
+}
+
+"""A channel's recent delivery record, read from the delivery ledger."""
+type NotificationChannelHealth {
+    """When an attempt through the channel last succeeded, as an RFC 3339 timestamp; null if none is recorded."""
+    lastSuccessAt: String
+    """When an attempt through the channel last failed or was refused, as an RFC 3339 timestamp; null if none is recorded."""
+    lastFailureAt: String
+    """
+    Number of attempts that failed or were refused since the channel last delivered (or
+    since the oldest recorded attempt, if it never has). Each retry counts, so one alarm
+    whose three tries all failed adds 3. Attempts the platform never made (NOT_ATTEMPTED)
+    or cut short (errorCode BUDGET_SPENT) do not count against the channel.
+    """
+    consecutiveFailures: Int!
 }
 
 """
@@ -292,6 +323,15 @@ type NotificationPolicy {
     maxEscalations: Int
     """Whether the policy is active. A disabled policy sends nothing."""
     enabled: Boolean!
+    """
+    True when the policy also tells the destinations that paged an alarm when it clears.
+    The clear goes only to the channels and recipients that actually delivered a page for
+    that alarm cycle and that this policy routes, whatever severity the alarm has when it
+    clears. It is sent once per cycle, after the clear has stopped escalation. A clear is
+    informational: it is not throttled, it does not start escalation, and one that happens
+    during the policy's quiet hours is dropped rather than held.
+    """
+    notifyOnClear: Boolean!
     """The policy's routing rules."""
     rules: [NotificationRule!]!
     """Free-form caller-defined metadata as a JSON object serialized to a string, or null if none is set."""
@@ -368,6 +408,8 @@ input NotificationPolicyCreateRequest {
     maxEscalations: Int
     """Whether the policy is active. A disabled policy sends nothing."""
     enabled: Boolean!
+    """Also notify the policy's channels when an alarm it paged clears. Omit it for false, the behaviour before this option existed."""
+    notifyOnClear: Boolean
     """The policy's complete rule set; pass an empty list for a policy with no rules yet."""
     # The policy's full rule set; pass [] for a policy with no rules yet.
     rules: [NotificationRuleCreateRequest!]!
@@ -426,6 +468,8 @@ input NotificationPolicyUpdateRequest {
     maxEscalations: Int
     """Whether the policy is active. Omit it to keep the stored value; an explicit null is refused."""
     enabled: Boolean
+    """Whether the policy also notifies on clear. Omit it to keep the stored value; an explicit null is refused."""
+    notifyOnClear: Boolean
     """
     The policy's complete rule set. Omit it to leave the stored rules untouched. Send a
     list to replace all the rules with it, or send null or an empty list to remove all
@@ -607,6 +651,30 @@ type Query {
         """Filters and paging."""
         criteria: NotificationStateSearchCriteria!
     ): NotificationStateSearchResults!
+
+    # The delivery ledger (read-only).
+    """
+    Searches the delivery ledger, newest first: one record per attempt to send an alarm's
+    notification through a channel, with its outcome. Records are kept for a retention
+    period (7 days by default). The ledger is best-effort: it never delays a
+    notification, so a record proves an attempt was made, but a missing record does not
+    prove one was not. Requires notification:read.
+    """
+    notificationAttempts(
+        """Filters and paging."""
+        criteria: NotificationAttemptSearchCriteria!
+    ): NotificationAttemptSearchResults!
+}
+
+"""
+A freshly minted webhook signing secret. This is the only response that ever contains the
+secret; store it now, it cannot be retrieved again.
+"""
+type IssuedNotificationChannelSigningSecret {
+    """The signing secret, in the form whsec_ followed by base64. Shown once."""
+    secret: String!
+    """True when this secret replaced an earlier one whose key still signs until the rotation is ended."""
+    rotating: Boolean!
 }
 
 type Mutation {
@@ -663,6 +731,50 @@ type Mutation {
         token: String!
     ): Boolean!
 
+    """
+    Mints a signing secret for a webhook channel and returns it. This is the only time the
+    secret is shown. Deliveries are signed per the Standard Webhooks specification
+    (webhook-id, webhook-timestamp and webhook-signature headers) once the channel's config
+    sets signing to true; until then it delivers unsigned, as before. Fails if the channel
+    already has a secret (use rotateNotificationChannelSigningSecret), if no channel has the
+    token, or if the channel is not a webhook channel. Requires notification:write.
+    """
+    # Mint a signing key, revealed once.
+    generateNotificationChannelSigningSecret(
+        """Token of the webhook channel."""
+        token: String!
+    ): IssuedNotificationChannelSigningSecret!
+    """
+    Replaces a webhook channel's signing secret with a new one and returns it once. The
+    previous secret keeps signing too, so each delivery carries two signatures and a receiver
+    holding either secret verifies it; call endNotificationChannelSigningRotation once
+    receivers have moved. Fails if the channel has no secret. Requires notification:write.
+    """
+    # Rotate with overlap.
+    rotateNotificationChannelSigningSecret(
+        """Token of the webhook channel."""
+        token: String!
+    ): IssuedNotificationChannelSigningSecret!
+    """
+    Ends an open signing-secret rotation: the previous secret stops signing and deliveries
+    carry one signature. Fails if the channel has no secret. Requires notification:write.
+    """
+    # Close the overlap.
+    endNotificationChannelSigningRotation(
+        """Token of the webhook channel."""
+        token: String!
+    ): NotificationChannel!
+    """
+    Deletes a webhook channel's signing secret, both keys. A channel whose config still sets
+    signing to true then has its deliveries refused rather than sent unsigned, until a secret
+    is generated again. Requires notification:write.
+    """
+    # Remove a signing key.
+    deleteNotificationChannelSigningSecret(
+        """Token of the webhook channel."""
+        token: String!
+    ): NotificationChannel!
+
     # Routing policies.
     """
     Creates a routing policy together with its rules, all or nothing. Rejects a non-blank
@@ -711,4 +823,91 @@ type Mutation {
 schema {
     query: Query
     mutation: Mutation
+}
+
+"""One attempt to send an alarm's notification through a channel, from the delivery ledger."""
+type NotificationAttempt {
+    """Server-assigned identifier of this record."""
+    id: ID!
+    """When the attempt started, as an RFC 3339 timestamp."""
+    attemptedAt: String!
+    """Token of the alarm the notification was about."""
+    alarmToken: String!
+    """
+    What caused the delivery: ALARM (an alarm state change), ESCALATION (an open alarm was
+    re-notified) or QUIET_HOURS_RELEASE (a notification held by quiet hours was sent when
+    the quiet period ended). New values may be added; treat an unknown one as informational.
+    """
+    trigger: String!
+    """
+    Token of the policy whose rule planned the delivery, or null if unknown. When two
+    policies route to the same channel and recipients the notification is sent once, and
+    the first policy is recorded.
+    """
+    policyToken: String
+    """Token of the channel. Kept by token so the record survives the channel being deleted."""
+    channelToken: String!
+    """The channel's type at the time of the attempt, such as smtp or webhook."""
+    channelType: String!
+    """The recipients the attempt was addressed to; empty for a channel type that has none."""
+    recipients: [String!]!
+    """
+    Hex SHA-256 of the notification's subject line, so two attempts can be shown to have
+    carried the same message without the ledger storing the message.
+    """
+    subjectHash: String
+    """
+    The outcome: SENT (the channel accepted it), FAILED (a failure a retry might fix),
+    REFUSED (refused terminally, so no retry followed: a destination outbound traffic may
+    not reach, or a refused credential configuration) or NOT_ATTEMPTED (planned but never
+    tried: the channel's delivery secret could not be read, or the time allowed for the
+    alarm's deliveries ran out first). New values may be added; treat an unknown one as
+    not delivered.
+    """
+    status: String!
+    """This try's number, starting at 1; 0 for NOT_ATTEMPTED."""
+    attempt: Int!
+    """How many tries the channel was allowed for this delivery."""
+    maxAttempts: Int!
+    """How long the channel took to accept or fail the attempt, in milliseconds; null if no call was made."""
+    latencyMillis: Int
+    """
+    Why the attempt did not succeed; null when it did: EGRESS_BLOCKED, CREDENTIAL_REFUSED,
+    TIMEOUT (the channel did not answer within its own per-attempt time), DELIVERY_ERROR,
+    SECRET_UNAVAILABLE or BUDGET_SPENT (the time allowed for all of the alarm's deliveries
+    ran out; on a FAILED record, while this attempt was in flight). BUDGET_SPENT does not
+    count against the channel's deliveryHealth. New values may be added.
+    """
+    errorCode: String
+    """
+    The provider's error text, with any URL replaced by <url> (a webhook URL can carry a
+    credential) and cut to 512 bytes; null when the attempt succeeded.
+    """
+    errorMessage: String
+}
+
+"""Filters and paging for the delivery ledger. Every filter is optional."""
+input NotificationAttemptSearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
+    pageNumber: Int!
+    """Records per page. A value below 1 is treated as 100; a value above 1000 is capped at 1000."""
+    pageSize: Int!
+    """Return only attempts about this alarm."""
+    alarmToken: String
+    """Return only attempts through this channel."""
+    channelToken: String
+    """Return only attempts with this status, such as FAILED."""
+    status: String
+    """Return only attempts made at or after this RFC 3339 timestamp. A value that does not parse fails the request."""
+    since: String
+    """Return only attempts made before this RFC 3339 timestamp. A value that does not parse fails the request."""
+    until: String
+}
+
+"""A page of delivery-ledger records."""
+type NotificationAttemptSearchResults {
+    """The records on this page, newest first."""
+    results: [NotificationAttempt!]!
+    """Position of this page within the full result set."""
+    pagination: SearchResultsPagination!
 }

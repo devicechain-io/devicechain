@@ -101,13 +101,19 @@ type Claims struct {
 	// already issued keeps working there until it expires.
 	SessionEpoch SessionEpoch `json:"sep,omitempty"`
 	// SessionID (the "sid" claim) names the server-side record of the sign-in this token
-	// descends from. It rides the same two tiers as SessionEpoch: identity tokens and
+	// descends from. It rides identity tokens and
 	// refresh tokens (tenant and OAuth). Every refresh chain minted from one sign-in -
 	// the first tenant, each tenant switched to, each rotation - carries the sign-in's
 	// sid, so ending that record (logout) ends them all at once, where the epoch ends
 	// every sign-in of an identity. It names nothing but a random value; only the issuing
 	// service looks it up, whenever one of those tokens is exchanged. A token without it
 	// is refused rather than treated as an older kind.
+	//
+	// OAuth and console tenant ACCESS tokens carry it too (WithSessionID), so the audit
+	// journal and a gate can name the sign-in a data-plane call descends from. Ordinary
+	// calls use it for correlation; approval decisions validate the named sign-in. An
+	// access token minted before its binding existed reads as "session unknown", never
+	// as a match (SameSession).
 	SessionID SessionID `json:"sid,omitempty"`
 	// Amr (the "amr" claim, RFC 8176) records how the sign-in this token descends from
 	// authenticated: ["pwd"], ["pwd","otp","mfa"] or ["pwd","mfa"] (a recovery code). It
@@ -116,6 +122,13 @@ type Claims struct {
 	// the sign-in's value. Validator.Parse refuses it on a service token and on a service
 	// account's token. Read it through Mfa, never by indexing.
 	Amr []string `json:"amr,omitempty"`
+	// MfaTime (the "mfa_time" claim) is when this token's sign-in last VERIFIED a second factor:
+	// the TOTP code or recovery code that completed the sign-in, or a later step-up. It is written
+	// from the session record at mint time, exactly as Amr is, so a refresh copies it unchanged and
+	// a token's own issue time never counts as freshness. Only a new factor verification advances
+	// it. It rides only beside an amr that proves a second factor; Validator.Parse refuses it
+	// anywhere else. Read it through StepUpFresh, never directly.
+	MfaTime *jwt.NumericDate `json:"mfa_time,omitempty"`
 	// TokenType distinguishes access from refresh tokens (see TokenType*).
 	TokenType string `json:"typ"`
 
@@ -140,9 +153,15 @@ type SessionID string
 // nothing else: not the tier (ADR-065), and not the scope (ADR-081). Gate on Authorize,
 // AuthorizeAny, AuthorizeScoped or AuthorizeCatalogue — a gate written on HasAuthority
 // admits a scoped member to an operation that refuses every scoped caller elsewhere.
+//
+// 🔴 "*" NEVER SATISFIES A PROPOSAL AUTHORITY. A proposal authority is held only when a token
+// literally carries it, which only DeriveProposalAuthorities puts there; a console token whose
+// subject holds "*" is a human acting directly, not an agent asking, and must not pass a gate that
+// exists for agents. Any ":propose"-shaped string is treated this way, defined or not.
 func (c *Claims) HasAuthority(required Authority) bool {
+	proposal := looksLikeProposal(string(required))
 	for _, held := range c.Authorities {
-		if held == string(AuthorityAll) || held == string(required) {
+		if (held == string(AuthorityAll) && !proposal) || held == string(required) {
 			return true
 		}
 	}

@@ -138,6 +138,9 @@ type State struct {
 	// is on: every path that never runs the detection (bootstrap, upgrade, a State built by hand, a
 	// detection error) lands on the noisy side, never the silent one.
 	UnscrapedControlPlane []string
+	// AlertRouting is the alert-routing flags of `dcctl install` or `dcctl upgrade`. The zero
+	// value asks for nothing, which keeps whatever routing the cluster already has.
+	AlertRouting AlertRoutingRequest
 	// NoCNPG records that the cluster was installed WITHOUT the CloudNativePG
 	// operator and its backup plugin (ADR-020 A2). Set and read back the same way
 	// as NoMonitoring; on the instance side it goes into the declaration and decides
@@ -205,6 +208,12 @@ type State struct {
 	// MqttFailClosedChange says this upgrade was given --mqtt-fail-closed with a value the
 	// declaration does not hold, so recordUpgradedVersion must write it.
 	MqttFailClosedChange bool
+	// MqttDeviceUplinks is the settled choice, carried forward from the declaration.
+	MqttDeviceUplinks *bool
+	// MqttDeviceUplinksGiven says this run was given --mqtt-device-uplinks.
+	MqttDeviceUplinksGiven bool
+	// MqttDeviceUplinksChange records a flag choice different from the declaration.
+	MqttDeviceUplinksChange bool
 	// MQTTExposure and MQTTHost are the settled exposure of the MQTT broker to devices outside the
 	// cluster (none, gateway or loadbalancer, and the DNS name they dial): the flags, else the
 	// declaration's, see mqttexposure.go. MQTTExposureChange says an upgrade must record them, and
@@ -214,6 +223,14 @@ type State struct {
 	MQTTExposureChange bool
 	MQTTExposureGiven  string
 	MQTTHostGiven      string
+	// DevAllowEgress is the settled local-development egress allowance (canonical CIDRs), rendered
+	// as infrastructure.egress.devAllowedDestinations; DevAllowEgressGiven is this run's flag
+	// (nil: keep what is recorded, empty: clear), DevAllowEgressRecorded what the declaration
+	// holds now, and DevAllowEgressChange says the run must record the difference. See devegress.go.
+	DevAllowEgress         []string
+	DevAllowEgressGiven    []string
+	DevAllowEgressRecorded []string
+	DevAllowEgressChange   bool
 	// BrokerMaxConnections is the settled cap on broker connections (0: the server's own limit),
 	// BrokerMaxConnectionsGiven this run's flag, and BrokerMaxConnectionsChange says an upgrade
 	// must record it.
@@ -246,6 +263,9 @@ type State struct {
 	// one the declaration already records), merged over what dcctl computes. See
 	// valuesoverlay.go. Nil means none.
 	ValuesOverlay map[string]interface{}
+	// ValuesOverlayIntent says this run explicitly replaces or resets the overlay,
+	// so historical token-audience enforcement values are not carried.
+	ValuesOverlayIntent bool
 	// ValuesOverlayRecorded is the overlay the declaration holds NOW, so a run can say what
 	// it changes and write only when it changes something.
 	ValuesOverlayRecorded map[string]interface{}
@@ -322,6 +342,9 @@ type State struct {
 	// and a later bootstrap is let through over it — so recordRunEnded reports that as
 	// a failure rather than the courtesy warning every other phase write gets.
 	UnfinishedBootstrap bool
+	// DeclarationWritten is set by stepDeclareInstance immediately before it writes
+	// the declaration, so even a write that fails part-way has an outcome to record.
+	DeclarationWritten bool
 	// Evolving says this State describes an instance that already exists and is
 	// being moved, rather than one being built.
 	//
@@ -394,6 +417,8 @@ type State struct {
 	// MaxConnections is the relational store's connection budget an install asks for.
 	// Zero keeps what the cluster was installed with.
 	MaxConnections int
+	// RelationalStoreMaxWALMiB is the optional install choice, restored before apply.
+	RelationalStoreMaxWALMiB *int
 	// NATSTLS is the broker's authority and the leaf it signs, minted here rather
 	// than during the apply so the private half never reaches the infrastructure
 	// state. Only the public CA is passed to OpenTofu.
@@ -567,7 +592,7 @@ func ResolveImageSource(registry, version string, build bool) (ImageSource, erro
 	// Only the published registry is normalized: a registry the operator named holds
 	// whatever tags they pushed (the upgrade drill pushes 0.24.0-drill.1 to
 	// localhost:5000), and rewriting those would break exactly that.
-	if !build && registry == DefaultImageRegistry && bareSemver.MatchString(version) {
+	if !build && isPublishedRegistry(registry) && bareSemver.MatchString(version) {
 		version = "v" + version
 	}
 	// Deploying an image tag that was never published fails as an

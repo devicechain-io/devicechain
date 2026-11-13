@@ -97,6 +97,7 @@ export function NotificationPolicyForm({
   const [name, setName] = useState(entity?.name ?? '');
   const [description, setDescription] = useState(entity?.description ?? '');
   const [enabled, setEnabled] = useState(entity?.enabled ?? true);
+  const [notifyOnClear, setNotifyOnClear] = useState(entity?.notifyOnClear ?? false);
   const [throttle, setThrottle] = useState(countText(entity?.throttleSeconds));
   const [escalate, setEscalate] = useState(countText(entity?.escalateAfterSeconds));
   const [maxEsc, setMaxEsc] = useState(countText(entity?.maxEscalations));
@@ -129,6 +130,7 @@ export function NotificationPolicyForm({
     name,
     description,
     enabled,
+    notifyOnClear,
     throttleSeconds: throttle,
     escalateAfterSeconds: escalate,
     maxEscalations: maxEsc,
@@ -205,6 +207,11 @@ export function NotificationPolicyForm({
         <Checkbox checked={enabled} onCheckedChange={(c) => setEnabled(c === true)} />
         <span>{t('common:enabled')}</span>
         <span className="text-muted-foreground">{t('entities:notificationPolicyEnabledHint')}</span>
+      </label>
+      <label className="flex items-center gap-2 text-sm">
+        <Checkbox checked={notifyOnClear} onCheckedChange={(c) => setNotifyOnClear(c === true)} />
+        <span>{t('entities:notificationPolicyNotifyOnClear')}</span>
+        <span className="text-muted-foreground">{t('entities:notificationPolicyNotifyOnClearHint')}</span>
       </label>
       <div className="grid gap-4 sm:grid-cols-3">
         <FormField

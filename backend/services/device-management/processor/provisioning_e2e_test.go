@@ -50,7 +50,7 @@ func (k *recordingKicker) KickDeviceSessions(_ context.Context, _, _ string, tok
 // username it built from what it was given gets a grant, with the client id it was told to use.
 // Every step that must NOT work is paired with the control that does.
 func TestARegisteredDeviceCanConnectAndIsCutOffWhenRevoked(t *testing.T) {
-	tables := []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{},
+	tables := []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{},
 		&model.DeviceProfileActivation{}, &model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
 		&model.DetectionRuleScopeRef{}, &model.ProvisioningProfile{}, &model.DeviceCredential{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}}
 	api := model.NewApi(&rdb.RdbManager{Database: putest.NewSQLiteDB(t, tables...)})

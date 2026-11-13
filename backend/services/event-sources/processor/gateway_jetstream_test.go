@@ -6,15 +6,20 @@ package processor
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/tracing"
 )
 
 // recordingAck stands in for the broker's acknowledgement of a consumed message.
@@ -61,6 +66,9 @@ type captureHarness struct {
 	source     *GatewayJetStreamSource
 	publishErr error
 	failedErr  error
+	// failedHold, when set before the pipeline starts, holds every failed-decode publish until it is
+	// closed: a failed-decode stream that has stopped answering.
+	failedHold chan struct{}
 
 	mu          sync.Mutex
 	published   int
@@ -169,6 +177,12 @@ func newCaptureHarnessWith(t *testing.T, configure func(*GatewayJetStreamSource)
 			return core.WithTenant(context.Background(), tenant), messaging.Message{Value: []byte(event.Device)}, true
 		},
 		func(_ string, _ string, _ []byte, err error) error {
+			h.mu.Lock()
+			hold := h.failedHold
+			h.mu.Unlock()
+			if hold != nil {
+				<-hold
+			}
 			h.mu.Lock()
 			h.failedCalls++
 			h.failedReasons = append(h.failedReasons, err)
@@ -568,6 +582,22 @@ func backlogHarness(t *testing.T, rps float64, burst int) *captureHarness {
 	return h
 }
 
+// frozenBacklogHarness freezes the limiter's clock so elapsed wall time cannot
+// earn tokens. At 100/s, a 1000-message loop accrues one token per 10ms; on a
+// loaded host or under -race it can earn more than the 2 spare tokens the old
+// bound allowed, failing for reasons unrelated to the metering behaviour.
+func frozenBacklogHarness(t *testing.T, rps float64, burst int) *captureHarness {
+	t.Helper()
+	frozen := time.Now()
+	h := newCaptureHarness(t)
+	limiter := core.NewTenantRateLimiter(core.StaticCeiling(rps, burst),
+		core.WithClock(func() time.Time { return frozen }))
+	h.gate = func(_ string, tenant string, sentAt time.Time, _ bool, _ Origin) bool {
+		return limiter.AllowAt(tenant, sentAt)
+	}
+	return h
+}
+
 // drain feeds count messages whose send times are `spacing` apart ending an hour
 // ago — a backlog that accumulated during an outage and is now arriving all at
 // once — and returns how many the gate admitted.
@@ -636,8 +666,12 @@ func TestRecoveredBacklogAboveTheCeilingIsStillShed(t *testing.T) {
 // A message with no broker metadata (AppendTime zero) must degrade to metering at
 // now — the pre-I4 behaviour — rather than to unmetered. Getting this backwards
 // would turn a metadata gap into a free pass past the tenant's ceiling.
+// The clock is frozen because a wall-clock loop earns one token per 10ms at
+// 100/s, and the old bound had about 20ms of slack. Treating zero append time as
+// unmetered would still admit all 1000 messages, so this test still discriminates.
 func TestCapturedMessageWithNoAppendTimeIsStillMetered(t *testing.T) {
-	h := backlogHarness(t, 100, 10)
+	// See frozenBacklogHarness for why elapsed wall time must not earn tokens.
+	h := frozenBacklogHarness(t, 100, 10)
 
 	for i := 0; i < 1000; i++ {
 		h.source.handle(capturedMsgAt(captureSubject, validEvent, uint64(i+1),
@@ -645,7 +679,7 @@ func TestCapturedMessageWithNoAppendTimeIsStillMetered(t *testing.T) {
 	}
 	_, _, admitted, _ := h.counts()
 
-	require.LessOrEqual(t, admitted, 12,
+	require.LessOrEqual(t, admitted, 10,
 		"a message with no send time must meter at now, not bypass the ceiling")
 }
 
@@ -653,17 +687,8 @@ func TestCapturedMessageWithNoAppendTimeIsStillMetered(t *testing.T) {
 // messages as sent in the future. The send time is clamped to now, so a future
 // append time buys at most the burst that was already available.
 func TestFutureAppendTimeCannotMintTokens(t *testing.T) {
-	// The limiter's clock is FROZEN. Read from the wall clock, the 1000-message loop
-	// below accrues one token per 10ms of elapsed time at 100/s, so on a loaded host
-	// (or under -race) the run itself earned more than the 2 spare tokens the bound
-	// allows and the test failed for reasons unrelated to the clamp.
-	frozen := time.Now()
-	h := newCaptureHarness(t)
-	limiter := core.NewTenantRateLimiter(core.StaticCeiling(100, 10),
-		core.WithClock(func() time.Time { return frozen }))
-	h.gate = func(_ string, tenant string, sentAt time.Time, _ bool, _ Origin) bool {
-		return limiter.AllowAt(tenant, sentAt)
-	}
+	// See frozenBacklogHarness for why elapsed wall time must not earn tokens.
+	h := frozenBacklogHarness(t, 100, 10)
 
 	// ADVANCING through the future, not a constant future time. A constant one
 	// accrues nothing after the first call with or without the clamp, so it cannot
@@ -854,4 +879,68 @@ func TestAFirstDeliveryIsStillMetered(t *testing.T) {
 	require.Zero(t, published, "a first delivery over the ceiling must be shed, not admitted")
 	acks := ack.counts()
 	require.Equal(t, 1, acks, "a shed message is a deliberate drop and must ack")
+}
+
+// A capture-stream message is device-originated, so a traceparent in its headers is untrusted: the
+// ingest span is a new local root that LINKS to it, never adopts its trace id, sampled flag or
+// tracestate.
+func TestCaptureTraceContextIsLinkedNeverAdopted(t *testing.T) {
+	const remoteTrace = "0af7651916cd43dd8448eb211c80319c"
+	headers := map[string]string{
+		"traceparent": "00-" + remoteTrace + "-b7ad6b7169203331-01",
+		"tracestate":  "vendor=" + strings.Repeat("x", 200),
+	}
+	run := func(t *testing.T, sampler sdktrace.Sampler) (trace.SpanContext, []sdktrace.ReadOnlySpan) {
+		exporter := tracetest.NewInMemoryExporter()
+		tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sampler))
+		t.Cleanup(tracing.Install(tp))
+		h := newCaptureHarness(t)
+		ack := &recordingAck{}
+		m := capturedMsg(captureSubject, validEvent, 1, 77, ack)
+		m.Headers = headers
+		// Guard the fixture: the tracestate must be valid, so extraction keeps it and only the edge drops it.
+		remote := trace.SpanContextFromContext(m.TraceContext())
+		require.True(t, remote.IsSampled() && remote.TraceState().Len() == 1, "fixture traceparent/tracestate must parse")
+		h.source.handle(m)
+		require.True(t, ack.settled(t), "message never settled")
+		events := h.publishedEvents()
+		require.Len(t, events, 1)
+		require.NotNil(t, events[0].TraceContext)
+		// The ingest span ends just after the message settles.
+		if _, ok := sampler.(interface{ Description() string }); ok && sampler.Description() == sdktrace.AlwaysSample().Description() {
+			require.Eventually(t, func() bool { return len(exporter.GetSpans()) == 1 }, 5*time.Second, 5*time.Millisecond)
+		}
+		return trace.SpanContextFromContext(events[0].TraceContext), exporter.GetSpans().Snapshots()
+	}
+
+	t.Run("ratio 0 records nothing and adopts nothing", func(t *testing.T) {
+		sc, spans := run(t, sdktrace.ParentBased(sdktrace.TraceIDRatioBased(0)))
+		require.False(t, sc.IsSampled(), "a device chose sampling")
+		require.NotEqual(t, remoteTrace, sc.TraceID().String(), "the device's trace id was adopted")
+		require.Zero(t, sc.TraceState().Len(), "the device's tracestate was propagated")
+		require.Empty(t, spans)
+	})
+	t.Run("ratio 1 is a root span with one link", func(t *testing.T) {
+		sc, spans := run(t, sdktrace.AlwaysSample())
+		require.NotEqual(t, remoteTrace, sc.TraceID().String())
+		require.Zero(t, sc.TraceState().Len())
+		require.Len(t, spans, 1)
+		require.False(t, spans[0].Parent().IsValid(), "the ingest span must be a new root")
+		require.Len(t, spans[0].Links(), 1)
+		require.Equal(t, remoteTrace, spans[0].Links()[0].SpanContext.TraceID().String())
+		require.Zero(t, spans[0].Links()[0].SpanContext.TraceState().Len())
+	})
+}
+
+// With tracing off the capture path attaches nothing: no span, no trace context on the event.
+func TestCaptureTracingDisabledLeavesTheEventUntraced(t *testing.T) {
+	h := newCaptureHarness(t)
+	ack := &recordingAck{}
+	m := capturedMsg(captureSubject, validEvent, 1, 78, ack)
+	m.Headers = map[string]string{"traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"}
+	h.source.handle(m)
+	require.True(t, ack.settled(t), "message never settled")
+	events := h.publishedEvents()
+	require.Len(t, events, 1)
+	require.Nil(t, events[0].TraceContext)
 }

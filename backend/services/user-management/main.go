@@ -190,6 +190,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// exactly this reason; this now does the same.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(),
 		func(nmgr *messaging.NatsManager) error {
+			writer, err := nmgr.NewWriter(streams.AgentActuationKills)
+			if err != nil {
+				return err
+			}
+			IdentityManager.SetKillPublisher(identity.NewKillWriter(writer, Microservice.InstanceId))
 			reader, err := nmgr.NewReader(streams.DeadLetters)
 			if err != nil {
 				return err
@@ -316,6 +321,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// The instance switch for agent actions, off unless the configuration turns it on.
+	IdentityManager.SetAgentActuation(Configuration.AgentActuation.Enabled)
 	if err := IdentityManager.Initialize(ctx, refreshKV, codesKV); err != nil {
 		return explainSeedRefusal(err)
 	}
@@ -368,7 +375,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// tenant-administration methods (ADR-081), which take the tenant from the caller's own
 	// token. One instance, so the two planes cannot be wired to different stores.
 	AdminService = newAdminService(iam.NewStore(RdbManager), Configuration.TenantPurgeSettle(),
-		Configuration.TenantPurgeTokenHold(), DeadLetterStore, serviceAccountKey, secretStore)
+		Configuration.TenantPurgeTokenHold(), DeadLetterStore, serviceAccountKey, secretStore, IdentityManager)
+	AdminService.SetAgentActuation(Configuration.AgentActuation.Enabled)
 
 	// Map of providers injected into the graphql http context.
 	providers := dataPlaneProviders(AdminService, IdentityManager, SettingsService, BlobStore)
@@ -673,7 +681,7 @@ func registerSsoHandlersIfEnabled() {
 }
 
 func registerOAuthHandlers() {
-	identity.RegisterMetadataHandlers(Microservice.Mux(), Configuration.Auth.IssuerUrl)
+	identity.RegisterMetadataHandlersFor(Microservice.Mux(), Configuration.Auth.IssuerUrl, IdentityManager.SupportedScopes())
 
 	// The token endpoint (ADR-047 slice B): authorization_code (+ PKCE) and
 	// refresh_token grants. AuthenticateClient runs first — public clients (PKCE) and
@@ -731,6 +739,7 @@ func registerServiceTokenHandler() {
 	internalAuthMux().Handle(auth.ServiceTokenPath, identity.ServiceTokenHandler(
 		func() string { return Microservice.InstanceConfiguration.Infrastructure.ServiceAuth.Secret },
 		IdentityManager.IssueServiceToken,
+		identity.NewServiceCeilingObserver(Microservice.MetricsRegisterer(), Microservice.MetricsSubsystem()),
 	))
 }
 

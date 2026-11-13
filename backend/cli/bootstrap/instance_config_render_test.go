@@ -502,6 +502,7 @@ func TestChartRenderedInstanceConfigLoadsThroughTheServiceLoader(t *testing.T) {
 						},
 						"metrics":          map[string]interface{}{"enabled": true},
 						"graphql":          map[string]interface{}{"maxSubscriptionMessageBytes": int64(8 << 20)},
+						"tracing":          map[string]interface{}{"enabled": true, "protocol": "grpc", "endpoint": "collector:4317", "insecure": true, "samplingRatio": 0.25},
 						"logging":          map[string]interface{}{"level": "debug"},
 						"userManagement":   map[string]interface{}{"hostname": "user-management", "port": 8080},
 						"deviceManagement": map[string]interface{}{"hostname": "device-management", "port": 8080},
@@ -514,7 +515,8 @@ func TestChartRenderedInstanceConfigLoadsThroughTheServiceLoader(t *testing.T) {
 							"backend": "postgres", "kekProvider": "instance", "rootKey": rootKey,
 						},
 						"egress": map[string]interface{}{
-							"allowedDestinations": []interface{}{"10.42.0.17/32"},
+							"allowedDestinations":    []interface{}{"10.42.0.17/32"},
+							"devAllowedDestinations": []interface{}{"192.168.1.0/24"},
 						},
 						"blob": map[string]interface{}{
 							"backend": "s3", "directory": "", "bucket": "b", "region": "r",

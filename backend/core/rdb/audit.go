@@ -85,6 +85,8 @@ const (
 	AuditOpMfaEnrolled = "mfa_enrolled"
 	AuditOpMfaDisabled = "mfa_disabled"
 	AuditOpMfaReset    = "mfa_reset"
+	// AuditOpStepUp records an in-session authenticator verification.
+	AuditOpStepUp = "step_up"
 	// AuditOpMfaFailed records a code that was evaluated and refused. AuditOpMfaLocked records
 	// an attempt that armed the identity-wide lock, which is evidence the password is in use by
 	// someone failing the second factor.
@@ -101,6 +103,14 @@ const (
 	// AuditOpTenantMfaRequiredChanged records a change to a tenant's own "second factor
 	// required" flag. The actor is who changed it, the tenant the one it applies to.
 	AuditOpTenantMfaRequiredChanged = "tenant_mfa_required_changed"
+	// AuditOpAgentActuationSuspended and AuditOpAgentActuationRestored record the operator's
+	// per-tenant override of agent actions, one row per transition. The actor is the operator,
+	// the tenant the one it applies to. The override row itself keeps only the latest state.
+	AuditOpAgentActuationSuspended = "agent_actuation_suspended"
+	AuditOpAgentActuationRestored  = "agent_actuation_restored"
+	// Tenant kill-switch changes, independent of published policy versions.
+	AuditOpAgentActuationDisabled = "agent_actuation_disabled"
+	AuditOpAgentActuationEnabled  = "agent_actuation_enabled"
 )
 
 // AuditEvent is one row of the tenant-scoped audit journal (ADR-019): a record,
@@ -165,6 +175,31 @@ type AuditEvent struct {
 	// two columns emptied for a purged tenant — see the type doc.
 	EntityLabel  string
 	RowsAffected int64
+
+	// ClientId is the OAuth client the acting token was minted for (the "client_id"
+	// claim), so a change made by an agent client is distinguishable from the same
+	// person's console change. When the approving token has no client, agent execution
+	// supplies the original client through WithAgentAttribution. Otherwise NULL for a
+	// console token, a system operation and every auth-event row.
+	//
+	// 🔴 FOR A PUBLIC CLIENT IT IS A LABEL THE CLIENT CHOSE, NOT AN AUTHENTICATED
+	// IDENTITY: only a confidential client proves it. The journal records what the token
+	// said, which is the most it can know.
+	ClientId *string
+	// SessionId is the sign-in session the acting token descends from (the "sid" claim),
+	// which ties a row to the grant that produced it. NULL when the token carries none —
+	// console and OAuth access tokens minted before their session binding existed. A NULL
+	// here means "unknown", never "the same session as another NULL row".
+	//
+	// It is an opaque random value and names no person on its own, but it correlates every
+	// row one sign-in produced, so it is retained and not redacted: it is evidence of the
+	// activity, the same as the table and the operation, which a purge keeps.
+	SessionId *string
+	// OnBehalfOf names the proposer for an approved agent execution. Tenant purge
+	// redacts this personal identity alongside Actor and EntityLabel.
+	OnBehalfOf *string
+	// Proposal is the server-generated proposal token, set only by agent execution.
+	Proposal *string
 }
 
 // auditSchemaName is the gorm schema (struct) name used by the recursion guard so
@@ -311,6 +346,14 @@ func auditCallback(operation string) func(*gorm.DB) {
 			EntityLabel:  auditLabel(db),
 			RowsAffected: db.Statement.RowsAffected,
 		}
+		row.ClientId, row.SessionId = auditAgentIdentity(db)
+		if attr, ok := db.Statement.Context.Value(agentAttributionKey{}).(AgentAttribution); ok {
+			if row.ClientId == nil {
+				row.ClientId = nonEmptyAgentField(attr.ClientID)
+			}
+			row.OnBehalfOf = nonEmptyAgentField(attr.OnBehalfOf)
+			row.Proposal = nonEmptyAgentField(attr.Proposal)
+		}
 
 		// Write the audit row on a fresh session that shares this statement's
 		// connection (and thus its transaction), carrying the same context so the
@@ -358,6 +401,29 @@ func auditActor(db *gorm.DB) string {
 		return "system"
 	}
 	return ""
+}
+
+// auditAgentIdentity reads the OAuth client and the grant session off the acting token's
+// claims, each nil when the claim is absent.
+//
+// 🔴 EACH COMES FROM ITS OWN CLAIM. client_id is Claims.ClientId and the session is
+// Claims.SessionID; stamping one from the other would make every row name a session that is
+// really a client, and the journal would still look fully populated. This helper reads
+// claims only; agent execution attribution is applied separately by auditCallback.
+func auditAgentIdentity(db *gorm.DB) (clientID, sessionID *string) {
+	claims, ok := auth.ClaimsFromContext(db.Statement.Context)
+	if !ok || claims == nil {
+		return nil, nil
+	}
+	if claims.ClientId != "" {
+		c := claims.ClientId
+		clientID = &c
+	}
+	if claims.SessionID != "" {
+		s := string(claims.SessionID)
+		sessionID = &s
+	}
+	return clientID, sessionID
 }
 
 // auditTenant returns the acting tenant from context, or "" when none is present
@@ -421,4 +487,27 @@ func (rdb *RdbManager) RecordAuthEventLabeled(ctx context.Context, operation, ac
 		EntityLabel:  label,
 	}
 	return rdb.DB(core.WithSystemContext(ctx)).Create(row).Error
+}
+
+// AgentAttribution identifies the proposal and original agent behind an execution.
+type AgentAttribution struct {
+	ClientID   string
+	OnBehalfOf string
+	Proposal   string
+}
+
+type agentAttributionKey struct{}
+
+// WithAgentAttribution is set only by an area's execution path after the proposal's
+// standing was re-validated. It can never override claims: a token's client_id wins.
+// OnBehalfOf and Proposal are written only through this context. Empty fields stay NULL.
+func WithAgentAttribution(ctx context.Context, attribution AgentAttribution) context.Context {
+	return context.WithValue(ctx, agentAttributionKey{}, attribution)
+}
+
+func nonEmptyAgentField(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

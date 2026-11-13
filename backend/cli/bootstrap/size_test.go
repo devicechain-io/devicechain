@@ -23,6 +23,14 @@ func perfState(ha bool) *State {
 	return st
 }
 
+// eachPreset runs fn once per size in the table, so a property of "a preset" holds for all of them.
+func eachPreset(t *testing.T, fn func(t *testing.T, name string, p sizePreset)) {
+	t.Helper()
+	for name, p := range sizePresets {
+		t.Run(name, func(t *testing.T) { fn(t, name, p) })
+	}
+}
+
 func qty(t *testing.T, s string) *resource.Quantity {
 	t.Helper()
 	q, err := resource.ParseQuantity(s)
@@ -142,7 +150,10 @@ func TestPerf12kReachesThePods(t *testing.T) {
 // here: every preset limit is at least the floor it would otherwise have had, with envelopes on and
 // off, and what GOMEMLIMIT derives from it is 75 percent.
 func TestPresetLimitsHoldTheFloors(t *testing.T) {
-	t.Parallel()
+	eachPreset(t, func(t *testing.T, name string, p sizePreset) { presetLimitsHoldTheFloors(t, name) })
+}
+
+func presetLimitsHoldTheFloors(t *testing.T, size string) {
 	ch, err := loadEmbeddedChart()
 	if err != nil {
 		t.Fatal(err)
@@ -154,12 +165,12 @@ func TestPresetLimitsHoldTheFloors(t *testing.T) {
 		return s
 	}
 	for _, envelopesOn := range []bool{false, true} {
-		vals := helmValues(perfState(false))
+		vals := helmValues(perfStateNamed(size, false))
 		if envelopesOn {
 			mergeOverlay(vals, envelopes(true, true))
 		}
 		got := byArea(t, renderContainers(t, vals))
-		for area, want := range sizePresets[SizePerf12k].Areas {
+		for area, want := range sizePresets[size].Areas {
 			floor := floorOf(area, "memoryLimitFloor")
 			if envelopesOn {
 				if f := floorOf(area, "memoryLimitFloorWithEnvelopes"); f != "" {
@@ -183,7 +194,7 @@ func TestPresetLimitsHoldTheFloors(t *testing.T) {
 	}
 	// device-management keeps its cache bound inside its limit: 2 x (3 x perDeviceCacheMiB 80 +
 	// credentialCacheMiB 32 + 36 + 60) MiB, the chart's own sizing rule for the default bound.
-	dm := byArea(t, renderContainers(t, helmValues(perfState(false))))["device-management"]
+	dm := byArea(t, renderContainers(t, helmValues(perfStateNamed(size, false))))["device-management"]
 	if need := int64(2 * (3*80 + 32 + 36 + 60)); qty(t, dm.memoryLimit).Value()>>20 < need {
 		t.Errorf("device-management limit %s is under %d MiB for its cache bound", dm.memoryLimit, need)
 	}
@@ -211,9 +222,11 @@ var perf12kEvidence = []sizeEvidence{
 // The limits hold the working set the rounds measured: memory at 1.5 times the resident maximum,
 // and the CPU limit at 1.5 times the average use per replica.
 func TestPresetLimitsHoldTheMeasuredWorkingSet(t *testing.T) {
-	t.Parallel()
-	got := byArea(t, renderContainers(t, helmValues(perfState(false))))
-	p := sizePresets[SizePerf12k]
+	eachPreset(t, func(t *testing.T, name string, p sizePreset) { presetLimitsHoldTheWorkingSet(t, name, p) })
+}
+
+func presetLimitsHoldTheWorkingSet(t *testing.T, name string, p sizePreset) {
+	got := byArea(t, renderContainers(t, helmValues(perfStateNamed(name, false))))
 	for _, e := range perf12kEvidence {
 		c := got[e.area]
 		if lim := qty(t, c.memoryLimit).Value() >> 20; float64(lim) < 1.5*float64(e.rssMiB) {
@@ -243,10 +256,13 @@ func TestPresetLimitsHoldTheMeasuredWorkingSet(t *testing.T) {
 // The design rate the preset states reaches the config a service reads, and the reservation it
 // implies fits the preset's own volume, with fail-closed off and on.
 func TestPresetReservationFitsItsVolume(t *testing.T) {
-	p := sizePresets[SizePerf12k]
+	eachPreset(t, func(t *testing.T, name string, p sizePreset) { presetReservationFitsItsVolume(t, name, p) })
+}
+
+func presetReservationFitsItsVolume(t *testing.T, name string, p sizePreset) {
 	for _, failClosed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("fail-closed=%v", failClosed), func(t *testing.T) {
-			st := perfState(false)
+			st := perfStateNamed(name, false)
 			if failClosed {
 				on := true
 				st.MqttFailClosed = &on
@@ -260,7 +276,7 @@ func TestPresetReservationFitsItsVolume(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err := checkJetStreamReservation(n, ceiling, "the "+p.JetStreamStorage+" volume", true); err != nil {
-				t.Errorf("perf-12k's reservation does not fit its own volume: %v", err)
+				t.Errorf("%s's reservation does not fit its own volume: %v", name, err)
 			}
 			// Tight on purpose: a volume a whole 25 percent over the need means the number was not derived.
 			if need := requiredVolumeGi(jetStreamReservation(n)); float64(qty(t, p.JetStreamStorage).Value()>>30) > 1.25*float64(need)+2 {
@@ -272,7 +288,10 @@ func TestPresetReservationFitsItsVolume(t *testing.T) {
 
 // The WAL allowance leaves the volume room to peak at about 1.9 times it.
 func TestPresetWalFitsItsVolume(t *testing.T) {
-	p := sizePresets[SizePerf12k]
+	eachPreset(t, func(t *testing.T, name string, p sizePreset) { presetWalFitsItsVolume(t, p) })
+}
+
+func presetWalFitsItsVolume(t *testing.T, p sizePreset) {
 	vol := qty(t, p.TimescaleStorage).Value() >> 20
 	if int64(p.TimescaleMaxWALMiB) > vol/4 {
 		t.Errorf("max_wal_size %d MiB is over a quarter of the %d MiB event store volume", p.TimescaleMaxWALMiB, vol)

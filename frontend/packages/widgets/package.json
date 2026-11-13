@@ -1,7 +1,7 @@
 {
   "name": "@devicechain/widgets",
   "version": "0.0.0-dev",
-  "description": "DeviceChain's built-in dashboard widgets across six channels — telemetry (time-series chart + gauge over Apache ECharts, latest card, table, and lazily loaded level, indicator and radial widgets: linear and level gauges, battery, status light, signal bars, compass, progress ring), static (label, image; no data), alarm (table, count, severity breakdown), control (command button), selection (entity selector), and location (map over MapLibre GL, lazily loaded, tile source supplied by the host app) — plus the renderer that lays them out. Each is a registration built on @devicechain/widget-sdk. Themed via CSS custom properties, no Tailwind leakage.",
+  "description": "DeviceChain dashboard widgets and React renderer across measurement, aggregate, static, alarm, control, selection and location channels. Built on @devicechain/widget-sdk, themed with CSS custom properties, with lazy chart and map loading.",
   "keywords": [
     "devicechain",
     "iot",
@@ -53,6 +53,7 @@
   "scripts": {
     "build": "node ../../scripts/build-package.mjs",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint --config ../../eslint.library.config.js --no-inline-config \"**/*.{ts,tsx}\"",
     "pretest": "node ../../scripts/build-packages.mjs",
     "test": "vitest run"
   },
@@ -75,11 +76,11 @@
     "@types/react-dom": "^19.3.0",
     "echarts": "^6.0.0",
     "esbuild": "^0.28.2",
-    "jsdom": "^30.1.3",
+    "jsdom": "^31.0.0",
     "maplibre-gl": "^6.16.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "typescript": "~7.0.2",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   }
 }

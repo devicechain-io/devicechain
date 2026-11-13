@@ -71,7 +71,7 @@ var channelSeed = struct {
 var policySeed = struct {
 	Name, Description, Metadata                           string
 	ThrottleSeconds, EscalateAfterSeconds, MaxEscalations int32
-	Enabled                                               bool
+	Enabled, NotifyOnClear                                bool
 	QuietTimezone, QuietSlots, QuietBypass                string
 }{
 	QuietTimezone: "Europe/Berlin",
@@ -86,6 +86,7 @@ var policySeed = struct {
 	EscalateAfterSeconds: 900,
 	MaxEscalations:       2,
 	Enabled:              true,
+	NotifyOnClear:        true,
 }
 
 // The rule sets the policy family seeds and replaces. Two entries in the replacement so
@@ -242,6 +243,7 @@ func notificationPolicyFamily() putest.Family[*Api] {
 				EscalateAfterSeconds: &policySeed.EscalateAfterSeconds,
 				MaxEscalations:       &policySeed.MaxEscalations,
 				Enabled:              policySeed.Enabled,
+				NotifyOnClear:        &policySeed.NotifyOnClear,
 				Rules:                seededRules(),
 				Metadata:             strPtr(policySeed.Metadata),
 
@@ -263,6 +265,7 @@ func notificationPolicyFamily() putest.Family[*Api] {
 				"escalateAfterSeconds": nullIntStr(row.EscalateAfterSeconds),
 				"maxEscalations":       nullIntStr(row.MaxEscalations),
 				"enabled":              putest.BoolString(row.Enabled),
+				"notifyOnClear":        putest.BoolString(row.NotifyOnClear),
 				"rules":                renderStoredRules(t, row.Rules),
 				"metadata":             jsonStr(row.Metadata),
 
@@ -284,6 +287,8 @@ func notificationPolicyFamily() putest.Family[*Api] {
 				func(r *NotificationPolicyUpdateRequest) *dcgraphql.OptionalInt32 { return &r.MaxEscalations }),
 			putest.RequiredBoolField("enabled", policySeed.Enabled,
 				func(r *NotificationPolicyUpdateRequest) *dcgraphql.OptionalBool { return &r.Enabled }),
+			putest.RequiredBoolField("notifyOnClear", policySeed.NotifyOnClear,
+				func(r *NotificationPolicyUpdateRequest) *dcgraphql.OptionalBool { return &r.NotifyOnClear }),
 			rulesField(),
 			putest.OptionalStringField("metadata", policySeed.Metadata, `{"fleet":"south"}`,
 				func(r *NotificationPolicyUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),

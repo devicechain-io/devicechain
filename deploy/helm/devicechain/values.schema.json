@@ -122,6 +122,43 @@
               "type": "object",
               "description": "Settings shared by every service in the instance: messaging, secrets and the HTTP edge. The chart validates only the keys named below; each service validates the rest at startup.",
               "properties": {
+                "tracing": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Opt-in OpenTelemetry export to an operator-managed OTLP collector. No credentials or headers are accepted.",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Turn tracing on. Off by default; when off no exporter is created and messages are unchanged.",
+                      "default": false
+                    },
+                    "protocol": {
+                      "type": "string",
+                      "description": "OTLP transport to the collector: grpc (default, usually port 4317) or http (usually port 4318).",
+                      "enum": [
+                        "grpc",
+                        "http"
+                      ],
+                      "default": "grpc"
+                    },
+                    "endpoint": {
+                      "type": "string",
+                      "description": "OTLP collector address: host:port for grpc, a full http(s) URL for http. Required when enabled; the services validate it at startup and refuse to start on a malformed one.",
+                      "default": ""
+                    },
+                    "insecure": {
+                      "type": "boolean",
+                      "description": "Send to the collector without TLS. Off by default; set it only for a collector reached over a trusted in-cluster network.",
+                      "default": false
+                    },
+                    "samplingRatio": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1,
+                      "description": "Root trace sample ratio; absent uses 0.1 when enabled. Zero samples no roots; upstream sampling is respected."
+                    }
+                  }
+                },
                 "http": {
                   "type": "object",
                   "description": "How the services' HTTP endpoints read the caller's address.",
@@ -172,10 +209,9 @@
                       "type": "string",
                       "enum": [
                         "",
-                        "observe",
                         "enforce"
                       ],
-                      "description": "observe counts and logs a request or token whose resource is not allowed and lets it through; enforce refuses it. Unset means the release default, which is observe in this release. Governs the authorization-server resource check and the plane audience check together."
+                      "description": "Token audiences are always enforced. Leave unset or set to enforce. Governs the authorization-server resource check and the plane audience check together."
                     },
                     "unscopedClientCredentials": {
                       "type": "string",
@@ -211,6 +247,10 @@
                   "type": "object",
                   "description": "The message broker connection and the JetStream ceilings. The chart validates only the capacity keys named below; the services validate the rest at startup.",
                   "properties": {
+                    "mqttDeviceUplinks": {
+                      "type": "boolean",
+                      "description": "Whether a device may publish its own payload to its raw-payload MQTT topic, for the decoder on its device type's profile to read. Off by default. Turn it on only after every event-sources and device-management replica runs a release that knows the topic."
+                    },
                     "streamDesignRate": {
                       "type": "integer",
                       "minimum": 0,
@@ -297,7 +337,7 @@
             "legacy",
             "lagCredit"
           ],
-          "description": "How event-sources meters a message against its tenant's ingest ceiling. legacy is the gate as it has always run. lagCredit meters fresh traffic at pod time with a measured reader-lag credit, so a short platform stall cannot shed a tenant that stayed within its ceiling; it is not available yet, and event-sources refuses to start with it rather than falling back to legacy. Rendered as the EVENT_SOURCES_INGEST_METERING environment variable, not as an instance configuration key."
+          "description": "How event-sources meters a message against its tenant's ingest ceiling. legacy is the gate as it has always run. lagCredit meters fresh traffic at pod time with a measured reader-lag credit, so a short platform stall cannot shed a tenant that stayed within its ceiling, measured per replica from the broker's own delivery metadata. Rendered as the EVENT_SOURCES_INGEST_METERING environment variable, not as an instance configuration key."
         }
       },
       "description": "Settings that belong to the event-sources area alone."
@@ -916,7 +956,217 @@
           },
           "config": {
             "type": "object",
-            "description": "This area's own configuration, written to the dct-<id>-config object and mounted at /etc/dct-config/<area>. Empty means the service applies its typed defaults; an unknown key stops the service at startup."
+            "description": "This area's own configuration, written to the dct-<id>-config object and mounted at /etc/dct-config/<area>. Empty means the service applies its typed defaults; an unknown key stops the service at startup.",
+            "properties": {
+              "security": {
+                "type": "object",
+                "description": "lwm2m-ingest: the DTLS listener settings and the pre-shared-key identities.",
+                "properties": {
+                  "identities": {
+                    "type": "array",
+                    "description": "lwm2m-ingest: one binding per pre-shared-key identity. dcctl writes these from --lwm2m-identities.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "deviceTypeToken": {
+                          "type": "string",
+                          "pattern": "^([A-Za-z0-9][A-Za-z0-9_-]*)?$",
+                          "description": "The device type stamped on a device that autoRegister creates. When set, it must be a valid token: a letter or digit, then letters, digits, hyphens or underscores. The service refuses any other value at startup."
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "ingestRateLimit": {
+                "type": "object",
+                "description": "event-sources, lwm2m-ingest and sparkplug-ingest: the platform-default per-tenant ingest ceiling. A tenant's tier overrides it.",
+                "properties": {
+                  "readingsPerSecond": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Sustained per-tenant ingest rate, in readings per second. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+                  },
+                  "burst": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Burst allowance for the ingest ceiling, in readings. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+                  }
+                }
+              },
+              "defaultCommandTtlSeconds": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "command-delivery: the time-to-live, in seconds, stamped on a command created without one. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+              },
+              "heldCommandCeiling": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "command-delivery: the per-tenant bound on withheld commands when no tenant or tier ceiling applies. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+              },
+              "sweepIntervalSeconds": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "command-delivery: how often, in seconds, the expiry and delivery sweep runs. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+              },
+              "maxDispatchFailures": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "command-delivery: how many failed dispatches a command may accumulate before it is marked failed. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+              },
+              "deliveryMachineryReserve": {
+                "type": "number",
+                "minimum": 0,
+                "description": "command-delivery: the fraction of the held-command ceiling reserved for the platform's own delivery. 0 or absent takes the service default; a negative value is refused here and by the service at startup."
+              },
+              "tenantPurge": {
+                "type": "object",
+                "description": "user-management: the tenant-purge coordinator's timing. Unset settings take the service defaults.",
+                "properties": {
+                  "intervalSeconds": {
+                    "type": "integer",
+                    "maximum": 9223372036,
+                    "description": "user-management: how often, in seconds, the tenant-purge coordinator runs a pass. 0 or absent takes the service default (60); a negative value turns the coordinator off. A value above 9223372036 (the longest a duration can hold) is refused here and by the service at startup."
+                  },
+                  "settleSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9223372036,
+                    "description": "user-management: how long, in seconds, every store must stay clean before a tenant purge completes. 0 or absent takes the service default (300); a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. The service also refuses a value that does not clear the broker's retained-message cache window."
+                  },
+                  "tokenHoldSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9223372036,
+                    "description": "user-management: how long, in seconds, a deleted tenant's token stays reserved after the purge went clean. 0 or absent takes the service default (43200); a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup."
+                  }
+                }
+              },
+              "presence": {
+                "type": "object",
+                "description": "sparkplug-ingest: how a connected Host re-checks its asserted-active devices. Unset settings take the service defaults.",
+                "properties": {
+                  "probeSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9223372036,
+                    "description": "sparkplug-ingest: how often, in seconds, a connected Host re-checks its asserted-active devices. 0 or absent takes the service default (1800); the service also refuses a written value below 60. A negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup."
+                  },
+                  "probeWindowSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9223372036,
+                    "description": "sparkplug-ingest: how long, in seconds, a probe waits for a node to answer before declaring its still-silent devices disconnected. 0 or absent takes the service default (10); the service also refuses a written value below 5 or at or above the probe interval. A negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup."
+                  }
+                }
+              },
+              "auth": {
+                "type": "object",
+                "description": "user-management: authentication settings. Only the token-lifetime and signing-key keys below are checked here; the service checks the rest at startup.",
+                "properties": {
+                  "accessTokenTtlSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9223372036,
+                    "description": "user-management: how long, in seconds, an access token stays valid. 0 or absent takes the service default (900); a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup."
+                  },
+                  "refreshTokenTtlSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9223372036,
+                    "description": "user-management: how long, in seconds, a refresh token stays valid. 0 or absent takes the service default (604800); a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup."
+                  },
+                  "signingKeyMaxAgeDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 106751,
+                    "description": "user-management: rotate the token signing key at startup once it is older than this many days. 0 or absent turns age-based rotation off; a negative value, or one above 106751, is refused here and by the service at startup."
+                  },
+                  "signingKeyRetentionDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 106751,
+                    "description": "user-management: how many days a rotated-out signing key stays published so the tokens it signed keep verifying. 0 or absent takes the service default (8); a negative value, or one above 106751, is refused here and by the service at startup. With signingKeyMaxAgeDays above 0, a retention shorter than auth.refreshTokenTtlSeconds is refused by the service at startup."
+                  }
+                }
+              },
+              "updates": {
+                "type": "object",
+                "description": "update-management: the over-the-air update settings. Unset settings take the service defaults.",
+                "properties": {
+                  "sweepIntervalSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9223372036,
+                    "description": "update-management: how often, in seconds, the deadline sweep looks for stalled update attempts. 0 or absent takes the service default; a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup."
+                  },
+                  "deadlines": {
+                    "type": "object",
+                    "description": "update-management: how long, in seconds, each phase of an update may go without a device report.",
+                    "properties": {
+                      "acknowledgeSeconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036,
+                        "description": "update-management: how long, in seconds, QUEUED and INITIATED attempts may wait for an offline device to return. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup."
+                      },
+                      "downloadSeconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036,
+                        "description": "update-management: how long, in seconds, DOWNLOADING and DOWNLOADED attempts may go since the last progress report. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup."
+                      },
+                      "verifySeconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036,
+                        "description": "update-management: how long, in seconds, VERIFIED attempts may go without a device report. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup."
+                      },
+                      "installSeconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036,
+                        "description": "update-management: how long, in seconds, UPDATING attempts may go without a device report; silence becomes UNKNOWN rather than failure. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup."
+                      },
+                      "confirmSeconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036,
+                        "description": "update-management: how long, in seconds, REBOOTING attempts may go without a device report; silence becomes UNKNOWN rather than failure. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup."
+                      }
+                    }
+                  }
+                }
+              },
+              "deliverySeconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036,
+                "description": "notification-management: how long, in seconds, a single channel delivery attempt (one SMTP send or webhook POST) may take. 0 or absent takes the service default; a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup."
+              },
+              "stateRetentionSeconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036,
+                "description": "notification-management: how long, in seconds, resolved per-alarm notification state is kept before the retention sweep prunes it. 0 or absent takes the service default; a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup."
+              },
+              "attemptRetentionSeconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036,
+                "description": "notification-management: how long, in seconds, a delivery-ledger row recording one channel delivery attempt is kept before the retention sweep deletes it. 0 or absent takes the service default; a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup."
+              },
+              "retentionSweepSeconds": {
+                "type": "integer",
+                "maximum": 9223372036,
+                "description": "notification-management: how often, in seconds, the retention sweep runs. 0 or absent takes the service default; a negative value turns the sweep off. A value above 9223372036 (the longest a duration can hold) is refused here and by the service at startup."
+              },
+              "escalationSweepSeconds": {
+                "type": "integer",
+                "maximum": 9223372036,
+                "description": "notification-management: how often, in seconds, the escalation scheduler checks open alarms for due re-notification. 0 or absent takes the service default; a negative value turns the sweep off, so alarms page only on event transitions. A value above 9223372036 (the longest a duration can hold) is refused here and by the service at startup."
+              }
+            }
           },
           "extraPorts": {
             "type": "array",

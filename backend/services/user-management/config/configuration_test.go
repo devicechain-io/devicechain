@@ -4,12 +4,14 @@
 package config
 
 import (
-	"github.com/devicechain-io/dc-microservice/messaging"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
@@ -81,6 +83,134 @@ func TestValidateRejectsNonPositiveRefreshTtl(t *testing.T) {
 		},
 	}
 	assert.Error(t, cfg.Validate())
+}
+
+// Token TTLs must be refused before their seconds-to-Duration conversion overflows.
+func TestTokenTtlThatOverflowsADurationIsRefusedAtLoad(t *testing.T) {
+	for _, key := range []string{"accessTokenTtlSeconds", "refreshTokenTtlSeconds"} {
+		for _, seconds := range []int{MaxDurationSeconds + 1, math.MaxInt} {
+			t.Run(fmt.Sprintf("%s/%d", key, seconds), func(t *testing.T) {
+				cfg := &UserManagementConfiguration{}
+				doc := fmt.Sprintf(`{"auth":{"%s":%d}}`, key, seconds)
+				err := core.LoadConfiguration([]byte(doc), cfg)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "auth."+key)
+			})
+		}
+	}
+}
+
+// The largest safe TTL still loads unchanged for each token type.
+func TestTokenTtlAtDurationBoundStillLoads(t *testing.T) {
+	for _, key := range []string{"accessTokenTtlSeconds", "refreshTokenTtlSeconds"} {
+		t.Run(key, func(t *testing.T) {
+			cfg := &UserManagementConfiguration{}
+			doc := fmt.Sprintf(`{"auth":{"%s":%d}}`, key, MaxDurationSeconds)
+			require.NoError(t, core.LoadConfiguration([]byte(doc), cfg))
+			require.NoError(t, cfg.Validate())
+			if key == "accessTokenTtlSeconds" {
+				assert.Equal(t, MaxDurationSeconds, cfg.Auth.AccessTokenTtlSeconds)
+			} else {
+				assert.Equal(t, MaxDurationSeconds, cfg.Auth.RefreshTokenTtlSeconds)
+			}
+		})
+	}
+}
+
+// A negative signing-key age, or one whose day count overflows the Duration conversion in
+// main.go, reached MaybeRotateOnAge as a non-positive age, which reads as "rotation off":
+// the instance then signed with one key indefinitely without a word. Each row loaded with
+// no error before this check existed.
+func TestSigningKeyAgesOutOfRangeAreRefusedAtLoad(t *testing.T) {
+	for _, key := range []string{"signingKeyMaxAgeDays", "signingKeyRetentionDays"} {
+		for _, days := range []int{-1, MaxSigningKeyDays + 1, 200000} {
+			t.Run(fmt.Sprintf("%s/%d", key, days), func(t *testing.T) {
+				cfg := &UserManagementConfiguration{}
+				doc := fmt.Sprintf(`{"auth":{"%s":%d}}`, key, days)
+				err := core.LoadConfiguration([]byte(doc), cfg)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "auth."+key)
+			})
+		}
+	}
+}
+
+// 0 still means "rotation off" for the max age and "the default" for the retention, and
+// every value up to the overflow bound still loads unchanged.
+func TestSigningKeyAgesInRangeStillLoad(t *testing.T) {
+	cases := []struct {
+		key  string
+		days int
+		want int
+	}{
+		{"signingKeyMaxAgeDays", 0, 0},
+		{"signingKeyMaxAgeDays", 90, 90},
+		{"signingKeyMaxAgeDays", MaxSigningKeyDays, MaxSigningKeyDays},
+		{"signingKeyRetentionDays", 0, 8},
+		{"signingKeyRetentionDays", 30, 30},
+		{"signingKeyRetentionDays", MaxSigningKeyDays, MaxSigningKeyDays},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%s/%d", tc.key, tc.days), func(t *testing.T) {
+			cfg := &UserManagementConfiguration{}
+			doc := fmt.Sprintf(`{"auth":{"%s":%d}}`, tc.key, tc.days)
+			require.NoError(t, core.LoadConfiguration([]byte(doc), cfg))
+			if tc.key == "signingKeyMaxAgeDays" {
+				assert.Equal(t, tc.want, cfg.Auth.SigningKeyMaxAgeDays)
+			} else {
+				assert.Equal(t, tc.want, cfg.Auth.SigningKeyRetentionDays)
+			}
+		})
+	}
+}
+
+func TestSigningKeyRetentionShorterThanRefreshTtlIsRefused(t *testing.T) {
+	cases := []struct {
+		name string
+		auth string
+	}{
+		{"default refresh TTL", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":6`},
+		{"configured refresh TTL", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":1,"refreshTokenTtlSeconds":172800`},
+		{"default retention", `"signingKeyMaxAgeDays":90,"refreshTokenTtlSeconds":864000`},
+		{"one second short", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":7,"refreshTokenTtlSeconds":604801`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &UserManagementConfiguration{}
+			doc := fmt.Sprintf(`{"auth":{%s}}`, tc.auth)
+			err := core.LoadConfiguration([]byte(doc), cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "signingKeyRetentionDays")
+		})
+	}
+}
+
+func TestSigningKeyRetentionCoveringRefreshTtlStillLoads(t *testing.T) {
+	cases := []struct {
+		name          string
+		auth          string
+		wantRetention int
+	}{
+		{"equal lifetime", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":7,"refreshTokenTtlSeconds":604800`, 7},
+		{"default retention and refresh TTL", `"signingKeyMaxAgeDays":90`, 8},
+		{"rotation off", `"signingKeyMaxAgeDays":0,"signingKeyRetentionDays":1,"refreshTokenTtlSeconds":604800`, 1},
+		{"maximum retention", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":106751,"refreshTokenTtlSeconds":604800`, 106751},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &UserManagementConfiguration{}
+			doc := fmt.Sprintf(`{"auth":{%s}}`, tc.auth)
+			require.NoError(t, core.LoadConfiguration([]byte(doc), cfg))
+			assert.Equal(t, tc.wantRetention, cfg.Auth.SigningKeyRetentionDays)
+			assert.Equal(t, 604800, cfg.Auth.RefreshTokenTtlSeconds)
+		})
+	}
+}
+
+// The bound is exactly the largest day count whose Duration does not wrap.
+func TestMaxSigningKeyDaysIsTheLargestDurationThatFits(t *testing.T) {
+	assert.Greater(t, time.Duration(MaxSigningKeyDays)*24*time.Hour, time.Duration(0))
+	assert.Greater(t, int64(MaxSigningKeyDays+1), int64(math.MaxInt64)/int64(24*time.Hour))
 }
 
 // OAuth is off by default (no issuer configured) — the AS surface stays
@@ -220,6 +350,59 @@ func TestTenantPurgeDefaultsFromAnEmptyDocument(t *testing.T) {
 	assert.Equal(t, 60*time.Second, cfg.TenantPurgeInterval())
 	assert.Equal(t, 300*time.Second, cfg.TenantPurgeSettle())
 	assert.NoError(t, cfg.Validate())
+}
+
+// Tenant-purge seconds must be refused before their duration conversion overflows.
+func TestTenantPurgeSecondsThatOverflowADurationAreRefusedAtLoad(t *testing.T) {
+	for _, key := range []string{"intervalSeconds", "settleSeconds", "tokenHoldSeconds"} {
+		for _, seconds := range []int{MaxDurationSeconds + 1, math.MaxInt} {
+			t.Run(fmt.Sprintf("%s/%d", key, seconds), func(t *testing.T) {
+				cfg := &UserManagementConfiguration{}
+				doc := fmt.Sprintf(`{"tenantPurge":{"%s":%d}}`, key, seconds)
+				err := core.LoadConfiguration([]byte(doc), cfg)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "tenantPurge."+key)
+			})
+		}
+	}
+}
+
+// The largest safe value still loads unchanged, and 0 still takes the default.
+func TestTenantPurgeSecondsAtDurationBoundAndZeroStillLoad(t *testing.T) {
+	for _, tc := range []struct {
+		key            string
+		defaultSeconds int
+		read           func(*UserManagementConfiguration) int
+	}{
+		{"intervalSeconds", 60, func(c *UserManagementConfiguration) int { return c.TenantPurge.IntervalSeconds }},
+		{"settleSeconds", 300, func(c *UserManagementConfiguration) int { return c.TenantPurge.SettleSeconds }},
+		{"tokenHoldSeconds", 43200, func(c *UserManagementConfiguration) int { return c.TenantPurge.TokenHoldSeconds }},
+	} {
+		for _, seconds := range []int{MaxDurationSeconds, 0} {
+			t.Run(fmt.Sprintf("%s/%d", tc.key, seconds), func(t *testing.T) {
+				cfg := &UserManagementConfiguration{}
+				doc := fmt.Sprintf(`{"tenantPurge":{"%s":%d}}`, tc.key, seconds)
+				require.NoError(t, core.LoadConfiguration([]byte(doc), cfg))
+				require.NoError(t, cfg.Validate())
+				want := seconds
+				if seconds == 0 {
+					want = tc.defaultSeconds
+				}
+				assert.Equal(t, want, tc.read(cfg))
+			})
+		}
+	}
+}
+
+// A wrapped non-positive settle duration used to bypass the positive-only floor check.
+func TestTenantPurgeSettleThatWrapsNonPositiveIsRefusedAtLoad(t *testing.T) {
+	seconds := MaxDurationSeconds + 1
+	require.LessOrEqual(t, time.Duration(seconds)*time.Second, time.Duration(0), "the regression value must wrap non-positive")
+	cfg := &UserManagementConfiguration{}
+	doc := fmt.Sprintf(`{"tenantPurge":{"settleSeconds":%d}}`, seconds)
+	err := core.LoadConfiguration([]byte(doc), cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tenantPurge.settleSeconds")
 }
 
 // A negative interval disables the coordinator, following the platform's sweep

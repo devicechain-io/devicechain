@@ -229,6 +229,8 @@ func startResolvePipeline(b testing.TB, spec pipelineSpec) *resolvePipeline {
 		for _, s := range []string{p.resolvedStream, p.inboundStream} {
 			benchSettled(b, js, s)
 		}
+		benchConsumerSettled(b, js, p.inboundStream,
+			messaging.DurableName(spec.instance, "device-management", streams.InboundEvents))
 	}
 
 	subject := messaging.ScopedSubject(spec.instance, "acme", streams.InboundEvents)
@@ -286,13 +288,35 @@ func benchSettled(b testing.TB, js nats.JetStreamContext, stream string) {
 	b.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		info, err := js.StreamInfo(stream)
-		if err == nil && info.Cluster != nil && info.Cluster.Leader != "" && len(info.Cluster.Replicas) == 2 &&
+		var info *nats.StreamInfo
+		retryWhileGroupSettles(b, "stream info "+stream, deadline, func(ctx context.Context) error {
+			var err error
+			info, err = js.StreamInfo(stream, nats.Context(ctx))
+			return err
+		})
+		if info.Cluster != nil && info.Cluster.Leader != "" && len(info.Cluster.Replicas) == 2 &&
 			info.Cluster.Replicas[0].Current && info.Cluster.Replicas[1].Current {
 			return
 		}
 		if time.Now().After(deadline) {
-			b.Fatalf("stream %s never settled (last err: %v)", stream, err)
+			b.Fatalf("stream %s never settled", stream)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// A durable has its own RAFT group; stream readiness says nothing about whether
+// CONSUMER.INFO can be served yet. Wait before starting or publishing to the pipeline.
+func benchConsumerSettled(b testing.TB, js nats.JetStreamContext, stream, durable string) {
+	b.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		info := consumerInfoWhileSettling(b, js, stream, durable, deadline)
+		if info.Cluster != nil && info.Cluster.Leader != "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			b.Fatalf("consumer %s never elected a leader", durable)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

@@ -1136,7 +1136,7 @@
    "id": 47,
    "type": "timeseries",
    "title": "Derived-event backlog",
-   "description": "Derived events waiting for REACT: the broker's own count for the durable (read from the consumer leader, so it stays visible while event-processing is down) beside the count event-processing reports. A line that only grows means REACT is slower than detection: the dispatch lag beside it says by how much.",
+   "description": "Derived events waiting for REACT or in progress: the broker's own count for the durable (read from the consumer leader, so it stays visible while event-processing is down) beside the count event-processing reports. A line that only grows means REACT is slower than detection: the dispatch lag beside it says by how much.",
    "gridPos": {
     "h": 8,
     "w": 8,
@@ -1154,7 +1154,7 @@
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "max by (consumer_name) (nats_consumer_num_pending{namespace=\"$namespace\", is_consumer_leader=\"true\", consumer_name=~\".+_event-processing_derived-events\"})",
+     "expr": "sum by (consumer_name) (max by (__name__, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", is_consumer_leader=\"true\", consumer_name=~\".+_event-processing_derived-events\"}))",
      "legendFormat": "broker"
     },
     {
@@ -1163,7 +1163,7 @@
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "max(devicechain_eventprocessing_jetstream_consumer_pending_messages{namespace=\"$namespace\", durable=~\".+_event-processing_derived-events\"})",
+     "expr": "sum(max by (__name__, durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages|devicechain_[a-z0-9]+_jetstream_consumer_ack_pending_messages\", namespace=\"$namespace\", durable=~\".+_event-processing_derived-events\"}))",
      "legendFormat": "reported by event-processing"
     }
    ],

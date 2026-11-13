@@ -83,7 +83,8 @@ is that same version without the leading `v`; `image.tag` keeps it.
 ```bash
 helm install dc deploy/helm/devicechain \
   --set instance.id=devicechain \
-  --set image.tag=v<X.Y.Z>
+  --set image.tag=v<X.Y.Z> \
+  --set instance.config.infrastructure.secrets.rootKey=$ROOT_KEY
 ```
 
 ## Choosing what to deploy
@@ -112,7 +113,7 @@ helm install dc deploy/helm/devicechain \
 The chart **fails the render** if the selection omits a required core area
 (`user-management`, `device-management`) or an enabled area's hard dependency.
 `user-management` and `device-management` are the required core; every other area in
-the table above is optional — the seven `default` adds on top of the core, plus the six
+the table above is optional — the eight `default` adds on top of the core, plus the five
 only `full` ships. The one dependency between optional areas is `outbound-connectors`,
 which requires `event-processing`; the rest can be enabled or left out independently.
 (`values.schema.json` carries the authoritative area names; the dependency catalog
@@ -170,10 +171,10 @@ installing.
 build has, and a test enforces that, so "full" cannot drift back into meaning "most of
 it".
 
-The difference is the six areas `default` holds back. Each carries a decision an operator
+The difference is the five areas `default` holds back. Each carries a decision an operator
 should make deliberately rather than inherit — a paid provider key, an egress surface, an
-agent-facing API, a customer broker topology, a device-facing DTLS port, an update plane
-that is not implemented yet — not because they are second-class. Get them with `--set profile=full`, or name them in an explicit
+agent-facing API, a customer broker topology or a device-facing DTLS port.
+Get them with `--set profile=full`, or name them in an explicit
 `enabledFunctionalAreas` set:
 
 | Area | Purpose | Notes |
@@ -365,9 +366,10 @@ exports later) go to a pluggable object store, configured under
 
 ## Rolling upgrades
 
-`helm upgrade` rolls forward one pod at a time. Each Deployment uses a
-`RollingUpdate` strategy with `maxUnavailable: 0` / `maxSurge: 1`, so a new pod must
-pass `/readyz` before an old one is removed. On termination a pod flips `/readyz` to
+Most Deployments use `RollingUpdate` with `maxUnavailable: 0` / `maxSurge: 1`,
+so a new pod must pass `/readyz` before an old one is removed. By default,
+`event-processing`, `mcp`, `sparkplug-ingest` and `lwm2m-ingest` use `Recreate`,
+which stops the old pod before starting its replacement. On termination a pod flips `/readyz` to
 503 first, waits `shutdownDrainSeconds` (default 5) for endpoint removal to
 propagate, then drains in-flight requests — an app-side drain, since the
 distroless images have no shell for a `preStop` hook. That window and
@@ -377,10 +379,12 @@ more than half the grace period, since the teardown after the drain is what actu
 finishes in-flight work before the kubelet's SIGKILL. Database migrations run under a
 Postgres advisory lock so concurrently-rolling replicas don't race on DDL.
 
-To keep serving through a rollout run `replicas: 2`+ per area (`--set replicas=2` or
-`functionalAreas.<area>.replicas`); a `PodDisruptionBudget` is rendered for any area
-with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable` /
-`rollingUpdate.maxSurge`.
+For areas that support multiple replicas, set `functionalAreas.<area>.replicas: 2`
+or more to keep serving through a rollout; a `PodDisruptionBudget` is rendered
+for any area with more than one replica. `mcp`, `sparkplug-ingest` and `lwm2m-ingest`
+are limited to one replica. To give `event-processing` a warm standby, set both
+its `replicas: 2` and `strategy: RollingUpdate`; only one replica runs detection.
+Tune rolling updates via `rollingUpdate.maxUnavailable` / `rollingUpdate.maxSurge`.
 
 Each `event-management` pod holds its own pool of 20 connections to the event store.
 On an event store built from this repository's OpenTofu, set the instance root's
@@ -611,6 +615,12 @@ generated from the schema; do not edit it by hand.
 | `instance.natsLoginSecrets` | object | `{}` | Per-area broker logins: a map of area name to the name of the Secret holding that area's login (keys `user` and `password`), projected into that area ALONE as DC_NATS_USER and DC_NATS_PASSWORD. An area not listed uses dci-&lt;id&gt;-nats-&lt;area&gt;, the Secret dcctl writes. mcp and ai-inference never open a broker connection and mount none. The pod reference is optional, so an instance whose broker has no per-area logins starts; when the instance configuration says they exist, an area refuses to start without its own. |
 | `instance.config` | object | - | The instance configuration document (infrastructure, persistence, per-service settings), written into the dci-&lt;id&gt;-config Secret. The chart validates only the envelope and the few keys named below; each service validates its own part at startup. Under existingSecret this block is not the mounted document, but templates still read its defaults; restate the ports in networkPolicy.externalConfigPorts and the broker host in metrics.natsBrokerHost. |
 | `instance.config.infrastructure` | object | - | Settings shared by every service in the instance: messaging, secrets and the HTTP edge. The chart validates only the keys named below; each service validates the rest at startup. |
+| `instance.config.infrastructure.tracing` | object | - | Opt-in OpenTelemetry export to an operator-managed OTLP collector. No credentials or headers are accepted. |
+| `instance.config.infrastructure.tracing.enabled` | boolean | `false` | Turn tracing on. Off by default; when off no exporter is created and messages are unchanged. |
+| `instance.config.infrastructure.tracing.protocol` | string | `"grpc"` | OTLP transport to the collector: grpc (default, usually port 4317) or http (usually port 4318). |
+| `instance.config.infrastructure.tracing.endpoint` | string | `""` | OTLP collector address: host:port for grpc, a full http(s) URL for http. Required when enabled; the services validate it at startup and refuse to start on a malformed one. |
+| `instance.config.infrastructure.tracing.insecure` | boolean | `false` | Send to the collector without TLS. Off by default; set it only for a collector reached over a trusted in-cluster network. |
+| `instance.config.infrastructure.tracing.samplingRatio` | number | - | Root trace sample ratio; absent uses 0.1 when enabled. Zero samples no roots; upstream sampling is respected. |
 | `instance.config.infrastructure.http` | object | - | How the services' HTTP endpoints read the caller's address. |
 | `instance.config.infrastructure.http.trustedProxies` | array | - | CIDR prefixes (IPv4 or IPv6) of the proxies whose X-Forwarded-For header an endpoint that keys on the caller's address may believe, in practice the ingress controller's pod or Service range. Empty or absent trusts no proxy, so such an endpoint keys on the connection's own peer, which behind an ingress is the ingress itself. Each entry must be in canonical masked form (10.42.0.0/16, never 10.42.0.7/16); the services re-check every entry at startup and refuse to start on a malformed one. |
 | `instance.config.infrastructure.messaging` | object | - | How the services write events to the retained streams. The chart validates only the key named below; the services validate the rest at startup. |
@@ -619,12 +629,13 @@ generated from the schema; do not edit it by hand.
 | `instance.config.infrastructure.messaging.envelopes.inbound` | boolean | - | Whether event-sources writes inbound events as envelopes (the capture hop and HTTP /events). False by default, with the same rule as resolved: turn it on only once every pod runs a release that reads envelopes (v1.1.0 or later). dcctl treats it like resolved when it records the switch and when it judges a move to an earlier release. |
 | `instance.config.infrastructure.messaging.envelopes.inboundLingerMillis` | integer | - | How many milliseconds an inbound event may wait for a second one to share its envelope when its tenant's recent rate predicts one. 0 means 5. Values above 10 are refused. |
 | `instance.config.infrastructure.tokenAudience` | object | - | Which resource a token must be bound to. Every API plane checks the audience of the access token it is shown against the area it serves (or a registered MCP resource), and the authorization server checks the resource a client asks a token for. The chart derives areaBaseUrl and mcpResources itself and refuses a hand-set value for either; the other three keys are the operator's. |
-| `instance.config.infrastructure.tokenAudience.enforcement` | string | - | observe counts and logs a request or token whose resource is not allowed and lets it through; enforce refuses it. Unset means the release default, which is observe in this release. Governs the authorization-server resource check and the plane audience check together. |
+| `instance.config.infrastructure.tokenAudience.enforcement` | string | - | Token audiences are always enforced. Leave unset or set to enforce. Governs the authorization-server resource check and the plane audience check together. |
 | `instance.config.infrastructure.tokenAudience.unscopedClientCredentials` | string | - | What happens to a client_credentials request that names a resource but no scope. observe counts and logs it and serves it as before. Refusing it arrives in the next major release, so enforce is not accepted yet. Unset means observe. |
 | `instance.config.infrastructure.tokenAudience.externalResources` | array | - | Resource servers outside the platform that validate DeviceChain tokens through the authorization server's JWKS endpoint. The authorization server may issue tokens bound to them; no DeviceChain plane accepts those tokens. Each entry is an https URL (http only for a loopback host) with a lowercase scheme and host, no query, fragment, percent-escape or trailing slash, that does not sit under the platform's own API address. |
 | `instance.config.infrastructure.tokenAudience.areaBaseUrl` | string | - | Derived by the chart: the ingress origin plus /api, set only when the origin is https or a loopback host. Refused if set by hand. |
 | `instance.config.infrastructure.tokenAudience.mcpResources` | array | - | Derived by the chart: the MCP area's resolved resource URL when that area is deployed. Refused if set by hand. |
 | `instance.config.infrastructure.nats` | object | - | The message broker connection and the JetStream ceilings. The chart validates only the capacity keys named below; the services validate the rest at startup. |
+| `instance.config.infrastructure.nats.mqttDeviceUplinks` | boolean | - | Whether a device may publish its own payload to its raw-payload MQTT topic, for the decoder on its device type's profile to read. Off by default. Turn it on only after every event-sources and device-management replica runs a release that knows the topic. |
 | `instance.config.infrastructure.nats.streamDesignRate` | integer | `0` | Events a second the whole instance is expected to ingest at its peak, across tenants. The streams that carry one message per event (inbound-events, resolved-events, the device capture stream) are sized to hold at least this rate for streamRunwayMinutes. It is the rate the disk is sized for, not a rate limit. 0 sizes them by streamMaxBytes alone. |
 | `instance.config.infrastructure.nats.streamRunwayMinutes` | integer | `15` | Minutes of events at streamDesignRate the per-event streams are sized to hold. Between 10 (the alerts that warn the runway is running out need that long to fire before the platform stops accepting events) and 10080, the 7 days after which the broker discards a message whatever the ceiling. 0 means 15. |
 | `instance.config.infrastructure.nats.streamMaxBytes` | integer | `1073741824` | Byte ceiling of each high-volume stream, and the floor under the runway sizing. |
@@ -637,7 +648,7 @@ generated from the schema; do not edit it by hand.
 | `service` | object | - | The Service exposed for each functional area. |
 | `service.port` | integer | `8080` | HTTP port every service listens on. It serves the GraphQL API, /healthz, /readyz and /metrics. |
 | `eventSources` | object | - | Settings that belong to the event-sources area alone. |
-| `eventSources.ingestMetering` | string | `"legacy"` | How event-sources meters a message against its tenant's ingest ceiling. legacy is the gate as it has always run. lagCredit meters fresh traffic at pod time with a measured reader-lag credit, so a short platform stall cannot shed a tenant that stayed within its ceiling; it is not available yet, and event-sources refuses to start with it rather than falling back to legacy. Rendered as the EVENT_SOURCES_INGEST_METERING environment variable, not as an instance configuration key. |
+| `eventSources.ingestMetering` | string | `"legacy"` | How event-sources meters a message against its tenant's ingest ceiling. legacy is the gate as it has always run. lagCredit meters fresh traffic at pod time with a measured reader-lag credit, so a short platform stall cannot shed a tenant that stayed within its ceiling, measured per replica from the broker's own delivery metadata. Rendered as the EVENT_SOURCES_INGEST_METERING environment variable, not as an instance configuration key. |
 | `eventEnvelopesEnabled` | boolean | `false` | Restates whether either event-envelope switch is on, for the event-processing memory floor. Under instance.existingSecret the chart cannot read instance.config.infrastructure.messaging.envelopes, so dcctl sets this from the document it wrote. |
 | `metrics` | object | - | Prometheus integration. Metrics are served on the same HTTP port as GraphQL, at /metrics. `enabled` renders a ServiceMonitor per area and requires the Prometheus Operator CRDs; the other keys here are ignored while it is false. See the individual keys for the dashboards, alert rules and PodMonitors it gates. |
 | `metrics.enabled` | boolean | `true` | Render one ServiceMonitor per enabled functional area, scraping /metrics on the named graphql port. Requires the Prometheus Operator CRDs; set false on a cluster without them. |
@@ -755,6 +766,42 @@ generated from the schema; do not edit it by hand.
 | `functionalAreas.<area>.gogc` | integer | - | GOGC for this area only, overriding the top-level gogc (0 leaves Go's default of 100). The five event-path areas ship 400. |
 | `functionalAreas.<area>.goMemLimit` | string | - | GOMEMLIMIT for this area only, overriding the derivation. Use for a service whose working set genuinely differs (e.g. event-processing holds more live state than the CRUD areas). |
 | `functionalAreas.<area>.config` | object | - | This area's own configuration, written to the dct-&lt;id&gt;-config object and mounted at /etc/dct-config/&lt;area&gt;. Empty means the service applies its typed defaults; an unknown key stops the service at startup. |
+| `functionalAreas.<area>.config.security` | object | - | lwm2m-ingest: the DTLS listener settings and the pre-shared-key identities. |
+| `functionalAreas.<area>.config.security.identities` | array | - | lwm2m-ingest: one binding per pre-shared-key identity. dcctl writes these from --lwm2m-identities. |
+| `functionalAreas.<area>.config.security.identities[].deviceTypeToken` | string | - | The device type stamped on a device that autoRegister creates. When set, it must be a valid token: a letter or digit, then letters, digits, hyphens or underscores. The service refuses any other value at startup. |
+| `functionalAreas.<area>.config.ingestRateLimit` | object | - | event-sources, lwm2m-ingest and sparkplug-ingest: the platform-default per-tenant ingest ceiling. A tenant's tier overrides it. |
+| `functionalAreas.<area>.config.ingestRateLimit.readingsPerSecond` | number | - | Sustained per-tenant ingest rate, in readings per second. 0 or absent takes the service default; a negative value is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.ingestRateLimit.burst` | integer | - | Burst allowance for the ingest ceiling, in readings. 0 or absent takes the service default; a negative value is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.defaultCommandTtlSeconds` | integer | - | command-delivery: the time-to-live, in seconds, stamped on a command created without one. 0 or absent takes the service default; a negative value is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.heldCommandCeiling` | integer | - | command-delivery: the per-tenant bound on withheld commands when no tenant or tier ceiling applies. 0 or absent takes the service default; a negative value is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.sweepIntervalSeconds` | integer | - | command-delivery: how often, in seconds, the expiry and delivery sweep runs. 0 or absent takes the service default; a negative value is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.maxDispatchFailures` | integer | - | command-delivery: how many failed dispatches a command may accumulate before it is marked failed. 0 or absent takes the service default; a negative value is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.deliveryMachineryReserve` | number | - | command-delivery: the fraction of the held-command ceiling reserved for the platform's own delivery. 0 or absent takes the service default; a negative value is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.tenantPurge` | object | - | user-management: the tenant-purge coordinator's timing. Unset settings take the service defaults. |
+| `functionalAreas.<area>.config.tenantPurge.intervalSeconds` | integer | - | user-management: how often, in seconds, the tenant-purge coordinator runs a pass. 0 or absent takes the service default (60); a negative value turns the coordinator off. A value above 9223372036 (the longest a duration can hold) is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.tenantPurge.settleSeconds` | integer | - | user-management: how long, in seconds, every store must stay clean before a tenant purge completes. 0 or absent takes the service default (300); a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. The service also refuses a value that does not clear the broker's retained-message cache window. |
+| `functionalAreas.<area>.config.tenantPurge.tokenHoldSeconds` | integer | - | user-management: how long, in seconds, a deleted tenant's token stays reserved after the purge went clean. 0 or absent takes the service default (43200); a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.presence` | object | - | sparkplug-ingest: how a connected Host re-checks its asserted-active devices. Unset settings take the service defaults. |
+| `functionalAreas.<area>.config.presence.probeSeconds` | integer | - | sparkplug-ingest: how often, in seconds, a connected Host re-checks its asserted-active devices. 0 or absent takes the service default (1800); the service also refuses a written value below 60. A negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.presence.probeWindowSeconds` | integer | - | sparkplug-ingest: how long, in seconds, a probe waits for a node to answer before declaring its still-silent devices disconnected. 0 or absent takes the service default (10); the service also refuses a written value below 5 or at or above the probe interval. A negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.auth` | object | - | user-management: authentication settings. Only the token-lifetime and signing-key keys below are checked here; the service checks the rest at startup. |
+| `functionalAreas.<area>.config.auth.accessTokenTtlSeconds` | integer | - | user-management: how long, in seconds, an access token stays valid. 0 or absent takes the service default (900); a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.auth.refreshTokenTtlSeconds` | integer | - | user-management: how long, in seconds, a refresh token stays valid. 0 or absent takes the service default (604800); a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.auth.signingKeyMaxAgeDays` | integer | - | user-management: rotate the token signing key at startup once it is older than this many days. 0 or absent turns age-based rotation off; a negative value, or one above 106751, is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.auth.signingKeyRetentionDays` | integer | - | user-management: how many days a rotated-out signing key stays published so the tokens it signed keep verifying. 0 or absent takes the service default (8); a negative value, or one above 106751, is refused here and by the service at startup. With signingKeyMaxAgeDays above 0, a retention shorter than auth.refreshTokenTtlSeconds is refused by the service at startup. |
+| `functionalAreas.<area>.config.updates` | object | - | update-management: the over-the-air update settings. Unset settings take the service defaults. |
+| `functionalAreas.<area>.config.updates.sweepIntervalSeconds` | integer | - | update-management: how often, in seconds, the deadline sweep looks for stalled update attempts. 0 or absent takes the service default; a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.updates.deadlines` | object | - | update-management: how long, in seconds, each phase of an update may go without a device report. |
+| `functionalAreas.<area>.config.updates.deadlines.acknowledgeSeconds` | integer | - | update-management: how long, in seconds, QUEUED and INITIATED attempts may wait for an offline device to return. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.updates.deadlines.downloadSeconds` | integer | - | update-management: how long, in seconds, DOWNLOADING and DOWNLOADED attempts may go since the last progress report. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.updates.deadlines.verifySeconds` | integer | - | update-management: how long, in seconds, VERIFIED attempts may go without a device report. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.updates.deadlines.installSeconds` | integer | - | update-management: how long, in seconds, UPDATING attempts may go without a device report; silence becomes UNKNOWN rather than failure. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.updates.deadlines.confirmSeconds` | integer | - | update-management: how long, in seconds, REBOOTING attempts may go without a device report; silence becomes UNKNOWN rather than failure. 0 or absent takes the service default; a negative value, or one above 9223372036, is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.deliverySeconds` | integer | - | notification-management: how long, in seconds, a single channel delivery attempt (one SMTP send or webhook POST) may take. 0 or absent takes the service default; a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.stateRetentionSeconds` | integer | - | notification-management: how long, in seconds, resolved per-alarm notification state is kept before the retention sweep prunes it. 0 or absent takes the service default; a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.attemptRetentionSeconds` | integer | - | notification-management: how long, in seconds, a delivery-ledger row recording one channel delivery attempt is kept before the retention sweep deletes it. 0 or absent takes the service default; a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.retentionSweepSeconds` | integer | - | notification-management: how often, in seconds, the retention sweep runs. 0 or absent takes the service default; a negative value turns the sweep off. A value above 9223372036 (the longest a duration can hold) is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.escalationSweepSeconds` | integer | - | notification-management: how often, in seconds, the escalation scheduler checks open alarms for due re-notification. 0 or absent takes the service default; a negative value turns the sweep off, so alarms page only on event transitions. A value above 9223372036 (the longest a duration can hold) is refused here and by the service at startup. |
 | `functionalAreas.<area>.extraPorts` | array | - | Extra Service/container ports for this area beyond the 8080 graphql port (e.g. event-sources HTTP device ingest on 8081). Port names must be &lt;=15 chars per Kubernetes. |
 | `functionalAreas.<area>.extraPorts[].name` | string | - | Port name; at most 15 characters, per Kubernetes. |
 | `functionalAreas.<area>.extraPorts[].port` | integer | - | Port number, 1 to 65535. |

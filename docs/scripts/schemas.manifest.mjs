@@ -94,6 +94,7 @@ export const SCHEMAS = [
   { source: 'backend/services/dashboard-management/graphql/schema.graphql', area: 'dashboard-management' },
   { source: 'backend/services/device-management/graphql/schema.graphql', area: 'device-management' },
   { source: 'backend/services/device-state/graphql/schema.graphql', area: 'device-state' },
+  { source: 'backend/services/event-management/graphql/admin_schema.graphql', area: 'event-management' },
   { source: 'backend/services/event-management/graphql/schema.graphql', area: 'event-management' },
   { source: 'backend/services/event-processing/graphql/schema.graphql', area: 'event-processing' },
   {
@@ -168,4 +169,6 @@ export const DEVICE_SCHEMAS = [
   { source: 'backend/services/event-sources/contract/new-relationship-payload.schema.json', role: 'Payload of a NewRelationship event' },
   { source: 'backend/services/command-delivery/contract/command-delivery.schema.json', role: 'Command delivered to a device' },
   { source: 'backend/services/command-delivery/contract/command-response.schema.json', role: 'Command response sent by a device' },
+  { source: 'backend/services/event-sources/contract/command-pull.schema.json', role: 'Commands handed to a device by an HTTP pull' },
+  { source: 'backend/services/event-sources/contract/command-pull-response.schema.json', role: 'Command response sent by a device on the HTTP pull channel' },
 ];

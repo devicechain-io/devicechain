@@ -58,6 +58,11 @@ var ErrDecodeFailed = errors.New("decode failed")
 // one event may hold (the Cut A rule, applied by device-management when the route did not).
 const ReasonTooManyReadings payloaddecode.Reason = "too_many_readings"
 
+// ReasonNoDecoder is the sub-reason of a device's own uplink whose profile has no decoder (one
+// cleared after event-sources selected the wire). There is nothing to flatten a device's raw bytes
+// into, so it fails, visibly, and never becomes a reading.
+const ReasonNoDecoder payloaddecode.Reason = "no_decoder"
+
 // DecodeFailure is one refused decode. Its text leads with the sub-reason, the way the failed-events
 // record carries it (`decode_failed: no_section: ...`), and is built only from the reason, the
 // expression path, the function name and the offset, never from platform internals, so it is safe
@@ -172,6 +177,21 @@ func withIntegration(ctx context.Context, a integrationAuth) context.Context {
 	return context.WithValue(ctx, integrationAuthKey{}, a)
 }
 
+type uplinkStreamKey struct{}
+
+// withUplinkStream marks a resolve whose event was read from the integration-uplinks stream. That is
+// the provenance of a device-connection uplink: the stream is written by event-sources alone, and a
+// device cannot publish to it, so the mark is set from where the message was read and never from
+// anything in the event.
+func withUplinkStream(ctx context.Context) context.Context {
+	return context.WithValue(ctx, uplinkStreamKey{}, true)
+}
+
+func fromUplinkStreamCtx(ctx context.Context) bool {
+	v, _ := ctx.Value(uplinkStreamKey{}).(bool)
+	return v
+}
+
 func integrationFrom(ctx context.Context) (integrationAuth, bool) {
 	a, ok := ctx.Value(integrationAuthKey{}).(integrationAuth)
 	return a, ok && a.integration != nil
@@ -203,7 +223,7 @@ var decodeResults = []string{
 	string(payloaddecode.ReasonNoOutputs), string(payloaddecode.ReasonMissingInput),
 	string(payloaddecode.ReasonMapOverflow), string(payloaddecode.ReasonInputTooLarge),
 	string(payloaddecode.ReasonInputMalformed), string(payloaddecode.ReasonEnvUnsupported),
-	string(payloaddecode.ReasonCompileFailed), string(ReasonTooManyReadings),
+	string(payloaddecode.ReasonCompileFailed), string(ReasonTooManyReadings), string(ReasonNoDecoder),
 }
 
 func newDecodeMetrics(ms *core.Microservice) *DecodeMetrics {
@@ -269,8 +289,11 @@ func (m *DecodeMetrics) kindSkew(direction string) {
 //     route runs, so nothing the route accepted is lost.
 func (rez *EventResolver) HandleIntegrationUplink(ctx context.Context, device *model.Device,
 	event *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
+	// An integration's uplink carries its authenticated integration. A device's own uplink (the
+	// device-connection wire) carries none, and is accepted only from the uplink stream, where the
+	// device was authenticated by the ordinary credential policy before this point.
 	auth, ok := integrationFrom(ctx)
-	if !ok {
+	if !ok && !fromUplinkStreamCtx(ctx) {
 		return nil, uint(resolvedevent.FailureReason_Unauthenticated),
 			errors.New("an integration uplink must come from an authenticated integration")
 	}
@@ -291,6 +314,15 @@ func (rez *EventResolver) HandleIntegrationUplink(ctx context.Context, device *m
 	switch {
 	case !dec.Declared():
 		rez.decode.kindSkew(kindSkewDecoderGone)
+		if auth.integration == nil {
+			// A device's own bytes have no flatten fallback: the decoder was cleared after the wire
+			// was selected, and storing nothing silently would hide it.
+			obs := DecodeObservation{DeviceTypeId: device.DeviceTypeId, Device: device.Token, Uplink: up,
+				ProfileVersionToken: res.Scope().ProfileVersionToken, Redelivered: redeliveredFrom(ctx)}
+			obs.Tenant, _ = core.TenantFromContext(ctx)
+			return nil, uint(resolvedevent.FailureReason_DecodeFailed),
+				rez.decodeFailed(ctx, &obs, &DecodeFailure{Reason: ReasonNoDecoder, Text: string(ReasonNoDecoder) + ": the device type has no payload decoder"})
+		}
 		var done bool
 		readings, done, reason, err = rez.flattenUplink(ctx, device, auth, res.Scope().ProfileVersionToken, up)
 		if err != nil {
@@ -362,7 +394,7 @@ func (rez *EventResolver) decodeUplink(ctx context.Context, device *model.Device
 	// The link metrics are the platform's: appended after the decode by the AUTHENTICATED
 	// integration's own setting, so a decoder cannot spoof them (it cannot emit their prefix) and a
 	// route that sent them for an integration that has since turned them off does not store them.
-	if auth.integration.LinkMetrics {
+	if auth.integration != nil && auth.integration.LinkMetrics {
 		for k, v := range linkReadings(up.Link) {
 			readings[k] = v
 		}

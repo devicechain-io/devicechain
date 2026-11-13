@@ -167,6 +167,32 @@ variable "postgres_max_connections" {
   }
 }
 
+variable "postgres_max_wal_size_mib" {
+  description = <<-EOT
+    The relational store's max_wal_size in MiB. 0 (the default) leaves Postgres's own 1GB.
+
+    Set it to keep checkpoints on the checkpoint_timeout clock instead of on WAL volume: a
+    checkpoint is requested after roughly a third of max_wal_size has been written. Measured on
+    GKE at 12,000 and 16,000 events a second, the stock 1GB took four to six requested
+    checkpoints per measurement window and 4096 took one; about 8192 suits 20,000. The
+    sizing page lists the value each size was measured with.
+
+    This is the store's setting and not an instance's, so it is stated here, at install, and not
+    by a bootstrap size. CloudNativePG refuses ALTER SYSTEM, so this is the only way to change
+    it. Reload-only: changing it restarts nothing.
+
+    🔴 pg_wal sits on the data volume, so this must stay at or under a quarter of
+    postgres_storage; the plan refuses a larger value.
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.postgres_max_wal_size_mib == floor(var.postgres_max_wal_size_mib) && (var.postgres_max_wal_size_mib == 0 || var.postgres_max_wal_size_mib >= 64)
+    error_message = "postgres_max_wal_size_mib is a whole number of MiB of at least 64 (Postgres refuses to start below twice its 16 MiB segment size), or 0 to leave Postgres's own 1GB."
+  }
+}
+
 variable "postgres_storage_class" {
   description = "StorageClass for the relational Postgres data volume. Empty uses the cluster default (often reclaimPolicy Delete). FOR PRODUCTION DURABILITY set this to a StorageClass whose reclaimPolicy is Retain, so the underlying volume and its data outlive PVC/PV deletion and can still be recovered FROM. 🔴 That is the whole guarantee: a retained PV goes to Released and will not bind a new claim without someone clearing its claimRef, and a new CloudNativePG Cluster bootstraps via initdb rather than adopting an existing PGDATA. It does NOT mean a redeploy comes back up on the old volume — an earlier version of this description said it did. The supported recovery path is bootstrap.recovery from a backup."
   type        = string

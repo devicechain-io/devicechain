@@ -83,10 +83,11 @@ func pdSeverity(s string) string {
 // Deliver sends one event. recipients is ignored: the routing key picks the service.
 func (a *pagerDutyAdapter) Deliver(ctx context.Context, channel *model.NotificationChannel,
 	secret string, _ []string, msg *RenderedNotification) error {
-	cfg, err := model.ParsePagerDutyConfig(channel.Token, dcgraphql.MetadataStr(channel.Config))
+	cfg, linkBaseErr, err := model.ParsePagerDutyConfigForDelivery(channel.Token, dcgraphql.MetadataStr(channel.Config))
 	if err != nil {
 		return err
 	}
+	warnInvalidLinkBase(channel.Token, linkBaseErr)
 	if err := requireSecret(channel, secret); err != nil {
 		return err
 	}
@@ -130,6 +131,15 @@ func pagerDutyEvent(routingKey, action string, cfg *model.PagerDutyConfig, msg *
 	if a.Originator != "" {
 		details["source"] = a.Originator
 	}
+	if a.DeviceToken != "" {
+		details["deviceToken"] = a.DeviceToken
+	}
+	if a.DeviceName != "" {
+		details["deviceName"] = a.DeviceName
+	}
+	if a.DeviceTypeToken != "" {
+		details["deviceTypeToken"] = a.DeviceTypeToken
+	}
 	if a.MetricKey != "" {
 		details["metric"] = a.MetricKey
 	}
@@ -156,8 +166,15 @@ func pagerDutyEvent(routingKey, action string, cfg *model.PagerDutyConfig, msg *
 		payload["group"] = trunc(a.Originator, 255)
 	}
 	ev["payload"] = payload
+	var links []map[string]any
 	if link := alarmLink(cfg.LinkBaseURL); link != "" {
-		ev["links"] = []map[string]any{{"href": link, "text": "Open alarms in DeviceChain"}}
+		links = append(links, map[string]any{"href": link, "text": "Open alarms in DeviceChain"})
+	}
+	if link := deviceLink(cfg.LinkBaseURL, a.DeviceToken); link != "" {
+		links = append(links, map[string]any{"href": link, "text": "Open device in DeviceChain"})
+	}
+	if len(links) > 0 {
+		ev["links"] = links
 	}
 	return ev
 }

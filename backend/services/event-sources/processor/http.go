@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/tracing"
 	"io"
 	"net"
 	"net/http"
@@ -86,6 +87,15 @@ type HttpEventSource struct {
 	// integrations is the inbound-integration route (http_integration.go), set by
 	// UseIntegrations before the source starts. nil answers 503 on that route.
 	integrations *IntegrationRoute
+	// deviceUplinks is the device's own-payload route (http_device_uplink.go), set by
+	// UseDeviceUplinks before the source starts. nil means the route does not exist.
+	deviceUplinks *DeviceUplinkRoute
+	// commandPull is the HTTP command pull (http_command_pull.go), set by UseCommandPull before
+	// the source starts. nil answers 503 on its routes.
+	commandPull *CommandPullRoute
+	// checks are the synchronous refusals /events makes before it answers 202 (see
+	// IngestChecks), set by UseIngestChecks before the source starts. nil makes none.
+	checks *IngestChecks
 }
 
 // Create a new HTTP event source based on the given configuration. instanceId is
@@ -150,6 +160,11 @@ func (es *HttpEventSource) handler() http.Handler {
 	// (ADR-006); the ServeMux only matches a non-empty segment, so a missing tenant
 	// — or an event addressed to a different instance — 404s.
 	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/events", es.InstanceId), es.handleEvent)
+	// A device's own binary or vendor-JSON payload, read by the decoder on its type's profile. Only
+	// registered when enabled, so /events and every other route are untouched.
+	if es.deviceUplinks != nil {
+		mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/devices/{token}/uplink", es.InstanceId), es.handleDeviceUplink)
+	}
 	// The inbound integrations (a LoRaWAN network server or a webhook): authenticated by the
 	// integration's bearer token, read by its registered type. See http_integration.go.
 	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/integrations/{integration}", es.InstanceId), es.handleIntegration)
@@ -163,6 +178,10 @@ func (es *HttpEventSource) handler() http.Handler {
 	// front end does not forward /events, so nothing else is reachable without the instance.
 	// An instance literally named "integrations" would make /integrations/{tenant}/events
 	// ambiguous with it, so it keeps only the qualified form.
+	// The HTTP command pull: how a device on the HTTP_PULL command channel receives commands.
+	mux.HandleFunc(fmt.Sprintf("GET /%s/{tenant}/devices/{device}/commands", es.InstanceId), es.handleCommandPoll)
+	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/devices/{device}/commands/{command}/ack", es.InstanceId), es.handleCommandAck)
+	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/devices/{device}/commands/{command}/response", es.InstanceId), es.handleCommandResponse)
 	if es.InstanceId != "integrations" {
 		mux.HandleFunc("POST /integrations/{tenant}/{integration}", es.handleIntegration)
 		mux.HandleFunc("POST /integrations/{tenant}/{integration}/{messageType}", es.handleIntegration)
@@ -171,8 +190,11 @@ func (es *HttpEventSource) handler() http.Handler {
 }
 
 // handleEvent decodes a single posted event and forwards it to the shared
-// publish path. It returns 202 once the event is stored in the inbound stream, 400
-// when the body cannot be decoded, 429 when the tenant is over its ingest ceiling
+// publish path. It returns 202 once the event is stored in the inbound stream (with an
+// X-DC-Event-Id receipt), 400 when the body is not JSON or is JSON the platform
+// refuses (the latter names the value by a JSON Pointer in a JSON body), 401 when the tenant does not exist or the
+// credential in the body will not authenticate (one answer for both, see IngestChecks),
+// 429 when the tenant is over its ingest ceiling
 // (in messages before decode, or in readings after it), and 503 when it was not
 // accepted: with a Retry-After when the pipeline refused it under backpressure (a
 // reader is far behind; the event was certainly not stored), and without one when
@@ -180,11 +202,16 @@ func (es *HttpEventSource) handler() http.Handler {
 // duplicate it). The tenant's ceiling is checked first, so a tenant over it gets 429
 // even while the pipeline is refusing.
 func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
+	tracing.HTTP(w, r, "ingest.http", es.handleTracedEvent)
+}
+
+func (es *HttpEventSource) handleTracedEvent(w http.ResponseWriter, r *http.Request) {
 	tenant := r.PathValue("tenant")
 	if tenant == "" {
 		http.Error(w, "missing tenant in path", http.StatusBadRequest)
 		return
 	}
+	eventId := newEventId()
 	// A syntactically invalid tenant is knowable at request time and can never be
 	// published to a valid subject, so reject it synchronously with a 400 rather
 	// than accept (202) an event the async publish path will only drop. Mirrors the
@@ -228,7 +255,24 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	event, payload, err := es.Decoder.Decode(body, time.Time{})
 	if err != nil {
 		es.failed(es.Id, tenant, body, err)
-		http.Error(w, fmt.Sprintf("unable to decode event: %v", err), http.StatusBadRequest)
+		// Not JSON at all: nothing in it can be pointed at, so it is a plain-text 400.
+		// JSON that is well formed and says something the platform refuses is still a 400, with a JSON body
+		// that names the value (an RFC 6901 pointer), so the sender can fix the field rather than guess.
+		if IsMalformedJSON(err) {
+			http.Error(w, fmt.Sprintf("unable to decode event: %v", err), http.StatusBadRequest)
+			return
+		}
+		writeUnprocessable(w, eventId, err)
+		return
+	}
+
+	// The synchronous refusals, after the decode and before anything is charged or published: a
+	// tenant that does not exist and a credential that will not authenticate are answered by the
+	// SAME 401. The tenant check sits after the decode so a malformed body is answered the same
+	// for every tenant, and the unknown-tenant answer does not arrive measurably before the others.
+	if es.checks != nil && es.checks.refusedTenant(r.Context(), tenant) {
+		es.checks.count(es.Id, tenant, event.Device, RefusedUnknownTenant)
+		writeUnauthorized(w)
 		return
 	}
 
@@ -237,6 +281,15 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	if !es.readings(es.Id, tenant, time.Time{}, false, OriginUntrusted, readingsOf(payload)) {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "ingest rate limit exceeded for tenant (counted in readings)", http.StatusTooManyRequests)
+		return
+	}
+
+	// The credential, once the request is known to be within its tenant's own ceiling: a flood of
+	// wrong credentials is metered by that ceiling and never spends the check's bounded budget
+	// on traffic the tenant was not allowed to send.
+	if es.checks != nil && es.checks.refusedCredential(r.Context(), tenant, event) {
+		es.checks.count(es.Id, tenant, event.Device, RefusedCredential)
+		writeUnauthorized(w)
 		return
 	}
 
@@ -253,6 +306,10 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// told the caller its data was safe when it had been dropped — the same silent
 	// loss ADR-030 removes from the MQTT path, on the one transport that can
 	// actually say so. A client that retries on 503 now loses nothing.
+	if tracing.Enabled() {
+		event.TraceContext = r.Context()
+		tracing.Operation(r.Context(), "", tenant, false)
+	}
 	if err := es.decoded(es.Id, tenant, event, payload, ""); err != nil {
 		// The gate can close between the admit check and the publish; that refusal is
 		// the same answer as the one above.
@@ -268,6 +325,11 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, "unable to accept event: downstream unavailable", http.StatusServiceUnavailable)
 		return
+	}
+	// 202 carries the receipt the platform minted for this request, so a sender (or its support
+	// ticket) can quote it.
+	if eventId != "" {
+		w.Header().Set(EventIdHeader, eventId)
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -325,6 +387,9 @@ func (es *HttpEventSource) Start(ctx context.Context) error {
 // over HTTP that stopped arriving.
 func (es *HttpEventSource) ExecuteStart(ctx context.Context) error {
 	tracker := es.newConnTracker()
+	if es.commandPull != nil {
+		es.commandPull.begin()
+	}
 	server := core.NewHttpServerForHandlerWithOptions(int32(es.Port), tracker.wrap(es.handler()), core.HttpServerOptions{
 		ReadHeaderTimeout: es.Ingest.HeaderTimeout(),
 		// 🔴 ReadTimeout IS SET HERE AND NOWHERE ELSE IN THE TREE, because this listener
@@ -351,6 +416,9 @@ func (es *HttpEventSource) ExecuteStart(ctx context.Context) error {
 		ConnContext: tracker.connContext,
 	})
 	if err := server.Start(); err != nil {
+		if es.commandPull != nil {
+			es.commandPull.end()
+		}
 		return fmt.Errorf("unable to start http event source %q: %w", es.Id, err)
 	}
 	es.server = server
@@ -385,6 +453,11 @@ func (es *HttpEventSource) ExecuteStop(ctx context.Context) error {
 	server := es.server
 	if server == nil {
 		return nil
+	}
+	// Held command polls are released first: Shutdown waits for every handler, and a poll would
+	// otherwise keep a stopping source alive for the whole of its wait.
+	if es.commandPull != nil {
+		es.commandPull.end()
 	}
 	tracker := es.tracker
 	es.server, es.tracker = nil, nil

@@ -5,8 +5,12 @@ package graphql
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/limit"
+	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // EntityRefResolver resolves a uniform (type, token) entity reference (ADR-013/044).
@@ -38,6 +42,11 @@ func (r *SchemaResolver) ExistingEntityRefs(ctx context.Context, args struct {
 		return nil, err
 	}
 
+	// Above this aggregate bound at least one type is unknown or exceeds the lookup limit, so
+	// the request cannot succeed; refuse it before grouping it.
+	if len(args.Refs) > model.EntityTypeCount()*rdb.MaxLookupKeys {
+		return nil, limit.Exceeded("lookup keys", len(args.Refs), rdb.MaxLookupKeys)
+	}
 	// Group the requested tokens by entity type so each type is checked in one query.
 	byType := make(map[string][]string)
 	order := make([]string, 0)
@@ -46,6 +55,19 @@ func (r *SchemaResolver) ExistingEntityRefs(ctx context.Context, args struct {
 			order = append(order, ref.Type)
 		}
 		byType[ref.Type] = append(byType[ref.Type], ref.Token)
+	}
+
+	// Refuse what the per-type lookups below would refuse, before ANY type is queried: an
+	// unknown type, or more tokens of one type than a lookup takes. Walking the types in the
+	// same order as the lookups keeps the refusal (and its count) the one a caller got when
+	// it surfaced from the lookup itself.
+	for _, etype := range order {
+		if !model.IsEntityType(etype) {
+			return nil, fmt.Errorf("unknown entity type %q", etype)
+		}
+		if n := len(byType[etype]); n > rdb.MaxLookupKeys {
+			return nil, limit.Exceeded("lookup keys", n, rdb.MaxLookupKeys)
+		}
 	}
 
 	api := r.GetApi(ctx)

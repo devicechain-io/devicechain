@@ -9,13 +9,15 @@ title: Grafana 仪表盘
 
 仪表盘上的所有内容都来自服务已经导出的指标（参见[指标参考](./metrics-reference.md)），以及监控栈采集的标准 Kubernetes、数据库和消息代理序列。无需额外开启任何东西。
 
+本页的截图取自一个单节点本地实例，承载来自四个租户的稳定合成负载：遥测、由规则触发和清除的告警，以及由设备应答的命令。时间使用 UTC；仪表盘截图覆盖 30 分钟，中断截图覆盖 15 分钟。
+
 ## 找到仪表盘 {#finding-the-boards}
 
 [打开 Grafana](./observability.md#reaching-grafana)，找到文件夹 `devicechain-<实例>`。每个实例都有自己的文件夹和自己的一份仪表盘，标题为 `DeviceChain — <名称> [<实例>]`。仪表盘只读取所属实例的数据：没有实例选择器，一个实例的仪表盘无法显示另一个实例的数据。
 
 每个仪表盘顶部都有 **DeviceChain boards** 菜单，列出该实例的所有仪表盘；总览末尾有一行指向各阶段仪表盘的链接。唯一需要你选择的是**数据源**，即监控栈安装的 Prometheus。
 
-每个仪表盘都以同一张 **Firing alerts** 表开头。它列出此刻正在为该实例触发、且属于该仪表盘所在阶段的告警，因此阶段正常时阶段仪表盘是安静的。表为空表示没有告警触发。该表读取实例的 Prometheus 规则，如果这些规则没有安装，表会一直为空。总览列出全部告警，所以没有任何阶段仪表盘匹配的告警仍然能在总览中看到。
+每个仪表盘都以同一张 **Firing alerts** 表开头。它列出此刻正在为该实例触发、且属于该仪表盘所在阶段的告警，因此阶段正常时阶段仪表盘是安静的。表为空表示没有告警触发，Grafana 会将其显示为 *No data*。该表读取实例的 Prometheus 规则，如果这些规则没有安装，表会一直为空。总览列出全部告警，所以没有任何阶段仪表盘匹配的告警仍然能在总览中看到。
 
 ## 如何阅读面板 {#reading-a-panel}
 
@@ -26,7 +28,7 @@ title: Grafana 仪表盘
 
 ### 积压面板，以及读取方宕机时它们显示什么 {#backlog-panels}
 
-**积压**（backlog）是流中尚未交给某个读取方的消息数量。它是平台中最有用的早期预警，因为读取方比生产方慢时，会在任何故障出现之前很久就开始落后。积压的含义及其测量方式参见[持续落后的消费者](./observability.md#consumer-backlog)。
+这些**积压**（backlog）面板统计等待交给读取方的消息，加上已经交出但尚未确认的消息。单独的待交付或在途面板只统计其标题所指的部分。它是平台中最有用的早期预警，因为读取方比生产方慢时，会在任何故障出现之前很久就开始落后。积压的含义及其测量方式参见[持续落后的消费者](./observability.md#consumer-backlog)。
 
 每个读取服务都会上报自己的积压，但已经停止的服务无法上报任何东西。读取方崩溃、正在重启或被缩容到零的时候，恰恰最需要这个数字，而此刻变成空白的仪表盘毫无用处。因此积压面板有**两个来源，按顺序取用**：
 
@@ -34,6 +36,14 @@ title: Grafana 仪表盘
 2. **消息代理自己对同一读取方的计数**，取自代理的指标，在读取方不上报时使用。
 
 可以这样回退的面板会在说明里写明（*“While the reading service is down this shows the message broker's own count”*）。两个来源统计的是同一批消息，因此一个接替另一个时，面板上的曲线保持连续。
+
+![event-management 缩容到零时的等待存储事件面板：曲线持续上升。](/img/grafana/fault-persistence-backlog.webp)
+
+*`event-management`（负责存储事件的读取方）被缩容到 0 约两分半钟后的 Events waiting to be stored。读取方宕机时无法上报，因此这条曲线来自代理对同一批消息的计数，并随着事件不断到达而上升。*
+
+![event-management 扩回一个副本后的同一面板：曲线回落到零。](/img/grafana/recovered-persistence-backlog.webp)
+
+*`event-management` 扩回 1 个副本后的同一面板。读取方启动后约一分钟内积压清空。代理回退同时统计等待中和处理中的事件，直到读取方再次上报。*
 
 共有十九个面板带有代理回退：
 
@@ -51,11 +61,17 @@ Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计�
 - **回退依赖代理的指标。**监控栈会采集代理，所以默认安装下回退可用。如果你使用自己的 Prometheus 且没有采集代理，读取方停止时积压面板会像以前一样变成空白。
 - **丢失计数器没有回退。**统计流在读取方读取之前就丢弃的消息的指标卡和曲线由读取方自己计数：Ingest 的 *Messages lost before being read, over the range* 和 *…, any consumer*，以及 *Capture backlog in messages* 的第二条线（未读缺口）；Messaging 的 *Messages lost unread (range)* 和 *Messages lost unread /s*；以及总览的 *Messages lost*。读取方宕机期间这些指标卡显示 0，这并不能证明没有丢失。中断期间被丢弃的消息只有在读取方恢复后才会被计入，作为下限，并记在其恢复的时间点。中断期间请根据仍然有效的 *Share of stream capacity left unread* 判断风险：达到 100% 时，流开始丢弃读取方尚未看到的消息。参见[消费者从未读取的消息](./observability.md#unread-loss)。
 
+![同一次中断期间 Messaging 仪表盘的读取方分组：停止的读取方的未读积压和流容量占比一同上升。](/img/grafana/fault-messaging-readers.webp)
+
+*同一次中断期间的 Messaging，位于 **Readers of streams**。**Unread backlog per reader** 中停止的读取方的曲线上升（图例列出所有读取方；将鼠标悬停在曲线上可看到其名称），**Share of stream capacity left unread** 显示这部分积压占用了流限制的多少：此处不到 1%，离限制很远。*
+
 序列缺失表示“未测量”，绝不表示“没有等待的消息”。如果积压面板为空，说明两个来源都没有上报：请检查代理是否被采集（Messaging 的 *Broker servers up*），以及读取方的 durable 是否存在。
 
 ## 总览 {#overview-board}
 
-<!-- screenshots: G13 -->
+![稳定负载下的总览仪表盘：“Is everything up?”下的所有指标卡均为绿色，“Events through the pipeline”的五条曲线相互重合。](/img/grafana/overview.webp)
+
+*稳定负载下的总览。**Is everything up?** 下的每张指标卡都是绿色，**Events through the pipeline** 中的曲线相互重合：接收、匹配到设备、存储、应用到设备状态以及送入规则的事件都以相同速率推进。哪个阶段的曲线脱离了其他曲线，就打开哪个阶段的仪表盘。*
 
 **用它一眼回答“一切都在运行吗？有没有东西在丢失？”**从这里开始，再沿链接进入不是绿色的那个阶段的仪表盘。
 
@@ -82,11 +98,17 @@ Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计�
 
 实例的配置档不运行的领域根本没有 deployment，因此两张指标卡里都不会出现。
 
+![event-management 缩容到零时的总览：存储曲线脱离其他曲线，“Areas scaled to 0”以蓝色显示 1，“Areas with no pod available”保持为 0。](/img/grafana/fault-overview.webp)
+
+*`event-management` 缩容到 0 时的总览。在 **Events through the pipeline** 中，存储曲线下降，而之前的各阶段保持原有速率。**Areas scaled to 0** 以蓝色显示 1，**Areas with no pod available** 保持为 0，因为该领域是被有意停止的。*
+
 ## Ingest {#ingest-board}
 
-<!-- screenshots: G13 -->
+![稳定负载下的 Ingest 仪表盘：事件以稳定速率到达，积压增长曲线保持为零。](/img/grafana/ingest.webp)
 
-**事件没有到达、被拒绝，或 MQTT 路径承压时使用。**它覆盖前门：传输层接受什么、拒绝什么，以及等待转发的 MQTT 消息积压。
+*相同负载下的 Ingest。事件以稳定速率到达，**Arriving vs backlog growth** 中的积压增长曲线保持为零，说明实例跟得上；高于零则表示事件到达的速度快于转发的速度。这里的设备通过 HTTP 发送，因此 MQTT 捕获流保持为空。*
+
+**事件没有到达、被拒绝，或 MQTT 路径承压时使用。**它覆盖前门：传输层接受什么、拒绝什么，以及尚未完成转发的 MQTT 消息积压（等待中或处理中）。
 
 | 分组 | 显示内容 |
 | --- | --- |
@@ -101,7 +123,9 @@ Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计�
 
 ## Messaging {#messaging-board}
 
-<!-- screenshots: G13 -->
+![稳定负载下的 Messaging 仪表盘：代理服务器指标卡、CPU、内存和客户端连接，以及经过代理的消息。](/img/grafana/messaging.webp)
+
+*相同负载下的 Messaging：代理服务器、它们的 CPU、内存和客户端连接，以及经过它们的消息。当某处出现积压而你不知道在哪里时，下方的 **Readers of streams** 分组会指出是哪个读取方。*
 
 **某处变慢或积压、但你还不知道在哪里时使用。**消息代理连接所有阶段，所以这个仪表盘展示共享的底层设施：代理服务器、它们保存的流、谁在读取以及落后多少，以及各副本是否同步。
 
@@ -119,7 +143,9 @@ Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计�
 
 ## Persistence and state {#persistence-board}
 
-<!-- screenshots: G13 -->
+![稳定负载下的 Persistence 仪表盘：事件按到达速率存储，没有被拒绝的事件，等待存储的事件面板平贴在零。](/img/grafana/persistence.webp)
+
+*相同负载下的 Persistence。**Events stored per second** 与 Ingest 上的到达速率一致，**Events not stored** 为 0，存储一个事件的第 95 百分位耗时在几十毫秒，**Events waiting to be stored**（右下）平贴在零。*
 
 **事件已被接受却没有出现，或设备实时状态过期时使用。**它跟随事件进入事件存储和设备实时状态，然后检查下面的数据库。
 
@@ -139,7 +165,9 @@ Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计�
 
 ## Event processing {#event-processing-board}
 
-<!-- screenshots: G13 -->
+![稳定负载下的 Event processing 仪表盘：消费者滞后为零，处理中的消息起伏，水位线滞后保持稳定。](/img/grafana/event-processing.webp)
+
+*规则触发和清除告警并发送命令时的 Event processing。**Consumer lag** 为 0；**In-flight** 随批次的分发和确认而起伏，这在负载下是正常的。**Watermark lag** 保持平稳；持续上升的曲线表示检测正在落后于时钟。*
 
 **规则不触发、告警延迟，或反应没有被执行时使用。**它监控[事件处理](../concepts/event-processing.md)中介绍的检测与反应引擎。
 
@@ -158,7 +186,9 @@ Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计�
 
 ## Command delivery {#command-delivery-board}
 
-<!-- screenshots: G13 -->
+![规则发送命令时的 Command delivery 仪表盘：所有批量写入指标卡均为零，拒绝图表保持平坦。](/img/grafana/command-delivery.webp)
+
+*规则发送命令、设备应答时的 Command delivery。这段时间内没有任何一次以批量方式写入设备群，因此所有批量写入指标卡都为 0，拒绝图表保持平坦。规则发送的命令走分发路径；总览上的 *Commands given up* 和 *Commands that cannot be delivered* 指标卡对它们显示 0。*
 
 **指令没有到达设备，或批量写入被拒绝时使用。**
 
@@ -172,9 +202,11 @@ Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计�
 
 ## Delivery {#delivery-board}
 
-<!-- screenshots: G13 -->
+![从自动化规则交接处打开的 Delivery 仪表盘：触发告警、清除告警和发送命令动作被交给各自的接收端，没有被拒绝的动作，告警通知处理过程中没有重试。](/img/grafana/delivery.webp)
 
-**告警已经发生但没有人收到通知，或连接器、更新卡住时使用。**这是最后一程，从规则的反应到某个人或外部系统。连接器和软件更新分组会在运行对应可选服务时出现。
+*Delivery，从 **Hand-off from automation rules** 打开。规则把触发告警、清除告警和发送命令动作交给各自的接收端，没有动作被拒绝，随后的告警通知处理过程中没有重试。仪表盘的第一个分组（出站连接器）属于本实例未运行的可选服务，因此不显示数据。*
+
+**告警已经发生但没有人收到通知，或连接器、更新卡住时使用。**这是最后一程，从规则的反应到某个人或外部系统。连接器和软件更新分组属于可选服务：实例不运行某个服务时，对应分组仍留在仪表盘上，并显示 *No data*。
 
 | 分组 | 显示内容 |
 | --- | --- |
@@ -189,7 +221,9 @@ Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计�
 
 ## Platform {#platform-board}
 
-<!-- screenshots: G13 -->
+![稳定负载下的 Platform 仪表盘：没有缺失的副本，没有未就绪的 Pod，没有重启，每个 deployment 的可用副本数都等于期望值。](/img/grafana/platform.webp)
+
+*相同负载下的 Platform：没有缺失的副本，没有未就绪的 Pod，没有重启，每个 deployment 的可用副本数都等于期望值。底部的 **Memory in use against limit** 是调整服务限制之前应该查看的面板。*
 
 **某个服务看起来不健康、需要判断是服务本身还是其下的节点有问题时使用。**这是唯一一个关注进程而非消息流的仪表盘。
 

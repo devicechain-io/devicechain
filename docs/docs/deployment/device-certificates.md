@@ -8,7 +8,7 @@ This page is the operator's side of [device client certificates](../concepts/dev
 
 ## The broker build {#broker}
 
-The NATS server will not request a client certificate on its MQTT listener in the way DeviceChain needs: its configuration file can turn certificates off, or require one from every client. The platform broker is therefore DeviceChain's own `nats-server` build, `dc-nats-server`: upstream `v2.15.2` unmodified, plus one setting, applied when it starts and again on every configuration reload. The MQTT listener **requests, but does not require,** a client certificate.
+The NATS server will not request a client certificate on its MQTT listener in the way DeviceChain needs: its configuration file can turn certificates off, require one from every client, or (from `v2.15.3`, `verify: optional`) check a certificate a client presents against the server's own CA list. Device certificates chain to each tenant's trust anchors, not to that list, so the broker must accept a certificate without checking it and leave the check to the platform. The platform broker is therefore DeviceChain's own `nats-server` build, `dc-nats-server`: upstream `v2.15.3` unmodified, plus one setting, applied when it starts and again on every configuration reload. The MQTT listener **requests, but does not require,** a client certificate.
 
 - **Token and password devices are unaffected.** A client that sends no certificate connects as before. A certificate sent with a token or password username is ignored.
 - **The authentication callout does the checking.** The broker hands the certificates the client presented to the callout in device-management, which verifies the chain. The broker itself decides nothing about trust.
@@ -30,7 +30,7 @@ The server checks, by handshaking with its own MQTT port at start, after every r
 
 ### Rolling back to the upstream broker {#rollback}
 
-Set the infrastructure variables `server_image_repository = "nats"` and `server_image_tag = "2.15.2-alpine"`. Every certificate device is then refused, because the upstream broker never asks for a certificate, and `BrokerMqttClientAuthLost` says why. Nothing else is affected.
+Set the infrastructure variables `server_image_repository = "nats"` and `server_image_tag = "2.15.3-alpine"`. Every certificate device is then refused, because the upstream broker never asks for a certificate, and `BrokerMqttClientAuthLost` says why. Nothing else is affected.
 
 ## Settings {#settings}
 
@@ -101,4 +101,4 @@ For an instance that is already running, certificate authentication is switched 
 - **A certificate credential from before certificates were supported does not authenticate.** The type was refused in earlier releases, and a row that exists has no trust anchor. Create it again as a pinned credential naming an anchor.
 - **The schema gains** a trust-anchor table and columns for the anchor on credentials and provisioning profiles. The upgrade applies them; no data is rewritten.
 
-Not available yet, and not part of the upgrade: renewal of a registered device's certificate, adopting a device after its provisioning is reset, and certificate authentication over HTTP or LwM2M. The [concept page](../concepts/device-certificates.md#not-supported) has the full list, including that name-constrained CAs are refused and that there is no OCSP and no CRL fetching (revocation lists are uploaded).
+Not available yet, and not part of the upgrade: renewal of a registered device's certificate, adopting a device after its provisioning is reset, and certificate authentication over HTTP or LwM2M. The [concept page](../concepts/device-certificates.md#not-supported) has the full list, including that name-constrained CAs are refused that there is no CRL fetching (revocation lists are uploaded), and that the optional OCSP check does not yet end live sessions.

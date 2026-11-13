@@ -262,6 +262,28 @@ type Command struct {
 	// the lifecycle (SDKs, dashboards, the batch cancel) is unchanged.
 	DispatchAfter sql.NullTime
 
+	// DeliveredTime and DeliveryEvidence record that the device was observed to have the command,
+	// and how. Both are NULL until then, and NULL is the true reading of every command that
+	// predates them and of every command no channel has evidence for.
+	//
+	// 🔴 THEY ARE EVIDENCE BESIDE THE STATUS, NOT A STATUS. There is deliberately no DELIVERED
+	// state (see CommandStatus): SENT still means "dispatched toward a device", and a terminal
+	// state still means what it meant. A command can be SUCCESSFUL with a NULL delivered_time
+	// (a transport with no acknowledgement and no evidence beyond the answer), and FAILED with
+	// outcome NOT_DELIVERED and a NULL one. The two columns are written together, once, by the
+	// first piece of evidence; later evidence never replaces it.
+	DeliveredTime    sql.NullTime
+	DeliveryEvidence sql.NullString
+
+	// DeliveryMode is NULL for an ordinary two-way command and DeliveryModeOneway for one the
+	// device acknowledges and does not answer. MaxAttempts bounds how many times the HTTP pull
+	// channel hands the command out before giving up on an acknowledgement; NULL is the platform
+	// default. DeliveryAttempts counts the hand-outs, and is NULL for a command no pull ever
+	// handed out, which is also how the pull channel recognises its own commands.
+	DeliveryMode     sql.NullString
+	MaxAttempts      sql.NullInt32
+	DeliveryAttempts sql.NullInt32
+
 	// DispatchUntil is when the opening DispatchAfter belongs to CLOSES; the claims refuse the
 	// row at or after it. Every window-gated command carries both bounds, including one
 	// enqueued while its window was open (DispatchAfter is then already past), so a command
@@ -325,6 +347,12 @@ type CommandCreateRequest struct {
 	Payload     *string
 	ExpiresAt   *string
 	Metadata    *string
+	// DeliveryMode is DeliveryModeOneway for a command the device acknowledges and does not
+	// answer. MaxAttempts bounds how many times the HTTP pull channel hands the command out
+	// before giving up on an acknowledgement. Both are accepted only for a device on that
+	// channel; see requirePullChannel.
+	DeliveryMode *string
+	MaxAttempts  *int32
 }
 
 // CommandSearchCriteria is the search criteria for locating commands.

@@ -36,6 +36,12 @@ const HeaderCommandImpact = "Dc-Command-Impact"
 // so a missing header costs only the earlier refusal, never a late actuation.
 const HeaderCommandExpires = "Dc-Command-Expires"
 
+// HeaderSource is the device's whole projected source ("integration:<integration token>"), stamped
+// only for a device that reports through an inbound integration and only when the LPWAN downlink is
+// enabled. ROUTING ONLY, like HeaderTransport: the adapter finds the device's network-server link
+// from it and treats its absence as "cannot route", never as a guess.
+const HeaderSource = "Dc-Source"
+
 // DeliveryEnvelope is command-delivery's wire payload on the device-commands subject. Its fields
 // and JSON tags MUST stay byte-identical to command-delivery/processor.deliveryEnvelope: the
 // services agree on this shape with no shared type, which is why command-delivery pins it with a
@@ -54,10 +60,10 @@ type DeliveryEnvelope struct {
 	DispatchNonce string `json:"dispatchNonce,omitempty"`
 }
 
-// Reach says how far a failed command got, as the reporting transport saw it. The values MUST
+// Reach says how far a command got, as the reporting transport saw it. The values MUST
 // match command-delivery/model.Reach.
 const (
-	// ReachUnanswered: the exchange ran and nothing came back. Recorded as TIMEOUT / UNKNOWN.
+	// ReachUnanswered: the exchange ran and nothing came back. On failure, TIMEOUT / UNKNOWN.
 	ReachUnanswered = "UNANSWERED"
 	// ReachUnsent: the transport refused the command before the wire. Recorded as FAILED /
 	// NOT_DELIVERED, the proven-safe-to-retry class.
@@ -73,7 +79,8 @@ type ResponseEnvelope struct {
 	Payload      *string `json:"payload,omitempty"`
 	Error        *string `json:"error,omitempty"`
 
-	// Reach is omitted on success and empty when the device itself answered no.
+	// Reach is empty when the device answered. A successful answer carries UNANSWERED when
+	// the transport has no answer from the device, so it records no delivery evidence.
 	Reach string `json:"reach,omitempty"`
 
 	// DispatchNonce names the dispatch this outcome answers, and command-delivery REFUSES a
@@ -101,6 +108,14 @@ type ResponseWriter interface {
 // per-publish ceiling.
 func PublishResponse(w ResponseWriter, tenant, deviceToken string, env ResponseEnvelope,
 	attempts int, backoff time.Duration) error {
+	return PublishResponseContext(context.Background(), w, tenant, deviceToken, env, attempts, backoff)
+}
+
+// PublishResponseContext is PublishResponse bounded by ctx: no attempt starts once ctx is done, and
+// ctx rides the writer, so a settler that holds a lease while it answers can promise it will have
+// stopped before the lease runs out.
+func PublishResponseContext(ctx context.Context, w ResponseWriter, tenant, deviceToken string, env ResponseEnvelope,
+	attempts int, backoff time.Duration) error {
 	if attempts < 1 {
 		return fmt.Errorf("cmddownlink: publish response for command %q: attempts must be at least 1", env.CommandToken)
 	}
@@ -108,14 +123,65 @@ func PublishResponse(w ResponseWriter, tenant, deviceToken string, env ResponseE
 	if err != nil {
 		return fmt.Errorf("cmddownlink: encode response for command %q: %w", env.CommandToken, err)
 	}
-	tctx := core.WithTenant(context.Background(), tenant)
+	tctx := core.WithTenant(ctx, tenant)
 	for attempt := 0; attempt < attempts; attempt++ {
+		if cerr := ctx.Err(); cerr != nil {
+			return fmt.Errorf("cmddownlink: publish response for command %q: %w", env.CommandToken, cerr)
+		}
 		if err = w.WriteToDevice(tctx, deviceToken, messaging.Message{Value: data}); err == nil {
 			return nil
 		}
 		if attempt < attempts-1 {
-			time.Sleep(backoff)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+			}
 		}
 	}
 	return fmt.Errorf("cmddownlink: publish response for command %q: %w", env.CommandToken, err)
 }
+
+// DownlinkReport is a network server's report about a downlink, as event-sources publishes it on
+// the lpwan-downlink-events subject after the sender's bearer token proved the integration and the
+// device resolved under it. outbound-connectors matches it to the pending downlink by QueueItemID,
+// scoped to the tenant (the subject) and Integration, and to the DevEUI it enqueued for.
+type DownlinkReport struct {
+	// Integration is the token of the inbound integration whose authenticated request carried the
+	// report. A pending downlink only accepts a report from the integration it was sent through.
+	Integration string `json:"integration"`
+	// Kind is "ack" (the device's confirmation, or the network server's report that it did not
+	// confirm), "txack" (a gateway accepted the frame for transmission) or "failed" (the network
+	// server could not send it).
+	Kind string `json:"kind"`
+	// DevEUI is the report's device, canonical upper-case hex.
+	DevEUI string `json:"devEui"`
+	// QueueItemID is the network server's id for the queued downlink.
+	QueueItemID string `json:"queueItemId"`
+	// DeviceRef is the device as the network server names it when DevEUI alone does not (The Things
+	// Stack: "<application id>/<device id>"). Empty for ChirpStack.
+	DeviceRef string `json:"deviceRef,omitempty"`
+	// DeviceToken is the device token event-sources resolved the report's device to under the proven
+	// integration. Unlike every other field it is not text the network server sent: it is what the
+	// platform's own lookup answered, so a downlink is only settled by a report for the device it was
+	// sent to. Empty from an event-sources that predates it.
+	DeviceToken string `json:"deviceToken,omitempty"`
+	// Attempt, ErrorNamespace and ErrorName describe a Kind "failed" report (The Things Stack
+	// downlink_failed): the confirmed-downlink retry the failure came after (0 when the field was
+	// absent, which proto3 JSON does that for) and the network server's own name for the error. They
+	// decide whether the downlink can be said never to have been transmitted.
+	Attempt        int    `json:"attempt,omitempty"`
+	ErrorNamespace string `json:"errorNamespace,omitempty"`
+	ErrorName      string `json:"errorName,omitempty"`
+	// Acknowledged is read for Kind "ack" only.
+	Acknowledged bool  `json:"acknowledged,omitempty"`
+	FCntDown     int64 `json:"fCntDown,omitempty"`
+}
+
+// The kinds of DownlinkReport. They match integrationcodec's, spelled out here because this
+// package is a leaf of the contract between two services.
+const (
+	DownlinkReportAck   = "ack"
+	DownlinkReportTxAck = "txack"
+	// DownlinkReportFailed: the network server could not send the downlink.
+	DownlinkReportFailed = "failed"
+)

@@ -18,17 +18,20 @@
 // cases above it.
 
 import '@/i18n/config';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { authorities, scope, area } = vi.hoisted(() => ({
+const { authorities, scope, area, access } = vi.hoisted(() => ({
+  access: vi.fn(),
   authorities: { value: [] as string[] },
   // The membership's scope anchors (the `scp` claim); empty means the whole tenant.
   scope: { value: [] as string[] },
   // What area discovery answered for update-management; the Updates group reads it.
   area: { status: 'unknown' as 'available' | 'absent' | 'unknown' },
 }));
+
+vi.mock('@/lib/api/agent-policy', () => ({ getAgentApprovalAccess: access }));
 
 vi.mock('@/auth/AuthProvider', () => ({
   useAuth: () => ({ claims: { authorities: authorities.value, scopeAnchors: scope.value } }),
@@ -61,6 +64,8 @@ beforeEach(() => {
   authorities.value = [];
   scope.value = [];
   area.status = 'unknown';
+  access.mockReset();
+  access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
 });
 
 // The sidebar is an accordion: a group renders its label always, and its CHILDREN
@@ -536,5 +541,40 @@ describe('the navigation tree', () => {
   it('lists every route once', () => {
     const hrefs = navLeaves().map((l) => l.href);
     expect(new Set(hrefs).size).toBe(hrefs.length);
+  });
+});
+describe('the Approvals entry', () => {
+  it('shows the preview entry with agent:admin', () => {
+    renderWith(['agent:admin'], '/approvals');
+    expect(entry('Approvals')).toBeTruthy();
+    expect(entry('Preview')).toBeTruthy();
+    expect(screen.getByRole('link', { name: /Approvals/ }).getAttribute('href')).toBe('/approvals');
+  });
+  it('hides the entry without agent:admin', () => {
+    renderWith(['alarm:read', 'member:write'], '/alarms');
+    expect(entry('Approvals')).toBeNull();
+    expect(entry('Alarms')).toBeTruthy();
+  });
+});
+
+describe('approver navigation visibility', () => {
+  it('shows an approver without agent:admin', async () => {
+    access.mockResolvedValue({ instanceEnabled: true, canApprove: true });
+    renderWith(['alarm:write'], '/');
+    await waitFor(() => expect(entry('Approvals')).toBeTruthy());
+    expect(access).toHaveBeenCalledTimes(1);
+  });
+  it.each(['denied', 'error', 'loading', 'disabled'])('fails closed for %s', async state => {
+    if (state === 'error') access.mockRejectedValue(new Error('offline'));
+    if (state === 'loading') access.mockReturnValue(new Promise(() => {}));
+    if (state === 'disabled') access.mockResolvedValue({ instanceEnabled: false, canApprove: true });
+    renderWith(['alarm:write'], '/');
+    await waitFor(() => expect(access).toHaveBeenCalledTimes(1));
+    expect(entry('Approvals')).toBeNull();
+  });
+  it.each(['admin', 'scoped', 'no write'])('does not query standing for %s', state => {
+    if (state === 'scoped') scope.value = ['customer:one'];
+    renderWith(state === 'admin' ? ['agent:admin'] : state === 'scoped' ? ['alarm:write'] : [], '/');
+    expect(access).not.toHaveBeenCalled();
   });
 });

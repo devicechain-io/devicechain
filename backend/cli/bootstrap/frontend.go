@@ -118,39 +118,23 @@ func applyIngressControllerChoice(st *State, inst *dcv1beta1.Instance, opts Upgr
 }
 
 // recordIngressController writes the choice onto the declaration, or removes it when empty.
-// A compare-and-swap, like every declaration write.
+// A compare-and-swap, like every declaration write -- one that an operator status write does
+// not lose (updateInstanceMetadata).
 func recordIngressController(ctx context.Context, dyn dynamic.Interface, instance, value string) error {
-	inst, err := readInstanceCR(ctx, dyn, instance)
-	if err != nil {
-		return err
-	}
-	if inst == nil {
-		return fmt.Errorf("the declaration for instance %q disappeared before the front-end choice could be recorded; "+
-			"re-run to start from a clean read", instance)
-	}
-	if value == "" {
-		if _, had := inst.Annotations[AnnotationIngressController]; !had {
-			return nil
+	return updateInstanceMetadata(ctx, dyn, instance, "the front-end choice", func(inst *dcv1beta1.Instance) (bool, error) {
+		if value == "" {
+			if _, had := inst.Annotations[AnnotationIngressController]; !had {
+				return false, nil
+			}
+			delete(inst.Annotations, AnnotationIngressController)
+			return true, nil
 		}
-		delete(inst.Annotations, AnnotationIngressController)
-	} else {
 		if inst.Annotations == nil {
 			inst.Annotations = map[string]string{}
 		}
 		inst.Annotations[AnnotationIngressController] = value
-	}
-	obj, err := instanceToUnstructured(inst)
-	if err != nil {
-		return err
-	}
-	if _, err := dyn.Resource(instanceGVR).Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
-		if apierrors.IsConflict(err) {
-			return fmt.Errorf("the declaration for instance %q changed while the front-end choice was being recorded; "+
-				"something else is editing it -- re-run once you know what", instance)
-		}
-		return fmt.Errorf("recording the front-end choice on instance %q: %w", instance, err)
-	}
-	return nil
+		return true, nil
+	})
 }
 
 // clusterFrontEnd is what the cluster runs, read once.

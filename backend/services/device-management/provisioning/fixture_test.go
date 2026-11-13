@@ -160,7 +160,7 @@ func withoutKeys() option                { return func(x *fixture) { x.api.Provi
 
 func newFixture(t *testing.T, opts ...option) *fixture {
 	t.Helper()
-	tables := []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{},
+	tables := []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{},
 		&model.DeviceProfileActivation{}, &model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
 		&model.DetectionRuleScopeRef{}, &model.ProvisioningProfile{}, &model.DeviceCredential{}}
 	api := model.NewApi(&rdb.RdbManager{Database: putest.NewSQLiteDB(t, tables...)})

@@ -51,6 +51,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#instanceareaunavailable"
             summary: "an area of this instance has no pod available"
             description: "Deployment {{ "{{ $labels.deployment }}" }} wants {{ "{{ $value }}" }} pod(s) and has had none available for ten minutes, so that area is not serving. Because its pods are gone, the area also stops reporting its own readiness and metrics, and the instance overview's readiness and scrape panels will not show it: this alert and the panel for areas with no pod available are what do. Describe the deployment and its pods: kubectl describe deployment and kubectl get pods in the instance's namespace show a failing image pull, a pod that cannot be scheduled for want of CPU or memory, a failed readiness probe, or a crash before ready (kubectl logs --previous). If the area was scaled to zero by mistake, scale it back; an area you turned off on purpose has zero wanted pods and does not raise this."
 {{- end }}

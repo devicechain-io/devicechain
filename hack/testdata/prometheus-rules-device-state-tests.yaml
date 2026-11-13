@@ -81,6 +81,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicestatedroppingevents"
               summary: "device-state is discarding events it could not apply to live device state"
               description: "In the last 15 minutes, device-state gave up on events after their last delivery attempt and discarded them. Each one was not applied to its device's live state, so that device's connectivity, latest readings or last position can be out of date until a newer event for it arrives. The event history is unaffected. The usual cause is device-state's database refusing or failing its writes for longer than the redelivery window: check its database, and the device-state log for 'Giving up on', which names the write and the device."
       - eval_time: 22m
@@ -90,6 +91,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicestatedroppingevents"
               summary: "device-state is discarding events it could not apply to live device state"
               description: "In the last 15 minutes, device-state gave up on events after their last delivery attempt and discarded them. Each one was not applied to its device's live state, so that device's connectivity, latest readings or last position can be out of date until a newer event for it arrives. The event history is unaffected. The usual cause is device-state's database refusing or failing its writes for longer than the redelivery window: check its database, and the device-state log for 'Giving up on', which names the write and the device."
       - eval_time: 40m

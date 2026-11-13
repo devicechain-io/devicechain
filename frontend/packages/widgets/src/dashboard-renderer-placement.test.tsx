@@ -61,7 +61,7 @@ describe('renderer placement', () => {
   it('makes rows as tall as a cell is wide, from the grid width less its gutters', async () => {
     const c = await draw(board);
     const grid = c.querySelector('[data-grid]') as HTMLElement;
-    expect(grid.style.gridTemplateColumns).toBe('repeat(12, minmax(0, 1fr))');
+    expect(grid.style.gridTemplateColumns).toBe('repeat(12, minmax(0px, 1fr))');
     expect(grid.style.gridAutoRows).toBe('var(--dc-cell)');
     expect(grid.style.getPropertyValue('--dc-cell')).toBe('calc((100cqw - 11 * calc(8px * var(--dc-scale, 1))) / 12)');
     expect(grid.style.rowGap).toBe('var(--dc-space-1)');
@@ -98,6 +98,6 @@ describe('renderer placement', () => {
       .parentElement as HTMLElement;
     expect(frameOf('host').style.borderStyle).toBe('none'); // flat, from the canvas
     expect(frameOf('host').style.background).toBe('hsl(var(--card))');
-    expect(frameOf('badge').style.background).toBe('transparent'); // its own `none`
+    expect(frameOf('badge').style.backgroundColor).toBe('transparent'); // its own `none`
   });
 });

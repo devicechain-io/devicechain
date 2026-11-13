@@ -92,6 +92,7 @@ Start with --dry-run, which writes nothing and lists the devices in scope.`,
 func init() {
 	presenceCmd.PersistentFlags().StringVarP(&presenceTenant, "tenant", "t", "", "tenant whose devices are affected (required)")
 	presenceCmd.PersistentFlags().StringP("server", "s", "localhost", "instance host for platform API calls")
+	addInstanceTargetFlags(presenceCmd)
 	presenceCmd.PersistentFlags().Bool("tls", false, "use https for platform endpoints")
 	presenceCmd.PersistentFlags().StringVar(&presenceEmail, "email", "", "identity to authenticate as; it must be a member of the tenant (required)")
 	presenceCmd.PersistentFlags().StringVar(&presencePassword, "password", "", "password for the identity (required)")
@@ -110,8 +111,10 @@ func init() {
 }
 
 func runPresenceDemote(cmd *cobra.Command, args []string) error {
-	server, _ := cmd.Flags().GetString("server")
-	tls, _ := cmd.Flags().GetBool("tls")
+	server, tls, err := targetFlags(cmd)
+	if err != nil {
+		return err
+	}
 
 	if strings.TrimSpace(presenceTenant) == "" {
 		return fmt.Errorf("--tenant is required: presence is per-tenant, and there is no default")

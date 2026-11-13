@@ -205,10 +205,11 @@ func SplitEnvelope(msg Message, subjectTenant string, done func(string), startCl
 			return nil, true, err
 		}
 	}
+	parents := memberTraces(msg)
 	g := &memberGroup{parent: msg, acksLeft: int32(n)}
 	units = make([]EnvelopeUnit, n)
 	for i := range units {
-		member := msg
+		member := msg.memberTraceContext(parents, r.Index(i))
 		member.Value = values[i]
 		member.slot = nil // the envelope's slot is released when the envelope is acked
 		member.member = &memberInfo{index: r.Index(i)}

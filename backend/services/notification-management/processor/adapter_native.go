@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"unicode/utf8"
 
@@ -21,9 +22,9 @@ import (
 // so the destination boundary, the no-redirect policy and the per-tenant egress allowances
 // apply to them exactly as they do to a webhook; none of them dials anything itself.
 
-// alarmLinkPath is the console page a message's "open" link points at. The alarm event
-// carries the originator's numeric id, not the device token the console routes by, so the
-// link goes to the alarm list rather than to a device page it could not name.
+// alarmLinkPath is the console page a message's "open" link points at: the alarm list. When
+// the alarm event also names its device (its token), the message carries a second link to that
+// device's page; see deviceLink.
 const alarmLinkPath = "/alarms"
 
 // ackHint tells a human how to stop the escalation; it is shown only while the alarm is
@@ -69,6 +70,9 @@ func postJSON(ctx context.Context, client *http.Client, target string, secretInU
 		Headers: headers,
 		Body:    raw,
 		Auth:    httpsink.Auth{Mode: httpsink.AuthNone},
+		// Every native channel carries its credential in the URL or the body, so a
+		// reflected response body could carry it too: never put the body in an error.
+		SuppressBody: true,
 	})
 	if secretInURL {
 		err = scrubSecret(err, target)
@@ -150,6 +154,9 @@ func (a AlarmFacts) facts() [][2]string {
 	if a.Originator != "" {
 		out = append(out, [2]string{"Source", a.Originator})
 	}
+	if a.DeviceTypeToken != "" {
+		out = append(out, [2]string{"Device type", a.DeviceTypeToken})
+	}
 	if a.MetricKey != "" {
 		out = append(out, [2]string{"Metric", a.MetricKey})
 	}
@@ -169,6 +176,19 @@ func alarmLink(base string) string {
 		return ""
 	}
 	return base + alarmLinkPath
+}
+
+// deviceLinkPath is the console route of one device's page, which routes by device token.
+const deviceLinkPath = "/devices/"
+
+// deviceLink builds the link to the alarm's device page, or "" when the channel has no
+// console base URL or the event did not name the device. A device is only linkable by
+// token, so a producer that predates the token yields no link rather than a wrong one.
+func deviceLink(base, deviceToken string) string {
+	if base == "" || deviceToken == "" {
+		return ""
+	}
+	return base + deviceLinkPath + url.PathEscape(deviceToken)
 }
 
 // errNoAlarm is returned by an adapter handed a rendering that carries no alarm identity.

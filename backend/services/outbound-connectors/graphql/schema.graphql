@@ -225,10 +225,43 @@ type ConnectorVersion {
     publishedBy: String
 }
 
+"""
+The state of a webhook signing secret. The key itself is never readable: it is revealed once,
+by the mutation that mints it.
+"""
+type WebhookSigningKey {
+    """The handle a rule's httpCall action names in signingSecretRef."""
+    handle: String!
+    """True while a rotation is open: deliveries carry a signature under the new key and one under the previous key."""
+    rotating: Boolean!
+}
+
+"""
+A freshly minted webhook signing secret. This is the only response that ever contains the
+secret; store it now, it cannot be retrieved again.
+"""
+type IssuedWebhookSigningSecret {
+    """The handle a rule's httpCall action names in signingSecretRef."""
+    handle: String!
+    """The signing secret, in the form whsec_ followed by base64. Shown once."""
+    secret: String!
+    """True when this secret replaced an earlier one whose key still signs until the rotation is ended."""
+    rotating: Boolean!
+}
+
 type Query {
     """Identifies the service answering. Requires no specific authority."""
     # Non-sensitive service identity (the deployed functional area).
     outboundConnectorsInfo: ServiceInfo!
+    """
+    Returns the state of the webhook signing secret under a handle, or null if there is none.
+    Never returns the secret. Requires connector:read.
+    """
+    # Status of a signing secret; the key is write-once-read-never.
+    webhookSigningSecret(
+        """The signing handle."""
+        handle: String!
+    ): WebhookSigningKey
     """Returns the connector with the given token, or null if there is none. Requires connector:read."""
     # Look up a single connector by its token.
     connector(
@@ -286,13 +319,13 @@ type Mutation {
     version until you publish again. Fails if no connector has the token. If
     expectedUpdatedAt is given and the connector has changed since, nothing is written and
     the call fails with the message "connector was modified by another writer; reload and
-    try again" (this error carries no code). Requires connector:write.
+    try again" and extensions.code STALE_WRITE. Requires connector:write.
     """
     # Partially update the connector (draft) with the given (current) token: an omitted
     # field is left alone, an explicit null clears it. When expectedUpdatedAt is
     # supplied it is an optimistic-concurrency precondition: the update is refused if the
     # connector's updatedAt has changed since, a concurrent edit ("connector was modified
-    # by another writer; reload and try again"; this is not the CONFLICT code). Pass the
+    # by another writer; reload and try again"; code STALE_WRITE, not CONFLICT). Pass the
     # updatedAt the caller last read.
     updateConnector(
         """Current token of the connector to update."""
@@ -368,6 +401,49 @@ type Mutation {
     deleteConnector(
         """Token of the connector to delete."""
         token: String!
+    ): Boolean!
+    """
+    Mints a webhook signing secret for a handle and returns it. This is the only time the
+    secret is shown. A rule's httpCall action that names the handle in signingSecretRef then
+    signs every delivery per the Standard Webhooks specification (webhook-id,
+    webhook-timestamp and webhook-signature headers). Fails if the handle already has a
+    secret; use rotateWebhookSigningSecret to replace it. The handle is letters, digits and
+    - _ . / with no leading slash. Requires connector:write.
+    """
+    # Mint a signing key, revealed once.
+    generateWebhookSigningSecret(
+        """The signing handle."""
+        handle: String!
+    ): IssuedWebhookSigningSecret!
+    """
+    Replaces the signing secret under a handle with a new one and returns it once. The previous
+    secret keeps signing too, so each delivery carries two signatures and a receiver holding
+    either secret verifies it; call endWebhookSigningRotation once receivers have moved.
+    Fails if the handle has no secret. Requires connector:write.
+    """
+    # Rotate with overlap.
+    rotateWebhookSigningSecret(
+        """The signing handle."""
+        handle: String!
+    ): IssuedWebhookSigningSecret!
+    """
+    Ends an open rotation: the previous secret stops signing and deliveries carry one
+    signature. Fails if the handle has no secret. Requires connector:write.
+    """
+    # Close the overlap.
+    endWebhookSigningRotation(
+        """The signing handle."""
+        handle: String!
+    ): WebhookSigningKey!
+    """
+    Deletes the signing secret under a handle, both keys. Returns whether there was one. A rule
+    that still names the handle has its deliveries refused rather than sent unsigned, until a
+    secret is generated again. Requires connector:write.
+    """
+    # Remove a signing key.
+    deleteWebhookSigningSecret(
+        """The signing handle."""
+        handle: String!
     ): Boolean!
 }
 

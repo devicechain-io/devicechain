@@ -77,3 +77,39 @@ func TestDevicePublishReachesTheCaptureStreamUnaltered(t *testing.T) {
 	require.Equal(t, device, deviceFromSubject(msg.Subject),
 		"the device token could not be recovered from the delivered subject")
 }
+
+// A device's QoS-1 publish to its raw-payload topic must arrive in the capture stream on the
+// mapped subject with byte-identical payload, and the stream's subject list (built from
+// DeviceEventsSubjects) must be what stores it. The topic is "{instance}/{tenant}/devices/{device}/uplink".
+func TestDeviceUplinkPublishReachesTheCaptureStreamUnaltered(t *testing.T) {
+	nc, mqttPort := startGateway(t)
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	const name = "uplink-capture"
+	_, err = js.AddStream(&nats.StreamConfig{
+		Name: name, Subjects: messaging.DeviceEventsSubjectsWith(testInstance, true), Storage: nats.FileStorage,
+	})
+	require.NoError(t, err)
+
+	const tenant = "acme"
+	const device = "meter-1"
+	subject := messaging.DeviceUplinkSubject(testInstance, tenant, device)
+	topic := messaging.SubjectToMqttTopic(subject)
+	require.Equal(t, testInstance+"/"+tenant+"/devices/"+device+"/uplink", topic)
+
+	payload := []byte{0x00, 0x01, 0xff, 0xfe, 'd', 'c', 0x7f, '\n'}
+	sub, err := js.SubscribeSync(subject, nats.BindStream(name))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+
+	publishAsDevice(t, mqttPort, "interop-uplink", topic, string(payload))
+
+	msg, err := sub.NextMsg(15 * time.Second)
+	require.NoError(t, err, "a QoS-1 raw-payload publish never reached the capture stream")
+	require.Equal(t, subject, msg.Subject)
+	require.Equal(t, payload, msg.Data)
+	d, ok := messaging.ParseDeviceUplinkSubject(msg.Subject)
+	require.True(t, ok)
+	require.Equal(t, device, d)
+	require.Equal(t, device, deviceFromSubject(msg.Subject))
+}

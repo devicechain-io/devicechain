@@ -73,18 +73,68 @@ const (
 // and the moment OUR callback accepted it (Anchor: never the provider's optional
 // auth_time, which a provider may omit or backdate).
 type sessionRecord struct {
+	// Epoch is the identity's session epoch this sign-in was STARTED under: the epoch every
+	// token minted from it carries. A proposal's standing compares it with the identity's
+	// epoch NOW, because ending the sign-in's record after a rotation (password reset, MFA
+	// reset or disable, enrolment, identity disable) is best-effort while the rotation itself
+	// is a database write. Every rotation path starts a NEW sign-in for whoever continues, so
+	// no sid ever legitimately moves to a new epoch. A record written before this field
+	// existed has none, and reads as ended wherever the epoch is checked.
+	Epoch          string      `json:"epoch,omitempty"`
 	Email          string      `json:"email"`
 	Method         string      `json:"method"`
 	ConnectionID   uint        `json:"connection_id,omitempty"`
 	ConnectionKind iam.IdpKind `json:"connection_kind,omitempty"`
 	Anchor         time.Time   `json:"anchor"`
 	// Amr is how a PASSWORD sign-in proved who the person is (auth.AmrPasswordOnly,
-	// AmrPasswordOTP, AmrPasswordRecovery). It is written once, by startSession, and every
-	// token minted from this sign-in takes its "amr" claim from HERE and nowhere else: never
+	// AmrPasswordOTP, AmrPasswordRecovery). Written by startSession and advanced by StepUp,
+	// every token minted from this sign-in takes its "amr" claim from HERE and nowhere else: never
 	// from a token the caller presented, which a forged or older refresh token could
 	// overstate. A record written by a build that predates it has none and reads as no
 	// second factor, so a tenant that requires one refuses it. A single sign-on records none.
 	Amr []string `json:"amr,omitempty"`
+	// MfaAt is when this sign-in last VERIFIED a second factor: the code that completed it. Every
+	// token minted from the sign-in carries it as "mfa_time", copied unchanged through every
+	// refresh until StepUp advances it. A step-up check reads when a person presented a factor,
+	// rather than when a token was minted. Nil when the sign-in presented none, and for a record
+	// written before it existed, which reads as "no recent factor".
+	MfaAt *time.Time `json:"mfa_at,omitempty"`
+}
+
+// signIn is what a minted token takes from its sign-in's RECORD, and from nothing a credential
+// carries: the amr, the second-factor time, and the moment the sign-in was accepted.
+type signIn struct {
+	amr    []string
+	mfaAt  *time.Time
+	anchor time.Time
+}
+
+// options are the mint options that stamp the sign-in's facts on a token.
+func (s *signIn) options() []auth.MintOption {
+	if s == nil {
+		return nil
+	}
+	opts := amrOptions(s.amr)
+	if s.mfaAt != nil && slices.Contains(s.amr, auth.AmrMFA) {
+		opts = append(opts, auth.WithMfaTime(*s.mfaAt))
+	}
+	return opts
+}
+
+// oauthOptions are the sign-in facts an OAuth (third-party client) token carries: the amr only.
+//
+// 🔴 NEVER mfa_time. When the person last presented a second factor is a fact about the person's
+// own console session; a token handed to a third-party client must not carry it, and a step-up
+// never accepts an agent-origin token anyway (auth.StepUpFresh).
+func (s *signIn) oauthOptions() []auth.MintOption {
+	if s == nil {
+		return nil
+	}
+	return amrOptions(s.amr)
+}
+
+func (r *sessionRecord) signIn() *signIn {
+	return &signIn{amr: r.Amr, mfaAt: r.MfaAt, anchor: r.Anchor}
 }
 
 // secondFactor reports whether the sign-in passed a second factor.
@@ -92,15 +142,21 @@ func (r *sessionRecord) secondFactor() bool { return slices.Contains(r.Amr, auth
 
 // startSession records a new password sign-in for email and returns its id. amr is what the
 // sign-in presented: the password alone, or with a code (see sessionRecord.Amr).
-func (m *Manager) startSession(email string, amr []string) (auth.SessionID, error) {
-	return m.putSession(sessionRecord{Email: email, Method: SessionMethodPassword, Anchor: time.Now().UTC(), Amr: amr})
+func (m *Manager) startSession(email string, epoch string, amr []string) (auth.SessionID, error) {
+	rec := sessionRecord{Email: email, Epoch: epoch, Method: SessionMethodPassword, Anchor: time.Now().UTC(), Amr: amr}
+	if slices.Contains(amr, auth.AmrMFA) {
+		// The factor was verified by the very step that is starting this session.
+		at := rec.Anchor
+		rec.MfaAt = &at
+	}
+	return m.putSession(rec)
 }
 
 // startSsoSession records a new single sign-on for email through conn, anchored at the
 // moment the callback accepted it.
-func (m *Manager) startSsoSession(email string, conn *iam.IdpConnection, anchor time.Time) (auth.SessionID, error) {
+func (m *Manager) startSsoSession(email string, epoch string, conn *iam.IdpConnection, anchor time.Time) (auth.SessionID, error) {
 	return m.putSession(sessionRecord{
-		Email: email, Method: SessionMethodSso,
+		Email: email, Epoch: epoch, Method: SessionMethodSso,
 		ConnectionID: conn.ID, ConnectionKind: conn.Kind, Anchor: anchor.UTC(),
 	})
 }
@@ -156,7 +212,22 @@ func (m *Manager) loadSession(sid auth.SessionID, email string) (*sessionRecord,
 	if rec.Email != email {
 		return nil, errSessionEnded
 	}
+	// A password sign-in has an absolute lifetime of one refresh TTL from its anchor. The
+	// record's own expiry is a per-message KV TTL that any rewrite (a step-up) restarts, so the
+	// ceiling is enforced HERE, on every load, and not left to the bucket. Single sign-on
+	// carries its own ceiling (admitSsoSession).
+	if rec.Method == SessionMethodPassword && !rec.Anchor.IsZero() && m.clock().Sub(rec.Anchor) > m.sessionCeiling() {
+		return nil, errSessionEnded
+	}
 	return &rec, nil
+}
+
+// sessionCeiling is the absolute lifetime of a password sign-in.
+func (m *Manager) sessionCeiling() time.Duration {
+	if m.refreshTTL <= 0 {
+		return auth.DefaultRefreshTTL
+	}
+	return m.refreshTTL
 }
 
 // sessionLive reports whether the sign-in a credential names is still open.
@@ -198,17 +269,27 @@ func (m *Manager) sessionLive(sid auth.SessionID, email string) error {
 //
 // It returns the sign-in's "amr" (nil for a single sign-on), read from the SESSION RECORD. A
 // caller that mints tokens takes the claim from this and from nothing a credential carries.
-func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, su bool) ([]string, error) {
+func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, su bool) (*signIn, error) {
 	rec, err := m.loadSession(sid, id.Email)
 	if err != nil {
 		return nil, err
+	}
+	return m.admitTenantRecord(ctx, rec, id, tenant, su)
+}
+
+// admitTenantRecord applies admission to a sign-in already loaded by the caller.
+func (m *Manager) admitTenantRecord(ctx context.Context, rec *sessionRecord, id *iam.Identity, tenant string, su bool) (*signIn, error) {
+	if rec == nil || rec.Email != id.Email {
+		return nil, errSessionEnded
 	}
 	if rec.Method != SessionMethodSso {
 		if err := m.admitPasswordSession(ctx, rec, id, tenant, su); err != nil {
 			return nil, err
 		}
-		return rec.Amr, nil
+		return rec.signIn(), nil
 	}
+	// A single sign-on records no amr; its facts are only its anchor.
+	sso := &signIn{anchor: rec.Anchor}
 	conn, err := m.admitSsoSession(ctx, rec, id)
 	if err != nil {
 		return nil, err
@@ -221,14 +302,14 @@ func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.I
 		}
 		for _, t := range served {
 			if t == tenant {
-				return nil, nil
+				return sso, nil
 			}
 		}
 		return nil, errTenantAccessDenied
 	case iam.IdpKindInstance:
 		if su {
 			m.recordAuthLabeled(ctx, rdb.AuditOpSsoBreakGlass, id.Email, tenant, conn.Token)
-			return nil, nil
+			return sso, nil
 		}
 		return nil, errTenantAccessDenied
 	}

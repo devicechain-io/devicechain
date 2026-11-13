@@ -58,7 +58,7 @@ Si operas la instancia, también hay que indicar a `event-sources` en qué proxi
 
 ## Antes de conectar un remitente {#before-you-start}
 
-1. **Ten un tipo de dispositivo con un perfil.** Los dispositivos de este tipo son los que la integración puede alcanzar. Declara una [métrica](../user-guide/device-types-and-profiles.md#métricas) para cada valor decodificado del que quieras unidades o validación, con la misma clave que produce el objeto decodificado. Las claves que no declares se guardan igualmente, sin unidad.
+1. **Ten un tipo de dispositivo con un perfil.** Los dispositivos de este tipo son los que la integración puede alcanzar. Declara una [métrica](../user-guide/device-types-and-profiles.md#metrics) para cada valor decodificado del que quieras unidades o validación, con la misma clave que produce el objeto decodificado. Las claves que no declares se guardan igualmente, sin unidad.
 2. **Crea la integración.** En la consola, abre **Conectar → Integraciones** en la barra lateral y elige **Nueva integración**. Elige el **Tipo de remitente**, los **Tipos de dispositivo** que puede alcanzar y, para un servidor de red, el **Identificador del dispositivo**. Activa **Guardar métricas del enlace** si quieres datos de señal. Elige **Crear integración** y copia el token bearer del diálogo. Se muestra una sola vez; si lo pierdes, rótalo. La página Integraciones necesita el permiso `device:read` para abrirse y `device:write` para modificar.
 3. **Añade los dispositivos** con sus alias, como en la sección siguiente. Puedes hacerlo antes o después de que el remitente empiece a enviar: los mensajes de un dispositivo que aún no existe se listan para que puedas [crearlo a partir de lo visto](#unregistered).
 
@@ -129,10 +129,10 @@ ChirpStack envía los uplinks mediante una **integración HTTP** en una aplicaci
    | Event endpoint URL(s) | `https://<host>/api/integrations/{tenant}/{integration}`. ChirpStack añade `?event=up` por sí mismo. |
    | Headers | Nombre `Authorization`, valor `Bearer <bearer-token>`. |
 
-3. **Configura un códec en el perfil de dispositivo de ChirpStack** (un códec de payload en JavaScript). La plataforma guarda los valores que decodifica el servidor de red; no decodifica la trama cruda. Sin códec, ChirpStack envía la trama cruda y ningún objeto decodificado, y el uplink se [cuenta como no decodificado](#undecoded) en lugar de guardarse. Como alternativa, da al tipo de dispositivo un [decodificador de payload](./payload-decoders.md), que lee la trama cruda en DeviceChain.
+3. **Configura un códec en el perfil de dispositivo de ChirpStack** (un códec de payload en JavaScript). Sin un decodificador de perfil, la plataforma guarda los valores que decodifica el servidor de red. Si no se aplica ni un códec del servidor de red ni un decodificador de perfil, el uplink se [cuenta como no decodificado](#undecoded) en lugar de guardarse. Como alternativa, da al tipo de dispositivo un [decodificador de payload](./payload-decoders.md), que lee la trama cruda en DeviceChain.
 4. Añade los dispositivos en DeviceChain con su DevEUI como alias `lorawan.deveui`.
 
-Solo se leen los uplinks. ChirpStack envía otros eventos (join, status, confirmaciones) a la misma URL con otro valor de `event`, y se responden con `204` y se ignoran. El `deduplicationId` del uplink debe ser un UUID, como siempre envía ChirpStack; cualquier otra cosa se rechaza con `400`. La hora del mensaje es el `time` que informa ChirpStack, o la hora a la que lo recibió la plataforma cuando el campo falta.
+Los uplinks se guardan como lecturas. ChirpStack envía además los eventos `ack` y `txack` a la misma URL: una instalación con el [downlink LoRaWAN](#lorawan-downlink) activado los lee para cerrar los [downlinks confirmados](#lorawan-confirmed); sin él se responden con `204` y se ignoran sin leerlos, como los demás eventos (join, status), sea cual sea su contenido. El `deduplicationId` del uplink debe ser un UUID, como siempre envía ChirpStack; cualquier otra cosa se rechaza con `400`. La hora del mensaje es el `time` que informa ChirpStack, o la hora a la que lo recibió la plataforma cuando el campo falta.
 
 ## The Things Stack v3 {#the-things-stack}
 
@@ -150,7 +150,7 @@ The Things Stack envía los uplinks mediante un **webhook** en una aplicación.
 3. **Configura un payload formatter** en la aplicación o en el dispositivo (el LoRaWAN Device Repository ofrece uno para muchos sensores). La plataforma guarda lo que produce el formatter; no decodifica la trama cruda. Sin uno, el uplink se [cuenta como no decodificado](#undecoded). Como alternativa, da al tipo de dispositivo un [decodificador de payload](./payload-decoders.md), que lee la trama cruda en DeviceChain.
 4. Añade los dispositivos en DeviceChain con su DevEUI como alias `lorawan.deveui`, o con su id de dispositivo como alias `tts.device-id` si elegiste **Id de dispositivo**.
 
-Un mensaje enviado a cualquier otra ruta (un join accept, una confirmación de downlink) se responde con `204` y se ignora, de modo que puedes activar otros tipos de mensaje sin cambiar nada en DeviceChain, aunque no hay motivo para hacerlo. La hora del mensaje es el `received_at` del uplink, que debe estar presente y no tener más de 366 días. La clave de deduplicación es el dispositivo, el contador de tramas y esa hora juntos, porque el contador se reinicia cuando un dispositivo vuelve a unirse.
+Un mensaje enviado a cualquier otra ruta (un join accept, una localización resuelta) se responde con `204` y se ignora, igual que un evento de downlink que no pertenece a un downlink enviado por la plataforma (véase [downlink de The Things Stack](#lorawan-downlink-tts)), de modo que puedes activar otros tipos de mensaje sin cambiar nada en DeviceChain, aunque no hay motivo para hacerlo. La hora del mensaje es el `received_at` del uplink, que debe estar presente y no tener más de 366 días. La clave de deduplicación es el dispositivo, el contador de tramas y esa hora juntos, porque el contador se reinicia cuando un dispositivo vuelve a unirse.
 
 ## JSON genérico {#generic-json}
 
@@ -200,7 +200,7 @@ Con **Guardar métricas del enlace** activado, se guardan tres lecturas más con
 
 ### Uplinks sin nada que guardar {#undecoded}
 
-Un uplink que no lleva objeto decodificado, o que no tiene ningún valor numérico ni booleano, se confirma pero no guarda nada. La integración lo cuenta como **no decodificado**, y su página muestra el recuento, cuándo llegó el último y una muestra de la trama cruda en hexadecimal. La causa habitual es un perfil de dispositivo sin códec en el servidor de red. La alerta `IntegrationUndecodedHigh` avisa a un operador cuando la mayor parte del tráfico es así; consulta [Observabilidad](../deployment/observability.md).
+Sin un [decodificador de payload del perfil](./payload-decoders.md) aplicable, un uplink que no lleva objeto decodificado, o que no tiene ningún valor numérico ni booleano, se confirma pero no guarda nada. La integración lo cuenta como **no decodificado**, y su página muestra el recuento, cuándo llegó el último y una muestra de la trama cruda en hexadecimal. La causa habitual es un perfil de dispositivo sin códec en el servidor de red. Cuando se aplica un decodificador de perfil, puede decodificar la trama cruda en su lugar; una decodificación que falla no guarda nada y se informa como `DECODE_FAILED`, en vez de contarse como un payload no decodificado del servidor de red. Consulta [Motivos de rechazo del decodificador](./payload-decoders.md#refusal-reasons). La alerta `IntegrationUndecodedHigh` avisa a un operador cuando la mayor parte del tráfico es así; consulta [Observabilidad](../deployment/observability.md).
 
 ## Duplicados y reintentos {#duplicates}
 
@@ -231,7 +231,7 @@ Un servidor de red solo ve el código de estado, y algunos suspenden un webhook 
 | Respuesta | Significado |
 | --- | --- |
 | `202` | Aceptado. Incluye los mensajes de dispositivos no registrados, que se omiten, y los mensajes [descartados](#limits) porque el inquilino superó su asignación de ingesta. |
-| `204` | Un tipo de mensaje que no es un uplink (join, status, confirmación). Confirmado e ignorado. |
+| `204` | Un tipo de mensaje ignorado, como join o status, o un informe de downlink cuando el adaptador de downlink está desactivado. Los informes de downlink admitidos se procesan cuando el adaptador está activado y reciben `202`; consulta [Downlinks confirmados](#lorawan-confirmed). |
 | `400` | El cuerpo no es lo que espera el tipo de remitente de la integración: JSON no válido, un identificador ausente o mal formado, un `deduplicationId` que no es un UUID, una hora de más de 366 días, más de 100 elementos o más de 256 lecturas. No se guarda nada de la petición. |
 | `401` | Falta el token, es incorrecto o pertenece a otra integración. Un token incorrecto y una integración que no existe son indistinguibles a propósito. |
 | `403` | La integración está desactivada. No se cuenta como un inicio de sesión fallido. |
@@ -264,14 +264,185 @@ Un cambio en una integración es rápido pero no instantáneo en el endpoint, qu
 
 ## Comandos a dispositivos de integración {#commands}
 
-Un dispositivo que informa a través de una integración no tiene una conexión con DeviceChain por la que enviarle un comando, y la versión 1 no tiene downlink hacia la API de un servidor de red. Un comando a un dispositivo así **se acepta cuando lo emites** y luego **falla en el siguiente barrido de entrega** con `COMMAND_TRANSPORT_UNSUPPORTED`, porque la plataforma reconoce el transporte y no tiene forma de entregar por él. No espera en la cola hasta caducar.
+Un dispositivo que informa a través de una integración no tiene una conexión con DeviceChain por la que enviarle un comando. Salvo que el [downlink LoRaWAN](#lorawan-downlink) esté activado en tu instalación, un comando a un dispositivo así **se acepta cuando lo emites** y luego **falla en el siguiente barrido de entrega** con `COMMAND_TRANSPORT_UNSUPPORTED`, porque la plataforma reconoce el transporte y no tiene forma de entregar por él. No espera en la cola hasta caducar.
 
 Conviene conocer dos casos:
 
 - Un dispositivo que además se conecta por MQTT se juzga por el último transporte por el que informó. Mientras su último informe fue a través de la integración, sus comandos fallan; cuando informa por MQTT, se entregan.
 - Un dispositivo que nunca ha informado no tiene transporte registrado, así que sus comandos se despachan como de costumbre, y caducan sin respuesta, hasta que informa por primera vez.
 
-Para un dispositivo que debe recibir comandos, dale también una conexión MQTT. Consulta la [matriz de transportes](../reference/transport-matrix.md).
+Para un dispositivo que debe recibir comandos y no está detrás de un servidor de red ChirpStack v4, dale también una conexión MQTT. Consulta la [matriz de transportes](../reference/transport-matrix.md).
+
+## Downlink LoRaWAN (ChirpStack v4) {#lorawan-downlink}
+
+Una instalación que ejecuta los conectores de salida con el downlink activado (`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`; el chart de Helm hace entonces que la entrega de comandos despache estos comandos, y rechaza una copia de esa marca puesta a mano) envía un comando a un dispositivo detrás de un servidor de red ChirpStack v4 poniendo un downlink en la cola de ese servidor. Nada cambia en una instalación que lo deja desactivado.
+
+**1. Vincula la integración a su servidor de red.** Crea y publica un conector de tipo `lorawan_downlink`:
+
+```json
+{
+  "networkServer": "chirpstack_v4",
+  "baseUrl": "https://chirpstack.example.com",
+  "integration": "my-integration-token"
+}
+```
+
+`integration` es el token de la integración de entrada cuyos dispositivos atiende este servidor. El **secreto** del conector es una clave de API de ChirpStack con permiso para encolar downlinks (la API REST de ChirpStack v4, servida por su componente `chirpstack-rest-api`); se guarda cifrado y no se vuelve a mostrar. Solo un conector publicado puede nombrar una integración: con ninguno, o con dos, un comando se rechaza en lugar de enviarse. Como todo conector, la llamada a `baseUrl` pasa por la política de salida de la plataforma, así que un servidor en una dirección privada necesita una autorización del operador.
+
+**2. Define el comando.** Sin codificador, da al perfil del tipo de dispositivo un comando con estos parámetros de payload en bruto. Para enviar valores tipados, configura un [codificador](#lorawan-command-encoder):
+
+| Parámetro | Significado |
+| --- | --- |
+| `fPort` | El puerto de aplicación LoRaWAN, de 1 a 223. Obligatorio. |
+| `hex` o `base64` | La carga útil de la aplicación, en hexadecimal o en base64 estándar con relleno. Indica exactamente uno. Como máximo 242 bytes. |
+| `confirmed` | Opcional, por defecto `false`. `true` pide al dispositivo que acuse la trama y retiene el comando hasta que lo haga (véase [Downlinks confirmados](#lorawan-confirmed)). |
+
+Cualquier otro nombre de parámetro se rechaza.
+
+**3. Envíalo.** El dispositivo debe tener un [alias](#aliases) `lorawan.deveui`: el DevEUI se lee del dispositivo, nunca del comando. El comando sale por la integración por la que el dispositivo **informó por última vez**.
+
+**Qué significa el resultado.** En un downlink sin confirmar, `SUCCEEDED` significa que el servidor de red **encoló** el downlink (el resultado incluye `{"stage":"queued","queueItemId":...}`). No significa que el dispositivo lo haya recibido: un dispositivo de clase A solo oye los downlinks después de su siguiente transmisión, y un downlink sin confirmar no recibe acuse. Un comando así no registra evidencia de entrega (`deliveredTime` y `deliveryEvidence` permanecen en null); el acuse de un downlink confirmado registra `DEVICE_RESPONSE`. En un [downlink confirmado](#lorawan-confirmed), `SUCCEEDED` significa que el dispositivo lo acusó. Los demás resultados:
+
+| Qué ocurrió | Resultado |
+| --- | --- |
+| Un parámetro no es válido, el dispositivo no tiene DevEUI, la integración no tiene vínculo (o tiene dos), el comando caducó, o el inquilino superó su techo de llamadas de salida | `FAILED`, no entregado. Es seguro volver a enviarlo. |
+| El servidor de red lo rechazó (un 4xx: clave de API incorrecta, dispositivo desconocido, carga demasiado grande para la velocidad de datos actual del dispositivo) o no se pudo alcanzar antes de enviar nada | `FAILED`, no entregado. El motivo nombra la respuesta del servidor. |
+| La petición se envió y el servidor falló o no respondió (un 5xx, un tiempo de espera) | El resultado es **desconocido**: el downlink puede estar en cola, y enviarlo de nuevo puede enviarlo dos veces. |
+
+Consulta la métrica `lpwan_downlinks_total` por resultado para ver dónde se detienen los comandos.
+
+### Downlinks confirmados {#lorawan-confirmed}
+
+Indica `"confirmed": true` en el comando y el servidor de red pide al dispositivo que acuse la trama. El comando **no** se responde cuando el downlink se encola: permanece en `SENT` hasta que el servidor de red informa de lo ocurrido, y entonces se cierra con esa evidencia:
+
+| Qué informa el servidor de red | Comando |
+| --- | --- |
+| El dispositivo acusó la trama (`ack`, acusada) | `SUCCEEDED`. El resultado incluye `{"stage":"acknowledged",...}`. |
+| El servidor de red dejó de esperar el acuse (`ack`, no acusada) | `TIMEOUT`, resultado desconocido. El dispositivo pudo oír la trama y perderse su acuse, así que enviarlo de nuevo puede actuar dos veces. |
+| Una pasarela aceptó la trama para transmitirla (`txack`) | Se registra y el comando sigue esperando. Que una pasarela envíe una trama no es que el dispositivo la reciba. |
+| Nada antes del plazo | `TIMEOUT`, resultado desconocido. El plazo es la caducidad del propio comando, o 24 horas si no tiene. |
+
+ChirpStack solo informa de un acuse si la integración HTTP de la aplicación está configurada para enviar el evento `ack`, y debe ser la misma integración que registraste en DeviceChain (la URL y el token de arriba): el informe se lee con el token de la propia integración, de modo que solo puede cerrar comandos enviados por esa integración, a dispositivos registrados en ella. Activa también el evento `txack` si quieres que se registre la transmisión; es opcional.
+
+Un informe que no corresponde a ningún downlink en espera nunca se asocia por suposición. Se descarta, se registra en el log y se cuenta en `lpwan_ack_reports_total` (`unmatched` cuando nada espera ese elemento de la cola, `mismatch` cuando nombra otra integración u otro dispositivo); ambos merecen una alerta. Todo downlink produce un `txack`, confirmado o no, así que uno para un downlink que no está en espera se cuenta como `tx_untracked` y es normal. Durante una actualización progresiva, un pod de la versión anterior sigue rechazando un comando confirmado como no entregado, lo que es seguro volver a enviar.
+
+Consulta `lpwan_ack_reports_total` por resultado: `acknowledged`, `timed_out`, `transmitted` y `deadline` son los resultados de arriba. Un `unmatched` de vez en cuando no es un fallo: si un informe se responde pero se pierde el acuse del mensaje en el broker, el informe llega de nuevo y no encuentra nada en espera (una réplica que lo cerró hace un momento lo cuenta como `redelivered`). Alerta sobre una tasa sostenida de `unmatched` o sobre cualquier `mismatch`.
+
+Un `txack` de un downlink que solo llevaba comandos MAC no tiene elemento de cola y se responde con `204` y se cuenta (`integration_downlink_reports_total`, resultado `untracked`); un `ack` sin elemento de cola se rechaza con `400`. Los informes tienen un límite propio, separado de la telemetría: una ráfaga de 100 por inquilino y 20 por segundo sostenidos. El límite se lleva por réplica de `event-sources`, así que el techo efectivo de un inquilino es esa tasa multiplicada por el número de réplicas. Más allá, la petición se responde con `202` y se cuenta (resultado `rate_limited`), y el comando que habría cerrado se cierra en su plazo, de modo que la avalancha de un inquilino no desplaza las confirmaciones de otro.
+
+**Actualizar.** Los downlinks confirmados necesitan la nueva versión tanto de los conectores de salida como de las fuentes de eventos. Mientras los conectores de salida son nuevos y las fuentes de eventos siguen siendo antiguas, los pods antiguos responden `204` a los informes del servidor de red y los descartan, así que un downlink confirmado enviado en esa ventana se cierra como `TIMEOUT`, resultado desconocido, en su plazo. El chart los actualiza en la misma operación; para evitar la ventana, retén los comandos confirmados mientras dure.
+
+### The Things Stack v3 {#lorawan-downlink-tts}
+
+Un vínculo con The Things Stack es un conector `lorawan_downlink` con `"networkServer": "tts_v3"` y la aplicación a la que pertenecen los dispositivos:
+
+```json
+{
+  "networkServer": "tts_v3",
+  "baseUrl": "https://eu1.cloud.thethings.network",
+  "integration": "my-integration-token",
+  "applicationId": "my-application"
+}
+```
+
+El **secreto** del conector es una clave de API con derecho a escribir el tráfico de downlink de esa aplicación. El dispositivo debe tener un [alias](#aliases) `tts.device-id`, que es el nombre por el que The Things Stack lo direcciona, en lugar de un DevEUI; se lee del dispositivo, nunca del comando. Los parámetros del comando son los mismos que para ChirpStack, y el downlink se añade al final de la cola del dispositivo.
+
+En un downlink **sin confirmar**, `SUCCEEDED` vuelve a significar que el servidor de red lo aceptó. En uno **confirmado**, la plataforma da a cada downlink un identificador propio (The Things Stack no devuelve ninguno), enviado como un correlation id que empieza por `dc:`, y cierra el comando con los eventos que The Things Stack publica para ese downlink. En el webhook de la aplicación, activa los eventos de downlink y da a cada uno su propia ruta bajo la URL de la integración, con una ruta que **empiece por `downlink`**: por ejemplo `/downlink-ack`, `/downlink-nack`, `/downlink-sent` y `/downlink-failed`.
+
+| Qué informa The Things Stack | Comando |
+| --- | --- |
+| `downlink_ack`: el dispositivo acusó la trama | `SUCCEEDED`. |
+| `downlink_nack`: el dispositivo no la acusó | `TIMEOUT`, resultado desconocido. El dispositivo pudo oír la trama y perderse su acuse, así que enviarlo de nuevo puede actuar dos veces. Véase la nota sobre reintentos más abajo. |
+| `downlink_sent`: una pasarela transmitió la trama | Se registra y el comando sigue esperando. |
+| `downlink_failed`, y el propio servidor de red nombra un descarte antes de transmitir (un downlink confirmado puesto en cola para un dispositivo multicast), sin reintento ni transmisión informada antes | `FAILED`, no entregado. Es seguro volver a enviarlo. |
+| Cualquier otro `downlink_failed` | `TIMEOUT`, resultado desconocido. La trama pudo transmitirse: véase abajo. |
+| Nada antes del plazo | `TIMEOUT`, resultado desconocido. |
+
+**Reintentos tras un nack.** Tras un `downlink_nack`, The Things Stack vuelve a poner en cola por sí mismo un downlink confirmado (hasta 8 veces más por defecto), y cada reintento es un downlink nuevo sobre el que el dispositivo puede actuar. DeviceChain cierra el comando en el primer nack, así que el dispositivo aún puede ejecutarlo después, y el acuse de un reintento llega con el comando ya cerrado y se descarta como sin correspondencia. Para mantener pequeña esa ventana, la plataforma establece `confirmed_retry.max_attempts` en 1 en cada downlink confirmado que envía (el valor más bajo que acepta The Things Stack), de modo que hay como máximo un reintento.
+
+**Por qué solo algunos `downlink_failed` son «no entregado».** El servidor de red emite `downlink_failed` cuando descarta un downlink en cola que nunca programó (los casos de la tabla) y cuando una pasarela informa de que no pudo transmitir. El Application Server también lo emite, cuando renuncia a reintentar un downlink confirmado que **sí** se transmitió (se agotan los reintentos o falla volver a ponerlo en cola). Como el evento no dice cuál de los dos es, DeviceChain responde `FAILED` solo para los errores propios del servidor de red previos a la transmisión, y nunca para un downlink informado como transmitido o reintentado; cualquier otro `downlink_failed` es `TIMEOUT`. Eso incluye una sesión desconocida, una carga demasiado grande, un downlink caducado, un fallo de programación en la pasarela (hora absoluta o rutas fijas no válidas) y el error de transmisión propio de una pasarela: si una llamada de programación a una pasarela falla de forma ambigua, el servidor de red vuelve a poner el elemento en cola sin contar un reintento ni informar de transmisión, de modo que un descarte posterior por cualquiera de esos motivos no se distingue del de un elemento que nunca se intentó. Solo el caso multicast, una propiedad estática del dispositivo, es seguro.
+
+Un informe se asocia a su comando solo por el correlation id `dc:` que puso la plataforma, y solo cuando nombra la aplicación y el dispositivo a los que se envió el downlink (y el dispositivo que resolvió la propia DeviceChain coincide), por la integración por la que se envió; los identificadores de traza propios del servidor de red no se usan nunca. Un downlink puesto en cola a mano en la consola de The Things Stack no lleva ese id, y sus eventos se ignoran. Las discrepancias y los informes sin correspondencia se cuentan y descartan como se describió arriba. Un webhook enviado a la URL base sin ruta no nombra ningún tipo de mensaje, así que sus informes se tratan como telemetría y pueden descartarse cuando el inquilino supera su techo de mensajes; da a cada tipo su propia ruta.
+
+**Activarlo en una instalación en marcha.** El downlink se activa con una sola actualización de Helm, y mientras los pods se reinician, los pods de entrega de comandos que aún no se han reiniciado siguen haciendo fallar de inmediato un comando a un dispositivo de integración, como antes de que existiera el downlink, con `COMMAND_TRANSPORT_UNSUPPORTED`. No se envía nada por ese comando y es seguro emitirlo de nuevo cuando termine la actualización. Para evitar esa ventana, pausa los comandos a dispositivos de integración mientras dure la actualización. Un comando emitido en los minutos previos al primer arranque del adaptador se recoge igualmente cuando este arranca.
+
+### Codificar comandos a partir de parámetros tipados {#lorawan-command-encoder}
+
+Una definición de comando puede incluir una cadena JSON `encoder` opcional. Publica
+el perfil para activarla. Se aplica tanto a ChirpStack v4 como a The Things Stack v3.
+El codificador vigente al despachar el comando es el que se aplica; una nueva
+publicación se aplica a los comandos despachados después de ella, incluidos los que
+ya estaban en cola. La definición publicada se consulta de nuevo en cada despacho,
+sin conservar el codificador en caché entre publicaciones. Si la consulta falla o
+devuelve una respuesta incompleta, se reintenta: el comando queda pendiente y no se
+envía nada. Un problema definitivo de la definición (codificador inválido,
+definiciones de comando duplicadas o comando ausente de un vocabulario publicado
+restringido) rechaza el comando como **no enviado**.
+Este documento concatena constantes, números escalados, booleanos y bits:
+
+```json
+{
+  "fPort": 10,
+  "confirmed": false,
+  "fields": [
+    {"const": "01ff"},
+    {"param": "level", "type": "u16be", "scale": 0.1, "offset": 0},
+    {"param": "enabled", "type": "bool"},
+    {"bits": {"type": "u8", "fields": [
+      {"param": "mode", "shift": 0, "width": 3},
+      {"param": "armed", "shift": 3, "width": 1}
+    ]}}
+  ]
+}
+```
+
+`fPort` es obligatorio, de 1 a 223. `confirmed` vale false por defecto y mantiene
+el requisito del canal de acuses indicado arriba. Se admiten 1–32 campos ordenados
+y un total de 1–242 bytes. Las constantes son hexadecimales de longitud par.
+Los tipos numéricos son `u8`, `i8`, `u16be`, `u16le`, `i16be`, `i16le`, `u32be`,
+`u32le`, `i32be` e `i32le`. `bool` genera `00` o `01`. Los bits usan un tipo entero,
+deben caber sin solaparse y dejan a cero las posiciones no especificadas.
+
+Para un termostato, declara `setpoint` como `DOUBLE` y `mode` como `INT` en
+`parameterSchema`, y usa este codificador:
+
+```json
+{
+  "fPort": 12,
+  "fields": [
+    {"param": "setpoint", "type": "i16be", "scale": 0.1},
+    {"bits": {"type": "u8", "fields": [
+      {"param": "mode", "shift": 0, "width": 3}
+    ]}}
+  ]
+}
+```
+
+El payload `{"setpoint":21.5,"mode":3}` produce `00d703` en hexadecimal, o `ANcD`
+en base64, en el puerto 12. El cálculo invierte el decodificador:
+`raw = (value - offset) / scale`. La escala vale 1 por defecto y su magnitud debe estar entre `1e-9` y `1e9`.
+El desplazamiento vale 0 por defecto y su magnitud no puede superar `1e9`; ambos deben
+ser finitos. Las combinaciones de escala y desplazamiento que dejan muy poca precisión
+`float64` para la tolerancia de `1e-6` del entero raw se rechazan al guardar la
+definición, aunque ambos valores cumplan sus límites individuales. Aumenta la
+magnitud de la escala o reduce la del desplazamiento para corregirlo. El rango del
+valor raw se comprueba antes de redondear, con una tolerancia de `1e-6` en los límites
+para errores de coma flotante. Con escala 1 y
+desplazamiento 0 se exige un entero exacto; otras transformaciones admiten una
+tolerancia de `1e-6`. La magnitud de entrada no puede superar `1e15`, y las magnitudes
+de entrada y raw deben ser menores que `2^53`. Nada se redondea ni se trunca en silencio: `215.4` con escala 1 se rechaza. NaN, infinito,
+valores fuera de rango, tipos JSON incorrectos o parámetros ausentes rechazan el
+comando como **no enviado**, antes de llamar a la red. Los valores predeterminados
+del esquema son sugerencias de edición y nunca se insertan.
+
+Cada parámetro del codificador debe ser único y estar declarado con un tipo escalar
+compatible: `INT` o `DOUBLE` para números, `BOOLEAN` para booleanos y valores enteros
+dentro de su anchura para bits (anchura 1 también admite `BOOLEAN`). Se rechazan las claves de payload no utilizadas y las claves JSON duplicadas.
+Las claves desconocidas del codificador se rechazan. Un codificador requiere un esquema de
+parámetros no vacío, que no puede declarar
+`fPort`, `hex`, `base64` ni `confirmed`: el codificador controla puerto y confirmación.
+Borrar `encoder` restaura el contrato raw. Una definición sin codificador conserva
+sin cambios el contrato `fPort` más `hex` o `base64`.
 
 ## Qué puede hacer un token de integración {#trust}
 
@@ -289,7 +460,7 @@ Consulta el [modelo de seguridad](../concepts/security-model.md).
 
 ## No incluido en la versión 1 {#not-supported}
 
-- **Downlink.** No se pueden enviar comandos a un dispositivo a través de un servidor de red. Consulta [Comandos a dispositivos de integración](#commands).
+- **Downlink hacia remitentes genéricos.** El [downlink LoRaWAN](#lorawan-downlink) cubre ChirpStack v4 y The Things Stack v3, con cargas útiles en bruto o [parámetros tipados codificados](#lorawan-command-encoder). Los comandos a cualquier otro dispositivo de integración fallan como se describe en [Comandos a dispositivos de integración](#commands).
 - **Payloads firmados.** No hay comprobación de HMAC ni de firma en una petición. El token bearer es la única credencial, y el transporte debe ser TLS.
 - **Mensajes join, status y de ubicación.** Se confirman y se ignoran.
 - **Creación automática de dispositivos.** Un identificador desconocido se lista, no se crea. Añades el dispositivo tú mismo, desde la lista.
@@ -305,7 +476,7 @@ Consulta el [modelo de seguridad](../concepts/security-model.md).
 | El remitente informa `400` | Lee el cuerpo de la respuesta; nombra el campo. Causas habituales: un DevEUI que no tiene 16 dígitos hexadecimales, un `deduplicationId` que no es un UUID y una hora de más de 366 días. |
 | El remitente informa `202` pero no se guarda nada | El dispositivo no tiene un alias que coincida, o su tipo está fuera del alcance de la integración: mira en **Dispositivos no registrados vistos**. O el uplink no tenía nada que guardar: mira el recuento de no decodificados. O el inquilino superó su asignación: consulta `IntegrationShedAccepted`. |
 | **Uplinks sin nada que leer** sigue creciendo | El perfil de dispositivo del servidor de red no tiene códec ni payload formatter, o su salida solo contiene cadenas. |
-| Los valores se guardan sin unidad | No hay ninguna [métrica](../user-guide/device-types-and-profiles.md#métricas) declarada para esa clave en el perfil del dispositivo. La clave es la ruta unida con puntos (`battery.voltage`). |
+| Los valores se guardan sin unidad | No hay ninguna [métrica](../user-guide/device-types-and-profiles.md#metrics) declarada para esa clave en el perfil del dispositivo. La clave es la ruta unida con puntos (`battery.voltage`). |
 | Un servidor de red alojado no consigue conectar | La instancia sirve un certificado autofirmado. Usa un certificado de una CA pública. |
 | Todos los remitentes comparten un mismo límite de peticiones | Los proxies que hay delante de `event-sources` no son de confianza. Consulta [Direcciones de cliente y proxies de confianza](../deployment/bootstrap.md#trusted-proxies). |
 

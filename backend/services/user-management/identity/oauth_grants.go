@@ -420,7 +420,7 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 			gerr = errServer(errGrantUnavailable)
 		}
 	} else {
-		grant, gerr = m.resolveScopedGrant(ctx, claims.Username, claims.SessionEpoch, claims.SessionID, claims.Tenant, scope, claims.Scope)
+		grant, gerr = m.resolveScopedGrant(ctx, claims.Username, claims.SessionEpoch, claims.SessionID, claims.Tenant, scope, claims.Scope, claims.ClientId)
 	}
 	if gerr != nil {
 		if gerr.Code != "server_error" {
@@ -508,7 +508,7 @@ func checkRefreshClientBinding(boundClientID, requestClientID, boundScope string
 // identity, or one whose session has ended since (a password reset), fails the
 // grant, as do a lost membership and a denied tenant.
 func (m *Manager) mintScopedGrant(ctx context.Context, email string, epoch auth.SessionEpoch, sid auth.SessionID, tenant, accessScope, refreshScope string, audience []string, clientID string) (*OAuthTokens, error) {
-	grant, gerr := m.resolveScopedGrant(ctx, email, epoch, sid, tenant, accessScope, refreshScope)
+	grant, gerr := m.resolveScopedGrant(ctx, email, epoch, sid, tenant, accessScope, refreshScope, clientID)
 	if gerr != nil {
 		return nil, gerr
 	}
@@ -533,9 +533,9 @@ type scopedGrant struct {
 	// so MCP tools — which forward the caller's own token — inherit it. Unscoped for a
 	// superuser and for a membership with no scope.
 	anchors auth.Scope
-	// amr is the sign-in's, read from its session record (never from the code or refresh token
-	// presented), and stamped on both tokens.
-	amr []string
+	// amr is the sign-in's facts (amr, second-factor time, anchor), read from its session record
+	// (never from the code or refresh token presented), and stamped on both tokens.
+	amr *signIn
 }
 
 // resolveScopedGrant is the READ half of mintScopedGrant: it re-resolves the identity's
@@ -543,14 +543,21 @@ type scopedGrant struct {
 // split out so RefreshOAuth can do every read before it consumes the refresh token. A
 // policy refusal is invalid_grant or invalid_scope; a store error is a server_error with
 // fixed text (errGrantUnavailable), its cause logged rather than returned.
-func (m *Manager) resolveScopedGrant(ctx context.Context, email string, epoch auth.SessionEpoch, sid auth.SessionID, tenant, accessScope, refreshScope string) (scopedGrant, *oauthError) {
-	accessAllow, err := scopeAllowance(accessScope)
-	if err != nil {
-		return scopedGrant{}, errInvalidScope(err.Error())
-	}
-	refreshAllow, err := scopeAllowance(refreshScope)
-	if err != nil {
-		return scopedGrant{}, errInvalidScope(err.Error())
+func (m *Manager) resolveScopedGrant(ctx context.Context, email string, epoch auth.SessionEpoch, sid auth.SessionID, tenant, accessScope, refreshScope, clientID string) (scopedGrant, *oauthError) {
+	// Every requested scope must be one this instance grants now: an act:* scope on an instance
+	// whose flag was turned off since the grant fails here, before anything is read.
+	for _, s := range []string{accessScope, refreshScope} {
+		if len(auth.ParseScope(s)) == 0 {
+			return scopedGrant{}, errInvalidScope("no scope requested")
+		}
+		for _, one := range auth.ParseScope(s) {
+			if !auth.IsSupportedScopeFor(one, m.agentActuation) {
+				if auth.IsActScope(one) {
+					return scopedGrant{}, errInvalidGrant(errActRefused)
+				}
+				return scopedGrant{}, errInvalidScope(fmt.Sprintf("unknown scope %q", one))
+			}
+		}
 	}
 	// Defence in depth: the tenant reaches the superuser branch of
 	// resolveTenantGrant with no DB lookup, so grammar-check it here (as SelectTenant
@@ -588,14 +595,40 @@ func (m *Manager) resolveScopedGrant(ctx context.Context, email string, epoch au
 		return scopedGrant{}, errServer(errGrantUnavailable)
 	}
 
-	// Cap the identity's *effective* authorities (the same set the console token
-	// would carry, viewer baseline included) to each token's scope allowance.
-	// Intersect caps even the superuser "*" to the allowance, so an OAuth session
-	// can never exceed its scope.
+	// The act:* admission, re-read now, at redemption and at every refresh alike: the flag, the
+	// superuser refusal, the client's registration, the operator's suspension and the tenant's
+	// published policy and client allowlist. The refresh scope is the grant's whole scope, so
+	// checking it covers a narrowed access scope too. A refusal is invalid_grant: the grant this
+	// code or token stands for is no longer one the tenant allows.
+	if auth.HasActScope(refreshScope) || auth.HasActScope(accessScope) {
+		if oerr := m.admitActScopes(ctx, tenant, clientID, refreshScope+" "+accessScope, su, false); oerr != nil {
+			if oerr.Code == "server_error" {
+				return scopedGrant{}, oerr
+			}
+			return scopedGrant{}, errInvalidGrant(oerr.Desc)
+		}
+		if oerr := m.checkActSessionCap(ctx, tenant, amr); oerr != nil {
+			return scopedGrant{}, oerr
+		}
+	}
+
+	// Derive-or-intersect (grantAuthorities): the read scopes cap the identity's *effective*
+	// authorities (the set the console token would carry, viewer baseline included) exactly as
+	// before, and the act scopes derive proposal authorities from its writes. Neither path ever
+	// emits "*" or a raw write, so an OAuth session can never exceed its scope.
+	scoped := anchors.IsScoped() && !su
+	accessCapped, err := grantAuthorities(authorities, su, scoped, accessScope)
+	if err != nil {
+		return scopedGrant{}, errInvalidScope(err.Error())
+	}
+	refreshCaps, err := grantAuthorities(authorities, su, scoped, refreshScope)
+	if err != nil {
+		return scopedGrant{}, errInvalidScope(err.Error())
+	}
 	return scopedGrant{
 		email: email, tenant: tenant, epoch: auth.SessionEpoch(id.SessionEpoch), sid: sid, roles: roles,
-		accessCapped: capToScope(authorities, su, accessAllow),
-		refreshCaps:  capToScope(authorities, su, refreshAllow),
+		accessCapped: accessCapped,
+		refreshCaps:  refreshCaps,
 		accessScope:  accessScope, refreshScope: refreshScope, su: su, anchors: anchors, amr: amr,
 	}, nil
 }
@@ -610,15 +643,15 @@ func (m *Manager) mintScoped(g scopedGrant, audience []string, clientID string) 
 	var access auth.IssuedToken
 	var err error
 	if g.anchors.IsScoped() && !g.su {
-		access, err = issuer.IssueScopedOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.anchors, clientID, uuid.NewString(), amrOptions(g.amr)...)
+		access, err = issuer.IssueScopedOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.anchors, clientID, uuid.NewString(), accessMintOptions(g)...)
 	} else {
-		access, err = issuer.IssueOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.su, clientID, uuid.NewString(), amrOptions(g.amr)...)
+		access, err = issuer.IssueOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.su, clientID, uuid.NewString(), accessMintOptions(g)...)
 	}
 	if err != nil {
 		return nil, errServer(err.Error())
 	}
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueOAuthRefresh(g.tenant, g.email, g.epoch, g.sid, g.roles, g.refreshCaps, g.refreshScope, audience, clientID, refreshJti, amrOptions(g.amr)...)
+	refresh, err := issuer.IssueOAuthRefresh(g.tenant, g.email, g.epoch, g.sid, g.roles, g.refreshCaps, g.refreshScope, audience, clientID, refreshJti, g.amr.oauthOptions()...)
 	if err != nil {
 		return nil, errServer(err.Error())
 	}
@@ -631,6 +664,18 @@ func (m *Manager) mintScoped(g scopedGrant, audience []string, clientID string) 
 		Scope:        g.accessScope,
 		ExpiresIn:    expiresInSeconds(access.ExpiresAt, time.Now()),
 	}, nil
+}
+
+// accessMintOptions are the claims an OAuth ACCESS token carries beyond its scope: the sign-in's
+// amr and the sid of the grant session it descends from.
+//
+// 🔴 THE SID IS WHAT LETS A JOURNAL ROW OR A GATE NAME THE GRANT. The refresh token has always
+// carried it; the access token, which is the one that reaches the data plane, did not. It is
+// additive: a validator that has never heard of the claim ignores it, and a token without it
+// (one minted before the claim existed) is read as "session unknown", never as a match
+// (auth.SameSession).
+func accessMintOptions(g scopedGrant) []auth.MintOption {
+	return append(g.amr.oauthOptions(), auth.WithSessionID(g.sid))
 }
 
 // expiresInSeconds is the OAuth expires_in of an access token: the seconds from now until

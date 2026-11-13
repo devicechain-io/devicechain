@@ -86,6 +86,7 @@ const sidebars: SidebarsConfig = {
           collapsed: false,
           items: [
             'concepts/event-processing',
+            'concepts/automation-change-review',
             'concepts/geofencing',
             'concepts/ai-authoring',
             'concepts/outbound-connectors',
@@ -202,6 +203,7 @@ const sidebars: SidebarsConfig = {
           items: [
             'guides/sending-commands',
             'guides/commanding-a-fleet',
+            'guides/scheduling-a-fleet',
             'guides/maintenance-windows',
             'guides/signing-updates',
             'guides/building-an-updatable-device',
@@ -211,7 +213,12 @@ const sidebars: SidebarsConfig = {
           type: 'category',
           label: 'Alerts',
           collapsed: false,
-          items: ['guides/notification-channels'],
+          items: [
+            'guides/notification-channels',
+            'guides/signed-webhooks',
+            'guides/testing-your-rules',
+            'guides/reviewing-a-rule-change',
+          ],
         },
         {
           type: 'category',
@@ -291,6 +298,7 @@ const sidebars: SidebarsConfig = {
           collapsed: false,
           items: [
             'deployment/observability',
+            'deployment/alert-runbook',
             'deployment/grafana-boards',
             'deployment/metrics-reference',
             'deployment/tuning-an-instance',
@@ -310,6 +318,7 @@ const sidebars: SidebarsConfig = {
             'deployment/releases-and-upgrades',
             'deployment/versioning-policy',
             'deployment/verifying-releases',
+            'deployment/security-process',
             // The label's translations live under `sidebar.docs.link.All releases on GitHub`.
             {
               type: 'link',

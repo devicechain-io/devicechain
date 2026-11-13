@@ -24,6 +24,11 @@ var SchemaContent string
 // keyed by device type and lives on the processor's CachedApi).
 const ContextCachedApiKey = gqlcore.ContextKey("cached-api")
 
+// ContextDeviceAuthModeKey carries the configured device authentication mode (one of the
+// config.AuthMode* constants) into the GraphQL context, so checkDeviceCredential applies the
+// policy the event resolver applies rather than one of its own.
+const ContextDeviceAuthModeKey = gqlcore.ContextKey("device-auth-mode")
+
 type SchemaResolver struct{}
 
 // Get rdb manager from context.

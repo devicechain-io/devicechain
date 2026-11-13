@@ -149,10 +149,12 @@ func assetTypeFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "assetType",
 		Token:   "at-1",
-		Migrate: []any{&AssetType{}, &Asset{}},
+		Migrate: []any{&AssetType{}, &Asset{}, &SemanticContext{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
+			seedSemanticContext(t, api, ctx)
 			if _, err := api.CreateAssetType(ctx, &AssetTypeCreateRequest{
-				Token: "at-1", Name: strp(brandedSeed.Name), Description: strp(brandedSeed.Description),
+				SemanticTypes: strs(iriStreetlightCabinet),
+				Token:         "at-1", Name: strp(brandedSeed.Name), Description: strp(brandedSeed.Description),
 				ImageUrl: strp(brandedSeed.ImageUrl), Icon: strp(brandedSeed.Icon),
 				BackgroundColor: strp(brandedSeed.Bg), ForegroundColor: strp(brandedSeed.Fg),
 				BorderColor: strp(brandedSeed.Border), Metadata: strp(brandedSeed.Metadata),
@@ -166,6 +168,7 @@ func assetTypeFamily() putest.Family[*Api] {
 			e := requireOne(t, "asset type", rows, err)
 			got := readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
 			got["propertySchema"] = jsonStr(e.PropertySchema)
+			got["semanticTypes"] = putest.RenderStringList(e.SemanticTypes)
 			return got
 		},
 		NewRequest: func() any { return new(AssetTypeUpdateRequest) },
@@ -190,6 +193,8 @@ func assetTypeFamily() putest.Family[*Api] {
 			putest.OptionalStringField("propertySchema", seededPropertySchema,
 				`[{"name":"vendor","dataType":"STRING"},{"name":"stages","dataType":"INT"}]`,
 				func(r *AssetTypeUpdateRequest) *dcgraphql.OptionalString { return &r.PropertySchema }),
+			putest.OptionalStringListField("semanticTypes", []string{iriStreetlightCabinet}, []string{iriElectricalMeter},
+				func(r *AssetTypeUpdateRequest) *dcgraphql.OptionalStringList { return &r.SemanticTypes }),
 		),
 	}
 }
@@ -198,10 +203,12 @@ func customerTypeFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "customerType",
 		Token:   "ct-1",
-		Migrate: []any{&CustomerType{}, &Customer{}, &IssuedCustomerToken{}},
+		Migrate: []any{&CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &SemanticContext{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
+			seedSemanticContext(t, api, ctx)
 			if _, err := api.CreateCustomerType(ctx, &CustomerTypeCreateRequest{
-				Token: "ct-1", Name: strp(brandedSeed.Name), Description: strp(brandedSeed.Description),
+				SemanticTypes: strs(iriPublicAdmin),
+				Token:         "ct-1", Name: strp(brandedSeed.Name), Description: strp(brandedSeed.Description),
 				ImageUrl: strp(brandedSeed.ImageUrl), Icon: strp(brandedSeed.Icon),
 				BackgroundColor: strp(brandedSeed.Bg), ForegroundColor: strp(brandedSeed.Fg),
 				BorderColor: strp(brandedSeed.Border), Metadata: strp(brandedSeed.Metadata),
@@ -212,14 +219,16 @@ func customerTypeFamily() putest.Family[*Api] {
 		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.CustomerTypesByToken(ctx, []string{"ct-1"})
 			e := requireOne(t, "customer type", rows, err)
-			return readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
+			got := readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
+			got["semanticTypes"] = putest.RenderStringList(e.SemanticTypes)
+			return got
 		},
 		NewRequest: func() any { return new(CustomerTypeUpdateRequest) },
 		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateCustomerType(ctx, token, req.(*CustomerTypeUpdateRequest))
 			return err
 		},
-		Fields: brandedFields(
+		Fields: append(brandedFields(
 			func(r *CustomerTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 			func(r *CustomerTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
 			func(r *CustomerTypeUpdateRequest) *dcgraphql.OptionalString { return &r.ImageUrl },
@@ -229,6 +238,9 @@ func customerTypeFamily() putest.Family[*Api] {
 			func(r *CustomerTypeUpdateRequest) *dcgraphql.OptionalString { return &r.BorderColor },
 			func(r *CustomerTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata },
 		),
+			putest.OptionalStringListField("semanticTypes", []string{iriPublicAdmin}, []string{iriDistrict},
+				func(r *CustomerTypeUpdateRequest) *dcgraphql.OptionalStringList { return &r.SemanticTypes }),
+		),
 	}
 }
 
@@ -236,10 +248,12 @@ func areaTypeFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "areaType",
 		Token:   "art-1",
-		Migrate: []any{&AreaType{}, &Area{}},
+		Migrate: []any{&AreaType{}, &Area{}, &SemanticContext{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
+			seedSemanticContext(t, api, ctx)
 			if _, err := api.CreateAreaType(ctx, &AreaTypeCreateRequest{
-				Token: "art-1", Name: strp(brandedSeed.Name), Description: strp(brandedSeed.Description),
+				SemanticTypes: strs(iriDistrict),
+				Token:         "art-1", Name: strp(brandedSeed.Name), Description: strp(brandedSeed.Description),
 				ImageUrl: strp(brandedSeed.ImageUrl), Icon: strp(brandedSeed.Icon),
 				BackgroundColor: strp(brandedSeed.Bg), ForegroundColor: strp(brandedSeed.Fg),
 				BorderColor: strp(brandedSeed.Border), Metadata: strp(brandedSeed.Metadata),
@@ -250,14 +264,16 @@ func areaTypeFamily() putest.Family[*Api] {
 		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.AreaTypesByToken(ctx, []string{"art-1"})
 			e := requireOne(t, "area type", rows, err)
-			return readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
+			got := readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
+			got["semanticTypes"] = putest.RenderStringList(e.SemanticTypes)
+			return got
 		},
 		NewRequest: func() any { return new(AreaTypeUpdateRequest) },
 		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateAreaType(ctx, token, req.(*AreaTypeUpdateRequest))
 			return err
 		},
-		Fields: brandedFields(
+		Fields: append(brandedFields(
 			func(r *AreaTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 			func(r *AreaTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
 			func(r *AreaTypeUpdateRequest) *dcgraphql.OptionalString { return &r.ImageUrl },
@@ -266,6 +282,9 @@ func areaTypeFamily() putest.Family[*Api] {
 			func(r *AreaTypeUpdateRequest) *dcgraphql.OptionalString { return &r.ForegroundColor },
 			func(r *AreaTypeUpdateRequest) *dcgraphql.OptionalString { return &r.BorderColor },
 			func(r *AreaTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata },
+		),
+			putest.OptionalStringListField("semanticTypes", []string{iriDistrict}, []string{iriPublicAdmin},
+				func(r *AreaTypeUpdateRequest) *dcgraphql.OptionalStringList { return &r.SemanticTypes }),
 		),
 	}
 }
@@ -396,21 +415,34 @@ func customerFamily() putest.Family[*Api] {
 	}
 }
 
+// The two fences the area family's boundary link moves between.
+const (
+	seededFenceToken = "fence-a"
+	otherFenceToken  = "fence-b"
+)
+
 func areaFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "area",
 		Token:   "ar-1",
-		Migrate: []any{&AreaType{}, &Area{}},
+		Migrate: []any{&AreaType{}, &Area{}, &GeoFence{}, &GeoFenceSetVersion{}, &GeoFenceGeometryBlob{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{seededTypeToken, otherTypeToken} {
 				if _, err := api.CreateAreaType(ctx, &AreaTypeCreateRequest{Token: tok}); err != nil {
 					t.Fatalf("seed area type %q: %v", tok, err)
 				}
 			}
+			// The boundary link must name a fence that exists, so both of the values the
+			// harness writes are real fences.
+			for _, tok := range []string{seededFenceToken, otherFenceToken} {
+				if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{Token: tok, Geometry: boxGeometry(0, 0, 1, 1)}); err != nil {
+					t.Fatalf("seed geofence %q: %v", tok, err)
+				}
+			}
 			if _, err := api.CreateArea(ctx, &AreaCreateRequest{
 				Token: "ar-1", AreaTypeToken: seededTypeToken,
 				Name: strp(memberSeed.Name), Description: strp(memberSeed.Description),
-				Metadata: strp(memberSeed.Metadata),
+				Metadata: strp(memberSeed.Metadata), BoundaryFenceToken: strp(seededFenceToken),
 			}); err != nil {
 				t.Fatalf("seed area: %v", err)
 			}
@@ -418,20 +450,23 @@ func areaFamily() putest.Family[*Api] {
 		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.AreasByToken(ctx, []string{"ar-1"})
 			e := requireOne(t, "area", rows, err)
-			return readMember(&namedRow{e.NamedEntity, e.Metadata}, "areaTypeToken",
+			got := readMember(&namedRow{e.NamedEntity, e.Metadata}, "areaTypeToken",
 				refTokenOf(t, e.AreaType == nil, func() string { return e.AreaType.Token }))
+			got["boundaryFenceToken"] = nullStr(e.BoundaryFenceToken)
+			return got
 		},
 		NewRequest: func() any { return new(AreaUpdateRequest) },
 		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateArea(ctx, token, req.(*AreaUpdateRequest))
 			return err
 		},
-		Fields: memberFields("areaTypeToken",
+		Fields: append(memberFields("areaTypeToken",
 			func(r *AreaUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 			func(r *AreaUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
 			func(r *AreaUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata },
 			func(r *AreaUpdateRequest) *dcgraphql.OptionalString { return &r.AreaTypeToken },
-		),
+		), putest.OptionalStringField("boundaryFenceToken", seededFenceToken, otherFenceToken,
+			func(r *AreaUpdateRequest) *dcgraphql.OptionalString { return &r.BoundaryFenceToken })),
 	}
 }
 
@@ -447,7 +482,7 @@ func deviceFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:  "device",
 		Token: "d-1",
-		Migrate: []any{&Device{}, &DeviceAlias{}, &IntegrationUnregisteredDevice{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
+		Migrate: []any{&Device{}, &DeviceAlias{}, &IntegrationUnregisteredDevice{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &DeviceProfileActivation{},
 			&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{seededTypeToken, otherTypeToken} {
@@ -545,10 +580,11 @@ func deviceTypeFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:  "deviceType",
 		Token: "dt-1",
-		Migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
+		Migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &DeviceProfileActivation{},
 			&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{},
-			&MaintenanceWindow{}},
+			&MaintenanceWindow{}, &SemanticContext{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
+			seedSemanticContext(t, api, ctx)
 			for _, tok := range []string{profileSeed, "profile-b"} {
 				if _, err := api.CreateDeviceProfile(ctx, &DeviceProfileCreateRequest{Token: tok}); err != nil {
 					t.Fatalf("seed profile %q: %v", tok, err)
@@ -568,6 +604,8 @@ func deviceTypeFamily() putest.Family[*Api] {
 				BorderColor: strp(brandedSeed.Border), Metadata: strp(brandedSeed.Metadata),
 				ProfileToken: strp(profileSeed), MaintenanceWindowToken: strp("mw-a"),
 				Manufacturer: strp(manufacturerSeed), Model: strp(modelSeed),
+				CommandChannel: strp(CommandChannelHTTPPull),
+				SemanticTypes:  strs(iriStreetlight),
 			}); err != nil {
 				t.Fatalf("seed device type: %v", err)
 			}
@@ -578,6 +616,8 @@ func deviceTypeFamily() putest.Family[*Api] {
 			got := readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
 			got["manufacturer"] = nullStr(e.Manufacturer)
 			got["model"] = nullStr(e.ModelName)
+			got["commandChannel"] = nullStr(e.CommandChannel)
+			got["semanticTypes"] = putest.RenderStringList(e.SemanticTypes)
 			got["maintenanceWindowToken"] = nullMarker
 			if e.MaintenanceWindowId != nil {
 				windows, werr := api.MaintenanceWindowsById(ctx, []uint{*e.MaintenanceWindowId})
@@ -616,6 +656,8 @@ func deviceTypeFamily() putest.Family[*Api] {
 				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Manufacturer }),
 			putest.OptionalStringField("model", modelSeed, "B-2000",
 				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Model }),
+			putest.OptionalStringField("commandChannel", CommandChannelHTTPPull, CommandChannelPublish,
+				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.CommandChannel }),
 			// NULLABLE, unlike every other reference in this file: detaching a profile is
 			// a state a device type can legitimately be in.
 			putest.OptionalStringField("profileToken", profileSeed, "profile-b",
@@ -624,6 +666,8 @@ func deviceTypeFamily() putest.Family[*Api] {
 			// whenever the device is reachable.
 			putest.OptionalStringField("maintenanceWindowToken", "mw-a", "mw-b",
 				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.MaintenanceWindowToken }),
+			putest.OptionalStringListField("semanticTypes", []string{iriStreetlight}, []string{iriLuminaire},
+				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalStringList { return &r.SemanticTypes }),
 		),
 	}
 }
@@ -698,8 +742,9 @@ func metricDefinitionFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "metricDefinition",
 		Token:   "md-1",
-		Migrate: deviceProfileTables,
+		Migrate: append(append([]any{}, deviceProfileTables...), &SemanticContext{}),
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
+			seedSemanticContext(t, api, ctx)
 			twoProfiles(t, api, ctx)
 			minValue, maxValue := minSeed, maxSeed
 			if _, err := api.CreateMetricDefinition(ctx, &MetricDefinitionCreateRequest{
@@ -707,7 +752,8 @@ func metricDefinitionFamily() putest.Family[*Api] {
 				Name: strp(nameSeed), Description: strp(descriptionSeed), DataType: dataTypeSeed,
 				Unit: strp(unitSeed), MinValue: &minValue, MaxValue: &maxValue,
 				Enum: strp(enumSeed), Descriptor: strp(descriptorSeed), Metadata: strp(metadataSeed),
-				Expression: strp(expressionSeed),
+				Expression:       strp(expressionSeed),
+				SemanticProperty: strp(iriActivePower), SemanticPointClass: strp(iriZoneAirTempSensor),
 			}); err != nil {
 				t.Fatalf("seed metric definition: %v", err)
 			}
@@ -728,6 +774,8 @@ func metricDefinitionFamily() putest.Family[*Api] {
 				"descriptor":         nullStr(e.Descriptor),
 				"metadata":           jsonStr(e.Metadata),
 				"expression":         nullStr(e.Expression),
+				"semanticProperty":   nullPtrStr(e.SemanticProperty),
+				"semanticPointClass": nullPtrStr(e.SemanticPointClass),
 			}
 		},
 		NewRequest: func() any { return new(MetricDefinitionUpdateRequest) },
@@ -763,6 +811,10 @@ func metricDefinitionFamily() putest.Family[*Api] {
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
 			putest.RequiredStringField("expression", expressionSeed, "humidity_raw * 0.25",
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Expression }),
+			putest.OptionalStringField("semanticProperty", iriActivePower, iriActivePowerR,
+				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.SemanticProperty }),
+			putest.OptionalStringField("semanticPointClass", iriZoneAirTempSensor, iriAvgZoneAirTempSensor,
+				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.SemanticPointClass }),
 		},
 	}
 }
@@ -775,6 +827,14 @@ func commandDefinitionFamily() putest.Family[*Api] {
 		descriptionSeed = "Original description"
 		metadataSeed    = `{"fleet":"north"}`
 	)
+	// An encoder requires its schema. The generic harness moves/clears the pair;
+	// the encoder lifecycle tests cover independent edits and refusing a schema clear.
+	encoderField, schemaField := putest.PairedWith(
+		putest.OptionalStringField("encoder", `{"fPort":10,"fields":[{"const":"01"}]}`, `{"fPort":11,"fields":[{"const":"02"}]}`,
+			func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Encoder }),
+		putest.OptionalStringField("parameterSchema", schemaSeed, `[{"name":"angle","dataType":"INT"}]`,
+			func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.ParameterSchema }),
+	)
 	return putest.Family[*Api]{
 		Name:    "commandDefinition",
 		Token:   "cd-1",
@@ -784,7 +844,7 @@ func commandDefinitionFamily() putest.Family[*Api] {
 			if _, err := api.CreateCommandDefinition(ctx, &CommandDefinitionCreateRequest{
 				Token: "cd-1", DeviceProfileToken: seededProfileToken, CommandKey: commandKeySeed,
 				Name: strp(nameSeed), Description: strp(descriptionSeed),
-				ParameterSchema: strp(schemaSeed), Metadata: strp(metadataSeed),
+				Encoder: strp(`{"fPort":10,"fields":[{"const":"01"}]}`), ParameterSchema: strp(schemaSeed), Metadata: strp(metadataSeed),
 			}); err != nil {
 				t.Fatalf("seed command definition: %v", err)
 			}
@@ -798,6 +858,7 @@ func commandDefinitionFamily() putest.Family[*Api] {
 				"name":               nullStr(e.Name),
 				"description":        nullStr(e.Description),
 				"parameterSchema":    jsonStr(e.ParameterSchema),
+				"encoder":            jsonStr(e.Encoder),
 				"impact":             e.Impact,
 				"metadata":           jsonStr(e.Metadata),
 			}
@@ -816,8 +877,7 @@ func commandDefinitionFamily() putest.Family[*Api] {
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
 			putest.OptionalStringField("description", descriptionSeed, "Rewritten",
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
-			putest.OptionalStringField("parameterSchema", schemaSeed, `[{"name":"angle","dataType":"INT"}]`,
-				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.ParameterSchema }),
+			encoderField, schemaField,
 			putest.RequiredStringField("impact", ImpactNormal, ImpactDisruptive,
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Impact }),
 			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
@@ -1423,11 +1483,13 @@ func entityRelationshipTypeFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "entityRelationshipType",
 		Token:   "ert-1",
-		Migrate: []any{&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}},
+		Migrate: []any{&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}, &SemanticContext{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
+			seedSemanticContext(t, api, ctx)
 			if _, err := api.CreateEntityRelationshipType(ctx, &EntityRelationshipTypeCreateRequest{
 				Token: "ert-1", Name: strp(memberSeed.Name), Description: strp(memberSeed.Description),
 				Metadata: strp(memberSeed.Metadata), Tracked: true,
+				SemanticPredicate: strp(iriFeeds), SemanticInverse: strp(iriIsFedBy),
 			}); err != nil {
 				t.Fatalf("seed entity relationship type: %v", err)
 			}
@@ -1440,6 +1502,9 @@ func entityRelationshipTypeFamily() putest.Family[*Api] {
 				"description": nullStr(e.Description),
 				"metadata":    jsonStr(e.Metadata),
 				"tracked":     boolStr(e.Tracked),
+
+				"semanticPredicate": nullStr(e.SemanticPredicate),
+				"semanticInverse":   nullStr(e.SemanticInverse),
 			}
 		},
 		NewRequest: func() any { return new(EntityRelationshipTypeUpdateRequest) },
@@ -1447,7 +1512,7 @@ func entityRelationshipTypeFamily() putest.Family[*Api] {
 			_, err := api.UpdateEntityRelationshipType(ctx, token, req.(*EntityRelationshipTypeUpdateRequest))
 			return err
 		},
-		Fields: []putest.Field{
+		Fields: append([]putest.Field{
 			putest.OptionalStringField("name", memberSeed.Name, "Renamed",
 				func(r *EntityRelationshipTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
 			putest.OptionalStringField("description", memberSeed.Description, "Rewritten",
@@ -1456,8 +1521,22 @@ func entityRelationshipTypeFamily() putest.Family[*Api] {
 				func(r *EntityRelationshipTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
 			putest.RequiredBoolField("tracked", true,
 				func(r *EntityRelationshipTypeUpdateRequest) *dcgraphql.OptionalBool { return &r.Tracked }),
-		},
+		}, semanticPairFields()...),
 	}
+}
+
+// semanticPairFields declares the predicate and its inverse as the PAIR they are: an inverse
+// is meaningless without a predicate, so the predicate's null takes the inverse with it and a
+// changed predicate re-derives the pack's declared one. Driving either alone would assert
+// that a legal request is refused, which is what Partner exists to avoid.
+func semanticPairFields() []putest.Field {
+	predicate, inverse := putest.PairedWith(
+		putest.OptionalStringField("semanticPredicate", iriFeeds, iriHasPart,
+			func(r *EntityRelationshipTypeUpdateRequest) *dcgraphql.OptionalString { return &r.SemanticPredicate }),
+		putest.OptionalStringField("semanticInverse", iriIsFedBy, iriIsPartOf,
+			func(r *EntityRelationshipTypeUpdateRequest) *dcgraphql.OptionalString { return &r.SemanticInverse }),
+	)
+	return []putest.Field{predicate, inverse}
 }
 
 // ─── the device profile, and its one non-scalar field ──────────────────────

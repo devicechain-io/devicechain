@@ -507,6 +507,10 @@ func runReadSweep(ctx context.Context, argv []string) error {
 // A new entry is needed only when a door takes an ambiguous token; a door taking
 // `deviceToken`, or one that is an entity's own read-back, needs nothing.
 var sweepTokenArgs = map[string]string{
+	// Both protection reads are keyed by the protected profile, including the empty
+	// break-glass ledger. The policy receipt's own key is not a separate resource.
+	"device-management.automationReviewPolicy.profileToken":     "device-profile",
+	"device-management.automationReviewBreakGlass.profileToken": "device-profile",
 	// The asset-hierarchy reads take an ambiguous `token`, and it is an ASSET's.
 	// They belong in this sweep for the reason the version doors do: each reads a
 	// STORED RELATIONSHIP EDGE rather than the row the drill just wrote, so a
@@ -538,6 +542,9 @@ var sweepTokenArgs = map[string]string{
 	// The seeded rollout's targets: a join of its frozen target rows to the attempts their
 	// assignments name, which the rollout's own read-back does not select.
 	"update-management.updateRolloutTargets.token": "update-rollout",
+	// The seeded campaign's cycles: it is created switched off, so the list is empty, and the
+	// read still has to decode the campaign it names after an upgrade.
+	"command-delivery.campaignCycles.campaignToken": "campaign",
 }
 
 // sweepExemptions names the served doors this sweep will NOT call, and why.
@@ -547,6 +554,14 @@ var sweepTokenArgs = map[string]string{
 // are different facts, and collapsing them into silence is how a hole becomes invisible.
 // A reader scanning the sweep's output sees each one printed, with its sentence.
 var sweepExemptions = map[string]string{
+	"device-management.checkDeviceCredential": "it asks whether a device credential would authenticate, for " +
+		"the HTTP ingest door, and is served on the service plane only (a user token is refused), so the " +
+		"sweep, which runs as a tenant administrator, has no standing to call it and no credential to " +
+		"present; the credential rows are read back through the device and its credentials",
+	"command-delivery.campaignElements": "it pages one CYCLE's elements and requires that cycle's key, and " +
+		"the seeded campaign is created switched off so that a drill never commands a device: it has no " +
+		"cycle, so there is no key to supply; the campaign itself is read back through campaign and its " +
+		"(empty) cycle list through campaignCycles",
 	"user-management.mfaStatus": "it reads the signed-in person's own second-factor status and takes an " +
 		"IDENTITY token, which is the result of a login this sweep does not make (it runs as a tenant " +
 		"administrator with an access token), so there is no value to supply; the factor's rows are " +
@@ -554,10 +569,22 @@ var sweepExemptions = map[string]string{
 	"device-management.integrationAuth": "it authenticates a bearer token the platform showed once, at " +
 		"creation, and stores only a digest of, so the sweep has no value to supply; the integration " +
 		"entity reads the stored row back through integration",
+	"device-management.authenticateCommandChannel": "it authenticates a device's access token on behalf of " +
+		"the HTTP command endpoints; the token is a secret the platform showed once and stores only a " +
+		"digest of, so the sweep has no value to supply; the device and its credentials are read back " +
+		"through their own entities",
 	"device-management.integrationDecoder": "it answers the ingest path's question about a device type's " +
 		"decoder for an integration, authenticated with the bearer token the platform showed once and " +
 		"stores only a digest of, so the sweep has no value to supply; the decoder itself is read back " +
 		"through the device profile and its versions",
+	"device-management.deviceDecoder": "it answers the ingest path's question about a device's own payload " +
+		"decoder, authenticated with the credential the device presented (an access token or MQTT basic " +
+		"secret the platform showed once and stores only a digest of), so the sweep has no value to " +
+		"supply; the decoder itself is read back through the device profile and its versions",
+	"device-management.brokerAssertedDeviceDecoder": "it answers the ingest path's question about the decoder of " +
+		"a device that published on its own raw-payload MQTT topic, for a service token only and keyed by a " +
+		"device token the broker asserted, so the sweep has no value to supply; the decoder itself is read " +
+		"back through the device profile and its versions",
 	"device-management.unregisteredIntegrationDevices": "it lists the sightings of ONE integration, named " +
 		"inside its criteria, which are written only by the ingest path's service-plane lookup " +
 		"(resolveIntegrationDevice, which needs the integration's bearer token), so the drill has no " +
@@ -568,6 +595,10 @@ var sweepExemptions = map[string]string{
 	"update-management.artifactSigner": "a signer is addressed by a token the platform derives from its " +
 		"public key, so the sweep has no value to supply; the artifact-signer entity reads the SAME " +
 		"door back by the token its receipt recorded, and artifactSigners is swept",
+	"outbound-connectors.webhookSigningSecret": "it reports whether a signing handle has a key and whether a " +
+		"rotation is open; the handle is a name the tenant chooses when it creates the secret, so the sweep " +
+		"has no value to supply, and the status holds no secret value (the key is shown once and is never " +
+		"readable again), so there is no stored shape for the drill to read back through it",
 	"device-management.previewSelector": "an authoring preview: it evaluates a selector expression " +
 		"the CALLER writes, so there is no stored row for the drill to reach through it",
 	"device-management.testMetricFormula": "an authoring preview: it evaluates a formula and a sample " +
@@ -636,6 +667,23 @@ var sweepExemptions = map[string]string{
 		"correct behaviour. It is read by the enforcing services over a service token",
 	"user-management.tenantTokens": "requires the system-tier tenant:read, for the reason tenantGovernance " +
 		"is exempt: a tenant user, even one with every tenant authority, cannot list tenants",
+	"user-management.agentActuationDecision": "answers only an AI agent's token, one that carries a " +
+		"proposal authority (which only an act:* OAuth grant or an agent service account's mint derives), " +
+		"and refuses a tenant administrator's console token by design; the policy rows it reads are swept " +
+		"through agentPolicy and seeded by the agent-policy entity",
+	"user-management.agentExecutionDecision": "takes what a stored agent proposal recorded (its proposer, " +
+		"client and grant session) and is asked by device-management when a person approves one; it holds no " +
+		"row of its own, and the policy rows it reads are swept through agentPolicy",
+	"device-management.agentProposal": "addressed by a server-generated proposal token, and only an AI " +
+		"agent's token can create a proposal, so the sweep holds no token it can defend; the ledger is swept " +
+		"through agentProposals",
+	"device-management.automationReview": "addressed by a server-generated review token from a completed " +
+		"recorded-input comparison; the probe seeds neither replay inputs nor review evidence, so it has no token to supply",
+	"device-management.automationReviews": "requires a profile token inside its criteria, while the planner " +
+		"supplies seeded tokens only to top-level arguments; the probe also seeds no recorded-input comparison evidence",
+	"user-management.principalStanding": "answers only device-management's own SERVICE token, which asks it under a " +
+		"profile lock when a protected profile publishes; every other caller, the tenant administrator this probe runs " +
+		"as included, is refused by design. It holds no row of its own: it reads the memberships members already sweeps",
 	"user-management.identityMemberships": "takes the IDENTITY token login returns — a credential, not a " +
 		"stored row's token — so the sweep has no value it can defend; me and members are swept",
 	"user-management.member": "addressed by email, and a missing one is a NOT_FOUND error by design; " +

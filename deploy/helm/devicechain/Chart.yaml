@@ -28,6 +28,9 @@ maintainers:
 # Artifact Hub reads these when the chart is ingested from
 # oci://ghcr.io/devicechain-io/charts. They are the listing's metadata, so
 # they are written for a reader who has never seen this repository.
+# artifacthub.io/prerelease is deliberately not set here: the release workflow
+# stamps it from the tag (hack/stamp-chart-prerelease.sh), "true" for an -rc
+# version, "false" otherwise.
 #
 # 🔴 Deliberately NOT set: `artifacthub.io/images`. It would have to name an
 # image TAG, and annotations are not templated — `helm package --app-version`

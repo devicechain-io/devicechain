@@ -271,7 +271,7 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 
 	rctx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
 	defer cancel()
-	tally := n.deliverAll(rctx, deliveries, renderNotification(&event), alarm)
+	tally := n.deliverAll(rctx, deliveries, renderNotification(&event), alarm, model.AttemptTriggerQuietHoursRelease)
 	if tally.delivered > 0 {
 		n.finish(ctx, alarm, claimed)
 		n.countQuiet(quietReleased, len(claimed))
@@ -279,6 +279,7 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 		// this write is the only record that it happened. Without it the alarm has no throttle
 		// basis and never escalates. Held on the notifier's own Holder (the scheduler has no
 		// message to beat); at-least-once, as dispatch documents.
+		var recorded *model.NotificationState
 		if err := n.settle(ctx, func(c context.Context) error {
 			sctx, scancel := context.WithTimeout(c, recordTimeout)
 			defer scancel()
@@ -286,12 +287,15 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 			// whatever cycle the state row is on now: a page held through a clear and re-raise
 			// describes the cycle it was raised in, and RecordNotification ignores it as stale
 			// rather than writing it into the newer cycle as that cycle's first page.
-			return n.api.RecordNotification(sctx, alarm, latest.AlarmKey, latest.Severity,
-				event.RaisedTime, now)
+			var err error
+			recorded, err = n.api.RecordPagedFrom(sctx, alarm, latest.AlarmKey, latest.Severity,
+				event.RaisedTime, now, pagedTargets(tally.targets), eventSource(&event), event.OccurredTime)
+			return err
 		}); err != nil {
 			log.Error().Err(err).Str("alarm", alarm).
 				Msg("Released a held notification but failed to record notification state")
 		}
+		n.announceLateClear(ctx, &event, recorded)
 		return nil
 	}
 	if tally.retryable() == 0 {

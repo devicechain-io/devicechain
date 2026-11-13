@@ -62,9 +62,9 @@ the instance's superuser password, tenant `sim-bp`, origin `http://localhost`):
   `bp-therm-*` devices. (`UnityWebRequestHttpTransport` ✓)
 - `Subscriptions(Area.EventManagement).SubscribeAsync(measurementStream …)` streamed **live
   temperature/co2/humidity/setpoint with self-describing units** into the Console once the buildingpulse
-  sim was emitting. (`ClientWebSocketFactory` ✓) — call the SDK from the main thread (no
-  `ConfigureAwait(false)` in your driver). Since slice 4.3 the SDK no longer uses
-  `ConfigureAwait(false)` on its own operational path either, so an `await foreach` over a
+  sim was emitting. (`ClientWebSocketFactory` ✓) — construct the client on the main thread (no
+  `ConfigureAwait(false)` in your driver). The subscription client preserves the consumer context on its
+  operational path, so an `await foreach` over a
   subscription now resumes on the context it was started from rather than a pool thread.
 - **Not yet exercised:** `DevicePublisher(...).EmitMeasurementsAsync(...)` (device-plane emit *from*
   Unity) — the transports it rides on are already proven above; it needs a device credential in the

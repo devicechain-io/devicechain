@@ -117,7 +117,9 @@ var dispositions = map[string]disposition{
 	"mqtt-exposure":          declared, // recorded as spec.mqttExposure
 	"mqtt-host":              declared, // recorded as spec.mqttHost
 	"broker-max-connections": declared, // recorded as spec.brokerMaxConnections
+	"dev-allow-egress":       declared, // recorded as the core.devicechain.io/dev-allow-egress annotation
 	"mqtt-fail-closed":       declared,
+	"mqtt-device-uplinks":    declared,
 
 	// --- known gaps ---
 	//

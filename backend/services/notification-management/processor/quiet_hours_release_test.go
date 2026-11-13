@@ -249,3 +249,35 @@ func TestAnExhaustedReleaseIsDeadLettered(t *testing.T) {
 		t.Fatal("the exhausted row is still held")
 	}
 }
+
+// A newer rename can finish while an older held page is being delivered.
+func TestAHeldReleaseDoesNotRegressANewerSource(t *testing.T) {
+	clock := insideQuiet
+	n, api, _, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
+	event := eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)
+	event.DeviceName = "Old"
+	if err := n.dispatch(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	newer := event.OccurredTime.Add(time.Minute)
+	n.adapters[model.ChannelTypeSMTP] = &funcAdapter{fn: func(int) error {
+		_, err := api.RecordPagedFrom(ctx, event.AlarmToken, event.AlarmKey, event.Severity,
+			event.RaisedTime, newer, nil, model.AlarmSource{DeviceName: "New"}, newer)
+		return err
+	}}
+	clock = quietEnds
+	if err := n.ReleaseHeld(ctx, enabledPolicies(t, api, ctx), clock); err != nil {
+		t.Fatal(err)
+	}
+	states, err := api.NotificationStatesByAlarmToken(ctx, []string{event.AlarmToken})
+	if err != nil || len(states) != 1 {
+		t.Fatalf("states = %v, %v", states, err)
+	}
+	row := states[0]
+	if row.Source().DeviceName != "New" || !row.SourceAt.Valid || !row.SourceAt.Time.Equal(newer) || !row.LastNotifiedAt.Time.Equal(clock) {
+		t.Fatalf("released source state = %+v", row)
+	}
+	if len(heldRows(t, api, ctx)) != 0 {
+		t.Fatal("released page is still held")
+	}
+}

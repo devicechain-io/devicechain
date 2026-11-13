@@ -5,10 +5,15 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
 )
+
+// MaxDurationSeconds is the largest whole number of seconds a time.Duration can hold;
+// a larger value overflows when converted.
+const MaxDurationSeconds = int(math.MaxInt64 / int64(time.Second))
 
 // NotificationManagementConfiguration is the typed config for the notification
 // service (ADR-017): the alarm→human last mile. The durable consumer over the
@@ -50,6 +55,11 @@ type NotificationManagementConfiguration struct {
 	// becoming an alarm index in the wrong service (the ADR-041 history-home concern).
 	// Unset (0) defaults to 7d.
 	StateRetentionSeconds int
+	// AttemptRetentionSeconds is how long a delivery-ledger row (one attempt to send a
+	// notification through a channel) is kept before the retention sweep deletes it. The
+	// ledger records recipients, which are personal data, so it is kept for a window rather
+	// than forever. Unset (0) defaults to 7d, the same window as resolved notification state.
+	AttemptRetentionSeconds int
 	// RetentionSweepSeconds is how often the retention sweep runs. Unset (0) defaults
 	// to hourly; a negative value disables the sweep.
 	RetentionSweepSeconds int
@@ -84,6 +94,7 @@ const (
 	defaultDeliveryAttempts       = 3
 	defaultStateRetentionSeconds  = 7 * 24 * 60 * 60 // 7 days
 	defaultRetentionSweepSeconds  = 60 * 60          // hourly
+	defaultAttemptRetentionSecs   = 7 * 24 * 60 * 60 // 7 days
 	defaultEscalationSweepSeconds = 60               // once a minute
 	defaultMaxEscalations         = 5
 )
@@ -104,6 +115,9 @@ func (c *NotificationManagementConfiguration) ApplyDefaults() {
 	if c.RetentionSweepSeconds == 0 {
 		c.RetentionSweepSeconds = defaultRetentionSweepSeconds
 	}
+	if c.AttemptRetentionSeconds == 0 {
+		c.AttemptRetentionSeconds = defaultAttemptRetentionSecs
+	}
 	if c.EscalationSweepSeconds == 0 {
 		c.EscalationSweepSeconds = defaultEscalationSweepSeconds
 	}
@@ -117,13 +131,32 @@ func (c *NotificationManagementConfiguration) ApplyDefaults() {
 // stall shutdown; fewer than one attempt would never deliver).
 func (c *NotificationManagementConfiguration) Validate() error {
 	if c.DeliverySeconds < 0 {
-		return fmt.Errorf("DeliverySeconds must not be negative, got %d", c.DeliverySeconds)
+		return fmt.Errorf("deliverySeconds must not be negative, got %d", c.DeliverySeconds)
+	}
+	if c.DeliverySeconds > MaxDurationSeconds {
+		return fmt.Errorf("deliverySeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.DeliverySeconds)
 	}
 	if c.DeliveryAttempts < 1 {
 		return fmt.Errorf("DeliveryAttempts must be at least 1, got %d", c.DeliveryAttempts)
 	}
 	if c.StateRetentionSeconds < 0 {
-		return fmt.Errorf("StateRetentionSeconds must not be negative, got %d", c.StateRetentionSeconds)
+		return fmt.Errorf("stateRetentionSeconds must not be negative, got %d", c.StateRetentionSeconds)
+	}
+	if c.StateRetentionSeconds > MaxDurationSeconds {
+		return fmt.Errorf("stateRetentionSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.StateRetentionSeconds)
+	}
+	if c.AttemptRetentionSeconds < 0 {
+		return fmt.Errorf("attemptRetentionSeconds must not be negative, got %d", c.AttemptRetentionSeconds)
+	}
+	if c.AttemptRetentionSeconds > MaxDurationSeconds {
+		return fmt.Errorf("attemptRetentionSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.AttemptRetentionSeconds)
+	}
+	// Negative sweep settings disable the sweeps, so only bound them above.
+	if c.RetentionSweepSeconds > MaxDurationSeconds {
+		return fmt.Errorf("retentionSweepSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.RetentionSweepSeconds)
+	}
+	if c.EscalationSweepSeconds > MaxDurationSeconds {
+		return fmt.Errorf("escalationSweepSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.EscalationSweepSeconds)
 	}
 	if c.DefaultMaxEscalations < 1 {
 		return fmt.Errorf("DefaultMaxEscalations must be at least 1, got %d", c.DefaultMaxEscalations)
@@ -139,6 +172,11 @@ func (c *NotificationManagementConfiguration) DeliveryTimeout() time.Duration {
 // StateRetention returns the cleared-state retention window as a duration.
 func (c *NotificationManagementConfiguration) StateRetention() time.Duration {
 	return time.Duration(c.StateRetentionSeconds) * time.Second
+}
+
+// AttemptRetention returns the delivery-ledger retention window as a duration.
+func (c *NotificationManagementConfiguration) AttemptRetention() time.Duration {
+	return time.Duration(c.AttemptRetentionSeconds) * time.Second
 }
 
 // RetentionSweepInterval returns the retention-sweep tick period as a duration.

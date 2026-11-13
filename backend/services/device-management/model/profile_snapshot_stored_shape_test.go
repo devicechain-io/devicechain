@@ -67,7 +67,7 @@ func TestProfileSnapshotStoredKeysArePinned(t *testing.T) {
 	// metric of such a version was.
 	wantCommand := []string{
 		"CommandKey", "CreatedAt", "DeletedAt", "Description", "DeviceProfile",
-		"DeviceProfileId", "ID", "Impact", "Metadata", "Name", "ParameterSchema", "TenantId",
+		"DeviceProfileId", "Encoder", "ID", "Impact", "Metadata", "Name", "ParameterSchema", "TenantId",
 		"Token", "UpdatedAt",
 	}
 	// AuthoringGraph is deliberately ABSENT: it is `json:"-"`, so publishing does not
@@ -103,6 +103,7 @@ func TestProfileSnapshotStoredKeysArePinned(t *testing.T) {
 	wantTop := []string{"commands", "configuration", "decoder", "location", "metrics", "rules"}
 
 	enum := datatypes.JSON([]byte(`["LOW","HIGH"]`))
+	encoder := datatypes.JSON([]byte(`{"fPort":1,"fields":[{"const":"01"}]}`))
 	schema := datatypes.JSON([]byte(`[{"key":"level","type":"INT"}]`))
 	graph := datatypes.JSON([]byte(`{"nodes":[]}`))
 	accuracy := 5.0
@@ -128,6 +129,7 @@ func TestProfileSnapshotStoredKeysArePinned(t *testing.T) {
 			TokenReference:  rdb.TokenReference{Token: "setpoint"},
 			DeviceProfileId: 7,
 			CommandKey:      "set_point",
+			Encoder:         &encoder,
 			ParameterSchema: &schema,
 		}},
 		Rules: []*DetectionRule{{

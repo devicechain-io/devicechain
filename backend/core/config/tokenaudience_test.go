@@ -51,6 +51,7 @@ func TestTokenAudienceRefusals(t *testing.T) {
 		c    TokenAudienceConfiguration
 		want string
 	}{
+		{"removed observe opt-out", TokenAudienceConfiguration{Enforcement: "observe"}, "removed in v1.4"},
 		{"unknown enforcement", TokenAudienceConfiguration{Enforcement: "warn"}, "enforcement"},
 		{"retired-looking enforcement spelling", TokenAudienceConfiguration{Enforcement: "Enforce"}, "enforcement"},
 		{"unknown unscoped mode", TokenAudienceConfiguration{UnscopedClientCredentials: "off"}, "unscopedClientCredentials"},
@@ -116,11 +117,12 @@ func TestTokenAudienceNoBaseMeansNoAreaResources(t *testing.T) {
 	assert.Equal(t, taOrigin+"/api/device-management", AreaResource(taOrigin+"/api", "device-management"))
 }
 
-// M21: an explicit value wins over the release default, in both directions. The default is
-// asserted against the constant, so the v1.3 flip changes one line and one expectation.
+// Programmatic policies retain observe compatibility; documents refuse it in v1.4.
 func TestTokenAudienceEffectiveEnforcement(t *testing.T) {
 	assert.Equal(t, TokenAudienceReleaseDefault, TokenAudienceConfiguration{}.EffectiveEnforcement())
-	assert.Equal(t, TokenAudienceObserve, TokenAudienceReleaseDefault, "v1.2 ships observe")
+	assert.Equal(t, TokenAudienceEnforce, TokenAudienceReleaseDefault, "v1.3 ships enforce")
+	assert.Equal(t, TokenAudienceEnforce, TokenAudienceConfiguration{}.EffectiveEnforcement(), "unset is enforce")
+	assert.Equal(t, TokenAudienceEnforce, TokenAudienceConfiguration{Enforcement: ""}.EffectiveEnforcement(), "empty is enforce")
 	assert.Equal(t, TokenAudienceObserve, TokenAudienceConfiguration{Enforcement: "observe"}.EffectiveEnforcement())
 	assert.Equal(t, TokenAudienceEnforce, TokenAudienceConfiguration{Enforcement: "enforce"}.EffectiveEnforcement())
 	assert.Equal(t, TokenAudienceObserve, TokenAudienceConfiguration{}.EffectiveUnscopedClientCredentials())
@@ -167,4 +169,16 @@ func TestUnscopedClientCredentialsEnforceIsRefusedInThisRelease(t *testing.T) {
 	assert.NoError(t, TokenAudienceConfiguration{UnscopedClientCredentials: "observe"}.Validate())
 	// And it is independent of the other mode key.
 	assert.NoError(t, TokenAudienceConfiguration{Enforcement: "enforce"}.Validate())
+}
+
+func TestV14TokenAudienceDocumentModes(t *testing.T) {
+	err := (TokenAudienceConfiguration{Enforcement: "observe"}).Validate()
+	require.ErrorContains(t, err, "removed in v1.4")
+	require.ErrorContains(t, err, "Remove the key (unset means enforce)")
+	require.ErrorContains(t, err, `set it to "enforce"`)
+	for _, mode := range []string{"", "enforce"} {
+		for _, unscoped := range []string{"", "observe"} {
+			require.NoError(t, (TokenAudienceConfiguration{Enforcement: mode, UnscopedClientCredentials: unscoped}).Validate())
+		}
+	}
 }

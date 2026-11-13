@@ -42,6 +42,8 @@
   "strandedType": "almacenado como {{stored}}",
   "system": "sistema",
   "title": "Facetas",
+  "typeChangeWarning": "Si cambias la declaración de {{existing}} a {{requested}}, los valores almacenados se conservan. Es posible que esos valores ya no coincidan con el eje declarado.",
+  "typeCheckFailed": "No se pudo comprobar el impacto de esta declaración. Puedes guardar de todos modos.",
   "usedByGroups": "Cambiar este valor mueve esta entidad dentro o fuera de: {{groups}}",
   "valueCleared": "“{{key}}” borrado",
   "valueRequired": "Introduce un valor, o usa Borrar para eliminarlo.",

@@ -142,6 +142,18 @@ func reconcileTableCoverage(
 // exemption, and TestEveryExemptionExplainsItself rejects it. The question each answers
 // is: why is it CORRECT for this table to be empty after a tenant has been fully seeded?
 var tableSweepExemptions = map[string]string{
+	"device-management.automation_review_break_glass": "written only by a break-glass rollback, " +
+		"device-type re-point or device move on a protected profile, which requires a person's sign-in " +
+		"with a second factor verified within the policy's step-up age (15 minutes by default). The " +
+		"probe's tenant administrator signs in with a password only, so these actions are refused with " +
+		"SECOND_FACTOR_REQUIRED by design, exactly like an agent-policy loosening. The table's tenant " +
+		"column is proved by the purge coverage gate, and its reads are swept through automationReviewBreakGlass.",
+	"device-management.agent_proposals": "the agent-proposal ledger, written only by proposeAlarmAction, " +
+		"which accepts nothing but an AI agent's access token carrying alarm:propose; a person's console " +
+		"token, like the tenant administrator this probe runs as, is refused with AGENT_ONLY by design. Such " +
+		"a token exists only through an act:* OAuth grant behind three switches that are off on the drill " +
+		"instance. The table's tenant column is proved by the purge coverage gate, and its reads are swept " +
+		"through agentProposals.",
 	// ---- the device plane, which the load harness owns ------------------------
 	//
 	// These hold what DEVICES produce, not what a tenant creates. The load-test harness
@@ -203,14 +215,31 @@ var tableSweepExemptions = map[string]string{
 		"No GraphQL mutation mints a capability, so seeding a key would mean a device session this " +
 		"drill deliberately does not open. The assignment and attempt that a grant would answer are " +
 		"covered: update-assignment writes both through the real API.",
+	"outbound-connectors.lpwan_pending_acks": "a CONFIRMED LoRaWAN downlink waiting for the device's " +
+		"acknowledgement. The only writer is the downlink adapter, after a network server accepted the " +
+		"downlink, and a row is deleted when the network server's report (or the row's deadline) answers " +
+		"the command. The drill runs no network server and the adapter is off by default, so the table " +
+		"is empty by construction; seeding a row would assert it rather than the path that writes it. Its " +
+		"tenant column is proved by the purge coverage gate, and the matching, settling and deadline " +
+		"paths by the lpwan package's store, feed and adapter tests.",
 	"device-management.alarms": "alarm objects are RAISED by the REACT pipeline when a rule fires. " +
 		"Nothing fires in a drill that sends no telemetry, and creating one by hand would assert " +
 		"the row rather than the engine that produces it.",
+	"device-management.alarm_dispositions": "an operator's label on one alarm cycle, written by " +
+		"setAlarmDisposition on an alarm that exists. No alarm is raised in a drill that sends no " +
+		"telemetry (see device-management.alarms), so there is nothing to label, and labelling a hand-made " +
+		"alarm would assert the row rather than the path that produces it. The label's write, reads, " +
+		"scope and alarm cascade are proved by device-management's own model, wire and Postgres tests.",
 	"notification-management.notification_deferrals": "a page HELD by a policy's quiet hours. The only " +
 		"writer is DeferNotifications, called by the policy notifier when an ALARM state change arrives " +
 		"inside a quiet stretch, and the row is deleted when it is released. No alarm is raised in a " +
 		"drill that sends no telemetry (see device-management.alarms), so nothing is held. The policy's " +
 		"quiet-hours configuration itself lives on notification_policies, which the seed covers.",
+	"notification-management.notification_attempts": "the delivery ledger: one row per attempt to send " +
+		"an ALARM's notification through a channel. The only writer is the policy notifier's " +
+		"AttemptLedger, after it tries a channel for an alarm state change, an escalation or a quiet-hours " +
+		"release. No alarm is raised in a drill that sends no telemetry (see device-management.alarms), " +
+		"so nothing is attempted and nothing is recorded.",
 	"event-processing.rule_stats": "written only by RuleStatStore.RecordFire, i.e. when a rule actually " +
 		"FIRES. No telemetry, no fire, no row.",
 
@@ -267,6 +296,15 @@ var tableSweepExemptions = map[string]string{
 		"one, so the writer is exercised; empty afterwards is the drain having caught up. A row still " +
 		"here a few seconds after the seed means ownership facts are not reaching the broker, which is " +
 		"a finding this bucket should report.",
+	"device-management.agent_effect_outboxes": "the agent-execution outbox: a row lives from the commit of an " +
+		"approved agent proposal's execution until the effect relay has published its event and the broker " +
+		"has acknowledged it. Only an executed agent proposal writes one and the seed proposes nothing " +
+		"(actuation is off by default), so empty is the normal state; a row that stays here means executed " +
+		"effects are not reaching the broker, which is a finding this bucket should report.",
+	"device-management.agent_actuation_fences": "the per-tenant local kill fence: a row appears when the " +
+		"first agent execution of a tenant seeds it or when a kill event for the tenant is applied. Agent " +
+		"actuation is off by default and the seed neither executes an agent proposal nor kills one, so no " +
+		"row is expected; an absent row means \"never killed\".",
 
 	// ---- written only by a decode that runs --------------------------------------
 	"device-management.profile_decoder_healths": "per-replica decode tallies, written by the resolver's " +
@@ -324,6 +362,21 @@ var tableSweepExemptions = map[string]string{
 	// an exemption on either would be reported STALE. A run with no provider named leaves
 	// them UNCOVERED, which is the intended signal: a drill that can no longer create a
 	// connection has stopped covering them.
+
+	// ---- campaign execution state -------------------------------------------
+	//
+	// The seeded campaign is created SWITCHED OFF (entities.go, "campaign"), because an
+	// enabled one fires commands at the seeded group's devices and a drill row must be inert.
+	// The stored definition is what an upgrade must keep, and it is read back through
+	// campaign; these two tables are the execution it would have produced.
+	"command-delivery.campaign_cycles": "one row per planned firing of a campaign, written only by the " +
+		"scheduler's planCampaign -> materializeCycle, which skips a campaign that is not enabled. The drill's " +
+		"campaign is created switched off so that it never commands a device, so it has no cycle to plan; " +
+		"the campaign definition itself is seeded and read back. The purge coverage gate proves the table's " +
+		"tenant column.",
+	"command-delivery.campaign_elements": "one row per device per step of a planned cycle, written " +
+		"alongside the cycle by materializeCycle. Empty for the same reason as campaign_cycles: the seeded " +
+		"campaign is switched off, so no cycle exists to expand into elements.",
 }
 
 func runTableSweep(ctx context.Context, argv []string) error {

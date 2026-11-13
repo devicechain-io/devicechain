@@ -12,6 +12,16 @@ ALTER TABLE ONLY "event-management".events
  ADD CONSTRAINT events_pkey PRIMARY KEY (tenant_id, occurred_time, event_id);
 ALTER TABLE ONLY "event-management".purged_tenants
  ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
+ALTER TABLE ONLY "event-management".tenant_usage_daily
+ ADD CONSTRAINT tenant_usage_daily_pkey PRIMARY KEY (tenant_id, day);
+ALTER TABLE ONLY "event-management".tenant_usage_devices
+ ADD CONSTRAINT tenant_usage_devices_pkey PRIMARY KEY (tenant_id, day, device_token);
+ALTER TABLE ONLY "event-management".tenant_usage_hourly
+ ADD CONSTRAINT tenant_usage_hourly_pkey PRIMARY KEY (tenant_id, hour);
+ALTER TABLE ONLY "event-management".tenant_usage_ledger
+ ADD CONSTRAINT tenant_usage_ledger_pkey PRIMARY KEY (day);
+ALTER TABLE ONLY "event-management".tenant_usage_state
+ ADD CONSTRAINT tenant_usage_state_pkey PRIMARY KEY (name);
 CREATE FUNCTION analytics.reader_tenant() RETURNS text
  LANGUAGE sql STABLE
  AS $$
@@ -25,6 +35,7 @@ CREATE INDEX idx_audit_tenant_time ON "event-management".audit_events USING btre
 CREATE INDEX idx_calculated_backfills_status_updated ON "event-management".calculated_backfills USING btree (status, updated_at);
 CREATE INDEX idx_calculated_backfills_tenant_profile ON "event-management".calculated_backfills USING btree (tenant_id, profile_token, created_at DESC);
 CREATE INDEX idx_event_anchors_lookup ON "event-management".event_anchors USING btree (tenant_id, anchor_type, anchor_token, occurred_time DESC);
+CREATE INDEX idx_events_processed_time_brin ON "event-management".events USING brin (processed_time);
 CREATE INDEX idx_events_tenant_device_time ON "event-management".events USING btree (tenant_id, device_token, occurred_time DESC);
 CREATE INDEX idx_failed_event_records_device ON "event-management".failed_event_records USING btree (tenant_id, device_token, reason, occurred_time DESC);
 CREATE INDEX idx_failed_event_records_tenant_time ON "event-management".failed_event_records USING btree (tenant_id, occurred_time DESC);
@@ -66,7 +77,11 @@ CREATE TABLE "event-management".audit_events (
  operation text NOT NULL,
  entity_pk text,
  entity_label text,
- rows_affected bigint
+ rows_affected bigint,
+ client_id text,
+ session_id text,
+ on_behalf_of text,
+ proposal text
 );
 CREATE TABLE "event-management".calculated_backfills (
  id bigint NOT NULL,
@@ -185,6 +200,37 @@ CREATE TABLE "event-management".state_change_events (
  state character varying(16) NOT NULL,
  reason text,
  session_id bigint DEFAULT 0 NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_daily (
+ tenant_id character varying(128) NOT NULL,
+ day date NOT NULL,
+ events_ingested bigint DEFAULT 0 NOT NULL,
+ devices_active integer DEFAULT 0 NOT NULL,
+ devices_peak integer DEFAULT 0 NOT NULL,
+ device_hours bigint DEFAULT 0 NOT NULL,
+ rolled_up_at timestamp with time zone NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_devices (
+ tenant_id character varying(128) NOT NULL,
+ day date NOT NULL,
+ device_token character varying(128) NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_hourly (
+ tenant_id character varying(128) NOT NULL,
+ hour timestamp with time zone NOT NULL,
+ events bigint DEFAULT 0 NOT NULL,
+ devices integer DEFAULT 0 NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_ledger (
+ day date NOT NULL,
+ hours integer DEFAULT 0 NOT NULL,
+ updated_at timestamp with time zone NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_state (
+ name character varying(64) NOT NULL,
+ next_hour timestamp with time zone NOT NULL,
+ scan_floor timestamp with time zone,
+ updated_at timestamp with time zone NOT NULL
 );
 CREATE UNIQUE INDEX idx_events_tenant_device_alt_id ON "event-management".events USING btree (tenant_id, device_token, alt_id, occurred_time) WHERE (alt_id IS NOT NULL);
 CREATE UNIQUE INDEX uix_calculated_backfills_tenant_active ON "event-management".calculated_backfills USING btree (tenant_id) WHERE (status = ANY (ARRAY['QUEUED'::text, 'RUNNING'::text]));

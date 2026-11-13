@@ -199,6 +199,10 @@ Metrics + health are on `http://127.0.0.1:<metricsPort>` (default `9090`; set
 | `…_refused_kept_total` / `…_refused_unmatched_total` | Refused events written to the local dead-letter file / refusals whose payload was no longer held (the platform's failed-events record has it). |
 | `…_body_credentials_stripped_total` | Credentials removed from event bodies before forwarding; the device should stop sending them. |
 | `…_uplink_inflight` | Publishes awaiting a PUBACK (window of 64). Pinned at 64 while draining a backlog is normal. |
+| `…_commands_received_total` / `…_commands_delivered_total` / `…_commands_expired_total` | With `commands.enabled`: commands taken from the platform, handed to a device, and expired before delivery (the cloud was told `UNSENT`). |
+| `…_commands_refused_total{reason}` | **Alert on `inbox_full`.** The command inbox is full and new commands are being refused durably; clear the cause (a device that never takes commands) or raise `commands.inboxMaxBytes`. |
+| `…_command_responses_refused_total{reason}` / `…_command_responses_dropped_total` | Answers the agent would not forward (not the device's command, wrong nonce, duplicate) / answers evicted from the bounded response stream. Alert on `dropped`. |
+| `…_command_inbox_depth` | Commands durable on the box and not yet delivered or expired. |
 
 `GET /healthz` → `200` when the agent is up and the last stream sample succeeded, `503`
 otherwise. It **does not** gate on the uplink — surviving a down uplink is the whole point,

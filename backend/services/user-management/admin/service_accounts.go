@@ -86,6 +86,9 @@ type ServiceAccountInput struct {
 	RoleTokens    []string
 	Scope         []ScopeAnchorInput
 	ExpiresInDays *int32
+	// Agent flags the account as running an AI agent: its tokens carry proposal authorities
+	// derived from its roles instead of the roles' writes. Set here and never changed.
+	Agent bool
 }
 
 // MintedSecret is a secret as it is minted: the cleartext, shown once, and its row.
@@ -188,6 +191,15 @@ func (s *Service) CreateServiceAccount(ctx context.Context, in ServiceAccountInp
 	if err := core.ValidateToken(in.Token); err != nil {
 		return nil, "", integrity.NewRefusal(integrity.ClassInvalid, fmt.Sprintf("service account token %q: %v", in.Token, err))
 	}
+	// 🔴 AN AGENT ACCOUNT ONLY WHERE AGENT ACTUATION IS ON. A pod of an earlier release does not
+	// know the flag and mints an account's roles' writes as they are; during a rolling upgrade
+	// an agent account created here could have its token minted there, carrying raw writes. The
+	// instance switch is turned on only after the rollout has finished, so requiring it here
+	// closes that window.
+	if in.Agent && !s.agentActuation {
+		return nil, "", integrity.NewRefusal(integrity.ClassInvalid,
+			"an agent service account can be created only when agent actions are enabled on this instance")
+	}
 	if len(in.Name) > maxNameLen {
 		return nil, "", limit.Exceeded("name length", len(in.Name), maxNameLen)
 	}
@@ -226,6 +238,9 @@ func (s *Service) CreateServiceAccount(ctx context.Context, in ServiceAccountInp
 		if err := requireAssignable(a, roles); err != nil {
 			return err
 		}
+		if err := requireAgentFlag(ctx, tx, caller.Tenant, in.Agent, roles); err != nil {
+			return err
+		}
 		n, err := tx.CountTenantServiceAccounts(ctx, caller.Tenant)
 		if err != nil {
 			return err
@@ -240,7 +255,7 @@ func (s *Service) CreateServiceAccount(ctx context.Context, in ServiceAccountInp
 		}
 		acct := &iam.ServiceAccount{
 			TenantId: caller.Tenant, Token: in.Token, ClientId: clientID, Enabled: true,
-			Scope: scope, CreatedBy: caller.Email, Roles: roles,
+			Scope: scope, CreatedBy: caller.Email, Roles: roles, Agent: in.Agent,
 			NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&in.Name), Description: rdb.NullStrOf(&in.Description)},
 			Secrets:     []iam.ServiceAccountSecret{minted.Row},
 		}
@@ -268,6 +283,9 @@ func (s *Service) SetServiceAccountAccess(ctx context.Context, token string, rol
 			return err
 		}
 		if err := requireAssignable(a, roles); err != nil {
+			return err
+		}
+		if err := requireAgentFlag(ctx, tx, acct.TenantId, acct.Agent, roles); err != nil {
 			return err
 		}
 		return tx.SetServiceAccountAccess(ctx, acct, roles, scope)

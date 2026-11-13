@@ -51,9 +51,16 @@ type PAlarmStateChangeEvent struct {
 	// access is limited to some customers, so a stream delivers exactly the alarms the
 	// alarms query would return them. Empty for an alarm raised before the stamp existed,
 	// which such a member never sees.
-	ScopeAnchors  []string `protobuf:"bytes,16,rep,name=scope_anchors,json=scopeAnchors,proto3" json:"scope_anchors,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ScopeAnchors []string `protobuf:"bytes,16,rep,name=scope_anchors,json=scopeAnchors,proto3" json:"scope_anchors,omitempty"`
+	// What the originating device is called, so a notification can name it. All three are
+	// empty when the originator is not a device or the producer could not read it, and a
+	// producer that predates these fields never sets them; a consumer omits what is empty
+	// rather than inventing a name. They describe the device when the event was emitted.
+	DeviceToken     string `protobuf:"bytes,17,opt,name=device_token,json=deviceToken,proto3" json:"device_token,omitempty"`
+	DeviceName      string `protobuf:"bytes,18,opt,name=device_name,json=deviceName,proto3" json:"device_name,omitempty"`
+	DeviceTypeToken string `protobuf:"bytes,19,opt,name=device_type_token,json=deviceTypeToken,proto3" json:"device_type_token,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *PAlarmStateChangeEvent) Reset() {
@@ -189,6 +196,27 @@ func (x *PAlarmStateChangeEvent) GetScopeAnchors() []string {
 		return x.ScopeAnchors
 	}
 	return nil
+}
+
+func (x *PAlarmStateChangeEvent) GetDeviceToken() string {
+	if x != nil {
+		return x.DeviceToken
+	}
+	return ""
+}
+
+func (x *PAlarmStateChangeEvent) GetDeviceName() string {
+	if x != nil {
+		return x.DeviceName
+	}
+	return ""
+}
+
+func (x *PAlarmStateChangeEvent) GetDeviceTypeToken() string {
+	if x != nil {
+		return x.DeviceTypeToken
+	}
+	return ""
 }
 
 // *
@@ -617,7 +645,7 @@ var File_proto_dc_device_management_events_proto protoreflect.FileDescriptor
 
 const file_proto_dc_device_management_events_proto_rawDesc = "" +
 	"\n" +
-	"'proto/dc-device-management-events.proto\x12\x1fio.devicechain.devicemanagement\"\xef\x04\n" +
+	"'proto/dc-device-management-events.proto\x12\x1fio.devicechain.devicemanagement\"\xdf\x05\n" +
 	"\x16PAlarmStateChangeEvent\x12\x1d\n" +
 	"\n" +
 	"event_type\x18\x01 \x01(\tR\teventType\x12\x1f\n" +
@@ -639,7 +667,11 @@ const file_proto_dc_device_management_events_proto_rawDesc = "" +
 	"\roccurred_time\x18\x0e \x01(\tR\foccurredTime\x12\x1f\n" +
 	"\vraised_time\x18\x0f \x01(\tR\n" +
 	"raisedTime\x12#\n" +
-	"\rscope_anchors\x18\x10 \x03(\tR\fscopeAnchorsB\x14\n" +
+	"\rscope_anchors\x18\x10 \x03(\tR\fscopeAnchors\x12!\n" +
+	"\fdevice_token\x18\x11 \x01(\tR\vdeviceToken\x12\x1f\n" +
+	"\vdevice_name\x18\x12 \x01(\tR\n" +
+	"deviceName\x12*\n" +
+	"\x11device_type_token\x18\x13 \x01(\tR\x0fdeviceTypeTokenB\x14\n" +
 	"\x12_previous_severityB\x12\n" +
 	"\x10_acknowledged_byB\r\n" +
 	"\v_last_valueJ\x04\b\r\x10\x0eR\amessage\"\xaf\x01\n" +

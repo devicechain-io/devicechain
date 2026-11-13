@@ -40,9 +40,8 @@ func TestLoadDefaultsEventSources(t *testing.T) {
 	assert.NoError(t, cfg.Validate())
 }
 
-// A non-positive ingest limit falls back to the platform default (fail-safe: an
-// omitted or zeroed limit still meters every tenant, never unlimited). An
-// explicit positive value is preserved.
+// A zero/unset ingest limit takes the platform default, never unlimited.
+// An explicit positive value is preserved.
 func TestIngestRateLimitDefaulting(t *testing.T) {
 	// Zeroed (omitted in the document) => platform default.
 	zeroed := &EventSourcesConfiguration{}
@@ -204,4 +203,19 @@ func TestValidateRejectsDuplicateSourceIds(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicates")
+}
+
+// The downlink feed switch is chart-derived and defaults off, so a configuration that predates it (and
+// an installation that leaves the LoRaWAN downlink off) behaves exactly as before. It is a typed key:
+// a document that carries it loads, and a misspelling is still refused.
+func TestTheDownlinkFeedDefaultsOffAndIsReadFromTheDocument(t *testing.T) {
+	off := &EventSourcesConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{}`), off))
+	assert.False(t, off.LpwanDownlink)
+
+	on := &EventSourcesConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{"lpwanDownlink":true}`), on))
+	assert.True(t, on.LpwanDownlink)
+
+	assert.Error(t, core.LoadConfiguration([]byte(`{"lpwanDownlinks":true}`), &EventSourcesConfiguration{}))
 }

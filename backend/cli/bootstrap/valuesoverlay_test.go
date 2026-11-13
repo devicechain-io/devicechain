@@ -698,3 +698,64 @@ func TestTheIngestMeteringSwitchIsTunable(t *testing.T) {
 		t.Fatal("a sibling of ingestMetering was accepted")
 	}
 }
+
+// The raw-device-payload opt-in is a tunable value: an operator can set it with --values, a later
+// upgrade carries it forward, and it reaches the rendered instance configuration. A value of the
+// wrong type is refused by the chart's schema.
+func TestTheDeviceUplinksOptInCanBeSetAndSurvivesAnUpgrade(t *testing.T) {
+	overlay, err := LoadValuesOverlay([]string{writeOverlayFile(t, "uplinks.yaml", `
+instance:
+  config:
+    infrastructure:
+      nats:
+        mqttDeviceUplinks: true
+`)})
+	if err != nil {
+		t.Fatalf("the opt-in was refused: %v", err)
+	}
+	// An upgrade without --values carries it.
+	st := &State{Instance: "prod"}
+	if err := applyUpgradeValuesOverlay(st, declarationWithOverlay(t, overlay), UpgradeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(diffOverlays(overlay, st.ValuesOverlay)) != 0 || valuesOverlayChanges(st) {
+		t.Errorf("the recorded opt-in was not carried unchanged: %v", st.ValuesOverlay)
+	}
+	// ...and renders into the instance configuration the services read.
+	rs := compactState(false)
+	rs.ValuesOverlay = st.ValuesOverlay
+	vals := authoringValues(rs)
+	nats := natsValuesOf(vals)
+	if nats["mqttDeviceUplinks"] != true {
+		t.Errorf("the opt-in did not reach the rendered values: %v (instance %v)", nats, vals["instance"])
+	}
+	// Off by default: no overlay, no key.
+	plain := compactState(false)
+	pv := authoringValues(plain)
+	if _, set := natsValuesOf(pv)["mqttDeviceUplinks"]; set {
+		t.Errorf("the opt-in is set without an overlay: %v", natsValuesOf(pv))
+	}
+	bad := `
+instance:
+  config:
+    infrastructure:
+      nats:
+        mqttDeviceUplinks: "yes"
+`
+	if _, err := LoadValuesOverlay([]string{writeOverlayFile(t, "bad.yaml", bad)}); err == nil {
+		t.Error("a non-boolean opt-in was accepted")
+	}
+}
+
+// natsValuesOf digs infrastructure.nats out of rendered values, or an empty map.
+func natsValuesOf(vals map[string]interface{}) map[string]interface{} {
+	var cur interface{} = vals
+	for _, k := range []string{"instance", "config", "infrastructure", "nats"} {
+		m, _ := cur.(map[string]interface{})
+		if cur = m[k]; cur == nil {
+			return map[string]interface{}{}
+		}
+	}
+	m, _ := cur.(map[string]interface{})
+	return m
+}

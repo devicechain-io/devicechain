@@ -80,7 +80,7 @@ Un umbral puede ser un **valor fijo** en la regla, o **dinámico**: el nombre de
 
 En una expresión CEL, las mediciones del evento son el mapa `m` y los atributos del dispositivo son el mapa `attr`, ambos de una clave a un número. Una clave está en `attr` solo mientras el dispositivo tiene un valor **numérico** para ella con alcance `SERVER` o `SHARED`. Falta cuando el atributo nunca se estableció, cuando se estableció con algo que no es un número, cuando se estableció con alcance `CLIENT`, y durante un breve tiempo después de establecerlo, hasta que el cambio llega al motor de detección.
 
-Compruebe la presencia antes de leer un valor. Un umbral dinámico creado en el formulario se compila como `"tempLimit" in attr && "temp" in m && m["temp"] > attr["tempLimit"]`, que no se dispara para un dispositivo sin el atributo. El formulario no tiene valor de respaldo. Para recurrir a un límite fijo, escriba el respaldo como su propia comparación:
+Comprueba la presencia antes de leer un valor. Un umbral dinámico creado en el formulario se compila como `"tempLimit" in attr && "temp" in m && m["temp"] > attr["tempLimit"]`, que no se dispara para un dispositivo sin el atributo. El formulario no tiene valor de respaldo. Para recurrir a un límite fijo, escribe el respaldo como su propia comparación:
 
 ```
 "temp" in m && ("tempLimit" in attr ? m["temp"] > attr["tempLimit"] : m["temp"] > 80.0)
@@ -88,7 +88,7 @@ Compruebe la presencia antes de leer un valor. Un umbral dinámico creado en el 
 
 Como esta expresión no puede ser verdadera para un evento sin `temp`, la regla solo mira los eventos que llevan `temp`. Un evento sin ella se omite: no resuelve una alarma de umbral y no interrumpe el tiempo de sostenimiento de una regla de duración.
 
-Una condición de umbral o de duración que sería verdadera en todos los eventos de **todos** los dispositivos sin los atributos que lee, sea cual sea el contenido del evento, se rechaza al publicar el perfil. Por ejemplo, `!("tempLimit" in attr) || m["temp"] > attr["tempLimit"]` levantaría una alarma para cada uno de esos dispositivos, informara lo que informara, mientras le faltara el atributo. Una condición que sigue dependiendo de la lectura, como `!("tempLimit" in attr) && m["temp"] > 80.0`, se acepta. Tenga en cuenta que también se aplica a los dispositivos cuyo atributo tiene un tipo o un alcance incorrectos, no solo a los que nunca lo establecieron.
+Una condición de umbral o de duración que sería verdadera en todos los eventos de **todos** los dispositivos sin los atributos que lee, sea cual sea el contenido del evento, se rechaza al publicar el perfil. Por ejemplo, `!("tempLimit" in attr) || m["temp"] > attr["tempLimit"]` levantaría una alarma para cada uno de esos dispositivos, informara lo que informara, mientras le faltara el atributo. Una condición que sigue dependiendo de la lectura, como `!("tempLimit" in attr) && m["temp"] > 80.0`, se acepta. Ten en cuenta que también se aplica a los dispositivos cuyo atributo tiene un tipo o un alcance incorrectos, no solo a los que nunca lo establecieron.
 
 La forma aceptada lleva una advertencia. Cuando la condición de una regla une con `&&` una comprobación de que un atributo **no** está definido y otras comprobaciones, como en `!("tempLimit" in attr) && m["temp"] > 80.0`, el formulario, el lienzo y la puerta «Describir» muestran una advertencia que nombra el atributo e indica que la regla se aplica a todos los dispositivos que no lo tienen. La advertencia es solo un aviso: la regla se guarda y se evalúa exactamente como está escrita. Existe porque «no definido» es más amplio que «no configurado», así que la regla también abarca los dispositivos cuyo atributo tiene un tipo o un alcance incorrectos. La advertencia es más fuerte cuando la comprobación es una alternativa y no un requisito, como en `"temp" in m && (!("tempLimit" in attr) || m["temp"] > attr["tempLimit"])`: esa condición es verdadera para todo dispositivo sin el atributo, informe lo que informe, así que no se les aplica ningún umbral. Usa la forma condicional anterior para darles un límite de reserva.
 
@@ -154,6 +154,18 @@ Una alarma nombra el dispositivo que la levantó. Consultas las alarmas a nivel 
 ### Severidad y escalamiento
 
 Cada alarma lleva una **severidad**: `CRITICAL`, `MAJOR`, `MINOR`, `WARNING` o `INDETERMINATE`. Una sola condición puede declarar reglas en varios niveles de severidad (por ejemplo `temp > 80 → MAJOR`, `temp > 100 → CRITICAL`). Cuando esas reglas levantan bajo la misma clave de alarma, el motor **escala en el mismo lugar una única alarma activa** hasta el nivel más alto que se cumple en ese momento, y la desescala a medida que las condiciones ceden, en lugar de abrir una alarma separada por nivel. Una acción de levantar alarma sin clave de alarma usa como clave la propia regla (sus tokens de perfil y de regla), así que las reglas que se dejan con ese valor por defecto abren alarmas separadas.
+
+### Etiquetar el resultado de una alarma {#labelling-an-alarms-outcome}
+
+Cuando alguien sabe qué resultó ser una alarma, puede etiquetarla con `setAlarmDisposition`:
+
+- `TRUE_POSITIVE`: la condición era real y requería atención.
+- `FALSE_POSITIVE`: la condición no era real, por ejemplo una lectura errónea, un sensor sucio o un umbral mal configurado. Una regla distinta no la habría levantado.
+- `EXPECTED`: la condición era real pero esperada y no requería acción, como un mantenimiento planificado o una prueba de puesta en marcha. La regla acertó; en todo caso, la alarma debería haberse suprimido.
+
+Una etiqueta pertenece a un **ciclo** de la alarma: un levantamiento, identificado por el `raisedTime` que tenía la alarma cuando se etiquetó. Cuando una condición intermitente reactiva la misma alarma, el nuevo ciclo empieza sin etiqueta y el ciclo anterior conserva la suya. Pasa el `raisedTime` que estabas viendo y la etiqueta se rechaza si la alarma se ha vuelto a levantar desde entonces, de modo que un veredicto sobre un ciclo nunca cae en el siguiente. Etiquetar un ciclo de nuevo reemplaza su etiqueta, y la plataforma registra quién la escribió y cuándo. Etiquetar no cambia nada más de la alarma: su estado, su reconocimiento y su severidad se mantienen, y no se envía ninguna notificación.
+
+El campo `disposition` de una alarma responde con la etiqueta de su ciclo actual. `alarmDispositions` lista todos los ciclos etiquetados, del más reciente al más antiguo, filtrados por alarma, etiqueta o intervalo de tiempo. Juntos son la verdad de referencia para medir una regla: cuántas de las alarmas que levantó eran reales.
 
 ## Llegar a una persona {#reaching-a-human}
 

@@ -5,15 +5,21 @@ package model
 
 import (
 	"context"
+	"fmt"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Create a new area type.
 func (api *Api) CreateAreaType(ctx context.Context, request *AreaTypeCreateRequest) (*AreaType, error) {
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	semanticTypes, err := api.semanticTypesOnCreate(ctx, request.SemanticTypes)
 	if err != nil {
 		return nil, err
 	}
@@ -35,6 +41,7 @@ func (api *Api) CreateAreaType(ctx context.Context, request *AreaTypeCreateReque
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: metadataJSON,
 		},
+		SemanticTypes: semanticTypes,
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -51,10 +58,8 @@ func (api *Api) CreateAreaType(ctx context.Context, request *AreaTypeCreateReque
 // type in the argument and another in the payload silently updated the second and
 // got a 200 back for it.
 //
-// Each assignment folds the field's three states onto the stored value: absent
-// keeps it, null clears it, a value sets it. Reading `found.X` as the "current"
-// argument is what makes an omitted field a no-op, so these must stay assignments
-// FROM the loaded record rather than from the request alone.
+// Only named columns are written; omitted fields remain untouched even when
+// another writer changes them after the read. Null clears a nullable field.
 func (api *Api) UpdateAreaType(ctx context.Context, token string,
 	request *AreaTypeUpdateRequest) (*AreaType, error) {
 	matches, err := api.AreaTypesByToken(ctx, []string{token})
@@ -66,24 +71,68 @@ func (api *Api) UpdateAreaType(ctx context.Context, token string,
 	}
 
 	found := matches[0]
-	found.Name = request.Name.ApplyToNullString(found.Name)
-	found.Description = request.Description.ApplyToNullString(found.Description)
-	found.ImageUrl = request.ImageUrl.ApplyToNullString(found.ImageUrl)
-	found.Icon = request.Icon.ApplyToNullString(found.Icon)
-	found.BackgroundColor = request.BackgroundColor.ApplyToNullString(found.BackgroundColor)
-	found.ForegroundColor = request.ForegroundColor.ApplyToNullString(found.ForegroundColor)
-	found.BorderColor = request.BorderColor.ApplyToNullString(found.BorderColor)
+	assignments := map[string]any{}
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(found.Name)
+	}
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(found.Description)
+	}
+	if request.ImageUrl.Set {
+		assignments["image_url"] = request.ImageUrl.ApplyToNullString(found.ImageUrl)
+	}
+	if request.Icon.Set {
+		assignments["icon"] = request.Icon.ApplyToNullString(found.Icon)
+	}
+	if request.BackgroundColor.Set {
+		assignments["background_color"] = request.BackgroundColor.ApplyToNullString(found.BackgroundColor)
+	}
+	if request.ForegroundColor.Set {
+		assignments["foreground_color"] = request.ForegroundColor.ApplyToNullString(found.ForegroundColor)
+	}
+	if request.BorderColor.Set {
+		assignments["border_color"] = request.BorderColor.ApplyToNullString(found.BorderColor)
+	}
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
 	if err != nil {
 		return nil, err
 	}
-	found.Metadata = metadataJSON
-
-	result := api.RDB.DB(ctx).Save(found)
-	if result.Error != nil {
-		return nil, result.Error
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
 	}
-	return found, nil
+	semanticTypes, err := api.semanticTypesOnUpdate(ctx, request.SemanticTypes, found.SemanticTypes)
+	if err != nil {
+		return nil, err
+	}
+
+	if request.SemanticTypes.Set {
+		assignments["semantic_types"] = semanticTypes
+	}
+
+	if len(assignments) == 0 {
+		return found, nil
+	}
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		res := rdb.AdvancingFrom(tx, found.UpdatedAt).Model(found).Omit(clause.Associations).
+			Where("id = ?", found.ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	matches, err = api.AreaTypesById(ctx, []uint{found.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // Get area types by id.
@@ -143,9 +192,20 @@ func (api *Api) CreateArea(ctx context.Context, request *AreaCreateRequest) (*Ar
 		},
 		AreaType: atmatches[0],
 	}
-	result := api.RDB.DB(ctx).Create(created)
-	if result.Error != nil {
-		return nil, result.Error
+	if request.BoundaryFenceToken != nil {
+		created.BoundaryFenceToken = rdb.NullStrOf(request.BoundaryFenceToken)
+	}
+	// The fence is checked and the area written in ONE transaction holding the fence's row lock,
+	// so a concurrent delete of the fence cannot slip between them (see DeleteGeoFence).
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if created.BoundaryFenceToken.Valid {
+			if err := lockGeoFenceOnTx(tx, created.BoundaryFenceToken.String); err != nil {
+				return err
+			}
+		}
+		return tx.Create(created).Error
+	}); err != nil {
+		return nil, err
 	}
 	return created, nil
 }
@@ -163,15 +223,16 @@ func (api *Api) UpdateArea(ctx context.Context, token string, request *AreaUpdat
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	updated := matches[0]
+	current := matches[0]
+	assignments := map[string]any{}
 
 	// The type hop resolves BEFORE anything is written, so an unknown area type
 	// refuses the WHOLE update rather than applying the fields it liked first. The
 	// nil guard is not decoration: the preload comes back nil for a dangling FK, and
 	// the comparison this replaces dereferenced it unconditionally.
 	currentTypeToken := ""
-	if updated.AreaType != nil {
-		currentTypeToken = updated.AreaType.Token
+	if current.AreaType != nil {
+		currentTypeToken = current.AreaType.Token
 	}
 	retypeTo, retype, err := resolveRequiredTypeRef(request.AreaTypeToken, currentTypeToken, "areaTypeToken")
 	if err != nil {
@@ -185,27 +246,68 @@ func (api *Api) UpdateArea(ctx context.Context, token string, request *AreaUpdat
 		if len(types) == 0 {
 			return nil, gorm.ErrRecordNotFound
 		}
-		updated.AreaType = types[0]
-		// Belt-and-braces: gorm's Save syncs a belongs-to FK from the association it is
-		// given, so this is not load-bearing the way the device version is (that one is
-		// READ back by the post-commit roster resolve). It is set anyway so the in-memory
-		// value the caller is handed back agrees with the row.
-		updated.AreaTypeId = types[0].ID
+		assignments["area_type_id"] = types[0].ID
 	}
 
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(current.Name)
+	}
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(current.Description)
+	}
+	if request.Metadata.Set {
+		metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(current.Metadata)))
+		if err != nil {
+			return nil, err
+		}
+		assignments["metadata"] = metadataJSON
+	}
+
+	// A NEW link is checked, and the area written, in one transaction holding the fence's row lock
+	// (see DeleteGeoFence); an unknown fence refuses the whole update.
+	linkTo := ""
+	if request.BoundaryFenceToken.Set {
+		proposed := request.BoundaryFenceToken.ApplyToNullString(current.BoundaryFenceToken)
+		assignments["boundary_fence_token"] = nil
+		if proposed.Valid {
+			assignments["boundary_fence_token"] = proposed.String
+		}
+		if proposed.Valid {
+			linkTo = proposed.String
+		}
+	}
+	if len(assignments) == 0 {
+		return current, nil
+	}
+
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if linkTo != "" {
+			if err := lockGeoFenceOnTx(tx, linkTo); err != nil {
+				return err
+			}
+		}
+		// Only requested columns are written: an omitted boundary must never restore
+		// a stale link after another writer unlinked the area and deleted the fence.
+		res := rdb.AdvancingFrom(tx, current.UpdatedAt).Model(current).Omit(clause.Associations).
+			Where("id = ?", current.ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	matches, err = api.AreasByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
 	}
-	updated.Metadata = metadataJSON
-
-	result := api.RDB.DB(ctx).Save(updated)
-	if result.Error != nil {
-		return nil, result.Error
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
 	}
-	return updated, nil
+	return matches[0], nil
 }
 
 // Get areas by id.
@@ -242,4 +344,20 @@ func (api *Api) Areas(ctx context.Context, criteria AreaSearchCriteria) (*AreaSe
 		Results:    results,
 		Pagination: pag,
 	}, nil
+}
+
+// lockGeoFenceOnTx refuses an area boundary that names no fence (a link to nothing would read back
+// as "this area has a boundary" and then fail where it is used), and holds the fence's row lock for
+// the rest of tx. DeleteGeoFence takes the same lock before it looks for areas naming the fence, so
+// the check and the area write cannot be split by a delete.
+func lockGeoFenceOnTx(tx *gorm.DB, token string) error {
+	var fence GeoFence
+	res := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("token = ?", token).Limit(1).Find(&fence)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("%w: boundaryFenceToken %q names no geofence", gorm.ErrRecordNotFound, token)
+	}
+	return nil
 }

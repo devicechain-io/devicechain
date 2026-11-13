@@ -80,6 +80,8 @@ AI 模型使用资格采用相同回退：先使用租户模型分配，再使�
 
 ### 接入何时可以超过租户上限 {#ingest-above-ceiling}
 
+以下额度描述的是默认的 `legacy` 计量方式。关于可选的 `lagCredit`、它对新到流量的共享额度及其限制，参见[Ingest metering](../deployment/tuning-an-instance.md#ingest-metering)。
+
 在单个 `event-sources` 副本中，租户接入上限分别应用于四个额度，而非租户整体：
 
 - **实时流量**：租户设备当前通过 MQTT 和 NATS 发送的流量，包括消息代理在线状态。
@@ -118,3 +120,9 @@ AI 模型使用资格采用相同回退：先使用租户模型分配，再使�
 - **[多租户](./multi-tenancy.md)**：正确性方面，在同一共享实例中拒绝无作用域查询的数据隔离。
 - **[出站连接器](./outbound-connectors.md#governance)**：出站治理如何应用于 webhook 和消息代理发布。
 - **[租户层级](./tenant-tiers.md)**：提供租户默认上限的服务组合实体。
+
+:::tip 动手试试
+
+**约 30 分钟，跑通你的第一台设备.** 在本地安装 DeviceChain，连接一台模拟设备，并查看它的遥测数据如何到达。 [开始快速入门 →](../quickstart/first-device.md)
+
+:::

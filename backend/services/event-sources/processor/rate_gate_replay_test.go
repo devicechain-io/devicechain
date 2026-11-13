@@ -55,8 +55,9 @@ import (
 //     runs legacy against the strict expectations and is RED on exactly the marked rows.
 //   - MODEL runs core.LagCreditMeter fed the exact lag and skew the harness knows. It is the library
 //     doing what the spec says with perfect measurement; it is not the gateway.
-//   - GATEWAY is the real lagCredit wiring. Not built yet (slice S3), so its rows are skipped, loudly,
-//     by name.
+//   - GATEWAY is the real lagCredit wiring (LagCreditIngest: the measured lag and skew, the meter, the
+//     reading stage, the same calls handle() and the decode worker make), judged by the same rows and the
+//     same oracle. It is in rate_gate_replay_gateway_test.go.
 
 // ---- the scenario DSL ----
 
@@ -113,6 +114,10 @@ type replayScenario struct {
 	legacyLoses bool
 	// modelSkip names why the model arm cannot judge a row, when it cannot.
 	modelSkip string
+	// gatewayResidual names a documented residual of the MEASURED gate that this row exercises: the
+	// gateway arm is expected to violate the expectations here (the model, told the truth, does not), and
+	// the arm fails if it ever stops, so the residual cannot be fixed or worsened unnoticed.
+	gatewayResidual string
 	// redeliverEvery, when positive, interleaves a redelivery of an earlier message after every Nth message.
 	redeliverEvery int
 }
@@ -824,6 +829,15 @@ func replayTable() []*replayScenario {
 		sources:     []replaySource{{offset: 2 * s, base: 5 * ms, stalls: []replayStallWindow{{0, 3 * s}}}},
 		tenants:     []replayTenant{bursty("bursty", 3*s, 2600*ms, 1000)},
 		legacyLoses: true,
+		gatewayResidual: "a pod that starts inside the stall has no caught-up sample to learn the leader's clock from: the first messages " +
+			"are aged without the 2 s correction, so the credit is undersized (residual: an unestimated skew)",
+	})
+	// The same stall, after a healthy stretch the skew was learned from.
+	add(&replayScenario{
+		id: "B4-warm-clock-2s-ahead-3s-stall", about: "leader's clock 2 s ahead, learned in 4 s of healthy reading; then a 3 s stall",
+		sources:     []replaySource{{offset: 2 * s, base: 5 * ms, stalls: []replayStallWindow{{4 * s, 7 * s}}}},
+		tenants:     []replayTenant{bursty("bursty", 7*s, 6600*ms, 1000)},
+		legacyLoses: true,
 	})
 	// A broker clock behind the pods makes young traffic look old and routes it to the unshed backlog.
 	add(&replayScenario{
@@ -878,11 +892,27 @@ func replayTable() []*replayScenario {
 		})
 		rows[len(rows)-1].burst = burst
 	}
+	// A long stall drained through a decode stage that is a second late, on a leader whose clock runs 2 s ahead
+	// (learned in the 5 s before the stall). The messages are backlog (older than the cover): the reading stage
+	// must follow them onto the backlog route and charge them at the stamp with the skew taken back out.
+	add(&replayScenario{
+		id: "X-backlog-readings-clock-ahead", about: "30 s stall, leader 2 s ahead, 1 s decode delay: the reading stage charges the drained backlog on the send timeline",
+		sources:     []replaySource{{offset: 2 * s, base: 5 * ms, decodeDelay: s, stalls: []replayStallWindow{{5 * s, 35 * s}}}},
+		tenants:     []replayTenant{{name: "steady", kind: kindCompliant, class: governance.ShedBronze, sends: steady(platformRate, 0, 35*s)}},
+		legacyLoses: true,
+	})
 	// A reading stage that decodes a second late.
 	add(&replayScenario{
 		id: "C6-decode-delay-1s", about: "compliant tenant, 1 s of decode delay between the stages, no stall",
 		sources: []replaySource{{base: 5 * ms, decodeDelay: s}},
 		tenants: []replayTenant{{name: "steady", kind: kindCompliant, class: governance.ShedBronze, sends: steady(platformRate, 0, 5*s)}},
+	})
+	// A stall nearly as long as the cover plus the decode delay: the reading stage's credit is the cover AND the delay.
+	add(&replayScenario{
+		id: "C6-stall-1900-and-decode-delay", about: "1.9 s stall plus 1 s decode delay, bursting compliant tenant",
+		sources:     []replaySource{{base: 5 * ms, decodeDelay: s, stalls: []replayStallWindow{{0, 1900 * ms}}}},
+		tenants:     []replayTenant{bursty("bursty", 1900*ms, 1500*ms, 1000)},
+		legacyLoses: true,
 	})
 	// Stall and decode delay together on a bursting tenant.
 	add(&replayScenario{
@@ -1061,18 +1091,6 @@ func TestReplayOracleNegativeControls(t *testing.T) {
 	}
 	require.Greater(t, policing, 5)
 	require.Greater(t, protecting, 10)
-}
-
-// THE GATEWAY ARM. The lag-credited gate is not wired into the gateway yet (slice S3), so every row is
-// skipped by name and the reason is printed. When S3 lands, build the real gate here and drop the skip:
-// the rows, the oracle and the expectations are already the ones it will be judged against.
-func TestReplayLagCreditGateway(t *testing.T) {
-	for _, sc := range replayTable() {
-		sc := sc
-		t.Run(sc.id, func(t *testing.T) {
-			t.Skip("lagCredit is not wired into the gateway until S3; the model arm (TestReplayModelMeetsEveryRow) judges the library")
-		})
-	}
 }
 
 // CONTENTION IS NOT PHASE-BOUND. After a 10 s stall the stream is in its backlog phase for the drain and the

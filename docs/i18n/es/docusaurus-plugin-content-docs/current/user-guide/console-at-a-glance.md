@@ -17,8 +17,11 @@ tendrán más sentido.
 ## La página de inicio
 
 Después de iniciar sesión llegas a la página de inicio. Te da la bienvenida por tu nombre y
-muestra dos recuentos: cuántos **Dispositivos** y cuántos **Tipos de dispositivo** tiene tu
-inquilino. Selecciona cualquiera de los dos para abrir esa lista.
+muestra cuántos **Dispositivos** y **Tipos de dispositivo** tiene tu inquilino. Selecciona cualquiera
+de los dos recuentos para abrir esa lista. Con `state:read`, también muestra **Dispositivos en línea**
+y **Dispositivos fuera de línea**; los dispositivos que nunca han enviado datos no cuentan en ninguno.
+Con `alarm:read`, **Alarmas activas por severidad** muestra un recuento por severidad; selecciona uno
+para abrir la lista de alarmas filtrada por esa severidad y por el estado activo.
 
 <GuideShot id="console-home" alt="La página de inicio de la consola. La barra lateral está a la izquierda. La cabecera dice Inicio, con el distintivo de inquilino 'acme (sim)' arriba a la derecha. La página se titula 'Bienvenido, Dana Okafor' y muestra dos tarjetas: 13 Dispositivos y 1 Tipos de dispositivo." />
 
@@ -39,12 +42,14 @@ una página dentro de ella para ir allí.
 | Entrada | Qué contiene |
 | --- | --- |
 | **Inicio** | La página de inicio. |
-| **Supervisión** | Los **Paneles** que crea tu equipo, las **Alarmas** que han generado tus reglas y las **Políticas de notificación**: a quién se avisa de las alarmas y las horas de silencio que retienen esos avisos. |
+| **Supervisión** | **Aprobaciones** (vista previa) para revisar propuestas de agentes, los **Paneles** que crea tu equipo, las **Alarmas** que han generado tus reglas, los **Fallos de ingesta** para eventos rechazados, las **Políticas de notificación** para el enrutamiento de alarmas y las horas de silencio, y los **Canales de notificación** para los destinos de entrega. |
 | **Dispositivos** | **Dispositivos**, **Tipos de dispositivo**, **Perfiles de dispositivo** (que contienen las reglas, métricas y comandos del perfil), **Grupos de dispositivos**, **Lotes de comandos**, **Ventanas de mantenimiento** y **Actualizaciones** (**Artefactos**, **Despliegues** y **Firmantes** para las actualizaciones remotas, OTA). |
 | **Conectar** | Cómo llegan al inquilino los dispositivos y otros sistemas: **Perfiles de aprovisionamiento**, **Anclas de confianza**, **Integraciones** y **Conectores** (conexiones salientes con otros sistemas). |
 | **Organización** | **Activos**, **Clientes** y **Áreas** (incluidas las **Geocercas**); **Facetas**, las claves con las que describes y filtras entidades; y **Explorar**, un generador de consultas para encontrar entidades por sus facetas. |
 | **Acceso** | **Miembros**, **Cuentas de servicio**, **Roles**, **Seguridad de inicio de sesión** y **Auditoría**, el registro del inquilino de quién cambió qué. |
 | **Configuración** | **Marca**, **Mapa** e **Idioma**. |
+
+La [bandeja de aprobaciones (vista previa)](../concepts/mcp.md#approvals-inbox) necesita `agent:admin` o un aprobador actual (rol aprobador, `alarm:write` y segundo factor activo) y una membresía en el inquilino sin restricción de alcance. El operador también debe habilitar las acciones de agentes antes de que puedas usarla.
 
 Solo ves las entradas que tu rol permite. Si tu rol no puede leer alarmas, por ejemplo,
 **Alarmas** no aparece en tu barra lateral. **Actualizaciones** solo aparece cuando tu instalación ejecuta el servicio

@@ -149,6 +149,9 @@ func TestTheBackgroundDrainRetriesWithoutAnOperator(t *testing.T) {
 	var pending int
 	var oldest time.Duration
 	f.api.SessionKickObserver = func(p int, o time.Duration) { pending, oldest = p, o }
+	// Backdate the debts: the age is a wall-clock difference, and on a coarse clock (Windows) a
+	// freshly queued row reads as 0s old, which made the assertion below flaky.
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&PendingSessionKick{}).Where("1 = 1").Update("requested_at", time.Now().Add(-time.Minute)).Error)
 	f.api.observeSessionKicks(f.ctx)
 	assert.Equal(t, 3, pending)
 	assert.Greater(t, oldest, time.Duration(0))

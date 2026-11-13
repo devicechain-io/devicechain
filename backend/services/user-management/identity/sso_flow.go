@@ -731,7 +731,7 @@ func (m *Manager) completeSsoRecord(ctx context.Context, rec ssoCode) (*Identity
 		m.countSso(conn.Token, SsoOutcomeRefusedSystemRole)
 		return nil, ErrSsoCodeInvalid
 	}
-	sid, err := m.startSsoSession(id.Email, conn, rec.Anchor)
+	sid, err := m.startSsoSession(id.Email, id.SessionEpoch, conn, rec.Anchor)
 	if err != nil {
 		return nil, err
 	}

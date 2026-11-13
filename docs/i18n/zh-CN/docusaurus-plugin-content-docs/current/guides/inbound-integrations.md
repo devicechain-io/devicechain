@@ -129,10 +129,10 @@ ChirpStack 通过应用上的 **HTTP 集成**发送上行。
    | Event endpoint URL(s) | `https://<host>/api/integrations/{tenant}/{integration}`。ChirpStack 会自行追加 `?event=up`。 |
    | Headers | 名称 `Authorization`，值 `Bearer <bearer-token>`。 |
 
-3. **在 ChirpStack 设备配置文件上设置编解码器**（JavaScript 载荷编解码器）。平台存储的是网络服务器解码出的值，不会自己解码原始帧。没有编解码器时，ChirpStack 发送原始帧而没有解码对象，该上行会被[计为未解码](#undecoded)，而不会被存储。或者，给设备类型配置一个[载荷解码器](./payload-decoders.md)，由 DeviceChain 读取原始帧。
+3. **在 ChirpStack 设备配置文件上设置编解码器**（JavaScript 载荷编解码器）。没有配置文件解码器时，平台存储网络服务器解码出的值。如果网络服务器编解码器和配置文件解码器均不适用，该上行会被[计为未解码](#undecoded)，而不会被存储。或者，给设备类型配置一个[载荷解码器](./payload-decoders.md)，由 DeviceChain 读取原始帧。
 4. 在 DeviceChain 中添加设备，并把它的 DevEUI 设为 `lorawan.deveui` 别名。
 
-只读取上行。ChirpStack 会用不同的 `event` 值把其他事件（join、status、确认）发送到同一个 URL，这些事件会返回 `204` 并被忽略。上行的 `deduplicationId` 必须是 UUID（ChirpStack 一直如此发送）；其他值会被以 `400` 拒绝。消息时间是 ChirpStack 报告的 `time`；该字段缺失时，则是平台收到消息的时间。
+上行会被存储为读数。ChirpStack 还会把 `ack` 和 `txack` 事件发送到同一个 URL：启用了 [LoRaWAN 下行](#lorawan-downlink)的安装会读取它们来结束[确认下行](#lorawan-confirmed)；未启用时它们与其他事件（join、status）一样返回 `204` 并被不加读取地忽略，无论正文内容如何。上行的 `deduplicationId` 必须是 UUID（ChirpStack 一直如此发送）；其他值会被以 `400` 拒绝。消息时间是 ChirpStack 报告的 `time`；该字段缺失时，则是平台收到消息的时间。
 
 ## The Things Stack v3 {#the-things-stack}
 
@@ -150,7 +150,7 @@ The Things Stack 通过应用上的 **webhook** 发送上行。
 3. **在应用或设备上设置载荷格式化器（payload formatter）**（LoRaWAN Device Repository 为许多传感器提供了现成的格式化器）。平台存储格式化器的输出，不会自己解码原始帧。没有格式化器时，该上行会被[计为未解码](#undecoded)。或者，给设备类型配置一个[载荷解码器](./payload-decoders.md)，由 DeviceChain 读取原始帧。
 4. 在 DeviceChain 中添加设备，把 DevEUI 设为 `lorawan.deveui` 别名；如果选择了 **Device id**，则把设备 ID 设为 `tts.device-id` 别名。
 
-发送到其他任何路径的消息（join accept、下行确认）会返回 `204` 并被忽略，因此启用其他消息类型不需要在 DeviceChain 中改动任何内容，但也没有必要这样做。消息时间是上行的 `received_at`，它必须存在，且不得早于 366 天前。去重键由设备、帧计数器和该时间共同组成，因为设备重新入网时计数器会重置。
+发送到其他任何路径的消息（join accept、位置解算）会返回 `204` 并被忽略，不属于平台所发下行的下行事件也一样（见 [The Things Stack 下行](#lorawan-downlink-tts)），因此启用其他消息类型不需要在 DeviceChain 中改动任何内容，但也没有必要这样做。消息时间是上行的 `received_at`，它必须存在，且不得早于 366 天前。去重键由设备、帧计数器和该时间共同组成，因为设备重新入网时计数器会重置。
 
 ## 通用 JSON {#generic-json}
 
@@ -183,7 +183,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 通用二进制 {#generic-binary}
 
-通用二进制集成接受原始字节正文，标识符放在请求头或查询参数中（`idFrom` 为 `header:` 或 `query:`；二进制正文没有可指向的字段）。如果设备类型上没有[载荷解码器](./payload-decoders.md)，平台就无法读取这些字节，因此每条这类上行都会被接受并[计为未解码](#undecoded)，其前 512 字节作为样本保存在集成上。用它来了解发送方发来了什么。设备类型上有解码器时，这些字节会被解码为读数。
+通用二进制集成接受原始字节正文，标识符放在请求头或查询参数中（`idFrom` 为 `header:` 或 `query:`；二进制正文没有可指向的字段）。如果设备类型上没有[载荷解码器](./payload-decoders.md)，平台就无法读取这些字节，因此每条这类上行都会被接受并[计为未解码](#undecoded)，其前 512 字节作为样本保存在集成上。在尚无解码器时，用它来了解发送方发来了什么。设备类型上有解码器时，这些字节会被解码为读数。
 
 ## 存储的内容 {#what-is-stored}
 
@@ -200,7 +200,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ### 没有可存储内容的上行 {#undecoded}
 
-不带解码对象、或其中没有任何数值或布尔值的上行会被确认，但不存储任何内容。集成会把它计为**未解码**，并在其页面显示计数、最近一条的到达时间，以及十六进制的原始帧样本。常见原因是网络服务器中的设备配置文件没有编解码器。当大部分流量都是这种情况时，`IntegrationUndecodedHigh` 告警会通知运营人员；参见[可观测性](../deployment/observability.md)。
+没有适用的[配置文件载荷解码器](./payload-decoders.md)时，不带解码对象、或其中没有任何数值或布尔值的上行会被确认，但不存储任何内容。集成会把它计为**未解码**，并在其页面显示计数、最近一条的到达时间，以及十六进制的原始帧样本。常见原因是网络服务器中的设备配置文件没有编解码器。有适用的配置文件解码器时，它可以转而解码原始帧；解码失败不会存储任何内容，并报告为 `DECODE_FAILED`，而不会计为网络服务器载荷未解码。参见[解码器拒绝原因](./payload-decoders.md#refusal-reasons)。当大部分流量都是这种情况时，`IntegrationUndecodedHigh` 告警会通知运营人员；参见[可观测性](../deployment/observability.md)。
 
 ## 重复与重试 {#duplicates}
 
@@ -231,7 +231,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 | 应答 | 含义 |
 | --- | --- |
 | `202` | 已接受。包括未注册设备的消息（会被跳过），以及因租户超出接入额度而被[丢弃](#limits)的消息。 |
-| `204` | 不是上行的消息类型（join、status、确认）。已确认并忽略。 |
+| `204` | 被忽略的消息类型，例如 join 或 status，或下行适配器禁用时的下行报告。启用适配器后，受支持的下行报告会被处理并收到 `202` 应答；参见[确认下行](#lorawan-confirmed)。 |
 | `400` | 正文不是集成的发送方类型所期望的格式：JSON 无效、标识符缺失或格式错误、`deduplicationId` 不是 UUID、时间早于 366 天前、超过 100 个条目，或超过 256 条读数。请求中的任何内容都不会被存储。 |
 | `401` | 令牌缺失、错误，或属于另一个集成。令牌错误和集成不存在有意让人无法区分。 |
 | `403` | 集成已关闭。这不计为登录失败。 |
@@ -264,14 +264,175 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 发给集成设备的命令 {#commands}
 
-通过集成上报的设备没有到 DeviceChain 的连接，无法向其下发命令，第 1 版也没有通向网络服务器 API 的下行。发给这类设备的命令**在你下发时会被接受**，然后在**下一次投递扫描时失败**，错误为 `COMMAND_TRANSPORT_UNSUPPORTED`，因为平台识别该传输，却无法通过它投递。它不会一直排队到过期。
+通过集成上报的设备没有到 DeviceChain 的连接，无法向其下发命令。除非你的安装启用了 [LoRaWAN 下行](#lorawan-downlink)，否则发给这类设备的命令**在你下发时会被接受**，然后在**下一次投递扫描时失败**，错误为 `COMMAND_TRANSPORT_UNSUPPORTED`，因为平台识别该传输，却无法通过它投递。它不会一直排队到过期。
 
 有两种情况值得了解：
 
 - 同时通过 MQTT 连接的设备，按它最近一次上报所用的传输来判断。最近一次通过集成上报时，其命令会失败；改为通过 MQTT 上报之后，命令即可投递。
 - 从未上报过的设备没有记录的传输，因此它的命令会照常下发，并因无人应答而过期，直到它首次上报为止。
 
-对必须接收命令的设备，请同时为它配置 MQTT 连接。参见[传输能力矩阵](../reference/transport-matrix.md)。
+对必须接收命令、且不在 ChirpStack v4 网络服务器后面的设备，请同时为它配置 MQTT 连接。参见[传输能力矩阵](../reference/transport-matrix.md)。
+
+## LoRaWAN 下行（ChirpStack v4） {#lorawan-downlink}
+
+当安装启用了出站连接器的下行（`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`；此时 Helm chart 会让命令投递服务派发这些命令，并拒绝手工设置的该标志副本），向 ChirpStack v4 网络服务器后面的设备发送命令时，会在该服务器上排入一条下行。未启用的安装不受任何影响。
+
+**1. 把集成关联到它的网络服务器。** 创建并发布一个类型为 `lorawan_downlink` 的连接器：
+
+```json
+{
+  "networkServer": "chirpstack_v4",
+  "baseUrl": "https://chirpstack.example.com",
+  "integration": "my-integration-token"
+}
+```
+
+`integration` 是该服务器所服务设备所属的入站集成的令牌。连接器的**密钥**是一个允许排入下行的 ChirpStack API 密钥（ChirpStack v4 的 REST API，由其 `chirpstack-rest-api` 组件提供）；它加密存储，之后不再显示。同一集成只能被一个已发布的连接器指向：没有或有两个时，命令会被拒绝而不是发出。与所有连接器一样，对 `baseUrl` 的调用要经过平台的出站策略，因此位于私有地址的服务器需要运维人员放行。
+
+**2. 定义命令。** 未配置编码器时，在设备类型的配置中添加一个带有以下原始负载参数的命令。要发送带类型的值，请配置[编码器](#lorawan-command-encoder)：
+
+| 参数 | 含义 |
+| --- | --- |
+| `fPort` | LoRaWAN 应用端口，1 到 223。必填。 |
+| `hex` 或 `base64` | 应用负载，十六进制或带填充的标准 base64。二者给出且仅给出一个。最多 242 字节。 |
+| `confirmed` | 可选，默认 `false`。`true` 要求设备应答该帧，并让命令一直等到应答为止（见[确认下行](#lorawan-confirmed)）。 |
+
+任何其他参数名都会被拒绝。
+
+**3. 发送。** 设备必须带有 `lorawan.deveui` [别名](#aliases)：DevEUI 取自设备，绝不取自命令。命令经由设备**最近一次上报所用**的集成发出。
+
+**结果的含义。** 对未确认的下行，`SUCCEEDED` 表示网络服务器已**排入**该下行（结果带有 `{"stage":"queued","queueItemId":...}`）。这并不表示设备已收到：A 类设备只在下一次上行之后才会收听下行，而未确认的下行不会得到应答。此类命令不记录投递证据（`deliveredTime` 和 `deliveryEvidence` 保持为 null）；确认下行的应答会记录 `DEVICE_RESPONSE`。对[确认下行](#lorawan-confirmed)，`SUCCEEDED` 表示设备已应答。其他结果：
+
+| 发生了什么 | 结果 |
+| --- | --- |
+| 参数无效、设备没有 DevEUI、集成没有关联（或有两个）、命令已过期，或租户超出出站调用上限 | `FAILED`，未投递。可以放心重发。 |
+| 网络服务器拒绝了它（4xx：API 密钥错误、设备未知、负载对设备当前数据速率过大），或在发出任何内容之前无法连接 | `FAILED`，未投递。原因会指明服务器的回应。 |
+| 请求已发出，但服务器出错或没有应答（5xx、超时） | 结果**未知**：下行可能已入队，再次发送可能会发出两次。 |
+
+按结果查看 `lpwan_downlinks_total` 指标，可以看到命令在哪一步停下。
+
+### 确认下行 {#lorawan-confirmed}
+
+在命令中设置 `"confirmed": true`，网络服务器会要求设备应答该帧。下行排入队列时命令**不会**得到回答：它保持 `SENT`，直到网络服务器报告结果，然后依据这些证据结束：
+
+| 网络服务器报告 | 命令 |
+| --- | --- |
+| 设备应答了该帧（`ack`，已应答） | `SUCCEEDED`。结果带有 `{"stage":"acknowledged",...}`。 |
+| 网络服务器不再等待应答（`ack`，未应答） | `TIMEOUT`，结果未知。设备可能已收到该帧而应答丢失，再次发送可能会动作两次。 |
+| 网关接受了该帧用于发射（`txack`） | 记录下来，命令继续等待。网关发出帧不等于设备收到。 |
+| 截止时间前没有任何报告 | `TIMEOUT`，结果未知。截止时间是命令自身的过期时间；没有过期时间时为 24 小时。 |
+
+只有应用的 HTTP 集成被设置为发送 `ack` 事件时，ChirpStack 才会报告应答，而且它必须是你在 DeviceChain 中登记的那个集成（上文的 URL 和令牌）：报告通过集成自己的令牌读取，因此只能结束经该集成发出的、发往登记在它名下设备的命令。如果希望记录发射情况，也请启用 `txack` 事件；它是可选的。
+
+与任何等待中的下行都不匹配的报告绝不会靠猜测去匹配。它会被丢弃、写入日志，并计入 `lpwan_ack_reports_total`（没有等待该队列项时为 `unmatched`，指向另一个集成或设备时为 `mismatch`）；这两项都值得告警。每条下行（无论是否确认）都会产生 `txack`，所以针对未在等待的下行的 `txack` 计为 `tx_untracked`，属于正常情况。滚动升级期间，旧版本的 Pod 仍会把确认命令按未投递拒绝，可以放心重发。
+
+按结果查看 `lpwan_ack_reports_total`：`acknowledged`、`timed_out`、`transmitted` 和 `deadline` 即上述结果。偶尔出现一次 `unmatched` 并非故障：如果报告已被回答、但消息在 broker 上的确认丢失，该报告会再次到达并发现没有任何等待项（刚刚结束它的副本会把它计为 `redelivered`）。请对持续出现的 `unmatched` 或任何 `mismatch` 告警。
+
+只携带 MAC 命令的下行的 `txack` 没有队列项，会返回 `204` 并被计数（`integration_downlink_reports_total`，结果 `untracked`）；没有队列项的 `ack` 会被以 `400` 拒绝。报告有自己的限额，与遥测分开：每个租户突发 100 条、持续每秒 20 条。该限额按 `event-sources` 副本分别计算，因此租户的实际上限是这个速率乘以副本数。超出后请求返回 `202` 并被计数（结果 `rate_limited`），它本可结束的命令在截止时间结束，因此一个租户的洪泛不会挤掉另一个租户的应答。
+
+**升级。** 确认下行需要出站连接器和事件源两者都是新版本。出站连接器已是新版本而事件源仍是旧版本期间，旧 Pod 会对网络服务器的报告返回 `204` 并丢弃，因此在这一窗口内发出的确认下行会在截止时间以 `TIMEOUT`（结果未知）结束。Chart 在同一次升级中滚动二者；要避开这一窗口，请在其持续期间暂停确认命令。
+
+### The Things Stack v3 {#lorawan-downlink-tts}
+
+指向 The Things Stack 的关联是一个 `"networkServer": "tts_v3"` 的 `lorawan_downlink` 连接器，并带上设备所属的应用：
+
+```json
+{
+  "networkServer": "tts_v3",
+  "baseUrl": "https://eu1.cloud.thethings.network",
+  "integration": "my-integration-token",
+  "applicationId": "my-application"
+}
+```
+
+连接器的**密钥**是一个有权写入该应用下行流量的 API 密钥。设备必须带有 `tts.device-id` [别名](#aliases)（The Things Stack 用它来寻址设备），而不是 DevEUI；它取自设备，绝不取自命令。命令的参数与 ChirpStack 相同，下行会加入设备队列的末尾。
+
+对**未确认**的下行，`SUCCEEDED` 同样表示网络服务器已接受它。对**确认**的下行，平台会给每条下行一个自己的标识（The Things Stack 不返回任何标识），作为以 `dc:` 开头的 correlation id 发送，并依据 The Things Stack 为该下行发布的事件来结束命令。在应用的 webhook 中启用下行事件，并在集成 URL 下给每种事件各自的路径，路径**必须以 `downlink` 开头**：例如 `/downlink-ack`、`/downlink-nack`、`/downlink-sent` 和 `/downlink-failed`。
+
+| The Things Stack 报告 | 命令 |
+| --- | --- |
+| `downlink_ack`：设备应答了该帧 | `SUCCEEDED`。 |
+| `downlink_nack`：设备没有应答 | `TIMEOUT`，结果未知。设备可能已收到该帧而应答丢失，再次发送可能会动作两次。见下文关于重试的说明。 |
+| `downlink_sent`：网关发射了该帧 | 记录下来，命令继续等待。 |
+| `downlink_failed`，且网络服务器自己指明这是发射之前的丢弃（为多播设备排队的确认下行），此前没有重试、也没有发射报告 | `FAILED`，未投递。可以放心重发。 |
+| 其他任何 `downlink_failed` | `TIMEOUT`，结果未知。该帧可能已被发射：见下文。 |
+| 截止时间前没有任何报告 | `TIMEOUT`，结果未知。 |
+
+**nack 之后的重试。** `downlink_nack` 之后，The Things Stack 会自己把确认下行重新排队（默认最多再 8 次），每次重试都是设备可能据以动作的一条新下行。DeviceChain 在第一个 nack 就结束命令，因此设备之后仍可能执行它；重试的应答会在命令已结束后到达，并作为无对应项被丢弃。为缩小这一窗口，平台在推送的每条确认下行上把 `confirmed_retry.max_attempts` 设为 1（The Things Stack 接受的最小值），因此最多重试一次。
+
+**为什么只有部分 `downlink_failed` 是“未投递”。** 网络服务器在丢弃一条它从未调度过的排队下行（表中所列情形）时，以及网关报告无法发射时，会发出 `downlink_failed`。Application Server 在放弃重试一条**已经被发射过**的确认下行时（重试次数用尽，或重新排队失败）也会发出它。由于该事件本身并不说明是哪一种，DeviceChain 只对网络服务器自己给出的发射前错误回答 `FAILED`，对已报告发射或重试过的下行绝不这样回答；其他任何 `downlink_failed` 都是 `TIMEOUT`。这包括未知会话、负载过大、下行已过期、网关调度失败（绝对时间或固定路径无效）以及网关自身的发射错误：如果对网关的一次调度调用以模棱两可的方式失败，网络服务器会把该项重新排回队首，既不计一次重试，也不报告发射，因此之后因上述任一原因发生的丢弃，无法与一个从未尝试过的项的丢弃区分开。只有多播这一情形（设备的静态属性）是确定的。
+
+报告只通过平台设置的 `dc:` correlation id 与其命令匹配，并且只在它指明的应用和设备正是该下行所发往的（且 DeviceChain 自己解析出的设备一致）、且经由发出时所用的集成时才匹配；网络服务器自己的追踪标识绝不会被使用。在 The Things Stack 控制台中手工排入队列的下行不带这种 id，其事件会被忽略。不匹配和无对应的报告会如上所述被计数并丢弃。发送到不带路径的基础 URL 的 webhook 不指明消息类型，因此其报告按遥测处理，租户超出消息上限时可能被丢弃；请给每种类型各自的路径。
+
+**在运行中的安装上启用。** 下行通过一次 Helm 升级启用；在 Pod 滚动期间，尚未重启的命令投递 Pod 仍会像下行出现之前那样，立即以 `COMMAND_TRANSPORT_UNSUPPORTED` 使发往集成设备的命令失败。这样的命令不会发出任何内容，升级结束后可以放心重新下发。要避开这一窗口，请在升级期间暂停发往集成设备的命令。适配器首次启动前几分钟内下发的命令，在适配器启动时仍会被接收。
+
+### 从带类型的参数编码命令 {#lorawan-command-encoder}
+
+命令定义可以包含可选的 `encoder` JSON 字符串。发布设备配置文件后生效。
+ChirpStack v4 和 The Things Stack v3 使用相同的编码器。
+命令使用派发时生效的编码器；重新发布适用于发布后派发的命令，包括已排队的命令。
+每次派发都会重新读取已发布的定义，不会跨发布缓存编码器。
+如果定义查询失败或返回不完整的响应，平台会重试：命令保持待处理状态，不会发送任何内容。
+只有确定的定义问题（编码器无效、命令定义重复，或命令不在受约束的已发布命令词汇表中）
+才会将命令拒绝为**未发送**。
+例如，以下文档按顺序拼接常量、
+缩放后的数值、布尔值和打包位字段：
+
+```json
+{
+  "fPort": 10,
+  "confirmed": false,
+  "fields": [
+    {"const": "01ff"},
+    {"param": "level", "type": "u16be", "scale": 0.1, "offset": 0},
+    {"param": "enabled", "type": "bool"},
+    {"bits": {"type": "u8", "fields": [
+      {"param": "mode", "shift": 0, "width": 3},
+      {"param": "armed", "shift": 3, "width": 1}
+    ]}}
+  ]
+}
+```
+
+`fPort` 必填，范围为 1–223。`confirmed` 默认为 false，仍须满足上文的确认反馈要求。
+必须有 1–32 个有序字段，总长度为 1–242 字节。常量必须是偶数长度的十六进制字符串。
+数值类型包括 `u8`、`i8`、`u16be`、`u16le`、`i16be`、`i16le`、`u32be`、`u32le`、
+`i32be` 和 `i32le`。`bool` 输出 `00` 或 `01`。打包位字段使用整数类型，
+必须在类型宽度内且互不重叠，未指定的位为零。
+
+以恒温器为例，在 `parameterSchema` 中将 `setpoint` 声明为 `DOUBLE`、`mode` 声明为
+`INT`，然后设置以下编码器：
+
+```json
+{
+  "fPort": 12,
+  "fields": [
+    {"param": "setpoint", "type": "i16be", "scale": 0.1},
+    {"bits": {"type": "u8", "fields": [
+      {"param": "mode", "shift": 0, "width": 3}
+    ]}}
+  ]
+}
+```
+
+命令载荷 `{"setpoint":21.5,"mode":3}` 在端口 12 上生成十六进制 `00d703`，
+即 base64 `ANcD`。编码是解码运算的逆运算：`raw = (value - offset) / scale`。
+scale 默认为 1，其绝对值必须在 `1e-9` 到 `1e9` 之间；offset 默认为 0，绝对值不得超过 `1e9`，两者都必须有限。
+即使 scale 和 offset 各自满足上述限制，若其组合导致 `float64` 精度不足以满足 raw 整数的
+`1e-6` 容差，保存定义时仍会被拒绝。请增大 scale 的绝对值或减小 offset 的绝对值。
+raw 的类型范围在舍入前检查，边界允许 `1e-6` 的浮点误差容差。
+scale 为 1 且 offset 为 0 时输入必须为精确整数；其他变换允许 `1e-6` 的整数误差。
+输入绝对值不得超过 `1e15`，输入和 raw 的绝对值都必须小于 `2^53`。
+不会静默舍入或截断任何值：scale 为 1 时，`215.4` 会被拒绝。
+NaN、无穷大、超出范围、JSON 类型错误或缺少编码器参数，都会在发起网络调用前将命令拒绝为
+**未发送**。参数模式中的默认值仅用于编辑提示，不会自动填入。
+
+编码器中的每个参数必须唯一，并在模式中声明兼容的标量类型：数值使用 `INT` 或 `DOUBLE`，
+布尔值使用 `BOOLEAN`，位字段使用宽度范围内的整数（宽度为 1 时也接受 `BOOLEAN`）。
+未被编码器使用的载荷键、重复的 JSON 键和未知的编码器键都会被拒绝。
+编码器要求非空参数模式，且模式不能声明 `fPort`、`hex`、`base64` 或 `confirmed`；端口和确认标志由
+编码器控制。清除 `encoder` 可恢复原始字节协议。未配置编码器的定义保持现有的
+`fPort` 加 `hex` 或 `base64` 协议不变。
 
 ## 集成令牌能做什么 {#trust}
 
@@ -289,7 +450,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 第 1 版不包含 {#not-supported}
 
-- **下行。**无法通过网络服务器向设备下发命令。参见[发给集成设备的命令](#commands)。
+- **面向通用发送方的下行。** [LoRaWAN 下行](#lorawan-downlink)覆盖 ChirpStack v4 与 The Things Stack v3，支持原始负载或[带类型参数的编码](#lorawan-command-encoder)。发给其他集成设备的命令按[发给集成设备的命令](#commands)所述失败。
 - **签名载荷。**请求上没有 HMAC 或签名校验。bearer 令牌是唯一的凭据，传输必须使用 TLS。
 - **Join、status 和位置消息。**它们会被确认并忽略。
 - **自动创建设备。**未知标识符只会被列出，不会被创建。你需要自己根据列表添加设备。

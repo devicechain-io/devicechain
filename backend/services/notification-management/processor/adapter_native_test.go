@@ -191,7 +191,7 @@ func TestSlackEscapesTenantAuthoredText(t *testing.T) {
 	}
 	r := rendered("RAISED")
 	r.Alarm.MetricKey = "<!here>"
-	msg := slackMessage(r, "")
+	msg := slackMessage(r, "", "")
 	raw, _ := json.Marshal(msg)
 	if strings.Contains(string(raw), "<!here>") {
 		t.Fatalf("an unescaped mention reached the payload: %s", raw)
@@ -201,7 +201,7 @@ func TestSlackEscapesTenantAuthoredText(t *testing.T) {
 func TestSlackTruncatesLongHeader(t *testing.T) {
 	r := rendered("RAISED")
 	r.Alarm.AlarmKey = strings.Repeat("k", 400)
-	_, blocks := slackBlocks(t, slackMessage(r, ""))
+	_, blocks := slackBlocks(t, slackMessage(r, "", ""))
 	h := blocks[0]["text"].(map[string]any)["text"].(string)
 	if n := len([]rune(h)); n != 150 {
 		t.Fatalf("header length = %d, want exactly 150 (Slack rejects longer)", n)
@@ -300,7 +300,7 @@ func TestNativeAdaptersRefuseARenderingWithoutAnAlarm(t *testing.T) {
 func TestNativeAdaptersRejectBadConfig(t *testing.T) {
 	for _, ch := range []*model.NotificationChannel{
 		channelWith("c", model.ChannelTypeSlack, `{"nope":1}`),
-		channelWith("c", model.ChannelTypeTeams, `{"linkBaseUrl":"ftp://x"}`),
+		channelWith("c", model.ChannelTypeTeams, `{"nope":1}`),
 		channelWith("c", model.ChannelTypePagerDuty, `{"region":"mars"}`),
 	} {
 		var a ChannelAdapter
@@ -367,7 +367,7 @@ func TestTeamsAccentAndOptionalParts(t *testing.T) {
 			t.Errorf("%s accent = %q, want %q", sev, got, want)
 		}
 	}
-	card := teamsMessage(rendered("CLEARED"), "")["attachments"].([]map[string]any)[0]["content"].(map[string]any)
+	card := teamsMessage(rendered("CLEARED"), "", "")["attachments"].([]map[string]any)[0]["content"].(map[string]any)
 	if _, has := card["actions"]; has {
 		t.Fatal("no link configured, so no action")
 	}
@@ -494,7 +494,7 @@ func TestPagerDutyRejectsNon2xx(t *testing.T) {
 // carries the egress sentinel the dispatcher treats as terminal.
 func TestNativeAdaptersDialThroughTheEgressGuard(t *testing.T) {
 	f := newProviderFake(t, 200, "ok")
-	reg := newAdapterRegistry(egress.NewGuard(nil))
+	reg := newAdapterRegistry(egress.NewGuard(nil), nil)
 	for _, tc := range []struct {
 		typ    string
 		secret string
@@ -513,7 +513,7 @@ func TestNativeAdaptersDialThroughTheEgressGuard(t *testing.T) {
 }
 
 func TestRegistryHasAnAdapterForEveryAvailableChannelType(t *testing.T) {
-	reg := newAdapterRegistry(nil)
+	reg := newAdapterRegistry(nil, nil)
 	for _, ct := range model.SupportedChannelTypes {
 		if _, ok := reg[ct.Id]; ct.Available && !ok {
 			t.Errorf("channel type %q is marked available but has no adapter", ct.Id)
@@ -569,5 +569,81 @@ func TestTeamsTransportErrorNeverContainsTheWebhookURL(t *testing.T) {
 	err := a.Deliver(context.Background(), channelWith("t", model.ChannelTypeTeams, ""), secretURL, nil, rendered("RAISED"))
 	if err == nil || strings.Contains(err.Error(), "SECRETSIG") {
 		t.Fatalf("transport error leaked the secret URL (or succeeded): %v", err)
+	}
+}
+
+// 🔴 A NON-2xx BODY CAN ECHO THE SECRET WITHOUT ITS SCHEME. A Slack or Teams webhook's
+// credential is its URL path (and a Workflows URL's is its sig= query), PagerDuty's is a
+// routing key in the body, and none of them is presented as a header, so nothing used to
+// suppress the response body from the error. An endpoint answering "Cannot POST
+// /services/T/B/XXXX" put the secret path into the error, which the delivery ledger then
+// stored for every notification:read holder; the URL scrub cannot see it, because there is
+// no scheme in front of it and it is not the whole URL.
+func TestANativeChannelErrorNeverCarriesTheResponseBody(t *testing.T) {
+	const secretPath = "/services/T000/B000/ECHOEDSECRET"
+	f := newProviderFake(t, 404, "Cannot POST "+secretPath+"?sig=ECHOEDSIG")
+	slack := &slackAdapter{client: f.srv.Client()}
+	err := slack.Deliver(context.Background(), channelWith("s", model.ChannelTypeSlack, ""), f.srv.URL+secretPath, nil, rendered("RAISED"))
+	if err == nil {
+		t.Fatal("a 404 must fail the delivery")
+	}
+	if strings.Contains(err.Error(), "ECHOEDSECRET") || strings.Contains(err.Error(), "ECHOEDSIG") {
+		t.Fatalf("the reflected response body leaked the secret into the error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Fatalf("the status must survive the suppression: %v", err)
+	}
+
+	pd := newProviderFake(t, 400, `{"message":"bad routing_key ECHOEDKEY"}`)
+	a := &pagerDutyAdapter{client: pd.srv.Client(), endpoint: pd.srv.URL}
+	err = a.Deliver(context.Background(), channelWith("pd", model.ChannelTypePagerDuty, ""), "ECHOEDKEY", nil, rendered("RAISED"))
+	if err == nil || strings.Contains(err.Error(), "ECHOEDKEY") {
+		t.Fatalf("PagerDuty's reflected routing key leaked (or the call succeeded): %v", err)
+	}
+}
+
+func TestNativeStoredInvalidLinkBaseStillDelivers(t *testing.T) {
+	for _, kind := range []string{model.ChannelTypeSlack, model.ChannelTypeTeams, model.ChannelTypePagerDuty} {
+		t.Run(kind, func(t *testing.T) {
+			f := newProviderFake(t, 200, "{}")
+			var adapter ChannelAdapter
+			switch kind {
+			case model.ChannelTypeSlack:
+				adapter = &slackAdapter{client: f.srv.Client()}
+			case model.ChannelTypeTeams:
+				adapter = &teamsAdapter{client: f.srv.Client()}
+			default:
+				adapter = &pagerDutyAdapter{client: f.srv.Client(), endpoint: f.srv.URL}
+			}
+			ch := channelWith(t.Name(), kind, `{"linkBaseUrl":"https://c.example/?x=1"}`)
+			msg := rendered("RAISED")
+			msg.Alarm.DeviceToken = "device-1"
+			if err := adapter.Deliver(context.Background(), ch, f.srv.URL, nil, msg); err != nil {
+				t.Fatalf("deliver: %v", err)
+			}
+			if f.calls != 1 {
+				t.Fatalf("got %d deliveries, want 1", f.calls)
+			}
+			switch kind {
+			case model.ChannelTypeSlack:
+				_, blocks := slackBlocks(t, f.body)
+				if got := strings.Join(blockTypes(blocks), ","); got != "header,section,context" {
+					t.Fatalf("blocks = %s, want no link/button", got)
+				}
+			case model.ChannelTypeTeams:
+				card := asMaps(t, f.body["attachments"])[0]["content"].(map[string]any)
+				if _, ok := card["actions"]; ok {
+					t.Fatalf("unexpected link actions: %v", card["actions"])
+				}
+			case model.ChannelTypePagerDuty:
+				if _, ok := f.body["links"]; ok {
+					t.Fatalf("unexpected links: %v", f.body["links"])
+				}
+			}
+			raw, _ := json.Marshal(f.body)
+			if strings.Contains(string(raw), "c.example") {
+				t.Fatalf("invalid link in payload: %s", raw)
+			}
+		})
 	}
 }

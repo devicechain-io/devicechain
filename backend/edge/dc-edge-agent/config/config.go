@@ -12,6 +12,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -36,7 +37,44 @@ type Configuration struct {
 
 	// Uplink configures the cloud-facing MQTT connection the agent forwards to.
 	Uplink UplinkConfiguration `json:"uplink"`
+
+	// Commands configures the cloud-to-device downlink (commands for the devices behind this
+	// agent). Absent or disabled, the agent subscribes to nothing, creates no command stream
+	// and behaves exactly as it did before the downlink existed.
+	Commands CommandsConfiguration `json:"commands"`
 }
+
+// CommandsConfiguration is the opt-in command downlink.
+type CommandsConfiguration struct {
+	// Enabled turns the downlink on. Default false. Enable it only after the platform routes
+	// gateway commands: an agent that subscribes earlier simply receives nothing.
+	Enabled bool `json:"enabled"`
+
+	// MaxAgeSeconds bounds how long a received command may wait for local delivery before the
+	// agent expires it and reports it UNSENT. A command envelope that carries its own
+	// expiresAt is held to the earlier of the two. Defaults to 3600.
+	MaxAgeSeconds int `json:"maxAgeSeconds"`
+
+	// InboxMaxBytes and ResponsesMaxBytes bound the two durable command streams. A full inbox
+	// REFUSES new commands (an actuation is never evicted to make room). Default 64 MiB each,
+	// floor 1 MiB.
+	InboxMaxBytes     int64 `json:"inboxMaxBytes"`
+	ResponsesMaxBytes int64 `json:"responsesMaxBytes"`
+
+	// RetryDelaySeconds is how long a command waits before the next local delivery attempt
+	// after the local broker refused or failed one. Defaults to 5.
+	RetryDelaySeconds int `json:"retryDelaySeconds"`
+}
+
+// Command downlink defaults and bounds.
+const (
+	DefaultCommandMaxAgeSeconds       = 3600
+	MaxCommandMaxAgeSeconds           = 7 * 24 * 3600
+	DefaultCommandStreamBytes   int64 = 64 * 1024 * 1024
+	MinCommandStreamBytes       int64 = 1024 * 1024
+	MaxCommandStreamBytes       int64 = 8 * 1024 * 1024 * 1024
+	DefaultCommandRetryDelaySec       = 5
+)
 
 // LocalConfiguration is the device-facing side: an embedded nats-server MQTT
 // gateway that terminates the golden path byte-identically (ADR-006), backed by a
@@ -87,7 +125,51 @@ type LocalConfiguration struct {
 	// default while an explicit 0 disables the endpoint entirely; any other value is
 	// the port. Defaults to 9090.
 	MetricsPort *int `json:"metricsPort"`
+
+	// Priority classes the events the spool sheds by when it nears its budget. See
+	// PriorityConfiguration. Omitted, every event is "standard" and the spool is the plain
+	// ring buffer it always was.
+	Priority PriorityConfiguration `json:"priority"`
 }
+
+// Priority classes. A spool that must lose something loses the lowest class first, and the
+// safety class is never shed by the agent.
+const (
+	ClassSafety   = "safety"
+	ClassStandard = "standard"
+	ClassBulk     = "bulk"
+)
+
+// PriorityRule assigns the events of the local devices whose token matches Match (a path.Match
+// glob, e.g. "estop-*") to Class. The first matching rule wins; a device matching none is
+// ClassStandard.
+type PriorityRule struct {
+	Match string `json:"match"`
+	Class string `json:"class"`
+}
+
+// PriorityConfiguration is the shedding policy. With rules set, the agent keeps the spool at or
+// below ShedAtFraction of spoolMaxBytes by deleting buffered events lowest class first (oldest
+// first within a class) down to ShedToFraction. The headroom above ShedAtFraction is what keeps
+// the spool's ring buffer (which cannot tell classes apart and evicts the oldest event of any
+// class) from ever being reached while shedding can keep up. Every shed event is counted by class.
+type PriorityConfiguration struct {
+	Rules          []PriorityRule `json:"rules"`
+	ShedAtFraction float64        `json:"shedAtFraction"`
+	ShedToFraction float64        `json:"shedToFraction"`
+}
+
+// Retire modes for Uplink.RetireOn.
+const (
+	// RetireOnPuback retires a spool entry when the broker PUBACKs it (the behaviour before
+	// the accept signal existed). It is the default, so an agent upgraded ahead of its platform
+	// keeps working.
+	RetireOnPuback = "puback"
+	// RetireOnAccept retires a spool entry only when the platform says it durably accepted the
+	// event. A PUBACK says the broker took the message; the platform may still shed it at the
+	// tenant's ingest ceiling or fail to store it. Requires a platform that sends acceptances.
+	RetireOnAccept = "accept"
+)
 
 // SpoolMinBytes is the floor for Local.SpoolMaxBytes: below a working minimum a
 // JetStream file stream cannot hold a useful backlog and would thrash its blocks.
@@ -146,6 +228,18 @@ type UplinkConfiguration struct {
 	// flapping WAN is not hammered. Default 1 / 60.
 	BackoffMinSeconds int `json:"backoffMinSeconds"`
 	BackoffMaxSeconds int `json:"backoffMaxSeconds"`
+
+	// RetireOn selects what retires a spool entry: "puback" (default) or "accept" (the
+	// platform's durable-accept signal). Use "accept" only against a platform that sends
+	// acceptances: against one that does not, nothing is ever retired and every event is
+	// resent each acceptTimeoutSeconds (the platform suppresses the duplicates, but the spool
+	// never drains).
+	RetireOn string `json:"retireOn"`
+
+	// AcceptTimeoutSeconds is how long an accept-mode agent waits for the platform's
+	// acceptance before offering the event again. It must exceed the round trip plus the
+	// platform's ingest latency; a satellite link wants minutes. Defaults to 120.
+	AcceptTimeoutSeconds int `json:"acceptTimeoutSeconds"`
 }
 
 // ApplyDefaults fills zero-valued fields with authoritative defaults (runs before
@@ -166,6 +260,18 @@ func (c *Configuration) ApplyDefaults() {
 		def := DefaultMetricsPort
 		c.Local.MetricsPort = &def
 	}
+	if c.Commands.MaxAgeSeconds == 0 {
+		c.Commands.MaxAgeSeconds = DefaultCommandMaxAgeSeconds
+	}
+	if c.Commands.InboxMaxBytes == 0 {
+		c.Commands.InboxMaxBytes = DefaultCommandStreamBytes
+	}
+	if c.Commands.ResponsesMaxBytes == 0 {
+		c.Commands.ResponsesMaxBytes = DefaultCommandStreamBytes
+	}
+	if c.Commands.RetryDelaySeconds == 0 {
+		c.Commands.RetryDelaySeconds = DefaultCommandRetryDelaySec
+	}
 	if c.Uplink.ConnectTimeoutSeconds == 0 {
 		c.Uplink.ConnectTimeoutSeconds = 30
 	}
@@ -174,6 +280,20 @@ func (c *Configuration) ApplyDefaults() {
 	}
 	if c.Uplink.BackoffMaxSeconds == 0 {
 		c.Uplink.BackoffMaxSeconds = 60
+	}
+	if c.Uplink.RetireOn == "" {
+		c.Uplink.RetireOn = RetireOnPuback
+	}
+	if c.Uplink.AcceptTimeoutSeconds == 0 {
+		c.Uplink.AcceptTimeoutSeconds = 120
+	}
+	if len(c.Local.Priority.Rules) > 0 {
+		if c.Local.Priority.ShedAtFraction == 0 {
+			c.Local.Priority.ShedAtFraction = 0.9
+		}
+		if c.Local.Priority.ShedToFraction == 0 {
+			c.Local.Priority.ShedToFraction = 0.8
+		}
 	}
 }
 
@@ -224,6 +344,9 @@ func (c *Configuration) Validate() error {
 	if err := c.Uplink.validateIdentity(); err != nil {
 		return err
 	}
+	if err := c.Commands.validate(); err != nil {
+		return err
+	}
 	if c.Uplink.BrokerURL == "" {
 		return fmt.Errorf("uplink.brokerUrl is required")
 	}
@@ -259,6 +382,37 @@ func (c *Configuration) Validate() error {
 	if c.Uplink.ConnectTimeoutSeconds < 1 {
 		return fmt.Errorf("uplink.connectTimeoutSeconds must be >= 1")
 	}
+	switch c.Uplink.RetireOn {
+	case RetireOnPuback, RetireOnAccept:
+	default:
+		return fmt.Errorf("uplink.retireOn %q unsupported (want %q or %q)", c.Uplink.RetireOn, RetireOnPuback, RetireOnAccept)
+	}
+	if c.Uplink.AcceptTimeoutSeconds < 1 {
+		return fmt.Errorf("uplink.acceptTimeoutSeconds must be >= 1")
+	}
+	return c.Local.Priority.validate()
+}
+
+func (p *PriorityConfiguration) validate() error {
+	for i, r := range p.Rules {
+		if _, err := path.Match(r.Match, ""); err != nil || r.Match == "" {
+			return fmt.Errorf("local.priority.rules[%d].match %q is not a valid glob", i, r.Match)
+		}
+		switch r.Class {
+		case ClassSafety, ClassStandard, ClassBulk:
+		default:
+			return fmt.Errorf("local.priority.rules[%d].class %q unsupported (want %q, %q or %q)", i, r.Class, ClassSafety, ClassStandard, ClassBulk)
+		}
+	}
+	if len(p.Rules) == 0 {
+		if p.ShedAtFraction != 0 || p.ShedToFraction != 0 {
+			return fmt.Errorf("local.priority.shedAtFraction/shedToFraction are set without any rules")
+		}
+		return nil
+	}
+	if !(p.ShedToFraction > 0 && p.ShedToFraction < p.ShedAtFraction && p.ShedAtFraction < 1) {
+		return fmt.Errorf("local.priority needs 0 < shedToFraction (%v) < shedAtFraction (%v) < 1", p.ShedToFraction, p.ShedAtFraction)
+	}
 	return nil
 }
 
@@ -284,6 +438,23 @@ func (u *UplinkConfiguration) validateIdentity() error {
 	prefix := u.Tenant + ":"
 	if !strings.HasPrefix(u.Username, prefix) || len(u.Username) == len(prefix) {
 		return fmt.Errorf("uplink.username %q must be %q followed by the gateway credential's id: the broker reads the tenant from the part before the colon, so a bare name is refused at CONNECT", u.Username, prefix+"<credentialId>")
+	}
+	return nil
+}
+
+// validate bounds the downlink settings whether or not it is enabled, so a typo in a
+// disabled block is found when it is written rather than when someone switches it on.
+func (cc *CommandsConfiguration) validate() error {
+	if cc.MaxAgeSeconds < 1 || cc.MaxAgeSeconds > MaxCommandMaxAgeSeconds {
+		return fmt.Errorf("commands.maxAgeSeconds %d out of range 1..%d", cc.MaxAgeSeconds, MaxCommandMaxAgeSeconds)
+	}
+	for name, v := range map[string]int64{"commands.inboxMaxBytes": cc.InboxMaxBytes, "commands.responsesMaxBytes": cc.ResponsesMaxBytes} {
+		if v < MinCommandStreamBytes || v > MaxCommandStreamBytes {
+			return fmt.Errorf("%s %d out of range %d..%d", name, v, MinCommandStreamBytes, MaxCommandStreamBytes)
+		}
+	}
+	if cc.RetryDelaySeconds < 1 {
+		return fmt.Errorf("commands.retryDelaySeconds must be >= 1")
 	}
 	return nil
 }

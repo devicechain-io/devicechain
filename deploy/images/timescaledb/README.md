@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0
 The PostgreSQL image the `tsdb` CloudNativePG cluster runs (ADR-020 A2.6, ADR-028).
 
 ```
-ghcr.io/devicechain-io/postgresql-timescaledb:<pg-minor>-ts<timescale-version>
+ghcr.io/devicechain-io/postgresql-timescaledb:<pg-minor>-ts<timescale-version>-r<revision>
 ```
 
 > **This is the deployed event store.** A2.6 built, gated and published the image and

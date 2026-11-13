@@ -4,6 +4,8 @@
 package model
 
 import (
+	"database/sql"
+
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -20,6 +22,11 @@ type AreaTypeCreateRequest struct {
 	ForegroundColor *string
 	BorderColor     *string
 	Metadata        *string
+	// SemanticTypes are the classes an entity of this type is, as CURIEs or full IRIs
+	// (for example sdm-streetlighting:Streetlight). Each must be a CLASS of a vocabulary pack
+	// the tenant has enabled, or of a custom prefix it declared; at most MaxSemanticTypes.
+	// Stored as expanded IRIs. Omitted binds nothing.
+	SemanticTypes *[]string
 }
 
 // AreaTypeUpdateRequest is the PARTIAL-update counterpart of
@@ -52,6 +59,9 @@ type AreaTypeUpdateRequest struct {
 	// replaces wholesale when sent and clears on null. There is no per-key merge to
 	// choose between: the API has never been able to address an individual key.
 	Metadata dcgraphql.OptionalString
+	// SemanticTypes replaces the bound classes: omitted leaves them, null (or an empty list)
+	// clears them, a list sets them. See the create request for what a term must be.
+	SemanticTypes dcgraphql.OptionalStringList
 }
 
 // Represents an area type.
@@ -62,6 +72,11 @@ type AreaType struct {
 	rdb.NamedEntity
 	rdb.BrandedEntity
 	rdb.MetadataEntity
+
+	// SemanticTypes are the classes this type is, as EXPANDED IRIs (the tenant's semantic
+	// context decides what is accepted). NULL binds nothing, which is the true state of every
+	// type that predates the layer.
+	SemanticTypes rdb.Anchors `gorm:"type:text[]"`
 
 	Areas []Area
 }
@@ -90,6 +105,9 @@ type AreaCreateRequest struct {
 	Description   *string
 	AreaTypeToken string
 	Metadata      *string
+	// BoundaryFenceToken links the area to the geofence that bounds it. It must name a fence
+	// that exists.
+	BoundaryFenceToken *string
 }
 
 // AreaUpdateRequest is the PARTIAL-update counterpart of AreaCreateRequest.
@@ -108,6 +126,9 @@ type AreaUpdateRequest struct {
 	// refusal is total — nothing is written.
 	AreaTypeToken dcgraphql.OptionalString
 	Metadata      dcgraphql.OptionalString
+	// BoundaryFenceToken links the area to the geofence that bounds it: omitted leaves the
+	// link, null clears it, a value sets it and must name a fence that exists.
+	BoundaryFenceToken dcgraphql.OptionalString
 }
 
 // Represents an area.
@@ -120,6 +141,11 @@ type Area struct {
 
 	AreaTypeId uint
 	AreaType   *AreaType
+
+	// BoundaryFenceToken names the geofence that bounds the area, or is NULL when none does. It
+	// is a token and not a foreign key, like the other same-service references here; a reader
+	// that finds the fence gone says so rather than answering "no boundary".
+	BoundaryFenceToken sql.NullString
 }
 
 // DefaultOrder implements rdb.Sortable with the registry default: newest first, token

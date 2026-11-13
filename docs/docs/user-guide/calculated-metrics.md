@@ -445,7 +445,8 @@ and say why from then on, until you leave the page. It is never hidden for those
 ## Turning calculated metrics on
 
 How many calculated metrics one profile may publish is set per **tier**, by the instance operator,
-as **Calculated metrics per profile** under **Admin → Tiers**. The platform default is `0`, which
+as **Calculated metrics per profile** under **Admin console → Tenants → Tiers**, on the tier's
+**Settings** tab. The platform default is `0`, which
 means calculated metrics are off: you can write formulas and test them, but publishing a profile
 that has one is refused with:
 

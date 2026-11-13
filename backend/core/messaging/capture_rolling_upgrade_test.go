@@ -24,12 +24,20 @@ import (
 // PLACE (its reconcileFilterSubject). These tests emulate that pod against the new reader on a
 // real broker.
 
+// oldBuildCaptureSubjects are the subjects the PREVIOUS build's capture stream stored and its
+// reader filtered on: a device's events and a gateway's. They are written out, not derived from
+// DeviceEventsSubjects, because that list grows (the raw-payload subject) and these fixtures stage
+// what an old pod left on the broker.
+func oldBuildCaptureSubjects(instance string) []string {
+	return []string{instance + ".*.devices.*.events", instance + ".*.gateways.*.devices.*.events"}
+}
+
 // oldBuildCaptureConfig is the durable config the previous build's capture reader asks for.
 func oldBuildCaptureConfig(durable string) *nats.ConsumerConfig {
 	return &nats.ConsumerConfig{
 		Durable: durable, AckPolicy: nats.AckExplicitPolicy,
 		AckWait: time.Second, MaxDeliver: MaxDeliver, MaxAckPending: readerMaxAckPending,
-		FilterSubjects: DeviceEventsSubjects("test"),
+		FilterSubjects: oldBuildCaptureSubjects("test"),
 	}
 }
 
@@ -108,7 +116,7 @@ func TestARollingUpgradeBesideAnOldPodLeavesTheCaptureUnfiltered(t *testing.T) {
 
 	legacy := DurableName("test", area, captureSuffix)
 	_, err = js.AddStream(&nats.StreamConfig{
-		Name: captureStreamOn("test"), Subjects: DeviceEventsSubjects("test"), Retention: nats.WorkQueuePolicy,
+		Name: captureStreamOn("test"), Subjects: oldBuildCaptureSubjects("test"), Retention: nats.WorkQueuePolicy,
 	})
 	require.NoError(t, err)
 	require.NoError(t, oldBuildBind(js, legacy), "the old build's durable could not be staged")

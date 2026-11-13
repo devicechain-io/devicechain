@@ -20,10 +20,11 @@ on:
 permissions:
   contents: read
 
-# Cancel superseded runs on the same ref to save CI minutes.
+# Keep each pushed commit in its own group so later main pushes cannot replace it.
+# This fits the existing concurrency block; superseded PR runs still cancel.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -76,6 +77,16 @@ jobs:
       - name: release manifest publisher self-test
         run: hack/publish-release-manifest.sh --self-test
 
+      # The evidence-pack generator and the OpenVEX generator, each against inputs it must refuse:
+      # a stale, missing, failing, future-dated or edited rig result, an empty SBOM or VEX document,
+      # a tampered or smuggled pack member, and a govulncheck report from a scan that never completed.
+      - name: evidence pack and OpenVEX generator self-tests
+        run: |
+          hack/evidence-pack.sh --self-test
+          hack/vex-from-govulncheck.sh --self-test
+          hack/check-evidence-pack-workflow.sh --self-test
+          hack/check-evidence-pack-workflow.sh
+
       # Proves the coverage check can fail before its green run is used as evidence.
       - name: dependabot module-coverage self-test
         run: hack/check-dependabot-modules.sh --self-test
@@ -97,6 +108,11 @@ jobs:
       # that runs on every PR; the guard itself has nothing to check until there is a tag.
       - name: release-highlights guard self-test
         run: hack/check-release-highlights.sh --self-test
+
+      # The chart stamp runs only on a tag; a broken flag mislabels a release in Artifact Hub.
+      # The self-test is the part that runs on every PR, before a release needs the stamp.
+      - name: chart prerelease stamp self-test
+        run: hack/stamp-chart-prerelease.sh --self-test
 
       # Same reasoning as the guard above, and the same blast radius: this builds the
       # header of the GitHub Release body, runs ONLY on a tag, and a break in it fails
@@ -294,6 +310,9 @@ jobs:
         module: ${{ fromJson(needs.discover.outputs.modules) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The bootstrap snapshot-currency test reads the release tags.
+          fetch-tags: true
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
@@ -392,6 +411,25 @@ jobs:
       # is backend/k8s for both, literally: the Makefile that holds the version,
       # and `make envtest`, live there, so both modules exercise one API server
       # version.
+      # The asset tarball comes from a GitHub release, which has had outages (504). The
+      # directory is cached by version + OS and the download is retried; the kube-apiserver/etcd
+      # check below runs AFTER the restore, so a stale or partial cache fails the step rather
+      # than passing silently (setup-envtest also re-verifies the archive checksum on use).
+      - name: Read the envtest version
+        id: envtest-version
+        if: matrix.module == 'backend/k8s' || matrix.module == 'backend/cli'
+        working-directory: backend/k8s
+        run: |
+          version="$(sed -n 's/^ENVTEST_K8S_VERSION[[:space:]]*=[[:space:]]*//p' Makefile | tr -d '[:space:]')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the envtest assets
+        if: matrix.module == 'backend/k8s' || matrix.module == 'backend/cli'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/dc-envtest
+          key: envtest-${{ runner.os }}-${{ runner.arch }}-${{ steps.envtest-version.outputs.version }}
+
       - name: envtest binaries
         if: matrix.module == 'backend/k8s' || matrix.module == 'backend/cli'
         working-directory: backend/k8s
@@ -407,7 +445,7 @@ jobs:
             exit 1
           fi
           make envtest
-          assets="$(bin/setup-envtest use "$version" -p path)"
+          assets="$(../../hack/ci-retry.sh bin/setup-envtest use "$version" --bin-dir "$HOME/.cache/dc-envtest" -p path)"
           if [ ! -x "$assets/kube-apiserver" ] || [ ! -x "$assets/etcd" ]; then
             echo "::error::setup-envtest reported $assets but it holds no kube-apiserver/etcd; the API-server suites would fail for the wrong reason"
             exit 1
@@ -825,6 +863,27 @@ jobs:
       - name: no bcrypt compare outside the credential primitive
         run: hack/check-credential-compare.sh
 
+      - name: Mojibake guard self-test
+        run: hack/check-mojibake.sh --self-test
+
+      - name: No mojibake in tracked text files
+        run: hack/check-mojibake.sh
+
+      # Two red lines on what an AI agent can be made to do, enforced as parsed, tree-wide
+      # properties. Declarative-only: no tenant code runtime (a script interpreter or a
+      # WebAssembly runtime) may appear in any go.mod, go.sum, go.work or Go import, and the
+      # allowance list is empty. Constant remediation: the text an error gives an agent is a
+      # string literal or a constant, never formatted from runtime data. The self-test
+      # plants a goja import, requirement, replace target and checksum line, the other
+      # runtimes, and a Sprintf, a concatenation and a variable in a remediation, and requires
+      # each to be named by file and line; it also requires clean shapes to pass and unusable
+      # inputs (an empty tree, a file that does not parse) to exit 2.
+      - name: red-lines guard self-test
+        run: hack/check-redlines.sh --self-test
+
+      - name: no tenant code runtime, constant agent remediation text
+        run: hack/check-redlines.sh
+
       # Proves this checker can fail too, and does it BEFORE the green run below is
       # read as evidence. It plants 21 evasion shapes across all three phase rules —
       # each one a module that really type-checks against a miniature framework of
@@ -1228,6 +1287,7 @@ jobs:
           -ignore '**/*.csproj' -ignore '**/*.sln' -ignore '**/*.props'
           -ignore '**/bin/**' -ignore '**/obj/**'
           -ignore '**/migrationdiff/golden/*.sql'
+          -ignore '**/migrationdiff/testdata/prev-release/**/*.sql'
           -ignore 'demos/**/*.meta' -ignore 'demos/**/*.asset' -ignore 'demos/**/*.unity'
           -ignore 'demos/**/*.prefab' -ignore 'demos/**/*.mat' -ignore 'demos/**/*.inputactions'
           -ignore 'demos/**/ProjectSettings/**' -ignore 'demos/**/Packages/packages-lock.json'
@@ -1532,6 +1592,35 @@ jobs:
       - name: Every shipped alert is documented, in every locale
         run: hack/check-docs-alert-coverage.sh
 
+      # The symbol cells of the transport matrix are generated from the conformance rig's results
+      # (hack/conformance-rig.sh): a filled circle names the third-party-client checks behind it, and
+      # the results say whether they passed. A hand-edited cell, in any of the three locales, is a
+      # claim nothing substantiates. The check re-renders the pages and fails on any difference.
+      # Self-test first: it proves the guard fails on a hand edit, on results from a dirty tree, on a
+      # negative control that never went red and on stale results, before it is trusted to pass.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: backend/tools/transportmatrix/go.mod
+
+      - name: Transport-matrix guard self-test
+        run: hack/check-transport-matrix.sh --self-test
+
+      - name: Transport-matrix cells match the conformance results, in every locale
+        run: hack/check-transport-matrix.sh
+
+      # An alert that reaches a person at 3 a.m. has to say what to do. Every rule carries a
+      # runbook_url that lands on its entry in the published alert runbook, and the runbook (in
+      # every locale) is generated from the rules, so neither can drift from the other. The
+      # self-test plants each defect alone: a rule with no link, a link at the wrong anchor, a
+      # stale page, a missing translation, an alert with no entry, and no rules at all.
+      - name: Alert runbook guard self-test
+        run: hack/check-alert-runbooks.sh --self-test
+
+      - name: Every shipped alert links to its runbook entry
+        run: hack/check-alert-runbooks.sh
+
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 26
@@ -1716,20 +1805,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # i18n gate (ADR-066): eslint's `no-literal-string` rule fails on any
-      # hard-coded user-facing string, keeping each app fully externalized into its
-      # react-i18next catalogs. BOTH front-end apps define a `lint` script now —
-      # apps/console and apps/dashboard (the /dash viewer) — and each carries its own
-      # flat config, because the two have different JSX vocabularies.
-      #
-      # 🔴 `--if-present` IS THE HOLE THIS STEP ONCE HAD, and it is worth naming
-      # because nothing in the log would ever have shown it. /dash had no i18n at all
-      # — no catalogs, no dependency, no lint script — and a workspace with no script
-      # is SKIPPED silently, which reads in the log exactly like a workspace that
-      # passed. So a step named "i18n gate" reported success while checking one of the
-      # two apps. A new app is in the same position the day it is created: adding the
-      # script is what enrols it, and nothing here will say that it has not.
-      - name: Lint (i18n no-literal-string gate)
+      # App and host-composition configs check JSX literal strings with their
+      # configured exclusions. TypeScript libraries run bounded correctness lint;
+      # brand runs its token verifier. This does not gate all widget prose on i18n.
+      # workspace-lint.test.ts (in the Test step) discovers the root's workspaces
+      # and fails if --if-present would silently skip a missing lint script.
+      - name: Lint (app JSX strings, library correctness, brand verification)
         run: npm run lint
 
       - name: Test
@@ -1826,7 +1907,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
 
@@ -2028,7 +2109,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
 
@@ -2055,7 +2136,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
 
@@ -2110,7 +2191,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
 
@@ -2149,7 +2230,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
 
@@ -2716,6 +2797,22 @@ jobs:
           # alone — that is how the skew came back.
           tofu_version: 1.9.1
 
+      # Provider plugins come from GitHub release assets via the registry redirect, which
+      # has had outages (504). Cache the plugin directory (keyed on every .tf, since the
+      # provider pins live there and no lock files are committed) and retry each init.
+      - name: Restore OpenTofu providers
+        id: tofu-plugins
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/tofu-plugins
+          key: tofu-plugins-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('deploy/**/*.tf') }}
+          restore-keys: tofu-plugins-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Point OpenTofu at the plugin cache
+        run: |
+          mkdir -p "$HOME/.cache/tofu-plugins"
+          echo "TF_PLUGIN_CACHE_DIR=$HOME/.cache/tofu-plugins" >> "$GITHUB_ENV"
+
       - name: tofu fmt
         run: tofu fmt -check -recursive
 
@@ -2746,7 +2843,7 @@ jobs:
           hack/tofu-roots.sh | sed 's/^/  discovered root: /'
           hack/tofu-roots.sh | while IFS= read -r root; do
             echo "::group::$root"
-            ( cd "$root" && tofu init -backend=false && tofu validate )
+            ( cd "$root" && "$GITHUB_WORKSPACE/hack/ci-retry.sh" tofu init -backend=false && tofu validate )
             echo "::endgroup::"
           done
 
@@ -2759,7 +2856,7 @@ jobs:
         run: |
           set -euo pipefail
           tofu fmt -check -recursive
-          tofu init -backend=false
+          "$GITHUB_WORKSPACE/hack/ci-retry.sh" tofu init -backend=false
           tofu validate
 
       # The plan's shape, rather than its syntax: two pools, the database one
@@ -2774,6 +2871,21 @@ jobs:
           set -euo pipefail
           tofu test -no-color | tee "$RUNNER_TEMP/gke-tftest.log"
           grep -Eq '^Success! [1-9][0-9]* passed, 0 failed\.$' "$RUNNER_TEMP/gke-tftest.log"
+
+      # The hosted playground's root (deploy/playground) is a sibling of deploy/gke for the
+      # same reason: it creates a cluster, dcctl does not ship it, and hack/tofu-roots.sh
+      # lists only what dcctl embeds. Its test suite holds the plan's shape (one spot pool,
+      # the budget alert, the reset wired to the driver's day boundary) against mocked
+      # providers. The pass count is required to be non-zero for the reason given above.
+      - name: tofu fmt, init, validate and test deploy/playground
+        working-directory: deploy/playground
+        run: |
+          set -euo pipefail
+          tofu fmt -check -recursive
+          "$GITHUB_WORKSPACE/hack/ci-retry.sh" tofu init -backend=false
+          tofu validate
+          tofu test -no-color | tee "$RUNNER_TEMP/playground-tftest.log"
+          grep -Eq '^Success! [1-9][0-9]* passed, 0 failed\.$' "$RUNNER_TEMP/playground-tftest.log"
 
       # The wait that ends the apply has a self-test against a scripted gcloud: it must
       # wait through RECONCILING and fail on a timeout, an always-failing gcloud and a
@@ -2841,6 +2953,16 @@ jobs:
       - name: broker version skew
         run: hack/check-broker-version-skew.sh
         working-directory: .
+
+      # Saved even when a later init failed: each provider is installed into the cache
+      # atomically, so what is there is whole, and keeping it lets the re-run skip the
+      # providers that did download instead of hitting the outage for all of them again.
+      - name: Save OpenTofu providers
+        if: always() && steps.tofu-plugins.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/tofu-plugins
+          key: tofu-plugins-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('deploy/**/*.tf') }}
 
   # ---------------------------------------------------------------------------
   # Image smoke build: ko builds each service image locally (no push). This
@@ -3153,7 +3275,7 @@ jobs:
       # last release shipped (rebuilt from that tag's sources the first time, since it predates
       # the files), and that no declaration is stale. The self-test plants an undeclared type, a
       # removed member and a hand-edited Shipped file and must see each fail.
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
           global-json-file: global.json
 

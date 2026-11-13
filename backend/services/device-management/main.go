@@ -6,9 +6,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/actiongate"
 	"os"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/automationreview"
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/graphql"
 	"github.com/devicechain-io/dc-device-management/model"
@@ -118,17 +120,28 @@ var (
 	// IssuerPinMetrics are the issuer pin's series, built once on the initialize path with the
 	// rest (registering on the start path would panic on a second start).
 	IssuerPinMetrics *processor.IssuerPinMetrics
+	// OcspMetrics are the OCSP check's series, built once on the initialize path: the start path
+	// may run again after a failed start, and a second registration would panic.
+	OcspMetrics *processor.OcspMetrics
 
 	// OwnershipDrain publishes the device ownership facts writes queue in their own
 	// transactions (ADR-081, model/ownership_outbox.go), one replica at a time.
-	OwnershipDrain        *core.PeriodicTask
-	OwnershipDrainMetrics *core.PeriodicTaskMetrics
+	AgentEffectsDrain        *core.PeriodicTask
+	AgentEffectsDrainMetrics *core.PeriodicTaskMetrics
+	AgentEffectsExhausted    prometheus.Counter
+	AgentKillConsumer        *processor.AgentKillConsumer
+	OwnershipDrain           *core.PeriodicTask
+	OwnershipDrainMetrics    *core.PeriodicTaskMetrics
 
 	// SessionKickDrain retries the broker session kicks a provisioning revoke or reset left
 	// unconfirmed (model.PendingSessionKick), so a kick does not wait for an operator to
 	// repeat the operation. SessionKicksPending and SessionKickOldestAge are what an alert reads.
 	SessionKickDrain        *core.PeriodicTask
 	SessionKickDrainMetrics *core.PeriodicTaskMetrics
+
+	// AgentProposalReaper moves agent proposals nobody approved in time to EXPIRED. The approval
+	// paths enforce the expiry themselves, so it only makes the ledger say so.
+	AgentProposalReaper *core.PeriodicTask
 
 	// DecodeAccountant is the payload decoders' accounting: the per-(tenant, device type) record
 	// budget a failing decoder is held to, the health tallies and the failure samples. It is the
@@ -178,7 +191,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: func(context.Context) error { return nil },
+			Postprocess: governance.StopRefreshes,
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -241,6 +254,9 @@ func buildMetrics() {
 		CredentialMisconfigured.WithLabelValues(path)
 	}
 	OwnershipDrainMetrics = Microservice.NewPeriodicTaskMetrics("ownership_drain")
+	AgentEffectsDrainMetrics = Microservice.NewPeriodicTaskMetrics("agent_effects_drain")
+	AgentEffectsExhausted = Microservice.NewCounter("agent_effects_exhausted_total",
+		"Agent effect outbox rows retained after exhausting their publication attempts.")
 	SessionKickDrainMetrics = Microservice.NewPeriodicTaskMetrics("session_kick_drain")
 	SessionKicksPending = Microservice.NewGauge("session_kicks_pending",
 		"Devices whose broker sessions a provisioning revoke or reset still owes an ended-session "+
@@ -252,6 +268,7 @@ func buildMetrics() {
 	MqttStoreBackoffMetrics, CalloutRefusedStoreFull = buildMqttStoreBackoffMetrics()
 	CalloutMetrics = processor.NewCalloutMetrics(Microservice)
 	IssuerPinMetrics = processor.NewIssuerPinMetrics(Microservice)
+	OcspMetrics = processor.NewOcspMetrics(Microservice)
 	buildTrustAnchorExpiryGauge()
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
@@ -404,6 +421,7 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	// Wrap api around rdb manager, then wrap a caching decorator over it for the hot
 	// inbound-event resolution path.
 	api := model.NewApi(rdbm)
+	api.AgentEffectsExhausted = AgentEffectsExhausted
 	api.EnableCeilingMetrics(nmgr.Microservice)
 	api.DeviceSecretKey = key
 	api.EnrollmentKeys = enrollment
@@ -424,6 +442,12 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 		if api.IntegrationChecker, err = processor.NewIntegrationChecker(enrollment); err != nil {
 			return nil, nil, err
 		}
+	}
+	// The tenant's decisions on agent proposals are asked of user-management UNDER THE CALLER'S
+	// OWN TOKEN (never a service token). Without its address every proposal and approval is
+	// refused with POLICY_UNAVAILABLE: nothing is decided without the policy.
+	if um := nmgr.Microservice.InstanceConfiguration.Infrastructure.UserManagement; um.Hostname != "" && um.Port != 0 {
+		api.AgentDecider = actiongate.NewCallerDecider(fmt.Sprintf("http://%s:%d/graphql", um.Hostname, um.Port))
 	}
 	cached := model.NewCachedApi(api, caches)
 	// The write paths evict the hot-path caches through this seam (ADR-044 F2). The GraphQL
@@ -688,6 +712,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
+	killReader, err := nmgr.NewReader(streams.AgentActuationKills)
+	if err != nil {
+		return err
+	}
+	Api.KillFeed = model.NewKillFeed(0, nil)
+	AgentKillConsumer = processor.NewAgentKillConsumer(Microservice, killReader, Api, Api.KillFeed, deadLetters)
+	if err := AgentKillConsumer.Initialize(context.Background()); err != nil {
+		return err
+	}
 	DeviceReportsReader = drreader
 	DeviceReportsConsumer = newDeviceReportsConsumer(DeviceReportsReader, deadLetters)
 	if err = DeviceReportsConsumer.Initialize(context.Background()); err != nil {
@@ -720,6 +753,21 @@ func initSessionKickDrain() error {
 	return SessionKickDrain.Initialize(context.Background())
 }
 
+// agentProposalReaperInterval is how often overdue agent proposals are marked EXPIRED.
+const agentProposalReaperInterval = time.Minute
+
+// initAgentProposalReaper builds the agent-proposal reaper. Every replica runs it: the transition
+// is one conditional update, so two passes at once each move what the other has not.
+func initAgentProposalReaper() error {
+	AgentProposalReaper = core.NewPeriodicTask(Microservice.FunctionalArea, "agent-proposal-reaper", agentProposalReaperInterval,
+		func(ctx context.Context) error {
+			_, err := Api.ExpireAgentProposals(ctx)
+			return err
+		},
+		core.NewNoOpLifecycleCallbacks())
+	return AgentProposalReaper.Initialize(context.Background())
+}
+
 // decodeAccountingInterval is how often the decoders' health tallies and failure samples are
 // written. A tally is held in memory between passes, so this is also the most a crash can lose of
 // the counts (never of the failed-events records, which are written before the source is acked).
@@ -743,6 +791,15 @@ func initDecodeAccounting() error {
 		func(ctx context.Context) error { return DecodeAccountant.Flush(ctx) },
 		core.NewNoOpLifecycleCallbacks())
 	return DecodeAccounting.Initialize(context.Background())
+}
+
+// initAgentEffectsDrain runs once; createNatsComponents rewires its publisher on
+// every broker start, just as it does for the ownership drain.
+func initAgentEffectsDrain() error {
+	AgentEffectsDrain = core.NewPeriodicTask(Microservice.FunctionalArea, "agent-effects-drain", ownershipDrainInterval,
+		func(ctx context.Context) error { return Api.DrainAgentEffectsLocked(ctx) },
+		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(AgentEffectsDrainMetrics))
+	return AgentEffectsDrain.Initialize(context.Background())
 }
 
 // initOwnershipDrain builds and initializes the ownership drain. Once, in the initialize
@@ -983,10 +1040,16 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			if err = initAgentEffectsDrain(); err != nil {
+				return err
+			}
 			if err = initOwnershipDrain(); err != nil {
 				return err
 			}
 			if err = initSessionKickDrain(); err != nil {
+				return err
+			}
+			if err = initAgentProposalReaper(); err != nil {
 				return err
 			}
 			if err = initDecodeAccounting(); err != nil {
@@ -1010,6 +1073,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
 			// its draft rules against event-processing and fails closed on an uncompilable one.
 			wireDetectionRuleValidator(Api, Microservice.InstanceConfiguration.Infrastructure, safetyGates)
+			wireRuleComparer(Api, Microservice.InstanceConfiguration.Infrastructure)
+			wirePrincipalStanding(Api, Microservice.InstanceConfiguration.Infrastructure)
 
 			// Wire the per-tenant geofence caps and the counter that reports their refusals. The
 			// counter is set unconditionally, unlike the resolver: with no resolver the platform
@@ -1047,8 +1112,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 					// The cached decorator is offered alongside the plain api so the profile
 					// publish/rollback mutations can invalidate the shared ingest cache they
 					// share with the processor (ADR-045 slice c); all other resolvers use Api.
-					graphql.ContextCachedApiKey: CachedApi,
-					gqlcore.ContextNatsKey:      Svc.Nats,
+					graphql.ContextCachedApiKey:      CachedApi,
+					graphql.ContextDeviceAuthModeKey: Configuration.DeviceAuthMode,
+					gqlcore.ContextNatsKey:           Svc.Nats,
 				}
 			},
 		},
@@ -1086,6 +1152,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	}
 
 	// Start the device-reports consumer: configuration sync and status from devices.
+	if err := AgentKillConsumer.Start(ctx); err != nil {
+		return err
+	}
 	err = DeviceReportsConsumer.Start(ctx)
 	if err != nil {
 		return err
@@ -1093,6 +1162,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 
 	// Start draining queued device ownership facts. After Svc.Start, which wired the
 	// publisher the drain publishes through.
+	if err := AgentEffectsDrain.Start(ctx); err != nil {
+		return err
+	}
 	if err = OwnershipDrain.Start(ctx); err != nil {
 		return err
 	}
@@ -1100,6 +1172,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	// Start retrying unconfirmed provisioning session kicks. After Svc.Start, which wired the
 	// NATS connection the kicker requests through.
 	if err = SessionKickDrain.Start(ctx); err != nil {
+		return err
+	}
+	if err = AgentProposalReaper.Start(ctx); err != nil {
 		return err
 	}
 
@@ -1147,6 +1222,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		// The bounds are stated rather than left to the constructor's defaults, and the load
 		// metrics are attached here: a responder without them enforces its bounds but reports
 		// nothing, which left the Ingest board's callout panels empty.
+		CalloutResponder.UseDeviceUplinks(infra.Nats.MqttDeviceUplinks)
 		CalloutResponder.Configure(processor.DefaultCalloutMaxInFlight, processor.DefaultCalloutLookupTimeout,
 			processor.DefaultCalloutStopWait, CalloutMetrics)
 		// The broker encrypts each authorization request to the responder's curve key when it is
@@ -1165,6 +1241,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		// A certificate that pins no credential yet registers its device, under the tenant's
 		// certificate profile, on its first connect.
 		if err = wireCalloutCertificateRegistration(CalloutResponder, Api, Configuration, infra); err != nil {
+			return err
+		}
+		// The OCSP check of a certificate connect, for the anchors that ask for it. Off instance-wide
+		// unless the fixed configuration turns it on.
+		if err = wireCalloutOcsp(CalloutResponder, OcspMetrics, Configuration, infra); err != nil {
 			return err
 		}
 		// The back-off ahead of overflow: with the fail-closed MQTT acknowledgement on, a full
@@ -1195,10 +1276,16 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 	// Stop the ownership drain before the NATS connection drains. What it has not published
 	// stays queued for whichever replica drains next.
+	if err := AgentEffectsDrain.Stop(ctx); err != nil {
+		return err
+	}
 	if err := OwnershipDrain.Stop(ctx); err != nil {
 		return err
 	}
 	if err := SessionKickDrain.Stop(ctx); err != nil {
+		return err
+	}
+	if err := AgentProposalReaper.Stop(ctx); err != nil {
 		return err
 	}
 
@@ -1227,6 +1314,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	}
 
 	// Stop the device-reports consumer before the NATS connection drains.
+	if err := AgentKillConsumer.Stop(ctx); err != nil {
+		return err
+	}
 	err = DeviceReportsConsumer.Stop(ctx)
 	if err != nil {
 		return err
@@ -1241,10 +1331,16 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if err := AgentEffectsDrain.Terminate(ctx); err != nil {
+		return err
+	}
 	if err := OwnershipDrain.Terminate(ctx); err != nil {
 		return err
 	}
 	if err := SessionKickDrain.Terminate(ctx); err != nil {
+		return err
+	}
+	if err := AgentProposalReaper.Terminate(ctx); err != nil {
 		return err
 	}
 	if DecodeAccounting != nil {
@@ -1266,6 +1362,9 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 
 	// Terminate the device-reports consumer.
+	if err := AgentKillConsumer.Terminate(ctx); err != nil {
+		return err
+	}
 	err = DeviceReportsConsumer.Terminate(ctx)
 	if err != nil {
 		return err
@@ -1285,4 +1384,31 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 // one setting, not two that can disagree.
 func resolvedEnvelopesOn() bool {
 	return Microservice.InstanceConfiguration.Infrastructure.Messaging.Envelopes.Resolved
+}
+
+// wireRuleComparer owns a separate long-query client: comparisons may consume two
+// 45-second windows, without changing the validation client's ordinary timeout.
+func wireRuleComparer(api *model.Api, infra mscfg.InfrastructureConfiguration) {
+	api.RuleComparer = nil
+	if infra.ServiceAuth.Secret == "" || infra.EventProcessing.Hostname == "" || infra.EventProcessing.Port == 0 {
+		log.Warn().Msg("Automation comparison disabled: service secret or event-processing endpoint is not configured.")
+		return
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",
+		[]string{string(auth.DeviceRead)}, svcclient.WithQueryTimeout(110*time.Second))
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.EventProcessing.Hostname, infra.EventProcessing.Port)
+	api.RuleComparer = automationreview.NewClient(client, url)
+	log.Info().Str("eventProcessing", url).Msg("Automation comparison enabled.")
+}
+
+func wirePrincipalStanding(api *model.Api, infra mscfg.InfrastructureConfiguration) {
+	api.PrincipalStanding = nil
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("Automation approver standing unavailable: service secret or user-management endpoint is not configured; protected publishes will be refused.")
+		return
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", []string{string(auth.TenantRead)}, svcclient.WithQueryTimeout(2*time.Second))
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	api.PrincipalStanding = automationreview.NewStandingClient(client, url)
+	log.Info().Msg("Automation approver standing enabled.")
 }

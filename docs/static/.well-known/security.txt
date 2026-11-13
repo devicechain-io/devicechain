@@ -1,0 +1,6 @@
+Contact: https://github.com/devicechain-io/devicechain/security/advisories/new
+Contact: mailto:admin@devicechain.io
+Expires: 2027-10-31T00:00:00.000Z
+Preferred-Languages: en, es
+Canonical: https://docs.devicechain.io/.well-known/security.txt
+Policy: https://github.com/devicechain-io/devicechain/blob/main/SECURITY.md

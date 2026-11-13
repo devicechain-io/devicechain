@@ -173,7 +173,12 @@ func TestCrlKickJoinComparesTheIssuerKeyOfAKeyedLink(t *testing.T) {
 		}))
 		return n
 	}
-	assert.Equal(t, 0, queue("ff"+real.Key[2:]), "another issuer key")
+	// Flip the first hex digit; a fixed "ff" prefix equals the real key 1 run in 256.
+	flipped := "0"
+	if real.Key[0] == '0' {
+		flipped = "1"
+	}
+	assert.Equal(t, 0, queue(flipped+real.Key[1:]), "another issuer key")
 	assert.Equal(t, 1, queue(real.Key), "the control")
 }
 

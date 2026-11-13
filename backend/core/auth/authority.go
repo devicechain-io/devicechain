@@ -109,6 +109,14 @@ const (
 	TenantRead  Authority = "tenant:read"
 	TenantWrite Authority = "tenant:write"
 
+	// UsageRead reads the per-tenant usage record on the instance admin plane
+	// (event-management's tenantEventUsage). System-tier only: it is what a self-hoster
+	// bills their own customers from, so it is an operator's view across tenants, and a
+	// tenant does not read its own figures through it. It is its own authority rather than
+	// tenant:read so a billing integration can be granted the usage record without the
+	// tenant catalogue.
+	UsageRead Authority = "usage:read"
+
 	// Device management (device-management). Enforcement is rolled out per service
 	// in later PRs; the vocabulary is defined here up front so resolvers across
 	// services reference one canonical set.
@@ -162,6 +170,21 @@ const (
 	// Adding it now is cheap; adding it once roles exist in the wild is a breaking
 	// change to every one of them.
 	LocationRead Authority = "location:read"
+
+	// LocationInstalledRead gates reading where a FIXED asset was installed: a streetlight,
+	// a parking spot, a cabinet. That is installation data, not a track, so it is a narrower
+	// capability than LocationRead and can be granted without it.
+	//
+	// 🔴 LocationRead IMPLIES THIS ONE and this one never implies LocationRead. Authority is
+	// checked per position SOURCE before any fallback runs: a caller holding only this
+	// authority is handed the installed position even when the device also reports fresh GPS,
+	// and is never handed the effective position, because the effective rule would give it a
+	// live fix. See CanReadInstalledPosition for the one place the implication lives.
+	//
+	// It is deliberately absent from the viewer baseline (a maintainer decision, not a
+	// default): whether lamp-post coordinates belong in the pinned baseline is a separate
+	// question from whether the authority exists.
+	LocationInstalledRead Authority = "location:installed:read"
 
 	// Alarms (device-management, ADR-041). AlarmRead gates reading raised alarms;
 	// AlarmWrite gates the operator transitions (acknowledge, clear). Distinct from
@@ -390,6 +413,15 @@ const (
 	// cannot read, list, grant, or change provider config (that is ai:admin) or touch any
 	// tenant resource.
 	AIInfer Authority = "ai:infer"
+
+	// AgentAdmin gates a tenant's AGENT POLICY: the published document that decides whether AI
+	// agents may act in the tenant at all, which clients may, what needs a person's approval, and
+	// the tenant kill switch (setAgentActuation). Tenant-tier: a tenant governs its own agents.
+	//
+	// 🔴 NO OAuth CEILING MAY EVER HOLD IT. An agent that could edit the policy that bounds it
+	// would be bounded by nothing; the act:* ceilings hold proposal authorities only, and a
+	// ratchet (TestAgentAdminNeverInActCeiling) pins that this one is never among them.
+	AgentAdmin Authority = "agent:admin"
 )
 
 // vocabulary maps every known authority to its tier. A Role may only grant
@@ -408,6 +440,7 @@ var vocabulary = map[Authority]Tiers{
 	UserWrite:   system,
 	TenantRead:  system,
 	TenantWrite: system,
+	UsageRead:   system,
 	// role:read and role:write are DUAL-tier (ADR-081), on exactly the audit:read
 	// argument: one capability with two scopes, told apart by the plane and by the
 	// row's tenant, not two capabilities. On the admin plane (an identity token)
@@ -460,24 +493,25 @@ var vocabulary = map[Authority]Tiers{
 	// A demotion writes one tenant's own projection rows. Tenant-tier is what makes
 	// it reachable at all from the data plane the mutation is served on; the reason
 	// it is not simply state:read is on the constant.
-	StateDemote:       tenant,
-	LocationRead:      tenant,
-	AlarmRead:         tenant,
-	AlarmWrite:        tenant,
-	CommandRead:       tenant,
-	CommandWrite:      tenant,
-	DashboardRead:     tenant,
-	DashboardWrite:    tenant,
-	NotificationRead:  tenant,
-	NotificationWrite: tenant,
-	ConnectorRead:     tenant,
-	ConnectorWrite:    tenant,
-	ArtifactRead:      tenant,
-	ArtifactWrite:     tenant,
-	ArtifactTrust:     tenant,
-	BrandingWrite:     tenant,
-	BasemapWrite:      tenant,
-	LocaleWrite:       tenant,
+	StateDemote:           tenant,
+	LocationRead:          tenant,
+	LocationInstalledRead: tenant,
+	AlarmRead:             tenant,
+	AlarmWrite:            tenant,
+	CommandRead:           tenant,
+	CommandWrite:          tenant,
+	DashboardRead:         tenant,
+	DashboardWrite:        tenant,
+	NotificationRead:      tenant,
+	NotificationWrite:     tenant,
+	ConnectorRead:         tenant,
+	ConnectorWrite:        tenant,
+	ArtifactRead:          tenant,
+	ArtifactWrite:         tenant,
+	ArtifactTrust:         tenant,
+	BrandingWrite:         tenant,
+	BasemapWrite:          tenant,
+	LocaleWrite:           tenant,
 	// audit:read was the first DUAL-tier authority, and it has to be: two different
 	// resolvers on two different planes gate on it. A tenant reads its own journal on
 	// device-management's data plane (tenant-tier), and an operator reads the instance
@@ -497,10 +531,13 @@ var vocabulary = map[Authority]Tiers{
 	// within a tenant, and the inference service holds no ambient authority over
 	// tenant data with it (ADR-047 confused-deputy red line).
 	AIInfer: tenant,
+	// The agent policy is a tenant's own governance of its own agents.
+	AgentAdmin: tenant,
 }
 
-// ValidAuthority reports whether s names a known authority (including the
-// super-authority "*").
+// ValidAuthority reports whether s names a known, GRANTABLE authority (including the
+// super-authority "*"). A proposal authority is known but not grantable, so it answers false:
+// no role and no service-token request may name one (see proposal.go).
 func ValidAuthority(s string) bool {
 	if Authority(s) == AuthorityAll {
 		return true
@@ -514,7 +551,13 @@ func ValidAuthority(s string) bool {
 // the bearer's tier") and for an unknown authority, so a caller must decide what an
 // untiered authority means rather than receiving a plausible default. Callers that
 // gate on the answer must fail closed when ok is false.
+//
+// A proposal authority is tenant-tier (it acts within one tenant) even though it is not in the
+// grantable vocabulary: see proposal.go.
 func TiersOf(a Authority) (Tiers, bool) {
+	if _, ok := proposalSources[a]; ok {
+		return tenant, true
+	}
 	t, ok := vocabulary[a]
 	return t, ok
 }

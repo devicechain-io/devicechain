@@ -81,6 +81,8 @@ var metricSafeCodes = map[RejectionCode]struct{}{
 	RejectMetadataTooLarge:            {},
 	RejectNameTooLong:                 {},
 	RejectExpiresAtInvalid:            {},
+	RejectDeliveryOptionInvalid:       {},
+	RejectDeliveryOptionNotApplicable: {},
 	RejectHeldCeilingExceeded:         {},
 	RejectUnclassified:                {},
 	RejectBatchTargetAmbiguous:        {},
@@ -94,6 +96,11 @@ var metricSafeCodes = map[RejectionCode]struct{}{
 	RejectRetryNotEligible:            {},
 	RejectRetryUnknownNotAcknowledged: {},
 	RejectRetryTokenInUse:             {},
+	RejectCampaignTriggerInvalid:      {},
+	RejectCampaignStepsInvalid:        {},
+	RejectCampaignStepUnsupported:     {},
+	RejectCampaignTargetInvalid:       {},
+	RejectCampaignFieldInvalid:        {},
 
 	// Relayed from device-management's enqueue gate. Listed for the label only; this
 	// is not a mirror of that service's enum and must not be treated as one.

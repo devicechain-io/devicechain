@@ -161,6 +161,9 @@ If the profile does not hold history as far back as the window, the panel says s
 the earliest event it has. The preview is a guide, not a guarantee: it replays from a cold start, so
 a rule that waits for a long silence previews less accurately.
 
+To check a rule against events you describe instead of history, including a rule that waits days for silence, see
+[Testing your rules](../guides/testing-your-rules.md).
+
 ## Rule health and the live feed
 
 The **Rule Health** tab answers "is my rule working?" for the profile's active published version.

@@ -171,7 +171,7 @@ describe('the round-trip corpus', () => {
   const SHAPES: Record<string, string> = {
     'an httpCall action with every field': JSON.stringify({
       name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', threshold: 30 },
-      actions: [{ type: 'httpCall', httpCall: { url: 'https://example.invalid/hook', method: 'POST', headers: { 'X-A': 'b' }, bodyTemplate: '"x"', secretRef: 'h', timeoutMs: 2000 } }],
+      actions: [{ type: 'httpCall', httpCall: { url: 'https://example.invalid/hook', method: 'POST', headers: { 'X-A': 'b' }, bodyTemplate: '"x"', secretRef: 'h', signingSecretRef: 'hooks/prod', timeoutMs: 2000 } }],
     }),
     'a publish action with every field': JSON.stringify({
       name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', threshold: 30 },
@@ -244,7 +244,7 @@ describe('the round-trip corpus', () => {
     expect(tags.length).toBeGreaterThan(1);
     const SAMPLES: Record<string, unknown> = {
       url: 'https://example.invalid/hook', method: 'POST', headers: { 'X-A': 'b' }, bodyTemplate: '"x"',
-      secretRef: 'team/h', timeoutMs: 2000, connectorRef: 'c', payloadTemplate: '"y"',
+      secretRef: 'team/h', signingSecretRef: 'hooks/prod', timeoutMs: 2000, connectorRef: 'c', payloadTemplate: '"y"',
     };
     const unmodelled = tags.filter((tg) => !(tg in SAMPLES));
     expect(unmodelled, `${struct} declares fields this test has no sample for — model them in the form first`).toEqual([]);

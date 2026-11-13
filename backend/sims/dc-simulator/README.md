@@ -194,6 +194,67 @@ The per-event identity ledger lives in memory for the length of the run (`--iden
 keeps it, since `auto` decides after the drive; a 60 minute run at 6,000/s holds about 21M
 entries, a few hundred MB).
 
+### Rehearsing a broker that is not DeviceChain (`--target`)
+
+The loss verdict does not need a DeviceChain platform on the other end. `dc-loadtest-mqtt --target`
+aims the same open-loop, PUBACK-true fleet at any MQTT broker, with a credential list you bring,
+and reads delivery back through a **subscriber tap** on that broker. A QoS 1 publish the broker
+PUBACKed is a promise; a PUBACKed message the tap never receives is a **LOSS**, with the same exit
+codes (0 held, 1 an invariant failed, 2 no verdict, 3 loss) and the same split between *lost* (the
+broker promised) and *unconfirmed* (it never did).
+
+```bash
+go build -o dc-loadtest-mqtt ./cmd/loadtest-mqtt
+./dc-loadtest-mqtt --target mqtts://broker.example:8883 --credentials fleet.csv \
+    --rate 500 --duration 5m --identity full \
+    --tap-username rehearsal-tap --tap-password-file tap.pass --report report.json
+```
+
+`--target` takes `mqtt://host:port` or `mqtts://host:port`; the scheme decides TLS (a contradicting
+`--tls` is refused). A `ws(s)://` or `https://` target is **refused by name**, not approximated:
+this build drives and observes only TCP and TLS sockets. There is no handshake and no platform.
+
+**The credential CSV** has a header row and one row per device; the file *is* the fleet.
+
+| Column | Meaning |
+| --- | --- |
+| `device` | required; the identity events are filed and read back under |
+| `client_id` | MQTT client id (default: the device); unique, since a broker evicts a duplicate |
+| `token` | a bearer token, presented as the username with an empty password |
+| `username`, `password` | the other password-style option (not together with `token`) |
+| `cert_file`, `key_file` | PEM client certificate and key, for an `mqtts://` target (the pair `x509sim` writes) |
+| `topic` | this device's publish topic (default: `--topic-template`, `{device}` replaced) |
+
+A row with none of these connects anonymously, and the report counts devices by how they
+authenticated, never by what they presented. A malformed list is refused whole, naming the line.
+
+**The tap** subscribes before anything publishes, at QoS 1, to `--topic-template` with `{device}`
+as a single-level wildcard (override with `--tap-topic`), and files each delivery under
+`(device, occurredTime in microseconds)` from the message body. Redeliveries are counted once, in
+the report. If the tap's own session drops, a shortfall is reported as inconclusive (exit 1), never
+as a loss: the tap may be the one that missed it. Use a topic prefix the run owns: other traffic
+that matches the filter is unexpected events and fails the run.
+
+**What the verdict is, and is not.** It measures *broker-to-subscriber* loss: PUBACKed, then
+delivered to one QoS 1 subscriber of the broker you named. It does not see what any pipeline
+behind the broker does with a message afterward, and a subscriber slower than the broker's
+per-client queue allows reads as the broker's loss, because from the publisher's side it is one
+(raise the queue and in-flight limits on a broker under rehearsal). The report carries this
+statement. Against a DeviceChain platform the stronger `--handshake` mode reads the event store
+itself.
+
+**Latency regression.** `--baseline report.json --max-p99-regression 0.25` fails the run when the
+PUBACK p99 grows by more than 25% of an earlier *passing* report's.
+
+**The negative control.** `dc-loadtest-dropproxy --listen 127.0.0.1:1884 --upstream broker:1883
+--every 100` is a plaintext MQTT proxy that PUBACKs every 100th QoS 1 publish and never forwards
+it. Publish through it (`--target mqtt://127.0.0.1:1884`) and tap the real broker
+(`--tap-target mqtt://broker:1883`): the run must exit 3 and its `lost` count must equal the
+proxy's `dropped` exactly. A gate that has only ever passed may be unable to fail; this is how you
+see that it can. `hack/rehearsal-rig.sh` runs both halves against an off-the-shelf authenticated
+Mosquitto in its own kind cluster, and `.github/actions/rehearsal` wraps the tool as a composite
+action that fails a job on a loss or a latency regression.
+
 ### The aggregate identity oracle (`dc-loadtest-aggoracle`)
 
 The per-device read-back (`--identity full`) pages every stored event back through the tenant API:
@@ -685,6 +746,82 @@ byte. The printed decoder declares one saved vector; set it on a profile that de
 `humidity` and `battery.voltage` as doubles and `door` as a boolean (the same metrics default mode
 stores), publish, and the stored values are the ones default mode would have stored.
 
+### Downlinks and the acknowledgement feed (`--lorawan-downlink-listen`)
+
+In `--lorawan-ns chirpstack` mode, `--lorawan-downlink-listen :8085` also plays
+ChirpStack v4's REST queue. The equivalent env var is
+`DC_SIM_LORAWAN_DOWNLINK_LISTEN`. Set the queue's API key in
+`DC_SIM_LORAWAN_API_KEY`; it has no command-line flag. Configure the platform's
+outbound connector with this base URL and API key. The listener starts before
+the first uplink and shuts down when the run ends. TTS mode refuses this listener.
+
+The endpoint is `POST /api/devices/{devEui}/queue`; a base URL path prefix is
+also accepted. It takes ChirpStack's envelope:
+
+```json
+{"queueItem":{"devEui":"70B3D57ED0050004","fPort":12,"confirmed":true,"data":"ANcD","expiresAt":"2030-01-01T00:00:00Z"}}
+```
+
+It answers `200 {"id":"<uuid>"}`. `expiresAt` is optional and logged; the
+simulator does not expire queued items. Empty data is allowed. Requests are
+limited to 64 KiB. Missing or wrong bearer keys get HTTP 401 with gRPC code 16;
+devices outside `--deveui` get 404 with code 5; malformed bodies, mismatched
+DevEUIs, ports outside 1..223 or invalid standard padded base64 get 400 with
+code 3. Other paths get 404 with code 5; other methods get 405. Refusals carry
+JSON `{"code":N,"message":"..."}` and never queue an item.
+Once the run has stopped taking downlinks, the queue refuses with HTTP 409 (gRPC code 9).
+
+Confirmed items follow class A timing. Before each device uplink POST, the
+simulator snapshots that device's pending items. After that POST, it sends a
+`?event=txack` report followed by `?event=ack` for each item in the snapshot.
+An item queued during an uplink POST waits for the next uplink. Both reports
+carry the queue response's ID and the same per-device `fCntDown`, starting at 0
+and increasing for each reported item. Reports use the integration bearer token
+and honor `--integration-host`, just like uplinks.
+
+`--lorawan-ack ack|nack|none` (or `DC_SIM_LORAWAN_ACK`, default `ack`) controls
+these reports. `ack` reports `acknowledged:true`; `nack` sends txack then an ack
+with `acknowledged:false`, as when ChirpStack gives up waiting. `none` accepts
+items but never reports them, to exercise the platform's deadline path.
+Unconfirmed items are accepted and logged but never reported in any mode.
+An explicit `--lorawan-ack` requires the listener.
+
+After `--uplinks` rounds, the run stays up until every pending confirmed item
+has been answered in ack or nack mode. It sends additional real uplinks at
+`--emit-interval`, keeping their counters increasing; a zero interval uses 1s
+while waiting. `--uplinks 0` is allowed with the listener and keeps uplinking
+until interrupted. With a listener, SIGINT or SIGTERM prints the summary and exits 0;
+an uplink-only run keeps its previous behaviour, returning the cancellation error.
+Transport errors still make the run fail.
+
+The listener writes JSON lines to stdout, followed by the usual run summary (a real run against an
+instance whose rule sent one confirmed command; a refusal is logged as
+`{"event":"downlink_refused","reason":"invalid bearer key","status":401}`):
+
+```json
+{"ack":"ack","addr":"127.0.0.1:8085","event":"downlink_listening"}
+{"event":"downlink_queued","devEui":"70B3D57ED0050004","id":"3ffed47b-dfa3-4d57-a4a9-4ce59dc03d31","fPort":12,"hex":"00d703","confirmed":true,"expiresAt":"2026-11-11T17:30:19Z"}
+{"devEui":"70B3D57ED0050004","event":"downlink_reported","id":"3ffed47b-dfa3-4d57-a4a9-4ce59dc03d31","report":"txack","status":202}
+{"acknowledged":true,"devEui":"70B3D57ED0050004","event":"downlink_reported","id":"3ffed47b-dfa3-4d57-a4a9-4ce59dc03d31","report":"ack","status":202}
+{"ns":"chirpstack","sent":12,"resent":0,"statuses":{"202":12},"errors":0,"queued":1,"reported":{"ack":{"202":1},"txack":{"202":1}},"runId":"1794418086190782000"}
+```
+
+Queued lines include `expiresAt` when supplied. Refusals never log the presented
+key. The summary adds `"queued":1` and
+`"reported":{"txack":{"202":1},"ack":{"202":1}}` when a listener is used.
+Report transport failures use status `"0"` in `reported`, increment `errors`,
+and set `firstError`, as uplink failures do. `statuses` continues to count only
+uplink responses. Without a listener the summary has no new fields.
+
+For example, with `DC_SIM_INTEGRATION_TOKEN` and `DC_SIM_LORAWAN_API_KEY` set:
+
+```sh
+dc-simulator --lorawan-ns chirpstack \
+  --integration-url https://host/api/integrations/acme/lora \
+  --deveui 70B3D57ED0050004 --lorawan-downlink-listen :8085 \
+  --lorawan-ack ack --uplinks 0 --emit-interval 1s
+```
+
 ### X.509 (mTLS) device mode (`--x509`)
 
 `--x509` plays devices that authenticate with a client certificate instead of a token. It is a
@@ -907,6 +1044,10 @@ a snapshot taken at page load would not.
 - `x509sim/` — the `--x509` mode: test CA and device certificate minting, trust-anchor and credential registration, and the certificate-presenting MQTT connect.
 - `mqttload/` — the MQTT fleet behind `dc-loadtest-mqtt`: one session per device, PUBACK-true
   accounting, jittered reconnect, observed TLS. `loadtest/mqtt.go` is its storage verdict.
+  `mqttload/target.go` (the bring-your-own credential list) and `mqttload/tap.go` (the read-back
+  subscriber) aim it at a broker that is not DeviceChain; `loadtest/target.go` is that run.
+- `internal/dropproxy/` — the rehearsal's negative control: an MQTT proxy that PUBACKs every Nth
+  publish and never forwards it (`cmd/loadtest-dropproxy`).
 - `sim/towerpulse*.go` — the building-management scenario: the manifest and rules
   (`towerpulse.go`), the seeded thermal model and the command engine that answers a command
   only when its job is done (`towerpulse_model.go`), and the boards (`towerpulse_dashboard.go`, and the annex owner's `towerpulse_annex_dashboard.go`).

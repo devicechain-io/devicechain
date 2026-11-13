@@ -117,3 +117,5 @@ func (r *CommandDefinitionSearchResultsResolver) Pagination() *SearchResultsPagi
 		C: r.C,
 	}
 }
+
+func (r *CommandDefinitionResolver) Encoder() *string { return util.MetadataStr(r.M.Encoder) }

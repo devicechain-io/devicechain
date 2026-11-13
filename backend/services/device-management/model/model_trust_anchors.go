@@ -55,6 +55,13 @@ type DeviceTrustAnchor struct {
 	// revocation writer under the anchor's row lock. NULL reads as 0, and an ENTRIES anchor with
 	// none runs no revocation query on a connect.
 	RevocationRows sql.NullInt64
+
+	// OcspMode is the anchor's OCSP mode (x509trust.OCSPMode): NULL reads as OFF, and a stored
+	// value outside the vocabulary is refused, never defaulted (OcspModeOf).
+	OcspMode sql.NullString `gorm:"size:32"`
+	// OcspResponderUrl is the tenant-set responder that replaces each certificate's own
+	// Authority Information Access entry; NULL means use the certificate's.
+	OcspResponderUrl sql.NullString `gorm:"size:2048"`
 }
 
 // DefaultOrder implements rdb.Sortable: newest first, token as the unique tiebreak.
@@ -105,6 +112,12 @@ type DeviceTrustAnchorUpdateRequest struct {
 	// RevocationStaleGrace is a Go duration (whole seconds, 0s to 168h). A null clears it, so the
 	// instance's default applies.
 	RevocationStaleGrace dcgraphql.OptionalString
+	// OcspMode is OFF, ENFORCE_KNOWN or REQUIRE_CURRENT. A null is refused (OFF is a value, not an
+	// absence). A mode other than OFF is refused while the instance's OCSP switch is off.
+	OcspMode OptionalOcspMode
+	// OcspResponderUrl is an http or https URL that replaces each certificate's own responder. A
+	// null clears it. REQUIRE_CURRENT needs one.
+	OcspResponderUrl dcgraphql.OptionalString
 }
 
 // Search criteria for trust anchors.

@@ -84,9 +84,12 @@ This list is here so that you find these things out before you adopt DeviceChain
   through LwM2M. Only the platform's MQTT broker authenticates a device by client certificate; HTTP
   uses a token or basic credential and LwM2M uses pre-shared keys. See the
   [transport capability matrix](./reference/transport-matrix.md#not-available).
-- **Commands to devices behind a network server.** There is no downlink through an
-  [inbound integration](./reference/transport-matrix.md#inbound-integrations). A command for such a
-  device is accepted and then fails with `COMMAND_TRANSPORT_UNSUPPORTED`.
+- **Commands to devices behind a network server.** Optional
+  [LoRaWAN downlink](./guides/inbound-integrations.md#lorawan-downlink) supports ChirpStack v4
+  and The Things Stack v3. When the adapter is disabled,
+  a command for a device that last reported through that integration is accepted and then
+  fails with `COMMAND_TRANSPORT_UNSUPPORTED`. With the adapter enabled, an integration without
+  a usable network-server link is refused as not sent. Generic-sender downlink is unsupported.
 - **A mobile app.** DeviceChain has a web console and dashboards that adapt to a phone screen, and
   client libraries for [JavaScript](./reference/npm-packages.md) and, in the repository's
   [`sdks/`](https://github.com/devicechain-io/devicechain/tree/main/sdks) directory, .NET and Unity.
@@ -110,3 +113,9 @@ This list is here so that you find these things out before you adopt DeviceChain
 - [Architecture at a glance](./concepts/architecture-at-a-glance.md) shows how a message moves
   through the platform, and [Architecture](./concepts/architecture.md) lists every component.
 - [Getting help](./getting-help.md) says where to ask a question or report a gap on this page.
+
+:::tip Try it
+
+**First device in about 30 minutes.** Install DeviceChain locally, connect a simulated device and watch its telemetry arrive. [Start the quickstart →](./quickstart/first-device.md)
+
+:::

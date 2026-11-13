@@ -105,6 +105,10 @@ func (r *DeviceTypeResolver) Model() *string {
 	return util.NullStr(r.M.ModelName)
 }
 
+func (r *DeviceTypeResolver) CommandChannel() *string {
+	return util.NullStr(r.M.CommandChannel)
+}
+
 // -----------------------------------
 // Device type search results resolver
 // -----------------------------------

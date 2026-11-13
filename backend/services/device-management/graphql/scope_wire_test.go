@@ -66,7 +66,7 @@ func seedScopeFixture(t *testing.T, db *gorm.DB, extra ...any) scopeFixture {
 	t.Helper()
 	if err := db.AutoMigrate(append([]any{&model.DeviceType{}, &model.Device{}, &model.DeviceAlias{}, &model.DeviceProfile{},
 		&model.CustomerType{}, &model.Customer{}, &model.IssuedCustomerToken{}, &model.Area{}, &model.EntityRelationshipType{},
-		&model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.DeviceClaim{}, &model.DeviceProfileVersion{}, &model.DeviceProfileActivation{},
+		&model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.DeviceClaim{}, &model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{}, &model.DeviceProfileActivation{},
 		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.Alarm{}, &model.EntityAttribute{},
 		&model.AreaType{}, &model.Asset{}, &model.AssetType{}}, extra...)...); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -158,6 +158,16 @@ func (f scopeFixture) member(anchors ...string) context.Context {
 	return f.withClaims(&auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: scopeTenant,
 		Authorities: []string{string(auth.DeviceRead), string(auth.AlarmRead), string(auth.AlarmWrite),
 			string(auth.EventRead)},
+		ScopeAnchors: anchors})
+}
+
+// sweepMember is member plus location:read, the caller the isolation sweeps run as. Holding it
+// puts the installed-position fields themselves under the sweep: without it they answer the
+// withheld marker for every entity and the sweep would never read a stored position.
+func (f scopeFixture) sweepMember(anchors ...string) context.Context {
+	return f.withClaims(&auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: scopeTenant,
+		Authorities: []string{string(auth.DeviceRead), string(auth.AlarmRead), string(auth.AlarmWrite),
+			string(auth.EventRead), string(auth.LocationRead)},
 		ScopeAnchors: anchors})
 }
 

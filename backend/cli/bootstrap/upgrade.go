@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -59,6 +60,10 @@ type UpgradeOptions struct {
 	// AllowEnvelopeDowngrade skips the refusal to move below the first release that reads event
 	// envelopes while the streams may hold one. See envelopedowngrade.go.
 	AllowEnvelopeDowngrade bool
+
+	// AlertRouting replaces where the cluster's Alertmanager sends alerts. The zero value
+	// changes nothing. See AlertRoutingRequest.
+	AlertRouting AlertRoutingRequest
 }
 
 // Upgrade moves a live instance onto a release: its message broker and event store
@@ -159,6 +164,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return err
 	}
 	st.Evolving = true
+	st.AlertRouting = opts.AlertRouting
 
 	if st.AreaChange != nil {
 		fmt.Println(GreenUnderline(fmt.Sprintf(
@@ -199,6 +205,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	}
 	sayValuesOverlay(st)
 	sayMqttFailClosed(st)
+	sayMqttDeviceUplinks(st)
 	sayUpdateStoreMountless(st)
 	// 🔴 THE OPERATOR IS NOT LISTED AS SOMETHING THIS RUN WILL MOVE, because it is
 	// not. hydrateUpgradeState has already refused unless the cluster's operator is
@@ -248,6 +255,13 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// 🔴 A MOVE BELOW THE FIRST RELEASE THAT READS EVENT ENVELOPES IS REFUSED WHILE THE HOT
 	// STREAMS MAY HOLD ONE, before the declaration is written. See envelopedowngrade.go.
 	if err := precheckEnvelopeDowngrade(ctx, st, opts.AllowEnvelopeDowngrade); err != nil {
+		return err
+	}
+
+	// Asked before the first write: a cluster whose Alertmanager reads no Secret of ours has
+	// nothing for the alert flags to change, and finding that out after the services moved
+	// would leave an upgrade that did half of what was asked.
+	if err := PrecheckAlertRoutingUpgrade(ctx, typed, dyn, st); err != nil {
 		return err
 	}
 
@@ -302,6 +316,12 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// flagless re-run finishes the job instead of rolling the moved half back.
 	if valuesOverlayChanges(st) {
 		if err := recordValuesOverlay(ctx, dyn, opts.Instance, st.ValuesOverlay); err != nil {
+			return err
+		}
+	}
+	// The development egress allowance, recorded before the move for the same reason.
+	if st.DevAllowEgressChange {
+		if err := recordDevAllowEgress(ctx, dyn, opts.Instance, st.DevAllowEgress); err != nil {
 			return err
 		}
 	}
@@ -387,6 +407,22 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// pessimistic date stays (TestTheExpiryIsPublishedOnlyAfterTheBrokerRestartIsWaitedOn).
 	// Published whether or not anything was renewed, so an instance bootstrapped before the
 	// date existed gets it on its first upgrade.
+	if st.AlertRouting.Given() {
+		doing("changing where alerts are sent")
+		if _, aerr := applyAlertRoutingUpgrade(ctx, typed, dyn, st.AlertRouting); aerr != nil {
+			return fail("changing where alerts are sent", aerr)
+		}
+		done()
+		// 🔴 A FAILURE HERE IS AN ERROR, NOT A WARNING. The Secret is already changed, so an
+		// instance this could not reach keeps its previous claim, and after a clear that claim
+		// is "routed" over an Alertmanager that drops everything. Re-running with the same
+		// flags is idempotent and tries again.
+		published, perrs := publishAlertRoutingToCluster(ctx, st.KubeContext)
+		fmt.Printf("  %s %s\n", color.WhiteString("Alert routing:"), SayAlertRouting(published))
+		if len(perrs) > 0 {
+			return fail("publishing the alert routing", errors.Join(perrs...))
+		}
+	}
 	if brokerExpiryUnverified(st) {
 		// The servers have not been restarted onto the renewed certificate and no StatefulSet
 		// exists to restart them, so the date would claim a certificate nobody serves yet. The next
@@ -399,6 +435,9 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 			return fail("publishing the broker certificate's expiry", err)
 		}
 		done()
+	}
+	if err := publishAlertRouting(ctx, typed, dyn, st); err != nil {
+		return fail("publishing the alert routing", err)
 	}
 
 	// THE BROKER AND THE EVENT STORE, BEFORE THE SERVICES.
@@ -671,6 +710,9 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 			wouldDo(fmt.Sprintf("record %s as enabled in the instance declaration",
 				strings.Join(st.AreaChange.Added, ", ")))
 		}
+		if st.MqttDeviceUplinksChange && st.MqttDeviceUplinks != nil {
+			wouldDo(fmt.Sprintf("record mqttDeviceUplinks=%t in the instance declaration", *st.MqttDeviceUplinks))
+		}
 		if st.MqttFailClosedChange && st.MqttFailClosed != nil {
 			wouldDo(fmt.Sprintf("record mqttFailClosed=%t in the instance declaration", *st.MqttFailClosed))
 		}
@@ -702,6 +744,7 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 
 	areasMove := st.AreaChange != nil && !slices.Equal(inst.Spec.ExtraFunctionalAreas, st.EnableAreas)
 	if inst.Spec.ImageRegistry == st.ImageRegistry && inst.Spec.ImageVersion == st.ImageVersion && !areasMove &&
+		!(st.MqttDeviceUplinksChange && !sameBoolPtr(inst.Spec.MQTTDeviceUplinks, st.MqttDeviceUplinks)) &&
 		!(st.MqttFailClosedChange && !sameBoolPtr(inst.Spec.MQTTFailClosed, st.MqttFailClosed)) &&
 		!(st.TrustedProxiesChange && !trustedProxiesRecorded(inst.Spec, st)) &&
 		!(st.MQTTExposureChange && !mqttExposureRecorded(inst.Spec, st)) &&
@@ -730,6 +773,9 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	// area delta is: a run that dies half-way leaves the choice declared and the flagless re-run
 	// finishes it instead of rolling it back. ONLY when this run was given one -- a State that
 	// merely read the declaration back never writes it away.
+	if st.MqttDeviceUplinksChange {
+		spec.MQTTDeviceUplinks = copyBoolPtr(st.MqttDeviceUplinks)
+	}
 	if st.MqttFailClosedChange {
 		spec.MQTTFailClosed = copyBoolPtr(st.MqttFailClosed)
 	}
@@ -755,7 +801,7 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	if err := writeInstanceCR(ctx, dyn, instance, spec, st.DcctlVersion, dcv1beta1.PhaseUpgrading); err != nil {
 		return err
 	}
-	if !st.MqttFailClosedChange {
+	if !st.MqttFailClosedChange && !st.MqttDeviceUplinksChange {
 		return nil
 	}
 	// 🔴 READ BACK WHAT THIS RUN ASKED TO KEEP. See verifyFailClosedRecorded.
@@ -766,7 +812,15 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	if back == nil {
 		return nil
 	}
-	return verifyFailClosedRecorded(st.MqttFailClosed, back.Spec.MQTTFailClosed)
+	if st.MqttFailClosedChange {
+		if err := verifyFailClosedRecorded(st.MqttFailClosed, back.Spec.MQTTFailClosed); err != nil {
+			return err
+		}
+	}
+	if st.MqttDeviceUplinksChange {
+		return verifyDeviceUplinksRecorded(st.MqttDeviceUplinks, back.Spec.MQTTDeviceUplinks)
+	}
+	return nil
 }
 
 // finishUpgradePhase records how this upgrade ENDED on the declaration, and gives

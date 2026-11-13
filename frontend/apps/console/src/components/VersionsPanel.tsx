@@ -149,7 +149,7 @@ export function VersionsPanel<V extends PublishedVersion>({
       return;
     setRolling((s) => new Set(s).add(v));
     try {
-      await rollback(token, v);
+      if (await rollback(token, v) === false) return;
       toast(t('versions:rolledBackToast', { version: v }));
       reload();
       onChanged();

@@ -33,10 +33,23 @@ import (
 
 type ttsUp struct {
 	EndDeviceIds struct {
-		DeviceId string `json:"device_id"`
-		DevEui   string `json:"dev_eui"`
+		DeviceId       string `json:"device_id"`
+		DevEui         string `json:"dev_eui"`
+		ApplicationIds struct {
+			ApplicationId string `json:"application_id"`
+		} `json:"application_ids"`
 	} `json:"end_device_ids"`
-	ReceivedAt    *string `json:"received_at"`
+	ReceivedAt     *string      `json:"received_at"`
+	DownlinkAck    *ttsDownlink `json:"downlink_ack"`
+	DownlinkNack   *ttsDownlink `json:"downlink_nack"`
+	DownlinkSent   *ttsDownlink `json:"downlink_sent"`
+	DownlinkFailed *struct {
+		Downlink *ttsDownlink `json:"downlink"`
+		Error    *struct {
+			Namespace string `json:"namespace"`
+			Name      string `json:"name"`
+		} `json:"error"`
+	} `json:"downlink_failed"`
 	UplinkMessage *struct {
 		FPort          json.RawMessage `json:"f_port"`
 		FCnt           json.Number     `json:"f_cnt"`
@@ -48,6 +61,18 @@ type ttsUp struct {
 			Snr  *float64 `json:"snr"`
 		} `json:"rx_metadata"`
 	} `json:"uplink_message"`
+}
+
+// ttsDownlink is the part of an ApplicationDownlink a report is matched by. Its correlation_ids are
+// the ones the downlink was pushed with; the message's own correlation_ids are the network
+// server's trace of the event and are never used.
+type ttsDownlink struct {
+	CorrelationIds []string `json:"correlation_ids"`
+	// ConfirmedRetry is set by the Application Server when it re-queues a confirmed downlink after a
+	// nack. proto3 JSON omits attempt at 0.
+	ConfirmedRetry *struct {
+		Attempt json.RawMessage `json:"attempt"`
+	} `json:"confirmed_retry"`
 }
 
 // ttsUplinkPath says whether a webhook path segment names the uplink message type. The type is
@@ -64,7 +89,17 @@ func ttsUplinkPath(segment string) bool {
 
 func decodeTTS(d *Descriptor, r *Request) (*Result, error) {
 	if r.MessageType != "" && !ttsUplinkPath(r.MessageType) {
-		return &Result{Ignored: true}, nil
+		if !r.DownlinkReports {
+			return &Result{Ignored: true}, nil
+		}
+		// Another message type. The ones that report on a downlink the platform pushed are read
+		// whatever path they were posted to (the body says which they are); a body that cannot be
+		// read as one is ignored, as every other message type always was.
+		var up ttsUp
+		if json.Unmarshal(r.Body, &up) != nil {
+			return &Result{Ignored: true}, nil
+		}
+		return decodeTTSDownlink(d, &up)
 	}
 	if !isJSONContent(r.ContentType) {
 		return nil, malformed("the body is not JSON (content type %q)", clip(r.ContentType))
@@ -74,7 +109,10 @@ func decodeTTS(d *Descriptor, r *Request) (*Result, error) {
 		return nil, err
 	}
 	if up.UplinkMessage == nil {
-		return &Result{Ignored: true}, nil
+		if !r.DownlinkReports {
+			return &Result{Ignored: true}, nil
+		}
+		return decodeTTSDownlink(d, &up)
 	}
 	m := up.UplinkMessage
 
@@ -144,4 +182,76 @@ func decodeTTS(d *Descriptor, r *Request) (*Result, error) {
 		u.Link = link
 	}
 	return &Result{Uplinks: []Uplink{u}}, nil
+}
+
+// decodeTTSDownlink reads a The Things Stack message that reports on a downlink: downlink_ack (the
+// device acknowledged a confirmed downlink), downlink_nack (it did not), downlink_sent (a gateway
+// transmitted it) and downlink_failed (the network server could not send it). Anything else is
+// ignored, and so is a report with no correlation id the platform set: that downlink was queued
+// by somebody else.
+func decodeTTSDownlink(d *Descriptor, up *ttsUp) (*Result, error) {
+	var (
+		kind  string
+		acked bool
+		dl    *ttsDownlink
+	)
+	switch {
+	case up.DownlinkAck != nil:
+		kind, acked, dl = DownlinkAck, true, up.DownlinkAck
+	case up.DownlinkNack != nil:
+		kind, dl = DownlinkAck, up.DownlinkNack
+	case up.DownlinkSent != nil:
+		kind, dl = DownlinkTxAck, up.DownlinkSent
+	case up.DownlinkFailed != nil && up.DownlinkFailed.Downlink != nil:
+		kind, dl = DownlinkFailed, up.DownlinkFailed.Downlink
+	default:
+		return &Result{Ignored: true}, nil
+	}
+	key := ""
+	for _, c := range dl.CorrelationIds {
+		if strings.HasPrefix(c, DownlinkCorrelationPrefix) && len(c) <= 100 {
+			key = c
+			break
+		}
+	}
+	if key == "" {
+		// A downlink somebody queued by hand: nothing of the platform's to follow.
+		return &Result{Ignored: true, Untracked: true}, nil
+	}
+	scheme := devicealias.SchemeDevEUI
+	raw := up.EndDeviceIds.DevEui
+	if d.Identity == identityDeviceID {
+		scheme, raw = devicealias.SchemeTTSDeviceID, up.EndDeviceIds.DeviceId
+	}
+	id, err := normalized(scheme, raw)
+	if err != nil {
+		return nil, err
+	}
+	if up.EndDeviceIds.ApplicationIds.ApplicationId == "" || up.EndDeviceIds.DeviceId == "" {
+		return nil, malformed("the downlink report names no application or device id")
+	}
+	ev := DownlinkEvent{
+		Kind: kind, Scheme: scheme, Identifier: id, QueueItemID: key, Acknowledged: acked,
+		DeviceRef: up.EndDeviceIds.ApplicationIds.ApplicationId + "/" + up.EndDeviceIds.DeviceId,
+	}
+	if kind == DownlinkFailed {
+		// What the failure came after matters more than the failure: the Application Server also emits
+		// downlink_failed when it gives up retrying a confirmed downlink that WAS transmitted (retries
+		// exhausted, or the re-push failed), so a failed report is only ever "never transmitted" when
+		// no retry preceded it and the error is one of the network server's own drops.
+		if dl.ConfirmedRetry != nil {
+			if text, present := loraNumber(dl.ConfirmedRetry.Attempt); present {
+				if n, err := strconv.ParseUint(text, 10, 31); err == nil {
+					ev.Attempt = int(n)
+				} else {
+					// An attempt that cannot be read is not 0: it is read as a retry that happened.
+					ev.Attempt = 1
+				}
+			}
+		}
+		if e := up.DownlinkFailed.Error; e != nil {
+			ev.ErrorNamespace, ev.ErrorName = e.Namespace, e.Name
+		}
+	}
+	return &Result{Downlinks: []DownlinkEvent{ev}}, nil
 }

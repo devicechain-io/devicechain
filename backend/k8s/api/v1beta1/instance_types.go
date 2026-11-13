@@ -222,7 +222,7 @@ type InstanceSpec struct {
 	// +optional
 	Compact bool `json:"compact,omitempty"`
 
-	// Size names the size preset the instance runs ("compact", "perf-12k"); empty is base. It
+	// Size names the size preset the instance runs ("compact", "perf-12k", "perf-16k"); empty is base. It
 	// is a NAME, never a number: the numbers belong to the dcctl release that applies it, and a
 	// release that retunes a preset retunes every instance recorded with it on its next
 	// upgrade. A compact instance records "compact" here beside compact: true.
@@ -301,6 +301,24 @@ type InstanceSpec struct {
 	//
 	// +optional
 	RestoredAt *metav1.Time `json:"restoredAt,omitempty"`
+
+	// MQTTDeviceUplinks records whether a device may publish its own payload to its
+	// raw-payload MQTT topic for the decoder on its device type's profile
+	// (the instance configuration's infrastructure.nats.mqttDeviceUplinks).
+	// A pointer, because there are three answers and only two of them are a decision:
+	// absent means the choice was never made, so the platform's default applies;
+	// true and false are the operator's own words, and an
+	// explicit false is kept as false by every later upgrade.
+	//
+	// Fixed configuration, so it is recorded here and not in the free-form tuning
+	// overlay: `dcctl upgrade` reads it back and writes it into the instance
+	// configuration document it composes, which is the only way a setting survives a
+	// version bump now that dcctl owns that document.
+	// Turn on only after every event-sources and device-management replica runs a
+	// release that knows the topic, in an upgrade of its own.
+	//
+	// +optional
+	MQTTDeviceUplinks *bool `json:"mqttDeviceUplinks,omitempty"`
 
 	// MQTTFailClosed records the operator's choice of the fail-closed MQTT QoS 1
 	// acknowledgement (the instance configuration's infrastructure.nats.mqttFailClosed).
@@ -589,6 +607,16 @@ const (
 	// exists to say. Unknown never gates, so an instance dcctl has not yet
 	// published for is not reported broken for it.
 	ConditionBrokerCertificateValid = "BrokerCertificateValid"
+	// ConditionAlertsRouted says whether the alerts this instance's rules raise reach a
+	// human. False (reason AlertsNotRouted, message beginning "ALERTS NOT ROUTED") when
+	// the Alertmanager's only receiver is the null receiver that drops them; True once
+	// dcctl published a receiver; Unknown when monitoring is off (no rules are rendered)
+	// or nothing has published the routing.
+	//
+	// 🔴 IT NEVER GATES Ready. The instance is serving whether or not anyone would be
+	// told if it stopped, and an instance reported unready for want of a webhook would
+	// train readers to ignore Ready. It is a warning that stays until it is fixed.
+	ConditionAlertsRouted = "AlertsRouted"
 )
 
 // The reasons the operator writes. These names are API: adding one is minor,
@@ -638,6 +666,22 @@ const (
 	// ReasonCertificateUnreadable is BrokerCertificateValid=Unknown: an expiry
 	// annotation is present but is not an RFC 3339 time.
 	ReasonCertificateUnreadable = "CertificateUnreadable"
+
+	// ReasonAlertsRouted is AlertsRouted=True: a receiver reaches a human.
+	ReasonAlertsRouted = "AlertsRouted"
+	// ReasonAlertsNotRouted is AlertsRouted=False: no receiver is configured, so every
+	// alert goes to the null receiver. Run dcctl install or upgrade with --alert-webhook,
+	// --alert-email or --alert-config.
+	ReasonAlertsNotRouted = "AlertsNotRouted"
+	// ReasonAlertRoutingNotPublished is AlertsRouted=Unknown: no routing annotation is
+	// present (an instance last touched by a dcctl from before alert routing existed).
+	ReasonAlertRoutingNotPublished = "AlertRoutingNotPublished"
+	// ReasonAlertRoutingUnreadable is AlertsRouted=Unknown: the annotation is present
+	// but is not a value this operator understands.
+	ReasonAlertRoutingUnreadable = "AlertRoutingUnreadable"
+	// ReasonMonitoringDisabled is AlertsRouted=Unknown: the instance has no monitoring
+	// stack, so no alert rules are rendered and there is nothing to route.
+	ReasonMonitoringDisabled = "MonitoringDisabled"
 )
 
 //+kubebuilder:object:root=true

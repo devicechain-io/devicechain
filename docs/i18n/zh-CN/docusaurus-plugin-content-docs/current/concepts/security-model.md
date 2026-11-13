@@ -38,7 +38,7 @@ title: 安全模型
 - **凭据。** 设备认证的默认模式是 `required`：只接受来自已认证设备的事件。在平台的 MQTT 代理上，设备在连接时认证；通过 HTTP 或你自己的代理时，凭据随事件正文传输。凭据认证了某台设备之后，指名其他设备的事件会被拒绝。禁用、轮换或删除凭据会立即拒绝新连接，并结束该设备已打开的会话。参见[设备凭据](../guides/device-credentials.md)，其中包括撤销多快能影响处理中的事件。
 - **静态存储的凭据。** `MQTT_BASIC` 凭据的密码和 `ACCESS_TOKEN` 凭据的令牌都仅以带密钥的单向摘要形式存储，所用密钥由实例根密钥派生，不保存在数据库中。预配配置文件的密钥和设备认领的密钥以同样方式存储，各自使用独立的密钥。两者都只在设置它的那次调用的响应中显示一次，之后不再返回；读取访问令牌凭据时返回的是一个指纹，不能当作令牌使用。因此，数据库或备份泄露不会暴露任何可用的设备密码、令牌、预配密钥或认领密钥。
 - **自注册。**尚无凭据的设备可以通过 HTTPS 出示自动注册配置共用的密钥和密文来自行注册（[设置方法](../guides/device-self-registration.md)）。密文由服务器生成（256 位随机数），仅以带密钥的摘要形式存储，并以恒定时间比较。认证失败的所有情形，包括未知的租户或密钥、已禁用或已过期的配置、正在删除的租户，都返回同样的 `401`，且代价相同，因此响应从不说明是哪一部分有误。为陌生方所做的工作在检查密文之前就受到限制：请求正文的期限、8 KiB 的上限、处理中请求数的上限，以及每个客户端地址的配额。只有当 `infrastructure.http.trustedProxies` 列出了服务前面的代理，该地址才是真实客户端的地址；参见[客户端地址与受信代理](../deployment/bootstrap.md#trusted-proxies)。密文被接受之后，才会应用来自租户套餐或租户覆盖值的每租户上限。设备自己选择凭据，平台只保留它的摘要。**设备群密文是首次接触的信任锚。**持有它的人，在 `ALLOW_NEW` 下可以注册任何尚无人注册的序列号，在 `CHECK_PRE_PROVISIONED` 下可以注册任何已预指定但尚未注册的序列号，数量以该配置的 `maxDevices` 为限。它永远无法接管已持有凭据的设备，也无法接管未为该配置预指定的设备。如果它泄露，请[轮换它并吊销它注册的设备](../guides/device-self-registration.md#compromise)。
-- **客户端证书。**设备可以在平台的 MQTT 代理上用 X.509 客户端证书认证，在 TLS 握手中证明自己持有密钥，因此不存储也不发送任何可重放的东西。平台在每次连接时对照租户添加的信任锚检查证书链，要求 clientAuth 密钥用途，并拒绝 SHA-1、弱密钥和带名称约束的 CA。**信任锚是身份的边界：**任何能从该 CA 获得证书的人都可以在证书配置下注册，直到其设备数量上限，所以请锚定在最窄的 CA 上，并在发生泄露时禁用信任锚。租户来自 MQTT 用户名，绝不来自证书。MQTT 客户端 ID 被固定到设备，因此一张证书无法接管另一台设备的会话，客户端 ID 不匹配的首次连接会在写入任何内容之前被拒绝。会话在证书链中最早的到期时间结束。没有 OCSP，也不获取 CRL：把 CA 的吊销列表上传到信任锚，或按指纹撤销某张证书，即可从其下一次连接起拒绝它并结束它所影响的打开的会话；禁用凭据或信任锚可在不撤销证书的情况下结束会话；并使用短期证书。见[证书身份](./device-certificates.md)。
+- **客户端证书。**设备可以在平台的 MQTT 代理上用 X.509 客户端证书认证，在 TLS 握手中证明自己持有密钥，因此不存储也不发送任何可重放的东西。平台在每次连接时对照租户添加的信任锚检查证书链，要求 clientAuth 密钥用途，并拒绝 SHA-1、弱密钥和带名称约束的 CA。**信任锚是身份的边界：**任何能从该 CA 获得证书的人都可以在证书配置下注册，直到其设备数量上限，所以请锚定在最窄的 CA 上，并在发生泄露时禁用信任锚。租户来自 MQTT 用户名，绝不来自证书。MQTT 客户端 ID 被固定到设备，因此一张证书无法接管另一台设备的会话，客户端 ID 不匹配的首次连接会在写入任何内容之前被拒绝。会话在证书链中最早的到期时间结束。不获取 CRL：把 CA 的吊销列表上传到信任锚，或按指纹撤销某张证书，即可从其下一次连接起拒绝它并结束它所影响的打开的会话；禁用凭据或信任锚可在不撤销证书的情况下结束会话；使用短期证书，也可以按信任锚开启连接时的 OCSP 检查（默认关闭；已撤销的响应会拒绝该次连接，但目前还不会结束已打开的会话）。见[证书身份](./device-certificates.md)。
 - **事件正文中的凭据。** 在平台的 MQTT 代理上，连接已经认证了设备，因此正文中还携带凭据的事件会被拒绝，绝不会在移除凭据后被接受：仍在发送凭据的设备会停止上报，拒绝会被计数，以便找到该设备并轮换其凭据。通过 HTTP 或你自己的代理时，正文就是凭据的传输方式，密码或令牌会在事件放入平台内部事件流之前被密封。在所有传输方式上，为诊断而保留的无法解码消息的副本都会移除其中的凭据。
 - **网关。** 网关（例如[边缘代理](../deployment/edge-services.md#gateway-identity)）是代表其他设备发言的设备。它以自己的身份登录并在自己的命名空间中发布，平台只接受分配给它的设备的事件。网关不能在其他网关或其他设备的 subject 中发布；指向其并不代表的设备时，事件会被拒绝、记录并告知该网关，而不是被确认后丢失。**网关代表它的子设备发言。** 被攻陷的网关只能伪造分配给它的设备的事件，并且只在它被停用或其凭据被吊销之前有效。它所称事件来自*哪个本地客户端*，其可信度只取决于其自身网络的本地认证强度。把设备分配给网关所需的权限与为设备签发凭据相同，因为它授予的是同样的能力。
 
@@ -63,19 +63,21 @@ OAuth 客户端可以在授权请求或令牌请求中发送 `resource` 参数�
 
 ### 允许列表 {#token-audience-allowlist}
 
-启用强制执行后，授权服务器把令牌绑定到下列资源，各 API 也只接受这些受众。在 `observe` 下，其他任何值都只会被统计并记录日志，但照常处理：
+授权服务器把令牌绑定到下列资源，各 API 也只接受这些受众：
 
 - **MCP 服务器**（已部署时）：它的资源 URL，`<origin>/api/mcp`。
 - **各区域的 API**，位于 `<origin>/api/<区域>`（`mcp` 除外的每个区域），例如 `https://iot.example.com/api/device-management`。
-- **外部资源**，即你在 `externalResources` 中列出的条目。当你自己有一个位于 DeviceChain 之外的服务，用公开的密钥集（`/oauth/jwks`）验证 DeviceChain 令牌，并申请绑定到自身的令牌时使用它。授权服务器会签发这样的令牌，但**启用强制执行后，没有任何 DeviceChain API 接受它**，授权服务器的 `userinfo` 端点也不接受。
+- **外部资源**，即你在 `externalResources` 中列出的条目。当你自己有一个位于 DeviceChain 之外的服务，用公开的密钥集（`/oauth/jwks`）验证 DeviceChain 令牌，并申请绑定到自身的令牌时使用它。授权服务器会签发这样的令牌，但**在 `enforce` 下，没有任何 DeviceChain API 接受它**，授权服务器的 `userinfo` 端点也不接受。
 
 比较是逐字节的，不做大小写折叠，也不处理末尾斜杠，所以 `https://IoT.example.com/api/mcp` 不等于 `https://iot.example.com/api/mcp`。因此配置只接受每个标识符的一种写法，客户端必须原样发送这种写法。
 
 ### 观察与强制执行 {#token-audience-modes}
 
-`enforcement` 决定违反任一检查的请求会怎样：
+从 `v1.4` 起，令牌受众始终强制执行。服务在启动时拒绝 `infrastructure.tokenAudience.enforcement: observe`，chart 的值模式也拒绝它。升级前删除该键（未设置即为 `enforce`）或设置为 `enforce`。在 Helm 值和 `dcctl` overlay 中删除 `instance.config.infrastructure.tokenAudience.enforcement`，也要从已存储的 overlay 注解和上一个 release 的用户提供值中删除它。使用 `instance.existingSecret` 时，从自己编写的文档中删除 `infrastructure.tokenAudience.enforcement` 或设置为 `enforce`。`dcctl upgrade` 在任何修改之前检查这些来源。
 
-| 位置 | `observe` | `enforce` |
+下表比较 `v1.2`/`v1.3` 实例的历史 `observe` 行为与 `v1.4` 的强制执行行为。没有受众的令牌仍被接受。`unscopedClientCredentials: observe` 是不同的设置，仍然受支持。
+
+| 位置 | `observe` (v1.2/v1.3) | `enforce` |
 | --- | --- | --- |
 | 授权端点 | 统计并记录日志；登录页面照常提供 | 客户端带着 `invalid_target` 被送回其重定向地址 |
 | `client_credentials` 授权 | 统计并记录日志；照常签发令牌 | `invalid_target`。不在列表中的资源是在校验客户端密钥之后才判定的，因此未经认证的发送方无从得知列表里有什么 |
@@ -84,13 +86,9 @@ OAuth 客户端可以在授权请求或令牌请求中发送 `resource` 参数�
 | 授权码或刷新请求中的 `resource` 与该授权所绑定的资源不同 | 统计并记录日志；照常处理 | `invalid_target`；刷新令牌不会被作废 |
 | API | 计为 `would_reject` 并记录日志；照常处理 | `401`，与无效令牌的响应相同 |
 
-`observe` 是 `v1.2` 的默认值。`v1.3` 把默认值改为 `enforce`，并为那一个次版本保留 `observe` 作为退路。`v1.4` 移除这条退路：文档中含有 `observe` 时服务拒绝启动，chart 也会拒绝它。参见[升级说明](../deployment/releases-and-upgrades.md#v120-token-audience)。
-
-未写明任何资源的令牌，在两种模式下都会被每个区域的 API 接受。从不发送 `resource` 的客户端不受这两项检查影响。
-
 ### 读取计数器 {#token-audience-reading}
 
-先运行 `observe` 并观察计数器：如果 `would_reject` 序列始终不变，切换到 `enforce` 对你的客户端就没有任何影响。各序列、两个告警，以及如何找到计数背后的客户端，见[令牌受众检查](../deployment/observability.md#token-audience-checks)。
+受众和资源请求的拒绝计为 `rejected`。`would_reject` 序列和两个告警为兼容性保留，只能由运行 observe 的 `v1.2`/`v1.3` 实例触发。参见[令牌受众检查](../deployment/observability.md#token-audience-checks)。
 
 ### 配置 {#token-audience-config}
 
@@ -98,7 +96,7 @@ OAuth 客户端可以在授权请求或令牌请求中发送 `resource` 参数�
 
 | 键 | 由谁写入 | 取值 |
 | --- | --- | --- |
-| `enforcement` | 你 | `observe`、`enforce` 或不设置。不设置即版本默认值，在 `v1.2` 中是 `observe`。它同时控制两项检查。 |
+| `enforcement` | 你 | 未设置或 `enforce`，两者都强制执行受众检查。`v1.4` 拒绝 `observe`。 |
 | `unscopedClientCredentials` | 你 | 不设置或 `observe`。本版本在启动时拒绝 `enforce`，因为它要开启的规则目前还不拒绝任何请求。参见[服务账号](../user-guide/service-accounts.md#binding-a-token-to-a-resource)。 |
 | `externalResources` | 你 | 平台之外的资源标识符列表，最多 8 项。 |
 | `areaBaseUrl` | chart | `<origin>/api`，由 ingress 主机得出。仅当来源为 https，或为 `localhost` 这样的明文 http 回环主机时才设置。在其他主机上未启用 TLS 的 ingress 没有区域资源，正如它也没有授权服务器。 |
@@ -106,7 +104,7 @@ OAuth 客户端可以在授权请求或令牌请求中发送 `resource` 参数�
 
 配置块违反下列任一规则时，服务会在启动时停止，并指明出问题的键：
 
-- `enforcement` 和 `unscopedClientCredentials` 必须是 `observe` 或 `enforce`，或者不设置。`unscopedClientCredentials` 不设置与 `observe` 等价，`enforce` 如上所述被拒绝。
+- `enforcement` 必须未设置或为 `enforce`；`v1.4` 拒绝 `observe`。不同的设置 `unscopedClientCredentials` 必须未设置或为 `observe`，其 `enforce` 仍被拒绝。
 - `areaBaseUrl` 和每个列表条目都必须是 scheme 为 `https` 的绝对 URL（仅 `localhost`、`127.0.0.1` 或 `::1` 允许 `http`），scheme 和主机为小写，不带查询、片段或用户信息，且没有末尾斜杠。
 - 每个列表最多 8 项。任何条目都不能出现两次（两个列表之间也一样），也不能等于某个区域自己的标识符。
 - `externalResources` 条目不能位于 `areaBaseUrl` 之下：当 `areaBaseUrl` 为 `https://iot.example.com/api` 时，`https://iot.example.com/api` 和 `https://iot.example.com/api/x` 都会被拒绝，`https://iot.example.com/apiary` 则不会。这样可以防止把平台区域改标为外部资源。
@@ -125,7 +123,7 @@ chart 另有自己的检查，因此出错会让 `helm upgrade` 在任何 Pod �
 }
 ```
 
-缺少它时，区域资源未知，`mcp` 也没有注册，因此 MCP 服务器转发的每个调用都会被计为本应拒绝的请求。`dcctl upgrade` 会就缺少 MCP 条目发出警告，在 `enforce` 下则拒绝继续。
+没有此配置块时，区域资源未知且 MCP 未注册。缺少 MCP 资源时 MCP 拒绝启动；`dcctl upgrade` 也拒绝省略 MCP 条目的文档。
 
 ## 双重身份验证 {#two-factor}
 

@@ -39,6 +39,40 @@ dcctl upgrade local my-instance --values tuning.yaml
 dcctl upgrade local my-instance --version <new-version>
 ```
 
+## Ingest metering {#ingest-metering}
+
+To reduce shedding of a tenant's compliant traffic after a short platform stall, opt in to
+lag-credited metering. The default remains `legacy`; `lagCredit` has not yet been through a
+production-scale round. Put this top-level Helm value in your tuning overlay, alongside your
+other settings:
+
+```yaml title="tuning.yaml"
+eventSources:
+  ingestMetering: lagCredit
+```
+
+Apply it with `dcctl upgrade <provider> <instance> --values tuning.yaml`, or supply the same
+value to Helm. Enable it after upgrading event-sources to v1.4; older releases refuse this mode.
+The chart sets `EVENT_SOURCES_INGEST_METERING` on event-sources pods. This is not a key under
+`instance.config` or `functionalAreas.event-sources.config`. Unknown modes are refused. To
+return to the previous metering, change the value to `legacy` and apply the overlay again.
+Later dcctl upgrades retain the recorded overlay.
+
+The gate measures reader lag separately for the platform broker's capture and store streams.
+Fresh gateway traffic, external MQTT and broker presence share an allowance at the pod's clock;
+HTTP and inbound integrations keep their existing separate limiters. Message and decoded-reading
+ceilings still apply, as do contention shedding and [per-replica limits](../concepts/governance.md#per-replica).
+This does not change MQTT acknowledgement guarantees: a message shed after acknowledgement is lost.
+
+Credit covers at most the time the tenant's burst allows (`burst / rate`), capped at five seconds.
+It does not cover an arbitrarily long outage or permit a sustained rate above the ceiling.
+Broker clock correction is capped at two seconds. A pod starting inside a stall before learning
+the broker's clock offset can still under-credit traffic when the broker clock is ahead; keep
+node clocks synchronized. Watch reader lag, append skew and shed causes in
+[Ingest monitoring](./observability.md#external-mqtt-owner), and use the
+[IngestShedBeyondLagCredit](./alert-runbook.md#ingestshedbeyondlagcredit) and
+[IngestAppendSkewLarge](./alert-runbook.md#ingestappendskewlarge) runbooks.
+
 ## How the overlay combines with what dcctl sets {#precedence}
 
 Three layers, each over the one before:
@@ -70,8 +104,10 @@ An overlay may set only the values below. Anything else is refused.
 | `ingress.className`, `ingress.annotations`, `ingress.uploadMaxBodySize`, `ingress.gateway.className`, `ingress.gateway.annotations`, `networkPolicy.additionalAllowedCidrs`, `serviceAccount.annotations` | How the ingress is fronted and who may reach the pods |
 | `mqttExposure.loadBalancer` | The cloud settings of the MQTT load balancer, such as an internal balancer and allowed source ranges |
 | `instance.config.infrastructure.nats.streamDesignRate`, `.streamRunwayMinutes`, `.streamMaxBytes`, `.streamMaxBytesCold`, `.streamMaxMsgs` | The outage runway the event streams are sized for, and their byte and message ceilings. The reservation is checked against the broker's volume before anything is written |
+| `instance.config.infrastructure.tracing` | Distributed tracing (OpenTelemetry), off by default; see [Observability](./observability.md). Enable it in an upgrade of its own after the release rollout completes: pods from an earlier release refuse this key |
 | `instance.config.infrastructure.messaging.envelopes.resolved`, `.inbound`, `.inboundLingerMillis` | Whether events are written as envelopes, off by default |
-| `instance.config.infrastructure.tokenAudience.enforcement`, `.unscopedClientCredentials`, `.externalResources` | Whether a token bound to the wrong resource is refused, and which resource servers outside the platform the authorization server may issue for. See [Token audience](../concepts/security-model.md#token-audience-config). The other two `tokenAudience` keys are derived by the chart and refused |
+| `instance.config.infrastructure.tokenAudience.enforcement`, `.unscopedClientCredentials`, `.externalResources` | Token audiences are always enforced. Leave enforcement unset or set it to `enforce`; `v1.4` refuses `observe`. The separate `unscopedClientCredentials: observe` setting remains supported. `externalResources` lists resource servers outside the platform. The chart derives and owns the other two keys. |
+| `eventSources.ingestMetering` | Opt-in lag-credited ingest metering; see [Ingest metering](#ingest-metering). Default `legacy` |
 | `brokerAdmin.allowCeilingShrink` | Lets one upgrade lower a stream ceiling below what the stream holds. Set it for that upgrade and remove it after |
 
 `functionalAreas.event-management.replicas` is not tunable even though the rest of that area is:
@@ -125,6 +161,8 @@ purpose. Three figures decide it.
   `event-management`'s config, losslessly, but it does nothing for the newest week: size the
   volume for at least that much uncompressed data. The 600-byte figure is the uncompressed one,
   and the compression ratio depends on your data, so measure it before counting on it.
+  Counting every table an event is written to (events and measurements, indexes included), a
+  later GKE measurement read 756 bytes per stored event, uncompressed.
 - **Rows per reading.** Every [calculated metric](../user-guide/calculated-metrics.md) that
   applies to a profile stores one more row per reading. Each formula adds one row per reading, so a profile with N calculated metrics stores (1 + N) rows per reading, so N formulas multiply the volume by up to 1 + N. The tier ceiling `calculatedMetricsPerProfile` is 0 (off) by default and at most 32; it is a ceiling, and the cost depends on use.
 - **Retention.** `lifecycle.retentionDays` is 0 by default, which keeps data forever. An

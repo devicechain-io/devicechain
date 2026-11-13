@@ -149,6 +149,21 @@ type NatsConfiguration struct {
 	// once no pod with it on holds it, and once the platform durables are drained removes
 	// them and hands the store back to the gateway's default discard policy and bound.
 	MqttFailClosed bool
+	// MqttDeviceUplinks lets a device publish its OWN payload (a binary or vendor-JSON message, not the
+	// DeviceChain JSON envelope) to its raw-payload topic, {instance}/{tenant}/devices/{device}/uplink,
+	// for the decoder on its device type's profile to read. It is OFF unless set: it is read by
+	// device-management when it mints a device's broker grant, so with it off no device may publish
+	// there and nothing about the broker differs from an install that has never heard of it.
+	//
+	// 🔴 TURN IT ON ONLY AFTER EVERY event-sources AND device-management REPLICA RUNS A RELEASE THAT
+	// KNOWS THE TOPIC, in an upgrade of its own. It also decides the device-events capture stream's
+	// subject list: with it off the stream is exactly what earlier releases declared (so a pod of an
+	// earlier release that restarts mid-roll is unaffected), and with it on the stream also stores the
+	// topic. An earlier event-sources pod already running would then discard such a message as foreign,
+	// and one that restarts stops with a stream-drift error; an earlier device-management pod refuses
+	// the uplink the new one produces. A device is granted the topic when it next connects (and loses it
+	// the same way when this is turned off), so the setting reaches a fleet as its devices reconnect.
+	MqttDeviceUplinks bool
 	// KvCacheMaxBytes / KvStateMaxBytes bound each JetStream KV bucket
 	// (messaging.KeyValueStore). KV buckets are backed by KV_-prefixed streams in
 	// the same account and draw on the same max_file_store, but until now nothing
@@ -347,7 +362,7 @@ func (c NatsFetchConfiguration) ValidateAgainst(ackWait time.Duration) error {
 		return err
 	}
 	if limit := ackWait / fetchAheadBudgetDivisor; c.AheadHoldBudgetMillis > 0 &&
-		time.Duration(c.AheadHoldBudgetMillis)*time.Millisecond > limit {
+		int64(c.AheadHoldBudgetMillis) > limit.Milliseconds() {
 		return fmt.Errorf("infrastructure.nats.fetch.aheadHoldBudgetMillis is %d, which is more than a "+
 			"tenth of the %s acknowledgement window (%d ms at most). A batch fetched ahead waits about "+
 			"one budget before it is handed out, and that wait comes out of the window the handler "+
@@ -745,6 +760,7 @@ type BlobConfiguration struct {
 
 // Infrastructure configuration section
 type InfrastructureConfiguration struct {
+	Tracing          TracingConfiguration
 	Nats             NatsConfiguration
 	Metrics          MetricsConfiguration
 	UserManagement   UserManagementConfiguration
@@ -1096,6 +1112,10 @@ const (
 // is theirs to choose. The message names both keys and both remedies, because from
 // inside the process there is no way to tell which of the two was the typo.
 func (c ShutdownConfiguration) validate() error {
+	if c.TerminationGracePeriodSeconds < 0 {
+		return fmt.Errorf("infrastructure.shutdown.terminationGracePeriodSeconds is %d; must not be negative",
+			c.TerminationGracePeriodSeconds)
+	}
 	if c.DrainSeconds == nil {
 		// Absent, and ApplyDefaults has not run yet. Judging it here would report on a
 		// key the operator never wrote.
@@ -1107,7 +1127,7 @@ func (c ShutdownConfiguration) validate() error {
 			"negative. Use 0 to skip the drain entirely, or a positive number of seconds", drain)
 	}
 	grace := c.TerminationGracePeriodSeconds
-	if grace <= 0 {
+	if grace == 0 {
 		// Same reasoning as above: not defaulted yet, so there is nothing to compare against.
 		return nil
 	}
@@ -1169,6 +1189,20 @@ type EgressConfiguration struct {
 	// AllowedDestinations are CIDR prefixes (IPv4 or IPv6) exempt from the guard's deny
 	// list. Empty — the default — means no exemptions.
 	AllowedDestinations []string
+
+	// DevAllowedDestinations is the LOCAL-DEVELOPMENT allowance: CIDR prefixes (IPv4 or IPv6) a
+	// developer's own instance may reach even though the guard refuses them, so a webhook or
+	// connector can point at a service on the developer's machine or LAN.
+	//
+	// It is not a second spelling of AllowedDestinations. dcctl writes it only for an instance
+	// on a local cluster (dcctl bootstrap|upgrade --dev-allow-egress), records it on the
+	// declaration, shows it in `dcctl instances`, and every service that builds a guard from it
+	// logs a warning at startup. Unlike AllowedDestinations it can NEVER exempt the cloud
+	// metadata addresses, loopback, link-local, multicast or the unspecified address, and a
+	// prefix that overlaps one fails the service at startup rather than being trimmed.
+	// Empty (the default) means none. An operator's production exemption belongs in
+	// AllowedDestinations, which dcctl does not write.
+	DevAllowedDestinations []string
 }
 
 // Generic datastore configuration
@@ -1516,6 +1550,7 @@ func (c *InstanceConfiguration) RetiredConfigKeys() map[string]string {
 // instance document that omits them is still well-formed (ADR-022 decision 1 /
 // review E3). It is applied after decoding and before Validate.
 func (c *InstanceConfiguration) ApplyDefaults() {
+	c.Infrastructure.Tracing.ApplyDefaults()
 	nats := &c.Infrastructure.Nats
 	if nats.StreamReplicas == 0 {
 		nats.StreamReplicas = 1
@@ -1586,17 +1621,16 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	if c.Infrastructure.Blob.Backend == "" {
 		c.Infrastructure.Blob.Backend = DefaultBlobBackend
 	}
-	// Default the graceful-shutdown budget. Unlike the ceilings above this one does
-	// NOT coerce a value it dislikes: only ABSENCE is defaulted, because 0 is a
-	// supported drain window and a negative one is refused in Validate rather than
-	// quietly rewritten. The grace period is defaulted to Kubernetes' own default,
-	// so an omitted key is judged against the budget the pod will really get.
+	// Default the graceful-shutdown budget. Only an absent drain window is
+	// defaulted: 0 is supported and a negative value is refused in Validate
+	// rather than quietly rewritten. An omitted or zero grace period takes Kubernetes' own
+	// default; a negative grace period is preserved for Validate to refuse.
 	shutdown := &c.Infrastructure.Shutdown
 	if shutdown.DrainSeconds == nil {
 		d := DefaultShutdownDrainSeconds
 		shutdown.DrainSeconds = &d
 	}
-	if shutdown.TerminationGracePeriodSeconds <= 0 {
+	if shutdown.TerminationGracePeriodSeconds == 0 {
 		shutdown.TerminationGracePeriodSeconds = DefaultTerminationGracePeriodSeconds
 	}
 	// Only ABSENCE is defaulted. A value that is present but is not a level is
@@ -1624,6 +1658,32 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 // against. A misrendered config Secret then surfaces at startup rather than as a
 // confusing downstream connection failure.
 func (c *InstanceConfiguration) Validate() error {
+	checkPort := func(name string, p uint32) error {
+		if p > 65535 {
+			return fmt.Errorf("%s is %d; must not exceed 65535", name, p)
+		}
+		return nil
+	}
+	for _, endpoint := range []struct {
+		name string
+		port uint32
+	}{
+		{"infrastructure.nats.port", c.Infrastructure.Nats.Port},
+		{"infrastructure.userManagement.port", c.Infrastructure.UserManagement.Port},
+		{"infrastructure.userManagement.internalPort", c.Infrastructure.UserManagement.InternalPort},
+		{"infrastructure.deviceManagement.port", c.Infrastructure.DeviceManagement.Port},
+		{"infrastructure.eventProcessing.port", c.Infrastructure.EventProcessing.Port},
+		{"infrastructure.commandDelivery.port", c.Infrastructure.CommandDelivery.Port},
+		{"infrastructure.deviceState.port", c.Infrastructure.DeviceState.Port},
+		{"infrastructure.aiInference.port", c.Infrastructure.AiInference.Port},
+	} {
+		if err := checkPort(endpoint.name, endpoint.port); err != nil {
+			return err
+		}
+	}
+	if err := c.Infrastructure.Tracing.Validate(); err != nil {
+		return err
+	}
 	if c.Infrastructure.Nats.Hostname == "" || c.Infrastructure.Nats.Port == 0 {
 		return fmt.Errorf("infrastructure.nats hostname and port are required")
 	}
@@ -1787,6 +1847,7 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 	defaultDrain := DefaultShutdownDrainSeconds
 	return &InstanceConfiguration{
 		Infrastructure: InfrastructureConfiguration{
+			Tracing: TracingConfiguration{Protocol: "grpc"},
 			Nats: NatsConfiguration{
 				// In the instance's own namespace, beside the services that dial it.
 				Hostname:           "dc-nats",

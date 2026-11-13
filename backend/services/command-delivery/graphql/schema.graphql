@@ -184,6 +184,34 @@ type Command implements Model & TokenReference & MetadataEntity {
     # device said no, outcome unknown) and only the writer knows which one it is recording.
     # Retrying a batch's unsuccessful targets keys on this.
     outcome: String
+    """
+    When the platform first had evidence that the device had the command, as an RFC 3339
+    timestamp; null when it has none. This is evidence beside the status, not a status: a
+    command can be SUCCESSFUL with no delivery time (a channel with no acknowledgement and no
+    answer to count) and a command that failed as NOT_DELIVERED never has one.
+    """
+    deliveredTime: String
+    """
+    What the delivery time rests on: DEVICE_ACK (the device acknowledged receipt on the HTTP
+    pull channel) or DEVICE_RESPONSE (the device answered the command, on any channel). Null
+    when deliveredTime is. The first piece of evidence is kept.
+    """
+    deliveryEvidence: String
+    """
+    ONEWAY for a command the device acknowledges and does not answer (the acknowledgement
+    settles it as SUCCESSFUL), null for an ordinary two-way command.
+    """
+    deliveryMode: String
+    """
+    The most times the HTTP pull channel hands this command out before giving up on its
+    acknowledgement; null for the platform default of 3.
+    """
+    maxAttempts: Int
+    """
+    How many times the HTTP pull channel has handed this command out; null for a command it
+    never handed out.
+    """
+    deliveryAttempts: Int
 }
 
 """Fields for issuing a command to one device."""
@@ -218,6 +246,18 @@ input CommandCreateRequest {
     65536 bytes (METADATA_TOO_LARGE). Optional.
     """
     metadata: String
+    """
+    ONEWAY for a command the device acknowledges and does not answer. Accepted only for a device
+    whose type has the HTTP_PULL command channel; otherwise the request is refused with
+    DELIVERY_OPTION_NOT_APPLICABLE (or DELIVERY_OPTION_INVALID for any other value). Optional.
+    """
+    deliveryMode: String
+    """
+    The most times the HTTP pull channel hands the command out before giving up on its
+    acknowledgement, 1 to 10. Accepted only for a device on the HTTP_PULL channel, like
+    deliveryMode. Optional; the platform default is 3.
+    """
+    maxAttempts: Int
 }
 
 """
@@ -236,7 +276,8 @@ type CommandEnqueueRejection {
     Stable, machine-readable classification: PAYLOAD_NOT_JSON, METADATA_NOT_JSON,
     COMMAND_NAME_TOO_LONG, PAYLOAD_TOO_LARGE, METADATA_TOO_LARGE, EXPIRES_AT_INVALID,
     HELD_CEILING_EXCEEDED, TOKEN_IN_USE, DEVICE_NOT_FOUND, DEVICE_DISABLED,
-    COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION, or COMMAND_REJECTED when a refusal
+    COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION, DELIVERY_OPTION_INVALID,
+    DELIVERY_OPTION_NOT_APPLICABLE, or COMMAND_REJECTED when a refusal
     arrived without a classification.
 
     Branch on this, never on reason. The list is open: treat an unrecognized code as a refusal
@@ -855,6 +896,196 @@ type CancelDeviceCommandsResult {
     cancelled: Int!
 }
 
+"""
+A scheduled, tracked fan-out of command steps to the devices of an entity group. It is a
+definition: each time its trigger fires it plans a cycle, and a cycle holds one element per
+device per step, so which devices did not receive a command, and why, is a query. A campaign is
+not edited in place: to change one, delete it and create it again. The new campaign sends
+nothing that fell due before it was created.
+"""
+type Campaign {
+    """Server-assigned numeric identifier, as a string."""
+    id: ID!
+    """When the campaign was created, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the campaign was last written, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """Identifier of the campaign, unique within the tenant."""
+    token: String!
+    """Human-readable name; null when none is set."""
+    name: String
+    """
+    False when the campaign is switched off: it plans and sends nothing. Switched back on, it
+    does not send what fell due while it was off.
+    """
+    enabled: Boolean!
+    """
+    The trigger as a JSON document: kind (CRON, CALENDAR or SOLAR), zone, and the fields of
+    that kind (cron; dates and times; event and offsetMinutes), plus optional holidays.
+    """
+    trigger: String!
+    """The command steps, in order."""
+    steps: [CampaignStep!]!
+    """Kind of target. Always GROUP in this release."""
+    targetKind: String!
+    """Token of the entity group whose devices the campaign targets."""
+    groupToken: String!
+    """How late, in seconds, a planned command may still be sent. Later ones are skipped as MISSED."""
+    maxLatenessSeconds: Int!
+    """Time-to-live, in seconds, of each command the campaign creates."""
+    expiresInSeconds: Int!
+    """The instant up to which cycles have been planned; null before the first plan."""
+    plannedThrough: String
+    """Why the last planning attempt failed; null when it succeeded."""
+    lastError: String
+}
+
+"""One step of a campaign."""
+type CampaignStep {
+    """COMMAND."""
+    type: String!
+    """The command name."""
+    name: String
+    """The command payload as a JSON document; null when none."""
+    payload: String
+    """Seconds after the trigger at which the step fires, per device."""
+    delaySeconds: Int!
+}
+
+"""One step of a new campaign."""
+input CampaignStepInput {
+    """COMMAND. ARTIFACT is recognised and refused with CAMPAIGN_STEP_UNSUPPORTED."""
+    type: String!
+    """The command name. Required for a COMMAND step."""
+    name: String
+    """The command payload as a JSON document. Optional."""
+    payload: String
+    """Seconds after the trigger at which the step fires, 0 to 86400. Optional; default 0."""
+    delaySeconds: Int
+}
+
+"""Fields for creating a campaign."""
+input CampaignCreateRequest {
+    """Identifier for the campaign, unique within the tenant."""
+    token: String!
+    """Human-readable name, at most 128 characters. Optional."""
+    name: String
+    """
+    The trigger, as a JSON document. kind CRON: {"kind":"CRON","zone":"Europe/Berlin","cron":"30 18 * * *"}.
+    kind CALENDAR: dates (YYYY-MM-DD) and times (HH:MM) in the zone. kind SOLAR: event SUNRISE or
+    SUNSET and offsetMinutes, computed per device from its installed position (Device.installedPosition). Every kind
+    requires an IANA zone and may carry holidays (YYYY-MM-DD local dates on which it does not fire).
+    """
+    trigger: String!
+    """The steps, one to ten."""
+    steps: [CampaignStepInput!]!
+    """Token of the entity group to target, at most 128 characters."""
+    groupToken: String!
+    """GROUP, or omitted."""
+    targetKind: String
+    """How late a planned command may still be sent, 1 to 86400. Optional; default 900."""
+    maxLatenessSeconds: Int
+    """Time-to-live of each command, 1 to 604800. Optional; default 3600."""
+    expiresInSeconds: Int
+    """Whether the campaign starts switched on. Optional; default true."""
+    enabled: Boolean
+}
+
+"""The outcome of createCampaign. Exactly one of campaign and rejection is non-null."""
+type CreateCampaignResult {
+    """The created campaign."""
+    campaign: Campaign
+    """Why the campaign was refused: CAMPAIGN_TRIGGER_INVALID, CAMPAIGN_STEPS_INVALID, CAMPAIGN_STEP_UNSUPPORTED, CAMPAIGN_TARGET_INVALID, CAMPAIGN_FIELD_INVALID, PAYLOAD_NOT_JSON, PAYLOAD_TOO_LARGE, COMMAND_NAME_TOO_LONG or TOKEN_IN_USE."""
+    rejection: CommandBatchRejection
+}
+
+"""One firing of a campaign."""
+type CampaignCycle {
+    """Stable key of the firing; pass it as cycleKey."""
+    key: String!
+    """When the cycle was planned, as an RFC 3339 timestamp."""
+    createdAt: String
+    """The local civil date (YYYY-MM-DD) of a SOLAR cycle; null otherwise."""
+    day: String
+    """The fire instant of a CRON or CALENDAR cycle; null for SOLAR, whose instant is per device."""
+    at: String
+    """How many devices the group held when the cycle was planned."""
+    resolved: Int!
+    """Where the cycle's elements and their commands stand now."""
+    counts: CampaignCycleCounts!
+}
+
+"""
+Where a cycle stands. The first five count elements by campaign state; the rest count the
+commands behind the dispatched elements, by what the latest command for each did.
+"""
+type CampaignCycleCounts {
+    """Planned and not yet due."""
+    pending: Int!
+    """Due and being sent."""
+    claimed: Int!
+    """Sent: a command was created."""
+    dispatched: Int!
+    """Not admitted by the command batch (vocabulary, ceiling, maintenance window...)."""
+    refused: Int!
+    """
+    Never commanded: NO_SITE, POLAR_DAY, POLAR_NIGHT, MISSED, CANCELLED, PREDATES_CAMPAIGN,
+    DISABLED, SUPERSEDED or NOT_IN_GROUP.
+    """
+    skipped: Int!
+    """Commands that succeeded."""
+    succeeded: Int!
+    """Commands not yet finished."""
+    inFlight: Int!
+    """Of the in-flight commands, how many are held for a maintenance window."""
+    waiting: Int!
+    """Commands that finished without success and are safe to send again."""
+    failed: Int!
+    """Commands that finished with an outcome that cannot be vouched for; a retry needs includeUnknown."""
+    unknown: Int!
+}
+
+"""One device's step in one cycle."""
+type CampaignElement {
+    """Server-assigned numeric identifier; pass the last one on a page as afterId."""
+    id: ID!
+    """Token of the device."""
+    deviceToken: String!
+    """Zero-based index of the step."""
+    step: Int!
+    """When the element falls due, as an RFC 3339 timestamp."""
+    dueAt: String!
+    """PENDING, CLAIMED, DISPATCHED, REFUSED or SKIPPED."""
+    status: String!
+    """
+    Why the element is REFUSED (the batch's refusal code) or SKIPPED: NO_SITE, POLAR_DAY or
+    POLAR_NIGHT (no event to fire at), MISSED (not sent within maxLatenessSeconds), CANCELLED (the
+    campaign was deleted), PREDATES_CAMPAIGN (due before the campaign was created), DISABLED (due
+    while the campaign was switched off), SUPERSEDED (a newer firing of the same step for the same
+    device was due at the same time, and only the newest was sent) or NOT_IN_GROUP (the device had
+    left the group when the cycle fell due).
+    """
+    reason: String
+    """Token of the batch that carried the command; null before it is sent."""
+    batchToken: String
+    """Token of the batch a retry re-sent it in; null when it was not retried."""
+    retryBatchToken: String
+    """Status of the latest command for the element; null when it has none."""
+    commandStatus: String
+    """Outcome class of that command once finished: SUCCEEDED, NOT_DELIVERED, REJECTED or UNKNOWN."""
+    commandOutcome: String
+}
+
+"""What a retry-from-failed did."""
+type CampaignRetryResult {
+    """Tokens of the retry batches created or replayed."""
+    batches: [String!]!
+    """How many elements were re-sent."""
+    retried: Int!
+    """How many were left alone because re-sending is unsafe: still in flight, or unknown without includeUnknown."""
+    held: Int!
+}
+
 type Query {
     """
     Returns the commands with the given ids, in no particular order. Ids that match nothing are
@@ -952,6 +1183,55 @@ type Query {
         """
         limit: Int
     ): [Command!]!
+    """Returns one campaign by token, or null. Requires command:read and device:read."""
+    campaign(
+        """Token of the campaign."""
+        token: String!
+    ): Campaign
+    """Lists the tenant's campaigns, newest first. Requires command:read and device:read."""
+    campaigns(
+        """Maximum campaigns to return, 1 to 200. Absent or out of range means 100."""
+        limit: Int
+    ): [Campaign!]!
+    """Lists a campaign's cycles, newest first. Requires command:read and device:read."""
+    campaignCycles(
+        """Token of the campaign."""
+        campaignToken: String!
+        """Maximum cycles to return, 1 to 200. Absent or out of range means 50."""
+        limit: Int
+    ): [CampaignCycle!]!
+    """Pages through a cycle's elements in id order. Requires command:read and device:read."""
+    campaignElements(
+        """Token of the campaign."""
+        campaignToken: String!
+        """Key of the cycle."""
+        cycleKey: String!
+        """
+        Only elements in this status: PENDING, CLAIMED, DISPATCHED, REFUSED or SKIPPED. Optional;
+        any other value is refused.
+        """
+        status: String
+        """Return elements after this id. Optional."""
+        afterId: ID
+        """Maximum elements to return, 1 to 1000. Absent or out of range means 200."""
+        limit: Int
+    ): [CampaignElement!]!
+}
+
+"""A command the HTTP pull channel handed to a device."""
+type PulledCommand {
+    """Token of the command; the device quotes it when it acknowledges and when it answers."""
+    token: String!
+    """The command's name, as defined in the command vocabulary of the device's profile."""
+    name: String!
+    """The command's arguments as a JSON document serialized to a string; null when none."""
+    payload: String
+    """ONEWAY if the device only acknowledges the command; null if it must also answer."""
+    deliveryMode: String
+    """How many times this command has now been handed out, counting this one."""
+    attempt: Int!
+    """When the command expires, as an RFC 3339 timestamp; null if it does not."""
+    expiresAt: String
 }
 
 type Mutation {
@@ -1092,6 +1372,53 @@ type Mutation {
         token: String!
     ): String
     """
+    For the HTTP pull channel: hands a device the commands it may be sent, oldest first, and
+    claims each one (QUEUED, HELD or PARKED to SENT) in the same conditional update markCommandSent
+    uses, so two pulls can never both be handed one. A command an earlier pull handed out and
+    never saw acknowledged for 60 seconds is handed out again, until its maxAttempts are spent;
+    a command whose attempts are spent is first failed as NOT_DELIVERED. Requires command:claim,
+    a system-tier authority; the caller must already have authenticated the device.
+    """
+    pullCommands(
+        """Token of the device pulling."""
+        deviceToken: String!
+        """At most this many commands, up to 16. Omit it for 16."""
+        limit: Int
+    ): [PulledCommand!]!
+    """
+    For the HTTP pull channel: records that the device acknowledged a command a pull handed it,
+    which sets the command's deliveredTime and deliveryEvidence (DEVICE_ACK) and settles a ONEWAY
+    command as SUCCESSFUL. Idempotent. Answers RECORDED (this call recorded it, or an earlier
+    one did), NOT_FOUND (no such command for the device), NOT_PULLED (the command was never
+    handed to a pull), or NOT_AWAITING (the command is already finished without a delivery, for
+    instance failed as NOT_DELIVERED). Requires command:claim, a system-tier authority.
+    """
+    acknowledgeCommandDelivery(
+        """Token of the command."""
+        token: String!
+        """Token of the device that acknowledged."""
+        deviceToken: String!
+    ): String!
+    """
+    For the HTTP pull channel: records the device's answer to a command a pull handed it,
+    settling it as SUCCESSFUL or FAILED and recording delivery evidence (DEVICE_RESPONSE) if no
+    acknowledgement came first. Idempotent for a command that is already finished. Answers
+    RECORDED, NOT_FOUND, NOT_PULLED, or NOT_ANSWERABLE (the command is not awaiting an answer
+    from this device). Requires command:claim, a system-tier authority.
+    """
+    respondToPulledCommand(
+        """Token of the command."""
+        token: String!
+        """Token of the device that answered."""
+        deviceToken: String!
+        """True if the device carried the command out."""
+        success: Boolean!
+        """The device's answer payload as text. At most 65536 bytes. Optional."""
+        payload: String
+        """Why the device did not carry the command out. Optional."""
+        error: String
+    ): String!
+    """
     For a transport that received a command on the live delivery stream: confirms, just before
     actuating, that the delivery is still the dispatch the platform holds. Returns a new
     dispatch nonce to quote when reporting the outcome, or null when the delivery is stale
@@ -1165,6 +1492,44 @@ type Mutation {
         """Token of the device that came back."""
         deviceToken: String!
     ): Int!
+    """
+    Creates a campaign. A refused definition comes back as a rejection. Requires command:write and
+    device:read.
+    """
+    createCampaign(
+        """The campaign to create."""
+        request: CampaignCreateRequest!
+    ): CreateCampaignResult!
+    """Switches a campaign on or off and returns it. Requires command:write and device:read."""
+    setCampaignEnabled(
+        """Token of the campaign."""
+        token: String!
+        """Whether the campaign should run."""
+        enabled: Boolean!
+    ): Campaign!
+    """
+    Deletes a campaign and cancels the commands it had planned but not sent. Commands already
+    created are untouched, and an element whose batch was being sent is recorded from that batch,
+    not as cancelled. There is no update: to change a campaign, delete it and create it again.
+    Requires command:write and device:read.
+    """
+    deleteCampaign(
+        """Token of the campaign."""
+        token: String!
+    ): Boolean!
+    """
+    Re-sends a cycle's command to the elements that did not succeed, through the batch retry, so a
+    device whose command is in flight or already succeeded is never sent a second copy, and one whose
+    outcome is unknown is sent one only with includeUnknown. Requires command:write and device:read.
+    """
+    retryCampaignFailed(
+        """Token of the campaign."""
+        campaignToken: String!
+        """Key of the cycle."""
+        cycleKey: String!
+        """Whether to also re-send elements whose command may already have acted."""
+        includeUnknown: Boolean!
+    ): CampaignRetryResult!
 }
 
 schema {

@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # @devicechain/widgets
 
 React dashboard widgets for DeviceChain, plus the renderer that lays a board out.
-Twenty-four widgets — charts, gauges, tables, a fleet table, alarm views,
+Thirty-two widgets — charts, gauges, tables, a fleet table, alarm views,
 command controls, an entity selector and a map — all bound to live data through
 [`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards).
 
@@ -23,7 +23,7 @@ npm install @devicechain/widgets @devicechain/dashboards @devicechain/client gra
 import { DashboardRenderer } from '@devicechain/widgets';
 import { DashboardHub, parseDashboardDefinition } from '@devicechain/dashboards';
 
-const hub = new DashboardHub({ resolver, authorities: user.scopes });
+const hub = new DashboardHub({ resolver, authorities: user.authorities });
 const definition = parseDashboardDefinition(json);
 
 <DashboardRenderer definition={definition} hub={hub} actions={hub} />;
@@ -60,6 +60,19 @@ or the one you pass as `registry`; see `createBuiltinWidgetRegistry` and
 `builtinWidgetDefinitions`, and `@devicechain/widget-sdk` to add your own). A widget
 bound to a slot needs its datasource resolved first (`resolveWidgets` or
 `resolveWidgetDatasource`).
+
+The `@devicechain/widgets/host-context` subpath exports `MapRuntimeProvider`,
+`useMapRuntime`, `MapRuntime`, `TenantBasemapProvider` and `useTenantBasemap`
+without importing the widget catalog. Use it for providers above lazy dashboard
+routes. `@devicechain/widgets/vite` exports only `viteMapRuntime`; the root stays
+bundler-independent. Chart helpers can also be imported directly from
+`@devicechain/widget-sdk/echarts`.
+
+For offline preview, use `new SyntheticDataSource()` from `@devicechain/dashboards`
+and set `seedHistory={false}` on the renderer; dispose the source with `disposeAll()`.
+Use `validateDefinitionOptions(definition, { catalog })` to report invalid options
+across a board and `stripUnknownOptions(definition, { catalog })` to remove
+undeclared option keys. Supply your registry's catalog for extension widgets.
 
 ## The widgets
 

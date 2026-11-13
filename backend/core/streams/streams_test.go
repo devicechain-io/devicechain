@@ -3,7 +3,10 @@
 
 package streams
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The declaration is only worth centralizing if it cannot be quietly incomplete.
 // These tests pin the properties that make "add an entry to All" sufficient.
@@ -140,6 +143,26 @@ func TestMaxBytesCapIsDeclaredOnlyWhereIntended(t *testing.T) {
 		if s.Suffix == IntegrationUplinks {
 			if got := MaxBytesCapFor(s.Suffix); got != integrationUplinksMaxBytesCap {
 				t.Errorf("MaxBytesCapFor(%q) = %d, want %d", s.Suffix, got, int64(integrationUplinksMaxBytesCap))
+			}
+			continue
+		}
+		// The downlink-report stream is the last cap. It is created on every install, read by one
+		// optional adapter, and holds advisory reports: one lost to eviction (or never read) leaves its
+		// command to settle at its own deadline as unanswered, which is the honest answer, so nothing
+		// promised is lost. Uncapped it would reserve a Cold tier's 128 MiB on installs that never use
+		// it, and move the published sizing table.
+		if s.Suffix == LpwanDownlinkEvents {
+			if got := MaxBytesCapFor(s.Suffix); got != lpwanDownlinkEventsMaxBytesCap {
+				t.Errorf("MaxBytesCapFor(%q) = %d, want %d", s.Suffix, got, int64(lpwanDownlinkEventsMaxBytesCap))
+			}
+			continue
+		}
+		// The kill stream carries a few hundred bytes per operator-thrown kill; uncapped it would reserve a
+		// cold tier's ceiling up front and move the published sizing table (the 20,000/s row has under
+		// 50 MiB of slack).
+		if s.Suffix == AgentActuationKills {
+			if got := MaxBytesCapFor(s.Suffix); got != agentActuationKillsMaxBytesCap {
+				t.Errorf("MaxBytesCapFor(%q) = %d, want %d", s.Suffix, got, int64(agentActuationKillsMaxBytesCap))
 			}
 			continue
 		}
@@ -307,7 +330,7 @@ func TestPlatformAuthoredStreamsArePinned(t *testing.T) {
 		ResolvedEvents: true, DerivedEvents: true, DeviceAttribute: true, DeviceCommands: true,
 		DeviceDesired: true, ConnectorDispatch: true, DetectionRulesPublished: true, DeviceRoster: true,
 		GeoFenceSetManifest: true, EntityDeleted: true, AlarmEvents: true, RaiseAlarm: true, FailedEvents: true,
-		DeviceOwnership: true,
+		DeviceOwnership: true, AgentActuationKills: true,
 	}
 	got := map[string]bool{}
 	for _, s := range All {
@@ -331,5 +354,43 @@ func TestPlatformAuthoredStreamsArePinned(t *testing.T) {
 	}
 	if KindPlatformAuthored("command-response") || KindPlatformAuthored("no-such-kind") || !KindPlatformAuthored("notification") {
 		t.Error("KindPlatformAuthored must be true only where every stream of the kind is platform-authored")
+	}
+}
+
+func TestAgentActuationKillsContract(t *testing.T) {
+	s := bySuffix[AgentActuationKills]
+	if len(s.Writers) != 1 || s.Writers[0] != "user-management" {
+		t.Fatalf("kill writers = %v", s.Writers)
+	}
+	if len(s.Readers) != 1 || s.Readers[0] != (Reader{"device-management", ReadDurable}) {
+		t.Fatalf("kill readers = %v", s.Readers)
+	}
+	if s.Tier != Cold || s.Shape != ShapeTenant || s.DeadLetterKind != kindControlFact || !s.PlatformAuthored || s.DuplicateWindowSeconds != BrokerDefaultDuplicateWindowSeconds {
+		t.Fatalf("incorrect kill stream contract: %+v", s)
+	}
+}
+
+// Uncaptured streams must explain how exhaustion is settled without the recorder.
+func TestMaxDeliveriesCaptureDeclaration(t *testing.T) {
+	for _, s := range All {
+		if s.MaxDeliveriesUncaptured != "" {
+			if strings.TrimSpace(s.MaxDeliveriesUncaptured) == "" {
+				t.Errorf("%s has an empty uncaptured reason", s.Suffix)
+			}
+			if MaxDeliveriesCaptured(s.Suffix) {
+				t.Errorf("%s declares itself uncaptured but the accessor captures it", s.Suffix)
+			}
+		} else if s.Shape != ShapeAdvisory && !MaxDeliveriesCaptured(s.Suffix) {
+			t.Errorf("%s must remain captured", s.Suffix)
+		}
+	}
+	if MaxDeliveriesCaptured(LpwanDownlinkEvents) {
+		t.Error("lpwan-downlink-events must be uncaptured")
+	}
+	if strings.TrimSpace(bySuffix[LpwanDownlinkEvents].MaxDeliveriesUncaptured) == "" {
+		t.Error("lpwan-downlink-events must give its uncaptured reason")
+	}
+	if MaxDeliveriesCaptured(MaxDeliveries) || MaxDeliveriesCaptured("undeclared") {
+		t.Error("advisory-shaped and undeclared streams must not be captured")
 	}
 }

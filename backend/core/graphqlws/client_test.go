@@ -351,8 +351,14 @@ func TestSlowConsumerOverflows(t *testing.T) {
 	sub, err := c.Subscribe(context.Background(), "subscription { counter(to: 100000) }", nil)
 	require.NoError(t, err)
 
-	// Let the server flood and the read loop overflow before we read a thing.
-	time.Sleep(150 * time.Millisecond)
+	// Wait for the terminal state, not elapsed time, so draining cannot prevent overflow.
+	deadline := time.Now().Add(10 * time.Second)
+	for sub.Err() == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for the subscription to reach a terminal error before draining")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	for range sub.C() { //nolint:revive // drain the buffered values
 	}
 	assert.ErrorIs(t, sub.Err(), ErrSlowConsumer)

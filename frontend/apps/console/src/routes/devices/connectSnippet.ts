@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The connectivity helper's command builder: a ready-to-run `mosquitto_pub` and `curl`
-// that send one measurement event for a device.
+// that send one measurement event for a device, or the device's own raw payload (a file) to
+// its raw-payload route for the decoder on its device type to read.
 //
 // 🔴 EVERY STRING THIS PRODUCES IS PINNED BY THE PLATFORM, NOT BY THIS FILE. The rendered
 // commands for a set of cases live in frontend/testdata/connect-snippets/cases.json.
@@ -10,7 +11,9 @@
 // read the same file and run the commands' values through the real ingest code:
 //   - event-sources (processor/connect_snippet_golden_test.go) POSTs the curl body to the
 //     curl URL through the real HTTP ingest route and decodes the mosquitto_pub message with
-//     the real JSON decoder, checking the topic is the device's own events topic;
+//     the real JSON decoder, checking the topic is the device's own events topic; it also
+//     sends the raw-payload curl through the real device-uplink route and checks the
+//     raw-payload topic is the device's own uplink subject;
 //   - device-management (processor/connect_snippet_golden_test.go) checks the client id and
 //     username the broker's auth-callout would accept, and runs the payload through the
 //     resolver's measurement validation and storage step, asserting no reading is dropped.
@@ -206,10 +209,11 @@ export function shellQuote(s: string): string {
 
 const CONTINUATION = ' \\\n  ';
 
-// mqttCommand publishes the event on the device's own events topic. The client id and
-// username are the shapes the broker's auth-callout requires; an ACCESS_TOKEN connects
-// with no password, which is how the broker tells it from an MQTT_BASIC username.
-export function mqttCommand(input: SnippetInput): string {
+// mqttConnectionArgs open the device's broker connection, for the event and the raw-payload
+// commands alike. The client id and username are the shapes the broker's auth-callout requires;
+// an ACCESS_TOKEN connects with no password, which is how the broker tells it from an
+// MQTT_BASIC username.
+function mqttConnectionArgs(input: SnippetInput): string[] {
   const { tenant, deviceToken, credential } = input;
   const login =
     `-u ${shellQuote(`${tenant}:${credential.credentialId}`)}` +
@@ -220,8 +224,32 @@ export function mqttCommand(input: SnippetInput): string {
     `-h ${shellQuote(PLACEHOLDER.mqttHost)} -p ${MQTT_PORT}`,
     `-i ${shellQuote(`${PLACEHOLDER.instanceId}:${tenant}:${deviceToken}`)}`,
     login,
+  ];
+}
+
+// mqttCommand publishes the event on the device's own events topic.
+export function mqttCommand(input: SnippetInput): string {
+  const { tenant, deviceToken } = input;
+  return [
+    ...mqttConnectionArgs(input),
     `-t ${shellQuote(`${PLACEHOLDER.instanceId}/${tenant}/devices/${deviceToken}/events`)}`,
     `-m ${shellQuote(eventBody(input, 'mqtt'))}`,
+  ].join(CONTINUATION);
+}
+
+// The file the raw-payload commands send. The console cannot know a device's bytes (they are
+// whatever its decoder reads), so the command sends a file the user supplies, byte for byte.
+export const PAYLOAD_FILE = 'payload.bin';
+
+// mqttUplinkCommand publishes the contents of PAYLOAD_FILE, untouched, on the device's own
+// raw-payload topic, where the decoder on its device type's profile reads it. The topic is
+// granted only when the operator sets infrastructure.nats.mqttDeviceUplinks.
+export function mqttUplinkCommand(input: SnippetInput): string {
+  const { tenant, deviceToken } = input;
+  return [
+    ...mqttConnectionArgs(input),
+    `-t ${shellQuote(`${PLACEHOLDER.instanceId}/${tenant}/devices/${deviceToken}/uplink`)}`,
+    `-f ${PAYLOAD_FILE}`,
   ].join(CONTINUATION);
 }
 
@@ -232,6 +260,29 @@ export function httpCommand(input: SnippetInput): string {
     `curl -i -X POST ${shellQuote(url)}`,
     `-H ${shellQuote('Content-Type: application/json')}`,
     `-d ${shellQuote(eventBody(input))}`,
+  ].join(CONTINUATION);
+}
+
+// httpUplinkCommand posts the contents of PAYLOAD_FILE, untouched, to the device's raw-payload
+// route. A binary body has nowhere to carry a credential, so it rides in headers: a Bearer token
+// for an ACCESS_TOKEN, the three X-DeviceChain-Credential headers for anything else. The route
+// exists only when the operator sets httpIngest.deviceUplinks on event-sources.
+export function httpUplinkCommand(input: SnippetInput): string {
+  const { tenant, deviceToken, credential } = input;
+  const url = `http://${PLACEHOLDER.ingestHost}:${HTTP_INGEST_PORT}/${PLACEHOLDER.instanceId}/${tenant}/devices/${deviceToken}/uplink`;
+  const auth =
+    credential.credentialType === 'ACCESS_TOKEN'
+      ? [`-H ${shellQuote(`Authorization: Bearer ${credential.credentialId}`)}`]
+      : [
+          `-H ${shellQuote(`X-DeviceChain-Credential-Type: ${credential.credentialType}`)}`,
+          `-H ${shellQuote(`X-DeviceChain-Credential-Id: ${credential.credentialId}`)}`,
+          `-H ${shellQuote(`X-DeviceChain-Credential-Secret: ${PLACEHOLDER.password}`)}`,
+        ];
+  return [
+    `curl -i -X POST ${shellQuote(url)}`,
+    ...auth,
+    `-H ${shellQuote('Content-Type: application/octet-stream')}`,
+    `--data-binary ${shellQuote(`@${PAYLOAD_FILE}`)}`,
   ].join(CONTINUATION);
 }
 

@@ -386,6 +386,59 @@ true
 {{- end -}}
 
 {{/*
+devicechain.lpwanDownlinkEnabled renders "true" when the outbound-connectors area turns the LoRaWAN
+command downlink on (functionalAreas.outbound-connectors.config.lpwanDownlink.enabled), and "" otherwise.
+It is the one place that fact is read, so the flag command-delivery receives and the refusals below
+cannot disagree about it. Keys are matched without regard to case, as the service decodes them.
+
+It fails the render, rather than leaving the pod to find out, when the downlink is on but
+  - enabled is not a boolean (a string "true" would be refused by the service at start), or
+  - outbound-connectors is not among the enabled areas (the flag would then say commands are
+    deliverable while nothing reads them), or
+  - command-delivery or device-management is not among the enabled areas (the adapter claims and
+    answers each command through the first and reads the device's DevEUI from the second), or
+  - infrastructure.commandDelivery or infrastructure.deviceManagement has no hostname or port.
+*/}}
+{{- define "devicechain.lpwanDownlinkEnabled" -}}
+{{- $areas := splitList "," (include "devicechain.enabledAreas" .) -}}
+{{- $cfg := get (get (.Values.functionalAreas | default dict) "outbound-connectors" | default dict) "config" | default dict -}}
+{{- $on := false -}}
+{{- range $k, $block := $cfg -}}
+{{- if eq (lower $k) "lpwandownlink" -}}
+{{- range $bk, $bv := ($block | default dict) -}}
+{{- if eq (lower $bk) "enabled" -}}
+{{- if not (kindIs "bool" $bv) -}}
+{{- fail (printf "functionalAreas.outbound-connectors.config.lpwanDownlink.enabled must be true or false (got %v)" $bv) -}}
+{{- end -}}
+{{- if $bv -}}{{- $on = true -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $on -}}
+{{- if not (has "outbound-connectors" $areas) -}}
+{{- fail "functionalAreas.outbound-connectors.config.lpwanDownlink.enabled is set, but outbound-connectors is not an enabled area, so nothing would send the downlinks. Enable the area or turn the downlink off." -}}
+{{- end -}}
+{{- if not (has "command-delivery" $areas) -}}
+{{- fail "the LoRaWAN command downlink is enabled, which needs command-delivery: the adapter claims and answers every command through it. Enable the area or turn the downlink off." -}}
+{{- end -}}
+{{- if not (has "device-management" $areas) -}}
+{{- fail "the LoRaWAN command downlink is enabled, which needs device-management: the adapter reads each device's DevEUI from it. Enable the area or turn the downlink off." -}}
+{{- end -}}
+{{- $infra := ((.Values.instance.config | default dict).infrastructure | default dict) -}}
+{{- $cd := ($infra.commandDelivery | default dict) -}}
+{{- if or (not $cd.hostname) (not $cd.port) -}}
+{{- fail "the LoRaWAN command downlink is enabled, but instance.config.infrastructure.commandDelivery has no hostname and port, so outbound-connectors could not reach command-delivery. Restore the chart default or turn the downlink off." -}}
+{{- end -}}
+{{- $dm := ($infra.deviceManagement | default dict) -}}
+{{- if or (not $dm.hostname) (not $dm.port) -}}
+{{- fail "the LoRaWAN command downlink is enabled, but instance.config.infrastructure.deviceManagement has no hostname and port, so outbound-connectors could not reach device-management. Restore the chart default or turn the downlink off." -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
 devicechain.commandDeliveryMergedConfig is the config command-delivery actually receives, as JSON:
 the operator's explicit value with sparkplugCommands set to true exactly when
 devicechain.sparkplugCommandsEnabled says some source sends commands. Nobody authors that key. A
@@ -403,8 +456,40 @@ themselves, and every later template would see the edit.
 {{- fail "functionalAreas.command-delivery.config.sparkplugCommands is derived by the chart from the Sparkplug sources' commands.enabled and cannot be set by hand. Set commands.enabled on the source in functionalAreas.sparkplug-ingest.config.sources instead." -}}
 {{- end -}}
 {{- end -}}
+{{- range $k, $_ := $cfg -}}
+{{- if eq (lower $k) "lpwandownlink" -}}
+{{- fail "functionalAreas.command-delivery.config.lpwanDownlink is derived by the chart from functionalAreas.outbound-connectors.config.lpwanDownlink.enabled and cannot be set by hand. Set lpwanDownlink.enabled on the outbound-connectors area instead." -}}
+{{- end -}}
+{{- end -}}
 {{- if include "devicechain.sparkplugCommandsEnabled" . -}}
 {{- $_ := set $cfg "sparkplugCommands" true -}}
+{{- end -}}
+{{- if include "devicechain.lpwanDownlinkEnabled" . -}}
+{{- $_ := set $cfg "lpwanDownlink" true -}}
+{{- end -}}
+{{- $cfg | toJson -}}
+{{- end -}}
+
+{{/*
+devicechain.eventSourcesMergedConfig is the config event-sources actually receives, as JSON: the
+operator's explicit value with lpwanDownlink set to true exactly when
+devicechain.lpwanDownlinkEnabled says the LoRaWAN downlink is on. Nobody authors that key. It tells the
+inbound-integration route to carry a network server's reports about downlinks (a ChirpStack ack or
+txack) to the adapter that settles confirmed downlinks, and a value that could be written independently
+of the outbound-connectors area could make the route take reports nothing reads, or ignore reports
+something waits for. A hand-set copy, in any spelling, fails the render.
+
+The explicit config is COPIED first -- `set` on a dict from .Values would edit the values themselves.
+*/}}
+{{- define "devicechain.eventSourcesMergedConfig" -}}
+{{- $cfg := deepCopy (get (get (.Values.functionalAreas | default dict) "event-sources" | default dict) "config" | default dict) -}}
+{{- range $k, $_ := $cfg -}}
+{{- if eq (lower $k) "lpwandownlink" -}}
+{{- fail "functionalAreas.event-sources.config.lpwanDownlink is derived by the chart from functionalAreas.outbound-connectors.config.lpwanDownlink.enabled and cannot be set by hand. Set lpwanDownlink.enabled on the outbound-connectors area instead." -}}
+{{- end -}}
+{{- end -}}
+{{- if include "devicechain.lpwanDownlinkEnabled" . -}}
+{{- $_ := set $cfg "lpwanDownlink" true -}}
 {{- end -}}
 {{- $cfg | toJson -}}
 {{- end -}}
@@ -419,6 +504,7 @@ exact same source. Takes the root context.
 {{- /* Evaluated here, not only where command-delivery's config is built: the refusals inside it
        are about command-delivery being ABSENT, and that branch never runs then. */ -}}
 {{- $_ := include "devicechain.sparkplugCommandsEnabled" $root -}}
+{{- $_ := include "devicechain.lpwanDownlinkEnabled" $root -}}
 {{- range $area := splitList "," (include "devicechain.enabledAreas" $root) }}
 {{- $areaCfg := get ($root.Values.functionalAreas | default dict) $area | default dict }}
 {{- $cfg := get $areaCfg "config" | default dict }}
@@ -431,6 +517,8 @@ exact same source. Takes the root context.
 {{- $cfg = include "devicechain.updateManagementMergedConfig" $root | fromJson }}
 {{- else if eq $area "command-delivery" }}
 {{- $cfg = include "devicechain.commandDeliveryMergedConfig" $root | fromJson }}
+{{- else if eq $area "event-sources" }}
+{{- $cfg = include "devicechain.eventSourcesMergedConfig" $root | fromJson }}
 {{- end }}
 {{ $area }}: {{ $cfg | toJson | quote }}
 {{- end }}
@@ -644,12 +732,14 @@ devicechain.enabledAreas (`$known`).
 {{- end -}}
 
 {{/*
-devicechain.tokenAudienceEnforced renders "true" when the operator set
-tokenAudience.enforcement to enforce, else nothing.
+devicechain.tokenAudienceEnforced renders "true" when the token-audience check refuses: when
+tokenAudience.enforcement is enforce OR unset (the release default is enforce), else nothing.
+Only an explicit observe turns it off. It mirrors config.TokenAudienceReleaseDefault, which a
+dcctl render test pins.
 */}}
 {{- define "devicechain.tokenAudienceEnforced" -}}
 {{- $infra := ((.Values.instance.config | default dict).infrastructure | default dict) -}}
-{{- if eq (get (get $infra "tokenAudience" | default dict) "enforcement" | default "") "enforce" -}}true{{- end -}}
+{{- if ne (get (get $infra "tokenAudience" | default dict) "enforcement" | default "") "observe" -}}true{{- end -}}
 {{- end -}}
 
 {{/*
@@ -663,8 +753,8 @@ the tokenAudience fields additionally require a lowercase scheme and host (which
 resourceUrl does not), and an mcp override that is a platform area's identifier
 (<areaBaseUrl>/<area>) collides with the area set. Leaving it out keeps a value that starts
 today from becoming a crash loop. In observe mode the consequence is only that mcp's calls are
-counted as carrying an unregistered audience; once enforcement is on they would be refused, so
-under enforce the render FAILS instead of dropping the entry silently.
+counted as carrying an unregistered audience; under enforce (the default) they would be refused,
+so the render FAILS instead of dropping the entry silently.
 */}}
 {{- define "devicechain.tokenAudienceMcpResources" -}}
 {{- $out := list -}}
@@ -682,7 +772,7 @@ uppercase one from a comparison of its fields). */ -}}
 {{- if and (eq $head (lower $head)) (not $clash) -}}
 {{- $out = append $out $v -}}
 {{- else if include "devicechain.tokenAudienceEnforced" . -}}
-{{- fail (printf "mcp: resourceUrl %q cannot be registered as a token audience while tokenAudience.enforcement is enforce, so every call MCP forwards would be refused. The scheme and host must be lowercase, and the URL must not be one of the platform areas' identifiers (%s/<area>). Lowercase it or move it off those, or set enforcement to observe." $v $base) -}}
+{{- fail (printf "mcp: resourceUrl %q cannot be registered as a token audience while token audiences are enforced (the default), so every call MCP forwards would be refused. The scheme and host must be lowercase, and the URL must not be one of the platform areas' identifiers (%s/<area>). Lowercase it or move it off those identifiers." $v $base) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -1599,6 +1689,18 @@ honest message ("not enabled on this deployment") fires only when the drafter is
 nil, so it could never appear on the profile that needed it. Unsetting the key
 restores that path.
 
+WHY AN EMPTY devAllowedDestinations IS LEFT OUT. v1.3.0 services decode this
+document strictly, so a key they do not know stops a pod of that release that
+restarts mid-upgrade. A setting added after a release is therefore written into
+the document only when it is set.
+
+WHY tracing IS LEFT OUT UNLESS IT IS ENABLED. The same rule, for a block a v1.4
+service does not know: values.yaml ships infrastructure.tracing with enabled: false,
+and written as-is it would stop every v1.4 pod that restarts during the upgrade to
+the release that added it. Disabled, the block configures nothing (the service's
+defaults are the same values), so it is written only when tracing is enabled, and
+enabling it belongs in an upgrade of its own once the rollout has finished.
+
 WHY THE SHUTDOWN BUDGET IS INJECTED RATHER THAN WRITTEN. The graceful-shutdown
 window and the pod's grace period are ONE budget checked against itself: a service
 refuses to start if its drain window does not leave room, inside the grace period,
@@ -1624,6 +1726,18 @@ the filtered document by accident.
   {{- $_ := set $cfg "infrastructure" dict -}}
 {{- end -}}
 {{- $infra := index $cfg "infrastructure" -}}
+{{- if hasKey $infra "egress" -}}
+  {{- $egress := index $infra "egress" -}}
+  {{- if and $egress (empty (get $egress "devAllowedDestinations")) -}}
+    {{- $_ := unset $egress "devAllowedDestinations" -}}
+  {{- end -}}
+{{- end -}}
+{{- if hasKey $infra "tracing" -}}
+  {{- $tracing := index $infra "tracing" -}}
+  {{- if not (and (kindIs "map" $tracing) (eq (get $tracing "enabled" | toString) "true")) -}}
+    {{- $_ := unset $infra "tracing" -}}
+  {{- end -}}
+{{- end -}}
 {{- include "devicechain.validateShutdownNotHandSet" . -}}
 {{- $_ := set $infra "shutdown" (dict
     "drainSeconds" (int .Values.shutdownDrainSeconds)

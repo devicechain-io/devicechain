@@ -51,6 +51,7 @@ tests:
               devicechain_instance: devicechain
               pod: dc-device-management-aaaaa
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicecredentialcachetoosmall"
               summary: "The device credential cache is too small for the fleet"
               description: "On dc-device-management-aaaaa, more than 5% of device credential lookups have pushed another credential out of a full cache for 15m (now 10%). The cache is smaller than the set of devices reporting through it, so it is cycling and most checks go to the database. Raise inMemoryCache.credentialCacheMiB for device-management, and raise its memory limit with it."
 
@@ -105,6 +106,7 @@ tests:
               pod: dc-device-management-aaaaa
               cache: relationships-by-source
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicelookupcachetoosmall"
               summary: "A device-management per-device cache is too small for the fleet"
               description: "On dc-device-management-aaaaa, more than 5% of lookups in the relationships-by-source cache have pushed another entry out of a full cache for 15m (now 20%). The cache is smaller than the set of devices reporting through it, so it is cycling and most lookups go to the key-value bucket. Raise inMemoryCache.perDeviceCacheMiB for device-management, and raise its memory limit with it."
 
@@ -138,6 +140,7 @@ tests:
               pod: dc-device-management-aaaaa
               cache: device-by-token
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicelookupcachetoosmall"
               summary: "A device-management per-device cache is too small for the fleet"
               description: "On dc-device-management-aaaaa, more than 5% of lookups in the device-by-token cache have pushed another entry out of a full cache for 15m (now 73%). The cache is smaller than the set of devices reporting through it, so it is cycling and most lookups go to the key-value bucket. Raise inMemoryCache.perDeviceCacheMiB for device-management, and raise its memory limit with it."
 
@@ -198,6 +201,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#mqttstorebackoffengaged"
               summary: "New MQTT device connections are being refused: the broker's MQTT message store is nearly full"
               description: "For 2m device-management has refused every new MQTT device connection, because the broker's MQTT message store is above 80% of its bound. Devices already connected keep publishing, and connections are accepted again once the store is below 60%. The platform is reading device publishes more slowly than devices send them: look at event-sources and at what reads inbound-events. Refused devices are told their connection is not authorized (MQTT CONNACK code 5) and must keep retrying."
       - eval_time: 14m
@@ -244,6 +248,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#provisioningauthfailuressustained"
               summary: "Device self-registration is being refused for a wrong provision key or secret, steadily"
               description: "For 15m device-management has refused more than one self-registration request a second (2/s now) because the provision key or secret was not valid. Either a fleet is registering with a secret that is wrong, was rotated or belongs to a disabled or expired profile, or someone is probing the endpoint. The answer is the same for every cause, so check the provisioning profile the fleet should be using (enabled, not expired, secret current) and the sources in the ingress log."
 
@@ -292,6 +297,7 @@ tests:
               devicechain_instance: devicechain
               result: rate_limited_source
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#provisioningratelimited"
               summary: "Device self-registration is refusing requests with 429 because a rate limit is exhausted"
               description: "For 15m device-management has refused self-registration requests with 429 at 1/s, from the rate_limited_source limit. rate_limited_source means one client address used up its allowance: if it is the ingress controller's address, every device is sharing one allowance because infrastructure.http.trustedProxies does not name the controller. rate_limited_tenant means the tenant's registrations per second are at its governance ceiling. Devices retry on their own after the Retry-After they are told."
 
@@ -326,6 +332,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#provisioningmisconfigured"
               summary: "A provisioning profile cannot register devices because it is misconfigured"
               description: "In the last 10m device-management refused 3 self-registration request(s) against a provisioning profile that cannot work: its device type was deleted, its strategy is not one the platform knows, or it mints a credential type this build does not support. Every device using that profile is refused until the profile is fixed. The service logs the profile's token at ERROR."
       - eval_time: 30m
@@ -344,6 +351,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#provisioningmisconfigured"
               summary: "A provisioning profile cannot register devices because it is misconfigured"
               description: "In the last 10m device-management refused 1 self-registration request(s) against a provisioning profile that cannot work: its device type was deleted, its strategy is not one the platform knows, or it mints a credential type this build does not support. Every device using that profile is refused until the profile is fixed. The service logs the profile's token at ERROR."
 
@@ -383,6 +391,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#provisioningsessionkickunconfirmed"
               summary: "A revoked or reset device may still be connected: its broker session was never confirmed ended"
               description: "For at least 5m, the oldest session kick that a provisioning revoke or reset still owes has waited more than 10 minutes (20m 0s now). The credentials were withdrawn, so the device cannot reconnect, but an MQTT session it already had open can keep publishing until its token expires (12 hours by default). device-management retries every 30 seconds, so the responder that ends sessions (event-sources) is down or unreachable: check that event-sources is running and its MQTT auth callout is healthy."
       # Drained.
@@ -411,6 +420,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicex509chainfailuressustained"
               summary: "Devices with registered certificates are being refused because their certificate chain does not verify, steadily"
               description: "For 15m device-management has refused more than one certificate connect a second (2/s now) because a registered certificate's chain does not build to its trust anchor, or has expired. Only certificates that are pinned to a credential count: certificates nothing pins and malformed presentations are separate results, so a client outside the tenant cannot raise this alert. Either the devices stopped sending the intermediate certificates that link them to the anchor, the chain or the anchor has expired, or a CA was replaced without the devices being re-registered. The answer on the wire is the same for every cause: check what the device presents with openssl s_client against the broker, and the expiry of the certificate, its intermediates and the trust anchor."
 
@@ -470,6 +480,7 @@ tests:
               devicechain_instance: devicechain
               result: jit_busy
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicex509jitrefusedsustained"
               summary: "Devices are being refused registration on first connect because registration is over its limit"
               description: "For 15m device-management has refused certificate registrations at 1/s, from the jit_busy limit. jit_rate_limited means the tenant's registrations per second are at its governance ceiling; jit_busy means the registration slots of every replica are taken, usually by a factory run on one provisioning profile, whose registrations take turns. Devices back off and retry on their own; raise the tenant's provisioning ceiling or spread the run out. A device that keeps retrying with a rotated certificate, before certificate renewal is available, spends the same allowance: every attempt that passes chain verification is charged to the tenant, including one refused afterwards."
 
@@ -514,6 +525,7 @@ tests:
               devicechain_instance: devicechain
               result: jit_ambiguous
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicex509jitmisconfigured"
               summary: "A certificate provisioning profile cannot register devices because it is misconfigured"
               description: "In the last 10m device-management refused 5 certificate registration(s) as jit_ambiguous. jit_provisioning_misconfigured and jit_credential_type_unsupported mean the profile's device type was deleted or it mints a credential type this build does not support; jit_ambiguous means a device's certificate chains to the trust anchor of more than one enabled profile at the same depth and cannot say which was meant. Every device concerned is refused until the profile is fixed or each profile has a trust anchor of its own. The service logs the cause."
           - exp_labels:
@@ -521,6 +533,7 @@ tests:
               devicechain_instance: devicechain
               result: jit_credential_type_unsupported
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicex509jitmisconfigured"
               summary: "A certificate provisioning profile cannot register devices because it is misconfigured"
               description: "In the last 10m device-management refused 5 certificate registration(s) as jit_credential_type_unsupported. jit_provisioning_misconfigured and jit_credential_type_unsupported mean the profile's device type was deleted or it mints a credential type this build does not support; jit_ambiguous means a device's certificate chains to the trust anchor of more than one enabled profile at the same depth and cannot say which was meant. Every device concerned is refused until the profile is fixed or each profile has a trust anchor of its own. The service logs the cause."
           - exp_labels:
@@ -528,6 +541,7 @@ tests:
               devicechain_instance: devicechain
               result: jit_provisioning_misconfigured
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicex509jitmisconfigured"
               summary: "A certificate provisioning profile cannot register devices because it is misconfigured"
               description: "In the last 10m device-management refused 5 certificate registration(s) as jit_provisioning_misconfigured. jit_provisioning_misconfigured and jit_credential_type_unsupported mean the profile's device type was deleted or it mints a credential type this build does not support; jit_ambiguous means a device's certificate chains to the trust anchor of more than one enabled profile at the same depth and cannot say which was meant. Every device concerned is refused until the profile is fixed or each profile has a trust anchor of its own. The service logs the cause."
       # The window slides past the refusals: it clears.
@@ -553,6 +567,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicex509issuerpinunavailable"
               summary: "Certificate devices are being refused because the auth callout cannot vouch for the broker's servers"
               description: "For 10m device-management has refused certificate connects without a break of two minutes because its issuer pin has no usable list of the broker's live servers: its system-account connection is down, or no refresh has succeeded for three refresh periods. Every certificate device is refused until it recovers; token and password devices are not affected. Check callout_issuer_pin_connected and callout_issuer_pin_refresh_total{result=\"error\"}, the device-management log for the system-account connection, and that infrastructure.nats.auth.sysUser and sysPassword are valid."
       # The refusals stopped: the window slides past them and it clears.
@@ -616,6 +631,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicex509issuerpinunavailable"
               summary: "Certificate devices are being refused because the auth callout cannot vouch for the broker's servers"
               description: "For 10m device-management has refused certificate connects without a break of two minutes because its issuer pin has no usable list of the broker's live servers: its system-account connection is down, or no refresh has succeeded for three refresh periods. Every certificate device is refused until it recovers; token and password devices are not affected. Check callout_issuer_pin_connected and callout_issuer_pin_refresh_total{result=\"error\"}, the device-management log for the system-account connection, and that infrastructure.nats.auth.sysUser and sysPassword are valid."
       - eval_time: 40m
@@ -672,6 +688,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicetrustanchorsexpiringsoon"
               summary: "A trust anchor expires within 30 days"
               description: "For 1h, 2 enabled trust anchor(s) across the instance's tenants expire within 30 days or already have. When a trust anchor expires, every device whose certificate chains to it is refused. List them with the deviceTrustAnchors query (the notAfter field), and add the replacement CA as a new anchor and pin each device's certificate to it before the date."
       - eval_time: 150m
@@ -719,6 +736,7 @@ tests:
               devicechain_instance: devicechain
               path: token
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicecalloutlatencyhigh"
               summary: "Device connects are being decided slowly by the auth callout"
               description: "For 10m the 99th percentile time to decide a token device connect has been above 250ms (509.4ms now). The time runs from a request being picked up to the answer being published. The broker gives up on an answer after 5 seconds and the device is refused, so a callout this slow is on its way to refusing devices. It is nearly always the database behind the credential read (token and password) or the trust-anchor and chain work (x509, x509-jit), or a reconnect storm queueing behind the callout's in-flight limit. Compare callout_in_flight with its limit, callout_refused_busy_total, the device-management database latency, and the log for credential store failures."
       - eval_time: 70m
@@ -798,6 +816,7 @@ tests:
               devicechain_instance: devicechain
               pod: dc-device-management-aaaaa
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#payloaddecoderrecompilesustained"
               summary: "A device-management replica is compiling payload decoders over and over"
               description: "On dc-device-management-aaaaa, payload decoders have been compiled more than once a second for 15m (now 2/s). A compile happens when a device type's resolution is read and its decoded copy is not held in memory, and a large decoder takes tens of milliseconds, so this is paid on the events themselves. The usual cause is decoders let go for room: the decoders one tenant keeps in use do not fit together in its share of the resolution cache, or the cache is too small. Raise inMemoryCache.profileResolutionCacheMiB, or profileResolutionTenantSharePercent for the tenant with the most decoders, and raise the device-management memory limit with it. Compare kv_cache_local_evictions_total{cache=\"profile-resolution-by-type\"} by reason: tenant_share points at the share, capacity at the cache."
 
@@ -842,3 +861,58 @@ tests:
       - eval_time: 40m
         alertname: PayloadDecoderRecompileSustained
         exp_alerts: []
+
+  # X509OcspUnavailableAllowed: sustained failures, pending window, burst, healthy and isolation cases.
+  - interval: 1m
+    input_series:
+    - series: devicechain_devicemanagement_x509_ocsp_unavailable_allowed_total{namespace="dci-devicechain", reason="unreachable"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: X509OcspUnavailableAllowed
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: X509OcspUnavailableAllowed
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations:
+          runbook_url: https://docs.devicechain.io/deployment/alert-runbook#x509ocspunavailableallowed
+          summary: Certificate connections are being allowed without current OCSP status
+          description: For 10 minutes, ENFORCE_KNOWN anchors have admitted certificate connections whose OCSP status
+            could not be learned. Revoked certificates may be admitted while the responder is unreachable. Inspect
+            the Ingest dashboard allowance reasons, responder fetch failures and breakers. Restore responder reachability
+            and allowed egress, check node clocks and capacity, and verify deviceManagement.callout.ocsp.enabled and
+            the anchor policy. REQUIRE_CURRENT refuses connections when current status is unavailable; change policy
+            only with the impact on device availability understood.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: X509OcspUnavailableAllowed
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_devicemanagement_x509_ocsp_unavailable_allowed_total{namespace="dci-devicechain", reason="unreachable"}
+      values: 0+0x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: X509OcspUnavailableAllowed
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_devicemanagement_x509_ocsp_unavailable_allowed_total{namespace="another-instance", reason="unreachable"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: X509OcspUnavailableAllowed
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_devicemanagement_x509_ocsp_unavailable_allowed_total{namespace="dci-devicechain", reason="unreachable"}
+      values: 0+0x5 1+0x35
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: X509OcspUnavailableAllowed
+      exp_alerts: []

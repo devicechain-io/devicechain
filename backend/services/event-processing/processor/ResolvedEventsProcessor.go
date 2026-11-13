@@ -540,13 +540,14 @@ type ResolvedEventsProcessor struct {
 	// fetched but the loop has not yet received is not missed by the backlog check.
 	lastLiveRead time.Time
 	dirty        bool
-	// restoredSeq is the StreamSeq of the checkpoint ROW this term restored from (0 when
-	// there was none). It is the compare half of Store.Reset's compare-and-swap: the only
-	// destructive write in a term build is conditioned on the row still being the one this
+	// restoredSeq and restoredWatermark are the checkpoint ROW's values this term restored
+	// from (zero when there was none). They are the compare half of Store.Reset's compare-and-swap:
+	// the only destructive write in a term build is conditioned on the row still being the one this
 	// replica read, so a replica that lost the partition mid-build cannot clear the
 	// checkpoint its successor has already committed to. Written by restore, read by
 	// replayToHead — both on the build path, before any loop starts.
-	restoredSeq int64
+	restoredSeq       int64
+	restoredWatermark time.Time
 	// committedSeq is the stream sequence the checkpoint row holds: what restore read, then
 	// what each Save wrote. It is the CEILING of the ack at a checkpoint (ackThroughCommitted)
 	// and nothing else is, not the engine's LastSeq, which can be ahead of the row between a
@@ -1537,6 +1538,7 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 	if !ok {
 		rp.engine = rp.newDetector()
 		rp.restoredSeq = 0
+		rp.restoredWatermark = time.Time{}
 		rp.committedSeq = 0
 		rp.metrics.recordRestore(0, 0)
 		log.Info().Str("partition", rp.cfg.PartitionId).Msg("No prior DETECT snapshot; starting from empty engine.")
@@ -1547,14 +1549,21 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 		return fmt.Errorf("restore engine from snapshot for partition %q: %w", rp.cfg.PartitionId, err)
 	}
 	rp.engine = engine
-	// The ROW's sequence, taken from the row rather than from the engine we just built out
-	// of it. They agree today, and the store's compare-and-swap is worth nothing if they
-	// ever stop: it has to compare what was actually read from the table.
+	// Take both axes from the ROW rather than the restored engine: the compare-and-swap
+	// must use what was actually read from the table, including database timestamp precision.
 	rp.restoredSeq = snap.StreamSeq
+	rp.restoredWatermark = snap.Watermark
 	rp.committedSeq = uint64(snap.StreamSeq)
 	rp.metrics.recordRestore(rp.clock.Now().Sub(start).Seconds(), uint64(snap.StreamSeq))
 	log.Info().Str("partition", rp.cfg.PartitionId).Uint64("lastSeq", engine.LastSeq()).
 		Time("watermark", engine.Watermark()).Msg("Restored DETECT engine from snapshot.")
+	if v := engine.RestoredFrontier(); v < detectcore.FrontierVersion {
+		// Written before the frontier was clamped to broker append time: a device clock that ran ahead may have
+		// carried it up to the resolver's future-skew bound past real time. It only moves forward, so it
+		// corrects itself once real time catches up; say so rather than leave an early absence unexplained.
+		log.Warn().Str("partition", rp.cfg.PartitionId).Int("frontierVersion", v).Int("current", detectcore.FrontierVersion).
+			Msg("Restored a DETECT snapshot whose watermark predates the append-time clamp; it may run ahead of real time until time catches up.")
+	}
 	return nil
 }
 
@@ -1594,17 +1603,18 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 				"leading from that checkpoint", rp.cfg.PartitionId)
 		}
 		observed := rp.restoredSeq
+		observedWatermark := rp.restoredWatermark
 		rp.closeDetector()
 		rp.engine = rp.newDetector()
 		rp.dirty = false
 		rp.committedSeq = 0
 		// Clear the stale row (the deliberate backward move Save's monotonic guard
 		// refuses); live consumption then writes a fresh checkpoint from sequence 1. The
-		// sequence is the row we RESTORED from, captured before the engine above replaced
-		// it — the store refuses the delete if the row has moved since (see Reset), which
+		// sequence and watermark are from the row we RESTORED, captured before replacing
+		// the engine — the store refuses the delete if the row has moved since (see Reset), which
 		// is what stops a replica that lost its term mid-build from clearing the checkpoint
 		// its successor is already committing to.
-		if err := rp.Store.Reset(rp.pctx(), rp.cfg.PartitionId, observed); err != nil {
+		if err := rp.Store.Reset(rp.pctx(), rp.cfg.PartitionId, observed, observedWatermark); err != nil {
 			return fmt.Errorf("reset stale snapshot for partition %q: %w", rp.cfg.PartitionId, err)
 		}
 		// The durable was created at the stale row's sequence plus one, past everything the new
@@ -1924,6 +1934,13 @@ func (rp *ResolvedEventsProcessor) checkpointDue() bool {
 // (the engine's message-level guard would drop it anyway; skipping early avoids the wasted
 // predicate evaluations) — still acked upstream, but not counted or marked dirty.
 func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
+	if !msg.IsEnvelope() {
+		traced, _, span := msg.Process(rp.pctx(), "resolved-events.processing")
+		msg = traced
+		if span != nil {
+			defer span.End()
+		}
+	}
 	rp.appliedEvents = 1 // an event envelope sets the number of its members (applyEnvelope)
 	if msg.StreamSeq == 0 {
 		// A JetStream-delivered message always carries a sequence; a 0 means the
@@ -2002,7 +2019,7 @@ func (rp *ResolvedEventsProcessor) applyEnvelope(msg messaging.Message, tenant s
 			rp.poisonSkipped++
 			continue
 		}
-		if rp.applyEvent(msg, tenant, event, prev, true) {
+		if rp.applyEvent(u.Msg, tenant, event, prev, true) {
 			advanced = true
 		}
 	}
@@ -2018,6 +2035,13 @@ func (rp *ResolvedEventsProcessor) applyEnvelope(msg messaging.Message, tenant s
 // (the descope gate), and member says the event is one of an envelope's, whose sequence the
 // engine records after the first of them (Engine.ProcessReceivedMember).
 func (rp *ResolvedEventsProcessor) applyEvent(msg messaging.Message, tenant string, event *resolvedevent.ResolvedEvent, prev uint64, member bool) bool {
+	if member {
+		traced, _, span := msg.Process(rp.pctx(), "resolved-events.processing")
+		msg = traced
+		if span != nil {
+			defer span.End()
+		}
+	}
 	// 🔴 AN EVENT ALREADY APPLIED IS SKIPPED, whatever sequence it arrived under (see
 	// runtime.AppliedGuard). It is handled exactly as a disabled device's event is: a member
 	// leaves the envelope's sequence to applyEnvelope, a legacy message records its own with

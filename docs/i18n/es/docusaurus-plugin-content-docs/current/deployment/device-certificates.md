@@ -8,7 +8,7 @@ Esta página es el lado del operador de los [certificados de cliente de disposit
 
 ## La compilación del broker {#broker}
 
-El servidor NATS no solicita un certificado de cliente en su listener MQTT del modo que necesita DeviceChain: su archivo de configuración puede desactivar los certificados o exigir uno a todos los clientes. Por eso el broker de la plataforma es la compilación propia de DeviceChain de `nats-server`, `dc-nats-server`: el `v2.15.2` original sin modificar, más un ajuste, aplicado al arrancar y en cada recarga de configuración. El listener MQTT **solicita, pero no exige,** un certificado de cliente.
+El servidor NATS no solicita un certificado de cliente en su listener MQTT del modo que necesita DeviceChain: su archivo de configuración puede desactivar los certificados, exigir uno a todos los clientes o (a partir de `v2.15.3`, con `verify: optional`) verificar un certificado que presente un cliente con la lista de CA del propio servidor. Las cadenas de los certificados de dispositivo terminan en los anclajes de confianza de cada tenant, no en esa lista, por lo que el broker debe aceptar un certificado sin verificarlo y dejar la verificación a la plataforma. Por eso el broker de la plataforma es la compilación propia de DeviceChain de `nats-server`, `dc-nats-server`: el `v2.15.3` original sin modificar, más un ajuste, aplicado al arrancar y en cada recarga de configuración. El listener MQTT **solicita, pero no exige,** un certificado de cliente.
 
 - **Los dispositivos con token y contraseña no se ven afectados.** Un cliente que no envía certificado se conecta como antes. Un certificado enviado con un usuario de token o de contraseña se ignora.
 - **El callout de autenticación hace la comprobación.** El broker entrega al callout de device-management los certificados que presentó el cliente, y este verifica la cadena. El broker en sí no decide nada sobre la confianza.
@@ -30,7 +30,7 @@ El servidor comprueba, haciendo un handshake con su propio puerto MQTT al arranc
 
 ### Volver al broker original {#rollback}
 
-Fija las variables de infraestructura `server_image_repository = "nats"` y `server_image_tag = "2.15.2-alpine"`. Entonces se rechaza a todos los dispositivos con certificado, porque el broker original nunca pide un certificado, y `BrokerMqttClientAuthLost` explica por qué. Nada más se ve afectado.
+Fija las variables de infraestructura `server_image_repository = "nats"` y `server_image_tag = "2.15.3-alpine"`. Entonces se rechaza a todos los dispositivos con certificado, porque el broker original nunca pide un certificado, y `BrokerMqttClientAuthLost` explica por qué. Nada más se ve afectado.
 
 ## Ajustes {#settings}
 
@@ -101,4 +101,4 @@ En una instancia que ya está en marcha, la autenticación por certificado se ac
 - **Una credencial de certificado anterior a la compatibilidad con certificados no autentica.** El tipo se rechazaba en versiones anteriores, y una fila existente no tiene ancla de confianza. Créala de nuevo como credencial fijada que nombre un ancla.
 - **El esquema gana** una tabla de anclas de confianza y columnas para el ancla en las credenciales y en los perfiles de aprovisionamiento. La actualización las aplica; no se reescribe ningún dato.
 
-Todavía no están disponibles, y no forman parte de la actualización: la renovación del certificado de un dispositivo registrado, adoptar un dispositivo tras restablecer su aprovisionamiento, y la autenticación por certificado por HTTP o LwM2M. La [página de conceptos](../concepts/device-certificates.md#not-supported) tiene la lista completa, incluido que las CA con restricciones de nombre se rechazan y que no hay OCSP ni descarga de CRL (las listas de revocación se suben).
+Todavía no están disponibles, y no forman parte de la actualización: la renovación del certificado de un dispositivo registrado, adoptar un dispositivo tras restablecer su aprovisionamiento, y la autenticación por certificado por HTTP o LwM2M. La [página de conceptos](../concepts/device-certificates.md#not-supported) tiene la lista completa, incluido que las CA con restricciones de nombre se rechazan que no hay descarga de CRL (las listas de revocación se suben) y que la comprobación OCSP opcional todavía no termina las sesiones abiertas.

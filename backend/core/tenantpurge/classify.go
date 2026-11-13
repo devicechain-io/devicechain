@@ -542,7 +542,7 @@ func classify(cols []column, fks []constraint, extra admitted) (*Plan, error) {
 				if col, ok := directColumn(cols); ok {
 					e.Class = ClassRedacted
 					e.Reason = rule.Reason
-					e.Redact = rule.Columns
+					e.Redact = presentColumns(rule.Columns, cols)
 					e.Column = col
 					entries[t] = e
 					continue
@@ -816,4 +816,27 @@ func cyclePath(path []Table) string {
 		names = append(names, t.String())
 	}
 	return strings.Join(names, " -> ")
+}
+
+// presentColumns keeps the redaction columns this relation actually has, in the rule's order.
+//
+// 🔴 A REDACTION RULE IS SHARED BY EVERY SCHEMA, AND THE SCHEMAS DO NOT MOVE TOGETHER. A
+// column added to the journal reaches each area's schema when that area next starts, so during
+// a rolling upgrade — and for good in an opt-in area that is disabled and never migrates
+// again — some schemas lack it. A column that does not exist holds no identifier, so it is
+// dropped from the UPDATE rather than named in it, where it would fail and roll back the whole
+// sweep. An empty result is NOT a success: the sweep refuses a redacted table with nothing to
+// empty (retainedWhere).
+func presentColumns(want []string, cols []column) []string {
+	have := make(map[string]bool, len(cols))
+	for _, c := range cols {
+		have[c.Name] = true
+	}
+	out := make([]string, 0, len(want))
+	for _, w := range want {
+		if have[w] {
+			out = append(out, w)
+		}
+	}
+	return out
 }

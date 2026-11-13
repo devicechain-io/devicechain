@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/tracing"
 )
 
 // The gateway source keeps a configurable number of inbound-events publishes awaiting
@@ -152,7 +154,15 @@ type GatewayJetStreamSource struct {
 	beatRef atomic.Uint64
 
 	lifecycle core.LifecycleManager
-	cancel    context.CancelFunc
+	// runMu serializes start/stop and protects runLive and the channel-close flags.
+	// A timed-out stop leaves the run live: handle still uses this run's fields,
+	// so none may be replaced until a subsequent stop finishes every stage.
+	runMu           sync.Mutex
+	runLive         bool
+	messagesClosed  bool
+	publishesClosed bool
+	writerClosed    chan struct{}
+	cancel          context.CancelFunc
 	// drained closes once the read loop has returned, so Stop does not race the
 	// loop into a closed message channel.
 	drained chan struct{}
@@ -170,9 +180,28 @@ type GatewayJetStreamSource struct {
 	// Required whenever allow is set.
 	meter MeterAt
 
+	// lc, when set (UseLagCredit), meters this source with the lag-credited gate instead of the age
+	// cutoff: the message stage here and the reading stage in the decode worker, which follows the
+	// decision carried in rawMessage.metering. lcStream is the reader stream it is metered as.
+	lc       *LagCreditIngest
+	lcStream int
+	// inHandle is true while handle() is running: the idle probe must not read a loop that is blocked
+	// handing a message on as "caught up".
+	inHandle atomic.Bool
+
 	// fromStore makes this the source over the MQTT gateway's message store rather than the
 	// capture stream; see UseMessageStore.
 	fromStore bool
+
+	// uplinks is the route that carries a device's raw payload to its type's decoder (UseDeviceUplinks),
+	// and uplinkRun the current start's runner built from it. nil: a raw payload is recorded on
+	// failed-decode with its cause.
+	uplinks   *DeviceUplinkRoute
+	uplinkRun *uplinkRunner
+
+	// feedback tells a gateway which of its events were durably accepted, or shed at the
+	// tenant's ceiling (see UseGatewayFeedback). nil sends nothing.
+	feedback GatewayFeedback
 
 	// readPacer spaces out the retries after a non-EOF read error and ends the loop once
 	// the errors stop clearing. It carries the microservice a give-up is reported to, so
@@ -259,6 +288,17 @@ func (es *GatewayJetStreamSource) Writer() messaging.OrderedWriter {
 	return es.writer
 }
 
+// UseDeviceUplinks gives the source the route that carries a device's raw payload (published to its
+// own uplink topic) to the decoder of its device type. Call it before the source starts. Without it
+// such a payload is recorded on failed-decode with its cause.
+func (es *GatewayJetStreamSource) UseDeviceUplinks(rt *DeviceUplinkRoute) error {
+	if rt == nil || rt.Plans == nil || rt.Publish == nil {
+		return errors.New("a device-uplink route needs its plan cache and its publisher")
+	}
+	es.uplinks = rt
+	return nil
+}
+
 func (es *GatewayJetStreamSource) Initialize(ctx context.Context) error {
 	return es.lifecycle.Initialize(ctx)
 }
@@ -298,6 +338,13 @@ func (es *GatewayJetStreamSource) ExecuteStart(ctx context.Context) error {
 			return fmt.Errorf("event source %q: infrastructure.messaging.envelopes.inbound is on, but the capture writer (%T) cannot report a PubAck, so it could not settle the envelopes it published", es.Id, es.writer)
 		}
 	}
+	es.runMu.Lock()
+	defer es.runMu.Unlock()
+	if es.runLive {
+		return fmt.Errorf("event source %q: the previous run has not finished stopping (a stop timed out); retry ExecuteStop until it completes before starting again", es.Id)
+	}
+	// All validation is complete; there are no fallible startup returns below.
+	es.runLive = true
 	drained := make(chan struct{})
 	es.drained = drained
 	es.startPipeline(DECODE_WORKER_COUNT)
@@ -306,6 +353,9 @@ func (es *GatewayJetStreamSource) ExecuteStart(ctx context.Context) error {
 	es.cancel = cancel
 	// The loop is handed its OWN drained channel rather than reading the field, so
 	// a lingering loop from a previous start attempt cannot close the current one's.
+	if es.lc != nil {
+		es.startLagCredit(loopCtx)
+	}
 	go es.readLoop(loopCtx, drained)
 	if es.fromStore {
 		log.Info().Str("source", es.Id).Msg("Gateway event source consuming the MQTT message store's events durable.")
@@ -325,6 +375,9 @@ func (es *GatewayJetStreamSource) Stop(ctx context.Context) error {
 // rather than reading the field, so a worker lingering from a stop cut short by its
 // deadline cannot send into a later start's channel.
 func (es *GatewayJetStreamSource) startPipeline(workers int) {
+	// ExecuteStart holds runMu; isolated pipeline tests call this before stopping.
+	es.messagesClosed, es.publishesClosed = false, false
+	es.writerClosed = nil
 	messages := make(chan rawMessage, DECODE_CHANNEL_DEPTH)
 	publishes := make(chan pendingPublish)
 	workersDone := make(chan struct{})
@@ -344,10 +397,15 @@ func (es *GatewayJetStreamSource) startPipeline(workers int) {
 		}
 		es.ce = ce
 	}
+	es.uplinkRun = nil
+	if es.uplinks != nil {
+		es.uplinkRun = newUplinkRunner(es.uplinks, es.readings, es.failed)
+	}
 	var running sync.WaitGroup
 	es.workers = make([]*DecodeWorker, 0, workers)
 	for w := 1; w <= workers; w++ {
 		worker := NewDecodeWorker(w, es.Id, es.Decoder, messages, es.readings, submit, es.failed)
+		worker.Uplinks = es.uplinkRun
 		es.workers = append(es.workers, worker)
 		running.Add(1)
 		go func() {
@@ -387,6 +445,10 @@ func (es *GatewayJetStreamSource) submitter(publishes chan<- pendingPublish) Dec
 			done(nil)
 			return
 		}
+		if event != nil && event.TraceContext != nil {
+			msg = msg.WithTraceContext(event.TraceContext)
+			ctx = msg.Context(ctx)
+		}
 		publishes <- pendingPublish{ctx: ctx, msg: msg, done: done, pos: pos}
 	}
 }
@@ -419,13 +481,22 @@ func submitLoop(publishes <-chan pendingPublish, writer messaging.OrderedWriter,
 // stream redelivers it to whichever pod is running, the capture dedup id stores it once,
 // and at-least-once is exactly the guarantee this source exists to provide.
 func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
+	es.runMu.Lock()
+	defer es.runMu.Unlock()
 	if es.cancel != nil {
 		es.cancel()
+	}
+	// The stream is no longer read here: its lag-credit view must stop growing a lag (and crediting every
+	// tenant the full cover) for a reader that no longer exists. Deferred, so the messages still in the
+	// pipeline are charged at the reading stage with the lag they were read under, not with none.
+	if es.lc != nil {
+		defer es.lc.views[es.lcStream].stop()
 	}
 	// A source stopped without ever having started has nothing to stop. The lifecycle
 	// permits that stop, and without this it would wait out the whole deadline on a nil
 	// channel.
 	if es.drained == nil {
+		es.runLive = false
 		return nil
 	}
 	// Draining before the read loop is waited for, not after: the loop can be blocked
@@ -445,7 +516,9 @@ func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
 	if !es.await(ctx, es.drained, "read loop") {
 		return nil
 	}
-	es.stopPipeline(ctx)
+	if es.stopPipelineLocked(ctx) {
+		es.runLive = false
+	}
 	return nil
 }
 
@@ -454,26 +527,57 @@ func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
 // that it is complete on its own, as the tests that run the pipeline without a read loop
 // use it.
 func (es *GatewayJetStreamSource) stopPipeline(ctx context.Context) bool {
+	es.runMu.Lock()
+	defer es.runMu.Unlock()
+	return es.stopPipelineLocked(ctx)
+}
+
+// stopPipelineLocked resumes a partial stop without closing a channel twice.
+// Only ExecuteStop clears runLive, after this reports that every stage finished.
+func (es *GatewayJetStreamSource) stopPipelineLocked(ctx context.Context) bool {
 	es.writer.Draining()
 	if ce := es.ce; ce != nil {
 		// Draining has begun: end the settlement walks now, so none is still retrying (and none can
 		// fire a done) after this returns. What they leave unsettled stays unacked for the next pod.
 		ce.cancel()
 	}
-	close(es.messages)
+	if !es.messagesClosed {
+		close(es.messages)
+		es.messagesClosed = true
+	}
 	if !es.await(ctx, es.workersDone, "decode workers") {
 		return false
 	}
-	close(es.publishes)
+	// A raw payload's publish runs off its worker, so the workers returning does not mean those
+	// have reported: wait for them before the connection they publish on is drained.
+	uplinksDone := make(chan struct{})
+	run := es.uplinkRun
+	go func() {
+		defer close(uplinksDone)
+		run.wait()
+	}()
+	if !es.await(ctx, uplinksDone, "device uplink publishes") {
+		return false
+	}
+	if !es.publishesClosed {
+		close(es.publishes)
+		es.publishesClosed = true
+	}
 	if !es.await(ctx, es.submitterDone, "publish submitter") {
 		return false
 	}
-	closed := make(chan struct{})
-	go func() {
-		defer close(closed)
-		es.writer.Close()
-	}()
-	if !es.await(ctx, closed, "inbound-events publishes") {
+	// Close can return immediately on a repeat call while its first call is still
+	// settling. Retries must wait for that original call before allowing a new run.
+	if es.writerClosed == nil {
+		closed := make(chan struct{})
+		es.writerClosed = closed
+		writer := es.writer
+		go func() {
+			defer close(closed)
+			writer.Close()
+		}()
+	}
+	if !es.await(ctx, es.writerClosed, "inbound-events publishes") {
 		return false
 	}
 	if ce := es.ce; ce != nil {
@@ -549,6 +653,8 @@ func (es *GatewayJetStreamSource) readLoop(ctx context.Context, drained chan str
 // This is the defect that reviews walk straight past, because every one of these
 // returns is individually, obviously correct.
 func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
+	es.inHandle.Store(true)
+	defer es.inHandle.Store(false)
 	// The tenant is the second subject segment. A message whose subject carries no
 	// parseable tenant cannot be published to a tenant-scoped subject, so it is
 	// dropped fail-closed rather than published unscoped.
@@ -627,13 +733,42 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	// and with the same redelivery exemption. A message over its tenant's reading ceiling
 	// is ack-dropped there, as a message over the message ceiling is here.
 	var meterAt time.Time
-	if es.meter != nil {
-		meterAt = es.meter(tenant, msg.AppendTime)
-	}
+	var metering ingestMeter
 	redelivery := msg.NumDelivered > 1
-	if es.allow != nil && !es.allow(es.Id, tenant, meterAt, redelivery, OriginAuthenticated) {
-		ackDrop(msg, "refused at the tenant ingest gate")
-		return
+	settle, shed := es.answers(msg, tenant, es.settler(msg, tenant))
+	if es.lc != nil {
+		// The lag-credited gate (ingestMetering: lagCredit). The composed gate is asked only for the
+		// refusals in front of the metering (the tenant lifecycle, on every delivery); this source then
+		// meters a first delivery itself, because the decision (its route and the lag credit it was judged
+		// against) is carried to the reading stage. A redelivery paid on delivery 1.
+		if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, redelivery, OriginPreMetered) {
+			// The broker PUBACKed this message, so a gateway believes it stored. Tell it the
+			// platform shed it, so it keeps the event and offers it again.
+			es.noticeShed(msg, tenant)
+			ackDrop(msg, "refused at the tenant ingest gate")
+			return
+		}
+		if redelivery {
+			metering = ingestMeter{lc: es.lc, stream: es.lcStream, redelivery: true}
+		} else {
+			var admitted bool
+			if metering, admitted = es.lc.admit(es.Id, tenant, es.lcStream, msg); !admitted {
+				es.noticeShed(msg, tenant)
+				ackDrop(msg, "refused at the tenant ingest gate")
+				return
+			}
+		}
+	} else {
+		if es.meter != nil {
+			meterAt = es.meter(tenant, msg.AppendTime)
+		}
+		if es.allow != nil && !es.allow(es.Id, tenant, meterAt, redelivery, OriginAuthenticated) {
+			// The broker PUBACKed this message, so a gateway believes it stored. Tell it the
+			// platform shed it, so it keeps the event and offers it again.
+			es.noticeShed(msg, tenant)
+			ackDrop(msg, "refused at the tenant ingest gate")
+			return
+		}
 	}
 
 	// A captured message with no stream sequence would publish with NO dedup id
@@ -650,7 +785,10 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	}
 	dedupID := es.dedupID(tenant, msg)
 	var beatRef uint64
-	if es.ce != nil && !es.fromStore && msg.StreamSeq != 0 {
+	// A raw payload is published to the uplink stream, not through the envelope engine that settles
+	// inbound-events rounds, so it carries a plain dedup id.
+	_, isUplink := messaging.ParseDeviceUplinkSubject(msg.Subject)
+	if es.ce != nil && !es.fromStore && msg.StreamSeq != 0 && !isUplink {
 		// Envelope mode: the decode pipeline carries the message's position to the submitter in
 		// the id it already passes through (see positionToken).
 		if key, _, ok := messaging.RoundKeyOf(tenant, msg.StreamSeq, msg.AppendTime); ok {
@@ -666,17 +804,25 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	// reading-shed counters, never on the message stage's rate-limited counter.
 	es.received(es.Id, msg.Value)
 
+	var remote trace.SpanContext
+	if tracing.Enabled() {
+		remote = trace.SpanContextFromContext(msg.TraceContext())
+	}
 	es.messages <- rawMessage{
+		remote:     remote,
 		tenant:     tenant,
 		payload:    msg.Value,
 		device:     deviceFromSubject(msg.Subject),
 		dedupID:    dedupID,
 		receivedAt: msg.AppendTime,
 		meterAt:    meterAt,
+		metering:   metering,
 		redelivery: redelivery,
 		origin:     OriginAuthenticated,
 		assertion:  assertedByCaptureBroker(msg),
-		done:       es.settleAndForget(es.settler(msg, tenant), beatRef),
+		uplink:     isUplink,
+		done:       es.settleAndForget(settle, beatRef),
+		shed:       shed,
 	}
 }
 
@@ -856,6 +1002,9 @@ func tenantFromSubject(subject string) (string, bool) {
 // this parser cannot recognise a shape the stream no longer captures or miss one
 // it does.
 func deviceFromSubject(subject string) string {
+	if device, ok := messaging.ParseDeviceUplinkSubject(subject); ok {
+		return device
+	}
 	_, device, _ := messaging.ParseDeviceEventsSubject(subject)
 	return device
 }

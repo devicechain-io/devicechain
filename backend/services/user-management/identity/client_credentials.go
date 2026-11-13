@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -203,11 +204,22 @@ func (m *Manager) ClientCredentials(ctx context.Context, req ClientCredentialsRe
 		// behaviour and stay unconditional.
 		rc = rp.check(req.Resources[0], 1)
 	}
-	var allow []string
+	var allow, actScopes []string
 	if scope := strings.TrimSpace(req.Scope); scope != "" {
-		var err error
-		if allow, err = scopeAllowance(scope); err != nil {
-			return nil, errInvalidScope(err.Error())
+		var read []string
+		read, actScopes = splitScope(scope)
+		if len(actScopes) > 0 && !m.agentActuation {
+			return nil, errInvalidScope(errActRefused)
+		}
+		if len(read) > 0 {
+			var err error
+			if allow, err = scopeAllowance(strings.Join(read, " ")); err != nil {
+				return nil, errInvalidScope(err.Error())
+			}
+		} else {
+			// Only act:* scopes were asked for: the token carries no read authority, exactly as an
+			// OAuth grant of only act:* scopes does.
+			allow = []string{}
 		}
 	}
 
@@ -252,9 +264,9 @@ func (m *Manager) ClientCredentials(ctx context.Context, req ClientCredentialsRe
 			return nil, errInvalidGrant("tenant access denied")
 		}
 	}
-	authorities := acct.Authorities()
-	if allow != nil {
-		authorities = auth.IntersectAuthorities(authorities, allow)
+	authorities, oerr := m.serviceAccountAuthorities(ctx, acct, scope.IsScoped(), allow, actScopes)
+	if oerr != nil {
+		return nil, oerr
 	}
 
 	m.mu.RLock()
@@ -344,4 +356,61 @@ func (m *Manager) TokenEndpoint() string {
 		return ""
 	}
 	return m.issuerUrl + TokenPath
+}
+
+// serviceAccountAuthorities is what an account's token carries.
+//
+// An ordinary account: its roles' authorities, capped to the read scopes when any were requested.
+// It may not ask for an act:* scope: it holds raw writes, and a proposal authority beside them
+// would mean nothing.
+//
+// 🔴 An AGENT account (the immutable flag) never carries a raw write. Its token holds read
+// authorities only (its roles' reads, capped to the requested read scopes, or to every read scope
+// when none was asked for) plus, when act:* scopes are requested AND admitted (admitActScopes),
+// the proposal authorities DERIVED from its roles' writes. The admission is the same one an OAuth
+// grant passes, read now: the instance flag, the operator's suspension, and the tenant's published
+// policy enabling actuation and listing this account's client id.
+func (m *Manager) serviceAccountAuthorities(ctx context.Context, acct *iam.ServiceAccount, scoped bool, allow, actScopes []string) ([]string, *oauthError) {
+	roleAuthorities := acct.Authorities()
+	if !acct.Agent {
+		if len(actScopes) > 0 {
+			return nil, errInvalidScope(errActRefused)
+		}
+		// The tenant's serviceAccounts.agentFlagRequiredFor, applied to the roles as they are NOW:
+		// a role edited after the account was created can make it hold a listed authority, and
+		// the checks at creation and at access changes cannot see that. A store error, or a
+		// published policy that cannot be read, refuses the mint (see requiredAgentFlags).
+		required, err := requiredAgentFlags(ctx, m.iam, acct.TenantId)
+		if err != nil {
+			log.Error().Err(err).Msg("Could not read the agent policy to check a service account mint; refused.")
+			return nil, errServer(errGrantUnavailable)
+		}
+		for _, r := range required {
+			if slices.Contains(roleAuthorities, r) || slices.Contains(roleAuthorities, string(auth.AuthorityAll)) {
+				return nil, errInvalidGrant("this tenant requires a service account holding " + r + " to be an agent account")
+			}
+		}
+		if allow != nil {
+			return auth.IntersectAuthorities(roleAuthorities, allow), nil
+		}
+		return roleAuthorities, nil
+	}
+	if allow == nil {
+		var err error
+		if allow, err = scopeAllowance(strings.Join(auth.SupportedScopes, " ")); err != nil {
+			return nil, errServer(err.Error())
+		}
+	}
+	out := auth.IntersectAuthorities(roleAuthorities, allow)
+	if len(actScopes) == 0 {
+		return out, nil
+	}
+	if oerr := m.admitActScopes(ctx, acct.TenantId, acct.ClientId, strings.Join(actScopes, " "), false, true); oerr != nil {
+		return nil, oerr
+	}
+	ceiling, err := actCeiling(actScopes)
+	if err != nil {
+		return nil, errInvalidScope(err.Error())
+	}
+	return unionStrings(out, auth.DeriveProposalAuthorities(roleAuthorities, ceiling, scoped)), nil
 }

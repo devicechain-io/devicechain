@@ -103,6 +103,19 @@ type entity struct {
 	// variables at all, because declaring a $token nothing uses is a validation error.
 	ReadAll bool
 
+	// Singleton marks a read that takes NO argument and returns ONE nullable object: the
+	// tenant's own configuration record, of which there is at most one per tenant
+	// (semanticContext). It renders as `read{…}` like ReadAll, and absence is a null as
+	// for Single. The row has no token, so the entity supplies its receipt key through
+	// TokenFrom.
+	Singleton bool
+
+	// AbsentIfNull names a selected field whose null means the row is ABSENT, for a
+	// Singleton read that never answers null itself: semanticContext serves an empty
+	// context, with a null updatedAt, to a tenant that has none stored. Without it a lost
+	// row would read as a changed one (MISMATCH) rather than as missing.
+	AbsentIfNull string
+
 	// ReadArg overrides the argument name of a Single read. Empty means "token";
 	// deviceClaim is keyed by `deviceToken`.
 	ReadArg string
@@ -228,8 +241,12 @@ func (e entity) createDoc() string {
 			decl = append(decl, "$"+p.Name+":"+p.Type)
 			pass = append(pass, p.Name+":$"+p.Name)
 		}
+		selection := e.Fields
+		if e.Wrap != "" {
+			selection = e.Wrap + "{" + e.Fields + "} " + e.Reject
+		}
 		return "mutation(" + strings.Join(decl, ",") + "){" + e.Mutation + "(" +
-			strings.Join(pass, ",") + "){" + e.Fields + "}}"
+			strings.Join(pass, ",") + "){" + selection + "}}"
 	}
 	selection := e.Fields
 	if e.Wrap != "" {
@@ -256,7 +273,7 @@ func (e entity) readDoc() string {
 		// to detect a changed row.
 		return "query($c:" + e.ReadInput + "){" + e.Read + "(criteria:$c){results{" + e.Fields + "}}}"
 	}
-	if e.ReadAll {
+	if e.ReadAll || e.Singleton {
 		return "query{" + e.Read + "{" + e.Fields + "}}"
 	}
 	if e.Publish {
@@ -432,6 +449,39 @@ var entities = []entity{
 		},
 	},
 
+	{
+		// The tenant's semantic context, so the semantic_contexts table has a row the drill
+		// can watch across an upgrade. One per tenant and addressed by no token, so it is
+		// read back with the argument-less semanticContext (Singleton) and keyed on the
+		// receipt by name. Selecting packVersions asserts the versions recorded when the
+		// context was set survive an upgrade that ships newer packs: they are what was
+		// validated against, not what the running build ships.
+		//
+		// 🔴 semanticContext NEVER ANSWERS NULL: a tenant with no stored context reads as an
+		// empty one whose updatedAt is null. So updatedAt is selected and AbsentIfNull judges
+		// presence by it; a lost row is reported missing, not compared as a changed one.
+		//
+		// A SKIPPABLE LEAF: it carries the Requires of the semantic layer, so a baseline
+		// that predates it skips the row, and nothing records its token.
+		Name:         "semantic-context",
+		Area:         "device-management",
+		Mutation:     "setSemanticContext",
+		Input:        "SemanticContextRequest!",
+		Read:         "semanticContext",
+		Singleton:    true,
+		Requires:     []string{"SemanticContextRequest.enabledPacks"},
+		Fields:       "enabledPacks customPrefixes{prefix namespace} packVersions{pack version} updatedAt",
+		AbsentIfNull: "updatedAt",
+		TokenFrom:    func(s *state) string { return s.tok("semantic-context") },
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				// Sorted, as the context serves them.
+				"enabledPacks": []any{"BRICK", "SDM_STREETLIGHTING"},
+				"customPrefixes": []any{map[string]any{
+					"prefix": "apiprobe", "namespace": "https://apiprobe.example/ontology#"}},
+			}}
+		},
+	},
 	{
 		// A weekly maintenance window, so the maintenance_windows table has a row the drill
 		// can watch across an upgrade (the table sweep fails on a tenant-scoped table
@@ -866,6 +916,8 @@ var entities = []entity{
 		Read:     "entityGroupsByToken",
 		Fields: "token name description imageUrl icon backgroundColor foregroundColor borderColor " +
 			"metadata memberType membershipMode selector activeVersion",
+		// A campaign targets this group, so its token is recorded for that row.
+		Record: record("entity-group"),
 		Vars: func(s *state) map[string]any {
 			return map[string]any{"req": map[string]any{
 				"token":           s.tok("entity-group"),
@@ -1247,6 +1299,37 @@ var entities = []entity{
 			}}
 		},
 	},
+	{
+		// Depends on: entity-group (a campaign targets one).
+		//
+		// 🔑 CREATED SWITCHED OFF. An enabled campaign plans cycles and fires commands at the
+		// group's devices; a drill row must be an inert stored record, so enabled is false and
+		// the trigger is a once-a-day CRON nothing here waits for. What must survive an upgrade
+		// is the stored definition: trigger, steps, target and bounds. plannedThrough and
+		// lastError are operational and not selected.
+		Name:     "campaign",
+		Area:     "command-delivery",
+		Mutation: "createCampaign",
+		Input:    "CampaignCreateRequest!",
+		Read:     "campaign",
+		Single:   true,
+		Wrap:     "campaign",
+		Reject:   "rejection{code reason}",
+		Fields: "token name enabled trigger targetKind groupToken maxLatenessSeconds expiresInSeconds " +
+			"steps{type name payload delaySeconds}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":              s.tok("campaign"),
+				"name":               "apiprobe campaign",
+				"trigger":            `{"kind":"CRON","zone":"Europe/Berlin","cron":"30 3 * * *"}`,
+				"steps":              []any{map[string]any{"type": "COMMAND", "name": probeCommandKey, "payload": `{"delaySeconds":15}`, "delaySeconds": 60}},
+				"groupToken":         s.tokens["entity-group"],
+				"maxLatenessSeconds": 600,
+				"expiresInSeconds":   1800,
+				"enabled":            false,
+			}}
+		},
+	},
 
 	// ---- dashboard-management ---------------------------------------------
 	{
@@ -1503,6 +1586,30 @@ var entities = []entity{
 	},
 }
 
+// probeAgentPolicy is the agent policy the probe publishes: actuation disabled and every alarm
+// action refused, which is a tightening and so needs no second factor. A fixed literal, so the
+// stored canonical document is a constant verify can compare.
+const probeAgentPolicy = `{"actuation":"disabled","tools":{"alarms":{"ack":"refuse","clear":"refuse"}}}`
+
+// publishProbeAgentPolicy publishes the probe's draft agent policy, which writes the version row.
+func publishProbeAgentPolicy(ctx context.Context, c *connection, sess *userclient.TenantSession, _ *state) error {
+	var out struct {
+		PublishAgentPolicy struct {
+			Published *struct {
+				Version int `json:"version"`
+			} `json:"published"`
+		} `json:"publishAgentPolicy"`
+	}
+	if err := sess.Query(ctx, c.areaURL("user-management"), `mutation{publishAgentPolicy{published{version}}}`,
+		map[string]any{}, &out); err != nil {
+		return fmt.Errorf("publish the probe agent policy: %w", err)
+	}
+	if out.PublishAgentPolicy.Published == nil || out.PublishAgentPolicy.Published.Version < 1 {
+		return fmt.Errorf("the probe agent policy published no version")
+	}
+	return nil
+}
+
 // probeInviteeEmail is the person member-invitation invites. Not derived from the tenant:
 // the read-back criteria are a literal (verify holds only the receipt), and an identity
 // is instance-global anyway, so every probe tenant inviting the same person is the shape
@@ -1627,13 +1734,13 @@ func otherWrites() int {
 	return len(seen)
 }
 
-const tenantCreateMutations = 33
+const tenantCreateMutations = 34
 
 // tenantPublishMutations is the same claim for publishes, measured the same way by
 // TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because
 // they are separate claims: a table can cover every create and no publish, which is
 // exactly the state this constant was added to end.
-const tenantPublishMutations = 5
+const tenantPublishMutations = 6
 
 // printCoverage prints the tool's coverage CLAIM. Given a baseline it also
 // prints what a seed against that release would SKIP — so the drill's real

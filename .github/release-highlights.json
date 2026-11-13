@@ -58,15 +58,15 @@
     "site is a separate repository and nothing here reads its prose. Answering \"no site",
     "impact\" is a fine answer; not asking is not."
   ],
-  "version": "v1.2.0",
-  "theme": "payload decoders a tenant writes, and revocation that ends sessions",
+  "version": "v1.5.0",
+  "theme": "reviewed automation changes and sign-in-bound agent approvals",
   "breaking": false,
   "highlights": [
-    "Upgrade in place from v1.1.0 with `dcctl install`, then one `dcctl upgrade` per instance; eight appended migrations add tables, nullable columns and storage parameters, and nothing is removed. Two things to check first: a v1.1 pod that restarts in the middle of the roll waits for its v1.2 replacement, so keep the roll moving; and create Slack, Teams or PagerDuty channels only once the rollout has finished.",
-    "Tenants write their own payload decoders: rules, written as expressions, that turn a LoRaWAN or other binary frame, a JSON body or a network server's decoded object into measurements. They are authored and tested in the console, gated at publish by their test vectors, and run live on every inbound integration uplink. Each decoder is held to a failure budget, and its health and recent failing uplinks are shown beside it.",
-    "X.509 certificates can be revoked: upload a certificate authority's revocation list, or revoke a certificate by hand, and the open sessions of the affected devices are ended. The C# SDK and the Unity package can connect a device with a client certificate.",
-    "Alarms reach Slack, Microsoft Teams and PagerDuty as native notification channels, and dashboards gain a status grid, a state timeline and SCADA symbols.",
-    "`dcctl bootstrap --size perf-12k` applies the sizing measured at 12,000 events a second. Detection uses far less memory: an absence rule keeps one timer per device instead of one per event, and the duplicate-event guard is about 40% smaller at 20,000 events a second.",
-    "Tokens bound to a resource the instance does not serve are counted and logged, not yet refused. The HTTP event endpoint answers 500 instead of 202 for an event it could not build."
+    "Upgrade in place from v1.4.0 with the v1.5.0 dcctl: install with your cluster settings, then upgrade each instance. Correct newly refused settings first, approve waiting agent proposals again, and enable new opt-ins and review protection only after the rollout.",
+    "Automation change review (Preview) compares rule changes against recorded incident and normal windows; protected profiles require an approved review, with audited break-glass actions and database guards.",
+    "Agent actions (Preview) bind approvals to an open sign-in, add MCP proposal tools and in-session step-up, and check authorization at the commit point with a local kill fence and effect outbox.",
+    "dcctl is forward-only with no downgrade override, and remembers MQTT device-uplink and relational WAL settings across later runs.",
+    "Configuration fails closed on invalid values; GraphQL inputs, subscriptions, dashboards and notification rule sets have explicit bounds. Partial updates preserve concurrent edits.",
+    "Opt-in OpenTelemetry tracing follows events across services; incoming trace context is linked to a new local root rather than adopted."
   ]
 }

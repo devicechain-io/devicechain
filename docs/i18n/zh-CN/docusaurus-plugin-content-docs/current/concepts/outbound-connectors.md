@@ -32,6 +32,8 @@ title: 出站连接器
 
 认证可选，使用**密钥句柄**。令牌保存在**密钥存储**中，发送时作为 `Authorization: Bearer <token>` 标头提供。标头名称和认证方案不可配置，因此这种方式不能用于要求自定义 API 密钥标头的接收方。如果动作指定的句柄下没有密钥，调用绝不会在缺少凭据的情况下发出：它会以 `invalid` 结果写入一次死信，不再重试。没有机制重放它，因此该次触发的调用不会执行；请修正动作的密钥句柄，让后续触发正常认证。
 
+`httpCall` 也可以**签名**，让接收方验证请求确实来自 DeviceChain 且未被篡改。在动作的 `signingSecretRef` 中指定签名密钥，调用就会携带 Standard Webhooks 规范的 `webhook-id`、`webhook-timestamp` 和 `webhook-signature` 请求头。除非你设置，否则默认关闭。参见[为出站 Webhook 签名](../guides/signed-webhooks.md)。
+
 webhook 投递通过以下方式加固：
 
 - 拒绝跟随重定向，外部端点不能通过 `3xx` 将请求转到其他位置。
@@ -47,6 +49,8 @@ webhook 投递通过以下方式加固：
 一个通用 `publish` 动作覆盖所有消息代理和队列类型；**连接器类型**选择传输方式。目前支持 `mqtt`、`kafka`、`aws_sns` 和 `aws_sqs`。
 
 `gcp_pubsub` 是可识别的类型，但本版本没有投递客户端，因此创建、更新为该类型或发布该类型的连接器都会被拒绝，错误代码为 `UNSUPPORTED`。控制台不提供该类型。早期版本已存储的该类型连接器，如果有 `publish` 指向它，仍会因不受支持而进入死信，不会被无声丢弃。
+
+`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码仅适用于连接器更新。`CONFLICT` 仍表示唯一值冲突；其他操作的错误不变。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
 
 ## 连接器是支持版本管理的资源 {#connectors-are-versioned-resources}
 
@@ -79,6 +83,8 @@ webhook 投递通过以下方式加固：
 - **不会读取服务自身环境。** 它不使用代理变量（`HTTPS_PROXY`、`ALL_PROXY` 等）、`AWS_*` 变量、AWS 配置文件或 Pod 云身份。连接器只到达其指定目标，使用自身携带的凭据。
 
 要允许连接器访问私有目标，运维人员在 `instance.config.infrastructure.egress.allowedDestinations` 下，为每个地址添加独立的 `/32`。私有目标包括集群内消息代理、**Amazon MSK**、**Amazon MQ**，以及通过**启用私有 DNS 的接口 VPC 端点**访问的 SNS/SQS；后者会使默认区域名称也解析为私有地址。接口端点在每个可用区都有一个地址，每个地址都需要自己的条目。允许规则适用于**所有租户、所有连接器和 webhook**，而不仅是添加它时针对的那个对象。
+
+在**本地开发集群**（kind、minikube、k3d、Docker Desktop 或 Rancher Desktop）上，`dcctl bootstrap` 和 `dcctl upgrade` 支持 `--dev-allow-egress <地址或 CIDR>`（可重复，也可用逗号分隔），让 webhook 或连接器访问你本机或局域网上的服务。它仅用于开发：dcctl 在任何其他集群上都会拒绝它；它会记录在实例上，使后续升级保留该设置；`dcctl instances` 会列出它（`DEV EGRESS ALLOWED`）；每个使用它的服务在启动时都会记录一条警告。请只写你需要的单个地址或较窄的范围。**无论你列出什么，云元数据地址、环回、链路本地和组播范围始终保持阻止**，与其重叠的条目会被拒绝。只接受地址和 CIDR，不接受名称，因为检查针对的是解析后的地址。`dcctl upgrade --dev-allow-egress none` 可将其移除。真实部署请使用上面的 `allowedDestinations`。 仅限本地集群的检查读取的是 kube 上下文名称，因此它只是防止失误的护栏，而不是强制手段。`10.0.0.0/8` 或 `172.16.0.0/12` 这类宽泛条目还会向所有租户开放集群自身的 Pod、Service 和节点网段，请列出具体主机。
 
 `blocked` 结果只向租户说明目标解析到被拒绝地址，与 webhook 拒绝提供的信息相同。被拒绝地址本身记录在死信中，运维人员可读，租户不可读。
 

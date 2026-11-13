@@ -135,3 +135,9 @@ Sparkplug B 没有定义固件更新，因此 DeviceChain 的[空中（OTA）更
 ## 运维 {#running-it}
 
 由于消息代理连接由单个副本持有，在生产环境依赖 Sparkplug 接入前，应了解几个运维特性：切换的代价、设备为什么可能一直显示在线，以及丢弃计数器说明什么。[运行边缘服务](../deployment/edge-services.md)介绍了这些内容。
+
+:::tip 动手试试
+
+**约 30 分钟，跑通你的第一台设备.** 在本地安装 DeviceChain，连接一台模拟设备，并查看它的遥测数据如何到达。 [开始快速入门 →](../quickstart/first-device.md)
+
+:::

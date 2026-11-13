@@ -50,6 +50,7 @@ func (r *ServiceAccountResolver) Name() *string        { return util.NullStr(r.M
 func (r *ServiceAccountResolver) Description() *string { return util.NullStr(r.M.Description) }
 func (r *ServiceAccountResolver) ClientId() string     { return r.M.ClientId }
 func (r *ServiceAccountResolver) Enabled() bool        { return r.M.Enabled }
+func (r *ServiceAccountResolver) Agent() bool          { return r.M.Agent }
 func (r *ServiceAccountResolver) Roles() []*TenantRoleResolver {
 	return tenantRoles(r.M.Roles)
 }
@@ -164,6 +165,7 @@ type serviceAccountCreateInput struct {
 	RoleTokens          []string
 	Scope               *[]scopeAnchorInput
 	SecretExpiresInDays *int32
+	Agent               *bool
 }
 
 // CreateServiceAccount creates a service account with its first secret (requires member:write).
@@ -186,6 +188,7 @@ func (r *SchemaResolver) CreateServiceAccount(ctx context.Context, args struct {
 	in := admin.ServiceAccountInput{
 		Token: args.Request.Token, RoleTokens: args.Request.RoleTokens, Scope: scope,
 		ExpiresInDays: args.Request.SecretExpiresInDays,
+		Agent:         args.Request.Agent != nil && *args.Request.Agent,
 	}
 	if args.Request.Name != nil {
 		in.Name = *args.Request.Name

@@ -135,6 +135,8 @@ export function MetricDefinitionForm({
           descriptor: null,
           metadata: null,
           expression: calculated ? expression.trim() : null,
+          semanticProperty: null,
+          semanticPointClass: null,
         };
         await createMetricDefinition(created);
         onDone(t('deviceProfiles:defMetricCreatedToast', { key: created.metricKey }));
@@ -273,6 +275,7 @@ export function CommandDefinitionForm({
         const created: Required<CommandDefinitionCreateRequest> = {
           token: token.trim(),
           ...edited,
+          encoder: null,
           metadata: null,
         };
         await createCommandDefinition(created);

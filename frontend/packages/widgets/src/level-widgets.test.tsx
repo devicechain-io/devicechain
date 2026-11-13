@@ -424,7 +424,7 @@ describe('status-light', () => {
     expect(lit()).toBe('false');
     expect(q('[data-lamp-caption]')?.textContent).toBe('Off');
     // A dark lamp is hollow: no fill, no glow.
-    expect(styleOf('[data-lamp]')).toContain('background: transparent');
+    expect(styleOf('[data-lamp]')).toMatch(/background(-color)?: (transparent|none)/);
     expect(styleOf('[data-lamp]')).toContain('box-shadow: none');
   });
 
@@ -482,7 +482,7 @@ describe('status-light', () => {
     expect(lit()).toBeUndefined();
     expect(q('[data-lamp-caption]')?.textContent).toBe('No data');
     expect(screen.queryByText('Off')).toBeNull();
-    expect(styleOf('[data-lamp]')).toContain('background: transparent');
+    expect(styleOf('[data-lamp]')).toMatch(/background(-color)?: (transparent|none)/);
   });
 });
 

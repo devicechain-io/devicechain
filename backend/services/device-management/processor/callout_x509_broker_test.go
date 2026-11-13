@@ -76,6 +76,8 @@ type certOpts struct {
 	notAfter  time.Time
 	notBefore time.Time
 	server    bool
+	// ocsp is the certificate's Authority Information Access OCSP responder URLs.
+	ocsp []string
 }
 
 var x509TestSerial atomic.Int64
@@ -96,6 +98,7 @@ func newTestCert(t testing.TB, parent *testCert, o certOpts) *testCert {
 		Subject:      pkix.Name{CommonName: o.cn},
 		NotBefore:    o.notBefore,
 		NotAfter:     o.notAfter,
+		OCSPServer:   o.ocsp,
 	}
 	switch {
 	case o.ca:
@@ -288,7 +291,7 @@ func newX509FixtureWith(t *testing.T, o fixtureOpts) *x509Fixture {
 	if o.newApi != nil {
 		api = o.newApi(t, srv)
 	} else {
-		tables := []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{},
+		tables := []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{},
 			&model.DeviceProfileActivation{}, &model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
 			&model.DetectionRuleScopeRef{}, &model.ProvisioningProfile{}, &model.DeviceCredential{},
 			&model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.DeviceTrustAnchor{}, &model.DeviceRevocationIssuer{},

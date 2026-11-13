@@ -28,6 +28,11 @@ type AssetTypeCreateRequest struct {
 	// validated at declaration time and only becomes binding on assets once
 	// PublishAssetType freezes it into a version.
 	PropertySchema *string
+	// SemanticTypes are the classes an entity of this type is, as CURIEs or full IRIs
+	// (for example sdm-streetlighting:Streetlight). Each must be a CLASS of a vocabulary pack
+	// the tenant has enabled, or of a custom prefix it declared; at most MaxSemanticTypes.
+	// Stored as expanded IRIs. Omitted binds nothing.
+	SemanticTypes *[]string
 }
 
 // AssetTypeUpdateRequest is the PARTIAL-update counterpart of
@@ -65,6 +70,9 @@ type AssetTypeUpdateRequest struct {
 	// replaces it wholesale. Editing the draft changes nothing an asset is validated
 	// against — that is the ACTIVE PUBLISHED version — until the type is published.
 	PropertySchema dcgraphql.OptionalString
+	// SemanticTypes replaces the bound classes: omitted leaves them, null (or an empty list)
+	// clears them, a list sets them. See the create request for what a term must be.
+	SemanticTypes dcgraphql.OptionalStringList
 }
 
 // Represents an asset type.
@@ -96,6 +104,11 @@ type AssetType struct {
 	// all. Publish advances this pointer; rollback flips it. Nothing else writes it
 	// — every other update path must Omit it.
 	ActiveVersion sql.NullInt32
+
+	// SemanticTypes are the classes this type is (the draft: a published version freezes its own copy, and a rollback restores it), as EXPANDED IRIs (SetSemanticContext's
+	// vocabulary packs and custom prefixes decide what is accepted). NULL binds nothing, which
+	// is the true state of every type that predates the layer.
+	SemanticTypes rdb.Anchors `gorm:"type:text[]"`
 
 	Assets []Asset
 }
@@ -164,6 +177,10 @@ type Asset struct {
 
 	AssetTypeId uint
 	AssetType   *AssetType
+
+	// InstalledPosition is where the asset was installed. It is written only by
+	// SetInstalledPosition / ClearInstalledPosition (see the type).
+	InstalledPosition
 
 	// Properties is the asset's property document (ADR-072) — a JSON object whose
 	// keys are the property names its type's published schema declares. It is to

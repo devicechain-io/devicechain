@@ -1,0 +1,267 @@
+{
+  "docs": [
+    "intro",
+    "quickstart/first-device",
+    "quickstart/feature-tour",
+    "why-devicechain",
+    {
+      "type": "category",
+      "label": "Concepts",
+      "link": {
+        "type": "generated-index",
+        "description": "How DeviceChain is designed — the foundations it is built on, how devices connect to it, how their events turn into automated action, how all of it is visualized, and the platform services behind a tenant."
+      },
+      "items": [
+        {
+          "type": "category",
+          "label": "Foundations",
+          "collapsed": false,
+          "items": [
+            "concepts/architecture-at-a-glance",
+            "concepts/architecture",
+            "concepts/domain-model",
+            "concepts/multi-tenancy"
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Device Connectivity",
+          "collapsed": false,
+          "items": [
+            "concepts/sparkplug",
+            "concepts/lwm2m",
+            "concepts/device-certificates",
+            "concepts/device-presence",
+            "concepts/commands",
+            "concepts/over-the-air-updates"
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Automation",
+          "collapsed": false,
+          "items": [
+            "concepts/event-processing",
+            "concepts/geofencing",
+            "concepts/ai-authoring",
+            "concepts/outbound-connectors"
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Visualization",
+          "collapsed": false,
+          "items": [
+            "concepts/dashboards",
+            "concepts/basemaps",
+            "concepts/white-labeling"
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Platform Services",
+          "collapsed": false,
+          "items": [
+            "concepts/governance",
+            "concepts/tenant-tiers",
+            "concepts/single-sign-on",
+            "concepts/system-settings",
+            "concepts/security-model",
+            "concepts/object-storage",
+            "concepts/mcp"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "category",
+      "label": "User guide",
+      "link": {
+        "type": "doc",
+        "id": "user-guide/index"
+      },
+      "items": [
+        "user-guide/signing-in",
+        "user-guide/console-at-a-glance",
+        "user-guide/dashboards",
+        "user-guide/viewing-dashboards-in-dash",
+        "user-guide/alarms",
+        "user-guide/notification-policies",
+        "user-guide/devices",
+        "user-guide/device-types-and-profiles",
+        "user-guide/calculated-metrics",
+        "user-guide/detection-rules",
+        "user-guide/commanding-a-fleet",
+        "user-guide/updates",
+        "user-guide/provisioning-and-trust-anchors",
+        "user-guide/inbound-integrations",
+        "user-guide/connectors",
+        "user-guide/assets-customers-areas",
+        "user-guide/geofences",
+        "user-guide/groups-facets-browse",
+        "user-guide/members-roles-and-customer-users",
+        "user-guide/service-accounts",
+        "user-guide/audit",
+        "user-guide/tenant-settings",
+        "user-guide/administering-the-instance"
+      ]
+    },
+    {
+      "type": "category",
+      "label": "Guides",
+      "link": {
+        "type": "generated-index",
+        "description": "Task-oriented how-to guides for the API and the device side: connecting devices, commanding and updating them, alerting, signing in, data access and extending the console. To do the same work in the web console, see the User guide."
+      },
+      "items": [
+        {
+          "type": "category",
+          "label": "Connect devices",
+          "collapsed": false,
+          "items": [
+            "guides/connecting-a-device",
+            "guides/device-credentials",
+            "guides/device-x509",
+            "guides/device-self-registration",
+            "guides/importing-devices",
+            "guides/migrating-from-another-platform",
+            "guides/inbound-integrations",
+            "guides/payload-decoders",
+            "guides/lorawan-uplink-to-alarm",
+            "guides/why-isnt-my-data-showing-up",
+            "guides/managing-assignments"
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Command and update",
+          "collapsed": false,
+          "items": [
+            "guides/sending-commands",
+            "guides/commanding-a-fleet",
+            "guides/maintenance-windows",
+            "guides/signing-updates",
+            "guides/building-an-updatable-device"
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Alerts",
+          "collapsed": false,
+          "items": [
+            "guides/notification-channels"
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Secure sign-in",
+          "collapsed": false,
+          "items": [
+            "guides/configuring-sso",
+            "guides/two-factor-authentication"
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Data access",
+          "collapsed": false,
+          "items": [
+            "guides/sql-and-bi-access"
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Extend",
+          "collapsed": false,
+          "items": [
+            "guides/writing-a-custom-widget",
+            "guides/adding-widget-packages",
+            "guides/widget-versions-and-compatibility"
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Contribute",
+          "collapsed": false,
+          "items": [
+            "guides/local-development"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "category",
+      "label": "Reference",
+      "link": {
+        "type": "generated-index",
+        "description": "Reference material — the GraphQL API and configuration."
+      },
+      "items": [
+        {
+          "type": "autogenerated",
+          "dirName": "reference"
+        },
+        {
+          "type": "link",
+          "label": "GraphQL schema reference",
+          "href": "/reference/graphql/"
+        }
+      ]
+    },
+    {
+      "type": "category",
+      "label": "Deployment",
+      "link": {
+        "type": "generated-index",
+        "description": "Operating DeviceChain — the Kubernetes operator and infrastructure provisioning."
+      },
+      "items": [
+        {
+          "type": "category",
+          "label": "Install",
+          "collapsed": false,
+          "items": [
+            "deployment/bootstrap",
+            "deployment/kubernetes-operator",
+            "deployment/cluster-lock",
+            "deployment/ingress-cutover",
+            "deployment/connecting-from-outside"
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Operate",
+          "collapsed": false,
+          "items": [
+            "deployment/observability",
+            "deployment/grafana-boards",
+            "deployment/metrics-reference",
+            "deployment/tuning-an-instance",
+            "deployment/sizing",
+            "deployment/detection-engine",
+            "deployment/edge-services",
+            "deployment/device-certificates",
+            "deployment/disaster-recovery",
+            "deployment/tenant-deletion"
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Releases and upgrades",
+          "collapsed": false,
+          "items": [
+            "deployment/releases-and-upgrades",
+            "deployment/versioning-policy",
+            "deployment/verifying-releases",
+            {
+              "type": "link",
+              "label": "All releases on GitHub",
+              "href": "https://github.com/devicechain-io/devicechain/releases"
+            }
+          ]
+        }
+      ]
+    },
+    "getting-help"
+  ]
+}

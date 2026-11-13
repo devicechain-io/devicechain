@@ -4,6 +4,42 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/** (Preview: may change in a minor release.) The kind of action an agent proposal asks for. */
+export type AgentProposalKind =
+  /** (Preview: may change in a minor release.) Acknowledge alarms. */
+  | 'ALARM_ACK'
+  /** (Preview: may change in a minor release.) Clear alarms. */
+  | 'ALARM_CLEAR';
+
+/** (Preview: may change in a minor release.) Filters for listing agent proposals. */
+export type AgentProposalSearchCriteria = {
+  /** (Preview: may change in a minor release.) Only proposals of this kind. */
+  kind?: AgentProposalKind | null | undefined;
+  /** (Preview: may change in a minor release.) The page to return, starting at 1. */
+  pageNumber: number;
+  /** (Preview: may change in a minor release.) How many proposals a page holds. */
+  pageSize: number;
+  /** (Preview: may change in a minor release.) Only proposals in this state. */
+  state?: AgentProposalState | null | undefined;
+};
+
+/** (Preview: may change in a minor release.) Where an agent proposal is in its life. */
+export type AgentProposalState =
+  /** (Preview: may change in a minor release.) Withdrawn by the agent that proposed it. */
+  | 'CANCELLED'
+  /** (Preview: may change in a minor release.) Approved and carried out. */
+  | 'EXECUTED'
+  /** (Preview: may change in a minor release.) Nobody approved it before it expired. */
+  | 'EXPIRED'
+  /** (Preview: may change in a minor release.) Ended by an agent-actions switch being turned off. */
+  | 'KILLED'
+  /** (Preview: may change in a minor release.) Waiting for people to approve it. The only state that changes. */
+  | 'PROPOSED'
+  /** (Preview: may change in a minor release.) The tenant's agent policy, or a check made when a person approved it, refused it. The reasons say why. */
+  | 'REFUSED'
+  /** (Preview: may change in a minor release.) A person rejected it. */
+  | 'REJECTED';
+
 /**
  * An anchor to filter alarms by: the alarms of one customer, area or asset, as stamped when each
  * alarm cycle began. An alarm stays under the area its device was in when the alarm was raised,
@@ -54,6 +90,8 @@ export type AlarmSearchCriteria = {
 
 export type AreaCreateRequest = {
   areaTypeToken: string;
+  /** The token of the geofence that bounds the area. It must name an existing fence. */
+  boundaryFenceToken?: string | null | undefined;
   description?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
@@ -75,6 +113,14 @@ export type AreaTypeCreateRequest = {
   imageUrl?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  /**
+   * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+   * or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+   * enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+   * enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+   * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+   */
+  semanticTypes?: Array<string> | null | undefined;
   token: string;
 };
 
@@ -92,10 +138,20 @@ export type AreaTypeUpdateRequest = {
   imageUrl?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  /**
+   * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+   * them alone. Validated as on create; only a request that names this field is validated.
+   */
+  semanticTypes?: Array<string> | null | undefined;
 };
 
 export type AreaUpdateRequest = {
   areaTypeToken?: string | null | undefined;
+  /**
+   * Links the area to the geofence that bounds it: omit to keep the link, send null to remove
+   * it, send a token to set it. The token must name an existing fence.
+   */
+  boundaryFenceToken?: string | null | undefined;
   description?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
@@ -126,6 +182,14 @@ export type AssetTypeCreateRequest = {
   metadata?: string | null | undefined;
   name?: string | null | undefined;
   propertySchema?: string | null | undefined;
+  /**
+   * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+   * or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+   * enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+   * enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+   * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+   */
+  semanticTypes?: Array<string> | null | undefined;
   token: string;
 };
 
@@ -144,6 +208,11 @@ export type AssetTypeUpdateRequest = {
   metadata?: string | null | undefined;
   name?: string | null | undefined;
   propertySchema?: string | null | undefined;
+  /**
+   * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+   * them alone. Validated as on create; only a request that names this field is validated.
+   */
+  semanticTypes?: Array<string> | null | undefined;
 };
 
 export type AssetUpdateRequest = {
@@ -155,6 +224,7 @@ export type AssetUpdateRequest = {
 };
 
 export type AuditEventSearchCriteria = {
+  /** Only entries whose actor contains this text. The match ignores case. At most 256 bytes; longer input is refused with LIMIT_EXCEEDED. */
   actor?: string | null | undefined;
   category?: string | null | undefined;
   endTime?: string | null | undefined;
@@ -165,6 +235,188 @@ export type AuditEventSearchCriteria = {
   startTime?: string | null | undefined;
   tableName?: string | null | undefined;
 };
+
+/** (Preview: may change in a minor release.) An activation change made outside review. */
+export type AutomationReviewBreakGlassAction =
+  /** (Preview: may change in a minor release.) Moving a device out of a protected type. */
+  | 'MOVE_DEVICE'
+  /** (Preview: may change in a minor release.) Changing the profile bound to a type. */
+  | 'REPOINT_TYPE'
+  /** (Preview: may change in a minor release.) Changing the active profile version. */
+  | 'ROLLBACK';
+
+/** (Preview: may change in a minor release.) Automation review ChangeKind vocabulary. */
+export type AutomationReviewChangeKind =
+  /** (Preview: may change in a minor release.) An intent exists only in the draft. */
+  | 'ADDED'
+  /** (Preview: may change in a minor release.) Content changed. */
+  | 'CONTENT_CHANGED'
+  /** (Preview: may change in a minor release.) An intent exists only in the baseline. */
+  | 'REMOVED'
+  /** (Preview: may change in a minor release.) A paired intent occurs at a different time. */
+  | 'SHIFTED';
+
+/** (Preview: may change in a minor release.) AutomationReviewExpectationInputValue parameters. */
+export type AutomationReviewExpectationInputValue = {
+  /** (Preview: may change in a minor release.) One rule-test expectation as JSON, using the event-processing expectation vocabulary. */
+  expect: string;
+  /** (Preview: may change in a minor release.) The expectation name. */
+  name?: string | null | undefined;
+  /** (Preview: may change in a minor release.) The window to which this expectation applies. */
+  window: AutomationReviewWindowRole;
+};
+
+/** (Preview: may change in a minor release.) Automation review Kind vocabulary. */
+export type AutomationReviewKind =
+  /** (Preview: may change in a minor release.) No automation change. */
+  | 'NO_AUTOMATION_CHANGE'
+  /** (Preview: may change in a minor release.) Rule change. */
+  | 'RULE_CHANGE'
+  /** (Preview: may change in a minor release.) Unreviewable. */
+  | 'UNREVIEWABLE';
+
+/** (Preview: may change in a minor release.) Automation review Outcome vocabulary. */
+export type AutomationReviewOutcome =
+  /** (Preview: may change in a minor release.) Failed. */
+  | 'FAILED'
+  /** (Preview: may change in a minor release.) Inconclusive. */
+  | 'INCONCLUSIVE'
+  /** (Preview: may change in a minor release.) No automation change. */
+  | 'NO_AUTOMATION_CHANGE'
+  /** (Preview: may change in a minor release.) Passed. */
+  | 'PASSED';
+
+/** (Preview: may change in a minor release.) The lifecycle of a proposed policy change. */
+export type AutomationReviewPolicyChangeState =
+  /** (Preview: may change in a minor release.) The proposal has taken effect. */
+  | 'APPLIED'
+  /** (Preview: may change in a minor release.) The proposal was cancelled. */
+  | 'CANCELLED'
+  /** (Preview: may change in a minor release.) Waiting for approval or a permitted delay. */
+  | 'PENDING'
+  /** (Preview: may change in a minor release.) A later policy change replaced this proposal. */
+  | 'SUPERSEDED';
+
+/** (Preview: may change in a minor release.) Requested automation protection settings; omitted optional fields use their defaults. */
+export type AutomationReviewPolicyInput = {
+  /** (Preview: may change in a minor release.) Whether creators and authors may approve; defaults to false. */
+  allowSelfApproval?: boolean | null | undefined;
+  /** (Preview: may change in a minor release.) Approval lifetime in seconds; defaults to 86400. */
+  approvalTtlSeconds?: number | null | undefined;
+  /** (Preview: may change in a minor release.) Whether publishing requires review. */
+  required: boolean;
+  /** (Preview: may change in a minor release.) Required approvals; defaults to 1. */
+  requiredApprovals?: number | null | undefined;
+  /** (Preview: may change in a minor release.) Maximum second-factor age in seconds; defaults to 900. */
+  stepUpMaxAgeSeconds?: number | null | undefined;
+};
+
+/** (Preview: may change in a minor release.) Automation review ProfileChangeArea vocabulary. */
+export type AutomationReviewProfileChangeArea =
+  /** (Preview: may change in a minor release.) Command. */
+  | 'COMMAND'
+  /** (Preview: may change in a minor release.) Configuration. */
+  | 'CONFIGURATION'
+  /** (Preview: may change in a minor release.) Decoder. */
+  | 'DECODER'
+  /** (Preview: may change in a minor release.) Location. */
+  | 'LOCATION'
+  /** (Preview: may change in a minor release.) Metric. */
+  | 'METRIC'
+  /** (Preview: may change in a minor release.) Rule. */
+  | 'RULE'
+  /** (Preview: may change in a minor release.) Semantics. */
+  | 'SEMANTICS';
+
+/** (Preview: may change in a minor release.) Automation review ProfileChangeType vocabulary. */
+export type AutomationReviewProfileChangeType =
+  /** (Preview: may change in a minor release.) A profile element was added. */
+  | 'ADDED'
+  /** (Preview: may change in a minor release.) Modified. */
+  | 'MODIFIED'
+  /** (Preview: may change in a minor release.) A profile element was removed. */
+  | 'REMOVED';
+
+/** (Preview: may change in a minor release.) Profile, lifecycle, draft matching and paging filters. */
+export type AutomationReviewSearchCriteria = {
+  /** (Preview: may change in a minor release.) Only reviews whose draft digest matches, or does not match, the current draft. */
+  matchingCurrentDraft?: boolean | null | undefined;
+  /** (Preview: may change in a minor release.) The page to return, starting at 1. */
+  pageNumber: number;
+  /** (Preview: may change in a minor release.) The number of reviews per page. */
+  pageSize: number;
+  /** (Preview: may change in a minor release.) The profile whose draft is reviewed. */
+  profileToken: string;
+  /** (Preview: may change in a minor release.) The current review lifecycle state. */
+  state?: AutomationReviewState | null | undefined;
+};
+
+/** (Preview: may change in a minor release.) Automation review StartState vocabulary. */
+export type AutomationReviewStartState =
+  /** (Preview: may change in a minor release.) Clear. */
+  | 'CLEAR'
+  /** (Preview: may change in a minor release.) Raised. */
+  | 'RAISED'
+  /** (Preview: may change in a minor release.) Unknown. */
+  | 'UNKNOWN';
+
+/** (Preview: may change in a minor release.) Automation review State vocabulary. */
+export type AutomationReviewState =
+  /** (Preview: may change in a minor release.) Approved. */
+  | 'APPROVED'
+  /** (Preview: may change in a minor release.) Consumed. */
+  | 'CONSUMED'
+  /** (Preview: may change in a minor release.) Expired. */
+  | 'EXPIRED'
+  /** (Preview: may change in a minor release.) Ran. */
+  | 'RAN'
+  /** (Preview: may change in a minor release.) Rejected. */
+  | 'REJECTED';
+
+/** (Preview: may change in a minor release.) Automation review Verdict vocabulary. */
+export type AutomationReviewVerdict =
+  /** (Preview: may change in a minor release.) Fail. */
+  | 'FAIL'
+  /** (Preview: may change in a minor release.) Inconclusive. */
+  | 'INCONCLUSIVE'
+  /** (Preview: may change in a minor release.) Pass. */
+  | 'PASS';
+
+/** (Preview: may change in a minor release.) AutomationReviewWindowInput parameters. */
+export type AutomationReviewWindowInput = {
+  /** (Preview: may change in a minor release.) RFC3339 timestamp; invalid timestamps are invalid arguments. */
+  end: string;
+  /** (Preview: may change in a minor release.) Whether this is the incident or normal window. */
+  role: AutomationReviewWindowRole;
+  /** (Preview: may change in a minor release.) RFC3339 timestamp; invalid timestamps are invalid arguments. */
+  start: string;
+};
+
+/** (Preview: may change in a minor release.) Automation review WindowRole vocabulary. */
+export type AutomationReviewWindowRole =
+  /** (Preview: may change in a minor release.) Incident. */
+  | 'INCIDENT'
+  /** (Preview: may change in a minor release.) Normal. */
+  | 'NORMAL';
+
+/**
+ * How an anchor uses its issuers' OCSP responders at connect. A certificate a responder says is
+ * revoked is always refused (a verified revoked answer for any certificate on any verified path
+ * wins); the modes differ in what an answer that could not be had means.
+ */
+export type CertificateOcspMode =
+  /**
+   * A revoked answer refuses; a status that could not be learned (a timeout, an unreachable or
+   * refused responder, an unusable answer) is ADMITTED and counted. Availability over completeness.
+   */
+  | 'ENFORCE_KNOWN'
+  /** No responder is asked. The default for every anchor. */
+  | 'OFF'
+  /**
+   * A revoked answer refuses, and so does a certificate whose status could not be confirmed
+   * current. A responder outage refuses new connects once cached answers expire.
+   */
+  | 'REQUIRE_CURRENT';
 
 /** How an anchor treats the completeness of its revocation lists. */
 export type CertificateRevocationMode =
@@ -187,6 +439,8 @@ export type CommandDefinitionCreateRequest = {
   description?: string | null | undefined;
   /** Token of the profile to declare the command on. An unknown token fails the request. */
   deviceProfileToken: string;
+  /** Optional declarative LoRaWAN payload encoder JSON. Null keeps the raw payload contract. */
+  encoder?: string | null | undefined;
   /**
    * How disruptive the command is: NORMAL (the default), DISRUPTIVE or DESTRUCTIVE.
    * DISRUPTIVE and DESTRUCTIVE commands wait for the device type's maintenance window. An
@@ -241,6 +495,8 @@ export type CommandDefinitionUpdateRequest = {
    * definition ends up in.
    */
   deviceProfileToken?: string | null | undefined;
+  /** Optional declarative LoRaWAN payload encoder JSON. Null keeps the raw payload contract. */
+  encoder?: string | null | undefined;
   /**
    * New impact (NORMAL, DISRUPTIVE or DESTRUCTIVE). An explicit null or an unknown value is
    * refused. The change reaches devices when the profile is published.
@@ -294,6 +550,14 @@ export type CustomerTypeCreateRequest = {
   imageUrl?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  /**
+   * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+   * or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+   * enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+   * enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+   * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+   */
+  semanticTypes?: Array<string> | null | undefined;
   token: string;
 };
 
@@ -311,6 +575,11 @@ export type CustomerTypeUpdateRequest = {
   imageUrl?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  /**
+   * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+   * them alone. Validated as on create; only a request that names this field is validated.
+   */
+  semanticTypes?: Array<string> | null | undefined;
 };
 
 export type CustomerUpdateRequest = {
@@ -559,6 +828,27 @@ export type DeviceImportRow = {
   deviceTypeToken: string;
   /** Optional business identifier, up to 256 characters. Checked for conflicts; never the key. */
   externalId?: string | null | undefined;
+  /**
+   * Horizontal accuracy in metres, not negative. Needs installedLatitude and installedLongitude.
+   * Like installedElevation, an omitted accuracy compares as none against a device that exists.
+   */
+  installedAccuracy?: number | null | undefined;
+  /**
+   * Metres above the WGS84 ellipsoid. Needs installedLatitude and installedLongitude. When a
+   * device that already exists is compared, an omitted elevation compares as NONE: a row that
+   * leaves it out, against a device whose stored position has one, is a CONFLICT.
+   */
+  installedElevation?: number | null | undefined;
+  /**
+   * Degrees north where the device was installed, for a device that is fixed in place. Given
+   * together with installedLongitude or not at all. A value outside -90 to 90 makes the row
+   * INVALID. The position is stored with source IMPORT. A device that already exists makes the
+   * row a CONFLICT when its stored position differs, and always for a caller without
+   * location:installed:read, which is never told whether the position matches.
+   */
+  installedLatitude?: number | null | undefined;
+  /** Degrees east where the device was installed, -180 to 180. See installedLatitude. */
+  installedLongitude?: number | null | undefined;
   /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
   /** Human-readable name, up to 128 characters. */
@@ -678,6 +968,11 @@ export type DeviceSearchCriteria = {
    * token matches nothing.
    */
   expectedProvisioningProfile?: string | null | undefined;
+  /**
+   * Return only devices whose name or token contains this text, ignoring case (a name is
+   * optional, so an unnamed device is found by its token). Blank matches all.
+   */
+  nameContains?: string | null | undefined;
   /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
   /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
@@ -738,6 +1033,17 @@ export type DeviceTrustAnchorUpdateRequest = {
   /** Human-readable name. Null clears it. */
   name?: string | null | undefined;
   /**
+   * Required and unclearable. OFF asks no responder. ENFORCE_KNOWN and REQUIRE_CURRENT are refused
+   * while the instance's OCSP switch is off; REQUIRE_CURRENT is refused unless the instance allows
+   * it, and needs ocspResponderUrl.
+   */
+  ocspMode?: CertificateOcspMode | null | undefined;
+  /**
+   * An http or https URL, without credentials, that replaces each certificate's own responder.
+   * Null clears it. The address it resolves to must be one the instance's egress policy allows.
+   */
+  ocspResponderUrl?: string | null | undefined;
+  /**
    * Required and unclearable. Switching to REQUIRE_CURRENT is refused while the anchor holds no
    * current revocation list, or a registered certificate under it was issued by a CA that has none:
    * the switch would refuse every such device.
@@ -757,6 +1063,12 @@ export type DeviceTypeCreateRequest = {
   backgroundColor?: string | null | undefined;
   /** Border colour, up to 32 characters. */
   borderColor?: string | null | undefined;
+  /**
+   * Command channel of the type: PUBLISH or HTTP_PULL, or omit it (or send an empty value) for
+   * the default channel, which behaves as PUBLISH. Any other value fails the request with
+   * INVALID_VALUE.
+   */
+  commandChannel?: string | null | undefined;
   /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
   /** Foreground (text) colour, up to 32 characters. */
@@ -784,12 +1096,25 @@ export type DeviceTypeCreateRequest = {
    * type with no profile. An unknown token fails the request.
    */
   profileToken?: string | null | undefined;
+  /**
+   * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+   * or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+   * enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+   * enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+   * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+   */
+  semanticTypes?: Array<string> | null | undefined;
   /** Identifier for the new device type. A token already in use in the tenant is refused with CONFLICT. */
   token: string;
 };
 
 /** Criteria for searching device types. Results are newest first. */
 export type DeviceTypeSearchCriteria = {
+  /**
+   * Return only device types whose name or token contains this text, ignoring case (a name is
+   * optional, so an unnamed type is found by its token). Blank matches all.
+   */
+  nameContains?: string | null | undefined;
   /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
   /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
@@ -807,6 +1132,12 @@ export type DeviceTypeUpdateRequest = {
   backgroundColor?: string | null | undefined;
   /** New border colour, or null to clear it. */
   borderColor?: string | null | undefined;
+  /**
+   * New command channel: PUBLISH or HTTP_PULL, or null (or an empty value) to return the type
+   * to the default channel, which behaves as PUBLISH. Any other value fails the whole update
+   * with INVALID_VALUE.
+   */
+  commandChannel?: string | null | undefined;
   /** New description, or null to clear it. */
   description?: string | null | undefined;
   /** New foreground colour, or null to clear it. */
@@ -836,6 +1167,11 @@ export type DeviceTypeUpdateRequest = {
    * what every device of the type measures and accepts.
    */
   profileToken?: string | null | undefined;
+  /**
+   * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+   * them alone. Validated as on create; only a request that names this field is validated.
+   */
+  semanticTypes?: Array<string> | null | undefined;
 };
 
 /**
@@ -1133,6 +1469,18 @@ export type MetricDefinitionCreateRequest = {
   minValue?: number | null | undefined;
   /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * The Brick point class of the metric's series: a class of the enabled brick pack that is a
+   * brick:Point. A custom-prefix class cannot be shown to be one and is refused.
+   */
+  semanticPointClass?: string | null | undefined;
+  /**
+   * The quantity or property the metric observes: an OBSERVABLE_PROPERTY term of an enabled
+   * vocabulary pack, as a CURIE or full IRI. Fails with INVALID_ARGUMENT naming the term when
+   * it is unknown, of another kind, deprecated or outside the enabled vocabularies. Stored
+   * as an expanded IRI.
+   */
+  semanticProperty?: string | null | undefined;
   /** Identifier for the new metric definition. A token already in use in the tenant is refused with CONFLICT. */
   token: string;
   /** Unit of measure, such as a UCUM code (Cel, kW). */
@@ -1190,6 +1538,10 @@ export type MetricDefinitionUpdateRequest = {
   minValue?: number | null | undefined;
   /** New name, or null to clear it. */
   name?: string | null | undefined;
+  /** New Brick point class, or null to clear it. Omit to leave it alone. */
+  semanticPointClass?: string | null | undefined;
+  /** New observed property, or null to clear it. Omit to leave it alone. */
+  semanticProperty?: string | null | undefined;
   /** New unit, or null to clear it. */
   unit?: string | null | undefined;
 };
@@ -1334,6 +1686,24 @@ export type QueryParamInput = {
   value: string;
 };
 
+/** (Preview: may change in a minor release.) RunAutomationReviewInput parameters. */
+export type RunAutomationReviewInput = {
+  /** (Preview: may change in a minor release.) The device tokens selected for replay. */
+  deviceTokens: Array<string>;
+  /** (Preview: may change in a minor release.) The expectations to evaluate against the comparison. */
+  expectations?: Array<AutomationReviewExpectationInputValue> | null | undefined;
+  /** (Preview: may change in a minor release.) The profile whose draft is reviewed. */
+  profileToken: string;
+  /** (Preview: may change in a minor release.) A caller-generated idempotency key for this review request. */
+  requestId: string;
+  /** (Preview: may change in a minor release.) The changed rule token, when one rule is compared. */
+  ruleToken?: string | null | undefined;
+  /** (Preview: may change in a minor release.) The maximum pairing shift, in seconds; null uses the engine default. */
+  shiftWindowSeconds?: number | null | undefined;
+  /** (Preview: may change in a minor release.) The incident and normal replay windows. */
+  windows: Array<AutomationReviewWindowInput>;
+};
+
 /** Which integration's unregistered devices to return, and the page. Most recently seen first. */
 export type UnregisteredIntegrationDeviceSearchCriteria = {
   /** Token of the integration. An unknown token matches nothing. */
@@ -1343,6 +1713,36 @@ export type UnregisteredIntegrationDeviceSearchCriteria = {
   /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
+
+export type AgentProposalsQueryVariables = Exact<{
+  criteria: AgentProposalSearchCriteria;
+}>;
+
+
+export type AgentProposalsQuery = { agentProposals: { results: Array<{ token: string, kind: AgentProposalKind, state: AgentProposalState, payload: string, targets: Array<string>, digest: string, impact: string, targetCount: number, proposerPrincipal: string, proposerClient: string, clientAttested: boolean, rationale: string | null, policyVersion: number, requiredApprovals: number, reasons: Array<string>, createdAt: string, expiresAt: string, decidedAt: string | null, decidedBy: string | null, note: string | null, approvals: Array<{ principal: string, approvedAt: string }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type AgentProposalDetailQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type AgentProposalDetailQuery = { agentProposal: { token: string, kind: AgentProposalKind, state: AgentProposalState, payload: string, targets: Array<string>, digest: string, impact: string, targetCount: number, proposerPrincipal: string, proposerClient: string, clientAttested: boolean, rationale: string | null, policyVersion: number, requiredApprovals: number, reasons: Array<string>, createdAt: string, expiresAt: string, decidedAt: string | null, decidedBy: string | null, note: string | null, approvals: Array<{ principal: string, approvedAt: string }> } };
+
+export type ApproveAgentProposalMutationVariables = Exact<{
+  token: string;
+  digest: string;
+}>;
+
+
+export type ApproveAgentProposalMutation = { approveAgentProposal: { token: string, state: AgentProposalState, reasons: Array<string> } };
+
+export type RejectAgentProposalMutationVariables = Exact<{
+  token: string;
+  note?: string | null | undefined;
+}>;
+
+
+export type RejectAgentProposalMutation = { rejectAgentProposal: { token: string } };
 
 export type AlarmsQueryVariables = Exact<{
   criteria: AlarmSearchCriteria;
@@ -1357,6 +1757,13 @@ export type AcknowledgeAlarmMutationVariables = Exact<{
 
 
 export type AcknowledgeAlarmMutation = { acknowledgeAlarm: { id: string } };
+
+export type AcknowledgeAlarmsMutationVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type AcknowledgeAlarmsMutation = { acknowledgeAlarms: { acknowledged: Array<{ token: string }>, refusals: Array<{ token: string, code: string, reason: string }> } };
 
 export type ClearAlarmMutationVariables = Exact<{
   token: string;
@@ -1595,6 +2002,79 @@ export type AuditEventsQueryVariables = Exact<{
 
 export type AuditEventsQuery = { auditEvents: { results: Array<{ id: string, occurredTime: string, category: string, actor: string, operation: string, tableName: string | null, entityPk: string | null, entityLabel: string | null, rowsAffected: number }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
+export type AutomationReviewsQueryVariables = Exact<{
+  criteria: AutomationReviewSearchCriteria;
+}>;
+
+
+export type AutomationReviewsQuery = { automationReviews: { results: Array<{ token: string, profileToken: string | null, ruleToken: string | null, kind: AutomationReviewKind, state: AutomationReviewState, outcome: AutomationReviewOutcome, createdBy: string, createdAt: string, approvedAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } | null };
+
+export type AutomationReviewDetailQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type AutomationReviewDetailQuery = { automationReview: { consumedVersion: number | null, token: string, profileToken: string | null, ruleToken: string | null, kind: AutomationReviewKind, state: AutomationReviewState, outcome: AutomationReviewOutcome, reviewDigest: string, draftDigest: string, baselineDigest: string, baselineVersion: number, createdBy: string, createdAt: string, requiredApprovals: number, approvedAt: string | null, expiresAt: string | null, decidedBy: string | null, decidedAt: string | null, note: string | null, draftAuthors: Array<string> | null, reasons: Array<string> | null, deviceTokens: Array<string> | null, shiftWindowSeconds: number | null, inputDigest: string | null, resultDigest: string | null, engineBuild: string | null, result: string | null, matchesCurrentDraft: boolean | null, profileChanges: Array<{ area: AutomationReviewProfileChangeArea, key: string, change: AutomationReviewProfileChangeType, automation: boolean }> | null, approvals: Array<{ principal: string, approvedAt: string, policyRevision: number }> | null, windows: Array<{ role: AutomationReviewWindowRole, start: string, end: string }> | null, expectationInputs: Array<{ window: AutomationReviewWindowRole, name: string | null, expect: string }> | null, fidelity: { status: string, reasons: Array<string>, label: string } | null, expectations: Array<{ index: number, name: string, window: AutomationReviewWindowRole, verdict: AutomationReviewVerdict, baseline: AutomationReviewVerdict, reason: string, baselineReason: string, evidence: Array<{ device: string, at: string, value: number | null, spanSeconds: number }> }> | null, windowResults: Array<{ role: AutomationReviewWindowRole, start: string, end: string, leadInStart: string, stream: string, firstSeq: string, lastSeq: string, inputDigest: string, degraded: Array<string>, changesTruncated: boolean, counts: { unchanged: number, added: number, removed: number, shifted: number, contentChanged: number }, devices: Array<{ device: string, stateBase: AutomationReviewStartState, stateDraft: AutomationReviewStartState, divergence: string | null, lateBase: number, lateDraft: number, first: string | null, last: string | null, readings: Array<{ key: string, count: number }>, versions: Array<{ key: string, count: number }> }>, changes: Array<{ kind: AutomationReviewChangeKind, device: string, subject: string, discriminator: string, baseAt: string | null, draftAt: string | null, shiftSeconds: number, contentChanged: boolean, afterDivergence: boolean, baseContent: { severity: string | null, payload: string | null, relativeExpirySeconds: number | null, expiryLabel: string | null, configDigest: string | null, bodyDigest: string | null, method: string | null } | null, draftContent: { severity: string | null, payload: string | null, relativeExpirySeconds: number | null, expiryLabel: string | null, configDigest: string | null, bodyDigest: string | null, method: string | null } | null, reading: { device: string, at: string, value: number | null, spanSeconds: number } }> }> | null } | null };
+
+export type RunAutomationReviewMutationVariables = Exact<{
+  input: RunAutomationReviewInput;
+}>;
+
+
+export type RunAutomationReviewMutation = { runAutomationReview: { token: string } | null };
+
+export type ApproveAutomationReviewMutationVariables = Exact<{
+  token: string;
+  digest: string;
+}>;
+
+
+export type ApproveAutomationReviewMutation = { approveAutomationReview: { token: string, state: AutomationReviewState } | null };
+
+export type RejectAutomationReviewMutationVariables = Exact<{
+  token: string;
+  note?: string | null | undefined;
+}>;
+
+
+export type RejectAutomationReviewMutation = { rejectAutomationReview: { token: string, state: AutomationReviewState } | null };
+
+export type AutomationReviewPolicyQueryVariables = Exact<{
+  profileToken: string;
+}>;
+
+
+export type AutomationReviewPolicyQuery = { automationReviewPolicy: { profileToken: string, revision: number, updatedBy: string | null, updatedAt: string | null, effective: { required: boolean, requiredApprovals: number, allowSelfApproval: boolean, approvalTtlSeconds: number, stepUpMaxAgeSeconds: number }, pendingChange: { token: string, proposedBy: string, proposedAt: string, effectiveAt: string | null, state: AutomationReviewPolicyChangeState, decidedBy: string | null, decidedAt: string | null, proposed: { required: boolean, requiredApprovals: number, allowSelfApproval: boolean, approvalTtlSeconds: number, stepUpMaxAgeSeconds: number } | null } | null } | null };
+
+export type SetAutomationReviewPolicyMutationVariables = Exact<{
+  profileToken: string;
+  settings: AutomationReviewPolicyInput;
+}>;
+
+
+export type SetAutomationReviewPolicyMutation = { setAutomationReviewPolicy: { applied: boolean, policy: { profileToken: string, revision: number, updatedBy: string | null, updatedAt: string | null, effective: { required: boolean, requiredApprovals: number, allowSelfApproval: boolean, approvalTtlSeconds: number, stepUpMaxAgeSeconds: number }, pendingChange: { token: string, proposedBy: string, proposedAt: string, effectiveAt: string | null, state: AutomationReviewPolicyChangeState, decidedBy: string | null, decidedAt: string | null, proposed: { required: boolean, requiredApprovals: number, allowSelfApproval: boolean, approvalTtlSeconds: number, stepUpMaxAgeSeconds: number } | null } | null } | null } | null };
+
+export type ApproveAutomationReviewPolicyChangeMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type ApproveAutomationReviewPolicyChangeMutation = { approveAutomationReviewPolicyChange: { profileToken: string, revision: number, updatedBy: string | null, updatedAt: string | null, effective: { required: boolean, requiredApprovals: number, allowSelfApproval: boolean, approvalTtlSeconds: number, stepUpMaxAgeSeconds: number }, pendingChange: { token: string, proposedBy: string, proposedAt: string, effectiveAt: string | null, state: AutomationReviewPolicyChangeState, decidedBy: string | null, decidedAt: string | null, proposed: { required: boolean, requiredApprovals: number, allowSelfApproval: boolean, approvalTtlSeconds: number, stepUpMaxAgeSeconds: number } | null } | null } | null };
+
+export type CancelAutomationReviewPolicyChangeMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type CancelAutomationReviewPolicyChangeMutation = { cancelAutomationReviewPolicyChange: { profileToken: string, revision: number, updatedBy: string | null, updatedAt: string | null, effective: { required: boolean, requiredApprovals: number, allowSelfApproval: boolean, approvalTtlSeconds: number, stepUpMaxAgeSeconds: number }, pendingChange: { token: string, proposedBy: string, proposedAt: string, effectiveAt: string | null, state: AutomationReviewPolicyChangeState, decidedBy: string | null, decidedAt: string | null, proposed: { required: boolean, requiredApprovals: number, allowSelfApproval: boolean, approvalTtlSeconds: number, stepUpMaxAgeSeconds: number } | null } | null } | null };
+
+export type AutomationReviewBreakGlassQueryVariables = Exact<{
+  profileToken: string;
+}>;
+
+
+export type AutomationReviewBreakGlassQuery = { automationReviewBreakGlass: Array<{ action: AutomationReviewBreakGlassAction, target: string, reason: string, actor: string, at: string }> | null };
+
 export type PreviewSelectorQueryVariables = Exact<{
   memberType: string;
   selector: string;
@@ -1821,6 +2301,7 @@ export type ImportDevicesMutation = { importDevices: { dryRun: boolean, created:
 export type UpdateDeviceMutationVariables = Exact<{
   token: string;
   request: DeviceUpdateRequest;
+  breakGlassReason?: string | null | undefined;
 }>;
 
 
@@ -1880,6 +2361,7 @@ export type CreateDeviceTypeMutation = { createDeviceType: { id: string, token: 
 export type UpdateDeviceTypeMutationVariables = Exact<{
   token: string;
   request: DeviceTypeUpdateRequest;
+  breakGlassReason?: string | null | undefined;
 }>;
 
 
@@ -2026,7 +2508,7 @@ export type DeviceProfileVersionsQueryVariables = Exact<{
 }>;
 
 
-export type DeviceProfileVersionsQuery = { deviceProfileVersions: Array<{ version: number, label: string | null, description: string | null, publishedAt: string, publishedBy: string | null }> };
+export type DeviceProfileVersionsQuery = { deviceProfileVersions: Array<{ automationReviewToken: string | null, version: number, label: string | null, description: string | null, publishedAt: string, publishedBy: string | null }> };
 
 export type DeviceProfileThingModelQueryVariables = Exact<{
   token: string;
@@ -2047,6 +2529,7 @@ export type PublishDeviceProfileMutationVariables = Exact<{
   token: string;
   label?: string | null | undefined;
   description?: string | null | undefined;
+  automationReviewToken?: string | null | undefined;
 }>;
 
 
@@ -2055,6 +2538,7 @@ export type PublishDeviceProfileMutation = { publishDeviceProfile: { version: nu
 export type RollbackDeviceProfileMutationVariables = Exact<{
   token: string;
   version: number;
+  breakGlassReason?: string | null | undefined;
 }>;
 
 
@@ -2628,6 +3112,89 @@ export class TypedDocumentString<TResult, TVariables>
   }
 }
 
+export const AgentProposalsDocument = new TypedDocumentString(`
+    query AgentProposals($criteria: AgentProposalSearchCriteria!) {
+  agentProposals(criteria: $criteria) {
+    results {
+      token
+      kind
+      state
+      payload
+      targets
+      digest
+      impact
+      targetCount
+      proposerPrincipal
+      proposerClient
+      clientAttested
+      rationale
+      policyVersion
+      requiredApprovals
+      approvals {
+        principal
+        approvedAt
+      }
+      reasons
+      createdAt
+      expiresAt
+      decidedAt
+      decidedBy
+      note
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AgentProposalsQuery, AgentProposalsQueryVariables>;
+export const AgentProposalDetailDocument = new TypedDocumentString(`
+    query AgentProposalDetail($token: String!) {
+  agentProposal(token: $token) {
+    token
+    kind
+    state
+    payload
+    targets
+    digest
+    impact
+    targetCount
+    proposerPrincipal
+    proposerClient
+    clientAttested
+    rationale
+    policyVersion
+    requiredApprovals
+    approvals {
+      principal
+      approvedAt
+    }
+    reasons
+    createdAt
+    expiresAt
+    decidedAt
+    decidedBy
+    note
+  }
+}
+    `) as unknown as TypedDocumentString<AgentProposalDetailQuery, AgentProposalDetailQueryVariables>;
+export const ApproveAgentProposalDocument = new TypedDocumentString(`
+    mutation ApproveAgentProposal($token: String!, $digest: String!) {
+  approveAgentProposal(token: $token, digest: $digest) {
+    token
+    state
+    reasons
+  }
+}
+    `) as unknown as TypedDocumentString<ApproveAgentProposalMutation, ApproveAgentProposalMutationVariables>;
+export const RejectAgentProposalDocument = new TypedDocumentString(`
+    mutation RejectAgentProposal($token: String!, $note: String) {
+  rejectAgentProposal(token: $token, note: $note) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<RejectAgentProposalMutation, RejectAgentProposalMutationVariables>;
 export const AlarmsDocument = new TypedDocumentString(`
     query Alarms($criteria: AlarmSearchCriteria!) {
   alarms(criteria: $criteria) {
@@ -2663,6 +3230,20 @@ export const AcknowledgeAlarmDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<AcknowledgeAlarmMutation, AcknowledgeAlarmMutationVariables>;
+export const AcknowledgeAlarmsDocument = new TypedDocumentString(`
+    mutation AcknowledgeAlarms($tokens: [String!]!) {
+  acknowledgeAlarms(tokens: $tokens) {
+    acknowledged {
+      token
+    }
+    refusals {
+      token
+      code
+      reason
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AcknowledgeAlarmsMutation, AcknowledgeAlarmsMutationVariables>;
 export const ClearAlarmDocument = new TypedDocumentString(`
     mutation ClearAlarm($token: String!) {
   clearAlarm(token: $token) {
@@ -3176,6 +3757,344 @@ export const AuditEventsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<AuditEventsQuery, AuditEventsQueryVariables>;
+export const AutomationReviewsDocument = new TypedDocumentString(`
+    query AutomationReviews($criteria: AutomationReviewSearchCriteria!) {
+  automationReviews(criteria: $criteria) {
+    results {
+      token
+      profileToken
+      ruleToken
+      kind
+      state
+      outcome
+      createdBy
+      createdAt
+      approvedAt
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AutomationReviewsQuery, AutomationReviewsQueryVariables>;
+export const AutomationReviewDetailDocument = new TypedDocumentString(`
+    query AutomationReviewDetail($token: String!) {
+  automationReview(token: $token) {
+    consumedVersion
+    token
+    profileToken
+    ruleToken
+    kind
+    state
+    outcome
+    reviewDigest
+    draftDigest
+    baselineDigest
+    baselineVersion
+    createdBy
+    createdAt
+    requiredApprovals
+    approvedAt
+    expiresAt
+    decidedBy
+    decidedAt
+    note
+    draftAuthors
+    reasons
+    deviceTokens
+    profileChanges {
+      area
+      key
+      change
+      automation
+    }
+    approvals {
+      principal
+      approvedAt
+      policyRevision
+    }
+    windows {
+      role
+      start
+      end
+    }
+    shiftWindowSeconds
+    expectationInputs {
+      window
+      name
+      expect
+    }
+    fidelity {
+      status
+      reasons
+      label
+    }
+    expectations {
+      index
+      name
+      window
+      verdict
+      baseline
+      reason
+      baselineReason
+      evidence {
+        device
+        at
+        value
+        spanSeconds
+      }
+    }
+    windowResults {
+      role
+      start
+      end
+      leadInStart
+      stream
+      firstSeq
+      lastSeq
+      inputDigest
+      degraded
+      changesTruncated
+      counts {
+        unchanged
+        added
+        removed
+        shifted
+        contentChanged
+      }
+      devices {
+        device
+        readings {
+          key
+          count
+        }
+        versions {
+          key
+          count
+        }
+        stateBase
+        stateDraft
+        divergence
+        lateBase
+        lateDraft
+        first
+        last
+      }
+      changes {
+        kind
+        device
+        subject
+        discriminator
+        baseAt
+        draftAt
+        shiftSeconds
+        contentChanged
+        afterDivergence
+        baseContent {
+          severity
+          payload
+          relativeExpirySeconds
+          expiryLabel
+          configDigest
+          bodyDigest
+          method
+        }
+        draftContent {
+          severity
+          payload
+          relativeExpirySeconds
+          expiryLabel
+          configDigest
+          bodyDigest
+          method
+        }
+        reading {
+          device
+          at
+          value
+          spanSeconds
+        }
+      }
+    }
+    inputDigest
+    resultDigest
+    engineBuild
+    result
+    matchesCurrentDraft
+  }
+}
+    `) as unknown as TypedDocumentString<AutomationReviewDetailQuery, AutomationReviewDetailQueryVariables>;
+export const RunAutomationReviewDocument = new TypedDocumentString(`
+    mutation RunAutomationReview($input: RunAutomationReviewInput!) {
+  runAutomationReview(input: $input) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<RunAutomationReviewMutation, RunAutomationReviewMutationVariables>;
+export const ApproveAutomationReviewDocument = new TypedDocumentString(`
+    mutation ApproveAutomationReview($token: String!, $digest: String!) {
+  approveAutomationReview(token: $token, digest: $digest) {
+    token
+    state
+  }
+}
+    `) as unknown as TypedDocumentString<ApproveAutomationReviewMutation, ApproveAutomationReviewMutationVariables>;
+export const RejectAutomationReviewDocument = new TypedDocumentString(`
+    mutation RejectAutomationReview($token: String!, $note: String) {
+  rejectAutomationReview(token: $token, note: $note) {
+    token
+    state
+  }
+}
+    `) as unknown as TypedDocumentString<RejectAutomationReviewMutation, RejectAutomationReviewMutationVariables>;
+export const AutomationReviewPolicyDocument = new TypedDocumentString(`
+    query AutomationReviewPolicy($profileToken: String!) {
+  automationReviewPolicy(profileToken: $profileToken) {
+    profileToken
+    effective {
+      required
+      requiredApprovals
+      allowSelfApproval
+      approvalTtlSeconds
+      stepUpMaxAgeSeconds
+    }
+    revision
+    updatedBy
+    updatedAt
+    pendingChange {
+      token
+      proposed {
+        required
+        requiredApprovals
+        allowSelfApproval
+        approvalTtlSeconds
+        stepUpMaxAgeSeconds
+      }
+      proposedBy
+      proposedAt
+      effectiveAt
+      state
+      decidedBy
+      decidedAt
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AutomationReviewPolicyQuery, AutomationReviewPolicyQueryVariables>;
+export const SetAutomationReviewPolicyDocument = new TypedDocumentString(`
+    mutation SetAutomationReviewPolicy($profileToken: String!, $settings: AutomationReviewPolicyInput!) {
+  setAutomationReviewPolicy(profileToken: $profileToken, settings: $settings) {
+    applied
+    policy {
+      profileToken
+      effective {
+        required
+        requiredApprovals
+        allowSelfApproval
+        approvalTtlSeconds
+        stepUpMaxAgeSeconds
+      }
+      revision
+      updatedBy
+      updatedAt
+      pendingChange {
+        token
+        proposed {
+          required
+          requiredApprovals
+          allowSelfApproval
+          approvalTtlSeconds
+          stepUpMaxAgeSeconds
+        }
+        proposedBy
+        proposedAt
+        effectiveAt
+        state
+        decidedBy
+        decidedAt
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<SetAutomationReviewPolicyMutation, SetAutomationReviewPolicyMutationVariables>;
+export const ApproveAutomationReviewPolicyChangeDocument = new TypedDocumentString(`
+    mutation ApproveAutomationReviewPolicyChange($token: String!) {
+  approveAutomationReviewPolicyChange(token: $token) {
+    profileToken
+    effective {
+      required
+      requiredApprovals
+      allowSelfApproval
+      approvalTtlSeconds
+      stepUpMaxAgeSeconds
+    }
+    revision
+    updatedBy
+    updatedAt
+    pendingChange {
+      token
+      proposed {
+        required
+        requiredApprovals
+        allowSelfApproval
+        approvalTtlSeconds
+        stepUpMaxAgeSeconds
+      }
+      proposedBy
+      proposedAt
+      effectiveAt
+      state
+      decidedBy
+      decidedAt
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<ApproveAutomationReviewPolicyChangeMutation, ApproveAutomationReviewPolicyChangeMutationVariables>;
+export const CancelAutomationReviewPolicyChangeDocument = new TypedDocumentString(`
+    mutation CancelAutomationReviewPolicyChange($token: String!) {
+  cancelAutomationReviewPolicyChange(token: $token) {
+    profileToken
+    effective {
+      required
+      requiredApprovals
+      allowSelfApproval
+      approvalTtlSeconds
+      stepUpMaxAgeSeconds
+    }
+    revision
+    updatedBy
+    updatedAt
+    pendingChange {
+      token
+      proposed {
+        required
+        requiredApprovals
+        allowSelfApproval
+        approvalTtlSeconds
+        stepUpMaxAgeSeconds
+      }
+      proposedBy
+      proposedAt
+      effectiveAt
+      state
+      decidedBy
+      decidedAt
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<CancelAutomationReviewPolicyChangeMutation, CancelAutomationReviewPolicyChangeMutationVariables>;
+export const AutomationReviewBreakGlassDocument = new TypedDocumentString(`
+    query AutomationReviewBreakGlass($profileToken: String!) {
+  automationReviewBreakGlass(profileToken: $profileToken) {
+    action
+    target
+    reason
+    actor
+    at
+  }
+}
+    `) as unknown as TypedDocumentString<AutomationReviewBreakGlassQuery, AutomationReviewBreakGlassQueryVariables>;
 export const PreviewSelectorDocument = new TypedDocumentString(`
     query PreviewSelector($memberType: String!, $selector: String!, $pagination: PaginationInput!) {
   previewSelector(
@@ -3202,7 +4121,12 @@ export const PreviewSelectorDocument = new TypedDocumentString(`
 export const DynamicGroupsDocument = new TypedDocumentString(`
     query DynamicGroups($memberType: String!) {
   entityGroups(
-    criteria: {pageNumber: 1, pageSize: 200, memberType: $memberType, membershipMode: "dynamic"}
+    criteria: {
+      pageNumber: 1
+      pageSize: 200
+      memberType: $memberType
+      membershipMode: "dynamic"
+    }
   ) {
     results {
       id
@@ -3708,8 +4632,12 @@ export const ImportDevicesDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<ImportDevicesMutation, ImportDevicesMutationVariables>;
 export const UpdateDeviceDocument = new TypedDocumentString(`
-    mutation UpdateDevice($token: String!, $request: DeviceUpdateRequest!) {
-  updateDevice(token: $token, request: $request) {
+    mutation UpdateDevice($token: String!, $request: DeviceUpdateRequest!, $breakGlassReason: String) {
+  updateDevice(
+    token: $token
+    request: $request
+    breakGlassReason: $breakGlassReason
+  ) {
     id
     token
     name
@@ -3867,8 +4795,12 @@ export const CreateDeviceTypeDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateDeviceTypeMutation, CreateDeviceTypeMutationVariables>;
 export const UpdateDeviceTypeDocument = new TypedDocumentString(`
-    mutation UpdateDeviceType($token: String!, $request: DeviceTypeUpdateRequest!) {
-  updateDeviceType(token: $token, request: $request) {
+    mutation UpdateDeviceType($token: String!, $request: DeviceTypeUpdateRequest!, $breakGlassReason: String) {
+  updateDeviceType(
+    token: $token
+    request: $request
+    breakGlassReason: $breakGlassReason
+  ) {
     id
     token
     name
@@ -4033,7 +4965,7 @@ export const GroupNamesDocument = new TypedDocumentString(`
     `) as unknown as TypedDocumentString<GroupNamesQuery, GroupNamesQueryVariables>;
 export const DeviceGroupTargetsDocument = new TypedDocumentString(`
     query DeviceGroupTargets {
-  entityGroups(criteria: {pageNumber: 1, pageSize: 500, memberType: "device"}) {
+  entityGroups(criteria: { pageNumber: 1, pageSize: 500, memberType: "device" }) {
     results {
       token
       name
@@ -4164,6 +5096,7 @@ export const DeleteDeviceProfileDocument = new TypedDocumentString(`
 export const DeviceProfileVersionsDocument = new TypedDocumentString(`
     query DeviceProfileVersions($token: String!) {
   deviceProfileVersions(token: $token) {
+    automationReviewToken
     version
     label
     description
@@ -4186,15 +5119,24 @@ export const FacetValuesDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<FacetValuesQuery, FacetValuesQueryVariables>;
 export const PublishDeviceProfileDocument = new TypedDocumentString(`
-    mutation PublishDeviceProfile($token: String!, $label: String, $description: String) {
-  publishDeviceProfile(token: $token, label: $label, description: $description) {
+    mutation PublishDeviceProfile($token: String!, $label: String, $description: String, $automationReviewToken: String) {
+  publishDeviceProfile(
+    token: $token
+    label: $label
+    description: $description
+    automationReviewToken: $automationReviewToken
+  ) {
     version
   }
 }
     `) as unknown as TypedDocumentString<PublishDeviceProfileMutation, PublishDeviceProfileMutationVariables>;
 export const RollbackDeviceProfileDocument = new TypedDocumentString(`
-    mutation RollbackDeviceProfile($token: String!, $version: Int!) {
-  rollbackDeviceProfile(token: $token, version: $version) {
+    mutation RollbackDeviceProfile($token: String!, $version: Int!, $breakGlassReason: String) {
+  rollbackDeviceProfile(
+    token: $token
+    version: $version
+    breakGlassReason: $breakGlassReason
+  ) {
     token
     activeVersion
   }
@@ -4379,7 +5321,7 @@ export const DetectionRulesDocument = new TypedDocumentString(`
 export const ScopeGroupsDocument = new TypedDocumentString(`
     query ScopeGroups {
   entityGroups(
-    criteria: {pageNumber: 1, pageSize: 500, membershipMode: "dynamic"}
+    criteria: { pageNumber: 1, pageSize: 500, membershipMode: "dynamic" }
   ) {
     results {
       token
@@ -5154,7 +6096,7 @@ export const ResetDeviceProvisioningDocument = new TypedDocumentString(`
 export const EarmarkedDeviceCountDocument = new TypedDocumentString(`
     query EarmarkedDeviceCount($profile: String!) {
   devices(
-    criteria: {pageNumber: 1, pageSize: 1, expectedProvisioningProfile: $profile}
+    criteria: { pageNumber: 1, pageSize: 1, expectedProvisioningProfile: $profile }
   ) {
     pagination {
       totalRecords
@@ -5171,7 +6113,7 @@ export const DeviceProvisioningDocument = new TypedDocumentString(`
       name
     }
   }
-  deviceCredentials(criteria: {pageNumber: 1, pageSize: 100, device: $device}) {
+  deviceCredentials(criteria: { pageNumber: 1, pageSize: 100, device: $device }) {
     results {
       token
       enabled

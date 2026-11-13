@@ -69,6 +69,7 @@ func deliverWithCopies(t *testing.T, corpus []diffEvent, k, copyEvery int, guard
 	w := &derivedCapture{}
 	rp := guardedProcessor(t, w, newTestStore(t), &fakeReplayOpener{}, 0, 0, true)
 	ack := &fakeAck{}
+	stored := diffStored(corpus)
 	seq := uint64(0)
 	reset := func() {
 		if !guard {
@@ -78,7 +79,7 @@ func deliverWithCopies(t *testing.T, corpus []diffEvent, k, copyEvery int, guard
 	legacy := func(e diffEvent) {
 		seq++
 		reset()
-		rp.handle(resolvedMessage(t, e, seq, e.occurred, ack))
+		rp.handle(resolvedMessage(t, e, seq, stored, ack))
 	}
 	envelope := func(es []diffEvent) {
 		var events []eventenvelope.Event
@@ -98,7 +99,7 @@ func deliverWithCopies(t *testing.T, corpus []diffEvent, k, copyEvery int, guard
 			map[string]string{eventenvelope.HeaderName: eventenvelope.HeaderValue}, ack)
 		seq++
 		m.StreamSeq = seq
-		m.AppendTime = es[0].occurred
+		m.AppendTime = stored
 		reset()
 		rp.handle(m)
 	}

@@ -131,7 +131,11 @@ CREATE TABLE "ai-inference".audit_events (
  operation text NOT NULL,
  entity_pk text,
  entity_label text,
- rows_affected bigint
+ rows_affected bigint,
+ client_id text,
+ session_id text,
+ on_behalf_of text,
+ proposal text
 );
 CREATE TABLE "ai-inference".purged_tenants (
  token character varying(128) NOT NULL,

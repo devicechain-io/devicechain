@@ -47,6 +47,7 @@ tests:
               job: devicechain/command-delivery
               gate: presence
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#safetygatedisabled"
               summary: "A safety gate is switched off in a running service"
               description: "For at least 5 minutes, devicechain/command-delivery has run with its presence safety gate OFF because the configuration it needs is absent (the service secret, or the endpoint of the service the gate consults). Work the gate exists to refuse is being let through: tenant_lifecycle admits work for deleted tenants, presence lets commands to absent devices be published and dropped, rule_validation lets uncompilable detection rules publish and be skipped at load. The service logged a WARN at startup naming what is missing. Restore the missing configuration and restart the service."
 
@@ -95,6 +96,7 @@ tests:
               job: devicechain/device-management
               gate: tenant_lifecycle
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#safetygatedisabled"
               summary: "A safety gate is switched off in a running service"
               description: "For at least 5 minutes, devicechain/device-management has run with its tenant_lifecycle safety gate OFF because the configuration it needs is absent (the service secret, or the endpoint of the service the gate consults). Work the gate exists to refuse is being let through: tenant_lifecycle admits work for deleted tenants, presence lets commands to absent devices be published and dropped, rule_validation lets uncompilable detection rules publish and be skipped at load. The service logged a WARN at startup naming what is missing. Restore the missing configuration and restart the service."
 

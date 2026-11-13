@@ -162,7 +162,7 @@ func TestDecide(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := Decide(c.state, false); got != c.want {
+			if got := Decide(c.state, Capabilities{}); got != c.want {
 				t.Errorf("Decide(%+v) = %v, want %v\n%s", c.state, got, c.want, c.why)
 			}
 		})
@@ -184,7 +184,7 @@ func TestOnlyPositiveEvidenceWithholds(t *testing.T) {
 		{Known: true, Asserted: false, Active: false, Source: mqttSource},
 		{Known: true, Asserted: true, Active: true},
 	} {
-		if got := Decide(s, false); got != Dispatch {
+		if got := Decide(s, Capabilities{}); got != Dispatch {
 			t.Errorf("Decide(%+v) = %v; nothing here is positive evidence of absence or of a "+
 				"missing delivery path, so it must dispatch", s, got)
 		}
@@ -256,7 +256,7 @@ func TestStatesForMarksMissingDevicesUnknown(t *testing.T) {
 		t.Fatalf("a device absent from the response must not appear in the result at all, got %+v", got)
 	}
 	// And the gate's own reduction of that must be Dispatch, not Hold.
-	if v := Decide(states["never-seen"], false); v != Dispatch {
+	if v := Decide(states["never-seen"], Capabilities{}); v != Dispatch {
 		t.Fatalf("a device the projection has never seen decided %v, want Dispatch", v)
 	}
 
@@ -318,12 +318,40 @@ func TestDecideFollowsTheSparkplugCapabilityFlag(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := Decide(c.state, false); got != c.off {
+			if got := Decide(c.state, Capabilities{}); got != c.off {
 				t.Errorf("flag off: Decide(%+v) = %v, want %v", c.state, got, c.off)
 			}
-			if got := Decide(c.state, true); got != c.on {
+			if got := Decide(c.state, Capabilities{Sparkplug: true}); got != c.on {
 				t.Errorf("flag on: Decide(%+v) = %v, want %v\n%s", c.state, got, c.on, c.commentary)
 			}
 		})
+	}
+}
+
+// TestLpwanCapabilityWidensOnlyTheIntegrationTransport pins the second capability. With it on, a
+// device behind an inbound integration is dispatched like any device; with it off the verdict is
+// the terminal one that predates the adapter. It must not leak into any other transport, and the
+// Sparkplug capability must not leak into it.
+func TestLpwanCapabilityWidensOnlyTheIntegrationTransport(t *testing.T) {
+	integration := State{Known: true, Asserted: false, Active: true, Source: "integration:cs1"}
+	if got := Decide(integration, Capabilities{}); got != Undeliverable {
+		t.Errorf("nothing enabled: Decide = %v, want Undeliverable", got)
+	}
+	if got := Decide(integration, Capabilities{Sparkplug: true}); got != Undeliverable {
+		t.Errorf("Sparkplug on does not make an integration device deliverable: Decide = %v", got)
+	}
+	if got := Decide(integration, Capabilities{Lpwan: true}); got != Dispatch {
+		t.Errorf("LPWAN on: Decide = %v, want Dispatch", got)
+	}
+	// Control: the other transports answer as they did.
+	sparkplug := State{Known: true, Asserted: true, Active: true, Source: "sparkplug:plant-a"}
+	if got := Decide(sparkplug, Capabilities{Lpwan: true}); got != Undeliverable {
+		t.Errorf("LPWAN on does not make Sparkplug deliverable: Decide = %v", got)
+	}
+	// An integration device asserted absent would hold, were that ever reported; the adapter owns
+	// delivery, so the verdict for it is the ordinary one.
+	absent := State{Known: true, Asserted: true, Active: false, Source: "integration:cs1"}
+	if got := Decide(absent, Capabilities{Lpwan: true}); got != Hold {
+		t.Errorf("an asserted-absent integration device is held, got %v", got)
 	}
 }

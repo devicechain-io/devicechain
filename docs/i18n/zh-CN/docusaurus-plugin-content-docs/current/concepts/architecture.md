@@ -10,24 +10,24 @@ DeviceChain 由基于共享核心库构建的无状态 Go 微服务组成。Kube
 
 | 组件 | 职责 |
 |---|---|
-| `event-sources` | 入站设备传输。解码原始消息（目前支持 JSON；计划支持 Protobuf 和自定义解码器），执行每租户接入速率限制，并将消息发布到流水线。 |
+| `event-sources` | 入站设备传输。接收 JSON 事件和供[配置文件载荷解码器](../guides/payload-decoders.md)处理的原始载荷，执行每租户接入速率限制，并将消息发布到流水线。 |
 | `device-management` | 管理设备、设备类型、支持版本管理的设备配置文件、带类型的关系图、告警对象及其生命周期，以及事件解析（为每个事件附加设备和组织上下文）。 |
 | `event-processing` | 检测与动作。流式核心在事件重放时产生相同结果，对已解析事件评估检测规则：阈值、持续时间、重复、变化率、缺失、连接状态、窗口聚合和区域关联。随后派发自动动作：触发告警、发送命令和调用出站连接器。检测在此运行；它触发的告警对象仍由 `device-management` 管理，连接器投递交给 `outbound-connectors`。 |
 | `event-management` | 将已解析事件持久化到 TimescaleDB，执行数据生命周期策略（压缩、保留、汇总），并通过 GraphQL 提供时序查询。 |
 | `device-state` | 每台设备的实时最新已知状态投影：在线状态和每项测量的当前读数。 |
 | `command-delivery` | 向设备持久化投递双向命令，跟踪每条命令的生命周期。它可以一次向一台设备发送，也可以将面向整个设备群的发送记录为单个批次。 |
 | `dashboard-management` | 支持版本管理的仪表板定义（草稿、发布、回滚），以不透明内容存储，由本仓库前端工作区的 React 运行时包渲染。导出定义是控制台端功能，不是服务操作。 |
-| `notification-management` | 根据每租户策略，通过电子邮件（SMTP）和 webhook 将已触发的告警通知人员。策略按严重程度路由，也可以按设定间隔，对持续未确认、未解除的告警再次通知。 |
+| `notification-management` | 根据每租户策略，通过电子邮件（SMTP）、webhook、Slack、Teams 和 PagerDuty 将已触发的告警通知人员。策略按严重程度路由，也可以按设定间隔，对持续未确认、未解除的告警再次通知。参见[通知渠道](../guides/notification-channels.md)。 |
 | `user-management` | 管理全局身份、各租户成员关系、角色目录，以及 JWT 签发与验证。 |
 | `sparkplug-ingest` _（可选启用）_ | 有状态的 Sparkplug B 主机应用。它向各租户的客户 MQTT 代理建立*出站*连接，运行 Sparkplug 会话状态机，并将数据送入流水线，包括确定设备在线状态。同一时间由一个副本提供服务，通过带隔离保护的租约选举。参见 [Sparkplug B](./sparkplug.md)。 |
 | `lwm2m-ingest` _（可选启用）_ | 通过 DTLS 终止基于 CoAP/UDP 的 OMA LwM2M 连接。设备建立*入站*连接，通过经过认证的 DTLS PSK 身份识别。注册驱动在线状态，观测资源被解码为测量，读取、写入和执行（包括固件更新序列）通过命令路径完成。参见 [LwM2M](./lwm2m.md)。 |
 | `ai-inference` _（可选启用）_ | 根据自然语言描述起草检测规则，并使用其他编写界面所用的*同一个*编译器进行验证。模型提出规则，编译器判断其是否有效。它绝不参与规则评估路径。参见 [AI 辅助编写](./ai-authoring.md)。 |
 | `outbound-connectors` _（可选启用）_ | 向外部系统投递出站动作：HTTP/webhook 调用，以及向消息代理和云队列（MQTT、Kafka、AWS SNS/SQS）执行 `publish`。它使用限定于租户、支持版本管理的连接器，凭据保存在密钥存储中。服务在独立进程中运行，因此缓慢或行为异常的外部系统不会影响检测流水线。参见[出站连接器](./outbound-connectors.md)。 |
-| `mcp` _（可选启用）_ | 只读的 Model Context Protocol 服务器，使 AI 助手能够代表用户访问租户。它是 GraphQL API 上的一层轻量 OAuth 2.1 资源服务器，携带调用方自己的租户作用域令牌。它没有服务令牌，只提供经过选择的读取工具。参见 [AI 访问（MCP）](./mcp.md)。 |
+| `mcp` _（可选启用）_ | Model Context Protocol 服务器，使 AI 助手能够代表用户访问租户。它是 GraphQL API 上的一层轻量 OAuth 2.1 资源服务器，携带调用方自己的租户作用域令牌。它没有服务令牌，提供经过选择的读取工具，并在启用 mcp 区域的 `agentActuation.enabled` 后提供[预览提议工具](./mcp.md#agent-proposals)。由人在控制台批准，MCP 不执行任何操作。参见 [AI 访问（MCP）](./mcp.md)。 |
 | `update-management` | 空中（OTA）更新：固件制品及其向设备的分配。它按租户保存不可变的固件、软件和配置镜像目录，并提供流式上传，按声明的大小和 SHA-256 摘要校验内容。可用制品被分配给设备后，设备通过其设备通道得知，并凭一个短期、可续传的授权下载镜像。服务会跟踪每次尝试，从下载、校验、安装、重启直到运行版本，并对不再出声的设备判定超时。制品由你注册的签名者签名，默认情况下只有已签名的制品才能被分配，由设备校验签名。发布会把制品分配给一个设备组，每次分配的设备数量有上限。它属于 `default` 配置档。参见[空中（OTA）更新](./over-the-air-updates.md)。 |
 | `operator` | 基于 controller-runtime 的 Operator，管理 `Instance` 自定义资源及其生命周期。其协调循环观察 Helm Chart 渲染的 Deployment，并把聚合状态条件、各区域的副本数和镜像以及正在运行的版本写入 `Instance.status`。配置不会原地重新加载：服务只在启动时读取一次配置，通过滚动更新 Pod 采用更改。工作负载本身由 Helm Chart 渲染。租户是控制平面数据库记录，不是被协调的资源。 |
 
-向多台设备分发同一条命令属于 `command-delivery`，不是独立服务。参见[一条命令，多台设备](./commands.md#command-batches)。调度功能仍在计划中；当前状态以仓库为准。
+向多台设备分发同一条命令属于 `command-delivery`，不是独立服务。参见[一条命令，多台设备](./commands.md#command-batches)。定时活动已可用；参见[设备群调度](../guides/scheduling-a-fleet.md)。
 
 ## 数据与消息基础设施 {#the-data-and-messaging-backbone}
 
@@ -120,3 +120,9 @@ Operator 假定基础设施已经存在，负责 `Instance` 生命周期，而�
 - `update-management` 上的更新制品上传（`PUT /updates/artifacts/{token}/content`）和下载（`GET /updates/download/{artifact}`）端点
 - `user-management` 上的租户徽标上传与下载端点（`/branding/logo`）
 - `user-management` 上供服务获取短期服务令牌的端点（`/auth/service-token`），在同一内部端口上提供，从不经过 Ingress
+
+:::tip 动手试试
+
+**约 30 分钟，跑通你的第一台设备.** 在本地安装 DeviceChain，连接一台模拟设备，并查看它的遥测数据如何到达。 [开始快速入门 →](../quickstart/first-device.md)
+
+:::

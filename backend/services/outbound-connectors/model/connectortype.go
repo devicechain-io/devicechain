@@ -27,6 +27,9 @@ const (
 	ConnectorTypeAWSSNS ConnectorType = "aws_sns"
 	// ConnectorTypeAWSSQS publishes to an AWS SQS queue.
 	ConnectorTypeAWSSQS ConnectorType = "aws_sqs"
+	// ConnectorTypeLoRaWANDownlink links an inbound integration to its LoRaWAN network server's
+	// downlink API. It is used by the command downlink adapter, not by the REACT publish action.
+	ConnectorTypeLoRaWANDownlink ConnectorType = "lorawan_downlink"
 	// ConnectorTypeGCPPubSub publishes to a GCP Pub/Sub topic.
 	ConnectorTypeGCPPubSub ConnectorType = "gcp_pubsub"
 )
@@ -35,11 +38,12 @@ const (
 // output (RabbitMQ/Slack/…) adds an entry here plus its generator — no schema/action
 // change (SD-4: one generic `publish`, the type selects the transport).
 var registeredConnectorTypes = map[ConnectorType]struct{}{
-	ConnectorTypeMQTT:      {},
-	ConnectorTypeKafka:     {},
-	ConnectorTypeAWSSNS:    {},
-	ConnectorTypeAWSSQS:    {},
-	ConnectorTypeGCPPubSub: {},
+	ConnectorTypeMQTT:            {},
+	ConnectorTypeKafka:           {},
+	ConnectorTypeAWSSNS:          {},
+	ConnectorTypeAWSSQS:          {},
+	ConnectorTypeGCPPubSub:       {},
+	ConnectorTypeLoRaWANDownlink: {},
 }
 
 // ErrUnknownConnectorType is returned when a create/update names a type outside the

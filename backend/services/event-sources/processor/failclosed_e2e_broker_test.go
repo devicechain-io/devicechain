@@ -185,13 +185,18 @@ func startE2EPodWith(t *testing.T, serverURL, name string, on bool, clock func()
 	if !on && p.nmgr.MqttMessageStoreMarked() {
 		p.startStore()
 	}
-	p.watch = p.nmgr.StartMqttFailClosedWatch(ctx, nil, 200*time.Millisecond, func(marked bool) {
-		if marked && !on {
+	p.startWatch()
+	t.Cleanup(p.stop)
+	return p
+}
+
+// startWatch starts the pod's fail-closed watch (a pass every 200 ms).
+func (p *e2ePod) startWatch() {
+	p.watch = p.nmgr.StartMqttFailClosedWatch(context.Background(), nil, 200*time.Millisecond, func(marked bool) {
+		if marked && !p.on {
 			p.startStore()
 		}
 	})
-	t.Cleanup(p.stop)
-	return p
 }
 
 func (p *e2ePod) startStore() {
@@ -457,9 +462,23 @@ func TestEveryPubackedMessageReachesInboundEventsExactlyOnce(t *testing.T) {
 	awaitInbound(t, js, acked, 20*time.Second, "live")
 
 	// 3. The store deleted and created again: sequences restart at 1 under a new epoch.
+	//
+	// The watch is stopped across the delete and started again once it has returned. The
+	// broker takes a stream out of its registry before it has finished removing the stream's
+	// directory, so a pass that creates the store in that gap (the watch runs every 200 ms,
+	// and a loaded runner stretches the gap) makes a new stream that recovers the old one's
+	// blocks while they are removed from under it. Every write to it then fails ("error
+	// opening msg block file ... no such file or directory"), the broker closes the
+	// device's connection without a PUBACK, and the paho client, which keeps the publish for
+	// its session, never completes the token. That is a race between two out-of-band
+	// operations on one stream name in the broker, not the fail-closed path under test: the
+	// store gives no PUBACK it cannot keep (the device is refused), and the watch still
+	// creates the store again below, once the delete is done.
 	before, err := js.StreamInfo(messaging.MqttMessageStore)
 	require.NoError(t, err)
+	podA.watch.Stop()
 	require.NoError(t, js.DeleteStream(messaging.MqttMessageStore))
+	podA.startWatch()
 	require.Eventually(t, func() bool {
 		si, err := js.StreamInfo(messaging.MqttMessageStore)
 		return err == nil && si.Created.After(before.Created) && si.Config.Discard == nats.DiscardNew

@@ -5,6 +5,7 @@ package identity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -86,10 +87,17 @@ func newMintTestEnv(t *testing.T) *mintTestEnv {
 	require.NoError(t, db.AutoMigrate(
 		&iam.TenantTier{}, &iam.Tenant{}, &iam.Role{}, &iam.Identity{}, &iam.Membership{}, &iam.IdentityLink{},
 		&iam.IdpConnection{}, &iam.IdpConnectionTenant{}, &iam.IdpConnectionDomain{}, &iam.IdpRoleMapping{}, &iam.SsoLinkRequest{},
-		&iam.OAuthClient{}, &rdb.AuditEvent{}, &iam.ServiceAccount{}, &iam.ServiceAccountSecret{},
+		&iam.OAuthClient{}, &rdb.AuditEvent{}, &iam.ServiceAccount{}, &iam.ServiceAccountSecret{}, &iam.AgentPolicy{}, &iam.AgentPolicyVersion{},
 		&iam.MfaFactor{}, &iam.MfaSourceFailure{}, &iam.MfaRecoveryCode{},
 	))
-	rdbm := &rdb.RdbManager{Database: db}
+	return newMintTestEnvOn(t, &rdb.RdbManager{Database: db})
+}
+
+func newMintTestEnvOn(t *testing.T, rdbm *rdb.RdbManager) *mintTestEnv {
+	t.Helper()
+	if rdbm == nil {
+		return newMintTestEnv(t)
+	}
 	store := iam.NewStore(rdbm)
 
 	key, err := auth.GenerateKeyPair()
@@ -109,6 +117,7 @@ func newMintTestEnv(t *testing.T) *mintTestEnv {
 		accessTTL: time.Minute,
 	}
 	m.initLimiters()
+	installHarnessTokenAudience(t, m)
 	return &mintTestEnv{m: m, store: store, validator: auth.NewValidator(&key.PublicKey), kv: kv}
 }
 
@@ -127,7 +136,11 @@ func (e *mintTestEnv) epochOf(t *testing.T, email string) auth.SessionEpoch {
 // code or refresh token minted for it would carry.
 func (e *mintTestEnv) sidOf(t *testing.T, email string) auth.SessionID {
 	t.Helper()
-	sid, err := e.m.startSession(email, auth.AmrPasswordOnly())
+	// The epoch as stored, even an empty one: a few tests open a sign-in for a row whose epoch
+	// was blanked on purpose, and the sign-in must record what the row held.
+	id, err := e.store.IdentityByEmail(context.Background(), email)
+	require.NoError(t, err)
+	sid, err := e.m.startSession(email, id.SessionEpoch, auth.AmrPasswordOnly())
 	require.NoError(t, err)
 	return sid
 }
@@ -136,8 +149,12 @@ func (e *mintTestEnv) sidOf(t *testing.T, email string) auth.SessionID {
 func (e *mintTestEnv) seedTenant(t *testing.T, token string) {
 	t.Helper()
 	ctx := context.Background()
-	tier := &iam.TenantTier{Token: "silver"}
-	require.NoError(t, e.store.CreateTenantTier(ctx, tier))
+	tier, err := e.store.TenantTierByToken(ctx, "silver")
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		tier = &iam.TenantTier{Token: "silver"}
+		err = e.store.CreateTenantTier(ctx, tier)
+	}
+	require.NoError(t, err)
 	require.NoError(t, e.store.CreateTenant(ctx, &iam.Tenant{
 		Token: token, Enabled: true, TierID: tier.ID, PurgeState: iam.PurgeActive,
 	}))

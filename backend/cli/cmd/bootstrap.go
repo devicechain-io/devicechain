@@ -22,10 +22,15 @@ import (
 // (Changed), because "not given" and "given false" are different things to record.
 var bootstrapMqttFailClosed bool
 
+var bootstrapMqttDeviceUplinks bool
+
 // bootstrapMQTTExposure and bootstrapMQTTHost are --mqtt-exposure and --mqtt-host. See mqttExposureUsage.
 var (
 	bootstrapMQTTExposure string
 	bootstrapMQTTHost     string
+	// bootstrapDevAllowEgress is --dev-allow-egress, bootstrapDevAllowEgressList its parsed form.
+	bootstrapDevAllowEgress     []string
+	bootstrapDevAllowEgressList []string
 	// bootstrapSize is --size. See bootstrap.SizeNames.
 	bootstrapSize string
 )
@@ -169,7 +174,7 @@ func restoreFlagsFromArgv(backupsEnabled bool) bootstrap.RestoreFlags {
 // bootstrapOptions is the Options the bootstrap flags describe. Split out of RunE so the
 // copy of each flag into its field can be tested: a deleted line is otherwise invisible,
 // and --mqtt-fail-closed would quietly stop reaching the declaration.
-func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed *bool) bootstrap.Options {
+func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed, mqttDeviceUplinks *bool) bootstrap.Options {
 	return bootstrap.Options{
 		Instance:             instance,
 		KubeContext:          bootstrapKubeContext,
@@ -185,11 +190,13 @@ func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed *boo
 		AllowLegacyDbRemoval: bootstrapAllowLegacyDb,
 		EnableAreas:          enableAreas,
 		MqttFailClosed:       mqttFailClosed,
+		MqttDeviceUplinks:    mqttDeviceUplinks,
 		Size:                 bootstrapSize,
 		TrustedProxies:       bootstrapTrustedProxies,
 		MQTTExposure:         bootstrapMQTTExposure,
 		BrokerMaxConnections: bootstrap.BrokerMaxConnectionsFromFlag(bootstrapBrokerMaxConnectionsGiven, bootstrapBrokerMaxConnections),
 		MQTTHost:             bootstrapMQTTHost,
+		DevAllowEgress:       bootstrapDevAllowEgressList,
 		SparkplugSources:     bootstrapSparkplugSources,
 		Lwm2mIdentities:      bootstrapLwm2mIdentityList,
 
@@ -227,10 +234,12 @@ func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding,
 		SparkplugSources:          opts.SparkplugSources,
 		SparkplugSourcesGiven:     len(opts.SparkplugSources) > 0 || opts.WithdrawSparkplugSources,
 		MqttFailClosed:            opts.MqttFailClosed,
+		MqttDeviceUplinks:         opts.MqttDeviceUplinks,
 		Size:                      bootstrap.StateSizeFrom(opts.Size),
 		MQTTExposureGiven:         opts.MQTTExposure,
 		BrokerMaxConnectionsGiven: opts.BrokerMaxConnections,
 		MQTTHostGiven:             opts.MQTTHost,
+		DevAllowEgressGiven:       opts.DevAllowEgress,
 		TrustedProxiesOverride:    opts.TrustedProxies,
 		ValuesOverlay:             valuesOverlay,
 		ObjectStore:               objectStore,
@@ -238,6 +247,11 @@ func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding,
 		Escrow:                    escrowPlan,
 		Values:                    map[string]string{},
 	}
+}
+
+// mqttDeviceUplinksFlag preserves the distinction between omitted and explicit false.
+func mqttDeviceUplinksFlag(changed func(string) bool, value bool) *bool {
+	return bootstrap.MqttDeviceUplinksFromFlag(changed("mqtt-device-uplinks"), value)
 }
 
 // mqttFailClosedFlag reads --mqtt-fail-closed off a command's flag set: nil when the flag
@@ -307,6 +321,20 @@ var bootstrapCmd = &cobra.Command{
 		}
 		if err := bootstrap.CheckMQTTExposureFlags(bootstrapMQTTExposure, bootstrapMQTTHost); err != nil {
 			return err
+		}
+		// --dev-allow-egress is judged up front too: a metadata range, an unmasked prefix or a
+		// non-local --kube-context fails before any cluster exists.
+		bootstrapDevAllowEgressList = nil
+		if cmd.Flags().Changed("dev-allow-egress") {
+			if bootstrapDevAllowEgressList, err = bootstrap.ParseDevAllowEgress(bootstrapDevAllowEgress); err != nil {
+				return err
+			}
+			if bootstrapDevAllowEgressList == nil {
+				return fmt.Errorf("--dev-allow-egress needs an IP address, a CIDR or 'none'")
+			}
+			if err := bootstrap.CheckDevAllowEgressContext(bootstrapKubeContext, bootstrapDevAllowEgressList); err != nil {
+				return err
+			}
 		}
 		if err := bootstrap.ValidateSize(bootstrapSize); err != nil {
 			return fmt.Errorf("--size: %w", err)
@@ -410,7 +438,7 @@ var bootstrapCmd = &cobra.Command{
 			return err
 		}
 
-		opts := bootstrapOptions(args[1], enableAreas, mqttFailClosed)
+		opts := bootstrapOptions(args[1], enableAreas, mqttFailClosed, mqttDeviceUplinksFlag(cmd.Flags().Changed, bootstrapMqttDeviceUplinks))
 
 		// WHAT CAN BE SETTLED FROM THE ARGUMENTS ALONE IS SETTLED HERE, BEFORE THE RUN
 		// TOUCHES ANYTHING.
@@ -746,11 +774,13 @@ func init() {
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapEnableAreas, "enable-area", nil, "additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with the cluster's --compact setting; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)")
 	bootstrapCmd.Flags().StringArrayVar(&bootstrapValues, "values", nil, valuesUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapSize, "size", "", sizeUsage)
+	bootstrapCmd.Flags().BoolVar(&bootstrapMqttDeviceUplinks, "mqtt-device-uplinks", false, mqttDeviceUplinksUsage)
 	bootstrapCmd.Flags().BoolVar(&bootstrapMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
 	bootstrapCmd.Flags().IntVar(&bootstrapBrokerMaxConnections, "broker-max-connections", 0, brokerMaxConnectionsUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapMQTTExposure, "mqtt-exposure", "", mqttExposureUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapMQTTHost, "mqtt-host", "", mqttHostUsage)
+	bootstrapCmd.Flags().StringSliceVar(&bootstrapDevAllowEgress, "dev-allow-egress", nil, devAllowEgressUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapSparkplugSource, "sparkplug-source", "", sparkplugSourceUsage)
 	bootstrapCmd.Flags().BoolVar(&bootstrapWithdrawSparkplug, "withdraw-sparkplug-sources", false, withdrawSparkplugUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", lwm2mIdentitiesUsage)
@@ -829,6 +859,9 @@ func finishClaim(ctx context.Context, st *bootstrap.State, runErr error) error {
 	return finishErr
 }
 
+// devAllowEgressUsage is the help for --dev-allow-egress on bootstrap and upgrade.
+const devAllowEgressUsage = "DEVELOPMENT ONLY, local clusters only (kind, minikube, k3d, docker-desktop, rancher-desktop): let tenant webhooks and connectors reach these private destinations (IP addresses or CIDRs, repeatable or comma-separated), for example a service on your own machine or LAN. Recorded on the instance so every upgrade keeps it, shown by 'dcctl instances', and logged as a warning by every service that uses it. The cloud metadata addresses, loopback, link-local and multicast stay blocked whatever you list. 'none' removes it. Refused on any other cluster"
+
 // mqttExposureUsage and mqttHostUsage are the help for --mqtt-exposure and --mqtt-host on bootstrap and upgrade.
 const (
 	mqttExposureUsage = "how devices OUTSIDE the cluster reach the MQTT broker: gateway (a TLSRoute in Passthrough mode on the instance's Gateway, TCP 8883, routed by SNI; needs 'dcctl install --mqtt-gateway' once for the cluster), loadbalancer (a LoadBalancer Service for 8883 straight to the broker, for a cluster without Gateway API) or none (turns it off). Off by default, so an upgrade never opens a port. " +
@@ -888,3 +921,9 @@ const sparkplugSourceUsage = "path to a YAML or JSON file of Sparkplug sources t
 // withdrawSparkplugUsage is the help text of --withdraw-sparkplug-sources on both verbs.
 const withdrawSparkplugUsage = "remove the instance's Sparkplug sources and the Secret holding their broker passwords. " +
 	"Not combinable with --sparkplug-source"
+
+// mqttDeviceUplinksUsage is shared by bootstrap and upgrade.
+const mqttDeviceUplinksUsage = "let a device publish its own payload to its raw-payload MQTT topic for the decoder on its device type's profile (infrastructure.nats.mqttDeviceUplinks). " +
+	"Off by default; turn it on only after every event-sources and device-management replica runs a release that knows the topic, in an upgrade of its own. " +
+	"=false turns it off; a connected device keeps its grant until it reconnects or its session token expires. " +
+	"Recorded on the instance and kept by upgrade when omitted"

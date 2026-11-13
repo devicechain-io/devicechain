@@ -56,6 +56,53 @@ describe('channelRequest', () => {
     expect(configOf(emptyDraft('smtp'))).toBeNull();
   });
 
+  it('builds a webhook create with an optional trimmed console URL and keeps unknown settings', () => {
+    const d = { ...emptyDraft('webhook'), rawConfig: '{"url":"https://x","auth":"none","extra":{"keep":true}}' };
+    expect(JSON.parse(createRequest('hook', d).config!)).toEqual({
+      url: 'https://x', auth: 'none', extra: { keep: true },
+    });
+    expect(JSON.parse(createRequest('hook', { ...d, linkBaseUrl: ' https://c.example ' }).config!)).toEqual({
+      url: 'https://x', auth: 'none', extra: { keep: true }, linkBaseUrl: 'https://c.example',
+    });
+    expect(configOf({ ...emptyDraft('webhook'), linkBaseUrl: '  ' })).toBeNull();
+  });
+
+  it('preserves a webhook console URL and unknown settings on an unchanged or rename-only edit', () => {
+    const c = stored({
+      channelType: 'webhook',
+      config: '{"url":"https://x","auth":"none","extra":{"keep":true},"linkBaseUrl":"https://c.example"}',
+    });
+    const d = draftOf(c);
+    expect(d.linkBaseUrl).toBe('https://c.example');
+    expect(JSON.parse(d.rawConfig)).not.toHaveProperty('linkBaseUrl');
+    expect(editRequest(c, d)).toEqual({});
+    expect(editRequest(c, { ...d, name: 'New' })).toEqual({ name: 'New' });
+    expect(JSON.parse(editRequest(c, { ...d, linkBaseUrl: 'https://new.example' }).config!)).toEqual({
+      url: 'https://x', auth: 'none', extra: { keep: true }, linkBaseUrl: 'https://new.example',
+    });
+    expect(JSON.parse(editRequest(c, { ...d, linkBaseUrl: ' ' }).config!)).toEqual({
+      url: 'https://x', auth: 'none', extra: { keep: true },
+    });
+  });
+
+  it('adds a webhook console URL while preserving existing config and clears a link-only config', () => {
+    const c = stored({ channelType: 'webhook', config: '{"url":"https://x","auth":"none"}' });
+    expect(JSON.parse(editRequest(c, { ...draftOf(c), linkBaseUrl: 'https://c.example' }).config!)).toEqual({
+      url: 'https://x', auth: 'none', linkBaseUrl: 'https://c.example',
+    });
+    const linkOnly = stored({ channelType: 'webhook', config: '{"linkBaseUrl":"https://c.example"}' });
+    expect(editRequest(linkOnly, { ...draftOf(linkOnly), linkBaseUrl: '' })).toEqual({ config: null });
+  });
+
+  it('leaves unreadable webhook config alone on rename and reports invalid JSON without throwing', () => {
+    for (const rawConfig of ['{broken', 'null', '[1]', '3']) {
+      const c = stored({ channelType: 'webhook', config: rawConfig });
+      const d = draftOf(c);
+      expect(draftProblem(d, true)).toBe('config');
+      expect(editRequest(c, { ...d, name: 'New' })).toEqual({ name: 'New' });
+    }
+  });
+
   it('requires a secret for a native create but not once one is stored', () => {
     const d = emptyDraft('teams');
     expect(draftProblem(d, false)).toBe('secret');

@@ -5,12 +5,24 @@ package model
 
 import (
 	"database/sql"
+	"time"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
+
+// ClearCutoff is the moment from which this policy announces clears: a clear that happened
+// before it predates the opt-in and is not announced. It is when the option was last switched
+// on; a policy with no such stamp (the option was set by a pod from before the column) falls
+// back to its last save, which is the only moment known.
+func (p *NotificationPolicy) ClearCutoff() time.Time {
+	if p.NotifyOnClearSince.Valid {
+		return p.NotifyOnClearSince.Time
+	}
+	return p.UpdatedAt
+}
 
 // SeverityAny is the rule severity wildcard: a rule with Severity == "*" matches
 // an alarm of any severity. Any other value matches that severity exactly.
@@ -64,6 +76,21 @@ type NotificationPolicy struct {
 	QuietHoursTimezone       sql.NullString
 	QuietHoursSlots          *datatypes.JSON
 	QuietHoursBypassSeverity sql.NullString
+
+	// NotifyOnClear opts the policy into telling its channels when an alarm it paged CLEARS,
+	// not only when it raises. Off by default and for every policy that predates the column
+	// (the migration's DEFAULT false), which is exactly what those policies did before. The
+	// clear goes to the (channel, recipients) targets that actually delivered a page for the
+	// alarm's cycle and that this policy routes, whatever severity the alarm clears at; it is
+	// informational, so it is neither throttled nor held for quiet hours (a clear inside a
+	// quiet stretch is dropped, not deferred) and it does not arm escalation.
+	NotifyOnClear bool
+
+	// NotifyOnClearSince is when NotifyOnClear last turned ON, and NULL while it is off (or for a
+	// row written by a pod from before the column, which ClearCutoff covers). It is the cut-off
+	// the clear pickup measures against, not UpdatedAt: UpdatedAt moves on ANY edit, so renaming
+	// a policy would otherwise drop a clear still waiting to be announced.
+	NotifyOnClearSince sql.NullTime
 
 	// Rules are the policy's owned routing rules; loaded with the policy and
 	// replaced wholesale on update. The FK is the shortened PolicyId (not the GORM
@@ -120,8 +147,10 @@ type NotificationPolicyCreateRequest struct {
 	EscalateAfterSeconds *int32
 	MaxEscalations       *int32
 	Enabled              bool
-	Rules                []*NotificationRuleCreateRequest
-	Metadata             *string
+	// NotifyOnClear is optional on create: nil is false, today's behaviour.
+	NotifyOnClear *bool
+	Rules         []*NotificationRuleCreateRequest
+	Metadata      *string
 
 	// Quiet hours: timezone and slots together, or neither. See quiet_hours.go.
 	QuietHoursTimezone       *string
@@ -177,6 +206,7 @@ type NotificationPolicyUpdateRequest struct {
 	EscalateAfterSeconds dcgraphql.OptionalInt32
 	MaxEscalations       dcgraphql.OptionalInt32
 	Enabled              dcgraphql.OptionalBool
+	NotifyOnClear        dcgraphql.OptionalBool
 	Rules                OptionalNotificationRuleList
 	Metadata             dcgraphql.OptionalString
 

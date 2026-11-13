@@ -237,3 +237,32 @@ func TestMarshalDetectionRulesPublishedEventEmpty(t *testing.T) {
 	assert.Equal(t, "p@1", got.ProfileVersionToken)
 	assert.Empty(t, got.Rules)
 }
+
+// The device names an alarm event carries cross the hop to notification-management. A
+// consumer built before the fields existed ignores them (protobuf skips unknown numbers), and
+// a consumer reading an event from a producer that predates them sees empty strings, which it
+// omits rather than inventing a name.
+func TestAlarmEventDeviceNamesRoundTrip(t *testing.T) {
+	at := time.Date(2026, 7, 4, 10, 30, 0, 0, time.UTC)
+	event := &model.AlarmStateChangeEvent{
+		EventType: model.AlarmEventRaised, AlarmToken: "a", OriginatorType: "device", OriginatorId: 7,
+		RaisedTime: at, OccurredTime: at,
+		DeviceToken: "boiler-7", DeviceName: "Boiler 7", DeviceTypeToken: "boiler",
+	}
+	raw, err := MarshalAlarmStateChangeEvent(event)
+	require.NoError(t, err)
+	got, err := UnmarshalAlarmStateChangeEvent(raw)
+	require.NoError(t, err)
+	assert.Equal(t, "boiler-7", got.DeviceToken)
+	assert.Equal(t, "Boiler 7", got.DeviceName)
+	assert.Equal(t, "boiler", got.DeviceTypeToken)
+
+	event.DeviceToken, event.DeviceName, event.DeviceTypeToken = "", "", ""
+	raw, err = MarshalAlarmStateChangeEvent(event)
+	require.NoError(t, err)
+	got, err = UnmarshalAlarmStateChangeEvent(raw)
+	require.NoError(t, err)
+	assert.Empty(t, got.DeviceToken)
+	assert.Empty(t, got.DeviceName)
+	assert.Empty(t, got.DeviceTypeToken)
+}

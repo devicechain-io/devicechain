@@ -855,7 +855,19 @@ type ServiceAccount {
     clientId: String!
     """False when the account is disabled and cannot obtain tokens."""
     enabled: Boolean!
-    """The roles the account holds. Its tokens carry exactly these roles' authorities."""
+    """
+    True when the account runs an AI agent. Its tokens never carry a write authority: in place of
+    its roles' writes they carry the matching proposal authorities, so it can ask for an action and
+    never perform one. Set when the account is created and never changed. This field is stable,
+    not preview: it will not be removed, because removing it would turn agent accounts back into
+    integrations holding their roles' writes.
+    """
+    agent: Boolean!
+    """
+    The roles the account holds. An ordinary account's tokens carry exactly these roles'
+    authorities. (Preview: may change in a minor release.) An agent account's tokens carry their
+    reads and the proposal authorities derived from their writes.
+    """
     roles: [TenantRole!]!
     """The customers or groups whose devices the account is limited to. Empty for the whole tenant."""
     scope: [ScopeAnchor!]!
@@ -903,6 +915,201 @@ input ServiceAccountCreateRequest {
     scope: [ScopeAnchorInput!]
     """Days until the first secret expires: 1 to 730. Defaults to 365."""
     secretExpiresInDays: Int
+    """
+    (Preview: may change in a minor release.) True to create an AGENT account, for an AI agent: its tokens carry proposal authorities in
+    place of its roles' write authorities. Cannot be changed later. Defaults to false. Refused
+    unless agent actions are enabled on this instance. A tenant
+    whose agent policy lists authorities under serviceAccounts.agentFlagRequiredFor refuses an
+    account that holds any of them without this flag.
+    """
+    agent: Boolean
+}
+
+"""(Preview: may change in a minor release.) How a version of the agent policy came to be published."""
+enum AgentPolicyOrigin {
+    """(Preview: may change in a minor release.) The draft was published."""
+    PUBLISH
+    """(Preview: may change in a minor release.) An earlier version's document was published again as a new version."""
+    ROLLBACK
+    """(Preview: may change in a minor release.) The version in force was republished with only agent actuation turned on or off."""
+    ACTUATION
+}
+
+"""(Preview: may change in a minor release.) The caller's own approvals inbox standing; grants no authority."""
+type AgentApprovalAccess {
+    """(Preview: may change in a minor release.) Whether this instance enables agent actions."""
+    instanceEnabled: Boolean!
+    """(Preview: may change in a minor release.) Whether the caller currently has approver standing for this release's alarm proposals."""
+    canApprove: Boolean!
+}
+
+"""(Preview: may change in a minor release.) One published version of this tenant's agent policy. Versions are never changed or removed."""
+type AgentPolicyVersion {
+    """(Preview: may change in a minor release.) The version number. It only grows: a rollback publishes a new, higher version."""
+    version: Int!
+    """(Preview: may change in a minor release.) The policy document, as JSON."""
+    document: String!
+    """(Preview: may change in a minor release.) How this version came to be published."""
+    origin: AgentPolicyOrigin!
+    """(Preview: may change in a minor release.) Who published it."""
+    publishedBy: String!
+    """(Preview: may change in a minor release.) When it was published, as an RFC 3339 timestamp."""
+    publishedAt: String!
+}
+
+"""
+(Preview: may change in a minor release.) This tenant's agent policy: whether AI agents may act in the tenant, which OAuth clients may,
+what each kind of action needs before it happens, and who may approve it. Agents can act only
+when this instance allows agent actions, the operator has not suspended them for this tenant,
+the tenant kill switch is off, and the published policy enables them.
+"""
+type AgentPolicy {
+    """(Preview: may change in a minor release.) The version in force, or null when none has been published (agents cannot act)."""
+    published: AgentPolicyVersion
+    """(Preview: may change in a minor release.) The working draft, as JSON, or null when there is none. A draft changes nothing until it is published."""
+    draft: String
+    """(Preview: may change in a minor release.) When the draft was last saved, as an RFC 3339 timestamp, or null."""
+    draftUpdatedAt: String
+    """(Preview: may change in a minor release.) Who last saved the draft, or null."""
+    draftUpdatedBy: String
+    """(Preview: may change in a minor release.) True when the instance operator has suspended agent actions for this tenant, whatever its policy says."""
+    operatorSuspended: Boolean!
+    """(Preview: may change in a minor release.) True when the tenant has switched agent actions off with the kill switch, independent of the document."""
+    actuationOff: Boolean!
+    """(Preview: may change in a minor release.) True when this instance allows agent actions at all."""
+    instanceEnabled: Boolean!
+    """(Preview: may change in a minor release.) True when agents may act in this tenant now: the instance allows it, the operator has not suspended it, the tenant kill switch is off, and the published policy enables it."""
+    actuationInEffect: Boolean!
+}
+
+"""(Preview: may change in a minor release.) A kind of action an AI agent may ask for."""
+enum AgentActionKind {
+    """(Preview: may change in a minor release.) Acknowledge an alarm."""
+    ALARM_ACK
+    """(Preview: may change in a minor release.) Clear an alarm."""
+    ALARM_CLEAR
+    """(Preview: may change in a minor release.) Send a command to one device."""
+    COMMAND_SEND
+    """(Preview: may change in a minor release.) Send a command to several devices."""
+    COMMAND_BATCH
+    """(Preview: may change in a minor release.) Change detection rules."""
+    RULE_CHANGESET
+    """(Preview: may change in a minor release.) Start a firmware update rollout."""
+    ROLLOUT_CREATE
+    """(Preview: may change in a minor release.) Add a note to a device, asset or alarm."""
+    ANNOTATION
+}
+
+"""(Preview: may change in a minor release.) How much an action changes the physical or logical world, as its command definition declares."""
+enum AgentActionImpact {
+    """(Preview: may change in a minor release.) An ordinary action."""
+    NORMAL
+    """(Preview: may change in a minor release.) An action that interrupts a device's normal operation."""
+    DISRUPTIVE
+    """(Preview: may change in a minor release.) An action that cannot be undone."""
+    DESTRUCTIVE
+}
+
+"""(Preview: may change in a minor release.) The outcome of an agent-action decision."""
+enum AgentActionVerdict {
+    """(Preview: may change in a minor release.) The action is not allowed."""
+    REFUSE
+    """(Preview: may change in a minor release.) The action may run without a person approving it."""
+    AUTO
+    """(Preview: may change in a minor release.) The action needs the given number of people to approve it."""
+    APPROVE
+}
+
+"""(Preview: may change in a minor release.) The tenant's verdict on an action an AI agent proposes to take."""
+type AgentActuationDecision {
+    """(Preview: may change in a minor release.) What the policy says."""
+    verdict: AgentActionVerdict!
+    """(Preview: may change in a minor release.) How many distinct people must approve: 0 for AUTO and REFUSE, otherwise 1 or 2."""
+    requiredApprovals: Int!
+    """(Preview: may change in a minor release.) Platform-defined codes saying why, for example CLIENT_NOT_ALLOWED or FLOOR_TWO_PERSON."""
+    reasons: [String!]!
+    """(Preview: may change in a minor release.) The policy version the decision was made under, or 0 when none is published."""
+    policyVersion: Int!
+    """(Preview: may change in a minor release.) When set, the groups every target device must belong to. Null for no group restriction."""
+    groupRestriction: [String!]
+    """
+    (Preview: may change in a minor release.) How long a proposal made now may wait for approval, in seconds, from the policy's expiry
+    settings and never more than 24 hours. 0 when the verdict is REFUSE.
+    """
+    expiresInSeconds: Int!
+    """
+    (Preview: may change in a minor release.) The policy's limit on how many actions of this kind the client, and separately the person,
+    may propose per hour, or 0 when the policy sets none and the platform limit applies. The
+    owning service never lets it exceed the platform limit. 0 when the verdict is REFUSE.
+    """
+    actionsPerHour: Int!
+    """
+    (Preview: may change in a minor release.) Whether the client's identity is authenticated (a confidential client or an agent service
+    account) rather than a label any application can claim. False when the verdict is REFUSE.
+    """
+    clientAttested: Boolean!
+}
+
+"""
+(Preview: may change in a minor release.) What the owning service recorded about an agent's
+proposal, and who has approved it so far, for agentExecutionDecision.
+"""
+input AgentExecutionDecisionInput {
+    """(Preview: may change in a minor release.) The proposal's token, for correlation."""
+    proposalToken: String!
+    """(Preview: may change in a minor release.) The kind of action."""
+    kind: AgentActionKind!
+    """(Preview: may change in a minor release.) The action's impact. Defaults to NORMAL."""
+    impact: AgentActionImpact
+    """(Preview: may change in a minor release.) How many targets the proposal reaches."""
+    targetCount: Int!
+    """(Preview: may change in a minor release.) The groups the targets were chosen through, if any."""
+    groupTokens: [String!]
+    """(Preview: may change in a minor release.) For a command, its name."""
+    command: String
+    """(Preview: may change in a minor release.) The principal the proposal was made for, as recorded on it."""
+    proposerPrincipal: String!
+    """(Preview: may change in a minor release.) The agent client the proposal was made through, as recorded on it."""
+    proposerClient: String!
+    """(Preview: may change in a minor release.) The grant session the proposal was made under, when the token carried one."""
+    proposerSid: String
+    """(Preview: may change in a minor release.) The principals who have approved so far, including the caller when the caller is approving. At most 10."""
+    approvers: [String!]!
+    """(Preview: may change in a minor release.) An approver counts only through the sign-in named here, which must still be open and started under the identity's current session epoch. An approver in approvers with no session here does not count. At most 10."""
+    approverSessions: [AgentApproverSessionInput!]
+}
+
+"""(Preview: may change in a minor release.) The sign-in that gave a principal's approval."""
+input AgentApproverSessionInput {
+    """(Preview: may change in a minor release.) The approver's principal."""
+    principal: String!
+    """(Preview: may change in a minor release.) The approver's sign-in."""
+    sid: String!
+}
+
+"""
+(Preview: may change in a minor release.) Whether a stored agent proposal may still go ahead, and
+under what approval rules, read now from this service's records.
+"""
+type AgentExecutionDecision {
+    """The current actuation generation, advanced by each tenant or operator switch call."""
+    actuationGeneration: Int!
+    """(Preview: may change in a minor release.) What the current policy says. Never AUTO."""
+    verdict: AgentActionVerdict!
+    """(Preview: may change in a minor release.) How many distinct people must approve under the current policy: 0 for REFUSE, otherwise 1 or 2."""
+    requiredApprovals: Int!
+    """(Preview: may change in a minor release.) The named approvers who are approvers now: enabled members in an approver role, holding the write the action needs, with an active second factor and a named sign-in still open under the identity's current session epoch. Approvers without a named session do not count."""
+    validApprovers: [String!]!
+    """(Preview: may change in a minor release.) Platform-defined codes saying why, for example PROPOSER_LOST_AUTHORITY or CLIENT_NOT_ALLOWED."""
+    reasons: [String!]!
+    """(Preview: may change in a minor release.) The policy version the decision was made under, or 0 when none is published."""
+    policyVersion: Int!
+    """(Preview: may change in a minor release.) How recently, in seconds, an approver's second factor must have been verified."""
+    stepUpMaxAgeSeconds: Int!
+    """(Preview: may change in a minor release.) Whether a sign-in completed with a recovery code counts as a second factor for an approval."""
+    acceptRecoveryCodes: Boolean!
+    """(Preview: may change in a minor release.) Whether the person the proposal was made for may be its only approver."""
+    allowSelfConfirm: Boolean!
 }
 
 """
@@ -918,6 +1125,14 @@ type ServiceAccountCredentials {
     clientSecret: String!
     """The token endpoint to request tokens from. Null when this instance has no OAuth issuer configured."""
     tokenEndpoint: String
+}
+
+"""(Preview: may change in a minor release.) A named person's current standing in this tenant."""
+type PrincipalStanding {
+    """(Preview: may change in a minor release.) The requested person's sign-in name."""
+    principal: String!
+    """(Preview: may change in a minor release.) Whether the person has an enabled identity and an enabled, unscoped membership with every requested authority."""
+    qualifies: Boolean!
 }
 
 """
@@ -947,6 +1162,17 @@ type Query {
     # The ingest governance overrides for the caller's tenant (requires
     # tenant:read); read by the enforcing service over a service token.
     tenantGovernance: TenantGovernance!
+    """
+    (Preview: may change in a minor release.) Service-only: whether each named person still holds an
+    enabled, unscoped membership of this tenant with every listed authority. Answers only the
+    device-management service's own token; every other caller is refused.
+    """
+    principalStanding(
+        """(Preview: may change in a minor release.) The people's sign-in names, 1 to 10."""
+        principals: [String!]!
+        """(Preview: may change in a minor release.) The authorities each must hold, 1 to 8."""
+        authorities: [String!]!
+    ): [PrincipalStanding!]!
     """
     The token of every tenant on the instance. Returns tokens only, not tenant records.
     Requires tenant:read, which only an instance-level caller holds, so a tenant user,
@@ -1071,6 +1297,49 @@ type Query {
     tokens. Requires member:read.
     """
     serviceAccountTokenEndpoint: String
+    """
+    (Preview: may change in a minor release.) This tenant's agent policy: the version in force, the working draft, and whether agent
+    actions are in effect. Requires agent:admin.
+    """
+    agentPolicy: AgentPolicy!
+    """(Preview: may change in a minor release.) Answers only the caller's OWN standing, without agent:admin. Requires a person's own session; agent-origin tokens and scoped sessions are refused. Reveals no other principals or policy document."""
+    agentApprovalAccess: AgentApprovalAccess!
+    """(Preview: may change in a minor release.) The published versions of this tenant's agent policy, newest first. Requires agent:admin."""
+    agentPolicyVersions(
+        """(Preview: may change in a minor release.) How many versions to return: 1 to 100. Defaults to 20."""
+        limit: Int
+    ): [AgentPolicyVersion!]!
+    """
+    (Preview: may change in a minor release.) The tenant's verdict on an action an AI agent proposes to take, read now from the published
+    policy. The agent's client is the one in the caller's own token, never an argument, so this
+    answers only for the caller, and only an agent's token (one carrying a proposal authority) may
+    ask: any other caller is refused with an error. This release never answers AUTO: an action the
+    policy would let run automatically still needs one person to approve it. An error must be
+    treated as a refusal.
+    """
+    agentActuationDecision(
+        """(Preview: may change in a minor release.) The kind of action."""
+        kind: AgentActionKind!
+        """(Preview: may change in a minor release.) The action's impact, from the command definition. Defaults to NORMAL."""
+        impact: AgentActionImpact
+        """(Preview: may change in a minor release.) How many devices the action would reach."""
+        targetCount: Int!
+        """(Preview: may change in a minor release.) The groups the targets were chosen through, if any."""
+        groupTokens: [String!]
+        """(Preview: may change in a minor release.) For a command, its name."""
+        command: String
+    ): AgentActuationDecision!
+    """
+    (Preview: may change in a minor release.) Whether a stored agent proposal may still go ahead,
+    asked by the service that owns it when a person approves it. Only a person's own session
+    holding the write the action needs may ask; an agent's token is refused. It answers for the
+    original client and proposer recorded on the proposal and for every approver named, from this
+    service's records read now. An error must be treated as a refusal.
+    """
+    agentExecutionDecision(
+        """(Preview: may change in a minor release.) What the owning service recorded about the proposal, and who has approved it so far."""
+        input: AgentExecutionDecisionInput!
+    ): AgentExecutionDecision!
 }
 
 """
@@ -1147,6 +1416,18 @@ type Mutation {
         """Token of the tenant to enter."""
         tenant: String!
     ): AuthToken!
+    """
+    Verify an authenticator code in the caller's own password session and rotate its tokens.
+    Requires a tenant access token and its matching console refresh token. Recovery codes
+    are refused without redemption. (Preview: may change in a minor release.)
+    """
+    stepUp(
+        """The console session's current refresh token. It is replaced by the one this returns."""
+        refreshToken: String!
+        """The current six-digit code from the authenticator app. Recovery codes are refused."""
+        code: String!
+    ): AuthToken!
+
     """
     Completes a sign-in that login held for its second factor, and returns what login returns:
     an identity token and the tenants the identity may enter. Needs no token. challenge is the
@@ -1643,6 +1924,44 @@ type Mutation {
         """Token of the service account."""
         token: String!
     ): Boolean!
+    """
+    (Preview: may change in a minor release.) Saves the working draft of this tenant's agent policy. The document is JSON; unknown keys
+    and invalid values are refused. Saving changes nothing in force. Requires agent:admin, and
+    cannot be called by an AI agent or a service account.
+    """
+    saveAgentPolicyDraft(
+        """(Preview: may change in a minor release.) The policy document, as JSON."""
+        document: String!
+    ): AgentPolicy!
+    """
+    (Preview: may change in a minor release.) Publishes the draft as the agent policy in force, as a new version. A change that loosens the
+    policy (more automatic actions, larger limits, new clients, more approvers, fewer approvals,
+    weaker sign-in requirements) needs a second factor verified within the policy's step-up age,
+    and is refused with the code STEP_UP_REQUIRED otherwise. Requires agent:admin, and cannot be
+    called by an AI agent or a service account.
+    """
+    publishAgentPolicy: AgentPolicy!
+    """
+    (Preview: may change in a minor release.) Publishes an earlier version's document again, as a new version. The same step-up rule as
+    publishAgentPolicy applies. Requires agent:admin, and cannot be called by an AI agent or a
+    service account.
+    """
+    rollbackAgentPolicy(
+        """(Preview: may change in a minor release.) The version whose document to publish again."""
+        version: Int!
+    ): AgentPolicy!
+    """
+    (Preview: may change in a minor release.) Turns agent actions in this tenant off or on using a flag independent of the policy document.
+    Turning them off sets the kill flag and needs no second factor; while upgrading it may also
+    publish the policy with actuation disabled.
+    Turning them back on needs a fresh second factor under the policy in force; if the document
+    disables actuation, enabling publishes it enabled. Requires agent:admin, and cannot be called by an AI
+    agent or a service account.
+    """
+    setAgentActuation(
+        """(Preview: may change in a minor release.) False to stop agent actions; true to allow them again under the published policy."""
+        enabled: Boolean!
+    ): AgentPolicy!
 }
 
 schema {

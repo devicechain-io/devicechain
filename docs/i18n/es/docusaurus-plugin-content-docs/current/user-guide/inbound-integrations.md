@@ -39,7 +39,7 @@ su estado. Tres insignias piden atención:
 ## Crear una integración {#creating}
 
 Antes de empezar, ten un tipo de dispositivo para los dispositivos que hay detrás del remitente, y a ser
-posible una [métrica](/user-guide/device-types-and-profiles#métricas) declarada para cada valor
+posible una [métrica](device-types-and-profiles.md#metrics) declarada para cada valor
 decodificado al que quieras dar una unidad. Después elige **Nueva integración** y rellena:
 
 - **Tipo de remitente**: **ChirpStack v4**, **The Things Stack v3**, **JSON genérico** o **Binario
@@ -71,7 +71,7 @@ Para un remitente genérico aparece una sección **Dónde están los datos**:
 - **Hora del remitente** (opcional): un puntero JSON a la hora que registró el remitente. Sin él se usa
   la hora de recepción, y una petición reintentada se guarda dos veces.
 - **Trama sin procesar** y **Codificación de la trama** (opcionales, solo JSON): dónde hay una trama sin
-  procesar codificada, que se conserva para un decodificador. La trama todavía no se decodifica.
+  procesar codificada para el decodificador de carga útil del perfil publicado del dispositivo.
 
 Elige **Crear integración**. El siguiente cuadro, **Integración creada**, muestra el **token de
 portador**. **Se muestra una sola vez.** No se puede volver a leer; si se pierde, rótalo. Introdúcelo
@@ -95,16 +95,18 @@ página:
 - Introduce la **Event endpoint URL** de la página. ChirpStack añade él mismo el tipo de evento a la
   URL; solo se leen los envíos ascendentes y los demás eventos se confirman y se ignoran.
 - Añade la cabecera `Authorization` con el valor `Bearer <token de portador>`.
-- Configura un **códec** en el perfil de dispositivo de ChirpStack. Sin él, un envío no lleva valores
-  decodificados y se cuenta como sin decodificar.
+- Configura un **códec** en el perfil de dispositivo de ChirpStack, o publica un **Decodificador**
+  en el perfil de dispositivo de DeviceChain para leer la trama sin procesar. Sin ninguno de los dos,
+  un envío no lleva valores decodificados y se cuenta como sin decodificar.
 
 ### The Things Stack v3 {#the-things-stack}
 
 En The Things Stack, abre la aplicación, añade un **Custom webhook** con formato JSON e introduce la
 **Base URL** y la cabecera `Authorization` de la página. Habilita el mensaje de envío ascendente en una
 de las rutas que enumera la página. Los mensajes en cualquier otra ruta se confirman y se ignoran.
-Configura un **payload formatter** en la aplicación o el dispositivo; si no, el envío se cuenta como sin
-decodificar.
+Configura un **payload formatter** en la aplicación o el dispositivo, o publica un **Decodificador**
+en el perfil de DeviceChain para leer la trama sin procesar. Sin ninguno de los dos, el envío se
+cuenta como sin decodificar.
 
 ### Remitentes genéricos {#generic}
 
@@ -112,9 +114,9 @@ Para **JSON genérico** y **Binario genérico**, la página da una petición de 
 el identificador. Un remitente genérico debe enviar cada envío como un `POST` HTTP con el token de
 portador en la cabecera `Authorization`. Las formas exactas de la petición están en las secciones
 [JSON genérico](/guides/inbound-integrations#generic-json) y
-[Binario genérico](/guides/inbound-integrations#generic-binary) de la guía. El binario genérico solo
-cuenta los envíos y conserva una muestra de los primeros bytes: sirve para ver qué envía un remitente,
-no para guardar lecturas.
+[Binario genérico](/guides/inbound-integrations#generic-binary) de la guía. El binario genérico guarda
+lecturas cuando el perfil publicado del dispositivo tiene un decodificador de carga útil para la trama.
+Sin un decodificador, solo cuenta los envíos sin decodificar y conserva una muestra de los primeros bytes.
 
 ### El certificado del remitente {#sender-certificate}
 
@@ -156,10 +158,14 @@ hexadecimal, cuándo se rechazó la última petición y cuándo se generó el to
 
 ### Envíos sin nada que leer {#undecoded}
 
-Un envío cuenta como sin decodificar cuando no lleva ningún objeto decodificado con un valor numérico o booleano (un booleano se almacena como 1 o 0).
-En un servidor de red, la causa habitual es que falta un códec o un payload formatter: configura uno en
-el perfil de dispositivo de allí y usa codificación JSON. DeviceChain no decodifica la trama sin
-procesar.
+Para un tipo de dispositivo sin un decodificador de carga útil publicado, un envío cuenta como sin
+decodificar cuando no lleva ningún objeto decodificado con un valor numérico o booleano (un booleano
+se almacena como 1 o 0). Configura un códec o un payload formatter en el servidor de red y usa
+codificación JSON, o publica un **Decodificador** en el perfil de dispositivo de DeviceChain para
+convertir la trama sin procesar en lecturas. Las indicaciones de conexión de la consola siguen
+describiendo la opción del códec en el servidor de red. Los fallos del decodificador se muestran en
+la pestaña **Decodificador** del perfil, en **Estado** y **Fallos recientes**, en lugar de en este
+recuento de envíos sin decodificar. Consulta [Decodificadores de carga útil](/guides/payload-decoders).
 
 ### Un token rechazado {#rejected-token}
 

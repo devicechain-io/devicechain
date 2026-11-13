@@ -142,6 +142,8 @@ export async function listDevices(opts: {
   pageNumber: number;
   pageSize: number;
   deviceType?: string;
+  /** Only devices whose name or token contains this text, ignoring case. Blank is no filter. */
+  nameContains?: string;
   /** Only devices holding a credential this provisioning profile issued (unscoped callers). */
   provisioningProfile?: string;
   /** Only devices earmarked for this provisioning profile (unscoped callers). */
@@ -152,6 +154,7 @@ export async function listDevices(opts: {
       pageNumber: opts.pageNumber,
       pageSize: opts.pageSize,
       deviceType: opts.deviceType ?? null,
+      ...(opts.nameContains?.trim() ? { nameContains: opts.nameContains.trim() } : {}),
       // Omitted, not null, when unset: a scoped caller's request must not name the fields at all.
       ...(opts.provisioningProfile ? { provisioningProfile: opts.provisioningProfile } : {}),
       ...(opts.expectedProvisioningProfile
@@ -295,8 +298,8 @@ export async function importDevices(
 }
 
 const UPDATE_DEVICE = graphql(`
-  mutation UpdateDevice($token: String!, $request: DeviceUpdateRequest!) {
-    updateDevice(token: $token, request: $request) {
+  mutation UpdateDevice($token: String!, $request: DeviceUpdateRequest!, $breakGlassReason: String) {
+    updateDevice(token: $token, request: $request, breakGlassReason: $breakGlassReason) {
       id
       token
       name
@@ -330,8 +333,9 @@ const UPDATE_DEVICE = graphql(`
 export async function updateDevice(
   token: string,
   request: DeviceUpdateRequest,
+  breakGlassReason?: string,
 ): Promise<Device> {
-  const data = await gql('device-management', UPDATE_DEVICE, { token, request });
+  const data = await gql('device-management', UPDATE_DEVICE, { token, request, ...(breakGlassReason !== undefined && { breakGlassReason }) });
   return data.updateDevice;
 }
 
@@ -466,11 +470,14 @@ const DEVICE_TYPES = graphql(`
 export async function listDeviceTypes(opts: {
   pageNumber: number;
   pageSize: number;
+  /** Only device types whose name or token contains this text, ignoring case. Blank is no filter. */
+  nameContains?: string;
 }): Promise<DeviceTypeSearchResults> {
   const data = await gql('device-management', DEVICE_TYPES, {
     criteria: {
       pageNumber: opts.pageNumber,
       pageSize: opts.pageSize,
+      ...(opts.nameContains?.trim() ? { nameContains: opts.nameContains.trim() } : {}),
     },
   });
   return data.deviceTypes;
@@ -549,8 +556,8 @@ export async function createDeviceType(request: DeviceTypeCreateRequest): Promis
 }
 
 const UPDATE_DEVICE_TYPE = graphql(`
-  mutation UpdateDeviceType($token: String!, $request: DeviceTypeUpdateRequest!) {
-    updateDeviceType(token: $token, request: $request) {
+  mutation UpdateDeviceType($token: String!, $request: DeviceTypeUpdateRequest!, $breakGlassReason: String) {
+    updateDeviceType(token: $token, request: $request, breakGlassReason: $breakGlassReason) {
       id
       token
       name
@@ -586,8 +593,9 @@ const UPDATE_DEVICE_TYPE = graphql(`
 export async function updateDeviceType(
   token: string,
   request: DeviceTypeUpdateRequest,
+  breakGlassReason?: string,
 ): Promise<DeviceType> {
-  const data = await gql('device-management', UPDATE_DEVICE_TYPE, { token, request });
+  const data = await gql('device-management', UPDATE_DEVICE_TYPE, { token, request, ...(breakGlassReason !== undefined && { breakGlassReason }) });
   return data.updateDeviceType;
 }
 
@@ -1150,6 +1158,7 @@ export async function deleteDeviceProfile(token: string): Promise<boolean> {
 const DEVICE_PROFILE_VERSIONS = graphql(`
   query DeviceProfileVersions($token: String!) {
     deviceProfileVersions(token: $token) {
+      automationReviewToken
       version
       label
       description
@@ -1213,8 +1222,8 @@ export async function getFacetValues(facet: DeviceFacet): Promise<string[]> {
 }
 
 const PUBLISH_DEVICE_PROFILE = graphql(`
-  mutation PublishDeviceProfile($token: String!, $label: String, $description: String) {
-    publishDeviceProfile(token: $token, label: $label, description: $description) {
+  mutation PublishDeviceProfile($token: String!, $label: String, $description: String, $automationReviewToken: String) {
+    publishDeviceProfile(token: $token, label: $label, description: $description, automationReviewToken: $automationReviewToken) {
       version
     }
   }
@@ -1224,26 +1233,28 @@ export async function publishDeviceProfile(
   token: string,
   label?: string,
   description?: string,
+  automationReviewToken?: string,
 ): Promise<number> {
   const data = await gql('device-management', PUBLISH_DEVICE_PROFILE, {
     token,
     label: label ?? null,
     description: description ?? null,
+    ...(automationReviewToken !== undefined && { automationReviewToken }),
   });
   return data.publishDeviceProfile.version;
 }
 
 const ROLLBACK_DEVICE_PROFILE = graphql(`
-  mutation RollbackDeviceProfile($token: String!, $version: Int!) {
-    rollbackDeviceProfile(token: $token, version: $version) {
+  mutation RollbackDeviceProfile($token: String!, $version: Int!, $breakGlassReason: String) {
+    rollbackDeviceProfile(token: $token, version: $version, breakGlassReason: $breakGlassReason) {
       token
       activeVersion
     }
   }
 `);
 
-export async function rollbackDeviceProfile(token: string, version: number): Promise<void> {
-  await gql('device-management', ROLLBACK_DEVICE_PROFILE, { token, version });
+export async function rollbackDeviceProfile(token: string, version: number, breakGlassReason?: string): Promise<void> {
+  await gql('device-management', ROLLBACK_DEVICE_PROFILE, { token, version, ...(breakGlassReason !== undefined && { breakGlassReason }) });
 }
 
 // ── Metric definitions (ADR-016) ──────────────────────────────────────────

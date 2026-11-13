@@ -971,6 +971,15 @@ run_assertions() {
   rejects postgres_max_connections 600.5
   accepts postgres_max_connections 100
   accepts postgres_max_connections 800
+  # The relational store's max_wal_size, in MiB: whole, at least 64, or 0 for Postgres's own.
+  for v in 0 64 4096 8192; do accepts postgres_max_wal_size_mib "$v"; done
+  for v in 1 63 -1 1.5; do rejects postgres_max_wal_size_mib "$v"; done
+  # The precondition behind it (postgres_wal_guard): a quarter of postgres_storage. An unparseable
+  # unit (16G, 1.5Gi) must plan, not fail on a null; 4096 on 8Gi must be refused.
+  evaluates true 'local.postgres_storage_mib == null ? true : var.postgres_max_wal_size_mib * 4 <= local.postgres_storage_mib' -var postgres_max_wal_size_mib=4096 -var postgres_storage=16G
+  evaluates true 'local.postgres_storage_mib == null ? true : var.postgres_max_wal_size_mib * 4 <= local.postgres_storage_mib' -var postgres_max_wal_size_mib=4096 -var postgres_storage=1.5Gi
+  evaluates true 'local.postgres_storage_mib == null ? true : var.postgres_max_wal_size_mib * 4 <= local.postgres_storage_mib' -var postgres_max_wal_size_mib=4096 -var postgres_storage=16Gi
+  evaluates false 'local.postgres_storage_mib == null ? true : var.postgres_max_wal_size_mib * 4 <= local.postgres_storage_mib' -var postgres_max_wal_size_mib=4096 -var postgres_storage=8Gi
 
   # --- chart version pins, the RUNTIME half -------------------------------------
   #
@@ -1098,7 +1107,7 @@ run_assertions() {
   accepts nats_server_image_tag ""
   accepts nats_server_image_tag "v0.26.0"
   accepts nats_server_image_tag "0.24.0-drill.1"
-  accepts nats_server_image_tag "2.15.2-alpine"
+  accepts nats_server_image_tag "2.15.3-alpine"
   rejects nats_server_image_digest "sha256:abc"
   rejects nats_server_image_digest "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   rejects nats_server_image_digest "sha256:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"

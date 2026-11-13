@@ -27,7 +27,7 @@ type profileResolutionRig struct {
 func newProfileResolutionRig(t *testing.T) *profileResolutionRig {
 	t.Helper()
 	api := newPartialUpdateApi(t, append(append([]any{}, deviceProfileTables...),
-		&GeoFence{}, &GeoFenceSetVersion{}, &GeoFenceGeometryBlob{})...)
+		&GeoFence{}, &Area{}, &GeoFenceSetVersion{}, &GeoFenceGeometryBlob{})...)
 	ctx := core.WithTenant(context.Background(), partialUpdateTenant)
 	kv := msgtest.NewMemoryKV()
 	capi := NewCachedApi(api, &Caches{ProfileResolutionByType: kv.NewCache()})
