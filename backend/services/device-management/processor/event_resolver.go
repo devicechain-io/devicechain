@@ -1585,8 +1585,9 @@ func (rez *EventResolver) Process(ctx context.Context) {
 					// A failed decode past its device type's record budget: counted as suppressed by the
 					// accountant and settled here WITHOUT a failed-events record, so a broken decoder at
 					// a large tenant cannot flood the platform-wide stream. It is terminal on the first
-					// delivery like any failed decode, and never silent: the first records of the
-					// window are already out and the tally says how many were not written.
+					// delivery like any failed decode: the first failures of the window were admitted.
+					// Normally their records are out; a failed-events outage may leave them unwritten,
+					// so a redelivery can end suppressed with no record, still counted in the tally.
 					_ = unresolved.Ack()
 					done(core.ResultDropped)
 				} else if errors.Is(err, ErrNotGatewayChild) {

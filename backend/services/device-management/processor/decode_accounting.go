@@ -37,10 +37,12 @@ import (
 // 🔴 WHAT IS DURABLE AND WHAT IS NOT. A recorded failure is a failed-events record written before
 // the source is acked, and that is the exact count. The tallies and samples are not: a tally lives
 // in memory until the next flush (about a minute), so a crash loses up to that much of the COUNTS,
-// and a sample is best-effort. A suppressed failure only happens once 20 records for its device type
-// are already out, so a broken decoder is never invisible; only its exact tally can be short. After
-// a crash (or a failed-events outage) a redelivered source can be counted twice, so counts are "at
-// least". The resolver tells the accountant once per delivery, not once per store-hold re-run.
+// and a sample is best-effort. A suppressed failure happens once 20 failures for its device type
+// have been ADMITTED in the window. Normally their records are out, but a failed-events outage may
+// leave admitted records unwritten: a redelivery can end suppressed with no record, still counted
+// in the suppressed tally. After a crash (or a failed-events outage) a redelivered source can be
+// counted twice, so counts are "at least". The resolver tells the accountant once per delivery,
+// not once per store-hold re-run.
 //
 // 🔴 THE FLUSH IS IDEMPOTENT. Each row is this replica's CUMULATIVE tally for the window and is
 // written with SET, so a write whose commit succeeded but whose reply was lost, written again on

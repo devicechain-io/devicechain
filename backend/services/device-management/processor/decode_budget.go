@@ -17,13 +17,13 @@ import (
 // front of it, per replica:
 //
 //   - the RECORD budget, per (tenant, device type): a token bucket of 20, refilled 10 a minute. A
-//     failure inside it is a failed-events record; a failure past it is counted as suppressed and
+//     failure inside it is admitted for recording; a failure past it is counted as suppressed and
 //     its source is acked without a record;
 //   - the SAMPLE budget, per (tenant, profile): one stored failing uplink every 10 seconds.
 //
-// Neither is ever a silent drop. The first 20 failures of a window are always recorded, so a broken
-// decoder is visible before anything is suppressed, and every suppressed uplink is in the health
-// tally.
+// The first 20 failures of a window are always ADMITTED for recording. Normally their records are
+// out before suppression; during a failed-events outage they may not land, and a redelivery can end
+// suppressed with no record. Every suppressed uplink is still counted in the health tally.
 const (
 	// DecodeRecordBurst is the record bucket's capacity.
 	DecodeRecordBurst = 20
