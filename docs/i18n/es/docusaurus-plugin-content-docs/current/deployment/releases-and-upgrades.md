@@ -799,16 +799,21 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 ## Versiones recientes {#recent-releases}
 
-Las tres versiones menores más recientes (`v1.5`, `v1.4` y `v1.3`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (`v1.5`, `v1.4` y `v1.3`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
 
-### v1.6.0 — una recarga de configuración del broker mantiene conectados los dispositivos {#v160-upgrade}
+### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 
-#### Un cambio en la configuración del broker mantiene conectados los dispositivos {#v160-broker-reload}
+`v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
-Un cambio en la configuración del broker cerraba todas las conexiones que había admitido el callout de autenticación, lo que incluye a todos los dispositivos MQTT que se autentican con un nombre de usuario. La biblioteca `nats-server` del broker trataba esas conexiones como si pertenecieran a usuarios que ya no existían y las cerraba en cualquier recarga de configuración, incluso si no cambiaba nada. Los dispositivos se reconectaban solos, pero un cambio de ajustes provocaba una ráfaga de reconexiones. El broker ahora se compila con `nats-server` `v2.15.3`, que incluye la corrección, por lo que una recarga aplica la nueva configuración y deja abiertas esas conexiones.
+#### Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación {#v160-broker-reload}
 
-- **No hay que hacer nada.** `dcctl upgrade` sigue reiniciando de forma gradual el broker en cualquier actualización que cambie su imagen o configuración; ese proceso reinicia los pods y desconecta sus dispositivos como antes. Lo que cambia es una recarga sin reinicio, como un cambio solo de ajustes.
-- **Un certificado TLS renovado** mantiene su comportamiento anterior: se aplica a las conexiones nuevas sin recarga.
+Una recarga completa del broker cerraba todas las conexiones admitidas por el callout de autenticación, entre ellas las de todos los dispositivos MQTT que se autentican con un nombre de usuario. El broker ahora se compila con `nats-server` `v2.15.3`, por lo que un cambio en el conjunto de CA del Secret TLS del broker (una rotación de CA), o una recarga manual, mantiene abiertas esas conexiones. Una recarga sin reinicio solo ocurre cuando el sidecar config-reloader del chart envía SIGHUP porque cambió el Secret TLS montado, o cuando un operador ejecuta `nats-server --signal reload` a mano.
+
+Cuando una recarga cambia los ajustes de autenticación del propio servidor (sus usuarios configurados, nkeys, etiquetas o ajustes TLS verify/map), `nats-server` sigue enviando las conexiones admitidas por el callout de nuevo al callout de autenticación. Una conexión que el callout rechace entonces se cierra.
+
+- **No hay que hacer nada.**
+- **Un cambio de configuración sigue reiniciando gradualmente el broker.** La configuración del broker se genera en un ConfigMap y el chart incorpora su hash a la plantilla de pods del StatefulSet. Cualquier cambio en esa configuración generada (ajustes, dimensionamiento o cuentas) reinicia los pods del broker, por lo que los dispositivos se reconectan, como antes; `dcctl upgrade` reinicia gradualmente el broker en cualquier actualización que cambie su imagen o configuración.
+- **Un certificado TLS renovado** bajo la misma CA mantiene su comportamiento anterior, vigente desde `v0.27.0`: se aplica a las conexiones nuevas sin recarga.
 - **La imagen de upstream para volver al broker original ahora es `nats:2.15.3-alpine`**: fija `server_image_repository = "nats"` y `server_image_tag = "2.15.3-alpine"`, como se describe en [Certificados de dispositivos](./device-certificates.md). Añade la nueva etiqueta a las imágenes que replicas si mantienes preparada esa vuelta atrás.
 
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
@@ -1440,7 +1445,7 @@ Se añaden las siguientes migraciones. Cada columna nueva admite nulos y cada ta
 #### Problemas conocidos {#v130-known-issues}
 
 - **La confirmación MQTT en modo de fallo cerrado está desactivada por defecto,** como en `v1.2.0`. La página del [transporte MQTT](../reference/transport-matrix.md#mqtt--the-platform-broker) indica los límites medidos con ella desactivada y activada.
-- **Un cambio en la configuración del broker sigue desconectando a los dispositivos que admitió el callout de autenticación,** hasta que la biblioteca del broker incluya la corrección de origen. Una renovación de certificado no lo hace. **Corregido en `v1.6.0`:** consulta [Un cambio en la configuración del broker mantiene conectados los dispositivos](#v160-broker-reload).
+- **Un cambio en la configuración del broker sigue desconectando a los dispositivos que admitió el callout de autenticación,** hasta que la biblioteca del broker incluya la corrección de origen. Una renovación de certificado no lo hace. **Corregido en `v1.6.0`:** consulta [Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación](#v160-broker-reload).
 - **`eventSources.ingestMetering: lagCredit` sigue sin estar disponible,** y se rechaza al arrancar; consulta [Medición de la ingesta](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-ingest-metering). Llega, con activación opcional, en [`v1.4.0`](#v140-ingest-metering).
 - **OCSP todavía no almacena lo que averigua ni termina las sesiones abiertas,** como se describe en [OCSP para conexiones con certificado](#v130-ocsp).
 - **Un evento almacenado más de 10 minutos después del final de la hora en que se recibió no se cuenta en el registro de uso del inquilino,** y tampoco un evento recibido después de la actualización pero fechado dentro de un fragmento que ya estaba comprimido. Consulta [Uso de eventos por inquilino](#v130-usage-metering).
@@ -1496,7 +1501,7 @@ Los dispositivos pueden autenticarse en el broker de la plataforma con un certif
 
 - **Un certificado TLS renovado ya no desconecta las sesiones MQTT.** El broker aplica un certificado cambiado bajo la misma autoridad a las conexiones nuevas sin recargar su configuración, así que un dispositivo conectado sigue conectado. En una prueba, 30 sesiones mantenidas tras el callout de autenticación sobrevivieron a una rotación y la conexión siguiente recibió el certificado nuevo.
 - **`dcctl upgrade` renueva el certificado hoja del broker sin reiniciarlo** cuando el único motivo es la caducidad: la autoridad no cambia y el broker ya ejecuta el número de réplicas para el que se emite el certificado. Escribe el Secret y espera hasta cinco minutos a que cada pod del broker informe de la nueva caducidad. Si no puede confirmarse, avisa y reinicia el broker, de modo que un certificado antiguo nunca queda sirviéndose tras una renovación aparentemente correcta. Un cambio de autoridad, de nombres o de número de réplicas sigue reiniciándolo.
-- **Un cambio en la configuración del broker sigue recargándolo,** y una recarga sigue desconectando las sesiones de los dispositivos admitidos por el callout, hasta que la biblioteca del broker incluya una corrección de upstream que aún no está en ninguna versión. `dcctl upgrade` reinicia el broker en toda actualización que cambie su imagen o su configuración.
+- **Un cambio en la configuración del broker sigue recargándolo,** y una recarga sigue desconectando las sesiones de los dispositivos admitidos por el callout, hasta que la biblioteca del broker incluya una corrección de upstream que aún no está en ninguna versión. `dcctl upgrade` reinicia el broker en toda actualización que cambie su imagen o su configuración. **Corregido en `v1.6.0`:** consulta [Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación](#v160-broker-reload).
 - **La biblioteca del broker es nats-server 2.15.2,** una versión de seguridad; entre sus correcciones, el callout de autenticación ahora respeta los tipos de conexión que permite. `dc-nats-server` se construye sobre ella. La imagen de control para volver al broker upstream es `nats:2.15.2-alpine`; el ajuste que se usa es `server_image_tag = "2.15.2-alpine"`.
 - **Tras una actualización que reinicia el broker, `dcctl` reequilibra el liderazgo.** El servidor reiniciado en último lugar solía no liderar ningún stream, y el p99 del acuse de publicación se duplicaba aproximadamente hasta que el liderazgo se movía. El último paso de `dcctl upgrade` ahora mueve los líderes de streams y consumidores para igualar los servidores e imprime los líderes por servidor antes y después. Es de mejor esfuerzo: un fallo es una advertencia, nunca un fallo de la actualización. [`dcctl broker rebalance <instancia>`](../reference/dcctl.md#dcctl-broker-rebalance) hace lo mismo a petición, y la nueva alerta `BrokerLeadershipImbalanced` salta cuando un servidor lidera menos de la mitad de la media.
 
@@ -1524,7 +1529,7 @@ Avanza desde esta versión; no retrocedas. Las dos migraciones nuevas añaden un
 
 #### Problemas conocidos {#v0270-known-issues}
 
-- **Un cambio en la configuración del broker sigue desconectando a los dispositivos admitidos por el callout de autenticación,** hasta que la biblioteca del broker incluya la corrección de upstream. Una renovación de certificado no lo hace.
+- **Un cambio en la configuración del broker sigue desconectando a los dispositivos admitidos por el callout de autenticación,** hasta que la biblioteca del broker incluya la corrección de upstream. Una renovación de certificado no lo hace. **Corregido en `v1.6.0`:** consulta [Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación](#v160-broker-reload).
 
 ### v0.26.0 — los dispositivos se registran solos y el front end pasa a Traefik {#v0260-upgrade}
 

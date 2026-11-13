@@ -59,6 +59,28 @@ func rotateAndReload(t *testing.T, fleet int, reload func(*running) error) int {
 	return n
 }
 
+// TestHeldFleetCountsAServerShutdownAsLost is the control for the Lost()==0 assertions in this file.
+func TestHeldFleetCountsAServerShutdownAsLost(t *testing.T) {
+	r := startBroker(t, true)
+	f, err := smoke.HoldFleet(r.dir, r.nats, r.mqtt, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(f.Close)
+
+	r.s.Shutdown()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.Lost() > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if f.Lost() == 0 {
+		t.Fatal("the fleet counted no loss when its broker shut down: a Lost() of 0 elsewhere proves nothing")
+	}
+}
+
 // TestTLSRotationReloadKeepsMQTTSessions is the D-AB2 reproduction: a certificate rotation as
 // cert-manager performs it (new leaf, same CA, files rewritten in place), followed by the reload
 // the SIGHUP path performs, must leave every established MQTT session connected, and the NEXT
