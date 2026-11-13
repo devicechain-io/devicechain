@@ -88,6 +88,79 @@ func TestDcctlOverlayStillRefusesUserManagementAuth(t *testing.T) {
 	}
 }
 
+// dcctl allows dead-letter tuning, so its overlay validation must enforce the duration bounds.
+func TestChartSchemaRefusesDeadLetterSettingsThatOverflowADuration(t *testing.T) {
+	// These mirror config.MaxDurationDays and config.MaxDurationSeconds in user-management.
+	const maxDurationDays = 106751
+	const maxDurationSeconds = 9223372036
+	for _, tc := range []struct {
+		key      string
+		refused  []int
+		accepted []int
+	}{
+		{"retentionDays", []int{maxDurationDays + 1, -1}, []int{maxDurationDays, 0}},
+		{"sweepSeconds", []int{maxDurationSeconds + 1}, []int{maxDurationSeconds, 0, -1}},
+	} {
+		overlay := func(value int) map[string]interface{} {
+			return map[string]interface{}{"functionalAreas": map[string]interface{}{
+				"user-management": map[string]interface{}{"config": map[string]interface{}{
+					"deadLetters": map[string]interface{}{tc.key: value},
+				}},
+			}}
+		}
+		for _, value := range tc.refused {
+			t.Run(fmt.Sprintf("%s/%d/refused", tc.key, value), func(t *testing.T) {
+				err := ValidateValuesOverlay(overlay(value))
+				if err == nil {
+					t.Fatalf("deadLetters.%s = %d passed the chart schema; it must be refused", tc.key, value)
+				}
+				if !strings.Contains(err.Error(), "/deadLetters/"+tc.key) {
+					t.Fatalf("the refusal must name /deadLetters/%s, got: %v", tc.key, err)
+				}
+			})
+		}
+		for _, value := range tc.accepted {
+			t.Run(fmt.Sprintf("%s/%d/accepted", tc.key, value), func(t *testing.T) {
+				if err := ValidateValuesOverlay(overlay(value)); err != nil {
+					t.Fatalf("deadLetters.%s = %d must pass the chart schema: %v", tc.key, value, err)
+				}
+			})
+		}
+	}
+}
+
+// The chart refuses token TTLs that would overflow the service's duration conversion.
+func TestChartSchemaRefusesTokenTtlThatOverflowsADuration(t *testing.T) {
+	// This mirrors config.MaxDurationSeconds in user-management, which is not a
+	// dependency of dcctl. Both bounds must stay in step with the service.
+	const maxDurationSeconds = 9223372036
+	overlay := func(auth map[string]interface{}) map[string]interface{} {
+		return map[string]interface{}{"functionalAreas": map[string]interface{}{
+			"user-management": map[string]interface{}{"config": map[string]interface{}{"auth": auth}},
+		}}
+	}
+	for _, key := range []string{"accessTokenTtlSeconds", "refreshTokenTtlSeconds"} {
+		for _, seconds := range []int{-1, maxDurationSeconds + 1} {
+			t.Run(fmt.Sprintf("%s/%d/refused", key, seconds), func(t *testing.T) {
+				err := validateAgainstChartSchemaOnly(t, overlay(map[string]interface{}{key: seconds}))
+				if err == nil {
+					t.Fatalf("functionalAreas.user-management.config.auth.%s = %d passed the chart schema; it must be refused", key, seconds)
+				}
+				if !strings.Contains(err.Error(), "/"+key) {
+					t.Fatalf("the refusal must name /%s, got: %v", key, err)
+				}
+			})
+		}
+		for _, seconds := range []int{0, maxDurationSeconds} {
+			t.Run(fmt.Sprintf("%s/%d/accepted", key, seconds), func(t *testing.T) {
+				if err := validateAgainstChartSchemaOnly(t, overlay(map[string]interface{}{key: seconds})); err != nil {
+					t.Fatalf("%s = %d must still pass the chart schema: %v", key, seconds, err)
+				}
+			})
+		}
+	}
+}
+
 // dcctl allows tenant-purge tuning, so its overlay validation must enforce the duration bounds.
 func TestChartSchemaRefusesTenantPurgeSecondsThatOverflowADuration(t *testing.T) {
 	// This mirrors config.MaxDurationSeconds in user-management.
@@ -122,38 +195,6 @@ func TestChartSchemaRefusesTenantPurgeSecondsThatOverflowADuration(t *testing.T)
 			t.Run(fmt.Sprintf("%s/%d/accepted", key, seconds), func(t *testing.T) {
 				if err := ValidateValuesOverlay(overlay(seconds)); err != nil {
 					t.Fatalf("tenantPurge.%s = %d must pass the chart schema: %v", key, seconds, err)
-				}
-			})
-		}
-	}
-}
-
-// The chart refuses token TTLs that would overflow the service's duration conversion.
-func TestChartSchemaRefusesTokenTtlThatOverflowsADuration(t *testing.T) {
-	// This mirrors config.MaxDurationSeconds in user-management, which is not a
-	// dependency of dcctl. Both bounds must stay in step with the service.
-	const maxDurationSeconds = 9223372036
-	overlay := func(auth map[string]interface{}) map[string]interface{} {
-		return map[string]interface{}{"functionalAreas": map[string]interface{}{
-			"user-management": map[string]interface{}{"config": map[string]interface{}{"auth": auth}},
-		}}
-	}
-	for _, key := range []string{"accessTokenTtlSeconds", "refreshTokenTtlSeconds"} {
-		for _, seconds := range []int{-1, maxDurationSeconds + 1} {
-			t.Run(fmt.Sprintf("%s/%d/refused", key, seconds), func(t *testing.T) {
-				err := validateAgainstChartSchemaOnly(t, overlay(map[string]interface{}{key: seconds}))
-				if err == nil {
-					t.Fatalf("functionalAreas.user-management.config.auth.%s = %d passed the chart schema; it must be refused", key, seconds)
-				}
-				if !strings.Contains(err.Error(), "/"+key) {
-					t.Fatalf("the refusal must name /%s, got: %v", key, err)
-				}
-			})
-		}
-		for _, seconds := range []int{0, maxDurationSeconds} {
-			t.Run(fmt.Sprintf("%s/%d/accepted", key, seconds), func(t *testing.T) {
-				if err := validateAgainstChartSchemaOnly(t, overlay(map[string]interface{}{key: seconds})); err != nil {
-					t.Fatalf("%s = %d must still pass the chart schema: %v", key, seconds, err)
 				}
 			})
 		}
