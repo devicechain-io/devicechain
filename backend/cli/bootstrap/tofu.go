@@ -80,6 +80,12 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	if err != nil {
 		return fmt.Errorf("connecting to the cluster to prepare the instance namespace: %w", err)
 	}
+	// Only bootstrap selects a storage default; upgrades leave it unset. The module
+	// remembers the creation-time class, including an empty one, across later applies.
+	instanceVars, err = appendJetStreamStorageClass(ctx, typed, st, inst.rootdir, instanceVars)
+	if err != nil {
+		return err
+	}
 	// 🔴 THE INSTANCE'S NAMESPACE AND ITS CREDENTIALS BEFORE THE APPLY. CloudNativePG
 	// builds the event store's role from a Secret when it CREATES the Cluster, so a
 	// Secret written afterwards leaves the role on one password and every service on

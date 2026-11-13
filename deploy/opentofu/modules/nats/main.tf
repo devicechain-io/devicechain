@@ -166,6 +166,23 @@ variable "server_image_digest" {
   }
 }
 
+variable "jetstream_storage_class" {
+  description = "StorageClass for new JetStream volumes. Empty omits storageClassName and uses the cluster default. Remembered on first apply: later changes are ignored because PVC storage classes and StatefulSet claim templates are immutable. When adopting an existing broker, leave unset to preserve its original template."
+  type        = string
+  default     = ""
+}
+
+# Persist the creation-time choice without freezing the rest of the Helm values.
+# Existing installations adopt the empty default; dcctl never supplies a new GKE
+# default on upgrade or over an existing broker/PVC. See tests/storage_class.tftest.hcl.
+resource "terraform_data" "jetstream_storage_class" {
+  input = var.jetstream_storage_class
+
+  lifecycle {
+    ignore_changes = [input]
+  }
+}
+
 variable "jetstream_storage" {
   description = <<-EOT
     Size of the JetStream PV.
@@ -1051,10 +1068,12 @@ locals {
       jetstream = {
         enabled = true
         fileStore = {
-          pvc = {
+          pvc = merge({
             enabled = true
             size    = var.jetstream_storage
-          }
+            }, terraform_data.jetstream_storage_class.input == "" ? {} : {
+            storageClassName = terraform_data.jetstream_storage_class.input
+          })
           # max_file_store — the server-level HARD AGGREGATE JetStream disk ceiling
           # (ADR-023): the total file store across every account/stream/KV/MQTT
           # session cannot exceed this, so a flood is bounded even before the

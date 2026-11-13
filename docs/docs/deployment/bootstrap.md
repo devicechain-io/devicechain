@@ -30,6 +30,12 @@ cluster for you if none exists, and asks first unless you pass `--yes`. The `gcp
 a planned follow-up.
 :::
 
+## Broker storage on GKE
+
+New GKE brokers created by `dcctl bootstrap` use `premium-rwo` (`pd-ssd`) when the GKE SSD StorageClass is available. JetStream's synchronous disk writes make storage latency important, especially with three replicas under `--ha`; SSD avoids relying on the balanced disk's small-volume IOPS floor. Other clouds and kind keep the cluster default. The OpenTofu instance input `nats_jetstream_storage_class` (module input `jetstream_storage_class`) defaults to `""`, which omits `config.jetstream.fileStore.pvc.storageClassName`. Set it before the first apply to choose another class.
+
+Storage classes on existing PVCs and StatefulSet claim templates are immutable. `dcctl` leaves this input unset on upgrade and when bootstrap finds an existing broker or JetStream claim. The module records its first choice with `lifecycle.ignore_changes`, including an unset choice, so later defaults cannot change it. Existing GKE brokers keep their current disks; this change does not migrate data to SSD.
+
 ## Install the cluster {#install}
 
 `dcctl install <provider>` prepares a cluster to hold DeviceChain instances. It installs the

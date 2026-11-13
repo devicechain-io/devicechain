@@ -309,6 +309,14 @@ pools built with the defaults.
 
 ### Put the databases on SSD
 
+New brokers created by `dcctl bootstrap` select `premium-rwo` (`pd-ssd`) automatically,
+without changing the cluster default. JetStream's synchronous writes benefit from low disk
+latency, especially with three HA replicas. Existing brokers and PVCs keep their original
+class: upgrades leave the new input unset, and the NATS module remembers its first choice
+with `lifecycle.ignore_changes`. This does not migrate existing disks. For a direct OpenTofu
+install, set `nats_jetstream_storage_class = "premium-rwo"` before the first apply; leave it
+unset when adopting an existing broker.
+
 GKE's default StorageClass, `standard-rwo`, is a balanced persistent disk. Postgres
 and NATS commit every write to disk before they acknowledge it, so how fast the
 disk syncs sets how fast the platform can go. Make the SSD class the default

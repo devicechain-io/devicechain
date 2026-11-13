@@ -24,6 +24,12 @@ from `--ha`, which decides how many copies run, while a size decides how big eac
 
 `perf-20k` is a throughput sizing target. The measured 20,000 events a second were stored exactly, with no loss or duplicates, but acknowledgement p99 was 245 ms, above the 50 ms target. This preset increases broker CPU on the same unsharded shape; it does not promise that latency target.
 
+## Broker storage on GKE
+
+New GKE brokers created by `dcctl bootstrap` use `premium-rwo` (`pd-ssd`) when the GKE SSD StorageClass is available. JetStream's synchronous disk writes make storage latency important, especially with three replicas under `--ha`; SSD avoids relying on the balanced disk's small-volume IOPS floor. Other clouds and kind keep the cluster default. The OpenTofu instance input `nats_jetstream_storage_class` (module input `jetstream_storage_class`) defaults to `""`, which omits `config.jetstream.fileStore.pvc.storageClassName`. Set it before the first apply to choose another class.
+
+Storage classes on existing PVCs and StatefulSet claim templates are immutable. `dcctl` leaves this input unset on upgrade and when bootstrap finds an existing broker or JetStream claim. The module records its first choice with `lifecycle.ignore_changes`, including an unset choice, so later defaults cannot change it. Existing GKE brokers keep their current disks; this change does not migrate data to SSD.
+
 ## Choosing one {#choosing}
 
 ```bash
