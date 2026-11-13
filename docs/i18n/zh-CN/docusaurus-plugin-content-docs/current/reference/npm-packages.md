@@ -34,6 +34,30 @@ npm 7 及更高版本会自动安装这些依赖，因此只需运行上面的�
 两份 SDK 比报错更糟。运行时通过捕获到的错误类的身份，区分“你无权查看”与“连接中断”。
 一份 SDK 抛出的错误不是另一份 SDK 中错误类的实例，权限拒绝就会被误认为服务中断。
 
+## 公共入口 {#public-entry-points}
+
+仅导入各包的 `exports` 映射中公开的路径：
+
+| 包 | 入口 |
+| --- | --- |
+| `@devicechain/client`, `@devicechain/dashboards` | 根 API 和 `/package.json` |
+| `@devicechain/widget-sdk` | 根 API、`/echarts`、`/empty-state`、`/strict-csp`、`/package.json` |
+| `@devicechain/widgets` | 根 API、`/host-context`、`/vite`、`/package.json` |
+| `@devicechain/brand` | `/tokens.json`、`/tokens`、`/css/brand.css`、`/css/shadcn.css`、`/css/infima.css`；无根 API |
+
+组件 SDK 的根入口不包含图表。其 `/echarts` 入口导出 `EChart`、
+`loadChartEngine`、选项构建器和图表主题。`/empty-state` 导出
+`WidgetEmptyState`，用于展示带有说明的空结果。`/strict-csp` 导出
+`configureStrictCsp`、`strictCspEnabled` 和 `plainTooltipText`（根入口也导出这些项）。
+在延迟加载的仪表板路由上方配置地图 Provider 时，使用 `@devicechain/widgets/host-context`；
+需要 Vite 专用的 `viteMapRuntime` 时，从 `/vite` 导入。
+
+有关浏览器认证和类型化字符串文档，请参见
+[客户端 README](https://github.com/devicechain-io/devicechain/tree/main/frontend/packages/client)。
+有关 hub 实时通道、录制回放、历史记录和编辑器辅助函数，请参见
+[仪表板 README](https://github.com/devicechain-io/devicechain/tree/main/frontend/packages/dashboards)。
+[.NET 和 Unity API 指南](./csharp-sdk.md)单独介绍这些平台。
+
 ## 版本和 dist-tag {#versions-and-dist-tags}
 
 五个包随平台发布一起发布，使用同一个版本号。组件的 `0.14.0` 版本对应 SDK 的 `0.14.0` 版本，

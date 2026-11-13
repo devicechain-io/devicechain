@@ -5,9 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # DeviceChain .NET SDK
 
-The public C# client SDK for the DeviceChain platform — the Unity/.NET enabler (ADR-035
-sim-subsystem slice 3). It wraps the platform's documented wire seams so a .NET host (and,
-via the slice-4 Unity UPM plugin, a digital twin) authenticates, reads/queries, subscribes to
+The public C# client SDK for the DeviceChain platform. A .NET host or Unity digital twin
+authenticates, reads/queries, subscribes to
 live telemetry, and emits device-plane telemetry — as an **untrusted external client**, never
 the admin surface.
 
@@ -20,17 +19,25 @@ and the library builds with `TreatWarningsAsErrors` + `IsAotCompatible`. It mult
 
 | Piece | Type | Seam |
 |-------|------|------|
-| Auth state machine | `Auth.AuthSession` | `login → selectTenant → refresh` (ADR-033), with proactive near-expiry refresh; the `TokenProvider` a client plugs in |
+| Auth state machine | `Auth.AuthSession` | `login → selectTenant → refresh`, with proactive near-expiry refresh; the `TokenProvider` a client plugs in |
 | GraphQL over HTTP | `GraphQlClient` | typed query/mutate against `/api/{area}/graphql`; caller supplies its own `JsonTypeInfo` (AOT-safe) |
 | Live subscriptions | `Subscriptions.GraphQlWsClient` | `graphql-transport-ws`, one multiplexed socket per area; token in `connection_init` |
 | Device-plane emit | `Ingest.DeviceEventPublisher` | Measurement + Location over `POST /{instanceId}/{tenant}/events` or MQTT (the `JsonEvent` shape; HTTP carries the credential in the body, platform MQTT carries none: the broker authenticated the connection and refuses a body credential, see `IDeviceEventCarrier.CarriesBodyCredential`) |
-| HTTP command pull (v1.4 in progress) | `Commands.HttpCommandPuller` | devices whose type opts into `HTTP_PULL` poll, acknowledge and respond over the device-plane HTTP listener |
+| HTTP command pull | `Commands.HttpCommandPuller` | devices whose type opts into `HTTP_PULL` poll, acknowledge and respond over the device-plane HTTP listener |
 | Transport seam | `Transport.IHttpTransport` / `Transport.IWebSocketFactory` | pluggable HTTP + WebSocket, so the SDK runs where `HttpClient`/`ClientWebSocket` don't (Unity WebGL) |
 | Facade | `DeviceChainClient` | wires all of the above against one origin |
 
 ## Usage
 
 ```csharp
+using System;
+using System.Threading;
+using DeviceChain.Sdk;
+using DeviceChain.Sdk.Json;
+using System.Collections.Generic;
+using DeviceChain.Sdk.Ingest;
+
+var ct = CancellationToken.None; // use your host's lifetime token
 await using var client = new DeviceChainClient(new Uri("https://devicechain.example.com"));
 
 await client.LoginAsync("me@example.com", "…");
@@ -40,12 +47,12 @@ await client.SelectTenantAsync("acme");
 var data = await client.Gql.SendAsync(
     Area.DeviceManagement,
     "query{devices(criteria:{pageNumber:1,pageSize:10}){results{token name}}}",
-    EmptyVariables.Value, MyJson.Default.EmptyVariables, MyJson.Default.DevicesData);
+    EmptyVariables.Value, MyJson.Default.EmptyVariables, MyJson.Default.JsonElement);
 
 // Subscribe to live telemetry:
 await foreach (var evt in client.Subscriptions(Area.EventManagement).SubscribeAsync(
     "subscription{measurementStream{deviceToken name value unit}}",
-    EmptyVariables.Value, MyJson.Default.EmptyVariables, MyJson.Default.MeasurementStreamData, ct))
+    EmptyVariables.Value, MyJson.Default.EmptyVariables, MyJson.Default.JsonElement, ct))
 {
     // …drive a chart / a twin transform
 }
@@ -54,19 +61,35 @@ await foreach (var evt in client.Subscriptions(Area.EventManagement).SubscribeAs
 // listener from the /api GraphQL origin, so its origin is passed explicitly:
 var publisher = client.DevicePublisher(
     ingressOrigin: new Uri("https://ingress.devicechain.example.com"), instanceId: "dc", tenant: "acme");
-await publisher.EmitMeasurementsAsync("car-42", credentialId,
+await publisher.EmitMeasurementsAsync("car-42", "your-device-access-token",
     new Dictionary<string, double> { ["speed"] = 55.0 });
 
 // …and where it is. Latitude/longitude are required; the rest are optional and are OMITTED from
 // the wire when null — send what the receiver actually knows rather than a placeholder, because a
 // zero heading is stored as "due north" and can never be told apart from a measured one afterwards.
-await publisher.EmitLocationAsync("car-42", credentialId,
+await publisher.EmitLocationAsync("car-42", "your-device-access-token",
     new LocationFix(33.74912345, -84.38812345)
     {
         Elevation = 320.5,                                  // metres above the WGS84 ELLIPSOID
         Speed = 24.6,                                       // metres per second
-        Heading = LocationFix.CanonicalHeading(bearing),     // degrees clockwise from true north
+        Heading = LocationFix.CanonicalHeading(90.0),     // degrees clockwise from true north
     });
+```
+
+`MyJson` below is application code, not an SDK type. Add this source-generated
+context to your .NET project (for Unity, compile it into an assembly with the
+System.Text.Json source generator before importing it). The result is a `JsonElement`
+containing the GraphQL `data` object; replace it with your own result DTO and its
+`JsonTypeInfo` when you want typed properties. `SdkJson` is internal to the SDK.
+
+```csharp
+using DeviceChain.Sdk.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+[JsonSerializable(typeof(EmptyVariables))]
+[JsonSerializable(typeof(JsonElement))]
+public partial class MyJson : JsonSerializerContext { }
 ```
 
 An HTTP emit the ingress does not accept throws `GraphQlRequestException` with the status. When the
@@ -81,14 +104,24 @@ Under Unity WebGL/IL2CPP, `System.Net.Http.HttpClient` and `System.Net.WebSocket
 do not work — HTTP and WebSocket must go through the browser (via `UnityWebRequest` and a `.jslib`
 `WebSocket` shim). The SDK never hard-depends on either type: everything runs over two small seams
 with plain-.NET defaults (`HttpClientTransport`, `ClientWebSocketFactory`) that a host can replace.
+A custom WebGL host must also pass a `ManualPumpDriver` as `readLoopDriver` and call
+`Pump()` from its frame loop; Unity's `DeviceChainRuntime.CreateClient` wires this automatically.
 
 ```csharp
-// On plain .NET nothing changes — the defaults are used automatically. On Unity WebGL, inject
-// transports backed by UnityWebRequest + a browser WebSocket (shipped by the slice-4 UPM plugin):
+using System;
+using DeviceChain.Sdk;
+using DeviceChain.Sdk.Subscriptions;
+using DeviceChain.Sdk.Unity;
+
+// For a Unity WebGL player with a host-managed pump; CreateClient is the usual shortcut.
+var pump = new ManualPumpDriver();
+DeviceChainPump.Attach(pump);
 await using var client = new DeviceChainClient(
     new Uri("https://devicechain.example.com"),
-    httpTransport: new MyUnityWebRequestTransport(),   // : IHttpTransport
-    webSocketFactory: new MyBrowserWebSocketFactory()); // : IWebSocketFactory
+    httpTransport: new UnityWebRequestHttpTransport(),
+    webSocketFactory: new WebGlWebSocketFactory(),
+    readLoopDriver: pump);
+// When finished, dispose the client and call DeviceChainPump.Detach(pump).
 ```
 
 `IHttpTransport` returns the full response for every status (the caller classifies it) and throws
@@ -260,8 +293,7 @@ disposes its own session waits out the whole bound. At 1, disposal is unchanged 
 for the handler.
 
 **Unity and WebGL.** The executor adds `Task.Run` and nothing else of its own. It adds no new WebGL
-blocker: the MQTT session already depends on MQTTnet's own `Task.Run` read loop, which is the open
-WebGL blocker recorded in the Unity package README. A Unity host still marshals to the main thread
+blocker: the MQTT session already depends on MQTTnet's own `Task.Run` read loop, which requires a native Unity build; browser WebGL has no MQTT transport. A Unity host still marshals to the main thread
 in its own pump, and handlers may now run concurrently, so that pump must be safe to call from
 several threads.
 
@@ -275,3 +307,6 @@ a native binary **and runs it** through a real round-trip.
 🔴 None of that is evidence about IL2CPP. NativeAOT and IL2CPP are different AOT compilers and
 `dotnet test` runs on CoreCLR, so a green job is strong evidence for the Unity path and proof of
 nothing about it. Only a native Unity player closes that gap.
+
+See the [C# and Unity API guide](https://docs.devicechain.io/reference/csharp-sdk) for authentication, command pulling,
+MQTT session setup, transport ownership and teardown.
