@@ -288,6 +288,16 @@ func revokeFingerprint(req *DeviceCertificateRevokeRequest) (string, error) {
 	return x509trust.Fingerprint(certs[0]), nil
 }
 
+// revokesACA is whether the revoke names a certificate (PEM) that is a CA. A bare fingerprint says
+// nothing about what it fingerprints, so it is not.
+func revokesACA(req *DeviceCertificateRevokeRequest) bool {
+	if req.CertificatePem == nil || strings.TrimSpace(*req.CertificatePem) == "" {
+		return false
+	}
+	_, certs, err := x509trust.ParseCertificates(*req.CertificatePem)
+	return err == nil && len(certs) == 1 && certs[0].BasicConstraintsValid && certs[0].IsCA
+}
+
 // bumpRevocationRows adds delta to the anchor's revocation_rows counter. The caller holds the
 // anchor FOR UPDATE.
 func bumpRevocationRows(tx *gorm.DB, anchorId uint, delta int64) error {
@@ -304,11 +314,15 @@ func bumpRevocationRows(tx *gorm.DB, anchorId uint, delta int64) error {
 //
 // The anchor's own certificate is refused: that is "disable the anchor".
 //
-// LOCK ORDER: the anchor row FOR UPDATE first (every revocation write takes it before anything
-// else, and a certificate registration holds it FOR SHARE to its commit), then the tenant's
-// manual-revocation advisory lock, then the entry. Nothing here takes a lock in the other order.
+// LOCK ORDER: the anchor row FOR UPDATE first, then the tenant's manual-revocation advisory lock,
+// then the entry, then the kick queue rows. It never takes the CRL-writers advisory lock, which must
+// not be taken while the anchor row is held (see revocationLockOrder in
+// api_x509_revocation_kicks.go). A certificate registration holds the anchor FOR SHARE to its commit.
 //
-// It does not end live sessions: that is the live-session slice's.
+// LIVE SESSIONS: the devices whose sessions the entry affects are queued for a kick in the same
+// transaction, and the call asks the broker before it returns (see revocationKickTargets). A kick
+// that cannot be confirmed returns the entry AND ErrSessionsNotEnded: the revocation stands and
+// new connects are refused; repeating the call asks again.
 func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertificateRevokeRequest) (*DeviceRevokedCertificate, error) {
 	tenant, err := ctxTenant(ctx)
 	if err != nil {
@@ -318,6 +332,8 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 	if err != nil {
 		return nil, err
 	}
+	isCA := revokesACA(req)
+	bareFingerprint := req.CertificatePem == nil || strings.TrimSpace(*req.CertificatePem) == ""
 	reason := x509trust.RevocationUnspecified
 	if req.Reason != nil {
 		r, ok := RevocationReasonFromEnum(*req.Reason)
@@ -330,14 +346,16 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 	if token == "" {
 		return nil, invalidAnchor("anchorToken is required")
 	}
-	// The credentials recorded before chain links existed get their depth-0 link now, so a later
-	// slice's session targeting finds them. A failure here must not stop a revocation, which is
-	// enforced at connect whatever the links say.
-	api.reconcileLegacyChainLinksBestEffort(ctx)
+	// The credentials recorded before chain links existed get their depth-0 link now, so the
+	// session targeting below finds them (see prepareRevocationKicks).
+	linksWhole := api.prepareRevocationKicks(ctx, tenant, token)
 
 	var out *DeviceRevokedCertificate
+	var anchorId uint
+	var unidentified bool
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		out = nil
+		unidentified = false
 		anchor, err := lockTrustAnchorByToken(tx, token)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -345,6 +363,7 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 			}
 			return err
 		}
+		anchorId = anchor.ID
 		if fp == anchor.FingerprintSha256 {
 			return invalidAnchor("that is the trust anchor's own certificate; disable the anchor instead")
 		}
@@ -358,7 +377,32 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 		}
 		if len(existing) == 1 {
 			out = &existing[0]
-			return nil
+			// A repeat finds the entry; whether the kick debt for it was ever recorded is the entry's
+			// own marker. An entry made before the debt existed (or with no session kicker wired) has
+			// none: queue it now, once, and say so on the entry.
+			if api.SessionKicker != nil && out.KickQueuedAt == nil {
+				if err := api.queueRevocationKicksOnTx(tx, tenant, anchor.ID,
+					RevocationDelta{Fingerprints: []string{fp}, CA: isCA}, linksWhole); err != nil {
+					return err
+				}
+				queuedAt := time.Now().UTC()
+				if err := tx.Model(out).Update("kick_queued_at", queuedAt).Error; err != nil {
+					return err
+				}
+				out.KickQueuedAt = &queuedAt
+			} else if api.SessionKicker != nil && isCA {
+				// 🔴 A PEM REPEAT WIDENS. The entry's debt was queued once, by its first call, which may
+				// have been a bare fingerprint that identified no session (see unidentifiedSessions). The
+				// certificate itself, known now to be a CA, is anchor-wide whatever the links say, so the
+				// repeat owes that kick again even though KickQueuedAt is set. It costs one anchor-wide
+				// marker per explicit repeat; the entry records no "queued as a CA" bit to dedupe on.
+				if err := api.queueRevocationKicksOnTx(tx, tenant, anchor.ID,
+					RevocationDelta{Fingerprints: []string{fp}, CA: true}, linksWhole); err != nil {
+					return err
+				}
+			}
+			unidentified, err = api.unidentifiedSessions(tx, tenant, anchor.ID, fp, bareFingerprint, linksWhole)
+			return err
 		}
 		if err := lockTenantCreates(tx, tenant, "manual_revocations"); err != nil {
 			return err
@@ -380,19 +424,69 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 			by := claims.Username
 			entry.CreatedBy = &by
 		}
+		if api.SessionKicker != nil {
+			entry.KickQueuedAt = &now
+		}
 		if err := tx.Create(entry).Error; err != nil {
 			return err
 		}
 		if err := bumpRevocationRows(tx, anchor.ID, 1); err != nil {
 			return err
 		}
+		// The sessions this entry ends are queued in the same transaction (lock order: anchor,
+		// then the entry, then the kick rows).
+		if err := api.queueRevocationKicksOnTx(tx, tenant, anchor.ID,
+			RevocationDelta{Fingerprints: []string{fp}, CA: isCA}, linksWhole); err != nil {
+			return err
+		}
 		out = entry
-		return nil
+		unidentified, err = api.unidentifiedSessions(tx, tenant, anchor.ID, fp, bareFingerprint, linksWhole)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
+	// Asked whether or not this call wrote the entry: a repeat after an unconfirmed kick finds the
+	// entry already there and still owes the broker its question. The entry is returned with the
+	// error, which is ErrSessionsNotEnded when the sessions could not be confirmed ended.
+	if err := api.endRevokedSessions(ctx, tenant, anchorId); err != nil {
+		return out, err
+	}
+	if unidentified {
+		return out, fmt.Errorf("%w: the fingerprint matched no recorded certificate path and credentials recorded "+
+			"before chain links existed are present, so which sessions it affects cannot be told; if it is a CA, "+
+			"repeat the revocation with its certificatePem to end every session under the anchor", ErrSessionsNotEnded)
+	}
 	return out, nil
+}
+
+// unidentifiedSessions is whether a revocation by bare fingerprint could not identify the sessions
+// it affects, so that reporting "sessions ended" would be a plausible value for an unknown. True
+// when the call names a bare fingerprint (a certificate given as PEM is known: a leaf, or a CA that is anchor-wide), the links are whole, no link of the anchor names
+// the fingerprint, and some credential of the anchor holds only a legacy depth-0 link (no issuer
+// key, no deeper link): its path through an intermediate was never recorded. Read in tx, the anchor
+// locked. With no kicker wired there are no sessions of ours and the answer is false.
+func (api *Api) unidentifiedSessions(tx *gorm.DB, tenant string, anchorId uint, fp string, bareFingerprint, linksWhole bool) (bool, error) {
+	if api.SessionKicker == nil || !bareFingerprint || !linksWhole {
+		return false, nil
+	}
+	var named int64
+	if err := tx.Session(&gorm.Session{NewDB: true}).Model(&DeviceCredentialChainLink{}).
+		Where("tenant_id = ? AND trust_anchor_id = ? AND fingerprint = ?", tenant, anchorId, fp).
+		Count(&named).Error; err != nil {
+		return false, err
+	}
+	if named > 0 {
+		return false, nil
+	}
+	var legacy int64
+	if err := tx.Session(&gorm.Session{NewDB: true}).Model(&DeviceCredentialChainLink{}).
+		Where("tenant_id = ? AND trust_anchor_id = ? AND depth = 0 AND issuer_key IS NULL", tenant, anchorId).
+		Where("NOT EXISTS (SELECT 1 FROM device_credential_chain_links d WHERE d.credential_id = device_credential_chain_links.credential_id AND d.depth >= 1)").
+		Count(&legacy).Error; err != nil {
+		return false, err
+	}
+	return legacy > 0, nil
 }
 
 // UnrevokeDeviceCertificate removes a manual revocation, reporting whether one existed. The

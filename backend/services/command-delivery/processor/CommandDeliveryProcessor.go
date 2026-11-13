@@ -82,11 +82,12 @@ type responseEnvelope struct {
 	Payload      *json.RawMessage `json:"payload,omitempty"`
 	Error        *string          `json:"error,omitempty"`
 
-	// Reach says how far a FAILED command got, as the reporting transport saw it: empty when the
+	// Reach says how far a command got, as the reporting transport saw it: empty when the
 	// device answered (every native device, which never sends it), UNANSWERED when the exchange
 	// was run and nothing came back, UNSENT when the transport refused it before the wire. It is
-	// read only when Success is false, and it must stay byte-identical with the LwM2M adapter's
-	// envelope. A device can only mis-class its OWN command with it, never another's.
+	// also read on success to withhold delivery evidence without a device answer, and must
+	// stay byte-identical with the LwM2M adapter's envelope. A device can only mis-class its
+	// OWN command with it, never another's.
 	Reach model.Reach `json:"reach,omitempty"`
 
 	// DispatchNonce is the value the device echoes from the delivery envelope it acted on,
@@ -115,6 +116,31 @@ func normalizeReach(r model.Reach) model.Reach {
 		return r
 	}
 	return model.ReachUnanswered
+}
+
+// responseReach maps the previous release's LPWAN adapter's successful queued response to
+// UNANSWERED for rolling upgrades. The subject identifies the device, so this only ever
+// withholds evidence on the responder's own command: a device sending this payload can only
+// under-claim, never forge delivery evidence.
+//
+// Remove in v1.6: the v1.5.0 outbound-connectors adapter sends reach UNANSWERED on a queued
+// unconfirmed downlink itself, so once v1.5 is the previous minor (upgrades go one minor at a
+// time) no pod still sends the reach-less shape this maps. Delete this and its legacy test
+// cases, and call normalizeReach directly.
+func responseReach(response responseEnvelope) model.Reach {
+	if response.Success && response.Reach == "" && response.Payload != nil {
+		payload := []byte(*response.Payload)
+		var text string
+		if json.Unmarshal(payload, &text) == nil {
+			payload = []byte(text)
+		}
+		var queued map[string]string
+		if json.Unmarshal(payload, &queued) == nil && len(queued) == 2 &&
+			queued["stage"] == "queued" && queued["queueItemId"] != "" {
+			return model.ReachUnanswered
+		}
+	}
+	return normalizeReach(response.Reach)
 }
 
 // CommandDeliveryProcessor owns the command delivery lifecycle: it delivers
@@ -212,6 +238,12 @@ type CommandDeliveryProcessor struct {
 	// byte for byte: a Sparkplug command is failed as undeliverable and no routing header is
 	// stamped. Read by the sweep, the nudge and the hold reconciler alike, which must agree.
 	SparkplugCommands bool
+
+	// LpwanDownlink is the deployment's derived flag that the outbound-connectors LPWAN downlink
+	// adapter is enabled: a command to a device that reports through an inbound integration is then
+	// dispatched (stamped with its integration) instead of failed on sight. Chart-derived, never
+	// authored.
+	LpwanDownlink bool
 
 	// CommandImpacts resolves a command's impact for the impact stamp (see dispatchHeaders).
 	// MAY BE NIL, which leaves the stamp off; the adapter fails closed on an absent stamp.
@@ -582,12 +614,17 @@ func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, b
 	// Impacts are resolved for the whole batch before the first claim; see resolveImpacts.
 	cproc.resolveImpacts(tenantCtx, batch, states)
 	for _, cmd := range batch.commands {
+		// Every path finishes a started claim without cancellation; stop here
+		// before the next claim so shutdown does not drain the remaining batch.
+		if ctx.Err() != nil {
+			return
+		}
 		// 🔴 A MISSING KEY READS AS State{Known:false}, WHICH Decide ANSWERS Dispatch.
 		// That is the fail-open, and it carries three separate cases on one line: a
 		// device the projection has never seen, a device whose chunk of the read failed,
 		// and an instance with no gate wired at all. All three must deliver.
 		state := states[cmd.DeviceToken]
-		switch presence.Decide(state, cproc.SparkplugCommands) {
+		switch presence.Decide(state, cproc.capabilities()) {
 		case presence.Hold:
 			cproc.holdCommand(tenantCtx, cmd)
 		case presence.Undeliverable:
@@ -750,9 +787,16 @@ func (cproc *CommandDeliveryProcessor) tenantDeleted(tenant string) bool {
 // the API's, not this function's — see releaseFailedClaim and model.ReleaseClaim.
 func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *model.Command,
 	path dispatchPath, route routing) error {
-	// Publish to the command's tenant subject and mark it SENT under the same
-	// tenant context.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Cancellation is observed only before the claim starts. An autocommit UPDATE
+	// can commit even when cancellation makes the driver report an error, so the
+	// claim itself and every subsequent publish/release step must finish on every
+	// dispatch path, including the sweep. The batch loop stops further claims.
+	// Retain tenant values and the writer's own publish bound during shutdown.
 	tenantCtx := core.WithTenant(ctx, cmd.TenantId)
+	tenantCtx = context.WithoutCancel(tenantCtx)
 	// Published to the TARGET DEVICE's subject, not the tenant's. Before this, every
 	// command went to one tenant-wide subject that every device in the tenant was
 	// granted to subscribe to, so isolation between devices rested entirely on each
@@ -953,7 +997,7 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 	// redelivery has always done.
 	if err := cproc.Hold.RunCtx(ctx, tenantCtx, []messaging.Message{msg}, func(c context.Context) error {
 		_, e := cproc.Api.MarkResponse(c, response.CommandToken, responder,
-			response.DispatchNonce, response.Success, normalizeReach(response.Reach), responsePayloadText(response.Payload), response.Error)
+			response.DispatchNonce, response.Success, responseReach(response), responsePayloadText(response.Payload), response.Error)
 		return e
 	}); err != nil {
 		// A device answering for a command it does not own is refused, and the refusal is
@@ -1178,6 +1222,7 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) error {
 			log.Info().Int64("expired", count).Interface("fromStatus", byFromStatus).
 				Msg("Command expiry sweep reached a terminal state for stale commands.")
 		}
+		cproc.failUnacknowledgedPulls(ctx)
 		delivered := cproc.deliverPendingCommands(ctx)
 		// After delivery, so a row whose window just opened is claimed this tick and a row
 		// whose window just closed is rolled on, not the other way round.
@@ -1344,7 +1389,7 @@ func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 	// ExecuteStop. Nudges enqueued before this point are already in the buffer and are
 	// picked up now; nudges enqueued after ExecuteStop are dropped, which costs a sweep
 	// tick of latency and nothing else.
-	cproc.nudger.Start()
+	cproc.nudger.Start(ctx)
 
 	// The two reconcile nets, each on its own slower ticker. Extracted from here for the
 	// same reason the sweep ticker was: inline, neither the cadence nor the shutdown
@@ -1387,10 +1432,10 @@ func (cproc *CommandDeliveryProcessor) Stop(ctx context.Context) error {
 // also why no deadline is taken from ExecuteStop's own context: it is context.Background(),
 // so a bounded wait on it could never fire — a guard that cannot fire is worse than none.
 //
-// ⚠️ THAT BOUND COVERS cproc.periodic AND NOT nudger.Stop(). A nudge worker drains under
-// context.Background() by deliberate choice — see dispatchNudger.run — so its wait is
-// bounded by the work itself finishing, not by any cancellation. Both waits are here, and
-// only one of them is answerable to the root context.
+// Both waits are answerable to the root context. Stop also cancels the nudge's child
+// context before joining, even when the root has not yet been cancelled. A nudge that
+// already claimed a command finishes its publish/release as before; cancellation must
+// not turn a claimed actuation into an uncertain resend (see deliverCommand).
 func (cproc *CommandDeliveryProcessor) ExecuteStop(context.Context) error {
 	cproc.nudger.Stop()
 	close(cproc.quit)
@@ -1455,4 +1500,41 @@ func (cproc *CommandDeliveryProcessor) deadLetterResponse(ctx context.Context, m
 		return
 	}
 	incr(cproc.ResponsesDeadLettered, 1)
+}
+
+// pullFailer is the one operation of the HTTP pull channel the sweep performs. It is asked of the
+// Api through this narrow interface so the many fakes of model.CommandDeliveryApi need not grow
+// a method for a channel they do not exercise.
+type pullFailer interface {
+	FailUnacknowledgedPulls(ctx context.Context, deviceToken string, now time.Time) (int64, error)
+}
+
+// failUnacknowledgedPulls ends the commands the pull channel handed out as many times as their
+// attempts allow and never saw acknowledged (FAILED, NOT_DELIVERED). A device settles its own on
+// each pull; this covers a device that stopped pulling, so its commands do not wait for their
+// TTL to be called a TIMEOUT, which says the device may have acted.
+func (cproc *CommandDeliveryProcessor) failUnacknowledgedPulls(ctx context.Context) {
+	failer, ok := cproc.Api.(pullFailer)
+	if !ok {
+		return
+	}
+	// System context on purpose, as the sweep around it: this ends exhausted, unacknowledged pull
+	// hand-outs for EVERY tenant in one statement, a device that stopped pulling having no request
+	// to carry its tenant. It only moves SENT rows whose attempts are spent to FAILED, and reads and
+	// writes nothing of any tenant's beyond that row's own state.
+	failed, err := failer.FailUnacknowledgedPulls(core.WithSystemContext(ctx), "", time.Now())
+	if err != nil {
+		log.Error().Err(err).Msg("unable to fail unacknowledged pull-channel commands")
+		return
+	}
+	if failed > 0 {
+		log.Info().Int64("failed", failed).
+			Msg("Failed pull-channel commands whose hand-outs were never acknowledged; they are NOT_DELIVERED.")
+	}
+}
+
+// capabilities is which optional command paths this deployment has, the one value every presence
+// verdict is decided with (the sweep and the hold reconciler must agree).
+func (cproc *CommandDeliveryProcessor) capabilities() presence.Capabilities {
+	return presence.Capabilities{Sparkplug: cproc.SparkplugCommands, Lpwan: cproc.LpwanDownlink}
 }

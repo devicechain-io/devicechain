@@ -59,6 +59,8 @@ type tenantResolver[V any] struct {
 	inflight  map[string]struct{}
 	// sem bounds concurrent refreshes (see maxConcurrentRefreshes).
 	sem chan struct{}
+	// group owns the refresh lifetime: processRefreshes except in tests.
+	group *refreshGroup
 	// refreshes bounds the RATE at which refreshes start (see maxRefreshesPerSecond).
 	//
 	// It is per resolver rather than per process on purpose. A process-wide bucket would
@@ -130,6 +132,7 @@ func newTenantResolver[V any](fetch func(context.Context, string) (V, error), de
 		fetch:    fetch,
 		def:      def,
 		label:    label,
+		group:    processRefreshes,
 		cache:    make(map[string]cacheEntry[V]),
 		inflight: make(map[string]struct{}),
 	}
@@ -278,30 +281,41 @@ func (r *tenantResolver[V]) triggerRefreshLocked(tenant string) {
 		<-r.sem
 		return // at the refresh rate bound; serve default and retry on a later call
 	}
+	// Lock order is r.mu then g.mu in begin; g.mu is never held while taking r.mu.
+	ctx, ok := r.group.begin()
+	if !ok {
+		<-r.sem
+		return // shutdown is terminal; keep serving cached or default values
+	}
 	r.inflight[tenant] = struct{}{}
 	// The semaphore is passed rather than re-read in the goroutine: Configure replaces
 	// the channel, and a refresh must release the slot it actually took. Reading the
 	// field later would have it return a token to a channel it never filled.
-	go r.refresh(tenant, r.sem)
+	go r.refresh(ctx, tenant, r.sem)
 }
 
 // refresh fetches a tenant's value and updates the cache. On error it keeps serving the
 // last-known value (or the default) rather than caching a sentinel that would drop the
 // tenant to an unsafe reading — but it does record that the ATTEMPT happened, which is
 // what stops an unresolvable tenant re-triggering a fetch on every message.
-func (r *tenantResolver[V]) refresh(tenant string, sem chan struct{}) {
+func (r *tenantResolver[V]) refresh(base context.Context, tenant string, sem chan struct{}) {
 	defer func() {
 		r.mu.Lock()
 		delete(r.inflight, tenant)
 		r.mu.Unlock()
 		<-sem
+		// Finish last so shutdown joins the cache writes and all resolver cleanup.
+		r.group.end()
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	ctx, cancel := context.WithTimeout(base, fetchTimeout)
 	defer cancel()
 
 	val, err := r.fetch(ctx, tenant)
 	if err != nil {
+		if base.Err() != nil {
+			return // shutdown is not an authority failure or a negative cache entry
+		}
 		r.mu.Lock()
 		r.recordFailureLocked(tenant, r.now(), err)
 		r.mu.Unlock()
@@ -377,4 +391,66 @@ func failureCause(err error) core.CeilingSource {
 		return core.CeilingUnknownTenant
 	}
 	return core.CeilingUnreachable
+}
+
+// Existence is what a resolver has learned about whether a tenant exists.
+type Existence uint8
+
+const (
+	// ExistenceUnknown: nothing has answered for this tenant (a cold miss, a refresh the
+	// resolver's bounds refused to start, or the authority unreachable). It is NOT a verdict:
+	// a caller that refuses on anything but ExistenceNone fails open, as the resolver does.
+	ExistenceUnknown Existence = iota
+	// ExistenceKnown: the authority has answered for this tenant, so it exists (or did, as
+	// of a fetch within the cache's reach).
+	ExistenceKnown
+	// ExistenceNone: the authority answered that no such tenant exists.
+	ExistenceNone
+)
+
+// existence reads the cache without blocking, starting a refresh when one is due.
+func (r *tenantResolver[V]) existence(tenant string) Existence {
+	r.mu.Lock()
+	e, ok := r.cache[tenant]
+	expired := !ok || !r.now().Before(e.nextRefreshAt)
+	if expired {
+		r.triggerRefreshLocked(tenant)
+	}
+	r.mu.Unlock()
+
+	switch {
+	case ok && e.have:
+		return ExistenceKnown
+	case ok && !expired && e.cause == core.CeilingUnknownTenant:
+		// A negative verdict is a verdict only while it is fresh. Once expired it is served as
+		// no opinion until the refresh it triggered answers: a tenant created after it was
+		// first asked about must not stay refused for as long as refresh admission is saturated.
+		return ExistenceNone
+	}
+	return ExistenceUnknown
+}
+
+// awaitExistence is existence, but a COLD tenant waits for the refresh it started, up to ctx.
+// The wait is only for a refresh that is actually running: when the resolver's rate or
+// concurrency bound refused to start one, the answer is ExistenceUnknown at once, so a flood of
+// invented tenant names costs no waiting beyond the bound it already hits.
+func (r *tenantResolver[V]) awaitExistence(ctx context.Context, tenant string) Existence {
+	if e := r.existence(tenant); e != ExistenceUnknown {
+		return e
+	}
+	tick := time.NewTicker(2 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		r.mu.Lock()
+		_, running := r.inflight[tenant]
+		r.mu.Unlock()
+		if !running {
+			return r.existence(tenant)
+		}
+		select {
+		case <-ctx.Done():
+			return ExistenceUnknown
+		case <-tick.C:
+		}
+	}
 }

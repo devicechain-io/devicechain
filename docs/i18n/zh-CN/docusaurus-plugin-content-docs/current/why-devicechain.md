@@ -46,7 +46,7 @@ DeviceChain 是一个采用 Apache 2.0 许可的物联网平台,运行在 Kubern
 - **工业现场总线驱动。** 没有 BACnet、Modbus 或 OPC-UA 驱动,项目发布的内容也都不支持这些协议。受支持的做法是使用本地网关与现场总线通信,再通过 MQTT 或 HTTP 转发;协议转换由你自己提供。参见[不可用](./reference/transport-matrix.md#not-available)。
 - **SNMP。** DeviceChain 不从 SNMP 代理采集数据,也不接收 SNMP trap。请使用能通过 MQTT 或 HTTP 转发的采集器。
 - **其他传输方式。** 不支持 WebSocket 设备接入;CoAP 只能通过 LwM2M 到达平台。只有平台自带的 MQTT broker 支持用客户端证书认证设备;HTTP 使用令牌或基本凭据,LwM2M 使用预共享密钥。参见[传输能力矩阵](./reference/transport-matrix.md#not-available)。
-- **向网络服务器背后的设备下发命令。** 通过[入站集成](./reference/transport-matrix.md#inbound-integrations)没有下行链路。针对此类设备的命令会被接受,随后以 `COMMAND_TRANSPORT_UNSUPPORTED` 失败。
+- **向网络服务器背后的设备下发命令。** 可选的 [LoRaWAN 下行](./guides/inbound-integrations.md#lorawan-downlink)支持 ChirpStack v4 和 The Things Stack v3。禁用适配器时，向最后一次通过该集成上报的设备发送的命令会被接受，随后以 `COMMAND_TRANSPORT_UNSUPPORTED` 失败。启用适配器后，若集成没有可用的网络服务器连接，命令会被拒绝并标记为未发送。不支持面向通用发送方的下行。
 - **移动应用。** DeviceChain 提供网页控制台和能适应手机屏幕的仪表板,也提供 [JavaScript](./reference/npm-packages.md) 客户端库,以及仓库 [`sdks/`](https://github.com/devicechain-io/devicechain/tree/main/sdks) 目录中的 .NET 和 Unity 库。它没有原生移动应用。
 - **空中升级的限制。** 批量发布没有分批、金丝雀推进、定时或维护窗口。只有通过 MQTT 连接的设备才能接收托管升级:只使用 HTTP 的设备不能,LwM2M 设备通过普通命令升级,Sparkplug 没有定义固件升级。参见[哪些设备可以升级](./concepts/over-the-air-updates.md#transports)。
 - **Kubernetes 以外的平台。** 平台运行在 Kubernetes 上。本地实例运行在 [kind](./quickstart/first-device.md) 集群中,正式实例运行在你自己的集群中。
@@ -58,3 +58,9 @@ DeviceChain 是一个采用 Apache 2.0 许可的物联网平台,运行在 Kubern
 - [快速入门:你的第一台设备](./quickstart/first-device.md)在你的机器上运行一个实例。
 - [架构概览](./concepts/architecture-at-a-glance.md)展示消息如何在平台中流转,[架构](./concepts/architecture.md)列出每个组件。
 - [获取帮助](./getting-help.md)说明在哪里提问,或报告本页遗漏的内容。
+
+:::tip 动手试试
+
+**约 30 分钟，跑通你的第一台设备.** 在本地安装 DeviceChain，连接一台模拟设备，并查看它的遥测数据如何到达。 [开始快速入门 →](./quickstart/first-device.md)
+
+:::

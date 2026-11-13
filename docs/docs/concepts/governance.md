@@ -80,6 +80,8 @@ If you scale a service out, set tier ceilings for the number of replicas you run
 
 ### When ingest can admit a tenant above its ceiling {#ingest-above-ceiling}
 
+The allowances below describe the default `legacy` metering. For opt-in `lagCredit`, its shared fresh allowance and limits, see [Ingest metering](../deployment/tuning-an-instance.md#ingest-metering).
+
 Within one `event-sources` replica, a tenant's ingest ceiling applies to each of four allowances separately, not to the tenant as a whole:
 
 - **Live traffic**: what the tenant's devices send now over MQTT and NATS, including broker presence.
@@ -118,3 +120,9 @@ Shed volume is reported as an operational metric. An operator sees a tenant that
 - **[Multi-Tenancy](./multi-tenancy.md)**: the correctness half, data isolation that refuses unscoped queries on the same shared instance.
 - **[Outbound Connectors](./outbound-connectors.md#governance)**: how egress governance applies to webhooks and broker publishes.
 - **[Tenant Tiers](./tenant-tiers.md)**: the packaging entity that supplies a tenant's default ceilings.
+
+:::tip Try it
+
+**First device in about 30 minutes.** Install DeviceChain locally, connect a simulated device and watch its telemetry arrive. [Start the quickstart →](../quickstart/first-device.md)
+
+:::

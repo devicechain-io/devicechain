@@ -32,6 +32,8 @@ The form builder's action picker offers all four actions. A webhook action there
 
 Authentication is optional and uses a **secret handle**. The token is stored in the **secret store** and presented at send time as an `Authorization: Bearer <token>` header. The header name and scheme are not configurable, so you cannot authenticate to a receiver that expects a custom API-key header this way. If the action names a handle but no secret is stored under it, the call is never sent without its credential: it is dead-lettered once with the outcome `invalid` and not retried. Nothing replays it, so that firing's call is not made; correct the action's secret handle so later firings authenticate.
 
+An `httpCall` can also be **signed**, so the receiver can verify the request came from DeviceChain and was not altered. Name a signing secret in the action's `signingSecretRef` and the call carries the `webhook-id`, `webhook-timestamp` and `webhook-signature` headers of the Standard Webhooks specification. It is off unless you set it. See [Signing Outbound Webhooks](../guides/signed-webhooks.md).
+
 Webhook delivery is hardened in these ways:
 
 - It refuses to follow redirects, so an external endpoint cannot `3xx` the request somewhere else.
@@ -47,6 +49,8 @@ For message brokers and cloud queues, the target is a reusable **connector** (be
 One generic `publish` action covers every broker and queue type; the **connector's type** selects the transport. The supported types today are `mqtt`, `kafka`, `aws_sns` and `aws_sqs`.
 
 `gcp_pubsub` is a recognized type with no delivery client in this release, so creating, updating to or publishing a connector of that type is refused with the error code `UNSUPPORTED`. The console does not offer the type. A connector of that type stored by an earlier release is still dead-lettered as unsupported if a `publish` targets it, never silently dropped.
+
+`updateConnector` refuses a stale `expectedUpdatedAt` with `errors[*].extensions.code` set to `STALE_WRITE`. Nothing is written; the message remains "connector was modified by another writer; reload and try again". This code applies only to connector updates. `CONFLICT` continues to mean a uniqueness collision; errors from other operations are unchanged. Classify by code rather than message text. The console keeps unsaved edits and shows a localized hint to copy them before reloading, then reapply them and retry saving.
 
 ## Connectors are versioned resources
 
@@ -79,6 +83,8 @@ Every connection a connector makes is checked at the moment it is made, against 
 - **The service's own environment is not consulted.** It does not use proxy variables (`HTTPS_PROXY`, `ALL_PROXY`, …), `AWS_*` variables, AWS configuration files or the pod's cloud identity. A connector reaches exactly the destination it names, with the credential it carries.
 
 To let connectors reach a private destination, an operator lists each address as its own `/32` under `instance.config.infrastructure.egress.allowedDestinations`. Private destinations include an in-cluster broker, **Amazon MSK**, **Amazon MQ**, and SNS/SQS through an **interface VPC endpoint with private DNS**, which makes even the default regional names resolve to private addresses. An interface endpoint has one address per availability zone, and each needs its own entry. An allowance applies to **every tenant and every connector and webhook**, not only the one it was added for.
+
+On a **local development cluster** (kind, minikube, k3d, Docker Desktop or Rancher Desktop), `dcctl bootstrap` and `dcctl upgrade` take `--dev-allow-egress <address-or-CIDR>` (repeatable, or comma-separated) so a webhook or connector can reach a service on your own machine or LAN. It is for development only: dcctl refuses it on any other cluster, records it on the instance so later upgrades keep it, lists it in `dcctl instances` (`DEV EGRESS ALLOWED`), and every service that uses it logs a warning at startup. Name the single address or narrow range you mean. **The cloud metadata addresses, loopback, link-local and multicast ranges stay blocked whatever you list**, and an entry that overlaps one is refused. Only addresses and CIDRs are accepted, never a name, because the check runs on the resolved address. `dcctl upgrade --dev-allow-egress none` removes it. For a real deployment, use `allowedDestinations` above. The local-only check reads the kube context name, so it is a guardrail against a slip, not an enforcement point. A wide entry such as `10.0.0.0/8` or `172.16.0.0/12` also opens the cluster's own pod, Service and node ranges to every tenant, so list specific hosts.
 
 A `blocked` outcome tells a tenant only that the destination resolved to a refused address, the same thing a webhook refusal says. The refused address itself is recorded in the dead letter, which operators can read and tenants cannot.
 

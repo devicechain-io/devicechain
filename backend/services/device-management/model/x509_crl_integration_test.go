@@ -69,7 +69,9 @@ func (f *pgCertFixture) crlSerials() map[string]bool {
 func hexSerial(n *big.Int) string { s, _ := x509trust.SerialHex(n); return s }
 
 // holdList pauses the upload whose CRL number is number, right after its list row is written: the
-// anchor and the issuer rows are held FOR UPDATE and nothing is committed.
+// CRL-writers advisory lock and the issuer rows (FOR UPDATE) are held, the anchor row only through the
+// implicit FOR KEY SHARE of the inserts (the upload takes it FOR UPDATE last, after the entries), and
+// nothing is committed. The global order is revocationLockOrder (api_x509_revocation_kicks.go).
 func (f *pgCertFixture) holdList(number string) (reached <-chan struct{}, release func()) {
 	f.t.Helper()
 	reachedCh, releaseCh := make(chan struct{}), make(chan struct{})
@@ -409,6 +411,7 @@ type lockProbe struct {
 	stop    chan struct{}
 	done    chan struct{}
 	longest atomic.Int64 // nanoseconds
+	bad     atomic.Value // the first error that was NOT a refused NOWAIT (55P03)
 }
 
 func (f *pgCertFixture) probeAnchorLock() *lockProbe {
@@ -420,6 +423,12 @@ func (f *pgCertFixture) probeAnchorLock() *lockProbe {
 		for {
 			select {
 			case <-p.stop:
+				// Still refused when told to stop: the stretch so far counts.
+				if !since.IsZero() {
+					if d := time.Since(since); int64(d) > p.longest.Load() {
+						p.longest.Store(int64(d))
+					}
+				}
 				return
 			default:
 			}
@@ -427,6 +436,11 @@ func (f *pgCertFixture) probeAnchorLock() *lockProbe {
 				return tx.Exec(`SELECT id FROM device_trust_anchors WHERE id = ? FOR SHARE NOWAIT`, f.anchor.ID).Error
 			})
 			now := time.Now()
+			// A probe that fails for any reason but "lock not available" measures nothing; it must
+			// not read as "never refused".
+			if err != nil && !strings.Contains(err.Error(), "55P03") {
+				p.bad.CompareAndSwap(nil, err)
+			}
 			switch {
 			case err != nil && since.IsZero():
 				since = now
@@ -442,9 +456,13 @@ func (f *pgCertFixture) probeAnchorLock() *lockProbe {
 	return p
 }
 
-func (p *lockProbe) finish() time.Duration {
+func (p *lockProbe) finish(t *testing.T) time.Duration {
+	t.Helper()
 	close(p.stop)
 	<-p.done
+	if err, _ := p.bad.Load().(error); err != nil {
+		t.Fatalf("the lock probe failed for a reason other than a refused NOWAIT, so its reading means nothing: %v", err)
+	}
 	return time.Duration(p.longest.Load())
 }
 
@@ -484,13 +502,16 @@ func peakHeap(fn func()) (extra uint64) {
 	return 0
 }
 
-// 🔑 AT THE DEFAULT BOUNDS (an 8 MiB CRL, as many entries as fit) an upload neither costs heap in
+// 🔑 AT THE DEFAULT BOUNDS (a 2 MiB CRL, as many entries as fit) an upload neither costs heap in
 // proportion to the entries nor holds the anchor lock while they are written: device-management
 // serves the auth callout in the same process, and a registration waits on that lock.
 func TestCrlPostgresDefaultBoundUploadStaysUnderTheMemoryAndLockCeilings(t *testing.T) {
 	const (
 		heapCeiling = 64 << 20
-		lockCeiling = 2 * time.Second
+		// The anchor row is held for one UPDATE and the commit, a small FRACTION of the upload. A
+		// ratio, not a wall-clock ceiling, so a slow host does not loosen it. With the anchor locked
+		// right after the advisory lock (the negative control) the fraction is ~1.
+		lockFraction = 0.25
 	)
 	f := newPgCertFixture(t)
 	const n = 80_000
@@ -515,14 +536,51 @@ func TestCrlPostgresDefaultBoundUploadStaysUnderTheMemoryAndLockCeilings(t *test
 	}{{"first upload", first}, {"replacement", second}} {
 		probe := f.probeAnchorLock()
 		var err error
+		began := time.Now()
 		extra := peakHeap(func() { _, err = f.putVia(f.api, step.crl) })
-		held := probe.finish()
+		took := time.Since(began)
+		held := probe.finish(t)
 		require.NoError(t, err, step.name)
-		t.Logf("%s: +%.1f MiB heap, anchor lock held %s", step.name, float64(extra)/(1<<20), held)
+		t.Logf("%s: +%.1f MiB heap, anchor lock refused a registration for %s of a %s upload", step.name, float64(extra)/(1<<20), held, took)
 		assert.Less(t, extra, uint64(heapCeiling), "%s: heap grew with the entries", step.name)
-		assert.Less(t, held, lockCeiling, "%s: the anchor was held for the entries' sake", step.name)
+		assert.Less(t, float64(held), lockFraction*float64(took), "%s: the anchor was held for the entries' sake", step.name)
 	}
 	assert.Len(t, f.crlSerials(), len(next))
 }
 
 const defaultCrlBytesForTest = 2 << 20
+
+// 🔴 AN ANCHOR DELETED WHILE AN UPLOAD WAITS FOR THE WRITERS' LOCK is refused in words ("trust anchor
+// changed"), not by the foreign-key error (23503) of the first insert. The interleaving is built: a
+// transaction holds the anchor's CRL-writers lock, the upload blocks on it, the anchor is deleted and
+// the holder commits.
+func TestCrlPostgresUploadToAnAnchorDeletedMidWaitIsRefusedInWords(t *testing.T) {
+	f := newPgCertFixture(t)
+	ca := newRootCA(t, "Doomed Root")
+	doomed, err := f.api.CreateDeviceTrustAnchor(f.ctx, &DeviceTrustAnchorCreateRequest{Token: "doomed", CertificatePem: ca.pem()})
+	require.NoError(t, err)
+	crl := ca.crl(t, crlSpec{number: big.NewInt(1), revoked: revokedSerials(big.NewInt(77))})
+
+	holder := f.mgr.Database.WithContext(f.ctx).Begin()
+	require.NoError(t, holder.Error)
+	defer holder.Rollback()
+	require.NoError(t, lockCrlWriters(holder, f.tenant, doomed.ID))
+
+	done := make(chan error, 1)
+	go func() {
+		_, perr := f.api.PutDeviceRevocationList(f.ctx, &RevocationListPutRequest{AnchorToken: "doomed", Crl: crl})
+		done <- perr
+	}()
+	waitForBlockedBackend(t, f.mgr.Database)
+	require.NoError(t, holder.Exec(`DELETE FROM device_trust_anchors WHERE id = ?`, doomed.ID).Error)
+	require.NoError(t, holder.Commit().Error)
+
+	select {
+	case perr := <-done:
+		require.Error(t, perr)
+		assert.NotContains(t, perr.Error(), "23503", "a raw foreign-key error leaked: %v", perr)
+		assert.Contains(t, perr.Error(), "changed while the list was being checked", "refused in words: %v", perr)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the upload never returned")
+	}
+}

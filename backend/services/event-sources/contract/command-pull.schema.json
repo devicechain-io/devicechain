@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.devicechain.io/schema/device/command-pull.schema.json",
+  "title": "DeviceChain command pull",
+  "description": "The JSON a device receives, with status 200, from GET /{instanceId}/{tenant}/devices/{deviceToken}/commands when it is on the HTTP_PULL command channel and commands are waiting. Status 204 with no body means none arrived within the wait. The request carries the device's access token in an Authorization: Bearer header. A device acknowledges each command BEFORE it acts on it (POST .../commands/{token}/ack, no body, 204) and reports what it did afterwards (POST .../commands/{token}/response, see command-pull-response.schema.json). A command whose acknowledgement does not arrive is handed out again by a later pull, up to its attempt limit, and then fails as never delivered.",
+  "type": "object",
+  "properties": {
+    "commands": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/command" },
+      "description": "The commands handed out by this pull, oldest first, at most 16. Each is now claimed by this pull and will not be handed out again unless its acknowledgement is overdue."
+    }
+  },
+  "required": ["commands"],
+  "$defs": {
+    "command": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "description": "The command's token: the identifier the device puts in the acknowledgement and response URLs."
+        },
+        "name": {
+          "type": "string",
+          "description": "The command key, one of the commands the device's profile declares."
+        },
+        "payload": {
+          "description": "The command's parameters, exactly as they were issued: any JSON value. Absent when the command was issued without parameters."
+        },
+        "deliveryMode": {
+          "type": "string",
+          "enum": ["ONEWAY"],
+          "description": "ONEWAY: the device only acknowledges the command, and the acknowledgement completes it; the device sends no response. Absent for an ordinary command that the device must also answer."
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many times this command has been handed out, counting this one. Greater than 1 means an earlier pull of it was never acknowledged, so a device that cannot tell whether it already acted should treat the command as possibly repeated."
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the command expires, as an RFC 3339 timestamp. Absent when it does not expire."
+        }
+      },
+      "required": ["token", "name", "attempt"]
+    }
+  },
+  "examples": [
+    {
+      "commands": [
+        {
+          "token": "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
+          "name": "setRelay",
+          "payload": { "channel": 2, "on": true },
+          "attempt": 1,
+          "expiresAt": "2030-01-01T00:00:00Z"
+        },
+        {
+          "token": "0b7a41c2-85d0-49d4-9c8d-6a4c1f6d2e90",
+          "name": "blinkLed",
+          "deliveryMode": "ONEWAY",
+          "attempt": 2
+        }
+      ]
+    }
+  ]
+}

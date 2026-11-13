@@ -22,8 +22,15 @@ const (
 	TokenAudienceEnforce TokenAudienceMode = "enforce"
 
 	// TokenAudienceReleaseDefault is what an absent or empty `enforcement` means. It is
-	// the ONE place the release default lives: observe in v1.2, enforce in v1.3.
-	TokenAudienceReleaseDefault = TokenAudienceObserve
+	// the ONE place the release default lives: observe in v1.2, enforce from v1.3.
+	// From v1.4, documents may no longer opt out of enforcement.
+	//
+	// The flip is safe across a rolling upgrade because a token with NO audience is accepted
+	// by every plane in both modes (see auth.PlanePolicy): every token the platform mints for
+	// itself (sign-in sessions, service tokens) carries none, and an OAuth token carries one
+	// only when its client asked for a resource. What enforce refuses is a token bound to a
+	// resource the plane does not serve, the same set observe counted as would_reject.
+	TokenAudienceReleaseDefault = TokenAudienceEnforce
 )
 
 // MaxTokenAudienceResources is the most entries either resource list may hold.
@@ -43,7 +50,7 @@ const MaxTokenAudienceResourceLen = 2048
 // identifier). The authorization server and every plane read this one document, so the list
 // the AS issues against and the set a plane accepts cannot drift apart.
 type TokenAudienceConfiguration struct {
-	// Enforcement is "observe", "enforce" or "" (the release default, see
+	// Enforcement is "enforce" or "" (the release default, enforce; see
 	// TokenAudienceReleaseDefault). It governs the authorization-server resource check and
 	// the plane audience check together.
 	Enforcement string
@@ -114,8 +121,14 @@ func (c TokenAudienceConfiguration) EffectiveUnscopedClientCredentials() TokenAu
 // Validate fails closed on anything that would make the policy mean something other than
 // what was written.
 func (c TokenAudienceConfiguration) Validate() error {
+	switch c.Enforcement {
+	case "", string(TokenAudienceEnforce):
+	case string(TokenAudienceObserve):
+		return fmt.Errorf("infrastructure.tokenAudience.enforcement is %q; that opt-out was removed in v1.4 and token audiences are always enforced. Remove the key (unset means enforce) or set it to %q", c.Enforcement, TokenAudienceEnforce)
+	default:
+		return fmt.Errorf("infrastructure.tokenAudience.enforcement is %q; it must be %q (or left unset)", c.Enforcement, TokenAudienceEnforce)
+	}
 	for _, f := range []struct{ key, val string }{
-		{"enforcement", c.Enforcement},
 		{"unscopedClientCredentials", c.UnscopedClientCredentials},
 	} {
 		switch f.val {

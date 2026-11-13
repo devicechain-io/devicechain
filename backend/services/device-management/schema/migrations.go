@@ -60,5 +60,17 @@ var (
 		NewDeviceTrustAnchorsSchema(),
 		NewX509RevocationSchema(),
 		NewProfileDecodersSchema(),
+		NewRevocationKickQueueSchema(),
+		NewDeviceTypeCommandChannelSchema(),
+		NewRevocationExpansionMarkersSchema(),
+		NewAnchorOcspSchema(),
+		NewAlarmDispositionsSchema(),
+		NewInstalledPositionSchema(),
+		NewSemanticBindingsSchema(),
+		NewAgentProposalsSchema(),
+		NewCommandEncoderSchema(),
+		NewAgentSafetySchema(),
+		NewAutomationReviewsSchema(),
+		NewAutomationReviewEnforcementSchema(),
 	}
 )

@@ -52,6 +52,29 @@ created long after startup. The gauge is 1 only when a stream is found unbounded
 not be set (typically the broker has no storage left to reserve it), so the alert has a `for` that rides
 out a failed leader election and never fires while the platform is bounding streams normally. The
 series are exported by every pod at 0 from start, whatever mqttFailClosed says.
+
+IngestShedBeyondLagCredit and IngestAppendSkewLarge watch the lag-credited ingest gate
+(eventSources.ingestMetering: lagCredit). Its series are registered on every pod but carry no
+child until that gate meters something, so with the default (legacy) both expressions are empty
+and neither alert can fire; no absent() arm, for the same reason as above. None carries a tenant.
+
+IngestShedBeyondLagCredit is the case the gate exists to remove coming back: messages shed at the
+tenant's ceiling on the fresh route while fresh admissions on the same reader stream were being
+judged against more than a second of lag credit, so the platform's readers were measurably behind
+in the same window (per pod: the lag is measured per replica). The commoner cause is a tenant above
+its ceiling while the readers were behind; a stall longer than the tenant's burst covers (the credit
+is capped there, never above 5 seconds) is the other. The series cannot tell which, because they
+carry no tenant, and a reader whose lag is not yet known (a stream just started, a batch delivered
+but not yet acknowledged) is credited as the cover allows, so an over-ceiling tenant reads the same.
+A short `for` (5m) keeps a one-off over-ceiling tenant during such a window from paging; a shed
+burst still holds the 10-minute window, so it is seen. MqttIngestShedAfterAcknowledgement, with no
+`for`, is the alert that says MQTT data was lost.
+
+IngestAppendSkewLarge is the broker's clock more than 2 seconds from a pod's: the gate corrects the
+age of a message by the measured offset, up to 2 seconds either way, and counts every message read
+while the estimate sits at that clamp. Beyond it the gate under- or over-credits by the difference.
+`for` equals the increase window, as for the sibling alerts: one clock step that the estimate
+relearns clears inside a window, a clock that stays out lasts the whole window.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -78,6 +101,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#externalmqttsourcenotreadbyonepod"
             summary: "An external MQTT source is not being read by exactly one pod"
             description: "External MQTT source {{ "{{ $labels.source }}" }} has been read by {{ "{{ $value }}" }} event-sources pods for 2m; it should be read by exactly one. At 0, nothing is reading it, and whatever your broker delivers meanwhile is lost, because the session is not persistent. The usual cause is that your broker is unreachable or refusing the connection: the pod that took the source over logs why, releases the source and tries again every 15 seconds. Another cause is that event-sources cannot reach the platform's message broker to agree which pod reads the source; its log says so. Above 1, more than one pod reports reading it. A pod that has lost the source drops what it is still delivered rather than storing it, and stops reporting within a lease renewal, so a value above 1 that lasts points at a pod that has lost contact with the platform's message broker."
         # One event per failed publish, lost: that transport is at-most-once and never retries.
@@ -92,6 +116,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#externalmqttsourcelosingevents"
             summary: "An external MQTT source is losing events it has already read"
             description: "For at least 10 minutes, external MQTT source {{ "{{ $labels.source }}" }} has been losing events: they were read from your broker and decoded, but publishing them to the platform's event stream failed. That source does not retry, and your broker was already told they arrived, so each one is gone. The cause is on the platform's side, not your broker's: its message broker is refusing or not answering publishes. Check the platform's message broker, and the event-sources log for 'is lost: this transport does not retry', which names the source and tenant of each."
         # NO `for`, unlike the sibling ingest-loss alerts, and that is the point of this one. A
@@ -107,6 +132,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#mqttingestshedafteracknowledgement"
             summary: "MQTT messages were dropped at the ingest ceiling after the device was told they arrived"
             description: "In the last 10 minutes, {{ "{{ $value }}" }} messages from MQTT source {{ "{{ $labels.source }}" }} were dropped at their tenant's ingest ceiling. The broker had already acknowledged each one to its device (PUBACK), so the device will not resend it: these messages are lost, not deferred. Either a tenant is sending above its ceiling, or the platform stalled briefly and the messages queued behind it arrived together; the shed counters carry the shed class but not the tenant, so raise event-sources to debug logging to name the tenant. Compare devicechain_eventsources_total_msg_rate_limited and total_msg_reading_limited, check whether the tenant's ceiling (ingestReadingsPerSecond, ingestBurst) matches what its devices send, and look at the platform's message broker for a stall (a log line saying an internal subscription took too long) at the same time."
         # `for` equals the increase window, as for the sibling ingest-loss alerts: a failure
@@ -119,6 +145,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#brokerpresencelosingtransitions"
             summary: "Broker presence transitions are not reaching the event stream"
             description: "For at least 10 minutes, event-sources has been failing to write device connects and disconnects to the platform's event stream ({{ "{{ $value }}" }} in the last 10 minutes). The broker does not resend connection notices, so each one is lost until the next reconciliation pass (every 5 minutes by default) puts the device right; until then a device can read offline while it is connected, or the other way round, and a reconnecting device's held commands are not released early. The cause is the platform's message broker refusing or not answering publishes. Check it, and the event-sources log for 'Failed to emit a broker presence transition', which names each device."
         # Both arms by durable. The gauge is per pod; `min` because any pod that could not
@@ -129,6 +156,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#mqttfailcloseddurablemissing"
             summary: "A platform durable on the MQTT message store is missing"
             description: "Durable {{ "{{ $labels.durable }}" }} on the MQTT gateway's message store has been missing within the last 10 minutes. While it is missing, the broker acknowledges device QoS 1 publishes of its kind without keeping them, so each one is lost although the device was told it arrived. event-sources creates it again within 30 seconds, and this alert clears 10 minutes after the last time it was found missing; while it cannot be created, the alert stays. A rolling update does not remove a durable, so it does not raise this alert. Find what deleted it (a command run against the broker's consumers, or a tool that manages them), and check the event-sources log for 'platform durable on the MQTT message store'."
         # Instance-wide: the store is one per broker account.
@@ -138,6 +166,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#mqttfailclosedstorenotasdeclared"
             summary: "The MQTT message store is not as the platform declared it"
             description: "Within the last 10 minutes event-sources found the MQTT gateway's message store changed from its fail-closed configuration, or found another DeviceChain instance on the same broker. A changed setting (the discard policy, the size bound, or the store deleted outright) is put back within 30 seconds, but while it lasted a full store could discard messages it had already acknowledged, or refuse every publish. Another instance on the broker shares the store and its bound, so one instance's backlog refuses the other's devices: give each instance its own broker, or turn infrastructure.nats.mqttFailClosed off. The event-sources log names the setting it put back, or the other instances."
         # Per stream, `max` across pods: any pod that cannot bound it leaves it unbounded.
@@ -148,6 +177,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#mqttgatewaystreamunbounded"
             summary: "An MQTT gateway stream has no size limit"
             description: "For at least 10 minutes the broker's MQTT gateway stream {{ "{{ $labels.stream }}" }} has had no size limit and event-sources could not set one. The broker creates these streams without a limit when the first MQTT device connects, and an unbounded one can fill the broker's storage and take the whole instance down. Check that the broker has storage free to reserve the limit and look in the event-sources log for 'Could not bound the MQTT gateway'. It clears on its own once the limit is set."
         # Inbound integrations (a LoRaWAN network server or a webhook posting under a bearer token).
@@ -165,6 +195,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#integrationauthfailuressustained"
             summary: "Requests to an integration are being refused for a bad token"
             description: "For at least 10 minutes, more than 30 requests in each 10 minutes to an inbound integration have been refused because the bearer token was wrong, the integration does not exist, or the integration's failure budget was spent. If a sender stopped delivering after you rotated an integration's token, update the token in the network server or webhook. If nothing of yours changed, someone who knows the URL is trying tokens: the integration's 'last authentication failure' time in the console shows which one, and the sprayed integration keeps serving senders that are already known."
         # A tenant over its ingest ceiling is answered 202 on these routes, because a refusal would
@@ -179,6 +210,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#integrationshedaccepted"
             summary: "Integration uplinks are being accepted and discarded at a tenant's ingest ceiling"
             description: "In the last 10 minutes, uplinks from inbound integrations were discarded because a tenant is over its ingest ceiling. They were answered 202 so the network server would not suspend its webhook, which means the sender believes they arrived and they did not. Raise the tenant's ingest ceiling, or reduce what the integration sends."
         # An uplink the network server forwarded without decoding is accepted and stores nothing: the
@@ -191,6 +223,54 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#integrationundecodedhigh"
             summary: "Most integration uplinks carry nothing to store"
             description: "For at least 30 minutes, more than half of the uplinks arriving over inbound integrations have had no decoded values to store. The network server forwards the raw frame but the device profile there has no payload codec configured (or the codec returns nothing), or a generic sender posts only text. Configure the codec in the network server; the integration's 'last undecoded' sample in the console shows a frame it could not read."
+        # The lag-credited gate (ingestMetering: lagCredit); see the header. Joined by pod and
+        # reader stream, because the lag and the credit are measured per replica: a fresh-route
+        # ceiling shed on a pod, and fresh admissions on that pod and stream judged against more
+        # than one second of credit (the histogram's count above its le="1" bucket) in the same
+        # window. The window, not the instant: the two need not be the same messages.
+        - alert: IngestShedBeyondLagCredit
+          expr: (sum by (pod, stream) (increase(devicechain_eventsources_ingest_shed_cause_total{namespace="{{ $ns }}", route="fresh", cause="ceiling"}[10m])) > 0) and on (pod, stream) (sum by (pod, stream) (increase(devicechain_eventsources_ingest_lag_credit_seconds_count{namespace="{{ $ns }}"}[10m])) > sum by (pod, stream) (increase(devicechain_eventsources_ingest_lag_credit_seconds_bucket{namespace="{{ $ns }}", le="1"}[10m])))
+          for: 5m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#ingestshedbeyondlagcredit"
+            summary: "Messages were shed at the ingest ceiling while the platform's readers were behind"
+            description: "In the last 10 minutes, {{ "{{ $value }}" }} messages read from stream {{ "{{ $labels.stream }}" }} on pod {{ "{{ $labels.pod }}" }} were shed at their tenant's ingest ceiling by the lag-credited gate (eventSources.ingestMetering: lagCredit), and in the same 10 minutes that pod measured its readers of the stream as more than a second behind. The likely cause is a tenant sending above its ceiling while the readers were behind: compare devicechain_eventsources_total_msg_rate_limited, raise event-sources to debug logging to name the tenant, and check its ceiling (ingestReadingsPerSecond, ingestBurst) against what its devices send. The other cause is a platform stall longer than the credit covers (the time the tenant's burst covers, never more than 5 seconds): check the platform's message broker and event-sources for a stall at the same time (devicechain_eventsources_reader_lag_seconds shows how far behind each stream was). If the tenant was within its ceiling, report it: it is the case this metering mode exists to prevent. MQTT messages shed this way were already acknowledged to their devices; MqttIngestShedAfterAcknowledgement fires for them as well."
+        - alert: IngestAppendSkewLarge
+          expr: sum by (stream) (increase(devicechain_eventsources_append_skew_clamped_total{namespace="{{ $ns }}"}[10m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#ingestappendskewlarge"
+            summary: "The message broker's clock is more than 2 seconds from event-sources'"
+            description: "For at least 10 minutes, the lag-credited ingest gate (eventSources.ingestMetering: lagCredit) has measured the message broker's append stamps on stream {{ "{{ $labels.stream }}" }} as more than 2 seconds away from the clock of an event-sources pod. The gate corrects a message's age for that offset only up to 2 seconds, so beyond it a tenant is credited too little after a stall (the broker's clock ahead) or too much (behind). devicechain_eventsources_append_skew_seconds shows the offset each pod measured, positive when the broker's clock is behind. Check time synchronisation (NTP) on the nodes running the message broker and event-sources; the alert clears once the clocks agree again."
+        # A 5m lookback with for: 10m excludes an isolated burst.
+        - alert: IntegrationDownlinkReportsDiscarded
+          expr: sum(rate(devicechain_eventsources_integration_downlink_reports_total{namespace="{{ $ns }}", result=~"rate_limited"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#integrationdownlinkreportsdiscarded"
+            summary: "Network-server downlink reports are being accepted and discarded"
+            description: "For 10 minutes, inbound integrations have discarded downlink reports above their separate report allowance while answering 202. The sender believes they arrived, and commands those reports would settle wait until their deadline. Reduce the report flood and inspect integration traffic and the confirmed-downlink dashboard before resending commands."
+        # A 5m lookback with for: 10m excludes an isolated burst.
+        - alert: DeviceUplinkMessagesFailing
+          expr: sum(rate(devicechain_eventsources_device_uplink_messages_total{namespace="{{ $ns }}", result=~"no_decoder|bad_request|too_large|internal_error|unauthorized|plan_unavailable|publish_failed"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#deviceuplinkmessagesfailing"
+            summary: "Device MQTT payloads cannot reach their decoder pipeline"
+            description: "For 10 minutes, raw device MQTT uplinks have failed before reaching the decoder pipeline. Missing decoders, invalid or oversized payloads and unknown devices go to failed-decode; plan resolution and publish failures retry through the broker. Inspect the Ingest dashboard result labels, failed-events and event-sources logs; check the profile decoder and device-management or broker availability. PayloadDecoderFailuresHigh covers failures after handoff to the decoder."
 {{- end }}

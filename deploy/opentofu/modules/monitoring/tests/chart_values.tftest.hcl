@@ -97,3 +97,35 @@ run "node_exporter_runs_on_tainted_pools" {
     error_message = "node-exporter must carry a bare operator: Exists toleration: a tainted pool (dedicated=broker) otherwise has no node series and the DaemonSet alerts fire"
   }
 }
+
+# 🔴 THE ALERTMANAGER READS ITS CONFIGURATION FROM A SECRET dcctl WRITES. The receivers are
+# credentials (a webhook URL, an SMTP password), so they must not be Terraform variables --
+# they would land in the state on the operator's machine, and `dcctl upgrade`, which never runs
+# this module, could not change them. A chart that silently dropped `configSecret` would come up
+# healthy on its built-in configuration, whose only receiver discards every alert.
+run "alertmanager_reads_the_configuration_dcctl_writes" {
+  command = plan
+
+  assert {
+    condition     = yamldecode(helm_release.kube_prometheus_stack.values[0]).alertmanager.alertmanagerSpec.configSecret == "dc-alertmanager-config"
+    error_message = "alertmanagerSpec.configSecret must name the Secret dcctl writes (dc-alertmanager-config): otherwise every alert goes to the stack's null receiver"
+  }
+
+  assert {
+    condition     = !contains(keys(yamldecode(helm_release.kube_prometheus_stack.values[0]).alertmanager), "config")
+    error_message = "the module must not carry receiver configuration of its own: it would be a second source of truth, and a credential in the infrastructure state"
+  }
+}
+
+run "the_configuration_secret_name_is_overridable" {
+  command = plan
+
+  variables {
+    alertmanager_config_secret = "custom-am"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kube_prometheus_stack.values[0]).alertmanager.alertmanagerSpec.configSecret == "custom-am"
+    error_message = "alertmanager_config_secret does not reach the chart"
+  }
+}

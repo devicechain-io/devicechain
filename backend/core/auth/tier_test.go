@@ -141,13 +141,13 @@ func TestAuthorizeAnyAppliesTheTier(t *testing.T) {
 // lesson).
 func TestEveryAuthorityDeclaresATier(t *testing.T) {
 	expected := []Authority{
-		UserRead, UserWrite, RoleRead, RoleWrite, TenantRead, TenantWrite,
-		DeviceRead, DeviceWrite, EventRead, StateRead, StateDemote, LocationRead, AlarmRead, AlarmWrite,
+		UserRead, UserWrite, RoleRead, RoleWrite, TenantRead, TenantWrite, UsageRead,
+		DeviceRead, DeviceWrite, EventRead, StateRead, StateDemote, LocationRead, LocationInstalledRead, AlarmRead, AlarmWrite,
 		CommandRead, CommandWrite, CommandClaim, CommandWake, CommandPark,
 		DashboardRead, DashboardWrite,
 		NotificationRead, NotificationWrite, AuditRead, SettingsRead, SettingsWrite,
 		ClientRead, ClientWrite, ConnectorRead, ConnectorWrite, ArtifactRead, ArtifactWrite, ArtifactTrust, BrandingWrite,
-		BasemapWrite, LocaleWrite, AIAdmin, AIInfer, MemberRead, MemberWrite,
+		BasemapWrite, LocaleWrite, AIAdmin, AIInfer, MemberRead, MemberWrite, AgentAdmin,
 	}
 	for _, a := range expected {
 		tiers, known := TiersOf(a)

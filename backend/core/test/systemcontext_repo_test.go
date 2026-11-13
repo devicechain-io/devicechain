@@ -46,18 +46,31 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/ai-inference/model/api.go": {"Api.AIProviders", "Api.sys"},
 	"backend/services/command-delivery/processor/CommandDeliveryProcessor.go": {
 		"CommandDeliveryProcessor.deliverPendingCommands", "CommandDeliveryProcessor.sweepLocked",
+		"CommandDeliveryProcessor.failUnacknowledgedPulls",
 	},
-	"backend/services/update-management/model/api_updates.go":                {"Api.SweepDeadlines"},
-	"backend/services/update-management/model/api_rollouts.go":               {"Api.AdvanceRollouts"},
-	"backend/services/command-delivery/processor/HoldReconciler.go":          {"CommandDeliveryProcessor.readHeldPage"},
-	"backend/services/command-delivery/processor/StrandedReconciler.go":      {"CommandDeliveryProcessor.reconcileStrandedPage"},
-	"backend/services/command-delivery/processor/WindowRestamp.go":           {"CommandDeliveryProcessor.restampWindows"},
-	"backend/services/device-management/model/ownership_outbox.go":           {"Api.DrainOwnershipFacts"},
+	// The downlink acknowledgement sweep lists overdue pending downlinks across tenants (one read), then
+	// answers, claims and deletes each under that row's own core.WithTenant.
+	"backend/services/outbound-connectors/lpwan/pending.go":    {"DBPending.Expired"},
+	"backend/services/update-management/model/api_updates.go":  {"Api.SweepDeadlines"},
+	"backend/services/update-management/model/api_rollouts.go": {"Api.AdvanceRollouts"},
+	// The campaign tick and the campaign pruner each list the tenants that have campaigns (or
+	// open claims), then do each tenant's work under core.WithTenant.
+	"backend/services/command-delivery/model/api_campaign.go":           {"Api.TickCampaigns", "Api.PruneCampaignHistory"},
+	"backend/services/command-delivery/processor/HoldReconciler.go":     {"CommandDeliveryProcessor.readHeldPage"},
+	"backend/services/command-delivery/processor/StrandedReconciler.go": {"CommandDeliveryProcessor.reconcileStrandedPage"},
+	"backend/services/command-delivery/processor/WindowRestamp.go":      {"CommandDeliveryProcessor.restampWindows"},
+	"backend/services/device-management/model/ownership_outbox.go":      {"Api.DrainOwnershipFacts"},
+	// The agent-effect relay lists the tenants that have queued effects, then drains each tenant's rows under core.WithTenant.
+	"backend/services/device-management/model/agent_effect_outbox.go":        {"Api.DrainAgentEffects"},
 	"backend/services/device-management/model/api_profile_decoder_health.go": {"Api.TrimDecoderHealth"},
 	"backend/services/device-management/model/api_trust_anchor_expiry.go":    {"Api.CountTrustAnchorsExpiring"},
 	"backend/services/device-management/model/session_kick_pending.go": {
 		"Api.tenantsOwingKicks", "Api.observeSessionKicks",
 	},
+	"backend/services/device-management/model/session_kick_revocation.go":     {"Api.tenantsOwingRevocationKicks"},
+	"backend/services/device-management/model/api_x509_revocation_markers.go": {"Api.tenantsOwingMarkers"},
+	// The agent-proposal reaper: one conditional update that can only move overdue PROPOSED rows to EXPIRED.
+	"backend/services/device-management/model/api_agent_proposals.go": {"Api.ExpireAgentProposals"},
 	"backend/services/device-management/schema/migration_credential_secret_digest.go": {
 		"CountForeignCredentialDigests", "DigestPlaintextCredentialSecrets",
 	},
@@ -72,8 +85,10 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/event-management/model/analytics.go":                     {"ReconcileAnalyticsSurface"},
 	"backend/services/event-management/model/lifecycle.go":                     {"ApplyDataLifecyclePolicies"},
 	"backend/services/event-management/processor/AnchorReconciliationSweep.go": {"AnchorReconciliationSweep.runOnce"},
-	"backend/services/event-management/processor/backfill/worker.go":           {"Worker.pass"},
-	"backend/services/event-management/processor/backfill/tail.go":             {"TailSweeper.sweep"},
+	"backend/services/event-management/model/usage.go": {"Api.PruneUsageWorkingTables", "Api.RollupUsageHours",
+		"Api.RollupUsagePass"},
+	"backend/services/event-management/processor/backfill/worker.go": {"Worker.pass"},
+	"backend/services/event-management/processor/backfill/tail.go":   {"TailSweeper.sweep"},
 	// The DETECT engine is a per-Instance singleton. At startup it holds no tenant and
 	// must rebuild its rule set, dead-man arming and dynamic-threshold view from every
 	// tenant's rows, so each of these four reads the whole projection. They are the only

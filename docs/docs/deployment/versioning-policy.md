@@ -54,6 +54,38 @@ These can change in a minor release. When they do, the release notes and that re
 
 - Helm chart values and the instance configuration document
 - Metric names and alert names
+- The MCP tool catalog (tool names, inputs and result shapes)
+
+### Preview: may change in a minor release, for a limited time {#preview-interfaces}
+
+A new served surface can spend its first minor release in a **preview** tier before it is covered by
+the promise above. A surface in the preview tier says so where you read about it, in its reference or
+guide page and, for each GraphQL operation, field, argument, type and enum value in that surface,
+in its description. While a surface is in preview it can change
+incompatibly in a minor release; when it does, that release's section in
+[Releases & Upgrades](./releases-and-upgrades.md) says what changed and what to do. A surface stays in
+preview for at most two minor releases; by the end of the second it is promoted, and covered like
+everything else. An incompatible change to a preview surface is not exempt from the project's
+compatibility checks: it is declared there as an intended break, the same way as any other, so no
+preview change ships unnoticed. A file format in the preview tier carries a version, such as
+`v1alpha1`, and a tool that does not know the version refuses the file rather than guessing.
+
+Today the preview tier holds three surfaces. The rule tests: the `evaluateRules` operation of the
+event-processing API, the scenario and test file formats, and the `dcctl test` command that reads them
+(see [Testing your rules](../guides/testing-your-rules.md)). Product as code: `dcctl product export`,
+`plan` and `apply`, and their bundle format (see [Product as Code](../guides/product-as-code.md)). And
+agent actions: the `act:*` OAuth scopes and their derived proposal authorities; the agent policy
+operations (`agentPolicy`, `agentPolicyVersions`, `saveAgentPolicyDraft`, `publishAgentPolicy`,
+`rollbackAgentPolicy`, `setAgentActuation`) and its document (format `v1alpha1`); the
+`agentActuationDecision` and `agentExecutionDecision` queries; the operator's per-tenant controls
+(`tenantAgentActuation`, `setTenantAgentActuationSuspended`); agent service-account creation
+(`ServiceAccountCreateRequest.agent`) and the agent-specific token authorities described by
+`ServiceAccount.roles`; and the agent proposal operations (`proposeAlarmAction`, `approveAgentProposal`,
+`rejectAgentProposal`, `agentProposals`, `agentProposal`) (see [Agent actions](../concepts/mcp.md#agent-actions)).
+The GraphQL preview surfaces include their dedicated input and result types, fields, arguments and
+enum values. The `ServiceAccount.agent` field is not in preview: it is covered from the release that
+adds it. Ordinary service-account roles remain covered. No MCP action tool is served yet; the MCP
+read tools remain in the not-covered catalog above.
 
 ## Supported upgrade paths {#upgrade-paths}
 
@@ -72,6 +104,12 @@ These can change in a minor release. When they do, the release notes and that re
   previous stable release. If it fails, the release is stopped: no GitHub release, `dcctl` binaries or SDK packages
   are published for it. Its container images and chart may already be in the registry, but they are not a release.
 - **There is no downgrade.** A new release may migrate the database in ways an earlier release cannot read.
+  dcctl enforces this: `dcctl upgrade`, and a `dcctl bootstrap` re-run over an existing instance, refuse a
+  release older than the one the instance is declared at,
+  and `dcctl install` refuses to run with a dcctl older than the one that last installed the cluster.
+  A release tag is a release on any registry, so this holds for an instance pulling from a mirror too.
+  Neither check has an override. A dcctl older than this policy does not carry these checks, so use
+  the current release's dcctl.
   If an upgrade goes wrong, roll forward to a fixed release, or restore from backup using the
   [disaster recovery](./disaster-recovery.md) procedure. Do not use `helm rollback` to go back.
 

@@ -643,7 +643,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Arriving vs backlog growth",
-      "description": "Events arriving per second, and how fast the capture backlog is growing or draining (messages per second). When the backlog line is above zero the forwarder is reading slower than events arrive, and it is the line to watch during a spike. Below zero the backlog is draining. Arrival counts every inbound source, so it is an upper bound for MQTT. While the reading service is down the backlog growth line uses the message broker's own count; the arrival line does not depend on it.",
+      "description": "Events arriving per second, and how fast the capture backlog of messages not yet fully handled is growing or draining (messages per second). When the backlog line is above zero the forwarder is reading slower than events arrive, and it is the line to watch during a spike. Below zero the backlog is draining. Arrival counts every inbound source, so it is an upper bound for MQTT. While the reading service is down the backlog growth line uses the message broker's own count; the arrival line does not depend on it.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -670,7 +670,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(deriv({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"}[5m])) or sum(deriv(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-sources_device-events-capture(_unfiltered)?\"}[5m]))",
+          "expr": "deriv(sum(max by (__name__, durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages|devicechain_[a-z0-9]+_jetstream_consumer_ack_pending_messages\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"}))[5m:30s]) or deriv(sum(max by (__name__, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-sources_device-events-capture(_unfiltered)?\"}))[5m:30s])",
           "legendFormat": "Backlog growth /s (above zero: falling behind)"
         }
       ],
@@ -706,7 +706,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Capture backlog in messages",
-      "description": "Messages waiting to be forwarded, and messages already removed from the stream that the forwarder never read. The second line should stay at zero; any value means loss has already happened or is happening. While the reading service is down the first line shows the message broker's own count; the second line has no broker equivalent and is not shown.",
+      "description": "Messages not yet forwarded (waiting or in progress), and messages already removed from the stream that the forwarder never read. The second line should stay at zero; any value means loss has already happened or is happening. While the reading service is down the first line shows the message broker's own count; the second line has no broker equivalent and is not shown.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -724,7 +724,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-sources_device-events-capture(_unfiltered)?\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
+          "expr": "max by (durable) (sum by (stream, durable) (max by (__name__, stream, durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages|devicechain_[a-z0-9]+_jetstream_consumer_ack_pending_messages\", durable=~\".+_event-sources_device-events-capture(_unfiltered)?\", namespace=\"$namespace\"}))) or max by (durable) (label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-sources_device-events-capture(_unfiltered)?\"})), \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "Waiting to be forwarded"
         },
         {
@@ -3758,6 +3758,843 @@
           }
         }
       ]
+    },
+    {
+      "id": 123,
+      "type": "row",
+      "title": "Device payloads and downlink reports",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 111
+      },
+      "panels": []
+    },
+    {
+      "id": 124,
+      "type": "timeseries",
+      "title": "Device MQTT payloads by result",
+      "description": "Reports when devices publish to their opt-in MQTT uplink topic. Accepted means handed to the payload decoder pipeline, not decoded successfully. Missing decoders and invalid payloads go to failed-decode; lookup and publish failures retry. Compare decoder results below and inspect failed-events.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 112
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (result) (rate(devicechain_eventsources_device_uplink_messages_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 125,
+      "type": "timeseries",
+      "title": "Network-server downlink reports by result",
+      "description": "Reports when inbound integrations receive downlink events. Published reports reach the confirmed-downlink adapter; rate_limited reports are accepted then discarded and commands wait until their deadline. Check the integration mapping for unknown_device; not_routed is expected with the adapter disabled.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 112
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (result) (rate(devicechain_eventsources_integration_downlink_reports_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 126,
+      "type": "timeseries",
+      "title": "Payload decoder results",
+      "description": "Decoded and ignored are normal. Other outcomes fail to decode and write failed-events, subject to the record budget. This includes device MQTT and HTTP payloads and integration payloads; inspect the device profile decoder health and replay a failing sample.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 120
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (result) (rate(devicechain_devicemanagement_resolve_decode_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 127,
+      "type": "timeseries",
+      "title": "Payload decode failures without a record",
+      "description": "Failures beyond the per-device-type record budget are counted here instead of writing every failed-event. Fix or unpublish a broken decoder; profile decoder health retains the failure count and recent samples.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 120
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_devicemanagement_resolve_decode_suppressed_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "suppressed"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 128,
+      "type": "row",
+      "title": "Lag-credited ingest (optional mode)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 128
+      },
+      "panels": []
+    },
+    {
+      "id": 129,
+      "type": "timeseries",
+      "title": "Messages shed by route and cause",
+      "description": "Reports only with lag-credited ingest enabled. Fresh traffic shed at the ceiling while reader lag is high can mean the tenant exceeds its allowance or a platform stall exceeded the credit. Compare reader lag and credit; contention is a separate shared-capacity limit.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 129
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (stream, route, cause) (rate(devicechain_eventsources_ingest_shed_cause_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{stream}} / {{route}} / {{cause}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 130,
+      "type": "timeseries",
+      "title": "Reader lag and admission credit",
+      "description": "Reports only with lag-credited ingest enabled. Reader lag is the corrected age of the last first delivery. The 95th percentile credit shows the delay allowed when admitting fresh traffic. A stall beyond the credit can still shed compliant traffic; check broker and event-sources health.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 129
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (pod, stream) (devicechain_eventsources_reader_lag_seconds{namespace=\"$namespace\"})",
+          "legendFormat": "lag {{pod}} / {{stream}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, pod, stream) (rate(devicechain_eventsources_ingest_lag_credit_seconds_bucket{namespace=\"$namespace\"}[$__rate_interval])))",
+          "legendFormat": "credit p95 {{pod}} / {{stream}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 131,
+      "type": "timeseries",
+      "title": "Broker clock offset from each reader",
+      "description": "Reports only with lag-credited ingest enabled. Positive means the broker clock is behind. The correction is limited to two seconds; check node time synchronisation when the offset reaches that limit.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 137
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (pod, stream) (devicechain_eventsources_append_skew_seconds{namespace=\"$namespace\"})",
+          "legendFormat": "{{pod}} / {{stream}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 132,
+      "type": "timeseries",
+      "title": "Reads with clock correction at its limit",
+      "description": "Reports only with lag-credited ingest enabled. Repeated increments mean the measured clock offset exceeds the correction limit, so traffic may receive too much or too little lag credit. Check NTP on broker and event-sources nodes.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 137
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (pod, stream) (rate(devicechain_eventsources_append_skew_clamped_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{pod}} / {{stream}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 133,
+      "type": "row",
+      "title": "Certificate revocation checks (optional OCSP)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 145
+      },
+      "panels": []
+    },
+    {
+      "id": 134,
+      "type": "timeseries",
+      "title": "Certificate connections allowed without OCSP status",
+      "description": "ENFORCE_KNOWN admits these connections without learning current revocation status. The reason identifies unreachable responders, blocked egress, stale answers, capacity limits or a disabled instance switch. Verify anchor policy and restore responder access; REQUIRE_CURRENT refuses instead.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 146
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (reason) (rate(devicechain_devicemanagement_x509_ocsp_unavailable_allowed_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 135,
+      "type": "timeseries",
+      "title": "OCSP fetch latency and outcome",
+      "description": "Reports when OCSP fetches occur. The 95th percentile latency is split by verified success or failed fetch. Compare failed fetches, open breakers and unchecked allowances to distinguish responder outages from local capacity limits.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 146
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(devicechain_devicemanagement_x509_ocsp_fetch_seconds_bucket{namespace=\"$namespace\"}[$__rate_interval])))",
+          "legendFormat": "{{outcome}} p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 136,
+      "type": "timeseries",
+      "title": "OCSP cache lookups and fetch outcomes",
+      "description": "Reports when OCSP checks run. Cache misses cause fetches; failed fetches mean no verified answer was obtained. Repeated failures call for checking responder reachability, egress policy and response validity.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 154
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (result) (rate(devicechain_devicemanagement_x509_ocsp_cache_lookups_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "cache {{result}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (outcome) (rate(devicechain_devicemanagement_x509_ocsp_fetch_seconds_count{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "fetch {{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 137,
+      "type": "timeseries",
+      "title": "OCSP fetches in flight",
+      "description": "Outstanding OCSP requests on each device-management replica. A sustained rise with saturation allowances means revocation checks are running out of capacity; compare responder latency before changing limits.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 154
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (pod) (devicechain_devicemanagement_x509_ocsp_inflight{namespace=\"$namespace\"})",
+          "legendFormat": "{{pod}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 138,
+      "type": "timeseries",
+      "title": "OCSP responder breakers opened",
+      "description": "Repeated endpoint failures temporarily stop requests to a responder. Check responder availability and egress access; compare unchecked allowances and failed fetches. Empty or zero is normal when OCSP is unused.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 162
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_devicemanagement_x509_ocsp_breaker_opened_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "opened"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
     }
   ]
 }

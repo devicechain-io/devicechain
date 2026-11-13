@@ -65,6 +65,8 @@ afterEach(() => {
   hostStyle.remove();
   document.getElementById('board-replay-theme')?.remove();
   document.getElementById('board-replay-theme-light')?.remove();
+  // A browser (and jsdom 31+) installs the tokens as adopted sheets, which no element removal clears.
+  document.adoptedStyleSheets = [];
   document.documentElement.lang = '';
   vi.unstubAllGlobals();
 });
@@ -150,7 +152,14 @@ describe('the host options', () => {
 
   it('installs the light tokens only for a light page, on its own root', async () => {
     await mountWith({ theme: 'light' });
-    expect(document.getElementById('board-replay-theme-light')?.textContent).toBe(lightCss);
+    // The tokens arrive as an adopted sheet where the platform has them (every browser, jsdom 31+),
+    // else as a <style> element; either way the light rules are in the page, and only here.
+    const light = document.getElementById('board-replay-theme-light');
+    if (light) expect(light.textContent).toBe(lightCss);
+    else {
+      const adopted = document.adoptedStyleSheets.flatMap((sh) => Array.from(sh.cssRules).map((r) => r.cssText)).join(' ');
+      expect(adopted).toContain('--muted: 240 4.8% 95.9%');
+    }
     const root = screen.getByTestId('replay-root');
     expect(root.getAttribute('data-theme')).toBe('light');
     expect(getComputedStyle(root).getPropertyValue('--muted').trim()).toBe('240 4.8% 95.9%');

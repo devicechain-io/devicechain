@@ -18,7 +18,7 @@ dcctl bootstrap local my-instance
 operator manifests are all embedded in it, so you never need a checkout of the source tree
 or `git` to deploy.
 
-It does not carry its own tools. `install` and `bootstrap` drive `kubectl`, `helm` and `tofu`
+It does not carry its own tools. `install` and `bootstrap` drive `kubectl` and `tofu`
 (or `terraform`) as binaries on your `PATH`, plus `docker` and `kind` when dcctl runs the cluster
 itself (the `local` provider) and `docker` when it builds images (`--build`). Both commands check
 for the ones the run needs before they start and stop if one is missing, so install them first. The full list is under [Prerequisites](#prerequisites).
@@ -277,6 +277,20 @@ no in-place upgrade. On an instance created before that change, the bootstrap **
 tells you how to dump the data or discard it deliberately. See
 [the legacy database exception](#legacy-db-removal).
 :::
+
+### Relational store WAL tuning {#relational-store-wal}
+
+`dcctl install --relational-store-max-wal-mib 4096` sets the shared relational store's
+`max_wal_size` soft checkpoint target to 4096 MiB. Omit the flag to keep the recorded
+choice; on a first install with no choice, the root keeps its stock PostgreSQL default
+(1 GiB). Pass `--relational-store-max-wal-mib=0` to record a reset to that default.
+Positive values must be at least 64 MiB. The choice is recorded before apply, so a
+flagless retry after a failed apply retains it, including an explicit reset.
+
+This is a soft checkpoint target, not a limit on `pg_wal`: WAL can grow beyond it
+when checkpoints or archiving fall behind. The cluster root still refuses a target
+larger than a quarter of the relational store's storage. Performance sizes recommend
+WAL values but never apply them automatically. Changes are reload-only and are allowed while instances exist on the cluster.
 
 ### The legacy database exception {#legacy-db-removal}
 
@@ -690,7 +704,7 @@ The alerts for snapshots are described under
   [opentofu.org](https://opentofu.org). Run `dcctl preflight local` to check that it is there,
   and the rest of your environment, up front. The preflight does not check its version; an older
   one fails when it loads the infrastructure configuration.
-- **`kubectl` and `helm`** on your `PATH`, and **`docker`** and **`kind`** for the `local`
+- **`kubectl`** on your `PATH`, and **`docker`** and **`kind`** for the `local`
   provider. The preflight check fails if any the run needs is missing. Docker is needed only for a
   local kind cluster or for `--build`: an install into a cluster you name with `--kube-context`,
   from published images, does not check for it or use it. Where it is needed, its daemon must
@@ -738,7 +752,7 @@ chart and operator are identical.
 |------|---------|
 | `--cluster <name>` | `local` provider: the kind cluster to create the instance on (default `devicechain`). It must already have been [installed](#install); bootstrap never creates a cluster. |
 | `--kube-context <name>` | Target an installed cluster through this kube-context instead. |
-| `--size <size>` | The instance's size preset: `base` (the default) or `perf-12k`, the measured high-throughput shape. Recorded on the instance and applied again by every upgrade. A `--values` overlay and an OpenTofu variable you state yourself win over it. See [Choosing a size](./sizing.md). |
+| `--size <size>` | The instance's size preset: `base` (the default), `perf-12k` or `perf-16k`, the measured high-throughput shapes. Recorded on the instance and applied again by every upgrade. A `--values` overlay and an OpenTofu variable you state yourself win over it. See [Choosing a size](./sizing.md). |
 | `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, MCP, Sparkplug B ingest and LwM2M ingest; over-the-air update management is part of `default`), `telemetry`, or `ingest-only`. |
 | `--enable-area <area>` | Deploy a functional area on top of the profile, such as `--enable-area outbound-connectors`. Repeatable. To add one to an instance that is already running, see [Adding a functional area later](#enable-area). |
 | `--build` | Build images from source into a local registry (developer path; needs the source tree + Docker + ko). |
@@ -915,6 +929,7 @@ bootstrapped on it follows them. None of them is a `dcctl bootstrap` flag.
 | `--restore-rdb-from <archive>` | Disaster recovery: recover the shared relational store from this archive path inside the backup bucket (`dc-rdb` for a store that has never been restored) instead of initialising an empty one. It takes effect only when the store is **created** — against a cluster whose store already exists it moves no data — so it is a rebuild lever, not a repair. Needs the backup plugin, so it is refused on a cluster installed with `--no-cnpg` or `--compact --no-tls`. See [Recovering an instance](./disaster-recovery.md#recover). |
 | `--restore-rdb-at <timestamp>` | Stop that recovery at a point in time instead of replaying the whole archive — for data destroyed *correctly*, by a bad migration or a mistaken delete; pick a moment strictly before the damage. Needs `--restore-rdb-from`, and an RFC 3339 timestamp with an explicit offset (`2026-07-27T13:59:00Z`): without one PostgreSQL reads it in the recovering server's own timezone and stops at a different moment than you named. |
 | `--max-connections <n>` | The relational database's connection budget (default `700` on a first install; a re-run without it keeps the current budget) — see [the connection budget](#connection-budget). May be raised, but not lowered, while instances run. |
+| `--relational-store-max-wal-mib <n>` | Shared relational store `max_wal_size` soft checkpoint target in MiB. Omitted keeps the recorded choice (first install: stock 1 GiB); `0` records a reset; positive values must be at least `64`. Recorded before apply and retained on a flagless retry. The root limits it to a quarter of storage. Never set automatically by performance sizes. See [relational WAL tuning](#relational-store-wal). |
 | `--allow-legacy-db-removal` | The relational-database half of the one-time exception described under [What bootstrap does](#what-it-does). |
 | `--dry-run` | Print what each step would do without changing anything. A dry run creates no cluster, so checks that need to read one — the `--ha` node-capacity check in particular — report what they could not see rather than failing the rehearsal. What such a check *does* see is still fatal: a cluster that answers and cannot host `--ha` fails a dry run too. On a cluster that answers, a dry run also makes the refusals a re-install makes — an install from a machine without the cluster's state, changed settings under running instances, an unusable `--backup-snapshot-class` — and fails with the same message the install would. On a cluster it cannot reach, it says those were not checked. |
 | `--yes` | Do not ask before creating a kind cluster. |
@@ -1831,6 +1846,8 @@ dcctl sim create demo --instance my-instance --server localhost
 
 The simulator then drives telemetry and alarms in over the same device wire real hardware
 uses — see [Trying it with simulated data](../intro.md#trying-it-with-simulated-data).
+
+Every command that talks to an instance's platform API (`sim`, `events failed`, `dead-letters`, `attr`, `presence`, `product`, `tenant-deletion`, `test` and `device register`) takes the same selector flags. `--server` (`-s`) names the host. `--instance` (`-i`) names the instance: on `sim` it is the instance id in the event-ingress path, and on the others, when `--server` is not given, it uses the host (and TLS setting, unless `--tls` is given) the instance was declared with. For example, `dcctl events failed -i my-instance -t acme ...`.
 
 ### Adding a functional area later {#enable-area}
 

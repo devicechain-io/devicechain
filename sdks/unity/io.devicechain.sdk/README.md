@@ -15,8 +15,9 @@ admin surface.
 > **Status: early — non-WebGL stack verified live.** On **Unity 6000.5.3f1 + URP** the package
 > compiles, the spinning-logo smoke test renders, and the full SDK stack (auth + `UnityWebRequest`
 > query + live `graphql-transport-ws` subscription) runs against a real cluster with live telemetry
-> (VERIFICATION.md items 0–3). The **WebGL** path is the one open follow-up — it has a known SDK
-> blocker (the `Task.Run` read loop; see VERIFICATION.md item 4). Also compile-checked against real
+> (VERIFICATION.md items 0–3). The **WebGL** browser build remains unverified. Its SDK read-loop
+> blocker is fixed: `DeviceChainRuntime` attaches a `DeviceChainPump` to advance the subscription
+> loop on the main thread (see VERIFICATION.md item 4). Also compile-checked against real
 > UnityEngine reference assemblies in both platform branches (tier-1, enforced in CI).
 
 ## What's here
@@ -50,7 +51,7 @@ Requires Unity **2021.3 LTS** or newer (for the .NET Standard 2.1 API profile).
 using DeviceChain.Sdk;
 using DeviceChain.Sdk.Unity;
 
-await using var client = DeviceChainRuntime.CreateClient("https://demo.devicechain.io");
+await using var client = DeviceChainRuntime.CreateClient("https://devicechain.example.com");
 await client.LoginAsync("me@example.com", "…");
 await client.SelectTenantAsync("acme");
 

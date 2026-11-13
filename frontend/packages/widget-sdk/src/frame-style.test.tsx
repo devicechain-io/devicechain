@@ -50,7 +50,7 @@ describe('WidgetFrame frame style', () => {
   it('draws no border, a transparent background and no header for a frameless widget', () => {
     const { root, column } = framed({ variant: 'none' });
     expect(root.style.borderStyle).toBe('none');
-    expect(root.style.background).toBe('transparent');
+    expect(root.style.backgroundColor).toBe('transparent');
     expect(screen.queryByText('Fuel')).toBeNull();
     expect(root.getAttribute('aria-label')).toBe('Fuel'); // still the accessible name
     expect(column.style.padding).toBe('0px');

@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/governance"
@@ -46,10 +47,8 @@ const (
 	// amplification to six times the default's while still allowing most of the latency
 	// win an operator would come here for.
 	//
-	// It is deliberately ABOVE 1. A floor of 1 would be unreachable code: ApplyDefaults
-	// maps every non-positive value onto the default, so Validate's lower bound can only
-	// ever fire for a value between 1 and the floor, and a floor of 1 leaves that range
-	// empty -- a check that cannot fail, guarding nothing.
+	// It is deliberately above 1 so Validate also refuses positive values that would
+	// make the sweep too frequent. ApplyDefaults replaces only unset (zero) values.
 	MinSweepIntervalSeconds = 5
 
 	// MaxSweepIntervalSeconds ceilings it. An over-long interval is refused rather than
@@ -153,9 +152,8 @@ const (
 	// at 2 the verdict rests on a single retry, which across a broker restart is a coin
 	// toss. Three is the smallest bound whose answer rests on more than one retry.
 	//
-	// Like MinSweepIntervalSeconds it is deliberately above 1, so that Validate's lower
-	// bound has a reachable range: ApplyDefaults maps every non-positive value onto the
-	// default, so a floor of 1 would leave the check guarding nothing.
+	// Like MinSweepIntervalSeconds it is deliberately above 1 so Validate also refuses
+	// positive values that are too small. ApplyDefaults replaces only unset (zero) values.
 	MinMaxDispatchFailures = 3
 
 	// MaxMaxDispatchFailures ceilings the bound. Past this it is a bound in name only:
@@ -211,28 +209,27 @@ type CommandDeliveryConfiguration struct {
 	RdbConfiguration config.MicroserviceDatastoreConfiguration
 
 	// DefaultCommandTTLSeconds is the TTL stamped on a command whose creator omits an
-	// explicit expiresAt (a caller-supplied value always wins). Fail-safe: a zero or
-	// negative value is replaced by the platform default in ApplyDefaults, so the field
-	// can never disable expiry (which would resurrect the stuck-in-SENT-forever gap).
+	// explicit expiresAt (a caller-supplied value always wins). An unset (zero) value
+	// takes the platform default in ApplyDefaults; a negative is left for Validate to
+	// refuse, so the field can never disable expiry.
 	DefaultCommandTTLSeconds int
 
 	// HeldCommandCeiling is this instance's fallback bound on withheld (HELD) commands
-	// per tenant, used when no per-tenant or tier ceiling has been resolved. Fail-safe
-	// in the same shape as the TTL above: a zero or negative value is replaced by the
-	// platform default in ApplyDefaults, so the field can never mean "unlimited".
+	// per tenant, used when no per-tenant or tier ceiling has been resolved. An unset
+	// (zero) value takes the platform default in ApplyDefaults, never "unlimited";
+	// a negative is left for Validate to refuse.
 	HeldCommandCeiling int
 
-	// SweepIntervalSeconds is the cadence of the expiry + delivery sweep. Fail-safe in
-	// the same direction as the fields below: absent, zero or negative lands on the
-	// platform default in ApplyDefaults, never on "never sweep" -- a sweep that does not
-	// run stops expiring commands as well as dispatching them.
+	// SweepIntervalSeconds is the cadence of the expiry + delivery sweep. An unset
+	// (zero) value takes the platform default in ApplyDefaults, never "never sweep";
+	// a negative is left for Validate to refuse. A sweep that does not run stops
+	// expiring commands as well as dispatching them.
 	SweepIntervalSeconds int
 
 	// MaxDispatchFailures is how many failed dispatch attempts one command may accumulate
-	// before it is driven to FAILED instead of being returned to the queue. Fail-safe in
-	// the same direction as the fields around it: absent, zero or negative lands on the
-	// platform default in ApplyDefaults, never on "retry forever" — an unbounded retry is
-	// the behaviour this bound exists to end.
+	// before it is driven to FAILED instead of being returned to the queue. An unset
+	// (zero) value takes the platform default in ApplyDefaults, never "retry forever";
+	// a negative is left for Validate to refuse.
 	MaxDispatchFailures int
 
 	// DeliveryMachineryReserve is the fraction of the ceiling in force that only the
@@ -241,8 +238,8 @@ type CommandDeliveryConfiguration struct {
 	// lower the reserve could defeat the protection that exists against its own fleet
 	// writes.
 	//
-	// Fail-safe in the same direction as the two above: absent, zero, negative or NaN
-	// means the platform reserve, never "no reserve".
+	// An unset (zero) value takes the platform reserve, never "no reserve". A negative
+	// or NaN is left for Validate to refuse.
 	DeliveryMachineryReserve float64
 
 	// SparkplugCommands says that at least one Sparkplug source of this instance publishes
@@ -257,6 +254,17 @@ type CommandDeliveryConfiguration struct {
 	// feature, byte for byte: a Sparkplug command fails within seconds, naming the platform.
 	// The adapter, not this flag, refuses a command to a source that is not itself enabled.
 	SparkplugCommands bool
+
+	// LpwanDownlink says that the outbound-connectors LPWAN downlink adapter is enabled, so a
+	// command to a device that reports through an inbound integration (a LoRaWAN network server)
+	// is dispatched to the adapter instead of failed on sight with COMMAND_TRANSPORT_UNSUPPORTED.
+	//
+	// 🔴 NOBODY AUTHORS IT, for the reason SparkplugCommands is not authored: the chart sets it to
+	// true exactly when outbound-connectors is among the enabled areas with lpwanDownlink.enabled,
+	// so it cannot say "deliverable" while no adapter runs. Absent is false, the behaviour that
+	// predates the feature byte for byte. The adapter, not this flag, refuses a command whose
+	// integration has no network-server link.
+	LpwanDownlink bool
 }
 
 // NewCommandDeliveryConfiguration creates the default command delivery configuration.
@@ -267,37 +275,35 @@ func NewCommandDeliveryConfiguration() *CommandDeliveryConfiguration {
 }
 
 // ApplyDefaults is the ADR-022 decision-1 defaulting hook for this service. It
-// floors the command TTL to the platform default when unset or non-positive — the
+// defaults the command TTL to the platform default when unset (zero) — the
 // fail-safe that keeps a missing/zero value from disabling expiry entirely.
 func (c *CommandDeliveryConfiguration) ApplyDefaults() {
-	if c.DefaultCommandTTLSeconds <= 0 {
+	// An unset (zero) TTL takes the default; a negative is left for Validate to refuse.
+	if c.DefaultCommandTTLSeconds == 0 {
 		c.DefaultCommandTTLSeconds = DefaultCommandTTLSeconds
 	}
-	// A missing or zero ceiling is the platform default, NEVER unlimited — the same
-	// fail-safe direction as the TTL: the harmless-looking value (absent, zero) must
-	// land on the bound, not remove it.
-	if c.HeldCommandCeiling <= 0 {
+	// An unset (zero) ceiling takes the default, never unlimited; a negative is left
+	// for Validate to refuse.
+	if c.HeldCommandCeiling == 0 {
 		c.HeldCommandCeiling = DefaultHeldCommandCeiling
 	}
-	// Same direction again for the reserve. Written as a negated positive test rather than
-	// `<= 0` on purpose: NaN compares false to everything, so the obvious spelling would
-	// let a NaN through here AND through the upper-bound check in Validate. It would not
-	// actually remove the reserve — governance.RestrictedCommandLimit makes the same test
-	// and lands on the platform reserve — but a config value that survives validation while
-	// meaning nothing is worth refusing where it enters rather than where it is used.
-	if !(c.DeliveryMachineryReserve > 0) {
+	// An unset (zero) reserve takes the default, never no reserve; a negative is left
+	// for Validate to refuse. NaN compares false to equality and ordering checks, so it
+	// survives defaulting and the upper bound; Validate refuses it explicitly.
+	// governance.RestrictedCommandLimit falls back to the platform reserve as defence
+	// in depth. JSON has no NaN literal, so the deployed config path cannot carry one,
+	// but a configuration struct built in Go can.
+	if c.DeliveryMachineryReserve == 0 {
 		c.DeliveryMachineryReserve = DefaultDeliveryMachineryReserve
 	}
-	// Same direction again for the sweep cadence: the harmless-looking value lands on the
-	// default, never on the pathological reading. Zero seconds is not "as fast as possible".
-	if c.SweepIntervalSeconds <= 0 {
+	// An unset (zero) cadence takes the default, never a zero-second tick; a negative
+	// is left for Validate to refuse.
+	if c.SweepIntervalSeconds == 0 {
 		c.SweepIntervalSeconds = DefaultSweepIntervalSeconds
 	}
-	// Same direction once more for the dispatch bound. Zero here is an unset field, and
-	// the reading that must never be reachable is "no bound": a command whose publish can
-	// never succeed would then cycle QUEUED -> SENT -> QUEUED on every tick until its TTL
-	// dragged it to TIMEOUT, which is the defect the bound was added for.
-	if c.MaxDispatchFailures <= 0 {
+	// An unset (zero) dispatch bound takes the default, never "no bound"; a negative
+	// is left for Validate to refuse.
+	if c.MaxDispatchFailures == 0 {
 		c.MaxDispatchFailures = DefaultMaxDispatchFailures
 	}
 }
@@ -347,6 +353,11 @@ func (c *CommandDeliveryConfiguration) Validate() error {
 	if c.MaxDispatchFailures < MinMaxDispatchFailures || c.MaxDispatchFailures > MaxMaxDispatchFailures {
 		return fmt.Errorf("maxDispatchFailures must be between %d and %d (got %d)",
 			MinMaxDispatchFailures, MaxMaxDispatchFailures, c.MaxDispatchFailures)
+	}
+	// Refuse NaN and negative reserves that defaulting deliberately preserves.
+	if math.IsNaN(c.DeliveryMachineryReserve) || c.DeliveryMachineryReserve < 0 {
+		return fmt.Errorf("deliveryMachineryReserve must be a number from 0 to %v (got %v)",
+			MaxDeliveryMachineryReserve, c.DeliveryMachineryReserve)
 	}
 	// An over-large reserve is refused rather than clamped. Unlike an absent value —
 	// which has an obviously right answer — a reserve of 0.8 or 3 is an operator saying

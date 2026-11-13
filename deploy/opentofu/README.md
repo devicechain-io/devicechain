@@ -8,7 +8,7 @@ RDB). The K8s operator and the service workloads (rendered by
 
 ## Scope
 
-This root is **cluster-agnostic**: it deploys into an **existing** cluster through
+The `cluster/` and `instance/` roots are **cluster-agnostic**: they deploy into an **existing** cluster through
 the `kubernetes` and `helm` providers (kubeconfig-supplied), so it runs the same on
 kind, k3s, EKS, or GKE. Provisioning the cluster itself is intentionally out of
 scope — a cloud-specific root (e.g. EKS/GKE) can provision a cluster and then wrap
@@ -20,7 +20,8 @@ these modules, passing its cluster credentials to the providers.
 | NATS (JetStream + MQTT) — instance root | `nats` Helm chart, pinned | `dc-nats.dci-<instance-id>:4222` / `:1883` |
 | Relational Postgres | `cnpg-cluster` module — a CloudNativePG `Cluster` (`dc-rdb`) | `dc-postgresql.dc-system:5432` |
 | TimescaleDB (event store) — instance root | `cnpg-cluster` module — a CloudNativePG `Cluster` (`dc-tsdb`) | `dc-timescaledb-single.dci-<instance-id>:5432` |
-| NGINX ingress controller | `ingress-nginx` Helm chart, pinned | IngressClass `nginx` |
+| Traefik + Gateway API (default) | `traefik` Helm chart, pinned, and Gateway API CRDs | GatewayClass `traefik`, namespace `traefik` |
+| NGINX ingress controller (legacy, off by default) | `ingress-nginx` Helm chart, pinned | IngressClass `nginx` |
 | cert-manager (+ CRDs) | `cert-manager` Helm chart, pinned | namespace `cert-manager` |
 | Observability (Prometheus/Grafana/Alertmanager) | `kube-prometheus-stack` Helm chart, pinned | namespace `monitoring` |
 | CloudNativePG operator (+ CRDs) | `cloudnative-pg` Helm chart, pinned | namespace `cnpg-system` |
@@ -152,9 +153,9 @@ volume is created: a later apply leaves an existing store's volume alone, so gro
 with `kubectl patch`.
 
 The ingress controller and cert-manager are the TLS/ingress *capability*; the
-per-instance **Ingress resource + cert Issuer** that route to the app Services are
+per-instance **Gateway + HTTPRoutes + cert Issuer** that route to the app Services are
 rendered by the Helm chart (it knows the enabled functional areas) — set
-`ingress.enabled=true` there. Both are toggleable (`enable_ingress_nginx`,
+`ingress.enabled=true` there. Both are toggleable (`enable_traefik`,
 `enable_cert_manager`) if the cluster already has them.
 
 **Gateway API + Traefik** (the controller that replaces ingress-nginx) are **on by default**

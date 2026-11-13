@@ -49,9 +49,42 @@ func TestLoadInstanceConfigurationInstallsTheAudiencePolicy(t *testing.T) {
 	p := ms.Readiness.AudiencePolicy()
 	assert.Equal(t, "https://iot.example.com/api/event-management", p.OwnResource(), "own = base + / + the SERVICE's area")
 	assert.Equal(t, config.TokenAudienceReleaseDefault, p.Mode(), "absent enforcement is the release default")
+	assert.Equal(t, config.TokenAudienceEnforce, p.Mode(), "the release default is enforce")
 	assert.NoError(t, p.Admit(claimsWithAud("https://iot.example.com/api/mcp"), auth.PlaneGraphQL))
 	assert.NoError(t, p.Admit(claimsWithAud("https://iot.example.com/api/event-management"), auth.PlaneGraphQL))
 	assert.NoError(t, p.Admit(claimsWithAud(), auth.PlaneGraphQL))
+	// Absent enforcement now REFUSES a token bound to another area...
+	assert.ErrorIs(t, p.Admit(claimsWithAud("https://iot.example.com/api/device-management"), auth.PlaneGraphQL), auth.ErrAudienceRefused)
+	assert.ErrorIs(t, p.Admit(claimsWithAud("https://elsewhere.example.org"), auth.PlaneGraphQL), auth.ErrAudienceRefused)
+}
+
+// The rolling-upgrade property the default flip rests on: a token with NO audience (every
+// sign-in session and service token the platform mints carries none) is admitted under the
+// default, so a token minted by a pod of the previous release is never refused for lacking one.
+func TestDefaultEnforcementAdmitsTokensWithNoAudience(t *testing.T) {
+	keepGlobalLevel(t)
+	ms := &Microservice{FunctionalArea: "event-management", Readiness: NewReadinessGate()}
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	require.NoError(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, audienceDoc(chartDerivedAudience))))
+	p := ms.Readiness.AudiencePolicy()
+	require.Equal(t, config.TokenAudienceEnforce, p.Mode())
+	for _, plane := range []auth.Plane{auth.PlaneGraphQL, auth.PlaneGraphQLWS, auth.PlaneAdmin, auth.PlaneSettings, auth.PlaneUpload, auth.PlaneBranding, auth.PlaneUserinfo} {
+		assert.NoError(t, p.Admit(claimsWithAud(), plane), plane)
+		assert.NoError(t, p.Admit(&auth.Claims{}, plane), plane)
+	}
+}
+
+// Documents refuse observe; policies constructed in code retain observe compatibility.
+func TestLoadInstanceConfigurationRefusesObserveButPoliciesRetainCompatibility(t *testing.T) {
+	keepGlobalLevel(t)
+	ms := &Microservice{FunctionalArea: "event-management", Readiness: NewReadinessGate()}
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	require.ErrorContains(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, audienceDoc(chartDerivedAudience+`, "enforcement": "observe"`))), "removed in v1.4")
+	p, err := auth.NewPlanePolicy(config.TokenAudienceConfiguration{Enforcement: "observe", AreaBaseUrl: "https://iot.example.com/api"}, "event-management", nil)
+	require.NoError(t, err)
+	assert.Equal(t, config.TokenAudienceObserve, p.Mode())
+	assert.NoError(t, p.Admit(claimsWithAud("https://iot.example.com/api/device-management"), auth.PlaneGraphQL))
+	assert.NoError(t, p.Admit(claimsWithAud("https://elsewhere.example.org"), auth.PlaneGraphQL))
 }
 
 func TestLoadInstanceConfigurationHonoursAnExplicitMode(t *testing.T) {

@@ -521,10 +521,7 @@ func TestHttpServerCloseStopsAServingServer(t *testing.T) {
 	gate.MarkReadyWithoutAuthSurface()
 	ms.RegisterProbes(gate)
 
-	srv := ms.NewHttpServer(0)
-	if err := srv.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
+	srv := startOutsideAutoAssignRange(t, ms.Mux())
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 	addr := srv.Addr()
 
@@ -576,14 +573,11 @@ func TestHttpServerShutdownLetsAnInFlightRequestFinish(t *testing.T) {
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 
-	srv := NewHttpServerForHandler(0, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := startOutsideAutoAssignRange(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		entered <- struct{}{}
 		<-release
 		_, _ = io.WriteString(w, "drained")
 	}))
-	if err := srv.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
 	// A failed assertion must not leave the handler blocked. The release has to come
 	// BEFORE the Shutdown in this one cleanup: cleanups run last-registered-first, and a
 	// Shutdown with no deadline waits for the blocked handler, so a separate unblock
@@ -665,10 +659,7 @@ func TestHttpServerShutdownIsSafeToCallConcurrently(t *testing.T) {
 	gate.MarkReadyWithoutAuthSurface()
 	ms.RegisterProbes(gate)
 
-	srv := ms.NewHttpServer(0)
-	if err := srv.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
+	srv := startOutsideAutoAssignRange(t, ms.Mux())
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 	addr := srv.Addr()
 
@@ -1136,6 +1127,45 @@ func startOnUnassignablePort(t *testing.T, ms *Microservice, lo, hi, round int) 
 	return nil, nil, ""
 }
 
+// startOutsideAutoAssignRange starts a loopback server for handler, on a port the kernel never
+// auto-assigns where the platform publishes that range, and on the OS's pick elsewhere.
+//
+// 🔴 FOR A TEST THAT REBINDS THE PORT AFTER A STOP. A port the kernel assigned (Start on port
+// 0) is also a port it assigns, as the SOURCE port of any outbound connection in the process or
+// on the host, the moment the listener lets go of it. A rebind that lands after that fails with
+// "address already in use" although the server released the port correctly: a CI run failed
+// TestHttpServerShutdownLetsAnInFlightRequestFinish this way, on a port from the auto-assign
+// range, with nothing of the server's left holding it. A port outside the range cannot be taken
+// by an ephemeral client socket, so a rebind failure there means a late release.
+func startOutsideAutoAssignRange(t *testing.T, handler http.Handler) *HttpServer {
+	t.Helper()
+	lo, hi, err := ephemeralPortRange()
+	if err != nil {
+		// No published range (not Linux): the OS's pick is the best available.
+		srv := NewHttpServerForHandler(0, handler)
+		if err := srv.Start(); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		return srv
+	}
+	for attempt := 0; attempt < startBindAttempts; attempt++ {
+		port, err := pickPortOutside(lo, hi, unassignablePortFloor, rand.IntN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := NewHttpServerAt(net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), handler, HttpServerOptions{})
+		if err := srv.Start(); err != nil {
+			if errors.Is(err, syscall.EADDRINUSE) {
+				continue
+			}
+			t.Fatalf("Start on port %d: %v", port, err)
+		}
+		return srv
+	}
+	t.Fatalf("%d picks in a row were already in use", startBindAttempts)
+	return nil
+}
+
 // listenOutsideAutoAssignRange listens on loopback at a port the kernel never auto-assigns,
 // so no ephemeral client socket of this process can share its local port.
 func listenOutsideAutoAssignRange(t *testing.T) net.Listener {
@@ -1313,5 +1343,27 @@ func TestPortHolderProbeNamesADualStackHolderOfALivePort(t *testing.T) {
 	v, report := probePortHolders(port, "1")
 	if v != holderTakenByOther || !strings.Contains(report, "tcp6") {
 		t.Errorf("held by a dual-stack socket that is not ours: verdict %v, report %q; want taken by another socket naming tcp6", v, report)
+	}
+}
+
+// The helper the rebinding tests start their server with must bind outside the auto-assign
+// range, because a port inside it can be taken by an unrelated outbound socket the moment the
+// server lets go of it. Held on Linux, the only platform that publishes the range.
+func TestStartOutsideAutoAssignRangeBindsOutsideTheRange(t *testing.T) {
+	lo, hi, err := ephemeralPortRange()
+	if err != nil {
+		t.Skip("the auto-assign range is published only on Linux")
+	}
+	for i := 0; i < 20; i++ {
+		srv := startOutsideAutoAssignRange(t, http.NotFoundHandler())
+		_, p, err := net.SplitHostPort(srv.Addr())
+		if err != nil {
+			t.Fatalf("Addr %q: %v", srv.Addr(), err)
+		}
+		port, _ := strconv.Atoi(p)
+		_ = srv.Shutdown(context.Background())
+		if port >= lo && port <= hi {
+			t.Fatalf("bound port %d lies inside the auto-assign range [%d, %d]", port, lo, hi)
+		}
 	}
 }

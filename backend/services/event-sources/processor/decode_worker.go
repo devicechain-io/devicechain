@@ -4,8 +4,12 @@
 package processor
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/tracing"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
@@ -19,6 +23,9 @@ import (
 // the payload is enqueued, so it travels with the payload to the producer, which
 // publishes to the tenant-scoped subject.
 type rawMessage struct {
+	// remote is the trace context a device-originated message carried. It is untrusted: the ingest
+	// span links to it and never adopts it (tracing.StartEdge).
+	remote  trace.SpanContext
 	tenant  string
 	payload []byte
 	// device is the device token the TRANSPORT addressed, when the transport
@@ -44,6 +51,10 @@ type rawMessage struct {
 	// The reading stage is charged at the same time, so both stages route one message to
 	// the same limiter. Zero on HTTP and external MQTT, which have no backlog.
 	meterAt time.Time
+	// metering is the lag-credited gate's decision for this message (route, stamp, the time of the
+	// message stage), carried so the reading stage follows it; the zero value when the message was not
+	// metered there (legacy mode, HTTP, external MQTT under legacy).
+	metering ingestMeter
 	// redelivery is true when the broker re-offers a message it delivered before (a capture
 	// message with NumDelivered > 1). The reading charge exempts it for the reason RateGate
 	// does: delivery 1 paid. One gap is accepted: a pod stopped after delivery 1 was charged
@@ -56,6 +67,10 @@ type rawMessage struct {
 	// assertion says whether the platform's own broker authenticated this message's
 	// device. Only the capture source can make it true; see brokerAssertion.
 	assertion brokerAssertion
+	// uplink is true for a raw payload a device published to its own uplink topic: not a DeviceChain
+	// envelope, so it is never decoded by Decoder but carried to the profile decoder (see
+	// mqtt_device_uplink.go). Only the capture source sets it, from the subject.
+	uplink bool
 	// done reports the outcome of handling this message back to the source that
 	// produced it, so the source can acknowledge the broker only once the payload
 	// is durably forwarded. nil for a fire-and-forget transport, which is why every
@@ -66,6 +81,10 @@ type rawMessage struct {
 	// worker published anything — so everything buffered here at SIGKILL was
 	// silently lost.
 	done func(error)
+	// shed, when set, is called just before settle(nil) for a message the reading stage shed
+	// at the tenant's ceiling, so a transport that tells its sender about a shed can say so
+	// and does not report the message as accepted. nil for a transport that does not.
+	shed func()
 }
 
 // settle reports the handling outcome for a raw message, tolerating a transport
@@ -128,6 +147,10 @@ type DecodeWorker struct {
 	// Failed routes an undecodable payload to the failed-decode path, likewise
 	// reporting whether that routing itself succeeded.
 	Failed func(string, string, []byte, error) error
+	// Uplinks carries a device's raw payload (rawMessage.uplink) to its type's decoder. nil on a
+	// worker of a source that has no such route: such a payload is then recorded on failed-decode
+	// with its cause, never decoded as an envelope and never dropped without a word.
+	Uplinks *uplinkRunner
 }
 
 // Create a new decode worker. A nil readings panics: a worker built without the reading
@@ -157,7 +180,38 @@ func (wrk *DecodeWorker) Process() {
 		raw, more := <-wrk.RawMessages
 		if more {
 			log.Debug().Msg(fmt.Sprintf("Decode handled by worker id %d", wrk.WorkerId))
+			if raw.uplink {
+				u := wrk.Uplinks
+				if u == nil {
+					// No route behind this worker: the payload is recorded with that cause.
+					u = &uplinkRunner{failed: wrk.Failed}
+				}
+				// Only a message the platform's broker asserted may be carried: the assertion is read here,
+				// where it is allowed to be, and handed in as the mark.
+				if !raw.assertion.asserted || raw.assertion.gateway != "" {
+					u.recordNow(wrk.SourceId, raw, DeviceUplinkInternalError, ErrUplinkNotAsserted)
+					continue
+				}
+				u.run(wrk.SourceId, raw, raw.assertion.mark)
+				continue
+			}
+			traceCtx, span := tracing.StartEdge(context.Background(), "ingest.mqtt", "mqtt", raw.remote)
+			if span != nil {
+				span.SetAttributes(attribute.String("tenant.id", raw.tenant))
+			}
+			if span != nil {
+				settle := raw.done
+				raw.done = func(err error) {
+					defer span.End()
+					if settle != nil {
+						settle(err)
+					}
+				}
+			}
 			event, payload, err := wrk.Decoder.Decode(raw.payload, raw.receivedAt)
+			if event != nil && span != nil {
+				event.TraceContext = traceCtx
+			}
 			if err == nil {
 				err = checkDeviceMatchesTransport(raw, event)
 			}
@@ -188,12 +242,15 @@ func (wrk *DecodeWorker) Process() {
 				} else {
 					raw.settle(nil)
 				}
-			} else if !wrk.Readings(wrk.SourceId, raw.tenant, raw.meterAt, raw.redelivery, raw.origin, readingsOf(payload)) {
+			} else if !wrk.chargeReadings(raw, readingsOf(payload)) {
 				// Shed at the tenant's ceiling for the readings it carries. ACKED, like a
 				// message the message stage sheds: left unacked it would be redelivered into
 				// the same over-limit gate (the ACK TRAP). Workers can take a backlog slightly
 				// out of order; the limiter charges an older time at its mark, so that can
 				// over-shed by milliseconds and can never mint tokens.
+				if raw.shed != nil {
+					raw.shed()
+				}
 				raw.settle(nil)
 			} else {
 				wrk.Callback(wrk.SourceId, raw.tenant, event, payload, raw.dedupID, raw.settle)
@@ -203,6 +260,16 @@ func (wrk *DecodeWorker) Process() {
 			return
 		}
 	}
+}
+
+// chargeReadings is the reading stage's verdict for one decoded message: the lag-credited gate when the
+// message stage metered it there (the decision rides in raw.metering, so both stages follow one route),
+// the Readings gate otherwise.
+func (wrk *DecodeWorker) chargeReadings(raw rawMessage, readings int) bool {
+	if raw.metering.active() {
+		return raw.metering.readings(wrk.SourceId, raw.tenant, readings)
+	}
+	return wrk.Readings(wrk.SourceId, raw.tenant, raw.meterAt, raw.redelivery, raw.origin, readings)
 }
 
 // checkDeviceMatchesTransport rejects an event whose payload claims to be from a

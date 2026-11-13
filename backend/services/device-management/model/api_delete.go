@@ -4,9 +4,13 @@
 package model
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -252,7 +256,10 @@ func (api *Api) DeleteDeviceType(ctx context.Context, token string) (bool, error
 	return deleted, inUseOn(err, fmt.Sprintf("device type %q is still referenced", token))
 }
 
-// DeleteDeviceProfile deletes a device profile (ADR-045). Refused while any device
+// DeleteDeviceProfile deletes an unprotected device profile (ADR-045). Consumed
+// reviews and break-glass history survive; inactive policies, proposals and
+// unconsumed reviews are removed. Protected profiles must lose protection first.
+// Refused while any device
 // type references it — a shared capability contract must not vanish out from under
 // the types that adopt it (fail closed). Its owned metric (ADR-016), command
 // (ADR-043), and detection-rule (ADR-051) definitions are cascade-removed — the cascade
@@ -266,21 +273,45 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 		return false, nil
 	}
 	dp := matches[0]
-	n, err := api.countReferencing(ctx, &DeviceType{}, "profile_id", dp.ID)
-	if err != nil {
-		return false, err
-	}
-	if n > 0 {
-		return false, fmt.Errorf("%w: %d device type(s) reference device profile %q", ErrEntityInUse, n, token)
-	}
 	var evictions []membershipEviction
 	var changed bool
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		locked, err := lockProfile(tx, dp.ID)
+		if err != nil {
+			return err
+		}
+		dp = locked
+		if !api.skipReviewGuardForOldPodTest {
+			if err = applyMaturedPolicyChange(tx, dp.ID, reviewNow()); err != nil {
+				return err
+			}
+			view, err := reviewPolicyView(tx, dp.ID, reviewNow())
+			if err != nil {
+				return err
+			}
+			if view.Effective.Required {
+				return reviewRefusal("PROFILE_PROTECTED", "a protected device profile cannot be deleted; remove its protection first")
+			}
+			if err = tx.Where("device_profile_id = ?", dp.ID).Delete(&AutomationReviewPolicyChange{}).Error; err != nil {
+				return err
+			}
+			if err = tx.Where("device_profile_id = ?", dp.ID).Delete(&AutomationReviewPolicy{}).Error; err != nil {
+				return err
+			}
+		}
+
+		var references int64
+		if err = tx.Model(&DeviceType{}).Where("profile_id = ?", dp.ID).Count(&references).Error; err != nil {
+			return err
+		}
+		if references > 0 {
+			return fmt.Errorf("%w: %d device type(s) reference device profile %q", ErrEntityInUse, references, token)
+		}
+
 		// Drop this profile's live scope references and GC any group@v whose last live
 		// reference this profile held (ADR-062 S4): a desired-empty re-sync deregisters the
 		// read-model for those group@versions, in the same transaction as the delete so no
 		// orphan enrollment (or stale AnyScopedGroups gate) survives the profile.
-		var err error
 		evictions, changed, err = api.syncProfileScopeRefsAndEnroll(ctx, tx, dp.ID, nil)
 		if err != nil {
 			return err
@@ -298,13 +329,20 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&DeviceProfileVersion{}).Error; err != nil {
 			return err
 		}
+		reviews := tx.Where("device_profile_id = ?", dp.ID)
+		if !api.skipReviewGuardForOldPodTest {
+			reviews = reviews.Where("state <> ?", ReviewStateConsumed)
+		}
+		if err := reviews.Delete(&AutomationReview{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("device_profile_id = ?", dp.ID).Delete(&DeviceProfileActivation{}).Error; err != nil {
 			return err
 		}
 		return tx.Unscoped().Where("token = ?", token).Delete(&DeviceProfile{}).Error
 	})
 	if err != nil {
-		return false, err
+		return false, mapAutomationReviewGuard(err)
 	}
 	api.fireScopingEvictions(ctx, evictions, changed)
 	return true, nil
@@ -429,7 +467,71 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 // row names. The delete returns those columns itself, so nothing is read first.
 func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool, error) {
 	var credentials []DeviceCredential
-	if err := deleteCredentialsReturningOwners(api.RDB.DB(ctx).Unscoped().Where("token = ?", token), &credentials); err != nil {
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		credentials = nil
+		// 🔴 LOCK ORDER OF A CREDENTIAL WRITE UNDER A TRUST ANCHOR: (a move: the target device row), the
+		// credential row, the anchor FOR SHARE, then the queue rows. The rows are read FOR UPDATE first
+		// so the owner and the anchor that are acted on are the ones in force at the delete (a concurrent
+		// move cannot change them underneath), whatever tenants a system caller's token matches.
+		var locked []DeviceCredential
+		if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("token = ?", token).Order("id ASC").Find(&locked).Error; err != nil {
+			return err
+		}
+		anchors := map[uint]struct{}{}
+		for _, c := range locked {
+			if c.TrustAnchorId != nil && CredentialType(c.CredentialType) == CredentialX509Certificate {
+				anchors[*c.TrustAnchorId] = struct{}{}
+			}
+		}
+		for _, id := range slices.Sorted(maps.Keys(anchors)) {
+			// FOR SHARE, as a registration takes it: a revocation either committed before this (its
+			// marker is visible below) or waits for this commit and then finds the credential gone, as
+			// it would have before the marker existed.
+			if err := lockTrustAnchorShareByID(tx, id); err != nil {
+				return err
+			}
+		}
+		for _, c := range locked {
+			if c.TrustAnchorId != nil && CredentialType(c.CredentialType) == CredentialX509Certificate {
+				if err := api.widenOwedMarkersOnTx(tx, c.TenantId, *c.TrustAnchorId, c.ID); err != nil {
+					return err
+				}
+			}
+		}
+		if err := deleteCredentialsReturningOwners(tx.Unscoped().Where("token = ?", token), &credentials); err != nil {
+			return err
+		}
+		// The kick rows are written in ONE order across everything this call owes (tenant, device token,
+		// anchor), so two system deletes that share devices take them in the same order.
+		type owed struct {
+			tenant, device string
+			anchor         uint
+		}
+		var all []owed
+		for _, c := range locked {
+			if c.TrustAnchorId == nil || CredentialType(c.CredentialType) != CredentialX509Certificate {
+				continue
+			}
+			var tokens []string
+			if err := tx.Unscoped().Model(&Device{}).Where("tenant_id = ? AND id = ?", c.TenantId, c.DeviceId).
+				Pluck("token", &tokens).Error; err != nil {
+				return err
+			}
+			for _, t := range tokens {
+				all = append(all, owed{c.TenantId, t, *c.TrustAnchorId})
+			}
+		}
+		slices.SortFunc(all, func(a, b owed) int {
+			return cmp.Or(strings.Compare(a.tenant, b.tenant), strings.Compare(a.device, b.device), cmp.Compare(a.anchor, b.anchor))
+		})
+		for _, o := range slices.Compact(all) {
+			if err := api.queueOwedRevocationKicksOnTx(tx, o.tenant, o.anchor, []string{o.device}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		return false, err
 	}
 	api.evictCredentialOwners(ctx, credentials)

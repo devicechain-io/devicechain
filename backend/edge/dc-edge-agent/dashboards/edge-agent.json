@@ -2089,6 +2089,150 @@
           "sort": "desc"
         }
       }
+    },
+    {
+      "id": 35,
+      "type": "timeseries",
+      "title": "Retiring on the platform's acceptance",
+      "description": "With retireOn accept: events the platform said it holds, events it shed at the tenant's ingest ceiling (each kept and offered again), and events offered again because no answer arrived in time, per second. The next line is the number of events published and still waiting for an answer. The last is events with no idempotency key (not a JSON object), which the platform cannot acknowledge and the agent retires on the broker's acknowledgement. A rising awaiting_accept with nothing accepted means the platform is not sending acceptances.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 102
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_edge_accepted_total{agent=~\"$agent\"}[$__rate_interval]))",
+          "legendFormat": "accepted"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_edge_over_ceiling_total{agent=~\"$agent\"}[$__rate_interval]))",
+          "legendFormat": "shed at the ceiling, kept"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_edge_unaccepted_total{agent=~\"$agent\"}[$__rate_interval]))",
+          "legendFormat": "offered again, no answer"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(devicechain_edge_awaiting_accept{agent=~\"$agent\"})",
+          "legendFormat": "awaiting an answer (events)"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_edge_keyless_retired_total{agent=~\"$agent\"}[$__rate_interval]))",
+          "legendFormat": "retired on the broker's ack (no key)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 36,
+      "type": "timeseries",
+      "title": "Events shed by priority class",
+      "description": "Buffered events the agent deleted on purpose to keep the spool under its shed threshold, per second, by class. Bulk is shed first, then standard; safety is never shed by the agent, so its line stays at zero. Any value here means the spool was near its budget.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 102
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (class) (rate(devicechain_edge_shed_total{agent=~\"$agent\"}[$__rate_interval]))",
+          "legendFormat": "{{class}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
     }
   ],
   "templating": {

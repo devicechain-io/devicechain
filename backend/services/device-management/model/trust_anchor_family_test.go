@@ -20,11 +20,12 @@ func trustAnchorFamily() putest.Family[*Api] {
 		descriptionSeed = "Original description"
 		metadataSeed    = `{"fleet":"north"}`
 		graceSeed       = "12h0m0s"
+		responderSeed   = "https://ocsp.example.com/seed"
 	)
 	return putest.Family[*Api]{
 		Name:  "deviceTrustAnchor",
 		Token: "ta-1",
-		Migrate: []any{&DeviceTrustAnchor{}, &DeviceCredential{}, &PendingSessionKick{},
+		Migrate: []any{&DeviceTrustAnchor{}, &DeviceCredential{}, &PendingSessionKick{}, &PendingRevocationKick{}, &PendingRevocationExpansion{}, &PendingRevocationExpansionSerial{},
 			&DeviceRevocationIssuer{}, &DeviceRevocationList{}, &DeviceRevokedCertificate{}, &DeviceCredentialChainLink{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			ca := newRootCA(t, "Seed Root")
@@ -44,6 +45,13 @@ func trustAnchorFamily() putest.Family[*Api] {
 				RevocationStaleGrace: dcgraphql.OptionalStringOf(graceSeed)}); err != nil {
 				t.Fatalf("seed grace: %v", err)
 			}
+			// OCSP on for the instance, so switching the anchor to ENFORCE_KNOWN (which the family
+			// does) is allowed, and a responder URL the anchor names.
+			api.SetOcspPolicy(OcspPolicy{Enabled: true})
+			if _, err := api.UpdateDeviceTrustAnchor(ctx, "ta-1", &DeviceTrustAnchorUpdateRequest{
+				OcspResponderUrl: dcgraphql.OptionalStringOf(responderSeed)}); err != nil {
+				t.Fatalf("seed responder: %v", err)
+			}
 		},
 		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.DeviceTrustAnchorsByToken(ctx, []string{"ta-1"})
@@ -60,6 +68,14 @@ func trustAnchorFamily() putest.Family[*Api] {
 					}
 					return string(m)
 				}(),
+				"ocspMode": func() string {
+					m, err := e.OcspModeOf()
+					if err != nil {
+						t.Fatalf("ocsp mode: %v", err)
+					}
+					return string(m)
+				}(),
+				"ocspResponderUrl": nullStr(e.OcspResponderUrl),
 				"revocationStaleGrace": func() string {
 					if !e.RevocationStaleGrace.Valid {
 						return nullMarker
@@ -91,6 +107,17 @@ func trustAnchorFamily() putest.Family[*Api] {
 					req.(*DeviceTrustAnchorUpdateRequest).RevocationMode = OptionalRevocationMode{Set: true}
 				},
 			},
+			{
+				Name: "ocspMode", Seeded: "OFF", Replace: "ENFORCE_KNOWN", Kind: putest.RequiredValue,
+				Set: func(req any, v string) {
+					req.(*DeviceTrustAnchorUpdateRequest).OcspMode = OptionalOcspMode{Set: true, Value: &v}
+				},
+				SetNull: func(req any) {
+					req.(*DeviceTrustAnchorUpdateRequest).OcspMode = OptionalOcspMode{Set: true}
+				},
+			},
+			putest.OptionalStringField("ocspResponderUrl", responderSeed, "https://ocsp.example.com/replaced",
+				func(r *DeviceTrustAnchorUpdateRequest) *dcgraphql.OptionalString { return &r.OcspResponderUrl }),
 			putest.OptionalStringField("revocationStaleGrace", graceSeed, "6h0m0s",
 				func(r *DeviceTrustAnchorUpdateRequest) *dcgraphql.OptionalString { return &r.RevocationStaleGrace }),
 		},

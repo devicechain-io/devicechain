@@ -71,12 +71,9 @@ func bounds(maxBodyBytes int64, stream bool) core.RequestBounds {
 // Routes' business, not the caller's — the paths are load-bearing (they have to match
 // what the ingress delivers and what the 401 challenge advertises), and leaving them to
 // each caller is how the endpoint came to be served at a path nothing published.
-func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *GraphQLClient, limits Limits) (mcpHandler, metadataHandler http.Handler) {
-	// The catalog of risk declarations is not needed here: it is published on each tool's
-	// own listing at registration, so nothing at runtime consults it, and it is dropped
-	// rather than stashed on a field nobody reads. The ratchet gets its copy by calling
-	// newServer itself, and gets the tool NAMES from the handler built below.
-	mcpServer, _ := newServer(gql)
+func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *GraphQLClient, limits Limits, opts ...Option) (mcpHandler, metadataHandler http.Handler) {
+	// newServer owns registration, per-caller scope filtering and auditing.
+	mcpServer, _ := newServer(gql, opts...)
 
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return mcpServer },
@@ -113,9 +110,16 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *G
 // test green. Construction lives here now, New only wires HTTP in front of it, and the
 // ratchet lists what New's own handler offers a real session — so the gap has to be
 // visible from the outside to exist at all.
-func newServer(gql *GraphQLClient) (*mcp.Server, *Catalog) {
+func newServer(gql *GraphQLClient, opts ...Option) (*mcp.Server, *Catalog) {
 	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
-	c := registerTools(s, NewTools(gql))
+	t := NewTools(gql)
+	c := registerTools(s, t)
+	o := options{}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	registerProposals(s, c, t, o.actuation)
+	s.AddReceivingMiddleware(filterActionScopes(c))
 	// Every tools/call this server answers writes one audit record (audit.go). It is a
 	// middleware on the served server rather than a wrapper inside register, so a call
 	// that never reaches a handler — an unknown tool, arguments that fail validation — is
@@ -142,14 +146,14 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	c := NewCatalog()
 	register(s, c, &mcp.Tool{
 		Name:        "list_devices",
-		Description: "List the devices in the caller's tenant (paged). Returns each device's token, name, description, external id, and device-type token. Address devices by token in follow-up tools.",
+		Description: "List the devices in the caller's tenant (paged). Returns each device's token and device-type token, with its name, description and external id under `untrusted`. Address devices by token in follow-up tools.",
 	}, ToolRisk{
 		Exposure: ExposureConfiguration, Scale: ScalePage,
 		Discloses: "the full inventory of a tenant's devices, a page at a time, including any external ids that tie them to the customer's own systems",
 	}, t.ListDevices)
 	register(s, c, &mcp.Tool{
 		Name:        "get_device",
-		Description: "Look up one or more devices by token. Returns each device's token, name, description, external id, and device-type token. Unknown tokens are simply omitted from the result (not an error), so compare the returned tokens against the ones requested.",
+		Description: "Look up one or more devices by token. Returns each device's token and device-type token, with its name, description and external id under `untrusted`. Unknown tokens are simply omitted from the result (not an error), so compare the returned tokens against the ones requested.",
 	}, ToolRisk{
 		Exposure: ExposureConfiguration, Scale: ScaleAddressed,
 		Discloses: "the registry entry for devices the caller already names, and — because unknown tokens are omitted rather than refused — whether a guessed token exists",
@@ -163,14 +167,14 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	}, t.GetDeviceState)
 	register(s, c, &mcp.Tool{
 		Name:        "get_latest_measurements",
-		Description: "Read the latest (last-known) value of every metric for a device, with its unit, data type, and time. Prefer this over querying raw history for a current snapshot.",
+		Description: "Read the latest (last-known) value of every metric for a device, with its data type and time; the metric name and unit are under `untrusted`. Prefer this over querying raw history for a current snapshot.",
 	}, ToolRisk{
 		Exposure: ExposureTelemetry, Scale: ScaleAddressed,
 		Discloses: "the current value of every metric a named device reports — the tenant's live product data for that device, though only its present state and not its history",
 	}, t.GetLatestMeasurements)
 	register(s, c, &mcp.Tool{
 		Name:        "get_device_capabilities",
-		Description: "Report what a device can measure and what it can be told to do. `commands` is the device's PUBLISHED command vocabulary — the platform accepts exactly these, with `parameterSchema` describing each one's arguments. `commandsConstrained` says whether the vocabulary is enforced at all: when it is false the platform accepts ANY command key and `commands` is empty, so an empty list means the vocabulary is OPEN, not that the device takes no commands. `metrics` are the profile's DRAFT metric definitions (key, name, unit, data type) and may name metrics the device does not yet report; `activeVersion` is the published profile version the device resolves, and when it is null the profile has never been published, so treat the listed metrics as not yet active.",
+		Description: "Report what a device can measure and what it can be told to do. `commands` is the device's PUBLISHED command vocabulary — the platform accepts exactly these, with `parameterSchema` (under `untrusted`, with the key, name and description) describing each one's arguments. `commandsConstrained` says whether the vocabulary is enforced at all: when it is false the platform accepts ANY command key and `commands` is empty, so an empty list means the vocabulary is OPEN, not that the device takes no commands. `metrics` are the profile's DRAFT metric definitions (data type, with the key, name and unit under `untrusted`) and may name metrics the device does not yet report; `activeVersion` is the published profile version the device resolves, and when it is null the profile has never been published, so treat the listed metrics as not yet active.",
 	}, ToolRisk{
 		Exposure: ExposureConfiguration, Scale: ScaleAddressed,
 		Discloses: "a named device's metric definitions and its published command vocabulary — what the platform would accept being told to do to it, though this server can never issue any of it",
@@ -198,7 +202,7 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	}, t.QueryLocations)
 	register(s, c, &mcp.Tool{
 		Name:        "list_alarms",
-		Description: "List alarms in the caller's tenant (paged), optionally filtered by originating device token, state, severity, alarm key, or acknowledged flag. Returns each alarm's token, key, metric, state, severity, acknowledged flag, raised/cleared times, and last value.",
+		Description: "List alarms in the caller's tenant (paged), optionally filtered by originating device token, state, severity, alarm key, or acknowledged flag. Returns each alarm's token, state, severity, acknowledged flag, raised/cleared times, and last value, with its key, metric and acknowledger under `untrusted`.",
 	}, ToolRisk{
 		Exposure: ExposureOperational, Scale: ScalePage,
 		Discloses: "a tenant-wide list of what has been going wrong and where, a page at a time, including the value that raised each alarm",
@@ -212,7 +216,7 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	}, t.GetAlarm)
 	register(s, c, &mcp.Tool{
 		Name:        "list_commands",
-		Description: "List dispatched commands in the caller's tenant (paged), optionally filtered by device token or status. Returns each command's token, device, name, status, and delivery-lifecycle timestamps (payloads are omitted).",
+		Description: "List dispatched commands in the caller's tenant (paged), optionally filtered by device token or status. Returns each command's token, device, status, and delivery-lifecycle timestamps, with its name and any device error under `untrusted` (payloads are omitted).",
 	}, ToolRisk{
 		Exposure: ExposureOperational, Scale: ScalePage,
 		Discloses: "what a tenant has been telling its fleet to do and whether each instruction landed — the command names and lifecycle, though never the payloads",
@@ -270,8 +274,8 @@ func metadataURL(resourceID string) string {
 // The probe and metrics handlers main.go adds are more specific patterns, so
 // ServeMux still routes them ahead of this catch-all.
 func Routes(mux *http.ServeMux, resourceID, issuer string, validator func() *coreauth.Validator,
-	gql *GraphQLClient, limits Limits) {
-	mcpHandler, metadataHandler := New(resourceID, issuer, validator, gql, limits)
+	gql *GraphQLClient, limits Limits, opts ...Option) {
+	mcpHandler, metadataHandler := New(resourceID, issuer, validator, gql, limits, opts...)
 
 	// Every handler here runs with a body-delivery deadline and an execution deadline;
 	// without them only the server's header timeout applies, and a client that stalls

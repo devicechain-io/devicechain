@@ -142,11 +142,37 @@ DeviceChain 的命令是**双向且持久化**的。发出的命令会根据设�
 
 #### 重试上限拒绝 {#retrying-a-ceiling-refusal}
 
-`HELD_CEILING_EXCEEDED` 是入队路径唯一的**带代码的临时拒绝**。（如果入队所依赖的服务不可达，入队会以不带代码的 `validation is unavailable` 错误失败，服务恢复后重试可能成功。）其他带代码的拒绝说明请求在下一次尝试仍然错误；这一项会随着积压投递自行解除。只有这个代码值得重试，其余应该提示用户处理。参见[发送命令](../guides/sending-commands.md#when-an-enqueue-is-refused)。
+`HELD_CEILING_EXCEEDED` 是入队路径唯一的**带代码的临时拒绝**，会随着积压投递自行解除。依赖服务中断则会使入队以 GraphQL 错误失败，其 `extensions.code` 为 `UNAVAILABLE`；此时未创建任何命令，依赖服务恢复后，你可以原样重试请求。其他依赖故障仍不带代码。其他带代码的拒绝说明请求在下一次尝试仍然错误，应该提示用户处理。参见[发送命令](../guides/sending-commands.md#when-an-enqueue-is-refused)。
+
+### 通过 HTTP 获取命令的设备 {#http-command-pull}
+
+只会说 HTTP 的设备，例如唤醒、发送一次读数后又休眠的电池供电传感器，不持有任何平台可以向其发布的连接。把设备类型的 `commandChannel` 设为 `HTTP_PULL`，它的命令就会等待设备来取。没有设置该值或设为 `PUBLISH`（默认值）的设备类型不受影响：其命令的投递方式与之前完全相同。
+
+设备在 HTTP 摄入监听器上使用三种请求，每个都带 `Authorization: Bearer <设备的访问令牌>`。路径中的设备必须是令牌所属的设备，URL 中的令牌一律不被接受。
+
+| 请求 | 含义 | 应答 |
+| --- | --- | --- |
+| `GET /{instanceId}/{tenant}/devices/{device}/commands?wait=25` | 领取等待该设备的命令。`wait` 是在没有命令时保持请求打开的秒数：0 到 30，默认 25。 | 带 `{"commands": [...]}` 的 `200`，没有命令到达时为 `204`。 |
+| `POST .../commands/{command}/ack` | 命令已到达设备。请在执行命令**之前**发送。 | `204`。 |
+| `POST .../commands/{command}/response` | 设备做了什么：`{"success": true, "payload": ..., "error": "..."}`。 | `204`。 |
+
+`200` 的正文和响应的正文发布为 [command-pull.schema.json](pathname:///schema/device/command-pull.schema.json) 和 [command-pull-response.schema.json](pathname:///schema/device/command-pull-response.schema.json)。`401` 表示令牌未被接受，`403` 表示令牌属于另一台设备或该设备的类型未启用此通道，`404` 表示该命令不属于此设备，`409` 表示该命令并不在等待这个请求，`429` 表示租户保持打开的请求已达上限（请在 `Retry-After` 之后重试）或来源地址的请求过多。`503` 表示请重试。
+
+一次拉取交出的每条命令都由该次拉取领取，因此两个请求、两个副本或一次重试永远不会收到同一条命令。保持打开的请求每隔几秒向平台询问设备的命令，所以设备轮询期间下发的命令会在几秒内到达。
+
+**在升级期间启用。** 先升级 device-management，并且只有在每个服务的每个副本都已升级之后，才把设备类型的 `commandChannel` 设为 `HTTP_PULL`。早于此通道的 command-delivery 副本会把拉取设备的命令发布到无人读取的 subject，这些命令随后超时。已升级的副本在 device-management 尚未升级时无法判断哪些设备使用拉取，因此会保留它所询问的所有设备的命令，待 device-management 应答后再释放；普通设备在此期间只会被延迟，不会被发往错误的地方。
+
+**确认。** 60 秒内没有收到确认的命令，会在下一次拉取时以更高的 `attempt` 再次交出，直到用完其 `maxAttempts`（默认 3，命令可另行设置，最多 10）。之后它以结果 [`NOT_DELIVERED`](#outcome) 失败，并且没有投递时间。这依赖于设备在执行之前先确认：未确认的命令是尚未发现设备对其执行过任何动作的命令，因此再次发送是安全的。先执行后确认的设备可能被交出两次同一条命令，不应依赖确认来避免这一点。
+
+**单向命令。** 以 `deliveryMode: ONEWAY` 创建的命令由其确认完成：它变为 `SUCCESSFUL`，设备不发送响应。`deliveryMode` 和 `maxAttempts` 只对 `HTTP_PULL` 通道上的设备接受；对任何其他设备，该命令会被以 `DELIVERY_OPTION_NOT_APPLICABLE` 拒绝。
+
+#### 投递证据 {#delivery-evidence}
+
+一旦平台有证据表明设备已收到命令，命令就带有 `deliveredTime` 和 `deliveryEvidence`：设备在拉取通道上确认时为 `DEVICE_ACK`，设备作出应答时（在任何通道上）为 `DEVICE_RESPONSE`。保留最先出现的证据。不存在 `DELIVERED` 状态：状态的含义不变，证据与之并列。来自既没有确认也没有应答可计的通道的 `SUCCESSFUL` 命令没有投递时间，以 `NOT_DELIVERED` 失败的命令也永远没有投递时间。
 
 ### 谁报告结果 {#who-reports-the-outcome}
 
-只有设备可以报告成功。`SUCCESSFUL` 和设备报告的 `FAILED` 是只能由设备产生的两种结果。（例外是 Sparkplug 写入：其成功由平台根据节点上报的状态推断，可能意味着该值本来就已是目标值；参见 [Sparkplug B](./sparkplug.md)。）其他终态由平台自行写入：
+命令通常由设备来确定结果：设备报告 `SUCCESSFUL` 或设备报告的 `FAILED`。例外包括 Sparkplug 写入，其成功由平台根据节点上报的状态推断，可能意味着该值本来就已是目标值（参见 [Sparkplug B](./sparkplug.md)），以及没有设备应答可等待的通道，例如[未确认的 LoRaWAN 下行](../guides/inbound-integrations.md#lorawan-downlink)。未确认下行在网络服务器将其加入队列后就标记为 `SUCCESSFUL`，此时没有证据表明设备已收到它。确认下行则根据设备的确认来确定结果。其他终态由平台自行写入：
 
 - `TIMEOUT`、`EXPIRED` 或 `CANCELLED`；
 - 传输完全无法承载命令导致的 `FAILED`；

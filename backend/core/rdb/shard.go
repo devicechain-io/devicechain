@@ -111,7 +111,17 @@ func checkPlacement(db *gorm.DB, tenants []string) error {
 }
 
 // shardGuard is the placement callback registered on every handle once sharding is enabled.
-func shardGuard(db *gorm.DB) {
+func shardGuard(db *gorm.DB) { guardPlacement(db, false) }
+
+// shardGuardRow is shardGuard for the Row() chain. A handle carrying an error makes gorm's row
+// callback skip, Row() then finds no *sql.Row and returns nil, and Scan on that panics. So here
+// a refusal swaps the statement's pool for a refusing one instead: the row callback still runs
+// and yields a *sql.Row that carries the refusal.
+// (rowReturnsRefusal now covers this for any refusal on the Row chain; this swap predates it and
+// keeps the refusal flowing through the pool, so a transaction is not left holding the error.)
+func shardGuardRow(db *gorm.DB) { guardPlacement(db, true) }
+
+func guardPlacement(db *gorm.DB, row bool) {
 	if db.Error != nil || placementOf(db) == nil {
 		return
 	}
@@ -144,16 +154,38 @@ func shardGuard(db *gorm.DB) {
 		tenants = append(tenants, destTenants(m, field.Name)...)
 	}
 	if err := checkPlacement(db, tenants); err != nil {
+		if row {
+			// The statement may be shared with a chained handle (a transaction's), so the pool is
+			// put back by dc:shard_restore_row once gorm:row has read through the refusing one.
+			db.Statement.Settings.Store(rowPoolKey, db.Statement.ConnPool)
+			db.Statement.ConnPool = refusingPool{err: err}
+			return
+		}
 		_ = db.AddError(err)
+	}
+}
+
+// rowPoolKey holds the pool a refused Row() statement had before the guard swapped it.
+const rowPoolKey = "dc:shard_row_pool"
+
+// restoreRowPool undoes shardGuardRow's swap after the row has been read.
+func restoreRowPool(db *gorm.DB) {
+	if pool, ok := db.Statement.Settings.LoadAndDelete(rowPoolKey); ok {
+		db.Statement.ConnPool = pool.(gorm.ConnPool)
 	}
 }
 
 func registerShardGuard(db *gorm.DB) error {
 	for _, register := range []func() error{
 		func() error {
+			return db.Callback().Row().After("gorm:row").Register("dc:shard_restore_row", restoreRowPool)
+		},
+		func() error {
 			return db.Callback().Query().Before("gorm:query").Register("dc:shard_guard_query", shardGuard)
 		},
-		func() error { return db.Callback().Row().Before("gorm:row").Register("dc:shard_guard_row", shardGuard) },
+		func() error {
+			return db.Callback().Row().Before("gorm:row").Register("dc:shard_guard_row", shardGuardRow)
+		},
 		func() error {
 			return db.Callback().Update().Before("gorm:update").Register("dc:shard_guard_update", shardGuard)
 		},
@@ -306,24 +338,26 @@ func (p refusingPool) BeginTx(context.Context, *sql.TxOptions) (gorm.ConnPool, e
 
 // QueryRowContext must return a *sql.Row, which cannot be built with an error by hand; one read
 // from a database that can never connect carries one, so Scan returns it instead of panicking.
+// The database is built per call so the row carries p.err itself, not a generic refusal; it never
+// opened a connection, so closing it straight away costs nothing.
 func (p refusingPool) QueryRowContext(ctx context.Context, q string, args ...interface{}) *sql.Row {
-	return neverConnects.QueryRowContext(ctx, q, args...)
+	db := sql.OpenDB(refusingConnector{err: p.err})
+	defer db.Close()
+	return db.QueryRowContext(ctx, q, args...)
 }
 
-type refusingConnector struct{}
+type refusingConnector struct{ err error }
 
-func (refusingConnector) Connect(context.Context) (driver.Conn, error) { return nil, ErrNoShard }
-func (refusingConnector) Driver() driver.Driver                        { return refusingDriver{} }
+func (c refusingConnector) Connect(context.Context) (driver.Conn, error) { return nil, c.err }
+func (c refusingConnector) Driver() driver.Driver                        { return refusingDriver{err: c.err} }
 
-type refusingDriver struct{}
+type refusingDriver struct{ err error }
 
-func (refusingDriver) Open(string) (driver.Conn, error) { return nil, ErrNoShard }
-
-var neverConnects = sql.OpenDB(refusingConnector{})
+func (d refusingDriver) Open(string) (driver.Conn, error) { return nil, d.err }
 
 // failedDB is a handle on which every statement fails with err and which holds no real
-// connection pool. A Row() read reports ErrNoShard rather than err, since a *sql.Row cannot be
-// built with a chosen error.
+// connection pool. A Row() read reports err too: the refusing pool builds its *sql.Row from a
+// connector that fails with err.
 func failedDB(base *gorm.DB, err error) *gorm.DB {
 	pool := refusingPool{err: err}
 	// Where(...) first: it gives the chain its OWN Statement. Session alone hands back the base
@@ -331,6 +365,8 @@ func failedDB(base *gorm.DB, err error) *gorm.DB {
 	tx := base.Session(&gorm.Session{NewDB: true}).Where("1 = 1")
 	tx.Config.ConnPool = pool // Session copied the Config, so this is this chain's own
 	tx.Statement.ConnPool = pool
+	// (rowReturnsRefusal now also turns a handle that carries an error into a Row() that returns it,
+	// so this is no longer the only protection against a nil row.)
 	// No AddError, deliberately: a handle that already carries an error makes Row() return nil
 	// (its callbacks skip), and Scan on that panics. Failing at the pool instead makes every
 	// entry point, Row included, return the error.

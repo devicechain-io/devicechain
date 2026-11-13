@@ -11,6 +11,7 @@ import (
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // This file holds the uniform entity-relationship API (ADR-013). One set of
@@ -24,6 +25,10 @@ func (api *Api) CreateEntityRelationshipType(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	predicate, inverse, err := api.bindPredicateOnCreate(ctx, request.SemanticPredicate, request.SemanticInverse)
+	if err != nil {
+		return nil, err
+	}
 	created := &EntityRelationshipType{
 		TokenReference: rdb.TokenReference{Token: request.Token},
 		NamedEntity: rdb.NamedEntity{
@@ -32,6 +37,9 @@ func (api *Api) CreateEntityRelationshipType(ctx context.Context,
 		},
 		MetadataEntity: rdb.MetadataEntity{Metadata: metadataJSON},
 		Tracked:        request.Tracked,
+
+		SemanticPredicate: predicate,
+		SemanticInverse:   inverse,
 	}
 	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
 		return nil, err
@@ -42,6 +50,8 @@ func (api *Api) CreateEntityRelationshipType(ctx context.Context,
 // UpdateEntityRelationshipType applies a PARTIAL update to a relationship type: a
 // field the caller did not name keeps its stored value, an explicit null clears a
 // nullable one, and `tracked` — which has no nullable reading — refuses a null.
+// Only named columns are written; omitted fields remain untouched even when
+// another writer changes them after the read.
 func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	request *EntityRelationshipTypeUpdateRequest) (*EntityRelationshipType, error) {
 	matches, err := api.EntityRelationshipTypesByToken(ctx, []string{token})
@@ -63,15 +73,47 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 			return nil, err
 		}
 	}
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
+	assignments := map[string]any{}
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(updated.Name)
+	}
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(updated.Description)
+	}
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err
 	}
-	updated.Metadata = metadataJSON
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
+	predicate, inverse, err := api.bindPredicateOnUpdate(ctx,
+		request.SemanticPredicate, request.SemanticInverse, updated.SemanticPredicate, updated.SemanticInverse)
+	if err != nil {
+		return nil, err
+	}
 	flipped := tracked != updated.Tracked
-	updated.Tracked = tracked
+	if request.Tracked.Set {
+		assignments["tracked"] = tracked
+	}
+	if request.SemanticPredicate.Set || request.SemanticInverse.Set {
+		assignments["semantic_predicate"] = predicate
+		assignments["semantic_inverse"] = inverse
+	}
+	if len(assignments) == 0 {
+		return updated, nil
+	}
+	write := func(tx *gorm.DB) error {
+		res := rdb.AdvancingFrom(tx, updated.UpdatedAt).Model(updated).Omit(clause.Associations).
+			Where("id = ?", updated.ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}
 	if flipped {
 		// Flipping `tracked` makes every edge of the type ownership, or stops it being
 		// ownership (ADR-081): every device with an edge of the type is owed its new anchors,
@@ -79,7 +121,7 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 		// the funnel then evicts their cached sets.
 		var queued ownershipQueued
 		err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-			if err := tx.Save(updated).Error; err != nil {
+			if err := write(tx); err != nil {
 				return err
 			}
 			sources, err := sourceDevicesOnTx(tx, "relationship_type_id = ?", updated.ID)
@@ -93,22 +135,29 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 			return nil, err
 		}
 		api.evictRelationshipSources(ctx, queued)
-		return updated, nil
+	} else {
+		if err := api.RDB.DB(ctx).Transaction(write); err != nil {
+			return nil, err
+		}
+		// The cached edges carry the type's own fields, so every device with an edge of this
+		// type has a stale set. Not bounded by a device list the caller named, so it is read
+		// from the edges.
+		sources := api.relationshipSourceDevices(ctx, "relationship_type_id = ?", updated.ID)
+		if api.CacheEvictor != nil && len(sources) > 0 {
+			// A rename or a description edit changes the cached edges' copy of the type and
+			// nobody's ownership, so it evicts without publishing a fact per device — on the
+			// built-in "assigned" type that would be one fact per assigned device in the tenant.
+			api.CacheEvictor.EvictRelationshipSources(ctx, sources)
+		}
 	}
-	if err := api.RDB.DB(ctx).Save(updated).Error; err != nil {
+	matches, err = api.EntityRelationshipTypesById(ctx, []uint{updated.ID})
+	if err != nil {
 		return nil, err
 	}
-	// The cached edges carry the type's own fields, so every device with an edge of this
-	// type has a stale set. Not bounded by a device list the caller named, so it is read
-	// from the edges.
-	sources := api.relationshipSourceDevices(ctx, "relationship_type_id = ?", updated.ID)
-	if api.CacheEvictor != nil && len(sources) > 0 {
-		// A rename or a description edit changes the cached edges' copy of the type and
-		// nobody's ownership, so it evicts without publishing a fact per device — on the
-		// built-in "assigned" type that would be one fact per assigned device in the tenant.
-		api.CacheEvictor.EvictRelationshipSources(ctx, sources)
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
 	}
-	return updated, nil
+	return matches[0], nil
 }
 
 // EntityRelationshipTypesById looks up relationship types by id.

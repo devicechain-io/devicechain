@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -188,6 +189,44 @@ func declarationStatus(ctx context.Context, known bootstrap.KnownInstance, probe
 		return "declaration marked for deletion"
 	}
 
+	return declarationPhaseWords(inst) + alertRoutingWarning(inst) + devEgressWarning(inst)
+}
+
+// devEgressWarning is the suffix a row carries while the instance holds a development egress
+// allowance (dcctl bootstrap|upgrade --dev-allow-egress). It is a warning, not a status: the
+// allowance relaxes the tenant-egress boundary, and an instance that should not have it is
+// found by this cell.
+func devEgressWarning(inst *dcv1beta1.Instance) string {
+	list := bootstrap.DevAllowEgressOf(inst)
+	if len(list) == 0 {
+		return ""
+	}
+	return "; DEV EGRESS ALLOWED: " + strings.Join(list, ", ") + " (dcctl upgrade --dev-allow-egress none)"
+}
+
+// alertRoutingWarning is the suffix a row carries when the instance's alerts go nowhere.
+//
+// 🔴 ONLY A PUBLISHED "none" WARNS, and a missing or unreadable value stays silent here:
+// the operator's AlertsRouted condition reports those as Unknown, and a row that cried
+// ALERTS NOT ROUTED over an instance nobody has looked at yet would train readers to skip
+// the cell. A monitoring-less instance renders no rules, so it has nothing to warn about.
+func alertRoutingWarning(inst *dcv1beta1.Instance) string {
+	if !inst.Spec.Monitoring {
+		return ""
+	}
+	raw, ok := inst.Annotations[dcv1beta1.AnnotationAlertRouting]
+	if !ok {
+		return ""
+	}
+	routing, err := dcv1beta1.ParseAlertRouting(raw)
+	if err != nil || routing.Routed() {
+		return ""
+	}
+	return "; ALERTS NOT ROUTED (dcctl upgrade --alert-webhook, --alert-email or --alert-config)"
+}
+
+// declarationPhaseWords is the phase half of a row's words.
+func declarationPhaseWords(inst *dcv1beta1.Instance) string {
 	switch phase := inst.Annotations[dcv1beta1.AnnotationPhase]; phase {
 	case dcv1beta1.PhaseDestroying:
 		return partWayDestroyed

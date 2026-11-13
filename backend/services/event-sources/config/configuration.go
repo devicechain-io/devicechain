@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -113,10 +114,9 @@ type EventSource struct {
 // tenant is metered by independent token buckets at these rates: once per message
 // at the receive point, before decode, so a noisy tenant spends no pipeline CPU past
 // its allowance, and once per READING after decode, so a message carrying many
-// readings costs what it stores. It is fail-safe: an unset or non-positive value
-// falls back to the platform default rather than to unlimited, so a
-// misconfiguration cannot silently remove the protection. A tenant's tier overrides
-// both numbers.
+// readings costs what it stores. A zero/unset value takes the platform default,
+// never unlimited. Validate refuses negative values rather than silently replacing
+// the ceiling the operator was trying to change. A tenant's tier overrides both numbers.
 type IngestRateLimit struct {
 	// ReadingsPerSecond is the sustained per-tenant rate, in readings per second (and,
 	// at the same number, in messages per second before decode). The key names the
@@ -311,6 +311,16 @@ type EventSourcesConfiguration struct {
 	Capture        Capture
 	// ExternalMqtt carries the settings of the sources that read a broker the operator runs.
 	ExternalMqtt ExternalMqtt
+	// LpwanDownlink says the outbound-connectors LoRaWAN downlink is enabled, so the inbound
+	// integration route carries a network server's reports about downlinks (a ChirpStack ack or
+	// txack) to the adapter that settles confirmed downlinks. Off, those events are answered 204 and
+	// ignored unread, as they always were.
+	//
+	// 🔴 NOBODY AUTHORS THIS. The chart derives it from
+	// functionalAreas.outbound-connectors.config.lpwanDownlink.enabled and refuses a hand-set copy, as
+	// it does for command-delivery's flag, so the route cannot take reports nothing reads, or ignore
+	// reports something waits for.
+	LpwanDownlink bool
 }
 
 // Creates the default event sources configuration
@@ -373,13 +383,13 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 			},
 		}
 	}
-	// Fail-safe defaulting: a non-positive rate or burst falls back to the
-	// platform ceiling, never to unlimited, so an omitted or zeroed limit still
-	// meters every tenant.
-	if c.IngestRateLimit.ReadingsPerSecond <= 0 {
+	// A zero/unset rate or burst takes the platform default, never unlimited.
+	// A negative is an operator mistake that Validate refuses rather than silently
+	// replacing it with the platform ceiling the operator was trying to change.
+	if c.IngestRateLimit.ReadingsPerSecond == 0 {
 		c.IngestRateLimit.ReadingsPerSecond = DefaultIngestReadingsPerSecond
 	}
-	if c.IngestRateLimit.Burst <= 0 {
+	if c.IngestRateLimit.Burst == 0 {
 		c.IngestRateLimit.Burst = DefaultIngestBurst
 	}
 	// nil, not 0, means unset: an explicit 0 must reach Validate and be refused.
@@ -435,6 +445,12 @@ func (c *EventSourcesConfiguration) RetiredConfigKeys() map[string]string {
 // check only that a Type is known and that no source points at the platform broker
 // — an Id was accepted whatever it said. That is what validateSourceIds closes.
 func (c *EventSourcesConfiguration) Validate() error {
+	if r := c.IngestRateLimit.ReadingsPerSecond; math.IsNaN(r) || math.IsInf(r, 0) || r < 0 {
+		return fmt.Errorf("ingestRateLimit.readingsPerSecond must be a positive number (got %v)", r)
+	}
+	if c.IngestRateLimit.Burst < 0 {
+		return fmt.Errorf("ingestRateLimit.burst must be positive (got %d)", c.IngestRateLimit.Burst)
+	}
 	// The shed floor names a level on the ADR-063 ladder (0..3); a value outside it
 	// names no level. Fail the load closed rather than clamp — a floor of 7 is a
 	// misconfiguration the operator must see, not one to silently reinterpret.

@@ -157,6 +157,11 @@ type PolicyNotifier struct {
 	// now is the clock quiet hours are evaluated against. Nil means time.Now; read it
 	// through clock. A field so a test can stand at a chosen instant of a chosen week.
 	now func() time.Time
+
+	// Ledger records every delivery attempt in the delivery ledger, off the delivery path.
+	// MAY BE NIL (struct-literal fixtures): nothing is then recorded and delivery is
+	// unchanged. See AttemptLedger for why it can never delay a page.
+	Ledger *AttemptLedger
 }
 
 // UseDeadLetters hands the notifier the sink a held notification that can never be sent is
@@ -185,6 +190,9 @@ func (n *PolicyNotifier) countQuiet(outcome string, by int) {
 const (
 	refusalReasonEgress     = "egress"
 	refusalReasonCredential = "credential"
+	// refusalReasonSigning: a webhook channel is set to sign but cannot (no signing key is stored,
+	// or the stored key is not a valid signing secret). The delivery is refused, never sent unsigned.
+	refusalReasonSigning = "signing"
 	// refusalReasonNoAdapter: the channel's type has no delivery adapter in this build, so the
 	// channel was skipped from the plan and nobody was paged through it.
 	refusalReasonNoAdapter = "no_adapter"
@@ -220,7 +228,7 @@ func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, 
 	return &PolicyNotifier{
 		api:           api,
 		store:         store,
-		adapters:      newAdapterRegistry(guard),
+		adapters:      newAdapterRegistry(guard, store),
 		attempts:      attempts,
 		timeout:       timeout,
 		budget:        dispatchBudget,
@@ -285,13 +293,21 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 			return n.resolveHeld(c, event)
 		})
 	case dmmodel.AlarmEventCleared:
-		return n.applyLifecycle(ctx, event.AlarmToken, "clear", func(c context.Context) error {
+		// Stamp the clear FIRST: that is what stops escalation. Announcing it (to the policies
+		// that opted in) comes after, claimed separately so it is sent once; see announceClear.
+		if err := n.applyLifecycle(ctx, event.AlarmToken, "clear", func(c context.Context) error {
 			if err := n.api.MarkCleared(c, event.AlarmToken, event.AlarmKey, event.Severity,
 				event.RaisedTime, event.OccurredTime); err != nil {
 				return err
 			}
 			return n.resolveHeld(c, event)
-		})
+		}); err != nil {
+			return err
+		}
+		if n.tenantDeleted(ctx) {
+			return nil
+		}
+		return n.announceClear(ctx, event, false, false)
 	case dmmodel.AlarmEventDeescalated:
 		return n.applyLifecycle(ctx, event.AlarmToken, "de-escalation", func(c context.Context) error {
 			return n.api.TouchSeverity(c, event.AlarmToken, event.Severity)
@@ -421,6 +437,15 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 		state = states[0]
 	}
 
+	// An escalation that arrives after its alarm cleared (the pool is unordered) would page
+	// "worse" about an alarm that is over.
+	if event.EventType == dmmodel.AlarmEventEscalated && state != nil && state.ClearedAt.Valid &&
+		state.SameCycleAs(event.RaisedTime) {
+		log.Debug().Str("tenant", tenant).Str("alarm", event.AlarmToken).
+			Msg("Not paging an escalation: the alarm has already cleared")
+		return nil
+	}
+
 	// Quiet hours come BEFORE the plan: a policy that holds this notification is taken out
 	// of the policies the plan sends through, and what it holds is written FIRST — before
 	// anything is sent. The write is an idempotent upsert, so a failure here returns an
@@ -441,7 +466,7 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 		return nil
 	}
 
-	tally := n.deliverAll(dctx, deliveries, renderNotification(event), event.AlarmToken)
+	tally := n.deliverAll(dctx, deliveries, renderNotification(event), event.AlarmToken, model.AttemptTriggerAlarm)
 
 	// Nothing delivered though targets existed: return an error so the durable consumer
 	// redelivers (its own retry is the reliability backstop for an outage longer than
@@ -505,11 +530,14 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	// escalation substrate, so the page that just went out would never be followed up.
 	// recordTimeout bounds each ATTEMPT and is smaller than dispatchMargin so the first
 	// still lands inside AckWait; a held re-run is kept alive by the hold's beats.
+	var recorded *model.NotificationState
 	if err := storehold.Settle(ctx, func(c context.Context) error {
 		rctx, rcancel := context.WithTimeout(c, recordTimeout)
 		defer rcancel()
-		return n.api.RecordNotification(rctx, event.AlarmToken, event.AlarmKey, event.Severity,
-			event.RaisedTime, event.OccurredTime)
+		var err error
+		recorded, err = n.api.RecordPagedFrom(rctx, event.AlarmToken, event.AlarmKey, event.Severity,
+			event.RaisedTime, event.OccurredTime, pagedTargets(tally.targets), eventSource(event), event.OccurredTime)
+		return err
 	}); err != nil {
 		log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
 			Msg("Delivered notification but failed to record notification state; the alarm " +
@@ -534,6 +562,7 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 		}
 		n.countQuiet(quietSuperseded, int(superseded))
 	}
+	n.announceLateClear(ctx, event, recorded)
 	return nil
 }
 
@@ -570,6 +599,8 @@ type dispatchTally struct {
 	refused     int
 	failed      int
 	unattempted int
+	// targets are the deliveries that went out, for the state row's paged set.
+	targets []delivery
 }
 
 // retryable is the count of outcomes a redelivery could still turn into a page. A refusal
@@ -589,12 +620,17 @@ func (t dispatchTally) retryable() int { return t.failed + t.unattempted }
 // here means the dispatch gives up BEFORE the broker decides it has, so a redelivery is
 // something we asked for rather than something that happened underneath us.
 func (n *PolicyNotifier) deliverAll(ctx context.Context, deliveries []delivery,
-	rendered *RenderedNotification, alarm string) dispatchTally {
+	rendered *RenderedNotification, alarm, trigger string) dispatchTally {
 	tenant, _ := core.TenantFromContext(ctx)
+	ac := newAttemptContext(alarm, trigger, rendered)
 	var tally dispatchTally
 	for i, d := range deliveries {
 		if ctx.Err() != nil {
 			tally.unattempted = len(deliveries) - i
+			for _, skipped := range deliveries[i:] {
+				n.Ledger.record(ctx, ac.row(skipped, model.AttemptStatusNotAttempted, 0, n.attempts,
+					time.Now(), 0, false, nil))
+			}
 			log.Error().Str("tenant", tenant).Str("alarm", alarm).
 				Int("channels", tally.unattempted).Dur("budget", n.wholeDispatchBudget()).
 				Msg("The whole-dispatch budget was spent before every channel had been tried; " +
@@ -615,12 +651,16 @@ func (n *PolicyNotifier) deliverAll(ctx context.Context, deliveries []delivery,
 			if tally.storeErr == nil {
 				tally.storeErr = err
 			}
+			n.Ledger.record(ctx, ac.row(d, model.AttemptStatusNotAttempted, 0, n.attempts,
+				time.Now(), 0, false, err))
 			continue
 		}
 		d.secret = secret
+		d.attempt = ac
 		switch n.deliverWithRetry(ctx, d, rendered) {
 		case deliveryOK:
 			tally.delivered++
+			tally.targets = append(tally.targets, d)
 		case deliveryRefused:
 			tally.refused++
 		default:
@@ -638,6 +678,11 @@ type delivery struct {
 	channel    *model.NotificationChannel
 	recipients []string
 	secret     string
+	// policy is the token of the policy whose rule planned this delivery (the first one,
+	// when two policies route to the same target), for the delivery ledger.
+	policy string
+	// attempt is what the delivery ledger records alongside each try; deliverAll sets it.
+	attempt attemptContext
 }
 
 // plan resolves the enabled policies to the deduplicated set of channel deliveries for
@@ -711,9 +756,9 @@ func (n *PolicyNotifier) throttled(event *dmmodel.AlarmStateChangeEvent,
 // claim (another pod won, or the alarm resolved between the read and the claim) is a
 // silent no-op. Because the tier is advanced by the claim, escalation stays bounded even
 // if the subsequent send fails — the accepted tradeoff is a rare missed page if the pod
-// dies between claim and send. An error is returned only for a DB error on the claim or
-// when the claim was won but every delivery failed, so the scheduler logs and retries the
-// alarm on a later tick.
+// dies between claim and send. Claim or delivery failures return an error; a mix of
+// delivered and failed channels returns ErrPassPartial so the scheduler can account for
+// the incomplete service without repeating the claimed tier.
 //
 // Escalation uses ONE shared clock and tier per alarm (state.LastNotifiedAt /
 // EscalationLevel), not per policy: when several escalation-enabled policies match one
@@ -772,7 +817,20 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 		// scheduler's read and here. Either way we must not deliver.
 		return nil
 	}
-	tally := n.deliverAll(ectx, deliveries, renderEscalation(state, state.EscalationLevel+1), state.AlarmToken)
+	tally := n.deliverAll(ectx, deliveries, renderEscalation(state, state.EscalationLevel+1), state.AlarmToken,
+		model.AttemptTriggerEscalation)
+	if tally.delivered > 0 {
+		// Best effort: the escalation's own claim already counted it, and a missed record only
+		// means a clear is not announced to a target an escalation alone reached.
+		if err := n.api.AddPagedTargets(ctx, state.AlarmToken, state.CycleRaisedAt, pagedTargets(tally.targets)); err != nil {
+			log.Warn().Err(err).Str("alarm", state.AlarmToken).
+				Msg("Could not record the targets an escalation reached")
+		}
+		if tally.retryable() > 0 {
+			return fmt.Errorf("%d of %d escalation deliveries failed for alarm %q: %w",
+				tally.retryable(), len(deliveries), state.AlarmToken, core.ErrPassPartial)
+		}
+	}
 	if tally.delivered == 0 {
 		// Same reasoning as dispatch: a refusal is not an outage, so redelivering it only
 		// delays the same answer. The tier has already been claimed either way.
@@ -848,7 +906,7 @@ func (n *PolicyNotifier) appendRuleDeliveries(policyToken, severity string,
 			continue
 		}
 		seen[key] = true
-		out = append(out, delivery{channel: rule.Channel, recipients: recipients})
+		out = append(out, delivery{channel: rule.Channel, recipients: recipients, policy: policyToken})
 	}
 	return out
 }
@@ -939,10 +997,27 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 
 	adapter := n.adapters[d.channel.ChannelType]
 	tenant, _ := core.TenantFromContext(ctx)
+	// One webhook-id for the whole delivery: a retry of this message re-sends it under the same id
+	// (with a fresh timestamp), so a receiver that deduplicates on webhook-id sees one message.
+	ctx = withMessageID(ctx, newMessageID())
 	for attempt := 1; attempt <= n.attempts; attempt++ {
 		dctx, cancel := context.WithTimeout(ctx, n.timeout)
+		// Wall time, not n.clock(): that is the quiet-hours clock a test can pin, and a
+		// ledger row's time and latency are measurements of this attempt.
+		started := time.Now()
 		err := adapter.Deliver(dctx, d.channel, d.secret, d.recipients, rendered)
+		latency := time.Since(started)
 		cancel()
+		status := attemptStatus(err)
+		ledgerErr := err
+		if status == model.AttemptStatusFailed && ctx.Err() != nil {
+			// The DISPATCH budget (ctx), not this attempt's own timeout (dctx), ended the
+			// attempt: the platform cut it short, and the ledger must not charge the
+			// channel with a timeout it did not have.
+			ledgerErr = fmt.Errorf("%w: %w", errDispatchBudgetSpent, err)
+		}
+		n.Ledger.record(ctx, d.attempt.row(d, status, attempt, n.attempts,
+			started, latency, true, ledgerErr))
 		if err == nil {
 			return deliveryOK
 		}
@@ -967,6 +1042,17 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 					"is missing, or a secret is stored that the channel never presents); not retrying. " +
 					"Fix the channel's config or secret.")
 			n.countRefusal(refusalReasonCredential)
+			return deliveryRefused
+		}
+		// A channel set to sign that cannot is terminal too: a redelivery finds the same missing or
+		// invalid key. It is refused rather than sent unsigned, because the receiver was promised a
+		// signature and may be dropping what lacks one.
+		if errors.Is(err, httpsink.ErrSigningRefused) {
+			log.Error().Err(err).Str("tenant", tenant).Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
+				Msg("Notification channel is set to sign its deliveries but cannot (no signing secret is " +
+					"stored, or it is not valid); not retrying and not sending unsigned. Generate a signing " +
+					"secret for the channel, or turn signing off in its config.")
+			n.countRefusal(refusalReasonSigning)
 			return deliveryRefused
 		}
 		log.Warn().Err(err).Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
@@ -999,6 +1085,20 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 	log.Error().Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
 		Int("attempts", n.attempts).Msg("Notification permanently dropped for channel after exhausting attempts")
 	return deliveryFailed
+}
+
+// attemptStatus is the ledger status of one adapter call's result. It mirrors the
+// terminal classification deliverWithRetry applies just below the call, so a row the
+// ledger calls REFUSED is exactly an attempt after which no retry was made.
+func attemptStatus(err error) string {
+	switch {
+	case err == nil:
+		return model.AttemptStatusSent
+	case errors.Is(err, egress.ErrBlocked), errors.Is(err, httpsink.ErrAuthRefused):
+		return model.AttemptStatusRefused
+	default:
+		return model.AttemptStatusFailed
+	}
 }
 
 // logBudgetCut reports a channel abandoned because the whole-dispatch budget ran out

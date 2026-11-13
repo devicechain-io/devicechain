@@ -213,15 +213,59 @@ var publishes = []publishOp{
 // govulncheck allowlist, and for the same reason: an exception nobody is watching is a
 // gap with paperwork.
 //
-// It is EMPTY, and it was not. publishEntityGroup lived here for exactly as long as the
-// table seeded only a STATIC group — the platform refuses to publish one, in its own
-// words: `only a dynamic entity group can be published`. The table now seeds both, so
-// the exclusion was deleted rather than left to look maintained.
-var publishesNotCovered = map[string]string{}
+// publishEntityGroup lived here for exactly as long as the table seeded only a STATIC
+// group — the platform refuses to publish one, in its own words: `only a dynamic entity
+// group can be published`. The table now seeds both, so that exclusion was deleted
+// rather than left to look maintained.
+var publishesNotCovered = map[string]string{
+	"publishAgentPolicy": "not in this table because it takes no token and no label, the two arguments " +
+		"every row here is rendered with; it IS exercised, by the agent-policy entity's After step " +
+		"(entities.go), and the version it writes is read back and compared through agentPolicy. " +
+		"Move it here only if the publish table learns an argument-less shape.",
+}
 
 // afterPublish is the third phase: entities that cannot be created until something has
 // been published, because they reference a published VERSION NUMBER.
 var afterPublish = []entity{
+	{
+		// Depends on: device-profile, device-profile-version.
+		//
+		// An automation change review of the profile just published. It is FIRST in this
+		// phase on purpose: nothing has touched the profile's draft since the publish, so
+		// the draft equals the active version and the review is NO_AUTOMATION_CHANGE. That
+		// kind runs no replay, so the row is written without event-processing's comparison
+		// engine and without any recorded telemetry, which the drill deliberately has none
+		// of. The rows below (the scoped rule) change the draft, so a review placed after
+		// them would need a live comparison and a recorded window.
+		//
+		// The windows and device are literals the server stores and never replays. The
+		// requestId is fixed, so a re-run of the seed against the same tenant is answered
+		// with the stored review rather than a second row.
+		//
+		// matchesCurrentDraft is NOT selected: it is computed against the CURRENT draft,
+		// which the rows below change, so it is derived, not stored.
+		Name:     "automation-review",
+		Area:     "device-management",
+		Mutation: "runAutomationReview",
+		Input:    "RunAutomationReviewInput!",
+		Arg:      "input",
+		Read:     "automationReview",
+		Single:   true,
+		Requires: []string{"RunAutomationReviewInput.requestId"},
+		Fields: "token profileToken kind ruleToken state outcome reviewDigest draftDigest baselineDigest " +
+			"baselineVersion createdBy requiredApprovals deviceTokens windows{role start end}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"profileToken": s.tok("device-profile"),
+				"deviceTokens": []any{s.tok("device")},
+				"windows": []any{
+					map[string]any{"role": "INCIDENT", "start": "2026-01-01T00:00:00Z", "end": "2026-01-01T01:00:00Z"},
+					map[string]any{"role": "NORMAL", "start": "2026-01-02T00:00:00Z", "end": "2026-01-02T01:00:00Z"},
+				},
+				"requestId": "apiprobe-automation-review",
+			}}
+		},
+	},
 	{
 		// Depends on: asset-type-schema, asset-type-version.
 		//
@@ -568,6 +612,133 @@ var afterPublish = []entity{
 			return nil
 		},
 	},
+	{
+		// The tenant's AGENT POLICY, so iam_agent_policies (the head) and
+		// iam_agent_policy_versions (a published version) both hold a row the drill can watch.
+		// One per tenant and addressed by no token, so it is read back with the argument-less
+		// agentPolicy (Singleton) and keyed on the receipt by name.
+		//
+		// The draft is saved here and published by the After step, which clears the draft, so
+		// the settled read selects the PUBLISHED version: its number, its document (stored
+		// canonically, so the comparison asserts the canonical form survives) and its origin.
+		//
+		// 🔴 THE DOCUMENT DISABLES ACTUATION ON PURPOSE. A publish that LOOSENS the policy
+		// (enabling it is one) needs a second factor verified in the last fifteen minutes, which
+		// the probe's sign-in does not have. A disabled policy that only refuses is a tightening
+		// against no policy at all, so it publishes with the probe's ordinary session, and the
+		// seed turns nothing on in the instance it runs against.
+		//
+		// A SKIPPABLE LEAF: it Requires the agent policy type, so a baseline that predates it
+		// skips the row, and nothing records its token.
+		Name:         "agent-policy",
+		Area:         "user-management",
+		Mutation:     "saveAgentPolicyDraft",
+		Params:       []param{{Name: "document", Type: "String!"}},
+		Read:         "agentPolicy",
+		Singleton:    true,
+		Requires:     []string{"AgentPolicy.actuationInEffect"},
+		Fields:       "draft operatorSuspended published{version document origin}",
+		AbsentIfNull: "published",
+		TokenFrom:    func(s *state) string { return s.tok("agent-policy") },
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"document": probeAgentPolicy}
+		},
+		After: publishProbeAgentPolicy,
+		Settled: func(f map[string]any) error {
+			pub, _ := f["published"].(map[string]any)
+			if pub == nil {
+				return fmt.Errorf("no published agent policy yet")
+			}
+			if f["draft"] != nil {
+				return fmt.Errorf("the draft was not consumed by the publish")
+			}
+			return nil
+		},
+	},
+	{
+		// Depends on: device-profile, device-profile-version.
+		//
+		// LAST ON PURPOSE. Protecting this profile makes later publishes require a
+		// review, and rollbacks, type re-points and device moves require break-glass.
+		// Nothing after this row may perform any of those actions on the probe profile.
+		//
+		// The tightening writes automation_review_policies; the After step proposes a
+		// LOOSENING and writes automation_review_policy_changes instead of applying it.
+		// A second person must approve, and the probe has only one. Self-approval is
+		// off, so there is NO delayed application either: the proposal stays PENDING.
+		//
+		// The seeded detection rule is DISABLED, so the profile is eligible for
+		// protection: eligibility refuses enabled rules reading device attributes,
+		// constants or group membership. The group-scoped rule earlier in this phase
+		// changes only the DRAFT, while eligibility reads the ACTIVE version.
+		//
+		// A SKIPPABLE LEAF: older baselines lack the required revision field. No Record
+		// and no token consumer. The receipt is resolved by Name, so sharing the
+		// profile's token with device-profile does not collide; Single needs that token
+		// to address the read (unlike the argument-less agent-policy singleton).
+		Name:     "automation-review-policy",
+		Area:     "device-management",
+		Mutation: "setAutomationReviewPolicy",
+		Params: []param{
+			{Name: "profileToken", Type: "String!"},
+			{Name: "settings", Type: "AutomationReviewPolicyInput!"},
+		},
+		Wrap:      "policy",
+		Read:      "automationReviewPolicy",
+		Single:    true,
+		ReadArg:   "profileToken",
+		TokenFrom: func(s *state) string { return s.tok("device-profile") },
+		Requires:  []string{"AutomationReviewPolicy.revision"},
+		Fields: "profileToken revision effective{required requiredApprovals allowSelfApproval " +
+			"approvalTtlSeconds stepUpMaxAgeSeconds} pendingChange{state proposedBy proposed{required}}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{
+				"profileToken": s.tok("device-profile"),
+				"settings":     map[string]any{"required": true},
+			}
+		},
+		After: proposeProbeAutomationPolicyLoosening,
+		Settled: func(f map[string]any) error {
+			effective, _ := f["effective"].(map[string]any)
+			if effective["required"] != true {
+				return fmt.Errorf("effective.required is %v, want true", effective["required"])
+			}
+			pending, _ := f["pendingChange"].(map[string]any)
+			if pending["state"] != "PENDING" {
+				return fmt.Errorf("pendingChange.state is %v, want PENDING", pending["state"])
+			}
+			return nil
+		},
+	},
+}
+
+const probeAutomationPolicyLooseningMutation = `mutation($profileToken:String!,$settings:AutomationReviewPolicyInput!){setAutomationReviewPolicy(profileToken:$profileToken,settings:$settings){applied}}`
+
+func probeAutomationPolicyLooseningVars(st *state) map[string]any {
+	return map[string]any{
+		"profileToken": st.tok("device-profile"),
+		"settings":     map[string]any{"required": false},
+	}
+}
+
+// proposeProbeAutomationPolicyLoosening seeds a proposal that cannot take effect alone.
+func proposeProbeAutomationPolicyLoosening(ctx context.Context, c *connection, sess *userclient.TenantSession, st *state) error {
+	var out struct {
+		SetAutomationReviewPolicy *struct {
+			Applied *bool `json:"applied"`
+		} `json:"setAutomationReviewPolicy"`
+	}
+	if err := sess.Query(ctx, c.areaURL("device-management"), probeAutomationPolicyLooseningMutation,
+		probeAutomationPolicyLooseningVars(st), &out); err != nil {
+		return fmt.Errorf("propose the probe automation policy loosening: %w", err)
+	}
+	if out.SetAutomationReviewPolicy == nil || out.SetAutomationReviewPolicy.Applied == nil {
+		return fmt.Errorf("the automation policy loosening returned no applied answer")
+	}
+	if *out.SetAutomationReviewPolicy.Applied {
+		return fmt.Errorf("the automation policy loosening applied without a second person")
+	}
+	return nil
 }
 
 // startProbeRollout starts the probe rollout, which is what writes its target rows.

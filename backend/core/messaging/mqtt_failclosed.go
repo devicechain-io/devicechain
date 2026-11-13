@@ -311,7 +311,8 @@ func MqttFailClosedDurables(instanceId string) []MqttFailClosedDurable {
 	return []MqttFailClosedDurable{
 		{Kind: MqttFailClosedEvents, Name: durable(MqttFailClosedEvents),
 			Forwards: mqttMsgsSubjectPrefix + DeviceEventsWildcard(instanceId), Filter: "",
-			AlsoForwards: []string{mqttMsgsSubjectPrefix + GatewayEventsWildcard(instanceId)}},
+			AlsoForwards: []string{mqttMsgsSubjectPrefix + GatewayEventsWildcard(instanceId),
+				mqttMsgsSubjectPrefix + DeviceUplinkWildcard(instanceId)}},
 		{Kind: MqttFailClosedResponses, Name: durable(MqttFailClosedResponses), Forwards: responses, Filter: responses},
 		{Kind: MqttFailClosedReports, Name: durable(MqttFailClosedReports), Forwards: reports, Filter: reports},
 	}

@@ -1,0 +1,63 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Supply-chain checks that are not part of the per-PR gate in ci.yml.
+#
+#   guards        - fast: the security.txt freshness check and the self-tests of the exposure/VEX
+#                   tool. Runs on PRs that touch them, and weekly, because security.txt is the one
+#                   file that goes bad with the calendar and not with a change.
+#   rebuild-diff  - slow: builds dcctl and the edge agent twice from two unpacked copies of the
+#                   commit with separate caches, and fails if the digests differ. Its --self-test
+#                   plants a nondeterministic build first and requires the comparison to FAIL.
+#                   Runs weekly, on demand, and on PRs that touch the script or the Go toolchain pin.
+#
+# Additive on purpose: it is not listed in ci.yml's `ci-complete` gate, so a red weekly run is a
+# signal to act on, not a merge blocker. Promote rebuild-diff to the gate once it has run clean for
+# a few weeks.
+name: supply-chain
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 3"
+  pull_request:
+    paths:
+      - ".github/workflows/supply-chain.yml"
+      - "hack/check-reproducible-build.sh"
+      - "hack/check-security-txt.sh"
+      - "hack/vex-exposure.sh"
+      - "hack/testdata/vex/**"
+      - "docs/static/.well-known/**"
+      - "go.work"
+
+permissions:
+  contents: read
+
+jobs:
+  guards:
+    name: security.txt and VEX tool
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: security.txt checker self-test
+        run: hack/check-security-txt.sh --self-test
+      - name: security.txt is valid and not about to expire
+        run: hack/check-security-txt.sh
+      - name: exposure/VEX tool self-test
+        run: hack/vex-exposure.sh --self-test
+
+  rebuild-diff:
+    name: Rebuild diff (dcctl, edge agent)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: false
+      - name: negative control - a planted nondeterministic build must be caught
+        run: hack/check-reproducible-build.sh --self-test
+      - name: shipped binaries reproduce
+        run: hack/check-reproducible-build.sh

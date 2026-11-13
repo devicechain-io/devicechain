@@ -48,6 +48,33 @@ var eventStoreIndexes = func() map[string]map[string]string {
 // of the migration under test, so the check follows whichever the database has reached.
 func storeIndexesFor(t *testing.T, db *gorm.DB) map[string]map[string]string {
 	t.Helper()
+	out := storeIndexesThroughAltIdKey(t, db)
+	// The usage rollup's ingest-time index (NewTenantUsageIngestSchema) comes later in the chain;
+	// a database that has reached it carries it on events and every chunk.
+	if hasIndex(t, db, usageIngestIndexName) {
+		events := map[string]string{usageIngestIndexName: usageIngestIndexDef}
+		for name, def := range out["events"] {
+			events[name] = def
+		}
+		withIngest := map[string]map[string]string{}
+		for table, idx := range out {
+			withIngest[table] = idx
+		}
+		withIngest["events"] = events
+		return withIngest
+	}
+	return out
+}
+
+// usageIngestIndexName and usageIngestIndexDef are the BRIN index the usage migration adds, as
+// pg_indexes prints it.
+const (
+	usageIngestIndexName = "idx_events_processed_time_brin"
+	usageIngestIndexDef  = `CREATE INDEX idx_events_processed_time_brin ON "event-management".events USING brin (processed_time)`
+)
+
+func storeIndexesThroughAltIdKey(t *testing.T, db *gorm.DB) map[string]map[string]string {
+	t.Helper()
 	if !hasIndex(t, db, deviceAltIdKey.name) {
 		return eventStoreIndexes
 	}

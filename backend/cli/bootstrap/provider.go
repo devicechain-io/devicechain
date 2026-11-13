@@ -47,6 +47,8 @@ type Options struct {
 	// MqttFailClosed is --mqtt-fail-closed: nil when the flag was not given, otherwise the
 	// operator's explicit choice, recorded on the instance declaration. See mqttfailclosed.go.
 	MqttFailClosed *bool
+	// MqttDeviceUplinks is the explicit --mqtt-device-uplinks choice, or nil when omitted.
+	MqttDeviceUplinks *bool
 	// Size is --size: "" when not given (base). Validated by ValidateSize; the instance's own
 	// preset, recorded on the declaration. See size.go.
 	Size string
@@ -54,6 +56,9 @@ type Options struct {
 	// what the declaration records). See mqttexposure.go.
 	MQTTExposure string
 	MQTTHost     string
+	// DevAllowEgress is --dev-allow-egress: nil when not given (keep what the declaration
+	// records), an empty non-nil list to clear it. Local clusters only; see devegress.go.
+	DevAllowEgress []string
 	// BrokerMaxConnections is --broker-max-connections: nil when not given (keep what is recorded),
 	// 0 to clear it. See mqttexposure.go.
 	BrokerMaxConnections *int

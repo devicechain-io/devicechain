@@ -326,6 +326,11 @@ func (d *device) connect(ctx context.Context) error {
 	// A persistent session with auto-reconnect: the subscription survives a blip, and OnConnect
 	// re-establishes it (and syncs) after a longer loss.
 	opts.SetCleanSession(false)
+	// paho's resume() walks the store after the connection is up and flags every stored publish
+	// DUP, while the outgoing goroutine reads that same packet; a report published the moment
+	// OnConnect returns lands in the walk and is a data race inside paho. The updater re-sends its
+	// own reports, so nothing needs to survive a reconnect in the store.
+	opts.SetStore(newClientStore())
 	opts.SetAutoReconnect(true)
 	opts.SetConnectTimeout(connectTimeout)
 	if f.tlsConfig != nil {
@@ -675,3 +680,12 @@ func (f *Fleet) Report() Report {
 	sort.Slice(r.Failures, func(i, j int) bool { return r.Failures[i].Token < r.Failures[j].Token })
 	return r
 }
+
+// resumelessStore is an in-memory store that reports nothing as pending, so paho's session
+// resume has no stored packet to mutate; in-flight publishes are still stored and acknowledged.
+type resumelessStore struct{ mqtt.Store }
+
+func (resumelessStore) All() []string { return nil }
+
+// newClientStore is the store every device client is given.
+func newClientStore() mqtt.Store { return resumelessStore{mqtt.NewMemoryStore()} }

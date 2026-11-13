@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # @devicechain/widgets
 
 React dashboard widgets for DeviceChain, plus the renderer that lays a board out.
-Twenty-four widgets — charts, gauges, tables, a fleet table, alarm views,
+Thirty-two widgets — charts, gauges, tables, a fleet table, alarm views,
 command controls, an entity selector and a map — all bound to live data through
 [`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards).
 
@@ -65,7 +65,7 @@ bound to a slot needs its datasource resolved first (`resolveWidgets` or
 
 | channel | widgets |
 | --- | --- |
-| measurement | `timeseries-chart`, `latest-card`, `gauge`, `linear-gauge`, `level-gauge`, `battery`, `status-light`, `signal-bars`, `compass`, `progress-ring`, `table`, `bar-chart`, `pie-chart`, `fleet-table`, `fleet-count`, `device-status`, `online-doughnut`, `history-table` |
+| measurement | `timeseries-chart`, `latest-card`, `gauge`, `linear-gauge`, `level-gauge`, `battery`, `status-light`, `signal-bars`, `compass`, `progress-ring`, `table`, `bar-chart`, `pie-chart`, `fleet-table`, `fleet-count`, `device-status`, `online-doughnut`, `history-table`, `status-grid`, `state-timeline`, `scada-symbol` |
 | aggregate | `stat-card` |
 | none (static) | `label`, `image` |
 | alarm | `alarm-table`, `alarm-count`, `alarm-severity` |

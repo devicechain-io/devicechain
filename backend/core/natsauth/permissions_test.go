@@ -162,10 +162,12 @@ func TestNoAreaCanPublishIntoTheDeviceEventsNamespace(t *testing.T) {
 // stream's subject list is the declaration; the deny is derived from the same shapes. If a new
 // subject is added to the capture stream (DeviceEventsSubjects) and not to the deny, a service
 // could forge into it, and this fails. The negative control is the loop's own premise: the list
-// has the gateway shape in it, so a deny that only knew the device shape is caught.
+// has the gateway shape and the raw-payload (uplink) shape in it, so a deny that only knew the
+// device events shape is caught.
 func TestEveryCaptureSubjectIsDeniedToEveryServiceLogin(t *testing.T) {
-	subjects := messaging.DeviceEventsSubjects("*")
-	require.Len(t, subjects, 2, "the capture stream stores a device's own subject and a gateway's")
+	subjects := messaging.DeviceEventsSubjectsWith("*", true)
+	require.Len(t, subjects, 3, "the capture stream stores a device's own subject, a gateway's and a device's raw payload")
+	require.Contains(t, subjects, messaging.DeviceUplinkWildcard("*"))
 	deny := ServicePublishDeny()
 	for _, subject := range subjects {
 		for _, form := range []string{subject, messaging.MqttMsgsSubject(subject)} {
@@ -499,7 +501,7 @@ func TestPermissionsSerialiseAsTheBrokerReadsThem(t *testing.T) {
 	require.JSONEq(t, `{"publish":{"allow":["a.>"],"deny":["b"]},"subscribe":{"allow":["c"]},"allow_responses":true}`, string(raw))
 	raw, err = json.Marshal(ServicePermissions())
 	require.NoError(t, err)
-	require.JSONEq(t, `{"publish":{"deny":["*.*.devices.*.events","$MQTT.msgs.*.*.devices.*.events","*.*.gateways.*.devices.*.events","$MQTT.msgs.*.*.gateways.*.devices.*.events"]}}`, string(raw))
+	require.JSONEq(t, `{"publish":{"deny":["*.*.devices.*.events","$MQTT.msgs.*.*.devices.*.events","*.*.gateways.*.devices.*.events","$MQTT.msgs.*.*.gateways.*.devices.*.events","*.*.devices.*.uplink","$MQTT.msgs.*.*.devices.*.uplink"]}}`, string(raw))
 }
 
 // The tenant purge deletes the gateway's consumers that name a tenant, whose names the gateway
@@ -694,4 +696,66 @@ func TestEventSourcesCanManageItsCaptureDurableAndDeleteTheEarlierOne(t *testing
 	}
 	require.True(t, p.publishes("$JS.API.CONSUMER.DELETE."+stream+"."+legacy), "event-sources cannot delete %s", legacy)
 	require.True(t, p.publishes("$JS.ACK."+stream+"."+current+".1.2.3.4.5"), "event-sources cannot ack on %s", current)
+}
+
+// 🔴 THE RAW-PAYLOAD SUBJECT IS GRANTED ONLY ON THE OPERATOR'S OPT-IN, AND ONLY THE DEVICE'S OWN.
+func TestDeviceGrantCoversItsOwnUplinkSubjectOnlyWhenOptedIn(t *testing.T) {
+	allows := func(list jwt.StringList, subject string) bool {
+		for _, g := range list {
+			if natsSubjectMatches(g, subject) {
+				return true
+			}
+		}
+		return false
+	}
+	own := messaging.DeviceUplinkSubject(permInstance, "acme", "pump-1")
+	other := messaging.DeviceUplinkSubject(permInstance, "acme", "pump-2")
+	otherTenant := messaging.DeviceUplinkSubject(permInstance, "globex", "pump-1")
+	otherInstance := messaging.DeviceUplinkSubject("another", "acme", "pump-1")
+
+	// Off (every earlier build's grant): no raw-payload subject at all.
+	off, err := DevicePermissions(permInstance, "acme", "pump-1")
+	require.NoError(t, err)
+	require.False(t, allows(off.Pub.Allow, own), "the grant is opt-in")
+	offExplicit, err := DevicePermissions(permInstance, "acme", "pump-1", WithDeviceUplink(false))
+	require.NoError(t, err)
+	require.Equal(t, off, offExplicit, "WithDeviceUplink(false) is the grant every earlier build minted")
+
+	on, err := DevicePermissions(permInstance, "acme", "pump-1", WithDeviceUplink(true))
+	require.NoError(t, err)
+	require.True(t, allows(on.Pub.Allow, own), "the paired positive")
+	require.False(t, allows(on.Pub.Allow, other), "never another device's payload topic")
+	require.False(t, allows(on.Pub.Allow, otherTenant), "never another tenant's")
+	require.False(t, allows(on.Pub.Allow, otherInstance), "never another instance's")
+	// The events topic and everything else is exactly what it was.
+	require.True(t, allows(on.Pub.Allow, messaging.DeviceEventsSubject(permInstance, "acme", "pump-1")))
+	require.Equal(t, off.Sub.Allow, on.Sub.Allow)
+	require.Len(t, on.Pub.Allow, len(off.Pub.Allow)+1)
+
+	// A wildcard in the token never reaches the grant, with the option on as with it off.
+	_, err = DevicePermissions(permInstance, "acme", "x.*", WithDeviceUplink(true))
+	require.Error(t, err)
+}
+
+// A service login can publish to no raw-payload subject, in either form the gateway stores it under.
+func TestServiceLoginsCannotPublishToADevicesUplinkSubject(t *testing.T) {
+	uplink := messaging.DeviceUplinkSubject(permInstance, "acme", "pump-1")
+	require.False(t, ServicePermissions().publishes(uplink))
+	require.False(t, ServicePermissions().publishes(messaging.MqttMsgsSubject(uplink)))
+	for _, area := range []string{"event-sources", "device-management", "command-delivery"} {
+		p, err := AreaPermissions(permInstance, area)
+		require.NoError(t, err, area)
+		require.False(t, p.publishes(uplink), area)
+		require.False(t, p.publishes(messaging.MqttMsgsSubject(uplink)), area)
+	}
+}
+
+// An uncaptured stream grants no fetch/delete permission for a recorder that cannot read it.
+func TestUncapturedReaderHasNoRecorderMessagePermissions(t *testing.T) {
+	p, err := AreaPermissions(permInstance, "outbound-connectors")
+	require.NoError(t, err)
+	name := messaging.StreamName(permInstance, streams.LpwanDownlinkEvents)
+	for _, verb := range []string{"STREAM.MSG.GET.", "DIRECT.GET.", "STREAM.MSG.DELETE."} {
+		require.False(t, p.publishes("$JS.API."+verb+name), "uncaptured stream grants %s", verb)
+	}
 }

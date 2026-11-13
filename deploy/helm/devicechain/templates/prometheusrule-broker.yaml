@@ -105,6 +105,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#brokermqttclientauthlost"
             summary: "the broker is not requesting device client certificates"
             description: "The broker server named by the pod label is not asking MQTT devices for a client certificate, so devices that authenticate by certificate cannot connect. Devices that use a token or a password are not affected. Either the server is running but its MQTT listener stopped requesting certificates (a configuration reload that did not keep the setting, or the broker's own check of its listener keeps failing; its log says which), or the server is not running the DeviceChain broker image, for example after a rollback to the upstream nats image. Check the server's image with kubectl get pod -o jsonpath='{.spec.containers[0].image}'. On the DeviceChain image, restart the server pod, and report the log lines around the last configuration reload. On the upstream image, certificate devices stay refused until the DeviceChain image is restored."
         - alert: BrokerLeadershipImbalanced
@@ -115,7 +116,7 @@ spec:
             min(
               (
                 count by (pod) (
-                  max by (pod, stream_name) (nats_stream_total_messages{namespace="{{ $natsNamespace }}", is_stream_leader="true", stream_name=~"{{ $id }}_(alarm-events|connector-dispatch|connector-dispatch_dead|dead-letters|derived-events|detection-rules-published|device-attribute|device-commands|device-desired|device-ownership|device-roster|entity-deleted|failed-events|geofence-set-manifest|max-deliveries|raise-alarm|resolved-events)"})
+                  max by (pod, stream_name) (nats_stream_total_messages{namespace="{{ $natsNamespace }}", is_stream_leader="true", stream_name=~"{{ $id }}_(agent-actuation-kills|alarm-events|connector-dispatch|connector-dispatch_dead|dead-letters|derived-events|detection-rules-published|device-attribute|device-commands|device-desired|device-ownership|device-roster|entity-deleted|failed-events|geofence-set-manifest|max-deliveries|raise-alarm|resolved-events)"})
                   and on (stream_name)
                   label_replace(max by (stream) ({__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}) > 1, "stream_name", "$1", "stream", "(.+)")
                 )
@@ -127,7 +128,7 @@ spec:
             0.5 * avg(
               (
                 count by (pod) (
-                  max by (pod, stream_name) (nats_stream_total_messages{namespace="{{ $natsNamespace }}", is_stream_leader="true", stream_name=~"{{ $id }}_(alarm-events|connector-dispatch|connector-dispatch_dead|dead-letters|derived-events|detection-rules-published|device-attribute|device-commands|device-desired|device-ownership|device-roster|entity-deleted|failed-events|geofence-set-manifest|max-deliveries|raise-alarm|resolved-events)"})
+                  max by (pod, stream_name) (nats_stream_total_messages{namespace="{{ $natsNamespace }}", is_stream_leader="true", stream_name=~"{{ $id }}_(agent-actuation-kills|alarm-events|connector-dispatch|connector-dispatch_dead|dead-letters|derived-events|detection-rules-published|device-attribute|device-commands|device-desired|device-ownership|device-roster|entity-deleted|failed-events|geofence-set-manifest|max-deliveries|raise-alarm|resolved-events)"})
                   and on (stream_name)
                   label_replace(max by (stream) ({__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}) > 1, "stream_name", "$1", "stream", "(.+)")
                 )
@@ -139,7 +140,7 @@ spec:
             avg(
               (
                 count by (pod) (
-                  max by (pod, stream_name) (nats_stream_total_messages{namespace="{{ $natsNamespace }}", is_stream_leader="true", stream_name=~"{{ $id }}_(alarm-events|connector-dispatch|connector-dispatch_dead|dead-letters|derived-events|detection-rules-published|device-attribute|device-commands|device-desired|device-ownership|device-roster|entity-deleted|failed-events|geofence-set-manifest|max-deliveries|raise-alarm|resolved-events)"})
+                  max by (pod, stream_name) (nats_stream_total_messages{namespace="{{ $natsNamespace }}", is_stream_leader="true", stream_name=~"{{ $id }}_(agent-actuation-kills|alarm-events|connector-dispatch|connector-dispatch_dead|dead-letters|derived-events|detection-rules-published|device-attribute|device-commands|device-desired|device-ownership|device-roster|entity-deleted|failed-events|geofence-set-manifest|max-deliveries|raise-alarm|resolved-events)"})
                   and on (stream_name)
                   label_replace(max by (stream) ({__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}) > 1, "stream_name", "$1", "stream", "(.+)")
                 )
@@ -152,6 +153,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#brokerleadershipimbalanced"
             summary: "one broker server leads far fewer streams than the others"
             description: "At least one broker server leads fewer than half the streams an even share would give it, so the others carry the replication and acknowledgement work for it. Only the streams that dcctl is allowed to move are counted: this instance's replicated streams other than the device-ingest ones (the broker's MQTT streams, the device capture stream and every stream an ingest area writes), which are never rebalanced because a leader change on them can lose messages already acknowledged to a device. After a rolling restart of the broker the server restarted last leads nothing, and at the load this was measured under that doubled publish acknowledgement latency and cost a few percent of HTTP ingest. dcctl upgrade evens leadership out after it rolls the broker, so this fires after a restart done any other way (a node drain, a pod loss, a manual rollout), or when that step was skipped or warned. Run dcctl broker rebalance <instance> to even it out; each move is a brief election for one stream. If it keeps returning, check the broker pods for repeated restarts."
         - alert: BrokerCertificateExpiringSoon
@@ -168,8 +170,9 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#brokercertificateexpiringsoon"
             summary: "the broker's TLS certificate expires within 30 days"
-            description: "The broker server named by the pod label presents a TLS certificate that expires in less than 30 days. When it expires the broker refuses TLS connections from devices and from this instance's own services. The certificate is renewed by dcctl upgrade, which re-issues it inside its last 30 days and swaps it in without restarting the broker when only the certificate changed, so running dcctl upgrade for this instance now clears this alert. If this keeps firing after an upgrade, the broker has not picked the new certificate up; check the server's log, and restart the server pod if it did not switch."
+            description: "The broker server named by the pod label presents a TLS certificate that expires in less than 30 days. When it expires the broker refuses TLS connections from devices and from this instance's own services. The certificate is renewed by dcctl upgrade, which re-issues it inside its last 30 days and swaps it in without restarting the broker when only the certificate changed, so running dcctl install and then dcctl upgrade for this instance now, both with the same dcctl release, clears this alert. If this keeps firing after an upgrade, the broker has not picked the new certificate up; check the server's log, and restart the server pod if it did not switch."
         - alert: BrokerCertificateExpiryCritical
           expr: |
             (
@@ -180,6 +183,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#brokercertificateexpirycritical"
             summary: "the broker's TLS certificate expires within 7 days, or already has"
-            description: "The broker server named by the pod label presents a TLS certificate that expires in less than 7 days, or that has already expired. Once it has expired the broker's TLS connections fail for devices and for this instance's own services. Run dcctl upgrade for this instance now: it re-issues the certificate under the authority the instance keeps. An instance that does not keep its authority (one bootstrapped by an early release) cannot re-issue it in place and has to be rebuilt; dcctl upgrade says so when that is the case. If an upgrade has run and this still fires, the broker has not picked the new certificate up; restart the server pod."
+            description: "The broker server named by the pod label presents a TLS certificate that expires in less than 7 days, or that has already expired. Once it has expired the broker's TLS connections fail for devices and for this instance's own services. Run dcctl install and then dcctl upgrade for this instance now, both with the same dcctl release: it re-issues the certificate under the authority the instance keeps. An instance that does not keep its authority (one bootstrapped by an early release) cannot re-issue it in place and has to be rebuilt; dcctl upgrade says so when that is the case. If an upgrade has run and this still fires, the broker has not picked the new certificate up; restart the server pod."
 {{- end }}

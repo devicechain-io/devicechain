@@ -140,6 +140,10 @@ const (
 	// gatewayNoticeArea tells a gateway that a publish it made for a child was refused (the
 	// resolver's NotGatewayChild verdict): a core publish on the gateway's own notices subject.
 	gatewayNoticeArea = "device-management"
+	// gatewayAcceptArea tells a gateway which of its events the platform has durably accepted
+	// (the capture reader's settle), or shed at the tenant's ceiling: a core publish on the
+	// gateway's own accepts and notices subjects.
+	gatewayAcceptArea = "event-sources"
 	// tenantPurgeArea erases a deleted tenant's data across every stream and bucket.
 	tenantPurgeArea = "user-management"
 )
@@ -235,7 +239,7 @@ func streamGrant(g *grant, instance, area string, st streams.Stream) {
 			for _, d := range messaging.DeclaredDurables(instance, st.Suffix, r) {
 				durableVerbs(g, name, d)
 			}
-			if st.Shape != streams.ShapeAdvisory {
+			if streams.MaxDeliveriesCaptured(st.Suffix) {
 				// The max-delivery recorder fetches the original of a message whose deliveries
 				// ran out, from the stream the area reads, and removes it from a work-queue stream
 				// once its letter is written.
@@ -327,6 +331,10 @@ func controlGrant(g *grant, instance, area string) {
 		g.subscribe(AuthCalloutRequestSubject)
 	}
 	if area == gatewayNoticeArea {
+		g.publish(messaging.GatewayNoticesWildcard(instance))
+	}
+	if area == gatewayAcceptArea {
+		g.publish(messaging.GatewayAcceptsWildcard(instance))
 		g.publish(messaging.GatewayNoticesWildcard(instance))
 	}
 	if area == detectPurgeResponderArea {

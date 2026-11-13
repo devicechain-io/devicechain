@@ -60,6 +60,7 @@ This reads the operator plane and authenticates as an identity, not as a tenant.
 
 func init() {
 	tenantDeletionCmd.PersistentFlags().StringP("server", "s", "localhost", "instance host for platform API calls")
+	addInstanceTargetFlags(tenantDeletionCmd)
 	tenantDeletionCmd.PersistentFlags().Bool("tls", false, "use https for platform endpoints")
 	tenantDeletionCmd.PersistentFlags().StringVar(&tdEmail, "email", "", "identity to authenticate as (required)")
 	tenantDeletionCmd.PersistentFlags().StringVar(&tdPassword, "password", "", "password for the identity (required)")
@@ -78,8 +79,10 @@ func init() {
 }
 
 func runTenantDeletionStatus(cmd *cobra.Command, args []string) error {
-	server, _ := cmd.Flags().GetString("server")
-	tls, _ := cmd.Flags().GetBool("tls")
+	server, tls, err := targetFlags(cmd)
+	if err != nil {
+		return err
+	}
 	if tdEmail == "" || tdPassword == "" {
 		return fmt.Errorf("--email and --password are required")
 	}

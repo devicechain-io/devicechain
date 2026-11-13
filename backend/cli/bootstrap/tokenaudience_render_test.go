@@ -91,15 +91,6 @@ func TestChartDerivesTheTokenAudienceBlockAndTheServicesAcceptIt(t *testing.T) {
 		{"loopback mcp override behind an https ingress",
 			tokenAudienceValues(tlsIngress("iot.example.com"), "full", "http://localhost:8080", nil),
 			"https://iot.example.com/api", []string{"http://localhost:8080"}, nil},
-		{"mixed-case loopback mcp override is left out rather than crash-looping the instance",
-			tokenAudienceValues(tlsIngress("iot.example.com"), "full", "http://LOCALHOST:8080", nil),
-			"https://iot.example.com/api", nil, nil},
-		{"uppercase-scheme loopback override is left out rather than crash-looping the instance",
-			tokenAudienceValues(tlsIngress("iot.example.com"), "full", "HTTP://localhost:8080", nil),
-			"https://iot.example.com/api", nil, nil},
-		{"an mcp override naming a platform area's identifier is left out (the validator would refuse it)",
-			tokenAudienceValues(plainIngress("localhost"), "full", "http://localhost/api/device-management", nil),
-			"http://localhost/api", nil, nil},
 		{"a bare IPv6 loopback host does not parse as loopback and derives no base",
 			tokenAudienceValues(plainIngress("::1"), "telemetry", "", nil), "", nil, nil},
 		{"loopback host with a port derives no base, as the issuer does not",
@@ -212,8 +203,8 @@ func TestHandSetDerivedTokenAudienceKeysAreRefusedOnBothConfigSources(t *testing
 	}
 }
 
-// The authored-document check: a document that omits a deployed mcp's resource warns in observe
-// mode and is refused in enforce mode; one that lists it passes silently.
+// The authored-document check refuses a missing MCP resource and the legacy observe
+// opt-out. A complete enforcing document passes silently.
 func TestAuthoredDocumentMustListMcpsResource(t *testing.T) {
 	// Not parallel: it swaps the package-level warning writer.
 	ch := chartForTest(t)
@@ -239,29 +230,33 @@ func TestAuthoredDocumentMustListMcpsResource(t *testing.T) {
 	if string(missing) == string(good) {
 		t.Fatal("the mutation did not apply; this control would prove nothing")
 	}
-	// Observe (the absent default): a WARNING that prints the block to add, and the deploy
-	// continues. A v1.1-era document cannot carry the block, so refusing here would be a new
-	// refusal in a minor release.
+	// Absent enforcement is enforce from v1.3: the omission is REFUSED at deploy time, naming the
+	// key and the value to add.
 	var warned strings.Builder
 	prev := authoredWarnOut
 	authoredWarnOut = &warned
 	err = validateRenderedInstanceConfig(t.Context(), ch, external(), missing)
 	authoredWarnOut = prev
-	if err != nil {
-		t.Fatalf("observe mode refused a document that omits mcp's resource: %v", err)
+	if err == nil {
+		t.Fatal("a document with no enforcement (enforce by default) omitting mcp's resource passed the pre-flight")
 	}
-	if !strings.Contains(warned.String(), "Warning") || !strings.Contains(warned.String(), `"mcpResources": ["https://iot.example.com/api/mcp"]`) {
-		t.Errorf("the warning does not print the block to add: %q", warned.String())
+	for _, want := range []string{"mcpResources", "https://iot.example.com/api/mcp", "unset", "scheme and host must be lowercase"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
 	}
 
-	// Explicit observe warns the same way.
+	// A legacy explicit observe is refused by the services' strict loader.
 	explicitObserve := []byte(strings.Replace(string(missing), `"tokenAudience":{`, `"tokenAudience":{"enforcement":"observe",`, 1))
+	if string(explicitObserve) == string(missing) {
+		t.Fatal("the mutation did not apply; this control would prove nothing")
+	}
 	warned.Reset()
 	authoredWarnOut = &warned
 	err = validateRenderedInstanceConfig(t.Context(), ch, external(), explicitObserve)
 	authoredWarnOut = prev
-	if err != nil || warned.Len() == 0 {
-		t.Errorf("explicit observe: err=%v warning=%q; want a warning and no refusal", err, warned.String())
+	if err == nil || !strings.Contains(err.Error(), "removed in v1.4") || !strings.Contains(err.Error(), "Remove the key") {
+		t.Fatalf("authored existingSecret document must refuse observe with the fix: %v", err)
 	}
 
 	// NEGATIVE CONTROL: enforce still refuses, and says why.
@@ -280,7 +275,7 @@ func TestAuthoredDocumentMustListMcpsResource(t *testing.T) {
 		t.Errorf("the refusal does not name the key and the value to add: %v", err)
 	}
 
-	// A listed resource is silent in both modes.
+	// A listed resource is silent under the default enforcement.
 	warned.Reset()
 	authoredWarnOut = &warned
 	err = validateRenderedInstanceConfig(t.Context(), ch, external(), good)

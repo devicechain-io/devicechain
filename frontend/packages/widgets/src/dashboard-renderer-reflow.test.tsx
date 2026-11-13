@@ -64,7 +64,7 @@ describe('renderer reflow', () => {
   it('draws the authored layout at 960 px, where 12 cells are 72 px', async () => {
     const c = await draw(960);
     expect((c.firstElementChild as HTMLElement).dataset.columns).toBe('12');
-    expect((c.querySelector('[data-grid]') as HTMLElement).style.gridTemplateColumns).toBe('repeat(12, minmax(0, 1fr))');
+    expect((c.querySelector('[data-grid]') as HTMLElement).style.gridTemplateColumns).toBe('repeat(12, minmax(0px, 1fr))');
     expect(at(c, 'a')).toBe('1 / span 6 | 1 / span 2');
     expect(at(c, 'b')).toBe('7 / span 6 | 1 / span 2');
   });
@@ -78,7 +78,7 @@ describe('renderer reflow', () => {
     const c = await draw(390);
     expect((c.firstElementChild as HTMLElement).dataset.columns).toBe('6');
     const g = c.querySelector('[data-grid]') as HTMLElement;
-    expect(g.style.gridTemplateColumns).toBe('repeat(6, minmax(0, 1fr))');
+    expect(g.style.gridTemplateColumns).toBe('repeat(6, minmax(0px, 1fr))');
     expect(g.style.getPropertyValue('--dc-cell')).toBe('calc((100cqw - 5 * calc(8px * var(--dc-scale, 1))) / 6)');
     expect(at(c, 'a')).toBe('1 / span 6 | 1 / span 2');
     expect(at(c, 'b')).toBe('1 / span 6 | 3 / span 2');

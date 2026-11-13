@@ -768,7 +768,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", namespace=\"$namespace\", durable=~\".+_event-management_.+\"}) or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-management_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
+          "expr": "max by (durable) (sum by (stream, durable) (max by (__name__, stream, durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages|devicechain_[a-z0-9]+_jetstream_consumer_ack_pending_messages\", namespace=\"$namespace\", durable=~\".+_event-management_.+\"}))) or max by (durable) (label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_event-management_.+\"})), \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "{{durable}}"
         }
       ],
@@ -1394,7 +1394,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", namespace=\"$namespace\", durable=~\".+_device-state_.+\"}) or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_device-state_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
+          "expr": "max by (durable) (sum by (stream, durable) (max by (__name__, stream, durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages|devicechain_[a-z0-9]+_jetstream_consumer_ack_pending_messages\", namespace=\"$namespace\", durable=~\".+_device-state_.+\"}))) or max by (durable) (label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_device-state_.+\"})), \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "{{durable}}"
         }
       ],

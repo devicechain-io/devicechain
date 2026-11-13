@@ -193,7 +193,7 @@ dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
 
-运行 `dcctl install` 时，请使用安装该集群时的同样设置，例如 `--ha` 或 `--compact`。集群上有实例运行时，它会拒绝改变这些设置；参见[重新运行安装](./bootstrap.md#re-running-install)。
+两条命令都请使用目标版本自带的 `dcctl`：一个 `dcctl` 只会安装并升级到它自己的版本，如果集群是由更旧的 `dcctl` 安装的，`dcctl upgrade` 会拒绝执行。运行 `dcctl install` 时，请使用安装该集群时的同样设置，例如 `--ha` 或 `--compact`。集群上有实例运行时，它会拒绝改变这些设置；参见[重新运行安装](./bootstrap.md#re-running-install)。
 
 :::note 已测量的内容
 升级曾在本地集群上手动演练：一个以 `--ha` 安装的实例在 MQTT 流量持续运行时被原地升级（四台设备以 QoS 1 发布，合计每秒 20 条消息，`infrastructure.nats.mqttFailClosed` 保持默认的关闭状态），其代理滚动两次，设备在每次滚动后重新连接。在一次演练中，代理已确认的每条消息之后仍被保存（11,009 条中的 11,009 条）。在另一次演练中，11,262 条已确认消息中丢失了 11 条，全部发生在某台代理服务器重启、MQTT 捕获流更换主节点期间。`mqttFailClosed` 关闭时，无论流量大小，每次代理滚动都应预期出现一个类似的短暂丢失窗口；见 [MQTT：平台代理](../reference/transport-matrix.md#mqtt--the-platform-broker)。这些演练是手动进行的。作为发布关卡的自动升级检查在没有流量的情况下运行。
@@ -224,10 +224,16 @@ dcctl upgrade local devicechain --version <new-version>
 并指出需要先运行的 install 命令。它不会自行应用 Operator：
 多实例集群中，升级一个实例时这样做会悄悄连带更新其他实例的控制器。
 
-有一种情况只警告，不拒绝。`dcctl install` 会记录安装定义的发布；
-**手动**安装的 Operator 没有该记录，`dcctl` 无法区分有意手装与被旧 `dcctl` 覆盖。
-它不推翻无法观察的选择，而是打印所需 install 命令后继续。
+操作员检查有一种情况只警告，不拒绝。`dcctl install` 会给它应用的定义打上标识；
+**手动**安装的 Operator 没有该标识，`dcctl` 无法区分有意手装与被旧 `dcctl` 覆盖。
+该检查不推翻无法观察的选择，而是打印所需 install 命令后继续。
 如果你并非手动安装 Operator，应把提示视为原本会发生的拒绝，继续前先运行 `dcctl install`。
+下面的安装检查是另一项，仍然适用：`dcctl install` 从未完成的集群没有安装记录，
+其升级会被拒绝，直到运行过 `dcctl install`。
+
+**升级还会检查 install 已经运行，并且只升级到自身 dcctl 的发布。** Operator 的定义可以在多个发布之间保持不变而控制器已经变化，所以仅检查 Operator 无法发现 `dcctl install` 被跳过。因此 `dcctl upgrade` 还会读取集群中的安装记录（其中记有最后一次完成 `dcctl install` 的 `dcctl` 版本），并在以下情况**拒绝**：该版本早于执行升级的 `dcctl`、某次安装已开始但未完成，或集群没有可用的记录。拒绝信息会指出需要先运行的 install 命令，且不会更改任何内容。在已安装的版本上再次运行升级不会被拒绝，由更新版本的 `dcctl` 安装的集群也不会。从源码构建的 `dcctl` 不参与比较。从本发布起，用更新的补丁版本 `dcctl` 执行普通的 `dcctl upgrade` 也需要先运行 `dcctl install`。
+
+显式的 `--version` 在 `dcctl upgrade` 和 `dcctl install` 中都受同一规则约束，两个方向都是如此。**早于**当前 `dcctl` 的发布会被拒绝，因为它的 chart 和基础设施配置属于它自己的发布，会围绕从未见过这些配置的镜像来规划；要回退，在该发布的说明允许时，请使用旧发布的 `dcctl`。**晚于**当前 `dcctl` 的发布同样会被拒绝，用当前 `dcctl` 去安装也无济于事：安装记录记录的是执行安装的 `dcctl`，而不是传入的 `--version`。请获取新发布的 `dcctl`，用它运行 `dcctl install`，然后再升级。`--version` 等于当前 `dcctl` 的发布和来自你自己的镜像仓库（`--registry`）的标签不受影响。不带 `--version` 的升级只有在实例声明的发布晚于当前 `dcctl` 时才会被拒绝。这两项拒绝都没有跳过选项。
 
 需要查看会改什么时，可以先给任一命令加 `--dry-run`。
 `dcctl upgrade` 从实例记录取得目标集群，不作猜测，并明确输出该集群。
@@ -504,520 +510,641 @@ dcctl bootstrap local devicechain
 
 ## 近期版本 {#recent-releases}
 
-最近三个次版本的说明完整保留，按从新到旧排列。
+此处完整记录最近的三个次版本（`v1.5`、`v1.4` 和 `v1.3`），按从新到旧排列。下方还保留 `v0.27.0` 至 `v0.24.0` 的详细说明。
 
-### v1.2.0 {#v120-upgrade}
+### v1.5.0 — 自动化变更先评审，代理审批绑定登录会话 {#v150-upgrade}
 
-`v1.2.0` 是原地升级，方式见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。本版本更改的 Helm 值不在兼容性策略的覆盖范围内，次版本在本节中说明这一点。
-
-需要处理的事项：
-
-- **了解有两个内存上限变高了。** `device-management` 的上限现在是 512Mi（原为 256Mi）；只要任一事件信封设置处于开启状态，`event-processing` 的上限为 768Mi（原为 384Mi）。两个信封设置都关闭时，`event-processing` 不变。内存请求不变，因此调度不变；每个上限只是 Pod 可使用的上限。参见[内存上限](#v120-memory)。
-- **检查你自己设置的内存上限。** 在 `functionalAreas.<服务>.resources.limits.memory` 下为 `device-management` 或 `event-processing` 设置的上限按原值使用，更高的顶层 `resources.limits.memory` 也是如此。如果你的值低于[服务规格](./bootstrap.md#service-sizing)中对应你的设备规模或事件速率的数字，请调高。
-- **请了解：`device-management` 在内存中保存更多设备群，其内存上限为 768Mi，而不是上面的 512Mi。** 逐设备缓存（`inMemoryCache.perDeviceCacheMiB`）现在每个为 80 MiB，原为 24，因为 24 MiB 只容纳 8,000 至 10,000 台设备。设备群达到该规模或更大时，每个副本现在使用更多内存。如果你自己设置了 `device-management` 的内存上限，请对照[服务规模](./bootstrap.md#service-sizing)中的规则检查。如果你自己设置了 `perDeviceCacheMiB`，则按你的值使用。参见[缓存与代理的规模设定](#v120-sizing-defaults)。
-- **开启事件信封且每秒 16,000 个事件或更高时，请把 `event-processing` 设为约 1Gi。** 768Mi 下限不随速率增长。参见[缓存与代理的规模设定](#v120-sizing-defaults)。
-- **如果代理服务器的工作集处于其软上限，请调高 `nats_memory_limit`。** 默认的 4Gi 从约每秒 12,000 个事件起就会到达该点；处于该点的服务器是变慢，而不是重启。参见[缓存与代理的规模设定](#v120-sizing-defaults)。
-- **`dcctl bootstrap` 现在会拒绝属于另一个集群的本地状态。** 包括 `--dry-run`。如果您在 `dcctl` 之外重建了集群并复用实例名，请先移开 `~/.devicechain/instances/<名称>`；详见[说明](#v120-stale-state)。
-- **检查是否有客户端为本实例不提供的资源申请令牌。** 默认情况下，本版本会统计这类请求以及使用这些令牌的 API 调用，但一律不拒绝。`v1.3` 默认拒绝它们。`infrastructure.tokenAudience.enforcement: observe` 可以在那一个次版本内保留本版本的行为，`v1.4` 会在启动时以及在 chart 的 values schema 中拒绝 `observe`。参见[令牌按其资源进行检查](#v120-token-audience)。
-- **让指定了 `resource` 的 `client_credentials` 请求同时指定 `scope`。** 这样的请求在本版本中会被统计并记录日志，仍然成功，只会在下一个主版本中被拒绝。参见[令牌按其资源进行检查](#v120-token-audience)。
-- **如果你自己编写实例配置**（`instance.existingSecret`），请添加 `infrastructure.tokenAudience`。在 MCP 区域已部署而文档没有列出它的资源时，`dcctl upgrade` 会打印警告，给出需要添加的配置块；当 `enforcement` 为 `enforce` 时则拒绝继续。参见[令牌按其资源进行检查](#v120-token-audience)。
-- **请知悉：滚动升级期间重启的 `v1.1` Pod 将无法启动。**实例配置现在带有 `infrastructure.tokenAudience`，而 `v1.1` 的服务在启动时会拒绝它不认识的键。在配置变更之后、滚动替换它之前被重新调度、驱逐或重启的 `v1.1` Pod，会一直无法启动，直到被 `v1.2` 的 Pod 替换，因此请让滚动升级持续进行，不要中途暂停。已经在运行的 Pod 继续运行。参见[令牌按其资源校验](#v120-token-audience)。
-- **如果你自己设置了 MCP 服务器的 `resourceUrl`，请在强制执行之前把它的 scheme 和主机写成小写。** 参见[令牌按其资源进行检查](#v120-token-audience)。
-- **了解滚动升级期间，配置文件和设备类型的变更会较晚到达已升级的副本。** 参见[滚动升级期间的配置文件变更](#v120-profile-cache)。
-- **请注意：带有载荷解码器的设备类型的上行消息会在一个小型流中等待。** 参见[解码器上行消息与 device-management 中断](#v120-decoder-stream)。
-- **处理新的失败事件原因 `DECODE_FAILED`。** 对 `FailedEventReason` 做穷举 `switch` 的客户端会多看到一个值。参见[新的失败事件原因](#v120-decode-failed)。
-- **预期持续失败的载荷解码器不再灌满失败事件。** 对每个设备类型，每个 `device-management` 副本记录前 20 次解码失败，之后每分钟记录 10 次；其余失败的源消息会被确认（ack），并计为已抑制，不再记录。新增两条告警 `PayloadDecoderFailuresHigh` 和 `PayloadDecoderSuppressing`：请把它们加入告警路由。参见[持续失败的载荷解码器有预算限制](#v120-decoder-budget)。
-- **请注意 `DeviceState.inactivityAlarmTime` 已恢复为 `v1.1.0` 之前的行为。** `v1.1.0` 由 `lastDisconnectTime` 推导该字段，因此对于因断开报告而离线、从未沉默的设备，它也会返回一个时间。现在它重新表示不活跃扫描将设备标记为不活跃的时刻；对于尚未被扫描标记或已重新活跃的设备则为 null。该字段仍已弃用，将在下一个主版本中移除，仍应使用 `lastDisconnectTime`。`v1.2.0` 首次启动会修复 `v1.1.0` 留下的行：清除活跃设备上残留的值，并为不活跃且没有该值的推断设备用 `lastDisconnectTime` 填充。滚动升级仍在进行时，被 `v1.1.0` 的 Pod 标记为不活跃的设备，该字段返回该 Pod 标记它的时刻（从 `lastDisconnectTime` 读取），与 `v1.0.0` 一致。随后第二个迁移会处理第一个迁移运行期间被 `v1.1.0` 写入方持有锁的行，并重试约半分钟。之后仍被持有的行会被记录并保留，读取该字段时仍会得到正确的结果。
-- **只有当每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。**在旧副本仍在提供服务时发布的版本，可能缺少它的解码器；参见[载荷解码器](#v120-payload-decoders)。
-- **请知悉：X.509 证书吊销列表是新增的可选功能。** 升级本身无需任何操作；上传之前请先阅读[吊销列表](#v120-x509-crl)。
-- **升级前检查事件库的剩余空间。** 对已有实例，`dcctl upgrade` 会把事件库的 `max_wal_size` 提高到其卷容量的五分之一（默认 32Gi 时为 6.4 GiB，原为 1 GiB），预写日志现在可以在数据卷上增长到这么大，归档落后时还会更大。该值升高时，升级会打印一条提示；卷的剩余空间小于新值时，会给出警告。要保留原来的额度，请运行 `dcctl upgrade --event-store-max-wal-mib 1024`。参见[事件库的预写日志额度](#v120-event-store-wal)。
-- **如果用随附的看板绘制边缘代理的图表，请以作业名 `dc-edge-agent` 抓取它们。** 看板的进程面板（内存、CPU、goroutine、打开的文件）现在会选择该作业，因此同一台机器上的其他作业不再把自己的进程指标加进某个代理的面板。作业名不同时，这些面板会显示为空。参见[边缘代理看板与抓取作业](#v120-edge-board-job)。
-- **`dcctl sim create` 现在会拒绝未声明所需限额的已有套餐层级。**`--tier` 指向已存在的层级时，`dcctl` 只会提高低于场景或 `--tier-config` 所要求的限额，并且看不到该层级继承的默认值。此前层级中缺失的限额会被读作 0 并设为下限，这可能覆盖层级继承的较大值；现在该层级会被拒绝，并指出缺失的键。请把该键加到层级中（user-management 管理 API 的 `updateTenantTier` 变更），或选择已声明它的层级。在 `v1.1` 上运行 `dcctl sim create --tier-config` 可能会把这类键写入已有的层级，如 `v1.1.0` 的说明所述；从本版本起不再如此。`--tier-config` 中的 `null` 限额同样被拒绝，此前它会被读作 0。参见[其他变更](#v120-other-changes)。
-- **请知悉：broker 滚动之后，`dcctl upgrade` 现在可能以 `upgrade incomplete` 失败。**broker 服务器就绪后，升级会在最长两分钟内重新读取它们的卷声明，如果某个声明的容量仍小于其请求就会失败，因为 broker 的文件存储上限跟随请求值。请完成或撤销该卷的扩容（`kubectl -n <namespace> describe pvc`），然后再次运行 `dcctl upgrade`。参见[其他变更](#v120-other-changes)。
-- **代理重载修复无需任何操作。**配置重载不再断开由认证调用放行的设备。参见[更改代理配置不再断开已连接的设备](#v120-broker-reload)。
-- **请知悉：`POST /{instanceId}/{tenant}/events` 现在可能返回 `500`。** 在构建其消息时被丢弃的事件（它携带的凭据无法密封，或事件无法编码）此前会收到 `202`，却没有在任何地方存储。现在它返回 `500`，事件不会被存储，重试会以同样方式失败；对所有非 `202` 响应都重试的客户端应停止重试该端点的 `500`。参见 [HTTP 接入不再对被丢弃的事件返回 202](#v120-http-build-dropped)。
-
-- **新的 `--size` 选项无需任何操作。** `dcctl bootstrap --size perf-12k` 会应用一套经过实测的高吞吐规格，`dcctl install --size compact` 等同于 `--compact`（后者会保留）。未指定规格的实例渲染结果与之前完全相同。见[规格预设](#v120-size-presets)。
-- **请知悉：`devicechain_eventprocessing_detect_pending_timers` 现在统计已启用的键。** 此前它统计静默或会话规则推入且尚未到期的所有定时器，随事件速率增长；引擎现在为每个已启用的设备只保留一个条目，因此该指标随设备数量变化，静默和会话规则的内存不再随事件速率增长。名称和告警不变；按旧的较大数值调整过的面板或告警阈值可以调低。
-
-#### 检测分片并行运行 {#v120-detect-shards}
-
-event-processing 的 `detectShards` 设置（默认 1，范围 1 到 64）按键拆分检测引擎的状态。在 `v1.1.0` 中各分片依次应用，因此大于 1 的取值结果相同、也没有提速。从本版本起每个分片在各自的 goroutine 中运行，引擎自身的工作可以使用多个核心。无论取何值，检测结果、事件时间时钟和已保存的检查点都完全一致，因此无需迁移，该设置可在任意一次重启时更改或还原。
-
-- **如果 `detectShards` 保持为 1，无需任何操作。** 引擎运行的仍是原来的代码。
-- **如果把 `detectShards` 设为大于 1**，除读取并规划消息的那一个循环外，event-processing Pod 现在最多可为引擎使用该数量的核心。依赖这一点之前请先检查 Pod 的 CPU 限制，并阅读[让引擎使用更多核心](./detection-engine.md#detect-shards)，确认引擎是否真是你的瓶颈。
-- **新增两条告警**：`DetectShardSaturated`（某个分片是检测速度的上限）和 `DetectShardInvariantViolated`（各分片在检查点上意见不一致，检查点被拒绝）。无论取何值都会安装，但只有 `detectShards` 大于 1 时才可能触发。请把它们加入告警路由。同时新增一组 `detect_shard_*` 指标和 `detect_barrier_wait_seconds`；其中两个不带标签的在取 1 时以 0 导出。
-- **内存随 `detectShards` 增长。** 每个分片最多持有 1024 条排队消息，因此已在大于 1 的取值下运行的 Pod，在循环领先于最慢分片时，内存中最多可能积压 `detectShards` 倍于此数量的消息。依赖新设置之前请检查 Pod 的内存限制。
-- **回退**只需用旧值重启。检查点完全相同，没有需要撤销的内容。
-
-#### 内存上限 {#v120-memory}
-
-在 Google Kubernetes Engine 上最高每秒 16,000 个事件的测试中，这两个上限都与服务实测占用量只差一档：
-
-- **`device-management`** 在每个副本中都把整个设备群保存在内存里。其 Go 堆在 6,000 台设备时为 154 MiB，在 12,000 至 16,000 台时为 193 至 218 MiB，而原上限为 256Mi，其软上限（`GOMEMLIMIT`）为 192 MiB。因此约 12,000 台设备的设备群就会触及软上限，更大的设备群则有 Pod 因超出上限而被终止的风险。chart 现在把下限设为 512Mi（软上限 384 MiB）。
-- **开启事件信封的 `event-processing`** 会保存[事件信封](#event-envelopes)中描述的重复防护。在每秒 4,500 至 6,000 个事件时占用 265 至 269 MiB，在每秒 12,000 个事件时占用 388 MiB（Go 堆 353 MiB），而上限为 384Mi，软上限为 288 MiB。在每秒约 8,000 个事件以上，Pod 会被软上限卡住、持续回收垃圾，或被终止。只要 `resolved` 或 `inbound` 之一开启，chart 现在就把下限设为 768Mi（软上限 576 MiB），否则为 384Mi。此前对该防护的估计（每秒 20,000 个事件时约 180 MB）低了三到四倍；更正后的数字见[事件信封](#event-envelopes)。
-
-两者都是下限，仅在本来适用的上限更低时才生效。你在服务上设置的上限，或更大的顶层上限，按原值使用，软上限随实际生效的上限而定。新值 `functionalAreas.<服务>.memoryLimitFloorWithEnvelopes` 保存开启信封时的下限。`dcctl` 会根据它写入的实例配置设置 `eventEnvelopesEnabled`。如果你自己用 `instance.existingSecret` 安装 chart，chart 读不到该配置：开启任一信封设置时，请设置 `eventEnvelopesEnabled: true`。
-
-#### 缓存与代理的规模设定 {#v120-sizing-defaults}
-
-第 30 轮在 Google Kubernetes Engine 上（每秒 8,000 至 20,000 个事件，一台代理服务器）发现，三项随产品发布的大小低于其文档所称的负载。
-
-- **`device-management` 的逐设备缓存是 80 MiB，而不是 24。** 按令牌缓存中一台设备占 2.5 至 3.1 KB，所以 24 MiB 只容纳 8,000 至 10,000 台设备。16,000 台设备时，缓存在 73% 的查找中淘汰了条目，每事件 CPU 在 8,000 至 16,000 台设备之间从每 1,000 个事件 0.048 CPU 秒升到 0.105，20,000 台时读取落到键值桶并超时。`DeviceLookupCacheTooSmall` 从 12,000 台设备起就已触发；它不变。80 MiB 按令牌容纳 27,000 台设备，即规模表所针对的 20,000 台设备再加四分之一余量。其他设备群请把 `inMemoryCache.perDeviceCacheMiB` 设为每 1,000 台按令牌解析的设备 4。规则及其所需的内存上限见[服务规模](./bootstrap.md#service-sizing)和[键值缓存](./observability.md#kv-caches)。
-- **`device-management` 的内存下限是 768Mi（软上限 576 MiB），取代[内存上限](#v120-memory)中的 512Mi。** 上限变大后，所有缓存写满时连同服务约占 370 MiB，512Mi 的软上限（384 MiB）只有其 1.04 倍，768Mi 则是 1.5 倍。下限规则不变：你在服务上设置的上限，或更高的顶层上限，按原值使用。
-- **开启信封时 `event-processing` 的下限仍是 768Mi，并且不随速率增长。** 每秒 8,000、12,000、16,000 和 20,000 个事件时，其 Go 堆为 441、488、511 和 516 MiB（常驻 500 至 571 MiB），软上限为 576 MiB，所以从约每秒 16,000 个事件持续起，它会在上限处回收。请在那里设为约 1Gi（`functionalAreas.event-processing.resources.limits.memory`）。
-- **4Gi 代理内存上限的软上限在约每秒 12,000 个事件时到达。** 一台服务器的工作集在每秒 8,000、12,000、16,000 和 20,000 个事件时为 1.9、3.0、3.8 和 4.8 GiB，而软上限为 3.2 GiB。超过软上限也不会被终止：服务器持续回收，每秒 12,000 个事件时第 99 百分位确认时间在 4Gi 下为 101 ms，在 20Gi 下为 25 ms。当工作集与上限的 80% 相差不到 10% 时就应调高 `nats_memory_limit`，而不只是在 `OOMKilled` 之后；按设计速率每每秒 1,000 个事件取 0.35 GiB。参见[消息代理](./bootstrap.md#broker-sizing)。
-
-#### `dcctl bootstrap` 会拒绝属于另一个集群的本地状态 {#v120-stale-state}
-
-当某个实例名在 `~/.devicechain/instances/<名称>` 下的本地状态记录的是与命令所指向的集群不同的集群时，`dcctl bootstrap`（以及 `dcctl bootstrap --dry-run`）现在会拒绝执行。以前这份记录会被新集群的标识悄悄改写，随后基于旧集群的 OpenTofu 状态和 broker 凭据做规划，之后以无关的信息失败（例如拒绝缩减一个并不存在的 broker 集群）。拒绝信息会列出两个集群并打印修复命令。如果记录的集群已经不在了，请把该目录移到一边；其中有凭据，请保留而不要删除：
+`v1.5.0` 是从 `v1.4.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。**两个命令都使用新版本的 `dcctl`**，并向 `dcctl install` 提供集群原有设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级会运行四项追加迁移：`device-management` 三项，`user-management` 一项。它们添加代理停用屏障和效果发件箱、自动化评审及其强制执行机制，以及执行代次列。参见[模式变更与回退](#v150-going-back)。如果来自 `v1.3.0` 或更早版本，请先阅读 [`v1.4.0` 说明](#v140-upgrade)。
 
 ```bash
-mv ~/.devicechain/instances/<名称> ~/.devicechain/<名称>.stale-state
+dcctl install local --version v1.5.0
+dcctl upgrade local devicechain --version v1.5.0 --dry-run
+dcctl upgrade local devicechain --version v1.5.0
 ```
 
-如果记录的集群仍在运行，请换一个实例名。由不含集群标识的旧版 `dcctl` 写下的记录不会被拒绝。没有 `dcctl` 命令或标志发生变化。
-#### 令牌按其资源进行检查 {#v120-token-audience}
+本版本遵循[版本与升级策略](./versioning-policy.md)，增加受保障接口，不删除任何接口。自动化变更评审、代理提案工具、审批访问和会话内二次验证属于 [Preview 层级](./versioning-policy.md#preview-interfaces)，仍可能在次版本中改变。Helm values 不受兼容性策略保障；新增的可选功能默认关闭。
 
-OAuth 客户端可以在授权请求和令牌请求中用 `resource` 参数申请绑定到某个资源的令牌。此前授权服务器接受任意值，也没有任何 API 检查这种绑定，因此绑定到一个资源的令牌会被所有 API 接受。本版本新增两项检查，**在本版本中，两者默认都只统计和记录日志，不拒绝任何请求**，除非你自己设置了 `enforcement: enforce`。 规则见[令牌受众](../concepts/security-model.md#token-audience)。
+新增内容：
 
-- **授权服务器检查所申请的资源。** 允许的资源包括本实例的 MCP 服务器、各区域位于 `<origin>/api/<区域>` 的 API，以及 `infrastructure.tokenAudience.externalResources` 中列出的资源。检查在授权端点、`client_credentials` 授权和每次刷新时进行。不在列表中的值会计入 `devicechain_usermanagement_oauth_resource_checks_total{verdict="would_reject"}`；仅在授权端点，不是绝对 `https` URL 的值（仅回环主机允许 `http`）和带有多个 `resource` 的请求也会计入。`client_credentials` 授权本来就拒绝这两种情况。
-- **各 API 检查令牌的受众。** 一个区域的 API 接受未绑定的令牌、绑定到该区域的令牌或绑定到 MCP 服务器的令牌。其他令牌计入 `devicechain_<区域>_token_audience_checks_total{verdict="would_reject"}`。通过登录控制台、仪表盘应用、C# SDK 或 `dcctl` 获得的令牌没有绑定，因此不受影响。MCP 服务器对各 API 的调用带有 MCP 绑定，会被接受。
+- **自动化变更可以要求先通过评审（Preview）。** 发布前将草稿与历史记录比较。参见[自动化变更评审（preview）](#v150-automation-review)。
+- **代理审批绑定登录会话（Preview），** 并提供 MCP 提案工具、会话内二次验证和本地停用屏障。参见[代理操作（preview）](#v150-agent-actions)。
+- **`dcctl` 只允许向前升级，** 并记住 MQTT 上行和关系存储 WAL 选择。参见[dcctl 只允许向前升级](#v150-dcctl)。
+- **配置遇到无效值时拒绝启动，API 输入有明确上限。** 参见[配置失败时拒绝运行](#v150-configuration)、[GraphQL 输入限制](#v150-input-limits)和[现有操作的更严格检查](#v150-tightenings)。
+- **LoRaWAN 队列接受不再被记作设备应答。** 参见[LoRaWAN 与命令](#v150-lorawan)。
+- **链路追踪可跨服务跟踪事件，** 默认关闭。参见[可观测性](#v150-observability)。
+- **部分更新保留并发修改。** 参见[保留并发修改](#v150-concurrent-edits)和[其他变更](#v150-other-changes)。
 
-两个计数器都附带一个 `info` 级告警（`TokenAudienceWouldReject` 和 `OAuthResourceWouldReject`），服务日志中还会有限频的警告，写明 OAuth 客户端和租户。读取方法见[令牌受众检查](./observability.md#token-audience-checks)。
+#### 升级前 {#v150-before-you-upgrade}
 
-**`v1.3` 默认拒绝这些请求。** 授权请求会带着 `invalid_target` 被送回客户端的重定向地址，`client_credentials` 请求返回 `invalid_target`，绑定到已不再提供的资源的刷新或授权码返回 `invalid_grant`，`resource` 与其授权码或刷新令牌签发时不同的请求返回 `invalid_target`，API 返回 `401`。因资源已不再提供而被拒绝的刷新令牌会被作废：切回 `observe` 或回退版本可以恢复配置，但恢复不了那个会话，客户端必须重新授权。如果任一计数器有变化，请根据日志行找到该客户端，并修改它发送的 `resource`：省略它，或改用上面列出的值之一。如果你自己的服务用公开的密钥集验证平台令牌，并申请绑定到自身的令牌，请把它的标识符加入 `externalResources`。平台 API 永远不接受绑定到外部资源的令牌，授权服务器的 `userinfo` 端点也不接受。
+需要操作的事项，按执行顺序排列：
 
-- **若要再保留本版本的行为一个次版本**，请在升级到 `v1.3` 之前设置 `infrastructure.tokenAudience.enforcement: observe`。本版本已经接受它，先行设置可以保证滚动期间没有 Pod 执行强制检查。`v1.4` 会拒绝该值：服务在启动时停止并给出指引，chart 的 values schema 也会拒绝它，使 `helm upgrade` 在任何 Pod 滚动之前就停下。
-- **若要提前开启强制执行**，请在本版本中设置 `enforcement: enforce`，这会让 Pod 滚动一次。`v1.3` 自己切换默认值时，滚动期间新旧 Pod 并存，同一个令牌可能在几分钟内被一个副本接受而被另一个副本拒绝。先行设置可以避免这种情况。
+- **升级说明：** 计划向前修复或从备份恢复。`dcctl upgrade` 和重新运行 bootstrap 会拒绝比实例声明版本更早的版本；`dcctl install` 会拒绝比集群上次安装器更旧的 `dcctl`。没有绕过选项。使用目标版本的工具，按集群设置安装，再升级每个实例。
+- **升级说明：** 重启前修正旧版本曾接受的值。chart 模式和 `dcctl` overlay 校验会在渲染时拒绝超出范围的签名密钥天数、负数摄取上限、负数命令交付设置、溢出的秒数设置和格式错误的 LwM2M token。服务启动时也会拒绝。检查 `functionalAreas.user-management.config.auth.signingKeyMaxAgeDays` 和 `signingKeyRetentionDays`：允许范围为 0–106751。`-1` 不再关闭轮换；最大年龄用 `0`（保留期为 `0` 时采用默认的 8 天）。在 `event-sources`、`lwm2m-ingest` 和 `sparkplug-ingest` 中删除负数 `ingestRateLimit.readingsPerSecond` 或 `ingestRateLimit.burst`。在 `command-delivery` 中删除负数 `defaultCommandTtlSeconds`、`heldCommandCeiling`、`sweepIntervalSeconds`、`maxDispatchFailures` 或 `deliveryMachineryReserve`。零或未设置仍采用默认值。
+- **升级说明：** 检查秒数设置不超过 9223372036：`updates.sweepIntervalSeconds`、`updates.deadlines.*`、`deliverySeconds`、`stateRetentionSeconds`、`attemptRetentionSeconds`、`retentionSweepSeconds` 和 `escalationSweepSeconds`。将 LwM2M `deviceTypeToken` 修正为字母、数字、连字符和下划线，且以字母或数字开头，即使 `autoRegister` 关闭也一样；用 `--lwm2m-identities` 传入修正后的身份文件，该选项也会校验。这些检查同样在渲染时执行。`dcctl` 和 chart 默认不会渲染其中大多数设置；受影响的是操作员提供的值，默认安装不受影响。
+- **升级说明：** 检查手写配置中仅在启动时拒绝的内容：负数 `maxOpenConnections` 或 `maxIdleConnections`、大于 65535 的端口、负数 `terminationGracePeriodSeconds`、配置文档后的多余内容（即使只是 `]` 或 `}`），以及会溢出的 `aheadHoldBudgetMillis`。重启前修正。`dcctl` 和 chart 安装通常不会生成这些无效文档。
+- **升级说明：** 发布含有超过 1,000 条已启用检测规则的配置文件前，拆分或禁用部分规则。此类发布现在返回 `LIMIT_EXCEEDED`；`validateDetectionRules` 也会在编译前拒绝超过 1,000 条规则。按[输入限制](#v150-input-limits)和[写入检查](#v150-tightenings)检查 API 调用方。
+- **升级说明：** 完成全部升级后再启用代理操作（Preview）。本版本之前记录的审批不再计数：请重新审批。升级前已登录的人必须刷新 token 或重新登录，其审批才会计数。混合版本部署会拒绝执行：新版 device-management 调用旧版 user-management 时返回 `POLICY_UNAVAILABLE`，新版 user-management 不计入旧版 device-management 提供的未绑定审批。如果租户通过新版 pod 被禁用后在滚动期间重新启用，请通过新版 pod 操作；旧版 pod 不会递增代次，代理操作会一直被拒绝，直到再次通过新版启用。
+- **升级说明：** 完成部署后再为配置文件启用自动化评审保护。在 user-management 升到 `v1.5.0` 前，受保护发布返回 `REVIEW_UNAVAILABLE`；运行评审还需要 event-processing 为 `v1.5.0`。`dcctl` 不会替你安排这些区域的升级顺序。升级不会自动保护任何配置文件。
+- **升级说明：** 新增可选功能只在部署完成后开启，并各自单独进行一次升级：`infrastructure.tracing` 和 MCP 区域的 `agentActuation.enabled`。重启的 `v1.4.0` pod 会拒绝不认识的实例或区域配置键。关闭追踪时整个块会从文档省略，因此默认安全。`--mqtt-device-uplinks` 不在此列：`v1.4.0` 已认识 `mqttDeviceUplinks` 键，新选项只记录选择。
+- **升级说明：** 如果手写实例 id 不符合 chart 语法（小写字母、数字及内部连字符，最多 50 个字符），请计划用合规 id 重建：派生的 broker 或数据库名称可能冲突。服务仍会启动，但记录警告并将各区域的指标（例如 `devicechain_devicemanagement_instance_id_noncanonical`）设为 1。`dcctl` 和 chart 安装原本就符合要求。
 
-chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入 `infrastructure.tokenAudience`。不要在 `instance.config` 下设置 `areaBaseUrl` 或 `mcpResources`：渲染会拒绝。在非 `localhost` 主机上未启用 TLS 的 ingress 没有区域资源，正如它也没有授权服务器。你可以设置的键是 `enforcement`、`unscopedClientCredentials` 和 `externalResources`，参见[配置](../concepts/security-model.md#token-audience-config)。
+新增 Helm values 和 `dcctl` 设置，默认关闭或保持原行为：
 
-**MCP 服务器的注册。** `mcp` 在启动时检查它的 `resourceUrl` 是否列在 `infrastructure.tokenAudience.mcpResources` 中。如果没有，`mcp` 每次启动都会记录一条 Error，并把仪表 `devicechain_mcp_token_audience_registered` 报告为 0，它转发的调用会被计为本应拒绝的请求。在 `enforcement: enforce` 下它会拒绝启动。
-
-- **由 chart 写入配置的实例**：chart 总会把它列入，所以该仪表为 1。例外有两种：显式设置的 `functionalAreas.mcp.config.resourceUrl` 的 scheme 或主机含有大写字母，或者它等于某个平台区域自己的标识符，例如 `<origin>/api/device-management`。列表只接受小写的 scheme 和主机，并且逐字节比较。在 observe 下 chart 会省略这样的值，症状同上；在 `enforce` 下渲染会失败。`mcp` 自身仍接受该值，所以请在 `v1.3` 之前把它改成小写且不是区域标识符的地址。
-- **如果你自己编写实例配置**（`instance.existingSecret`），chart 不会写入该配置块。如果你的文档没有 `tokenAudience` 配置块，或者其 `mcpResources` 没有列出 MCP 服务器的 `resourceUrl`，仪表就停留在 0，只要缺少这一项，每次启动都会重复这条 Error。这会一直持续，直到你添加它。在 MCP 区域已部署时，`dcctl upgrade` 会打印警告并给出需要添加的配置块，在 `enforce` 下则拒绝继续。请添加该配置块，其中 `areaBaseUrl: <origin>/api`，`mcpResources: [<MCP 服务器的 resourceUrl>]`，并更新 `instance.existingSecretChecksum`。
-
-**已弃用：指定了 `resource` 却未指定 `scope` 的 `client_credentials` 请求。** 这样的令牌带有服务账号各角色的全部权限。请随资源一起发送 `scope`（`read-only`，可同时加上 `location`）。带 scope 的令牌只带有该 scope 的读取权限，因此需要写入的集成应改为省略 `resource`。本版本中缺少 scope 本身从不构成拒绝的理由，所以该请求仍然成功。每次都会计入 `devicechain_usermanagement_oauth_unscoped_client_credentials_total`，并连同其客户端记录到日志，它将在下一个主版本中以 `invalid_scope` 被拒绝。在此之前，`infrastructure.tokenAudience.unscopedClientCredentials: enforce` 在启动时会被拒绝。参见[服务账号](../user-guide/service-accounts.md#binding-a-token-to-a-resource)。
-
-**回退。** `v1.1` 的服务在启动时会拒绝 `tokenAudience` 配置块。`dcctl` 渲染的 `v1.1` 配置不含它。如果你自己编写配置，请在回退前删除该配置块并更新 `instance.existingSecretChecksum`。
-
-#### 新的失败事件原因 {#v120-decode-failed}
-
-`FailedEventReason` 新增 `DECODE_FAILED`：载荷解码器拒绝了某个集成的上行消息。错误文本的开头说明了原因（例如 `no_section`、`eval_error` 或 `invalid_output`）。它在第一次投递时即被记录，不会重试，因为相同的上行消息和解码器会给出相同的结果。版本策略允许在次要版本中新增枚举值；对原因做穷举 `switch` 的客户端应处理该值，较旧的 event-management 会把该编号显示为 `UNKNOWN`，并附带 `reasonCode`。`dcctl` 的 `--reason` 接受 `DECODE_FAILED`。
-
-#### 持续失败的载荷解码器有预算限制 {#v120-decoder-budget}
-
-对某个设备不正确的解码器，会在该设备的每条上行消息上失败，而每次失败过去都会产生一条失败事件记录。在流量大的租户上，这会在全平台共用的流里产生大量记录。从本版本起，`device-management` 在写入记录之前，对每个设备类型执行预算限制：
-
-- **记录。** 在每个副本上，对每个租户和设备类型，前 20 次解码失败会记入失败事件（原因为 `DECODE_FAILED`，并归档该上行消息）。之后每分钟再记录 10 次。其余失败的源消息会被确认而不产生记录，并计为**已抑制**。只有在该设备类型已写入 20 条记录之后才会出现已抑制的失败，所以损坏的解码器不会悄无声息。
-- **样本。** 在每个副本上，对每个租户和配置文件，每 10 秒保留一条失败的上行消息，每个配置文件保留最新的 20 条。测试面板可以把其中一条载入解码器测试，得到它在线上时的结果。样本是尽力而为的：无法保存的样本（写入失败，或携带的 JSON 无法重新编码）会计入 `resolve_decode_samples_dropped_total`，其失败仍会被记录。
-- **预算按副本计算，** 因此租户的总量会随副本数增加。没有可配置的选项。
-- **每条上行消息每次投递只计一次。** 配置文件的解码器健康度按分钟汇总已解码、已忽略、失败（已记录）和已抑制（未记录）的上行消息。`payloadDecoderHealth` 中的计数是 `Float` 而不是 `Int`，因为流量大的解码器一周内就会超过 32 位整数；它们是整数，在 2^53 以内精确。`device-management` GraphQL API 上的 `payloadDecoderHealth` 和 `payloadDecoderSamples` 查询是新增的、向后兼容的，并且需要 `device:write`；样本的字节只能通过带 `sampleId` 的 `testPayloadDecoder` 获取，权限相同。健康度记录保留 7 天。
-- **崩溃后计数可能偏少。** 汇总每分钟写入一次，所以崩溃最多丢失一分钟的计数，不会丢失失败事件记录。崩溃后，或失败事件流不可用期间，被重新投递的上行消息可能被计两次。被重新投递的失败总是会被记录，并且仍会消耗预算中的一个令牌。
-- **新增两条告警。** 当 15 分钟内超过 5% 的已解码上行消息失败时触发 `PayloadDecoderFailuresHigh`，当 10 分钟内被抑制的失败超过 50 次时触发 `PayloadDecoderSuppressing`。它们不带租户标签；失败事件索引和配置文件的解码器健康度会指明租户和配置文件。新增指标：`resolve_decode_suppressed_total`、`resolve_decode_samples_dropped_total`、`resolve_decode_health_flush_failures_total`、`resolve_decode_health_lost_total` 和 `resolve_decode_unattributed_total`。
-- **升级时无需任何操作。** 这些表由本版本较早的迁移创建，不会运行新的迁移。早于本版本的副本不会写入健康度或样本，也不会对失败应用预算。
-
-#### 解码器上行消息与 device-management 中断 {#v120-decoder-stream}
-
-带有载荷解码器的设备类型的上行消息，通过专用的流从 event-sources 传给 device-management。该流很小且大小固定（32 MiB），因此默认的 JetStream 卷和已发布的容量表都不会变化。如果 device-management 停止读取，该流在高速率下几秒内就会写满，随后 event-sources 对这些集成的请求返回 503。会重试失败投递的发送方会在该流排空后送达上行消息；不重试的发送方则不会。The Things Stack 的 webhook 仅在启用其可选的 webhook 重试功能（Cloud Plus 功能，任何非 2xx 响应都算一次失败尝试）时才会重试失败的投递，而 ChirpStack v4 的 HTTP 集成没有文档说明任何重试，因此应将其在中断期间发送的上行消息视为不会被重新投递。已被接受（返回 202）的上行消息不会丢失。没有解码器的设备类型的上行消息照常处理，不受影响。请运行多个 device-management 副本（至少足以让重启其中一个不会中断读取），使中断保持短暂。
-
-#### 滚动升级期间的配置文件变更 {#v120-profile-cache}
-
-`device-management` 现在用一个新的键缓存每个设备类型的配置文件解析结果，因此运行本版本的副本不会读取旧副本写入的条目（旧条目不含载荷解码器）。在本版本副本上所做的每次变更都会同时清除两个键下的条目。在**旧**副本上所做的变更只清除旧键，因此已升级的副本会继续提供其持有的内容，直到条目过期。
-
-- **滚动升级进行期间所做的配置文件和设备类型变更，可能需要大约两倍的缓存存活时间才能到达已升级的副本**（按 `metricDefCacheTtlSeconds` 和 `inMemoryCache.ttlSeconds` 默认的 300 秒计，约 10 分钟）。这包括发布、回滚、设备类型更换配置文件以及地理围栏变更。所有副本都运行本版本后，变更会像以前一样立即生效。
-- **只有在每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。** 从旧副本发布的版本不包含该解码器。
-- **此缓存的进程内副本变大了。** 每个副本上限为 32 MiB（原为 4 MiB），因为带有载荷解码器的条目持有其编译后的程序。不带解码器的条目大小不变。该上限由 `inMemoryCache.profileResolutionCacheMiB` 设置，`inMemoryCache.profileResolutionTenantSharePercent`（默认 25）限制单个租户可占用的比例，因此拥有许多大型解码器的租户会被限制在自己的份额内，并先驱逐自己的条目。当某副本的整个缓存已满时，占用最多的租户先让出条目，所以份额以内的租户在更大的占用者还有条目可让时保留自己的条目。租户的份额就是其大型解码器必须共同容纳的空间：一个最大的解码器计约 6 MiB，因此默认的 8 MiB 份额只容纳一个，同一租户同时使用两个时会轮流占用，每次读取都要重新编译解码器。请按租户同时使用的大型解码器数量来设定缓存和份额。当租户的份额（`profileResolutionCacheMiB` x `profileResolutionTenantSharePercent`）低于 7 MiB 时，`device-management` 现在会拒绝启动，7 MiB 是限制所允许的最大解码器的计费大小：更小的份额无法让它保持解码状态，其设备类型的每个事件都会重新编译它。较小的解码器需要的更少。副本会导出 `payload_decoder_compiles_total`，当某副本连续 15 分钟每秒编译超过一次时，chart 会以 `PayloadDecoderRecompileSustained` 告警。如果你自行设置了内存上限，请计入额外的 28 MiB。
-
-#### 载荷解码器 {#v120-payload-decoders}
-
-设备配置文件现在可以携带**载荷解码器**：用表达式写成的规则，把二进制帧、通用 JSON 正文或网络服务器解码出的对象转换成测量。新的[载荷解码器](../guides/payload-decoders.md)指南对它们做了说明，[函数参考](../reference/decoder-functions.md)列出了函数库中的函数和各项限制。升级本身无需做任何事，没有解码器的配置文件行为与以前完全一致。
-
-- **编写和测试包含在本版本中。**控制台的配置文件页面有一个 **Decoder** 选项卡。在 `device-management` 的 GraphQL API 上，`setDeviceProfileDecoder` 和 `clearDeviceProfileDecoder` 写入配置文件的草稿解码器，`testPayloadDecoder` 在不存储任何内容的情况下对一个输入运行解码器，`payloadDecoderFunctions` 列出函数库。`DeviceProfile.decoder` 和 `DeviceProfileVersion.decoder` 是新增的可空字段。以上全部是增量变化。
-- **对实时上行的解码已包含在本版本中。**当[入站集成](../guides/inbound-integrations.md)上行所属的设备，其设备类型的配置文件版本带有解码器时，`device-management` 会用该解码器解码这条上行，网络服务器解码出的内容不会被存储。event-sources 会把设备类型的解码器查询结果记住约一分钟，因此在你发布解码器之后的一分钟内，上行仍可能按网络服务器解码出的内容存储。没有解码器的设备类型的上行照旧存储。上行在被接受时计入租户的接入额度：至少是解码器的最大读数数（集成存储链路指标时再加 3），运行代价高的解码器更多，且最多 256。如果期间发布的解码器产生了更多读数，这些读数仍会被存储，`device-management` 会统计超出的部分。解码失败的上行不会存储任何内容，而是被记录为原因为 `DECODE_FAILED` 的失败事件；参见[新的失败事件原因](#v120-decode-failed)。集成端点现在还会向 `device-management` 询问设备的类型是否有解码器，无法得到答复、且没有记住最近 15 分钟内的答复时返回 `503`，而不是存储本应由解码器产生的读数。如果 `device-management` 还不认识这个查询（滚动升级期间可能出现），上行照旧存储。
-- **发布取决于解码器。**带有解码器的配置文件，只有在解码器能针对该版本的指标编译、且所有已保存的测试向量都通过时，才能发布或回滚到该版本。没有解码器的配置文件不受影响。
-- **迁移是增量的。**它为设备配置文件增加一个可空列，以及两张由 `device-management` 写入解码器健康度与失败样本的表（参见[持续失败的载荷解码器有预算限制](#v120-decoder-budget)）。旧副本不会读取它们。
-- **测试入口按副本限速。**`testPayloadDecoder` 允许每个租户在每个 `device-management` 副本上每秒 10 个请求，突发 20 个，因此租户的总速率会随副本数增加而提高。超出限制的请求会以 `RATE_LIMITED` 被拒绝。
-- **滚动升级期间，只有当每个 `device-management` 副本都运行本版本之后，才发布解码器。**由旧副本处理请求时发布的版本，会在没有解码器的情况下被冻结，因为该副本不认识这个字段。升级完成后，请检查你发布的版本上是否存在 `DeviceProfileVersion.decoder`，如果没有，请重新发布。
-
-#### X.509 吊销列表 {#v120-x509-crl}
-
-租户现在可以把证书颁发机构的吊销列表（CRL）存放到信任锚上，每个信任锚也有了吊销模式。没有列表、也没有手动吊销的信任锚，行为与以前完全一致。
-
-- **CRL 通过 GraphQL 或流式 `PUT` 上传**，平台会用信任锚校验其签名。可接受的大小由固定设置 `deviceManagement.callout.revocation.maxCrlBytes` 决定（默认 2 MiB，最大 32 MiB）。**请按 Pod 的内存上限来设定它。** 校验 CRL 需要整体解析，一次上传的堆内存峰值约为 CRL 大小的 20 到 30 倍：2 MiB 的列表需要 40 到 65 MiB，包含 300,000 条记录的 7 MB 列表约需 190 MiB。`maxConcurrentWrites`（默认 1）是单个副本同时处理的上传数。
-- **较旧的 CRL 永远不能替换较新的 CRL**，即使列表已被删除也一样：平台会保留每个颁发者已接受的最高 CRL 编号。**删除信任锚会连同这些编号、它的列表和列表中的条目一并丢弃**，因此用同一个 CA 重新创建的信任锚会从头开始，并会接受此前被拒绝的 CRL。只有在没有任何凭据和配置档案依赖某个信任锚时，才能删除它。
-- **只要信任锚上还有手动吊销，删除它就会被拒绝。** 请先取消吊销（`unrevokeDeviceCertificate`）；这些是您自己的决定，不会被静默丢弃。
-- **`REQUIRE_CURRENT` 按信任锚自行选择启用。** 如果信任锚没有任何有效列表，或者某个已注册证书的颁发 CA 没有有效列表，平台会拒绝切换到该模式，因为切换后所有此类设备都会被拒绝。
-- **滚动升级期间**，尚未替换的副本在回答代理的授权回调时不检查吊销，因此吊销只有在滚动完成后才会在各处生效。回退到 `v1.1.0` 时这些表保留但不再被读取：吊销将不再生效。
-
-#### 事件库的预写日志额度 {#v120-event-store-wal}
-
-事件库的 `max_wal_size` 现在是其卷容量的五分之一，且不低于 Postgres 自带的 1 GiB；升级会按已有卷的大小把它应用到已有的事件库。默认 32Gi 时为 6.4 GiB，而升级后的实例原来是 1 GiB。`max_wal_size` 是检查点触发频率的目标值，既不是上限，也不是预留：检查点跟不上或 WAL 归档落后时，日志会超过它。但日志位于数据卷上，所以已经接近写满的事件库能让出的空间不到这么多，归档长时间停滞时占用的空间还可能超过该值。
-
-- **该值升高时，`dcctl upgrade` 会告知。** 计划中会打印一行，写明旧值和新值。它还会读取事件库卷的剩余空间，在剩余空间小于新值或无法读取时打印警告。它不会拒绝执行：剩余空间少的事件库在当前速率下可能完全健康，剩余空间的读取只是尽力而为，而补救办法只需一个标志。
-- **要保留较小的额度**，给升级加上 `--event-store-max-wal-mib`，例如 `dcctl upgrade local devicechain --event-store-max-wal-mib 1024` 即保留原来的 1 GiB。可先用 `--dry-run` 查看效果。省略该标志时，之后的升级会保留此值；`--event-store-max-wal-mib 0` 则恢复为推导出的值。`--event-store-checkpoint-timeout` 以同样方式设置检查点间隔（默认 `15min`；传入空值 `--event-store-checkpoint-timeout=""` 即恢复默认）。`dcctl` 会在应用变更之前就记录这两个值，因此升级中途失败后不带这些标志再次运行时，它们仍会保留。两者都通过重新加载生效，事件库无需重启。`dcctl` 把它们记录在实例 OpenTofu 状态旁边的 `zz-dcctl-event-store.auto.tfvars.json` 中，位于执行升级的那台机器上；参见[事件库调优](./tuning-an-instance.md)。
-- **如果你自己管理实例的 OpenTofu**，照旧设置 `timescale_max_wal_size_mib` 和 `timescale_checkpoint_timeout`。
-
-#### HTTP 接入不再对被丢弃的事件返回 202 {#v120-http-build-dropped}
-
-HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建入站消息时被丢弃的事件返回 `202 Accepted`：这类事件包括所携带的凭据无法密封，或事件无法编码。调用方被告知数据已安全，实际上它没有存储在任何地方。从本版本起，端点对这些事件返回 `500 Internal Server Error`，不带 `Retry-After`，响应中也不包含原因。
-
-- **如果没有客户端看到 `500`，则无需任何操作。** 这些情况是服务上的实例密钥缺失或失败，或事件无法编码，正常运行中都不会出现。
-- **对所有非 `202` 响应都重试的客户端，不应重试该端点的 `500`：** 同一请求会以同样方式失败。`503`（无论是否带 `Retry-After`）和 `429` 的含义不变。
-- **新增计数器 `total_msg_build_dropped{source,cause}`**，在所有传输上统计这些丢弃，`cause` 取 `no_tenant`、`no_transit_key`、`seal_failed` 或 `marshal_failed`。它为每个已配置的来源导出初值 0。任何大于 0 的值都表示有事件未被存储。
-- 集成端点在消息被丢弃时仍保留文档中说明的 `202`。
-
-#### 规格预设 {#v120-size-presets}
-
-`dcctl bootstrap` 新增了 `--size` 选项，`dcctl install` 接受 `--size base` 和 `--size compact`。不传就没有任何变化：未指定规格的实例渲染结果与此变更之前逐字节一致，`--compact` 的行为与之前完全相同。
-
-- **`perf-12k` 是第一个规格。** 它设置五个繁忙服务的副本数、CPU 与内存，Broker 的请求与内存上限，JetStream 与事件库的卷，以及事件库预写日志的额度，这些数值来自一个在开启事件信封的情况下持续每秒 12,000 个事件的集群。具体数字见[选择规格](./sizing.md#perf-12k)。
-- **已有的紧凑实例会在下次写入时获得 `spec.size: "compact"`。** 用 `--compact` 构建的实例，其声明会在 `dcctl` 下次写入时（升级会写入）连同 `compact: true` 一起写上规格名；实例本身没有任何变化。
-- **它记录在实例上**（声明中的 `spec.size`，base 时为空），每次 `dcctl upgrade` 都会重新应用。某个版本如果调整了某个规格，用该规格记录的实例会在下一次升级时随之改变，并在此说明。
-- **你自己的设置优先。** 从低到高：Chart 默认值、规格、`dcctl` 自己算出的内容、你的 `--values` 覆盖文件，最后是你自行声明的 OpenTofu 变量。见[哪个值优先](./sizing.md#precedence)。
-- **它不会开启别的东西。** 规格不会开启事件信封或 MQTT 故障关闭确认；与 `--ha` 同用时，会提示这种组合尚未实测。
-
-#### 边缘代理看板与抓取作业 {#v120-edge-board-job}
-
-边缘代理看板的进程面板除选择代理外，还选择 `job="dc-edge-agent"`。`agent` 是机器上采集器的全局外部标签，因此如果采集器还抓取了机器上的其他进程（例如 node exporter），那个进程的内存、CPU、goroutine 和打开的文件就会被加进每个代理的面板。文档中的抓取配置已使用 `job_name: dc-edge-agent`，按它导入的看板无需改动。如果您给作业起了别的名字，请在采集器中改名，或把看板上五个进程与运行时查询（`process_*` 和 `go_goroutines`）改成您的作业名。请从 `backend/edge/dc-edge-agent/dashboards/edge-agent.json` 重新导入看板以应用此变更。
-
-#### 更改代理配置不再断开已连接的设备 {#v120-broker-reload}
-
-过去，更改代理配置会关闭认证调用放行的所有连接，其中包括所有用用户名认证的 MQTT 设备。代理的 `nats-server` 库把这些连接当作已不存在的用户，在任何配置重载时都会关闭它们，即使重载并未改变任何内容。设备会自行重连，但一次滚动或一次设置更改就会带来一波重连。现在代理基于包含该修复的 `nats-server` 构建，重载会应用新配置并保持这些连接。
-
-- **无需任何操作。**只要升级改变了代理的镜像或配置，`dcctl upgrade` 仍会滚动代理；滚动会重启 pod 并像以前一样断开其设备。变化的是不重启的重载，例如仅更改设置。
-- **续期的 TLS 证书**行为不变：它会在不重载的情况下应用于新连接。
-
-#### 本版本的其他变更 {#v120-other-changes}
-
-除上面列表中的两项 `dcctl` 变更外，这里的内容都不需要你采取行动。每一项都是对已发布功能的修复或补充。
-
-- **`dcctl sim create` 与层级。**`--tier` 指向已存在的层级时，该层级必须声明场景或 `--tier-config` 所列出的每一项限额，否则 `create` 会拒绝并指出缺失的键：`dcctl` 只会提高限额，看不到继承的默认值。由 `create` 自己创建的层级不受影响。`--tier-config` 中的 `null` 会被拒绝，而不再被读作 0。
-- **`dcctl upgrade` 与 broker 的卷。**如果某个声明唯一未完成的步骤是扩容的文件系统部分，并且它的 broker 服务器 Pod 已不存在，升级不再永远被拒绝：升级重新创建的 StatefulSet 会完成这次扩容。正在进行的扩容、没有扩容记录却容量不足的声明、节点侧扩容失败以及仍存在的 Pod，依然会导致拒绝。滚动结束后，升级会按上面列表所述检查这些声明。不带 `--mqtt-host` 的 `dcctl upgrade --mqtt-exposure <模式>` 会沿用实例已记录的主机；若没有记录，仍会被拒绝。
-- **`dcctl sim`。**`dcctl sim status`、`start` 和 `stop` 在输出到终端时会缩进控制 API 的 JSON；管道输出不变。模拟设备群可以运行空中升级的设备端（`--ota`，并可注入错误哈希、错误签名、中断的下载和离线设备）。
-- **当实例不是默认实例时，`dcctl bootstrap` 和 `dcctl sim create` 会给出更多信息。**bootstrap 摘要中的 `GraphQL:` 行现在与 `Console:` 行使用相同的主机和端口，此前它会省略非默认端口。当 `--instance` 仍是默认值 `devicechain`，导致 `dcctl sim create`（或 `sim destroy`）无法读取超级用户密码时，错误信息现在会附上本机已记录的实例，并建议使用 `--instance <name>`。标志、默认值以及命令作用于哪个实例都没有变化。
-- **`dcctl bootstrap` 和 `dcctl upgrade` 多打印一行**：当 MQTT 接入路径未设置为失败即关闭时，提示在持续过载下已确认的事件可能被丢弃，并给出 `--mqtt-fail-closed`。你不操作就不会有任何变化。
-- **`dcctl broker rebalance` 让最繁忙的两个逐事件流保持在不同服务器上。**broker 滚动之后，`resolved-events` 与固定的接入流的 leader 可能落在同一台服务器上，按流数量均衡看不出这一点。该步骤现在会在有可用服务器时，把 `resolved-events` 移到不领导任何逐事件流的服务器上，其摘要会把它报告为已分离、共享或未确认。v1.0 摘要中的字段保持不变。
-- **事件库：早于刷新策略覆盖范围的历史数据。**日期早于 `bucketedMeasurements` 背后的汇总所刷新的最近 30 天的读数（先存后发、回填），此前会被存储并由 `measurementEvents` 返回，却从未进入汇总。现在每小时一次的清扫会刷新它，因此这类读数大约一小时内就会出现在分桶查询中。没有架构变更。
-- **禁用或删除设备会可靠地结束它的 broker 会话。**以前，结束会话只是在变更保存后尝试一次；如果 broker 没有确认，只能靠重复调用来重试。现在它会与变更一起排队并在后台重试，与凭据吊销已有的做法一致，重新启用设备会撤回尚未执行的结束请求。
-- **表示“请重试”的命令入队失败。**当平台因所需服务不可用而无法决定一次入队（校验关卡、归属查询、分组成员关系、维护窗口计划）时，GraphQL 错误会带上 `extensions.code: UNAVAILABLE`。消息不变，它仍是错误，而不是拒绝。
-- **检测：由死人开关撤防而清除的告警，不再停留在触发状态。**此前如果之后没有新消息就遇到检查点或引擎任期结束，待发布的 Resolved 会丢失；现在会先发布。
-- **事件信封（可选）：消息已从流中被淘汰的轮次会被跳过**并计数（`envelope_rounds_evicted_total`、`resolve_envelope_rounds_evicted_total`），遍历池占满也不再阻止服务关闭。
-- **新增两条告警**：`SparkplugIngestLeaderMetricAbsent` 和 `Lwm2mIngestLeaderMetricAbsent`。已部署的边缘接入服务如果不导出 leader 序列，原有的 leader 数量告警会保持沉默。请把它们加入你的告警路由。图表中新增两块 Grafana 看板，分别用于 Sparkplug 和 LwM2M 接入；仓库还附带一个边缘代理的仪表盘文件；参见 [Grafana 看板](./grafana-boards.md)。
-- **控制台**在设备有未完成命令时会轮询其命令状态，告警值的格式与仪表盘一致，自动化画布的缩放控件会应用主题，设备配置文件列表以名称为首。
-- **严格 CSP 宿主中的仪表盘。**`configureStrictCsp`（默认关闭，因此不会有变化）让看板回放包可以在 `style-src 'self'` 下运行；参见[编写自定义小组件](../guides/writing-a-custom-widget.md)。
-- **基础设施。**未设置 `nats_mqtt_capable_users` 时，OpenTofu 的 broker 模块不再写出会被 broker 拒绝的空 `allowed_connection_types`；事件库备份的证书修复器会监视运营商配置的命名空间。
-- **`dcctl upgrade` 现在接受 `--yes`（`-y`），与 `dcctl install` 和 `dcctl bootstrap` 一致，并能找到用 `--escrow-file` 写出的托管文件。**`--yes` 表示对提示一律回答是；升级不会提问，所以它不改变任何行为，脚本现在可以把它同时传给这三个命令。`dcctl bootstrap --escrow-file` 会记录托管文件的写入位置，升级的根密钥托管检查会到那里查找，因此对于托管文件位于自定义路径的实例，不再报告“没有托管”。对于更早创建的实例，请给升级传一次 `--escrow-file`，它会记录该路径。
-
-#### 架构变更与回退 {#v120-going-back}
-
-五个迁移追加了以下内容。每个新列都允许为空，因此运行在新架构上的 `v1.1.0` 服务写入的行仍然可以存储。
-
-- **X.509 吊销**（`device-management`，迁移 `20261105100000`）。四张新表：`device_revocation_issuers`、`device_revocation_lists`、`device_revoked_certificates` 和 `device_credential_chain_links`。四个新列：`device_trust_anchors` 上的 `revocation_mode`、`revocation_stale_grace` 和 `revocation_rows`，以及 `pending_session_kicks` 上的 `not_before`。已有的信任锚的 `revocation_mode` 保持为空，按 `ENTRIES` 读取：证书只有列在名单上才会被拒绝。
-- **载荷解码器**（`device-management`，迁移 `20261110120000`）。两张新表 `profile_decoder_healths` 和 `profile_decoder_samples`，以及一个新列：`device_profiles` 上的 `decoder_declaration`。
-- **投影存储**（`device-state`，迁移 `20261104120000`）。不新增表或列，只为 `device_states`、`latest_measurements` 和 `latest_locations` 设置存储参数（填充因子 75 和 autovacuum 阈值）。已有的行只有在其页面被重写时才获得填充因子留出的余量，因此升级后的实例会缓慢感受到这一变化。
-- **放置表**（`user-management`，迁移 `20261105120000`）。三张新表：`iam_partition_config`、`iam_vpartition_assignments` 和 `iam_tenant_vpartition_overrides`。迁移本身不写入任何行；`user-management` 首次启动时会写入默认放置（`iam_partition_config` 一行和 `iam_vpartition_assignments` 64 行），并在消息 broker 中创建 `dc_partition_placement` 存储桶。
-- **不活动告警时间修复**（`device-state`，迁移 `20261106120000`）。不改变架构，只对 `device_states` 中的 `inactivity_alarm_time` 做仅数据修复，每批 5,000 个，恢复该列在 `v1.1.0` 之前的内容。回退到 `v1.1.0` 时无需撤销。
-
-除这份默认放置外，新表一开始都是空的。**回退到 `v1.1.0` 时，数据库中无需撤销任何内容：** 新的表、列和存储参数留在原处，`v1.1.0` 的服务会忽略它们，只有一个例外：见下文的租户删除。能向前走就向前走：升级失败时，再次运行 `dcctl upgrade` 即可修复。回退所需的配置变更，参见[令牌按其资源受到检查](#v120-token-audience)。
-
-**当运行租户删除的是 `v1.1.0` 的 `user-management` 副本时，删除会被卡住。** `v1.1.0` 的副本不认识这三张放置表，它的关系型清除在遇到无法归类的表时会拒绝运行。只要由它执行清除，关系型存储就会为该删除报告错误，日志和账本失败记录中会点出 `iam_partition_config`、`iam_vpartition_assignments` 或 `iam_tenant_vpartition_overrides`，同时 `tenant_purge_store_blocked{store="rdb",reason="error"}` 大于零。被拒绝的这一步不会从数据库删除任何内容，也不会丢失任何数据；其他存储在同一轮中照常被清除。删除无法完成：租户保持在 `purging` 状态。运行本版本的副本会在下一轮接手，并在其通常的检查满足后完成。滚动升级期间，最后一个 `v1.1.0` 副本消失后会自行完成；回退到 `v1.1.0` 后则一直被卡住，直到你再次向前升级。条件允许时，请在升级完成后再发起删除。
-
-### v1.1.0：摄取每个事件更省 CPU，集群外的设备可通过 MQTT 接入 {#v110-upgrade}
-
-`v1.1.0` 是从 `v1.0.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及 `--version`。升级时会运行两个追加的迁移（一个在 `event-management`，一个在 `device-state`）；每个迁移只新增一张表，不改写任何现有行。`Instance` 的新字段（参见[集群外的设备](#v110-mqtt-exposure)）随 operator 一同发布，由 `dcctl install` 更新，因此请如上所述先运行它，再升级实例。如果从 `v0.27.0` 或更早版本升级，请先阅读 [`v1.0.0` 的说明](#v100-upgrade)，并在其中使用 `--version v1.1.0`。
-
-```bash
-dcctl install local --version v1.1.0
-dcctl upgrade local devicechain --version v1.1.0 --dry-run
-dcctl upgrade local devicechain --version v1.1.0
-```
-
-适用[版本与升级策略](./versioning-policy.md)。本版本扩充了受保护的接口（新的 `dcctl` 命令与标志、新的 GraphQL 查询、新的 `Instance` 字段），没有移除任何接口。有一个 GraphQL 字段已被[弃用](#v110-deprecations)，并保留到下一个主版本。
-
-需要采取的行动，按执行顺序如下：
-
-- **请了解：按事件计的流现在按故障缓冲时长定容。** `inbound-events`、`resolved-events` 和设备捕获流现在按“设计速率下若干分钟的事件量”定容，而不再是固定的 1 GiB。使用 chart 默认值时，上限不变。如果设置了 `streamDesignRate`，升级会原地增大这些上限，JetStream 卷必须容得下结果；`dcctl` 会在写入任何内容之前对照卷检查预留量，并指出缺口。参见[流按故障缓冲时长定容](#v110-runway)。
-- **除非明确要求，否则会拒绝调低流的上限。** 如果你的值文件把某个上限设得低于该流当前的数据量，代理管理器会停止并指出该流和缺口。参见[这一保护](#v110-shrink)。
-- **检查所有使用平台服务登录名连接 MQTT 监听器的工具。** 自本版本起，只有 `event-sources` 自己的登录名可以通过 MQTT 认证；其余静态平台登录名仅限使用代理的原生协议。设备不受影响。参见[升级说明](#v110-upgrade-notes)。
-- **请了解：重新运行 `dcctl bootstrap` 现在会保留代理的证书颁发机构。** 以前每次重新运行都会生成新的。如果你依赖重新运行来轮换它，现在不会再轮换。参见[升级说明](#v110-upgrade-notes)。
-- **请了解：`device-state` 的 `projection.maxBatch` 现在默认为 64**（原为 32）。如果你已自行设置，则不受影响。参见[升级说明](#v110-upgrade-notes)。
-- **如果有客户端读取 `DeviceState.inactivityAlarmTime`，请改用 `lastDisconnectTime`。** 参见[弃用](#v110-deprecations)。
-- **事件信封和 MQTT 对外暴露默认关闭**，升级时无需任何操作。要使用它们，请参见[事件信封](#v110-envelope)和[集群外的设备](#v110-mqtt-exposure)。
-- **更新告警路由。** 新增四个告警，变更两个。参见[告警](#v110-alerts)。
-- **更新读取 `kubectl get dci` 的脚本。** 列已变化。参见[实例上报观测到的状态](#v110-status)。
-- **安装 .NET SDK 8.0.427**，如果你自行构建 C# SDK 或演示项目。参见[较小的变更](#v110-smaller)。
-- **回退。** 参见[回退](#v110-going-back)。
-
-#### 摄取每个事件消耗的 CPU 更少 {#v110-ingest}
-
-事件写入器现在会把批次填满。一个 Pod 的十个写入器过去各自从一个共享通道收集自己的批次，因此一个批次只有寥寥几个事件，等待时间几乎没有带来任何好处。现在，一个 Pod 内各写入器之间的收集是串行化的：同一时间只有一个写入器持有收集权，且仅在它接收消息期间持有，并在解码、租户准入和提交之前释放，因此这些步骤仍然并行。因此 `event-management` 和 `device-state` 的批量都大幅增加。`device-state` 还通过共享数据库层中新增的按列数组 upsert 模式，把热点 upsert（心跳、加锁或创建、合并后的回写、最新测量值和最新位置）按每批一条语句写入，每列一个数组。该模式从请求上下文绑定租户，要求冲突目标包含租户列，并依据允许列表语法校验其更新保护条件，因此它与其旁边的插入具有相同的租户隔离。
-
-在 Google Kubernetes Engine 的 `us-east4-b` 区域测量，两列使用相同的负载形态和相同的测试工具：三个服务节点（`t2d-standard-4`）、三个数据库节点（`n2d-standard-4`）、一个负载生成器节点（`n2d-standard-4`），代理（上游原版，未做修改）运行在由三个私有 `t2d-standard-4` 节点组成的独立节点池上（为代理设置了污点）；启动盘为 100 GB 标准持久化磁盘，默认存储类为 `premium-rwo`，实例通过 `dcctl install --ha` 和 `dcctl bootstrap --no-tls --no-escrow` 安装，事件信封关闭，失败即关闭的 MQTT 确认关闭；混合负载为 500 台 HTTP 设备（每台 5 事件/秒，共 2,500 事件/秒）、1,500 个 MQTT over TLS 会话（每个 1 事件/秒）、500 台检测背景设备（每台 4 事件/秒，共 2,000 事件/秒）外加探针，以及命令（约 6,200 事件/秒入库），取 15 分钟稳态窗口。第一列不是已发布的 `v1.0.0` 镜像，而是主分支上写入器变更之前的最后一个构建。在代理与服务共用节点的形态下，该构建的测量结果与 `v1.0.0` 候选发布版相同；表中采用独立节点池形态，该次运行中代理的 CPU 因领导者分布不均而只是上限。
-
-| 混合负载，约 6,200 事件/秒 | 之前（写入器变更前的最后一个构建） | v1.1.0 |
+| 值 | 默认值 | 作用 |
 | --- | --- | --- |
-| 每 1,000 个事件的平台 CPU | 2.60 CPU 秒 | 2.06 CPU 秒（降低 21%） |
-| 每 1,000 个事件的关系型数据库 CPU | 0.402 CPU 秒 | 0.241 CPU 秒（降低 40%） |
-| 每 1,000 个事件的事件存储（TimescaleDB）CPU | 0.377 CPU 秒 | 0.193 CPU 秒（降低 49%） |
-| 每 1,000 个事件的 `device-state` CPU | 0.154 CPU 秒 | 0.064 CPU 秒（降低 58%） |
-| 每条 `INSERT` 写入 `events` 的行数 | 8.4（代理位于服务节点上时测得） | 41.9 |
-| 持久化延迟，中位数 / 第 99 百分位 | 21 ms / 167 ms | 17.6 ms / 107 ms |
+| `instance.config.infrastructure.tracing.enabled` | `false` | 启用 OpenTelemetry 追踪；关闭时从实例文档省略该块。 |
+| `instance.config.infrastructure.tracing.protocol` / `endpoint` / `insecure` | `grpc` / `""` / `false` | 通过 `grpc` 或 `http` 导出 OTLP，指定收集器端点和传输安全设置。 |
+| `instance.config.infrastructure.tracing.samplingRatio` | 未设置；启用时为 `0.1` | 基于父 span 的采样；允许显式 `0`。 |
+| `functionalAreas.mcp.config` 下的 `agentActuation.enabled` | 未设置（`false`） | 注册 MCP 提案工具；仍受 user-management 实例开关和租户策略约束。 |
+| `--mqtt-device-uplinks` / `spec.mqttDeviceUplinks` | 未设置；没有既有选择时关闭 | 记录 MQTT 上行选择；`=false` 关闭，省略则保留已记录选择。 |
+| `dcctl install --relational-store-max-wal-mib` | 省略保留记录；无记录保留旧行为 | 记录关系存储的 `max_wal_size`；`0` 恢复 PostgreSQL 默认值，否则至少 64 MiB。 |
 
-持久化延迟没有上升。未在此配置下重复测量的项目（例如 3,000 个会话的纯 MQTT 负载）不在此列。
+#### dcctl 只允许向前升级 {#v150-dcctl}
 
-在相同的形态下（每一步使用各自全新的租户，预热 3 分钟，在 11 分钟稳态窗口内测量），MQTT over TLS（每个会话每秒一个事件）在 5,250 事件/秒以内，确认时间的第 99 百分位保持在 50 ms 以下，到 6,000 事件/秒时超过（整个运行期间为 60.1 ms；稳态窗口内每 10 秒第 99 百分位的平均值为 55.7 ms）。此时最繁忙的资源是一台代理服务器，服务节点和数据库节点仍有富余。这些都是单次运行，数字描述的是这一形态，而不是容量保证。
+不支持降级。Upgrade 和重新运行 bootstrap 会拒绝比实例声明版本更早的版本，install 拒绝比上次集群安装器更旧的工具，且没有绕过选项。升级失败时，用新版本工具重试、向前升级到修复版本，或从备份恢复。发布镜像仓库的别名现在与标准写法采用相同的版本前缀及固定 broker digest 处理。
 
-另有两项变更缩短了事件存储的写入路径。每个事件的标识现在直接计算，而不再经过 JSON 文档；标识逐字节不变，因此重新投递的事件仍能被识别。批次现在先用普通的 `INSERT` 写入，只有出现重复时才回退到 `ON CONFLICT DO NOTHING`，这去掉了仲裁器为每一行写入的第二条日志记录。在一次独立测量中，每个事件的事件存储 WAL 约降低 8%。新增计数器 `devicechain_eventmanagement_persist_insert_fallbacks_total` 显示批次走回退路径的频率；预期这种情况很少。
+`--mqtt-device-uplinks` 记录 `spec.mqttDeviceUplinks`，后续不传选项的重跑和升级会保留它。如果省略该选项，新提供的 values overlay 与已记录选择冲突时会在写入前拒绝；允许继承的旧 overlay，且已记录选择优先。旧 CRD 若裁剪该字段，会在应用前拒绝。
 
-调优与指标：`device-state` 的 `projection.lingerMillis` 现在默认为 10（显式设置的 `0` 仍为 `0`）。`event-management` 中新增的指标 `persist_collect_full_total` 和 `persist_handoff_depth`，以及 `device-state` 中的 `state_collect_full_total` 和 `state_handoff_depth`，用于显示批次是否正在填满。`device-state` 的 `projection.maxBatch` 现在默认为 64（原为 32）。收集到的批次按租户拆分，每个租户的部分是一条 upsert，因此当多个租户并行运行时，32 的上限使每条语句只能装下批次的一小部分。在 4,500 事件/秒的 MQTT 负载下，64 对比 32：每个 `device_states` 批次的行数从 31.4 升到 49.4，`device-state` CPU 降低 10%，关系型数据库 CPU 降低 15%；由于批次要等待填满，`device-state` 交接时间的中位数从 8.0 ms 升到 13.2 ms，第 99 百分位不变。多租户负载看到的批次仍比单租户负载更小。显式设置 `maxBatch` 即可保持 32。
+`dcctl install --relational-store-max-wal-mib` 在应用前持久记录关系存储 WAL 目标，应用失败后重试也会保留。一旦记录，它优先于 `TF_VAR_postgres_max_wal_size_mib`；省略会保留。这修复了以前每次安装都要重复传入设置的问题。它不会从 `--size` 推断，实例运行期间也可修改。
 
-#### 流按故障缓冲时长定容 {#v110-runway}
+HA 性能规格 bootstrap（包括 dry run）现在会在创建任何内容前检查：是否至少有三个可调度节点各能容纳一个 broker 的 CPU 和内存请求。不足时拒绝。选择较小规格、添加更大节点，或显式设置 `nats_cpu_request` / `nats_memory_request`（跳过相应资源的检查）。Upgrade 不受影响。`--lwm2m-identities` 现在会在配置前校验设备类型 token 语法。
 
-为每个摄取的事件承载一条消息的那些流，过去的上限固定为 1 GiB 和 500 万条消息。这个上限是平台在消费者或数据库故障期间的缓冲时长，也是规则预览和检测重放能够回读的范围。在每秒 20,000 个事件时，它只能把 `resolved-events` 保留约 2.8 分钟。
+#### 配置失败时拒绝运行 {#v150-configuration}
 
-- **两个新的 chart 值。** `instance.config.infrastructure.nats.streamDesignRate` 是预期整个实例（跨租户）摄取的事件速率峰值，单位为事件/秒。它是磁盘定容所依据的速率，不是限速。`instance.config.infrastructure.nats.streamRunwayMinutes` 是流按该速率保留多少分钟的事件（默认 15，范围 10 到 10080）。三个流各自至少获得 速率 × 分钟数 × 60 × 其单事件成本（捕获流和入站流为 384 字节，已解析流为 448 字节）。`streamMaxBytes` 仍是下限，`streamMaxMsgs` 会被调高，使消息数量不会缩短缓冲时长。
-- **默认值让上限保持原样。** 未设置速率时，各流按以前的方式定容。chart 自身对 `streamDesignRate` 的默认值为 0（不按时间定容）；`dcctl` 的标准配置提供每秒 1,000 个事件、15 分钟，仍在 1 GiB 上限之内，`--compact` 提供每秒 50 个，保持 64 MiB。超出范围的值会导致启动失败。
-- **设置方法：**在值文件的 `instance.config.infrastructure.nats` 下放入这两个键，然后运行 `dcctl upgrade <provider> <instance> --values <file>`。现有的流会原地采用新的上限。按每秒 20,000 个事件、15 分钟定容的流，需要约 33 GiB 的 JetStream 卷；完整对照表见[事件流能等待多久的故障](./observability.md#outage-runway)。
-- **预留量预检会指明缓冲时长。** 当装不进卷的正是缓冲时长时，`dcctl` 会在写入任何内容之前失败并说明这一点。
+[升级前](#v150-before-you-upgrade)列出的无效值会在拒绝时指出键名，而不是悄悄采用默认值、关闭轮换、让时长溢出或在启动时崩溃。零和未设置仍保留文档规定的默认值。chart 模式检查文档所用的键名拼写；手写文档仍需启动校验。配置只能有一个完整文档，末尾不得有被忽略的内容。
 
-##### 调低流的上限需要显式标志 {#v110-shrink}
+#### GraphQL 输入限制 {#v150-input-limits}
 
-把某个按事件计的流的上限调到低于它当前的数据量，会使代理立即丢弃最旧的消息，包括尚未读取的。代理管理器现在会拒绝这样做，并指出该流和缺口。当你确实要这样做时，例如在一次有意缩短缓冲时长的升级中，请传入一次，随后移除：
+- 仪表板名称搜索文本超过 256 字节时返回 `LIMIT_EXCEEDED`。
+- 租户和管理平面的审计日志 `actor` 筛选文本超过 256 字节时返回 `LIMIT_EXCEEDED`。
+- `calculatedMetricBackfills(statuses:)` 超过五项时返回 `LIMIT_EXCEEDED`；已接受列表中的重复项会被忽略。
+- 设备和设备类型子串搜索的 `nameContains` 超过 256 个 UTF-8 字节时返回 `LIMIT_EXCEEDED`，长度在去除首尾空白前计算。
+- 命令搜索的 `statuses` 或 `outcomes` 列表超过 1,000 项（含重复项）时返回 `LIMIT_EXCEEDED`。
+- 事件页面和测量聚合的 `eventTypes` 超过 1,000 项（含重复项）时返回 `LIMIT_EXCEEDED`。
+- `facetValues` 超过 1,000 个不同值时返回 `LIMIT_EXCEEDED`，不返回部分列表。
+- 每个 GraphQL WebSocket 连接最多允许 1,000 个并发订阅操作。后续 `subscribe` 返回 `LIMIT_EXCEEDED`，连接保持打开。
 
-- chart 值 `brokerAdmin.allowCeilingShrink: true`（默认 `false`），
-- `dcctl broker reconcile --allow-ceiling-shrink`。
+#### 现有操作的更严格检查 {#v150-tightenings}
 
-调高上限，或者调低到该流仍然容得下的程度，不需要任何额外操作。
+- **仪表板。** 每租户已有 10,000 个未删除仪表板时，`createDashboard` 返回 `DASHBOARD_LIMIT`。既有仪表板仍可使用，即使已经超限；删除不用的仪表板后可再创建。每个仪表板达到 1,000 个发布版本后，发布返回 `DASHBOARD_VERSION_LIMIT`；既有历史、已发布指针和草稿仍可使用。
+- **仪表板草稿选择器。** 保存 `kind: "device"` 数据源要求 `deviceToken` 为字符串、`measurements` 为字符串数组，两个键都必须存在。格式错误的手写输入会在保存草稿时被拒绝；已存仪表板仍可读取、发布、回滚和渲染。
+- **通知策略。** 每次提供的规则集最多接受 100 条规则（`LIMIT_EXCEEDED`）。既有更大策略继续运行；省略 `rules` 的更新不会改变它们。
+- **命令活动。** 创建活动时拒绝末尾有额外内容的触发器 JSON，不再静默丢弃。
 
-#### 限额内的 MQTT 设备在平台停滞后不再被丢弃 {#v110-rate-gate}
+#### 自动化变更评审（preview） {#v150-automation-review}
 
-`event-sources` 按每个租户的上限计量其摄取。在捕获流中等待超过固定五秒的消息，按设备发送它的时间计量；更新的消息则按被读取的时间计量。当从捕获到入站的这一跳停滞数秒时，排队的流量会全部按停滞结束的那一刻计量，租户的突发额度只能吸收其中一两秒，其余的被丢弃，尽管租户在其上限之内，并且代理已经向设备确认了这些消息。
+配置文件的 **Change review** 选项卡会在记录的事故窗口和正常窗口中，将草稿规则变更与当前生效基线比较。比较引擎让两个版本在相同历史事件上运行，不产生副作用，比较告警转换和反应请求，包括内容。证据不完整或不受支持时返回 `INCONCLUSIVE`，不会通过。上限为 50 个设备、两个各不超过 24 小时的窗口、最多六小时的预热输入、十项预期和每窗口 2,000 项列出变更。Night Shift 模拟提供已记录场景：`dcctl sim create --episode night-shift` 和 `dcctl sim windows`。
 
-- **阈值按租户计算。** 当消息的年龄超过“原来的五秒”与“租户上限可吸收的突发量（突发量除以速率）”两者中较小的一个时，它被视为积压，并按其发送时间计量。该判定对每条消息只做一次，并同时交给两个计量阶段，因此消息阶段和读数阶段不可能把同一条消息路由到不同的限流器。
-- **不变的部分。** HTTP 及其他不受信任的流量、集成和外部 MQTT 源仍像以前一样按读取时间计量。真正超过上限的租户仍会被限流。
-- **新计数器与告警。** `total_msg_shed_acknowledged{source}` 统计代理已确认之后被丢弃的消息，仅限 MQTT 源，并以 0 导出。告警 `MqttIngestShedAfterAcknowledgement`（警告）在 `increase(...[10m]) > 0` 时触发，没有 `for:`，因此持续数秒后停止的突发仍能被看到。最后一次之后它保持十分钟。上限之内的租户不会丢弃任何消息，所以稳态下该序列为 0；超过上限的租户会使其升高，这也是应该的。
+评审保留输入摘要、stream 边界、预期和结果，可以分享，要求 `event:read`。审批需要近期第二因素验证；草稿作者被排除，自我审批遵循配置文件策略。发布和回滚现在也写入审计日志。
 
-#### 告警 {#v110-alerts}
+保护需要在已发布且符合条件的配置文件上主动启用，可以要求一或两次审批。受保护发布必须提供 `automationReviewToken`，只消费一次已批准评审，并检查冻结草稿、基线、证据、有效期、当前策略及审批者当前资格。缺少评审返回 `REVIEW_REQUIRED`；资格检查不可用返回 `REVIEW_UNAVAILABLE`。发布版本链接回评审和证据。未保护的配置文件沿用原发布路径。
 
-- **`JetStreamOutageRunwayShort`**（警告）为新增。它读取起门控作用的消费者的未读积压增长有多快，并在按该速率二十分钟内流将开始拒绝新事件时触发（流在 90% 时拒绝）。积压必须高于 10%，且条件须持续两分钟。持平或正在清空的积压保持安静。其文本提示：当流量超出设计速率时，应把 `streamDesignRate` 与 JetStream 卷一同调高。
-- **`JetStreamUnreadBacklogNearFull`** 现在在 75% 且持续一分钟时触发（原为 80% 且持续五分钟）。按 R 分钟缓冲时长定容的流在 0.75R 时达到 75%，在 0.9R 时拒绝，所以对于小于约 17 分钟的缓冲时长，旧阈值会在拒绝之后才触发。
-- **`MqttIngestShedAfterAcknowledgement`**（警告）为新增。参见[上文](#v110-rate-gate)。
-- **`BrokerCertificateExpiringSoon`**（警告，30 到 7 天）和 **`BrokerCertificateExpiryCritical`**（严重，不足 7 天或已过期）为新增。它们读取代理 TLS 监听器当前正在提供的到期时间（`dc_broker_mqtt_tls_cert_not_after_seconds`），因此代理从未采用的续期会持续告警。
-- **`JetStreamReplicaPeersDegraded` 读取在线对等节点，** 滞后有了自己的告警 **`JetStreamReplicaPeersLagging`**。旧的比较把稍有落后的跟随者与已离线的同等看待，所以在负载下会不断重新触发。新的指标 `jetstream_peers_online` 统计领导者加上每个未离线的对等节点。
-- **`DeviceX509IssuerPinUnavailable` 不再因代理滚动而进入 pending。** 滚动期间代理系统账户出现两秒的抖动，过去会使告警保持 pending 约两分钟。现在这个等待写在表达式里：拒绝率必须在最近十次一分钟评估中的每一次都不为零。真正的故障仍在约十分钟后触发。
+受保护回滚、将设备类型改为指向或不再指向受保护配置文件，或将设备移出其绑定类型，都需要记录紧急变更理由并完成近期第二因素验证。回滚改变基线，使待用审批失效。受保护配置文件不能删除。PostgreSQL 保护触发器对旧版本 pod 同样强制这些条件：旧写入被拒绝，不能绕过保护。收紧立即生效；放宽需要另一人批准，或在允许自我审批时等待 24 小时。仅在部署完成后保护配置文件。
 
-#### 实例上报观测到的状态 {#v110-status}
+参见[自动化变更审查](../concepts/automation-change-review.md)和[审查规则变更](../guides/reviewing-a-rule-change.md)。
 
-Operator 现在会在每个 `Instance` 上写入**观测到的**状态，并且是唯一的写入者。此前，`kubectl get dci` 在 `Phase` 列显示的是 dcctl 的意图，对象的 `status` 从未被写入。
+#### 代理操作（preview） {#v150-agent-actions}
 
-```
-NAME   PROVIDER   CLUSTER           PROFILE   REQUESTED   OPERATION   READY   RUNNING   AGE
-prod   local      kind-devicechain  default   1.1.0       Ready       True    1.1.0     12d
-```
+MCP 新增 `propose_alarm_action`、`get_proposal` 和 `list_my_proposals`，仅在 MCP `agentActuation.enabled` 开启且调用方有相应 act scope 时注册。请求转发调用方自己的 bearer token。人员在控制台审批；MCP 没有审批或执行工具。`agentApprovalAccess` 允许符合条件的审批者无需 `agent:admin` 即可进入收件箱；停用开关仍要求 `agent:admin`。会话内 `stepUp(refreshToken, code)` 用验证器代码刷新 `mfa_time`；不可用或使用 SSO 时退回重新登录。
 
-- **列的变化。** `Phase` 改名为 `Operation`，`Version` 改名为 `Requested`，以免与新增的 `Running` 列混淆，并新增 `Ready` 和 `Running`。
-- **状态内容。** `status.observedGeneration`，条件 `WorkloadsAvailable` 和 `RolloutComplete` 及其原因，`status.version.requested` 和 `.running`，以及每个功能区域一条 `status.areas[]`（期望、就绪和已更新的副本数，镜像）。不按租户或设备保存任何内容。控制器会监视实例的 Deployment，因此状态随滚动更新而变化。Operator 获得对 `apps/deployments` 的 `get`、`list` 和 `watch` 权限，其管理器缓存被限制为带实例标签的 Deployment。Instance CRD 随 operator 一同发布，不在 Helm chart 中。
-- **代理证书到期。** 新的 `BrokerCertificateValid` 条件报告代理的 TLS 叶证书与证书颁发机构：`CertificateValid`、`CertificateExpiringSoon`（30 天或更少，仍为 True）、`CertificateExpired`（False，并使 `Ready` 为 False），以及 `CertificateNotPublished` 或 `CertificateUnreadable`（Unknown）。叶证书与颁发机构中较差的一个起决定作用。叶证书签发期限为一年，并在 `dcctl upgrade` 中续期，因此一个约十一个月没有升级的实例，过去会在没有任何提示的情况下失去代理 TLS。`dcctl bootstrap` 和 `dcctl upgrade` 会把两个 `notAfter` 日期作为注解发布在 Instance 上（`core.devicechain.io/broker-certificate-not-after` 和 `.../broker-ca-not-after`）。较旧的实例会在下次升级时补全，在此之前该条件显示为 `CertificateNotPublished`。
+已禁用或正在清除的租户，其提案及执行决策返回 `OPERATOR_SUSPENDED`。禁用或清除也会发布停用消息；重新启用递增执行代次。Device-management 本地停用屏障将执行与已消费的停用消息串行化，消息流不可用或过期时返回 `FENCE_UNAVAILABLE`。告警效果进入事务发件箱，因此已提交效果会重试发布。策略或租户变更提交后，停用发布仍可能失败：重复该操作以重新发布。
 
-参见[实例状态](./kubernetes-operator.md#instance-status)和[代理证书到期](./kubernetes-operator.md#broker-certificate-expiry)。
+授权数据库事实来自同一个读取快照；登录记录在快照前读取一次。执行在全部数据库工作后、提交前请求最终决策，期限为四秒，决策后不再运行 SQL。拒绝或迟到答复会回滚全部内容；请求决策后闲置会话被终止或连接丢失会映射为 `POLICY_UNAVAILABLE`。在决策快照之后提交的撤权仍可能被先行提交的操作越过，窗口为最多五秒加提交耗时。只有全部 device-management 和 user-management pod 升级后，此界限才成立。
 
-#### 被拒绝的事件可以查看 {#v110-failed-events}
+**审批绑定审批者的登录会话。** 退出登录、重置密码或第二因素、或禁用该人员，都会结束这次审批；需从新登录重新批准。以前没有登录绑定的审批不再计数。控制台访问 token 现在携带 `sid`，控制台变更也会填充审计日志的会话列。完整部署后再启用代理操作。参见[提案与审批](../concepts/mcp.md#agent-proposals)。
 
-平台拒绝的事件会进入一个流，而此前没有任何东西读取它：“为什么我设备的数据没有出现”只能靠 Pod 日志回答。
+#### LoRaWAN 与命令 {#v150-lorawan}
 
-- **被拒绝事件的索引。** `event-management` 把失败事件流读入新的 `failed_event_records` 表，保留七天（`lifecycle.failedEventRetentionDays`）。一行包含租户、时间、来源区域、原因、声称的设备令牌、事件类型、有长度上限的错误文本，以及原始载荷是否仍在流上；载荷不会被复制。同一租户、原因和设备在任意一小时内最多保留十行，其余记录会折叠进最新一行的 `suppressed` 计数，因此用捏造的设备令牌进行探测无法淹没该表。
-- **租户 GraphQL。** `failedEvents`、`failedEventSummary` 和 `failedEventCount`，面向持有 `device:write` 的成员（限定客户范围的调用者会被拒绝）。最多回读 31 天。没有任何东西会重放或重试事件，API 也不会返回原始载荷。
-- **控制台。** 一个摄取失败视图，带原因标签、设备过滤器和时间范围；当该设备的事件在过去 24 小时内被拒绝时，设备页面上会显示提示。
-- **被丢弃的测量键会被记录。** 发送 `{"status_text":"ok","battery":50}` 的设备会得到确认，`battery` 被存储，`status_text` 被丢弃。[`v1.0.0` 的计数器](#v100-measurement-drops)说明整个设备群中这种情况的频率；现在 `device-state` 会记录哪台设备因何原因丢失了哪个键，包括计数、首次和最近时间，以及最近一次的值（截断为 64 字节），每台设备最多 32 个键。通过 `droppedMeasurements` 查询提供，并显示在设备页面上。计数反映的是频率，而不是精确总数。事件标识不变。
+网络服务器仅排队的未确认下行仍以 `SUCCESSFUL` 结束，但不记录 `deliveredTime` 或 `deliveryEvidence: DEVICE_RESPONSE`：设备并未应答。确认下行的确认消息仍记录 `DEVICE_RESPONSE`。命令指南解释各结果由哪个组件结算。LoRaWAN 指南现在向设备发送确认命令，`dc-simulator` 可用 `--lorawan-downlink-listen` 和 `--lorawan-ack` 模拟 ChirpStack 下行队列和确认消息流。
 
-#### 可以回查在线状态 {#v110-presence}
+#### 可观测性 {#v150-observability}
 
-- **在线状态时间线。** `event-management` 新增租户 GraphQL 查询 `stateChangeEvents`，按设备令牌和时间范围分页返回设备的在线状态变化（已连接、已断开、不活跃），从新到旧排列。它需要 `event:read`，并像其他事件查询一样通过事件的锚点限定范围，因此限定到客户的调用方只能看到自己的设备。控制台的设备页面把它显示为在线状态时间线。
-- **设备页面显示更多连接信息。** 连接状态卡片现在显示最近一次在线状态报告及其所属的传输会话。
-- **统一的不活跃窗口。** 在线状态为推断的设备在十分钟没有上报后被标记为不活跃，全平台统一；它从来不能按设备配置。清扫每 60 秒运行一次，因此这类设备在静默后 10 到 11 分钟离线。在线状态为断言的设备遵循显式的在线状态转换，不参与清扫。`DeviceState.inactivityTimeout` 始终报告该窗口（600 秒）。`inactivityAlarmTime` 字段已被[弃用](#v110-deprecations)。
+可选 OpenTelemetry 追踪贯穿摄取、NATS 发布和消费、device-management 解析、事件存储及 event-processing。通过 gRPC 或 HTTP 导出 OTLP。GraphQL span 不记录文档、变量或 token；摄取 span 不记录凭据或设备 token。在摄取边界，调用方的 `traceparent` 只链接到新的本地根 span，绝不采用为父上下文：远端 `tracestate` 被丢弃，远端采样标志被忽略。内部 span 继续平台上下文。关闭追踪时不安装 provider、不启动 goroutine 或 exporter，消息字节保持不变。失败事件发布和拆分重试会开启新 trace。
 
-#### 弃用 {#v110-deprecations}
+不规范的实例 id 会记录警告并将各区域的指标（例如 `devicechain_devicemanagement_instance_id_noncanonical`）设为 1，不拒绝启动；参见[升级前](#v150-before-you-upgrade)。
 
-**`DeviceState.inactivityAlarmTime`（device-state GraphQL）已被弃用。** 请改用 `lastDisconnectTime`。对于当前处于不活跃状态的推断设备，两者是同一时刻。被弃用的字段现在返回该值，对其他任何设备返回 null，因此设备恢复活跃后，它不再保留过去的不活跃时段。该字段将在下一个主版本中移除。`DeviceState.inactivityTimeout` 的形态不变，现在始终报告全平台统一的窗口（600 秒）。本版本没有其他弃用项。
+#### 保留并发修改 {#v150-concurrent-edits}
 
-#### 集群外的设备 {#v110-mqtt-exposure}
+客户、通知渠道、设备配置文件草稿、资产类型、资产、实体组、维护窗口、指标定义、设备类型、检测规则草稿、命令定义、区域类型、客户类型、关系类型、凭据、设备和地理围栏的部分更新仅写入点名字段。省略字段不会再覆盖并发修改；空更新不写任何内容。过期的区域重命名不再恢复并发删除的边界围栏链接。若凭据编辑会覆盖并发密码轮换，则返回重试错误。
 
-云集群上，不在集群内的设备过去没有受支持的方式连接平台的 MQTT 代理。现在可以按实例对外暴露代理在 TCP 8883 上的 TLS 监听器。**它默认关闭，升级后在你提出要求之前不会有任何变化。** 页面[从集群外连接设备](./connecting-from-outside.md)给出完整步骤：DNS、端口与防火墙、设备必须信任的证书、如何从外部检查，以及故障排查。
+#### 其他变更 {#v150-other-changes}
 
-```bash
-dcctl install   <provider> --mqtt-gateway                                   # 每个集群一次，仅 gateway 模式
-dcctl bootstrap <provider> <instance> --mqtt-exposure gateway|loadbalancer|none --mqtt-host mqtt.example.com
-dcctl upgrade   <provider> <instance> --mqtt-exposure ... --mqtt-host ...   # 或用 --mqtt-exposure none 关闭
-dcctl upgrade   <provider> <instance> --broker-max-connections N          # 可选上限；0 表示清除
-```
+- **停止与交接。** Event-sources 刷出未解码上行的待写计数，并等待正在写入的防抖断开消息。LwM2M 等待已删除租户扫描完成后才交接领导权。Messaging 断开前完成后续缓存驱逐。治理刷新会被取消并等待结束。通知停止在排空预算内取消卡住的发送，避免重发已送达通知。Command-delivery 在领取命令前取消调度提醒，命令保留排队。集成认证等待者在调用方取消时停止等待；共享查询有独立的十秒期限。
+- **Operator 领导选举。** Operator 接受 `--leader-elect`，随附清单已启用。
+- **分析访问。** 协调覆盖直接和嵌套组成员，不依赖 reader 名称前缀。名称冲突的超级用户被跳过、记录并计数；与服务登录角色或模式所有者冲突时拒绝启动。其他角色拥有的视图会在修复或授权变更前诊断。
+- **控制台与组件。** 遥测列标题、告警表和命令表单及历史遵循查看者语言。告警表滚动区域可通过键盘操作。个人地理围栏底图 URL 和署名一起应用；不完整的配对会保留原地图。分面声明将改变既有轴值类型时，控制台会先警告。
+- **既有客户端和编辑。** 过期的连接器更新返回 `STALE_WRITE`；控制台保留未保存修改并提示重新加载和重试。旧 `dcsa_` OAuth 客户端仍是可维护的普通客户端，绝不作为服务账户；删除前先注册替代客户端。
+- **运行修复。** 网关前一次停止超时后仍在运行时，不能重新启动。快照重置同时比较序列号和水位，保留继任者的新检查点。被拒绝的 `CONNECTED` 声明不再推进最后活动时间。通知混合交付结果计为部分完成而非完成，硬失败优先级保留。载荷编码器精度拒绝会指出参数名。仅对端自身明确的未知字段拒绝才识别为围栏归档版本差异。计数查询失败的列表会返回该错误，而不是带有虚构总数的页面。
+- **Chart 与文档。** 候选 chart 在 Artifact Hub 标为预发布。所属区域运行时计数磁贴显示零，积压包括处理中消息。CRL 指南澄清：流式上传超过 2 MiB 必须提高 `deviceManagement.callout.revocation.maxCrlBytes`（最多 32 MiB）。解码器参考将 `base64.decode` 输入文本上限更正为 5467 字节，包括换行；运行行为不变。
 
-- **两种模式。** `gateway` 在实例的 Gateway 上按设备所连接的主机名做 TLS 透传路由，因此多个实例可共用一个地址。`loadbalancer` 创建一个 `LoadBalancer` Service，把 8883 直接指向代理 Pod，适用于不支持 Gateway API 的集群，或你想使用自己的负载均衡器时。
-- **TLS 在代理处终止，绝不在入口处终止。** 两种模式都不会发布明文 MQTT（1883），并且如果代理自身的 TLS 已关闭，chart 会拒绝对其做暴露。设备的认证方式不变，仍通过凭据或[证书](./device-certificates.md)。
-- **在写入任何内容之前就会被拒绝的情形：** 主机缺失或格式错误、主机已被集群上另一个实例占用、入口控制器未监听 8883 或实例不是经 Gateway 前端提供服务时使用 gateway 模式，以及代理证书无法包含的主机。
-- **连接数上限。** `--broker-max-connections` 限制代理接受的连接数（设备与平台客户端合计），以抵御对外暴露端口上的连接洪泛。默认不设置，此时沿用服务器自身的限制。
-- **记录在 `Instance` 上。** `spec.mqttExposure`、`spec.mqttHost` 和 `spec.brokerMaxConnections` 为新增字段。不带标志的升级会沿用其中记录的值。
-- **限制。** 不支持 PROXY 协议，因此在 gateway 模式下代理看到的是入口控制器的地址而不是设备的地址，`callout.jitSourceTrusted` 必须保持关闭。在负载均衡器模式下，仅当前面的均衡器会保留客户端地址时才打开它。
+#### 模式变更与回退 {#v150-going-back}
 
-#### 升级说明 {#v110-upgrade-notes}
+恰好四项迁移，均为追加式增量变更。新表初始为空，既有数据保留。
 
-- **平台服务登录名不能再通过 MQTT 认证。** 所有静态平台登录名现在都仅限使用代理的原生协议，只有 `event-sources` 自己的登录名例外，它的 MQTT 源和在线状态探测需要使用 MQTT。因此，泄露的平台凭据无法通过对外暴露的 MQTT 端口使用。设备不受影响，因为它们通过认证回调认证。如果你的脚本或工具用平台服务登录名连接 MQTT 监听器，请改用设备凭据或原生协议。
-- **重新运行 `dcctl bootstrap` 会保留代理的证书颁发机构。** 设备会固定（pin）它，因此重新运行现在会沿用实例现有的颁发机构，只签发新的叶证书；如果设置了 MQTT 主机，叶证书会包含它。以前，重新运行会生成新的颁发机构。如果你依赖重新运行来轮换颁发机构，现在不会再轮换。新实例，以及被销毁后重建的实例，仍会得到新的颁发机构；这包括恢复到重建的集群，因为颁发机构不在任何数据库备份或根密钥托管中，固定了它的设备此时需要新的 `instance-ca.crt`。颁发机构存在但无法读取时，运行会失败，而不是替换它。
-- **`Instance` 的新字段。** `spec.mqttExposure`、`spec.mqttHost` 和 `spec.brokerMaxConnections` 被加入 `Instance` 资源定义，该定义随 operator 一同发布，而不在 Helm chart 中。`dcctl install` 会带来它，这就是它要排在实例升级之前的原因。
-- **`device-state` 的 `projection.maxBatch` 默认为 64。** 参见[摄取每个事件消耗的 CPU 更少](#v110-ingest)。
-- **不带 `--mqtt-gateway` 的 `dcctl install` 会保留入口控制器已有的 8883 端口**，并且只要有实例声明了 gateway 暴露，`--mqtt-gateway=false` 就会被拒绝。
+- **代理停用屏障与效果发件箱**（`device-management`，`20261110000100`）：添加 `agent_actuation_fences` 和 `agent_effect_outboxes`。
+- **自动化评审**（`device-management`，`20261111150000`）：添加 `automation_reviews`。
+- **自动化评审强制执行**（`device-management`，`20261126120000`）：为保护策略、待定策略变更和紧急变更记录添加三张表，添加一个可空列 `device_profile_versions.automation_review_token`、一个函数和六个 `BEFORE` 行触发器。迁移不保护任何配置文件；启用保护后，约束也适用于旧版本 pod。
+- **执行代次**（`user-management`，`20261110130000`）：添加 `iam_agent_policies.actuation_generation`。
 
-#### `dcctl` {#v110-dcctl}
+**升级只能向前；不能降级到 `v1.4.0`；`dcctl` 现在会拒绝。** 用 `v1.5.0` 工具重试失败升级、向前升级到修复版本，或从备份恢复。参见[版本与升级策略](./versioning-policy.md)。
 
-- **`dcctl attr set|get|unset <kind> <token> <key> [value]`** 通过脚本写入分面值，与控制台的“分面”标签页作用相同。类型有设备、资产、区域和客户。`get` 输出表格或 `-o json`。写入进入共享作用域，这是分面选择器唯一读取的作用域；值的类型取自分面的声明，与之矛盾的 `--type` 会被拒绝。未声明的键需要 `--type`。它以租户成员身份登录（`--tenant`、`--email`、`--password`、`--otp`），并使用现有的 device-management GraphQL 调用，因此授权由服务器决定。不包含 CSV 批量导入和值的重命名。
-- **`dcctl events failed`** 按从新到旧列出租户被拒绝的事件，支持 `--reason`、`--device`、`--since` 和 `--until`（RFC 3339 或 `6h` 这样的时长）、`--limit`（默认 100；匹配更多时输出会说明）和 `-o table|json`。`--summary` 输出按原因的计数和主要设备，默认统计最近 24 小时。它以租户成员身份登录，并需要 `device:write`。
-- **`dcctl sim create --tier <token> --tier-config '<json>'`** 在负载运行所指名的层级不存在时创建它，已存在时只会调高（绝不调低）。例如 `--tier rc-100k --tier-config '{"ingestReadingsPerSecond":100000}'`。没有 `--tier` 的 `--tier-config` 会被拒绝，单独的 `--tier` 仍表示已存在的层级。层级缺失且没有 `--tier-config` 时，现在会失败并写明修复办法。
-- **`dcctl sim create` 和 `dcctl sim destroy` 会发送实例的主机名。** 当 `--server` 是地址（IP 或 `localhost`）而不是名称时，它们拨向该地址，并把实例记录的主机名作为 Host 头和 TLS 服务器名发送，这样绑定了主机名的 Gateway 监听器才会接受请求。以前登录会因未指明原因的 404 而失败。新增的 `--host-header` 标志可覆盖记录的主机名，DNS 形式的 `--server` 保持不变，模拟器也遵循同一个头。如果无法读取实例的声明且登录失败，错误信息会指出该标志。
-- **用于[集群外的设备](#v110-mqtt-exposure)的新标志：** `dcctl install --mqtt-gateway`，以及 `bootstrap` 和 `upgrade` 上的 `--mqtt-exposure`、`--mqtt-host` 和 `--broker-max-connections`。
-- **`dcctl upgrade --allow-envelope-downgrade`** 见[事件信封](#v110-envelope)。
-- **`dcctl broker reconcile --allow-ceiling-shrink`** 见[上文](#v110-shrink)。
-- **`dcctl broker rebalance` 在代理滚动后可用。** 它此前找不到代理管理器的登录信息，修复后仍然只完成了部分领导者迁移，因为管理器可以读取流，却不能读取迁移所涉及的消费者，而拒绝表现为超时。管理器现在可以读取这些消费者；其权限的其他方面没有变化。`dcctl upgrade` 在结束时运行同一步骤。
-- **`dcctl install` 修复卡住的 Barman Cloud 插件证书。** 在全新集群上，cert-manager 可能让插件的两个证书之一在一小时退避期内一直未签发，使插件停在 `ContainerCreating`，直到 Helm 等待超时。现在安装会在应用前置组件期间监视这两个证书，对创建三分钟后仍未就绪的证书，将其删除并重新创建。
-- **`dcctl --values` 接受分析器开关：** `functionalAreas.<area>.profiler.enabled`、`.blockRate` 和 `.mutexFraction`。`profiler.address` 被刻意排除，因为绑定到非回环地址会暴露未经认证的性能剖析；请通过端口转发采集。
+#### 已知问题 {#v150-known-issues}
 
-#### 性能剖析开关 {#v110-profiling}
+- **确认 LoRaWAN 下行未收到网络服务器报告时，在截止时以 `TIMEOUT` 结束，** 交付情况未知。升级前记录的未确认命令保留旧证据。
+- **在清除被标记前已领取的升级通知仍可能在清除后发送；** 清除被领取后才记录的目标不会收到清除通知。
+- **仅告警 ACK/CLEAR 提案会执行。** 其他操作即使批准也不执行。停用开关不会撤销已执行操作。
+- **同一开放登录会话内移除再授予审批者角色，会恢复该会话的审批。** 会话绑定无法检测中间的角色变更。
+- **已满 24 小时的评审保护放宽在下一次受保护操作时应用，** 不由后台定时器应用。
+- **评审保护资格使用保守文本搜索，** 不解析规则；看起来像被排除的动态依赖项的标识符或键可能阻止启用。
+- **代理效果 relay 至少交付一次。** Broker 去重覆盖 120 秒；告警事件可能乱序，失败 100 次的行会保留以供操作员处理。
 
-这些开关默认全部关闭，用于性能调查。阻塞和互斥锁剖析过去一直是空的，因为采样从未开启；设置了 `profiler.blockRate` 和 `profiler.mutexFraction` 后，相应端点会提供它们。只设置其中之一而不设置 `profiler.enabled` 会拒绝启动，chart 在渲染时也会拒绝。OpenTofu 集群根新增用于关系型数据库上 `pg_stat_statements` 的 `postgres_statement_stats`；实例根新增用于代理的 `nats_profiling_port` 和 `nats_profiling_block_rate`，以及用于事件存储上 `pg_stat_statements` 的 `timescale_statement_stats`。监控模块还会在带污点的节点池上运行 node exporter（对每个污点都设置容忍），因此专用的代理节点池不再在节点 CPU 中缺失，也不会触发 `KubeDaemonSetRolloutStuck` 或 `TargetDown`。
+### v1.4.0：LoRaWAN 确认下行、通过 MQTT 发送设备自有载荷，以及标明设备的通知 {#v140-upgrade}
 
-#### 较小的变更 {#v110-smaller}
-
-- **.NET SDK 8.0.427。** 固定的 SDK 从 8.0.425 升到 8.0.427（运行时 8.0.33），以应对 .NET Brotli 解码器中一个已公布的安全公告，较旧的运行时包含该问题。所有已锁定的 .NET 项目，包括 C# SDK、其 AOT 宿主以及演示和模拟器项目，都重新锁定到 8.0.33 包；变化的只有版本和内容哈希。如果你自行构建其中任何一个，请先安装 SDK 8.0.427。
-- **前端工作区把 `minimatch` 固定为 11.0.1 或更高版本**，以应对一个已公布的安全公告，并包含例行的 Go、npm 和容器基础镜像更新。
-- **文档。** 新增：从集群外连接设备的页面、实例状态一节、事件信封一节、故障缓冲时长页面、故障事件指南中的“从命令行”一节，以及分面的脚本编写一节。实测吞吐量页面为 `v1.0.0` 新增了六十分钟混合负载一行。在线状态页面现在说明全平台统一的不活跃窗口。发布说明页头不再带有 1.0 之前的警告。
-- **单样本脉冲**到上升沿的映射现在由测试固定；行为不变。
-
-#### 事件信封（可选启用） {#v110-envelope}
-
-事件信封把同一租户的多个事件放进入站事件流和已解析事件流的一条消息中，而不是每个事件一条消息，从而减少代理处理每个事件的工作量。它由两个设置控制，**两者默认都关闭**：`infrastructure.messaging.envelopes.resolved` 和 `infrastructure.messaging.envelopes.inbound`。关闭时，流的格式不变，无需任何操作。无论设置如何，本版本中的所有服务都同样读取信封和单事件消息；这些设置只决定服务是否写入信封。开启它们的规则、检测引擎重复保护的开销以及降级保护，见[事件信封](#event-envelopes)。
-
-- **何时安全。** 实例的每个 Pod 都运行 `v1.1.0` 或更高版本之后，而不是之前：较早版本的 Pod 会把信封当作失败消息搁置。请先升级，等所有 Pod 都已滚动完成，再设置开关。
-- **入站信封。** `event-sources` 以简短的预测性等待对同一租户的事件分组：安静的租户立即以单事件形式发布，繁忙的租户最多等待 `inboundLingerMillis`（默认 5 ms，最大 10）等下一个事件。`HTTP /events` 只有在代理确认了包含该事件的消息之后才返回 202。随后 `device-management` 为每个入站信封写入一个已解析信封。
-- **检测引擎跳过重复。** 开关开启后，检测引擎会在平台自身的重投递跨度（约十分钟的代理时间）内记住它已应用的每个事件的标识，并跳过第二份副本，计入 `detect_duplicate_events_skipped_total`。在 6,000 事件/秒时内存约 190 MB，12,000 事件/秒时约 300 MB，20,000 事件/秒时约 540 MB（外推值），仅在检测领导者上；开关开启期间，chart 会提高 `event-processing` 的内存上限（参见[服务规格](./bootstrap.md#service-sizing)）。晚于该跨度到达的副本会被应用两次；[事件信封](#event-envelopes)说明了这一残余情形。
-- **新指标：** `inbound_envelope_members{hop}`（每个信封中的事件数）和 `inbound_envelope_linger_seconds{hop}`、结算计数器，以及 `detect_guard_*` 系列。
-- **在本地集群上测得，尚未在云集群上测量。** 在有三个 worker 的本地 `kind` 集群上，以 1,500 事件/秒（1,000 经 MQTT，500 经 HTTP）、两个开关都开启、每个信封约八个事件的条件下，每个事件的代理消息数下降约 41%（116.5 降到 68.2），每个事件的代理字节数下降约 37% 到 40%，每个事件的平台总 CPU 下降约 12%（每 1,000 个事件从 7.48 降到 6.60 CPU 秒）。`device-management` 每个事件的 CPU 减少 31%，`device-state` 减少 24%，检测引擎减少 47%，代理减少 14%。事件存储做的工作更多而不是更少：它每个事件的 CPU 上升约 23%，每条 `INSERT` 的行数从 16.1 降到 12.9，因为它从信封消息收到的批次更小、更多。持久化和确认延迟在测试环境的噪声范围内没有明显变化。请把这些数字看作在一种负载形态下效果的方向和大致幅度，并在依赖它们之前测量你自己的负载。
-- **关闭与回退。** 把两个值都设为 `false`。已在流中的信封会保留到过期或被消费。`dcctl upgrade` 会记录开关何时被开启，并在两者都关闭且滚动完成后记录每个流最新消息的位置。此后，只要有开关处于开启状态，或某个流中仍有开关关闭之前的消息，它就会拒绝降级到 `v1.1.0` 以下，并指出每个处于开启状态的开关。要回退，请关闭两个开关，让流越过记录的位置，然后再回退。`--allow-envelope-downgrade` 会带着警告跳过该拒绝，之后较早版本的服务会丢失它遇到的任何信封中的事件。代理管理器对这两个流拥有读取权限，用于这项检查。
-
-#### 回退 {#v110-going-back}
-
-两个迁移各新增一张表（事件存储中的 `failed_event_records` 和 `device-state` 中的 `dropped_measurements`）。数据库中没有需要撤销的内容。尽量向前推进：升级失败时，再次运行 `dcctl upgrade` 即可修复。
-
-- **事件信封。** 如果两个开关中有任何一个曾被开启，请在回退到 `v1.1.0` 以下之前，关闭两个开关，并让事件流越过 `dcctl` 记录的位置。否则 `dcctl upgrade` 会拒绝该变更，而 `v1.1.0` 以下的版本无法读取信封。参见[事件信封](#v110-envelope)。
-- **对外暴露的 MQTT。** `v1.1.0` 以下的版本不认识暴露设置。请先运行 `dcctl upgrade <provider> <instance> --mqtt-exposure none`，有意识地关闭该端口。
-- **流的大小。** 如果在设置了 `streamDesignRate` 之后回退到 `v1.0.0`，`v1.0.0` 在启动时会把事件流恢复为它自己的固定上限，而容量超出该上限的流会立即丢弃最旧的消息（`v1.0.0` 没有调低保护）。回退之前，请让事件流排空，直到每个流的数据量都远低于其 `v1.0.0` 上限，或者继续使用 `v1.1.0`。
-
-#### 已知问题 {#v110-known-issues}
-
-- **失败即关闭的 MQTT 确认默认关闭，** 与 `v1.0.0` 相同。[MQTT 传输](../reference/transport-matrix.md#mqtt--the-platform-broker)页面给出了关闭和开启时的实测限制。
-- **更改代理配置仍会断开由认证调用放行的设备，** 直到代理库包含上游修复。证书续期不会。 **已在 `v1.2.0` 中修复：**参见[更改代理配置不再断开已连接的设备](#v120-broker-reload)。
-
-### v1.0.0：首个稳定版本，数据库故障时事件被保留，Traefik 成为默认入口 {#v100-upgrade}
-
-`v1.0.0` 是首个稳定版本。它是从 `v0.27.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及 `--version`。本版本不运行任何迁移，也不改写任何行，因此除升级本身外没有数据步骤。如果从 `v0.26.0` 或更早版本升级，请先阅读 [`v0.27.0` 的说明](#v0270-upgrade)，并在其中使用 `--version v1.0.0`。由 `v0.16.0` 或更早版本创建的实例仍然[低于升级下限](#pre-declaration-recreate)，需要重建而不是升级。
+`v1.4.0` 是从 `v1.3.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见 [v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。**两个命令都要使用新版本的 `dcctl`**，并给 `dcctl install` 传入安装集群时使用的设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级时会运行十个追加的迁移（`device-management` 两个，`notification-management` 四个，`outbound-connectors` 两个，`user-management` 两个）；它们新增表和列。清除通知时间戳迁移还会在 `notify_on_clear` 为 true 且 `notify_on_clear_since IS NULL` 时设置 `notify_on_clear_since = updated_at`。参见[架构变更与回退](#v140-going-back)。如果从 `v1.2.0` 或更早版本升级，请先阅读 [`v1.3.0` 的说明](#v130-upgrade)，并在按其操作时使用 `--version v1.4.0`。
 
 ```bash
-dcctl install local --version v1.0.0
-dcctl upgrade local devicechain --version v1.0.0 --dry-run
-dcctl upgrade local devicechain --version v1.0.0
+dcctl install local --version v1.4.0
+dcctl upgrade local devicechain --version v1.4.0 --dry-run
+dcctl upgrade local devicechain --version v1.4.0
 ```
 
-从本版本起适用[版本与升级策略](./versioning-policy.md)：其中列为受保护的接口，只在主版本中发生不兼容变更。CI 中的检查会把每个受保护的接口（设备线路格式、GraphQL Schema、`dcctl` 命令与标志、npm 包和 C# SDK）与上一个发布比较，任何破坏性变更都必须写进检查所读取的文件。
+适用[版本与升级策略](./versioning-policy.md)。本版本扩充了受保护的接口（新的 GraphQL 字段、操作和枚举值，一个新的 MQTT 主题，新的 `dcctl` 标志和一个新的 `--size`），且未移除任何接口。新的代理提案和审批操作处于[预览层级](./versioning-policy.md#preview-interfaces)，在此期间仍可能在次版本中变化；届时发布说明会写明变化内容。本版本新增的 Helm 值不受兼容性策略保护，每个新值默认都是关闭的，或保持 `v1.3.0` 的行为。
 
-需要采取的行动，按执行顺序如下：
+新功能：
 
-- **把告警过滤器 `originator` 改名为 `originatorToken`。** 在 `device-management` 的 GraphQL Schema 中，`AlarmSearchCriteria`、`AlarmCountCriteria` 和 `Subscription.alarmStream` 此前接受 `originator`，而 `Alarm`、`AlarmEvent` 和 `AlarmState` 早已返回 `originatorToken`。这三个输入现在接受 `originatorToken`，且没有别名：仍然发送 `originator` 的请求会被拒绝。MCP 工具 `list_alarms` 也改为接受 `originatorToken`。控制台和仪表板包已经更新。参见[告警过滤器用令牌指明发起者](#v100-alarm-filter)。
-- **如果直接用 Helm（而非 `dcctl`）安装 chart，且你的实例由 ingress-nginx 提供服务，请在升级 chart 之前设置 `ingress.controller=nginx`。** chart 的默认值现在是 `gateway`。新的默认值会渲染 Gateway 及其路由并删除 Ingress 对象，如果集群没有 Traefik 的 `GatewayClass`，该主机将不再响应。`dcctl` 总是自行指明入口，因此不受影响。参见[Traefik 是默认入口](#v100-front-end)。
-- **如果你直接应用 OpenTofu 的集群根，** `enable_ingress_nginx` 现在默认为 `false`，新集群不会再安装 ingress-nginx。设为 `true` 可在已运行该控制器的集群上保留它。`dcctl install` 在集群中发现 ingress-nginx 时会替你这样做。只要还有属于其类的 Ingress，该根仍然拒绝移除控制器。
-- **当数据库无法接受写入时，事件会被保留而不是丢弃。** 这对在故障期间监视死信去向的任何东西都是行为变化。随之而来的告警见[数据库故障会保留消息](#v100-store-hold)。
-- **回退。** 参见[回退](#v100-going-back)。
+- **`dcctl` 拒绝顺序错误的升级。** 参见[强制检查升级顺序](#v140-ordering)。
+- **令牌受众不能再设为 `observe`，** 与 `v1.3.0` 说明中的预告一致。参见[令牌受众不能再设为 observe](#v140-token-audience)。
+- **通知策略可以在告警清除时发出通知，** 告警通知会标明设备，并可链接到设备。参见[标明设备的通知](#v140-notifications)。
+- **设备可以通过自身的 MQTT 连接发布自有载荷，** 交给其配置文件的解码器处理，控制台的连接示例也可以显示这种用法。需主动开启。参见[通过 MQTT 发送设备自有载荷](#v140-mqtt-uplinks)。
+- **LoRaWAN 命令可以获得确认，** 支持 ChirpStack v4 和 The Things Stack v3，命令定义还可以带有声明式载荷编码器。参见 [LoRaWAN 确认下行](#v140-lorawan)。
+- **接入计量可以补偿平台停顿造成的延迟。** 需主动开启。参见[带延迟补偿的接入计量](#v140-ingest-metering)。
+- **新增 `perf-16k` 规模，** 修正 `perf-12k`，并新增关系存储的 `max_wal_size` 设置。参见[规模规划](#v140-sizing)。
+- **代理动作，预览功能。** AI 代理可以提议确认或清除告警，由真人从自己的会话中审批。最终批准会执行告警 ACK 或 CLEAR。参见[代理动作（预览）](#v140-agent-actions)。
+- **提供受支持的方式，让本地集群访问你自己机器上的服务：** `--dev-allow-egress`。参见[本地开发出站访问](#v140-dev-egress)。
+- **Grafana 仪表板页面提供全部八个仪表板的截图，** 仪表板还会统计传输中的消息。参见[本版本的其他变更](#v140-other-changes)。
 
-#### 数据库故障会保留消息，而不是丢弃 {#v100-store-hold}
+#### 升级之前 {#v140-before-you-upgrade}
 
-在一次使用 32 GiB 事件存储卷的负载测试中，卷在事件存储的行数达到约 5100 万时被写满。主库陷入崩溃重启循环，报 “No space left on device”，负载工具统计到 1,722,366 个事件已被代理确认、但平台没有存储。原因是投递次数上限。事件存储拒绝写入时，`event-management` 让消息保持未确认，代理每 60 秒重新投递一次。到第五次投递（约四分钟后），它把事件发布到一个无人读取的去处并将其确认。如果数据库对每条语句都立即返回错误，整个在途窗口都会被丢弃，故障持续多久，就每四分钟丢弃一个窗口。没有任何告警。
+需要采取的操作，按执行顺序排列：
 
-- **`event-management` 保留存储拒绝的事件。** 当服务器表示无法接受写入（磁盘已满、连接过多、只读、I/O 错误），或连接类错误经 `SELECT 1` 探测失败确认时，写入器会让该批消息保持未确认，告知代理仍在处理，并且只在存储通过探测应答后才再次写入。积压会在流中等待、不被读取，现有的背压闸门会在流丢弃未读消息之前拒绝新事件。存储正常应答时让写入器崩溃的消息，仍像以前一样在用完投递预算后被搁置。新增指标为 `devicechain_eventmanagement_persist_store_held_events`。
-- **同样的保留覆盖其他在最后一次投递时丢弃消息的消费者。** `device-management` 中：事件解析器、`raise-alarm` 和 `device-reports`。`command-delivery` 中：`command-responses`、`dead-letter-writeback` 和 `device-roster`。`notification-management` 中：`alarm-notification`。`update-management` 中：`device-reports` 和 `device-roster`。`device-state` 中的实时状态投影有意不处理，因为它可以从流重建；其所有权消费者会保留。每个保留中的消费者都会上报 `devicechain_<service>_store_held_messages{consumer}`。
-- **通知既不会重复，也不会遗漏。** 已发送通知之后的写入（通知记录，以及清除静默时段所保留的内容）现在会原地保留，并在存储应答后重新执行。只重试写入，不重复发送。Webhook 或 SMTP 发送无法做到恰好一次：如果服务在发送与写入之间停止，记录会丢失，并且会写入日志。
-- **保留中的服务每重启一次，就消耗一条消息五次投递中的一次。** 跨越多次重启的保留仍可能走到最后一次投递。
-- **五个新告警。** 事件存储卷剩余空间不足 80%，且按最近两小时的速率将在 24 小时内写满时，触发 `DatabaseVolumeFillsWithinDay`（警告）。任何数据库卷使用超过 95% 时触发 `DatabaseVolumeCritical`（严重）。`event-management` 正在保留其数据库拒绝的事件时触发 `EventStoreRefusingWrites`（严重）。积压高于 1,000 且持续十分钟稳步上升时触发 `EventPersistBacklogGrowing`（警告）。`ConsumerHoldingForDatabase`（严重，按服务和消费者）覆盖其他服务。现有的卷告警和 JetStream 告警不变。参见[事件存储无法接受写入时](./observability.md#event-store-down)和[其他服务的数据库无法接受写入时](./observability.md#service-store-down)。
-- **三个新的持久化指标**给出每个已存储行的延迟：`persist_rows_total`、`persist_batch_rows` 和 `persist_commit_duration_seconds`（1 ms 到 2.5 s 的分桶）。`persist_duration_seconds` 不变；它按消息计量并包含批次等待，因此会随一次提交中的行数上升。
-- **容量规划指引。** 一行事件存储数据实测约 600 字节（未压缩）。[事件存储容量规划](./tuning-an-instance.md#event-store-sizing)给出计算指标带来的倍数、保留期和压缩，以及如何在线扩容卷。
+- **如果实例在任何位置设置了 `infrastructure.tokenAudience.enforcement: observe`，请在升级前移除。** 服务会拒绝使用此值启动，`dcctl upgrade` 也会在改动任何内容之前拒绝升级。参见[令牌受众不能再设为 observe](#v140-token-audience)。
+- **务必先用新版本的 `dcctl` 运行 `dcctl install`，再运行 `dcctl upgrade`。** `dcctl upgrade` 现在读取集群的安装记录，并在以下情况下于写入任何内容之前拒绝升级：上次完成 `dcctl install` 的 `dcctl` 比执行升级的版本旧，安装已开始但从未完成，或记录缺失。补丁版本也适用：使用较新补丁版本的 `dcctl` 运行不带标志的 `dcctl upgrade`，也需要先用该 `dcctl` 运行 `dcctl install`。不带标志的 `dcctl upgrade` 会重新应用实例声明的版本；如果该版本比你运行的 `dcctl` 更新，同样会被拒绝。参见[强制检查升级顺序](#v140-ordering)。
+- **显式指定的 `--version` 必须是你的 `dcctl` 自身的版本，** 对 `install` 和 `upgrade` 都适用。要切换到其他版本，请使用该版本的 `dcctl`。自定义镜像仓库标签、`--build` 和 `enable-area` 不受影响。
+- **只有在发布完成后，才开启新的可选功能，并且每项都要单独进行一次升级。** 每项默认都关闭，仍在运行的 `v1.3.0` Pod 不认识它：
+  - 在 `v1.4.0` 安装就绪后，单独进行一次升级来设置 `infrastructure.nats.mqttDeviceUplinks`。旧 Pod 会如何处理此设置：开启期间重启的旧 Pod 会在启动时停止，参见[通过 MQTT 发送设备自有载荷](#v140-mqtt-uplinks)。
+  - 在 `v1.4.0` 发布完成后，单独进行一次升级来设置 `agentActuation.enabled`。参见[代理动作（预览）](#v140-agent-actions)。
+  - 只有在所有 `event-sources` Pod 都是 `v1.4.0` 后，才设置 `eventSources.ingestMetering: lagCredit`。参见[带延迟补偿的接入计量](#v140-ingest-metering)。
+  - 仅在发布完成后开启 LoRaWAN 下行（`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled`），如果它尚未开启：开启期间重启的 `v1.3.0` `event-sources` Pod 会因 `v1.4.0` 由此派生的配置键而停止。
+  - 仅在发布完成后使用 `--dev-allow-egress`：任何条目都会向实例配置添加 `infrastructure.egress.devAllowedDestinations`，重启的 `v1.3.0` Pod 会拒绝该配置。参见[本地开发出站访问](#v140-dev-egress)。
+- **如果 LoRaWAN 下行已开启**（`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled`），在发布期间重启的 `v1.3.0` `event-sources` Pod 会因 `unknown field "lpwanDownlink"` 而停止。`v1.4.0` 会在 `event-sources` 收到的配置中加入该键（由 chart 推导，不可手动设置），而 `v1.3.0` Pod 会拒绝它不认识的键。未重启的 Pod 不受影响，发布过程会用可正常启动的 `v1.4.0` Pod 替换已停止的 Pod。下行保持关闭（默认）时，`event-sources` 没有任何变化。
+- **检查通用 webhook、Slack、Teams 和 PagerDuty 渠道的 `linkBaseUrl`。**现在保存渠道时会验证它（拒绝查询或片段），升级后投递时，已存储的无效值会使链接被省略，通知仍会发送。参见[标明设备的通知](#v140-notifications)。
+- **重命名以 `dcsa_` 开头的 OAuth 客户端 ID（不区分大小写），包括预置配置中的 ID。** 此前缀标识服务账号，可能与代理策略的客户端列表冲突。参见[现有操作的更严格检查](#v140-tightenings)。
+- **如果实例记录的规模为 `--size perf-12k`，下次 `dcctl upgrade` 时会有两项 Pod 规格变更：** `device-management` 请求 400m CPU（原为 500m），`event-sources` 的内存限制为 256Mi（原为 512Mi）。Pod 会像任何一次发布一样重启。参见[规模规划](#v140-sizing)。
+- **首次连接在 OCSP 状态不可用时获准接入，`devicechain_devicemanagement_x509_ocsp_unavailable_allowed_total` 将增加一，而不是二。** 设备首次连接过去会执行两次 OCSP 步骤，并将两次都计数；该序列的帮助文本说它统计连接次数，现在实际行为与之相符。允许和拒绝的决定、名称及标签均不变。请重新校准按双倍速率调好的仪表板或告警。
+- **根据下方的更严格检查审查脚本，** 包括原始 LoRaWAN 命令及 HTTP 解码器查询超时。
 
-这一保留机制在 kind 集群上做了端到端验证：事件存储被设为只读七分钟，同时以每秒 200 个事件的速率发送 QoS 1 MQTT。两次运行中，全部 144,000 个事件都恰好存储一次，四个死信去向均未增加任何消息。同样的故障下，保留机制之前的构建丢失了约 37,500 个。该对比以 `hack/outage-rig.sh` 运行。慢速失败的故障（连接挂起而不是报错）会使写入器变慢而不是耗尽投递次数，因此更早的构建丢失多少取决于故障形态；保留机制对两种情况都适用。
+新的 Helm 值和 `dcctl` 设置，默认都是关闭或保持不变：
 
-这一变更的限制：代理已向 MQTT 设备确认、但仍在捕获流中的事件，在该流写满时仍可能被淘汰，除非开启了失败即关闭的 MQTT 确认。参见[已知问题](#v100-known-issues)。
-
-#### 检测更快，重建的设备可以再次触发告警 {#v100-detection}
-
-- **检测在一个周期内发布。** 触发的检测过去要等到下一个检查点（默认 10 秒）才进入反应阶段，所以在安静的流上，规则的告警及其 `sendCommand` 会在读数之后 0 到 10 秒才出现。告警与命令此前总是在几毫秒内先后写入。现在待发布的检测在每个周期都会发布。提前发布不提交也不确认任何内容；崩溃后，同样的检测会以同样的标识重新推导，流的重复窗口会将其合并。
-- **删除后以相同令牌重建的设备可以再次触发告警。** 设备被删除后，引擎仍保留该令牌的已触发锁存、游标、窗口和定时器，所以重建后的设备的第一个越限读数发现规则已被锁存，在其离开条件再重新进入之前不会触发任何告警。现在设备被删除时会清除该状态，并在每个领导任期开始时依据持久的花名册进行对账，因此任期结束时仍在排队的删除也能覆盖。
-- **规则触发次数是统计值，不是下限。** 检测引擎页面曾说，被重放放大的计数应当作下限。重放之后它可能偏高，规则健康计数器也可能偏低，所以两个边界都不成立。要得到准确的账目，请使用按标识合并后的告警和命令。另外，一行只存储一次，并不证明只发生了一次实际动作，因为向设备或接收方的投递可能重复。
-
-#### 被丢弃的测量值现在会计数 {#v100-measurement-drops}
-
-设备在有效读数旁发布一个文本值，例如 `status_text` 为 `"ok"`、`battery` 为 50，该事件会被确认，有效读数会被存储；文本条目过去被丢弃，只在 `device-management` 日志中留下一条警告。计数器 `resolve_measurement_dropped_total{reason}` 现在对此计数，原因为 `undeclared_non_numeric`、`undeclared_unstorable` 和 `declared_not_storable`。警告按租户、设备、指标和原因各记录一次，并说明事件的其余部分已存储。契约不变：事件不会被拒绝，类型错误的已声明指标仍会进入死信。真/假值只对声明为布尔的指标转换为 1 或 0。
-
-#### 告警过滤器用令牌指明发起者 {#v100-alarm-filter}
-
-GraphQL 接口上其他所有令牌引用都叫 `...Token`，`Alarm`、`AlarmEvent` 和 `AlarmState` 也暴露 `originatorToken`，但告警过滤器却接受 `originator`，因此把字段名当过滤器名复用的脚本会报错。现在过滤器与之一致：
-
-| 输入 | 之前 | 现在 |
+| 值 | 默认值 | 作用 |
 | --- | --- | --- |
-| `AlarmSearchCriteria` | `originator` | `originatorToken` |
-| `AlarmCountCriteria` | `originator` | `originatorToken` |
-| `Subscription.alarmStream` 参数 | `originator` | `originatorToken` |
+| `eventSources.ingestMetering` | `legacy` | `lagCredit` 选择带延迟补偿的准入控制，以环境变量形式渲染到 `event-sources` Pod。 |
+| `instance.config.infrastructure.nats.mqttDeviceUplinks` | `false` | 授予每台设备向自身上行主题发布的权限，并将上行 subject 加入捕获流。可通过 `dcctl --values` 设置。 |
+| `agentActuation.enabled`，位于 `functionalAreas.user-management.config` 下 | `false` | 代理动作的实例开关，三个开关中的第一个。它是实例配置文档中的键，不是 `values.yaml` 默认值；缺失表示关闭。 |
+| `postgres_max_wal_size_mib`（集群根级 OpenTofu 变量） | `0` | 关系存储的 `max_wal_size`；`0` 保持 PostgreSQL 自身的 1 GB 默认值。 |
 
-`originatorType` 不变，提供令牌时仍然必填。这三处移除已在 GraphQL 兼容性检查的破坏性变更文件中声明。由 Schema 重新生成的强类型客户端在改用新名称之前无法编译。
+#### 强制检查升级顺序 {#v140-ordering}
 
-#### Traefik 是默认入口，ingress-nginx 已弃用 {#v100-front-end}
+显式指定的 `dcctl install --version` 或 `dcctl upgrade --version` 现在会拒绝与运行中的 `dcctl` 不同的已发布版本，无论更旧还是更新。不带标志的升级保留声明的版本，但会拒绝比运行工具更新的声明。请使用目标版本的 `dcctl`，带集群设置运行 `dcctl install`，然后逐个升级实例。二进制程序必须与其安装的版本一致，确保工具了解该版本的迁移及执行顺序。
 
-Kubernetes 项目已停用 ingress-nginx。新集群现在仅由 Traefik 和 Gateway API 提供服务，ingress-nginx 已弃用。不会有任何悄然迁移：`dcctl` 明确指定入口，因此 chart 的默认值只影响直接用 Helm 做的安装。
+`dcctl upgrade` 还要求有一份由不早于自身版本的 `dcctl` 完成的安装记录。记录缺失或不可读、安装未完成或已完成安装的版本过旧，都会在写入之前被拒绝。此前跳过安装的脚本必须先运行安装，包括补丁版本。
 
-- **只有 ingress-nginx 的集群** 继续用它为实例提供服务，`dcctl upgrade` 每次运行都会打印弃用警告。
-- **同时有两个控制器的集群** 与 `v0.26.0` 和 `v0.27.0` 相比没有变化。实例会在其 Ingress 对象旁获得一个 Gateway，迁移 DNS 由你负责，`--drop-legacy-ingress` 和 `--remove-legacy-ingress` 仍受保护。
-- **已记录的 `--ingress-controller nginx` 选择会在升级中保留。**
-- **在已有 ingress-nginx 的集群上运行 `dcctl install` 会保留它。** 它会传入 `enable_ingress_nginx=true`，使新的默认值不会被当作移除。
-- **`nginx` 选项再保留一个次版本。** 请利用这段时间[把实例迁移到 Traefik](./ingress-cutover.md)。
+本版本还让与平台 API 通信的命令支持 `-i` / `--instance`（`events failed`、`attr`、`dead-letters`、`presence`、`product`、`tenant-deletion`、`test` 和 `device register`）。未指定 `--server` 时，`--instance` 使用声明中的主机和 TLS 设置；显式指定的 `--server` 或 `--tls` 优先。
 
-#### 安装与运行 `dcctl` {#v100-dcctl}
+#### 现有操作的更严格检查 {#v140-tightenings}
 
-这些问题是在一台干净的、装有 Docker Desktop 的 Windows 机器上，从公开发布安装时发现的。
+- **OAuth 客户端 ID。** 保存和预置配置现在都会拒绝 `dcsa_` 前缀，不区分大小写。请重命名此类客户端：该前缀标识服务账号（包括代理账号），否则可能被误认为服务账号，或与代理策略的客户端列表冲突。
+- **通知链接。** 保存通用 webhook、Slack、Teams 或 PagerDuty 渠道时，现在会拒绝带查询或片段的 `linkBaseUrl`。请从基础 URL 中移除它们，因为链接通过追加路径构建。已存储的无效基础 URL 会在投递时省略链接；通知仍会发送。
+- **LoRaWAN 发送。** 每次发送现在都会读取已发布的命令词汇表和编码器，包括不带编码器的原始命令。查询故障会使投递等待重试；受限词汇表中确定缺失的命令会以未发送状态被拒绝。请保持命令定义已发布，并恢复查询服务。等待中的命令使用发送时生效的编码器，绝不使用入队时缓存的编码器。
+- **HTTP 设备解码器查询。** 调用方取消现在会停止等待查询。共享的后端查询会继续填充缓存，但有独立的 10 秒限制，避免无限运行。脚本可能更早遇到取消或可重试的查询失败；请重试后者，不要将其当作没有解码器。
 
-- **`dcctl preflight` 检查主机端口 80、443 和 1883。** 被其他容器占用的端口会使检查失败，早于 `dcctl install` 以 Docker 自己的消息失败，并且检查会指出占用者。已持有这些端口的集群通过检查。Docker Desktop 不再被报告为不适用，首次安装前没有当前上下文仅为提示。
-- **Preflight 在 Windows 和 macOS 上检查磁盘。** 它检查保存 `dcctl` 状态和 Docker Desktop 磁盘映像的卷的可用空间（低于 40 GiB 警告，低于 20 GiB 失败），并打印 Docker 自己的磁盘用量。Docker Desktop 的虚拟机上限无法从命令行读取，所以输出会提示你自行确认。
-- **打印的控制台 URL 和 `dcctl sim create` 的 MQTT 地址取自 kind 控制平面容器实际发布的端口。** 无法确定时，会打印此前的文字。
-- **被强制终止的 `dcctl bootstrap` 可以重新运行。** 在基础设施步骤中被终止的运行会留下托管（escrow）制品，需要 `--restore-root-key` 才能完成。现在重新运行会在该制品指明本实例、实例的凭据 Secret 已在集群中、且口令能打开它时采纳该制品。其他情况仍像以前一样拒绝。过期锁的拒绝信息现在会说明持有者何时是本机上已不再运行的进程。
-- **没有终端且没有 `--yes` 的 `dcctl install`** 不再报告创建被拒绝。
-- **`dc-simulator` 附在每个发布中，** 与 `dcctl` 和 `dc-edge-agent` 并列，覆盖 Linux、macOS 和 Windows 的 `amd64` 与 `arm64`，附校验和与来源证明。`dcctl sim run --simulator ./dc-simulator` 不再需要 Go 编译器，`dc-simulator -version` 会报告发布版本。`dcctl sim run` 通过 `event-sources` 的设备接入监听端口发布数据，标准安装不会在集群外暴露该端口，因此运行期间请保持 `kubectl -n dci-devicechain port-forward svc/event-sources 8081:8081` 处于运行状态（参见[首个设备指南的第 5 步](../quickstart/first-device.md#5-open-a-path-to-the-ingest-endpoint)）。
+#### 令牌受众不能再设为 observe {#v140-token-audience}
 
-#### 仪表板 {#v100-dashboards}
+`v1.3.0` 的说明已预告此变更。`infrastructure.tokenAudience.enforcement: observe` 在 `v1.2.0` 和 `v1.3.0` 中可用于选择不强制执行检查，现在会被拒绝：
 
-- **由设备类型的配置文件生成的看板修复了四处问题。** 它按单位各画一张图，而不是把所有测量值放在同一根轴上（没有单位的测量值单独一张图；每个看板最多四张图，每张图最多四个系列）。它的设备选择器只提供该类型的设备，这通过设备槽上新增的可选 `candidates.deviceType` 过滤器实现。仪表板令牌会自动填入，而不再因占位符而阻塞“创建”。缺少 `command:write` 的查看者看不到命令按钮的表单和“发送”按钮；界面会显示原因，并保留只读历史。
-- **限定到客户的查看者不再触发被拒绝的调用。** 打开仪表板时，每个区域和资产锚点都会先发起一次被拒绝的 `anchorDevices` 调用，再不带关系类型重试。现在会从访问令牌读取查看者的范围，不再发送关系类型。服务器不变，因此限定范围的成员能看到的内容没有扩大。
+- 如果实例配置中设置了此值，服务会在启动时停止，并指出该键。
+- chart 的值架构会拒绝 Helm 值和 `dcctl` 值覆盖文件中的此值。
+- 如果实例上记录的覆盖值、安装该版本时使用的值，或 `instance.existingSecret` 中的文档仍设置了此值，`dcctl upgrade` 会在改动任何内容之前拒绝升级。
 
-#### 其他较小的变更 {#v100-smaller}
+移除该键（未设置表示 `enforce`）或将其设为 `enforce`，然后升级。对于由 `dcctl` 管理且记录的覆盖值设置了此值的实例，请运行带 `--reset-values` 或 `--values <file without the key>` 的 `dcctl upgrade`；两者都不带的运行会被拒绝，并给出这两个命令。如果文档由你自行提供（`instance.existingSecret`），请在运行 `helm upgrade` 之前从文档中移除该键，因为服务会在启动时拒绝此值，而普通的 `helm upgrade` 无法查看 Secret 内部；同时更新 `instance.existingSecretChecksum`。升级前，请检查 `v1.3` 实例上的 `{__name__=~"devicechain_[a-z0-9]+_token_audience_checks_total", verdict="would_reject"}` 和 `devicechain_usermanagement_oauth_resource_checks_total{verdict="would_reject"}` 在具有代表性的流量时间窗口内是否没有新增计数，否则其对应的客户端将被拒绝。为保持兼容性，`would_reject` 序列以及 `TokenAudienceWouldReject` 和 `OAuthResourceWouldReject` 告警仍予保留，但不再可能触发。`unscopedClientCredentials` 不变。
 
-- **`update-management` 说明如何配置对象存储。** `createArtifact` 上的拒绝 `OBJECT_STORE_NOT_CONFIGURED` 现在会指出 `dcctl bootstrap --object-store filesystem|s3` 和 chart 值 `instance.config.infrastructure.blob.backend`。
-- **空中升级的文档以已验证的内容为准。** 受管升级仅支持 MQTT，LwM2M 设备用普通命令升级，Sparkplug 没有定义固件升级，分批、金丝雀和计划在 1.0 中不提供。一套可重复的测试台现在覆盖签名验证失败、上传时摘要不匹配、续传下载、离线分配、取消、截止时间和暂停的发布。
-- **凭据类型词汇表已冻结**，由带负向对照的测试保证，并移除了六条已过期的兼容性破坏声明。
-- **新的指南和示例。** [功能导览](../quickstart/feature-tour.md)走完从设备类型到只看到自己设备的客户用户的整条路径，只需更改一个参数文件即可为第二个站点运行。`examples/migration-pilot` 是迁移自其他平台的实操评估，链接自[迁移指南](../guides/migrating-from-another-platform.md)。其他示例涵盖使用 X.509 证书登录的设备、ChirpStack 上行消息，以及触发告警并向设备发送命令的规则。快速入门新增了获取 `dcctl` 的步骤，并说明了必须空闲的主机端口，以及如何从被强制终止的 bootstrap 中恢复。
-- **Sitepulse 和 Towerpulse 演示重新显示平台读数。** 在 `v0.27.0` 中，它们的实时设备卡片从未显示平台上报的内容，因为共享观察器创建了测量流却从未启动它；设备本身发布正常。请用此版本重新构建演示播放器。`dcctl sim create --manifest towerpulse` 现在会自行配置其演示层级，仅为该层级启用计算指标；所有默认层级中计算指标仍保持关闭。
-- **西班牙语翻译现在像中文一样**按新鲜度对照英文页面进行跟踪。
+#### 标明设备的通知 {#v140-notifications}
 
-#### 回退 {#v100-going-back}
+- **`notifyOnClear`。** 通知策略可在此前已发出通知的告警清除时通知，选项默认关闭。清除通知只发给该周期内成功投递过告警通知的渠道和接收人。静默时段会丢弃清除通知，不会保留等待。认领后至多投递一次：认领与发送之间崩溃可能导致通知丢失。拾取失败后退避两分钟重试，并在清除发生 30 分钟后停止。
+- **通知标明设备。** 已知时，webhook 载荷携带 `deviceToken`、`deviceName` 和 `deviceTypeToken`。Slack、Teams、PagerDuty 和电子邮件摘要显示设备名称；通用 webhook 的 `text` 用设备令牌标明设备，设备自己设置的名称只出现在结构化字段 `deviceName` 中，因此名称无法向渲染 `text` 的聊天工具注入标记。要发送到 Slack，请使用原生 Slack 渠道，而不是通用 webhook。定时重复通知和迟到的清除使用存储的来源；没有来源的旧行会省略这些字段。已知时包含 `originatorType` 和 `originatorId`。
+- **链接。** 通用 webhook、Slack、Teams 和 PagerDuty 渠道可以设置 `linkBaseUrl`。通用 webhook 载荷新增 `alarmUrl`，设备已知时还新增 `deviceUrl`；原生消息可链接到设备。保存已有渠道前，请参见[现有操作的更严格检查](#v140-tightenings)。
+- **文本渲染。** 设备或租户编写的文本中，Slack 控制字符（`&`、`<`、`>`）会被转义，Teams 提及和链接会被中和。摘要中的名称归一为单行，最多 120 个字符；结构化载荷保留存储的名称。非 ASCII 邮件主题按 RFC 2047 编码；ASCII 主题保持原样。
 
-本版本不运行任何迁移，因此数据库中没有需要撤销的内容。请尽量向前走：升级失败后，再运行一次 `dcctl upgrade` 即可修复。如果回退到 `v0.27.0`，已改为发送 `originatorToken` 的 GraphQL 客户端也必须一并回退。
+#### 通过 MQTT 发送设备自有载荷 {#v140-mqtt-uplinks}
 
-#### 已知问题 {#v100-known-issues}
+设备可以向 `{instance}/{tenant}/devices/{device}/uplink` 发布自己的字节数据，由其设备类型配置文件上的解码器转换为事件，与 `v1.3.0` 中 HTTP `uplink` 路由提供的能力相同。设备在连接时认证，签名授权只指定其自身的上行主题，因此载荷绝不可能被当作另一台设备的数据解码。`events` 上的载荷仍然绝不会由解码器读取。
 
-- **失败即关闭的 MQTT 确认默认关闭，** 与 `v0.24.0` 到 `v0.27.0` 相同。关闭时，代理已确认的事件在捕获流写满时仍可能丢失。[MQTT 传输](../reference/transport-matrix.md#mqtt--the-platform-broker)说明了关闭与开启时的实测限制和丢失上界。
+此功能需主动开启：`infrastructure.nats.mqttDeviceUplinks` 默认关闭，此时签发的授权与早期版本完全相同，消息代理会拒绝向该主题发布。载荷处理的终止性错误会连同原因记录为解码失败，并计入新的 `devicechain_eventsources_device_uplink_messages_total{result}`；限速丢弃会单独确认，消息阶段的丢弃不经过此计数器。还新增了一个服务平面查询 `brokerAssertedDeviceDecoder`。
+
+**在 `v1.4.0` 安装就绪后，单独进行一次升级来开启此功能。** 开启后，捕获流还会声明上行 subject。`mqttDeviceUplinks` 是共享实例配置文档中的一个键，因此开启期间，任何区域中启动或重启的 `v1.3.0` Pod 都会在启动时因 `unknown field "mqttDeviceUplinks"` 而停止，且发生在任何流检查之前。未重启的 `v1.3.0` Pod 会继续运行，影响如下：已在运行的 `event-sources` Pod 会确认并丢弃其两个 subject 之外的 subject，因此到达它的原始载荷会丢失；`device-management` Pod 则会拒绝无法安置的上行，该上行会被重新投递。关闭时，捕获流与 `v1.3.0` 声明的完全相同，因此在发布过程中重启的 Pod 不受影响。现有发布授权会保留到重新连接或会话令牌过期，但关闭此设置会在协调时将上行从捕获范围中移除，因此继续发布可能丢失载荷。
+
+使用 `dcctl` 时，在 `--values` 覆盖文件中设置：`instance.config.infrastructure.nats.mqttDeviceUplinks: true`；后续升级会保留它。参见[载荷解码器指南](../guides/payload-decoders.md)和[设备协议参考](../reference/device-protocol.md#raw-payload)。控制台中设备的**发送数据**标签页现在在事件 JSON 旁提供**原始载荷**选项，包含用于 HTTP 路由的 `curl` 和用于该主题的 `mosquitto_pub`。控制台无法判断运维人员是否启用了其中任一功能，因此每条命令都会标明所需设置。
+
+#### LoRaWAN 确认下行 {#v140-lorawan}
+
+- **ChirpStack v4。** 带有 `"confirmed": true` 的命令保持 `SENT`，直到网络服务器给出最终结果，而不再在下行排入队列时就得到应答。ChirpStack 的 `ack` 和 `txack` 事件会到达已为上行配置的入站集成 URL。收到确认后，命令最终状态为 `SUCCESSFUL`；确认超时且未收到确认，或截止时间前未收到任何报告，最终状态为 `TIMEOUT`，投递情况未知，绝不会标为“未投递”，因为设备可能已经收到。截止时间取命令过期时间与入队后 24 小时中较早者。无法通过队列项 ID、集成和 DevEUI 匹配到待处理下行的事件会被丢弃，并计入 `devicechain_outboundconnectors_lpwan_ack_reports_total`，绝不猜测匹配。
+- **The Things Stack v3。** 下行也能送达位于 The Things Stack v3 网络服务器之后的设备。创建 `lorawan_downlink` 连接器，设置 `networkServer: "tts_v3"` 和应用 ID；设备需要一个 `tts.device-id` 别名。确认下行的最终结果来自 `downlink_ack`、`downlink_nack`、`downlink_sent` 和 `downlink_failed` webhook 事件；必须在应用的 webhook 中启用这些事件，并使用以 `downlink` 开头的路径（例如 `/downlink-ack`）。只有能证明帧从未传输的失败才会得出确定的未投递结果；不确定的失败会以 `TIMEOUT` 结束，投递情况未知。
+- **命令定义上的载荷编码器。** 命令定义可以带有可选的声明式 `encoder`，将命令的类型化参数转换为应用载荷，与上行解码器相对应：一个 `fPort`、可选的静态 `confirmed`，以及有序字段（常量字节、支持两种字节序并带 `scale` 和 `offset` 的 8、16 或 32 位定宽整数、布尔值及打包位字段）。创建或更新定义时以及发布配置文件时都会验证，因此错误的编码器会明确报错并指出命令。当 scale/offset 转换后得到的值在编码器的浮点容差内为范围内的整数时，允许小数输入。超出这些界限、值缺失或类型错误，都会使命令以未发送状态被拒绝。没有编码器的定义保留原始十六进制或 base64 约定。等待投递的命令使用发送时生效的已发布编码器，包括重新发布之后；每次发送都会重新读取词汇表。查询故障会推迟投递以便重试，不会使用过时的编码器。参见[入站集成指南](../guides/inbound-integrations.md)。
+
+此功能需要 `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled`，与 `v1.3.0` 相同。请等到发布完成后再发送确认下行，以确保每个 `outbound-connectors` Pod 都读取新的确认流。仍在运行的 `v1.3.0` Pod 会拒绝 `"confirmed": true`，并将命令应答为未发送，因此不会让命令卡住；如果 Pod 在下行排入队列之后、记录之前停止，命令会保持 `SENT`，直到过期扫描将其最终状态设为 `TIMEOUT`。对于 ChirpStack，确认下行需要 HTTP 集成向集成 URL 发送 `ack`（以及可选的 `txack`）事件；对于 The Things Stack，请启用上述下行事件。`outbound-connectors` 在所有投递尝试中都未能处理的网络服务器报告不会记录为死信：其下行会如上所述在截止时间得出最终状态。
+
+#### 带延迟补偿的接入计量 {#v140-ingest-metering}
+
+平台短暂停顿（消息代理暂停、读取器暂停、解码阶段缓慢）后，始终未超出上限的租户，其排队流量会被集中读取；实时额度容纳不了的部分过去会被丢弃，而此时设备已被告知消息到达。新的计量模式消除了这一问题。
+
+- **需主动开启，且不作为默认值。** `eventSources.ingestMetering` 仍为 `legacy`，在 kind 测试环境和一轮云端测试中完成此模式的测量之前都会保持如此。设为 `lagCredit` 可使用新的准入控制，改回 `legacy` 可恢复原有方式。这是一个 Helm 值，会以环境变量形式渲染到 `event-sources` Pod 中，因此早期版本的 Pod 根本不会看到它。无法识别的值会使 Pod 在启动时停止。升级只能向前进行。
+- **作用。** 新流量仍在 Pod 读取时计数，但租户的额度会增加，增量为其速率在读取器实测延迟期间所积累的额度，最多覆盖其突发额度允许的时长（绝不超过 5 秒）。超过上限的租户仍会被丢弃超额部分，早于覆盖时段的积压仍按原方式排空。
+- **不变之处。** 超出上限、过载档位或硬丢弃造成的丢弃，仍由已有的限速计数器按原方式计数。HTTP 和入站集成保留各自限制。上限仍按副本计算。
+- **测量方式。** 每个副本利用消息代理已有的投递信息，估算代理的追加时间戳与自身时钟之间的偏差，以及每个读取器落后多少，并每秒约四次询问代理，检查安静的流中是否有消息排队。停顿期间启动的副本尚未测量代理时钟，因此在停顿最初的一段时间内，给出的补偿可能少于应有值。
+- **新的指标，** 在 `legacy` 模式下为空，且均不带租户标签：`devicechain_eventsources_ingest_shed_cause_total{stream,route,cause}`、`devicechain_eventsources_ingest_lag_credit_seconds{stream}`、`devicechain_eventsources_reader_lag_seconds{stream}`、`devicechain_eventsources_append_skew_seconds{stream}` 和 `devicechain_eventsources_append_skew_clamped_total{stream}`。**新的告警，** 在 `legacy` 模式下不触发：`IngestShedBeyondLagCredit` 和 `IngestAppendSkewLarge`。
+
+#### 规模规划 {#v140-sizing}
+
+- **`perf-16k` 是新的 `--size` 值，** 用于持续每秒 16,000 个事件：NATS 请求 6 CPU 和 6Gi，事件存储在 260Gi 卷上设置 40960 MiB 的 `max_wal_size`，`event-processing` 使用 2 CPU 和 1536Mi，并为设计速率配备 36Gi JetStream 卷。实测配置完整承载了每秒 16,000 个事件；每秒 20,000 个事件也能完整存储，但超出了延迟目标，因此文档将其列为吞吐量上限，且没有 `perf-20k`。`perf-16k` 的值根据实测递增负载推导，尚未按当前写法实际运行；规模规划页面已说明这一点。
+- **修正 `perf-12k`：** `device-management` 请求 400m CPU（原为 500m），`event-sources` 的内存限制为 256Mi（原为 512Mi，实测驻留内存最多 81 MiB）。记录为 `perf-12k` 的实例会在下次 `dcctl upgrade` 时应用这两项变更。
+- **关系存储的 `max_wal_size`。** 新增的集群根级 OpenTofu 变量 `postgres_max_wal_size_mib`（默认为 `0`，即 PostgreSQL 自身的 1 GB，因此不改变任何已有安装）通过集群定义设置该值。当存储以整数 Mi、Gi 或 Ti 数量表示时，计划会拒绝超过 `postgres_storage` 四分之一的额度；其他形式会跳过此检查。关系存储属于集群，因此 `dcctl bootstrap --size` 不会写入此值：请在安装时通过 `TF_VAR_postgres_max_wal_size_mib` 指定，并确保 `TF_VAR_postgres_storage` 足够大。`dcctl` 不会持久保存此设置：后续运行 `dcctl install` 时若未提供，会重置为 PostgreSQL 默认值。每次安装都要重复提供。规模规划页面列出了测量每种规模时使用的值。
+
+参见[规模规划](./sizing.md)。
+
+#### 代理动作（预览） {#v140-agent-actions}
+
+AI 代理可以提议确认或清除告警。此预览功能默认关闭，最终批准会在平台使用审批人自己的凭据再次询问代理策略后，**以审批人的身份执行 ACK 或 CLEAR**，整个过程在一个数据库事务中完成。如果告警再次触发或被删除、依赖发生变化，或策略拒绝（包括租户开关、实例开关或客户端准入），提案会以 `REFUSED` 结束，不改变任何告警。审计行记录审批人、所代表的人以及提案。控制台审批还会记录代理客户端；如果审批令牌有自己的 `client_id`，则该声明优先。没有自动模式。参见[提案与审批](../concepts/mcp.md#agent-proposals)。
+
+- **仅在发布完成后开启。** 实例开关 `agentActuation.enabled`、运维人员按租户设置的暂停以及租户的代理策略共同控制决策。`v1.3.0` 没有代理 API、策略表或暂停操作：代理请求在这些 Pod 上失败，不执行任何动作。`v1.4.0` Pod 遵守这些开关。请在所有 Pod 都是 `v1.4.0` 后，通过单独一次升级开启实例开关。升级前已登录的人员必须重新登录，其代理才能提出提案：`v1.4.0` 之前开始的登录不带会话纪元，在其下提出的提案会以 `PROPOSER_SESSION_ENDED` 被拒绝。重新登录后，代理再次提出提案即可。
+- **控制台 Approvals 收件箱（预览）。** 用户可以列出提案、查看详情、批准或拒绝，并使用租户紧急关闭开关。需要强化认证时，控制台会提供重新登录，并返回提案。租户、用户或会话改变时，策略、提案及本地决策状态都会重置。 最终批准的确认提示会说明：批准即以你的身份执行该动作；之后收件箱显示结果：`EXECUTED` 及其结果、`REFUSED` 及原因（告警已变化时包括 `DEPENDENCY_CHANGED`），或在他人正在决定同一提案时显示 `CONCURRENT_APPROVAL` 并随后刷新。若服务器仍返回已弃用的 `EXECUTION_NOT_AVAILABLE`，收件箱会说明该批准未被记录，且没有任何告警发生变化。
+- **再次检查审批。** 审批人需要动作所需的写入权限、审批角色和刚验证过的第二因素。先前的批准只有在审批人仍符合资格且第二因素仍在有效时限内才计入。角色持有者变化会改变哪些批准计入。
+- **紧急关闭开关在下一次决策时生效。** 即使无法读取或验证策略，也会接受 `setAgentActuation(enabled: false)`。开关关闭时，尚未到达的决策点会拒绝执行；已通过该决策点的动作可能完成。开关不会撤销已执行的动作。重新开启需要刚验证过的第二因素。这是应用层面的控制。
+- **其他动作不执行。** 此预览仅为告警 ACK/CLEAR 提案提供执行路径；命令和发布操作没有。MCP 工具不执行任何动作。
+- **提案者资格。** 平台会重新检查原始登录和当前权限。既不是提案者也不是 `agent:admin` 的调用方会收到概括性原因 `PROPOSER_NOT_IN_STANDING`；存储的 `PROPOSER_` 拒绝原因也会概括化。
+- **提案目标必须是有效的告警令牌。**`proposeAlarmAction` 会拒绝格式不正确的目标令牌，因此已存储的提案不能携带自由文本，以免之后的读取将其当作平台标识符呈现。
+- **弃用。** 不再返回 `EXECUTION_NOT_AVAILABLE`，该值已弃用；仍保留在词汇表中。
+
+#### 本地开发出站访问 {#v140-dev-egress}
+
+`dcctl bootstrap` 和 `dcctl upgrade` 接受 `--dev-allow-egress <address-or-CIDR>`（可重复指定，也可用逗号分隔；`none` 用于清空），让本地集群中的 webhook 或连接器能够访问你自己机器或局域网上的服务。除非 Kubernetes 上下文以 `kind-` 或 `k3d-` 开头，或为 `minikube`、`docker-desktop`、`rancher-desktop`（也接受带连字符及配置名称后缀的形式），否则会被拒绝。它使用独立的键 `infrastructure.egress.devAllowedDestinations`，运维控制器的 `allowedDestinations` 仍不可调整。无论列出什么，云元数据地址、回环、链路本地和组播范围，以及其他绝不允许的范围仍会被阻止；与其中任一范围重叠的条目都会使 `dcctl` 在开始时失败。该设置会记录在实例上，供后续升级保留；`dcctl instances` 将其显示为 `DEV EGRESS ALLOWED`，每个使用它的服务都会在启动时记录警告。参见[出站连接器](../concepts/outbound-connectors.md)。 请在所有 Pod 都是 `v1.4.0` 后再设置：重启的 `v1.3.0` Pod 会拒绝列出任何条目的配置。
+
+#### 本版本的其他变更 {#v140-other-changes}
+
+本节内容均无需任何操作。
+
+- **[Grafana 仪表板](./grafana-boards.md)页面提供截图，** 展示 `v1.3.0` 实例在稳定合成负载下的全部八个仪表板，并包含一次脚本触发的故障。
+- **等待积压面板统计传输中的消息。** 消息代理的回退统计方式将等待中的消息和已取出但尚未确认的消息合并计数，因此重启的读取器已取出的消息仍会被计入；接入、持久化、设备状态、消息传递、投递和事件处理的积压面板均已修正。平台 OOM 以及投递被拒或静默时段的指标卡，在其负责服务运行时显示 `0`，而非“无数据”。
+- **通知清除拾取流程**会将已完成部分投递、随后耗尽预算的一轮处理报告为部分完成，而非失败，并且对两次读取均失败的租户只计数一次。
+- **删除已删除租户的待处理下行失败时，** 会记录为 `store_failed`，确认扫描会在认领之前丢弃已删除租户的行。
+- **本版本功能的面板和告警。** Ingest、Command Delivery 和 Delivery 看板新增面板，覆盖设备 MQTT 上行、LoRaWAN 确认与下行、集成下行报告、按延迟补偿的接入计量、OCSP 以及清除通知拾取；七个新告警都有[运行手册条目](./alert-runbook.md)：`LpwanAckReportsAnomalous`, `LpwanAckSettlementFailing`, `LpwanDownlinkTrackingFailing`, `IntegrationDownlinkReportsDiscarded`, `DeviceUplinkMessagesFailing`, `X509OcspUnavailableAllowed` and `NotificationClearPickupFailing`。
+- **被拒绝的数据库读取**会返回错误，而不是发生空指针 panic。
+- **代理令牌不能再更改某个人的个人资料名称：**`updateProfile` 拒绝代理令牌。
+- **使用 Go 1.27.4 构建。** `v1.4.0` 的二进制文件和镜像使用 Go 1.27.4 构建，修复了标准库 `net/http` 中的一个漏洞。
+
+#### 架构变更与回退 {#v140-going-back}
+
+以下迁移为追加式增量变更。新列可为空或有默认值，新表最初为空。这支持升级期间 Pod 共存，并不提供降级路径。
+
+- **代理策略**（`user-management`，迁移 `20261109120000`）。两张新表：`iam_agent_policies`（每个租户一条头记录）和 `iam_agent_policy_versions`（仅追加的已发布版本），以及 `iam_service_accounts` 上的代理标志。不预置任何行：没有已发布策略的租户，其代理执行功能处于关闭状态。
+- **租户紧急关闭开关**（`user-management`，迁移 `20261109130000`）。`iam_agent_policies` 上新增三列：不可为空且默认为 false 的 `tenant_actuation_off`，以及可为空的 `actuation_off_at` 和 `actuation_off_by`。`v1.3.0` 没有代理策略操作。
+- **代理提案**（`device-management`，迁移 `20261125090000`）。一张新表 `agent_proposals`。
+- **命令编码器**（`device-management`，迁移 `20261109000100`）。命令定义上新增一个可为空的列 `encoder`。
+- **清除时通知**（`notification-management`，迁移 `20261109000100`、`20261109000200` 和 `20261110000100`）。策略上新增默认为 false 的 `notify_on_clear` 列，通知状态表上新增按周期记录的列和部分索引，策略上还新增可为空的 `notify_on_clear_since`，仅在 `notify_on_clear` 为 true 且 `notify_on_clear_since IS NULL` 时设为 `updated_at`。
+- **通知状态来源**（`notification-management`，迁移 `20261110000200`）。通知状态表上新增六个可为空的列：`originator_type`、`originator_id`、`device_token`、`device_name`、`device_type_token` 和 `source_at`。不回填历史数据。
+- **待处理确认**（`outbound-connectors`，迁移 `20261109120000` 和 `20261110120000`）。一张新表 `lpwan_pending_acks`，以及该表上一个可为空的 `device_ref` 列。
+
+**升级只能向前进行；不能降级到 `v1.3.0`。** 升级失败后，请使用 `v1.4.0` 的 `dcctl` 再次运行 `dcctl upgrade` 修复。该工具会拒绝 `--version v1.3.0`。请遵循[版本与升级策略](./versioning-policy.md)。
+
+#### 已知问题 {#v140-known-issues}
+
+- **网络服务器始终未报告结果的 LoRaWAN 确认下行，会在截止时间到达时确定最终状态，** 记为 `TIMEOUT`，投递情况未知。
+- **在清除标记写入之前已成功认领的升级通知，仍可能在清除之后投递，** 而在清除被认领之后才记录的升级通知目标不会收到清除通知。
+- **`dcctl bootstrap --size` 不会写入关系存储的 `max_wal_size`。** 请在安装时设置，并在每次安装中重复提供；未提供时会恢复 PostgreSQL 默认值。
+- **除告警 ACK/CLEAR 外，其他提案即使获批也不执行；** MCP 工具不执行任何动作。
+- **紧急关闭开关不会逆转已执行的动作。** 它在下一次决策时生效；已通过该决策点的动作可能完成。
+
+### v1.3.0：命令可送达 HTTP 和 LoRaWAN 设备，每次投递都留有凭据 {#v130-upgrade}
+
+`v1.3.0` 是从 `v1.2.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入安装集群时使用的设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级时会运行十个追加的迁移（`device-management` 五个，`command-delivery` 两个，`event-management` 两个，`notification-management` 一个），并且每个区域的审计日志各增加四个可为空的列；它们新增表、可为空的列和索引，不改动任何已有行。参见[架构变更与回退](#v130-going-back)。请按上面的顺序在升级实例之前运行 `dcctl install`：它还会让 Alertmanager 改用 `dcctl` 写入的路由配置（参见[告警送达真人](#v130-alert-routing)）。**令牌受众现在默认强制执行：** 升级之前请阅读[令牌受众默认强制执行](#v130-token-audience)，如果你自己编写实例配置，更要如此。如果从 `v1.1.0` 升级，请先阅读 [`v1.2.0` 的说明](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-upgrade)，并在按其操作时使用 `--version v1.3.0`。
+
+```bash
+dcctl install local --version v1.3.0
+dcctl upgrade local devicechain --version v1.3.0 --dry-run
+dcctl upgrade local devicechain --version v1.3.0
+```
+
+适用[版本与升级策略](./versioning-policy.md)。本版本扩充了受保护的接口（新的 GraphQL 查询、变更、字段和枚举值，新的设备 HTTP 路由，新的 `dcctl` 标志和命令，以及 C# SDK 的一个新类型），且未移除任何接口。策略本身在本版本中有三点新内容：
+
+- **预览层级。** 新提供的接口可以在最初的几个次版本中处于[预览](./versioning-policy.md#preview-interfaces)层级，在此期间仍可能在次版本中变化；届时发布说明会写明变化内容和应对方法。本版本中处于预览层级的是规则测试（event-processing API 的 `evaluateRules` 操作、场景和测试文件格式，以及 `dcctl test`），以及 `dcctl product export`、`plan`、`apply` 及其包格式（`product.devicechain.io/v1alpha1`）。可以在其上构建，任何变化都会在这里公布。
+- **MCP 工具目录不受保护。** 工具名称、输入和结果结构可以在次版本中变化，本版本就改变了它们：参见 [MCP 工具结果标明来源](#v130-mcp-provenance)。
+- **Helm 值。** 本版本新增或修改的 Helm 值不受兼容性策略保护，次版本在本节中说明这一点。每个新值默认都是关闭的，或保持 `v1.2.0` 的行为。
+
+新功能：
+
+- **令牌受众默认强制执行，** 正如 `v1.2.0` 的说明所预告。API 以 `401` 拒绝绑定到它不提供的资源的令牌，授权服务器以 `invalid_target` 拒绝为本实例不提供的资源发出的请求。未绑定任何资源的令牌（包括每一次登录和每一个服务令牌）不受影响，MCP 令牌也不受影响。参见[令牌受众默认强制执行](#v130-token-audience)。
+- **命令可以送达不保持连接的设备。** 只使用 HTTP 的设备通过长轮询获取命令、确认收到并作出应答。位于 ChirpStack v4 网络服务器之后的设备以 LoRaWAN 下行的形式收到命令。现在每条命令都会记录其投递是如何被观察到的，适用于所有传输方式。参见[通过 HTTP 获取命令与投递凭据](#v130-http-command-pull)和 [LoRaWAN 下行](#v130-lorawan-downlink)。
+- **告警送达真人。** `dcctl install` 和 `dcctl upgrade` 可以把平台自身的告警路由到 webhook、电子邮件地址或你自己的配置；死信开关接收器会在告警系统本身沉默时通知你；每条告警都链接到告警手册中的条目；告警无处可去的实例会明确报告。参见[告警送达真人](#v130-alert-routing)。
+- **出站 webhook 可以签名，** 遵循开放的 Standard Webhooks 规范，适用于 `httpCall` 规则动作和 webhook 通知渠道。参见[签名的出站 webhook](#v130-signed-webhooks)。
+- **HTTP 事件端点更早地告诉设备实情。** 未知租户或无法认证的凭据会立即得到 `401`，被拒文档的 `400` 会指出出错的字段，被接受的事件会附带回执。参见[HTTP 事件端点返回 401](#v130-http-events-401)。
+- **设备可以把自己的载荷发给其配置文件的解码器，** 使用一个新的可选路由。参见[设备自有载荷的解码](#v130-device-uplinks)。
+- **证书连接可以用 OCSP 检查，** 按信任锚配置，默认关闭。参见[证书连接的 OCSP 检查](#v130-ocsp)。
+- **租户的产品可以保存为文件，** 使用 `dcctl product export`、`plan` 和 `apply`（预览）。参见[产品即代码](#v130-product-as-code)。
+- **检测规则可以做单元测试，** 使用 `dcctl test` 和 `evaluateRules` 查询（预览）。参见[规则测试](#v130-rule-tests)。
+- **记录每个租户每天的事件用量，** 运维人员可以读取。参见[按租户的事件用量](#v130-usage-metering)。
+- **活动按计划发送命令：** cron、日历日期、节假日，以及按每台设备自身安装位置计算的日出或日落。参见[活动](#v130-campaigns)和[安装位置](#v130-installed-position)。
+- **记录通知投递，** 每次尝试一行，并给出每个渠道的健康状况。参见[通知投递台账](#v130-delivery-ledger)。
+- **控制台中的告警分诊：** 告警链接到其设备并显示单位，可以一次确认多条，设备有“告警”标签页，首页统计告警和在线设备。运维人员还可以标注一条告警最终是什么性质。参见[控制台搜索设备并分诊告警](#v130-console)和 [告警处置](#v130-alarm-dispositions)。
+- **原生模型上的词汇术语：** 设备、资产、区域和客户类型，关系类型以及指标，可以带有 Brick、SAREF、Smart Data Models 和 NGSI-LD 中的术语。参见[语义绑定](#v130-semantic-bindings)。
+- **MCP 工具结果把设备和用户写入的文本标记为数据，** 放在带有来源的 `untrusted` 成员之下。参见 [MCP 工具结果标明来源](#v130-mcp-provenance)。
+
+#### 升级之前 {#v130-before-you-upgrade}
+
+需要采取的操作，按执行顺序排列：
+
+- **检查是否有绑定到错误资源的令牌，并决定是否在这个次版本内退出强制执行。** 令牌受众现在默认强制执行。在 `v1.2.0` 实例上，`{__name__=~"devicechain_[a-z0-9]+_token_audience_checks_total", verdict="would_reject"}` 和 `devicechain_usermanagement_oauth_resource_checks_total{verdict="would_reject"}` 应为零；如果是这样，新的默认值对你的客户端没有任何影响。如果你自己提供实例配置（`instance.existingSecret`）并运行 MCP 区域，请先把 `tokenAudience` 配置块加入文档，否则 AI 代理会失去 MCP 访问。参见[令牌受众默认强制执行](#v130-token-audience)。
+- **如果你曾通过手动编辑 Alertmanager 自身的 Secret 来路由告警，请先把这份配置迁移到 `dcctl install --alert-config <文件>`。** 从本版本起，Alertmanager 读取 `dcctl` 写入的 Secret `dc-alertmanager-config`，因此运行 `dcctl install` 后，手动编辑的配置不再被读取。由早期版本安装的集群还需要先运行一次 `dcctl install`，`dcctl upgrade` 才会接受 `--alert-*` 标志。参见[告警送达真人](#v130-alert-routing)。
+- **注意 `POST /{instanceId}/{tenant}/events` 现在对未知租户或无法认证的凭据返回 `401`。** 这类请求过去会得到 `202`，随后被拒绝，因此其事件从未被存储。收到 `401` 的设备需要修正租户名称或凭据；事件正常存储的设备不受影响。滚动升级期间，旧 Pod 对这类请求仍返回 `202`。参见[HTTP 事件端点返回 401](#v130-http-events-401)。
+- **只有在滚动升级完成后，才开启信任锚的 OCSP 模式。** 在所有 `device-management` 副本都运行本版本之前，旧副本不检查 OCSP，因此一个副本拒绝的证书仍可能被另一个副本放行。参见[证书连接的 OCSP 检查](#v130-ocsp)。
+- **其他新的可选功能也只在发布完成后开启。** 它们默认都关闭，原因相同：仍在运行的 `v1.2.0` Pod 不认识它们。
+  - 只有在所有服务的所有副本都已升级后，才把设备类型的 `commandChannel` 设为 `HTTP_PULL`；旧的 `command-delivery` 会把这类设备的命令发布到无人读取的地方，命令随后超时。
+  - 只有在所有 `device-management` 副本都已升级后，才开启 `httpIngest.deviceUplinks`；旧副本会在已返回 `202` 之后拒绝该上行。
+  - 只有在所有 `outbound-connectors` 和 `notification-management` 副本都已升级后，才开启 webhook 签名（`httpCall` 动作上的 `signingSecretRef`，webhook 渠道上的 `"signing": true`）；旧副本会发送未签名的请求。
+  - 在发布完成后再创建带日出或日落触发器的活动：`v1.2.0` 的 `user-management` 副本拒绝签发读取安装位置的令牌，因此太阳时间规划会报告错误并重试，直到该副本消失。
+- **迁移所有以 `webhook-signing/` 开头的 `httpCall` Bearer 凭据句柄。** 该命名空间现在保留给签名密钥，引用此类句柄的规则在发布时会被拒绝。参见[签名的出站 webhook](#v130-signed-webhooks)。
+- **更新从工具结果中读取自由文本的 MCP 客户端。** 设备的名称、描述和外部 ID，指标的名称和单位，告警的键，以及命令的名称和错误，现在都位于 `untrusted` 之下，形式为 `{ "value": ..., "source": ... }`。MCP 工具目录不是受保护的接口，因此这一变化在次版本中发布。参见 [MCP 工具结果标明来源](#v130-mcp-provenance)。
+- **预计 `devicechain_eventprocessing_detect_late_samples_total` 的读数会变高。** 被已关闭的滚动窗口或已关闭的会话丢弃的迟到读数现在会被计数，与其他规则类型一直以来的做法一致；此前这些丢弃不留痕迹。检测结果不变。请重新校准按旧速率调好的仪表板或告警。参见[规则测试](#v130-rule-tests)。
+- **在发布完成后再发布带语义绑定的配置文件和资产类型。** 在滚动窗口内，处理发布请求的旧 Pod 写出的快照不含绑定。草稿会保留它们，由已升级的 Pod 进行的下一次发布会将其固定下来。参见[语义绑定](#v130-semantic-bindings)。
+- **预计在大型事件存储上 `event-management` 的迁移耗时更长。** 它会逐个分块在事件表上建立索引。参见[按租户的事件用量](#v130-usage-metering)。
+- **把新的告警和指标加入你的路由和仪表板。** 新增了 `devicechain_usermanagement_service_token_checks_total`（[详情](#v130-service-token-ceiling)），以及证书连接的 OCSP 序列和 `devicechain_notificationmanagement_ledger_writes_total`。
+- **本版本的其他内容无需任何操作。** 其余变更都是新增的，或默认关闭。`infrastructure.tokenAudience.enforcement: observe` 仅在本版本中作为退出选项被接受，`v1.4` 会拒绝它。`v1.2.0` 中对“指定 `resource` 但未指定 `scope` 的 `client_credentials` 请求”的弃用仍然有效。
+
+新的权限：
+
+- **`usage:read`** 是系统层级的权限，用于在 event-management 的管理 API 上读取每个租户的事件用量。内置的 `superuser` 角色持有 `*`，因此拥有它；把它授予其他系统角色，即可让该角色读取用量。任何租户角色都不能持有它。
+- **`location:installed:read`** 是租户层级的权限，只用于读取设备或资产的安装位置。`location:read` 隐含该权限，因此已经持有 `location:read` 的角色（以及持有 `*` 的 `tenant-admin`）无需改动。它不在查看者基线中：如果某个角色应能看到安装位置、但不应看到设备的实时位置，就只授予它 `location:installed:read`。
+
+新的 Helm 值，默认都是关闭或保持不变：
+
+| 值 | 默认 | 作用 |
+| --- | --- | --- |
+| `functionalAreas.device-management.config.callout.ocsp.enabled` | `false` | 实例级的 OCSP 总开关。关闭时不会询问任何响应器；其他 `ocsp.*` 键见 [OCSP](#v130-ocsp)。 |
+| `functionalAreas.device-management.config.callout.ocsp.allowRequireCurrent` | `false` | 允许信任锚使用 `REQUIRE_CURRENT`。 |
+| `functionalAreas.event-sources.config.httpIngest.deviceUplinks` | `false` | 提供 `POST /{instanceId}/{tenant}/devices/{token}/uplink`。 |
+| `functionalAreas.event-sources.config.httpIngest.maxCommandPollsPerTenant` | `256` | 每个副本为每个租户保持的 HTTP 命令轮询数；超出的一个会得到 `429`。未列在 chart 的 `values.yaml` 中；需要其他上限时再设置。 |
+| `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled` | `false` | 通过网络服务器向 LoRaWAN 设备发送命令。未列在 chart 的 `values.yaml` 中；设置它即可开启该功能。 |
+
+#### 令牌受众默认强制执行 {#v130-token-audience}
+
+`v1.2.0` 的说明已预告这一点：[令牌按其资源进行检查](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-token-audience)中计为 `would_reject` 的情况，现在会被拒绝。未设置的 `infrastructure.tokenAudience.enforcement` 表示 `enforce`，对两项检查都适用：
+
+- **API 拒绝绑定到它不提供的资源的令牌，** 返回 `401`，与无效令牌的应答相同。区域的 API 接受未绑定任何资源的令牌、绑定到该区域的令牌，以及绑定到已注册 MCP 服务器的令牌。
+- **授权服务器拒绝为本实例不提供的资源发出的请求：** 在授权端点和 `client_credentials` 授权中返回 `invalid_target`；对于绑定到已不再提供的资源的刷新或授权码，返回 `invalid_grant`。以这种方式被拒绝的刷新令牌会被消耗掉，客户端必须重新授权。
+
+未绑定任何资源的令牌不受影响。这包括从控制台、仪表板应用、C# SDK 和 `dcctl` 进行的每一次登录，以及每一个服务令牌。MCP 令牌绑定到 MCP 服务器，而 chart 会注册该服务器，因此同样不受影响。在 `enforce` 下，拒绝会计入相同的序列，`verdict="rejected"`；两个 `info` 告警 `TokenAudienceWouldReject` 和 `OAuthResourceWouldReject` 只会在设置了 `observe` 的实例上触发。
+
+拒绝的样子：服务账号申请绑定到一个区域的令牌，却在另一个区域使用，就会在那里被拒绝。
+
+```bash
+TOKEN=$(curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
+  -d grant_type=client_credentials -d scope=read-only \
+  --data-urlencode "resource=https://dc.example.com/api/device-management" \
+  https://dc.example.com/api/user-management/oauth/token | jq -r .access_token)
+
+# 接受：令牌绑定到 device-management。
+curl -s -o /dev/null -w '%{http_code}\n' https://dc.example.com/api/device-management/graphql \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"{ __typename }"}'
+
+# 在 enforce 下返回 401：event-management 不接受绑定到 device-management 的令牌。
+curl -s -o /dev/null -w '%{http_code}\n' https://dc.example.com/api/event-management/graphql \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"{ __typename }"}'
+```
+
+调用多个区域的集成应省略 `resource`：未绑定的令牌被所有区域接受。参见[把令牌绑定到资源](../user-guide/service-accounts.md#binding-a-token-to-a-resource)。
+
+**升级之前，** 请在 `v1.2.0` 实例上检查是否存在强制执行会拒绝的流量：
+
+- API 计数器每个区域一个序列，其名称中的区域名不带连字符：`devicechain_devicemanagement_token_audience_checks_total`、`devicechain_eventmanagement_token_audience_checks_total` 等。用 `{__name__=~"devicechain_[a-z0-9]+_token_audience_checks_total", verdict="would_reject"}` 选中全部。授权服务器的计数器是 `devicechain_usermanagement_oauth_resource_checks_total{verdict="would_reject"}`。两者都应为零，两个告警也应保持安静。
+- 如果有任何一个在变化，限速的警告日志会给出客户端：区域日志中的 `Token audience is not accepted by this plane`，以及 `user-management` 日志中的 `OAuth resource is not one this instance serves`。修改该客户端发送的 `resource`：省略它，或使用本实例提供的资源。
+
+**如需在这个次版本内退出，** 请在升级之前设置 `enforcement: observe`，这样滚动升级期间没有 Pod 执行强制检查。在 Helm values 或 `dcctl` [values 覆盖文件](./tuning-an-instance.md#tunable)中，键为 `instance.config.infrastructure.tokenAudience.enforcement`。`v1.4` 会拒绝 `observe`：服务在启动时停止，chart 的 values schema 也会拒绝它。如果不退出，滚动升级期间新旧 Pod 并存，因此在几分钟内，绑定到错误资源的令牌可能被 `v1.2.0` 的副本接受，却被 `v1.3.0` 的副本拒绝。
+
+:::warning 直接使用 Helm 并配合 `instance.existingSecret` 时，除非文档列出 MCP，否则会失去 MCP 访问
+chart 不会把 `tokenAudience` 配置块写入你自己提供的配置。在 `enforce` 下，`mcp` 区域在启动时会检查其 `resourceUrl` 是否列在 `infrastructure.tokenAudience.mcpResources` 中，如果没有，它会**拒绝启动**，AI 代理因此失去 MCP 访问。`dcctl upgrade` 会在任何内容滚动之前拒绝这样的文档，但直接运行的 `helm upgrade` 无法查看你的 Secret 内部。升级之前，请把该配置块加入文档，写上你的源地址和 MCP 服务器的 `resourceUrl`（与 `mcp` 区域的配置完全一致，scheme 和主机为小写）：
+
+```json
+"infrastructure": {
+  "tokenAudience": {
+    "areaBaseUrl": "https://iot.example.com/api",
+    "mcpResources": ["https://iot.example.com/api/mcp"]
+  }
+}
+```
+
+或者在同一配置块中设置 `"enforcement": "observe"`。无论哪种方式，**都要把 `instance.existingSecretChecksum` 设置为新 `instance` 文档的 sha256**，否则不会滚动任何 Pod，所有 Pod 仍读取旧文档。
+:::
+
+- **如果你手动设置了 `functionalAreas.mcp.config.resourceUrl`**，而其 scheme 或主机含有大写字母，或者它等于某个区域自身的标识符（例如 `<origin>/api/device-management`），`helm upgrade` 现在会失败并说明原因。请把它改为小写或换一个地址，或者设置 `observe`；在 `observe` 下，chart 会把这样的值排除在列表之外，与 `v1.2.0` 相同。
+- **回退到 `v1.2.0`** 时，这方面无需任何操作：`v1.2.0` 读取同一个配置块，默认值为 `observe`。
+
+#### 告警送达真人 {#v130-alert-routing}
+
+Chart 附带的每条告警规则现在都带有 `runbook_url`，会打开其在新增的[告警手册](./alert-runbook.md)中的条目。规则的其他方面均未改变：名称、表达式、`for` 时长和标签与之前一致。
+
+`dcctl install` 和 `dcctl upgrade` 现在接受 `--alert-webhook`、`--alert-email`（配合 `--alert-smtp-host`、`--alert-smtp-from`、`--alert-smtp-user` 和 `--alert-smtp-password-file`）、`--alert-config`、`--alert-watchdog-webhook` 和 `--clear-alert-routing`。Alertmanager 现在从 `monitoring` 命名空间中的 Secret `dc-alertmanager-config` 读取配置，`dcctl install` 会在应用监控栈之前写入它。不带任何 `--alert-*` 标志重新运行 `dcctl install` 会保留现有路由；首次安装不带这些标志时写入一份没有接收器的配置，这与早期版本的行为一致。只要指定任一 `--alert-*` 标志，就会重新声明全部路由。使用 `--alert-watchdog-webhook` 时，始终处于触发状态的 `Watchdog` 告警每分钟发送到该接收器一次，它一旦沉默，就说明告警系统已停止。
+
+实例会在新的 `AlertsRouted` 条件中报告是否有人在接收，对于告警无处可去的实例，`dcctl instances list` 会显示 `ALERTS NOT ROUTED`。该条件绝不会使实例变为未就绪。
+
+对于由早期版本安装的集群，在对 `dcctl upgrade` 使用这些标志之前，请先运行一次 `dcctl install`；否则 `dcctl upgrade` 会拒绝，因为旧的 Alertmanager 不会读取我们的 Secret。`dcctl` 会检查 `--alert-config` 中会导致告警无法路由的错误，但它不是 Alertmanager 自身的解析器：请先对该文件运行 `amtool check-config`。参见[将告警路由给真人](./observability.md#alert-routing)。
+
+#### 通过 HTTP 获取命令与投递凭据 {#v130-http-command-pull}
+
+只使用 HTTP 的设备，例如醒来、上报后再休眠的电池传感器，现在也能接收命令。把其设备类型的 `commandChannel` 设为 `HTTP_PULL`，它的命令就会等待设备来取：
+
+- `GET /{instanceId}/{tenant}/devices/{device}/commands?wait=0..30` 会把请求保持最多 `wait` 秒（默认 25 秒），直到有命令到期；
+- `POST .../commands/{command}/ack` 在设备执行之前确认收到；
+- `POST .../commands/{command}/response` 作出应答。
+
+设备在每次请求中都要出示其访问令牌。未设置渠道或设为 `PUBLISH` 的设备类型，其命令投递方式与之前完全相同。发给拉取式设备的命令可以设置 `deliveryMode: ONEWAY`（由确认完成）和 `maxAttempts`；对其他设备，这些选项会以 `DELIVERY_OPTION_NOT_APPLICABLE` 被拒绝。每个 `event-sources` 副本为一个租户最多保持 `httpIngest.maxCommandPollsPerTenant` 个轮询（默认 256），超出时返回 `429`。C# SDK 新增了 `HttpCommandPuller`。
+
+现在每条命令都会记录投递凭据：`deliveredTime` 和 `deliveryEvidence`（拉取式设备的确认为 `DEVICE_ACK`，任何传输方式上的应答为 `DEVICE_RESPONSE`）。没有新增命令状态。参见[通过 HTTP 获取命令的设备](../concepts/commands.md#http-command-pull)。
+
+- **在发布完成后开启。** 先升级 `device-management`，并且只有在所有服务的所有副本都运行本版本后才设置 `HTTP_PULL`。如果 `command-delivery` 副本已经升级而 `device-management` 尚未升级，它会暂扣所询问的每台设备的命令，待 `device-management` 应答后再放行，因此普通设备在重叠期间只会延迟，绝不会被发往错误的地方。
+- **新路由不通过 chart 的 ingress 暴露，** 与 `/events` 相同。
+
+#### LoRaWAN 下行 {#v130-lorawan-downlink}
+
+发给通过入站集成上报的设备的命令，现在可以作为 LoRaWAN 下行发送给设备，排入其 ChirpStack v4 网络服务器的队列。首个版本接受原始的 `hex` 或 `base64` 载荷，发送非确认下行；`confirmed: true` 会被拒绝，绝不会被降级处理。链路是新类型 `lorawan_downlink` 的已发布连接器，ChirpStack API 密钥是该连接器的密封密钥。成功表示网络服务器已把下行排入队列，而不表示设备已收到。
+
+除非 `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled` 为 `true`，否则此功能关闭；开启后，chart 会让 `command-delivery` 分派这些命令，并拒绝手动设置的该标志副本。`connectorTypes` 查询多列出一个值。首次开启时，在适配器启动前几秒内分派的命令会超时。参见 [LoRaWAN 下行](../guides/inbound-integrations.md#lorawan-downlink)。
+
+#### 签名的出站 webhook {#v130-signed-webhooks}
+
+`httpCall` 规则动作和 webhook 通知渠道可以按照开放的 Standard Webhooks 规范对发送的内容签名。签名的投递带有 `webhook-id`、`webhook-timestamp` 和 `webhook-signature`；正文不变，未签名的投递与之前完全相同。签名密钥由平台生成，只显示一次，之后再也无法读取，并且可以轮换，轮换的重叠期内投递会同时带有两个签名。应当签名却无法签名的投递会被拒绝，绝不会以未签名的形式发送。参见[为出站 webhook 签名](../guides/signed-webhooks.md)。
+
+- **在发布完成后开启签名。** 旧的 `outbound-connectors` 或 `notification-management` 副本会忽略 `signingSecretRef` 和 `signing`，并发送未签名的请求。
+- **`webhook-signing/` 已被保留。** Bearer 凭据句柄位于其下的规则在发布时会被拒绝；请先迁移该句柄。
+- **新密钥最多需要一分钟才能用于所有 `httpCall` 投递，** 因为连接器服务会缓存密钥。
+
+#### HTTP 事件端点返回 401 {#v130-http-events-401}
+
+`POST /{instanceId}/{tenant}/events` 过去会对永远无法存储的请求返回 `202 Accepted`：租户名称有拼写错误，或凭据无法认证。这些请求随后才被拒绝，而设备已被告知其数据安全。现在它们在入口处就被拒绝：
+
+- **`401`**：针对未知租户和无法认证的凭据（未知、已过期、密钥错误、属于其他设备，或在实例要求时缺失）。所有原因都得到相同的状态、头和正文 `{"error":"unauthorized"}`，因此该端点不会暴露哪些租户或设备存在。运维人员可以通过 `total_http_ingest_refused{source,reason}` 和一条采样日志区分原因。
+- **`400` 仍为 `400`**：针对格式错误的载荷。对于是合法 JSON 但被拒绝的正文，现在会返回一个 JSON 正文，其中 `errors` 用 JSON Pointer 指出每个出错的值；`message` 是纯文本正文一直携带的那句话。不是 JSON 的正文仍得到纯文本的 `400`。
+- **`X-DC-Event-Id`**：出现在 `202` 以及被拒文档的 `400` 上，是该请求的回执。
+
+该检查在失败时放行：如果它询问的服务缓慢或无法访问，请求会像以前一样被接受，稍后再判定。连续失败五次的凭据在一段时间内（从 1 秒开始翻倍，最长 60 秒）不再被询问，因此 `401` 无法用于猜测密钥。缓存的答案不是权威：`device-management` 仍会认证每个事件，因此刚被禁用的凭据在入口处最多被接受 30 秒，随后像以前一样被拒绝。入口处的拒绝会被计数并记录日志，但不会产生失败事件记录。
+
+#### 设备自有载荷的解码 {#v130-device-uplinks}
+
+发送自有二进制载荷或厂商 JSON（而不是 DeviceChain 事件文档）的设备，可以把载荷发到 `POST /{instanceId}/{tenant}/devices/{token}/uplink`，由其设备类型配置文件上的载荷解码器读取。设备在 `X-DeviceChain-Credential-*` 头中出示自己的凭据，并且最先得到验证：没有凭据的调用方只会得到一个 `401`，无论设备是否存在、是否有解码器。解码、预算、健康状况和样本与入站集成路由使用的相同。没有解码器的设备类型会得到 `422`。
+
+除非 `functionalAreas.event-sources.config.httpIngest.deviceUplinks` 为 `true`，否则该路由关闭。只有在所有 `device-management` 副本都运行本版本后才开启：旧副本会在设备已收到 `202` 之后拒绝这样的上行，并把它记录为失败事件。
+
+#### 证书连接的 OCSP 检查 {#v130-ocsp}
+
+信任锚现在可以询问证书颁发机构的 OCSP 响应器某个证书是否仍然有效，作为你所上传的[吊销列表](../concepts/device-certificates.md#revocation)之外的第二个吊销来源。它默认在所有地方都关闭：实例开关 `functionalAreas.device-management.config.callout.ocsp.enabled` 为 `false`，每个信任锚新增的 `ocspMode` 为 `OFF`。
+
+- **`ENFORCE_KNOWN`** 拒绝响应器声明已吊销的证书，放行无法得知状态的证书。
+- **`REQUIRE_CURRENT`** 拒绝任何无法确认状态的证书。它还需要 `callout.ocsp.allowRequireCurrent: true`，以及信任锚上的响应器 URL（`ocspResponderUrl`）。
+- **开销。** OCSP 只在证书链、有效期、吊销列表和手动吊销检查都通过之后运行，因此已被拒绝的证书不会产生任何查询。有效的答复会被缓存；已吊销的答复会拒绝本次连接，且永不缓存。`callout.ocsp` 下的其他键（`fetchDeadline`、`maxInFlight`、`maxAge`、`failureTtl`、`cacheEntries`、`maxResponderHostsPerTenant`）限制查询，其默认值见 chart 的 `values.yaml`。
+- **尚未支持的内容。** 已吊销的答复会拒绝每次连接，但不会被存储为吊销记录，也不会结束已打开的会话；如需这样做，请上传列表或吊销该证书。
+- **新的结果和指标。** `callout_x509_total` 新增结果 `ocsp_revoked` 和 `ocsp_unavailable`，另有五个新的 `x509_ocsp_*` 序列报告查询、缓存、熔断器以及在没有答复时放行的连接。
+
+**只有在滚动升级完成后，才把信任锚切换为 `ENFORCE_KNOWN` 或 `REQUIRE_CURRENT`。** 在此之前，旧副本不检查 OCSP，因此一个副本拒绝的证书仍可能被另一个副本放行。实例开关关闭时，设为 `REQUIRE_CURRENT` 的信任锚会拒绝新的证书连接，API 也会拒绝开启信任锚的 OCSP。
+
+#### MCP 工具结果标明来源 {#v130-mcp-provenance}
+
+MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺保护。[版本策略](./versioning-policy.md)现在把它列入可在次版本中变化的内容，而本版本就改变了它。
+
+每个读取工具都把令牌和平台计算的值保留在顶层，并把自由文本移到 `untrusted` 之下，形式为 `{ "value": ..., "source": ... }`，其中 `source` 为 `device-reported`、`operator` 或 `agent`。移动的字段包括：设备的 `name`、`description` 和 `externalId`，指标的 `name` 和 `unit`，告警的 `alarmKey`，以及命令的 `name` 和 `error`。读取这些字段的客户端必须改从这里读取。结果中包含的类别列在 `_meta["io.devicechain/provenance"]` 下，每个工具的描述都说明：`untrusted` 之下的文本是数据，绝不是指令。参见[助手看到的内容](../concepts/mcp.md#what-an-assistant-sees)。
+
+另有新增内容：OAuth 访问令牌带有 `sid` 声明（授权会话），审计日志会记录做出每次变更的令牌的 `client_id` 和会话，MCP 审计日志行升级到 `schema: 2`，新增 `scopes`。
+
+#### 观察服务令牌的权限上限 {#v130-service-token-ceiling}
+
+签发服务令牌的端点现在会把每个请求与其调用方预期需要的权限进行比对，并把判定结果计入 `devicechain_usermanagement_service_token_checks_total{caller,verdict}`。它不拒绝任何请求，签发方式与之前完全相同。`over_ceiling`、`wildcard` 或 `unknown_caller` 的速率不为零，说明今后实施该上限的版本会拒绝该调用方；目前预计不会出现。
+
+#### 产品即代码（预览） {#v130-product-as-code}
+
+`dcctl product export <dir>` 把租户的产品写成文件：设备类型、带指标的配置文件、计算指标、带测试向量的载荷解码器、命令、检测规则和画布图、仪表板、连接器以及集成。`dcctl product plan <dir>` 打印应用这些文件会带来的变更，不写入任何内容（`--fail-on-changes` 会把漂移变为退出状态），`dcctl product apply <dir>` 让租户收敛到这些文件，并发布有变化的内容。密钥绝不会出现在包中：连接器按句柄（`env:NAME`）引用其凭据，每个包都会被扫描是否含有看似密钥的值。只会改动包中指明的内容。
+
+这是一个**预览**接口：命令树和包格式（`product.devicechain.io/v1alpha1`）可能在次版本中变化，`dcctl` 会拒绝它不认识的包版本。它完全在 `dcctl` 中运行，通过已提供的租户 API 工作，因此服务器端没有任何变化。参见[产品即代码](../guides/product-as-code.md)。
+
+#### 规则测试（预览） {#v130-rule-tests}
+
+`dcctl test <dir|file>` 为检测规则运行确定性的单元测试。`scenario.yaml` 描述设备及其读数（常量、有界随机游走、阶梯计划，或 CSV/NDJSON 文件），以及故障（缺口、重复、乱序、离线窗口）和随机种子；`*.test.yaml` 文件说明必须发生的事情：在某个时长内触发或清除告警、从不触发、请求了某条命令或 webhook 等。`dcctl test` 打印报告，可以写出 JUnit XML（`--junit`），所有期望都成立时退出码为 `0`，有期望失败时为 `1`，有内容无法判定时为 `2`。无法给出答案的运行绝不会显示为通过。
+
+它驱动一个新查询 `evaluateRules`（event-processing 租户 API，`device:read`），该查询在请求中提供的事件上，以事件时间和与线上相同的迟到容忍值，运行配置文件已发布的规则或一份草稿，并返回状态跳变、它们会请求的动作，以及结果为何不完整。它不执行任何操作，也不触及任何流。文件格式（`devicechain.io/ruletest/v1alpha1`）、该查询和该命令都处于**预览**层级。
+
+- **`devicechain_eventprocessing_detect_late_samples_total` 的读数会变高。** 被已关闭的滚动窗口或已关闭的会话丢弃的迟到读数现在会被计数，与其他规则类型一致。检测结果不变；按旧速率调好的仪表板或告警需要重新校准。
+
+#### 按租户的事件用量 {#v130-usage-metering}
+
+`event-management` 每天记录每个租户的用量：它接入的事件，以及发送这些事件的设备（去重数量、单小时峰值和每小时平均值）。运维人员通过 `event-management` 新的实例级 `/admin/graphql` 端点上的 `tenantEventUsage(tenant, from, to)` 查询读取，该端点需要持有 `usage:read` 的身份令牌。该记录只报告用量，不做任何限制。
+
+- **事件按接收当天计数，** 而不是按其标注的日期，因此迟到或补传的读数绝不会改写已结束的一天，重复投递的副本只计一次。
+- **一个小时在结束 10 分钟后成为最终结果，** 最终的小时绝不会被改写。一天的 24 个小时全部成为最终结果后，该天显示为 `complete`。因此，**在接收所在小时结束后超过 10 分钟才被存储的事件不会被计数。**
+- **记录从升级后的服务首次运行的那个 UTC 日开始。** 更早的日期显示为不完整。升级后接收、但日期落在升级时已压缩的分块内的事件不会被计数。
+- **升级会在事件表上建立索引，** 逐个分块进行，因此不会阻塞整张表的写入，但在大型存储上 `event-management` 的迁移会比平时耗时更长。
+
+#### 活动 {#v130-campaigns}
+
+活动按计划向一个实体组中的设备发送一系列命令，步骤之间可以设置延迟。计划可以是指定时区中的 cron 表达式、日历日期和时间，或者日出、日落加上偏移量，后者按每台设备的[安装位置](#v130-installed-position)分别计算。节假日会取消一次触发，但绝不会把它挪到别的日子。夏令时变化遵循同一条规则：落在春季跳变空档中的时间在跳变时刻触发，重复的那个小时只触发一次。每次触发都按设备跟踪（待处理、已派发、被拒绝或已跳过，并附原因），`retryCampaignFailed` 会向命令未成功的设备重新发送该周期的命令。命令通过常规的批量路径发送，因此维护窗口仍然生效。每个副本都运行调度器，由数据库决定哪个副本发送每条命令，因此不会重复发送。
+
+- **活动不能编辑。** 请删除后重新创建；重新创建的活动不会发送在其创建之前就已到期的内容。
+- **目标是组。** 使用动态组来选择某个区域中的设备。
+- **太阳时间触发需要发布完成。** 只要还有 `v1.2.0` 的 `user-management` 副本，规划日出或日落触发就会报告错误并重试。
+
+#### 安装位置 {#v130-installed-position}
+
+不会移动的设备或资产，例如路灯、停车位或机柜，现在可以有安装位置：`setInstalledPosition` 和 `clearInstalledPosition`（`device:write`），设备批量导入中可选的 `installedLatitude`、`installedLongitude`、`installedElevation` 和 `installedAccuracy` 列，以及 `Device` 和 `Asset` 上的 `installedPosition` 字段。读取它需要新的 `location:installed:read`，`location:read` 隐含该权限。它绝不会退而使用设备上报的位置。每个设备和资产上的 `positionWithheld` 告诉调用方它无权查看位置，但不透露位置是否存在。区域可以指定其边界围栏（`boundaryFenceToken`）；被区域引用的围栏不能删除。
+
+#### 通知投递台账 {#v130-delivery-ledger}
+
+每次通过某个渠道发送告警通知的尝试现在都会写入一行：触发原因、策略、渠道、接收人、结果（`SENT`、`FAILED`、`REFUSED` 或 `NOT_ATTEMPTED`）、尝试序号、延迟以及分类后的错误代码。通过 `notificationAttempts`（`notification:read`）读取；`NotificationChannel.deliveryHealth` 给出每个渠道最近一次成功、最近一次失败和连续失败次数。投递 URL 本身可能就是凭据，因此绝不会被存储。记录默认保留 7 天。
+
+台账绝不会延迟告警通知：记录从一个有界队列在后台写入，队列满时会丢弃该行，并计入 `devicechain_notificationmanagement_ledger_writes_total{outcome}`。因此，有记录可以证明发生过尝试；缺少记录则不能证明任何事情。
+
+#### 告警处置 {#v130-alarm-dispositions}
+
+`setAlarmDisposition` 把告警的当前周期标注为 `TRUE_POSITIVE`、`FALSE_POSITIVE` 或 `EXPECTED`，可附带备注（`alarm:write`）。标注属于某一个周期：告警再次触发时，新周期从无标注开始，之前的周期保留各自的标注。`Alarm.disposition` 读取当前周期的标注，`alarmDispositions` 列出所有已标注的周期。标注不会改变告警的其他任何方面。受客户范围限制的成员可以读取其可见周期的标注，但不能写入。
+
+#### 语义绑定 {#v130-semantic-bindings}
+
+租户可以把词汇表中的术语附加到已有的模型上：设备、资产、区域和客户类型上的 `semanticTypes`，关系类型上的 `semanticPredicate` 和 `semanticInverse`，以及指标上的 `semanticProperty` 和 `semanticPointClass`。随附的词汇表有 Brick 1.4.4、SAREF 4.1.1 及 SAREF4CITY 和 SAREF4BLDG、路灯、停车和环境领域的 Smart Data Models，以及 NGSI-LD 核心术语。租户通过 `setSemanticContext`（`device:write`）启用所用的词汇表，并可以添加自己的前缀。每个术语都会检查是否存在及其种类，以完整 IRI 存储，被拒绝时返回指明该术语的 `INVALID_ARGUMENT`；会让已存储绑定失去依据的上下文变更会以 `SEMANTIC_CONTEXT_IN_USE` 被拒绝。`thingModel(includeSemanticTypes: true)` 会把每个指标的语义属性和点类加入其属性的 `@type`；默认输出不变。
+
+- **在滚动窗口内，** 发布配置文件或资产类型的旧 Pod 写出的快照不含绑定。草稿会保留它们，由已升级的 Pod 进行的下一次发布会将其固定下来。
+
+#### 控制台搜索设备并分诊告警 {#v130-console}
+
+设备搜索和设备类型搜索各新增一个可选参数 `nameContains`：对名称或令牌做不区分大小写的子串匹配，其中 `%` 和 `_` 只匹配它们自身，空白文本匹配全部。不发送该参数的客户端得到的结果与以前相同。在控制台中，设备列表有按名称搜索和按设备类型筛选，二者都保存在页面地址中；设备、批量创建、导入和配置文件表单中的类型选择器会在输入时向服务器搜索，而不再读取前 1,000 个类型。
+
+告警列表把每条告警链接到其设备，按设备配置文件声明的单位显示数值，可一次请求确认多条选中的告警，并把筛选条件保存在页面地址中。设备新增“告警”标签页，首页按严重级别统计活动告警，并统计在线和离线设备。这些只是控制台的变更。
+
+#### 设备时钟走快不再影响其他租户的检测 {#v130-detect-watermark}
+
+检测在整个实例范围内只维护一个逻辑时钟，过去它会跟随所见过的最新事件时间。平台接受比服务器时钟最多提前五分钟的事件时间，因此只要有一台设备时钟偏快，就可能把这个共享时钟推到真实时间之前。随后所有租户的缺失定时器都会提前触发，时钟正确的设备所产生的窗口读数也会被当作迟到数据丢弃。从本版本起，一条消息推动共享时钟的幅度不会超过消息被代理存储的时间加上配置的迟到容忍值。事件保留自己的时间，因此读数仍按设备上报的时刻进行开窗和排序，回放预览也应用同样的上限。
+
+- **只有原本错误的情形会改变检测结果。** 时钟与代理时钟相差不超过迟到容忍值（默认 5 秒）的设备行为不变。对于走得更快的设备，其他设备的缺失告警现在按真实截止时间触发，而这台快钟设备自己的定时器要等真实时间到达后才触发。
+- **快照带有时钟版本。** 本版本写出的检测快照会记录该版本，恢复更早的快照仍然可用。升级后的最初一段时间，恢复出的时钟可能仍然和之前一样偏快；随着真实时间追上它会自行修正，服务在恢复这类快照时会记录一条警告。滚动升级期间，接手的旧版本 Pod 写出的快照不带该版本，读取时也会忽略它，因此无需任何操作。
+- **不涵盖相反的情形。** 上传旧读数的设备（存储转发）仍可能因共享时钟已向前推进而使窗口规则把这些读数当作迟到数据丢弃。按设备划分的时钟不属于本版本。
+
+#### 边缘代理 {#v130-edge}
+
+无需任何操作；两者默认都关闭，在为代理做相应配置之前不会改变任何行为。
+
+- **代理可以在平台接受事件之前一直保留它。** 设置 `uplink.retireOn: accept` 后，代理只在平台报告已持久接受某个缓冲事件时才删除它，如果平台因超出租户的接入上限而丢弃了该事件，代理会再次提交。默认值 `puback` 的行为与之前相同。在把代理切换到 `accept` 之前请先升级平台：处于该模式的代理无法连接到旧版本平台，连接错误会指明 `uplink.retireOn`。当本地缓冲接近其预算时，代理还可以按优先级类别丢弃缓冲的事件（`local.priority.*`）。参见[在平台接受时退役事件](./edge-services.md#retire-on-accept)。
+- **向代理之后的设备下发命令的代理端功能** 随 `commands.enabled` 关闭一同发布。平台尚未路由网关命令，因此它在本版本中不起作用。
+
+#### 文档、示例主机与智能体说明 {#v130-docs-hosts}
+
+.NET 和 Unity SDK 的文档以及 `DeviceChainClient.Origin` 的文档注释原先用 `demo.devicechain.io` 作为示例主机，该主机无法解析；现在改用 `devicechain.example.com`。SDK 没有默认主机，因此行为不变。新增的[设备 API 一览](../reference/device-apis.md)页面为设备接入平台的每种方式给出一条命令，`@devicechain/client`、`@devicechain/widget-sdk` 两个包和 .NET SDK 也各自带有一份面向编码智能体的 `AGENTS.md`。新增的[安全流程](./security-process.md)页面说明如何处理漏洞（确认与分诊的目标时间现在是 24 小时），以及每个版本发布哪些内容。
+
+#### 本版本的其他变更 {#v130-other-changes}
+
+无需任何操作。
+
+- **LwM2M：读取以 TLV 应答的设备的设备信息。** `lwm2m.readDeviceInfo` 和注册时的设备信息采集过去只读取纯文本应答，因此对于像 Eclipse Leshan 那样以 LwM2M TLV 应答单资源读取的客户端，不会记录任何内容。现在会解码 TLV 应答。
+- **[传输矩阵](../reference/transport-matrix.md)由一次一致性运行生成，** 在该运行中，第三方客户端（Eclipse Paho、curl、Eclipse Leshan 和 Eclipse Tahu）驱动一个真实实例，每个单元格都依据平台实际存储的内容判定。
+- **`dcctl install` 不再需要 `helm` 命令。** Chart 通过 `dcctl` 内置的 Helm 库安装；仍然需要 `tofu`（或 `terraform`）。
+- **`dcctl bootstrap --values` 在新实例上不再失败并报告 “changed while the values overlay was being recorded”。** 操作器的状态写入会在此期间改变实例的版本；现在当只有状态变化时 `dcctl` 会重试，其他任何内容发生变化时仍然拒绝。记录前端和事件信封开关时也是如此。
+
+#### 架构变更与回退 {#v130-going-back}
+
+追加了以下迁移。每个新列都允许为空，每张新表开始时都为空，因此运行在新架构上的 `v1.2.0` 服务写入的行仍然可以存储。
+
+- **信任锚上的 OCSP**（`device-management`，迁移 `20261113100000`）。`device_trust_anchors` 上两个可为空的列：`ocsp_mode` 和 `ocsp_responder_url`。空模式读作 `OFF`。
+- **HTTP 命令渠道**（`device-management`，迁移 `20261114120000`）。`device_types` 上一个可为空的列 `command_channel`。空值读作 `PUBLISH`。
+- **投递凭据**（`command-delivery`，迁移 `20261114120100`）。`commands` 上五个可为空的列：`delivered_time`、`delivery_evidence`、`delivery_mode`、`max_attempts` 和 `delivery_attempts`。
+- **审计日志中的身份**（所有区域）。每个区域在自己的表旁边保存的审计日志表 `audit_events` 新增四个可为空的列：`client_id`、`session_id`、`on_behalf_of` 和 `proposal`。它们在启动时添加，与该表本身一贯的创建方式相同，而不是通过编号迁移。
+- **事件用量**（`event-management`，迁移 `20261107000000` 和 `20261108000000`）。五张新表 `tenant_usage_daily`、`tenant_usage_hourly`、`tenant_usage_devices`、`tenant_usage_ledger` 和 `tenant_usage_state`，以及 `events.processed_time` 上逐块建立的 BRIN 索引。
+- **通知投递台账**（`notification-management`，迁移 `20261108000100`）。一张新表 `notification_attempts`，带三个索引。
+- **安装位置**（`device-management`，迁移 `20261112120000`）。`devices` 和 `assets` 上各六个可为空的列（`installed_lat`、`installed_lon`、`installed_elev`、`installed_accuracy`、`installed_source` 和 `installed_updated_at`），`areas` 上一个（`boundary_fence_token`）及其部分索引。
+- **告警处置**（`device-management`，迁移 `20261114090000`）。一张新表 `alarm_dispositions`，其行随所属告警一起删除。
+- **活动**（`command-delivery`，迁移 `20261116120000`）。三张新表 `campaigns`、`campaign_cycles` 和 `campaign_elements`，以及它们的索引。
+- **语义绑定**（`device-management`，迁移 `20261120120000`）。类型、关系类型和指标表上用于绑定的可为空列，以及一张新表 `semantic_contexts`。
+
+**回退到 `v1.2.0` 时，数据库中无需撤销任何内容：** 新的表、列和索引保留原处，`v1.2.0` 的服务会忽略它们。回退之前，请把每个信任锚的 OCSP 模式改回 `OFF`，把每个设备类型的 `commandChannel` 改回 `PUBLISH`，并关闭 `httpIngest.deviceUplinks`、`lpwanDownlink.enabled` 和 webhook 签名，因为 `v1.2.0` 不认识它们。条件允许时请向前升级：升级失败可以通过再次运行 `dcctl upgrade` 来修复。
+
+#### 已知问题 {#v130-known-issues}
+
+- **失败即关闭的 MQTT 确认默认关闭，** 与 `v1.2.0` 相同。[MQTT 传输](../reference/transport-matrix.md#mqtt--the-platform-broker)页面给出了关闭和开启时的实测限制。
 - **更改代理配置仍会断开由认证调用放行的设备，** 直到代理库包含上游修复。证书续期不会。
-- **有两条路径不在保留机制的覆盖范围内。** 读取器已提前取到、且早于确认等待时间一半的消息，在写入器保留时会被不确认地丢弃并消耗一次投递，记录达到最后一次投递的消息的记录器可能在写入器保留它之前为其写入一封信。记录器的重新发布也不在覆盖范围内。
+- **`eventSources.ingestMetering: lagCredit` 仍不可用，** 并会在启动时被拒绝；参见[接入计量](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-ingest-metering)。该功能在 [`v1.4.0`](#v140-ingest-metering) 中提供，需主动开启。
+- **OCSP 尚不会存储其获知的结果，也不会结束已打开的会话，** 详见[证书连接的 OCSP 检查](#v130-ocsp)。
+- **在接收它的那个小时结束 10 分钟之后才存储的事件，不计入租户的用量记录，** 升级后接收、但日期落在已压缩分块中的事件也不计入。参见[按租户的事件用量](#v130-usage-metering)。
 
 ### v0.27.0：设备使用证书登录，Sparkplug 命令可用 {#v0270-upgrade}
 
@@ -2163,6 +2290,9 @@ dcctl upgrade local devicechain --version v0.24.0
 
 | 版本 | 摘要 | 是否需要操作 | 详情 |
 | --- | --- | --- | --- |
+| <a id="v120-upgrade"></a>v1.2.0 | 租户自行编写的载荷解码器，以及会结束会话的证书吊销 | 是 | [完整说明](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-upgrade) |
+| <a id="v110-upgrade"></a>v1.1.0 | 摄取每个事件更省 CPU，集群外的设备可通过 MQTT 接入 | 是 | [完整说明](https://github.com/devicechain-io/devicechain/blob/v1.1.0/docs/i18n/zh-CN/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v110-upgrade) |
+| <a id="v100-upgrade"></a>v1.0.0 | 首个稳定版本，数据库故障时事件被保留，Traefik 成为默认入口 | 是 | [完整说明](https://github.com/devicechain-io/devicechain/blob/v1.0.0/docs/i18n/zh-CN/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v100-upgrade) |
 | <a id="v0230-upgrade"></a>v0.23.0 | 带范围限制的客户用户，以及丢事件更少的 MQTT 接入 | 是 | [完整说明](https://github.com/devicechain-io/devicechain/blob/v0.23.0/docs/i18n/zh-CN/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0230-upgrade) |
 | <a id="v0220-upgrade"></a>v0.22.0 | 仪表板改用方形单元格网格，事件路径等待更少 | 是 | [完整说明](https://github.com/devicechain-io/devicechain/blob/v0.22.0/docs/i18n/zh-CN/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0220-upgrade) |
 | <a id="v0211-upgrade"></a>v0.21.1 | 补丁，无需操作 | 否 | [完整说明](https://github.com/devicechain-io/devicechain/blob/v0.21.1/docs/i18n/zh-CN/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0211-upgrade) |

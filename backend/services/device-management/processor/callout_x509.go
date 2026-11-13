@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/x509trust"
+	"github.com/devicechain-io/dc-microservice/x509trust/ocspclient"
 	"github.com/nats-io/jwt/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -38,6 +39,8 @@ const (
 	// has no list, or one past nextUpdate plus the grace.
 	x509ResultCertRevoked       = "cert_revoked"
 	x509ResultRevocationUnknown = "revocation_unknown"
+	// x509ResultOcspRevoked and x509ResultOcspUnavailable are the OCSP check's refusals, defined with
+	// it in callout_x509_ocsp.go and listed in x509Results below.
 	x509ResultClientIDMismatch  = "client_id_mismatch"
 	x509ResultUnknownPin        = "unknown_pin"
 	x509ResultMisconfigured     = "misconfigured"
@@ -70,7 +73,7 @@ const (
 )
 
 var x509Results = []string{
-	x509ResultOK, x509ResultNoCert, x509ResultChainInvalid, x509ResultAnchorDisabled, x509ResultRevoked, x509ResultCertRevoked, x509ResultRevocationUnknown,
+	x509ResultOK, x509ResultNoCert, x509ResultChainInvalid, x509ResultAnchorDisabled, x509ResultRevoked, x509ResultCertRevoked, x509ResultRevocationUnknown, x509ResultOcspRevoked, x509ResultOcspUnavailable,
 	x509ResultClientIDMismatch, x509ResultUnknownPin, x509ResultMisconfigured, x509ResultPasswordPresented, x509ResultUnsealed, x509ResultIssuerUnpinned, x509ResultIssuerPending, x509ResultPinUnavailable, x509ResultCertMalformed,
 	x509ResultTenantRefused, x509ResultError, x509ResultCertIgnored,
 	x509ResultJitCreated, x509ResultJitAdopted, x509ResultJitRenewed, x509ResultJitReplayed,
@@ -176,7 +179,9 @@ func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant st
 	}
 	pin := x509trust.Fingerprint(chain[0])
 
-	ctx, cancel := context.WithTimeout(core.WithTenant(c.base, tenant), c.lookupTimeout)
+	// The connect budget: every OCSP check this connect makes (each registration candidate, then
+	// the grant) shares ONE fetch deadline, so no connect waits on OCSP longer than fetchDeadline.
+	ctx, cancel := context.WithTimeout(ocspclient.WithConnectBudget(core.WithTenant(c.base, tenant)), c.lookupTimeout)
 	defer cancel()
 	// 🔴 ResolveX509Connect, never a cached lookup. See the notes on it and on
 	// AuthenticateDeviceConnect.
@@ -254,10 +259,20 @@ func (c *CalloutResponder) grantX509(ctx context.Context, req jwt.AuthorizationR
 	}
 	// 🔴 THE REVOCATION CHECK, uncached, on the paths that verified and before the session is
 	// clamped, so the clamp follows the path that SURVIVED.
+	allPaths := verified
 	verified, refusal := c.applyRevocation(ctx, tenant, found.Anchor, verified)
 	if refusal != "" {
 		log.Debug().Str("tenant", tenant).Str("device", device.Token).Str("host", req.ClientInformation.Host).Str("result", refusal).
 			Msg("Auth-callout refused a certificate connect on revocation.")
+		return c.refuseX509(obs, refusal)
+	}
+	// 🔴 THE OCSP CHECK, after every cheap local check (chain, expiry, CRL, manual) so a certificate
+	// already refused never costs a fetch, and only for an anchor that asked for it. An OFF anchor
+	// (every anchor that predates OCSP) returns from applyOcsp before any OCSP code runs.
+	verified, refusal = c.applyOcsp(ctx, tenant, found.Anchor, allPaths, verified, true)
+	if refusal != "" {
+		log.Debug().Str("tenant", tenant).Str("device", device.Token).Str("host", req.ClientInformation.Host).Str("result", refusal).
+			Msg("Auth-callout refused a certificate connect on OCSP.")
 		return c.refuseX509(obs, refusal)
 	}
 	// The device is a copy carrying the credential's expiry (withConnectExpiry); the session is
@@ -334,7 +349,7 @@ func earliestExpiry(credentialExpiry sql.NullTime, chainNotAfter time.Time) sql.
 func newX509Counter(ms *core.Microservice) *prometheus.CounterVec {
 	v := ms.NewCounterVec("callout_x509_total",
 		"Device connects by certificate (MQTT username {tenant}:@x509), by result. ok is a granted session; "+
-			"no_cert, chain_invalid, anchor_disabled, revoked, cert_revoked, revocation_unknown, client_id_mismatch, unknown_pin, misconfigured, "+
+			"no_cert, chain_invalid, anchor_disabled, revoked, cert_revoked, revocation_unknown, ocsp_revoked, ocsp_unavailable, client_id_mismatch, unknown_pin, misconfigured, "+
 			"password_presented, unsealed, issuer_unpinned, issuer_pin_pending, issuer_pin_unavailable, cert_malformed, tenant_refused and error are refusals, each answered with the same generic denial. "+
 			"x509_cert_ignored counts a certificate presented with a token or password username, which authenticates "+
 			"on that credential alone. The jit_ results are registration on first connect: jit_created, jit_adopted, "+

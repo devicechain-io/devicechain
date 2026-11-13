@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	_ "embed"
+	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/nldraft"
 	"github.com/devicechain-io/dc-event-processing/internal/preview"
@@ -55,6 +56,10 @@ type SchemaResolver struct {
 	// AppliedGuard is whether live DETECT runs its duplicate-event guard (event envelopes on). The
 	// preview applies the same rule, so it neither drops nor keeps a duplicate differently.
 	AppliedGuard bool
+	// EvaluationLateness is live DETECT's configured watermark lateness. evaluateRules holds its
+	// engine's frontier the same distance behind the newest event, so an out-of-order reading is
+	// used or declined in a test exactly as live uses or declines it.
+	EvaluationLateness time.Duration
 }
 
 // EventProcessingInfo resolves the scaffold identity query.

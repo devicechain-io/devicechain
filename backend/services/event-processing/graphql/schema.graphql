@@ -22,7 +22,8 @@ type Query {
     Checks a batch of detection-rule definitions by decoding, compiling and cost-checking each
     one, without saving anything. Returns valid=false with one error per rejected rule; rules
     that compile may still produce advisory warnings. Pure validation: no state is read or
-    written, so it is safe to call repeatedly. Requires device:read.
+    written, so it is safe to call repeatedly. Requires device:read. At most 1,000 rules per
+    call; a longer list is refused with LIMIT_EXCEEDED before any rule is compiled.
     """
     # Validate a batch of detection-rule definitions (opaque rules.Rule JSON) by
     # decoding, compiling, and cost-gating each through the DETECT compiler — the
@@ -33,7 +34,7 @@ type Query {
     # if any of them does not compile (a disabled rule is inert and is not submitted).
     # Pure validation — no state is read or written, so it is safe to call repeatedly.
     validateDetectionRules(
-        """The rules to check, in order; the index in each error and warning refers to this list."""
+        """The rules to check, in order; the index in each error and warning refers to this list. At most 1,000."""
         rules: [DetectionRuleInput!]!
     ): DetectionRuleValidationResult!
 
@@ -110,6 +111,52 @@ type Query {
         """The draft rule, the profile and the time window to replay."""
         input: PreviewRuleInput!
     ): PreviewResult!
+
+    """
+    (Preview: may change in a minor release.) Tests a profile's detection rules against events you supply, in event time, and reports what
+    they would do. It returns the edges the rules derive (each raised or resolved) and, for each
+    edge, the side effects the rules' action chains would request: the alarm raise or clear, the
+    command with its key and arguments, and the webhook or published message with its rendered
+    body. Nothing is executed: no alarm is raised, no command enqueued, no request sent.
+
+    The rules are either the profile's PUBLISHED rules or a DRAFT given as a canvas graph or a
+    rule definition. The events are the ones in the request, handed to the detection engine in the
+    order given, which is the order of delivery: list an event after one with a later time and it
+    arrives late. After the last event the engine's clock is moved to advanceTo, which is how a
+    rule that waits for silence is decided without waiting: a rule that fires after seven days of
+    silence is tested by advancing seven days. The run reads no clock, so the same request always
+    returns the same answer, and it touches no live stream, so it cannot move the live watermark
+    or disturb live detection.
+
+    The engine holds its clock behind the newest event by the same lateness live detection uses, so
+    a reading delivered out of order is used or declined exactly as live would use or decline it.
+
+    What it does not model: device attributes (a rule that reads one is evaluated without them and
+    the result is marked degraded with ATTRIBUTE_REFERENCES), group-scoped published rules (skipped
+    and listed in skippedRules, because an event here carries no group memberships), correlation
+    rules (skipped when published and refused in a draft, because an event here carries no anchor
+    memberships), geofence rules (refused), and whether a command exists on the device or a connector exists in the tenant (the
+    intent is what the rule asks for).
+
+    A run that evaluates nothing is never a success: no events, no rule to evaluate, no free slot
+    or no time left is a refusal (ok false, with the reason in refusal). The size of the request
+    replaces the preview's 24-hour window as the bound. It shares the preview's per-tenant
+    concurrency limit, and the service runs at most a few evaluations at once. Requires
+    device:read.
+    """
+    evaluateRules(
+        """(Preview: may change in a minor release.) The profile, the rule set, the events to evaluate and the limits."""
+        input: EvaluateRulesInput!
+    ): EvaluateRulesResult
+    """
+    (Preview: may change in a minor release.) Only device-management's service identity may call this comparison engine behind
+    reviewing an automation change. It replays two recorded windows once each through the active
+    and the draft rule and returns the differences and expectation verdicts, executing nothing.
+    """
+    compareRuleVersions(
+        """(Preview: may change in a minor release.) The profile, rules, recorded windows and expectations to compare."""
+        input: CompareRuleVersionsInput!
+    ): CompareRuleVersionsResult
 }
 
 type Mutation {
@@ -321,6 +368,314 @@ input PreviewMetricInput {
     """Largest value a calculated metric may take; a result above it produces no value."""
     maxValue: Float
 }
+
+"""(Preview: may change in a minor release.) Which rules an evaluation runs."""
+enum EvaluateRuleSet {
+    """(Preview: may change in a minor release.) The profile's currently published detection rules."""
+    PUBLISHED
+    """
+    (Preview: may change in a minor release.) A draft given in the request as a canvas graph or a rule definition. The profile need not be
+    published.
+    """
+    DRAFT
+}
+
+"""(Preview: may change in a minor release.) Input to evaluateRules."""
+input EvaluateRulesInput {
+    """(Preview: may change in a minor release.) Token of the device profile whose rules are evaluated."""
+    profileToken: String!
+    """(Preview: may change in a minor release.) Whether to run the profile's PUBLISHED rules or the DRAFT given in this request."""
+    ruleSet: EvaluateRuleSet!
+    """
+    (Preview: may change in a minor release.) For ruleSet DRAFT, a canvas definition serialized to a string. Give exactly one of graph and
+    ruleDefinition. A graph may hold several detection rules; each is evaluated and named by its
+    condition node's id. Rejected for PUBLISHED, so a mistake is not silent.
+    """
+    graph: String
+    """
+    (Preview: may change in a minor release.) For ruleSet DRAFT, a rule definition as a JSON document serialized to a string. The rule is
+    named "draft" in the result.
+    """
+    ruleDefinition: String
+    """
+    (Preview: may change in a minor release.) The events, in the order they are delivered to the engine. An event listed after one with a
+    later occurredAt is delivered late.
+    """
+    events: [EvaluateEventInput!]!
+    """
+    (Preview: may change in a minor release.) The instant the engine's clock is moved to after the last event, as an RFC 3339 timestamp:
+    what decides a timer-driven rule (silence, a held duration, a closing window). Defaults to the
+    last event's time. Must not be before it.
+    """
+    advanceTo: String
+    """(Preview: may change in a minor release.) Limits on the size of the run. Omit for the defaults."""
+    limits: EvaluateLimitsInput
+}
+
+"""(Preview: may change in a minor release.) One measurement event to evaluate."""
+input EvaluateEventInput {
+    """(Preview: may change in a minor release.) Token of the device that reports the readings. It is the series the rules key on."""
+    deviceToken: String!
+    """(Preview: may change in a minor release.) When the readings occurred, as an RFC 3339 timestamp."""
+    occurredAt: String!
+    """(Preview: may change in a minor release.) The readings, one per metric. At least one."""
+    measurements: [EvaluateMeasurementInput!]!
+}
+
+"""(Preview: may change in a minor release.) One reading of an evaluated event."""
+input EvaluateMeasurementInput {
+    """(Preview: may change in a minor release.) The metric key, as a rule's condition names it."""
+    name: String!
+    """(Preview: may change in a minor release.) The reading."""
+    value: Float!
+}
+
+"""(Preview: may change in a minor release.) Limits on one evaluation. Each is capped by a fixed maximum."""
+input EvaluateLimitsInput {
+    """
+    (Preview: may change in a minor release.) The most events the request may carry; 100000 when omitted, and at most 250000. A request over
+    the limit is refused before any work is done.
+    """
+    maxEvents: Int
+    """
+    (Preview: may change in a minor release.) The most intents the result records; 50000 when omitted, and at most 250000. Edges beyond it
+    are still returned; the intents past the limit are not, and the result says so in degraded.
+    """
+    maxIntents: Int
+    """
+    (Preview: may change in a minor release.) The most edges the result records; 50000 when omitted, and at most 250000. Edges past the
+    limit, and their intents, are not recorded, and the result is marked degraded with EDGE_LIMIT.
+    """
+    maxEdges: Int
+}
+
+"""(Preview: may change in a minor release.) Why an evaluation was refused."""
+enum EvaluateRefusalReason {
+    """(Preview: may change in a minor release.) Too many previews and evaluations are already running; try again shortly."""
+    BUSY
+    """(Preview: may change in a minor release.) The evaluation ran out of time before it finished; send fewer events."""
+    TIMEOUT
+    """(Preview: may change in a minor release.) A limit was exceeded, for example too many events or rules."""
+    LIMIT_EXCEEDED
+    """(Preview: may change in a minor release.) The request is malformed, for example it has no events or an invalid timestamp."""
+    INVALID_INPUT
+    """(Preview: may change in a minor release.) A rule does not compile, or a draft graph does not lower to rules."""
+    RULE_REJECTED
+    """(Preview: may change in a minor release.) The profile has no published version, so it has no published rules."""
+    NO_PUBLISHED_VERSION
+    """(Preview: may change in a minor release.) The profile's published version has no detection rules."""
+    NO_RULES
+    """(Preview: may change in a minor release.) Every published rule was skipped (see skippedRules), so nothing was evaluated."""
+    ALL_RULES_SKIPPED
+}
+
+"""(Preview: may change in a minor release.) Why an evaluation result is partial."""
+enum EvaluateDegradationReason {
+    """(Preview: may change in a minor release.) Readings arrived too far behind the others to be used."""
+    LATE_READINGS
+    """(Preview: may change in a minor release.) A rule predicate could not be evaluated on some events."""
+    EVAL_ERRORS
+    """(Preview: may change in a minor release.) Intents past the intent limit were not recorded."""
+    INTENT_LIMIT
+    """(Preview: may change in a minor release.) Edges past the edge limit, and their intents, were not recorded."""
+    EDGE_LIMIT
+    """(Preview: may change in a minor release.) A detection could not be turned into a derived event and was dropped."""
+    UNATTRIBUTED_DETECTIONS
+    """
+    (Preview: may change in a minor release.) An action was skipped because the rule's stored action could not be carried out (a guard,
+    payload template or alarm-key template that failed, or an invalid setting).
+    """
+    ACTION_DROPPED
+    """(Preview: may change in a minor release.) A rule reads device attributes, which an evaluation does not supply."""
+    ATTRIBUTE_REFERENCES
+}
+
+"""(Preview: may change in a minor release.) One reason an evaluation result is partial."""
+type EvaluateDegradation {
+    """(Preview: may change in a minor release.) The reason."""
+    reason: EvaluateDegradationReason!
+    """(Preview: may change in a minor release.) How many readings, edges, intents, actions or rules it affected."""
+    count: Int!
+}
+
+"""(Preview: may change in a minor release.) Why a published rule was not evaluated."""
+enum EvaluateSkipReason {
+    """(Preview: may change in a minor release.) The rule is scoped to an entity group, and an evaluated event carries no group memberships."""
+    GROUP_SCOPED
+    """
+    (Preview: may change in a minor release.) The rule correlates devices under an anchor (an area, for example), and an evaluated event
+    carries no anchor memberships.
+    """
+    CORRELATION
+}
+
+"""(Preview: may change in a minor release.) A published rule an evaluation did not run."""
+type SkippedRule {
+    """(Preview: may change in a minor release.) Token of the rule."""
+    rule: String!
+    """(Preview: may change in a minor release.) Why it was not run."""
+    reason: EvaluateSkipReason!
+    """(Preview: may change in a minor release.) For GROUP_SCOPED, the group as token@version."""
+    group: String
+    """(Preview: may change in a minor release.) A sentence saying why."""
+    message: String!
+}
+
+"""(Preview: may change in a minor release.) The direction of an evaluated edge."""
+enum EvaluatedSignal {
+    """(Preview: may change in a minor release.) The condition became true."""
+    RAISED
+    """(Preview: may change in a minor release.) The condition ceased."""
+    RESOLVED
+}
+
+"""(Preview: may change in a minor release.) The kind of side effect an evaluated intent requests."""
+enum EvaluatedIntentKind {
+    """(Preview: may change in a minor release.) Raise or escalate an alarm."""
+    RAISE_ALARM
+    """(Preview: may change in a minor release.) Clear the rule's contribution to an alarm."""
+    CLEAR_ALARM
+    """(Preview: may change in a minor release.) Send a command to the device."""
+    SEND_COMMAND
+    """(Preview: may change in a minor release.) Call a webhook."""
+    HTTP_CALL
+    """(Preview: may change in a minor release.) Publish a message through a connector."""
+    PUBLISH
+}
+
+"""(Preview: may change in a minor release.) The outcome of an evaluation."""
+type EvaluateRulesResult {
+    """
+    (Preview: may change in a minor release.) True when the rules compiled and the evaluation ran, even if it derived nothing. False when
+    the evaluation did not run; the reason is in refusal and the details in diagnostics.
+    """
+    ok: Boolean!
+    """(Preview: may change in a minor release.) When ok is false, why the evaluation was refused. Null when it ran."""
+    refusal: EvaluateRefusalReason
+    """
+    (Preview: may change in a minor release.) The tokens of the rules the evaluation ran: published rule tokens, a graph's condition node
+    ids, or "draft". An expectation about a rule not in this list cannot be judged.
+    """
+    evaluatedRules: [String!]!
+    """
+    (Preview: may change in a minor release.) The edges the rules derived, ordered by time, then device, then rule, with raised before
+    resolved at the same instant.
+    """
+    edges: [EvaluatedEdge!]!
+    """
+    (Preview: may change in a minor release.) The side effects the edges would cause, in the order of the edges that cause them and within
+    an edge in the rule's action order. Requested, never executed.
+    """
+    intents: [EvaluatedIntent!]!
+    """(Preview: may change in a minor release.) Counters for the run."""
+    stats: EvaluateStats!
+    """
+    (Preview: may change in a minor release.) Published rules the evaluation did not run, each with the reason. Empty when every rule ran.
+    """
+    skippedRules: [SkippedRule!]!
+    """
+    (Preview: may change in a minor release.) Each reason the result is partial, with a count. Empty for a complete result. A partial result
+    cannot prove that something did NOT happen.
+    """
+    degradations: [EvaluateDegradation!]!
+    """(Preview: may change in a minor release.) The degradations as one sentence for a person to read. Null for a complete result."""
+    degraded: String
+    """
+    (Preview: may change in a minor release.) When ok is false, the reasons the evaluation was refused, each with the refusal reason as its
+    code; otherwise advisory warnings, for example METRIC_NOT_SUPPLIED for a rule whose metric no
+    supplied event carries.
+    """
+    diagnostics: [CanvasDiagnostic!]!
+}
+
+"""(Preview: may change in a minor release.) One transition a rule derived."""
+type EvaluatedEdge {
+    """(Preview: may change in a minor release.) Event time of the edge, as an RFC 3339 timestamp with nanoseconds."""
+    occurredAt: String!
+    """(Preview: may change in a minor release.) Token of the device the edge is for."""
+    series: String!
+    """
+    (Preview: may change in a minor release.) Token of the rule that derived it: the published rule's token, a graph's condition node id, or
+    "draft".
+    """
+    rule: String!
+    """(Preview: may change in a minor release.) The rule's type, for example threshold or absence."""
+    kind: String!
+    """(Preview: may change in a minor release.) The rule's severity, when it declares one."""
+    severity: String
+    """(Preview: may change in a minor release.) Whether the condition became true or ceased."""
+    signal: EvaluatedSignal!
+    """
+    (Preview: may change in a minor release.) The reading or computed value the edge is about, when it has one. Null for a resolved edge and
+    for a silence-driven one.
+    """
+    value: Float
+}
+
+"""(Preview: may change in a minor release.) A side effect an edge would have caused. Requested by the rules; never executed."""
+type EvaluatedIntent {
+    """(Preview: may change in a minor release.) Event time of the edge that causes it, as an RFC 3339 timestamp with nanoseconds."""
+    occurredAt: String!
+    """(Preview: may change in a minor release.) Token of the device the edge is for."""
+    series: String!
+    """(Preview: may change in a minor release.) Token of the rule that derived the edge."""
+    rule: String!
+    """(Preview: may change in a minor release.) The direction of the edge that causes the intent."""
+    signal: EvaluatedSignal!
+    """
+    (Preview: may change in a minor release.) What is requested. SEND_COMMAND, HTTP_CALL and PUBLISH are requested on a raised edge only;
+    CLEAR_ALARM on the resolved edge of a rule that raises an alarm.
+    """
+    kind: EvaluatedIntentKind!
+    """(Preview: may change in a minor release.) The idempotency token the request would carry."""
+    token: String!
+    """(Preview: may change in a minor release.) For raiseAlarm and clearAlarm, the alarm key the alarm is filed under."""
+    alarmKey: String
+    """(Preview: may change in a minor release.) For raiseAlarm and clearAlarm, the alarm's severity tier."""
+    severity: String
+    """(Preview: may change in a minor release.) For raiseAlarm, the value the alarm is stamped with, when the edge has one."""
+    value: Float
+    """(Preview: may change in a minor release.) For sendCommand, the command key sent to the device."""
+    command: String
+    """(Preview: may change in a minor release.) For sendCommand, the command's argument object as the rule authored it."""
+    payload: String
+    """
+    (Preview: may change in a minor release.) For sendCommand with an expiry, when the command would expire, measured from the edge, as an
+    RFC 3339 timestamp.
+    """
+    expiresAt: String
+    """(Preview: may change in a minor release.) For publish, the token of the connector the message goes through."""
+    connector: String
+    """(Preview: may change in a minor release.) For httpCall, the endpoint called."""
+    url: String
+    """(Preview: may change in a minor release.) For httpCall, the HTTP method."""
+    method: String
+    """(Preview: may change in a minor release.) For httpCall and publish, the body or message the rule's template rendered."""
+    body: String
+    """(Preview: may change in a minor release.) For httpCall and publish, the action's timeout in milliseconds; 0 means the default."""
+    timeoutMs: Int
+}
+
+"""(Preview: may change in a minor release.) Counters for one evaluation."""
+type EvaluateStats {
+    """(Preview: may change in a minor release.) Events handed to the detection engine."""
+    eventsFed: Int!
+    """(Preview: may change in a minor release.) Events the duplicate guard dropped before the engine saw them."""
+    eventsDropped: Int!
+    """(Preview: may change in a minor release.) Events a rule predicate could not evaluate."""
+    evalErrors: Int!
+    """(Preview: may change in a minor release.) Readings the engine declined because they arrived too far behind the others."""
+    lateReadings: Int!
+    """(Preview: may change in a minor release.) Rules that ran."""
+    rulesEvaluated: Int!
+    """(Preview: may change in a minor release.) Edges derived."""
+    edgeCount: Int!
+    """(Preview: may change in a minor release.) Intents recorded."""
+    intentCount: Int!
+    """(Preview: may change in a minor release.) Wall-clock milliseconds the evaluation took."""
+    wallMs: Int!
+}
+
 
 """The outcome of a replay preview."""
 # The outcome of a replay preview.
@@ -710,4 +1065,220 @@ type DetectionRuleValidationError {
     """Why the rule was rejected, in English, suitable for showing to the rule's author."""
     # Human-readable, console-surfaceable reason the rule did not compile.
     message: String!
+}
+
+"""(Preview: may change in a minor release.) A recorded-input automation comparison."""
+input CompareRuleVersionsInput {
+    """(Preview: may change in a minor release.) The owning profile token."""
+    profileToken: String!
+    """(Preview: may change in a minor release.) The active rule; null means absent."""
+    base: CompareRuleEnvelopeInput
+    """(Preview: may change in a minor release.) The proposed rule; null means removed."""
+    draft: CompareRuleEnvelopeInput
+    """(Preview: may change in a minor release.) Distinct devices to review, at most 50."""
+    deviceTokens: [String!]!
+    """(Preview: may change in a minor release.) Exactly one INCIDENT and one NORMAL window, each at most 24 hours."""
+    windows: [CompareReviewWindowInput!]!
+    """(Preview: may change in a minor release.) At most ten expectations."""
+    expectations: [CompareExpectationInput!]
+    """(Preview: may change in a minor release.) Maximum displacement for pairing changes; defaults to fifteen minutes."""
+    shiftWindowSeconds: Int
+    """(Preview: may change in a minor release.) Optional recorded sequence bounds."""
+    streamBounds: [CompareStreamBoundsInput!]
+    """(Preview: may change in a minor release.) Calculated metrics whose formulas read device constants."""
+    constantMetrics: [String!]
+}
+
+"""(Preview: may change in a minor release.) One rule version."""
+input CompareRuleEnvelopeInput {
+    """(Preview: may change in a minor release.) Rule token."""
+    token: String!
+    """(Preview: may change in a minor release.) Whether the rule is enabled."""
+    enabled: Boolean!
+    """(Preview: may change in a minor release.) The rules.Rule JSON definition."""
+    definition: String!
+    """(Preview: may change in a minor release.) Optional entity group scope."""
+    entityGroupToken: String
+    """(Preview: may change in a minor release.) Optional entity group version."""
+    entityGroupVersion: Int
+}
+
+"""(Preview: may change in a minor release.) One recorded window."""
+input CompareReviewWindowInput {
+    """(Preview: may change in a minor release.) Purpose of this window."""
+    role: ReviewWindowRole!
+    """(Preview: may change in a minor release.) Inclusive RFC3339 start."""
+    start: String!
+    """(Preview: may change in a minor release.) Inclusive RFC3339 end, at least two minutes before now."""
+    end: String!
+}
+
+"""(Preview: may change in a minor release.) One strict rule-test expectation."""
+input CompareExpectationInput {
+    """(Preview: may change in a minor release.) Window to judge."""
+    window: ReviewWindowRole!
+    """(Preview: may change in a minor release.) Optional display name."""
+    name: String
+    """(Preview: may change in a minor release.) One core rule-test expectation as strict JSON or YAML."""
+    expect: String!
+}
+
+"""(Preview: may change in a minor release.) Recorded replay positions."""
+input CompareStreamBoundsInput {
+    """(Preview: may change in a minor release.) The window these bounds identify."""
+    role: ReviewWindowRole!
+    """(Preview: may change in a minor release.) Resolved-events stream suffix."""
+    stream: String!
+    """(Preview: may change in a minor release.) First sequence as a uint64 decimal string."""
+    firstSeq: String!
+    """(Preview: may change in a minor release.) Last sequence as a uint64 decimal string."""
+    lastSeq: String!
+}
+
+"""(Preview: may change in a minor release.) The purpose of recorded history."""
+enum ReviewWindowRole {
+    """(Preview: may change in a minor release.) History containing the incident."""
+    INCIDENT
+    """(Preview: may change in a minor release.) History containing normal operation."""
+    NORMAL
+}
+
+"""(Preview: may change in a minor release.) The aggregate expectation outcome."""
+enum ReviewOutcome {
+    """(Preview: may change in a minor release.) Every expectation passed."""
+    PASSED
+    """(Preview: may change in a minor release.) An expectation failed."""
+    FAILED
+    """(Preview: may change in a minor release.) The available evidence cannot decide."""
+    INCONCLUSIVE
+}
+
+"""(Preview: may change in a minor release.) Whether recorded telemetry can reproduce this rule."""
+enum ReplayFidelityStatus {
+    """(Preview: may change in a minor release.) The rules support recorded-input replay."""
+    SUPPORTED
+    """(Preview: may change in a minor release.) The rules require inputs replay cannot reproduce."""
+    UNSUPPORTED
+}
+
+"""(Preview: may change in a minor release.) A single expectation verdict."""
+enum ExpectationVerdict {
+    """(Preview: may change in a minor release.) The expectation holds."""
+    PASS
+    """(Preview: may change in a minor release.) The expectation is contradicted."""
+    FAIL
+    """(Preview: may change in a minor release.) The available evidence cannot decide."""
+    INCONCLUSIVE
+}
+
+"""(Preview: may change in a minor release.) Why a comparison was refused."""
+enum CompareRefusalReason {
+    """(Preview: may change in a minor release.) Invalid request or rule definition."""
+    INVALID_INPUT
+    """(Preview: may change in a minor release.) A request exceeds comparison limits."""
+    LIMIT_EXCEEDED
+    """(Preview: may change in a minor release.) A rule failed compilation."""
+    RULE_REJECTED
+    """(Preview: may change in a minor release.) No preview slot is free."""
+    BUSY
+    """(Preview: may change in a minor release.) The comparison time budget expired."""
+    TIMEOUT
+}
+
+"""(Preview: may change in a minor release.) The comparison response."""
+type CompareRuleVersionsResult {
+    """(Preview: may change in a minor release.) Whether the comparison ran."""
+    ok: Boolean!
+    """(Preview: may change in a minor release.) Why the comparison did not run."""
+    refusal: CompareRefusal
+    """(Preview: may change in a minor release.) Aggregate verdict, including INCONCLUSIVE for unsupported replay."""
+    outcome: ReviewOutcome
+    """(Preview: may change in a minor release.) Replay eligibility and limitations."""
+    fidelity: CompareReplayFidelity
+    """(Preview: may change in a minor release.) Expectation verdicts in input order."""
+    expectations: [CompareExpectationResult!]!
+    """(Preview: may change in a minor release.) Recorded windows; empty for unsupported replay."""
+    windows: [CompareReviewWindow!]!
+    """(Preview: may change in a minor release.) Digest of the admitted recorded inputs."""
+    inputDigest: String
+    """(Preview: may change in a minor release.) The service build version or source revision."""
+    engineBuild: String!
+    """(Preview: may change in a minor release.) Canonical JSON of the engine result for storage; unsupported results contain no edges, intents or changes."""
+    result: String
+    """(Preview: may change in a minor release.) SHA-256 hex digest of exactly the result string bytes."""
+    resultDigest: String
+}
+
+"""(Preview: may change in a minor release.) A refused comparison."""
+type CompareRefusal {
+    """(Preview: may change in a minor release.) Typed refusal reason."""
+    reason: CompareRefusalReason!
+    """(Preview: may change in a minor release.) Explanation of the refusal."""
+    message: String!
+}
+
+"""(Preview: may change in a minor release.) Replay eligibility."""
+type CompareReplayFidelity {
+    """(Preview: may change in a minor release.) Whether replay is supported."""
+    status: ReplayFidelityStatus!
+    """(Preview: may change in a minor release.) Reasons replay is unsupported."""
+    reasons: [String!]!
+    """(Preview: may change in a minor release.) Human-readable interpretation of the replay."""
+    label: String!
+}
+
+"""(Preview: may change in a minor release.) One expectation verdict."""
+type CompareExpectationResult {
+    """(Preview: may change in a minor release.) Zero-based expectation index."""
+    index: Int!
+    """(Preview: may change in a minor release.) Expectation name."""
+    name: String!
+    """(Preview: may change in a minor release.) Judged window."""
+    window: ReviewWindowRole!
+    """(Preview: may change in a minor release.) Draft verdict."""
+    verdict: ExpectationVerdict!
+    """(Preview: may change in a minor release.) Active-rule verdict."""
+    baseline: ExpectationVerdict!
+    """(Preview: may change in a minor release.) Draft verdict explanation."""
+    reason: String!
+    """(Preview: may change in a minor release.) Active-rule verdict explanation."""
+    baselineReason: String!
+}
+
+"""(Preview: may change in a minor release.) Window provenance and differences."""
+type CompareReviewWindow {
+    """(Preview: may change in a minor release.) Window purpose."""
+    role: ReviewWindowRole!
+    """(Preview: may change in a minor release.) RFC3339 start."""
+    start: String!
+    """(Preview: may change in a minor release.) RFC3339 end."""
+    end: String!
+    """(Preview: may change in a minor release.) RFC3339 lead-in start."""
+    leadInStart: String!
+    """(Preview: may change in a minor release.) Replay stream suffix."""
+    stream: String!
+    """(Preview: may change in a minor release.) First sequence as a uint64 decimal string."""
+    firstSeq: String!
+    """(Preview: may change in a minor release.) Last sequence as a uint64 decimal string."""
+    lastSeq: String!
+    """(Preview: may change in a minor release.) Admitted input digest."""
+    inputDigest: String!
+    """(Preview: may change in a minor release.) Reasons evidence is incomplete."""
+    degraded: [String!]!
+    """(Preview: may change in a minor release.) Full difference counts."""
+    changeCounts: CompareChangeCounts!
+    """(Preview: may change in a minor release.) Whether the stored change list was truncated."""
+    changesTruncated: Boolean!
+}
+
+"""(Preview: may change in a minor release.) Difference counts before truncation."""
+type CompareChangeCounts {
+    """(Preview: may change in a minor release.) Added edges and intents."""
+    added: Int!
+    """(Preview: may change in a minor release.) Removed edges and intents."""
+    removed: Int!
+    """(Preview: may change in a minor release.) Edges and intents paired at different instants."""
+    shifted: Int!
+    """(Preview: may change in a minor release.) Pairs with changed content at the same instant."""
+    contentChanged: Int!
 }

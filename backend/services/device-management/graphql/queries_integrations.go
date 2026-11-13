@@ -6,7 +6,9 @@ package graphql
 import (
 	"context"
 	"errors"
+	"time"
 
+	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 )
@@ -89,6 +91,52 @@ func (r *SchemaResolver) IntegrationDecoder(ctx context.Context, args struct {
 	return &IntegrationDecoderPlanResolver{M: answer}, nil
 }
 
+// Whether a device's type has a payload decoder (service plane), for a device that publishes its
+// own payload. The credential the device presented is authenticated FIRST, and every failure to
+// authenticate is the same null, so the question says nothing about which devices exist or which
+// types carry a decoder to a caller without the device's credential.
+func (r *SchemaResolver) DeviceDecoder(ctx context.Context, args struct {
+	DeviceToken      string
+	CredentialType   string
+	CredentialId     string
+	CredentialSecret *string
+}) (*DeviceDecoderPlanResolver, error) {
+	if err := auth.AuthorizeService(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	var api model.DeviceManagementApi = r.GetApi(ctx)
+	if capi, ok := ctx.Value(ContextCachedApiKey).(*model.CachedApi); ok && capi != nil {
+		api = capi
+	}
+	answer, err := model.DeviceDecoder(ctx, api, args.DeviceToken, &model.PresentedCredential{
+		CredentialType: args.CredentialType, CredentialId: args.CredentialId, Secret: args.CredentialSecret,
+	})
+	if err != nil || answer == nil {
+		return nil, err
+	}
+	return &DeviceDecoderPlanResolver{IntegrationDecoderPlanResolver{M: answer}}, nil
+}
+
+// Whether a device's type has a payload decoder (service plane), for a device that published its own
+// payload on its raw-payload MQTT topic. The platform's broker authenticated the device and confined
+// it to its own topic, so there is no credential to check; only a service holding device:read may ask.
+func (r *SchemaResolver) BrokerAssertedDeviceDecoder(ctx context.Context, args struct {
+	DeviceToken string
+}) (*DeviceDecoderPlanResolver, error) {
+	if err := auth.AuthorizeService(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	var api model.DeviceManagementApi = r.GetApi(ctx)
+	if capi, ok := ctx.Value(ContextCachedApiKey).(*model.CachedApi); ok && capi != nil {
+		api = capi
+	}
+	answer, err := model.BrokerAssertedDeviceDecoder(ctx, api, args.DeviceToken)
+	if err != nil || answer == nil {
+		return nil, err
+	}
+	return &DeviceDecoderPlanResolver{IntegrationDecoderPlanResolver{M: answer}}, nil
+}
+
 // The sender-named devices an integration has seen that the tenant has no device in scope for.
 func (r *SchemaResolver) UnregisteredIntegrationDevices(ctx context.Context, args struct {
 	Criteria model.UnregisteredDeviceSearchCriteria
@@ -101,4 +149,39 @@ func (r *SchemaResolver) UnregisteredIntegrationDevices(ctx context.Context, arg
 		return nil, err
 	}
 	return &UnregisteredIntegrationDeviceSearchResultsResolver{M: *results, S: r, C: ctx}, nil
+}
+
+// Whether an event's credential would authenticate (service plane). See CheckIngestCredential.
+func (r *SchemaResolver) CheckDeviceCredential(ctx context.Context, args struct {
+	Device         string
+	CredentialType string
+	CredentialId   string
+	Secret         *string
+}) (bool, error) {
+	// Service plane: a tenant user's access token must not be able to probe credentials.
+	if err := auth.AuthorizeService(ctx, auth.DeviceRead); err != nil {
+		return false, err
+	}
+	mode, _ := ctx.Value(ContextDeviceAuthModeKey).(string)
+	if mode == "" {
+		// The resolver treats an unset mode as the hardened one; so does this.
+		mode = config.AuthModeRequired
+	}
+	// Through the cached decorator when the service injected one: it is the resolver's own
+	// authentication, so a warm credential costs a memory hit and no database read.
+	var authn model.IngestCredentialAuthenticator = r.GetApi(ctx)
+	if capi, ok := ctx.Value(ContextCachedApiKey).(*model.CachedApi); ok && capi != nil {
+		authn = capi
+	}
+	presented := presentedBy(args.CredentialType, args.CredentialId, args.Secret)
+	return model.CheckIngestCredential(ctx, authn, mode, args.Device, presented, time.Now())
+}
+
+// presentedBy is the credential an event presents, or nil when it presents none: the same rule the
+// event resolver applies, where a credential with no type or no id is no credential.
+func presentedBy(credentialType, credentialId string, secret *string) *model.PresentedCredential {
+	if credentialType == "" || credentialId == "" {
+		return nil
+	}
+	return &model.PresentedCredential{CredentialType: credentialType, CredentialId: credentialId, Secret: secret}
 }

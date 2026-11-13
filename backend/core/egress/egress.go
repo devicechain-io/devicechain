@@ -91,6 +91,9 @@ func (e *BlockedError) Unwrap() error { return ErrBlocked }
 // addition to it as a fix, not as tidying.
 type Guard struct {
 	allow []netip.Prefix
+	// devAllow is the local-development allowance (see dev.go). Checked after allow and
+	// never able to admit an address neverDevAllowedAddr names.
+	devAllow []netip.Prefix
 }
 
 // NewGuard builds a guard that refuses every address in the built-in deny set except
@@ -107,6 +110,15 @@ func NewGuard(allow []netip.Prefix) *Guard {
 	cp := make([]netip.Prefix, len(allow))
 	copy(cp, allow)
 	return &Guard{allow: cp}
+}
+
+// WithDevAllow returns a copy of g that additionally admits the local-development prefixes
+// (already validated by ParseDevPrefixes), except for the addresses that are never allowed.
+func (g *Guard) WithDevAllow(dev []netip.Prefix) *Guard {
+	ng := &Guard{allow: g.allow}
+	ng.devAllow = make([]netip.Prefix, len(dev))
+	copy(ng.devAllow, dev)
+	return ng
 }
 
 // CheckAddr reports whether addr may be dialed.
@@ -129,6 +141,19 @@ func (g *Guard) check(addr netip.Addr, what string) error {
 
 	for _, p := range g.allow {
 		if p.Contains(addr) {
+			return nil
+		}
+	}
+
+	// The local-development allowance. A match admits the address unless it is one that is
+	// never allowed (metadata, loopback, link-local, ...): that is refused here, with its
+	// own reason, rather than falling through, so the refusal is not hostage to the deny
+	// table below being right.
+	for _, p := range g.devAllow {
+		if p.Contains(addr) {
+			if why := neverDevAllowedAddr(addr); why != "" {
+				return &BlockedError{Addr: addr, Reason: what + " is in " + why + ", which a development allowance never admits"}
+			}
 			return nil
 		}
 	}

@@ -99,7 +99,7 @@ device.
 Every terminal command also carries an `outcome` that says what physically happened, because `FAILED` alone spans three different facts:
 
 - **`SUCCEEDED`** — the device reported success.
-- **`NOT_DELIVERED`** — proven never to have reached the device (`EXPIRED`, `CANCELLED`, and the `FAILED` cases where the transport cannot carry commands, the platform stopped trying to publish, or the device's profile no longer defines a command that was waiting for a window).
+- **`NOT_DELIVERED`** — proven never to have reached the device (`EXPIRED`, `CANCELLED`, and the `FAILED` cases where the transport cannot carry commands, the platform stopped trying to publish, the device's profile no longer defines a command that was waiting for a window, or a command on the [HTTP pull channel](#http-command-pull) was handed out as many times as it allows and never acknowledged).
 - **`REJECTED`** — the device received the command and reported a failure.
 - **`UNKNOWN`** — it may have acted: `TIMEOUT`, or a `FAILED` where the device answered and the platform lost the answer.
 
@@ -272,21 +272,50 @@ lowered per tenant.
 
 #### Retrying a ceiling refusal {#retrying-a-ceiling-refusal}
 
-`HELD_CEILING_EXCEEDED` is the **only temporary coded refusal** the enqueue path produces. (If a service the
-enqueue depends on is unreachable, the enqueue fails with an uncoded `validation is unavailable` error,
-which can succeed on a retry once the service is back.) Every other coded
-rejection describes a request that will be exactly as wrong on the next attempt; this one clears on
-its own as the backlog goes out. It is the one code worth retrying, and the rest are worth
-surfacing to a person. See
+`HELD_CEILING_EXCEEDED` is the **only temporary coded rejection** the enqueue path produces.
+It clears on its own as the backlog goes out. A dependency outage instead fails the enqueue
+with a GraphQL error whose `extensions.code` is `UNAVAILABLE`; no command was created and
+you can retry the request unchanged once the dependency is back. Other dependency failures
+remain uncoded. Every other coded rejection describes a request that will be exactly as wrong
+on the next attempt and should be surfaced to a person. See
 [Sending a command](../guides/sending-commands.md#when-an-enqueue-is-refused).
+
+### Devices that fetch their commands over HTTP {#http-command-pull}
+
+A device that only speaks HTTP, such as a battery sensor that wakes, sends a reading and sleeps, holds no connection the platform can publish to. Set the device type's `commandChannel` to `HTTP_PULL` and its commands wait for the device to ask. A device type with no value, or with `PUBLISH` (the default), is not affected: its commands are delivered exactly as before.
+
+The device uses three requests on the HTTP ingest listener, each with `Authorization: Bearer <the device's access token>`. The device in the path must be the device the token belongs to, and a token in the URL is never accepted.
+
+| Request | Meaning | Answers |
+| --- | --- | --- |
+| `GET /{instanceId}/{tenant}/devices/{device}/commands?wait=25` | Claim the commands waiting for the device. `wait` is how many seconds to hold the request open when none are waiting: 0 to 30, 25 by default. | `200` with `{"commands": [...]}`, or `204` when none arrived. |
+| `POST .../commands/{command}/ack` | The command reached the device. Send it **before** acting on the command. | `204`. |
+| `POST .../commands/{command}/response` | What the device did: `{"success": true, "payload": ..., "error": "..."}`. | `204`. |
+
+The body of the `200` and of a response are published as [command-pull.schema.json](pathname:///schema/device/command-pull.schema.json) and [command-pull-response.schema.json](pathname:///schema/device/command-pull-response.schema.json). `401` means the token was not accepted, `403` that it belongs to another device or the device's type has not opted in, `404` that the command is not this device's, `409` that the command is not waiting for that request, and `429` that the tenant already has as many requests being held open as it may (retry after the `Retry-After`) or the source address is making too many requests. `503` means retry.
+
+Each command a pull hands out is claimed by that pull, so two requests, two replicas or a retry never receive the same command. A held request asks the platform for the device's commands every couple of seconds, so a command issued while a device is polling reaches it within a few seconds.
+
+**Turning it on during an upgrade.** Upgrade device-management first, and set a device type's `commandChannel` to `HTTP_PULL` only once every replica of every service has been upgraded. A command-delivery replica from before this channel publishes a pull device's commands to a subject nobody reads, and they time out. A replica that is already upgraded while device-management is not yet cannot tell which devices pull, so it holds the commands of every device it asks about and releases them once device-management answers; ordinary devices are delayed for that time, never sent to the wrong place.
+
+**Acknowledging.** A command whose acknowledgement does not arrive within 60 seconds is handed out again by the next pull, with a higher `attempt`, until its `maxAttempts` are spent (3 unless the command sets another, up to 10). After that it fails with outcome [`NOT_DELIVERED`](#outcome) and no delivery time. This rests on the device acknowledging before it acts: an unacknowledged command is one the device has not been seen to act on, so sending it again is safe. A device that acts first and acknowledges afterwards can be handed a command twice and should not rely on the acknowledgement for that.
+
+**One-way commands.** A command created with `deliveryMode: ONEWAY` is completed by its acknowledgement: it becomes `SUCCESSFUL` and the device sends no response. `deliveryMode` and `maxAttempts` are accepted only for a device on the `HTTP_PULL` channel; for any other device the command is refused with `DELIVERY_OPTION_NOT_APPLICABLE`.
+
+#### Delivery evidence {#delivery-evidence}
+
+A command carries `deliveredTime` and `deliveryEvidence` once the platform has evidence that the device had it: `DEVICE_ACK` when the device acknowledged on the pull channel, or `DEVICE_RESPONSE` when the device answered, on any channel. The first evidence is kept. There is no `DELIVERED` status: the status keeps its meaning, and the evidence sits beside it. A `SUCCESSFUL` command from a channel with neither acknowledgement nor answer to count has no delivery time, and a command that failed as `NOT_DELIVERED` never has one.
 
 ### Who reports the outcome {#who-reports-the-outcome}
 
-Only the device can report success. `SUCCESSFUL` and a device-reported `FAILED` are the two
-outcomes only the device can produce. (The exception is a Sparkplug write, whose success the
-platform infers from the node's reported state, which can mean the value was already there; see
-[Sparkplug B](./sparkplug.md).) Every other terminal state is one the platform writes on its
-own:
+A command is normally settled by the device: it reports `SUCCESSFUL` or a device-reported
+`FAILED`. The exceptions are a Sparkplug write, whose success the platform infers from the node's
+reported state, which can mean the value was already there (see [Sparkplug B](./sparkplug.md)),
+and a channel that has no device answer to wait for, such as an
+[unconfirmed LoRaWAN downlink](../guides/inbound-integrations.md#lorawan-downlink). An unconfirmed
+downlink is marked `SUCCESSFUL` once the network server queues it, without evidence that the device
+received it. A confirmed downlink is settled from the device's acknowledgement. Every other terminal
+state is one the platform writes on its own:
 
 - `TIMEOUT`, `EXPIRED` or `CANCELLED`;
 - `FAILED` because the transport cannot carry the command at all;

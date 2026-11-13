@@ -119,7 +119,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: func(context.Context) error { return nil },
+			Postprocess: governance.StopRefreshes,
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -726,6 +726,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 					Constants: DeviceConstants,
 					// The preview applies live's duplicate rule, so it is told the envelope mode.
 					AppliedGuard: appliedGuardEnabled(),
+					// evaluateRules judges out-of-order delivery with live's lateness.
+					EvaluationLateness: detectProcessorConfig(Configuration).Lateness,
 				}
 			},
 			// The NATS manager is injected as a provider so the slice-7c detectionStream

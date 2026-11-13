@@ -312,6 +312,10 @@ type NatsManager struct {
 	reconnectMu sync.Mutex
 	onReconnect []func()
 
+	// caches own delayed evictions that must run while the connection is still live.
+	cacheMu sync.Mutex
+	caches  []*Cache
+
 	// ackWaitOverride is the test seam behind SetAckWaitForTesting. Zero in production,
 	// where ackWait() answers the AckWait constant. Read it through ackWait(), never
 	// directly: the durable's configured AckWait and the AckDeadline a capacity reader
@@ -895,7 +899,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	}
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	bounds := nmgr.streamBounds(suffix)
-	subjects := StreamSubjects(nmgr.Microservice.InstanceId, suffix)
+	subjects := nmgr.streamSubjects(suffix)
 	retention := retentionPolicy(streams.RetentionFor(suffix))
 	dupWindow := time.Duration(streams.DuplicateWindowSecondsFor(suffix)) * time.Second
 	// Retry on connection/server errors so a few seconds of NATS lag on a cluster
@@ -1436,7 +1440,7 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 		return err
 	}
 	for i := range msgs {
-		nm := natsMsg(subject, msgs[i])
+		nm, spans := startPublishMessage(ctx, subject, w.suffix, msgs[i])
 		// A fresh ceiling for each message: a batch is not one publish, and the
 		// ceiling bounds how long ONE unanswered request is waited on.
 		pctx, callerBound, cancel := publishContext(ctx)
@@ -1463,6 +1467,7 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 			}
 		}
 		cancel()
+		finishPublish(spans, err)
 		if err != nil && !callerBound && errors.Is(err, context.DeadlineExceeded) {
 			// Our ceiling fired, not the caller's deadline, which has not passed:
 			// report it as the broker timeout it has always been.
@@ -1662,6 +1667,13 @@ type natsReader struct {
 	// deliverNew, when set, creates the durable at the stream tail (DeliverNewPolicy)
 	// instead of the default DeliverAll — see ReaderWithDeliverNew.
 	deliverNew bool
+	// deliverLookback, when positive, creates the durable at a start time that far in the past
+	// on first creation (DeliverByStartTimePolicy) — see ReaderWithDeliverLookback.
+	deliverLookback time.Duration
+	// pinned is the delivery policy the durable actually carries (read back, or chosen at its
+	// creation) once pinLookback has settled it; consumerConfig applies it so every later
+	// UpdateConsumer/AddConsumer of this reader repeats the immutable fields unchanged.
+	pinned *pinnedDelivery
 	// ackFloorStart, when set, makes the durable an AckAll consumer created at the position
 	// it returns — see ReaderWithAckFloor.
 	ackFloorStart func(ctx context.Context) (uint64, error)
@@ -1789,6 +1801,22 @@ type ReaderOption func(*natsReader)
 // its ack cursor persists, so a restart still resumes from the last ack, not the tail.
 func ReaderWithDeliverNew() ReaderOption {
 	return func(r *natsReader) { r.deliverNew = true }
+}
+
+// ReaderWithDeliverLookback starts the durable, on first creation only, at the stream position
+// from d ago instead of at the tail (ReaderWithDeliverNew) or the beginning of the retained
+// history (the default). It is for a consumer that must not replay the whole retained stream the
+// first time it is enabled, yet must not lose what was published in the rollout window just
+// BEFORE its durable existed — the traffic of a producer that was switched on a moment before
+// this consumer was. The caller must make each message safe to see late (an idempotent or
+// predicated claim), because the window can hold messages that were already handled.
+//
+// Like every creation-time option the policy is frozen on the server: an existing durable is
+// kept exactly as it is (its start time is read back, not recomputed), so a restart resumes from
+// the last ack and a later pod's different "now" never makes AddConsumer refuse the durable.
+// It takes precedence over ReaderWithDeliverNew.
+func ReaderWithDeliverLookback(d time.Duration) ReaderOption {
+	return func(r *natsReader) { r.deliverLookback = d }
 }
 
 // termGatePoll is how often a term-gated reader re-evaluates its predicate while
@@ -2000,7 +2028,37 @@ func (r *natsReader) consumerConfig() *nats.ConsumerConfig {
 	if r.deliverNew {
 		cfg.DeliverPolicy = nats.DeliverNewPolicy
 	}
+	if p := r.pinned; p != nil {
+		cfg.DeliverPolicy, cfg.OptStartTime, cfg.OptStartSeq = p.policy, p.start, p.seq
+	}
 	return cfg
+}
+
+// pinLookback settles ReaderWithDeliverLookback's delivery policy. A durable that already
+// exists keeps the delivery policy it was created with (read back from the server); only a
+// first creation computes a start time from now.
+func (r *natsReader) pinLookback() error {
+	if r.deliverLookback <= 0 {
+		return nil
+	}
+	info, err := r.nmgr.js.ConsumerInfo(r.stream, r.durable, nats.Context(r.nmgr.opContext()))
+	switch {
+	case err == nil:
+		r.pinned = &pinnedDelivery{policy: info.Config.DeliverPolicy, start: info.Config.OptStartTime, seq: info.Config.OptStartSeq}
+	case errors.Is(err, nats.ErrConsumerNotFound):
+		start := time.Now().Add(-r.deliverLookback)
+		r.pinned = &pinnedDelivery{policy: nats.DeliverByStartTimePolicy, start: &start}
+	default:
+		return err
+	}
+	return nil
+}
+
+// pinnedDelivery is a durable's immutable delivery fields.
+type pinnedDelivery struct {
+	policy nats.DeliverPolicy
+	start  *time.Time
+	seq    uint64
 }
 
 // bind (re)creates the durable consumer if needed and binds a pull subscription to
@@ -2049,7 +2107,19 @@ func (r *natsReader) bindLocked() error {
 		// does (see opContext): a stop abandons a create or update still in flight rather than
 		// waiting out the client's request timeout on each call.
 		r.retireLegacyCaptureDurable()
-		if _, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig(), nats.Context(r.nmgr.opContext())); err != nil {
+		if err := r.pinLookback(); err != nil {
+			return err
+		}
+		_, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig(), nats.Context(r.nmgr.opContext()))
+		if err != nil && r.deliverLookback > 0 && errors.Is(err, nats.ErrConsumerNameAlreadyInUse) {
+			// Another replica created the durable between our lookup and our create, with its own
+			// start time. Adopt the winner's policy rather than fight over an immutable field.
+			r.pinned = nil
+			if err = r.pinLookback(); err == nil {
+				_, err = r.nmgr.js.AddConsumer(r.stream, r.consumerConfig(), nats.Context(r.nmgr.opContext()))
+			}
+		}
+		if err != nil {
 			return err
 		}
 		if err := r.reconcileFilterSubject(); err != nil {
@@ -2286,7 +2356,11 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	// pod of the previous build running beside this one, and that build re-filters the durable
 	// it knows in place whenever it re-binds; see CaptureDurableName.
 	if streams.ShapeOf(suffix) == streams.ShapeDeviceEvents {
-		subjects := DeviceEventsSubjects(nmgr.Microservice.InstanceId)
+		// 🔴 THE HAND-OUT DOES NOT FOLLOW THE OPT-IN, THE STREAM'S SUBJECT LIST DOES. A reader that
+		// acks and drops what it does not hand out would delete a raw payload a flag-on replica's
+		// grant let a device publish, if this replica had not yet been told the setting (a roll in
+		// either direction), so every replica of this release hands out every shape it knows.
+		subjects := DeviceEventsSubjectsWith(nmgr.Microservice.InstanceId, true)
 		r.forwards, r.alsoForwards = subjects[0], subjects[1:]
 		r.legacyDurable = DurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
 	} else {
@@ -2660,7 +2734,7 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 				continue // its AckWait has run out: the broker is redelivering it
 			}
 		}
-		seq, deliv, appended := msgMeta(nm)
+		seq, deliv, appended, pending := msgMeta(nm)
 		// A direct copy of a device QoS 1 publish the fail-closed store holds: the store copy is
 		// the one forwarded, so this one is acked and skipped.
 		if r.carried != "" && r.nmgr.mqttView().carriedByStore(r.carried, nm.Header.Get(mqttGatewayHeader), seq) {
@@ -2688,6 +2762,7 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 		}
 		msg.StreamSeq = seq
 		msg.AppendTime = appended
+		msg.NumPending = pending
 		msg.slot = sl
 		msg.origin = Origin{Suffix: r.suffix, Stream: r.stream, Consumer: r.durable, Seq: seq}
 		return msg, nil
@@ -2948,9 +3023,9 @@ func natsHeaders(nm *nats.Msg) map[string]string {
 }
 
 // msgMeta returns the JetStream stream sequence, delivery-attempt count and
-// append time of a consumed message in a single metadata parse (the reply subject
-// is parsed once, not once per field). All three are zero when metadata is
-// unavailable — a non-JetStream message — which callers treat as "no durable
+// append time of a consumed message, and how many messages the broker still had queued for the consumer
+// when it delivered this one, in a single metadata parse (the reply subject is parsed once, not once per
+// field). All four are zero when metadata is unavailable — a non-JetStream message — which callers treat as "no durable
 // position / first delivery / no send time".
 //
 // The stream sequence is the durable, gapless position a checkpointing consumer
@@ -2962,12 +3037,12 @@ func natsHeaders(nm *nats.Msg) map[string]string {
 // to the stream, which for the ingest capture stream is when the device published
 // it — so it is the tenant's SEND time, and the clock a drain-admission gate must
 // meter against rather than the time we got round to reading it (ADR-030 I4).
-func msgMeta(nm *nats.Msg) (streamSeq uint64, numDelivered int, appendTime time.Time) {
+func msgMeta(nm *nats.Msg) (streamSeq uint64, numDelivered int, appendTime time.Time, numPending uint64) {
 	md, err := nm.Metadata()
 	if err != nil {
-		return 0, 0, time.Time{}
+		return 0, 0, time.Time{}, 0
 	}
-	return md.Sequence.Stream, int(md.NumDelivered), md.Timestamp
+	return md.Sequence.Stream, int(md.NumDelivered), md.Timestamp, md.NumPending
 }
 
 // HandleResponse logs the result of a read operation.
@@ -3476,6 +3551,9 @@ func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
 			}
 		}
 	}
+	// Follow-up deletes need the live connection, so flush before draining it; ctx
+	// bounds the deletes and the join of any follow-up already running.
+	nmgr.flushCacheFollowUps(ctx)
 	if nmgr.nc != nil {
 		nmgr.drainAndWait(ctx)
 	}

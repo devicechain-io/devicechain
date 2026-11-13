@@ -58,6 +58,8 @@ func (r *NotificationPolicyResolver) MaxEscalations() (*int32, error) {
 
 func (r *NotificationPolicyResolver) Enabled() bool { return r.M.Enabled }
 
+func (r *NotificationPolicyResolver) NotifyOnClear() bool { return r.M.NotifyOnClear }
+
 func (r *NotificationPolicyResolver) Metadata() *string { return util.MetadataStr(r.M.Metadata) }
 
 func (r *NotificationPolicyResolver) QuietHoursTimezone() *string {

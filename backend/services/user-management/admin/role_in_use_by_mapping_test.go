@@ -22,7 +22,7 @@ func TestDeleteRoleRefusesARoleAnIdpMappingNames(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&iam.Role{}, &iam.Identity{}, &iam.Membership{}, &iam.IdpConnection{}, &iam.IdpRoleMapping{},
-		&iam.ServiceAccount{}, &iam.ServiceAccountSecret{}))
+		&iam.ServiceAccount{}, &iam.ServiceAccountSecret{}, &iam.AgentPolicy{}, &iam.AgentPolicyVersion{}))
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	s := NewService(iam.NewStore(&rdb.RdbManager{Database: db}), testSettle, testTokenHold, nil)

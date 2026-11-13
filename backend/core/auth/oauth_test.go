@@ -301,10 +301,15 @@ func TestLocationIsReachableOnlyThroughItsOwnScope(t *testing.T) {
 	}
 }
 
-// Every ceiling is read-only and never names the super-authority. IntersectAuthorities
-// already drops "*" from an allowance, so this is defence in depth on the table
-// itself: a write authority here would let an OAuth session mutate the tenant, and
-// the scopes are named for reading.
+// NO CEILING HOLDS A RAW WRITE AUTHORITY OR THE SUPER-AUTHORITY.
+//
+// This is the first of three assertions that replace "nothing here may be a write authority"
+// now that an agent-action design exists: a scope's ceiling is either a READ ceiling (every
+// entry ends ":read") or, for a future "act:" scope, a PROPOSAL ceiling (every entry ends
+// ":propose"). It is never "*", never ":write", never ":admin". The second assertion is
+// below (the act: scopes hold only proposals), the third is
+// TestReadOnlyAndLocationCeilingsUnchanged.
+//
 // 🔴 IT ITERATES THE TABLE, NOT SupportedScopes, AND THE DIFFERENCE IS THE WHOLE TEST.
 // An earlier version walked SupportedScopes, so a ceiling whose key was absent from that
 // list was invisible to every test in every package — an entry naming device:write,
@@ -315,28 +320,71 @@ func TestLocationIsReachableOnlyThroughItsOwnScope(t *testing.T) {
 // exactly one endpoint, and any future mint path that does not route through /authorize
 // would make this table the authority. A table that is the authority has to be the thing
 // the test reads.
-func TestScopeAllowancesAreReadOnly(t *testing.T) {
-	for scope := range scopeAllowances {
-		allow, ok := ScopeAllowance(scope)
-		if !ok {
+func TestCeilingsHoldNoRawWriteOrAll(t *testing.T) {
+	all := map[string][]string{}
+	for scope, allow := range scopeAllowances {
+		if _, ok := ScopeAllowance(scope); !ok {
 			t.Errorf("scope %q has a ceiling in scopeAllowances but is not in SupportedScopes, so "+
 				"ScopeAllowance refuses it — the two lists must agree", scope)
-			continue
 		}
+		all[scope] = allow
+	}
+	for scope, allow := range actScopeCeilings {
+		if !IsSupportedScopeFor(scope, true) {
+			t.Errorf("act scope %q has a ceiling but is not advertised with the flag on", scope)
+		}
+		all[scope] = allow
+	}
+	for scope, allow := range all {
 		if len(allow) == 0 {
 			t.Errorf("scope %q has an empty ceiling, so a token minted for it carries "+
 				"nothing and the scope is unusable", scope)
 		}
 		for _, a := range allow {
 			if a == string(AuthorityAll) {
-				t.Errorf("scope %q names %q", scope, a)
+				t.Errorf("scope %q names the super-authority %q", scope, a)
 				continue
 			}
-			if !strings.HasSuffix(a, ":read") {
+			switch {
+			case strings.HasSuffix(a, ":write"), strings.HasSuffix(a, ":admin"):
+				t.Errorf("scope %q names %q, a raw write/admin authority: an OAuth-minted "+
+					"token must never carry one (a proposal authority is the most it may hold)", scope, a)
+			case strings.HasPrefix(scope, "act:"):
+				if !strings.HasSuffix(a, ProposalAuthoritySuffix) {
+					t.Errorf("act scope %q names %q, which is not a proposal authority", scope, a)
+				}
+			case !strings.HasSuffix(a, ":read"):
 				t.Errorf("scope %q names %q, which is not a read authority", scope, a)
 			}
 		}
 	}
+}
+
+// The two ceilings that exist today are byte-for-byte what v1.1 shipped. A grant refreshes
+// against the CURRENT allowance (RefreshOAuth), so any change here silently widens every
+// existing session at its next refresh; that is why `location` was split out in the first
+// place. This is a LITERAL, deliberately not derived from the table it checks.
+func TestReadOnlyAndLocationCeilingsUnchanged(t *testing.T) {
+	wantReadOnly := []string{"device:read", "event:read", "state:read", "command:read", "alarm:read", "dashboard:read"}
+	wantLocation := []string{"location:read"}
+	if got := scopeAllowances[ScopeReadOnly]; !equalStrings(got, wantReadOnly) {
+		t.Errorf("read-only ceiling = %v, want exactly %v", got, wantReadOnly)
+	}
+	if got := scopeAllowances[ScopeLocation]; !equalStrings(got, wantLocation) {
+		t.Errorf("location ceiling = %v, want exactly %v", got, wantLocation)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // An undefined scope fails closed, and the returned slice is a COPY — a caller that

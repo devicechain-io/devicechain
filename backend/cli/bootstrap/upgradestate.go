@@ -89,6 +89,14 @@ func hydrateUpgradeState(
 		InstallCommand(provider.Name(), binding)); err != nil {
 		return nil, err
 	}
+	// 🔴 THE OPERATOR'S IDENTITY DIGESTS ITS DEFINITIONS ONLY, so a cluster still on the previous
+	// release's controller passes the check above whenever a release left the definitions alone.
+	// The install record says which dcctl last finished the cluster-level install. See
+	// upgradeorder.go.
+	if err := requireInstallOrderFor(ctx, typed, opts.DcctlVersion,
+		InstallCommand(provider.Name(), binding)); err != nil {
+		return nil, err
+	}
 
 	// 1. THE DECLARATION.
 	//
@@ -192,6 +200,14 @@ func hydrateUpgradeState(
 			"instance %q is declared but has no configuration document, so it was never "+
 				"finished — there is no running instance here to upgrade. Complete the bootstrap, "+
 				"or destroy the instance and build it again", opts.Instance)
+	}
+	// The deployed document still says observe (v1.3 opt-out). dcctl writes that document, so an explicit
+	// --reset-values or replacing --values recomposes it without the key; a flagless run would rewrite it
+	// unchanged from the recorded overlay and is refused here, before anything is changed.
+	if deployed.Infrastructure.TokenAudience.Enforcement == "observe" && !st.ValuesOverlayIntent {
+		return nil, fmt.Errorf("the deployed instance configuration document for instance %q sets "+
+			"infrastructure.tokenAudience.enforcement to observe, which v1.4 refuses. Re-run `dcctl upgrade` with "+
+			"`--values <file without the key>` or `--reset-values`. Nothing has been changed", opts.Instance)
 	}
 	st.FromImageVersion = inst.Spec.ImageVersion
 	st.EnvelopesEnabledAt = inst.Annotations[AnnotationEnvelopesEnabledAt]
@@ -298,7 +314,8 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	// registry could have its controller moved to a published image and its services
 	// left on the local one — two halves of what is defined as ONE version across the
 	// images, the chart, the operator and this CLI.
-	st.ImageRegistry, st.ImageVersion = inst.Spec.ImageRegistry, inst.Spec.ImageVersion
+	declaredRegistry, declaredVersion := inst.Spec.ImageRegistry, inst.Spec.ImageVersion
+	st.ImageRegistry, st.ImageVersion = declaredRegistry, declaredVersion
 	// 🔴 AN AREA CHANGE STAYS ON THE DECLARED IMAGES, AND THAT IS NOT LEFT TO THE CALLER.
 	// The release refusal in applyAreaChange compares this dcctl with the version the run
 	// is about to deploy; an image source supplied beside the areas would make that the
@@ -328,6 +345,30 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 		return err
 	}
 	st.ImageRegistry, st.ImageVersion = img.Registry, img.Version
+	// A dcctl is not pointed at a release that is not its own: that plans its chart around images it
+	// was not built for. See refuseForeignRelease.
+	if len(opts.EnableAreas) == 0 && opts.ImageVersion != "" {
+		if err := refuseForeignRelease(st.ImageVersion, DefaultImageVersion, st.ImageRegistry); err != nil {
+			return err
+		}
+	}
+	// 🔴 A FLAGLESS UPGRADE RE-APPLIES THE DECLARED VERSION, and a declaration written by a newer
+	// dcctl names a release this one was not built for while the cluster's install record (this
+	// dcctl's, or older) cannot satisfy it. Same refusal and remedy as an explicit --version;
+	// a declared version OLDER than this dcctl is the ordinary case (the instance has yet to move).
+	if len(opts.EnableAreas) == 0 && opts.ImageVersion == "" {
+		if err := judgeForeignRelease(
+			fmt.Sprintf("the version instance %q is declared at (%s)", opts.Instance, st.ImageVersion),
+			st.ImageVersion, DefaultImageVersion, st.ImageRegistry, true); err != nil {
+			return err
+		}
+	}
+
+	if len(opts.EnableAreas) == 0 {
+		if err := refuseADowngrade(opts.Instance, declaredRegistry, declaredVersion, st.ImageRegistry, st.ImageVersion); err != nil {
+			return err
+		}
+	}
 
 	// `dcctl enable-area`: the requested areas join the declaration's delta here, so
 	// the resolution below — and everything downstream of it, the chart values, the
@@ -387,6 +428,11 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	// stays on the platform default. A flag overrides it, and is marked for recording below
 	// (recordUpgradedVersion) so the NEXT flagless upgrade keeps it. Judged against the area set
 	// the instance will have, here, while nothing has been written.
+	st.MqttDeviceUplinksGiven = opts.MqttDeviceUplinks != nil
+	if opts.MqttDeviceUplinks != nil {
+		st.MqttDeviceUplinksChange = !sameBoolPtr(st.MqttDeviceUplinks, opts.MqttDeviceUplinks)
+		st.MqttDeviceUplinks = copyBoolPtr(opts.MqttDeviceUplinks)
+	}
 	if opts.MqttFailClosed != nil {
 		if err := ValidateMqttFailClosed(opts.MqttFailClosed, st.Profile, st.EnableAreas); err != nil {
 			return err
@@ -407,6 +453,11 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 		st.MQTTExposure, st.MQTTHost, st.MQTTExposureChange = got.Mode, got.Host, got.Changed
 	}
 	sayMQTTExposure(st)
+	// The development egress allowance: the declaration's, unless this run was given one.
+	if err := settleDevAllowEgress(st, recordedDevAllowEgress(inst.Annotations), opts.DevAllowEgress); err != nil {
+		return err
+	}
+	sayDevAllowEgress(st)
 	if err := adoptBrokerMaxConnections(st, st.BrokerMaxConnections, opts.BrokerMaxConnections); err != nil {
 		return err
 	}

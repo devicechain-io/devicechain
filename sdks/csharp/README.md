@@ -24,13 +24,14 @@ and the library builds with `TreatWarningsAsErrors` + `IsAotCompatible`. It mult
 | GraphQL over HTTP | `GraphQlClient` | typed query/mutate against `/api/{area}/graphql`; caller supplies its own `JsonTypeInfo` (AOT-safe) |
 | Live subscriptions | `Subscriptions.GraphQlWsClient` | `graphql-transport-ws`, one multiplexed socket per area; token in `connection_init` |
 | Device-plane emit | `Ingest.DeviceEventPublisher` | Measurement + Location over `POST /{instanceId}/{tenant}/events` or MQTT (the `JsonEvent` shape; HTTP carries the credential in the body, platform MQTT carries none: the broker authenticated the connection and refuses a body credential, see `IDeviceEventCarrier.CarriesBodyCredential`) |
+| HTTP command pull (v1.4 in progress) | `Commands.HttpCommandPuller` | devices whose type opts into `HTTP_PULL` poll, acknowledge and respond over the device-plane HTTP listener |
 | Transport seam | `Transport.IHttpTransport` / `Transport.IWebSocketFactory` | pluggable HTTP + WebSocket, so the SDK runs where `HttpClient`/`ClientWebSocket` don't (Unity WebGL) |
 | Facade | `DeviceChainClient` | wires all of the above against one origin |
 
 ## Usage
 
 ```csharp
-await using var client = new DeviceChainClient(new Uri("https://demo.devicechain.io"));
+await using var client = new DeviceChainClient(new Uri("https://devicechain.example.com"));
 
 await client.LoginAsync("me@example.com", "…");
 await client.SelectTenantAsync("acme");
@@ -52,7 +53,7 @@ await foreach (var evt in client.Subscriptions(Area.EventManagement).SubscribeAs
 // Emit device-plane telemetry (an interactive twin). The device-plane ingress is a SEPARATE
 // listener from the /api GraphQL origin, so its origin is passed explicitly:
 var publisher = client.DevicePublisher(
-    ingressOrigin: new Uri("https://ingress.demo.devicechain.io"), instanceId: "dc", tenant: "acme");
+    ingressOrigin: new Uri("https://ingress.devicechain.example.com"), instanceId: "dc", tenant: "acme");
 await publisher.EmitMeasurementsAsync("car-42", credentialId,
     new Dictionary<string, double> { ["speed"] = 55.0 });
 
@@ -85,7 +86,7 @@ with plain-.NET defaults (`HttpClientTransport`, `ClientWebSocketFactory`) that 
 // On plain .NET nothing changes — the defaults are used automatically. On Unity WebGL, inject
 // transports backed by UnityWebRequest + a browser WebSocket (shipped by the slice-4 UPM plugin):
 await using var client = new DeviceChainClient(
-    new Uri("https://demo.devicechain.io"),
+    new Uri("https://devicechain.example.com"),
     httpTransport: new MyUnityWebRequestTransport(),   // : IHttpTransport
     webSocketFactory: new MyBrowserWebSocketFactory()); // : IWebSocketFactory
 ```
@@ -147,9 +148,16 @@ Unity player check. See [`sdks/unity/MQTT-PLAYER-VERIFICATION.md`](../unity/MQTT
 ## MQTT device plane
 
 `MqttDeviceSession` speaks the device plane the way a device does: it publishes telemetry and
-receives commands over MQTT, which is the only carrier commands travel on. One session is one
+receives commands over MQTT. Other platform command transports are not implemented by this session. One session is one
 device — MQTT 3.1.1 has no shared subscriptions and the broker grant confines a connection to a
 single device — so a scene with 18 machines holds 18 connections.
+
+A device can authenticate with an X.509 client certificate instead of its access-token credential:
+load it with `MqttClientCertificate.FromPemFiles` / `FromPfxFile` (RSA or ECDSA), set
+`MqttSessionOptions.ClientCertificate`, and use an `ssl://` broker address (pin a private broker CA
+with `MqttTrust.PinnedCaFromFile`). The session then connects as `{tenant}:@x509` with no password.
+A loader failure (no key, mismatched key, CA certificate, no client-auth usage, wrong password)
+throws `MqttClientCertificateException` before any connection is made.
 
 Three properties are worth knowing before you use it:
 

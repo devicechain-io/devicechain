@@ -64,8 +64,8 @@ For a generic sender, a **Where the data is** section appears:
   Leave it empty when the body is a single uplink.
 - **Sender time** (optional): a JSON pointer to the time the sender recorded. Without it the time of
   receipt is used, and a retried request is stored twice.
-- **Raw frame** and **Frame encoding** (optional, JSON only): where an encoded raw frame is, kept for
-  a decoder. The frame is not decoded yet.
+- **Raw frame** and **Frame encoding** (optional, JSON only): where an encoded raw frame is for
+  the payload decoder on the device's published profile.
 
 Choose **Create integration**. The next dialog, **Integration created**, shows the **bearer token**.
 **It is shown once.** It cannot be read again; if it is lost, rotate it. Enter it in the sender now.
@@ -87,7 +87,8 @@ In ChirpStack, open the application, add an **HTTP** integration, and fill it in
 - Enter the **Event endpoint URL** from the page. ChirpStack adds the event type to the URL itself;
   only uplinks are read, and other events are acknowledged and ignored.
 - Add the header `Authorization` with the value `Bearer <bearer token>`.
-- Set a **codec** on the ChirpStack device profile. Without one an uplink carries no decoded values and
+- Set a **codec** on the ChirpStack device profile, or publish a **Decoder** on the DeviceChain
+  device profile to read the raw frame. Without either, an uplink carries no decoded values and
   is counted as undecoded.
 
 ### The Things Stack v3 {#the-things-stack}
@@ -95,7 +96,8 @@ In ChirpStack, open the application, add an **HTTP** integration, and fill it in
 In The Things Stack, open the application, add a **Custom webhook** with the JSON format, and enter
 the **Base URL** and the `Authorization` header from the page. Enable the uplink message on one of the
 paths the page lists. Messages on any other path are acknowledged and ignored. Set a **payload
-formatter** on the application or device, or the uplink is counted as undecoded.
+formatter** on the application or device, or publish a **Decoder** on the DeviceChain profile
+to read the raw frame. Without either, the uplink is counted as undecoded.
 
 ### Generic senders {#generic}
 
@@ -103,9 +105,9 @@ For **Generic JSON** and **Generic binary** the page gives an example request sh
 identifier goes. A generic sender must send each uplink as an HTTP `POST` with the bearer token in the
 `Authorization` header. The exact request shapes are in the guide's
 [Generic JSON](/guides/inbound-integrations#generic-json) and
-[Generic binary](/guides/inbound-integrations#generic-binary) sections. Generic binary only counts
-uplinks and keeps a sample of the first bytes: it is for seeing what a sender sends, not for storing
-readings.
+[Generic binary](/guides/inbound-integrations#generic-binary) sections. Generic binary stores
+readings when the device's published profile has a payload decoder for the frame. Without a
+decoder it only counts undecoded uplinks and keeps a sample of the first bytes.
 
 ### The sender's certificate {#sender-certificate}
 
@@ -145,9 +147,13 @@ hexadecimal, when the last request was rejected and when the token was generated
 
 ### Uplinks with nothing to read {#undecoded}
 
-An uplink counts as undecoded when it carries no decoded object with a numeric or boolean value (a boolean is stored as 1 or 0). For a network
-server, the usual cause is a missing codec or payload formatter: set one on the device profile there,
-and use JSON encoding. The raw frame is not decoded by DeviceChain.
+For a device type without a published payload decoder, an uplink counts as undecoded when it
+carries no decoded object with a numeric or boolean value (a boolean is stored as 1 or 0).
+Set a codec or payload formatter in the network server and use JSON encoding, or publish a
+**Decoder** on the DeviceChain device profile to turn the raw frame into readings. The console's
+connection hints still describe the network-server codec path. Decoder failures are shown in the
+profile's **Decoder** tab, under **Health** and **Recent failures**, rather than in this undecoded
+tally. See [Payload decoders](/guides/payload-decoders).
 
 ### A rejected token {#rejected-token}
 

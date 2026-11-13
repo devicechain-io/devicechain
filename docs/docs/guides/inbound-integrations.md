@@ -129,10 +129,10 @@ ChirpStack sends uplinks through an **HTTP integration** on an application.
    | Event endpoint URL(s) | `https://<host>/api/integrations/{tenant}/{integration}`. ChirpStack adds `?event=up` itself. |
    | Headers | Name `Authorization`, value `Bearer <bearer-token>`. |
 
-3. **Set a codec on the ChirpStack device profile** (a JavaScript payload codec). The platform stores the values the network server decodes; it does not decode the raw frame. Without a codec, ChirpStack sends the raw frame and no decoded object, and the uplink is [counted as undecoded](#undecoded) instead of stored. Alternatively, give the device type a [payload decoder](./payload-decoders.md), which reads the raw frame in DeviceChain.
+3. **Set a codec on the ChirpStack device profile** (a JavaScript payload codec). Without a profile decoder, the platform stores the values the network server decodes. If neither a network-server codec nor a profile decoder applies, the uplink is [counted as undecoded](#undecoded) instead of stored. Alternatively, give the device type a [payload decoder](./payload-decoders.md), which reads the raw frame in DeviceChain.
 4. Add the devices in DeviceChain with their DevEUI as a `lorawan.deveui` alias.
 
-Only uplinks are read. ChirpStack sends other events (join, status, acknowledgements) to the same URL with a different `event` value, and they are answered `204` and ignored. The uplink's `deduplicationId` must be a UUID, which ChirpStack always sends; anything else is refused with `400`. The message time is the `time` ChirpStack reports, or the time the platform received it when the field is absent.
+Uplinks are stored as readings. ChirpStack also sends the events `ack` and `txack` to the same URL, which an installation with the [LoRaWAN downlink](#lorawan-downlink) switched on reads to settle [confirmed downlinks](#lorawan-confirmed); without it they are answered `204` and ignored unread, like the other events (join, status), whatever their bodies hold. The uplink's `deduplicationId` must be a UUID, which ChirpStack always sends; anything else is refused with `400`. The message time is the `time` ChirpStack reports, or the time the platform received it when the field is absent.
 
 ## The Things Stack v3 {#the-things-stack}
 
@@ -150,7 +150,7 @@ The Things Stack sends uplinks through a **webhook** on an application.
 3. **Set a payload formatter** on the application or on the device (the LoRaWAN Device Repository offers one for many sensors). The platform stores the formatter's output; it does not decode the raw frame. Without one, the uplink is [counted as undecoded](#undecoded). Alternatively, give the device type a [payload decoder](./payload-decoders.md), which reads the raw frame in DeviceChain.
 4. Add the devices in DeviceChain with their DevEUI as a `lorawan.deveui` alias, or their device id as a `tts.device-id` alias if you chose **Device id**.
 
-A message posted to any other path (a join accept, a downlink acknowledgement) is answered `204` and ignored, so you can enable other message types without changing anything in DeviceChain, but there is no reason to. The message time is the uplink's `received_at`, which must be present and not older than 366 days. The deduplication key is the device, the frame counter and that time together, because the counter restarts when a device rejoins.
+A message posted to any other path (a join accept, a location solve) is answered `204` and ignored, as is a downlink event that does not belong to a downlink the platform sent (see [The Things Stack downlink](#lorawan-downlink-tts)), so you can enable other message types without changing anything in DeviceChain, but there is no reason to. The message time is the uplink's `received_at`, which must be present and not older than 366 days. The deduplication key is the device, the frame counter and that time together, because the counter restarts when a device rejoins.
 
 ## Generic JSON {#generic-json}
 
@@ -200,7 +200,7 @@ With **Store link metrics** on, three more readings are stored with each uplink 
 
 ### Uplinks with nothing to store {#undecoded}
 
-An uplink that carries no decoded object, or one with no numeric or boolean value in it, is acknowledged but stores nothing. The integration counts it as **undecoded**, and its page shows the count, when the last one arrived and a sample of the raw frame in hex. The usual cause is a device profile with no codec in the network server. The `IntegrationUndecodedHigh` alert tells an operator when most traffic is like this; see [Observability](../deployment/observability.md).
+Without an applicable [profile payload decoder](./payload-decoders.md), an uplink that carries no decoded object, or one with no numeric or boolean value in it, is acknowledged but stores nothing. The integration counts it as **undecoded**, and its page shows the count, when the last one arrived and a sample of the raw frame in hex. The usual cause is a device profile with no codec in the network server. When a profile decoder applies, it can decode the raw frame instead; a decode that fails stores nothing and is reported as `DECODE_FAILED`, rather than counted as an undecoded network-server payload. See [Decoder refusals](./payload-decoders.md#refusal-reasons). The `IntegrationUndecodedHigh` alert tells an operator when most traffic is like this; see [Observability](../deployment/observability.md).
 
 ## Duplicates and retries {#duplicates}
 
@@ -231,7 +231,7 @@ A network server sees only the status code, and some suspend a webhook that is r
 | Answer | Meaning |
 | --- | --- |
 | `202` | Accepted. Includes messages for devices that are not registered, which are skipped, and messages [shed](#limits) because the tenant is over its ingest allowance. |
-| `204` | A message type that is not an uplink (join, status, acknowledgement). Acknowledged and ignored. |
+| `204` | An ignored message type, such as join or status, or a downlink report when the downlink adapter is disabled. Supported downlink reports are processed when the adapter is enabled and answered `202`; see [Confirmed downlinks](#lorawan-confirmed). |
 | `400` | The body is not what the integration's sender type expects: invalid JSON, a missing or malformed identifier, a `deduplicationId` that is not a UUID, a time older than 366 days, more than 100 items, or more than 256 readings. Nothing in the request is stored. |
 | `401` | The token is missing, wrong, or belongs to a different integration. A wrong token and an integration that does not exist are indistinguishable on purpose. |
 | `403` | The integration is switched off. This is not counted as a failed login. |
@@ -264,14 +264,184 @@ A change to an integration is quick but not instant at the endpoint, which remem
 
 ## Commands to integration devices {#commands}
 
-A device that reports through an integration has no connection to DeviceChain to send a command down, and v1 has no downlink to a network server's API. A command to such a device **is accepted when you issue it**, and then **fails at the next delivery sweep** with `COMMAND_TRANSPORT_UNSUPPORTED`, because the platform recognizes the transport and has no way to deliver on it. It does not wait in the queue until it expires.
+A device that reports through an integration has no connection to DeviceChain to send a command down. Unless the [LoRaWAN downlink](#lorawan-downlink) is switched on for your installation, a command to such a device **is accepted when you issue it**, and then **fails at the next delivery sweep** with `COMMAND_TRANSPORT_UNSUPPORTED`, because the platform recognizes the transport and has no way to deliver on it. It does not wait in the queue until it expires.
 
 Two cases are worth knowing:
 
 - A device that also connects over MQTT is judged by the last transport it reported on. While it last reported through the integration its commands fail; after it reports over MQTT they are delivered.
 - A device that has never reported has no recorded transport, so its commands are dispatched as usual, and expire unanswered, until it first reports.
 
-For a device that must be commanded, give it an MQTT connection as well. See the [transport matrix](../reference/transport-matrix.md).
+For a device that must be commanded and is not behind a ChirpStack v4 network server, give it an MQTT connection as well. See the [transport matrix](../reference/transport-matrix.md).
+
+## LoRaWAN downlink (ChirpStack v4) {#lorawan-downlink}
+
+An installation that runs the outbound connectors with the downlink switched on (`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`; the Helm chart then makes command delivery dispatch these commands, and refuses a hand-set copy of that flag) sends a command to a device behind a ChirpStack v4 network server by queueing a downlink on that server. Nothing changes for an installation that leaves it off.
+
+**1. Link the integration to its network server.** Create and publish a connector of type `lorawan_downlink`:
+
+```json
+{
+  "networkServer": "chirpstack_v4",
+  "baseUrl": "https://chirpstack.example.com",
+  "integration": "my-integration-token"
+}
+```
+
+`integration` is the token of the inbound integration whose devices this server serves. The connector's **secret** is a ChirpStack API key allowed to enqueue downlinks (the REST API of ChirpStack v4, served by its `chirpstack-rest-api` component); it is stored encrypted and never shown again. Exactly one published connector may name an integration: with none, or with two, a command is refused rather than sent. Like every connector, the call to `baseUrl` goes through the platform's egress policy, so a server on a private address needs an operator allowance.
+
+**2. Define the command.** Without an encoder, give the device type's profile a command with these raw payload parameters. To send typed values instead, configure an [encoder](#lorawan-command-encoder):
+
+| Parameter | Meaning |
+| --- | --- |
+| `fPort` | The LoRaWAN application port, 1 to 223. Required. |
+| `hex` or `base64` | The application payload, as hexadecimal or standard padded base64. Give exactly one. At most 242 bytes. |
+| `confirmed` | Optional, default `false`. `true` asks the device to acknowledge the frame and holds the command until it does (see [Confirmed downlinks](#lorawan-confirmed)). |
+
+Any other parameter name is refused.
+
+**3. Send it.** The device must carry a `lorawan.deveui` [alias](#aliases): the DevEUI is read from the device, never from the command. The command goes through the integration the device **last reported through**.
+
+**What the outcome means.** For an unconfirmed downlink, `SUCCEEDED` means the network server **queued** the downlink (the result carries `{"stage":"queued","queueItemId":...}`). It does not mean the device has received it: a class A device hears downlinks only after it next transmits, and an unconfirmed downlink gets no acknowledgement. Such a command records no delivery evidence (`deliveredTime` and `deliveryEvidence` stay null); a confirmed downlink's acknowledgement records `DEVICE_RESPONSE`. For a [confirmed downlink](#lorawan-confirmed), `SUCCEEDED` means the device acknowledged it. The other outcomes:
+
+| What happened | Outcome |
+| --- | --- |
+| A parameter is invalid, the device has no DevEUI, the integration has no (or two) links, the command expired, or the tenant is over its outbound call ceiling | `FAILED`, not delivered. Safe to send again. |
+| The network server refused it (a 4xx: wrong API key, unknown device, payload too large for the device's current data rate) or could not be reached before anything was sent | `FAILED`, not delivered. The reason names the server's answer. |
+| The request was sent and the server failed or did not answer (a 5xx, a timeout) | The outcome is **unknown**: the downlink may be queued, and sending again may send it twice. |
+
+Check the `lpwan_downlinks_total` metric by result to see where commands stop.
+
+### Confirmed downlinks {#lorawan-confirmed}
+
+Set `"confirmed": true` in the command and the network server asks the device to acknowledge the frame. The command is **not** answered when the downlink is queued: it stays `SENT` until the network server reports what happened, and then settles from that evidence:
+
+| What the network server reports | Command |
+| --- | --- |
+| The device acknowledged the frame (`ack`, acknowledged) | `SUCCEEDED`. The result carries `{"stage":"acknowledged",...}`. |
+| The network server gave up waiting for the acknowledgement (`ack`, not acknowledged) | `TIMEOUT`, outcome unknown. The device may have heard the frame and its acknowledgement been lost, so sending again may act twice. |
+| A gateway accepted the frame for transmission (`txack`) | Recorded, and the command keeps waiting. A gateway sending a frame is not the device receiving it. |
+| Nothing by the deadline | `TIMEOUT`, outcome unknown. The deadline is the command's own expiry, or 24 hours when it has none. |
+
+ChirpStack reports an acknowledgement only if the HTTP integration of the application is set to send the `ack` event, and the same integration must be the one you registered in DeviceChain (the URL and token above): the report is read through the integration's own token, so it can only settle commands sent through that integration, to devices registered under it. Enable the `txack` event as well if you want the transmission to be recorded; it is optional.
+
+A report that matches no waiting downlink is never matched by guess. It is dropped, logged, and counted in `lpwan_ack_reports_total` (`unmatched` when nothing waits for that queue item, `mismatch` when it names another integration or device); both are worth an alert. Every downlink produces a `txack`, confirmed or not, so one for a downlink that is not waiting is counted as `tx_untracked` and is normal. During a rolling upgrade, a pod of the previous version still refuses a confirmed command as not delivered, which is safe to send again.
+
+Check `lpwan_ack_reports_total` by result: `acknowledged`, `timed_out`, `transmitted` and `deadline` are the outcomes above. One `unmatched` now and then is not a fault: if a report is answered but the broker's acknowledgement of the message is lost, the report arrives again and finds nothing waiting (a replica that settled it moments ago counts it `redelivered` instead). Alert on a sustained rate of `unmatched` or on any `mismatch`.
+
+A `txack` for a downlink that carried only MAC commands has no queue item and is answered `204` and counted (`integration_downlink_reports_total`, result `untracked`); an `ack` with no queue item is refused with `400`. Reports have a limit of their own, separate from telemetry: a burst of 100 per tenant and 20 a second sustained. The limit is kept per `event-sources` replica, so a tenant's effective ceiling is that rate times the number of replicas. Beyond it the request is answered `202` and counted (result `rate_limited`), and the command it would have settled settles at its deadline, so one tenant's flood cannot crowd out another's acknowledgements.
+
+**Upgrading.** Confirmed downlinks need the new version of both the outbound connectors and the event sources. While the outbound connectors are new and the event sources still old, the network server's reports are answered `204` and dropped by the old pods, so a confirmed downlink sent in that window settles `TIMEOUT`, outcome unknown, at its deadline. The chart rolls them in the same upgrade; to avoid the window, hold confirmed commands for its length.
+
+### The Things Stack v3 {#lorawan-downlink-tts}
+
+A link to The Things Stack is a `lorawan_downlink` connector with `"networkServer": "tts_v3"` and the application the devices belong to:
+
+```json
+{
+  "networkServer": "tts_v3",
+  "baseUrl": "https://eu1.cloud.thethings.network",
+  "integration": "my-integration-token",
+  "applicationId": "my-application"
+}
+```
+
+The connector's **secret** is an API key with the right to write downlink traffic of that application. The device must carry a `tts.device-id` [alias](#aliases), which is what The Things Stack addresses it by, instead of a DevEUI; it is read from the device, never from the command. The command's parameters are the same as for ChirpStack, and the downlink joins the end of the device's queue.
+
+For an **unconfirmed** downlink, `SUCCEEDED` again means the network server accepted it. For a **confirmed** one, the platform gives each downlink an identifier of its own (The Things Stack returns none), sent as a correlation id that starts with `dc:`, and settles the command from the events The Things Stack posts for that downlink. In the application's webhook, enable the downlink events and give each its own path under the integration URL, with a path that **starts with `downlink`**: for example `/downlink-ack`, `/downlink-nack`, `/downlink-sent` and `/downlink-failed`.
+
+| What The Things Stack reports | Command |
+| --- | --- |
+| `downlink_ack`: the device acknowledged the frame | `SUCCEEDED`. |
+| `downlink_nack`: the device did not acknowledge it | `TIMEOUT`, outcome unknown. The device may have heard the frame and its acknowledgement been lost, so sending again may act twice. See the note on retries below. |
+| `downlink_sent`: a gateway transmitted the frame | Recorded, and the command keeps waiting. |
+| `downlink_failed`, and the network server itself names a drop before transmission (a confirmed downlink queued for a multicast device), with no retry and no transmission reported before it | `FAILED`, not delivered. Safe to send again. |
+| Any other `downlink_failed` | `TIMEOUT`, outcome unknown. The frame may have been transmitted: see below. |
+| Nothing by the deadline | `TIMEOUT`, outcome unknown. |
+
+**Retries after a nack.** After a `downlink_nack`, The Things Stack re-queues a confirmed downlink itself (up to 8 more times by default), and each retry is a fresh downlink the device may act on. DeviceChain closes the command at the first nack, so the device can still execute it afterwards, and the acknowledgement of a retry arrives after the command is closed and is dropped as unmatched. To keep that window small the platform sets `confirmed_retry.max_attempts` to 1 on every confirmed downlink it pushes (the lowest value The Things Stack accepts), so there is at most one retry.
+
+**Why only some `downlink_failed` events are "not delivered".** The network server emits `downlink_failed` when it drops a queued downlink it never scheduled (the cases named in the table) and when a gateway reports it could not transmit. The Application Server emits it too, when it gives up retrying a confirmed downlink that **was** transmitted (the retries are exhausted, or re-queuing the retry failed). Because the event does not otherwise say which, DeviceChain answers `FAILED` only for the network server's own pre-transmission errors, and never for a downlink that was reported transmitted or retried; every other `downlink_failed` is `TIMEOUT`. That includes an unknown session, a payload that is too long, an expired downlink, a gateway scheduling failure (invalid absolute time or fixed paths) and a gateway's own transmission error: if a scheduling call to a gateway fails ambiguously the network server re-queues the item with no retry counted and no transmission reported, so a later drop for any of these reasons cannot be told apart from a drop of an item that was never tried. Only the multicast case, a static property of the device, is certain.
+
+A report is matched to its command only by the `dc:` correlation id the platform set, and only when it names the application and device the downlink was sent to (and the device DeviceChain itself resolved agrees), through the integration it was sent through; the network server's own trace identifiers are never used. A downlink queued by hand in The Things Stack console carries no such id, and its events are ignored. Mismatches and unmatched reports are counted and dropped as described above. A webhook posted to the bare base URL, with no path, names no message type, so its reports are treated like telemetry and can be shed when the tenant is over its message ceiling; give each type its own path.
+
+**Switching it on in a running installation.** The downlink is enabled by one Helm upgrade, and while the pods roll, command delivery pods that have not yet restarted still fail a command to an integration device on sight, as they did before the downlink existed, with `COMMAND_TRANSPORT_UNSUPPORTED`. Nothing is sent for such a command and it is safe to issue again once the upgrade has finished. To avoid the window, pause commands to integration devices for the length of the upgrade. A command issued in the minutes before the adapter first starts is still picked up when it does.
+
+
+### Encoding commands from typed parameters {#lorawan-command-encoder}
+
+A command definition can carry an optional `encoder` JSON string. Publish the device
+profile to activate it. Both ChirpStack v4 and The Things Stack v3 use the same encoder.
+The encoder in force when a command is dispatched applies; republishing applies to
+commands dispatched after the publish, including commands already queued. The published
+definition is read afresh for every dispatch, with no encoder cache across a publish.
+If the definition lookup fails or returns an incomplete response, it is retried:
+the command stays pending and nothing is sent. A definitive definition problem
+(an invalid encoder, duplicate command definitions, or a command absent from a
+constrained published vocabulary) refuses the command as **not sent**.
+For example, this document combines constant bytes, a scaled number, a boolean and packed bits:
+
+```json
+{
+  "fPort": 10,
+  "confirmed": false,
+  "fields": [
+    {"const": "01ff"},
+    {"param": "level", "type": "u16be", "scale": 0.1, "offset": 0},
+    {"param": "enabled", "type": "bool"},
+    {"bits": {"type": "u8", "fields": [
+      {"param": "mode", "shift": 0, "width": 3},
+      {"param": "armed", "shift": 3, "width": 1}
+    ]}}
+  ]
+}
+```
+
+`fPort` is required, from 1 through 223. `confirmed` defaults to false and keeps the
+acknowledgement-feed requirement above. There must be 1–32 ordered fields, producing
+1–242 bytes in total. Constants are even-length hex. Numeric types are `u8`, `i8`,
+`u16be`, `u16le`, `i16be`, `i16le`, `u32be`, `u32le`, `i32be` and `i32le`.
+`bool` emits `00` or `01`. Packed bits use an integer type; their ranges must fit
+without overlap, and unspecified bits remain zero.
+
+For a thermostat, declare `setpoint` as `DOUBLE` and `mode` as `INT` in
+`parameterSchema`, then set the definition's encoder to:
+
+```json
+{
+  "fPort": 12,
+  "fields": [
+    {"param": "setpoint", "type": "i16be", "scale": 0.1},
+    {"bits": {"type": "u8", "fields": [
+      {"param": "mode", "shift": 0, "width": 3}
+    ]}}
+  ]
+}
+```
+
+The command payload `{"setpoint":21.5,"mode":3}` becomes hex `00d703`, or base64
+`ANcD`, on port 12. Numeric encoding inverts the decoder arithmetic:
+`raw = (value - offset) / scale`. Scale defaults to 1; its magnitude must be between `1e-9` and `1e9`.
+Offset defaults to 0 and its magnitude must be at most `1e9`. Both must be finite.
+Scale/offset combinations that leave too little `float64` precision for the `1e-6`
+raw-integer tolerance are refused when you save the definition, even if both values
+meet those individual bounds. Increase the scale magnitude or reduce the offset
+magnitude to resolve this. The raw value is checked against its type range before
+rounding, allowing `1e-6` at the boundaries for floating-point error. Identity mappings
+(scale 1, offset 0) require an exact integer input; other mappings allow a `1e-6`
+integer tolerance. Input magnitude must be at most `1e15`, and input and raw
+magnitudes must be below `2^53`. Nothing is silently rounded or truncated: `215.4` with
+scale 1 is refused. NaN, infinity, out-of-range values, wrong JSON types and missing
+encoder parameters refuse the command as **not sent**, before any network call.
+Defaults in the parameter schema are authoring hints and are never injected.
+
+Each encoder parameter must be unique and declared with a compatible scalar type:
+numbers use `INT` or `DOUBLE`, booleans use `BOOLEAN`, and bit values use integers
+within their width (a width of 1 also accepts `BOOLEAN`). Payload keys unused by the
+encoder, duplicate JSON keys and unknown encoder keys are refused. An encoder requires
+a non-empty parameter schema. With an encoder, the parameter schema cannot declare
+`fPort`, `hex`, `base64` or `confirmed`; the encoder controls the port and confirmation.
+Clearing `encoder` restores the raw contract. A definition without an encoder keeps
+the existing `fPort` plus `hex` or `base64` contract unchanged.
 
 ## What an integration token can do {#trust}
 
@@ -289,7 +459,7 @@ See the [security model](../concepts/security-model.md).
 
 ## Not in v1 {#not-supported}
 
-- **Downlink.** Commands cannot be sent to a device through a network server. See [Commands to integration devices](#commands).
+- **Downlink to generic senders.** The [LoRaWAN downlink](#lorawan-downlink) covers ChirpStack v4 and The Things Stack v3, with raw payloads or [encoded typed parameters](#lorawan-command-encoder). Commands to any other integration device fail as described in [Commands to integration devices](#commands).
 - **Signed payloads.** There is no HMAC or signature check on a request. The bearer token is the only credential, and the transport must be TLS.
 - **Join, status and location messages.** They are acknowledged and ignored.
 - **Automatic device creation.** An unknown identifier is listed, not created. You add the device yourself, from the list.

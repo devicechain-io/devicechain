@@ -27,11 +27,33 @@ import (
 	"github.com/devicechain-io/dc-user-management/purge"
 )
 
+// TenantActuation notifies area fences after committed tenant lifecycle writes.
+type TenantActuation interface {
+	TenantDisabled(ctx context.Context, tenant string, generation int) error
+	TenantPurgeBegan(ctx context.Context, tenant string) error
+}
+
+// SetTenantActuation installs the tenant lifecycle notifier during startup.
+func (s *Service) SetTenantActuation(notifier TenantActuation) { s.tenantActuation = notifier }
+
+// requireTenantActuation refuses incomplete wiring when agent actions can be in flight.
+func (s *Service) requireTenantActuation() error {
+	if s.tenantActuation == nil && s.agentActuation {
+		return errors.New("tenant actuation notifier not wired")
+	}
+	return nil
+}
+
 // Service is the admin control-plane application service. It wraps the iam store
 // and (in later phases) adds the cross-cutting logic the raw store should not own:
 // password hashing on identity creation and authority validation on role writes.
 type Service struct {
 	iam *iam.Store
+
+	// agentActuation is the instance flag for agent actions (SetAgentActuation): whether an OAuth
+	// client may be registered for an act:* scope.
+	agentActuation  bool
+	tenantActuation TenantActuation
 
 	// settle and tokenHold are the purge coordinator's two windows (ADR-077), carried here
 	// so a caller asking what a deletion is waiting on gets an answer derived from the
@@ -203,3 +225,7 @@ func (s *Service) TenantDeletionProgress(rec *iam.TenantPurge, lines []iam.Tenan
 	}
 	return purge.Waiting(lines, rec.Epoch, time.Now().UTC(), s.settle, s.tokenHold)
 }
+
+// SetAgentActuation installs the instance flag for agent actions. Off (the default), no OAuth
+// client may be registered for an act:* scope.
+func (s *Service) SetAgentActuation(enabled bool) { s.agentActuation = enabled }

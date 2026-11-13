@@ -44,6 +44,17 @@ v1.0.0 之前，本页内容均不适用。v1.0.0 之前的发布可能改变什
 
 - Helm chart 的值和实例配置文档
 - 指标名称和告警名称
+- MCP 工具目录（工具名称、输入和结果结构）
+
+### 预览：在有限时间内可能在次版本中变更 {#preview-interfaces}
+
+新增的对外接口可以先在**预览**层级中度过第一个次版本，之后才纳入上述承诺。处于预览层级的接口会在你阅读它的地方说明这一点：
+在其参考或指南页面中，对于该接口中的每个 GraphQL 操作、字段、参数、类型和枚举值，则写在各自的描述里。接口处于预览期间，可能在次版本中发生不兼容的变更；发生时，该版本在
+[发布与升级](./releases-and-upgrades.md)中的小节会说明变更内容和应对办法。接口最多在预览层级停留两个次版本；到第二个次版本结束时，
+它会被提升并与其他接口一样受到承诺保护。对预览接口的不兼容变更并不豁免于项目的兼容性检查：它要像其他任何变更一样，在那里声明为有意的破坏性变更，
+因此预览变更不会在无人察觉的情况下发布。预览层级的文件格式带有版本号，例如 `v1alpha1`，不认识该版本的工具会拒绝该文件，而不是去猜测。
+
+目前预览层级包含三类接口。一是规则测试：event-processing API 的 `evaluateRules` 操作、场景文件和测试文件的格式，以及读取它们的 `dcctl test` 命令（参见[测试你的规则](../guides/testing-your-rules.md)）。二是产品即代码：`dcctl product export`、`plan` 和 `apply` 命令及其包格式（参见[产品即代码](../guides/product-as-code.md)）。三是代理操作：`act:*` OAuth 作用域及其派生的提议权限；代理策略操作（`agentPolicy`、`agentPolicyVersions`、`saveAgentPolicyDraft`、`publishAgentPolicy`、`rollbackAgentPolicy`、`setAgentActuation`）及其文档（格式 `v1alpha1`）；`agentActuationDecision` 和 `agentExecutionDecision` 查询；运维人员的按租户控制（`tenantAgentActuation`、`setTenantAgentActuationSuspended`）；代理服务账户的创建（`ServiceAccountCreateRequest.agent`）和 `ServiceAccount.roles` 中描述的代理令牌权限；以及代理提议操作（`proposeAlarmAction`、`approveAgentProposal`、`rejectAgentProposal`、`agentProposals`、`agentProposal`）（参见[代理操作](../concepts/mcp.md#agent-actions)）。GraphQL 预览接口包括其专用的输入和结果类型、字段、参数及枚举值。`ServiceAccount.agent` 字段不属于预览：从引入它的版本起即受兼容性承诺保护。普通服务账户的角色仍受保障。目前尚未提供 MCP 操作工具；MCP 读取工具仍属于上述不受保障的工具目录。
 
 ## 支持的升级路径 {#upgrade-paths}
 
@@ -51,7 +62,7 @@ v1.0.0 之前，本页内容均不适用。v1.0.0 之前的发布可能改变什
 - **跳过次版本**不是经过测试的路径。要从 `1.4.x` 升级到 `1.7.0`，请先依次升级到 `1.5.x` 和 `1.6.x`。某个发布的升级章节会说明它是否要求先升级到特定发布，就像目前[事件线路格式](./releases-and-upgrades.md#event-wire-format)一节那样。
 - **数据库迁移始终可以升级。** 从 v1.0.0 起，不会为了采用新发布而重建实例。Schema 变更是追加到该功能区迁移链末尾的迁移，绝不修改已有迁移，并且每个迁移在失败后都可以重新运行。v1.0.0 之前，有些发布完全无法升级进入；这一情况随 v1.0.0 结束。
 - **升级用真实数据检查。** 每个发布的升级都会这样演练：在较早发布上写入一个实例的数据，升级它，再读回每一行。发布流程会从上一个稳定发布运行这项检查。检查未通过时发布会中止：不会为它发布 GitHub 发布、`dcctl` 二进制文件或 SDK 包。它的容器镜像和 chart 可能已在镜像仓库中，但它们不构成一个发布。
-- **不支持降级。** 新发布可能以较早发布无法读取的方式迁移数据库。如果升级出错，请向前升级到修复后的发布，或按[灾难恢复](./disaster-recovery.md)流程从备份恢复。不要用 `helm rollback` 回退。
+- **不支持降级。** 新发布可能以较早发布无法读取的方式迁移数据库。dcctl 会强制执行这一点：`dcctl upgrade`，以及在现有实例上重新运行的 `dcctl bootstrap`，会拒绝早于实例所声明版本的发布；`dcctl install` 会拒绝使用比上一次安装该集群的 dcctl 更旧的 dcctl 运行。发布标签在任何镜像仓库中都代表同一个发布，因此从镜像拉取的实例同样适用。这两项检查都没有覆盖选项。早于此策略的 dcctl 不包含这些检查，因此请使用当前发布的 dcctl。如果升级出错，请向前升级到修复后的发布，或按[灾难恢复](./disaster-recovery.md)流程从备份恢复。不要用 `helm rollback` 回退。
 
 运行升级之前，请先阅读目标发布的升级章节。其中列出升级会检查什么、会拒绝什么，以及你必须先做什么。
 

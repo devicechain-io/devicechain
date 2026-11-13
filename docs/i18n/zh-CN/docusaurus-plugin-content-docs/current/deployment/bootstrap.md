@@ -14,7 +14,7 @@ dcctl bootstrap local my-instance
 
 `dcctl` 内嵌自己的内容，包括 OpenTofu 配置、Helm chart 和 Operator 清单，部署无需源码检出或 `git`。
 
-它不包含工具本身。两个命令调用 `PATH` 中的 `kubectl`、`helm`、`tofu`（或 `terraform`）；由 dcctl 自己运行集群时（`local` 提供方）还需要 `docker` 和 `kind`，构建镜像时（`--build`）还需要 `docker`。启动前检查本次运行所需的工具，缺少时停止，因此应先安装，完整列表见[前置条件](#prerequisites)。
+它不包含工具本身。两个命令调用 `PATH` 中的 `kubectl`、`tofu`（或 `terraform`）；由 dcctl 自己运行集群时（`local` 提供方）还需要 `docker` 和 `kind`，构建镜像时（`--build`）还需要 `docker`。启动前检查本次运行所需的工具，缺少时停止，因此应先安装，完整列表见[前置条件](#prerequisites)。
 
 :::note 状态
 `dcctl install local` 和 `dcctl bootstrap local` 已实现，并在本地 kind Kubernetes 上端到端验证。不存在 kind 集群时，install 会创建，除非指定 `--yes` 否则先确认。`gcp` 提供商是计划中的后续工作。
@@ -157,6 +157,12 @@ and nothing has been changed: ... Destroy an instance, or raise the budget by re
 :::warning 一次性例外：数据库迁移至 CloudNativePG 之前创建的实例
 关系型数据库已从 StatefulSet 改为 CloudNativePG 集群，无法原地升级。对更早创建的实例，初始化会**拒绝**执行，并说明如何导出数据或有意丢弃数据。详见[旧数据库例外](#legacy-db-removal)。
 :::
+
+### 关系型存储 WAL 调优 {#relational-store-wal}
+
+`dcctl install --relational-store-max-wal-mib 4096` 将共享关系型存储的 `max_wal_size` 软检查点目标设为 4096 MiB。省略此标志会保留已记录的选择；首次安装且未选择时，沿用根配置的 PostgreSQL 默认值（1 GiB）。传入 `--relational-store-max-wal-mib=0` 会记录恢复默认值的选择。正数必须至少为 64 MiB。选择在应用前记录，因此应用失败后不带标志重试仍会保留该选择，包括显式恢复默认值。
+
+这是软检查点目标，并非 `pg_wal` 的硬上限：检查点或归档落后时 WAL 可以超过它。集群根配置仍会拒绝超过关系型存储容量四分之一的目标。性能规格推荐 WAL 值，但不会自动应用。此更改只需重新加载，集群中存在实例时也允许更改。
 
 ### 旧数据库例外 {#legacy-db-removal}
 
@@ -301,7 +307,7 @@ kind 不强制卷大小限制，可使用宿主机可用磁盘。
 - **默认 StorageClass 上的持久卷磁盘。** 非本地集群（非 kind、minikube、k3d、docker-desktop、rancher-desktop）使用默认设置，没有 `--compact`、`--no-cnpg`、`--no-monitoring`、`--backup-credentials-file` 时，`dcctl install --ha` 为集群申请 204 GiB，包括三个关系型数据库卷、160 GiB [备份存储](#backup-store-size)和 Prometheus。每实例再申请 144 GiB，用于三个事件存储卷及三个代理卷；单实例集群合计 348 GiB。无 `--ha` 时集群 188 GiB，每实例 48 GiB。每个额外持续摄取实例还需增加约 160 GiB 备份容量，详见[备份存储容量](#backup-store-size)。云环境先核对磁盘配额。新的 Google Cloud 项目每区域 SSD 默认 500 GB 配额，每 GiB 卷按一 GB 计，两种 GKE 磁盘类均计入。单实例卷容量低于配额；[GKE 指南](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#before-you-start)使用标准启动盘，计入不同配额，因此默认高可用单实例也适用。平衡型或 SSD 启动盘则计入 SSD 配额。指南说明多实例需申请的配额。本地集群监控不使用持久卷，kind 不强制容量。
 - **满足请求的 CPU 和内存。** 非 `--compact` 时，处理每个事件的五个服务合计请求约 4 CPU；`--ha` 下 `event-management` 两个 Pod，合计约 5 CPU。每个 NATS 服务器请求 500m CPU 和 768Mi 内存，高可用下有三个，另需其他服务、数据库和集群组件资源。无法容纳的 Pod 保持 `Pending`，安装等待至超时。各项见[服务容量配置](#service-sizing)；笔记本等资源有限集群使用 [`--compact`](#--compact)。
 - **OpenTofu 1.9 或更新版本**（`tofu`，也支持 `terraform` 1.9 或更新）位于 `PATH`。`dcctl` 使用它部署基础设施，安装见 [opentofu.org](https://opentofu.org)。`dcctl preflight local` 提前检查工具及环境，但不检查其版本；旧版本加载配置时失败。
-- **`kubectl`、`helm`** 位于 `PATH`；`local` 提供方还需 **`docker`** 和 **`kind`**。缺少本次运行所需的工具会使预检失败。只有本地 kind 集群或 `--build` 才需要 Docker：使用已发布镜像安装到 `--kube-context` 指定的集群时，既不检查也不使用它。需要时，其守护进程必须可访问：Linux 上为 Docker Engine，macOS 和 Windows 上为 Docker Desktop。
+- **`kubectl`** 位于 `PATH`；`local` 提供方还需 **`docker`** 和 **`kind`**。缺少本次运行所需的工具会使预检失败。只有本地 kind 集群或 `--build` 才需要 Docker：使用已发布镜像安装到 `--kube-context` 指定的集群时，既不检查也不使用它。需要时，其守护进程必须可访问：Linux 上为 Docker Engine，macOS 和 Windows 上为 Docker Desktop。
 - **空闲的主机端口 80、443 和 1883**（本地 kind 集群使用）。集群会将它们发布出来，分别用于控制台、HTTPS 和 MQTT。`dcctl preflight local` 会在端口被占用时失败并指出占用它的容器，而不是让集群创建时才因 Docker 的绑定错误而失败。
 - **在 Linux 上，需要调高 inotify 限制。** 对于本地 kind 集群，`dcctl preflight local` 要求 `fs.inotify.max_user_instances` 至少为 256，而原装 Ubuntu 24.04 默认只有 128，因此它会在此处失败并打印要运行的命令。第一行调高该限制（第二行 `max_user_watches` 仅是警告），`/etc/sysctl.d` 使其在重启后依然有效：
 
@@ -335,7 +341,7 @@ dcctl bootstrap local my-instance --build
 |------|---------|
 | `--cluster <name>` | `local` 提供方：创建实例的 kind 集群，默认 `devicechain`。必须已[安装](#install)，初始化不创建集群。 |
 | `--kube-context <name>` | 通过此 kube-context 选择已安装集群。 |
-| `--size <size>` | 实例的规格预设：`base`（默认）或 `perf-12k`（已实测的高吞吐形态）。记录在实例上，每次升级都会重新应用。`--values` 覆盖文件和你自行声明的 OpenTofu 变量优先于它。见[选择规格](./sizing.md)。 |
+| `--size <size>` | 实例的规格预设：`base`（默认）、`perf-12k` 或 `perf-16k`（已实测的高吞吐形态）。记录在实例上，每次升级都会重新应用。`--values` 覆盖文件和你自行声明的 OpenTofu 变量优先于它。见[选择规格](./sizing.md)。 |
 | `--profile <profile>` | 功能领域配置档：默认 `default` 标准系统；`full` 包含全部，增加 AI 推理、出站连接器、MCP、Sparkplug B 和 LwM2M 摄取，空中（OTA）更新管理已包含在 `default` 中；还可选 `telemetry` 或 `ingest-only`。 |
 | `--enable-area <area>` | 在配置档之外额外部署一个功能领域，例如 `--enable-area outbound-connectors`。可重复使用。要为已在运行的实例添加，见[稍后添加功能领域](#enable-area)。 |
 | `--build` | 将源码镜像构建至本地仓库，开发路径需源码、Docker、ko。 |
@@ -478,6 +484,7 @@ chart 会给对象存储的卷加上 `helm.sh/resource-policy: keep`，因此之
 | `--restore-rdb-from <archive>` | 灾难恢复：从备份桶内归档路径恢复共享关系型存储（未恢复过时为 `dc-rdb`），不初始化空库。仅**创建**时生效，已有存储时不移动数据，是重建而非修复操作。需备份插件，`--no-cnpg` 或 `--compact --no-tls` 时拒绝。见[恢复实例](./disaster-recovery.md#recover)。 |
 | `--restore-rdb-at <timestamp>` | 在指定时间停止恢复，而非重放全部归档。用于错误迁移或误删除等被系统正常执行的数据破坏，必须选破坏之前的时间。需 `--restore-rdb-from` 和带显式偏移的 RFC 3339 时间（`2026-07-27T13:59:00Z`），否则 PostgreSQL 按恢复服务器时区解释，停止时间不同。 |
 | `--max-connections <n>` | 关系型数据库连接预算，首次默认 `700`，重跑未指定时保留当前值。见[连接预算](#connection-budget)。运行实例存在时只能提高，不可降低。 |
+| `--relational-store-max-wal-mib <n>` | 关系型存储 `max_wal_size` 软检查点目标，单位 MiB。省略则保留已记录的选择（首次安装：默认 1 GiB）；`0` 记录恢复默认值；正数至少为 `64`。应用前记录，失败后不带标志重试仍保留。根配置限制为存储容量的四分之一。性能规格不会自动设置。参见[关系型 WAL 调优](#relational-store-wal)。 |
 | `--allow-legacy-db-removal` | [初始化过程](#what-it-does)所述一次性例外的关系型数据库部分。 |
 | `--dry-run` | 打印行为，不改变内容、不创建集群。因此需读取集群的检查，尤其 `--ha` 节点容量检查，无法读取时报告未检查，不阻止演练。但可读集群若无法承载高可用，试运行也失败。可访问时，同样拒绝缺少集群本地状态的机器重安装、在运行实例下改变设置、不可用快照类，并使用相同错误消息；不可访问时说明未检查。 |
 | `--yes` | 创建 kind 集群前不询问。 |
@@ -836,6 +843,8 @@ dcctl sim create demo --instance my-instance --server localhost
 ```
 
 模拟器通过真实硬件相同的设备协议发送遥测及告警，见[使用模拟数据体验](../intro.md#trying-it-with-simulated-data)。
+
+所有与实例平台 API 通信的命令（`sim`、`events failed`、`dead-letters`、`attr`、`presence`、`product`、`tenant-deletion`、`test` 和 `device register`）都接受相同的选择器参数。`--server`（`-s`）指定主机；`--instance`（`-i`）指定实例：在 `sim` 中它是事件接入路径中的实例 id，在其他命令中，未给出 `--server` 时，它会使用该实例声明时的主机（以及 TLS 设置，除非给出了 `--tls`）。例如 `dcctl events failed -i my-instance -t acme ...`。
 
 ### 稍后添加功能领域 {#enable-area}
 

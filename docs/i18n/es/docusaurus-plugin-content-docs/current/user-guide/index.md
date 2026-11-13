@@ -52,3 +52,9 @@ Los capítulos se publican a medida que se completan.
 | 21 | [Auditoría](./audit.md) | El diario de auditoría del inquilino, los filtros y la exportación. |
 | 22 | [Ajustes del inquilino](./tenant-settings.md) | Marca, mapa e idioma. |
 | 23 | [Administración de la instancia](./administering-the-instance.md) | Inquilinos, eliminaciones, niveles, identidades, roles, proveedores de identidad, proveedores de IA, auditoría de la instancia y ajustes. |
+
+:::tip Pruébalo
+
+**Tu primer dispositivo en unos 30 minutos.** Instala DeviceChain en local, conecta un dispositivo simulado y observa cómo llega su telemetría. [Empezar el inicio rápido →](../quickstart/first-device.md)
+
+:::

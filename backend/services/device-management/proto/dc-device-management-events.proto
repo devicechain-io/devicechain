@@ -44,6 +44,13 @@ message PAlarmStateChangeEvent {
     // alarms query would return them. Empty for an alarm raised before the stamp existed,
     // which such a member never sees.
     repeated string scope_anchors = 16;
+    // What the originating device is called, so a notification can name it. All three are
+    // empty when the originator is not a device or the producer could not read it, and a
+    // producer that predates these fields never sets them; a consumer omits what is empty
+    // rather than inventing a name. They describe the device when the event was emitted.
+    string device_token = 17;
+    string device_name = 18;
+    string device_type_token = 19;
 }
 
 /**

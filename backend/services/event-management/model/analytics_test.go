@@ -4,11 +4,13 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
+	"github.com/prometheus/client_golang/prometheus"
 	"gorm.io/gorm"
 )
 
@@ -273,5 +275,20 @@ func TestAnalyticsMigrationRunsAfterTheLocationFixColumns(t *testing.T) {
 			t.Errorf("duplicate migration id %s", m.ID)
 		}
 		seen[m.ID] = true
+	}
+}
+
+func newTestAnalyticsMetrics() *AnalyticsMetrics {
+	return &AnalyticsMetrics{PlatformCollisions: prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "analytics_reconcile_platform_collisions_total",
+		Help: "Superuser reader-name collisions skipped during analytics reconciliation.",
+	})}
+}
+
+func TestReconcileAnalyticsSurfaceRequiresMetrics(t *testing.T) {
+	for _, metrics := range []*AnalyticsMetrics{nil, {}} {
+		if err := ReconcileAnalyticsSurface(context.Background(), nil, metrics); err == nil {
+			t.Error("reconciliation accepted missing metrics")
+		}
 	}
 }

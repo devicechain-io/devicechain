@@ -144,3 +144,23 @@ func CreateIfAbsent(ctx context.Context, store SecretStore, ref SecretRef, value
 	}
 	return c.CreateIfAbsent(ctx, ref, value)
 }
+
+// Locker is implemented by a store that can serialize a read-modify-write sequence across every
+// replica sharing it, not just within a process. WithLock runs fn with a view of the store whose
+// calls are one transaction, holding a lock on key (scoped to tenant) until fn returns; a second
+// caller on any replica, for the same tenant and key, waits for it. fn's error rolls the whole
+// sequence back.
+type Locker interface {
+	WithLock(ctx context.Context, tenant, key string, fn func(SecretStore) error) error
+}
+
+// WithLock runs fn under a cross-replica lock when the store can provide one, and otherwise
+// reports ok=false without running fn, so the caller chooses its fallback explicitly rather than
+// receiving a lock that is not there.
+func WithLock(ctx context.Context, store SecretStore, tenant, key string, fn func(SecretStore) error) (ok bool, err error) {
+	l, isLocker := store.(Locker)
+	if !isLocker {
+		return false, nil
+	}
+	return true, l.WithLock(ctx, tenant, key, fn)
+}

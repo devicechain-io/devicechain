@@ -41,7 +41,7 @@ func TestGetDevice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDevice: %v", err)
 	}
-	if len(out.Devices) != 1 || out.Devices[0].Token != "d1" || out.Devices[0].DeviceType != "truck" || out.Devices[0].ExternalId != "VIN1" {
+	if len(out.Devices) != 1 || out.Devices[0].Token != "d1" || out.Devices[0].DeviceType != "truck" || deviceText(out.Devices[0], "externalId") != "VIN1" {
 		t.Errorf("unexpected devices: %+v", out.Devices)
 	}
 }
@@ -139,7 +139,7 @@ func TestGetLatestMeasurements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLatestMeasurements: %v", err)
 	}
-	if len(out.Measurements) != 1 || out.Measurements[0].Name != "temp" || out.Measurements[0].Value == nil || *out.Measurements[0].Value != 21.5 {
+	if len(out.Measurements) != 1 || out.Measurements[0].Untrusted.Name.Value != "temp" || out.Measurements[0].Value == nil || *out.Measurements[0].Value != 21.5 {
 		t.Errorf("unexpected measurements: %+v", out.Measurements)
 	}
 
@@ -163,18 +163,18 @@ func TestGetDeviceCapabilities(t *testing.T) {
 	if out.Profile != "p1" || out.ActiveVersion == nil || *out.ActiveVersion != 3 {
 		t.Errorf("unexpected profile/version: %+v", out)
 	}
-	if len(out.Metrics) != 1 || out.Metrics[0].MetricKey != "temp" {
+	if len(out.Metrics) != 1 || out.Metrics[0].Untrusted.MetricKey.Value != "temp" {
 		t.Errorf("unexpected metrics: %+v", out.Metrics)
 	}
 	if !out.CommandsConstrained {
 		t.Error("a constrained vocabulary must be reported as constrained")
 	}
-	if len(out.Commands) != 1 || out.Commands[0].CommandKey != "reboot" {
+	if len(out.Commands) != 1 || out.Commands[0].Untrusted.CommandKey.Value != "reboot" {
 		t.Fatalf("unexpected commands: %+v", out.Commands)
 	}
 	// The schema is what lets an agent describe a command's arguments without a second
 	// lookup. Dropping it would make the tool describe capabilities it cannot explain.
-	if out.Commands[0].Description == "" || out.Commands[0].ParameterSchema == "" {
+	if out.Commands[0].Untrusted.Description == nil || out.Commands[0].Untrusted.ParameterSchema == nil {
 		t.Errorf("command description/schema must survive: %+v", out.Commands[0])
 	}
 }
@@ -214,11 +214,11 @@ func TestGetDeviceCapabilities_IgnoresDrafts(t *testing.T) {
 		t.Fatalf("GetDeviceCapabilities: %v", err)
 	}
 	for _, c := range out.Commands {
-		if c.CommandKey == "not-yet-published" {
+		if c.Untrusted.CommandKey.Value == "not-yet-published" {
 			t.Fatal("a draft definition reached the caller")
 		}
 	}
-	if len(out.Commands) != 1 || out.Commands[0].CommandKey != "reboot" {
+	if len(out.Commands) != 1 || out.Commands[0].Untrusted.CommandKey.Value != "reboot" {
 		t.Errorf("unexpected commands: %+v", out.Commands)
 	}
 }
@@ -272,4 +272,24 @@ func TestGetDevice_RejectsBlankToken(t *testing.T) {
 	if _, _, err := tools.GetDevice(context.Background(), authedReq("tok"), GetDeviceInput{Tokens: []string{"ok", ""}}); err == nil {
 		t.Errorf("a blank token should be rejected")
 	}
+}
+
+// deviceText reads one marked text member of a device summary, "" when it is absent.
+func deviceText(d DeviceSummary, member string) string {
+	if d.Untrusted == nil {
+		return ""
+	}
+	var m *Marked
+	switch member {
+	case "name":
+		m = d.Untrusted.Name
+	case "description":
+		m = d.Untrusted.Description
+	case "externalId":
+		m = d.Untrusted.ExternalId
+	}
+	if m == nil {
+		return ""
+	}
+	return m.Value
 }

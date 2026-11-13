@@ -161,11 +161,12 @@ type SeedOAuthClient struct {
 // Manager owns native auth for the instance. Build it with NewManager, then
 // call Initialize once the database and NATS KV are available.
 type Manager struct {
-	ms        *core.Microservice
-	db        *rdb.RdbManager
-	iam       *iam.Store
-	locker    *messaging.DistributedLock
-	accessTTL time.Duration
+	killPublisher KillPublisher
+	ms            *core.Microservice
+	db            *rdb.RdbManager
+	iam           *iam.Store
+	locker        *messaging.DistributedLock
+	accessTTL     time.Duration
 	// secrets holds the private half of the active JWT signing key, sealed under the
 	// instance root key. The signing_keys table holds public halves only.
 	secrets secrets.SecretStore
@@ -202,6 +203,9 @@ type Manager struct {
 	// (defaultResourcePolicy), never "unchecked".
 	resources  *resourcePolicy
 	ssoLimiter beginLimiter
+	// agentActuation is the instance flag for agent actions (SetAgentActuation). False, the
+	// default, refuses every act:* scope and every agent decision on this instance.
+	agentActuation bool
 	// mfaKV holds the sign-ins waiting for their second factor (dc_mfa_challenges), apart from
 	// every other bucket. Nil means the instance cannot complete an enrolled person's sign-in,
 	// and it FAILS CLOSED: no token is minted without the factor.
@@ -529,7 +533,7 @@ func (m *Manager) completeSignIn(ctx context.Context, id *iam.Identity, amr []st
 	// only ErrInvalidCredentials, the same as every other sign-in failure: this branch
 	// is reached only after the password matched, so a distinct error would tell
 	// whoever sent it that the password was right.
-	sid, err := m.startSession(id.Email, amr)
+	sid, err := m.startSession(id.Email, id.SessionEpoch, amr)
 	if err != nil {
 		return nil, err
 	}
@@ -1070,12 +1074,21 @@ var errTenantAccessDenied = errors.New("tenant access denied")
 // whichever of the three mints (select, refresh, OAuth) asks. A superuser is never
 // scoped. A stored scope that does not parse is a DENIAL, never the whole tenant: a
 // membership whose bound cannot be read must not be minted unbounded.
-func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, amr []string, err error) {
+func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, amr *signIn, err error) {
+	rec, err := m.loadSession(sid, id.Email)
+	if err != nil {
+		return nil, nil, auth.Scope{}, nil, err
+	}
+	return m.resolveTenantGrantRecord(ctx, rec, id, tenant, mem, su)
+}
+
+// resolveTenantGrantRecord reuses the sign-in read before a decision's snapshot.
+func (m *Manager) resolveTenantGrantRecord(ctx context.Context, rec *sessionRecord, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, amr *signIn, err error) {
 	// The sign-in's own terms come first: a session that may not enter this tenant gets no
 	// grant from the identity's memberships, superuser or not (admitTenant says which
 	// sessions a superuser's break-glass still applies to). It also hands back the sign-in's
 	// amr, which the caller mints into every token.
-	amr, err = m.admitTenant(ctx, sid, id, tenant, su)
+	amr, err = m.admitTenantRecord(ctx, rec, id, tenant, su)
 	if err != nil {
 		return nil, nil, auth.Scope{}, nil, err
 	}
@@ -1207,7 +1220,7 @@ func unionStrings(a, b []string) []string {
 // amr is the sign-in's, read from its session record by the caller (see admitTenant). It is
 // stamped on both tokens; an empty one (a single sign-on, or a record from before amr was
 // recorded) writes no claim.
-func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoch, sid auth.SessionID, roles, authorities []string, scope auth.Scope, sudo bool, amr []string) (*TokenPair, error) {
+func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoch, sid auth.SessionID, roles, authorities []string, scope auth.Scope, sudo bool, amr *signIn) (*TokenPair, error) {
 	// Every enabled tenant member can view the domain objects by default (the
 	// `viewer` baseline); writes stay role-gated, as does reading a device
 	// credential (see viewerAuthorities). Superusers already hold `*`.
@@ -1222,15 +1235,15 @@ func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoc
 	var access auth.IssuedToken
 	var err error
 	if scope.IsScoped() && !sudo {
-		access, err = issuer.IssueScopedTenantAccess(tenant, email, roles, authorities, scope, uuid.NewString(), amrOptions(amr)...)
+		access, err = issuer.IssueScopedTenantAccess(tenant, email, roles, authorities, scope, uuid.NewString(), append(amr.options(), auth.WithSessionID(sid))...)
 	} else {
-		access, err = issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString(), amrOptions(amr)...)
+		access, err = issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString(), append(amr.options(), auth.WithSessionID(sid))...)
 	}
 	if err != nil {
 		return nil, err
 	}
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueRefresh(tenant, email, epoch, sid, roles, authorities, refreshJti, amrOptions(amr)...)
+	refresh, err := issuer.IssueRefresh(tenant, email, epoch, sid, roles, authorities, refreshJti, amr.options()...)
 	if err != nil {
 		return nil, err
 	}

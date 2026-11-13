@@ -544,7 +544,7 @@ yendo al único pod que sirve.
 | `security.handshakeTimeoutSeconds` | `10` | Acota un handshake DTLS, para que uno atascado no pueda inmovilizar recursos. |
 | `security.maxSessions` | `100000` | Techo de la tabla de sesiones vivas. Un handshake por encima del techo se rechaza y se cuenta, nunca se admite en silencio. |
 | `maxLifetimeSeconds` | `86400` | El techo hasta el que se recorta el tiempo de vida de todo registro. **Es la palanca que acota cuánto tiempo figura en línea un dispositivo muerto.** Debe quedar por encima del mayor tiempo de vida que pidan tus dispositivos. |
-| `ingestRateLimit.readingsPerSecond` | `1000` | Techo de ingesta sostenida por inquilino, contado en lecturas (muestras decodificadas) y en mensajes Notify antes de decodificar. Sin definir o con un valor no positivo, recae en este predeterminado, nunca en ilimitado. |
+| `ingestRateLimit.readingsPerSecond` | `1000` | Techo de ingesta sostenida por inquilino, contado en lecturas (muestras decodificadas) y en mensajes Notify antes de decodificar. Sin definir o en cero, recae en este predeterminado, nunca en ilimitado; un valor negativo se rechaza al arrancar. |
 | `ingestRateLimit.burst` | `2000` | Margen de ráfaga para lo anterior. |
 | `downlink.timeoutSeconds` | `10` | Acota un intercambio de comando con un dispositivo. Al expirar, el comando se reporta como fallido en lugar de quedar colgado. Súbelo para dispositivos celulares lentos que duermen. |
 | `downlink.concurrency` | `16` | Paralelismo de comandos entre dispositivos. Los comandos de un mismo dispositivo se ejecutan siempre en orden, sea cual sea este valor. |
@@ -695,7 +695,7 @@ cualquier transporte con una lectura por encima de su techo.
 
 | Ajuste | Predeterminado | Qué hace |
 |---|---|---|
-| `ingestRateLimit.readingsPerSecond` | `1000` | Techo de ingesta sostenida por inquilino, contado en lecturas. El nivel del inquilino lo sustituye. Sin definir o con un valor no positivo, recae en este predeterminado, nunca en ilimitado. |
+| `ingestRateLimit.readingsPerSecond` | `1000` | Techo de ingesta sostenida por inquilino, contado en lecturas. El nivel del inquilino lo sustituye. Sin definir o en cero, recae en este predeterminado, nunca en ilimitado; un valor negativo se rechaza al arrancar. |
 | `ingestRateLimit.burst` | `2000` | Ráfaga permitida para lo anterior, en lecturas. |
 
 **Qué no se mide.** La tasa de mensajes no se mide, porque el Host debe observar cada mensaje para
@@ -850,6 +850,67 @@ un enlace inestable puede entregarlo dos veces. Si usas un decodificador que no 
 agente de borde, haz que tu tratamiento de las lecturas tolere una repetición.
 :::
 
+### Retirar eventos con la aceptación de la plataforma {#retire-on-accept}
+
+Por defecto el agente elimina un evento de su spool cuando el broker en la nube confirma la publicación.
+Esa confirmación dice que el broker tomó el mensaje y nada más: MQTT 3.1.1 no da al broker forma de
+rechazar uno. La plataforma aún puede descartar el evento después de que el broker lo haya confirmado,
+casi siempre porque el tenant supera su límite de ingesta, y un agente que retiró el evento con la
+confirmación habrá borrado la única copia.
+
+Pon `uplink.retireOn` en `accept` y el agente conserva cada evento en el spool hasta que la plataforma
+diga que lo tiene:
+
+- La plataforma envía una **aceptación** que nombra la clave de idempotencia del evento una vez que el
+  evento está almacenado de forma duradera en un stream de la plataforma. Entonces el agente lo quita del
+  spool.
+- Si la plataforma descarta el evento en el límite de ingesta del tenant, se lo comunica al agente. El
+  agente cuenta el rechazo en `refused_total{reason="over_ceiling"}`, conserva el evento y lo ofrece de
+  nuevo tras una breve espera. No se escribe nada en el archivo de mensajes fallidos, porque el evento no
+  es defectuoso.
+- Si la plataforma rechaza el evento de forma definitiva (el dispositivo no está asignado a la pasarela),
+  el agente lo escribe en el archivo de mensajes fallidos y lo quita del spool, como antes.
+- Si no llega ninguna respuesta en `uplink.acceptTimeoutSeconds`, el spool vuelve a ofrecer el evento con
+  la misma clave de idempotencia, y un evento JSON se fusiona con la copia que la plataforma ya tiene.
+
+Una respuesta perdida cuesta, por tanto, un reenvío, nunca un evento. El coste del modo es un vaciado más
+lento: un evento permanece en el spool un viaje de ida y vuelta más el tiempo de ingesta de la
+plataforma, lo que en un enlace satelital es la diferencia que se ve en `awaiting_accept`.
+
+:::caution Activa esto solo frente a una plataforma que envíe aceptaciones
+Frente a una plataforma que no las envía, nunca se acepta nada, así que el spool no se vacía y cada evento
+se reenvía cada `uplink.acceptTimeoutSeconds`. El agente se suscribe a sus aceptaciones al conectarse, y
+una plataforma que rechaza la suscripción hace fallar la conexión con un error que nombra este ajuste.
+Actualiza primero la plataforma y después el agente. Una plataforma que envía aceptaciones y un agente
+que retira con la confirmación siguen funcionando juntos, así que no hay día de corte.
+:::
+
+Un evento retenido a la espera de aceptación cuenta para `local.spoolMaxBytes` como cualquier otro.
+
+#### Descarte por clase de prioridad {#priority-classes}
+
+Un spool que supera su presupuesto tiene que perder algo. Su propio anillo descarta el evento más antiguo
+sea cual sea, así que una caída larga puede perder las alarmas tempranas y conservar el ruido posterior.
+Con `local.priority.rules` definido, el agente descarta primero a propósito. Cada regla asigna a una clase
+los dispositivos locales cuyo token coincide con un glob, y gana la primera coincidencia:
+
+| Clase | Significado |
+|---|---|
+| `safety` | El agente nunca la descarta. |
+| `standard` | Todo lo que no coincide con ninguna regla. Se descarta después de `bulk`. |
+| `bulk` | Datos crudos de alta frecuencia, baratos de perder. Se descartan primero. |
+
+Cuando el spool supera `local.priority.shedAtFraction` de su presupuesto (`0.9` por defecto), el agente
+elimina eventos almacenados, primero `bulk` y los más antiguos primero dentro de una clase, hasta volver
+por debajo de `local.priority.shedToFraction` (`0.8`). Cada evento descartado así se cuenta en
+`shed_total{class}`, de modo que un descarte nunca es silencioso.
+
+«Nunca» tiene un límite, y es el presupuesto. Si solo los eventos `safety` llenan el spool, o llegan más
+rápido de lo que el agente puede liberar espacio, el anillo subyacente sigue expulsando el evento más
+antiguo de cualquier clase, y la pérdida solo se ve en `dropped_total`. El margen por encima de
+`shedAtFraction` lo hace improbable, no imposible. Dimensiona el spool para el tráfico `safety` de tu
+caída más larga.
+
 ### Antes de desplegar un agente {#before-you-deploy-an-agent}
 
 - **El listener MQTT local está abierto salvo que configures una credencial.** Define `local.username`
@@ -877,6 +938,10 @@ agente de borde, haz que tu tratamiento de las lecturas tolere una repetición.
 | `uplink.passwordEnv` | — | Obligatorio. La variable de entorno que contiene el secreto de la credencial. |
 | `uplink.connectTimeoutSeconds` | `30` | Acota un intento de conexión del enlace ascendente. |
 | `uplink.backoffMinSeconds` / `uplink.backoffMaxSeconds` | `1` / `60` | Cotas de la espera creciente de reconexión mientras el enlace está caído. |
+| `uplink.retireOn` | `puback` | Qué quita un evento del spool: `puback` (el broker confirmó la publicación) o `accept` (la plataforma dijo que almacena el evento de forma duradera). Consulta [retirar eventos con la aceptación de la plataforma](#retire-on-accept). |
+| `uplink.acceptTimeoutSeconds` | `120` | Con `retireOn: accept`, cuánto esperar la respuesta de la plataforma antes de ofrecer el evento de nuevo. Ponlo por encima del viaje de ida y vuelta del enlace más el tiempo de ingesta de la plataforma. |
+| `local.priority.rules` | ninguna | Clases de prioridad por glob de token de dispositivo: `safety`, `standard`, `bulk`. Consulta [descarte por clase de prioridad](#priority-classes). |
+| `local.priority.shedAtFraction` / `local.priority.shedToFraction` | `0.9` / `0.8` | El llenado del spool en el que empieza el descarte y el llenado en el que se detiene. |
 
 ## Qué vigilar {#what-to-watch}
 
@@ -1017,7 +1082,11 @@ Prefijo: `devicechain_edge_`.
 | `malformed_total` | Eventos descartados como no reenviables, en lugar de bloquear la cola que va detrás. |
 | `tenant_mismatched_total` | Publicaciones de dispositivo que nombran un tenant distinto de `uplink.tenant`. No se almacenan ni se reenvían. |
 | `body_credentials_stripped_total` | Miembros de credencial eliminados de los cuerpos de eventos antes de reenviarlos. El dispositivo debería dejar de enviarlos. |
-| `refused_total{reason}` | **Eventos rechazados para esta pasarela.** `not_gateway_child`: la plataforma rechazó un evento porque su dispositivo no está asignado a la pasarela o no existe. `gateway_self` e `invalid_device_token`: el agente no quiso enviarlo. `other`: un motivo que esta versión del agente no conoce. Cualquier incremento requiere atención; consulta [identidad de pasarela](#gateway-identity). |
+| `refused_total{reason}` | **Eventos rechazados para esta pasarela.** `not_gateway_child`: la plataforma rechazó un evento porque su dispositivo no está asignado a la pasarela o no existe. `gateway_self` e `invalid_device_token`: el agente no quiso enviarlo. `over_ceiling`: la plataforma descartó el evento en el límite de ingesta del tenant. `other`: un motivo que esta versión del agente no conoce. Cualquier incremento requiere atención; consulta [identidad de pasarela](#gateway-identity). |
+| `accepted_total` / `awaiting_accept` | Con `retireOn: accept`: eventos que la plataforma dijo tener, y eventos publicados que aún esperan su respuesta. Un `awaiting_accept` creciente sin `accepted_total` significa que la plataforma no envía aceptaciones. |
+| `over_ceiling_total` / `unaccepted_total` | Con `retireOn: accept`: eventos que la plataforma descartó en el límite de ingesta del tenant (cada uno conservado y ofrecido de nuevo), y eventos ofrecidos de nuevo porque no llegó respuesta a tiempo. |
+| `keyless_retired_total` | Con `retireOn: accept`: eventos cuyo payload no es un objeto JSON. No llevan clave de idempotencia, así que la plataforma no puede acusarlos; el agente los retira cuando el broker confirma la publicación y cuenta cada uno aquí. |
+| `shed_total{class}` | Eventos almacenados que el agente eliminó a propósito para mantenerse bajo su umbral de descarte. `safety` se queda en 0. |
 | `refused_kept_total` / `refused_unmatched_total` | Eventos rechazados escritos en `refused-events.jsonl` / rechazos cuyo evento ya no se conservaba en el equipo (el registro `failed-events` de la plataforma lo tiene). |
 | `uplink_inflight` | Publicaciones a la espera de acuse, como máximo 64. Mantenerse en 64 mientras se vacía un atraso es normal. |
 | `local_auth_enabled` | 0 significa que el listener MQTT de la planta no exige credencial. |

@@ -48,3 +48,9 @@ The API-path tenant is taken from the caller's verified RS256 JWT tenant claim. 
 :::note Status
 Runtime tenant scoping on the data path is enforced today. A tenant-scoped query with no tenant is rejected.
 :::
+
+:::tip Try it
+
+**First device in about 30 minutes.** Install DeviceChain locally, connect a simulated device and watch its telemetry arrive. [Start the quickstart →](../quickstart/first-device.md)
+
+:::

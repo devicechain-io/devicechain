@@ -5,7 +5,7 @@ title: Configuración de Canales de Notificación
 
 # Configuración de Canales de Notificación
 
-Las notificaciones llevan una **alarma** levantada la última milla, hasta una persona. Cuando las acciones de una regla de detección levantan una alarma, una **política** por inquilino la enruta por severidad a los **canales** que configures: correo electrónico por SMTP, o un webhook. Las políticas añaden limitación de frecuencia (throttling) y **escalado** de las alarmas no reconocidas.
+Las notificaciones llevan una **alarma** levantada la última milla, hasta una persona. Cuando las acciones de una regla de detección levantan una alarma, una **política** por inquilino la enruta por severidad a los **canales** que configures: correo electrónico por SMTP, un webhook, o un canal nativo de Slack, Microsoft Teams o PagerDuty. Las políticas añaden limitación de frecuencia (throttling) y **escalado** de las alarmas no reconocidas.
 
 Esta ruta de máquina a humano está deliberadamente separada de los **[conectores de salida](../concepts/outbound-connectors.md)** de máquina a máquina. Los conectores llevan payloads a *sistemas*; las notificaciones llevan alertas a *personas*, con destinatarios y enrutamiento por severidad. Para saber cómo se levantan las alarmas en primer lugar, consulta [Procesamiento de Eventos y Alarmas](../concepts/event-processing.md).
 
@@ -17,7 +17,7 @@ Disponible. Gestionas los canales y las políticas a través de la API GraphQL d
 
 ## Canales
 
-Un **canal** es un endpoint de entrega que configura tu inquilino: una instancia de un **tipo** de canal, más su configuración de conexión. Consulta `notificationChannelTypes` para ver los tipos que define la plataforma. Hoy `smtp` y `webhook` se entregan con adaptadores funcionales; el indicador `available` de cada tipo dice si su adaptador ya está disponible.
+Un **canal** es un endpoint de entrega que configura tu inquilino: una instancia de un **tipo** de canal, más su configuración de conexión. Consulta `notificationChannelTypes` para ver los tipos que define la plataforma. Hoy `smtp`, `webhook`, `slack`, `teams` y `pagerduty` se entregan con adaptadores funcionales; el indicador `available` de cada tipo dice si su adaptador ya está disponible.
 
 Un canal divide su configuración en dos:
 
@@ -84,7 +84,91 @@ mutation {
 }
 ```
 
-Para un webhook entrante de Slack, usa `"auth":"none"` y omite `secret`.
+Para un webhook entrante de Slack, usa `"auth":"none"` y omite `secret`. El [canal de Slack](#create-a-slack-channel) nativo de abajo da formato al mensaje por ti y es la mejor opción.
+
+El campo `text` del webhook genérico es un resumen de texto plano que usa el token del dispositivo o el originador en lugar del nombre del dispositivo; los usuarios de Slack deben usar el [canal nativo de Slack](#create-a-slack-channel).
+
+El cuerpo JSON de un canal webhook incluye el `eventType` de la alarma (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, o `RENOTIFIED` para una renotificación temporizada), `alarmToken`, `alarmKey`, `severity`, `state`, el `originatorType` y el `originatorId` del originador cuando se conocen, y las horas. Cuando se conoce el dispositivo de la alarma, incluye además `deviceToken`, `deviceName` y `deviceTypeToken`; una clave se omite cuando su valor se desconoce (por ejemplo, un dispositivo sin nombre) y nunca se envía vacía. Las renotificaciones temporizadas (`RENOTIFIED`) y las notificaciones `CLEARED` tardías que recoge el planificador también incluyen estos campos del dispositivo y del originador cuando se conocen. Las alarmas notificadas antes de actualizar omiten estos campos en esas notificaciones posteriores.
+
+Opcionalmente, establece `linkBaseUrl` en el `config` del canal webhook con la URL base `http` o `https` de tu consola (se recomienda `https`), por ejemplo `"linkBaseUrl":"https://console.example.com"`. El cuerpo incluirá entonces `alarmUrl` y, cuando la alarma identifique el dispositivo, `deviceUrl`. La URL base no debe incluir una cadena de consulta ni un fragmento, porque los enlaces se construyen añadiendo una ruta. Ambas claves se omiten cuando no estableces `linkBaseUrl`. Si un webhook almacenado tiene un `linkBaseUrl` no válido, la entrega lo omite, excluye ambos enlaces y registra una advertencia.
+
+### Canales nativos de Slack, Teams y PagerDuty {#native-channels}
+
+Los tres tipos nativos usan el formato propio de cada servicio en lugar de un cuerpo JSON genérico. Comparten tres reglas:
+
+- **La credencial es el `secret`.** En Slack y Teams es la URL del webhook (que ya es una credencial, así que se almacena cifrada y nunca se devuelve, y no va en `config`); en PagerDuty es la clave de enrutamiento de Events API v2. No hay ajuste `auth`. Un canal nativo sin secreto se rechaza al guardarlo, y una entrega a uno que no lo tiene se rechaza en el primer intento y no se reintenta; se cuenta con `reason="credential"`.
+- **`config` es opcional y estricto.** Una clave desconocida se rechaza al guardar el canal, de modo que un ajuste mal escrito no se ignora en silencio. `linkBaseUrl` es la dirección `http` o `https` de tu consola (se recomienda `https`), sin cadena de consulta ni fragmento; si se establece, el mensaje incluye un botón o enlace **Abrir alarmas** a `<linkBaseUrl>/alarms`.
+- **La entrega pasa por la misma protección de salida que un webhook.** Un destino en una dirección privada, de bucle local o de metadatos de nube se rechaza y no se reintenta (`reason="egress"`), y las excepciones de salida de la instancia se aplican igual que en un webhook. Los `recipients` de una regla se ignoran: el webhook o la clave de enrutamiento deciden adónde va el mensaje.
+
+Cada mensaje indica la alarma, su severidad, su estado, el dispositivo de origen, la métrica y el valor que la levantó, y cuándo se levantó. Mientras una alarma está abierta y sin reconocer, una indicación dice que hay que reconocerla en la consola para detener más notificaciones; una alarma cerrada o reconocida omite la indicación.
+
+### Crear un canal de Slack {#create-a-slack-channel}
+
+Un canal de Slack publica un mensaje Block Kit en la URL de un webhook entrante de Slack: un encabezado, una cuadrícula con los campos de la alarma, la indicación de reconocimiento y un botón opcional **Abrir alarmas**. La barra de color del mensaje sigue la severidad (rojo para `CRITICAL`, naranja para `MAJOR`, ámbar para `MINOR` y `WARNING`, gris para `INDETERMINATE`), y pasa a verde cuando la alarma se cierra y a azul cuando se reconoce. El texto de la alarma se escapa para que no pueda inyectar una mención o un enlace de Slack.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "ops-slack",
+    name: "Slack de operaciones",
+    channelType: "slack",
+    config: "{\"linkBaseUrl\":\"https://console.example.com\"}",
+    secret: "https://hooks.slack.com/services/T000/B000/XXXXXXXX",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+El secreto debe ser una URL `https`.
+
+### Crear un canal de Microsoft Teams {#create-a-microsoft-teams-channel}
+
+Un canal de Teams publica una Adaptive Card en la URL del webhook de un flujo de **Workflows** (Power Automate) de Teams que usa el desencadenador *Cuando se recibe una solicitud de webhook de Teams* y publica la tarjeta en un chat o canal. Los webhooks de conector de Office 365, ya retirados, no son compatibles. La tarjeta lleva los mismos datos que el mensaje de Slack, con el título coloreado según la severidad, y una acción **Abrir alarmas** si se establece `linkBaseUrl`.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "ops-teams",
+    channelType: "teams",
+    secret: "https://prod-00.westus.logic.azure.com:443/workflows/...",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+### Crear un canal de PagerDuty {#create-a-pagerduty-channel}
+
+Un canal de PagerDuty envía eventos de Events API v2 y asigna el ciclo de vida de la alarma al del incidente. Cada evento lleva `dedup_key` con el token de la alarma, de modo que toda la vida de una alarma es un solo incidente:
+
+| Evento de la alarma | Acción de PagerDuty |
+| --- | --- |
+| levantada, escalada, desescalada o renotificada por el escalado de una política | `trigger` (una repetición sobre un incidente abierto lo actualiza en lugar de abrir otro) |
+| reconocida | `acknowledge` |
+| cerrada | `resolve` |
+
+La severidad de la alarma se asigna a la de PagerDuty: `CRITICAL` a `critical`, `MAJOR` a `error`, `MINOR` y `WARNING` a `warning`, cualquier otra a `info`. Para que la política resuelva incidentes, enruta las transiciones de cierre y reconocimiento por el mismo canal que el levantamiento.
+
+`config` admite `region` (`us`, el valor por defecto, o `eu`, que selecciona `events.eu.pagerduty.com`), `source` (el origen del evento; `devicechain` por defecto) y `linkBaseUrl`.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "oncall-pagerduty",
+    channelType: "pagerduty",
+    config: "{\"region\":\"eu\",\"source\":\"plant-3\"}",
+    secret: "<routing key>",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+### En la consola {#channels-in-the-console}
+
+**Canales de notificación**, junto a **Políticas de notificación** en la barra lateral, lista, crea, edita y elimina canales de todos los tipos con un formulario para cada uno. El campo de credencial es de solo escritura: en un canal existente indica que hay una credencial almacenada, y dejarlo vacío la conserva.
+
+Un canal webhook también puede **firmar** sus entregas para que el receptor pueda verificarlas. Está desactivado salvo que lo pidas, añadiendo `"signing":true` al `config` del canal una vez que le hayas generado un secreto de firma. Un canal configurado para firmar que no tiene secreto se rechaza, no se envía sin firma, y se cuenta con `reason="signing"`. Consulta [Firma de Webhooks de Salida](signed-webhooks.md).
+
+Los mensajes de chat y el resumen del webhook nombran el dispositivo por su nombre (o por su token si no tiene nombre) e indican su tipo de dispositivo. Cuando el canal tiene `linkBaseUrl` y la alarma indica su dispositivo, el mensaje incluye además un botón o enlace **Open device** a `<linkBaseUrl>/devices/<token del dispositivo>`; sin `linkBaseUrl`, o para una alarma que no indica su dispositivo, no hay enlace al dispositivo.
 
 ## Políticas
 
@@ -99,6 +183,25 @@ Aquí la severidad va en **mayúsculas** porque es la severidad de la *alarma*. 
 :::caution Las políticas son de alcance para todo el inquilino
 `deviceTypeToken` **todavía no se respeta**, y una política que lo establece se rechaza al escribir. Deja `deviceTypeToken` sin establecer. Consulta [Acotamiento por tipo de dispositivo](#device-type-scoping) para saber por qué.
 :::
+
+### Notificar cuando una alarma se resuelve {#notify-on-clear}
+
+De forma predeterminada, una política avisa a sus canales solo cuando una alarma se genera o escala. Establece `notifyOnClear: true` en una política para avisarles también cuando una alarma que la política notificó **se resuelve** (`clear`). El aviso va a los canales y destinatarios que realmente entregaron un aviso de esa alarma, entre los que la política enruta, sea cual sea la severidad de la alarma al resolverse (una alarma generada como `CRITICAL`, bajada a `MAJOR` y luego resuelta se resuelve en el canal que la notificó). Su `eventType` es `CLEARED`, que PagerDuty traduce en un resolve. Está desactivado de forma predeterminada, así que una política anterior a la opción se comporta como antes.
+
+```graphql
+mutation {
+  updateNotificationPolicy(token: "ops", request: { notifyOnClear: true }) { token notifyOnClear }
+}
+```
+
+Una resolución es informativa, así que se trata de forma distinta a un aviso:
+
+- Va solo a los destinos que entregaron un aviso en ese ciclo. Una política que nunca notificó la alarma (su notificación se limitó por frecuencia, se retuvo por las horas de silencio, o la política se creó después de la generación) no envía resolución.
+- Se envía una vez por ciclo, después de registrar la resolución, así que ninguna escalada de "sigue sin resolverse" la sigue. Si ningún canal la acepta, se reintenta; cuando algún canal la ha aceptado, no se repite. Una resolución que se procesa antes de que se haya registrado el aviso de su alarma se envía justo después de ese aviso, y una que no pudo enviarse entonces la recoge el planificador de notificaciones en sus siguientes pasadas durante hasta 30 minutos.
+- **No** se limita por frecuencia, no cuenta como notificación y no inicia la escalada.
+- Una resolución que ocurre durante las horas de silencio de una política se **descarta**, no se retiene: un "resuelta" liberado horas después comunicaría una noticia vieja.
+- Activar la opción no anuncia resoluciones históricas: la resolución debe ser posterior a su activación. Una caída después de reclamar una resolución pero antes de enviarla puede perder ese aviso; no se garantiza la entrega exactamente una vez.
+- `notifyOnClear` no se puede borrar con `null`; envía `true` o `false`.
 
 ### Acotamiento por tipo de dispositivo {#device-type-scoping}
 
@@ -223,11 +326,48 @@ El contador `devicechain_notificationmanagement_quiet_hours_total` cuenta lo que
 
 En la consola, las horas de silencio se editan en la página **Supervisión → Políticas de notificación**; consulta [Políticas de notificación](../user-guide/notification-policies.md).
 
+## Registro de entregas {#delivery-ledger}
+
+Cada intento de enviar la notificación de una alarma por un canal queda registrado en el **registro de entregas** del inquilino, de modo que «¿se avisó realmente de esta alarma, a quién y, si no, por qué?» tiene respuesta. Consúltalo con `notificationAttempts` (requiere `notification:read`):
+
+```graphql
+query {
+  notificationAttempts(criteria: { pageNumber: 1, pageSize: 20, alarmToken: "<token de la alarma>" }) {
+    results {
+      attemptedAt trigger policyToken channelToken recipients
+      status attempt maxAttempts latencyMillis errorCode errorMessage
+    }
+  }
+}
+```
+
+Cada registro es un intento, del más reciente al más antiguo. Un canal con tres intentos permitidos que falla dos veces y luego entrega deja tres registros: `FAILED` (intento 1), `FAILED` (intento 2) y `SENT` (intento 3). Filtra por `alarmToken`, `channelToken` o `status`, y por tiempo con `since` y `until` (RFC 3339).
+
+| `status` | Significado |
+| --- | --- |
+| `SENT` | El canal aceptó la notificación. |
+| `FAILED` | Un fallo que un reintento podría resolver: un tiempo de espera agotado, un código de error, una conexión rechazada. |
+| `REFUSED` | Rechazado de forma definitiva, así que no hubo reintento: el destino es uno al que el tráfico saliente no puede llegar (`EGRESS_BLOCKED`), o la configuración de credenciales del canal se rechaza (`CREDENTIAL_REFUSED`). |
+| `NOT_ATTEMPTED` | Planificado pero nunca intentado: no se pudo leer el secreto de entrega del canal (`SECRET_UNAVAILABLE`), o el tiempo disponible para las entregas de la alarma se agotó antes de llegar a este canal (`BUDGET_SPENT`). |
+
+`trigger` indica qué causó la entrega: `ALARM` (un cambio de estado de la alarma), `ESCALATION` (se volvió a notificar una alarma no reconocida) o `QUIET_HOURS_RELEASE` (se envió una notificación retenida por las horas de silencio al terminar el periodo). Versiones posteriores pueden añadir valores de `status`, `trigger` y `errorCode`, así que trata uno que no reconozcas como informativo.
+
+`errorMessage` es el texto de error del proveedor con cada URL sustituida por `<url>`, porque la URL de un webhook de Slack o Teams es en sí una credencial, y el registro lo puede leer cualquiera con `notification:read`. El mensaje en sí no se guarda: `subjectHash` (un SHA-256 de la línea de asunto) muestra si dos intentos llevaron el mismo.
+
+Cada canal informa además de `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`, leído del registro. `consecutiveFailures` cuenta los intentos fallidos y rechazados desde la última entrega correcta del canal. Los registros `NOT_ATTEMPTED` no cuentan contra el canal, porque describen algo que la plataforma no hizo, y tampoco un registro `FAILED` con `errorCode: BUDGET_SPENT`: el tiempo disponible para todas las entregas de la alarma se agotó mientras ese intento estaba en curso, así que fue la plataforma la que lo cortó. `deliveryHealth` es null para quien no tiene `notification:read`, por ejemplo un canal que una mutación devuelve a quien puede escribir pero no leer.
+
+Dos propiedades a tener en cuenta:
+
+- **El registro nunca retrasa una notificación.** Los registros se escriben después del intento y fuera de la ruta de entrega. Si la base de datos no puede aceptar un registro, este se descarta y se cuenta en `devicechain_notificationmanagement_ledger_writes_total{outcome="failed"}` (o `outcome="dropped"` cuando ya hay demasiadas escrituras en espera). Un registro demuestra que hubo un intento; la ausencia de un registro no demuestra que no lo hubo.
+- **Los destinatarios son datos personales.** Los registros se eliminan pasados 7 días (la misma ventana que el estado de notificación resuelto), o pasado `AttemptRetentionSeconds` en la configuración de notification-management. También se borran con el inquilino cuando este se elimina.
+- **Calcula el tamaño antes de ampliar la retención.** El registro guarda un registro por intento: aproximadamente las transiciones de alarma notificadas, por los canales a los que llega cada una, por los intentos por canal, más los escalados. Un inquilino que avisa 10.000 veces al día por 3 canales mantiene unos 210.000 registros con los 7 días predeterminados, y cada registro lleva su lista de destinatarios.
+
 ## Verificar la ruta de extremo a extremo
 
 1. **Crea un canal** (como arriba). Confirma `enabled: true` en el resultado, y que `hasSecret` es `true` para un canal SMTP con usuario o un webhook que declara `bearer` o `header`, y `false` para un webhook que declara `none`.
 2. **Crea una política** cuyas reglas mapeen las severidades que te interesan a ese canal.
 3. **Levanta una alarma real.** Dispara una regla de detección en un dispositivo de prueba (consulta [Procesamiento de Eventos y Alarmas](../concepts/event-processing.md)) y confirma que llega el correo o la llamada al webhook.
 4. **Inspecciona el estado de entrega.** El servicio mantiene un registro de solo lectura por alarma de lo que ha hecho. Consulta `notificationStatesByAlarmToken(alarmTokens: [...])`, o busca con `notificationStates`. Revisa `firstNotifiedAt` y `notifyCount` y, una vez que la alarma ha permanecido sin reconocer más allá de la ventana de escalado, `escalationLevel`.
+5. **Lee el registro de entregas.** `notificationAttempts(criteria: {pageNumber: 1, pageSize: 20, alarmToken: "..."})` lista cada intento de la alarma con su resultado. Un registro `FAILED` o `REFUSED` lleva `errorCode` y el `errorMessage` del proveedor; consulta [Registro de entregas](#delivery-ledger).
 
 Reconocer o despejar la alarma detiene el escalado adicional. El registro de estado guarda `acknowledgedAt`/`clearedAt` junto con el historial de notificaciones. Si la alarma se despeja y su condición vuelve a darse, la plataforma reabre la misma alarma y su registro de estado empieza de nuevo para el nuevo ciclo: el escalado vuelve a funcionar hasta que ese ciclo se reconozca o se despeje.

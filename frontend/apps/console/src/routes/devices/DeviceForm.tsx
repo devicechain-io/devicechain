@@ -1,13 +1,14 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { useBreakGlass } from '@/routes/automation-reviews/use-break-glass';
 import { useState } from 'react';
 import { RegistryInstanceForm } from '@/components/registry';
+import { resolveDeviceType, searchDeviceTypes } from '@/lib/api/pickers';
 import { ProvisioningProfilePicker } from '@/routes/provisioning/ProvisioningProfilePicker';
 import { DeviceAliasesField } from './DeviceAliasesField';
 import { aliasInputs, aliasesChanged, aliasesValid, rowsOf, type AliasRow } from './deviceAliases';
 import {
-  listDeviceTypes,
   createDevice,
   updateDevice,
   getDevice,
@@ -48,6 +49,7 @@ export function DeviceForm({
   /** Create only: the type to start with. */
   initialTypeToken?: string;
 }) {
+  const breakGlass = useBreakGlass();
   const [earmark, setEarmark] = useState('');
   const editing = device != null;
   // The rows the form was seeded from; an edit sends the list only when it differs from them.
@@ -55,13 +57,16 @@ export function DeviceForm({
   const [aliases, setAliases] = useState<AliasRow[]>(seed);
   const showAliases = offerAliases && (!editing || device.aliases != null);
   return (
+    <>
+    {breakGlass.element}
     <RegistryInstanceForm
       entity={device}
       i18nKey="device"
       entityType="device"
       checkAvailability={(token) => getDevice(token).then((d) => d === null)}
       defaultTypeToken={device?.deviceType.token ?? initialTypeToken}
-      loadTypes={() => listDeviceTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
+      searchTypes={searchDeviceTypes}
+      resolveType={resolveDeviceType}
       create={(req) =>
         createDevice({
           token: req.token,
@@ -85,20 +90,14 @@ export function DeviceForm({
             )
           : undefined
       }
-      update={(token, req) =>
-        // A partial update: this form edits the name, the description and the type,
-        // so it sends exactly those. externalId — the handle whatever system
-        // provisioned the device correlates it by — and metadata survive by being
-        // ABSENT. Under the full replace this replaces, renaming a device here
-        // deleted both, with a success toast either way.
-        updateDevice(token, {
-          name: req.name,
-          description: req.description,
-          deviceTypeToken: req.typeToken,
-          // The list REPLACES the stored one, so it is named only when the operator changed it.
+      update={async (token, req) => {
+        const request = {
+          name: req.name, description: req.description, deviceTypeToken: req.typeToken,
           ...(showAliases && aliasesChanged(seed, aliases) ? { aliases: aliasInputs(aliases) } : {}),
-        })
-      }
+        };
+        if (req.typeToken === device?.deviceType.token) return updateDevice(token, request);
+        return (await breakGlass.run(reason => reason === undefined ? updateDevice(token, request) : updateDevice(token, request, reason))) ?? false;
+      }}
       renderExtra={
         showAliases
           ? ({ disabled }) => <DeviceAliasesField rows={aliases} onChange={setAliases} disabled={disabled} />
@@ -108,5 +107,6 @@ export function DeviceForm({
       onDone={onDone}
       readOnly={readOnly}
     />
+    </>
   );
 }

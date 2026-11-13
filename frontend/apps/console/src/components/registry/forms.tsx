@@ -63,6 +63,7 @@ import { TokenField } from '@/components/ui/token-field';
 import type { EntityType } from '@/lib/entity-types';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
+import { AsyncCombobox, type AsyncComboboxPage } from '@/components/ui/async-combobox';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage } from '@/routes/common';
 import { Textarea } from '@/components/ui/textarea';
@@ -191,6 +192,8 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   defaultTypeToken,
   checkAvailability,
   loadTypes,
+  searchTypes,
+  resolveType,
   create,
   update,
   onDone,
@@ -206,7 +209,14 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   entityType: EntityType;
   defaultTypeToken?: string;
   checkAvailability?: (token: string) => Promise<boolean>;
-  loadTypes: () => Promise<NamedEntity[]>;
+  /** Reads every type up front (for a family with few). Ignored when `searchTypes` is given. */
+  loadTypes?: () => Promise<NamedEntity[]>;
+  /**
+   * Searches types on the server as the operator types, for a family whose types can outgrow
+   * one page. Supply it with `resolveType` (labels the type already chosen) instead of loadTypes.
+   */
+  searchTypes?: (query: string) => Promise<AsyncComboboxPage>;
+  resolveType?: (token: string) => Promise<ComboboxOption | null>;
   create: (req: InstanceRequest) => Promise<unknown>;
   update: (token: string, req: InstanceRequest) => Promise<unknown>;
   onDone: (message: string) => void;
@@ -234,13 +244,13 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const { data: types } = useQuery(loadTypes, []);
+  const { data: types } = useQuery(() => (searchTypes || !loadTypes ? Promise.resolve([]) : loadTypes()), []);
   const options: ComboboxOption[] = (types ?? []).map((ty) => ({
     value: ty.token,
     label: ty.name || ty.token,
     description: ty.name ? ty.token : undefined,
   }));
-  const noTypes = types != null && options.length === 0;
+  const noTypes = !searchTypes && types != null && options.length === 0;
 
   const submit = async () => {
     setFormError(null);
@@ -252,7 +262,7 @@ export function RegistryInstanceForm<T extends NamedEntity>({
         typeToken,
       };
       if (editing) {
-        await update(entity.token, { token: entity.token, ...fields });
+        if (await update(entity.token, { token: entity.token, ...fields }) === false) return;
         onDone(e('UpdatedToast', { token: entity.token }));
       } else {
         const trimmed = token.trim();
@@ -278,14 +288,26 @@ export function RegistryInstanceForm<T extends NamedEntity>({
           htmlFor="r-type"
           description={noTypes ? e('TypeEmpty') : undefined}
         >
-          <Combobox
-            id="r-type"
-            value={typeToken}
-            onChange={setTypeToken}
-            options={options}
-            placeholder={e('TypeSelect')}
-            disabled={noTypes || readOnly}
-          />
+          {searchTypes ? (
+            <AsyncCombobox
+              id="r-type"
+              value={typeToken}
+              onChange={setTypeToken}
+              search={searchTypes}
+              resolve={resolveType}
+              placeholder={e('TypeSelect')}
+              disabled={readOnly}
+            />
+          ) : (
+            <Combobox
+              id="r-type"
+              value={typeToken}
+              onChange={setTypeToken}
+              options={options}
+              placeholder={e('TypeSelect')}
+              disabled={noTypes || readOnly}
+            />
+          )}
         </FormField>
         <FormField
           label={t('common:colToken')}

@@ -90,6 +90,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#commandclaimsstranded"
               summary: "Commands are stranded in SENT and may time out against innocent devices"
               description: >-
                 At least one command was left reading SENT after both its publish and its release
@@ -111,6 +112,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#commandclaimsstranded"
               summary: "Commands are stranded in SENT and may time out against innocent devices"
               description: >-
                 At least one command was left reading SENT after both its publish and its release
@@ -207,6 +209,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#commandpresencereaderrors"
               summary: "The command presence gate is failing open"
               description: >-
                 The dispatch sweep cannot read the presence projection, and the gate fails OPEN by
@@ -262,6 +265,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#commandbatchreserverefusals"
               summary: "The delivery-machinery reserve is refusing fleet writes the tenant's ceiling would have admitted"
               description: >-
                 Fleet writes are being refused that WOULD have fitted against the tenant's own
@@ -372,3 +376,275 @@ tests:
       - eval_time: 120m
         alertname: CommandBatchReserveRefusals
         exp_alerts: []
+
+  # LpwanAckReportsAnomalous: sustained failures, pending window, burst, healthy and isolation cases.
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="dci-devicechain", result="mismatch"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: LpwanAckReportsAnomalous
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: LpwanAckReportsAnomalous
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: &LpwanAckReportsAnomalous
+          runbook_url: https://docs.devicechain.io/deployment/alert-runbook#lpwanackreportsanomalous
+          summary: Confirmed LoRaWAN downlink reports do not match pending commands
+          description: For 10 minutes, network-server acknowledgements have named no pending downlink or disagreed
+            with its correlation fields. Commands may reach their deadline despite a device acknowledgement. Check
+            the Command Delivery dashboard, integration device mapping and network-server queue item identifiers;
+            inspect outbound-connectors logs before resending a command.
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="dci-devicechain", result="unmatched"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: LpwanAckReportsAnomalous
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: LpwanAckReportsAnomalous
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: *LpwanAckReportsAnomalous
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanAckReportsAnomalous
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="dci-devicechain", result="mismatch"}
+      values: 0+0x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanAckReportsAnomalous
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="another-instance", result="mismatch"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanAckReportsAnomalous
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="dci-devicechain", result="mismatch"}
+      values: 0+0x5 1+0x35
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanAckReportsAnomalous
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="dci-devicechain", result="acknowledged"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanAckReportsAnomalous
+      exp_alerts: []
+
+  # LpwanAckSettlementFailing: sustained failures, pending window, burst, healthy and isolation cases.
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="dci-devicechain", result="store_failed"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: LpwanAckSettlementFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: LpwanAckSettlementFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: &LpwanAckSettlementFailing
+          runbook_url: https://docs.devicechain.io/deployment/alert-runbook#lpwanacksettlementfailing
+          summary: Confirmed LoRaWAN downlink reports cannot settle commands
+          description: For 10 minutes, confirmed-downlink reports have failed in the store or response path, or could
+            not be read. A device may have acknowledged while its command remains pending. Check outbound-connectors
+            logs, database writes and the broker response stream; inspect pending commands before retrying them.
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="dci-devicechain", result="response_failed"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: LpwanAckSettlementFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: LpwanAckSettlementFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: *LpwanAckSettlementFailing
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="dci-devicechain", result="poison"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: LpwanAckSettlementFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: LpwanAckSettlementFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: *LpwanAckSettlementFailing
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanAckSettlementFailing
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="dci-devicechain", result="store_failed"}
+      values: 0+0x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanAckSettlementFailing
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="another-instance", result="store_failed"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanAckSettlementFailing
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="dci-devicechain", result="store_failed"}
+      values: 0+0x5 1+0x35
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanAckSettlementFailing
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="dci-devicechain", result="acknowledged"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanAckSettlementFailing
+      exp_alerts: []
+
+  # LpwanDownlinkTrackingFailing: sustained failures, pending window, burst, healthy and isolation cases.
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_downlinks_total{namespace="dci-devicechain", result="pending_failed"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: LpwanDownlinkTrackingFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: LpwanDownlinkTrackingFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: &LpwanDownlinkTrackingFailing
+          runbook_url: https://docs.devicechain.io/deployment/alert-runbook#lpwandownlinktrackingfailing
+          summary: LoRaWAN commands cannot be tracked or answered reliably
+          description: For 10 minutes, the LoRaWAN adapter has failed to claim, look up, track or answer commands.
+            pending_failed means the network server accepted a confirmed downlink but its pending acknowledgement
+            could not be stored. The device may still receive it. Check outbound-connectors database and broker health
+            and logs; reconcile the network-server queue before resending.
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_downlinks_total{namespace="dci-devicechain", result="claim_failed"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: LpwanDownlinkTrackingFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: LpwanDownlinkTrackingFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: *LpwanDownlinkTrackingFailing
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_downlinks_total{namespace="dci-devicechain", result="lookup_failed"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: LpwanDownlinkTrackingFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: LpwanDownlinkTrackingFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: *LpwanDownlinkTrackingFailing
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_downlinks_total{namespace="dci-devicechain", result="response_failed"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: LpwanDownlinkTrackingFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: LpwanDownlinkTrackingFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: *LpwanDownlinkTrackingFailing
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanDownlinkTrackingFailing
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_downlinks_total{namespace="dci-devicechain", result="pending_failed"}
+      values: 0+0x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanDownlinkTrackingFailing
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_downlinks_total{namespace="another-instance", result="pending_failed"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanDownlinkTrackingFailing
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_downlinks_total{namespace="dci-devicechain", result="pending_failed"}
+      values: 0+0x5 1+0x35
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanDownlinkTrackingFailing
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_outboundconnectors_lpwan_downlinks_total{namespace="dci-devicechain", result="queued_confirmed"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: LpwanDownlinkTrackingFailing
+      exp_alerts: []

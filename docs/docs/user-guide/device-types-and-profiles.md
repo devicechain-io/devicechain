@@ -85,7 +85,7 @@ with a token, a name, a **Category** (a functional class such as thermostat or m
 description.
 
 Select a profile to open it. Its tabs are **Basic**, **Metrics**, **Commands**,
-**Configuration**, **Detection Rules**, **Rule Health** and **Versions**. Detection rules and
+**Configuration**, **Decoder**, **Detection Rules**, **Rule Health** and **Versions**. Detection rules and
 rule health are covered in their own chapter.
 
 ### Drafts and versions
@@ -151,6 +151,14 @@ A device sees only the declared keys. With none declared, it sees an empty docum
 
 The values themselves are set per device, as shared attributes. A device's
 [Configuration tab](/user-guide/devices#configuration) shows the result.
+
+### Decoder
+
+**Decoder** turns a binary frame, generic JSON or a network server's decoded object into
+measurements. Edit the draft, use **Run test** to check an input without storing readings,
+and **Save decoder** to save it. The decoder takes effect only when you publish the profile.
+**Clear decoder** removes it from the draft; published versions keep theirs. See
+[Payload decoders](/guides/payload-decoders) for the input contract and limits.
 
 ### Publishing a version {#publishing-a-version}
 

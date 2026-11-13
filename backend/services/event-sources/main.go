@@ -5,17 +5,22 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/tracing"
 	"os"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
 
+	"github.com/devicechain-io/dc-event-sources/commandpull"
 	"github.com/devicechain-io/dc-event-sources/integration"
 
 	"github.com/devicechain-io/dc-event-sources/config"
+	"github.com/devicechain-io/dc-event-sources/credcheck"
 	"github.com/devicechain-io/dc-event-sources/graphql"
 	"github.com/devicechain-io/dc-event-sources/model"
 	processor "github.com/devicechain-io/dc-event-sources/processor"
@@ -137,11 +142,28 @@ var (
 	// case every tenant resolves to the fail-safe bronze band.
 	ShedPriorityResolver *governance.ShedPriorityResolver
 
+	// IngestMeteringMode is how the ingest gate meters a message (see IngestMeteringEnv); legacy unless the
+	// operator chose otherwise. LagCredit is the lag-credited gate, built only in lagCredit mode.
+	IngestMeteringMode = IngestMeteringLegacy
+	LagCredit          *processor.LagCreditIngest
+	// ingestBaseCeiling and ingestShedPriority are the BASE (never shed-adjusted) ceiling resolver and the
+	// shed-priority lookup buildRateLimiter built, kept for the lag-credited gate, which applies the
+	// contention factor itself (a separate bucket) instead of tightening the ceiling.
+	ingestBaseCeiling  core.TenantCeilingResolver
+	ingestShedPriority func(string) (int, bool)
+	// ingestUnresolved counts admissions metered at the platform default for want of the tenant's own
+	// ceiling (governance_unresolved_admissions_total); the lag-credited gate reports to the same counter.
+	ingestUnresolved func(core.CeilingSource)
+
 	// Messaging.
 	InboundEventsWriter messaging.MessageWriter
 	// IntegrationUplinksWriter writes the integration route's IntegrationUplink events, which go to
 	// their own stream and never to InboundEventsWriter's (streams.IntegrationUplinks says why).
 	IntegrationUplinksWriter messaging.MessageWriter
+
+	// LpwanDownlinkEventsWriter writes the network server's downlink reports (a ChirpStack ack or
+	// txack) the integration route accepted, to the stream outbound-connectors reads.
+	LpwanDownlinkEventsWriter messaging.MessageWriter
 	// InboundEnvelopeMetrics are the instruments of inbound envelopes (realised k, linger paid,
 	// settlement counters). Built once with the other instruments; nil-safe, so it exists whether
 	// or not the setting is on.
@@ -262,16 +284,25 @@ var (
 	// refusal after a restart is an increase.
 	IntegrationRequestsCounter             *prometheus.CounterVec
 	IntegrationUplinksCounter              *prometheus.CounterVec
+	IntegrationDownlinkReportsCounter      *prometheus.CounterVec
 	IntegrationFlattenSkippedCounter       *prometheus.CounterVec
 	IntegrationUnregisteredOverflowCounter prometheus.Counter
 	// The payload-decoder selection's accounting, under the same rule: no tenant, no integration.
 	IntegrationDecoderLookupsCounter          *prometheus.CounterVec
 	IntegrationDecoderProbeUnsupportedCounter prometheus.Counter
-	IntegrationDecoderChargedCounter          prometheus.Counter
+	// DeviceUplinkRequestsCounter and DeviceUplinkChargedCounter report the device-uplink route.
+	DeviceUplinkRequestsCounter      *prometheus.CounterVec
+	DeviceUplinkMessagesCounter      *prometheus.CounterVec
+	DeviceUplinkChargedCounter       prometheus.Counter
+	IntegrationDecoderChargedCounter prometheus.Counter
+
+	// CommandPullRequestsCounter and CommandPullPollersGauge are the HTTP command pull's accounting,
+	// under the same rule: no tenant and no device, both being strings a sender chose.
+	CommandPullRequestsCounter *prometheus.CounterVec
+	CommandPullPollersGauge    prometheus.Gauge
 	// integrationUndecoded batches the undecoded-uplink markers and is run from start to stop.
 	integrationUndecoded               []*integration.Undecoded
 	IntegrationUndecodedDroppedCounter prometheus.Counter
-	integrationStop                    context.CancelFunc
 
 	// ExternalMqttOwnerGauge is 1 on the pod that reads an external MQTT source and 0 on
 	// every other, per source; see processor.OwnedMqttSource.
@@ -289,6 +320,19 @@ var (
 	// HTTP answers such a request 500, and the other transports settle the message, so each is an
 	// event stored nowhere.
 	BuildDroppedCounter *prometheus.CounterVec
+
+	// IngestRefusedCounter counts the requests HTTP /events refused synchronously with a 401, by
+	// source and reason (processor.RefusedUnknownTenant, processor.RefusedCredential). The sender
+	// is told one thing for both; the operator is told which.
+	IngestRefusedCounter *prometheus.CounterVec
+	// CredentialCheckCounter counts the credential check's calls to device-management by outcome
+	// (accepted, rejected, error), and CredentialCheckSkippedCounter the checks not made by reason
+	// (busy, held, probing, table_full): each skipped check is a request accepted unchecked.
+	CredentialCheckCounter        *prometheus.CounterVec
+	CredentialCheckSkippedCounter *prometheus.CounterVec
+	// TenantDirectory answers whether a tenant is known not to exist, from the same cache the
+	// ingest ceiling is resolved through. nil when user-management is not configured.
+	TenantDirectory *governance.TenantLimitResolver
 
 	// ShedAcknowledgedCounter counts messages shed at the per-tenant ingest ceiling from an MQTT
 	// source, every one of which the device (or the operator's broker) had ALREADY been told
@@ -314,7 +358,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: func(context.Context) error { return nil },
+			Postprocess: governance.StopRefreshes,
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -418,6 +462,30 @@ func initializeMetrics() {
 			"no tenant, no transit key, a credential that could not be sealed, or a marshal failure. "+
 			"HTTP answers 500 for each; no transport stores them",
 		[]string{"source", "cause"})
+	IngestRefusedCounter = Microservice.NewCounterVec(
+		"total_http_ingest_refused",
+		"Count of HTTP /events requests refused synchronously with a 401, by reason: the tenant in the path "+
+			"does not exist, or the credential in the body does not authenticate. The sender sees one answer "+
+			"for both",
+		[]string{"source", "reason"})
+	CredentialCheckCounter = Microservice.NewCounterVec(
+		"total_http_credential_checks",
+		"Count of calls the HTTP credential check made to device-management, by outcome. A device posting "+
+			"with a verdict already remembered makes no call",
+		[]string{"outcome"})
+	CredentialCheckSkippedCounter = Microservice.NewCounterVec(
+		"total_http_credential_checks_skipped",
+		"Count of HTTP credential checks not made, by reason: the in-flight bound (busy), the credential "+
+			"is held off after repeated failures (held), another check of the same credential is in flight "+
+			"(probing), or the failure table is full (table_full). The "+
+			"request is accepted unchecked and device-management decides, as it always did",
+		[]string{"reason"})
+	for _, outcome := range []string{"accepted", "rejected", "error"} {
+		CredentialCheckCounter.WithLabelValues(outcome)
+	}
+	for _, reason := range []string{"busy", "held", "probing", "table_full"} {
+		CredentialCheckSkippedCounter.WithLabelValues(reason)
+	}
 	ShedAcknowledgedCounter = Microservice.NewCounterVec(
 		"total_msg_shed_acknowledged",
 		"Count of messages from an MQTT source shed at the per-tenant ingest ceiling after the device had "+
@@ -428,7 +496,9 @@ func initializeMetrics() {
 	for source := range acknowledgedShedSources {
 		ShedAcknowledgedCounter.WithLabelValues(source) // exported at 0, so the first shed is an increase
 	}
+	initializeLagCreditMetrics()
 	initializeIntegrationMetrics()
+	initializeCommandPullMetrics()
 	seedRefusalCounters(configuredSourceIDs())
 	initializePresenceMetrics()
 }
@@ -446,6 +516,14 @@ func initializeIntegrationMetrics() {
 		"integration_uplinks_total",
 		"Count of uplinks read from accepted integration requests by what became of each",
 		[]string{"result"})
+	IntegrationDownlinkReportsCounter = Microservice.NewCounterVec(
+		"integration_downlink_reports_total",
+		"Count of network-server downlink reports (ChirpStack ack and txack) read from accepted integration "+
+			"requests by what became of each. unknown_device is a report for a device the integration does not govern",
+		[]string{"result"})
+	for _, r := range processor.IntegrationDownlinkReportResults {
+		IntegrationDownlinkReportsCounter.WithLabelValues(r)
+	}
 	IntegrationFlattenSkippedCounter = Microservice.NewCounterVec(
 		"integration_flatten_skipped_total",
 		"Count of leaves of a network server's decoded object that were not stored as readings, by reason",
@@ -470,6 +548,21 @@ func initializeIntegrationMetrics() {
 	IntegrationDecoderChargedCounter = Microservice.NewCounter(
 		"integration_decoder_charged_readings_total",
 		"Count of readings charged at the reading gate for integration uplinks carried to a payload decoder")
+	DeviceUplinkRequestsCounter = Microservice.NewCounterVec(
+		"device_uplink_requests_total",
+		"Count of requests to the device-uplink route (a device's own payload, read by its type's decoder) by result",
+		[]string{"result"})
+	DeviceUplinkMessagesCounter = Microservice.NewCounterVec(
+		"device_uplink_messages_total",
+		"Count of raw payloads a device published to its own MQTT uplink topic (read by its type's decoder) by result",
+		[]string{"result"})
+	DeviceUplinkChargedCounter = Microservice.NewCounter(
+		"device_uplink_charged_readings_total",
+		"Count of readings charged at the reading gate for device uplinks carried to a payload decoder")
+	for _, r := range processor.DeviceUplinkResults {
+		DeviceUplinkRequestsCounter.WithLabelValues(r)
+		DeviceUplinkMessagesCounter.WithLabelValues(r)
+	}
 	for _, r := range processor.IntegrationDecoderLookupResults {
 		IntegrationDecoderLookupsCounter.WithLabelValues(r)
 	}
@@ -486,6 +579,90 @@ func initializeIntegrationMetrics() {
 	}
 }
 
+// initializeCommandPullMetrics registers the HTTP command pull's accounting and exports every
+// series at zero, so the first refusal after a restart is an increase.
+func initializeCommandPullMetrics() {
+	CommandPullRequestsCounter = Microservice.NewCounterVec(
+		"http_command_pull_requests_total",
+		"Count of requests to the HTTP command pull by operation (poll, ack, response) and result. "+
+			"unauthorized, forbidden, source_limited and poller_cap are refusals; unavailable is a "+
+			"platform failure the device is told to retry",
+		[]string{"op", "result"})
+	CommandPullPollersGauge = Microservice.NewGauge(
+		"http_command_pull_pollers",
+		"Number of HTTP command polls this replica is holding open right now, across tenants")
+	for _, op := range processor.CommandPullOps {
+		for _, r := range processor.CommandPullResults {
+			CommandPullRequestsCounter.WithLabelValues(op, r)
+		}
+	}
+}
+
+// commandPullMetrics is the route's reporting, reading the collectors when called: the route is
+// built before they are registered.
+func commandPullMetrics() processor.CommandPullMetrics {
+	return processor.CommandPullMetrics{
+		Request: func(op, result string) {
+			if CommandPullRequestsCounter != nil {
+				CommandPullRequestsCounter.WithLabelValues(op, result).Inc()
+			}
+		},
+		Pollers: func(delta int) {
+			if CommandPullPollersGauge != nil {
+				CommandPullPollersGauge.Add(float64(delta))
+			}
+		},
+	}
+}
+
+// The per-source allowance for HTTP command pull requests. Every request asks device-management to
+// prove its token, so unlike the integration route nothing is answered from memory and every
+// request is charged: a burst of 600 and one more every 20 ms (50 a second sustained) per source
+// address, which a fleet behind one NAT polling every 25 seconds does not approach, and which
+// makes guessing a 256-bit token from one address pointless.
+const (
+	commandPullSourceBurst = 600
+	commandPullSourceEvery = 20 * time.Millisecond
+	commandPullSourceKeys  = 4096
+)
+
+// buildCommandPullRoute builds the HTTP command pull over a service-token client holding
+// device:read (to prove the token) and command:claim (to hand out, acknowledge and settle
+// commands). It returns nil, with the reason logged, when device-management or command-delivery
+// cannot be reached from here: the routes then answer 503 rather than authenticating against
+// nothing.
+func buildCommandPullRoute() *processor.CommandPullRoute {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 ||
+		infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 ||
+		infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
+		log.Warn().Msg("Service secret or user-management, device-management or command-delivery endpoint not " +
+			"configured - the HTTP command pull will answer 503.")
+		return nil
+	}
+	trusted, err := infra.Http.TrustedProxyPrefixes()
+	if err != nil {
+		log.Error().Err(err).Msg("infrastructure.http.trustedProxies is invalid - the HTTP command pull will answer 503.")
+		return nil
+	}
+	sources, err := sourcelimit.New(sourcelimit.Limits{Burst: commandPullSourceBurst, Every: commandPullSourceEvery, MaxKeys: commandPullSourceKeys})
+	if err != nil {
+		log.Error().Err(err).Msg("Unable to build the HTTP command pull source limiter - the route will answer 503.")
+		return nil
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources",
+		[]string{string(auth.DeviceRead), string(auth.CommandClaim)})
+	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	cdURL := fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port)
+	return &processor.CommandPullRoute{
+		Backend:             commandpull.New(client, dmURL, cdURL),
+		Sources:             sources,
+		TrustedProxies:      trusted,
+		MaxPollersPerTenant: Configuration.HttpIngest.CommandPollCap(),
+		Metrics:             commandPullMetrics(),
+	}
+}
+
 // integrationMetrics is the route's reporting, reading the counters when called: the route is
 // built before the counters are registered.
 func integrationMetrics() processor.IntegrationMetrics {
@@ -498,6 +675,11 @@ func integrationMetrics() processor.IntegrationMetrics {
 		Uplink: func(result string) {
 			if IntegrationUplinksCounter != nil {
 				IntegrationUplinksCounter.WithLabelValues(result).Inc()
+			}
+		},
+		DownlinkReport: func(result string) {
+			if IntegrationDownlinkReportsCounter != nil {
+				IntegrationDownlinkReportsCounter.WithLabelValues(result).Inc()
 			}
 		},
 		FlattenSkipped: func(reason string, n int) {
@@ -591,7 +773,132 @@ func buildIntegrationRoute() *processor.IntegrationRoute {
 		Publish: onIntegrationEventDecoded,
 		Metrics: integrationMetrics(),
 	}
+	if Configuration != nil && Configuration.LpwanDownlink {
+		route.PublishDownlink = onDownlinkReport
+		route.DownlinkLimiter = sourcelimit.Must(downlinkReportLimits)
+	}
 	return route
+}
+
+// downlinkReportLimits is a tenant's allowance for network-server downlink reports: a burst of 100
+// and 20 a second sustained. Reports follow the commands a tenant sends to LoRaWAN devices, which a
+// device's duty cycle keeps far below telemetry rates. The limit exists so that one tenant's flood of
+// them cannot fill the shared, small stream and evict other tenants' acknowledgements.
+var downlinkReportLimits = sourcelimit.Limits{Burst: 100, Every: 50 * time.Millisecond, MaxKeys: 10000}
+
+// buildDeviceUplinkRoute builds the device-uplink route's dependencies, or nil when the operator has
+// not turned the route on (httpIngest.deviceUplinks, off by default so a rolling upgrade cannot lose
+// an accepted uplink) or device-management cannot be reached from here. The route then does not exist.
+func buildDeviceUplinkRoute(ingest config.HttpIngest) *processor.DeviceUplinkRoute {
+	if !ingest.DeviceUplinks {
+		return nil
+	}
+	return newDeviceUplinkRoute()
+}
+
+// newDeviceUplinkRoute is the device-uplink route's dependencies, without asking whether an
+// operator switched a transport on. The MQTT wire is switched on at the broker (the grant to publish
+// to the uplink topic, infrastructure.nats.mqttDeviceUplinks), so this service serves whatever the
+// broker captured; nil only when device-management cannot be reached from here.
+func newDeviceUplinkRoute() *processor.DeviceUplinkRoute {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.DeviceManagement.Hostname == "" {
+		return nil
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.DeviceRead)})
+	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	return &processor.DeviceUplinkRoute{
+		Plans:   integration.NewDeviceDecoders(integration.NewDM(client, dmURL), integration.DeviceDecoderConfig{}),
+		Publish: onDeviceUplinkDecoded,
+		Result: func(result string) {
+			if DeviceUplinkRequestsCounter != nil {
+				DeviceUplinkRequestsCounter.WithLabelValues(result).Inc()
+			}
+		},
+		Charged: func(n int) {
+			if DeviceUplinkChargedCounter != nil {
+				DeviceUplinkChargedCounter.Add(float64(n))
+			}
+		},
+		Message: func(result string) {
+			if DeviceUplinkMessagesCounter != nil {
+				DeviceUplinkMessagesCounter.WithLabelValues(result).Inc()
+			}
+		},
+	}
+}
+
+// onDeviceUplinkDecoded publishes a device's own IntegrationUplink, synchronously, to the uplink
+// stream. It is the only device-facing publish that may carry that type: the event is stamped with
+// the source, any integration mark is cleared (a device has none), the presented credential is
+// sealed, and nothing is written to inbound-events.
+func onDeviceUplinkDecoded(source string, tenant string, event *model.UnresolvedEvent, payload interface{},
+	dedupID string) error {
+	event.Source = source
+	processor.ClearIntegrationMark(event)
+	ctx, msg, ok := buildInboundMessage(source, tenant, event, payload, dedupID)
+	if !ok {
+		return processor.ErrEventNotBuilt
+	}
+	return writeIntegrationUplink(ctx, source, msg)
+}
+
+// buildIngestChecks builds the synchronous refusals HTTP /events makes before it answers 202:
+// 401 for a tenant that does not exist and for a credential that will not authenticate.
+//
+// Each half is built only when what it needs is configured, and each fails open: with no
+// user-management there is no authority on which tenants exist, and with no device-management
+// there is nobody to ask about a credential, so the door is then exactly what it was.
+func buildIngestChecks() *processor.IngestChecks {
+	checks := &processor.IngestChecks{
+		Refused: func(source, reason string) {
+			if IngestRefusedCounter != nil {
+				IngestRefusedCounter.WithLabelValues(source, reason).Inc()
+			}
+		},
+	}
+	if dir := TenantDirectory; dir != nil {
+		checks.TenantUnknown = func(ctx context.Context, tenant string) bool {
+			// A warm answer is a cache read. Only a tenant never seen before waits, and then
+			// for at most the budget: the timer is made for that request alone.
+			switch dir.Existence(tenant) {
+			case governance.ExistenceNone:
+				return true
+			case governance.ExistenceKnown:
+				return false
+			}
+			wctx, cancel := context.WithTimeout(ctx, processor.TenantWaitBudget)
+			defer cancel()
+			return dir.AwaitExistence(wctx, tenant) == governance.ExistenceNone
+		}
+	}
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 ||
+		infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+		log.Warn().Msg("Service secret or user-management or device-management endpoint not configured - " +
+			"HTTP /events will not check a device credential before it answers 202.")
+		return checks
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.DeviceRead)})
+	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	verifier, err := credcheck.New(credcheck.NewDM(client, dmURL), credcheck.Config{
+		OnCall: func(outcome string) {
+			if CredentialCheckCounter != nil {
+				CredentialCheckCounter.WithLabelValues(outcome).Inc()
+			}
+		},
+		OnSkip: func(reason string) {
+			if CredentialCheckSkippedCounter != nil {
+				CredentialCheckSkippedCounter.WithLabelValues(reason).Inc()
+			}
+		},
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("Unable to build the HTTP credential check - /events will not check a credential before it answers 202.")
+		return checks
+	}
+	checks.Credential = verifier
+	return checks
 }
 
 // contentionLevel is the effective ADR-063 shed level. At GA it is just the operator
@@ -653,7 +960,8 @@ func shedAdjusted(base core.TenantCeilingResolver, shedPriority func(string) (in
 // limiter alone: nothing calls AllowUntrusted on the other two, and the counter is one
 // registration, so it belongs to exactly one limiter.
 func buildRateLimiter() {
-	unresolved := core.WithUnresolvedAdmissions(governance.NewUnresolvedAdmissions(Microservice, governance.Ingest))
+	ingestUnresolved = governance.NewUnresolvedAdmissions(Microservice, governance.Ingest)
+	unresolved := core.WithUnresolvedAdmissions(ingestUnresolved)
 	overflow := core.WithOverflowAdmissions(governance.NewOverflowAdmissions(Microservice))
 	def := governance.Limits{
 		RatePerSecond: Configuration.IngestRateLimit.ReadingsPerSecond,
@@ -672,6 +980,7 @@ func buildRateLimiter() {
 		// transiently down, so the default is the real answer here — unlike the
 		// UM-backed path, where an unfetched tenant is genuinely unresolved).
 		shedPrio := func(string) (int, bool) { return governance.DefaultShedPriority, true }
+		ingestBaseCeiling, ingestShedPriority = flat, shedPrio
 		RateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved)
 		BacklogRateLimiter = core.NewTenantRateLimiter(flat, unresolved)
 		HttpRateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved, overflow)
@@ -682,7 +991,9 @@ func buildRateLimiter() {
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.TenantRead)})
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest)
+	TenantDirectory = resolver
 	ShedPriorityResolver = governance.NewShedPriorityResolver(client, umURL)
+	ingestBaseCeiling, ingestShedPriority = resolver.Ceiling, ShedPriorityResolver.Resolve
 	// Both limiters share the ceiling resolver, so a tenant's ADR-023 override applies
 	// to their live traffic and their backlog alike — the ceiling is the same, only the
 	// timeline each bucket measures against differs.
@@ -750,10 +1061,7 @@ func buildEventSources() error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	tenantGate, tenantGoneStrict := ingestTenantGates(infra, safetyGates)
 	TenantGone = tenantGoneStrict
-	ingestGate = processor.RefuseDeletedTenants(
-		tenantGate,
-		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, IntegrationRateLimiter, onRateShed),
-		onTenantGone)
+	legacyGate := processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, IntegrationRateLimiter, onRateShed)
 	// The live/backlog routing decision the capture source makes once per message, sized to
 	// the tenant's live burst (see processor.NewMeterAt).
 	meterAt := processor.NewMeterAt(RateLimiter)
@@ -761,6 +1069,16 @@ func buildEventSources() error {
 	// for the same reason as ingestGate.
 	readingGate = processor.NewReadingGate(ReadingRateLimiter, BacklogReadingRateLimiter, HttpReadingRateLimiter, IntegrationReadingRateLimiter,
 		onReadingShed)
+	// In lagCredit mode the gateway sources meter themselves in the lag-credited gate, and so do the
+	// sources with no stream (external MQTT, presence); HTTP, integrations and untrusted names keep the
+	// existing limiters either way.
+	LagCredit = nil
+	if IngestMeteringMode == IngestMeteringLagCredit {
+		LagCredit = buildLagCreditIngest()
+		legacyGate = processor.NewLagCreditRateGate(LagCredit, legacyGate)
+		readingGate = processor.NewLagCreditReadingGate(LagCredit, readingGate)
+	}
+	ingestGate = processor.RefuseDeletedTenants(tenantGate, legacyGate, onTenantGone)
 
 	for _, source := range Configuration.EventSources {
 		// Create decoder.
@@ -822,6 +1140,9 @@ func buildEventSources() error {
 				// INITIALIZE phase and readers and writers are created in START, so there
 				// is nothing to wire here yet.
 				GatewaySource = gateway
+				if LagCredit != nil {
+					gateway.UseLagCredit(LagCredit, processor.StreamCapture)
+				}
 				created = append(created, gateway)
 				// The same source over the MQTT message store: the copy of a device's QoS 1
 				// publish the broker PUBACKs on, read with the fail-closed store (see
@@ -831,6 +1152,20 @@ func buildEventSources() error {
 					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
 					ingestGate, readingGate, meterAt)
 				StoreSource.UseMessageStore()
+				if LagCredit != nil {
+					StoreSource.UseLagCredit(LagCredit, processor.StreamStore)
+				}
+				// A device's raw payload (its own uplink topic) reaches its type's decoder from either
+				// path. The grant to publish there is the operator's, so this serves whatever the
+				// broker captured.
+				if dr := newDeviceUplinkRoute(); dr != nil {
+					if err := gateway.UseDeviceUplinks(dr); err != nil {
+						return err
+					}
+					if err := StoreSource.UseDeviceUplinks(dr); err != nil {
+						return err
+					}
+				}
 				continue
 			}
 			// An external broker must NOT be forced to verify against the NATS CA (it
@@ -887,6 +1222,18 @@ func buildEventSources() error {
 			// device-management from here it answers 503.
 			if route := buildIntegrationRoute(); route != nil {
 				if err := http.UseIntegrations(route); err != nil {
+					return err
+				}
+			}
+			if dr := buildDeviceUplinkRoute(Configuration.HttpIngest); dr != nil {
+				if err := http.UseDeviceUplinks(dr); err != nil {
+					return err
+				}
+			}
+			http.UseIngestChecks(buildIngestChecks())
+			// ... and the command pull, which answers 503 the same way.
+			if route := buildCommandPullRoute(); route != nil {
+				if err := http.UseCommandPull(route); err != nil {
 					return err
 				}
 			}
@@ -1114,7 +1461,11 @@ func buildInboundMessage(source string, tenant string, event *model.UnresolvedEv
 		countBuildDropped(source, buildDropNoTenant)
 		return nil, messaging.Message{}, false
 	}
-	ctx := core.WithTenant(context.Background(), tenant)
+	base := context.Background()
+	if tracing.Enabled() && event.TraceContext != nil {
+		base = event.TraceContext
+	}
+	ctx := core.WithTenant(base, tenant)
 
 	if cause := sealPresentedSecret(tenant, event); cause != "" {
 		countBuildDropped(source, cause)
@@ -1283,6 +1634,25 @@ func onIntegrationEventDecoded(source string, tenant string, event *model.Unreso
 	return writeInbound(ctx, source, msg)
 }
 
+// onDownlinkReport publishes a network server's downlink report, synchronously, to its own stream.
+// The tenant comes from the route's authenticated path and rides the subject, never the body.
+func onDownlinkReport(tenant string, report cmddownlink.DownlinkReport) error {
+	if LpwanDownlinkEventsWriter == nil {
+		return errors.New("no writer for the downlink report stream")
+	}
+	if tenant == "" {
+		return errors.New("a downlink report needs a tenant")
+	}
+	body, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+	err = LpwanDownlinkEventsWriter.WriteMessages(core.WithTenant(context.Background(), tenant),
+		messaging.Message{Key: []byte(report.QueueItemID), Value: body})
+	LpwanDownlinkEventsWriter.HandleResponse(err)
+	return err
+}
+
 // writeIntegrationUplink writes an IntegrationUplink to ITS OWN stream. It is never written to
 // inbound-events: a device-management built before payload decoders reads that stream, fails to
 // unmarshal a type it does not know and dead-letters the message on delivery 1, so every
@@ -1415,6 +1785,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	IntegrationUplinksWriter = iuplinks
 
+	// The downlink-report stream's writer. Creating it also ensures the stream, so a report is never
+	// refused for want of one; with outbound-connectors' adapter off nothing reads it and the
+	// broker's age limit trims it.
+	lreports, err := nmgr.NewWriter(streams.LpwanDownlinkEvents)
+	if err != nil {
+		return err
+	}
+	LpwanDownlinkEventsWriter = lreports
+
 	// The presence tap's asynchronous writer (see newPresenceWriter). Built here, once for
 	// the life of the process, and closed by stopBrokerPresence.
 	if err := buildPresenceWriter(nmgr); err != nil {
@@ -1442,7 +1821,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// which runs before the manager drains the connection. InboundEventsWriter above
 	// stays for HTTP and the presence tap, which publish synchronously; the two do
 	// not share a JetStream context, since the ordered writer builds its own.
+	startGatewayFeedback(nmgr)
 	if GatewaySource != nil {
+		GatewaySource.UseGatewayFeedback(GatewayAnswers)
 		GatewaySource.SetReader(capture)
 		pipeline, err := newGatewayWriter(nmgr)
 		if err != nil {
@@ -1509,7 +1890,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	// The metering mode is read from the environment (see IngestMeteringEnv), and a mode this build
 	// cannot run stops the service here rather than running a different gate than the one asked for.
-	if _, err = resolveIngestMetering(os.Getenv); err != nil {
+	if IngestMeteringMode, err = resolveIngestMetering(os.Getenv); err != nil {
 		return err
 	}
 
@@ -1592,12 +1973,8 @@ func afterMicroserviceStarted(ctx context.Context) error {
 
 	// The integration route's undecoded markers are written in batches; this flushes the ones a
 	// quiet integration would otherwise leave waiting for its next uplink.
-	if len(integrationUndecoded) > 0 {
-		var runCtx context.Context
-		runCtx, integrationStop = context.WithCancel(context.Background())
-		for _, u := range integrationUndecoded {
-			go u.Run(runCtx)
-		}
+	for _, u := range integrationUndecoded {
+		go u.Run(context.Background())
 	}
 
 	// A capture stream created before it became a work queue keeps its old retention until
@@ -1686,14 +2063,14 @@ func afterMicroserviceStarted(ctx context.Context) error {
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	stopGatewayFeedback()
 	// Stop the presence tap before the sources: it holds its own broker connection and
 	// its own goroutines, and a reconciliation pass mid-shutdown would emit into a
 	// writer that is about to close.
 	stopSessionKick()
 	stopBrokerPresence()
-	if integrationStop != nil {
-		integrationStop()
-		integrationStop = nil
+	for _, u := range integrationUndecoded {
+		u.Close(ctx)
 	}
 	// The fail-closed store's watch holds no writer, but it uses the broker connection the
 	// manager drains below.

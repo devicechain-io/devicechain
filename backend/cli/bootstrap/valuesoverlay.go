@@ -44,6 +44,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"helm.sh/helm/v3/pkg/chartutil"
 	"sigs.k8s.io/yaml"
 )
@@ -68,6 +69,7 @@ const maxValuesOverlayBytes = 128 * 1024
 // listener's ADDRESS are all dcctl's or the declaration's. None of them is a tuning knob: they are
 // credentials, wiring, exposure or a way to weaken the pod's isolation.
 var tunableValues = []string{
+	"instance.config.infrastructure.tracing",
 	// Scale and rollout.
 	"replicas",
 	"rollingUpdate",
@@ -98,6 +100,14 @@ var tunableValues = []string{
 	"instance.config.infrastructure.nats.streamMaxBytes",
 	"instance.config.infrastructure.nats.streamMaxBytesCold",
 	"instance.config.infrastructure.nats.streamMaxMsgs",
+	// Whether a device may publish its OWN payload to its raw-payload MQTT topic, for the decoder on
+	// its device type's profile to read. Off by default. It is an opt-in, not wiring: it adds one
+	// topic, confined to the device's own token, to the grant device-management mints, and the
+	// capture stream's subject list follows it at the next upgrade's broker step. Carried forward
+	// by every later upgrade like the rest of the overlay. --mqtt-device-uplinks records
+	// the choice on the instance; change it with the flag. A fresh conflicting overlay
+	// value is refused by checkDeviceUplinksOverlay.
+	"instance.config.infrastructure.nats.mqttDeviceUplinks",
 	// Whether device-management writes resolved events as envelopes. A capacity dial, off by
 	// default; dcctl records when it is turned on and what the streams held when it is turned
 	// off, because that is what makes a later move to a release that cannot read envelopes
@@ -113,6 +123,10 @@ var tunableValues = []string{
 	// platform the authorization server may issue for (externalResources). The two the chart
 	// derives are refused below (ownedWithinTunable).
 	"instance.config.infrastructure.tokenAudience",
+	// How event-sources meters a message against its tenant's ingest ceiling (legacy, the default,
+	// or lagCredit). It is rendered into the event-sources pods alone and is not an instance
+	// configuration key; the chart's schema bounds the values.
+	"eventSources.ingestMetering",
 	// Alerting rules and dashboards.
 	"metrics.alerts",
 	"metrics.grafanaDashboards",
@@ -201,6 +215,10 @@ var ownedWithinTunable = []struct {
 		"lwm2m-ingest's identity bindings are wiring, not tuning: provision them with --lwm2m-identities <file>, which keeps the pre-shared keys out of the configuration and carries the bindings through every upgrade"},
 	{"functionalAreas.command-delivery.config.sparkplugCommands",
 		"whether Sparkplug commands are deliverable is derived by the chart from the Sparkplug sources' commands.enabled; a value written here could say they are while no source sends them, or the reverse"},
+	{"functionalAreas.event-sources.config.lpwanDownlink",
+		"whether the inbound-integration route carries a network server's downlink reports is derived by the chart from functionalAreas.outbound-connectors.config.lpwanDownlink.enabled; a value written here could make the route take reports nothing reads, or ignore reports something waits for"},
+	{"functionalAreas.command-delivery.config.lpwanDownlink",
+		"whether commands to LoRaWAN devices are deliverable is derived by the chart from functionalAreas.outbound-connectors.config.lpwanDownlink.enabled; a value written here could say they are while no adapter reads them, or the reverse"},
 }
 
 // refusedIngressAnnotations are ingress.annotations keys an overlay may not set. The chart
@@ -369,10 +387,42 @@ func overlaySchemaProbe() map[string]interface{} {
 	}
 }
 
+// refuseObserveValues also checks historical release values without applying the overlay allowlist.
+func refuseObserveValues(values map[string]interface{}, source string) error {
+	var current interface{} = values
+	for _, key := range []string{"instance", "config", "infrastructure", "tokenAudience", "enforcement"} {
+		m, ok := current.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		current = m[key]
+	}
+	if current == "observe" {
+		err := (config.TokenAudienceConfiguration{Enforcement: "observe"}).Validate()
+		return fmt.Errorf("%s: %w. Remove instance.config.infrastructure.tokenAudience.enforcement from the values or set it to enforce; v1.4 refuses observe. Nothing has been changed", source, err)
+	}
+	return nil
+}
+
+// refuseCarriedObserveValues names the command that can replace historical values.
+func refuseCarriedObserveValues(values map[string]interface{}, source, command string) error {
+	if err := refuseObserveValues(values, source); err != nil {
+		remedy := "re-run `dcctl " + command + "` with `--values <file without the key>`"
+		if command == "upgrade" {
+			remedy += " or `--reset-values`"
+		}
+		return fmt.Errorf("%w; %s", err, remedy)
+	}
+	return nil
+}
+
 // ValidateValuesOverlay judges an overlay against this build's chart: the key allowlist,
 // then values.schema.json over the chart's own defaults with the overlay on top. It reads
 // nothing from a cluster, so it runs before anything exists to change.
 func ValidateValuesOverlay(overlay map[string]interface{}) error {
+	if err := refuseObserveValues(overlay, "the values overlay"); err != nil {
+		return err
+	}
 	if err := refuseOverlayKeys(overlay, "the values overlay"); err != nil {
 		return err
 	}
@@ -413,6 +463,9 @@ func LoadValuesOverlay(files []string) (map[string]interface{}, error) {
 		if len(overlayLeaves(one)) == 0 {
 			return nil, fmt.Errorf("--values %s sets no values. To remove the overlay recorded on an instance, "+
 				"use `dcctl upgrade --reset-values`", f)
+		}
+		if err := refuseObserveValues(one, "--values "+f); err != nil {
+			return nil, err
 		}
 		if err := refuseOverlayKeys(one, "--values "+f); err != nil {
 			return nil, err
@@ -465,6 +518,12 @@ func deepCopyValues(m map[string]interface{}) map[string]interface{} {
 func authoringValues(st *State) map[string]interface{} {
 	vals := helmValues(st)
 	if overlay := effectiveOverlay(st); len(overlay) > 0 {
+		// Keep the recorded choice without changing the stored tuning overlay; fresh
+		// conflicts are refused earlier by checkDeviceUplinksOverlay.
+		if st.MqttDeviceUplinks != nil {
+			overlay = deepCopyValues(overlay)
+			deletePath(overlay, splitPath("instance.config.infrastructure.nats.mqttDeviceUplinks"))
+		}
 		mergeOverlay(vals, overlay)
 	}
 	return vals

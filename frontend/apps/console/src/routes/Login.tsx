@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { consumeStepUpReturn } from '@/lib/stepUpReturn';
 import { useRef, useState, type FormEvent } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -102,7 +103,7 @@ export default function LoginPage() {
       }
       throw err;
     }
-    navigate('/', { replace: true });
+    navigate(consumeStepUpReturn() ?? '/', { replace: true });
   };
 
   // Everything after the identity is established, whether by password or by password plus code.

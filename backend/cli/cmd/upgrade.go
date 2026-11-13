@@ -23,10 +23,14 @@ var (
 
 	upgradeAllowEnvelopeDowngrade bool
 
-	upgradeMqttFailClosed bool
-	upgradeTrustedProxies []string
-	upgradeMQTTExposure   string
-	upgradeMQTTHost       string
+	upgradeMqttFailClosed    bool
+	upgradeMqttDeviceUplinks bool
+	upgradeTrustedProxies    []string
+	upgradeMQTTExposure      string
+	upgradeMQTTHost          string
+	// upgradeDevAllowEgress is --dev-allow-egress; upgradeDevAllowEgressList its parsed form.
+	upgradeDevAllowEgress     []string
+	upgradeDevAllowEgressList []string
 
 	upgradeBrokerMaxConnections      int
 	upgradeBrokerMaxConnectionsGiven bool
@@ -48,6 +52,11 @@ var (
 
 	upgradeIngressController string
 	upgradeDropLegacyIngress bool
+
+	// upgradeAlerts holds the alert-routing flags; upgradeAlertRequest is what RunE settled
+	// them to (files read, request validated), which upgradeOptions copies.
+	upgradeAlerts       alertFlags
+	upgradeAlertRequest bootstrap.AlertRoutingRequest
 )
 
 const (
@@ -82,7 +91,7 @@ func eventStoreStringFlag(given bool, v string) *string {
 
 // upgradeOptions is the UpgradeOptions the upgrade flags describe, split out of RunE so
 // the copy of each flag into its field can be tested.
-func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[string]interface{}) bootstrap.UpgradeOptions {
+func upgradeOptions(instance string, mqttFailClosed, mqttDeviceUplinks *bool, valuesOverlay map[string]interface{}) bootstrap.UpgradeOptions {
 	return bootstrap.UpgradeOptions{
 		Options: bootstrap.Options{
 			Instance:      instance,
@@ -92,10 +101,12 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 			ImageRegistry: upgradeRegistry,
 			ImageVersion:  upgradeVersion,
 
-			MqttFailClosed: mqttFailClosed,
-			TrustedProxies: upgradeTrustedProxies,
-			MQTTExposure:   upgradeMQTTExposure,
-			MQTTHost:       upgradeMQTTHost,
+			MqttFailClosed:    mqttFailClosed,
+			MqttDeviceUplinks: mqttDeviceUplinks,
+			TrustedProxies:    upgradeTrustedProxies,
+			MQTTExposure:      upgradeMQTTExposure,
+			MQTTHost:          upgradeMQTTHost,
+			DevAllowEgress:    upgradeDevAllowEgressList,
 
 			BrokerMaxConnections: bootstrap.BrokerMaxConnectionsFromFlag(upgradeBrokerMaxConnectionsGiven, upgradeBrokerMaxConnections),
 			ValuesOverlay:        valuesOverlay,
@@ -118,6 +129,7 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 		SkipInfrastructure:   upgradeSkipInfra,
 
 		AllowEnvelopeDowngrade: upgradeAllowEnvelopeDowngrade,
+		AlertRouting:           upgradeAlertRequest,
 	}
 }
 
@@ -146,9 +158,34 @@ So an upgrade is two commands, in this order:
 
 This command checks the cluster's operator and never moves it. It REFUSES when the
 cluster has no operator, or has one identifiably from another release, naming the
-install command that fixes it. An operator installed by hand carries no record of
-which release put it there, and dcctl cannot tell that apart from one an older
-dcctl overwrote — so that case is allowed through with a note rather than refused.
+install command that fixes it. An operator installed by hand carries no identity,
+and dcctl cannot tell that apart from one an older dcctl overwrote, so that one check
+lets it through with a note rather than refusing; the install check below still applies.
+
+It also REFUSES, before anything is written, when the cluster-level install is older than
+this dcctl, or cannot be shown to be current for it: the operator's definitions can stay
+the same across a release while its controller changes, so the check reads the install
+record in the cluster, which names the dcctl that last finished 'dcctl install'. A
+cluster with no usable record (an install that never finished, or never ran) is refused
+until 'dcctl install' has run. A re-run at the same version satisfies this install check,
+as does a cluster installed by a newer dcctl; the instance version checks below still apply.
+A dcctl built from source is not compared against the install record. From
+this release, a flag-less upgrade with a newer patch dcctl needs 'dcctl install' first.
+
+An explicit '--version' must be this dcctl's own release; the same holds for
+'dcctl install --version'. An OLDER release is refused: the chart and the infrastructure
+configuration this dcctl applies are its own release's, so they would be planned around
+images that have never seen them. There is no downgrade (see
+https://docs.devicechain.io/deployment/versioning-policy#upgrade-paths). An upgrade to
+a release older than the one the instance is declared at is refused, whichever dcctl
+runs it. A NEWER release is refused too, and installing it with
+this dcctl would not help, because the install record names the dcctl that ran the
+install, not the --version it was given: get the dcctl of the newer release, run
+'dcctl install' with it, then upgrade. A release tag (v1.4.0, v1.4.0-rc.1) is that
+release on any registry, a mirror included, so these checks apply to it there too; any
+other tag on a registry of your own (--registry), such as a local build's, is not compared.
+This dcctl's own release is not affected, and a flag-less upgrade is refused only when the
+instance is declared at a release newer than this dcctl.
 
 It replaces no credential. Every credential the instance is running on is read back
 and kept: the database passwords, the broker's authority and logins, the
@@ -268,12 +305,29 @@ store), says so when it rises, and warns when the volume has less free space tha
 		if upgradeIngressController == "nginx" && upgradeDropLegacyIngress {
 			return fmt.Errorf("--drop-legacy-ingress stops rendering the Ingress objects beside the Gateway, and --ingress-controller nginx makes them the only front end; give one")
 		}
+		alertRequest, err := upgradeAlerts.request()
+		if err != nil {
+			return err
+		}
+		upgradeAlertRequest = alertRequest
 		mqttFailClosed := mqttFailClosedFlag(cmd.Flags().Changed, upgradeMqttFailClosed)
 		upgradeBrokerMaxConnectionsGiven = cmd.Flags().Changed("broker-max-connections")
 		upgradeEventStoreMaxWALGiven = cmd.Flags().Changed("event-store-max-wal-mib")
 		upgradeEventStoreCheckpointGiven = cmd.Flags().Changed("event-store-checkpoint-timeout")
 		if err := bootstrap.CheckMQTTExposureFlagsForUpgrade(upgradeMQTTExposure, upgradeMQTTHost); err != nil {
 			return err
+		}
+		upgradeDevAllowEgressList = nil
+		if cmd.Flags().Changed("dev-allow-egress") {
+			if upgradeDevAllowEgressList, err = bootstrap.ParseDevAllowEgress(upgradeDevAllowEgress); err != nil {
+				return err
+			}
+			if upgradeDevAllowEgressList == nil {
+				return fmt.Errorf("--dev-allow-egress needs an IP address, a CIDR or 'none'")
+			}
+			if err := bootstrap.CheckDevAllowEgressContext(upgradeKubeContext, upgradeDevAllowEgressList); err != nil {
+				return err
+			}
 		}
 		if upgradeResetValues && len(upgradeValues) > 0 {
 			return fmt.Errorf("--values replaces the recorded overlay and --reset-values removes it; give one")
@@ -296,7 +350,7 @@ store), says so when it rises, and warns when the volume has less free space tha
 		if err := bootstrap.CheckSparkplugFlags(upgradeSparkplugSources, upgradeWithdrawSparkplug); err != nil {
 			return err
 		}
-		opts := upgradeOptions(args[1], mqttFailClosed, valuesOverlay)
+		opts := upgradeOptions(args[1], mqttFailClosed, mqttDeviceUplinksFlag(cmd.Flags().Changed, upgradeMqttDeviceUplinks), valuesOverlay)
 		return bootstrap.Upgrade(cmd.Context(), provider, opts)
 	},
 	SilenceUsage: true,
@@ -305,7 +359,7 @@ store), says so when it rises, and warns when the volume has less free space tha
 func init() {
 	upgradeCmd.Flags().StringVar(&upgradeKubeContext, "kube-context", "", "kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)")
 	upgradeCmd.Flags().StringVar(&upgradeRegistry, "registry", "", "image registry to pull from (default: "+bootstrap.DefaultImageRegistry+")")
-	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "release version to upgrade to (default: this dcctl's pinned version)")
+	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "release version to upgrade to; must be this dcctl's own release (default: the version the instance is declared at)")
 	upgradeCmd.Flags().BoolVar(&upgradeDryRun, "dry-run", false, "print what would happen without changing anything")
 	upgradeCmd.Flags().BoolVarP(&upgradeAssumeYes, "yes", "y", false, "assume yes for prompts (an upgrade asks none, so this changes nothing; it is accepted so a script can pass the same flag to install, bootstrap and upgrade)")
 	upgradeCmd.Flags().StringVar(&upgradeEscrowFile, "escrow-file", "", "where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on")
@@ -316,6 +370,7 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeWithdrawLwm2m, "withdraw-lwm2m-identities", false, withdrawLwm2mUsage)
 	upgradeCmd.Flags().StringVar(&upgradeSparkplugSource, "sparkplug-source", "", sparkplugSourceUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeWithdrawSparkplug, "withdraw-sparkplug-sources", false, withdrawSparkplugUsage)
+	upgradeCmd.Flags().BoolVar(&upgradeMqttDeviceUplinks, "mqtt-device-uplinks", false, mqttDeviceUplinksUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	upgradeCmd.Flags().StringSliceVar(&upgradeTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
 	upgradeCmd.Flags().IntVar(&upgradeBrokerMaxConnections, "broker-max-connections", 0, brokerMaxConnectionsUsage)
@@ -323,8 +378,10 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeEventStoreCheckpoint, "event-store-checkpoint-timeout", "", eventStoreCheckpointUsage)
 	upgradeCmd.Flags().StringVar(&upgradeMQTTExposure, "mqtt-exposure", "", mqttExposureUsage)
 	upgradeCmd.Flags().StringVar(&upgradeMQTTHost, "mqtt-host", "", mqttHostUsage)
+	upgradeCmd.Flags().StringSliceVar(&upgradeDevAllowEgress, "dev-allow-egress", nil, devAllowEgressUsage)
 	upgradeCmd.Flags().StringVar(&upgradeIngressController, "ingress-controller", "", ingressControllerUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeDropLegacyIngress, "drop-legacy-ingress", false, dropLegacyIngressUsage)
+	upgradeAlerts.register(upgradeCmd)
 	upgradeCmd.Flags().BoolVar(&upgradeResetValues, "reset-values", false, "remove the tuning overlay recorded on the instance: it returns to the values dcctl computes. Cannot be combined with --values")
 	upgradeCmd.Flags().StringVar(&upgradeEscrowPass, "escrow-passphrase-file", "", "read the escrow passphrase from this file (or $"+bootstrap.EscrowPassphraseEnv+"). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase")
 

@@ -8,8 +8,51 @@ title: 可观测性与指标
 DeviceChain 内置可观测性：每个服务都提供 **Prometheus 指标**和标准 Kubernetes 健康探针。`dcctl install` 在集群上部署完整 **Prometheus + Grafana + Alertmanager** 栈，覆盖该集群上的每个实例，新安装从第一分钟起即可监控，无需另行拼装监控项目。
 
 :::note 状态
-监控栈（由 `dcctl install` 部署 kube-prometheus-stack）及其 Grafana 仪表盘已经实现并经过端到端验证：一个实例总览和七个阶段仪表盘，详见 [Grafana 仪表盘](./grafana-boards.md)，并附带告警规则。OTLP 分布式追踪属于计划中的后续工作。
+监控栈（由 `dcctl install` 部署 kube-prometheus-stack）及其 Grafana 仪表盘已经实现并经过端到端验证：一个实例总览和七个阶段仪表盘，详见 [Grafana 仪表盘](./grafana-boards.md)，并附带告警规则。
 :::
+
+## 分布式追踪（OpenTelemetry）
+
+追踪**默认关闭**。启用后，GraphQL 请求和 HTTP/MQTT 设备接入会创建 span。
+W3C TraceContext 会沿着 NATS 入站事件、device-management 解析、已解析事件发布、
+event-management 存储以及 event-processing 处理传递。服务名称为 `devicechain-<area>`。
+仅传播 TraceContext，不传播 baggage。
+
+请将所有服务指向运维人员管理的 OTLP 接收端，例如已启用 OTLP 接收器的
+OpenTelemetry Collector、Jaeger 或 Tempo。添加以下 Helm values 覆盖配置
+（也可用于 `dcctl bootstrap|upgrade --values`），然后升级以重启服务：
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      tracing:
+        enabled: true
+        protocol: grpc
+        endpoint: otel-collector.observability.svc:4317
+        insecure: true
+        samplingRatio: 0.1
+```
+
+示例使用集群内明文传输。使用 TLS 时保持 `insecure: false`。如需通过 HTTP 发送 OTLP，
+设置 `protocol: http`、`endpoint: http://otel-collector.observability.svc:4318` 和
+`insecure: true`；使用 TLS 时则设置 `https://` 地址和 `insecure: false`。
+接收端需要单独部署，DeviceChain 不会自动安装。
+
+不带路径的 HTTP 端点会发送到 `/v1/traces`；如接收端位于路径前缀之后，请写明路径，
+系统将按原样使用。导出器仍会读取标准的 `OTEL_EXPORTER_OTLP_*` 环境变量，
+如果在 Pod 上设置了它们，可能覆盖这里的配置。
+
+在 DeviceChain 服务之间，采样遵循父 span：在第一个服务被采样的追踪会在后续流程中继续采样。
+设备或 API 调用方自带的 `traceparent` 不会决定采样：请求会开始一条新的本地追踪，
+并链接到调用方的追踪。解析失败而进入死信的事件，以及为重试而重新发布的事件，
+会开始新的追踪，而不是延续原追踪。省略 `samplingRatio` 时，
+启用追踪会采样 10% 的新根追踪。显式设置 `0` 表示不采样新根追踪，`1` 表示全部采样。
+繁忙设备群应从低采样率开始，排查问题时再短暂提高。不会记录凭据、设备令牌、
+GraphQL 变量或文档正文。记录内容包括租户 ID、传输方式、操作名称和 HTTP 状态。
+
+追踪会增加 CPU、网络流量、消息头字节数和接收端存储成本，请综合规划保留期与采样率。
+设置 `enabled: false` 并重启即可关闭；关闭时不会创建导出器或追踪 goroutine。
 
 ## 每个服务暴露什么 {#what-every-service-exposes}
 
@@ -103,6 +146,49 @@ DeviceChain 内置可观测性：每个服务都提供 **Prometheus 指标**和�
 重新运行 `dcctl install` 会把监控栈升级到该版本固定的版本。Helm 从不升级 chart 的自定义资源定义，因此监控栈会先运行 chart 自带的 CRD 升级 Job：`monitoring` 命名空间中的一个短生命周期 Job 在新的 operator 启动之前，以服务端方式应用 Prometheus Operator 的 CRD，无需手动应用。该 Job 会拉取两个镜像（`busybox` 和 `registry.k8s.io/kubectl`），无法访问这些镜像仓库的集群需要先镜像它们。
 
 从早期版本的监控栈升级到此版本，会跨越 Prometheus 的一个主版本（2 到 3）和 Grafana 的一个主版本（11 到 13）。Prometheus、Alertmanager 和 Grafana 各重启一次；Grafana 管理员登录、其 `ClusterIP` Service 以及每个实例的仪表盘文件夹保持不变。使用持久卷的集群会保留 Prometheus 已存储的指标；本地集群只把指标保存在节点磁盘上，升级后从空开始。
+
+## 将告警路由给真人 {#alert-routing}
+
+平台附带的告警规则会监视数据丢失、卡住的消费者、失败的备份以及即将过期的证书。规则只有在触发时有人收到通知才有意义，而开箱即用时没有人会收到：Alertmanager 启动时使用的接收器会丢弃所有告警。处于这种状态的实例会报告出来：`dcctl instances list` 会在它旁边显示 `ALERTS NOT ROUTED`，实例的 `AlertsRouted` 状态条件为 `False`。该条件不会使实例变为未就绪。
+
+可以在安装时给 Alertmanager 配置接收器，也可以之后在任意实例上配置：
+
+```bash
+# Webhook：兼容 Slack 的中继、PagerDuty、Opsgenie 以及大多数事件管理工具都接受。
+dcctl install local --alert-webhook https://hooks.example.com/services/T000/B000/XXXX
+
+# 电子邮件。密码从文件读取，不会留在 shell 历史记录中。
+dcctl install local \
+  --alert-email oncall@example.com --alert-email backup@example.com \
+  --alert-smtp-host smtp.example.com:587 --alert-smtp-from alerts@example.com \
+  --alert-smtp-user alerts --alert-smtp-password-file ~/.secrets/smtp-password
+
+# 之后修改，无需改动集群的前置组件。
+dcctl upgrade local my-instance --alert-webhook https://hooks.example.com/services/T000/B000/YYYY
+```
+
+- **所有告警都会发送**，包括 `critical`、`warning` 和 `info`。同一告警、同一命名空间下，`critical` 会抑制 `warning`。
+- **URL 和 SMTP 密码保存在 Secret 中**（`monitoring` 命名空间里的 `dc-alertmanager-config`），而不是你本机的基础设施状态里。实例只记录存在哪几种接收器。
+- **只要指定任意一个 `--alert-*` 参数，就会重新声明全部路由。**单独使用 `--alert-email` 会移除之前设置的 webhook。不带任何 `--alert-*` 参数的运行会保持路由不变，因此为了修改其他内容而重新运行 `dcctl install` 不会撤销它。`--clear-alert-routing` 用于移除路由。
+- **`dcctl upgrade` 只能修改已由 `dcctl install` 准备好的集群。**由早期版本安装的集群需要先运行一次 `dcctl install`，使用与之前相同的参数再加上告警参数。它会就地应用集群前置组件。
+- **没有监控栈就没有路由。**使用 `--no-monitoring` 时，实例不会渲染告警规则，`--alert-*` 参数会被拒绝。
+
+### 得知告警系统本身已停止工作
+
+如果 Alertmanager 宕机，或无法连接其接收器，就不会有任何告警送达，而没有告警的集群看上去与健康的集群毫无区别。`Watchdog` 告警正是为此而设：它按设计始终处于触发状态。把它发送到死人开关（dead-man's-switch）服务（Healthchecks、Dead Man's Snitch、Cronitor），当心跳停止时由该服务通知你：
+
+```bash
+dcctl install local --alert-webhook https://hooks.example.com/... \
+  --alert-watchdog-webhook https://hc-ping.example.com/your-check-uuid
+```
+
+Watchdog 每分钟发送一次到它专用的接收器，绝不会发送到真人阅读的接收器。不指定 `--alert-watchdog-webhook` 时它会被丢弃，`AlertsRouted` 条件会说明告警链路一旦静默将无人察觉。
+
+### Webhook 和电子邮件之外的接收器
+
+`--alert-config <文件>` 原样使用你自己的 Alertmanager 配置。Slack、PagerDuty、Opsgenie 或 Teams 接收器，以及按标签路由，都可以用它。它不能与其他 `--alert-*` 参数同时使用。`dcctl` 会检查文件能否解析、每条路由是否指向文件中定义的接收器，以及是否有接收器真正会投递到某处，但不会发送测试消息，也不是 Alertmanager 自己的解析器：请先对该文件运行 `amtool check-config`，因为拒绝某份配置的 Alertmanager 会继续使用上一份配置运行。请在你的文件内路由 `Watchdog` 告警：当某条路由选中 `alertname = "Watchdog"` 且其接收器会投递时，`dcctl` 会将其计为已路由。
+
+每条告警都带有 `runbook_url`，会打开其在[告警手册](./alert-runbook.md)中的条目，因此通知可以直接链接到它的含义以及该怎么处理。
 
 ## 登录 Grafana {#signing-in-to-grafana}
 
@@ -333,6 +419,8 @@ kubectl -n dci-my-instance patch pvc <claim> -p '{"spec":{"resources":{"requests
 
 最近十分钟内，MQTT 来源只要在租户的摄取上限处丢弃了任何消息（`devicechain_eventsources_total_msg_shed_acknowledged` 上升），`MqttIngestShedAfterAcknowledgement`（warning）立即触发。它没有等待期，因为平台停顿造成的丢弃只持续数秒。这些消息在丢弃之前，代理已向设备确认（PUBACK），设备不会重发：它们是丢失，而不是延后。原因要么是租户发送量超过其上限，要么是平台短暂停顿后积压的消息一起到达。该计数器带有来源而非租户：请按丢弃等级对比 `total_msg_rate_limited` 和 `total_msg_reading_limited`，把日志级别调到 `debug` 以查看租户，核对其上限与设备实际发送量，并在消息代理日志中查找耗时过长的内部订阅。HTTP 的丢弃会以 `429` 应答并被重试，因此不计入此处。
 
+启用 `eventSources.ingestMetering: lagCredit` 后，`devicechain_eventsources_ingest_shed_cause_total{stream,route,cause}` 会给出每条消息被丢弃的原因。当 `ingest_lag_credit_seconds` 偏高时，`route="fresh"` 上出现 `cause="ceiling"` 的丢弃，说明有租户未超出上限，却在一次大于额度的停顿之后被丢弃，请上报。`cause="contention"` 和 `cause="hard_drop"` 是过载档位按配置在起作用，`route="backlog"` 上的丢弃则是租户在被排空的积压中超出了上限。`reader_lag_seconds` 和 `append_skew_seconds` 显示各副本的测量值；偏差停在任一方向的 2 秒（`append_skew_clamped_total` 上升）意味着消息代理的时钟与 Pod 时钟相差超出了闸门可修正的范围。告警 [`IngestShedBeyondLagCredit`](./alert-runbook.md#ingestshedbeyondlagcredit) 和 [`IngestAppendSkewLarge`](./alert-runbook.md#ingestappendskewlarge) 在此模式下监视这些序列；在 `legacy` 模式下这些序列为空，两个告警都不会触发。
+
 ## 超过确认窗口的消息 {#held-past-ack-wait}
 
 代理为每条交付消息提供固定确认窗口。窗口关闭仍未确认，会重新交付，服务按新消息处理。告警通知和对外连接器的工作是向平台外慢速发送，因此可能重复通知或调用 webhook。两者仅在有空闲 worker 时读取相应数量消息，避免排队消耗窗口；每次发送也会在窗口结束前留有余量地截止。下列告警报告仍超时的情况。
@@ -405,8 +493,8 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | --- | --- | --- |
 | `BrokerMqttClientAuthLost`（warning） | 在十分钟内，`pod` 标签所指的代理服务器要么通过 TLS 提供 MQTT 却没有请求客户端证书，要么没有运行 DeviceChain 代理镜像（指标边车报告了该服务器，但服务器本身没有报告任何自己的指标）。用证书认证的设备无法连接；使用令牌或密码的设备不受影响。 | 检查服务器的镜像：`kubectl get pod -n <namespace> <pod> -o jsonpath='{.spec.containers[0].image}'`。如果是上游 `nats` 镜像，说明实例已回退到该镜像，在恢复 DeviceChain 镜像之前，证书设备会一直被拒绝。如果是 DeviceChain 镜像，请阅读服务器最近一次重新加载配置前后的日志，查找说明监听器没有请求客户端证书、或检查无法完成的那一行，然后重启该 Pod 并报告日志。 |
 | `BrokerLeadershipImbalanced`（warning） | 在三十分钟内，至少有一台代理服务器所领导的流不到均分份额的一半。只统计 `dcctl` 可以移动的流：此实例中除设备摄入流之外的已复制流，设备摄入流永远不会被重新均衡。滚动重启之后，最后重启的服务器不领导任何流，其余服务器领导全部，这会增加发布延迟并略微降低摄入吞吐量。`dcctl upgrade` 会在滚动代理后重新均衡领导权，所以只有在以其他方式重启（节点排空、Pod 丢失、手动滚动）或该步骤给出警告时才会触发。 | 运行 `dcctl broker rebalance <instance>`；每次移动只是针对一个流的短暂选举，已经均衡的代理不会被改动，只是会让已解析事件的流避开领导设备采集流或入站流的服务器。消息仪表板上的 *Stream leaders per server* 面板显示分布情况。如果不久后再次出现，请检查代理是否反复重启。 |
-| `BrokerCertificateExpiringSoon`（warning） | 持续一小时，`pod` 标签所指的代理服务器所提供的 TLS 证书将在不到 30 天且多于 7 天内到期。证书到期后，代理会拒绝来自设备和实例自身服务的 TLS 连接。证书只由 `dcctl upgrade` 续期，所以大约十一个月没有升级的实例会走到这一步。 | 运行 `dcctl upgrade <instance>`：它会在证书最后 30 天内重新签发证书，且只有证书变化时无需重启代理即可原地切换。服务器开始提供新证书后告警即解除。如果升级后仍持续触发，说明服务器没有切换；请阅读其日志并重启该 Pod。 |
-| `BrokerCertificateExpiryCritical`（critical） | 持续十分钟，服务器所提供的证书将在不到 7 天内到期，或已经过期。 | 立即运行 `dcctl upgrade <instance>`。由早期版本引导的实例不保留其证书颁发机构，无法原地重新签发证书；`dcctl upgrade` 会明确说明，此时必须重建该实例。如果已经升级而告警仍在触发，请重启该服务器 Pod。 |
+| `BrokerCertificateExpiringSoon`（warning） | 持续一小时，`pod` 标签所指的代理服务器所提供的 TLS 证书将在不到 30 天且多于 7 天内到期。证书到期后，代理会拒绝来自设备和实例自身服务的 TLS 连接。证书只由 `dcctl upgrade` 续期，所以大约十一个月没有升级的实例会走到这一步。 | 先运行 `dcctl install <provider>`，再用同一个 `dcctl`（并沿用安装集群时的设置）运行 `dcctl upgrade <provider> <instance>`：它会在证书最后 30 天内重新签发证书，且只有证书变化时无需重启代理即可原地切换。服务器开始提供新证书后告警即解除。如果升级后仍持续触发，说明服务器没有切换；请阅读其日志并重启该 Pod。 |
+| `BrokerCertificateExpiryCritical`（critical） | 持续十分钟，服务器所提供的证书将在不到 7 天内到期，或已经过期。 | 立即先运行 `dcctl install <provider>`，再用同一个 `dcctl`（并沿用安装集群时的设置）运行 `dcctl upgrade <provider> <instance>`。由早期版本引导的实例不保留其证书颁发机构，无法原地重新签发证书；`dcctl upgrade` 会明确说明，此时必须重建该实例。如果已经升级而告警仍在触发，请重启该服务器 Pod。 |
 
 这两条证书告警读取 `dc_broker_mqtt_tls_cert_not_after_seconds`，即代理此刻向新连接提供的证书的到期时间，因此它们反映设备实际看到的情况：已写入但从未被应用的续期会让告警持续，而代理一旦切换，告警即解除。代理不终止 TLS 时它们保持安静，且不覆盖证书颁发机构（有效期十年）。如果代理的指标端口没有被抓取（例如 `dc-metrics` 出故障的紧凑实例），则不会有任何告警，上述条件是唯一的信号。`Instance` 的 `BrokerCertificateValid` 条件无需 Prometheus 即可报告同样的到期时间以及颁发机构的到期时间；参见[代理证书到期](./kubernetes-operator.md#broker-certificate-expiry)。
 
@@ -771,7 +859,7 @@ UPDATE "event-management".calculated_backfills
 | device-state | `inactivity_sweep` |
 | event-sources | `presence_demote`, `presence_reconcile`, `presence_canary` |
 | device-management | `ownership_drain`, `session_kick_drain` |
-| command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile` |
+| command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile`, `campaign_scheduler` |
 | event-processing | `detect_tick`, `rule_health_flush`, `shed_summary` |
 | lwm2m-ingest | `tenant_sweep` |
 | sparkplug-ingest | `presence_probe` |
@@ -869,26 +957,28 @@ chart 覆盖链条各环节：
 
 ## 令牌受众检查 {#token-audience-checks}
 
-每个 API 都会检查访问令牌绑定到哪个资源，授权服务器则检查客户端申请哪个资源。规则见[令牌受众](../concepts/security-model.md#token-audience)。检查只做观察时（这是 `v1.2` 的默认），下面的序列和告警就是你找出 `v1.3` 会拒绝的客户端的方法。当 chart 的告警处于开启状态（`metrics.alerts`，默认开启）时，它们就存在。
+每个 API 检查访问令牌的受众，授权服务器检查请求的资源。从 `v1.4` 起，两项检查始终强制执行；下面的序列将拒绝计为 `rejected`。启动加载器、chart 的值模式和升级前的 `dcctl` 都拒绝 `enforcement: observe`。指标和告警为兼容旧实例保留。
 
 | 序列 | 标签 | 如何读取 |
 | --- | --- | --- |
-| `devicechain_<区域>_token_audience_checks_total` | `plane`、`audience`、`verdict` | 每个到达某个服务的已认证请求计一次（`graphql_ws` 则在连接完成认证时按连接计一次）。`audience` 是令牌的绑定对象，从该服务的角度看：`none`、`own_area`、`mcp`、`other_area`、`external` 或 `unlisted`。`verdict` 是 `accepted`、`would_reject`（observe：统计并照常处理）或 `rejected`（enforce：以 `401` 拒绝，WebSocket 则以关闭码 `4401` 关闭连接）。`plane` 是接收请求的入口：`graphql`、`graphql_ws`、`admin`、`settings`、`upload`、`branding` 或 `userinfo`；每个服务只报告它具备的入口。 |
+| `devicechain_<area>_token_audience_checks_total` | `plane`、`audience`、`verdict` | 每个到达某个服务的已认证请求计一次（`graphql_ws` 则在连接完成认证时按连接计一次）。`audience` 是令牌的绑定对象，从该服务的角度看：`none`、`own_area`、`mcp`、`other_area`、`external` 或 `unlisted`。`verdict` 是 `accepted`、`would_reject`（observe (v1.2/v1.3)：统计并照常处理）或 `rejected`（enforce：以 `401` 拒绝，WebSocket 则以关闭码 `4401` 关闭连接）。`plane` 是接收请求的入口：`graphql`、`graphql_ws`、`admin`、`settings`、`upload`、`branding` 或 `userinfo`；每个服务只报告它具备的入口。 |
 | `devicechain_usermanagement_oauth_resource_checks_total` | `grant`、`resource`、`verdict` | 授权服务器每做出一次资源判定计一次。`grant` 是 `authorization_code`、`refresh_token` 或 `client_credentials`。`resource` 是所申请内容的类别：`none`、`area`、`mcp`、`external`、`unlisted`、`malformed` 或 `multiple`。`resource` 与其授权码或刷新令牌所绑定的资源不同的请求也会计入这里。 |
 | `devicechain_usermanagement_oauth_unscoped_client_credentials_total` | `verdict` | 指定了资源却未指定 scope 的 `client_credentials` 请求，这种请求已被弃用。判定始终是 `would_reject`，请求照常处理。 |
-| `devicechain_mcp_token_audience_registered` | 无 | MCP 服务器的 `resourceUrl` 在 `infrastructure.tokenAudience.mcpResources` 中时为 1，不在时为 0。为 0 表示 MCP 服务器转发的调用被计为 `would_reject`，并且在启用强制执行后 `mcp` 会拒绝启动。 |
+| `devicechain_mcp_token_audience_registered` | 无 | MCP 的 resourceUrl 位于 `infrastructure.tokenAudience.mcpResources` 中时为 1，否则为 0。缺少时 MCP 拒绝启动。 |
 
-健康的实例只有 `accepted` 判定。前两行的 `would_reject` 序列有变化，说明某个客户端发送的令牌或请求会被 `v1.3` 拒绝；第三行有变化，则说明有请求会被下一个主版本拒绝。读取这些数字时请记住两点：
+前两行的 `rejected` 表示客户端被拒绝；其中的 `would_reject` 来自运行 observe 的历史 `v1.2`/`v1.3` 实例。第三行在 `v1.4` 仍有效：未指定 scope 的客户端凭据请求仍计为 `would_reject` 并被处理。
 
 - **它们统计的是请求，不是客户端。** 一个持续发送同一令牌的客户端，每次调用都会让某个序列增加，而且入口是在 GraphQL 授权运行之前计数的。序列不为零回答的是“有没有客户端这样做”，日志回答的是“是哪一个”。伪造或过期的令牌永远不会让入口计数器增加，因为检查是在验证签名之后进行的。授权服务器的计数器在客户端通过认证之后才增加，只有一个例外：授权端点在任何人登录之前就对请求计数，所用的值都是公开的，所以任何能访问该页面的人都可以让它的序列增加。
-- **`rejected` 只在强制执行时出现。** 使用 `observe` 时它保持为零。
+- 受众和资源检查在 `v1.4` 中产生 `accepted` 或 `rejected`；`would_reject` 为旧实例保留。独立的无 scope 客户端凭据计数器仍产生 `would_reject`。
 
-有两个 `info` 级告警监视 `would_reject` 判定。两者都在序列最近一小时的速率持续一小时大于零之后触发，并在最后一个违规请求之后大约一小时自行解除。它们都不带租户标签；kube-prometheus-stack 默认的 Alertmanager 配置会抑制 `info` 级告警，所以如果想收到它们，请显式配置路由。
+升级到 `v1.4` 前，修正旧实例的 `would_reject` 计数器识别出的客户端，并从值、已存储的 overlay、上一个 release 的值以及自己编写的 Secret 文档中删除 `enforcement: observe`。未设置即为 enforce。
+
+`TokenAudienceWouldReject` 和 `OAuthResourceWouldReject` 为兼容性保留，不能由 `v1.4` 实例触发；只能由运行 observe 的 `v1.2`/`v1.3` 实例触发。两者均为 `info` 告警，要求过去一小时的速率连续一小时为正。
 
 | 告警 | 严重程度 | 含义 | 处理方式 |
 | --- | --- | --- | --- |
-| `TokenAudienceWouldReject` | info | 至少一小时内，某个服务收到的请求所带访问令牌绑定到了它所提供资源之外的资源，且该资源不是已注册的 MCP 资源。目前这些请求照常处理，`v1.3` 会以 `401` 拒绝它们。 | 在该服务的日志中找到客户端：一条有限频的警告 `Token audience is not accepted by this plane`，带有 `client_id`、`tenant`、`plane`、`audience`、`sub_kind` 和令牌的 `aud`。让客户端改为申请它所调用资源的令牌，或不绑定任何资源。每个 Pod 对每个入口、受众和客户端的组合每分钟最多写一行，`suppressed` 统计被压下的行数。第一方令牌的 `client_id` 为空。 |
-| `OAuthResourceWouldReject` | info | 至少一小时内，授权服务器收到的令牌请求或授权请求指定了本实例不提供的资源。目前这些请求照常处理，`v1.3` 会以 `invalid_target` 拒绝它们，刷新则返回 `invalid_grant`。 | 在 `user-management` 的日志中找到客户端：一条有限频的警告 `OAuth resource is not one this instance serves`，带有 `client_id`、`tenant`、`grant`、`resource_class` 和所申请的 `resource`。`sender_authenticated=false` 表示请求是在登录之前到达授权端点的，因此 `client_id` 只是发送方自称的值。让客户端省略该资源，或改用本实例提供的资源。如果该资源是你自己的服务，请把它列入 `externalResources`。 |
+| `TokenAudienceWouldReject` | info | 至少一小时内，某个服务收到的请求所带访问令牌绑定到了它所提供资源之外的资源，且该资源不是已注册的 MCP 资源。这些请求之所以照常处理，只是因为实例设置了 `observe` (v1.2/v1.3)。默认的 `enforce` 会以 `401` 拒绝它们。 | 在该服务的日志中找到客户端：一条有限频的警告 `Token audience is not accepted by this plane`，带有 `client_id`、`tenant`、`plane`、`audience`、`sub_kind` 和令牌的 `aud`。让客户端改为申请它所调用资源的令牌，或不绑定任何资源。每个 Pod 对每个入口、受众和客户端的组合每分钟最多写一行，`suppressed` 统计被压下的行数。第一方令牌的 `client_id` 为空。 |
+| `OAuthResourceWouldReject` | info | 至少一小时内，授权服务器收到的令牌请求或授权请求指定了本实例不提供的资源。这些请求之所以照常处理，只是因为实例设置了 `observe` (v1.2/v1.3)。默认的 `enforce` 会以 `invalid_target` 拒绝它们，刷新则返回 `invalid_grant`。 | 在 `user-management` 的日志中找到客户端：一条有限频的警告 `OAuth resource is not one this instance serves`，带有 `client_id`、`tenant`、`grant`、`resource_class` 和所申请的 `resource`。`sender_authenticated=false` 表示请求是在登录之前到达授权端点的，因此 `client_id` 只是发送方自称的值。让客户端省略该资源，或改用本实例提供的资源。如果该资源是你自己的服务，请把它列入 `externalResources`。 |
 
 已弃用的 `client_credentials` 请求在 `user-management` 的日志中有它自己的警告 `A client_credentials request named a resource without a scope`，带有客户端和租户，但没有告警。参见[服务账号](../user-guide/service-accounts.md#binding-a-token-to-a-resource)。
 
@@ -1021,3 +1111,9 @@ Deployment 转发只到**一个** Pod。多副本时按名称选择目标：`kub
 
 - **[初始化实例](./bootstrap.md#install)**：部署监控栈的 `dcctl install` 及标志。
 - **[部署与 Operator](./kubernetes-operator.md)**：chart 如何生成带健康探针的逐服务工作负载。
+
+:::tip 动手试试
+
+**约 30 分钟，跑通你的第一台设备.** 在本地安装 DeviceChain，连接一台模拟设备，并查看它的遥测数据如何到达。 [开始快速入门 →](../quickstart/first-device.md)
+
+:::

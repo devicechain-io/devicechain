@@ -77,7 +77,13 @@ EXEMPTIONS=(
 
   "backend/services/update-management/model.Api.VerifyCapability@hmac.Equal=not a guessable credential check: it verifies a 256-bit HMAC-SHA256 over one device, one assignment and one artifact digest, with a fifteen minute ceiling and a key per tenant, on a request that has no principal to back off and no per-account state to throttle. The signature is checked before any assignment, attempt or artifact row is read; the only read that precedes it is the tenant key, which comes from a bounded cache or one secret-store lookup (never created on this path) and is remembered as absent for a few seconds, so a caller naming tenants that have no key costs at most one store read per tenant name per few seconds, and the download slots bound how many such checks run at once"
 
+  "backend/core/webhooksig.Verify@hmac.Equal=not a credential check: it is the verifier published for webhook receivers (and used by tests), comparing a signature a receiver was sent against one it computes with its own secret, in a receiver's process; no platform principal is being authenticated and there is no attempt to back off"
+
   "backend/tools/drdrill.classify@subtle.ConstantTimeCompare=test instrument: the restore drill checks a decrypted plaintext against the one it seeded itself"
+
+  "backend/sims/dc-simulator/lorawan.Downlink.ServeHTTP@subtle.ConstantTimeCompare=test instrument: the simulator's fake network-server queue checks the API key its own operator set in DC_SIM_LORAWAN_API_KEY for one run on a developer machine; it guards no account and no platform principal, so there is nothing to back off"
+
+  "backend/edge/dc-edge-agent/agent.Agent.sealed@subtle.ConstantTimeCompare=not a guessable credential check: the seal is a random per-box token, minted into the agent's own store directory, that tells a message the agent published from one a local MQTT client wrote to the same subject. It is not an account password, there is no principal to back off, and a wrong seal is refused and counted, never admitted"
 )
 
 TMP="$(mktemp -d)"

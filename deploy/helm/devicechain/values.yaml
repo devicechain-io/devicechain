@@ -276,6 +276,14 @@ instance:
         # for streamReplicas 3. Turning it off again hands the store back once its consumers
         # are drained.
         # mqttFailClosed: false
+        # Raw device payloads over MQTT (off by default). On, every device is granted its OWN
+        # {instance}/{tenant}/devices/{device}/uplink topic, where it may publish a payload of
+        # its own (a binary frame, or JSON in a vendor's shape) for the decoder on its device
+        # type's profile to read. Turn it on only after every event-sources and
+        # device-management replica runs a release that knows the topic, in an upgrade of its own
+        # (the capture stream gains the topic when this is on). A device is granted the topic when
+        # it next connects, and loses it the same way when this is turned off.
+        # mqttDeviceUplinks: false
         # The JetStream KV buckets (device caches, locks, refresh tokens, OAuth
         # codes, sign-in attempt counts). They are streams too — backed by KV_-prefixed streams in the same
         # account — so a bounded bucket reserves its ceiling up front like any other.
@@ -384,6 +392,19 @@ instance:
         # file, or a pre-created instance Secret — logs a warning naming the key and
         # starts, rather than being refused as unknown.
         enabled: true
+      # OpenTelemetry is off by default. Restart services after changing FIXED config.
+      # While enabled is false the chart leaves this block out of the instance document, so a
+      # pod of an earlier release, which does not know the key, still starts during an upgrade.
+      # OTLP gRPC: collector.observability.svc:4317; HTTP: http://collector.observability.svc:4318
+      # An HTTP endpoint without a path posts to /v1/traces; give a path to use another.
+      # The OTEL_EXPORTER_OTLP_* environment variables, if set on a pod, still apply to the exporter.
+      # Set insecure: true only for plaintext transport. TLS is the default.
+      # samplingRatio may be omitted (0.1 when enabled); explicit 0 samples no roots.
+      tracing:
+        enabled: false
+        protocol: grpc
+        endpoint: ""
+        insecure: false
       graphql:
         # The largest single inbound WebSocket message the GraphQL subscription
         # endpoint will read, in bytes.
@@ -543,12 +564,12 @@ instance:
       # loopback origin, so a plain-http ingress on a real host has no area audiences) and
       # mcpResources (mcp's resolved resourceUrl, when mcp is deployed) from the ingress and the
       # enabled areas, and refuses to render if either is set here. The operator's keys:
-      #   enforcement: observe | enforce            (unset = the release default, observe)
+      #   enforcement: enforce                      (unset = enforce; v1.4 always enforces)
       #   unscopedClientCredentials: observe          (enforce is refused until the next major release)
       #   externalResources: [https://api.example.com]   (resource servers outside the platform)
       # Under instance.existingSecret the chart does not write the document, so the supplier
-      # writes the keys they need, and dcctl checks that mcpResources lists mcp's resourceUrl (a warning
-      # while enforcement is observe or unset, a refusal under enforce).
+      # writes the keys they need. dcctl checks that mcpResources lists mcp's resourceUrl;
+      # a missing resource is refused before deployment and by mcp at startup.
       serviceAuth:
         # Shared secret backing the synchronous cross-service call primitive
         # (ADR-044 amendment): a caller presents it to user-management's mint
@@ -606,6 +627,14 @@ instance:
         # though it were not.
         allowedDestinations: []
         # - "10.42.0.17/32"   # the in-cluster SMTP relay
+        # LOCAL DEVELOPMENT ONLY. Written by `dcctl bootstrap|upgrade --dev-allow-egress` for an
+        # instance on a local cluster; do not set it for a real deployment (use allowedDestinations
+        # after reading the notes above). Same shape as allowedDestinations (masked CIDRs), but it can
+        # never admit the cloud metadata addresses, loopback, link-local, multicast or the unspecified
+        # address, and every service that reads it logs a warning at startup. A prefix overlapping
+        # one of those fails the service at startup.
+        # Left out unless set: a pod of an earlier release refuses a key it does not know.
+        # devAllowedDestinations: []
       blob:
         # Object/asset-store backend for opaque binaries that do not belong in
         # Postgres (branding logos and firmware/OTA update artifacts; exports later, ADR-058).
@@ -1062,8 +1091,8 @@ eventSources:
   #   legacy     the gate as it has always run (the default).
   #   lagCredit  meter fresh traffic at pod time in a bucket whose capacity carries a measured
   #              reader-lag credit, so a short platform stall cannot shed a tenant that stayed
-  #              within its ceiling. NOT AVAILABLE YET: event-sources refuses to start with it,
-  #              rather than falling back to legacy.
+  #              within its ceiling. Measured per replica from the broker's own delivery
+  #              metadata; off by default until it has been through a production-scale round.
   # It is rendered into the event-sources pods as the EVENT_SOURCES_INGEST_METERING environment
   # variable and is deliberately not a key of the instance configuration, so a pod from an earlier
   # release that restarts mid-upgrade never sees it.
@@ -1702,6 +1731,30 @@ functionalAreas:
       #       maxGraphqlCrlBytes: 2097152 # the CRL the GraphQL mutation takes (DER bytes), 64 KiB to
       #                             # 2 MiB; larger lists use the streaming upload.
       #       maxConcurrentWrites: 1 # CRL uploads one replica works on at once, 1 to 8.
+      #       resweepAfter: 10s # how long after a revocation ends sessions the second pass falls due, to
+      #                             # catch a device being admitted at that instant; it runs on the next
+      #                             # 30 s session-kick retry, so 10-40 s at the default. Above 8s, up to 5m.
+      #     ocsp:                   # the OCSP check of a certificate connect, per trust anchor
+      #                             # (ocspMode OFF, ENFORCE_KNOWN, REQUIRE_CURRENT). OFF everywhere
+      #                             # until this switch is turned on.
+      #       enabled: false        # master switch. Off: no responder is ever asked, an anchor set to
+      #                             # ENFORCE_KNOWN runs as OFF, one set to REQUIRE_CURRENT refuses new
+      #                             # certificate connects, and the API refuses to switch an anchor on.
+      #       allowRequireCurrent: false # also lets an anchor use REQUIRE_CURRENT, which refuses a
+      #                             # certificate whose status cannot be confirmed. Needs enabled.
+      #       fetchDeadline: 400ms  # the one deadline for every fetch a connect makes, 0s to 2s. 0s is
+      #                             # cache-only: nothing is fetched on the connect path.
+      #       maxInFlight: 32       # fetches one replica has outstanding, 1 to 256. A connect never
+      #                             # queues for a slot; one tenant holds at most max(4, maxInFlight/4).
+      #       maxAge: 6h            # oldest an answer's thisUpdate may be, 5m to 168h (the replay bound).
+      #       failureTtl: 30s       # how long a failing responder is skipped before one probe, 1s to 10m.
+      #       cacheEntries: 100000  # good answers one replica holds, 1000 to 1000000.
+      #       maxResponderHostsPerTenant: 16 # distinct responder hosts a tenant's certificates may name
+      #                             # (an anchor's own ocspResponderUrl is not counted), 1 to 256.
+      #                             # An anchor's ocspResponderUrl is set by the TENANT and has the same
+      #                             # reach as the tenant's webhooks (the egress boundary, including
+      #                             # egress.allowedDestinations). A responder named by a certificate
+      #                             # never reaches an address in egress.allowedDestinations.
   event-sources:
     # CPU LIMIT raised from the 500m default. On GKE (3 x n2-standard-8, SSD
     # persistent disks, --ha, v0.18.0, shipped defaults) this service was throttled in
@@ -1872,6 +1925,10 @@ functionalAreas:
     #     httpIngest:
     #       headerTimeoutSeconds: 5    # wait for the request headers
     #       requestTimeoutSeconds: 60  # whole request, headers and body
+    #       deviceUplinks: false       # serve POST /{instanceId}/{tenant}/devices/{token}/uplink (a device's own
+    #                                  # payload, read by its type's decoder). Off by default: turn it on only after
+    #                                  # every device-management replica runs a release that reads it, or an uplink
+    #                                  # answered 202 during the roll could be refused by an old replica.
     #
     # HTTP device-ingest listener (PR #38): event-sources serves
     # POST /{instanceId}/{tenant}/events on 8081, in addition to the 8080 GraphQL/management
@@ -2336,6 +2393,9 @@ functionalAreas:
     strategy: Recreate
     config: {}
       # resourceUrl: https://<host>/api/mcp
+      # Preview proposal tools: off by default. The user-management AS-side instance
+      # switch (agentActuation.enabled) must also be on and a tenant policy published.
+      # agentActuation: {enabled: false}
       # issuerUrl: https://<host>/api/user-management
   outbound-connectors:
     # The outbound-connectors service (ADR-060): a durable consumer of the

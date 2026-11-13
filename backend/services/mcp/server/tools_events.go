@@ -20,13 +20,24 @@ type QueryMeasurementsInput struct {
 	PageSize    int    `json:"pageSize,omitempty" jsonschema:"events per page (default 25, max 100)"`
 }
 
+// MeasurementEvent is one raw reading. The metric name and unit are what the device reported,
+// so they sit under Untrusted.
 type MeasurementEvent struct {
+	DeviceToken  string                `json:"deviceToken" prov:"id"`
+	Value        *float64              `json:"value,omitempty"`
+	DataType     string                `json:"dataType,omitempty" prov:"platform"`
+	OccurredTime string                `json:"occurredTime,omitempty" prov:"platform"`
+	Untrusted    *MeasurementUntrusted `json:"untrusted,omitempty"`
+}
+
+// measurementEventRaw is the shape event-management returns.
+type measurementEventRaw struct {
 	DeviceToken  string   `json:"deviceToken"`
 	Name         string   `json:"name"`
-	Value        *float64 `json:"value,omitempty"`
-	Unit         string   `json:"unit,omitempty"`
-	DataType     string   `json:"dataType,omitempty"`
-	OccurredTime string   `json:"occurredTime,omitempty"`
+	Value        *float64 `json:"value"`
+	Unit         string   `json:"unit"`
+	DataType     string   `json:"dataType"`
+	OccurredTime string   `json:"occurredTime"`
 }
 
 type QueryMeasurementsOutput struct {
@@ -61,7 +72,7 @@ func (t *Tools) QueryMeasurements(ctx context.Context, req *mcp.CallToolRequest,
 
 	var resp struct {
 		MeasurementEvents struct {
-			Results    []MeasurementEvent `json:"results"`
+			Results    []measurementEventRaw `json:"results"`
 			Pagination struct {
 				TotalRecords int `json:"totalRecords"`
 			} `json:"pagination"`
@@ -70,10 +81,17 @@ func (t *Tools) QueryMeasurements(ctx context.Context, req *mcp.CallToolRequest,
 	if err := t.gql.Query(ctx, queryMeasurementsQuery, token, map[string]any{"criteria": criteria}, &resp); err != nil {
 		return nil, QueryMeasurementsOutput{}, err
 	}
-	return nil, QueryMeasurementsOutput{
-		Measurements: resp.MeasurementEvents.Results,
+	out := QueryMeasurementsOutput{
+		Measurements: []MeasurementEvent{},
 		TotalRecords: resp.MeasurementEvents.Pagination.TotalRecords,
-	}, nil
+	}
+	for _, m := range resp.MeasurementEvents.Results {
+		out.Measurements = append(out.Measurements, MeasurementEvent{
+			DeviceToken: m.DeviceToken, Value: m.Value, DataType: m.DataType, OccurredTime: m.OccurredTime,
+			Untrusted: newMeasurementUntrusted(m.Name, m.Unit),
+		})
+	}
+	return provenanceResult(out), out, nil
 }
 
 // ---- aggregate_measurements ----
@@ -86,13 +104,26 @@ type AggregateMeasurementsInput struct {
 	IntervalSeconds int    `json:"intervalSeconds" jsonschema:"time-bucket width in seconds (required, e.g. 3600 for hourly). A request is capped at 10,000 buckets (window / interval) and at 50,000 rows (buckets x distinct metric names that match the request's filters; 1 name when name is given), so keep the window and interval proportionate"`
 }
 
+// MeasurementBucket is one time bucket of one metric. The metric name is what the device
+// reported, so it sits under Untrusted.
 type MeasurementBucket struct {
+	BucketStart string                `json:"bucketStart" prov:"platform"`
+	Avg         *float64              `json:"avg,omitempty"`
+	Min         *float64              `json:"min,omitempty"`
+	Max         *float64              `json:"max,omitempty"`
+	Sum         *float64              `json:"sum,omitempty"`
+	Count       int                   `json:"count"`
+	Untrusted   *MeasurementUntrusted `json:"untrusted,omitempty"`
+}
+
+// measurementBucketRaw is the shape event-management returns.
+type measurementBucketRaw struct {
 	BucketStart string   `json:"bucketStart"`
 	Name        string   `json:"name"`
-	Avg         *float64 `json:"avg,omitempty"`
-	Min         *float64 `json:"min,omitempty"`
-	Max         *float64 `json:"max,omitempty"`
-	Sum         *float64 `json:"sum,omitempty"`
+	Avg         *float64 `json:"avg"`
+	Min         *float64 `json:"min"`
+	Max         *float64 `json:"max"`
+	Sum         *float64 `json:"sum"`
 	Count       int      `json:"count"`
 }
 
@@ -131,29 +162,79 @@ func (t *Tools) AggregateMeasurements(ctx context.Context, req *mcp.CallToolRequ
 	putIfSet(criteria, "endTime", in.EndTime)
 
 	var resp struct {
-		BucketedMeasurements []MeasurementBucket `json:"bucketedMeasurements"`
+		BucketedMeasurements []measurementBucketRaw `json:"bucketedMeasurements"`
 	}
 	if err := t.gql.Query(ctx, aggregateMeasurementsQuery, token, map[string]any{"criteria": criteria}, &resp); err != nil {
 		return nil, AggregateMeasurementsOutput{}, err
 	}
-	return nil, AggregateMeasurementsOutput{Buckets: resp.BucketedMeasurements}, nil
+	out := AggregateMeasurementsOutput{Buckets: []MeasurementBucket{}}
+	for _, b := range resp.BucketedMeasurements {
+		out.Buckets = append(out.Buckets, MeasurementBucket{
+			BucketStart: b.BucketStart, Avg: b.Avg, Min: b.Min, Max: b.Max, Sum: b.Sum, Count: b.Count,
+			Untrusted: newMeasurementUntrusted(b.Name, ""),
+		})
+	}
+	return provenanceResult(out), out, nil
 }
 
 // ---- alarms ----
 
+// AlarmSummary is one alarm. The alarm key and metric key come from a rule an operator wrote,
+// and the acknowledger is a person, so they sit under Untrusted.
 type AlarmSummary struct {
+	Token            string          `json:"token" prov:"id"`
+	OriginatorToken  string          `json:"originatorToken,omitempty" prov:"id"`
+	State            string          `json:"state" prov:"platform"`
+	Severity         string          `json:"severity" prov:"platform"`
+	Acknowledged     bool            `json:"acknowledged"`
+	RaisedTime       string          `json:"raisedTime,omitempty" prov:"platform"`
+	ClearedTime      string          `json:"clearedTime,omitempty" prov:"platform"`
+	AcknowledgedTime string          `json:"acknowledgedTime,omitempty" prov:"platform"`
+	LastValue        *float64        `json:"lastValue,omitempty"`
+	Untrusted        *AlarmUntrusted `json:"untrusted,omitempty"`
+}
+
+// AlarmUntrusted is the operator-authored text of an alarm.
+type AlarmUntrusted struct {
+	AlarmKey       *Marked `json:"alarmKey,omitempty" prov:"operator"`
+	MetricKey      *Marked `json:"metricKey,omitempty" prov:"operator"`
+	AcknowledgedBy *Marked `json:"acknowledgedBy,omitempty" prov:"operator"`
+}
+
+// alarmRaw is the shape device-management returns.
+type alarmRaw struct {
 	Token            string   `json:"token"`
-	OriginatorToken  string   `json:"originatorToken,omitempty"`
+	OriginatorToken  string   `json:"originatorToken"`
 	AlarmKey         string   `json:"alarmKey"`
-	MetricKey        string   `json:"metricKey,omitempty"`
+	MetricKey        string   `json:"metricKey"`
 	State            string   `json:"state"`
 	Severity         string   `json:"severity"`
 	Acknowledged     bool     `json:"acknowledged"`
-	RaisedTime       string   `json:"raisedTime,omitempty"`
-	ClearedTime      string   `json:"clearedTime,omitempty"`
-	AcknowledgedTime string   `json:"acknowledgedTime,omitempty"`
-	AcknowledgedBy   string   `json:"acknowledgedBy,omitempty"`
-	LastValue        *float64 `json:"lastValue,omitempty"`
+	RaisedTime       string   `json:"raisedTime"`
+	ClearedTime      string   `json:"clearedTime"`
+	AcknowledgedTime string   `json:"acknowledgedTime"`
+	AcknowledgedBy   string   `json:"acknowledgedBy"`
+	LastValue        *float64 `json:"lastValue"`
+}
+
+func newAlarmSummaries(raw []alarmRaw) []AlarmSummary {
+	out := make([]AlarmSummary, 0, len(raw))
+	for _, a := range raw {
+		u := &AlarmUntrusted{
+			AlarmKey:       mark(SourceOperator, a.AlarmKey),
+			MetricKey:      mark(SourceOperator, a.MetricKey),
+			AcknowledgedBy: mark(SourceOperator, a.AcknowledgedBy),
+		}
+		if u.AlarmKey == nil && u.MetricKey == nil && u.AcknowledgedBy == nil {
+			u = nil
+		}
+		out = append(out, AlarmSummary{
+			Token: a.Token, OriginatorToken: a.OriginatorToken, State: a.State, Severity: a.Severity,
+			Acknowledged: a.Acknowledged, RaisedTime: a.RaisedTime, ClearedTime: a.ClearedTime,
+			AcknowledgedTime: a.AcknowledgedTime, LastValue: a.LastValue, Untrusted: u,
+		})
+	}
+	return out
 }
 
 const alarmFields = `token originatorToken alarmKey metricKey state severity acknowledged raisedTime clearedTime acknowledgedTime acknowledgedBy lastValue`
@@ -203,7 +284,7 @@ func (t *Tools) ListAlarms(ctx context.Context, req *mcp.CallToolRequest, in Lis
 
 	var resp struct {
 		Alarms struct {
-			Results    []AlarmSummary `json:"results"`
+			Results    []alarmRaw `json:"results"`
 			Pagination struct {
 				TotalRecords int `json:"totalRecords"`
 			} `json:"pagination"`
@@ -212,7 +293,8 @@ func (t *Tools) ListAlarms(ctx context.Context, req *mcp.CallToolRequest, in Lis
 	if err := t.gql.Query(ctx, listAlarmsQuery, token, map[string]any{"criteria": criteria}, &resp); err != nil {
 		return nil, ListAlarmsOutput{}, err
 	}
-	return nil, ListAlarmsOutput{Alarms: resp.Alarms.Results, TotalRecords: resp.Alarms.Pagination.TotalRecords}, nil
+	out := ListAlarmsOutput{Alarms: newAlarmSummaries(resp.Alarms.Results), TotalRecords: resp.Alarms.Pagination.TotalRecords}
+	return provenanceResult(out), out, nil
 }
 
 type GetAlarmInput struct {
@@ -237,12 +319,13 @@ func (t *Tools) GetAlarm(ctx context.Context, req *mcp.CallToolRequest, in GetAl
 		return nil, GetAlarmOutput{}, err
 	}
 	var resp struct {
-		AlarmsByToken []AlarmSummary `json:"alarmsByToken"`
+		AlarmsByToken []alarmRaw `json:"alarmsByToken"`
 	}
 	if err := t.gql.Query(ctx, getAlarmQuery, token, map[string]any{"tokens": in.Tokens}, &resp); err != nil {
 		return nil, GetAlarmOutput{}, err
 	}
-	return nil, GetAlarmOutput{Alarms: resp.AlarmsByToken}, nil
+	out := GetAlarmOutput{Alarms: newAlarmSummaries(resp.AlarmsByToken)}
+	return provenanceResult(out), out, nil
 }
 
 // ---- list_commands ----
@@ -264,15 +347,35 @@ type ListCommandsInput struct {
 	PageSize   int    `json:"pageSize,omitempty" jsonschema:"commands per page (default 25, max 100)"`
 }
 
+// CommandSummary is one dispatched command. Its name is written by whoever issued it (an
+// operator today) and its error is whatever the device answered with, so both sit under
+// Untrusted.
 type CommandSummary struct {
+	Token         string            `json:"token" prov:"id"`
+	DeviceToken   string            `json:"deviceToken" prov:"id"`
+	Status        string            `json:"status" prov:"platform"`
+	QueuedTime    string            `json:"queuedTime,omitempty" prov:"platform"`
+	SentTime      string            `json:"sentTime,omitempty" prov:"platform"`
+	RespondedTime string            `json:"respondedTime,omitempty" prov:"platform"`
+	Untrusted     *CommandUntrusted `json:"untrusted,omitempty"`
+}
+
+// CommandUntrusted is the text of a dispatched command.
+type CommandUntrusted struct {
+	Name  *Marked `json:"name,omitempty" prov:"operator"`
+	Error *Marked `json:"error,omitempty" prov:"device-reported"`
+}
+
+// commandRaw is the shape command-delivery returns.
+type commandRaw struct {
 	Token         string `json:"token"`
 	DeviceToken   string `json:"deviceToken"`
 	Name          string `json:"name"`
 	Status        string `json:"status"`
-	QueuedTime    string `json:"queuedTime,omitempty"`
-	SentTime      string `json:"sentTime,omitempty"`
-	RespondedTime string `json:"respondedTime,omitempty"`
-	Error         string `json:"error,omitempty"`
+	QueuedTime    string `json:"queuedTime"`
+	SentTime      string `json:"sentTime"`
+	RespondedTime string `json:"respondedTime"`
+	Error         string `json:"error"`
 }
 
 type ListCommandsOutput struct {
@@ -303,7 +406,7 @@ func (t *Tools) ListCommands(ctx context.Context, req *mcp.CallToolRequest, in L
 
 	var resp struct {
 		Commands struct {
-			Results    []CommandSummary `json:"results"`
+			Results    []commandRaw `json:"results"`
 			Pagination struct {
 				TotalRecords int `json:"totalRecords"`
 			} `json:"pagination"`
@@ -312,7 +415,18 @@ func (t *Tools) ListCommands(ctx context.Context, req *mcp.CallToolRequest, in L
 	if err := t.gql.Query(ctx, listCommandsQuery, token, map[string]any{"criteria": criteria}, &resp); err != nil {
 		return nil, ListCommandsOutput{}, err
 	}
-	return nil, ListCommandsOutput{Commands: resp.Commands.Results, TotalRecords: resp.Commands.Pagination.TotalRecords}, nil
+	out := ListCommandsOutput{Commands: []CommandSummary{}, TotalRecords: resp.Commands.Pagination.TotalRecords}
+	for _, c := range resp.Commands.Results {
+		u := &CommandUntrusted{Name: mark(SourceOperator, c.Name), Error: mark(SourceDevice, c.Error)}
+		if u.Name == nil && u.Error == nil {
+			u = nil
+		}
+		out.Commands = append(out.Commands, CommandSummary{
+			Token: c.Token, DeviceToken: c.DeviceToken, Status: c.Status, QueuedTime: c.QueuedTime,
+			SentTime: c.SentTime, RespondedTime: c.RespondedTime, Untrusted: u,
+		})
+	}
+	return provenanceResult(out), out, nil
 }
 
 // putIfSet adds a string criterion only when non-empty, so an omitted optional

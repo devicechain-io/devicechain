@@ -29,10 +29,12 @@ func TestTheManagerBuiltLikeMainRunsTheInstancesTokenAudienceMode(t *testing.T) 
 	require.Equal(t, mscfg.TokenAudienceEnforce, m.ResourceEnforcement(),
 		"the document's enforcement never reached the Manager main builds")
 
-	// The counterweight: an absent block is the release default, observe.
+	// An absent block is the release default, enforce from v1.3.
 	m, err = build(mscfg.TokenAudienceConfiguration{})
 	require.NoError(t, err)
-	require.Equal(t, mscfg.TokenAudienceObserve, m.ResourceEnforcement())
+	require.Equal(t, mscfg.TokenAudienceEnforce, m.ResourceEnforcement())
+
+	// Programmatic construction retains observe compatibility; documents refuse it at load.
 
 	m, err = build(mscfg.TokenAudienceConfiguration{Enforcement: "observe"})
 	require.NoError(t, err)

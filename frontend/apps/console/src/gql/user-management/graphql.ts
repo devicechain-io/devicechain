@@ -4,6 +4,15 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/** (Preview: may change in a minor release.) How a version of the agent policy came to be published. */
+export type AgentPolicyOrigin =
+  /** (Preview: may change in a minor release.) The version in force was republished with only agent actuation turned on or off. */
+  | 'ACTUATION'
+  /** (Preview: may change in a minor release.) The draft was published. */
+  | 'PUBLISH'
+  /** (Preview: may change in a minor release.) An earlier version's document was published again as a new version. */
+  | 'ROLLBACK';
+
 /** Paging for listing this tenant's invitations. */
 export type InvitationSearchCriteria = {
   /** Page to return, starting at 1. */
@@ -100,6 +109,14 @@ export type ScopeAnchorKind =
 
 /** A service account to create. */
 export type ServiceAccountCreateRequest = {
+  /**
+   * (Preview: may change in a minor release.) True to create an AGENT account, for an AI agent: its tokens carry proposal authorities in
+   * place of its roles' write authorities. Cannot be changed later. Defaults to false. Refused
+   * unless agent actions are enabled on this instance. A tenant
+   * whose agent policy lists authorities under serviceAccounts.agentFlagRequiredFor refuses an
+   * account that holds any of them without this flag.
+   */
+  agent?: boolean | null | undefined;
   /** Free-text description, at most 1024 characters. */
   description?: string | null | undefined;
   /** Human-readable name, at most 128 characters. */
@@ -207,6 +224,23 @@ export type TenantRoleUpdateRequest = {
   /** New name. Omit to keep it, send null to clear it. */
   name?: string | null | undefined;
 };
+
+export type AgentApprovalAccessQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type AgentApprovalAccessQuery = { agentApprovalAccess: { instanceEnabled: boolean, canApprove: boolean } };
+
+export type AgentPolicyQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type AgentPolicyQuery = { agentPolicy: { operatorSuspended: boolean, actuationOff: boolean, instanceEnabled: boolean, actuationInEffect: boolean, published: { version: number, document: string, origin: AgentPolicyOrigin, publishedBy: string, publishedAt: string } | null } };
+
+export type SetAgentActuationMutationVariables = Exact<{
+  enabled: boolean;
+}>;
+
+
+export type SetAgentActuationMutation = { setAgentActuation: { operatorSuspended: boolean, actuationOff: boolean, instanceEnabled: boolean, actuationInEffect: boolean, published: { version: number, document: string, origin: AgentPolicyOrigin, publishedBy: string, publishedAt: string } | null } };
 
 export type MembersQueryVariables = Exact<{
   criteria: MemberSearchCriteria;
@@ -553,6 +587,14 @@ export type TenantTokenMasksQueryVariables = Exact<{ [key: string]: never; }>;
 
 export type TenantTokenMasksQuery = { tokenMasks: string };
 
+export type StepUpMutationVariables = Exact<{
+  refreshToken: string;
+  code: string;
+}>;
+
+
+export type StepUpMutation = { stepUp: { accessToken: string, refreshToken: string, expiresAt: string } };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -614,6 +656,48 @@ export const TenantFieldsFragmentDoc = new TypedDocumentString(`
   localeOverride
 }
     `, {"fragmentName":"TenantFields"}) as unknown as TypedDocumentString<TenantFieldsFragment, unknown>;
+export const AgentApprovalAccessDocument = new TypedDocumentString(`
+    query AgentApprovalAccess {
+  agentApprovalAccess {
+    instanceEnabled
+    canApprove
+  }
+}
+    `) as unknown as TypedDocumentString<AgentApprovalAccessQuery, AgentApprovalAccessQueryVariables>;
+export const AgentPolicyDocument = new TypedDocumentString(`
+    query AgentPolicy {
+  agentPolicy {
+    published {
+      version
+      document
+      origin
+      publishedBy
+      publishedAt
+    }
+    operatorSuspended
+    actuationOff
+    instanceEnabled
+    actuationInEffect
+  }
+}
+    `) as unknown as TypedDocumentString<AgentPolicyQuery, AgentPolicyQueryVariables>;
+export const SetAgentActuationDocument = new TypedDocumentString(`
+    mutation SetAgentActuation($enabled: Boolean!) {
+  setAgentActuation(enabled: $enabled) {
+    published {
+      version
+      document
+      origin
+      publishedBy
+      publishedAt
+    }
+    operatorSuspended
+    actuationOff
+    instanceEnabled
+    actuationInEffect
+  }
+}
+    `) as unknown as TypedDocumentString<SetAgentActuationMutation, SetAgentActuationMutationVariables>;
 export const MembersDocument = new TypedDocumentString(`
     query Members($criteria: MemberSearchCriteria!) {
   members(criteria: $criteria) {
@@ -1290,3 +1374,12 @@ export const TenantTokenMasksDocument = new TypedDocumentString(`
   tokenMasks
 }
     `) as unknown as TypedDocumentString<TenantTokenMasksQuery, TenantTokenMasksQueryVariables>;
+export const StepUpDocument = new TypedDocumentString(`
+    mutation StepUp($refreshToken: String!, $code: String!) {
+  stepUp(refreshToken: $refreshToken, code: $code) {
+    accessToken
+    refreshToken
+    expiresAt
+  }
+}
+    `) as unknown as TypedDocumentString<StepUpMutation, StepUpMutationVariables>;

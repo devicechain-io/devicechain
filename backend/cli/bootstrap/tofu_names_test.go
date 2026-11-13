@@ -99,6 +99,7 @@ func TestTheSecretNamesDcctlWritesAreTheOnesTheInfrastructureReads(t *testing.T)
 		{"the object store's credential", objectStoreName + "-credentials",
 			`default     = "dc-object-store-credentials"`},
 		{"the dashboard's credential", grafanaSecretName, `default     = "dc-grafana-admin"`},
+		{"the alertmanager's configuration", alertConfigSecretName, `default     = "dc-alertmanager-config"`},
 		{"the broker's TLS material", natsReleaseName, `default     = "dc-nats"`},
 	} {
 		if !tofuTreeContains(tree, c.expectedIn) {

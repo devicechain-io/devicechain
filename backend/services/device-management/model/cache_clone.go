@@ -69,6 +69,7 @@ func cloneDeviceValue(in Device) Device {
 	out.Metadata = cloneJSONPtr(in.Metadata)
 	out.GatewayId = clonePtr(in.GatewayId)
 	out.ExpectedProvisioningProfileId = clonePtr(in.ExpectedProvisioningProfileId)
+	out.InstalledPosition = in.InstalledPosition.clone()
 	if in.DeviceType != nil {
 		dt := cloneDeviceTypeValue(*in.DeviceType)
 		out.DeviceType = &dt
@@ -80,6 +81,7 @@ func cloneDeviceTypeValue(in DeviceType) DeviceType {
 	out := in
 	out.Metadata = cloneJSONPtr(in.Metadata)
 	out.ProfileId = clonePtr(in.ProfileId)
+	out.SemanticTypes = cloneSlice(in.SemanticTypes)
 	if in.Profile != nil {
 		out.Profile = cloneDeviceProfile(in.Profile)
 	}
@@ -114,6 +116,19 @@ func cloneDeviceProfile(in *DeviceProfile) *DeviceProfile {
 		panic("model: a DeviceProfile held by the cache did not decode: " + err.Error())
 	}
 	return out
+}
+
+// clone copies an installed position, whose fields are pointers, so a copy shares no memory with
+// the cached original.
+func (p InstalledPosition) clone() InstalledPosition {
+	return InstalledPosition{
+		InstalledLat:       clonePtr(p.InstalledLat),
+		InstalledLon:       clonePtr(p.InstalledLon),
+		InstalledElev:      clonePtr(p.InstalledElev),
+		InstalledAccuracy:  clonePtr(p.InstalledAccuracy),
+		InstalledSource:    clonePtr(p.InstalledSource),
+		InstalledUpdatedAt: clonePtr(p.InstalledUpdatedAt),
+	}
 }
 
 func clonePtr[T any](in *T) *T {

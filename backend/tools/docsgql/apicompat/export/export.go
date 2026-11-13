@@ -16,6 +16,10 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/build"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,7 +40,40 @@ func CommandTree(root, out string) error {
 // DeviceTopics writes the topic layout one device is granted by the repository tree at
 // root to out.
 func DeviceTopics(root, out string) error {
-	return run(root, "backend/core", "natsauth", "zz_apicompat_export_test.go", topicsExporter, "TestAPICompatExportTopics", out)
+	// The same exporter runs in old release checkouts. Only reference the option
+	// when that tree declares it; a pre-option baseline must still compile and
+	// export its original grant. The comparer treats the new topic as Safe.
+	hasUplink, err := hasDeviceUplink(filepath.Join(root, "backend", "core", "natsauth"))
+	if err != nil {
+		return err
+	}
+	option := ""
+	if hasUplink {
+		option = ", natsauth.WithDeviceUplink(true)"
+	}
+	src := strings.ReplaceAll(string(topicsExporter), "/*DEVICE_UPLINK_OPTION*/", option)
+	return run(root, "backend/core", "natsauth", "zz_apicompat_export_test.go", []byte(src), "TestAPICompatExportTopics", out)
+}
+
+// hasDeviceUplink checks declarations in buildable non-test files, without loading
+// dependencies or reflecting on a symbol that old releases do not have.
+func hasDeviceUplink(dir string) (bool, error) {
+	pkg, err := build.Default.ImportDir(dir, 0)
+	if err != nil {
+		return false, err
+	}
+	for _, name := range append(pkg.GoFiles, pkg.CgoFiles...) {
+		f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, parser.SkipObjectResolution)
+		if err != nil {
+			return false, err
+		}
+		for _, d := range f.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "WithDeviceUplink" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // run injects src as <module>/<pkg>/<name> via -overlay, runs the named test there and

@@ -277,7 +277,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devicechain_outboundconnectors_connector_dispatch_total{namespace=\"$namespace\", outcome=\"retry\"}[$__rate_interval]))",
+          "expr": "sum(rate(devicechain_outboundconnectors_connector_dispatch_total{namespace=\"$namespace\", outcome=\"retry\"}[$__rate_interval])) or (0 * max(up{namespace=\"$namespace\", job=\"outbound-connectors\"} == 1))",
           "legendFormat": "__auto"
         }
       ],
@@ -339,7 +339,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_outboundconnectors_connector_dispatch_total{namespace=\"$namespace\", outcome=~\"dead|invalid|unsupported|blocked|rate_limited|dead_write_failed\"}[$__range])))",
+          "expr": "round(sum(increase(devicechain_outboundconnectors_connector_dispatch_total{namespace=\"$namespace\", outcome=~\"dead|invalid|unsupported|blocked|rate_limited|dead_write_failed\"}[$__range]))) or (0 * max(up{namespace=\"$namespace\", job=\"outbound-connectors\"} == 1))",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -402,7 +402,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_outboundconnectors_connector_dispatch_total{namespace=\"$namespace\", outcome=\"blocked\"}[$__range])))",
+          "expr": "round(sum(increase(devicechain_outboundconnectors_connector_dispatch_total{namespace=\"$namespace\", outcome=\"blocked\"}[$__range]))) or (0 * max(up{namespace=\"$namespace\", job=\"outbound-connectors\"} == 1))",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -465,7 +465,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_outboundconnectors_connector_dispatch_total{namespace=\"$namespace\", outcome=\"dead_write_failed\"}[$__range])))",
+          "expr": "round(sum(increase(devicechain_outboundconnectors_connector_dispatch_total{namespace=\"$namespace\", outcome=\"dead_write_failed\"}[$__range]))) or (0 * max(up{namespace=\"$namespace\", job=\"outbound-connectors\"} == 1))",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -510,7 +510,7 @@
       "id": 7,
       "type": "stat",
       "title": "Waiting to be sent",
-      "description": "Reports only when the outbound connectors area is installed (it is optional and not part of the default install). Without it this panel stays empty. Dispatch requests the connectors service has not been handed yet, as last sampled. A number that keeps growing means sends are not keeping up; look at the retry and given-up panels below. While the reading service is down this shows the message broker's own count.",
+      "description": "Reports only when the outbound connectors area is installed (it is optional and not part of the default install). Without it this panel stays empty. Dispatch requests the connectors service has not finished handling (waiting or in progress), as last sampled. A number that keeps growing means sends are not keeping up; look at the retry and given-up panels below. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -528,7 +528,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max(devicechain_outboundconnectors_jetstream_consumer_pending_messages{namespace=\"$namespace\"}) or max(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_outbound-connectors_.+\"})",
+          "expr": "sum(max by (__name__, durable) ({__name__=~\"devicechain_outboundconnectors_jetstream_consumer_pending_messages|devicechain_outboundconnectors_jetstream_consumer_ack_pending_messages\", namespace=\"$namespace\"})) or sum(max by (__name__, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_outbound-connectors_.+\"}))",
           "legendFormat": "__auto"
         }
       ],
@@ -760,7 +760,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) (devicechain_outboundconnectors_jetstream_consumer_pending_messages{namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_outbound-connectors_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
+          "expr": "max by (durable) (sum by (stream, durable) (max by (__name__, stream, durable) ({__name__=~\"devicechain_outboundconnectors_jetstream_consumer_pending_messages|devicechain_outboundconnectors_jetstream_consumer_ack_pending_messages\", namespace=\"$namespace\"}))) or max by (durable) (label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_outbound-connectors_.+\"})), \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "waiting / {{durable}}"
         },
         {
@@ -1339,7 +1339,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_notificationmanagement_deliveries_refused_total{namespace=\"$namespace\"}[$__range])))",
+          "expr": "round(sum(increase(devicechain_notificationmanagement_deliveries_refused_total{namespace=\"$namespace\"}[$__range]))) or (0 * max(up{namespace=\"$namespace\", job=\"notification-management\"} == 1))",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -1402,7 +1402,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_notificationmanagement_quiet_hours_total{namespace=\"$namespace\", outcome=\"held\"}[$__range])))",
+          "expr": "round(sum(increase(devicechain_notificationmanagement_quiet_hours_total{namespace=\"$namespace\", outcome=\"held\"}[$__range]))) or (0 * max(up{namespace=\"$namespace\", job=\"notification-management\"} == 1))",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -1443,7 +1443,7 @@
       "id": 23,
       "type": "stat",
       "title": "Failed escalation passes",
-      "description": "Escalation passes over the selected time range that failed. The scheduler re-notifies alarms that stayed open; a failed pass means some of them were not re-notified until the next pass. Check the notification service log.",
+      "description": "Escalation passes over the selected time range that failed. The scheduler re-notifies alarms that stayed open; a failed pass means some of them were not re-notified until the next pass. Check the notification service log. This also counts failed pickup of pending clear notifications; compare the escalation and clear pickup passes below.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -1706,8 +1706,8 @@
     {
       "id": 27,
       "type": "timeseries",
-      "title": "Escalation passes",
-      "description": "Passes of the escalation scheduler, by outcome. It runs on a timer in every replica of the notification service. Failed passes need attention; skipped means another replica held the work.",
+      "title": "Escalation and clear pickup passes",
+      "description": "The scheduler re-pages active alarms and picks up pending clear notifications. Failed means the pass could not do its work, including when clear pickup reached no delivery target. Partial means some work completed: clears may remain after the pickup budget, or some tenants may have failed. Check logs to distinguish these cases. Repeated failures need database and channel checks. There is no separate clear-only counter.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1783,7 +1783,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) (devicechain_notificationmanagement_jetstream_consumer_pending_messages{namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_notification-management_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
+          "expr": "max by (durable) (sum by (stream, durable) (max by (__name__, stream, durable) ({__name__=~\"devicechain_notificationmanagement_jetstream_consumer_pending_messages|devicechain_notificationmanagement_jetstream_consumer_ack_pending_messages\", namespace=\"$namespace\"}))) or max by (durable) (label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_notification-management_.+\"})), \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "waiting / {{durable}}"
         },
         {
@@ -2582,7 +2582,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) (devicechain_updatemanagement_jetstream_consumer_pending_messages{namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_update-management_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
+          "expr": "max by (durable) (sum by (stream, durable) (max by (__name__, stream, durable) ({__name__=~\"devicechain_updatemanagement_jetstream_consumer_pending_messages|devicechain_updatemanagement_jetstream_consumer_ack_pending_messages\", namespace=\"$namespace\"}))) or max by (durable) (label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_update-management_.+\"})), \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "waiting / {{durable}}"
         },
         {

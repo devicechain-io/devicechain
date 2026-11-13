@@ -34,7 +34,7 @@ func TestQueryMeasurements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryMeasurements: %v", err)
 	}
-	if len(out.Measurements) != 1 || out.TotalRecords != 1 || out.Measurements[0].Name != "temp" {
+	if len(out.Measurements) != 1 || out.TotalRecords != 1 || out.Measurements[0].Untrusted.Name.Value != "temp" {
 		t.Errorf("unexpected: %+v", out)
 	}
 
@@ -77,7 +77,7 @@ func TestListAlarms_FilterMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAlarms: %v", err)
 	}
-	if len(out.Alarms) != 1 || out.Alarms[0].AlarmKey != "overheat" || out.Alarms[0].Severity != "CRITICAL" {
+	if len(out.Alarms) != 1 || out.Alarms[0].Untrusted.AlarmKey.Value != "overheat" || out.Alarms[0].Severity != "CRITICAL" {
 		t.Errorf("unexpected alarms: %+v", out.Alarms)
 	}
 	crit := (*captured)["variables"].(map[string]any)["criteria"].(map[string]any)
@@ -130,7 +130,7 @@ func TestListCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCommands: %v", err)
 	}
-	if len(out.Commands) != 1 || out.Commands[0].Name != "reboot" || out.Commands[0].Status != "SENT" {
+	if len(out.Commands) != 1 || out.Commands[0].Untrusted.Name.Value != "reboot" || out.Commands[0].Status != "SENT" {
 		t.Errorf("unexpected commands: %+v", out.Commands)
 	}
 	crit := (*captured)["variables"].(map[string]any)["criteria"].(map[string]any)

@@ -1,4 +1,5 @@
 {
+  "approvals": "Aprobaciones",
   "home": "Inicio",
   "dashboards": "Paneles",
   "notificationPolicies": "Políticas de notificación",
@@ -45,5 +46,6 @@
   "connect": "Conectar",
   "organization": "Organización",
   "access": "Acceso",
-  "deviceProfilesHint": "reglas, métricas, comandos"
+  "deviceProfilesHint": "reglas, métricas, comandos",
+  "notificationChannels": "Canales de notificación"
 }

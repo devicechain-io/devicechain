@@ -22,6 +22,8 @@ Cada mensaje de esta página se publica como un esquema JSON (draft 2020-12). Ú
 | [`new-relationship-payload.schema.json`](pathname:///schema/device/new-relationship-payload.schema.json) | El payload de un evento [`NewRelationship`](#new-relationship-payload) |
 | [`command-delivery.schema.json`](pathname:///schema/device/command-delivery.schema.json) | El [comando](#command-delivery) que la plataforma entrega a un dispositivo |
 | [`command-response.schema.json`](pathname:///schema/device/command-response.schema.json) | La [respuesta](#command-response) que devuelve un dispositivo |
+| [`command-pull.schema.json`](pathname:///schema/device/command-pull.schema.json) | Los comandos que recibe un dispositivo de una [consulta HTTP](../concepts/commands.md#http-command-pull) |
+| [`command-pull-response.schema.json`](pathname:///schema/device/command-pull-response.schema.json) | La respuesta que envía un dispositivo en el [canal de consulta HTTP](../concepts/commands.md#http-command-pull) |
 
 La misma lista, con URL absolutas, está bajo `deviceProtocol` en [`/schema/index.json`](pathname:///schema/index.json). El esquema del sobre hace referencia a los esquemas de payload mediante URL relativas, así que un validador que lo cargue por URL los resuelve por sí solo.
 
@@ -46,6 +48,7 @@ El broker de la plataforma es el servidor MQTT integrado en NATS. Un topic MQTT 
 | Mensaje | Dirección | Topic MQTT | Subject NATS |
 | --- | --- | --- | --- |
 | [Evento](#device-event) | dispositivo → plataforma | `{instanceId}/{tenant}/devices/{deviceToken}/events` | `{instanceId}.{tenant}.devices.{deviceToken}.events` |
+| [Carga útil propia](#raw-payload) | dispositivo → plataforma | `{instanceId}/{tenant}/devices/{deviceToken}/uplink` | `{instanceId}.{tenant}.devices.{deviceToken}.uplink` |
 | [Entrega de comando](#command-delivery) | plataforma → dispositivo | `{instanceId}/{tenant}/device-commands/{deviceToken}` | `{instanceId}.{tenant}.device-commands.{deviceToken}` |
 | [Respuesta a comando](#command-response) | dispositivo → plataforma | `{instanceId}/{tenant}/command-responses/{deviceToken}` | `{instanceId}.{tenant}.command-responses.{deviceToken}` |
 | Mensajes de [configuración](../guides/connecting-a-device.md#reserved-device-topics) y de [actualización](../guides/connecting-a-device.md#over-the-air-updates) | plataforma → dispositivo | `{instanceId}/{tenant}/device-desired/{deviceToken}` | `{instanceId}.{tenant}.device-desired.{deviceToken}` |
@@ -57,7 +60,7 @@ El broker de la plataforma es el servidor MQTT integrado en NATS. Un topic MQTT 
 
 Un dispositivo que todavía no tiene credencial llega a la plataforma por HTTPS para [registrarse por sí mismo](#self-registration), en `POST /api/device-management/provisioning/{tenant}/register`. Es un endpoint distinto de la ingesta de eventos, servido por `device-management`.
 
-Por **HTTP**, un dispositivo solo puede enviar eventos. Haz `POST` del mismo [cuerpo de evento](#device-event) a `/{instanceId}/{tenant}/events` en el servicio `event-sources` (puerto 8081). No hay canal de bajada por HTTP: un dispositivo que solo usa HTTP no puede recibir comandos, configuración ni asignaciones de actualización.
+Por **HTTP**, un dispositivo puede enviar eventos (y, donde el operador lo ha activado, una [carga útil propia](#raw-payload)). Haz `POST` del mismo [cuerpo de evento](#device-event) a `/{instanceId}/{tenant}/events` en el servicio `event-sources` (puerto 8081). Para recibir comandos, establece el `commandChannel` del tipo de dispositivo en `HTTP_PULL`; el dispositivo consulta entonces los comandos y envía confirmaciones y respuestas al mismo listener. Consulta [Consulta de comandos por HTTP](../concepts/commands.md#http-command-pull) para ver los endpoints y la autenticación. La configuración y las asignaciones de actualización gestionadas siguen usando los canales desired/reports de MQTT; la consulta de comandos por HTTP no las transporta.
 
 ### El espacio de nombres de pasarela {#gateway-namespace}
 
@@ -67,10 +70,12 @@ Una pasarela (el [agente de borde](../deployment/edge-services.md#gateway-identi
 | --- | --- | --- |
 | [Evento](#device-event) de un dispositivo tras la pasarela | pasarela → plataforma | `{instanceId}/{tenant}/gateways/{gatewayToken}/devices/{deviceToken}/events` |
 | Aviso de que se rechazó un evento | plataforma → pasarela | `{instanceId}/{tenant}/gateways/{gatewayToken}/notices` |
+| Aceptación de eventos que la plataforma ya tiene | plataforma → pasarela | `{instanceId}/{tenant}/gateways/{gatewayToken}/accepts` |
 
-- Una pasarela está autorizada a publicar solo bajo su token **propio**, con cualquier token hijo tras `devices/`, y a suscribirse solo a sus propios avisos. No puede publicar en el espacio de nombres de otra pasarela ni de otro tenant, ni en el topic propio de un hijo. La concesión tiene el mismo tamaño sea cual sea el número de dispositivos que representa la pasarela, y la tiene cada dispositivo, así que asignar un primer dispositivo a una pasarela no requiere reconexión.
+- Una pasarela está autorizada a publicar solo bajo su token **propio**, con cualquier token hijo tras `devices/`, y a suscribirse solo a sus propios avisos y aceptaciones. No puede publicar en el espacio de nombres de otra pasarela ni de otro tenant, ni en el topic propio de un hijo. La concesión tiene el mismo tamaño sea cual sea el número de dispositivos que representa la pasarela, y la tiene cada dispositivo, así que asignar un primer dispositivo a una pasarela no requiere reconexión.
 - La plataforma acepta un evento solo si el dispositivo nombrado en el topic existe, está **asignado a esa pasarela** y la pasarela está habilitada. En caso contrario rechaza el evento con el motivo `NotGatewayChild` ([más abajo](#rejections-after-acceptance)) y envía un aviso a la pasarela. El broker confirma la publicación en ambos casos, porque MQTT 3.1.1 no puede rechazar una.
 - La identidad es el topic más la asignación. El cuerpo no lleva ninguna: se rechaza un evento de este espacio de nombres que lleve `credentialType`, `credentialId` o `credentialSecret`, y también un `device` del cuerpo que nombre a otro dispositivo. El evento se atribuye al hijo, y el evento resuelto lleva además el token de la pasarela.
+- Un aviso es `{"altId", "device", "reason"}`. Además de `not_gateway_child`, el motivo `over_ceiling` significa que la plataforma recibió el evento y lo descartó porque el tenant superaba su límite de ingesta; el evento no se almacenó y se puede enviar de nuevo sin riesgo. Una aceptación es `{"altIds": [...]}`: las claves de idempotencia de los eventos que ya están almacenados de forma duradera en un stream de la plataforma, agrupadas. Ambos son de mejor esfuerzo y no llevan carga. Una pasarela que elimina un evento almacenado debe hacerlo con la aceptación, no con la confirmación del broker; la que nunca la recibe reenvía el evento con el mismo `altId`, y la plataforma lo almacena una sola vez.
 - Un aviso es un objeto JSON, `{"altId": "...", "device": "...", "reason": "not_gateway_child"}`. No lleva carga y no se almacena, así que una pasarela que estaba desconectada cuando se envió no lo recibe. El registro de un rechazo es el flujo `failed-events`.
 - La concesión también cubre `responses` y `reports` bajo el espacio de nombres y la suscripción a `commands` y `desired`, pero nada los lee ni los envía todavía. Publica solo **eventos**.
 
@@ -162,6 +167,42 @@ Crea una relación desde el dispositivo emisor hacia otra entidad del mismo tena
 | `target` | string | sí | El token de la entidad de destino. | `"building-7-sensors"` |
 
 Una relación que la plataforma no puede crear (un tipo de destino desconocido, un destino que no existe, un tipo de relación desconocido) no se crea. Como cualquier evento que no se puede resolver, se reintenta y después pasa a dead-letter.
+
+## La carga útil propia de un dispositivo {#raw-payload}
+
+Un dispositivo que no puede enviar el [JSON de evento](#device-event), porque publica una trama binaria compacta o un JSON con una forma propia, puede publicar esa carga útil tal cual y hacer que el [decodificador](../guides/payload-decoders.md) del perfil de su tipo de dispositivo la convierta en eventos. El decodificador es el que se redacta en la pestaña **Decoder** de la consola; el mismo decodificador sirve a una [integración de entrada](../guides/inbound-integrations.md) y a la conexión propia de un dispositivo.
+
+Publica los bytes, sin envoltorio, en el topic de carga útil propia del dispositivo:
+
+| | |
+| --- | --- |
+| Topic MQTT | `{instanceId}/{tenant}/devices/{deviceToken}/uplink` |
+| Subject NATS | `{instanceId}.{tenant}.devices.{deviceToken}.uplink` |
+| Cuerpo | La carga útil del dispositivo, tal cual. Hasta 1 MiB; un decodificador que lee la trama admite como máximo 4 KiB de ella, y uno que lee JSON, como máximo 64 KiB. |
+| QoS | 0 o 1, como en los [eventos](#topics). |
+
+- **El topic es la activación.** Un mensaje en el topic `events` nunca lo lee un decodificador de perfil, y nada se elige por el aspecto de un cuerpo. Un dispositivo usa su decodificador publicando aquí.
+- **El operador concede el topic.** Está desactivado salvo que se establezca `infrastructure.nats.mqttDeviceUplinks`. Mientras lo está, el broker rechaza una publicación en este topic, igual que en cualquier topic para el que el dispositivo no está autorizado. Con `dcctl`, pasa `--mqtt-device-uplinks` a `dcctl upgrade` (o a `dcctl bootstrap`); `--mqtt-device-uplinks=false` lo desactiva. La elección se registra en la instancia y las actualizaciones posteriores la conservan. La clave `instance.config.infrastructure.nats.mqttDeviceUplinks` de la superposición `--values` sigue funcionando; una elección registrada con la bandera tiene prioridad sobre la clave de la superposición; cámbiala con la bandera. Se rechaza un valor de superposición que entre en conflicto. Un dispositivo recibe la concesión la próxima vez que se conecta, así que activar el ajuste llega a una flota a medida que sus dispositivos se reconectan, y **desactivarlo** surte efecto del mismo modo: un dispositivo ya conectado conserva su concesión hasta que se reconecta o caduca el token de su sesión.
+- **El topic es la identidad.** Como en los eventos, el dispositivo se autentica al conectarse y solo puede publicar en el topic que lleva **su propio** token, de modo que nunca se puede hacer decodificar una carga útil como la de otro dispositivo. No envíes ninguna credencial: la carga útil no es un envoltorio y no tiene dónde llevarla. El [modo de autenticación](../guides/device-credentials.md) de dispositivos se aplica igual que a los eventos.
+- **Qué lee el decodificador.** Si el decodificador lee una trama, los bytes son su entrada. Si lee JSON y la carga útil empieza por `{`, además se analiza como objeto JSON (de hasta 32 niveles de profundidad) y el decodificador lee ese objeto; una carga útil que empieza como un objeto y no lo es se transporta como trama, y un decodificador que necesita el JSON registra entonces `missing_input`.
+- **Límites.** Una carga útil cuenta contra los límites de ingesta del inquilino como un evento: una vez como mensaje y, después, por las lecturas que el decodificador puede producir, como lecturas (al menos las lecturas máximas del decodificador, más para un decodificador costoso, nunca más de 256).
+
+MQTT no puede responder a un dispositivo, así que una carga útil que la plataforma no puede transportar se registra para un operador y el dispositivo no se entera:
+
+| Condición | Resultado | Dónde lo ve un operador |
+| --- | --- | --- |
+| El tipo del dispositivo no tiene decodificador, o ningún dispositivo tiene este token | Se encamina a `failed-decode` con el motivo; nunca se lee como un evento | `total_msg_failed_decode`; `device_uplink_messages_total` por `result` (`no_decoder`, `unauthorized`) |
+| La carga útil supera un límite que permite la entrada del decodificador | Se encamina a `failed-decode` | `total_msg_failed_decode`; `device_uplink_messages_total` con `result="too_large"` |
+| El inquilino supera su límite de ingesta, por mensajes o por lecturas | Se confirma y luego se **descarta** | `total_msg_rate_limited`, `total_msg_reading_limited` |
+| No se puede consultar a device-management, o la canalización aplica contrapresión | No se rechaza: espera en el stream de captura y se vuelve a ofrecer | `result="plan_unavailable"` o `"backpressure"` |
+| El decodificador se ejecuta y falla (una salida rechazada, `missing_input`) | Se registra en `failed-events` como `DECODE_FAILED`, con la salud y las muestras propias del decodificador en la consola | la salud del decodificador en la consola |
+| Decodificada | Se almacenan los eventos que produce el decodificador | `result="accepted"` |
+
+:::caution Actívalo después de la actualización, no durante
+Activa `mqttDeviceUplinks` solo cuando todas las réplicas de `event-sources` y de `device-management` ejecuten una versión que conozca el topic, en una actualización aparte, una vez instalada la versión. Con el ajuste desactivado el stream de captura es exactamente el que declaraban las versiones anteriores; la actualización que lo activa añade el topic al stream, y una réplica de `event-sources` anterior a esta versión que se reinicie después se detiene al arrancar con un error de desajuste del stream. Una que ya esté en ejecución leería un mensaje así y lo descartaría por ajeno, y una réplica de `device-management` anterior rechaza el uplink que produce la nueva, de modo que una carga útil publicada mientras conviven las dos podría perderse.
+:::
+
+**Por HTTP**, la misma capacidad es `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink` en el servicio `event-sources`. El dispositivo presenta su propia credencial en cabeceras (`Authorization: Bearer <token>`, o `X-DeviceChain-Credential-Type`, `-Id` y `-Secret`), porque un cuerpo binario no tiene dónde llevarla, y la ruta responde `401` sin ella. Existe solo cuando el operador establece `httpIngest.deviceUplinks` en `event-sources`; si no, responde `404`.
 
 ## Entrega de comando {#command-delivery}
 
@@ -318,7 +359,7 @@ El jitter importa: una flota que se enciende a la vez y reintenta al unísono vu
 
 ## Rechazos y errores {#rejections}
 
-Lo que le ocurre a un mensaje que la plataforma no acepta depende de dónde se rechaza y del transporte. HTTP responde a la petición, así que el dispositivo se entera de un rechazo en la entrada. MQTT confirma una publicación (`PUBACK`) en cuanto el broker la ha capturado, **antes** de decodificarla, así que a un dispositivo MQTT nunca se le avisa: todo rechazo posterior al broker solo es visible para un operador. Con el ajuste por defecto, una publicación QoS 1 confirmada mientras el stream de captura cambia de líder también se puede perder, tanto mientras cambia de líder como, con carga sostenida, cuando la ingesta se queda atrás y el stream se llena; vea [Calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
+Lo que le ocurre a un mensaje que la plataforma no acepta depende de dónde se rechaza y del transporte. HTTP responde a la petición, así que el dispositivo se entera de un rechazo en la entrada. MQTT confirma una publicación (`PUBACK`) en cuanto el broker la ha capturado, **antes** de decodificarla, así que a un dispositivo MQTT nunca se le avisa: todo rechazo posterior al broker solo es visible para un operador. Con el ajuste por defecto, una publicación QoS 1 confirmada mientras el stream de captura cambia de líder también se puede perder, tanto mientras cambia de líder como, con carga sostenida, cuando la ingesta se queda atrás y el stream se llena; ve [Calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
 
 ### En la entrada {#rejections-at-the-door}
 
@@ -328,9 +369,11 @@ Lo comprueba `event-sources` al recibir y decodificar el mensaje.
 | --- | --- | --- | --- |
 | El id de instancia de la ruta o del topic no es el de esta instancia | `404` | El broker rechaza la publicación: el dispositivo no está autorizado en ese topic | — |
 | El tenant de la ruta no es un token válido | `400` | El broker rechaza la publicación | — |
+| El tenant de la ruta no existe | `401`, la misma respuesta que ante una credencial incorrecta | El broker rechaza la conexión | `total_http_ingest_refused`, `reason="unknown_tenant"` |
+| La credencial del cuerpo no se autentica: desconocida, caducada, secreto equivocado, de otro dispositivo, o ausente donde la instancia la exige | `401`, siempre `{"error":"unauthorized"}` | Se juzga en el broker cuando el dispositivo se conecta | `total_http_ingest_refused`, `reason="bad_credential"` |
 | El tenant supera su límite de ingesta, por mensajes o por lecturas | `429` con `Retry-After: 1` | Se confirma y después **se descarta** | `total_msg_rate_limited`, `total_msg_reading_limited` |
 | El cuerpo no se puede leer o supera 1 MiB | `400` | — | — |
-| El cuerpo no se decodifica: no es JSON, un `eventType` desconocido o exclusivo de la plataforma (`StateChange`, `CommandInvocation`, `CommandResponse`), un valor del tipo JSON equivocado, ninguna entrada, una entrada vacía, un campo de ubicación ausente o fuera de rango, una alerta sin `type` o con un `level` mayor que 2147483647 | `400`, con el motivo en el cuerpo | Se confirma y después se envía al stream `failed-decode` | `total_msg_failed_decode` |
+| El cuerpo no se decodifica: no es JSON, un `eventType` desconocido o exclusivo de la plataforma (`StateChange`, `CommandInvocation`, `CommandResponse`), un valor del tipo JSON equivocado, ninguna entrada, una entrada vacía, un campo de ubicación ausente o fuera de rango, una alerta sin `type` o con un `level` mayor que 2147483647 | `400`, con el motivo y un [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901) al valor del cuerpo | Se confirma y después se envía al stream `failed-decode` | `total_msg_failed_decode` |
 | Una marca de tiempo que no es RFC 3339, es `0001-01-01T00:00:00Z` o tiene más de 366 días | `400`, nombrando el campo | Se envía a `failed-decode` | `total_msg_failed_decode`, `total_msg_invalid_event_time` |
 | Más de 256 lecturas | `400`, indicando el número y el límite | Se envía a `failed-decode` | `total_msg_failed_decode`, `total_msg_too_many_readings` |
 | El `device` del cuerpo no es el dispositivo del topic | — | Se envía a `failed-decode` | `total_msg_failed_decode` |
@@ -338,7 +381,7 @@ Lo comprueba `event-sources` al recibir y decodificar el mensaje.
 | La plataforma está aplicando [contrapresión](../deployment/observability.md#ingest-backpressure) | `503` **con** `Retry-After`: no se almacenó, envíalo de nuevo | No se rechaza: espera en el stream de captura; los mensajes capturados más antiguos solo se descartan si ese stream se llena | |
 | No se pudo construir el mensaje del evento: una credencial que presentó no se pudo sellar, o el evento no se pudo codificar | `500`: no se almacena, y reenviarlo falla igual | Descartado | `total_msg_build_dropped`, por `cause` |
 | El evento no se pudo entregar a la cadena de proceso | `503` **sin** `Retry-After`: puede haberse almacenado, así que reenviarlo lo almacena dos veces salvo que lleve un [`altId`](#altid) | — | |
-| Aceptado | `202` | `PUBACK` (QoS 1) | |
+| Aceptado | `202`, con una cabecera de recibo `X-DC-Event-Id` | `PUBACK` (QoS 1) | |
 
 Un `400` es definitivo: la misma petición recibe la misma respuesta. Un rechazo en la entrada rechaza el **mensaje entero**, incluidas todas las demás entradas que contenga.
 

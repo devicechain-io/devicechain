@@ -20,8 +20,10 @@ import {
   exampleMeasurements,
   exampleValue,
   httpCommand,
+  httpUplinkCommand,
   MAX_EXAMPLE_METRICS,
   mqttCommand,
+  mqttUplinkCommand,
   PLACEHOLDER,
   shellQuote,
   usableCredential,
@@ -38,6 +40,8 @@ interface GoldenCase {
   input: SnippetInput;
   mqtt: string;
   http: string;
+  mqttUplink: string;
+  httpUplink: string;
 }
 
 const cases = JSON.parse(readFileSync(CASES_PATH, 'utf8')) as GoldenCase[];
@@ -46,6 +50,8 @@ if (process.env.UPDATE_CONNECT_SNIPPETS === '1') {
   for (const c of cases) {
     c.mqtt = mqttCommand(c.input);
     c.http = httpCommand(c.input);
+    c.mqttUplink = mqttUplinkCommand(c.input);
+    c.httpUplink = httpUplinkCommand(c.input);
   }
   writeFileSync(CASES_PATH, JSON.stringify(cases, null, 2) + '\n');
 }
@@ -59,6 +65,8 @@ describe('connect snippets match the file the platform tests read', () => {
     it(c.name, () => {
       expect(mqttCommand(c.input)).toBe(c.mqtt);
       expect(httpCommand(c.input)).toBe(c.http);
+      expect(mqttUplinkCommand(c.input)).toBe(c.mqttUplink);
+      expect(httpUplinkCommand(c.input)).toBe(c.httpUplink);
     });
   }
 });
@@ -143,6 +151,34 @@ describe('secrets', () => {
     const tok: SnippetInput = { ...base, credential: { credentialType: 'ACCESS_TOKEN', credentialId: 'tok' } };
     expect(JSON.parse(eventBody(tok))).not.toHaveProperty('credentialSecret');
     expect(mqttCommand(tok)).not.toContain(' -P ');
+  });
+});
+
+describe('raw-payload commands', () => {
+  const base: SnippetInput = {
+    tenant: 'acme',
+    deviceToken: 'sensor-001',
+    credential: { credentialType: 'MQTT_BASIC', credentialId: 'sensor-001-user' },
+    metrics: [],
+  };
+  const tok: SnippetInput = { ...base, credential: { credentialType: 'ACCESS_TOKEN', credentialId: 'tok' } };
+
+  it('sends a file untouched to its own uplink topic, carrying no event body', () => {
+    const c = mqttUplinkCommand(base);
+    expect(c).toContain(`-t '<instance-id>/acme/devices/sensor-001/uplink'`);
+    expect(c).toContain('-f payload.bin');
+    expect(c).not.toContain(' -m ');
+    expect(c).not.toContain('credentialSecret');
+  });
+
+  it('presents the credential in headers, never a password', () => {
+    expect(httpUplinkCommand(tok)).toContain(`-H 'Authorization: Bearer tok'`);
+    const c = httpUplinkCommand(base);
+    expect(c).toContain(`-H 'X-DeviceChain-Credential-Type: MQTT_BASIC'`);
+    expect(c).toContain(`-H 'X-DeviceChain-Credential-Id: sensor-001-user'`);
+    expect(c).toContain(`-H 'X-DeviceChain-Credential-Secret: ${PLACEHOLDER.password}'`);
+    expect(c).not.toContain('Authorization');
+    expect(c).toContain(`--data-binary '@payload.bin'`);
   });
 });
 

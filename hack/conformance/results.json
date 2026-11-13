@@ -1,0 +1,204 @@
+{
+  "schema": 1,
+  "commit": "7bc2b4279c2b3f3846c1ff26099554e1a42751ad",
+  "dirty": false,
+  "generatedAt": "2026-11-08T06:58:16Z",
+  "specDigest": "39465edb238adeca82839c34c7d3523a1ab469d9532da2b4a2fa1e85b1f2e8c8",
+  "checks": [
+    {
+      "id": "http-202",
+      "status": "pass",
+      "evidence": "POST of 1003.03 answered 202, stored=1, event-sources counted +1"
+    },
+    {
+      "id": "http-429",
+      "status": "pass",
+      "evidence": "over-ceiling POST answered 429 Retry-After 1, refused value stored=0, refusal counter +1"
+    },
+    {
+      "id": "http-503-retry-after",
+      "status": "pass",
+      "evidence": "POST answered 503 Retry-After 10 while backpressured, refused value 1011.63 stored=0, refusal counter +1"
+    },
+    {
+      "id": "lwm2m-device-info-tlv-unread",
+      "status": "pass",
+      "evidence": "lwm2m.readDeviceInfo settled FAILED with 'no Device-object resource could be read: manufacturer: unsupported content format 11542 (only text/plain is decoded); mo'"
+    },
+    {
+      "id": "lwm2m-execute",
+      "status": "pass",
+      "evidence": "lwm2m.execute /3/0/4 settled SUCCESSFUL/SUCCEEDED"
+    },
+    {
+      "id": "lwm2m-harvest-tlv-unread",
+      "status": "pass",
+      "evidence": "client attribute query answered=1; manufacturer recorded as ''"
+    },
+    {
+      "id": "lwm2m-observe",
+      "status": "pass",
+      "evidence": "stored for lw-conf-lwm2m-a-bf6df76c2c7d: initial 21.5 present=1, a notified (changed) value present=1; names: /3303/0/5700"
+    },
+    {
+      "id": "lwm2m-read",
+      "status": "pass",
+      "evidence": "lwm2m.read /3/0/0 settled SUCCESSFUL/SUCCEEDED with '\"yAALRGV2aWNlQ2hhaW4=\"'"
+    },
+    {
+      "id": "lwm2m-reboot",
+      "status": "pass",
+      "evidence": "lwm2m.reboot settled SUCCESSFUL/SUCCEEDED"
+    },
+    {
+      "id": "lwm2m-register",
+      "status": "pass",
+      "evidence": "Leshan registered: device lw-conf-lwm2m-a-bf6df76c2c7d exists, active=true, presence ASSERTED"
+    },
+    {
+      "id": "lwm2m-tlv-only-no-telemetry",
+      "status": "pass",
+      "evidence": "TLV-only client: device lw-conf-lwm2m-tlv-458a8d821ebc active=true, readings stored=0 (the limitation holds when 0)"
+    },
+    {
+      "id": "lwm2m-write",
+      "status": "pass",
+      "evidence": "lwm2m.write /3/0/15 settled SUCCESSFUL/SUCCEEDED; a read afterwards returned '\"yA8NRXVyb3BlL1p1cmljaA==\"'"
+    },
+    {
+      "id": "mqtt-command-subscription",
+      "status": "pass",
+      "evidence": "Paho subscribed to its command topic; the command settled SUCCESSFUL/SUCCEEDED"
+    },
+    {
+      "id": "mqtt-qos0-publish",
+      "status": "pass",
+      "evidence": "Paho QoS 0 publish of 1001.01: client exit 0, stored=1, event-sources counted +1"
+    },
+    {
+      "id": "mqtt-qos1-publish",
+      "status": "pass",
+      "evidence": "Paho QoS 1 publish of 1002.02: client exit 0, stored=1, event-sources counted +1"
+    },
+    {
+      "id": "sparkplug-birth",
+      "status": "pass",
+      "evidence": "Tahu NBIRTH: device sp-conf-n1-88092013ec62 for conf/n1 exists=1, active=true, presence ASSERTED"
+    },
+    {
+      "id": "sparkplug-data",
+      "status": "pass",
+      "evidence": "Tahu NDATA by alias: temperature=24.5 stored=1; names: humidity,temperature"
+    }
+  ],
+  "controls": [
+    {
+      "id": "N1-dropped-command-subscription",
+      "check": "mqtt-command-subscription",
+      "outcome": "red",
+      "detail": "no subscription: the command settled as 'SENT'"
+    },
+    {
+      "id": "N2-decoder-off-by-one",
+      "check": "sparkplug-data",
+      "outcome": "red",
+      "detail": "NDATA one alias off: temperature=24.5 stored=0 (humidity 24.5 stored=1)"
+    },
+    {
+      "id": "N3-lwm2m-tlv-only",
+      "check": "lwm2m-observe",
+      "outcome": "red",
+      "detail": "TLV-only client: initial stored=0, notified value stored=0"
+    },
+    {
+      "id": "R-http-202",
+      "check": "http-202",
+      "outcome": "red",
+      "detail": "the request was answered 400"
+    },
+    {
+      "id": "R-http-429",
+      "check": "http-429",
+      "outcome": "red",
+      "detail": "the request was accepted with 202 and stored"
+    },
+    {
+      "id": "R-http-503",
+      "check": "http-503-retry-after",
+      "outcome": "red",
+      "detail": "the 503 carries no Retry-After header"
+    },
+    {
+      "id": "R-lwm2m-device-info",
+      "check": "lwm2m-device-info-tlv-unread",
+      "outcome": "red",
+      "detail": "the command succeeded with the manufacturer the client holds"
+    },
+    {
+      "id": "R-lwm2m-execute",
+      "check": "lwm2m-execute",
+      "outcome": "red",
+      "detail": "the command failed"
+    },
+    {
+      "id": "R-lwm2m-harvest",
+      "check": "lwm2m-harvest-tlv-unread",
+      "outcome": "red",
+      "detail": "the manufacturer the client holds was recorded as a client attribute"
+    },
+    {
+      "id": "R-lwm2m-observe",
+      "check": "lwm2m-observe",
+      "outcome": "red",
+      "detail": "only the initial value was stored; a different value than the one notified"
+    },
+    {
+      "id": "R-lwm2m-read",
+      "check": "lwm2m-read",
+      "outcome": "red",
+      "detail": "the command failed"
+    },
+    {
+      "id": "R-lwm2m-reboot",
+      "check": "lwm2m-reboot",
+      "outcome": "red",
+      "detail": "the command timed out"
+    },
+    {
+      "id": "R-lwm2m-register",
+      "check": "lwm2m-register",
+      "outcome": "red",
+      "detail": "the device exists but its presence reads disconnected"
+    },
+    {
+      "id": "R-lwm2m-tlv-limit",
+      "check": "lwm2m-tlv-only-no-telemetry",
+      "outcome": "red",
+      "detail": "telemetry from the TLV-only client was stored, so the limitation no longer holds"
+    },
+    {
+      "id": "R-lwm2m-write",
+      "check": "lwm2m-write",
+      "outcome": "red",
+      "detail": "the command succeeded but a read afterwards returns the old value"
+    },
+    {
+      "id": "R-mqtt-qos0",
+      "check": "mqtt-qos0-publish",
+      "outcome": "red",
+      "detail": "the client reports a publish but nothing was stored"
+    },
+    {
+      "id": "R-mqtt-qos1",
+      "check": "mqtt-qos1-publish",
+      "outcome": "red",
+      "detail": "the broker never acknowledged the publish, though a value is stored"
+    },
+    {
+      "id": "R-sparkplug-birth",
+      "check": "sparkplug-birth",
+      "outcome": "red",
+      "detail": "no device was registered"
+    }
+  ]
+}

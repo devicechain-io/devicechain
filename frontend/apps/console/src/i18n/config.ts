@@ -26,6 +26,7 @@ import enNav from './locales/en/nav.json';
 import enUserMenu from './locales/en/userMenu.json';
 import enTheme from './locales/en/theme.json';
 import enDevices from './locales/en/devices.json';
+import enApprovals from './locales/en/approvals.json';
 import enAlarms from './locales/en/alarms.json';
 import enTenants from './locales/en/tenants.json';
 import enTiers from './locales/en/tiers.json';
@@ -104,6 +105,8 @@ export const NAMESPACES = [
   'theme',
   'devices',
   'alarms',
+  'approvals',
+  'automationReview',
   'dashboards',
   'deviceProfiles',
   'tenants',
@@ -162,6 +165,7 @@ const enResources = {
     theme: enTheme,
     devices: enDevices,
     alarms: enAlarms,
+    approvals: enApprovals,
     tenants: enTenants,
     tiers: enTiers,
     connectors: enConnectors,

@@ -258,6 +258,7 @@ title: 指标参考
 | --- | --- |
 | `notifications_dead_lettered_total` | 每次投递尝试都失败后写入死信流的告警，使运维人员可以看到哪些通知从未被发出。 |
 | `quiet_hours_total{outcome}` | 静默时段对一条通知的处理结果，按 outcome 分类：held（被暂存而未发送）、released（在静默时段结束时发送）、dropped_resolved（因告警已被确认或清除而丢弃）、dropped_policy（因策略被停用或删除而丢弃）、dropped_exhausted（在 5 次发送都未送达任何渠道后丢弃并记录为死信）或 superseded（因策略已针对同一告警的更新事件发出通知而丢弃）。 |
+| `ledger_writes_total{outcome}` | 投递记录按结果分类：written（已写入）、failed（数据库拒绝或超时，记录丢失）、dropped（等待写入的记录过多，从未尝试写入）或 purged（租户已被删除）。投递记录绝不会延迟通知，因此 failed 或 dropped 表示缺少一条记录，而不是缺少一次通知。 |
 
 ## 用户管理 {#user-management}
 

@@ -57,7 +57,7 @@ type provFixture struct {
 func newProvFixture(t *testing.T) *provFixture {
 	t.Helper()
 	api := newPartialUpdateApi(t, append(append([]any{}, deviceProfileTables...),
-		&ProvisioningProfile{}, &DeviceCredential{}, &Integration{}, &IntegrationDeviceType{}, &PendingSessionKick{}, &DeviceTrustAnchor{},
+		&ProvisioningProfile{}, &DeviceCredential{}, &Integration{}, &IntegrationDeviceType{}, &PendingSessionKick{}, &PendingRevocationKick{}, &PendingRevocationExpansion{}, &PendingRevocationExpansionSerial{}, &DeviceTrustAnchor{},
 		&DeviceRevocationIssuer{}, &DeviceRevocationList{}, &DeviceRevokedCertificate{}, &DeviceCredentialChainLink{})...)
 	ctx := partialUpdateCtx()
 	var store *credentialtest.Store

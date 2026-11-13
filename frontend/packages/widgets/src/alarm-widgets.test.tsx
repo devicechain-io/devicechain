@@ -55,6 +55,27 @@ const state = (over: Partial<AlarmStreamState> = {}): AlarmStreamState => ({
 });
 
 describe('AlarmTable', () => {
+  it.each([
+    ['en', 'Alarms'],
+    ['es', 'Alarmas'],
+  ])('makes the read-only scroll region focusable and named in %s', (locale, name) => {
+    const previousLang = document.documentElement.lang;
+    document.documentElement.lang = locale;
+    try {
+      render(<AlarmTable widget={widget('alarm-table')} data={state({ alarms: [alarm()], total: 1 })} />);
+      expect(screen.queryByRole('button')).toBeNull();
+      const region = screen.getByRole('region', { name });
+      expect(region).toBe(screen.getByRole('table').parentElement);
+      expect(region.style.overflow).toBe('auto');
+      expect(region.tabIndex).toBe(0);
+      region.focus();
+      expect(document.activeElement).toBe(region);
+      // Focus is the prerequisite for native scrolling; jsdom cannot prove scroll movement.
+    } finally {
+      document.documentElement.lang = previousLang;
+    }
+  });
+
   it('renders a row per alarm with severity label, originator, key and value', () => {
     const alarms = [
       alarm({ token: 'a-1', severity: 'CRITICAL', alarmKey: 'over-temperature', originatorToken: 'thermostat-01', lastValue: 87.4 }),

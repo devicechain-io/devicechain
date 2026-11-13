@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The words the alarm table's device-type tab strip renders itself. The widget packages carry no
+// The words the alarm widgets render themselves. The widget packages carry no
 // i18n runtime, so this is the one small per-language table, in the manner of fleet-strings.ts;
 // option labels are translated in the console's catalogs, not here.
 
@@ -18,6 +18,28 @@ export interface AlarmStrings {
   activeBadge: (count: number, worst: string) => string;
   // The severity words for the badge description.
   severity: Record<string, string>;
+  rows: {
+    scrollLabel: string;
+    severity: string;
+    status: string;
+    originator: string;
+    alarm: string;
+    value: string;
+    raised: string;
+    actions: string;
+    active: string;
+    acknowledged: string;
+    cleared: string;
+    loading: string;
+    empty: string;
+    acknowledge: string;
+    clear: string;
+    acknowledgeAlarm: (key: string) => string;
+    clearAlarm: (key: string) => string;
+    failed: string;
+    drill: (token: string) => string;
+    shown: (shown: number, total: number) => string;
+  };
   // The severity breakdown (alarm-severity).
   breakdown: {
     // The list's accessible name, spoken before the counts.
@@ -43,6 +65,28 @@ export const ALARM_STRINGS: Record<'en' | 'es', AlarmStrings> = {
     deviceType: 'Device type',
     activeBadge: (n, worst) => `${n} active ${n === 1 ? 'alarm' : 'alarms'}, worst ${worst}`,
     severity: { CRITICAL: 'Critical', MAJOR: 'Major', MINOR: 'Minor', WARNING: 'Warning', INDETERMINATE: 'Indeterminate' },
+    rows: {
+      scrollLabel: 'Alarms',
+      severity: 'Severity',
+      status: 'Status',
+      originator: 'Originator',
+      alarm: 'Alarm',
+      value: 'Value',
+      raised: 'Raised',
+      actions: 'Actions',
+      active: 'Active',
+      acknowledged: 'Acknowledged',
+      cleared: 'Cleared',
+      loading: 'Loading…',
+      empty: 'No alarms',
+      acknowledge: 'Ack',
+      clear: 'Clear',
+      acknowledgeAlarm: (key) => `Acknowledge alarm ${key}`,
+      clearAlarm: (key) => `Clear alarm ${key}`,
+      failed: 'Action failed — retry',
+      drill: (token) => `Show ${token} in the linked widgets`,
+      shown: (shown, total) => `Showing ${shown} of ${total}`,
+    },
     breakdown: {
       label: 'Alarms by severity',
       total: (n) => `${n} ${n === 1 ? 'alarm' : 'alarms'}`,
@@ -59,6 +103,28 @@ export const ALARM_STRINGS: Record<'en' | 'es', AlarmStrings> = {
     deviceType: 'Tipo de dispositivo',
     activeBadge: (n, worst) => `${n} ${n === 1 ? 'alarma activa' : 'alarmas activas'}, la peor: ${worst}`,
     severity: { CRITICAL: 'Crítica', MAJOR: 'Mayor', MINOR: 'Menor', WARNING: 'Advertencia', INDETERMINATE: 'Indeterminada' },
+    rows: {
+      scrollLabel: 'Alarmas',
+      severity: 'Severidad',
+      status: 'Estado',
+      originator: 'Originador',
+      alarm: 'Alarma',
+      value: 'Valor',
+      raised: 'Generada',
+      actions: 'Acciones',
+      active: 'Activa',
+      acknowledged: 'Reconocida',
+      cleared: 'Despejada',
+      loading: 'Cargando…',
+      empty: 'No hay alarmas',
+      acknowledge: 'Reconocer',
+      clear: 'Despejar',
+      acknowledgeAlarm: (key) => `Reconocer alarma ${key}`,
+      clearAlarm: (key) => `Despejar alarma ${key}`,
+      failed: 'La acción falló — inténtalo de nuevo',
+      drill: (token) => `Mostrar ${token} en los widgets enlazados`,
+      shown: (shown, total) => `Mostrando ${shown} de ${total}`,
+    },
     breakdown: {
       label: 'Alarmas por severidad',
       total: (n) => `${n} ${n === 1 ? 'alarma' : 'alarmas'}`,

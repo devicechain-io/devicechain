@@ -7,10 +7,12 @@ import (
 	"context"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
+	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // CreateNotificationChannel creates a delivery channel. The channel type must be
@@ -30,7 +32,7 @@ func (api *Api) CreateNotificationChannel(ctx context.Context,
 	if err := validateJSONObject(request.Metadata, "metadata"); err != nil {
 		return nil, err
 	}
-	if err := validateChannelCredential(request.Token, request.ChannelType, request.Config,
+	if err := validateChannelCredential(request.Token, request.ChannelType, request.Config, request.Secret,
 		request.Secret != nil && *request.Secret != ""); err != nil {
 		return nil, err
 	}
@@ -155,27 +157,45 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 	// with no secret. Delivery re-checks the same rule (httpsink.Send) and refuses such a
 	// channel terminally; this check exists so the caller hears about the mistake now, from
 	// the request that made it, rather than from a page that never arrived.
-	if channelType == ChannelTypeWebhook && (request.ChannelType.Set || request.Config.Set ||
+	if (channelType == ChannelTypeWebhook || IsNativeChannelType(channelType)) && (request.ChannelType.Set || request.Config.Set ||
 		request.Secret.Set || (request.Enabled.Set && enabled)) {
 		hasSecret, err := api.channelHasSecretAfter(ctx, updated.ID, request.Secret)
 		if err != nil {
 			return nil, err
 		}
-		if err := validateChannelCredential(token, channelType, config, hasSecret); err != nil {
+		if err := validateChannelCredential(token, channelType, config, request.Secret.Value, hasSecret); err != nil {
 			return nil, err
 		}
 	}
 
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	updated.Metadata = metadataJSON
-	updated.ChannelType = channelType
-	updated.Config = configJSON
-	updated.Enabled = enabled
-
-	result := api.RDB.DB(ctx).Save(updated)
-	if result.Error != nil {
-		return nil, result.Error
+	assignments := make(map[string]any)
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(updated.Name)
+	}
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(updated.Description)
+	}
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
+	if request.ChannelType.Set {
+		assignments["channel_type"] = channelType
+	}
+	if request.Config.Set {
+		assignments["config"] = configJSON
+	}
+	if request.Enabled.Set {
+		assignments["enabled"] = enabled
+	}
+	if len(assignments) == 0 && !request.Secret.Set {
+		return updated, nil
+	}
+	// Effective inputs above are needed for credential validation, but omitted
+	// columns may already have changed since the read and must never be assigned.
+	if len(assignments) > 0 {
+		if err := api.RDB.DB(ctx).Model(updated).Omit(clause.Associations).Updates(assignments).Error; err != nil {
+			return nil, err
+		}
 	}
 	// The secret is the one field whose three states do not map onto a column, because it
 	// is not one: it lives in the envelope-encrypted store, keyed by the channel's
@@ -200,7 +220,14 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 			return nil, err
 		}
 	}
-	return updated, nil
+	reloaded, err := api.NotificationChannelsById(ctx, []uint{updated.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(reloaded) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return reloaded[0], nil
 }
 
 // RenameNotificationChannel moves a channel from token to newToken, and is the ONLY way
@@ -403,6 +430,13 @@ func (api *Api) DeleteNotificationChannel(ctx context.Context, token string) (bo
 	if err := api.Secrets.Delete(ctx, ref); err != nil {
 		log.Warn().Err(err).Str("token", token).
 			Msg("Deleted channel but failed to remove its stored secret (orphaned ciphertext)")
+	}
+	// The signing keys go the same way; both slots, idempotent, same reasoning.
+	if tenant, ok := core.TenantFromContext(ctx); ok {
+		if err := api.channelKeyring().Delete(ctx, tenant, ChannelSigningBase(matches[0].ID)); err != nil {
+			log.Warn().Err(err).Str("token", token).
+				Msg("Deleted channel but failed to remove its signing secrets (orphaned ciphertext)")
+		}
 	}
 	return result.RowsAffected > 0, nil
 }

@@ -4,10 +4,10 @@ title: Por qué no aparecen los datos de mi dispositivo
 
 # Por qué no aparecen los datos de mi dispositivo {#why}
 
-Un dispositivo envía eventos y no aparece nada. Antes de leer el log de un pod, mire lo que la plataforma **rechazó**. Cuando descarta un evento, o no puede almacenarlo, guarda un registro breve de ello, y su tenant puede leerlo.
+Un dispositivo envía eventos y no aparece nada. Antes de leer el log de un pod, mira lo que la plataforma **rechazó**. Cuando descarta un evento, o no puede almacenarlo, guarda un registro breve de ello, y tu tenant puede leerlo.
 
 :::note Estado
-Disponible. Abra **Fallos de ingesta** en la sección **Monitor** de la consola, o consulte `failedEvents` y `failedEventSummary` en la API GraphQL de event-management. Ambas requieren `device:write`, la autorización de los miembros que gestionan dispositivos y por tanto pueden actuar ante un rechazo, y no la base de solo lectura que tiene todo miembro. Tampoco se ofrecen a los miembros cuyo acceso se limita a algunos clientes: un rechazo suele nombrar un dispositivo que no existe, por lo que no pertenece a ningún cliente.
+Disponible. Abre **Fallos de ingesta** en la sección **Monitor** de la consola, o consulta `failedEvents` y `failedEventSummary` en la API GraphQL de event-management. Ambas requieren `device:write`, la autorización de los miembros que gestionan dispositivos y por tanto pueden actuar ante un rechazo, y no la base de solo lectura que tiene todo miembro. Tampoco se ofrecen a los miembros cuyo acceso se limita a algunos clientes: un rechazo suele nombrar un dispositivo que no existe, por lo que no pertenece a ningún cliente.
 :::
 
 ## Qué está viendo {#what}
@@ -17,26 +17,26 @@ Cada fila es un evento rechazado, del más reciente al más antiguo:
 | Columna | Significado |
 | --- | --- |
 | **Registrado** | Cuándo registró la plataforma el rechazo. Es el reloj de la plataforma, no el del dispositivo. |
-| **Motivo** | Por qué. Vea la tabla siguiente. |
+| **Motivo** | Por qué. Ve la tabla siguiente. |
 | **Token del dispositivo** | El token que **indicó el remitente**. Es lo que afirma el remitente, no una prueba de que el dispositivo exista: para un dispositivo desconocido no nombra nada de su registro. |
 | **Lo que indicó la plataforma** | El texto de la propia plataforma, acortado a 512 bytes. |
-| **Agrupados además** | Cuántos registros adicionales del mismo motivo y del mismo dispositivo se contaron en esta fila. Vea el [límite de inundación](#flood-bound). |
+| **Agrupados además** | Cuántos registros adicionales del mismo motivo y del mismo dispositivo se contaron en esta fila. Ve el [límite de inundación](#flood-bound). |
 
-Las filas son un informe. **No son una cola**: no se reenvía nada, y los eventos originales no se almacenan en los datos de su tenant. Corrija la causa y los siguientes eventos del dispositivo se aceptan.
+Las filas son un informe. **No son una cola**: no se reenvía nada, y los eventos originales no se almacenan en los datos de tu tenant. Corrige la causa y los siguientes eventos del dispositivo se aceptan.
 
 ## Motivos y qué hacer {#reasons}
 
 | Motivo | Qué ocurrió | Qué revisar |
 | --- | --- | --- |
-| **Dispositivo desconocido** (`DEVICE_NOT_FOUND`) | Ningún dispositivo tiene el token que indicó el remitente. | Registre el dispositivo o corrija el token que envía. Un token no es el nombre del dispositivo ni su credencial; vea [los tres identificadores](./connecting-a-device.md#three-identifiers). |
+| **Dispositivo desconocido** (`DEVICE_NOT_FOUND`) | Ningún dispositivo tiene el token que indicó el remitente. | Registra el dispositivo o corrige el token que envías. Un token no es el nombre del dispositivo ni su credencial; ve [los tres identificadores](./connecting-a-device.md#three-identifiers). |
 | **Credencial rechazada** (`UNAUTHENTICATED`) | La credencial que presentó el dispositivo faltaba o era incorrecta. | La [credencial](./device-credentials.md) del dispositivo: ¿se rotó, venció o nunca se configuró en el dispositivo? |
 | **No es dispositivo de esta pasarela** (`NOT_GATEWAY_CHILD`) | Una pasarela publicó para un dispositivo que no le está asignado o que no existe. | La [asignación a la pasarela](./connecting-a-device.md) del dispositivo. |
 | **Mensaje ilegible** (`INVALID`) | El mensaje no se pudo leer. | El formato de la carga que envía el dispositivo. |
-| **Error de la plataforma** (`API_CALL_FAILED`) | No se pudo contactar un servicio de la plataforma que el evento necesitaba, o falló el almacenamiento del evento. | No se resuelve desde el dispositivo. Avise a su operador; el detalle está en los logs de la plataforma y no se le muestra. |
+| **Error de la plataforma** (`API_CALL_FAILED`) | No se pudo contactar un servicio de la plataforma que el evento necesitaba, o falló el almacenamiento del evento. | No se resuelve desde el dispositivo. Avisa a tu operador; el detalle está en los logs de la plataforma y no se te muestra. |
 | **Alias de integración cambiado** (`INTEGRATION_ALIAS_MISMATCH`) | El evento de una integración nombró un dispositivo que ya no tiene el alias con el que se asoció. | El alias del dispositivo en la [integración](./inbound-integrations.md). |
 | **Otro motivo** (`UNKNOWN`) | Un motivo que esta versión no nombra. | La fila lleva su código de motivo. Nunca se muestra como otro motivo. |
 
-Si la tabla está vacía y los datos siguen sin aparecer, la plataforma no registró ningún rechazo: compruebe si el dispositivo está [deshabilitado](./device-credentials.md#disabling-a-device) (los eventos de un dispositivo deshabilitado se descartan y se cuentan, pero no aparecen aquí), la conexión del dispositivo, su [estado en vivo](../user-guide/devices.md) y si sus eventos llegan al broker.
+Si la tabla está vacía y los datos siguen sin aparecer, la plataforma no registró ningún rechazo: comprueba si el dispositivo está [deshabilitado](./device-credentials.md#disabling-a-device) (los eventos de un dispositivo deshabilitado se descartan y se cuentan, pero no aparecen aquí), la conexión del dispositivo, su [estado en vivo](../user-guide/devices.md) y si sus eventos llegan al broker.
 
 ## En la página de un dispositivo {#device-page}
 
@@ -78,4 +78,4 @@ Los registros se borran junto con el resto de los datos del tenant. Un tenant el
 
 ## Para operadores {#operators}
 
-`FailedEventsSustained` se dispara cuando un mismo motivo se rechaza a más de un registro por segundo durante 15 minutos. La serie que lo respalda cuenta todos los registros, incluidos los que el límite de inundación agrupó. Vea [Observabilidad](../deployment/observability.md) y la [referencia de métricas](../deployment/metrics-reference.md#event-management).
+`FailedEventsSustained` se dispara cuando un mismo motivo se rechaza a más de un registro por segundo durante 15 minutos. La serie que lo respalda cuenta todos los registros, incluidos los que el límite de inundación agrupó. Ve [Observabilidad](../deployment/observability.md) y la [referencia de métricas](../deployment/metrics-reference.md#event-management).

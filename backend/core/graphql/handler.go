@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/tracing"
 	"io"
 	"net"
 	"net/http"
@@ -232,6 +233,15 @@ func (h *HttpHandler) validator() *auth.Validator {
 
 // Handles http request processing.
 func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Checked here, not inside tracing.HTTP, so the disabled path builds no method-value closure.
+	if !tracing.Enabled() {
+		h.serveHTTP(w, r)
+		return
+	}
+	tracing.HTTP(w, r, "graphql.request", h.serveHTTP)
+}
+
+func (h *HttpHandler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// Cap the request body before anything reads it (ADR-029): serveExec's JSON
 	// decode buffers the whole envelope — query + variables — into memory before
 	// the query-length ceiling can reject an oversized query, so without this a
@@ -245,6 +255,8 @@ func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(context.WithValue(r.Context(), key, value))
 	}
 	r = r.WithContext(context.WithValue(r.Context(), contextRemoteAddrKey, requestSourceAddr(r)))
+	// One memo per request, never shared with another (see Memoize).
+	r = r.WithContext(WithRequestMemo(r.Context()))
 
 	// Authenticate via the verified JWT (ADR-008), which replaces the former
 	// trusted X-DC-Tenant gateway header: a verified token's claims cannot be
@@ -288,6 +300,9 @@ func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ctx = core.WithTenant(ctx, tenant)
 	}
 	ctx = auth.WithClaims(ctx, claims)
+	// The token the claims were verified from, for a call made under the caller's own authority
+	// (auth.WithBearer). Never a credential this process uses for itself.
+	ctx = auth.WithBearer(ctx, token)
 	h.serveExec(w, r.WithContext(ctx))
 }
 
@@ -339,6 +354,10 @@ func (h *HttpHandler) serveExec(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	response := h.Schema.Exec(ctx, params.Query, params.OperationName, params.Variables)
+	if tracing.Enabled() {
+		tenant, _ := core.TenantFromContext(ctx)
+		tracing.Operation(ctx, params.OperationName, tenant, len(response.Errors) > 0)
+	}
 	body, err := json.Marshal(response)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

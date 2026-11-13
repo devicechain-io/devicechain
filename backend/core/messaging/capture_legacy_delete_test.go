@@ -38,7 +38,7 @@ func stageOldBuildCapture(t *testing.T, srvURL, area string, staged bool) nats.J
 	js, err := nc.JetStream()
 	require.NoError(t, err)
 	_, err = js.AddStream(&nats.StreamConfig{
-		Name: captureStreamOn("test"), Subjects: DeviceEventsSubjects("test"), Retention: nats.WorkQueuePolicy,
+		Name: captureStreamOn("test"), Subjects: oldBuildCaptureSubjects("test"), Retention: nats.WorkQueuePolicy,
 	})
 	require.NoError(t, err)
 	if staged {

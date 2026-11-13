@@ -60,7 +60,8 @@ func req(body []byte, event string) *Request {
 	if event != "" {
 		q.Set("event", event)
 	}
-	return &Request{Body: body, Header: http.Header{}, Query: q, ContentType: "application/json", ReceivedAt: receipt}
+	return &Request{Body: body, Header: http.Header{}, Query: q, ContentType: "application/json", ReceivedAt: receipt,
+		DownlinkReports: true}
 }
 
 // The Things Stack's example is dated 2020, so its requests are received just after.
@@ -118,9 +119,48 @@ func TestChirpStackEventsThatAreNotUplinksAreIgnored(t *testing.T) {
 		require.Empty(t, res.Uplinks, event)
 	}
 	// An event type this build has never heard of is also not an uplink.
-	res, err := Decode(chirp(false), req([]byte(`{}`), "txack"))
+	res, err := Decode(chirp(false), req([]byte(`{}`), "log"))
 	require.NoError(t, err)
 	require.True(t, res.Ignored)
+}
+
+func TestChirpStackDownlinkReports(t *testing.T) {
+	cases := []struct {
+		file, event, id string
+		acked           bool
+		fcnt            int64
+	}{
+		{"ack.json", "ack", "5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f11", true, 12},
+		// acknowledged is false by default and protobuf-JSON may omit it: the network server's timeout.
+		{"ack_timeout.json", "ack", "5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f12", false, 13},
+		{"txack.json", "txack", "5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f13", false, 14},
+	}
+	for _, c := range cases {
+		res, err := Decode(chirp(false), req(fixture(t, "chirpstack/"+c.file), c.event))
+		require.NoError(t, err, c.file)
+		require.False(t, res.Ignored, c.file)
+		require.Empty(t, res.Uplinks, c.file)
+		require.Equal(t, []DownlinkEvent{{Kind: c.event, Scheme: "lorawan.deveui", Identifier: "0101010101010101",
+			QueueItemID: c.id, Acknowledged: c.acked, FCntDown: c.fcnt}}, res.Downlinks, c.file)
+	}
+}
+
+func TestChirpStackDownlinkReportRefusals(t *testing.T) {
+	for name, body := range map[string]string{
+		"no queue item":       `{"deviceInfo":{"devEui":"0101010101010101"},"acknowledged":true}`,
+		"queue item not uuid": `{"deviceInfo":{"devEui":"0101010101010101"},"queueItemId":"abc","acknowledged":true}`,
+		"no deveui":           `{"queueItemId":"5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f11","acknowledged":true}`,
+		"not json":            `nope`,
+		"acknowledged text":   `{"deviceInfo":{"devEui":"0101010101010101"},"queueItemId":"5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f11","acknowledged":"yes"}`,
+	} {
+		for _, ev := range []string{"ack", "txack"} {
+			if name == "no queue item" && ev == "txack" {
+				continue // untracked, not malformed: see TestAChirpStackTxAckWithNoQueueItemIsUntrackedNotMalformed
+			}
+			_, err := Decode(chirp(false), req([]byte(body), ev))
+			require.ErrorIs(t, err, ErrMalformed, name+" "+ev)
+		}
+	}
 }
 
 func TestChirpStackRefusals(t *testing.T) {
@@ -456,4 +496,151 @@ func TestDecodeRefusesAnyCodecsBadDedupKey(t *testing.T) {
 	}
 	_, err := Decode(chirp(false), req(nil, "up"))
 	require.NoError(t, err, "the paired positive")
+}
+
+// With the route not carrying downlink reports (the feed is off) an ack or txack is not read at all:
+// Ignored whatever the body holds, as it was before the reports existed, so a body that would be
+// refused with the feed on is not refused with it off.
+func TestChirpStackDownlinkReportsAreIgnoredWhenTheRouteDoesNotCarryThem(t *testing.T) {
+	for _, body := range [][]byte{fixture(t, "chirpstack/ack.json"), fixture(t, "chirpstack/txack.json"), []byte("not json"), []byte(`{}`)} {
+		for _, ev := range []string{"ack", "txack"} {
+			r := req(body, ev)
+			r.DownlinkReports = false
+			res, err := Decode(chirp(false), r)
+			require.NoError(t, err)
+			require.True(t, res.Ignored)
+			require.Empty(t, res.Downlinks)
+			require.False(t, res.Untracked)
+		}
+	}
+}
+
+// A txack for a downlink that carried only MAC commands has no queue item: Ignored and flagged untracked,
+// never a 400. An ack is held to the stricter rule, because a confirmed data downlink always has one.
+func TestAChirpStackTxAckWithNoQueueItemIsUntrackedNotMalformed(t *testing.T) {
+	body := []byte(`{"deviceInfo":{"devEui":"0101010101010101"},"fCntDown":3,"gatewayId":"0102030405060708"}`)
+	res, err := Decode(chirp(false), req(body, "txack"))
+	require.NoError(t, err)
+	require.True(t, res.Ignored)
+	require.True(t, res.Untracked)
+	require.Empty(t, res.Downlinks)
+
+	_, err = Decode(chirp(false), req(body, "ack"))
+	require.ErrorIs(t, err, ErrMalformed)
+	// ...and a queue item that is present but not a UUID is still malformed for a txack.
+	_, err = Decode(chirp(false), req([]byte(`{"deviceInfo":{"devEui":"0101010101010101"},"queueItemId":"x"}`), "txack"))
+	require.ErrorIs(t, err, ErrMalformed)
+}
+
+func TestTTSDownlinkReports(t *testing.T) {
+	const key = "dc:0123456789abcdef0123456789abcdef"
+	cases := []struct {
+		file, kind string
+		acked      bool
+	}{
+		{"downlink_ack_dc.json", "ack", true},
+		// downlink_nack: the device did not acknowledge. The same "ack, not acknowledged" as ChirpStack's
+		// timeout, because that is exactly the evidence: it says nothing about whether the frame was heard.
+		{"downlink_nack_dc.json", "ack", false},
+		{"downlink_sent_dc.json", "txack", false},
+		{"downlink_failed_dc.json", "failed", false},
+	}
+	for _, c := range cases {
+		for _, identity := range []string{"DEV_EUI", "DEVICE_ID"} {
+			d := tts(identity, false)
+			// Whatever path the webhook posted the message type to, the body says what it is.
+			for _, path := range []string{"", "downlink-ack", "up"} {
+				r := req(fixture(t, "tts/"+c.file), "")
+				r.MessageType = path
+				res, err := Decode(d, r)
+				require.NoError(t, err, c.file)
+				require.Len(t, res.Downlinks, 1, c.file+" "+identity+" "+path)
+				got := res.Downlinks[0]
+				require.Equal(t, c.kind, got.Kind)
+				require.Equal(t, c.acked, got.Acknowledged)
+				require.Equal(t, key, got.QueueItemID, "matched by the correlation id the platform set, never the event's own")
+				require.Equal(t, "app1/dev1", got.DeviceRef)
+				if identity == "DEV_EUI" {
+					require.Equal(t, "lorawan.deveui", got.Scheme)
+					require.Equal(t, "0004A30B001C0530", got.Identifier)
+				} else {
+					require.Equal(t, "tts.device-id", got.Scheme)
+					require.Equal(t, "dev1", got.Identifier)
+				}
+				require.Empty(t, res.Uplinks)
+			}
+		}
+	}
+}
+
+// downlink_failed is not always a frame that never left: the Application Server emits it when it gives up
+// retrying a transmitted confirmed downlink. The report carries what decides that.
+func TestTTSFailedReportsCarryTheRetryAndTheErrorThatDecideWhetherItWasTransmitted(t *testing.T) {
+	for file, want := range map[string]DownlinkEvent{
+		"downlink_failed_dc.json":          {Attempt: 0, ErrorNamespace: "pkg/networkserver", ErrorName: "downlink_expired"},
+		"downlink_failed_retries_dc.json":  {Attempt: 8, ErrorNamespace: "pkg/applicationserver", ErrorName: "max_retries_reached"},
+		"downlink_failed_attempt1_dc.json": {Attempt: 1, ErrorNamespace: "pkg/networkserver", ErrorName: "downlink_expired"},
+	} {
+		res, err := Decode(tts("DEV_EUI", false), req(fixture(t, "tts/"+file), ""))
+		require.NoError(t, err, file)
+		require.Len(t, res.Downlinks, 1, file)
+		got := res.Downlinks[0]
+		require.Equal(t, DownlinkFailed, got.Kind)
+		require.Equal(t, want.Attempt, got.Attempt, file)
+		require.Equal(t, want.ErrorNamespace, got.ErrorNamespace, file)
+		require.Equal(t, want.ErrorName, got.ErrorName, file)
+	}
+	// An attempt that cannot be read is not 0: it is read as a retry that happened.
+	body := []byte(`{"end_device_ids":{"device_id":"dev1","application_ids":{"application_id":"app1"},"dev_eui":"0004A30B001C0530"},` +
+		`"downlink_failed":{"downlink":{"correlation_ids":["dc:0123456789abcdef0123456789abcdef"],"confirmed_retry":{"attempt":"x"}}}}`)
+	res, err := Decode(tts("DEV_EUI", false), req(body, ""))
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Downlinks[0].Attempt)
+	// A failed report with no error at all carries empty names, which never show a pre-transmission drop.
+	body = []byte(`{"end_device_ids":{"device_id":"dev1","application_ids":{"application_id":"app1"},"dev_eui":"0004A30B001C0530"},` +
+		`"downlink_failed":{"downlink":{"correlation_ids":["dc:0123456789abcdef0123456789abcdef"]}}}`)
+	res, err = Decode(tts("DEV_EUI", false), req(body, ""))
+	require.NoError(t, err)
+	require.Empty(t, res.Downlinks[0].ErrorName)
+}
+
+func TestTTSDownlinkReportsNotFromThePlatformAreIgnored(t *testing.T) {
+	// The recorded TTS example has correlation ids of the network server's own; a downlink queued by hand
+	// in the console carries none of the platform's.
+	for _, f := range []string{"downlink_ack.json", "downlink_ack_foreign.json"} {
+		for _, path := range []string{"", "downlink-ack"} {
+			r := req(fixture(t, "tts/"+f), "")
+			r.MessageType = path
+			res, err := Decode(tts("DEV_EUI", false), r)
+			require.NoError(t, err)
+			require.True(t, res.Ignored, f)
+			require.Empty(t, res.Downlinks)
+		}
+	}
+	// A bad body at another path is ignored, as it always was.
+	r := req([]byte("nope"), "")
+	r.MessageType = "join-accept"
+	res, err := Decode(tts("DEV_EUI", false), r)
+	require.NoError(t, err)
+	require.True(t, res.Ignored)
+}
+
+func TestTTSDownlinkReportsAreIgnoredWhenTheRouteDoesNotCarryThem(t *testing.T) {
+	for _, f := range []string{"downlink_ack_dc.json", "downlink_nack_dc.json", "downlink_sent_dc.json", "downlink_failed_dc.json"} {
+		for _, path := range []string{"", "downlink-ack", "up"} {
+			r := req(fixture(t, "tts/"+f), "")
+			r.MessageType = path
+			r.DownlinkReports = false
+			res, err := Decode(tts("DEV_EUI", false), r)
+			require.NoError(t, err)
+			require.True(t, res.Ignored, f+" "+path)
+			require.Empty(t, res.Downlinks)
+		}
+	}
+	// A downlink the platform did not push is flagged untracked when the route does carry reports.
+	r := req(fixture(t, "tts/downlink_ack_foreign.json"), "")
+	res, err := Decode(tts("DEV_EUI", false), r)
+	require.NoError(t, err)
+	require.True(t, res.Ignored)
+	require.True(t, res.Untracked)
 }

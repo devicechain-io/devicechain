@@ -35,7 +35,7 @@ func newGrantTestManager(t *testing.T) (*Manager, *iam.Store) {
 func openPasswordSignIn(t *testing.T, m *Manager) (auth.SessionID, *iam.Identity) {
 	t.Helper()
 	id := &iam.Identity{Email: "pat@example.com"}
-	sid, err := m.startSession(id.Email, auth.AmrPasswordOnly())
+	sid, err := m.startSession(id.Email, id.SessionEpoch, auth.AmrPasswordOnly())
 	require.NoError(t, err)
 	return sid, id
 }

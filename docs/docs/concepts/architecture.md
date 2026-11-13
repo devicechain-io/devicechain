@@ -10,24 +10,24 @@ DeviceChain is a set of stateless Go microservices built on a shared core librar
 
 | Component | Responsibility |
 |---|---|
-| `event-sources` | Inbound device transports. Decodes raw messages (JSON today; Protobuf and custom decoders planned), applies a per-tenant ingest rate limit, and publishes them onto the pipeline. |
+| `event-sources` | Inbound device transports. Accepts JSON events and raw payloads for [profile payload decoders](../guides/payload-decoders.md), applies a per-tenant ingest rate limit, and publishes them onto the pipeline. |
 | `device-management` | Devices, device types and versioned device profiles, the typed relationship graph, the alarm object and its lifecycle, and event resolution (attaching device and organizational context to each event). |
 | `event-processing` | Detection and actions. A streaming core, which gives the same result when events are replayed, evaluates detection rules over resolved events: threshold, duration, repeating, rate-of-change, absence, connectivity, windowed aggregate and area correlation. It then dispatches automated actions: raise alarm, send command, and outbound connectors. Detection lives here. The alarm object it raises stays in `device-management`, and connector delivery is handed off to `outbound-connectors`. |
 | `event-management` | Persists resolved events to TimescaleDB, applies the data-lifecycle policies (compression, retention, rollups), and serves time-series queries over GraphQL. |
 | `device-state` | The live last-known-state projection per device: presence and the current reading per measurement. |
 | `command-delivery` | Persistent, two-way command dispatch to devices, tracked through a per-command lifecycle. It sends to one device at a time, or to a whole fleet as a single recorded batch. |
 | `dashboard-management` | Versioned dashboard definitions (draft, publish, rollback), stored opaquely and rendered by the React runtime packages in this repository's frontend workspace. Exporting a definition is a console-side feature, not a service operation. |
-| `notification-management` | Routes triggered alarms to humans, using per-tenant policy over email (SMTP) and webhook. A policy routes alarms by severity and can re-notify, at a set interval, an alarm that stays unacknowledged and uncleared. |
+| `notification-management` | Routes triggered alarms to humans, using per-tenant policy over email (SMTP), webhook, Slack, Teams and PagerDuty. A policy routes alarms by severity and can re-notify, at a set interval, an alarm that stays unacknowledged and uncleared. See [Notification Channels](../guides/notification-channels.md). |
 | `user-management` | Global identities, per-tenant memberships, the role catalog, and JWT issuance and validation. |
 | `sparkplug-ingest` _(opt-in)_ | A stateful Sparkplug B Host Application. It connects *out* to per-tenant customer MQTT brokers, runs the Sparkplug session machine, and feeds this pipeline, including authoritative device presence. One replica serves at a time, elected through a fenced lease. See [Sparkplug B](./sparkplug.md). |
 | `lwm2m-ingest` _(opt-in)_ | Terminates OMA LwM2M over CoAP/UDP with DTLS. Devices connect *in* and are identified by their authenticated DTLS PSK identity. Registration drives presence, observed resources decode to measurements, and reads, writes and executes, including the firmware update sequence, go through the command path. See [LwM2M](./lwm2m.md). |
 | `ai-inference` _(opt-in)_ | Drafts a detection rule from a natural-language description and runs it through the *same* compiler the other authoring surfaces use. The model proposes a rule; the compiler decides whether it is valid. It never sits in the path that evaluates rules. See [AI Authoring](./ai-authoring.md). |
 | `outbound-connectors` _(opt-in)_ | Delivers outbound actions to external systems: an HTTP/webhook call, and a `publish` to message brokers and cloud queues (MQTT, Kafka, AWS SNS/SQS). It uses tenant-scoped, versioned connectors whose credentials are held in the secret store. It runs in its own process, so a slow or misbehaving external system can't affect the detection pipeline. See [Outbound Connectors](./outbound-connectors.md). |
-| `mcp` _(opt-in)_ | A read-only Model Context Protocol server that lets AI assistants operate a tenant on a user's behalf. It is a thin OAuth 2.1 resource server over the GraphQL API that carries the caller's own tenant-scoped token. It has no service token and offers curated read tools only. See [AI Access (MCP)](./mcp.md). |
+| `mcp` _(opt-in)_ | A Model Context Protocol server that lets AI assistants operate a tenant on a user's behalf. It is a thin OAuth 2.1 resource server over the GraphQL API that carries the caller's own tenant-scoped token. It has no service token and offers curated read tools, plus [Preview proposal tools](./mcp.md#agent-proposals) when the mcp area's `agentActuation.enabled` is on. People approve in the console; MCP executes nothing. See [AI Access (MCP)](./mcp.md). |
 | `update-management` | Over-the-air updates: firmware artifacts and their assignment to devices. It keeps a per-tenant, immutable catalogue of firmware, software and configuration images, with a streaming upload that verifies the content against its declared size and SHA-256 digest. An available artifact is assigned to a device, which is told over its device channel and downloads the image with a short-lived, resumable grant. The service tracks each attempt through download, verification, installation and reboot to the running version, and times out a device that goes quiet. An artifact is signed by a signer you register, and by default only a signed artifact can be assigned; the device verifies the signature. A rollout assigns an artifact to a device group a capped number of devices at a time. It is part of the `default` profile. See [Over-the-Air Updates](./over-the-air-updates.md). |
 | `operator` | A controller-runtime operator that owns the `Instance` custom resource and its lifecycle. Its reconcile loop observes the chart-rendered Deployments and writes the aggregate conditions, per-area replica counts and images, and the running version to `Instance.status`. Config is not reloaded in place: a service reads its configuration once at startup, and a change is adopted by rolling the pods. The Helm chart renders the workloads themselves. Tenants are control-plane database records, not reconciled resources. |
 
-Fanning one command out to many devices is part of `command-delivery`, not a separate service. See [One command, many devices](./commands.md#command-batches). Scheduling is still planned; see the repository for current status.
+Fanning one command out to many devices is part of `command-delivery`, not a separate service. See [One command, many devices](./commands.md#command-batches). Scheduled campaigns are available; see [Scheduling a Fleet](../guides/scheduling-a-fleet.md).
 
 ## Data and messaging backbone {#the-data-and-messaging-backbone}
 
@@ -120,3 +120,9 @@ The others are:
 - the update-artifact upload (`PUT /updates/artifacts/{token}/content`) and download (`GET /updates/download/{artifact}`) endpoints on `update-management`
 - the tenant logo upload and download endpoint (`/branding/logo`) on `user-management`
 - the endpoint where services obtain their short-lived service token (`/auth/service-token`) on `user-management`, served on the same internal port and never through the ingress
+
+:::tip Try it
+
+**First device in about 30 minutes.** Install DeviceChain locally, connect a simulated device and watch its telemetry arrive. [Start the quickstart →](../quickstart/first-device.md)
+
+:::

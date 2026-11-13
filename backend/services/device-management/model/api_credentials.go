@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/sqlnull"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // buildDeviceCredential validates a credential create request against an ALREADY
@@ -241,7 +242,8 @@ func (api *Api) CreateDeviceCredential(ctx context.Context, request *DeviceCrede
 
 // UpdateDeviceCredential applies a PARTIAL update: a field the caller did not name keeps
 // its stored value — including the SECRET, which the full-replace shape blanked on every
-// edit that failed to restate it.
+// edit that failed to restate it. Only named columns are written; omitted fields stay
+// untouched even when another writer changes them after the read.
 func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	request *DeviceCredentialUpdateRequest) (*DeviceCredential, error) {
 	matches, err := api.DeviceCredentialsByToken(ctx, []string{token})
@@ -255,6 +257,9 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// The device the credential belonged to before this update: a re-point must evict the
 	// credential's cached copy under the device it is leaving as well as the one it joins.
 	priorDeviceId := updated.DeviceId
+	// The type every derived value below (the stored id's encoding, the secret's rules) was resolved
+	// against; the locked row must still hold it, or those values are for a credential that is gone.
+	readType := updated.CredentialType
 
 	// Everything that can refuse resolves before anything is written, so a refused update
 	// leaves the credential exactly as the device last authenticated with it.
@@ -335,6 +340,15 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// MQTT_BASIC must carry a password in the same request, so no secret chosen under another
 	// type (or none) becomes a password that skipped the minimum length.
 	secretDigest := updated.SecretDigest
+	// The secret state this update was derived from. Under the row lock the stored state must still be
+	// this one whenever the digest is written without a new password in the request (see below).
+	readDigest := updated.SecretDigest
+	var readLegacy sql.NullString
+	if !request.CredentialValue.Set {
+		if readLegacy, err = api.legacySecretOf(api.RDB.DB(ctx), updated.ID); err != nil {
+			return nil, err
+		}
+	}
 	switch {
 	case !credentialRequiresSecret(credentialType):
 		secretDigest = sql.NullString{}
@@ -346,9 +360,40 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 			return nil, err
 		}
 	default:
-		if secretDigest, err = api.adoptLegacySecret(ctx, updated); err != nil {
-			return nil, err
+		// Adopted from the plaintext read above, the same read the under-lock comparison uses, so the
+		// digest written and the state it is checked against cannot differ.
+		if readLegacy.Valid && readLegacy.String != "" {
+			if secretDigest, err = digestSecret(api.DeviceSecretKey, updated.TenantId, &readLegacy.String, 0); err != nil {
+				return nil, err
+			}
 		}
+	}
+
+	assignments := map[string]any{}
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
+	if request.CredentialType.Set {
+		assignments["credential_type"] = credentialType
+	}
+	if request.CredentialId.Set {
+		// IssuedCredentialId is response-only (gorm:"-"), never a stored column.
+		assignments["credential_id"] = credentialId
+	}
+	if request.Enabled.Set {
+		assignments["enabled"] = enabled
+	}
+	if request.ExpiresAt.Set {
+		assignments["expires_at"] = expiresAt
+	}
+	if request.CredentialValue.Set || request.CredentialType.Set || secretDigest != updated.SecretDigest {
+		assignments["secret_digest"] = secretDigest
+		// Retire any old pod's plaintext together with the digest, as Save did,
+		// so a later adoption cannot bring back the password this write replaced.
+		assignments["credential_value"] = sql.NullString{}
+	}
+	if repoint {
+		assignments["device_id"] = device.ID
 	}
 
 	updated.Metadata = metadataJSON
@@ -360,10 +405,7 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	updated.ExpiresAt = expiresAt
 	if device != nil {
 		updated.Device = device
-		// Belt-and-braces, and said so rather than left to look load-bearing: gorm's Save
-		// syncs a belongs-to FK from the association it is given, so a mutant deleting this
-		// line is behaviour-equivalent and survives on purpose. It is set anyway so the
-		// in-memory value handed back to the caller agrees with the row.
+		// The named-column update and post-commit logic both use the explicit FK.
 		updated.DeviceId = device.ID
 	}
 
@@ -372,11 +414,17 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// profile of a credential that was removed and re-issued meanwhile). trust_anchor_id and
 	// certificate_pem are the certificate credential's, fixed at create, so an update has no
 	// reason to write them either.
+	var lockedOwnerId uint
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		x509 := CredentialType(updated.CredentialType) == CredentialX509Certificate
 		// A certificate credential moved onto another device counts against THAT device's limit,
 		// counted under its row lock so two moves (or a move and a create) cannot both fit the
 		// last slot. Any other credential type moves freely.
-		if repoint && CredentialType(updated.CredentialType) == CredentialX509Certificate {
+		//
+		// 🔴 LOCK ORDER of a credential write: the target device row, then the credential row, then (a
+		// certificate leaving a device) the anchor FOR SHARE. Device before credential is the order a
+		// provisioning reset takes; the anchor comes last because nothing that holds it waits for either.
+		if repoint && x509 {
 			if err := lockDeviceRow(tx, device.ID); err != nil {
 				return err
 			}
@@ -389,7 +437,85 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 					device.Token, n)
 			}
 		}
-		return tx.Omit("ProvisioningProfileId", "TrustAnchorId", "CertificatePem").Save(updated).Error
+		// The credential is read again under its row lock, and what the save writes is reconciled with
+		// it: the owner in force is the one acted on, so a concurrent move or delete cannot be undone by
+		// this save writing the owner of the earlier, unlocked read.
+		var cur DeviceCredential
+		if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", updated.ID).Take(&cur).Error; err != nil {
+			return err
+		}
+		if cur.CredentialType != readType {
+			return fmt.Errorf("credential %q changed type while this update was prepared; retry", updated.Token)
+		}
+		// A digest derived from the unlocked read (kept as it was, adopted from the legacy plaintext, or
+		// cleared by a type that holds none) must not be written over a secret rotated since: that would
+		// bring back a password the rotation retired. Refused rather than re-derived: the caller retries
+		// against the rotated state.
+		if _, writes := assignments["secret_digest"]; writes && !request.CredentialValue.Set {
+			curLegacy, err := api.legacySecretOf(tx, cur.ID)
+			if err != nil {
+				return err
+			}
+			if cur.SecretDigest != readDigest || curLegacy != readLegacy {
+				return fmt.Errorf("credential %q's secret changed while this update was prepared; retry", updated.Token)
+			}
+		}
+		// The inline kick after the commit names the owner in force too, not the one the unlocked read saw.
+		lockedOwnerId = cur.DeviceId
+		if cur.DeviceId != priorDeviceId {
+			var owners []string
+			if err := tx.Unscoped().Model(&Device{}).Where("tenant_id = ? AND id = ?", cur.TenantId, cur.DeviceId).
+				Pluck("token", &owners).Error; err != nil {
+				return err
+			}
+			if len(owners) == 1 {
+				currentDeviceToken = owners[0]
+			}
+		}
+		if !repoint && cur.DeviceId != updated.DeviceId {
+			updated.DeviceId = cur.DeviceId
+			updated.Device = nil
+			var owner Device
+			if err := tx.Unscoped().Where("tenant_id = ? AND id = ?", cur.TenantId, cur.DeviceId).Take(&owner).Error; err != nil {
+				return err
+			}
+			updated.Device = &owner
+		}
+		// A certificate credential LEAVING a device under a pending revocation: the outgoing owner is
+		// the one read here, under the lock.
+		var movedFrom string
+		var movedAnchor uint
+		certMove := repoint && x509 && cur.TrustAnchorId != nil
+		if certMove {
+			movedAnchor = *cur.TrustAnchorId
+			if err := lockTrustAnchorShareByID(tx, movedAnchor); err != nil {
+				return err
+			}
+			var tokens []string
+			if err := tx.Unscoped().Model(&Device{}).Where("tenant_id = ? AND id = ?", cur.TenantId, cur.DeviceId).
+				Pluck("token", &tokens).Error; err != nil {
+				return err
+			}
+			if len(tokens) == 1 {
+				movedFrom = tokens[0]
+			}
+		}
+		if len(assignments) != 0 {
+			res := rdb.AdvancingFrom(tx, cur.UpdatedAt).Model(&cur).Omit(clause.Associations).
+				Where("id = ?", updated.ID).Updates(assignments)
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				return gorm.ErrRecordNotFound
+			}
+		}
+		if certMove && movedFrom != "" {
+			// The device it left is no longer found by the marker's expansion; see
+			// queueOwedRevocationKicksOnTx.
+			return api.queueOwedRevocationKicksOnTx(tx, updated.TenantId, movedAnchor, []string{movedFrom})
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -397,7 +523,7 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// EVERY committed update evicts, a metadata-only edit included: one database read on
 	// the device's next event, in place of a field-by-field judgement of which changes
 	// matter that would have to be kept right forever.
-	api.evictDeviceCredentials(ctx, updated.TenantId, priorDeviceId, updated.DeviceId)
+	api.evictDeviceCredentials(ctx, updated.TenantId, priorDeviceId, updated.DeviceId, lockedOwnerId)
 	// A change that withdraws or alters what a session authenticated with ends the device's
 	// open sessions; a rename or a metadata edit does not. A credential that is DISABLED
 	// re-asks on every update, so repeating the disable after a failed kick is the retry.
@@ -407,26 +533,34 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 			return updated, kerr
 		}
 	}
-	return updated, nil
+	if len(assignments) == 0 {
+		return updated, nil
+	}
+	matches, err = api.DeviceCredentialsById(ctx, []uint{updated.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	// Preserve the one response that shows a newly issued access token.
+	if request.CredentialId.Set {
+		matches[0].IssuedCredentialId = updated.IssuedCredentialId
+	}
+	return matches[0], nil
 }
 
-// adoptLegacySecret is the stored secret an update that does not name one must keep. That is
-// the row's digest, UNLESS an old-version pod rotated the password during a rolling
-// upgrade: it wrote the new password into credential_value and left secret_digest alone,
-// so the plaintext column holds the later secret. The save that follows writes that column
-// NULL (LegacyCredentialValue), so the plaintext is digested here first rather than
-// discarded, which would bring back the password the old pod rotated away. Outside an
-// upgrade's overlap the column is always NULL and this returns the digest unchanged.
-func (api *Api) adoptLegacySecret(ctx context.Context, cred *DeviceCredential) (sql.NullString, error) {
+// legacySecretOf reads the credential's legacy plaintext column, which the model can write but not read.
+func (api *Api) legacySecretOf(db *gorm.DB, id uint) (sql.NullString, error) {
 	var legacy []sql.NullString
-	if err := api.RDB.DB(ctx).Model(&DeviceCredential{}).Where("id = ?", cred.ID).
+	if err := db.Unscoped().Model(&DeviceCredential{}).Where("id = ?", id).
 		Pluck("credential_value", &legacy).Error; err != nil {
 		return sql.NullString{}, err
 	}
-	if len(legacy) != 1 || !legacy[0].Valid || legacy[0].String == "" {
-		return cred.SecretDigest, nil
+	if len(legacy) != 1 {
+		return sql.NullString{}, nil
 	}
-	return digestSecret(api.DeviceSecretKey, cred.TenantId, &legacy[0].String, 0)
+	return legacy[0], nil
 }
 
 // Get device credentials by id.

@@ -27,6 +27,12 @@ const (
 	DefaultRevocationStaleGrace = 24 * time.Hour
 	MaxRevocationStaleGrace     = 7 * 24 * time.Hour
 
+	// DefaultRevocationResweepAfter is how long after its first sweep a revocation's session kick is
+	// repeated. The floor (the callout lookup timeout plus the broker's authorization timeout) is
+	// checked where the callout is wired, against the timeout in force; the ceiling is here.
+	DefaultRevocationResweepAfter = 10 * time.Second
+	MaxRevocationResweepAfter     = 5 * time.Minute
+
 	// DefaultRevocationMaxGraphqlCrlBytes is also the ceiling: a PEM of 2 MiB of DER is about
 	// 2.8 MiB, which fits inside the 4 MiB GraphQL request body cap with its JSON envelope. A larger
 	// list goes over the REST upload.
@@ -68,6 +74,12 @@ type RevocationConfiguration struct {
 	// once; the REST upload refuses the next with 503 and Retry-After, a GraphQL mutation waits
 	// its turn. 1 to 8, default 1.
 	MaxConcurrentWrites int
+	// ResweepAfter is how long after the first sweep a certificate revocation's session kick falls
+	// due again, as a Go duration, to catch a device that was being admitted at the instant of the
+	// revocation. The session-kick drain runs it on its next 30 s pass, so the second sweep lands
+	// up to 30 s after this (10 to 40 s at the default). Up to 5m, default 10s. It must also exceed the callout lookup timeout plus the
+	// broker's 5 s authorization timeout; device-management refuses to start otherwise.
+	ResweepAfter string
 }
 
 // ApplyDefaults fills what the document left out. DefaultStaleGrace is a duration, whose
@@ -94,6 +106,16 @@ func (c *RevocationConfiguration) ApplyDefaults() {
 	if c.MaxConcurrentWrites == 0 {
 		c.MaxConcurrentWrites = DefaultRevocationMaxConcurrentWrites
 	}
+	if c.ResweepAfter == "" {
+		c.ResweepAfter = DefaultRevocationResweepAfter.String()
+	}
+}
+
+// ResweepAfterDuration is the setting parsed. Validate has already refused one that is not a
+// duration.
+func (c RevocationConfiguration) ResweepAfterDuration() time.Duration {
+	d, _ := time.ParseDuration(c.ResweepAfter)
+	return d
 }
 
 // DefaultStaleGraceDuration is the setting parsed. Validate has already refused one that is not a
@@ -133,6 +155,10 @@ func (c RevocationConfiguration) Validate() error {
 	if c.MaxConcurrentWrites < 1 || c.MaxConcurrentWrites > MaxRevocationMaxConcurrentWrites {
 		return fmt.Errorf("callout.revocation.maxConcurrentWrites must be between 1 and %d, got %d",
 			MaxRevocationMaxConcurrentWrites, c.MaxConcurrentWrites)
+	}
+	if d, err := time.ParseDuration(c.ResweepAfter); err != nil || d <= 0 || d > MaxRevocationResweepAfter {
+		return fmt.Errorf("callout.revocation.resweepAfter must be a duration above 0s and at most %s, got %q",
+			MaxRevocationResweepAfter, c.ResweepAfter)
 	}
 	if c.MaxGraphqlCrlBytes > c.MaxCrlBytes {
 		return fmt.Errorf("callout.revocation.maxGraphqlCrlBytes (%d) cannot exceed maxCrlBytes (%d)",

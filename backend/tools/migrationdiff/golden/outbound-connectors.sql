@@ -1,6 +1,7 @@
 ALTER SEQUENCE "outbound-connectors".audit_events_id_seq OWNED BY "outbound-connectors".audit_events.id;
 ALTER SEQUENCE "outbound-connectors".connector_versions_id_seq OWNED BY "outbound-connectors".connector_versions.id;
 ALTER SEQUENCE "outbound-connectors".connectors_id_seq OWNED BY "outbound-connectors".connectors.id;
+ALTER SEQUENCE "outbound-connectors".lpwan_pending_acks_id_seq OWNED BY "outbound-connectors".lpwan_pending_acks.id;
 ALTER SEQUENCE "outbound-connectors".secrets_id_seq OWNED BY "outbound-connectors".secrets.id;
 ALTER TABLE ONLY "outbound-connectors".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
@@ -11,6 +12,9 @@ ALTER TABLE ONLY "outbound-connectors".connector_versions ALTER COLUMN id SET DE
 ALTER TABLE ONLY "outbound-connectors".connectors
  ADD CONSTRAINT connectors_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "outbound-connectors".connectors ALTER COLUMN id SET DEFAULT nextval('"outbound-connectors".connectors_id_seq'::regclass);
+ALTER TABLE ONLY "outbound-connectors".lpwan_pending_acks
+ ADD CONSTRAINT lpwan_pending_acks_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "outbound-connectors".lpwan_pending_acks ALTER COLUMN id SET DEFAULT nextval('"outbound-connectors".lpwan_pending_acks_id_seq'::regclass);
 ALTER TABLE ONLY "outbound-connectors".outbound_connectors_migrations
  ADD CONSTRAINT outbound_connectors_migrations_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "outbound-connectors".purged_tenants
@@ -23,6 +27,7 @@ CREATE INDEX "idx_outbound-connectors_connector_versions_tenant_id" ON "outbound
 CREATE INDEX "idx_outbound-connectors_connectors_deleted_at" ON "outbound-connectors".connectors USING btree (deleted_at);
 CREATE INDEX "idx_outbound-connectors_connectors_tenant_id" ON "outbound-connectors".connectors USING btree (tenant_id);
 CREATE INDEX "idx_outbound-connectors_connectors_token" ON "outbound-connectors".connectors USING btree (token);
+CREATE INDEX "idx_outbound-connectors_lpwan_pending_acks_deadline_at" ON "outbound-connectors".lpwan_pending_acks USING btree (deadline_at);
 CREATE INDEX "idx_outbound-connectors_secrets_deleted_at" ON "outbound-connectors".secrets USING btree (deleted_at);
 CREATE INDEX "idx_outbound-connectors_secrets_name" ON "outbound-connectors".secrets USING btree (name);
 CREATE INDEX "idx_outbound-connectors_secrets_scope" ON "outbound-connectors".secrets USING btree (scope);
@@ -47,6 +52,12 @@ CREATE SEQUENCE "outbound-connectors".connectors_id_seq
  NO MINVALUE
  NO MAXVALUE
  CACHE 1;
+CREATE SEQUENCE "outbound-connectors".lpwan_pending_acks_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
 CREATE SEQUENCE "outbound-connectors".secrets_id_seq
  START WITH 1
  INCREMENT BY 1
@@ -63,7 +74,11 @@ CREATE TABLE "outbound-connectors".audit_events (
  operation text NOT NULL,
  entity_pk text,
  entity_label text,
- rows_affected bigint
+ rows_affected bigint,
+ client_id text,
+ session_id text,
+ on_behalf_of text,
+ proposal text
 );
 CREATE TABLE "outbound-connectors".connector_versions (
  id bigint NOT NULL,
@@ -91,6 +106,21 @@ CREATE TABLE "outbound-connectors".connectors (
  type character varying(64) NOT NULL,
  config jsonb NOT NULL
 );
+CREATE TABLE "outbound-connectors".lpwan_pending_acks (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ integration character varying(128) NOT NULL,
+ device_token character varying(128) NOT NULL,
+ dev_eui character varying(16) NOT NULL,
+ command_token character varying(128) NOT NULL,
+ dispatch_nonce character varying(128) NOT NULL,
+ queue_item_id character varying(64) NOT NULL,
+ deadline_at timestamp with time zone NOT NULL,
+ transmitted_at timestamp with time zone,
+ settling_until timestamp with time zone,
+ device_ref character varying(256)
+);
 CREATE TABLE "outbound-connectors".outbound_connectors_migrations (
  id character varying(255) NOT NULL
 );
@@ -116,4 +146,5 @@ CREATE TABLE "outbound-connectors".secrets (
 );
 CREATE UNIQUE INDEX uix_connector_versions_connector_version ON "outbound-connectors".connector_versions USING btree (connector_id, version);
 CREATE UNIQUE INDEX uix_connectors_tenant_token ON "outbound-connectors".connectors USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_lpwan_pending_acks_item ON "outbound-connectors".lpwan_pending_acks USING btree (tenant_id, queue_item_id);
 CREATE UNIQUE INDEX uix_secrets_tenant_scope_name ON "outbound-connectors".secrets USING btree (tenant_id, scope, name) WHERE (deleted_at IS NULL);

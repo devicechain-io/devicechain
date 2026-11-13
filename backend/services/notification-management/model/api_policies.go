@@ -40,6 +40,9 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	if err := validatePolicyRuleCount(request.Rules); err != nil {
+		return nil, err
+	}
 
 	var created *NotificationPolicy
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
@@ -55,10 +58,14 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 			EscalateAfterSeconds: sqlnull.Int64FromInt32(request.EscalateAfterSeconds),
 			MaxEscalations:       sqlnull.Int64FromInt32(request.MaxEscalations),
 			Enabled:              request.Enabled,
+			NotifyOnClear:        request.NotifyOnClear != nil && *request.NotifyOnClear,
 
 			QuietHoursTimezone:       rdb.NullStrOf(quiet.timezone),
 			QuietHoursSlots:          quiet.slots,
 			QuietHoursBypassSeverity: rdb.NullStrOf(quiet.bypass),
+		}
+		if policy.NotifyOnClear {
+			policy.NotifyOnClearSince = sql.NullTime{Time: time.Now().UTC(), Valid: true}
 		}
 		if err := tx.Create(policy).Error; err != nil {
 			return err
@@ -119,6 +126,13 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 // gorm leaves behind is not: PostgreSQL keeps microseconds of the nanoseconds it was sent.
 func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 	request *NotificationPolicyUpdateRequest, expectedUpdatedAt *string) (*NotificationPolicy, error) {
+	requestedRules, replaceRules := request.Rules.Requested()
+	// Refuse oversized replacements before even preloading the stored channels.
+	if replaceRules {
+		if err := validatePolicyRuleCount(requestedRules); err != nil {
+			return nil, err
+		}
+	}
 	matches, err := api.NotificationPoliciesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -129,6 +143,10 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 	policy := matches[0]
 
 	enabled, err := request.Enabled.ApplyToRequired("enabled", policy.Enabled)
+	if err != nil {
+		return nil, err
+	}
+	notifyOnClear, err := request.NotifyOnClear.ApplyToRequired("notifyOnClear", policy.NotifyOnClear)
 	if err != nil {
 		return nil, err
 	}
@@ -171,8 +189,6 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 	}
 	quietChanged := quietEdited || request.Enabled.Set
 
-	requestedRules, replaceRules := request.Rules.Requested()
-
 	// The rule checks that need nothing but the request, run before the precondition so a
 	// malformed request is refused as malformed whoever else is writing — reporting it as
 	// stale would send the caller off to reload and retry a request that can never succeed.
@@ -206,6 +222,20 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 		policy.EscalateAfterSeconds = request.EscalateAfterSeconds.ApplyToNullInt64(policy.EscalateAfterSeconds)
 		policy.MaxEscalations = request.MaxEscalations.ApplyToNullInt64(policy.MaxEscalations)
 		policy.Enabled = enabled
+		// The cut-off moves only when the option turns on, never on another edit; it is
+		// cleared when the option turns off so the next opt-in starts fresh.
+		switch {
+		case notifyOnClear && policy.NotifyOnClear && !policy.NotifyOnClearSince.Valid:
+			// Already on with no stamp (it was switched on by a pod from before the column):
+			// pin the cut-off it has been measured against until now, so this edit does not
+			// move it.
+			policy.NotifyOnClearSince = sql.NullTime{Time: readAt, Valid: true}
+		case notifyOnClear && !policy.NotifyOnClear:
+			policy.NotifyOnClearSince = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+		case !notifyOnClear:
+			policy.NotifyOnClearSince = sql.NullTime{}
+		}
+		policy.NotifyOnClear = notifyOnClear
 		policy.QuietHoursTimezone = rdb.NullStrOf(quiet.timezone)
 		policy.QuietHoursSlots = quiet.slots
 		policy.QuietHoursBypassSeverity = rdb.NullStrOf(quiet.bypass)
@@ -230,6 +260,8 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 				"escalate_after_seconds": policy.EscalateAfterSeconds,
 				"max_escalations":        policy.MaxEscalations,
 				"enabled":                policy.Enabled,
+				"notify_on_clear":        policy.NotifyOnClear,
+				"notify_on_clear_since":  policy.NotifyOnClearSince,
 
 				"quiet_hours_timezone":        policy.QuietHoursTimezone,
 				"quiet_hours_slots":           policy.QuietHoursSlots,
@@ -300,6 +332,9 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 // second path: an absent rule set builds nothing rather than building it somewhere else.
 func (api *Api) buildRules(tx *gorm.DB, policyId uint,
 	requests []*NotificationRuleCreateRequest) ([]*NotificationRule, error) {
+	if err := validatePolicyRuleCount(requests); err != nil {
+		return nil, err
+	}
 	rules := make([]*NotificationRule, 0, len(requests))
 	for _, rr := range requests {
 		if err := validateSeverity(rr.Severity); err != nil {

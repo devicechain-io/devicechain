@@ -7,3 +7,4 @@
 
 export { HistoryTable } from './history-table';
 export { default as HistoryFeed } from '../history-feed';
+export { StateTimeline } from './state-timeline';

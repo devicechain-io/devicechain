@@ -100,3 +100,4 @@ func (CommandDefinition) ScopedBy() rdb.ScopeRule       { return rdb.Catalogue()
 func (CustomerType) ScopedBy() rdb.ScopeRule            { return rdb.Catalogue() }
 func (AreaType) ScopedBy() rdb.ScopeRule                { return rdb.Catalogue() }
 func (AssetType) ScopedBy() rdb.ScopeRule               { return rdb.Catalogue() }
+func (SemanticContext) ScopedBy() rdb.ScopeRule         { return rdb.Catalogue() }

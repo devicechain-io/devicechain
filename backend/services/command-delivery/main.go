@@ -48,6 +48,8 @@ var (
 	DeviceCommandsWriter     messaging.MessageWriter
 	CommandDeliveryProcessor *processor.CommandDeliveryProcessor
 	DeadLetterWriteback      *processor.DeadLetterWriteback
+	// CampaignScheduler plans and fires campaigns. It runs in every replica; see its type.
+	CampaignScheduler *processor.CampaignScheduler
 
 	// RosterConsumer keeps the record of disabled devices current from device-management's
 	// device-roster facts, so commands queued for a disabled device are held, not sent.
@@ -77,7 +79,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: func(context.Context) error { return nil },
+			Postprocess: governance.StopRefreshes,
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -160,7 +162,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
 		tenantLifecycleGate(infra, safetyGates),
-		presenceReader(infra, safetyGates), deadLetters, DeliveryMetrics)
+		withPullChannels(presenceReader(infra, safetyGates)), deadLetters, DeliveryMetrics)
 	// 🔴 SET HERE, WHERE THE PROCESSOR EXISTS, AND NOT BESIDE THE Api.* ASSIGNMENTS IN
 	// afterMicroserviceInitialized -- WHICH IS WHERE THEY BELONG BY APPEARANCE AND WHERE
 	// THEY WOULD NIL-PANIC. This function is the NatsManager's construction callback, and
@@ -182,6 +184,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Whether a Sparkplug command is dispatched or failed on sight. Set here for the reason the
 	// lines above are; the chart derives it from the rendered Sparkplug sources.
 	CommandDeliveryProcessor.SparkplugCommands = Configuration.SparkplugCommands
+	CommandDeliveryProcessor.LpwanDownlink = Configuration.LpwanDownlink
 
 	// The dispatch nudge: enqueueing a command hands its DEVICE to the processor's bounded
 	// queue, whose workers dispatch that device's backlog through the same gates the sweep
@@ -279,6 +282,20 @@ func disabledSource(infra mscfg.InfrastructureConfiguration) processor.DisabledS
 	return verify.NewDisabledSource(client, dmURL, umURL, Microservice.InstanceId)
 }
 
+// withPullChannels layers the HTTP pull channel over the presence reader, so a device whose type
+// takes its commands over it is held for its pull instead of being published to. With no
+// device-management to ask there are no pull devices, and the reader is returned as it is.
+//
+// 🔴 IT HOLDS THE LAYERING EVEN WHEN THERE IS NO PRESENCE READER (an instance without
+// device-state), because the pull channel does not depend on presence: a nil reader becomes one
+// that knows nothing and the pull devices are still held.
+func withPullChannels(reader presence.Reader) presence.Reader {
+	if Api == nil || Api.PullChannels == nil {
+		return reader
+	}
+	return presence.WithPullChannels(reader, Api.PullChannels)
+}
+
 // presenceReader builds the presence gate's read side, or nil to run the sweep ungated.
 //
 // 🔴 FAIL-OPEN, AND LOUDLY, which is the opposite of wireEnqueueValidator's neighbours in
@@ -359,6 +376,14 @@ func wireDeviceManagementGates() {
 	Api.DeviceAnchors = verify.NewDeviceAnchorLookup(client, url)
 	Api.BatchValidator = verify.NewBatchValidator(client, url)
 	Api.GroupTargetResolver = verify.NewGroupResolver(client, url)
+	// Solar campaign triggers read each device's installed position from the same owner, on a
+	// client of their own: location:installed:read is newer than the authorities above, and a
+	// user-management replica of the previous release refuses to mint a token naming it. Sharing
+	// the client would turn that refusal, during a rolling upgrade, into failed command
+	// validation; on its own client it fails only solar planning, which says so and retries.
+	siteClient := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery",
+		[]string{string(auth.DeviceRead), string(auth.LocationInstalledRead)})
+	Api.SiteResolver = verify.NewSiteResolver(siteClient, url)
 	// The maintenance-window gate shares the validator's coordinates and its fate: with no
 	// device-management endpoint there is nobody to ask, and the branch above has already
 	// returned and said so.
@@ -366,6 +391,10 @@ func wireDeviceManagementGates() {
 	Api.DispatchScheduler = windows
 	Api.WindowOpenings = windows
 	Api.CommandImpacts = windows
+	// Which devices take their commands over the HTTP pull channel: asked of the same owner, so
+	// a device type's channel is never copied here. It layers over the presence reader (see
+	// createNatsComponents) and refuses delivery options for a device that is not on it.
+	Api.PullChannels = verify.NewPullChannels(client, url)
 	log.Info().Str("deviceManagement", url).Msg("Command enqueue will be validated against device-management (device existence + published command vocabulary + payload schema, ADR-043), for single commands and for fleet batches; entity groups will be resolved there as batch targets; disruptive commands will be held for their device type's maintenance window.")
 }
 
@@ -511,7 +540,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// collaborator). Group targeting is the exception and fails closed: a group that
 			// cannot be resolved must not silently become an empty fleet write.
 			wireDeviceManagementGates()
-			return nil
+			// The campaign scheduler needs only the Api, so it is built here rather than in
+			// the NATS callback: it reaches the database and device-management, never the broker.
+			CampaignScheduler = processor.NewCampaignScheduler(Microservice, Api, core.NewNoOpLifecycleCallbacks())
+			return CampaignScheduler.Initialize(ctx)
 		},
 		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
 		GraphQL: &service.GraphQLSpec{
@@ -556,11 +588,21 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
-	return RosterConsumer.Start(ctx)
+	if err := RosterConsumer.Start(ctx); err != nil {
+		return err
+	}
+	// Last: a pass creates batches, which hand commands to the processor started above.
+	return CampaignScheduler.Start(ctx)
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	// The scheduler first: it creates commands for the processor stopped below.
+	if CampaignScheduler != nil {
+		if err := CampaignScheduler.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	// The roster consumer first: it can resume a device, which dispatches through the
 	// processor stopped below.
 	if RosterConsumer != nil {
@@ -596,6 +638,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if CampaignScheduler != nil {
+		if err := CampaignScheduler.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	if RosterConsumer != nil {
 		if err := RosterConsumer.Terminate(ctx); err != nil {
 			return err

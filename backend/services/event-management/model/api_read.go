@@ -10,10 +10,21 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/limit"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
+
+// checkEventTypeFilter bounds raw entries, including duplicates, before any COUNT,
+// distinct-name lookup or aggregation can expand the list into SQL.
+func checkEventTypeFilter(eventTypes []eventtype.EventType) error {
+	if len(eventTypes) > rdb.MaxLookupKeys {
+		return limit.Exceeded("eventTypes", len(eventTypes), rdb.MaxLookupKeys)
+	}
+	return nil
+}
 
 // commonEventFilters applies the device, event-type and occurred-time-range
 // filters that are shared by every event read. The anchor filter is applied
@@ -203,6 +214,9 @@ func (api *Api) AnchorsForEvent(ctx context.Context, eventId []byte,
 // event_anchors set table (the base event no longer carries a single anchor), on the base
 // event's full key (anchorEventKeySubquery).
 func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*EventSearchResults, error) {
+	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
+		return nil, err
+	}
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
@@ -222,6 +236,9 @@ func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*Even
 
 // Search for location events that meet criteria.
 func (api *Api) LocationEvents(ctx context.Context, criteria EventSearchCriteria) (*LocationEventSearchResults, error) {
+	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
+		return nil, err
+	}
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
@@ -241,6 +258,9 @@ func (api *Api) LocationEvents(ctx context.Context, criteria EventSearchCriteria
 
 // Search for measurement events that meet criteria.
 func (api *Api) MeasurementEvents(ctx context.Context, criteria EventSearchCriteria) (*MeasurementEventSearchResults, error) {
+	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
+		return nil, err
+	}
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
@@ -386,6 +406,9 @@ func boundBucketedRows(buckets, names int64) error {
 // The read is bounded before it runs: at most MaxMeasurementBuckets buckets, and at
 // most MaxMeasurementRows rows (buckets x measurement names).
 func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
+	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
+		return nil, err
+	}
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
@@ -537,6 +560,9 @@ func (api *Api) rollupMeasurementScope(ctx context.Context, criteria Measurement
 
 // Search for alert events that meet criteria.
 func (api *Api) AlertEvents(ctx context.Context, criteria EventSearchCriteria) (*AlertEventSearchResults, error) {
+	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
+		return nil, err
+	}
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
@@ -556,6 +582,9 @@ func (api *Api) AlertEvents(ctx context.Context, criteria EventSearchCriteria) (
 
 // Search for state change (presence transition) events that meet criteria, newest first.
 func (api *Api) StateChangeEvents(ctx context.Context, criteria EventSearchCriteria) (*StateChangeEventSearchResults, error) {
+	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
+		return nil, err
+	}
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}

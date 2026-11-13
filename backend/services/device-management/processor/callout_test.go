@@ -239,6 +239,41 @@ func TestAuthorizeGrant(t *testing.T) {
 	}
 }
 
+// The operator's opt-in (infrastructure.nats.mqttDeviceUplinks) adds exactly the device's OWN raw-payload
+// topic to its grant, and off mints the grant every earlier build minted.
+func TestAuthorizeGrantsTheDevicesOwnUplinkTopicOnlyWhenOptedIn(t *testing.T) {
+	const own = "inst-1.acme-corp.devices.sensor-001.uplink"
+	grant := func(on bool) []string {
+		r, _ := newTestResponder(t, func(_ context.Context, _ *model.PresentedCredential) (*model.Device, error) {
+			d := &model.Device{}
+			d.Token = "sensor-001"
+			return d, nil
+		})
+		r.UseDeviceUplinks(on)
+		userJWT, errMsg := r.authorize(testRequest(t, "acme-corp:dev1", "s3cret"))
+		if errMsg != "" {
+			t.Fatalf("expected grant, got denial %q", errMsg)
+		}
+		uc, err := jwt.DecodeUserClaims(userJWT)
+		if err != nil {
+			t.Fatalf("decode user claims: %v", err)
+		}
+		return []string(uc.Permissions.Pub.Allow)
+	}
+	if off := grant(false); slices.Contains(off, own) {
+		t.Errorf("the default grant %v names the uplink topic", off)
+	}
+	on := grant(true)
+	if !slices.Contains(on, own) {
+		t.Errorf("the opted-in grant %v is missing this device's own uplink topic", on)
+	}
+	for _, g := range on {
+		if strings.Contains(g, "uplink") && g != own {
+			t.Errorf("grant %q reaches an uplink topic that is not this device's", g)
+		}
+	}
+}
+
 // The granted JWT is confined to the AUTHENTICATED DEVICE, not its tenant: it may
 // subscribe to its own command subject and nothing that reaches another device's.
 func TestAuthorizeGrantIsPerDevice(t *testing.T) {

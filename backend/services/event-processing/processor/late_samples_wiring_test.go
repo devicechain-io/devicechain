@@ -172,3 +172,37 @@ func TestADurationReadingPastItsHoldIsCountedLate(t *testing.T) {
 		}
 	})
 }
+
+// A device whose clock runs ahead must not carry the shared frontier past the broker's append
+// time of its message: the live loop hands the engine the message's AppendTime, and the engine
+// clamps the frontier to it. A message with no append time (tests only; the broker always stamps
+// one) is the unclamped bare entry point, so this sets one.
+func TestProcessorClampsTheFrontierToTheBrokerAppendTime(t *testing.T) {
+	ctx := context.Background()
+	reg := repeatingReg(t)
+	rp := &ResolvedEventsProcessor{
+		Store: newTestStore(t),
+		cfg: Config{
+			PartitionId:        "singleton",
+			CheckpointEvents:   100,
+			CheckpointInterval: time.Hour,
+			TickInterval:       time.Hour,
+			Lateness:           5 * time.Second,
+			Clock:              detectcore.RealClock{},
+		},
+		registry:  reg,
+		publisher: runtime.NewPublisher(&captureWriter{}, reg, (*DetectMetrics)(nil)),
+		clock:     detectcore.RealClock{},
+		procCtx:   ctx,
+	}
+	if err := rp.restore(ctx); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	stored := testBase.Add(101 * time.Second)
+	fast := measuredMsgAt(t, 1, stored.Add(290*time.Second), "acme", "d1", "p@1", "temperature", "90", &fakeAck{})
+	fast.AppendTime = stored
+	rp.handle(fast)
+	if got := rp.engine.Watermark(); got.After(stored) {
+		t.Fatalf("frontier = %v, past the message's broker append time %v: a device clock moved the shared frontier", got, stored)
+	}
+}

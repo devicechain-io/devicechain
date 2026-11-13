@@ -100,6 +100,7 @@ still count as a value. Removing a key that is not set succeeds and says so.`,
 func init() {
 	attrCmd.PersistentFlags().StringVarP(&attrTenant, "tenant", "t", "", "tenant that owns the entity (required)")
 	attrCmd.PersistentFlags().StringP("server", "s", "localhost", "instance host for platform API calls")
+	addInstanceTargetFlags(attrCmd)
 	attrCmd.PersistentFlags().Bool("tls", false, "use https for platform endpoints")
 	attrCmd.PersistentFlags().StringVar(&attrEmail, "email", "", "identity to authenticate as; it must be a member of the tenant (required)")
 	attrCmd.PersistentFlags().StringVar(&attrPassword, "password", "", "password for the identity (required)")
@@ -120,8 +121,10 @@ func init() {
 // attrSession builds the tenant session for the identity and returns it with the
 // device-management endpoint, or the reason the flags are not enough.
 func attrSession(cmd *cobra.Command) (attr.Client, string, error) {
-	server, _ := cmd.Flags().GetString("server")
-	tls, _ := cmd.Flags().GetBool("tls")
+	server, tls, err := targetFlags(cmd)
+	if err != nil {
+		return nil, "", err
+	}
 	if strings.TrimSpace(attrTenant) == "" {
 		return nil, "", fmt.Errorf("--tenant is required: attributes are per-tenant, and there is no default")
 	}

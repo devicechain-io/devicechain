@@ -8,7 +8,7 @@ title: Conexión de un dispositivo
 Los dispositivos envían eventos a DeviceChain por **MQTT** o por **HTTP**. MQTT lo sirve directamente el servidor MQTT integrado de NATS en el puerto 1883, sin broker independiente. Ambos transportes alimentan el mismo pipeline de decodificación → resolución → persistencia, así que el cuerpo JSON del evento es idéntico en los dos.
 
 :::note Estado
-La ingesta por MQTT y por HTTP está disponible. Los dispositivos restringidos pueden conectarse en su lugar sobre CoAP/UDP con DTLS mediante la [ingesta LwM2M](../concepts/lwm2m.md), y las flotas heredadas (brownfield) mediante [Sparkplug B](../concepts/sparkplug.md). Un transporte WebSocket y el flujo completo de aprovisionamiento/reclamación de autoservicio siguen planificados.
+La ingesta por MQTT y por HTTP está disponible. Los dispositivos restringidos pueden conectarse en su lugar sobre CoAP/UDP con DTLS mediante la [ingesta LwM2M](../concepts/lwm2m.md), y las flotas heredadas (brownfield) mediante [Sparkplug B](../concepts/sparkplug.md). El [autorregistro de dispositivos](./device-self-registration.md) está disponible, al igual que la reclamación de posesión mediante las mutaciones `initiateDeviceClaim` y `claimDevice` de la [API GraphQL de device-management](../reference/graphql-api.md). Un transporte WebSocket sigue planificado.
 :::
 
 Un dispositivo que informa a través de un servidor de red LoRaWAN (ChirpStack, The Things Stack) o del webhook de otro sistema no se conecta por sí mismo; consulta [Integraciones de entrada](./inbound-integrations.md).
@@ -29,7 +29,7 @@ Conectar un dispositivo por MQTT significa acertar con tres identificadores dist
 Es **`{tenant}:{credentialId}`**. Copiar el valor «Usuario» de la consola directamente en tu cliente es el fallo de conexión más común.
 :::
 
-El broker rechaza cualquier client id que no sea `{instanceId}:{tenant}:{deviceToken}` o ese valor más un `:sufijo`. Eso incluye el id aleatorio que inventa tu biblioteca cliente cuando no lo fijas. El sufijo es la forma de que un dispositivo abra dos conexiones; consulta [MQTT](#mqtt).
+El broker rechaza cualquier client id que no sea `{instanceId}:{tenant}:{deviceToken}` o ese valor más un `:suffix`. Eso incluye el id aleatorio que inventa tu biblioteca cliente cuando no lo fijas. El sufijo es la forma de que un dispositivo abra dos conexiones; consulta [MQTT](#mqtt).
 
 Los tres errores se ven idénticos desde el dispositivo. Una conexión rechazada recibe una única respuesta genérica: el broker devuelve el código de retorno 5 del CONNACK de MQTT (*no autorizado*) y después cierra la conexión. El código es genérico a propósito: es el mismo tanto si lo incorrecto era el client id, el prefijo `{tenant}:` o la credencial, así que el rechazo nunca dice qué comprobación falló. Tu cliente informa de «no autorizado» o, si nunca lee el CONNACK, solo del reset o EOF inesperado que sigue. Un dispositivo que se reconecta automáticamente entrará en bucle.
 
@@ -43,7 +43,7 @@ Más adelante aparece un cuarto identificador: el `token` del sobre de un **coma
 
 ## El cuerpo del evento
 
-Todo evento entrante, sobre cualquier transporte, es un objeto JSON:
+Todo evento entrante, sobre cualquier transporte, es un objeto JSON. El ejemplo siguiente es la forma HTTP; la forma MQTT es la misma sin los campos de credencial:
 
 ```json
 {
@@ -69,7 +69,7 @@ Un payload `Measurement`, `Location` o `Alert` envuelve su contenido en un arreg
 - Los valores de medición y todos los campos de `Location` son **cadenas JSON** (`"21.5"`, no `21.5`).
 - El `level` de una alerta es un **entero JSON sin comillas** de 0 a 2147483647.
 
-Ambas reglas se aplican. Un payload sin entradas, una entrada vacía, un valor del tipo JSON equivocado (un número sin comillas donde se espera una cadena, o un `level` de alerta entre comillas) o un `level` de alerta fuera de ese rango se rechaza en lugar de aceptarse en silencio: HTTP responde `400` y una publicación MQTT va a la cola de mensajes fallidos.
+Ambas reglas se aplican. Un payload sin entradas, una entrada vacía, un valor del tipo JSON equivocado (un número sin comillas donde se espera una cadena, o un `level` de alerta entre comillas) o un `level` de alerta fuera de ese rango se rechaza en lugar de aceptarse en silencio: HTTP responde `400` con el valor señalado por un JSON Pointer y una publicación MQTT va a la cola de mensajes fallidos.
 
 Una entrada es una lectura, tomada en un instante. Una entrada puede llevar su propio `occurredTime`. Ese es el instante con el que la lectura se almacena, se grafica, se evalúa y se devuelve, de modo que un dispositivo que acumula lecturas mientras está sin conexión puede subir una serie acumulada (hasta el límite descrito más abajo) y conservar el historial que realmente registró.
 
@@ -182,7 +182,7 @@ Un topic de MQTT se asigna directamente a un subject de NATS. Una publicación e
 
 El listener es TLS y la conexión está autenticada por el broker. Conéctate por TLS con la CA de la instancia y presenta la credencial del dispositivo como nombre de usuario MQTT **`{tenant}:{credentialId}`** y contraseña.
 
-Fija el **client id** de MQTT en `{instanceId}:{tenant}:{deviceToken}` para que la conexión declare qué dispositivo es. El broker rechaza cualquier otra cosa, incluido el valor aleatorio que inventa tu biblioteca cliente cuando no lo fijas. La única excepción es un `:sufijo` tras el token del dispositivo, descrito más abajo.
+Fija el **client id** de MQTT en `{instanceId}:{tenant}:{deviceToken}` para que la conexión declare qué dispositivo es. El broker rechaza cualquier otra cosa, incluido el valor aleatorio que inventa tu biblioteca cliente cuando no lo fijas. La única excepción es un `:suffix` tras el token del dispositivo, descrito más abajo.
 
 Un dispositivo puede en cambio autenticarse con un certificado de cliente TLS: el usuario es `{tenant}:@x509`, no hay contraseña y la regla del client id no cambia. Consulta [Conectar con un certificado](./device-x509.md).
 
@@ -197,7 +197,7 @@ Un client id incorrecto, un prefijo `{tenant}:` ausente y una credencial incorre
 ### Publicación de un evento {#publishing-an-event}
 
 :::tip Deja que la consola lo escriba
-La pestaña **Enviar datos** de la página de un dispositivo en la consola construye este comando, y el de HTTP más abajo, para ese dispositivo: su token, su credencial y lecturas de ejemplo para las métricas que declara su perfil publicado. Consulta [Enviar datos](../user-guide/devices.md#send-data).
+La pestaña **Enviar datos** de la página de un dispositivo en la consola construye este comando, y el de HTTP más abajo, para ese dispositivo: su token, su credencial y lecturas de ejemplo para las métricas que declara su perfil publicado. Consulta [Enviar datos](/user-guide/devices#send-data).
 :::
 
 Publica el cuerpo del evento en el topic de eventos de tu dispositivo:
@@ -236,10 +236,10 @@ Publica la telemetría con **QoS 0** salvo que tengas una razón concreta para n
 
 QoS ≥ 1 tiene un coste real de almacenamiento en el servidor. El broker mantiene una segunda copia de cada mensaje QoS ≥ 1 en su propio almacén interno, además de la copia en el stream que lo sirve, y ese almacén comparte el mismo disco que todo lo demás que ejecuta la instancia. Lo que promete un PUBACK, y lo que hace un backlog, depende de un ajuste de la instancia, `infrastructure.nats.mqttFailClosed`:
 
-- **Desactivado (por defecto).** La plataforma le impone un tope al almacén para que no pueda consumir todo el volumen. Un PUBACK significa que el broker aceptó el mensaje, no que la plataforma vaya a conservarlo: un backlog sostenido descarta sus mensajes no entregados **más antiguos** en lugar de tumbar la instancia, y al dispositivo no se le avisa. También se pueden perder mensajes QoS 1 que el broker ya confirmó mientras el stream de captura cambia de líder, algo que provoca un reinicio del broker, una actualización o la pérdida de un nodo, con cualquier carga; nada los cuenta, y `JetStreamCaptureLeaderChanged` avisa de que hubo un cambio (vea [MQTT: el bróker de la plataforma](../reference/transport-matrix.md#mqtt--the-platform-broker)). También se pueden perder sin ningún cambio de líder, con carga sostenida: cuando `event-sources` se queda atrás y la cola del stream de captura alcanza su límite, el stream descarta su mensaje sin leer más antiguo por cada mensaje nuevo que confirma, y al dispositivo no se le avisa. En una prueba de carga eso perdió entre el 7 y el 13 % del tráfico MQTT. `devicechain_<area>_jetstream_consumer_unread_skipped_total` cuenta estas pérdidas, y `JetStreamCaptureBacklogGrowing`, `JetStreamCaptureBacklogWillOverflow` y `JetStreamDurableLostUnread` alertan sobre ellas.
-- **Activado.** Un PUBACK significa que la plataforma guarda el mensaje. Esto cubre eventos, respuestas a comandos e informes de dispositivo. Cuando la plataforma se retrasa y el almacén se llena, **rechaza las publicaciones nuevas** en lugar de descartar las antiguas. El broker no envía PUBACK y cierra la conexión, así que el dispositivo conserva el mensaje y lo vuelve a enviar al reconectarse: se le hace esperar, y no se pierden datos. Lo mismo ocurre mientras el almacén no tiene líder: el broker no confirma una publicación QoS 1, y el dispositivo la vuelve a enviar. El ajuste reduce el tráfico que la instancia puede sostener, y un broker que se queda sin memoria por sobrecarga aún puede perder mensajes que confirmó, así que dimensione la instalación para mantenerse por debajo de su techo. Mientras el almacén está lleno por encima del 80 %, se rechazan las conexiones nuevas de dispositivos hasta que baja del 60 %. El rechazo es el código de retorno 5 de CONNACK de MQTT (no autorizado), así que el firmware debe seguir reintentando tras el código 5 en lugar de rendirse. Un dispositivo cuya conexión se cerró así y que se reconecta en menos de 30 segundos no se da por desconectado. Una excepción: un mensaje que supera el límite de ingesta de su tenant se sigue confirmando y descartando, como con el ajuste desactivado. Activa el ajuste con `--mqtt-fail-closed` en `dcctl bootstrap` o `dcctl upgrade`; consulta [MQTT con fail-closed](../deployment/observability.md#mqtt-fail-closed).
+- **Desactivado (por defecto).** La plataforma le impone un tope al almacén para que no pueda consumir todo el volumen. Un PUBACK significa que el broker aceptó el mensaje, no que la plataforma vaya a conservarlo: un backlog sostenido descarta sus mensajes no entregados **más antiguos** en lugar de tumbar la instancia, y al dispositivo no se le avisa. También se pueden perder mensajes QoS 1 que el broker ya confirmó mientras el stream de captura cambia de líder, algo que provoca un reinicio del broker, una actualización o la pérdida de un nodo, con cualquier carga; nada los cuenta, y `JetStreamCaptureLeaderChanged` avisa de que hubo un cambio (ve [MQTT: el bróker de la plataforma](../reference/transport-matrix.md#mqtt--the-platform-broker)). También se pueden perder sin ningún cambio de líder, con carga sostenida: cuando `event-sources` se queda atrás y la cola del stream de captura alcanza su límite, el stream descarta su mensaje sin leer más antiguo por cada mensaje nuevo que confirma, y al dispositivo no se le avisa. En una prueba de carga eso perdió entre el 7 y el 13 % del tráfico MQTT. `devicechain_<area>_jetstream_consumer_unread_skipped_total` cuenta estas pérdidas, y `JetStreamCaptureBacklogGrowing`, `JetStreamCaptureBacklogWillOverflow` y `JetStreamDurableLostUnread` alertan sobre ellas.
+- **Activado.** Un PUBACK significa que la plataforma guarda el mensaje. Esto cubre eventos, respuestas a comandos e informes de dispositivo. Cuando la plataforma se retrasa y el almacén se llena, **rechaza las publicaciones nuevas** en lugar de descartar las antiguas. El broker no envía PUBACK y cierra la conexión, así que el dispositivo conserva el mensaje y lo vuelve a enviar al reconectarse: se le hace esperar, y no se pierden datos. Lo mismo ocurre mientras el almacén no tiene líder: el broker no confirma una publicación QoS 1, y el dispositivo la vuelve a enviar. El ajuste reduce el tráfico que la instancia puede sostener, y un broker que se queda sin memoria por sobrecarga aún puede perder mensajes que confirmó, así que dimensiona la instalación para mantenerse por debajo de su techo. Mientras el almacén está lleno por encima del 80 %, se rechazan las conexiones nuevas de dispositivos hasta que baja del 60 %. El rechazo es el código de retorno 5 de CONNACK de MQTT (no autorizado), así que el firmware debe seguir reintentando tras el código 5 en lugar de rendirse. Un dispositivo cuya conexión se cerró así y que se reconecta en menos de 30 segundos no se da por desconectado. Una excepción: un mensaje que supera el límite de ingesta de su tenant se sigue confirmando y descartando, como con el ajuste desactivado. Activa el ajuste con `--mqtt-fail-closed` en `dcctl bootstrap` o `dcctl upgrade`; consulta [MQTT con fail-closed](../deployment/observability.md#mqtt-fail-closed).
 
-**Fail-closed está desactivado por defecto.** Activarlo reduce la carga que la instancia sostiene, pero entonces la sobrecarga genera contrapresión: cuando el almacén de mensajes del bróker supera el 80 % de ocupación, rechaza nuevas conexiones de dispositivos hasta que baja del 60 %, y cuando se llena rechaza nuevas publicaciones en lugar de perder mensajes. Un bróker que se queda sin memoria bajo sobrecarga aún puede perder mensajes que ya confirmó, así que dimensione la instalación para mantenerse por debajo de su techo. Es opcional, y convertirlo en el valor por defecto figura en la [hoja de ruta](https://github.com/devicechain-io/devicechain/blob/main/ROADMAP.md). Para activarlo, pase `--mqtt-fail-closed` a `dcctl bootstrap` o `dcctl upgrade` (`--mqtt-fail-closed=false` lo desactiva de nuevo).
+**Fail-closed está desactivado por defecto.** Activarlo reduce la carga que la instancia sostiene, pero entonces la sobrecarga genera contrapresión: cuando el almacén de mensajes del bróker supera el 80 % de ocupación, rechaza nuevas conexiones de dispositivos hasta que baja del 60 %, y cuando se llena rechaza nuevas publicaciones en lugar de perder mensajes. Un bróker que se queda sin memoria bajo sobrecarga aún puede perder mensajes que ya confirmó, así que dimensiona la instalación para mantenerse por debajo de su techo. Es opcional, y convertirlo en el valor por defecto figura en la [hoja de ruta](https://github.com/devicechain-io/devicechain/blob/main/ROADMAP.md). Para activarlo, pasa `--mqtt-fail-closed` a `dcctl bootstrap` o `dcctl upgrade` (`--mqtt-fail-closed=false` lo desactiva de nuevo).
 
 Con el ajuste **desactivado**, un PUBACK puede ir seguido de una pérdida por tres vías, y estas son las cotas medidas hasta ahora:
 
@@ -255,9 +255,9 @@ Con el ajuste **activado**, el techo medido es de unos **8000 eventos QoS 1 por 
 - **A 12 000 por segundo falla perdiendo, no rechazando.** Los tres servidores del bróker se quedaron sin memoria y se perdieron 621 280 de 3,36 millones de eventos confirmados (18,5 %).
 - **A modo de comparación, con el ajuste desactivado,** la misma ejecución a 9000 por segundo no tuvo reinicios y perdió 1250 de 2,70 millones, todos dentro de los cambios de líder. En este nivel, ambos modos llevan los nodos de servicios cerca del 100 % de CPU a 9000 por segundo.
 
-Por eso, dimensione una instancia con el ajuste activado para mantenerse por debajo de unos 8000 eventos QoS 1 por segundo por instancia, y trate como no segura cualquier cifra cercana a 9000.
+Por eso, dimensiona una instancia con el ajuste activado para mantenerse por debajo de unos 8000 eventos QoS 1 por segundo por instancia, y trata como no segura cualquier cifra cercana a 9000.
 
-**Firmware.** Reintente tras un rechazo. Una conexión rechazada es el código de retorno 5 de CONNACK, y una publicación rechazada es una conexión cerrada sin PUBACK: conserve el mensaje, reconecte y vuelva a enviarlo, las veces que haga falta. Ponga `altId` y `occurredTime` en cada evento (vea más abajo) para que un reintento, o una publicación que llega dos veces en torno a un cambio de líder, se guarde una sola vez.
+**Firmware.** Reintenta tras un rechazo. Una conexión rechazada es el código de retorno 5 de CONNACK, y una publicación rechazada es una conexión cerrada sin PUBACK: conserva el mensaje, reconecta y vuelve a enviarlo, las veces que haga falta. Pon `altId` y `occurredTime` en cada evento (ve más abajo) para que un reintento, o una publicación que llega dos veces en torno a un cambio de líder, se guarde una sola vez.
 
 QoS 0 no se ve afectado por el ajuste. El broker nunca almacena una publicación QoS 0, así que nada la frena, y sigue siendo de mejor esfuerzo en ambos casos.
 
@@ -283,11 +283,19 @@ Publica con QoS 0, o con QoS 1 con `altId` y `occurredTime`. Un operador que rea
 
 `event-sources` también acepta eventos por HTTP en el puerto **8081**. El id de instancia y el inquilino se toman de la ruta `/{instanceId}/{tenant}/events`, siguiendo la convención del topic MQTT; el dispositivo y su credencial viajan en el cuerpo.
 
-- `POST` devuelve **202 Accepted** una vez que el evento está en cola.
+- `POST` devuelve **202 Accepted** una vez que el evento está en cola, con una cabecera `X-DC-Event-Id`: un recibo de la petición, para citarlo al preguntar por ella. Identifica la petición, no el evento almacenado, cuyo id aún no existe.
+- Devuelve **401 Unauthorized** cuando el inquilino de la ruta no existe, o la credencial del cuerpo no se autentica (es desconocida, ha caducado, tiene un secreto equivocado, pertenece a otro dispositivo que el nombrado, o falta donde la instancia la exige). El cuerpo es siempre `{"error":"unauthorized"}`, igual para toda causa, de modo que el endpoint no sirve para averiguar qué inquilinos o ids de credencial existen; el contador `total_http_ingest_refused` del operador indica cuál fue. No se almacenó nada y reenviar la misma petición da la misma respuesta. Consulta [por qué no aparecen mis datos](./why-isnt-my-data-showing-up.md).
 - Devuelve **429 Too Many Requests** si el inquilino supera su techo de ingesta HTTP, contado en lecturas, así que un mensaje que lleva muchas lecturas cuesta más que uno que lleva una sola. La ruta MQTT descarta los mensajes que exceden el límite en lugar de responder.
-- Devuelve **400 Bad Request** cuando el cuerpo no puede leerse o decodificarse, o el inquilino de la
+- Devuelve **400 Bad Request** cuando el cuerpo no puede leerse o no es JSON, o el inquilino de la
   ruta no es un token válido. Enviar de nuevo la misma petición recibe la misma respuesta.
-- Devuelve **500 Internal Server Error** cuando el evento se descartó antes de poder ponerlo en cola porque no se pudo construir su mensaje (una credencial que presentó no se pudo sellar, o el evento no se pudo codificar). No se almacenó nada y reenviar la misma petición da la misma respuesta, así que no la reintente; la causa está en el registro de `event-sources`, y `total_msg_build_dropped` lo cuenta por causa.
+- Devuelve **400 Bad Request** cuando el cuerpo es JSON pero dice algo que la plataforma rechaza: un `eventType` desconocido, un payload sin entradas, una entrada vacía, una marca de tiempo que no es RFC 3339, más de 256 lecturas. El cuerpo nombra el valor para que puedas corregir el campo:
+
+  ```json
+  {"error":"unprocessable_event","message":"unable to decode event: ...","eventId":"9f2c…","errors":[{"pointer":"/payload/entries/1/measurements","detail":"measurement entry 1 carries no measurements"}]}
+  ```
+
+  `pointer` es un JSON Pointer ([RFC 6901](https://www.rfc-editor.org/rfc/rfc6901)) dentro del cuerpo enviado, y uno vacío significa el documento entero. No se almacenó nada y reenviar la misma petición da la misma respuesta.
+- Devuelve **500 Internal Server Error** cuando el evento se descartó antes de poder ponerlo en cola porque no se pudo construir su mensaje (una credencial que presentó no se pudo sellar, o el evento no se pudo codificar). No se almacenó nada y reenviar la misma petición da la misma respuesta, así que no la reintentes; la causa está en el registro de `event-sources`, y `total_msg_build_dropped` lo cuenta por causa.
 - Devuelve **503 Service Unavailable** cuando el evento no se aceptó. Con una cabecera
   `Retry-After`, la plataforma está rechazando eventos nuevos
   ([contrapresión](../deployment/observability.md#ingest-backpressure)) y el evento no se
@@ -412,8 +420,8 @@ Guarda el nonce junto al comando mientras lo ejecutas, y sobrescríbelo si el mi
 Un dispositivo recibe su configuración, y le dice a la plataforma qué hizo con ella, mediante dos topics por dispositivo:
 
 ```
-{instanceId}/{tenant}/device-desired/{deviceToken}    (de la plataforma al dispositivo; un dispositivo puede suscribirse al suyo)
-{instanceId}/{tenant}/device-reports/{deviceToken}    (del dispositivo a la plataforma; un dispositivo puede publicar en el suyo)
+{instanceId}/{tenant}/device-desired/{deviceToken}    (platform to device; a device may subscribe to its own)
+{instanceId}/{tenant}/device-reports/{deviceToken}    (device to platform; a device may publish to its own)
 ```
 
 Igual que con los comandos, un dispositivo solo está autorizado para el topic que lleva su propio token de dispositivo, y únicamente en el sentido indicado. La plataforma toma el tenant y el dispositivo del topic, nunca del mensaje, así que un mensaje no debe llevar la identidad de un dispositivo (si la lleva, se rechaza) y un dispositivo solo puede informar por sí mismo.
@@ -480,14 +488,14 @@ Cuando se asigna un artefacto al dispositivo, la plataforma publica en `device-d
 Para producir una firma a mano (`file` es el artefacto, `k.pem` la clave privada):
 
 ```bash
-# keyId: SHA-256 de la clave pública en DER SubjectPublicKeyInfo
+# keyId: SHA-256 of the public key as DER SubjectPublicKeyInfo
 openssl pkey -in k.pem -pubout -outform DER | openssl dgst -sha256
 
-# ECDSA_P256_SHA256 (clave P-256): firma SHA-256(file)
+# ECDSA_P256_SHA256 (a P-256 key): signs SHA-256(file)
 openssl dgst -sha256 -sign k.pem -binary file | base64 | tr -d '\n'
-cosign sign-blob --key k.key file          # la misma firma, en base64
+cosign sign-blob --key k.key file          # the same signature, base64
 
-# ED25519: firma los 32 bytes del resumen
+# ED25519: sign the 32 digest bytes themselves
 openssl dgst -sha256 -binary file > digest
 openssl pkeyutl -sign -rawin -inkey k.pem -in digest | base64 | tr -d '\n'
 ```

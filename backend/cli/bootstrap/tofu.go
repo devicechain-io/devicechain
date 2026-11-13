@@ -97,6 +97,10 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	if err := publishBrokerCertificateExpiry(ctx, typed, dyn, st); err != nil {
 		return err
 	}
+	// Where the cluster's alerts go, so the operator can report AlertsRouted.
+	if err := publishAlertRouting(ctx, typed, dyn, st); err != nil {
+		return err
+	}
 
 	// 🔴 THIS INSTANCE'S OWN LOGIN AND DATABASE, BEFORE ITS OWN INFRASTRUCTURE: the
 	// refusals it can raise — a database by this name that some other identity owns, or
@@ -604,6 +608,9 @@ func infraVarsIn(st *State, rootdir string) []string {
 	vars = append(vars, databasePlacement(st).infraVars()...)
 	if st.MaxConnections > 0 {
 		vars = append(vars, fmt.Sprintf("postgres_max_connections=%d", st.MaxConnections))
+	}
+	if st.RelationalStoreMaxWALMiB != nil {
+		vars = append(vars, fmt.Sprintf("postgres_max_wal_size_mib=%d", *st.RelationalStoreMaxWALMiB))
 	}
 	// The compact preset's volumes (compactSizing). The JetStream PV is DERIVED from
 	// the stream ceilings helmInstall states, not chosen alongside them: every

@@ -5,8 +5,13 @@ package model
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -61,6 +66,185 @@ type NotificationState struct {
 	// a cycle adopts it, resetting the row only when that cycle was raised after the
 	// row's clear (see enterCycle).
 	CycleRaisedAt sql.NullTime
+
+	// ClearNotifiedAt is when this cycle's clear was CLAIMED for announcement to the channels
+	// that paged it (see Api.ClaimClearAnnouncement). Per cycle: a new cycle resets it. NULL
+	// means no clear has been announced for the cycle the row describes.
+	ClearNotifiedAt sql.NullTime
+
+	// ClearNotifiedCycle is the CYCLE (a CycleRaisedAt value) whose clear has been claimed. The
+	// claim is judged by cycle, never by comparing times: see ClearAnnounced.
+	ClearNotifiedCycle sql.NullTime
+
+	// PagedTargets is a JSON array of PagedTarget: the (channel, recipients) targets that
+	// actually delivered a page in this cycle, merged in as pages go out. A clear is sent only
+	// to these, so it reaches what was paged and nothing else. Per cycle; NULL until a page is
+	// recorded (including every row written before the column existed).
+	PagedTargets *datatypes.JSON
+
+	// PagedCycle is the cycle PagedTargets describes, as a column so SQL can match it to
+	// CycleRaisedAt (see Api.PendingClearStates).
+	PagedCycle sql.NullTime
+
+	// The source of the alarm, kept so a notification rendered from this row alone (a timed
+	// re-notification, a clear the scheduler picks up late) can name the device and link to it
+	// the way the event-driven one does. Written from the alarm event when a page is recorded;
+	// NULL means unknown (a row from before these columns, or an alarm whose originator is not a
+	// device), and a renderer omits what is NULL, never invents it. Not per cycle: they describe
+	// the alarm's device, and a newer event's value replaces an older one.
+	OriginatorType  sql.NullString
+	OriginatorId    sql.NullInt64
+	DeviceToken     sql.NullString
+	DeviceName      sql.NullString
+	DeviceTypeToken sql.NullString
+
+	// SourceAt orders source facts by the event occurrence time, independently of delivery.
+	SourceAt sql.NullTime
+}
+
+// AlarmSource is the originator facts an alarm event carries that a state row keeps. The zero
+// value is "nothing known" and changes nothing on the row.
+type AlarmSource struct {
+	OriginatorType  string
+	OriginatorId    uint
+	DeviceToken     string
+	DeviceName      string
+	DeviceTypeToken string
+}
+
+// IsZero reports whether the source states nothing.
+func (a AlarmSource) IsZero() bool { return a == AlarmSource{} }
+
+// applySource writes the facts the source states onto the row. A field the source leaves empty keeps
+// what the row has: an event from a producer that predates a field must not erase it.
+// With fillOnly the row keeps what it already has and only the unknown fields are filled: an
+// older event, finishing late, must not put a stale name back over a newer one.
+func (s *NotificationState) applySource(a AlarmSource, fillOnly bool) {
+	if fillOnly {
+		cur := s.Source()
+		if cur.OriginatorType != "" {
+			a.OriginatorType = ""
+		}
+		if cur.OriginatorId != 0 {
+			a.OriginatorId = 0
+		}
+		if cur.DeviceToken != "" {
+			a.DeviceToken = ""
+		}
+		if cur.DeviceName != "" {
+			a.DeviceName = ""
+		}
+		if cur.DeviceTypeToken != "" {
+			a.DeviceTypeToken = ""
+		}
+	}
+	if a.OriginatorType != "" {
+		s.OriginatorType = sql.NullString{String: a.OriginatorType, Valid: true}
+	}
+	if a.OriginatorId != 0 {
+		s.OriginatorId = sql.NullInt64{Int64: int64(a.OriginatorId), Valid: true}
+	}
+	if a.DeviceToken != "" {
+		s.DeviceToken = sql.NullString{String: a.DeviceToken, Valid: true}
+	}
+	if a.DeviceName != "" {
+		s.DeviceName = sql.NullString{String: a.DeviceName, Valid: true}
+	}
+	if a.DeviceTypeToken != "" {
+		s.DeviceTypeToken = sql.NullString{String: a.DeviceTypeToken, Valid: true}
+	}
+}
+
+// Source is what the row remembers about the alarm's source (zero when it knows nothing).
+func (s *NotificationState) Source() AlarmSource {
+	var a AlarmSource
+	if s == nil {
+		return a
+	}
+	if s.OriginatorType.Valid {
+		a.OriginatorType = s.OriginatorType.String
+	}
+	if s.OriginatorId.Valid && s.OriginatorId.Int64 > 0 {
+		a.OriginatorId = uint(s.OriginatorId.Int64)
+	}
+	if s.DeviceToken.Valid {
+		a.DeviceToken = s.DeviceToken.String
+	}
+	if s.DeviceName.Valid {
+		a.DeviceName = s.DeviceName.String
+	}
+	if s.DeviceTypeToken.Valid {
+		a.DeviceTypeToken = s.DeviceTypeToken.String
+	}
+	return a
+}
+
+// PagedTarget names one destination that delivered a page: the channel by token and the
+// resolved recipients, the same identity the dispatcher dedups deliveries on.
+type PagedTarget struct {
+	// ChannelID is the channel's stable identity: a token can be renamed between the page and
+	// the clear, an id cannot. Channel is the token at the time, for reading the record.
+	ChannelID  uint     `json:"channelId,omitempty"`
+	Channel    string   `json:"channel"`
+	Recipients []string `json:"recipients,omitempty"`
+}
+
+// Key is the target's identity: the channel's id (its token only for a record that has no id)
+// and the recipients.
+func (t PagedTarget) Key() string {
+	if t.ChannelID != 0 {
+		return fmt.Sprintf("#%d|%s", t.ChannelID, strings.Join(t.Recipients, ","))
+	}
+	return t.Channel + "|" + strings.Join(t.Recipients, ",")
+}
+
+// PagedTargetSet decodes the row's paged targets; a missing or unreadable value is the empty
+// set, which sends no clear (an unreadable record must not turn into a clear sent anywhere).
+func (s *NotificationState) PagedTargetSet() map[string]bool {
+	out := map[string]bool{}
+	if s == nil || s.PagedTargets == nil {
+		return out
+	}
+	var doc pagedDoc
+	if err := json.Unmarshal(*s.PagedTargets, &doc); err != nil || doc.Cycle != cycleLabel(s.CycleRaisedAt) {
+		return out
+	}
+	for _, t := range doc.Targets {
+		out[t.Key()] = true
+	}
+	return out
+}
+
+// pagedDoc is the stored form of the paged set. It names the cycle it describes so that a
+// value an earlier cycle left behind is never read as this one's.
+type pagedDoc struct {
+	Cycle   string        `json:"cycle"`
+	Targets []PagedTarget `json:"targets"`
+}
+
+// cycleLabel is a cycle's stable text form ("" for none).
+func cycleLabel(c sql.NullTime) string {
+	if !c.Valid {
+		return ""
+	}
+	return c.Time.UTC().Format(time.RFC3339Nano)
+}
+
+// ClearAnnounced reports whether THIS cycle's clear has been claimed: the claim names the row's
+// cycle. A claim naming another cycle (left by an earlier one) is not this cycle's, whatever
+// the clocks say. A row with no cycle recorded cannot name one, so any claim stands for it.
+func (s *NotificationState) ClearAnnounced() bool {
+	if !s.CycleRaisedAt.Valid {
+		return s.ClearNotifiedAt.Valid
+	}
+	return s.ClearNotifiedCycle.Valid && s.ClearNotifiedCycle.Time.Equal(s.CycleRaisedAt.Time)
+}
+
+// SameCycleAs reports whether an event raised at `raised` belongs to the cycle the row
+// describes. A row or an event that names no cycle cannot be ordered and is taken as the same.
+func (s *NotificationState) SameCycleAs(raised time.Time) bool {
+	k := cycleKey(raised)
+	return !s.CycleRaisedAt.Valid || !k.Valid || s.CycleRaisedAt.Time.Equal(k.Time)
 }
 
 // DefaultOrder implements rdb.Sortable: newest first, tiebroken on the row id.

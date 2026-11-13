@@ -22,6 +22,8 @@ Every message on this page is published as a JSON Schema (draft 2020-12). Use th
 | [`new-relationship-payload.schema.json`](pathname:///schema/device/new-relationship-payload.schema.json) | The payload of a [`NewRelationship`](#new-relationship-payload) event |
 | [`command-delivery.schema.json`](pathname:///schema/device/command-delivery.schema.json) | The [command](#command-delivery) the platform delivers to a device |
 | [`command-response.schema.json`](pathname:///schema/device/command-response.schema.json) | The [response](#command-response) a device sends back |
+| [`command-pull.schema.json`](pathname:///schema/device/command-pull.schema.json) | The commands a device receives from an [HTTP pull](../concepts/commands.md#http-command-pull) |
+| [`command-pull-response.schema.json`](pathname:///schema/device/command-pull-response.schema.json) | The response a device sends on the [HTTP pull channel](../concepts/commands.md#http-command-pull) |
 
 The same list, with absolute URLs, is under `deviceProtocol` in [`/schema/index.json`](pathname:///schema/index.json). The envelope schema references the payload schemas by relative URL, so a validator that loads it by URL resolves them on its own.
 
@@ -46,6 +48,7 @@ The platform broker is the MQTT server built into NATS. An MQTT topic and the NA
 | Message | Direction | MQTT topic | NATS subject |
 | --- | --- | --- | --- |
 | [Event](#device-event) | device → platform | `{instanceId}/{tenant}/devices/{deviceToken}/events` | `{instanceId}.{tenant}.devices.{deviceToken}.events` |
+| [Raw payload](#raw-payload) | device → platform | `{instanceId}/{tenant}/devices/{deviceToken}/uplink` | `{instanceId}.{tenant}.devices.{deviceToken}.uplink` |
 | [Command delivery](#command-delivery) | platform → device | `{instanceId}/{tenant}/device-commands/{deviceToken}` | `{instanceId}.{tenant}.device-commands.{deviceToken}` |
 | [Command response](#command-response) | device → platform | `{instanceId}/{tenant}/command-responses/{deviceToken}` | `{instanceId}.{tenant}.command-responses.{deviceToken}` |
 | [Configuration](../guides/connecting-a-device.md#reserved-device-topics) and [update](../guides/connecting-a-device.md#over-the-air-updates) messages | platform → device | `{instanceId}/{tenant}/device-desired/{deviceToken}` | `{instanceId}.{tenant}.device-desired.{deviceToken}` |
@@ -57,7 +60,7 @@ The platform broker is the MQTT server built into NATS. An MQTT topic and the NA
 
 A device with no credential yet reaches the platform over HTTPS to [register itself](#self-registration), at `POST /api/device-management/provisioning/{tenant}/register`. That is a separate endpoint from event ingest, served by `device-management`.
 
-Over **HTTP**, a device can send events only. `POST` the same [event body](#device-event) to `/{instanceId}/{tenant}/events` on the `event-sources` service (port 8081). There is no HTTP downlink: an HTTP-only device cannot receive commands, configuration or update assignments.
+Over **HTTP**, a device can send events (and, where the operator has enabled it, a [raw payload](#raw-payload)). `POST` the same [event body](#device-event) to `/{instanceId}/{tenant}/events` on the `event-sources` service (port 8081). To receive commands, set the device type's `commandChannel` to `HTTP_PULL`; the device then polls for commands and sends acknowledgements and responses on the same listener. See [HTTP command pull](../concepts/commands.md#http-command-pull) for the endpoints and authentication. Configuration and managed update assignments still use the MQTT desired/reports channels; HTTP command pull does not carry them.
 
 ### The gateway namespace {#gateway-namespace}
 
@@ -67,9 +70,11 @@ A gateway (the [edge agent](../deployment/edge-services.md#gateway-identity) is 
 | --- | --- | --- |
 | [Event](#device-event) for a device behind the gateway | gateway → platform | `{instanceId}/{tenant}/gateways/{gatewayToken}/devices/{deviceToken}/events` |
 | Notice that an event was refused | platform → gateway | `{instanceId}/{tenant}/gateways/{gatewayToken}/notices` |
+| Acceptance of events the platform now holds | platform → gateway | `{instanceId}/{tenant}/gateways/{gatewayToken}/accepts` |
 
-- A gateway is authorized to publish only under its **own** token, with any child token after `devices/`, and to subscribe only to its own notices. It cannot publish in another gateway's or another tenant's namespace, or on a child's own topic. The grant is the same size however many devices the gateway fronts, and every device holds it, so assigning a first device to a gateway needs no reconnect.
+- A gateway is authorized to publish only under its **own** token, with any child token after `devices/`, and to subscribe only to its own notices and acceptances. It cannot publish in another gateway's or another tenant's namespace, or on a child's own topic. The grant is the same size however many devices the gateway fronts, and every device holds it, so assigning a first device to a gateway needs no reconnect.
 - The platform accepts an event only if the device named in the topic exists, is **assigned to that gateway**, and the gateway is enabled. Otherwise it refuses the event with the reason `NotGatewayChild` ([below](#rejections-after-acceptance)) and sends the gateway a notice. The broker acknowledges the publish either way, because MQTT 3.1.1 cannot refuse one.
+- A notice is `{"altId", "device", "reason"}`. Besides `not_gateway_child`, the reason `over_ceiling` means the platform received the event and shed it because the tenant was over its ingest ceiling; the event was not stored and is safe to send again. An acceptance is `{"altIds": [...]}`: the idempotency keys of events now durably held on a platform stream, batched. Both are best effort and carry no payload. A gateway that deletes a buffered event should do so on the acceptance, not on the broker's acknowledgement; one that never receives it re-sends the event under the same `altId`, and the platform stores it once.
 - Identity is the topic plus the assignment. The body carries none: an event on this namespace that carries `credentialType`, `credentialId` or `credentialSecret` is refused, and so is a body `device` that names another device. The event is attributed to the child, and the resolved event carries the gateway's token as well.
 - A notice is a JSON object, `{"altId": "...", "device": "...", "reason": "not_gateway_child"}`. It carries no payload and is not stored, so a gateway that was offline when it was sent misses it. The record of a refusal is the `failed-events` stream.
 - The grant also covers `responses` and `reports` under the namespace and subscribing to `commands` and `desired`, but nothing reads or sends them yet. Publish **events** only.
@@ -162,6 +167,42 @@ Creates one relationship from the sending device to another entity in the same t
 | `target` | string | yes | The token of the target entity. | `"building-7-sensors"` |
 
 A relationship the platform cannot create (an unknown target type, a target that does not exist, an unknown relationship type) is not created. Like any event that cannot be resolved, it is retried and then dead-lettered.
+
+## A device's own payload {#raw-payload}
+
+A device that cannot send the [event JSON](#device-event), because it publishes a compact binary frame or JSON in a shape of its own, can publish that payload as it is and have the [decoder](../guides/payload-decoders.md) on its device type's profile turn it into events. The decoder is the one authored in the console's **Decoder** tab; the same decoder serves an [inbound integration](../guides/inbound-integrations.md) and a device's own connection.
+
+Publish the bytes, with no envelope, to the device's own raw-payload topic:
+
+| | |
+| --- | --- |
+| MQTT topic | `{instanceId}/{tenant}/devices/{deviceToken}/uplink` |
+| NATS subject | `{instanceId}.{tenant}.devices.{deviceToken}.uplink` |
+| Body | The device's payload, as it is. Up to 1 MiB; a decoder that reads the frame takes at most 4 KiB of it, and one that reads JSON at most 64 KiB. |
+| QoS | 0 or 1, as for [events](#topics). |
+
+- **The topic is the opt-in.** A message on the `events` topic is never read by a profile decoder, and nothing is chosen by what a body looks like. A device uses its decoder by publishing here.
+- **The operator grants the topic.** It is off unless `infrastructure.nats.mqttDeviceUplinks` is set. While it is off the broker refuses a publish to this topic, as it does any topic the device is not authorized for. With `dcctl`, pass `--mqtt-device-uplinks` to `dcctl upgrade` (or `dcctl bootstrap`); `--mqtt-device-uplinks=false` turns it off. The choice is recorded on the instance and kept by later upgrades. The `--values` overlay key `instance.config.infrastructure.nats.mqttDeviceUplinks` still works; a choice recorded with the flag takes precedence over the overlay key; change it with the flag. A conflicting overlay value is refused. A device is granted the topic when it next connects, so turning the setting on reaches a fleet as its devices reconnect, and **turning it off again** takes effect the same way: a device that is already connected keeps its grant until it reconnects or its session token expires.
+- **The topic is the identity.** As for events, the device authenticates when it connects and may publish only to the topic carrying **its own** token, so a device can never have a payload decoded as another device. Send no credential: the payload is not an envelope and has nowhere to put one. The device's [authentication mode](../guides/device-credentials.md) applies as it does to events.
+- **What the decoder reads.** If the decoder reads a frame, the bytes are its input. If it reads JSON and the payload begins with `{`, the payload is also parsed as a JSON object (at most 32 levels deep) and the decoder reads that; a payload that begins like an object and is not one is carried as a frame, and a decoder that needs the JSON then records `missing_input`.
+- **Limits.** A payload counts against the tenant's ingest ceilings like an event: once as a message, and then, for the readings the decoder can produce, as readings (at least the decoder's maximum readings, more for a costly decoder, never more than 256).
+
+MQTT cannot answer a device, so a payload the platform cannot carry is recorded for an operator and the device is not told:
+
+| Condition | Outcome | Where an operator sees it |
+| --- | --- | --- |
+| The device's type has no decoder, or no device has this token | Routed to `failed-decode` with the reason; never read as an event | `total_msg_failed_decode`; `device_uplink_messages_total` by `result` (`no_decoder`, `unauthorized`) |
+| The payload is over a limit the decoder's input allows | Routed to `failed-decode` | `total_msg_failed_decode`; `device_uplink_messages_total` with `result="too_large"` |
+| Tenant is over its ingest ceiling, by messages or by readings | Acknowledged, then **dropped** | `total_msg_rate_limited`, `total_msg_reading_limited` |
+| device-management cannot be asked, or the pipeline is applying backpressure | Not refused: it waits in the capture stream and is offered again | `result="plan_unavailable"` or `"backpressure"` |
+| The decoder runs and fails (a refused output, `missing_input`) | Recorded on `failed-events` as `DECODE_FAILED`, with the decoder's own health and samples in the console | the decoder's health in the console |
+| Decoded | The events the decoder produces are stored | `result="accepted"` |
+
+:::caution Turn it on after the upgrade, not during it
+Enable `mqttDeviceUplinks` only once every `event-sources` and `device-management` replica runs a release that knows the topic, in an upgrade of its own after the release is in place. With the setting off the capture stream is exactly what earlier releases declared; the upgrade that turns it on adds the topic to the stream, and an `event-sources` replica from before this release that restarts after that stops at start-up with a stream-drift error. One that is already running would read such a message and discard it as foreign, and a `device-management` replica from before it refuses the uplink the new one produces, so a payload published while the two are mixed could be lost.
+:::
+
+**Over HTTP**, the same capability is `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink` on the `event-sources` service. The device presents its own credential in headers (`Authorization: Bearer <token>`, or `X-DeviceChain-Credential-Type`, `-Id` and `-Secret`), because a binary body has nowhere to carry one, and the route answers `401` without one. It exists only when the operator sets `httpIngest.deviceUplinks` on `event-sources`; otherwise it is `404`.
 
 ## Command delivery {#command-delivery}
 
@@ -328,9 +369,11 @@ Checked by `event-sources` when the message is received and decoded.
 | --- | --- | --- | --- |
 | Instance id in the path or topic is not this instance's | `404` | The broker refuses the publish: the device is not authorized for that topic | — |
 | Tenant in the path is not a valid token | `400` | The broker refuses the publish | — |
+| The tenant in the path does not exist | `401`, the same answer as a bad credential | The broker refuses the connection | `total_http_ingest_refused`, `reason="unknown_tenant"` |
+| The credential in the body will not authenticate: unknown, expired, the wrong secret, another device's, or missing where the instance requires one | `401`, always `{"error":"unauthorized"}` | Judged at the broker when the device connects | `total_http_ingest_refused`, `reason="bad_credential"` |
 | Tenant is over its ingest ceiling, by messages or by readings | `429` with `Retry-After: 1` | Acknowledged, then **dropped** | `total_msg_rate_limited`, `total_msg_reading_limited` |
 | Body cannot be read, or is over 1 MiB | `400` | — | — |
-| Body does not decode: not JSON, an unknown or platform-only `eventType` (`StateChange`, `CommandInvocation`, `CommandResponse`), a value of the wrong JSON type, no entries, an empty entry, a missing or out-of-range location field, an alert with no `type` or with a `level` over 2147483647 | `400`, with the reason in the body | Acknowledged, then routed to the `failed-decode` stream | `total_msg_failed_decode` |
+| Body does not decode: not JSON, an unknown or platform-only `eventType` (`StateChange`, `CommandInvocation`, `CommandResponse`), a value of the wrong JSON type, no entries, an empty entry, a missing or out-of-range location field, an alert with no `type` or with a `level` over 2147483647 | `400`, with the reason and a [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901) to the value in the body | Acknowledged, then routed to the `failed-decode` stream | `total_msg_failed_decode` |
 | A timestamp that is not RFC 3339, is `0001-01-01T00:00:00Z`, or is more than 366 days old | `400`, naming the field | Routed to `failed-decode` | `total_msg_failed_decode`, `total_msg_invalid_event_time` |
 | More than 256 readings | `400`, naming the count and the limit | Routed to `failed-decode` | `total_msg_failed_decode`, `total_msg_too_many_readings` |
 | The body's `device` is not the device in the topic | — | Routed to `failed-decode` | `total_msg_failed_decode` |
@@ -338,7 +381,7 @@ Checked by `event-sources` when the message is received and decoded.
 | The platform is applying [backpressure](../deployment/observability.md#ingest-backpressure) | `503` **with** `Retry-After`: not stored, send it again | Not refused: it waits in the capture stream; the oldest captured messages are discarded only if that stream fills | |
 | The event's message could not be built: a credential it presented could not be sealed, or the event could not be encoded | `500`: not stored, and sending it again fails the same way | Dropped | `total_msg_build_dropped`, by `cause` |
 | The event could not be handed to the pipeline | `503` **without** `Retry-After`: it may have been stored, so a resend stores it twice unless it carries an [`altId`](#altid) | — | |
-| Accepted | `202` | `PUBACK` (QoS 1) | |
+| Accepted | `202`, with an `X-DC-Event-Id` receipt header | `PUBACK` (QoS 1) | |
 
 A `400` is terminal: the same request gets the same answer. A refusal at the door refuses the **whole message**, including every other entry in it.
 

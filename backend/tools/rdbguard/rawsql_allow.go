@@ -21,6 +21,8 @@ package rdbguard
 //   - tenant-write: the column-array insert, the one raw statement that WRITES tenant
 //     rows. Its text is built from the model's schema, and its tenant is bound from the
 //     context after the checks a gorm Create runs; see core/rdb/insert_columns.go.
+//   - metering: the usage rollup, which aggregates every tenant's events into per-tenant rows
+//     under a system context, grouping and keying by tenant_id at every step.
 var rawSQLAllowList = []siteEntry{
 	// --- not-sql ---
 	{
@@ -73,6 +75,32 @@ var rawSQLAllowList = []siteEntry{
 			"configuration with no tenant predicate by design",
 	},
 
+	// --- metering ---
+	{
+		Path: "backend/services/event-management/model/usage.go", Func: "rollupHour", Count: 4,
+		Why: "the usage rollup reads EVERY tenant's events for one hour on purpose, under a system context, " +
+			"and writes per-tenant rows: the hour statement GROUPs BY tenant_id and inserts the device set " +
+			"keyed (tenant_id, day, device_token), the day derivation groups the hourly rows by tenant_id and " +
+			"counts the device set through an explicit d.tenant_id = h.tenant_id, and the two clears delete " +
+			"by hour or day (plus a tenant_id correlation) to replace what is recomputed. Each statement is " +
+			"constant text with only the hour, day, floor and clock bound, and the hour statement skips any " +
+			"tenant whose erasure fence stands. No count can mix two tenants; the two-tenant integration test " +
+			"(usage_integration_test.go) reuses one device token across tenants to prove it",
+	},
+	{
+		Path: "backend/services/event-management/model/usage.go", Func: "initUsageState", Count: 1,
+		Why: "reads the TimescaleDB chunk catalog (timescaledb_information.chunks) for the newest compressed " +
+			"chunk of the events hypertable; 'events' appears only as the catalog's hypertable_name literal, " +
+			"and the statement reads no event row and no tenant's data",
+	},
+	{
+		Path: "backend/services/event-management/model/usage.go", Func: "Api.PruneUsageWorkingTables", Count: 2,
+		Why: "deletes the usage rollup's WORKING rows (tenant_usage_hourly, tenant_usage_devices) of every " +
+			"tenant for days older than a cutoff, on purpose and under a system context: retention by time, " +
+			"not a read or write of any one tenant's data. The predicate is the hour/day alone and is bound; " +
+			"the per-tenant record (tenant_usage_daily) is never touched",
+	},
+
 	// --- tenant-write ---
 	{
 		Path: "backend/core/rdb/insert_columns.go", Func: "ColumnTable.exec", Count: 2,
@@ -103,6 +131,29 @@ var rawSQLAllowList = []siteEntry{
 			"staging table is a TEMP table private to the transaction. Nothing is formatted into the text " +
 			"but package constants. A gorm bulk Create of hundreds of thousands of rows is the cost this " +
 			"replaces (see the memory and lock-hold test)",
+	},
+
+	{
+		Path: "backend/services/device-management/model/api_x509_crl_stage.go", Func: "keepNewSerials", Count: 2,
+		Why: "copies, into a TEMP table private to the transaction, the staged serials the list does not hold " +
+			"yet (the live-session kick's input). The SELECT's NOT EXISTS over device_revoked_certificates is a " +
+			"constant text whose WHERE binds tenant_id, trust_anchor_id, revocation_list_id, kind, issuer_key " +
+			"and issuer_name from the caller; the two counts are the Postgres and the SQLite spelling of the " +
+			"same statement, and only one runs. Only package constants are formatted into the text.",
+	},
+	{
+		Path: "backend/services/device-management/model/api_x509_revocation_kicks.go", Func: "crlRevocationKickTargets", Count: 3,
+		Why: "joins a CRL upload's durable set of newly revoked serials (pending_revocation_expansion_serials, one " +
+			"generation) to device_credential_chain_links. Three statements, each constant text whose WHERE binds " +
+			"tenant_id and trust_anchor_id explicitly on every table (plus the generation, and the issuer name and " +
+			"key where it applies): the join of the serials to the links, the count of serials no link accounts " +
+			"for, and the legacy depth-0 links of other issuers.",
+	},
+	{
+		Path: "backend/services/device-management/model/api_x509_revocation_markers.go", Func: "stashCrlRevocationSerials", Count: 1,
+		Why: "copies the transaction's TEMP table of newly revoked serials into pending_revocation_expansion_serials, " +
+			"binding tenant_id and trust_anchor_id from the caller on every row it writes. The only formatted-in " +
+			"name is a package constant naming the temp table.",
 	},
 
 	// --- erasure ---

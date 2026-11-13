@@ -4,9 +4,53 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/**
+ * Fields for a new delivery channel. The type must be one listed by
+ * notificationChannelTypes and the config must be valid for it.
+ */
+export type NotificationChannelCreateRequest = {
+  /** The channel type: smtp, webhook, slack, teams or pagerduty, as listed by notificationChannelTypes. */
+  channelType: string;
+  /**
+   * The non-secret connection settings as a JSON object serialized to a string. For smtp:
+   * host, port, from, username (optional; requires a secret) and security (starttls, the
+   * default; tls; or none for cleartext). For webhook: url (http or https, required),
+   * method (POST only), headers (an object of extra request headers) and auth (required:
+   * none when the URL itself carries the credential, bearer to send the secret as a bearer
+   * token, or header to send it in the header named by authHeader, optionally prefixed
+   * with authScheme). A webhook with auth bearer or header must have a secret, and one
+   * with auth none must not. For slack and teams: optional linkBaseUrl (the console URL the
+   * message's "open alarms" link is built from). For pagerduty: optional region (us, the
+   * default, or eu), source and linkBaseUrl. Unknown keys are refused for these three. The
+   * platform restricts which destinations a channel may reach.
+   */
+  config?: string | null | undefined;
+  /** Free-text description of what the channel is for. */
+  description?: string | null | undefined;
+  /** Whether the channel is active. Notifications are not sent through a disabled channel. */
+  enabled: boolean;
+  /** Free-form caller-defined metadata as a JSON object serialized to a string. */
+  metadata?: string | null | undefined;
+  /** Human-readable name shown in channel lists. */
+  name?: string | null | undefined;
+  /**
+   * The delivery credential: the SMTP password, the webhook bearer or header value, the
+   * Slack or Teams webhook URL (https), or the PagerDuty Events API v2 routing key. A slack,
+   * teams or pagerduty channel requires one.
+   * Write-only; stored encrypted and never returned. Omit it, or send an empty string, for
+   * no secret.
+   */
+  secret?: string | null | undefined;
+  /**
+   * Unique identifier for the new channel within the tenant. Letters, digits, hyphens and
+   * underscores, starting with a letter or digit, at most 128 characters.
+   */
+  token: string;
+};
+
 /** Filters and paging for the notificationChannels query. */
 export type NotificationChannelSearchCriteria = {
-  /** Return only channels of this type (smtp or webhook). Omit it to return every type. */
+  /** Return only channels of this type (smtp, webhook, slack, teams or pagerduty). Omit it to return every type. */
   channelType?: string | null | undefined;
   /** Return only enabled (true) or only disabled (false) channels. Omit it to return both. */
   enabled?: boolean | null | undefined;
@@ -14,6 +58,38 @@ export type NotificationChannelSearchCriteria = {
   pageNumber: number;
   /** Channels per page. A value below 1 is treated as 100; a value above 1000 is capped at 1000. */
   pageSize: number;
+};
+
+/**
+ * A partial update to a delivery channel. Omit a field to leave the stored value alone,
+ * send a value to set it, or send an explicit null to clear it (except where noted). The
+ * channel is named by the mutation's token argument, so there is no token here; use
+ * renameNotificationChannel to change the token.
+ */
+export type NotificationChannelUpdateRequest = {
+  /** New channel type (smtp, webhook, slack, teams or pagerduty). Omit it to keep the stored type; an explicit null is refused. */
+  channelType?: string | null | undefined;
+  /**
+   * New connection settings as a JSON object serialized to a string, in the format
+   * described on NotificationChannelCreateRequest.config, or null to clear them. For a
+   * webhook channel the result must still be valid, including its auth setting.
+   */
+  config?: string | null | undefined;
+  /** New description, or null to clear it. */
+  description?: string | null | undefined;
+  /** Whether the channel is active. Omit it to keep the stored value; an explicit null is refused. */
+  enabled?: boolean | null | undefined;
+  /** New metadata as a JSON object serialized to a string, or null to clear it. */
+  metadata?: string | null | undefined;
+  /** New name, or null to clear it. */
+  name?: string | null | undefined;
+  /**
+   * The write-only delivery credential. Omit it to keep the stored secret, send a value to
+   * replace it, or send null or an empty string to delete it. A webhook channel whose auth
+   * is bearer or header cannot be left without a secret, and one whose auth is none cannot
+   * have one.
+   */
+  secret?: string | null | undefined;
 };
 
 /** Fields for a new routing policy, including its complete rule set. */
@@ -32,6 +108,8 @@ export type NotificationPolicyCreateRequest = {
   metadata?: string | null | undefined;
   /** Human-readable name shown in policy lists. */
   name?: string | null | undefined;
+  /** Also notify the policy's channels when an alarm it paged clears. Omit it for false, the behaviour before this option existed. */
+  notifyOnClear?: boolean | null | undefined;
   /**
    * The severity at or above which alarms are sent even during quiet hours. Omit it to hold
    * every severity. It has no effect while the policy has no quiet hours.
@@ -90,6 +168,8 @@ export type NotificationPolicyUpdateRequest = {
   metadata?: string | null | undefined;
   /** New name, or null to clear it. */
   name?: string | null | undefined;
+  /** Whether the policy also notifies on clear. Omit it to keep the stored value; an explicit null is refused. */
+  notifyOnClear?: boolean | null | undefined;
   /** New bypass severity, or null so that quiet hours hold every severity. */
   quietHoursBypassSeverity?: string | null | undefined;
   /** New quiet-hours slots (a JSON array serialized to a string), or null to clear them. */
@@ -157,14 +237,14 @@ export type NotificationPolicyRegistryQueryVariables = Exact<{
 }>;
 
 
-export type NotificationPolicyRegistryQuery = { notificationPolicies: { results: Array<{ id: string, token: string, name: string | null, description: string | null, enabled: boolean, throttleSeconds: number | null, escalateAfterSeconds: number | null, maxEscalations: number | null, metadata: string | null, quietHoursTimezone: string | null, quietHoursSlots: string | null, quietHoursBypassSeverity: string | null, createdAt: string | null, updatedAt: string | null, rules: Array<{ id: string, severity: string, recipients: string | null, channel: { token: string, name: string | null } | null }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type NotificationPolicyRegistryQuery = { notificationPolicies: { results: Array<{ id: string, token: string, name: string | null, description: string | null, enabled: boolean, notifyOnClear: boolean, throttleSeconds: number | null, escalateAfterSeconds: number | null, maxEscalations: number | null, metadata: string | null, quietHoursTimezone: string | null, quietHoursSlots: string | null, quietHoursBypassSeverity: string | null, createdAt: string | null, updatedAt: string | null, rules: Array<{ id: string, severity: string, recipients: string | null, channel: { token: string, name: string | null } | null }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type NotificationPolicyByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type NotificationPolicyByTokenQuery = { notificationPoliciesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, enabled: boolean, throttleSeconds: number | null, escalateAfterSeconds: number | null, maxEscalations: number | null, metadata: string | null, quietHoursTimezone: string | null, quietHoursSlots: string | null, quietHoursBypassSeverity: string | null, createdAt: string | null, updatedAt: string | null, rules: Array<{ id: string, severity: string, recipients: string | null, channel: { token: string, name: string | null } | null }> }> };
+export type NotificationPolicyByTokenQuery = { notificationPoliciesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, enabled: boolean, notifyOnClear: boolean, throttleSeconds: number | null, escalateAfterSeconds: number | null, maxEscalations: number | null, metadata: string | null, quietHoursTimezone: string | null, quietHoursSlots: string | null, quietHoursBypassSeverity: string | null, createdAt: string | null, updatedAt: string | null, rules: Array<{ id: string, severity: string, recipients: string | null, channel: { token: string, name: string | null } | null }> }> };
 
 export type CreateNotificationPolicyRecordMutationVariables = Exact<{
   request: NotificationPolicyCreateRequest;
@@ -188,6 +268,40 @@ export type DeleteNotificationPolicyMutationVariables = Exact<{
 
 
 export type DeleteNotificationPolicyMutation = { deleteNotificationPolicy: boolean };
+
+export type NotificationChannelRegistryQueryVariables = Exact<{
+  criteria: NotificationChannelSearchCriteria;
+}>;
+
+
+export type NotificationChannelRegistryQuery = { notificationChannels: { results: Array<{ id: string, token: string, name: string | null, description: string | null, channelType: string, config: string | null, hasSecret: boolean, enabled: boolean, updatedAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type NotificationChannelTypesQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type NotificationChannelTypesQuery = { notificationChannelTypes: Array<{ id: string, label: string, description: string, available: boolean }> };
+
+export type CreateNotificationChannelMutationVariables = Exact<{
+  request: NotificationChannelCreateRequest;
+}>;
+
+
+export type CreateNotificationChannelMutation = { createNotificationChannel: { token: string } };
+
+export type UpdateNotificationChannelMutationVariables = Exact<{
+  token: string;
+  request: NotificationChannelUpdateRequest;
+}>;
+
+
+export type UpdateNotificationChannelMutation = { updateNotificationChannel: { token: string } };
+
+export type DeleteNotificationChannelMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteNotificationChannelMutation = { deleteNotificationChannel: boolean };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -260,6 +374,7 @@ export const NotificationPolicyRegistryDocument = new TypedDocumentString(`
       name
       description
       enabled
+      notifyOnClear
       throttleSeconds
       escalateAfterSeconds
       maxEscalations
@@ -295,6 +410,7 @@ export const NotificationPolicyByTokenDocument = new TypedDocumentString(`
     name
     description
     enabled
+    notifyOnClear
     throttleSeconds
     escalateAfterSeconds
     maxEscalations
@@ -341,3 +457,54 @@ export const DeleteNotificationPolicyDocument = new TypedDocumentString(`
   deleteNotificationPolicy(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteNotificationPolicyMutation, DeleteNotificationPolicyMutationVariables>;
+export const NotificationChannelRegistryDocument = new TypedDocumentString(`
+    query NotificationChannelRegistry($criteria: NotificationChannelSearchCriteria!) {
+  notificationChannels(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      channelType
+      config
+      hasSecret
+      enabled
+      updatedAt
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<NotificationChannelRegistryQuery, NotificationChannelRegistryQueryVariables>;
+export const NotificationChannelTypesDocument = new TypedDocumentString(`
+    query NotificationChannelTypes {
+  notificationChannelTypes {
+    id
+    label
+    description
+    available
+  }
+}
+    `) as unknown as TypedDocumentString<NotificationChannelTypesQuery, NotificationChannelTypesQueryVariables>;
+export const CreateNotificationChannelDocument = new TypedDocumentString(`
+    mutation CreateNotificationChannel($request: NotificationChannelCreateRequest!) {
+  createNotificationChannel(request: $request) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<CreateNotificationChannelMutation, CreateNotificationChannelMutationVariables>;
+export const UpdateNotificationChannelDocument = new TypedDocumentString(`
+    mutation UpdateNotificationChannel($token: String!, $request: NotificationChannelUpdateRequest!) {
+  updateNotificationChannel(token: $token, request: $request) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateNotificationChannelMutation, UpdateNotificationChannelMutationVariables>;
+export const DeleteNotificationChannelDocument = new TypedDocumentString(`
+    mutation DeleteNotificationChannel($token: String!) {
+  deleteNotificationChannel(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteNotificationChannelMutation, DeleteNotificationChannelMutationVariables>;

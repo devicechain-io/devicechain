@@ -475,6 +475,9 @@ function ActionFields({
           <FormField label={t('inspectorSecretHandleLabel')} htmlFor="cfg-secretref" description={t('inspectorSecretHandleDescription')}>
             <Input id="cfg-secretref" value={strVal(config.secretRef)} onChange={(e) => set({ secretRef: e.target.value || undefined })} placeholder={t('inspectorSecretHandlePlaceholder')} />
           </FormField>
+          <FormField label={t('inspectorSigningHandleLabel')} htmlFor="cfg-signingref" description={t('inspectorSigningHandleDescription')}>
+            <Input id="cfg-signingref" value={strVal(config.signingSecretRef)} onChange={(e) => set({ signingSecretRef: e.target.value || undefined })} placeholder={t('inspectorSigningHandlePlaceholder')} />
+          </FormField>
         </>
       )}
 

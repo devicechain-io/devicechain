@@ -85,5 +85,11 @@ var (
 		// the data-lifecycle reconciler (LifecycleHypertables) and, unlike the others, on a
 		// window of its own.
 		NewFailedEventRecordsSchema(),
+		// The per-tenant daily usage record (see its doc comment): a small plain table that
+		// outlives event retention, written by the usage rollup and read on the admin plane.
+		NewTenantUsageDailySchema(),
+		// The usage rollup moves to ingest time: a BRIN index on events.processed_time and the
+		// rollup's persisted watermark (see its doc comment).
+		NewTenantUsageIngestSchema(),
 	}
 )

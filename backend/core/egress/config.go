@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/rs/zerolog/log"
 )
 
 // FromConfig builds a guard from an instance's egress configuration.
@@ -22,7 +23,21 @@ func FromConfig(cfg config.EgressConfiguration) (*Guard, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewGuard(prefixes), nil
+	dev, err := ParseDevPrefixes(cfg.DevAllowedDestinations)
+	if err != nil {
+		return nil, err
+	}
+	g := NewGuard(prefixes)
+	if len(dev) > 0 {
+		// Loud on purpose: this is a development-only relaxation, and a production log that
+		// carries this line is the fastest way to find an instance that should not have it.
+		log.Warn().Str("devAllowedDestinations", FormatDevPrefixes(dev)).
+			Msg("DEVELOPMENT EGRESS ALLOWANCE ACTIVE: tenant webhooks and connectors may reach these private " +
+				"destinations. This is for a local development cluster only; the cloud metadata, loopback and " +
+				"link-local ranges stay blocked")
+		g = g.WithDevAllow(dev)
+	}
+	return g, nil
 }
 
 // ParsePrefixes validates operator-supplied CIDR strings.

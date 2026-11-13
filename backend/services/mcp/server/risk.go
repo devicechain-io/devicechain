@@ -6,23 +6,15 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Exposure names WHAT CLASS OF TENANT DATA a successful call returns.
-//
-// 🔴 IT IS A READ VOCABULARY, NOT A WRITE ONE. This server is read-only and fronts each
-// area's GraphQL under the CALLER'S OWN token — never a service token, which is the
-// confused-deputy line ADR-047 draws — so no tool here can create, modify or actuate
-// anything, and the MCP spec's own destructive/idempotent hints have nothing to say about
-// any of them. What a risk declaration can usefully describe is therefore the shape of
-// the disclosure: what someone holding a token for this server learns by calling it.
-//
-// The values were derived from the tools that exist rather than chosen ahead of them. A
-// taxonomy invented first would have produced neat categories that no tool occupies and
-// left the one distinction that actually matters — position — as a footnote.
+// Exposure names the class of tenant data a read tool returns. Proposal tools declare
+// ActionRisk instead. Every tool forwards only the caller's own bearer token.
 type Exposure string
 
 const (
@@ -117,21 +109,26 @@ func (r ToolRisk) validate(tool string) error {
 // to whoever is deciding what to authorize, and is corrected when it is wrong.
 const riskMetaKey = "io.devicechain/risk"
 
-// Catalog is the set of risk declarations made AT REGISTRATION. It is filled by register
-// and by nothing else, so it cannot describe a tool that was not registered and cannot
+// Catalog is the set of risk declarations made at registration by register or
+// registerAction, so it cannot describe a tool that was not registered and cannot
 // omit one that was — provided every tool goes through register, which is the one
 // property the ratchet has to check and the negative control proves it does check.
 type Catalog struct {
-	risks map[string]ToolRisk
+	risks       map[string]ToolRisk
+	actions     map[string][]string
+	actionRisks map[string]ActionRisk
 	// decls is the LISTING each tool was declared with — the description, annotations
 	// and risk metadata as register stamped them, before the SDK filled in schemas.
 	// It is what closes the last gap in the name-based ratchet; see AlteredTools.
 	decls map[string]*mcp.Tool
+	// outputs is the Go type each tool returns, recorded by register so the provenance ratchet
+	// walks the types the server actually serves rather than a list kept beside them.
+	outputs map[string]reflect.Type
 }
 
 // NewCatalog builds an empty catalog.
 func NewCatalog() *Catalog {
-	return &Catalog{risks: map[string]ToolRisk{}, decls: map[string]*mcp.Tool{}}
+	return &Catalog{actions: map[string][]string{}, actionRisks: map[string]ActionRisk{}, risks: map[string]ToolRisk{}, decls: map[string]*mcp.Tool{}, outputs: map[string]reflect.Type{}}
 }
 
 // Declared returns the listing a tool was registered with.
@@ -140,16 +137,31 @@ func (c *Catalog) Declared(name string) (*mcp.Tool, bool) {
 	return d, ok
 }
 
-// Risk returns a tool's declaration.
+// Output returns the type a tool returns, for the provenance ratchet.
+func (c *Catalog) Output(name string) (reflect.Type, bool) {
+	t, ok := c.outputs[name]
+	return t, ok
+}
+
+// Risk returns a read tool's declaration.
 func (c *Catalog) Risk(name string) (ToolRisk, bool) {
 	r, ok := c.risks[name]
 	return r, ok
 }
 
+// ActionRisk returns a proposal or ledger tool's action declaration.
+func (c *Catalog) ActionRisk(name string) (ActionRisk, bool) {
+	r, ok := c.actionRisks[name]
+	return r, ok
+}
+
 // Names returns every declared tool name, sorted.
 func (c *Catalog) Names() []string {
-	out := make([]string, 0, len(c.risks))
+	out := make([]string, 0, len(c.risks)+len(c.actionRisks))
 	for name := range c.risks {
+		out = append(out, name)
+	}
+	for name := range c.actionRisks {
 		out = append(out, name)
 	}
 	sort.Strings(out)
@@ -173,40 +185,20 @@ func register[In, Out any](s *mcp.Server, c *Catalog, tool *mcp.Tool, risk ToolR
 	if err := risk.validate(tool.Name); err != nil {
 		panic("mcp: " + err.Error())
 	}
-	if _, duplicate := c.risks[tool.Name]; duplicate {
+	if _, duplicate := c.decls[tool.Name]; duplicate {
 		panic(fmt.Sprintf("mcp: tool %q is registered twice; the second declaration would "+
 			"silently replace the first", tool.Name))
 	}
 	c.risks[tool.Name] = risk
 
-	// Every tool on this server is a read, and both hints are true of all of them: nothing
-	// here modifies anything, and calling one twice returns the same answer rather than
-	// doing anything twice.
-	//
-	// 🔴 THIS LINE IS A STATEMENT TO CLIENTS, NOT A CHECK. It used to claim that "the day
-	// a tool that is NOT a read is proposed, the person adding it has to change this
-	// line" — which nothing makes true. A write handler passed to register is stamped
-	// ReadOnlyHint:true exactly like every other, validate() only checks that the two
-	// enums are members of their vocabularies, and no test could tell the difference: an
-	// MCP tool annotation is advisory metadata for the client, not an authorization
-	// decision, so the server would happily serve a write behind it. The one thing that
-	// is enforced here is upstream of the stamp — Exposure is a closed READ vocabulary
-	// (configuration / operational / telemetry / position) with no write class in it, so
-	// a write tool has nothing honest to declare and validate() refuses whatever it
-	// invents.
-	//
-	// 🔑 WHAT ACTUALLY MAKES THIS SERVER READ-ONLY LIVES IN core/auth (scopeAllowances
-	// and IntersectAuthorities), AND IT IS STRONGER THAN THIS COMMENT EVER CLAIMED. The
-	// `read-only` scope carries an authority CEILING — device/event/state/command/alarm
-	// and dashboard reads — and every OAuth token is minted through it by intersecting
-	// what the subject holds against that ceiling. A superuser holding the `*`
-	// super-authority is capped by the same intersection: `*` is skipped rather than
-	// expanded, so the token that reaches this server carries reads and nothing else.
-	// The middleware in New requires that scope on every request. So a write tool added
-	// here would not become dangerous by being mis-annotated; it would be REFUSED
-	// downstream, by the caller's own token, because no token this server accepts carries
-	// a write authority to run it with. Changing that takes a new scope with a new
-	// ceiling and a new consent string, which is the conversation this comment wanted.
+	// Every description carries the untrusted-text contract, appended HERE so that a tool cannot
+	// leave it out, and only once so a description that already says it is not told twice.
+	if !strings.Contains(tool.Description, untrustedNotice) {
+		tool.Description = strings.TrimRight(tool.Description, " ") + " " + untrustedNotice
+	}
+
+	// This registration door is for reads. Proposal and ledger tools use registerAction,
+	// which stamps their action risk and enforces the separate scope requirement.
 	tool.Annotations = &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}
 	if tool.Meta == nil {
 		tool.Meta = mcp.Meta{}
@@ -217,6 +209,11 @@ func register[In, Out any](s *mcp.Server, c *Catalog, tool *mcp.Tool, risk ToolR
 		"discloses": risk.Discloses,
 	}
 
+	finishRegistration(s, c, tool, h)
+}
+
+func finishRegistration[In, Out any](s *mcp.Server, c *Catalog, tool *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
+	c.outputs[tool.Name] = reflect.TypeFor[Out]()
 	// Keep the listing as declared, so AlteredTools can compare it against what the
 	// server ends up serving. Schemas are deliberately not kept: mcp.AddTool derives
 	// them from the handler's types, so a declared copy would differ from the served
@@ -250,7 +247,9 @@ func register[In, Out any](s *mcp.Server, c *Catalog, tool *mcp.Tool, risk ToolR
 func UndeclaredTools(catalogNames []string, c *Catalog) []string {
 	missing := []string{}
 	for _, name := range catalogNames {
-		if _, declared := c.Risk(name); !declared {
+		_, read := c.Risk(name)
+		_, action := c.ActionRisk(name)
+		if !read && !action {
 			missing = append(missing, name)
 		}
 	}

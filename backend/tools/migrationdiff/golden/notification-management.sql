@@ -1,4 +1,5 @@
 ALTER SEQUENCE "notification-management".audit_events_id_seq OWNED BY "notification-management".audit_events.id;
+ALTER SEQUENCE "notification-management".notification_attempts_id_seq OWNED BY "notification-management".notification_attempts.id;
 ALTER SEQUENCE "notification-management".notification_channels_id_seq OWNED BY "notification-management".notification_channels.id;
 ALTER SEQUENCE "notification-management".notification_deferrals_id_seq OWNED BY "notification-management".notification_deferrals.id;
 ALTER SEQUENCE "notification-management".notification_policies_id_seq OWNED BY "notification-management".notification_policies.id;
@@ -8,6 +9,9 @@ ALTER SEQUENCE "notification-management".secrets_id_seq OWNED BY "notification-m
 ALTER TABLE ONLY "notification-management".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "notification-management".audit_events ALTER COLUMN id SET DEFAULT nextval('"notification-management".audit_events_id_seq'::regclass);
+ALTER TABLE ONLY "notification-management".notification_attempts
+ ADD CONSTRAINT notification_attempts_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "notification-management".notification_attempts ALTER COLUMN id SET DEFAULT nextval('"notification-management".notification_attempts_id_seq'::regclass);
 ALTER TABLE ONLY "notification-management".notification_channels
  ADD CONSTRAINT notification_channels_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "notification-management".notification_channels ALTER COLUMN id SET DEFAULT nextval('"notification-management".notification_channels_id_seq'::regclass);
@@ -47,14 +51,24 @@ CREATE INDEX "idx_notification-management_notification_rules_policy_id" ON "noti
 CREATE INDEX "idx_notification-management_notification_rules_tenant_id" ON "notification-management".notification_rules USING btree (tenant_id);
 CREATE INDEX "idx_notification-management_notification_states_alarm_key" ON "notification-management".notification_states USING btree (alarm_key);
 CREATE INDEX "idx_notification-management_notification_states_deleted_at" ON "notification-management".notification_states USING btree (deleted_at);
+CREATE INDEX "idx_notification-management_notification_states_pending_clear" ON "notification-management".notification_states USING btree (tenant_id, updated_at) WHERE ((cleared_at IS NOT NULL) AND (paged_targets IS NOT NULL));
 CREATE INDEX "idx_notification-management_notification_states_tenant_id" ON "notification-management".notification_states USING btree (tenant_id);
 CREATE INDEX "idx_notification-management_secrets_deleted_at" ON "notification-management".secrets USING btree (deleted_at);
 CREATE INDEX "idx_notification-management_secrets_name" ON "notification-management".secrets USING btree (name);
 CREATE INDEX "idx_notification-management_secrets_scope" ON "notification-management".secrets USING btree (scope);
 CREATE INDEX "idx_notification-management_secrets_tenant_id" ON "notification-management".secrets USING btree (tenant_id);
 CREATE INDEX idx_audit_tenant_time ON "notification-management".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX ix_notification_attempts_tenant_alarm ON "notification-management".notification_attempts USING btree (tenant_id, alarm_token, created_at DESC, id DESC);
+CREATE INDEX ix_notification_attempts_tenant_channel ON "notification-management".notification_attempts USING btree (tenant_id, channel_token, status, created_at DESC, id DESC);
+CREATE INDEX ix_notification_attempts_tenant_time ON "notification-management".notification_attempts USING btree (tenant_id, created_at DESC, id DESC);
 CREATE SCHEMA "notification-management";
 CREATE SEQUENCE "notification-management".audit_events_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "notification-management".notification_attempts_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -106,7 +120,29 @@ CREATE TABLE "notification-management".audit_events (
  operation text NOT NULL,
  entity_pk text,
  entity_label text,
- rows_affected bigint
+ rows_affected bigint,
+ client_id text,
+ session_id text,
+ on_behalf_of text,
+ proposal text
+);
+CREATE TABLE "notification-management".notification_attempts (
+ id bigint NOT NULL,
+ created_at timestamp with time zone NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ alarm_token character varying(128) NOT NULL,
+ trigger_kind character varying(32) NOT NULL,
+ policy_token character varying(128),
+ channel_token character varying(128) NOT NULL,
+ channel_type character varying(32) NOT NULL,
+ recipients jsonb,
+ subject_hash character varying(64),
+ status character varying(32) NOT NULL,
+ attempt bigint DEFAULT 0 NOT NULL,
+ max_attempts bigint DEFAULT 0 NOT NULL,
+ latency_millis bigint,
+ error_code character varying(32),
+ error_message character varying(512)
 );
 CREATE TABLE "notification-management".notification_channels (
  id bigint NOT NULL,
@@ -156,7 +192,9 @@ CREATE TABLE "notification-management".notification_policies (
  max_escalations bigint,
  quiet_hours_timezone character varying(64),
  quiet_hours_slots jsonb,
- quiet_hours_bypass_severity character varying(16)
+ quiet_hours_bypass_severity character varying(16),
+ notify_on_clear boolean DEFAULT false NOT NULL,
+ notify_on_clear_since timestamp with time zone
 );
 CREATE TABLE "notification-management".notification_rules (
  id bigint NOT NULL,
@@ -185,7 +223,17 @@ CREATE TABLE "notification-management".notification_states (
  cleared_at timestamp with time zone,
  escalation_level bigint DEFAULT 0 NOT NULL,
  last_escalated_at timestamp with time zone,
- cycle_raised_at timestamp with time zone
+ cycle_raised_at timestamp with time zone,
+ clear_notified_at timestamp with time zone,
+ clear_notified_cycle timestamp with time zone,
+ paged_targets jsonb,
+ paged_cycle timestamp with time zone,
+ originator_type text,
+ originator_id bigint,
+ device_token text,
+ device_name text,
+ device_type_token text,
+ source_at timestamp with time zone
 );
 CREATE TABLE "notification-management".purged_tenants (
  token character varying(128) NOT NULL,

@@ -9,9 +9,10 @@ import (
 	"strings"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// The size axis: `--size base|compact|perf-12k`.
+// The size axis: `--size base|compact|perf-12k|perf-16k`.
 //
 // A size is a PRESET, not a dial, by the same rules compact.go states: it composes levers that
 // already exist, never changes which services run (that stays on the profile axis), and never
@@ -22,10 +23,16 @@ import (
 //   - compact is the --compact preset (compact.go), reachable as `--size compact` as well; the flag
 //     stays as a permanent alias. Its sizing is still compactSizing, so its tests are unchanged.
 //   - perf-12k is the measured high-throughput shape: one cluster, no --ha, sustained 12,000
-//     events a second with event envelopes on (GKE rounds 29 and 30).
+//     events a second with event envelopes on (GKE rounds 29, 30 and 31).
+//   - perf-16k is the same shape sized for 16,000 events a second (GKE round 31): a larger broker,
+//     a larger write-ahead log allowance and a larger event-processing pod. 20,000 events a second
+//     was stored exactly on that shape in round 31 but over the latency target, so it is a
+//     throughput-only ceiling and is documented as one.
 //
-// 🔴 THE NAME IS THE CLAIM. A size ships only once a round measured it clean, which is why there is
-// no perf-20k here: round 30 collapsed at 20,000 and the preset waits for a round that passes.
+// 🔴 THE NAME IS THE CLAIM. A size is named for the rate it holds INSIDE the latency target, which
+// is why there is no perf-20k: round 31 stored 20,000 a second without loss at a PUBACK p99 of
+// 245 ms, and a name that said 20k would promise a latency it did not deliver. A size for a rate
+// above that waits for a round that passes it.
 //
 // Precedence, lowest to highest, each layer deep-merged over the one before:
 //
@@ -39,10 +46,11 @@ const (
 	SizeBase    = "base"
 	SizeCompact = "compact"
 	SizePerf12k = "perf-12k"
+	SizePerf16k = "perf-16k"
 )
 
 // sizeNames is every name `--size` accepts, in the order help prints them.
-var sizeNames = []string{SizeBase, SizeCompact, SizePerf12k}
+var sizeNames = []string{SizeBase, SizeCompact, SizePerf12k, SizePerf16k}
 
 // SizeNames is the accepted --size values, for the command layer's help and errors.
 func SizeNames() []string { return append([]string(nil), sizeNames...) }
@@ -77,6 +85,13 @@ type sizePreset struct {
 	// TimescaleMaxWALMiB is the event store's max_wal_size, in MiB.
 	TimescaleMaxWALMiB int
 
+	// RelationalMaxWALMiB is the relational store's max_wal_size, in MiB, measured with this
+	// size. A bootstrap does NOT write it: the relational store belongs to the cluster and is
+	// set at install (postgres_max_wal_size_mib in the cluster root; CloudNativePG refuses
+	// ALTER SYSTEM, so the cluster spec is the only way). It is here so the figure has one home,
+	// is held to the cluster root by a test and is published in the sizing page.
+	RelationalMaxWALMiB int
+
 	// EnvelopesMeasured says the figures were measured with event envelopes on, which the notices
 	// repeat when they are off.
 	EnvelopesMeasured bool
@@ -85,44 +100,85 @@ type sizePreset struct {
 // sizePresets are the sizes with a measured basis. base and compact are not rows here: base states
 // nothing, compact is compactSizing.
 //
-// perf-12k, from GKE rounds 29 and 30 (non-HA, one broker server, 48 vCPU, envelopes on; 12,000
-// events a second clean: PUBACK p99 25 ms, 0.734 CPU-s per 1,000 events, exact by the oracle). The
-// derivations, per knob:
+// perf-12k, from GKE rounds 29, 30 and 31 (non-HA, one broker server, 48 vCPU, envelopes on; 12,000
+// events a second clean: PUBACK p99 3.7 ms in round 31, 0.658 CPU-s per 1,000 events, exact by the
+// oracle). The derivations, per knob:
 //
 //   - event-sources 3 x 3 CPU / 512Mi, device-management 2 x 3 CPU, device-state 2 x 3 CPU / 512Mi,
 //     event-management 4 CPU / 1Gi, event-processing 2 CPU / 1Gi: the shape round 30 ran. Requests
 //     are CPU-seconds per 1,000 events at 12,000 / replicas x 1.2-1.5, rounded up to 50m.
+//   - round 31 corrections: device-management's request is 400m (0.30 cores a pod at 12,000 x 1.3)
+//     and event-sources' memory limit is 256Mi (81 MiB resident at most).
 //   - device-management states no memory limit: the chart floor (768Mi) is the measured one, and
 //     an explicit limit would bypass it.
 //   - event-processing 1Gi: resident 547 MiB at 12,000 events a second x 1.5, rounded up.
-//   - NATS 8Gi: the working set was 3.0 GiB at 12,000 (0.35 GiB per 1,000 events a second needs
-//     4.2Gi) with a margin of two. The clean MEASUREMENT was at 20Gi; 8Gi is derived and the next
-//     round confirms it.
-//   - JetStream and event store volumes: the runway rule at 12,000 (see size_test.go), and a first
-//     estimate of bytes per event pending the next round's hypertable growth figure.
-//   - max_wal_size 20480 MiB: 1.9 x 900 s x 10.8 MB/s (round 30 at 12,000).
+//   - NATS 8Gi: the working set was 2.5 GiB at 12,000 in round 31 (a margin of 2.5 at 8Gi).
+//   - JetStream volume: the runway rule at 12,000 (see size_test.go); round 31 used 7.9 GiB at 20,000.
+//   - event store volume 160Gi: 756 bytes per stored event (indexes included, uncompressed) is
+//     32.7 GB an hour at 12,000 a second, so it holds about three and a half hours of saturated
+//     ingest after the log allowance. It is a burst volume, not retention.
+//   - max_wal_size 20480 MiB: 1.9 x 900 s x 10.8 MB/s (round 30 at 12,000); round 31 saw no
+//     requested checkpoint at 12,000.
+//   - relational max_wal_size 4096 MiB: the stock 1 GB took four requested checkpoints a window at
+//     12,000; 4 GB took one at 18,000.
 //
-// What is NOT here yet, because it needs a variable the cluster root does not expose or a
-// measurement: the relational max_wal_size and storage, CNPG resources, Prometheus sizing and the
-// GKE node pools.
+// perf-16k, from round 31's ramp to 20,000 on the perf-12k shape. PUBACK p99 at 16,000 was 63 ms on
+// the perf-12k sizing, just over the 50 ms target. The figures below are what was read off that run
+// to take it under; they have NOT been run as written, and the next round confirms them.
+//
+//   - NATS 6 CPU request: 4.25 cores at 16,000 (5.2, peak 5.5 at 20,000) ran over a 4 CPU request.
+//     Memory limit 10Gi (3.6 GiB working set at 16,000, 4.4 at 20,000; 8Gi also carried 20,000).
+//   - event-processing 2 CPU / 1536Mi: 1 CPU throttled from 16,000, and 1.5Gi with 2 CPU was the
+//     only arm with a clean DETECT lag at 20,000.
+//   - requests are the round 31 per-pod CPU at 16,000 x 1.3, rounded up to 50m.
+//   - streamDesignRate 16000 and a 36Gi JetStream volume: the runway rule (a 15 minute outage at the
+//     design rate) now asks for 17,876 MiB, and the reservation with fail-closed on is 30,528 MiB,
+//     which needs at least 34Gi. Round 31 ran 12,000 here and used 7.9 GiB at 20,000.
+//   - max_wal_size 40960 MiB: 1.9 x 900 s x 23.8 MB/s (round 31 at 20,000), so 20,000 also
+//     checkpoints on the clock; relational 8192 MiB: 1.9 x 300 s x 11.2 MB/s is 6.4 GB at 20,000.
+//   - event store volume 260Gi (the volume round 30 ran): 756 bytes an event is 43.6 GB an hour at
+//     16,000 a second, about four hours of saturated ingest after the log allowance and working room.
+//
+// What is NOT here yet, because it needs a measurement: the relational storage, CNPG resources,
+// Prometheus sizing and the GKE node pools.
 var sizePresets = map[string]sizePreset{
 	SizePerf12k: {
 		Name: SizePerf12k,
 		Areas: map[string]areaSize{
-			"event-sources":     {Replicas: 3, CPULimit: "3", MemLimit: "512Mi", CPURequest: "600m"},
-			"device-management": {Replicas: 2, CPULimit: "3", CPURequest: "500m"},
+			"event-sources":     {Replicas: 3, CPULimit: "3", MemLimit: "256Mi", CPURequest: "600m"},
+			"device-management": {Replicas: 2, CPULimit: "3", CPURequest: "400m"},
 			"device-state":      {Replicas: 2, CPULimit: "3", MemLimit: "512Mi", CPURequest: "250m"},
 			"event-management":  {CPULimit: "4", MemLimit: "1Gi", CPURequest: "400m"},
 			"event-processing":  {CPULimit: "2", MemLimit: "1Gi", CPURequest: "500m"},
 		},
-		StreamDesignRate:   12000,
-		NatsCPURequest:     "4",
-		NatsMemoryRequest:  "4Gi",
-		NatsMemoryLimit:    "8Gi",
-		JetStreamStorage:   "28Gi",
-		TimescaleStorage:   "160Gi",
-		TimescaleMaxWALMiB: 20480,
-		EnvelopesMeasured:  true,
+		StreamDesignRate:    12000,
+		NatsCPURequest:      "4",
+		NatsMemoryRequest:   "4Gi",
+		NatsMemoryLimit:     "8Gi",
+		JetStreamStorage:    "28Gi",
+		TimescaleStorage:    "160Gi",
+		TimescaleMaxWALMiB:  20480,
+		RelationalMaxWALMiB: 4096,
+		EnvelopesMeasured:   true,
+	},
+	SizePerf16k: {
+		Name: SizePerf16k,
+		Areas: map[string]areaSize{
+			"event-sources":     {Replicas: 3, CPULimit: "3", MemLimit: "256Mi", CPURequest: "750m"},
+			"device-management": {Replicas: 2, CPULimit: "3", CPURequest: "500m"},
+			"device-state":      {Replicas: 2, CPULimit: "3", MemLimit: "512Mi", CPURequest: "300m"},
+			"event-management":  {CPULimit: "4", MemLimit: "1Gi", CPURequest: "450m"},
+			"event-processing":  {CPULimit: "2", MemLimit: "1536Mi", CPURequest: "700m"},
+		},
+		StreamDesignRate:    16000,
+		NatsCPURequest:      "6",
+		NatsMemoryRequest:   "6Gi",
+		NatsMemoryLimit:     "10Gi",
+		JetStreamStorage:    "36Gi",
+		TimescaleStorage:    "260Gi",
+		TimescaleMaxWALMiB:  40960,
+		RelationalMaxWALMiB: 8192,
+		EnvelopesMeasured:   true,
 	},
 }
 
@@ -163,6 +219,83 @@ func sizeFor(st *State) *sizePreset {
 		return nil
 	}
 	return &p
+}
+
+type brokerRequest struct {
+	Preset           string
+	CPU, Memory      *resource.Quantity
+	CPUText, MemText string
+}
+
+// brokerRequestFor checks only requests still supplied by the built-in preset.
+func brokerRequestFor(st *State, stated func(name string) bool) (req *brokerRequest, unchecked string, err error) {
+	p := sizeFor(st)
+	if p == nil {
+		return nil, "", nil
+	}
+	values := map[string]string{}
+	for _, v := range p.tofuVarsFor(st, stated) {
+		values[v.Name] = v.Value
+	}
+	var missing []string
+	for _, name := range []string{"nats_cpu_request", "nats_memory_request"} {
+		if _, ok := values[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		unchecked = "the operator states " + strings.Join(missing, " / ")
+	}
+	if len(missing) == 2 {
+		return nil, unchecked, nil
+	}
+	req = &brokerRequest{Preset: p.Name, CPUText: values["nats_cpu_request"], MemText: values["nats_memory_request"]}
+	if _, ok := values["nats_cpu_request"]; ok {
+		cpu, err := resource.ParseQuantity(req.CPUText)
+		if err != nil {
+			return nil, unchecked, fmt.Errorf("parsing %s nats_cpu_request: %w", p.Name, err)
+		}
+		req.CPU = &cpu
+	}
+	if _, ok := values["nats_memory_request"]; ok {
+		memory, err := resource.ParseQuantity(req.MemText)
+		if err != nil {
+			return nil, unchecked, fmt.Errorf("parsing %s nats_memory_request: %w", p.Name, err)
+		}
+		req.Memory = &memory
+	}
+	return req, unchecked, nil
+}
+
+// smallerBrokerPreset finds the largest preset strictly below both selected requests.
+func smallerBrokerPreset(selected string) *sizePreset {
+	p, ok := sizePresets[selected]
+	if !ok {
+		return nil
+	}
+	cpu, cpuErr := resource.ParseQuantity(p.NatsCPURequest)
+	memory, memErr := resource.ParseQuantity(p.NatsMemoryRequest)
+	if cpuErr != nil || memErr != nil {
+		return nil
+	}
+	var best *sizePreset
+	var bestCPU, bestMemory resource.Quantity
+	for _, name := range sizeNames {
+		candidate, ok := sizePresets[name]
+		if !ok {
+			continue
+		}
+		candidateCPU, cpuErr := resource.ParseQuantity(candidate.NatsCPURequest)
+		candidateMemory, memErr := resource.ParseQuantity(candidate.NatsMemoryRequest)
+		if cpuErr != nil || memErr != nil || candidateCPU.Cmp(cpu) >= 0 || candidateMemory.Cmp(memory) >= 0 {
+			continue
+		}
+		if best == nil || candidateCPU.Cmp(bestCPU) > 0 || (candidateCPU.Cmp(bestCPU) == 0 && candidateMemory.Cmp(bestMemory) > 0) {
+			best = &candidate
+			bestCPU, bestMemory = candidateCPU, candidateMemory
+		}
+	}
+	return best
 }
 
 // helmValues is the preset's chart values, to sit BELOW what dcctl computes. Nil for base.
@@ -386,6 +519,8 @@ func (p *sizePreset) docInfraRows() []string {
 	for _, v := range p.tofuVars("", "") {
 		rows = append(rows, [2]string{v.Name, v.Value})
 	}
+	// The cluster's setting, not an instance's: the sizing page says so under the table.
+	rows = append(rows, [2]string{"postgres_max_wal_size_mib", fmt.Sprint(p.RelationalMaxWALMiB)})
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, fmt.Sprintf("| `%s` | `%s` |", r[0], r[1]))

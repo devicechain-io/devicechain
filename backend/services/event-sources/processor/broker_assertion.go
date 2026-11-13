@@ -46,6 +46,11 @@ type brokerAssertion struct {
 // when the subject is the device-events shape the broker grants a device, so a message on
 // any other subject asserts nothing.
 func assertedByCaptureBroker(msg messaging.Message) brokerAssertion {
+	// A device's own raw-payload subject asserts the device exactly as its events subject does: the
+	// grant confined the publisher to it.
+	if _, ok := messaging.ParseDeviceUplinkSubject(msg.Subject); ok {
+		return brokerAssertion{asserted: true}
+	}
 	gateway, device, ok := messaging.ParseDeviceEventsSubject(msg.Subject)
 	if !ok {
 		return brokerAssertion{}

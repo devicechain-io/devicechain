@@ -25,4 +25,6 @@ import (
 var Migrations = []*gormigrate.Migration{
 	secrets.NewSecretStoreSchema(),
 	NewBaselineSchema(),
+	NewLpwanPendingAcksSchema(),
+	NewLpwanPendingAcksDeviceRefSchema(),
 }

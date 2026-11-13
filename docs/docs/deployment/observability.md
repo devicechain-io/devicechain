@@ -15,8 +15,54 @@ with no separate monitoring project to assemble.
 The monitoring stack (kube-prometheus-stack via `dcctl install`) and its Grafana
 boards are implemented and validated end-to-end: an instance overview and seven stage
 boards, described in [Grafana boards](./grafana-boards.md), with alert rules alongside them.
-OTLP distributed tracing is a planned follow-up.
 :::
+
+## Distributed tracing (OpenTelemetry)
+
+Tracing is **off by default**. When enabled, GraphQL requests and HTTP/MQTT device ingest
+create spans. W3C TraceContext follows inbound events through NATS, device-management
+resolution, resolved-event publication, event-management storage and event-processing.
+Services identify themselves as `devicechain-<area>`. Only TraceContext is propagated;
+baggage is excluded.
+
+Point every service at an operator-managed OTLP collector, such as OpenTelemetry Collector,
+Jaeger or Tempo with its OTLP receiver enabled. Add this Helm values overlay (also accepted
+by `dcctl bootstrap|upgrade --values`), then upgrade to restart the services:
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      tracing:
+        enabled: true
+        protocol: grpc
+        endpoint: otel-collector.observability.svc:4317
+        insecure: true
+        samplingRatio: 0.1
+```
+
+This example uses plaintext within the cluster. Keep `insecure: false` for TLS. For OTLP
+over HTTP, use `protocol: http` and `endpoint: http://otel-collector.observability.svc:4318`
+with `insecure: true`; use an `https://` endpoint and `insecure: false` for TLS.
+The collector is deployed separately; DeviceChain does not deploy one for you.
+
+An HTTP endpoint without a path posts to `/v1/traces`; give a path (for a collector behind
+a prefix) and it is used as written. The standard `OTEL_EXPORTER_OTLP_*` environment variables
+are still read by the exporter, so if you set any on a pod they can override these values.
+
+Sampling is parent based between DeviceChain services: a trace sampled at the first service
+stays sampled through the rest of the pipeline. A device's or API caller's own `traceparent`
+is never trusted to choose sampling: the request starts a new local trace that links to the
+caller's trace. Events that fail resolution and are dead-lettered, and events re-published
+for retry, start a new trace rather than continuing the original. If
+`samplingRatio` is omitted, enabled tracing samples 10% of new root traces. Explicit `0`
+samples no new roots; `1` samples all roots. Start low on busy fleets and increase briefly
+while diagnosing a problem. Credentials, device tokens, GraphQL variables and document
+text are never recorded. Tenant IDs, transport, operation names and HTTP status are recorded.
+
+Tracing adds CPU, network traffic, message-header bytes and collector storage costs.
+Budget retention and sampling together. Set `enabled: false` and restart to turn it off;
+disabled tracing constructs no exporter or tracing goroutines.
 
 ## What every service exposes
 
@@ -210,6 +256,72 @@ Going from the stack of earlier releases to this one crosses a Prometheus major 
 once; the Grafana admin login, its `ClusterIP` Service and the per-instance dashboard folders
 are unchanged. Prometheus keeps its stored metrics on a cluster with a persistent volume, and
 starts empty on a local cluster, which keeps them on the node's disk only.
+
+## Routing alerts to a person {#alert-routing}
+
+The platform ships alert rules that watch for lost data, stuck consumers, failing backups and
+expiring certificates. A rule only matters if someone is told when it fires, and out of the box
+nobody is: Alertmanager starts with a receiver that drops every alert. An instance in that state
+reports it. `dcctl instances list` shows `ALERTS NOT ROUTED` beside it, and the instance's
+`AlertsRouted` condition is `False`. The condition does not make the instance unready.
+
+Give Alertmanager a receiver when you install, or later on any instance:
+
+```bash
+# A webhook: Slack-compatible relays, PagerDuty, Opsgenie and most incident tools accept one.
+dcctl install local --alert-webhook https://hooks.example.com/services/T000/B000/XXXX
+
+# Email. The password is read from a file so it never lands in your shell history.
+dcctl install local \
+  --alert-email oncall@example.com --alert-email backup@example.com \
+  --alert-smtp-host smtp.example.com:587 --alert-smtp-from alerts@example.com \
+  --alert-smtp-user alerts --alert-smtp-password-file ~/.secrets/smtp-password
+
+# Change it later without touching the cluster prerequisites.
+dcctl upgrade local my-instance --alert-webhook https://hooks.example.com/services/T000/B000/YYYY
+```
+
+- **Every alert is sent**, `critical`, `warning` and `info`. A `critical` alert silences the
+  `warning` for the same alert and namespace.
+- **The URLs and the SMTP password are kept in a Secret** (`dc-alertmanager-config`, in the
+  `monitoring` namespace), not in the infrastructure state on your machine. The instance only
+  records which kinds of receiver exist.
+- **Naming any `--alert-*` flag restates all of the routing.** `--alert-email` on its own removes
+  a webhook set earlier. A run with no `--alert-*` flag leaves the routing as it is, so re-running
+  `dcctl install` to change something else does not undo it. `--clear-alert-routing` removes it.
+- **`dcctl upgrade` can only change a cluster that `dcctl install` has set up.** A cluster
+  installed by an earlier release has to run `dcctl install` once, with the same flags as before
+  plus the alert flags. It applies the cluster prerequisites in place.
+- **There is no routing without the monitoring stack.** With `--no-monitoring` the instance renders
+  no alert rules, and the `--alert-*` flags are refused.
+
+### Knowing when alerting itself has stopped
+
+If Alertmanager is down, or cannot reach its receiver, no alert arrives, and a cluster with no
+alerts looks exactly like a healthy one. The `Watchdog` alert exists for this. It fires all the
+time, by design. Send it to a dead-man's-switch service (Healthchecks, Dead Man's Snitch,
+Cronitor) that alerts you when the pings stop:
+
+```bash
+dcctl install local --alert-webhook https://hooks.example.com/... \
+  --alert-watchdog-webhook https://hc-ping.example.com/your-check-uuid
+```
+
+The Watchdog is sent to its own receiver once a minute and never to the receiver a person reads.
+Without `--alert-watchdog-webhook` it is dropped, and the `AlertsRouted` condition says that a
+silent alerting pipeline would go unnoticed.
+
+### Receivers beyond webhook and email
+
+`--alert-config <file>` uses your own Alertmanager configuration as it is. Use it for Slack,
+PagerDuty, Opsgenie or Teams receivers, or for routing by label. It cannot be combined with the
+other `--alert-*` flags. `dcctl` checks that the file parses, that every route names a receiver the
+file defines, and whether some receiver delivers anywhere. It does not send a test message, and it is not Alertmanager's own parser: run `amtool check-config` on the file first, because an Alertmanager that rejects a configuration keeps running on the one before it.
+Route the `Watchdog` alert inside your file: `dcctl` counts it as routed when a route selects
+`alertname = "Watchdog"` and its receiver delivers.
+
+Every alert carries a `runbook_url` that opens its entry in the [Alert Runbook](./alert-runbook.md),
+so a notification links straight to what it means and what to do about it.
 
 ## Signing in to Grafana
 
@@ -675,6 +787,8 @@ arrived together. The counter carries the source, not the tenant, so compare `to
 ceiling against what its devices send, and look in the message broker's log for an internal subscription that took
 too long. HTTP sheds are answered `429` and retried, so they are not counted here.
 
+With `eventSources.ingestMetering: lagCredit`, `devicechain_eventsources_ingest_shed_cause_total{stream,route,cause}` says why each message was shed. A `cause="ceiling"` shed on `route="fresh"` while `ingest_lag_credit_seconds` is high is a tenant that stayed within its ceiling but was shed after a stall larger than the credit, so report it. `cause="contention"` and `cause="hard_drop"` are the overload bands doing what they are configured to do, and `route="backlog"` sheds are a tenant above its ceiling in a drained backlog. `reader_lag_seconds` and `append_skew_seconds` show what each replica measured; a skew that sits at 2 seconds in either direction (`append_skew_clamped_total` rising) means the message broker's clock is further from the pods' clocks than the gate corrects for. The alerts [`IngestShedBeyondLagCredit`](./alert-runbook.md#ingestshedbeyondlagcredit) and [`IngestAppendSkewLarge`](./alert-runbook.md#ingestappendskewlarge) watch these series in this mode; in `legacy` mode the series are empty and neither can fire.
+
 ## Messages held past their acknowledgement window {#held-past-ack-wait}
 
 The broker gives a service a fixed window to acknowledge each message it hands out. A
@@ -819,8 +933,8 @@ configuration, and checks its own listener at start, after every reload and once
 | --- | --- | --- |
 | `BrokerMqttClientAuthLost` (warning) | For ten minutes, the broker server named by the `pod` label has either served MQTT over TLS without asking for client certificates, or has not been running the DeviceChain broker image (the metrics sidecar reports the server, but the server reports none of its own metrics). Devices that authenticate by certificate cannot connect; token and password devices are not affected. | Check the server's image: `kubectl get pod -n <namespace> <pod> -o jsonpath='{.spec.containers[0].image}'`. If it is the upstream `nats` image, the instance was rolled back to it, and certificate devices stay refused until the DeviceChain image is restored. If it is the DeviceChain image, read the server's log around its last configuration reload for the line saying the listener is not requesting client certificates, or that the check could not complete, then restart the pod and report the log. |
 | `BrokerLeadershipImbalanced` (warning) | For thirty minutes, at least one broker server has led fewer than half the streams an even share would give it. Only the streams `dcctl` may move are counted: this instance's replicated streams other than the device-ingest ones, which are never rebalanced. After a rolling restart the server restarted last leads nothing and the others lead everything, which raises publish latency and costs a little ingest throughput. `dcctl upgrade` evens leadership out after it rolls the broker, so this fires after a restart done another way (a node drain, a pod loss, a manual rollout) or when that step warned. | Run `dcctl broker rebalance <instance>`; each move is a brief election for one stream, and a broker that is already even is left alone, apart from keeping the resolved stream off the server that leads the capture or inbound stream. The *Stream leaders per server* panel on the messaging dashboard shows the spread. If it returns soon after, look for repeated broker restarts. |
-| `BrokerCertificateExpiringSoon` (warning) | For an hour, the TLS certificate the broker server named by the `pod` label presents expires in less than 30 days and more than 7. When it expires the broker refuses TLS connections from devices and from the instance's own services. The certificate is renewed only by `dcctl upgrade`, so an instance that is not upgraded for about eleven months reaches this. | Run `dcctl upgrade <instance>`: it re-issues the certificate inside its last 30 days and, when only the certificate changed, swaps it in without restarting the broker. The alert clears when the server presents the new certificate. If it keeps firing after an upgrade, the server did not switch; read its log and restart the pod. |
-| `BrokerCertificateExpiryCritical` (critical) | For ten minutes, the certificate the server presents expires in less than 7 days, or has already expired. | Run `dcctl upgrade <instance>` now. An instance bootstrapped by an early release does not keep its certificate authority and cannot re-issue the certificate in place; `dcctl upgrade` says so, and the instance has to be rebuilt. If an upgrade has run and this still fires, restart the server pod. |
+| `BrokerCertificateExpiringSoon` (warning) | For an hour, the TLS certificate the broker server named by the `pod` label presents expires in less than 30 days and more than 7. When it expires the broker refuses TLS connections from devices and from the instance's own services. The certificate is renewed only by `dcctl upgrade`, so an instance that is not upgraded for about eleven months reaches this. | Run `dcctl install <provider>`, then `dcctl upgrade <provider> <instance>`, with the same `dcctl` and the settings the cluster was installed with: it re-issues the certificate inside its last 30 days and, when only the certificate changed, swaps it in without restarting the broker. The alert clears when the server presents the new certificate. If it keeps firing after an upgrade, the server did not switch; read its log and restart the pod. |
+| `BrokerCertificateExpiryCritical` (critical) | For ten minutes, the certificate the server presents expires in less than 7 days, or has already expired. | Run `dcctl install <provider>`, then `dcctl upgrade <provider> <instance>`, with the same `dcctl` and the settings the cluster was installed with, now. An instance bootstrapped by an early release does not keep its certificate authority and cannot re-issue the certificate in place; `dcctl upgrade` says so, and the instance has to be rebuilt. If an upgrade has run and this still fires, restart the server pod. |
 
 The two certificate alerts read `dc_broker_mqtt_tls_cert_not_after_seconds`, the expiry of the
 certificate the broker is presenting to new connections right now, so they follow what devices
@@ -1503,7 +1617,7 @@ exports three series under its own service's name, `devicechain_<area>_<task>_�
 | device-state | `inactivity_sweep` |
 | event-sources | `presence_demote`, `presence_reconcile`, `presence_canary` |
 | device-management | `ownership_drain`, `session_kick_drain` |
-| command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile` |
+| command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile`, `campaign_scheduler` |
 | event-processing | `detect_tick`, `rule_health_flush`, `shed_summary` |
 | lwm2m-ingest | `tenant_sweep` |
 | sparkplug-ingest | `presence_probe` |
@@ -1643,26 +1757,28 @@ both directions by unit tests.
 
 ## Token audience checks {#token-audience-checks}
 
-Every API checks which resource an access token is bound to, and the authorization server checks which resource a client asks for. [Token audience](../concepts/security-model.md#token-audience) explains the rules. While the checks only observe, which is the default in `v1.2`, the series and alerts below are how you find a client that `v1.3` would refuse. They exist when the chart's alerts are on (`metrics.alerts`, the default).
+Every API checks the access token's audience and the authorization server checks the requested resource. From `v1.4`, both checks always enforce; the series below count refusals as `rejected`. `enforcement: observe` is refused at startup, by the chart schema and by `dcctl` before upgrading. The metrics and alerts remain for compatibility with older instances.
 
 | Series | Labels | How to read it |
 | --- | --- | --- |
-| `devicechain_<area>_token_audience_checks_total` | `plane`, `audience`, `verdict` | One per authenticated request to a service (for `graphql_ws`, one per connection, when it authenticates). `audience` is what the token is bound to, seen from that service: `none`, `own_area`, `mcp`, `other_area`, `external` or `unlisted`. `verdict` is `accepted`, `would_reject` (observe: counted and served) or `rejected` (enforce: refused with `401`, or by closing a WebSocket with code `4401`). `plane` is the surface that took the request: `graphql`, `graphql_ws`, `admin`, `settings`, `upload`, `branding` or `userinfo`; a service reports the ones it has. |
+| `devicechain_<area>_token_audience_checks_total` | `plane`, `audience`, `verdict` | One per authenticated request to a service (for `graphql_ws`, one per connection, when it authenticates). `audience` is what the token is bound to, seen from that service: `none`, `own_area`, `mcp`, `other_area`, `external` or `unlisted`. `verdict` is `accepted`, `would_reject` (observe (v1.2/v1.3): counted and served) or `rejected` (enforce: refused with `401`, or by closing a WebSocket with code `4401`). `plane` is the surface that took the request: `graphql`, `graphql_ws`, `admin`, `settings`, `upload`, `branding` or `userinfo`; a service reports the ones it has. |
 | `devicechain_usermanagement_oauth_resource_checks_total` | `grant`, `resource`, `verdict` | One per resource decision at the authorization server. `grant` is `authorization_code`, `refresh_token` or `client_credentials`. `resource` is the class of what was asked for: `none`, `area`, `mcp`, `external`, `unlisted`, `malformed` or `multiple`. A request whose `resource` differs from the one its code or refresh token is bound to is counted here too. |
 | `devicechain_usermanagement_oauth_unscoped_client_credentials_total` | `verdict` | `client_credentials` requests that named a resource without a scope, which are deprecated. The verdict is always `would_reject`, and the request is served. |
-| `devicechain_mcp_token_audience_registered` | none | 1 when the MCP server's `resourceUrl` is in `infrastructure.tokenAudience.mcpResources`, 0 when it is not. A 0 means the calls the MCP server forwards are counted as `would_reject`, and `mcp` refuses to start under enforcement. |
+| `devicechain_mcp_token_audience_registered` | none | 1 when MCP's resourceUrl is registered in `infrastructure.tokenAudience.mcpResources`, otherwise 0. MCP refuses startup when it is missing. |
 
-A healthy instance has only `accepted` verdicts. A moving `would_reject` series on the first two rows means some client sends a token or a request that `v1.3` will refuse. On the third row it means a request that the next major release will refuse. Two things to keep in mind when you read the numbers:
+For the first two rows, `rejected` means a client is being refused. `would_reject` there is historical data from a `v1.2`/`v1.3` instance running observe. The third row remains active in `v1.4`: unscoped client credentials are still counted as `would_reject` and served.
 
 - **They count requests, not clients.** One client that keeps sending the same token moves a series on every call, and a plane counts before GraphQL authorization runs. A non-zero series answers "does any client do this?", and the log answers "which one?". A forged or expired token never moves a plane counter, because the check runs after the signature is verified. The authorization server's counters move after the client has authenticated, with one exception: the authorization endpoint counts the request before anyone has signed in, using values that are public, so anyone who can reach that page can move its series.
-- **`rejected` only appears under enforcement.** With `observe` it stays at zero.
+- For audience and resource checks, `v1.4` emits `accepted` or `rejected`; `would_reject` is retained for older instances. The separate unscoped client-credentials counter still emits `would_reject`.
 
-Two `info` alerts watch the `would_reject` verdict. Both fire when the series' rate over the last hour has stayed above zero for an hour, and clear on their own about an hour after the last offending request. Neither carries a tenant label, and the default Alertmanager configuration of kube-prometheus-stack suppresses `info` alerts, so route them explicitly if you want to receive them.
+Before upgrading to `v1.4`, fix clients identified by the older instance's `would_reject` counters and remove `enforcement: observe` from values, stored overlays, previous release values and authored Secret documents. Unset means enforce.
+
+`TokenAudienceWouldReject` and `OAuthResourceWouldReject` are retained for compatibility. They cannot fire on a `v1.4` instance; they can only fire on a `v1.2`/`v1.3` instance running observe. Both are `info` alerts and require a positive rate over the last hour for an hour.
 
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |
-| `TokenAudienceWouldReject` | info | For at least an hour, a service has been receiving requests whose access token is bound to a resource other than the one it serves and is not a registered MCP resource. They are served today. `v1.3` refuses them with `401`. | Find the client in the service's log: a rate-limited warning, `Token audience is not accepted by this plane`, carries `client_id`, `tenant`, `plane`, `audience`, `sub_kind` and the token's `aud`. Have the client request a token for the resource it calls, or none. Each pod writes at most one line per minute for each plane, audience and client, and `suppressed` counts the ones held back. A first-party token has an empty `client_id`. |
-| `OAuthResourceWouldReject` | info | For at least an hour, the authorization server has been receiving token or authorization requests that name a resource this instance does not serve. They are served today. `v1.3` refuses them with `invalid_target`, or `invalid_grant` on a refresh. | Find the client in the `user-management` log: a rate-limited warning, `OAuth resource is not one this instance serves`, carries `client_id`, `tenant`, `grant`, `resource_class` and the `resource` that was asked for. `sender_authenticated=false` means the request came to the authorization endpoint before sign-in, so the `client_id` is only what the sender claimed. Have the client leave the resource out or use one the instance serves. If the resource is a service of your own, list it in `externalResources`. |
+| `TokenAudienceWouldReject` | info | For at least an hour, a service has been receiving requests whose access token is bound to a resource other than the one it serves and is not a registered MCP resource. They are served only because the instance sets `observe` (v1.2/v1.3). `enforce`, the default, refuses them with `401`. | Find the client in the service's log: a rate-limited warning, `Token audience is not accepted by this plane`, carries `client_id`, `tenant`, `plane`, `audience`, `sub_kind` and the token's `aud`. Have the client request a token for the resource it calls, or none. Each pod writes at most one line per minute for each plane, audience and client, and `suppressed` counts the ones held back. A first-party token has an empty `client_id`. |
+| `OAuthResourceWouldReject` | info | For at least an hour, the authorization server has been receiving token or authorization requests that name a resource this instance does not serve. They are served only because the instance sets `observe` (v1.2/v1.3). `enforce`, the default, refuses them with `invalid_target`, or `invalid_grant` on a refresh. | Find the client in the `user-management` log: a rate-limited warning, `OAuth resource is not one this instance serves`, carries `client_id`, `tenant`, `grant`, `resource_class` and the `resource` that was asked for. `sender_authenticated=false` means the request came to the authorization endpoint before sign-in, so the `client_id` is only what the sender claimed. Have the client leave the resource out or use one the instance serves. If the resource is a service of your own, list it in `externalResources`. |
 
 The deprecated `client_credentials` request has its own warning in the `user-management` log, `A client_credentials request named a resource without a scope`, with the client and the tenant, and no alert. See [Service accounts](../user-guide/service-accounts.md#binding-a-token-to-a-resource).
 
@@ -1839,3 +1955,9 @@ Only that service's pods restart.
   that deploys the monitoring stack, and its flags.
 - **[Deployment & Operator](./kubernetes-operator.md)** — how the chart renders
   per-service workloads with their health probes.
+
+:::tip Try it
+
+**First device in about 30 minutes.** Install DeviceChain locally, connect a simulated device and watch its telemetry arrive. [Start the quickstart →](../quickstart/first-device.md)
+
+:::

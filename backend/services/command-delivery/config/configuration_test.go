@@ -34,10 +34,9 @@ func TestLoadEmptyConfiguration(t *testing.T) {
 	assert.Equal(t, DefaultCommandTTLSeconds, cfg.DefaultCommandTTLSeconds)
 }
 
-// A non-positive TTL is a misconfiguration that must not silently disable expiry:
-// ApplyDefaults floors it to the platform default rather than leaving it at zero.
-func TestDefaultCommandTTLFlooredWhenNonPositive(t *testing.T) {
-	for _, v := range []int{0, -1} {
+// An unset (zero) TTL takes the platform default, never disables expiry.
+func TestDefaultCommandTTLDefaultedWhenUnset(t *testing.T) {
+	for _, v := range []int{0} {
 		cfg := &CommandDeliveryConfiguration{DefaultCommandTTLSeconds: v}
 		cfg.ApplyDefaults()
 		assert.Equal(t, DefaultCommandTTLSeconds, cfg.DefaultCommandTTLSeconds)
@@ -69,12 +68,12 @@ func TestDefaultCommandTTLValidation(t *testing.T) {
 // same reason in the opposite direction: an absent or zero value is the PLATFORM
 // DEFAULT, never "unlimited". A governance bound whose missing value reads as no bound
 // stops governing exactly when whatever carries it is unset or unreachable.
-func TestHeldCommandCeilingFlooredWhenNonPositive(t *testing.T) {
+func TestHeldCommandCeilingDefaultedWhenUnset(t *testing.T) {
 	empty := &CommandDeliveryConfiguration{}
 	assert.NoError(t, core.LoadConfiguration([]byte(``), empty))
 	assert.Equal(t, DefaultHeldCommandCeiling, empty.HeldCommandCeiling)
 
-	for _, v := range []int{0, -1} {
+	for _, v := range []int{0} {
 		cfg := &CommandDeliveryConfiguration{HeldCommandCeiling: v}
 		cfg.ApplyDefaults()
 		assert.Equal(t, DefaultHeldCommandCeiling, cfg.HeldCommandCeiling,
@@ -104,15 +103,15 @@ func TestHeldCommandCeilingValidation(t *testing.T) {
 }
 
 // The delivery machinery reserve gets the same fail-safe treatment as the ceiling above,
-// in the same direction: an absent, zero or negative value is the PLATFORM RESERVE, never
+// in the same direction: an unset (zero) value is the PLATFORM RESERVE, never
 // "no reserve". There is deliberately no configured value that switches the reserve off —
 // the thing it protects is the platform's ability to deliver at all.
-func TestDeliveryMachineryReserveFlooredWhenNonPositive(t *testing.T) {
+func TestDeliveryMachineryReserveDefaultedWhenUnset(t *testing.T) {
 	empty := &CommandDeliveryConfiguration{}
 	assert.NoError(t, core.LoadConfiguration([]byte(``), empty))
 	assert.Equal(t, DefaultDeliveryMachineryReserve, empty.DeliveryMachineryReserve)
 
-	for _, v := range []float64{0, -0.5} {
+	for _, v := range []float64{0} {
 		cfg := &CommandDeliveryConfiguration{DeliveryMachineryReserve: v}
 		cfg.ApplyDefaults()
 		assert.Equal(t, DefaultDeliveryMachineryReserve, cfg.DeliveryMachineryReserve,
@@ -120,20 +119,58 @@ func TestDeliveryMachineryReserveFlooredWhenNonPositive(t *testing.T) {
 	}
 }
 
-// 🔴 NaN is the case the obvious `<= 0` spelling lets through: it compares false to every
-// bound, so it would survive BOTH the defaulting hook and the upper-bound check in Validate.
-//
-// It is defence in depth rather than the only defence — governance.RestrictedCommandLimit
-// applies the same negated-positive test and would land on the platform reserve anyway — and
-// it is not reachable through the deployed config path: the chart serializes each area's
-// config with toJson and LoadConfiguration decodes it with encoding/json, and JSON has no
-// NaN literal at all. (YAML does have one, `.nan`; the config document simply is not YAML by
-// the time it arrives.) A config struct built in Go is reachable from more than that path,
-// which is what this guards.
+// NaN survives defaulting and the upper bound, so Validate must refuse it explicitly.
+// JSON has no NaN literal, but a configuration struct built in Go can contain one.
 func TestDeliveryMachineryReserveRejectsNaN(t *testing.T) {
 	cfg := &CommandDeliveryConfiguration{DeliveryMachineryReserve: math.NaN()}
 	cfg.ApplyDefaults()
-	assert.Equal(t, DefaultDeliveryMachineryReserve, cfg.DeliveryMachineryReserve)
+	assert.True(t, math.IsNaN(cfg.DeliveryMachineryReserve), "defaulting must preserve NaN")
+	if err := cfg.Validate(); assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "deliveryMachineryReserve")
+	}
+}
+
+// Each negative setting must survive defaulting and be refused by its own guard at load.
+func TestNegativeSettingsAreRefusedAtLoad(t *testing.T) {
+	for _, tc := range []struct {
+		key      string
+		document string
+	}{
+		{"defaultCommandTtlSeconds", `{"defaultCommandTtlSeconds": -1}`},
+		{"heldCommandCeiling", `{"heldCommandCeiling": -1}`},
+		{"sweepIntervalSeconds", `{"sweepIntervalSeconds": -1}`},
+		{"maxDispatchFailures", `{"maxDispatchFailures": -1}`},
+		{"deliveryMachineryReserve", `{"deliveryMachineryReserve": -0.5}`},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			cfg := &CommandDeliveryConfiguration{}
+			err := core.LoadConfiguration([]byte(tc.document), cfg)
+			if assert.Error(t, err) {
+				assert.Contains(t, err.Error(), tc.key)
+			}
+		})
+	}
+}
+
+// Absent and explicitly zero settings both mean unset and take all five defaults.
+func TestAbsentSettingsStillDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		document string
+	}{
+		{"absent", `{}`},
+		{"zero", `{"defaultCommandTtlSeconds": 0, "heldCommandCeiling": 0, "sweepIntervalSeconds": 0, "maxDispatchFailures": 0, "deliveryMachineryReserve": 0}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &CommandDeliveryConfiguration{}
+			assert.NoError(t, core.LoadConfiguration([]byte(tc.document), cfg))
+			assert.Equal(t, DefaultCommandTTLSeconds, cfg.DefaultCommandTTLSeconds)
+			assert.Equal(t, DefaultHeldCommandCeiling, cfg.HeldCommandCeiling)
+			assert.Equal(t, DefaultSweepIntervalSeconds, cfg.SweepIntervalSeconds)
+			assert.Equal(t, DefaultMaxDispatchFailures, cfg.MaxDispatchFailures)
+			assert.Equal(t, DefaultDeliveryMachineryReserve, cfg.DeliveryMachineryReserve)
+		})
+	}
 }
 
 // A configured reserve survives defaulting untouched; one above the cap is REFUSED rather
@@ -167,12 +204,12 @@ func TestDeliveryMachineryReserveValidation(t *testing.T) {
 // harmless-looking value lands on the default. Zero seconds is not "as fast as possible",
 // and a sweep that never runs stops expiring commands as well as dispatching them, so
 // there is deliberately no configured value meaning "off".
-func TestSweepIntervalFlooredWhenNonPositive(t *testing.T) {
+func TestSweepIntervalDefaultedWhenUnset(t *testing.T) {
 	empty := &CommandDeliveryConfiguration{}
 	assert.NoError(t, core.LoadConfiguration([]byte(``), empty))
 	assert.Equal(t, DefaultSweepIntervalSeconds, empty.SweepIntervalSeconds)
 
-	for _, v := range []int{0, -1} {
+	for _, v := range []int{0} {
 		cfg := &CommandDeliveryConfiguration{SweepIntervalSeconds: v}
 		cfg.ApplyDefaults()
 		assert.Equal(t, DefaultSweepIntervalSeconds, cfg.SweepIntervalSeconds,
@@ -203,12 +240,7 @@ func TestSweepIntervalValidation(t *testing.T) {
 		assert.NoError(t, cfg.Validate(), "the documented bounds are INCLUSIVE; %d was refused", endpoint)
 	}
 
-	// 🔑 THE FLOOR CHECK IS ONLY REACHABLE BECAUSE THE FLOOR IS ABOVE 1. ApplyDefaults maps
-	// every non-positive value onto the default, so Validate's lower bound can fire only
-	// for a value between 1 and the floor. With a floor of 1 that range is empty and this
-	// assertion would be guarding nothing -- which is what an earlier version of this test
-	// admitted by wrapping itself in `if MinSweepIntervalSeconds > 1`, a condition that was
-	// false. A test that skips itself is not a test.
+	// A positive sub-floor cadence survives defaulting and is refused by Validate.
 	tooFast := &CommandDeliveryConfiguration{
 		DefaultCommandTTLSeconds: 3600, SweepIntervalSeconds: MinSweepIntervalSeconds - 1,
 	}
@@ -238,8 +270,8 @@ func TestSweepKeysAreAcceptedFromYaml(t *testing.T) {
 // The dispatch bound gets the same fail-safe as everything around it, and the reading that
 // must never be reachable is "no bound": an unset value that meant zero would restore the
 // retry-until-the-TTL behaviour the bound exists to end.
-func TestMaxDispatchFailuresFlooredWhenNonPositive(t *testing.T) {
-	for _, v := range []int{0, -1} {
+func TestMaxDispatchFailuresDefaultedWhenUnset(t *testing.T) {
+	for _, v := range []int{0} {
 		cfg := &CommandDeliveryConfiguration{MaxDispatchFailures: v}
 		cfg.ApplyDefaults()
 		assert.Equal(t, DefaultMaxDispatchFailures, cfg.MaxDispatchFailures)
@@ -276,13 +308,10 @@ func TestMaxDispatchFailuresValidation(t *testing.T) {
 	}
 }
 
-// 🔴 THE FLOOR HAS TO BE ABOVE 1 OR Validate's LOWER CHECK GUARDS NOTHING. ApplyDefaults
-// maps every non-positive value onto the default, so the only values that can ever reach
-// the lower bound are 1 up to the floor — a floor of 1 leaves that range empty and the
-// check unreachable. This is the same trap MinSweepIntervalSeconds documents.
+// A floor above 1 lets Validate refuse positive values that allow too few retries.
 func TestMaxDispatchFailuresFloorIsReachable(t *testing.T) {
 	assert.Greater(t, MinMaxDispatchFailures, 1,
-		"a floor of 1 makes the lower-bound check in Validate impossible to fail")
+		"the floor must refuse positive values that allow too few retries")
 	assert.Less(t, MinMaxDispatchFailures, DefaultMaxDispatchFailures,
 		"the default must sit above the floor, or the shipped value is itself refused")
 }
@@ -311,5 +340,22 @@ func TestSparkplugCommandsDefaultsOffAndLoadsWhenSet(t *testing.T) {
 
 	typo := &CommandDeliveryConfiguration{}
 	assert.Error(t, core.LoadConfiguration([]byte(`{"sparkplugCommand": true}`), typo),
+		"a misspelled key must be refused, not read as off")
+}
+
+// LpwanDownlink is derived by the chart, never authored, and absent means OFF: the behaviour that
+// predates the adapter, in which a command to a device behind an inbound integration fails on sight.
+func TestLpwanDownlinkDefaultsOffAndLoadsWhenSet(t *testing.T) {
+	absent := &CommandDeliveryConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(``), absent))
+	assert.False(t, absent.LpwanDownlink)
+
+	set := &CommandDeliveryConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{"lpwanDownlink": true}`), set))
+	assert.True(t, set.LpwanDownlink, "the key the chart renders must reach the field")
+	assert.NoError(t, set.Validate())
+
+	typo := &CommandDeliveryConfiguration{}
+	assert.Error(t, core.LoadConfiguration([]byte(`{"lpwanDownlinks": true}`), typo),
 		"a misspelled key must be refused, not read as off")
 }

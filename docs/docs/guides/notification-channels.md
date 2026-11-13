@@ -5,7 +5,7 @@ title: Configuring Notification Channels
 
 # Configuring Notification Channels
 
-Notifications carry a raised **alarm** the last mile, to a person. When a detection rule's actions raise an alarm, a per-tenant **policy** routes it by severity to the **channels** you configure: email over SMTP, or a webhook. Policies add throttling and **escalation** of unacknowledged alarms.
+Notifications carry a raised **alarm** the last mile, to a person. When a detection rule's actions raise an alarm, a per-tenant **policy** routes it by severity to the **channels** you configure: email over SMTP, a webhook, or a native Slack, Microsoft Teams or PagerDuty channel. Policies add throttling and **escalation** of unacknowledged alarms.
 
 This machine-to-human path is deliberately separate from the machine-to-machine **[outbound connectors](../concepts/outbound-connectors.md)**. Connectors carry payloads to *systems*; notifications carry alerts to *people*, with recipients and per-severity routing. For how alarms are raised in the first place, see [Event Processing & Alarms](../concepts/event-processing.md).
 
@@ -17,7 +17,7 @@ Available. You manage channels and policies over the notification-management Gra
 
 ## Channels
 
-A **channel** is a delivery endpoint your tenant configures: an instance of a channel **type**, plus its connection config. Query `notificationChannelTypes` for the types the platform defines. Today `smtp` and `webhook` ship with working adapters; each type's `available` flag says whether its adapter has landed.
+A **channel** is a delivery endpoint your tenant configures: an instance of a channel **type**, plus its connection config. Query `notificationChannelTypes` for the types the platform defines. Today `smtp`, `webhook`, `slack`, `teams` and `pagerduty` ship with working adapters; each type's `available` flag says whether its adapter has landed.
 
 A channel splits its settings in two:
 
@@ -84,7 +84,91 @@ mutation {
 }
 ```
 
-For a Slack incoming webhook, use `"auth":"none"` and leave `secret` out.
+For a Slack incoming webhook, use `"auth":"none"` and leave `secret` out. The native [Slack channel](#create-a-slack-channel) below formats the message for you, and is the better choice.
+
+The generic webhook `text` is a plain summary that uses the device token or originator instead of the device name; Slack users should use the native [Slack channel](#create-a-slack-channel).
+
+A webhook channel's JSON body carries the alarm's `eventType` (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, or `RENOTIFIED` for a timed re-notification), `alarmToken`, `alarmKey`, `severity`, `state`, the originator's `originatorType` and `originatorId` when known, and the times. When the alarm's device is known it also carries `deviceToken`, `deviceName` and `deviceTypeToken`; a key is left out when its value is unknown (for example a device with no name), never sent empty. Timed re-notifications (`RENOTIFIED`) and late `CLEARED` notifications picked up by the scheduler also include these device and originator fields when known. Alarms that were notified before upgrading omit these fields from those later notifications.
+
+Optionally set `linkBaseUrl` in the webhook channel's `config` to your console's `http` or `https` base URL (`https` recommended), for example `"linkBaseUrl":"https://console.example.com"`. The payload then includes `alarmUrl` and, when the alarm names its device, `deviceUrl`. The base URL must not carry a query string or fragment, because links are built by appending a path. Both keys are absent when `linkBaseUrl` is unset. If a stored webhook has an invalid `linkBaseUrl`, delivery skips it, omits both links and logs a warning.
+
+### Native Slack, Teams and PagerDuty channels {#native-channels}
+
+The three native types speak each service's own format instead of a generic JSON body. They share three rules:
+
+- **The credential is the `secret`.** For Slack and Teams it is the webhook URL (which is itself a credential, so it is stored encrypted and never returned, not kept in `config`); for PagerDuty it is the Events API v2 routing key. There is no `auth` setting. A native channel with no secret is refused when you save it, and a delivery to one that has none is refused on its first attempt and not retried, counted with `reason="credential"`.
+- **`config` is optional and strict.** An unknown key is refused when you save the channel, so a misspelled setting cannot be silently ignored. `linkBaseUrl` is the `http` or `https` address of your console (`https` recommended), with no query string or fragment; when set, the message carries an **Open alarms** button or link to `<linkBaseUrl>/alarms`.
+- **Delivery goes through the same outbound guard as a webhook.** A destination on a private, loopback or cloud-metadata address is refused and not retried (`reason="egress"`), and the instance's egress allowances apply exactly as for a webhook. A rule's `recipients` are ignored: the webhook or the routing key decides where the message goes.
+
+Each message names the alarm, its severity, its state, the device it came from, the metric and value that raised it, and when it was raised. While an alarm is open and unacknowledged, a hint says to acknowledge it in the console to stop further notifications; a cleared or acknowledged alarm omits the hint.
+
+### Create a Slack channel {#create-a-slack-channel}
+
+A Slack channel posts a Block Kit message to a Slack incoming-webhook URL: a header, a grid of the alarm's fields, the acknowledge hint and an optional **Open alarms** button. The message's colour bar follows the severity (red for `CRITICAL`, orange for `MAJOR`, amber for `MINOR` and `WARNING`, grey for `INDETERMINATE`), turning green when the alarm clears and blue when it is acknowledged. Text from the alarm is escaped so it cannot inject a Slack mention or link.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "ops-slack",
+    name: "Operations Slack",
+    channelType: "slack",
+    config: "{\"linkBaseUrl\":\"https://console.example.com\"}",
+    secret: "https://hooks.slack.com/services/T000/B000/XXXXXXXX",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+The secret must be an `https` URL.
+
+### Create a Microsoft Teams channel {#create-a-microsoft-teams-channel}
+
+A Teams channel posts an Adaptive Card to the webhook URL of a Teams **Workflows** (Power Automate) flow that uses the *When a Teams webhook request is received* trigger and posts the card to a chat or channel. The retired Office 365 connector webhooks are not supported. The card carries the same facts as the Slack message, with the title coloured by severity, and an **Open alarms** action when `linkBaseUrl` is set.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "ops-teams",
+    channelType: "teams",
+    secret: "https://prod-00.westus.logic.azure.com:443/workflows/...",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+### Create a PagerDuty channel {#create-a-pagerduty-channel}
+
+A PagerDuty channel sends Events API v2 events, and maps the alarm's lifecycle onto the incident's. Every event carries `dedup_key` set to the alarm's token, so the whole life of one alarm is one incident:
+
+| Alarm event | PagerDuty action |
+| --- | --- |
+| raised, escalated, de-escalated, or re-notified by a policy's escalation | `trigger` (a repeat on an open incident updates it instead of opening another) |
+| acknowledged | `acknowledge` |
+| cleared | `resolve` |
+
+The alarm's severity maps to PagerDuty's: `CRITICAL` to `critical`, `MAJOR` to `error`, `MINOR` and `WARNING` to `warning`, anything else to `info`. For the policy to resolve incidents, route the cleared and acknowledged transitions through the same channel as the raise.
+
+`config` accepts `region` (`us`, the default, or `eu`, which selects `events.eu.pagerduty.com`), `source` (the event's source; `devicechain` by default) and `linkBaseUrl`.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "oncall-pagerduty",
+    channelType: "pagerduty",
+    config: "{\"region\":\"eu\",\"source\":\"plant-3\"}",
+    secret: "<routing key>",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+### In the console {#channels-in-the-console}
+
+**Notification Channels**, next to **Notification Policies** in the sidebar, lists, creates, edits and deletes channels of every type with a form for each. The credential box is write-only: on an existing channel it shows that a credential is stored, and leaving it empty keeps it.
+
+A webhook channel can also **sign** its deliveries so the receiver can verify them. It is off unless you ask for it, by adding `"signing":true` to the channel's `config` once you have generated a signing secret for it. A channel set to sign that holds no secret is refused, not sent unsigned, and counted with `reason="signing"`. See [Signing Outbound Webhooks](signed-webhooks.md).
+
+Chat messages and the webhook summary name the device by its name (or its token when it has no name), and list its device type. When the channel has a `linkBaseUrl` and the alarm names its device, the message also carries an **Open device** button or link to `<linkBaseUrl>/devices/<device token>`; with no `linkBaseUrl`, or for an alarm that does not name its device, there is no device link.
 
 ## Policies
 
@@ -99,6 +183,25 @@ The severity here is **uppercase** because it is the *alarm's* severity. A detec
 :::caution Policies are tenant-wide
 `deviceTypeToken` is **not honoured yet**, and a policy that sets it is refused at write. Leave `deviceTypeToken` unset. See [Device-type scoping](#device-type-scoping) for why.
 :::
+
+### Notify when an alarm clears {#notify-on-clear}
+
+By default a policy tells its channels only when an alarm is raised or escalates. Set `notifyOnClear: true` on a policy to also tell them when an alarm that the policy paged **clears**. The clear goes to the channels and recipients that actually delivered a page for that alarm, among those the policy routes, whatever severity the alarm has when it clears (an alarm raised `CRITICAL`, lowered to `MAJOR` and then cleared resolves on the channel that paged it). Its `eventType` is `CLEARED`, which PagerDuty maps to a resolve. It is off by default, so a policy that existed before the option behaves as it did.
+
+```graphql
+mutation {
+  updateNotificationPolicy(token: "ops", request: { notifyOnClear: true }) { token notifyOnClear }
+}
+```
+
+A clear is informational, so it is handled differently from a page:
+
+- It goes only to destinations that delivered a page in that cycle. A policy that never paged the alarm (its notification was throttled, held for quiet hours, or the policy was created after the raise) sends no clear.
+- It is sent once per cycle, after the clear has been recorded, so no "still unresolved" escalation follows it. If no channel takes it, it is retried; once any channel has taken it, it is not repeated. A clear that is processed before its alarm's page has been recorded is sent right after that page, and one that could not be sent then is picked up by the notification scheduler's next passes for up to 30 minutes.
+- It is **not** throttled, does not count as a notification, and does not start escalation.
+- A clear that happens during a policy's quiet hours is **dropped**, not held: a "cleared" released hours later would report old news.
+- Enabling the option does not announce historical clears: the clear must be after the option was enabled. A crash after claiming a clear but before sending can lose that announcement; it is not an exactly-once delivery guarantee.
+- `notifyOnClear` cannot be cleared with `null`; send `true` or `false`.
 
 ### Device-type scoping {#device-type-scoping}
 
@@ -223,11 +326,48 @@ The counter `devicechain_notificationmanagement_quiet_hours_total` counts what q
 
 In the console, quiet hours are edited on the **Monitor → Notification Policies** page; see [Notification policies](../user-guide/notification-policies.md).
 
+## Delivery ledger {#delivery-ledger}
+
+Every attempt to send an alarm's notification through a channel is recorded in the tenant's **delivery ledger**, so "was this alarm actually paged, to whom, and why not?" has an answer. Query it with `notificationAttempts` (requires `notification:read`):
+
+```graphql
+query {
+  notificationAttempts(criteria: { pageNumber: 1, pageSize: 20, alarmToken: "<alarm token>" }) {
+    results {
+      attemptedAt trigger policyToken channelToken recipients
+      status attempt maxAttempts latencyMillis errorCode errorMessage
+    }
+  }
+}
+```
+
+Each record is one try, newest first. A channel allowed three tries that failed twice and then delivered leaves three records: `FAILED` (attempt 1), `FAILED` (attempt 2) and `SENT` (attempt 3). Filter by `alarmToken`, `channelToken` or `status`, and by time with `since` and `until` (RFC 3339).
+
+| `status` | Meaning |
+| --- | --- |
+| `SENT` | The channel accepted the notification. |
+| `FAILED` | A failure a retry might fix: a timeout, an error status, a refused connection. |
+| `REFUSED` | Refused for good, so no retry followed: the destination is one outbound traffic may not reach (`EGRESS_BLOCKED`), or the channel's credential configuration is refused (`CREDENTIAL_REFUSED`). |
+| `NOT_ATTEMPTED` | Planned but never tried: the channel's delivery secret could not be read (`SECRET_UNAVAILABLE`), or the time allowed for the alarm's deliveries ran out before this channel (`BUDGET_SPENT`). |
+
+`trigger` says what caused the delivery: `ALARM` (an alarm state change), `ESCALATION` (an unacknowledged alarm was re-notified) or `QUIET_HOURS_RELEASE` (a notification held by quiet hours was sent when the quiet period ended). New `status`, `trigger` and `errorCode` values may be added in later releases, so treat one you do not recognise as informational.
+
+`errorMessage` is the provider's error text with every URL replaced by `<url>`, because a Slack or Teams webhook URL is itself a credential, and the ledger is readable by anyone with `notification:read`. The message itself is not stored: `subjectHash` (a SHA-256 of the subject line) shows whether two attempts carried the same one.
+
+Each channel also reports `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`, read from the ledger. `consecutiveFailures` counts the failed and refused attempts since the channel last delivered. `NOT_ATTEMPTED` records do not count against a channel, since they describe something the platform did not do, and neither does a `FAILED` record with `errorCode: BUDGET_SPENT`: the time allowed for all of the alarm's deliveries ran out while that attempt was in flight, so the platform cut it short. `deliveryHealth` is null for a caller without `notification:read`, such as a channel returned by a mutation to a caller who may write but not read.
+
+Two properties to keep in mind:
+
+- **The ledger never delays a notification.** Records are written after the attempt and off the delivery path. If the database cannot take a record, the record is dropped and counted on `devicechain_notificationmanagement_ledger_writes_total{outcome="failed"}` (or `outcome="dropped"` when too many writes are already waiting). A record proves an attempt was made; a missing record does not prove one was not.
+- **Recipients are personal data.** Records are deleted after 7 days (the same window as resolved notification state), or after `AttemptRetentionSeconds` in the notification-management configuration. They are also erased with the tenant when it is deleted.
+- **Size it before raising the retention.** The ledger holds one record per attempt: roughly the alarm transitions notified, times the channels each one reaches, times the tries per channel, plus escalations. A tenant paging 10,000 times a day through 3 channels keeps about 210,000 records at the 7-day default, and every record carries its recipient list.
+
 ## Verify the path end to end
 
 1. **Create a channel** (as above). Confirm `enabled: true` on the result, and that `hasSecret` is `true` for an SMTP channel with a username or a webhook declaring `bearer` or `header`, and `false` for a webhook declaring `none`.
 2. **Create a policy** whose rules map the severities you care about to that channel.
 3. **Raise a real alarm.** Trip a detection rule on a test device (see [Event Processing & Alarms](../concepts/event-processing.md)) and confirm the email or webhook call arrives.
 4. **Inspect delivery state.** The service keeps a read-only per-alarm record of what it has done. Query `notificationStatesByAlarmToken(alarmTokens: [...])`, or search with `notificationStates`. Check `firstNotifiedAt` and `notifyCount`, and, once the alarm has sat unacknowledged past the escalation window, `escalationLevel`.
+5. **Read the delivery ledger.** `notificationAttempts(criteria: {pageNumber: 1, pageSize: 20, alarmToken: "..."})` lists every attempt for the alarm with its outcome. A `FAILED` or `REFUSED` record carries `errorCode` and the provider's `errorMessage`; see [Delivery ledger](#delivery-ledger).
 
 Acknowledging or clearing the alarm stops further escalation. The state row records `acknowledgedAt`/`clearedAt` alongside the notification history. If the alarm clears and its condition returns, the platform re-opens the same alarm, and its state row starts over for the new cycle: escalation runs again until that cycle is acknowledged or cleared.

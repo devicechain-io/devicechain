@@ -172,7 +172,7 @@ func TestEveryEntityDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 		if e.ReadInput != "" {
 			readVars = map[string]any{"c": e.ReadVars}
 		}
-		if e.ReadAll {
+		if e.ReadAll || e.Singleton {
 			readVars = map[string]any{}
 		}
 		if errs := schema.ValidateWithVariables(e.readDoc(), readVars); len(errs) > 0 {
@@ -192,6 +192,18 @@ func TestEveryEntityDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 		if e.Record != nil {
 			e.Record(st, map[string]any{"token": st.tok(e.Name)})
 		}
+	}
+}
+
+// After steps send their own documents, outside the generated entity documents.
+func TestAutomationPolicyLooseningDocumentValidatesAgainstTheServedSchema(t *testing.T) {
+	schema := servedSchema(t, "device-management", schemaplane.MountTenant)
+	vars := probeAutomationPolicyLooseningVars(newState("apiprobe"))
+	if errs := schema.ValidateWithVariables(probeAutomationPolicyLooseningMutation, vars); len(errs) > 0 {
+		t.Fatalf("automation policy loosening does not validate: %v", errs)
+	}
+	if err := gqlcore.CheckWork(probeAutomationPolicyLooseningMutation); err != nil {
+		t.Fatal(err)
 	}
 }
 

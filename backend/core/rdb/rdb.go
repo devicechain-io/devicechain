@@ -30,6 +30,12 @@ type RdbManager struct {
 
 	// shards is nil unless EnableSharding was called (see shard.go).
 	shards atomic.Pointer[shardSet]
+
+	// shardHandles are the shard databases opened from configuration (shard_handles.go),
+	// keyed by group. Nil when sharding is unconfigured. Written once during initialization.
+	shardHandles map[int]*gorm.DB
+	// openShard opens one shard database; nil means Postgres. A test seam.
+	openShard openShardFunc
 }
 
 // Create a new rdb manager.
@@ -74,7 +80,12 @@ func (rdb *RdbManager) countAndOrder(ctx context.Context, mdl Sortable,
 	if filters != nil {
 		result = filters(result)
 	}
-	_ = result.Count(&count)
+	result = result.Count(&count)
+	if result.Error != nil {
+		// Keep the failed handle so callers' existing Error checks see the cause.
+		// A failed COUNT cannot supply a total or authorize a data SELECT.
+		return result, 0
+	}
 	total := int32(count)
 
 	// Execute data query.
@@ -460,6 +471,11 @@ func (rdb *RdbManager) ExecuteTerminate(context.Context) error {
 		return err
 	}
 	sqldb.Close()
+	// Shard handles close after home, and a failure to close one is logged rather than
+	// returned: termination is best effort and must reach every handle.
+	if err := closeHandles(rdb.shardHandles); err != nil {
+		log.Warn().Err(err).Msg("Failed to close a shard database cleanly.")
+	}
 	return nil
 }
 

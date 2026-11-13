@@ -25,6 +25,10 @@
 //     default. A declared credential that is missing, or a credential with mode none,
 //     is refused before a request is built (ErrAuthRefused);
 //
+//   - optional Standard Webhooks signing (Request.Signing): webhook-id, webhook-timestamp and
+//     webhook-signature, computed here over the exact body sent, so both webhook-shaped sinks
+//     sign identically and a nil Signing leaves the request untouched;
+//
 //   - a destination-address boundary: DefaultClient dials through egress.Guard, which
 //     refuses a private, loopback, link-local or cloud-metadata address at the moment
 //     the kernel is about to connect to it. That placement is the point — checking the
@@ -54,8 +58,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/egress"
+	"github.com/devicechain-io/dc-microservice/webhooksig"
 )
 
 // noRedirect is the redirect policy every httpsink request runs under: a 3xx is
@@ -92,6 +98,53 @@ var DefaultClient = &http.Client{
 func IsReservedHeader(name string) bool {
 	canonical := http.CanonicalHeaderKey(name)
 	return canonical == "Authorization" || strings.HasPrefix(canonical, "X-Dc-")
+}
+
+// ErrSigningRefused reports a Signing that cannot produce a signature: no id, no secret, or a
+// secret that is not a valid signing secret. It is raised before any request is built, so nothing
+// reaches the wire, and it is terminal for a caller: a redelivery signs the same way. Callers
+// classify it with errors.Is, as they do ErrAuthRefused.
+var ErrSigningRefused = errors.New("httpsink: signing refused")
+
+// CheckSigningAuth refuses an auth header that a signed delivery would overwrite. The signing
+// headers are written after the credential, so a channel with auth "header" naming webhook-id,
+// webhook-timestamp or webhook-signature would pass every credential check and then have its
+// credential replaced by the signature while the request still went out. It is a configuration
+// error, reported as ErrSigningRefused so it is terminal. Send applies it at the point of use and
+// config parsers apply it at save time.
+func CheckSigningAuth(a Auth) error {
+	if a.Mode != AuthHeader {
+		return nil
+	}
+	switch http.CanonicalHeaderKey(a.Header) {
+	case http.CanonicalHeaderKey(webhooksig.HeaderID),
+		http.CanonicalHeaderKey(webhooksig.HeaderTimestamp),
+		http.CanonicalHeaderKey(webhooksig.HeaderSignature):
+		return fmt.Errorf("%w: auth header %q is one of the signing headers; a signed delivery would overwrite the credential",
+			ErrSigningRefused, a.Header)
+	}
+	return nil
+}
+
+func (s *Signing) validate() error {
+	if s == nil {
+		return nil
+	}
+	if s.ID == "" {
+		return fmt.Errorf("%w: a signed delivery needs a webhook-id", ErrSigningRefused)
+	}
+	if err := ValidateHeader(webhooksig.HeaderID, s.ID); err != nil {
+		return fmt.Errorf("%w: %w", ErrSigningRefused, err)
+	}
+	if len(s.Secrets) == 0 {
+		return fmt.Errorf("%w: a signed delivery needs at least one signing secret", ErrSigningRefused)
+	}
+	for _, secret := range s.Secrets {
+		if err := webhooksig.ValidateSecret(secret); err != nil {
+			return fmt.Errorf("%w: %w", ErrSigningRefused, err)
+		}
+	}
+	return nil
 }
 
 // idempotencyHeader carries a caller-supplied idempotency key so an endpoint that
@@ -307,6 +360,23 @@ func validHeaderNameByte(c byte) bool {
 	return false
 }
 
+// Signing asks Send to sign the delivery per the Standard Webhooks specification (core/webhooksig).
+// A nil *Signing on a Request means an unsigned delivery, byte-for-byte what Send has always
+// produced; the fields below are consulted only when it is set.
+type Signing struct {
+	// ID is the webhook-id: the message's identity, which a receiver deduplicates on. It must be
+	// stable across the retries of one message and distinct between messages. Required.
+	ID string
+	// Secrets are the signing secrets, in the form core/webhooksig generates. One signature is
+	// emitted per secret, so two secrets (a rotation overlap) give a delivery either key verifies.
+	// At least one is required: Send refuses a Signing with none, so a delivery that was meant to
+	// be signed can never go out unsigned.
+	Secrets []string
+	// At is the signing time; zero means now. The timestamp is taken on every call to Send, so a
+	// retry carries a fresh one while keeping its ID.
+	At time.Time
+}
+
 // Request is one outbound delivery. Body is sent as-is with ContentType (defaulting
 // to application/json). Method defaults to POST. Caller-supplied Headers have
 // reserved names dropped. Auth is REQUIRED: Send refuses the zero value, a mode that
@@ -321,6 +391,15 @@ type Request struct {
 	Secret         string
 	Auth           Auth
 	IdempotencyKey string
+	// Signing, when non-nil, signs the delivery (webhook-id, webhook-timestamp, webhook-signature).
+	// Nil leaves the request exactly as it was before signing existed.
+	Signing *Signing
+	// SuppressBody keeps the response body out of a non-2xx error even though no Secret
+	// is presented as a header. Set it when the credential travels in the URL (a Slack or
+	// Teams incoming webhook) or in the request body (a PagerDuty routing key): an endpoint
+	// that echoes the request ("Cannot POST /services/T/B/XXXX") would otherwise put the
+	// credential into the error, without the scheme a URL scrub looks for.
+	SuppressBody bool
 }
 
 // Send delivers req using client (nil ⇒ DefaultClient), bounded by ctx. It validates
@@ -348,6 +427,14 @@ func Send(ctx context.Context, client *http.Client, req Request) error {
 	}
 	if err := req.Auth.CheckCredential(req.Secret != ""); err != nil {
 		return err
+	}
+	if err := req.Signing.validate(); err != nil {
+		return err
+	}
+	if req.Signing != nil {
+		if err := CheckSigningAuth(req.Auth); err != nil {
+			return err
+		}
 	}
 	method := req.Method
 	if method == "" {
@@ -379,6 +466,21 @@ func Send(ctx context.Context, client *http.Client, req Request) error {
 	if req.IdempotencyKey != "" {
 		httpReq.Header.Set(idempotencyHeader, req.IdempotencyKey)
 	}
+	if req.Signing != nil {
+		// Signed over the exact bytes that go on the wire (req.Body is what NewRequest read), after
+		// every other header so a configured webhook-* header cannot stand in for a signature.
+		at := req.Signing.At
+		if at.IsZero() {
+			at = time.Now()
+		}
+		sig, err := webhooksig.Sign(req.Signing.ID, at, req.Body, req.Signing.Secrets...)
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrSigningRefused, err)
+		}
+		httpReq.Header.Set(webhooksig.HeaderID, req.Signing.ID)
+		httpReq.Header.Set(webhooksig.HeaderTimestamp, webhooksig.Timestamp(at))
+		httpReq.Header.Set(webhooksig.HeaderSignature, sig)
+	}
 
 	c := DefaultClient
 	if client != nil {
@@ -402,7 +504,7 @@ func Send(ctx context.Context, client *http.Client, req Request) error {
 	// This is not a full drain, so it does not by itself enable keep-alive reuse.
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if req.Secret != "" {
+		if req.Secret != "" || req.SuppressBody {
 			// Never surface the body of a secret-bearing call (it could reflect the
 			// Authorization header).
 			return fmt.Errorf("returned %d", resp.StatusCode)

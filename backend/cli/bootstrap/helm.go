@@ -157,6 +157,11 @@ func helmInstall(ctx context.Context, st *State) error {
 		if previous, err = previousReleaseValues(actionConfig, releaseName); err != nil {
 			return err
 		}
+		if !st.ValuesOverlayIntent {
+			if err := refuseCarriedObserveValues(previous, "the previously installed release's user-supplied values", "upgrade"); err != nil {
+				return err
+			}
+		}
 		carryForwardFromRelease(st, previous)
 	}
 	// The keys an instance on the old layout holds in its release, read BEFORE any write so a
@@ -295,6 +300,22 @@ func helmInstall(ctx context.Context, st *State) error {
 	// Secret the old pods referenced removed (see ownedsecret_phased.go).
 	return finishOwnedSecrets(ctx, release(), []postReleaseStep{spPost, lwPost},
 		func(msg string) { fmt.Println(color.YellowString("warning: " + msg)) })
+}
+
+// precheckTokenAudienceRelease reads historical user-supplied values before the upgrade writes.
+func precheckTokenAudienceRelease(st *State) error {
+	if st.ValuesOverlayIntent {
+		return nil
+	}
+	cfg, err := helmActionConfigFor(st.KubeContext)
+	if err != nil {
+		return err
+	}
+	previous, err := previousReleaseValues(cfg, helmReleaseNameFor(st.Instance))
+	if err != nil {
+		return err
+	}
+	return refuseCarriedObserveValues(previous, "the previously installed release's user-supplied values", "upgrade")
 }
 
 // releaseValues is the value map helmInstall hands Helm, and the instance configuration
@@ -499,12 +520,17 @@ func helmValues(st *State) map[string]interface{} {
 		natsVals[k] = v
 	}
 	applyMqttFailClosed(natsVals, st)
+	applyMqttDeviceUplinks(natsVals, st)
 	infraVals := map[string]interface{}{}
 	if len(natsVals) > 0 {
 		infraVals["nats"] = natsVals
 	}
 	if httpVals := trustedProxiesValues(st); httpVals != nil {
 		infraVals["http"] = httpVals
+	}
+	// Absent unless a developer asked for it on a local cluster (devegress.go).
+	if egressVals := devAllowEgressValues(st); egressVals != nil {
+		infraVals["egress"] = egressVals
 	}
 	// The shared service secret (ADR-044 amendment) backing the sync cross-service
 	// call primitive, threaded into every service's instance config.

@@ -510,7 +510,7 @@ proxy). It must be a path that keeps every datagram of a session going to the on
 | `security.handshakeTimeoutSeconds` | `10` | Bounds one DTLS handshake, so a stalled one cannot pin resources. |
 | `security.maxSessions` | `100000` | Ceiling on the live session table. A handshake past the ceiling is refused and counted, never silently admitted. |
 | `maxLifetimeSeconds` | `86400` | The ceiling every registration lifetime is clamped down to. **This is the lever that bounds how long a dead device reads online.** Must stay above the longest lifetime your devices request. |
-| `ingestRateLimit.readingsPerSecond` | `1000` | Per-tenant sustained ingest ceiling, counted in readings (decoded samples), and in Notify messages before decode. Unset or non-positive falls back to this default, never to unlimited. |
+| `ingestRateLimit.readingsPerSecond` | `1000` | Per-tenant sustained ingest ceiling, counted in readings (decoded samples), and in Notify messages before decode. Unset or zero falls back to this default, never to unlimited; a negative value is refused at startup. |
 | `ingestRateLimit.burst` | `2000` | Burst allowance for the above. |
 | `downlink.timeoutSeconds` | `10` | Bounds one command exchange to a device. On expiry the command is reported failed rather than left hanging. Raise it for slow cellular sleepers. |
 | `downlink.concurrency` | `16` | Cross-device command parallelism. A device's own commands always run in order regardless of this value. |
@@ -658,7 +658,7 @@ ceiling is on every transport.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `ingestRateLimit.readingsPerSecond` | `1000` | Per-tenant sustained ingest ceiling, counted in readings. A tenant's tier overrides it. Unset or non-positive falls back to this default, never to unlimited. |
+| `ingestRateLimit.readingsPerSecond` | `1000` | Per-tenant sustained ingest ceiling, counted in readings. A tenant's tier overrides it. Unset or zero falls back to this default, never to unlimited; a negative value is refused at startup. |
 | `ingestRateLimit.burst` | `2000` | Burst allowance for the above, in readings. |
 
 **What is not metered.** The message rate is not metered, because the Host must observe every
@@ -802,6 +802,64 @@ link can deliver it twice. If you use a non-JSON decoder behind an edge agent, m
 the readings tolerant of a repeat.
 :::
 
+### Retiring events on the platform's acceptance {#retire-on-accept}
+
+By default the agent deletes an event from its spool when the cloud broker acknowledges the publish.
+That acknowledgement says the broker took the message and nothing more: MQTT 3.1.1 gives a broker no
+way to refuse one. The platform can still shed the event after the broker has acknowledged it, most
+often because the tenant is over its ingest ceiling, and an agent that retired the event on the
+acknowledgement has then deleted the only copy.
+
+Set `uplink.retireOn` to `accept` and the agent keeps each event in the spool until the platform says
+it holds it:
+
+- The platform sends an **acceptance** naming the event's idempotency key once the event is durably
+  stored on a platform stream. The agent then removes it from the spool.
+- If the platform sheds the event at the tenant's ingest ceiling, it tells the agent so. The agent
+  counts the refusal in `refused_total{reason="over_ceiling"}`, keeps the event, and offers it again
+  after a short delay. Nothing is written to the dead-letter file, because the event is not bad.
+- If the platform refuses the event for good (the device is not assigned to the gateway), the agent
+  writes it to the dead-letter file and removes it from the spool, as before.
+- If no answer arrives within `uplink.acceptTimeoutSeconds`, the spool offers the event again under
+  the same idempotency key, and a JSON event folds into the copy the platform already holds.
+
+An answer that is lost therefore costs a resend, never an event. The cost of the mode is a slower
+drain: an event stays in the spool for one round trip plus the platform's ingest time longer, which
+on a satellite link is the difference you can see in `awaiting_accept`.
+
+:::caution Turn this on only against a platform that sends acceptances
+Against a platform that does not, nothing is ever accepted, so the spool never drains and every event
+is re-sent each `uplink.acceptTimeoutSeconds`. The agent subscribes to its acceptances when it
+connects, and a platform that refuses the subscription fails the connection with an error that names
+this setting. Upgrade the platform first, then the agent. Both a platform that sends acceptances and
+an agent that retires on the acknowledgement keep working together, so there is no flag day.
+:::
+
+An event held for acceptance counts against `local.spoolMaxBytes` like any other.
+
+#### Shedding by priority class {#priority-classes}
+
+A spool that outlasts its budget has to lose something. Its own ring drops the oldest event whatever
+it is, so a long outage can lose the early alarms and keep the later chatter. With
+`local.priority.rules` set, the agent sheds on purpose first. Each rule assigns the local devices
+whose token matches a glob to a class, and the first match wins:
+
+| Class | Meaning |
+|---|---|
+| `safety` | Never shed by the agent. |
+| `standard` | Everything that matches no rule. Shed after `bulk`. |
+| `bulk` | Raw high-rate data that is cheap to lose. Shed first. |
+
+When the spool passes `local.priority.shedAtFraction` of its budget (`0.9` by default), the agent
+deletes buffered events, `bulk` first and oldest first within a class, until it is back under
+`local.priority.shedToFraction` (`0.8`). Every event shed this way is counted in
+`shed_total{class}`, so a shed is never silent.
+
+"Never" has a boundary, and it is the budget. If safety events alone fill the spool, or arrive faster
+than the agent can free room, the ring underneath still evicts the oldest event of any class, and the
+loss shows only in `dropped_total`. The headroom above `shedAtFraction` makes that unlikely, not
+impossible. Size the spool for the safety traffic of your longest outage.
+
 ### Before you deploy an agent {#before-you-deploy-an-agent}
 
 - **The local MQTT listener is open unless you configure a credential.** Set `local.username` and
@@ -829,6 +887,10 @@ the readings tolerant of a repeat.
 | `uplink.passwordEnv` | — | Required. The environment variable holding the credential's secret. |
 | `uplink.connectTimeoutSeconds` | `30` | Bounds one uplink connection attempt. |
 | `uplink.backoffMinSeconds` / `uplink.backoffMaxSeconds` | `1` / `60` | Reconnection backoff bounds while the link is down. |
+| `uplink.retireOn` | `puback` | What removes an event from the spool: `puback` (the broker acknowledged the publish) or `accept` (the platform said it durably holds the event). See [retiring events on the platform's acceptance](#retire-on-accept). |
+| `uplink.acceptTimeoutSeconds` | `120` | With `retireOn: accept`, how long to wait for the platform's answer before offering the event again. Set it above the link's round trip plus the platform's ingest time. |
+| `local.priority.rules` | none | Priority classes by device token glob: `safety`, `standard`, `bulk`. See [shedding by priority class](#priority-classes). |
+| `local.priority.shedAtFraction` / `local.priority.shedToFraction` | `0.9` / `0.8` | The spool fill at which shedding starts, and the fill it stops at. |
 
 ## What to watch {#what-to-watch}
 
@@ -968,7 +1030,11 @@ Prefix: `devicechain_edge_`.
 | `malformed_total` | Events discarded as unforwardable rather than blocking the queue behind them. |
 | `tenant_mismatched_total` | Device publishes naming a tenant other than `uplink.tenant`. They are not spooled or forwarded. |
 | `body_credentials_stripped_total` | Credential members removed from event bodies before forwarding. The device should stop sending them. |
-| `refused_total{reason}` | **Events refused for this gateway.** `not_gateway_child`: the platform refused an event because its device is not assigned to the gateway or does not exist. `gateway_self` and `invalid_device_token`: the agent would not send it. `other`: a reason this version of the agent does not know. Any increase needs attention; see [gateway identity](#gateway-identity). |
+| `refused_total{reason}` | **Events refused for this gateway.** `not_gateway_child`: the platform refused an event because its device is not assigned to the gateway or does not exist. `gateway_self` and `invalid_device_token`: the agent would not send it. `over_ceiling`: the platform shed the event at the tenant's ingest ceiling. `other`: a reason this version of the agent does not know. Any increase needs attention; see [gateway identity](#gateway-identity). |
+| `accepted_total` / `awaiting_accept` | With `retireOn: accept`: events the platform said it holds, and events published and still waiting for its answer. A rising `awaiting_accept` with no `accepted_total` means the platform is not sending acceptances. |
+| `over_ceiling_total` / `unaccepted_total` | With `retireOn: accept`: events the platform shed at the tenant's ingest ceiling (each kept and offered again), and events offered again because no answer arrived in time. |
+| `keyless_retired_total` | With `retireOn: accept`: events whose payload is not a JSON object. They carry no idempotency key, so the platform cannot acknowledge them; the agent retires them when the broker confirms the publish, and counts each here. |
+| `shed_total{class}` | Buffered events the agent deleted on purpose to stay under its shed threshold. `safety` stays at 0. |
 | `refused_kept_total` / `refused_unmatched_total` | Refused events written to `refused-events.jsonl` / refusals whose event was no longer held on the box (the platform's `failed-events` record has it). |
 | `uplink_inflight` | Publishes waiting for an acknowledgement, at most 64. Staying at 64 while a backlog drains is normal. |
 | `local_auth_enabled` | 0 means the site's MQTT listener requires no credential. |

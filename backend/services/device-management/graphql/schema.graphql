@@ -135,6 +135,13 @@ type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity 
     """
     maintenanceWindow: MaintenanceWindow
     """
+    How the devices of this type receive their commands. PUBLISH, or null, is the default: the
+    command is published to the device's subject and delivered by the transport the device is
+    connected on. HTTP_PULL holds the type's commands until the device asks for them with an
+    authenticated GET to its commands endpoint.
+    """
+    commandChannel: String
+    """
     Manufacturer of the devices of this type: free text, up to 128 characters. facetValues
     lists the values already in use.
     """
@@ -144,6 +151,12 @@ type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity 
     the values already in use.
     """
     model: String
+    """
+    The classes this type is, as terms of the vocabularies the tenant has enabled; empty when
+    it is bound to none. Each carries its expanded IRI and a display CURIE. Null only when the
+    terms could not be rendered, with an error saying why.
+    """
+    semanticTypes: [SemanticTerm!]
     """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
 }
@@ -378,6 +391,10 @@ definitions and its position declaration. Versions are never deleted while the p
 exists; rollbackDeviceProfile makes an earlier one active again.
 """
 type DeviceProfileVersion {
+    """(Preview: may change in a minor release.) The automation review this version consumed when it was published, or null when it was published without one."""
+    automationReviewToken: String
+    """(Preview: may change in a minor release.) The review consumed by this version, or null when none was consumed. Requires device:read and event:read and an unscoped caller; authorization failures affect only this field."""
+    automationReview: AutomationReview
     """Version number: 1 for the first publish of the profile, increasing by one with each publish."""
     version: Int!
     """Optional label given at publish time, such as a release name. Not interpreted."""
@@ -414,7 +431,15 @@ type DeviceProfileVersion {
     emitted as written, so it should be an absolute IRI or a prefixed term the consumer
     knows.
     """
-    thingModel: String!
+    thingModel(
+        """
+        When true, each property's @type becomes a list, in this order and without repeats: the
+        descriptor (when set), the metric's semantic property IRI and its semantic point class
+        IRI (each when bound). When false, the default, the document is exactly what it has
+        always been.
+        """
+        includeSemanticTypes: Boolean! = false
+    ): String!
     """
     The metrics frozen into this version, in declaration order: what a device's measurements
     are validated against while this version is active. Calculated metrics are included and
@@ -485,6 +510,16 @@ type MetricDefinition implements Model & TokenReference & NamedEntity & Metadata
     ingest; a published version's thingModel carries it as the property's @type.
     """
     descriptor: String
+    """
+    The quantity or property this metric observes, as a term of an enabled vocabulary, or
+    null when unbound. Independent of descriptor.
+    """
+    semanticProperty: SemanticTerm
+    """
+    The Brick point class this metric's series is (a class that is a brick:Point), or null
+    when unbound.
+    """
+    semanticPointClass: SemanticTerm
     """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
     """
@@ -531,6 +566,18 @@ input MetricDefinitionCreateRequest {
     enum: String
     """Optional semantic tag, such as a Web of Things type."""
     descriptor: String
+    """
+    The quantity or property the metric observes: an OBSERVABLE_PROPERTY term of an enabled
+    vocabulary pack, as a CURIE or full IRI. Fails with INVALID_ARGUMENT naming the term when
+    it is unknown, of another kind, deprecated or outside the enabled vocabularies. Stored
+    as an expanded IRI.
+    """
+    semanticProperty: String
+    """
+    The Brick point class of the metric's series: a class of the enabled brick pack that is a
+    brick:Point. A custom-prefix class cannot be shown to be one and is refused.
+    """
+    semanticPointClass: String
     """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
     """
@@ -591,6 +638,10 @@ input MetricDefinitionUpdateRequest {
     enum: String
     """New semantic tag, or null to clear it."""
     descriptor: String
+    """New observed property, or null to clear it. Omit to leave it alone."""
+    semanticProperty: String
+    """New Brick point class, or null to clear it. Omit to leave it alone."""
+    semanticPointClass: String
     """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
     """
@@ -1084,6 +1135,16 @@ type CommandDispatchHold {
     dispatchUntil: String!
 }
 
+"""What the HTTP command endpoints learn about a device that proved its access token."""
+type CommandChannelAccess {
+    """Token of the device the access token belongs to."""
+    deviceToken: String!
+    """Token of the device's type."""
+    deviceTypeToken: String!
+    """The type's command channel: PUBLISH, HTTP_PULL, or null for the default (PUBLISH)."""
+    commandChannel: String
+}
+
 """
 The maintenance-window part of an enqueue decision for one or many devices: which commands
 must wait, and which are refused because the window opens only after they expire.
@@ -1179,6 +1240,8 @@ type PublishedCommand {
     description: String
     """The command's parameters as a JSON array of parameter descriptors, or null when it takes no structured arguments."""
     parameterSchema: String
+    """Optional declarative LoRaWAN payload encoder JSON. Null keeps the raw payload contract."""
+    encoder: String
     """NORMAL, DISRUPTIVE or DESTRUCTIVE. The last two wait for the device type's maintenance window."""
     impact: String!
 }
@@ -1287,6 +1350,8 @@ type CommandDefinition implements Model & TokenReference & NamedEntity & Metadat
     command takes no structured arguments, in which case payloads are not checked.
     """
     parameterSchema: String
+    """Optional declarative LoRaWAN payload encoder JSON. Null keeps the raw payload contract."""
+    encoder: String
     """
     How disruptive the command is to the device's work: NORMAL (a read or a benign write),
     DISRUPTIVE (interrupts it, such as a reboot) or DESTRUCTIVE (erases state, such as a
@@ -1324,6 +1389,8 @@ input CommandDefinitionCreateRequest {
     structured arguments.
     """
     parameterSchema: String
+    """Optional declarative LoRaWAN payload encoder JSON. Null keeps the raw payload contract."""
+    encoder: String
     """
     How disruptive the command is: NORMAL (the default), DISRUPTIVE or DESTRUCTIVE.
     DISRUPTIVE and DESTRUCTIVE commands wait for the device type's maintenance window. An
@@ -1370,6 +1437,8 @@ input CommandDefinitionUpdateRequest {
     structured arguments.
     """
     parameterSchema: String
+    """Optional declarative LoRaWAN payload encoder JSON. Null keeps the raw payload contract."""
+    encoder: String
     """
     New impact (NORMAL, DISRUPTIVE or DESTRUCTIVE). An explicit null or an unknown value is
     refused. The change reaches devices when the profile is published.
@@ -1914,6 +1983,96 @@ type Alarm implements Model & TokenReference & MetadataEntity {
     acknowledgedBy: String
     lastValue: Float
     metadata: String
+    """
+    The disposition of this alarm's current cycle (see setAlarmDisposition), or null when
+    nobody has labelled it. A disposition belongs to the cycle it was written on: when the
+    alarm is raised again, the new cycle starts unlabelled and the earlier disposition stays
+    with the earlier cycle, where alarmDispositions still finds it. A cycle is named by its
+    raisedTime, so two cycles of one alarm raised at the same instant share one disposition.
+    """
+    disposition: AlarmDisposition
+}
+
+"""
+An operator's verdict on one alarm cycle. New values may be added in a later release; a client
+should treat a value it does not know as unhandled rather than as any of these.
+"""
+enum AlarmDispositionLabel {
+    """The condition was real and needed attention."""
+    TRUE_POSITIVE
+    """
+    The condition was not real, for example a bad reading, a fouled sensor or a threshold set
+    wrong. A different rule should not have raised it.
+    """
+    FALSE_POSITIVE
+    """
+    The condition was real but expected and needed no action, such as planned maintenance or a
+    commissioning test.
+    """
+    EXPECTED
+}
+
+"""
+An operator's verdict on one alarm cycle: was the condition real, and did it need anyone? It
+is ground truth for measuring a rule, not for operating one. A cycle is one raise of an alarm,
+named by the raisedTime the alarm had when it was labelled, so two cycles of one alarm raised
+at the same instant share one disposition.
+"""
+type AlarmDisposition {
+    """The alarm the labelled cycle belongs to, by its id."""
+    alarmId: ID!
+    """
+    The alarm the labelled cycle belongs to, by its token. Always served, even when the caller
+    can no longer read the alarm itself (see alarm).
+    """
+    alarmToken: String!
+    """
+    The alarm itself, or null when the caller cannot read it any more (a member whose access
+    is limited to some customers, after the alarm was raised again for another customer).
+    """
+    alarm: Alarm
+    """The labelled cycle: the alarm's raisedTime when the label was written."""
+    raisedTime: String!
+    """
+    The verdict. New values may be added in a later release; treat a value you do not know as
+    unhandled.
+    """
+    label: AlarmDispositionLabel!
+    """Why, in the labeller's words. Null when no note was given."""
+    note: String
+    """The authenticated subject that last wrote the label, recorded server-side."""
+    recordedBy: String
+    """When the label was last written."""
+    recordedTime: String!
+}
+
+"""
+Criteria for listing alarm disposition labels. Every facet is optional and they AND together.
+"""
+input AlarmDispositionSearchCriteria {
+    """The page to return, starting at 1."""
+    pageNumber: Int!
+    """How many labels a page holds."""
+    pageSize: Int!
+    """Only the labelled cycles of this alarm, by its token. An unknown token finds nothing."""
+    alarmToken: String
+    """
+    Only cycles with this label. A value that is not an AlarmDispositionLabel is refused when
+    the request is validated, so a misspelt filter never reads as an empty answer.
+    """
+    label: AlarmDispositionLabel
+    """Only cycles raised at or after this instant (inclusive), as an RFC 3339 timestamp."""
+    startTime: String
+    """Only cycles raised at or before this instant (inclusive), as an RFC 3339 timestamp."""
+    endTime: String
+}
+
+"""One page of alarm disposition labels, newest cycle first."""
+type AlarmDispositionSearchResults {
+    """The labels on this page."""
+    results: [AlarmDisposition!]!
+    """Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
 }
 
 """
@@ -2088,6 +2247,7 @@ input AuditEventSearchCriteria {
     endTime: String
     category: String
     operation: String
+    """Only entries whose actor contains this text. The match ignores case. At most 256 bytes; longer input is refused with LIMIT_EXCEEDED."""
     actor: String
     tableName: String
     entityPk: String
@@ -2138,8 +2298,22 @@ input DeviceTypeCreateRequest {
     manufacturer: String
     """Model of the devices of this type, up to 128 characters."""
     model: String
+    """
+    Command channel of the type: PUBLISH or HTTP_PULL, or omit it (or send an empty value) for
+    the default channel, which behaves as PUBLISH. Any other value fails the request with
+    INVALID_VALUE.
+    """
+    commandChannel: String
     """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
+    """
+    The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+    or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+    enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+    enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+    INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+    """
+    semanticTypes: [String!]
 }
 
 # 🔴 Do NOT give any field in this input an SDL default value. A default makes the
@@ -2184,8 +2358,19 @@ input DeviceTypeUpdateRequest {
     manufacturer: String
     """New model, or null to clear it."""
     model: String
+    """
+    New command channel: PUBLISH or HTTP_PULL, or null (or an empty value) to return the type
+    to the default channel, which behaves as PUBLISH. Any other value fails the whole update
+    with INVALID_VALUE.
+    """
+    commandChannel: String
     """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
+    """
+    New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+    them alone. Validated as on create; only a request that names this field is validated.
+    """
+    semanticTypes: [String!]
 }
 
 """Criteria for searching device types. Results are newest first."""
@@ -2194,6 +2379,11 @@ input DeviceTypeSearchCriteria {
     pageNumber: Int!
     """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """
+    Return only device types whose name or token contains this text, ignoring case (a name is
+    optional, so an unnamed type is found by its token). Blank matches all.
+    """
+    nameContains: String
 }
 
 """One page of device types matching a search."""
@@ -2334,6 +2524,73 @@ type Device implements Model & TokenReference & NamedEntity & MetadataEntity & E
     aliases are not shown to it.
     """
     aliases: [DeviceAlias!]
+    """
+    Where the device was installed, for a device that is fixed in place. Needs
+    location:installed:read (location:read includes it). Null for a caller without it, and
+    null when no position was recorded. This is installation data only: it never falls back to
+    a position the device reported, even when the device also reports GPS.
+    """
+    installedPosition: InstalledPosition
+    """
+    Whether installedPosition is withheld from this caller. It concerns the INSTALLED position
+    only, not any position the device reports. True for every device a caller without
+    location:installed:read (or location:read) reads, whether or not the device has an installed
+    position, and false for every device a caller with it reads. It depends on the caller alone,
+    so it does not reveal whether a position exists.
+    """
+    positionWithheld: Boolean!
+}
+
+"""Where an installed position came from."""
+enum InstalledPositionSource {
+    """Measured on site by a survey."""
+    SURVEY
+    """Read from a fleet import file."""
+    IMPORT
+    """Entered by an operator."""
+    MANUAL
+    """Derived from other data rather than measured."""
+    INFERRED
+}
+
+"""The entity kinds a position can be installed on."""
+enum PositionFamily {
+    """A device, named by its token."""
+    DEVICE
+    """An asset, named by its token."""
+    ASSET
+}
+
+"""
+Where a fixed asset was installed: WGS84 decimal degrees, elevation and accuracy in metres.
+"""
+type InstalledPosition {
+    """Degrees north, -90 to 90."""
+    latitude: Float!
+    """Degrees east, -180 to 180."""
+    longitude: Float!
+    """Metres above the WGS84 ellipsoid, or null when not recorded."""
+    elevation: Float
+    """Horizontal accuracy in metres, or null when not recorded."""
+    accuracy: Float
+    """How the position was obtained."""
+    source: InstalledPositionSource
+    """When the position was recorded, as an RFC 3339 timestamp."""
+    updatedAt: String
+}
+
+"""The position an operator, an import or a survey tool records."""
+input InstalledPositionInput {
+    """Degrees north. Values outside -90 to 90, and values that are not numbers, are refused."""
+    latitude: Float!
+    """Degrees east. Values outside -180 to 180, and values that are not numbers, are refused."""
+    longitude: Float!
+    """Metres above the WGS84 ellipsoid."""
+    elevation: Float
+    """Horizontal accuracy in metres. Not negative."""
+    accuracy: Float
+    """How the position was obtained. MANUAL when omitted."""
+    source: InstalledPositionSource
 }
 
 """
@@ -2533,6 +2790,27 @@ input DeviceImportRow {
     that already exists with a different alias set makes the row a CONFLICT.
     """
     aliases: [DeviceAliasInput!]
+    """
+    Degrees north where the device was installed, for a device that is fixed in place. Given
+    together with installedLongitude or not at all. A value outside -90 to 90 makes the row
+    INVALID. The position is stored with source IMPORT. A device that already exists makes the
+    row a CONFLICT when its stored position differs, and always for a caller without
+    location:installed:read, which is never told whether the position matches.
+    """
+    installedLatitude: Float
+    """Degrees east where the device was installed, -180 to 180. See installedLatitude."""
+    installedLongitude: Float
+    """
+    Metres above the WGS84 ellipsoid. Needs installedLatitude and installedLongitude. When a
+    device that already exists is compared, an omitted elevation compares as NONE: a row that
+    leaves it out, against a device whose stored position has one, is a CONFLICT.
+    """
+    installedElevation: Float
+    """
+    Horizontal accuracy in metres, not negative. Needs installedLatitude and installedLongitude.
+    Like installedElevation, an omitted accuracy compares as none against a device that exists.
+    """
+    installedAccuracy: Float
     """ACCESS_TOKEN or MQTT_BASIC. FACTORY_CREDENTIALS mode only."""
     credentialType: String
     """The id the device presents (the access token itself, or the MQTT username). FACTORY_CREDENTIALS mode only."""
@@ -2584,6 +2862,11 @@ input DeviceSearchCriteria {
     pageSize: Int!
     """Return only devices of the device type with this token. An unknown token matches nothing."""
     deviceType: String
+    """
+    Return only devices whose name or token contains this text, ignoring case (a name is
+    optional, so an unnamed device is found by its token). Blank matches all.
+    """
+    nameContains: String
     """
     Return only devices that hold a credential issued by the provisioning profile with this
     token, revoked ones included. An unknown token matches nothing.
@@ -3410,6 +3693,16 @@ type DeviceTrustAnchor implements Model & TokenReference & NamedEntity & Metadat
     stale of them.
     """
     revocationStatus: RevocationStatus!
+    """
+    Whether, and how strictly, a certificate's status is also asked of its issuer's online OCSP
+    responder when a device connects. OFF (the default) asks nothing and sends no request.
+    """
+    ocspMode: CertificateOcspMode!
+    """
+    The responder every OCSP request for this anchor goes to, in place of each certificate's own
+    Authority Information Access entry. Null when the certificates' own entries are used.
+    """
+    ocspResponderUrl: String
 }
 
 """Data required to create a trust anchor."""
@@ -3462,6 +3755,17 @@ input DeviceTrustAnchorUpdateRequest {
     list.
     """
     revocationStaleGrace: String
+    """
+    Required and unclearable. OFF asks no responder. ENFORCE_KNOWN and REQUIRE_CURRENT are refused
+    while the instance's OCSP switch is off; REQUIRE_CURRENT is refused unless the instance allows
+    it, and needs ocspResponderUrl.
+    """
+    ocspMode: CertificateOcspMode
+    """
+    An http or https URL, without credentials, that replaces each certificate's own responder.
+    Null clears it. The address it resolves to must be one the instance's egress policy allows.
+    """
+    ocspResponderUrl: String
 }
 
 """How an anchor treats the completeness of its revocation lists."""
@@ -3469,6 +3773,26 @@ enum CertificateRevocationMode {
     """A listed certificate is refused; an issuer with no list, or a stale one, is allowed."""
     ENTRIES
     """A listed certificate is refused, and so is one whose issuer has no current list."""
+    REQUIRE_CURRENT
+}
+
+"""
+How an anchor uses its issuers' OCSP responders at connect. A certificate a responder says is
+revoked is always refused (a verified revoked answer for any certificate on any verified path
+wins); the modes differ in what an answer that could not be had means.
+"""
+enum CertificateOcspMode {
+    """No responder is asked. The default for every anchor."""
+    OFF
+    """
+    A revoked answer refuses; a status that could not be learned (a timeout, an unreachable or
+    refused responder, an unusable answer) is ADMITTED and counted. Availability over completeness.
+    """
+    ENFORCE_KNOWN
+    """
+    A revoked answer refuses, and so does a certificate whose status could not be confirmed
+    current. A responder outage refuses new connects once cached answers expire.
+    """
     REQUIRE_CURRENT
 }
 
@@ -3519,6 +3843,13 @@ type DeviceRevocationListResult {
     newlyRevoked: Int!
     """True when this very CRL was already the current list and nothing was written."""
     unchanged: Boolean!
+    """
+    True when the live broker sessions of the devices the list newly revokes were confirmed ended.
+    False when the list is stored and new connects are refused, but a session already open could not
+    be confirmed ended: the retry (automatic, and on repeating the upload, which is idempotent) ends
+    it, or its token expires.
+    """
+    sessionsEnded: Boolean!
 }
 
 """
@@ -3564,6 +3895,14 @@ type DeviceRevokedCertificate {
     reason: CertificateRevocationReason!
     """When it was revoked, as an RFC 3339 timestamp."""
     revokedAt: String!
+    """
+    Set only on the result of revokeDeviceCertificate, null everywhere else. True when the live
+    broker sessions of the devices the revocation affects were confirmed ended. False when the
+    revocation is saved and new connects are refused, but a session already open could not be
+    confirmed ended: it may still be publishing until the retry (automatic, and on repeating the
+    mutation, which is idempotent) ends it, or its token expires.
+    """
+    sessionsEnded: Boolean
 }
 
 """Criteria used when listing the revoked certificates of a trust anchor."""
@@ -3809,6 +4148,22 @@ type IntegrationDecoderPlan {
     profileVersionToken: String!
 }
 
+"""What the ingest path needs to know about the payload decoder of a device's type."""
+type DeviceDecoderPlan {
+    """Whether the active published version declares a decoder, usable or not."""
+    present: Boolean!
+    """The input an uplink must carry for the decoder to run; null when there is no decoder."""
+    input: PayloadDecoderInput
+    """The most readings one decode produces; 0 when there is no decoder this build can run."""
+    maxReadings: Int!
+    """The part of the static worst-case cost that does not depend on the size of the uplink."""
+    composedCost: Int!
+    """Whether the decoder reads the JSON body, parsed and priced by size."""
+    parsesJson: Boolean!
+    """The profile version the answer is for, as "{profile}@{version}"; empty when there is no decoder."""
+    profileVersionToken: String!
+}
+
 """The answer to resolveIntegrationDevice."""
 type IntegrationDeviceResolution {
     """What happened."""
@@ -3928,6 +4283,13 @@ type AssetType implements Model & TokenReference & NamedEntity & BrandedEntity &
     # the type has never been published. An asset of an unpublished type may carry
     # no properties at all.
     activeVersion: Int
+    """
+    The classes this type's draft is, as terms of the vocabularies the tenant has enabled
+    (a published version freezes its own copy); empty when it is bound to none. Each carries
+    its expanded IRI and a display CURIE. Null only when the terms could not be rendered, with
+    an error saying why.
+    """
+    semanticTypes: [SemanticTerm!]
 }
 
 # An immutable published snapshot of an asset type's property contract. Assets are
@@ -3945,6 +4307,18 @@ type AssetTypeVersion {
     # exposed: an author needs to see what a version froze in order to decide whether
     # to roll back to it.
     propertySchema: String!
+    """
+    The classes the type was bound to when this version was published; empty when it was
+    bound to none, and for every version published before the semantic layer existed.
+    Rolling back to this version restores them onto the type. Null only when the terms could
+    not be rendered, with an error saying why.
+    """
+    semanticTypes: [SemanticTerm!]
+    """
+    The vocabulary versions the frozen classes were validated against; empty when none were
+    bound. Null only when the stored record could not be read, with an error saying why.
+    """
+    semanticPackVersions: [SemanticPackVersion!]
 }
 
 # Data required to create an asset type.
@@ -3964,6 +4338,14 @@ input AssetTypeCreateRequest {
     # contract nothing could satisfy — a duplicate name, an unknown data type, a
     # default outside its own enum.
     propertySchema: String
+    """
+    The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+    or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+    enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+    enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+    INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+    """
+    semanticTypes: [String!]
 }
 
 # A PARTIAL update to an asset type: omit a field to leave it alone, send null to
@@ -3989,6 +4371,11 @@ input AssetTypeUpdateRequest {
     # leave the stored draft alone. It is validated the same way as on create, and a
     # rejection writes nothing at all.
     propertySchema: String
+    """
+    New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+    them alone. Validated as on create; only a request that names this field is validated.
+    """
+    semanticTypes: [String!]
 }
 
 # Criteria used when searching for asset types.
@@ -4017,6 +4404,17 @@ type Asset implements Model & TokenReference & NamedEntity & MetadataEntity & En
     # The asset's property document: a JSON object whose keys are the properties its
     # type's published contract declares. Null when the asset carries none.
     properties: String
+    """
+    Where the asset was installed. Needs location:installed:read (location:read includes it).
+    Null for a caller without it, and null when no position was recorded.
+    """
+    installedPosition: InstalledPosition
+    """
+    Whether installedPosition is withheld from this caller; it concerns the installed position
+    only. True for every asset a caller without location:installed:read (or location:read)
+    reads, whether or not the asset has an installed position. It depends on the caller alone.
+    """
+    positionWithheld: Boolean!
 }
 
 # Data required to create an asset.
@@ -4086,6 +4484,12 @@ type CustomerType implements Model & TokenReference & NamedEntity & BrandedEntit
     foregroundColor: String
     borderColor: String
     metadata: String
+    """
+    The classes this type is, as terms of the vocabularies the tenant has enabled; empty when
+    it is bound to none. Each carries its expanded IRI and a display CURIE. Null only when the
+    terms could not be rendered, with an error saying why.
+    """
+    semanticTypes: [SemanticTerm!]
 }
 
 # Data required to create a customer type.
@@ -4099,6 +4503,14 @@ input CustomerTypeCreateRequest {
     foregroundColor: String
     borderColor: String
     metadata: String
+    """
+    The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+    or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+    enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+    enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+    INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+    """
+    semanticTypes: [String!]
 }
 
 # A PARTIAL update to a customer type: omit a field to leave it alone, send null to
@@ -4120,6 +4532,11 @@ input CustomerTypeUpdateRequest {
     foregroundColor: String
     borderColor: String
     metadata: String
+    """
+    New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+    them alone. Validated as on create; only a request that names this field is validated.
+    """
+    semanticTypes: [String!]
 }
 
 # Criteria used when searching for customer types.
@@ -4202,6 +4619,12 @@ type AreaType implements Model & TokenReference & NamedEntity & BrandedEntity & 
     foregroundColor: String
     borderColor: String
     metadata: String
+    """
+    The classes this type is, as terms of the vocabularies the tenant has enabled; empty when
+    it is bound to none. Each carries its expanded IRI and a display CURIE. Null only when the
+    terms could not be rendered, with an error saying why.
+    """
+    semanticTypes: [SemanticTerm!]
 }
 
 # Data required to create an area type.
@@ -4215,6 +4638,14 @@ input AreaTypeCreateRequest {
     foregroundColor: String
     borderColor: String
     metadata: String
+    """
+    The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+    or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+    enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+    enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+    INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+    """
+    semanticTypes: [String!]
 }
 
 # A PARTIAL update to an area type: omit a field to leave it alone, send null to
@@ -4236,6 +4667,11 @@ input AreaTypeUpdateRequest {
     foregroundColor: String
     borderColor: String
     metadata: String
+    """
+    New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+    them alone. Validated as on create; only a request that names this field is validated.
+    """
+    semanticTypes: [String!]
 }
 
 # Criteria used when searching for area types.
@@ -4261,6 +4697,11 @@ type Area implements Model & TokenReference & NamedEntity & MetadataEntity & Ent
     description: String
     areaType: AreaType!
     metadata: String
+    """
+    The geofence that bounds the area, or null when none does. Null for a caller limited to part
+    of the tenant. Answers an error, not null, when the linked fence has been deleted.
+    """
+    boundaryFence: GeoFence
 }
 
 # Data required to create an area.
@@ -4270,6 +4711,8 @@ input AreaCreateRequest {
     description: String
     areaTypeToken: String!
     metadata: String
+    """The token of the geofence that bounds the area. It must name an existing fence."""
+    boundaryFenceToken: String
 }
 
 # A PARTIAL update to an area: omit a field to leave it alone, send null to clear
@@ -4288,6 +4731,11 @@ input AreaUpdateRequest {
     # token is refused too, and the refusal is total — nothing is written.
     areaTypeToken: String
     metadata: String
+    """
+    Links the area to the geofence that bounds it: omit to keep the link, send null to remove
+    it, send a token to set it. The token must name an existing fence.
+    """
+    boundaryFenceToken: String
 }
 
 # Criteria used when searching for areas.
@@ -4332,6 +4780,13 @@ type EntityRelationshipType implements Model & TokenReference & NamedEntity & Me
     description: String
     metadata: String
     tracked: Boolean!
+    """
+    The vocabulary predicate this relationship is (for example brick:feeds), or null when it
+    is bound to none.
+    """
+    semanticPredicate: SemanticTerm
+    """The predicate's inverse (for example brick:isFedBy), or null when there is none."""
+    semanticInverse: SemanticTerm
 }
 
 # Data required to create an entity relationship type.
@@ -4341,6 +4796,18 @@ input EntityRelationshipTypeCreateRequest {
     description: String
     metadata: String
     tracked: Boolean!
+    """
+    A PREDICATE of an enabled vocabulary pack, as a CURIE or full IRI. A term of the wrong
+    kind, deprecated, or outside the enabled vocabularies fails the request with
+    INVALID_ARGUMENT naming it. Stored as an expanded IRI.
+    """
+    semanticPredicate: String
+    """
+    The predicate's inverse. Omitted, it is the inverse the vocabulary declares for the
+    predicate (none when it declares none), and the stored value is that resolved term. An
+    inverse without a predicate is refused.
+    """
+    semanticInverse: String
 }
 
 # A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
@@ -4359,6 +4826,17 @@ input EntityRelationshipTypeUpdateRequest {
     # Required and unclearable: null is refused rather than read as false, which would
     # stop denormalizing this type's relationships onto events and report success.
     tracked: Boolean
+    """
+    New predicate: null clears it, and the inverse with it. Omit to leave it alone. Validated
+    as on create.
+    """
+    semanticPredicate: String
+    """
+    New inverse: null clears it. Omitted while the predicate changes, it becomes the inverse
+    the vocabulary declares for the new predicate. An inverse is refused while no predicate
+    is bound.
+    """
+    semanticInverse: String
 }
 
 # Criteria used when searching for entity relationship types.
@@ -4417,8 +4895,863 @@ type EntityRelationshipSearchResults {
     pagination: SearchResultsPagination!
 }
 
+"""A term of a vocabulary the tenant has enabled, as it is stored and as it is displayed."""
+type SemanticTerm {
+    """The expanded IRI. This is what is stored; it does not change when a prefix is remapped."""
+    iri: String!
+    """A display form, prefix:local, using the vocabulary's prefix or the tenant's custom prefix. It is the IRI itself when no prefix explains it."""
+    curie: String!
+}
+
+"""
+A vocabulary pack this build ships. New packs may be added in a minor release, so a client
+should tolerate a value it does not know.
+"""
+enum SemanticPack {
+    """Brick (pack id brick): buildings, equipment and points."""
+    BRICK
+    """The NGSI-LD core vocabulary (pack id ngsi-ld)."""
+    NGSI_LD
+    """SAREF for buildings (pack id s4bldg)."""
+    S4BLDG
+    """SAREF for smart cities (pack id s4city)."""
+    S4CITY
+    """SAREF core (pack id saref): devices, properties and measurements."""
+    SAREF
+    """Smart Data Models, environment domain (pack id sdm-environment)."""
+    SDM_ENVIRONMENT
+    """Smart Data Models, parking domain (pack id sdm-parking)."""
+    SDM_PARKING
+    """Smart Data Models, street lighting domain (pack id sdm-streetlighting)."""
+    SDM_STREETLIGHTING
+}
+
+"""A tenant's semantic configuration."""
+type SemanticContext {
+    """
+    The vocabulary packs the tenant has enabled, sorted by pack id. Null only when the stored
+    record could not be read, with an error saying why.
+    """
+    enabledPacks: [SemanticPack!]
+    """
+    The custom prefixes the tenant declared for its own terms, sorted by prefix. Null only
+    when the stored record could not be read, with an error saying why.
+    """
+    customPrefixes: [CustomPrefix!]
+    """
+    The version of each enabled pack as this build shipped it when the context was last set,
+    sorted by pack. Null only when the stored record could not be read, with an error saying
+    why.
+    """
+    packVersions: [SemanticPackVersion!]
+    """When the context was last set, as an RFC 3339 timestamp; null when it never was."""
+    updatedAt: String
+}
+
+"""A custom prefix and the namespace it stands for."""
+type CustomPrefix {
+    """The prefix, as written before the colon in a CURIE (city in city:SmartBin)."""
+    prefix: String!
+    """The namespace IRI the prefix expands to."""
+    namespace: String!
+}
+
+"""The version of one vocabulary pack."""
+type SemanticPackVersion {
+    """The pack."""
+    pack: SemanticPack!
+    """The pack's version, as this build shipped it (for example the upstream release it was generated from)."""
+    version: String!
+}
+
+"""The semantic context to set. It replaces the stored one whole."""
+input SemanticContextRequest {
+    """The packs to enable. An empty list enables none."""
+    enabledPacks: [SemanticPack!]!
+    """
+    Custom prefixes for the tenant's own terms; at most 32. An empty list declares none. A
+    prefix may not shadow a pack's, and namespaces may not overlap.
+    """
+    customPrefixes: [CustomPrefixInput!]!
+}
+
+"""One custom prefix declaration."""
+input CustomPrefixInput {
+    """The prefix, as it will be written before the colon in a CURIE. It may not be a pack's prefix."""
+    prefix: String!
+    """The namespace IRI the prefix expands to. It may not overlap a pack's or another prefix's namespace."""
+    namespace: String!
+}
+
 # Contains queries executed against model.
+"""
+(Preview: may change in a minor release.) What an AI agent asks to be done to alarms: ACK
+acknowledges them, CLEAR clears them.
+"""
+enum AgentAlarmAction {
+    """(Preview: may change in a minor release.) Acknowledge the alarms."""
+    ACK
+    """(Preview: may change in a minor release.) Clear the alarms. Clearing an alarm whose condition is still active hides a live condition."""
+    CLEAR
+}
+
+"""(Preview: may change in a minor release.) The kind of action an agent proposal asks for."""
+enum AgentProposalKind {
+    """(Preview: may change in a minor release.) Acknowledge alarms."""
+    ALARM_ACK
+    """(Preview: may change in a minor release.) Clear alarms."""
+    ALARM_CLEAR
+}
+
+"""(Preview: may change in a minor release.) Where an agent proposal is in its life."""
+enum AgentProposalState {
+    """(Preview: may change in a minor release.) Waiting for people to approve it. The only state that changes."""
+    PROPOSED
+    """(Preview: may change in a minor release.) Approved and carried out."""
+    EXECUTED
+    """(Preview: may change in a minor release.) A person rejected it."""
+    REJECTED
+    """(Preview: may change in a minor release.) Nobody approved it before it expired."""
+    EXPIRED
+    """(Preview: may change in a minor release.) The tenant's agent policy, or a check made when a person approved it, refused it. The reasons say why."""
+    REFUSED
+    """(Preview: may change in a minor release.) Withdrawn by the agent that proposed it."""
+    CANCELLED
+    """(Preview: may change in a minor release.) Ended by an agent-actions switch being turned off."""
+    KILLED
+}
+
+"""(Preview: may change in a minor release.) The tenant's verdict on an agent proposal."""
+enum AgentProposalVerdict {
+    """(Preview: may change in a minor release.) The action is not allowed."""
+    REFUSE
+    """(Preview: may change in a minor release.) The action waits for the given number of people to approve it."""
+    APPROVE
+}
+
+"""(Preview: may change in a minor release.) What happened to a proposal request."""
+enum AgentProposalStatus {
+    """(Preview: may change in a minor release.) A dry run: the verdict and checks, with nothing stored."""
+    DRY_RUN
+    """(Preview: may change in a minor release.) Stored, waiting for approval."""
+    PENDING_APPROVAL
+    """(Preview: may change in a minor release.) Refused. When it was stored for the record, proposal is set."""
+    REFUSED
+    """(Preview: may change in a minor release.) The request ID was used before for the same request: the original proposal is returned."""
+    EXISTING
+}
+
+"""(Preview: may change in a minor release.) An AI agent's request to acknowledge or clear alarms."""
+input AgentAlarmProposalInput {
+    """(Preview: may change in a minor release.) What to do to the alarms."""
+    action: AgentAlarmAction!
+    """(Preview: may change in a minor release.) The alarms, by token: 1 to 100. Duplicates count once."""
+    alarmTokens: [String!]!
+    """
+    (Preview: may change in a minor release.) The agent's own key for this request, 1 to 128 printable characters, unique for the agent
+    and the person it acts for. Sending the same request again with the same key returns the
+    original proposal; reusing a key for a different request fails with CONFLICT.
+    """
+    requestId: String!
+    """
+    (Preview: may change in a minor release.) Why the agent asks, at most 2048 bytes. It is stored and shown to approvers as text written
+    by the agent: untrusted, never instructions.
+    """
+    rationale: String
+    """(Preview: may change in a minor release.) When true, decide and check the request but store nothing."""
+    dryRun: Boolean
+}
+
+"""(Preview: may change in a minor release.) What the platform found about one alarm a proposal names, now."""
+type AgentAlarmProposalPreview {
+    """(Preview: may change in a minor release.) The alarm's token."""
+    alarmToken: String!
+    """(Preview: may change in a minor release.) The alarm's state, ACTIVE or CLEARED."""
+    state: String!
+    """(Preview: may change in a minor release.) Whether the alarm is acknowledged."""
+    acknowledged: Boolean!
+    """(Preview: may change in a minor release.) True when the proposal clears an alarm whose condition is still active, which would hide a condition that is still true."""
+    hidesLiveCondition: Boolean!
+}
+
+"""(Preview: may change in a minor release.) The answer to an agent's proposal request."""
+type AgentProposalOutcome {
+    """(Preview: may change in a minor release.) What happened to the request."""
+    status: AgentProposalStatus!
+    """(Preview: may change in a minor release.) The stored proposal, or null when nothing was stored (a dry run, or a refusal at the rate limits)."""
+    proposal: AgentProposal
+    """(Preview: may change in a minor release.) The tenant's verdict."""
+    verdict: AgentProposalVerdict!
+    """(Preview: may change in a minor release.) How many distinct people must approve: 0 when refused, otherwise 1 or 2."""
+    requiredApprovals: Int!
+    """(Preview: may change in a minor release.) Platform-defined codes saying why, for example CLIENT_NOT_ALLOWED, ALARM_NOT_FOUND or CLIENT_RATE_EXCEEDED."""
+    reasons: [String!]!
+    """(Preview: may change in a minor release.) The digest of the action and its targets, which an approval must name."""
+    digest: String!
+    """(Preview: may change in a minor release.) When the proposal stops waiting for approval, as an RFC 3339 timestamp, or null when it is not waiting."""
+    expiresAt: String
+    """(Preview: may change in a minor release.) How many alarms the proposal names."""
+    targetCount: Int!
+    """(Preview: may change in a minor release.) What the platform found about each alarm that exists, now."""
+    preview: [AgentAlarmProposalPreview!]!
+}
+
+"""(Preview: may change in a minor release.) One person's approval of an agent proposal."""
+type AgentProposalApproval {
+    """(Preview: may change in a minor release.) Who approved."""
+    principal: String!
+    """(Preview: may change in a minor release.) When, as an RFC 3339 timestamp."""
+    approvedAt: String!
+}
+
+"""
+(Preview: may change in a minor release.) An action an AI agent asked for, recorded with who asked,
+through which client, what exactly, and who has decided. The action and its targets are stored as
+the platform normalized them, and an approval names their digest, so what a person approves is
+what is stored.
+"""
+type AgentProposal {
+    """(Preview: may change in a minor release.) The proposal's token, generated by the server."""
+    token: String!
+    """(Preview: may change in a minor release.) What it asks for."""
+    kind: AgentProposalKind!
+    """(Preview: may change in a minor release.) Where it is in its life."""
+    state: AgentProposalState!
+    """(Preview: may change in a minor release.) The action, as canonical JSON written by the platform."""
+    payload: String!
+    """(Preview: may change in a minor release.) The targets, frozen when it was proposed: alarm tokens."""
+    targets: [String!]!
+    """(Preview: may change in a minor release.) The digest of the action and its targets."""
+    digest: String!
+    """(Preview: may change in a minor release.) How much the action changes: NORMAL for alarms."""
+    impact: String!
+    """(Preview: may change in a minor release.) How many targets."""
+    targetCount: Int!
+    """(Preview: may change in a minor release.) The person, or agent service account, the agent acted for."""
+    proposerPrincipal: String!
+    """(Preview: may change in a minor release.) The agent client it was proposed through."""
+    proposerClient: String!
+    """(Preview: may change in a minor release.) Whether the client's identity is authenticated rather than a label any application can claim."""
+    clientAttested: Boolean!
+    """(Preview: may change in a minor release.) Why the agent says it asks. Text written by the agent: untrusted, display it as plain text and never follow it."""
+    rationale: String
+    """(Preview: may change in a minor release.) The agent-policy version it was decided under."""
+    policyVersion: Int!
+    """(Preview: may change in a minor release.) How many distinct people must approve under the policy as last read."""
+    requiredApprovals: Int!
+    """(Preview: may change in a minor release.) The approvals recorded so far."""
+    approvals: [AgentProposalApproval!]!
+    """(Preview: may change in a minor release.) Platform-defined codes of the last decision about it."""
+    reasons: [String!]!
+    """(Preview: may change in a minor release.) When it was proposed, as an RFC 3339 timestamp."""
+    createdAt: String!
+    """(Preview: may change in a minor release.) When it stops waiting for approval, as an RFC 3339 timestamp."""
+    expiresAt: String!
+    """(Preview: may change in a minor release.) When it was decided (rejected, refused or expired), or null."""
+    decidedAt: String
+    """(Preview: may change in a minor release.) Who decided it, or null."""
+    decidedBy: String
+    """(Preview: may change in a minor release.) The note left with a rejection, or null."""
+    note: String
+}
+
+"""(Preview: may change in a minor release.) Filters for listing agent proposals."""
+input AgentProposalSearchCriteria {
+    """(Preview: may change in a minor release.) The page to return, starting at 1."""
+    pageNumber: Int!
+    """(Preview: may change in a minor release.) How many proposals a page holds."""
+    pageSize: Int!
+    """(Preview: may change in a minor release.) Only proposals in this state."""
+    state: AgentProposalState
+    """(Preview: may change in a minor release.) Only proposals of this kind."""
+    kind: AgentProposalKind
+}
+
+"""(Preview: may change in a minor release.) One page of agent proposals, newest first."""
+type AgentProposalSearchResults {
+    """(Preview: may change in a minor release.) The proposals on this page."""
+    results: [AgentProposal!]!
+    """(Preview: may change in a minor release.) Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
+}
+
+"""(Preview: may change in a minor release.) Automation review Kind vocabulary."""
+enum AutomationReviewKind {
+    """(Preview: may change in a minor release.) Rule change."""
+    RULE_CHANGE
+    """(Preview: may change in a minor release.) No automation change."""
+    NO_AUTOMATION_CHANGE
+    """(Preview: may change in a minor release.) Unreviewable."""
+    UNREVIEWABLE
+}
+
+"""(Preview: may change in a minor release.) Automation review Outcome vocabulary."""
+enum AutomationReviewOutcome {
+    """(Preview: may change in a minor release.) Passed."""
+    PASSED
+    """(Preview: may change in a minor release.) Failed."""
+    FAILED
+    """(Preview: may change in a minor release.) Inconclusive."""
+    INCONCLUSIVE
+    """(Preview: may change in a minor release.) No automation change."""
+    NO_AUTOMATION_CHANGE
+}
+
+"""(Preview: may change in a minor release.) Automation review State vocabulary."""
+enum AutomationReviewState {
+    """(Preview: may change in a minor release.) Ran."""
+    RAN
+    """(Preview: may change in a minor release.) Approved."""
+    APPROVED
+    """(Preview: may change in a minor release.) Rejected."""
+    REJECTED
+    """(Preview: may change in a minor release.) Consumed."""
+    CONSUMED
+    """(Preview: may change in a minor release.) Expired."""
+    EXPIRED
+}
+
+"""(Preview: may change in a minor release.) Automation review WindowRole vocabulary."""
+enum AutomationReviewWindowRole {
+    """(Preview: may change in a minor release.) Incident."""
+    INCIDENT
+    """(Preview: may change in a minor release.) Normal."""
+    NORMAL
+}
+
+"""(Preview: may change in a minor release.) Automation review Verdict vocabulary."""
+enum AutomationReviewVerdict {
+    """(Preview: may change in a minor release.) Pass."""
+    PASS
+    """(Preview: may change in a minor release.) Fail."""
+    FAIL
+    """(Preview: may change in a minor release.) Inconclusive."""
+    INCONCLUSIVE
+}
+
+"""(Preview: may change in a minor release.) Automation review ChangeKind vocabulary."""
+enum AutomationReviewChangeKind {
+    """(Preview: may change in a minor release.) An intent exists only in the draft."""
+    ADDED
+    """(Preview: may change in a minor release.) An intent exists only in the baseline."""
+    REMOVED
+    """(Preview: may change in a minor release.) A paired intent occurs at a different time."""
+    SHIFTED
+    """(Preview: may change in a minor release.) Content changed."""
+    CONTENT_CHANGED
+}
+
+"""(Preview: may change in a minor release.) Automation review StartState vocabulary."""
+enum AutomationReviewStartState {
+    """(Preview: may change in a minor release.) Unknown."""
+    UNKNOWN
+    """(Preview: may change in a minor release.) Clear."""
+    CLEAR
+    """(Preview: may change in a minor release.) Raised."""
+    RAISED
+}
+
+"""(Preview: may change in a minor release.) Automation review ProfileChangeArea vocabulary."""
+enum AutomationReviewProfileChangeArea {
+    """(Preview: may change in a minor release.) Rule."""
+    RULE
+    """(Preview: may change in a minor release.) Metric."""
+    METRIC
+    """(Preview: may change in a minor release.) Command."""
+    COMMAND
+    """(Preview: may change in a minor release.) Decoder."""
+    DECODER
+    """(Preview: may change in a minor release.) Location."""
+    LOCATION
+    """(Preview: may change in a minor release.) Configuration."""
+    CONFIGURATION
+    """(Preview: may change in a minor release.) Semantics."""
+    SEMANTICS
+}
+
+"""(Preview: may change in a minor release.) Automation review ProfileChangeType vocabulary."""
+enum AutomationReviewProfileChangeType {
+    """(Preview: may change in a minor release.) A profile element was added."""
+    ADDED
+    """(Preview: may change in a minor release.) A profile element was removed."""
+    REMOVED
+    """(Preview: may change in a minor release.) Modified."""
+    MODIFIED
+}
+
+"""(Preview: may change in a minor release.) Frozen evidence and approval history for a profile draft."""
+type AutomationReview {
+    """(Preview: may change in a minor release.) The version this review was consumed by, or null while it has not been."""
+    consumedVersion: Int
+    """(Preview: may change in a minor release.) The stable token identifying this review."""
+    token: String!
+    """(Preview: may change in a minor release.) The profile token, resolved from its stored id; lookup failures return null and an error."""
+    profileToken: String
+    """(Preview: may change in a minor release.) How the draft changes automation."""
+    kind: AutomationReviewKind!
+    """(Preview: may change in a minor release.) The changed rule token, when one rule is compared."""
+    ruleToken: String
+    """(Preview: may change in a minor release.) The current review lifecycle state."""
+    state: AutomationReviewState!
+    """(Preview: may change in a minor release.) The frozen comparison outcome."""
+    outcome: AutomationReviewOutcome!
+    """(Preview: may change in a minor release.) The frozen evidence digest the approver must be shown."""
+    reviewDigest: String!
+    """(Preview: may change in a minor release.) The digest of the reviewed draft snapshot."""
+    draftDigest: String!
+    """(Preview: may change in a minor release.) The digest of the published baseline snapshot."""
+    baselineDigest: String!
+    """(Preview: may change in a minor release.) The published baseline version."""
+    baselineVersion: Int!
+    """(Preview: may change in a minor release.) The person who ran the review."""
+    createdBy: String!
+    """(Preview: may change in a minor release.) When the review was created, in RFC3339 format."""
+    createdAt: String!
+    """(Preview: may change in a minor release.) The number of independent approvals required."""
+    requiredApprovals: Int!
+    """(Preview: may change in a minor release.) Approvals. Parsed from stored JSON; parse failures return null and an error."""
+    approvals: [AutomationReviewApproval!]
+    """(Preview: may change in a minor release.) When the approval threshold was reached, in RFC3339 format."""
+    approvedAt: String
+    """(Preview: may change in a minor release.) When approval expires, in RFC3339 format."""
+    expiresAt: String
+    """(Preview: may change in a minor release.) The person who rejected the review."""
+    decidedBy: String
+    """(Preview: may change in a minor release.) When the review was rejected, in RFC3339 format."""
+    decidedAt: String
+    """(Preview: may change in a minor release.) The optional rejection note."""
+    note: String
+    """(Preview: may change in a minor release.) People whose edits contributed after the baseline publication. Parsed from stored JSON; parse failures return null and an error."""
+    draftAuthors: [String!]
+    """(Preview: may change in a minor release.) The differences between the baseline and reviewed draft. Parsed from stored JSON; parse failures return null and an error."""
+    profileChanges: [AutomationReviewProfileChange!]
+    """(Preview: may change in a minor release.) Stored UNREVIEWABLE reasons; an empty list otherwise. Invalid stored JSON returns null and an error."""
+    reasons: [String!]
+    """(Preview: may change in a minor release.) The device tokens selected for replay. Parsed from stored JSON; parse failures return null and an error."""
+    deviceTokens: [String!]
+    """(Preview: may change in a minor release.) The incident and normal replay windows. Parsed from stored JSON; parse failures return null and an error."""
+    windows: [AutomationReviewWindowSpec!]
+    """(Preview: may change in a minor release.) The maximum pairing shift, in seconds; null uses the engine default. Parsed from stored JSON; parse failures return null and an error."""
+    shiftWindowSeconds: Int
+    """(Preview: may change in a minor release.) The expectations supplied when the review ran. Parsed from stored JSON; parse failures return null and an error."""
+    expectationInputs: [AutomationReviewExpectationInput!]
+    """(Preview: may change in a minor release.) The recorded-input fidelity assessment. Parsed from stored JSON; parse failures return null and an error."""
+    fidelity: AutomationReviewFidelity
+    """(Preview: may change in a minor release.) The verdicts for the supplied expectations. Parsed from stored JSON; parse failures return null and an error."""
+    expectations: [AutomationReviewExpectationResult!]
+    """(Preview: may change in a minor release.) The recorded comparison evidence for each window. Parsed from stored JSON; parse failures return null and an error."""
+    windowResults: [AutomationReviewWindowResult!]
+    """(Preview: may change in a minor release.) The digest of the recorded comparison inputs."""
+    inputDigest: String
+    """(Preview: may change in a minor release.) The digest of the stored result bytes."""
+    resultDigest: String
+    """(Preview: may change in a minor release.) The comparison engine build identifier."""
+    engineBuild: String
+    """(Preview: may change in a minor release.) The stored canonical comparison JSON, preserved byte for byte."""
+    result: String
+    """(Preview: may change in a minor release.) Whether the current draft digest matches this review; computation failures return null and an error."""
+    matchesCurrentDraft: Boolean
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewApproval evidence."""
+type AutomationReviewApproval {
+    """(Preview: may change in a minor release.) The approving person."""
+    principal: String!
+    """(Preview: may change in a minor release.) When this approval was recorded, in RFC3339 format."""
+    approvedAt: String!
+    """(Preview: may change in a minor release.) The policy revision recorded with this approval."""
+    policyRevision: Int!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewProfileChange evidence."""
+type AutomationReviewProfileChange {
+    """(Preview: may change in a minor release.) The part of the profile that changed."""
+    area: AutomationReviewProfileChangeArea!
+    """(Preview: may change in a minor release.) The stable key of the changed profile element."""
+    key: String!
+    """(Preview: may change in a minor release.) Whether the profile element was added, removed or modified."""
+    change: AutomationReviewProfileChangeType!
+    """(Preview: may change in a minor release.) Whether this change affects automation behavior."""
+    automation: Boolean!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewWindowSpec evidence."""
+type AutomationReviewWindowSpec {
+    """(Preview: may change in a minor release.) Whether this is the incident or normal window."""
+    role: AutomationReviewWindowRole!
+    """(Preview: may change in a minor release.) The start of the window, in RFC3339 format."""
+    start: String!
+    """(Preview: may change in a minor release.) The end of the window, in RFC3339 format."""
+    end: String!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewExpectationInput evidence."""
+type AutomationReviewExpectationInput {
+    """(Preview: may change in a minor release.) The window to which this expectation applies."""
+    window: AutomationReviewWindowRole!
+    """(Preview: may change in a minor release.) The expectation name."""
+    name: String
+    """(Preview: may change in a minor release.) The stored rule-test expectation as JSON."""
+    expect: String!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewFidelity evidence."""
+type AutomationReviewFidelity {
+    """(Preview: may change in a minor release.) The engine fidelity status."""
+    status: String!
+    """(Preview: may change in a minor release.) The reasons supporting the fidelity assessment."""
+    reasons: [String!]!
+    """(Preview: may change in a minor release.) The human-readable fidelity label."""
+    label: String!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewExpectationResult evidence."""
+type AutomationReviewExpectationResult {
+    """(Preview: may change in a minor release.) The zero-based expectation index."""
+    index: Int!
+    """(Preview: may change in a minor release.) The expectation name."""
+    name: String!
+    """(Preview: may change in a minor release.) The window to which this expectation applies."""
+    window: AutomationReviewWindowRole!
+    """(Preview: may change in a minor release.) The draft verdict for this expectation."""
+    verdict: AutomationReviewVerdict!
+    """(Preview: may change in a minor release.) The baseline verdict for this expectation."""
+    baseline: AutomationReviewVerdict!
+    """(Preview: may change in a minor release.) The reason for the draft verdict."""
+    reason: String!
+    """(Preview: may change in a minor release.) The reason for the baseline verdict."""
+    baselineReason: String!
+    """(Preview: may change in a minor release.) The readings supporting this verdict."""
+    evidence: [AutomationReviewReading!]!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewReading evidence."""
+type AutomationReviewReading {
+    """(Preview: may change in a minor release.) The device token."""
+    device: String!
+    """(Preview: may change in a minor release.) The reading time, in RFC3339 format."""
+    at: String!
+    """(Preview: may change in a minor release.) The recorded value, or null when the reading has no value."""
+    value: Float
+    """(Preview: may change in a minor release.) The reading span converted from nanoseconds to seconds."""
+    spanSeconds: Float!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewWindowResult evidence."""
+type AutomationReviewWindowResult {
+    """(Preview: may change in a minor release.) Whether this is the incident or normal window."""
+    role: AutomationReviewWindowRole!
+    """(Preview: may change in a minor release.) The start of the window, in RFC3339 format."""
+    start: String!
+    """(Preview: may change in a minor release.) The end of the window, in RFC3339 format."""
+    end: String!
+    """(Preview: may change in a minor release.) The replay lead-in start, in RFC3339 format."""
+    leadInStart: String!
+    """(Preview: may change in a minor release.) The recorded input stream."""
+    stream: String!
+    """(Preview: may change in a minor release.) The first stream sequence as a decimal string, without numeric narrowing."""
+    firstSeq: String!
+    """(Preview: may change in a minor release.) The last stream sequence as a decimal string, without numeric narrowing."""
+    lastSeq: String!
+    """(Preview: may change in a minor release.) The digest of the recorded comparison inputs."""
+    inputDigest: String!
+    """(Preview: may change in a minor release.) The window degradation reasons."""
+    degraded: [String!]!
+    """(Preview: may change in a minor release.) The total change counts before truncation."""
+    counts: AutomationReviewChangeCounts!
+    """(Preview: may change in a minor release.) Whether the engine limited the listed changes."""
+    changesTruncated: Boolean!
+    """(Preview: may change in a minor release.) The replay coverage for each selected device."""
+    devices: [AutomationReviewDeviceCoverage!]!
+    """(Preview: may change in a minor release.) The listed automation intent differences."""
+    changes: [AutomationReviewChange!]!
+}
+
+"""(Preview: may change in a minor release.) Total intent change counts for one window."""
+type AutomationReviewChangeCounts {
+    """(Preview: may change in a minor release.) The number of unchanged paired intents."""
+    unchanged: Int!
+    """(Preview: may change in a minor release.) The number of added intents."""
+    added: Int!
+    """(Preview: may change in a minor release.) The number of removed intents."""
+    removed: Int!
+    """(Preview: may change in a minor release.) The number of shifted paired intents."""
+    shifted: Int!
+    """(Preview: may change in a minor release.) The number of paired intents whose content changed."""
+    contentChanged: Int!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewDeviceCoverage evidence."""
+type AutomationReviewDeviceCoverage {
+    """(Preview: may change in a minor release.) The device token."""
+    device: String!
+    """(Preview: may change in a minor release.) Reading counts by metric key, sorted by key."""
+    readings: [AutomationReviewMetricCount!]!
+    """(Preview: may change in a minor release.) Reading counts by profile version token, sorted by key."""
+    versions: [AutomationReviewMetricCount!]!
+    """(Preview: may change in a minor release.) The baseline starting state."""
+    stateBase: AutomationReviewStartState!
+    """(Preview: may change in a minor release.) The draft starting state."""
+    stateDraft: AutomationReviewStartState!
+    """(Preview: may change in a minor release.) When replay first diverged, in RFC3339 format, if it diverged."""
+    divergence: String
+    """(Preview: may change in a minor release.) The number of late baseline readings."""
+    lateBase: Int!
+    """(Preview: may change in a minor release.) The number of late draft readings."""
+    lateDraft: Int!
+    """(Preview: may change in a minor release.) The first covered reading time, or null if none."""
+    first: String
+    """(Preview: may change in a minor release.) The last covered reading time, or null if none."""
+    last: String
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewMetricCount evidence."""
+type AutomationReviewMetricCount {
+    """(Preview: may change in a minor release.) The metric key, or profile version token for version counts. Entries are sorted by key."""
+    key: String!
+    """(Preview: may change in a minor release.) The number of recorded occurrences."""
+    count: Int!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewChange evidence."""
+type AutomationReviewChange {
+    """(Preview: may change in a minor release.) How the draft changes automation."""
+    kind: AutomationReviewChangeKind!
+    """(Preview: may change in a minor release.) The device token."""
+    device: String!
+    """(Preview: may change in a minor release.) The automation intent subject."""
+    subject: String!
+    """(Preview: may change in a minor release.) The intent discriminator used for pairing."""
+    discriminator: String!
+    """(Preview: may change in a minor release.) The baseline intent time, in RFC3339 format, if present."""
+    baseAt: String
+    """(Preview: may change in a minor release.) The draft intent time, in RFC3339 format, if present."""
+    draftAt: String
+    """(Preview: may change in a minor release.) The signed paired-intent shift converted from nanoseconds to seconds."""
+    shiftSeconds: Float!
+    """(Preview: may change in a minor release.) The baseline intent content, if present."""
+    baseContent: AutomationReviewIntentContent
+    """(Preview: may change in a minor release.) The draft intent content, if present."""
+    draftContent: AutomationReviewIntentContent
+    """(Preview: may change in a minor release.) Whether paired intent content changed."""
+    contentChanged: Boolean!
+    """(Preview: may change in a minor release.) The reading that caused this intent difference."""
+    reading: AutomationReviewReading!
+    """(Preview: may change in a minor release.) Whether this difference follows the first state divergence."""
+    afterDivergence: Boolean!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewIntentContent evidence."""
+type AutomationReviewIntentContent {
+    """(Preview: may change in a minor release.) The alarm severity, when applicable."""
+    severity: String
+    """(Preview: may change in a minor release.) The command payload, when applicable."""
+    payload: String
+    """(Preview: may change in a minor release.) The relative expiry converted from nanoseconds to seconds, if present."""
+    relativeExpirySeconds: Float
+    """(Preview: may change in a minor release.) The expiry label, when applicable."""
+    expiryLabel: String
+    """(Preview: may change in a minor release.) The configuration digest, when applicable."""
+    configDigest: String
+    """(Preview: may change in a minor release.) The request body digest, when applicable."""
+    bodyDigest: String
+    """(Preview: may change in a minor release.) The request method, when applicable."""
+    method: String
+}
+
+"""(Preview: may change in a minor release.) RunAutomationReviewInput parameters."""
+input RunAutomationReviewInput {
+    """(Preview: may change in a minor release.) The profile whose draft is reviewed."""
+    profileToken: String!
+    """(Preview: may change in a minor release.) The changed rule token, when one rule is compared."""
+    ruleToken: String
+    """(Preview: may change in a minor release.) The device tokens selected for replay."""
+    deviceTokens: [String!]!
+    """(Preview: may change in a minor release.) The incident and normal replay windows."""
+    windows: [AutomationReviewWindowInput!]!
+    """(Preview: may change in a minor release.) The expectations to evaluate against the comparison."""
+    expectations: [AutomationReviewExpectationInputValue!]
+    """(Preview: may change in a minor release.) The maximum pairing shift, in seconds; null uses the engine default."""
+    shiftWindowSeconds: Int
+    """(Preview: may change in a minor release.) A caller-generated idempotency key for this review request."""
+    requestId: String!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewWindowInput parameters."""
+input AutomationReviewWindowInput {
+    """(Preview: may change in a minor release.) Whether this is the incident or normal window."""
+    role: AutomationReviewWindowRole!
+    """(Preview: may change in a minor release.) RFC3339 timestamp; invalid timestamps are invalid arguments."""
+    start: String!
+    """(Preview: may change in a minor release.) RFC3339 timestamp; invalid timestamps are invalid arguments."""
+    end: String!
+}
+
+"""(Preview: may change in a minor release.) AutomationReviewExpectationInputValue parameters."""
+input AutomationReviewExpectationInputValue {
+    """(Preview: may change in a minor release.) The window to which this expectation applies."""
+    window: AutomationReviewWindowRole!
+    """(Preview: may change in a minor release.) The expectation name."""
+    name: String
+    """(Preview: may change in a minor release.) One rule-test expectation as JSON, using the event-processing expectation vocabulary."""
+    expect: String!
+}
+
+"""(Preview: may change in a minor release.) Profile, lifecycle, draft matching and paging filters."""
+input AutomationReviewSearchCriteria {
+    """(Preview: may change in a minor release.) The profile whose draft is reviewed."""
+    profileToken: String!
+    """(Preview: may change in a minor release.) The current review lifecycle state."""
+    state: AutomationReviewState
+    """(Preview: may change in a minor release.) Only reviews whose draft digest matches, or does not match, the current draft."""
+    matchingCurrentDraft: Boolean
+    """(Preview: may change in a minor release.) The page to return, starting at 1."""
+    pageNumber: Int!
+    """(Preview: may change in a minor release.) The number of reviews per page."""
+    pageSize: Int!
+}
+
+"""(Preview: may change in a minor release.) One page of automation reviews."""
+type AutomationReviewSearchResults {
+    """(Preview: may change in a minor release.) The reviews on this page, newest first."""
+    results: [AutomationReview!]!
+    """(Preview: may change in a minor release.) Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
+}
+
+"""(Preview: may change in a minor release.) Effective automation publish protection settings."""
+type AutomationReviewPolicySettings {
+    """(Preview: may change in a minor release.) Whether publishing requires an approved review."""
+    required: Boolean!
+    """(Preview: may change in a minor release.) Number of distinct approvals required."""
+    requiredApprovals: Int!
+    """(Preview: may change in a minor release.) Whether review creators and draft authors may approve."""
+    allowSelfApproval: Boolean!
+    """(Preview: may change in a minor release.) Approval lifetime in seconds."""
+    approvalTtlSeconds: Int!
+    """(Preview: may change in a minor release.) Maximum age of the second factor in seconds."""
+    stepUpMaxAgeSeconds: Int!
+}
+
+"""(Preview: may change in a minor release.) The lifecycle of a proposed policy change."""
+enum AutomationReviewPolicyChangeState {
+    """(Preview: may change in a minor release.) Waiting for approval or a permitted delay."""
+    PENDING
+    """(Preview: may change in a minor release.) The proposal has taken effect."""
+    APPLIED
+    """(Preview: may change in a minor release.) The proposal was cancelled."""
+    CANCELLED
+    """(Preview: may change in a minor release.) A later policy change replaced this proposal."""
+    SUPERSEDED
+}
+
+"""(Preview: may change in a minor release.) A proposed loosening of automation protection."""
+type AutomationReviewPolicyChange {
+    """(Preview: may change in a minor release.) The policy change token."""
+    token: String!
+    """(Preview: may change in a minor release.) The proposed settings; unreadable stored JSON returns null and an error."""
+    proposed: AutomationReviewPolicySettings
+    """(Preview: may change in a minor release.) The person proposing the change."""
+    proposedBy: String!
+    """(Preview: may change in a minor release.) When proposed, as an RFC 3339 timestamp."""
+    proposedAt: String!
+    """(Preview: may change in a minor release.) When the change may take effect without a second person, as an RFC 3339 timestamp."""
+    effectiveAt: String
+    """(Preview: may change in a minor release.) The proposal lifecycle state."""
+    state: AutomationReviewPolicyChangeState!
+    """(Preview: may change in a minor release.) Who decided the proposal, when decided."""
+    decidedBy: String
+    """(Preview: may change in a minor release.) When decided, as an RFC 3339 timestamp."""
+    decidedAt: String
+}
+
+"""(Preview: may change in a minor release.) Automation publish protection for a profile."""
+type AutomationReviewPolicy {
+    """(Preview: may change in a minor release.) The protected profile token."""
+    profileToken: String!
+    """(Preview: may change in a minor release.) The settings currently enforced; defaults apply when no policy is stored."""
+    effective: AutomationReviewPolicySettings!
+    """(Preview: may change in a minor release.) The stored revision, or zero when no policy is stored."""
+    revision: Int!
+    """(Preview: may change in a minor release.) Who last updated the stored policy, or null when none is stored."""
+    updatedBy: String
+    """(Preview: may change in a minor release.) When the stored policy was updated, as an RFC 3339 timestamp, or null when none is stored."""
+    updatedAt: String
+    """(Preview: may change in a minor release.) The pending loosening proposal, if any."""
+    pendingChange: AutomationReviewPolicyChange
+}
+
+"""(Preview: may change in a minor release.) Requested automation protection settings; omitted optional fields use their defaults."""
+input AutomationReviewPolicyInput {
+    """(Preview: may change in a minor release.) Whether publishing requires review."""
+    required: Boolean!
+    """(Preview: may change in a minor release.) Required approvals; defaults to 1."""
+    requiredApprovals: Int
+    """(Preview: may change in a minor release.) Whether creators and authors may approve; defaults to false."""
+    allowSelfApproval: Boolean
+    """(Preview: may change in a minor release.) Approval lifetime in seconds; defaults to 86400."""
+    approvalTtlSeconds: Int
+    """(Preview: may change in a minor release.) Maximum second-factor age in seconds; defaults to 900."""
+    stepUpMaxAgeSeconds: Int
+}
+
+"""(Preview: may change in a minor release.) Whether the policy was applied immediately and its resulting view."""
+type SetAutomationReviewPolicyResult {
+    """(Preview: may change in a minor release.) True when applied immediately; false when approval or a delay is pending."""
+    applied: Boolean!
+    """(Preview: may change in a minor release.) The resulting policy."""
+    policy: AutomationReviewPolicy
+}
+
+"""(Preview: may change in a minor release.) An activation change made outside review."""
+enum AutomationReviewBreakGlassAction {
+    """(Preview: may change in a minor release.) Changing the active profile version."""
+    ROLLBACK
+    """(Preview: may change in a minor release.) Changing the profile bound to a type."""
+    REPOINT_TYPE
+    """(Preview: may change in a minor release.) Moving a device out of a protected type."""
+    MOVE_DEVICE
+}
+
+"""(Preview: may change in a minor release.) The recorded reason and person for a protected activation change."""
+type AutomationReviewBreakGlass {
+    """(Preview: may change in a minor release.) The activation change action."""
+    action: AutomationReviewBreakGlassAction!
+    """(Preview: may change in a minor release.) The affected target token."""
+    target: String!
+    """(Preview: may change in a minor release.) Why the change was necessary."""
+    reason: String!
+    """(Preview: may change in a minor release.) The person making the change."""
+    actor: String!
+    """(Preview: may change in a minor release.) When recorded, as an RFC 3339 timestamp."""
+    at: String!
+}
+
 type Query {
+    """(Preview: may change in a minor release.) Read automation protection settings. Requires device:read and an unscoped caller; an unknown profile returns NOT_FOUND."""
+    automationReviewPolicy(
+        """(Preview: may change in a minor release.) The profile token."""
+        profileToken: String!
+    ): AutomationReviewPolicy
+    """(Preview: may change in a minor release.) Read at most 200 activation changes made outside review, newest first. Requires device:read and an unscoped caller; an unknown profile returns NOT_FOUND."""
+    automationReviewBreakGlass(
+        """(Preview: may change in a minor release.) The profile token."""
+        profileToken: String!
+    ): [AutomationReviewBreakGlass!]
+
+    """(Preview: may change in a minor release.) Read frozen automation evidence. Requires device:read and event:read and an unscoped caller."""
+    automationReview(
+        """(Preview: may change in a minor release.) The review token."""
+        token: String!
+    ): AutomationReview
+
+    """(Preview: may change in a minor release.) List automation reviews. Requires device:read and event:read and an unscoped caller."""
+    automationReviews(
+        """(Preview: may change in a minor release.) Profile, state, draft matching and paging filters."""
+        criteria: AutomationReviewSearchCriteria!
+    ): AutomationReviewSearchResults
+
+
     """
     Returns the device types with the given ids. Ids that match no device type are
     omitted, an id that is not a number fails the request, and more than 1000 ids are
@@ -4479,7 +5812,8 @@ type Query {
     """
     Lists the distinct values currently in use for a free-text classification field across
     the tenant's device types or profiles, sorted, without empty values. An authoring form
-    can offer them as suggestions. Requires device:read.
+    can offer them as suggestions. More than 1000 distinct values are refused with
+    LIMIT_EXCEEDED rather than listed in part. Requires device:read.
     """
     facetValues(
         """The field whose values to list."""
@@ -4867,6 +6201,16 @@ type Query {
     # List raised alarms that meet criteria.
     alarms(criteria: AlarmSearchCriteria!): AlarmSearchResults!
     """
+    Lists alarm disposition labels, newest labelled cycle first: every labelled cycle, including
+    those before an alarm's current one. It is the read a backtest scores a rule against.
+    Requires alarm:read; a member whose access is limited to some customers reads the labels of
+    the cycles raised under its customers.
+    """
+    alarmDispositions(
+        """The facets the listed labels must match, and the page to return."""
+        criteria: AlarmDispositionSearchCriteria!
+    ): AlarmDispositionSearchResults!
+    """
     Counts the alarms matching the criteria per originating device type and severity, in one
     read, for a view that groups alarms by type. Only alarms on devices the caller can read are
     counted, so a type's count equals the total of alarms(criteria) filtered to that type.
@@ -5043,6 +6387,39 @@ type Query {
     ): IntegrationDecoderPlan
     """
     Service-only: callable with a service token that holds device:read, and refused for any
+    user's access token. What the ingest path needs to know about the payload decoder of the
+    device with this token, for a device that publishes its own payload: whether the active
+    published version of its type's profile declares one, which input it reads, and the figures
+    the ingest charge is built from. The credential the device presented is authenticated
+    first, and the answer is null for every failure to do so (nothing presented, an unknown,
+    disabled or expired credential, a wrong secret, a credential that belongs to another device,
+    a device that does not exist): those are indistinguishable from one another and say nothing
+    about whether a decoder is attached. A device that authenticates and whose type has no decoder
+    is present: false.
+    """
+    deviceDecoder(
+        """Token of the device the uplink is addressed to."""
+        deviceToken: String!
+        """Type of the credential the device presented (ACCESS_TOKEN, MQTT_BASIC)."""
+        credentialType: String!
+        """The credential id the device presented (for an access token, the token)."""
+        credentialId: String!
+        """The secret the device presented, for a credential type that carries one."""
+        credentialSecret: String
+    ): DeviceDecoderPlan
+    """
+    Service-only: callable with a service token that holds device:read, and refused for any
+    user's access token. The same question as deviceDecoder, for a device that published its own
+    payload on its raw-payload MQTT topic: the platform's broker authenticated the device at
+    connect and confined it to its own topic, so no credential is presented. Null when no device
+    has this token; present: false for a device whose type has no decoder.
+    """
+    brokerAssertedDeviceDecoder(
+        """Token of the device the broker confined the publish to."""
+        deviceToken: String!
+    ): DeviceDecoderPlan
+    """
+    Service-only: callable with a service token that holds device:read, and refused for any
     user's access token. Proves a bearer token belongs to the integration with this token.
     Returns the integration when it does, and null for every failure: no such integration and
     a wrong token are indistinguishable. A switched-off integration whose token matches is
@@ -5055,6 +6432,26 @@ type Query {
         """The bearer token the sender presented."""
         secret: String!
     ): Integration
+    """
+    Service-only: callable with a service token that holds device:read, and refused for any
+    user's access token. The ingest door's one question about an event's credential: would the
+    credential its body carries authenticate under the device authentication policy the
+    event resolver applies? True when it would (or when the policy asks for none); false only for
+    an authentication failure, with no word on which: an unknown credential, an expired one, a
+    wrong secret, another device's credential and a missing one the policy requires are one
+    answer. A database failure is an error, never false. The caller MUST throttle failures per
+    credential: unlike the resolver's, this verdict reaches the sender.
+    """
+    checkDeviceCredential(
+        """The device token the event names, or empty."""
+        device: String!
+        """The credential type the event presents (for example MQTT_BASIC), or empty."""
+        credentialType: String!
+        """The credential id the event presents, or empty."""
+        credentialId: String!
+        """The credential secret the event presents, or null."""
+        secret: String
+    ): Boolean!
     """
     The sender-named devices an integration has seen that the tenant has no device in scope
     for, most recently seen first. Requires device:read.
@@ -5096,6 +6493,13 @@ type Query {
     entityRelationshipTypesByToken(tokens: [String!]!): [EntityRelationshipType!]!
     # List entity relationship types that meet criteria.
     entityRelationshipTypes(criteria: EntityRelationshipTypeSearchCriteria!): EntityRelationshipTypeSearchResults!
+    """
+    The tenant's semantic context: the vocabulary packs it has enabled and the custom prefixes
+    it declared. A tenant that never set one has an empty context, which enables nothing, so
+    no binding is accepted. Requires device:read; a member limited to part of the tenant may
+    read it. Null only on an error, which says why.
+    """
+    semanticContext: SemanticContext
     # Find entity relationships by unique id.
     entityRelationshipsById(ids: [String!]!): [EntityRelationship!]!
     # Find entity relationships by unique token.
@@ -5178,6 +6582,25 @@ type Query {
         """
         alreadyHeld: Boolean
     ): CommandDispatchSchedule!
+    """
+    Which of the named devices take their commands over HTTP_PULL: the ones that exist, are
+    enabled, and whose device type has commandChannel HTTP_PULL. A device that does not exist
+    or is disabled is simply absent from the answer. Requires device:read.
+    """
+    commandPullDevices(
+        """Tokens of the devices to ask about, at most 2000."""
+        deviceTokens: [String!]!
+    ): [String!]!
+    """
+    Service plane. Proves a device's access token for the HTTP command endpoints and says which
+    device it belongs to. Null when the token is unknown, revoked or expired, or the device is
+    disabled: one answer for all of them. Reads the database on every call, so a revocation
+    takes effect on the next request. Requires a service token with device:read.
+    """
+    authenticateCommandChannel(
+        """The device's access token."""
+        credentialId: String!
+    ): CommandChannelAccess
 
     # Find customer types by unique id.
     customerTypesById(ids: [ID!]!): [CustomerType!]!
@@ -5209,10 +6632,122 @@ type Query {
     # List areas that meet criteria. Scoped as areasById; pagination counts only the areas
     # the member reaches.
     areas(criteria: AreaSearchCriteria!): AreaSearchResults!
+    """
+    (Preview: may change in a minor release.) The tenant's agent proposals, newest first. A person
+    needs alarm:read; an AI agent's token (one holding alarm:propose) sees only its own client's
+    proposals for the person it acts for. A member limited to part of the tenant is refused.
+    """
+    agentProposals(
+        """(Preview: may change in a minor release.) The filters, and the page to return."""
+        criteria: AgentProposalSearchCriteria!
+    ): AgentProposalSearchResults!
+    """
+    (Preview: may change in a minor release.) One agent proposal by token, under the same rules as
+    agentProposals. A token that names no proposal the caller may see fails with NOT_FOUND.
+    """
+    agentProposal(
+        """(Preview: may change in a minor release.) The proposal's token."""
+        token: String!
+    ): AgentProposal!
 }
 
 # Contains mutations executed against model.
 type Mutation {
+    """(Preview: may change in a minor release.) Set automation protection. Protecting requires every enabled rule of the active version to read only recorded telemetry: no device attributes, no calculated metric reading device constants and no group scope. Tightening applies at once. Loosening (removing protection, fewer approvals, allowing self-approval, a longer approval lifetime or step-up age) waits for a second person's approval, or for 24 hours when self-approval is allowed. Requires device:write and a person's own unscoped session."""
+    setAutomationReviewPolicy(
+        """(Preview: may change in a minor release.) The profile token."""
+        profileToken: String!
+        """(Preview: may change in a minor release.) The protection settings to request."""
+        settings: AutomationReviewPolicyInput!
+    ): SetAutomationReviewPolicyResult
+    """(Preview: may change in a minor release.) Approve a pending policy change. Requires device:write, a second person's own unscoped session and a recently verified second factor; the proposer is refused."""
+    approveAutomationReviewPolicyChange(
+        """(Preview: may change in a minor release.) The policy change token."""
+        token: String!
+    ): AutomationReviewPolicy
+    """(Preview: may change in a minor release.) Cancel a pending policy change. Requires device:write and a person's own unscoped session."""
+    cancelAutomationReviewPolicyChange(
+        """(Preview: may change in a minor release.) The policy change token."""
+        token: String!
+    ): AutomationReviewPolicy
+
+    """(Preview: may change in a minor release.) Compare a profile draft with its published baseline. Requires an unscoped person with device:write and event:read."""
+    runAutomationReview(
+        """(Preview: may change in a minor release.) The draft, devices, windows and expectations to review."""
+        input: RunAutomationReviewInput!
+    ): AutomationReview
+
+    """(Preview: may change in a minor release.) Approve frozen evidence. Requires an unscoped person with device:write and event:read and a recent second factor; refuses the review creator and draft authors."""
+    approveAutomationReview(
+        """(Preview: may change in a minor release.) The review token."""
+        token: String!
+        """(Preview: may change in a minor release.) The reviewDigest the approver was shown."""
+        digest: String!
+    ): AutomationReview
+
+    """(Preview: may change in a minor release.) Reject a review. Requires an unscoped person with device:write and event:read."""
+    rejectAutomationReview(
+        """(Preview: may change in a minor release.) The review token."""
+        token: String!
+        """(Preview: may change in a minor release.) An optional decision note."""
+        note: String
+    ): AutomationReview
+
+
+    """
+    (Preview: may change in a minor release.) An AI agent asks for alarms to be acknowledged or
+    cleared. Only an agent's token holding alarm:propose may call it; a person's own session is
+    refused with AGENT_ONLY and acts through acknowledgeAlarm and clearAlarm instead. The
+    tenant's agent policy decides, and a request it allows waits for people to approve it. In
+    this preview, off by default, the final approval carries out the action as the approving
+    person in one transaction after asking the policy again. If an alarm was raised again or
+    policy now refuses, it ends REFUSED without effects. Execution is never automatic.
+    A member limited to part of the tenant is refused.
+    """
+    proposeAlarmAction(
+        """(Preview: may change in a minor release.) The request."""
+        input: AgentAlarmProposalInput!
+    ): AgentProposalOutcome!
+    """
+    (Preview: may change in a minor release.) A person approves an agent proposal. The digest
+    must be the one shown for the proposal. The approver must be a person (never an agent), hold
+    the write the action needs, be in an approver role of the agent policy, and have verified a
+    second factor recently enough (STEP_UP_REQUIRED otherwise). The final approval carries out
+    the action as that person, in one transaction after asking the policy again. If an alarm
+    was raised again or policy now refuses, the proposal ends REFUSED and nothing is done.
+    Earlier approvals are recorded. This preview is off by default and never automatic.
+    """
+    approveAgentProposal(
+        """(Preview: may change in a minor release.) The proposal's token."""
+        token: String!
+        """(Preview: may change in a minor release.) The digest shown for the proposal."""
+        digest: String!
+    ): AgentProposal!
+    """
+    (Preview: may change in a minor release.) A person rejects an agent proposal that is still
+    waiting. Needs the write the action needs; an agent is refused.
+    """
+    rejectAgentProposal(
+        """(Preview: may change in a minor release.) The proposal's token."""
+        token: String!
+        """(Preview: may change in a minor release.) Why, at most 512 bytes."""
+        note: String
+    ): AgentProposal!
+    """
+    Replaces the tenant's semantic context and returns it. Enabling a pack or declaring a
+    custom prefix makes its terms bindable; a pack this build does not ship, a custom prefix
+    that shadows a pack's, or overlapping namespaces fail with INVALID_ARGUMENT. A context
+    that would leave any stored binding unexplained (it stops enabling a pack, or declaring a
+    custom namespace, that a binding uses) is refused with SEMANTIC_CONTEXT_IN_USE and
+    extensions.references, the number of such bindings; keep the vocabulary or unbind them
+    first. Two first sets for one tenant at once: the loser fails with CONFLICT, and may read
+    the context and retry. Requires device:write, and a member limited to part of the tenant
+    is refused. Null only on an error, which says why.
+    """
+    setSemanticContext(
+        """The context to store. It replaces the stored one whole."""
+        request: SemanticContextRequest!
+    ): SemanticContext
     """Creates a device type and returns it. Requires device:write."""
     createDeviceType(
         """The new device type's fields. Although the schema lets it be omitted, a call without it fails."""
@@ -5227,6 +6762,8 @@ type Mutation {
         token: String!
         """The fields to change."""
         request: DeviceTypeUpdateRequest!
+        """(Preview: may change in a minor release.) Why the device type is being re-pointed outside review. Required (with a second factor verified recently) on a profile re-point to or from a protected profile, where it is recorded with the person; ignored otherwise."""
+        breakGlassReason: String
     ): DeviceType!
     """
     Deletes a device type. Returns true when it was deleted and false when no device type
@@ -5367,6 +6904,7 @@ type Mutation {
     use. The draft's enabled detection rules are checked first; a rejected
     rule, or a check that cannot be completed, fails the publish and nothing is stored.
     Fails if no profile has the token. Returns the new version. Requires device:write.
+    On a protected profile the approved review must still match the draft, the active version, the policy and its approvers' standing.
     """
     publishDeviceProfile(
         """Token of the profile to publish."""
@@ -5375,6 +6913,8 @@ type Mutation {
         label: String
         """Optional notes for the version, up to 1024 characters."""
         description: String
+        """(Preview: may change in a minor release.) The approved automation review this publish consumes. Required when the profile is protected by an automation review policy, where a publish without one is refused with REVIEW_REQUIRED; ignored otherwise."""
+        automationReviewToken: String
     ): DeviceProfileVersion!
     """
     Makes an existing published version the one devices use again. The draft and the version
@@ -5388,6 +6928,8 @@ type Mutation {
         token: String!
         """Number of the published version to make active."""
         version: Int!
+        """(Preview: may change in a minor release.) Why the active version of a protected profile is being changed outside review. Required (with a second factor verified recently) on a protected profile, where it is recorded with the person; ignored otherwise."""
+        breakGlassReason: String
     ): DeviceProfile!
     """
     Adds a metric definition to a profile's draft and returns it. It reaches devices when
@@ -5484,6 +7026,36 @@ type Mutation {
     acknowledgeAlarms(tokens: [String!]!): BulkAcknowledgeAlarmsResult!
     # Clear a raised alarm (manual operator override).
     clearAlarm(token: String!): Alarm!
+    """
+    Labels the CURRENT cycle of an alarm with an operator's verdict (see AlarmDisposition) and
+    returns the alarm. Only the current cycle can be labelled: once the alarm is raised again,
+    the earlier cycle's disposition can be read but no longer written. Labelling changes nothing
+    else about the alarm and emits no alarm event; labelling a cleared alarm is the ordinary
+    case. Labelling a cycle again replaces its disposition. The labelling identity is the
+    authenticated subject, recorded server-side. An alarm deleted while the label is being
+    written answers NOT_FOUND, as an unknown token does.
+
+    Requires alarm:write. A member whose access is limited to some customers cannot label
+    (FORBIDDEN): labels are ground truth for the tenant's rules.
+    """
+    setAlarmDisposition(
+        """The alarm, by its token."""
+        token: String!
+        """
+        The verdict. A value that is not an AlarmDispositionLabel is refused when the request
+        is validated.
+        """
+        label: AlarmDispositionLabel!
+        """Why, at most 1000 characters. Empty or omitted is no note."""
+        note: String
+        """
+        The cycle being labelled, as the alarm's raisedTime was served. When given, the label
+        is refused if the alarm has been raised again since ("alarm was modified by another
+        writer; reload and try again"), so a verdict on one cycle never lands on the next.
+        Omitted labels the alarm's current cycle.
+        """
+        raisedTime: String
+    ): Alarm!
     # Set (upsert) an entity attribute.
     setEntityAttribute(request: EntityAttributeSetRequest!): EntityAttribute!
     # Delete an entity attribute by its natural key.
@@ -5555,6 +7127,8 @@ type Mutation {
         token: String!
         """The fields to change."""
         request: DeviceUpdateRequest!
+        """(Preview: may change in a minor release.) Why the device is being moved outside review. Required (with a second factor verified recently) on moving a device out of a type bound to a protected profile, where it is recorded with the person; ignored otherwise."""
+        breakGlassReason: String
     ): Device!
     """
     Deletes a device together with its credentials, replacement history, relationships,
@@ -5705,7 +7279,10 @@ type Mutation {
     its credential or its device does not let it register again. It applies to any certificate on a
     verified path, a leaf or an intermediate. Name it with exactly one of certificatePem and
     fingerprintSha256. Revoking one already revoked returns the existing entry. The anchor's own
-    certificate is refused (disable the anchor instead). This does not end sessions already open.
+    certificate is refused (disable the anchor instead). The live broker sessions of the devices the
+    certificate affects are ended: those whose credential is this leaf, or every device under the
+    anchor when the certificate is a CA that a registered credential's chain was seen to use. The
+    result's sessionsEnded says whether that was confirmed.
     """
     revokeDeviceCertificate(
         """Token of the trust anchor."""
@@ -5736,7 +7313,8 @@ type Mutation {
     from the next connect on every replica. Uploading the very CRL already in force changes
     nothing. The text is limited (the instance's callout.revocation.maxGraphqlCrlBytes, 2 MiB of
     DER at most); larger lists go over the streaming REST upload,
-    PUT /trust-anchors/{token}/crl on this service. This does not end sessions already open.
+    PUT /trust-anchors/{token}/crl on this service. The live sessions of the devices the list newly
+    revokes are ended; sessionsEnded on the result says whether that was confirmed.
     """
     putDeviceRevocationList(
         """Token of the trust anchor."""
@@ -5950,6 +7528,29 @@ type Mutation {
     updateArea(token: String!, request: AreaUpdateRequest!): Area!
     # Delete an area and its relationship edges.
     deleteArea(token: String!): Boolean!
+    """
+    Records where a device or an asset was installed. Needs device:write. The position is
+    refused, before anything is stored, when it is not a finite WGS84 coordinate. An entity
+    outside the caller's scope is NOT_FOUND.
+    """
+    setInstalledPosition(
+        """Whether token names a device or an asset."""
+        family: PositionFamily!
+        """The token of the device or asset."""
+        token: String!
+        """The position to record."""
+        position: InstalledPositionInput!
+    ): InstalledPosition!
+    """
+    Removes the installed position of a device or an asset. Needs device:write. Clearing an
+    entity that has none succeeds.
+    """
+    clearInstalledPosition(
+        """Whether token names a device or an asset."""
+        family: PositionFamily!
+        """The token of the device or asset."""
+        token: String!
+    ): Boolean!
 }
 
 # A single alarm state-change, pushed live to a subscriber (ADR-041 / ADR-037). It

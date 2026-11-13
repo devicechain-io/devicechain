@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/actiongate"
 	"github.com/devicechain-io/dc-microservice/entityevent"
 	"slices"
 	"sync/atomic"
@@ -16,6 +17,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 )
 
 // GeoFenceCapsResolver reads a tenant's three RESOLVED geofence caps — the per-tenant
@@ -71,7 +74,30 @@ type GeoFenceCapRefusalCounter interface {
 }
 
 type Api struct {
+	// RuleComparer is nil when recorded comparison is unavailable; runs fail closed.
+	RuleComparer      RuleComparer
+	PrincipalStanding PrincipalStandingChecker
+	// skipReviewGuardForOldPodTest is test-only: emulate previous-release writes so triggers can be tested.
+	skipReviewGuardForOldPodTest bool
+
 	RDB *rdb.RdbManager
+
+	// AgentDecider asks user-management for the tenant's decisions on agent proposals, under the
+	// caller's own token (actiongate.CallerDecider). Nil refuses every proposal and approval with
+	// POLICY_UNAVAILABLE: without the policy nothing is decided.
+	AgentDecider actiongate.Decider
+	// KillFeed is the liveness of the kill-event consumer that feeds the local actuation fence.
+	// Nil refuses every agent execution (fail closed).
+	KillFeed *KillFeed
+	// AgentEffectsExhausted counts committed transitions to the outbox attempt cap.
+	AgentEffectsExhausted prometheus.Counter
+	// beforeFenceForTest runs after the dependency check, before erasure and kill fence reads (tests only).
+	beforeFenceForTest func(tx *gorm.DB) error
+	// afterDecisionForTest runs right after the commit-point decision returns, before the
+	// in-memory checks; tests only; production SQL there would break the tail rule.
+	afterDecisionForTest func(tx *gorm.DB) error
+	// afterFenceForTest runs after the fence read and before effects (tests only).
+	afterFenceForTest func(tx *gorm.DB) error
 
 	// ceilings exports the observed size of the ceilinged collections (ceilings.go). Nil
 	// disables it.
@@ -102,6 +128,11 @@ type Api struct {
 	// credential disabled, rotated or deleted; the device disabled, replaced or deleted); see
 	// SessionKicker. Nil on an instance that runs no MQTT auth callout, and in tests.
 	SessionKicker SessionKicker
+
+	// RevocationResweepAfter is how long after its first sweep a certificate revocation's kick is
+	// repeated, to end a session admitted in the race with the revocation. Zero means
+	// DefaultRevocationResweepAfter; wiring validates it (ValidateRevocationResweepAfter).
+	RevocationResweepAfter time.Duration
 
 	// DeviceSecretKey digests every device credential secret a create or update carries,
 	// and verifies a presented one against its stored digest on the per-event path. It is
@@ -227,6 +258,9 @@ type Api struct {
 	// revocation holds the X.509 revocation store's fixed bounds and the slots that bound the
 	// CRL uploads one replica works on at once (SetRevocationLimits). Unset means the defaults.
 	revocation atomic.Pointer[revocationConfig]
+
+	// ocspPolicy is the instance-wide OCSP switch (SetOcspPolicy). Unset means everything off.
+	ocspPolicy atomic.Pointer[OcspPolicy]
 }
 
 // CacheEvictor drops the hot-path caches (ADR-022 B2) that a mutation makes stale.
@@ -295,7 +329,49 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 // inside the closure.
 func (api *Api) emitAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent) {
 	if api.AlarmPublisher != nil {
+		api.describeAlarmDevice(ctx, event)
 		api.AlarmPublisher.PublishAlarmEvent(ctx, event)
+	}
+}
+
+// alarmDeviceLookupTimeout bounds the device read that names an alarm event.
+const alarmDeviceLookupTimeout = 500 * time.Millisecond
+
+// describeAlarmDevice names the originating device on the event (token, name, type token) so
+// a subscriber such as notification-management can show a person which device it is. It is
+// best effort and never blocks the page: the transition is already committed, so a failed read
+// publishes the event without the names rather than not at all.
+func (api *Api) describeAlarmDevice(ctx context.Context, event *AlarmStateChangeEvent) {
+	if event.OriginatorType != string(entity.TypeDevice) || event.OriginatorId == 0 {
+		return
+	}
+	// Only the transitions that notify a person. An acknowledgement does not, and bulk
+	// acknowledgements (thousands of alarms) must not each pay a device read.
+	switch event.EventType {
+	case AlarmEventRaised, AlarmEventEscalated, AlarmEventCleared:
+	default:
+		return
+	}
+	// A short bound: naming is a courtesy to the reader, and a slow database must not hold the
+	// transition's emission.
+	rctx, cancel := context.WithTimeout(ctx, alarmDeviceLookupTimeout)
+	defer cancel()
+	devices, err := api.DevicesById(rctx, []uint{event.OriginatorId})
+	if err != nil {
+		log.Warn().Err(err).Str("alarm", event.AlarmToken).
+			Msg("Could not read the alarm's device to name it on the event; publishing it unnamed")
+		return
+	}
+	if len(devices) == 0 {
+		return
+	}
+	d := devices[0]
+	event.DeviceToken = d.Token
+	if d.Name.Valid {
+		event.DeviceName = d.Name.String
+	}
+	if d.DeviceType != nil {
+		event.DeviceTypeToken = d.DeviceType.Token
 	}
 }
 

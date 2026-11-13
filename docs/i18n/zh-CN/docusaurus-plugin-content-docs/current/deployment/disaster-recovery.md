@@ -325,6 +325,82 @@ dcctl secrets escrow show ~/backups/my-instance-rootkey.escrow
 
 原地轮换计划在首个稳定版本之后提供。
 
+## 数据库之外还存放了什么 {#other-state}
+
+除两个数据库外，实例还在三处保存数据：消息流、键值存储桶和对象存储。恢复对每一项负有三种义务之一，下表给出了平台创建的每个消息流和存储桶的答案：
+
+- **must-back-up。** 它保存着平台已经确认过的某些数据的唯一副本。数据库中没有它的记录，所以遗漏它的恢复会让它永久丢失。
+- **rebuildable。** 平台可以从数据库重新计算或重新发布它，或者由它所属的设备或人员再次发送。恢复后它从空开始，这是正确的。
+- **transient。** 它处于传输中或存活时间很短：会话、锁、管道缓冲区。恢复所丢失的内容受该项存活时长或管道延迟的限制。
+
+只有三项是 must-back-up：原始采集流、无法送达的出站连接器投递的死信流，以及对象存储。其余一切都会自行恢复。
+
+<!-- durability:start -->
+| Item | Kind | Class | What a restore owes it |
+|---|---|---|---|
+| `inbound-events` | stream | transient | events accepted and not yet resolved; a pipeline buffer, so the most a restore loses is the lag |
+| `integration-uplinks` | stream | transient | raw decoder input already accepted from an integration and not yet decoded; an in-flight buffer |
+| `resolved-events` | stream | transient | events resolved and not yet stored; the event store is the landing, so only the in-flight lag is lost |
+| `derived-events` | stream | transient | events derived by detection and not yet consumed; an in-flight buffer |
+| `device-attribute` | stream | rebuildable | attribute changes are projected from the device store, which is restored from the database |
+| `device-commands` | stream | rebuildable | commands are re-dispatched from the command-delivery store by its sweep |
+| `device-desired` | stream | rebuildable | the current desired state is held in the database and sent to a device again on its next sync |
+| `device-reports` | stream | rebuildable | a device sends its reports again, and its state is held in the database |
+| `device-events-capture` | stream | must-back-up | raw device telemetry already acknowledged to the device and not yet forwarded; the database holds no copy of it. No backup tool ships in this release. Telemetry acknowledged and not yet forwarded when the cluster is lost is the recovery gap, so keep the capture backlog drained. |
+| `command-responses` | stream | transient | a device answer not yet consumed; the command it answers is settled from its stored state as unanswered |
+| `connector-dispatch` | stream | transient | outbound deliveries not yet attempted; in flight, at least once |
+| `lpwan-downlink-events` | stream | transient | a network-server report not yet matched to its command; a lost report is settled by the pending record's deadline as unanswered |
+| `detection-rules-published` | stream | rebuildable | a rule publish is re-derived from the stored profile version |
+| `device-roster` | stream | rebuildable | roster changes are projected from the device store |
+| `geofence-set-manifest` | stream | rebuildable | a fence edit is re-derived from the stored fence set |
+| `entity-deleted` | stream | transient | a deletion fan-out in flight; a deletion announced just before the restore point may not have reached every consumer |
+| `device-ownership` | stream | rebuildable | ownership changes are projected from the stored relationships |
+| `agent-actuation-kills` | stream | rebuildable | the policy head retains the kill state and operators can repeat a kill |
+| `alarm-events` | stream | rebuildable | alarm state is held in the database and notification re-derives from it |
+| `raise-alarm` | stream | transient | an in-flight request from detection, which evaluates again on the next event |
+| `failed-decode` | stream | transient | a diagnostic record of an event that could not be decoded |
+| `failed-events` | stream | transient | records not yet stored by their consumer; the event store keeps each one once it is consumed |
+| `connector-dispatch.dead` | stream | must-back-up | the only record of an outbound delivery that could not be made, kept for the operator to inspect. No backup tool ships in this release. The records cannot be recovered once the stream is lost. |
+| `dead-letters` | stream | transient | letters not yet stored by their consumer; the database keeps each one once it is consumed |
+| `max-deliveries` | stream | transient | broker advisories for deliveries that ran out; empty in steady state |
+| `dc_refresh_tokens` | bucket | transient | a live session token; people sign in again |
+| `dc_oauth_codes` | bucket | transient | an authorization code that lives sixty seconds |
+| `dc_sso_state` | bucket | transient | an in-flight single sign-on attempt that lives ten minutes |
+| `dc_sso_codes` | bucket | transient | a completed single sign-on awaiting redemption for sixty seconds |
+| `dc_mfa_challenges` | bucket | transient | a second-factor challenge that lives five minutes |
+| `dc_credential_attempts` | bucket | transient | sign-in backoff counters that expire after ten minutes |
+| `dc_device_credential_attempts` | bucket | transient | device connect backoff counters that expire after ten minutes |
+| `dc_locks` | bucket | transient | held locks that expire after thirty seconds |
+| `dc_sparkplug_commands_awaiting` | bucket | transient | commands in flight inside a confirm window of at most two hours |
+| `dc_partition_placement` | bucket | rebuildable | a mirror of the placement table in the user-management database, rewritten every few minutes |
+| `dc_leases` | bucket | transient | partition leases that expire after thirty seconds; a restore must also be treated as a fence invalidation, because the epoch is the bucket revision and a rebuilt bucket restarts it |
+| `device-by-token` | bucket | rebuildable | a cache of the device store |
+| `relationships-by-source` | bucket | rebuildable | a cache of the relationship store |
+| `memberships-by-entity` | bucket | rebuildable | a cache of the group membership store |
+| `profile-resolution-by-type` | bucket | rebuildable | a cache of the published profile versions |
+| `scoped-groups-exist` | bucket | rebuildable | a cache of the group store |
+| `$MQTT_msgs` | gateway stream | transient | a second copy of every QoS 1 and 2 message, held only until the platform stream has it |
+| `$MQTT_out` | gateway stream | transient | outgoing QoS 2 release records, in flight |
+| `$MQTT_qos2in` | gateway stream | transient | inbound QoS 2 handshake state, in flight |
+| `$MQTT_sess` | gateway stream | rebuildable | persistent MQTT sessions and their subscriptions; a device that subscribes on every connect recovers by itself, one that relies on the broker having remembered its subscriptions must be made to subscribe again |
+| `$MQTT_rmsgs` | gateway stream | rebuildable | retained messages; the platform publishes none itself, so each one is whatever a device or an integration retained and must publish again |
+| `object-store` | object store | must-back-up | update artifact content and tenant branding images; the database holds only each object's size and digest. Snapshot the volume, or turn on versioning and replication for the bucket, and take that copy after the database base backup it belongs with. |
+<!-- durability:end -->
+
+此表由平台自身的声明生成，因此它列出的是运行中的服务所创建的内容。没有分类，就无法添加消息流或存储桶。
+
+### 对象存储 {#object-store-backup}
+
+对象存储保存更新制品的内容和租户的品牌图片。数据库只保存每个对象的大小和摘要，所以单独恢复数据库会带回一个内容可能缺失的目录。
+
+- **卷（默认）。** 使用集群的卷快照，或存储类提供的备份策略为该卷创建快照（chart 的 `blobStorage.persistence.annotations` 会把它带到卷声明上）。
+- **兼容 S3 的存储桶。** 存储桶归您所有，因此平台不会复制它。请开启版本控制和复制，或使用云服务商的备份服务。
+- **在与之配套的数据库基础备份之后再做副本。** 对象只写入一次，所以比数据库更新的副本会多出数据库不知道的几个对象，这不会造成危害。比数据库更旧的副本，会让数据库列为可用的制品背后没有内容。收到这种制品的设备无法下载它。请停用该制品，并用同一文件重新声明；凡使用过被停用制品的更新，都要重新分配。
+
+### 分区租约与单写入者区域 {#restore-fence}
+
+租约存储桶 `dc_leases` 保存每个单写入者所有者（检测、Sparkplug 和 LwM2M 接入区域、外部 MQTT 来源）对其分区的占有。它不会被备份，恢复后从空开始。其纪元计数器就是存储桶自身的修订号，所以也会重新开始。请在恢复数据库之前停止这些区域，并在恢复之后再启动它们，这样在授予新的占有时，旧占有的所有者不会仍在运行。
+
 ## `dcctl destroy` 之后 {#after-destroy}
 
 `dcctl destroy` 会删除实例的 Helm release、NATS 消息代理、事件存储、数据库及数据库登录身份、命名空间和本地状态。它**不会**删除托管文件，因为文件特意保存在该目录之外。Destroy 结束时会提示托管文件的位置。

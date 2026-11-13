@@ -74,7 +74,11 @@ type DeviceRevokedCertificateResolver struct {
 	M model.DeviceRevokedCertificate
 	S *SchemaResolver
 	C context.Context
+	// Ended is the revoke mutation's verdict on the live sessions; nil on every other path.
+	Ended *bool
 }
+
+func (r *DeviceRevokedCertificateResolver) SessionsEnded() *bool { return r.Ended }
 
 func (r *DeviceRevokedCertificateResolver) Kind() string               { return r.M.Kind }
 func (r *DeviceRevokedCertificateResolver) FingerprintSha256() *string { return r.M.Fingerprint }
@@ -108,6 +112,21 @@ func (r *DeviceRevokedCertificateSearchResultsResolver) Pagination() *SearchResu
 func (r *DeviceTrustAnchorResolver) RevocationMode() (string, error) {
 	m, err := r.M.RevocationModeOf()
 	return string(m), err
+}
+
+// OcspMode is the anchor's OCSP mode; a stored value this build does not know is an error, not OFF.
+func (r *DeviceTrustAnchorResolver) OcspMode() (string, error) {
+	m, err := r.M.OcspModeOf()
+	return string(m), err
+}
+
+// OcspResponderUrl is the anchor's own responder, null when it uses the certificates' entries.
+func (r *DeviceTrustAnchorResolver) OcspResponderUrl() *string {
+	if !r.M.OcspResponderUrl.Valid {
+		return nil
+	}
+	u := r.M.OcspResponderUrl.String
+	return &u
 }
 
 // RevocationStaleGrace is the grace in force for the anchor.
@@ -181,3 +200,4 @@ func (r *DeviceRevocationListResultResolver) List() *DeviceRevocationListResolve
 }
 func (r *DeviceRevocationListResultResolver) NewlyRevoked() int32 { return int32(r.M.NewlyRevoked) }
 func (r *DeviceRevocationListResultResolver) Unchanged() bool     { return r.M.Unchanged }
+func (r *DeviceRevocationListResultResolver) SessionsEnded() bool { return r.M.SessionsEnded }

@@ -208,6 +208,20 @@ var exemptions = []Exemption{
 			"ai_provider_tenant_grants, which carries a tenant column and is swept.",
 	},
 
+	// ---- event-management: the usage rollup's own bookkeeping ----------------
+	{
+		Schema: "event-management", Name: "tenant_usage_ledger", Class: ClassExempt,
+		Reason: "records which UTC hours of each day the usage rollup has computed, for ALL tenants " +
+			"at once (one row per day, a bitmask of hours). It names no tenant and holds no " +
+			"tenant's figures; those are in tenant_usage_daily/_hourly/_devices, which carry a " +
+			"tenant column and are swept.",
+	},
+	{
+		Schema: "event-management", Name: "tenant_usage_state", Class: ClassExempt,
+		Reason: "the usage rollup's own watermark: one row per rollup naming the next UTC hour it " +
+			"owes. It names no tenant and holds no tenant's figures.",
+	},
+
 	// ---- event-processing: the DETECT engine's own state --------------------
 	{
 		Schema: "event-processing", Name: "detect_snapshots", Class: ClassExternal, Store: "detect",
@@ -401,14 +415,18 @@ func redactionFor(t Table) (Redaction, bool) {
 var redactions = []Redaction{
 	{
 		Name:    "audit_events",
-		Columns: []string{"actor", "entity_label"},
+		Columns: []string{"actor", "entity_label", "on_behalf_of"},
 		Reason: "the audit journal is retained through a purge because it is the evidence that " +
 			"the deletion happened — sweeping it destroys the record of the erasure it is part of. " +
-			"Both columns that CARRY a person's name are emptied: `actor` is the acting JWT's username, " +
+			"Every column that CARRIES a person's name is emptied: `actor` is the acting JWT's username, " +
 			"which for every human token IS the email; `entity_label` is documented as a token, name " +
 			"or email, and really carries both — an identity row's label IS its email, and the " +
 			"customer-chosen tokens promoted from TokenReference across ~26 models are routinely " +
-			"people's and companies' names. What survives is the SHAPE of the activity: when, which " +
+			"people's and companies' names; `on_behalf_of` is the principal an approver acted for, " +
+			"which is the proposer's email (no row carries one yet, and it is listed ahead of its " +
+			"first writer so that writer cannot ship before the redaction). `client_id` (an OAuth " +
+			"client label), `session_id` (an opaque random sign-in value) and `proposal` (a server " +
+			"token) name no one and are retained with the rest of the shape. What survives is the SHAPE of the activity: when, which " +
 			"table, which operation, how many rows. What is destroyed cannot be recovered: the " +
 			"columns are written empty rather than hashed, because an email is a low-entropy " +
 			"enumerable space and a digest of one is reversible by anyone holding a user list. " +

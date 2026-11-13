@@ -83,6 +83,9 @@ func (s *storeIngest) start(ctx context.Context, nmgr *messaging.NatsManager) er
 		}
 		fwds = append(fwds, processor.NewStoreForwarder(Microservice, k.suffix, r, w))
 	}
+	if GatewayAnswers != nil {
+		StoreSource.UseGatewayFeedback(GatewayAnswers)
+	}
 	StoreSource.SetReader(events)
 	StoreSource.SetWriter(writer)
 	if err := StoreSource.Initialize(ctx); err != nil {

@@ -54,6 +54,28 @@ func (r *NotificationChannelResolver) HasSecret() (bool, error) {
 	return r.S.GetApi(r.C).Secrets.Exists(r.C, ref)
 }
 
+// HasSigningSecret reports whether the channel holds a webhook signing key, without exposing it.
+func (r *NotificationChannelResolver) HasSigningSecret() (bool, error) {
+	st, err := r.S.GetApi(r.C).ChannelSigningState(r.C, r.M.ID)
+	return st.Exists, err
+}
+
+// SigningRotationOpen reports whether a signing-key rotation is open (the previous key still
+// signs alongside the current one).
+func (r *NotificationChannelResolver) SigningRotationOpen() (bool, error) {
+	st, err := r.S.GetApi(r.C).ChannelSigningState(r.C, r.M.ID)
+	return st.Rotating, err
+}
+
+// IssuedChannelSigningSecretResolver resolves IssuedNotificationChannelSigningSecret, the one
+// response that carries a signing key.
+type IssuedChannelSigningSecretResolver struct {
+	M model.IssuedChannelSigningSecret
+}
+
+func (r *IssuedChannelSigningSecretResolver) Secret() string { return r.M.Secret }
+func (r *IssuedChannelSigningSecretResolver) Rotating() bool { return r.M.Rotating }
+
 func (r *NotificationChannelResolver) Enabled() bool { return r.M.Enabled }
 
 func (r *NotificationChannelResolver) Metadata() *string { return util.MetadataStr(r.M.Metadata) }

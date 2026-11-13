@@ -22,7 +22,6 @@ import (
 	"github.com/fatih/color"
 	nats "github.com/nats-io/nats.go"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
@@ -346,29 +345,15 @@ func settleEnvelopeMarks(ctx context.Context, dyn dynamic.Interface, st *State) 
 }
 
 // mutateInstanceAnnotations reads the Instance, lets change edit its annotations, and writes it
-// back as a compare-and-swap when change reports an edit.
+// back as a compare-and-swap when change reports an edit -- one that an operator status write
+// does not lose (updateInstanceMetadata).
 func mutateInstanceAnnotations(ctx context.Context, dyn dynamic.Interface, instance string, change func(map[string]string) bool) error {
-	inst, err := readInstanceCR(ctx, dyn, instance)
-	if err != nil {
-		return err
-	}
-	if inst == nil {
-		return fmt.Errorf("the declaration for instance %q is not there to record the envelope switch on", instance)
-	}
-	if inst.Annotations == nil {
-		inst.Annotations = map[string]string{}
-	}
-	if !change(inst.Annotations) {
-		return nil
-	}
-	obj, err := instanceToUnstructured(inst)
-	if err != nil {
-		return err
-	}
-	if _, err := dyn.Resource(instanceGVR).Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("recording the envelope switch on instance %q: %w", instance, err)
-	}
-	return nil
+	return updateInstanceMetadata(ctx, dyn, instance, "the envelope switch", func(inst *dcv1beta1.Instance) (bool, error) {
+		if inst.Annotations == nil {
+			inst.Annotations = map[string]string{}
+		}
+		return change(inst.Annotations), nil
+	})
 }
 
 // probeStreamsForEnvelopes reads the hot streams through a port-forward to a broker pod, as the

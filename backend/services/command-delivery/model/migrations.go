@@ -43,5 +43,7 @@ var (
 		NewDispatchAfterSchema(),
 		NewCommandScopeAnchorsSchema(),
 		NewDeviceTimeIndexSchema(),
+		NewCommandDeliveryEvidenceSchema(),
+		NewCampaignsSchema(),
 	}
 )

@@ -17,6 +17,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-sources/integration"
 	"github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
@@ -82,6 +83,30 @@ const (
 	ResultPrecheckBudget = "precheck_budget"
 )
 
+// Results of one network-server downlink report (the result label of integration_downlink_reports_total).
+const (
+	// DownlinkReportPublished: the report named a device of the integration and was written to the
+	// downlink-report stream for the adapter that holds the downlink.
+	DownlinkReportPublished = "published"
+	// DownlinkReportUnknownDevice: the device is not registered under this integration, so nothing was
+	// published. A report is never accepted for a device the integration does not govern.
+	DownlinkReportUnknownDevice = "unknown_device"
+	// DownlinkReportNotRouted: the downlink feed is off (the LoRaWAN downlink is not enabled), so the
+	// report was answered 204 and dropped unread, exactly as every such report was before.
+	DownlinkReportNotRouted = "not_routed"
+	// DownlinkReportRateLimited: the tenant sent reports faster than its allowance for them. The
+	// request is answered 202 (a network server does not retry, and a 4xx can suspend its webhook) and
+	// the report is dropped; the command it would have settled settles at its deadline.
+	DownlinkReportRateLimited = "rate_limited"
+	// DownlinkReportUntracked: the report names no downlink the platform can follow (a txack for a
+	// MAC-command-only downlink has no queue item). Answered 204.
+	DownlinkReportUntracked = "untracked"
+)
+
+// IntegrationDownlinkReportResults lists every downlink-report result.
+var IntegrationDownlinkReportResults = []string{DownlinkReportPublished, DownlinkReportUnknownDevice, DownlinkReportNotRouted,
+	DownlinkReportRateLimited, DownlinkReportUntracked}
+
 // IntegrationRequestResults lists every request result, so a series can be exported at zero.
 var IntegrationRequestResults = []string{
 	ResultAccepted, ResultIgnoredType, ResultBadEnvelope, ResultUnsupportedEncoding, ResultUnauthorized,
@@ -139,8 +164,10 @@ var IntegrationTypes = []string{
 // tenant or an integration name: both are strings a sender chose before its credential was
 // checked.
 type IntegrationMetrics struct {
-	Request              func(integrationType, result string)
-	Uplink               func(result string)
+	Request func(integrationType, result string)
+	Uplink  func(result string)
+	// DownlinkReport counts a network-server downlink report by result.
+	DownlinkReport       func(result string)
 	FlattenSkipped       func(reason string, n int)
 	UnregisteredOverflow func()
 	// DecoderLookup counts a decoder-plan lookup by result. DecoderCharge adds the readings an
@@ -158,6 +185,12 @@ func (m IntegrationMetrics) decoderLookup(result string) {
 func (m IntegrationMetrics) decoderCharge(n int) {
 	if m.DecoderCharge != nil {
 		m.DecoderCharge(n)
+	}
+}
+
+func (m IntegrationMetrics) downlinkReport(result string) {
+	if m.DownlinkReport != nil {
+		m.DownlinkReport(result)
 	}
 }
 
@@ -193,7 +226,17 @@ type IntegrationRoute struct {
 	// published. It must keep the event's Source: the route has stamped it.
 	// An event of type IntegrationUplink goes to its own stream, never to inbound-events.
 	Publish func(source, tenant string, event *model.UnresolvedEvent, payload interface{}, dedupID string) error
-	Metrics IntegrationMetrics
+	// PublishDownlink writes one network-server downlink report (a ChirpStack ack or txack) to the
+	// downlink-report stream and returns whether it was durably published. Nil means the downlink feed
+	// is OFF (the chart derives that from the outbound-connectors area): the reports are not even read,
+	// and are answered 204 as they always were.
+	PublishDownlink func(tenant string, report cmddownlink.DownlinkReport) error
+	// DownlinkLimiter meters the reports a tenant may send, keyed by tenant. Required with
+	// PublishDownlink. Reports are not metered with telemetry (shedding one would turn a delivered
+	// command into a TIMEOUT), so they need a limit of their own, sized to commands: one tenant's flood
+	// of them must not fill the shared stream and evict other tenants' acknowledgements.
+	DownlinkLimiter *sourcelimit.Limiter
+	Metrics         IntegrationMetrics
 	// Now is the receipt clock, replaced in tests.
 	Now func() time.Time
 }
@@ -217,6 +260,8 @@ func (rt *IntegrationRoute) Validate() error {
 		return errors.New("an integration route needs its pre-check, its device lookup and its undecoded recorder")
 	case rt.Seal == nil, rt.Publish == nil:
 		return errors.New("an integration route needs a seal and a publish")
+	case rt.PublishDownlink != nil && rt.DownlinkLimiter == nil:
+		return errors.New("an integration route that carries downlink reports needs a limiter for them")
 	}
 	return nil
 }
@@ -332,7 +377,19 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 	}
 
 	// 3. The tenant's message gate, with the integration as the origin: its token is proven.
-	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, false, OriginIntegration) {
+	//
+	// A ChirpStack downlink report (ack, txack) is not telemetry and is not shed with it: shedding is
+	// answered 202, the network server never resends, and a dropped acknowledgement would turn a
+	// delivered command into a TIMEOUT. Its volume follows the commands the tenant sent, it is
+	// authenticated, and its stream is small and bounded.
+	if rt.PublishDownlink != nil && isDownlinkEvent(desc.Type, r, messageType) {
+		if !rt.DownlinkLimiter.Allow(tenant) {
+			m.downlinkReport(DownlinkReportRateLimited)
+			m.request(typ, ResultShedAccepted)
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+	} else if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, false, OriginIntegration) {
 		m.request(typ, ResultShedAccepted)
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -357,7 +414,7 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 
 	result, err := integrationcodec.Decode(desc, &integrationcodec.Request{
 		Body: body, Header: r.Header, Query: r.URL.Query(), ContentType: r.Header.Get("Content-Type"),
-		MessageType: messageType, ReceivedAt: receivedAt,
+		MessageType: messageType, ReceivedAt: receivedAt, DownlinkReports: rt.PublishDownlink != nil,
 	})
 	switch {
 	case err == nil:
@@ -378,7 +435,17 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "the integration cannot be read; retry later", http.StatusServiceUnavailable)
 		return
 	}
+	if len(result.Downlinks) > 0 {
+		es.handleDownlinkReports(w, r, rt, desc, tenant, slug, bearer, result.Downlinks)
+		return
+	}
 	if result.Ignored {
+		switch {
+		case result.Untracked:
+			m.downlinkReport(DownlinkReportUntracked)
+		case rt.PublishDownlink == nil && isDownlinkEvent(desc.Type, r, messageType):
+			m.downlinkReport(DownlinkReportNotRouted)
+		}
 		m.request(typ, ResultIgnoredType)
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -610,6 +677,92 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 			}
 			m.uplink(UplinkPublished)
 		}
+	}
+	m.request(typ, ResultAccepted)
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// isDownlinkEvent reports whether the request names a downlink report: ChirpStack by its event query
+// value, The Things Stack by a webhook path that starts with "downlink" (downlink-ack, downlink/nack,
+// downlink_failed, ...). A The Things Stack webhook posted to its bare base URL names nothing, so its
+// reports are shed with telemetry; the documentation says to give each message type its own path.
+func isDownlinkEvent(t integrationcodec.Type, r *http.Request, messageType string) bool {
+	switch t {
+	case integrationcodec.ChirpStackV4:
+		ev := r.URL.Query().Get("event")
+		return ev == integrationcodec.DownlinkAck || ev == integrationcodec.DownlinkTxAck
+	case integrationcodec.TTSV3:
+		seg := strings.NewReplacer("-", "", "_", "", "/", "").Replace(strings.ToLower(messageType))
+		return strings.HasPrefix(seg, "downlink")
+	}
+	return false
+}
+
+// handleDownlinkReports carries a network server's reports about downlinks (ack, txack) to the
+// adapter that holds those downlinks. It runs after the same authentication, enabled check and
+// message gate as an uplink.
+//
+// 🔴 A REPORT IS ACCEPTED ONLY FOR A DEVICE THE AUTHENTICATED INTEGRATION GOVERNS. The device is
+// resolved with the bearer the sender presented, under the integration it proved, exactly as an
+// uplink's is, so an integration can only speak for devices registered to it (and in its device-type
+// scope). The report is then stamped with the INTEGRATION's token, which the adapter checks against
+// the one the downlink was sent through. Nothing in the report's body names the tenant or the
+// integration: both come from the path the token was proven for.
+func (es *HttpEventSource) handleDownlinkReports(w http.ResponseWriter, r *http.Request, rt *IntegrationRoute,
+	desc *integrationcodec.Descriptor, tenant, slug, bearer string, reports []integrationcodec.DownlinkEvent) {
+	m := rt.Metrics
+	typ := string(desc.Type)
+	if rt.PublishDownlink == nil {
+		m.downlinkReport(DownlinkReportNotRouted)
+		m.request(typ, ResultIgnoredType)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	var out []cmddownlink.DownlinkReport
+	for _, d := range reports {
+		looked, err := rt.Devices.Resolve(r.Context(), tenant, slug, bearer, d.Scheme, d.Identifier)
+		if err != nil {
+			log.Warn().Err(err).Str("integration", slug).Msg("Integration device lookup failed for a downlink report; refusing the request")
+			m.request(typ, ResultResolveUnavailable)
+			http.Error(w, "device lookup is unavailable; retry later", http.StatusServiceUnavailable)
+			return
+		}
+		switch looked.Outcome {
+		case integration.Resolved:
+		case integration.Unregistered:
+			m.downlinkReport(DownlinkReportUnknownDevice)
+			continue
+		case integration.Disabled:
+			rt.Auth.Forget(tenant, slug, bearer)
+			m.request(typ, ResultDisabled)
+			http.Error(w, "this integration is disabled", http.StatusForbidden)
+			return
+		case integration.Unauthenticated:
+			rt.Auth.Forget(tenant, slug, bearer)
+			rt.Devices.Forget(tenant, slug)
+			m.request(typ, ResultUnauthorized)
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "integration authentication failed", http.StatusUnauthorized)
+			return
+		default:
+			m.request(typ, ResultResolveUnavailable)
+			http.Error(w, "device lookup is unavailable; retry later", http.StatusServiceUnavailable)
+			return
+		}
+		out = append(out, cmddownlink.DownlinkReport{
+			Integration: slug, Kind: d.Kind, DevEUI: d.Identifier, QueueItemID: d.QueueItemID, DeviceRef: d.DeviceRef,
+			DeviceToken: looked.DeviceToken, Attempt: d.Attempt, ErrorNamespace: d.ErrorNamespace, ErrorName: d.ErrorName,
+			Acknowledged: d.Acknowledged, FCntDown: d.FCntDown,
+		})
+	}
+	for _, rep := range out {
+		if err := rt.PublishDownlink(tenant, rep); err != nil {
+			log.Warn().Err(err).Str("integration", slug).Msg("Could not publish a downlink report; refusing the request")
+			m.request(typ, ResultPublishFailed)
+			http.Error(w, "unable to accept event: downstream unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		m.downlinkReport(DownlinkReportPublished)
 	}
 	m.request(typ, ResultAccepted)
 	w.WriteHeader(http.StatusAccepted)
