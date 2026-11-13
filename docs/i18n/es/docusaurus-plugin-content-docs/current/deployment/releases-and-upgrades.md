@@ -816,6 +816,12 @@ Cuando una recarga cambia los ajustes de autenticación del propio servidor (sus
 - **Un certificado TLS renovado** bajo la misma CA mantiene su comportamiento anterior, vigente desde `v0.27.0`: se aplica a las conexiones nuevas sin recarga.
 - **La imagen de upstream para volver al broker original ahora es `nats:2.15.3-alpine`**: fija `server_image_repository = "nats"` y `server_image_tag = "2.15.3-alpine"`, como se describe en [Certificados de dispositivos](./device-certificates.md). Añade la nueva etiqueta a las imágenes que replicas si mantienes preparada esa vuelta atrás.
 
+#### Un fallo de decodificación reenviado usa el presupuesto de registros {#v160-decoder-redelivery-budget}
+
+Un fallo del decodificador de carga útil que se vuelve a entregar (por ejemplo, tras un reinicio con una acumulación de mensajes de enlace ascendente de un tipo de dispositivo cuyo decodificador falla) ahora usa el presupuesto de registros de fallos por tipo de dispositivo como cualquier otro fallo. Una vez agotado el presupuesto, se cuenta como suprimido y no se escribe en el flujo failed-events, aunque su primera entrega nunca haya generado un registro. Antes, un fallo reenviado siempre se registraba, por lo que un reinicio podía registrar todos los mensajes de enlace ascendente acumulados.
+
+- **No hay que hacer nada.**
+
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
 
 `v1.5.0` es una actualización in situ desde `v1.4.0`: ejecuta `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de la nueva versión para ambos comandos** y pasa a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Se ejecutan cuatro migraciones añadidas: tres en `device-management` y una en `user-management`. Añaden la barrera de desactivación del agente y la bandeja de salida de efectos, las revisiones de automatización y su exigencia, y la columna de generación de actuación. Consulta [Cambios de esquema y vuelta atrás](#v150-going-back). Si vienes de `v1.3.0` o anterior, lee primero las [notas de `v1.4.0`](#v140-upgrade).

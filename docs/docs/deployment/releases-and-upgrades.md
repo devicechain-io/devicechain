@@ -771,6 +771,12 @@ When a reload changes the server's own authentication settings (its configured u
 - **A renewed TLS certificate** under the same CA keeps its earlier behaviour, in place since `v0.27.0`: it is applied to new connections without a reload.
 - **The upstream image for going back to the upstream broker is now `nats:2.15.3-alpine`**: set `server_image_repository = "nats"` and `server_image_tag = "2.15.3-alpine"`, as described in [Device certificates](./device-certificates.md). Add the new tag to the images you mirror if you keep that rollback ready.
 
+#### A redelivered decoder failure uses the record budget {#v160-decoder-redelivery-budget}
+
+A payload decoder failure that is redelivered (for example after a restart with a backlog of a failing device type's uplinks) now uses the per-device-type failure-record budget like any other failure. Once the budget is spent it is counted as suppressed and not written to the failed-events stream, even if its first delivery never produced a record. Previously a redelivered failure was always recorded, so a restart could record every uplink of a backlog.
+
+- **Nothing needs doing.**
+
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
 `v1.5.0` is an in-place upgrade from `v1.4.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Four appended migrations run on upgrade: three in `device-management` and one in `user-management`. They add the agent kill fence and effect outbox, automation reviews and review enforcement, and the actuation generation column. See [Schema changes and going back](#v150-going-back). Coming from `v1.3.0` or earlier, read the [`v1.4.0` notes](#v140-upgrade) first.

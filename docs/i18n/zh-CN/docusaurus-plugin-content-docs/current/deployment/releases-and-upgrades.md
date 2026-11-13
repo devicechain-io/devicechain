@@ -527,6 +527,12 @@ dcctl bootstrap local devicechain
 - **同一 CA 下续期的 TLS 证书**保持自 `v0.27.0` 起的原有行为：无需重载即可应用于新连接。
 - **用于回退到上游代理的上游镜像现在是 `nats:2.15.3-alpine`**：按[设备证书](./device-certificates.md)所述，设置 `server_image_repository = "nats"` 和 `server_image_tag = "2.15.3-alpine"`。如果你保留了这种回退准备，请将新标签加入镜像同步列表。
 
+#### 重新投递的解码失败使用记录预算 {#v160-decoder-redelivery-budget}
+
+重新投递的载荷解码器失败（例如重启后积压了某个解码器持续失败的设备类型的上行消息）现在与其他失败一样，使用按设备类型分配的失败记录预算。预算耗尽后，该失败会计为已抑制，不会写入 failed-events 流，即使首次投递时从未生成记录也是如此。过去，重新投递的失败总会被记录，因此重启可能会记录积压的每一条上行消息。
+
+- **无需操作。**
+
 ### v1.5.0 — 自动化变更先评审，代理审批绑定登录会话 {#v150-upgrade}
 
 `v1.5.0` 是从 `v1.4.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。**两个命令都使用新版本的 `dcctl`**，并向 `dcctl install` 提供集群原有设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级会运行四项追加迁移：`device-management` 三项，`user-management` 一项。它们添加代理停用屏障和效果发件箱、自动化评审及其强制执行机制，以及执行代次列。参见[模式变更与回退](#v150-going-back)。如果来自 `v1.3.0` 或更早版本，请先阅读 [`v1.4.0` 说明](#v140-upgrade)。

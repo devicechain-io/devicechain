@@ -147,27 +147,3 @@ func (b *decodeBudget) sweep(now time.Time) {
 		}
 	}
 }
-
-// Charge takes a token from the (tenant, device type) bucket if it has one, and never refuses: it is
-// the cost of a failure that is recorded regardless (a redelivery). A key with no bucket and no room
-// for one is simply not charged, which is the same bound AllowRecord applies.
-func (b *decodeBudget) Charge(tenant string, deviceType uint) {
-	now := b.now()
-	k := recordKey{tenant, deviceType}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	bk, ok := b.records[k]
-	if !ok {
-		b.sweep(now) // as AllowRecord does: reclaim what has recovered before judging the bound
-		if len(b.records) >= maxBudgetKeys || b.recordsBy[tenant] >= maxBudgetKeysPerTenant {
-			return
-		}
-		bk = &bucket{tokens: DecodeRecordBurst, at: now}
-		b.records[k] = bk
-		b.recordsBy[tenant]++
-	} else if el := now.Sub(bk.at); el > 0 {
-		bk.tokens = min(DecodeRecordBurst, bk.tokens+el.Minutes()*DecodeRecordRefillPerMinute)
-		bk.at = now
-	}
-	bk.tokens = max(0, bk.tokens-1)
-}
