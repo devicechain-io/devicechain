@@ -369,6 +369,11 @@
       "retired": {},
       "tree": {
         "fields": {
+          "AgentActuation": {
+            "fields": {
+              "Enabled": {}
+            }
+          },
           "CallsBurst": {},
           "CallsPerSecond": {},
           "IssuerUrl": {},

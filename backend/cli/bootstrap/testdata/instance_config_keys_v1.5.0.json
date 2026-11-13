@@ -177,6 +177,15 @@
               "UnscopedClientCredentials": {}
             }
           },
+          "Tracing": {
+            "fields": {
+              "Enabled": {},
+              "Endpoint": {},
+              "Insecure": {},
+              "Protocol": {},
+              "SamplingRatio": {}
+            }
+          },
           "UserManagement": {
             "fields": {
               "Hostname": {},

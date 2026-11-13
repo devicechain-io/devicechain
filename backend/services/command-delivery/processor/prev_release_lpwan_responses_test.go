@@ -15,9 +15,9 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
-const prevRelease = "v1.4.0"
+const prevRelease = "v1.5.0"
 
-// Frozen from v1.4.0:backend/core/cmddownlink/wire.go:ResponseEnvelope.
+// Frozen from v1.5.0:backend/core/cmddownlink/wire.go:ResponseEnvelope.
 // Field order and tags are verbatim; PublishResponseContext marshals this struct.
 type responseEnvelopePrev struct {
 	CommandToken string  `json:"commandToken"`
@@ -25,7 +25,8 @@ type responseEnvelopePrev struct {
 	Payload      *string `json:"payload,omitempty"`
 	Error        *string `json:"error,omitempty"`
 
-	// Reach is omitted on success and empty when the device itself answered no.
+	// Reach is empty when the device answered. A successful answer carries UNANSWERED when
+	// the transport has no answer from the device, so it records no delivery evidence.
 	Reach string `json:"reach,omitempty"`
 
 	// DispatchNonce names the dispatch this outcome answers, and command-delivery REFUSES a
@@ -62,7 +63,7 @@ const (
 	wire_pre_NO_DEVICE_ID                  = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_DEVICE_ID\"}","error":"the device has no tts.device-id alias","reach":"UNSENT","dispatchNonce":"N1"}`
 	wire_pre_NO_DEVEUI                     = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_DEVEUI\"}","error":"the device has no lorawan.deveui alias","reach":"UNSENT","dispatchNonce":"N1"}`
 	wire_pre_RATE_LIMITED                  = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"RATE_LIMITED\"}","error":"the tenant is over its outbound call ceiling; retry shortly","reach":"UNSENT","dispatchNonce":"N1"}`
-	wire_post_queued                       = `{"commandToken":"cmd-1","success":true,"payload":"{\"queueItemId\":\"queue-1\",\"stage\":\"queued\"}","dispatchNonce":"N2"}`
+	wire_post_queued                       = `{"commandToken":"cmd-1","success":true,"payload":"{\"queueItemId\":\"queue-1\",\"stage\":\"queued\"}","reach":"UNANSWERED","dispatchNonce":"N2"}`
 	wire_post_EXPIRED                      = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"EXPIRED\"}","error":"the command expired before it could be sent","reach":"UNSENT","dispatchNonce":"N2"}`
 	wire_post_NETWORK_SERVER_REFUSED       = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NETWORK_SERVER_REFUSED\"}","error":"the network server refused the downlink (HTTP 400)","reach":"UNSENT","dispatchNonce":"N2"}`
 	wire_post_EGRESS_BLOCKED               = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"EGRESS_BLOCKED\"}","error":"the platform egress policy refused the network server's address","reach":"UNSENT","dispatchNonce":"N2"}`
@@ -95,7 +96,7 @@ var responseCasesPrev = []responseCasePrev{
 	{"pre_NO_DEVICE_ID", adapterHandle, "N1", wire_pre_NO_DEVICE_ID, false, `{"reason":"NO_DEVICE_ID"}`, "the device has no tts.device-id alias", "UNSENT", "FAILED", "NOT_DELIVERED"},
 	{"pre_NO_DEVEUI", adapterHandle, "N1", wire_pre_NO_DEVEUI, false, `{"reason":"NO_DEVEUI"}`, "the device has no lorawan.deveui alias", "UNSENT", "FAILED", "NOT_DELIVERED"},
 	{"pre_RATE_LIMITED", adapterHandle, "N1", wire_pre_RATE_LIMITED, false, `{"reason":"RATE_LIMITED"}`, "the tenant is over its outbound call ceiling; retry shortly", "UNSENT", "FAILED", "NOT_DELIVERED"},
-	{"post_queued", adapterHandle, "N2", wire_post_queued, true, `{"queueItemId":"queue-1","stage":"queued"}`, "", "", "SUCCESSFUL", "SUCCEEDED"},
+	{"post_queued", adapterHandle, "N2", wire_post_queued, true, `{"queueItemId":"queue-1","stage":"queued"}`, "", "UNANSWERED", "SUCCESSFUL", "SUCCEEDED"},
 	{"post_EXPIRED", adapterHandle, "N2", wire_post_EXPIRED, false, `{"reason":"EXPIRED"}`, "the command expired before it could be sent", "UNSENT", "FAILED", "NOT_DELIVERED"},
 	{"post_NETWORK_SERVER_REFUSED", adapterHandle, "N2", wire_post_NETWORK_SERVER_REFUSED, false, `{"reason":"NETWORK_SERVER_REFUSED"}`, "the network server refused the downlink (HTTP 400)", "UNSENT", "FAILED", "NOT_DELIVERED"},
 	{"post_EGRESS_BLOCKED", adapterHandle, "N2", wire_post_EGRESS_BLOCKED, false, `{"reason":"EGRESS_BLOCKED"}`, "the platform egress policy refused the network server's address", "UNSENT", "FAILED", "NOT_DELIVERED"},
@@ -191,7 +192,7 @@ func assertResponsePrev(t *testing.T, api *model.Api, tc responseCasePrev) {
 	if tc.success && tc.name == "post_queued" {
 		// An unconfirmed downlink the network server only queued: the device never answered,
 		// so it settles SUCCESSFUL with no delivery evidence (the previous release's wire shape
-		// is mapped to UNANSWERED by the current command-delivery).
+		// carries UNANSWERED explicitly).
 		if row.DeliveredTime.Valid || row.DeliveryEvidence.Valid {
 			t.Errorf("%s queued unconfirmed downlink stamped delivery evidence=%v/%v; want none", prevRelease, row.DeliveredTime, row.DeliveryEvidence)
 		}
