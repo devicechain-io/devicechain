@@ -97,7 +97,7 @@ Por defecto basta una aprobación; la política puede exigir dos personas distin
 
 La aprobación se evalúa con el token de la sesión propia de quien aprueba en ese momento. Cerrar la sesión después no la termina. Al publicar, cada aprobador debe conservar una membresía habilitada, sin restricciones de ámbito, con `device:write` y `event:read`; de lo contrario se rechaza con `APPROVER_NO_LONGER_QUALIFIES`.
 
-El ciclo es `RAN` → `APPROVED` cuando aprueban suficientes personas → `CONSUMED` al publicar. `consumedVersion` identifica la versión. Puedes rechazar una revisión `RAN` o `APPROVED` con `rejectAutomationReview(token, note)`, sin verificación adicional. Las ejecuciones, aprobaciones y rechazos se registran con la persona como actor.
+El ciclo es `RAN` → `APPROVED` cuando aprueban suficientes personas → `CONSUMED` al publicar. `consumedVersion` identifica la versión. Puedes rechazar una revisión `RAN` o `APPROVED` con `rejectAutomationReview(token, note)`, sin verificación adicional, salvo que haya caducado; intentar rechazar una revisión caducada devuelve `REVIEW_NOT_PENDING`. Las ejecuciones, aprobaciones y rechazos se registran con la persona como actor.
 
 La aprobación dura 24 horas por defecto. Las lecturas y los filtros de estado muestran `EXPIRED` cuando vence el `expiresAt` almacenado o la duración de la política actual, incluido el instante exacto de caducidad. Al publicar se aplica la misma regla y se rechazan las pruebas caducadas con `REVIEW_EXPIRED`. La caducidad se calcula al consultar, sin tarea en segundo plano ni actualización del registro; las revisiones pendientes, rechazadas y consumidas conservan su estado.
 

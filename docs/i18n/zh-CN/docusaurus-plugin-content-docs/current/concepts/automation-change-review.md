@@ -97,7 +97,7 @@ GraphQL 类型和操作可能在次要版本中变更。保护需要主动启用
 
 批准时使用批准者自己的会话令牌进行判断。之后退出登录不会终止批准。发布时，每位批准者仍必须具有已启用、不受范围限制且持有 `device:write` 和 `event:read` 的成员资格，否则返回 `APPROVER_NO_LONGER_QUALIFIES`。
 
-生命周期为 `RAN` → 足够人员批准后的 `APPROVED` → 发布使用后的 `CONSUMED`。`consumedVersion` 标识对应版本。可以通过 `rejectAutomationReview(token, note)` 拒绝 `RAN` 或 `APPROVED` 审查，无需追加验证。运行、批准和拒绝均以该人员为操作者写入审计日志。
+生命周期为 `RAN` → 足够人员批准后的 `APPROVED` → 发布使用后的 `CONSUMED`。`consumedVersion` 标识对应版本。可以通过 `rejectAutomationReview(token, note)` 拒绝尚未过期的 `RAN` 或 `APPROVED` 审查，无需追加验证；拒绝已过期的审查会返回 `REVIEW_NOT_PENDING`。运行、批准和拒绝均以该人员为操作者写入审计日志。
 
 批准有效期默认为 24 小时。当存储的 `expiresAt` 或当前策略的有效期到期时（包括到期时刻），读取和状态筛选均返回 `EXPIRED`。发布时应用相同规则，证据过期时返回 `REVIEW_EXPIRED`。到期状态按需计算，无需后台任务或更新记录；待批准、已拒绝和已使用的审查保留原状态。
 

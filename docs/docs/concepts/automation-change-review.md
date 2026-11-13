@@ -97,7 +97,7 @@ The default is one approval; policy can require two different people. Without se
 
 Approval is judged from the approver's own session token at approval time. Signing out later does not end it. At publish, every approver must still have enabled, unscoped membership with `device:write` and `event:read`, or publishing is refused with `APPROVER_NO_LONGER_QUALIFIES`.
 
-The lifecycle is `RAN` → `APPROVED` when enough people approve → `CONSUMED` when published. `consumedVersion` identifies the version. A `RAN` or `APPROVED` review can be rejected with `rejectAutomationReview(token, note)`, without step-up. Runs, approvals and rejections are journaled with the person as actor.
+The lifecycle is `RAN` → `APPROVED` when enough people approve → `CONSUMED` when published. `consumedVersion` identifies the version. A `RAN` or `APPROVED` review can be rejected with `rejectAutomationReview(token, note)`, without step-up, unless it has expired; rejecting an expired review returns `REVIEW_NOT_PENDING`. Runs, approvals and rejections are journaled with the person as actor.
 
 Approval lifetime defaults to 24 hours. Reads and state filters report `EXPIRED` when either the stored `expiresAt` or the current policy's lifetime has elapsed, including at the exact expiry time. Publishing applies the same rule and refuses expired evidence with `REVIEW_EXPIRED`. Expiry is computed on demand without a background job or a ledger update; pending, rejected and consumed reviews retain their states.
 

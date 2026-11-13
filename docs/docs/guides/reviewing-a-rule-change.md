@@ -143,7 +143,7 @@ mutation ApproveReview($token: String!, $digest: String!) {
 
 Supply the review's `token` and the exact `reviewDigest` the person inspected. Only `RAN` reviews with `PASSED` or `NO_AUTOMATION_CHANGE` can be approved. If two approvals are required, two different qualifying people must approve. **Reject** rejects a pending or approved review, with an optional note and no step-up.
 
-Approval lasts 24 hours by default. Check `expiresAt`; an expired approved review keeps state `APPROVED`. Signing out does not end approval, but every approver's enabled membership and permissions are checked again at publish.
+Approval lasts 24 hours by default. Check `expiresAt`; an expired approved review reads as `EXPIRED` and cannot satisfy publish. Signing out does not end approval, but every approver's enabled membership and permissions are checked again at publish.
 
 ## Protect the profile {#protect-the-profile}
 
