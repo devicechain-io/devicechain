@@ -1,4 +1,12 @@
 {
+  "agent-actuation-kills": {
+    "subjects": [
+      "inst.*.agent-actuation-kills"
+    ],
+    "retention": "Limits",
+    "duplicateWindowSeconds": 120,
+    "allowDirect": false
+  },
   "alarm-events": {
     "subjects": [
       "inst.*.alarm-events"
@@ -186,6 +194,7 @@
       "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_geofence-set-manifest.*",
       "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_entity-deleted.*",
       "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_device-ownership.*",
+      "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_agent-actuation-kills.*",
       "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_alarm-events.*",
       "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_raise-alarm.*",
       "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_failed-decode.*",
