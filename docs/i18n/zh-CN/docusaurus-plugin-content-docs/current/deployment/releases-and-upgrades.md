@@ -545,7 +545,7 @@ dcctl upgrade local devicechain --version v1.5.0
 - **升级说明：** 发布含有超过 1,000 条已启用检测规则的配置文件前，拆分或禁用部分规则。此类发布现在返回 `LIMIT_EXCEEDED`；`validateDetectionRules` 也会在编译前拒绝超过 1,000 条规则。按[输入限制](#v150-input-limits)和[写入检查](#v150-tightenings)检查 API 调用方。
 - **升级说明：** 完成全部升级后再启用代理操作（Preview）。本版本之前记录的审批不再计数：请重新审批。升级前已登录的人必须刷新 token 或重新登录，其审批才会计数。混合版本部署会拒绝执行：新版 device-management 调用旧版 user-management 时返回 `POLICY_UNAVAILABLE`，新版 user-management 不计入旧版 device-management 提供的未绑定审批。如果租户通过新版 pod 被禁用后在滚动期间重新启用，请通过新版 pod 操作；旧版 pod 不会递增代次，代理操作会一直被拒绝，直到再次通过新版启用。
 - **升级说明：** 完成部署后再为配置文件启用自动化评审保护。在 user-management 升到 `v1.5.0` 前，受保护发布返回 `REVIEW_UNAVAILABLE`；运行评审还需要 event-processing 为 `v1.5.0`。`dcctl` 不会替你安排这些区域的升级顺序。升级不会自动保护任何配置文件。
-- **升级说明：** 新增可选功能只在部署完成后开启，并各自单独进行一次升级：`infrastructure.tracing`、MCP 区域的 `agentActuation.enabled`，以及尚未开启上行时的 `--mqtt-device-uplinks`。重启的 `v1.4.0` pod 会拒绝不认识的实例或区域配置键。关闭追踪时整个块会从文档省略，因此默认安全。MQTT 上行在 `v1.4.0` 已可用；新选项用于记录选择。
+- **升级说明：** 新增可选功能只在部署完成后开启，并各自单独进行一次升级：`infrastructure.tracing` 和 MCP 区域的 `agentActuation.enabled`。重启的 `v1.4.0` pod 会拒绝不认识的实例或区域配置键。关闭追踪时整个块会从文档省略，因此默认安全。`--mqtt-device-uplinks` 不在此列：`v1.4.0` 已认识 `mqttDeviceUplinks` 键，新选项只记录选择。
 - **升级说明：** 如果手写实例 id 不符合 chart 语法（小写字母、数字及内部连字符，最多 50 个字符），请计划用合规 id 重建：派生的 broker 或数据库名称可能冲突。服务仍会启动，但记录警告并将各区域的指标（例如 `devicechain_devicemanagement_instance_id_noncanonical`）设为 1。`dcctl` 和 chart 安装原本就符合要求。
 
 新增 Helm values 和 `dcctl` 设置，默认关闭或保持原行为：
