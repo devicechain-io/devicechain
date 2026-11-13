@@ -85,6 +85,38 @@ func TestValidateRejectsNonPositiveRefreshTtl(t *testing.T) {
 	assert.Error(t, cfg.Validate())
 }
 
+// Token TTLs must be refused before their seconds-to-Duration conversion overflows.
+func TestTokenTtlThatOverflowsADurationIsRefusedAtLoad(t *testing.T) {
+	for _, key := range []string{"accessTokenTtlSeconds", "refreshTokenTtlSeconds"} {
+		for _, seconds := range []int{MaxDurationSeconds + 1, math.MaxInt} {
+			t.Run(fmt.Sprintf("%s/%d", key, seconds), func(t *testing.T) {
+				cfg := &UserManagementConfiguration{}
+				doc := fmt.Sprintf(`{"auth":{"%s":%d}}`, key, seconds)
+				err := core.LoadConfiguration([]byte(doc), cfg)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "auth."+key)
+			})
+		}
+	}
+}
+
+// The largest safe TTL still loads unchanged for each token type.
+func TestTokenTtlAtDurationBoundStillLoads(t *testing.T) {
+	for _, key := range []string{"accessTokenTtlSeconds", "refreshTokenTtlSeconds"} {
+		t.Run(key, func(t *testing.T) {
+			cfg := &UserManagementConfiguration{}
+			doc := fmt.Sprintf(`{"auth":{"%s":%d}}`, key, MaxDurationSeconds)
+			require.NoError(t, core.LoadConfiguration([]byte(doc), cfg))
+			require.NoError(t, cfg.Validate())
+			if key == "accessTokenTtlSeconds" {
+				assert.Equal(t, MaxDurationSeconds, cfg.Auth.AccessTokenTtlSeconds)
+			} else {
+				assert.Equal(t, MaxDurationSeconds, cfg.Auth.RefreshTokenTtlSeconds)
+			}
+		})
+	}
+}
+
 // A negative signing-key age, or one whose day count overflows the Duration conversion in
 // main.go, reached MaybeRotateOnAge as a non-positive age, which reads as "rotation off":
 // the instance then signed with one key indefinitely without a word. Each row loaded with

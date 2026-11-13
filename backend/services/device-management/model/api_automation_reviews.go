@@ -138,7 +138,7 @@ func (api *Api) reviewByRequest(ctx context.Context, request string) (*Automatio
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	return &rows[0], nil
+	return api.reviewWithEffectiveState(ctx, &rows[0])
 }
 
 func existingReview(r *AutomationReview, person, scope, expectations string) (*AutomationReview, error) {
@@ -364,7 +364,22 @@ func (api *Api) AutomationReviewByToken(ctx context.Context, token string) (*Aut
 	if len(rows) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
-	return &rows[0], nil
+	return api.reviewWithEffectiveState(ctx, &rows[0])
+}
+
+// Reads use the current effective policy, including a matured delayed change,
+// without persisting either the policy or the derived review state.
+func (api *Api) reviewWithEffectiveState(ctx context.Context, r *AutomationReview) (*AutomationReview, error) {
+	if r.State != ReviewStateApproved {
+		return r, nil
+	}
+	now := reviewNow().UTC()
+	view, err := reviewPolicyView(api.RDB.DB(ctx), r.DeviceProfileId, now)
+	if err != nil {
+		return nil, err
+	}
+	r.State = effectiveReviewState(r, view.Effective, now)
+	return r, nil
 }
 
 // CurrentDraftDigest shares the exact snapshot builder used by publication.
@@ -568,11 +583,23 @@ func (api *Api) AutomationReviews(ctx context.Context, criteria AutomationReview
 			return nil, err
 		}
 	}
+	now := reviewNow().UTC()
+	view, err := reviewPolicyView(api.RDB.DB(ctx), profile.ID, now)
+	if err != nil {
+		return nil, err
+	}
 	rows := make([]AutomationReview, 0)
 	db, pag := api.RDB.ListOf(ctx, &AutomationReview{}, func(q *gorm.DB) *gorm.DB {
 		q = q.Where("automation_reviews.device_profile_id = ?", profile.ID)
 		if criteria.State != nil {
-			q = q.Where("automation_reviews.state = ?", *criteria.State)
+			// Filter before counting and paging, so EXPIRED and APPROVED pages
+			// describe the same effective states as individual reads.
+			q = q.Where(`(CASE WHEN automation_reviews.state = ? AND
+				(automation_reviews.expires_at IS NULL OR automation_reviews.approved_at IS NULL OR
+				automation_reviews.expires_at <= ? OR automation_reviews.approved_at <= ?)
+				THEN ? ELSE automation_reviews.state END) = ?`,
+				ReviewStateApproved, now, now.Add(-time.Duration(view.Effective.ApprovalTtlSeconds)*time.Second),
+				ReviewStateExpired, *criteria.State)
 		}
 		if criteria.MatchingCurrentDraft != nil {
 			if *criteria.MatchingCurrentDraft {
@@ -585,6 +612,9 @@ func (api *Api) AutomationReviews(ctx context.Context, criteria AutomationReview
 	}, criteria.Pagination)
 	if err := db.Find(&rows).Error; err != nil {
 		return nil, err
+	}
+	for i := range rows {
+		rows[i].State = effectiveReviewState(&rows[i], view.Effective, now)
 	}
 	return &AutomationReviewSearchResults{Results: rows, Pagination: pag}, nil
 }

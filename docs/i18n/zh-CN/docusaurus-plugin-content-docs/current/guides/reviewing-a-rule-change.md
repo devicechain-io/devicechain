@@ -143,7 +143,7 @@ mutation ApproveReview($token: String!, $digest: String!) {
 
 提供审查的 `token` 和该人员实际查看的准确 `reviewDigest`。只有 `RAN` 状态且结果为 `PASSED` 或 `NO_AUTOMATION_CHANGE` 的审查才能批准。如果需要两次批准，必须由两名符合条件的不同人员批准。**Reject** 可拒绝待处理或已批准的审查，备注可选，无需追加验证。
 
-批准有效期默认为 24 小时。请检查 `expiresAt`；过期的已批准审查仍保持 `APPROVED`。退出登录不会终止批准，但发布时会再次检查每位批准者已启用的成员资格和权限。
+批准有效期默认为 24 小时。请检查 `expiresAt`；过期的已批准审查在读取时显示为 `EXPIRED`，不能满足发布要求。退出登录不会终止批准，但发布时会再次检查每位批准者已启用的成员资格和权限。
 
 ## 保护配置文件 {#protect-the-profile}
 

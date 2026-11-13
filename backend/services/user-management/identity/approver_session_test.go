@@ -194,8 +194,8 @@ func TestProposerSessionIsValidatedBeforeReads(t *testing.T) {
 	for name, input := range map[string]struct {
 		principal, sid, message string
 	}{
-		"long principal":                 {strings.Repeat("a", 257), uuid.NewString(), "maximum principal length is 256 bytes"},
-		"long service-account principal": {auth.ServiceAccountSubject(strings.Repeat("a", 257)), "", "maximum principal length is 256 bytes"},
+		"long principal":                 {strings.Repeat("a", 257), uuid.NewString(), "maximum principal length is 256 characters"},
+		"long service-account principal": {auth.ServiceAccountSubject(strings.Repeat("a", 257)), "", "maximum principal length is 256 characters"},
 		"long sid":                       {agentPerson, strings.Repeat("a", 65), "canonical 36-character UUID"},
 		"non UUID":                       {agentPerson, "not-a-uuid", "canonical 36-character UUID"},
 		"URN UUID":                       {agentPerson, "urn:uuid:" + uuid.NewString(), "canonical 36-character UUID"},
@@ -232,7 +232,21 @@ func TestProposerSessionValidationAllowsBoundaries(t *testing.T) {
 		d, err := x.m.AgentExecutionDecision(context.Background(), personClaims(approvalBoss, string(auth.AlarmWrite)), req)
 		require.NoError(t, err)
 		require.Equal(t, agentpolicy.VerdictRefuse, d.Verdict, "the unknown principal fails standing, not input validation")
-		require.Equal(t, 2, kv.gets, "a 256-byte principal and canonical sid pass validation")
+		require.Equal(t, 2, kv.gets, "a 256-character principal and canonical sid pass validation")
+	})
+	t.Run("non-ASCII principal within 256 characters", func(t *testing.T) {
+		// varchar(256) counts characters, and a canonical email may have a non-ASCII local
+		// part: 255 characters here are 765 bytes, which a byte cap would wrongly refuse.
+		req := x.request(approvalBoss)
+		req.ProposerPrincipal = strings.Repeat("界", 250) + "@x.cn"
+		require.Greater(t, len(req.ProposerPrincipal), maxApproverPrincipalLen)
+		original := x.m.refreshKV
+		kv := &countingApproverKV{KeyValue: original}
+		x.m.refreshKV = kv
+		defer func() { x.m.refreshKV = original }()
+		_, err := x.m.AgentExecutionDecision(context.Background(), personClaims(approvalBoss, string(auth.AlarmWrite)), req)
+		require.NoError(t, err, "a principal the identity store accepts must pass input validation")
+		require.Equal(t, 2, kv.gets)
 	})
 	t.Run("service-account subject fits", func(t *testing.T) {
 		token := strings.Repeat("a", core.MaxTokenLen)
