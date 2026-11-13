@@ -199,7 +199,7 @@ func TestPgxClassicScanInterfaces(t *testing.T) {
 // either module (Dependabot raises them weekly) must fail here until it is re-read.
 const (
 	pgxClassicGormPostgresVersion = "v1.6.3"
-	pgxClassicPgxVersion          = "v5.11.0"
+	pgxClassicPgxVersion          = "v5.12.0"
 )
 
 // TestPgxClassicScanUpstreamPins is the drift guard for what the method-set tests cannot
@@ -226,8 +226,8 @@ func TestPgxClassicScanUpstreamPins(t *testing.T) {
 				"time-zone runtime parameter and TimestampCodec, OptionOpenDB, any new Config field), " +
 				"port any change, then update pgxClassicGormPostgresVersion"},
 		{"github.com/jackc/pgx/v5", pgxClassicPgxVersion,
-			"check whether stdlib/sql_go1.27.go now caches isSQLScanDestination per reflect.Type " +
-				"(if so, run BenchmarkPgxScan and follow pgx_classic_scan.go's EXIT CONDITION), that " +
+			"run BenchmarkPgxScan and follow pgx_classic_scan.go's EXIT CONDITION (v5.12.0 caches " +
+				"isSQLScanDestination yet native still measured ~15% slower than classic), check that " +
 				"stdlib.OpenDB is still sql.OpenDB(GetConnector(...)) and nothing more, then update " +
 				"pgxClassicPgxVersion"},
 	} {

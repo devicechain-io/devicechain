@@ -69,6 +69,12 @@ updates:
         versions: [">= 0.21.3"]
       - dependency-name: "sigs.k8s.io/kustomize/kyaml"
         versions: [">= 0.21.3"]
+      # pflag 1.1.0 renders every bool flag in help as `--flag[=true|false]` (dcctl
+      # `--help` and the generated CLI reference included), unconditionally and with no
+      # opt-out; parsing is unchanged. Held at 1.0.10. Revisit when upstream issue
+      # https://github.com/spf13/pflag/issues/454 (revert it, or make it opt-in) is resolved.
+      - dependency-name: "github.com/spf13/pflag"
+        versions: [">= 1.1.0"]
     commit-message:
       prefix: "chore(deps)"
 
