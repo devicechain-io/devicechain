@@ -54,6 +54,10 @@ const (
 // occupancy: a connection that receives a message every 50 ms keeps about one in flight.
 const DefaultIngestPublishWindow = 32
 
+// MaxDurationSeconds is the largest whole number of seconds a time.Duration can hold.
+// A larger value overflows when converted.
+const MaxDurationSeconds = int(math.MaxInt64 / int64(time.Second))
+
 const (
 	// DefaultPresenceProbeSeconds is how often a connected Host re-checks its asserted
 	// devices for liveness when none is configured: a device the platform believes
@@ -552,6 +556,12 @@ func (c *SparkplugConfiguration) Validate() error {
 	}
 	if w := c.Ingest.PublishWindowSize(); w < 1 || w > messaging.MaxOrderedWindow {
 		return fmt.Errorf("ingest.publishWindow must be between 1 and %d (got %d)", messaging.MaxOrderedWindow, w)
+	}
+	if s := c.Presence.ProbeSeconds; s > MaxDurationSeconds {
+		return fmt.Errorf("presence.probeSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, s)
+	}
+	if w := c.Presence.ProbeWindowSeconds; w > MaxDurationSeconds {
+		return fmt.Errorf("presence.probeWindowSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, w)
 	}
 	// 0 is "unset" (ApplyDefaults fills it); anything else written must clear the floor.
 	// A negative value is a written value, and it is refused rather than defaulted.
