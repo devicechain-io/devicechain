@@ -126,10 +126,11 @@ func executionResult(p *AgentProposal, err error) string {
 	if actiongate.IsCode(err, actiongate.CodePolicyUnavailable) || actiongate.IsCode(err, actiongate.CodeFenceUnavailable) {
 		return "failed"
 	}
-	// errNotAnApprover, errSelfApproval, errConcurrentApproval,
-	// errProposalExpired and actiongate.ErrNotPending are all *actiongate.Error.
+	// errNotAnApprover, errSelfApproval, errConcurrentApproval, errProposalExpired and
+	// actiongate.ErrNotPending are all *actiongate.Error. A decision refused for the caller's
+	// standing (auth.ErrForbidden) is a refusal too, not a failure to complete.
 	var refusal *actiongate.Error
-	if errors.As(err, &refusal) {
+	if errors.As(err, &refusal) || errors.Is(err, auth.ErrForbidden) {
 		return "refused"
 	}
 	return "failed"
