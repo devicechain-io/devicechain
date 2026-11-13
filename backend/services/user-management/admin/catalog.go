@@ -681,6 +681,9 @@ func (s *Service) SetTenantEnabled(ctx context.Context, token string, enabled bo
 		return nil, err
 	}
 	gen, err := s.iam.SetTenantEnabledAndBumpGeneration(ctx, t, enabled)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrTenantNotFound
+	}
 	if errors.Is(err, iam.ErrTenantPurging) {
 		return nil, ErrTenantDeleted
 	}
