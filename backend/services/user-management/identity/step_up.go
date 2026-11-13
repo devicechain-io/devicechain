@@ -61,10 +61,10 @@ func (m *Manager) StepUp(ctx context.Context, access *auth.Claims, refreshToken,
 }
 
 func (m *Manager) stepUp(ctx context.Context, ot credential.OneTime, access *auth.Claims, refreshToken, code, source string) (*TokenPair, error) {
-	// KNOWN LIMIT: the binding is user + tenant, not sid + epoch. Console access tokens carry no
-	// sid, so an access token from sign-in A can step up sign-in B's refresh token, for the same
-	// user and tenant, and only with a valid TOTP code. The session named by the refresh token is
-	// the one elevated.
+	// KNOWN LIMIT: the binding is user + tenant, not the sign-in. Tenant access tokens carry the
+	// sign-in's sid, but it is not compared here yet, so an access token from sign-in A can step up
+	// sign-in B's refresh token, for the same user and tenant, and only with a valid TOTP code. The
+	// session named by the refresh token is the one elevated.
 	if access == nil || access.TokenType != auth.TokenTypeAccess || auth.IsAgentOrigin(access) ||
 		strings.HasPrefix(access.Username, auth.ServiceAccountSubjectPrefix) {
 		return nil, auth.ErrForbidden

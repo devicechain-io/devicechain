@@ -359,13 +359,34 @@ func refuseOverlayKey(path []string) string {
 	return "this is not an operator-tunable value: dcctl or the chart owns it (images, credentials, endpoints, exposure, the area set, security contexts)"
 }
 
+// refuseMisplacedDeviceUplinks explains the choice at a key outside its tunable path.
+func refuseMisplacedDeviceUplinks(overlay map[string]interface{}, path []string) string {
+	fullPath := splitPath("instance.config.infrastructure.nats.mqttDeviceUplinks")
+	if len(path) < 2 || !strings.EqualFold(path[len(path)-2], "nats") ||
+		!strings.EqualFold(path[len(path)-1], "mqttDeviceUplinks") ||
+		(len(path) == len(fullPath) && pathsOverlap(path, fullPath)) {
+		return ""
+	}
+	value, _ := lookupPath(overlay, path)
+	remedy := "to set it, run with --mqtt-device-uplinks=true or --mqtt-device-uplinks=false"
+	if choice, ok := value.(bool); ok {
+		remedy = fmt.Sprintf("to make it %t, run with --mqtt-device-uplinks=%t", choice, choice)
+	}
+	return fmt.Sprintf("this key is not where the device-uplinks choice is set (requested value: %v). dcctl records that choice on the instance: %s "+
+		"(an overlay can set it only at instance.config.infrastructure.nats.mqttDeviceUplinks, and a choice recorded with the flag takes precedence over the overlay)", value, remedy)
+}
+
 // refuseOverlayKeys checks every leaf of an overlay and reports ALL the ones it refuses,
 // each by its dotted key, in one error -- an operator fixing a file should not have to
 // discover its problems one run at a time.
 func refuseOverlayKeys(overlay map[string]interface{}, source string) error {
 	var lines []string
 	for _, leaf := range overlayLeaves(overlay) {
-		if why := refuseOverlayKey(leaf); why != "" {
+		why := refuseMisplacedDeviceUplinks(overlay, leaf)
+		if why == "" {
+			why = refuseOverlayKey(leaf)
+		}
+		if why != "" {
 			lines = append(lines, fmt.Sprintf("  %s: %s", strings.Join(leaf, "."), why))
 		}
 	}

@@ -512,6 +512,10 @@ func (s *Store) SetTenantEnabledAndBumpGeneration(ctx context.Context, t *Tenant
 			Where("token = ?", t.Token).First(&tenant).Error; err != nil {
 			return err
 		}
+		// A completed purge releases the token; it may now name a different tenant.
+		if tenant.ID != t.ID {
+			return ErrTenantPurging
+		}
 		if tenant.PurgeState.Deleted() {
 			return ErrTenantPurging
 		}
