@@ -59,6 +59,28 @@ func rotateAndReload(t *testing.T, fleet int, reload func(*running) error) int {
 	return n
 }
 
+// TestHeldFleetCountsAServerShutdownAsLost is the control for the Lost()==0 assertions in this file.
+func TestHeldFleetCountsAServerShutdownAsLost(t *testing.T) {
+	r := startBroker(t, true)
+	f, err := smoke.HoldFleet(r.dir, r.nats, r.mqtt, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(f.Close)
+
+	r.s.Shutdown()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.Lost() > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if f.Lost() == 0 {
+		t.Fatal("the fleet counted no loss when its broker shut down: a Lost() of 0 elsewhere proves nothing")
+	}
+}
+
 // TestTLSRotationReloadKeepsMQTTSessions is the D-AB2 reproduction: a certificate rotation as
 // cert-manager performs it (new leaf, same CA, files rewritten in place), followed by the reload
 // the SIGHUP path performs, must leave every established MQTT session connected, and the NEXT
@@ -70,16 +92,53 @@ func TestTLSRotationReloadKeepsMQTTSessions(t *testing.T) {
 	}
 }
 
-// TestFullReloadDropsCalloutSessions is the negative control, and the canary. It pins the upstream
-// behaviour this binary works around (hottls.go): handing the server new options, even for a pure
-// certificate rotation, closes every callout-admitted session. It passes while the library has the
-// defect. The day it fails, the library carries the upstream fix: delete hottls.go and the hot path
-// in broker.go, and make reload the full one.
-func TestFullReloadDropsCalloutSessions(t *testing.T) {
+// TestFullReloadKeepsCalloutSessions is the regression test for the callout-reload defect. Before
+// nats-server carried the upstream fix (v2.15.3), handing the server new options, even for a pure
+// certificate rotation, closed every callout-admitted session. It must now keep all of them.
+func TestFullReloadKeepsCalloutSessions(t *testing.T) {
 	const fleet = 20
-	if n := rotateAndReload(t, fleet, func(r *running) error { return r.b.reloadFull() }); n != fleet {
-		t.Fatalf("a full reload dropped %d of %d sessions; if it is 0 the library no longer has the "+
-			"callout-reload defect and hottls.go can go", n, fleet)
+	if n := rotateAndReload(t, fleet, func(r *running) error { return r.b.reloadFull() }); n != 0 {
+		t.Fatalf("a full reload dropped %d of %d callout-admitted sessions", n, fleet)
+	}
+}
+
+// TestConfigChangeKeepsCalloutSessions: a change to the configuration that is not key material
+// (here the auth timeout) takes the full reload, applies, and leaves the fleet connected.
+func TestConfigChangeKeepsCalloutSessions(t *testing.T) {
+	const fleet = 20
+	r := startBroker(t, true)
+	f, err := smoke.HoldFleet(r.dir, r.nats, r.mqtt, fleet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(f.Close)
+	conf := filepath.Join(r.dir, "nats.conf")
+	b, err := os.ReadFile(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const from, to = "timeout: 5\n", "timeout: 7\n"
+	if !strings.Contains(string(b), from) {
+		t.Fatal("fixture changed: no authorization timeout to edit")
+	}
+	if err := os.WriteFile(conf, []byte(strings.Replace(string(b), from, to, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.b.reload(); err != nil {
+		t.Fatal(err)
+	}
+	if r.b.hotSwaps.Load() != 0 {
+		t.Fatal("a config change was served by the hot path; the full reload was not exercised")
+	}
+	if vz, err := r.s.Varz(nil); err != nil || vz.AuthTimeout != 7 {
+		t.Fatalf("reload did not apply the change: %v %v", vz, err)
+	}
+	time.Sleep(2 * time.Second)
+	if n := f.Lost(); n != 0 {
+		t.Fatalf("a configuration reload dropped %d of %d sessions: %s", n, fleet, f.FirstLoss())
+	}
+	if err := f.Publish(); err != nil {
+		t.Fatalf("a surviving session does not work: %v", err)
 	}
 }
 

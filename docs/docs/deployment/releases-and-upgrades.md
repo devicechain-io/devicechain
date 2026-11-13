@@ -754,7 +754,22 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 ## Recent releases {#recent-releases}
 
-The three most recent minor releases (`v1.5`, `v1.4` and `v1.3`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
+The release in development (`v1.6`) and the three most recent minor releases (`v1.5`, `v1.4` and `v1.3`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
+
+### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
+
+`v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
+
+#### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
+
+A full broker reload used to close every connection the auth callout had admitted, which includes every MQTT device that authenticates with a username. The broker is now built on `nats-server` `v2.15.3`, so a change to the CA bundle in the broker's TLS Secret (a CA rotation), or a manual reload, keeps those connections open. A reload without a restart happens only when the chart's config-reloader sidecar sends SIGHUP because the mounted TLS Secret changed, or when an operator runs `nats-server --signal reload` by hand.
+
+When a reload changes the server's own authentication settings (its configured users, nkeys, tags, or TLS verify/map settings), `nats-server` still sends callout-admitted connections back through the auth callout. A connection the callout then refuses is closed.
+
+- **Nothing needs doing.**
+- **A configuration change still rolls the broker.** The broker's configuration is rendered into a ConfigMap, and the chart hashes it into the StatefulSet's pod template. Any change to that rendered configuration (settings, sizing or accounts) restarts the broker pods, so devices reconnect then, as before; `dcctl upgrade` rolls the broker for any upgrade that changes its image or configuration.
+- **A renewed TLS certificate** under the same CA keeps its earlier behaviour, in place since `v0.27.0`: it is applied to new connections without a reload.
+- **The upstream image for going back to the upstream broker is now `nats:2.15.3-alpine`**: set `server_image_repository = "nats"` and `server_image_tag = "2.15.3-alpine"`, as described in [Device certificates](./device-certificates.md). Add the new tag to the images you mirror if you keep that rollback ready.
 
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
@@ -1385,7 +1400,7 @@ The following migrations are appended. Every new column is nullable and every ne
 #### Known issues {#v130-known-issues}
 
 - **Fail-closed MQTT acknowledgement is off by default,** as in `v1.2.0`. The [MQTT transport](../reference/transport-matrix.md#mqtt--the-platform-broker) page states the measured limits with it off and on.
-- **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not.
+- **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not. **Fixed in `v1.6.0`:** see [A full broker reload keeps the devices the auth callout admitted](#v160-broker-reload).
 - **`eventSources.ingestMetering: lagCredit` is still not available,** and is refused at startup; see [Ingest metering](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-ingest-metering). It arrives, opt-in, in [`v1.4.0`](#v140-ingest-metering).
 - **OCSP does not yet store what it learns or end open sessions,** as described under [OCSP for certificate connects](#v130-ocsp).
 - **An event stored more than 10 minutes after the end of the hour in which it was received is not counted in the tenant's usage record,** and neither is an event received after the upgrade but dated inside a chunk that was already compressed. See [Event usage per tenant](#v130-usage-metering).
@@ -1444,7 +1459,7 @@ Devices can authenticate to the platform broker with an X.509 client certificate
 
 - **A renewed TLS certificate no longer disconnects MQTT sessions.** The broker applies a certificate that changed under the same authority to new connections without reloading its configuration, so a device that is connected stays connected. In a test, 30 held sessions behind the auth callout survived a rotation and the next connection was served the new certificate.
 - **`dcctl upgrade` renews a broker leaf certificate without rolling the broker** when expiry is the only reason: the authority is unchanged and the broker already runs the replica count the certificate is issued for. It writes the Secret, then waits up to five minutes for every broker pod to report the new expiry. If that cannot be confirmed, it warns and rolls the broker, so an old certificate is never left serving behind a green renewal. A change of authority, of names or of replica count still rolls it.
-- **A change to the broker's configuration still reloads it,** and a reload still drops the sessions of devices the auth callout admitted, until the broker library carries an upstream fix that is not in a release yet. `dcctl upgrade` rolls the broker for any upgrade that changes its image or configuration.
+- **A change to the broker's configuration still reloads it,** and a reload still drops the sessions of devices the auth callout admitted, until the broker library carries an upstream fix that is not in a release yet. `dcctl upgrade` rolls the broker for any upgrade that changes its image or configuration. **Fixed in `v1.6.0`:** see [A full broker reload keeps the devices the auth callout admitted](#v160-broker-reload).
 - **The broker library is nats-server 2.15.2,** a security release; among its fixes the auth callout now respects the connection types it allows. `dc-nats-server` is built on it. The control image for going back to the upstream broker is `nats:2.15.2-alpine`; the setting to use is `server_image_tag = "2.15.2-alpine"`.
 - **After an upgrade rolls the broker, `dcctl` evens out leadership.** The server that restarted last used to lead no streams, and publish-acknowledgement p99 roughly doubled until leadership moved. The last step of `dcctl upgrade` now moves stream and consumer leaders to even the servers out and prints the leaders per server before and after. It is best effort: a failure is a warning, never an upgrade failure. [`dcctl broker rebalance <instance>`](../reference/dcctl.md#dcctl-broker-rebalance) does the same on demand, and the new alert `BrokerLeadershipImbalanced` fires when a server leads fewer than half the average.
 
@@ -1472,7 +1487,7 @@ Roll forward from this release, not back. The two new migrations add a table and
 
 #### Known issues {#v0270-known-issues}
 
-- **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not.
+- **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not. **Fixed in `v1.6.0`:** see [A full broker reload keeps the devices the auth callout admitted](#v160-broker-reload).
 
 ### v0.26.0 — devices enrol themselves, and the front end moves to Traefik {#v0260-upgrade}
 
