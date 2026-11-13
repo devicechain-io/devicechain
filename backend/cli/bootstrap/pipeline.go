@@ -342,6 +342,9 @@ type State struct {
 	// and a later bootstrap is let through over it — so recordRunEnded reports that as
 	// a failure rather than the courtesy warning every other phase write gets.
 	UnfinishedBootstrap bool
+	// DeclarationWritten is set by stepDeclareInstance immediately before it writes
+	// the declaration, so even a write that fails part-way has an outcome to record.
+	DeclarationWritten bool
 	// Evolving says this State describes an instance that already exists and is
 	// being moved, rather than one being built.
 	//

@@ -97,9 +97,9 @@ Por defecto basta una aprobación; la política puede exigir dos personas distin
 
 La aprobación se evalúa con el token de la sesión propia de quien aprueba en ese momento. Cerrar la sesión después no la termina. Al publicar, cada aprobador debe conservar una membresía habilitada, sin restricciones de ámbito, con `device:write` y `event:read`; de lo contrario se rechaza con `APPROVER_NO_LONGER_QUALIFIES`.
 
-El ciclo es `RAN` → `APPROVED` cuando aprueban suficientes personas → `CONSUMED` al publicar. `consumedVersion` identifica la versión. Puedes rechazar una revisión `RAN` o `APPROVED` con `rejectAutomationReview(token, note)`, sin verificación adicional. Las ejecuciones, aprobaciones y rechazos se registran con la persona como actor.
+El ciclo es `RAN` → `APPROVED` cuando aprueban suficientes personas → `CONSUMED` al publicar. `consumedVersion` identifica la versión. Puedes rechazar una revisión `RAN` o `APPROVED` con `rejectAutomationReview(token, note)`, sin verificación adicional, salvo que haya caducado; intentar rechazar una revisión caducada devuelve `REVIEW_NOT_PENDING`. Las ejecuciones, aprobaciones y rechazos se registran con la persona como actor.
 
-La aprobación dura 24 horas por defecto. Una aprobación caducada sigue en estado `APPROVED`; comprueba `expiresAt`. Al publicar se aplican tanto la caducidad almacenada como la duración de la política actual; las pruebas caducadas se rechazan con `REVIEW_EXPIRED`.
+La aprobación dura 24 horas por defecto. Las lecturas y los filtros de estado muestran `EXPIRED` cuando vence el `expiresAt` almacenado o la duración de la política actual, incluido el instante exacto de caducidad. Al publicar se aplica la misma regla y se rechazan las pruebas caducadas con `REVIEW_EXPIRED`. La caducidad se calcula al consultar, sin tarea en segundo plano ni actualización del registro; las revisiones pendientes, rechazadas y consumidas conservan su estado.
 
 Al aprobar también se comprueba que coincidan el borrador, la base y las pruebas almacenadas. `matchesCurrentDraft` indica si el borrador sigue siendo el revisado; la consola muestra un aviso cuando cambia. Comparte `/automation-reviews/<token>` con cualquiera que tenga permiso para leer revisiones.
 

@@ -277,3 +277,28 @@ func TestAutomationReviewWireRequiresEventRead(t *testing.T) {
 		})
 	}
 }
+
+func TestAutomationReviewWireExpiredState(t *testing.T) {
+	ctx, api, schema := automationWireRig(t)
+	res := schema.Exec(ctx, automationRunDoc, "", map[string]any{"input": automationWireInput()})
+	require.Empty(t, res.Errors)
+	review := automationWireData(t, res.Data, "runAutomationReview")
+	vars := map[string]any{"token": review["token"], "digest": review["reviewDigest"]}
+	res = schema.Exec(auth.WithClaims(ctx, automationWireClaims("reviewer")),
+		`mutation($token:String!,$digest:String!) { approveAutomationReview(token:$token,digest:$digest) { state } }`, "", vars)
+	require.Empty(t, res.Errors)
+	row, err := api.AutomationReviewByToken(ctx, review["token"].(string))
+	require.NoError(t, err)
+	require.NoError(t, api.RDB.DB(ctx).Model(row).Update("expires_at", time.Now().UTC().Add(-time.Second)).Error)
+	res = schema.Exec(ctx, `query($token:String!) {
+  automationReview(token:$token) { state }
+  automationReviews(criteria:{profileToken:"profile",state:EXPIRED,pageNumber:1,pageSize:1}) {
+   results { token state } pagination { totalRecords }
+  }
+ }`, "", map[string]any{"token": row.Token})
+	require.Empty(t, res.Errors)
+	require.Equal(t, "EXPIRED", automationWireData(t, res.Data, "automationReview")["state"])
+	page := automationWireData(t, res.Data, "automationReviews")
+	require.Equal(t, []any{map[string]any{"token": row.Token, "state": "EXPIRED"}}, page["results"])
+	require.Equal(t, float64(1), page["pagination"].(map[string]any)["totalRecords"])
+}
