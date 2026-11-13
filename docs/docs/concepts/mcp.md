@@ -178,13 +178,9 @@ from passing policy; a waiting proposal is refused when approval rechecks that p
 
 The tenant policy decides whether a new proposal may be made; device-management's local kill
 fence guards only the carrying out of an approved action. After agent actions are turned off and
-on again, the fence reopens at the next final approval, which sees that actions were turned back
-on after the kill, so proposals are accepted again as soon as the policy allows them. During a
-rolling upgrade, if a tenant is disabled through an upgraded pod and enabled again through a pod
-of an earlier release, the policy allows proposals but the fence stays closed: new proposals are
-accepted and wait, and a final approval is refused with `FENCE_CLOSED`, leaving the proposal
-pending and every alarm unchanged. Enable the tenant again through an upgraded pod; the next
-final approval then reopens the fence, and the waiting proposals can be approved.
+on again, the fence reopens at the next final approval that passes every check made just before
+commit, so proposals are accepted again as soon as the policy allows them, and a proposal that
+was waiting can then be approved.
 
 ### Proposing actions (Preview) {#proposing-actions}
 
