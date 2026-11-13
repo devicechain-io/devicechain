@@ -18,6 +18,12 @@ title: 选择规格
 
 规格以它在延迟目标之内能够稳定处理的速率命名。名字就是承诺，因此规格绝不会以“目标”的形式发布。这就是没有 `perf-20k` 的原因：实测的形态精确存储了每秒 20,000 个事件，没有丢失也没有重复，但确认延迟的第 99 百分位为 245 毫秒，所以 20,000 只作为 `perf-16k` 的吞吐上限记录在文档中，而不是一个规格。
 
+## GKE 上的 broker 存储
+
+当 GKE 的 SSD StorageClass 可用时，`dcctl bootstrap` 创建的新 GKE broker 使用 `premium-rwo`（`pd-ssd`）。JetStream 的同步磁盘写入使磁盘延迟尤为重要，使用 `--ha` 的三个副本时更是如此；SSD 可避免依赖小容量 balanced 磁盘的最低 IOPS。其他云和 kind 继续使用集群默认存储类。OpenTofu 实例输入 `nats_jetstream_storage_class`（模块输入 `jetstream_storage_class`）默认为 `""`，此时省略 `config.jetstream.fileStore.pvc.storageClassName`。如需其他存储类，请在首次 apply 前设置。
+
+现有 PVC 的存储类及 StatefulSet 的卷声明模板不可变。升级时，以及 bootstrap 发现现有 broker 或 JetStream 卷声明时，`dcctl` 不设置此输入。模块通过 `lifecycle.ignore_changes` 保留首次选择（包括未设置的情况），后续默认值不会改变它。现有 GKE broker 保留当前磁盘；本次变更不会将数据迁移到 SSD。
+
 ## 如何选择 {#choosing}
 
 ```bash

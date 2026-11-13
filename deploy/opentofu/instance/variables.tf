@@ -173,6 +173,12 @@ variable "nats_server_image_digest" {
   }
 }
 
+variable "nats_jetstream_storage_class" {
+  description = "StorageClass for new broker JetStream volumes. Empty uses the cluster default. dcctl selects premium-rwo for new GKE brokers only; upgrades leave this unset. The module remembers its first choice and ignores later changes because PVC storage classes are immutable. Leave unset when adopting an existing broker."
+  type        = string
+  default     = ""
+}
+
 variable "nats_jetstream_storage" {
   description = <<-EOT
     PersistentVolume size for NATS JetStream file storage. The default must fit the

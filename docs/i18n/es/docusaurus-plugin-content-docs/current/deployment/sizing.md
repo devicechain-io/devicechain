@@ -29,6 +29,12 @@ configuración medida almacenó 20 000 eventos por segundo con exactitud, sin p�
 pero las confirmaciones tardaron 245 ms en el percentil 99, así que 20 000 se documenta como un techo
 de rendimiento de `perf-16k` y no como un tamaño.
 
+## Almacenamiento del broker en GKE
+
+Los brokers nuevos de GKE creados por `dcctl bootstrap` usan `premium-rwo` (`pd-ssd`) cuando está disponible la StorageClass SSD de GKE. Las escrituras síncronas de JetStream hacen que la latencia del disco sea importante, especialmente con tres réplicas bajo `--ha`; SSD evita depender del mínimo de IOPS de los discos balanced pequeños. Otras nubes y kind conservan la clase predeterminada del clúster. La entrada OpenTofu de instancia `nats_jetstream_storage_class` (entrada del módulo `jetstream_storage_class`) vale `""` por defecto y omite `config.jetstream.fileStore.pvc.storageClassName`. Para elegir otra clase, configúrala antes del primer apply.
+
+La clase de un PVC existente y la plantilla de claims del StatefulSet son inmutables. `dcctl` deja esta entrada sin definir al actualizar y cuando bootstrap encuentra un broker o claim de JetStream existente. El módulo conserva su primera elección mediante `lifecycle.ignore_changes`, incluso si estaba sin definir, para que los nuevos valores predeterminados no la cambien. Los brokers GKE existentes conservan sus discos; este cambio no migra datos a SSD.
+
 ## Elegir uno {#choosing}
 
 ```bash
