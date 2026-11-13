@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-user-management/agentpolicy"
@@ -56,7 +57,10 @@ const (
 const MaxExecutionApprovers = 10
 
 // maxApproverPrincipalLen is the identity email column's size (iam.Identity.Email size:256),
-// so no real principal is longer.
+// shared by proposers. It counts CHARACTERS, as varchar(256) does: a canonical email may
+// carry a non-ASCII local part, so a byte cap would refuse a principal the store accepts.
+// Service-account subjects are at most 144 characters (16-character prefix + 128-character
+// account token), so no real principal is longer.
 const maxApproverPrincipalLen = 256
 
 // kindActScope is the act:* scope a proposal of each kind is derived through.
@@ -169,6 +173,16 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 	if req.ProposerPrincipal == "" || req.ProposerClient == "" {
 		return ExecutionDecision{}, errors.New("the proposer's principal and client are required")
 	}
+	if utf8.RuneCountInString(req.ProposerPrincipal) > maxApproverPrincipalLen {
+		return ExecutionDecision{}, fmt.Errorf("proposer session principal is malformed: maximum principal length is %d characters", maxApproverPrincipalLen)
+	}
+	// Service-account proposers need no sid. Any supplied sid must have the same canonical
+	// form as an approver's, even when the proposer's standing will not read its session.
+	if req.ProposerSid != "" {
+		if _, err := uuid.Parse(req.ProposerSid); len(req.ProposerSid) != 36 || err != nil {
+			return ExecutionDecision{}, errors.New("proposer session sid is malformed: must be empty or a canonical 36-character UUID")
+		}
+	}
 	if len(req.Approvers) > MaxExecutionApprovers {
 		return ExecutionDecision{}, fmt.Errorf("at most %d approvers may be named", MaxExecutionApprovers)
 	}
@@ -182,7 +196,7 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 		}
 		// A sid is minted by uuid.NewString, so only the canonical 36-character form is one; the
 		// length test also refuses the urn:, braced and undashed forms uuid.Parse accepts.
-		if _, err := uuid.Parse(s.Sid); len(s.Principal) > maxApproverPrincipalLen || len(s.Sid) != 36 || err != nil {
+		if _, err := uuid.Parse(s.Sid); utf8.RuneCountInString(s.Principal) > maxApproverPrincipalLen || len(s.Sid) != 36 || err != nil {
 			return ExecutionDecision{}, errors.New("approver session principal or sid is malformed")
 		}
 		named[s.Principal] = true

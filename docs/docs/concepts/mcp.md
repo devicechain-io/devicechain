@@ -176,6 +176,12 @@ confirm, without step-up. **Turn agent actions back on** requires step-up and do
 an operator suspension or a disabled instance switch. Turning actions off stops new proposals
 from passing policy; a waiting proposal is refused when approval rechecks that policy.
 
+The tenant policy decides whether a new proposal may be made; device-management's local kill
+fence guards only the carrying out of an approved action. After agent actions are turned off and
+on again, the fence reopens at the next final approval that passes every check made just before
+commit, so proposals are accepted again as soon as the policy allows them, and a proposal that
+was waiting can then be approved.
+
 ### Proposing actions (Preview) {#proposing-actions}
 
 Three MCP tools expose proposals for human review. They appear only when the MCP service's `agentActuation.enabled` configuration key is `true` (the default is `false`) and the caller's token carries the appropriate action scope alongside `read-only`:

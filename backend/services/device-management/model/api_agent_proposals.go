@@ -224,6 +224,11 @@ func (api *Api) ProposeAlarmAction(ctx context.Context, proposer actiongate.Prop
 	if api.AgentDecider == nil {
 		return nil, errAgentDecider
 	}
+	// Tenant policy gates proposals; the local kill fence guards execution only.
+	// This decision has no actuation generation, and a closed fence may await re-enable
+	// by the next execution, so checking the row here would prevent that recovery.
+	// Proposals change no alarms: a fenced approval leaves them pending for a later
+	// approval with a newer generation, or until they expire.
 	dec, err := api.AgentDecider.Actuation(ctx, actiongate.ActuationRequest{Kind: kind, Impact: ProposalImpactNormal, TargetCount: len(tokens)})
 	if err != nil {
 		if errors.Is(err, auth.ErrForbidden) {

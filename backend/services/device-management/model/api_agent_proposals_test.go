@@ -180,6 +180,48 @@ func TestProposalIsRecordedNotExecuted(t *testing.T) {
 	require.Equal(t, string(AlarmStateActive), alarms[0].State, "a proposal changes no alarm")
 }
 
+func TestProposalIsAcceptedWhileFenceClosedAndApprovalStaysPending(t *testing.T) {
+	r := newProposalRig(t)
+	ctx := tenantCtx(rigTenant)
+	const generation = 7
+	require.NoError(t, r.api.ApplyKillEvent(ctx, killFor(rigTenant, generation)))
+	var fence AgentActuationFence
+	require.NoError(t, r.api.RDB.DB(ctx).First(&fence).Error)
+	require.False(t, fence.Enabled)
+	require.Equal(t, generation, fence.KilledAtGeneration)
+	r.decider.act = approveOne()
+	r.decider.exec = execApprove(1, "boss")
+	r.decider.exec.ActuationGeneration = generation
+	before, err := r.api.AlarmsByToken(ctx, []string{"a1"})
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+
+	out := r.propose(t, rigAgent, clearReq("closed-fence", "a1"))
+	require.Equal(t, ProposalStatusPending, out.Status)
+	require.NotNil(t, out.Proposal)
+	p := r.stored(t, out.Proposal.Token)
+	require.Equal(t, string(actiongate.StateProposed), p.State)
+
+	person := approver("boss", time.Now())
+	ctx = auth.WithBearer(auth.WithClaims(ctx, person.Claims), "human-bearer")
+	_, err = r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
+	require.True(t, actiongate.IsCode(err, actiongate.CodeFenceClosed), "got %v", err)
+	requireUnexecuted(t, r, p, ctx)
+	after, err := r.api.AlarmsByToken(ctx, []string{"a1"})
+	require.NoError(t, err)
+	require.Equal(t, before, after, "a fenced approval changes no alarm fields")
+
+	r.decider.exec.ActuationGeneration = generation + 1
+	got, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
+	require.NoError(t, err)
+	require.Equal(t, string(actiongate.StateExecuted), got.State)
+	require.Equal(t, string(actiongate.StateExecuted), r.stored(t, p.Token).State)
+	after, err = r.api.AlarmsByToken(ctx, []string{"a1"})
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	require.Equal(t, string(AlarmStateCleared), after[0].State)
+}
+
 // The same requestId with the same request returns the original; with another request, CONFLICT.
 func TestRequestIdReuseWithDifferentPayloadConflicts(t *testing.T) {
 	r := newProposalRig(t)
