@@ -56,7 +56,8 @@ const (
 const MaxExecutionApprovers = 10
 
 // maxApproverPrincipalLen is the identity email column's size (iam.Identity.Email size:256),
-// so no real principal is longer.
+// shared by proposers. Service-account subjects are at most 144 bytes (16-byte prefix +
+// 128-byte account token), so no real principal is longer.
 const maxApproverPrincipalLen = 256
 
 // kindActScope is the act:* scope a proposal of each kind is derived through.
@@ -168,6 +169,16 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 	}
 	if req.ProposerPrincipal == "" || req.ProposerClient == "" {
 		return ExecutionDecision{}, errors.New("the proposer's principal and client are required")
+	}
+	if len(req.ProposerPrincipal) > maxApproverPrincipalLen {
+		return ExecutionDecision{}, fmt.Errorf("proposer session principal is malformed: maximum principal length is %d bytes", maxApproverPrincipalLen)
+	}
+	// Service-account proposers need no sid. Any supplied sid must have the same canonical
+	// form as an approver's, even when the proposer's standing will not read its session.
+	if req.ProposerSid != "" {
+		if _, err := uuid.Parse(req.ProposerSid); len(req.ProposerSid) != 36 || err != nil {
+			return ExecutionDecision{}, errors.New("proposer session sid is malformed: must be empty or a canonical 36-character UUID")
+		}
 	}
 	if len(req.Approvers) > MaxExecutionApprovers {
 		return ExecutionDecision{}, fmt.Errorf("at most %d approvers may be named", MaxExecutionApprovers)

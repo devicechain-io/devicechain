@@ -189,6 +189,66 @@ func TestApproverSessionsAreValidated(t *testing.T) {
 	})
 }
 
+func TestProposerSessionIsValidatedBeforeReads(t *testing.T) {
+	x := newExecEnv(t)
+	for name, input := range map[string]struct {
+		principal, sid, message string
+	}{
+		"long principal":                 {strings.Repeat("a", 257), uuid.NewString(), "maximum principal length is 256 bytes"},
+		"long service-account principal": {auth.ServiceAccountSubject(strings.Repeat("a", 257)), "", "maximum principal length is 256 bytes"},
+		"long sid":                       {agentPerson, strings.Repeat("a", 65), "canonical 36-character UUID"},
+		"non UUID":                       {agentPerson, "not-a-uuid", "canonical 36-character UUID"},
+		"URN UUID":                       {agentPerson, "urn:uuid:" + uuid.NewString(), "canonical 36-character UUID"},
+		"braced UUID":                    {agentPerson, "{" + uuid.NewString() + "}", "canonical 36-character UUID"},
+		"undashed UUID":                  {agentPerson, strings.ReplaceAll(uuid.NewString(), "-", ""), "canonical 36-character UUID"},
+		"36 non-hex":                     {agentPerson, strings.Repeat("z", 36), "canonical 36-character UUID"},
+		"service-account malformed sid":  {auth.ServiceAccountSubject("alarm-agent"), "not-a-uuid", "canonical 36-character UUID"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := x.request(approvalBoss)
+			req.ProposerPrincipal, req.ProposerSid = input.principal, input.sid
+			original := x.m.refreshKV
+			kv := &countingApproverKV{KeyValue: original}
+			x.m.refreshKV = kv
+			defer func() { x.m.refreshKV = original }()
+			d, err := x.m.AgentExecutionDecision(context.Background(), personClaims(approvalBoss, string(auth.AlarmWrite)), req)
+			require.ErrorContains(t, err, "proposer session")
+			require.ErrorContains(t, err, input.message)
+			require.Empty(t, d.Verdict, "malformed input returns a validation error rather than a refusal")
+			require.Zero(t, kv.gets, "a malformed proposer is rejected before any sign-in is read")
+		})
+	}
+}
+
+func TestProposerSessionValidationAllowsBoundaries(t *testing.T) {
+	x := newExecEnv(t)
+	t.Run("maximum principal length", func(t *testing.T) {
+		req := x.request(approvalBoss)
+		req.ProposerPrincipal = strings.Repeat("a", 256)
+		original := x.m.refreshKV
+		kv := &countingApproverKV{KeyValue: original}
+		x.m.refreshKV = kv
+		defer func() { x.m.refreshKV = original }()
+		d, err := x.m.AgentExecutionDecision(context.Background(), personClaims(approvalBoss, string(auth.AlarmWrite)), req)
+		require.NoError(t, err)
+		require.Equal(t, agentpolicy.VerdictRefuse, d.Verdict, "the unknown principal fails standing, not input validation")
+		require.Equal(t, 2, kv.gets, "a 256-byte principal and canonical sid pass validation")
+	})
+	t.Run("service-account subject fits", func(t *testing.T) {
+		token := strings.Repeat("a", core.MaxTokenLen)
+		require.NoError(t, core.ValidateToken(token))
+		require.Len(t, auth.ServiceAccountSubject(token), len(auth.ServiceAccountSubjectPrefix)+core.MaxTokenLen)
+		require.LessOrEqual(t, len(auth.ServiceAccountSubject(token)), maxApproverPrincipalLen)
+	})
+	t.Run("service-account empty sid", func(t *testing.T) {
+		req := tenantServiceAccountRequest(t, x)
+		require.Empty(t, req.ProposerSid)
+		d := x.decide(t, req)
+		require.Equal(t, agentpolicy.VerdictApprove, d.Verdict)
+		require.Contains(t, d.ValidApprovers, approvalBoss)
+	})
+}
+
 type countingApproverKV struct {
 	nats.KeyValue
 	gets     int
