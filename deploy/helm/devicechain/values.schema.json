@@ -1056,7 +1056,7 @@
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 106751,
-                    "description": "user-management: how many days a rotated-out signing key stays published so the tokens it signed keep verifying. 0 or absent takes the service default (8); a negative value, or one above 106751, is refused here and by the service at startup."
+                    "description": "user-management: how many days a rotated-out signing key stays published so the tokens it signed keep verifying. 0 or absent takes the service default (8); a negative value, or one above 106751, is refused here and by the service at startup. With signingKeyMaxAgeDays above 0, a retention shorter than auth.refreshTokenTtlSeconds is refused by the service at startup."
                   }
                 }
               },
