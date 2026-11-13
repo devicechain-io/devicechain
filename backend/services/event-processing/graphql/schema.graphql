@@ -389,7 +389,8 @@ input EvaluateRulesInput {
     """
     (Preview: may change in a minor release.) For ruleSet DRAFT, a canvas definition serialized to a string. Give exactly one of graph and
     ruleDefinition. A graph may hold several detection rules; each is evaluated and named by its
-    condition node's id. Rejected for PUBLISHED, so a mistake is not silent.
+    condition node's id. A graph with more than 256 detection rules is refused with LIMIT_EXCEEDED before any is compiled.
+    Rejected for PUBLISHED, so a mistake is not silent.
     """
     graph: String
     """
