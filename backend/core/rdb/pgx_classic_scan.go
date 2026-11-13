@@ -26,9 +26,13 @@ package rdb
 // held by TestPgxClassicScanUpstreamPins, which fails on any bump of either module.
 //
 // EXIT CONDITION: delete this file — and call postgres.New(postgres.Config{DSN: dsn})
-// directly again — once pgx caches isSQLScanDestination per reflect.Type (upstream:
-// github.com/jackc/pgx/v5, stdlib/sql_go1.27.go, func isSQLScanDestination, called from
-// (*Rows).ScanColumn). Re-run BenchmarkPgxScan to confirm before deleting.
+// directly again at all THREE call sites (postgres.go, guest.go, shard_handles.go) — only
+// once BenchmarkPgxScan's native sub-benchmark (no workaround) is at or below its classic
+// one (this workaround), within noise. pgx caching isSQLScanDestination per reflect.Type
+// is necessary but NOT sufficient: v5.12.0 does cache it (a sync.Map in
+// stdlib/sql_go1.27.go), and on 2026-11-13 (n=30, Postgres 17) it still measured
+// 29.6 ms/op with this workaround against 34.0 ms/op without it, because the per-column
+// ScanColumn path itself costs more than the classic Next(dest) path.
 
 import (
 	"context"
