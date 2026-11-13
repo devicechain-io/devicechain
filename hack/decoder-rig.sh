@@ -123,10 +123,15 @@ cluster_exists() { grep -qx -- "$cluster" <<<"$(kind get clusters 2>/dev/null)";
 # never deleted by an earlier run's timer.
 deadman_pid_file="$state_dir/deadman.pid"
 deadman_cmdline_of() {
-  { tr '\0' ' ' <"/proc/$1/cmdline"; } 2>/dev/null || true
+  if [ -r "/proc/$1/cmdline" ]; then
+    tr '\0' ' ' <"/proc/$1/cmdline"
+  else
+    # macOS has no /proc; -ef also works with Git Bash's ps (unlike -o).
+    ps -ef | awk -v p="$1" '$2 == p { print }'
+  fi
 }
 disarm_deadman() {
-  local pid child cmd
+  local pid cmd
   [[ -f "$deadman_pid_file" ]] || return 0
   pid="$(<"$deadman_pid_file")"
   # A saved PID can belong to an unrelated process after a reboot or PID reuse.
@@ -138,15 +143,20 @@ disarm_deadman() {
     rm -f "$deadman_pid_file"
     return 0
   fi
-  # The sleep is the timer's child: end it too, so nothing outlives the disarm.
-  for child in $(ps -o pid=,ppid= 2>/dev/null | awk -v p="$pid" '$2 == p { print $1 }'); do kill "$child" 2>/dev/null || true; done
+  # The timer's TERM trap kills its recorded sleep PID, without process discovery.
   kill "$pid" 2>/dev/null || true
   rm -f "$deadman_pid_file"
 }
 arm_deadman() {
   disarm_deadman
   [[ "$deadman_hours" != 0 ]] || { note "dead-man disarmed (DC_DEC_RIG_DEADMAN_HOURS=0)"; return 0; }
-  nohup bash -c "sleep $((deadman_hours * 3600)) && kind delete cluster --name '$cluster' --kubeconfig '$kubeconfig'" \
+  nohup bash -c "
+    sleeper=
+    trap 'if [ -n \"\$sleeper\" ]; then kill \"\$sleeper\" 2>/dev/null; wait \"\$sleeper\" 2>/dev/null; fi; exit 0' TERM INT
+    sleep $((deadman_hours * 3600)) &
+    sleeper=\$!
+    wait \"\$sleeper\" && kind delete cluster --name '$cluster' --kubeconfig '$kubeconfig'
+  " \
     >"$state_dir/deadman.log" 2>&1 </dev/null &
   printf '%s\n' "$!" >"$deadman_pid_file"
   disown || true
@@ -588,7 +598,7 @@ cmd_selftest() {
     note "refused: missing uplink series in '$metrics'"
   done
   (
-    local saved_deadman_pid_file="$deadman_pid_file" decoy="" timer="" timer_children="" i
+    local saved_deadman_pid_file="$deadman_pid_file" decoy="" timer="" timer_children="" child i
     deadman_pid_file="$rig_tmp/selftest-deadman.pid"
     # Keep both planted processes contained even if an assertion fails.
     # shellcheck disable=SC2317 # invoked by the EXIT trap below
@@ -611,15 +621,16 @@ cmd_selftest() {
     kill "$decoy" 2>/dev/null || true
     wait "$decoy" 2>/dev/null || true
     decoy=""
-    bash -c "sleep 300 && kind delete cluster --name '$cluster' --kubeconfig '$kubeconfig'" &
-    timer=$!
+    deadman_hours=1
+    arm_deadman
+    timer="$(<"$deadman_pid_file")"
     # Track the child before disarming so cleanup also works where ps lacks -o support.
     for i in {1..20}; do
       timer_children="$(ps -ef | awk -v p="$timer" '$3 == p { print $2 }')"
       [[ -n "$timer_children" && "$(deadman_cmdline_of "$timer")" == *"kind delete cluster --name '$cluster'"* ]] && break
       sleep 0.1
     done
-    printf '%s\n' "$timer" >"$deadman_pid_file"
+    [[ -n "$timer_children" ]] || fail "selftest: dead-man sleep never started"
     disarm_deadman
     for i in {1..20}; do
       kill -0 "$timer" 2>/dev/null || break
@@ -627,6 +638,13 @@ cmd_selftest() {
     done
     if kill -0 "$timer" 2>/dev/null; then fail "selftest: disarm_deadman left its own timer alive"; fi
     wait "$timer" 2>/dev/null || true
+    for child in $timer_children; do
+      for i in {1..20}; do
+        kill -0 "$child" 2>/dev/null || break
+        sleep 0.1
+      done
+      if kill -0 "$child" 2>/dev/null; then fail "selftest: disarm_deadman left its sleep alive"; fi
+    done
     timer=""
     deadman_pid_file="$saved_deadman_pid_file"
     note "disarmed: this rig's own dead-man"
