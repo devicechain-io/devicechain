@@ -19,7 +19,7 @@
     "prestart": "npm run guide-assets && npm run schema && npm run graphql-reference",
     "start": "docusaurus start",
     "prebuild": "npm run guide-assets && npm run schema && npm run graphql-reference",
-    "build": "docusaurus build",
+    "build": "node --max-old-space-size=4096 node_modules/@docusaurus/core/bin/docusaurus.mjs build",
     "postbuild": "node scripts/check-search-selectors.mjs",
     "serve": "docusaurus serve",
     "clear": "docusaurus clear",

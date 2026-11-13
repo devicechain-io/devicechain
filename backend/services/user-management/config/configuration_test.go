@@ -85,6 +85,38 @@ func TestValidateRejectsNonPositiveRefreshTtl(t *testing.T) {
 	assert.Error(t, cfg.Validate())
 }
 
+// Token TTLs must be refused before their seconds-to-Duration conversion overflows.
+func TestTokenTtlThatOverflowsADurationIsRefusedAtLoad(t *testing.T) {
+	for _, key := range []string{"accessTokenTtlSeconds", "refreshTokenTtlSeconds"} {
+		for _, seconds := range []int{MaxDurationSeconds + 1, math.MaxInt} {
+			t.Run(fmt.Sprintf("%s/%d", key, seconds), func(t *testing.T) {
+				cfg := &UserManagementConfiguration{}
+				doc := fmt.Sprintf(`{"auth":{"%s":%d}}`, key, seconds)
+				err := core.LoadConfiguration([]byte(doc), cfg)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "auth."+key)
+			})
+		}
+	}
+}
+
+// The largest safe TTL still loads unchanged for each token type.
+func TestTokenTtlAtDurationBoundStillLoads(t *testing.T) {
+	for _, key := range []string{"accessTokenTtlSeconds", "refreshTokenTtlSeconds"} {
+		t.Run(key, func(t *testing.T) {
+			cfg := &UserManagementConfiguration{}
+			doc := fmt.Sprintf(`{"auth":{"%s":%d}}`, key, MaxDurationSeconds)
+			require.NoError(t, core.LoadConfiguration([]byte(doc), cfg))
+			require.NoError(t, cfg.Validate())
+			if key == "accessTokenTtlSeconds" {
+				assert.Equal(t, MaxDurationSeconds, cfg.Auth.AccessTokenTtlSeconds)
+			} else {
+				assert.Equal(t, MaxDurationSeconds, cfg.Auth.RefreshTokenTtlSeconds)
+			}
+		})
+	}
+}
+
 // A negative signing-key age, or one whose day count overflows the Duration conversion in
 // main.go, reached MaybeRotateOnAge as a non-positive age, which reads as "rotation off":
 // the instance then signed with one key indefinitely without a word. Each row loaded with
@@ -128,6 +160,49 @@ func TestSigningKeyAgesInRangeStillLoad(t *testing.T) {
 			} else {
 				assert.Equal(t, tc.want, cfg.Auth.SigningKeyRetentionDays)
 			}
+		})
+	}
+}
+
+func TestSigningKeyRetentionShorterThanRefreshTtlIsRefused(t *testing.T) {
+	cases := []struct {
+		name string
+		auth string
+	}{
+		{"default refresh TTL", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":6`},
+		{"configured refresh TTL", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":1,"refreshTokenTtlSeconds":172800`},
+		{"default retention", `"signingKeyMaxAgeDays":90,"refreshTokenTtlSeconds":864000`},
+		{"one second short", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":7,"refreshTokenTtlSeconds":604801`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &UserManagementConfiguration{}
+			doc := fmt.Sprintf(`{"auth":{%s}}`, tc.auth)
+			err := core.LoadConfiguration([]byte(doc), cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "signingKeyRetentionDays")
+		})
+	}
+}
+
+func TestSigningKeyRetentionCoveringRefreshTtlStillLoads(t *testing.T) {
+	cases := []struct {
+		name          string
+		auth          string
+		wantRetention int
+	}{
+		{"equal lifetime", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":7,"refreshTokenTtlSeconds":604800`, 7},
+		{"default retention and refresh TTL", `"signingKeyMaxAgeDays":90`, 8},
+		{"rotation off", `"signingKeyMaxAgeDays":0,"signingKeyRetentionDays":1,"refreshTokenTtlSeconds":604800`, 1},
+		{"maximum retention", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":106751,"refreshTokenTtlSeconds":604800`, 106751},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &UserManagementConfiguration{}
+			doc := fmt.Sprintf(`{"auth":{%s}}`, tc.auth)
+			require.NoError(t, core.LoadConfiguration([]byte(doc), cfg))
+			assert.Equal(t, tc.wantRetention, cfg.Auth.SigningKeyRetentionDays)
+			assert.Equal(t, 604800, cfg.Auth.RefreshTokenTtlSeconds)
 		})
 	}
 }

@@ -314,6 +314,10 @@
       "sourceSha256": "c3b38f5fa05aaf556e4ae994c3dd89ab8bc466560f63d1ef508643a53e07a8e0",
       "translationSha256": "a4994195fb204fc0d9a2dd0763b9115b7b72f0caff11beac4603ecdcd89caf0a"
     },
+    "reference/csharp-sdk.md": {
+      "sourceSha256": "7c2ff25f32b4e14b3d51c27a5729ab0bd08c6e90302dc5ab1ea1bbf7be73ae50",
+      "translationSha256": "80ece6ceebb95ded7fc681e7a9e80693873cc631103c19dc691c8773e847ffee"
+    },
     "reference/dcctl.md": {
       "sourceSha256": "9a34a79b71ea8b07373930776a3da68ade8def89bb79f3c3a19a85b2a28f4d5a",
       "translationSha256": "5f04517b771684946399f42f17c068f07faf878c8e7b743b793e0bb244866993"

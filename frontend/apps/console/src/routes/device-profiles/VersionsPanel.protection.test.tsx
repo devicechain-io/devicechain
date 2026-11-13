@@ -3,7 +3,7 @@
 
 import '@/i18n/config';
 import type { ReactNode } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ policy: vi.fn(), reviews: vi.fn(), publish: vi.fn(), rollback: vi.fn(), toast: vi.fn(), changed: vi.fn() }));
@@ -22,39 +22,52 @@ vi.mock('@/components/ui/select', () => ({
   SelectItem: ({ value, children }: { value: string; children: ReactNode }) => <option value={value}>{children}</option>,
 }));
 import { VersionsPanel } from './VersionsPanel';
+// Warm the production lazy imports during module setup, outside each test's
+// timeout budget. Cold Vite transforms on CI are not part of publishing behavior.
+import '@/routes/automation-reviews/PublishReviewSelect';
+import '@/lib/api/automation-reviews';
 const policy = { effective: { required: true } };
 beforeEach(() => {
   vi.resetAllMocks(); h.policy.mockResolvedValue(policy); h.publish.mockResolvedValue(4);
   h.reviews.mockResolvedValue({ results: [{ token: 'approved-review', outcome: 'PASSED', approvedAt: '2026-11-10T10:00:00Z' }] });
 });
 afterEach(cleanup);
-function show() { render(<MemoryRouter><VersionsPanel profileToken="profile" activeVersion={3} deviceTypeCount={1} onChanged={h.changed} /></MemoryRouter>); }
+async function show() {
+  render(<MemoryRouter><VersionsPanel profileToken="profile" activeVersion={3} deviceTypeCount={1} onChanged={h.changed} /></MemoryRouter>);
+  await act(async () => {
+    // Settle the policy (including rejection) and the lazy review selector before
+    // interacting; a mock being called does not mean useQuery has settled.
+    await vi.dynamicImportSettled();
+  });
+}
 async function publish() {
   fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
-  const buttons = await screen.findAllByRole('button', { name: 'Publish' }, { timeout: 5000 }); fireEvent.click(buttons[buttons.length - 1]);
+  const drawer = await screen.findByRole('dialog', { name: 'Publish profile' });
+  fireEvent.click(within(drawer).getByRole('button', { name: 'Publish' }));
 }
-// Slow CI runners: the publish path goes through lazy imports.
-const SLOW = { timeout: 5000 };
 
 describe('protected profile publishing', () => {
   it('passes the selected review and refreshes reviews after publishing', async () => {
-    show(); await screen.findByRole('option', { name: /approved-rev/ }, SLOW);
+    await show(); await screen.findByRole('option', { name: /approved-rev/ });
     fireEvent.change(screen.getByLabelText('Approved review'), { target: { value: 'approved-review' } });
     await publish();
-    await waitFor(() => expect(h.publish).toHaveBeenCalledExactlyOnceWith('profile', undefined, undefined, 'approved-review'), SLOW);
-    await waitFor(() => expect(h.reviews).toHaveBeenCalledTimes(2), SLOW);
+    await waitFor(() => expect(h.publish).toHaveBeenCalledExactlyOnceWith('profile', undefined, undefined, 'approved-review'));
+    await waitFor(() => expect(h.reviews).toHaveBeenCalledTimes(2));
+    await screen.findByRole('option', { name: /approved-rev/ });
+    expect((screen.getByLabelText('Approved review') as HTMLSelectElement).value).toBe('');
+    expect(h.changed).toHaveBeenCalledTimes(1);
   });
   it('explains the missing review, links to review, and blocks publishing', async () => {
-    h.reviews.mockResolvedValue({ results: [] }); show();
-    await screen.findByText(/There are no approved reviews/, undefined, SLOW);
+    h.reviews.mockResolvedValue({ results: [] }); await show();
+    await screen.findByText(/There are no approved reviews/);
     expect(screen.getByRole('link', { name: 'Change review' }).getAttribute('href')).toBe('/device-profiles/profile?tab=change-review');
     await publish();
-    await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Select an approved review of the current draft.', 'error'), SLOW);
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Select an approved review of the current draft.', 'error'));
     expect(h.publish).not.toHaveBeenCalled();
   });
   it('preserves publishing when the policy cannot be read', async () => {
-    h.policy.mockRejectedValue(new Error('Unavailable')); show();
-    await waitFor(() => expect(h.policy).toHaveBeenCalled(), SLOW); await publish();
-    await waitFor(() => expect(h.publish).toHaveBeenCalledExactlyOnceWith('profile', undefined, undefined), SLOW);
+    h.policy.mockRejectedValue(new Error('Unavailable')); await show();
+    expect(h.policy).toHaveBeenCalled(); await publish();
+    await waitFor(() => expect(h.publish).toHaveBeenCalledExactlyOnceWith('profile', undefined, undefined));
   });
 });

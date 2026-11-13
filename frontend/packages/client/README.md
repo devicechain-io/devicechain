@@ -35,18 +35,28 @@ DeviceChain console's own `vite.config.ts` uses.
 
 ```ts
 import { gql } from '@devicechain/client';
-import { DeviceListDocument } from './gql/graphql'; // your generated documents
+import { DeviceListDocument } from './gql/graphql'; // generated query with a $criteria variable
 
 const { devices } = await gql('device-management', DeviceListDocument, {
-  first: 25,
+  criteria: { pageNumber: 1, pageSize: 25 },
 });
 ```
 
 The area is the first argument, and it is a checked union — `AREAS` is exported
 as a real runtime array, not just a type, so you can enumerate it.
 
+Use generated string documents (`TypedDocumentString`, with codegen's
+`documentMode: 'string'`); the SDK calls `toString()` to obtain query text. An AST
+`DocumentNode` is not printed into GraphQL by this transport. `TypedDocument<TResult,
+TVariables>` is the exported contract for a hand-authored typed string.
+
 The result and variable types are inferred from the document. If the operation
-takes no variables, the argument is optional.
+takes no variables, the argument is optional. To supply options for that case,
+call `gql(area, document, undefined, options)`. The optional fourth argument is
+`RequestOptions`: `anonymous` skips authentication; `identity` selects the
+identity token explicitly. Both `/admin` and `/settings` areas default to the
+identity token. `areaPath(area)` returns the HTTP path and `areaKey(area)` the
+functional area before any slash.
 
 Failures arrive as a `GraphQLRequestError` carrying the HTTP status and the
 GraphQL error list. `isForbiddenError(err)` is the one classification worth
@@ -83,10 +93,15 @@ const session = createSessionTokens({
   apply: (pair) => { store.pair = pair; },
   refresh: async (refreshToken) =>
     (await gql('user-management', REFRESH, { refreshToken }, { anonymous: true })).refresh,
-  onEnd: (err) => showSignIn(err), // refused, lapsed, or offline past expiry
+  onEnd: (err) => {
+    store.pair = null;
+    showSignIn(err); // refused, lapsed, or offline past expiry
+  },
 });
 setAuthTokenGetter(session.getAccessToken);
 const stop = session.startAutoRefresh(); // optional: refresh on a timer, not only on demand
+// On teardown: stop(). When signing out or replacing the pair: session.reset().
+// onEnd must also clear store.pair; the SDK does not own that storage.
 ```
 
 A refusal from the server, such as an invalid or revoked refresh token, ends the
@@ -129,6 +144,12 @@ server closes it with code `4401` when the access token it opened with expires.
 token, subscribes again, and reports the reconnect as `connected(true)`, so re-query
 anything you must not miss when you see it.
 
+For a subscription with no variables, the third argument is still required:
+`subscribe(area, document, undefined, sink)`. Call the returned `unsubscribe()`
+when its owner unmounts. The sink also accepts optional `complete()` for operation
+completion. On sign-out, unregister the getters with `setAuthTokenGetter(null)`
+and `setIdentityTokenGetter(null)` as well as disposing the sockets.
+
 ## Also in here
 
 - **Basemap resolution** (`resolveBasemap`, `renderableBasemap`) — the client half
@@ -136,6 +157,28 @@ anything you must not miss when you see it.
   per-surface override over the tenant default the same way.
 - **Token masks** (`generateToken`, `conformsToMask`, `parseMask`, …) — the
   device-token vocabulary, validated client-side before a round trip.
+
+`errorCode(err)` reads the first GraphQL `extensions.code`, or returns null.
+`isScopeUnsupportedError(err)` distinguishes an operation unavailable to scoped
+members from an ordinary missing permission. `isScoped(claims)` and
+`scopeAnchorRefs(claims)` read `DecodedClaims.scopeAnchors`; permissions are in
+`authorities`, not a `scopes` field. `hasAuthority` takes decoded claims and a
+required authority; `isExpired` takes a token and optional skew in seconds (30 by default).
+
+`resolveBasemap(override, tenant)` returns the effective `Basemap`;
+`renderableBasemap(basemap)` returns a renderable tile configuration or null, and
+`fallbackView(basemap)` returns a center/zoom hint or null.
+
+For token masks, `generateToken(mask, { seed?, random?, uuid? })` generates a token;
+`conformsToMask(mask, token)` checks its shape. `normalizeToken(input)` normalizes
+user text, `isValidToken(token)` checks the token grammar, and `validateMask(mask)`
+returns a `MaskProblem` or null. `resolveMask(masks, entityType)` selects a configured
+mask, falling back to `masks.default` and then `'{slug}'`. `parseMask`, `maskToRegExp`,
+`sampleToken` and `MAX_TOKEN_LEN` support editors and previews.
+
+`createSessionTokens` accepts optional `skewSeconds` (30 by default, capped at half
+the token's lifetime). `read()` must return the same pair object until replacement,
+so a late refresh can be discarded after a session switch.
 
 ## Compatibility
 

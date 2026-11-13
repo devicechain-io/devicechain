@@ -664,16 +664,29 @@ func ParseConfigJSON(s *string) (map[string]any, error) {
 // Every call bumps, even with an unchanged value. During a rolling upgrade, an old
 // pod's re-enable after a new pod's disable does not bump and leaves the fence closed
 // (fail closed); repeating the re-enable through a new pod remedies this.
+// A tenant whose purge has begun is refused with ErrTenantDeleted: toggling it would
+// bump the actuation generation and could create a policy-head row in a tenant being
+// erased. The store re-checks under the tenant row lock, so a purge that begins
+// between the load and the write is refused too.
 func (s *Service) SetTenantEnabled(ctx context.Context, token string, enabled bool) (*iam.Tenant, error) {
 	t, err := s.loadTenant(ctx, token)
 	if err != nil {
 		return nil, err
+	}
+	if t.PurgeState.Deleted() {
+		return nil, ErrTenantDeleted
 	}
 	// Refuse unwired notification BEFORE the write, so a misconfigured service changes nothing.
 	if err := s.requireTenantActuation(); err != nil {
 		return nil, err
 	}
 	gen, err := s.iam.SetTenantEnabledAndBumpGeneration(ctx, t, enabled)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrTenantNotFound
+	}
+	if errors.Is(err, iam.ErrTenantPurging) {
+		return nil, ErrTenantDeleted
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -159,6 +159,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	// only such a run marks the declaration unfinished. A carve-out re-run (a restore,
 	// --allow-legacy-db-removal) over a LIVE instance clears the mark instead: had it
 	// written one, its failure would hand the next plain bootstrap a running instance.
+	st.DeclarationWritten = true
 	if err := writeInstanceDeclaration(ctx, st.KubeContext, st.Instance, spec, st.DcctlVersion, !st.OverLiveInstance); err != nil {
 		return err
 	}
