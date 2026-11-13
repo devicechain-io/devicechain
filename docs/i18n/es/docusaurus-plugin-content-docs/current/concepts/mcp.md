@@ -183,13 +183,16 @@ de instancia deshabilitado. Apagar las acciones impide que las propuestas nuevas
 política; una propuesta pendiente se deniega cuando la aprobación vuelve a comprobar esa política.
 
 La política del inquilino decide si se puede crear una propuesta nueva; la barrera local de
-desactivación de device-management solo protege la ejecución de una acción aprobada. Durante una
-actualización gradual, si las acciones de agentes se desactivan mediante un pod actualizado y se
-vuelven a activar mediante un pod de una versión anterior, la política vuelve a permitir
-propuestas, pero la barrera sigue cerrada: se aceptan las propuestas nuevas y quedan en espera,
-y la aprobación final se deniega con `FENCE_CLOSED`, dejando la propuesta pendiente y todas las
-alarmas sin cambios. Volver a activar las acciones de agentes mediante un pod actualizado reabre
-la barrera y permite aprobar las propuestas pendientes.
+desactivación de device-management solo protege la ejecución de una acción aprobada. Después de
+desactivar y volver a activar las acciones de agentes, la barrera se reabre en la siguiente
+aprobación final, que ve que las acciones se reactivaron después de la desactivación, así que las
+propuestas se aceptan de nuevo en cuanto la política las permite. Durante una actualización
+gradual, si un inquilino se deshabilita mediante un pod actualizado y se vuelve a habilitar
+mediante un pod de una versión anterior, la política permite propuestas, pero la barrera sigue
+cerrada: se aceptan las propuestas nuevas y quedan en espera, y la aprobación final se deniega con
+`FENCE_CLOSED`, dejando la propuesta pendiente y todas las alarmas sin cambios. Vuelva a habilitar
+el inquilino mediante un pod actualizado; la siguiente aprobación final reabre entonces la barrera
+y las propuestas pendientes se pueden aprobar.
 
 ### Proponer acciones (Preview) {#proposing-actions}
 
