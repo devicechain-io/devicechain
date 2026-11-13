@@ -17,6 +17,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventenvelope"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -359,24 +361,53 @@ func newHTTPEnv(t *testing.T, publish func(ctx context.Context, source string, m
 	return h
 }
 
-// A quiet tenant's request is published at once and alone (no dedup id, legacy bytes): its
-// latency and its message are what they were without envelopes.
+// A quiet tenant's request closes in Former.Add and is published alone with legacy bytes.
+// The former records exactly zero wait when Add closes at the first member's arrival time;
+// timer expiry records a positive wait. Checking these observations is deterministic even
+// when scheduling or publishing is slow, unlike measuring request latency.
 func TestHTTPQuietTenantRequestIsPublishedAloneImmediately(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	ms := &core.Microservice{FunctionalArea: "event-sources"}
+	ms.UseMetricsRegistry(reg)
+	metrics := messaging.NewEnvelopeMetrics(ms, "inbound")
 	var got []messaging.Message
 	var mu sync.Mutex
-	h := newHTTPEnv(t, func(_ context.Context, _ string, msg messaging.Message) error {
+	h, err := NewHTTPEnvelopes(messaging.FormerConfig{Linger: 5 * time.Millisecond}, metrics, func(_ context.Context, _ string, msg messaging.Message) error {
 		mu.Lock()
 		got = append(got, msg)
 		mu.Unlock()
 		return nil
-	})
+	}, nil)
+	require.NoError(t, err)
+	t.Cleanup(h.Stop)
 	for i := 0; i < 3; i++ {
-		start := time.Now()
 		require.NoError(t, h.Publish(core.WithTenant(context.Background(), "acme"), "http", "acme",
 			messaging.Message{Value: pbDevice("d"), Key: []byte("d")}))
-		assert.Less(t, time.Since(start), 4*time.Millisecond, "a quiet tenant waited")
 		time.Sleep(20 * time.Millisecond)
 	}
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	histograms := map[string]*dto.Histogram{}
+	for _, family := range families {
+		if family.GetType() != dto.MetricType_HISTOGRAM {
+			continue
+		}
+		require.Len(t, family.Metric, 1)
+		metric := family.Metric[0]
+		require.Len(t, metric.Label, 1)
+		assert.Equal(t, "hop", metric.Label[0].GetName())
+		assert.Equal(t, "http", metric.Label[0].GetValue())
+		histograms[family.GetName()] = metric.GetHistogram()
+	}
+	members := histograms["devicechain_eventsources_inbound_envelope_members"]
+	require.NotNil(t, members)
+	assert.EqualValues(t, 3, members.GetSampleCount(), "three batches closed")
+	assert.Equal(t, float64(3), members.GetSampleSum(), "each batch had one member")
+	waited := histograms["devicechain_eventsources_inbound_envelope_linger_seconds"]
+	require.NotNil(t, waited)
+	assert.EqualValues(t, 3, waited.GetSampleCount(), "every batch reported its wait")
+	assert.Zero(t, waited.GetSampleSum(), "quiet batches must close in Add, not on timer expiry")
+
 	mu.Lock()
 	defer mu.Unlock()
 	require.Len(t, got, 3)
