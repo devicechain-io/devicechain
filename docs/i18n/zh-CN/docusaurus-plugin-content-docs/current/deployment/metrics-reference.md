@@ -57,6 +57,11 @@ title: 指标参考
 
 | 指标 | 含义 |
 | --- | --- |
+| `agent_proposals_total{kind, outcome}` | Preview（代理操作）。非试运行的提案调用数，按类型（`ALARM_ACK`、`ALARM_CLEAR`、`unknown`）和结果（`created`、`existing`、`refused`）区分；错误计为 `refused`。 |
+| `agent_approvals_total{outcome}` | Preview（代理操作）。审批调用数，按最终结果（`recorded`、`executed`、`refused`、`concurrent`、`step_up_required`、`forbidden`、`fence_closed`）区分，内部重试仅计一次。没有更具体结果的错误计为 `refused`。 |
+| `agent_executions_total{kind, result}` | Preview（代理操作）。最终审批执行数，按类型（`ALARM_ACK`、`ALARM_CLEAR`、`unknown`）和结果（`executed`、`dependency_changed`、`policy_refused`、`fence_closed`、`refused`、`failed`）区分，每次执行仅计一次，包括重新启用围栏后的重试。`failed` 表示事务未能完成（数据库或语句超时、策略服务或停用事件流不可用）；锁冲突作为并发审批计为 `refused`。 |
+| `agent_execution_seconds` | 直方图。Preview（代理操作）。执行最终审批所用的时间，包括拒绝、失败及重新启用围栏后的重试。 |
+| `agent_proposals_expired_total` | Preview（代理操作）。由过期清理任务转为 `EXPIRED` 的提案数。 |
 | `alarm_event_dead_lettered_total` | 无法发布到告警事件流而改写入死信流的告警状态变更事件。每一条都是到达了数据库却没有到达总线的告警转换，因此没有人因此被通知，它对运维人员可见，而不是只写进日志。 |
 | `callout_in_flight` | 此刻正在授权的设备认证标注请求。 |
 | `callout_refused_busy_total` | 因达到并发上限而以通用拒绝回应的设备认证标注请求。 |

@@ -37,6 +37,7 @@ type fakeDecider struct {
 	execReqs    []actiongate.ExecutionRequest
 	execBearers []string
 	second      func() (actiongate.ExecutionDecision, error)
+	beforeExec  func()
 }
 
 func (f *fakeDecider) Actuation(context.Context, actiongate.ActuationRequest) (actiongate.ActuationDecision, error) {
@@ -45,6 +46,9 @@ func (f *fakeDecider) Actuation(context.Context, actiongate.ActuationRequest) (a
 }
 
 func (f *fakeDecider) Execution(ctx context.Context, req actiongate.ExecutionRequest) (actiongate.ExecutionDecision, error) {
+	if f.beforeExec != nil {
+		f.beforeExec()
+	}
 	f.execReqs = append(f.execReqs, req)
 	bearer, _ := auth.BearerFromContext(ctx)
 	f.execBearers = append(f.execBearers, bearer)

@@ -141,6 +141,41 @@ func TestAgentExecutionMetrics(t *testing.T) {
 	}
 }
 
+func TestAgentExecutionCountedOnceWhenRetriedAfterNotPending(t *testing.T) {
+	r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1")
+	m := enableAgentTestMetrics(r)
+	bumped := false
+	r.decider.beforeExec = func() {
+		if bumped {
+			return
+		}
+		// The first pre-decision follows pendingProposal and precedes the execution lock.
+		require.Empty(t, r.decider.execReqs, "bump before the first pre-decision, not at the commit point")
+		update := r.db.WithContext(ctx).Model(&AgentProposal{}).Where("token = ?", p.Token).
+			Update("revision", gorm.Expr("revision + 1"))
+		require.NoError(t, update.Error)
+		require.EqualValues(t, 1, update.RowsAffected)
+		bumped = true
+	}
+
+	got, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
+	require.NoError(t, err)
+	require.Equal(t, string(actiongate.StateExecuted), got.State)
+	require.True(t, bumped)
+	require.Len(t, r.decider.execReqs, 3, "NOT_PENDING retries the pre-decision before the successful transaction decision; plain execution needs two calls")
+	for _, result := range []string{"executed", "dependency_changed", "policy_refused", "fence_closed", "refused", "failed"} {
+		want := float64(0)
+		if result == "executed" {
+			want = 1
+		}
+		require.Equal(t, want, testutil.ToFloat64(m.executions.WithLabelValues("ALARM_ACK", result)), result)
+	}
+	metric := &dto.Metric{}
+	require.NoError(t, m.duration.(prometheus.Metric).Write(metric))
+	require.Equal(t, uint64(1), metric.GetHistogram().GetSampleCount())
+	require.Equal(t, float64(1), testutil.ToFloat64(m.approvals.WithLabelValues("executed")))
+}
+
 func TestAgentExecutionCountsCommittedOutcomeWhenReadBackFails(t *testing.T) {
 	r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1")
 	m := enableAgentTestMetrics(r)
@@ -237,7 +272,7 @@ func TestExecutionResult(t *testing.T) {
 		{"policy unavailable", nil, fmt.Errorf("wrapped: %w", actiongate.ErrPolicyUnavailable), "failed"},
 		{"fence unavailable", nil, fmt.Errorf("wrapped: %w", actiongate.ErrFenceUnavailable), "failed"},
 		{"database", nil, errors.New("database unavailable"), "failed"},
-		{"lock timeout", nil, errors.New("lock timeout"), "failed"},
+		{"unrecognised error", nil, errors.New("lock timeout"), "failed"},
 		{"forbidden", nil, auth.ErrForbidden, "refused"},
 		{"wrapped forbidden", nil, fmt.Errorf("wrapped: %w", auth.ErrForbidden), "refused"},
 		{"not approver", nil, errNotAnApprover, "refused"},
