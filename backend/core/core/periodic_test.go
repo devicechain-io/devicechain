@@ -251,9 +251,12 @@ func TestWithoutTheOptionNoPassRunsAtStart(t *testing.T) {
 // still writing when Stop returned would be writing after the database it uses was told to
 // close.
 func TestStopWaitsForAPassInFlight(t *testing.T) {
+	entered := make(chan struct{})
+	var once sync.Once
 	release := make(chan struct{})
 	var finished atomic.Bool
 	task := NewPeriodicTask("test-area", "sweep", time.Millisecond, func(context.Context) error {
+		once.Do(func() { close(entered) })
 		<-release
 		finished.Store(true)
 		return nil
@@ -261,8 +264,12 @@ func TestStopWaitsForAPassInFlight(t *testing.T) {
 	require.NoError(t, task.Initialize(context.Background()))
 	require.NoError(t, task.Start(context.Background()))
 
-	// Wait until the pass is definitely in flight, then stop while it is.
-	time.Sleep(50 * time.Millisecond)
+	// Stop only after the callback confirms a pass is in flight.
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pass did not start")
+	}
 	stopped := make(chan error, 1)
 	go func() { stopped <- task.Stop(context.Background()) }()
 
@@ -296,27 +303,56 @@ func TestADetachedTaskSurvivesTheInitializeContext(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var passes atomic.Int64
+			passed := make(chan struct{}, 1)
 			task := NewPeriodicTask("test-area", "sweep", 10*time.Millisecond, func(context.Context) error {
 				passes.Add(1)
+				select {
+				case passed <- struct{}{}:
+				default:
+				}
 				return nil
 			}, NewNoOpLifecycleCallbacks(), tc.opts...)
 
 			initCtx, cancelInit := context.WithCancel(context.Background())
+			defer cancelInit()
 			require.NoError(t, task.Initialize(initCtx))
 			require.NoError(t, task.Start(context.Background()))
 			defer func() { _ = task.Stop(context.Background()) }()
 
-			require.Eventually(t, func() bool { return passes.Load() >= 1 }, 2*time.Second, 5*time.Millisecond)
+			waitForPassAfter := func(before int64) {
+				t.Helper()
+				timer := time.NewTimer(5 * time.Second)
+				defer timer.Stop()
+				for passes.Load() <= before {
+					select {
+					case <-passed:
+					case <-timer.C:
+						t.Fatalf("no pass after count %d: %s", before, tc.descriptions)
+					}
+				}
+			}
+			waitForPassAfter(0)
 			cancelInit()
-			time.Sleep(60 * time.Millisecond)
-			before := passes.Load()
-			time.Sleep(120 * time.Millisecond)
-			after := passes.Load()
 
 			if tc.wantCancel {
-				assert.Equal(t, before, after, tc.descriptions)
+				// Join without calling Stop: cancellation of Initialize must end the loop.
+				stopped := make(chan struct{})
+				go func() {
+					task.wg.Wait()
+					close(stopped)
+				}()
+				select {
+				case <-stopped:
+				case <-time.After(5 * time.Second):
+					t.Fatal(tc.descriptions)
+				}
+				before := passes.Load()
+				require.NoError(t, task.Stop(context.Background()))
+				assert.Equal(t, before, passes.Load(), tc.descriptions)
 			} else {
-				assert.Greater(t, after, before, tc.descriptions)
+				before := passes.Load()
+				waitForPassAfter(before)
+				assert.Greater(t, passes.Load(), before, tc.descriptions)
 			}
 		})
 	}
