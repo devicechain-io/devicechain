@@ -23,7 +23,7 @@ DeviceChain 由基于共享核心库构建的无状态 Go 微服务组成。Kube
 | `lwm2m-ingest` _（可选启用）_ | 通过 DTLS 终止基于 CoAP/UDP 的 OMA LwM2M 连接。设备建立*入站*连接，通过经过认证的 DTLS PSK 身份识别。注册驱动在线状态，观测资源被解码为测量，读取、写入和执行（包括固件更新序列）通过命令路径完成。参见 [LwM2M](./lwm2m.md)。 |
 | `ai-inference` _（可选启用）_ | 根据自然语言描述起草检测规则，并使用其他编写界面所用的*同一个*编译器进行验证。模型提出规则，编译器判断其是否有效。它绝不参与规则评估路径。参见 [AI 辅助编写](./ai-authoring.md)。 |
 | `outbound-connectors` _（可选启用）_ | 向外部系统投递出站动作：HTTP/webhook 调用，以及向消息代理和云队列（MQTT、Kafka、AWS SNS/SQS）执行 `publish`。它使用限定于租户、支持版本管理的连接器，凭据保存在密钥存储中。服务在独立进程中运行，因此缓慢或行为异常的外部系统不会影响检测流水线。参见[出站连接器](./outbound-connectors.md)。 |
-| `mcp` _（可选启用）_ | 只读的 Model Context Protocol 服务器，使 AI 助手能够代表用户访问租户。它是 GraphQL API 上的一层轻量 OAuth 2.1 资源服务器，携带调用方自己的租户作用域令牌。它没有服务令牌，只提供经过选择的读取工具。参见 [AI 访问（MCP）](./mcp.md)。 |
+| `mcp` _（可选启用）_ | Model Context Protocol 服务器，使 AI 助手能够代表用户访问租户。它是 GraphQL API 上的一层轻量 OAuth 2.1 资源服务器，携带调用方自己的租户作用域令牌。它没有服务令牌，提供经过选择的读取工具，并在启用 mcp 区域的 `agentActuation.enabled` 后提供[预览提议工具](./mcp.md#agent-proposals)。由人在控制台批准，MCP 不执行任何操作。参见 [AI 访问（MCP）](./mcp.md)。 |
 | `update-management` | 空中（OTA）更新：固件制品及其向设备的分配。它按租户保存不可变的固件、软件和配置镜像目录，并提供流式上传，按声明的大小和 SHA-256 摘要校验内容。可用制品被分配给设备后，设备通过其设备通道得知，并凭一个短期、可续传的授权下载镜像。服务会跟踪每次尝试，从下载、校验、安装、重启直到运行版本，并对不再出声的设备判定超时。制品由你注册的签名者签名，默认情况下只有已签名的制品才能被分配，由设备校验签名。发布会把制品分配给一个设备组，每次分配的设备数量有上限。它属于 `default` 配置档。参见[空中（OTA）更新](./over-the-air-updates.md)。 |
 | `operator` | 基于 controller-runtime 的 Operator，管理 `Instance` 自定义资源及其生命周期。其协调循环观察 Helm Chart 渲染的 Deployment，并把聚合状态条件、各区域的副本数和镜像以及正在运行的版本写入 `Instance.status`。配置不会原地重新加载：服务只在启动时读取一次配置，通过滚动更新 Pod 采用更改。工作负载本身由 Helm Chart 渲染。租户是控制平面数据库记录，不是被协调的资源。 |
 

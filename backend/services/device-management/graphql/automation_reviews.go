@@ -719,3 +719,7 @@ func (r *AutomationReviewResolver) WindowResults() (*[]*AutomationReviewWindowRe
 	}
 	return &out, nil
 }
+
+func (r *AutomationReviewResolver) ConsumedVersion() *int32 {
+	return r.M.ConsumedVersion
+}

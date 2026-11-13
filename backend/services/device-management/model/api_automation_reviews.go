@@ -24,7 +24,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// These defaults will be resolved from per-profile policy when enforcement lands.
+// Defaults apply to profiles without a stored protection policy.
 const (
 	DefaultReviewRequiredApprovals = 1
 	DefaultReviewAllowSelfApproval = false
@@ -403,20 +403,20 @@ func (api *Api) checkReviewCurrent(ctx context.Context, r *AutomationReview) err
 
 // recordReviewApproval is a single journaled compare-and-set; a stale revision
 // cannot overwrite another person's approval or a rejection.
-func (api *Api) recordReviewApproval(ctx context.Context, r *AutomationReview, approvals []ReviewApproval, now time.Time) error {
+func (api *Api) recordReviewApproval(ctx context.Context, r *AutomationReview, approvals []ReviewApproval, now time.Time, policy ReviewPolicySettings, policyRevision int32) error {
 	raw, err := actiongate.Canonical(approvals)
 	if err != nil {
 		return err
 	}
-	set := map[string]any{"approvals": datatypes.JSON(raw), "revision": r.Revision + 1}
+	set := map[string]any{"approvals": datatypes.JSON(raw), "revision": r.Revision + 1, "required_approvals": policy.RequiredApprovals}
 	principals := map[string]bool{}
 	for _, a := range approvals {
 		if a.Sub != "" {
 			principals[a.Sub] = true
 		}
 	}
-	if len(principals) >= r.RequiredApprovals {
-		set["state"], set["approved_at"], set["expires_at"], set["approved_policy_revision"] = ReviewStateApproved, now, now.Add(DefaultReviewApprovalTTL), 0
+	if len(principals) >= policy.RequiredApprovals {
+		set["state"], set["approved_at"], set["expires_at"], set["approved_policy_revision"] = ReviewStateApproved, now, now.Add(time.Duration(policy.ApprovalTtlSeconds)*time.Second), policyRevision
 	}
 	res := api.RDB.DB(ctx).Model(r).Where("token = ? AND state = ? AND revision = ?", r.Token, ReviewStateRan, r.Revision).Updates(set)
 	if res.Error != nil {
@@ -465,8 +465,17 @@ func (api *Api) ApproveAutomationReview(ctx context.Context, approver actiongate
 		if err := api.checkReviewCurrent(ctx, r); err != nil {
 			return nil, err
 		}
-		now := time.Now().UTC()
-		if err := actiongate.CheckStepUp(approver, auth.StepUp{MaxAge: DefaultReviewStepUpMaxAge}, now); err != nil {
+		view, err := api.approvalPolicy(ctx, r.DeviceProfileId)
+		if err != nil {
+			return nil, err
+		}
+		policy := view.Effective
+		policyRevision := int32(0)
+		if view.Stored != nil {
+			policyRevision = view.Stored.Revision
+		}
+		now := reviewNow().UTC()
+		if err := actiongate.CheckStepUp(approver, auth.StepUp{MaxAge: time.Duration(policy.StepUpMaxAgeSeconds) * time.Second}, now); err != nil {
 			return nil, err
 		}
 		var authors []string
@@ -476,7 +485,7 @@ func (api *Api) ApproveAutomationReview(ctx context.Context, approver actiongate
 		if authors == nil {
 			return nil, fmt.Errorf("stored review draft authors are missing")
 		}
-		if !DefaultReviewAllowSelfApproval && (approver.Principal == r.CreatedBy || slices.Contains(authors, approver.Principal)) {
+		if !policy.AllowSelfApproval && (approver.Principal == r.CreatedBy || slices.Contains(authors, approver.Principal)) {
 			return nil, actiongate.Refusal(actiongate.CodeSelfApproval, "the review creator and draft authors cannot approve this review", true)
 		}
 		var approvals []ReviewApproval
@@ -491,8 +500,8 @@ func (api *Api) ApproveAutomationReview(ctx context.Context, approver actiongate
 				return r, nil
 			}
 		}
-		approvals = append(approvals, ReviewApproval{Approval: actiongate.Approval{Sub: approver.Principal, Amr: approver.Amr, MfaTime: approver.MfaTime, At: now}, PolicyRevision: 0})
-		err = api.recordReviewApproval(ctx, r, approvals, now)
+		approvals = append(approvals, ReviewApproval{Approval: actiongate.Approval{Sub: approver.Principal, Amr: approver.Amr, MfaTime: approver.MfaTime, At: now}, PolicyRevision: int(policyRevision)})
+		err = api.recordReviewApproval(ctx, r, approvals, now, policy, policyRevision)
 		if errors.Is(err, errReviewConcurrentApproval) && attempt == 0 {
 			continue
 		}

@@ -285,11 +285,11 @@ inquilino; no se puede subir ni bajar por inquilino.
 #### Reintentar un rechazo por techo {#retrying-a-ceiling-refusal}
 
 `HELD_CEILING_EXCEEDED` es el **único rechazo temporal con código** que produce la ruta de puesta en cola.
-(Si un servicio del que depende la puesta en cola no responde, esta falla con un error sin código,
-`validation is unavailable`, que puede tener éxito al reintentar cuando el servicio vuelva.)
-Cualquier otro rechazo con código describe una petición que estará igual de mal en el siguiente intento; este
-se resuelve solo conforme sale el pendiente. Es el único código que vale la pena reintentar, y los
-demás vale la pena mostrarlos a una persona. Consulta
+Se resuelve solo conforme sale el trabajo pendiente. Una caída de una dependencia, en cambio, hace fallar
+la puesta en cola con un error de GraphQL cuyo `extensions.code` es `UNAVAILABLE`; no se ha creado
+ningún comando y puedes reintentar la petición sin cambios cuando vuelva la dependencia. Otros fallos
+de dependencias siguen sin código. Cualquier otro rechazo con código describe una petición que estará
+igual de mal en el siguiente intento y debes mostrarlo a una persona. Consulta
 [Enviar un comando](../guides/sending-commands.md#when-an-enqueue-is-refused).
 
 ### Dispositivos que obtienen sus comandos por HTTP {#http-command-pull}

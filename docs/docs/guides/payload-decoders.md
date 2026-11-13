@@ -8,7 +8,7 @@ title: Payload Decoders
 A **payload decoder** turns what a device or a network server sent into measurements. You write it once, on a [device profile](../user-guide/device-types-and-profiles.md), as a short list of rules: read two bytes at offset 1 as a signed number, divide by ten, store it as `temperature`. It reads a binary frame, a JSON body or the object a network server already decoded, and it produces the same measurements as any other source, with the units and validation of the metrics you declared.
 
 :::note Live decoding is in v1.2
-A decoder you publish runs on the live uplinks of an [inbound integration](./inbound-integrations.md): when the device an uplink is about has a device type whose profile version carries a decoder, the uplink is decoded with it instead of being stored as the network server decoded it. A newly published decoder can take up to about a minute to be picked up. A device type with no decoder is stored as before. Rolling the upgrade out is described in [Releases and upgrades](../deployment/releases-and-upgrades.md#v120-payload-decoders).
+A decoder you publish runs on the live uplinks of an [inbound integration](./inbound-integrations.md): when the device an uplink is about has a device type whose profile version carries a decoder, the uplink is decoded with it instead of being stored as the network server decoded it. A newly published decoder can take up to about a minute to be picked up. A device type with no decoder is stored as before. Rolling the upgrade out is described in [Releases and upgrades](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-payload-decoders).
 
 The same decoder also reads a payload a device sends on its own connection, over HTTP (from v1.3) or MQTT (from v1.4), when the operator has turned that on. See [A device's own connection](#device-connection).
 :::
@@ -501,4 +501,4 @@ A function's behaviour never changes once it has shipped. A fix arrives under a 
 - [Device Protocol Reference](../reference/device-protocol.md#raw-payload): the raw-payload topic and route, and what happens to each message.
 - [Device types and profiles](../user-guide/device-types-and-profiles.md): metrics, drafts and publishing.
 - [Transport capability matrix](../reference/transport-matrix.md#inbound-integrations): what each way in supports.
-- [Releases and upgrades](../deployment/releases-and-upgrades.md#v120-payload-decoders): what changed in this release.
+- [Releases and upgrades](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-payload-decoders): what changed in this release.

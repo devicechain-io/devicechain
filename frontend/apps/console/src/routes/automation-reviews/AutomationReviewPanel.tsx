@@ -26,6 +26,7 @@ import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Pagination } from '@/components/ui/pagination';
 import { buildExpectation, parseDevices, type ExpectationRow, type ExpectationShape } from './expectations';
+import { ProtectionSection } from './ProtectionSection';
 import { Outcome, ReviewTable, reviewErrorKey, reviewPath } from './shared';
 
 const ROLES = ['INCIDENT', 'NORMAL'] as const;
@@ -58,6 +59,7 @@ function Panel({ profileToken }: { profileToken: string }) {
   }, [profileToken, pageNumber]);
   const reviews = [...(data?.results ?? [])].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return <div className="space-y-4">
+    <ProtectionSection profileToken={profileToken} />
     <SectionPanel title={t('tab')}><Badge variant="secondary">{t('preview')}</Badge>
       {loading ? <LoadingState description={t('loading')} /> : error ? <ErrorState description={error} />
         : !reviews.length ? <EmptyState description={t('empty')} /> : <>

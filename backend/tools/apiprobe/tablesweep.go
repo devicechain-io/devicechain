@@ -142,6 +142,12 @@ func reconcileTableCoverage(
 // exemption, and TestEveryExemptionExplainsItself rejects it. The question each answers
 // is: why is it CORRECT for this table to be empty after a tenant has been fully seeded?
 var tableSweepExemptions = map[string]string{
+	"device-management.automation_review_break_glass": "written only by a break-glass rollback, " +
+		"device-type re-point or device move on a protected profile, which requires a person's sign-in " +
+		"with a second factor verified within the policy's step-up age (15 minutes by default). The " +
+		"probe's tenant administrator signs in with a password only, so these actions are refused with " +
+		"SECOND_FACTOR_REQUIRED by design, exactly like an agent-policy loosening. The table's tenant " +
+		"column is proved by the purge coverage gate, and its reads are swept through automationReviewBreakGlass.",
 	"device-management.agent_proposals": "the agent-proposal ledger, written only by proposeAlarmAction, " +
 		"which accepts nothing but an AI agent's access token carrying alarm:propose; a person's console " +
 		"token, like the tenant administrator this probe runs as, is refused with AGENT_ONLY by design. Such " +

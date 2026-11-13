@@ -272,12 +272,12 @@ lowered per tenant.
 
 #### Retrying a ceiling refusal {#retrying-a-ceiling-refusal}
 
-`HELD_CEILING_EXCEEDED` is the **only temporary coded refusal** the enqueue path produces. (If a service the
-enqueue depends on is unreachable, the enqueue fails with an uncoded `validation is unavailable` error,
-which can succeed on a retry once the service is back.) Every other coded
-rejection describes a request that will be exactly as wrong on the next attempt; this one clears on
-its own as the backlog goes out. It is the one code worth retrying, and the rest are worth
-surfacing to a person. See
+`HELD_CEILING_EXCEEDED` is the **only temporary coded rejection** the enqueue path produces.
+It clears on its own as the backlog goes out. A dependency outage instead fails the enqueue
+with a GraphQL error whose `extensions.code` is `UNAVAILABLE`; no command was created and
+you can retry the request unchanged once the dependency is back. Other dependency failures
+remain uncoded. Every other coded rejection describes a request that will be exactly as wrong
+on the next attempt and should be surfaced to a person. See
 [Sending a command](../guides/sending-commands.md#when-an-enqueue-is-refused).
 
 ### Devices that fetch their commands over HTTP {#http-command-pull}

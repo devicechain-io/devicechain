@@ -54,7 +54,7 @@ func identityApi(t *testing.T, extra ...any) (*Api, context.Context) {
 		t.Fatal(err)
 	}
 	if err := db.AutoMigrate(append([]any{&DeviceType{}, &AssetType{}, &AssetTypeVersion{}, &Asset{},
-		&DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &MetricDefinition{},
+		&DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{}, &MetricDefinition{},
 		&CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}}, extra...)...); err != nil {
 		t.Fatal(err)
 	}
