@@ -35,9 +35,9 @@ func checkDeviceUplinksOverlay(st *State) error {
 	if recorded, was := lookupPath(st.ValuesOverlayRecorded, path); was && recorded == overlay {
 		return nil
 	}
-	return fmt.Errorf("the values overlay sets infrastructure.nats.mqttDeviceUplinks to %t, but this instance records --mqtt-device-uplinks=%t. "+
-		"A choice recorded with the flag takes precedence over the overlay key; change it with --mqtt-device-uplinks (or --mqtt-device-uplinks=false), "+
-		"or remove the key from the overlay. Nothing has been changed", overlay, *st.MqttDeviceUplinks)
+	return fmt.Errorf("the values overlay sets instance.config.infrastructure.nats.mqttDeviceUplinks to %t, but this instance records --mqtt-device-uplinks=%t, "+
+		"and a choice recorded with the flag takes precedence over the overlay. To record %t, run with --mqtt-device-uplinks=%t; "+
+		"to keep %t, remove the key from the overlay. Nothing has been changed", overlay, *st.MqttDeviceUplinks, overlay, overlay, *st.MqttDeviceUplinks)
 }
 
 // verifyDeviceUplinksRecorded refuses a declaration that came back without the choice this run

@@ -27,6 +27,11 @@ npm install @devicechain/brand
 import tokens from '@devicechain/brand/tokens';
 ```
 
+The public exports are `@devicechain/brand/tokens.json` (source tokens),
+`@devicechain/brand/tokens` (generated tokens), and the three stylesheet paths in
+the table below. There is no root `@devicechain/brand` entry; do not import it as
+JavaScript or reach into `tokens.generated.json` directly.
+
 There is no build step and no JavaScript to run: the stylesheets and the
 generated token JSON are shipped as-is.
 

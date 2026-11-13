@@ -254,6 +254,11 @@ type LimitError struct{ Msg string }
 
 func (e *LimitError) Error() string { return e.Msg }
 
+// RuleCountError describes a run refused for exceeding MaxRules.
+func RuleCountError(n int) *LimitError {
+	return &LimitError{Msg: fmt.Sprintf("%d rules were given, above the maximum of %d for one evaluation", n, MaxRules)}
+}
+
 // InputError is a run refused because its input is malformed.
 type InputError struct{ Msg string }
 
@@ -286,7 +291,7 @@ func Run(ctx context.Context, p Params) (Result, error) {
 		return Result{}, &LimitError{Msg: fmt.Sprintf("the edge limit %d is above the maximum of %d", maxEdges, HardMaxEdges)}
 	}
 	if len(p.Rules) > MaxRules {
-		return Result{}, &LimitError{Msg: fmt.Sprintf("%d rules were given, above the maximum of %d for one evaluation", len(p.Rules), MaxRules)}
+		return Result{}, RuleCountError(len(p.Rules))
 	}
 	if p.Lateness < 0 {
 		return Result{}, &InputError{Msg: "lateness must not be negative"}

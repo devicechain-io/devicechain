@@ -199,6 +199,93 @@ func TestCreateTenantStillCollidesOnAnActiveToken(t *testing.T) {
 	require.True(t, conflict.Is(err), "an active duplicate must be a conflict: %v", err)
 }
 
+func TestSetTenantEnabledRefusesADeletedTenant(t *testing.T) {
+	s, db := newPurgeTestServiceDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.AutoMigrate(&iam.AgentPolicy{}))
+	createTenant(t, s, "acme")
+	removed, err := s.DeleteTenant(ctx, "acme")
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	for _, enabled := range []bool{true, false} {
+		_, err := s.SetTenantEnabled(ctx, "acme", enabled)
+		require.ErrorIs(t, err, ErrTenantDeleted)
+		after, err := s.iam.TenantByToken(ctx, "acme")
+		require.NoError(t, err)
+		require.False(t, after.Enabled)
+		head, err := s.iam.AgentPolicyHead(ctx, "acme")
+		require.NoError(t, err)
+		require.Nil(t, head)
+	}
+}
+
+// Complete the purge after the service's initial load, before it takes either lock.
+// The loaded ID must never authorize a write or a generation bump for a successor.
+func TestSetTenantEnabledRefusesATenantPurgedAfterLoad(t *testing.T) {
+	for _, reuse := range []bool{false, true} {
+		for _, existingHead := range []bool{false, true} {
+			for _, enabled := range []bool{false, true} {
+				t.Run(fmt.Sprintf("reuse=%t/head=%t/enabled=%t", reuse, existingHead, enabled), func(t *testing.T) {
+					s, db := newPurgeTestServiceDB(t)
+					ctx := context.Background()
+					require.NoError(t, db.AutoMigrate(&iam.AgentPolicy{}))
+					createTenant(t, s, "acme")
+
+					var successor *iam.Tenant
+					var before *iam.AgentPolicy
+					fired := false
+					const callback = "test:purge_after_tenant_load"
+					require.NoError(t, db.Callback().Query().After("gorm:query").Register(callback, func(tx *gorm.DB) {
+						loaded, ok := tx.Statement.Dest.(*iam.Tenant)
+						if fired || !ok || tx.Error != nil || loaded.Token != "acme" {
+							return
+						}
+						fired = true
+						// Keep the service's loaded snapshot intact while its row disappears.
+						old := *loaded
+						epoch := time.Now().UTC().Truncate(time.Second)
+						require.NoError(t, s.iam.BeginTenantPurge(ctx, &old, epoch))
+						purging, err := s.iam.TenantByToken(ctx, old.Token)
+						require.NoError(t, err)
+						rec, err := s.iam.PurgeRecordFor(ctx, old.Token, epoch)
+						require.NoError(t, err)
+						require.NoError(t, s.iam.CompleteTenantPurge(ctx, purging, rec, 0, time.Now().UTC()))
+						if reuse {
+							successor = &iam.Tenant{Token: old.Token, TierID: old.TierID, Enabled: !enabled}
+							require.NoError(t, s.iam.CreateTenant(ctx, successor))
+							require.NotEqual(t, old.ID, successor.ID)
+						}
+						if existingHead {
+							_, err = s.iam.SaveAgentPolicyDraft(ctx, old.Token, "{}", "test")
+							require.NoError(t, err)
+							before, err = s.iam.AgentPolicyHead(ctx, old.Token)
+							require.NoError(t, err)
+						}
+					}))
+					t.Cleanup(func() { _ = db.Callback().Query().Remove(callback) })
+
+					got, err := s.SetTenantEnabled(ctx, "acme", enabled)
+					require.True(t, fired, "the purge race must be exercised")
+					require.Nil(t, got)
+					if reuse {
+						require.ErrorIs(t, err, ErrTenantDeleted)
+						after, err := s.iam.TenantByToken(ctx, "acme")
+						require.NoError(t, err)
+						require.Equal(t, successor.ID, after.ID)
+						require.Equal(t, !enabled, after.Enabled)
+					} else {
+						require.ErrorIs(t, err, ErrTenantNotFound)
+					}
+					afterHead, err := s.iam.AgentPolicyHead(ctx, "acme")
+					require.NoError(t, err)
+					require.Equal(t, before, afterHead, "refusal must roll back head creation or changes")
+				})
+			}
+		}
+	}
+}
+
 // A deleted tenant takes no new members. Without this, DeleteTenant's zero-membership
 // precondition holds only at the instant of the cut: an operator could attach a user
 // afterwards, get a success toast, and hand them a tenant that answers every login
