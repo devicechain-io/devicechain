@@ -946,7 +946,7 @@ input AdminAuditEventSearchCriteria {
     category: String
     """Only entries of this operation, such as `login` or `update`. Exact match."""
     operation: String
-    """Only entries whose actor contains this text. The match ignores case."""
+    """Only entries whose actor contains this text. The match ignores case. At most 256 bytes; longer input is refused with LIMIT_EXCEEDED."""
     actor: String
     """
     Only entries belonging to the tenant with this token. Exact match. Entries that belong

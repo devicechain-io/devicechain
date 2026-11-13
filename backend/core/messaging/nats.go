@@ -312,6 +312,10 @@ type NatsManager struct {
 	reconnectMu sync.Mutex
 	onReconnect []func()
 
+	// caches own delayed evictions that must run while the connection is still live.
+	cacheMu sync.Mutex
+	caches  []*Cache
+
 	// ackWaitOverride is the test seam behind SetAckWaitForTesting. Zero in production,
 	// where ackWait() answers the AckWait constant. Read it through ackWait(), never
 	// directly: the durable's configured AckWait and the AckDeadline a capacity reader
@@ -1436,7 +1440,7 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 		return err
 	}
 	for i := range msgs {
-		nm := natsMsg(subject, msgs[i])
+		nm, spans := startPublishMessage(ctx, subject, w.suffix, msgs[i])
 		// A fresh ceiling for each message: a batch is not one publish, and the
 		// ceiling bounds how long ONE unanswered request is waited on.
 		pctx, callerBound, cancel := publishContext(ctx)
@@ -1463,6 +1467,7 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 			}
 		}
 		cancel()
+		finishPublish(spans, err)
 		if err != nil && !callerBound && errors.Is(err, context.DeadlineExceeded) {
 			// Our ceiling fired, not the caller's deadline, which has not passed:
 			// report it as the broker timeout it has always been.
@@ -3546,6 +3551,9 @@ func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
 			}
 		}
 	}
+	// Follow-up deletes need the live connection, so flush before draining it; ctx
+	// bounds the deletes and the join of any follow-up already running.
+	nmgr.flushCacheFollowUps(ctx)
 	if nmgr.nc != nil {
 		nmgr.drainAndWait(ctx)
 	}

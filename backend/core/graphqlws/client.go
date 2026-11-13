@@ -199,6 +199,9 @@ type Client struct {
 	buffer      int
 
 	writeMu sync.Mutex // gorilla permits only one concurrent writer
+	// The reader and caller can discover closure concurrently.
+	connCloseOnce sync.Once
+	connCloseErr  error
 
 	mu       sync.Mutex
 	subs     map[string]*Subscription
@@ -270,6 +273,33 @@ func Dial(ctx context.Context, endpoint string, token TokenProvider, opts ...Opt
 	}
 	// Before the first read, which is the connection_ack below.
 	conn.SetReadLimit(cfg.readLimit)
+	// DialContext only covers the HTTP upgrade. Interrupt protocol-handshake
+	// I/O too, including cancellation without a deadline. Join a running callback
+	// before transferring ownership to the read loop.
+	cancelDone := make(chan struct{})
+	stopCancel := context.AfterFunc(ctx, func() {
+		defer close(cancelDone)
+		_ = conn.Close()
+	})
+	var disarmOnce sync.Once
+	disarmCancel := func() {
+		disarmOnce.Do(func() {
+			if !stopCancel() {
+				<-cancelDone
+			}
+		})
+	}
+	defer disarmCancel()
+	handshakeError := func(err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// The socket deadline can fire just before the context timer does.
+		if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+			return context.DeadlineExceeded
+		}
+		return err
+	}
 
 	c := &Client{
 		conn:        conn,
@@ -289,24 +319,33 @@ func Dial(ctx context.Context, endpoint string, token TokenProvider, opts ...Opt
 			params = map[string]interface{}{"Authorization": "Bearer " + tok}
 		}
 	}
-	if err := c.writeInit(params); err != nil {
+	if err := c.writeInit(ctx, params); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("graphqlws: send connection_init: %w", err)
+		return nil, fmt.Errorf("graphqlws: send connection_init: %w", handshakeError(err))
 	}
 
 	// Await connection_ack. A close frame here (e.g. 4401) is unwrapped into the
 	// returned error so the caller can errors.As it to a *websocket.CloseError.
-	_ = conn.SetReadDeadline(time.Now().Add(cfg.ackTimeout))
+	ackDeadline := time.Now().Add(cfg.ackTimeout)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(ackDeadline) {
+		ackDeadline = deadline
+	}
+	_ = conn.SetReadDeadline(ackDeadline)
 	var msg wsMessage
 	if err := conn.ReadJSON(&msg); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("graphqlws: await connection_ack: %w", err)
+		return nil, fmt.Errorf("graphqlws: await connection_ack: %w", handshakeError(err))
 	}
 	if msg.Type != msgConnectionAck {
 		_ = conn.Close()
 		return nil, fmt.Errorf("graphqlws: expected connection_ack, got %q", msg.Type)
 	}
 
+	disarmCancel()
+	if err := ctx.Err(); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("graphqlws: await connection_ack: %w", err)
+	}
 	_ = conn.SetReadDeadline(time.Now().Add(cfg.readTimeout))
 	go c.readLoop()
 	return c, nil
@@ -375,7 +414,12 @@ func (c *Client) Close() error {
 	_ = c.conn.WriteMessage(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	c.writeMu.Unlock()
-	return c.conn.Close()
+	return c.closeConn()
+}
+
+func (c *Client) closeConn() error {
+	c.connCloseOnce.Do(func() { c.connCloseErr = c.conn.Close() })
+	return c.connCloseErr
 }
 
 // readLoop demultiplexes inbound frames to their subscriptions until the socket
@@ -385,6 +429,9 @@ func (c *Client) readLoop() {
 		var msg wsMessage
 		if err := c.conn.ReadJSON(&msg); err != nil {
 			c.shutdown(fmt.Errorf("graphqlws: connection closed: %w", err))
+			// Attribute the read error first, then release the socket without
+			// waiting for the writer lock or attempting a close-frame write.
+			_ = c.closeConn()
 			return
 		}
 		_ = c.conn.SetReadDeadline(time.Now().Add(c.readTimeout))
@@ -484,7 +531,7 @@ func (c *Client) shutdown(err error) {
 	}
 }
 
-func (c *Client) writeInit(params map[string]interface{}) error {
+func (c *Client) writeInit(ctx context.Context, params map[string]interface{}) error {
 	var payload json.RawMessage
 	if params != nil {
 		raw, err := json.Marshal(params)
@@ -493,7 +540,7 @@ func (c *Client) writeInit(params map[string]interface{}) error {
 		}
 		payload = raw
 	}
-	return c.write(context.Background(), wsMessage{Type: msgConnectionInit, Payload: payload})
+	return c.write(ctx, wsMessage{Type: msgConnectionInit, Payload: payload})
 }
 
 func (c *Client) write(ctx context.Context, msg wsMessage) error {

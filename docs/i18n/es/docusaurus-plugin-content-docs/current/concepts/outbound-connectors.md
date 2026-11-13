@@ -50,6 +50,8 @@ Una única acción `publish` genérica cubre todos los tipos de broker y de cola
 
 `gcp_pubsub` es un tipo reconocido sin cliente de entrega en esta versión, así que crear, actualizar a ese tipo o publicar un conector de ese tipo se rechaza con el código de error `UNSUPPORTED`. La consola no ofrece ese tipo. Un conector de ese tipo guardado por una versión anterior sigue enviándose a la cola de mensajes no entregados (dead letter) como no soportado si un `publish` lo apunta, nunca se descarta en silencio.
 
+`updateConnector` rechaza un `expectedUpdatedAt` obsoleto con `errors[*].extensions.code` igual a `STALE_WRITE`. No se escribe nada; el mensaje sigue siendo "connector was modified by another writer; reload and try again". Este código solo se aplica a las actualizaciones de conectores. `CONFLICT` sigue indicando una colisión de unicidad; los errores de otras operaciones no cambian. Clasifica por código, no por el texto del mensaje. La consola conserva los cambios sin guardar y muestra una indicación localizada para copiarlos antes de volver a cargar, aplicarlos de nuevo y reintentar guardar.
+
 ## Los conectores son recursos versionados
 
 Un conector es un **recurso con alcance de inquilino** con el mismo ciclo de vida que un [perfil de dispositivo](./domain-model.md) o un [panel](./dashboards.md). Editas un **borrador**, **publicas** una versión inmutable y **reviertes (roll back)** a una anterior si un cambio se comporta mal. Un conector contiene:

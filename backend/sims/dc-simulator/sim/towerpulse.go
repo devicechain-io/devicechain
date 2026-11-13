@@ -47,14 +47,16 @@ import (
 // its day timeline, is the Unity showcase's own; this one is the smallest thing that is
 // plausible and seeded.
 type towerpulse struct {
-	seed int64
-	load Load
+	seed    int64
+	load    Load
+	episode string
 
-	mu       sync.Mutex
-	model    *towerpulseModel
-	commands *towerpulseCommands
-	started  time.Time
-	now      func() time.Time
+	mu          sync.Mutex
+	model       *towerpulseModel
+	commands    *towerpulseCommands
+	started     time.Time
+	recordStart func(time.Time) error
+	now         func() time.Time
 }
 
 // NewTowerpulse returns the towerpulse Sim seeded from the handshake. Prefer NewSim.
@@ -508,6 +510,9 @@ func (s *towerpulse) ensureModel() (*towerpulseModel, *towerpulseCommands) {
 	defer s.mu.Unlock()
 	if s.model == nil {
 		s.model = newTowerpulseModel(buildTowerpulseLayout())
+		if s.episode == EpisodeNightShift {
+			s.model.initNightShift()
+		}
 		s.commands = newTowerpulseCommands(s.model)
 	}
 	return s.model, s.commands
@@ -520,7 +525,14 @@ func (s *towerpulse) Tick(ctx context.Context, rt *Runtime) error {
 	model, commands := s.ensureModel()
 	s.mu.Lock()
 	if s.started.IsZero() {
-		s.started = s.now()
+		start := s.now()
+		if s.recordStart != nil {
+			if err := s.recordStart(start); err != nil {
+				s.mu.Unlock()
+				return err
+			}
+		}
+		s.started = start
 	}
 	elapsed := s.now().Sub(s.started).Seconds()
 	s.mu.Unlock()

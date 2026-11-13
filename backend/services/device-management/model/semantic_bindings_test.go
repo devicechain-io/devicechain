@@ -68,7 +68,7 @@ func semanticTestApi(t *testing.T) (*Api, context.Context) {
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	require.NoError(t, db.AutoMigrate(&SemanticContext{}, &DeviceType{}, &AssetType{}, &AssetTypeVersion{},
 		&Asset{}, &AreaType{}, &CustomerType{}, &EntityRelationshipType{}, &DeviceProfile{},
-		&DeviceProfileVersion{}, &DeviceProfileActivation{}, &MetricDefinition{}, &CommandDefinition{},
+		&DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{}, &MetricDefinition{}, &CommandDefinition{},
 		&DetectionRule{}, &DetectionRuleScopeRef{}, &MaintenanceWindow{}))
 	return NewApi(&rdb.RdbManager{Database: db}), core.WithTenant(context.Background(), "acme")
 }

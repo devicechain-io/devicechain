@@ -5,6 +5,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -22,8 +23,8 @@ func newAgentTestMetrics(ms *core.Microservice) *AgentMetrics {
 	return NewAgentMetrics(
 		ms.NewCounterVec("agent_proposals_total", "Non-dry-run proposal calls by kind and outcome; errors count as refused.", []string{"kind", "outcome"}),
 		ms.NewCounterVec("agent_approvals_total", "Approval calls by final outcome, counted once across internal retries; errors without a more specific outcome count as refused.", []string{"outcome"}),
-		ms.NewCounterVec("agent_executions_total", "Final-approval transaction attempts by kind and result; rolled-back attempts count as failed.", []string{"kind", "result"}),
-		ms.NewHistogramVec("agent_execution_seconds", "Time spent in final-approval transactions, including failed attempts.", nil, prometheus.DefBuckets).WithLabelValues(),
+		ms.NewCounterVec("agent_executions_total", "Final-approval executions by kind and result, counted once per execution including a fence re-enable retry; failed means the transaction could not complete (database, lock, policy service or kill feed unavailable), not a refusal.", []string{"kind", "result"}),
+		ms.NewHistogramVec("agent_execution_seconds", "Time spent executing final approvals, including refusals, failures and a fence re-enable retry.", nil, prometheus.DefBuckets).WithLabelValues(),
 		ms.NewCounter("agent_proposals_expired_total", "Proposals moved to EXPIRED by the reaper."),
 	)
 }
@@ -54,7 +55,7 @@ func TestAgentProposalMetrics(t *testing.T) {
 }
 
 func TestAgentApprovalMetrics(t *testing.T) {
-	for _, outcome := range []string{"recorded", "executed", "refused", "concurrent", "step_up_required", "forbidden"} {
+	for _, outcome := range []string{"recorded", "executed", "refused", "concurrent", "step_up_required", "forbidden", "fence_closed"} {
 		t.Run(outcome, func(t *testing.T) {
 			r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1")
 			m := enableAgentTestMetrics(r)
@@ -72,6 +73,8 @@ func TestAgentApprovalMetrics(t *testing.T) {
 				}))
 			case "step_up_required":
 				person = approver("boss", time.Now().Add(-time.Hour))
+			case "fence_closed":
+				require.NoError(t, r.api.ApplyKillEvent(ctx, killFor(rigTenant, r.decider.exec.ActuationGeneration)))
 			case "forbidden":
 				r.decider.execErr = auth.ErrForbidden
 			}
@@ -83,7 +86,7 @@ func TestAgentApprovalMetrics(t *testing.T) {
 				require.Error(t, err)
 			}
 			require.Equal(t, float64(1), testutil.ToFloat64(m.approvals.WithLabelValues(outcome)))
-			for _, label := range []string{"recorded", "executed", "refused", "concurrent", "step_up_required", "forbidden"} {
+			for _, label := range []string{"recorded", "executed", "refused", "concurrent", "step_up_required", "forbidden", "fence_closed"} {
 				want := float64(0)
 				if label == outcome {
 					want = 1
@@ -178,5 +181,78 @@ func TestAgentMetricNamesAndLabels(t *testing.T) {
 			}
 			require.ElementsMatch(t, labels, names)
 		}
+	}
+}
+
+func TestExecutionResult(t *testing.T) {
+	executed := &AgentProposal{Record: actiongate.Record{State: string(actiongate.StateExecuted)}}
+	refused := &AgentProposal{Record: actiongate.Record{State: string(actiongate.StateRefused), Reasons: []byte(`[]`)}}
+	dependency := &AgentProposal{Record: actiongate.Record{State: string(actiongate.StateRefused), Reasons: []byte(`["OTHER","DEPENDENCY_CHANGED"]`)}}
+	for _, tc := range []struct {
+		name     string
+		proposal *AgentProposal
+		err      error
+		want     string
+	}{
+		{"executed", executed, nil, "executed"},
+		{"dependency changed", dependency, nil, "dependency_changed"},
+		{"policy refused", refused, nil, "policy_refused"},
+		{"fence closed", nil, actiongate.ErrFenceClosed, "fence_closed"},
+		{"wrapped fence closed", nil, fmt.Errorf("wrapped: %w", actiongate.ErrFenceClosed), "fence_closed"},
+		{"forbidden fence closed", nil, actiongate.Refusal(actiongate.CodeFenceClosed, "closed", true), "fence_closed"},
+		{"policy unavailable", nil, fmt.Errorf("wrapped: %w", actiongate.ErrPolicyUnavailable), "failed"},
+		{"fence unavailable", nil, fmt.Errorf("wrapped: %w", actiongate.ErrFenceUnavailable), "failed"},
+		{"database", nil, errors.New("database unavailable"), "failed"},
+		{"lock timeout", nil, errors.New("lock timeout"), "failed"},
+		{"forbidden", nil, auth.ErrForbidden, "failed"},
+		{"not approver", nil, errNotAnApprover, "refused"},
+		{"self approval", nil, errSelfApproval, "refused"},
+		{"concurrent", nil, errConcurrentApproval, "refused"},
+		{"not pending", nil, actiongate.ErrNotPending, "refused"},
+		{"expired", nil, errProposalExpired, "refused"},
+		{"step up", nil, actiongate.Refusal(actiongate.CodeStepUpRequired, "step up", true), "refused"},
+		{"second factor", nil, actiongate.Refusal(actiongate.CodeMfaRequired, "second factor", true), "refused"},
+		{"wrapped refusal", nil, fmt.Errorf("wrapped: %w", errNotAnApprover), "refused"},
+		{"error overrides state", executed, errors.New("read failed"), "failed"},
+		{"missing result", nil, nil, "failed"},
+		{"unexpected state", &AgentProposal{}, nil, "failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, executionResult(tc.proposal, tc.err)) })
+	}
+}
+
+func TestAgentExecutionFenceMetrics(t *testing.T) {
+	for _, retry := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reenable_retry=%t", retry), func(t *testing.T) {
+			r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1")
+			m := enableAgentTestMetrics(r)
+			generation := r.decider.exec.ActuationGeneration + 1
+			require.NoError(t, r.api.ApplyKillEvent(ctx, killFor(rigTenant, generation)))
+			want := "fence_closed"
+			if retry {
+				r.decider.exec.ActuationGeneration = generation + 1
+				want = "executed"
+			}
+			got, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
+			if retry {
+				require.NoError(t, err)
+				require.Equal(t, string(actiongate.StateExecuted), got.State)
+				require.Len(t, r.decider.execReqs, 3, "pre-decision plus both transaction decisions")
+			} else {
+				require.True(t, actiongate.IsCode(err, actiongate.CodeFenceClosed))
+				requireUnexecuted(t, r, p, ctx)
+			}
+			for _, label := range []string{"executed", "dependency_changed", "policy_refused", "fence_closed", "refused", "failed"} {
+				value := float64(0)
+				if label == want {
+					value = 1
+				}
+				require.Equal(t, value, testutil.ToFloat64(m.executions.WithLabelValues("ALARM_ACK", label)), label)
+			}
+			require.Equal(t, float64(1), testutil.ToFloat64(m.approvals.WithLabelValues(want)))
+			metric := &dto.Metric{}
+			require.NoError(t, m.duration.(prometheus.Metric).Write(metric))
+			require.Equal(t, uint64(1), metric.GetHistogram().GetSampleCount())
+		})
 	}
 }

@@ -75,6 +75,12 @@ llamador. Algunas autoridades no coinciden con la intuición:
 - Leer credenciales de dispositivo requiere `device:write`, no `device:read`.
 - `latestLocation` requiere `location:read`, mientras que sus hermanas en `device-state` requieren
   `state:read`.
+- La posición instalada de un activo fijo (`Device.installedPosition`, `Asset.installedPosition`) requiere
+  `location:installed:read`, que está incluida en `location:read`. Es un dato de instalación y nunca recurre
+  a una posición comunicada por el dispositivo. Sin ninguno de esos permisos, recibes `positionWithheld: true`
+  para todos los dispositivos y activos, tengan o no una posición; el indicador se refiere solo a la posición
+  instalada. Establecerla o borrarla (`setInstalledPosition`, `clearInstalledPosition`) requiere `device:write`,
+  y un miembro limitado a una parte del inquilino no puede escribirla.
 - `demoteAssertedPresence` requiere `state:demote`, que no es ninguna de las dos. Ningún rol la
   nombra por defecto; solo un rol que tenga la superautoridad `*`, como el rol `tenant-admin`
   sembrado, la tiene sin una concesión explícita. Es lo único fuera del canal de eventos que escribe
@@ -100,13 +106,13 @@ artefacto. Una actualización que queda en `UNKNOWN` (el dispositivo calló dura
 instalación o el reinicio) bloquea una nueva asignación de ese componente hasta que el dispositivo informe de lo que ejecuta;
 si nunca lo hará, `abandonUnknownUpdate(assignmentToken, reason)` la cierra como `CANCELLED` con su motivo registrado,
 deja constancia del cambio a su nombre y avisa al dispositivo. No averigua qué ejecuta el dispositivo, que puede estar en
-cualquiera de las dos versiones, así que compruebe su inventario antes de dar por buena una u otra. [Actualizaciones over-the-air](../concepts/over-the-air-updates.md) describe el ciclo de vida y los ajustes. El contenido del artefacto no viaja por GraphQL:
+cualquiera de las dos versiones, así que comprueba su inventario antes de dar por buena una u otra. [Actualizaciones over-the-air](../concepts/over-the-air-updates.md) describe el ciclo de vida y los ajustes. El contenido del artefacto no viaja por GraphQL:
 se sube con `PUT /api/update-management/updates/artifacts/{token}/content`, autenticado con un token
 de acceso del inquilino que tenga `artifact:write`. El chart da a esa ruta un Ingress propio, con el límite de cuerpo de petición fijado por
 `ingress.uploadMaxBodySize` (por defecto `1g`) y el almacenamiento en búfer de la petición desactivado. En el front end
 Gateway, que usa una instalación nueva, lo hace en su lugar la propia instalación del controlador: Traefik transmite el
 cuerpo sin límite y el servicio aplica el suyo. Con
-cualquier otro controlador de ingress, fije lo mismo en esa ruta: para ingress-nginx,
+cualquier otro controlador de ingress, fija lo mismo en esa ruta: para ingress-nginx,
 `nginx.ingress.kubernetes.io/proxy-body-size` igual o superior a su artefacto más grande, y
 `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`. Sin lo segundo, nginx lee todo el cuerpo a disco
 antes de que el servicio vea la petición, de modo que el token no se comprueba hasta que ha llegado la imagen
@@ -117,7 +123,7 @@ La petición no lleva ninguna credencial del inquilino: `cap` es una capacidad q
 dispositivo por su sesión MQTT autenticada, que nombra un artefacto para un dispositivo bajo una asignación y
 caduca en menos de quince minutos. Un dispositivo que necesite más tiempo la pide de nuevo y recibe una capacidad
 nueva para el mismo artefacto. Como `cap` va en la cadena de consulta, el chart publica esta ruta en un Ingress propio con el
-registro de accesos de ingress-nginx desactivado; con cualquier otro controlador de ingress, asegúrese de que la cadena de
+registro de accesos de ingress-nginx desactivado; con cualquier otro controlador de ingress, asegúrate de que la cadena de
 consulta de `/api/update-management/updates/download/` no se escriba en un registro de accesos. El endpoint responde a las peticiones `Range` con `206`, de modo que una descarga
 interrumpida continúa donde se detuvo, y rechaza una capacidad falsificada, caducada o que ya no está vigente antes
 de leer nada del artefacto. La URL pública a la que se envía a un dispositivo es `updates.downloadBaseUrl`. Si no la
@@ -741,6 +747,8 @@ Algunos rechazos parecen similares y no llevan `CONFLICT`:
 - Eliminar un registro al que otros registros todavía se refieren lleva `REFERENCE_VIOLATION`.
   Consulta [Una referencia o un valor que se rechaza](#reference-and-invalid-values).
 
+`updateConnector` rechaza un `expectedUpdatedAt` obsoleto con `errors[*].extensions.code` igual a `STALE_WRITE`. No se escribe nada; el mensaje sigue siendo "connector was modified by another writer; reload and try again". Este código solo se aplica a las actualizaciones de conectores. `CONFLICT` sigue indicando una colisión de unicidad; los errores de otras operaciones no cambian. Clasifica por código, no por el texto del mensaje. La consola conserva los cambios sin guardar y muestra una indicación localizada para copiarlos antes de volver a cargar, aplicarlos de nuevo y reintentar guardar.
+
 ### Una referencia o un valor que se rechaza {#reference-and-invalid-values}
 
 Otros dos rechazos se responden de la misma forma, cada uno con su propio código.
@@ -929,6 +937,7 @@ tenants no se ven afectadas.
 
 ## Iniciar sesión con autenticación en dos pasos {#two-factor-sign-in}
 
+
 Una cuenta con [autenticación en dos pasos](../guides/two-factor-authentication.md) no recibe un token de `login`. Cuando la contraseña es correcta, `login` falla con el código de error `MFA_CHALLENGE`, que lleva un desafío en `extensions`, y no se emite nada hasta que el cliente envía un código a `verifyMfa`. **Un cliente que solo gestiona un `login` correcto ahora falla para estas cuentas**, con un error, y nunca recibe un token que no debería tener.
 
 ```json
@@ -957,6 +966,21 @@ mutation Verify($challenge: String!, $code: String!) {
 ```
 
 `verifyMfa` devuelve lo mismo que `login`, y el cliente continúa con `selectTenant` como antes. `code` es el código de seis dígitos de la aplicación o un código de recuperación (`ABCD-EFGH-JKMN-PQRS`, en mayúsculas o minúsculas, con o sin guiones). Un desafío dura cinco minutos, admite cinco intentos e inicia sesión una sola vez.
+
+**Verificación adicional dentro de la sesión (Vista previa: puede cambiar en una versión menor).** Si una aprobación de agente o una relajación de política devuelve `STEP_UP_REQUIRED`, envía tu token de acceso del inquilino en `Authorization: Bearer ...` y tu propio token de actualización con un código nuevo:
+
+```graphql
+mutation StepUp($refreshToken: String!, $code: String!) {
+  stepUp(refreshToken: $refreshToken, code: $code) {
+    accessToken
+    refreshToken
+    expiresAt
+  }
+}
+```
+
+Devuelve el mismo par `AuthToken` que `refresh`. Guarda ambos tokens y vuelve a intentar la acción sin cerrar sesión. Conserva el identificador y la época de la sesión y actualiza `mfa_time`; una actualización normal no renueva la verificación. Los tokens deben pertenecer al mismo usuario e inquilino. Se rechazan los tokens de agentes, servicio, identidad o actualización como autorización, los tokens de actualización OAuth, las sesiones terminadas y las épocas revocadas.
+
 
 Las operaciones están en el endpoint de user-management. `mfaStatus`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` y `disableTotp` toman el token de identidad como argumento (no en una cabecera `Authorization`), no un token de inquilino. `verifyMfa` no toma ningún token. `setTenantMfaRequired` del plano del inquilino toma el token de acceso del inquilino y requiere `member:write` y un llamador sin alcance restringido. `resetIdentityMfa` y el `setTenantMfaRequired` de la API de administración están en la API de administración y requieren `user:write`:
 
@@ -1045,20 +1069,25 @@ primer nivel; los alias de un campo anidado no se cuentan.
 
 Aparte de los límites de forma de la solicitud, algunas lecturas y entradas tienen un límite de
 tamaño. Una solicitud que lo supera se rechaza con `extensions.code` igual a `LIMIT_EXCEEDED`. No se
-trunca nada ni se aplica nada a medias, así que reduzca la solicitud y envíela de nuevo. Los tamaños se cuentan en bytes, no en caracteres.
+trunca nada ni se aplica nada a medias, así que reduce la solicitud y envíala de nuevo. Los tamaños se cuentan en bytes, no en caracteres.
 
 | Límite | Valor | Se aplica a |
 | --- | --- | --- |
+| Filtro de actor de auditoría | 256 B | `actor` en `AuditEventSearchCriteria` (plano de inquilino) y `AdminAuditEventSearchCriteria` (plano de administración). |
+| Texto de búsqueda de nombre de dashboard | 256 B | `DashboardSearchCriteria.name` en `dashboards`, medido en bytes UTF-8 antes de recortar espacios. |
 | Clave de atributo | 128 B | `attrKey` de `setEntityAttribute`. |
 | Valor de atributo | 64 KiB | `value` de `setEntityAttribute`, sea cual sea su tipo declarado. |
 | Definición de regla | 256 KiB | `definition` de una regla de detección, al crear y al actualizar. |
 | Grafo de autoría de regla | 256 KiB | `authoringGraph` de una regla de detección, al crear y al actualizar. |
-| Historial de versiones | 1000 por llamada | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: las más recientes primero. Reduzca con `limit` (al menos 1) y pagine con `offset` (no negativo); un valor fuera de ese rango se rechaza con `INVALID_VALUE`. |
+| Reglas por validación | 1000 | `validateDetectionRules` `rules`. Publicar un perfil de dispositivo con más de 1000 reglas de detección habilitadas se rechaza del mismo modo. |
+| Historial de versiones | 1000 por llamada | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: las más recientes primero. Reduce con `limit` (al menos 1) y pagina con `offset` (no negativo); un valor fuera de ese rango se rechaza con `INVALID_VALUE`. |
 | Intervalos por agregación | 10 000 | `bucketedMeasurements`: el rango dividido por `intervalSeconds`, redondeado hacia arriba. |
 | Filas por agregación | 50 000 | `bucketedMeasurements`: los intervalos multiplicados por los nombres de medición devueltos. Con un filtro `name` es un solo nombre; sin él, cada nombre de medición distinto que coincide con los filtros de la lectura. |
 | Claves por consulta | 1000 | Una lista de tokens, identificadores externos o tokens de alarma pasada a una consulta por lotes `…ByToken`, `…ByExternalId` o similar (estados de dispositivo, últimas ubicaciones, comandos, lotes de comandos, canales, políticas y estados de notificación). |
-| Tamaño de entrada JSON | 64 KiB | Cada valor de metadatos, propiedades, configuración, carga útil o destinatarios enviado como JSON. Las cargas útiles y los metadatos de comandos se rechazan con `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` (consulte [Enviar comandos](../guides/sending-commands.md)). |
+| Tamaño de entrada JSON | 64 KiB | Cada valor de metadatos, propiedades, configuración, carga útil o destinatarios enviado como JSON. Las cargas útiles y los metadatos de comandos se rechazan con `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` (consulta [Enviar comandos](../guides/sending-commands.md)). |
+| Estados de recálculo de métricas calculadas | 5 entradas | `statuses` de `calculatedMetricBackfills`, contando duplicados. Las listas más largas se rechazan antes de cualquier consulta; se eliminan los duplicados de las listas aceptadas. |
 | Destinatarios por regla de notificación | 100 | La lista `recipients` de una regla de una política de notificación. |
+| Reglas por política de notificación | 100 | Una lista `rules` enviada al crear o actualizar una política. Las actualizaciones que omiten `rules` conservan el conjunto de reglas almacenado. |
 | URI de redirección de cliente OAuth | 16 entradas, 2048 B cada una | `redirectUris` de `createOauthClient` y `updateOauthClient`. |
 | Ámbitos de cliente OAuth | 16 entradas, 64 B cada una | `scopes` de `createOauthClient` y `updateOauthClient`. |
 | Niveles de inquilino | 100 niveles, 128 B por token | El catálogo de niveles (`createTenantTier` rechaza un nivel 101) y `orderedTokens` de `reorderTenantTiers`, que debe nombrar todos los niveles. |

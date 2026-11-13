@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/tracing"
 	"os"
 	"time"
 
@@ -302,7 +303,6 @@ var (
 	// integrationUndecoded batches the undecoded-uplink markers and is run from start to stop.
 	integrationUndecoded               []*integration.Undecoded
 	IntegrationUndecodedDroppedCounter prometheus.Counter
-	integrationStop                    context.CancelFunc
 
 	// ExternalMqttOwnerGauge is 1 on the pod that reads an external MQTT source and 0 on
 	// every other, per source; see processor.OwnedMqttSource.
@@ -358,7 +358,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: func(context.Context) error { return nil },
+			Postprocess: governance.StopRefreshes,
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -1461,7 +1461,11 @@ func buildInboundMessage(source string, tenant string, event *model.UnresolvedEv
 		countBuildDropped(source, buildDropNoTenant)
 		return nil, messaging.Message{}, false
 	}
-	ctx := core.WithTenant(context.Background(), tenant)
+	base := context.Background()
+	if tracing.Enabled() && event.TraceContext != nil {
+		base = event.TraceContext
+	}
+	ctx := core.WithTenant(base, tenant)
 
 	if cause := sealPresentedSecret(tenant, event); cause != "" {
 		countBuildDropped(source, cause)
@@ -1969,12 +1973,8 @@ func afterMicroserviceStarted(ctx context.Context) error {
 
 	// The integration route's undecoded markers are written in batches; this flushes the ones a
 	// quiet integration would otherwise leave waiting for its next uplink.
-	if len(integrationUndecoded) > 0 {
-		var runCtx context.Context
-		runCtx, integrationStop = context.WithCancel(context.Background())
-		for _, u := range integrationUndecoded {
-			go u.Run(runCtx)
-		}
+	for _, u := range integrationUndecoded {
+		go u.Run(context.Background())
 	}
 
 	// A capture stream created before it became a work queue keeps its old retention until
@@ -2069,9 +2069,8 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// writer that is about to close.
 	stopSessionKick()
 	stopBrokerPresence()
-	if integrationStop != nil {
-		integrationStop()
-		integrationStop = nil
+	for _, u := range integrationUndecoded {
+		u.Close(ctx)
 	}
 	// The fail-closed store's watch holds no writer, but it uses the broker connection the
 	// manager drains below.

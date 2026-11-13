@@ -877,7 +877,7 @@ type Query {
     calculatedMetricBackfills(
         """Only the jobs of this profile."""
         profileToken: String
-        """Only jobs in one of these statuses."""
+        """Only jobs in one of these statuses. At most 5 entries, counting duplicates; longer lists are refused with LIMIT_EXCEEDED. Accepted lists are de-duplicated."""
         statuses: [CalculatedMetricBackfillStatus!]
         """Page size, 1 to 100; defaults to 25."""
         first: Int

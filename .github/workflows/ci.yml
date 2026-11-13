@@ -109,6 +109,11 @@ jobs:
       - name: release-highlights guard self-test
         run: hack/check-release-highlights.sh --self-test
 
+      # The chart stamp runs only on a tag; a broken flag mislabels a release in Artifact Hub.
+      # The self-test is the part that runs on every PR, before a release needs the stamp.
+      - name: chart prerelease stamp self-test
+        run: hack/stamp-chart-prerelease.sh --self-test
+
       # Same reasoning as the guard above, and the same blast radius: this builds the
       # header of the GitHub Release body, runs ONLY on a tag, and a break in it fails
       # the `cli` job after every image has already been pushed. The self-test is the
@@ -305,6 +310,9 @@ jobs:
         module: ${{ fromJson(needs.discover.outputs.modules) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The bootstrap snapshot-currency test reads the release tags.
+          fetch-tags: true
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
@@ -855,6 +863,12 @@ jobs:
       - name: no bcrypt compare outside the credential primitive
         run: hack/check-credential-compare.sh
 
+      - name: Mojibake guard self-test
+        run: hack/check-mojibake.sh --self-test
+
+      - name: No mojibake in tracked text files
+        run: hack/check-mojibake.sh
+
       # Two red lines on what an AI agent can be made to do, enforced as parsed, tree-wide
       # properties. Declarative-only: no tenant code runtime (a script interpreter or a
       # WebAssembly runtime) may appear in any go.mod, go.sum, go.work or Go import, and the
@@ -1273,6 +1287,7 @@ jobs:
           -ignore '**/*.csproj' -ignore '**/*.sln' -ignore '**/*.props'
           -ignore '**/bin/**' -ignore '**/obj/**'
           -ignore '**/migrationdiff/golden/*.sql'
+          -ignore '**/migrationdiff/testdata/prev-release/**/*.sql'
           -ignore 'demos/**/*.meta' -ignore 'demos/**/*.asset' -ignore 'demos/**/*.unity'
           -ignore 'demos/**/*.prefab' -ignore 'demos/**/*.mat' -ignore 'demos/**/*.inputactions'
           -ignore 'demos/**/ProjectSettings/**' -ignore 'demos/**/Packages/packages-lock.json'
@@ -1790,20 +1805,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # i18n gate (ADR-066): eslint's `no-literal-string` rule fails on any
-      # hard-coded user-facing string, keeping each app fully externalized into its
-      # react-i18next catalogs. BOTH front-end apps define a `lint` script now —
-      # apps/console and apps/dashboard (the /dash viewer) — and each carries its own
-      # flat config, because the two have different JSX vocabularies.
-      #
-      # 🔴 `--if-present` IS THE HOLE THIS STEP ONCE HAD, and it is worth naming
-      # because nothing in the log would ever have shown it. /dash had no i18n at all
-      # — no catalogs, no dependency, no lint script — and a workspace with no script
-      # is SKIPPED silently, which reads in the log exactly like a workspace that
-      # passed. So a step named "i18n gate" reported success while checking one of the
-      # two apps. A new app is in the same position the day it is created: adding the
-      # script is what enrols it, and nothing here will say that it has not.
-      - name: Lint (i18n no-literal-string gate)
+      # App and host-composition configs check JSX literal strings with their
+      # configured exclusions. TypeScript libraries run bounded correctness lint;
+      # brand runs its token verifier. This does not gate all widget prose on i18n.
+      # workspace-lint.test.ts (in the Test step) discovers the root's workspaces
+      # and fails if --if-present would silently skip a missing lint script.
+      - name: Lint (app JSX strings, library correctness, brand verification)
         run: npm run lint
 
       - name: Test

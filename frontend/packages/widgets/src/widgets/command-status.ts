@@ -12,6 +12,7 @@
 // surfaces.
 
 import { isTerminalCommandStatus } from '@devicechain/dashboards';
+import { commandStrings } from '../command-strings';
 
 // 🔴 EVERY STATUS NEEDS AN ENTRY, INCLUDING THE ONES THAT LOOK NEUTRAL. UNKNOWN_COLOR
 // below is the same slate as EXPIRED, so a status with no entry does not merely fall
@@ -59,8 +60,15 @@ export function isTerminalStatus(status: string): boolean {
   return isTerminalCommandStatus(status);
 }
 
-// commandStatusLabel renders a status in Title Case ('SUCCESSFUL' → 'Successful').
+// Known statuses are localized for the viewer; future values keep a readable title-case
+// fallback. The published signature is unchanged: the locale comes from the viewer.
 export function commandStatusLabel(status: string): string {
+  return commandStatusLabelIn(status);
+}
+
+/** commandStatusLabel for an explicit locale (module-internal; not part of the package API). */
+export function commandStatusLabelIn(status: string, locale?: string): string {
   if (!status) return '';
-  return status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
+  return commandStrings(locale).status[status]
+    ?? status.charAt(0).toUpperCase() + status.slice(1).toLowerCase().replace(/_/g, ' ');
 }

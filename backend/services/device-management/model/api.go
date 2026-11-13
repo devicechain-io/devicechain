@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 )
 
 // GeoFenceCapsResolver reads a tenant's three RESOLVED geofence caps — the per-tenant
@@ -73,12 +74,30 @@ type GeoFenceCapRefusalCounter interface {
 }
 
 type Api struct {
+	// RuleComparer is nil when recorded comparison is unavailable; runs fail closed.
+	RuleComparer      RuleComparer
+	PrincipalStanding PrincipalStandingChecker
+	// skipReviewGuardForOldPodTest is test-only: emulate previous-release writes so triggers can be tested.
+	skipReviewGuardForOldPodTest bool
+
 	RDB *rdb.RdbManager
 
 	// AgentDecider asks user-management for the tenant's decisions on agent proposals, under the
 	// caller's own token (actiongate.CallerDecider). Nil refuses every proposal and approval with
 	// POLICY_UNAVAILABLE: without the policy nothing is decided.
 	AgentDecider actiongate.Decider
+	// KillFeed is the liveness of the kill-event consumer that feeds the local actuation fence.
+	// Nil refuses every agent execution (fail closed).
+	KillFeed *KillFeed
+	// AgentEffectsExhausted counts committed transitions to the outbox attempt cap.
+	AgentEffectsExhausted prometheus.Counter
+	// beforeFenceForTest runs after the dependency check, before erasure and kill fence reads (tests only).
+	beforeFenceForTest func(tx *gorm.DB) error
+	// afterDecisionForTest runs right after the commit-point decision returns, before the
+	// in-memory checks; tests only; production SQL there would break the tail rule.
+	afterDecisionForTest func(tx *gorm.DB) error
+	// afterFenceForTest runs after the fence read and before effects (tests only).
+	afterFenceForTest func(tx *gorm.DB) error
 
 	// AgentMetrics is shared by all APIs built during messaging reconnects.
 	AgentMetrics *AgentMetrics

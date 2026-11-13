@@ -1272,7 +1272,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_usermanagement_credential_checks_total{namespace=\"$namespace\", outcome=\"throttled\"}[$__range])))",
+          "expr": "round(sum(increase(devicechain_usermanagement_credential_checks_total{namespace=\"$namespace\", outcome=\"throttled\"}[$__range]))) or (0 * max(up{namespace=\"$namespace\", job=\"user-management\"} == 1))",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -1335,7 +1335,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_usermanagement_sso_logins_total{namespace=\"$namespace\", outcome=~\"refused_unverified_email|refused_unverified_domain|refused_required_claim|refused_system_role_identity\"}[$__range])))",
+          "expr": "round(sum(increase(devicechain_usermanagement_sso_logins_total{namespace=\"$namespace\", outcome=~\"refused_unverified_email|refused_unverified_domain|refused_required_claim|refused_system_role_identity\"}[$__range]))) or (0 * max(up{namespace=\"$namespace\", job=\"user-management\"} == 1))",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -1398,7 +1398,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_usermanagement_sso_idp_fetch_failures_total{namespace=\"$namespace\"}[$__range])))",
+          "expr": "round(sum(increase(devicechain_usermanagement_sso_idp_fetch_failures_total{namespace=\"$namespace\"}[$__range]))) or (0 * max(up{namespace=\"$namespace\", job=\"user-management\"} == 1))",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -2326,7 +2326,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_eventprocessing_react_connector_egress_shed_total{namespace=\"$namespace\"}[$__range])))",
+          "expr": "round(sum(increase(devicechain_eventprocessing_react_connector_egress_shed_total{namespace=\"$namespace\"}[$__range]))) or (0 * max(up{namespace=\"$namespace\", job=\"event-processing\"} == 1))",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -2906,8 +2906,8 @@
     {
       "id": 52,
       "type": "timeseries",
-      "title": "Execution attempts by result",
-      "description": "Final-approval transactions by kind and result. Failed attempts rolled back; dependency changes and policy refusals have separate results. Check service logs for sustained failures.",
+      "title": "Executions by result",
+      "description": "Final-approval executions by kind and result, counted once including a fence re-enable retry. Failed means the execution transaction could not complete. Dependency changes, policy refusals, a closed kill fence and approver refusals have separate results. Check service logs for sustained failures.",
       "gridPos": {
         "h": 8,
         "w": 6,
@@ -2964,8 +2964,8 @@
     {
       "id": 53,
       "type": "timeseries",
-      "title": "Execution transaction time (p95)",
-      "description": "95th percentile transaction time across final-approval attempts, including failed attempts. Includes database locks and the fresh policy decision.",
+      "title": "Execution time (p95)",
+      "description": "95th percentile time spent executing final approvals, including refusals, failures and a fence re-enable retry. Includes database locks and the fresh policy decision.",
       "gridPos": {
         "h": 8,
         "w": 6,

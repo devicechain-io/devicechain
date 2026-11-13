@@ -15,6 +15,7 @@ import * as types from './graphql';
  * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size
  */
 type Documents = {
+    "\n  query AgentApprovalAccess {\n    agentApprovalAccess { instanceEnabled canApprove }\n  }\n": typeof types.AgentApprovalAccessDocument,
     "\n  query AgentPolicy {\n    agentPolicy {\n      published { version document origin publishedBy publishedAt }\n      operatorSuspended actuationOff instanceEnabled actuationInEffect\n    }\n  }\n": typeof types.AgentPolicyDocument,
     "\n  mutation SetAgentActuation($enabled: Boolean!) {\n    setAgentActuation(enabled: $enabled) {\n      published { version document origin publishedBy publishedAt }\n      operatorSuspended actuationOff instanceEnabled actuationInEffect\n    }\n  }\n": typeof types.SetAgentActuationDocument,
     "\n  query Members($criteria: MemberSearchCriteria!) {\n    members(criteria: $criteria) {\n      results {\n        email\n        firstName\n        lastName\n        enabled\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        managedByIdentityProvider\n        invitationPending\n        mfaEnabled\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.MembersDocument,
@@ -65,8 +66,10 @@ type Documents = {
     "\n  mutation UpdateProfile($request: ProfileUpdateRequest!) {\n    updateProfile(request: $request) {\n      email\n      firstName\n      lastName\n    }\n  }\n": typeof types.UpdateProfileDocument,
     "\n  query FunctionalAreas {\n    functionalAreas\n  }\n": typeof types.FunctionalAreasDocument,
     "\n  query TenantTokenMasks {\n    tokenMasks\n  }\n": typeof types.TenantTokenMasksDocument,
+    "\n  mutation StepUp($refreshToken: String!, $code: String!) {\n    stepUp(refreshToken: $refreshToken, code: $code) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": typeof types.StepUpDocument,
 };
 const documents: Documents = {
+    "\n  query AgentApprovalAccess {\n    agentApprovalAccess { instanceEnabled canApprove }\n  }\n": types.AgentApprovalAccessDocument,
     "\n  query AgentPolicy {\n    agentPolicy {\n      published { version document origin publishedBy publishedAt }\n      operatorSuspended actuationOff instanceEnabled actuationInEffect\n    }\n  }\n": types.AgentPolicyDocument,
     "\n  mutation SetAgentActuation($enabled: Boolean!) {\n    setAgentActuation(enabled: $enabled) {\n      published { version document origin publishedBy publishedAt }\n      operatorSuspended actuationOff instanceEnabled actuationInEffect\n    }\n  }\n": types.SetAgentActuationDocument,
     "\n  query Members($criteria: MemberSearchCriteria!) {\n    members(criteria: $criteria) {\n      results {\n        email\n        firstName\n        lastName\n        enabled\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        managedByIdentityProvider\n        invitationPending\n        mfaEnabled\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.MembersDocument,
@@ -117,8 +120,13 @@ const documents: Documents = {
     "\n  mutation UpdateProfile($request: ProfileUpdateRequest!) {\n    updateProfile(request: $request) {\n      email\n      firstName\n      lastName\n    }\n  }\n": types.UpdateProfileDocument,
     "\n  query FunctionalAreas {\n    functionalAreas\n  }\n": types.FunctionalAreasDocument,
     "\n  query TenantTokenMasks {\n    tokenMasks\n  }\n": types.TenantTokenMasksDocument,
+    "\n  mutation StepUp($refreshToken: String!, $code: String!) {\n    stepUp(refreshToken: $refreshToken, code: $code) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": types.StepUpDocument,
 };
 
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query AgentApprovalAccess {\n    agentApprovalAccess { instanceEnabled canApprove }\n  }\n"): typeof import('./graphql').AgentApprovalAccessDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
@@ -319,6 +327,10 @@ export function graphql(source: "\n  query FunctionalAreas {\n    functionalArea
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query TenantTokenMasks {\n    tokenMasks\n  }\n"): typeof import('./graphql').TenantTokenMasksDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation StepUp($refreshToken: String!, $code: String!) {\n    stepUp(refreshToken: $refreshToken, code: $code) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n"): typeof import('./graphql').StepUpDocument;
 
 
 export function graphql(source: string) {

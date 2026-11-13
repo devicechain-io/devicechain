@@ -78,6 +78,7 @@
   "secretRequired": "{{secretLabel}} is required for {{connectorLabel}} connectors.",
   "secretSaslPassword": "SASL password",
   "secretSaslPasswordDesc": "Required when SASL is enabled; the password for the SASL user.",
+  "staleWrite": "This connector changed since you loaded it. Copy your unsaved edits, reload the connector, then reapply your edits and retry saving.",
   "tabConfiguration": "Configuration",
   "tabVersions": "Versions",
   "title": "Connectors",

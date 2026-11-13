@@ -228,6 +228,45 @@ var publishesNotCovered = map[string]string{
 // been published, because they reference a published VERSION NUMBER.
 var afterPublish = []entity{
 	{
+		// Depends on: device-profile, device-profile-version.
+		//
+		// An automation change review of the profile just published. It is FIRST in this
+		// phase on purpose: nothing has touched the profile's draft since the publish, so
+		// the draft equals the active version and the review is NO_AUTOMATION_CHANGE. That
+		// kind runs no replay, so the row is written without event-processing's comparison
+		// engine and without any recorded telemetry, which the drill deliberately has none
+		// of. The rows below (the scoped rule) change the draft, so a review placed after
+		// them would need a live comparison and a recorded window.
+		//
+		// The windows and device are literals the server stores and never replays. The
+		// requestId is fixed, so a re-run of the seed against the same tenant is answered
+		// with the stored review rather than a second row.
+		//
+		// matchesCurrentDraft is NOT selected: it is computed against the CURRENT draft,
+		// which the rows below change, so it is derived, not stored.
+		Name:     "automation-review",
+		Area:     "device-management",
+		Mutation: "runAutomationReview",
+		Input:    "RunAutomationReviewInput!",
+		Arg:      "input",
+		Read:     "automationReview",
+		Single:   true,
+		Requires: []string{"RunAutomationReviewInput.requestId"},
+		Fields: "token profileToken kind ruleToken state outcome reviewDigest draftDigest baselineDigest " +
+			"baselineVersion createdBy requiredApprovals deviceTokens windows{role start end}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"profileToken": s.tok("device-profile"),
+				"deviceTokens": []any{s.tok("device")},
+				"windows": []any{
+					map[string]any{"role": "INCIDENT", "start": "2026-01-01T00:00:00Z", "end": "2026-01-01T01:00:00Z"},
+					map[string]any{"role": "NORMAL", "start": "2026-01-02T00:00:00Z", "end": "2026-01-02T01:00:00Z"},
+				},
+				"requestId": "apiprobe-automation-review",
+			}}
+		},
+	},
+	{
 		// Depends on: asset-type-schema, asset-type-version.
 		//
 		// An asset under the SCHEMA-BEARING type, carrying properties — which is only
@@ -616,6 +655,90 @@ var afterPublish = []entity{
 			return nil
 		},
 	},
+	{
+		// Depends on: device-profile, device-profile-version.
+		//
+		// LAST ON PURPOSE. Protecting this profile makes later publishes require a
+		// review, and rollbacks, type re-points and device moves require break-glass.
+		// Nothing after this row may perform any of those actions on the probe profile.
+		//
+		// The tightening writes automation_review_policies; the After step proposes a
+		// LOOSENING and writes automation_review_policy_changes instead of applying it.
+		// A second person must approve, and the probe has only one. Self-approval is
+		// off, so there is NO delayed application either: the proposal stays PENDING.
+		//
+		// The seeded detection rule is DISABLED, so the profile is eligible for
+		// protection: eligibility refuses enabled rules reading device attributes,
+		// constants or group membership. The group-scoped rule earlier in this phase
+		// changes only the DRAFT, while eligibility reads the ACTIVE version.
+		//
+		// A SKIPPABLE LEAF: older baselines lack the required revision field. No Record
+		// and no token consumer. The receipt is resolved by Name, so sharing the
+		// profile's token with device-profile does not collide; Single needs that token
+		// to address the read (unlike the argument-less agent-policy singleton).
+		Name:     "automation-review-policy",
+		Area:     "device-management",
+		Mutation: "setAutomationReviewPolicy",
+		Params: []param{
+			{Name: "profileToken", Type: "String!"},
+			{Name: "settings", Type: "AutomationReviewPolicyInput!"},
+		},
+		Wrap:      "policy",
+		Read:      "automationReviewPolicy",
+		Single:    true,
+		ReadArg:   "profileToken",
+		TokenFrom: func(s *state) string { return s.tok("device-profile") },
+		Requires:  []string{"AutomationReviewPolicy.revision"},
+		Fields: "profileToken revision effective{required requiredApprovals allowSelfApproval " +
+			"approvalTtlSeconds stepUpMaxAgeSeconds} pendingChange{state proposedBy proposed{required}}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{
+				"profileToken": s.tok("device-profile"),
+				"settings":     map[string]any{"required": true},
+			}
+		},
+		After: proposeProbeAutomationPolicyLoosening,
+		Settled: func(f map[string]any) error {
+			effective, _ := f["effective"].(map[string]any)
+			if effective["required"] != true {
+				return fmt.Errorf("effective.required is %v, want true", effective["required"])
+			}
+			pending, _ := f["pendingChange"].(map[string]any)
+			if pending["state"] != "PENDING" {
+				return fmt.Errorf("pendingChange.state is %v, want PENDING", pending["state"])
+			}
+			return nil
+		},
+	},
+}
+
+const probeAutomationPolicyLooseningMutation = `mutation($profileToken:String!,$settings:AutomationReviewPolicyInput!){setAutomationReviewPolicy(profileToken:$profileToken,settings:$settings){applied}}`
+
+func probeAutomationPolicyLooseningVars(st *state) map[string]any {
+	return map[string]any{
+		"profileToken": st.tok("device-profile"),
+		"settings":     map[string]any{"required": false},
+	}
+}
+
+// proposeProbeAutomationPolicyLoosening seeds a proposal that cannot take effect alone.
+func proposeProbeAutomationPolicyLoosening(ctx context.Context, c *connection, sess *userclient.TenantSession, st *state) error {
+	var out struct {
+		SetAutomationReviewPolicy *struct {
+			Applied *bool `json:"applied"`
+		} `json:"setAutomationReviewPolicy"`
+	}
+	if err := sess.Query(ctx, c.areaURL("device-management"), probeAutomationPolicyLooseningMutation,
+		probeAutomationPolicyLooseningVars(st), &out); err != nil {
+		return fmt.Errorf("propose the probe automation policy loosening: %w", err)
+	}
+	if out.SetAutomationReviewPolicy == nil || out.SetAutomationReviewPolicy.Applied == nil {
+		return fmt.Errorf("the automation policy loosening returned no applied answer")
+	}
+	if *out.SetAutomationReviewPolicy.Applied {
+		return fmt.Errorf("the automation policy loosening applied without a second person")
+	}
+	return nil
 }
 
 // startProbeRollout starts the probe rollout, which is what writes its target rows.

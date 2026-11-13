@@ -32,6 +32,9 @@ title: 传输能力矩阵
 ● 仅用于没有这种缺口的方向。这也是 HTTP 接入的订阅能力为 `●`，而平台代理不是的唯一原因：
 超过租户接入限额时，HTTP 向发布者返回 `429`；代理路径则在设备已经收到 PUBACK 后丢弃消息，不向发布者传递任何信息。
 
+HTTP 命令拉取和 LoRaWAN 集成下行在规范中以 `basis: "prose"` 声明为 `◐`。
+下文描述其支持范围和限制；已记录的测试运行并未测量这两项能力。
+
 各方向均从平台的角度命名：
 
 - **读取**：平台向设备请求一个值，并在该次交互中取得响应。
@@ -43,9 +46,6 @@ title: 传输能力矩阵
 ## 设备传输 {#device-transports}
 
 设备如何接入平台，以及平台如何与设备反向通信。
-
-HTTP 命令拉取和 LoRaWAN 集成下行在规范中以 `basis: "prose"` 声明为 `◐`。
-下文描述其支持范围和限制；已记录的测试运行并未测量这两项能力。
 
 {/* conformance:table device-transports */}
 
@@ -91,7 +91,7 @@ HTTP 命令拉取和 LoRaWAN 集成下行在规范中以 `basis: "prose"` 声明
   存储写满时会拒绝发布，主节点切换中的存储则不会确认发布，因此设备收不到 PUBACK，会重新发送。
   QoS 0 发布保持上述行为，超出租户上限的消息仍会在 PUBACK 之后被丢弃。`dcctl bootstrap` 和 `dcctl upgrade` 用 `--mqtt-fail-closed` 开启它。参见
   [服务质量](../guides/connecting-a-device.md#quality-of-service)和
-  [MQTT 故障关闭](../deployment/observability.md#mqtt-fail-closed)。该设置在 1.0 中默认关闭，因为开启后上限更低，且过载时尚不会形成反压；实测上限，以及关闭时各路径的丢失上界，见[服务质量](../guides/connecting-a-device.md#quality-of-service)。
+  [MQTT 故障关闭](../deployment/observability.md#mqtt-fail-closed)。该设置在 1.0 中默认关闭，开启后的上限更低。存储写满时会拒绝发布；存储占用达到 80% 时，存储压力会使新的设备连接退避，直到占用降至 60% 以下。这并不消除代理内存不足或 OOM 的独立限制；实测上限，以及关闭时各路径的丢失上界，见[服务质量](../guides/connecting-a-device.md#quality-of-service)。
 - **写入 ◐**：命令可以送出，但投递**仅面向当前在线连接，且没有确认**。
   发布只会到达那一刻已连接并订阅的设备。代理不会为未连接或未订阅的设备保留消息，
   平台也不会获知设备是否收到。系统有意不设 `DELIVERED` 状态：独立于响应确认投递需要这种传输并不提供的确认机制。
@@ -109,7 +109,7 @@ HTTP 命令拉取和 LoRaWAN 集成下行在规范中以 `basis: "prose"` 声明
 - **订阅 ●**：`POST /{instanceId}/{tenant}/events` 返回：
   - 事件存入平台入站流后返回 `202`，并带 `X-DC-Event-Id` 回执响应头；
   - 路径中的租户不存在或正文中的凭据无法通过认证时返回 `401`（两者同一响应）；
-  - 不是 JSON、无法读取、或为平台拒绝的 JSON（后者在 JSON 响应体中附指向问题值的 JSON Pointer）的正文，或语法无效的租户返回 `400`；
+  - 不是 JSON 或为平台拒绝的 JSON（后者在 JSON 响应体中附指向问题值的 JSON Pointer）的正文，或语法无效的租户返回 `400`；
   - 路径中的实例 ID 错误时返回 `404`；
   - 租户超过按读数计量的接入上限时返回 `429`。此检查先于背压，因此超过自身限额的租户会收到 `429`，绝不会收到背压的 `503`；
   - **平台施加背压时返回带 `Retry-After` 响应头的 `503`**：平台拒绝新事件，防止它们挤掉消费者尚未处理的事件（参见[接入路径上的背压](../deployment/observability.md#ingest-backpressure)）；
@@ -285,17 +285,17 @@ Sparkplug 设备的身份来自它发布所用的主题，因此逐事件设备�
 | Write-Attributes | ○ | 未实现，无法通过平台设置通知阈值范围 |
 | Bootstrap | ○ | 未实现；Bootstrap 服务器在规划中 |
 
-设备认证在 DTLS 握手时逐设备进行，使用预共享密钥。X.509 和原始公钥凭据在规划中。
-
 设备信息的两个单元格仍为 `◐`：已记录的符合性测试测量的是旧版仅支持 text/plain 的实现及其
 TLV 限制。当前实现也能解码 TLV，但尚未通过新一轮测试测量；记录的结果和限制检查均未修改。
 这不表示 Observe 已支持 TLV 解码。
+
+设备认证在 DTLS 握手时逐设备进行，使用预共享密钥。X.509 和原始公钥凭据在规划中。
 
 ### 入站集成 {#inbound-integrations}
 
 ChirpStack 或 The Things Stack 这样的网络服务器，或任何能 `POST` JSON 或字节的系统，会把设备的数据转发到租户的[集成](../guides/inbound-integrations.md)。设备从不连接 DeviceChain。
 
-- **订阅 ◐**：平台把发送方提供的解码值存储为普通测量。它不是 `●` 的原因：租户超出接入额度时到达的消息会返回 `202` 并被丢弃，因为拒绝反正也会丢失它，而且有些网络服务器会暂停被拒绝的 webhook。因此发送方得不到通知。没有任何解码内容的上行会被确认，但不存储任何内容，并被计数。`IntegrationShedAccepted` 和 `IntegrationUndecodedHigh` 会报告这两种情况。在设备配置文件上编写的[载荷解码器](../guides/payload-decoders.md)可以改为在平台中解码原始帧；它将从 v1.2 起解码实时上行。
+- **订阅 ◐**：平台把发送方提供的解码值存储为普通测量。它不是 `●` 的原因：租户超出接入额度时到达的消息会返回 `202` 并被丢弃，因为拒绝反正也会丢失它，而且有些网络服务器会暂停被拒绝的 webhook。因此发送方得不到通知。没有适用的配置文件解码器时，没有任何解码内容的上行会被确认，但不存储任何内容，并被计数。`IntegrationShedAccepted` 和 `IntegrationUndecodedHigh` 会报告这两种情况。在设备配置文件上编写的[载荷解码器](../guides/payload-decoders.md)可以改为在平台中解码原始帧；它从 v1.2 起可解码实时上行。
 - **写入 ◐ / 读取 ○**：可选的 [LoRaWAN 下行](../guides/inbound-integrations.md#lorawan-downlink)
   可在 ChirpStack v4 或 The Things Stack v3 上将命令加入队列。非确认下行报告队列接受；
   确认下行会等待设备的确认。不支持通用发送方下行。适配器关闭时，发给最近一次通过集成
@@ -308,7 +308,7 @@ ChirpStack 或 The Things Stack 这样的网络服务器，或任何能 `POST` J
 ## 出站连接器 {#outbound-connectors}
 
 规则触发时平台向哪里发送数据。连接器是单向接收端，没有设备方向，
-所以**读取**和**订阅**标为 `—`，而不是“无”。
+所以**读取**和**订阅**标为 `—`，而不是 `None`。
 
 | 连接器 | 读取 | 写入 | 订阅 | 备注 |
 | --- | :---: | :---: | :---: | --- |
@@ -334,6 +334,8 @@ Kafka 有真正的 `tls` 开关；MQTT 连接器配置则**没有任何 TLS 字�
 早期版本已存储的该类型连接器，如果有 `publish` 指向它，仍会因不受支持而进入死信；它可识别，但不能执行，不会无声丢弃。
 将来发布此能力时，它会像 AWS 连接器一样使用存储在连接器上的凭据认证，而不会使用 Pod 身份。
 :::
+
+`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码仅适用于连接器更新。`CONFLICT` 仍表示唯一值冲突；其他操作的错误不变。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
 
 与连接器不同，[通知渠道](../guides/notification-channels.md) 通过 SMTP 和 webhook 联系人，而不是系统。
 

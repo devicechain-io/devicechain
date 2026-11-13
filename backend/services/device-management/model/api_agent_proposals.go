@@ -122,9 +122,9 @@ func normalizeAlarmProposal(req AlarmProposalRequest) (actiongate.Kind, []string
 		return "", nil, fmt.Errorf("a proposal names 1 to %d alarms", MaxProposalAlarms)
 	}
 	var tokens []string
-	for _, t := range req.AlarmTokens {
-		if t == "" || len(t) > 128 {
-			return "", nil, errors.New("an alarm token must be 1 to 128 characters")
+	for i, t := range req.AlarmTokens {
+		if err := core.ValidateToken(t); err != nil {
+			return "", nil, fmt.Errorf("alarmTokens[%d]: %w", i, err)
 		}
 		if !slices.Contains(tokens, t) {
 			tokens = append(tokens, t)
@@ -522,18 +522,18 @@ var (
 //
 //  1. the proposal must still be PROPOSED, inside its expiry, and its stored digest must equal the
 //     one the approver was shown;
-//  2. collect the distinct previous approvers and the current approver;
+//  2. collect previous approvers with their stored sign-ins and the caller with their current sign-in;
 //  3. user-management is asked, under the APPROVER'S own token and with no cache, whether the
 //     proposal may still go ahead (agentExecutionDecision): the original client, the proposer's
 //     standing and every counted approver's standing, under the current policy. A refusal ends
 //     the proposal as REFUSED with the reasons;
-//  4. an already-approved, still-valid approver with a fresh approval is answered unchanged;
+//  4. an already-approved, still-valid approver with a fresh approval from the SAME sign-in is answered unchanged;
 //     otherwise their stale entry is replaced after the normal checks. The approver must be a
 //     valid approver, with a second factor fresh by the policy's measure, and may be the proposer
 //     only when the policy allows self-confirmation of a
 //     single-approval, normal-impact proposal;
-//  5. the final approval executes atomically after another policy decision; earlier
-//     approvals are recorded with a compare-and-set on the row's revision.
+//  5. the final approval executes atomically with the decision asked again as the last act
+//     before commit; earlier approvals are recorded with a compare-and-set on the row's revision.
 func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Approver, token, digest string) (result *AgentProposal, resultErr error) {
 	defer func() { api.AgentMetrics.approval(result, resultErr) }()
 	for attempt := 0; ; attempt++ {
@@ -549,6 +549,15 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 		if err != nil {
 			return nil, err
 		}
+		sessions := []actiongate.ApproverSession{}
+		for _, s := range actiongate.ApproverSessions(approvals) {
+			if s.Principal != approver.Principal {
+				sessions = append(sessions, s)
+			}
+		}
+		if approver.Sid != "" {
+			sessions = append(sessions, actiongate.ApproverSession{Principal: approver.Principal, Sid: approver.Sid})
+		}
 		principals := actiongate.Principals(approvals)
 		if !slices.Contains(principals, approver.Principal) {
 			principals = append(principals, approver.Principal)
@@ -563,7 +572,7 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 		dec, err := api.AgentDecider.Execution(ctx, actiongate.ExecutionRequest{
 			ProposalToken: p.Token, Kind: actiongate.Kind(p.Kind), Impact: p.Impact, TargetCount: p.TargetCount,
 			ProposerPrincipal: p.ProposerSub, ProposerClient: p.ProposerClient, ProposerSid: sid,
-			Approvers: principals,
+			Approvers: principals, ApproverSessions: sessions,
 		})
 		// The decision is a remote call, so the window and step-up are judged when the approval
 		// is written, not when the request arrived.
@@ -588,7 +597,7 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 			return nil, errNotAnApprover
 		}
 		for _, a := range approvals {
-			if a.Sub == approver.Principal && auth.StepUpFreshAt(a.Amr, a.MfaTime, dec.StepUp, now) {
+			if a.Sub == approver.Principal && auth.SameSession(auth.SessionID(a.Sid), auth.SessionID(approver.Sid)) && auth.StepUpFreshAt(a.Amr, a.MfaTime, dec.StepUp, now) {
 				// Nothing to write; answer what is stored NOW, not the row read before the remote
 				// decision, which a concurrent decision may have moved on.
 				return api.AgentProposalByToken(ctx, p.Token, nil)
@@ -606,9 +615,9 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 				next = append(next, a)
 			}
 		}
-		next = append(next, actiongate.Approval{Sub: approver.Principal, Amr: approver.Amr, MfaTime: approver.MfaTime, At: now})
+		next = append(next, actiongate.Approval{Sub: approver.Principal, Sid: approver.Sid, Amr: approver.Amr, MfaTime: approver.MfaTime, At: now})
 		if actiongate.Tally(next, dec.ValidApprovers, p.ProposerSub, dec.RequiredApprovals, dec.AllowSelfConfirm, dec.StepUp, now) >= dec.RequiredApprovals {
-			result, execErr := api.executeAlarmProposal(ctx, approver, p, next)
+			result, execErr := api.executeAlarmProposal(ctx, approver, p, next, dec.RequiredApprovals)
 			if errors.Is(execErr, actiongate.ErrNotPending) {
 				if attempt == 0 {
 					continue

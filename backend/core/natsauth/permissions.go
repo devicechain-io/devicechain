@@ -239,7 +239,7 @@ func streamGrant(g *grant, instance, area string, st streams.Stream) {
 			for _, d := range messaging.DeclaredDurables(instance, st.Suffix, r) {
 				durableVerbs(g, name, d)
 			}
-			if st.Shape != streams.ShapeAdvisory {
+			if streams.MaxDeliveriesCaptured(st.Suffix) {
 				// The max-delivery recorder fetches the original of a message whose deliveries
 				// ran out, from the stream the area reads, and removes it from a work-queue stream
 				// once its letter is written.

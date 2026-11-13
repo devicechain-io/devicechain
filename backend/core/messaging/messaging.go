@@ -135,7 +135,7 @@ func StreamSubject(instanceId, suffix string) string {
 
 // StreamSubjects is the list of subjects a suffix's stream captures. For every shape but
 // one it is StreamSubject's single pattern. For the advisory shape it is one subject per
-// OTHER declared stream of this instance: the broker's max-delivery advisory for any
+// captured declared stream of this instance (streams.MaxDeliveriesCaptured): the broker's max-delivery advisory for any
 // durable on that stream, "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.<stream>.*".
 //
 // Per stream rather than one wildcard, because the instance prefix sits INSIDE the stream
@@ -147,7 +147,9 @@ func StreamSubjects(instanceId, suffix string) []string {
 }
 
 // StreamSubjectsWith is StreamSubjects for an instance that may have opted in to raw device
-// payloads; only the device-events capture stream's list depends on it.
+// payloads; only the device-events capture stream's list depends on it. The advisory
+// shape excludes streams whose MaxDeliveriesUncaptured reason is non-empty, preserving
+// the subject list earlier releases verify exactly during rolling upgrades.
 func StreamSubjectsWith(instanceId, suffix string, uplinks bool) []string {
 	if streams.ShapeOf(suffix) == streams.ShapeDeviceEvents {
 		return DeviceEventsSubjectsWith(instanceId, uplinks)
@@ -157,7 +159,7 @@ func StreamSubjectsWith(instanceId, suffix string, uplinks bool) []string {
 	}
 	out := make([]string, 0, len(streams.All))
 	for _, s := range streams.All {
-		if s.Shape == streams.ShapeAdvisory {
+		if !streams.MaxDeliveriesCaptured(s.Suffix) {
 			continue
 		}
 		out = append(out, AdvisorySubject(StreamName(instanceId, s.Suffix), "*"))
@@ -341,6 +343,9 @@ type Message struct {
 	// split is set on a message read from inbound-events that is a member republished alone
 	// out of an envelope; see HeaderRetry.
 	split *splitOrigin
+	// Trace state (see tracing.go): reader/producer-side, nil when tracing is off.
+	traceContext context.Context
+	traceMembers []TraceMember
 }
 
 // AckDeadline is when the broker will redeliver this message if it has not been acked: its

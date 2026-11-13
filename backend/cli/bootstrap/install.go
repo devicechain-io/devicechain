@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -73,6 +74,9 @@ type InstallOptions struct {
 	// MaxConnections is the relational store's connection budget. Zero keeps what the
 	// cluster was installed with, or the default on a first install.
 	MaxConnections int
+	// RelationalStoreMaxWALMiB is nil to retain the recorded choice, 0 for the
+	// root stock default, or at least 64 MiB. Never inferred from a size preset.
+	RelationalStoreMaxWALMiB *int
 	// Restore recovers the CLUSTER's shared relational store from an archive instead
 	// of initialising an empty one (ADR-028). The zero plan is an ordinary install.
 	//
@@ -108,6 +112,9 @@ type InstallOptions struct {
 // prerequisites that are not there. markInstallApplying brackets the apply for exactly
 // that reason.
 func Install(ctx context.Context, provider Provider, opts InstallOptions) error {
+	if err := ValidateRelationalStoreWAL(opts.RelationalStoreMaxWALMiB); err != nil {
+		return err
+	}
 	opts.CreateCluster = true
 	binding, err := provider.EnsureCluster(ctx, opts.Options)
 	if err != nil {
@@ -236,19 +243,20 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		return identityReadError(binding.Describe(), err)
 	}
 	st.ClusterUID, st.Binding.ClusterUID = uid, uid
+	// The clients the first writes below go through come out of the refusals, so
+	// those writes cannot be reached without them. See connectAndRefuse.
+	dyn, typed, err := connectAndRefuse(ctx, st, settings, localClusterStateExists)
+	if err != nil {
+		return err
+	}
+	// After the refusals, so a refused install (an older dcctl over a newer cluster) does not
+	// restamp this machine's record of the cluster with the dcctl it refused.
 	if err := WriteClusterRecord(ClusterRecord{
 		UID: uid, Cluster: binding.Cluster, KubeContext: binding.KubeContext, Managed: binding.Managed,
 		FirstSeenAt: time.Now().UTC(), DcctlVersion: opts.DcctlVersion,
 	}); err != nil {
 		fmt.Println(color.YellowString("warning: could not record what is known about cluster %s (%v).",
 			binding.Describe(), err))
-	}
-
-	// The clients the first writes below go through come out of the refusals, so
-	// those writes cannot be reached without them. See connectAndRefuse.
-	dyn, typed, err := connectAndRefuse(ctx, st, settings, localClusterStateExists)
-	if err != nil {
-		return err
 	}
 
 	doing("settling the cluster's credentials")
@@ -303,7 +311,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 			return fmt.Errorf("settling the Alertmanager's routing: %w", err)
 		}
 	}
-	if err := markInstallApplying(ctx, typed, st.ClusterUID, st.DcctlVersion, time.Now); err != nil {
+	if err := markInstallApplying(ctx, typed, st.ClusterUID, st.DcctlVersion, time.Now, st.RelationalStoreMaxWALMiB); err != nil {
 		return err
 	}
 	// 🔴 AFTER markInstallApplying, BECAUSE THAT CALL IS THE LAST REFUSAL AND A
@@ -313,22 +321,14 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	// fields out of a structural schema on its way to being told it may not touch
 	// this cluster at all.
 	//
-	// 🔑 THAT IS A NARROWER GUARD THAN IT LOOKS, AND THE GAP IS THE WHOLE REASON
-	// SLICE A EXISTS. The check is `old.Schema > installRecordSchema`, so a NEWER
-	// dcctl at the SAME record schema passes it — and an older install then
-	// server-side-applies its older CRDs with the same field manager and Force,
-	// removing whatever the newer release added. Ordering cannot fix that; only
-	// comparing what is on the cluster against what is about to be applied can,
-	// which is what the operator identity is for.
-	//
-	// 🔴 THOSE GUARDS EXIST NOW — in `dcctl bootstrap` and `dcctl upgrade`, which
-	// refuse a cluster whose operator is not the one they need. INSTALL ITSELF STILL
-	// HAS NONE, and that is deliberate rather than overlooked: install is the verb
-	// whose job is to MOVE the operator, so a guard refusing a difference would
-	// refuse the only command that can resolve one. The consequence is that an older
-	// dcctl's `install` still downgrades a newer cluster's CRDs silently, and closing
-	// that needs a comparison that can tell "older" from "different" — which the
-	// identity, being equality-only, cannot. Written down rather than left implied.
+	// The record schema alone cannot refuse an older dcctl at the same schema.
+	// connectAndRefuse now refuses that older-release case before any write by comparing
+	// release versions from the install record, including an unfinished install.
+	// The operator identity check cannot do this: it tests equality, not order, and
+	// install must be able to move the operator to a different, newer release. Releases
+	// can also change the controller without changing the definitions it digests.
+	// A dcctl built from source, an unparseable record version, or a hand-edited record
+	// can still leave the release ordering unknown or misrepresented.
 	if err := installOperator(ctx, st); err != nil {
 		return err
 	}
@@ -372,7 +372,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	return finishInstall(ctx, st, provider.Name(), typed, dyn, InstallRecord{
 		ClusterUID:   st.ClusterUID,
 		DcctlVersion: st.DcctlVersion,
-		Settings:     settings,
+		Settings:     installSettingsFor(st),
 		Outputs:      outputs,
 	}, cnpgClusterReadyTimeout, rolloutPollInterval)
 }
@@ -473,15 +473,16 @@ func installState(binding ClusterBinding, provider string, opts InstallOptions) 
 		HA:                opts.HA,
 		BackupDestination: opts.BackupDestination,
 		// Read through backupSnapshotClass, which drops it when backups are off.
-		BackupSnapshotClass: opts.BackupSnapshotClass,
-		DatabasePlacement:   opts.DatabasePlacement,
-		MaxConnections:      opts.MaxConnections,
-		Restore:             opts.Restore,
-		RemoveLegacyIngress: opts.RemoveLegacyIngress,
-		AWSNLB:              opts.AWSNLB,
-		MQTTGateway:         opts.MQTTGateway,
-		AlertRouting:        opts.AlertRouting,
-		Values:              map[string]string{},
+		BackupSnapshotClass:      opts.BackupSnapshotClass,
+		DatabasePlacement:        opts.DatabasePlacement,
+		MaxConnections:           opts.MaxConnections,
+		RelationalStoreMaxWALMiB: opts.RelationalStoreMaxWALMiB,
+		Restore:                  opts.Restore,
+		RemoveLegacyIngress:      opts.RemoveLegacyIngress,
+		AWSNLB:                   opts.AWSNLB,
+		MQTTGateway:              opts.MQTTGateway,
+		AlertRouting:             opts.AlertRouting,
+		Values:                   map[string]string{},
 	}
 }
 
@@ -630,6 +631,13 @@ func connectAndRefuse(ctx context.Context, st *State, settings InstallSettings,
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := refuseAnOlderInstall(prev, st.DcctlVersion); err != nil {
+		return nil, nil, err
+	}
+	if err := restoreRelationalStoreWAL(st, prev); err != nil {
+		return nil, nil, err
+	}
+	settings.RelationalStoreMaxWALMiB = st.RelationalStoreMaxWALMiB
 	if st.MaxConnections == 0 {
 		st.MaxConnections = defaultMaxConnections
 		if last := prev.lastCompleted(); last != nil && last.Outputs.Rdb.MaxConnections > 0 {
@@ -686,7 +694,8 @@ func localClusterStateExists(uid string) (bool, error) {
 //     it found — its HA, its sizing, whether it archives — and none of them is
 //     re-applied when the cluster's change. Turning backups off or HA down underneath
 //     them leaves instances that believe in a cluster that no longer exists. Raising
-//     the connection budget is the one change that cannot hurt them, so it is allowed.
+//     the connection budget or changing the reload-only WAL target cannot hurt them,
+//     so those changes are allowed.
 func refuseAReinstallThatWouldHurt(ctx context.Context, st *State, prev *InstallRecord, settings InstallSettings,
 	stateExists func(uid string) (bool, error)) error {
 	last := prev.lastCompleted()
@@ -705,8 +714,23 @@ func refuseAReinstallThatWouldHurt(ctx context.Context, st *State, prev *Install
 			st.Binding.Describe(), last.DcctlVersion, last.UpdatedAt.Format(time.RFC3339), st.ClusterUID)
 	}
 
+	// WAL is reload-only and may change while instances run. Compare settings
+	// without it, retaining the original choices for the run's change summary.
+	previousSettings, nextSettings := last.Settings, settings
+	previousSettings.RelationalStoreMaxWALMiB = nil
+	nextSettings.RelationalStoreMaxWALMiB = nil
+	if !reflect.DeepEqual(last.Settings.RelationalStoreMaxWALMiB, settings.RelationalStoreMaxWALMiB) {
+		describeWAL := func(value *int) string {
+			if value == nil {
+				return "unrecorded (root default)"
+			}
+			return fmt.Sprintf("%d MiB (0: stock default)", *value)
+		}
+		fmt.Printf("  Relational store max_wal_size: %s → %s (reload-only)\n",
+			describeWAL(last.Settings.RelationalStoreMaxWALMiB), describeWAL(settings.RelationalStoreMaxWALMiB))
+	}
 	var changed []string
-	if last.Settings != settings {
+	if !reflect.DeepEqual(previousSettings, nextSettings) {
 		changed = append(changed, fmt.Sprintf("settings %s → %s",
 			describeInstallSettings(last.Settings), describeInstallSettings(settings)))
 	}
@@ -770,6 +794,9 @@ func describeInstallSettings(s InstallSettings) string {
 	}
 	if !s.DatabasePlacement.IsZero() {
 		parts = append(parts, "databases on "+s.DatabasePlacement.describe())
+	}
+	if s.RelationalStoreMaxWALMiB != nil {
+		parts = append(parts, fmt.Sprintf("relational max_wal_size %d MiB (0: stock default)", *s.RelationalStoreMaxWALMiB))
 	}
 	return strings.Join(parts, ", ")
 }

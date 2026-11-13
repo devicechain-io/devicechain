@@ -39,6 +39,10 @@ plataforma no lo es: al superar el límite de ingesta del inquilino, HTTP respon
 mientras que la vía del bróker descarta el mensaje después de que el dispositivo ya haya recibido su
 PUBACK, y al publicador no le llega nada.
 
+La consulta HTTP de comandos y el canal descendente LoRaWAN se declaran `◐` con
+`basis: "prose"` en la especificación: sus posibilidades y límites se describen abajo,
+pero la ejecución de conformidad registrada no los midió.
+
 Las direcciones se nombran desde el punto de vista de la plataforma:
 
 - **Lectura**: la plataforma pide un valor a un dispositivo y obtiene la respuesta en ese intercambio.
@@ -52,10 +56,6 @@ pregunta real.
 ## Transportes de dispositivo
 
 Cómo llegan los dispositivos a la plataforma, y cómo llega la plataforma de vuelta.
-
-La consulta HTTP de comandos y el canal descendente LoRaWAN se declaran `◐` con
-`basis: "prose"` en la especificación: sus posibilidades y límites se describen abajo,
-pero la ejecución de conformidad registrada no los midió.
 
 {/* conformance:table device-transports */}
 
@@ -121,9 +121,9 @@ operador lo ha activado; consulta [Conectar dispositivos desde fuera del clúste
   la publicación, y uno cuyo líder está cambiando no la confirma, así que el dispositivo no recibe
   PUBACK y la vuelve a enviar. Las publicaciones QoS 0 mantienen el comportamiento anterior, y un
   mensaje por encima del techo del inquilino se sigue descartando después de su PUBACK. `dcctl bootstrap` y
-  `dcctl upgrade` lo activan con `--mqtt-fail-closed`. Consulte
+  `dcctl upgrade` lo activan con `--mqtt-fail-closed`. Consulta
   [calidad de servicio](../guides/connecting-a-device.md#quality-of-service) y
-  [MQTT a prueba de fallos](../deployment/observability.md#mqtt-fail-closed). Está desactivado por defecto en 1.0, porque con él activado el techo es más bajo y la sobrecarga aún no genera contrapresión; el techo medido y las cotas de pérdida con él desactivado están en [calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
+  [MQTT a prueba de fallos](../deployment/observability.md#mqtt-fail-closed). Está desactivado por defecto en 1.0, y con él activado el techo es más bajo. Un almacén lleno rechaza publicaciones, y la presión sobre el almacén frena las nuevas conexiones de dispositivos al alcanzar el 80 % de ocupación hasta que baja del 60 %. Esto no elimina el límite independiente de memoria del bróker ni el riesgo de quedarse sin memoria; el techo medido y las cotas de pérdida con él desactivado están en [calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
 - **Escritura ◐**: los comandos se entregan, pero la entrega es **solo en vivo y sin
   confirmación**. Una publicación alcanza a un dispositivo que esté conectado y suscrito en ese
   instante. El bróker no la retiene para uno que no lo esté, y nada informa a la plataforma de si
@@ -165,8 +165,8 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON, más consulta opcional d
   cabecera `Retry-After`, así que espera y reintenta. `202`, `400`, `401` y `404` son terminales
   para esa petición.
 - **Escritura ◐ / Lectura ○**: los comandos están disponibles mediante
-  [consulta HTTP de comandos](../concepts/commands.md#http-command-pull). Configura
-  `commandChannel: HTTP_PULL` en el tipo de dispositivo; el dispositivo consulta los comandos,
+  [consulta HTTP de comandos](../concepts/commands.md#http-command-pull). En el tipo de dispositivo, establece
+  `commandChannel` en `HTTP_PULL`; el dispositivo consulta los comandos,
   confirma su recepción y envía su respuesta por HTTP. Los comandos esperan la consulta y
   siguen sujetos a su caducidad. Este canal no lleva configuración ni asignaciones de
   actualizaciones gestionadas; tampoco existe una lectura iniciada por la plataforma.
@@ -228,7 +228,7 @@ La plataforma también puede actuar como cliente en un bróker que ya operes, pa
   el bróker vuelva a conceder la suscripción.
 
   **Un solo pod lee cada fuente, con un identificador de cliente propio.** La plataforma se
-  conecta a tu bróker como `devicechain:<instancia>:<fuente>:<pod>`, así que dos instancias, dos
+  conecta a tu bróker como `devicechain:<instance>:<source>:<pod>`, así que dos instancias, dos
   fuentes o dos pods de `event-sources` nunca comparten una sesión. Un bróker mantiene una sesión
   por identificador de cliente y corta la conexión más antigua cuando llega una segunda, y el
   identificador único compartido que usaban las versiones anteriores perdía mensajes por esa vía.
@@ -396,7 +396,7 @@ del inquilino. El dispositivo nunca se conecta a DeviceChain.
   mediciones normales. Lo que impide que sea `●`: un mensaje que llega mientras el inquilino supera su
   asignación de ingesta se responde con `202` y se descarta, porque un rechazo lo perdería de todos modos
   y algunos servidores de red suspenden un webhook al que se rechaza. Por tanto, no se avisa al remitente.
-  Un uplink sin nada decodificado se confirma y no guarda nada, y se cuenta. `IntegrationShedAccepted` e
+  Sin un decodificador de perfil aplicable, un uplink sin nada decodificado se confirma y no guarda nada, y se cuenta. `IntegrationShedAccepted` e
   `IntegrationUndecodedHigh` informan de ambos casos. Un [decodificador de payload](../guides/payload-decoders.md)
   escrito en el perfil de dispositivo puede decodificar en su lugar la trama cruda en la plataforma;
   decodifica uplinks en vivo a partir de la v1.2.
@@ -416,11 +416,11 @@ del inquilino. El dispositivo nunca se conecta a DeviceChain.
 
 A dónde envía datos la plataforma cuando dispara una regla. Un conector es un sumidero de un solo
 sentido sin direcciones de dispositivo, así que **Lectura** y **Suscripción** son `—` y no
-`Ninguno`.
+`None`.
 
 | Conector | Lectura | Escritura | Suscripción | Notas |
 | --- | :---: | :---: | :---: | --- |
-| Webhook `httpCall` | — | ● | — | Solo `POST`; se rechaza cualquier otro método |
+| Webhook `httpCall` | — | ● | — | Solo `POST`; se rechaza cualquier método distinto de `POST` |
 | `publish` → MQTT | — | ● | — | QoS 0/1/2; usuario + secreto; URL `tcp`, `mqtt`, `ssl`, `tls`, `mqtts`, `ws`, `wss`; **sin ajustes de TLS** (consulta más abajo) |
 | `publish` → Kafka | — | ● | — | TLS; SASL `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512` |
 | `publish` → AWS SNS | — | ● | — | Solo credenciales estáticas por inquilino |
@@ -451,6 +451,8 @@ acabando en la cola de mensajes muertos como no soportado si un `publish` lo apu
 pero no ejecutable, nunca descartado en silencio. Cuando se publique, se autenticará con una credencial
 guardada en el conector, como hacen los conectores de AWS, nunca con la identidad del pod.
 :::
+
+`updateConnector` rechaza un `expectedUpdatedAt` obsoleto con `errors[*].extensions.code` igual a `STALE_WRITE`. No se escribe nada; el mensaje sigue siendo "connector was modified by another writer; reload and try again". Este código solo se aplica a las actualizaciones de conectores. `CONFLICT` sigue indicando una colisión de unicidad; los errores de otras operaciones no cambian. Clasifica por código, no por el texto del mensaje. La consola conserva los cambios sin guardar y muestra una indicación localizada para copiarlos antes de volver a cargar, aplicarlos de nuevo y reintentar guardar.
 
 Aparte de los conectores, los [canales de notificación](../guides/notification-channels.md) llegan a
 personas y no a sistemas, por SMTP y webhook.

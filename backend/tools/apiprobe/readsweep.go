@@ -507,6 +507,10 @@ func runReadSweep(ctx context.Context, argv []string) error {
 // A new entry is needed only when a door takes an ambiguous token; a door taking
 // `deviceToken`, or one that is an entity's own read-back, needs nothing.
 var sweepTokenArgs = map[string]string{
+	// Both protection reads are keyed by the protected profile, including the empty
+	// break-glass ledger. The policy receipt's own key is not a separate resource.
+	"device-management.automationReviewPolicy.profileToken":     "device-profile",
+	"device-management.automationReviewBreakGlass.profileToken": "device-profile",
 	// The asset-hierarchy reads take an ambiguous `token`, and it is an ASSET's.
 	// They belong in this sweep for the reason the version doors do: each reads a
 	// STORED RELATIONSHIP EDGE rather than the row the drill just wrote, so a
@@ -673,6 +677,13 @@ var sweepExemptions = map[string]string{
 	"device-management.agentProposal": "addressed by a server-generated proposal token, and only an AI " +
 		"agent's token can create a proposal, so the sweep holds no token it can defend; the ledger is swept " +
 		"through agentProposals",
+	"device-management.automationReview": "addressed by a server-generated review token from a completed " +
+		"recorded-input comparison; the probe seeds neither replay inputs nor review evidence, so it has no token to supply",
+	"device-management.automationReviews": "requires a profile token inside its criteria, while the planner " +
+		"supplies seeded tokens only to top-level arguments; the probe also seeds no recorded-input comparison evidence",
+	"user-management.principalStanding": "answers only device-management's own SERVICE token, which asks it under a " +
+		"profile lock when a protected profile publishes; every other caller, the tenant administrator this probe runs " +
+		"as included, is refused by design. It holds no row of its own: it reads the memberships members already sweeps",
 	"user-management.identityMemberships": "takes the IDENTITY token login returns — a credential, not a " +
 		"stored row's token — so the sweep has no value it can defend; me and members are swept",
 	"user-management.member": "addressed by email, and a missing one is a NOT_FOUND error by design; " +

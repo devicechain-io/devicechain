@@ -17,8 +17,9 @@ frontend/
                      preview, slot binding, export). React 19 + Vite + Tailwind +
                      shadcn/ui, graphql-codegen client-preset.
     dashboard/       The /dash app — a VIEWER-ONLY reference external embedder
-                     (ADR-039). It brings its own login, takes an EXPORTED
-                     definition + a host binding manifest, and renders view-only.
+                     (ADR-039). It brings its own login, loads a published dashboard
+                     by token or an exported definition + a host binding manifest,
+                     and renders without an editor. Authorized widget actions remain available.
                      Proof of the embed story: one definition + two manifests →
                      two live dashboards on different devices.
   packages/

@@ -8,8 +8,51 @@ title: 可观测性与指标
 DeviceChain 内置可观测性：每个服务都提供 **Prometheus 指标**和标准 Kubernetes 健康探针。`dcctl install` 在集群上部署完整 **Prometheus + Grafana + Alertmanager** 栈，覆盖该集群上的每个实例，新安装从第一分钟起即可监控，无需另行拼装监控项目。
 
 :::note 状态
-监控栈（由 `dcctl install` 部署 kube-prometheus-stack）及其 Grafana 仪表盘已经实现并经过端到端验证：一个实例总览和七个阶段仪表盘，详见 [Grafana 仪表盘](./grafana-boards.md)，并附带告警规则。OTLP 分布式追踪属于计划中的后续工作。
+监控栈（由 `dcctl install` 部署 kube-prometheus-stack）及其 Grafana 仪表盘已经实现并经过端到端验证：一个实例总览和七个阶段仪表盘，详见 [Grafana 仪表盘](./grafana-boards.md)，并附带告警规则。
 :::
+
+## 分布式追踪（OpenTelemetry）
+
+追踪**默认关闭**。启用后，GraphQL 请求和 HTTP/MQTT 设备接入会创建 span。
+W3C TraceContext 会沿着 NATS 入站事件、device-management 解析、已解析事件发布、
+event-management 存储以及 event-processing 处理传递。服务名称为 `devicechain-<area>`。
+仅传播 TraceContext，不传播 baggage。
+
+请将所有服务指向运维人员管理的 OTLP 接收端，例如已启用 OTLP 接收器的
+OpenTelemetry Collector、Jaeger 或 Tempo。添加以下 Helm values 覆盖配置
+（也可用于 `dcctl bootstrap|upgrade --values`），然后升级以重启服务：
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      tracing:
+        enabled: true
+        protocol: grpc
+        endpoint: otel-collector.observability.svc:4317
+        insecure: true
+        samplingRatio: 0.1
+```
+
+示例使用集群内明文传输。使用 TLS 时保持 `insecure: false`。如需通过 HTTP 发送 OTLP，
+设置 `protocol: http`、`endpoint: http://otel-collector.observability.svc:4318` 和
+`insecure: true`；使用 TLS 时则设置 `https://` 地址和 `insecure: false`。
+接收端需要单独部署，DeviceChain 不会自动安装。
+
+不带路径的 HTTP 端点会发送到 `/v1/traces`；如接收端位于路径前缀之后，请写明路径，
+系统将按原样使用。导出器仍会读取标准的 `OTEL_EXPORTER_OTLP_*` 环境变量，
+如果在 Pod 上设置了它们，可能覆盖这里的配置。
+
+在 DeviceChain 服务之间，采样遵循父 span：在第一个服务被采样的追踪会在后续流程中继续采样。
+设备或 API 调用方自带的 `traceparent` 不会决定采样：请求会开始一条新的本地追踪，
+并链接到调用方的追踪。解析失败而进入死信的事件，以及为重试而重新发布的事件，
+会开始新的追踪，而不是延续原追踪。省略 `samplingRatio` 时，
+启用追踪会采样 10% 的新根追踪。显式设置 `0` 表示不采样新根追踪，`1` 表示全部采样。
+繁忙设备群应从低采样率开始，排查问题时再短暂提高。不会记录凭据、设备令牌、
+GraphQL 变量或文档正文。记录内容包括租户 ID、传输方式、操作名称和 HTTP 状态。
+
+追踪会增加 CPU、网络流量、消息头字节数和接收端存储成本，请综合规划保留期与采样率。
+设置 `enabled: false` 并重启即可关闭；关闭时不会创建导出器或追踪 goroutine。
 
 ## 每个服务暴露什么 {#what-every-service-exposes}
 
@@ -918,7 +961,7 @@ chart 覆盖链条各环节：
 
 | 序列 | 标签 | 如何读取 |
 | --- | --- | --- |
-| `devicechain_<区域>_token_audience_checks_total` | `plane`、`audience`、`verdict` | 每个到达某个服务的已认证请求计一次（`graphql_ws` 则在连接完成认证时按连接计一次）。`audience` 是令牌的绑定对象，从该服务的角度看：`none`、`own_area`、`mcp`、`other_area`、`external` 或 `unlisted`。`verdict` 是 `accepted`、`would_reject`（observe (v1.2/v1.3)：统计并照常处理）或 `rejected`（enforce：以 `401` 拒绝，WebSocket 则以关闭码 `4401` 关闭连接）。`plane` 是接收请求的入口：`graphql`、`graphql_ws`、`admin`、`settings`、`upload`、`branding` 或 `userinfo`；每个服务只报告它具备的入口。 |
+| `devicechain_<area>_token_audience_checks_total` | `plane`、`audience`、`verdict` | 每个到达某个服务的已认证请求计一次（`graphql_ws` 则在连接完成认证时按连接计一次）。`audience` 是令牌的绑定对象，从该服务的角度看：`none`、`own_area`、`mcp`、`other_area`、`external` 或 `unlisted`。`verdict` 是 `accepted`、`would_reject`（observe (v1.2/v1.3)：统计并照常处理）或 `rejected`（enforce：以 `401` 拒绝，WebSocket 则以关闭码 `4401` 关闭连接）。`plane` 是接收请求的入口：`graphql`、`graphql_ws`、`admin`、`settings`、`upload`、`branding` 或 `userinfo`；每个服务只报告它具备的入口。 |
 | `devicechain_usermanagement_oauth_resource_checks_total` | `grant`、`resource`、`verdict` | 授权服务器每做出一次资源判定计一次。`grant` 是 `authorization_code`、`refresh_token` 或 `client_credentials`。`resource` 是所申请内容的类别：`none`、`area`、`mcp`、`external`、`unlisted`、`malformed` 或 `multiple`。`resource` 与其授权码或刷新令牌所绑定的资源不同的请求也会计入这里。 |
 | `devicechain_usermanagement_oauth_unscoped_client_credentials_total` | `verdict` | 指定了资源却未指定 scope 的 `client_credentials` 请求，这种请求已被弃用。判定始终是 `would_reject`，请求照常处理。 |
 | `devicechain_mcp_token_audience_registered` | 无 | MCP 的 resourceUrl 位于 `infrastructure.tokenAudience.mcpResources` 中时为 1，否则为 0。缺少时 MCP 拒绝启动。 |

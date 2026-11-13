@@ -168,9 +168,11 @@ func expiredOutcome(next string) CommandOutcome {
 	return out
 }
 
-// Reach says how far a FAILED response got, as the reporting transport observed it. It exists
+// Reach says how far a response got, as the reporting transport observed it. It exists
 // because "the device did not answer" and "the device answered no" are the same Success=false on
 // the wire and opposite facts about the world.
+// Success still settles SUCCESSFUL / SUCCEEDED, but only ReachAnswered records delivery
+// evidence: a successful transport with no device answer uses ReachUnanswered.
 //
 // The zero value is the ordinary case — the device spoke — so a response from a transport that
 // does not send the field (every native MQTT device) means exactly what it always meant.
@@ -180,10 +182,11 @@ const (
 	// ReachAnswered: the device answered. A failure is the device's own verdict (REJECTED).
 	ReachAnswered Reach = ""
 	// ReachUnanswered: the command was put on the wire and nothing came back — the same physical
-	// fact the expiry sweep records as TIMEOUT, and recorded the same way (UNKNOWN).
+	// fact the expiry sweep records as TIMEOUT. On failure it is recorded the same way (UNKNOWN);
+	// on success it records SUCCEEDED with no delivery evidence.
 	ReachUnanswered Reach = "UNANSWERED"
 	// ReachUnsent: the reporting transport refused the command locally; it never reached the
-	// wire (NOT_DELIVERED).
+	// wire. On failure it is NOT_DELIVERED; on success it records no delivery evidence.
 	ReachUnsent Reach = "UNSENT"
 )
 

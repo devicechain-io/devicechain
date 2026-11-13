@@ -61,7 +61,7 @@ func newPresenceChain(t *testing.T, producer presenceProducer) *presenceChain {
 	t.Helper()
 	ctx := core.WithTenant(context.Background(), "acme")
 	db := putest.NewSQLiteDB(t, &dmmodel.Device{}, &dmmodel.DeviceType{}, &dmmodel.DeviceProfile{},
-		&dmmodel.DeviceProfileVersion{}, &dmmodel.MetricDefinition{}, &dmmodel.CommandDefinition{},
+		&dmmodel.DeviceProfileVersion{}, &dmmodel.AutomationReviewPolicy{}, &dmmodel.AutomationReviewPolicyChange{}, &dmmodel.AutomationReviewBreakGlass{}, &dmmodel.MetricDefinition{}, &dmmodel.CommandDefinition{},
 		&dmmodel.DetectionRule{}, &dmmodel.DetectionRuleScopeRef{}, &dmmodel.EntityRelationship{},
 		&dmmodel.EntityRelationshipType{}, &dmmodel.GeoFenceSetVersion{}, &dmmodel.EntityGroupFacetRef{},
 		&dmmodel.EntityGroupMembership{}, &dmmodel.DeviceCredential{})

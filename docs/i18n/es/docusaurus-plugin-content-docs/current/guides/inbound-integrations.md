@@ -58,7 +58,7 @@ Si operas la instancia, también hay que indicar a `event-sources` en qué proxi
 
 ## Antes de conectar un remitente {#before-you-start}
 
-1. **Ten un tipo de dispositivo con un perfil.** Los dispositivos de este tipo son los que la integración puede alcanzar. Declara una [métrica](../user-guide/device-types-and-profiles.md#métricas) para cada valor decodificado del que quieras unidades o validación, con la misma clave que produce el objeto decodificado. Las claves que no declares se guardan igualmente, sin unidad.
+1. **Ten un tipo de dispositivo con un perfil.** Los dispositivos de este tipo son los que la integración puede alcanzar. Declara una [métrica](../user-guide/device-types-and-profiles.md#metrics) para cada valor decodificado del que quieras unidades o validación, con la misma clave que produce el objeto decodificado. Las claves que no declares se guardan igualmente, sin unidad.
 2. **Crea la integración.** En la consola, abre **Conectar → Integraciones** en la barra lateral y elige **Nueva integración**. Elige el **Tipo de remitente**, los **Tipos de dispositivo** que puede alcanzar y, para un servidor de red, el **Identificador del dispositivo**. Activa **Guardar métricas del enlace** si quieres datos de señal. Elige **Crear integración** y copia el token bearer del diálogo. Se muestra una sola vez; si lo pierdes, rótalo. La página Integraciones necesita el permiso `device:read` para abrirse y `device:write` para modificar.
 3. **Añade los dispositivos** con sus alias, como en la sección siguiente. Puedes hacerlo antes o después de que el remitente empiece a enviar: los mensajes de un dispositivo que aún no existe se listan para que puedas [crearlo a partir de lo visto](#unregistered).
 
@@ -301,7 +301,7 @@ Cualquier otro nombre de parámetro se rechaza.
 
 **3. Envíalo.** El dispositivo debe tener un [alias](#aliases) `lorawan.deveui`: el DevEUI se lee del dispositivo, nunca del comando. El comando sale por la integración por la que el dispositivo **informó por última vez**.
 
-**Qué significa el resultado.** En un downlink sin confirmar, `SUCCEEDED` significa que el servidor de red **encoló** el downlink (el resultado incluye `{"stage":"queued","queueItemId":...}`). No significa que el dispositivo lo haya recibido: un dispositivo de clase A solo oye los downlinks después de su siguiente transmisión, y un downlink sin confirmar no recibe acuse. En un [downlink confirmado](#lorawan-confirmed), `SUCCEEDED` significa que el dispositivo lo acusó. Los demás resultados:
+**Qué significa el resultado.** En un downlink sin confirmar, `SUCCEEDED` significa que el servidor de red **encoló** el downlink (el resultado incluye `{"stage":"queued","queueItemId":...}`). No significa que el dispositivo lo haya recibido: un dispositivo de clase A solo oye los downlinks después de su siguiente transmisión, y un downlink sin confirmar no recibe acuse. Un comando así no registra evidencia de entrega (`deliveredTime` y `deliveryEvidence` permanecen en null); el acuse de un downlink confirmado registra `DEVICE_RESPONSE`. En un [downlink confirmado](#lorawan-confirmed), `SUCCEEDED` significa que el dispositivo lo acusó. Los demás resultados:
 
 | Qué ocurrió | Resultado |
 | --- | --- |
@@ -430,7 +430,7 @@ valor raw se comprueba antes de redondear, con una tolerancia de `1e-6` en los l
 para errores de coma flotante. Con escala 1 y
 desplazamiento 0 se exige un entero exacto; otras transformaciones admiten una
 tolerancia de `1e-6`. La magnitud de entrada no puede superar `1e15`, y las magnitudes
-de entrada y raw deben ser menores que `2^53`. `215.4` con escala 1 se rechaza. NaN, infinito,
+de entrada y raw deben ser menores que `2^53`. Nada se redondea ni se trunca en silencio: `215.4` con escala 1 se rechaza. NaN, infinito,
 valores fuera de rango, tipos JSON incorrectos o parámetros ausentes rechazan el
 comando como **no enviado**, antes de llamar a la red. Los valores predeterminados
 del esquema son sugerencias de edición y nunca se insertan.
@@ -438,7 +438,7 @@ del esquema son sugerencias de edición y nunca se insertan.
 Cada parámetro del codificador debe ser único y estar declarado con un tipo escalar
 compatible: `INT` o `DOUBLE` para números, `BOOLEAN` para booleanos y valores enteros
 dentro de su anchura para bits (anchura 1 también admite `BOOLEAN`). Se rechazan las claves de payload no utilizadas y las claves JSON duplicadas.
-Las claves desconocidas se rechazan. Un codificador requiere un esquema de
+Las claves desconocidas del codificador se rechazan. Un codificador requiere un esquema de
 parámetros no vacío, que no puede declarar
 `fPort`, `hex`, `base64` ni `confirmed`: el codificador controla puerto y confirmación.
 Borrar `encoder` restaura el contrato raw. Una definición sin codificador conserva
@@ -476,7 +476,7 @@ Consulta el [modelo de seguridad](../concepts/security-model.md).
 | El remitente informa `400` | Lee el cuerpo de la respuesta; nombra el campo. Causas habituales: un DevEUI que no tiene 16 dígitos hexadecimales, un `deduplicationId` que no es un UUID y una hora de más de 366 días. |
 | El remitente informa `202` pero no se guarda nada | El dispositivo no tiene un alias que coincida, o su tipo está fuera del alcance de la integración: mira en **Dispositivos no registrados vistos**. O el uplink no tenía nada que guardar: mira el recuento de no decodificados. O el inquilino superó su asignación: consulta `IntegrationShedAccepted`. |
 | **Uplinks sin nada que leer** sigue creciendo | El perfil de dispositivo del servidor de red no tiene códec ni payload formatter, o su salida solo contiene cadenas. |
-| Los valores se guardan sin unidad | No hay ninguna [métrica](../user-guide/device-types-and-profiles.md#métricas) declarada para esa clave en el perfil del dispositivo. La clave es la ruta unida con puntos (`battery.voltage`). |
+| Los valores se guardan sin unidad | No hay ninguna [métrica](../user-guide/device-types-and-profiles.md#metrics) declarada para esa clave en el perfil del dispositivo. La clave es la ruta unida con puntos (`battery.voltage`). |
 | Un servidor de red alojado no consigue conectar | La instancia sirve un certificado autofirmado. Usa un certificado de una CA pública. |
 | Todos los remitentes comparten un mismo límite de peticiones | Los proxies que hay delante de `event-sources` no son de confianza. Consulta [Direcciones de cliente y proxies de confianza](../deployment/bootstrap.md#trusted-proxies). |
 

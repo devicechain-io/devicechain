@@ -27,7 +27,7 @@ func deviceConfigurationCtx(t *testing.T) context.Context {
 	if err := db.AutoMigrate(&model.Device{}, &model.DeviceType{}, &model.DeviceCredential{},
 		&model.DeviceReplacement{}, &model.DeviceAlias{}, &model.EntityAttribute{}, &model.EntityGroup{}, &model.IssuedGroupToken{},
 		&model.EntityGroupVersion{}, &model.EntityGroupMembership{}, &model.EntityGroupFacetRef{},
-		&model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.Alarm{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.DeviceProfileActivation{},
+		&model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.Alarm{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{}, &model.DeviceProfileActivation{},
 		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
 		&model.DetectionRuleScopeRef{}, &model.DeviceConfigurationRevision{},
 		&model.DeviceConfigurationState{}); err != nil {

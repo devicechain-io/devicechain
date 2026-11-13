@@ -1,11 +1,12 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { StepUpDialog } from '@/components/StepUpDialog';
 import { useTranslation } from 'react-i18next';
 import { hasAuthority, isScoped } from '@devicechain/client';
 import { useAuth } from '@/auth/AuthProvider';
-import { getAgentPolicy } from '@/lib/api/agent-policy';
+import { getAgentApprovalAccess, getAgentPolicy } from '@/lib/api/agent-policy';
 import { useQuery } from '@/lib/hooks/use-query';
 import { setStepUpReturn } from '@/lib/stepUpReturn';
 import { Button } from '@/components/ui/button';
@@ -39,21 +40,28 @@ export function ProposalResult({ proposal }: { proposal: Pick<AgentProposal, 'st
 export function StepUpPrompt({ path }: { path: string }) {
   const { t } = useTranslation('approvals');
   const { logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [fallback, setFallback] = useState(false);
+  const [verified, setVerified] = useState(false);
   return <div role="status" className="space-y-2 rounded-md border border-warning p-4">
-    <p>{t('stepUp')}</p><p className="text-sm">{t('stepUpHelp')}</p>
-    <Button onClick={() => { setStepUpReturn(path); logout(); }}>{t('signInAgain')}</Button>
+    <p>{t(verified ? 'stepUpSuccess' : 'stepUp')}</p>
+    {fallback ? <><p>{t('stepUpUnavailable')}</p><Button onClick={() => { setStepUpReturn(path); void logout(); }}>{t('signInAgain')}</Button></>
+      : !verified && <Button onClick={() => setOpen(true)}>{t('verifyCode')}</Button>}
+    <StepUpDialog open={open} onOpenChange={setOpen} onSuccess={() => setVerified(true)} onUnavailable={() => setFallback(true)} />
   </div>;
 }
 
 export function ApprovalsGate({ children }: { children: ReactNode }) {
   const { claims, identityToken } = useAuth();
   const { t } = useTranslation('approvals');
-  if (!hasAuthority(claims, 'agent:admin') || isScoped(claims)) {
+  if (isScoped(claims)) {
     return <PageShell title={t('title')}><EmptyState description={t('notAuthorized')} /></PageShell>;
   }
   // Drop policy, proposals and local decision state when another tab changes the session.
   const sessionKey = JSON.stringify([claims?.tenant, claims?.username, identityToken]);
-  return <InstanceGate key={sessionKey}>{children}</InstanceGate>;
+  return hasAuthority(claims, 'agent:admin')
+    ? <InstanceGate key={sessionKey}>{children}</InstanceGate>
+    : <ApproverGate key={sessionKey}>{children}</ApproverGate>;
 }
 function InstanceGate({ children }: { children: ReactNode }) {
   const { t } = useTranslation('approvals');
@@ -63,5 +71,13 @@ function InstanceGate({ children }: { children: ReactNode }) {
   if (!current?.instanceEnabled) return <PageShell title={t('title')}>
     {error ? <ErrorState description={error} /> : <EmptyState description={t('notEnabled')} />}
   </PageShell>;
+  return children;
+}
+
+function ApproverGate({ children }: { children: ReactNode }) {
+  const { t } = useTranslation('approvals');
+  const { current, loading } = useQuery(getAgentApprovalAccess);
+  if (loading) return <PageShell title={t('title')}><LoadingState description={t('loading')} /></PageShell>;
+  if (!current?.canApprove || !current.instanceEnabled) return <PageShell title={t('title')}><EmptyState description={t('notAuthorized')} /></PageShell>;
   return children;
 }

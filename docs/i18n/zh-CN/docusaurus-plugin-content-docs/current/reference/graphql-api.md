@@ -65,6 +65,11 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 
 - 读取设备凭据需要 `device:write`，不是 `device:read`。
 - `latestLocation` 需要 `location:read`，其他同属 `device-state` 的接口需要 `state:read`。
+- 固定资产的安装位置（`Device.installedPosition`、`Asset.installedPosition`）需要 `location:installed:read`，
+  而 `location:read` 包含该权限。这是安装数据，绝不会回退到设备上报的位置。
+  调用者若两项权限都没有，读取任何设备和资产时都会得到 `positionWithheld: true`，无论它是否有位置；
+  该标志仅针对安装位置。设置和清除安装位置（`setInstalledPosition`、`clearInstalledPosition`）需要
+  `device:write`，且仅能访问租户部分数据的成员不能写入安装位置。
 - `demoteAssertedPresence` 需要 `state:demote`，不同于前两者。
   默认没有角色直接声明它；只有持有 `*` 超级权限的角色，例如预置的 `tenant-admin`，无需明确授权就能使用。
   它是事件流水线之外唯一写入实时状态投影的接口，一次调用会影响整个事件源的设备。
@@ -570,6 +575,8 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 - 用已有 token 创建命令不会拒绝，而是返回原命令。参见[发送命令](../guides/sending-commands.md#issue-it)。
 - 删除仍被其他记录引用的记录会携带 `REFERENCE_VIOLATION`。参见[引用或值被拒绝](#reference-and-invalid-values)。
 
+`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码仅适用于连接器更新。`CONFLICT` 仍表示唯一值冲突；其他操作的错误不变。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
+
 ### 引用或值被拒绝 {#reference-and-invalid-values}
 
 另外两种拒绝也使用相同响应方式，各有自己的代码。
@@ -694,6 +701,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 
 ## 使用双重身份验证登录 {#two-factor-sign-in}
 
+
 设有[双重身份验证](../guides/two-factor-authentication.md)的账号无法从 `login` 获得令牌。密码正确时，`login` 以错误码 `MFA_CHALLENGE` 失败，并在 `extensions` 中携带一个质询；在客户端把代码发给 `verifyMfa` 之前不会签发任何东西。**只处理 `login` 成功情形的客户端，对这些账号现在会失败**，得到一个错误，而不会拿到不该拿到的令牌。
 
 ```json
@@ -722,6 +730,21 @@ mutation Verify($challenge: String!, $code: String!) {
 ```
 
 `verifyMfa` 返回与 `login` 相同的内容，客户端像以前一样继续调用 `selectTenant`。`code` 是六位应用代码或恢复码（`ABCD-EFGH-JKMN-PQRS`，大小写均可，带不带连字符均可）。质询有效期五分钟，允许五次尝试，只能完成一次登录。
+
+**会话内加强验证（预览：可能在次要版本中更改）。** 代理批准或放宽策略返回 `STEP_UP_REQUIRED` 时，在 `Authorization: Bearer ...` 中发送自己的租户访问令牌，并提供控制台自己的刷新令牌及新的身份验证器验证码：
+
+```graphql
+mutation StepUp($refreshToken: String!, $code: String!) {
+  stepUp(refreshToken: $refreshToken, code: $code) {
+    accessToken
+    refreshToken
+    expiresAt
+  }
+}
+```
+
+返回与 `refresh` 相同的 `AuthToken` 令牌对。保存两个替换令牌后重试操作，无需退出登录。会话标识符和纪元保持不变，`mfa_time` 更新；普通刷新不会更新因素验证时间。两个令牌必须属于同一用户名和租户。代理、服务、身份和刷新令牌不能授权此操作；OAuth 刷新令牌、已结束的会话和已轮换的纪元也会被拒绝。
+
 
 这些操作位于 user-management 端点。`mfaStatus`、`beginTotpEnrollment`、`confirmTotpEnrollment`、`regenerateRecoveryCodes` 和 `disableTotp` 以参数形式接收身份令牌（不放在 `Authorization` 头中），而不是租户令牌。`verifyMfa` 不接收令牌。租户平面的 `setTenantMfaRequired` 使用租户访问令牌，需要 `member:write`，且调用者不能带有范围限制。`resetIdentityMfa` 和管理 API 的 `setTenantMfaRequired` 位于管理 API，需要 `user:write`：
 
@@ -809,12 +832,14 @@ mutation Verify($challenge: String!, $code: String!) {
 | 属性值 | 64 KiB | `setEntityAttribute` 的 `value`，无论声明的类型是什么。 |
 | 规则定义 | 256 KiB | 检测规则的 `definition`，创建和更新时均适用。 |
 | 规则编排图 | 256 KiB | 检测规则的 `authoringGraph`，创建和更新时均适用。 |
+| 每次验证的规则数 | 1,000 | `validateDetectionRules` 的 `rules`。发布包含超过 1,000 条已启用检测规则的设备配置文件时，也会以相同方式拒绝。 |
 | 版本历史 | 每次调用 1,000 条 | `deviceProfileVersions`、`entityGroupVersions`、`assetTypeVersions`：最新的在前。用 `limit`（至少为 1）缩小范围，用 `offset`（不为负）翻页；超出此范围的值会被拒绝，`extensions.code` 为 `INVALID_VALUE`。 |
 | 每次聚合的时间桶数 | 10,000 | `bucketedMeasurements`：时间范围除以 `intervalSeconds`，向上取整。 |
 | 每次聚合的行数 | 50,000 | `bucketedMeasurements`：时间桶数乘以返回的测量名称数。指定 `name` 过滤时为一个名称；未指定时为符合该读取过滤条件的所有不同测量名称。 |
 | 每次查找的键数 | 1,000 | 传给 `…ByToken`、`…ByExternalId` 等批量查询的令牌、外部 ID 或告警令牌列表（设备状态、最新位置、命令、命令批次、通知渠道、策略和状态）。 |
 | JSON 输入大小 | 64 KiB | 以 JSON 形式发送的每个元数据、属性、配置、载荷或收件人值。命令的载荷和元数据会以 `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` 拒绝（参见[发送命令](../guides/sending-commands.md)）。 |
 | 每条通知规则的收件人数 | 100 | 通知策略规则的 `recipients` 列表。 |
+| 每个通知策略的规则数 | 100 | 创建或更新策略时提供的一个 `rules` 列表。未提供 `rules` 的更新会保留已存储的规则集。 |
 | OAuth 客户端重定向 URI | 16 项，每项 2,048 B | `createOauthClient` 和 `updateOauthClient` 的 `redirectUris`。 |
 | OAuth 客户端作用域 | 16 项，每项 64 B | `createOauthClient` 和 `updateOauthClient` 的 `scopes`。 |
 | 租户层级 | 100 个层级，每个令牌 128 B | 层级目录（`createTenantTier` 拒绝第 101 个层级）以及 `reorderTenantTiers` 的 `orderedTokens`，后者必须列出所有层级。 |

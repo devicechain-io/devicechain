@@ -86,6 +86,7 @@ const sidebars: SidebarsConfig = {
           collapsed: false,
           items: [
             'concepts/event-processing',
+            'concepts/automation-change-review',
             'concepts/geofencing',
             'concepts/ai-authoring',
             'concepts/outbound-connectors',
@@ -216,6 +217,7 @@ const sidebars: SidebarsConfig = {
             'guides/notification-channels',
             'guides/signed-webhooks',
             'guides/testing-your-rules',
+            'guides/reviewing-a-rule-change',
           ],
         },
         {

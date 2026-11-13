@@ -68,5 +68,33 @@
     "check": "admonitions",
     "detail": "admonitions differ: English [], translated [note]",
     "reason": "The command reference below the intro is generated from the dcctl binary and ships in English only; the translation adds one :::note telling the reader so. English has nothing to warn about. Frozen into the 1.3 snapshot with the living page, so the snapshot carries the same accepted difference."
+  },
+  {
+    "locale": "es",
+    "page": "version-1.4/reference/dcctl.md",
+    "check": "admonitions",
+    "detail": "admonitions differ: English [], translated [note]",
+    "reason": "The command reference below the intro is generated from the dcctl binary and ships in English only; the translation adds one :::note telling the reader so. English has nothing to warn about. Frozen into the 1.4 snapshot with the living page, so the snapshot carries the same accepted difference."
+  },
+  {
+    "locale": "zh-CN",
+    "page": "version-1.4/reference/dcctl.md",
+    "check": "admonitions",
+    "detail": "admonitions differ: English [], translated [note]",
+    "reason": "The command reference below the intro is generated from the dcctl binary and ships in English only; the translation adds one :::note telling the reader so. English has nothing to warn about. Frozen into the 1.4 snapshot with the living page, so the snapshot carries the same accepted difference."
+  },
+  {
+    "locale": "es",
+    "page": "version-1.5/reference/dcctl.md",
+    "check": "admonitions",
+    "detail": "admonitions differ: English [], translated [note]",
+    "reason": "The command reference below the intro is generated from the dcctl binary and ships in English only; the translation adds one :::note telling the reader so. English has nothing to warn about. Frozen into the 1.5 snapshot with the living page, so the snapshot carries the same accepted difference."
+  },
+  {
+    "locale": "zh-CN",
+    "page": "version-1.5/reference/dcctl.md",
+    "check": "admonitions",
+    "detail": "admonitions differ: English [], translated [note]",
+    "reason": "The command reference below the intro is generated from the dcctl binary and ships in English only; the translation adds one :::note telling the reader so. English has nothing to warn about. Frozen into the 1.5 snapshot with the living page, so the snapshot carries the same accepted difference."
   }
 ]

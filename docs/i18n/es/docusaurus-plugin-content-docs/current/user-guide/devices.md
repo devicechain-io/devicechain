@@ -147,7 +147,7 @@ Mientras se exporta, el botón muestra cuántas filas lleva reunidas, junto a un
 detiene en 10.000 filas; si llega a ese límite, la consola te avisa de que el archivo contiene
 solo las primeras 10.000.
 
-## Deshabilitar y habilitar un dispositivo
+## Deshabilitar y habilitar un dispositivo {#disabling-and-enabling-a-device}
 
 Deshabilitar un dispositivo lo deja fuera sin eliminarlo. Úsalo para poner en cuarentena un
 dispositivo que se comporta mal o que puede estar comprometido, y vuelve a habilitarlo cuando esté
