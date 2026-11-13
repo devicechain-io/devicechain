@@ -8,7 +8,7 @@ This page is the operator's side of [device client certificates](../concepts/dev
 
 ## The broker build {#broker}
 
-The NATS server will not request a client certificate on its MQTT listener in the way DeviceChain needs: its configuration file can turn certificates off, or require one from every client. The platform broker is therefore DeviceChain's own `nats-server` build, `dc-nats-server`: upstream `v2.15.3` unmodified, plus one setting, applied when it starts and again on every configuration reload. The MQTT listener **requests, but does not require,** a client certificate.
+The NATS server will not request a client certificate on its MQTT listener in the way DeviceChain needs: its configuration file can turn certificates off, require one from every client, or (from `v2.15.3`, `verify: optional`) check a certificate a client presents against the server's own CA list. Device certificates chain to each tenant's trust anchors, not to that list, so the broker must accept a certificate without checking it and leave the check to the platform. The platform broker is therefore DeviceChain's own `nats-server` build, `dc-nats-server`: upstream `v2.15.3` unmodified, plus one setting, applied when it starts and again on every configuration reload. The MQTT listener **requests, but does not require,** a client certificate.
 
 - **Token and password devices are unaffected.** A client that sends no certificate connects as before. A certificate sent with a token or password username is ignored.
 - **The authentication callout does the checking.** The broker hands the certificates the client presented to the callout in device-management, which verifies the chain. The broker itself decides nothing about trust.
