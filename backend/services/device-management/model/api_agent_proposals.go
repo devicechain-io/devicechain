@@ -617,7 +617,7 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 		}
 		next = append(next, actiongate.Approval{Sub: approver.Principal, Sid: approver.Sid, Amr: approver.Amr, MfaTime: approver.MfaTime, At: now})
 		if actiongate.Tally(next, dec.ValidApprovers, p.ProposerSub, dec.RequiredApprovals, dec.AllowSelfConfirm, dec.StepUp, now) >= dec.RequiredApprovals {
-			result, execErr := api.executeAlarmProposal(ctx, approver, p, next, dec.RequiredApprovals)
+			result, execErr := api.executeAlarmProposal(ctx, approver, p, next, dec.RequiredApprovals, attempt == 0)
 			if errors.Is(execErr, actiongate.ErrNotPending) {
 				if attempt == 0 {
 					continue

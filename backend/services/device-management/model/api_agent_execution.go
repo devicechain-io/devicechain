@@ -61,13 +61,18 @@ func connectionLost(err error) bool {
 
 var errRefusedAtCommitPoint = errors.New("agent proposal refused at commit point")
 
-// executeAlarmProposal consumes the final approval and its effects atomically.
-func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval, preRequired int) (result *AgentProposal, resultErr error) {
+// executeAlarmProposal consumes the final approval and its effects atomically. willRetry says the
+// caller decides again on NOT_PENDING (another decision moved the row first); that attempt is not
+// an execution and is not counted, so a final approval is counted once, by the attempt that ends it.
+func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval, preRequired int, willRetry bool) (result *AgentProposal, resultErr error) {
 	started := time.Now()
 	// committed is the outcome once it is durable, so a failed read-back after COMMIT is not
 	// counted as an execution that could not complete.
 	var committed string
 	defer func() {
+		if willRetry && committed == "" && errors.Is(resultErr, actiongate.ErrNotPending) {
+			return
+		}
 		res := committed
 		if res == "" {
 			res = executionResult(result, resultErr)
