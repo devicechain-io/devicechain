@@ -182,6 +182,15 @@ agentes** requiere verificación adicional y no anula una suspensión del operad
 de instancia deshabilitado. Apagar las acciones impide que las propuestas nuevas superen la
 política; una propuesta pendiente se deniega cuando la aprobación vuelve a comprobar esa política.
 
+La política del inquilino decide si se puede crear una propuesta nueva; la barrera local de
+desactivación de device-management solo protege la ejecución de una acción aprobada. Durante una
+actualización gradual, si las acciones de agentes se desactivan mediante un pod actualizado y se
+vuelven a activar mediante un pod de una versión anterior, la política vuelve a permitir
+propuestas, pero la barrera sigue cerrada: se aceptan las propuestas nuevas y quedan en espera,
+y la aprobación final se deniega con `FENCE_CLOSED`, dejando la propuesta pendiente y todas las
+alarmas sin cambios. Volver a activar las acciones de agentes mediante un pod actualizado reabre
+la barrera y permite aprobar las propuestas pendientes.
+
 ### Proponer acciones (Preview) {#proposing-actions}
 
 Tres herramientas MCP permiten proponer acciones para revisión humana. Solo aparecen cuando la clave de configuración `agentActuation.enabled` del servicio MCP es `true` (por defecto es `false`) y el token del solicitante lleva el alcance de acción adecuado junto con `read-only`:
