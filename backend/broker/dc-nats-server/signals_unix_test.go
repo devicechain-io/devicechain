@@ -462,8 +462,20 @@ func blockedStartup(t *testing.T) (*proc, string) {
 	return p, meta
 }
 
+// changeConfig makes the next SIGHUP a FULL reload (a changed digest), the one that reaches
+// Server.ReloadOptions and, while startup is incomplete, blocks there. An unchanged file takes the
+// hot path (hottls.go), which never calls the server and so could not show the loop parking.
+func (p *proc) changeConfig(t *testing.T) {
+	t.Helper()
+	conf := filepath.Join(p.dir, "nats.conf")
+	if err := os.WriteFile(conf, append(mustRead(t, conf), []byte("\ntrace: true\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSIGHUPDuringBlockedStartupDoesNotParkSIGTERM(t *testing.T) {
 	p, _ := blockedStartup(t)
+	p.changeConfig(t)
 	if err := p.cmd.Process.Signal(syscall.SIGHUP); err != nil {
 		t.Fatal(err)
 	}
@@ -505,6 +517,7 @@ func TestSIGUSR2DuringBlockedStartupDoesNotDisableSIGTERM(t *testing.T) {
 
 func TestDeferredSIGHUPRunsAfterStartup(t *testing.T) {
 	p, meta := blockedStartup(t)
+	p.changeConfig(t)
 	if err := p.cmd.Process.Signal(syscall.SIGHUP); err != nil {
 		t.Fatal(err)
 	}
