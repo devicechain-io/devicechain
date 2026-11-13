@@ -2263,7 +2263,7 @@ jobs:
       # a network blip into a red helm job on an unrelated pull request. A pinned version
       # fails closed: a Helm upgrade is a deliberate bump that re-runs these guards, never a
       # side effect of an API call. v4.3.0 is the version these guards have been passing on.
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: v4.3.0
 
