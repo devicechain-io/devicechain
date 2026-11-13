@@ -129,6 +129,8 @@ type Bucket struct {
 	// tier's. A bucket that holds a handful of small entries should not reserve a tier's worth
 	// of disk up front: KV buckets are streams and reserve their ceiling at creation.
 	MaxBytes int64
+	// BackupClass is the explicit checkpoint policy; zero is invalid.
+	BackupClass durability.BackupClass
 	// Durability says what a restore owes this bucket, and DurabilityWhy the reason. Both are
 	// REQUIRED (see streams.Stream.Durability); core/backupset fails for a bucket that omits them.
 	Durability    durability.Class
@@ -152,6 +154,7 @@ var All = []Bucket{
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
 
+		BackupClass:   durability.BackupEphemeral,
 		Durability:    durability.Transient,
 		DurabilityWhy: "a live session token; people sign in again",
 		Why: "One entry per live refresh token (jti -> email), plus two small entries " +
@@ -167,6 +170,7 @@ var All = []Bucket{
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
 
+		BackupClass:   durability.BackupEphemeral,
 		Durability:    durability.Transient,
 		DurabilityWhy: "an authorization code that lives sixty seconds",
 		Why: "One entry per in-flight OAuth 2.1 authorization code (ADR-047), held " +
@@ -181,6 +185,7 @@ var All = []Bucket{
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
 
+		BackupClass:   durability.BackupEphemeral,
 		Durability:    durability.Transient,
 		DurabilityWhy: "an in-flight single sign-on attempt that lives ten minutes",
 		Why: "One entry per in-flight single sign-on attempt (state, nonce, the upstream " +
@@ -199,6 +204,7 @@ var All = []Bucket{
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
 
+		BackupClass:   durability.BackupEphemeral,
 		Durability:    durability.Transient,
 		DurabilityWhy: "a completed single sign-on awaiting redemption for sixty seconds",
 		Why: "One entry per completed single sign-on awaiting its completeSso call, " +
@@ -214,6 +220,7 @@ var All = []Bucket{
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
 
+		BackupClass:   durability.BackupEphemeral,
 		Durability:    durability.Transient,
 		DurabilityWhy: "a second-factor challenge that lives five minutes",
 		Why: "One entry per password sign-in that is waiting for its second factor: the owner's " +
@@ -233,6 +240,7 @@ var All = []Bucket{
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
 
+		BackupClass:   durability.BackupEphemeral,
 		Durability:    durability.Transient,
 		DurabilityWhy: "sign-in backoff counters that expire after ten minutes",
 		Why: "One entry per principal of a throttled kind (in user-management, a " +
@@ -260,6 +268,7 @@ var All = []Bucket{
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
 
+		BackupClass:   durability.BackupEphemeral,
 		Durability:    durability.Transient,
 		DurabilityWhy: "device connect backoff counters that expire after ten minutes",
 		Why: "device-management's MQTT password backoff (credential.KindDeviceCredential): " +
@@ -283,6 +292,7 @@ var All = []Bucket{
 		Writers: []string{"event-sources", "user-management"},
 		Readers: []string{"event-sources", "user-management"},
 
+		BackupClass:   durability.BackupEphemeral,
 		Durability:    durability.Transient,
 		DurabilityWhy: "held locks that expire after thirty seconds",
 		Why: "One entry per HELD lock — a handful at a time, TTL'd so a crashed " +
@@ -296,6 +306,7 @@ var All = []Bucket{
 		Writers: []string{"sparkplug-ingest"},
 		Readers: []string{"sparkplug-ingest"},
 
+		BackupClass:   durability.BackupEphemeral,
 		Durability:    durability.Transient,
 		DurabilityWhy: "commands in flight inside a confirm window of at most two hours",
 		Why: "One entry per Sparkplug command that was published to a node and has not yet been " +
@@ -321,6 +332,7 @@ var All = []Bucket{
 		Writers:  []string{"user-management"},
 		Readers:  []string{"user-management"},
 
+		BackupClass:   durability.BackupRebuildable,
 		Durability:    durability.Rebuildable,
 		DurabilityWhy: "a mirror of the placement table in the user-management database, rewritten every few minutes",
 		Why: "ONE entry (key \"table\"): the instance's placement table, tenant -> vpartition -> shard " +
@@ -338,6 +350,7 @@ var All = []Bucket{
 		Writers: []string{"event-processing", "event-sources", "lwm2m-ingest", "sparkplug-ingest"},
 		Readers: []string{"event-processing", "event-sources", "lwm2m-ingest", "sparkplug-ingest"},
 
+		BackupClass:   durability.BackupEphemeral,
 		Durability:    durability.Transient,
 		DurabilityWhy: "partition leases that expire after thirty seconds; a restore must also be treated as a fence invalidation, because the epoch is the bucket revision and a rebuilt bucket restarts it",
 		Why: "One entry per HELD partition lease (ADR-070) — a handful at a time, one " +
@@ -354,6 +367,7 @@ var All = []Bucket{
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
 
+		BackupClass:   durability.BackupRebuildable,
 		Durability:    durability.Rebuildable,
 		DurabilityWhy: "a cache of the device store",
 		Why: "One entry per device resolved on the hot ingest path. Scales directly " +
@@ -367,6 +381,7 @@ var All = []Bucket{
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
 
+		BackupClass:   durability.BackupRebuildable,
 		Durability:    durability.Rebuildable,
 		DurabilityWhy: "a cache of the relationship store",
 		Why: "One entry per device holding tracked relationships (ADR-044 F2), so " +
@@ -379,6 +394,7 @@ var All = []Bucket{
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
 
+		BackupClass:   durability.BackupRebuildable,
 		Durability:    durability.Rebuildable,
 		DurabilityWhy: "a cache of the group membership store",
 		Why: "One entry per entity with rule-scoped group memberships (ADR-062), so " +
@@ -391,6 +407,7 @@ var All = []Bucket{
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
 
+		BackupClass:   durability.BackupRebuildable,
 		Durability:    durability.Rebuildable,
 		DurabilityWhy: "a cache of the published profile versions",
 		Why: "One entry per device TYPE: the active published profile version's metric " +
@@ -405,6 +422,7 @@ var All = []Bucket{
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
 
+		BackupClass:   durability.BackupRebuildable,
 		Durability:    durability.Rebuildable,
 		DurabilityWhy: "a cache of the group store",
 		Why: "One entry per TENANT — the resolver's pay-nothing gate (ADR-062 " +

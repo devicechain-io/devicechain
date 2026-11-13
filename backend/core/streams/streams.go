@@ -264,6 +264,8 @@ type Stream struct {
 	Readers []Reader
 	// Tier selects the disk ceiling. Anything riding the device path is Hot.
 	Tier Tier
+	// BackupClass is the explicit checkpoint policy; zero is invalid.
+	BackupClass durability.BackupClass
 	// Durability says what a restore owes this stream, and DurabilityWhy the reason, in words an
 	// operator reading the disaster-recovery page can use. Both are REQUIRED: the zero value is
 	// durability.Unclassified, and core/backupset fails for a stream that carries it, so a new stream
@@ -790,7 +792,7 @@ var All = []Stream{
 	//
 	// device-management is also a WRITER here, for one thing only: an event-envelope member that
 	// must retry is republished alone, in the legacy shape (processor.WithSplitWriter).
-	{Suffix: InboundEvents, Durability: durability.Transient, DurabilityWhy: "events accepted and not yet resolved; a pipeline buffer, so the most a restore loses is the lag", Writers: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
+	{Suffix: InboundEvents, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "events accepted and not yet resolved; a pipeline buffer, so the most a restore loses is the lag", Writers: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		RunwayBytesPerMessage: 384,
 		DeadLetterKind:        kindEvent,
 		BackpressureReaders:   []string{"device-management"},
@@ -824,7 +826,7 @@ var All = []Stream{
 	// (a ChirpStack v4 HTTP integration documents no retry) will not; uplinks already accepted are
 	// never lost, and uplinks for types with no
 	// decoder (Cut A) are unaffected. Raising it is a sizing-table change, not a tuning knob.
-	{Suffix: IntegrationUplinks, Durability: durability.Transient, DurabilityWhy: "raw decoder input already accepted from an integration and not yet decoded; an in-flight buffer", Writers: []string{"event-sources"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
+	{Suffix: IntegrationUplinks, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "raw decoder input already accepted from an integration and not yet decoded; an in-flight buffer", Writers: []string{"event-sources"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		MaxBytesCap:         integrationUplinksMaxBytesCap,
 		DeadLetterKind:      kindEvent,
 		BackpressureReaders: []string{"device-management"},
@@ -860,7 +862,7 @@ var All = []Stream{
 	// which its durable's backlog does not show exactly (see BackpressureReaders). That
 	// backlog is still warned on (the chart's JetStreamDurableUnreadNearFull), as an upper
 	// bound: the checkpoint is never behind what the durable has acknowledged.
-	{Suffix: ResolvedEvents, Durability: durability.Transient, DurabilityWhy: "events resolved and not yet stored; the event store is the landing, so only the in-flight lag is lost", AllowDirect: true, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}, {"event-management", ReadDurable}, {"event-management", ReadLive}, {"event-processing", ReadAckFloor}, {"event-processing", ReadEphemeral}}, Tier: Hot, DeadLetterKind: kindEvent,
+	{Suffix: ResolvedEvents, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "events resolved and not yet stored; the event store is the landing, so only the in-flight lag is lost", AllowDirect: true, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}, {"event-management", ReadDurable}, {"event-management", ReadLive}, {"event-processing", ReadAckFloor}, {"event-processing", ReadEphemeral}}, Tier: Hot, DeadLetterKind: kindEvent,
 		RunwayBytesPerMessage:  448,
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		ReplayCovered:          []string{"event-processing"},
@@ -887,7 +889,7 @@ var All = []Stream{
 	// Window: RestartDuplicateWindowSeconds = 1800 s >= a 15-minute restart allowance + the
 	// 540 s redelivery span = 1440 s. Cost: the rule-firing rate times 1800 s, ~270 MB (67-byte ids) per
 	// broker server per 1,000 detections/s.
-	{Suffix: DerivedEvents, Durability: durability.Transient, DurabilityWhy: "events derived by detection and not yet consumed; an in-flight buffer", PlatformAuthored: true, Writers: []string{"event-processing"}, Readers: []Reader{{"event-processing", ReadDurable}, {"event-processing", ReadLive}}, Tier: Hot, DuplicateWindowSeconds: RestartDuplicateWindowSeconds,
+	{Suffix: DerivedEvents, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "events derived by detection and not yet consumed; an in-flight buffer", PlatformAuthored: true, Writers: []string{"event-processing"}, Readers: []Reader{{"event-processing", ReadDurable}, {"event-processing", ReadLive}}, Tier: Hot, DuplicateWindowSeconds: RestartDuplicateWindowSeconds,
 		DeadLetterKind: kindDetectionAction, Why: "DETECT output — scales with rule firings against device traffic"},
 
 	// Emitted post-commit when a numeric platform-set attribute (ADR-012 scope
@@ -899,7 +901,7 @@ var All = []Stream{
 	// minutes), not by replay.
 	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceAttribute, Durability: durability.Rebuildable, DurabilityWhy: "attribute changes are projected from the device store, which is restored from the database", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"event-processing", ReadDurable}}, Tier: Hot, DeadLetterKind: kindControlFact, Why: "attribute set/delete per device — scales with fleet size"},
+	{Suffix: DeviceAttribute, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "attribute changes are projected from the device store, which is restored from the database", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"event-processing", ReadDurable}}, Tier: Hot, DeadLetterKind: kindControlFact, Why: "attribute set/delete per device — scales with fleet size"},
 
 	// PER-DEVICE: the concrete subject carries the target device's token as a
 	// final segment so the broker grant can confine a device to its own commands.
@@ -908,7 +910,7 @@ var All = []Stream{
 	// these names: a second literal is how the two drift apart.
 	// Window: command-delivery publishes it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceCommands, Durability: durability.Rebuildable, DurabilityWhy: "commands are re-dispatched from the command-delivery store by its sweep", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"command-delivery"}, Readers: []Reader{{"lwm2m-ingest", ReadDurable}, {"outbound-connectors", ReadDurable}, {"sparkplug-ingest", ReadDurable}}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommand, Why: "outbound commands — scale with fleet size"},
+	{Suffix: DeviceCommands, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "commands are re-dispatched from the command-delivery store by its sweep", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"command-delivery"}, Readers: []Reader{{"lwm2m-ingest", ReadDurable}, {"outbound-connectors", ReadDurable}, {"sparkplug-ingest", ReadDurable}}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommand, Why: "outbound commands — scale with fleet size"},
 
 	// PER-DEVICE, PLATFORM -> DEVICE: the desired-state downlink (configuration revisions,
 	// and later update assignments). Like DeviceCommands, the concrete subject ends in the
@@ -921,7 +923,7 @@ var All = []Stream{
 	// because volume follows state CHANGES, not telemetry samples.
 	// Window: device-management and update-management publish it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceDesired, Durability: durability.Rebuildable, DurabilityWhy: "the current desired state is held in the database and sent to a device again on its next sync", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management", "update-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
+	{Suffix: DeviceDesired, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "the current desired state is held in the database and sent to a device again on its next sync", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management", "update-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
 		Why: "desired-state downlink per device - one message per state change"},
 
 	// PER-DEVICE, DEVICE -> PLATFORM: progress and status reports. The device token in the
@@ -933,7 +935,7 @@ var All = []Stream{
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
 	// event-sources is an area too: with the fail-closed MQTT acknowledgement it forwards
 	// device reports from the MQTT gateway's message store into this stream.
-	{Suffix: DeviceReports, Durability: durability.Rebuildable, DurabilityWhy: "a device sends its reports again, and its state is held in the database", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources"}, Readers: []Reader{{"device-management", ReadDurable}, {"update-management", ReadDurable}}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
+	{Suffix: DeviceReports, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "a device sends its reports again, and its state is held in the database", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources"}, Readers: []Reader{{"device-management", ReadDurable}, {"update-management", ReadDurable}}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
 		Why: "device reports per device - one message per state change"},
 
 	// ADR-030 amendment. The durable capture of raw device telemetry, and the
@@ -982,7 +984,7 @@ var All = []Stream{
 	// retention move onto this one once the old stream has been drained.
 	// Window: the broker's MQTT gateway stores device publishes here with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceEventsCapture, Durability: durability.MustBackUp, DurabilityWhy: "raw device telemetry already acknowledged to the device and not yet forwarded; the database holds no copy of it", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Readers: []Reader{{"event-sources", ReadDurable}}, Tier: Hot, Shape: ShapeDeviceEvents,
+	{Suffix: DeviceEventsCapture, BackupClass: durability.BackupRequired, Durability: durability.MustBackUp, DurabilityWhy: "raw device telemetry already acknowledged to the device and not yet forwarded; the database holds no copy of it", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Readers: []Reader{{"event-sources", ReadDurable}}, Tier: Hot, Shape: ShapeDeviceEvents,
 		RunwayBytesPerMessage: 384,
 		DeadLetterKind:        kindEvent, Retention: RetentionWorkQueue, RecreateOnRetentionChange: true,
 		Forwards: map[string]string{"event-sources": InboundEvents},
@@ -1009,7 +1011,7 @@ var All = []Stream{
 	// the two must move together is the point of deriving both from here.
 	// Window: devices and lwm2m-ingest publish it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: CommandResponses, Durability: durability.Transient, DurabilityWhy: "a device answer not yet consumed; the command it answers is settled from its stored state as unanswered", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources", "lwm2m-ingest", "outbound-connectors", "sparkplug-ingest"}, Readers: []Reader{{"command-delivery", ReadDurable}}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommandResponse, Why: "device replies to commands — scale with fleet size"},
+	{Suffix: CommandResponses, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "a device answer not yet consumed; the command it answers is settled from its stored state as unanswered", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources", "lwm2m-ingest", "outbound-connectors", "sparkplug-ingest"}, Readers: []Reader{{"command-delivery", ReadDurable}}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommandResponse, Why: "device replies to commands — scale with fleet size"},
 
 	// One message per fired httpCall/publish action. The stream is auto-provisioned
 	// when event-processing creates the writer, so publishing is safe before the
@@ -1031,7 +1033,7 @@ var All = []Stream{
 	//
 	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s. Cost:
 	// the connector-action rate times 600 s, ~72 MB per broker server per 1,000 actions/s.
-	{Suffix: ConnectorDispatch, Durability: durability.Transient, DurabilityWhy: "outbound deliveries not yet attempted; in flight, at least once", PlatformAuthored: true, Writers: []string{"event-processing"}, Readers: []Reader{{"outbound-connectors", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
+	{Suffix: ConnectorDispatch, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "outbound deliveries not yet attempted; in flight, at least once", PlatformAuthored: true, Writers: []string{"event-processing"}, Readers: []Reader{{"outbound-connectors", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		DeadLetterKind: kindConnectorDispatch, VerbatimCopy: ConnectorDispatchDead, Why: "REACT outbound dispatch — scales with rule firings"},
 
 	// ---- Control plane (Cold): volume cannot scale with device count ----
@@ -1048,7 +1050,7 @@ var All = []Stream{
 	// Transient. With the adapter off nothing reads it and the broker's age limit trims it.
 	// Window: event-sources publishes it with no Nats-Msg-Id; the consumer is idempotent.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: LpwanDownlinkEvents, MaxDeliveriesUncaptured: "added after v1.3.0, whose services check the advisory stream's subjects exactly; a report that exhausts its deliveries is settled by its pending record's deadline as unanswered, so no dead letter is needed to repair it", Durability: durability.Transient, DurabilityWhy: "a network-server report not yet matched to its command; a lost report is settled by the pending record's deadline as unanswered", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources"}, Readers: []Reader{{"outbound-connectors", ReadDurable}}, Tier: Cold, MaxBytesCap: lpwanDownlinkEventsMaxBytesCap, DeadLetterKind: kindControlFact, Why: "network-server downlink reports — scale with commands sent"},
+	{Suffix: LpwanDownlinkEvents, BackupClass: durability.BackupCheckpoint, MaxDeliveriesUncaptured: "added after v1.3.0, whose services check the advisory stream's subjects exactly; a report that exhausts its deliveries is settled by its pending record's deadline as unanswered, so no dead letter is needed to repair it", Durability: durability.Transient, DurabilityWhy: "a network-server report not yet matched to its command; a lost report is settled by the pending record's deadline as unanswered", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources"}, Readers: []Reader{{"outbound-connectors", ReadDurable}}, Tier: Cold, MaxBytesCap: lpwanDownlinkEventsMaxBytesCap, DeadLetterKind: kindControlFact, Why: "network-server downlink reports — scale with commands sent"},
 
 	// Emitted post-commit on profile publish and rollback, carrying the ENABLED
 	// rules of the now-active version, keyed on profile-version token, and the
@@ -1058,7 +1060,7 @@ var All = []Stream{
 	// start and every five minutes), not by replay.
 	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DetectionRulesPublished, Durability: durability.Rebuildable, DurabilityWhy: "a rule publish is re-derived from the stored profile version", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"event-processing", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a rule publish — a human authoring action"},
+	{Suffix: DetectionRulesPublished, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "a rule publish is re-derived from the stored profile version", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"event-processing", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a rule publish — a human authoring action"},
 
 	// Emitted post-commit when a device is created or re-typed, naming the device
 	// and the stable profile token its type adopts, so DETECT can arm absence for
@@ -1069,7 +1071,7 @@ var All = []Stream{
 	// start and every five minutes), not by replay.
 	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceRoster, Durability: durability.Rebuildable, DurabilityWhy: "roster changes are projected from the device store", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"command-delivery", ReadDurable}, {"event-processing", ReadDurable}, {"update-management", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
+	{Suffix: DeviceRoster, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "roster changes are projected from the device store", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"command-delivery", ReadDurable}, {"event-processing", ReadDurable}, {"update-management", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
 
 	// Emitted post-commit whenever a geofence change mints a new fence-set version, naming that
 	// version's fences and the content address of each one's geometry so event-processing's live
@@ -1085,7 +1087,7 @@ var All = []Stream{
 	// contain, so no fence set can outgrow one message.
 	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: GeoFenceSetManifest, Durability: durability.Rebuildable, DurabilityWhy: "a fence edit is re-derived from the stored fence set", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"event-processing", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a fence edit — a human authoring action"},
+	{Suffix: GeoFenceSetManifest, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "a fence edit is re-derived from the stored fence set", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"event-processing", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a fence edit — a human authoring action"},
 
 	// ADR-044. Emitted when an edge entity (device, customer, area, asset, and
 	// their groups) is deleted, so cross-service reference holders — such as
@@ -1093,7 +1095,7 @@ var All = []Stream{
 	// At-least-once and idempotent.
 	// Window: device-management publishes it with no Nats-Msg-Id; its consumers are idempotent.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: EntityDeleted, Durability: durability.Transient, DurabilityWhy: "a deletion fan-out in flight; a deletion announced just before the restore point may not have reached every consumer", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"dashboard-management", ReadDurable}, {"event-management", ReadDurable}, {"event-processing", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
+	{Suffix: EntityDeleted, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "a deletion fan-out in flight; a deletion announced just before the restore point may not have reached every consumer", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"dashboard-management", ReadDurable}, {"event-management", ReadDurable}, {"event-processing", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
 
 	// ADR-081. Emitted post-commit by device-management whenever a device's tracked
 	// relationships may have changed (an edge created or removed, a claim redeemed or
@@ -1104,16 +1106,16 @@ var All = []Stream{
 	// which carries the same anchors.
 	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceOwnership, Durability: durability.Rebuildable, DurabilityWhy: "ownership changes are projected from the stored relationships", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a relationship edit — an operator assigning or claiming a device"},
+	{Suffix: DeviceOwnership, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "ownership changes are projected from the stored relationships", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a relationship edit — an operator assigning or claiming a device"},
 
 	// Small control facts; the window deduplicates retries of the same EventID.
-	{Suffix: AgentActuationKills, Durability: durability.Rebuildable, DurabilityWhy: "the policy head retains the kill state and operators can repeat a kill", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"user-management"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Cold, MaxBytesCap: agentActuationKillsMaxBytesCap, DeadLetterKind: kindControlFact, Why: "tenant agent actuation kills"},
+	{Suffix: AgentActuationKills, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "the policy head retains the kill state and operators can repeat a kill", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"user-management"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Cold, MaxBytesCap: agentActuationKillsMaxBytesCap, DeadLetterKind: kindControlFact, Why: "tenant agent actuation kills"},
 
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).
 	// Window: device-management publishes it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: AlarmEvents, Durability: durability.Rebuildable, DurabilityWhy: "alarm state is held in the database and notification re-derives from it", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"notification-management", ReadDurable}, {"device-management", ReadLive}}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
+	{Suffix: AlarmEvents, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "alarm state is held in the database and notification re-derives from it", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"notification-management", ReadDurable}, {"device-management", ReadLive}}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
 
 	// ADR-051 5c / ADR-054, carrying a JSON RaiseAlarmRequest. AT-LEAST-once, and
 	// safe as such: ApplyAlarmContributorEdge (ADR-057) is an idempotent
@@ -1128,12 +1130,12 @@ var All = []Stream{
 	//
 	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s. Cost:
 	// the alarm-edge rate times 600 s, ~72 MB per broker server per 1,000 edges/s.
-	{Suffix: RaiseAlarm, Durability: durability.Transient, DurabilityWhy: "an in-flight request from detection, which evaluates again on the next event", PlatformAuthored: true, Writers: []string{"event-processing"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Cold,
+	{Suffix: RaiseAlarm, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "an in-flight request from detection, which evaluates again on the next event", PlatformAuthored: true, Writers: []string{"event-processing"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Cold,
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds, DeadLetterKind: kindDetectionAction, Why: "REACT alarm requests"},
 
 	// Window: event-sources publishes it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: FailedDecode, Durability: durability.Transient, DurabilityWhy: "a diagnostic record of an event that could not be decoded", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
+	{Suffix: FailedDecode, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "a diagnostic record of an event that could not be decoded", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
 	// device-management publishes each failure record with an id its source's redelivery
 	// reproduces (processor.sourceDedupID), on the same redelivery span as resolved-events;
 	// event-management's records carry one only for a member of an event envelope, in a kind
@@ -1142,7 +1144,7 @@ var All = []Stream{
 	//
 	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s. Cost:
 	// ~0 in steady state; a spike at the full 10,000 events/s holds 6M ids, ~720 MB per server.
-	{Suffix: FailedEvents, Durability: durability.Transient, DurabilityWhy: "records not yet stored by their consumer; the event store keeps each one once it is consumed", PlatformAuthored: true, Writers: []string{"device-management", "event-management"}, Readers: []Reader{{"event-management", ReadDurable}}, Tier: Cold, DeadLetterKind: NotLettered,
+	{Suffix: FailedEvents, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "records not yet stored by their consumer; the event store keeps each one once it is consumed", PlatformAuthored: true, Writers: []string{"device-management", "event-management"}, Readers: []Reader{{"event-management", ReadDurable}}, Tier: Cold, DeadLetterKind: NotLettered,
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds, Why: "error path — near zero in steady state; see the spike caveat below"},
 	// The dedup window is what lets the connectors service's own arm and the platform's
 	// max-delivery recorder both write the verbatim copy of one give-up and store it
@@ -1151,7 +1153,7 @@ var All = []Stream{
 	// Window: RestartDuplicateWindowSeconds = 1800 s >= a 15-minute restart allowance (a
 	// recorder down for a pod restart) + the 540 s redelivery span = 1440 s. Cost: ~0, one id
 	// per give-up.
-	{Suffix: ConnectorDispatchDead, Durability: durability.MustBackUp, DurabilityWhy: "the only record of an outbound delivery that could not be made, kept for the operator to inspect", Writers: []string{"outbound-connectors"}, Tier: Cold, DuplicateWindowSeconds: RestartDuplicateWindowSeconds,
+	{Suffix: ConnectorDispatchDead, BackupClass: durability.BackupRequired, Durability: durability.MustBackUp, DurabilityWhy: "the only record of an outbound delivery that could not be made, kept for the operator to inspect", Writers: []string{"outbound-connectors"}, Tier: Cold, DuplicateWindowSeconds: RestartDuplicateWindowSeconds,
 		DeadLetterKind: NotLettered, Why: "terminal dead-letter sink (ADR-060 SD-2)"},
 	// 🔴 user-management IS IN THIS LIST BECAUSE IT READS, NOT BECAUSE IT WRITES. The areas
 	// are the ADR-020 A0 deployment predicate, and NewReader creates the stream exactly as
@@ -1168,7 +1170,7 @@ var All = []Stream{
 	//
 	// Window: RestartDuplicateWindowSeconds = 1800 s >= a 15-minute restart allowance + the
 	// 540 s redelivery span = 1440 s. Cost: ~0 in steady state, one id per letter.
-	{Suffix: DeadLetters, Durability: durability.Transient, DurabilityWhy: "letters not yet stored by their consumer; the database keeps each one once it is consumed",
+	{Suffix: DeadLetters, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "letters not yet stored by their consumer; the database keeps each one once it is consumed",
 		RecorderWrites: true, Readers: []Reader{{"user-management", ReadDurable}, {"command-delivery", ReadDurable}},
 		Tier: Cold, DuplicateWindowSeconds: RestartDuplicateWindowSeconds, DeadLetterKind: NotLettered,
 		Why: "ADR-024 dead-letter sink: every area that consumes a stream writes it, user-management " +
@@ -1195,7 +1197,7 @@ var All = []Stream{
 	//
 	// Window: nats-server publishes the advisories with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: MaxDeliveries, Durability: durability.Transient, DurabilityWhy: "broker advisories for deliveries that ran out; empty in steady state",
+	{Suffix: MaxDeliveries, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "broker advisories for deliveries that ran out; empty in steady state",
 		Tier: Cold, Shape: ShapeAdvisory, Retention: RetentionWorkQueue, MaxBytesCap: maxDeliveriesMaxBytesCap,
 		DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, DeadLetterKind: NotLettered,
 		Why: "broker advisories for deliveries that ran out — empty in steady state"},
