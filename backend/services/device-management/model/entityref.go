@@ -144,6 +144,11 @@ func (api *Api) ExistingEntityTokens(ctx context.Context, etype string, tokens [
 	return loader.existingTokens(ctx, api, tokens)
 }
 
+// EntityTypeCount returns the number of entity types with registered loaders.
+func EntityTypeCount() int {
+	return len(entityLoaders)
+}
+
 // IsEntityType reports whether t names a known entity type.
 func IsEntityType(t string) bool {
 	return entity.Type(t).Valid()
