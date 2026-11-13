@@ -1,13 +1,14 @@
 module github.com/devicechain-io/dc-simulator
 
-go 1.26.0
+go 1.26.6
 
 require (
 	github.com/devicechain-io/dc-event-sources v0.0.1
 	github.com/devicechain-io/dc-microservice v0.0.1
+	github.com/devicechain-io/dc-outbound-connectors v0.0.1
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
-	github.com/graph-gophers/graphql-go v1.10.3
+	github.com/graph-gophers/graphql-go v1.11.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
@@ -22,6 +23,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/friendsofgo/graphiql v0.2.2 // indirect
+	github.com/go-gormigrate/gormigrate/v2 v2.1.7 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-sql-driver/mysql v1.8.1 // indirect
@@ -32,6 +34,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/klauspost/compress v1.20.4 // indirect
@@ -69,9 +72,12 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gorm.io/datatypes v1.2.7 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
+	gorm.io/driver/postgres v1.6.3 // indirect
 	gorm.io/gorm v1.31.2 // indirect
 )
 
 replace github.com/devicechain-io/dc-microservice => ../../core
 
 replace github.com/devicechain-io/dc-event-sources => ../../services/event-sources
+
+replace github.com/devicechain-io/dc-outbound-connectors => ../../services/outbound-connectors
