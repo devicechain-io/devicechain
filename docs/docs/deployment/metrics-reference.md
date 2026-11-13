@@ -81,6 +81,11 @@ bus: read them with `dcctl dead-letters`.
 
 | Metric | Means |
 | --- | --- |
+| `agent_proposals_total{kind, outcome}` | Preview (agent actions). Non-dry-run proposal calls by kind (`ALARM_ACK`, `ALARM_CLEAR`, `unknown`) and outcome (`created`, `existing`, `refused`); errors count as `refused`. |
+| `agent_approvals_total{outcome}` | Preview (agent actions). Approval calls by final outcome (`recorded`, `executed`, `refused`, `concurrent`, `step_up_required`, `forbidden`, `fence_closed`), counted once across internal retries. Errors without a more specific outcome count as `refused`. |
+| `agent_executions_total{kind, result}` | Preview (agent actions). Final-approval executions by kind (`ALARM_ACK`, `ALARM_CLEAR`, `unknown`) and result (`executed`, `dependency_changed`, `policy_refused`, `fence_closed`, `refused`, `failed`), counted once per execution including a fence re-enable retry. `failed` means the transaction could not complete (database or statement timeout, policy service or kill feed unavailable); a lock conflict is `refused` as a concurrent approval. |
+| `agent_execution_seconds` | Histogram. Preview (agent actions). Time spent executing final approvals, including refusals, failures and a fence re-enable retry. |
+| `agent_proposals_expired_total` | Preview (agent actions). Proposals moved to `EXPIRED` by the reaper. |
 | `alarm_event_dead_lettered_total` | Alarm state-change events that could not be published to the alarm-events stream and were written to the dead-letter stream instead. Each one is an alarm transition that reached the database but not the bus, so nobody was paged about it — it is visible to an operator rather than only logged. |
 | `callout_in_flight` | Device auth-callout requests being authorized right now. |
 | `callout_refused_busy_total` | Device auth-callout requests refused with the generic denial because the in-flight bound was reached. |

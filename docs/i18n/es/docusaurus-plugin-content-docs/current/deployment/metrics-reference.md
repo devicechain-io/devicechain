@@ -86,6 +86,11 @@ que un cambio de estado llegó a la base de datos pero no al bus: léelos con `d
 
 | Métrica | Significa |
 | --- | --- |
+| `agent_proposals_total{kind, outcome}` | Preview (acciones de agentes). Llamadas de propuesta que no son simulaciones, por tipo (`ALARM_ACK`, `ALARM_CLEAR`, `unknown`) y resultado (`created`, `existing`, `refused`); los errores cuentan como `refused`. |
+| `agent_approvals_total{outcome}` | Preview (acciones de agentes). Llamadas de aprobación por resultado final (`recorded`, `executed`, `refused`, `concurrent`, `step_up_required`, `forbidden`, `fence_closed`), contadas una sola vez entre reintentos internos. Los errores sin un resultado más específico cuentan como `refused`. |
+| `agent_executions_total{kind, result}` | Preview (acciones de agentes). Ejecuciones de aprobación final por tipo (`ALARM_ACK`, `ALARM_CLEAR`, `unknown`) y resultado (`executed`, `dependency_changed`, `policy_refused`, `fence_closed`, `refused`, `failed`), contadas una sola vez por ejecución, incluido un reintento al rehabilitar la barrera. `failed` significa que la transacción no pudo completarse (base de datos o sentencia agotó el tiempo de espera, servicio de políticas o flujo de desactivación no disponible); un conflicto de bloqueo cuenta como `refused` por aprobación concurrente. |
+| `agent_execution_seconds` | Histograma. Preview (acciones de agentes). Tiempo dedicado a ejecutar aprobaciones finales, incluidos rechazos, fallos y un reintento al rehabilitar la barrera. |
+| `agent_proposals_expired_total` | Preview (acciones de agentes). Propuestas que el proceso de caducidad pasó a `EXPIRED`. |
 | `alarm_event_dead_lettered_total` | Eventos de cambio de estado de alarma que no se pudieron publicar en el flujo de eventos de alarma y se escribieron en el flujo de mensajes no entregados. Cada uno es una transición de alarma que llegó a la base de datos pero no al bus, así que nadie recibió aviso de ella: queda visible para un operador y no solo registrada en el log. |
 | `callout_in_flight` | Solicitudes de auth-callout de dispositivos que se están autorizando ahora mismo. |
 | `callout_refused_busy_total` | Solicitudes de auth-callout de dispositivos rechazadas con la denegación genérica porque se alcanzó la cota de solicitudes en curso. |

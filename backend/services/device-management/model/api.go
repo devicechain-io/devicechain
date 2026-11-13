@@ -99,6 +99,9 @@ type Api struct {
 	// afterFenceForTest runs after the fence read and before effects (tests only).
 	afterFenceForTest func(tx *gorm.DB) error
 
+	// AgentMetrics is shared by all APIs built during messaging reconnects.
+	AgentMetrics *AgentMetrics
+
 	// ceilings exports the observed size of the ceilinged collections (ceilings.go). Nil
 	// disables it.
 	ceilings *ceilingMetrics

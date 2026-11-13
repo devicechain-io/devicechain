@@ -159,6 +159,7 @@ var (
 	RaiseAlarmMetrics    processor.RaiseAlarmMetrics
 	DeviceReportsMetrics processor.DeviceReportsMetrics
 	AlarmEventMetrics    processor.AlarmEventMetrics
+	AgentMetrics         *model.AgentMetrics
 	GeoFencePublishFails prometheus.Counter
 	// FactPublishFails counts detection-rule, device-roster and device-attribute facts that
 	// could not be published, by fact. Each one is a change the detection engine learns of at
@@ -228,6 +229,13 @@ func parseConfiguration() error {
 // registry panics. Initialize is where the process's own singletons are made, which is
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
+	AgentMetrics = model.NewAgentMetrics(
+		Microservice.NewCounterVec("agent_proposals_total", "Non-dry-run proposal calls by kind and outcome; errors count as refused.", []string{"kind", "outcome"}),
+		Microservice.NewCounterVec("agent_approvals_total", "Approval calls by final outcome, counted once across internal retries; errors without a more specific outcome count as refused.", []string{"outcome"}),
+		Microservice.NewCounterVec("agent_executions_total", "Final-approval executions by kind and result, counted once per execution including a fence re-enable retry; failed means the transaction could not complete (database or statement timeout, policy service or kill feed unavailable); a lock conflict is refused as a concurrent approval.", []string{"kind", "result"}),
+		Microservice.NewHistogramVec("agent_execution_seconds", "Time spent executing final approvals, including refusals, failures and a fence re-enable retry.", nil, prometheus.DefBuckets).WithLabelValues(),
+		Microservice.NewCounter("agent_proposals_expired_total", "Proposals moved to EXPIRED by the reaper."),
+	)
 	ResolveMetrics = processor.NewResolveMetrics(Microservice)
 	DecodeAccountingMetrics = processor.NewAccountingMetrics(Microservice)
 	RaiseAlarmMetrics = processor.NewRaiseAlarmMetrics(Microservice)
@@ -421,6 +429,7 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	// Wrap api around rdb manager, then wrap a caching decorator over it for the hot
 	// inbound-event resolution path.
 	api := model.NewApi(rdbm)
+	api.AgentMetrics = AgentMetrics
 	api.AgentEffectsExhausted = AgentEffectsExhausted
 	api.EnableCeilingMetrics(nmgr.Microservice)
 	api.DeviceSecretKey = key

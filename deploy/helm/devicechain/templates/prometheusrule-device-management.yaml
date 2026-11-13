@@ -287,4 +287,14 @@ spec:
             runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#x509ocspunavailableallowed"
             summary: "Certificate connections are being allowed without current OCSP status"
             description: "For 10 minutes, ENFORCE_KNOWN anchors have admitted certificate connections whose OCSP status could not be learned. Revoked certificates may be admitted while the responder is unreachable. Inspect the Ingest dashboard allowance reasons, responder fetch failures and breakers. Restore responder reachability and allowed egress, check node clocks and capacity, and verify deviceManagement.callout.ocsp.enabled and the anchor policy. REQUIRE_CURRENT refuses connections when current status is unavailable; change policy only with the impact on device availability understood."
+        - alert: AgentExecutionsFailing
+          expr: sum(rate(devicechain_devicemanagement_agent_executions_total{result="failed",namespace="{{ $ns }}"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#agentexecutionsfailing"
+            summary: "Agent action executions are failing steadily"
+            description: "For 10m, agent action executions have failed because the execution transaction could not complete (database or statement timeout, policy service or kill feed unavailable). A lock conflict on the proposal or its alarms is refused as a concurrent approval and counted as refused. Check device-management logs and the Agent actions (preview) row on the Platform board. Dependency changes, policy refusals, a closed kill fence and approver refusals are separate results and do not raise this alert."
 {{- end }}

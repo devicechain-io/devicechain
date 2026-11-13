@@ -61,14 +61,31 @@ func connectionLost(err error) bool {
 
 var errRefusedAtCommitPoint = errors.New("agent proposal refused at commit point")
 
-// executeAlarmProposal consumes the final approval and its effects atomically.
-func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval, preRequired int) (*AgentProposal, error) {
-	return api.executeAlarmProposalAttempt(ctx, approver, p, next, preRequired, false)
+// executeAlarmProposal consumes the final approval and its effects atomically. willRetry says the
+// caller decides again on NOT_PENDING (another decision moved the row first); that attempt is not
+// an execution and is not counted, so a final approval is counted once, by the attempt that ends it.
+func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval, preRequired int, willRetry bool) (result *AgentProposal, resultErr error) {
+	started := time.Now()
+	// committed is the outcome once it is durable, so a failed read-back after COMMIT is not
+	// counted as an execution that could not complete.
+	var committed string
+	defer func() {
+		if willRetry && committed == "" && errors.Is(resultErr, actiongate.ErrNotPending) {
+			return
+		}
+		res := committed
+		if res == "" {
+			res = executionResult(result, resultErr)
+		}
+		api.AgentMetrics.execution(actiongate.Kind(p.Kind), res, time.Since(started))
+	}()
+	return api.executeAlarmProposalAttempt(ctx, approver, p, next, preRequired, false, &committed)
 }
 
-func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval, preRequired int, retried bool) (*AgentProposal, error) {
+func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval, preRequired int, retried bool, committed *string) (*AgentProposal, error) {
 	attrCtx := rdb.WithAgentAttribution(ctx, rdb.AgentAttribution{ClientID: p.ProposerClient, OnBehalfOf: p.ProposerSub, Proposal: p.Token})
 	reenableGeneration := 0
+	dependencyRefused := false
 	var reasons []string
 	decisionAsked := false
 	err := api.RDB.DB(attrCtx).Transaction(func(tx *gorm.DB) error {
@@ -159,6 +176,7 @@ func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver action
 			}
 		}
 		if changed {
+			dependencyRefused = true
 			return refuse([]string{actiongate.ReasonDependencyChanged})
 		}
 		if api.beforeFenceForTest != nil {
@@ -285,13 +303,22 @@ func (api *Api) executeAlarmProposalAttempt(ctx context.Context, approver action
 		if err := api.reenableFence(ctx, reenableGeneration); err != nil {
 			return nil, err
 		}
-		return api.executeAlarmProposalAttempt(ctx, approver, p, next, preRequired, true)
+		return api.executeAlarmProposalAttempt(ctx, approver, p, next, preRequired, true, committed)
 	}
 	if errors.Is(err, errRefusedAtCommitPoint) {
-		return api.endProposal(attrCtx, p.Token, actiongate.StateRefused, approver.Principal, nil, reasons, time.Now().UTC())
+		ended, err := api.endProposal(attrCtx, p.Token, actiongate.StateRefused, approver.Principal, nil, reasons, time.Now().UTC())
+		if err == nil {
+			*committed = "policy_refused"
+		}
+		return ended, err
 	}
 	if err != nil {
 		return nil, err
+	}
+	if dependencyRefused {
+		*committed = "dependency_changed"
+	} else {
+		*committed = "executed"
 	}
 	return api.AgentProposalByToken(ctx, p.Token, nil)
 }
