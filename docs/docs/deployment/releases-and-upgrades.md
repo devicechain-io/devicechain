@@ -756,6 +756,16 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The three most recent minor releases (`v1.5`, `v1.4` and `v1.3`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
 
+### v1.6.0 — a broker configuration reload keeps connected devices {#v160-upgrade}
+
+#### A change to the broker's configuration keeps connected devices {#v160-broker-reload}
+
+A change to the broker's configuration used to close every connection the auth callout had admitted, which includes every MQTT device that authenticates with a username. The broker's `nats-server` library treated those connections as belonging to users that no longer existed, and closed them on any configuration reload, even one that changed nothing. Devices reconnected on their own, but a settings change meant a burst of reconnects. The broker is now built on `nats-server` `v2.15.3`, which carries the fix, so a reload applies the new configuration and leaves those connections open.
+
+- **Nothing needs doing.** `dcctl upgrade` still rolls the broker for any upgrade that changes its image or configuration; a roll restarts the pods and disconnects their devices as before. What changes is a reload without a restart, such as a settings-only change.
+- **A renewed TLS certificate** keeps its earlier behaviour: it is applied to new connections without a reload.
+- **The upstream image for going back to the upstream broker is now `nats:2.15.3-alpine`**: set `server_image_repository = "nats"` and `server_image_tag = "2.15.3-alpine"`, as described in [Device certificates](./device-certificates.md). Add the new tag to the images you mirror if you keep that rollback ready.
+
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
 `v1.5.0` is an in-place upgrade from `v1.4.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Four appended migrations run on upgrade: three in `device-management` and one in `user-management`. They add the agent kill fence and effect outbox, automation reviews and review enforcement, and the actuation generation column. See [Schema changes and going back](#v150-going-back). Coming from `v1.3.0` or earlier, read the [`v1.4.0` notes](#v140-upgrade) first.
@@ -1385,7 +1395,7 @@ The following migrations are appended. Every new column is nullable and every ne
 #### Known issues {#v130-known-issues}
 
 - **Fail-closed MQTT acknowledgement is off by default,** as in `v1.2.0`. The [MQTT transport](../reference/transport-matrix.md#mqtt--the-platform-broker) page states the measured limits with it off and on.
-- **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not.
+- **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not. **Fixed in `v1.6.0`:** see [A change to the broker's configuration keeps connected devices](#v160-broker-reload).
 - **`eventSources.ingestMetering: lagCredit` is still not available,** and is refused at startup; see [Ingest metering](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-ingest-metering). It arrives, opt-in, in [`v1.4.0`](#v140-ingest-metering).
 - **OCSP does not yet store what it learns or end open sessions,** as described under [OCSP for certificate connects](#v130-ocsp).
 - **An event stored more than 10 minutes after the end of the hour in which it was received is not counted in the tenant's usage record,** and neither is an event received after the upgrade but dated inside a chunk that was already compressed. See [Event usage per tenant](#v130-usage-metering).

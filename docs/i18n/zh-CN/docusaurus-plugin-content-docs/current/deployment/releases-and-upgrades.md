@@ -512,6 +512,16 @@ dcctl bootstrap local devicechain
 
 此处完整记录最近的三个次版本（`v1.5`、`v1.4` 和 `v1.3`），按从新到旧排列。下方还保留 `v0.27.0` 至 `v0.24.0` 的详细说明。
 
+### v1.6.0 — 代理配置重载会保持设备连接 {#v160-upgrade}
+
+#### 更改代理配置会保持设备连接 {#v160-broker-reload}
+
+过去，更改代理配置会关闭认证调用已放行的所有连接，其中包括所有使用用户名进行认证的 MQTT 设备。代理的 `nats-server` 库将这些连接视为属于已不存在的用户，并在任何配置重载时关闭它们，即使配置没有任何变化。设备会自行重连，但更改设置会引发一波集中重连。代理现在基于包含此修复的 `nats-server` `v2.15.3` 构建，因此重载会应用新配置，并保持这些连接打开。
+
+- **无需操作。** 对于任何更改代理镜像或配置的升级，`dcctl upgrade` 仍会滚动重启代理；滚动重启会像以前一样重启 pod，并断开其设备连接。变化在于不重启的重载，例如只更改设置。
+- **续期后的 TLS 证书**保持原有行为：无需重载即可应用于新连接。
+- **用于回退到上游代理的上游镜像现在是 `nats:2.15.3-alpine`**：按[设备证书](./device-certificates.md)所述，设置 `server_image_repository = "nats"` 和 `server_image_tag = "2.15.3-alpine"`。如果你保留了这种回退准备，请将新标签加入镜像同步列表。
+
 ### v1.5.0 — 自动化变更先评审，代理审批绑定登录会话 {#v150-upgrade}
 
 `v1.5.0` 是从 `v1.4.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。**两个命令都使用新版本的 `dcctl`**，并向 `dcctl install` 提供集群原有设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级会运行四项追加迁移：`device-management` 三项，`user-management` 一项。它们添加代理停用屏障和效果发件箱、自动化评审及其强制执行机制，以及执行代次列。参见[模式变更与回退](#v150-going-back)。如果来自 `v1.3.0` 或更早版本，请先阅读 [`v1.4.0` 说明](#v140-upgrade)。
@@ -1141,7 +1151,7 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 #### 已知问题 {#v130-known-issues}
 
 - **失败即关闭的 MQTT 确认默认关闭，** 与 `v1.2.0` 相同。[MQTT 传输](../reference/transport-matrix.md#mqtt--the-platform-broker)页面给出了关闭和开启时的实测限制。
-- **更改代理配置仍会断开由认证调用放行的设备，** 直到代理库包含上游修复。证书续期不会。
+- **更改代理配置仍会断开由认证调用放行的设备，** 直到代理库包含上游修复。证书续期不会。 **已在 `v1.6.0` 中修复：**参见[更改代理配置会保持设备连接](#v160-broker-reload)。
 - **`eventSources.ingestMetering: lagCredit` 仍不可用，** 并会在启动时被拒绝；参见[接入计量](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-ingest-metering)。该功能在 [`v1.4.0`](#v140-ingest-metering) 中提供，需主动开启。
 - **OCSP 尚不会存储其获知的结果，也不会结束已打开的会话，** 详见[证书连接的 OCSP 检查](#v130-ocsp)。
 - **在接收它的那个小时结束 10 分钟之后才存储的事件，不计入租户的用量记录，** 升级后接收、但日期落在已压缩分块中的事件也不计入。参见[按租户的事件用量](#v130-usage-metering)。

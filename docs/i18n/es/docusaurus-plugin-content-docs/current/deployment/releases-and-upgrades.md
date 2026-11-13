@@ -801,6 +801,16 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 Las tres versiones menores más recientes (`v1.5`, `v1.4` y `v1.3`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
 
+### v1.6.0 — una recarga de configuración del broker mantiene conectados los dispositivos {#v160-upgrade}
+
+#### Un cambio en la configuración del broker mantiene conectados los dispositivos {#v160-broker-reload}
+
+Un cambio en la configuración del broker cerraba todas las conexiones que había admitido el callout de autenticación, lo que incluye a todos los dispositivos MQTT que se autentican con un nombre de usuario. La biblioteca `nats-server` del broker trataba esas conexiones como si pertenecieran a usuarios que ya no existían y las cerraba en cualquier recarga de configuración, incluso si no cambiaba nada. Los dispositivos se reconectaban solos, pero un cambio de ajustes provocaba una ráfaga de reconexiones. El broker ahora se compila con `nats-server` `v2.15.3`, que incluye la corrección, por lo que una recarga aplica la nueva configuración y deja abiertas esas conexiones.
+
+- **No hay que hacer nada.** `dcctl upgrade` sigue reiniciando de forma gradual el broker en cualquier actualización que cambie su imagen o configuración; ese proceso reinicia los pods y desconecta sus dispositivos como antes. Lo que cambia es una recarga sin reinicio, como un cambio solo de ajustes.
+- **Un certificado TLS renovado** mantiene su comportamiento anterior: se aplica a las conexiones nuevas sin recarga.
+- **La imagen de upstream para volver al broker original ahora es `nats:2.15.3-alpine`**: fija `server_image_repository = "nats"` y `server_image_tag = "2.15.3-alpine"`, como se describe en [Certificados de dispositivos](./device-certificates.md). Añade la nueva etiqueta a las imágenes que replicas si mantienes preparada esa vuelta atrás.
+
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
 
 `v1.5.0` es una actualización in situ desde `v1.4.0`: ejecuta `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de la nueva versión para ambos comandos** y pasa a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Se ejecutan cuatro migraciones añadidas: tres en `device-management` y una en `user-management`. Añaden la barrera de desactivación del agente y la bandeja de salida de efectos, las revisiones de automatización y su exigencia, y la columna de generación de actuación. Consulta [Cambios de esquema y vuelta atrás](#v150-going-back). Si vienes de `v1.3.0` o anterior, lee primero las [notas de `v1.4.0`](#v140-upgrade).
@@ -1430,7 +1440,7 @@ Se añaden las siguientes migraciones. Cada columna nueva admite nulos y cada ta
 #### Problemas conocidos {#v130-known-issues}
 
 - **La confirmación MQTT en modo de fallo cerrado está desactivada por defecto,** como en `v1.2.0`. La página del [transporte MQTT](../reference/transport-matrix.md#mqtt--the-platform-broker) indica los límites medidos con ella desactivada y activada.
-- **Un cambio en la configuración del broker sigue desconectando a los dispositivos que admitió el callout de autenticación,** hasta que la biblioteca del broker incluya la corrección de origen. Una renovación de certificado no lo hace.
+- **Un cambio en la configuración del broker sigue desconectando a los dispositivos que admitió el callout de autenticación,** hasta que la biblioteca del broker incluya la corrección de origen. Una renovación de certificado no lo hace. **Corregido en `v1.6.0`:** consulta [Un cambio en la configuración del broker mantiene conectados los dispositivos](#v160-broker-reload).
 - **`eventSources.ingestMetering: lagCredit` sigue sin estar disponible,** y se rechaza al arrancar; consulta [Medición de la ingesta](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-ingest-metering). Llega, con activación opcional, en [`v1.4.0`](#v140-ingest-metering).
 - **OCSP todavía no almacena lo que averigua ni termina las sesiones abiertas,** como se describe en [OCSP para conexiones con certificado](#v130-ocsp).
 - **Un evento almacenado más de 10 minutos después del final de la hora en que se recibió no se cuenta en el registro de uso del inquilino,** y tampoco un evento recibido después de la actualización pero fechado dentro de un fragmento que ya estaba comprimido. Consulta [Uso de eventos por inquilino](#v130-usage-metering).

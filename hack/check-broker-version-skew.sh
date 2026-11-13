@@ -59,9 +59,10 @@ EXCEPTIONS=(
 # broker's is stale and FAILS, so the list can only shrink. Move the chart pins and delete the
 # entry once the chart is published.
 CHART_LAGS=(
-  # nats-server 2.15.2 (security release, 2026-10-26); nats chart 2.15.2 was not published
-  # (latest is 2.15.1, whose templates were verified against this module).
-  "2.15.2=2.15.1"
+  # nats-server 2.15.3 (carries the auth-callout reload fix); nats chart 2.15.3 is not
+  # published, and chart 2.15.2 has not been adopted: the deployment stays on chart 2.15.1,
+  # whose templates were verified against this module.
+  "2.15.3=2.15.1"
 )
 
 is_exception() {
