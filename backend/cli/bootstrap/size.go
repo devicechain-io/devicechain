@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// The size axis: `--size base|compact|perf-12k|perf-16k`.
+// The size axis: `--size base|compact|perf-12k|perf-16k|perf-20k`.
 //
 // A size is a PRESET, not a dial, by the same rules compact.go states: it composes levers that
 // already exist, never changes which services run (that stays on the profile axis), and never
@@ -20,19 +20,21 @@ import (
 // replicas while the preset sizes each copy.
 //
 //   - base is the default and renders exactly what dcctl rendered before this axis existed.
+//
 //   - compact is the --compact preset (compact.go), reachable as `--size compact` as well; the flag
 //     stays as a permanent alias. Its sizing is still compactSizing, so its tests are unchanged.
+//
 //   - perf-12k is the measured high-throughput shape: one cluster, no --ha, sustained 12,000
 //     events a second with event envelopes on (GKE rounds 29, 30 and 31).
+//
 //   - perf-16k is the same shape sized for 16,000 events a second (GKE round 31): a larger broker,
 //     a larger write-ahead log allowance and a larger event-processing pod. 20,000 events a second
 //     was stored exactly on that shape in round 31 but over the latency target, so it is a
 //     throughput-only ceiling and is documented as one.
 //
-// 🔴 THE NAME IS THE CLAIM. A size is named for the rate it holds INSIDE the latency target, which
-// is why there is no perf-20k: round 31 stored 20,000 a second without loss at a PUBACK p99 of
-// 245 ms, and a name that said 20k would promise a latency it did not deliver. A size for a rate
-// above that waits for a round that passes it.
+//   - perf-20k is the throughput target derived from round 31: more broker CPU on the same
+//     unsharded shape. It does not promise the 50 ms PUBACK latency target; the measured 20k
+//     run stored every event but had a 245 ms PUBACK p99. These values are not yet run as written.
 //
 // Precedence, lowest to highest, each layer deep-merged over the one before:
 //
@@ -47,10 +49,11 @@ const (
 	SizeCompact = "compact"
 	SizePerf12k = "perf-12k"
 	SizePerf16k = "perf-16k"
+	SizePerf20k = "perf-20k"
 )
 
 // sizeNames is every name `--size` accepts, in the order help prints them.
-var sizeNames = []string{SizeBase, SizeCompact, SizePerf12k, SizePerf16k}
+var sizeNames = []string{SizeBase, SizeCompact, SizePerf12k, SizePerf16k, SizePerf20k}
 
 // SizeNames is the accepted --size values, for the command layer's help and errors.
 func SizeNames() []string { return append([]string(nil), sizeNames...) }
@@ -175,6 +178,34 @@ var sizePresets = map[string]sizePreset{
 		NatsMemoryRequest:   "6Gi",
 		NatsMemoryLimit:     "10Gi",
 		JetStreamStorage:    "36Gi",
+		TimescaleStorage:    "260Gi",
+		TimescaleMaxWALMiB:  40960,
+		RelationalMaxWALMiB: 8192,
+		EnvelopesMeasured:   true,
+	},
+	// GKE round 31: product/gke-perf-report-r31-2026-11.md, sections 1-3, in the
+	// devicechain-strategy repo. At 20k the single broker used 5.2 cores (peak 5.5):
+	// reserve 6 CPU, 6Gi memory and a 10Gi limit; no sharding or replica increase.
+	// Keep perf-12k's service shape and request rule (measured cores per pod x
+	// 1.2-1.5, rounded up to 50m): ES .75 x 1.2, DM .50 x 1.2, DS .29 x 1.3,
+	// EM .41 x 1.5, EP .72 x 1.3. EP arm C needs 2 CPU / 1536Mi at 20k.
+	// WAL 40960 MiB and 260Gi event storage follow section 2; relational WAL is
+	// published for install only. 40Gi JetStream holds the 20k runway even with
+	// fail-closed acknowledgements enabled. This is throughput sizing, not a latency claim.
+	SizePerf20k: {
+		Name: SizePerf20k,
+		Areas: map[string]areaSize{
+			"event-sources":     {Replicas: 3, CPULimit: "3", MemLimit: "256Mi", CPURequest: "900m"},
+			"device-management": {Replicas: 2, CPULimit: "3", CPURequest: "600m"},
+			"device-state":      {Replicas: 2, CPULimit: "3", MemLimit: "512Mi", CPURequest: "400m"},
+			"event-management":  {CPULimit: "4", MemLimit: "1Gi", CPURequest: "650m"},
+			"event-processing":  {CPULimit: "2", MemLimit: "1536Mi", CPURequest: "950m"},
+		},
+		StreamDesignRate:    20000,
+		NatsCPURequest:      "6",
+		NatsMemoryRequest:   "6Gi",
+		NatsMemoryLimit:     "10Gi",
+		JetStreamStorage:    "40Gi",
 		TimescaleStorage:    "260Gi",
 		TimescaleMaxWALMiB:  40960,
 		RelationalMaxWALMiB: 8192,
