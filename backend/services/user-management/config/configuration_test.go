@@ -352,6 +352,59 @@ func TestTenantPurgeDefaultsFromAnEmptyDocument(t *testing.T) {
 	assert.NoError(t, cfg.Validate())
 }
 
+// Tenant-purge seconds must be refused before their duration conversion overflows.
+func TestTenantPurgeSecondsThatOverflowADurationAreRefusedAtLoad(t *testing.T) {
+	for _, key := range []string{"intervalSeconds", "settleSeconds", "tokenHoldSeconds"} {
+		for _, seconds := range []int{MaxDurationSeconds + 1, math.MaxInt} {
+			t.Run(fmt.Sprintf("%s/%d", key, seconds), func(t *testing.T) {
+				cfg := &UserManagementConfiguration{}
+				doc := fmt.Sprintf(`{"tenantPurge":{"%s":%d}}`, key, seconds)
+				err := core.LoadConfiguration([]byte(doc), cfg)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "tenantPurge."+key)
+			})
+		}
+	}
+}
+
+// The largest safe value still loads unchanged, and 0 still takes the default.
+func TestTenantPurgeSecondsAtDurationBoundAndZeroStillLoad(t *testing.T) {
+	for _, tc := range []struct {
+		key            string
+		defaultSeconds int
+		read           func(*UserManagementConfiguration) int
+	}{
+		{"intervalSeconds", 60, func(c *UserManagementConfiguration) int { return c.TenantPurge.IntervalSeconds }},
+		{"settleSeconds", 300, func(c *UserManagementConfiguration) int { return c.TenantPurge.SettleSeconds }},
+		{"tokenHoldSeconds", 43200, func(c *UserManagementConfiguration) int { return c.TenantPurge.TokenHoldSeconds }},
+	} {
+		for _, seconds := range []int{MaxDurationSeconds, 0} {
+			t.Run(fmt.Sprintf("%s/%d", tc.key, seconds), func(t *testing.T) {
+				cfg := &UserManagementConfiguration{}
+				doc := fmt.Sprintf(`{"tenantPurge":{"%s":%d}}`, tc.key, seconds)
+				require.NoError(t, core.LoadConfiguration([]byte(doc), cfg))
+				require.NoError(t, cfg.Validate())
+				want := seconds
+				if seconds == 0 {
+					want = tc.defaultSeconds
+				}
+				assert.Equal(t, want, tc.read(cfg))
+			})
+		}
+	}
+}
+
+// A wrapped non-positive settle duration used to bypass the positive-only floor check.
+func TestTenantPurgeSettleThatWrapsNonPositiveIsRefusedAtLoad(t *testing.T) {
+	seconds := MaxDurationSeconds + 1
+	require.LessOrEqual(t, time.Duration(seconds)*time.Second, time.Duration(0), "the regression value must wrap non-positive")
+	cfg := &UserManagementConfiguration{}
+	doc := fmt.Sprintf(`{"tenantPurge":{"settleSeconds":%d}}`, seconds)
+	err := core.LoadConfiguration([]byte(doc), cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tenantPurge.settleSeconds")
+}
+
 // A negative interval disables the coordinator, following the platform's sweep
 // convention. main.go reads a zero duration as "do not construct it", so this is the
 // only value that turns it off — and it is safe, because the tenant row is the work

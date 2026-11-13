@@ -394,6 +394,16 @@ func (c *UserManagementConfiguration) Validate() error {
 	if c.Auth.SigningKeyMaxAgeDays > 0 && int64(c.Auth.SigningKeyRetentionDays)*86400 < int64(c.Auth.RefreshTokenTtlSeconds) {
 		return fmt.Errorf("auth.signingKeyRetentionDays (%d days) must cover auth.refreshTokenTtlSeconds (%d) while auth.signingKeyMaxAgeDays turns rotation on: a rotated-out key has to stay published for as long as a refresh token it signed can be used, and a shorter retention would be lengthened silently at rotation", c.Auth.SigningKeyRetentionDays, c.Auth.RefreshTokenTtlSeconds)
 	}
+	// Bound the raw seconds before the settle-floor check converts them to durations.
+	if c.TenantPurge.IntervalSeconds > MaxDurationSeconds {
+		return fmt.Errorf("tenantPurge.intervalSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.TenantPurge.IntervalSeconds)
+	}
+	if c.TenantPurge.SettleSeconds > MaxDurationSeconds {
+		return fmt.Errorf("tenantPurge.settleSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.TenantPurge.SettleSeconds)
+	}
+	if c.TenantPurge.TokenHoldSeconds > MaxDurationSeconds {
+		return fmt.Errorf("tenantPurge.tokenHoldSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.TenantPurge.TokenHoldSeconds)
+	}
 	// A negative interval disables the coordinator, which is a supported lever. A
 	// negative SETTLE is not the same kind of knob: it would mean "complete the purge
 	// without ever having observed the stores clean", i.e. release the token and record

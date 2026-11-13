@@ -160,3 +160,43 @@ func TestChartSchemaRefusesTokenTtlThatOverflowsADuration(t *testing.T) {
 		}
 	}
 }
+
+// dcctl allows tenant-purge tuning, so its overlay validation must enforce the duration bounds.
+func TestChartSchemaRefusesTenantPurgeSecondsThatOverflowADuration(t *testing.T) {
+	// This mirrors config.MaxDurationSeconds in user-management.
+	const maxDurationSeconds = 9223372036
+	for _, key := range []string{"intervalSeconds", "settleSeconds", "tokenHoldSeconds"} {
+		overlay := func(seconds int) map[string]interface{} {
+			return map[string]interface{}{"functionalAreas": map[string]interface{}{
+				"user-management": map[string]interface{}{"config": map[string]interface{}{
+					"tenantPurge": map[string]interface{}{key: seconds},
+				}},
+			}}
+		}
+		refused := []int{maxDurationSeconds + 1}
+		accepted := []int{maxDurationSeconds, 0}
+		if key == "intervalSeconds" {
+			accepted = append(accepted, -1)
+		} else {
+			refused = append(refused, -1)
+		}
+		for _, seconds := range refused {
+			t.Run(fmt.Sprintf("%s/%d/refused", key, seconds), func(t *testing.T) {
+				err := ValidateValuesOverlay(overlay(seconds))
+				if err == nil {
+					t.Fatalf("tenantPurge.%s = %d passed the chart schema; it must be refused", key, seconds)
+				}
+				if !strings.Contains(err.Error(), "/tenantPurge/"+key) {
+					t.Fatalf("the refusal must name /tenantPurge/%s, got: %v", key, err)
+				}
+			})
+		}
+		for _, seconds := range accepted {
+			t.Run(fmt.Sprintf("%s/%d/accepted", key, seconds), func(t *testing.T) {
+				if err := ValidateValuesOverlay(overlay(seconds)); err != nil {
+					t.Fatalf("tenantPurge.%s = %d must pass the chart schema: %v", key, seconds, err)
+				}
+			})
+		}
+	}
+}
