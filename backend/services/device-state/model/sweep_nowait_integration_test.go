@@ -15,13 +15,17 @@ package model
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/jackc/pgx/v5/pgconn"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -103,7 +107,7 @@ func TestTheSweepDoesNotWaitForAHeldRow(t *testing.T) {
 	n, err := api.SweepInactive(ctx, sweepAt())
 	if err != nil || n != 1 {
 		release(false)
-		t.Fatalf("sweep = %d, %v after %v; want 1, nil without waiting for the held row", n, err, time.Since(start))
+		t.Fatalf("sweep = %d, %v after %v; want 1, nil without waiting for the held row", n, describeDBError(err), time.Since(start))
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("the sweep took %v with a row held; it must not wait", d)
@@ -116,7 +120,7 @@ func TestTheSweepDoesNotWaitForAHeldRow(t *testing.T) {
 		t.Error("the held device was flipped though the writer held it")
 	}
 	if n, err := api.SweepInactive(core.WithSystemContext(context.Background()), sweepAt()); err != nil || n != 1 {
-		t.Errorf("the next sweep = %d, %v; want 1, nil (the row left behind)", n, err)
+		t.Errorf("the next sweep = %d, %v; want 1, nil (the row left behind)", n, describeDBError(err))
 	}
 	if activeOf(t, api, "sw", "b") {
 		t.Error("the left-behind device was not flipped by the next pass")
@@ -167,10 +171,10 @@ func TestTheSweepAndABatchCannotDeadlock(t *testing.T) {
 	}
 	<-done
 	if sweepErr != nil {
-		t.Errorf("the sweep failed: %v", sweepErr)
+		t.Errorf("the sweep failed: %v", describeDBError(sweepErr))
 	}
 	if batchErr != nil {
-		t.Errorf("the batch failed: %v", batchErr)
+		t.Errorf("the batch failed: %v", describeDBError(batchErr))
 	}
 	if d := deadlocksOf(t, api) - before; d != 0 {
 		t.Errorf("the server counted %d deadlocks; want 0 (swept %d)", d, swept)
@@ -188,10 +192,68 @@ func TestTheSweepAndABatchCannotDeadlock(t *testing.T) {
 	}
 	// And x was left for the next pass, not lost.
 	if n, err := api.SweepInactive(core.WithSystemContext(context.Background()), sweepAt()); err != nil || n != 1 {
-		t.Errorf("the next sweep = %d, %v; want 1, nil (x, left behind)", n, err)
+		t.Errorf("the next sweep = %d, %v; want 1, nil (x, left behind)", n, describeDBError(err))
 	}
 	if activeOf(t, api, "dl", "dl-x") {
 		t.Error("the left-behind device (x) was not flipped by the next pass")
+	}
+}
+
+// A deliberate lock cycle proves that the server's deadlock diagnostics survive the driver.
+func TestADeadlockErrorCarriesTheServersDetail(t *testing.T) {
+	api := newPostgresProjectionApi(t, "dldetail")
+	seedStale(t, api, "dl", "dl-x", "dl-y")
+	ctx, cancel := context.WithTimeout(core.WithTenant(context.Background(), "dl"), 10*time.Second)
+	defer cancel()
+	tx1 := api.RDB.DB(ctx).Begin()
+	if tx1.Error != nil {
+		t.Fatalf("begin tx1: %s", describeDBError(tx1.Error))
+	}
+	defer tx1.Rollback()
+	tx2 := api.RDB.DB(ctx).Begin()
+	if tx2.Error != nil {
+		t.Fatalf("begin tx2: %s", describeDBError(tx2.Error))
+	}
+	defer tx2.Rollback()
+	if err := tx1.Model(&DeviceState{}).Where("device_token = ?", "dl-x").Update("session_id", 1).Error; err != nil {
+		t.Fatalf("lock x in tx1: %s", describeDBError(err))
+	}
+	if err := tx2.Model(&DeviceState{}).Where("device_token = ?", "dl-y").Update("session_id", 1).Error; err != nil {
+		t.Fatalf("lock y in tx2: %s", describeDBError(err))
+	}
+
+	results := make(chan error, 2)
+	update := func(tx *gorm.DB, token string) {
+		err := tx.Model(&DeviceState{}).Where("device_token = ?", token).Update("session_id", 2).Error
+		// Release the winner's locks too, so both statements can finish without a commit.
+		tx.Rollback()
+		results <- err
+	}
+	go update(tx1, "dl-y")
+	go update(tx2, "dl-x")
+	var losingErr error
+	for range 2 {
+		select {
+		case err := <-results:
+			if err != nil {
+				if losingErr != nil {
+					t.Fatalf("both statements failed: %s\n%s", describeDBError(losingErr), describeDBError(err))
+				}
+				losingErr = err
+			}
+		case <-ctx.Done():
+			t.Fatalf("waiting for the deadlock statements: %v", ctx.Err())
+		}
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(losingErr, &pgErr) || pgErr.Code != "40P01" {
+		t.Fatalf("losing statement: %s; want PostgreSQL deadlock (40P01)", describeDBError(losingErr))
+	}
+	if description := describeDBError(losingErr); !strings.Contains(description, "blocked by process") {
+		t.Errorf("deadlock description lacks the server's detail: %s", description)
+	}
+	if strings.Contains(losingErr.Error(), "blocked by process") {
+		t.Errorf("err.Error() unexpectedly includes the server's detail: %s", losingErr)
 	}
 }
 
@@ -211,7 +273,8 @@ func TestTwoSweepsAndBatchesDoNotDeadlock(t *testing.T) {
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	var sweepErrs, batchErrs, swept atomic.Int64
-	var firstErr atomic.Value
+	var firstErr error
+	var firstErrOnce sync.Once
 	for s := 0; s < 2; s++ {
 		wg.Add(1)
 		go func() {
@@ -225,7 +288,7 @@ func TestTwoSweepsAndBatchesDoNotDeadlock(t *testing.T) {
 				n, err := api.SweepInactive(core.WithSystemContext(context.Background()), sweepAt())
 				if err != nil {
 					sweepErrs.Add(1)
-					firstErr.CompareAndSwap(nil, err.Error())
+					firstErrOnce.Do(func() { firstErr = err })
 				}
 				swept.Add(n)
 			}
@@ -251,7 +314,7 @@ func TestTwoSweepsAndBatchesDoNotDeadlock(t *testing.T) {
 				}
 				if err := api.MergeProjectionBatch(context.Background(), updates); err != nil {
 					batchErrs.Add(1)
-					firstErr.CompareAndSwap(nil, err.Error())
+					firstErrOnce.Do(func() { firstErr = err })
 				}
 			}
 		}()
@@ -260,7 +323,7 @@ func TestTwoSweepsAndBatchesDoNotDeadlock(t *testing.T) {
 	close(stop)
 	wg.Wait()
 	if sweepErrs.Load() != 0 || batchErrs.Load() != 0 {
-		t.Errorf("%d sweeps and %d batches failed; first: %v", sweepErrs.Load(), batchErrs.Load(), firstErr.Load())
+		t.Errorf("%d sweeps and %d batches failed; first: %v", sweepErrs.Load(), batchErrs.Load(), describeDBError(firstErr))
 	}
 	if d := deadlocksOf(t, api) - before; d != 0 {
 		t.Errorf("the server counted %d deadlocks; want 0", d)
@@ -273,7 +336,7 @@ func TestTwoSweepsAndBatchesDoNotDeadlock(t *testing.T) {
 		t.Error("the sweeps flipped no row in four seconds over stale devices: they did no work")
 	}
 	if _, err := api.SweepInactive(core.WithSystemContext(context.Background()), sweepAt()); err != nil {
-		t.Fatalf("final sweep: %v", err)
+		t.Fatalf("final sweep: %v", describeDBError(err))
 	}
 	var stillActive int64
 	if err := api.RDB.DB(core.WithTenant(context.Background(), "tw")).Model(&DeviceState{}).
@@ -329,7 +392,7 @@ func TestTheSweepFlipsByRowNotByToken(t *testing.T) {
 			}
 			n, err := api.SweepInactive(ctx, sweepAt())
 			if err != nil || n != 1 {
-				t.Fatalf("sweep = %d, %v; want 1, nil", n, err)
+				t.Fatalf("sweep = %d, %v; want 1, nil", n, describeDBError(err))
 			}
 			if activeOf(t, api, "tenant-a", "same") {
 				t.Error("the stale device was not flipped")
