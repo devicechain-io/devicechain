@@ -96,7 +96,7 @@
           },
           "instant": true,
           "format": "table",
-          "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"CredentialAttemptStoreFull|DeviceCredentialAttemptStoreFull|Sso.*|TenantPurge.*|SafetyGateDisabled|InstanceContainerRestarted|TenantsMeteredAtPlatformDefault|RateLimiterOverflowInUse|RateMeteringClockFallback|ReactShedLettersOverBudget|ConnectorDispatchRateLimited\"})"
+          "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"AgentExecutionsFailing|CredentialAttemptStoreFull|DeviceCredentialAttemptStoreFull|Sso.*|TenantPurge.*|SafetyGateDisabled|InstanceContainerRestarted|TenantsMeteredAtPlatformDefault|RateLimiterOverflowInUse|RateMeteringClockFallback|ReactShedLettersOverBudget|ConnectorDispatchRateLimited\"})"
         }
       ],
       "fieldConfig": {
@@ -2745,6 +2745,259 @@
             "spanNulls": true,
             "stacking": {
               "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 49,
+      "type": "row",
+      "title": "Agent actions (preview)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 138
+      }
+    },
+    {
+      "id": 50,
+      "type": "timeseries",
+      "title": "Proposals and expiry",
+      "description": "Proposal calls by kind and outcome, excluding dry runs. Expired counts rows moved by the reaper. Refused includes validation and policy errors.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 139
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (kind, outcome) (rate(devicechain_devicemanagement_agent_proposals_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{kind}} {{outcome}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_devicemanagement_agent_proposals_expired_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "expired"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 51,
+      "type": "timeseries",
+      "title": "Approvals by outcome",
+      "description": "One outcome per approval call, including internal retries. Step-up and forbidden outcomes need a fresh sign-in or valid approver standing.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 139
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (outcome) (rate(devicechain_devicemanagement_agent_approvals_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 52,
+      "type": "timeseries",
+      "title": "Executions by result",
+      "description": "Final-approval executions by kind and result, counted once including a fence re-enable retry. Failed means the execution transaction could not complete. Dependency changes, policy refusals, a closed kill fence and approver refusals have separate results. Check service logs for sustained failures.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 139
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (kind, result) (rate(devicechain_devicemanagement_agent_executions_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{kind}} {{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 53,
+      "type": "timeseries",
+      "title": "Execution time (p95)",
+      "description": "95th percentile time spent executing final approvals, including refusals, failures and a fence re-enable retry. Includes database locks and the fresh policy decision.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 139
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(devicechain_devicemanagement_agent_execution_seconds_bucket{namespace=\"$namespace\"}[$__rate_interval])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
               "group": "A"
             }
           }

@@ -777,6 +777,10 @@ A payload decoder failure that is redelivered (for example after a restart with 
 
 - **Nothing needs doing.**
 
+#### Metrics and an alert for agent actions (Preview) {#v160-agent-metrics}
+
+`device-management` now reports agent actions: proposals by kind and outcome, approvals by outcome, executions by kind and result with their duration, and proposals that expired. The Platform board gains an **Agent actions (preview)** row, and a new warning alert, `AgentExecutionsFailing`, fires when final approvals keep failing to complete. Refusals do not raise it: a dependency change, a policy refusal, a closed kill fence or an approver refusal is counted under its own result. The metrics are listed in the [metrics reference](./metrics-reference.md), and the alert has an [alert runbook](./alert-runbook.md#agentexecutionsfailing) entry. Like agent actions, they are Preview: names and labels may still change in a minor release.
+
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
 `v1.5.0` is an in-place upgrade from `v1.4.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Four appended migrations run on upgrade: three in `device-management` and one in `user-management`. They add the agent kill fence and effect outbox, automation reviews and review enforcement, and the actuation generation column. See [Schema changes and going back](#v150-going-back). Coming from `v1.3.0` or earlier, read the [`v1.4.0` notes](#v140-upgrade) first.
