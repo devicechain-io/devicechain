@@ -142,7 +142,7 @@ DeviceChain 的命令是**双向且持久化**的。发出的命令会根据设�
 
 #### 重试上限拒绝 {#retrying-a-ceiling-refusal}
 
-`HELD_CEILING_EXCEEDED` 是入队路径唯一的**带代码的临时拒绝**。（如果入队所依赖的服务不可达，入队会以不带代码的 `validation is unavailable` 错误失败，服务恢复后重试可能成功。）其他带代码的拒绝说明请求在下一次尝试仍然错误；这一项会随着积压投递自行解除。只有这个代码值得重试，其余应该提示用户处理。参见[发送命令](../guides/sending-commands.md#when-an-enqueue-is-refused)。
+`HELD_CEILING_EXCEEDED` 是入队路径唯一的**带代码的临时拒绝**，会随着积压投递自行解除。依赖服务中断则会使入队以 GraphQL 错误失败，其 `extensions.code` 为 `UNAVAILABLE`；此时未创建任何命令，依赖服务恢复后，你可以原样重试请求。其他依赖故障仍不带代码。其他带代码的拒绝说明请求在下一次尝试仍然错误，应该提示用户处理。参见[发送命令](../guides/sending-commands.md#when-an-enqueue-is-refused)。
 
 ### 通过 HTTP 获取命令的设备 {#http-command-pull}
 

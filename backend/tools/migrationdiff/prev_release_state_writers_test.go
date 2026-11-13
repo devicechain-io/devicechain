@@ -20,7 +20,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// SNAPSHOT v1.4.0:backend/services/notification-management/model/model_state.go NotificationState. The embedded
+// SNAPSHOT v1.5.0:backend/services/notification-management/model/model_state.go NotificationState. The embedded
 // gorm.Model (gorm v1.31.2) and rdb.TenantScoped are expanded by hand. Never
 // replace this with a live service model or a live embedded base.
 type notificationStatePrev struct {
@@ -92,7 +92,7 @@ func TestPrevReleaseNotificationStateWriters(t *testing.T) {
 		}
 		require.Equal(t, *want, got)
 	}
-	// v1.4.0:backend/services/notification-management/model/api_state.go RecordPagedFrom (also RecordPaged/RecordNotification), new-state Create.
+	// v1.5.0:backend/services/notification-management/model/api_state.go RecordPagedFrom (also RecordPaged/RecordNotification), new-state Create.
 	row := notificationStatePrev{TenantId: tenant, AlarmToken: "raised", AlarmKey: "temperature", Severity: "MAJOR",
 		FirstNotifiedAt: stamp(at), LastNotifiedAt: stamp(at), NotifyCount: 1, CycleRaisedAt: stamp(at)}
 	// Source facts and the paged document are populated before the first Create.
@@ -106,7 +106,7 @@ func TestPrevReleaseNotificationStateWriters(t *testing.T) {
 	row.SourceAt = stamp(at)
 	require.NoError(t, tx.Create(&row).Error)
 	read(&row)
-	// v1.4.0:backend/services/notification-management/model/api_state.go RecordPagedFrom: existing-row full Save, including source/paged fields.
+	// v1.5.0:backend/services/notification-management/model/api_state.go RecordPagedFrom: existing-row full Save, including source/paged fields.
 	row.NotifyCount++
 	row.LastNotifiedAt = stamp(at.Add(time.Minute))
 	row.Severity = "CRITICAL"
@@ -114,14 +114,14 @@ func TestPrevReleaseNotificationStateWriters(t *testing.T) {
 	row.SourceAt = stamp(at.Add(time.Minute))
 	require.NoError(t, tx.Save(&row).Error)
 	read(&row)
-	// v1.4.0:backend/services/notification-management/model/api_state.go TouchSeverity uses Update, not UpdateColumn: gorm also stamps updated_at.
+	// v1.5.0:backend/services/notification-management/model/api_state.go TouchSeverity uses Update, not UpdateColumn: gorm also stamps updated_at.
 	res := tx.Model(&notificationStatePrev{}).Where("tenant_id = ? AND alarm_token = ?", tenant, row.AlarmToken).Update("severity", "MINOR")
 	require.NoError(t, res.Error)
 	require.EqualValues(t, 1, res.RowsAffected)
 	row.Severity = "MINOR"
 	require.NoError(t, tx.Raw(`SELECT updated_at FROM "notification-management".notification_states WHERE id = ?`, row.ID).Row().Scan(&row.UpdatedAt))
 	read(&row)
-	// v1.4.0:backend/services/notification-management/model/api_state.go ClaimEscalation: exact map, value kinds and both cycle predicates.
+	// v1.5.0:backend/services/notification-management/model/api_state.go ClaimEscalation: exact map, value kinds and both cycle predicates.
 	for _, knownCycle := range []bool{true, false} {
 		if !knownCycle {
 			row.CycleRaisedAt = sql.NullTime{}
@@ -151,7 +151,7 @@ func TestPrevReleaseNotificationStateWriters(t *testing.T) {
 		require.NoError(t, tx.Raw(`SELECT updated_at FROM "notification-management".notification_states WHERE id = ?`, row.ID).Row().Scan(&row.UpdatedAt))
 		read(&row)
 	}
-	// v1.4.0:backend/services/notification-management/model/api_state.go markTerminal (MarkAcknowledged and MarkCleared) uses full-row Save in both
+	// v1.5.0:backend/services/notification-management/model/api_state.go markTerminal (MarkAcknowledged and MarkCleared) uses full-row Save in both
 	// the stamp branch and the cycle-adoption-only branch; there are no UpdateColumns maps.
 	row.AcknowledgedAt = stamp(at)
 	require.NoError(t, tx.Save(&row).Error)
@@ -162,7 +162,7 @@ func TestPrevReleaseNotificationStateWriters(t *testing.T) {
 	row.ClearedAt = stamp(at)
 	require.NoError(t, tx.Save(&row).Error)
 	read(&row)
-	// v1.4.0:backend/services/notification-management/model/api_state.go AddPagedTargets:
+	// v1.5.0:backend/services/notification-management/model/api_state.go AddPagedTargets:
 	// Exact Updates map; it does not increment NotifyCount. The stored document
 	// names the earlier cycle, so mergePaged replaces it with this cycle's target.
 	row.CycleRaisedAt = stamp(at)
@@ -177,7 +177,7 @@ func TestPrevReleaseNotificationStateWriters(t *testing.T) {
 	row.PagedTargets, row.PagedCycle = &merged, row.CycleRaisedAt
 	read(&row)
 
-	// v1.4.0:backend/services/notification-management/model/api_state.go ClaimClearAnnouncement:
+	// v1.5.0:backend/services/notification-management/model/api_state.go ClaimClearAnnouncement:
 	// both distinct maps and their cycle predicates, including a losing repeat claim.
 	for _, knownCycle := range []bool{true, false} {
 		if !knownCycle {
@@ -214,7 +214,7 @@ func TestPrevReleaseNotificationStateWriters(t *testing.T) {
 		require.Zero(t, res.RowsAffected)
 		read(&row)
 
-		// v1.4.0:backend/services/notification-management/model/api_state.go UnclaimClearAnnouncement:
+		// v1.5.0:backend/services/notification-management/model/api_state.go UnclaimClearAnnouncement:
 		// both columns explicitly bind NULL, and only the caller's stamp matches.
 		res = tx.Model(&notificationStatePrev{}).Where("tenant_id = ?", tenant).
 			Where("alarm_token = ? AND clear_notified_at = ?", row.AlarmToken, claimAt).
@@ -230,7 +230,7 @@ func TestPrevReleaseNotificationStateWriters(t *testing.T) {
 	row.ClearNotifiedAt, row.ClearNotifiedCycle = stamp(at), stamp(at)
 	require.NoError(t, tx.Save(&row).Error)
 	read(&row)
-	// v1.4.0:backend/services/notification-management/model/api_state.go startCycle (via RecordPagedFrom/markTerminal): reset per-cycle fields.
+	// v1.5.0:backend/services/notification-management/model/api_state.go startCycle (via RecordPagedFrom/markTerminal): reset per-cycle fields.
 	// ClearNotifiedCycle and source facts are deliberately retained by the tagged code.
 	row.CycleRaisedAt = stamp(at.Add(time.Hour))
 	row.FirstNotifiedAt = stamp(at.Add(time.Hour))
@@ -245,7 +245,7 @@ func TestPrevReleaseNotificationStateWriters(t *testing.T) {
 	row.PagedCycle = sql.NullTime{}
 	require.NoError(t, tx.Save(&row).Error)
 	read(&row)
-	// v1.4.0:backend/services/notification-management/model/api_state.go markTerminal: tombstone Create, once for each terminal column.
+	// v1.5.0:backend/services/notification-management/model/api_state.go markTerminal: tombstone Create, once for each terminal column.
 	for _, column := range []string{"acknowledged_at", "cleared_at"} {
 		tombstone := notificationStatePrev{TenantId: tenant, AlarmToken: column, AlarmKey: "temperature", Severity: "MAJOR", CycleRaisedAt: stamp(at)}
 		if column == "cleared_at" {
@@ -256,7 +256,7 @@ func TestPrevReleaseNotificationStateWriters(t *testing.T) {
 		require.NoError(t, tx.Create(&tombstone).Error)
 		read(&tombstone)
 	}
-	// v1.4.0:backend/services/notification-management/model/api_state.go PruneResolvedStates: exact hard-delete predicate, with explicit tenant scope.
+	// v1.5.0:backend/services/notification-management/model/api_state.go PruneResolvedStates: exact hard-delete predicate, with explicit tenant scope.
 	res = tx.Unscoped().Where("tenant_id = ?", tenant).
 		Where("(cleared_at IS NOT NULL OR acknowledged_at IS NOT NULL)").
 		Where("(cleared_at IS NULL OR cleared_at < ?)", at.Add(time.Second)).
@@ -279,32 +279,32 @@ func prevStateJSON(t *testing.T, db *gorm.DB, table, tenant string) map[string]a
 	return row
 }
 
-// Frozen builder output: v1.4.0:backend/core/rdb/insert_columns.go build and
-// v1.4.0:backend/core/rdb/insert_columns_upsert.go upsertAssignments, with columns/arms from
-// v1.4.0:backend/services/device-state/model/columnar_writes.go. These writers have no literal SQL at
+// Frozen builder output: v1.5.0:backend/core/rdb/insert_columns.go build and
+// v1.5.0:backend/core/rdb/insert_columns_upsert.go upsertAssignments, with columns/arms from
+// v1.5.0:backend/services/device-state/model/columnar_writes.go. These writers have no literal SQL at
 // the call site: this is the exact generated Postgres text for one-row arrays.
 // The production RdbManager table prefix qualifies the schema (not search_path alone).
-// v1.4.0:backend/services/device-state/model/projection_merge.go lockOrCreate (via deviceStateLock).
+// v1.5.0:backend/services/device-state/model/projection_merge.go lockOrCreate (via deviceStateLock).
 const deviceStateLockPrevSQL = `INSERT INTO "device-state"."device_states" AS t ("tenant_id","created_at","updated_at","device_token","external_id","source","active","last_connect_time","last_disconnect_time","last_activity_time","inactivity_alarm_time","presence_source","session_id","presence_time","scope_anchors","scope_anchors_at") SELECT $1::text, unnest($2::timestamptz[]), unnest($3::timestamptz[]), unnest($4::text[]), unnest($5::text[]), unnest($6::text[]), unnest($7::bool[]), unnest($8::timestamptz[]), unnest($9::timestamptz[]), unnest($10::timestamptz[]), unnest($11::timestamptz[]), unnest($12::text[]), unnest($13::int8[]), unnest($14::timestamptz[]), unnest($15::text[])::text[], unnest($16::timestamptz[]) ON CONFLICT ("tenant_id","device_token") DO UPDATE SET "updated_at" = t.updated_at WHERE (1 = 0) AND t."tenant_id" = $1::text`
 
-// v1.4.0:backend/services/device-state/model/projection_merge.go writeFoldedStates (via deviceStateFolded).
+// v1.5.0:backend/services/device-state/model/projection_merge.go writeFoldedStates (via deviceStateFolded).
 const deviceStateFoldedPrevSQL = `INSERT INTO "device-state"."device_states" AS t ("tenant_id","created_at","updated_at","device_token","external_id","source","active","last_connect_time","last_disconnect_time","last_activity_time","inactivity_alarm_time","presence_source","session_id","presence_time","scope_anchors","scope_anchors_at") SELECT $1::text, unnest($2::timestamptz[]), unnest($3::timestamptz[]), unnest($4::text[]), unnest($5::text[]), unnest($6::text[]), unnest($7::bool[]), unnest($8::timestamptz[]), unnest($9::timestamptz[]), unnest($10::timestamptz[]), unnest($11::timestamptz[]), unnest($12::text[]), unnest($13::int8[]), unnest($14::timestamptz[]), unnest($15::text[])::text[], unnest($16::timestamptz[]) ON CONFLICT ("tenant_id","device_token") DO UPDATE SET "external_id" = excluded.external_id, "source" = excluded.source, "active" = excluded.active, "last_connect_time" = excluded.last_connect_time, "last_disconnect_time" = excluded.last_disconnect_time, "last_activity_time" = excluded.last_activity_time, "inactivity_alarm_time" = excluded.inactivity_alarm_time, "presence_source" = excluded.presence_source, "session_id" = excluded.session_id, "presence_time" = excluded.presence_time, "scope_anchors" = excluded.scope_anchors, "scope_anchors_at" = excluded.scope_anchors_at, "updated_at" = excluded.updated_at WHERE t."tenant_id" = $1::text`
 
-// v1.4.0:backend/services/device-state/model/projection_merge.go mergeHeartbeats (via deviceStateHeartbeat).
+// v1.5.0:backend/services/device-state/model/projection_merge.go mergeHeartbeats (via deviceStateHeartbeat).
 const deviceStateHeartbeatPrevSQL = `INSERT INTO "device-state"."device_states" AS t ("tenant_id","created_at","updated_at","device_token","external_id","source","active","last_connect_time","last_disconnect_time","last_activity_time","inactivity_alarm_time","presence_source","session_id","presence_time","scope_anchors","scope_anchors_at") SELECT $1::text, unnest($2::timestamptz[]), unnest($3::timestamptz[]), unnest($4::text[]), unnest($5::text[]), unnest($6::text[]), unnest($7::bool[]), unnest($8::timestamptz[]), unnest($9::timestamptz[]), unnest($10::timestamptz[]), unnest($11::timestamptz[]), unnest($12::text[]), unnest($13::int8[]), unnest($14::timestamptz[]), unnest($15::text[])::text[], unnest($16::timestamptz[]) ON CONFLICT ("tenant_id","device_token") DO UPDATE SET "external_id" = CASE WHEN excluded.external_id <> '' THEN excluded.external_id ELSE t.external_id END, "source" = CASE WHEN excluded.source <> '' THEN excluded.source ELSE t.source END, "last_activity_time" = CASE WHEN t.last_activity_time IS NULL OR excluded.last_activity_time >= t.last_activity_time THEN excluded.last_activity_time ELSE t.last_activity_time END, "scope_anchors" = CASE WHEN excluded.scope_anchors_at IS NOT NULL AND (t.scope_anchors_at IS NULL OR excluded.scope_anchors_at > t.scope_anchors_at) THEN excluded.scope_anchors ELSE t.scope_anchors END, "scope_anchors_at" = CASE WHEN excluded.scope_anchors_at IS NOT NULL AND (t.scope_anchors_at IS NULL OR excluded.scope_anchors_at > t.scope_anchors_at) THEN excluded.scope_anchors_at ELSE t.scope_anchors_at END, "updated_at" = excluded.updated_at WHERE (NOT (t.presence_source <> 'ASSERTED' AND NOT t.active AND (t.last_activity_time IS NULL OR excluded.last_activity_time >= t.last_activity_time))) AND t."tenant_id" = $1::text`
 
-// v1.4.0:backend/services/device-state/model/projection_merge.go upsertLatestMeasurements / MergeLatestMeasurements (via latestMeasurementUpsert).
+// v1.5.0:backend/services/device-state/model/projection_merge.go upsertLatestMeasurements / MergeLatestMeasurements (via latestMeasurementUpsert).
 const latestMeasurementUpsertPrevSQL = `INSERT INTO "device-state"."latest_measurements" AS t ("tenant_id","created_at","updated_at","device_token","name","value","classifier","unit","data_type","occurred_time") SELECT $1::text, unnest($2::timestamptz[]), unnest($3::timestamptz[]), unnest($4::text[]), unnest($5::text[]), unnest($6::text[]::numeric[]), unnest($7::int8[]), unnest($8::text[]), unnest($9::text[]), unnest($10::timestamptz[]) ON CONFLICT ("tenant_id","device_token","name") DO UPDATE SET "value" = excluded.value, "classifier" = excluded.classifier, "unit" = excluded.unit, "data_type" = excluded.data_type, "occurred_time" = excluded.occurred_time, "updated_at" = excluded.updated_at WHERE (t.occurred_time < excluded.occurred_time) AND t."tenant_id" = $1::text`
 
-// v1.4.0:backend/services/device-state/model/projection_merge.go upsertLatestLocations / MergeLatestLocations (via latestLocationUpsert).
+// v1.5.0:backend/services/device-state/model/projection_merge.go upsertLatestLocations / MergeLatestLocations (via latestLocationUpsert).
 const latestLocationUpsertPrevSQL = `INSERT INTO "device-state"."latest_locations" AS t ("tenant_id","created_at","updated_at","device_token","latitude","longitude","elevation","accuracy","speed","heading","occurred_time") SELECT $1::text, unnest($2::timestamptz[]), unnest($3::timestamptz[]), unnest($4::text[]), unnest($5::text[]::numeric[]), unnest($6::text[]::numeric[]), unnest($7::text[]::numeric[]), unnest($8::text[]::numeric[]), unnest($9::text[]::numeric[]), unnest($10::text[]::numeric[]), unnest($11::timestamptz[]) ON CONFLICT ("tenant_id","device_token") DO UPDATE SET "latitude" = excluded.latitude, "longitude" = excluded.longitude, "elevation" = excluded.elevation, "accuracy" = excluded.accuracy, "speed" = excluded.speed, "heading" = excluded.heading, "occurred_time" = excluded.occurred_time, "updated_at" = excluded.updated_at WHERE (t.occurred_time < excluded.occurred_time) AND t."tenant_id" = $1::text`
 
-// v1.4.0:backend/services/device-state/model/dropped_measurements.go upsertDropped/droppedSet. Frozen gorm
+// v1.5.0:backend/services/device-state/model/dropped_measurements.go upsertDropped/droppedSet. Frozen gorm
 // CreateInBatches output for one row (ID omitted, RETURNING id); the only dynamic
 // part is the repeated VALUES group. Explicit tenant_id replaces the core callback.
 const droppedUpsertPrevSQL = `INSERT INTO "device-state"."dropped_measurements" ("created_at","updated_at","tenant_id","device_token","name","reason","last_value","count","first_time","last_time") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT ("tenant_id","device_token","name","reason") DO UPDATE SET "count"=dropped_measurements.count + excluded.count,"first_time"=CASE WHEN excluded.first_time < dropped_measurements.first_time THEN excluded.first_time ELSE dropped_measurements.first_time END,"last_value"=CASE WHEN excluded.last_time > dropped_measurements.last_time THEN excluded.last_value ELSE dropped_measurements.last_value END,"last_time"=CASE WHEN excluded.last_time > dropped_measurements.last_time THEN excluded.last_time ELSE dropped_measurements.last_time END,"updated_at"="excluded"."updated_at" RETURNING "id"`
 
-// v1.4.0:backend/services/device-state/model/dropped_measurements.go enforceDroppedBound. Representative gorm
+// v1.5.0:backend/services/device-state/model/dropped_measurements.go enforceDroppedBound. Representative gorm
 // subquery output, including the explicit inner tenant and callback's outer tenant.
 // MaxDroppedMeasurementsPerDevice=32; evictScan=100000. No soft-delete field on this table.
 const droppedEvictPrevSQL = `DELETE FROM "device-state"."dropped_measurements" WHERE id IN (SELECT "id" FROM "device-state"."dropped_measurements" WHERE tenant_id = $1 AND device_token = $2 ORDER BY last_time DESC, id DESC LIMIT $3 OFFSET $4) AND "dropped_measurements"."tenant_id" = $5`
@@ -471,8 +471,8 @@ func TestPrevReleaseDeviceStateWriters(t *testing.T) {
 	require.Zero(t, n)
 }
 
-// Additional per-event shapes from v1.4.0:backend/services/device-state/model/api.go and ownership.go.
-// SNAPSHOT v1.4.0:backend/services/device-state/model/model.go DeviceState; gorm.Model expanded by hand.
+// Additional per-event shapes from v1.5.0:backend/services/device-state/model/api.go and ownership.go.
+// SNAPSHOT v1.5.0:backend/services/device-state/model/model.go DeviceState; gorm.Model expanded by hand.
 type deviceStatePrev struct {
 	ID                  uint `gorm:"primarykey"`
 	CreatedAt           time.Time
@@ -496,7 +496,7 @@ type deviceStatePrev struct {
 
 func (deviceStatePrev) TableName() string { return "device-state.device_states" }
 
-// Frozen v1.4.0:backend/core/rdb/anchors.go Value serialization; no live base/model dependency.
+// Frozen v1.5.0:backend/core/rdb/anchors.go Value serialization; no live base/model dependency.
 type anchorsPrev []string
 
 func (a anchorsPrev) Value() (driver.Value, error) {
@@ -530,7 +530,7 @@ func TestPrevReleaseDeviceStatePerEventWriters(t *testing.T) {
 	require.NoError(t, tx.Unscoped().Where("tenant_id = ?", tenant).Delete(&deviceStatePrev{}).Error)
 	at := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	stamp := func(at time.Time) sql.NullTime { return sql.NullTime{Time: at, Valid: true} }
-	// v1.4.0:backend/services/device-state/model/api.go MergeDeviceState's first-sight Create and existing-row full Save.
+	// v1.5.0:backend/services/device-state/model/api.go MergeDeviceState's first-sight Create and existing-row full Save.
 	row := deviceStatePrev{TenantId: tenant, DeviceToken: "device", ExternalId: "external", Source: "source", Active: true,
 		LastConnectTime: stamp(at), LastActivityTime: stamp(at), PresenceSource: "INFERRED"}
 	read := func(want string, active bool, when time.Time) {
@@ -549,7 +549,7 @@ func TestPrevReleaseDeviceStatePerEventWriters(t *testing.T) {
 	row.LastActivityTime = stamp(later)
 	require.NoError(t, tx.Save(&row).Error)
 	read("changed", true, later)
-	// v1.4.0:backend/services/device-state/model/ownership.go ApplyDeviceOwnership's exact update map and 30-second settle.
+	// v1.5.0:backend/services/device-state/model/ownership.go ApplyDeviceOwnership's exact update map and 30-second settle.
 	ownershipAt := later.Add(30 * time.Second)
 	res := tx.Model(&deviceStatePrev{}).Where("tenant_id = ?", tenant).
 		Where("device_token = ?", "device").Where("scope_anchors_at IS NULL OR scope_anchors_at < ?", ownershipAt).
@@ -562,7 +562,7 @@ func TestPrevReleaseDeviceStatePerEventWriters(t *testing.T) {
 	parsed, err := time.Parse(time.RFC3339Nano, got["scope_anchors_at"].(string))
 	require.NoError(t, err)
 	require.True(t, ownershipAt.Equal(parsed))
-	// v1.4.0:backend/services/device-state/model/api.go SweepInactive, including the exact Postgres inactivitySQL fragment and
+	// v1.5.0:backend/services/device-state/model/api.go SweepInactive, including the exact Postgres inactivitySQL fragment and
 	// locked ARRAY subquery. The production system-context sweep has no tenant filter;
 	// this replay confines its candidates explicitly to this test's tenant.
 	now := later.Add(601 * time.Second)

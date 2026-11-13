@@ -132,6 +132,49 @@ func TestSigningKeyAgesInRangeStillLoad(t *testing.T) {
 	}
 }
 
+func TestSigningKeyRetentionShorterThanRefreshTtlIsRefused(t *testing.T) {
+	cases := []struct {
+		name string
+		auth string
+	}{
+		{"default refresh TTL", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":6`},
+		{"configured refresh TTL", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":1,"refreshTokenTtlSeconds":172800`},
+		{"default retention", `"signingKeyMaxAgeDays":90,"refreshTokenTtlSeconds":864000`},
+		{"one second short", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":7,"refreshTokenTtlSeconds":604801`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &UserManagementConfiguration{}
+			doc := fmt.Sprintf(`{"auth":{%s}}`, tc.auth)
+			err := core.LoadConfiguration([]byte(doc), cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "signingKeyRetentionDays")
+		})
+	}
+}
+
+func TestSigningKeyRetentionCoveringRefreshTtlStillLoads(t *testing.T) {
+	cases := []struct {
+		name          string
+		auth          string
+		wantRetention int
+	}{
+		{"equal lifetime", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":7,"refreshTokenTtlSeconds":604800`, 7},
+		{"default retention and refresh TTL", `"signingKeyMaxAgeDays":90`, 8},
+		{"rotation off", `"signingKeyMaxAgeDays":0,"signingKeyRetentionDays":1,"refreshTokenTtlSeconds":604800`, 1},
+		{"maximum retention", `"signingKeyMaxAgeDays":90,"signingKeyRetentionDays":106751,"refreshTokenTtlSeconds":604800`, 106751},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &UserManagementConfiguration{}
+			doc := fmt.Sprintf(`{"auth":{%s}}`, tc.auth)
+			require.NoError(t, core.LoadConfiguration([]byte(doc), cfg))
+			assert.Equal(t, tc.wantRetention, cfg.Auth.SigningKeyRetentionDays)
+			assert.Equal(t, 604800, cfg.Auth.RefreshTokenTtlSeconds)
+		})
+	}
+}
+
 // The bound is exactly the largest day count whose Duration does not wrap.
 func TestMaxSigningKeyDaysIsTheLargestDurationThatFits(t *testing.T) {
 	assert.Greater(t, time.Duration(MaxSigningKeyDays)*24*time.Hour, time.Duration(0))

@@ -138,7 +138,11 @@ func (r *SchemaResolver) EvaluateRules(ctx context.Context, args struct{ Input e
 	switch in.RuleSet {
 	case ruleSetDraft:
 		var diags []graph.Diagnostic
-		ruleSet, warnings, diags = draftEvaluationRules(in)
+		var refusal *EvaluateRulesResultResolver
+		ruleSet, warnings, diags, refusal = draftEvaluationRules(in)
+		if refusal != nil {
+			return refusal, nil
+		}
 		if len(diags) > 0 {
 			return refusedDiags(refusalRuleRejected, diags...), nil
 		}
@@ -306,27 +310,34 @@ func parseEvaluationEvents(in evaluateRulesInput) ([]evaluate.Event, time.Time, 
 // canvas lowering and rule decoder the preview and the publish gate use. Rules are compiled by
 // evaluate.Run under the production limits, so a draft that could not be published is refused here
 // with the same message.
-func draftEvaluationRules(in evaluateRulesInput) ([]evaluate.Rule, []graph.Diagnostic, []graph.Diagnostic) {
+//
+// A graph with more condition nodes than evaluate.MaxRules is refused before it is lowered, with the
+// refusal Run would give: lowering compiles every rule, so checking the count only in Run let one
+// request compile any number of them before being refused.
+func draftEvaluationRules(in evaluateRulesInput) ([]evaluate.Rule, []graph.Diagnostic, []graph.Diagnostic, *EvaluateRulesResultResolver) {
 	hasGraph := in.Graph != nil && *in.Graph != ""
 	hasDef := in.RuleDefinition != nil && *in.RuleDefinition != ""
 	switch {
 	case hasGraph == hasDef:
-		return nil, nil, []graph.Diagnostic{{Severity: "error", Message: "provide exactly one of graph and ruleDefinition for a draft"}}
+		return nil, nil, []graph.Diagnostic{{Severity: "error", Message: "provide exactly one of graph and ruleDefinition for a draft"}}, nil
 	case hasGraph:
 		def, err := graph.Decode([]byte(*in.Graph))
 		if err != nil {
-			return nil, nil, []graph.Diagnostic{{Severity: "error", Message: err.Error()}}
+			return nil, nil, []graph.Diagnostic{{Severity: "error", Message: err.Error()}}, nil
+		}
+		if n := def.ConditionCount(); n > evaluate.MaxRules {
+			return nil, nil, nil, refused(refusalLimitExceeded, evaluate.RuleCountError(n).Error())
 		}
 		res, cerr := graph.Compile(def, in.ProfileToken, rules.DefaultLimits())
 		if cerr != nil {
 			var ce *graph.CompileError
 			if errors.As(cerr, &ce) {
-				return nil, nil, ce.Diagnostics
+				return nil, nil, ce.Diagnostics, nil
 			}
-			return nil, nil, []graph.Diagnostic{{Severity: "error", Message: cerr.Error()}}
+			return nil, nil, []graph.Diagnostic{{Severity: "error", Message: cerr.Error()}}, nil
 		}
 		if len(res.Rules) == 0 {
-			return nil, nil, []graph.Diagnostic{{Severity: "error", Message: "the graph holds no detection rule to evaluate"}}
+			return nil, nil, []graph.Diagnostic{{Severity: "error", Message: "the graph holds no detection rule to evaluate"}}, nil
 		}
 		out := make([]evaluate.Rule, 0, len(res.Rules))
 		var warns []graph.Diagnostic
@@ -334,13 +345,13 @@ func draftEvaluationRules(in evaluateRulesInput) ([]evaluate.Rule, []graph.Diagn
 			out = append(out, evaluate.Rule{Token: lr.NodeID, Def: lr.Rule})
 			warns = append(warns, graph.WarningDiagnostics(lr.Trace.ConditionID, lr.Compiled.Warnings)...)
 		}
-		return out, warns, nil
+		return out, warns, nil, nil
 	default:
 		def, err := rules.Decode([]byte(*in.RuleDefinition))
 		if err != nil {
-			return nil, nil, []graph.Diagnostic{{Severity: "error", Message: err.Error()}}
+			return nil, nil, []graph.Diagnostic{{Severity: "error", Message: err.Error()}}, nil
 		}
-		return []evaluate.Rule{{Token: draftRuleToken, Def: def}}, nil, nil
+		return []evaluate.Rule{{Token: draftRuleToken, Def: def}}, nil, nil, nil
 	}
 }
 
