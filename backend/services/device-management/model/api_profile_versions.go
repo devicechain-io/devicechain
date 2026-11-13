@@ -145,7 +145,7 @@ func parseProfileSnapshot(raw datatypes.JSON) (*ProfileSnapshot, error) {
 // gate compiles per call (graphql.MaxRulesPerValidation there); it refuses a longer
 // list. Checking it here first gives the author a LIMIT_EXCEEDED that names the bound
 // instead of the fail-closed "validation is unavailable" a refused call would otherwise
-// surface as. The two numbers must move together.
+// surface as. The two numbers must move together; TestRuleCountBoundAgreesWithThePublishBound in event-processing pins them.
 const MaxEnabledDetectionRulesPerPublish = 1000
 
 // validateSnapshotDetectionRules compiles the ENABLED detection rules carried in a

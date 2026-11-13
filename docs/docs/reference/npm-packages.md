@@ -40,6 +40,30 @@ from "the connection dropped" by the identity of the error class it catches, and
 one copy is not an instance of the other copy's class. A permission refusal would then read as an
 outage.
 
+## Public entry points
+
+Import only the paths exposed in each package's `exports` map:
+
+| Package | Entry points |
+| --- | --- |
+| `@devicechain/client`, `@devicechain/dashboards` | Root API and `/package.json` |
+| `@devicechain/widget-sdk` | Root API, `/echarts`, `/empty-state`, `/strict-csp`, `/package.json` |
+| `@devicechain/widgets` | Root API, `/host-context`, `/vite`, `/package.json` |
+| `@devicechain/brand` | `/tokens.json`, `/tokens`, `/css/brand.css`, `/css/shadcn.css`, `/css/infima.css`; no root API |
+
+The widget SDK's root is chart-free. Its `/echarts` entry exports `EChart`,
+`loadChartEngine`, option builders and chart themes. `/empty-state` exports
+`WidgetEmptyState` for explained empty results. `/strict-csp` exports
+`configureStrictCsp`, `strictCspEnabled` and `plainTooltipText` (also root exports).
+Use `@devicechain/widgets/host-context` for map providers above lazy dashboard
+routes, and `/vite` for the Vite-specific `viteMapRuntime`.
+
+For browser authentication and typed string documents, see the
+[client README](https://github.com/devicechain-io/devicechain/tree/main/frontend/packages/client).
+For live hub channels, recorded playback, history and editor helpers, see the
+[dashboards README](https://github.com/devicechain-io/devicechain/tree/main/frontend/packages/dashboards).
+The [.NET and Unity API guide](./csharp-sdk.md) covers those platforms separately.
+
 ## Versions and dist-tags
 
 All five packages are published together, at one version, from the release that cuts the platform
@@ -65,7 +89,7 @@ packages in the first place, and predate the workflow that signs them.
 import { DashboardRenderer } from '@devicechain/widgets';
 import { DashboardHub, parseDashboardDefinition } from '@devicechain/dashboards';
 
-const hub = new DashboardHub({ resolver, authorities: user.scopes });
+const hub = new DashboardHub({ resolver, authorities: user.authorities });
 const definition = parseDashboardDefinition(json);
 
 <DashboardRenderer definition={definition} hub={hub} actions={hub} />;
@@ -79,12 +103,21 @@ render `HubConnectionBadge` with the state from `useHubConnectionState(hub)`. Al
 falls back to English), so both can follow your application's language. `density` overrides the density the board was authored with.
 
 ```tsx
-const [range, controls] = useBoardTimeRange(definition.timeRange?.defaultSeconds);
-const connection = useHubConnectionState(hub);
+import {
+  DashboardRenderer, HubConnectionBadge, TimeRangeBar,
+  useBoardTimeRange, useHubConnectionState,
+} from '@devicechain/widgets';
 
+function BoardWithControls() {
+  const [range, controls] = useBoardTimeRange(definition.timeRange?.defaultSeconds);
+  const connection = useHubConnectionState(hub);
+
+  return (<>
 <TimeRangeBar state={range} controls={controls} />
 <HubConnectionBadge state={connection} labels={{ live: 'Live', reconnecting: 'Reconnecting', offline: 'Offline' }} />
-<DashboardRenderer definition={definition} hub={hub} actions={hub} timeRange={range} />;
+<DashboardRenderer definition={definition} hub={hub} actions={hub} timeRange={range} />
+  </>);
+}
 ```
 
 Omit `actions` for a strictly read-only mount, and the acting widgets render inert:

@@ -29,5 +29,5 @@ source-generated `JsonTypeInfo` instead.
    measurement lines once something is emitting into the tenant (e.g. run the buildingpulse sim:
    `backend/sims/dc-simulator/dc-simulator --handshake ~/.devicechain/sims/bp.json`).
 
-Call the SDK from the main thread (this script does — no `ConfigureAwait(false)` in the driver — so
-`UnityWebRequest` stays on the main thread).
+Construct the client on Unity's main thread. `UnityWebRequestHttpTransport` captures that
+thread's synchronization context and posts requests and cancellation aborts back to it.

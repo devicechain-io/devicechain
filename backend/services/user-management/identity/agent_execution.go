@@ -13,6 +13,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-user-management/agentpolicy"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -53,6 +54,10 @@ const (
 
 // MaxExecutionApprovers bounds the approvers one execution decision is asked about.
 const MaxExecutionApprovers = 10
+
+// maxApproverPrincipalLen is the identity email column's size (iam.Identity.Email size:256),
+// so no real principal is longer.
+const maxApproverPrincipalLen = 256
 
 // kindActScope is the act:* scope a proposal of each kind is derived through.
 var kindActScope = map[agentpolicy.Kind]string{
@@ -175,6 +180,11 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 		if s.Principal == "" || s.Sid == "" || named[s.Principal] || !slices.Contains(req.Approvers, s.Principal) {
 			return ExecutionDecision{}, errors.New("approver sessions require distinct named approvers and non-empty principal and sid")
 		}
+		// A sid is minted by uuid.NewString, so only the canonical 36-character form is one; the
+		// length test also refuses the urn:, braced and undashed forms uuid.Parse accepts.
+		if _, err := uuid.Parse(s.Sid); len(s.Principal) > maxApproverPrincipalLen || len(s.Sid) != 36 || err != nil {
+			return ExecutionDecision{}, errors.New("approver session principal or sid is malformed")
+		}
 		named[s.Principal] = true
 	}
 	// KV is outside the database snapshot. Carry errors into the standing checks so
@@ -182,6 +192,9 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 	var rec *sessionRecord
 	var recErr error
 	if !strings.HasPrefix(req.ProposerPrincipal, auth.ServiceAccountSubjectPrefix) && req.ProposerSid != "" {
+		if err := ctx.Err(); err != nil {
+			return ExecutionDecision{}, err
+		}
 		rec, recErr = m.loadSession(auth.SessionID(req.ProposerSid), req.ProposerPrincipal)
 	}
 	records := map[string]*sessionRecord{}
@@ -192,6 +205,9 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 			// Self-confirmation can name the proposer's same sign-in; read it only once.
 			records[s.Principal], recordErrors[s.Principal] = rec, recErr
 		} else {
+			if err := ctx.Err(); err != nil {
+				return ExecutionDecision{}, err
+			}
 			records[s.Principal], recordErrors[s.Principal] = m.loadSession(auth.SessionID(s.Sid), s.Principal)
 		}
 	}

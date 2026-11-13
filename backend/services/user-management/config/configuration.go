@@ -54,7 +54,10 @@ type AuthConfiguration struct {
 	// MaxSigningKeyDays, is refused at load. SigningKeyRetentionDays is how long a
 	// rotated-out key is kept (its public half stays in the JWKS) so tokens it signed
 	// keep verifying. 0 takes the default of 8 days; a negative value, or one above
-	// MaxSigningKeyDays, is refused at load.
+	// MaxSigningKeyDays, is refused at load. When SigningKeyMaxAgeDays is above 0,
+	// SigningKeyRetentionDays must cover the refresh-token lifetime; it is refused at
+	// load rather than left to Manager.RotateSigningKey, which would lengthen it
+	// silently to the lifetime plus a day.
 	SigningKeyMaxAgeDays    int
 	SigningKeyRetentionDays int
 
@@ -370,8 +373,14 @@ func (c *UserManagementConfiguration) Validate() error {
 	if c.Auth.AccessTokenTtlSeconds <= 0 {
 		return fmt.Errorf("auth.accessTokenTtlSeconds must be positive (got %d)", c.Auth.AccessTokenTtlSeconds)
 	}
+	if c.Auth.AccessTokenTtlSeconds > MaxDurationSeconds {
+		return fmt.Errorf("auth.accessTokenTtlSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.Auth.AccessTokenTtlSeconds)
+	}
 	if c.Auth.RefreshTokenTtlSeconds <= 0 {
 		return fmt.Errorf("auth.refreshTokenTtlSeconds must be positive (got %d)", c.Auth.RefreshTokenTtlSeconds)
+	}
+	if c.Auth.RefreshTokenTtlSeconds > MaxDurationSeconds {
+		return fmt.Errorf("auth.refreshTokenTtlSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.Auth.RefreshTokenTtlSeconds)
 	}
 	// A negative max age, or one that overflows main.go's Duration conversion, can
 	// reach MaybeRotateOnAge as a non-positive age, which it reads as disabled.
@@ -381,6 +390,9 @@ func (c *UserManagementConfiguration) Validate() error {
 	}
 	if c.Auth.SigningKeyRetentionDays < 0 || c.Auth.SigningKeyRetentionDays > MaxSigningKeyDays {
 		return fmt.Errorf("auth.signingKeyRetentionDays must be between 0 and %d (got %d): 0 takes the default of 8 days", MaxSigningKeyDays, c.Auth.SigningKeyRetentionDays)
+	}
+	if c.Auth.SigningKeyMaxAgeDays > 0 && int64(c.Auth.SigningKeyRetentionDays)*86400 < int64(c.Auth.RefreshTokenTtlSeconds) {
+		return fmt.Errorf("auth.signingKeyRetentionDays (%d days) must cover auth.refreshTokenTtlSeconds (%d) while auth.signingKeyMaxAgeDays turns rotation on: a rotated-out key has to stay published for as long as a refresh token it signed can be used, and a shorter retention would be lengthened silently at rotation", c.Auth.SigningKeyRetentionDays, c.Auth.RefreshTokenTtlSeconds)
 	}
 	// A negative interval disables the coordinator, which is a supported lever. A
 	// negative SETTLE is not the same kind of knob: it would mean "complete the purge

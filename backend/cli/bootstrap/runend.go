@@ -28,6 +28,9 @@ func FinishBootstrapPhase(ctx context.Context, st *State, runErr error) error {
 
 // finishBootstrapPhase is FinishBootstrapPhase with the connection supplied.
 //
+// 🔴 A run that failed before writing the declaration leaves the phase it found:
+// it changed nothing, so it has no outcome to record.
+//
 // 🔴 SPLIT BECAUSE THIS IS NOW WHAT PROTECTS A LIVE INSTANCE. Bootstrap's Ready stamp is
 // the only bootstrap write that removes the first-bootstrap record, so a version of this
 // that returned without stamping — or stamped without the run's claim, over a reclaimer's
@@ -36,6 +39,10 @@ func FinishBootstrapPhase(ctx context.Context, st *State, runErr error) error {
 // function rather than a client so a dry run still connects to nothing.
 func finishBootstrapPhase(ctx context.Context, st *State, runErr error, connect func() (dynamic.Interface, error)) error {
 	if st.DryRun {
+		return nil
+	}
+	if runErr != nil && !st.DeclarationWritten {
+		fmt.Println("The instance's recorded phase is unchanged: this run stopped before it wrote anything to the declaration.")
 		return nil
 	}
 	dyn, err := connect()
