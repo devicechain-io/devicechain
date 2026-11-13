@@ -197,6 +197,7 @@ Like every device refusal, the device sees only CONNACK return code 5. The reaso
 The C# SDK (`DeviceChain.Sdk`, and the Unity package built on it) presents a client certificate in the TLS handshake. Load the certificate and its key, give the session the certificate, and point the trust at your instance CA:
 
 ```csharp
+using System;
 using DeviceChain.Sdk.Mqtt;
 using DeviceChain.Sdk.Transport;
 

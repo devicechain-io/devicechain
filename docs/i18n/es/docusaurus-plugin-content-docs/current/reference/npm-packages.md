@@ -40,6 +40,30 @@ de «se cayó la conexión» por la identidad de la clase de error que captura, 
 una copia no es una instancia de la clase de la otra. Un rechazo por permisos se leería entonces como
 una caída del servicio.
 
+## Puntos de entrada públicos
+
+Importa solo las rutas expuestas en el mapa `exports` de cada paquete:
+
+| Paquete | Puntos de entrada |
+| --- | --- |
+| `@devicechain/client`, `@devicechain/dashboards` | API raíz y `/package.json` |
+| `@devicechain/widget-sdk` | API raíz, `/echarts`, `/empty-state`, `/strict-csp`, `/package.json` |
+| `@devicechain/widgets` | API raíz, `/host-context`, `/vite`, `/package.json` |
+| `@devicechain/brand` | `/tokens.json`, `/tokens`, `/css/brand.css`, `/css/shadcn.css`, `/css/infima.css`; sin API raíz |
+
+La raíz del SDK de widgets no incluye gráficos. Su punto de entrada `/echarts` exporta `EChart`,
+`loadChartEngine`, constructores de opciones y temas de gráficos. `/empty-state` exporta
+`WidgetEmptyState` para resultados vacíos con una explicación. `/strict-csp` exporta
+`configureStrictCsp`, `strictCspEnabled` y `plainTooltipText` (también exportados desde la raíz).
+Usa `@devicechain/widgets/host-context` para los proveedores de mapas por encima de las rutas de
+paneles con carga diferida, y `/vite` para `viteMapRuntime`, específico de Vite.
+
+Para la autenticación en el navegador y los documentos de cadena tipados, consulta el
+[README del cliente](https://github.com/devicechain-io/devicechain/tree/main/frontend/packages/client).
+Para los canales en vivo del hub, la reproducción de grabaciones, el historial y los ayudantes del editor, consulta el
+[README de paneles](https://github.com/devicechain-io/devicechain/tree/main/frontend/packages/dashboards).
+La [guía de API de .NET y Unity](./csharp-sdk.md) cubre esas plataformas por separado.
+
 ## Versiones y dist-tags
 
 Los cinco paquetes se publican juntos, en una sola versión, desde la misma release que corta la

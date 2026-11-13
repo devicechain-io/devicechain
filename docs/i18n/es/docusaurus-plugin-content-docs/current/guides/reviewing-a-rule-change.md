@@ -143,7 +143,7 @@ mutation ApproveReview($token: String!, $digest: String!) {
 
 Proporciona el `token` de la revisión y el `reviewDigest` exacto que esa persona examinó. Solo pueden aprobarse revisiones `RAN` con `PASSED` o `NO_AUTOMATION_CHANGE`. Si se exigen dos aprobaciones, deben aprobar dos personas distintas que cumplan los requisitos. **Reject** rechaza una revisión pendiente o aprobada, con nota opcional y sin verificación adicional.
 
-La aprobación dura 24 horas por defecto. Comprueba `expiresAt`; una revisión aprobada caducada mantiene `APPROVED`. Cerrar sesión no termina la aprobación, pero al publicar se comprueban de nuevo la membresía habilitada y los permisos de cada aprobador.
+La aprobación dura 24 horas por defecto. Comprueba `expiresAt`; una revisión aprobada caducada se muestra como `EXPIRED` al consultar y no cumple el requisito para publicar. Cerrar sesión no termina la aprobación, pero al publicar se comprueban de nuevo la membresía habilitada y los permisos de cada aprobador.
 
 ## Protege el perfil {#protect-the-profile}
 

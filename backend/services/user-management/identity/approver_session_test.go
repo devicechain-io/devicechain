@@ -5,6 +5,7 @@ package identity
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -12,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-user-management/agentpolicy"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/google/uuid"
+	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -143,16 +145,84 @@ func TestApproverSessionsAreValidated(t *testing.T) {
 	many := make([]ApproverSession, MaxExecutionApprovers+1)
 	for name, sessions := range map[string][]ApproverSession{
 		"too many":        many,
-		"empty principal": {{Sid: "sid"}},
+		"empty principal": {{Sid: uuid.NewString()}},
 		"empty sid":       {{Principal: approvalBoss}},
-		"duplicate":       {{Principal: approvalBoss, Sid: "one"}, {Principal: approvalBoss, Sid: "two"}},
-		"not an approver": {{Principal: "other", Sid: "sid"}},
+		"duplicate":       {{Principal: approvalBoss, Sid: uuid.NewString()}, {Principal: approvalBoss, Sid: uuid.NewString()}},
+		"not an approver": {{Principal: "other", Sid: uuid.NewString()}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			req := x.request(approvalBoss)
 			req.ApproverSessions = sessions
 			_, err := x.m.AgentExecutionDecision(context.Background(), personClaims(approvalBoss, string(auth.AlarmWrite)), req)
 			require.Error(t, err)
+		})
+	}
+	const malformed = "approver session principal or sid is malformed"
+	for name, session := range map[string]ApproverSession{
+		"long principal": {Principal: strings.Repeat("a", 257), Sid: uuid.NewString()},
+		"long sid":       {Principal: approvalBoss, Sid: strings.Repeat("a", 65)},
+		"non UUID":       {Principal: approvalBoss, Sid: "not-a-uuid"},
+		"URN UUID":       {Principal: approvalBoss, Sid: "urn:uuid:" + uuid.NewString()},
+		"undashed UUID":  {Principal: approvalBoss, Sid: strings.ReplaceAll(uuid.NewString(), "-", "")},
+		"36 non-hex":     {Principal: approvalBoss, Sid: strings.Repeat("z", 36)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := x.request(session.Principal)
+			req.ApproverSessions = []ApproverSession{session}
+			original := x.m.refreshKV
+			kv := &countingApproverKV{KeyValue: original}
+			x.m.refreshKV = kv
+			defer func() { x.m.refreshKV = original }()
+			_, err := x.m.AgentExecutionDecision(context.Background(), personClaims(approvalBoss, string(auth.AlarmWrite)), req)
+			require.ErrorContains(t, err, malformed)
+			require.Zero(t, kv.gets, "a malformed session is refused before any sign-in is read")
+		})
+	}
+	t.Run("maximum principal length", func(t *testing.T) {
+		principal := strings.Repeat("a", 256)
+		req := x.request(principal)
+		req.ApproverSessions = []ApproverSession{{Principal: principal, Sid: uuid.NewString()}}
+		_, err := x.m.AgentExecutionDecision(context.Background(), personClaims(approvalBoss, string(auth.AlarmWrite)), req)
+		if err != nil {
+			require.NotContains(t, err.Error(), malformed)
+		}
+	})
+}
+
+type countingApproverKV struct {
+	nats.KeyValue
+	gets     int
+	cancelAt int
+	cancel   context.CancelFunc
+}
+
+func (kv *countingApproverKV) Get(key string) (nats.KeyValueEntry, error) {
+	kv.gets++
+	if kv.cancel != nil && kv.gets == kv.cancelAt {
+		kv.cancel()
+	}
+	return kv.KeyValue.Get(key)
+}
+
+func TestApproverSessionReadsStopOnCancellation(t *testing.T) {
+	x := newExecEnv(t)
+	x.addApprover(t, "other@example.invalid")
+	// The proposer's sign-in is read first, then each approver's: three reads in all.
+	req := x.request(approvalBoss, "other@example.invalid")
+	for name, cancelAt := range map[string]int{"before reads": 0, "during the proposer read": 1, "during the first approver read": 2} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			original := x.m.refreshKV
+			kv := &countingApproverKV{KeyValue: original, cancel: cancel, cancelAt: cancelAt}
+			x.m.refreshKV = kv
+			defer func() { x.m.refreshKV = original }()
+			if cancelAt == 0 {
+				cancel()
+			}
+			_, err := x.m.AgentExecutionDecision(ctx, personClaims(approvalBoss, string(auth.AlarmWrite)), req)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Equal(t, cancelAt, kv.gets)
 		})
 	}
 }

@@ -32,6 +32,8 @@ func Setup(ctx context.Context, cfg config.TracingConfiguration, area string) (f
 	if !cfg.Enabled {
 		return func(context.Context) error { return nil }, nil
 	}
+	// Route exporter and SDK diagnostics through the service's JSON logger.
+	installOtelLogging()
 	var exporter sdktrace.SpanExporter
 	var err error
 	if cfg.Protocol == "http" {
