@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The signal handling below follows nats-server's server/signal.go (handleSignals and
-// handleSignal) at v2.15.2, Copyright 2012-2026 The NATS Authors, Apache License 2.0, changed
+// handleSignal) at v2.15.3, Copyright 2012-2026 The NATS Authors, Apache License 2.0, changed
 // only where this file says so.
 
 //go:build !windows
@@ -40,18 +40,19 @@ func (b *broker) handleSignals(c chan os.Signal) {
 	}()
 }
 
-// handleSignal is upstream's, case for case, with two changes:
+// handleSignal follows upstream v2.15.3 with three changes:
 //
-//   - SIGHUP calls b.reload, which re-applies the device TLS setting between parsing the config and
-//     handing it to the server, then re-checks the listener. Upstream calls Server.Reload, which
-//     would SUCCEED and leave the listener no longer requesting certificates (see applyDeviceTLS).
-//   - SIGTERM's "is a lame duck shutdown already in progress?" reads b.ldm, set when SIGUSR2 is
-//     handled here, instead of the server's own unexported flag. They agree for every SIGTERM that
-//     matters: lame duck mode is entered only through SIGUSR2 (which is all `-sl=ldm` sends, and
-//     what the chart's preStop runs) or LameDuckShutdown, which nothing in this binary calls
-//     otherwise. They could differ only if SIGUSR2 arrived while the server was already shutting
-//     down — when upstream's lameDuckMode returns without setting its flag — and then the shutdown
-//     in progress ends the process anyway.
+//   - SIGHUP calls b.reload, which keeps the device TLS setting and hot key-material path,
+//     then re-checks the listener. Server.Reload would drop the certificate request.
+//   - SIGTERM reads b.ldm instead of the server's unexported flag. SIGUSR2 sets it
+//     synchronously before launching the blocking LameDuckShutdown, replacing upstream's
+//     unexported startLameDuckMode. Requests during startup are refused, as upstream's
+//     enterLameDuckMode refuses when the client listener is nil. After startup the flags
+//     agree for subsequent SIGTERM handling: this binary only enters lame duck via SIGUSR2.
+//     A request during shutdown may differ, but that shutdown ends the process anyway.
+//   - The broker's started gate replaces the unexported startupComplete and waitForStartup.
+//     It also waits for the client listener (Run has returned), so lame duck can enter.
+//     A deferred reload returns on stopped if shutdown completes before startup.
 func (b *broker) handleSignal(sig os.Signal) {
 	s := b.s
 	s.Noticef("Trapped %q signal", sig)
@@ -71,13 +72,40 @@ func (b *broker) handleSignal(sig os.Signal) {
 		// File log re-open for rotating file logs.
 		s.ReOpenLogFile()
 	case syscall.SIGUSR2:
-		b.ldm.Store(true)
-		go s.LameDuckShutdown()
+		select {
+		case <-b.started:
+			b.ldm.Store(true)
+			go s.LameDuckShutdown()
+		default:
+			s.Noticef("Lame duck mode is not entered because the server is still starting")
+		}
 	case syscall.SIGHUP:
 		// Config reload, keeping the device TLS setting.
-		if err := b.reload(); err != nil {
-			s.Errorf("Failed to reload server configuration: %s", err)
+		reload := func() {
+			if err := b.reload(); err != nil {
+				s.Errorf("Failed to reload server configuration: %s", err)
+			}
+			b.check()
 		}
-		b.check()
+		select {
+		case <-b.started:
+			reload()
+		default:
+			s.Noticef("Server is still starting, config reload will run once startup completes")
+			go func() {
+				select {
+				case <-b.stopped:
+					return
+				case <-b.started:
+				}
+				// Run may return because the server shut down during startup.
+				select {
+				case <-b.stopped:
+					return
+				default:
+					reload()
+				}
+			}()
+		}
 	}
 }

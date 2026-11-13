@@ -7,6 +7,8 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-broker/nats-server/internal/smoke"
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
 
@@ -409,4 +412,194 @@ func mustRead(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// waitLog bounds startup/signal synchronization without guessing how long recovery takes.
+func (p *proc) waitLog(t *testing.T, marker string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if strings.Contains(string(mustRead(t, p.log)), marker) {
+			return
+		}
+		if !p.alive() || time.Now().After(deadline) {
+			t.Fatalf("server did not log %q while alive", marker)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// blockedStartup holds Start in EnableJetStream's os.ReadFile(metafile). The account
+// directory is its configured name (APP), below the normalized jetstream store directory.
+// Recovery releases js.mu/a.mu before reading, and parallelTaskQueue workers are not in
+// s.grWG, so Shutdown can finish even while this read is blocked. No writer is opened
+// until the test explicitly resumes startup or cleanup runs AFTER the exit assertion.
+func blockedStartup(t *testing.T) (*proc, string) {
+	t.Helper()
+	f := newFixture(t)
+	conf := filepath.Join(f.dir, "nats.conf")
+	if err := os.WriteFile(conf, append(mustRead(t, conf), []byte("\ndebug: true\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	meta := filepath.Join(f.dir, "js", "jetstream", "APP", "streams", "BLOCKED", "meta.inf")
+	if err := os.MkdirAll(filepath.Dir(meta), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(meta, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := launch(t, f, "blocked-start.log")
+	// Registered after launch: release a reader before launch's kill-and-wait cleanup.
+	t.Cleanup(func() {
+		fd, err := syscall.Open(meta, syscall.O_WRONLY|syscall.O_NONBLOCK, 0)
+		if err == nil {
+			_ = syscall.Close(fd)
+		} else if !errors.Is(err, syscall.ENXIO) {
+			t.Errorf("release recovery FIFO: %v", err)
+		}
+	})
+	p.waitLog(t, `Recovering JetStream state for account "APP"`)
+	return p, meta
+}
+
+func TestSIGHUPDuringBlockedStartupDoesNotParkSIGTERM(t *testing.T) {
+	p, _ := blockedStartup(t)
+	if err := p.cmd.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	// Wait only for the loop to have TAKEN the SIGHUP, not for the deferral, so that a loop that
+	// handles it inline (and parks in ReloadOptions until startup completes) fails on the exit.
+	p.waitLog(t, `Trapped "hangup" signal`)
+	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.waitExit(t, 10*time.Second); err != nil {
+		t.Fatalf("SIGTERM after a SIGHUP during startup: %v, want exit 0", err)
+	}
+	if !strings.Contains(string(mustRead(t, p.log)), "Server is still starting, config reload will run once startup completes") {
+		t.Fatal("the reload was not deferred")
+	}
+}
+
+func TestSIGUSR2DuringBlockedStartupDoesNotDisableSIGTERM(t *testing.T) {
+	p, _ := blockedStartup(t)
+	if err := p.cmd.Process.Signal(syscall.SIGUSR2); err != nil {
+		t.Fatal(err)
+	}
+	// Wait only for the loop to have TAKEN the SIGUSR2, so a loop that records a lame duck
+	// request the server cannot honour (and then ignores SIGTERM) fails on the exit.
+	p.waitLog(t, `Trapped "user defined signal 2" signal`)
+	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.waitExit(t, 10*time.Second); err != nil {
+		t.Fatalf("SIGTERM after startup SIGUSR2: %v, want exit 0", err)
+	}
+	if !strings.Contains(string(mustRead(t, p.log)), "Lame duck mode is not entered because the server is still starting") {
+		t.Fatal("the lame duck request during startup was not reported")
+	}
+	if strings.Contains(string(mustRead(t, p.log)), "Entering lame duck mode") {
+		t.Fatal("entered lame duck mode during startup")
+	}
+}
+
+func TestDeferredSIGHUPRunsAfterStartup(t *testing.T) {
+	p, meta := blockedStartup(t)
+	if err := p.cmd.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	p.waitLog(t, "Server is still starting, config reload will run once startup completes")
+	// A second signal must be handled while the reload waits outside the loop.
+	if err := p.cmd.Process.Signal(syscall.SIGUSR2); err != nil {
+		t.Fatal(err)
+	}
+	p.waitLog(t, "Lame duck mode is not entered because the server is still starting")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		fd, err := syscall.Open(meta, syscall.O_WRONLY|syscall.O_NONBLOCK, 0)
+		if err == nil {
+			_ = syscall.Close(fd)
+			break
+		}
+		if !errors.Is(err, syscall.ENXIO) || time.Now().After(deadline) {
+			t.Fatalf("open recovery FIFO writer: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// EOF makes recovery skip this synthetic stream (it has no checksum file).
+	// This also proves that recovery actually reached the FIFO before startup resumed.
+	p.waitLog(t, "Missing stream checksum file")
+	p.waitLog(t, "Reloaded server configuration")
+	p.waitLog(t, "Server is ready")
+	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.waitExit(t, 10*time.Second); err != nil {
+		t.Fatalf("SIGTERM after resumed startup: %v, want exit 0", err)
+	}
+}
+
+func TestCheckReloadFlag(t *testing.T) {
+	bin := buildBinary(t)
+	f := newFixture(t)
+	current := filepath.Join(f.dir, "nats.conf")
+	original := string(mustRead(t, current))
+	for _, tc := range []struct {
+		name, config string
+		code         int
+		marker       string
+	}{
+		// checkReload rejects a changed store_dir with ErrConfigReloadNotSupported.
+		{"restart", strings.Replace(original, filepath.Join(f.dir, "js"), filepath.Join(f.dir, "other-js"), 1), 3, "jetstream storage dir"},
+		// Debug is explicitly handled by diffOptions' debugOption.
+		{"reload", original + "\ndebug: true\n", 0, "can be reloaded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next := filepath.Join(f.dir, tc.name+".conf")
+			if tc.config == original {
+				t.Fatal("fixture mutation did not change the config")
+			}
+			if err := os.WriteFile(next, []byte(tc.config), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			before, err := server.ProcessConfigFile(current)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := server.ProcessConfigFile(next)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = server.CheckReload(before, after)
+			if tc.code == 3 && !errors.Is(err, server.ErrConfigReloadNotSupported) {
+				t.Fatalf("CheckReload = %v, want ErrConfigReloadNotSupported", err)
+			} else if tc.code == 0 && err != nil {
+				t.Fatalf("CheckReload = %v, want reloadable", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, bin, "-t", "-c", current, "--test_reload", next)
+			var stderr strings.Builder
+			cmd.Stderr = &stderr
+			err = cmd.Run()
+			code := 0
+			if err != nil {
+				var exit *exec.ExitError
+				if !errors.As(err, &exit) {
+					t.Fatal(err)
+				}
+				code = exit.ExitCode()
+			}
+			if code != tc.code || !strings.Contains(stderr.String(), tc.marker) {
+				t.Fatalf("--test_reload: exit %d, want %d; stderr:\n%s", code, tc.code, stderr.String())
+			}
+			if tc.code == 0 {
+				valid := strings.Index(stderr.String(), "is valid")
+				reloadable := strings.Index(stderr.String(), "can be reloaded")
+				if valid < 0 || valid > reloadable {
+					t.Fatalf("missing or out-of-order validation messages:\n%s", stderr.String())
+				}
+			}
+		})
+	}
 }
