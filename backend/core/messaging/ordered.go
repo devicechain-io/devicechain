@@ -152,6 +152,7 @@ type orderedPending struct {
 // status fan-out may be sending on, and the reply subscription and reconnect goroutine it
 // would release end anyway when the connection closes.
 func (nmgr *NatsManager) NewOrderedWriter(suffix string, writer PublishWriter, window int) (OrderedWriter, error) {
+	nmgr.freezeStreamRouting()
 	if window < 1 || window > MaxOrderedWindow {
 		return nil, fmt.Errorf("messaging: ordered writer window %d is outside [1, %d]", window, MaxOrderedWindow)
 	}
@@ -182,7 +183,7 @@ func (nmgr *NatsManager) NewOrderedWriter(suffix string, writer PublishWriter, w
 		// Registering is idempotent, and a service that forwards into a gated stream has
 		// normally registered its gate already, through the reader that parks on it; here it
 		// is fetched so the writer can count its volume.
-		gate:     nmgr.registerBackpressure(suffix),
+		gate:     nmgr.registerWriterBackpressure(suffix),
 		js:       js,
 		slots:    make(chan struct{}, window),
 		pending:  make(chan orderedPending, window),
@@ -250,6 +251,12 @@ func (o *orderedWriter) publishGuardedAck(ctx context.Context, msg Message, done
 		o.pending <- orderedPending{err: err, done: done}
 		return
 	}
+	if o.nmgr.streamSharding().selects(o.suffix) && !msg.BypassBackpressure {
+		if err := o.nmgr.publishBackpressure(ctx, o.suffix); err != nil {
+			o.pending <- orderedPending{err: err, done: done}
+			return
+		}
+	}
 	if guard != nil {
 		if err := guard(); err != nil {
 			o.pending <- orderedPending{err: err, reported: true, done: done}
@@ -286,7 +293,7 @@ func (o *orderedWriter) publishGuardedAck(ctx context.Context, msg Message, done
 	// Counted when sent, not when acknowledged: the measurement it paces is of what the
 	// broker holds, and a publish in flight is about to be held.
 	// Subject, headers and data, as sent: what natsWriter counts.
-	o.gate.notePublished(wireSize(nm))
+	o.nmgr.noteRoutedPublish(ctx, o.suffix, wireSize(nm))
 	o.pending <- orderedPending{fut: fut, msg: nm, sent: sent, deadline: deadline, callerBound: callerBound, done: done, ack: ack}
 }
 

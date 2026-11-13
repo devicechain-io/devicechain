@@ -466,7 +466,7 @@ func (nmgr *NatsManager) backpressure() *backpressureGates {
 // It returns the gate, for a writer to count its publishes against (notePublished); nil for
 // a stream that applies no backpressure.
 func (nmgr *NatsManager) registerBackpressure(suffix string) *gateState {
-	if !streams.AppliesBackpressure(suffix) {
+	if !streams.AppliesBackpressure(nmgr.declaredSuffix(suffix)) {
 		return nil
 	}
 	g := nmgr.backpressure()
@@ -565,7 +565,7 @@ func (nmgr *NatsManager) runBackpressure() {
 //
 // It never waits on the broker: it reads the last measurement runBackpressure made.
 func (nmgr *NatsManager) Backpressure(suffix string) error {
-	if !streams.AppliesBackpressure(suffix) {
+	if !streams.AppliesBackpressure(nmgr.declaredSuffix(suffix)) {
 		return nil
 	}
 	g := nmgr.backpressure()
@@ -747,7 +747,7 @@ func (nmgr *NatsManager) MeasureBackpressureForTesting(tb interface {
 // read that failed for a reason of its own), not the deadline cutting short the read in
 // flight, which says nothing about the broker.
 func (nmgr *NatsManager) awaitConsumerCounts(ctx context.Context, suffix string) error {
-	if !streams.AppliesBackpressure(suffix) {
+	if !streams.AppliesBackpressure(nmgr.declaredSuffix(suffix)) {
 		return nil
 	}
 	if nmgr.js == nil {
@@ -899,7 +899,7 @@ func (nmgr *NatsManager) measureBackpressure(ctx context.Context, stream, suffix
 // the mount this assumes it is), every declared reader counts: a gate that cannot tell which
 // readers are live errs toward protecting all of them.
 func (nmgr *NatsManager) gatingDurables(suffix string) []string {
-	declared := streams.BackpressureReadersFor(suffix)
+	declared := streams.BackpressureReadersFor(nmgr.declaredSuffix(suffix))
 	areas := declared
 	if enabled, err := nmgr.backpressure().enabledAreas(); err == nil && slices.Contains(enabled, nmgr.Microservice.FunctionalArea) {
 		areas = nil

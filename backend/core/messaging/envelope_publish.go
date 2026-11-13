@@ -110,6 +110,7 @@ type roundPublisher struct {
 
 // NewRoundPublisher builds the RoundPublisher for suffix; the stream is created if needed.
 func (nmgr *NatsManager) NewRoundPublisher(suffix string) (RoundPublisher, error) {
+	nmgr.freezeStreamRouting()
 	if err := nmgr.requireWriter(suffix); err != nil {
 		return nil, err
 	}
@@ -129,13 +130,18 @@ func (nmgr *NatsManager) NewRoundPublisher(suffix string) (RoundPublisher, error
 	// backpressure volume as the ordered writer, so these rounds are not invisible to the
 	// instruments that watch the stream.
 	nmgr.metrics.initPublish(suffix, publishModeSync)
-	return &roundPublisher{nmgr: nmgr, suffix: suffix, gate: nmgr.registerBackpressure(suffix)}, nil
+	return &roundPublisher{nmgr: nmgr, suffix: suffix, gate: nmgr.registerWriterBackpressure(suffix)}, nil
 }
 
 func (r *roundPublisher) Publish(ctx context.Context, msg Message) (out PubAckInfo, resultErr error) {
 	subject, err := r.nmgr.tenantSubject(ctx, r.suffix, "")
 	if err != nil {
 		return PubAckInfo{}, err
+	}
+	if r.nmgr.streamSharding().selects(r.suffix) && !msg.BypassBackpressure {
+		if err := r.nmgr.publishBackpressure(ctx, r.suffix); err != nil {
+			return PubAckInfo{}, err
+		}
 	}
 	nm, spans := startPublishMessage(ctx, subject, r.suffix, msg)
 	if len(spans) > 0 {
@@ -153,7 +159,7 @@ func (r *roundPublisher) Publish(ctx context.Context, msg Message) (out PubAckIn
 			if ack.Duplicate {
 				r.nmgr.metrics.countDuplicate(r.suffix, string(WriterResolution))
 			}
-			r.gate.notePublished(wireSize(nm))
+			r.nmgr.noteRoutedPublish(ctx, r.suffix, wireSize(nm))
 			return PubAckInfo{Sequence: ack.Sequence, Duplicate: ack.Duplicate}, nil
 		}
 		if !duplicateInProcess(err) {
@@ -172,7 +178,11 @@ func (r *roundPublisher) Publish(ctx context.Context, msg Message) (out PubAckIn
 func (r *roundPublisher) Get(ctx context.Context, tenant string, seq uint64) (StoredMessage, error) {
 	pctx, _, cancel := publishContext(ctx)
 	defer cancel()
-	stream := StreamName(r.nmgr.Microservice.InstanceId, r.suffix)
+	suffix, err := r.nmgr.tenantSuffix(tenant, r.suffix)
+	if err != nil {
+		return StoredMessage{}, err
+	}
+	stream := StreamName(r.nmgr.Microservice.InstanceId, suffix)
 	raw, err := r.nmgr.js.GetMsg(stream, seq, nats.Context(pctx))
 	if err != nil {
 		return StoredMessage{}, fmt.Errorf("reading %s seq %d: %w", stream, seq, err)

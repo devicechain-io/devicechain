@@ -66,6 +66,9 @@ type RangeStatser interface {
 // an absence only if the stream leader says so, and a reader that is shown an end it cannot
 // confirm retries and then fails rather than ending short.
 func (nmgr *NatsManager) NewRangeReader(suffix string, from, to uint64) (ReplayReader, error) {
+	if err := nmgr.refuseShardedRead(suffix, "range reader"); err != nil {
+		return nil, err
+	}
 	if err := nmgr.requireReader(suffix, streams.ReadEphemeral); err != nil {
 		return nil, err
 	}

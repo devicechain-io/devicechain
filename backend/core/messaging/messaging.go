@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1062,4 +1063,15 @@ func ParseGatewayChildSubject(subject, leaf string) (gateway, child string, ok b
 		return "", "", false
 	}
 	return parts[GatewayTokenIndex], parts[GatewayChildIndex], true
+}
+
+// GroupSuffix names a shard group's suffix. Group zero preserves the existing wire names.
+func GroupSuffix(suffix string, group int) string {
+	if group < 0 {
+		panic("messaging: negative shard group")
+	}
+	if group == 0 {
+		return suffix
+	}
+	return suffix + "-g" + strconv.Itoa(group)
 }
