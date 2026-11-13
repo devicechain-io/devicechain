@@ -3,13 +3,13 @@
 
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/device-management';
-import type { AutomationReviewDetailQuery, AutomationReviewSearchCriteria, RunAutomationReviewInput } from '@/gql/device-management/graphql';
+import type { AutomationReviewDetailQuery, AutomationReviewSearchCriteria, RunAutomationReviewInput, AutomationReviewPolicyInput, AutomationReviewPolicyQuery } from '@/gql/device-management/graphql';
 
 export type AutomationReview = NonNullable<AutomationReviewDetailQuery['automationReview']>;
 const LIST = graphql(`
   query AutomationReviews($criteria: AutomationReviewSearchCriteria!) {
     automationReviews(criteria: $criteria) {
-      results { token profileToken ruleToken kind state outcome createdBy createdAt }
+      results { token profileToken ruleToken kind state outcome createdBy createdAt approvedAt }
       pagination { pageStart pageEnd totalRecords }
     }
   }
@@ -17,7 +17,7 @@ const LIST = graphql(`
 const DETAIL = graphql(`
   query AutomationReviewDetail($token: String!) {
     automationReview(token: $token) {
-      token profileToken ruleToken kind state outcome reviewDigest draftDigest baselineDigest baselineVersion
+      consumedVersion token profileToken ruleToken kind state outcome reviewDigest draftDigest baselineDigest baselineVersion
       createdBy createdAt requiredApprovals approvedAt expiresAt decidedBy decidedAt note draftAuthors reasons deviceTokens
       profileChanges { area key change automation }
       approvals { principal approvedAt policyRevision }
@@ -81,4 +81,50 @@ export async function approveAutomationReview(token: string, digest: string) {
 }
 export async function rejectAutomationReview(token: string, note?: string) {
   return (await gql('device-management', REJECT, { token, note })).rejectAutomationReview;
+}
+
+export type AutomationReviewPolicy = NonNullable<AutomationReviewPolicyQuery['automationReviewPolicy']>;
+const POLICY = graphql(`
+  query AutomationReviewPolicy($profileToken: String!) {
+    automationReviewPolicy(profileToken: $profileToken) { profileToken effective { required requiredApprovals allowSelfApproval approvalTtlSeconds stepUpMaxAgeSeconds } revision updatedBy updatedAt pendingChange { token proposed { required requiredApprovals allowSelfApproval approvalTtlSeconds stepUpMaxAgeSeconds } proposedBy proposedAt effectiveAt state decidedBy decidedAt } }
+  }
+`);
+export async function getAutomationReviewPolicy(profileToken: string) {
+  return (await gql('device-management', POLICY, { profileToken })).automationReviewPolicy;
+}
+const SET_POLICY = graphql(`
+  mutation SetAutomationReviewPolicy($profileToken: String!, $settings: AutomationReviewPolicyInput!) {
+    setAutomationReviewPolicy(profileToken: $profileToken, settings: $settings) { applied policy { profileToken effective { required requiredApprovals allowSelfApproval approvalTtlSeconds stepUpMaxAgeSeconds } revision updatedBy updatedAt pendingChange { token proposed { required requiredApprovals allowSelfApproval approvalTtlSeconds stepUpMaxAgeSeconds } proposedBy proposedAt effectiveAt state decidedBy decidedAt } } }
+  }
+`);
+export async function setAutomationReviewPolicy(profileToken: string, settings: AutomationReviewPolicyInput) {
+  return (await gql('device-management', SET_POLICY, { profileToken, settings })).setAutomationReviewPolicy;
+}
+const APPROVE_POLICY = graphql(`
+  mutation ApproveAutomationReviewPolicyChange($token: String!) {
+    approveAutomationReviewPolicyChange(token: $token) { profileToken effective { required requiredApprovals allowSelfApproval approvalTtlSeconds stepUpMaxAgeSeconds } revision updatedBy updatedAt pendingChange { token proposed { required requiredApprovals allowSelfApproval approvalTtlSeconds stepUpMaxAgeSeconds } proposedBy proposedAt effectiveAt state decidedBy decidedAt } }
+  }
+`);
+export async function approveAutomationReviewPolicyChange(token: string) {
+  return (await gql('device-management', APPROVE_POLICY, { token })).approveAutomationReviewPolicyChange;
+}
+const CANCEL_POLICY = graphql(`
+  mutation CancelAutomationReviewPolicyChange($token: String!) {
+    cancelAutomationReviewPolicyChange(token: $token) { profileToken effective { required requiredApprovals allowSelfApproval approvalTtlSeconds stepUpMaxAgeSeconds } revision updatedBy updatedAt pendingChange { token proposed { required requiredApprovals allowSelfApproval approvalTtlSeconds stepUpMaxAgeSeconds } proposedBy proposedAt effectiveAt state decidedBy decidedAt } }
+  }
+`);
+export async function cancelAutomationReviewPolicyChange(token: string) {
+  return (await gql('device-management', CANCEL_POLICY, { token })).cancelAutomationReviewPolicyChange;
+}
+const BREAK_GLASS = graphql(`
+  query AutomationReviewBreakGlass($profileToken: String!) {
+    automationReviewBreakGlass(profileToken: $profileToken) { action target reason actor at }
+  }
+`);
+export async function listAutomationReviewBreakGlass(profileToken: string) {
+  return (await gql('device-management', BREAK_GLASS, { profileToken })).automationReviewBreakGlass;
+}
+
+export async function listApprovedReviewsForDraft(profileToken: string) {
+  return listAutomationReviews({ profileToken, state: 'APPROVED', matchingCurrentDraft: true, pageNumber: 1, pageSize: 25 });
 }

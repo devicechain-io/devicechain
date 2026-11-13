@@ -36,7 +36,7 @@ func agentToken() *auth.Claims {
 }
 
 func personToken() *auth.Claims {
-	return &auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: "acme", Username: "boss@example.invalid",
+	return &auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: "acme", Username: "boss@example.invalid", SessionID: "boss-sid",
 		Authorities: []string{string(auth.AlarmRead), string(auth.AlarmWrite)}, Amr: auth.AmrPasswordOTP(),
 		MfaTime: jwt.NewNumericDate(time.Now())}
 }

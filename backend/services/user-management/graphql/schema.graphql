@@ -1075,6 +1075,16 @@ input AgentExecutionDecisionInput {
     proposerSid: String
     """(Preview: may change in a minor release.) The principals who have approved so far, including the caller when the caller is approving. At most 10."""
     approvers: [String!]!
+    """(Preview: may change in a minor release.) An approver counts only through the sign-in named here, which must still be open and started under the identity's current session epoch. An approver in approvers with no session here does not count. At most 10."""
+    approverSessions: [AgentApproverSessionInput!]
+}
+
+"""(Preview: may change in a minor release.) The sign-in that gave a principal's approval."""
+input AgentApproverSessionInput {
+    """(Preview: may change in a minor release.) The approver's principal."""
+    principal: String!
+    """(Preview: may change in a minor release.) The approver's sign-in."""
+    sid: String!
 }
 
 """
@@ -1088,7 +1098,7 @@ type AgentExecutionDecision {
     verdict: AgentActionVerdict!
     """(Preview: may change in a minor release.) How many distinct people must approve under the current policy: 0 for REFUSE, otherwise 1 or 2."""
     requiredApprovals: Int!
-    """(Preview: may change in a minor release.) The named approvers who are approvers now: enabled members in an approver role, holding the write the action needs, with an active second factor."""
+    """(Preview: may change in a minor release.) The named approvers who are approvers now: enabled members in an approver role, holding the write the action needs, with an active second factor and a named sign-in still open under the identity's current session epoch. Approvers without a named session do not count."""
     validApprovers: [String!]!
     """(Preview: may change in a minor release.) Platform-defined codes saying why, for example PROPOSER_LOST_AUTHORITY or CLIENT_NOT_ALLOWED."""
     reasons: [String!]!
@@ -1115,6 +1125,14 @@ type ServiceAccountCredentials {
     clientSecret: String!
     """The token endpoint to request tokens from. Null when this instance has no OAuth issuer configured."""
     tokenEndpoint: String
+}
+
+"""(Preview: may change in a minor release.) A named person's current standing in this tenant."""
+type PrincipalStanding {
+    """(Preview: may change in a minor release.) The requested person's sign-in name."""
+    principal: String!
+    """(Preview: may change in a minor release.) Whether the person has an enabled identity and an enabled, unscoped membership with every requested authority."""
+    qualifies: Boolean!
 }
 
 """
@@ -1144,6 +1162,17 @@ type Query {
     # The ingest governance overrides for the caller's tenant (requires
     # tenant:read); read by the enforcing service over a service token.
     tenantGovernance: TenantGovernance!
+    """
+    (Preview: may change in a minor release.) Service-only: whether each named person still holds an
+    enabled, unscoped membership of this tenant with every listed authority. Answers only the
+    device-management service's own token; every other caller is refused.
+    """
+    principalStanding(
+        """(Preview: may change in a minor release.) The people's sign-in names, 1 to 10."""
+        principals: [String!]!
+        """(Preview: may change in a minor release.) The authorities each must hold, 1 to 8."""
+        authorities: [String!]!
+    ): [PrincipalStanding!]!
     """
     The token of every tenant on the instance. Returns tokens only, not tenant records.
     Requires tenant:read, which only an instance-level caller holds, so a tenant user,

@@ -79,6 +79,7 @@ function Detail({ token }: { token: string }) {
       {error && <ErrorState description={error} />}{mutationError && <ErrorState description={mutationError} />}
       {stepUp && <StepUpPrompt path={reviewPath(token)} />}
       <div className={`rounded-md border p-4 ${outcomeStyle}`} role="status"><Outcome outcome={review.outcome} /></div>
+      {review.consumedVersion != null && <p>{t('consumedVersion', { version: review.consumedVersion })}</p>}
       {review.matchesCurrentDraft === false && <div role="status" className="rounded-md border border-warning p-4">{t('stale')}</div>}
       <SectionPanel title={t('summary')}><dl className="grid gap-2 sm:grid-cols-2">
         <dt>{t('profile')}</dt><dd>{review.profileToken && <Link className="text-primary underline" to={`/device-profiles/${encodeURIComponent(review.profileToken)}`}>{review.profileToken}</Link>}</dd>

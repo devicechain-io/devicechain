@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -61,24 +62,40 @@ func TestDisabledGraphQLTracingAddsZeroAllocations(t *testing.T) {
 	request(h.serveHTTP)
 	request(h.ServeHTTP)
 	measure := func(handler http.HandlerFunc) float64 {
-		return testing.AllocsPerRun(1000, func() {
+		return mallocsPerRequest(1000, func() {
 			request(handler)
 		})
 	}
-	// Pool misses and runtime activity can inflate individual samples, especially
-	// under -race. Amortize them over many requests and compare the minimum of
-	// several trials in the same process, rather than pinning an absolute count.
-	least := func(handler http.HandlerFunc) float64 {
-		best := measure(handler)
-		for i := 1; i < 10; i++ {
-			if v := measure(handler); v < best {
-				best = v
-			}
-		}
-		return best
+	// Under -race, sync.Pool drops a random share of what is put back, so the misses make
+	// the per-request count a non-integer that moves by a few tenths between trials.
+	// AllocsPerRun floors it, so with the mean near an integer each handler's floor fell on
+	// either side of it independently: the test failed in both directions, and taking the
+	// minimum of several trials could not help. So: unfloored means, trials interleaved
+	// so drift over the run reaches both handlers alike.
+	var base, actual float64
+	for i := 0; i < 10; i++ {
+		base += measure(h.serveHTTP)
+		actual += measure(h.ServeHTTP)
 	}
-	base, actual := least(h.serveHTTP), least(h.ServeHTTP)
-	if actual != base {
-		t.Fatalf("disabled GraphQL tracing adds %g allocations per request (bare=%g, wrapped=%g)", actual-base, base, actual)
+	base /= 10
+	actual /= 10
+	// An allocation the disabled path makes on every request adds about 1.0 (measured:
+	// 0.998 without -race, 0.91 to 0.95 with it); the noise moves the difference by
+	// about 0.1. Half an allocation separates the two.
+	if actual-base >= 0.5 {
+		t.Fatalf("disabled GraphQL tracing adds %.3f allocations per request (bare=%.3f, wrapped=%.3f)", actual-base, base, actual)
 	}
+}
+
+func mallocsPerRequest(n int, f func()) float64 {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	f()
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	before := stats.Mallocs
+	for i := 0; i < n; i++ {
+		f()
+	}
+	runtime.ReadMemStats(&stats)
+	return float64(stats.Mallocs-before) / float64(n)
 }

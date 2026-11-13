@@ -89,4 +89,4 @@ API 密钥是**只写的密钥句柄**（[密钥存储](./architecture.md)）。
 
 - [事件处理与告警](./event-processing.md)：AI 起草规则所面向的编译器和引擎。
 - [租户层级与服务组合](./tenant-tiers.md)：如何组合 AI 模型使用资格。
-- [AI 访问（MCP）](./mcp.md)：供 AI 代理操作平台的独立只读接口。
+- [AI 访问（MCP）](./mcp.md)：供 AI 代理读取平台的独立接口；启用 mcp 区域的 `agentActuation.enabled` 后，还可使用[预览提议工具](./mcp.md#agent-proposals)。由人在控制台批准，MCP 不执行任何操作。

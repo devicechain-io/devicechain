@@ -1235,9 +1235,9 @@ func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoc
 	var access auth.IssuedToken
 	var err error
 	if scope.IsScoped() && !sudo {
-		access, err = issuer.IssueScopedTenantAccess(tenant, email, roles, authorities, scope, uuid.NewString(), amr.options()...)
+		access, err = issuer.IssueScopedTenantAccess(tenant, email, roles, authorities, scope, uuid.NewString(), append(amr.options(), auth.WithSessionID(sid))...)
 	} else {
-		access, err = issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString(), amr.options()...)
+		access, err = issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString(), append(amr.options(), auth.WithSessionID(sid))...)
 	}
 	if err != nil {
 		return nil, err

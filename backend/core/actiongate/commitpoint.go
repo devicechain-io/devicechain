@@ -27,6 +27,8 @@ const commitPointIdleSQL = "SET LOCAL idle_in_transaction_session_timeout = '500
 // ErrCommitPointSetup distinguishes failure to install the idle bound from a decision RPC error.
 var ErrCommitPointSetup = errors.New("commit point setup failed")
 
+var commitPointNow = time.Now
+
 // CommitPoint asks decide as the LAST act of an effect transaction before COMMIT.
 // An answer that arrives after the deadline is not trusted, whatever the decider did
 // with the context.
@@ -46,8 +48,14 @@ func CommitPoint(ctx context.Context, tx *gorm.DB, decide func(context.Context) 
 	dctx, cancel := context.WithTimeout(ctx, CommitPointDeadline)
 	defer cancel()
 	decision, err := decide(dctx)
-	if err == nil && dctx.Err() != nil {
-		return ExecutionDecision{}, fmt.Errorf("commit-point decision answered after its deadline: %w", dctx.Err())
+	// 🔴 A context timer can fire late; compare monotonic arrival time as well.
+	deadline, _ := dctx.Deadline()
+	if err == nil && (dctx.Err() != nil || !commitPointNow().Before(deadline)) {
+		cause := dctx.Err()
+		if cause == nil {
+			cause = context.DeadlineExceeded
+		}
+		return ExecutionDecision{}, fmt.Errorf("commit-point decision answered after its deadline: %w", cause)
 	}
 	return decision, err
 }

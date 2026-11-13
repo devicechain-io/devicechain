@@ -35,7 +35,7 @@ func newRuleScopeTestApi(t *testing.T) (*Api, context.Context) {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
 	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceCredential{}, &Area{}, &AreaType{},
-		&DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReview{}, &MetricDefinition{}, &CommandDefinition{},
+		&DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{}, &MetricDefinition{}, &CommandDefinition{},
 		&DetectionRule{}, &DetectionRuleScopeRef{}, &EntityAttribute{},
 		&EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{}, &EntityGroupFacetRef{},
 		&EntityRelationship{}, &PendingOwnershipFact{}, &Alarm{}); err != nil {

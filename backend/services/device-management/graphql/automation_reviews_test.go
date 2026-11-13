@@ -113,7 +113,9 @@ func TestAutomationReviewWireEvidenceAndDecisions(t *testing.T) {
 	require.Equal(t, "PASSED", review["outcome"])
 	require.Equal(t, "profile", review["profileToken"])
 	require.Equal(t, true, review["matchesCurrentDraft"])
-	require.Equal(t, []any{"editor"}, review["draftAuthors"])
+	// The baseline was published unprotected, so its journal boundary is inexact and the
+	// earlier writer of the changed rule counts too.
+	require.Equal(t, []any{"before", "editor"}, review["draftAuthors"])
 	require.Equal(t, []any{}, review["reasons"])
 	require.Equal(t, automationReviewResultJSON, review["result"])
 	require.Equal(t, float64(15), review["shiftWindowSeconds"])

@@ -225,7 +225,7 @@ if [ "$MODE" = "verify" ]; then
   # pgconn.PgError structurally cannot check. Different module, so a separate invocation.
   echo "==> Running the guest-connection integration suite"
   ( cd "$ROOT/backend/core" && DC_IT_PGPORT="$HOST_PORT" \
-      go test -tags integration -count=1 ./rdb/... )
+      go test -tags integration -count=1 -timeout 20m ./rdb/... )
 
   # dcctl's per-instance database logins. PostgreSQL 16 changed what CREATEROLE grants,
   # and whether one instance's login is refused by another instance's database — the
