@@ -317,7 +317,7 @@ REACT is giving up on detection actions that keep failing
 
 Agent action executions are failing steadily
 
-**Qué significa y qué hacer.** For 10m, agent action executions have failed because the execution transaction could not complete (database, lock timeout, policy service or kill feed unavailable). Check device-management logs and the Agent actions (preview) row on the Platform board. Dependency changes, policy refusals, a closed kill fence and approver refusals are separate results and do not raise this alert.
+**Qué significa y qué hacer.** For 10m, agent action executions have failed because the execution transaction could not complete (database or statement timeout, policy service or kill feed unavailable). A lock conflict on the proposal or its alarms is refused as a concurrent approval and counted as refused. Check device-management logs and the Agent actions (preview) row on the Platform board. Dependency changes, policy refusals, a closed kill fence and approver refusals are separate results and do not raise this alert.
 
 ### DeviceCalloutLatencyHigh {#devicecalloutlatencyhigh}
 

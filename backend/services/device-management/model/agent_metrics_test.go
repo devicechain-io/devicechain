@@ -6,6 +6,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func newAgentTestMetrics(ms *core.Microservice) *AgentMetrics {
 	return NewAgentMetrics(
 		ms.NewCounterVec("agent_proposals_total", "Non-dry-run proposal calls by kind and outcome; errors count as refused.", []string{"kind", "outcome"}),
 		ms.NewCounterVec("agent_approvals_total", "Approval calls by final outcome, counted once across internal retries; errors without a more specific outcome count as refused.", []string{"outcome"}),
-		ms.NewCounterVec("agent_executions_total", "Final-approval executions by kind and result, counted once per execution including a fence re-enable retry; failed means the transaction could not complete (database, lock, policy service or kill feed unavailable), not a refusal.", []string{"kind", "result"}),
+		ms.NewCounterVec("agent_executions_total", "Final-approval executions by kind and result, counted once per execution including a fence re-enable retry; failed means the transaction could not complete (database or statement timeout, policy service or kill feed unavailable); a lock conflict is refused as a concurrent approval.", []string{"kind", "result"}),
 		ms.NewHistogramVec("agent_execution_seconds", "Time spent executing final approvals, including refusals, failures and a fence re-enable retry.", nil, prometheus.DefBuckets).WithLabelValues(),
 		ms.NewCounter("agent_proposals_expired_total", "Proposals moved to EXPIRED by the reaper."),
 	)
@@ -138,6 +139,39 @@ func TestAgentExecutionMetrics(t *testing.T) {
 			require.GreaterOrEqual(t, metric.GetHistogram().GetSampleSum(), float64(0))
 		})
 	}
+}
+
+func TestAgentExecutionCountsCommittedOutcomeWhenReadBackFails(t *testing.T) {
+	r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1")
+	m := enableAgentTestMetrics(r)
+	var failReadBack atomic.Bool
+	readBackErr := errors.New("post-commit read-back failed")
+	queries := r.api.RDB.Database.Callback().Query()
+	require.NoError(t, queries.Before("gorm:query").Register("fail_execution_read_back", func(db *gorm.DB) {
+		if failReadBack.Load() {
+			db.AddError(readBackErr)
+		}
+	}))
+	t.Cleanup(func() {
+		failReadBack.Store(false)
+		r.api.afterDecisionForTest = nil
+		require.NoError(t, queries.Remove("fail_execution_read_back"))
+	})
+	// The decision is followed only by COMMIT, so the next query is the read-back.
+	r.api.afterDecisionForTest = func(*gorm.DB) error {
+		failReadBack.Store(true)
+		return nil
+	}
+
+	_, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
+	require.ErrorIs(t, err, readBackErr)
+
+	failReadBack.Store(false)
+	stored, err := r.api.AgentProposalByToken(ctx, p.Token, nil)
+	require.NoError(t, err)
+	require.Equal(t, string(actiongate.StateExecuted), stored.State)
+	require.Equal(t, float64(1), testutil.ToFloat64(m.executions.WithLabelValues("ALARM_ACK", "executed")))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.executions.WithLabelValues("ALARM_ACK", "failed")))
 }
 
 func TestAgentExpiryMetricsCountRowsOnce(t *testing.T) {
