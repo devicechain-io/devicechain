@@ -526,6 +526,7 @@ dcctl bootstrap local devicechain
 - **更改配置仍会滚动重启代理。** 代理配置被渲染到 ConfigMap 中，chart 将其哈希写入 StatefulSet 的 pod 模板。渲染后配置的任何变化（设置、容量或账户）都会重启代理 pod，因此设备会像以前一样重新连接；对于任何更改代理镜像或配置的升级，`dcctl upgrade` 都会滚动重启代理。
 - **同一 CA 下续期的 TLS 证书**保持自 `v0.27.0` 起的原有行为：无需重载即可应用于新连接。
 - **用于回退到上游代理的上游镜像现在是 `nats:2.15.3-alpine`**：按[设备证书](./device-certificates.md)所述，设置 `server_image_repository = "nats"` 和 `server_image_tag = "2.15.3-alpine"`。如果你保留了这种回退准备，请将新标签加入镜像同步列表。
+- **仍在启动中的代理 Pod 被停止时，现在会立即停止。** 代理沿用上游 `nats-server` `v2.15.3` 的信号处理：在 JetStream 仍在恢复时请求的重载会在启动完成后执行，而 SIGTERM 或 Pod 的 preStop 钩子发送的 lame duck 请求会在此期间得到处理，不再排在它之后等待。在代理开始接受客户端之前到达的 lame duck 请求会被忽略，因此随后的 SIGTERM 会停止该 Pod。`nats-server -t --test_reload <文件>` 会报告配置文件能否在不重启的情况下重载（不能时退出码为 3）。
 
 ### v1.5.0 — 自动化变更先评审，代理审批绑定登录会话 {#v150-upgrade}
 
