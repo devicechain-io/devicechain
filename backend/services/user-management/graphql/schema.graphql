@@ -514,6 +514,8 @@ type TenantGovernance {
     """
     # Read by device-management when a profile carrying a calculated metric is published.
     calculatedMetricsPerProfile: Int
+    "Enabled detection rules across active profile versions; null inherits the platform default."
+    rulesPerTenant: Int
     """
     The most inbound integrations (network servers and webhook senders, each authenticated
     by its own bearer token) the tenant may hold. Set on the tenant's tier; there is no

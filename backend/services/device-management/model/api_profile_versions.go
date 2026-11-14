@@ -291,10 +291,17 @@ func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
 	// Insert the version and advance the active pointer atomically: if the pointer
 	// update failed after the insert we would leave an orphan version and devices
 	// resolving the stale one, so wrap both.
+	ceiling, err := api.rulesCeiling(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var evictions []membershipEviction
 	var changed bool
 	var activeSince time.Time
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockTenantCreates(tx, profile.TenantId, "active_rules"); err != nil {
+			return err
+		}
 		locked, err := lockProfile(tx, profile.ID)
 		if err != nil {
 			return err
@@ -329,6 +336,9 @@ func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
 					return err
 				}
 			}
+		}
+		if err := checkActiveRuleCount(tx, profile.ID, version.Snapshot, ceiling); err != nil {
+			return err
 		}
 		var maxVersion int32
 		if err = tx.Model(&DeviceProfileVersion{}).Where("device_profile_id = ?", profile.ID).Select("COALESCE(MAX(version), 0)").Scan(&maxVersion).Error; err != nil {
@@ -567,10 +577,17 @@ func (api *Api) RollbackDeviceProfileWithReason(ctx context.Context, token strin
 		return nil, err
 	}
 
+	ceiling, err := api.rulesCeiling(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var evictions []membershipEviction
 	var changed bool
 	var activeSince time.Time
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockTenantCreates(tx, profile.TenantId, "active_rules"); err != nil {
+			return err
+		}
 		locked, err := lockProfile(tx, profile.ID)
 		if err != nil {
 			return err
@@ -598,6 +615,9 @@ func (api *Api) RollbackDeviceProfileWithReason(ctx context.Context, token strin
 
 		floor, err := activationFloor(tx, profile.ID)
 		if err != nil {
+			return err
+		}
+		if err := checkActiveRuleCount(tx, profile.ID, target.Snapshot, ceiling); err != nil {
 			return err
 		}
 		activeSince = nextActivationInstant(floor)
