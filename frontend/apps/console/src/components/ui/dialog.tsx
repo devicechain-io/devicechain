@@ -7,6 +7,8 @@ import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 
+const DIALOG_OVERLAY_SLOT = 'dialog-overlay';
+
 export const Dialog = DialogPrimitive.Root;
 export const DialogTrigger = DialogPrimitive.Trigger;
 export const DialogClose = DialogPrimitive.Close;
@@ -24,7 +26,7 @@ export const DialogContent = React.forwardRef<
   const { t } = useTranslation('common');
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/80" />
+      <DialogPrimitive.Overlay data-slot={DIALOG_OVERLAY_SLOT} className="fixed inset-0 z-50 bg-black/80" />
       <DialogPrimitive.Content
         {...props}
         ref={ref}

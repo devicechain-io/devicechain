@@ -6,18 +6,18 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 
 /** The owner holds the issued value in memory and clears it only on acknowledgement. */
-export function RevealOnceDialog({ title, description, onDone, doneLabel, children, shot, contentClassName }: {
+export function RevealOnceDialog({ title, description, onDone, doneLabel, children, shot, className }: {
   title: string;
   description?: string;
   onDone: () => void;
   doneLabel: string;
   children: ReactNode;
   shot?: string;
-  contentClassName?: string;
+  className?: string;
 }) {
   return (
     <Dialog open>
-      <DialogContent dismissible={false} data-shot={shot} className={contentClassName}
+      <DialogContent dismissible={false} data-shot={shot} className={className}
         {...(description == null ? { 'aria-describedby': undefined } : {})}>
         <div className="flex flex-col gap-2">
           <DialogTitle className="text-lg font-semibold text-foreground">{title}</DialogTitle>

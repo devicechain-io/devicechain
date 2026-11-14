@@ -52,7 +52,7 @@ export function IntegrationTokenReveal({
       description={revealed.rotated ? t('revealRotatedBody', { token: revealed.integration.token }) : t('revealCreatedBody', { token: revealed.integration.token })}
       onDone={onClose}
       doneLabel={t('revealClose')}
-      contentClassName="max-w-2xl"
+      className="max-w-2xl"
     >
       <FormField label={t('revealTokenLabel')} htmlFor={TOKEN_INPUT_ID}>
         <div className="flex items-center gap-2">
