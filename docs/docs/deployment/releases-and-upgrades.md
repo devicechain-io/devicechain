@@ -760,6 +760,14 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
+#### Security: a device can no longer assign itself to a customer, area or asset {#v160-device-relationship-refused}
+
+- A `NewRelationship` event naming a tracked relationship type (the built-in `assigned`, or any type marked tracked) or the built-in `contains` is refused and recorded on the `failed-events` stream with reason `Invalid` on its first delivery, without retries. This changes what an accepted device event does; the [versioning policy](./versioning-policy.md) allows this for a security fix.
+- Assign devices with a claim code or the `createEntityRelationship` mutation.
+- Relationships devices created earlier are not removed. Review the tracked relationships of your devices.
+- Untracked types, including `member`, are still created, unless your tenant marked that type tracked. The `NewRelationship` event itself no longer carries the new target as an anchor: an untracked relationship is not ownership, so the event is scoped by the device's existing anchors, as its next telemetry event is.
+- During the rolling upgrade, pods still on v1.5 create the edge until they are replaced.
+
 #### Before you upgrade {#v160-before-upgrade}
 
 Review hand-edited instance configuration before rolling pods. These refusals are new since `v1.5.0`; invalid service settings stop startup and can leave pods crash-looping. Service keys below live under `functionalAreas.<area>.config`.
@@ -779,6 +787,10 @@ Review hand-edited instance configuration before rolling pods. These refusals ar
 | GKE `nats_jetstream_storage_class` | New brokers default to `premium-rwo` (`pd-ssd`) when that GKE class exists; a GKE `premium-rwo` class with a different disk type is refused. Explicit overrides win. Existing brokers/PVCs and upgrades keep their storage class; this does not migrate disks. |
 | `infrastructure.nats.shardGroups` | Opt-in tenant routing for the two ingest streams; absent preserves existing routing. Group streams multiply reservations by `count`, so budget capacity before enabling it. Enable only after the roll completes. |
 | `dcctl backup`, `dcctl backup inspect --verify`, `dcctl restore --plan` | **Preview** commands for local stream/object backup sets, byte verification and read-only restore planning. There is no restore apply command or coordinated database checkpoint. See [Exporting streams and object content](./disaster-recovery.md#export-streams-objects). |
+
+#### Automated action authorities {#v160-action-authorities}
+
+Authoring or publishing an automated action now requires the authority to perform it. Creating or updating a rule with a `sendCommand` action, and publishing or rolling back to a profile version whose enabled rules include one, requires `command:write` in addition to `device:write`. `httpCall` and `publish` actions require `connector:write`. A role that holds `device:write` alone can still author and publish rules that only raise alarms. Rules already published keep running; they are checked at the next publish or rollback. Review the roles that author automation before upgrading. Older `device-management` replicas do not enforce this until they are replaced.
 
 **Notification scheduling is bounded per tenant.** Four workers serve tenants in rotating order. Each tenant stops starting releases and escalations after twice the whole-dispatch budget (80 seconds at the defaults) while another tenant is waiting for a worker; a tenant nobody is waiting behind keeps going; an alarm already started keeps its full budget, and remaining alarms stay due for the next tick. Clear announcements run within each tenant job under their own budget. Channels that exhaust their timeout attempts are skipped for the rest of that tenant job; an escalation routed only to those channels keeps its tier and is retried next tick. The first probe can still spend a tier. No configuration change is needed, and existing configuration works throughout rolling upgrades.
 
