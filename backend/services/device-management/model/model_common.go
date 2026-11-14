@@ -131,6 +131,8 @@ func (EntityRelationship) DefaultOrder() string {
 // entity by its type (one of entity.Type) and token; both are resolved and
 // validated against the entity-type registry on write.
 type EntityRelationshipCreateRequest struct {
+	// DeviceAuthored is in-process provenance, absent from the GraphQL schema.
+	DeviceAuthored   bool
 	Token            string
 	SourceType       string
 	Source           string

@@ -805,6 +805,14 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
+#### Seguridad: un dispositivo ya no puede asignarse a un cliente, área o activo {#v160-device-relationship-refused}
+
+- Un evento `NewRelationship` que nombre un tipo de relación con seguimiento (el tipo integrado `assigned` o cualquier tipo marcado con seguimiento) o el tipo integrado `contains` se rechaza y se registra en el flujo `failed-events` con motivo `Invalid` en su primera entrega, sin reintentos. Esto cambia lo que hace un evento de dispositivo aceptado; la [política de versiones](./versioning-policy.md) lo permite para una corrección de seguridad.
+- Asigna los dispositivos con un código de reclamación o con la mutación `createEntityRelationship`.
+- Las relaciones creadas anteriormente por los dispositivos no se eliminan. Revisa las relaciones con seguimiento de tus dispositivos.
+- Los tipos sin seguimiento, incluido `member`, se siguen creando, salvo que tu tenant haya marcado ese tipo con seguimiento. El propio evento `NewRelationship` ya no lleva el nuevo destino como ancla: una relación sin seguimiento no es propiedad, así que el evento queda acotado por las anclas existentes del dispositivo, igual que su siguiente evento de telemetría.
+- Durante la actualización gradual, los pods que siguen en v1.5 crean la relación hasta que se sustituyen.
+
 #### ingress-nginx ya no acepta snippets de configuración {#v160-nginx-snippets-off}
 
 `dcctl install` desactiva los snippets de configuración en el controlador `ingress-nginx` que el clúster conserva y restablece su nivel de riesgo de anotaciones al valor predeterminado del controlador. Antes de aplicar cambios, la instalación se niega a continuar mientras algún Ingress de la clase de ese controlador lleve una anotación `*-snippet`, e identifica cada Ingress y anotación. Actualiza la instancia propietaria con `dcctl upgrade`, o elimina la anotación, y vuelve a ejecutar `dcctl install`.
