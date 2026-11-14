@@ -11,6 +11,8 @@ import (
 // Outcome label values for connector_dispatch_total. This is a fixed, small enum — the bounded
 // cardinality the ADR-023 G.3 lesson requires: never a per-tenant or per-connector value.
 const (
+	// outcomeThrottled counts deliveries that had to wait for a tenant slot.
+	outcomeThrottled = "throttled"
 	// outcomeSent — the outbound send succeeded (a 2xx for httpCall).
 	outcomeSent = "sent"
 	// outcomeRetry — a transient failure (send error/non-2xx, or a secret-resolve error that may be

@@ -5,77 +5,70 @@ package lpwan
 
 import (
 	"context"
-	"sync"
-	"sync/atomic"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
 	"github.com/stretchr/testify/require"
 )
 
-type flightDevices struct{ fakeDevices }
-
-func (*flightDevices) DevEUI(_ context.Context, tenant, _ string) (string, error) {
-	return tenant, nil
+type flightAck struct {
+	fakeAck
+	progress func() error
 }
 
-type flightEnqueuer struct {
-	started, fast chan struct{}
-	release       chan struct{}
-	hits          atomic.Int32
+func (a *flightAck) InProgress() error { return a.progress() }
+
+func TestSingleTenantDownlinkUsesSpareCapacity(t *testing.T) {
+	r := newRig(t, nil)
+	require.True(t, r.a.inFlight.TryAcquire("acme"))
+	ack := &flightAck{progress: func() error {
+		t.Fatal("a lone tenant must not be throttled")
+		return nil
+	}}
+	r.a.handle(context.Background(), messaging.NewConsumedMessage(subject, envelope(t, goodParams), 1, routed(), ack))
+	require.True(t, ack.acked)
+	require.Len(t, r.send.calls, 1)
+	require.Zero(t, r.m.get("throttled"))
 }
 
-func (e *flightEnqueuer) Enqueue(_ context.Context, _ connectorspec.LoRaWANDownlinkTarget, eui string, _ Params, _ time.Time) (string, error) {
-	e.hits.Add(1)
-	if eui == "acme" {
-		e.started <- struct{}{}
-		<-e.release
-	} else {
-		e.fast <- struct{}{}
+func TestThrottledDownlinkKeepsDeliveryOrAnswersUnsent(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "resumes", true: "final_progress_failure"}[fail], func(t *testing.T) {
+			r := newRig(t, nil)
+			require.True(t, r.a.inFlight.TryAcquire("acme"))
+			require.True(t, r.a.inFlight.TryAcquire("other"))
+			beats := 0
+			ack := &flightAck{progress: func() error {
+				beats++
+				require.Zero(t, r.claim.calls, "waiting must not claim the command")
+				require.Empty(t, r.send.calls)
+				if fail {
+					return errors.New("broker unavailable")
+				}
+				r.a.inFlight.Release("other")
+				return nil
+			}}
+			msg := messaging.NewConsumedMessage(subject, envelope(t, goodParams), messaging.MaxDeliver, routed(), ack)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			r.a.handle(ctx, msg)
+			require.Positive(t, beats, "must renew AckWait on the current delivery")
+			require.True(t, ack.acked)
+			require.Equal(t, 1, r.m.get("throttled"))
+			require.Len(t, r.resp.envs, 1)
+			if fail {
+				require.Zero(t, r.claim.calls)
+				require.Empty(t, r.send.calls)
+				require.Equal(t, cmddownlink.ReachUnsent, r.resp.envs[0].Reach)
+				require.False(t, r.resp.envs[0].Success)
+			} else {
+				require.Equal(t, 1, r.claim.calls)
+				require.Len(t, r.send.calls, 1)
+				require.True(t, r.resp.envs[0].Success)
+			}
+		})
 	}
-	return "q", nil
-}
-
-func TestSlowTenantLeavesDownlinkWorkersForOtherTenants(t *testing.T) {
-	r := newRig(t, func(o *Options) { o.Workers = 2 })
-	reader := &queueReader{ch: make(chan messaging.Message, 3)}
-	sender := &flightEnqueuer{started: make(chan struct{}, 3), fast: make(chan struct{}, 3), release: make(chan struct{})}
-	r.a.reader, r.a.sender, r.a.devices = reader, sender, &flightDevices{}
-	var once sync.Once
-	r.a.Start()
-	defer func() {
-		once.Do(func() { close(sender.release) })
-		r.a.Stop()
-	}()
-	first, excess, other := &fakeAck{}, &fakeAck{}, &fakeAck{}
-	makeMsg := func(tenant string, ack *fakeAck) messaging.Message {
-		return messaging.NewConsumedMessage("inst."+tenant+".device-commands.dev-1", envelope(t, goodParams), 1, routed(), ack)
-	}
-	reader.ch <- makeMsg("acme", first)
-	select {
-	case <-sender.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("first tenant did not start")
-	}
-	retry := makeMsg("acme", excess)
-	reader.ch <- retry
-	reader.ch <- makeMsg("other", other)
-	select {
-	case <-sender.fast:
-	case <-time.After(2 * time.Second):
-		t.Fatal("another tenant stalled behind the slow network server")
-	}
-	require.EqualValues(t, 2, sender.hits.Load(), "excess must not send")
-	once.Do(func() { close(sender.release) })
-	r.a.Stop()
-	require.True(t, first.acked)
-	require.True(t, other.acked)
-	require.False(t, excess.acked)
-	require.Equal(t, 2, r.claim.calls, "excess must not consume its dispatch claim")
-	require.Len(t, r.resp.envs, 2, "excess must not be answered as a terminal refusal")
-	r.a.handle(context.Background(), retry)
-	require.True(t, excess.acked, "completion must release the tenant slot")
-	require.EqualValues(t, 3, sender.hits.Load())
 }

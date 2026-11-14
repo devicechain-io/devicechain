@@ -359,12 +359,16 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 		return
 	}
 
-	// Do not wait while holding a shared worker. Excess stays unacked for AckWait-paced
-	// redelivery; Process returns its reader slot so another tenant can make progress.
+	// Keep the current delivery alive while waiting, including on MaxDeliver.
 	if !c.inFlight.TryAcquire(tenant) {
-		return
+		c.metrics.recordOutcome(action, outcomeThrottled)
+		if err := c.inFlight.Wait(c.procCtx, tenant, msg.InProgress); err != nil {
+			c.retryOrDeadLetter(tctx, msg, req.RuleID, tenant, action, err)
+			return
+		}
 	}
 	defer c.inFlight.Release(tenant)
+	tctx = messaging.WithAckDeadline(tctx, msg)
 
 	// Per-tenant egress rate gate (ADR-060 SD-3), applied BEFORE the expensive secret-resolve + send.
 	//

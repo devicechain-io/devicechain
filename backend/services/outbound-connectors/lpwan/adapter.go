@@ -26,6 +26,7 @@ import (
 
 // Result labels for lpwan_downlinks_total. A fixed enum: never a per-tenant or per-device value.
 const (
+	ResultThrottled = "throttled" // waited for a tenant's in-flight capacity
 	// ResultQueued: success carries UNANSWERED because the transport has no answer from the
 	// device, so it records no delivery evidence.
 	ResultQueued          = "queued"
@@ -51,6 +52,7 @@ const (
 
 // Results is every result label, so a metric can create its children at 0.
 var Results = []string{
+	ResultThrottled,
 	ResultQueued, ResultQueuedConfirmed, ResultPendingFailed, ResultRefusedParams, ResultRefusedExpired, ResultRefusedNoRoute, ResultRefusedNoLink,
 	ResultRefusedNoDevEUI, ResultRefusedConfirm, ResultRefusedRate, ResultUnsent, ResultUnanswered,
 	ResultNotServed, ResultPoison, ResultTenantGone, ResultClaimLost, ResultClaimFailed,
@@ -309,13 +311,6 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 		ack(msg)
 		return
 	}
-	// Admit before lookups and the claim. Excess remains unacked, unclaimed and
-	// unanswered for redelivery, without waiting on a shared worker.
-	if !a.inFlight.TryAcquire(tenant) {
-		return
-	}
-	defer a.inFlight.Release(tenant)
-
 	j := &job{tenant: tenant, device: env.DeviceToken, token: env.Token, nonce: env.DispatchNonce,
 		source: msg.Headers[cmddownlink.HeaderSource]}
 	if env.Payload != nil {
@@ -326,6 +321,18 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 			j.expires = t
 		}
 	}
+	// Renew AckWait while waiting before any lookups or claim. Contention must
+	// never spend deliveries until an unsent command silently times out.
+	if !a.inFlight.TryAcquire(tenant) {
+		a.count(ResultThrottled)
+		if err := a.inFlight.Wait(ctx, tenant, msg.InProgress); err != nil {
+			if msg.NumDelivered >= messaging.MaxDeliver {
+				a.refuse(msg, j, ResultUnsent, ReasonFailed, "could not wait for downlink capacity: "+err.Error())
+			}
+			return
+		}
+	}
+	defer a.inFlight.Release(tenant)
 
 	integration, ok := integrationOf(j.source)
 	if !ok {
