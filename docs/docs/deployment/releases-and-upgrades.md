@@ -758,6 +758,8 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 
+- **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 rows are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 8 per process before reading or parsing. Message admission uses the same caps and counts every batch entry; excess requests receive HTTP 429 with Retry-After. Tools that outlive an HTTP timeout keep their execution slots; further tool work can receive a retryable tool error. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.
+
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}

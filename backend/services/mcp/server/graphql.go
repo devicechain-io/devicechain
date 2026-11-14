@@ -18,8 +18,10 @@ import (
 const graphqlPort = 8080
 
 // maxGraphQLResponseBytes caps a downstream GraphQL response so a pathological
-// query result cannot exhaust memory (defence in depth; tool queries are bounded).
-const maxGraphQLResponseBytes = 8 << 20 // 8 MiB
+// query result cannot exhaust memory. Decoding, provenance marking and the SDK's
+// structured/text representations multiply these bytes; limitMessages also bounds
+// concurrent messages through response serialization.
+const maxGraphQLResponseBytes = 256 << 10 // 256 KiB
 
 // GraphQLClient calls the per-area DeviceChain GraphQL endpoints on behalf of the
 // MCP caller (ADR-047). It forwards the CALLER'S validated access token as the

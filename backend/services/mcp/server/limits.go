@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -52,6 +53,74 @@ const (
 	rpcRateLimited    = -32029
 )
 
+// Count messages, including every batch entry, until the HTTP response has been
+// serialized. A downstream-query semaphore would release too early: decoded results
+// and the SDK's text fallback remain live after the query returns. These fixed bounds
+// need no new config keys that older pods would reject during a rolling upgrade.
+const maxInFlightMessages = 8
+const maxCallerInFlightMessages = 4
+
+var activeMessages = &messageBudget{callers: make(map[string]int)}
+
+// Reserve a request slot before reading or parsing. Otherwise the early body-byte
+// release would leave concurrent parsers (including empty batches) unaccounted.
+var activeRequests = &messageBudget{callers: make(map[string]int)}
+
+type messageBudget struct {
+	mu      sync.Mutex
+	total   int
+	callers map[string]int
+}
+
+func (b *messageBudget) acquire(caller string, n int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if n > maxInFlightMessages-b.total || n > maxCallerInFlightMessages-b.callers[caller] {
+		return false
+	}
+	b.total += n
+	b.callers[caller] += n
+	return true
+}
+
+func (b *messageBudget) release(caller string, n int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.total -= n
+	b.callers[caller] -= n
+	if b.callers[caller] == 0 {
+		delete(b.callers, caller)
+	}
+}
+
+// bufferRequestBody uses core's shared read budget, but ends that reservation
+// before executing MCP. The buffered bytes are then bounded by the non-blocking
+// message admission below, rather than reserving a full MiB throughout a slow call.
+func bufferRequestBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A body on a long-lived SSE GET is counted too. Bodyless streams need
+		// no buffer; POSTs always count, even before their messages are known.
+		if r.Method == http.MethodPost || (r.Body != nil && r.Body != http.NoBody) {
+			caller := callerKey(r)
+			if !activeRequests.acquire(caller, 1) {
+				w.Header().Set("Connection", "close")
+				w.Header().Set("Retry-After", "1")
+				writeRPCError(w, http.StatusTooManyRequests, rpcRateLimited, nil,
+					"too many in-flight requests; retry shortly")
+				return
+			}
+			defer activeRequests.release(caller, 1)
+		}
+		var buffered *http.Request
+		core.BufferBody(http.HandlerFunc(func(_ http.ResponseWriter, read *http.Request) {
+			buffered = read
+		}), maxRequestBodyBytes).ServeHTTP(w, r)
+		if buffered != nil {
+			next.ServeHTTP(w, buffered)
+		}
+	})
+}
+
 // limitMessages is the handler that applies Limits in front of the MCP handler. It must
 // sit INSIDE the bearer check (it reads the verified subject from the request context)
 // and AFTER the body is buffered (it reads the body and puts it back).
@@ -88,6 +157,14 @@ func limitMessages(next http.Handler, l Limits) http.Handler {
 				"rate limit exceeded for this caller; retry after the interval in Retry-After")
 			return
 		}
+		caller := callerKey(r)
+		if !activeMessages.acquire(caller, n) {
+			w.Header().Set("Retry-After", "1")
+			writeRPCError(w, http.StatusTooManyRequests, rpcRateLimited, id,
+				"too many in-flight messages; at most 4 per caller and 8 per process (including batch entries); retry shortly")
+			return
+		}
+		defer activeMessages.release(caller, n)
 		next.ServeHTTP(w, r)
 	})
 }

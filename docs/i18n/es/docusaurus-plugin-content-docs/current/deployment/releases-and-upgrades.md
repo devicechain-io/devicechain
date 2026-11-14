@@ -803,6 +803,8 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 
+- **Límites de memoria de MCP:** se rechazan por completo las respuestas GraphQL de más de 256 KiB y las agregaciones de más de 1.000 filas; reduce el intervalo de fechas, selecciona una métrica o amplía los bloques temporales. Los POST y las solicitudes con cuerpo se limitan a 4 en curso por usuario y 8 por proceso antes de leer o analizar el cuerpo. La admisión de mensajes usa los mismos límites y cuenta cada entrada de un lote; las solicitudes adicionales reciben HTTP 429 con Retry-After. Las herramientas que siguen ejecutándose tras un timeout HTTP conservan sus plazas; nuevas llamadas pueden recibir un error que permite reintentar. La reserva de lectura del cuerpo se libera antes de ejecutar la herramienta; se mantiene el límite de 1 MiB por solicitud. No requiere cambios de configuración.
+
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
 #### Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación {#v160-broker-reload}
