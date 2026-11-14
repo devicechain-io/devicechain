@@ -18,7 +18,7 @@ Budget about half an hour, most of it waiting for the bootstrap.
 
 :::note What this page assumes
 You need `dcctl` plus four tools on your `PATH`: `docker`, `kubectl`,
-`terraform` also works). You do not need a cluster in advance. The details are under
+[`kind`](https://kind.sigs.k8s.io/) and [OpenTofu](https://opentofu.org/) (the `tofu` binary;
 `terraform` also works). You do not need a cluster in advance. The details are under
 [Prerequisites](#prerequisites) below.
 :::
@@ -27,9 +27,9 @@ You need `dcctl` plus four tools on your `PATH`: `docker`, `kubectl`,
 
 `dcctl install` and `dcctl bootstrap` each run a preflight first, and **stop** if one of the four
 tools is missing. A gap costs you the first ten seconds rather than ten minutes.
+
 - You do not need the `helm` command. `dcctl` carries the chart inside itself and installs it
   through Helm's Go library, and the preflight does not check for the binary.
-  Go library rather than the command, but the preflight checks for the binary regardless.
 - `ko` and `cloud-provider-kind` are only warnings. You need `ko` solely to build images from
   source (`--build`).
 - No cluster is needed in advance. `dcctl install local` looks for a kind cluster named
@@ -371,6 +371,56 @@ You now have a device end to end: registered, credentialed, reporting and querya
 
 `202`, `400` and `404` are terminal for that request: do not send it again unchanged. Retry a `429`
 and either kind of `503`, as described above.
+
+## Next: an alarm and a command {#next-an-alarm-and-a-command}
+
+Keep using `sensor-001` in `sim-demo`, signed in as `demo@sim.devicechain.local`. The device
+created in step 4 has no profile: it stores readings, but has no detection rules or declared
+commands. Refresh `DC_TOKEN` with step 3 if it has expired.
+
+### Raise your first alarm {#first-alarm}
+
+1. Under **Devices → Device Profiles**, create a profile with token `temp-probe-profile`, name
+   **Temperature probe profile** and category **sensor**. In **Metrics**, add a metric with token
+   and key `temperature`, type **DOUBLE** and unit `Cel`.
+2. Under **Devices → Device Types**, open `temp-probe`. On **Profile**, attach
+   `temp-probe-profile`. See [Device types and profiles](../user-guide/device-types-and-profiles.md).
+3. On the profile's **Detection Rules** tab, choose **New detection rule → Form**. Set token
+   `temperature-high`, name **Temperature high**, type **Threshold**, severity **Warning** and
+   **Enabled**. Set the condition to `temperature > 25` and add a **Raise alarm** action with alarm
+   key `temperature-high`. Save the rule, then **Publish** from **Versions**. A saved draft does
+   not run. See [Detection rules](../user-guide/detection-rules.md).
+4. Repeat the HTTP request in step 6 with `"temperature":"30.0"`. Under **Monitor → Alarms**,
+   find the active alarm for `sensor-001`. Send `"temperature":"21.5"` to clear it. Send these new
+   readings after publication; old readings are not replayed automatically.
+
+### Send your first command {#first-command}
+
+1. On the same profile's **Commands** tab, add a command with token and command key `identify`,
+   name **Identify**, impact **Normal** and no parameter schema. **Publish** the profile again.
+2. The HTTP `curl` in step 6 cannot receive commands. Before sending one, follow
+   [Receiving commands](../guides/connecting-a-device.md#receiving-commands) to start an MQTT
+   subscriber (install the Mosquitto clients and use the instance CA as described in that guide).
+   Use host `localhost`, client id `devicechain:sim-demo:sensor-001:sub`, username
+   `sim-demo:$DC_CRED_ID` (expand the shell variable), password `$DC_CRED_ID` for its `ACCESS_TOKEN`
+   credential, and topic `devicechain/sim-demo/device-commands/sensor-001`. Keep it connected. For local `localhost` connections, follow the guide's TLS hostname instructions as well.
+3. Issue this harmless test command on the tenant API:
+
+```bash
+curl -s -X POST http://localhost/api/command-delivery/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"mutation { createCommand(request: {token: \"first-identify\", deviceToken: \"sensor-001\", name: \"identify\", payload: \"{}\"}) { command { token status } rejection { code reason } } }"}'
+```
+
+4. Check `rejection`: it must be null and `command` must be present. Read the delivery envelope
+   in the subscriber. Follow [Responding to a command](../guides/connecting-a-device.md#responding-to-a-command)
+   to publish `success: true` on `devicechain/sim-demo/command-responses/sensor-001`, using the
+   same MQTT credentials, a different client-id suffix, and the envelope's actual `token` and
+   `dispatchNonce`. This acknowledges the test; no physical device acts.
+5. On `sensor-001`'s **Commands** tab, check that `first-identify` reaches **SUCCESSFUL**.
+   Without a response it remains **SENT** until timeout; without a receiving connection it may
+   remain **HELD**. [Sending a command](../guides/sending-commands.md) explains refusals, polling
+   and cancellation. To run the test again as a new command, choose a new command token.
 
 ## Where to go next {#where-to-go-next}
 

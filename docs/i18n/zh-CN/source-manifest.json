@@ -267,8 +267,8 @@
       "translationSha256": "3922f26f1bdf4302fe3dbf8b2bee1e24600a055f8fb193183b57edc7f069c98e"
     },
     "guides/sending-commands.md": {
-      "sourceSha256": "290b0c7e6ee017df5f0dcf721e2c4b12e7fcbd2b739fe3c6730ffe0ceb900b25",
-      "translationSha256": "31d5fed352225f2a6ad3001b3314cac07904f37da91008bd2613837eb90c7033"
+      "sourceSha256": "07622b79499402cf9049e915b7a3bb0b0670d618c7a5d751f12c558201831bfd",
+      "translationSha256": "a22655f26d3ceab829788673d32bba3a1adacfa399370e2c8bd4e1fc797c40b0"
     },
     "guides/signed-webhooks.md": {
       "sourceSha256": "37b2f7e3183aa5e0678ecb056ee4b787400a7c659948865a54a3275d606c064e",
@@ -307,12 +307,12 @@
       "translationSha256": "88e1592fd166a547ba64dea3622bc2f8d64c7fd0081ab57bc3208330583e57c4"
     },
     "quickstart/feature-tour.md": {
-      "sourceSha256": "ef233303d050d17df4655acc5cc3963f2f70ba1eb7238a0655f32baf4e9ff0c9",
-      "translationSha256": "73a18abed54cea610106da4746bc30677ce9afb0bbe07524ec3535e4113519bb"
+      "sourceSha256": "f25cc5022a688cda0123e63c3ec364c8d3aa32bd185a9b2ee1a803e508bdc243",
+      "translationSha256": "6376f182ce42bf34e1945d9b315f5ee2602ab8de46473a481133452ce2695608"
     },
     "quickstart/first-device.md": {
-      "sourceSha256": "ed45bb9a800789d3890a91ffe145d859238550f4ccec93d0906b685dd38ed06a",
-      "translationSha256": "56899436802f5e1aa1013b4186cb81d083174d6eefb1e3f2b78c6636f4e53e6d"
+      "sourceSha256": "7feb8b03ca56f9c3b48971da29a937812a89feeb102d4a2f73fa6d83ccd89c23",
+      "translationSha256": "77380404031e09dba84155fc74711db682c6ba6cd2d6c8c1d2eb4886599a0584"
     },
     "reference/csharp-sdk.md": {
       "sourceSha256": "7c2ff25f32b4e14b3d51c27a5729ab0bd08c6e90302dc5ab1ea1bbf7be73ae50",

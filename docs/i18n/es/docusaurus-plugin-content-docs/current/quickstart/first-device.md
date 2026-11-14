@@ -365,6 +365,56 @@ Ya tienes un dispositivo de principio a fin: registrado, con credencial, reporta
 `202`, `400` y `404` son terminales para esa petición: no la vuelvas a enviar sin cambios. Reintenta
 un `429` y cualquiera de los dos tipos de `503`, como se describe arriba.
 
+## A continuación: una alarma y un comando {#next-an-alarm-and-a-command}
+
+Sigue con `sensor-001` en `sim-demo`, con la sesión de `demo@sim.devicechain.local`. El dispositivo
+creado en el paso 4 no tiene perfil: almacena lecturas, pero no tiene reglas de detección ni comandos
+declarados. Renueva `DC_TOKEN` con el paso 3 si ha caducado.
+
+### Generar tu primera alarma {#first-alarm}
+
+1. En **Devices → Device Profiles**, crea un perfil con token `temp-probe-profile`, nombre
+   **Temperature probe profile** y categoría **sensor**. En **Metrics**, añade una métrica con token
+   y clave `temperature`, tipo **DOUBLE** y unidad `Cel`.
+2. En **Devices → Device Types**, abre `temp-probe`. En **Profile**, adjunta `temp-probe-profile`.
+   Consulta [Tipos de dispositivo y perfiles](../user-guide/device-types-and-profiles.md).
+3. En **Detection Rules** del perfil, elige **New detection rule → Form**. Indica token
+   `temperature-high`, nombre **Temperature high**, tipo **Threshold**, severidad **Warning** y
+   **Enabled**. Configura la condición `temperature > 25` y añade una acción **Raise alarm** con
+   clave de alarma `temperature-high`. Guarda la regla y elige **Publish** en **Versions**. Un
+   borrador guardado no se ejecuta. Consulta [Reglas de detección](../user-guide/detection-rules.md).
+4. Repite la petición HTTP del paso 6 con `"temperature":"30.0"`. En **Monitor → Alarms**, busca
+   la alarma activa de `sensor-001`. Envía `"temperature":"21.5"` para resolverla. Envía estas lecturas
+   nuevas después de publicar; las anteriores no se reproducen automáticamente.
+
+### Enviar tu primer comando {#first-command}
+
+1. En **Commands** del mismo perfil, añade un comando con token y clave `identify`, nombre
+   **Identify**, impacto **Normal** y sin esquema de parámetros. Vuelve a **Publish** el perfil.
+2. El `curl` HTTP del paso 6 no recibe comandos. Antes de enviar uno, sigue
+   [Recibir comandos](../guides/connecting-a-device.md#receiving-commands) para iniciar un suscriptor
+   MQTT (instala los clientes Mosquitto y usa la CA de la instancia como indica esa guía).
+   Usa host `localhost`, id de cliente `devicechain:sim-demo:sensor-001:sub`, usuario
+   `sim-demo:$DC_CRED_ID` (expande la variable), contraseña `$DC_CRED_ID` para su credencial
+   `ACCESS_TOKEN` y tema `devicechain/sim-demo/device-commands/sensor-001`. Déjalo conectado. Para conexiones locales a `localhost`, sigue también las instrucciones de la guía sobre el nombre de host TLS.
+3. Emite este comando de prueba inocuo en la API del inquilino:
+
+```bash
+curl -s -X POST http://localhost/api/command-delivery/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"mutation { createCommand(request: {token: \"first-identify\", deviceToken: \"sensor-001\", name: \"identify\", payload: \"{}\"}) { command { token status } rejection { code reason } } }"}'
+```
+
+4. Comprueba `rejection`: debe ser null y debe existir `command`. Lee el sobre de entrega en el
+   suscriptor. Sigue [Responder a un comando](../guides/connecting-a-device.md#responding-to-a-command)
+   para publicar `success: true` en `devicechain/sim-demo/command-responses/sensor-001`, con las
+   mismas credenciales MQTT, otro sufijo de id de cliente y los valores reales de `token` y
+   `dispatchNonce` del sobre. Esto confirma la prueba; no actúa ningún dispositivo físico.
+5. En **Commands** de `sensor-001`, comprueba que `first-identify` alcanza **SUCCESSFUL**.
+   Sin respuesta permanece **SENT** hasta agotar el plazo; sin conexión receptora puede permanecer
+   **HELD**. [Enviar un comando](../guides/sending-commands.md) explica rechazos, consultas y
+   cancelación. Para repetir la prueba como un comando nuevo, elige otro token de comando.
+
 ## Adónde ir después {#where-to-go-next}
 
 - **Ejecuta una flota simulada.** Un dispositivo no es una flota. El `dcctl sim create` del paso 2
