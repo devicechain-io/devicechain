@@ -14,7 +14,7 @@
 
 import '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { gqlMock, toastMock } = vi.hoisted(() => ({ gqlMock: vi.fn(), toastMock: vi.fn() }));
@@ -390,5 +390,40 @@ describe('CommandBatchDetailPage maintenance-window hold', () => {
     await screen.findByText('dev-a');
     expect(screen.queryByTestId('batch-waiting')).toBeNull();
     expect(screen.queryByTestId('command-waiting')).toBeNull();
+  });
+});
+
+describe('detail token changes', () => {
+  it.each([false, true])('drops the previous batch while its retry loads (failure=%s)', async (fail) => {
+    let resolve!: (value: unknown) => void;
+    let reject!: (error: Error) => void;
+    const pending = new Promise((yes, no) => { resolve = yes; reject = no; });
+    gqlMock.mockImplementation((_service: string, document: unknown, variables: { tokens?: string[] }) => {
+      if (String(document).includes('query CommandBatchesByToken')) {
+        return variables.tokens?.[0] === 'batch-2' ? pending : Promise.resolve({
+          commandBatchesByToken: [batch({ retries: ['batch-2'] })],
+        });
+      }
+      return Promise.resolve({ commands: { results: [], pagination: { pageStart: 0, pageEnd: 0, totalRecords: 0 } } });
+    });
+    render(<ConfirmProvider><MemoryRouter initialEntries={['/command-batches/batch-1']}>
+      <Link to="/command-batches/batch-2">Next batch</Link>
+      <Routes><Route path="/command-batches/:token" element={<CommandBatchDetailPage />} /></Routes>
+    </MemoryRouter></ConfirmProvider>);
+    await screen.findByText('Summary');
+    fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+    await screen.findByText('Retry unsuccessful devices');
+    fireEvent.click(screen.getByRole('link', { name: 'Next batch' }));
+    await waitFor(() => expect(screen.queryByText('Summary')).toBeNull());
+    expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
+    if (fail) {
+      reject(new Error('offline'));
+      await screen.findByText('Failed to load data.');
+      expect(screen.queryByText('Summary')).toBeNull();
+    } else {
+      resolve({ commandBatchesByToken: [batch({ token: 'batch-2', name: 'retry command' })] });
+      await screen.findByText('retry command');
+      expect(screen.queryByText('Retry unsuccessful devices')).toBeNull();
+    }
   });
 });
