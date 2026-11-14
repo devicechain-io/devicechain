@@ -805,6 +805,12 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
+#### ingress-nginx ya no acepta snippets de configuración {#v160-nginx-snippets-off}
+
+`dcctl install` desactiva los snippets de configuración en el controlador `ingress-nginx` que el clúster conserva y restablece su nivel de riesgo de anotaciones al valor predeterminado del controlador. Antes de aplicar cambios, la instalación se niega a continuar mientras algún Ingress de la clase de ese controlador lleve una anotación `*-snippet`, e identifica cada Ingress y anotación. Actualiza la instancia propietaria con `dcctl upgrade`, o elimina la anotación, y vuelve a ejecutar `dcctl install`.
+
+Ningún chart desde `v0.25.2` establece snippets. Los clústeres nuevos, que solo ejecutan Traefik, no se ven afectados. Este cambio llega a cada clúster en su siguiente `dcctl install`.
+
 #### Antes de actualizar {#v160-before-upgrade}
 
 Revise la configuración de instancia editada a mano antes de desplegar los pods. Estos rechazos son nuevos desde `v1.5.0`; los ajustes de servicio inválidos impiden el arranque y pueden dejar los pods reiniciándose. Las claves de servicio siguientes van bajo `functionalAreas.<area>.config`.
@@ -1788,9 +1794,7 @@ conjunto de claves y emite su token en el puerto interno. Consulta
 
 - **El chart ya no fija ningún snippet de configuración de nginx.**
 - **El controlador de ingress que instala `dcctl install` no cambia en esta versión** y sigue aceptando
-  snippets, porque las instancias aún no actualizadas dependen de ellos. Una versión posterior los
-  desactiva, tras una comprobación de `dcctl install` que se niega a continuar mientras algún Ingress de la
-  clase del controlador siga llevando una anotación `*-snippet`.
+  snippets, porque las instancias aún no actualizadas dependen de ellos. [v1.6.0 los desactiva](#v160-nginx-snippets-off), tras una comprobación previa de `dcctl install`.
 - **Los verificadores de tokens externos no se ven afectados:** usan el `jwks_uri` de los metadatos del
   servidor de autorización, `/oauth/jwks`, que sigue siendo público.
 

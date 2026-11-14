@@ -516,6 +516,12 @@ dcctl bootstrap local devicechain
 
 `v1.6.0` 是从 `v1.5.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
 
+#### ingress-nginx 不再接受配置片段 {#v160-nginx-snippets-off}
+
+`dcctl install` 会关闭集群保留的 `ingress-nginx` 控制器上的配置片段，并将其注解风险级别恢复为控制器的默认值。在应用更改前，只要该控制器类的任何 Ingress 带有 `*-snippet` 注解，安装就会拒绝继续，并列出每个 Ingress 和注解。请使用 `dcctl upgrade` 升级所属实例，或移除该注解，然后重新运行 `dcctl install`。
+
+自 `v0.25.2` 起，没有任何 chart 设置配置片段。仅运行 Traefik 的新集群不受影响。此更改会在集群下一次运行 `dcctl install` 时生效。
+
 #### 升级前 {#v160-before-upgrade}
 
 滚动更新 Pod 前，请检查手工编辑的实例配置。以下拒绝条件均为 `v1.5.0` 之后新增；无效的服务设置会阻止启动，可能导致 Pod 反复崩溃重启。下列服务键位于 `functionalAreas.<area>.config` 下。
@@ -1467,8 +1473,7 @@ chart 的 API ingress 上的一个 nginx 配置片段（snippet）。**因此，
 
 - **chart 不再设置任何 nginx 配置片段。**
 - **`dcctl install` 安装的 ingress 控制器在本版本中保持不变**，仍接受配置片段，因为尚未升级的实例依赖
-  它们。后续版本会关闭配置片段，并由 `dcctl install` 的检查把关：只要该控制器类的任何 Ingress 仍带有
-  `*-snippet` 注解，它就拒绝继续。
+  它们。[v1.6.0 会关闭配置片段](#v160-nginx-snippets-off)，并由 `dcctl install` 的预检把关。
 - **外部令牌校验方不受影响：**它们使用授权服务器元数据中的 `jwks_uri`，即 `/oauth/jwks`，该端点仍然公开。
 
 #### 预期情况 {#v0252-during}

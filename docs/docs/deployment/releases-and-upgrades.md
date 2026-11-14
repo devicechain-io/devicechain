@@ -760,6 +760,12 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
+#### ingress-nginx no longer accepts configuration snippets {#v160-nginx-snippets-off}
+
+`dcctl install` turns configuration snippets off on a cluster's retained `ingress-nginx` controller and returns its annotations risk level to the controller default. Before applying, install refuses while any Ingress of that controller's class carries a `*-snippet` annotation, naming each Ingress and annotation. Upgrade the instance that owns it with `dcctl upgrade`, or remove the annotation, then re-run `dcctl install`.
+
+No chart since `v0.25.2` sets a snippet. Fresh clusters, which run Traefik only, are unaffected. This change reaches a cluster at its next `dcctl install`.
+
 #### Before you upgrade {#v160-before-upgrade}
 
 Review hand-edited instance configuration before rolling pods. These refusals are new since `v1.5.0`; invalid service settings stop startup and can leave pods crash-looping. Service keys below live under `functionalAreas.<area>.config`.
@@ -1747,9 +1753,7 @@ internal port. See [Endpoints that never leave the cluster](../concepts/security
 
 - **The chart no longer sets an nginx configuration snippet.**
 - **The ingress controller `dcctl install` sets up is unchanged in this release** and still accepts
-  snippets, because instances not yet upgraded rely on them. A later release turns snippets off, behind a
-  `dcctl install` check that refuses while any Ingress of the controller's class still carries a
-  `*-snippet` annotation.
+  snippets, because instances not yet upgraded rely on them. [v1.6.0 turns snippets off](#v160-nginx-snippets-off), behind a `dcctl install` preflight.
 - **External token verifiers are unaffected:** they use the `jwks_uri` in the authorization-server
   metadata, `/oauth/jwks`, which stays public.
 
