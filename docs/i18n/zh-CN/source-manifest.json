@@ -127,8 +127,8 @@
       "translationSha256": "a1c4e652126859cc06e7b979f668a9b2cae3499184b5659c8cf723e84a70083e"
     },
     "deployment/disaster-recovery.md": {
-      "sourceSha256": "af86f66adfab9fa7324c206b07833f3c0c23d3efc4082282617203a8acb3217b",
-      "translationSha256": "f2612a43a063f3039f29524c19f9d8b72dff578644218df7f84d7eb1c0ec70d8"
+      "sourceSha256": "97fa04d2f4c8d23f1497539a0db15c8342d5ffda6add632c7a6663b06c0571cd",
+      "translationSha256": "cad1398edc39527c172c5dfcbe46a2ed8ac98a87de6a96ae868e873d9378f7e5"
     },
     "deployment/edge-services.md": {
       "sourceSha256": "a0f2c648d70bcfd79b8eabb2ae1b05df72e4c1c8f71d13850fb8f9661e00813b",
@@ -155,8 +155,8 @@
       "translationSha256": "c49d15ee37f57cbd3e52e1c97342e014ad6fc8b84b0db0f59fbcdf9b7cd6e0da"
     },
     "deployment/releases-and-upgrades.md": {
-      "sourceSha256": "326b3cc3b3a52c81983af59a689a9c1a16d4c3f99eed25ab44e016cf30cc597f",
-      "translationSha256": "2e4c496c6a31a1e8f955cdea36b1d6571fc15e366bd8daef32a241580effbcb5"
+      "sourceSha256": "61c8b01f7a7611c4451068d139fca765613b786fb3fd99d38d386e1c44122b5f",
+      "translationSha256": "aa0a6bbaeff07b8b220f8edf8feca71f4b3f4c16b5e9728861ea5deeb853cba6"
     },
     "deployment/security-process.md": {
       "sourceSha256": "8a0f79d6d26c39d5f1483a7376ce17e965b5868d437e9534b8288312b5cce500",
