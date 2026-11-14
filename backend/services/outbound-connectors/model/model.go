@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/devicechain-io/dc-event-processing/connectorwire"
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -147,7 +148,7 @@ type ConnectorSearchResults struct {
 // connector's IMMUTABLE numeric id (not its token) so a token rename keeps the same
 // credential bound (rename-safe, mirroring notification's ChannelSecretName).
 func ConnectorSecretName(id uint) string {
-	return fmt.Sprintf("connector/%d", id)
+	return fmt.Sprintf("%s%d", connectorwire.ConnectorSecretPrefix, id)
 }
 
 // ConnectorSecretRef builds the tenant-scoped SecretRef for a connector's outbound

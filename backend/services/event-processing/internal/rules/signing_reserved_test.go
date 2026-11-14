@@ -24,3 +24,18 @@ func TestCompileRejectsASigningKeyAsABearerCredential(t *testing.T) {
 		t.Fatalf("a signing handle is not restricted: %v", err)
 	}
 }
+
+// Connector credentials are reserved, while ordinary HTTP credential handles remain valid.
+func TestValidateHTTPCallRejectsConnectorCredential(t *testing.T) {
+	for _, handle := range []string{"connector/7", "connector/anything"} {
+		err := validateHTTPCall("rule", 0, &HTTPCallAction{URL: "https://x/y", SecretRef: handle})
+		if err == nil || !strings.Contains(err.Error(), "connector credentials") {
+			t.Errorf("handle %q: want connector credential refusal, got %v", handle, err)
+		}
+	}
+	for _, handle := range []string{"hooks/prod", "Connector/7", "connector", "http-credential/hooks/prod"} {
+		if err := validateHTTPCall("rule", 0, &HTTPCallAction{URL: "https://x/y", SecretRef: handle}); err != nil {
+			t.Errorf("ordinary handle %q: %v", handle, err)
+		}
+	}
+}
