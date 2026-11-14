@@ -516,6 +516,14 @@ dcctl bootstrap local devicechain
 
 `v1.6.0` 是从 `v1.5.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
 
+#### 安全：设备不能再将自身分配给客户、区域或资产 {#v160-device-relationship-refused}
+
+- 如果 `NewRelationship` 事件指定了跟踪关系类型（内置 `assigned` 或任何标记为跟踪的类型）或内置 `contains`，则在第一次投递时拒绝该事件，并以原因 `Invalid` 记录到 `failed-events` 流，不会重试。这改变了已接受的设备事件的行为；[版本策略](./versioning-policy.md)允许安全修复作出此类更改。
+- 请使用认领码或 `createEntityRelationship` mutation 分配设备。
+- 设备此前创建的关系不会被删除。请检查设备的跟踪关系。
+- 非跟踪类型（包括 `member`）仍会被创建，除非租户已将该类型标记为跟踪。`NewRelationship` 事件本身不再把新目标作为锚点携带：非跟踪关系不代表归属，因此该事件按设备现有的锚点限定范围，与其下一个遥测事件相同。
+- 滚动升级期间，仍运行 v1.5 的 Pod 在被替换之前仍会创建该关系。
+
 - **升级说明：** 每个副本的 OTA 下载现在限制每个（租户、设备、分配）最多一个进行中的流。只有当其他租户占用下载名额时，已达到或超过 `updates.maxConcurrentDownloads` 一半的租户（向下取整，至少一个；默认总数为 16 时为八个）才会被拒绝启动新流。单个租户可以使用全部名额。超出限制的请求返回现有的 503 busy 响应和 `Retry-After: 5`；请在该延迟后重试。无需更改配置。
 
 #### 升级前 {#v160-before-upgrade}
@@ -559,6 +567,12 @@ dcctl bootstrap local devicechain
 #### 代理操作的指标和告警（Preview） {#v160-agent-metrics}
 
 `device-management` 现在会报告代理操作：按类型和结果统计的提议、按结果统计的批准、按类型和结果统计的执行及其耗时，以及已过期的提议。Platform 看板新增 **Agent actions (preview)** 一行，并新增警告级告警 `AgentExecutionsFailing`，在最终批准持续无法完成时触发。拒绝不会触发该告警：依赖变化、策略拒绝、紧急停止栅栏关闭或批准人被拒绝都会计入各自的结果。这些指标列在[指标参考](./metrics-reference.md)中，该告警在[告警处理手册](./alert-runbook.md#agentexecutionsfailing)中有对应条目。与代理操作一样，它们属于 Preview：名称和标签仍可能在次要版本中变化。
+
+#### 控制台标签页不再沿用其他标签页的登录会话 {#v160-console-tab-session}
+
+控制台标签页的会话结束后，不再沿用其他标签页为不同租户或用户开启的会话，而是返回登录页面。
+
+- **无需操作。**
 
 ### v1.5.0 — 自动化变更先评审，代理审批绑定登录会话 {#v150-upgrade}
 

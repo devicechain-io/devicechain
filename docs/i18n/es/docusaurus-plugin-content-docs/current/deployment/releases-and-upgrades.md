@@ -805,6 +805,14 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
+#### Seguridad: un dispositivo ya no puede asignarse a un cliente, área o activo {#v160-device-relationship-refused}
+
+- Un evento `NewRelationship` que nombre un tipo de relación con seguimiento (el tipo integrado `assigned` o cualquier tipo marcado con seguimiento) o el tipo integrado `contains` se rechaza y se registra en el flujo `failed-events` con motivo `Invalid` en su primera entrega, sin reintentos. Esto cambia lo que hace un evento de dispositivo aceptado; la [política de versiones](./versioning-policy.md) lo permite para una corrección de seguridad.
+- Asigna los dispositivos con un código de reclamación o con la mutación `createEntityRelationship`.
+- Las relaciones creadas anteriormente por los dispositivos no se eliminan. Revisa las relaciones con seguimiento de tus dispositivos.
+- Los tipos sin seguimiento, incluido `member`, se siguen creando, salvo que tu tenant haya marcado ese tipo con seguimiento. El propio evento `NewRelationship` ya no lleva el nuevo destino como ancla: una relación sin seguimiento no es propiedad, así que el evento queda acotado por las anclas existentes del dispositivo, igual que su siguiente evento de telemetría.
+- Durante la actualización gradual, los pods que siguen en v1.5 crean la relación hasta que se sustituyen.
+
 - **Nota de actualización:** Las descargas OTA permiten un flujo simultáneo por (inquilino, dispositivo, asignación) en cada réplica. Mientras otro inquilino ocupe un cupo, un inquilino que alcance o supere la mitad de `updates.maxConcurrentDownloads` (redondeada hacia abajo, mínimo uno; ocho con el valor predeterminado de 16) no puede iniciar otro flujo. Un único inquilino puede usar todos los cupos. Las solicitudes que excedan estos límites reciben la respuesta 503 de ocupado con `Retry-After: 5`; reintente tras ese plazo. No se requiere cambiar la configuración.
 
 #### Antes de actualizar {#v160-before-upgrade}
@@ -848,6 +856,12 @@ Un fallo del decodificador de carga útil que se vuelve a entregar (por ejemplo,
 #### Métricas y una alerta para las acciones de agentes (Preview) {#v160-agent-metrics}
 
 `device-management` informa ahora de las acciones de agentes: propuestas por tipo y resultado, aprobaciones por resultado, ejecuciones por tipo y resultado con su duración, y propuestas que caducaron. El panel Platform incorpora una fila **Agent actions (preview)**, y una nueva alerta de aviso, `AgentExecutionsFailing`, se dispara cuando las aprobaciones finales no llegan a completarse de forma continuada. Las denegaciones no la disparan: un cambio de dependencia, una denegación de la política, una barrera de desactivación cerrada o una denegación del aprobador se cuentan con su propio resultado. Las métricas figuran en la [referencia de métricas](./metrics-reference.md), y la alerta tiene una entrada en el [manual de alertas](./alert-runbook.md#agentexecutionsfailing). Como las acciones de agentes, están en Preview: los nombres y las etiquetas aún pueden cambiar en una versión menor.
+
+#### Una pestaña de la consola ya no continúa con el inicio de sesión de otra pestaña {#v160-console-tab-session}
+
+Una pestaña de la consola cuya sesión ha terminado ya no continúa con una sesión que otra pestaña abrió para otro inquilino o usuario; vuelve al inicio de sesión.
+
+- **No es necesario hacer nada.**
 
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
 

@@ -178,6 +178,55 @@ describe('a session that can no longer be refreshed', () => {
   });
 
   it.each([
+    ['a different tenant', jwt({ tenant: 'other', username: 'alice', exp: future }), false],
+    ['a different username', jwt({ tenant: 'acme', username: 'bob', exp: future }), false],
+    ['an undecodable access token', 'invalid', false],
+    ['an undecodable own access token', freshAccess, true],
+  ])('does not adopt a pair another tab stored for %s', async (_label, accessToken, invalidOwn) => {
+    window.localStorage.setItem('dc-auth', JSON.stringify({
+      accessToken: invalidOwn ? 'invalid' : jwt({ tenant: 'acme', username: 'alice', exp: past }),
+      refreshToken: staleRefresh,
+    }));
+    const otherPair = JSON.stringify({ accessToken, refreshToken: freshRefresh });
+    h.refresh.mockImplementation(async () => {
+      window.localStorage.setItem('dc-auth', otherPair);
+      throw coded('UNAUTHENTICATED');
+    });
+    mount();
+    await act(async () => {
+      await resolveAuthToken().catch(() => null);
+    });
+    expect(h.refresh).toHaveBeenCalledOnce();
+    expect(auth.isAuthenticated).toBe(false);
+    expect(auth.claims).toBeNull();
+    expect(window.localStorage.getItem('dc-auth')).toBe(otherPair);
+    expect(window.sessionStorage.getItem('dc-session-expired')).toBe('1');
+  });
+
+  it('adopts a refreshed pair for the same named user and tenant', async () => {
+    window.localStorage.setItem('dc-auth', JSON.stringify({
+      accessToken: jwt({ tenant: 'acme', username: 'alice', exp: past }),
+      refreshToken: staleRefresh,
+    }));
+    const pair = {
+      accessToken: jwt({ tenant: 'acme', username: 'alice', exp: future }),
+      refreshToken: freshRefresh,
+    };
+    h.refresh.mockImplementation(async () => {
+      window.localStorage.setItem('dc-auth', JSON.stringify(pair));
+      throw coded('UNAUTHENTICATED');
+    });
+    mount();
+    await act(async () => {
+      await resolveAuthToken().catch(() => null);
+    });
+    expect(auth.isAuthenticated).toBe(true);
+    expect(auth.claims).toMatchObject({ tenant: 'acme', username: 'alice' });
+    expect(stored('dc-auth')).toEqual(pair);
+    expect(window.sessionStorage.getItem('dc-session-expired')).toBeNull();
+  });
+
+  it.each([
     ['MFA_REQUIRED', 'mfaRequired'],
     ['MFA_ENROLLMENT_REQUIRED', 'mfaEnrollmentRequired'],
     ['SSO_REQUIRED', 'ssoRequired'],
