@@ -55,9 +55,10 @@ EXCEPTIONS=(
 # Library versions whose nats Helm chart has not been published yet, mapped to the chart the
 # deployment stays on meanwhile, with why. The broker image is DeviceChain's own build and the
 # chart's default image is overridden, so the chart contributes templates only; a server-only
-# patch release can precede its chart. An entry whose library version is no longer the
-# broker's is stale and FAILS, so the list can only shrink. Move the chart pins and delete the
-# entry once the chart is published.
+# patch release can precede its chart. All chart pins must use the lag target while an entry
+# exists. An entry is stale and FAILS if its library version is no longer the broker's or no
+# chart pin uses its lag target. Move the chart pins and delete the entry once the chart is
+# published.
 CHART_LAGS=(
   # nats-server 2.15.3 (carries the auth-callout reload fix); nats chart 2.15.3 is not
   # published, and chart 2.15.2 has not been adopted: the deployment stays on chart 2.15.1,
@@ -104,13 +105,14 @@ check() {
     "deploy/opentofu/modules/nats/main.tf:chart_version"
     "deploy/opentofu/instance/variables.tf:nats_chart_version"
   )
-  local spec file var lag="" l
+  local spec file var lag="" l chart_expected lag_seen=0
   for l in "${CHART_LAGS[@]}"; do
     [ "${l%%=*}" = "$ours" ] && lag="${l#*=}"
   done
   for l in "${CHART_LAGS[@]}"; do
     [ "${l%%=*}" = "$ours" ] || { echo "STALE CHART LAG: $l; the broker is on $ours, remove it from CHART_LAGS" >&2; bad=1; }
   done
+  chart_expected="${lag:-$ours}"
   for spec in "${chart_pins[@]}"; do
     file="${spec%%:*}"
     var="${spec#*:}"
@@ -125,11 +127,16 @@ check() {
       continue
     fi
     n=$((n + 1))
-    if [ "${v#v}" != "$ours" ] && [ "${v#v}" != "$lag" ]; then
-      echo "SKEW: $file $var defaults to $v" >&2
+    [ "${v#v}" = "$lag" ] && lag_seen=1
+    if [ "${v#v}" != "$chart_expected" ]; then
+      echo "SKEW: $file $var defaults to $v; all chart pins must use $chart_expected" >&2
       bad=1
     fi
   done
+  if [ -n "$lag" ] && [ "$lag_seen" -eq 0 ]; then
+    echo "STALE CHART LAG: $ours=$lag; no chart pin uses $lag any more; delete it from CHART_LAGS" >&2
+    bad=1
+  fi
 
   # 3. Every upstream nats-server image a tracked file names: `nats:<ver>` references and
   #    the rollback tag "<ver>-alpine" in the nats module and the instance root. An image
@@ -222,17 +229,60 @@ fresh() {
   (cd "$st/t" && git init -q && git add -A >/dev/null 2>&1)
 }
 expect_fail() {
-  local label="$1"
-  if check "$st/t" >/dev/null 2>&1; then
+  local label="$1" diagnostic="${2:-}" output
+  if output="$(check "$st/t" 2>&1)"; then
     echo "SELF-TEST FAILED: $label was not caught" >&2
+    exit 1
+  fi
+  if [ -n "$diagnostic" ] && ! printf '%s\n' "$output" | grep -Fq "$diagnostic"; then
+    echo "SELF-TEST FAILED: $label did not report '$diagnostic': $output" >&2
     exit 1
   fi
   echo "  ok: $label is caught"
 }
 
+# Plant a lag independently of the real exception list, so these cases still run after
+# the current chart catches up and its exception is deleted.
+chart_lag_fixture() {
+  fresh
+  fixture_broker="$(awk '$1 == "github.com/nats-io/nats-server/v2" { print $2 } $1 == "require" && $2 == "github.com/nats-io/nats-server/v2" { print $3 }' "$st/t/backend/broker/dc-nats-server/go.mod")"
+  fixture_broker="${fixture_broker#v}"
+  CHART_LAGS=("$fixture_broker=0.0.1")
+  set_chart_pin deploy/opentofu/modules/nats/main.tf chart_version 0.0.1
+  set_chart_pin deploy/opentofu/instance/variables.tf nats_chart_version 0.0.1
+}
+set_chart_pin() {
+  local file="$1" var="$2" version="$3" actual
+  sed -i -E "/^variable \"$var\"/,/^}/ s/default( *)= \"[^\"]+\"/default\\1= \"$version\"/" "$st/t/$file"
+  actual="$(awk -v want="$var" '
+    $1 == "variable" && $2 == "\"" want "\"" { inv = 1; next }
+    inv && /^}/ { inv = 0 }
+    inv && $1 == "default" { gsub(/"/, "", $3); print $3; exit }' "$st/t/$file")"
+  [ "$actual" = "$version" ] || { echo "chart mutation did not apply: $file $var" >&2; exit 1; }
+}
+
 fresh
 check "$st/t" >/dev/null || { echo "SELF-TEST FAILED: the clean copy does not pass" >&2; exit 1; }
 echo "  ok: the clean tree passes"
+
+(
+  chart_lag_fixture
+  check "$st/t" >/dev/null || { echo "SELF-TEST FAILED: matching chart pins with a lag do not pass" >&2; exit 1; }
+  echo "  ok: matching chart pins with a lag pass"
+)
+
+(
+  chart_lag_fixture
+  set_chart_pin deploy/opentofu/modules/nats/main.tf chart_version "$fixture_broker"
+  set_chart_pin deploy/opentofu/instance/variables.tf nats_chart_version "$fixture_broker"
+  expect_fail "a chart lag after all chart pins catch up" "no chart pin uses 0.0.1 any more; delete it from CHART_LAGS"
+)
+
+(
+  chart_lag_fixture
+  set_chart_pin deploy/opentofu/instance/variables.tf nats_chart_version "$fixture_broker"
+  expect_fail "split chart pins while a lag exists" "all chart pins must use 0.0.1"
+)
 
 fresh
 sed -i -E 's#(github.com/nats-io/nats-server/v2) v[0-9.]+#\1 v9.9.9#' "$st/t/backend/core/go.mod"
