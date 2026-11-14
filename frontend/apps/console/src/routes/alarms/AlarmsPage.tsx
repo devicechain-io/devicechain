@@ -123,7 +123,19 @@ export default function AlarmsPage() {
       },
       { replace: true },
     );
-  const [version, reload] = useReload();
+  const [version, bumpVersion] = useReload();
+  // Refreshes for the same filters must let the current read land. Remember just one trailing
+  // refresh, regardless of how many events, reconnects or actions arrive while it is running.
+  const reading = useRef(true);
+  const reconcileWanted = useRef(false);
+  const reload = useCallback(() => {
+    if (reading.current) {
+      reconcileWanted.current = true;
+      return;
+    }
+    reading.current = true;
+    bumpVersion();
+  }, [bumpVersion]);
   // In-flight ack/clear actions, keyed `${token}:${action}` — a Set so one row's
   // action never disables another's, and a button spins only for its own action.
   const [acting, setActing] = useState<ReadonlySet<string>>(() => new Set());
@@ -142,16 +154,29 @@ export default function AlarmsPage() {
   useEffect(() => setSelected(new Set()), [state, severity, ack, pageNumber]);
 
   const { data, loading, error } = useQuery(
-    () =>
-      listAlarms({
+    () => {
+      reading.current = true;
+      return listAlarms({
         pageNumber,
         pageSize,
         state: state || undefined,
         severity: severity || undefined,
         acknowledged,
-      }),
+      });
+    },
     [pageNumber, state, severity, ack, version],
   );
+
+  // Drain only after useQuery has published the result (or error). Starting in the loader's
+  // finally would invalidate its answer before useQuery could publish it.
+  useEffect(() => {
+    if (loading) return;
+    reading.current = false;
+    if (reconcileWanted.current) {
+      reconcileWanted.current = false;
+      reload();
+    }
+  }, [loading, data, error, reload]);
 
   // Debounced reconcile: a burst of live events coalesces into a single refetch. The
   // stream is best-effort (at-most-once), so a live event reconciles the query — the
