@@ -168,6 +168,11 @@ func snapshot(ctx context.Context, nc *nats.Conn, name string, w io.Writer, meta
 		return err
 	}
 	defer sub.Unsubscribe()
+	// Confirm the server registered the inbox subscription before the snapshot
+	// request: core NATS drops a chunk that arrives with no subscriber.
+	if err := nc.FlushWithContext(ctx); err != nil {
+		return err
+	}
 	if err := sub.SetPendingLimits(1024, 32<<20); err != nil {
 		return err
 	}
