@@ -33,6 +33,8 @@ A decoder belongs to a device profile and travels with it:
 
 The decoder is a document of expressions in a small, loop-free language (CEL). It has one **input** kind it reads, optional **shared values**, and one or more **sections**; each section has **rows**, and each row says which metric it writes and how to compute the value. The language has no clock, no randomness and no side effects, so the same input always gives the same readings.
 
+DeviceChain does not execute JavaScript, Python or other user-supplied scripts as payload decoders. A ChirpStack JavaScript codec runs in ChirpStack; DeviceChain receives its decoded object through the [inbound integration](./inbound-integrations.md#chirpstack). For an existing script, rewrite supported byte reads and JSON mappings as CEL decoder rows. Keep logic outside this language in the network server's codec or in an external bridge that forwards [device events](../reference/device-protocol.md).
+
 A decoder can have at most 8 sections, 16 shared values and 20 saved vectors, and the whole document is at most 32 KiB. The [function reference](../reference/decoder-functions.md#decoder-functions-limits) lists the limits.
 
 ## Inputs {#inputs}
