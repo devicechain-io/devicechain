@@ -805,6 +805,10 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
+#### Las detecciones en vivo de reglas de geocercas necesitan acceso a la ubicación {#v160-detection-stream-location}
+
+La suscripción `detectionStream` ya no entrega detecciones de reglas que comprueban si un dispositivo está dentro de una geocerca a quien no tenga `location:read`, al igual que la vista previa de reglas. Las demás detecciones no cambian. Un panel o agente que supervise reglas de geocercas necesita un rol o token que incluya acceso a la ubicación. Un token emitido con el ámbito OAuth de solo lectura no incluye `location:read`.
+
 #### Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación {#v160-broker-reload}
 
 Una recarga completa del broker cerraba todas las conexiones admitidas por el callout de autenticación, entre ellas las de todos los dispositivos MQTT que se autentican con un nombre de usuario. El broker ahora se compila con `nats-server` `v2.15.3`, por lo que un cambio en el conjunto de CA del Secret TLS del broker (una rotación de CA), o una recarga manual, mantiene abiertas esas conexiones. Una recarga sin reinicio solo ocurre cuando el sidecar config-reloader del chart envía SIGHUP porque cambió el Secret TLS montado, o cuando un operador ejecuta `nats-server --signal reload` a mano.

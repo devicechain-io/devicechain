@@ -27,18 +27,20 @@ func (r *SchemaResolver) GetNats(ctx context.Context) *messaging.NatsManager {
 
 // DetectionStream streams a device profile's DETECT detections to the subscriber as they fire
 // (ADR-037 / ADR-057, slice 7c). It taps the caller tenant's derived-event feed — the same
-// first-class signal the REACT dispatcher consumes — and pushes every firing whose rule belongs
+// first-class signal the REACT dispatcher consumes — and pushes authorized firings whose rule belongs
 // to the given profile, including a rule with NO alarm action (a pure emitted signal), which the
-// alarm stream would miss: a detection feed must show ALL firings, so it taps the derived-event
+// alarm stream would miss: a detection feed must include pure signals, so it taps the derived-event
 // stream, not the alarm stream. Both edges (raised and resolved, ADR-057) are streamed. The feed
 // is live from subscribe time onward with no backfill, and torn down when the client
-// unsubscribes or disconnects (ctx cancelled). Tenant-scoped; gated on device:read.
+// unsubscribes or disconnects (ctx cancelled). Requires device:read; detections of rules that
+// test geofence containment are delivered only to a caller that also holds location:read.
 func (r *SchemaResolver) DetectionStream(ctx context.Context, args struct {
 	ProfileToken string
 }) (<-chan *DetectionEventResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
+	canLocate := auth.Authorize(ctx, auth.LocationRead) == nil
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
 		return nil, core.ErrNoTenant
@@ -49,7 +51,11 @@ func (r *SchemaResolver) DetectionStream(ctx context.Context, args struct {
 
 	// SubscribeLive scopes to "{instance}.{tenant}.derived-events", so every delivered event is
 	// already this tenant's — the per-event filter narrows to the requested profile only.
-	live, err := r.GetNats(ctx).SubscribeLive(ctx, tenant, streams.DerivedEvents)
+	openLive := r.Live
+	if openLive == nil {
+		openLive = r.GetNats(ctx).SubscribeLive
+	}
+	live, err := openLive(ctx, tenant, streams.DerivedEvents)
 	if err != nil {
 		return nil, err
 	}
@@ -57,6 +63,7 @@ func (r *SchemaResolver) DetectionStream(ctx context.Context, args struct {
 	out := make(chan *DetectionEventResolver)
 	go func() {
 		defer close(out)
+		filter := positionFilter{store: r.DetectRules}
 		for msg := range live {
 			var de runtime.DerivedEvent
 			if err := json.Unmarshal(msg.Value, &de); err != nil {
@@ -65,6 +72,9 @@ func (r *SchemaResolver) DetectionStream(ctx context.Context, args struct {
 			}
 			profileToken, ruleToken, ok := runtime.ProfileAndRuleToken(de.RuleID)
 			if !ok || profileToken != args.ProfileToken {
+				continue
+			}
+			if !canLocate && !filter.allow(ctx, de.RuleID) {
 				continue
 			}
 			select {
