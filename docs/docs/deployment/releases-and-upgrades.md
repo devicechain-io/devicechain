@@ -760,6 +760,14 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
+#### Security: a device can no longer assign itself to a customer, area or asset {#v160-device-relationship-refused}
+
+- A `NewRelationship` event naming a tracked relationship type (the built-in `assigned`, or any type marked tracked) or the built-in `contains` is refused and recorded on the `failed-events` stream with reason `Invalid` on its first delivery, without retries. This changes what an accepted device event does; the [versioning policy](./versioning-policy.md) allows this for a security fix.
+- Assign devices with a claim code or the `createEntityRelationship` mutation.
+- Relationships devices created earlier are not removed. Review the tracked relationships of your devices.
+- Untracked types, including `member`, work as before.
+- During the rolling upgrade, pods still on v1.5 create the edge until they are replaced.
+
 #### Before you upgrade {#v160-before-upgrade}
 
 Review hand-edited instance configuration before rolling pods. These refusals are new since `v1.5.0`; invalid service settings stop startup and can leave pods crash-looping. Service keys below live under `functionalAreas.<area>.config`.

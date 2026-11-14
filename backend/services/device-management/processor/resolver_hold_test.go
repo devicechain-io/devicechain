@@ -131,6 +131,10 @@ type relationshipApi struct {
 	creates []string
 }
 
+func (a *relationshipApi) EntityRelationshipTypesByToken(context.Context, []string) ([]*dmodel.EntityRelationshipType, error) {
+	return []*dmodel.EntityRelationshipType{{Tracked: false}}, nil
+}
+
 func (a *relationshipApi) EntityRelationshipsByToken(_ context.Context, tokens []string) ([]*dmodel.EntityRelationship, error) {
 	a.looked = append(a.looked, tokens...)
 	var out []*dmodel.EntityRelationship

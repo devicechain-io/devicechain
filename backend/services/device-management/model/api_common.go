@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -17,6 +18,37 @@ import (
 // This file holds the uniform entity-relationship API (ADR-013). One set of
 // methods over the single EntityRelationship edge table replaces the per-family
 // relationship CRUD that previously duplicated this logic four times.
+
+// ErrDeviceAuthoredOwnership identifies a terminal refusal of device-authored graph ownership.
+var ErrDeviceAuthoredOwnership = errors.New("a device may not create an ownership (tracked) or containment relationship; assign devices with a claim code or the createEntityRelationship mutation")
+
+func refuseDeviceAuthoredRelationshipType(token string, tracked bool) error {
+	if tracked || token == ContainmentRelationshipType {
+		return fmt.Errorf("%w: relationship type %q", ErrDeviceAuthoredOwnership, token)
+	}
+	return nil
+}
+
+// RefuseDeviceAuthoredRelationshipType checks before an idempotency read or any write.
+// Reserved types need no provisioning; unknown tenant types retain normal not-found handling.
+func RefuseDeviceAuthoredRelationshipType(ctx context.Context, api interface {
+	EntityRelationshipTypesByToken(context.Context, []string) ([]*EntityRelationshipType, error)
+}, token string) error {
+	switch token {
+	case AssignmentRelationshipType, ContainmentRelationshipType:
+		return refuseDeviceAuthoredRelationshipType(token, token == AssignmentRelationshipType)
+	case MembershipRelationshipType:
+		return nil
+	}
+	types, err := api.EntityRelationshipTypesByToken(ctx, []string{token})
+	if err != nil {
+		return err
+	}
+	if len(types) > 0 {
+		return refuseDeviceAuthoredRelationshipType(token, types[0].Tracked)
+	}
+	return nil
+}
 
 // CreateEntityRelationshipType creates a new relationship type.
 func (api *Api) CreateEntityRelationshipType(ctx context.Context,
@@ -191,6 +223,17 @@ func (api *Api) EntityRelationshipTypes(ctx context.Context,
 // which validates both the type and the entity's existence (ADR-013).
 func (api *Api) CreateEntityRelationship(ctx context.Context,
 	request *EntityRelationshipCreateRequest) (*EntityRelationship, error) {
+	if request.DeviceAuthored {
+		types, err := api.EntityRelationshipTypesByToken(ctx, []string{request.RelationshipType})
+		if err != nil {
+			return nil, err
+		}
+		if len(types) == 0 {
+			if err := refuseDeviceAuthoredRelationshipType(request.RelationshipType, request.RelationshipType == AssignmentRelationshipType); err != nil {
+				return nil, err
+			}
+		}
+	}
 	sourceId, err := api.ResolveEntityToken(ctx, request.SourceType, request.Source)
 	if err != nil {
 		return nil, fmt.Errorf("source: %w", err)
@@ -218,6 +261,11 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 	}
 	if len(rtmatches) == 0 {
 		return nil, gorm.ErrRecordNotFound
+	}
+	if request.DeviceAuthored {
+		if err := refuseDeviceAuthoredRelationshipType(request.RelationshipType, rtmatches[0].Tracked); err != nil {
+			return nil, err
+		}
 	}
 
 	// The asset hierarchy's structural contract (ADR-072) is enforced HERE as well

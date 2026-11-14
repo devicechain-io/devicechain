@@ -86,7 +86,8 @@ type EventResolver struct {
 	// deviceDisabled counts events refused because their device is disabled. ONE counter
 	// for the pool (initializeEventResolvers sets it), label-free; nil in tests that do not
 	// look at it.
-	deviceDisabled prometheus.Counter
+	deviceDisabled      prometheus.Counter
+	relationshipRefused prometheus.Counter
 	// integrationAliasMismatch counts integration events refused because their device no longer
 	// holds the alias they were resolved from. Pool-wide, label-free; nil in tests that do not
 	// look at it.
@@ -341,6 +342,13 @@ func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, devic
 	// caller exactly like a failed write. A random token then created the relationship a second
 	// time on the re-run. Derived from the tenant and the relationship's identity, the re-run
 	// finds the first one by token and uses it.
+	if err := model.RefuseDeviceAuthoredRelationshipType(ctx, rez.Api, relcreate.RelationshipType); err != nil {
+		reason := uint(resolvedevent.FailureReason_ApiCallFailed)
+		if errors.Is(err, model.ErrDeviceAuthoredOwnership) {
+			reason = uint(resolvedevent.FailureReason_Invalid)
+		}
+		return nil, reason, err
+	}
 	tenant, _ := core.TenantFromContext(ctx)
 	token := uuid.NewSHA1(relationshipTokenNamespace, []byte(strings.Join([]string{
 		tenant, string(entity.TypeDevice), device.Token, relcreate.TargetType, relcreate.Target, relcreate.RelationshipType}, "\x00"))).String()
@@ -350,6 +358,7 @@ func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, devic
 		return found[0], 0, nil
 	}
 	create := &model.EntityRelationshipCreateRequest{
+		DeviceAuthored:   true,
 		Token:            token,
 		SourceType:       string(entity.TypeDevice),
 		Source:           device.Token,
@@ -359,6 +368,9 @@ func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, devic
 		Metadata:         nil,
 	}
 	created, err := rez.Api.CreateEntityRelationship(ctx, create)
+	if errors.Is(err, model.ErrDeviceAuthoredOwnership) {
+		return nil, uint(resolvedevent.FailureReason_Invalid), err
+	}
 	if err != nil {
 		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), err
 	}
@@ -1590,6 +1602,13 @@ func (rez *EventResolver) Process(ctx context.Context) {
 					// so a redelivery can end suppressed with no record, still counted in the tally.
 					_ = unresolved.Ack()
 					done(core.ResultDropped)
+				} else if errors.Is(err, model.ErrDeviceAuthoredOwnership) {
+					if rez.relationshipRefused != nil {
+						rez.relationshipRefused.Inc()
+					}
+					log.Warn().Str("tenant", tenant).Str("correlation", correlation).Err(err).Msg("Refusing a device-authored ownership or containment relationship.")
+					rez.Failed(unresolved, tenant, reason, *event, err)
+					done(core.ResultFailed)
 				} else if errors.Is(err, ErrNotGatewayChild) {
 					// A gateway named a device that is not its own. Terminal on the FIRST
 					// delivery (redelivery cannot change an assignment's answer, and a device
