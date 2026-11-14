@@ -504,8 +504,7 @@ func (suite *EventResolverTestSuite) TestNewRelationshipCarriesEveryAnchorTheDev
 		assert.ElementsMatch(suite.T(), []resolvedevent.ResolvedAnchor{
 			{AnchorType: "customer", AnchorToken: "acme", RelationshipId: 7},
 			{AnchorType: "group", AnchorToken: "north"},
-			{AnchorType: "gateway", AnchorToken: "gw-1", RelationshipId: 9},
-		}, results[0].Resolved.Anchors)
+		}, results[0].Resolved.Anchors, "an untracked relationship's target is not an anchor")
 	}
 }
 

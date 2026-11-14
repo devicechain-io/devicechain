@@ -115,8 +115,34 @@ func TestDeviceUntrackedRelationshipsRemainIdempotent(t *testing.T) {
 			require.Len(t, second, 1)
 			require.Equal(t, first[0].Resolved.Payload, second[0].Resolved.Payload)
 			require.Equal(t, before+1, edgeCount(t, rig))
+			// An untracked relationship is not ownership, so its target must not be stamped on
+			// the event as an anchor: that would put this event in bravo's scope.
+			for _, a := range append(first[0].Resolved.Anchors, second[0].Resolved.Anchors...) {
+				require.False(t, a.AnchorType == "customer" && a.AnchorToken == "bravo",
+					"the untracked target was stamped as an anchor: %+v", a)
+			}
 		})
 	}
+}
+
+// The stored type decides, reserved tokens included: a tenant that marks "member" tracked
+// has made it ownership, and a device may no longer assert it.
+func TestAReservedTypeMarkedTrackedIsRefusedToo(t *testing.T) {
+	rig := relationshipRig(t)
+	_, err := rig.api.CreateEntityRelationshipType(rig.ctx, &model.EntityRelationshipTypeCreateRequest{Token: "member", Tracked: true})
+	require.NoError(t, err)
+	// An edge the device created before the type was marked tracked, under the derived token:
+	// the redelivery must be refused, not answered "found" by the idempotency lookup.
+	token := uuid.NewSHA1(relationshipTokenNamespace, []byte(strings.Join([]string{
+		"acme", "device", "dev", "customer", "bravo", "member"}, "\x00"))).String()
+	_, err = rig.api.CreateEntityRelationship(rig.ctx, &model.EntityRelationshipCreateRequest{
+		Token: token, SourceType: "device", Source: "dev", TargetType: "customer", Target: "bravo", RelationshipType: "member"})
+	require.NoError(t, err)
+	before := edgeCount(t, rig)
+	_, reason, err := rig.rez.ResolveEvent(rig.ctx, relationshipEvent("member", "customer", "bravo"))
+	require.ErrorIs(t, err, model.ErrDeviceAuthoredOwnership)
+	require.Equal(t, uint(resolvedevent.FailureReason_Invalid), reason)
+	require.Equal(t, before, edgeCount(t, rig))
 }
 func TestAGatewayCannotAssignItsChildThroughAnEvent(t *testing.T) {
 	rig := gatewayRig(t, config.AuthModeDisabled)

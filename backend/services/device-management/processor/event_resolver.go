@@ -434,12 +434,22 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	// relationship, addressed by target token. Stamping only the new one left this event —
 	// in the history, and in the live view until the ownership fact arrived — visible to
 	// the new target alone, and denied to the device's other owners (ADR-081).
+	//
+	// 🔴 ONLY A TRACKED RELATIONSHIP IS AN ANCHOR. A device may assert only untracked types
+	// (CreateNewEntityRelationship refuses tracked ones), and an untracked relationship is not
+	// on the device's next telemetry event, so stamping its target here made this one event an
+	// ownership claim: `connected-to -> customer:bravo` put the event in bravo's scope. The
+	// guard is kept on the created type's flag rather than removed, so it stays right if a
+	// tracked relationship ever reaches this path by another door; a type that was not loaded
+	// reads as untracked and stamps nothing.
 	anchors := existing
-	newAnchor := resolvedevent.ResolvedAnchor{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID}
-	if !slices.ContainsFunc(anchors, func(a resolvedevent.ResolvedAnchor) bool {
-		return a.AnchorType == newAnchor.AnchorType && a.AnchorToken == newAnchor.AnchorToken
-	}) {
-		anchors = append(anchors, newAnchor)
+	if created.RelationshipType.Tracked {
+		newAnchor := resolvedevent.ResolvedAnchor{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID}
+		if !slices.ContainsFunc(anchors, func(a resolvedevent.ResolvedAnchor) bool {
+			return a.AnchorType == newAnchor.AnchorType && a.AnchorToken == newAnchor.AnchorToken
+		}) {
+			anchors = append(anchors, newAnchor)
+		}
 	}
 	scope := res.Scope()
 	resolved := rez.MergeToResolveEvent(device, anchors, memberships, event, payload, &scope)

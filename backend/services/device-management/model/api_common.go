@@ -34,12 +34,10 @@ func refuseDeviceAuthoredRelationshipType(token string, tracked bool) error {
 func RefuseDeviceAuthoredRelationshipType(ctx context.Context, api interface {
 	EntityRelationshipTypesByToken(context.Context, []string) ([]*EntityRelationshipType, error)
 }, token string) error {
-	switch token {
-	case AssignmentRelationshipType, ContainmentRelationshipType:
-		return refuseDeviceAuthoredRelationshipType(token, token == AssignmentRelationshipType)
-	case MembershipRelationshipType:
-		return nil
-	}
+	// The STORED type decides, reserved tokens included: an administrator can mark any type
+	// tracked, "member" among them, and a token-only answer would let a device keep asserting
+	// a type that has since become ownership. A reserved type not provisioned yet in the tenant
+	// is decided by the flag it would be created with.
 	types, err := api.EntityRelationshipTypesByToken(ctx, []string{token})
 	if err != nil {
 		return err
@@ -47,7 +45,7 @@ func RefuseDeviceAuthoredRelationshipType(ctx context.Context, api interface {
 	if len(types) > 0 {
 		return refuseDeviceAuthoredRelationshipType(token, types[0].Tracked)
 	}
-	return nil
+	return refuseDeviceAuthoredRelationshipType(token, token == AssignmentRelationshipType)
 }
 
 // CreateEntityRelationshipType creates a new relationship type.
