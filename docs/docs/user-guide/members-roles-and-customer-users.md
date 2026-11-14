@@ -16,6 +16,12 @@ its own permission. **Members** lists people with `member:read` and changes them
 built-in tenant administrator role holds all four. Without a permission, its page is not in your
 sidebar.
 
+## Automated action authorities
+
+Authoring or publishing an automated action now requires the authority to perform it. Creating or updating a rule with a `sendCommand` action, and publishing or rolling back to a profile version whose enabled rules include one, requires `command:write` in addition to `device:write`. `httpCall` and `publish` actions require `connector:write`. A role that holds `device:write` alone can still author and publish rules that only raise alarms.
+
+Action authority is checked on the effective rule on every create or update, even for disabled rules. Publishing and rolling back check all enabled rules in the selected profile version, even when only a metric changed. The publisher must hold the action authorities; an automation-review approver does not need them. Adopting a profile whose actions were already authorized does not require these additional authorities.
+
 ## Members {#members}
 
 **Members** lists everyone who belongs to the tenant, ordered by email address. For each person
