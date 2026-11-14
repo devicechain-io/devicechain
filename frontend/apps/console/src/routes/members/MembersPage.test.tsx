@@ -190,6 +190,15 @@ describe('inviting a member', () => {
     // The code rides the fragment, which a browser never sends to a server.
     expect(link.value).toBe(`${window.location.origin}/invitation#code=${encodeURIComponent('c0de+/=')}`);
     expect(screen.getByText(/shown only once/)).toBeTruthy();
+    fireEvent.keyDown(screen.getByLabelText('Invitation link'), { key: 'Escape' });
+    const overlay = document.querySelector('[data-slot="dialog-overlay"]')!;
+    fireEvent.pointerDown(overlay, { button: 0, pointerType: 'mouse' });
+    fireEvent.click(overlay);
+    expect(screen.getByLabelText('Invitation link')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(screen.queryByLabelText('Invitation link')).toBeNull();
+
   });
 
   it('limits a member to an access-scope group, beside a customer, and says where a missing group is enabled', async () => {

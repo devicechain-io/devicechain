@@ -60,6 +60,8 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 - `credentialType` / `credentialId`：设备**通过 HTTP** 提供的凭据。`MQTT_BASIC` 还需要 `credentialSecret`。只有实例的设备认证模式设为 `disabled` 或 `optional` 时才可省略。默认值是 `required`，因此 HTTP 事件需要携带凭据。**通过 MQTT 时，这三个字段都不要带**：设备连接时消息代理已完成认证，平台 MQTT 消息代理上携带其中任何一个的事件都会被拒绝（参见[设备协议参考](../reference/device-protocol.md#rejections-at-the-door)）。
 - `payload`：结构取决于 `eventType`。`Measurement`、`Location` 和 `Alert` 是 `{ "entries": [ … ] }`；`NewRelationship` 是直接位于 `payload` 下的三个字段。见下文。
 
+`NewRelationship` 可以创建非跟踪关系，包括 `member`。跟踪类型（如 `assigned`）和内置 `contains` 会在第一次投递时以原因 `Invalid` 被拒绝。请使用认领码或 `createEntityRelationship` mutation 分配设备。
+
 每个字段的类型及是否必填（包括可选的 `altId` 和 `relationship`）见[设备协议参考](../reference/device-protocol.md#device-event)，其中还提供可用于校验固件输出的 JSON Schema。
 
 ### 载荷结构 {#payload-shapes}
