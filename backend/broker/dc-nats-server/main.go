@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 //
-// main and usageStr follow nats-server's main.go at v2.15.2, Copyright 2012-2026 The NATS Authors,
+// main and usageStr follow nats-server's main.go at v2.15.3, Copyright 2012-2026 The NATS Authors,
 // Apache License 2.0, changed only where the comments below say so.
 
 // Command nats-server is DeviceChain's broker: upstream nats-server's own main, built on the
@@ -26,6 +26,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -48,6 +49,8 @@ Server Options:
     -ms,--https_port <port>          Use port for https monitoring
     -c, --config <file>              Configuration file
     -t                               Test configuration and exit
+        --test_reload <file>         With -t, test whether this configuration file can be reloaded
+                                     (exit code 3 if a restart is required)
     -sl,--signal <signal>[=<pid>]    Send signal to nats-server process (ldm, stop, quit, term, reopen, reload)
                                      <pid> can be either a PID (e.g. 1) or the path to a PID file (e.g. /var/run/nats-server.pid)
         --client_advertise <string>  Client URL to advertise to other servers
@@ -129,9 +132,17 @@ func main() {
 		fs.Usage,
 		server.PrintTLSHelpAndDie)
 	if err != nil {
+		// The configuration is valid, but changing to it requires a restart.
+		if errors.Is(err, server.ErrConfigReloadNotSupported) {
+			fmt.Fprintf(os.Stderr, "%s: %s\n", exe, err)
+			os.Exit(3)
+		}
 		server.PrintAndDie(fmt.Sprintf("%s: %s", exe, err))
 	} else if opts.CheckConfig {
 		fmt.Fprintf(os.Stderr, "%s: configuration file %s is valid (%s)\n", exe, opts.ConfigFile, opts.ConfigDigest())
+		if opts.CheckReloadTo != "" {
+			fmt.Fprintf(os.Stderr, "%s: configuration file %s can be reloaded\n", exe, opts.CheckReloadTo)
+		}
 		os.Exit(0)
 	}
 
@@ -168,8 +179,8 @@ func main() {
 	// is installed at the end of NewServer. Run blocks through JetStream recovery, which on a
 	// single server with a large store takes minutes, and a SIGTERM (or the preStop hook's
 	// SIGUSR2) that waited for Run to return would be ignored for all of it, until Kubernetes
-	// killed the process mid-recovery. A SIGHUP in that window reloads like any other; the
-	// probe that follows it records an error until the listener is up.
+	// killed the process mid-recovery. A SIGHUP in that window waits for startup outside the
+	// signal loop, so shutdown signals can still be handled.
 	b := newBroker(s, opts, newBrokerMetrics(), hot)
 	b.serveMetrics(metricsLn)
 	b.handleSignals(sigs)
@@ -178,6 +189,8 @@ func main() {
 	if err := server.Run(s); err != nil {
 		server.PrintAndDie(err.Error())
 	}
+
+	b.markStarted()
 
 	// DeviceChain: the watcher, which waits for the server to be ready before its first probe.
 	go b.watch()

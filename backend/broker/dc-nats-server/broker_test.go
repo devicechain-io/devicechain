@@ -75,10 +75,12 @@ func startBrokerWith(t *testing.T, withHook, clientCA bool) *running {
 	if err != nil {
 		t.Fatal(err)
 	}
+	b := newBroker(s, opts, newBrokerMetrics(), hot)
+	b.markStarted()
 	return &running{
 		dir:  dir,
 		s:    s,
-		b:    newBroker(s, opts, newBrokerMetrics(), hot),
+		b:    b,
 		mqtt: net.JoinHostPort("127.0.0.1", strconv.Itoa(vz.MQTT.Port)),
 		nats: "tls://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(vz.Port)),
 	}
