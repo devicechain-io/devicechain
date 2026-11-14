@@ -13,11 +13,15 @@ The GraphQL types and operations may change in a minor release. Protection is op
 
 ## Before you start {#before-you-start}
 
+**Allow about 2 h 42 min of recording after the episode starts, plus setup and review time.** This walkthrough records live telemetry. There is no supported fast-forward or backfill mode for this review. For a shorter first look, try [Your first device](../quickstart/first-device.md); return here for the full comparison.
+
 You need a running DeviceChain instance, `dcctl`, and two people with memberships in the tenant that `dcctl sim create` makes for the simulator. The person editing and running needs `device:write` and `event:read` in their own unscoped session. The approver needs those permissions, an unscoped membership and two-factor authentication enrolled. Reading reviews also needs `device:read` and `event:read`.
 
 Use a different person to approve: the runner and draft authors cannot approve by default. For simulator sign-in with a second factor, `dcctl sim` takes `--otp`; see [two-factor authentication with dcctl](../guides/two-factor-authentication.md#dcctl).
 
 ## Record the Night Shift episode {#record-night-shift}
+
+### Start recording {#start-recording}
 
 Create the simulator tenant and sign-in:
 
@@ -31,7 +35,13 @@ Run the simulator in its own terminal and keep it running in the foreground:
 dcctl sim run nightshift
 ```
 
-In another terminal, get the recorded windows:
+### While the episode records {#while-recording}
+
+Leave the simulator running. Explore the five devices and their telemetry in the console, prepare Draft A below without publishing it, and ask the second person to check their membership and two-factor authentication. Read the review expectations and expected results while the history accumulates. Wait to run the review until about 2 h 42 min after the episode starts.
+
+### Get the review windows {#get-review-windows}
+
+In another terminal, get the episode's window times:
 
 ```bash
 dcctl sim windows nightshift
@@ -44,7 +54,7 @@ INCIDENT	<start RFC3339>	<end RFC3339>
 NORMAL	<start RFC3339>	<end RFC3339>
 ```
 
-Before the episode starts, the command asks you to run the simulator first. The start instant is recorded when the episode starts. INCIDENT runs from minute 45 to 95 after that instant; NORMAL runs from minute 105 to 160. Wait until about 2 h 42 min after the start so NORMAL ends at least two minutes before review.
+Before the episode starts, the command asks you to run the simulator first. The start instant is recorded when the episode starts. INCIDENT runs from minute 45 to 95 after that instant; NORMAL runs from minute 105 to 160. Printing the windows does not mean recording is complete: run the review only once NORMAL has ended at least two minutes ago. Changing `--emit-interval` changes the sampling cadence, not the episode's elapsed time.
 
 The first 45 minutes let the episode settle. During INCIDENT, `tp-vav-tower-f1-south` runs hot and the shipped rule misses it. During NORMAL, `tp-vav-tower-f3-north` has an ordinary short warm-up that must not trigger cooling; `tp-vav-tower-f5-west` hosts a meeting as a control.
 

@@ -77,7 +77,7 @@ creates a device, sends a reading with `curl` and shows it in the console.
 
 [Docs](https://docs.devicechain.io) · [Examples](examples/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Discussions](https://github.com/devicechain-io/devicechain/discussions) · [Releases](https://github.com/devicechain-io/devicechain/releases)
 
-The current release is **v1.3.0**; **v1.4** is in progress. See [Status](#status) for the compatibility promises.
+The current release is **v1.5.0**; **v1.6** is in progress. See [Status](#status) for the compatibility promises.
 
 DeviceChain™ takes in telemetry from device fleets, keeps a record of each device and the assets,
 areas and customers it belongs to, detects conditions in the data as it arrives, and sends
@@ -97,7 +97,7 @@ Devices send data over these transports:
 - [OMA LwM2M](https://docs.devicechain.io/concepts/lwm2m) over CoAP/UDP with DTLS
 
 The transports differ in what they support. HTTP devices can opt into command polling with the
-`HTTP_PULL` command channel on their device type (on this tree, for v1.4). Sparkplug commands (`NCMD` and
+`HTTP_PULL` command channel on their device type (available since v1.4). Sparkplug commands (`NCMD` and
 `DCMD`) are opt-in and off by default, and LwM2M telemetry is decoded from SenML-JSON only. Sparkplug and LwM2M are not in
 the default install; add them at bootstrap with `--enable-area sparkplug-ingest` or
 `--enable-area lwm2m-ingest`. The
