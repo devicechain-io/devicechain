@@ -43,7 +43,7 @@ describe('i18n config', () => {
     // supportedLngs is derived from the registry, so the detector can never resolve to
     // a locale whose catalog is absent. i18next appends 'cimode'.
     const supported = (i18n.options.supportedLngs || []).filter((l) => l !== 'cimode');
-    expect(supported).toEqual(SUPPORTED_LOCALES.map((l) => l.code));
+    expect(supported).toEqual([...SUPPORTED_LOCALES.map((l) => l.code), 'zh']);
     expect(SUPPORTED_LOCALES.map((l) => l.code)).toContain(DEFAULT_LOCALE);
   });
 
@@ -219,7 +219,7 @@ describe('isShippedLocale agrees with what i18next actually resolves', () => {
   const TAGS = [
     'en', 'es', 'ES',
     'es-MX', 'es-mx', 'es-419', 'es-Latn-MX',
-    'pt-BR', 'fr', 'fr-CA', 'zh-Hans-CN',
+    'pt-BR', 'fr', 'fr-CA', 'ja-JP',
   ];
 
   it('reports shipped exactly when the tag renders its own language', async () => {

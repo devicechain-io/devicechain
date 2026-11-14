@@ -26,7 +26,7 @@ export interface LevelStrings {
   cardinals: readonly [string, string, string, string];
 }
 
-export const LEVEL_STRINGS: Record<'en' | 'es', LevelStrings> = {
+export const LEVEL_STRINGS: Record<'en' | 'es' | 'zh-CN', LevelStrings> = {
   en: {
     noData: 'No data',
     setRange: 'Set min and max',
@@ -49,8 +49,14 @@ export const LEVEL_STRINGS: Record<'en' | 'es', LevelStrings> = {
     off: 'Apagado',
     cardinals: ['N', 'E', 'S', 'O'],
   },
+  'zh-CN': {
+    noData: '暂无数据', setRange: '请设置最小值和最大值', badRange: '最大值必须大于最小值',
+    setThresholds: '请至少设置两个阈值', aboveScale: '超出量程上限', belowScale: '低于量程下限',
+    on: '开', off: '关', cardinals: ['北', '东', '南', '西'],
+  },
 };
 
 export function levelStrings(locale: string | undefined = viewerLocale()): LevelStrings {
-  return locale?.toLowerCase().split('-')[0] === 'es' ? LEVEL_STRINGS.es : LEVEL_STRINGS.en;
+  const language = locale?.toLowerCase().split('-')[0];
+  return language === 'es' ? LEVEL_STRINGS.es : language === 'zh' ? LEVEL_STRINGS['zh-CN'] : LEVEL_STRINGS.en;
 }

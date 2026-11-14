@@ -46,7 +46,9 @@ describe('locale parity', () => {
   });
 
   it.each(NAMESPACES)('namespace %s has identical keys in every locale', (ns) => {
-    const bundles = locales.map((code) => {
+    // Scoped locales must carry every key in each namespace they ship; other screens use English.
+    const translatedLocales = SUPPORTED_LOCALES.filter((l) => !l.namespaces || l.namespaces.includes(ns));
+    const bundles = translatedLocales.map(({ code }) => {
       const b = bundle(code, ns);
       expect(b, `${code}/${ns}.json is missing entirely`).toBeDefined();
       return { code, keys: new Set(Object.keys(b as object)) };

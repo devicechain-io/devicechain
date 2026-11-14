@@ -53,7 +53,7 @@ export interface ControlStrings {
   sendFailed: string;
 }
 
-export const CONTROL_STRINGS: Record<'en' | 'es', ControlStrings> = {
+export const CONTROL_STRINGS: Record<'en' | 'es' | 'zh-CN', ControlStrings> = {
   en: {
     noCommand: 'No command configured',
     setParameter: 'Set which parameter this control sends',
@@ -124,8 +124,24 @@ export const CONTROL_STRINGS: Record<'en' | 'es', ControlStrings> = {
     noDevice: 'No hay un dispositivo seleccionado para este comando.',
     sendFailed: 'No se pudo enviar el comando. Inténtelo de nuevo.',
   },
+  'zh-CN': {
+    noCommand: '尚未配置命令', setParameter: '请设置此控件发送的参数',
+    parameterMissing: (n) => `命令没有参数“${n}”`, wrongType: (n, e) => `参数“${n}”不是${e}`,
+    fixedChoices: (n) => `参数“${n}”使用固定选项，不能设置范围`,
+    otherRequired: (ns) => `未发送：命令还需要 ${ns.map((n) => `“${n}”`).join('、')}，且未设置默认值`,
+    badDefault: (ns) => `未发送：${ns.map((n) => `“${n}”`).join('、')} 的默认值不符合命令要求`,
+    setRange: '请设置最小值和最大值', badRange: '最大值必须大于最小值', numberKind: '数字', booleanKind: '布尔值',
+    lastSent: '上次发送', nothingSent: '尚未发送', beyondHistory: '未出现在最近的命令中', noValue: '无值',
+    unsent: '尚未发送，松开或按 Enter 发送', sliderHint: '使用方向键选择值；按 Enter 发送，或按 Escape 放弃。',
+    stepperHint: '使用方向键和 Page Up 或 Page Down 更改值；按 Enter 发送，或按 Escape 放弃。',
+    stepperUnsent: '尚未发送，请点击“发送”', send: '发送', decrease: '减小', increase: '增大', pending: '等待中',
+    delivered: '已送达', failed: '失败', sending: '正在发送…', on: '开', off: '关', viewOnly: '仅查看',
+    noPermission: '您没有发送命令的权限。', noSeam: '此视图中无法使用命令。', noDevice: '尚未为此命令选择设备。',
+    sendFailed: '无法发送命令，请重试。',
+  },
 };
 
 export function controlStrings(locale: string | undefined = viewerLocale()): ControlStrings {
-  return locale?.toLowerCase().split('-')[0] === 'es' ? CONTROL_STRINGS.es : CONTROL_STRINGS.en;
+  const language = locale?.toLowerCase().split('-')[0];
+  return language === 'es' ? CONTROL_STRINGS.es : language === 'zh' ? CONTROL_STRINGS['zh-CN'] : CONTROL_STRINGS.en;
 }

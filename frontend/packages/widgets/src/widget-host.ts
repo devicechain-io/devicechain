@@ -6,6 +6,7 @@
 // narrowing is API hygiene, not a security boundary (trusted React runs with the page's
 // privileges); the server stays the authority on every write.
 
+import { sharedStrings } from './shared-strings';
 import type { WidgetActions, WidgetDescriptor } from '@devicechain/dashboards';
 
 import { type WidgetCandidates, type WidgetSelect } from '@devicechain/widget-sdk';
@@ -48,7 +49,7 @@ const COMMAND_AUTHORITY = 'command:write';
 // (`void actions.acknowledgeAlarm(t)`) must still SHOW the refusal, not swallow it.
 function undeclared(capability: string, report: ReportRejection): () => Promise<never> {
   return guardAsync(
-    () => Promise.reject(new Error(`this widget did not declare the ${capability} interaction`)),
+    () => Promise.reject(new Error(sharedStrings().undeclared(capability))),
     report,
   );
 }

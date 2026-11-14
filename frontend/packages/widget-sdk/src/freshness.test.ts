@@ -90,9 +90,12 @@ describe('ageSeconds / formatAge', () => {
 });
 
 describe('freshnessStrings', () => {
-  it('ships en and es with the same keys, and falls back to en', () => {
+  it('ships en, es and zh-CN with the same keys, and falls back to en', () => {
     expect(Object.keys(FRESHNESS_STRINGS.es).sort()).toEqual(Object.keys(FRESHNESS_STRINGS.en).sort());
     expect(freshnessStrings('es-MX').stale).toBe(FRESHNESS_STRINGS.es.stale);
+    expect(Object.keys(FRESHNESS_STRINGS['zh-CN']).sort()).toEqual(Object.keys(FRESHNESS_STRINGS.en).sort());
+    expect(freshnessStrings('zh-CN').stale).toBe('已过期');
+    expect(freshnessStrings('zh-Hans-CN').ageLabel).toBe('最新样本');
     expect(freshnessStrings('fr').stale).toBe(FRESHNESS_STRINGS.en.stale);
   });
 });

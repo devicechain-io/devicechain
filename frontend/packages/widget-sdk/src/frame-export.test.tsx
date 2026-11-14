@@ -81,6 +81,16 @@ describe('the export button', () => {
     expect(await screen.findByRole('button', { name: 'Exportar datos' })).toBeTruthy();
   });
 
+  it('updates its accessible name and menu when the viewer switches to Chinese', async () => {
+    const { rerender } = render(<WidgetFrame title="Pump 3" exportRows={() => TABLE}>x</WidgetFrame>);
+    await button();
+    document.documentElement.lang = 'zh-CN';
+    rerender(<WidgetFrame title="Pump 3" exportRows={() => TABLE}>x</WidgetFrame>);
+    fireEvent.click(await screen.findByRole('button', { name: '导出数据' }));
+    expect(screen.getByRole('menuitem', { name: '下载 CSV' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Export data' })).toBeNull();
+  });
+
   it('reserves its room beside the title only when it is drawn', async () => {
     const { container, rerender } = render(<WidgetFrame title="Pump 3">x</WidgetFrame>);
     const bar = () => container.querySelector('[data-widget-body]')!.previousElementSibling as HTMLElement;

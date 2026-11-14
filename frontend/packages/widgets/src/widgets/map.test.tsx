@@ -300,6 +300,23 @@ describe('MapWidget — no tile source: the bundled world basemap', () => {
     expect(style.sources.land.attribution).toMatch(/Natural Earth/);
   });
 
+  it('localizes the bundled attribution when the viewer changes language', async () => {
+    const previous = document.documentElement.lang;
+    try {
+      document.documentElement.lang = 'es';
+      const { rerender } = render(<MapWidget widget={widget()} data={twoDevices()} />);
+      await waitFor(() => expect(m.maps).toHaveLength(1));
+      const credit = (index: number) => (m.maps[index].style as { sources: { land: { attribution: string } } }).sources.land.attribution;
+      expect(credit(0)).toBe('Con datos de Natural Earth');
+      document.documentElement.lang = 'zh-CN';
+      rerender(<MapRuntimeProvider runtime={TEST_RUNTIME}><MapWidget widget={widget()} data={twoDevices()} /></MapRuntimeProvider>);
+      await waitFor(() => expect(m.maps).toHaveLength(2));
+      expect(credit(1)).toBe('采用 Natural Earth 数据');
+    } finally {
+      document.documentElement.lang = previous;
+    }
+  });
+
   // A blank tileUrl is what a cleared authoring field leaves behind, and it must be
   // treated as "no tile source" rather than as a source whose URL is the empty string —
   // otherwise the widget reaches the renderer with a raster style pointing nowhere,

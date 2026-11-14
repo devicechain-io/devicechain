@@ -32,6 +32,7 @@
 // 🔴 ABSENT IS NOT ZERO. A marker describes only what its device reported; an
 // unreported heading is not due north. See describePosition.
 
+import { sharedStrings } from '../shared-strings';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { renderableBasemap, resolveBasemap } from '@devicechain/client';
 
@@ -174,8 +175,8 @@ export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
       <WidgetFrame title={title}>
         <MapNotice
           glyph="🔒"
-          heading="Location not permitted"
-          detail="You do not have permission to view device locations."
+          heading={sharedStrings().locationDenied}
+          detail={sharedStrings().locationPermission}
         />
       </WidgetFrame>
     );
@@ -194,8 +195,8 @@ export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
       <WidgetFrame title={title}>
         <MapNotice
           glyph="🧩"
-          heading="Map runtime not configured"
-          detail="This host must install MapRuntimeProvider with its bundler's MapLibre worker URL."
+          heading={sharedStrings().noMapRuntime}
+          detail={sharedStrings().mapRuntimeHint}
         />
       </WidgetFrame>
     );
@@ -204,7 +205,7 @@ export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
   if (data.loading && positions.length === 0) {
     return (
       <WidgetFrame title={title}>
-        <MapNotice heading="Loading…" />
+        <MapNotice heading={sharedStrings().loading} />
       </WidgetFrame>
     );
   }
@@ -215,11 +216,11 @@ export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
     return (
       <WidgetFrame title={title}>
         <MapNotice
-          heading={data.deviceTokens.length === 0 ? 'No devices selected' : 'No positions reported'}
+          heading={data.deviceTokens.length === 0 ? sharedStrings().noDevices : sharedStrings().noPositions}
           detail={
             data.deviceTokens.length === 0
-              ? 'Bind this widget to a device or anchor and select its location series.'
-              : 'None of the selected devices has reported a position yet.'
+              ? sharedStrings().bindLocation
+              : sharedStrings().positionsEmpty
           }
         />
       </WidgetFrame>
@@ -343,6 +344,7 @@ function LiveMap({
 
   const tileUrl = basemap?.tileUrl ?? null;
   const attribution = basemap?.attribution ?? null;
+  const landAttribution = sharedStrings().naturalEarth;
 
   // Init + teardown for this basemap. Re-runs when the source changes, which is the
   // only thing that invalidates the style.
@@ -356,7 +358,7 @@ function LiveMap({
     // once, with its final style — nothing re-styles after mount.
     Promise.all([
       loadMapLibre(runtime),
-      tileUrl ? rasterStyleFor(tileUrl, attribution ?? undefined) : loadLandStyle(),
+      tileUrl ? rasterStyleFor(tileUrl, attribution ?? undefined) : loadLandStyle(landAttribution),
     ])
       .then(([maplibre, style]) => {
         const el = containerRef.current;
@@ -396,7 +398,7 @@ function LiveMap({
     // That is the documented contract, not an oversight — and no eslint config in this repo
     // lints packages/*, so a disable comment here would suppress nothing and merely look
     // like the question had been settled by a linter.
-  }, [tileUrl, attribution, runtime.workerUrl]);
+  }, [tileUrl, attribution, landAttribution, runtime.workerUrl]);
 
   // Sync the markers to the current positions. Rebuilt wholesale rather than diffed:
   // a poll delivers a whole snapshot, the marker count is a dashboard's worth of
@@ -464,7 +466,7 @@ function LiveMap({
     return (
       <PlainPanel
         positions={positions}
-        note="Map renderer unavailable — positions are shown without a basemap."
+        note={sharedStrings().mapUnavailable}
         pick={pick}
       />
     );

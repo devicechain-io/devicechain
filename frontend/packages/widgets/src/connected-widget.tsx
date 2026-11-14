@@ -15,6 +15,7 @@
 // placeholder with a specific reason: it reads nothing — no channel, no availability query —
 // and is handed no actions.
 
+import { sharedStrings, unresolvedWidgetDetail } from './shared-strings';
 import {
   UNKNOWN_WIDGET_TYPE,
   type MeasurementSample,
@@ -48,7 +49,6 @@ import {
   fontVar,
   optString,
   spaceVar,
-  viewerLocale,
   useAlarmStream,
   useCommandStream,
   useDatasourceAvailability,
@@ -174,21 +174,16 @@ function showsCurrentStateOnly(descriptor: WidgetDescriptor): boolean {
   return descriptor.channel === 'alarm' || descriptor.channel === 'location' || presenceMode(descriptor);
 }
 
-const CURRENT_STATE_STRINGS = {
-  en: { label: 'Now', title: 'Shows the current state: the fixed time window does not apply to this widget.' },
-  es: { label: 'Ahora', title: 'Muestra el estado actual: la ventana de tiempo fija no se aplica a este widget.' },
-};
-
 function CurrentStateBadge({ children }: { children: ReactNode }) {
-  const words = viewerLocale()?.toLowerCase().startsWith('es') ? CURRENT_STATE_STRINGS.es : CURRENT_STATE_STRINGS.en;
+  const words = sharedStrings();
   return (
     <div data-current-state="" style={{ position: 'relative', width: '100%', height: '100%', minWidth: 0, minHeight: 0 }}>
       {children}
       <span
         data-current-state-badge=""
         role="note"
-        title={words.title}
-        aria-label={words.title}
+        title={words.currentState}
+        aria-label={words.currentState}
         style={{
           position: 'absolute',
           // Bottom LEFT: a map keeps its attribution bottom right, and a chart its span badge top right.
@@ -204,7 +199,7 @@ function CurrentStateBadge({ children }: { children: ReactNode }) {
           zIndex: 1,
         }}
       >
-        {words.label}
+        {words.now}
       </span>
     </div>
   );
@@ -529,20 +524,21 @@ function UnresolvedWidgetFrame({
   reason: UnresolvedWidgetReason | undefined;
 }): ReactNode {
   const storedType = typeof stored === 'string' ? stored : '';
+  const detail = reason ? unresolvedWidgetDetail(reason) : undefined;
   const heading =
     (reason?.code ?? 'unregistered') === 'unregistered'
-      ? 'This widget needs a newer viewer'
-      : 'This widget cannot be shown here';
+      ? sharedStrings().newerViewer
+      : sharedStrings().cannotShow;
   return (
     <WidgetFrame>
       <div
         style={STATE_STYLE}
       >
         <div style={{ fontSize: 13, fontWeight: 600 }}>{heading}</div>
-        {storedType && !reason?.message.includes(storedType) && (
-          <div style={{ fontSize: 11, opacity: 0.8 }}>Widget type: {storedType}</div>
+        {storedType && !detail?.includes(storedType) && (
+          <div style={{ fontSize: 11, opacity: 0.8 }}>{sharedStrings().widgetType(storedType)}</div>
         )}
-        {reason && <div style={{ fontSize: 11, opacity: 0.8, wordBreak: 'break-word' }}>{reason.message}</div>}
+        {detail && <div style={{ fontSize: 11, opacity: 0.8, wordBreak: 'break-word' }}>{detail}</div>}
       </div>
     </WidgetFrame>
   );
@@ -593,7 +589,7 @@ function WidgetForbiddenFrame({ widget }: { widget: WidgetInstance }): ReactNode
 // Shown when a widget's bound device no longer exists (a deleted device's stable token). Distinct
 // from the error frame: not a transient failure to retry, but a settled "this entity is gone".
 function WidgetUnavailableFrame({ widget }: { widget: WidgetInstance }): ReactNode {
-  return <StatePane widget={widget} kind="gone" glyph="⊘" title="Device unavailable" detail="The bound device no longer exists." />;
+  return <StatePane widget={widget} kind="gone" glyph="⊘" title={sharedStrings().deviceUnavailable} detail={sharedStrings().deviceGone} />;
 }
 
 // Shown when the platform does not offer the widget's binding to the viewer at all: a member limited
@@ -607,8 +603,8 @@ function WidgetNotForCustomerUsersFrame({ widget }: { widget: WidgetInstance }):
       widget={widget}
       kind="unsupported"
       glyph="⊘"
-      title="Not available for customer users"
-      detail="This widget is bound to something customer users cannot view."
+      title={sharedStrings().notForCustomers}
+      detail={sharedStrings().customerBinding}
     />
   );
 }
@@ -622,5 +618,5 @@ function WidgetNotForCustomerUsersFrame({ widget }: { widget: WidgetInstance }):
 // server's raw "forbidden: missing required authority".
 function WidgetErrorFrame({ widget, error }: { widget: WidgetInstance; error: unknown }): ReactNode {
   if (isForbiddenError(error)) return <WidgetForbiddenFrame widget={widget} />;
-  return <StatePane widget={widget} kind="error" glyph="…" title="Data unavailable" detail={String(error)} />;
+  return <StatePane widget={widget} kind="error" glyph="…" title={sharedStrings().dataUnavailable} detail={String(error)} />;
 }

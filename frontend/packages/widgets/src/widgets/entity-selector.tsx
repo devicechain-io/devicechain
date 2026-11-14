@@ -11,6 +11,7 @@
 // from the target slot's scope; the pick fires the ambient select() callback. Inert (a muted
 // hint) wherever selection isn't wired — edit mode, preview, a read-only embedder.
 
+import { sharedStrings } from '../shared-strings';
 import type { SlotBinding } from '@devicechain/dashboards';
 import { useEffect, useState, type ChangeEvent, type CSSProperties } from 'react';
 
@@ -95,7 +96,7 @@ export function EntitySelector({ widget }: WidgetProps<null>) {
       >
         {inert ? (
           <span style={hint}>
-            {select && target ? 'Selection isn’t available here.' : select ? 'No target slot configured.' : 'Selection is available on the live dashboard.'}
+            {select && target ? sharedStrings().selectionUnavailable : select ? sharedStrings().noTarget : sharedStrings().liveSelection}
           </span>
         ) : (
           <>
@@ -104,12 +105,12 @@ export function EntitySelector({ widget }: WidgetProps<null>) {
               value={value}
               disabled={candidates.length === 0}
               onChange={onChange}
-              aria-label={title || `Select ${target}`}
+              aria-label={title || sharedStrings().selectTarget(target)}
             >
               {/* A blank option so an unbound slot (no member picked yet, or the prior pick
                   is out of the new context) shows a prompt rather than defaulting to a row. */}
               <option value="" disabled>
-                {loading ? 'Loading…' : candidates.length === 0 ? 'No options' : 'Select…'}
+                {loading ? sharedStrings().loading : candidates.length === 0 ? sharedStrings().noOptions : sharedStrings().select}
               </option>
               {candidates.map((c) => (
                 <option key={tokenOf(c.binding)} value={tokenOf(c.binding)}>
@@ -117,7 +118,7 @@ export function EntitySelector({ widget }: WidgetProps<null>) {
                 </option>
               ))}
             </select>
-            {error ? <span style={hint}>Couldn’t load options.</span> : null}
+            {error ? <span style={hint}>{sharedStrings().optionsFailed}</span> : null}
           </>
         )}
       </div>

@@ -192,12 +192,12 @@ const BOUNDARY = '#475569';
 // without pulling 150 KiB of coordinates into a test — and so the one thing worth
 // asserting about it (that it projects exactly as the tiled style does) is
 // checkable in isolation.
-export function landStyleFrom(land: unknown, boundaries: unknown): unknown {
+export function landStyleFrom(land: unknown, boundaries: unknown, attribution = BUNDLED_BASEMAP_ATTRIBUTION): unknown {
   return {
     version: 8,
     projection: PROJECTION,
     sources: {
-      land: { type: 'geojson', data: land, attribution: BUNDLED_BASEMAP_ATTRIBUTION },
+      land: { type: 'geojson', data: land, attribution },
       boundaries: { type: 'geojson', data: boundaries },
     },
     layers: [
@@ -231,13 +231,15 @@ export function landStyleFrom(land: unknown, boundaries: unknown): unknown {
 // re-request a chunk that is failing for a reason retrying will not fix. Worth knowing
 // that the blast radius grew when this became the DEFAULT unconfigured path rather
 // than a rarity.
-let landStylePromise: Promise<unknown> | undefined;
+const landStylePromises = new Map<string, Promise<unknown>>();
 
-export function loadLandStyle(): Promise<unknown> {
-  if (!landStylePromise) {
-    landStylePromise = import('./natural-earth-data').then((mod) =>
-      landStyleFrom(mod.NATURAL_EARTH.land, mod.NATURAL_EARTH.boundaries),
+export function loadLandStyle(attribution = BUNDLED_BASEMAP_ATTRIBUTION): Promise<unknown> {
+  let pending = landStylePromises.get(attribution);
+  if (!pending) {
+    pending = import('./natural-earth-data').then((mod) =>
+      landStyleFrom(mod.NATURAL_EARTH.land, mod.NATURAL_EARTH.boundaries, attribution),
     );
+    landStylePromises.set(attribution, pending);
   }
-  return landStylePromise;
+  return pending;
 }

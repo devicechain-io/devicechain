@@ -32,7 +32,7 @@ export interface HistoryStrings {
   next: string;
 }
 
-export const HISTORY_STRINGS: Record<'en' | 'es', HistoryStrings> = {
+export const HISTORY_STRINGS: Record<'en' | 'es' | 'zh-CN', HistoryStrings> = {
   en: {
     time: 'Time',
     exportTime: 'Bucket start (UTC)',
@@ -71,8 +71,17 @@ export const HISTORY_STRINGS: Record<'en' | 'es', HistoryStrings> = {
     previous: 'Página anterior',
     next: 'Página siguiente',
   },
+  'zh-CN': {
+    time: '时间', exportTime: '时间桶起点（UTC）', average: (bucket) => `每 ${bucket} 的平均值`,
+    averageTitle: (bucket) => `每个数值是 ${bucket} 时间桶内读数的平均值，而非单次读数；时间为该时间桶的起点。`,
+    loading: '正在加载', unbound: '请为此组件选择设备', forbidden: ACCESS_STRINGS['zh-CN'].forbidden,
+    unsupported: '此数据源无法读取已存储的历史记录', failed: '无法读取历史记录', empty: '此范围内没有读数',
+    noReadings: '此时间桶内没有读数', newestFirst: '最新在前', oldestFirst: '最早在前',
+    range: (from, to, of) => `第 ${from}–${to} 项，共 ${of} 项`, previous: '上一页', next: '下一页',
+  },
 };
 
 export function historyStrings(): HistoryStrings {
-  return viewerLocale()?.toLowerCase().startsWith('es') ? HISTORY_STRINGS.es : HISTORY_STRINGS.en;
+  const language = viewerLocale()?.toLowerCase().split('-')[0];
+  return language === 'es' ? HISTORY_STRINGS.es : language === 'zh' ? HISTORY_STRINGS['zh-CN'] : HISTORY_STRINGS.en;
 }

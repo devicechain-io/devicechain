@@ -439,6 +439,8 @@ export interface UnresolvedWidgetReason {
   code: UnresolvedWidgetCode;
   // A human-readable, specific explanation (names the id and the versions involved).
   message: string;
+  // Structured values let a viewer translate a compatibility diagnostic without parsing prose.
+  versions?: { authored: number; installed: number };
 }
 
 // A widget that cannot be resolved to an installed implementation. The parser keeps the
