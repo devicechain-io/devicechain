@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/connectorwire"
@@ -125,7 +126,8 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 	}
 
 	// The auth mode is STATED: an authored handle means Bearer, no handle means an anonymous call (a
-	// token-in-URL webhook). httpsink refuses a Bearer call with an empty credential, so a
+	// token-in-URL webhook). Bearer handles resolve only under http-credential/, never as raw
+	// secret names or connector credentials. httpsink refuses an empty credential, so a
 	// resolved-but-empty value can never go out unauthenticated.
 	//
 	// Resolve the credential fail-closed: if a handle was authored, a resolve failure must NOT fall
@@ -134,9 +136,14 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 	// blip recovers on redelivery.
 	auth := httpsink.Auth{Mode: httpsink.AuthNone}
 	var secret string
-	// A Bearer credential handle may not name a signing key. The two share one secret store, and a
-	// signing key must never be readable after it is issued; presenting it as a credential would
-	// send it to the rule's own endpoint. Terminal: a redelivery names the same handle.
+	// Bearer handles may not name connector credentials or signing keys. These namespaces
+	// share one store but are reserved for their own delivery paths. Terminal: a redelivery
+	// names the same handle.
+	if strings.HasPrefix(h.SecretRef, connectorwire.ConnectorSecretPrefix) {
+		return execOutcome{outcome: outcomeInvalid, retryable: false,
+			err: fmt.Errorf("httpCall secretRef %q: %w: connector credentials cannot be used as an httpCall credential",
+				h.SecretRef, httpsink.ErrAuthRefused)}
+	}
 	if webhooksig.InReservedNamespace(h.SecretRef) {
 		return execOutcome{outcome: outcomeInvalid, retryable: false,
 			err: fmt.Errorf("httpCall secretRef %q: %w: the %q namespace holds webhook signing keys and "+
@@ -149,7 +156,7 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		// hung secret store (DB) must not pin the message past AckWait into a redelivery. Normally the
 		// resolve is a cached/fast envelope-decrypt, so this ceiling never trips in practice.
 		resolveCtx, cancelResolve := context.WithTimeout(ctx, secretResolveTimeout)
-		resolved, err := e.secrets.Resolve(resolveCtx, req.Tenant, h.SecretRef)
+		resolved, err := e.secrets.Resolve(resolveCtx, req.Tenant, connectorwire.HTTPCredentialSecretName(h.SecretRef))
 		cancelResolve()
 		// It used to be retried to the redelivery cap and then dead-lettered as exhausted, which
 		// reads as "the endpoint kept failing". Dead-lettered now as invalid, it says the rule's
