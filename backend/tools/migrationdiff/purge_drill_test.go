@@ -142,12 +142,26 @@ func seedTenant(t *testing.T, db *gorm.DB, tenant string, base int) {
 	               (id, tenant_id, device_profile_id, action, target, reason, actor, amr, txid)
 	             VALUES (?, ?, ?, 'ROLLBACK', '1', 'drill', 'drill', '[]', 1)`, base+10, tenant, base+5)
 
+	// Published versions are independent rows, not merely their live parents.
+	mustExec(t, db, `INSERT INTO "device-management".asset_types (id, tenant_id, token, active_version) VALUES (?, ?, ?, 1)`, base+20, tenant, tenant+"-asset-type")
+	mustExec(t, db, `INSERT INTO "device-management".asset_type_versions (id, tenant_id, asset_type_id, version, property_schema) VALUES (?, ?, ?, 1, '{}')`, base+21, tenant, base+20)
+	mustExec(t, db, `INSERT INTO "device-management".entity_groups (id, tenant_id, token, member_type, membership_mode, active_version) VALUES (?, ?, ?, 'DEVICE', 'STATIC', 1)`, base+22, tenant, tenant+"-group")
+	mustExec(t, db, `INSERT INTO "device-management".entity_group_versions (id, tenant_id, entity_group_id, version, selector, member_type, selector_schema) VALUES (?, ?, ?, 1, 'true', 'DEVICE', 1)`, base+23, tenant, base+22)
+	mustExec(t, db, `INSERT INTO "device-management".geo_fence_set_versions (id, tenant_id, version, snapshot, minted_at) VALUES (?, ?, 1, '{}', now())`, base+24, tenant)
+	mustExec(t, db, `INSERT INTO "dashboard-management".dashboards (id, tenant_id, token, definition, published_version) VALUES (?, ?, ?, '{}', 1)`, base+20, tenant, tenant+"-dashboard")
+	mustExec(t, db, `INSERT INTO "dashboard-management".dashboard_versions (id, tenant_id, dashboard_id, version, definition) VALUES (?, ?, ?, 1, '{}')`, base+21, tenant, base+20)
+	mustExec(t, db, `INSERT INTO "outbound-connectors".connectors (id, tenant_id, token, type, config) VALUES (?, ?, ?, 'httpCall', '{}')`, base+20, tenant, tenant+"-connector")
+	mustExec(t, db, `INSERT INTO "outbound-connectors".connector_versions (id, tenant_id, connector_id, version, type, config) VALUES (?, ?, ?, 1, 'httpCall', '{}')`, base+21, tenant, base+20)
+	mustExec(t, db, `INSERT INTO "user-management".iam_agent_policies (id, tenant_id, published_version) VALUES (?, ?, 1)`, base+20, tenant)
+	mustExec(t, db, `INSERT INTO "user-management".iam_agent_policy_versions (id, tenant_id, version, document, origin, published_by) VALUES (?, ?, 1, '{}', 'TENANT', 'drill')`, base+21, tenant)
+
 	// 🔴 THE JOURNAL HAS TO BE SEEDED BY HAND, and until it was, this drill certified
 	// the ADR-077 retention without a single row to retain. Every other row here is
 	// written by raw INSERT, which bypasses the GORM callbacks — so no audit row is ever
 	// generated, and a redaction that did nothing would pass every assertion below.
 	// Two schemas, because the journal is core-owned and exists in all ten; both columns
 	// that can name a person, because a redaction covering one reads as settled.
+
 	for _, schema := range []string{"user-management", "device-management"} {
 		mustExec(t, db, fmt.Sprintf(`INSERT INTO %q.audit_events
 		       (occurred_time, tenant_id, category, actor, table_name, operation, entity_pk, entity_label, rows_affected)
@@ -225,34 +239,6 @@ func seedShared(t *testing.T, db *gorm.DB) {
 	             VALUES (?, 'drill-role', 'tenant')`, sharedRoleID)
 }
 
-// seededLocation is one place seedTenant writes, with how many rows it puts there.
-type seededLocation struct {
-	label, table, where string
-	rows                int64
-}
-
-// tenantRowCounts is every seeded location. The row count is carried per location rather
-// than assumed to be one, so a location seeded with several rows cannot quietly pass an
-// assertion written for a single one.
-func tenantRowCounts() []seededLocation {
-	return []seededLocation{
-		{"device-management.area_types", `"device-management".area_types`, "tenant_id = ?", 1},
-		{"device-management.areas", `"device-management".areas`, "tenant_id = ?", 1},
-		{"device-management.devices", `"device-management".devices`, "tenant_id = ?", 1},
-		{"device-management.device_credentials", `"device-management".device_credentials`, "tenant_id = ?", 1},
-		{"device-management.device_profiles", `"device-management".device_profiles`, "tenant_id = ?", 1},
-		{"device-management.device_profile_versions", `"device-management".device_profile_versions`, "tenant_id = ?", 1},
-		{"device-management.device_types", `"device-management".device_types`, "tenant_id = ?", 1},
-		{"device-management.automation_review_policies", `"device-management".automation_review_policies`, "tenant_id = ?", 1},
-		{"device-management.automation_review_policy_changes", `"device-management".automation_review_policy_changes`, "tenant_id = ?", 1},
-		{"device-management.automation_review_break_glass", `"device-management".automation_review_break_glass`, "tenant_id = ?", 1},
-		{"event-processing.device_rosters", `"event-processing".device_rosters`, "tenant = ?", 1},
-		{"user-management.iam_memberships", `"user-management".iam_memberships`, "tenant_id = ?", 1},
-		{"event-management.measurement_events", `"event-management".measurement_events`, "tenant_id = ?", 3},
-		{"event-management.failed_event_records", `"event-management".failed_event_records`, "tenant_id = ?", 2},
-	}
-}
-
 func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	db, ctx := drillConn(t)
 
@@ -287,6 +273,16 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	// reason. The call cannot run inside a transaction, which is why it is a bare Exec.
 	mustExec(t, db, `CALL refresh_continuous_aggregate('event-management.measurement_rollups', NULL, NULL)`)
 	rollupMat := materializationOf(t, db, "event-management", "measurement_rollups")
+
+	seedPlan, err := tenantpurge.Classify(ctx, db)
+	require.NoError(t, err)
+	var drillTables []string
+	for _, entry := range seedPlan.Entries {
+		if !strings.HasPrefix(entry.Table.Schema, "_") {
+			drillTables = append(drillTables, entry.Table.String())
+		}
+	}
+	require.NoError(t, checkPurgeSeedCoverage(drillTables, tenantRowCounts(), purgeSeedExemptions))
 
 	// The seed itself has to be proven, or an INSERT that silently did nothing would
 	// make the erasure assertions below pass against an empty database.
