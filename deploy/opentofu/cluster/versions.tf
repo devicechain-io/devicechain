@@ -9,7 +9,7 @@
 # A cloud-specific root that provisions the cluster itself can wrap these modules.
 
 terraform {
-  required_version = ">= 1.6"
+  required_version = ">= 1.10"
 
   required_providers {
     # 🔴 EXACT PINS, AND THE kubernetes ONE MAY NOT GO BELOW 3.2.1.
