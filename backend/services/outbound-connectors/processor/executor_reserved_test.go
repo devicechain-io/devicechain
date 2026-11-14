@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-event-processing/connectorwire"
@@ -82,4 +83,13 @@ func TestHTTPCallBearerCredentialNamespace(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The refusal matches connector credentials by the shared prefix, so the name the model
+// stores a connector's credential under must stay inside it. model spells the prefix
+// itself rather than importing connectorwire, which would pull the event-processing
+// module into every module that imports model.
+func TestConnectorSecretNamesUseTheReservedPrefix(t *testing.T) {
+	assert.True(t, strings.HasPrefix(model.ConnectorSecretName(7), connectorwire.ConnectorSecretPrefix),
+		"model.ConnectorSecretName(7) = %q is outside %q", model.ConnectorSecretName(7), connectorwire.ConnectorSecretPrefix)
 }
