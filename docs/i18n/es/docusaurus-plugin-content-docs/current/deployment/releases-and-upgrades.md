@@ -805,6 +805,13 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
+#### La ruta HTTP de cargas útiles de dispositivos limita los intentos de adivinar credenciales {#v160-device-uplink-guessing}
+
+La ruta HTTP de cargas útiles de dispositivos, que se activa con `httpIngest.deviceUplinks`, ahora limita las solicitudes por dirección de origen (`429` con `Retry-After`). Tras fallos repetidos de credenciales para un dispositivo, deja de responder a los intentos de autenticación (`503` con `Retry-After`) en lugar de repetir `401`. Un dispositivo cuya credencial ya se autenticó sigue funcionando, incluidas las renovaciones.
+
+- **No hay que hacer nada** para los dispositivos que ya se autenticaron.
+- **Espera antes de reintentar tras un `503`**, incluso si presentas una credencial incorrecta: espera al menos el tiempo indicado por `Retry-After`.
+
 #### Antes de actualizar {#v160-before-upgrade}
 
 Revise la configuración de instancia editada a mano antes de desplegar los pods. Estos rechazos son nuevos desde `v1.5.0`; los ajustes de servicio inválidos impiden el arranque y pueden dejar los pods reiniciándose. Las claves de servicio siguientes van bajo `functionalAreas.<area>.config`.

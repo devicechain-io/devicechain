@@ -550,3 +550,120 @@ func TestABrokerAssertedFirstContactDoesNotSpendTheColdBucket(t *testing.T) {
 		require.True(t, l.Authenticated)
 	}
 }
+
+// Blocking the backend makes all distinct credentials contend for the same free allowance.
+type blockedDeviceBackend struct {
+	calls   atomic.Int64
+	release chan struct{}
+}
+
+func (b *blockedDeviceBackend) DeviceDecoder(context.Context, string, string, DeviceCredential) (*DecoderPlan, error) {
+	b.calls.Add(1)
+	<-b.release
+	return nil, nil
+}
+func TestDeviceDecodersParallelGuessesAreBounded(t *testing.T) {
+	b := &blockedDeviceBackend{release: make(chan struct{})}
+	d := NewDeviceDecoders(b, DeviceDecoderConfig{})
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := d.Lookup(context.Background(), "acme", "d1", credN(i))
+			if err != nil {
+				require.ErrorIs(t, err, ErrDeviceDecoderHeld)
+			}
+		}(i)
+	}
+	require.Eventually(t, func() bool { return b.calls.Load() >= deviceDecoderFreeFailures }, time.Second, time.Millisecond)
+	close(b.release)
+	wg.Wait()
+	require.LessOrEqual(t, b.calls.Load(), int64(deviceDecoderFreeFailures+1))
+}
+
+func TestDeviceDecodersBrokerAssertionBypassesHold(t *testing.T) {
+	be := &deviceBackendFake{plan: &DecoderPlan{Present: true}, good: "S"}
+	d := NewDeviceDecoders(be, DeviceDecoderConfig{})
+	for i := 0; i < 5; i++ {
+		_, err := d.Lookup(context.Background(), "acme", "d1", credN(i))
+		require.NoError(t, err)
+	}
+	_, err := d.Lookup(context.Background(), "acme", "d1", DeviceCredential{ID: "S"})
+	require.ErrorIs(t, err, ErrDeviceDecoderHeld)
+	l, err := d.Lookup(context.Background(), "acme", "d1", DeviceCredential{ID: "S", AssertedByBroker: true})
+	require.NoError(t, err)
+	require.True(t, l.Authenticated)
+}
+
+func TestDeviceDecodersFailureHoldGrowsAndErrorsReleaseProbe(t *testing.T) {
+	ck := &dclock{t: time.Unix(1000, 0)}
+	be := &deviceBackendFake{good: "S", plan: &DecoderPlan{Present: true}}
+	d := NewDeviceDecoders(be, DeviceDecoderConfig{Now: ck.now})
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		_, err := d.Lookup(ctx, "t", "d", credN(i))
+		require.NoError(t, err)
+	}
+	for step := 0; step < 8; step++ {
+		_, err := d.Lookup(ctx, "t", "d", credN(100+step))
+		require.ErrorIs(t, err, ErrDeviceDecoderHeld)
+		ck.t = ck.t.Add(min(time.Second*time.Duration(1<<step), 60*time.Second))
+		_, err = d.Lookup(ctx, "t", "d", credN(200+step))
+		require.NoError(t, err)
+	}
+	ck.t = ck.t.Add(60 * time.Second)
+	be.set(nil, errors.New("offline"))
+	_, err := d.Lookup(ctx, "t", "d", credN(300))
+	require.EqualError(t, err, "offline")
+	be.set(&DecoderPlan{Present: true}, nil)
+	l, err := d.Lookup(ctx, "t", "d", DeviceCredential{ID: "S"})
+	require.NoError(t, err)
+	require.True(t, l.Authenticated)
+	require.Empty(t, d.failures)
+}
+
+func TestDeviceDecodersFailureTableIsBoundedAndReclaimsOldEntries(t *testing.T) {
+	ck := &dclock{t: time.Unix(1000, 0)}
+	be := &deviceBackendFake{good: "S", plan: &DecoderPlan{Present: true}}
+	d := NewDeviceDecoders(be, DeviceDecoderConfig{Now: ck.now})
+	for i := 0; i < deviceDecoderFailureEntries; i++ {
+		d.failures[deviceFailureKey{"t", strconv.Itoa(i)}] = &deviceFailureState{count: 5, touched: ck.t, heldUntil: ck.t.Add(time.Second)}
+	}
+	_, err := d.Lookup(context.Background(), "t", "new", cred1)
+	require.ErrorIs(t, err, ErrDeviceDecoderHeld)
+	require.Zero(t, be.calls.Load())
+	require.Len(t, d.failures, deviceDecoderFailureEntries)
+	ck.t = ck.t.Add(11 * time.Minute)
+	l, err := d.Lookup(context.Background(), "t", "new", DeviceCredential{ID: "S"})
+	require.NoError(t, err)
+	require.True(t, l.Authenticated)
+	require.Empty(t, d.failures)
+}
+
+func TestDeviceDecodersElapsedHoldAllowsOnlyOneProbe(t *testing.T) {
+	ck := &dclock{t: time.Unix(1000, 0)}
+	d := NewDeviceDecoders(&deviceBackendFake{good: "S"}, DeviceDecoderConfig{Now: ck.now})
+	for i := 0; i < 5; i++ {
+		_, err := d.Lookup(context.Background(), "t", "d", credN(i))
+		require.NoError(t, err)
+	}
+	ck.t = ck.t.Add(time.Second)
+	b := &blockedDeviceBackend{release: make(chan struct{})}
+	d.backend = b
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := d.Lookup(context.Background(), "t", "d", credN(100+i))
+			if err != nil {
+				require.ErrorIs(t, err, ErrDeviceDecoderHeld)
+			}
+		}(i)
+	}
+	require.Eventually(t, func() bool { return b.calls.Load() == 1 }, time.Second, time.Millisecond)
+	close(b.release)
+	wg.Wait()
+	require.EqualValues(t, 1, b.calls.Load())
+}

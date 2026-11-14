@@ -204,6 +204,11 @@ Activa `mqttDeviceUplinks` solo cuando todas las réplicas de `event-sources` y 
 
 **Por HTTP**, la misma capacidad es `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink` en el servicio `event-sources`. El dispositivo presenta su propia credencial en cabeceras (`Authorization: Bearer <token>`, o `X-DeviceChain-Credential-Type`, `-Id` y `-Secret`), porque un cuerpo binario no tiene dónde llevarla, y la ruta responde `401` sin ella. Existe solo cuando el operador establece `httpIngest.deviceUplinks` en `event-sources`; si no, responde `404`.
 
+| HTTP | Respuesta |
+| --- | --- |
+| `429` | Las solicitudes desde esta dirección de origen superan el límite. `Retry-After` indica cuándo reintentar. |
+| `503` | Los fallos repetidos de credenciales para este dispositivo han activado una pausa temporal. `Retry-After` indica cuándo reintentar; espera incluso con una credencial incorrecta. Una credencial que ya se autenticó sigue funcionando. |
+
 ## Entrega de comando {#command-delivery}
 
 Lo que un dispositivo recibe en su topic `device-commands`, una vez por cada despacho de un comando. La entrega es **solo en vivo**: un dispositivo que no está conectado y suscrito cuando se publica el comando no lo recibe, y la plataforma no se entera en ningún caso. Consulta [Recepción de comandos](../guides/connecting-a-device.md#receiving-commands).

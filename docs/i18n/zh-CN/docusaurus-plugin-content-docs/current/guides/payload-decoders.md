@@ -315,8 +315,10 @@ HTTP 会回应设备。凡是取决于设备的回应，都只在其凭据通过
 | `404` | 该路由未开启。 |
 | `413` | 正文超过解码器所读内容的上限（帧 4 KiB、JSON 64 KiB），或超过 1 MiB。 |
 | `422` | 设备的类型没有解码器。载荷绝不会被当作事件读取。 |
+| `429` | 来自此来源地址的请求超出限额。`Retry-After` 指示何时重试。 |
 | `429` | 租户超出其摄取上限（按消息或按读数）。`Retry-After` 指明何时重试。 |
 | `500` | 平台无法构造该消息。设备不应重试。 |
+| `503` | 此设备的凭据反复验证失败，已触发临时暂停。`Retry-After` 指示何时重试；即使凭据错误也应退避。已通过认证的凭据仍可正常使用。 |
 | `503` | 解码器查询不可用、摄取正在施加背压，或下游流无法接收该载荷。前两种情况会设置 `Retry-After`，指明何时重试。 |
 
 MQTT 无法回应设备，因此平台会把发生的情况记录下来。完整表格见[设备协议参考](../reference/device-protocol.md#raw-payload)；简要如下：
@@ -326,7 +328,7 @@ MQTT 无法回应设备，因此平台会把发生的情况记录下来。完整
 - **超出上限的租户**会被丢弃：通过 HTTP 时设备收到 `429`；通过 MQTT 时消息被确认后丢弃，并计入 `total_msg_rate_limited` 或 `total_msg_reading_limited`。
 - **平台暂时无法作出的决定**（无法询问 device-management，或存在背压）会被重试：HTTP 返回 `503`，MQTT 消息则等待并再次投递。
 
-运维人员关注 `device_uplink_requests_total`（HTTP）和 `device_uplink_messages_total`（MQTT），两者都按 `result` 区分（`accepted`、`bad_request`、`unauthorized`、`too_large`、`no_decoder`、`rate_limited`、`plan_unavailable`、`backpressure`、`publish_failed`、`internal_error`），以及用于统计已计费读数的 `device_uplink_charged_readings_total`。
+运维人员关注 `device_uplink_requests_total`（HTTP）和 `device_uplink_messages_total`（MQTT），两者都按 `result` 区分（`accepted`、`bad_request`、`unauthorized`、`too_large`、`no_decoder`、`rate_limited`、`source_limited`、`held`、`plan_unavailable`、`backpressure`、`publish_failed`、`internal_error`），以及用于统计已计费读数的 `device_uplink_charged_readings_total`。
 
 载荷与集成一样计入租户的摄取上限：先按一条消息计，再按读数计，至少为解码器的[最大读数](#max-readings)。
 

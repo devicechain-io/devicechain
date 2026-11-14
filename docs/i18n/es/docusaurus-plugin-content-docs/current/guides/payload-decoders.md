@@ -315,8 +315,10 @@ HTTP responde al dispositivo. Toda respuesta que depende del dispositivo se da s
 | `404` | La ruta no está activada. |
 | `413` | El cuerpo supera el límite de lo que lee el decodificador (4 KiB de trama, 64 KiB de JSON) o 1 MiB. |
 | `422` | El tipo del dispositivo no tiene decodificador. La carga útil nunca se lee como un evento. |
+| `429` | Las solicitudes desde esta dirección de origen superan el límite. `Retry-After` indica cuándo reintentar. |
 | `429` | El inquilino supera su límite de ingesta, por mensajes o por lecturas. `Retry-After` indica cuándo reintentar. |
 | `500` | La plataforma no pudo construir el mensaje. El dispositivo no debe reintentar. |
+| `503` | Los fallos repetidos de credenciales para este dispositivo han activado una pausa temporal. `Retry-After` indica cuándo reintentar; espera incluso con una credencial incorrecta. Una credencial que ya se autenticó sigue funcionando. |
 | `503` | La consulta del decodificador no está disponible, la ingesta aplica contrapresión, o el flujo posterior no pudo aceptar la carga útil. `Retry-After` se envía en los dos primeros casos e indica cuándo reintentar. |
 
 MQTT no puede responder a un dispositivo, así que la plataforma registra lo ocurrido. La [Referencia del protocolo de dispositivos](../reference/device-protocol.md#raw-payload) tiene la tabla completa; en resumen:
@@ -326,7 +328,7 @@ MQTT no puede responder a un dispositivo, así que la plataforma registra lo ocu
 - **Un inquilino por encima de su límite** se descarta: por HTTP se le responde `429`; por MQTT el mensaje se confirma y se descarta, y se cuenta en `total_msg_rate_limited` o `total_msg_reading_limited`.
 - **Una decisión que la plataforma aún no puede tomar** (no se puede consultar a device-management, o hay contrapresión) se reintenta: HTTP responde `503`, y un mensaje MQTT espera y se vuelve a ofrecer.
 
-Un operador vigila `device_uplink_requests_total` (HTTP) y `device_uplink_messages_total` (MQTT), cada una por `result` (`accepted`, `bad_request`, `unauthorized`, `too_large`, `no_decoder`, `rate_limited`, `plan_unavailable`, `backpressure`, `publish_failed`, `internal_error`), y `device_uplink_charged_readings_total` para las lecturas cargadas.
+Un operador vigila `device_uplink_requests_total` (HTTP) y `device_uplink_messages_total` (MQTT), cada una por `result` (`accepted`, `bad_request`, `unauthorized`, `too_large`, `no_decoder`, `rate_limited`, `source_limited`, `held`, `plan_unavailable`, `backpressure`, `publish_failed`, `internal_error`), y `device_uplink_charged_readings_total` para las lecturas cargadas.
 
 Una carga útil cuenta contra los límites de ingesta del inquilino una vez como mensaje y luego como lecturas, al menos las [lecturas máximas](#max-readings) del decodificador, igual que para una integración.
 

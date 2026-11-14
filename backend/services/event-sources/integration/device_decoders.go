@@ -28,6 +28,20 @@ var ErrDeviceDecoderUnsupported = errors.New("integration: device-management doe
 // ErrDeviceDecoderBudget is a fill refused because this replica's budget for plan lookups is spent.
 var ErrDeviceDecoderBudget = errors.New("integration: this replica's device-decoder lookup budget is spent")
 
+// ErrDeviceDecoderHeld suppresses authentication verdicts after repeated device failures.
+var ErrDeviceDecoderHeld = errors.New("integration: device-decoder authentication held")
+
+const (
+	deviceDecoderFreeFailures   = 5
+	deviceDecoderFailureEntries = 50_000
+)
+
+type deviceFailureKey struct{ tenant, device string }
+type deviceFailureState struct {
+	count, inFlight    int
+	heldUntil, touched time.Time
+}
+
 const deviceDecoderQuery = `query($deviceToken: String!, $credentialType: String!, $credentialId: String!, $credentialSecret: String) {
   deviceDecoder(deviceToken: $deviceToken, credentialType: $credentialType, credentialId: $credentialId, credentialSecret: $credentialSecret) {
     present input maxReadings composedCost parsesJson profileVersionToken
@@ -280,11 +294,15 @@ func (e deviceDecoderEntry) fresh(now time.Time, cfg DeviceDecoderConfig) bool {
 //
 // 🔴 THE HIT PATH IS THE HOT PATH. It is one read lock, one map read and one fingerprint of the
 // credential per uplink on the device wire (and nothing at all on the routes that do not use it); a
-// fill takes the singleflight and a budget, which a hit never touches.
+// fill takes the singleflight and a budget, which a hit never touches. Cold fills also reserve
+// a per-device failure slot: HTTP exposes authentication verdicts, so distinct credential guesses
+// must share a failure hold even though they have distinct cache keys.
 type DeviceDecoders struct {
-	cfg     DeviceDecoderConfig
-	backend DeviceDecoderBackend
-	sf      singleflight.Group
+	cfg       DeviceDecoderConfig
+	backend   DeviceDecoderBackend
+	sf        singleflight.Group
+	failureMu sync.Mutex
+	failures  map[deviceFailureKey]*deviceFailureState
 
 	mu      sync.RWMutex
 	entries map[string]deviceDecoderEntry
@@ -310,7 +328,7 @@ type fillBucket struct {
 func NewDeviceDecoders(backend DeviceDecoderBackend, cfg DeviceDecoderConfig) *DeviceDecoders {
 	cfg = cfg.withDefaults()
 	now := cfg.Now()
-	return &DeviceDecoders{cfg: cfg, backend: backend, entries: make(map[string]deviceDecoderEntry),
+	return &DeviceDecoders{cfg: cfg, backend: backend, failures: make(map[deviceFailureKey]*deviceFailureState), entries: make(map[string]deviceDecoderEntry),
 		coldTokens: cfg.ColdFillBurst, coldAt: now, fillTokens: cfg.FillBurst, fillAt: now, tenants: make(map[string]*fillBucket)}
 }
 
@@ -364,6 +382,17 @@ func (d *DeviceDecoders) Lookup(ctx context.Context, tenant, device string, cred
 		// tenant is the broker's, not an unproven caller's, so it is charged to THAT tenant's bucket
 		// and never spends the cold bucket that bounds a flood of invented credentials.
 		refresh := cred.AssertedByBroker || (ok && cur.authed && at.Sub(cur.at) < d.cfg.StaleMax)
+		who := deviceFailureKey{tenant, device}
+		var reservation *deviceFailureState
+		if !refresh {
+			var allowed bool
+			reservation, allowed = d.reserveFailure(who, at)
+			if !allowed {
+				return nil, ErrDeviceDecoderHeld
+			}
+			// Also releases reservations on a budget refusal or backend error.
+			defer d.finishFailure(who, reservation)
+		}
 		if !d.takeFill(tenant, refresh, at) {
 			return nil, ErrDeviceDecoderBudget
 		}
@@ -374,6 +403,7 @@ func (d *DeviceDecoders) Lookup(ctx context.Context, tenant, device string, cred
 		if err != nil {
 			return nil, err
 		}
+		d.recordFailure(who, reservation, plan != nil, d.cfg.Now())
 		fresh := deviceDecoderEntry{at: d.cfg.Now()}
 		if plan != nil {
 			fresh.plan, fresh.authed = *plan, true
@@ -490,4 +520,64 @@ func (d *DeviceDecoders) put(key string, e deviceDecoderEntry) {
 		evictSome(d.entries, d.cfg.Entries/16+1, func(old deviceDecoderEntry) bool { return e.at.Sub(old.at) >= d.cfg.StaleMax })
 	}
 	d.entries[key] = e
+}
+
+// reserveFailure counts pending cold questions against the free allowance. Once that allowance
+// is spent, only one probe may run after the hold expires, regardless of credential digest.
+func (d *DeviceDecoders) reserveFailure(key deviceFailureKey, now time.Time) (*deviceFailureState, bool) {
+	d.failureMu.Lock()
+	defer d.failureMu.Unlock()
+	s := d.failures[key]
+	if s == nil {
+		if len(d.failures) >= deviceDecoderFailureEntries {
+			for k, old := range d.failures {
+				if old.inFlight == 0 && now.Sub(old.touched) > 10*time.Minute && !now.Before(old.heldUntil) {
+					delete(d.failures, k)
+				}
+			}
+			if len(d.failures) >= deviceDecoderFailureEntries {
+				return nil, false
+			}
+		}
+		s = &deviceFailureState{}
+		d.failures[key] = s
+	}
+	s.touched = now
+	if s.count >= deviceDecoderFreeFailures {
+		if now.Before(s.heldUntil) || s.inFlight > 0 {
+			return nil, false
+		}
+	} else if s.count+s.inFlight >= deviceDecoderFreeFailures {
+		return nil, false
+	}
+	s.inFlight++
+	return s, true
+}
+
+func (d *DeviceDecoders) finishFailure(key deviceFailureKey, s *deviceFailureState) {
+	d.failureMu.Lock()
+	defer d.failureMu.Unlock()
+	s.inFlight--
+	if d.failures[key] == s && s.count == 0 && s.inFlight == 0 {
+		delete(d.failures, key)
+	}
+}
+
+func (d *DeviceDecoders) recordFailure(key deviceFailureKey, s *deviceFailureState, authenticated bool, now time.Time) {
+	d.failureMu.Lock()
+	defer d.failureMu.Unlock()
+	if authenticated {
+		delete(d.failures, key)
+		return
+	}
+	// A successful concurrent authentication supersedes outstanding cold guesses.
+	if s == nil || d.failures[key] != s {
+		return
+	}
+	s.count++
+	s.touched = now
+	if s.count >= deviceDecoderFreeFailures {
+		hold := time.Second * time.Duration(1<<min(s.count-deviceDecoderFreeFailures, 6))
+		s.heldUntil = now.Add(min(hold, 60*time.Second))
+	}
 }

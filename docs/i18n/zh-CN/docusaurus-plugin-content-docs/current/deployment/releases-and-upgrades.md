@@ -516,6 +516,13 @@ dcctl bootstrap local devicechain
 
 `v1.6.0` 是从 `v1.5.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
 
+#### HTTP 设备上行路由限制凭据猜测 {#v160-device-uplink-guessing}
+
+通过 `httpIngest.deviceUplinks` 按需启用的 HTTP 设备上行路由现在会按来源地址限制请求（返回 `429` 和 `Retry-After`）。某个设备的凭据反复验证失败后，路由将暂停回答认证猜测（返回 `503` 和 `Retry-After`），而不再重复返回 `401`。凭据已通过认证的设备仍可正常工作，包括刷新认证缓存时。
+
+- **无需操作**：已通过认证的设备可继续使用。
+- **收到 `503` 时应退避重试**，即使提交的是错误凭据：至少等待 `Retry-After` 指定的时间再重试。
+
 #### 升级前 {#v160-before-upgrade}
 
 滚动更新 Pod 前，请检查手工编辑的实例配置。以下拒绝条件均为 `v1.5.0` 之后新增；无效的服务设置会阻止启动，可能导致 Pod 反复崩溃重启。下列服务键位于 `functionalAreas.<area>.config` 下。
