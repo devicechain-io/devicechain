@@ -13,11 +13,15 @@ Los tipos y las operaciones de GraphQL pueden cambiar en una versión menor. La 
 
 ## Antes de empezar {#before-you-start}
 
+**Reserva unas 2 h 42 min de grabación desde que empieza el episodio, además del tiempo de preparación y revisión.** Este tutorial registra telemetría en vivo. No hay un modo compatible de avance rápido ni de carga de datos con fechas pasadas para esta revisión. Para una primera prueba más breve, consulta [Tu primer dispositivo](../quickstart/first-device.md); vuelve aquí para la comparación completa.
+
 Necesitas una instancia de DeviceChain en ejecución, `dcctl` y dos personas con membresía en el tenant que `dcctl sim create` crea para el simulador. Quien edita y ejecuta necesita `device:write` y `event:read` en su propia sesión sin restricciones de ámbito. Quien aprueba necesita esos permisos, una membresía sin restricciones de ámbito y autenticación de dos factores configurada. Leer revisiones también exige `device:read` y `event:read`.
 
 Pide la aprobación a otra persona: por defecto, ni quien ejecuta ni los autores del borrador pueden aprobar. Para iniciar sesión en el simulador con un segundo factor, `dcctl sim` acepta `--otp`; consulta [autenticación de dos factores con dcctl](../guides/two-factor-authentication.md#dcctl).
 
 ## Registra el episodio Night Shift {#record-night-shift}
+
+### Inicia la grabación {#start-recording}
 
 Crea el tenant y el acceso del simulador:
 
@@ -31,7 +35,13 @@ Ejecuta el simulador en su propia terminal y mantenlo en primer plano:
 dcctl sim run nightshift
 ```
 
-En otra terminal, obtén las ventanas registradas:
+### Mientras se graba el episodio {#while-recording}
+
+Deja el simulador en ejecución. Explora los cinco dispositivos y su telemetría en la consola, prepara el borrador A descrito más abajo sin publicarlo y pide a la segunda persona que compruebe su membresía y la autenticación de dos factores. Lee las expectativas de revisión y los resultados esperados mientras se acumula el historial. Espera hasta unas 2 h 42 min después del inicio del episodio para ejecutar la revisión.
+
+### Obtén las ventanas de revisión {#get-review-windows}
+
+En otra terminal, obtén las horas de las ventanas del episodio:
 
 ```bash
 dcctl sim windows nightshift
@@ -44,7 +54,7 @@ INCIDENT	<start RFC3339>	<end RFC3339>
 NORMAL	<start RFC3339>	<end RFC3339>
 ```
 
-Antes de iniciar el episodio, el comando te pide que ejecutes primero el simulador. El instante inicial se registra cuando empieza el episodio. INCIDENT va del minuto 45 al 95 desde ese instante; NORMAL, del 105 al 160. Espera unas 2 h 42 min desde el inicio para que NORMAL termine al menos dos minutos antes de la revisión.
+Antes de iniciar el episodio, el comando te pide que ejecutes primero el simulador. El instante inicial se registra cuando empieza el episodio. INCIDENT va del minuto 45 al 95 desde ese instante; NORMAL, del 105 al 160. Mostrar las ventanas no significa que la grabación haya terminado: ejecuta la revisión solo cuando hayan pasado al menos dos minutos desde el final de NORMAL. Cambiar `--emit-interval` modifica la frecuencia de muestreo, no el tiempo transcurrido del episodio.
 
 Los primeros 45 minutos permiten estabilizar el episodio. Durante INCIDENT, `tp-vav-tower-f1-south` se calienta y la regla incluida no lo detecta. Durante NORMAL, `tp-vav-tower-f3-north` tiene un breve calentamiento normal que no debe activar la refrigeración; `tp-vav-tower-f5-west` alberga una reunión como control.
 
