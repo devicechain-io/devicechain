@@ -45,8 +45,18 @@ func TestAClearWithAFutureEventTimeIsAnnouncedOnce(t *testing.T) {
 // Two claimants racing on the same cycle: exactly one wins.
 func TestExactlyOneConcurrentClaimantWinsTheClearAnnouncement(t *testing.T) {
 	n, _, ctx := clearHarness(t, true)
+	// :memory: belongs to one SQLite connection. An unrestricted pool opens
+	// empty databases under contention; real multi-connection claims are tested
+	// against Postgres in model/claims_integration_test.go.
+	pool, err := stateDB(n.api).DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.SetMaxOpenConns(1)
 	raised := time.Now().UTC().Add(-time.Hour)
-	_ = n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised))
+	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+		t.Fatal(err)
+	}
 	// Stamp the clear without announcing it, so the claim is what is contended.
 	if err := n.api.MarkCleared(ctx, "a1", "k", "CRITICAL", raised, time.Now().UTC().Add(300*time.Second)); err != nil {
 		t.Fatal(err)
@@ -57,18 +67,28 @@ func TestExactlyOneConcurrentClaimantWinsTheClearAnnouncement(t *testing.T) {
 	}
 	cycle := states[0].CycleRaisedAt
 	var wins atomic.Int32
+	var losses atomic.Int32
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			won, err := n.api.ClaimClearAnnouncement(ctx, "a1", cycle, time.Now().UTC().Add(time.Duration(i)*time.Nanosecond))
-			if err == nil && won {
+			if err != nil {
+				t.Errorf("claim %d: %v", i, err)
+				return
+			}
+			if won {
 				wins.Add(1)
+			} else {
+				losses.Add(1)
 			}
 		}(i)
 	}
 	wg.Wait()
+	if wins.Load()+losses.Load() != 8 {
+		t.Errorf("%d wins + %d losses, want 8 completed claims", wins.Load(), losses.Load())
+	}
 	if wins.Load() != 1 {
 		t.Fatalf("%d claimants won, want exactly 1", wins.Load())
 	}
