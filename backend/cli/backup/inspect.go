@@ -23,8 +23,11 @@ const ManifestVersion = 1
 // Manifest is manifest.json in a backup-set directory. It describes only listed
 // snapshots; verification does not prove inventory coverage or checkpoint consistency.
 type Manifest struct {
-	Version int     `json:"version"`
-	Entries []Entry `json:"entries"`
+	Version              int      `json:"version"`
+	Instance             string   `json:"instance,omitempty"`
+	Tenant               string   `json:"tenant,omitempty"`
+	AbsentGatewayStreams []string `json:"absent_gateway_streams,omitempty"`
+	Entries              []Entry  `json:"entries"`
 }
 
 // Entry describes one opaque snapshot. Kind is stream, bucket, or object-store.

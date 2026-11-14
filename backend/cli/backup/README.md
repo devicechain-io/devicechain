@@ -73,5 +73,41 @@ are hashed as a stream, without loading archives into memory.
 
 Success proves the listed bytes match the manifest. It does not authenticate the
 manifest, inspect native archive internals, establish inventory completeness, or
-prove a coordinated database/stream/blob recovery checkpoint. This slice defines
-no restore operation or separate COMPLETE marker; the manifest is published last.
+prove a coordinated database/stream/blob recovery checkpoint. The manifest is published last, with no separate COMPLETE marker.
+
+`dcctl restore <instance> --from <backup-set-dir> --plan` verifies the set with
+`Inspect` (the same verifier as `backup inspect --verify`), then validates its
+identity, registry coverage, stream metadata and blob index before cluster
+access. It prints one create, replace or explained skip for every declared
+stream, KV bucket and instance object store. Stream replacements include the
+current message count. KV and other rebuildable/ephemeral resources are skipped
+with their policy reason; their existing data is left alone.
+
+New exports record `instance` and `tenant` in the v1 manifest. Tenant `"*"`
+explicitly means the entire instance, whose shared streams cover all tenants;
+there is no individual tenant selector in deployed instance configuration.
+Legacy sets without either identity field remain inspectable but are refused by
+restore planning. Foreign instance/tenant identities require `--force-foreign`.
+That flag only permits the identity mismatch, never missing evidence, missing
+required entries or potential data loss. Foreign plans name the target resources;
+they do not implement subject, tenant, blob Ref or backend migration.
+
+Every preserved platform stream and the blob store must be present. B2 omitted
+`$MQTT_msgs` when MQTT was disabled: its absence is allowed only when the target
+also has no such stream and the manifest explicitly lists it in
+`absent_gateway_streams`. An unexplained omission always fails. New exports
+record this absence when MQTT is disabled. Unknown entries and wrong registry
+policies are refused.
+For existing streams, newer last-message timestamps, higher sequence numbers or
+more messages cause refusal. For blobs, any extra or divergent target content
+(or differing backend) is refused because the bundle has no trusted object cut
+timestamps. Matching blob content is skipped; an identical subset can be safely
+completed. Missing or unreadable target storage is an error, not an empty store.
+
+Planning reuses installed instance configuration, broker authentication/TLS and
+port-forward resolution, with the same `--kube-context`, `--nats-url` and
+`--blob-directory` options as backup. It reads stream information and exports
+blob bytes into an in-memory pipe; it never calls NATS restore/reconciliation or
+writes target files/objects. Freeze target mutations while planning. The output
+is an observation, not a lock or authorization for a later restore. `--plan` is
+mandatory and no apply operation exists.

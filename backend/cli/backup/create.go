@@ -34,7 +34,7 @@ func Create(ctx context.Context, nc *nats.Conn, instance, destination string, bl
 	if err := os.Mkdir(destination, 0o700); err != nil {
 		return err
 	}
-	m := Manifest{Version: ManifestVersion}
+	m := Manifest{Version: ManifestVersion, Instance: instance, Tenant: "*"}
 	write := func(kind, name string, class durability.BackupClass, export func(io.Writer) error) error {
 		path := fmt.Sprintf("%06d.snapshot", len(m.Entries))
 		f, err := os.OpenFile(filepath.Join(destination, path), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -82,6 +82,7 @@ func Create(ctx context.Context, nc *nats.Conn, instance, destination string, bl
 		// Gateway state is absent when MQTT has never been enabled. Required
 		// platform streams must exist, including empty streams.
 		if err == nats.ErrStreamNotFound && item.Kind == backupset.KindGatewayStream {
+			m.AbsentGatewayStreams = append(m.AbsentGatewayStreams, name)
 			continue
 		}
 		if err != nil {
