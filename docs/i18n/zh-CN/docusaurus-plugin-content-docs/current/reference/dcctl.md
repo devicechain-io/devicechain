@@ -22,6 +22,7 @@ dcctl [command]
 ### Commands
 
 * [dcctl attr](#dcctl-attr)	 - Set, read and remove an entity's attributes (facet values)
+* [dcctl backup](#dcctl-backup)	 - Inspect local backup sets
 * [dcctl bootstrap](#dcctl-bootstrap)	 - Bootstrap a DeviceChain instance
 * [dcctl broker](#dcctl-broker)	 - Message broker operations
 * [dcctl dead-letters](#dcctl-dead-letters)	 - Inspect work the platform accepted and then gave up on
@@ -221,6 +222,46 @@ dcctl attr unset <kind> <token> <key> [flags]
 ### SEE ALSO
 
 * [dcctl attr](#dcctl-attr)	 - Set, read and remove an entity's attributes (facet values)
+
+## dcctl backup {#dcctl-backup}
+
+Inspect local backup sets
+
+### Options
+
+```
+  -h, --help   help for backup
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl backup inspect](#dcctl-backup-inspect)	 - Verify a local backup manifest and all listed snapshot files
+
+## dcctl backup inspect {#dcctl-backup-inspect}
+
+Verify a local backup manifest and all listed snapshot files
+
+### Synopsis
+
+Read manifest.json and verify each listed snapshot's size and SHA-256.
+Requires --verify. Uses no cluster access. Verification covers listed files only;
+it does not establish inventory completeness or checkpoint consistency.
+
+```
+dcctl backup inspect <backup-set-dir> [flags]
+```
+
+### Options
+
+```
+  -h, --help     help for inspect
+      --verify   Verify every listed snapshot's size and SHA-256 (required)
+```
+
+### SEE ALSO
+
+* [dcctl backup](#dcctl-backup)	 - Inspect local backup sets
 
 ## dcctl bootstrap {#dcctl-bootstrap}
 
