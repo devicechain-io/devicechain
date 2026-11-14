@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 
 	"github.com/devicechain-io/dc-microservice/config"
@@ -96,7 +97,11 @@ func liveMaxFileStore(state *tfjson.State) string {
 func jetStreamReservation(n *config.NatsConfiguration) int64 {
 	var reserved int64
 	for _, s := range streams.Suffixes() {
-		reserved += n.StreamMaxBytesFor(s)
+		copies := 1
+		if n.ShardGroups != nil && slices.Contains(n.ShardGroups.Suffixes, s) {
+			copies = n.ShardGroups.Count
+		}
+		reserved += int64(copies) * n.StreamMaxBytesFor(s)
 	}
 	return reserved + n.MqttStoreReservation() + n.KvReservation()
 }
@@ -112,6 +117,9 @@ func requiredVolumeGi(reserved int64) int64 {
 // derived is true when the ceiling is 90% of a volume (so the volume that would hold the
 // reservation can be named), false when an operator set max_file_store by hand.
 func checkJetStreamReservation(n *config.NatsConfiguration, ceiling int64, source string, derived bool) error {
+	if err := n.ShardGroups.Validate(); err != nil {
+		return err
+	}
 	reserved := jetStreamReservation(n)
 	if reserved <= ceiling {
 		return nil

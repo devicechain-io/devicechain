@@ -203,6 +203,9 @@ func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err
 		return openedInstanceRoot{}, err
 	}
 	// The generated broker permissions, as a variable file the root loads by itself.
+	if err := writeShardGroupsVarFile(rootdir, st); err != nil {
+		return openedInstanceRoot{}, err
+	}
 	if err := writeBrokerPermissionsVarFile(rootdir, st); err != nil {
 		return openedInstanceRoot{}, err
 	}
@@ -512,7 +515,16 @@ func infraVarsIn(st *State, rootdir string) []string {
 	// The broker image: DeviceChain's own nats-server build, at the release this run
 	// deploys. See brokerImageVars.
 	vars = append(vars, brokerImageVars(st)...)
-	vars = append(vars, haFor(st.HA).infraVars()...)
+	topology := haFor(st.HA)
+	if cfg, err := shardGroupsFromValues(authoringValues(st)); err == nil && cfg != nil {
+		// The opt-in adds independent R1 groups inside one odd-sized server cluster.
+		topology.ServerReplicas = max(3, cfg.Count|1)
+	}
+	if topology.ServerReplicas != haFor(st.HA).ServerReplicas {
+		vars = append(vars, fmt.Sprintf("ha=%t", st.HA), fmt.Sprintf("nats_cluster_replicas=%d", topology.ServerReplicas))
+	} else {
+		vars = append(vars, topology.infraVars()...)
+	}
 	// The OpenTofu half of the event-management pod count, for the same reason: the
 	// event store reserves its connections per pod. See persistenceTopology.
 	vars = append(vars, persistenceFor(st).infraVars()...)
