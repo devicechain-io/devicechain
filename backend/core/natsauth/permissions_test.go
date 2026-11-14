@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/durability"
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -365,17 +366,47 @@ func TestTheBrokerAdministratorShapesTheCatalogAndNothingElse(t *testing.T) {
 		envelopeReads["$JS.API.DIRECT.GET."+name] = true
 	}
 	for _, a := range p.Publish.Allow {
+		if strings.HasPrefix(a, "$JS.SNAPSHOT.ACK.") {
+			continue
+		}
 		require.True(t, strings.HasPrefix(a, "$JS.API."), "the administrator may publish to %q, which is not a JetStream API subject", a)
 		if envelopeReads[a] {
 			continue
 		}
-		for _, forbidden := range []string{"STREAM.PURGE", "STREAM.MSG", "STREAM.RESTORE", "STREAM.SNAPSHOT", "CONSUMER.CREATE", "CONSUMER.DELETE", "CONSUMER.MSG", "DIRECT.GET"} {
+		for _, forbidden := range []string{"STREAM.PURGE", "STREAM.MSG", "STREAM.RESTORE", "CONSUMER.CREATE", "CONSUMER.DELETE", "CONSUMER.MSG", "DIRECT.GET"} {
 			require.NotContains(t, a, forbidden)
 		}
 	}
 	require.Equal(t, []string{messaging.InboxPrefix(config.NatsAdminPrincipal) + ".>"}, p.Subscribe.Allow)
 	require.False(t, p.AllowResponses)
 	require.False(t, p.publishes("$MQTT.msgs.acme.devices.d1.events"), "the device-events deny rides on this login too")
+}
+
+func TestAdministratorSnapshotsOnlyPreservedStreams(t *testing.T) {
+	p, err := AdminPermissions(permInstance)
+	require.NoError(t, err)
+	allowed := map[string]bool{"$MQTT_msgs": true}
+	for _, st := range streams.All {
+		if st.BackupClass == durability.BackupRequired || st.BackupClass == durability.BackupCheckpoint {
+			allowed[messaging.StreamName(permInstance, st.Suffix)] = true
+		}
+	}
+	for name := range allowed {
+		require.True(t, p.publishes("$JS.API.STREAM.SNAPSHOT."+name), name)
+		require.True(t, p.publishes("$JS.SNAPSHOT.ACK."+name+".token.1.1024"), name)
+	}
+	for _, name := range []string{messaging.StreamName("other", streams.All[0].Suffix), "KV_cache", "$MQTT_sess", "$MQTT_rmsgs"} {
+		require.False(t, p.publishes("$JS.API.STREAM.SNAPSHOT."+name), name)
+		require.False(t, p.publishes("$JS.SNAPSHOT.ACK."+name+".token.1.1024"), name)
+	}
+	for _, a := range p.Publish.Allow {
+		if strings.HasPrefix(a, "$JS.API.STREAM.SNAPSHOT.") {
+			require.True(t, allowed[strings.TrimPrefix(a, "$JS.API.STREAM.SNAPSHOT.")], a)
+		}
+		if strings.HasPrefix(a, "$JS.SNAPSHOT.ACK.") {
+			require.True(t, allowed[strings.TrimSuffix(strings.TrimPrefix(a, "$JS.SNAPSHOT.ACK."), ".>")], a)
+		}
+	}
 }
 
 // Stream deletion, restore and message deletion are not granted wholesale: they appear only where

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/durability"
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -477,6 +478,10 @@ func AdminPermissions(instanceId string) (Permissions, error) {
 	for _, st := range streams.All {
 		name := messaging.StreamName(instanceId, st.Suffix)
 		shape(name)
+		if st.BackupClass == durability.BackupRequired || st.BackupClass == durability.BackupCheckpoint {
+			g.api("STREAM.SNAPSHOT." + name)
+			g.publish("$JS.SNAPSHOT.ACK." + name + ".>")
+		}
 		if st.RecreateOnRetentionChange {
 			// The migration waits for the reader's durable to drain, deletes the stream and adds it
 			// again with the declared retention.
@@ -514,6 +519,9 @@ func AdminPermissions(instanceId string) (Permissions, error) {
 	for _, bucket := range messaging.IdentityBucketNames(instanceId) {
 		shape(messaging.KvStreamName(bucket))
 	}
+	// The fail-closed gateway store can hold the only accepted copy.
+	g.api("STREAM.INFO.$MQTT_msgs", "STREAM.SNAPSHOT.$MQTT_msgs")
+	g.publish("$JS.SNAPSHOT.ACK.$MQTT_msgs.>")
 	return g.permissions(false), nil
 }
 
