@@ -295,6 +295,9 @@ func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
 	var changed bool
 	var activeSince time.Time
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockTenantCreates(tx, profile.TenantId, "active_rules"); err != nil {
+			return err
+		}
 		locked, err := lockProfile(tx, profile.ID)
 		if err != nil {
 			return err
@@ -329,6 +332,9 @@ func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
 					return err
 				}
 			}
+		}
+		if err := api.checkActiveRuleCount(ctx, tx, profile.ID, version.Snapshot); err != nil {
+			return err
 		}
 		var maxVersion int32
 		if err = tx.Model(&DeviceProfileVersion{}).Where("device_profile_id = ?", profile.ID).Select("COALESCE(MAX(version), 0)").Scan(&maxVersion).Error; err != nil {
@@ -571,6 +577,9 @@ func (api *Api) RollbackDeviceProfileWithReason(ctx context.Context, token strin
 	var changed bool
 	var activeSince time.Time
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockTenantCreates(tx, profile.TenantId, "active_rules"); err != nil {
+			return err
+		}
 		locked, err := lockProfile(tx, profile.ID)
 		if err != nil {
 			return err
@@ -598,6 +607,9 @@ func (api *Api) RollbackDeviceProfileWithReason(ctx context.Context, token strin
 
 		floor, err := activationFloor(tx, profile.ID)
 		if err != nil {
+			return err
+		}
+		if err := api.checkActiveRuleCount(ctx, tx, profile.ID, target.Snapshot); err != nil {
 			return err
 		}
 		activeSince = nextActivationInstant(floor)

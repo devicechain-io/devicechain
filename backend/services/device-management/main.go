@@ -982,6 +982,19 @@ func wireIntegrationsCeilingResolver() {
 	Api.IntegrationsCeiling = governance.NewIntegrationsCeilingResolver(client, url)
 }
 
+func wireRulesCeilingResolver() {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().
+			Msg("Service secret or user-management endpoint not configured — no tier rule ceiling is enforced (only an explicit tier rulesPerTenant enforces one).")
+		return
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",
+		[]string{string(auth.TenantRead)})
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	Api.RulesCeiling = governance.NewRulesCeilingResolver(client, url)
+}
+
 // Called after microservice has been initialized.
 // safetyGates reports whether this service's optional safety gates are wired
 // (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
@@ -1099,6 +1112,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			wireGeoFenceCapsResolver()
 			wireCalculatedMetricsCeilingResolver()
 			wireIntegrationsCeilingResolver()
+			wireRulesCeilingResolver()
 			if err = wireProvisioningEndpoint(); err != nil {
 				return err
 			}
