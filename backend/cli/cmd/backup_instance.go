@@ -26,16 +26,20 @@ import (
 
 type backupOptions struct {
 	InstanceID, KubeContext, Destination, NatsURL, BlobDirectory string
+	RestorePlan                                                  *backup.RestorePlan
+	PlanOutput                                                   io.Writer
 }
 
 func backupInstance(ctx context.Context, opts backupOptions) error {
-	if opts.InstanceID == "" || opts.Destination == "" {
+	if opts.InstanceID == "" || (opts.Destination == "" && opts.RestorePlan == nil) {
 		return fmt.Errorf("instance and destination are required")
 	}
-	if _, err := os.Lstat(opts.Destination); err == nil {
-		return fmt.Errorf("backup destination already exists")
-	} else if !os.IsNotExist(err) {
-		return err
+	if opts.RestorePlan == nil {
+		if _, err := os.Lstat(opts.Destination); err == nil {
+			return fmt.Errorf("backup destination already exists")
+		} else if !os.IsNotExist(err) {
+			return err
+		}
 	}
 	// The public resolver overlays the installed per-login Secrets, including the
 	// broker administrator, and preserves the existing namespace/credential rules.
@@ -111,9 +115,17 @@ func backupInstance(ctx context.Context, opts backupOptions) error {
 		return err
 	}
 	defer nc.Close()
-	return backup.Create(ctx, nc, opts.InstanceID, opts.Destination, func(ctx context.Context, w io.Writer) error {
+	export := func(ctx context.Context, w io.Writer) error {
 		return backup.ExportBlobs(ctx, blob.Config{Backend: bc.Backend, Directory: bc.Directory, Bucket: bc.Bucket, Region: bc.Region, Endpoint: bc.Endpoint, UsePathStyle: bc.UsePathStyle}, opts.InstanceID, w)
-	})
+	}
+	if opts.RestorePlan != nil {
+		actions, err := opts.RestorePlan.Plan(ctx, nc, export)
+		if err != nil {
+			return err
+		}
+		return backup.WritePlan(opts.PlanOutput, actions)
+	}
+	return backup.Create(ctx, nc, opts.InstanceID, opts.Destination, export)
 }
 
 // Match the diagnostic commands' transport policy: resolve TLS through the
