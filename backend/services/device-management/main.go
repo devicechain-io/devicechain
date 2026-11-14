@@ -985,8 +985,8 @@ func wireIntegrationsCeilingResolver() {
 func wireRulesCeilingResolver() {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
-		log.Warn().Int("rulesPerTenant", governance.DefaultRulesPerTenant).
-			Msg("Service secret or user-management endpoint not configured — the rule ceiling is the platform default for every tenant.")
+		log.Warn().
+			Msg("Service secret or user-management endpoint not configured — no tier rule ceiling is enforced (only an explicit tier rulesPerTenant enforces one).")
 		return
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",

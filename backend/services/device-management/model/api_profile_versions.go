@@ -291,10 +291,6 @@ func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
 	// Insert the version and advance the active pointer atomically: if the pointer
 	// update failed after the insert we would leave an orphan version and devices
 	// resolving the stale one, so wrap both.
-	ceiling, err := api.rulesCeiling(ctx)
-	if err != nil {
-		return nil, err
-	}
 	var evictions []membershipEviction
 	var changed bool
 	var activeSince time.Time
@@ -337,7 +333,7 @@ func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
 				}
 			}
 		}
-		if err := checkActiveRuleCount(tx, profile.ID, version.Snapshot, ceiling); err != nil {
+		if err := api.checkActiveRuleCount(ctx, tx, profile.ID, version.Snapshot); err != nil {
 			return err
 		}
 		var maxVersion int32
@@ -577,10 +573,6 @@ func (api *Api) RollbackDeviceProfileWithReason(ctx context.Context, token strin
 		return nil, err
 	}
 
-	ceiling, err := api.rulesCeiling(ctx)
-	if err != nil {
-		return nil, err
-	}
 	var evictions []membershipEviction
 	var changed bool
 	var activeSince time.Time
@@ -617,7 +609,7 @@ func (api *Api) RollbackDeviceProfileWithReason(ctx context.Context, token strin
 		if err != nil {
 			return err
 		}
-		if err := checkActiveRuleCount(tx, profile.ID, target.Snapshot, ceiling); err != nil {
+		if err := api.checkActiveRuleCount(ctx, tx, profile.ID, target.Snapshot); err != nil {
 			return err
 		}
 		activeSince = nextActivationInstant(floor)
