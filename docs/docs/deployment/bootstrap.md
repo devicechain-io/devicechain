@@ -30,6 +30,12 @@ cluster for you if none exists, and asks first unless you pass `--yes`. The `gcp
 a planned follow-up.
 :::
 
+## Broker storage on GKE
+
+New GKE brokers created by `dcctl bootstrap` use `premium-rwo` (`pd-ssd`) when the GKE SSD StorageClass is available. JetStream's synchronous disk writes make storage latency important, especially with three replicas under `--ha`; SSD avoids relying on the balanced disk's small-volume IOPS floor. Other clouds and kind keep the cluster default. The OpenTofu instance input `nats_jetstream_storage_class` (module input `jetstream_storage_class`) defaults to `""`, which omits `config.jetstream.fileStore.pvc.storageClassName`. Set it before the first apply to choose another class.
+
+Storage classes on existing PVCs and StatefulSet claim templates are immutable. `dcctl` leaves this input unset on upgrade and when bootstrap finds an existing broker or JetStream claim. The module records its first choice with `lifecycle.ignore_changes`, including an unset choice, so later defaults cannot change it. Existing GKE brokers keep their current disks; this change does not migrate data to SSD.
+
 ## Install the cluster {#install}
 
 `dcctl install <provider>` prepares a cluster to hold DeviceChain instances. It installs the
@@ -752,7 +758,7 @@ chart and operator are identical.
 |------|---------|
 | `--cluster <name>` | `local` provider: the kind cluster to create the instance on (default `devicechain`). It must already have been [installed](#install); bootstrap never creates a cluster. |
 | `--kube-context <name>` | Target an installed cluster through this kube-context instead. |
-| `--size <size>` | The instance's size preset: `base` (the default), `perf-12k` or `perf-16k`, the measured high-throughput shapes. Recorded on the instance and applied again by every upgrade. A `--values` overlay and an OpenTofu variable you state yourself win over it. See [Choosing a size](./sizing.md). |
+| `--size <size>` | The instance's size preset: `base` (the default), `perf-12k`, `perf-16k` or `perf-20k`. `perf-20k` targets throughput; acknowledgement latency is unvalidated. Recorded on the instance and applied again by every upgrade. A `--values` overlay and an OpenTofu variable you state yourself win over it. See [Choosing a size](./sizing.md). |
 | `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, MCP, Sparkplug B ingest and LwM2M ingest; over-the-air update management is part of `default`), `telemetry`, or `ingest-only`. |
 | `--enable-area <area>` | Deploy a functional area on top of the profile, such as `--enable-area outbound-connectors`. Repeatable. To add one to an instance that is already running, see [Adding a functional area later](#enable-area). |
 | `--build` | Build images from source into a local registry (developer path; needs the source tree + Docker + ko). |

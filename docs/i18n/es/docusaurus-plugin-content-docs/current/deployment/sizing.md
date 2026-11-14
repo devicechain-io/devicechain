@@ -22,12 +22,15 @@ grande que es cada copia.
 | `compact` | Un portátil con pocos recursos. Es un ajuste del clúster, elegido al instalar; `--compact` es lo mismo y se mantiene. | Descrito en [`--compact`](./bootstrap.md#--compact). |
 | `perf-12k` | Un clúster sin `--ha`, grupos de plataforma de unas 40 vCPU, 12 000 eventos por segundo sostenidos con los sobres de eventos activados. | Medido: 12 000 eventos por segundo sostenidos sin incidencias en GKE (confirmación p99 por debajo de 4 ms), con todos los eventos contabilizados. Algunos valores se corrigen a partir de esa ejecución y aún no se han ejecutado tal cual; véase más abajo. |
 | `perf-16k` | La misma configuración para 16 000 eventos por segundo sostenidos: un broker, una asignación del registro de escritura anticipada y un pod de event-processing más grandes. 20 000 eventos por segundo es un techo de rendimiento, no el objetivo. | Derivado de la misma ejecución en GKE, que mantuvo 16 000 eventos por segundo con exactitud; el dimensionamiento apunta a la latencia de confirmación de 50 ms que esa ejecución rozó (63 ms con el dimensionamiento de `perf-12k`). Aún no se ha ejecutado tal cual; véase más abajo. |
+| `perf-20k` | Dimensionamiento para 20 000 eventos por segundo en un clúster sin particiones ni `--ha`, con sobres de eventos activados. | Derivado de la rampa en GKE; aún no se ha ejecutado tal cual. La latencia de confirmación no está validada. |
 
-Un tamaño lleva el nombre de la tasa que mantiene dentro del objetivo de latencia. El nombre es la
-afirmación, así que un tamaño nunca se publica como objetivo. Por eso no existe `perf-20k`: la
-configuración medida almacenó 20 000 eventos por segundo con exactitud, sin pérdidas ni duplicados,
-pero las confirmaciones tardaron 245 ms en el percentil 99, así que 20 000 se documenta como un techo
-de rendimiento de `perf-16k` y no como un tamaño.
+`perf-20k` es un objetivo de dimensionamiento de rendimiento. La ejecución medida almacenó exactamente 20 000 eventos por segundo, sin pérdidas ni duplicados, pero la confirmación p99 fue de 245 ms, por encima del objetivo de 50 ms. Este preajuste aumenta la CPU del broker en la misma configuración sin particiones; no promete ese objetivo de latencia.
+
+## Almacenamiento del broker en GKE
+
+Los brokers nuevos de GKE creados por `dcctl bootstrap` usan `premium-rwo` (`pd-ssd`) cuando está disponible la StorageClass SSD de GKE. Las escrituras síncronas de JetStream hacen que la latencia del disco sea importante, especialmente con tres réplicas bajo `--ha`; SSD evita depender del mínimo de IOPS de los discos balanced pequeños. Otras nubes y kind conservan la clase predeterminada del clúster. La entrada OpenTofu de instancia `nats_jetstream_storage_class` (entrada del módulo `jetstream_storage_class`) vale `""` por defecto y omite `config.jetstream.fileStore.pvc.storageClassName`. Para elegir otra clase, configúrala antes del primer apply.
+
+La clase de un PVC existente y la plantilla de claims del StatefulSet son inmutables. `dcctl` deja esta entrada sin definir al actualizar y cuando bootstrap encuentra un broker o claim de JetStream existente. El módulo conserva su primera elección mediante `lifecycle.ignore_changes`, incluso si estaba sin definir, para que los nuevos valores predeterminados no la cambien. Los brokers GKE existentes conservan sus discos; este cambio no migra datos a SSD.
 
 ## Elegir uno {#choosing}
 
@@ -133,6 +136,37 @@ La ejecución medida usó el dimensionamiento de `perf-12k` y mantuvo 16 000 eve
 
 Con la configuración de `perf-12k`, 20 000 eventos por segundo se almacenaron con exactitud (13,2 millones de eventos, ninguno perdido ni duplicado) sin perder ninguna conexión, con una confirmación p99 de 245 ms. Es un techo de rendimiento: la latencia de confirmación supera su objetivo y el límite es el único servidor del broker (5,2 núcleos en uso, pico de 5,5). El dimensionamiento de `perf-16k` lo soporta, pero no es una promesa sobre la latencia.
 
+## Qué establece `perf-20k` {#perf-20k}
+
+`perf-20k` es un objetivo de dimensionamiento de rendimiento. La ejecución medida almacenó exactamente 20 000 eventos por segundo, sin pérdidas ni duplicados, pero la confirmación p99 fue de 245 ms, por encima del objetivo de 50 ms. Este preajuste aumenta la CPU del broker en la misma configuración sin particiones; no promete ese objetivo de latencia.
+
+Mantiene las réplicas y los límites de CPU de `perf-12k`. Las solicitudes siguen la misma regla: CPU medida por pod a la tasa de diseño, multiplicada por 1,2–1,5 y redondeada hacia arriba a 50m. Event-processing recibe 1536Mi porque ese caso mantuvo el retraso de detección bajo control a 20k.
+
+<!-- size-table:perf-20k:areas -->
+| Servicio | Réplicas | Límite de CPU | Límite de memoria | Solicitud de CPU |
+| --- | --- | --- | --- | --- |
+| `device-management` | `2` | `3` | - | `600m` |
+| `device-state` | `2` | `3` | `512Mi` | `400m` |
+| `event-management` | - | `4` | `1Gi` | `650m` |
+| `event-processing` | - | `2` | `1536Mi` | `950m` |
+| `event-sources` | `3` | `3` | `256Mi` | `900m` |
+<!-- /size-table:perf-20k:areas -->
+
+<!-- size-table:perf-20k:infra -->
+| Ajuste | Valor |
+| --- | --- |
+| `streamDesignRate` | `20000` |
+| `nats_cpu_request` | `6` |
+| `nats_memory_request` | `6Gi` |
+| `nats_memory_limit` | `10Gi` |
+| `nats_jetstream_storage` | `40Gi` |
+| `timescale_storage` | `260Gi` |
+| `timescale_max_wal_size_mib` | `40960` |
+| `postgres_max_wal_size_mib` | `8192` |
+<!-- /size-table:perf-20k:infra -->
+
+El broker único usó 5,2 núcleos (pico de 5,5) y 4,4Gi de memoria a 20k: se reservan 6 CPU y 6Gi, con un límite de memoria de 10Gi. El volumen JetStream de 40Gi admite la reserva de 15 minutos incluso con confirmaciones de cierre seguro activadas. Los 260Gi del almacén de eventos y los 40960 MiB de WAL proceden de la ejecución medida; es almacenamiento para ráfagas, no retención. Los 8192 MiB de WAL relacional se configuran por separado al instalar con `dcctl install --relational-store-max-wal-mib 8192` y `TF_VAR_postgres_storage=32Gi`. Estos valores aún no se han ejecutado tal cual.
+
 ### Lo que los tamaños `perf` no establecen {#perf-12k-not}
 
 - **Los sobres de eventos.** Las cifras se midieron con ellos activados, y reducen la CPU en
@@ -140,7 +174,7 @@ Con la configuración de `perf-12k`, 20 000 eventos por segundo se almacenaron c
   cuando un tamaño `perf` se ejecuta con ellos desactivados.
 - **`--ha`.** La tasa se midió con un solo servidor de broker. La combinación está permitida y
   `dcctl bootstrap` avisa de que no se ha medido.
-- **Ajuste a los nodos con `--ha`.** Esta es una comprobación de `dcctl bootstrap`; upgrade no la ejecuta. Con `--ha`, un tamaño `perf` se rechaza cuando menos de tres nodos planificables tienen, cada uno, la solicitud del broker (6 CPU y 6Gi para `perf-16k`, 4 CPU y 4Gi para `perf-12k`) como CPU y memoria asignables. La comprobación se ejecuta antes de declarar la instancia, para que funcione una nueva ejecución con un `--size` menor. Cada nodo se juzga por separado: la CPU de un nodo y la memoria de otro no se suman. El mensaje indica el nodo más grande que vio y las soluciones: declarar las variables de entorno `TF_VAR_nats_cpu_request` / `TF_VAR_nats_memory_request`, o establecer `nats_cpu_request` / `nats_memory_request` en el archivo `terraform.tfvars` de la raíz de la instancia, que solo se lee una vez que esa raíz existe, en una nueva ejecución. En el primer bootstrap, usa las variables de entorno. Las solicitudes que declares tú mismo quedan sin comprobar por `dcctl`. Otras opciones son un `--size` menor o nodos más grandes. Solo compara la capacidad asignable, no lo que está libre ni lo que decidiría el planificador. También rechaza con `--dry-run`, pero si no se puede alcanzar el clúster solo emite un aviso.
+- **Ajuste a los nodos con `--ha`.** Esta es una comprobación de `dcctl bootstrap`; upgrade no la ejecuta. Con `--ha`, un tamaño `perf` se rechaza cuando menos de tres nodos planificables tienen, cada uno, la solicitud del broker (6 CPU y 6Gi para `perf-16k` y `perf-20k`, 4 CPU y 4Gi para `perf-12k`) como CPU y memoria asignables. La comprobación se ejecuta antes de declarar la instancia, para que funcione una nueva ejecución con un `--size` menor. Cada nodo se juzga por separado: la CPU de un nodo y la memoria de otro no se suman. El mensaje indica el nodo más grande que vio y las soluciones: declarar las variables de entorno `TF_VAR_nats_cpu_request` / `TF_VAR_nats_memory_request`, o establecer `nats_cpu_request` / `nats_memory_request` en el archivo `terraform.tfvars` de la raíz de la instancia, que solo se lee una vez que esa raíz existe, en una nueva ejecución. En el primer bootstrap, usa las variables de entorno. Las solicitudes que declares tú mismo quedan sin comprobar por `dcctl`. Otras opciones son un `--size` menor o nodos más grandes. Solo compara la capacidad asignable, no lo que está libre ni lo que decidiría el planificador. También rechaza con `--dry-run`, pero si no se puede alcanzar el clúster solo emite un aviso.
 - **La base de datos compartida y los nodos.** El volumen del almacén relacional, las solicitudes
   de CPU y memoria de las bases de datos, el volumen de monitorización y los grupos de nodos
   pertenecen al clúster y quedan como los dejó `dcctl install` y tu clúster. El `max_wal_size` del

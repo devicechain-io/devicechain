@@ -48,6 +48,8 @@ type Item struct {
 	Kind  Kind
 	Name  string
 	Class durability.Class
+	// BackupClass is the checkpoint policy, separate from the published durability contract.
+	BackupClass durability.BackupClass
 	// Why is the reason for the class, in words an operator can act on.
 	Why string
 	// Procedure is what an operator does to back the item up. It is set for exactly the
@@ -58,20 +60,25 @@ type Item struct {
 // gateway lists the streams nats-server creates for the MQTT gateway. They are named by the server
 // (core/messaging mqtt_store.go), so they are listed here rather than declared by a registry.
 // TestGatewayNamesMatchTheTransport holds these to the transport's constants.
+// $MQTT_msgs is checkpoint-required even though its published durability class is
+// transient: fail-closed ownership can leave it holding the only accepted copy.
+// Snapshot it with consumers and ownership/from metadata. The other gateway
+// streams may be included together in an optional broker-continuity profile.
 var gateway = []Item{
-	{KindGatewayStream, "$MQTT_msgs", durability.Transient, "a second copy of every QoS 1 and 2 message, held only until the platform stream has it", ""},
-	{KindGatewayStream, "$MQTT_out", durability.Transient, "outgoing QoS 2 release records, in flight", ""},
-	{KindGatewayStream, "$MQTT_qos2in", durability.Transient, "inbound QoS 2 handshake state, in flight", ""},
-	{KindGatewayStream, "$MQTT_sess", durability.Rebuildable, "persistent MQTT sessions and their subscriptions; a device that subscribes on every connect recovers by itself, one that relies on the broker having remembered its subscriptions must be made to subscribe again", ""},
-	{KindGatewayStream, "$MQTT_rmsgs", durability.Rebuildable, "retained messages; the platform publishes none itself, so each one is whatever a device or an integration retained and must publish again", ""},
+	{KindGatewayStream, "$MQTT_msgs", durability.Transient, durability.BackupCheckpoint, "a second copy of every QoS 1 and 2 message, held only until the platform stream has it", ""},
+	{KindGatewayStream, "$MQTT_out", durability.Transient, durability.BackupEphemeral, "outgoing QoS 2 release records, in flight", ""},
+	{KindGatewayStream, "$MQTT_qos2in", durability.Transient, durability.BackupEphemeral, "inbound QoS 2 handshake state, in flight", ""},
+	{KindGatewayStream, "$MQTT_sess", durability.Rebuildable, durability.BackupRebuildable, "persistent MQTT sessions and their subscriptions; a device that subscribes on every connect recovers by itself, one that relies on the broker having remembered its subscriptions must be made to subscribe again", ""},
+	{KindGatewayStream, "$MQTT_rmsgs", durability.Rebuildable, durability.BackupRebuildable, "retained messages; the platform publishes none itself, so each one is whatever a device or an integration retained and must publish again", ""},
 }
 
 // objectStore is the object store's entry.
 var objectStore = Item{
-	Kind:  KindObjectStore,
-	Name:  ObjectStoreName,
-	Class: durability.MustBackUp,
-	Why:   "update artifact content and tenant branding images; the database holds only each object's size and digest",
+	Kind:        KindObjectStore,
+	Name:        ObjectStoreName,
+	Class:       durability.MustBackUp,
+	BackupClass: durability.BackupRequired,
+	Why:         "update artifact content and tenant branding images; the database holds only each object's size and digest",
 	Procedure: "Snapshot the volume, or turn on versioning and replication for the bucket, and take that copy after " +
 		"the database base backup it belongs with.",
 }
@@ -88,18 +95,34 @@ var streamProcedures = map[string]string{
 func Items() []Item {
 	var out []Item
 	for _, s := range streams.All {
-		it := Item{Kind: KindStream, Name: s.Suffix, Class: s.Durability, Why: s.DurabilityWhy}
+		it := Item{Kind: KindStream, Name: s.Suffix, Class: s.Durability, BackupClass: s.BackupClass, Why: s.DurabilityWhy}
 		if it.Class == durability.MustBackUp {
 			it.Procedure = streamProcedures[s.Suffix]
 		}
 		out = append(out, it)
 	}
 	for _, b := range kv.All {
-		out = append(out, Item{Kind: KindBucket, Name: b.Name, Class: b.Durability, Why: b.DurabilityWhy})
+		out = append(out, Item{Kind: KindBucket, Name: b.Name, Class: b.Durability, BackupClass: b.BackupClass, Why: b.DurabilityWhy})
 	}
 	out = append(out, gateway...)
 	out = append(out, objectStore)
 	return out
+}
+
+// ValidateBackupPolicy rejects incomplete inventory before backup tooling selects
+// resources. It never treats an unknown policy as permission to omit an item.
+// It is opt-in metadata validation; service startup behavior is unchanged.
+func ValidateBackupPolicy() error {
+	return validateBackupPolicy(Items())
+}
+
+func validateBackupPolicy(items []Item) error {
+	for _, it := range items {
+		if !it.BackupClass.Valid() {
+			return fmt.Errorf("%s %q has missing or unknown backup classification %q", it.Kind, it.Name, it.BackupClass)
+		}
+	}
+	return nil
 }
 
 // MustBackUp returns the items a restore cannot rebuild, sorted by kind and name.

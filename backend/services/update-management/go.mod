@@ -1,6 +1,6 @@
 module github.com/devicechain-io/dc-update-management
 
-go 1.26.0
+go 1.26.6
 
 require (
 	github.com/devicechain-io/dc-device-management v0.0.1
@@ -8,7 +8,7 @@ require (
 	github.com/devicechain-io/dc-simulator v0.0.1
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-gormigrate/gormigrate/v2 v2.1.7
-	github.com/graph-gophers/graphql-go v1.10.3
+	github.com/graph-gophers/graphql-go v1.11.0
 	github.com/nats-io/nats-server/v2 v2.15.3
 	github.com/nats-io/nats.go v1.55.0
 	github.com/prometheus/client_golang v1.25.0

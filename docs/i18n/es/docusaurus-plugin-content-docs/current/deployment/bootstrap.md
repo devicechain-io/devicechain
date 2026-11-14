@@ -33,6 +33,12 @@ están implementados y validados de extremo a extremo en Kubernetes local (kind)
 salvo que pases `--yes`. El proveedor `gcp` es una mejora planificada.
 :::
 
+## Almacenamiento del broker en GKE
+
+Los brokers nuevos de GKE creados por `dcctl bootstrap` usan `premium-rwo` (`pd-ssd`) cuando está disponible la StorageClass SSD de GKE. Las escrituras síncronas de JetStream hacen que la latencia del disco sea importante, especialmente con tres réplicas bajo `--ha`; SSD evita depender del mínimo de IOPS de los discos balanced pequeños. Otras nubes y kind conservan la clase predeterminada del clúster. La entrada OpenTofu de instancia `nats_jetstream_storage_class` (entrada del módulo `jetstream_storage_class`) vale `""` por defecto y omite `config.jetstream.fileStore.pvc.storageClassName`. Para elegir otra clase, configúrala antes del primer apply.
+
+La clase de un PVC existente y la plantilla de claims del StatefulSet son inmutables. `dcctl` deja esta entrada sin definir al actualizar y cuando bootstrap encuentra un broker o claim de JetStream existente. El módulo conserva su primera elección mediante `lifecycle.ignore_changes`, incluso si estaba sin definir, para que los nuevos valores predeterminados no la cambien. Los brokers GKE existentes conservan sus discos; este cambio no migra datos a SSD.
+
 ## Instalar el clúster {#install}
 
 `dcctl install <provider>` prepara un clúster para alojar instancias de DeviceChain. Instala
@@ -805,7 +811,7 @@ imágenes. La canalización, el chart y el operador son idénticos.
 |------|-----------|
 | `--cluster <name>` | Proveedor `local`: el clúster de kind en el que crear la instancia (por defecto `devicechain`). Debe estar ya [instalado](#install); el arranque inicial nunca crea un clúster. |
 | `--kube-context <name>` | Apunta en su lugar a un clúster instalado a través de este kube-context. |
-| `--size <size>` | El preajuste de tamaño de la instancia: `base` (el valor por defecto), `perf-12k` o `perf-16k`, las configuraciones de alto rendimiento medidas. Queda registrado en la instancia y cada actualización lo vuelve a aplicar. Una superposición `--values` y una variable de OpenTofu que indiques tú prevalecen sobre él. Consulta [Elegir un tamaño](./sizing.md). |
+| `--size <size>` | El preajuste de tamaño de la instancia: `base` (por defecto), `perf-12k`, `perf-16k` o `perf-20k`. `perf-20k` apunta al rendimiento; la latencia de confirmación no está validada. Se registra y se aplica en cada actualización. Una superposición `--values` y una variable OpenTofu explícita prevalecen. Consulta [Elegir un tamaño](./sizing.md). |
 | `--profile <profile>` | Perfil de área funcional: `default` (el sistema estándar, usado cuando se omite), `full` (todo: añade inferencia de IA, conectores salientes, MCP, ingesta de Sparkplug B e ingesta de LwM2M; la gestión de actualizaciones over-the-air forma parte de `default`), `telemetry` o `ingest-only`. |
 | `--enable-area <area>` | Despliega un área funcional además de las del perfil, por ejemplo `--enable-area outbound-connectors`. Repetible. Para añadir una a una instancia que ya está en marcha, consulta [Añadir un área funcional más adelante](#enable-area). |
 | `--build` | Compila las imágenes desde el código fuente en un registro local (ruta para desarrolladores; necesita el árbol de código fuente + Docker + ko). |

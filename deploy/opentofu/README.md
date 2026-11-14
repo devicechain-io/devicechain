@@ -317,6 +317,12 @@ broker and the event store are not in.
   unadopted config rather than as a version diff. Bump deliberately; each variable's
   description says what to re-verify. `timescale_image` is pinned for the same reason and
   is not a chart, so it is not covered by that check.
+- **JetStream storage class.** `nats_jetstream_storage_class` defaults to empty,
+  omitting `config.jetstream.fileStore.pvc.storageClassName`. For a new GKE broker,
+  set `premium-rwo` (`pd-ssd`); dcctl bootstrap selects it automatically. Leave it
+  unset when adopting an existing broker. The module remembers its first choice
+  (including empty) with `ignore_changes` because claim templates and PVC storage
+  classes are immutable; upgrades never migrate existing disks.
 - **JetStream disk ceiling.** `nats_jetstream_max_file_store` is the hard aggregate
   JetStream file-store bound (ADR-023); it defaults to 90% of `nats_jetstream_storage`
   for filesystem headroom, **floored to a whole unit of that size's own magnitude** —

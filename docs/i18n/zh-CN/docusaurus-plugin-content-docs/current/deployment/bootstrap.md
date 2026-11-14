@@ -20,6 +20,12 @@ dcctl bootstrap local my-instance
 `dcctl install local` 和 `dcctl bootstrap local` 已实现，并在本地 kind Kubernetes 上端到端验证。不存在 kind 集群时，install 会创建，除非指定 `--yes` 否则先确认。`gcp` 提供商是计划中的后续工作。
 :::
 
+## GKE 上的 broker 存储
+
+当 GKE 的 SSD StorageClass 可用时，`dcctl bootstrap` 创建的新 GKE broker 使用 `premium-rwo`（`pd-ssd`）。JetStream 的同步磁盘写入使磁盘延迟尤为重要，使用 `--ha` 的三个副本时更是如此；SSD 可避免依赖小容量 balanced 磁盘的最低 IOPS。其他云和 kind 继续使用集群默认存储类。OpenTofu 实例输入 `nats_jetstream_storage_class`（模块输入 `jetstream_storage_class`）默认为 `""`，此时省略 `config.jetstream.fileStore.pvc.storageClassName`。如需其他存储类，请在首次 apply 前设置。
+
+现有 PVC 的存储类及 StatefulSet 的卷声明模板不可变。升级时，以及 bootstrap 发现现有 broker 或 JetStream 卷声明时，`dcctl` 不设置此输入。模块通过 `lifecycle.ignore_changes` 保留首次选择（包括未设置的情况），后续默认值不会改变它。现有 GKE broker 保留当前磁盘；本次变更不会将数据迁移到 SSD。
+
 ## 安装集群 {#install}
 
 `dcctl install <provider>` 准备承载实例的集群，安装所有实例共享的前置组件。
@@ -341,7 +347,7 @@ dcctl bootstrap local my-instance --build
 |------|---------|
 | `--cluster <name>` | `local` 提供方：创建实例的 kind 集群，默认 `devicechain`。必须已[安装](#install)，初始化不创建集群。 |
 | `--kube-context <name>` | 通过此 kube-context 选择已安装集群。 |
-| `--size <size>` | 实例的规格预设：`base`（默认）、`perf-12k` 或 `perf-16k`（已实测的高吞吐形态）。记录在实例上，每次升级都会重新应用。`--values` 覆盖文件和你自行声明的 OpenTofu 变量优先于它。见[选择规格](./sizing.md)。 |
+| `--size <size>` | 实例的规格预设：`base`（默认）、`perf-12k`、`perf-16k` 或 `perf-20k`。`perf-20k` 是吞吐量目标，确认延迟尚未验证。记录在实例上，每次升级都会重新应用。`--values` 覆盖文件和自行声明的 OpenTofu 变量优先。见[选择规格](./sizing.md)。 |
 | `--profile <profile>` | 功能领域配置档：默认 `default` 标准系统；`full` 包含全部，增加 AI 推理、出站连接器、MCP、Sparkplug B 和 LwM2M 摄取，空中（OTA）更新管理已包含在 `default` 中；还可选 `telemetry` 或 `ingest-only`。 |
 | `--enable-area <area>` | 在配置档之外额外部署一个功能领域，例如 `--enable-area outbound-connectors`。可重复使用。要为已在运行的实例添加，见[稍后添加功能领域](#enable-area)。 |
 | `--build` | 将源码镜像构建至本地仓库，开发路径需源码、Docker、ko。 |

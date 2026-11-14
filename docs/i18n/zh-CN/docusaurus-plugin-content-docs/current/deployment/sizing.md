@@ -15,8 +15,15 @@ title: 选择规格
 | `compact` | 资源很少的笔记本。这是集群级设置，在安装时选择；`--compact` 与之等价且会保留。 | 见 [`--compact`](./bootstrap.md#--compact)。 |
 | `perf-12k` | 一个不带 `--ha` 的集群，平台节点池约 40 个 vCPU，在开启事件信封的情况下持续每秒 12,000 个事件。 | 已实测：在 GKE 上稳定处理每秒 12,000 个事件（确认延迟 p99 低于 4 毫秒），所有事件均有对账。少数取值根据该次运行修正，尚未按此取值实际运行；见下文。 |
 | `perf-16k` | 同一形态，用于持续每秒 16,000 个事件：更大的 Broker、预写日志额度和 event-processing Pod。每秒 20,000 个事件是仅就吞吐而言的上限，不是目标。 | 由同一次 GKE 运行推导：该次运行精确处理了每秒 16,000 个事件；这里的规格以 50 毫秒确认延迟为目标，而该次运行仅略微未达标（`perf-12k` 规格下为 63 毫秒）。尚未按此取值实际运行；见下文。 |
+| `perf-20k` | 在不分片且不带 `--ha` 的单个集群上，为每秒 20,000 个事件配置资源，开启事件信封。 | 根据 GKE 递增负载测试推导，尚未按这些取值实测，确认延迟尚未验证。 |
 
-规格以它在延迟目标之内能够稳定处理的速率命名。名字就是承诺，因此规格绝不会以“目标”的形式发布。这就是没有 `perf-20k` 的原因：实测的形态精确存储了每秒 20,000 个事件，没有丢失也没有重复，但确认延迟的第 99 百分位为 245 毫秒，所以 20,000 只作为 `perf-16k` 的吞吐上限记录在文档中，而不是一个规格。
+`perf-20k` 是吞吐量资源配置目标。实测每秒 20,000 个事件全部精确入库，无丢失或重复，但确认延迟 p99 为 245 毫秒，超过 50 毫秒目标。此预设在同一不分片形态上增加 Broker CPU，不承诺达到该延迟目标。
+
+## GKE 上的 broker 存储
+
+当 GKE 的 SSD StorageClass 可用时，`dcctl bootstrap` 创建的新 GKE broker 使用 `premium-rwo`（`pd-ssd`）。JetStream 的同步磁盘写入使磁盘延迟尤为重要，使用 `--ha` 的三个副本时更是如此；SSD 可避免依赖小容量 balanced 磁盘的最低 IOPS。其他云和 kind 继续使用集群默认存储类。OpenTofu 实例输入 `nats_jetstream_storage_class`（模块输入 `jetstream_storage_class`）默认为 `""`，此时省略 `config.jetstream.fileStore.pvc.storageClassName`。如需其他存储类，请在首次 apply 前设置。
+
+现有 PVC 的存储类及 StatefulSet 的卷声明模板不可变。升级时，以及 bootstrap 发现现有 broker 或 JetStream 卷声明时，`dcctl` 不设置此输入。模块通过 `lifecycle.ignore_changes` 保留首次选择（包括未设置的情况），后续默认值不会改变它。现有 GKE broker 保留当前磁盘；本次变更不会将数据迁移到 SSD。
 
 ## 如何选择 {#choosing}
 
@@ -112,6 +119,37 @@ Broker、卷以及预写日志的额度：
 ### 每秒 20,000 个事件 {#perf-16k-ceiling}
 
 在 `perf-12k` 的形态上，每秒 20,000 个事件被精确存储（1,320 万个事件，没有缺失也没有重复），没有丢失任何连接，确认延迟 p99 为 245 毫秒。这是吞吐上限：确认延迟超出目标，限制因素是单个 Broker 服务器（使用 5.2 个核，峰值 5.5）。`perf-16k` 的规格可以承载它，但这不是对延迟的承诺。
+
+## `perf-20k` 设置了什么 {#perf-20k}
+
+`perf-20k` 是吞吐量资源配置目标。实测每秒 20,000 个事件全部精确入库，无丢失或重复，但确认延迟 p99 为 245 毫秒，超过 50 毫秒目标。此预设在同一不分片形态上增加 Broker CPU，不承诺达到该延迟目标。
+
+保留 `perf-12k` 的服务副本数和 CPU 上限。请求遵循同一规则：设计速率下每个 Pod 的实测 CPU 乘以 1.2–1.5，再向上取整到 50m。Event-processing 使用 1536Mi，因为该配置在 20k 时保持了正常的检测延迟。
+
+<!-- size-table:perf-20k:areas -->
+| 服务 | 副本数 | CPU 上限 | 内存上限 | CPU 请求 |
+| --- | --- | --- | --- | --- |
+| `device-management` | `2` | `3` | - | `600m` |
+| `device-state` | `2` | `3` | `512Mi` | `400m` |
+| `event-management` | - | `4` | `1Gi` | `650m` |
+| `event-processing` | - | `2` | `1536Mi` | `950m` |
+| `event-sources` | `3` | `3` | `256Mi` | `900m` |
+<!-- /size-table:perf-20k:areas -->
+
+<!-- size-table:perf-20k:infra -->
+| 设置 | 值 |
+| --- | --- |
+| `streamDesignRate` | `20000` |
+| `nats_cpu_request` | `6` |
+| `nats_memory_request` | `6Gi` |
+| `nats_memory_limit` | `10Gi` |
+| `nats_jetstream_storage` | `40Gi` |
+| `timescale_storage` | `260Gi` |
+| `timescale_max_wal_size_mib` | `40960` |
+| `postgres_max_wal_size_mib` | `8192` |
+<!-- /size-table:perf-20k:infra -->
+
+在 20k 时单个 Broker 使用 5.2 核（峰值 5.5）和 4.4Gi 工作内存：请求 6 CPU 和 6Gi，内存上限为 10Gi。40Gi JetStream 卷可容纳 15 分钟缓冲预留，即使开启故障关闭确认。260Gi 事件存储和 40960 MiB WAL 额度依据实测结果选择；这是突发存储容量，不是保留期承诺。关系数据库的 8192 MiB WAL 需在安装时单独设置：`dcctl install --relational-store-max-wal-mib 8192`，同时设置 `TF_VAR_postgres_storage=32Gi`。这些取值尚未按原样实测。
 
 ### `perf` 规格不设置什么 {#perf-12k-not}
 
