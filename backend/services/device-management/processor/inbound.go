@@ -263,7 +263,8 @@ type ResolveMetrics struct {
 
 	// deviceDisabled counts events refused because their device is disabled. ONE counter
 	// for the pool, for the same reason.
-	deviceDisabled prometheus.Counter
+	deviceDisabled      prometheus.Counter
+	relationshipRefused prometheus.Counter
 
 	// integrationAliasMismatch counts inbound integration events refused because their device no
 	// longer holds the alias they were resolved from.
@@ -318,6 +319,8 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 		eventTimeTooOld: ms.NewCounter(
 			"resolve_event_time_too_old_total",
 			"Events refused because a reported time is more than 366 days before the platform received it; each is dead-lettered with reason Invalid"),
+		relationshipRefused: ms.NewCounter("resolve_relationship_refused_total",
+			"Device-authored ownership or containment relationships refused on first delivery and dead-lettered with reason Invalid"),
 		deviceDisabled: ms.NewCounter(
 			"resolve_device_disabled_total",
 			"Events refused because their device is disabled; each is discarded, not dead-lettered"),
@@ -1010,6 +1013,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		resolver.tenantDeleted = iproc.tenantDeleted
 		resolver.splitOut = iproc.splitOut
 		resolver.deviceDisabled = iproc.metrics.deviceDisabled
+		resolver.relationshipRefused = iproc.metrics.relationshipRefused
 		resolver.integrationAliasMismatch = iproc.metrics.integrationAliasMismatch
 		resolver.gateway = gateway
 		resolver.hold = iproc.hold
