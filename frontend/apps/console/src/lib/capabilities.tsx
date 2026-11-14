@@ -70,7 +70,7 @@ export const AREA = {
 } as const satisfies Record<string, Area>;
 
 interface CapabilityValue {
-  statusOf: (area: Area) => AreaStatus;
+  statusOf: (area: string) => AreaStatus;
 }
 
 const CapabilityContext = createContext<CapabilityValue | null>(null);
@@ -177,9 +177,9 @@ export function AreaCapabilityProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<CapabilityValue>(
     () => ({
-      statusOf: (area: Area) => {
+      statusOf: (area: string) => {
         if (areas === null) return 'unknown';
-        return areas.includes(areaKey(area)) ? 'available' : 'absent';
+        return areas.includes(area.split('/')[0]) ? 'available' : 'absent';
       },
     }),
     [areas],
@@ -196,6 +196,11 @@ export function AreaCapabilityProvider({ children }: { children: ReactNode }) {
  * than throwing or hiding itself.
  */
 export function useAreaStatus(area: Area): AreaStatus {
+  return useFunctionalAreaStatus(areaKey(area));
+}
+
+/** Deployment areas include services without a browser-facing GraphQL endpoint. */
+export function useFunctionalAreaStatus(area: string): AreaStatus {
   const ctx = useContext(CapabilityContext);
   if (!ctx) return 'unknown';
   return ctx.statusOf(area);
