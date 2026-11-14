@@ -125,7 +125,7 @@ query {
 
 空 `statuses` 列表会被忽略，而不是匹配零条。
 
-各终态含义见[命令](../concepts/commands.md#command-lifecycle)。要记住的区别是：`EXPIRED` 表示未到达设备，`TIMEOUT` 表示已发出。连续 `EXPIRED` 指向派发，连续 `TIMEOUT` 指向设备。
+各终态含义见[命令](../concepts/commands.md#command-lifecycle)。`EXPIRED` 表示命令在交付前过期；`TIMEOUT` 表示命令在 `SENT` 状态过期，已派发但未获答复。是否收到和执行仍未知（`outcome: UNKNOWN`）：设备可能在在线检查与发布之间断开。连续出现 `TIMEOUT` 时，请同时排查交付和设备响应处理。
 
 ## 取消命令 {#cancel-one}
 

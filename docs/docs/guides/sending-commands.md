@@ -159,8 +159,10 @@ Use `statuses` when you care about a set. "Everything still in flight for this d
 An empty `statuses` list is ignored rather than matching nothing.
 
 What each terminal state tells you is in [Commands](../concepts/commands.md#command-lifecycle).
-The pair to remember: `EXPIRED` means the command never reached a device, and `TIMEOUT`
-means it did. A run of `EXPIRED` points at dispatch; a run of `TIMEOUT` points at the device.
+The pair to remember: `EXPIRED` means the command expired before delivery; `TIMEOUT` means
+it expired in `SENT`, dispatched and unanswered. Receipt and execution remain unknown
+(`outcome: UNKNOWN`): a device can disconnect between the presence check and publication.
+For repeated `TIMEOUT`, investigate both delivery and device response handling.
 
 ## Cancel a command {#cancel-one}
 

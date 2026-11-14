@@ -101,7 +101,7 @@ Una superposición solo puede fijar los valores siguientes. Todo lo demás se re
 | --- | --- |
 | `replicas`, `rollingUpdate`, `terminationGracePeriodSeconds`, `nodeLossTolerationSeconds`, `shutdownDrainSeconds`, `podDisruptionBudget`, `startupProbe`, `livenessProbe` | Escala y despliegue de todas las áreas |
 | `resources`, `useMeasuredRequests`, `goMemLimitPercent`, `gogc`, `goMemLimit` | CPU y memoria, y el comportamiento de memoria de Go, de todas las áreas |
-| `functionalAreas.<area>.replicas`, `.strategy`, `.resources`, `.measuredRequests`, `.goMemLimitPercent`, `.memoryLimitFloor`, `.gogc`, `.goMemLimit`, `.avoidEventStorePrimary`, `.eventPathSpread` | Lo mismo, para un área |
+| `functionalAreas.<area>.replicas`, `.strategy`, `.resources`, `.measuredRequests`, `.goMemLimitPercent`, `.memoryLimitFloor`, `.memoryLimitFloorWithEnvelopes`, `.gogc`, `.goMemLimit`, `.avoidEventStorePrimary`, `.eventPathSpread` | Lo mismo, para un área |
 | `functionalAreas.<area>.config` | La configuración propia de esa área. Una clave desconocida detiene el servicio al arrancar |
 | `functionalAreas.<area>.profiler.enabled`, `.blockRate`, `.mutexFraction` | El listener de profiling de diagnóstico, desactivado por defecto (véase [Observabilidad](./observability.md)). Su `address` no es ajustable |
 | `frontend.replicas`, `frontend.resources` | Los pods de la consola |
@@ -109,6 +109,7 @@ Una superposición solo puede fijar los valores siguientes. Todo lo demás se re
 | `ingress.className`, `ingress.annotations`, `ingress.uploadMaxBodySize`, `ingress.gateway.className`, `ingress.gateway.annotations`, `networkPolicy.additionalAllowedCidrs`, `serviceAccount.annotations` | Cómo se publica el ingress y quién puede llegar a los pods |
 | `mqttExposure.loadBalancer` | Los ajustes de nube del balanceador de carga de MQTT, como un balanceador interno y los rangos de origen permitidos |
 | `instance.config.infrastructure.nats.streamDesignRate`, `.streamRunwayMinutes`, `.streamMaxBytes`, `.streamMaxBytesCold`, `.streamMaxMsgs` | El margen de interrupción para el que se dimensionan los streams de eventos y sus techos de bytes y mensajes. La reserva se comprueba con el volumen del broker antes de escribir nada |
+| `instance.config.infrastructure.nats.mqttDeviceUplinks` | Uplinks MQTT de payload sin procesar, opcionales. La elección registrada con `--mqtt-device-uplinks` prevalece; se rechaza una nueva superposición que entre en conflicto. Cambia la elección registrada con el flag |
 | `instance.config.infrastructure.tracing` | Trazas distribuidas (OpenTelemetry), desactivadas por defecto; consulta [Observabilidad](./observability.md). Actívalas en una actualización independiente tras completar el despliegue de la versión: los pods de una versión anterior rechazan esta clave |
 | `instance.config.infrastructure.messaging.envelopes.resolved`, `.inbound`, `.inboundLingerMillis` | Si los eventos se escriben como envelopes, desactivado por defecto |
 | `instance.config.infrastructure.tokenAudience.enforcement`, `.unscopedClientCredentials`, `.externalResources` | Las audiencias siempre se aplican. Deja enforcement sin definir o usa `enforce`; `v1.4` rechaza `observe`. La opción distinta `unscopedClientCredentials: observe` sigue admitida. `externalResources` enumera servidores externos. El chart deriva y controla las otras dos claves. |

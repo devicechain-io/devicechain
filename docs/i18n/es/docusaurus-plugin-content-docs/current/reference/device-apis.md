@@ -12,7 +12,7 @@ Los ejemplos usan la instalación local en kind (tenant `acme`, instancia `devic
 | Transporte | Dirección | Se autentica con | Ir a |
 | --- | --- | --- | --- |
 | [MQTT](#mqtt) | telemetría de entrada, comandos de salida | id y secreto de credencial, por conexión | [Conectar un dispositivo](../guides/connecting-a-device.md#mqtt) |
-| [HTTP](#http) | telemetría de entrada | credencial en el cuerpo de la petición | [Conectar un dispositivo](../guides/connecting-a-device.md#http) |
+| [HTTP](#http) | telemetría de entrada, recepción de comandos por consulta opcional | credencial en el cuerpo para eventos; token de acceso bearer para consultar comandos | [Conectar un dispositivo](../guides/connecting-a-device.md#http) |
 | [LwM2M](#lwm2m) | telemetría de entrada, escrituras de salida | clave precompartida DTLS | [LwM2M](../concepts/lwm2m.md) |
 | [Sparkplug B](#sparkplug) | telemetría de entrada, comandos de salida | la credencial del broker de la fuente | [Sparkplug B](../concepts/sparkplug.md) |
 | [Certificado X.509](#x509) | como MQTT | certificado de cliente | [Dispositivos con certificado](../guides/device-x509.md) |
@@ -47,7 +47,7 @@ curl -i -X POST http://localhost:8081/devicechain/acme/events \
   -d '{"device":"sensor-001","eventType":"Measurement","credentialType":"ACCESS_TOKEN","credentialId":"<token>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
-HTTP es solo ascendente: un dispositivo HTTP no puede recibir comandos. El puerto 8081 no tiene autenticación de transporte, así que mantenlo detrás de controles de red.
+Para la [recepción de comandos por consulta HTTP](../concepts/commands.md#http-command-pull), fija `commandChannel` del tipo de dispositivo en `HTTP_PULL`. El dispositivo consulta comandos, confirma su recepción y envía respuestas usando `Authorization: Bearer <access-token>` con su propio token de acceso. El canal predeterminado `PUBLISH` no admite consultas. Este canal HTTP no transporta configuración ni asignaciones de actualizaciones gestionadas. Mantén el puerto 8081 detrás de controles de red.
 
 ## LwM2M {#lwm2m}
 

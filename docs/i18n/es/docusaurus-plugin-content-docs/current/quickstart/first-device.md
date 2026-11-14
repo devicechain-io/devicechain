@@ -307,10 +307,7 @@ La ruta es `/{instanceId}/{tenant}/events`. `devicechain` es la instancia del pa
 el inquilino del paso 2. Un `404` aquí significa que el **id de instancia** está mal, porque la ruta
 solo existe bajo el id propio de esta instancia.
 
-Un **inquilino** equivocado no devuelve `404`. Cualquier nombre de inquilino bien formado se acepta
-con `202`, exista o no un inquilino con ese nombre. El evento se descarta más abajo en la cadena, y
-nada en la respuesta lo dice. Si un `202` no produce datos, comprueba el nombre del inquilino antes
-que cualquier otra cosa.
+Un **inquilino** equivocado no devuelve `404`. En una instancia con los servicios habituales conectados, una confirmación autoritativa de que el inquilino no existe o una credencial rechazada devuelve `401` con `{"error":"unauthorized"}` antes de publicar. Si las dependencias de validación no pueden determinar la respuesta, estas comprobaciones permiten continuar: `202` confirma el encolado, no la validación del inquilino y la credencial ni la finalización del procesamiento.
 
 Envía algunas lecturas más con valores distintos, para tener una línea que mirar en vez de un
 punto:
@@ -358,7 +355,8 @@ Ya tienes un dispositivo de principio a fin: registrado, con credencial, reporta
 | `404` en el `POST` de ingesta | El **id de instancia** de la ruta está mal. Es `devicechain` salvo que lo cambiaras. Un inquilino equivocado no produce esto. |
 | Conexión rechazada en `:8081` | La redirección de puerto del paso 5 no está corriendo. |
 | `400` en el `POST` de ingesta | Un número desnudo en vez de una cadena, lecturas no envueltas en `entries`, o un segmento de inquilino que no es un token válido. |
-| `202`, pero no aparece nada | O el **inquilino** no existe (se acepta un nombre bien formado, exista o no ese inquilino), o la credencial no coincidió. El `credentialId` del cuerpo debe ser exactamente el que creaste en el paso 4. |
+| El `POST` de ingesta devuelve `401` | Una consulta autoritativa no reconoce al inquilino o la credencial fue rechazada. Comprueba el inquilino y la credencial del paso 4; ambos casos devuelven el mismo cuerpo de no autorizado. |
+| `202`, pero no aparece nada | El encolado se completó; el procesamiento es asíncrono. Comprueba los diagnósticos de procesamiento y el inquilino y la credencial del paso 4. Las comprobaciones permiten continuar si sus dependencias no pueden determinar la respuesta. |
 | `429` en el `POST` de ingesta | El inquilino supera su techo de ingesta: estás enviando más lecturas por segundo de las que permite su nivel. El evento no se aceptó. La respuesta lleva una cabecera `Retry-After`, así que espera y vuelve a enviarlo. |
 | `503` con cabecera `Retry-After` en el `POST` de ingesta | La plataforma está rechazando eventos nuevos de todos los inquilinos ([contrapresión](../deployment/observability.md#ingest-backpressure)). El evento **no** se almacenó. Espera los segundos que indica `Retry-After` (10) y vuelve a enviarlo. `curl -i` muestra las cabeceras de la respuesta. |
 | `503` sin cabecera `Retry-After` en el `POST` de ingesta | El evento no pudo entregarse al stream, y **puede** que se haya almacenado igualmente. Vuelve a enviarlo, pero el reenvío almacena una segunda copia salvo que el evento lleve `altId` y `occurredTime` (consulta [calidad de servicio](../guides/connecting-a-device.md#quality-of-service)). |

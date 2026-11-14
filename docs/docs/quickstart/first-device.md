@@ -314,9 +314,7 @@ The path is `/{instanceId}/{tenant}/events`. `devicechain` is the instance from 
 `sim-demo` is the tenant from step 2. A `404` here means the **instance id** is wrong, because the
 route exists only under this instance's own id.
 
-A wrong **tenant** does not return `404`. Any well-formed tenant name is accepted with `202`,
-whether or not a tenant of that name exists. The event is dropped further downstream, and nothing
-in the response says so. If a `202` produces no data, check the tenant name before anything else.
+A wrong **tenant** does not return `404`. On a normally wired instance, an authoritative unknown-tenant result or a rejected credential returns `401` with `{"error":"unauthorized"}` before publication. These checks fail open when their validation dependencies cannot determine the answer, so `202` confirms queueing, not successful tenant and credential validation or completed processing.
 
 Send a few more readings with different values, so there is a line to look at rather than a
 point:
@@ -364,7 +362,8 @@ You now have a device end to end: registered, credentialed, reporting and querya
 | `404` from the ingest `POST` | The **instance id** in the path is wrong. It is `devicechain` unless you changed it. A wrong tenant does not produce this. |
 | Connection refused on `:8081` | The port-forward in step 5 is not running. |
 | `400` from the ingest `POST` | A bare number instead of a string, readings not wrapped in `entries`, or a tenant segment that is not a valid token. |
-| `202`, but nothing appears | Either the **tenant** does not exist (a well-formed name is accepted whether or not it names anything), or the credential did not match. `credentialId` in the body must be exactly the one you created in step 4. |
+| Ingest `POST` returns `401` | The tenant is authoritatively unknown or the credential was rejected. Check the tenant and the credential from step 4; both cases return the same unauthorized body. |
+| `202`, but nothing appears | Queueing succeeded; processing is asynchronous. Check processing diagnostics and the tenant and credential from step 4. Validation checks fail open when their dependencies cannot determine the answer. |
 | `429` from the ingest `POST` | The tenant is over its ingest ceiling: you are sending more readings per second than its tier allows. The event was not accepted. The response carries a `Retry-After` header, so back off and send it again. |
 | `503` with a `Retry-After` header from the ingest `POST` | The platform is refusing new events for every tenant ([backpressure](../deployment/observability.md#ingest-backpressure)). The event was **not** stored. Wait the number of seconds in `Retry-After` (10) and send it again. `curl -i` prints the response headers. |
 | `503` without a `Retry-After` header from the ingest `POST` | The event could not be handed to the stream, and it **may** have been stored anyway. Send it again, but a resend stores a second copy unless the event carries an `altId` and an `occurredTime` (see [quality of service](../guides/connecting-a-device.md#quality-of-service)). |

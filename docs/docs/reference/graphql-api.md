@@ -1014,9 +1014,10 @@ counted.
 
 ### Size bounds on lists, inputs and aggregations {#size-bounds}
 
-Separately from the request-shape limits above, some reads and inputs have a size bound. A request
-over one is refused with `extensions.code` set to `LIMIT_EXCEEDED`. Nothing is truncated and nothing
-is partly applied, so narrow the request and send it again. Sizes are counted in bytes, not
+Separately from the request-shape limits above, some reads and inputs have a size bound. Except
+for version-history paging and the error codes noted below, exceeding a bound is refused with
+`extensions.code` set to `LIMIT_EXCEEDED`; narrow the request and send it again. Version-history
+reads default to 1,000 results and clamp larger limits to 1,000. Sizes are counted in bytes, not
 characters.
 
 | Bound | Limit | Applies to |
@@ -1028,7 +1029,7 @@ characters.
 | Rule definition | 256 KiB | `definition` of a detection rule, on create and update. |
 | Rule authoring graph | 256 KiB | `authoringGraph` of a detection rule, on create and update. |
 | Rules per validation | 1,000 | `validateDetectionRules` `rules`. Publishing a device profile with more than 1,000 enabled detection rules is refused the same way. |
-| Version history | 1,000 per call | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: newest first. Narrow with `limit` (at least 1) and page with `offset` (not negative); a value outside that range is refused with `INVALID_VALUE`. |
+| Version history | 1,000 per call | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: newest first. An omitted `limit` defaults to 1,000; a larger value is clamped to 1,000. Page with `offset` (default 0). A `limit` below 1 or a negative `offset` is refused with `INVALID_VALUE`. |
 | Buckets per aggregation | 10,000 | `bucketedMeasurements`: the range divided by `intervalSeconds`, rounded up. |
 | Rows per aggregation | 50,000 | `bucketedMeasurements`: the buckets multiplied by the measurement names returned. With a `name` filter that is one name; without one it is every distinct measurement name that matches the read's filters. |
 | Keys per lookup | 1,000 | A list of tokens, external ids or alarm tokens passed to a `…ByToken`, `…ByExternalId` or similar batch query (device states, latest locations, commands, command batches, notification channels, policies and states). |

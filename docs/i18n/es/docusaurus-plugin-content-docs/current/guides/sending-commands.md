@@ -165,9 +165,11 @@ dispositivo» es:
 Una lista `statuses` vacía se ignora en lugar de no coincidir con nada.
 
 Lo que te dice cada estado terminal está en
-[Comandos](../concepts/commands.md#command-lifecycle). El par que conviene recordar: `EXPIRED`
-significa que el comando nunca llegó a un dispositivo, y `TIMEOUT` significa que sí llegó. Una
-racha de `EXPIRED` apunta al despacho; una racha de `TIMEOUT` apunta al dispositivo.
+[Comandos](../concepts/commands.md#command-lifecycle). La diferencia: `EXPIRED` significa que
+el comando caducó antes de la entrega; `TIMEOUT` significa que caducó en `SENT`, despachado y
+sin respuesta. La recepción y la ejecución siguen siendo desconocidas (`outcome: UNKNOWN`):
+el dispositivo puede desconectarse entre la comprobación de presencia y la publicación.
+Si se repite `TIMEOUT`, investiga tanto la entrega como la gestión de respuestas del dispositivo.
 
 ## Cancela un comando {#cancel-one}
 
