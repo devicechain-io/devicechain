@@ -805,6 +805,69 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
+#### Exportaciones npm heredadas obsoletas {#v160-npm-deprecations}
+
+Las siguientes exportaciones quedan obsoletas en `v1.6.0` y siguen funcionando sin cambios. Actualice las importaciones o llamadas con los reemplazos indicados. No se elimina ninguna exportaci?n. La eliminaci?n requiere una versi?n mayor tras al menos dos versiones menores de obsolescencia; si empieza en 1.6, no podr? eliminarse nada antes de una versi?n mayor posterior a 1.7. `BuiltinOptionIssue` nombra la forma existente del problema de un widget integrado (`widgetType`); el tipo general `@devicechain/dashboards.OptionIssue` (`widgetId`) sigue siendo compatible.
+
+- `@devicechain/client` / `resolveAuthToken` queda obsoleta; use `SessionTokens.getAccessToken()` en la sesi?n devuelta por `createSessionTokens()`.
+- `@devicechain/widgets` / `pickSample` queda obsoleta; use `@devicechain/widget-sdk.pickSample`.
+- `@devicechain/widgets` / `optBoolean` queda obsoleta; use `@devicechain/widget-sdk.optBoolean`.
+- `@devicechain/widgets` / `WidgetProps` queda obsoleta; use `@devicechain/widget-sdk.WidgetProps`.
+- `@devicechain/widgets` / `WidgetComponent` queda obsoleta; use `@devicechain/widget-sdk.WidgetComponent`.
+- `@devicechain/widgets` / `WidgetFrame` queda obsoleta; use `@devicechain/widget-sdk.WidgetFrame`.
+- `@devicechain/widgets` / `WidgetSubjectProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetSubjectProvider`.
+- `@devicechain/widgets` / `WidgetSelectProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetSelectProvider`.
+- `@devicechain/widgets` / `useWidgetSelect` queda obsoleta; use `@devicechain/widget-sdk.useWidgetSelect`.
+- `@devicechain/widgets` / `WidgetTimeZoneProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetTimeZoneProvider`.
+- `@devicechain/widgets` / `useWidgetTimeZone` queda obsoleta; use `@devicechain/widget-sdk.useWidgetTimeZone`.
+- `@devicechain/widgets` / `WidgetThemeRootProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetThemeRootProvider`.
+- `@devicechain/widgets` / `useWidgetThemeRoot` queda obsoleta; use `@devicechain/widget-sdk.useWidgetThemeRoot`.
+- `@devicechain/widgets` / `WidgetCandidatesProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetCandidatesProvider`.
+- `@devicechain/widgets` / `useWidgetCandidates` queda obsoleta; use `@devicechain/widget-sdk.useWidgetCandidates`.
+- `@devicechain/widgets` / `useFlashOnChange` queda obsoleta; use `@devicechain/widget-sdk.useFlashOnChange`.
+- `@devicechain/widgets` / `flashTextStyle` queda obsoleta; use `@devicechain/widget-sdk.flashTextStyle`.
+- `@devicechain/widgets` / `flashBackgroundStyle` queda obsoleta; use `@devicechain/widget-sdk.flashBackgroundStyle`.
+- `@devicechain/widgets` / `FlashValue` queda obsoleta; use `@devicechain/widget-sdk.FlashValue`.
+- `@devicechain/widgets` / `fitValueFont` queda obsoleta; use `@devicechain/widget-sdk.fitValueFont`.
+- `@devicechain/widgets` / `useMeasurementStream` queda obsoleta; use `@devicechain/widget-sdk.useMeasurementStream`.
+- `@devicechain/widgets` / `useAlarmStream` queda obsoleta; use `@devicechain/widget-sdk.useAlarmStream`.
+- `@devicechain/widgets` / `useCommandStream` queda obsoleta; use `@devicechain/widget-sdk.useCommandStream`.
+- `@devicechain/widgets` / `useLocationStream` queda obsoleta; use `@devicechain/widget-sdk.useLocationStream`.
+- `@devicechain/widgets` / `useDatasourceAvailability` queda obsoleta; use `@devicechain/widget-sdk.useDatasourceAvailability`.
+- `@devicechain/widgets` / `useDashboardHub` queda obsoleta; use `@devicechain/widget-sdk.useDashboardHub`.
+- `@devicechain/widgets` / `useHubConnectionState` queda obsoleta; use `@devicechain/widget-sdk.useHubConnectionState`.
+- `@devicechain/widgets` / `HubConnectionBadge` queda obsoleta; use `@devicechain/widget-sdk.HubConnectionBadge`.
+- `@devicechain/widgets` / `useResolvedBindings` queda obsoleta; use `@devicechain/widget-sdk.useResolvedBindings`.
+- `@devicechain/widgets` / `useViewerBindings` queda obsoleta; use `@devicechain/widget-sdk.useViewerBindings`.
+- `@devicechain/widgets` / `useSlotCandidates` queda obsoleta; use `@devicechain/widget-sdk.useSlotCandidates`.
+- `@devicechain/widgets` / `useCandidates` queda obsoleta; use `@devicechain/widget-sdk.useCandidates`.
+- `@devicechain/widgets` / `css` queda obsoleta; use `@devicechain/widget-sdk.css`.
+- `@devicechain/widgets` / `FlashDirection` queda obsoleta; use `@devicechain/widget-sdk.FlashDirection`.
+- `@devicechain/widgets` / `WidgetFrameProps` queda obsoleta; use `@devicechain/widget-sdk.WidgetFrameProps`.
+- `@devicechain/widgets` / `WidgetSelect` queda obsoleta; use `@devicechain/widget-sdk.WidgetSelect`.
+- `@devicechain/widgets` / `WidgetCandidates` queda obsoleta; use `@devicechain/widget-sdk.WidgetCandidates`.
+- `@devicechain/widgets` / `MeasurementStreamState` queda obsoleta; use `@devicechain/widget-sdk.MeasurementStreamState`.
+- `@devicechain/widgets` / `AlarmStreamState` queda obsoleta; use `@devicechain/widget-sdk.AlarmStreamState`.
+- `@devicechain/widgets` / `CommandStreamState` queda obsoleta; use `@devicechain/widget-sdk.CommandStreamState`.
+- `@devicechain/widgets` / `LocationStreamState` queda obsoleta; use `@devicechain/widget-sdk.LocationStreamState`.
+- `@devicechain/widgets` / `CandidatesState` queda obsoleta; use `@devicechain/widget-sdk.CandidatesState`.
+- `@devicechain/widgets` / `DatasourceAvailability` queda obsoleta; use `@devicechain/widget-sdk.DatasourceAvailability`.
+- `@devicechain/widgets` / `HubConnectionBadgeProps` queda obsoleta; use `@devicechain/widget-sdk.HubConnectionBadgeProps`.
+- `@devicechain/widgets` / `ThemeVar` queda obsoleta; use `@devicechain/widget-sdk.ThemeVar`.
+- `@devicechain/widgets` / `EChart` queda obsoleta; use `@devicechain/widget-sdk/echarts.EChart`.
+- `@devicechain/widgets` / `buildLineOption` queda obsoleta; use `@devicechain/widget-sdk/echarts.buildLineOption`.
+- `@devicechain/widgets` / `buildGaugeOption` queda obsoleta; use `@devicechain/widget-sdk/echarts.buildGaugeOption`.
+- `@devicechain/widgets` / `resolveChartTheme` queda obsoleta; use `@devicechain/widget-sdk/echarts.resolveChartTheme`.
+- `@devicechain/widgets` / `useChartTheme` queda obsoleta; use `@devicechain/widget-sdk/echarts.useChartTheme`.
+- `@devicechain/widgets` / `EChartOption` queda obsoleta; use `@devicechain/widget-sdk/echarts.EChartOption`.
+- `@devicechain/widgets` / `LineChartOptions` queda obsoleta; use `@devicechain/widget-sdk/echarts.LineChartOptions`.
+- `@devicechain/widgets` / `GaugeChartOptions` queda obsoleta; use `@devicechain/widget-sdk/echarts.GaugeChartOptions`.
+- `@devicechain/widgets` / `ChartTheme` queda obsoleta; use `@devicechain/widget-sdk/echarts.ChartTheme`.
+- `@devicechain/widgets` / `WIDGET_CHANNEL` queda obsoleta; use `builtinWidgetDescriptors[id].channel`.
+- `@devicechain/widgets` / `WIDGET_BINDS_DATASOURCE` queda obsoleta; use `builtinWidgetDescriptors[id].datasource.mode !== 'none'`.
+- `@devicechain/widgets` / `isTerminalStatus` queda obsoleta; use `@devicechain/dashboards.isTerminalCommandStatus`.
+- `@devicechain/widgets` / `OptionIssue` queda obsoleta; use `@devicechain/widgets.BuiltinOptionIssue`.
+
 #### Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación {#v160-broker-reload}
 
 Una recarga completa del broker cerraba todas las conexiones admitidas por el callout de autenticación, entre ellas las de todos los dispositivos MQTT que se autentican con un nombre de usuario. El broker ahora se compila con `nats-server` `v2.15.3`, por lo que un cambio en el conjunto de CA del Secret TLS del broker (una rotación de CA), o una recarga manual, mantiene abiertas esas conexiones. Una recarga sin reinicio solo ocurre cuando el sidecar config-reloader del chart envía SIGHUP porque cambió el Secret TLS montado, o cuando un operador ejecuta `nats-server --signal reload` a mano.

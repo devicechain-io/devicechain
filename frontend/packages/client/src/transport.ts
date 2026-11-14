@@ -101,6 +101,7 @@ export function setIdentityTokenGetter(getter: (() => Promise<string | null>) | 
 // resolveAuthToken returns the current access token (refreshing via the getter),
 // or null. Internal to the SDK — the ws subscribe path (subscribe.ts) reuses it
 // so subscriptions authenticate with the same token as queries.
+/** @deprecated Use SessionTokens.getAccessToken() on the session returned by createSessionTokens() instead. */
 export async function resolveAuthToken(): Promise<string | null> {
   return tokenGetter ? tokenGetter() : null;
 }

@@ -516,6 +516,69 @@ dcctl bootstrap local devicechain
 
 `v1.6.0` 是从 `v1.5.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
 
+#### ?? npm ????? {#v160-npm-deprecations}
+
+????? `v1.6.0` ?????????????????????????????????????????????????????????????????? 1.6 ????????????? 1.7 ???????????`BuiltinOptionIssue` ????????????`widgetType`?????????? `@devicechain/dashboards.OptionIssue`?`widgetId`??????
+
+- `@devicechain/client` / `resolveAuthToken` ??????? `SessionTokens.getAccessToken()`??? `createSessionTokens()` ???????
+- `@devicechain/widgets` / `pickSample` ??????? `@devicechain/widget-sdk.pickSample`?
+- `@devicechain/widgets` / `optBoolean` ??????? `@devicechain/widget-sdk.optBoolean`?
+- `@devicechain/widgets` / `WidgetProps` ??????? `@devicechain/widget-sdk.WidgetProps`?
+- `@devicechain/widgets` / `WidgetComponent` ??????? `@devicechain/widget-sdk.WidgetComponent`?
+- `@devicechain/widgets` / `WidgetFrame` ??????? `@devicechain/widget-sdk.WidgetFrame`?
+- `@devicechain/widgets` / `WidgetSubjectProvider` ??????? `@devicechain/widget-sdk.WidgetSubjectProvider`?
+- `@devicechain/widgets` / `WidgetSelectProvider` ??????? `@devicechain/widget-sdk.WidgetSelectProvider`?
+- `@devicechain/widgets` / `useWidgetSelect` ??????? `@devicechain/widget-sdk.useWidgetSelect`?
+- `@devicechain/widgets` / `WidgetTimeZoneProvider` ??????? `@devicechain/widget-sdk.WidgetTimeZoneProvider`?
+- `@devicechain/widgets` / `useWidgetTimeZone` ??????? `@devicechain/widget-sdk.useWidgetTimeZone`?
+- `@devicechain/widgets` / `WidgetThemeRootProvider` ??????? `@devicechain/widget-sdk.WidgetThemeRootProvider`?
+- `@devicechain/widgets` / `useWidgetThemeRoot` ??????? `@devicechain/widget-sdk.useWidgetThemeRoot`?
+- `@devicechain/widgets` / `WidgetCandidatesProvider` ??????? `@devicechain/widget-sdk.WidgetCandidatesProvider`?
+- `@devicechain/widgets` / `useWidgetCandidates` ??????? `@devicechain/widget-sdk.useWidgetCandidates`?
+- `@devicechain/widgets` / `useFlashOnChange` ??????? `@devicechain/widget-sdk.useFlashOnChange`?
+- `@devicechain/widgets` / `flashTextStyle` ??????? `@devicechain/widget-sdk.flashTextStyle`?
+- `@devicechain/widgets` / `flashBackgroundStyle` ??????? `@devicechain/widget-sdk.flashBackgroundStyle`?
+- `@devicechain/widgets` / `FlashValue` ??????? `@devicechain/widget-sdk.FlashValue`?
+- `@devicechain/widgets` / `fitValueFont` ??????? `@devicechain/widget-sdk.fitValueFont`?
+- `@devicechain/widgets` / `useMeasurementStream` ??????? `@devicechain/widget-sdk.useMeasurementStream`?
+- `@devicechain/widgets` / `useAlarmStream` ??????? `@devicechain/widget-sdk.useAlarmStream`?
+- `@devicechain/widgets` / `useCommandStream` ??????? `@devicechain/widget-sdk.useCommandStream`?
+- `@devicechain/widgets` / `useLocationStream` ??????? `@devicechain/widget-sdk.useLocationStream`?
+- `@devicechain/widgets` / `useDatasourceAvailability` ??????? `@devicechain/widget-sdk.useDatasourceAvailability`?
+- `@devicechain/widgets` / `useDashboardHub` ??????? `@devicechain/widget-sdk.useDashboardHub`?
+- `@devicechain/widgets` / `useHubConnectionState` ??????? `@devicechain/widget-sdk.useHubConnectionState`?
+- `@devicechain/widgets` / `HubConnectionBadge` ??????? `@devicechain/widget-sdk.HubConnectionBadge`?
+- `@devicechain/widgets` / `useResolvedBindings` ??????? `@devicechain/widget-sdk.useResolvedBindings`?
+- `@devicechain/widgets` / `useViewerBindings` ??????? `@devicechain/widget-sdk.useViewerBindings`?
+- `@devicechain/widgets` / `useSlotCandidates` ??????? `@devicechain/widget-sdk.useSlotCandidates`?
+- `@devicechain/widgets` / `useCandidates` ??????? `@devicechain/widget-sdk.useCandidates`?
+- `@devicechain/widgets` / `css` ??????? `@devicechain/widget-sdk.css`?
+- `@devicechain/widgets` / `FlashDirection` ??????? `@devicechain/widget-sdk.FlashDirection`?
+- `@devicechain/widgets` / `WidgetFrameProps` ??????? `@devicechain/widget-sdk.WidgetFrameProps`?
+- `@devicechain/widgets` / `WidgetSelect` ??????? `@devicechain/widget-sdk.WidgetSelect`?
+- `@devicechain/widgets` / `WidgetCandidates` ??????? `@devicechain/widget-sdk.WidgetCandidates`?
+- `@devicechain/widgets` / `MeasurementStreamState` ??????? `@devicechain/widget-sdk.MeasurementStreamState`?
+- `@devicechain/widgets` / `AlarmStreamState` ??????? `@devicechain/widget-sdk.AlarmStreamState`?
+- `@devicechain/widgets` / `CommandStreamState` ??????? `@devicechain/widget-sdk.CommandStreamState`?
+- `@devicechain/widgets` / `LocationStreamState` ??????? `@devicechain/widget-sdk.LocationStreamState`?
+- `@devicechain/widgets` / `CandidatesState` ??????? `@devicechain/widget-sdk.CandidatesState`?
+- `@devicechain/widgets` / `DatasourceAvailability` ??????? `@devicechain/widget-sdk.DatasourceAvailability`?
+- `@devicechain/widgets` / `HubConnectionBadgeProps` ??????? `@devicechain/widget-sdk.HubConnectionBadgeProps`?
+- `@devicechain/widgets` / `ThemeVar` ??????? `@devicechain/widget-sdk.ThemeVar`?
+- `@devicechain/widgets` / `EChart` ??????? `@devicechain/widget-sdk/echarts.EChart`?
+- `@devicechain/widgets` / `buildLineOption` ??????? `@devicechain/widget-sdk/echarts.buildLineOption`?
+- `@devicechain/widgets` / `buildGaugeOption` ??????? `@devicechain/widget-sdk/echarts.buildGaugeOption`?
+- `@devicechain/widgets` / `resolveChartTheme` ??????? `@devicechain/widget-sdk/echarts.resolveChartTheme`?
+- `@devicechain/widgets` / `useChartTheme` ??????? `@devicechain/widget-sdk/echarts.useChartTheme`?
+- `@devicechain/widgets` / `EChartOption` ??????? `@devicechain/widget-sdk/echarts.EChartOption`?
+- `@devicechain/widgets` / `LineChartOptions` ??????? `@devicechain/widget-sdk/echarts.LineChartOptions`?
+- `@devicechain/widgets` / `GaugeChartOptions` ??????? `@devicechain/widget-sdk/echarts.GaugeChartOptions`?
+- `@devicechain/widgets` / `ChartTheme` ??????? `@devicechain/widget-sdk/echarts.ChartTheme`?
+- `@devicechain/widgets` / `WIDGET_CHANNEL` ??????? `builtinWidgetDescriptors[id].channel`?
+- `@devicechain/widgets` / `WIDGET_BINDS_DATASOURCE` ??????? `builtinWidgetDescriptors[id].datasource.mode !== 'none'`?
+- `@devicechain/widgets` / `isTerminalStatus` ??????? `@devicechain/dashboards.isTerminalCommandStatus`?
+- `@devicechain/widgets` / `OptionIssue` ??????? `@devicechain/widgets.BuiltinOptionIssue`?
+
 #### 完整重载代理会保持认证调用已放行的设备连接 {#v160-broker-reload}
 
 过去，完整重载代理会关闭认证调用已放行的所有连接，其中包括所有使用用户名进行认证的 MQTT 设备。代理现在基于 `nats-server` `v2.15.3` 构建，因此更改代理 TLS Secret 中的 CA 包（CA 轮换）或手动重载时，会保持这些连接打开。只有当 chart 的 config-reloader 边车因挂载的 TLS Secret 发生变化而发送 SIGHUP，或操作员手动运行 `nats-server --signal reload` 时，才会发生不重启的重载。

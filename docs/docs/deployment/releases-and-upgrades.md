@@ -760,6 +760,69 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
+#### Legacy npm exports are deprecated {#v160-npm-deprecations}
+
+The following exports are deprecated in `v1.6.0` and keep working unchanged. Update imports or calls to the replacements below. No export is removed. Removal requires a major release after at least two minor releases of deprecation; with deprecation starting in 1.6, no removal is eligible before a major after 1.7. `BuiltinOptionIssue` names the existing built-in issue shape (`widgetType`); the general `@devicechain/dashboards.OptionIssue` (`widgetId`) remains supported.
+
+- `@devicechain/client` / `resolveAuthToken` is deprecated; use `SessionTokens.getAccessToken()` on the session returned by `createSessionTokens()`.
+- `@devicechain/widgets` / `pickSample` is deprecated; use `@devicechain/widget-sdk.pickSample`.
+- `@devicechain/widgets` / `optBoolean` is deprecated; use `@devicechain/widget-sdk.optBoolean`.
+- `@devicechain/widgets` / `WidgetProps` is deprecated; use `@devicechain/widget-sdk.WidgetProps`.
+- `@devicechain/widgets` / `WidgetComponent` is deprecated; use `@devicechain/widget-sdk.WidgetComponent`.
+- `@devicechain/widgets` / `WidgetFrame` is deprecated; use `@devicechain/widget-sdk.WidgetFrame`.
+- `@devicechain/widgets` / `WidgetSubjectProvider` is deprecated; use `@devicechain/widget-sdk.WidgetSubjectProvider`.
+- `@devicechain/widgets` / `WidgetSelectProvider` is deprecated; use `@devicechain/widget-sdk.WidgetSelectProvider`.
+- `@devicechain/widgets` / `useWidgetSelect` is deprecated; use `@devicechain/widget-sdk.useWidgetSelect`.
+- `@devicechain/widgets` / `WidgetTimeZoneProvider` is deprecated; use `@devicechain/widget-sdk.WidgetTimeZoneProvider`.
+- `@devicechain/widgets` / `useWidgetTimeZone` is deprecated; use `@devicechain/widget-sdk.useWidgetTimeZone`.
+- `@devicechain/widgets` / `WidgetThemeRootProvider` is deprecated; use `@devicechain/widget-sdk.WidgetThemeRootProvider`.
+- `@devicechain/widgets` / `useWidgetThemeRoot` is deprecated; use `@devicechain/widget-sdk.useWidgetThemeRoot`.
+- `@devicechain/widgets` / `WidgetCandidatesProvider` is deprecated; use `@devicechain/widget-sdk.WidgetCandidatesProvider`.
+- `@devicechain/widgets` / `useWidgetCandidates` is deprecated; use `@devicechain/widget-sdk.useWidgetCandidates`.
+- `@devicechain/widgets` / `useFlashOnChange` is deprecated; use `@devicechain/widget-sdk.useFlashOnChange`.
+- `@devicechain/widgets` / `flashTextStyle` is deprecated; use `@devicechain/widget-sdk.flashTextStyle`.
+- `@devicechain/widgets` / `flashBackgroundStyle` is deprecated; use `@devicechain/widget-sdk.flashBackgroundStyle`.
+- `@devicechain/widgets` / `FlashValue` is deprecated; use `@devicechain/widget-sdk.FlashValue`.
+- `@devicechain/widgets` / `fitValueFont` is deprecated; use `@devicechain/widget-sdk.fitValueFont`.
+- `@devicechain/widgets` / `useMeasurementStream` is deprecated; use `@devicechain/widget-sdk.useMeasurementStream`.
+- `@devicechain/widgets` / `useAlarmStream` is deprecated; use `@devicechain/widget-sdk.useAlarmStream`.
+- `@devicechain/widgets` / `useCommandStream` is deprecated; use `@devicechain/widget-sdk.useCommandStream`.
+- `@devicechain/widgets` / `useLocationStream` is deprecated; use `@devicechain/widget-sdk.useLocationStream`.
+- `@devicechain/widgets` / `useDatasourceAvailability` is deprecated; use `@devicechain/widget-sdk.useDatasourceAvailability`.
+- `@devicechain/widgets` / `useDashboardHub` is deprecated; use `@devicechain/widget-sdk.useDashboardHub`.
+- `@devicechain/widgets` / `useHubConnectionState` is deprecated; use `@devicechain/widget-sdk.useHubConnectionState`.
+- `@devicechain/widgets` / `HubConnectionBadge` is deprecated; use `@devicechain/widget-sdk.HubConnectionBadge`.
+- `@devicechain/widgets` / `useResolvedBindings` is deprecated; use `@devicechain/widget-sdk.useResolvedBindings`.
+- `@devicechain/widgets` / `useViewerBindings` is deprecated; use `@devicechain/widget-sdk.useViewerBindings`.
+- `@devicechain/widgets` / `useSlotCandidates` is deprecated; use `@devicechain/widget-sdk.useSlotCandidates`.
+- `@devicechain/widgets` / `useCandidates` is deprecated; use `@devicechain/widget-sdk.useCandidates`.
+- `@devicechain/widgets` / `css` is deprecated; use `@devicechain/widget-sdk.css`.
+- `@devicechain/widgets` / `FlashDirection` is deprecated; use `@devicechain/widget-sdk.FlashDirection`.
+- `@devicechain/widgets` / `WidgetFrameProps` is deprecated; use `@devicechain/widget-sdk.WidgetFrameProps`.
+- `@devicechain/widgets` / `WidgetSelect` is deprecated; use `@devicechain/widget-sdk.WidgetSelect`.
+- `@devicechain/widgets` / `WidgetCandidates` is deprecated; use `@devicechain/widget-sdk.WidgetCandidates`.
+- `@devicechain/widgets` / `MeasurementStreamState` is deprecated; use `@devicechain/widget-sdk.MeasurementStreamState`.
+- `@devicechain/widgets` / `AlarmStreamState` is deprecated; use `@devicechain/widget-sdk.AlarmStreamState`.
+- `@devicechain/widgets` / `CommandStreamState` is deprecated; use `@devicechain/widget-sdk.CommandStreamState`.
+- `@devicechain/widgets` / `LocationStreamState` is deprecated; use `@devicechain/widget-sdk.LocationStreamState`.
+- `@devicechain/widgets` / `CandidatesState` is deprecated; use `@devicechain/widget-sdk.CandidatesState`.
+- `@devicechain/widgets` / `DatasourceAvailability` is deprecated; use `@devicechain/widget-sdk.DatasourceAvailability`.
+- `@devicechain/widgets` / `HubConnectionBadgeProps` is deprecated; use `@devicechain/widget-sdk.HubConnectionBadgeProps`.
+- `@devicechain/widgets` / `ThemeVar` is deprecated; use `@devicechain/widget-sdk.ThemeVar`.
+- `@devicechain/widgets` / `EChart` is deprecated; use `@devicechain/widget-sdk/echarts.EChart`.
+- `@devicechain/widgets` / `buildLineOption` is deprecated; use `@devicechain/widget-sdk/echarts.buildLineOption`.
+- `@devicechain/widgets` / `buildGaugeOption` is deprecated; use `@devicechain/widget-sdk/echarts.buildGaugeOption`.
+- `@devicechain/widgets` / `resolveChartTheme` is deprecated; use `@devicechain/widget-sdk/echarts.resolveChartTheme`.
+- `@devicechain/widgets` / `useChartTheme` is deprecated; use `@devicechain/widget-sdk/echarts.useChartTheme`.
+- `@devicechain/widgets` / `EChartOption` is deprecated; use `@devicechain/widget-sdk/echarts.EChartOption`.
+- `@devicechain/widgets` / `LineChartOptions` is deprecated; use `@devicechain/widget-sdk/echarts.LineChartOptions`.
+- `@devicechain/widgets` / `GaugeChartOptions` is deprecated; use `@devicechain/widget-sdk/echarts.GaugeChartOptions`.
+- `@devicechain/widgets` / `ChartTheme` is deprecated; use `@devicechain/widget-sdk/echarts.ChartTheme`.
+- `@devicechain/widgets` / `WIDGET_CHANNEL` is deprecated; use `builtinWidgetDescriptors[id].channel`.
+- `@devicechain/widgets` / `WIDGET_BINDS_DATASOURCE` is deprecated; use `builtinWidgetDescriptors[id].datasource.mode !== 'none'`.
+- `@devicechain/widgets` / `isTerminalStatus` is deprecated; use `@devicechain/dashboards.isTerminalCommandStatus`.
+- `@devicechain/widgets` / `OptionIssue` is deprecated; use `@devicechain/widgets.BuiltinOptionIssue`.
+
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
 
 A full broker reload used to close every connection the auth callout had admitted, which includes every MQTT device that authenticates with a username. The broker is now built on `nats-server` `v2.15.3`, so a change to the CA bundle in the broker's TLS Secret (a CA rotation), or a manual reload, keeps those connections open. A reload without a restart happens only when the chart's config-reloader sidecar sends SIGHUP because the mounted TLS Secret changed, or when an operator runs `nats-server --signal reload` by hand.
