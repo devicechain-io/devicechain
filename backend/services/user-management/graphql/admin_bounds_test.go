@@ -97,9 +97,10 @@ func TestAdminListsOverTheBoundAreRefused(t *testing.T) {
 	update.Authorities.Set = true
 	update.Authorities.Value = over
 	_, err = r.UpdateRole(boundsCtx(), struct {
-		Scope   string
-		Token   string
-		Request admin.RoleUpdateRequest
+		Scope             string
+		Token             string
+		Request           admin.RoleUpdateRequest
+		ExpectedUpdatedAt *string
 	}{Scope: "tenant", Token: "r", Request: update})
 	requireLimit(t, err)
 }
@@ -175,9 +176,10 @@ func TestAdminListsAtTheBoundAreAccepted(t *testing.T) {
 			update.Authorities.Set = true
 			update.Authorities.Value = at
 			_, err := r.UpdateRole(boundsCtx(), struct {
-				Scope   string
-				Token   string
-				Request admin.RoleUpdateRequest
+				Scope             string
+				Token             string
+				Request           admin.RoleUpdateRequest
+				ExpectedUpdatedAt *string
 			}{Scope: "tenant", Token: "r", Request: update})
 			return err
 		},
@@ -230,9 +232,10 @@ func TestEveryAdminBoundRunsAfterAuthorization(t *testing.T) {
 	update.Authorities.Set = true
 	update.Authorities.Value = over
 	_, errs["updateRole"] = r.UpdateRole(ctx, struct {
-		Scope   string
-		Token   string
-		Request admin.RoleUpdateRequest
+		Scope             string
+		Token             string
+		Request           admin.RoleUpdateRequest
+		ExpectedUpdatedAt *string
 	}{Scope: "tenant", Token: "r", Request: update})
 
 	for name, err := range errs {

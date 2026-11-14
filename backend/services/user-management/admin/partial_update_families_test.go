@@ -83,7 +83,7 @@ func roleFamily() putest.Family[*Service] {
 		},
 		NewRequest: func() any { return new(RoleUpdateRequest) },
 		Update: func(s *Service, ctx context.Context, token string, req any) error {
-			_, err := s.UpdateRole(ctx, scope, token, req.(*RoleUpdateRequest))
+			_, err := s.UpdateRole(ctx, scope, token, req.(*RoleUpdateRequest), nil)
 			return err
 		},
 		Fields: []putest.Field{

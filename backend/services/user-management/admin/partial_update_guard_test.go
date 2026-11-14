@@ -124,7 +124,7 @@ func TestAnEmptyAuthoritySetIsAllowed(t *testing.T) {
 
 	emptied, err := s.UpdateRole(ctx, string(iam.ScopeSystem), "ops-role", &RoleUpdateRequest{
 		Authorities: dcgraphql.ClearedStringList(),
-	})
+	}, nil)
 	require.NoError(t, err, "clearing a role's authorities was refused, which leaves a role "+
 		"that create can produce and update cannot correct")
 	require.Empty(t, emptied.Authorities)
@@ -148,7 +148,7 @@ func TestUpdateRoleCannotCrossScopes(t *testing.T) {
 
 	_, err := s.UpdateRole(ctx, string(iam.ScopeTenant), "ops", &RoleUpdateRequest{
 		Name: dcgraphql.OptionalStringOf("renamed"),
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	sys, err := s.iam.CatalogueRoleByScopeToken(ctx, iam.ScopeSystem, "ops")

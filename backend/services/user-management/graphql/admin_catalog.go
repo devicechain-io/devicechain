@@ -254,9 +254,10 @@ func (r *AdminResolver) CreateRole(ctx context.Context, args struct {
 // request carries neither, so addressing a second role through the payload is
 // unrepresentable.
 func (r *AdminResolver) UpdateRole(ctx context.Context, args struct {
-	Scope   string
-	Token   string
-	Request admin.RoleUpdateRequest
+	Scope             string
+	Token             string
+	Request           admin.RoleUpdateRequest
+	ExpectedUpdatedAt *string
 }) (*AdminRoleResolver, error) {
 	if err := auth.Authorize(ctx, auth.RoleWrite); err != nil {
 		return nil, err
@@ -264,7 +265,7 @@ func (r *AdminResolver) UpdateRole(ctx context.Context, args struct {
 	if err := checkList("authorities", args.Request.Authorities.Value); err != nil {
 		return nil, err
 	}
-	role, err := r.getAdminService(ctx).UpdateRole(ctx, args.Scope, args.Token, &args.Request)
+	role, err := r.getAdminService(ctx).UpdateRole(ctx, args.Scope, args.Token, &args.Request, args.ExpectedUpdatedAt)
 	return wrapRole(role, err)
 }
 
