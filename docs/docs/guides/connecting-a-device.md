@@ -60,6 +60,8 @@ Every inbound event, over any transport, is a JSON object. The example below is 
 - `credentialType` / `credentialId` — the credential the device presents **over HTTP**. `MQTT_BASIC` additionally carries `credentialSecret`. Omit these only when the instance's device-auth mode is set to `disabled` or `optional`. The default is `required`, so an HTTP event is expected to carry a credential. **Over MQTT, leave all three out**: the broker has already authenticated the device when it connected, and an event on the platform's MQTT broker that carries any of them is refused (see the [Device Protocol Reference](../reference/device-protocol.md#rejections-at-the-door)).
 - `payload` — its shape depends on `eventType`. `Measurement`, `Location` and `Alert` are `{ "entries": [ … ] }`; `NewRelationship` is three fields directly under `payload`. See below.
 
+`NewRelationship` can create untracked relationships, including `member`. Tracked types such as `assigned`, and the built-in `contains`, are refused on the first delivery with reason `Invalid`. Assign devices with a claim code or the `createEntityRelationship` mutation.
+
 Every field, with its type and whether it is required, including the optional `altId` and `relationship`, is in the [Device Protocol Reference](../reference/device-protocol.md#device-event), together with JSON Schemas you can validate firmware output against.
 
 ### Payload shapes {#payload-shapes}
