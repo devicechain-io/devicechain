@@ -141,7 +141,7 @@ export function moveWidget(
   def: DashboardDefinition,
   id: string,
   to: { col: number; row: number },
-  columns: number | undefined = undefined,
+  columns?: number,
   options: EditOptions = {},
 ): DashboardDefinition {
   const w = def.widgets.find((x) => x.id === id);
@@ -167,7 +167,7 @@ export function resizeWidget(
   target: { col: number; row: number; cols: number; rows: number },
   limits: SpanLimits | undefined,
   edges: { fromLeft?: boolean; fromTop?: boolean } = {},
-  columns: number | undefined = undefined,
+  columns?: number,
   options: EditOptions = {},
 ): DashboardDefinition {
   const w = def.widgets.find((x) => x.id === id);
@@ -404,6 +404,10 @@ function replacePlacement(def: DashboardDefinition, id: string, placement: Place
 // the box is inside the canvas at that cell size (the editor cannot produce an off-canvas widget by
 // dragging; the lint still checks the extremes of cell size). A grid widget has no offset, so it is
 // returned unchanged. A zero offset is stored as absent.
+// Keep the published signatures as overloads when adding breakpoint arguments, so the public
+// API report retains the original call contracts alongside the new ones.
+export function setRelativeOffset(def: DashboardDefinition, id: string, offset: { x: number; y: number }, options?: { fine?: boolean; bounds?: RelativeBounds }): DashboardDefinition;
+export function setRelativeOffset(def: DashboardDefinition, id: string, offset: { x: number; y: number }, options?: { fine?: boolean; bounds?: RelativeBounds; breakpoint?: string }): DashboardDefinition;
 export function setRelativeOffset(
   def: DashboardDefinition,
   id: string,
@@ -460,6 +464,8 @@ export function canHostRelative(def: DashboardDefinition, id: string, hostId: st
 // it (a new host and anchor, the size kept, the offset dropped). A host that is missing, is the
 // widget itself, or is not a grid widget at every breakpoint is refused: the definition comes back
 // unchanged. Only the requested breakpoint is edited; base is the default.
+export function placeRelative(def: DashboardDefinition, id: string, hostId: string, anchor: PlacementAnchor): DashboardDefinition;
+export function placeRelative(def: DashboardDefinition, id: string, hostId: string, anchor: PlacementAnchor, breakpoint?: string): DashboardDefinition;
 export function placeRelative(
   def: DashboardDefinition,
   id: string,
@@ -476,6 +482,8 @@ export function placeRelative(
 }
 
 // setRelativeAnchor changes the host point a relative widget hangs from, keeping the rest.
+export function setRelativeAnchor(def: DashboardDefinition, id: string, anchor: PlacementAnchor): DashboardDefinition;
+export function setRelativeAnchor(def: DashboardDefinition, id: string, anchor: PlacementAnchor, breakpoint?: string): DashboardDefinition;
 export function setRelativeAnchor(
   def: DashboardDefinition,
   id: string,
@@ -490,6 +498,8 @@ export function setRelativeAnchor(
 
 // placeOnGrid is the way back: a relative widget takes its own size (a `fill` one its host's) in
 // the first free slot of the grid, pushing nothing. A grid widget is returned unchanged.
+export function placeOnGrid(def: DashboardDefinition, id: string): DashboardDefinition;
+export function placeOnGrid(def: DashboardDefinition, id: string, breakpoint?: string): DashboardDefinition;
 export function placeOnGrid(def: DashboardDefinition, id: string, breakpoint = BASE_BREAKPOINT): DashboardDefinition {
   const w = def.widgets.find((x) => x.id === id);
   if (!w) return def;

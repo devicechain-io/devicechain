@@ -66,6 +66,7 @@ import { densityScale, tokenStyle, WidgetDensityProvider, WidgetFrameStyleProvid
 import { ConnectedWidget, WidgetSubjectProvider, resolveWidgets, widgetSubjectLabel } from '@devicechain/widgets';
 import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
 import { Button } from '@/components/ui/button';
+import { Select, SelectItem } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import {
   enabledHandles,
@@ -622,14 +623,13 @@ export function DashboardCanvas({
         onMouseDown={(e) => e.stopPropagation()}
       >
         {t('canvasBreakpoint')}
-        <select
-          aria-label={t('canvasBreakpoint')}
+        <Select
+          ariaLabel={t('canvasBreakpoint')}
           value={breakpoint}
-          className="rounded border border-border bg-background px-2 py-1"
-          onChange={(e) => {
+          onChange={(value) => {
             setGesture(null);
             setPickingFor(null);
-            setSelectedBreakpoint(e.target.value);
+            setSelectedBreakpoint(value);
           }}
         >
           {Object.entries(definition.canvas.breakpoints)
@@ -637,9 +637,9 @@ export function DashboardCanvas({
               a === BASE_BREAKPOINT ? -1 : b === BASE_BREAKPOINT ? 1 : breakpointMinWidth(x) - breakpointMinWidth(y),
             )
             .map(([name]) => (
-              <option key={name} value={name}>{name}</option>
+              <SelectItem key={name} value={name}>{name}</SelectItem>
             ))}
-        </select>
+        </Select>
       </label>
       {pickingFor && (
         // Over everything on the canvas, the selected widget's toolbar (250) and the placement

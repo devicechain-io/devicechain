@@ -461,7 +461,10 @@ describe('keyboard', () => {
 
 
 describe('breakpoint selector', () => {
-  const select = (name: string) => fireEvent.change(screen.getByRole('combobox', { name: 'Breakpoint' }), { target: { value: name } });
+  const select = (name: string) => {
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Breakpoint' }), { key: 'ArrowDown' });
+    fireEvent.click(screen.getByRole('option', { name }));
+  };
   const responsive = () => {
     const d = board([card('a', 0, 0), card('b', 0, 3)]);
     d.canvas.breakpoints = { base: 0, compact: { minWidth: 400, columns: 6 }, wide: 1200 };
