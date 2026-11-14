@@ -4,7 +4,8 @@ title: Feature Tour
 
 # Feature Tour {#feature-tour}
 
-[Your first device](./first-device.md) stops at the first reading. This tour keeps going. By the end
+[Your first device](./first-device.md) introduces readings, an alarm and a command on one device.
+This scripted tour builds a complete site. By the end
 of it one site is running from end to end: a device type and its profile, two devices reporting
 readings, a dashboard, a rule that raises an alarm and sends a command, the device's answer to that
 command, and a **customer user** who signs in and sees only their own device.
@@ -180,7 +181,7 @@ and creates it with `createDashboard`, publishes it with `publishDashboard`, and
 Open `DC_URL/dashboards/tour-a-ops`. The two boards differ in nothing but the button, which is the
 point of generating them from one definition.
 
-## 7. The rule raises an alarm {#7-the-rule-raises-an-alarm}
+## 7. Verify the alarm in the console {#7-the-rule-raises-an-alarm}
 
 Wait about half a minute. When a room passes the line, the rule fires: an alarm appears under
 **Monitor → Alarms** (and on the board's alarm table and count), and it **clears by itself** when the
@@ -191,7 +192,7 @@ latest raise.
 The room warms again after it has cooled, so the cycle repeats: one alarm and one command for each
 excursion. See [Alarms](/user-guide/alarms) and [Event processing](../concepts/event-processing.md).
 
-## 8. The command and its outcome {#8-command-outcome}
+## 8. Verify the command and its outcome {#8-command-outcome}
 
 The same firing sent the command `boost-cooling`. The device received it on its command topic,
 cooled, and **answered**, with the command's own token and the delivery's nonce. The answer is what
