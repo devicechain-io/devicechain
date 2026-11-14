@@ -168,6 +168,10 @@ type Microservice struct {
 	muxOnce sync.Once
 	mux     *http.ServeMux
 
+	// OpsMux is separate from the publicly routed API mux.
+	opsMuxOnce sync.Once
+	opsMux     *http.ServeMux
+
 	// profiler is the opt-in profiling listener, nil unless ENV_PROFILER_ADDRESS asked
 	// for one and ExecuteStart started it. It is a SEPARATE server on a separate address,
 	// never a route on mux above: the traffic port does not serve profiles. Atomic

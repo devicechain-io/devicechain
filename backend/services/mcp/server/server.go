@@ -271,8 +271,8 @@ func metadataURL(resourceID string) string {
 // RFC 8707 audience binding needs them to be: the identifier tokens are minted for is
 // the identifier a client POSTs to.
 //
-// The probe and metrics handlers main.go adds are more specific patterns, so
-// ServeMux still routes them ahead of this catch-all.
+// Probe and metrics handlers are served separately on the operations mux;
+// this catch-all belongs only to the public listener.
 func Routes(mux *http.ServeMux, resourceID, issuer string, validator func() *coreauth.Validator,
 	gql *GraphQLClient, limits Limits, opts ...Option) {
 	mcpHandler, metadataHandler := New(resourceID, issuer, validator, gql, limits, opts...)

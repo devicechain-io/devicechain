@@ -374,7 +374,7 @@ shed_snap() { # label
   mkdir -p "$raw/$1"
   mapfile -t es_pods < <(k get pods -n "$ns" -o json | jq -r '.items[]|select(.metadata.name|test("^event-sources-"))|.metadata.name' | tr -d '\r')
   for p in "${es_pods[@]}"; do
-    k get --raw "/api/v1/namespaces/$ns/pods/$p:8080/proxy/metrics" \
+    k get --raw "/api/v1/namespaces/$ns/pods/$p:8083/proxy/metrics" \
       | grep -E '^devicechain_eventsources_total_(msg_rate_limited|msg_reading_limited|readings_rate_limited|msg_publish_failed|msg_backpressured)[{ ]' > "$raw/$1/shed-$p.prom" || true
   done
 }

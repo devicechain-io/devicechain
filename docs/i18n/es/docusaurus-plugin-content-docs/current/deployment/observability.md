@@ -17,6 +17,8 @@ est谩n implementados y validados de extremo a extremo: un resumen de la instanci
 descritos en [Paneles de Grafana](./grafana-boards.md), con reglas de alerta incluidas.
 :::
 
+Las m閠ricas (`/metrics`) y las sondas de salud (`/healthz`, `/readyz`) usan el puerto 8083 (`ops`) de los pods y del Service de cada 醨ea. Las rutas p鷅licas `/api/<area>/...` apuntan 鷑icamente al puerto de la API (`graphql`, 8080) y no permiten acceder a estos endpoints operativos. Si utilizas tu propio controlador de entrada, dirige la API a `graphql`, nunca a `ops`.
+
 ## Trazado distribuido (OpenTelemetry)
 
 El trazado est谩 **desactivado de forma predeterminada**. Al activarlo, las solicitudes GraphQL
@@ -2029,7 +2031,7 @@ r茅plica, reenv铆a al pod que quieres por su nombre (`kubectl port-forward pod/<
 
 `profiler.address` fija d贸nde escucha el listener. Debe ser una direcci贸n IP y un puerto, por
 ejemplo `0.0.0.0:6060` para un perfilador que recoge datos desde otros pods. El servicio se niega a
-arrancar con un nombre de host, sin puerto o con su propio puerto 8080.
+arrancar con un nombre de host, sin puerto o con su propio puerto 8080 o 8083.
 
 :::warning Cualquier direcci贸n que no sea loopback queda abierta a la red del cl煤ster
 El listener no tiene autenticaci贸n, y el chart no genera ninguna network policy que limite qui茅n

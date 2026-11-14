@@ -322,7 +322,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 65535,
-          "description": "HTTP port every service listens on. It serves the GraphQL API, /healthz, /readyz and /metrics."
+          "description": "Public HTTP port every service listens on. It serves the GraphQL API; /healthz, /readyz and /metrics are on the separate ops port 8083, which no route targets."
         }
       },
       "description": "The Service exposed for each functional area."
@@ -355,7 +355,7 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Render one ServiceMonitor per enabled functional area, scraping /metrics on the named graphql port. Requires the Prometheus Operator CRDs; set false on a cluster without them."
+          "description": "Render one ServiceMonitor per enabled functional area, scraping /metrics on the named ops port. Requires the Prometheus Operator CRDs; set false on a cluster without them."
         },
         "grafanaDashboards": {
           "type": "boolean",

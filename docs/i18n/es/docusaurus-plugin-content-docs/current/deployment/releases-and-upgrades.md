@@ -805,6 +805,10 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
+#### Las métricas y los endpoints de salud pasan al puerto ops {#v160-ops-port}
+
+Las métricas y los endpoints de salud de los servicios se han separado del puerto de la API. `/metrics`, `/healthz` y `/readyz` se sirven en el puerto 8083 (`ops`) de los pods y del Service de cada área y ya no son accesibles mediante `/api/<area>/...`. Los ServiceMonitors y las sondas del chart se actualizan automáticamente. Si recopilas métricas de los pods con tu propia configuración de Prometheus, cambia el puerto de destino de 8080 a 8083. Durante el despliegue gradual, no se recopilan métricas de los pods que aún no se han reemplazado.
+
 #### Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación {#v160-broker-reload}
 
 Una recarga completa del broker cerraba todas las conexiones admitidas por el callout de autenticación, entre ellas las de todos los dispositivos MQTT que se autentican con un nombre de usuario. El broker ahora se compila con `nats-server` `v2.15.3`, por lo que un cambio en el conjunto de CA del Secret TLS del broker (una rotación de CA), o una recarga manual, mantiene abiertas esas conexiones. Una recarga sin reinicio solo ocurre cuando el sidecar config-reloader del chart envía SIGHUP porque cambió el Secret TLS montado, o cuando un operador ejecuta `nats-server --signal reload` a mano.
