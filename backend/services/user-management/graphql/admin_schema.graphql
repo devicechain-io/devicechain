@@ -2049,6 +2049,8 @@ type Mutation {
         token: String!
         """The changes to apply."""
         request: AdminRoleUpdateRequest!
+        """Optional updatedAt from the role being edited. A stale version refuses the save; omit for an unconditional update."""
+        expectedUpdatedAt: String
     ): AdminRole!
     """
     Deletes a role and removes it from everything it was assigned to. Returns true if it was
