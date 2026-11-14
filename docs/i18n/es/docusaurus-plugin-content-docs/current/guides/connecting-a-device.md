@@ -60,6 +60,8 @@ Todo evento entrante, sobre cualquier transporte, es un objeto JSON. El ejemplo 
 - `credentialType` / `credentialId` — la credencial que presenta el dispositivo **por HTTP**. `MQTT_BASIC` además lleva `credentialSecret`. Omítelos solo cuando el modo de autenticación de dispositivo de la instancia esté configurado como `disabled` u `optional`. El valor predeterminado es `required`, así que se espera que un evento HTTP lleve una credencial. **Por MQTT, omite los tres**: el broker ya autenticó al dispositivo al conectarse, y un evento en el broker MQTT de la plataforma que lleve cualquiera de ellos se rechaza (consulta la [Referencia del protocolo de dispositivos](../reference/device-protocol.md#rejections-at-the-door)).
 - `payload` — su forma depende de `eventType`. `Measurement`, `Location` y `Alert` son `{ "entries": [ … ] }`; `NewRelationship` son tres campos directamente bajo `payload`. Consulta a continuación.
 
+`NewRelationship` puede crear relaciones sin seguimiento, incluido `member`. Los tipos con seguimiento como `assigned` y el tipo integrado `contains` se rechazan en la primera entrega con motivo `Invalid`. Asigna los dispositivos con un código de reclamación o la mutación `createEntityRelationship`.
+
 Cada campo, con su tipo y si es obligatorio, incluidos los opcionales `altId` y `relationship`, está en la [Referencia del protocolo de dispositivo](../reference/device-protocol.md#device-event), junto con esquemas JSON con los que puedes validar lo que emite el firmware.
 
 ### Formas del payload {#payload-shapes}
