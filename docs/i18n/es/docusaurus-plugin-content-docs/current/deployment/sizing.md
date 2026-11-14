@@ -190,14 +190,17 @@ De menor a mayor prioridad:
 1. los valores por defecto del chart y de las variables de OpenTofu;
 2. el tamaño;
 3. lo que `dcctl` calcula por sí mismo: los recuentos de réplicas de HA, el interruptor de los
-   sobres, los servicios que se ejecutan y los volúmenes que la instancia ya tiene;
+   sobres y los servicios que se ejecutan;
 4. tu superposición `--values`;
 5. una variable de OpenTofu que indiques en `TF_VAR_*`, `terraform.tfvars` o un archivo
    `*.auto.tfvars`.
 
-Prevalece lo que tú indiques. `dcctl` no pasa en absoluto una variable de OpenTofu del tamaño
-cuando ya la has indicado tú, porque de lo contrario OpenTofu tomaría el valor del tamaño en lugar
-del tuyo. La línea que imprime `dcctl bootstrap` nombra el tamaño que aplicó.
+Los volúmenes existentes son una excepción a este orden. Cuando conoce sus tamaños actuales,
+`dcctl` los pasa en `nats_jetstream_storage` y `timescale_storage`, aunque hayas indicado otros
+valores mediante variables de entorno o archivos tfvars. Tus valores para esas dos variables
+prevalecen sobre el tamaño predefinido en la creación inicial, antes de que existan los volúmenes.
+Para las demás variables de OpenTofu del tamaño, `dcctl` omite las que hayas indicado para que
+prevalezca tu valor. La línea que imprime `dcctl bootstrap` nombra el tamaño que aplicó.
 
 ## Cambiar el tamaño de una instancia en ejecución {#changing}
 

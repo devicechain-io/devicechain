@@ -12,7 +12,7 @@ title: 设备 API 一览
 | 传输方式 | 方向 | 认证方式 | 前往 |
 | --- | --- | --- | --- |
 | [MQTT](#mqtt) | 遥测上行，命令下行 | 每次连接使用凭据 ID 和密钥 | [连接设备](../guides/connecting-a-device.md#mqtt) |
-| [HTTP](#http) | 遥测上行 | 请求体中的凭据 | [连接设备](../guides/connecting-a-device.md#http) |
+| [HTTP](#http) | 遥测上行，可选命令拉取 | 事件使用请求体凭据；命令拉取使用 bearer 访问令牌 | [连接设备](../guides/connecting-a-device.md#http) |
 | [LwM2M](#lwm2m) | 遥测上行，写入下行 | DTLS 预共享密钥 | [LwM2M](../concepts/lwm2m.md) |
 | [Sparkplug B](#sparkplug) | 遥测上行，命令下行 | 数据源的 broker 凭据 | [Sparkplug B](../concepts/sparkplug.md) |
 | [X.509 证书](#x509) | 同 MQTT | 客户端证书 | [证书设备](../guides/device-x509.md) |
@@ -47,7 +47,7 @@ curl -i -X POST http://localhost:8081/devicechain/acme/events \
   -d '{"device":"sensor-001","eventType":"Measurement","credentialType":"ACCESS_TOKEN","credentialId":"<token>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
-HTTP 只能上行：HTTP 设备无法接收命令。8081 端口没有传输层认证，请把它放在网络控制之后。
+要使用 [HTTP 命令拉取](../concepts/commands.md#http-command-pull)，请将设备类型的 `commandChannel` 设为 `HTTP_PULL`。设备使用自身的访问令牌，通过 `Authorization: Bearer <access-token>` 轮询命令、确认接收并提交响应。默认的 `PUBLISH` 通道不支持轮询。HTTP 命令拉取不传递配置或托管更新分配。请将 8081 端口置于网络控制之后。
 
 ## LwM2M {#lwm2m}
 

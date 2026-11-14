@@ -186,13 +186,16 @@ From lowest to highest:
 1. the chart's defaults and the OpenTofu variables' defaults;
 2. the size;
 3. what `dcctl` works out itself: the HA replica counts, the envelope switch, the services that
-   run, the volumes an instance already has;
+   run;
 4. your `--values` overlay;
 5. an OpenTofu variable you state in `TF_VAR_*`, `terraform.tfvars` or an `*.auto.tfvars` file.
 
-Anything you state wins. `dcctl` does not pass a size's OpenTofu variable at all when you have
-stated it yourself, because OpenTofu would otherwise take the size's value over yours. The line
-`dcctl bootstrap` prints names the size it applied.
+Existing volumes are an exception to this order. When their live sizes are known, `dcctl`
+passes those sizes for `nats_jetstream_storage` and `timescale_storage`, even if you supplied
+different values through environment variables or tfvars files. Your values for these two
+variables take precedence over the size preset on initial creation, before the volumes exist.
+For other preset OpenTofu variables, `dcctl` omits any variable you have supplied, so your value
+wins. The line `dcctl bootstrap` prints names the size it applied.
 
 ## Changing the size of a running instance {#changing}
 
