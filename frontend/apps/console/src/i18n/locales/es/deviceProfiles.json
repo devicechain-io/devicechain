@@ -1,4 +1,13 @@
 {
+  "celPresetSource": "Origen del valor escalar",
+  "celPresetEvent": "Métrica del evento (alimenta una condición)",
+  "celPresetDetection": "Lectura que activa la regla (alimenta una bifurcación)",
+  "celPresetSummary": "Crear una expresión",
+  "celPresetKind": "Operación",
+  "celPresetFilter": "Filtro: comparar una lectura",
+  "celPresetExists": "Existe: comprobar si hay una lectura",
+  "celPresetApply": "Usar expresión",
+
   "canvasAddLabel": "Añadir:",
   "canvasChecking": "Comprobando…",
   "canvasCompiles": "Compila",
