@@ -544,6 +544,10 @@ dcctl bootstrap local devicechain
 | `infrastructure.nats.shardGroups` | 为两个摄取流按租户路由，需主动启用；缺省时保持原路由。分组流会将预留容量乘以 `count`，启用前需规划容量。仅在滚动更新完成后启用。 |
 | `dcctl backup`、`dcctl backup inspect --verify`、`dcctl restore --plan` | **预览**命令，用于本地流/对象备份集、字节验证和只读恢复规划。目前没有执行恢复的命令，也不协调数据库检查点。参见[导出流和对象内容](./disaster-recovery.md#export-streams-objects)。 |
 
+#### 自动化动作的权限 {#v160-action-authorities}
+
+编写或发布自动化动作需要具备执行该动作的权限。创建或更新包含 `sendCommand` 动作的规则，以及发布或回滚到启用规则中包含该动作的配置文件版本，除了 `device:write` 之外，还需要 `command:write`。`httpCall` 和 `publish` 动作需要 `connector:write`。仅具备 `device:write` 的角色仍可编写和发布只触发告警的规则。 已发布的规则继续运行；系统将在下次发布或回滚时进行检查。升级前，请检查负责编写自动化规则的角色。旧版 `device-management` 副本在被替换之前不会执行此检查。
+
 #### 完整重载代理会保持认证调用已放行的设备连接 {#v160-broker-reload}
 
 过去，完整重载代理会关闭认证调用已放行的所有连接，其中包括所有使用用户名进行认证的 MQTT 设备。代理现在基于 `nats-server` `v2.15.3` 构建，因此更改代理 TLS Secret 中的 CA 包（CA 轮换）或手动重载时，会保持这些连接打开。只有当 chart 的 config-reloader 边车因挂载的 TLS Secret 发生变化而发送 SIGHUP，或操作员手动运行 `nats-server --signal reload` 时，才会发生不重启的重载。
