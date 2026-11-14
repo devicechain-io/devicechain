@@ -28,6 +28,8 @@ type PendingAttributeRepair struct {
 
 func (api *Api) DrainAttributeRepairs(ctx context.Context) error {
 	var tenants []string
+	// Cross-tenant by necessity: which tenants have queued repairs. No row is read here;
+	// each tenant's rows are read and repaired under core.WithTenant below.
 	if err := api.RDB.DB(core.WithSystemContext(ctx)).Model(&PendingAttributeRepair{}).
 		Distinct().Order("tenant_id").Pluck("tenant_id", &tenants).Error; err != nil {
 		return err
