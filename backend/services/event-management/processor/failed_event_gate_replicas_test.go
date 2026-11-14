@@ -181,7 +181,7 @@ func TestADeterministicRefusalKeepsItsDeviceAndEventType(t *testing.T) {
 	require.NotNil(t, rows[0].EventType)
 	assert.EqualValues(t, 3, sumSuppressed(rows))
 
-	// device-management's Invalid record is a different thing: the message would not parse and
+	// A device-management Invalid record from an unparseable message has no payload:
 	// nothing was retained, so there is no device and the row says no payload was kept.
 	none, err := resolvedevent.MarshalFailedEvent(resolvedevent.NewFailedEvent(uint(resolvedevent.FailureReason_Invalid),
 		"device-management", "message could not be parsed; payload not retained", fmt.Errorf("bad"), nil))
@@ -239,4 +239,28 @@ func TestAFlushOutageIsLoggedOnce(t *testing.T) {
 	g.Flush(context.Background())
 	assert.Zero(t, g.Pending())
 	assert.Equal(t, 1, strings.Count(out.String(), "being written again"))
+}
+
+func TestValidationRefusalsAreBoundedPerDevice(t *testing.T) {
+	store := newFailedStore(t)
+	ix := newIndexer(t, store)
+	// feed runs the real indexer, including ParseFailedRecord and Gate.Decide.
+	for i := 0; i < 11; i++ {
+		feed(ix, failedSubject, validationRefusalBytes(t, "pump-7", ""), uint64(i+1), base.Add(time.Duration(i)*time.Second), 1)
+	}
+	feed(ix, failedSubject, validationRefusalBytes(t, "pump-8", ""), 12, base.Add(12*time.Second), 1)
+	ix.Gate.Flush(context.Background())
+	rows := rowsFor(t, store, "acme")
+	var pump7, pump8 int
+	for _, row := range rows {
+		switch row.DeviceToken {
+		case "pump-7":
+			pump7++
+		case "pump-8":
+			pump8++
+		}
+	}
+	assert.Equal(t, model.FailedEventsPerDeviceHour, pump7, "the eleventh pump-7 refusal is suppressed")
+	assert.Equal(t, 1, pump8, "pump-8 has its own itemized allowance")
+	assert.EqualValues(t, 1, sumSuppressed(rows))
 }

@@ -45,12 +45,12 @@ type FailedRecord struct {
 // What is read depends on who wrote it, because the two writers archive different things:
 // device-management archives the UNRESOLVED event, as the sender framed it (the device token is
 // the sender's claim); event-management archives the RESOLVED event it could not store (the
-// token is the device's own). A reason of Invalid archives either nothing or the raw bytes that
-// would not parse; device-management's Invalid records carry no payload, but
-// event-management's Invalid is ALSO written for a resolved event the database refused
-// deterministically (bad data), and that record carries a valid PResolvedEvent with the
-// device's token. So an event-management record is decoded whatever its reason, and bytes
-// that were never an event simply fail to decode and leave the device empty.
+// token is the device's own). Device-management's Invalid records carry either no payload
+// (an unparseable message) or the archived unresolved event (a resolver refusal).
+// Event-management's Invalid can carry a resolved event the database refused. A payload is
+// therefore read whenever present, for either writer and whatever the reason. Bytes that
+// were never an event leave the device empty and the type unset. Proto3's zero event type
+// means NewRelationship, so only a message carrying identity supplies an event type.
 func ParseFailedRecord(value []byte) (*FailedRecord, error) {
 	pf := &resolvedevent.PFailedEvent{}
 	if err := proto.Unmarshal(value, pf); err != nil {
@@ -66,13 +66,10 @@ func ParseFailedRecord(value []byte) (*FailedRecord, error) {
 	if len(pf.Payload) == 0 {
 		return rec, nil
 	}
-	if pf.Reason == resolvedevent.FailureReason_Invalid && pf.Service != areaEventManagement {
-		return rec, nil
-	}
 	switch pf.Service {
 	case areaDeviceManagement:
 		var ue esproto.PUnresolvedEvent
-		if proto.Unmarshal(pf.Payload, &ue) == nil {
+		if proto.Unmarshal(pf.Payload, &ue) == nil && (ue.Device != "" || ue.IntegrationIdentifier != "") {
 			rec.DeviceToken = ue.Device
 			if rec.DeviceToken == "" {
 				rec.DeviceToken = ue.IntegrationIdentifier
@@ -82,7 +79,7 @@ func ParseFailedRecord(value []byte) (*FailedRecord, error) {
 		}
 	case areaEventManagement:
 		var re resolvedevent.PResolvedEvent
-		if proto.Unmarshal(pf.Payload, &re) == nil {
+		if proto.Unmarshal(pf.Payload, &re) == nil && re.SourceDeviceToken != "" {
 			rec.DeviceToken = re.SourceDeviceToken
 			et := re.EventType
 			rec.EventType = &et

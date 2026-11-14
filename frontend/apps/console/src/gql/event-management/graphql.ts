@@ -129,7 +129,7 @@ export type FailedEventReason =
   | 'DEVICE_NOT_FOUND'
   /** An integration's event named a device that no longer holds the alias it was resolved from. */
   | 'INTEGRATION_ALIAS_MISMATCH'
-  /** The message could not be read at all. */
+  /** The message could not be read, or a value in it was refused. */
   | 'INVALID'
   /** A gateway published for a device that is not assigned to it, or that does not exist. */
   | 'NOT_GATEWAY_CHILD'
