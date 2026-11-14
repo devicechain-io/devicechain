@@ -760,6 +760,10 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
+#### Live detections of geofence rules need location access {#v160-detection-stream-location}
+
+The `detectionStream` subscription no longer delivers detections of rules that test geofence containment to a caller without `location:read`, matching rule preview. Other detections are unchanged. A dashboard or agent that watches geofence rules needs a role or token that includes location access. A token minted through the read-only OAuth scope does not include `location:read`.
+
 #### Before you upgrade {#v160-before-upgrade}
 
 Review hand-edited instance configuration before rolling pods. These refusals are new since `v1.5.0`; invalid service settings stop startup and can leave pods crash-looping. Service keys below live under `functionalAreas.<area>.config`.

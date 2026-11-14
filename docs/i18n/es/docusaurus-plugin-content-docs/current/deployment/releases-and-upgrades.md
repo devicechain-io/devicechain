@@ -805,6 +805,10 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
+#### Las detecciones en vivo de reglas de geocercas necesitan acceso a la ubicación {#v160-detection-stream-location}
+
+La suscripción `detectionStream` ya no entrega detecciones de reglas que comprueban si un dispositivo está dentro de una geocerca a quien no tenga `location:read`, al igual que la vista previa de reglas. Las demás detecciones no cambian. Un panel o agente que supervise reglas de geocercas necesita un rol o token que incluya acceso a la ubicación. Un token emitido con el ámbito OAuth de solo lectura no incluye `location:read`.
+
 #### Antes de actualizar {#v160-before-upgrade}
 
 Revise la configuración de instancia editada a mano antes de desplegar los pods. Estos rechazos son nuevos desde `v1.5.0`; los ajustes de servicio inválidos impiden el arranque y pueden dejar los pods reiniciándose. Las claves de servicio siguientes van bajo `functionalAreas.<area>.config`.
