@@ -16,7 +16,8 @@
 //  1. Take a download slot. Unauthenticated work is bounded before any of it is done.
 //  2. Verify the capability's signature, then its expiry and its binding to the artifact in the
 //     path. A forged, mangled, wrong-tenant or wrong-artifact capability is one answer (403).
-//  3. Check that the database still agrees: the assignment is the device's current one, its
+//  3. Admit one stream per (tenant, device, assignment), and at most half the slots per tenant
+//     (minimum one), then check that the database still agrees: the assignment is the device's current one, its
 //     attempt is live and not being cancelled, the artifact is the assignment's own and still
 //     available (403 / 410).
 //  4. Only then open the object, for exactly the requested window, and stream it. The artifact is
@@ -36,6 +37,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/blob"
@@ -107,7 +109,40 @@ type Handler struct {
 	// slowest rate they tolerate.
 	window func(length int64) time.Duration
 	// slots bounds the downloads this process serves at once: one token per request in flight.
-	slots chan struct{}
+	slots   chan struct{}
+	mu      sync.Mutex
+	tenants map[string]int
+	streams map[streamKey]int
+}
+
+type streamKey struct {
+	tenant, device, assignment string
+}
+
+// admit counts only verified identities. Entries live only while requests are in flight,
+// so neither capability renewal nor a succession of tenants grows retained state.
+func (h *Handler) admit(c model.Capability) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	key := streamKey{c.Tenant, c.DeviceToken, c.AssignmentID}
+	share := max(1, cap(h.slots)/2)
+	if h.streams[key] >= 1 || h.tenants[c.Tenant] >= share {
+		return false
+	}
+	h.streams[key]++
+	h.tenants[c.Tenant]++
+	return true
+}
+
+func (h *Handler) release(c model.Capability) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	key := streamKey{c.Tenant, c.DeviceToken, c.AssignmentID}
+	delete(h.streams, key)
+	h.tenants[c.Tenant]--
+	if h.tenants[c.Tenant] == 0 {
+		delete(h.tenants, c.Tenant)
+	}
 }
 
 // New builds the handler. maxConcurrent bounds the downloads this process streams at once (it must
@@ -117,7 +152,7 @@ func New(api *model.Api, maxConcurrent int, metrics *Metrics) *Handler {
 		panic("download.New: maxConcurrent must be positive")
 	}
 	return &Handler{api: api, metrics: metrics, idle: idleTimeout, window: model.UploadWindow,
-		slots: make(chan struct{}, maxConcurrent)}
+		slots: make(chan struct{}, maxConcurrent), tenants: make(map[string]int), streams: make(map[streamKey]int)}
 }
 
 // Register mounts the handler on mux.
@@ -161,6 +196,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, http.StatusInternalServerError, ResultError, "internal error")
 		return
 	}
+
+	// Verified identities get one stream per assignment and at most half the global slots
+	// per tenant (minimum one for a single-slot replica). Renewed capabilities share the key.
+	if !h.admit(*c) {
+		w.Header().Set("Retry-After", "5")
+		h.refuse(w, http.StatusServiceUnavailable, ResultBusy, "too many downloads are in progress; retry shortly")
+		return
+	}
+	defer h.release(*c)
 
 	// 3. The state it refers to.
 	ctx := core.WithTenant(r.Context(), c.Tenant)
