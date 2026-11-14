@@ -60,6 +60,7 @@ func (suite *InboundEventsProcessorTestSuite) TestAnEventResolvedDuringAStoreOut
 			suite.API.Mock.On("TrackedRelationshipsForDevice", mock.Anything, mock.Anything).Return(
 				&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 			suite.API.Mock.On("EntityRelationshipsByToken", mock.Anything, mock.Anything).Return([]*dmodel.EntityRelationship{}, nil)
+			suite.API.Mock.On("EntityRelationshipTypesByToken").Return([]*dmodel.EntityRelationshipType{{Tracked: false}}, nil)
 			suite.API.Mock.On("CreateEntityRelationship", mock.Anything, mock.Anything).Return(
 				&dmodel.EntityRelationship{}, nil)
 
@@ -129,6 +130,10 @@ type relationshipApi struct {
 	created []*dmodel.EntityRelationship
 	looked  []string
 	creates []string
+}
+
+func (a *relationshipApi) EntityRelationshipTypesByToken(context.Context, []string) ([]*dmodel.EntityRelationshipType, error) {
+	return []*dmodel.EntityRelationshipType{{Tracked: false}}, nil
 }
 
 func (a *relationshipApi) EntityRelationshipsByToken(_ context.Context, tokens []string) ([]*dmodel.EntityRelationship, error) {
