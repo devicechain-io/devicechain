@@ -293,13 +293,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 🔴 Only forget the pair that is actually being expired. Another tab shares this storage:
     // when it has since replaced the pair (it just turned two-factor on, which ends every
     // other session and swaps in a fresh one), this tab's failed refresh of the OLD pair must
-    // not delete the new one. The newer pair is adopted instead, in memory, and is judged on
-    // its own at its next refresh.
+    // not delete the new one. The newer pair is adopted instead, in memory, only when both
+    // access tokens decode to the same tenant and username, and is judged on its own at its
+    // next refresh. A different or undecodable identity ends only this tab's session.
     const stored = readStored();
     const mine = tokensRef.current;
     if (stored && mine && stored.refreshToken !== mine.refreshToken) {
-      tokensRef.current = stored;
-      setTokens(stored);
+      const storedClaims = decodeToken(stored.accessToken);
+      const mineClaims = decodeToken(mine.accessToken);
+      if (
+        storedClaims && mineClaims &&
+        storedClaims.tenant === mineClaims.tenant &&
+        storedClaims.username === mineClaims.username
+      ) {
+        tokensRef.current = stored;
+        setTokens(stored);
+        return;
+      }
+      flagSessionExpired(reason);
+      tokensRef.current = null;
+      setTokens(null);
       return;
     }
     flagSessionExpired(reason);
