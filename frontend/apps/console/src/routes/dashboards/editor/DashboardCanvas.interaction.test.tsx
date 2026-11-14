@@ -458,3 +458,60 @@ describe('keyboard', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+
+describe('breakpoint selector', () => {
+  const select = (name: string) => fireEvent.change(screen.getByRole('combobox', { name: 'Breakpoint' }), { target: { value: name } });
+  const responsive = () => {
+    const d = board([card('a', 0, 0), card('b', 0, 3)]);
+    d.canvas.breakpoints = { base: 0, compact: { minWidth: 400, columns: 6 }, wide: 1200 };
+    d.widgets[0].layout.wide = { mode: 'grid', col: 6, row: 0, cols: 3, rows: 2 };
+    return d;
+  };
+
+  it('shows base fallback without editing, and preserves positions when switching', () => {
+    const { onChange } = mount(responsive());
+    expect(px(widgetEl('a'), 'left')).toBe(0);
+    select('wide');
+    expect(px(widgetEl('a'), 'left')).toBe(600);
+    expect(px(widgetEl('b'), 'top')).toBe(300);
+    select('compact');
+    expect(px(widgetEl('a'), 'width')).toBe(600);
+    expect(px(widgetEl('b'), 'top')).toBe(600);
+    select('base');
+    expect(px(widgetEl('a'), 'width')).toBe(300);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('drags and resizes the selected layout, retaining base and other overrides', () => {
+    const d = responsive();
+    const { onChange, rerender } = mount(d, 'a');
+    select('compact');
+    press(widgetEl('a'));
+    moveTo(200, 0);
+    release(200, 0);
+    const next = onChange.mock.calls[0][0] as DashboardDefinition;
+    expect(next.widgets[0].layout.compact).toMatchObject({ col: 1 });
+    expect(next.widgets[0].layout.base).toEqual(d.widgets[0].layout.base);
+    expect(next.widgets[0].layout.wide).toEqual(d.widgets[0].layout.wide);
+    rerender(<DashboardCanvas definition={next} onChange={onChange} hub={quiet} bindings={{}} selectedId="a" onSelect={vi.fn()} />);
+    fireEvent.keyDown(widgetEl('a'), { key: 'ArrowRight', shiftKey: true });
+    const resized = onChange.mock.calls[1][0] as DashboardDefinition;
+    expect(resized.widgets[0].layout.compact).toMatchObject({ col: 1, cols: 4 });
+    expect(resized.widgets[0].layout.base).toEqual(d.widgets[0].layout.base);
+    select('base');
+    expect(px(widgetEl('a'), 'left')).toBe(0);
+    select('compact');
+    expect(px(widgetEl('a'), 'left')).toBe(200);
+  });
+
+  it('cancels an in-flight gesture when switching breakpoint', () => {
+    const { onChange } = mount(responsive());
+    press(widgetEl('a'));
+    moveTo(100, 0);
+    select('compact');
+    release(100, 0);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('drag-ghost')).toBeNull();
+  });
+});

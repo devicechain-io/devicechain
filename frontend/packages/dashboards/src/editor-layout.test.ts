@@ -20,7 +20,7 @@ import {
   setRelativeOffset,
   snapOffset,
 } from './editor-model';
-import { gridFootprintsOverlap, pushAside } from './grid';
+import { gridFootprintsOverlap, pushAside, resolvePlacement, layoutRects } from './grid';
 import { blockingLayoutFindings, lintLayout, type SpanLimits } from './layout-lint';
 import type { DashboardDefinition, GridPlacement, WidgetInstance } from './types';
 
@@ -463,5 +463,54 @@ describe('fit to limits and the publish block', () => {
   it('returns the same object when everything already fits', () => {
     const d = board([small('a', at(0, 0, 3, 3))]);
     expect(fitToLimits(d, limitsOf)).toBe(d);
+  });
+});
+
+
+describe('breakpoint placement edits', () => {
+  function responsive() {
+    const d = board([w('a', at(0, 0, 2, 2)), w('b', at(0, 2, 2, 2))]);
+    d.canvas.breakpoints = { base: 0, compact: { minWidth: 400, columns: 4 }, wide: 1200 };
+    d.widgets[0].layout.wide = at(6, 0, 2, 2);
+    return d;
+  }
+
+  it('inherits base without materializing entries and keeps base-only geometry unchanged', () => {
+    const d = responsive();
+    expect(resolvePlacement(d.widgets[0].layout, 'compact')).toBe(d.widgets[0].layout.base);
+    expect(layoutRects(d.widgets, 'compact', 80, { x: 8, y: 8 }))
+      .toEqual(layoutRects(d.widgets, 'base', 80, { x: 8, y: 8 }));
+    expect(Object.keys(d.widgets[0].layout)).toEqual(['base', 'wide']);
+  });
+
+  it('moves and swaps inherited neighbours only at the selected breakpoint', () => {
+    const d = responsive();
+    const next = moveWidget(d, 'a', { col: 0, row: 2 }, undefined, { breakpoint: 'compact', nearest: true });
+    expect(next.widgets[0].layout.compact).toEqual(at(0, 2, 2, 2));
+    expect(next.widgets[1].layout.compact).toEqual(at(0, 0, 2, 2));
+    expect(next.widgets.map(basePlacement)).toEqual(d.widgets.map(basePlacement));
+    expect(next.widgets[0].layout.wide).toBe(d.widgets[0].layout.wide);
+    reloads(next);
+  });
+
+  it('resizes within the breakpoint column count and round trips overrides', () => {
+    const d = responsive();
+    const next = resizeWidget(d, 'a', { col: 0, row: 0, cols: 9, rows: 1 }, undefined, {}, undefined, { breakpoint: 'compact' });
+    expect(next.widgets[0].layout.compact).toEqual(at(0, 0, 4, 1));
+    expect(next.widgets[0].layout.base).toBe(d.widgets[0].layout.base);
+    const parsed = parseDashboardDefinition(JSON.parse(serializeDefinition(next)));
+    expect(parsed.widgets[0].layout).toEqual(next.widgets[0].layout);
+  });
+
+  it('edits relative placement, offset, anchor and return to grid independently', () => {
+    const d = responsive();
+    const placed = placeRelative(d, 'b', 'a', 'top-left', 'compact');
+    const moved = setRelativeOffset(placed, 'b', { x: 0.5, y: 1 }, { fine: true, breakpoint: 'compact' });
+    const anchored = setRelativeAnchor(moved, 'b', 'bottom-left', 'compact');
+    expect(anchored.widgets[1].layout.compact).toMatchObject({ mode: 'relative', anchor: 'bottom-left', offset: { x: 0.5, y: 1 } });
+    const next = placeOnGrid(anchored, 'b', 'compact');
+    expect(next.widgets[1].layout.compact.mode).toBe('grid');
+    expect(next.widgets.map(basePlacement)).toEqual(d.widgets.map(basePlacement));
+    reloads(next);
   });
 });

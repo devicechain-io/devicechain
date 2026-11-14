@@ -1,4 +1,5 @@
 {
+  "canvasBreakpoint": "Breakpoint",
   "title": "Dashboards",
   "description": "Live dashboards for this tenant",
   "newDashboard": "New dashboard",
