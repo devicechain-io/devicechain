@@ -7,6 +7,7 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/s
 import { AppSidebar } from '@/routes/AppSidebar';
 import { TenantChip } from '@/routes/TenantChip';
 import { TenantProvider } from '@/auth/TenantProvider';
+import { useAuth } from '@/auth/AuthProvider';
 import { CurrentUserProvider } from '@/auth/CurrentUserProvider';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { RouteSuspense } from '@/components/RouteSuspense';
@@ -71,6 +72,7 @@ export const NAV_SECTION_KEY: Record<string, string> = {
 };
 
 export default function AppLayout() {
+  const { claims } = useAuth();
   const { pathname } = useLocation();
   const { t } = useTranslation('nav');
   const segments = pathname.split('/').filter(Boolean);
@@ -83,8 +85,9 @@ export default function AppLayout() {
   // page content's own actions).
   const back = segments.length >= 2 ? { to: `/${seg0}`, label: sectionLabel } : null;
 
+  // Identity changes must drop tenant configuration, current-user data, and page form state.
   return (
-    <TenantProvider>
+    <TenantProvider key={`${claims?.tenant ?? ''}:${claims?.username ?? ''}`}>
       <CurrentUserProvider>
         <SidebarProvider>
           <AppSidebar />
