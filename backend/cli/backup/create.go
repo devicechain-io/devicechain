@@ -24,7 +24,9 @@ import (
 // Create exports declared checkpoint-preserved streams (including consumers) and
 // the instance blob store. Callers must freeze writers for a consistent cut.
 // Destination must not exist. A failed export never publishes manifest.json.
-func Create(ctx context.Context, nc *nats.Conn, instance, destination string, blobs func(context.Context, io.Writer) error) error {
+// enabledAreas, when supplied, is the resolved installation set. Omission keeps
+// the legacy behavior of requiring every declared checkpoint stream.
+func Create(ctx context.Context, nc *nats.Conn, instance, destination string, blobs func(context.Context, io.Writer) error, enabledAreas ...[]string) error {
 	if instance == "" || filepath.Base(instance) != instance || instance == "." || instance == ".." || destination == "" || blobs == nil {
 		return fmt.Errorf("instance, new destination and blob exporter are required")
 	}
@@ -35,6 +37,15 @@ func Create(ctx context.Context, nc *nats.Conn, instance, destination string, bl
 		return err
 	}
 	m := Manifest{Version: ManifestVersion, Instance: instance, Tenant: "*"}
+	if len(enabledAreas) > 1 {
+		return fmt.Errorf("one enabled area set required")
+	}
+	if len(enabledAreas) == 1 {
+		if err := validateAreas(enabledAreas[0]); err != nil {
+			return err
+		}
+		m.EnabledAreas = append([]string{}, enabledAreas[0]...)
+	}
 	write := func(kind, name string, class durability.BackupClass, export func(io.Writer) error) error {
 		path := fmt.Sprintf("%06d.snapshot", len(m.Entries))
 		f, err := os.OpenFile(filepath.Join(destination, path), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -79,6 +90,10 @@ func Create(ctx context.Context, nc *nats.Conn, instance, destination string, bl
 			return fmt.Errorf("unsupported preserved kind %q", item.Kind)
 		}
 		_, err := js.StreamInfo(name, nats.Context(ctx))
+		if err == nats.ErrStreamNotFound && item.Kind == backupset.KindStream && m.EnabledAreas != nil && !streamEnabled(item.Name, m.EnabledAreas) {
+			m.DisabledStreams = append(m.DisabledStreams, name)
+			continue
+		}
 		// Gateway state is absent when MQTT has never been enabled. Required
 		// platform streams must exist, including empty streams.
 		if err == nats.ErrStreamNotFound && item.Kind == backupset.KindGatewayStream {
