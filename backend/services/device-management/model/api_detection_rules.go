@@ -128,6 +128,9 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 	if err := validateDetectionRuleDefinition(request.Definition); err != nil {
 		return nil, err
 	}
+	if err := authorizeRuleActions(ctx, []byte(request.Definition)); err != nil {
+		return nil, err
+	}
 	if err := validateAuthoringGraph(request.AuthoringGraph); err != nil {
 		return nil, err
 	}
@@ -200,6 +203,9 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	}
 	definition, err := request.Definition.ApplyToRequired("definition", string(updated.Definition))
 	if err != nil {
+		return nil, err
+	}
+	if err := authorizeRuleActions(ctx, []byte(definition)); err != nil {
 		return nil, err
 	}
 	if request.Definition.Set {

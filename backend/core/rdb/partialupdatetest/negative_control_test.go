@@ -40,6 +40,27 @@ const brokenModeEnv = "DC_PARTIALUPDATETEST_MUTANT"
 // mutants are the deliberately broken runs. Each returns nothing and is EXPECTED TO FAIL
 // the *testing.T it is given — except "healthy", which is the no-op control.
 var mutants = map[string]func(t *testing.T){
+	"duplicateRequestField": func(t *testing.T) {
+		s := requestCoverageSuite()
+		duplicate := s.Families[0].Fields[0]
+		duplicate.Name = "NAME" // the same case-insensitive key as "name"
+		s.Families[0].Fields = append(s.Families[0].Fields, duplicate)
+		everyRequestFieldIsDeclared(t, s)
+	},
+	"staleRequestField": func(t *testing.T) {
+		s := requestCoverageSuite()
+		stale := s.Families[0].Fields[0]
+		stale.Name = "renamedAway"
+		s.Families[0].Fields = append(s.Families[0].Fields, stale)
+		everyRequestFieldIsDeclared(t, s)
+	},
+	"privateRequestFieldDeclared": func(t *testing.T) {
+		s := requestCoverageSuite()
+		private := s.Families[0].Fields[0]
+		private.Name = "private"
+		s.Families[0].Fields = append(s.Families[0].Fields, private)
+		everyRequestFieldIsDeclared(t, s)
+	},
 	// The no-op control: the real suite and the real guard inputs, through the same
 	// subprocess mechanism.
 	"healthy": func(t *testing.T) {
@@ -244,6 +265,9 @@ func TestNegativeControls(t *testing.T) {
 		want string
 	}{
 		{mutant: "healthy", wantPass: true},
+		{mutant: "duplicateRequestField", want: "declares field \"NAME\" more than once"},
+		{mutant: "staleRequestField", want: "declares field \"renamedAway\", but no exported request field matches it"},
+		{mutant: "privateRequestFieldDeclared", want: "declares field \"private\", but no exported request field matches it"},
 		{mutant: "fullreplace", want: "the update is still a full replace"},
 		// Named in full, so this row cannot be satisfied by the OTHER method that is
 		// also unregistered under a different mutant.
