@@ -20,6 +20,12 @@ El primer paso de abajo es la única excepción. Averiguar qué acepta un dispos
 consulta de `device-management`. Usa otro endpoint,
 `https://<tu-host>/api/device-management/graphql`, y otra autoridad, `device:read`.
 
+## Autoridades para acciones automatizadas
+
+Crear o publicar una acción automatizada requiere la autoridad para ejecutarla. Crear o actualizar una regla con una acción `sendCommand`, y publicar o volver a una versión de perfil cuyas reglas habilitadas incluyan una, requiere `command:write` además de `device:write`. Las acciones `httpCall` y `publish` requieren `connector:write`. Un rol que solo tenga `device:write` puede seguir creando y publicando reglas que únicamente generen alarmas.
+
+La autoridad se comprueba sobre la regla efectiva en cada creación o actualización, incluso si está deshabilitada. La publicación y la reversión comprueban todas las reglas habilitadas de la versión seleccionada, incluso si solo cambió una métrica. Quien publica debe tener las autoridades de las acciones; quien aprueba la revisión de automatización no las necesita. Adoptar un perfil cuyas acciones ya fueron autorizadas no requiere estas autoridades adicionales.
+
 ## Averigua qué acepta el dispositivo {#find-out-what-the-device-accepts}
 
 El vocabulario de comandos de un dispositivo proviene de su perfil, así que pregúntale a

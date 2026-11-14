@@ -11,6 +11,12 @@ title: 发送命令
 
 下面第一步是唯一例外。查询设备接受什么是 `device-management` 查询，使用不同端点 `https://<your-host>/api/device-management/graphql` 和权限 `device:read`。
 
+## 自动化动作的权限
+
+编写或发布自动化动作需要具备执行该动作的权限。创建或更新包含 `sendCommand` 动作的规则，以及发布或回滚到启用规则中包含该动作的配置文件版本，除了 `device:write` 之外，还需要 `command:write`。`httpCall` 和 `publish` 动作需要 `connector:write`。仅具备 `device:write` 的角色仍可编写和发布只触发告警的规则。
+
+每次创建或更新都会检查合并后的完整规则所需的动作权限，即使规则被禁用也不例外。发布和回滚会检查所选配置文件版本中的所有启用规则，即使仅修改了指标。发布者必须具备动作权限；自动化审核的批准者无需具备这些权限。采用动作已获授权的配置文件不需要这些额外权限。
+
 ## 查询设备接受什么 {#find-out-what-the-device-accepts}
 
 设备命令集合来自配置文件，因此应询问 `device-management`，不要猜测：

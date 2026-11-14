@@ -21,6 +21,12 @@ The first step below is the one exception. Finding out what a device accepts is 
 `https://<your-host>/api/device-management/graphql`, and a different authority,
 `device:read`.
 
+## Automated action authorities
+
+Authoring or publishing an automated action now requires the authority to perform it. Creating or updating a rule with a `sendCommand` action, and publishing or rolling back to a profile version whose enabled rules include one, requires `command:write` in addition to `device:write`. `httpCall` and `publish` actions require `connector:write`. A role that holds `device:write` alone can still author and publish rules that only raise alarms.
+
+Action authority is checked on the effective rule on every create or update, even for disabled rules. Publishing and rolling back check all enabled rules in the selected profile version, even when only a metric changed. The publisher must hold the action authorities; an automation-review approver does not need them. Adopting a profile whose actions were already authorized does not require these additional authorities.
+
 ## Find out what the device accepts {#find-out-what-the-device-accepts}
 
 A device's command vocabulary comes from its profile, so ask `device-management` rather than
