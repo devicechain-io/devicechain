@@ -1,4 +1,5 @@
 {
+  "canvasBreakpoint": "断点",
   "title": "仪表板",
   "description": "此租户的实时仪表板",
   "newDashboard": "新建仪表板",
