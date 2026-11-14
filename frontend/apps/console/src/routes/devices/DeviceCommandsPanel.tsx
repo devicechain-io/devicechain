@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Send } from 'lucide-react';
@@ -107,6 +107,7 @@ export function DeviceCommandsPanel({
   const [sparkplugWrite, setSparkplugWrite] = useState<SparkplugWriteValues>(EMPTY_SPARKPLUG_WRITE);
   const [sparkplugErrors, setSparkplugErrors] = useState<SparkplugWriteErrors>({});
   const [submitting, setSubmitting] = useState(false);
+  const inFlight = useRef(false);
   const [version, reload] = useReload();
 
   // Bumped by the poll below. A separate counter from `version` on purpose: `version` also
@@ -193,6 +194,8 @@ export function DeviceCommandsPanel({
   }, [selectedKey]);
 
   const issue = async () => {
+    // Enter can arrive again before React renders the button's loading state.
+    if (inFlight.current) return;
     // Unconstrained devices keep the free-text path; constrained ones send the key the
     // operator picked from the published vocabulary.
     const trimmed = constrained ? selectedKey : name.trim();
@@ -223,6 +226,7 @@ export function DeviceCommandsPanel({
       body = payload.trim() || undefined;
     }
 
+    inFlight.current = true;
     setSubmitting(true);
     try {
       const result = await createCommand({
@@ -264,6 +268,7 @@ export function DeviceCommandsPanel({
       // operator typed.
       toast(t('commandIssueFailed'), 'error');
     } finally {
+      inFlight.current = false;
       setSubmitting(false);
     }
   };
@@ -371,7 +376,10 @@ export function DeviceCommandsPanel({
                   placeholder={t('commandNamePlaceholder')}
                   onChange={(e) => setName(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') issue();
+                    if (e.key === 'Enter' && !e.repeat) {
+                      e.preventDefault();
+                      void issue();
+                    }
                   }}
                 />
               </FormField>

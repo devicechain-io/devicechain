@@ -760,6 +760,14 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
+#### Security: a device can no longer assign itself to a customer, area or asset {#v160-device-relationship-refused}
+
+- A `NewRelationship` event naming a tracked relationship type (the built-in `assigned`, or any type marked tracked) or the built-in `contains` is refused and recorded on the `failed-events` stream with reason `Invalid` on its first delivery, without retries. This changes what an accepted device event does; the [versioning policy](./versioning-policy.md) allows this for a security fix.
+- Assign devices with a claim code or the `createEntityRelationship` mutation.
+- Relationships devices created earlier are not removed. Review the tracked relationships of your devices.
+- Untracked types, including `member`, are still created, unless your tenant marked that type tracked. The `NewRelationship` event itself no longer carries the new target as an anchor: an untracked relationship is not ownership, so the event is scoped by the device's existing anchors, as its next telemetry event is.
+- During the rolling upgrade, pods still on v1.5 create the edge until they are replaced.
+
 #### Solar campaigns need installed-position access {#v160-solar-campaign-position}
 
 Creating a `SOLAR` campaign, reading its elements (`campaignElements`) or cycles (`campaignCycles`), and retrying its failures (`retryCampaignFailed`) now also requires `location:installed:read` (or `location:read`). A solar schedule's per-device times reveal each device's installed position; even cycle counts can reveal position-derived results for a group with one device. `CRON` and `CALENDAR` campaigns are unchanged. Add this authority to any role that manages solar campaigns.
