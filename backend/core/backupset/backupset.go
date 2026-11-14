@@ -83,11 +83,10 @@ var objectStore = Item{
 		"the database base backup it belongs with.",
 }
 
-// streamProcedures names what an operator does for each must-back-up stream. In this release the
-// platform has no tool for a stream; the entry says so rather than leaving the class bare.
+// streamProcedures names what an operator does for each must-back-up stream.
 var streamProcedures = map[string]string{
-	streams.DeviceEventsCapture:   "No backup tool ships in this release. Telemetry acknowledged and not yet forwarded when the cluster is lost is the recovery gap, so keep the capture backlog drained.",
-	streams.ConnectorDispatchDead: "No backup tool ships in this release. The records cannot be recovered once the stream is lost.",
+	streams.DeviceEventsCapture:   "Freeze producers and consumers, then export with dcctl backup and verify with dcctl backup inspect --verify. Coordinate the database recovery cutoff separately; restore --plan is read-only and does not apply a restore.",
+	streams.ConnectorDispatchDead: "Export with dcctl backup while producers and consumers are frozen, then verify with dcctl backup inspect --verify. Records absent from the backup cannot be recovered once the stream is lost; restore --plan does not apply a restore.",
 }
 
 // Items returns every item, streams first, then buckets, the gateway's streams and the object
