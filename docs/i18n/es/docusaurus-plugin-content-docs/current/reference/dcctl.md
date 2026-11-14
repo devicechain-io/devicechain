@@ -37,6 +37,7 @@ dcctl [command]
 * [dcctl presence](#dcctl-presence)	 - Inspect and repair device presence
 * [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
 * [dcctl resgen](#dcctl-resgen)	 - Generate configuration resources
+* [dcctl restore](#dcctl-restore)	 - Verify a backup and print a read-only restore plan
 * [dcctl secrets](#dcctl-secrets)	 - Inspect and verify instance secret material
 * [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
 * [dcctl tenant-deletion](#dcctl-tenant-deletion)	 - Check whether a deleted tenant's data is established as erased
@@ -1695,6 +1696,36 @@ dcctl resgen [flags]
 
 ```
   -h, --help   help for resgen
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+
+## dcctl restore {#dcctl-restore}
+
+Verify a backup and print a read-only restore plan
+
+### Synopsis
+
+Verify local backup bytes, identity and coverage before connecting to the installed instance.
+Read target stream state and blob bytes; refuse possible newer-data loss. No restore is applied.
+Freeze target writers while planning; this is an observation, not a reservation for a later apply.
+
+```
+dcctl restore <instance> --from <backup-set> --plan [flags]
+```
+
+### Options
+
+```
+      --blob-directory string   Read-only mounted/exported target filesystem blob PVC root
+      --force-foreign           Allow a foreign instance or tenant identity; never bypass loss or coverage checks
+      --from string             Local verified backup-set directory (required)
+  -h, --help                    help for restore
+      --kube-context string     Kubernetes context of the installed instance
+      --nats-url string         Reachable broker URL (default: port-forward)
+      --plan                    Print a plan without applying it (required)
 ```
 
 ### SEE ALSO

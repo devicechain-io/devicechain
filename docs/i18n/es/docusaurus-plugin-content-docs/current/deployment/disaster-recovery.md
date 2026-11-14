@@ -617,7 +617,7 @@ objetos. Todo lo demás se recupera por sí solo.
 | `device-commands` | stream | rebuildable | commands are re-dispatched from the command-delivery store by its sweep |
 | `device-desired` | stream | rebuildable | the current desired state is held in the database and sent to a device again on its next sync |
 | `device-reports` | stream | rebuildable | a device sends its reports again, and its state is held in the database |
-| `device-events-capture` | stream | must-back-up | raw device telemetry already acknowledged to the device and not yet forwarded; the database holds no copy of it. No backup tool ships in this release. Telemetry acknowledged and not yet forwarded when the cluster is lost is the recovery gap, so keep the capture backlog drained. |
+| `device-events-capture` | stream | must-back-up | raw device telemetry already acknowledged to the device and not yet forwarded; the database holds no copy of it. Freeze producers and consumers, then export with dcctl backup and verify with dcctl backup inspect --verify. Coordinate the database recovery cutoff separately; restore --plan is read-only and does not apply a restore. |
 | `command-responses` | stream | transient | a device answer not yet consumed; the command it answers is settled from its stored state as unanswered |
 | `connector-dispatch` | stream | transient | outbound deliveries not yet attempted; in flight, at least once |
 | `lpwan-downlink-events` | stream | transient | a network-server report not yet matched to its command; a lost report is settled by the pending record's deadline as unanswered |
@@ -631,7 +631,7 @@ objetos. Todo lo demás se recupera por sí solo.
 | `raise-alarm` | stream | transient | an in-flight request from detection, which evaluates again on the next event |
 | `failed-decode` | stream | transient | a diagnostic record of an event that could not be decoded |
 | `failed-events` | stream | transient | records not yet stored by their consumer; the event store keeps each one once it is consumed |
-| `connector-dispatch.dead` | stream | must-back-up | the only record of an outbound delivery that could not be made, kept for the operator to inspect. No backup tool ships in this release. The records cannot be recovered once the stream is lost. |
+| `connector-dispatch.dead` | stream | must-back-up | the only record of an outbound delivery that could not be made, kept for the operator to inspect. Export with dcctl backup while producers and consumers are frozen, then verify with dcctl backup inspect --verify. Records absent from the backup cannot be recovered once the stream is lost; restore --plan does not apply a restore. |
 | `dead-letters` | stream | transient | letters not yet stored by their consumer; the database keeps each one once it is consumed |
 | `max-deliveries` | stream | transient | broker advisories for deliveries that ran out; empty in steady state |
 | `dc_refresh_tokens` | bucket | transient | a live session token; people sign in again |
@@ -660,6 +660,28 @@ objetos. Todo lo demás se recupera por sí solo.
 
 Esta tabla se genera a partir de las declaraciones de la propia plataforma, así que lista lo que
 crean los servicios en ejecución. No se puede añadir un stream o un bucket sin una clase.
+
+### Exportar streams y contenido de objetos {#export-streams-objects}
+
+Los siguientes comandos de `v1.6.0` están en **vista previa**. Complementan las copias de bases de datos y el depósito de la clave raíz; no exportan ninguna base de datos ni la clave raíz, no eligen puntos de recuperación de las bases de datos ni coordinan el modo de mantenimiento.
+
+Detenga productores, consumidores, cargas y eliminaciones antes de exportar. Para el backend de archivos, monte o exporte localmente el PVC de blobs en modo de solo lectura: `--blob-directory` apunta a su raíz, que contiene el directorio de la instancia (`devicechain/` en este ejemplo). El comando no crea un Job de exportación del PVC. Un directorio de instancia ausente o una carga incompleta hace fallar la exportación. Para S3, omita `--blob-directory`: se usan la configuración desplegada de bucket/endpoint y la cadena estándar de credenciales AWS del operador, no credenciales extraídas de los pods de servicio.
+
+```bash
+dcctl backup devicechain --destination ./backup-set --blob-directory /mnt/blob-export
+dcctl backup inspect ./backup-set --verify
+dcctl restore devicechain --from ./backup-set --plan --blob-directory /mnt/target-blob-export
+```
+
+`backup` requiere un directorio de destino nuevo y una instancia instalada. `--kube-context <context>` selecciona el clúster; `--nats-url <url>` sustituye opcionalmente el reenvío de puerto predeterminado del broker. Tanto la copia como la planificación usan las credenciales de administrador y TLS desplegados; el broker necesita los permisos de snapshot/confirmación de fragmentos de esta versión. El `--blob-directory` de la planificación lee la exportación del PVC de destino, no la copia de origen.
+
+La exportación incluye todos los streams de plataforma declarados que deben preservarse en el checkpoint, incluso vacíos, con sus consumidores, además de `$MQTT_msgs` cuando existe y todos los objetos completos bajo el prefijo de instancia, incluido contenido sin referencias. La ausencia de streams de plataforma obligatorios hace fallar la exportación; la ausencia del stream del gateway MQTT se registra explícitamente. Los archivos de streams contienen el snapshot nativo y metadatos de configuración/estado; el tar de objetos contiene contenido y un índice de referencias originales, tamaños y hashes SHA-256 (más tipo de contenido/ID de versión S3 cuando se devuelven). `manifest.json` se publica al final, tras verificar los archivos. Una exportación fallida puede dejar archivos de diagnóstico sin manifiesto; reintente en un directorio nuevo. Estos archivos por sí solos no establecen un checkpoint coordinado de bases de datos/streams/objetos.
+
+`backup inspect --verify` requiere `--verify` y no accede al clúster ni escribe. Valida el manifiesto y el tamaño y SHA-256 de cada snapshot listado; los errores devuelven un estado distinto de cero. El éxito solo demuestra que los bytes listados coinciden: no autentica el manifiesto, inspecciona el interior de los archivos nativos ni demuestra que el inventario esté completo o que el checkpoint sea coherente.
+
+`restore --plan` requiere `--from` y `--plan`; **la aplicación de la restauración no está implementada**. Verifica los bytes locales, la identidad de instancia/tenant, la cobertura del inventario obligatorio y los metadatos utilizables antes de conectar; después lee el estado de streams y los bytes de objetos del destino e imprime acciones create/replace/skip sin aplicarlas. Los manifiestos antiguos sin identidad se pueden inspeccionar, pero no planificar. Se rechazan entradas preservadas ausentes, entradas desconocidas o políticas incorrectas. Solo se permite omitir `$MQTT_msgs` si se registra explícitamente en `absent_gateway_streams` y tampoco existe en el destino.
+
+Para un stream de destino no vacío, se rechaza la ausencia de hora del último mensaje, una marca temporal más reciente, una secuencia superior o más mensajes. También se rechazan objetos adicionales o divergentes en el destino, incluido un backend distinto; los objetos coincidentes se omiten y un subconjunto idéntico puede completarse. El almacenamiento de destino ausente o ilegible es un error. `--force-foreign` solo permite una identidad de instancia/tenant diferente: no evita las comprobaciones de cobertura o pérdida ni migra subjects, tenants, referencias de blobs o backends. Detenga las escrituras en el destino al planificar; la salida es una observación, no un bloqueo ni una reserva para una aplicación posterior.
 
 ### El almacén de objetos {#object-store-backup}
 

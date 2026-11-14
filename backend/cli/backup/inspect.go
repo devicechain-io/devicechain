@@ -23,8 +23,16 @@ const ManifestVersion = 1
 // Manifest is manifest.json in a backup-set directory. It describes only listed
 // snapshots; verification does not prove inventory coverage or checkpoint consistency.
 type Manifest struct {
-	Version int     `json:"version"`
-	Entries []Entry `json:"entries"`
+	Version              int      `json:"version"`
+	Instance             string   `json:"instance,omitempty"`
+	Tenant               string   `json:"tenant,omitempty"`
+	AbsentGatewayStreams []string `json:"absent_gateway_streams,omitempty"`
+	// EnabledAreas attests source deployment intent. DisabledStreams names only
+	// preserved platform streams absent because no enabled area opens them.
+	// Missing area metadata retains legacy v1 strict restore coverage.
+	EnabledAreas    []string `json:"enabled_areas,omitempty"`
+	DisabledStreams []string `json:"disabled_streams,omitempty"`
+	Entries         []Entry  `json:"entries"`
 }
 
 // Entry describes one opaque snapshot. Kind is stream, bucket, or object-store.
@@ -143,7 +151,7 @@ func (m Manifest) validate() error {
 			return fmt.Errorf("entry %q: sha256 must be 64 lowercase hexadecimal characters", e.Name)
 		}
 	}
-	return nil
+	return m.validateDisabledStreams()
 }
 
 func verify(root *os.Root, e Entry) error {
