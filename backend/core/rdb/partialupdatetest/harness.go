@@ -561,13 +561,19 @@ func everyRequestFieldIsDeclared[A any](t *testing.T, s Suite[A]) {
 
 			declared := map[string]Field{}
 			for _, f := range fam.Fields {
-				declared[strings.ToLower(f.Name)] = f
+				key := strings.ToLower(f.Name)
+				if _, exists := declared[key]; exists {
+					t.Errorf("%s declares field %q more than once", rt.Name(), f.Name)
+				}
+				declared[key] = f
 			}
+			exported := map[string]bool{}
 			for i := 0; i < rt.NumField(); i++ {
 				sf := rt.Field(i)
 				if sf.PkgPath != "" {
 					continue // unexported: not reachable from the wire
 				}
+				exported[strings.ToLower(sf.Name)] = true
 				f, ok := declared[strings.ToLower(sf.Name)]
 				if !ok {
 					t.Errorf("%s.%s is a field callers can send, but no Field declares it — "+
@@ -581,11 +587,12 @@ func everyRequestFieldIsDeclared[A any](t *testing.T, s Suite[A]) {
 						"RequiredStringListField, or supply SetEmpty", rt.Name(), sf.Name)
 				}
 			}
-			// The other direction, so the map cannot be satisfied by a table declaring
-			// fields the request does not have (a rename leaving a stale row behind).
-			if n := rt.NumField(); n != len(fam.Fields) {
-				t.Errorf("%s has %d exported fields but the family declares %d — the two lists "+
-					"have diverged", rt.Name(), n, len(fam.Fields))
+			// Check membership in both directions, rather than comparing counts: private
+			// implementation fields are not inputs and cannot justify a stale declaration.
+			for _, f := range fam.Fields {
+				if !exported[strings.ToLower(f.Name)] {
+					t.Errorf("%s declares field %q, but no exported request field matches it", rt.Name(), f.Name)
+				}
 			}
 		})
 	}
