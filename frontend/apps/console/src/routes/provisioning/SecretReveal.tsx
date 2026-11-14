@@ -15,9 +15,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import * as DialogPrimitive from '@radix-ui/react-dialog';
+import { RevealOnceDialog } from '@/components/RevealOnceDialog';
 import { AlertTriangle, Check, Copy } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { IconButton } from '@/components/ui/icon-button';
@@ -44,60 +43,39 @@ export function SecretReveal({
   onClose: () => void;
 }) {
   const { t } = useTranslation('provisioning');
+  if (!revealed) return null;
   return (
-    <DialogPrimitive.Root open={revealed != null} onOpenChange={(open) => !open && onClose()}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/80" />
-        <DialogPrimitive.Content
-          data-shot="provisioning-secret"
-          // Not dismissed by a stray click or Esc: see the header.
-          onInteractOutside={(e) => e.preventDefault()}
-          onEscapeKeyDown={(e) => e.preventDefault()}
-          className="fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border bg-background p-6 shadow-lg"
-        >
-          {revealed && (
-            <>
-              <div className="flex flex-col gap-2">
-                <DialogPrimitive.Title className="text-lg font-semibold text-foreground">
-                  {revealed.rotated ? t('revealRotatedTitle') : t('revealCreatedTitle')}
-                </DialogPrimitive.Title>
-                <DialogPrimitive.Description className="text-sm text-muted-foreground">
-                  {revealed.rotated
-                    ? t('revealRotatedBody', { token: revealed.profileToken })
-                    : t('revealCreatedBody', { token: revealed.profileToken })}
-                </DialogPrimitive.Description>
-              </div>
-              <FormField label={t('revealKeyLabel')} htmlFor={KEY_INPUT_ID}>
-                <div className="flex items-center gap-2">
-                  <Input id={KEY_INPUT_ID} readOnly value={revealed.provisionKey} className="font-mono text-xs" />
-                  <CopyField value={revealed.provisionKey} inputId={KEY_INPUT_ID} label={t('revealCopyKey')} />
-                </div>
-              </FormField>
-              <FormField label={t('revealSecretLabel')} htmlFor={SECRET_INPUT_ID}>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id={SECRET_INPUT_ID}
-                    readOnly
-                    value={revealed.secret}
-                    className="font-mono text-xs"
-                    onFocus={(e) => e.currentTarget.select()}
-                    data-shot-mask
-                  />
-                  <CopyField value={revealed.secret} inputId={SECRET_INPUT_ID} label={t('revealCopySecret')} />
-                </div>
-              </FormField>
-              <p role="alert" className="flex items-start gap-2 text-sm text-foreground">
-                <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
-                <span>{t('revealShownOnce')}</span>
-              </p>
-              <div className="flex justify-end">
-                <Button onClick={onClose}>{t('revealClose')}</Button>
-              </div>
-            </>
-          )}
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+    <RevealOnceDialog
+      shot="provisioning-secret"
+      title={revealed.rotated ? t('revealRotatedTitle') : t('revealCreatedTitle')}
+      description={revealed.rotated ? t('revealRotatedBody', { token: revealed.profileToken }) : t('revealCreatedBody', { token: revealed.profileToken })}
+      onDone={onClose}
+      doneLabel={t('revealClose')}
+    >
+      <FormField label={t('revealKeyLabel')} htmlFor={KEY_INPUT_ID}>
+        <div className="flex items-center gap-2">
+          <Input id={KEY_INPUT_ID} readOnly value={revealed.provisionKey} className="font-mono text-xs" />
+          <CopyField value={revealed.provisionKey} inputId={KEY_INPUT_ID} label={t('revealCopyKey')} />
+        </div>
+      </FormField>
+      <FormField label={t('revealSecretLabel')} htmlFor={SECRET_INPUT_ID}>
+        <div className="flex items-center gap-2">
+          <Input
+            id={SECRET_INPUT_ID}
+            readOnly
+            value={revealed.secret}
+            className="font-mono text-xs"
+            onFocus={(e) => e.currentTarget.select()}
+            data-shot-mask
+          />
+          <CopyField value={revealed.secret} inputId={SECRET_INPUT_ID} label={t('revealCopySecret')} />
+        </div>
+      </FormField>
+      <p role="alert" className="flex items-start gap-2 text-sm text-foreground">
+        <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
+        <span>{t('revealShownOnce')}</span>
+      </p>
+    </RevealOnceDialog>
   );
 }
 

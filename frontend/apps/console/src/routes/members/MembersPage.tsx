@@ -30,7 +30,6 @@ import {
   DataTableHeaderCell,
   DataTableRow,
 } from '@/components/ui/data-table';
-import { FormDrawer } from '@/components/registry';
 import { useAuth } from '@/auth/AuthProvider';
 import { useQuery } from '@/lib/hooks/use-query';
 import { mayWrite } from '@/lib/scope';
@@ -280,9 +279,7 @@ function MemberActions({ member, onEdit, onChanged }: { member: Member; onEdit: 
   return (
     <>
       {reissued && (
-        <FormDrawer open onOpenChange={(open) => !open && setReissued(null)} title={t('reissueTitle')}>
-          <InvitationIssued email={member.email} code={reissued} onDone={() => setReissued(null)} />
-        </FormDrawer>
+        <InvitationIssued email={member.email} code={reissued} onDone={() => setReissued(null)} />
       )}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
