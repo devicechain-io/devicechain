@@ -192,6 +192,8 @@ const BOUNDARY = '#475569';
 // without pulling 150 KiB of coordinates into a test — and so the one thing worth
 // asserting about it (that it projects exactly as the tiled style does) is
 // checkable in isolation.
+export function landStyleFrom(land: unknown, boundaries: unknown): unknown;
+export function landStyleFrom(land: unknown, boundaries: unknown, attribution: string | undefined): unknown;
 export function landStyleFrom(land: unknown, boundaries: unknown, attribution = BUNDLED_BASEMAP_ATTRIBUTION): unknown {
   return {
     version: 8,
@@ -233,6 +235,8 @@ export function landStyleFrom(land: unknown, boundaries: unknown, attribution = 
 // than a rarity.
 const landStylePromises = new Map<string, Promise<unknown>>();
 
+export function loadLandStyle(): Promise<unknown>;
+export function loadLandStyle(attribution: string | undefined): Promise<unknown>;
 export function loadLandStyle(attribution = BUNDLED_BASEMAP_ATTRIBUTION): Promise<unknown> {
   let pending = landStylePromises.get(attribution);
   if (!pending) {

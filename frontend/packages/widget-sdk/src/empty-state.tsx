@@ -34,7 +34,7 @@ export interface WidgetEmptyStrings {
   error: { title: string; detail: string };
 }
 
-export const WIDGET_EMPTY_STRINGS: Record<'en' | 'es' | 'zh-CN', WidgetEmptyStrings> = {
+export const WIDGET_EMPTY_STRINGS: Record<'en' | 'es', WidgetEmptyStrings> = {
   en: {
     unbound: { title: 'No device chosen', detail: 'Choose a device for this widget to show its data.' },
     notReported: {
@@ -61,24 +61,26 @@ export const WIDGET_EMPTY_STRINGS: Record<'en' | 'es' | 'zh-CN', WidgetEmptyStri
     forbidden: { title: 'Sin acceso', detail: 'No tiene acceso a estos datos.' },
     error: { title: 'Datos no disponibles', detail: 'El origen de datos no respondió.' },
   },
-  'zh-CN': {
-    unbound: { title: '尚未选择设备', detail: '请选择设备以在此组件中显示其数据。' },
-    notReported: {
-      title: '此设备不报告该测量项',
-      detail: (m) => `此设备的配置文件未包含${m ? `“${m}”` : '此测量项'}，因此不会报告其数据。`,
-    },
-    noData: {
-      title: '此范围内暂无数据',
-      detail: (m) => `所选时间范围内未收到${m ? `“${m}”的` : ''}数据。`,
-    },
-    forbidden: { title: '无访问权限', detail: '您无权访问这些数据。' },
-    error: { title: '数据不可用', detail: '数据源未响应。' },
+};
+
+// Additional catalogs stay internal so the published record keeps its original key type.
+const ZH_EMPTY_STRINGS: WidgetEmptyStrings = {
+  unbound: { title: '尚未选择设备', detail: '请选择设备以在此组件中显示其数据。' },
+  notReported: {
+    title: '此设备不报告该测量项',
+    detail: (m) => `此设备的配置文件未包含${m ? `“${m}”` : '此测量项'}，因此不会报告其数据。`,
   },
+  noData: {
+    title: '此范围内暂无数据',
+    detail: (m) => `所选时间范围内未收到${m ? `“${m}”的` : ''}数据。`,
+  },
+  forbidden: { title: '无访问权限', detail: '您无权访问这些数据。' },
+  error: { title: '数据不可用', detail: '数据源未响应。' },
 };
 
 export function widgetEmptyStrings(locale: string | undefined = viewerLocale()): WidgetEmptyStrings {
   const language = locale?.toLowerCase().split('-')[0];
-  return language === 'es' ? WIDGET_EMPTY_STRINGS.es : language === 'zh' ? WIDGET_EMPTY_STRINGS['zh-CN'] : WIDGET_EMPTY_STRINGS.en;
+  return language === 'es' ? WIDGET_EMPTY_STRINGS.es : language === 'zh' ? ZH_EMPTY_STRINGS : WIDGET_EMPTY_STRINGS.en;
 }
 
 // The glyph per kind. Quiet and non-alarming; the access refusal keeps the circle-slash the board's
@@ -172,13 +174,14 @@ export interface LastValueStrings {
   lastValue: (value: string, age: string) => string;
 }
 
-export const LAST_VALUE_STRINGS: Record<'en' | 'es' | 'zh-CN', LastValueStrings> = {
+export const LAST_VALUE_STRINGS: Record<'en' | 'es', LastValueStrings> = {
   en: { lastValue: (value, age) => `Last value ${value} · ${age}` },
   es: { lastValue: (value, age) => `Último valor ${value} · ${age}` },
-  'zh-CN': { lastValue: (value, age) => `上次读数 ${value} · ${age}` },
 };
+
+const ZH_LAST_VALUE_STRINGS: LastValueStrings = { lastValue: (value, age) => `上次读数 ${value} · ${age}` };
 
 export function lastValueHint(value: string, age: string, locale: string | undefined = viewerLocale()): string {
   const language = locale?.toLowerCase().split('-')[0];
-  return (language === 'es' ? LAST_VALUE_STRINGS.es : language === 'zh' ? LAST_VALUE_STRINGS['zh-CN'] : LAST_VALUE_STRINGS.en).lastValue(value, age);
+  return (language === 'es' ? LAST_VALUE_STRINGS.es : language === 'zh' ? ZH_LAST_VALUE_STRINGS : LAST_VALUE_STRINGS.en).lastValue(value, age);
 }
