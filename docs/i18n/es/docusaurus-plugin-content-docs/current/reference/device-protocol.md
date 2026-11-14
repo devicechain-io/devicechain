@@ -160,6 +160,8 @@ Cada campo de ubicación es un **string** JSON, incluidos los numéricos. Cada u
 
 Crea una relación desde el dispositivo emisor hacia otra entidad del mismo tenant. Este payload no tiene array `entries`, y sus tres claves se leen por su nombre exacto, así que las mayúsculas importan. Una clave ausente no se rechaza al decodificar el mensaje: se lee como un string vacío, y el evento falla después en la resolución, como en los casos siguientes.
 
+Un dispositivo no puede crear relaciones de propiedad ni de contención: un `NewRelationship` que nombre un tipo con seguimiento (incluido `assigned` y cualquier tipo del tenant marcado con seguimiento) o el tipo integrado `contains` se rechaza y se registra en `failed-events` con motivo `Invalid` en su primera entrega, sin reintentos. Asigna los dispositivos con un código de reclamación o la mutación `createEntityRelationship`. Los tipos sin seguimiento, incluido `member`, funcionan como antes.
+
 | Campo | Tipo | Obligatorio | Significado | Ejemplo |
 | --- | --- | --- | --- | --- |
 | `relationshipType` | string | sí | El token del tipo de relación: uno definido en el tenant, o uno de los tipos reservados de la plataforma, que se crean en su primer uso. | `"member"` |
@@ -398,11 +400,11 @@ Un evento aceptado (`202`, o capturado por el broker) lo resuelve después `devi
 | --- | --- |
 | `Unauthenticated` | Ninguna credencial mientras la autenticación de dispositivos es `required`; una credencial que no autentica; o un `device` en el cuerpo que no es el dispositivo de la credencial. |
 | `DeviceNotFound` | No se usó ninguna credencial y el token `device` no está registrado en el tenant. |
-| `Invalid` | El evento tiene más de 366 días, o no se pudo interpretar para su tipo. |
+| `Invalid` | El evento tiene más de 366 días, o no se pudo interpretar para su tipo; un NewRelationship que nombre un tipo de relación con seguimiento o de contención (se registra en su primera entrega, sin reintentos) |
 | `ApiCallFailed` | Falló una consulta o escritura que la resolución necesitaba, incluido un [`NewRelationship`](#new-relationship-payload) que la plataforma no pudo crear. |
 | `NotGatewayChild` | Una pasarela publicó por un dispositivo que no tiene asignado, que no existe, o la pasarela está deshabilitada. No se reintenta: se registra en la primera entrega. |
 
-Un evento rechazado se reintenta hasta su quinta entrega, de modo que si entretanto se registra el dispositivo o se recupera la base de datos, el evento se almacena igualmente. La excepción es un evento demasiado antiguo para almacenarse, que se registra en su primera entrega, ya que ningún reintento puede cambiar su antigüedad.
+Un evento rechazado se reintenta hasta su quinta entrega, de modo que si entretanto se registra el dispositivo o se recupera la base de datos, el evento se almacena igualmente. Los eventos demasiado antiguos, los rechazos de pasarela y las relaciones de propiedad o contención creadas por dispositivos se registran en su primera entrega, sin reintentos.
 
 ### Respuestas a comandos {#rejections-command-responses}
 

@@ -516,6 +516,14 @@ dcctl bootstrap local devicechain
 
 `v1.6.0` 是从 `v1.5.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
 
+#### 安全：设备不能再将自身分配给客户、区域或资产 {#v160-device-relationship-refused}
+
+- 如果 `NewRelationship` 事件指定了跟踪关系类型（内置 `assigned` 或任何标记为跟踪的类型）或内置 `contains`，则在第一次投递时拒绝该事件，并以原因 `Invalid` 记录到 `failed-events` 流，不会重试。这改变了已接受的设备事件的行为；[版本策略](./versioning-policy.md)允许安全修复作出此类更改。
+- 请使用认领码或 `createEntityRelationship` mutation 分配设备。
+- 设备此前创建的关系不会被删除。请检查设备的跟踪关系。
+- 非跟踪类型（包括 `member`）仍会被创建，除非租户已将该类型标记为跟踪。`NewRelationship` 事件本身不再把新目标作为锚点携带：非跟踪关系不代表归属，因此该事件按设备现有的锚点限定范围，与其下一个遥测事件相同。
+- 滚动升级期间，仍运行 v1.5 的 Pod 在被替换之前仍会创建该关系。
+
 #### HTTP 设备上行路由限制凭据猜测 {#v160-device-uplink-guessing}
 
 通过 `httpIngest.deviceUplinks` 按需启用的 HTTP 设备上行路由现在会按来源地址限制请求（返回 `429` 和 `Retry-After`）。某个设备的凭据反复验证失败后，路由将暂停回答认证猜测（返回 `503` 和 `Retry-After`），而不再重复返回 `401`。在此设备的凭据遭到猜测期间，该设备的每条 HTTP 上行请求（包括使用正确凭据的请求）都会收到 `503` 和 `Retry-After`，直到暂停结束（每次最长 60 秒）。

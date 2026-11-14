@@ -760,6 +760,14 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
+#### Security: a device can no longer assign itself to a customer, area or asset {#v160-device-relationship-refused}
+
+- A `NewRelationship` event naming a tracked relationship type (the built-in `assigned`, or any type marked tracked) or the built-in `contains` is refused and recorded on the `failed-events` stream with reason `Invalid` on its first delivery, without retries. This changes what an accepted device event does; the [versioning policy](./versioning-policy.md) allows this for a security fix.
+- Assign devices with a claim code or the `createEntityRelationship` mutation.
+- Relationships devices created earlier are not removed. Review the tracked relationships of your devices.
+- Untracked types, including `member`, are still created, unless your tenant marked that type tracked. The `NewRelationship` event itself no longer carries the new target as an anchor: an untracked relationship is not ownership, so the event is scoped by the device's existing anchors, as its next telemetry event is.
+- During the rolling upgrade, pods still on v1.5 create the edge until they are replaced.
+
 #### The HTTP device-uplink route limits guessing {#v160-device-uplink-guessing}
 
 The opt-in HTTP device-uplink route (`httpIngest.deviceUplinks`) now limits requests per source address (`429` with `Retry-After`). After repeated credential failures for a device, it stops answering authentication guesses (`503` with `Retry-After`) instead of repeating `401`. While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time).
