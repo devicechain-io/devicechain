@@ -242,7 +242,7 @@
   "widgetLabelThresholdLevel": "Severidad",
   "widgetLabelThresholdLabel": "Etiqueta",
   "widgetPlaceholderThresholdLevel": "Elige una severidad",
-  "widgetSeverityNormal": "Normal",
+  "widgetSeverityNormal": "Sin incidencias",
   "widgetSeverityWarning": "Advertencia",
   "widgetSeverityMinor": "Menor",
   "widgetSeverityMajor": "Mayor",

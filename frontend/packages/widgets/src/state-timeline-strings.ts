@@ -54,9 +54,9 @@ export const STATE_TIMELINE_STRINGS: Record<'en' | 'es' | 'zh-CN', StateTimeline
     unsupported: 'Esta fuente de datos no puede leer el historial almacenado',
     failed: 'No se pudo leer el historial',
     empty: 'No hay lecturas en este intervalo',
-    baseline: 'Normal',
+    baseline: 'Sin incidencias',
     noData: 'Sin lecturas',
-    levels: { critical: 'Crítico', major: 'Mayor', minor: 'Menor', warning: 'Aviso', info: 'Info', normal: 'Normal' },
+    levels: { critical: 'Crítico', major: 'Mayor', minor: 'Menor', warning: 'Aviso', info: 'Información', normal: 'Sin incidencias' },
     lane: (name, shares, runs) => `${name}: ${shares}. ${runs}`,
     basis: (bucket) => `estado del promedio de cada ${bucket}`,
     basisTitle: (bucket) =>

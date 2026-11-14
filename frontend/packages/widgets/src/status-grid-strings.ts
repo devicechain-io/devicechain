@@ -30,7 +30,7 @@ export const STATUS_GRID_STRINGS: Record<'en' | 'es' | 'zh-CN', StatusGridString
     ok: 'Correcto',
     none: 'Sin lectura',
     chooseMeasurement: 'Elija la medición que muestran los mosaicos',
-    levels: { critical: 'Crítico', major: 'Mayor', minor: 'Menor', warning: 'Aviso', info: 'Info', normal: 'Correcto' },
+    levels: { critical: 'Crítico', major: 'Mayor', minor: 'Menor', warning: 'Aviso', info: 'Información', normal: 'Correcto' },
     tile: (device, reading, group) => `${device}: ${reading}, ${group}`,
   },
   'zh-CN': {
