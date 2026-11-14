@@ -520,6 +520,7 @@ dcctl bootstrap local devicechain
 
 滚动更新 Pod 前，请检查手工编辑的实例配置。以下拒绝条件均为 `v1.5.0` 之后新增；无效的服务设置会阻止启动，可能导致 Pod 反复崩溃重启。下列服务键位于 `functionalAreas.<area>.config` 下。
 
+- **活动规划在租户之间轮流进行。** 每个租户每轮最多规划 1,000,000 行元素和 128 个周期；规划预算 2 秒用完后不再开始新的周期，已开始的周期总会完成，每个周期完成后都会保存进度，其余周期在下一轮继续。规划时的分组和设备位置查询在 2 秒后超时，作为本轮错误上报，但不会将活动标记为失败。最多同时处理四个租户。大型计划可能需要多轮才能填满 36 小时窗口。这些限制无需新配置或迁移，随 command-delivery Pod 滚动升级生效。
 - **启用轮换时，签名密钥保留期必须覆盖刷新令牌的有效期。** 在 `user-management` 中，当 `auth.signingKeyMaxAgeDays > 0` 时，应用默认值后的 `auth.signingKeyRetentionDays × 86400` 必须大于或等于 `auth.refreshTokenTtlSeconds`；允许相等。此前轮换会静默延长过短的保留期。保留期为 `0` 时取 8 天，默认刷新 TTL 为 604800 秒（7 天）。升级前请增加保留期或缩短刷新 TTL。关闭轮换时不执行此比较。chart 不比较这两个字段，且 `dcctl` 已拒绝覆盖此 auth 块。
 - **拒绝令牌 TTL 溢出。** `user-management` 现在会在转换为时长前拒绝超过 **9223372036 秒**的 `auth.accessTokenTtlSeconds` 或 `auth.refreshTokenTtlSeconds`。`0` 仍取默认值（分别为 900 和 604800 秒）；负 TTL 原本就无效。Helm schema 也执行该上限检查。
 - **拒绝租户清除时长溢出。** 在 `user-management` 中，`tenantPurge.intervalSeconds`、`tenantPurge.settleSeconds` 和 `tenantPurge.tokenHoldSeconds` 均不得超过 **9223372036 秒**。原有规则继续适用：负间隔会禁用协调器；负 settle/hold 值被拒绝，settle 和 token-hold 的安全下限保持不变。
