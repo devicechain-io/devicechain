@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package backup verifies local backup sets without contacting a cluster.
+// Package backup exports instance streams and blobs and verifies local backup sets.
 package backup
 
 import (

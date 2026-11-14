@@ -48,3 +48,31 @@ func TestBackupInspect(t *testing.T) {
 		t.Fatalf("backup inspect not registered: %v, %v", cmd, err)
 	}
 }
+
+func TestBackupExportValidatesBeforeClusterAccess(t *testing.T) {
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "absent"))
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"sample"}, "--destination is required"},
+		{[]string{"--destination", "backup"}, "accepts 1 arg"},
+		{[]string{"sample", "--destination", t.TempDir()}, "destination already exists"},
+	} {
+		cmd := newBackupCmd()
+		cmd.SetArgs(tc.args)
+		if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("args %v: got %v, want %q", tc.args, err, tc.want)
+		}
+	}
+}
+
+func TestBareBackupKeepsItsHelpBehavior(t *testing.T) {
+	cmd := newBackupCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{})
+	if err := cmd.Execute(); err != nil || !strings.Contains(out.String(), "inspect") {
+		t.Fatalf("bare backup should show help: %q, %v", out.String(), err)
+	}
+}

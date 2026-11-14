@@ -18,7 +18,7 @@ dcctl [command]
 ### Commands
 
 * [dcctl attr](#dcctl-attr)	 - Set, read and remove an entity's attributes (facet values)
-* [dcctl backup](#dcctl-backup)	 - Inspect local backup sets
+* [dcctl backup](#dcctl-backup)	 - Export instance streams and blobs, or inspect a local backup set
 * [dcctl bootstrap](#dcctl-bootstrap)	 - Bootstrap a DeviceChain instance
 * [dcctl broker](#dcctl-broker)	 - Message broker operations
 * [dcctl dead-letters](#dcctl-dead-letters)	 - Inspect work the platform accepted and then gave up on
@@ -221,12 +221,25 @@ dcctl attr unset <kind> <token> <key> [flags]
 
 ## dcctl backup {#dcctl-backup}
 
-Inspect local backup sets
+Export instance streams and blobs, or inspect a local backup set
+
+### Synopsis
+
+Export checkpoint-preserved JetStream streams with consumers and instance blobs.
+Freeze writers before export. This does not coordinate database recovery cutoffs or maintenance mode.
+
+```
+dcctl backup <instance> --destination <dir> [flags]
+```
 
 ### Options
 
 ```
-  -h, --help   help for backup
+      --blob-directory string   Read-only mounted/exported filesystem blob PVC root
+      --destination string      New local backup directory (must not exist)
+  -h, --help                    help for backup
+      --kube-context string     Kubernetes context of the installed instance
+      --nats-url string         Reachable broker URL (default: port-forward)
 ```
 
 ### SEE ALSO
@@ -257,7 +270,7 @@ dcctl backup inspect <backup-set-dir> [flags]
 
 ### SEE ALSO
 
-* [dcctl backup](#dcctl-backup)	 - Inspect local backup sets
+* [dcctl backup](#dcctl-backup)	 - Export instance streams and blobs, or inspect a local backup set
 
 ## dcctl bootstrap {#dcctl-bootstrap}
 
