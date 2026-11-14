@@ -416,6 +416,9 @@ func (suite *EventResolverTestSuite) TestNewRelationshipStampsTrackedAnchorMembe
 		}}, nil)
 	// The assignment being created: device -> gateway.
 	suite.API.Mock.On("EntityRelationshipsByToken").Return([]*dmodel.EntityRelationship{}, nil)
+	// "connected-to" is an untracked tenant type, which a device may still assert.
+	suite.API.Mock.On("EntityRelationshipTypesByToken").Return(
+		[]*dmodel.EntityRelationshipType{{Tracked: false}}, nil)
 	suite.API.Mock.On("CreateEntityRelationship").Return(
 		&dmodel.EntityRelationship{TargetType: "gateway", TargetToken: "gw-1", TargetId: 42}, nil)
 	// device 500 is in beta-fleet@1; the already-tracked area 900 is in arid-areas@2. The NEW
@@ -471,6 +474,9 @@ func (suite *EventResolverTestSuite) TestNewRelationshipCarriesEveryAnchorTheDev
 			trackedRel(7, "customer", "acme"),
 		}}, nil)
 	suite.API.Mock.On("EntityRelationshipsByToken").Return([]*dmodel.EntityRelationship{}, nil)
+	// "connected-to" is an untracked tenant type, which a device may still assert.
+	suite.API.Mock.On("EntityRelationshipTypesByToken").Return(
+		[]*dmodel.EntityRelationshipType{{Tracked: false}}, nil)
 	suite.API.Mock.On("CreateEntityRelationship").Return(
 		&dmodel.EntityRelationship{Model: gorm.Model{ID: 9}, TargetType: "gateway", TargetToken: "gw-1", TargetId: 42}, nil)
 	suite.API.MembershipsFn = func(entityType string, entityId uint) []dmodel.GroupMembership {
@@ -498,8 +504,7 @@ func (suite *EventResolverTestSuite) TestNewRelationshipCarriesEveryAnchorTheDev
 		assert.ElementsMatch(suite.T(), []resolvedevent.ResolvedAnchor{
 			{AnchorType: "customer", AnchorToken: "acme", RelationshipId: 7},
 			{AnchorType: "group", AnchorToken: "north"},
-			{AnchorType: "gateway", AnchorToken: "gw-1", RelationshipId: 9},
-		}, results[0].Resolved.Anchors)
+		}, results[0].Resolved.Anchors, "an untracked relationship's target is not an anchor")
 	}
 }
 

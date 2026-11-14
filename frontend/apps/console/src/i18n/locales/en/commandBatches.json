@@ -179,7 +179,7 @@
   "unconstrainedHint": "That device's profile does not restrict what may be sent, so these are suggestions rather than the whole set.",
   "undecidedNothingCreated": "The batch could not be decided, so nothing was created and no device was sent anything. The request can simply be tried again.",
   "unreadableAnswer": "The platform answered with neither a batch nor a refusal.",
-  "unreadableNothingKnown": "Whether the batch was created is not known — unlike a failure to reach the platform, this answer says nothing either way. Check the batch list before firing again, so you do not send the fleet a second copy.",
+  "unreadableNothingKnown": "Whether the batch was created is not known. Check the batch list before firing again. Retrying with the same request reuses its token to avoid sending the fleet a second copy.",
   "versionOption": "v{{version}}",
   "versionOptionLabelled": "v{{version}} — {{label}}",
   "vocabularyUnavailable": "Could not read that device's published commands, so the command key is free text. The platform checks it either way.",
