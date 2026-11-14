@@ -805,6 +805,14 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
+#### Seguridad: un dispositivo ya no puede asignarse a un cliente, área o activo {#v160-device-relationship-refused}
+
+- Un evento `NewRelationship` que nombre un tipo de relación con seguimiento (el tipo integrado `assigned` o cualquier tipo marcado con seguimiento) o el tipo integrado `contains` se rechaza y se registra en el flujo `failed-events` con motivo `Invalid` en su primera entrega, sin reintentos. Esto cambia lo que hace un evento de dispositivo aceptado; la [política de versiones](./versioning-policy.md) lo permite para una corrección de seguridad.
+- Asigna los dispositivos con un código de reclamación o con la mutación `createEntityRelationship`.
+- Las relaciones creadas anteriormente por los dispositivos no se eliminan. Revisa las relaciones con seguimiento de tus dispositivos.
+- Los tipos sin seguimiento, incluido `member`, se siguen creando, salvo que tu tenant haya marcado ese tipo con seguimiento. El propio evento `NewRelationship` ya no lleva el nuevo destino como ancla: una relación sin seguimiento no es propiedad, así que el evento queda acotado por las anclas existentes del dispositivo, igual que su siguiente evento de telemetría.
+- Durante la actualización gradual, los pods que siguen en v1.5 crean la relación hasta que se sustituyen.
+
 El descubrimiento MCP ahora ofrece `read-only` y `location`, además de `act:*` cuando `agentActuation.enabled` está activado en MCP. Los desafíos permiten usar estos metadatos en vez de fijar `read-only`. El acceso sigue requiriendo solo `read-only`; las herramientas de acción conservan sus controles de ámbitos y permisos. No hay que cambiar la configuración; los tokens existentes siguen siendo válidos. Vuelva a autorizar los clientes para conceder los ámbitos descubiertos y active también la actuación en el servidor de autorización para usar propuestas.
 
 #### Antes de actualizar {#v160-before-upgrade}

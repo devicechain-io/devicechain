@@ -516,6 +516,14 @@ dcctl bootstrap local devicechain
 
 `v1.6.0` 是从 `v1.5.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
 
+#### 安全：设备不能再将自身分配给客户、区域或资产 {#v160-device-relationship-refused}
+
+- 如果 `NewRelationship` 事件指定了跟踪关系类型（内置 `assigned` 或任何标记为跟踪的类型）或内置 `contains`，则在第一次投递时拒绝该事件，并以原因 `Invalid` 记录到 `failed-events` 流，不会重试。这改变了已接受的设备事件的行为；[版本策略](./versioning-policy.md)允许安全修复作出此类更改。
+- 请使用认领码或 `createEntityRelationship` mutation 分配设备。
+- 设备此前创建的关系不会被删除。请检查设备的跟踪关系。
+- 非跟踪类型（包括 `member`）仍会被创建，除非租户已将该类型标记为跟踪。`NewRelationship` 事件本身不再把新目标作为锚点携带：非跟踪关系不代表归属，因此该事件按设备现有的锚点限定范围，与其下一个遥测事件相同。
+- 滚动升级期间，仍运行 v1.5 的 Pod 在被替换之前仍会创建该关系。
+
 MCP 发现现在提供 `read-only` 和 `location`，并在 MCP 的 `agentActuation.enabled` 开启时提供 `act:*`。认证质询允许客户端使用这些元数据，不再将范围固定为 `read-only`。接入仍只要求 `read-only`；操作工具保留各自的范围和权限检查。无需更改配置，现有令牌继续有效。请重新授权客户端以授予新发现的范围；使用提案时还需在授权服务器上开启代理操作。
 
 #### 升级前 {#v160-before-upgrade}
