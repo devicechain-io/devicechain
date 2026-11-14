@@ -25,6 +25,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Send } from 'lucide-react';
+import { GraphQLRequestError } from '@devicechain/client';
 import type { CommandParameter } from '@devicechain/dashboards';
 import {
   parseParameterSchema,
@@ -126,9 +127,8 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
   // 🔴 A FAILURE CARRIES WHAT IS KNOWN ABOUT THE FLEET, NOT JUST A MESSAGE — because the
   // two ways this can fail differ in exactly the fact the operator needs before they
   // press the button again:
-  //   'undecided'  — the call threw. The service guarantees an undecided batch creates
-  //                  nothing, so the token is unspent and a retry is safe.
-  //   'unreadable' — the call succeeded with NEITHER arm populated. That says nothing
+  //   'undecided'  — the server returned GraphQL errors: nothing was created.
+  //   'unreadable' — transport failure or NEITHER arm populated. That says nothing
   //                  about what happened server-side: a batch may exist and may already
   //                  be actuating hardware. Offering the same "just try again" here
   //                  would invite a second fleet write on top of a first one nobody can
@@ -137,9 +137,11 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
     null,
   );
   const [rejection, setRejection] = useState<CommandBatchRejection | null>(null);
-  // Synchronous double-submit guard. `busy` disables the button, but state lands on the
-  // next render and a token must never be spent twice — see submit().
+  // Synchronous double-submit guard: busy disables the button on the next render.
   const inFlight = useRef(false);
+  // An unknown outcome may already have committed. Replay the same request and token
+  // until the service decides; a changed request represents a new intent.
+  const pendingAttempt = useRef<{ body: string; token: string } | null>(null);
 
   const { data: devices } = useQuery(
     () => listDevices({ pageNumber: 1, pageSize: optionPageSize }).then((r) => r.results),
@@ -282,10 +284,7 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
       body = rawPayload.trim() || undefined;
     }
 
-    const request: CommandBatchCreateRequest = {
-      // 🔴 A FRESH TOKEN PER ATTEMPT, minted here rather than held in state. It is the
-      // idempotency key for the whole fan-out; reusing one replays the original batch.
-      token: crypto.randomUUID(),
+    const requestBody = {
       name: commandKey,
       payload: body,
       allowPartial,
@@ -300,6 +299,14 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
             groupVersion: versioned && groupVersion ? Number(groupVersion) : undefined,
           }),
     };
+    const fingerprint = JSON.stringify(requestBody);
+    if (pendingAttempt.current?.body !== fingerprint) {
+      pendingAttempt.current = { body: fingerprint, token: crypto.randomUUID() };
+    }
+    const request: CommandBatchCreateRequest = {
+      ...requestBody,
+      token: pendingAttempt.current.token,
+    };
 
     inFlight.current = true;
     setBusy(true);
@@ -313,27 +320,29 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
       // typed, to be corrected and re-fired. (Re-firing mints a new token, so the
       // corrected request is a new batch rather than a replay of the refused one.)
       if (result.rejection) {
+        pendingAttempt.current = null;
         setRejection(result.rejection);
         return;
       }
       // 🔴 `CreateCommandBatchResult` IS TWO NULLABLE FIELDS, NOT A UNION, so "neither"
       // is a shape the type permits and one this has to answer for. It is NOT a success:
       // reporting a batch that may not exist would leave a fleet actuation nobody can
-      // audit. It is also NOT the same as the throw below — a call that answered says
+      // audit. Like a transport failure, it leaves the outcome unknown: a response says
       // nothing about whether it created anything first, so this must not tell the
       // operator a retry is free.
       if (!result.batch) {
         setFailure({ message: t('unreadableAnswer'), kind: 'unreadable' });
         return;
       }
+      pendingAttempt.current = null;
       onFired(result.batch);
     } catch (err) {
-      // The server's own message, unlike the single-command path's fixed string. The
-      // difference is what can arrive here: a batch targeting a GROUP additionally
-      // requires device:read, so an authorization refusal is a realistic throw and names
-      // only an authority the operator can ask for. The reassurance beside it is the
-      // service's own guarantee — an undecided batch creates nothing.
-      setFailure({ message: errMessage(err), kind: 'undecided' });
+      // Only a successful HTTP response carrying GraphQL errors is a server verdict.
+      // Network/gateway failures and malformed responses can hide a committed batch.
+      const decided = err instanceof GraphQLRequestError &&
+        err.status >= 200 && err.status < 300 && (err.errors?.length ?? 0) > 0;
+      if (decided) pendingAttempt.current = null;
+      setFailure({ message: errMessage(err), kind: decided ? 'undecided' : 'unreadable' });
     } finally {
       inFlight.current = false;
       setBusy(false);
