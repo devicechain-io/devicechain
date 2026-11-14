@@ -739,6 +739,15 @@ func manualMembershipsIn(id *iam.Identity, tenants []string) []string {
 // made. If the identity already holds manual memberships in the connection's tenants a
 // disposition for them is required.
 func (m *Manager) ApproveSsoLinkRequest(ctx context.Context, requestID uint, disposition string) error {
+	return m.ApproveSsoLinkRequestFor(ctx, requestID, disposition, nil)
+}
+
+// ApproveSsoLinkRequestFor is ApproveSsoLinkRequest with an authorization check run on the
+// identity the link is actually made to, after it is resolved and before anything is
+// written. The admin API passes its no-escalation check here rather than judging the
+// request beforehand: a pending request's email can be replaced by a later callback for
+// the same subject, so a check made on an earlier read would judge a different identity.
+func (m *Manager) ApproveSsoLinkRequestFor(ctx context.Context, requestID uint, disposition string, authorize func(*iam.Identity) error) error {
 	req, err := m.iam.SsoLinkRequestByID(ctx, requestID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -759,6 +768,11 @@ func (m *Manager) ApproveSsoLinkRequest(ctx context.Context, requestID uint, dis
 			return fmt.Errorf("%w: no identity has the email %s now; create one, or reject the request", ErrIdpInvalid, req.Email)
 		}
 		return err
+	}
+	if authorize != nil {
+		if err := authorize(id); err != nil {
+			return err
+		}
 	}
 	manual := []string(nil)
 	if conn.Kind == iam.IdpKindTenant {

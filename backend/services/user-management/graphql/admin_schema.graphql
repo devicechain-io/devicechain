@@ -1864,6 +1864,7 @@ type Mutation {
     Creates an identity with the given system roles and returns it. Fails if the email is
     already in use (error code CONFLICT), if the password is empty, or if a system role does
     not exist. Requires user:write.
+    The caller may assign only system roles whose authorities it currently holds.
     """
     # Create a global identity with the given system roles.
     createIdentity(
@@ -1875,6 +1876,7 @@ type Mutation {
     Disabling also ends every session the identity has, so re-enabling does not revive them;
     tokens already issued stop working when they expire (15 minutes by default). Fails if the
     identity does not exist. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     # Enable or disable an identity (disabled identities cannot authenticate).
     # Disabling also ends every refresh session the identity holds, so re-enabling
@@ -1890,6 +1892,7 @@ type Mutation {
     Replaces the identity's system roles with exactly those given and returns the identity.
     An empty list removes them all. Fails if the identity does not exist or a role does not
     exist with system scope. Requires user:write.
+    The caller must hold every authority granted by both the current and requested system roles.
     """
     # Replace an identity's system-role assignments (role tokens, system scope).
     setSystemRoles(
@@ -1903,6 +1906,7 @@ type Mutation {
     the identity has, so it must sign in again; tokens already issued stop working when they
     expire (15 minutes by default). Fails if the password is empty or the identity does not
     exist. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     # Replace an identity's password (hashed server-side). Also ends every refresh
     # session the identity holds; identity and access tokens already issued run out
@@ -1917,6 +1921,7 @@ type Mutation {
     Deletes an identity together with its memberships. Returns true if one was deleted and
     false if there was no such identity. Its sessions end with it, and an identity later
     created with the same email does not inherit them. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     # Delete an identity and its memberships; returns whether one was removed. Its
     # refresh sessions end with it, and an identity created again under the same
@@ -2030,6 +2035,7 @@ type Mutation {
     Creates a role and returns it. Fails if the scope is not `system` or `tenant`, if an
     authority is unknown or belongs to the other scope, or if the token is already used in
     that scope (error code CONFLICT). Requires role:write.
+    The caller must hold every authority the new role grants.
     """
     # Create a role granting a set of authorities (requires role:write).
     createRole(
@@ -2039,6 +2045,7 @@ type Mutation {
     """
     Applies a partial update to a role and returns it. Fails if the role does not exist or
     the resulting authorities are not valid for its scope. Requires role:write.
+    The caller must hold every authority granted by both the current and resulting role.
     """
     # Apply a partial update to a role by scope + token: an omitted field is left
     # alone, a null clears it, a value sets it (requires role:write).
@@ -2056,6 +2063,7 @@ type Mutation {
     Deletes a role and removes it from everything it was assigned to. Returns true if it was
     deleted and false if there was no such role. The `superuser` system role cannot be
     deleted, so the instance cannot be locked out of this API. Requires role:write.
+    The caller must hold every authority the current role grants.
     """
     # Delete a role by scope + token; returns whether one was removed. The
     # superuser system role is protected (requires role:write).
@@ -2375,6 +2383,7 @@ type Mutation {
     as this identity. This is how an instance connection reaches an identity. A tenant connection
     refuses an identity that holds a system role. Fails if the identity or connection does not
     exist, or either side is already linked. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     linkIdentity(
         """Email of the identity."""
@@ -2387,6 +2396,7 @@ type Mutation {
     """
     Removes an identity's link on a connection; its sign-ins through that connection end at their
     next exchange. Returns true if a link was removed. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     unlinkIdentity(
         """Email of the identity."""
@@ -2399,6 +2409,7 @@ type Mutation {
     request's email NOW. If that identity already holds memberships in the connection's tenants
     that no connection manages, say what becomes of them: `convert` makes the connection manage
     them, `keep_manual` leaves them. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     approveSsoLinkRequest(
         """Identifier of the request."""
@@ -2488,6 +2499,7 @@ type Mutation {
     issued stop working when they expire, 15 minutes by default (on the admin API too). The password
     is unchanged and the person can sign in again at once. Returns how many sign-ins it ended.
     Fails if the identity does not exist. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     revokeSessions(
         """Email of the identity."""
@@ -2499,6 +2511,7 @@ type Mutation {
     refused unless the identity is linked to an enabled connection it can sign in through (an
     instance connection for an identity holding a system role), so it is never left with no way
     in. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     clearPassword(
         """Email of the identity."""

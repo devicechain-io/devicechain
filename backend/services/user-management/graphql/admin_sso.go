@@ -428,6 +428,9 @@ func (r *AdminResolver) LinkIdentity(ctx context.Context, args struct{ Email, Co
 	if err := auth.Authorize(ctx, auth.UserWrite); err != nil {
 		return false, err
 	}
+	if err := r.getAdminService(ctx).CheckAdminIdentity(ctx, args.Email); err != nil {
+		return false, err
+	}
 	if err := r.sso(ctx).LinkIdentity(ctx, args.Email, args.Connection, args.Subject); err != nil {
 		return false, err
 	}
@@ -437,6 +440,9 @@ func (r *AdminResolver) LinkIdentity(ctx context.Context, args struct{ Email, Co
 // UnlinkIdentity removes a link (requires user:write).
 func (r *AdminResolver) UnlinkIdentity(ctx context.Context, args struct{ Email, Connection string }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.UserWrite); err != nil {
+		return false, err
+	}
+	if err := r.getAdminService(ctx).CheckAdminIdentity(ctx, args.Email); err != nil {
 		return false, err
 	}
 	return r.sso(ctx).UnlinkIdentity(ctx, args.Email, args.Connection)
@@ -466,7 +472,10 @@ func (r *AdminResolver) ApproveSsoLinkRequest(ctx context.Context, args struct {
 	if args.MembershipDisposition != nil {
 		disposition = *args.MembershipDisposition
 	}
-	if err := r.sso(ctx).ApproveSsoLinkRequest(ctx, id, disposition); err != nil {
+	authorize := func(target *iam.Identity) error {
+		return r.getAdminService(ctx).CheckAdminIdentityRecord(ctx, target)
+	}
+	if err := r.sso(ctx).ApproveSsoLinkRequestFor(ctx, id, disposition, authorize); err != nil {
 		return false, err
 	}
 	return true, nil

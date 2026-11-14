@@ -782,6 +782,14 @@ A payload decoder failure that is redelivered (for example after a restart with 
 
 `device-management` now reports agent actions: proposals by kind and outcome, approvals by outcome, executions by kind and result with their duration, and proposals that expired. The Platform board gains an **Agent actions (preview)** row, and a new warning alert, `AgentExecutionsFailing`, fires when final approvals keep failing to complete. Refusals do not raise it: a dependency change, a policy refusal, a closed kill fence or an approver refusal is counted under its own result. The metrics are listed in the [metrics reference](./metrics-reference.md), and the alert has an [alert runbook](./alert-runbook.md#agentexecutionsfailing) entry. Like agent actions, they are Preview: names and labels may still change in a minor release.
 
+#### Delegated administrators cannot grant or act above what they hold {#v160-no-escalation}
+
+The operator admin API now limits an identity whose system role is not superuser to the authorities its current system roles grant. The tenant API also checks the current role and its members before a tenant role is narrowed.
+
+- **Operator admin API:** a delegated identity can assign only system roles whose authorities it holds; can act on another identity (password, sign-in links, sessions, enable or delete, system roles) only if it holds everything that identity's system roles grant; and can create, change or delete a role only within the authorities it holds.
+- **Tenant API:** a tenant administrator can change a tenant role only if they hold every authority it grants, and can remove authorities from it only if they hold everything its members hold.
+- **What to check:** a delegated system role that needs to administer superusers or define roles beyond its own authorities now gets `ESCALATION`; make those changes as a superuser.
+
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
 `v1.5.0` is an in-place upgrade from `v1.4.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Four appended migrations run on upgrade: three in `device-management` and one in `user-management`. They add the agent kill fence and effect outbox, automation reviews and review enforcement, and the actuation generation column. See [Schema changes and going back](#v150-going-back). Coming from `v1.3.0` or earlier, read the [`v1.4.0` notes](#v140-upgrade) first.
