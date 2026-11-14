@@ -13,6 +13,7 @@ import { fleetStrings } from './fleet-strings';
 import { historyStrings } from './history-strings';
 import { levelStrings } from './level-strings';
 import { presenceStrings } from './presence-strings';
+import { selectionStrings } from './selection-strings';
 import { scadaStrings } from './scada-strings';
 import { sharedStrings, unresolvedWidgetDetail } from './shared-strings';
 import { stateTimelineStrings } from './state-timeline-strings';
@@ -41,7 +42,7 @@ function literals(value: unknown): string[] {
 describe.each([
   accessStrings, aggregateStrings, alarmStrings, controlStrings, commandStrings, compareStrings,
   eventMarkerStrings, fleetStrings, historyStrings, levelStrings, presenceStrings, scadaStrings,
-  sharedStrings, stateTimelineStrings, statusGridStrings, tableStrings, timeRangeStrings,
+  sharedStrings, selectionStrings, stateTimelineStrings, statusGridStrings, tableStrings, timeRangeStrings,
 ])('%s locale coverage', (read) => {
   it('selects complete Spanish and Chinese tables from the document language, with English fallback', () => {
     document.documentElement.lang = 'en';

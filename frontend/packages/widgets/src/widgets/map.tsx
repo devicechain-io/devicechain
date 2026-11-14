@@ -79,7 +79,8 @@ import type { Map as MapLibreMap, Marker as MapLibreMarker } from 'maplibre-gl';
 // one bundler's dialect.
 //
 // Loaded once and memoized: several map widgets on one board share the fetch.
-let mapLibrePromise: Promise<typeof import('maplibre-gl')> | undefined;
+type MapLibreRuntime = Pick<typeof import('maplibre-gl'), 'Map' | 'Marker' | 'LngLatBounds' | 'setWorkerUrl'>;
+let mapLibrePromise: Promise<MapLibreRuntime> | undefined;
 
 // 🔴 THE WORKER HAS TO BE ASKED FOR BY NAME, and getting this wrong produces a map
 // that builds, type-checks, passes every test and then renders nothing. MapLibre
@@ -99,7 +100,7 @@ let mapLibrePromise: Promise<typeof import('maplibre-gl')> | undefined;
 // board share the fetch, and `setWorkerUrl` is global state in MapLibre, so a second
 // caller with a different URL could not be honoured even if we tried. In practice
 // there is one provider at the top of the tree and therefore one URL.
-function loadMapLibre(runtime: MapRuntime): Promise<typeof import('maplibre-gl')> {
+function loadMapLibre(runtime: MapRuntime): Promise<MapLibreRuntime> {
   if (!mapLibrePromise) {
     // The stylesheet rides the SAME dynamic boundary as the renderer, which is why a host
     // may pass a loader rather than importing it at module scope: it is 83 KB raw, 10.7 KB
@@ -115,7 +116,8 @@ function loadMapLibre(runtime: MapRuntime): Promise<typeof import('maplibre-gl')
     // host loader takes down the whole dashboard instead of degrading to the plain panel.
     // Deferring the call puts it inside the promise chain, where the existing catch works.
     mapLibrePromise = Promise.all([
-      import('maplibre-gl'),
+      // Name the exports we use so the bundler can drop unused controls and helpers.
+      import('maplibre-gl').then(({ Map, Marker, LngLatBounds, setWorkerUrl }) => ({ Map, Marker, LngLatBounds, setWorkerUrl })),
       Promise.resolve().then(() => runtime.loadStyles?.()),
     ]).then(([mod]) => {
       mod.setWorkerUrl(runtime.workerUrl);
