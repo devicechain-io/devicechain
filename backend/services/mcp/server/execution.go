@@ -6,14 +6,20 @@ package server
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// The SDK can continue tool work on the session context after its HTTP request
-// times out. Keep a separate execution reservation until that work actually ends;
-// the HTTP message reservation independently bounds retained batch responses.
+// The SDK uses a session context; bind tool work and reservations to HTTP too.
 var activeToolCalls = &messageBudget{callers: make(map[string]int)}
+
+const executionKey = "devicechain.mcp.requestExecution"
+
+type requestExecution struct {
+	ctx   context.Context
+	slots chan struct{}
+}
 
 func limitToolExecution(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
@@ -25,12 +31,36 @@ func limitToolExecution(next mcp.MethodHandler) mcp.MethodHandler {
 			return nil, fmt.Errorf("unauthenticated: no verified caller")
 		}
 		caller := extra.TokenInfo.UserID
+		if execution, ok := extra.TokenInfo.Extra[executionKey].(*requestExecution); ok {
+			select {
+			case execution.slots <- struct{}{}:
+				defer func() { <-execution.slots }()
+			case <-execution.ctx.Done():
+				return nil, execution.ctx.Err()
+			}
+			toolCtx, cancel := context.WithCancel(ctx)
+			stop := context.AfterFunc(execution.ctx, cancel)
+			defer stop()
+			defer cancel()
+			if execution.ctx.Err() != nil {
+				cancel()
+			}
+			ctx = toolCtx
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !activeToolCalls.acquire(caller, 1) {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{
 				&mcp.TextContent{Text: "too many in-flight tool calls; retry shortly"},
 			}}, nil
 		}
-		defer activeToolCalls.release(caller, 1)
+		// Release exactly once even if a downstream handler ignores cancellation.
+		var once sync.Once
+		release := func() { once.Do(func() { activeToolCalls.release(caller, 1) }) }
+		stop := context.AfterFunc(ctx, release)
+		defer stop()
+		defer release()
 		return next(ctx, method, req)
 	}
 }

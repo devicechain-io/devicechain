@@ -215,8 +215,14 @@ func TestInFlightMessagesBoundCallersBatchesAndProcess(t *testing.T) {
 		t.Fatalf("alice consumed bob's allowance: status %d", got)
 	}
 	start(two, bob)
+	if got := request(one.URL+"?quick", charlie, batchOf(1)); got != http.StatusNoContent {
+		t.Fatalf("two slow callers blocked a third: status %d", got)
+	}
+	for i := 2; i < 16; i++ {
+		start(one, tokenFor(fmt.Sprintf("user%d@b.c", i)))
+	}
 	if got := request(one.URL+"?quick", charlie, batchOf(1)); got != http.StatusTooManyRequests {
-		t.Fatalf("process exceeded eight slots across callers: status %d", got)
+		t.Fatalf("process exceeded 64 slots across callers: status %d", got)
 	}
 	close(release)
 	closed = true
