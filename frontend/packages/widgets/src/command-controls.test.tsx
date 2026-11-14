@@ -67,6 +67,35 @@ const slider = (extra: Record<string, unknown> = {}) =>
   });
 const input = () => screen.getByRole('slider') as HTMLInputElement;
 
+describe('command subject changes', () => {
+  for (const kind of ['slider', 'toggle'] as const) {
+    for (const late of [false, true]) {
+      it(`${kind} discards device A's ${late ? 'late' : 'accepted'} send when rebound to B`, async () => {
+        let resolve!: (value: CommandDispatch) => void;
+        const send = makeSend(() => new Promise((done) => { resolve = done; }));
+        const actions = actionsWith(send);
+        const control = (deviceToken: string) => kind === 'slider'
+          ? <CommandSlider widget={slider()} data={{ ...state([row({ status: 'SUCCESSFUL' })]), deviceToken }} actions={actions} />
+          : <CommandToggle widget={toggle()} data={{ ...state([power({ enabled: false }, { status: 'SUCCESSFUL' })]), deviceToken }} actions={actions} />;
+        const view = render(control('A'));
+        await act(async () => {
+          if (kind === 'slider') {
+            fireEvent.change(input(), { target: { value: '30' } });
+            fireEvent.pointerUp(input());
+          } else fireEvent.click(screen.getByRole('switch'));
+        });
+        if (!late) await act(async () => resolve({ status: 'sent', token: 'A-send' }));
+        view.rerender(control('B'));
+        if (late) await act(async () => resolve({ status: 'sent', token: 'A-send' }));
+        expect(screen.getByRole('status').textContent).toMatch(/delivered/i);
+        expect(screen.getByRole('status').textContent).not.toMatch(/pending|sending/i);
+        if (kind === 'slider') expect(input().value).toBe('21');
+        else expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+      });
+    }
+  }
+});
+
 describe('command-slider', () => {
   it('sends nothing while the thumb is dragged, and one command, with defaults filled, on release', () => {
     const send = makeSend();
