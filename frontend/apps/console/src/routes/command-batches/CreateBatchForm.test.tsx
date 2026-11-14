@@ -11,7 +11,7 @@
 //
 // 🔴 WHY THIS FILE EXISTS. Firing a batch is the one screen in the console where a
 // mistake is a PHYSICAL ACTUATION across a fleet, and three of the four things it can get
-// wrong are invisible on screen: a token reused between submits replays a previous batch
+// wrong are invisible on screen: a token reused after a definitive answer replays a previous batch
 // and paints its old counts as fresh; an `allowPartial` defaulted rather than chosen
 // sends an intent the operator never formed; a null `resolved` printed as 0 tells them a
 // healthy group matched nothing. Each has a test below, and each was checked by breaking
@@ -37,6 +37,7 @@ vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: toastMock })
 vi.mock('@/routes/devices/HeldWhileDisabledNotice', () => ({ HeldWhileDisabledNotice: () => null }));
 
 import { CreateBatchForm } from './CreateBatchForm';
+import { GraphQLRequestError } from '@devicechain/client';
 import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
 
 afterEach(cleanup);
@@ -222,13 +223,8 @@ function chooseFromCombobox(trigger: string | RegExp, option: string | RegExp) {
 // ── the tests ──────────────────────────────────────────────────────────────
 
 describe('CreateBatchForm token', () => {
-  // 🔴🔴 A REUSED BATCH TOKEN IS AN IDEMPOTENT REPLAY, NOT A RETRY. Re-issuing a token
-  // that already names a batch returns THAT batch unchanged — it is never topped up — so
-  // a form that minted its token once and fired twice would answer the second attempt
-  // with the FIRST batch's stored counts and render them as the outcome of the write
-  // just made. The operator reads "4900 of 5000 accepted" for a fan-out that never
-  // happened.
-  it('mints a fresh token for every attempt', async () => {
+  // A refusal ends the attempt, so the next submit represents a new intent.
+  it('mints a fresh token after a definitive rejection', async () => {
     wire({ batch: { kind: 'rejected', code: 'BATCH_PARTIAL_REFUSED', reason: 'nope', resolved: 2 } });
     renderForm();
     await waitFor(() => expect(gqlMock).toHaveBeenCalled());
@@ -246,6 +242,51 @@ describe('CreateBatchForm token', () => {
     expect(first.token).toBeTruthy();
     expect(second.token).toBeTruthy();
     expect(second.token).not.toBe(first.token);
+  });
+
+  it.each([
+    new GraphQLRequestError('connection reset', 0),
+    new GraphQLRequestError('Request failed (504)', 504),
+    new SyntaxError('invalid response JSON'),
+  ])('keeps the token across unknown outcomes: %s', async (error) => {
+    wire({ batch: { kind: 'threw', error } });
+    renderForm();
+    pasteDevices('therm-1');
+    await typeCommandKey('reboot');
+    chooseAllOrNothing();
+    fire();
+    await screen.findByText(error.message);
+    expect(screen.queryByText(/nothing was created/)).toBeNull();
+    fire();
+    await waitFor(() => expect(batchRequests()).toHaveLength(2));
+    await screen.findByText(error.message);
+    expect(batchRequests()[1]).toEqual(batchRequests()[0]);
+
+    wire({ batch: { kind: 'created' } });
+    fire();
+    await waitFor(() => expect(firedBatches).toHaveLength(1));
+    expect(batchRequests()[2]).toEqual(batchRequests()[0]);
+    fire();
+    await waitFor(() => expect(firedBatches).toHaveLength(2));
+    expect(batchRequests()[3].token).not.toBe(batchRequests()[0].token);
+  });
+
+  it('keeps an unreadable answer token, but changes it when the request changes', async () => {
+    wire({ batch: { kind: 'neither' } });
+    renderForm();
+    pasteDevices('therm-1');
+    await typeCommandKey('reboot');
+    chooseAllOrNothing();
+    fire();
+    await screen.findByText(/Check the batch list/i);
+    fire();
+    await waitFor(() => expect(batchRequests()).toHaveLength(2));
+    await screen.findByText(/Check the batch list/i);
+    expect(batchRequests()[1]).toEqual(batchRequests()[0]);
+    await typeCommandKey('toggle-relay');
+    fire();
+    await waitFor(() => expect(batchRequests()).toHaveLength(3));
+    expect(batchRequests()[2].token).not.toBe(batchRequests()[0].token);
   });
 
   // The counterweight: a token is spent once per PRESS, not once per click. Three things
@@ -455,11 +496,11 @@ describe('CreateBatchForm outcome', () => {
     expect(firedBatches[0]).toMatchObject({ token: 'batch-new', accepted: 2, resolved: 3 });
   });
 
-  // A thrown error is the OTHER failure, and the difference is load-bearing: the service
+  // A GraphQL error is the OTHER failure, and the difference is load-bearing: the service
   // guarantees an undecided batch creates nothing, so here — and only here — a retry is
   // free and the screen says so.
   it('says a retry is safe when the batch could not be decided', async () => {
-    wire({ batch: { kind: 'threw', error: new Error('device:read required') } });
+    wire({ batch: { kind: 'threw', error: new GraphQLRequestError('device:read required', 200, [{ message: 'device:read required' }]) } });
     renderForm();
     await waitFor(() => expect(gqlMock).toHaveBeenCalled());
 
@@ -471,6 +512,9 @@ describe('CreateBatchForm outcome', () => {
     expect(await screen.findByText('device:read required')).toBeTruthy();
     expect(screen.getByText(/nothing was created/)).toBeTruthy();
     expect(firedBatches).toHaveLength(0);
+    fire();
+    await waitFor(() => expect(batchRequests()).toHaveLength(2));
+    expect(batchRequests()[1].token).not.toBe(batchRequests()[0].token);
   });
 });
 
