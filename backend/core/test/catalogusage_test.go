@@ -98,6 +98,40 @@ func TestScanOfNothingRefuses(t *testing.T) {
 	}
 }
 
+func TestScanShardGroupHelpers(t *testing.T) {
+	services, sf, kf := writeTree(t, map[string]string{
+		"services/device-management/main.go": `package main
+import (
+ groups "github.com/devicechain-io/dc-microservice/shardgroups"
+ other "example.com/shardgroups"
+)
+func f(nmgr *M, suffix string) {
+ groups.Enable(nmgr)
+ groups.NewReaders(nmgr, streams.InboundEvents)
+ groups.NewReaders(nmgr, suffix)
+ other.Enable(nmgr)
+ other.NewReaders(nmgr, streams.DeadLetters)
+}
+`,
+	})
+	uses, unresolved, _, err := scanCatalogUses(services, sf, kf, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := usedBy(uses)
+	for _, want := range []catalogUse{
+		{Area: "device-management", Role: useRead, Name: streams.InboundEvents},
+		{Area: "device-management", Role: useBucket, Name: "dc_partition_placement"},
+	} {
+		if !got[want] {
+			t.Errorf("scan missed %+v; found %v", want, uses)
+		}
+	}
+	if len(uses) != 2 || len(unresolved) != 1 {
+		t.Fatalf("want two helper uses and one unresolved suffix, got %v, %v", uses, unresolved)
+	}
+}
+
 // The scan has to be looking at the real tree: aim it at a use that is known to exist.
 func TestScanFindsKnownUsesInTheRealTree(t *testing.T) {
 	root := workspaceRoot(t)

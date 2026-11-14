@@ -66,8 +66,18 @@ var useMethods = map[string]useCall{
 	"SparkplugCommandsAwaitingStore": {role: useBucket, arg: -1, bucket: "dc_sparkplug_commands_awaiting"},
 }
 
+// These core helpers open resources on the calling service's behalf. Match the
+// full import path (including aliases), so unrelated package functions stay out
+// of the scan. Shard groups retain the logical suffix and its existing roles.
+var useFunctions = map[string]map[string]useCall{
+	"github.com/devicechain-io/dc-microservice/shardgroups": {
+		"Enable":     {role: useBucket, arg: -1, bucket: "dc_partition_placement"},
+		"NewReaders": {role: useRead, arg: 1},
+	},
+}
+
 // scanCatalogUses reads every production Go file under servicesDir/<area>/ and returns each
-// use of useMethods it can resolve to a stream suffix or bucket name.
+// use of useMethods or useFunctions it can resolve to a stream suffix or bucket name.
 //
 // unresolved lists the calls whose argument it could NOT resolve and that are not in dynamic:
 // a stream chosen at run time. They are returned rather than skipped, because a scan that
@@ -137,12 +147,12 @@ func scanCatalogUses(servicesDir, streamsFile, kvFile string, dynamic map[string
 					return true
 				}
 				uc, ok := useMethods[sel.Sel.Name]
-				if !ok {
-					return true
-				}
 				// bufio.NewReader, bytes.NewReader, tabwriter.NewWriter...: a function of an
 				// imported package, not a method of the manager.
-				if id, isIdent := sel.X.(*ast.Ident); isIdent && imports[id.Name] {
+				if id, isIdent := sel.X.(*ast.Ident); isIdent && imports[id.Name] != "" {
+					uc, ok = useFunctions[imports[id.Name]][sel.Sel.Name]
+				}
+				if !ok {
 					return true
 				}
 				pos := fset.Position(call.Pos())
@@ -181,15 +191,15 @@ func scanCatalogUses(servicesDir, streamsFile, kvFile string, dynamic map[string
 	return uses, unresolved, usedDynamic, nil
 }
 
-func importNames(f *ast.File) map[string]bool {
-	out := map[string]bool{}
+func importNames(f *ast.File) map[string]string {
+	out := map[string]string{}
 	for _, im := range f.Imports {
 		p, _ := strconv.Unquote(im.Path.Value)
 		name := p[strings.LastIndex(p, "/")+1:]
 		if im.Name != nil {
 			name = im.Name.Name
 		}
-		out[name] = true
+		out[name] = p
 	}
 	return out
 }

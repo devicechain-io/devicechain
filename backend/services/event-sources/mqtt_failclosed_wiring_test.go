@@ -54,8 +54,9 @@ func fcWiringBrokerWith(t *testing.T, on, gateway bool) (nats.JetStreamContext, 
 
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true,
-		StoreDir: dctest.JetStreamStoreDir(t),
-		MQTT:     natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1},
+		StoreDir:          dctest.JetStreamStoreDir(t),
+		JetStreamMaxStore: dctest.JetStreamMaxStore,
+		MQTT:              natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1},
 	})
 	require.NoError(t, err)
 	go srv.Start()

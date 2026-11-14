@@ -27,6 +27,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/shardgroups"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
@@ -36,8 +37,9 @@ import (
 )
 
 var (
-	Microservice  *core.Microservice
-	Configuration *config.DeviceManagementConfiguration
+	stopStreamSharding context.CancelFunc
+	Microservice       *core.Microservice
+	Configuration      *config.DeviceManagementConfiguration
 
 	// Svc owns the three managers below and the order of all four of their lifecycle
 	// phases. They stay named here because the rest of this service refers to them
@@ -535,19 +537,25 @@ func createPublishWriters(nmgr *messaging.NatsManager) error {
 
 // createInboundReaders builds the configured number of pull readers on the inbound-events
 // durable (resolution.inboundReaders), each subscribed to the cross-tenant wildcard. They are
-// readers of ONE consumer: the broker hands each message to exactly one of them, and each
+// readers of one consumer per configured shard group (one legacy consumer when off):
+// the broker hands each message to exactly one of them, and each
 // keeps its own pull in flight, so the pod reads as deep as that many replicas would while
 // keeping one set of caches. It is a function of its own so resolution_wiring_test.go can
 // check the setting reaches the broker: a processor test builds its own readers.
 func createInboundReaders(nmgr *messaging.NatsManager) error {
+	stop, err := shardgroups.Enable(nmgr)
+	if err != nil {
+		return err
+	}
+	stopStreamSharding = stop
 	n := Configuration.Resolution.InboundReaderCount()
 	readers := make([]messaging.MessageReader, 0, n)
 	for i := 0; i < n; i++ {
-		r, err := nmgr.NewReader(streams.InboundEvents)
+		groupReaders, err := shardgroups.NewReaders(nmgr, streams.InboundEvents)
 		if err != nil {
 			return err
 		}
-		readers = append(readers, r)
+		readers = append(readers, groupReaders...)
 	}
 	InboundEventsReaders = readers
 
@@ -1335,6 +1343,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// ack/clear mutation tries to publish an alarm event to a NATS connection that is
 	// already shutting down (mirrors the start order). core/service walks them in exactly
 	// that order, for every service.
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
 	return Svc.Stop(ctx)
 }
 
@@ -1385,6 +1396,9 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
 	// that actually closes handles, and which both consumers above still precede.
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
 	return Svc.Terminate(ctx)
 }
 
