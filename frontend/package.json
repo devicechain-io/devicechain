@@ -8,6 +8,7 @@
     "packages/*"
   ],
   "scripts": {
+    "create-widget": "node scripts/create-widget.mjs",
     "dev": "npm run dev -w @devicechain/console",
     "dev:dash": "npm run dev -w @devicechain/dashboard",
     "build:packages": "node scripts/build-packages.mjs",
@@ -16,6 +17,7 @@
     "codegen": "npm run codegen -w @devicechain/console",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
+    "posttest": "node --test scripts/create-widget.integration.mjs",
     "test:scripts": "node --test scripts/*.test.mjs",
     "lint": "npm run lint --workspaces --if-present"
   },

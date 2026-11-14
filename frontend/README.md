@@ -35,6 +35,24 @@ frontend/
                      Themed via CSS vars (no Tailwind — run anywhere).
 ```
 
+## Create a custom widget
+
+From `frontend`, run `npm run create-widget -- acme/tank-level ../my-widget`
+to generate a standalone TypeScript package. The destination's parent must exist;
+the command refuses any existing destination, including an empty directory.
+Use a lowercase `scope/name` id with letters, digits and single hyphens.
+
+The scaffold takes SDK peer versions from this checkout. If they are development
+placeholders (`0.0.0-dev`), set the `@devicechain/*` peer ranges to released
+versions before installing, as in the existing tank-level example.
+In the generated directory, run `npm install`, `npm run typecheck`, and
+`npm run build`. Import its `widget` export into your host's
+`createWidgetRegistry` list. SDK and React are peers so the host shares its
+contexts with the widget. The starter is a static DOM card; follow the
+[custom widget guide](../docs/docs/guides/writing-a-custom-widget.md) to add data
+channels, options and interactions. Review package metadata and licensing before
+publishing; generated packages are private by default.
+
 ## Stack
 
 - **React 19** + **TypeScript** (strict), bundled with **Vite 8**
