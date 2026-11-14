@@ -131,7 +131,7 @@ func TestDetectionPositionFilterCachesAndBoundsDecisions(t *testing.T) {
 	}
 	for i := len(f.allowed); i < maxPositionFilterEntries; i++ {
 		id := fmt.Sprintf("unknown-%d", i)
-		f.allowed[id] = false
+		f.allowed[id] = positionDecision{allowed: false, at: time.Now()}
 		f.order = append(f.order, id)
 	}
 	f.store = store
@@ -153,5 +153,33 @@ func TestDetectionStreamWithholdsOnRuleLoadError(t *testing.T) {
 	f := positionFilter{store: store}
 	if f.allow(ctx, "acme/p@1/threshold") {
 		t.Fatal("rule load error must withhold the event")
+	}
+}
+
+// A rule id is not unique for all time: a profile deleted and created again under the same
+// token restarts its versions, so "{profile}@1/{rule}" can come back holding a geofence rule.
+// A cached "allowed" must therefore expire, and the re-read must see the fence.
+func TestDetectionPositionDecisionExpiresWhenARuleIdIsReused(t *testing.T) {
+	store, _ := evStores(t)
+	ctx := previewCtx(auth.DeviceRead)
+	row := detectionRule("reused", plainDraft)
+	if err := store.Upsert(ctx, []model.DetectRule{row}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	f := positionFilter{store: store, now: func() time.Time { return now }}
+	if !f.allow(ctx, row.RuleId) {
+		t.Fatal("a threshold rule must be delivered")
+	}
+	fence := detectionRule("reused", fenceDraft)
+	if fence.RuleId != row.RuleId {
+		t.Fatalf("test setup: ids differ %q %q", fence.RuleId, row.RuleId)
+	}
+	if err := store.Upsert(ctx, []model.DetectRule{fence}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(positionDecisionTTL)
+	if f.allow(ctx, row.RuleId) {
+		t.Fatal("an expired decision was trusted after the rule id came back as a geofence rule")
 	}
 }

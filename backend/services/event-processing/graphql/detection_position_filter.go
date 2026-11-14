@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -12,21 +13,42 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const maxPositionFilterEntries = 1024
+const (
+	maxPositionFilterEntries = 1024
+	// positionDecisionTTL bounds how long a decision is trusted. A published version's rules
+	// never change, but a rule id is NOT unique for all time: "{profile}@{n}" restarts when a
+	// profile is deleted and created again under the same token, so the same id can come back
+	// holding a geofence rule. A decision is therefore re-read after this long rather than
+	// held for the life of the subscription.
+	positionDecisionTTL = 30 * time.Second
+)
 
-// positionFilter belongs to one subscription goroutine. Cache both allow and deny decisions
-// by immutable, versioned rule ID. FIFO eviction bounds memory across profile versions;
-// evicted decisions can safely be recomputed without withholding unrelated detections.
+type positionDecision struct {
+	allowed bool
+	at      time.Time
+}
+
+// positionFilter belongs to one subscription goroutine. It caches decided answers by rule id
+// for positionDecisionTTL; FIFO eviction bounds memory across profile versions, and an
+// evicted or expired decision is simply recomputed.
 type positionFilter struct {
 	store   *model.DetectRuleStore
-	allowed map[string]bool
+	now     func() time.Time // nil: time.Now
+	allowed map[string]positionDecision
 	order   []string
 	next    int
 }
 
+func (f *positionFilter) clock() time.Time {
+	if f.now != nil {
+		return f.now()
+	}
+	return time.Now()
+}
+
 func (f *positionFilter) allow(ctx context.Context, ruleID string) bool {
-	if allowed, ok := f.allowed[ruleID]; ok {
-		return allowed
+	if d, ok := f.allowed[ruleID]; ok && f.clock().Sub(d.at) < positionDecisionTTL {
+		return d.allowed
 	}
 	if f.store == nil {
 		log.Debug().Str("rule", ruleID).Msg("detection subscription: rule store unavailable; withholding event")
@@ -59,7 +81,11 @@ func (f *positionFilter) allow(ctx context.Context, ruleID string) bool {
 // rule for the rest of the subscription; it is asked again on the rule's next detection.
 func (f *positionFilter) remember(ruleID string, allowed bool) {
 	if f.allowed == nil {
-		f.allowed = make(map[string]bool)
+		f.allowed = make(map[string]positionDecision)
+	}
+	if _, ok := f.allowed[ruleID]; ok {
+		f.allowed[ruleID] = positionDecision{allowed: allowed, at: f.clock()}
+		return
 	}
 	if len(f.allowed) == maxPositionFilterEntries {
 		delete(f.allowed, f.order[f.next])
@@ -68,5 +94,5 @@ func (f *positionFilter) remember(ruleID string, allowed bool) {
 	} else {
 		f.order = append(f.order, ruleID)
 	}
-	f.allowed[ruleID] = allowed
+	f.allowed[ruleID] = positionDecision{allowed: allowed, at: f.clock()}
 }
