@@ -5,6 +5,8 @@ title: Sending a Command
 
 # Sending a Command
 
+Before you start, register the target device and, for a declared command vocabulary, attach and publish a profile that declares the command. To complete the lifecycle, connect a device client that can receive commands and report their outcomes; an HTTP telemetry POST alone cannot do that. The [quickstart continuation](../quickstart/first-device.md#next-an-alarm-and-a-command) walks through this setup.
+
 This guide covers the operator's half of two-way command dispatch: you issue a command, tell
 an accepted one from a refused one, and follow it to an outcome. The device's half — receiving
 a command and reporting what happened — is in
@@ -58,8 +60,7 @@ mutation {
     token: "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
     deviceToken: "sensor-001",
     name: "reboot",          # the commandKey, not the display name
-    payload: "{\"delaySeconds\":5}",
-    expiresAt: "2026-08-15T00:00:00Z"
+    payload: "{\"delaySeconds\":5}"
   }) {
     command { token status queuedTime }
     rejection { code reason }
@@ -159,8 +160,10 @@ Use `statuses` when you care about a set. "Everything still in flight for this d
 An empty `statuses` list is ignored rather than matching nothing.
 
 What each terminal state tells you is in [Commands](../concepts/commands.md#command-lifecycle).
-The pair to remember: `EXPIRED` means the command never reached a device, and `TIMEOUT`
-means it did. A run of `EXPIRED` points at dispatch; a run of `TIMEOUT` points at the device.
+The pair to remember: `EXPIRED` means the command expired before delivery; `TIMEOUT` means
+it expired in `SENT`, dispatched and unanswered. Receipt and execution remain unknown
+(`outcome: UNKNOWN`): a device can disconnect between the presence check and publication.
+For repeated `TIMEOUT`, investigate both delivery and device response handling.
 
 ## Cancel a command {#cancel-one}
 

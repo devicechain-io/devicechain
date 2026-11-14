@@ -225,7 +225,7 @@ jobs:
       # off so `exec.LookPath("tofu")` finds the real binary, not the action's shim.
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2
         with:
-          tofu_version: 1.9.1
+          tofu_version: 1.10.10
           tofu_wrapper: false
 
       # ko: only the --build path needs it (dcctl shells out to ko to build each

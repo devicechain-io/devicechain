@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
@@ -38,13 +39,14 @@ import (
 // a deferral exists to hold a purge open for, and deferring on it would deadlock every
 // purge on any instance running an edge agent.
 type Broker struct {
-	conn       messaging.Connection
-	instanceId string
+	conn        messaging.Connection
+	instanceId  string
+	shardGroups *config.NatsShardGroupsConfiguration
 }
 
 // NewBroker builds the broker store over the service's existing NATS connection.
-func NewBroker(conn messaging.Connection, instanceId string) *Broker {
-	return &Broker{conn: conn, instanceId: instanceId}
+func NewBroker(conn messaging.Connection, instanceId string, shardGroups *config.NatsShardGroupsConfiguration) *Broker {
+	return &Broker{conn: conn, instanceId: instanceId, shardGroups: shardGroups}
 }
 
 func (b *Broker) Name() string { return StoreBroker }
@@ -63,7 +65,7 @@ func (b *Broker) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 			"can be erased from it — the ledger records this as retryable", tenant)
 	}
 
-	res, err := messaging.PurgeTenant(ctx, nc, b.instanceId, tenant)
+	res, err := messaging.PurgeTenant(ctx, nc, b.instanceId, tenant, b.shardGroups)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("purging the broker for %q: %w", tenant, err)
 	}

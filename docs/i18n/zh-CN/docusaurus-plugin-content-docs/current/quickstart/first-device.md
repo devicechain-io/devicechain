@@ -243,7 +243,7 @@ curl -i -X POST http://localhost:8081/devicechain/sim-demo/events \
 
 路径是 `/{instanceId}/{tenant}/events`。`devicechain` 是第 1 步的实例，`sim-demo` 是第 2 步的租户。这里的 `404` 表示**实例 ID**有误，因为路由只存在于当前实例自己的 ID 下。
 
-错误的**租户**不会返回 `404`。只要租户名称格式正确，无论该名称的租户是否存在，都会以 `202` 接受请求。事件会在下游被丢弃，响应不会说明这一点。如果收到 `202` 却没有数据，请先检查租户名称。
+错误的**租户**不会返回 `404`。在正常连接相关服务的实例上，权威查询确认租户不存在或凭据被拒绝时，会在发布前返回 `401`，响应体同为 `{"error":"unauthorized"}`。如果验证依赖无法确定结果，这些检查会放行，因此 `202` 只确认入队，并不确认租户和凭据验证成功或处理完成。
 
 再发送几条不同数值的读数，这样看到的就是一条曲线，而不是一个点：
 
@@ -288,13 +288,40 @@ curl -s -X POST http://localhost/api/event-management/graphql \
 | 接入 `POST` 返回 `404` | 路径中的**实例 ID**有误。如果你没有修改，它应是 `devicechain`。错误的租户不会产生这个状态码。 |
 | `:8081` 连接被拒绝 | 第 5 步的端口转发没有运行。 |
 | 接入 `POST` 返回 `400` | 使用了裸数字而非字符串、读数未放入 `entries`，或租户路径片段不是有效的令牌。 |
-| 返回 `202`，但没有数据显示 | **租户**不存在（格式正确的名称都会被接受，无论它是否对应真实租户），或凭据不匹配。请求体中的 `credentialId` 必须与第 4 步创建的完全一致。 |
+| 接入 `POST` 返回 `401` | 权威查询确认租户不存在，或凭据被拒绝。请检查租户和第 4 步的凭据；两种情况返回相同的未授权响应体。 |
+| 返回 `202`，但没有数据显示 | 入队成功，处理是异步的。请检查处理诊断信息、租户和第 4 步的凭据。如果验证依赖无法确定结果，检查会放行。 |
 | 接入 `POST` 返回 `429` | 租户超过接入上限：你每秒发送的读数多于其层级允许的数量。事件未被接受。响应带有 `Retry-After` 标头，请退避后重试。 |
 | 接入 `POST` 返回带 `Retry-After` 标头的 `503` | 平台正在拒绝所有租户的新事件（[背压](../deployment/observability.md#ingest-backpressure)）。事件**没有**被存储。等待 `Retry-After` 指定的秒数（10），再重新发送。`curl -i` 会输出响应标头。 |
 | 接入 `POST` 返回不带 `Retry-After` 标头的 `503` | 事件无法交给消息流，但仍**可能**已被存储。请重新发送，不过除非事件包含 `altId` 和 `occurredTime`，否则重发会存储第二份副本（参见[服务质量](../guides/connecting-a-device.md#quality-of-service)）。 |
 | API 调用返回未授权 | 访问令牌已过期，或你发送的是第 3 步第一次调用返回的 `identityToken`，而不是第二次返回的 `accessToken`。 |
 
 `202`、`400` 和 `404` 对于该次请求都是终止结果：不要原样重发。对于 `429` 和两种 `503`，请按上文说明重试。
+
+## 下一步：告警和命令 {#next-an-alarm-and-a-command}
+
+继续使用 `sim-demo` 中的 `sensor-001`，并以 `demo@sim.devicechain.local` 登录。第 4 步创建的设备没有配置文件：可以存储读数，但没有检测规则或声明的命令。如果 `DC_TOKEN` 已过期，请按第 3 步刷新。
+
+### 触发第一条告警 {#first-alarm}
+
+1. 在 **Devices → Device Profiles** 中创建配置文件，令牌为 `temp-probe-profile`，名称为 **Temperature probe profile**，类别为 **sensor**。在 **Metrics** 中添加指标，令牌和键均为 `temperature`，类型为 **DOUBLE**，单位为 `Cel`。
+2. 在 **Devices → Device Types** 中打开 `temp-probe`，在 **Profile** 中关联 `temp-probe-profile`。参见[设备类型和配置文件](../user-guide/device-types-and-profiles.md)。
+3. 在配置文件的 **Detection Rules** 中选择 **New detection rule → Form**。令牌设为 `temperature-high`，名称为 **Temperature high**，类型为 **Threshold**，严重程度为 **Warning**，勾选 **Enabled**。条件设为 `temperature > 25`，添加 **Raise alarm** 操作，告警键为 `temperature-high`。保存规则，然后在 **Versions** 中选择 **Publish**。保存的草稿不会运行。参见[检测规则](../user-guide/detection-rules.md)。
+4. 重复第 6 步的 HTTP 请求，将读数改为 `"temperature":"30.0"`。在 **Monitor → Alarms** 中找到 `sensor-001` 的活动告警，再发送 `"temperature":"21.5"` 清除它。必须在发布后发送新读数；旧读数不会自动回放。
+
+### 发送第一条命令 {#first-command}
+
+1. 在同一配置文件的 **Commands** 中添加命令，令牌和命令键均为 `identify`，名称为 **Identify**，影响为 **Normal**，不设置参数模式。再次 **Publish** 配置文件。
+2. 第 6 步的 HTTP `curl` 无法接收命令。发送前，按[接收命令](../guides/connecting-a-device.md#receiving-commands)启动 MQTT 订阅客户端（安装 Mosquitto 客户端，并按该指南使用实例 CA）。使用主机 `localhost`、客户端 ID `devicechain:sim-demo:sensor-001:sub`、用户名 `sim-demo:$DC_CRED_ID`（展开 shell 变量）、`ACCESS_TOKEN` 凭证的密码 `$DC_CRED_ID`，以及主题 `devicechain/sim-demo/device-commands/sensor-001`。保持连接。本地连接 `localhost` 时，还需按照指南处理 TLS 主机名验证。
+3. 在租户 API 上发出这条无害的测试命令：
+
+```bash
+curl -s -X POST http://localhost/api/command-delivery/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"mutation { createCommand(request: {token: \"first-identify\", deviceToken: \"sensor-001\", name: \"identify\", payload: \"{}\"}) { command { token status } rejection { code reason } } }"}'
+```
+
+4. 检查 `rejection`：应为 null，且必须存在 `command`。读取订阅客户端收到的派发信封。按[响应命令](../guides/connecting-a-device.md#responding-to-a-command)，向 `devicechain/sim-demo/command-responses/sensor-001` 发布 `success: true`。使用相同的 MQTT 凭证、不同的客户端 ID 后缀，以及信封中实际的 `token` 和 `dispatchNonce`。这只确认测试，没有物理设备执行操作。
+5. 在 `sensor-001` 的 **Commands** 页签中，确认 `first-identify` 达到 **SUCCESSFUL**。没有响应时会保持 **SENT** 直到超时；没有接收连接时可能保持 **HELD**。[发送命令](../guides/sending-commands.md)介绍拒绝、轮询和取消。再次测试时，请使用新的命令令牌。
 
 ## 下一步 {#where-to-go-next}
 

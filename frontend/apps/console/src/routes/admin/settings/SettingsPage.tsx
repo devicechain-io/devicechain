@@ -51,6 +51,9 @@ import { useReload, errMessage } from '@/routes/common';
 import { SECTIONS } from './sections';
 import { RAW_JSON_SECTION } from './RawJsonEditor';
 import type { SettingSection } from './registry';
+import { FunctionalAreasPanel } from './FunctionalAreasPanel';
+
+const FUNCTIONAL_AREAS_TAB = 'functional-areas';
 
 /** Renders a stored JSON value multi-line for editing; an unparseable value is
  *  shown verbatim rather than lost. */
@@ -132,24 +135,11 @@ export default function SettingsPage() {
       </PageShell>
     );
   }
-  if (error) {
-    return (
-      <PageShell title={t('title')} description={t('description')}>
-        <ErrorState description={error} />
-      </PageShell>
-    );
-  }
-  if (panels.length === 0) {
-    return (
-      <PageShell title={t('title')} description={t('description')}>
-        <EmptyState description={t('noSettingsDefined')} />
-      </PageShell>
-    );
-  }
-
   return (
     <PageShell title={t('title')} description={t('description')}>
-      <Tabs defaultValue={panels[0].setting.key}>
+      {error && <ErrorState description={error} />}
+      {!error && panels.length === 0 && <EmptyState description={t('noSettingsDefined')} />}
+      <Tabs defaultValue={panels[0]?.setting.key ?? FUNCTIONAL_AREAS_TAB}>
         <TabsList>
           {panels.map(({ setting, section }) => (
             <TabsTrigger key={setting.key} value={setting.key} className="flex items-center gap-1.5">
@@ -157,7 +147,12 @@ export default function SettingsPage() {
               {section.labelKey ? t(section.labelKey) : setting.key}
             </TabsTrigger>
           ))}
+          <TabsTrigger value={FUNCTIONAL_AREAS_TAB}>{t('functionalAreasTitle')}</TabsTrigger>
         </TabsList>
+
+        <TabsContent value={FUNCTIONAL_AREAS_TAB}>
+          <FunctionalAreasPanel />
+        </TabsContent>
 
         {panels.map(({ setting, section }) => (
           <TabsContent key={setting.key} value={setting.key}>

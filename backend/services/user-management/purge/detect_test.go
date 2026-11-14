@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/devicechain-io/dc-microservice/messaging"

@@ -11,10 +11,32 @@ import (
 )
 
 func newBackupCmd() *cobra.Command {
+	var opts backupOptions
 	parent := &cobra.Command{
-		Use:   "backup",
-		Short: "Inspect local backup sets",
+		Use:   "backup <instance> --destination <dir>",
+		Short: "Export instance streams and blobs, or inspect a local backup set",
+		Long:  "Export checkpoint-preserved JetStream streams with consumers and instance blobs.\nFreeze writers before export. This does not coordinate database recovery cutoffs or maintenance mode.",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 && cmd.Flags().NFlag() == 0 {
+				return nil
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return cmd.Help()
+			}
+			if opts.Destination == "" {
+				return fmt.Errorf("--destination is required")
+			}
+			opts.InstanceID = args[0]
+			return backupInstance(cmd.Context(), opts)
+		},
 	}
+	parent.Flags().StringVar(&opts.Destination, "destination", "", "New local backup directory (must not exist)")
+	parent.Flags().StringVar(&opts.KubeContext, "kube-context", "", "Kubernetes context of the installed instance")
+	parent.Flags().StringVar(&opts.NatsURL, "nats-url", "", "Reachable broker URL (default: port-forward)")
+	parent.Flags().StringVar(&opts.BlobDirectory, "blob-directory", "", "Read-only mounted/exported filesystem blob PVC root")
 	var verify bool
 	inspect := &cobra.Command{
 		Use:   "inspect <backup-set-dir>",

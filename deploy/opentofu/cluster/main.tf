@@ -334,9 +334,7 @@ resource "terraform_data" "backup_removal_guard" {
 
 # 🔴 A PLAN-TIME REFUSAL, not an apply-time one, and not a variable validation.
 #
-# The condition spans two variables, and cross-variable references in a
-# `validation` block need a newer core than this root's `required_version = ">=
-# 1.6"` allows. A precondition on a terraform_data is the portable form and is
+# The condition spans two variables. A precondition on a terraform_data keeps
 # the shape this root already uses for the legacy-StatefulSet cutover guard.
 #
 # What it refuses is the configuration that CANNOT work and does not say so: an

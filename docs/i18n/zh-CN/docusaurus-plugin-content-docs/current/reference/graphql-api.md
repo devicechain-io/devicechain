@@ -823,8 +823,9 @@ mutation StepUp($refreshToken: String!, $code: String!) {
 
 ### 列表、输入和聚合的大小限制 {#size-bounds}
 
-除上述请求形态限制外，部分读取和输入还有大小限制。超出限制的请求会被拒绝，`extensions.code`
-为 `LIMIT_EXCEEDED`。不会截断，也不会部分应用，请缩小请求后重新发送。大小按字节而非字符计算。
+除上述请求形态限制外，部分读取和输入还有大小限制。除版本历史分页及下表注明的错误码外，
+超出限制的请求会被拒绝，`extensions.code` 为 `LIMIT_EXCEEDED`；请缩小请求后重新发送。
+版本历史默认最多返回 1,000 条，较大的限制值会被收窄为 1,000。大小按字节而非字符计算。
 
 | 限制 | 数值 | 适用于 |
 | --- | --- | --- |
@@ -833,7 +834,7 @@ mutation StepUp($refreshToken: String!, $code: String!) {
 | 规则定义 | 256 KiB | 检测规则的 `definition`，创建和更新时均适用。 |
 | 规则编排图 | 256 KiB | 检测规则的 `authoringGraph`，创建和更新时均适用。 |
 | 每次验证的规则数 | 1,000 | `validateDetectionRules` 的 `rules`。发布包含超过 1,000 条已启用检测规则的设备配置文件时，也会以相同方式拒绝。 |
-| 版本历史 | 每次调用 1,000 条 | `deviceProfileVersions`、`entityGroupVersions`、`assetTypeVersions`：最新的在前。用 `limit`（至少为 1）缩小范围，用 `offset`（不为负）翻页；超出此范围的值会被拒绝，`extensions.code` 为 `INVALID_VALUE`。 |
+| 版本历史 | 每次调用 1,000 条 | `deviceProfileVersions`、`entityGroupVersions`、`assetTypeVersions`：最新的在前。省略 `limit` 时默认为 1,000；较大的值会被收窄为 1,000。用 `offset`（默认 0）翻页。`limit` 小于 1 或 `offset` 为负时会被拒绝，错误码为 `INVALID_VALUE`。 |
 | 每次聚合的时间桶数 | 10,000 | `bucketedMeasurements`：时间范围除以 `intervalSeconds`，向上取整。 |
 | 每次聚合的行数 | 50,000 | `bucketedMeasurements`：时间桶数乘以返回的测量名称数。指定 `name` 过滤时为一个名称；未指定时为符合该读取过滤条件的所有不同测量名称。 |
 | 每次查找的键数 | 1,000 | 传给 `…ByToken`、`…ByExternalId` 等批量查询的令牌、外部 ID 或告警令牌列表（设备状态、最新位置、命令、命令批次、通知渠道、策略和状态）。 |

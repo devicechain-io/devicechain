@@ -54,10 +54,11 @@ import (
 func startEmbeddedNats(t *testing.T) (string, uint32) {
 	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
-		Host:      "127.0.0.1",
-		Port:      -1, // ephemeral
-		JetStream: true,
-		StoreDir:  dctest.JetStreamStoreDir(t),
+		Host:              "127.0.0.1",
+		Port:              -1, // ephemeral
+		JetStream:         true,
+		StoreDir:          dctest.JetStreamStoreDir(t),
+		JetStreamMaxStore: dctest.JetStreamMaxStore,
 	})
 	require.NoError(t, err)
 	go srv.Start()

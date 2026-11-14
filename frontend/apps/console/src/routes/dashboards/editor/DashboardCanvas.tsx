@@ -26,13 +26,14 @@
 //
 // It is CONTROLLED: the workspace owns the working DashboardDefinition (and the save/dirty
 // state); this component owns the gesture state only. Widgets render live (WYSIWYG) but inert, so
-// the pointer drives the gesture. Editing targets the 'base' breakpoint; per-breakpoint
-// responsive editing is deferred.
+// the pointer drives the gesture. The selected breakpoint controls placement reads and edits.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  basePlacement,
+  breakpointColumns,
+  breakpointMinWidth,
+  resolvePlacement,
   canHostRelative,
   DEFAULT_CANVAS_DENSITY,
   deleteWidget,
@@ -65,6 +66,7 @@ import { densityScale, tokenStyle, WidgetDensityProvider, WidgetFrameStyleProvid
 import { ConnectedWidget, WidgetSubjectProvider, resolveWidgets, widgetSubjectLabel } from '@devicechain/widgets';
 import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
 import { Button } from '@/components/ui/button';
+import { Select, SelectItem } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import {
   enabledHandles,
@@ -224,6 +226,12 @@ export function DashboardCanvas({
 }: DashboardCanvasProps) {
   const { t } = useTranslation('dashboards');
   const { grid, sizing, frame: canvasFrame } = definition.canvas;
+  const [selectedBreakpoint, setSelectedBreakpoint] = useState(BASE_BREAKPOINT);
+  const breakpoint = Object.prototype.hasOwnProperty.call(definition.canvas.breakpoints, selectedBreakpoint)
+    ? selectedBreakpoint
+    : BASE_BREAKPOINT;
+  const columns = breakpointColumns(definition.canvas, breakpoint);
+  const placementOf = (widget: WidgetInstance) => resolvePlacement(widget.layout, breakpoint);
   const [contentRef, measuredWidth] = useMeasuredWidth<HTMLDivElement>();
   // Each widget as it RENDERS: its slot resolved to a concrete selector. Render-only — the
   // editing transforms below act on `definition`, never on these copies.
@@ -242,7 +250,7 @@ export function DashboardCanvas({
   // The live cell at the current canvas width, the same math the viewer's CSS does: the grid's
   // width (the measured element sits inside the padding) less the gutters, shared by the
   // columns. Floored at 1 so an unmeasured (width 0) first frame can't divide-by-zero.
-  const cell = Math.max(1, (measuredWidth - (grid.columns - 1) * gutter.x) / grid.columns);
+  const cell = Math.max(1, (measuredWidth - (columns - 1) * gutter.x) / columns);
   const strides: Strides = { col: cell + gutter.x, row: cell + gutter.y };
   // Mirror the viewer's fixed-width sizing so editing a fixed-width board sees the
   // same cell size (hence the same widget sizes) it will render at — the ResizeObserver
@@ -270,7 +278,7 @@ export function DashboardCanvas({
     const widget = definition.widgets.find((w) => w.id === g.id);
     if (!widget) return definition;
     if (g.kind === 'move') {
-      return moveWidget(definition, g.id, moveTarget(g.origin, p.dx, p.dy, strides), grid.columns, { nearest: true });
+      return moveWidget(definition, g.id, moveTarget(g.origin, p.dx, p.dy, strides), columns, { nearest: true, breakpoint });
     }
     if (g.kind === 'resize') {
       return resizeWidget(
@@ -279,15 +287,15 @@ export function DashboardCanvas({
         resizeTarget(g.origin, g.handle, p.dx, p.dy, strides),
         limitsOf(widget),
         handleEdges(g.handle),
-        grid.columns,
-        { nearest: true },
+        columns,
+        { nearest: true, breakpoint },
       );
     }
     return setRelativeOffset(
       definition,
       g.id,
       { x: g.origin.x + p.dx / strides.col, y: g.origin.y + p.dy / strides.row },
-      { fine: p.shift, bounds: { cell, gutter, columns: grid.columns } },
+      { breakpoint, fine: p.shift, bounds: { cell, gutter, columns } },
     );
   };
   const previewRef = useRef(previewOf);
@@ -353,8 +361,8 @@ export function DashboardCanvas({
   // What is drawn: the preview while a gesture runs, the definition otherwise.
   const view = gesture ? previewOf(gesture, pointer) : definition;
   // Where every widget lands, relative ones included (they follow their host).
-  const rects = layoutRects(view.widgets, BASE_BREAKPOINT, cell, gutter);
-  const originalRects = gesture ? layoutRects(definition.widgets, BASE_BREAKPOINT, cell, gutter) : rects;
+  const rects = layoutRects(view.widgets, breakpoint, cell, gutter);
+  const originalRects = gesture ? layoutRects(definition.widgets, breakpoint, cell, gutter) : rects;
 
   // Give the scroll area room below the lowest widget so there's somewhere to drag.
   const contentHeight = Math.max(0, ...[...rects.values()].map((r) => r.y + r.h)) + 240;
@@ -409,7 +417,7 @@ export function DashboardCanvas({
     const placing = pickingFor;
     setPickingFor(null);
     if (canHostRelative(definition, placing, widget.id)) {
-      onChange(placeRelative(definition, placing, widget.id, 'top-right'), { action: 'placement', widgetId: placing });
+      onChange(placeRelative(definition, placing, widget.id, 'top-right', breakpoint), { action: 'placement', widgetId: placing });
       onSelect(placing);
       elements.current.get(placing)?.focus();
     }
@@ -424,7 +432,7 @@ export function DashboardCanvas({
     if (pickHost(widget)) return;
     setPickingFor(null);
     onSelect(widget.id);
-    const placement = basePlacement(widget);
+    const placement = placementOf(widget);
     if (placement.mode === 'grid') startGesture(e, { kind: 'move', id: widget.id, origin: placement });
     else startGesture(e, { kind: 'offset', id: widget.id, origin: placement.offset ?? { x: 0, y: 0 } });
   };
@@ -443,7 +451,7 @@ export function DashboardCanvas({
     const dy = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
     if (dx === 0 && dy === 0) return;
     e.preventDefault();
-    const p = basePlacement(widget);
+    const p = placementOf(widget);
     let next: DashboardDefinition;
     let action: CanvasEdit['action'] = 'move';
     if (p.mode === 'relative') {
@@ -453,7 +461,7 @@ export function DashboardCanvas({
         definition,
         widget.id,
         { x: (p.offset?.x ?? 0) + dx * step, y: (p.offset?.y ?? 0) + dy * step },
-        { fine: e.shiftKey, bounds: { cell, gutter, columns: grid.columns } },
+        { breakpoint, fine: e.shiftKey, bounds: { cell, gutter, columns } },
       );
     } else if (e.shiftKey) {
       action = 'resize';
@@ -463,16 +471,16 @@ export function DashboardCanvas({
         { col: p.col, row: p.row, cols: p.cols + dx, rows: p.rows + dy },
         limitsOf(widget),
         {},
-        grid.columns,
-        { nearest: true },
+        columns,
+        { nearest: true, breakpoint },
       );
     } else {
-      next = moveWidget(definition, widget.id, { col: p.col + dx, row: p.row + dy }, grid.columns, { nearest: true });
+      next = moveWidget(definition, widget.id, { col: p.col + dx, row: p.row + dy }, columns, { nearest: true, breakpoint });
     }
     if (next === definition) return;
     onChange(next, { action, widgetId: widget.id });
     const after = next.widgets.find((w) => w.id === widget.id);
-    const q = after && basePlacement(after);
+    const q = after && placementOf(after);
     if (q?.mode === 'grid') {
       setAnnouncement(t('canvasAnnounce', { name: nameOf(widget), size: formatSpan(q), col: q.col + 1, row: q.row + 1 }));
     } else if (q?.mode === 'relative') {
@@ -481,7 +489,7 @@ export function DashboardCanvas({
   };
 
   const toolbar = (widget: WidgetInstance, rect: Rect) => {
-    const placement = basePlacement(widget);
+    const placement = placementOf(widget);
     return (
       <FloatingToolbar rect={rect} canvasWidth={measuredWidth} roomAbove={rect.y + pad.top + TOOLBAR_ROOM}>
         <div role="group" aria-label={t('canvasPlacementLabel')} className="flex gap-px">
@@ -490,7 +498,7 @@ export function DashboardCanvas({
             pressed={placement.mode === 'grid'}
             onClick={() => {
               setPickingFor(null);
-              onChange(placeOnGrid(definition, widget.id), { action: PLACEMENT_EDIT, widgetId: widget.id });
+              onChange(placeOnGrid(definition, widget.id, breakpoint), { action: PLACEMENT_EDIT, widgetId: widget.id });
             }}
           >
             {t('canvasPlacementGrid')}
@@ -506,7 +514,7 @@ export function DashboardCanvas({
         {placement.mode === 'relative' && (
           <AnchorPicker
             value={placement.anchor}
-            onPick={(anchor) => onChange(setRelativeAnchor(definition, widget.id, anchor), { action: ANCHOR_EDIT, widgetId: widget.id })}
+            onPick={(anchor) => onChange(setRelativeAnchor(definition, widget.id, anchor, breakpoint), { action: ANCHOR_EDIT, widgetId: widget.id })}
           />
         )}
         {onDuplicate && widget.type !== UNKNOWN_WIDGET_TYPE && (
@@ -570,7 +578,7 @@ export function DashboardCanvas({
 
   const guides: ReactNode[] = [];
   for (const widget of view.widgets) {
-    const p = basePlacement(widget);
+    const p = placementOf(widget);
     if (p.mode !== 'relative') continue;
     const host = rects.get(p.host);
     const box = rects.get(widget.id);
@@ -591,7 +599,7 @@ export function DashboardCanvas({
     if (!rect) return null;
     if (gesture?.kind === 'move' && gesture.id === widget.id) {
       const o = originalRects.get(widget.id) ?? rect;
-      const total = spanPx(grid.columns, cell, gutter.x);
+      const total = spanPx(columns, cell, gutter.x);
       return {
         rect: { ...o, x: Math.min(Math.max(0, o.x + pointer.dx), Math.max(0, total - o.w)), y: Math.max(0, o.y + pointer.dy) },
         dragging: true,
@@ -610,6 +618,29 @@ export function DashboardCanvas({
       }}
       style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto' }}
     >
+      <label
+        className="sticky left-0 top-0 z-[400] flex items-center gap-2 bg-background px-3 py-2 text-sm"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {t('canvasBreakpoint')}
+        <Select
+          ariaLabel={t('canvasBreakpoint')}
+          value={breakpoint}
+          onChange={(value) => {
+            setGesture(null);
+            setPickingFor(null);
+            setSelectedBreakpoint(value);
+          }}
+        >
+          {Object.entries(definition.canvas.breakpoints)
+            .sort(([a, x], [b, y]) =>
+              a === BASE_BREAKPOINT ? -1 : b === BASE_BREAKPOINT ? 1 : breakpointMinWidth(x) - breakpointMinWidth(y),
+            )
+            .map(([name]) => (
+              <SelectItem key={name} value={name}>{name}</SelectItem>
+            ))}
+        </Select>
+      </label>
       {pickingFor && (
         // Over everything on the canvas, the selected widget's toolbar (250) and the placement
         // guides (300) included: scrolled, they pass under it, and it is what tells the author
@@ -663,7 +694,7 @@ export function DashboardCanvas({
               const box = boxOf(widget);
               if (!box) return null;
               const { rect, dragging } = box;
-              const placement = basePlacement(widget);
+              const placement = placementOf(widget);
               const selected = widget.id === selectedId;
               const layout = widget.type === UNKNOWN_WIDGET_TYPE ? undefined : registry.descriptor(widget.type)?.layout;
               const pinned = pinnedAxes(layout?.resize);

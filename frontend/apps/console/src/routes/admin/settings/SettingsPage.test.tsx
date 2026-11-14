@@ -296,6 +296,7 @@ describe('the tab bar', () => {
       'Branding',
       'Map',
       'some.future.key',
+      'Functional areas',
     ]);
   });
 });

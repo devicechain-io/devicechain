@@ -945,6 +945,7 @@ export interface EditHistory<T, L> {
 ```ts
 export interface EditOptions {
     nearest?: boolean;
+    breakpoint?: string;
 }
 ```
 
@@ -3451,12 +3452,14 @@ export declare function pinnedAxes(mode: WidgetResizeMode | undefined): readonly
 
 ```ts
 export declare function placeOnGrid(def: DashboardDefinition, id: string): DashboardDefinition;
+export declare function placeOnGrid(def: DashboardDefinition, id: string, breakpoint?: string): DashboardDefinition;
 ```
 
 ## `.:placeRelative`
 
 ```ts
 export declare function placeRelative(def: DashboardDefinition, id: string, hostId: string, anchor: PlacementAnchor): DashboardDefinition;
+export declare function placeRelative(def: DashboardDefinition, id: string, hostId: string, anchor: PlacementAnchor, breakpoint?: string): DashboardDefinition;
 ```
 
 ## `.:presetIdOf`
@@ -3680,6 +3683,7 @@ export declare function setCanvasSizing(def: DashboardDefinition, sizing: Canvas
 
 ```ts
 export declare function setRelativeAnchor(def: DashboardDefinition, id: string, anchor: PlacementAnchor): DashboardDefinition;
+export declare function setRelativeAnchor(def: DashboardDefinition, id: string, anchor: PlacementAnchor, breakpoint?: string): DashboardDefinition;
 ```
 
 ## `.:setRelativeOffset`
@@ -3691,6 +3695,14 @@ export declare function setRelativeOffset(def: DashboardDefinition, id: string, 
 }, options?: {
     fine?: boolean;
     bounds?: RelativeBounds;
+}): DashboardDefinition;
+export declare function setRelativeOffset(def: DashboardDefinition, id: string, offset: {
+    x: number;
+    y: number;
+}, options?: {
+    fine?: boolean;
+    bounds?: RelativeBounds;
+    breakpoint?: string;
 }): DashboardDefinition;
 ```
 

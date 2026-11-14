@@ -96,7 +96,7 @@ An overlay may set only the values below. Anything else is refused.
 | --- | --- |
 | `replicas`, `rollingUpdate`, `terminationGracePeriodSeconds`, `nodeLossTolerationSeconds`, `shutdownDrainSeconds`, `podDisruptionBudget`, `startupProbe`, `livenessProbe` | Scale and rollout for every area |
 | `resources`, `useMeasuredRequests`, `goMemLimitPercent`, `gogc`, `goMemLimit` | CPU and memory, and Go's memory behaviour, for every area |
-| `functionalAreas.<area>.replicas`, `.strategy`, `.resources`, `.measuredRequests`, `.goMemLimitPercent`, `.memoryLimitFloor`, `.gogc`, `.goMemLimit`, `.avoidEventStorePrimary`, `.eventPathSpread` | The same, for one area |
+| `functionalAreas.<area>.replicas`, `.strategy`, `.resources`, `.measuredRequests`, `.goMemLimitPercent`, `.memoryLimitFloor`, `.memoryLimitFloorWithEnvelopes`, `.gogc`, `.goMemLimit`, `.avoidEventStorePrimary`, `.eventPathSpread` | The same, for one area |
 | `functionalAreas.<area>.config` | That area's own configuration. An unknown key stops the service at startup |
 | `functionalAreas.<area>.profiler.enabled`, `.blockRate`, `.mutexFraction` | The diagnostic profiling listener, off by default (see [Observability](./observability.md)). Its `address` is not tunable |
 | `frontend.replicas`, `frontend.resources` | The console's pods |
@@ -104,6 +104,7 @@ An overlay may set only the values below. Anything else is refused.
 | `ingress.className`, `ingress.annotations`, `ingress.uploadMaxBodySize`, `ingress.gateway.className`, `ingress.gateway.annotations`, `networkPolicy.additionalAllowedCidrs`, `serviceAccount.annotations` | How the ingress is fronted and who may reach the pods |
 | `mqttExposure.loadBalancer` | The cloud settings of the MQTT load balancer, such as an internal balancer and allowed source ranges |
 | `instance.config.infrastructure.nats.streamDesignRate`, `.streamRunwayMinutes`, `.streamMaxBytes`, `.streamMaxBytesCold`, `.streamMaxMsgs` | The outage runway the event streams are sized for, and their byte and message ceilings. The reservation is checked against the broker's volume before anything is written |
+| `instance.config.infrastructure.nats.mqttDeviceUplinks` | Opt-in raw-payload MQTT uplinks. A choice recorded with `--mqtt-device-uplinks` takes precedence; a fresh conflicting overlay is refused. Change the recorded choice with the flag |
 | `instance.config.infrastructure.tracing` | Distributed tracing (OpenTelemetry), off by default; see [Observability](./observability.md). Enable it in an upgrade of its own after the release rollout completes: pods from an earlier release refuse this key |
 | `instance.config.infrastructure.messaging.envelopes.resolved`, `.inbound`, `.inboundLingerMillis` | Whether events are written as envelopes, off by default |
 | `instance.config.infrastructure.tokenAudience.enforcement`, `.unscopedClientCredentials`, `.externalResources` | Token audiences are always enforced. Leave enforcement unset or set it to `enforce`; `v1.4` refuses `observe`. The separate `unscopedClientCredentials: observe` setting remains supported. `externalResources` lists resource servers outside the platform. The chart derives and owns the other two keys. |

@@ -5,6 +5,8 @@ title: Enviar un comando
 
 # Enviar un comando
 
+Antes de empezar, registra el dispositivo de destino y, para usar un vocabulario declarado, adjunta y publica un perfil que declare el comando. Para completar el ciclo, conecta un cliente de dispositivo que reciba comandos e informe de sus resultados; un POST HTTP de telemetría por sí solo no lo hace. La [continuación del inicio rápido](../quickstart/first-device.md#next-an-alarm-and-a-command) explica esta preparación.
+
 Esta guía cubre la mitad del operador en el envío bidireccional de comandos: emites un
 comando, distingues uno aceptado de uno rechazado y lo sigues hasta su desenlace. La mitad
 del dispositivo — recibir un comando e informar qué ocurrió — está en
@@ -59,8 +61,7 @@ mutation {
     token: "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
     deviceToken: "sensor-001",
     name: "reboot",          # el commandKey, no el nombre visible
-    payload: "{\"delaySeconds\":5}",
-    expiresAt: "2026-08-15T00:00:00Z"
+    payload: "{\"delaySeconds\":5}"
   }) {
     command { token status queuedTime }
     rejection { code reason }
@@ -165,9 +166,11 @@ dispositivo» es:
 Una lista `statuses` vacía se ignora en lugar de no coincidir con nada.
 
 Lo que te dice cada estado terminal está en
-[Comandos](../concepts/commands.md#command-lifecycle). El par que conviene recordar: `EXPIRED`
-significa que el comando nunca llegó a un dispositivo, y `TIMEOUT` significa que sí llegó. Una
-racha de `EXPIRED` apunta al despacho; una racha de `TIMEOUT` apunta al dispositivo.
+[Comandos](../concepts/commands.md#command-lifecycle). La diferencia: `EXPIRED` significa que
+el comando caducó antes de la entrega; `TIMEOUT` significa que caducó en `SENT`, despachado y
+sin respuesta. La recepción y la ejecución siguen siendo desconocidas (`outcome: UNKNOWN`):
+el dispositivo puede desconectarse entre la comprobación de presencia y la publicación.
+Si se repite `TIMEOUT`, investiga tanto la entrega como la gestión de respuestas del dispositivo.
 
 ## Cancela un comando {#cancel-one}
 

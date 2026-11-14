@@ -705,7 +705,7 @@ The alerts for snapshots are described under
   own components. A pod that does not fit stays `Pending`, and the install waits out its timeout.
   See [Service sizing](#service-sizing) for each figure. On a cluster that cannot spare them, such
   as a laptop, use [`--compact`](#--compact).
-- **OpenTofu 1.9 or later** (the `tofu` binary; `terraform` 1.9 or later also works) on your
+- **OpenTofu 1.10 or later** (the `tofu` binary; `terraform` 1.10 or later also works) on your
   `PATH`. `dcctl` drives it to provision infrastructure. Install it from
   [opentofu.org](https://opentofu.org). Run `dcctl preflight local` to check that it is there,
   and the rest of your environment, up front. The preflight does not check its version; an older

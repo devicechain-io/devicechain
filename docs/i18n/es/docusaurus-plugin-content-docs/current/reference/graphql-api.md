@@ -1068,8 +1068,10 @@ primer nivel; los alias de un campo anidado no se cuentan.
 ### Límites de tamaño en listas, entradas y agregaciones {#size-bounds}
 
 Aparte de los límites de forma de la solicitud, algunas lecturas y entradas tienen un límite de
-tamaño. Una solicitud que lo supera se rechaza con `extensions.code` igual a `LIMIT_EXCEEDED`. No se
-trunca nada ni se aplica nada a medias, así que reduce la solicitud y envíala de nuevo. Los tamaños se cuentan en bytes, no en caracteres.
+tamaño. Salvo la paginación del historial de versiones y los códigos de error indicados abajo,
+superarlo se rechaza con `extensions.code` igual a `LIMIT_EXCEEDED`; reduce la solicitud y envíala
+de nuevo. El historial devuelve hasta 1000 resultados por defecto y limita a 1000 los valores mayores.
+Los tamaños se cuentan en bytes, no en caracteres.
 
 | Límite | Valor | Se aplica a |
 | --- | --- | --- |
@@ -1080,7 +1082,7 @@ trunca nada ni se aplica nada a medias, así que reduce la solicitud y envíala 
 | Definición de regla | 256 KiB | `definition` de una regla de detección, al crear y al actualizar. |
 | Grafo de autoría de regla | 256 KiB | `authoringGraph` de una regla de detección, al crear y al actualizar. |
 | Reglas por validación | 1000 | `validateDetectionRules` `rules`. Publicar un perfil de dispositivo con más de 1000 reglas de detección habilitadas se rechaza del mismo modo. |
-| Historial de versiones | 1000 por llamada | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: las más recientes primero. Reduce con `limit` (al menos 1) y pagina con `offset` (no negativo); un valor fuera de ese rango se rechaza con `INVALID_VALUE`. |
+| Historial de versiones | 1000 por llamada | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: las más recientes primero. Si se omite `limit`, se usa 1000; un valor mayor se limita a 1000. Pagina con `offset` (0 por defecto). Un `limit` menor que 1 o un `offset` negativo se rechaza con `INVALID_VALUE`. |
 | Intervalos por agregación | 10 000 | `bucketedMeasurements`: el rango dividido por `intervalSeconds`, redondeado hacia arriba. |
 | Filas por agregación | 50 000 | `bucketedMeasurements`: los intervalos multiplicados por los nombres de medición devueltos. Con un filtro `name` es un solo nombre; sin él, cada nombre de medición distinto que coincide con los filtros de la lectura. |
 | Claves por consulta | 1000 | Una lista de tokens, identificadores externos o tokens de alarma pasada a una consulta por lotes `…ByToken`, `…ByExternalId` o similar (estados de dispositivo, últimas ubicaciones, comandos, lotes de comandos, canales, políticas y estados de notificación). |

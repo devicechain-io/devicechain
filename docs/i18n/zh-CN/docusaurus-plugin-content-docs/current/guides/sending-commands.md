@@ -5,6 +5,8 @@ title: 发送命令
 
 # 发送命令 {#sending-a-command}
 
+开始前，请注册目标设备；如需声明的命令词汇表，请关联并发布声明该命令的配置文件。要完成生命周期，还需连接能接收命令并报告结果的设备客户端；单独发送 HTTP 遥测 POST 无法完成这些操作。[快速入门后续步骤](../quickstart/first-device.md#next-an-alarm-and-a-command)介绍了准备过程。
+
 本指南介绍双向命令派发中运维人员的一侧：发出命令、区分接受与拒绝，并跟踪结果。设备一侧的接收与结果报告见[连接设备](./connecting-a-device.md#responding-to-a-command)。两侧共同推进的生命周期见[命令](../concepts/commands.md)。
 
 使用租户访问令牌，在 `command-delivery` 端点 `https://<your-host>/api/command-delivery/graphql` 发出、读取和取消命令。发出和取消需要 `command:write`，读取历史需要 `command:read`。
@@ -41,8 +43,7 @@ mutation {
     token: "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
     deviceToken: "sensor-001",
     name: "reboot",          # the commandKey, not the display name
-    payload: "{\"delaySeconds\":5}",
-    expiresAt: "2026-08-15T00:00:00Z"
+    payload: "{\"delaySeconds\":5}"
   }) {
     command { token status queuedTime }
     rejection { code reason }
@@ -125,7 +126,7 @@ query {
 
 空 `statuses` 列表会被忽略，而不是匹配零条。
 
-各终态含义见[命令](../concepts/commands.md#command-lifecycle)。要记住的区别是：`EXPIRED` 表示未到达设备，`TIMEOUT` 表示已发出。连续 `EXPIRED` 指向派发，连续 `TIMEOUT` 指向设备。
+各终态含义见[命令](../concepts/commands.md#command-lifecycle)。`EXPIRED` 表示命令在交付前过期；`TIMEOUT` 表示命令在 `SENT` 状态过期，已派发但未获答复。是否收到和执行仍未知（`outcome: UNKNOWN`）：设备可能在在线检查与发布之间断开。连续出现 `TIMEOUT` 时，请同时排查交付和设备响应处理。
 
 ## 取消命令 {#cancel-one}
 

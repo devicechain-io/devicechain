@@ -279,7 +279,7 @@ jobs:
       # exec.LookPath finds the real binary rather than the action's shim.
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2
         with:
-          tofu_version: 1.9.1
+          tofu_version: 1.10.10
           tofu_wrapper: false
 
       # ONE place that decides the run's shape, written into the environment for

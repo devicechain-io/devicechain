@@ -36,15 +36,17 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/payloadredact"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/shardgroups"
 	"github.com/devicechain-io/dc-microservice/sourcelimit"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
-	Microservice  *core.Microservice
-	Configuration *config.EventSourcesConfiguration
-	EventSources  []core.LifecycleComponent
+	stopStreamSharding context.CancelFunc
+	Microservice       *core.Microservice
+	Configuration      *config.EventSourcesConfiguration
+	EventSources       []core.LifecycleComponent
 
 	// Svc owns the managers below and the order of all four of their lifecycle phases.
 	Svc *service.Service
@@ -1758,6 +1760,11 @@ func newGatewayWriter(nmgr *messaging.NatsManager) (messaging.OrderedWriter, err
 
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
+	stop, err := shardgroups.Enable(nmgr)
+	if err != nil {
+		return err
+	}
+	stopStreamSharding = stop
 	// The fail-closed MQTT store comes FIRST, before any reader, writer or source exists:
 	// it is the store the broker acknowledges device QoS 1 publishes against, and its
 	// platform durables are what make it keep them. A store this cannot declare would
@@ -2101,6 +2108,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	mqttStoreIngest.stop(ctx)
 
 	// Stop the GraphQL manager, then the broker manager.
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
 	return Svc.Stop(ctx)
 }
 
@@ -2162,6 +2172,9 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 
 	// Terminate the GraphQL manager, then the broker manager.
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
 	return Svc.Terminate(ctx)
 }
 

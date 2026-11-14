@@ -164,11 +164,11 @@ Broker、卷以及预写日志的额度：
 
 1. Chart 的默认值和 OpenTofu 变量的默认值；
 2. 规格；
-3. `dcctl` 自己算出的内容：HA 的副本数、信封开关、运行的服务、实例已有的卷；
+3. `dcctl` 自己算出的内容：HA 的副本数、信封开关、运行的服务；
 4. 你的 `--values` 覆盖文件；
 5. 你在 `TF_VAR_*`、`terraform.tfvars` 或 `*.auto.tfvars` 文件中声明的 OpenTofu 变量。
 
-你声明的内容优先。当你已自行声明某个 OpenTofu 变量时，`dcctl` 根本不会传递规格的同名变量，否则 OpenTofu 会采用规格的值而非你的值。`dcctl bootstrap` 打印的那一行会写明所应用的规格。
+现有卷是此顺序的例外。如果已知卷的实际大小，`dcctl` 会将其作为 `nats_jetstream_storage` 和 `timescale_storage` 传入，即使你通过环境变量或 tfvars 文件提供了不同的值。这两个变量仅在卷尚不存在的初次创建时，才由你的值优先于规格预设。对于其他规格预设的 OpenTofu 变量，`dcctl` 会省略你已声明的变量，使你的值优先。`dcctl bootstrap` 打印的那一行会写明所应用的规格。
 
 ## 更改运行中实例的规格 {#changing}
 

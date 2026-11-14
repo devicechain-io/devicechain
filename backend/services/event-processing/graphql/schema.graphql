@@ -1057,6 +1057,12 @@ type DetectionRuleValidationWarning {
 """A rule that was rejected."""
 # A single rejected detection rule.
 type DetectionRuleValidationError {
+    """
+    Authored JSON field to highlight (for example hold or when), or groupScoped for an
+    unsupported group scope. Null means the finding applies to the whole definition,
+    such as malformed JSON. Clients should show message for every finding.
+    """
+    field: String
     """Zero-based position of the rejected rule in the submitted list."""
     # Zero-based index of the offending definition in the submitted list.
     index: Int!

@@ -13,6 +13,7 @@ require (
 	github.com/graph-gophers/graphql-go v1.10.3
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/nats-io/nats-server/v2 v2.15.3
+	github.com/nats-io/nats.go v1.55.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
@@ -56,7 +57,6 @@ require (
 	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/jwt/v2 v2.8.3 // indirect
-	github.com/nats-io/nats.go v1.55.0 // indirect
 	github.com/nats-io/nkeys v0.4.17 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/prometheus/client_model v0.6.3 // indirect

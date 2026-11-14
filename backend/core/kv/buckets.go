@@ -330,7 +330,7 @@ var All = []Bucket{
 		MaxBytes: 4 << 20,
 		TTL:      24 * time.Hour, // user-management rewrites it every few minutes; this only bounds a table nobody keeps alive
 		Writers:  []string{"user-management"},
-		Readers:  []string{"user-management"},
+		Readers:  []string{"user-management", "event-sources", "device-management", "event-management"},
 
 		BackupClass:   durability.BackupRebuildable,
 		Durability:    durability.Rebuildable,
@@ -339,8 +339,8 @@ var All = []Bucket{
 			"group, mirrored from user-management's database so that no hot path ever queries a " +
 			"database to route. It holds 64 group numbers and the tenants pinned by hand, " +
 			"capped at 4096, so it does not scale with fleet size or with tenants. " +
-			"Nothing reads it yet: Readers widens to every area that routes by tenant " +
-			"when one does. A full bucket refuses the write and the mirror goes stale, " +
+			"Ingest and persistence services read this mirror when stream sharding is enabled. " +
+			"A full bucket refuses the write and the mirror goes stale, " +
 			"which with S = 1 changes nothing, since there is one shard group.",
 	},
 	{

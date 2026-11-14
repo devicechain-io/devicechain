@@ -4,8 +4,9 @@ title: Recorrido por las funciones
 
 # Recorrido por las funciones {#feature-tour}
 
-[Tu primer dispositivo](./first-device.md) termina en la primera lectura. Este recorrido sigue
-adelante. Al final, un sitio funciona de extremo a extremo: un tipo de dispositivo y su perfil, dos
+La guía [Tu primer dispositivo](./first-device.md) presenta lecturas, una alarma y un comando en un dispositivo. Este recorrido con scripts construye un sitio completo.
+
+Al final, un sitio funciona de extremo a extremo: un tipo de dispositivo y su perfil, dos
 dispositivos que envían lecturas, un panel, una regla que genera una alarma y envía un comando, la
 respuesta del dispositivo a ese comando y un **usuario cliente** que inicia sesión y ve solo su propio
 dispositivo.
@@ -183,7 +184,7 @@ y lo crea con `createDashboard`, lo publica con `publishDashboard`, y lo hace do
 Abre `DC_URL/dashboards/tour-a-ops`. Los dos tableros no difieren en nada salvo el botón, que es la
 razón de generarlos a partir de una sola definición.
 
-## 7. La regla genera una alarma {#7-the-rule-raises-an-alarm}
+## 7. Verificar la alarma en la consola {#7-the-rule-raises-an-alarm}
 
 Espera medio minuto. Cuando una cámara pasa el límite, la regla se dispara: aparece una alarma en
 **Monitor → Alarms** (y en la tabla y el contador de alarmas del tablero), y **se borra sola** cuando
@@ -195,7 +196,7 @@ La cámara vuelve a calentarse después de enfriarse, así que el ciclo se repit
 comando por cada exceso. Consulta [Alarmas](/user-guide/alarms) y
 [Procesamiento de eventos](../concepts/event-processing.md).
 
-## 8. El comando y su resultado {#8-command-outcome}
+## 8. Verificar el comando y su resultado {#8-command-outcome}
 
 La misma activación envió el comando `boost-cooling`. El dispositivo lo recibió en su topic de
 comandos, enfrió y **respondió**, con el token del propio comando y el nonce de la entrega. La
