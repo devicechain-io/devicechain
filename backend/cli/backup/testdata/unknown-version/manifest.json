@@ -1,0 +1,29 @@
+{
+    "version":  999,
+    "entries":  [
+                    {
+                        "kind":  "stream",
+                        "name":  "stream",
+                        "backup_class":  "checkpoint-required-if-nonempty",
+                        "snapshot":  "stream.snap",
+                        "size_bytes":  8,
+                        "sha256":  "16a0eeb0791b6c92451fd284dd9f599e0a7dbe7f6ebea6e2d2d06c7f74aec112"
+                    },
+                    {
+                        "kind":  "bucket",
+                        "name":  "bucket",
+                        "backup_class":  "must-survive",
+                        "snapshot":  "bucket.snap",
+                        "size_bytes":  8,
+                        "sha256":  "16a0eeb0791b6c92451fd284dd9f599e0a7dbe7f6ebea6e2d2d06c7f74aec112"
+                    },
+                    {
+                        "kind":  "object-store",
+                        "name":  "object-store",
+                        "backup_class":  "must-survive",
+                        "snapshot":  "object-store.snap",
+                        "size_bytes":  8,
+                        "sha256":  "16a0eeb0791b6c92451fd284dd9f599e0a7dbe7f6ebea6e2d2d06c7f74aec112"
+                    }
+                ]
+}
