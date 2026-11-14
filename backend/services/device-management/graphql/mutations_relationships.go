@@ -52,6 +52,7 @@ func (r *SchemaResolver) CreateEntityRelationship(ctx context.Context, args stru
 	}
 
 	api := r.GetApi(ctx)
+	args.Request.DeviceAuthored = false
 	created, err := api.CreateEntityRelationship(ctx, &args.Request)
 	if err != nil {
 		return nil, err

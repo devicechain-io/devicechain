@@ -248,6 +248,9 @@ func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
+	if err := authorizeSnapshotActions(ctx, snapshot); err != nil {
+		return nil, err
+	}
 
 	// The calculated-metrics gate (ADR-082): local, so it runs before the cross-service
 	// detection-rule check, and over the same exact bytes.
@@ -317,6 +320,10 @@ func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
 				}
 				rebuilt, err := api.buildProfileSnapshotDB(tx, profile.ID)
 				if err != nil {
+					return err
+				}
+				// Check the publisher, not the review approver, over the frozen bytes.
+				if err := authorizeSnapshotActions(ctx, rebuilt); err != nil {
 					return err
 				}
 				if err = checkFrozenReviewDraft(rebuilt, review); err != nil {
@@ -545,6 +552,9 @@ func (api *Api) RollbackDeviceProfileWithReason(ctx context.Context, token strin
 	}
 	targetSnap, err := parseProfileSnapshot(target.Snapshot)
 	if err != nil {
+		return nil, err
+	}
+	if err := authorizeSnapshotActions(ctx, target.Snapshot); err != nil {
 		return nil, err
 	}
 
