@@ -173,7 +173,7 @@ func (nmgr *NatsManager) NewOrderedWriter(suffix string, writer PublishWriter, w
 	if err != nil {
 		return nil, err
 	}
-	nmgr.metrics.initPublish(suffix, publishModePipelined)
+	nmgr.initRoutedPublish(suffix, publishModePipelined)
 	nmgr.metrics.initWindow(suffix, string(writer))
 	log.Info().Str("suffix", suffix).Str("writer", string(writer)).Int("window", window).Msg("Added new ordered NATS writer")
 	w := &orderedWriter{
@@ -251,15 +251,16 @@ func (o *orderedWriter) publishGuardedAck(ctx context.Context, msg Message, done
 		o.pending <- orderedPending{err: err, done: done}
 		return
 	}
-	if o.nmgr.streamSharding().selects(o.suffix) && !msg.BypassBackpressure {
-		if err := o.nmgr.publishBackpressure(ctx, o.suffix); err != nil {
-			o.pending <- orderedPending{err: err, done: done}
-			return
-		}
-	}
 	if guard != nil {
 		if err := guard(); err != nil {
 			o.pending <- orderedPending{err: err, reported: true, done: done}
+			return
+		}
+	}
+	if o.nmgr.streamSharding().selects(o.suffix) && !msg.BypassBackpressure {
+		if err := o.nmgr.publishBackpressure(ctx, o.suffix); err != nil {
+			o.nmgr.countRoutedRefused(ctx, o.suffix, 1)
+			o.pending <- orderedPending{err: err, done: done}
 			return
 		}
 	}
@@ -460,7 +461,7 @@ func (o *orderedWriter) settleLoop() {
 			if p.ack != nil && err == nil && ack != nil {
 				*p.ack = PubAckInfo{Sequence: ack.Sequence, Duplicate: ack.Duplicate}
 			}
-			o.nmgr.metrics.observePublish(o.suffix, publishModePipelined, time.Since(p.sent))
+			o.nmgr.metrics.observePublish(o.nmgr.publishMetricSuffix(p.msg.Subject, o.suffix), publishModePipelined, time.Since(p.sent))
 			brokerFailed = err != nil
 		}
 		if err != nil && !p.reported {

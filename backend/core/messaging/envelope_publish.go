@@ -129,7 +129,7 @@ func (nmgr *NatsManager) NewRoundPublisher(suffix string) (RoundPublisher, error
 	// Counted like every other publish: the same latency histogram, duplicate counter and
 	// backpressure volume as the ordered writer, so these rounds are not invisible to the
 	// instruments that watch the stream.
-	nmgr.metrics.initPublish(suffix, publishModeSync)
+	nmgr.initRoutedPublish(suffix, publishModeSync)
 	return &roundPublisher{nmgr: nmgr, suffix: suffix, gate: nmgr.registerWriterBackpressure(suffix)}, nil
 }
 
@@ -140,6 +140,7 @@ func (r *roundPublisher) Publish(ctx context.Context, msg Message) (out PubAckIn
 	}
 	if r.nmgr.streamSharding().selects(r.suffix) && !msg.BypassBackpressure {
 		if err := r.nmgr.publishBackpressure(ctx, r.suffix); err != nil {
+			r.nmgr.countRoutedRefused(ctx, r.suffix, 1)
 			return PubAckInfo{}, err
 		}
 	}
@@ -154,7 +155,7 @@ func (r *roundPublisher) Publish(ctx context.Context, msg Message) (out PubAckIn
 	for {
 		start := time.Now()
 		ack, err := r.nmgr.js.PublishMsg(nm, nats.Context(pctx))
-		r.nmgr.metrics.observePublish(r.suffix, publishModeSync, time.Since(start))
+		r.nmgr.metrics.observePublish(r.nmgr.publishMetricSuffix(subject, r.suffix), publishModeSync, time.Since(start))
 		if err == nil {
 			if ack.Duplicate {
 				r.nmgr.metrics.countDuplicate(r.suffix, string(WriterResolution))

@@ -88,17 +88,15 @@ var mqttTenantStreams = []struct{ stream, prefix string }{
 // started has no stream of its own. "Not there" and "there and empty" are the same fact
 // for an erasure.
 //
-// Sharded callers pass the enabled configuration, or use NatsManager.PurgeTenant,
+// Callers must pass the instance shard-group configuration (nil when disabled),
+// or use NatsManager.PurgeTenant,
 // which supplies its installed configuration automatically. Every configured group
 // is swept, even if the tenant has since moved to another group.
-func PurgeTenant(ctx context.Context, nc *nats.Conn, instanceId, tenant string, shardGroups ...*config.NatsShardGroupsConfiguration) (TenantPurgeResult, error) {
+func PurgeTenant(ctx context.Context, nc *nats.Conn, instanceId, tenant string, shardGroups *config.NatsShardGroupsConfiguration) (TenantPurgeResult, error) {
 	res := TenantPurgeResult{PerStream: map[string]int64{}}
 	suffixes := streams.Suffixes()
-	if len(shardGroups) > 1 {
-		return res, fmt.Errorf("messaging: expected at most one shard-group configuration")
-	}
-	if len(shardGroups) == 1 && shardGroups[0] != nil {
-		cfg := shardGroups[0]
+	if shardGroups != nil {
+		cfg := shardGroups
 		if err := cfg.Validate(); err != nil {
 			return res, err
 		}

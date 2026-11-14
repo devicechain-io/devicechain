@@ -25,7 +25,7 @@ import (
 // with no store", and this test is the honest stand-in, not a replacement.
 func TestTheStoreSetIsTheCoverageClaim(t *testing.T) {
 	var names []string
-	for _, s := range DefaultStores(nil, nil, nil, "inst", nil, nil) {
+	for _, s := range DefaultStores(nil, nil, nil, "inst", nil, nil, nil) {
 		names = append(names, s.Name())
 	}
 	require.Equal(t, []string{
@@ -50,7 +50,7 @@ func TestTheStoreSetIsTheCoverageClaim(t *testing.T) {
 // against.
 func TestExternalTablesNameARegisteredStore(t *testing.T) {
 	registered := map[string]bool{}
-	for _, s := range DefaultStores(nil, nil, nil, "inst", nil, nil) {
+	for _, s := range DefaultStores(nil, nil, nil, "inst", nil, nil, nil) {
 		registered[s.Name()] = true
 	}
 	claimed := tenantpurge.ExternalStores()
@@ -70,7 +70,7 @@ func TestExternalTablesNameARegisteredStore(t *testing.T) {
 // would say a purge is incomplete without saying what is retained, which is the report an
 // operator or an auditor actually reads.
 func TestEveryPendingStoreSaysWhatItHolds(t *testing.T) {
-	for _, s := range DefaultStores(nil, nil, nil, "inst", nil, nil) {
+	for _, s := range DefaultStores(nil, nil, nil, "inst", nil, nil, nil) {
 		p, ok := s.(Pending)
 		if !ok {
 			continue

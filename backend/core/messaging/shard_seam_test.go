@@ -17,7 +17,8 @@ func TestShardedWritersCheckRoutedBackpressure(t *testing.T) {
 	for _, suffix := range []string{streams.InboundEvents, streams.ResolvedEvents} {
 		for _, mode := range []string{"sync", "ordered", "async", "round"} {
 			t.Run(suffix+"/"+mode, func(t *testing.T) {
-				m := n1Manager(t, true)
+				m, reg := metricsManager(t, startEmbeddedServer(t))
+				require.NoError(t, m.EnableStreamSharding(shardRouterFunc(n1Router), n1Config(streams.InboundEvents, streams.ResolvedEvents)))
 				await := func(send func(func(error))) error {
 					done := make(chan error, 1)
 					send(func(err error) { done <- err })
@@ -55,6 +56,13 @@ func TestShardedWritersCheckRoutedBackpressure(t *testing.T) {
 					publish = func(ctx context.Context) error { _, err := w.Publish(ctx, Message{Value: []byte("value")}); return err }
 				}
 				routed := GroupSuffix(suffix, 1)
+				publishMode := publishModeSync
+				if mode == "ordered" || mode == "async" {
+					publishMode = publishModePipelined
+				}
+				counts := publishCounts(t, reg)
+				require.Contains(t, counts, routed+"/"+publishMode, "group latency series must exist before publishing")
+				require.Zero(t, counts[routed+"/"+publishMode])
 				gates := m.backpressure()
 				gates.mu.Lock()
 				groupGate := gates.gates[routed]
@@ -83,6 +91,12 @@ func TestShardedWritersCheckRoutedBackpressure(t *testing.T) {
 				var bp *BackpressureError
 				require.ErrorAs(t, err, &bp)
 				require.Equal(t, StreamName("test", routed), bp.Stream)
+				metricRig := &bpService{nmgr: m, reg: reg}
+				refused, exists := metricRig.metric(t, "jetstream_publish_refused_total", StreamName("test", routed))
+				require.True(t, exists)
+				require.EqualValues(t, 1, refused, "refusal must be charged to group 1")
+				baseRefused, _ := metricRig.metric(t, "jetstream_publish_refused_total", StreamName("test", suffix))
+				require.Zero(t, baseRefused)
 				require.NoError(t, publish(n1Context("tenant-a")), "group zero remains open")
 				n1Stored(t, m, routed, 0)
 				require.Positive(t, gates.gates[suffix].pubMsgs.Load())
@@ -91,6 +105,9 @@ func TestShardedWritersCheckRoutedBackpressure(t *testing.T) {
 				gates.mu.Unlock()
 				require.NoError(t, publish(n1Context("tenant-b")))
 				require.Positive(t, groupGate.pubMsgs.Load(), "volume belongs to the receiving group")
+				counts = publishCounts(t, reg)
+				require.EqualValues(t, 1, counts[routed+"/"+publishMode])
+				require.EqualValues(t, 1, counts[suffix+"/"+publishMode])
 				// A missing group gate must fail closed, even while group zero remains healthy.
 				gates.mu.Lock()
 				delete(gates.gates, routed)
@@ -169,6 +186,12 @@ func TestShardedAdvisorySubjectsIncludeEnabledGroups(t *testing.T) {
 
 func TestEnableStreamShardingRefusesAfterFirstHandle(t *testing.T) {
 	constructors := map[string]func(*NatsManager){
+		"live": func(m *NatsManager) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			_, err := m.SubscribeLive(ctx, "tenant-a", streams.ResolvedEvents)
+			require.NoError(t, err)
+		},
 		"writer": func(m *NatsManager) { _, err := m.NewWriter(streams.InboundEvents); require.NoError(t, err) },
 		"async": func(m *NatsManager) {
 			w, err := m.NewAsyncWriter(streams.InboundEvents, WriterResolution, 4, true)
@@ -195,4 +218,65 @@ func TestEnableStreamShardingRefusesAfterFirstHandle(t *testing.T) {
 			require.Nil(t, m.streamSharding())
 		})
 	}
+}
+
+func TestShardedReaderParksOnItsOwnDownstreamGroup(t *testing.T) {
+	m := n1Manager(t, true)
+	m.Microservice.FunctionalArea = "device-management"
+	// The onward writer registers both groups, independently of the reader.
+	_, err := m.NewWriter(streams.ResolvedEvents)
+	require.NoError(t, err)
+	r, err := m.NewReader(streams.InboundEvents, ReaderWithShardGroup(1))
+	require.NoError(t, err)
+	nr := r.(*natsReader)
+	gates := m.backpressure()
+	gates.mu.Lock()
+	group := gates.gates["resolved-events-g1"]
+	gates.mu.Unlock()
+	require.NotNil(t, group, "the onward stream must have a group gate")
+	base := m.registerBackpressure(streams.ResolvedEvents)
+	_, err = m.js.Publish("test.tenant-b.inbound-events-g1", []byte("waiting"))
+	require.NoError(t, err)
+	gates.mu.Lock()
+	group.closed = true
+	group.sampledAt = time.Now()
+	base.closed = false
+	base.sampledAt = time.Now()
+	gates.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	_, err = r.ReadMessage(ctx)
+	cancel()
+	require.Error(t, err, "closed group 1 must park the reader before fetch")
+	info, err := m.js.ConsumerInfo(nr.stream, nr.durable)
+	require.NoError(t, err)
+	require.Zero(t, info.Delivered.Stream, "parked messages must remain undelivered")
+	gates.mu.Lock()
+	group.closed = false
+	group.sampledAt = time.Now()
+	base.closed = true
+	base.sampledAt = time.Now()
+	gates.mu.Unlock()
+	n1Read(t, r, "test.tenant-b.inbound-events-g1", "waiting")
+}
+
+func TestDisabledRoutingSnapshotPublishesWithoutStreamMutex(t *testing.T) {
+	m := n1Manager(t, false)
+	w, err := m.NewWriter(streams.InboundEvents)
+	require.NoError(t, err)
+	require.NotNil(t, m.routingSnapshot.Load())
+	done := make(chan error, 1)
+	m.streamMu.Lock()
+	go func() { done <- w.WriteMessages(n1Context("tenant-a"), Message{Value: []byte("legacy")}) }()
+	select {
+	case err := <-done:
+		m.streamMu.Unlock()
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		m.streamMu.Unlock()
+		<-done
+		t.Fatal("disabled publish waited for streamMu")
+	}
+	raw, err := m.js.GetMsg("test_inbound-events", 1)
+	require.NoError(t, err)
+	require.Equal(t, "test.tenant-a.inbound-events", raw.Subject)
 }

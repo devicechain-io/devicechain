@@ -24,6 +24,9 @@ func (c *NatsShardGroupsConfiguration) Validate() error {
 	if c == nil {
 		return nil
 	}
+	if c.Count > 16 {
+		return fmt.Errorf("nats.shardGroups.count must be at most 16 (got %d)", c.Count)
+	}
 	if c.Count < 2 {
 		return fmt.Errorf("nats.shardGroups.count must be at least 2")
 	}

@@ -76,3 +76,9 @@ func TestNatsShardGroupsPlacementTagsRoundTrip(t *testing.T) {
 	require.NoError(t, core.LoadConfiguration(encoded, &again))
 	require.Equal(t, want, again.Infrastructure.Nats.ShardGroups)
 }
+
+func TestNatsShardGroupsCountBound(t *testing.T) {
+	require.NoError(t, (&config.NatsShardGroupsConfiguration{Count: 16}).Validate())
+	require.ErrorContains(t, (&config.NatsShardGroupsConfiguration{Count: 17}).Validate(), "at most 16")
+	require.ErrorContains(t, (&config.NatsShardGroupsConfiguration{Count: 1000000}).Validate(), "at most 16")
+}

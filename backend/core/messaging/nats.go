@@ -208,12 +208,13 @@ type NatsManager struct {
 	// stream is ensured because that is where its suffix is known; nil until the first.
 	// routingFrozen prevents sharding configuration changes after the first handle.
 	// Like shards, it is guarded by streamMu.
-	routingFrozen bool
-	shards        *streamShards // guarded by streamMu
-	streamMu      sync.Mutex
-	streamNames   []string
-	sinkStreams   map[string]bool
-	bucketNames   []string
+	routingFrozen   bool
+	shards          *streamShards // guarded by streamMu
+	routingSnapshot atomic.Pointer[streamRouting]
+	streamMu        sync.Mutex
+	streamNames     []string
+	sinkStreams     map[string]bool
+	bucketNames     []string
 	// identityBucketNames is the KV buckets opened in the identity account, sampled through
 	// that account's own JetStream context. Guarded by streamMu.
 	identityBucketNames []string
@@ -1307,7 +1308,7 @@ func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
 		return nil, err
 	}
 	w := &natsWriter{nmgr: nmgr, suffix: suffix}
-	nmgr.metrics.initPublish(suffix, publishModeSync)
+	nmgr.initRoutedPublish(suffix, publishModeSync)
 	// A writer to a stream that applies backpressure is refused while a gating reader is far
 	// behind (backpressure.go); registering measures the stream once now, so the writer is
 	// not born refusing. Its refused counter exists at 0 from here, for the reason
@@ -1454,7 +1455,7 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 	// is, not as a retryable refusal. The whole call is refused or none of it is: a batch the
 	// gate cut in half would leave the caller unable to say which part landed.
 	if err := w.nmgr.publishBackpressure(ctx, w.suffix); err != nil && !bypassesBackpressure(msgs) {
-		w.nmgr.countRefused(StreamName(w.nmgr.Microservice.InstanceId, w.suffix), len(msgs))
+		w.nmgr.countRoutedRefused(ctx, w.suffix, len(msgs))
 		return err
 	}
 	for i := range msgs {
@@ -1474,7 +1475,7 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 			// bucket.
 			start := time.Now()
 			err = w.publishOne(pctx, nm)
-			w.nmgr.metrics.observePublish(w.suffix, publishModeSync, time.Since(start))
+			w.nmgr.metrics.observePublish(w.nmgr.publishMetricSuffix(subject, w.suffix), publishModeSync, time.Since(start))
 			if err == nil {
 				// Subject, headers and data, as sent (wireSize: nats.Msg.Size, counted
 				// rather than encoded): the headers natsMsg always sets can be most of a
@@ -2343,6 +2344,9 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	if _, err := nmgr.ensureStream(suffix); err != nil {
 		return nil, err
 	}
+	if r.shardGroup != nil && nmgr.streamSharding().selects(r.downstream) {
+		r.downstream = GroupSuffix(r.downstream, *r.shardGroup)
+	}
 	r.stream = StreamName(nmgr.Microservice.InstanceId, selectedSuffix)
 	r.durable = ReaderDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, selectedSuffix)
 	// The device-events capture stream stores two subjects (a device's own telemetry and a
@@ -2929,6 +2933,7 @@ func (r *natsReader) dropPending() {
 // is cancelled (the client unsubscribed or the socket closed). A slow reader
 // drops messages (bounded buffer) rather than stalling the pipeline.
 func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffix string) (<-chan Message, error) {
+	nmgr.freezeStreamRouting()
 	if err := nmgr.requireReader(suffix, streams.ReadLive); err != nil {
 		return nil, err
 	}

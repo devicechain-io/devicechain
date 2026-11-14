@@ -79,7 +79,7 @@ func purgeAsUserManagement(t *testing.T, b *permtest.Broker) (rows int64, err er
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	res, err := messaging.PurgeTenant(ctx, nc, purgeInstance, "victim")
+	res, err := messaging.PurgeTenant(ctx, nc, purgeInstance, "victim", nil)
 	if err != nil {
 		return 0, err
 	}

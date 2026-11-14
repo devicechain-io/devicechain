@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
@@ -24,6 +25,10 @@ var ErrUnplacedTenant = errors.New("messaging: tenant has no valid shard-group p
 type ShardGroupRouter interface {
 	ShardGroup(tenant string) (int, error)
 }
+
+// A non-nil snapshot also represents disabled routing, so frozen legacy
+// publishers never need streamMu to distinguish disabled from not yet frozen.
+type streamRouting struct{ shards *streamShards }
 
 // streamShards is immutable after publication under streamMu.
 type streamShards struct {
@@ -67,6 +72,9 @@ func (nmgr *NatsManager) EnableStreamSharding(router ShardGroupRouter, cfg *conf
 }
 
 func (nmgr *NatsManager) streamSharding() *streamShards {
+	if snapshot := nmgr.routingSnapshot.Load(); snapshot != nil {
+		return snapshot.shards
+	}
 	nmgr.streamMu.Lock()
 	defer nmgr.streamMu.Unlock()
 	return nmgr.shards
@@ -180,6 +188,9 @@ func (nmgr *NatsManager) newStreamConfig(suffix string) *nats.StreamConfig {
 func (nmgr *NatsManager) freezeStreamRouting() {
 	nmgr.streamMu.Lock()
 	nmgr.routingFrozen = true
+	if nmgr.routingSnapshot.Load() == nil {
+		nmgr.routingSnapshot.Store(&streamRouting{shards: nmgr.shards})
+	}
 	nmgr.streamMu.Unlock()
 }
 
@@ -211,6 +222,7 @@ func (nmgr *NatsManager) registerWriterBackpressure(suffix string) *gateState {
 	if s.selects(suffix) {
 		for g := 1; g < s.cfg.Count; g++ {
 			nmgr.registerBackpressure(GroupSuffix(suffix, g))
+			nmgr.metrics.initRefused(StreamName(nmgr.Microservice.InstanceId, GroupSuffix(suffix, g)))
 		}
 	}
 	return nmgr.registerBackpressure(suffix)
@@ -229,4 +241,30 @@ func (nmgr *NatsManager) noteRoutedPublish(ctx context.Context, suffix string, s
 	gate := gates.gates[routed]
 	gates.mu.Unlock()
 	gate.notePublished(size)
+}
+
+// initRoutedPublish exposes each configured stream before its first publish.
+func (nmgr *NatsManager) initRoutedPublish(suffix, mode string) {
+	nmgr.metrics.initPublish(suffix, mode)
+	if s := nmgr.streamSharding(); s.selects(suffix) {
+		for g := 1; g < s.cfg.Count; g++ {
+			nmgr.metrics.initPublish(GroupSuffix(suffix, g), mode)
+		}
+	}
+}
+
+func (nmgr *NatsManager) countRoutedRefused(ctx context.Context, suffix string, n int) {
+	tenant, _ := core.TenantFromContext(ctx)
+	routed, err := nmgr.tenantSuffix(tenant, suffix)
+	if err == nil {
+		nmgr.countRefused(StreamName(nmgr.Microservice.InstanceId, routed), n)
+	}
+}
+
+// Selected streams are per-event subjects, whose final token is the routed suffix.
+func (nmgr *NatsManager) publishMetricSuffix(subject, suffix string) string {
+	if !nmgr.streamSharding().selects(suffix) {
+		return suffix
+	}
+	return subject[strings.LastIndexByte(subject, '.')+1:]
 }

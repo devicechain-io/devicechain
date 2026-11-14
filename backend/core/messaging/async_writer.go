@@ -235,7 +235,7 @@ func (w *asyncWriter) dispatch(it asyncItem) {
 			// and a refusal there stops every piece.
 			guard = func() error {
 				if err := w.nmgr.publishBackpressure(it.ctx, w.suffix); err != nil {
-					w.nmgr.countRefused(StreamName(w.nmgr.Microservice.InstanceId, w.suffix), len(it.msgs))
+					w.nmgr.countRoutedRefused(it.ctx, w.suffix, len(it.msgs))
 					failed.Store(true)
 					return err
 				}
