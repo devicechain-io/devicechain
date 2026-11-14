@@ -55,7 +55,8 @@ export interface CommandSender {
 }
 
 // useCommandSender owns one control's sending. `resetKey` identifies the configured command: when
-// it changes, an in-flight send's result is dropped rather than landing under the new command.
+// it or the device changes, an in-flight send's result is dropped rather than landing under the
+// new subject.
 export function useCommandSender(
   actions: WidgetActions | undefined,
   deviceToken: string | null | undefined,
@@ -81,7 +82,7 @@ export function useCommandSender(
     setPending(false);
     setError(null);
     setOptimistic(null);
-  }, [resetKey]);
+  }, [resetKey, deviceToken]);
 
   const send = useCallback(
     (payload: string, value: number | boolean): boolean => {

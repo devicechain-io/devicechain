@@ -13,13 +13,15 @@ const h = vi.hoisted(() => ({
   gql: vi.fn(),
   authorities: ['*'] as string[],
   onEvent: (() => {}) as (ev: unknown) => void,
+  onReconnect: (() => {}) as () => void,
 }));
 vi.mock('@/auth/AuthProvider', () => ({
   useAuth: () => ({ claims: { username: 'ann', authorities: h.authorities, scopeAnchors: [] } }),
 }));
 vi.mock('@/lib/hooks/use-alarm-stream', () => ({
-  useAlarmStream: (onEvent: (ev: unknown) => void) => {
+  useAlarmStream: (onEvent: (ev: unknown) => void, onReconnect: () => void) => {
     h.onEvent = onEvent;
+    h.onReconnect = onReconnect;
     return { status: 'live' };
   },
 }));
@@ -85,6 +87,49 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+
+describe('slow alarm reconciles', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('lets slow reads land during a storm and coalesces stream, reconnect and periodic refreshes', async () => {
+    const pending: ((value: unknown) => void)[] = [];
+    h.gql.mockImplementation((_service: string, doc: unknown) =>
+      /query Alarms\b/.test(String(doc))
+        ? new Promise((resolve) => pending.push(resolve))
+        : Promise.resolve({ deviceMetricVocabulary: null }),
+    );
+    vi.useFakeTimers();
+    const view = renderPage();
+    const settle = async (token: string) => {
+      await act(async () => pending.shift()!({
+        alarms: { results: [alarm(token)], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } },
+      }));
+    };
+    const storm = async () => {
+      for (let i = 0; i < 4; i++) {
+        await act(async () => {
+          h.onEvent({ token: `event-${i}` });
+          h.onReconnect();
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+      }
+    };
+    await storm();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    expect(pending).toHaveLength(1);
+    await settle('first');
+    expect(screen.getByText('key-first')).toBeTruthy();
+    expect(pending).toHaveLength(1); // exactly one trailing read
+    await storm();
+    expect(pending).toHaveLength(1);
+    await settle('second');
+    expect(screen.getByText('key-second')).toBeTruthy();
+    expect(pending).toHaveLength(1);
+    view.unmount();
+    await settle('after-unmount');
+    expect(pending).toHaveLength(0);
+  });
+});
 
 // Stands in for the rest of the app: shows the address and can move it, as a link or Back would.
 function Address() {
