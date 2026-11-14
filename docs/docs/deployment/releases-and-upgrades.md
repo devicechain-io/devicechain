@@ -762,9 +762,9 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 #### The HTTP device-uplink route limits guessing {#v160-device-uplink-guessing}
 
-The opt-in HTTP device-uplink route (`httpIngest.deviceUplinks`) now limits requests per source address (`429` with `Retry-After`). After repeated credential failures for a device, it stops answering authentication guesses (`503` with `Retry-After`) instead of repeating `401`. A device whose credential already authenticated keeps working, including refreshes.
+The opt-in HTTP device-uplink route (`httpIngest.deviceUplinks`) now limits requests per source address (`429` with `Retry-After`). After repeated credential failures for a device, it stops answering authentication guesses (`503` with `Retry-After`) instead of repeating `401`. While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time).
 
-- **Nothing needs doing** for devices that already authenticated.
+- **Devices on the broker's MQTT connection are unaffected.**
 - **Back off on `503`**, even when presenting a wrong credential: wait at least `Retry-After` before retrying.
 
 #### Before you upgrade {#v160-before-upgrade}

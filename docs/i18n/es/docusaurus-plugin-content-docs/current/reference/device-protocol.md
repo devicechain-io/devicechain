@@ -207,7 +207,7 @@ Activa `mqttDeviceUplinks` solo cuando todas las réplicas de `event-sources` y 
 | HTTP | Respuesta |
 | --- | --- |
 | `429` | Las solicitudes desde esta dirección de origen superan el límite. `Retry-After` indica cuándo reintentar. |
-| `503` | Los fallos repetidos de credenciales para este dispositivo han activado una pausa temporal. `Retry-After` indica cuándo reintentar; espera incluso con una credencial incorrecta. Una credencial que ya se autenticó sigue funcionando. |
+| `503` | Mientras se intenta adivinar la credencial de este dispositivo, todas sus cargas útiles HTTP, incluidas las que presentan la credencial correcta, reciben `503` con `Retry-After` hasta que termina la pausa (como máximo 60 segundos cada vez). Los dispositivos conectados por MQTT al broker no se ven afectados. |
 
 ## Entrega de comando {#command-delivery}
 

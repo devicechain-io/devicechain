@@ -583,17 +583,29 @@ func TestDeviceDecodersParallelGuessesAreBounded(t *testing.T) {
 }
 
 func TestDeviceDecodersBrokerAssertionBypassesHold(t *testing.T) {
+	ck := &dclock{t: time.Unix(1000, 0)}
 	be := &deviceBackendFake{plan: &DecoderPlan{Present: true}, good: "S"}
-	d := NewDeviceDecoders(be, DeviceDecoderConfig{})
+	d := NewDeviceDecoders(be, DeviceDecoderConfig{Now: ck.now, TTL: time.Millisecond})
+	ctx := context.Background()
 	for i := 0; i < 5; i++ {
-		_, err := d.Lookup(context.Background(), "acme", "d1", credN(i))
+		_, err := d.Lookup(ctx, "acme", "d1", credN(i))
 		require.NoError(t, err)
 	}
-	_, err := d.Lookup(context.Background(), "acme", "d1", DeviceCredential{ID: "S"})
+	_, err := d.Lookup(ctx, "acme", "d1", DeviceCredential{ID: "S"})
 	require.ErrorIs(t, err, ErrDeviceDecoderHeld)
-	l, err := d.Lookup(context.Background(), "acme", "d1", DeviceCredential{ID: "S", AssertedByBroker: true})
-	require.NoError(t, err)
-	require.True(t, l.Authenticated)
+	asserted := DeviceCredential{ID: "S", AssertedByBroker: true}
+	for i := 0; i < 3; i++ {
+		// A cold broker lookup, a cache hit, and a refresh all bypass the HTTP hold.
+		if i == 2 {
+			ck.t = ck.t.Add(2 * time.Millisecond)
+		}
+		l, err := d.Lookup(ctx, "acme", "d1", asserted)
+		require.NoError(t, err)
+		require.True(t, l.Authenticated)
+		_, err = d.Lookup(ctx, "acme", "d1", DeviceCredential{ID: "S"})
+		require.ErrorIs(t, err, ErrDeviceDecoderHeld, "broker assertions must not clear the HTTP hold")
+	}
+	require.EqualValues(t, 7, be.calls.Load())
 }
 
 func TestDeviceDecodersFailureHoldGrowsAndErrorsReleaseProbe(t *testing.T) {
@@ -621,34 +633,123 @@ func TestDeviceDecodersFailureHoldGrowsAndErrorsReleaseProbe(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, l.Authenticated)
 	require.Empty(t, d.failures)
+	require.Zero(t, d.tracked.Load())
 }
 
 func TestDeviceDecodersFailureTableIsBoundedAndReclaimsOldEntries(t *testing.T) {
 	ck := &dclock{t: time.Unix(1000, 0)}
+	d := NewDeviceDecoders(&deviceBackendFake{}, DeviceDecoderConfig{Now: ck.now})
+	d.failureEntries = 8
+	oldest := deviceFailureKey{"t", "0"}
+	reserved := deviceFailureKey{"t", "reserved"}
+	active, ok := d.reserveFailure(reserved, ck.t.Add(-time.Hour))
+	require.True(t, ok)
+	for i := 0; i < 7; i++ {
+		key := deviceFailureKey{"t", strconv.Itoa(i)}
+		at := ck.t.Add(time.Duration(i) * time.Second)
+		r, ok := d.reserveFailure(key, at)
+		require.True(t, ok)
+		d.recordFailure(key, r, false, at)
+		d.finishFailure(key, r)
+	}
+	key := deviceFailureKey{"t", "new"}
+	r, ok := d.reserveFailure(key, ck.t.Add(8*time.Second))
+	require.True(t, ok, "capacity evicts an idle entry without waiting ten minutes")
+	require.NotContains(t, d.failures, oldest)
+	require.Same(t, active, d.failures[reserved], "even an older reservation must not be evicted")
+	d.recordFailure(key, r, false, ck.t)
+	d.finishFailure(key, r)
+	require.Len(t, d.failures, d.failureEntries)
+	require.EqualValues(t, len(d.failures), d.tracked.Load())
+	d.finishFailure(reserved, active)
+	require.EqualValues(t, len(d.failures), d.tracked.Load())
+}
+
+func TestAFullFailureTableDoesNotLockOutAnUnrelatedDevice(t *testing.T) {
+	ck := &dclock{t: time.Unix(1000, 0)}
 	be := &deviceBackendFake{good: "S", plan: &DecoderPlan{Present: true}}
 	d := NewDeviceDecoders(be, DeviceDecoderConfig{Now: ck.now})
-	for i := 0; i < deviceDecoderFailureEntries; i++ {
-		d.failures[deviceFailureKey{"t", strconv.Itoa(i)}] = &deviceFailureState{count: 5, touched: ck.t, heldUntil: ck.t.Add(time.Second)}
+	d.failureEntries = 8
+	for i := 0; i < d.failureEntries; i++ {
+		key := deviceFailureKey{"t", strconv.Itoa(i)}
+		r, ok := d.reserveFailure(key, ck.t)
+		require.True(t, ok)
+		for j := 0; j < deviceDecoderFreeFailures; j++ {
+			d.recordFailure(key, r, false, ck.t)
+		}
+		d.finishFailure(key, r)
 	}
-	_, err := d.Lookup(context.Background(), "t", "new", cred1)
-	require.ErrorIs(t, err, ErrDeviceDecoderHeld)
-	require.Zero(t, be.calls.Load())
-	require.Len(t, d.failures, deviceDecoderFailureEntries)
-	ck.t = ck.t.Add(11 * time.Minute)
-	l, err := d.Lookup(context.Background(), "t", "new", DeviceCredential{ID: "S"})
+	l, err := d.Lookup(context.Background(), "t", "unrelated", DeviceCredential{ID: "S"})
 	require.NoError(t, err)
 	require.True(t, l.Authenticated)
-	require.Empty(t, d.failures)
+	require.EqualValues(t, 1, be.calls.Load())
+	require.Len(t, d.failures, d.failureEntries-1, "the successful authentication releases its entry")
+	require.EqualValues(t, len(d.failures), d.tracked.Load())
+}
+
+func TestDeviceDecodersFullFailureTableProtectsReservations(t *testing.T) {
+	d := NewDeviceDecoders(&deviceBackendFake{}, DeviceDecoderConfig{})
+	d.failureEntries = 8
+	for i := 0; i < d.failureEntries; i++ {
+		_, ok := d.reserveFailure(deviceFailureKey{"t", strconv.Itoa(i)}, d.cfg.Now())
+		require.True(t, ok)
+	}
+	_, ok := d.reserveFailure(deviceFailureKey{"t", "new"}, d.cfg.Now())
+	require.False(t, ok, "only a sample with every reservation in flight refuses a new key")
+	require.Len(t, d.failures, d.failureEntries)
+	require.EqualValues(t, len(d.failures), d.tracked.Load())
+}
+
+func TestDeviceDecodersHoldIncludesAuthenticatedRefreshes(t *testing.T) {
+	ck := &dclock{t: time.Unix(1000, 0)}
+	be := &deviceBackendFake{good: "S", plan: &DecoderPlan{Present: true}}
+	d := NewDeviceDecoders(be, DeviceDecoderConfig{Now: ck.now, TTL: time.Millisecond})
+	ctx := context.Background()
+	correct := DeviceCredential{ID: "S"}
+	_, err := d.Lookup(ctx, "t", "d", correct)
+	require.NoError(t, err)
+	for i := 0; i < 5; i++ {
+		_, err = d.Lookup(ctx, "t", "d", credN(i))
+		require.NoError(t, err)
+	}
+	ck.t = ck.t.Add(2 * time.Millisecond)
+	_, err = d.Lookup(ctx, "t", "d", correct)
+	require.ErrorIs(t, err, ErrDeviceDecoderHeld)
+	require.EqualValues(t, 6, be.calls.Load())
+	// The hold can also begin between the first cache read and the flight's refresh.
+	ck.t = ck.t.Add(time.Second)
+	d.betweenMissAndFlight = func() {
+		d.failureMu.Lock()
+		d.failures[deviceFailureKey{"t", "d"}].heldUntil = ck.t.Add(time.Second)
+		d.failureMu.Unlock()
+	}
+	_, err = d.Lookup(ctx, "t", "d", correct)
+	require.ErrorIs(t, err, ErrDeviceDecoderHeld, "a held refresh must not fall back to stale authentication")
+	require.EqualValues(t, 6, be.calls.Load())
+	d.betweenMissAndFlight = nil
+	ck.t = ck.t.Add(time.Second)
+	l, err := d.Lookup(ctx, "t", "d", correct)
+	require.NoError(t, err)
+	require.True(t, l.Authenticated)
+	require.False(t, l.Stale)
+	require.Empty(t, d.failures, "a new backend authentication clears the failures")
+	require.Zero(t, d.tracked.Load())
 }
 
 func TestDeviceDecodersElapsedHoldAllowsOnlyOneProbe(t *testing.T) {
 	ck := &dclock{t: time.Unix(1000, 0)}
 	d := NewDeviceDecoders(&deviceBackendFake{good: "S"}, DeviceDecoderConfig{Now: ck.now})
+	correct := DeviceCredential{ID: "S"}
+	d.put("t\x00d\x00"+correct.digest(), deviceDecoderEntry{authed: true, at: ck.t})
 	for i := 0; i < 5; i++ {
 		_, err := d.Lookup(context.Background(), "t", "d", credN(i))
 		require.NoError(t, err)
 	}
 	ck.t = ck.t.Add(time.Second)
+	l, err := d.Lookup(context.Background(), "t", "d", correct)
+	require.NoError(t, err)
+	require.True(t, l.Authenticated && l.Cached)
+	require.Equal(t, deviceDecoderFreeFailures, d.failures[deviceFailureKey{"t", "d"}].count, "cache hits do not clear failures")
 	b := &blockedDeviceBackend{release: make(chan struct{})}
 	d.backend = b
 	var wg sync.WaitGroup
@@ -663,6 +764,8 @@ func TestDeviceDecodersElapsedHoldAllowsOnlyOneProbe(t *testing.T) {
 		}(i)
 	}
 	require.Eventually(t, func() bool { return b.calls.Load() == 1 }, time.Second, time.Millisecond)
+	_, err = d.Lookup(context.Background(), "t", "d", correct)
+	require.ErrorIs(t, err, ErrDeviceDecoderHeld, "even a fresh authenticated hit is held while a probe runs")
 	close(b.release)
 	wg.Wait()
 	require.EqualValues(t, 1, b.calls.Load())

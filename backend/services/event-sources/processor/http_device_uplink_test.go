@@ -421,18 +421,24 @@ func TestTheUplinkRouteLimitsASource(t *testing.T) {
 	require.Equal(t, DeviceUplinkSourceLimited, h.results[len(h.results)-1])
 }
 
-func TestDeviceUplinkHoldPreservesAuthenticatedTraffic(t *testing.T) {
+func TestTheUplinkRouteHoldsACachedCorrectCredentialToo(t *testing.T) {
 	h := newDeviceHarness(t, fplan())
 	now := time.Unix(1000, 0)
-	h.es.deviceUplinks.Plans = integration.NewDeviceDecoders(h.plans, integration.DeviceDecoderConfig{Now: func() time.Time { return now }, TTL: time.Millisecond})
+	h.es.deviceUplinks.Plans = integration.NewDeviceDecoders(h.plans, integration.DeviceDecoderConfig{Now: func() time.Time { return now }})
 	require.Equal(t, 202, h.post(uplinkPath, "", "x", bearer).Code)
 	for i := 0; i < 5; i++ {
 		require.Equal(t, 401, h.post(uplinkPath, "", "x", map[string]string{"Authorization": fmt.Sprintf("Bearer wrong-%d", i)}).Code)
 	}
-	require.Equal(t, 202, h.post(uplinkPath, "", "x", bearer).Code)
+	for _, headers := range []map[string]string{bearer, {"Authorization": "Bearer wrong-held"}} {
+		r := h.post(uplinkPath, "", "x", headers)
+		require.Equal(t, 503, r.Code)
+		require.NotEmpty(t, r.Header().Get("Retry-After"))
+	}
+	require.Equal(t, 6, h.plans.calls, "held requests never reach the backend")
 	require.Equal(t, 202, h.post("/inst/acme/devices/meter-2/uplink", "", "x", bearer).Code)
-	now = now.Add(2 * time.Millisecond)
+	now = now.Add(time.Second)
 	require.Equal(t, 202, h.post(uplinkPath, "", "x", bearer).Code)
+	require.Equal(t, 7, h.plans.calls, "the elapsed hold permits the cached answer unchanged")
 }
 
 func TestDeviceUplinkHoldExpiresAndSuccessClearsFailures(t *testing.T) {

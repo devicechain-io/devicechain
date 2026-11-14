@@ -518,9 +518,9 @@ dcctl bootstrap local devicechain
 
 #### HTTP 设备上行路由限制凭据猜测 {#v160-device-uplink-guessing}
 
-通过 `httpIngest.deviceUplinks` 按需启用的 HTTP 设备上行路由现在会按来源地址限制请求（返回 `429` 和 `Retry-After`）。某个设备的凭据反复验证失败后，路由将暂停回答认证猜测（返回 `503` 和 `Retry-After`），而不再重复返回 `401`。凭据已通过认证的设备仍可正常工作，包括刷新认证缓存时。
+通过 `httpIngest.deviceUplinks` 按需启用的 HTTP 设备上行路由现在会按来源地址限制请求（返回 `429` 和 `Retry-After`）。某个设备的凭据反复验证失败后，路由将暂停回答认证猜测（返回 `503` 和 `Retry-After`），而不再重复返回 `401`。在此设备的凭据遭到猜测期间，该设备的每条 HTTP 上行请求（包括使用正确凭据的请求）都会收到 `503` 和 `Retry-After`，直到暂停结束（每次最长 60 秒）。
 
-- **无需操作**：已通过认证的设备可继续使用。
+- **通过代理的 MQTT 连接通信的设备不受影响。**
 - **收到 `503` 时应退避重试**，即使提交的是错误凭据：至少等待 `Retry-After` 指定的时间再重试。
 
 #### 升级前 {#v160-before-upgrade}

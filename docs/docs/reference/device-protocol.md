@@ -207,7 +207,7 @@ Enable `mqttDeviceUplinks` only once every `event-sources` and `device-managemen
 | HTTP | Response |
 | --- | --- |
 | `429` | Requests from this source address exceed the allowance. `Retry-After` says when to retry. |
-| `503` | Repeated credential failures for this device have triggered a temporary hold. `Retry-After` says when to retry; back off even with a wrong credential. A credential that already authenticated keeps working. |
+| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). Devices on the broker's MQTT connection are unaffected. |
 
 ## Command delivery {#command-delivery}
 
