@@ -29,6 +29,8 @@ Creating, switching and deleting a campaign, and retrying its failures, need `co
 needs `command:read`. Every operation also needs `device:read`, because a campaign names a group and
 its tracking lists the group's devices. A member limited to part of the tenant cannot use campaigns.
 
+Creating a `SOLAR` campaign, reading its elements (`campaignElements`) or cycles (`campaignCycles`), and retrying its failures (`retryCampaignFailed`) now also requires `location:installed:read` (or `location:read`). A solar schedule's per-device times reveal each device's installed position; even cycle counts can reveal position-derived results for a group with one device. `CRON` and `CALENDAR` campaigns are unchanged. Add this authority to any role that manages solar campaigns.
+
 ## Create a campaign {#create-a-campaign}
 
 ```graphql

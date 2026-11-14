@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/schedule"
 	gql "github.com/graph-gophers/graphql-go"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
@@ -30,6 +31,28 @@ func authorizeCampaigns(ctx context.Context, write bool) error {
 		return err
 	}
 	return auth.Authorize(ctx, auth.DeviceRead)
+}
+
+// A solar schedule discloses installed positions through per-device times and skip
+// results, including aggregate counts for a group containing only one device.
+func authorizeSolarCampaign(ctx context.Context, trigger *schedule.Trigger) error {
+	if trigger.PerDevice() && !auth.CanReadInstalledPosition(ctx) {
+		return auth.ErrForbidden
+	}
+	return nil
+}
+
+// Reads and retries must use the stored trigger, never caller-supplied trigger data.
+func (r *SchemaResolver) authorizeStoredSolarCampaign(ctx context.Context, token string) error {
+	found, err := r.GetApi(ctx).CampaignsByToken(ctx, []string{token})
+	if err != nil || len(found) == 0 {
+		return err
+	}
+	trigger, err := model.DecodeTrigger(found[0].Trigger)
+	if err != nil {
+		return err
+	}
+	return authorizeSolarCampaign(ctx, trigger)
 }
 
 // CampaignResolver resolves a Campaign.
@@ -250,6 +273,9 @@ func (r *SchemaResolver) CampaignCycles(ctx context.Context, args struct {
 	if err := authorizeCampaigns(ctx, false); err != nil {
 		return nil, err
 	}
+	if err := r.authorizeStoredSolarCampaign(ctx, args.CampaignToken); err != nil {
+		return nil, err
+	}
 	limit := 0
 	if args.Limit != nil {
 		limit = int(*args.Limit)
@@ -274,6 +300,9 @@ func (r *SchemaResolver) CampaignElements(ctx context.Context, args struct {
 	Limit         *int32
 }) ([]*CampaignElementResolver, error) {
 	if err := authorizeCampaigns(ctx, false); err != nil {
+		return nil, err
+	}
+	if err := r.authorizeStoredSolarCampaign(ctx, args.CampaignToken); err != nil {
 		return nil, err
 	}
 	var after uint
@@ -309,6 +338,13 @@ func (r *SchemaResolver) CreateCampaign(ctx context.Context, args struct {
 }) (*CreateCampaignResultResolver, error) {
 	if err := authorizeCampaigns(ctx, true); err != nil {
 		return nil, err
+	}
+	// Invalid definitions retain the model's usual rejection payload. Valid solar
+	// definitions are authorized before the API can store or plan anything.
+	if trigger, err := model.DecodeTrigger([]byte(args.Request.Trigger)); err == nil {
+		if err := authorizeSolarCampaign(ctx, trigger); err != nil {
+			return nil, err
+		}
 	}
 	created, err := r.GetApi(ctx).CreateCampaign(ctx, &args.Request)
 	if err != nil {
@@ -356,6 +392,9 @@ func (r *SchemaResolver) RetryCampaignFailed(ctx context.Context, args struct {
 	IncludeUnknown bool
 }) (*CampaignRetryResultResolver, error) {
 	if err := authorizeCampaigns(ctx, true); err != nil {
+		return nil, err
+	}
+	if err := r.authorizeStoredSolarCampaign(ctx, args.CampaignToken); err != nil {
 		return nil, err
 	}
 	res, err := r.GetApi(ctx).RetryCampaignFailed(ctx, args.CampaignToken, args.CycleKey, args.IncludeUnknown)

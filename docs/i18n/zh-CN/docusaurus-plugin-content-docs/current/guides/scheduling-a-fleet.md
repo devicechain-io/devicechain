@@ -24,6 +24,8 @@ title: 为设备群安排计划
 以及重试失败项需要 `command:write`，读取需要 `command:read`。所有操作还需要 `device:read`，因为活动指向
 一个组，其跟踪会列出组内设备。仅限于租户部分范围的成员不能使用活动。
 
+创建 `SOLAR` 活动、读取其元素（`campaignElements`）或周期（`campaignCycles`），以及重试其失败项（`retryCampaignFailed`），现在还需要 `location:installed:read`（或 `location:read`）。太阳计划中每台设备的时间会透露该设备的安装位置；对于只有一台设备的组，周期计数也可能透露由位置推导出的结果。`CRON` 和 `CALENDAR` 活动保持不变。请为管理太阳活动的角色添加此权限。
+
 ## 创建活动 {#create-a-campaign}
 
 ```graphql
