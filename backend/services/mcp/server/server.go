@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	coreauth "github.com/devicechain-io/dc-microservice/auth"
@@ -107,12 +108,20 @@ func requireReadOnly(next http.Handler, resourceID string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		info := sdkauth.TokenInfoFromContext(r.Context())
 		if info == nil || !slices.Contains(info.Scopes, coreauth.ScopeReadOnly) {
-			w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope", resource_metadata="`+metadataURL(resourceID)+`"`)
+			w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope", resource_metadata="`+quotedStringValue(metadataURL(resourceID))+`"`)
 			http.Error(w, "insufficient scope", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// quotedStringValue escapes s for use inside an HTTP quoted-string (RFC 9110 §5.6.4):
+// a backslash or double quote is sent as a quoted-pair, so a resource identifier that
+// carries either cannot end the parameter early and inject another.
+func quotedStringValue(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, `"`, `\"`)
 }
 
 // newServer builds the MCP server this process serves, together with the catalog of the
