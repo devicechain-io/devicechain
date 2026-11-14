@@ -42,6 +42,9 @@ func newDeleteEmitTestApi(t *testing.T) *Api {
 		&EntityRelationship{}, &PendingOwnershipFact{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatal(err)
+	}
 	return NewApi(&rdb.RdbManager{Database: db})
 }
 

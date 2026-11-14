@@ -762,6 +762,8 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 #### Before you upgrade {#v160-before-upgrade}
 
+- **Entity attributes are unique per key.** The upgrade collapses duplicate live rows from concurrent first writes, keeping the lowest row ID, and queues group membership and configuration repairs. The index build briefly blocks attribute writes. While old and new replicas overlap, an old replica that loses a concurrent first write may refuse it; retry the write. No configuration change is needed.
+
 Review hand-edited instance configuration before rolling pods. These refusals are new since `v1.5.0`; invalid service settings stop startup and can leave pods crash-looping. Service keys below live under `functionalAreas.<area>.config`.
 
 - **Signing-key retention must cover refresh tokens when rotation is on.** In `user-management`, when `auth.signingKeyMaxAgeDays > 0`, `auth.signingKeyRetentionDays × 86400` must be at least `auth.refreshTokenTtlSeconds` after defaults are applied; equality is allowed. Previously rotation silently lengthened a shorter retention. `0` retention takes 8 days, and the default refresh TTL is 604800 seconds (7 days). Increase retention or reduce the refresh TTL before upgrading. With rotation off, this comparison does not apply. The chart does not compare these fields, and `dcctl` already refuses overlays of this auth block.

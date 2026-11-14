@@ -518,6 +518,8 @@ dcctl bootstrap local devicechain
 
 #### 升级前 {#v160-before-upgrade}
 
+- **每个实体和作用域中的属性键只保留一个值。** 升级会合并并发首次写入产生的重复活动行，保留 ID 最小的行，并排队修复组成员关系和配置。创建索引期间会短暂阻塞属性写入。在新旧副本共存期间，旧副本可能拒绝发生竞争的首次写入；请重试。无需更改配置。
+
 滚动更新 Pod 前，请检查手工编辑的实例配置。以下拒绝条件均为 `v1.5.0` 之后新增；无效的服务设置会阻止启动，可能导致 Pod 反复崩溃重启。下列服务键位于 `functionalAreas.<area>.config` 下。
 
 - **启用轮换时，签名密钥保留期必须覆盖刷新令牌的有效期。** 在 `user-management` 中，当 `auth.signingKeyMaxAgeDays > 0` 时，应用默认值后的 `auth.signingKeyRetentionDays × 86400` 必须大于或等于 `auth.refreshTokenTtlSeconds`；允许相等。此前轮换会静默延长过短的保留期。保留期为 `0` 时取 8 天，默认刷新 TTL 为 604800 秒（7 天）。升级前请增加保留期或缩短刷新 TTL。关闭轮换时不执行此比较。chart 不比较这两个字段，且 `dcctl` 已拒绝覆盖此 auth 块。

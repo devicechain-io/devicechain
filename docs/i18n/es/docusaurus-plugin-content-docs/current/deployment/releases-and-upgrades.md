@@ -807,6 +807,8 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 #### Antes de actualizar {#v160-before-upgrade}
 
+- **Los atributos de entidad son únicos por clave.** La actualización elimina duplicados activos de escrituras iniciales simultáneas, conserva el menor ID y encola la reparación de pertenencias a grupos y configuración. La creación del índice bloquea brevemente las escrituras de atributos. Durante el despliegue gradual, una réplica antigua puede rechazar una escritura inicial concurrente; vuelva a intentarla. No se requiere cambiar la configuración.
+
 Revise la configuración de instancia editada a mano antes de desplegar los pods. Estos rechazos son nuevos desde `v1.5.0`; los ajustes de servicio inválidos impiden el arranque y pueden dejar los pods reiniciándose. Las claves de servicio siguientes van bajo `functionalAreas.<area>.config`.
 
 - **La retención de claves debe cubrir los tokens de renovación si la rotación está activa.** En `user-management`, cuando `auth.signingKeyMaxAgeDays > 0`, `auth.signingKeyRetentionDays × 86400` debe ser al menos `auth.refreshTokenTtlSeconds` tras aplicar los valores predeterminados; se admite la igualdad. Antes, la rotación alargaba silenciosamente una retención menor. Una retención de `0` toma 8 días y el TTL de renovación predeterminado es 604800 segundos (7 días). Aumente la retención o reduzca el TTL antes de actualizar. Sin rotación, esta comparación no se aplica. El chart no compara estos campos y `dcctl` ya rechaza las superposiciones de este bloque auth.

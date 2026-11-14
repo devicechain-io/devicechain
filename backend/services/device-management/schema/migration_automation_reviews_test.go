@@ -18,7 +18,14 @@ func TestAutomationReviewsMigrationIsReplayable(t *testing.T) {
 	require.NoError(t, err)
 	m := NewAutomationReviewsSchema()
 	require.Equal(t, "20261111150000", m.ID)
-	require.Equal(t, m.ID, Migrations[len(Migrations)-2].ID)
+	require.Condition(t, func() bool {
+		for _, registered := range Migrations {
+			if registered.ID == m.ID {
+				return true
+			}
+		}
+		return false
+	}, "migration must remain registered when later migrations are appended")
 	require.NoError(t, m.Migrate(db))
 	require.NoError(t, m.Migrate(db))
 	require.False(t, db.Migrator().HasColumn(&automationReview{}, "deleted_at"))
