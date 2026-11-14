@@ -1955,6 +1955,7 @@ type Mutation {
     is being deleted, if a role is not assignable in the tenant, if the scope has more than
     16 anchors (LIMIT_EXCEEDED) or names a group (INVALID_VALUE), or if the identity is
     already a member of the tenant (error code CONFLICT). Requires user:write.
+    Delegated callers must hold every authority granted by the assigned tenant roles (ESCALATION).
     """
     # Bind an identity to an existing tenant with the given tenant roles and scope.
     addMembership(
@@ -1977,6 +1978,7 @@ type Mutation {
     its old scope until it expires, and its sessions in other tenants are not affected. Fails if the identity has no membership in
     the tenant, or for more than 16 anchors (LIMIT_EXCEEDED).
     Requires user:write.
+    Delegated callers must hold every authority granted by the membership's current tenant roles (ESCALATION).
     """
     setMembershipScope(
         """Email of the identity."""
@@ -1992,6 +1994,7 @@ type Mutation {
     not assignable in the tenant. Adding or taking away authorities takes effect at the
     identity's next token refresh (within 15 minutes; 5 for customer-scoped access): an access
     token already issued keeps its old authorities until it expires. Requires user:write.
+    Delegated callers must hold every authority granted by both the current and assigned tenant roles (ESCALATION).
     """
     # Replace a membership's tenant-role assignments (role tokens, tenant scope).
     setMembershipRoles(
@@ -2008,6 +2011,7 @@ type Mutation {
     identity's next token refresh (within 15 minutes; 5 for customer-scoped access), which is
     refused for this tenant, while an access token already issued keeps working until it
     expires. Its sessions in other tenants are not affected. Fails if the identity has no membership in the tenant. Requires user:write.
+    Delegated callers must hold every authority granted by the membership's current tenant roles (ESCALATION).
     """
     # Enable or disable a membership (a disabled membership cannot be selected).
     setMembershipEnabled(
@@ -2022,6 +2026,7 @@ type Mutation {
     Removes an identity's membership in a tenant and returns the identity. This takes effect
     as disabling the membership does, at the identity's next token refresh. Fails if the identity has no membership in
     the tenant. Requires user:write.
+    Delegated callers must hold every authority granted by the membership's current tenant roles (ESCALATION).
     """
     # Remove an identity's membership in a tenant.
     removeMembership(
@@ -2273,6 +2278,7 @@ type Mutation {
     connection serving a tenant that requires single sign-on is refused with the error code
     SSO_ENFORCED_TENANT_STRANDED (its `tenants` extension names them): turn the requirement off
     with setTenantSsoEnforced first. Requires user:write.
+    Changing a tenant connection's groupsClaim requires holding every authority its default roles and group mappings grant.
     """
     updateIdpConnection(
         """Token of the connection."""
@@ -2334,6 +2340,7 @@ type Mutation {
     can enter those tenants and no others. Fails for an instance connection or an unknown tenant,
     and refuses to drop a tenant that requires single sign-on when this is the last enabled
     connection serving it, with the error code SSO_ENFORCED_TENANT_STRANDED. Requires user:write.
+    Requires holding every authority the connection's default roles and group mappings grant.
     """
     setIdpConnectionTenants(
         """Token of the connection."""
@@ -2424,6 +2431,7 @@ type Mutation {
     disables it. Only memberships the connection manages are touched, never manual ones. Roles
     are tenant roles only: a system role is refused. A role with full authority in the tenant
     needs acknowledgeFullAuthority. Takes effect at each person's next sign-in. Requires user:write.
+    Delegated callers must hold every authority granted by the mapped tenant roles and by the mappings being replaced (ESCALATION).
     """
     setIdpRoleMappings(
         """Token of the connection."""
@@ -2440,6 +2448,7 @@ type Mutation {
     identity has) and the tenant roles everyone who signs in through it holds, and returns the
     connection. An instance connection takes neither. A role with full authority needs
     acknowledgeFullAuthority. Requires user:write.
+    Delegated callers must hold every authority granted by the default tenant roles and by the defaults being replaced (ESCALATION).
     """
     setIdpJit(
         """Token of the connection."""

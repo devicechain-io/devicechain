@@ -128,6 +128,9 @@ func (r *AdminResolver) AddMembership(ctx context.Context, args struct {
 				return nil, err
 			}
 		}
+		if err := s.CheckAdminMembershipAddition(ctx, args.Email, args.Tenant, args.RoleTokens); err != nil {
+			return nil, err
+		}
 		return wrap(s.AddScopedMembership(ctx, args.Email, args.Tenant, args.RoleTokens, scope))
 	})
 }
@@ -141,6 +144,9 @@ func (r *AdminResolver) SetMembershipScope(ctx context.Context, args struct {
 	return r.identityMutation(ctx, func(s *admin.Service) (*identityResult, error) {
 		scope, err := toScopeInput(args.Scope)
 		if err != nil {
+			return nil, err
+		}
+		if err := s.CheckAdminMembership(ctx, args.Email, args.Tenant); err != nil {
 			return nil, err
 		}
 		return wrap(s.SetMembershipScope(ctx, args.Email, args.Tenant, scope))
@@ -157,6 +163,9 @@ func (r *AdminResolver) SetMembershipRoles(ctx context.Context, args struct {
 		if err := checkList("role tokens", args.RoleTokens); err != nil {
 			return nil, err
 		}
+		if err := s.CheckAdminMembershipRoleChange(ctx, args.Email, args.Tenant, args.RoleTokens); err != nil {
+			return nil, err
+		}
 		return wrap(s.SetMembershipRoles(ctx, args.Email, args.Tenant, args.RoleTokens))
 	})
 }
@@ -168,6 +177,9 @@ func (r *AdminResolver) SetMembershipEnabled(ctx context.Context, args struct {
 	Enabled bool
 }) (*AdminIdentityResolver, error) {
 	return r.identityMutation(ctx, func(s *admin.Service) (*identityResult, error) {
+		if err := s.CheckAdminMembership(ctx, args.Email, args.Tenant); err != nil {
+			return nil, err
+		}
 		return wrap(s.SetMembershipEnabled(ctx, args.Email, args.Tenant, args.Enabled))
 	})
 }
@@ -179,6 +191,9 @@ func (r *AdminResolver) RemoveMembership(ctx context.Context, args struct {
 	Tenant string
 }) (*AdminIdentityResolver, error) {
 	return r.identityMutation(ctx, func(s *admin.Service) (*identityResult, error) {
+		if err := s.CheckAdminMembership(ctx, args.Email, args.Tenant); err != nil {
+			return nil, err
+		}
 		return wrap(s.RemoveMembership(ctx, args.Email, args.Tenant))
 	})
 }

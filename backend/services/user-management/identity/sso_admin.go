@@ -743,11 +743,11 @@ func (m *Manager) ApproveSsoLinkRequest(ctx context.Context, requestID uint, dis
 }
 
 // ApproveSsoLinkRequestFor is ApproveSsoLinkRequest with an authorization check run on the
-// identity the link is actually made to, after it is resolved and before anything is
-// written. The admin API passes its no-escalation check here rather than judging the
+// identity and connection the link is actually made to, after they are resolved
+// and before anything is written. The admin API passes its no-escalation check here rather than judging the
 // request beforehand: a pending request's email can be replaced by a later callback for
 // the same subject, so a check made on an earlier read would judge a different identity.
-func (m *Manager) ApproveSsoLinkRequestFor(ctx context.Context, requestID uint, disposition string, authorize func(*iam.Identity) error) error {
+func (m *Manager) ApproveSsoLinkRequestFor(ctx context.Context, requestID uint, disposition string, authorize func(*iam.Identity, *iam.IdpConnection) error) error {
 	req, err := m.iam.SsoLinkRequestByID(ctx, requestID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -770,7 +770,7 @@ func (m *Manager) ApproveSsoLinkRequestFor(ctx context.Context, requestID uint, 
 		return err
 	}
 	if authorize != nil {
-		if err := authorize(id); err != nil {
+		if err := authorize(id, conn); err != nil {
 			return err
 		}
 	}
