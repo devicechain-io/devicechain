@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -147,7 +148,8 @@ type PolicyNotifier struct {
 	refused *prometheus.CounterVec
 
 	// quiet counts quiet-hours outcomes. MAY BE NIL; read it through countQuiet.
-	quiet *prometheus.CounterVec
+	quiet          *prometheus.CounterVec
+	sliceExhausted prometheus.Counter
 
 	// dead records a held notification whose release will never be sent. Set once the
 	// dead-letter stream exists (UseDeadLetters, from the NATS callback), read on the
@@ -226,15 +228,16 @@ func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, 
 				"inside the whole-dispatch budget; a channel's last retries will be cut short.")
 	}
 	return &PolicyNotifier{
-		api:           api,
-		store:         store,
-		adapters:      newAdapterRegistry(guard, store),
-		attempts:      attempts,
-		timeout:       timeout,
-		budget:        dispatchBudget,
-		TenantDeleted: tenantDeleted,
-		refused:       metrics.deliveriesRefused,
-		quiet:         metrics.quietHours,
+		api:            api,
+		store:          store,
+		adapters:       newAdapterRegistry(guard, store),
+		attempts:       attempts,
+		timeout:        timeout,
+		budget:         dispatchBudget,
+		TenantDeleted:  tenantDeleted,
+		refused:        metrics.deliveriesRefused,
+		quiet:          metrics.quietHours,
+		sliceExhausted: metrics.tenantSliceExhausted,
 	}
 }
 
@@ -625,8 +628,14 @@ func (n *PolicyNotifier) deliverAll(ctx context.Context, deliveries []delivery,
 	ac := newAttemptContext(alarm, trigger, rendered)
 	var tally dispatchTally
 	for i, d := range deliveries {
+		if pass := passFromContext(ctx); pass != nil && pass.timedOut[d.channel.ID] {
+			tally.unattempted++
+			n.Ledger.record(ctx, ac.row(d, model.AttemptStatusNotAttempted, 0, n.attempts,
+				time.Now(), 0, false, errChannelTimedOutThisPass))
+			continue
+		}
 		if ctx.Err() != nil {
-			tally.unattempted = len(deliveries) - i
+			tally.unattempted += len(deliveries) - i
 			for _, skipped := range deliveries[i:] {
 				n.Ledger.record(ctx, ac.row(skipped, model.AttemptStatusNotAttempted, 0, n.attempts,
 					time.Now(), 0, false, nil))
@@ -786,16 +795,26 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 	if len(deliveries) == 0 {
 		return nil
 	}
-	// The same whole-dispatch budget the event-driven path uses, for a different reason.
-	// There is no AckWait here — the scheduler is a timer, not a consumer — but its tick
-	// walks EVERY tenant and every open alarm on ONE goroutine, so an unbounded
-	// re-notification is an outage for every tenant behind it in the loop, not just for
-	// this alarm. Bounding both paths identically also means a channel cannot be slow
-	// enough to matter on one and not the other.
+	// Do not burn a tier when every destination already exhausted its timeout
+	// attempts in this tenant job. A new job probes again; no memo is persisted.
+	if pass := passFromContext(ctx); pass != nil {
+		allTimedOut := true
+		for _, d := range deliveries {
+			if !pass.timedOut[d.channel.ID] {
+				allTimedOut = false
+				break
+			}
+		}
+		if allTimedOut {
+			return fmt.Errorf("alarm %q: %w", state.AlarmToken, errChannelTimedOutThisPass)
+		}
+	}
+	// Each admitted alarm retains the full dispatch budget, independent of the
+	// tenant slice. Claim-before-send still arbitrates overlapping replicas.
 	ectx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
 	defer cancel()
 
-	claimed, err := n.api.ClaimEscalation(ectx, state.AlarmToken, state.EscalationLevel, state.CycleRaisedAt, now)
+	claimed, err := n.api.ClaimEscalation(ectx, state.AlarmToken, state.EscalationLevel, state.CycleRaisedAt, n.clock())
 	if err != nil {
 		// 🔴 A PURGED TENANT IS TERMINAL HERE TOO. ClaimEscalation is an UPDATE, so the
 		// ADR-077 erasure fence refuses it — and this is the path the gate above is least
@@ -957,6 +976,8 @@ func effectiveMaxEscalations(p *model.NotificationPolicy, defaultMax int) int {
 // returned an error, and the event still churned the redelivery budget and died as an
 // ordinary exhausted delivery — the exact operator-facing outcome the refusal exists to
 // replace, one layer up from where it was fixed.
+var errChannelTimedOutThisPass = errors.New("channel exhausted its timeout attempts in this tenant pass")
+
 type deliveryResult int
 
 const (
@@ -1007,6 +1028,15 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 		started := time.Now()
 		err := adapter.Deliver(dctx, d.channel, d.secret, d.recipients, rendered)
 		latency := time.Since(started)
+		// Memoise only an endpoint timeout that exhausted the configured attempts,
+		// not cancellation or a whole-dispatch budget cutting the channel short.
+		var timeoutErr net.Error
+		if attempt == n.attempts && ctx.Err() == nil &&
+			(errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeoutErr) && timeoutErr.Timeout())) {
+			if pass := passFromContext(ctx); pass != nil {
+				pass.timedOut[d.channel.ID] = true
+			}
+		}
 		cancel()
 		status := attemptStatus(err)
 		ledgerErr := err
