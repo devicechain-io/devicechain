@@ -611,7 +611,7 @@ API does not name: either none was given, or a newer part of the platform wrote 
 reasonCode carries its number. A reason is never reported as a different one.
 """
 enum FailedEventReason {
-    """The message could not be read at all."""
+    """The message could not be read, or a value in it was refused."""
     INVALID
     """A platform service the event needed could not be reached, or storing the event failed."""
     API_CALL_FAILED

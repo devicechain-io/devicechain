@@ -558,6 +558,12 @@ dcctl bootstrap local devicechain
 
 `device-management` 现在会报告代理操作：按类型和结果统计的提议、按结果统计的批准、按类型和结果统计的执行及其耗时，以及已过期的提议。Platform 看板新增 **Agent actions (preview)** 一行，并新增警告级告警 `AgentExecutionsFailing`，在最终批准持续无法完成时触发。拒绝不会触发该告警：依赖变化、策略拒绝、紧急停止栅栏关闭或批准人被拒绝都会计入各自的结果。这些指标列在[指标参考](./metrics-reference.md)中，该告警在[告警处理手册](./alert-runbook.md#agentexecutionsfailing)中有对应条目。与代理操作一样，它们属于 Preview：名称和标签仍可能在次要版本中变化。
 
+#### 无效的摄取失败记录会标明设备 {#v160-invalid-failures-name-the-device}
+
+对于可读取的事件（值不符合指标定义、事件早于 366 天前或被解码器拒绝），device-management 记录的 `INVALID` 摄取失败现在会标明设备和事件类型，并像其他原因一样按设备限制记录数。在此版本之前，这些记录不显示设备，整个租户共用每小时十条记录的上限。升级前已索引的记录不会重写。
+
+- **无需操作。** 不会回填历史记录。现有上限现在适用：每个设备、每种原因每小时十条记录，每个租户、每种原因每小时最多逐条列出 1,000 条记录。整个设备群发送无效载荷时可能达到此上限。
+
 ### v1.5.0 — 自动化变更先评审，代理审批绑定登录会话 {#v150-upgrade}
 
 `v1.5.0` 是从 `v1.4.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。**两个命令都使用新版本的 `dcctl`**，并向 `dcctl install` 提供集群原有设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级会运行四项追加迁移：`device-management` 三项，`user-management` 一项。它们添加代理停用屏障和效果发件箱、自动化评审及其强制执行机制，以及执行代次列。参见[模式变更与回退](#v150-going-back)。如果来自 `v1.3.0` 或更早版本，请先阅读 [`v1.4.0` 说明](#v140-upgrade)。
