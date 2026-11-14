@@ -7,7 +7,7 @@
 // next to parse/serialize — because it is the definition's edit lifecycle, not
 // app-specific glue (ADR-039 authoring in the console).
 //
-// The editor edits the 'base' placements only; per-breakpoint editing is deferred. Every
+// Placement edits target base by default, or the requested breakpoint. Every
 // transform keeps the one invariant the parser enforces: no two grid footprints overlap. A move,
 // a resize, an add or a narrower grid that would collide pushes the widgets in the way DOWN
 // (pushDown), so the editor can never produce a definition that fails to load.
@@ -43,7 +43,7 @@ import type {
 } from './types';
 import { FALLBACK_DEFAULT_SPAN, type WidgetDescriptor } from './widget-descriptor';
 
-// The base placement a widget is edited by.
+// The base placement (the default editing target).
 export function basePlacement(widget: WidgetInstance): Placement {
   return widget.layout[BASE_BREAKPOINT];
 }
@@ -97,21 +97,26 @@ export function resolveEverywhere(def: DashboardDefinition, first: readonly stri
 // Android launcher does. The editor's pointer and keyboard edits use `nearest`.
 export interface EditOptions {
   nearest?: boolean;
+  breakpoint?: string;
 }
 
-// setWidgetPlacement replaces a widget's base placement. A grid placement pushes whatever it now
-// covers down out of its way, at base and at every breakpoint that shows it.
+// setWidgetPlacement replaces a widget's placement at the requested breakpoint. Grid collisions
+// settle there; a base edit also settles breakpoints that inherit the changed placement.
 export function setWidgetPlacement(
   def: DashboardDefinition,
   id: string,
   placement: Placement,
   options: EditOptions = {},
 ): DashboardDefinition {
+  const breakpoint = options.breakpoint ?? BASE_BREAKPOINT;
   const next = {
     ...def,
-    widgets: def.widgets.map((w) => (w.id === id ? { ...w, layout: { ...w.layout, [BASE_BREAKPOINT]: placement } } : w)),
+    widgets: def.widgets.map((w) => (w.id === id ? { ...w, layout: { ...w.layout, [breakpoint]: placement } } : w)),
   };
-  return placement.mode === 'grid' ? resolveEverywhere(next, [id], options.nearest) : next;
+  if (placement.mode !== 'grid') return next;
+  return breakpoint === BASE_BREAKPOINT
+    ? resolveEverywhere(next, [id], options.nearest)
+    : resolveCollisions(next, breakpoint, [id], options.nearest);
 }
 
 // clampSpan holds a span inside a widget's declared limits and inside the columns that remain to
@@ -136,12 +141,14 @@ export function moveWidget(
   def: DashboardDefinition,
   id: string,
   to: { col: number; row: number },
-  columns: number = def.canvas.grid.columns,
+  columns?: number,
   options: EditOptions = {},
 ): DashboardDefinition {
   const w = def.widgets.find((x) => x.id === id);
   if (!w) return def;
-  const p = basePlacement(w);
+  const breakpoint = options.breakpoint ?? BASE_BREAKPOINT;
+  columns ??= breakpointColumns(def.canvas, breakpoint);
+  const p = resolvePlacement(w.layout, breakpoint);
   if (p.mode !== 'grid') return def;
   const col = Math.min(Math.max(0, Math.round(to.col)), Math.max(0, columns - p.cols));
   const row = Math.max(0, Math.round(to.row));
@@ -160,12 +167,14 @@ export function resizeWidget(
   target: { col: number; row: number; cols: number; rows: number },
   limits: SpanLimits | undefined,
   edges: { fromLeft?: boolean; fromTop?: boolean } = {},
-  columns: number = def.canvas.grid.columns,
+  columns?: number,
   options: EditOptions = {},
 ): DashboardDefinition {
   const w = def.widgets.find((x) => x.id === id);
   if (!w) return def;
-  const p = basePlacement(w);
+  const breakpoint = options.breakpoint ?? BASE_BREAKPOINT;
+  columns ??= breakpointColumns(def.canvas, breakpoint);
+  const p = resolvePlacement(w.layout, breakpoint);
   if (p.mode !== 'grid') return def;
   const right = target.col + target.cols;
   const bottom = target.row + target.rows;
@@ -383,10 +392,10 @@ export interface RelativeBounds {
   columns: number;
 }
 
-function replaceBase(def: DashboardDefinition, id: string, placement: Placement): DashboardDefinition {
+function replacePlacement(def: DashboardDefinition, id: string, placement: Placement, breakpoint: string): DashboardDefinition {
   return {
     ...def,
-    widgets: def.widgets.map((w) => (w.id === id ? { ...w, layout: { ...w.layout, [BASE_BREAKPOINT]: placement } } : w)),
+    widgets: def.widgets.map((w) => (w.id === id ? { ...w, layout: { ...w.layout, [breakpoint]: placement } } : w)),
   };
 }
 
@@ -395,22 +404,27 @@ function replaceBase(def: DashboardDefinition, id: string, placement: Placement)
 // the box is inside the canvas at that cell size (the editor cannot produce an off-canvas widget by
 // dragging; the lint still checks the extremes of cell size). A grid widget has no offset, so it is
 // returned unchanged. A zero offset is stored as absent.
+// Keep the published signatures as overloads when adding breakpoint arguments, so the public
+// API report retains the original call contracts alongside the new ones.
+export function setRelativeOffset(def: DashboardDefinition, id: string, offset: { x: number; y: number }, options?: { fine?: boolean; bounds?: RelativeBounds }): DashboardDefinition;
+export function setRelativeOffset(def: DashboardDefinition, id: string, offset: { x: number; y: number }, options?: { fine?: boolean; bounds?: RelativeBounds; breakpoint?: string }): DashboardDefinition;
 export function setRelativeOffset(
   def: DashboardDefinition,
   id: string,
   offset: { x: number; y: number },
-  options: { fine?: boolean; bounds?: RelativeBounds } = {},
+  options: { fine?: boolean; bounds?: RelativeBounds; breakpoint?: string } = {},
 ): DashboardDefinition {
   const w = def.widgets.find((x) => x.id === id);
   if (!w) return def;
-  const p = basePlacement(w);
+  const breakpoint = options.breakpoint ?? BASE_BREAKPOINT;
+  const p = resolvePlacement(w.layout, breakpoint);
   if (p.mode !== 'relative') return def;
   const step = options.fine ? OFFSET_STEP_FINE : OFFSET_STEP;
   let x = snapOffset(offset.x, options.fine);
   let y = snapOffset(offset.y, options.fine);
   const { bounds } = options;
   if (bounds) {
-    const host = layoutRects(def.widgets, BASE_BREAKPOINT, bounds.cell, bounds.gutter).get(p.host);
+    const host = layoutRects(def.widgets, breakpoint, bounds.cell, bounds.gutter).get(p.host);
     if (host) {
       const r = relativeRect({ ...p, offset: { x, y } }, host, bounds.cell, bounds.gutter);
       const px = (bounds.cell + bounds.gutter.x) * step;
@@ -425,7 +439,7 @@ export function setRelativeOffset(
   if (x === 0 && y === 0) delete next.offset;
   else next.offset = { x, y };
   if ((next.offset?.x ?? 0) === (p.offset?.x ?? 0) && (next.offset?.y ?? 0) === (p.offset?.y ?? 0)) return def;
-  return replaceBase(def, id, next);
+  return replacePlacement(def, id, next, breakpoint);
 }
 
 // A widget can host another when it is a grid widget at every breakpoint it is shown at (the
@@ -449,47 +463,58 @@ export function canHostRelative(def: DashboardDefinition, id: string, hostId: st
 // leaves the grid, so it no longer pushes anything. Placing an already-relative widget re-homes
 // it (a new host and anchor, the size kept, the offset dropped). A host that is missing, is the
 // widget itself, or is not a grid widget at every breakpoint is refused: the definition comes back
-// unchanged. Only the base placement is edited; a breakpoint with its own entry for the widget
-// keeps it.
+// unchanged. Only the requested breakpoint is edited; base is the default.
+export function placeRelative(def: DashboardDefinition, id: string, hostId: string, anchor: PlacementAnchor): DashboardDefinition;
+export function placeRelative(def: DashboardDefinition, id: string, hostId: string, anchor: PlacementAnchor, breakpoint?: string): DashboardDefinition;
 export function placeRelative(
   def: DashboardDefinition,
   id: string,
   hostId: string,
   anchor: PlacementAnchor,
+  breakpoint = BASE_BREAKPOINT,
 ): DashboardDefinition {
   const w = def.widgets.find((x) => x.id === id);
   if (!w) return def;
   if (!canHost(def, def.widgets.find((x) => x.id === hostId), id)) return def;
-  const p = basePlacement(w);
+  const p = resolvePlacement(w.layout, breakpoint);
   const size = p.mode === 'grid' ? { cols: p.cols, rows: p.rows } : p.size;
-  return replaceBase(def, id, { mode: 'relative', host: hostId, anchor, size });
+  return replacePlacement(def, id, { mode: 'relative', host: hostId, anchor, size }, breakpoint);
 }
 
 // setRelativeAnchor changes the host point a relative widget hangs from, keeping the rest.
-export function setRelativeAnchor(def: DashboardDefinition, id: string, anchor: PlacementAnchor): DashboardDefinition {
+export function setRelativeAnchor(def: DashboardDefinition, id: string, anchor: PlacementAnchor): DashboardDefinition;
+export function setRelativeAnchor(def: DashboardDefinition, id: string, anchor: PlacementAnchor, breakpoint?: string): DashboardDefinition;
+export function setRelativeAnchor(
+  def: DashboardDefinition,
+  id: string,
+  anchor: PlacementAnchor,
+  breakpoint = BASE_BREAKPOINT,
+): DashboardDefinition {
   const w = def.widgets.find((x) => x.id === id);
-  const p = w && basePlacement(w);
+  const p = w && resolvePlacement(w.layout, breakpoint);
   if (!p || p.mode !== 'relative' || p.anchor === anchor) return def;
-  return replaceBase(def, id, { ...p, anchor });
+  return replacePlacement(def, id, { ...p, anchor }, breakpoint);
 }
 
 // placeOnGrid is the way back: a relative widget takes its own size (a `fill` one its host's) in
 // the first free slot of the grid, pushing nothing. A grid widget is returned unchanged.
-export function placeOnGrid(def: DashboardDefinition, id: string): DashboardDefinition {
+export function placeOnGrid(def: DashboardDefinition, id: string): DashboardDefinition;
+export function placeOnGrid(def: DashboardDefinition, id: string, breakpoint?: string): DashboardDefinition;
+export function placeOnGrid(def: DashboardDefinition, id: string, breakpoint = BASE_BREAKPOINT): DashboardDefinition {
   const w = def.widgets.find((x) => x.id === id);
   if (!w) return def;
-  const p = basePlacement(w);
+  const p = resolvePlacement(w.layout, breakpoint);
   if (p.mode !== 'relative') return def;
-  const columns = def.canvas.grid.columns;
-  const size = 'fill' in p.size ? hostSpan(p, def, BASE_BREAKPOINT) : p.size;
+  const columns = breakpointColumns(def.canvas, breakpoint);
+  const size = 'fill' in p.size ? hostSpan(p, def, breakpoint) : p.size;
   const cols = Math.min(size.cols, columns);
   const occupied = def.widgets
     .filter((o) => o.id !== id)
-    .map(basePlacement)
+    .map((o) => resolvePlacement(o.layout, breakpoint))
     .filter((o): o is GridPlacement => o.mode === 'grid');
   const slot = firstFreeSlot(occupied, cols, size.rows, columns);
   const grid: GridPlacement = { mode: 'grid', col: slot.col, row: slot.row, cols, rows: size.rows };
-  return resolveEverywhere(replaceBase(def, id, grid), [id]);
+  return setWidgetPlacement(def, id, grid, { breakpoint });
 }
 
 // ---- Fit to limits ------------------------------------------------------------------
