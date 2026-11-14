@@ -158,6 +158,8 @@ Cada campo de ubicación es un **string** JSON, incluidos los numéricos. Cada u
 
 #### NewRelationship {#new-relationship-payload}
 
+Cuando se crea la relación, su evento se conserva en el historial de eventos como un sobre con sus anclajes.
+
 Crea una relación desde el dispositivo emisor hacia otra entidad del mismo tenant. Este payload no tiene array `entries`, y sus tres claves se leen por su nombre exacto, así que las mayúsculas importan. Una clave ausente no se rechaza al decodificar el mensaje: se lee como un string vacío, y el evento falla después en la resolución, como en los casos siguientes.
 
 | Campo | Tipo | Obligatorio | Significado | Ejemplo |
