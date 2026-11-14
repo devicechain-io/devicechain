@@ -42,10 +42,6 @@ what people ask for, so tell us if it should change.
   refusing them. Turning it on by default needs overload to push back first. Until then the
   documentation states how much each path can lose with it off, and the limit measured with it on.
   See [quality of service](https://docs.devicechain.io/guides/connecting-a-device#quality-of-service).
-- **Payload decoders you write yourself.** Inbound integrations store what a network server decodes
-  and can map a generic JSON body. The next step is a decoder you author per device profile, in the
-  same expression language the detection engine uses. See
-  [inbound integrations](https://docs.devicechain.io/guides/inbound-integrations).
 - **Certificate sign-in for the edge agent.** The agent's uplink authenticates with an `MQTT_BASIC`
   credential today and has no client-certificate setting. See
   [edge services](https://docs.devicechain.io/deployment/edge-services).
