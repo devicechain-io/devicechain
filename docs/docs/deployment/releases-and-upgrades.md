@@ -820,6 +820,12 @@ A console tab whose session ended no longer continues under a session another ta
 
 - **Nothing needs doing.**
 
+#### Invalid ingest failures name the device {#v160-invalid-failures-name-the-device}
+
+Ingest failures with reason `INVALID` that device-management recorded for a readable event (a value that fails its metric's definition, an event older than 366 days, a decoder refusal) now name the device and the event type, and are bounded per device like every other reason. Before this release they were listed with no device and shared one bound of ten records an hour for the whole tenant. Records indexed before the upgrade are not rewritten.
+
+- **Nothing needs doing.** There is no backfill. The existing limits now apply: ten records per device and reason per hour, capped at 1,000 itemized records per tenant and reason per hour. A fleet-wide invalid payload can reach that cap.
+
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
 `v1.5.0` is an in-place upgrade from `v1.4.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Four appended migrations run on upgrade: three in `device-management` and one in `user-management`. They add the agent kill fence and effect outbox, automation reviews and review enforcement, and the actuation generation column. See [Schema changes and going back](#v150-going-back). Coming from `v1.3.0` or earlier, read the [`v1.4.0` notes](#v140-upgrade) first.
