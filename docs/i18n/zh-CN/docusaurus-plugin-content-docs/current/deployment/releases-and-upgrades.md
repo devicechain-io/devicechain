@@ -538,6 +538,12 @@ dcctl bootstrap local devicechain
 
 `device-management` 现在会报告代理操作：按类型和结果统计的提议、按结果统计的批准、按类型和结果统计的执行及其耗时，以及已过期的提议。Platform 看板新增 **Agent actions (preview)** 一行，并新增警告级告警 `AgentExecutionsFailing`，在最终批准持续无法完成时触发。拒绝不会触发该告警：依赖变化、策略拒绝、紧急停止栅栏关闭或批准人被拒绝都会计入各自的结果。这些指标列在[指标参考](./metrics-reference.md)中，该告警在[告警处理手册](./alert-runbook.md#agentexecutionsfailing)中有对应条目。与代理操作一样，它们属于 Preview：名称和标签仍可能在次要版本中变化。
 
+#### `dcctl destroy` 拒绝将路径作为实例名称，并且不再信任猜测的集群 {#v160-destroy-instance-name}
+
+`dcctl destroy` 会拒绝不是简单名称的实例参数（`.`、`..` 或任何包含路径分隔符的值）。早期版本会将其解析为 `~/.devicechain/instances` 下的目录，并删除解析后的目标。
+
+- **清理本地状态需要依据。** 只有当实例拥有集群记录且该集群记录中的上下文不再响应时，`dcctl destroy` 才会清理缺失集群的本地状态。没有记录的实例会执行正常卸载；如果无法连接集群，卸载会失败。请传入 `--kube-context`，或者在确认集群确实已不存在时手动删除该实例的目录。
+
 ### v1.5.0 — 自动化变更先评审，代理审批绑定登录会话 {#v150-upgrade}
 
 `v1.5.0` 是从 `v1.4.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。**两个命令都使用新版本的 `dcctl`**，并向 `dcctl install` 提供集群原有设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级会运行四项追加迁移：`device-management` 三项，`user-management` 一项。它们添加代理停用屏障和效果发件箱、自动化评审及其强制执行机制，以及执行代次列。参见[模式变更与回退](#v150-going-back)。如果来自 `v1.3.0` 或更早版本，请先阅读 [`v1.4.0` 说明](#v140-upgrade)。
