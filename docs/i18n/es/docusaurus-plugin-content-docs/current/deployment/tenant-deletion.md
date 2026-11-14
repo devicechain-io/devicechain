@@ -5,9 +5,21 @@ title: Eliminación de inquilinos
 
 # Eliminación de inquilinos
 
-Eliminar un inquilino es un ciclo de vida, no una única acción. La eliminación corta el acceso de
-inmediato. Los datos del inquilino se recuperan después, en segundo plano, y su identificador no
+Eliminar un inquilino es un ciclo de vida, no una única acción. La eliminación deshabilita de
+inmediato el inquilino y lo marca como en eliminación, impidiendo que los usuarios normales
+obtengan nuevos tokens de acceso al inquilino. Los datos del inquilino se recuperan después, en segundo plano, y su identificador no
 vuelve a estar disponible hasta que eso termina.
+
+Quitar las membresías requeridas bloquea el inicio de sesión en el inquilino y los intercambios de
+tokens de actualización de esos usuarios; no termina sus sesiones de inicio de sesión de toda la
+instancia. Los tokens de acceso de personas (JWT) ya emitidos pueden seguir siendo válidos hasta
+que caduquen, durante el plazo configurado en `auth.accessTokenTtlSeconds` desde su emisión:
+**900 segundos (15 minutos) por defecto**. Ni siquiera la revocación explícita de sesiones
+invalida esos JWT. El acceso de emergencia de superusuario sigue disponible durante la eliminación.
+
+La eliminación también publica un evento de cancelación para detener las acciones automatizadas
+mediante sus comprobaciones del inquilino. Esto no revoca los JWT de personas ni desconecta las
+sesiones existentes de los dispositivos en el bróker; consulta [Durante la eliminación](#during).
 
 Esta página trata de lo que sucede entre esos dos momentos: qué esperar, qué puede dejar una
 eliminación abierta y qué conserva la plataforma deliberadamente.
@@ -16,7 +28,7 @@ eliminación abierta y qué conserva la plataforma deliberadamente.
 
 | | |
 |---|---|
-| **De inmediato** | Se revoca el inicio de sesión. El inquilino queda deshabilitado y marcado como en eliminación, y se registra el momento del corte. Las nuevas conexiones de dispositivos, la nueva ingesta y el nuevo envío de comandos se rechazan en aproximadamente un minuto. |
+| **De inmediato** | El inquilino queda deshabilitado y marcado como en eliminación, y se registra el momento de la eliminación. Se bloquean el inicio de sesión en el inquilino y los intercambios de tokens de actualización para usuarios normales; los JWT de personas ya emitidos pueden seguir siendo válidos hasta que caduquen (15 minutos desde su emisión por defecto). Se publica un evento de cancelación para las acciones automatizadas. Las nuevas conexiones de dispositivos, la nueva ingesta y el nuevo envío de comandos se rechazan en aproximadamente un minuto. |
 | **En uno o dos minutos** | Un coordinador en segundo plano empieza a recuperar los datos del inquilino de todos los sistemas de almacenamiento que los contienen, y continúa hasta que cada uno informa de que no conserva nada. |
 | **Cuando todos los sistemas de almacenamiento llevan limpios toda la ventana de asentamiento** (cinco minutos por defecto) | La eliminación se registra como [borrada](#erased-signal): la plataforma respalda la afirmación de que los datos del inquilino ya no existen. El identificador sigue retenido. |
 | **Tras al menos 12 horas** | Se elimina el registro del inquilino y su identificador vuelve a estar disponible. |
@@ -26,8 +38,9 @@ eliminando, tiene éxito y no cambia nada, así que puedes volver a ejecutar un 
 que falló a medias.
 
 :::note Primero hay que quitar las membresías
-Un inquilino que todavía tiene membresías de usuario se rechaza, porque quitarlas es lo que
-realmente revoca el acceso de las personas a él. Quita las membresías y luego elimina el inquilino.
+Un inquilino que todavía tiene membresías de usuario se rechaza. Quita las membresías y luego
+elimina el inquilino. Quitar una membresía bloquea nuevos inicios de sesión en el inquilino y la
+actualización de tokens para ese miembro, pero no invalida un token de acceso ya emitido.
 :::
 
 ## Por qué el identificador se retiene 12 horas {#token-hold}
