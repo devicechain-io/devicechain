@@ -815,6 +815,19 @@ const dockerBuildNetEnv = "DOCKER_BUILD_NET"
 // stepInfraApply deploys the shared data/infra stack via OpenTofu, driving the
 // tofu/terraform binary through terraform-exec.
 func stepInfraApply(ctx context.Context, st *State) error {
+	// Check the planned fresh-install reservation before creating infrastructure.
+	// The Helm step also checks the applied broker's actual ceiling.
+	cfg, err := shardGroupsFromValues(authoringValues(st))
+	if err != nil {
+		return err
+	}
+	if cfg != nil {
+		planned := *st
+		planned.LiveVolumes.JetStream = jetStreamStorageFor(st)
+		if err := precheckJetStreamReservation(ctx, &planned); err != nil {
+			return err
+		}
+	}
 	if err := checkHaNodeCapacity(ctx, st); err != nil {
 		return err
 	}

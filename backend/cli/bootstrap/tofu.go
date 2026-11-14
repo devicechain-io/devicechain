@@ -292,6 +292,14 @@ func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err
 	if err := checkHaNotTornDown(ctx, st, tf); err != nil {
 		return openedInstanceRoot{}, err
 	}
+	if cfg, err := shardGroupsFromValues(authoringValues(st)); err != nil {
+		return openedInstanceRoot{}, err
+	} else if cfg != nil && st.Evolving {
+		servers, known := appliedServerCount(ctx, tf)
+		if err := refuseStandaloneShardGroups(servers, known); err != nil {
+			return openedInstanceRoot{}, err
+		}
+	}
 	return openedInstanceRoot{tf: tf, rootdir: rootdir}, nil
 }
 
@@ -515,11 +523,8 @@ func infraVarsIn(st *State, rootdir string) []string {
 	// The broker image: DeviceChain's own nats-server build, at the release this run
 	// deploys. See brokerImageVars.
 	vars = append(vars, brokerImageVars(st)...)
-	topology := haFor(st.HA)
-	if cfg, err := shardGroupsFromValues(authoringValues(st)); err == nil && cfg != nil {
-		// The opt-in adds independent R1 groups inside one odd-sized server cluster.
-		topology.ServerReplicas = max(3, cfg.Count|1)
-	}
+	// The opt-in adds independent R1 groups inside one odd-sized server cluster.
+	topology := brokerTopology(st)
 	if topology.ServerReplicas != haFor(st.HA).ServerReplicas {
 		vars = append(vars, fmt.Sprintf("ha=%t", st.HA), fmt.Sprintf("nats_cluster_replicas=%d", topology.ServerReplicas))
 	} else {

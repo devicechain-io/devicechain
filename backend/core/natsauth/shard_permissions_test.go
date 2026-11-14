@@ -37,6 +37,15 @@ func TestShardPermissionsOffAndExactGroups(t *testing.T) {
 		require.False(t, source.publishes("$JS.API.STREAM.CREATE."+stream))
 		require.False(t, source.publishes("$JS.API.CONSUMER.MSG.NEXT."+stream+"."+durable))
 	}
+
+	resolved := "resolved-events-g1"
+	resolvedStream := messaging.StreamName("prod", resolved)
+	ep := users[AppAccount][LoginUser("event-processing")]
+	require.True(t, dm.publishes("prod.tenant."+resolved))
+	require.False(t, source.publishes("prod.tenant."+resolved))
+	require.True(t, ep.publishes("$JS.API.CONSUMER.MSG.NEXT."+resolvedStream+"."+messaging.AckFloorDurableName("prod", "event-processing", resolved)))
+	require.True(t, ep.publishes("$JS.API.DIRECT.GET."+resolvedStream))
+	require.True(t, users[AppAccount][LoginUser("user-management")].publishes("$JS.API.STREAM.PURGE."+resolvedStream))
 	for _, suffix := range []string{"inbound-events-g0", "inbound-events-g3", "inbound-events-g20", "inbound-events-evil", "inbound-events2", "resolved-events-g3", "commands-g1"} {
 		require.False(t, source.publishes("prod.tenant."+suffix), suffix)
 		require.False(t, admin.publishes("$JS.API.STREAM.CREATE.prod_"+suffix), suffix)

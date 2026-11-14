@@ -163,6 +163,12 @@ func ValidateInstanceSpec(spec dcv1beta1.InstanceSpec) error {
 			"deploy: %w", err)
 	}
 	if spec.ShardGroups != nil {
+		if len(areas) == 0 {
+			areas, err = shardGroupAreas(spec.Profile, spec.ExtraFunctionalAreas)
+			if err != nil {
+				return err
+			}
+		}
 		if err := validateShardGroupReaders(spec.ShardGroups.Suffixes, areas); err != nil {
 			return err
 		}

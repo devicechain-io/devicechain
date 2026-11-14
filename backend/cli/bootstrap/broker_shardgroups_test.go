@@ -18,23 +18,25 @@ import (
 )
 
 func shardBlock() map[string]interface{} {
-	return map[string]interface{}{"count": 3, "suffixes": []string{"inbound-events"}}
+	return map[string]interface{}{"count": 3, "suffixes": []interface{}{"inbound-events"}}
 }
 
 func TestShardGroupsValuesFailClosed(t *testing.T) {
 	require.NoError(t, ValidateValuesOverlay(shardGroupsValues(shardBlock())))
 	for _, raw := range []interface{}{
 		nil, true,
-		map[string]interface{}{"count": 1, "suffixes": []string{"inbound-events"}},
-		map[string]interface{}{"count": 6, "suffixes": []string{"inbound-events"}},
-		map[string]interface{}{"count": 2.5, "suffixes": []string{"inbound-events"}},
-		map[string]interface{}{"count": 2, "suffixes": []string{}},
-		map[string]interface{}{"count": 2, "suffixes": []string{"inbound-events", "inbound-events"}},
-		map[string]interface{}{"count": 2, "suffixes": []string{"command-delivery"}},
-		map[string]interface{}{"count": 2, "suffixes": []string{"inbound-events"}, "typo": true},
-		map[string]interface{}{"count": 2, "suffixes": []string{"inbound-events"}, "placementTags": map[string]interface{}{"1": []string{"dc-nats-0"}}},
+		map[string]interface{}{"count": 1, "suffixes": []interface{}{"inbound-events"}},
+		map[string]interface{}{"count": 6, "suffixes": []interface{}{"inbound-events"}},
+		map[string]interface{}{"count": 2.5, "suffixes": []interface{}{"inbound-events"}},
+		map[string]interface{}{"count": 2, "suffixes": []interface{}{}},
+		map[string]interface{}{"count": 2, "suffixes": []interface{}{"inbound-events", "inbound-events"}},
+		map[string]interface{}{"count": 2, "suffixes": []interface{}{"command-delivery"}},
+		map[string]interface{}{"count": 2, "suffixes": []interface{}{"inbound-events"}, "typo": true},
+		map[string]interface{}{"count": 2, "suffixes": []interface{}{"inbound-events"}, "placementTags": map[string]interface{}{"1": []interface{}{"dc-nats-0"}}},
 	} {
 		require.Error(t, ValidateValuesOverlay(shardGroupsValues(raw)), "%v", raw)
+		_, err := shardGroupsFromValues(shardGroupsValues(raw))
+		require.Error(t, err, "%v", raw)
 	}
 }
 
@@ -42,7 +44,7 @@ func TestShardGroupsChartPlacementAndOffBytes(t *testing.T) {
 	ch, err := loadEmbeddedChart()
 	require.NoError(t, err)
 	st := &State{Instance: "prod", Profile: "default", Values: map[string]string{}}
-	vals := authoringValues(st)
+	vals := renderOnlyAuthoring(st)
 	// Give the chart its required root key through its normal test helper's values.
 	infra := vals["instance"].(map[string]interface{})["config"].(map[string]interface{})["infrastructure"].(map[string]interface{})
 	infra["secrets"] = map[string]interface{}{"rootKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}
@@ -151,7 +153,7 @@ func TestShardGroupsDeclarationRoundTripAndBrokerTopology(t *testing.T) {
 }
 
 func TestShardGroupsRefusesUnwiredResolvedReaders(t *testing.T) {
-	block := map[string]interface{}{"count": 2, "suffixes": []string{"resolved-events"}}
+	block := map[string]interface{}{"count": 2, "suffixes": []interface{}{"resolved-events"}}
 	st := &State{Instance: "prod", Profile: "default", Values: map[string]string{}, ValuesOverlay: shardGroupsValues(block)}
 	_, err := shardGroupsFromValues(authoringValues(st))
 	require.ErrorContains(t, err, "device-state")

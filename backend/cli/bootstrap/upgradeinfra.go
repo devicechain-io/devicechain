@@ -669,7 +669,7 @@ func settleUpgradeInfraInputs(ctx context.Context, st *State) error {
 	if err != nil {
 		return err
 	}
-	infra, st.OrphanExtraClaims = infra.forReplicas(haFor(st.HA).ServerReplicas)
+	infra, st.OrphanExtraClaims = infra.forReplicas(brokerTopology(st).ServerReplicas)
 	st.OrphanedClaims = nil
 	if infra.Broker == nil {
 		for _, c := range infra.BrokerClaims {
