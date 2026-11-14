@@ -377,6 +377,16 @@ func (c *ConcurrentSharded) UpsertRule(r Rule) { c.direct(func() { c.s.UpsertRul
 // caller that removes a rule between an operation and its Drain can tell, and none does.
 func (c *ConcurrentSharded) RemoveRule(id string) { c.direct(func() { c.s.RemoveRule(id) }) }
 
+// CarryRaised moves latches across shards with all workers idle.
+func (c *ConcurrentSharded) CarryRaised(successor map[string]string, skip func(SeriesKey) bool) int {
+	return directResult(c, func() int { return c.s.CarryRaised(successor, skip) })
+}
+
+// IsRaised reads with all workers idle, like the publish path's other queries.
+func (c *ConcurrentSharded) IsRaised(key SeriesKey) bool {
+	return directResult(c, func() bool { return c.s.IsRaised(key) })
+}
+
 // RemoveMatching is Sharded.RemoveMatching, at a barrier.
 func (c *ConcurrentSharded) RemoveMatching(match func(ruleID string) bool) int {
 	return directResult(c, func() int { return c.s.RemoveMatching(match) })

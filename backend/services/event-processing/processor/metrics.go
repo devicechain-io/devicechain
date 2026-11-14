@@ -120,6 +120,8 @@ type DetectMetrics struct {
 	// event-driven kinds but not its watermark-fired timers/panes, which would otherwise contribute a
 	// false edge under the stable contributor id. Bounded cardinality (no labels).
 	supersededFrontierDropped prometheus.Counter
+	// supersededRaisedDropped counts suppressed threshold raises and their paired clears (no labels).
+	supersededRaisedDropped prometheus.Counter
 
 	// Slice-6c per-tenant state-budget gauges (ADR-023 amendment). Bounded cardinality — NO
 	// per-tenant labels (the G.3 DoS lesson): liveKeys/retainedSamples are AGGREGATE totals across
@@ -257,6 +259,7 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 
 		staleAbsenceDropped:       ms.NewCounter("detect_stale_absence_dropped_total", "Absence RAISES (and their paired clears) dropped at publish because the device left the rule's scope (deleted/disabled/re-typed/version superseded), plus republish handoff clears."),
 		supersededFrontierDropped: ms.NewCounter("detect_superseded_frontier_dropped_total", "Non-absence frontier-triggered detections (Duration/Session/Aggregate) dropped at publish because their profile version is superseded (ADR-057 D6)."),
+		supersededRaisedDropped:   ms.NewCounter("detect_superseded_raised_dropped_total", "Threshold raises (and their paired clears) dropped because the active same-kind successor is raised."),
 
 		liveKeys:                 ms.NewGauge("detect_live_keys", "Total live keyed window/timer state entries across all tenants (the per-tenant state-budget aggregate)."),
 		tenantsOverRuleBudget:    ms.NewGauge("detect_tenants_over_rule_budget", "Tenants currently exceeding the per-tenant rule-count budget (ADR-023)."),
@@ -1162,4 +1165,11 @@ func (m *DetectMetrics) RuleStatPending(keys int, bytes int64, oldest time.Durat
 	m.ruleStatPendingKeys.Set(float64(keys))
 	m.ruleStatPendingBytes.Set(float64(bytes))
 	m.ruleStatOldestPending.Set(oldest.Seconds())
+}
+
+// recordSupersededRaisedDropped records a late old-version threshold edge suppressed with its episode after handoff.
+func (m *DetectMetrics) recordSupersededRaisedDropped() {
+	if m != nil {
+		m.supersededRaisedDropped.Inc()
+	}
 }

@@ -538,6 +538,14 @@ dcctl bootstrap local devicechain
 
 `device-management` 现在会报告代理操作：按类型和结果统计的提议、按结果统计的批准、按类型和结果统计的执行及其耗时，以及已过期的提议。Platform 看板新增 **Agent actions (preview)** 一行，并新增警告级告警 `AgentExecutionsFailing`，在最终批准持续无法完成时触发。拒绝不会触发该告警：依赖变化、策略拒绝、紧急停止栅栏关闭或批准人被拒绝都会计入各自的结果。这些指标列在[指标参考](./metrics-reference.md)中，该告警在[告警处理手册](./alert-runbook.md#agentexecutionsfailing)中有对应条目。与代理操作一样，它们属于 Preview：名称和标签仍可能在次要版本中变化。
 
+#### 发布阈值规则会保留现有报警 {#v160-publish-keeps-alarms}
+
+发布配置文件时，如果阈值规则的规则令牌和条件类型保持不变，就会保留已触发的报警状态。此状态转移与现有的缺报规则交接行为一起，可避免在设备持续超限时重新发送命令、Webhook 请求和连接器消息。对于这些规则，动作或严重程度的变更从下一次进入报警状态时生效。其他规则类型（包括重复和关联规则）在设备持续超限时，发布仍可能导致动作重复执行。
+
+在滚动升级期间，只要旧版 event-processing Pod 仍持有检测租约，就不会转移告警状态，行为与之前相同。
+
+- **无需操作。**
+
 ### v1.5.0 — 自动化变更先评审，代理审批绑定登录会话 {#v150-upgrade}
 
 `v1.5.0` 是从 `v1.4.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。**两个命令都使用新版本的 `dcctl`**，并向 `dcctl install` 提供集群原有设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级会运行四项追加迁移：`device-management` 三项，`user-management` 一项。它们添加代理停用屏障和效果发件箱、自动化评审及其强制执行机制，以及执行代次列。参见[模式变更与回退](#v150-going-back)。如果来自 `v1.3.0` 或更早版本，请先阅读 [`v1.4.0` 说明](#v140-upgrade)。

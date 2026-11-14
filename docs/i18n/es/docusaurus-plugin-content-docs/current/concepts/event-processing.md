@@ -18,6 +18,10 @@ Defines las reglas de detección sobre un **[perfil de dispositivo](./domain-mod
 
 Una regla plantea una **condición** sobre la telemetría del perfil, declara su **severidad** y enumera las **acciones** a ejecutar cuando se dispara.
 
+### Qué hace una publicación con los dispositivos que ya están en alarma {#publish-keeps-alarms}
+
+Al publicar un perfil, una **regla de umbral** que ya está en alarma conserva ese estado en la nueva versión si mantiene su token y su tipo de condición, aunque edites su predicado, acciones o gravedad. El traspaso existente de las reglas de ausencia también conserva las alarmas de los dispositivos silenciosos. Para estas reglas, publicar no vuelve a enviar comandos, llamadas webhook ni publicaciones a conectores mientras un dispositivo siga incumpliendo la condición; los cambios de acciones o gravedad se aplican desde su siguiente flanco de subida. La recuperación despeja la alarma conservada y un incumplimiento posterior ejecuta las acciones de la nueva versión. Los demás tipos de regla, incluidas las reglas de repetición y correlación, pueden seguir repitiendo sus acciones al publicar mientras el dispositivo siga incumpliendo la condición. Un token nuevo o un tipo de condición distinto comienza de forma independiente. Un fallo antes del siguiente punto de control puede repetir acciones; la entrega sigue siendo al menos una vez. Si la recuperación solo aparece en una lectura en tránsito marcada con la versión anterior, la alarma se despeja con la siguiente lectura del dispositivo.
+
 ## Delimitar una regla a un grupo
 
 Por defecto, una regla se aplica a **todos los dispositivos** que resuelven a su perfil. En su lugar, puedes **delimitar una regla a un [grupo dinámico](./domain-model.md#facets-and-dynamic-groups)**, para que se dispare solo para los dispositivos que son miembros en ese momento. Por ejemplo, puedes ejecutar una regla de calor más estricta únicamente en *dispositivos en zonas áridas*. La delimitación es opcional y se define por regla. Las reglas de ausencia y de correlación de área no se pueden delimitar, y publicar una delimitada se rechaza.

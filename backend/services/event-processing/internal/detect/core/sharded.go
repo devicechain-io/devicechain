@@ -6,6 +6,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -121,6 +122,27 @@ func (s *Sharded) RemoveRule(id string) {
 		e.RemoveRule(id)
 	}
 }
+
+// CarryRaised collects every old owner before inserting into the NEW key's owner.
+func (s *Sharded) CarryRaised(successor map[string]string, skip func(SeriesKey) bool) int {
+	var entries []carriedRaised
+	for _, e := range s.shards {
+		entries = append(entries, e.takeRaised(successor, skip)...)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if !entries[i].at.Equal(entries[j].at) {
+			return entries[i].at.After(entries[j].at)
+		}
+		return entries[i].newest.After(entries[j].newest)
+	})
+	for _, x := range entries {
+		s.owner(x.key).putRaised(x)
+	}
+	return len(entries)
+}
+
+// IsRaised asks the owner of the successor key.
+func (s *Sharded) IsRaised(key SeriesKey) bool { return s.owner(key).IsRaised(key) }
 
 // RemoveMatching evicts every selected rule from every shard and reports how many entries went,
 // as a single engine would. The rule set is replicated, so each removed rule is counted once per
