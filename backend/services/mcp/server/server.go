@@ -6,6 +6,7 @@ package server
 import (
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	coreauth "github.com/devicechain-io/dc-microservice/auth"
@@ -81,22 +82,37 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *G
 	)
 
 	// The RS middleware verifies the bearer (signature + audience, via the verifier)
-	// AND enforces the read-only scope, and on failure emits the RFC 9728
+	// and on failure emits the RFC 9728
 	// WWW-Authenticate challenge pointing at the protected-resource metadata.
+	// Leave Scopes unset: the SDK also advertises that list in challenges, which
+	// would pin client discovery to read-only. Enforce admission separately below.
 	protected := sdkauth.RequireBearerToken(
 		NewTokenVerifier(validator, resourceID),
 		&sdkauth.RequireBearerTokenOptions{
 			ResourceMetadataURL: metadataURL(resourceID),
-			Scopes:              []string{coreauth.ScopeReadOnly},
 		},
-	)(core.BufferBody(limitMessages(streamable, limits), maxRequestBodyBytes))
+	)(requireReadOnly(core.BufferBody(limitMessages(streamable, limits), maxRequestBodyBytes), resourceID))
 	// limitMessages sits inside the buffering because it reads the body, and inside the
 	// bearer check because it keys on the verified subject.
 	// The body is buffered INSIDE the bearer check, so a caller with no valid token is
 	// refused before any of it is held in memory. The deadlines go outside it, in
 	// Routes, so that caller still cannot stall the connection.
 
-	return protected, ProtectedResourceMetadataHandler(resourceID, issuer)
+	return protected, ProtectedResourceMetadataHandler(resourceID, issuer, opts...)
+}
+
+// requireReadOnly keeps the admission floor independent of discovery's optional
+// scopes. Challenges omit scope so clients use metadata's full scopes_supported.
+func requireReadOnly(next http.Handler, resourceID string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		info := sdkauth.TokenInfoFromContext(r.Context())
+		if info == nil || !slices.Contains(info.Scopes, coreauth.ScopeReadOnly) {
+			w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope", resource_metadata="`+metadataURL(resourceID)+`"`)
+			http.Error(w, "insufficient scope", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // newServer builds the MCP server this process serves, together with the catalog of the
