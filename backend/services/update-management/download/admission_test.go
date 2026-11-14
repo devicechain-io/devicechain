@@ -73,9 +73,8 @@ func TestVerifiedDownloadShares(t *testing.T) {
 	require.NoError(t, err)
 	busy(e.rebase(t, g.URL))
 	park(urls[1])
+	park(e.rebase(t, other))
 	busy(urls[2]) // two different devices already hold this tenant's half
-	resp, _ := get(t, e.rebase(t, other))
-	require.Equal(t, http.StatusOK, resp.StatusCode, "another tenant retains capacity")
 	require.Equal(t, float64(3), testutil.ToFloat64(e.h.metrics.Requests.WithLabelValues(ResultBusy)))
 }
 
@@ -97,15 +96,33 @@ func TestDownloadAdmissionKeysAndRelease(t *testing.T) {
 	require.Empty(t, h.streams)
 	require.True(t, h.admit(a))
 	h.release(a)
-	for _, slots := range []int{1, 3, 4} {
-		h = New(nil, slots, nil)
-		for i := 0; i < max(1, slots/2); i++ {
-			c := a
-			c.AssignmentID = string(rune('a' + i))
-			require.True(t, h.admit(c))
+}
+
+func TestDownloadSingleTenantUsesAllSlots(t *testing.T) {
+	for _, slots := range []int{1, 3, 4, 16} {
+		h := New(nil, slots, nil)
+		for i := 0; i < slots; i++ {
+			c := model.Capability{Tenant: "a", DeviceToken: "d", AssignmentID: string(rune('a' + i))}
+			require.True(t, h.admit(c), "single tenant must use all %d slots, admission %d", slots, i)
 		}
+	}
+}
+
+func TestDownloadTenantShareWhileAnotherHoldsSlot(t *testing.T) {
+	for _, slots := range []int{3, 4, 16} {
+		h := New(nil, slots, nil)
+		a := model.Capability{Tenant: "a", DeviceToken: "d", AssignmentID: "x"}
+		// A tenant already above its share may keep existing streams.
+		for i := 0; i < max(1, slots/2)+1; i++ {
+			a.AssignmentID = string(rune('a' + i))
+			require.True(t, h.admit(a))
+		}
+		b := model.Capability{Tenant: "b", DeviceToken: "d", AssignmentID: "x"}
+		require.True(t, h.admit(b), "a second tenant can take a freed global slot")
 		a.AssignmentID = "excess"
-		require.False(t, h.admit(a))
+		require.False(t, h.admit(a), "over-share tenant is refused while another holds a slot")
+		h.release(b)
+		require.True(t, h.admit(a), "spare capacity is available once the other tenant leaves")
 	}
 }
 

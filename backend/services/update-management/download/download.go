@@ -16,8 +16,9 @@
 //  1. Take a download slot. Unauthenticated work is bounded before any of it is done.
 //  2. Verify the capability's signature, then its expiry and its binding to the artifact in the
 //     path. A forged, mangled, wrong-tenant or wrong-artifact capability is one answer (403).
-//  3. Admit one stream per (tenant, device, assignment), and at most half the slots per tenant
-//     (minimum one), then check that the database still agrees: the assignment is the device's current one, its
+//  3. Admit one stream per (tenant, device, assignment), limiting a tenant to half the slots
+//     (minimum one) only while another tenant holds a slot, then check that the database
+//     still agrees: the assignment is the device's current one, its
 //     attempt is live and not being cancelled, the artifact is the assignment's own and still
 //     available (403 / 410).
 //  4. Only then open the object, for exactly the requested window, and stream it. The artifact is
@@ -126,7 +127,10 @@ func (h *Handler) admit(c model.Capability) bool {
 	defer h.mu.Unlock()
 	key := streamKey{c.Tenant, c.DeviceToken, c.AssignmentID}
 	share := max(1, cap(h.slots)/2)
-	if h.streams[key] >= 1 || h.tenants[c.Tenant] >= share {
+	// A lone tenant may use all slots. Once another tenant holds a slot,
+	// refuse further over-share admissions until that tenant leaves.
+	otherTenant := len(h.tenants) > 1 || (len(h.tenants) == 1 && h.tenants[c.Tenant] == 0)
+	if h.streams[key] >= 1 || (h.tenants[c.Tenant] >= share && otherTenant) {
 		return false
 	}
 	h.streams[key]++
@@ -197,8 +201,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verified identities get one stream per assignment and at most half the global slots
-	// per tenant (minimum one for a single-slot replica). Renewed capabilities share the key.
+	// Verified identities get one stream per (tenant, device, assignment). The tenant share
+	// applies only while another tenant holds a slot. Renewed capabilities share the key.
 	if !h.admit(*c) {
 		w.Header().Set("Retry-After", "5")
 		h.refuse(w, http.StatusServiceUnavailable, ResultBusy, "too many downloads are in progress; retry shortly")
