@@ -234,7 +234,7 @@ expect_fail() {
     echo "SELF-TEST FAILED: $label was not caught" >&2
     exit 1
   fi
-  if [ -n "$diagnostic" ] && ! printf '%s\n' "$output" | grep -Fq "$diagnostic"; then
+  if [ -n "$diagnostic" ] && ! grep -Fq -- "$diagnostic" <<<"$output"; then
     echo "SELF-TEST FAILED: $label did not report '$diagnostic': $output" >&2
     exit 1
   fi
