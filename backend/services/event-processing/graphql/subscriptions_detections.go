@@ -51,11 +51,13 @@ func (r *SchemaResolver) DetectionStream(ctx context.Context, args struct {
 
 	// SubscribeLive scopes to "{instance}.{tenant}.derived-events", so every delivered event is
 	// already this tenant's — the per-event filter narrows to the requested profile only.
-	openLive := r.Live
-	if openLive == nil {
-		openLive = r.GetNats(ctx).SubscribeLive
+	var live <-chan messaging.Message
+	var err error
+	if r.Live != nil {
+		live, err = r.Live(ctx, tenant, streams.DerivedEvents)
+	} else {
+		live, err = r.GetNats(ctx).SubscribeLive(ctx, tenant, streams.DerivedEvents)
 	}
-	live, err := openLive(ctx, tenant, streams.DerivedEvents)
 	if err != nil {
 		return nil, err
 	}
