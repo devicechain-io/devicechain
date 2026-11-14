@@ -36,6 +36,7 @@ func mergeSnapshots(parts []snapshot) snapshot {
 	m.Corr = mergeSection(parts, func(s *snapshot) []snapCorr { return s.Corr }, func(a, b *snapCorr) bool { return ruleSeriesLess(a.Rule, a.Series, b.Rule, b.Series) })
 	m.Expected = mergeSection(parts, func(s *snapshot) []snapExpected { return s.Expected }, func(a, b *snapExpected) bool { return ruleSeriesLess(a.Rule, a.Series, b.Rule, b.Series) })
 	m.Raised = mergeSection(parts, func(s *snapshot) []snapRaised { return s.Raised }, func(a, b *snapRaised) bool { return ruleSeriesLess(a.Rule, a.Series, b.Rule, b.Series) })
+	m.Fell = mergeSection(parts, func(s *snapshot) []snapRaised { return s.Fell }, func(a, b *snapRaised) bool { return ruleSeriesLess(a.Rule, a.Series, b.Rule, b.Series) })
 	m.Presence = mergeSection(parts, func(s *snapshot) []snapPresence { return s.Presence }, func(a, b *snapPresence) bool { return ruleSeriesLess(a.Rule, a.Series, b.Rule, b.Series) })
 	m.Pending = mergeSection(parts, func(s *snapshot) []snapPending { return s.Pending }, func(a, b *snapPending) bool { return ruleSeriesLess(a.Rule, a.Series, b.Rule, b.Series) })
 	m.Newest = mergeSection(parts, func(s *snapshot) []snapNewest { return s.Newest }, func(a, b *snapNewest) bool { return ruleSeriesLess(a.Rule, a.Series, b.Rule, b.Series) })

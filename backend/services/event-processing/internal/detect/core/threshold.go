@@ -33,7 +33,8 @@ import (
 // dropped when the alarm clears, so it costs one entry per RAISED alarm that has seen a reading
 // newer than its raise, live and in the checkpoint, not one per active series.
 //
-// UNRAISED: THE FRONTIER, FOR A REDELIVERY. A series that is not raised holds nothing. A matching
+// UNRAISED: THE FRONTIER, FOR A REDELIVERY. An unraised series retains no reading cursor;
+// its last fall is memoized for ten minutes after its recording watermark. A matching
 // reading is refused and counted late only when BOTH hold:
 //
 //   - it is behind the frontier: more than the lateness budget behind the newest event the engine
@@ -60,24 +61,26 @@ import (
 //
 // Neither time is engine state: both are fixed in the stored message, so the decision is the same
 // in the live run, a replay from any checkpoint, and the replay preview, and nothing is held per
-// unraised series. One inside the frontier raises as it always did, so the narrow in-budget stale
-// re-raise (non-match@32 clears, then match@28 arrives within the budget and raises, stamped before
-// the clear) behaves exactly as before; it heals on the series' next reading. A non-matching
+// unraised series other than the bounded falling-edge memo. One inside the frontier still raises,
+// including a stale re-raise (non-match@32, then match@28), but its stamp is bumped past the fall
+// while that memo remains. It heals on the series' next reading. A non-matching
 // reading on an unraised series does nothing, as before.
 //
 // What this does not see, deliberately accepted: a reading that reaches the platform afresh is not
 // a redelivery in this sense, whatever its event time — a device that sends an old reading again
 // (an MQTT retransmission after a reconnect, a re-uploaded buffer, an ingest adapter's retry, which
 // is stamped anew), or one whose readings reach the platform out of order. If it is an older match
-// arriving after a newer non-match cleared the alarm, it raises again, stamped before the clear, as
-// every reading did before the frontier bound; the series' next reading heals it. Telling that apart from a lagging device's new reading needs the
+// arriving after a newer non-match cleared the alarm, it still raises again at its own time,
+// behind the clear; the downstream fold ignores that stale edge. Telling it apart from a lagging device's new reading needs the
 // series' own newest time, which an unraised series does not keep. And a first delivery the
 // pipeline held for longer than thresholdRedeliveryBudget (a backlog in device-management) is
 // treated as a possible redelivery: a match in it that is also behind the frontier is refused, as
 // every one was before. A raised series answers to its cursor, not to any of this.
 //
 // Ties: two readings at the cursor's instant are both "newest", so the second to arrive decides,
-// as it always did. No order between them is more right than the other.
+// A fresh raise following a fall at that instant is stamped 1µs later so the alarm fold
+// agrees. Further readings at the original instant are then behind the raised cursor.
+// Devices should send distinct timestamps.
 //
 // 🔴 HORIZON BEHIND THE CURSOR. A device whose clock steps BACK — an NTP correction, an RTC reset
 // after a power loss, a time-zone fix — presents every later reading as older than its cursor, and

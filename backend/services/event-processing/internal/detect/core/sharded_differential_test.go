@@ -964,3 +964,26 @@ func TestDifferentialKindListIsTheEngines(t *testing.T) {
 		}
 	}
 }
+
+// The class-wide edge invariant also holds when per-key streams are merged
+// from different owners. Compare against the unsharded engine by value.
+func TestShardedEveryKindHasStrictEpisodeEdges(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		for kind := Threshold; kind <= Connectivity; kind++ {
+			r := Rule{ID: "r", Kind: kind}
+			plain := NewEngine([]Rule{r}, 0)
+			sharded := NewSharded(k, []Rule{r}, 0)
+			for _, series := range []string{"a", "b", "c", "d"} {
+				key := SeriesKey{Rule: "r", Series: series}
+				emitEpisodeEdges(plain, r, key)
+				emitEpisodeEdges(sharded.owner(key), r, key)
+			}
+			a, b := plain.Drain(), sharded.Drain()
+			assertStrictEpisodeEdges(t, a)
+			assertStrictEpisodeEdges(t, b)
+			if _, ok := detectionsEqual(normDetections(a), normDetections(b)); !ok {
+				t.Fatalf("K=%d kind=%v: edges differ", k, kind)
+			}
+		}
+	}
+}

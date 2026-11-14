@@ -150,6 +150,10 @@ func protoBuilder(mode protoMode, k int) engineBuilder {
 				i := sh(x.Rule, x.Series)
 				parts[i].Raised = append(parts[i].Raised, x)
 			}
+			for _, x := range s.Fell {
+				i := sh(x.Rule, x.Series)
+				parts[i].Fell = append(parts[i].Fell, x)
+			}
 			for _, x := range s.Presence {
 				i := sh(x.Rule, x.Series)
 				parts[i].Presence = append(parts[i].Presence, x)
@@ -362,7 +366,7 @@ func (p *protoSharded) HeartbeatAbsenceKeys() []SeriesKey {
 func (p *protoSharded) ProcessEvent(ev Event) { p.ProcessResolved(ev.Seq, ev.Time, []Event{ev}) }
 
 func (p *protoSharded) Snapshot() ([]byte, error) {
-	m := snapshot{Active: []snapRun{}, Breaks: []snapBreak{}, Timers: []snapTimer{}, Gens: []snapGen{}, Sliding: []snapSliding{}, Panes: []snapPane{}, Deltas: []snapDelta{}, Counts: []snapCount{}, Sessions: []snapSession{}, Slides: []snapSlide{}, Corr: []snapCorr{}, Expected: []snapExpected{}, Raised: []snapRaised{}, Presence: []snapPresence{}, Pending: []snapPending{}, Newest: []snapNewest{}}
+	m := snapshot{Active: []snapRun{}, Breaks: []snapBreak{}, Timers: []snapTimer{}, Gens: []snapGen{}, Sliding: []snapSliding{}, Panes: []snapPane{}, Deltas: []snapDelta{}, Counts: []snapCount{}, Sessions: []snapSession{}, Slides: []snapSlide{}, Corr: []snapCorr{}, Expected: []snapExpected{}, Raised: []snapRaised{}, Fell: []snapRaised{}, Presence: []snapPresence{}, Pending: []snapPending{}, Newest: []snapNewest{}}
 	for i, s := range p.shards {
 		b, err := s.Snapshot()
 		if err != nil {
@@ -394,6 +398,7 @@ func (p *protoSharded) Snapshot() ([]byte, error) {
 		m.Corr = append(m.Corr, x.Corr...)
 		m.Expected = append(m.Expected, x.Expected...)
 		m.Raised = append(m.Raised, x.Raised...)
+		m.Fell = append(m.Fell, x.Fell...)
 		m.Presence = append(m.Presence, x.Presence...)
 		m.Pending = append(m.Pending, x.Pending...)
 		m.Newest = append(m.Newest, x.Newest...)
@@ -413,6 +418,7 @@ func (p *protoSharded) Snapshot() ([]byte, error) {
 	if p.mode != protoUnsortedRaisedMerge {
 		sortByRuleSeries(m.Raised, func(i int) (string, string) { return m.Raised[i].Rule, m.Raised[i].Series })
 	}
+	sortByRuleSeries(m.Fell, func(i int) (string, string) { return m.Fell[i].Rule, m.Fell[i].Series })
 	sortByRuleSeries(m.Presence, func(i int) (string, string) { return m.Presence[i].Rule, m.Presence[i].Series })
 	sort.Slice(m.Timers, func(i, j int) bool {
 		a, b := m.Timers[i], m.Timers[j]

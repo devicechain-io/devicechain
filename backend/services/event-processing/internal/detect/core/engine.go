@@ -146,21 +146,9 @@ type PresenceEdge struct {
 //
 // The zero value is EdgeRaised, so every legacy fire site is a raise by default and only the
 // explicit resolve path stamps EdgeResolved. Edge is part of the detection's dedup identity (it is
-// not zeroed by the identity projection), so a Raised and a Resolved that happen to share an At — a
-// single kind never emits both for one event, but a gap-driven falling edge can coincide with a
-// fresh rising edge at the same timestamp on ADJACENT events — never collapse into one another
-// under a downstream at-least-once dedup. Note that (rule, series, kind, At, edge) still cannot
-// distinguish two SEPARATE raise episodes at the identical timestamp (match/non-match/match all at
-// one At); that residual same-At-same-edge collapse is a documented 6d-pre-2 concern — the alarm
-// object's monotonic decision-time guard resolves it, and it requires multiple events at a byte-
-// identical event time, which real per-device telemetry does not produce.
-//
-// The edges of one series are also NOT globally time-ordered: with the D2/D5 falling edge (6d-pre-2a),
-// a bounded-late matching event can open a fresh window and stamp a Raised at an event time EARLIER
-// than an already-emitted Resolved for the same key (resolve@12 then a late match@9 → raise@9). Both
-// survive dedup (distinct At), but they reach the alarm object out of At order — so the 6d-pre-2 alarm
-// integrator's per-contributor monotonic decision-time guard (not arrival order) is what must decide
-// the final raised/cleared state; this is explicitly on the hook, not just the same-At case above.
+// not zeroed by the identity projection), so a Raised and Resolved at one instant remain
+// distinct. A fresh raise at exactly the preceding falling edge is stamped one microsecond
+// later while the falling-edge memo is retained. Strictly older raises keep their own time.
 type EdgeKind uint8
 
 const (
@@ -282,6 +270,10 @@ type Engine struct {
 	// an alarm the latest reading still supports (review D3/F2). It is snapshotted, so the level and
 	// its origin survive a restart.
 	raised map[SeriesKey]time.Time
+	// raiseInputs holds the original decision time only for synthetically bumped raises.
+	raiseInputs map[SeriesKey]time.Time
+	// fell retains the last falling edge for ten minutes after its recording watermark.
+	fell map[SeriesKey]fallMemo
 	// presenceState is the Connectivity kind's per-series ordering cursor (ADR-067 S3b): the
 	// last-applied presence transition (session epoch, time, connected). It is the engine-side
 	// twin of the device-state projection's stored (SessionId, PresenceTime, Active), consulted
@@ -362,6 +354,8 @@ func NewEngine(rules []Rule, allowedLateness time.Duration) *Engine {
 		newest:        map[SeriesKey]time.Time{},
 		pending:       map[SeriesKey]*pendingRun{},
 		raised:        map[SeriesKey]time.Time{},
+		raiseInputs:   map[SeriesKey]time.Time{},
+		fell:          map[SeriesKey]fallMemo{},
 		presenceState: map[SeriesKey]presence.Prior{},
 	}
 }
@@ -444,6 +438,8 @@ func (e *Engine) RemoveMatching(match func(ruleID string) bool) int {
 	n += deleteSeriesKeysMatching(e.expected, match)
 	n += deleteSeriesKeysMatching(e.newest, match)
 	n += deleteSeriesKeysMatching(e.raised, match)
+	n += deleteSeriesKeysMatching(e.raiseInputs, match)
+	n += deleteSeriesKeysMatching(e.fell, match)
 	n += deleteSeriesKeysMatching(e.presenceState, match)
 	n += deleteSeriesKeysMatching(e.pending, match)
 	e.pendHeap.purgeMatching(match) // the heap entry and the map entry are one run; counted once
@@ -488,7 +484,7 @@ func deleteSeriesKeysMatching[V any](m map[SeriesKey]V, match func(string) bool)
 	return n
 }
 
-// Descope drops ALL keyed state for one exact (rule, series) and resolves a raised alarm — the
+// Descope retains the bounded falling-edge memo but drops other keyed state for one exact (rule, series) and resolves a raised alarm — the
 // ADR-062 S4 membership-flip. When a group-scoped rule's series (device) leaves the scoped
 // group, the resolved event stops carrying the rule's group@v (ScopeMemberships), so the
 // runtime feeds a descope here instead of a normal sample: any raised alarm resolves and every
@@ -526,7 +522,11 @@ func (e *Engine) Descope(ruleID, series string, at time.Time) bool {
 	// never reports again. So resolve at max(at, rising-edge): never before the raise (which
 	// would be a nonsensical negative-duration alarm) but always emitted.
 	e.resolveLatched(r, key, at)
+	memo, keep := e.fell[key]
 	dropped := e.dropSeriesKey(key, r.Kind)
+	if keep {
+		e.fell[key] = memo
+	}
 	return dropped || len(e.out) > before
 }
 
@@ -574,6 +574,7 @@ func (e *Engine) dropSeriesOfRule(id, series string, stale func(string, time.Tim
 // its state maps and the timer wheel. It is the enumeration the restore-time reconcile walks to find
 // state belonging to a device that has since been deleted or recreated. Order is unspecified.
 func (e *Engine) SeriesKeys() []SeriesKey {
+	e.pruneFell()
 	seen := make(map[SeriesKey]struct{})
 	add := func(k SeriesKey) { seen[k] = struct{}{} }
 	for k := range e.runs {
@@ -604,6 +605,9 @@ func (e *Engine) SeriesKeys() []SeriesKey {
 		add(k)
 	}
 	for k := range e.raised {
+		add(k)
+	}
+	for k := range e.fell {
 		add(k)
 	}
 	for k := range e.presenceState {
@@ -649,6 +653,8 @@ func (e *Engine) dropSeriesKey(key SeriesKey, kind RuleKind) bool {
 	n += dropOneKey(e.corr, key)
 	n += dropOneKey(e.expected, key)
 	n += dropOneKey(e.newest, key)
+	n += dropOneKey(e.fell, key)
+	n += dropOneKey(e.raiseInputs, key)
 	n += dropOneKey(e.presenceState, key)
 	if e.dropPendingRun(key) {
 		n++
@@ -720,6 +726,7 @@ func countSeriesKeys[V any](counts map[string]int, m map[SeriesKey]V) {
 // per rule by distinct-series-ever-timed and reclaimed on RemoveRule. Computed on demand on the
 // single-writer loop (no lock, no hot-path cost).
 func (e *Engine) LiveKeyCounts() map[string]int {
+	e.pruneFell()
 	e.pruneNewest() // count the evaluation instants that still bear on an outcome, not every series ever seen
 	counts := make(map[string]int)
 	countSeriesKeys(counts, e.runs)
@@ -729,8 +736,10 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 	countSeriesKeys(counts, e.session)
 	countSeriesKeys(counts, e.slides)
 	countSeriesKeys(counts, e.expected)
-	countSeriesKeys(counts, e.newest)        // newest-reading instant: one per sliding-kind series active within its window of the frontier, or raised
-	countSeriesKeys(counts, e.pending)       // a sample-pairing kind's open reorder run (reorder.go)
+	countSeriesKeys(counts, e.newest)  // newest-reading instant: one per sliding-kind series active within its window of the frontier, or raised
+	countSeriesKeys(counts, e.pending) // a sample-pairing kind's open reorder run (reorder.go)
+	countSeriesKeys(counts, e.raiseInputs)
+	countSeriesKeys(counts, e.fell)          // bounded falling-edge memo: one live entry per retained fall
 	countSeriesKeys(counts, e.raised)        // ADR-057 two-edge latch: a raised series is a live entry
 	countSeriesKeys(counts, e.presenceState) // Connectivity cursor: one permanent entry per (rule, device-ever-seen)
 	countSeriesKeys(counts, e.wheel.live)    // heartbeat-armed absence timers live ONLY here
@@ -861,7 +870,9 @@ func (e *Engine) RemoveExpected(key SeriesKey) {
 		e.resolve(r, key, e.wm.now)
 	} else {
 		delete(e.raised, key)
+		delete(e.raiseInputs, key)
 	}
+	delete(e.fell, key)
 }
 
 // ExpectedKeys returns every series currently dead-man-armed (fired or not), so the runtime's
@@ -1140,6 +1151,7 @@ func (e *Engine) advance(t time.Time) bool {
 }
 
 func (e *Engine) apply(ev Event) {
+	e.pruneFellKey(ev.Key)
 	e.step(ordEvent, time.Time{}, "", "", ev.idx)
 	r, ok := e.rules[ev.Key.Rule]
 	if !ok {
@@ -1317,6 +1329,48 @@ func (e *Engine) fire(key SeriesKey, deadline time.Time) {
 	}
 }
 
+func (e *Engine) pruneFell() {
+	for key := range e.fell {
+		e.pruneFellKey(key)
+	}
+}
+
+// fallMemo ages from the frontier at recording, even for promptly delivered lagging devices.
+type fallMemo struct {
+	at       time.Time
+	frontier time.Time
+}
+
+// pruneFellKey expires a memo only once the watermark is strictly past its recording horizon.
+func (e *Engine) pruneFellKey(key SeriesKey) {
+	if memo, ok := e.fell[key]; ok && e.wm.now.After(memo.frontier.Add(thresholdCursorHorizon)) {
+		delete(e.fell, key)
+	}
+}
+
+// latch distinguishes an equal-time new episode without promoting strictly stale raises.
+func (e *Engine) latch(key SeriesKey, at time.Time) (time.Time, bool) {
+	e.pruneFellKey(key)
+	if _, ok := e.raised[key]; ok {
+		return at, false
+	}
+	if fell, ok := e.fell[key]; ok && at.Equal(fell.at) {
+		e.raiseInputs[key] = at
+		at = fell.at.Add(time.Microsecond)
+	}
+	e.raised[key] = at
+	return at, true
+}
+
+// raiseInput is the input decision time used by stale guards. The emitted stamp
+// can be later solely to distinguish episodes; it is not evidence of a newer sample.
+func (e *Engine) raiseInput(key SeriesKey) time.Time {
+	if input, ok := e.raiseInputs[key]; ok {
+		return input
+	}
+	return e.raised[key]
+}
+
 // emit raises a value-less detection (Absence, Duration, Correlation) on the RISING edge, and
 // latches the series as raised (ADR-057). It is idempotent while raised: a rule whose condition
 // stays satisfied — a duration held past a second hold, a still-absent device, a cohort that
@@ -1324,20 +1378,22 @@ func (e *Engine) fire(key SeriesKey, deadline time.Time) {
 // a sustained breach is one alarm, not a flood. The falling edge (resolve) emits the matching
 // Resolved.
 func (e *Engine) emit(r Rule, key SeriesKey, at time.Time) {
-	if _, ok := e.raised[key]; ok {
+	var ok bool
+	at, ok = e.latch(key, at)
+	if !ok {
 		return
 	}
-	e.raised[key] = at
 	e.out = append(e.out, e.stamp(Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at}))
 }
 
 // emitValue raises a detection carrying a COMPUTED scalar the fire is about (the delta/rate, or a
 // window/session aggregate) — always present, so HasValue is true. Latched exactly like emit.
 func (e *Engine) emitValue(r Rule, key SeriesKey, at time.Time, value float64) {
-	if _, ok := e.raised[key]; ok {
+	var ok bool
+	at, ok = e.latch(key, at)
+	if !ok {
 		return
 	}
-	e.raised[key] = at
 	e.out = append(e.out, e.stamp(Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at, Value: value, HasValue: true}))
 }
 
@@ -1358,10 +1414,11 @@ func (e *Engine) emitSample(r Rule, ev Event) { e.emitSampleAt(r, ev, ev.Time) }
 // Repeating run completed by a late sample raises at the series' newest instant (trailingWindow),
 // still carrying the sample that completed it.
 func (e *Engine) emitSampleAt(r Rule, ev Event, at time.Time) {
-	if _, ok := e.raised[ev.Key]; ok {
+	var ok bool
+	at, ok = e.latch(ev.Key, at)
+	if !ok {
 		return
 	}
-	e.raised[ev.Key] = at
 	value, hasValue := ev.Value, ev.HasValue
 	if hasValue && (math.IsNaN(value) || math.IsInf(value, 0)) {
 		value, hasValue = 0, false
@@ -1406,11 +1463,17 @@ func (e *Engine) resolveLatched(r Rule, key SeriesKey, at time.Time) {
 }
 
 func (e *Engine) resolve(r Rule, key SeriesKey, at time.Time) {
+	e.pruneFellKey(key)
 	raisedAt, ok := e.raised[key]
-	if !ok || at.Before(raisedAt) {
+	if !ok || at.Before(e.raiseInput(key)) {
 		return
 	}
+	if at.Before(raisedAt) {
+		at = raisedAt
+	}
 	delete(e.raised, key)
+	delete(e.raiseInputs, key)
+	e.fell[key] = fallMemo{at: at, frontier: e.wm.now}
 	e.out = append(e.out, e.stamp(Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at, Edge: EdgeResolved}))
 }
 
@@ -1429,7 +1492,9 @@ func (e *Engine) resolve(r Rule, key SeriesKey, at time.Time) {
 // survive, or a late match older than it would open a run across it and raise falsely; a restarted
 // run's hold timer is still live and will raise on its own.
 func (e *Engine) ClearRaised(key SeriesKey) {
+	e.pruneFellKey(key) // keep an unexpired prior fall: only the dropped raise was unseen
 	delete(e.raised, key)
+	delete(e.raiseInputs, key)
 	st, ok := e.runs[key]
 	if !ok || !st.running {
 		return
@@ -1460,6 +1525,10 @@ type snapRaised struct {
 	Rule   string    `json:"rule"`
 	Series string    `json:"series"`
 	At     time.Time `json:"at"`
+	// Input is present only when At was bumped beyond its input decision time.
+	Input *time.Time `json:"input,omitempty"`
+	// RecordedFrontier is used only in fell; absent in older snapshots.
+	RecordedFrontier *time.Time `json:"recordedFrontier,omitempty"`
 }
 
 // snapPresence persists one Connectivity ordering cursor (ADR-067 S3b): the last-applied
@@ -1495,6 +1564,7 @@ type snapshot struct {
 	Corr      []snapCorr     `json:"corr"`
 	Expected  []snapExpected `json:"expected"`
 	Raised    []snapRaised   `json:"raised"`
+	Fell      []snapRaised   `json:"fell,omitempty"`
 	Presence  []snapPresence `json:"presence"`
 	// Pending is the sample-pairing kinds' held samples (reorder.go). A checkpoint written
 	// before it existed restores with none, which is exact: that model held nothing back.
@@ -1524,6 +1594,7 @@ func (e *Engine) Snapshot() ([]byte, error) {
 // snapshotState is Snapshot before it is serialized: the canonical, sorted sections. The sharded
 // engine merges K of these rather than round-tripping each shard through bytes.
 func (e *Engine) snapshotState() snapshot {
+	e.pruneFell()
 	timers, gens := e.wheel.snapshot()
 	active, breaks := e.snapshotRuns()
 	sliding, panes := e.snapshotWindows()
@@ -1539,7 +1610,11 @@ func (e *Engine) snapshotState() snapshot {
 	})
 	raised := make([]snapRaised, 0, len(e.raised))
 	for k, at := range e.raised {
-		raised = append(raised, snapRaised{Rule: k.Rule, Series: k.Series, At: at})
+		x := snapRaised{Rule: k.Rule, Series: k.Series, At: at}
+		if input, ok := e.raiseInputs[k]; ok {
+			x.Input = &input
+		}
+		raised = append(raised, x)
 	}
 	sort.Slice(raised, func(i, j int) bool {
 		if raised[i].Rule != raised[j].Rule {
@@ -1547,6 +1622,12 @@ func (e *Engine) snapshotState() snapshot {
 		}
 		return raised[i].Series < raised[j].Series
 	})
+	fell := make([]snapRaised, 0, len(e.fell))
+	for k, memo := range e.fell {
+		frontier := memo.frontier
+		fell = append(fell, snapRaised{Rule: k.Rule, Series: k.Series, At: memo.at, RecordedFrontier: &frontier})
+	}
+	sort.Slice(fell, func(i, j int) bool { return ruleSeriesLess(fell[i].Rule, fell[i].Series, fell[j].Rule, fell[j].Series) })
 	presenceCursors := make([]snapPresence, 0, len(e.presenceState))
 	for k, p := range e.presenceState {
 		presenceCursors = append(presenceCursors, snapPresence{
@@ -1576,6 +1657,7 @@ func (e *Engine) snapshotState() snapshot {
 		Corr:      e.snapshotCorr(),
 		Expected:  expected,
 		Raised:    raised,
+		Fell:      fell,
 		Presence:  presenceCursors,
 		Pending:   e.snapshotPending(),
 		Newest:    e.snapshotNewest(),
@@ -1611,7 +1693,18 @@ func restoreState(rules []Rule, allowedLateness time.Duration, s snapshot) *Engi
 		e.expected[SeriesKey{Rule: x.Rule, Series: x.Series}] = expectedState{since: x.Since}
 	}
 	for _, x := range s.Raised {
-		e.raised[SeriesKey{Rule: x.Rule, Series: x.Series}] = x.At
+		key := SeriesKey{Rule: x.Rule, Series: x.Series}
+		e.raised[key] = x.At
+		if x.Input != nil {
+			e.raiseInputs[key] = *x.Input
+		}
+	}
+	for _, x := range s.Fell {
+		frontier := x.At
+		if x.RecordedFrontier != nil {
+			frontier = *x.RecordedFrontier
+		}
+		e.fell[SeriesKey{Rule: x.Rule, Series: x.Series}] = fallMemo{at: x.At, frontier: frontier}
 	}
 	e.restoreRuns(s.Active, s.Breaks) // after the latch: a raise written without its run gets one
 	e.restoreNewest(s.Newest)         // after the windows and the latch: a missing instant is seeded from them

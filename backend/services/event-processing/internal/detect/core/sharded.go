@@ -403,6 +403,7 @@ func restoreSharded(k int, salt uint32, rules []Rule, allowedLateness time.Durat
 	splitBy(snap.Corr, k, salt, func(x snapCorr) (string, string) { return x.Rule, x.Series }, func(i int, x snapCorr) { parts[i].Corr = append(parts[i].Corr, x) })
 	splitBy(snap.Expected, k, salt, func(x snapExpected) (string, string) { return x.Rule, x.Series }, func(i int, x snapExpected) { parts[i].Expected = append(parts[i].Expected, x) })
 	splitBy(snap.Raised, k, salt, func(x snapRaised) (string, string) { return x.Rule, x.Series }, func(i int, x snapRaised) { parts[i].Raised = append(parts[i].Raised, x) })
+	splitBy(snap.Fell, k, salt, func(x snapRaised) (string, string) { return x.Rule, x.Series }, func(i int, x snapRaised) { parts[i].Fell = append(parts[i].Fell, x) })
 	splitBy(snap.Presence, k, salt, func(x snapPresence) (string, string) { return x.Rule, x.Series }, func(i int, x snapPresence) { parts[i].Presence = append(parts[i].Presence, x) })
 	splitBy(snap.Pending, k, salt, func(x snapPending) (string, string) { return x.Rule, x.Series }, func(i int, x snapPending) { parts[i].Pending = append(parts[i].Pending, x) })
 	splitBy(snap.Newest, k, salt, func(x snapNewest) (string, string) { return x.Rule, x.Series }, func(i int, x snapNewest) { parts[i].Newest = append(parts[i].Newest, x) })
