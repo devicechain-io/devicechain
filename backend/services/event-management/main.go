@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/shardgroups"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
@@ -26,8 +27,9 @@ import (
 )
 
 var (
-	Microservice  *core.Microservice
-	Configuration *config.EventManagementConfiguration
+	stopStreamSharding context.CancelFunc
+	Microservice       *core.Microservice
+	Configuration      *config.EventManagementConfiguration
 
 	// Svc owns the three managers below and the order of all four of their lifecycle
 	// phases. They stay named here because the rest of this service refers to them
@@ -40,9 +42,10 @@ var (
 
 	Api *model.Api
 
-	ResolvedEventsReader      messaging.MessageReader
-	EventPersistenceProcessor *processor.EventPersistenceProcessor
-	FailedEventsWriter        messaging.MessageWriter
+	ResolvedEventsReader            messaging.MessageReader
+	AdditionalPersistenceProcessors []*processor.EventPersistenceProcessor
+	EventPersistenceProcessor       *processor.EventPersistenceProcessor
+	FailedEventsWriter              messaging.MessageWriter
 
 	// PersistMetrics is built ONCE, in the initialize phase, and shared by every
 	// EventPersistenceProcessor the NATS manager's oncreate callback builds. See
@@ -149,12 +152,17 @@ func newFailedEventsIndexer(reader messaging.MessageReader) *processor.FailedEve
 
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
-	// Create reader for resolved events (wildcard across tenants).
-	revents, err := nmgr.NewReader(streams.ResolvedEvents)
+	stop, err := shardgroups.Enable(nmgr)
 	if err != nil {
 		return err
 	}
-	ResolvedEventsReader = revents
+	stopStreamSharding = stop
+	// Create reader for resolved events (wildcard across tenants).
+	readers, err := shardgroups.NewReaders(nmgr, streams.ResolvedEvents)
+	if err != nil {
+		return err
+	}
+	ResolvedEventsReader = readers[0]
 
 	// Add and initialize failed events writer.
 	fevents, err := nmgr.NewWriter(streams.FailedEvents)
@@ -168,6 +176,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	err = EventPersistenceProcessor.Initialize(context.Background())
 	if err != nil {
 		return err
+	}
+
+	AdditionalPersistenceProcessors = nil
+	for _, reader := range readers[1:] {
+		p := newEventPersistenceProcessor(reader, FailedEventsWriter)
+		if err := p.Initialize(context.Background()); err != nil {
+			return err
+		}
+		AdditionalPersistenceProcessors = append(AdditionalPersistenceProcessors, p)
 	}
 
 	// Reader + reconciler for entity-deletion events (ADR-044): drops event_anchors
@@ -487,6 +504,12 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	for _, p := range AdditionalPersistenceProcessors {
+		if err := p.Start(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Start entity-anchor reconciler.
 	err = EntityAnchorReconciler.Start(ctx)
 	if err != nil {
@@ -568,6 +591,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
+	for _, p := range AdditionalPersistenceProcessors {
+		if err := p.Stop(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Stop event persistence processor.
 	if err := EventPersistenceProcessor.Stop(ctx); err != nil {
 		return err
@@ -594,6 +623,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	//
 	// core/service stops them in exactly that order, for every service. Pinned next door in
 	// graphql_shutdown_order_test.go, which drives this function.
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
 	return Svc.Stop(ctx)
 }
 
@@ -605,5 +637,8 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
 	// that actually closes handles.
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
 	return Svc.Terminate(ctx)
 }
