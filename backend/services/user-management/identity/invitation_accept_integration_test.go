@@ -26,6 +26,7 @@ func TestPostgresInvitationIsRedeemedOnceConcurrently(t *testing.T) {
 			e := newMfaPgEnv(t)
 			s := admin.NewService(e.store, 0, 0, nil)
 			s.SetViewerBaseline(ViewerAuthorities())
+			require.NoError(t, e.store.CreateRole(context.Background(), &iam.Role{Scope: iam.ScopeTenant, Token: iam.TenantAdminRoleToken, Authorities: []string{"*"}}))
 			_, err := s.CreateIdentity(context.Background(), admin.CreateIdentityInput{Email: "boss@example.com", Password: "pw", Enabled: true})
 			require.NoError(t, err)
 			_, err = s.AddMembership(context.Background(), "boss@example.com", "acme", []string{iam.TenantAdminRoleToken})

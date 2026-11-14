@@ -156,7 +156,7 @@ func TestPostgresConcurrentRotationsLeaveAtMostTwoLiveSecrets(t *testing.T) {
 		t.Run(fmt.Sprintf("without_tenant_and_account_locks=%t", unlocked), func(t *testing.T) {
 			e := newPostgresPlaneEnv(t)
 			e.member(t, "boss@acme.example", "acme", []string{iam.TenantAdminRoleToken})
-			key, err := credential.DeriveServiceAccountSecretKey([]byte("concurrent-secret-rotation-test-key"))
+			key, err := credential.DeriveServiceAccountSecretKey([]byte("concurrent-rotation-test-rootkey"))
 			require.NoError(t, err)
 			e.s.SetServiceAccountSecretKey(key)
 			_, _, err = e.s.CreateServiceAccount(boss(), ServiceAccountInput{Token: "ci"})
