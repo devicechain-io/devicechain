@@ -26,7 +26,7 @@ Un canal divide su configuración en dos:
 
 En una **actualización**, el campo `secret` se comporta así:
 
-- **Omítelo** para dejar el secreto existente sin cambios. Nunca necesitas reenviarlo.
+- **Omítelo** para dejar el secreto existente sin cambios. Debes reenviarlo al cambiar el tipo o destino de la credencial.
 - Envía un valor no nulo para reemplazarlo.
 - Envía `null` o una cadena vacía para borrarlo.
 - En un canal webhook cuya configuración declara `bearer` o `header`, borrar el secreto se rechaza. Cambia `auth` a `none` en la misma solicitud si quieres que el endpoint sea anónimo.
@@ -371,3 +371,5 @@ Dos propiedades a tener en cuenta:
 5. **Lee el registro de entregas.** `notificationAttempts(criteria: {pageNumber: 1, pageSize: 20, alarmToken: "..."})` lista cada intento de la alarma con su resultado. Un registro `FAILED` o `REFUSED` lleva `errorCode` y el `errorMessage` del proveedor; consulta [Registro de entregas](#delivery-ledger).
 
 Reconocer o despejar la alarma detiene el escalado adicional. El registro de estado guarda `acknowledgedAt`/`clearedAt` junto con el historial de notificaciones. Si la alarma se despeja y su condición vuelve a darse, la plataforma reabre la misma alarma y su registro de estado empieza de nuevo para el nuevo ciclo: el escalado vuelve a funcionar hasta que ese ciclo se reconozca o se despeje.
+
+Cambiar el tipo de canal, la URL o autenticación del webhook, el host/puerto/seguridad SMTP o la región de PagerDuty requiere `secret` en la misma solicitud si hay una credencial almacenada. Omitirlo devuelve `SECRET_RESUPPLY_REQUIRED` sin escribir nada: vuelve a enviar la credencial o bórrala con `secret: null`. Los cambios de nombre, cabeceras personalizadas y URL base de enlaces conservan la credencial.

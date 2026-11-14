@@ -538,6 +538,10 @@ dcctl bootstrap local devicechain
 
 `device-management` 现在会报告代理操作：按类型和结果统计的提议、按结果统计的批准、按类型和结果统计的执行及其耗时，以及已过期的提议。Platform 看板新增 **Agent actions (preview)** 一行，并新增警告级告警 `AgentExecutionsFailing`，在最终批准持续无法完成时触发。拒绝不会触发该告警：依赖变化、策略拒绝、紧急停止栅栏关闭或批准人被拒绝都会计入各自的结果。这些指标列在[指标参考](./metrics-reference.md)中，该告警在[告警处理手册](./alert-runbook.md#agentexecutionsfailing)中有对应条目。与代理操作一样，它们属于 Preview：名称和标签仍可能在次要版本中变化。
 
+#### 现有操作的更严格检查 {#v160-stricter-checks}
+
+**更改已存储凭据的目标.** `updateConnector`、`rollbackConnector`、`updateNotificationChannel` 和 `updateAiProvider` 会在以下情况下返回 `SECRET_RESUPPLY_REQUIRED`：请求更改持有已存储凭据的连接器、通知渠道或 AI 提供方的类型或目标，但未在同一请求中发送 `secret`。请重新提供凭据，或使用 `secret: null` 删除凭据。不改变目标的编辑（名称、主题、QoS、自定义请求头、链接基础 URL、模型、启用状态）不受影响，现有连接器、渠道和提供方会继续投递。若要将连接器回滚到目标不同的版本，请改用 `updateConnector` 并提供凭据。使用 `dcctl product apply` 时，如果清单更改目标，请设置连接器的凭据句柄。旧副本在被替换之前不会执行此检查。
+
 ### v1.5.0 — 自动化变更先评审，代理审批绑定登录会话 {#v150-upgrade}
 
 `v1.5.0` 是从 `v1.4.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。**两个命令都使用新版本的 `dcctl`**，并向 `dcctl install` 提供集群原有设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级会运行四项追加迁移：`device-management` 三项，`user-management` 一项。它们添加代理停用屏障和效果发件箱、自动化评审及其强制执行机制，以及执行代次列。参见[模式变更与回退](#v150-going-back)。如果来自 `v1.3.0` 或更早版本，请先阅读 [`v1.4.0` 说明](#v140-upgrade)。
