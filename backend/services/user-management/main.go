@@ -61,6 +61,8 @@ var (
 	// database's. Nothing routes by either yet.
 	PlacementMirror *core.PeriodicTask
 
+	SigningKeyFollow *core.PeriodicTask
+
 	// DeadLetterStore is the ADR-024 record of work a consumer accepted and gave up on,
 	// with the consumer that fills it and the sweep that bounds it.
 	DeadLetterStore *deadletters.Store
@@ -333,12 +335,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	configureMfa(IdentityManager, mfaKV, newMfaMetrics(Microservice),
 		mfaIssuerSource(func() *settings.Service { return SettingsService }, Configuration.Auth.IssuerUrl))
 
-	// Age-based signing-key rotation (ADR-008 follow-up): rotate at startup if the
-	// active key is older than the configured max age, retaining the prior key for
-	// the configured window so the tokens it signed keep verifying.
+	// Follow peers' signing keys while running. Age-based rotation starts after a
+	// 15-minute grace so older replicas can finish a rolling upgrade first.
 	keyMaxAge := time.Duration(Configuration.Auth.SigningKeyMaxAgeDays) * 24 * time.Hour
 	keyRetention := time.Duration(Configuration.Auth.SigningKeyRetentionDays) * 24 * time.Hour
-	if err := IdentityManager.MaybeRotateOnAge(ctx, keyMaxAge, keyRetention); err != nil {
+	SigningKeyFollow = IdentityManager.NewSigningKeyFollowTask(keyMaxAge, keyRetention)
+	if err := SigningKeyFollow.Initialize(ctx); err != nil {
 		return err
 	}
 
@@ -623,7 +625,7 @@ func registerSettingsHandler() {
 // the public mirror the OAuth metadata advertises.
 func registerKeyHandlers() {
 	internalAuthMux().Handle(auth.JWKSPath, identity.BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		jwks, err := IdentityManager.JWKS()
+		jwks, err := IdentityManager.JWKS(r.Context())
 		if err != nil {
 			http.Error(w, "failed to build JWKS", http.StatusInternalServerError)
 			return
@@ -715,7 +717,7 @@ func registerOAuthHandlers() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		jwks, err := IdentityManager.JWKS()
+		jwks, err := IdentityManager.JWKS(r.Context())
 		if err != nil {
 			http.Error(w, "failed to build JWKS", http.StatusInternalServerError)
 			return
@@ -793,6 +795,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 			return err
 		}
 	}
+	if SigningKeyFollow != nil {
+		if err := SigningKeyFollow.Start(ctx); err != nil {
+			return err
+		}
+	}
 	if PlacementMirror != nil {
 		if err := PlacementMirror.Start(ctx); err != nil {
 			return err
@@ -826,6 +833,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	}
 	if MfaSweeper != nil {
 		if err := MfaSweeper.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	if SigningKeyFollow != nil {
+		if err := SigningKeyFollow.Stop(ctx); err != nil {
 			return err
 		}
 	}
@@ -864,6 +876,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 	if MfaSweeper != nil {
 		if err := MfaSweeper.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if SigningKeyFollow != nil {
+		if err := SigningKeyFollow.Terminate(ctx); err != nil {
 			return err
 		}
 	}

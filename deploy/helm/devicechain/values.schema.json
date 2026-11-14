@@ -1097,7 +1097,7 @@
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 106751,
-                    "description": "user-management: rotate the token signing key at startup once it is older than this many days. 0 or absent turns age-based rotation off; a negative value, or one above 106751, is refused here and by the service at startup."
+                    "description": "user-management: rotate the token signing key while running once it is older than this many days, after a 15-minute startup grace. Replicas follow new keys within 30 seconds. 0 or absent turns age-based rotation off; a negative value, or one above 106751, is refused here and by the service at startup."
                   },
                   "signingKeyRetentionDays": {
                     "type": "integer",

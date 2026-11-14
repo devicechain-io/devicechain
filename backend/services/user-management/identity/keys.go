@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-user-management/model"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // signingKeySet is the in-memory result of loading the instance signing keys: the
@@ -200,8 +201,9 @@ func (m *Manager) mintSigningKey(ctx context.Context, tx *gorm.DB, store secrets
 // never leave zero or two active keys, a retired key whose private half is still
 // stored, or an active key with no private half; and the whole thing runs under the
 // distributed lock so it happens once across replicas. That is a claim about the
-// DATABASE: another replica already running keeps the demoted key in memory and signs
-// with it until it restarts, because nothing tells it the key was rotated. retention <= 0 keeps retired keys'
+// DATABASE: another replica can sign with the demoted key until its next follow
+// (every 30s, or on an unknown kid / JWKS request, subject to a 2s minimum).
+// retention <= 0 keeps retired keys'
 // PUBLIC halves indefinitely; their private halves are gone at demotion regardless.
 func (m *Manager) rotateSigningKey(ctx context.Context, retention time.Duration) (*signingKeySet, error) {
 	var set *signingKeySet
@@ -225,47 +227,8 @@ func (m *Manager) rotateSigningKeyLocked(ctx context.Context, retention time.Dur
 		if err != nil {
 			return err
 		}
-		var demoted []model.SigningKey
-		if err := tx.Where("active = ?", true).Find(&demoted).Error; err != nil {
-			return err
-		}
-		now := time.Now()
-		if err := tx.Model(&model.SigningKey{}).Where("active = ?", true).
-			Updates(map[string]any{"active": false, "retired_at": now}).Error; err != nil {
-			return err
-		}
-		// A retired key is only meant to verify (a replica still running with it in
-		// memory signs until it restarts; nothing here reaches that copy), so its
-		// stored private half has no further use — and kept, it is a key that can still mint tokens every service accepts for as
-		// long as the public half is served.
-		for _, k := range demoted {
-			pub, err := auth.DecodePublicKeyPEM([]byte(k.PublicKeyPem))
-			if err != nil {
-				return fmt.Errorf("the JWT signing key being retired has a public half that does not parse: %w", err)
-			}
-			if err := store.Delete(ctx, signingKeyRef(pub)); err != nil {
-				return fmt.Errorf("deleting the retired JWT signing key's private half (kid %s): %w", auth.Thumbprint(pub), err)
-			}
-		}
-		active, err := m.mintSigningKey(ctx, tx, store)
-		if err != nil {
-			return err
-		}
-		if retention > 0 {
-			cutoff := now.Add(-retention)
-			if err := tx.Unscoped().
-				Where("active = ? AND retired_at IS NOT NULL AND retired_at < ?", false, cutoff).
-				Delete(&model.SigningKey{}).Error; err != nil {
-				return err
-			}
-		}
-		loaded, err := readKeySet(tx, active)
-		if err != nil {
-			return err
-		}
-		set = loaded
-		log.Warn().Msg("Rotated the instance JWT signing key; the retired key's private half was deleted.")
-		return nil
+		set, err = m.rotateSigningKeyInTx(ctx, tx, store, retention)
+		return err
 	})
 	if err != nil {
 		return nil, err
@@ -273,14 +236,81 @@ func (m *Manager) rotateSigningKeyLocked(ctx context.Context, retention time.Dur
 	return set, nil
 }
 
-// activeKeyAge reports how long the current active signing key has existed, used
-// by the age-based auto-rotation check.
-func (m *Manager) activeKeyAge(ctx context.Context) (time.Duration, error) {
-	var current model.SigningKey
-	if err := m.db.DB(core.WithSystemContext(ctx)).Where("active = ?", true).First(&current).Error; err != nil {
-		return 0, err
+// rotateIfOlderThanLocked re-reads the active row inside the rotation transaction.
+// A peer that lost the race adopts the current set without minting another key.
+func (m *Manager) rotateIfOlderThanLocked(ctx context.Context, maxAge, retention time.Duration) (*signingKeySet, bool, error) {
+	var set *signingKeySet
+	rotated := false
+	err := m.db.DB(core.WithSystemContext(ctx)).Transaction(func(tx *gorm.DB) error {
+		store, err := m.sealedIn(tx)
+		if err != nil {
+			return err
+		}
+		var current model.SigningKey
+		query := tx.Where("active = ?", true)
+		if tx.Dialector.Name() != "sqlite" {
+			query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		if err := query.First(&current).Error; err != nil {
+			return err
+		}
+		if m.clock().Sub(current.CreatedAt) < maxAge {
+			active, err := openPrivateHalf(ctx, store, &current)
+			if err != nil {
+				return err
+			}
+			set, err = readKeySet(tx, active)
+			return err
+		}
+		set, err = m.rotateSigningKeyInTx(ctx, tx, store, retention)
+		rotated = err == nil
+		return err
+	})
+	return set, rotated, err
+}
+
+func (m *Manager) rotateSigningKeyInTx(ctx context.Context, tx *gorm.DB, store secrets.SecretStore, retention time.Duration) (*signingKeySet, error) {
+	var demoted []model.SigningKey
+	if err := tx.Where("active = ?", true).Find(&demoted).Error; err != nil {
+		return nil, err
 	}
-	return time.Since(current.CreatedAt), nil
+	now := m.clock()
+	if err := tx.Model(&model.SigningKey{}).Where("active = ?", true).
+		Updates(map[string]any{"active": false, "retired_at": now}).Error; err != nil {
+		return nil, err
+	}
+	// A retired key is only meant to verify (a replica still running with it in
+	// memory signs until its next follow: every 30s, or on an unknown kid /
+	// JWKS request subject to the 2s minimum), so its
+	// stored private half has no further use — and kept, it is a key that can still mint tokens every service accepts for as
+	// long as the public half is served.
+	for _, k := range demoted {
+		pub, err := auth.DecodePublicKeyPEM([]byte(k.PublicKeyPem))
+		if err != nil {
+			return nil, fmt.Errorf("the JWT signing key being retired has a public half that does not parse: %w", err)
+		}
+		if err := store.Delete(ctx, signingKeyRef(pub)); err != nil {
+			return nil, fmt.Errorf("deleting the retired JWT signing key's private half (kid %s): %w", auth.Thumbprint(pub), err)
+		}
+	}
+	active, err := m.mintSigningKey(ctx, tx, store)
+	if err != nil {
+		return nil, err
+	}
+	if retention > 0 {
+		cutoff := now.Add(-retention)
+		if err := tx.Unscoped().
+			Where("active = ? AND retired_at IS NOT NULL AND retired_at < ?", false, cutoff).
+			Delete(&model.SigningKey{}).Error; err != nil {
+			return nil, err
+		}
+	}
+	loaded, err := readKeySet(tx, active)
+	if err != nil {
+		return nil, err
+	}
+	log.Warn().Msg("Rotated the instance JWT signing key; the retired key's private half was deleted.")
+	return loaded, nil
 }
 
 // zero overwrites key material this process no longer needs, best effort: Go may

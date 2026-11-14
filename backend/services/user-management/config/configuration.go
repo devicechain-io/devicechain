@@ -48,7 +48,8 @@ type AuthConfiguration struct {
 	AccessTokenTtlSeconds  int
 	RefreshTokenTtlSeconds int
 
-	// SigningKeyMaxAgeDays triggers an age-based signing-key rotation at startup
+	// SigningKeyMaxAgeDays triggers age-based signing-key rotation while running,
+	// after a 15-minute startup grace
 	// when the active key is older than this. 0 disables age-based rotation
 	// (rotation can still be invoked explicitly). A negative value, or one above
 	// MaxSigningKeyDays, is refused at load. SigningKeyRetentionDays is how long a
