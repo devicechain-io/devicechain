@@ -56,6 +56,7 @@ export function commandStatusColor(status: string): string {
 // It is an alias, not a second definition: the terminal set lives in @devicechain/dashboards
 // so the console, this package and the preview cannot disagree about it. The name is kept
 // because it is part of this package's published surface.
+/** @deprecated Use isTerminalCommandStatus from `@devicechain/dashboards` instead. */
 export function isTerminalStatus(status: string): boolean {
   return isTerminalCommandStatus(status);
 }
