@@ -516,68 +516,67 @@ dcctl bootstrap local devicechain
 
 `v1.6.0` 是从 `v1.5.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
 
-#### ?? npm ????? {#v160-npm-deprecations}
+#### 旧版 npm 导出已弃用 {#v160-npm-deprecations}
 
-????? `v1.6.0` ?????????????????????????????????????????????????????????????????? 1.6 ????????????? 1.7 ???????????`BuiltinOptionIssue` ????????????`widgetType`?????????? `@devicechain/dashboards.OptionIssue`?`widgetId`??????
+以下导出在 `v1.6.0` 中被弃用，但仍按原样工作。请将导入或调用更新为下列替代项。本次不会移除任何导出。只有在弃用至少两个次要版本之后，才能在主要版本中移除；从 1.6 开始弃用的导出，最早也只能在 1.7 之后的某个主要版本中移除。`BuiltinOptionIssue` 表示现有的内置组件问题结构（`widgetType`）；通用的 `@devicechain/dashboards.OptionIssue`（`widgetId`）仍受支持。
 
-- `@devicechain/client` / `resolveAuthToken` ??????? `SessionTokens.getAccessToken()`??? `createSessionTokens()` ???????
-- `@devicechain/widgets` / `pickSample` ??????? `@devicechain/widget-sdk.pickSample`?
-- `@devicechain/widgets` / `optBoolean` ??????? `@devicechain/widget-sdk.optBoolean`?
-- `@devicechain/widgets` / `WidgetProps` ??????? `@devicechain/widget-sdk.WidgetProps`?
-- `@devicechain/widgets` / `WidgetComponent` ??????? `@devicechain/widget-sdk.WidgetComponent`?
-- `@devicechain/widgets` / `WidgetFrame` ??????? `@devicechain/widget-sdk.WidgetFrame`?
-- `@devicechain/widgets` / `WidgetSubjectProvider` ??????? `@devicechain/widget-sdk.WidgetSubjectProvider`?
-- `@devicechain/widgets` / `WidgetSelectProvider` ??????? `@devicechain/widget-sdk.WidgetSelectProvider`?
-- `@devicechain/widgets` / `useWidgetSelect` ??????? `@devicechain/widget-sdk.useWidgetSelect`?
-- `@devicechain/widgets` / `WidgetTimeZoneProvider` ??????? `@devicechain/widget-sdk.WidgetTimeZoneProvider`?
-- `@devicechain/widgets` / `useWidgetTimeZone` ??????? `@devicechain/widget-sdk.useWidgetTimeZone`?
-- `@devicechain/widgets` / `WidgetThemeRootProvider` ??????? `@devicechain/widget-sdk.WidgetThemeRootProvider`?
-- `@devicechain/widgets` / `useWidgetThemeRoot` ??????? `@devicechain/widget-sdk.useWidgetThemeRoot`?
-- `@devicechain/widgets` / `WidgetCandidatesProvider` ??????? `@devicechain/widget-sdk.WidgetCandidatesProvider`?
-- `@devicechain/widgets` / `useWidgetCandidates` ??????? `@devicechain/widget-sdk.useWidgetCandidates`?
-- `@devicechain/widgets` / `useFlashOnChange` ??????? `@devicechain/widget-sdk.useFlashOnChange`?
-- `@devicechain/widgets` / `flashTextStyle` ??????? `@devicechain/widget-sdk.flashTextStyle`?
-- `@devicechain/widgets` / `flashBackgroundStyle` ??????? `@devicechain/widget-sdk.flashBackgroundStyle`?
-- `@devicechain/widgets` / `FlashValue` ??????? `@devicechain/widget-sdk.FlashValue`?
-- `@devicechain/widgets` / `fitValueFont` ??????? `@devicechain/widget-sdk.fitValueFont`?
-- `@devicechain/widgets` / `useMeasurementStream` ??????? `@devicechain/widget-sdk.useMeasurementStream`?
-- `@devicechain/widgets` / `useAlarmStream` ??????? `@devicechain/widget-sdk.useAlarmStream`?
-- `@devicechain/widgets` / `useCommandStream` ??????? `@devicechain/widget-sdk.useCommandStream`?
-- `@devicechain/widgets` / `useLocationStream` ??????? `@devicechain/widget-sdk.useLocationStream`?
-- `@devicechain/widgets` / `useDatasourceAvailability` ??????? `@devicechain/widget-sdk.useDatasourceAvailability`?
-- `@devicechain/widgets` / `useDashboardHub` ??????? `@devicechain/widget-sdk.useDashboardHub`?
-- `@devicechain/widgets` / `useHubConnectionState` ??????? `@devicechain/widget-sdk.useHubConnectionState`?
-- `@devicechain/widgets` / `HubConnectionBadge` ??????? `@devicechain/widget-sdk.HubConnectionBadge`?
-- `@devicechain/widgets` / `useResolvedBindings` ??????? `@devicechain/widget-sdk.useResolvedBindings`?
-- `@devicechain/widgets` / `useViewerBindings` ??????? `@devicechain/widget-sdk.useViewerBindings`?
-- `@devicechain/widgets` / `useSlotCandidates` ??????? `@devicechain/widget-sdk.useSlotCandidates`?
-- `@devicechain/widgets` / `useCandidates` ??????? `@devicechain/widget-sdk.useCandidates`?
-- `@devicechain/widgets` / `css` ??????? `@devicechain/widget-sdk.css`?
-- `@devicechain/widgets` / `FlashDirection` ??????? `@devicechain/widget-sdk.FlashDirection`?
-- `@devicechain/widgets` / `WidgetFrameProps` ??????? `@devicechain/widget-sdk.WidgetFrameProps`?
-- `@devicechain/widgets` / `WidgetSelect` ??????? `@devicechain/widget-sdk.WidgetSelect`?
-- `@devicechain/widgets` / `WidgetCandidates` ??????? `@devicechain/widget-sdk.WidgetCandidates`?
-- `@devicechain/widgets` / `MeasurementStreamState` ??????? `@devicechain/widget-sdk.MeasurementStreamState`?
-- `@devicechain/widgets` / `AlarmStreamState` ??????? `@devicechain/widget-sdk.AlarmStreamState`?
-- `@devicechain/widgets` / `CommandStreamState` ??????? `@devicechain/widget-sdk.CommandStreamState`?
-- `@devicechain/widgets` / `LocationStreamState` ??????? `@devicechain/widget-sdk.LocationStreamState`?
-- `@devicechain/widgets` / `CandidatesState` ??????? `@devicechain/widget-sdk.CandidatesState`?
-- `@devicechain/widgets` / `DatasourceAvailability` ??????? `@devicechain/widget-sdk.DatasourceAvailability`?
-- `@devicechain/widgets` / `HubConnectionBadgeProps` ??????? `@devicechain/widget-sdk.HubConnectionBadgeProps`?
-- `@devicechain/widgets` / `ThemeVar` ??????? `@devicechain/widget-sdk.ThemeVar`?
-- `@devicechain/widgets` / `EChart` ??????? `@devicechain/widget-sdk/echarts.EChart`?
-- `@devicechain/widgets` / `buildLineOption` ??????? `@devicechain/widget-sdk/echarts.buildLineOption`?
-- `@devicechain/widgets` / `buildGaugeOption` ??????? `@devicechain/widget-sdk/echarts.buildGaugeOption`?
-- `@devicechain/widgets` / `resolveChartTheme` ??????? `@devicechain/widget-sdk/echarts.resolveChartTheme`?
-- `@devicechain/widgets` / `useChartTheme` ??????? `@devicechain/widget-sdk/echarts.useChartTheme`?
-- `@devicechain/widgets` / `EChartOption` ??????? `@devicechain/widget-sdk/echarts.EChartOption`?
-- `@devicechain/widgets` / `LineChartOptions` ??????? `@devicechain/widget-sdk/echarts.LineChartOptions`?
-- `@devicechain/widgets` / `GaugeChartOptions` ??????? `@devicechain/widget-sdk/echarts.GaugeChartOptions`?
-- `@devicechain/widgets` / `ChartTheme` ??????? `@devicechain/widget-sdk/echarts.ChartTheme`?
-- `@devicechain/widgets` / `WIDGET_CHANNEL` ??????? `builtinWidgetDescriptors[id].channel`?
-- `@devicechain/widgets` / `WIDGET_BINDS_DATASOURCE` ??????? `builtinWidgetDescriptors[id].datasource.mode !== 'none'`?
-- `@devicechain/widgets` / `isTerminalStatus` ??????? `@devicechain/dashboards.isTerminalCommandStatus`?
-- `@devicechain/widgets` / `OptionIssue` ??????? `@devicechain/widgets.BuiltinOptionIssue`?
+- `@devicechain/widgets` / `pickSample` 已弃用；请改用 `@devicechain/widget-sdk.pickSample`。
+- `@devicechain/widgets` / `optBoolean` 已弃用；请改用 `@devicechain/widget-sdk.optBoolean`。
+- `@devicechain/widgets` / `WidgetProps` 已弃用；请改用 `@devicechain/widget-sdk.WidgetProps`。
+- `@devicechain/widgets` / `WidgetComponent` 已弃用；请改用 `@devicechain/widget-sdk.WidgetComponent`。
+- `@devicechain/widgets` / `WidgetFrame` 已弃用；请改用 `@devicechain/widget-sdk.WidgetFrame`。
+- `@devicechain/widgets` / `WidgetSubjectProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetSubjectProvider`。
+- `@devicechain/widgets` / `WidgetSelectProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetSelectProvider`。
+- `@devicechain/widgets` / `useWidgetSelect` 已弃用；请改用 `@devicechain/widget-sdk.useWidgetSelect`。
+- `@devicechain/widgets` / `WidgetTimeZoneProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetTimeZoneProvider`。
+- `@devicechain/widgets` / `useWidgetTimeZone` 已弃用；请改用 `@devicechain/widget-sdk.useWidgetTimeZone`。
+- `@devicechain/widgets` / `WidgetThemeRootProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetThemeRootProvider`。
+- `@devicechain/widgets` / `useWidgetThemeRoot` 已弃用；请改用 `@devicechain/widget-sdk.useWidgetThemeRoot`。
+- `@devicechain/widgets` / `WidgetCandidatesProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetCandidatesProvider`。
+- `@devicechain/widgets` / `useWidgetCandidates` 已弃用；请改用 `@devicechain/widget-sdk.useWidgetCandidates`。
+- `@devicechain/widgets` / `useFlashOnChange` 已弃用；请改用 `@devicechain/widget-sdk.useFlashOnChange`。
+- `@devicechain/widgets` / `flashTextStyle` 已弃用；请改用 `@devicechain/widget-sdk.flashTextStyle`。
+- `@devicechain/widgets` / `flashBackgroundStyle` 已弃用；请改用 `@devicechain/widget-sdk.flashBackgroundStyle`。
+- `@devicechain/widgets` / `FlashValue` 已弃用；请改用 `@devicechain/widget-sdk.FlashValue`。
+- `@devicechain/widgets` / `fitValueFont` 已弃用；请改用 `@devicechain/widget-sdk.fitValueFont`。
+- `@devicechain/widgets` / `useMeasurementStream` 已弃用；请改用 `@devicechain/widget-sdk.useMeasurementStream`。
+- `@devicechain/widgets` / `useAlarmStream` 已弃用；请改用 `@devicechain/widget-sdk.useAlarmStream`。
+- `@devicechain/widgets` / `useCommandStream` 已弃用；请改用 `@devicechain/widget-sdk.useCommandStream`。
+- `@devicechain/widgets` / `useLocationStream` 已弃用；请改用 `@devicechain/widget-sdk.useLocationStream`。
+- `@devicechain/widgets` / `useDatasourceAvailability` 已弃用；请改用 `@devicechain/widget-sdk.useDatasourceAvailability`。
+- `@devicechain/widgets` / `useDashboardHub` 已弃用；请改用 `@devicechain/widget-sdk.useDashboardHub`。
+- `@devicechain/widgets` / `useHubConnectionState` 已弃用；请改用 `@devicechain/widget-sdk.useHubConnectionState`。
+- `@devicechain/widgets` / `HubConnectionBadge` 已弃用；请改用 `@devicechain/widget-sdk.HubConnectionBadge`。
+- `@devicechain/widgets` / `useResolvedBindings` 已弃用；请改用 `@devicechain/widget-sdk.useResolvedBindings`。
+- `@devicechain/widgets` / `useViewerBindings` 已弃用；请改用 `@devicechain/widget-sdk.useViewerBindings`。
+- `@devicechain/widgets` / `useSlotCandidates` 已弃用；请改用 `@devicechain/widget-sdk.useSlotCandidates`。
+- `@devicechain/widgets` / `useCandidates` 已弃用；请改用 `@devicechain/widget-sdk.useCandidates`。
+- `@devicechain/widgets` / `css` 已弃用；请改用 `@devicechain/widget-sdk.css`。
+- `@devicechain/widgets` / `FlashDirection` 已弃用；请改用 `@devicechain/widget-sdk.FlashDirection`。
+- `@devicechain/widgets` / `WidgetFrameProps` 已弃用；请改用 `@devicechain/widget-sdk.WidgetFrameProps`。
+- `@devicechain/widgets` / `WidgetSelect` 已弃用；请改用 `@devicechain/widget-sdk.WidgetSelect`。
+- `@devicechain/widgets` / `WidgetCandidates` 已弃用；请改用 `@devicechain/widget-sdk.WidgetCandidates`。
+- `@devicechain/widgets` / `MeasurementStreamState` 已弃用；请改用 `@devicechain/widget-sdk.MeasurementStreamState`。
+- `@devicechain/widgets` / `AlarmStreamState` 已弃用；请改用 `@devicechain/widget-sdk.AlarmStreamState`。
+- `@devicechain/widgets` / `CommandStreamState` 已弃用；请改用 `@devicechain/widget-sdk.CommandStreamState`。
+- `@devicechain/widgets` / `LocationStreamState` 已弃用；请改用 `@devicechain/widget-sdk.LocationStreamState`。
+- `@devicechain/widgets` / `CandidatesState` 已弃用；请改用 `@devicechain/widget-sdk.CandidatesState`。
+- `@devicechain/widgets` / `DatasourceAvailability` 已弃用；请改用 `@devicechain/widget-sdk.DatasourceAvailability`。
+- `@devicechain/widgets` / `HubConnectionBadgeProps` 已弃用；请改用 `@devicechain/widget-sdk.HubConnectionBadgeProps`。
+- `@devicechain/widgets` / `ThemeVar` 已弃用；请改用 `@devicechain/widget-sdk.ThemeVar`。
+- `@devicechain/widgets` / `EChart` 已弃用；请改用 `@devicechain/widget-sdk/echarts.EChart`。
+- `@devicechain/widgets` / `buildLineOption` 已弃用；请改用 `@devicechain/widget-sdk/echarts.buildLineOption`。
+- `@devicechain/widgets` / `buildGaugeOption` 已弃用；请改用 `@devicechain/widget-sdk/echarts.buildGaugeOption`。
+- `@devicechain/widgets` / `resolveChartTheme` 已弃用；请改用 `@devicechain/widget-sdk/echarts.resolveChartTheme`。
+- `@devicechain/widgets` / `useChartTheme` 已弃用；请改用 `@devicechain/widget-sdk/echarts.useChartTheme`。
+- `@devicechain/widgets` / `EChartOption` 已弃用；请改用 `@devicechain/widget-sdk/echarts.EChartOption`。
+- `@devicechain/widgets` / `LineChartOptions` 已弃用；请改用 `@devicechain/widget-sdk/echarts.LineChartOptions`。
+- `@devicechain/widgets` / `GaugeChartOptions` 已弃用；请改用 `@devicechain/widget-sdk/echarts.GaugeChartOptions`。
+- `@devicechain/widgets` / `ChartTheme` 已弃用；请改用 `@devicechain/widget-sdk/echarts.ChartTheme`。
+- `@devicechain/widgets` / `WIDGET_CHANNEL` 已弃用；请改用 `builtinWidgetDescriptors[id].channel`。
+- `@devicechain/widgets` / `WIDGET_BINDS_DATASOURCE` 已弃用；请改用 `builtinWidgetDescriptors[id].datasource.mode !== 'none'`。
+- `@devicechain/widgets` / `isTerminalStatus` 已弃用；请改用 `@devicechain/dashboards.isTerminalCommandStatus`。
+- `@devicechain/widgets` / `OptionIssue` 已弃用；请改用 `@devicechain/widgets.BuiltinOptionIssue`。
 
 #### 完整重载代理会保持认证调用已放行的设备连接 {#v160-broker-reload}
 

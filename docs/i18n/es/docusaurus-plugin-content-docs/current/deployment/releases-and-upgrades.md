@@ -807,9 +807,8 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 #### Exportaciones npm heredadas obsoletas {#v160-npm-deprecations}
 
-Las siguientes exportaciones quedan obsoletas en `v1.6.0` y siguen funcionando sin cambios. Actualice las importaciones o llamadas con los reemplazos indicados. No se elimina ninguna exportaci?n. La eliminaci?n requiere una versi?n mayor tras al menos dos versiones menores de obsolescencia; si empieza en 1.6, no podr? eliminarse nada antes de una versi?n mayor posterior a 1.7. `BuiltinOptionIssue` nombra la forma existente del problema de un widget integrado (`widgetType`); el tipo general `@devicechain/dashboards.OptionIssue` (`widgetId`) sigue siendo compatible.
+Las siguientes exportaciones quedan obsoletas en `v1.6.0` y siguen funcionando sin cambios. Actualice las importaciones o llamadas con los reemplazos indicados. No se elimina ninguna exportación. La eliminación requiere una versión mayor tras al menos dos versiones menores de obsolescencia; si empieza en 1.6, no podrá eliminarse nada antes de una versión mayor posterior a 1.7. `BuiltinOptionIssue` nombra la forma existente del problema de un widget integrado (`widgetType`); el tipo general `@devicechain/dashboards.OptionIssue` (`widgetId`) sigue siendo compatible.
 
-- `@devicechain/client` / `resolveAuthToken` queda obsoleta; use `SessionTokens.getAccessToken()` en la sesi?n devuelta por `createSessionTokens()`.
 - `@devicechain/widgets` / `pickSample` queda obsoleta; use `@devicechain/widget-sdk.pickSample`.
 - `@devicechain/widgets` / `optBoolean` queda obsoleta; use `@devicechain/widget-sdk.optBoolean`.
 - `@devicechain/widgets` / `WidgetProps` queda obsoleta; use `@devicechain/widget-sdk.WidgetProps`.
