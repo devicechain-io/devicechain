@@ -113,9 +113,9 @@ everything running on them.
 ## Before you start
 
 You need `gcloud`, `kubectl`, `tofu` (or `terraform`) and `dcctl` on your `PATH`,
-and a Google Cloud project with billing linked. You need OpenTofu or Terraform 1.9
-or newer. This configuration accepts 1.8, but `dcctl bootstrap`, which you run
-after it, needs 1.9, and `dcctl` does not check the version before it starts.
+and a Google Cloud project with billing linked. You need OpenTofu or Terraform 1.10
+or newer. This configuration accepts 1.10, but `dcctl bootstrap`, which you run
+after it, needs 1.10, and `dcctl` does not check the version before it starts.
 
 1. Sign in. The first command is for `gcloud` itself, and the second gives
    OpenTofu credentials:

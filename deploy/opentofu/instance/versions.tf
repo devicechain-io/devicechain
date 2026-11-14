@@ -9,13 +9,10 @@
 # A cloud-specific root that provisions the cluster itself can wrap these modules.
 
 terraform {
-  # 1.9, not the cluster root's 1.6: two variable validations here refer to
-  # something other than their own variable (restore_tsdb_target_time reads
-  # var.restore_tsdb_from; timescale_analytics_readers reads
-  # local.event_store_reserved_connections), and OpenTofu accepts that only from
-  # 1.9.0. Below it this root fails to load. It is also the version CI's tofu job
-  # pins (.github/workflows/ci.yml), so the floor declared here is the one tested.
-  required_version = ">= 1.9"
+  # Move this floor and every CI OpenTofu pin together (D2-6).
+  # OpenTofu <1.10 evaluates both sides of &&, including invalid indexes.
+  # Keep init -upgrade: a lock file from an older init keeps old providers.
+  required_version = ">= 1.10"
 
   required_providers {
     # 🔴 EXACT PINS, AND THE kubernetes ONE MAY NOT GO BELOW 3.2.1.

@@ -759,7 +759,7 @@ Las alertas de las instantáneas se describen en
   agotar su tiempo límite. Consulta cada cifra en
   [Dimensionamiento de los servicios](#service-sizing). En un clúster que no puede dedicarles eso,
   como un portátil, usa [`--compact`](#--compact).
-- **OpenTofu 1.9 o posterior** (el binario `tofu`; `terraform` 1.9 o posterior también
+- **OpenTofu 1.10 o posterior** (el binario `tofu`; `terraform` 1.10 o posterior también
   funciona) en tu `PATH`. `dcctl` lo ejecuta para aprovisionar infraestructura. Instálalo desde
   [opentofu.org](https://opentofu.org). Ejecuta `dcctl preflight local` para comprobar que está
   y el resto de tu entorno de antemano. La comprobación previa no mira su versión; una anterior
