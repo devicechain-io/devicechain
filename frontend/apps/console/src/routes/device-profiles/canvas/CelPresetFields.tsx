@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
@@ -13,6 +13,7 @@ import '@/i18n/lazy/deviceProfiles';
 /** Applying is explicit: opening a saved CEL expression must never rewrite it. */
 export function CelPresetFields({ context, math = false, onApply }: { context: CelContext; math?: boolean; onApply: (cel: string) => void }) {
   const { t } = useTranslation('deviceProfiles');
+  const id = useId();
   const [mathContext, setMathContext] = useState<CelContext>(context);
   const [kind, setKind] = useState<CelPreset>(math ? 'math' : 'filter');
   const [metric, setMetric] = useState('');
@@ -23,29 +24,29 @@ export function CelPresetFields({ context, math = false, onApply }: { context: C
   return (
     <details className="space-y-3 rounded-md border border-dashed p-3">
       <summary>{t('celPresetSummary')}</summary>
-      {math && <FormField label={t('celPresetSource')} htmlFor="preset-source">
-        <Select id="preset-source" value={mathContext} onChange={(v) => setMathContext(v as CelContext)}>
+      {math && <FormField label={t('celPresetSource')} htmlFor={`${id}-source`}>
+        <Select id={`${id}-source`} value={mathContext} onChange={(v) => setMathContext(v as CelContext)}>
           <SelectItem value="event">{t('celPresetEvent')}</SelectItem>
           <SelectItem value="detection">{t('celPresetDetection')}</SelectItem>
         </Select>
       </FormField>}
-      {!math && <FormField label={t('celPresetKind')} htmlFor="preset-kind">
-        <Select id="preset-kind" value={kind} onChange={(v) => setKind(v as CelPreset)}>
+      {!math && <FormField label={t('celPresetKind')} htmlFor={`${id}-kind`}>
+        <Select id={`${id}-kind`} value={kind} onChange={(v) => setKind(v as CelPreset)}>
           <SelectItem value="filter">{t('celPresetFilter')}</SelectItem>
           <SelectItem value="exists">{t('celPresetExists')}</SelectItem>
         </Select>
       </FormField>}
-      {selectedContext === 'event' && <FormField label={t('inspectorMetricLabel')} htmlFor="preset-metric">
-        <Input id="preset-metric" value={metric} onChange={(e) => setMetric(e.target.value)} />
+      {selectedContext === 'event' && <FormField label={t('inspectorMetricLabel')} htmlFor={`${id}-metric`}>
+        <Input id={`${id}-metric`} value={metric} onChange={(e) => setMetric(e.target.value)} />
       </FormField>}
       {kind !== 'exists' && <>
-        <FormField label={t('inspectorOpLabel')} htmlFor="preset-op">
-          <Select id="preset-op" value={op} onChange={setOp}>
+        <FormField label={t('inspectorOpLabel')} htmlFor={`${id}-op`}>
+          <Select id={`${id}-op`} value={op} onChange={setOp}>
             {(math ? ['+', '-', '*', '/'] : ['>', '>=', '<', '<=', '==', '!=']).map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
           </Select>
         </FormField>
-        <FormField label={t('inspectorValueLabel')} htmlFor="preset-number">
-          <Input id="preset-number" type="number" value={number} onChange={(e) => setNumber(e.target.value)} />
+        <FormField label={t('inspectorValueLabel')} htmlFor={`${id}-number`}>
+          <Input id={`${id}-number`} type="number" value={number} onChange={(e) => setNumber(e.target.value)} />
         </FormField>
       </>}
       {expression && <pre className="overflow-auto text-xs">{expression}</pre>}
