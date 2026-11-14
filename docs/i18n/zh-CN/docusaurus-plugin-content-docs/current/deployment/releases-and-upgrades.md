@@ -516,6 +516,8 @@ dcctl bootstrap local devicechain
 
 `v1.6.0` 是从 `v1.5.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
 
+- **升级说明：** 出站连接器派发和 LoRaWAN 下行现在将每个租户的并发数限制为每个副本发送池的一半（向下取整，至少一个），由 `maxConcurrentSends` 决定。超出限制的消息等待代理重新投递，不占用发送工作线程。只有一个工作线程的池仍会串行处理租户；至少使用两个才能提供隔离。无需新增配置；每个 Pod 升级后即应用此限制。
+
 #### 完整重载代理会保持认证调用已放行的设备连接 {#v160-broker-reload}
 
 过去，完整重载代理会关闭认证调用已放行的所有连接，其中包括所有使用用户名进行认证的 MQTT 设备。代理现在基于 `nats-server` `v2.15.3` 构建，因此更改代理 TLS Secret 中的 CA 包（CA 轮换）或手动重载时，会保持这些连接打开。只有当 chart 的 config-reloader 边车因挂载的 TLS Secret 发生变化而发送 SIGHUP，或操作员手动运行 `nats-server --signal reload` 时，才会发生不重启的重载。

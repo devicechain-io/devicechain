@@ -760,6 +760,8 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
+- **Upgrade note:** Outbound connector dispatches and LoRaWAN downlinks now limit each tenant to half of each replica's send pool (rounded down, minimum one), derived from `maxConcurrentSends`. Excess messages wait for broker redelivery without occupying send workers. A pool of one still serializes tenants; use at least two workers for isolation. No new configuration is needed; the limit takes effect as each pod upgrades.
+
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
 
 A full broker reload used to close every connection the auth callout had admitted, which includes every MQTT device that authenticates with a username. The broker is now built on `nats-server` `v2.15.3`, so a change to the CA bundle in the broker's TLS Secret (a CA rotation), or a manual reload, keeps those connections open. A reload without a restart happens only when the chart's config-reloader sidecar sends SIGHUP because the mounted TLS Secret changed, or when an operator runs `nats-server --signal reload` by hand.

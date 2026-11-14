@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-outbound-connectors/internal/tenantflight"
 	"github.com/rs/zerolog/log"
 )
 
@@ -42,7 +43,7 @@ const maxSend = time.Duration(connectorwire.MaxTimeoutMs) * time.Millisecond
 //
 // Idempotency rides in each message (the content-addressed key), so an at-least-once redelivery or a
 // DETECT replay collapses downstream to one execution (an endpoint honoring X-DC-Idempotency-Key);
-// the consumer therefore never needs cross-message state and scales out as a queue group.
+// the consumer scales out as a queue group. Its per-tenant in-flight counts are local to each pool.
 type DispatchConsumer struct {
 	reader   messaging.MessageReader
 	dead     messaging.MessageWriter
@@ -94,6 +95,7 @@ type DispatchConsumer struct {
 	readerWG   sync.WaitGroup
 	workerWG   sync.WaitGroup
 	workers    int
+	inFlight   *tenantflight.Limit
 	stopOnce   sync.Once
 }
 
@@ -166,6 +168,7 @@ func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageW
 		tenantDeleted: tenantDeleted,
 		readPacer:     readPacer,
 		workers:       workers,
+		inFlight:      tenantflight.New(workers),
 		// A non-nil default so a shutdown-aware wait (deadLetter's retry backoff) never dereferences a
 		// nil context before Start runs; Start replaces it with the cancelable process context.
 		procCtx: context.Background(),
@@ -355,6 +358,13 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 		c.ack(msg)
 		return
 	}
+
+	// Do not wait while holding a shared worker. Excess stays unacked for AckWait-paced
+	// redelivery; Process returns its reader slot so another tenant can make progress.
+	if !c.inFlight.TryAcquire(tenant) {
+		return
+	}
+	defer c.inFlight.Release(tenant)
 
 	// Per-tenant egress rate gate (ADR-060 SD-3), applied BEFORE the expensive secret-resolve + send.
 	//

@@ -21,6 +21,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/transport"
 
 	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
+	"github.com/devicechain-io/dc-outbound-connectors/internal/tenantflight"
 )
 
 // Result labels for lpwan_downlinks_total. A fixed enum: never a per-tenant or per-device value.
@@ -160,6 +161,7 @@ type Adapter struct {
 	sender    Enqueuer
 	metrics   Metrics
 	opts      Options
+	inFlight  *tenantflight.Limit
 
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -196,7 +198,7 @@ func New(reader messaging.MessageReader, responses cmddownlink.ResponseWriter, c
 		opts.ResponseBackoff = 200 * time.Millisecond
 	}
 	return &Adapter{reader: reader, responses: responses, claimer: claimer, links: links, devices: devices,
-		sender: sender, metrics: metrics, opts: opts, ctx: context.Background()}
+		sender: sender, metrics: metrics, opts: opts, inFlight: tenantflight.New(opts.Workers), ctx: context.Background()}
 }
 
 func (a *Adapter) count(result string) {
@@ -307,6 +309,13 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 		ack(msg)
 		return
 	}
+	// Admit before lookups and the claim. Excess remains unacked, unclaimed and
+	// unanswered for redelivery, without waiting on a shared worker.
+	if !a.inFlight.TryAcquire(tenant) {
+		return
+	}
+	defer a.inFlight.Release(tenant)
+
 	j := &job{tenant: tenant, device: env.DeviceToken, token: env.Token, nonce: env.DispatchNonce,
 		source: msg.Headers[cmddownlink.HeaderSource]}
 	if env.Payload != nil {
