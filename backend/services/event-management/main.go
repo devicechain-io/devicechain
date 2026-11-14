@@ -42,8 +42,10 @@ var (
 
 	Api *model.Api
 
-	ResolvedEventsReader            messaging.MessageReader
-	AdditionalPersistenceProcessors []*processor.EventPersistenceProcessor
+	ResolvedEventsReader messaging.MessageReader
+	// Lifecycle components let the start/stop guard track the per-group collection
+	// through the same interface used by other service component collections.
+	AdditionalPersistenceProcessors []core.LifecycleComponent
 	EventPersistenceProcessor       *processor.EventPersistenceProcessor
 	FailedEventsWriter              messaging.MessageWriter
 

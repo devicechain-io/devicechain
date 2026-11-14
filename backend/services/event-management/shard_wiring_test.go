@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-event-management/processor"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -73,7 +74,7 @@ func TestShardGroupServiceWiring(t *testing.T) {
 			t.Cleanup(stopStreamSharding)
 			readers := []messaging.MessageReader{EventPersistenceProcessor.ResolvedEventsReader}
 			for _, p := range AdditionalPersistenceProcessors {
-				readers = append(readers, p.ResolvedEventsReader)
+				readers = append(readers, p.(*processor.EventPersistenceProcessor).ResolvedEventsReader)
 			}
 			writer, err := nmgr.NewWriter(streams.ResolvedEvents)
 			require.NoError(t, err)
