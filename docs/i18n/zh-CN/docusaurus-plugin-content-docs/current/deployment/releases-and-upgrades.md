@@ -516,6 +516,10 @@ dcctl bootstrap local devicechain
 
 `v1.6.0` 是从 `v1.5.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
 
+#### Sparkplug 跟踪容量上限 {#v160-sparkplug-limits}
+
+**升级说明：** 每个 Sparkplug 来源最多跟踪 50,000 个节点会话，其中未发送 NBIRTH 的节点最多 1,024 个。达到上限后，新的身份消息会被丢弃，不写入数据，也不请求重生；现有节点仍可重生，在线会话不会被驱逐。空闲占位会话在 10 分钟后过期，离线会话在 24 小时后过期；达到容量上限时，新生节点可回收最旧的离线会话。活动历史最多保留 50,000 个身份，容量不足时清理旧记录，仍满时拒绝新记录（已满期间，探测不会将未记录的身份判定为静默）。组、节点和设备主题层级超过 256 个字符时会被拒绝，与现有设备注册上限一致。 容量拒绝通过 `devicechain_sparkplugingest_session_refused_total` 统计，`reason` 为 `placeholder_cap`、`session_cap` 或 `seen_cap`。容量和队列已满警告分别限制为每个来源每 10 分钟一次，逐消息日志改为 debug。滚动升级无需更改配置。
+
 #### 完整重载代理会保持认证调用已放行的设备连接 {#v160-broker-reload}
 
 过去，完整重载代理会关闭认证调用已放行的所有连接，其中包括所有使用用户名进行认证的 MQTT 设备。代理现在基于 `nats-server` `v2.15.3` 构建，因此更改代理 TLS Secret 中的 CA 包（CA 轮换）或手动重载时，会保持这些连接打开。只有当 chart 的 config-reloader 边车因挂载的 TLS Secret 发生变化而发送 SIGHUP，或操作员手动运行 `nats-server --signal reload` 时，才会发生不重启的重载。

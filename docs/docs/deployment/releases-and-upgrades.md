@@ -760,6 +760,10 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
+#### Bounded Sparkplug tracking {#v160-sparkplug-limits}
+
+**Upgrade note:** Each Sparkplug source now tracks at most 50,000 node sessions, including at most 1,024 nodes that have not sent NBIRTH. New identities past a limit are dropped without ingestion or a rebirth request; existing nodes can still rebirth, and online sessions are never evicted. Idle placeholders expire after 10 minutes, offline sessions after 24 hours; at capacity, births reclaim the oldest offline sessions. The liveness history holds at most 50,000 identities, prunes old entries on pressure, and refuses further new entries while full (while it is full, a probe does not declare an unrecorded identity silent). Group, node and device topic levels longer than 256 characters are refused, matching the existing device-registration ceiling. Capacity refusals are counted by `devicechain_sparkplugingest_session_refused_total` with `reason` values `placeholder_cap`, `session_cap` or `seen_cap`. Capacity and queue-full warnings are each limited to one per source per 10 minutes; per-message logs move to debug. No configuration change is needed for rolling upgrades.
+
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
 
 A full broker reload used to close every connection the auth callout had admitted, which includes every MQTT device that authenticates with a username. The broker is now built on `nats-server` `v2.15.3`, so a change to the CA bundle in the broker's TLS Secret (a CA rotation), or a manual reload, keeps those connections open. A reload without a restart happens only when the chart's config-reloader sidecar sends SIGHUP because the mounted TLS Secret changed, or when an operator runs `nats-server --signal reload` by hand.
