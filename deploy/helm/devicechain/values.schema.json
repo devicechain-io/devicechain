@@ -247,7 +247,17 @@
                   "type": "object",
                   "description": "The message broker connection and the JetStream ceilings. The chart validates only the capacity keys named below; the services validate the rest at startup.",
                   "properties": {
-                    "mqttDeviceUplinks": {
+                    "shardGroups": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["count", "suffixes"],
+                        "properties": {
+                          "count": {"type": "integer", "minimum": 2, "maximum": 5},
+                          "suffixes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "enum": ["inbound-events", "resolved-events"]}},
+                          "placementTags": {"type": "object", "propertyNames": {"pattern": "^[0-4]$"}, "additionalProperties": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"type": "string"}}}
+                        }
+                      },
+                      "mqttDeviceUplinks": {
                       "type": "boolean",
                       "description": "Whether a device may publish its own payload to its raw-payload MQTT topic, for the decoder on its device type's profile to read. Off by default. Turn it on only after every event-sources and device-management replica runs a release that knows the topic."
                     },

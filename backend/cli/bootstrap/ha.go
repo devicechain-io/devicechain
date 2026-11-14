@@ -212,7 +212,7 @@ func (h haTopology) summary() string {
 // when nothing will be applied. The COUNTING result is still fatal on a dry run:
 // if the cluster answers and cannot host the topology, that is the finding.
 func checkHaNodeCapacity(ctx context.Context, st *State) error {
-	ha := haFor(st.HA)
+	ha := brokerTopology(st)
 	if !ha.Replicated() {
 		return nil
 	}
@@ -464,7 +464,10 @@ type outputReader interface {
 // grows a real plan step; not worth making dry-run require tofu state today.
 func checkHaNotTornDown(ctx context.Context, st *State, tf outputReader) error {
 	applied, known := appliedServerCount(ctx, tf)
-	return haTeardownRefusal(haFor(st.HA), applied, known)
+	if _, err := shardGroupsFromValues(authoringValues(st)); err != nil {
+		return err
+	}
+	return haTeardownRefusal(brokerTopology(st), applied, known)
 }
 
 // appliedServerCount reads the provisioned NATS server count out of the current

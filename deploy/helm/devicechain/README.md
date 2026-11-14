@@ -824,3 +824,40 @@ generated from the schema; do not edit it by hand.
 | `functionalAreas.<area>.profiler.blockRate` | integer | - | Turn on block-profile sampling for a profiling run: nanoseconds blocked per sampled event (1 samples every event). 0 (default) leaves the block profile off. Needs enabled: true. |
 | `functionalAreas.<area>.profiler.mutexFraction` | integer | - | Turn on mutex-profile sampling for a profiling run: sample 1 in this many contended events. 0 (default) leaves the mutex profile off. Needs enabled: true. |
 <!-- values:end -->
+
+### Opt-in NATS shard groups
+
+After this release has rolled to every service replica,
+`dcctl upgrade ... --values shard-groups.yaml` can opt the ingest streams into tenant
+placement. The setting is absent by default:
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      nats:
+        shardGroups:
+          count: 3
+          suffixes: [inbound-events]
+```
+
+This install path supports 2-5 groups with R1 streams (`--ha` is refused). dcctl
+provisions three or five broker servers and preserves the values on upgrades.
+The chart derives placement tags `dc-nats-0`, `dc-nats-1`, and so on; group zero
+keeps its existing stream and subject names. Each broker advertises its own
+server name as a tag. Explicit placement tags must match those pod names.
+An operator using OpenTofu directly sets `nats_shard_groups` in the instance root
+(or `shard_groups` on the NATS module) and provisions at least that many servers.
+The broker's default release name is `dc-nats`; a custom broker must supply
+matching server tags and placement configuration itself.
+
+Group streams reserve their full byte ceilings independently. Grow the JetStream
+volume before enabling them if dcctl's reservation check refuses the setting.
+Tenant placement must also be populated: an unplaced tenant's publish is refused.
+Keep the block absent until all old service pods have finished rolling; older
+builds reject the new configuration key.
+
+The default profile currently supports sharding `inbound-events` only. Sharding
+`resolved-events` is refused while device-state or event-processing is deployed:
+those consumers still read only group zero. A deployment consisting of the
+ingest-only profile plus event-management has group readers for both streams.

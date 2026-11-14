@@ -36,9 +36,7 @@ type streamShards struct {
 	cfg    config.NatsShardGroupsConfiguration
 }
 
-// EnableStreamSharding installs the opt-in routing seam once. Services do not call it yet.
-// Group streams multiply each selected stream's disk reservation by Count; budget
-// accounting is deferred to a later slice.
+// EnableStreamSharding installs the opt-in routing seam once before opening handles.
 func (nmgr *NatsManager) EnableStreamSharding(router ShardGroupRouter, cfg *config.NatsShardGroupsConfiguration) error {
 	if router == nil {
 		return fmt.Errorf("messaging: nil shard-group router")

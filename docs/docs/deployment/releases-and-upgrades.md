@@ -760,6 +760,25 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
+#### Optional NATS shard groups {#v160-nats-shard-groups}
+
+NATS shard groups remain off by default. A new instance can opt in through `--values`
+at `instance.config.infrastructure.nats.shardGroups` when it is installed. The setting
+supports 2-5 groups with R1 streams on a cluster of at least three broker servers, and
+refuses `--ha`. Placement tags use the corresponding `dc-nats` pod names; explicit tags
+must match those names. The default profiles support sharding `inbound-events`;
+`resolved-events` is refused while device-state or event-processing is deployed because
+those consumers still read only group zero. Each selected stream reserves its full byte
+ceiling in every group, and `dcctl` checks that reservation before it creates or changes
+any infrastructure, so grow the JetStream volume first if the check refuses it.
+
+`dcctl upgrade` refuses to enable shard groups on an existing instance whose broker is a
+single server, because turning a standalone JetStream server that holds data into a
+cluster is not supported. It also refuses an upgrade whose `--values` (or
+`--reset-values`) would drop a recorded `shardGroups` block, lower its `count`, or remove a stream from its
+`suffixes`, since the groups may hold data: carry the block forward in every replacement
+values file.
+
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
 
 A full broker reload used to close every connection the auth callout had admitted, which includes every MQTT device that authenticates with a username. The broker is now built on `nats-server` `v2.15.3`, so a change to the CA bundle in the broker's TLS Secret (a CA rotation), or a manual reload, keeps those connections open. A reload without a restart happens only when the chart's config-reloader sidecar sends SIGHUP because the mounted TLS Secret changed, or when an operator runs `nats-server --signal reload` by hand.

@@ -11,7 +11,7 @@ import (
 )
 
 // NatsShardGroupsConfiguration opts selected per-event streams into tenant placement.
-// Group streams multiply the stream reservation by Count; budget accounting is a later slice.
+// Group streams multiply each selected stream reservation by Count.
 type NatsShardGroupsConfiguration struct {
 	// Count is the total number of groups, including the existing group zero.
 	Count         int              `json:"count"`
@@ -44,8 +44,8 @@ func (c *NatsShardGroupsConfiguration) Validate() error {
 		}
 	}
 	for group, tags := range c.PlacementTags {
-		if group < 1 || group >= c.Count {
-			return fmt.Errorf("nats.shardGroups placementTags key %d must be within 1..%d", group, c.Count-1)
+		if group < 0 || group >= c.Count {
+			return fmt.Errorf("nats.shardGroups placementTags key %d must be within 0..%d", group, c.Count-1)
 		}
 		for _, tag := range tags {
 			if strings.TrimSpace(tag) == "" {

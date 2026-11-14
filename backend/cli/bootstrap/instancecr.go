@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -85,6 +86,11 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 	// The fail-closed choice as made: nil is "never chose" and is recorded as that.
 	spec.MQTTFailClosed = copyBoolPtr(st.MqttFailClosed)
 	spec.MQTTDeviceUplinks = copyBoolPtr(st.MqttDeviceUplinks)
+	if raw, ok := lookupPath(authoringValues(st), splitPath(shardGroupsValuesPath)); ok {
+		b, _ := json.Marshal(raw)
+		spec.ShardGroups = &dcv1beta1.ShardGroupsSpec{}
+		_ = json.Unmarshal(b, spec.ShardGroups) // validated before declaration write
+	}
 	recordTrustedProxies(&spec, st)
 	recordMQTTExposure(&spec, st)
 	spec.BrokerMaxConnections = int32(st.BrokerMaxConnections)
@@ -102,6 +108,23 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 // This is the check that runs on the SUPPORTED path, where dcctl is the only
 // writer — so it is the one that has to be right, and the one worth testing.
 func ValidateInstanceSpec(spec dcv1beta1.InstanceSpec) error {
+	if spec.ShardGroups != nil {
+		if spec.HA {
+			return fmt.Errorf("shardGroups requires R1 streams; --ha requests replicated streams")
+		}
+		b, err := json.Marshal(spec.ShardGroups)
+		if err != nil {
+			return err
+		}
+		var raw interface{}
+		if err := json.Unmarshal(b, &raw); err != nil {
+			return err
+		}
+		vals := shardGroupsValues(raw)
+		if _, err := shardGroupsFromValues(vals); err != nil {
+			return err
+		}
+	}
 	if _, err := CanonicalTrustedProxies(spec.TrustedProxies); len(spec.TrustedProxies) > 0 && err != nil {
 		return fmt.Errorf("trustedProxies: %w", err)
 	}
@@ -134,9 +157,21 @@ func ValidateInstanceSpec(spec dcv1beta1.InstanceSpec) error {
 	// somewhere in the chart, minutes in, rather than here. ResolveEnabledAreas is
 	// the same function the command layer runs over the same two values, so a
 	// declaration that passes here is one dcctl can act on.
-	if _, err := ResolveEnabledAreas(spec.Profile, spec.ExtraFunctionalAreas); err != nil {
+	areas, err := ResolveEnabledAreas(spec.Profile, spec.ExtraFunctionalAreas)
+	if err != nil {
 		return fmt.Errorf("the instance declaration names an area set this build cannot "+
 			"deploy: %w", err)
+	}
+	if spec.ShardGroups != nil {
+		if len(areas) == 0 {
+			areas, err = shardGroupAreas(spec.Profile, spec.ExtraFunctionalAreas)
+			if err != nil {
+				return err
+			}
+		}
+		if err := validateShardGroupReaders(spec.ShardGroups.Suffixes, areas); err != nil {
+			return err
+		}
 	}
 	return nil
 }

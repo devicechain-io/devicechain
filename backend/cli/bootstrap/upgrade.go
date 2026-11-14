@@ -204,6 +204,9 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return err
 	}
 	sayValuesOverlay(st)
+	if err := precheckShardGroupsUpgrade(ctx, st); err != nil {
+		return err
+	}
 	sayMqttFailClosed(st)
 	sayMqttDeviceUplinks(st)
 	sayUpdateStoreMountless(st)

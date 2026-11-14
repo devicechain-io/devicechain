@@ -263,6 +263,8 @@ type State struct {
 	// one the declaration already records), merged over what dcctl computes. See
 	// valuesoverlay.go. Nil means none.
 	ValuesOverlay map[string]interface{}
+	// ShardGroups is the optional routing block read from the Instance declaration.
+	ShardGroups *dcv1beta1.ShardGroupsSpec
 	// ValuesOverlayIntent says this run explicitly replaces or resets the overlay,
 	// so historical token-audience enforcement values are not carried.
 	ValuesOverlayIntent bool

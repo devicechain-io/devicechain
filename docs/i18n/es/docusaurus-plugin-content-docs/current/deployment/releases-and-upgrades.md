@@ -805,6 +805,27 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
+#### Grupos de particiones de NATS opcionales {#v160-nats-shard-groups}
+
+Los grupos de particiones de NATS siguen desactivados por defecto. Una instancia nueva
+puede activarlos mediante `--values` en `instance.config.infrastructure.nats.shardGroups`
+al instalarse. La opción admite entre 2 y 5 grupos con flujos R1 en un clúster de al
+menos tres servidores del broker, y rechaza `--ha`. Las etiquetas de colocación usan los
+nombres de los pods `dc-nats`; las etiquetas explícitas deben coincidir con esos nombres.
+Los perfiles predeterminados permiten particionar `inbound-events`; se rechaza
+`resolved-events` si se despliega device-state o event-processing, porque esos
+consumidores solo leen el grupo cero. Cada flujo seleccionado reserva su límite completo
+de bytes en cada grupo, y `dcctl` comprueba esa reserva antes de crear o modificar
+cualquier infraestructura, así que amplíe primero el volumen de JetStream si la
+comprobación lo rechaza.
+
+`dcctl upgrade` rechaza activar los grupos de particiones en una instancia existente cuyo
+broker es un único servidor, porque no se admite convertir en clúster un servidor
+JetStream independiente que contiene datos. También rechaza una actualización cuyo
+`--values` (o `--reset-values`) eliminaría un bloque `shardGroups` registrado, reduciría su
+`count` o quitaría un flujo de sus `suffixes`, ya que los grupos pueden contener datos:
+mantenga el bloque en cada archivo de valores de reemplazo.
+
 #### Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación {#v160-broker-reload}
 
 Una recarga completa del broker cerraba todas las conexiones admitidas por el callout de autenticación, entre ellas las de todos los dispositivos MQTT que se autentican con un nombre de usuario. El broker ahora se compila con `nats-server` `v2.15.3`, por lo que un cambio en el conjunto de CA del Secret TLS del broker (una rotación de CA), o una recarga manual, mantiene abiertas esas conexiones. Una recarga sin reinicio solo ocurre cuando el sidecar config-reloader del chart envía SIGHUP porque cambió el Secret TLS montado, o cuando un operador ejecuta `nats-server --signal reload` a mano.

@@ -156,7 +156,7 @@ func mintNATSTLS(releaseName, namespace string, replicas int, now time.Time, ext
 // throwaway pair it will never deploy.
 func settleNATSTLS(ctx context.Context, typed kubernetes.Interface, st *State, now time.Time) (*natsTLSMaterial, error) {
 	ns := InstanceNamespace(st.Instance)
-	replicas := haFor(st.HA).ServerReplicas
+	replicas := brokerTopology(st).ServerReplicas
 	if typed == nil {
 		return mintNATSTLS(natsReleaseName, ns, replicas, now, mqttBrokerNames(st)...)
 	}
