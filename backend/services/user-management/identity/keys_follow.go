@@ -51,6 +51,8 @@ func (m *Manager) followSigningKeys(ctx context.Context) (changed bool, err erro
 		m.lastMissingKid = missingKid
 	}()
 	var rows []model.SigningKey
+	// Signing keys are instance-wide, not tenant data; every replica must read
+	// the same key set under the sanctioned system context.
 	if err := m.db.DB(core.WithSystemContext(ctx)).Find(&rows).Error; err != nil {
 		return false, err
 	}

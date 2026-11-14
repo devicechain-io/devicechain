@@ -4,7 +4,6 @@
 package identity
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -14,8 +13,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -268,23 +265,21 @@ func TestFollowerRetriesAMissingPrivateHalfAndCountsFailures(t *testing.T) {
 	b.secrets = missingSigningStore{store}
 	counter := &countingInc{}
 	b.followFailures = counter
-	var buf bytes.Buffer
-	previous := log.Logger
-	log.Logger = zerolog.New(&buf)
-	t.Cleanup(func() { log.Logger = previous })
+	logs := logSink.Capture(t)
 	now := time.Now()
 	b.now = func() time.Time { return now }
 	for attempt := 0; attempt < 2; attempt++ {
-		buf.Reset()
+		before := len(logs.String())
 		_, err := b.followSigningKeys(ctx)
 		require.ErrorIs(t, err, errSigningKeyChanged)
 		require.NotErrorIs(t, err, errActiveKeyNotSealed)
 		require.Same(t, original, b.issuer)
+		output := logs.String()[before:]
 		if attempt == 0 {
-			require.Contains(t, buf.String(), `"level":"warn"`)
-			require.NotContains(t, buf.String(), `"level":"error"`)
+			require.Contains(t, output, `"level":"warn"`)
+			require.NotContains(t, output, `"level":"error"`)
 		} else {
-			require.Contains(t, buf.String(), `"level":"error"`)
+			require.Contains(t, output, `"level":"error"`)
 		}
 		now = now.Add(signingKeyFollowMinInterval)
 	}

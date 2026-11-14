@@ -241,6 +241,8 @@ func (m *Manager) rotateSigningKeyLocked(ctx context.Context, retention time.Dur
 func (m *Manager) rotateIfOlderThanLocked(ctx context.Context, maxAge, retention time.Duration) (*signingKeySet, bool, error) {
 	var set *signingKeySet
 	rotated := false
+	// Signing keys and their sealed secrets are instance-wide, not tenant data,
+	// so the rotation transaction uses the sanctioned system context.
 	err := m.db.DB(core.WithSystemContext(ctx)).Transaction(func(tx *gorm.DB) error {
 		store, err := m.sealedIn(tx)
 		if err != nil {
