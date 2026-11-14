@@ -15,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/backupset"
@@ -87,6 +88,9 @@ func PrepareRestore(dir, instance string, forceForeign bool) (*RestorePlan, erro
 		if !ok && item.Kind == backupset.KindGatewayStream && absent[name] {
 			continue
 		} // New exports explicitly attest that MQTT was disabled at the source.
+		if !ok && item.Kind == backupset.KindStream && slices.Contains(m.DisabledStreams, name) {
+			continue
+		}
 		if !ok {
 			return nil, fmt.Errorf("missing must-survive/checkpoint entry %s %q", kind, name)
 		}
@@ -181,9 +185,19 @@ func resource(item backupset.Item, instance string) (string, string) {
 // Plan queries StreamInfo and reads the blob export only. It does not reconcile,
 // create consumers, subscribe to application data, or mutate target storage.
 // All actions are returned together only after every refusal check succeeds.
-func (p *RestorePlan) Plan(ctx context.Context, nc *nats.Conn, blobs func(context.Context, io.Writer) error) ([]Action, error) {
+// enabledAreas describes the target declaration. Without it, an area-disabled
+// source omission cannot be proven safe and is refused.
+func (p *RestorePlan) Plan(ctx context.Context, nc *nats.Conn, blobs func(context.Context, io.Writer) error, enabledAreas ...[]string) ([]Action, error) {
 	if p == nil || p.manifest == nil || blobs == nil {
 		return nil, fmt.Errorf("verified plan and target blob reader required")
+	}
+	if len(enabledAreas) > 1 {
+		return nil, fmt.Errorf("one target enabled area set required")
+	}
+	if len(enabledAreas) == 1 {
+		if err := validateAreas(enabledAreas[0]); err != nil {
+			return nil, err
+		}
 	}
 	js, err := nc.JetStream()
 	if err != nil {
@@ -231,10 +245,18 @@ func (p *RestorePlan) Plan(ctx context.Context, nc *nats.Conn, blobs func(contex
 			return nil, fmt.Errorf("target stream %q: %w", name, err)
 		}
 		if !included {
+			if item.Kind == backupset.KindStream {
+				if len(enabledAreas) == 0 || streamEnabled(item.Name, enabledAreas[0]) {
+					return nil, fmt.Errorf("target stream %q belongs to an enabled area but backup has no data: source area was disabled; cannot restore this coverage", name)
+				}
+			}
 			if live != nil {
 				return nil, fmt.Errorf("missing checkpoint entry for target stream %q", name)
 			}
 			a.Action, a.Reason = "skip", "gateway absent from backup and target"
+			if item.Kind == backupset.KindStream {
+				a.Reason = "source area disabled: backup has no data; stream also disabled and absent on target"
+			}
 		} else if errors.Is(err, nats.ErrStreamNotFound) {
 			a.Action = "create"
 		} else {
