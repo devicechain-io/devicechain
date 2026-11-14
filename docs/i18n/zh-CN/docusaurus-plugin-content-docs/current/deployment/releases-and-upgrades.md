@@ -516,6 +516,26 @@ dcctl bootstrap local devicechain
 
 `v1.6.0` 是从 `v1.5.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
 
+#### 升级前 {#v160-before-upgrade}
+
+滚动更新 Pod 前，请检查手工编辑的实例配置。以下拒绝条件均为 `v1.5.0` 之后新增；无效的服务设置会阻止启动，可能导致 Pod 反复崩溃重启。下列服务键位于 `functionalAreas.<area>.config` 下。
+
+- **启用轮换时，签名密钥保留期必须覆盖刷新令牌的有效期。** 在 `user-management` 中，当 `auth.signingKeyMaxAgeDays > 0` 时，应用默认值后的 `auth.signingKeyRetentionDays × 86400` 必须大于或等于 `auth.refreshTokenTtlSeconds`；允许相等。此前轮换会静默延长过短的保留期。保留期为 `0` 时取 8 天，默认刷新 TTL 为 604800 秒（7 天）。升级前请增加保留期或缩短刷新 TTL。关闭轮换时不执行此比较。chart 不比较这两个字段，且 `dcctl` 已拒绝覆盖此 auth 块。
+- **拒绝令牌 TTL 溢出。** `user-management` 现在会在转换为时长前拒绝超过 **9223372036 秒**的 `auth.accessTokenTtlSeconds` 或 `auth.refreshTokenTtlSeconds`。`0` 仍取默认值（分别为 900 和 604800 秒）；负 TTL 原本就无效。Helm schema 也执行该上限检查。
+- **拒绝租户清除时长溢出。** 在 `user-management` 中，`tenantPurge.intervalSeconds`、`tenantPurge.settleSeconds` 和 `tenantPurge.tokenHoldSeconds` 均不得超过 **9223372036 秒**。原有规则继续适用：负间隔会禁用协调器；负 settle/hold 值被拒绝，settle 和 token-hold 的安全下限保持不变。
+- **拒绝死信时长溢出。** 在 `user-management` 中，`deadLetters.retentionDays` 不得超过 **106751 天**，`deadLetters.sweepSeconds` 不得超过 **9223372036 秒**。原有的默认值、禁用和最短保留期规则保持不变。
+- **拒绝 Sparkplug 存在探测时长溢出。** 在 `sparkplug-ingest` 中，`presence.probeSeconds` 和 `presence.probeWindowSeconds` 均不得超过 **9223372036 秒**。`0` 仍分别取 1800 和 10 秒。原有下限保持不变：显式设置的间隔至少为 60 秒；显式设置的窗口至少为 5 秒且严格小于间隔。
+- **在整个 v1.5 → v1.6 滚动更新期间保持 `infrastructure.nats.shardGroups` 缺省。** 如果 `v1.5` Pod 在滚动更新中加载新配置，会将这个新键作为未知字段拒绝。所有 Pod 升级完成后再启用。配置该块时，`count` 必须为 2–16；后缀必须唯一且仅限 `inbound-events` 和 `resolved-events`；`placementTags` 的键必须为 1 到 `count - 1` 的组编号，标签字符串不得为空或仅含空白。无效配置块会被拒绝。
+
+#### 新增值和命令 {#v160-values-commands}
+
+| 设置或命令 | 变化 / 运维操作 |
+|---|---|
+| `--size perf-20k` | 新增吞吐量规格预设：broker 请求 6 CPU / 6Gi，内存上限 10Gi，JetStream 40Gi，事件存储 260Gi。不承诺 50 ms 的 PUBACK 延迟目标；尚未按该预设的完整配置进行实测。 |
+| GKE `nats_jetstream_storage_class` | 存在相应 GKE 类时，新 broker 默认使用 `premium-rwo`（`pd-ssd`）；若 GKE `premium-rwo` 类使用其他磁盘类型则拒绝。显式覆盖优先。已有 broker/PVC 和升级保持原存储类；此操作不会迁移磁盘。 |
+| `infrastructure.nats.shardGroups` | 为两个摄取流按租户路由，需主动启用；缺省时保持原路由。分组流会将预留容量乘以 `count`，启用前需规划容量。仅在滚动更新完成后启用。 |
+| `dcctl backup`、`dcctl backup inspect --verify`、`dcctl restore --plan` | **预览**命令，用于本地流/对象备份集、字节验证和只读恢复规划。目前没有执行恢复的命令，也不协调数据库检查点。参见[导出流和对象内容](./disaster-recovery.md#export-streams-objects)。 |
+
 #### 完整重载代理会保持认证调用已放行的设备连接 {#v160-broker-reload}
 
 过去，完整重载代理会关闭认证调用已放行的所有连接，其中包括所有使用用户名进行认证的 MQTT 设备。代理现在基于 `nats-server` `v2.15.3` 构建，因此更改代理 TLS Secret 中的 CA 包（CA 轮换）或手动重载时，会保持这些连接打开。只有当 chart 的 config-reloader 边车因挂载的 TLS Secret 发生变化而发送 SIGHUP，或操作员手动运行 `nats-server --signal reload` 时，才会发生不重启的重载。

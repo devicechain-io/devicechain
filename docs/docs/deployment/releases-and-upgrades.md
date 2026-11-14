@@ -760,6 +760,26 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
+#### Before you upgrade {#v160-before-upgrade}
+
+Review hand-edited instance configuration before rolling pods. These refusals are new since `v1.5.0`; invalid service settings stop startup and can leave pods crash-looping. Service keys below live under `functionalAreas.<area>.config`.
+
+- **Signing-key retention must cover refresh tokens when rotation is on.** In `user-management`, when `auth.signingKeyMaxAgeDays > 0`, `auth.signingKeyRetentionDays × 86400` must be at least `auth.refreshTokenTtlSeconds` after defaults are applied; equality is allowed. Previously rotation silently lengthened a shorter retention. `0` retention takes 8 days, and the default refresh TTL is 604800 seconds (7 days). Increase retention or reduce the refresh TTL before upgrading. With rotation off, this comparison does not apply. The chart does not compare these fields, and `dcctl` already refuses overlays of this auth block.
+- **Token TTL overflow is refused.** `user-management` now rejects `auth.accessTokenTtlSeconds` or `auth.refreshTokenTtlSeconds` above **9223372036 seconds**, before conversion to a duration. `0` still takes the defaults (900 and 604800 seconds respectively); negative TTLs were already invalid. The Helm schema also enforces the upper bound.
+- **Tenant-purge overflow is refused.** In `user-management`, `tenantPurge.intervalSeconds`, `tenantPurge.settleSeconds` and `tenantPurge.tokenHoldSeconds` cannot exceed **9223372036 seconds**. Existing rules still apply: a negative interval disables the coordinator; negative settle/hold values are refused, and the settle and token-hold safety floors remain.
+- **Dead-letter overflow is refused.** In `user-management`, `deadLetters.retentionDays` cannot exceed **106751 days**, and `deadLetters.sweepSeconds` cannot exceed **9223372036 seconds**. Existing default, disable and minimum-retention rules remain.
+- **Sparkplug presence-probe overflow is refused.** In `sparkplug-ingest`, `presence.probeSeconds` and `presence.probeWindowSeconds` cannot exceed **9223372036 seconds**. `0` still takes 1800 and 10 seconds respectively. Existing floors remain: a written interval is at least 60 seconds; a written window is at least 5 seconds and strictly below the interval.
+- **Keep `infrastructure.nats.shardGroups` absent throughout the v1.5 → v1.6 roll.** A `v1.5` pod rejects this new key as unknown if it loads the new configuration mid-roll. Finish upgrading all pods before opting in. When present, `count` must be 2–16; suffixes must be unique and limited to `inbound-events` and `resolved-events`; `placementTags` keys must be group numbers 1 through `count - 1`, with nonblank tag strings. Invalid blocks are refused.
+
+#### New values and commands {#v160-values-commands}
+
+| Setting or command | What changes / operator action |
+|---|---|
+| `--size perf-20k` | New throughput sizing preset: broker request 6 CPUs / 6Gi, memory limit 10Gi, JetStream 40Gi and event storage 260Gi. It does not promise the 50 ms PUBACK latency target; the preset has not yet been measured as written. |
+| GKE `nats_jetstream_storage_class` | New brokers default to `premium-rwo` (`pd-ssd`) when that GKE class exists; a GKE `premium-rwo` class with a different disk type is refused. Explicit overrides win. Existing brokers/PVCs and upgrades keep their storage class; this does not migrate disks. |
+| `infrastructure.nats.shardGroups` | Opt-in tenant routing for the two ingest streams; absent preserves existing routing. Group streams multiply reservations by `count`, so budget capacity before enabling it. Enable only after the roll completes. |
+| `dcctl backup`, `dcctl backup inspect --verify`, `dcctl restore --plan` | **Preview** commands for local stream/object backup sets, byte verification and read-only restore planning. There is no restore apply command or coordinated database checkpoint. See [Exporting streams and object content](./disaster-recovery.md#export-streams-objects). |
+
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
 
 A full broker reload used to close every connection the auth callout had admitted, which includes every MQTT device that authenticates with a username. The broker is now built on `nats-server` `v2.15.3`, so a change to the CA bundle in the broker's TLS Secret (a CA rotation), or a manual reload, keeps those connections open. A reload without a restart happens only when the chart's config-reloader sidecar sends SIGHUP because the mounted TLS Secret changed, or when an operator runs `nats-server --signal reload` by hand.
