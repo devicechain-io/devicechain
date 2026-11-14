@@ -85,6 +85,7 @@ type asyncItem struct {
 // reply subscription (and a reconnect goroutine) until the connection closes; Settle is the
 // barrier that makes reuse across terms possible.
 func (nmgr *NatsManager) NewAsyncWriter(suffix string, writer PublishWriter, window int, refuseOnBackpressure bool) (AsyncWriter, error) {
+	nmgr.freezeStreamRouting()
 	ow, err := nmgr.NewOrderedWriter(suffix, writer, window)
 	if err != nil {
 		return nil, err
@@ -233,8 +234,8 @@ func (w *asyncWriter) dispatch(it asyncItem) {
 			// is read once, as the first piece is about to go (after its tenant is checked),
 			// and a refusal there stops every piece.
 			guard = func() error {
-				if err := w.nmgr.Backpressure(w.suffix); err != nil {
-					w.nmgr.countRefused(StreamName(w.nmgr.Microservice.InstanceId, w.suffix), len(it.msgs))
+				if err := w.nmgr.publishBackpressure(it.ctx, w.suffix); err != nil {
+					w.nmgr.countRoutedRefused(it.ctx, w.suffix, len(it.msgs))
 					failed.Store(true)
 					return err
 				}

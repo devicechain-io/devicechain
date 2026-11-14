@@ -472,7 +472,7 @@ FROM generate_series(1, ?) g`, pmTenant, devices, fmt.Sprintf("(%d * 86400.0 / ?
 	stores := []purge.Store{
 		purge.NewRelational(purge.StoreRelational, drillDatabase{rdbConn}, nil),
 		purge.NewRelational(purge.StoreTelemetry, drillDatabase{tsConn}, nil),
-		purge.NewBroker(pmConn{nc}, pmInstance),
+		purge.NewBroker(pmConn{nc}, pmInstance, nil),
 		purge.NewKeyValue(pmConn{nc}, pmInstance),
 		purge.NewObject(objects, pmTenants{}),
 	}

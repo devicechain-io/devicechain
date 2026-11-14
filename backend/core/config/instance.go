@@ -23,8 +23,11 @@ import (
 
 // NATS configuration parameters
 type NatsConfiguration struct {
-	Hostname string
-	Port     uint32
+	// ShardGroups is disabled when absent; enabling routing requires an explicit
+	// NatsManager.EnableStreamSharding call with a placement router.
+	ShardGroups *NatsShardGroupsConfiguration `json:"shardGroups,omitempty"`
+	Hostname    string
+	Port        uint32
 	// StreamReplicas is the JetStream replica count for created streams AND for
 	// every KV bucket (core/messaging kv.go reads this same value — there is no
 	// separate KV lever). 1 for single-node dev; 3 for the ADR-020 HA topology.
@@ -1698,6 +1701,9 @@ func (c *InstanceConfiguration) Validate() error {
 		if _, err := c.Infrastructure.Secrets.DecodedRootKey(); err != nil {
 			return err
 		}
+	}
+	if err := c.Infrastructure.Nats.ShardGroups.Validate(); err != nil {
+		return err
 	}
 	if err := c.Infrastructure.Nats.validateTierOrdering(); err != nil {
 		return err
