@@ -16,6 +16,7 @@ import { FormField } from '@/components/ui/form-field';
 import { Select, SelectItem } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
+import { CelPresetFields } from './CelPresetFields';
 import { ConnectorPicker } from '../ConnectorPicker';
 import { formatHeaders, parseHeaders } from '../rule-model';
 import {
@@ -137,6 +138,7 @@ function LeafEditor({ leaf, allowNone, onChange }: { leaf: unknown; allowNone: b
           )}
         </div>
       )}
+      {mode === 'cel' && <CelPresetFields context="event" onApply={(cel) => onChange({ cel })} />}
       {mode === 'cel' && (
         <FormField label={t('inspectorCelExpressionLabel')} htmlFor="leaf-cel" description={t('inspectorCelExpressionDescription')}>
           <Textarea id="leaf-cel" value={strVal(l.cel)} onChange={(e) => onChange({ cel: e.target.value })} placeholder={t('inspectorCelPlaceholderThreshold')} />
@@ -348,6 +350,7 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
           <FormField label={t('inspectorBranchLabelLabel')} htmlFor="cfg-branch-name" description={t('inspectorBranchLabelDescription')}>
             <Input id="cfg-branch-name" value={strVal(config.name)} onChange={(e) => set({ name: e.target.value || undefined })} placeholder={t('inspectorBranchNamePlaceholder')} />
           </FormField>
+          <CelPresetFields context="detection" onApply={(when) => set({ when })} />
           <FormField
             label={t('inspectorOnlyWhenCelLabel')}
             htmlFor="cfg-branch-when"
@@ -382,6 +385,7 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
           >
             <Input id="cfg-compute-name" value={strVal(config.name)} onChange={(e) => set({ name: e.target.value })} placeholder={t('inspectorComputeNamePlaceholder')} />
           </FormField>
+          <CelPresetFields context="event" math onApply={(expr) => set({ expr })} />
           <FormField label={t('inspectorComputeValueCelLabel')} htmlFor="cfg-compute-expr" description={t('inspectorComputeValueCelDescription')}>
             <Textarea id="cfg-compute-expr" value={strVal(config.expr)} onChange={(e) => set({ expr: e.target.value })} placeholder={t('inspectorComputeCelPlaceholder')} />
           </FormField>
