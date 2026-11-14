@@ -24,6 +24,7 @@ import {
 } from '@devicechain/widget-sdk';
 
 import { highestSeverity, severityColor, severityLabel } from './severity';
+import { alarmStrings } from '../alarm-strings';
 
 // The caption under the count (11 px text plus its 6 px margin). It always shows -- it names
 // the worst severity -- so the count is fitted to what is left rather than pushing it out.
@@ -55,8 +56,10 @@ function AlarmCountBody({ data }: { data: AlarmStreamState }) {
     : // First frame: the same curve in cq units, resolved by the browser against the frame's
       // column (it does not take the caption's room off; the first measure does).
       fitValueFontCss(chars, { floor });
-  const unit = total === 1 ? 'alarm' : 'alarms';
-  const ariaLabel = alerting ? `${total} ${unit}, worst severity ${severityLabel(worst)}` : `${total} ${unit}`;
+  const strings = alarmStrings();
+  const unit = strings.countUnit(total);
+  const worstLabel = worst ? strings.severity[worst] ?? severityLabel(worst) : undefined;
+  const ariaLabel = strings.countLabel(total, alerting ? worstLabel : undefined);
 
   return (
     <div
@@ -94,7 +97,7 @@ function AlarmCountBody({ data }: { data: AlarmStreamState }) {
         }}
       >
         <span>{unit}</span>
-        {alerting ? <span>{` · worst ${severityLabel(worst)}`}</span> : null}
+        {alerting && worstLabel ? <span>{` · ${strings.worst(worstLabel)}`}</span> : null}
       </div>
     </div>
   );

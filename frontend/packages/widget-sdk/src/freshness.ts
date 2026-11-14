@@ -97,12 +97,13 @@ export interface FreshnessStrings {
   ageLabel: string;
 }
 
-export const FRESHNESS_STRINGS: Record<'en' | 'es', FreshnessStrings> = {
+export const FRESHNESS_STRINGS: Record<'en' | 'es' | 'zh-CN', FreshnessStrings> = {
   en: { stale: 'stale', ageLabel: 'Last sample' },
   es: { stale: 'obsoleto', ageLabel: 'Última muestra' },
+  'zh-CN': { stale: '已过期', ageLabel: '最新样本' },
 };
 
 export function freshnessStrings(locale: string | undefined = viewerLocale()): FreshnessStrings {
   const base = locale?.toLowerCase().split('-')[0];
-  return base === 'es' ? FRESHNESS_STRINGS.es : FRESHNESS_STRINGS.en;
+  return base === 'es' ? FRESHNESS_STRINGS.es : base === 'zh' ? FRESHNESS_STRINGS['zh-CN'] : FRESHNESS_STRINGS.en;
 }

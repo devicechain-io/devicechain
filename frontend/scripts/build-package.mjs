@@ -120,6 +120,8 @@ const result = await esbuild.build({
   format: 'esm',
   platform: 'browser',
   target: 'es2020',
+  // Keep translated template literals as UTF-8 instead of expanding them to Unicode escapes.
+  charset: 'utf8',
   // Shipped, with sources inlined, so a consumer debugging a stack trace lands in
   // readable code rather than in a bundle. It roughly triples the tarball (widgets:
   // 207 kB packed) and gives away nothing — the sources are Apache-2.0 and public.

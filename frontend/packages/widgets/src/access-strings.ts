@@ -10,11 +10,13 @@
 
 import { viewerLocale } from '@devicechain/widget-sdk';
 
-export const ACCESS_STRINGS: Record<'en' | 'es', { forbidden: string }> = {
+export const ACCESS_STRINGS: Record<'en' | 'es' | 'zh-CN', { forbidden: string }> = {
   en: { forbidden: 'You do not have access to this data' },
   es: { forbidden: 'No tiene acceso a estos datos' },
+  'zh-CN': { forbidden: '您无权访问这些数据' },
 };
 
 export function accessStrings(locale: string | undefined = viewerLocale()): { forbidden: string } {
-  return locale?.toLowerCase().split('-')[0] === 'es' ? ACCESS_STRINGS.es : ACCESS_STRINGS.en;
+  const language = locale?.toLowerCase().split('-')[0];
+  return language === 'es' ? ACCESS_STRINGS.es : language === 'zh' ? ACCESS_STRINGS['zh-CN'] : ACCESS_STRINGS.en;
 }

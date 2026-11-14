@@ -53,6 +53,8 @@ import enVersions from './locales/en/versions.json';
 export interface Locale {
   /** BCP-47 code; also the ./locales/<code>/ directory name and the i18next lng. */
   code: string;
+  /** This locale currently translates dashboard widgets and viewer controls only. */
+  namespaces?: readonly string[];
   /** The language's own endonym, shown in the switcher — never itself translated. */
   label: string;
   /**
@@ -77,6 +79,7 @@ export interface Locale {
 export const SUPPORTED_LOCALES: Locale[] = [
   { code: 'en', label: 'English', badge: 'EN' },
   { code: 'es', label: 'Español', badge: 'ES' },
+  { code: 'zh-CN', label: '简体中文', badge: 'ZH', namespaces: ['dashboards'] },
 ];
 
 export const DEFAULT_LOCALE = 'en';
@@ -233,10 +236,11 @@ export const i18nReady = i18n
     // Only English is in the bundle; every other locale's namespaces come through the
     // backend below. Without this, giving `resources` at all would mean "nothing to load".
     partialBundledLanguages: true,
-    // es-MX loads the es catalog, not a (non-existent) es-MX one.
-    load: 'languageOnly',
+    // Try region-specific catalogs first, then the base language (es-MX -> es).
+    load: 'all',
     fallbackLng: DEFAULT_LOCALE,
-    supportedLngs: SUPPORTED_LOCALES.map((l) => l.code),
+    // Include the base tag so i18next's regional fallback can reach Simplified Chinese.
+    supportedLngs: [...SUPPORTED_LOCALES.map((l) => l.code), 'zh'],
     // Fall a region variant back onto its base language ("es-MX" -> "es") rather
     // than straight to `en`, so a future regional catalog is reachable.
     nonExplicitSupportedLngs: true,

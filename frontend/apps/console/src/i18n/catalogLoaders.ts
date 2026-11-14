@@ -20,4 +20,6 @@ export interface CatalogModule {
  */
 export const LOADERS: Record<string, () => Promise<CatalogModule | undefined>> = {
   es: () => import('./locales/es'),
+  'zh-CN': () => import('./locales/zh-CN'),
+  zh: () => import('./locales/zh-CN'),
 };

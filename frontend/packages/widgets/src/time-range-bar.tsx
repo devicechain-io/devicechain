@@ -6,7 +6,7 @@
 // component for every host (the console viewer, the /dash app), so the two cannot disagree about
 // what a frozen board looks like. It is a plain controlled bar -- the host owns the state through
 // useBoardTimeRange and feeds it to the renderer as `timeRange` -- and it carries no copy of its
-// own beyond English defaults: a host passes its translations as `labels`.
+// own beyond locale defaults: a host can override its translations as `labels`.
 
 import {
   DEFAULT_TIME_RANGE_SECONDS,
@@ -28,6 +28,7 @@ import {
 } from '@devicechain/dashboards';
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from 'react';
 import type { AbsolutePickerLabels } from './absolute-range-picker';
+import { timeRangeStrings } from './time-range-strings';
 
 export interface TimeRangeControls {
   setSpan(spanSeconds: number): void;
@@ -105,45 +106,12 @@ export interface TimeRangeLabels {
   absolute?: Partial<AbsoluteLabels>;
 }
 
-export const DEFAULT_ABSOLUTE_LABELS: AbsoluteLabels = {
-  custom: 'Custom range',
-  from: 'From',
-  to: 'To',
-  apply: 'Apply',
-  cancel: 'Cancel',
-  zone: (zone, offset) => `Times are in ${zone} (${offset}). Shared links use UTC.`,
-  problem: {
-    unparseable: 'Enter both a start and an end.',
-    order: 'The start must be before the end.',
-    tooShort: 'The window must be at least one minute.',
-    tooLong: 'The window can be at most 31 days.',
-    future: 'The end cannot be in the future.',
-    tooEarly: 'The start is too far in the past.',
-  },
-  fixed: 'Fixed window',
-  backToLive: 'Back to live',
-  copyLink: 'Copy link',
-  linkCopied: 'Link copied',
-  loadFailed: 'The range picker could not be loaded. Try again.',
-  dismiss: 'Dismiss',
-  ignored: (reason, raw) => `The link's time window was ignored: ${reason} (${raw}). Showing the live board.`,
-  incomplete: 'both from and to are required',
-  unzoned: 'times must be ISO 8601 with a zone, such as 2026-10-22T02:00:00Z or +02:00',
-};
+export { DEFAULT_ABSOLUTE_LABELS, DEFAULT_TIME_RANGE_LABELS } from './time-range-strings';
 
-export const DEFAULT_TIME_RANGE_LABELS: TimeRangeLabels = {
-  range: 'Time range',
-  pause: 'Pause',
-  resume: 'Resume',
-  paused: 'Paused',
-  pausedAt: (time) => `Paused at ${time}`,
-  actionsLive: 'commands still send',
-};
-
-const absoluteLabels = (labels: TimeRangeLabels): AbsoluteLabels => ({ ...DEFAULT_ABSOLUTE_LABELS, ...labels.absolute });
+const absoluteLabels = (labels: TimeRangeLabels): AbsoluteLabels => ({ ...timeRangeStrings().absolute, ...labels.absolute });
 
 // The note text for a deep link whose `from`/`to` were unusable.
-export function rejectedLinkNote(rejected: AbsoluteLinkRejection, labels: TimeRangeLabels = DEFAULT_TIME_RANGE_LABELS): string {
+export function rejectedLinkNote(rejected: AbsoluteLinkRejection, labels: TimeRangeLabels = timeRangeStrings()): string {
   const l = absoluteLabels(labels);
   const raw = `from=${rejected.from || '-'} to=${rejected.to || '-'}`;
   const reason =
@@ -167,7 +135,7 @@ const button = (active: boolean): CSSProperties => ({
 // no bar) can show it alone.
 export function PausedIndicator({
   pausedAt,
-  labels = DEFAULT_TIME_RANGE_LABELS,
+  labels = timeRangeStrings(),
 }: {
   pausedAt: number | undefined;
   labels?: TimeRangeLabels;
@@ -214,7 +182,7 @@ export function formatAbsoluteRange(a: AbsoluteRange): string {
 // the same reason either way. Exported for the kiosk, like PausedIndicator.
 export function AbsoluteIndicator({
   absolute,
-  labels = DEFAULT_TIME_RANGE_LABELS,
+  labels = timeRangeStrings(),
 }: {
   absolute: AbsoluteRange;
   labels?: TimeRangeLabels;
@@ -273,7 +241,7 @@ type PickerProps = {
 export function TimeRangeBar({
   state,
   controls,
-  labels = DEFAULT_TIME_RANGE_LABELS,
+  labels = timeRangeStrings(),
   notice,
 }: {
   state: TimeRangeState;

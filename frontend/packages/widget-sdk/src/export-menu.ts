@@ -23,6 +23,7 @@ import type { WidgetExportResult } from './widget-export';
 const WORDS = {
   en: { button: 'Export data', csv: 'Download CSV', image: 'Download image (PNG)' },
   es: { button: 'Exportar datos', csv: 'Descargar CSV', image: 'Descargar imagen (PNG)' },
+  'zh-CN': { button: '导出数据', csv: '下载 CSV', image: '下载图片（PNG）' },
 };
 
 export interface ExportMenuOptions {
@@ -53,9 +54,10 @@ export function fileStamp(at: Date): string {
 }
 
 // The viewer's language, as freshness.ts's viewerLocale reads it (see the top of this file).
-function spanish(): boolean {
+function exportWords() {
   const lang = (typeof document !== 'undefined' && document.documentElement.lang) || (typeof navigator !== 'undefined' && navigator.language) || '';
-  return lang.toLowerCase().startsWith('es');
+  const base = lang.toLowerCase().split('-')[0];
+  return base === 'es' ? WORDS.es : base === 'zh' ? WORDS['zh-CN'] : WORDS.en;
 }
 
 const MENU_STYLE =
@@ -71,7 +73,7 @@ const ITEM_STYLE =
  * pressed again).
  */
 export function openExportMenu(host: HTMLElement, o: ExportMenuOptions): () => void {
-  const words = spanish() ? WORDS.es : WORDS.en;
+  const words = exportWords();
   const menu = document.createElement('div');
   menu.setAttribute('role', 'menu');
   menu.setAttribute('data-widget-export-menu', '');
@@ -169,7 +171,7 @@ const ICON =
  * unmounting, or no longer having anything to export).
  */
 export function mountExportButton(host: HTMLElement, size: number, source: () => ExportSource): () => void {
-  const words = spanish() ? WORDS.es : WORDS.en;
+  const words = exportWords();
   const button = document.createElement('button');
   button.type = 'button';
   button.setAttribute('aria-label', words.button);

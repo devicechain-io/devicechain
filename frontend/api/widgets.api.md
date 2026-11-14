@@ -9272,12 +9272,14 @@ export declare function isTerminalStatus(status: string): boolean;
 
 ```ts
 export declare function landStyleFrom(land: unknown, boundaries: unknown): unknown;
+export declare function landStyleFrom(land: unknown, boundaries: unknown, attribution: string | undefined): unknown;
 ```
 
 ## `.:loadLandStyle`
 
 ```ts
 export declare function loadLandStyle(): Promise<unknown>;
+export declare function loadLandStyle(attribution: string | undefined): Promise<unknown>;
 ```
 
 ## `.:numberOptionSpec`

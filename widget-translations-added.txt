@@ -1,0 +1,1173 @@
+Added widget translation entries by locale
+
+Includes newly routed runtime copy, function templates and new app catalog entries.
+Entries are counted by key, so shared wording may appear more than once.
+The en and es app catalogs already had complete dashboard keys; their new runtime copy uses the same per-widget string tables as PRs #2430–#2432.
+Chinese is scoped to dashboard widgets, the dashboard editor and viewer controls; other app screens retain English fallback.
+
+en: 44 added entries
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.missingCount = (bucket, name) => `the bucket at ${bucket} for "${name}" carries no reading count`
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.missingFields = (bucket, name, count, fields) => `the bucket at ${bucket} for "${name}" holds ${count} readings but no ${fields}`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.countUnit = (n) => n === 1 ? 'alarm' : 'alarms'
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.worst = (severity) => `worst ${severity}`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.countLabel = (n, severity) => `${n} ${n === 1 ? 'alarm' : 'alarms'}${severity ? `, worst severity ${severity}` : ''}`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.renderFailed = This widget failed to render
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.reset = Reset widget
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.dismiss = Dismiss
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.newerViewer = This widget needs a newer viewer
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.cannotShow = This widget cannot be shown here
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.widgetType = (type: string) => `Widget type: ${type}`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.deviceUnavailable = Device unavailable
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.deviceGone = The bound device no longer exists.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.notForCustomers = Not available for customer users
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.customerBinding = This widget is bound to something customer users cannot view.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.dataUnavailable = Data unavailable
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noImage = No image URL
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.naturalEarth = Made with Natural Earth
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.selectionUnavailable = Selection isn’t available here.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noTarget = No target slot configured.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.liveSelection = Selection is available on the live dashboard.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.selectTarget = (target: string) => `Select ${target}`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.loading = Loading…
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noOptions = No options
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.select = Select…
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.optionsFailed = Couldn’t load options.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.locationDenied = Location not permitted
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.locationPermission = You do not have permission to view device locations.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noMapRuntime = Map runtime not configured
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.mapRuntimeHint = This host must install MapRuntimeProvider with its bundler's MapLibre worker URL.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noDevices = No devices selected
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noPositions = No positions reported
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.bindLocation = Bind this widget to a device or anchor and select its location series.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.positionsEmpty = None of the selected devices has reported a position yet.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.mapUnavailable = Map renderer unavailable — positions are shown without a basemap.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.now = Now
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.currentState = Shows the current state: the fixed time window does not apply to this widget.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.undeclared = (capability: string) => `this widget did not declare the ${capability} interaction`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.versions = (authored: number, installed: number) => `Saved version: ${authored}; installed version: ${installed}.`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.unregistered = This widget is not installed in this viewer.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.unversioned = This widget was saved without version information.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.invalid-metadata = This widget has invalid version information.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.options-version = The saved settings version does not match the installed widget.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.sdk-incompatible = The saved widget SDK version does not match the installed widget.
+
+es: 71 added entries
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.missingCount = (bucket, name) => `el intervalo de ${bucket} para «${name}» no incluye el número de lecturas`
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.missingFields = (bucket, name, count, fields) => `el intervalo de ${bucket} para «${name}» contiene ${count} lecturas, pero faltan ${fields}`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.countUnit = (n) => n === 1 ? 'alarma' : 'alarmas'
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.worst = (severity) => `la peor: ${severity}`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.countLabel = (n, severity) => `${n} ${n === 1 ? 'alarma' : 'alarmas'}${severity ? `, mayor severidad: ${severity}` : ''}`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.renderFailed = No se pudo mostrar este widget
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.reset = Restablecer widget
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.dismiss = Cerrar
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.newerViewer = Este widget necesita un visor más reciente
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.cannotShow = Este widget no se puede mostrar aquí
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.widgetType = (type: string) => `Tipo de widget: ${type}`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.deviceUnavailable = Dispositivo no disponible
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.deviceGone = El dispositivo vinculado ya no existe.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.notForCustomers = No disponible para usuarios de clientes
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.customerBinding = Este widget está vinculado a un recurso que los usuarios de clientes no pueden ver.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.dataUnavailable = Datos no disponibles
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noImage = No se ha indicado la URL de la imagen
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.naturalEarth = Con datos de Natural Earth
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.selectionUnavailable = La selección no está disponible aquí.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noTarget = No se ha configurado una ranura de destino.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.liveSelection = La selección está disponible en el panel en vivo.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.selectTarget = (target: string) => `Seleccionar ${target}`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.loading = Cargando…
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noOptions = No hay opciones
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.select = Seleccionar…
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.optionsFailed = No se pudieron cargar las opciones.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.locationDenied = Ubicación no permitida
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.locationPermission = No tiene permiso para ver las ubicaciones de los dispositivos.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noMapRuntime = El motor del mapa no está configurado
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.mapRuntimeHint = Esta aplicación debe configurar MapRuntimeProvider con la URL del worker de MapLibre de su empaquetador.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noDevices = No hay dispositivos seleccionados
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noPositions = No se han comunicado posiciones
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.bindLocation = Vincule este widget a un dispositivo o ancla y seleccione su serie de ubicación.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.positionsEmpty = Ninguno de los dispositivos seleccionados ha comunicado una posición todavía.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.mapUnavailable = El motor del mapa no está disponible; las posiciones se muestran sin mapa base.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.now = Ahora
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.currentState = Muestra el estado actual: la ventana de tiempo fija no se aplica a este widget.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.undeclared = (capability: string) => `Este widget no declaró la interacción ${capability}`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.versions = (authored: number, installed: number) => `Versión guardada: ${authored}; versión instalada: ${installed}.`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.unregistered = Este widget no está instalado en este visor.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.unversioned = Este widget se guardó sin información de versión.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.invalid-metadata = Este widget tiene información de versión no válida.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.options-version = La versión de la configuración guardada no coincide con la del widget instalado.
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.sdk-incompatible = La versión del SDK del widget guardado no coincide con la del widget instalado.
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.range = Intervalo de tiempo
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.pause = Pausar
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.resume = Reanudar
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.paused = En pausa
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.pausedAt = (time) => `En pausa desde las ${time}`
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.actionsLive = los comandos se siguen enviando
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.custom = Intervalo personalizado
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.from = Desde
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.to = Hasta
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.apply = Aplicar
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.cancel = Cancelar
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.zone = (zone, offset) => `Las horas están en ${zone} (${offset}). Los enlaces compartidos usan UTC.`
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.fixed = Intervalo fijo
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.backToLive = Volver a en vivo
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.copyLink = Copiar enlace
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.linkCopied = Enlace copiado
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.loadFailed = No se pudo cargar el selector de intervalo. Inténtalo de nuevo.
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.dismiss = Descartar
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.ignored = (reason, raw) => `Se ignoró el intervalo de tiempo del enlace: ${reason} (${raw}). Se muestra el panel en vivo.`
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.incomplete = se requieren tanto from como to
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.unzoned = las horas deben ser ISO 8601 con zona horaria, por ejemplo 2026-10-22T02:00:00Z o +02:00
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.problem.unparseable = Introduce un inicio y un fin.
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.problem.order = El inicio debe ser anterior al fin.
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.problem.tooShort = El intervalo debe durar al menos un minuto.
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.problem.tooLong = El intervalo puede durar como máximo 31 días.
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.problem.future = El fin no puede estar en el futuro.
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.problem.tooEarly = El inicio queda demasiado lejos en el pasado.
+
+zh-CN: 1033 added entries
+frontend/packages/widgets/src/access-strings.ts :: ACCESS_STRINGS.forbidden = 您无权访问这些数据
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.missingCount = (bucket, name) => `“${name}”在 ${bucket} 的时间桶缺少读数数量`
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.missingFields = (bucket, name, count, fields) => `“${name}”在 ${bucket} 的时间桶包含 ${count} 条读数，但缺少 ${fields}`
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.stats.avg = 平均值
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.stats.min = 最小值
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.stats.max = 最大值
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.stats.sum = 总和
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.stats.count = 读数数量
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.stats.last = 最新值
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.loading = 正在加载
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.unsupported = 此数据源无法计算聚合值
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.failed = (m) => (m ? `聚合数据不可用：${m}` : '聚合数据不可用')
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.noReadings = (span) => `最近 ${span} 内没有读数`
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.noData = 暂无数据
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.unbound = 请为此组件选择设备
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.trend = (stat, span) => `最近 ${span} 的${stat}趋势`
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.noCategories = 请选择要显示的测量项
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.pieNegative = 饼图的值必须大于或等于零
+frontend/packages/widgets/src/aggregate-strings.ts :: AGGREGATE_STRINGS.pieNoShare = 所有值均为零，无法显示占比
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.countUnit = () => '条告警'
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.worst = (severity) => `最高严重程度：${severity}`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.countLabel = (n, severity) => `${n} 条告警${severity ? `，最高严重程度：${severity}` : ''}`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.tabsLabel = 按设备类型查看告警
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.all = 全部
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.deviceType = 设备类型
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.activeBadge = (n, worst) => `${n} 条活动告警，最高严重程度：${worst}`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.severity.CRITICAL = 危急
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.severity.MAJOR = 严重
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.severity.MINOR = 次要
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.severity.WARNING = 警告
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.severity.INDETERMINATE = 未确定
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.scrollLabel = 告警
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.severity = 严重程度
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.status = 状态
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.originator = 来源
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.alarm = 告警
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.value = 值
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.raised = 触发时间
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.actions = 操作
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.active = 活动
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.acknowledged = 已确认
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.cleared = 已清除
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.loading = 正在加载…
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.empty = 暂无告警
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.acknowledge = 确认
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.clear = 清除
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.acknowledgeAlarm = (key) => `确认告警 ${key}`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.clearAlarm = (key) => `清除告警 ${key}`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.failed = 操作失败，请重试
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.drill = (token) => `在关联组件中显示 ${token}`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.rows.shown = (shown, total) => `显示 ${total} 条中的 ${shown} 条`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.breakdown.label = 按严重程度查看告警
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.breakdown.total = (n) => `${n} 条告警`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.breakdown.ofType = (n, type) => `${type} 类型设备上的 ${n} 条告警`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.breakdown.item = (severity, n) => `${severity}：${n}`
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.breakdown.loading = 正在加载告警…
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.breakdown.unsupported = 此数据源无法按严重程度统计告警。
+frontend/packages/widgets/src/alarm-strings.ts :: ALARM_STRINGS.breakdown.failed = 无法读取告警数量。
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.noCommand = 尚未配置命令
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.setParameter = 请设置此控件发送的参数
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.parameterMissing = (n) => `命令没有参数“${n}”`
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.wrongType = (n, e) => `参数“${n}”不是${e}`
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.fixedChoices = (n) => `参数“${n}”使用固定选项，不能设置范围`
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.otherRequired = (ns) => `未发送：命令还需要 ${ns.map((n) => `“${n}”`).join('、')}，且未设置默认值`
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.badDefault = (ns) => `未发送：${ns.map((n) => `“${n}”`).join('、')} 的默认值不符合命令要求`
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.setRange = 请设置最小值和最大值
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.badRange = 最大值必须大于最小值
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.numberKind = 数字
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.booleanKind = 布尔值
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.lastSent = 上次发送
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.nothingSent = 尚未发送
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.beyondHistory = 未出现在最近的命令中
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.noValue = 无值
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.unsent = 尚未发送，松开或按 Enter 发送
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.sliderHint = 使用方向键选择值；按 Enter 发送，或按 Escape 放弃。
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.stepperHint = 使用方向键和 Page Up 或 Page Down 更改值；按 Enter 发送，或按 Escape 放弃。
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.stepperUnsent = 尚未发送，请点击“发送”
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.send = 发送
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.decrease = 减小
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.increase = 增大
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.pending = 等待中
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.delivered = 已送达
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.failed = 失败
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.sending = 正在发送…
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.on = 开
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.off = 关
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.viewOnly = 仅查看
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.noPermission = 您没有发送命令的权限。
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.noSeam = 此视图中无法使用命令。
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.noDevice = 尚未为此命令选择设备。
+frontend/packages/widgets/src/command-control-strings.ts :: CONTROL_STRINGS.sendFailed = 无法发送命令，请重试。
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.send = (label) => `发送 ${label}`
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.sending = 正在发送…
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.noCommand = 尚未配置命令。
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.noPermission = 您没有下发命令的权限。
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.noSeam = 此视图中无法使用命令。
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.noDevice = 尚未为此命令选择设备。
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.sendFailed = 无法下发命令，请重试。
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.historyFailed = 无法加载命令历史记录。
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.loading = 正在加载…
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.empty = 尚未下发任何命令。
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.structuredHint = (required) => `${required ? '必填的' : ''}结构化参数，此处暂不支持。`
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.structured = 结构化参数，此处暂不支持
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.required = 必填
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.number = 必须为数字
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.integer = 必须为整数
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.minimum = (value) => `必须 ≥ ${value}`
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.maximum = (value) => `必须 ≤ ${value}`
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.status.QUEUED = 已排队
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.status.SENT = 已发送
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.status.HELD = 已暂缓
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.status.PARKED = 已搁置
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.status.SUCCESSFUL = 成功
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.status.FAILED = 失败
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.status.TIMEOUT = 超时
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.status.EXPIRED = 已过期
+frontend/packages/widgets/src/command-strings.ts :: COMMAND_STRINGS.status.CANCELLED = 已取消
+frontend/packages/widgets/src/compare-strings.ts :: COMPARE_STRINGS.capped = (shown, total) => `显示 ${total} 台设备中的前 ${shown} 台；提高“最多曲线数”（最多 12 条）可查看更多。`
+frontend/packages/widgets/src/compare-strings.ts :: COMPARE_STRINGS.cappedPage = (shown, read, total) => `显示 ${total} 台设备中的 ${shown} 台：此组的设备数超过已读取的 ${read} 台，仅绘制前 ${shown} 台。`
+frontend/packages/widgets/src/compare-strings.ts :: COMPARE_STRINGS.bucketed = (bucket) => `每 ${bucket} 的平均值`
+frontend/packages/widgets/src/compare-strings.ts :: COMPARE_STRINGS.bucketedTitle = (bucket) => `已存储的历史记录按每 ${bucket} 时间桶的平均值绘制，每桶一个点；此后实时到达的读数按原值绘制，不取平均。`
+frontend/packages/widgets/src/compare-strings.ts :: COMPARE_STRINGS.thresholdNote = 阈值为参考线；历史数据点是时间桶的平均值，而非单次读数。
+frontend/packages/widgets/src/compare-strings.ts :: COMPARE_STRINGS.historyFailed = (n) => `${n} 台设备的历史记录无法读取；其曲线从实时读数开始。`
+frontend/packages/widgets/src/compare-strings.ts :: COMPARE_STRINGS.cappedShort = (shown, total) => `${total} 台中的 ${shown} 台`
+frontend/packages/widgets/src/compare-strings.ts :: COMPARE_STRINGS.thresholdShort = 阈值仅供参考
+frontend/packages/widgets/src/compare-strings.ts :: COMPARE_STRINGS.historyFailedShort = (n) => `${n} 台未读取`
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.events = (n) => `此范围内的事件（${n}）`
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.otherAlarms = (n) => `此设备的其他告警（${n}）`
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.noMeasurement = 测量项未知
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.aboutMeasurement = (m) => `关于 ${m}`
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.alarm = 告警
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.command = 命令
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.severity.CRITICAL = 危急
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.severity.MAJOR = 严重
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.severity.MINOR = 次要
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.severity.WARNING = 警告
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.severity.INDETERMINATE = 未确定
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.raised = (t) => `触发于 ${t}`
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.cleared = (t) => `清除于 ${t}`
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.stillActive = 仍处于活动状态
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.sent = (t) => `发送于 ${t}`
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.outcome.SUCCESSFUL = 成功
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.outcome.FAILED = 失败
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.outcome.TIMEOUT = 超时
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.outcome.EXPIRED = 已过期
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.outcome.CANCELLED = 已取消
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.outcome.QUEUED = 已排队
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.outcome.SENT = 已发送，等待回复
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.outcome.HELD = 已暂缓
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.outcome.PARKED = 已搁置
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.more = (n) => `另有 ${n} 条未显示`
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.notInRecording.alarm = 告警标记：此录制中未包含
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.notInRecording.command = 命令标记：此录制中未包含
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.failed.alarm = 无法加载告警标记
+frontend/packages/widgets/src/event-markers-strings.ts :: EVENT_MARKER_STRINGS.failed.command = 无法加载命令标记
+frontend/packages/widgets/src/export-rows.ts :: WORDS.time = 时间（UTC）
+frontend/packages/widgets/src/export-rows.ts :: WORDS.measurement = 测量项
+frontend/packages/widgets/src/export-rows.ts :: WORDS.series = 序列
+frontend/packages/widgets/src/export-rows.ts :: WORDS.value = 值
+frontend/packages/widgets/src/export-rows.ts :: WORDS.basis = 数据依据
+frontend/packages/widgets/src/export-rows.ts :: WORDS.reading = 读数
+frontend/packages/widgets/src/export-rows.ts :: WORDS.average = (bucket) => `每 ${bucket} 的平均值`
+frontend/packages/widgets/src/export-rows.ts :: WORDS.device = 设备
+frontend/packages/widgets/src/export-rows.ts :: WORDS.deviceToken = 设备标识
+frontend/packages/widgets/src/export-rows.ts :: WORDS.readingTime = 读数时间（UTC）
+frontend/packages/widgets/src/export-rows.ts :: WORDS.latest = 最新值
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.device = 设备
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.loading = 正在加载
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.notReported = 不报告此测量项
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.unread = 尚未加载
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.noData = 此范围内暂无数据
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.failed = 无法读取
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.unbound = 请为此组件选择设备组
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.forbidden = 您无权访问这些数据
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.unsupported = 此数据源无法列出设备群
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.noMembers = 此组中没有设备
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.noMeasurement = 请选择要比较的测量项
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.oneDevice = 此组件显示单台设备，但当前绑定的是设备组，会将组内设备的读数混在一起。
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.useFleetTable = 请将其绑定到单台设备，或使用设备群表格显示此组。
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.usePerDevice = 请设置为每台设备一条柱形以进行比较，或将其绑定到单台设备。
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.useLinePerDevice = 请设置为每台设备一条曲线以进行比较，或将其绑定到单台设备。
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.stale = 已过期
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.noMeasurementCount = 请选择要监测的测量项
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.noBands = 请添加阈值以标明需要关注的情况
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.countOf = (total) => `共 ${total} 台`
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.needAttention = 需要关注
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.devices = 台设备
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.notReporting = (n) => `${n} 台未报告数据`
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.notMeasured = (n) => `${n} 台不报告此测量项`
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.noneMeasured = 此组中没有设备报告此测量项
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.noneMeasuredShown = (shown, total) => `已读取 ${total} 台设备中的 ${shown} 台，均不报告此测量项`
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.notRead = (n) => `${n} 台无法读取`
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.truncated = (shown, total) => `显示 ${total} 台设备中的 ${shown} 台`
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.range = (from, to, of) => `第 ${from}–${to} 项，共 ${of} 项`
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.previous = 上一页
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.next = 下一页
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.sortBy = (column) => `按${column}排序`
+frontend/packages/widgets/src/fleet-strings.ts :: FLEET_STRINGS.drill = (device) => `在关联组件中显示 ${device}`
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.time = 时间
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.exportTime = 时间桶起点（UTC）
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.average = (bucket) => `每 ${bucket} 的平均值`
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.averageTitle = (bucket) => `每个数值是 ${bucket} 时间桶内读数的平均值，而非单次读数；时间为该时间桶的起点。`
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.loading = 正在加载
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.unbound = 请为此组件选择设备
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.forbidden = 您无权访问这些数据
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.unsupported = 此数据源无法读取已存储的历史记录
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.failed = 无法读取历史记录
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.empty = 此范围内没有读数
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.noReadings = 此时间桶内没有读数
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.newestFirst = 最新在前
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.oldestFirst = 最早在前
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.range = (from, to, of) => `第 ${from}–${to} 项，共 ${of} 项`
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.previous = 上一页
+frontend/packages/widgets/src/history-strings.ts :: HISTORY_STRINGS.next = 下一页
+frontend/packages/widgets/src/level-strings.ts :: LEVEL_STRINGS.noData = 暂无数据
+frontend/packages/widgets/src/level-strings.ts :: LEVEL_STRINGS.setRange = 请设置最小值和最大值
+frontend/packages/widgets/src/level-strings.ts :: LEVEL_STRINGS.badRange = 最大值必须大于最小值
+frontend/packages/widgets/src/level-strings.ts :: LEVEL_STRINGS.setThresholds = 请至少设置两个阈值
+frontend/packages/widgets/src/level-strings.ts :: LEVEL_STRINGS.aboveScale = 超出量程上限
+frontend/packages/widgets/src/level-strings.ts :: LEVEL_STRINGS.belowScale = 低于量程下限
+frontend/packages/widgets/src/level-strings.ts :: LEVEL_STRINGS.on = 开
+frontend/packages/widgets/src/level-strings.ts :: LEVEL_STRINGS.off = 关
+frontend/packages/widgets/src/level-strings.ts :: LEVEL_STRINGS.cardinals.0 = 北
+frontend/packages/widgets/src/level-strings.ts :: LEVEL_STRINGS.cardinals.1 = 东
+frontend/packages/widgets/src/level-strings.ts :: LEVEL_STRINGS.cardinals.2 = 南
+frontend/packages/widgets/src/level-strings.ts :: LEVEL_STRINGS.cardinals.3 = 西
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.online = 在线
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.offline = 离线
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.unknown = 暂无状态
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.neverSeen = 从未上报
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.lastSeen = (when) => `最后上报于 ${when}`
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.failed = 无法读取状态
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.unsupported = 此数据源无法读取设备状态
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.unbound = 请为此组件选择设备
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.oneDevice = 此卡片显示单台设备，但当前绑定的是设备组。
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.useDoughnut = 请将其绑定到单台设备，或使用在线/离线环形图显示此组。
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.ofTotal = (total) => `共 ${total} 台`
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.onlineCaption = 在线
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.notRead = (n) => `${n} 台无法读取`
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.noStatusYet = (n) => `${n} 台暂无状态`
+frontend/packages/widgets/src/presence-strings.ts :: PRESENCE_STRINGS.chartLabel = (online, offline, unknown) => `${online} 台在线，${offline} 台离线，${unknown} 台暂无状态`
+frontend/packages/widgets/src/scada-strings.ts :: SCADA_STRINGS.symbols.pump = 泵
+frontend/packages/widgets/src/scada-strings.ts :: SCADA_STRINGS.symbols.valve = 阀门
+frontend/packages/widgets/src/scada-strings.ts :: SCADA_STRINGS.symbols.tank = 储罐
+frontend/packages/widgets/src/scada-strings.ts :: SCADA_STRINGS.symbols.motor = 电机
+frontend/packages/widgets/src/scada-strings.ts :: SCADA_STRINGS.symbols.fan = 风机
+frontend/packages/widgets/src/scada-strings.ts :: SCADA_STRINGS.symbols.pipe = 管道
+frontend/packages/widgets/src/scada-strings.ts :: SCADA_STRINGS.symbols.sensor = 传感器
+frontend/packages/widgets/src/scada-strings.ts :: SCADA_STRINGS.symbols.breaker = 断路器
+frontend/packages/widgets/src/scada-strings.ts :: SCADA_STRINGS.symbols.light = 指示灯
+frontend/packages/widgets/src/scada-strings.ts :: SCADA_STRINGS.forward = 正向
+frontend/packages/widgets/src/scada-strings.ts :: SCADA_STRINGS.reverse = 反向
+frontend/packages/widgets/src/scada-strings.ts :: SCADA_STRINGS.label = (symbol, state) => `${symbol}：${state}`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.renderFailed = 无法显示此组件
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.reset = 重置组件
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.dismiss = 关闭
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.newerViewer = 此组件需要更新版本的查看器
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.cannotShow = 此处无法显示此组件
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.widgetType = (type: string) => `组件类型：${type}`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.deviceUnavailable = 设备不可用
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.deviceGone = 绑定的设备已不存在。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.notForCustomers = 客户用户无法使用
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.customerBinding = 此组件绑定的资源不支持客户用户查看。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.dataUnavailable = 数据不可用
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noImage = 尚未设置图片 URL
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.naturalEarth = 采用 Natural Earth 数据
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.selectionUnavailable = 此处无法进行选择。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noTarget = 尚未配置目标槽位。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.liveSelection = 可在实时仪表板中进行选择。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.selectTarget = (target: string) => `选择 ${target}`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.loading = 正在加载…
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noOptions = 暂无选项
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.select = 请选择…
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.optionsFailed = 无法加载选项。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.locationDenied = 无权查看位置
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.locationPermission = 您没有查看设备位置的权限。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noMapRuntime = 尚未配置地图运行环境
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.mapRuntimeHint = 此应用必须配置 MapRuntimeProvider，并提供打包工具生成的 MapLibre worker URL。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noDevices = 尚未选择设备
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.noPositions = 尚未报告位置
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.bindLocation = 请将此组件绑定到设备或锚点，并选择其位置序列。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.positionsEmpty = 所选设备均尚未报告位置。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.mapUnavailable = 地图渲染器不可用，位置将不带底图显示。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.now = 当前
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.currentState = 显示当前状态：固定时间窗口不适用于此组件。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.undeclared = (capability: string) => `此组件未声明 ${capability} 交互`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.versions = (authored: number, installed: number) => `保存的版本：${authored}；已安装的版本：${installed}。`
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.unregistered = 此查看器尚未安装此组件。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.unversioned = 此组件保存时未包含版本信息。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.invalid-metadata = 此组件的版本信息无效。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.options-version = 已保存的设置版本与已安装的组件不匹配。
+frontend/packages/widgets/src/shared-strings.ts :: SHARED_STRINGS.unresolved.sdk-incompatible = 已保存的组件 SDK 版本与已安装的组件不匹配。
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.loading = 正在加载
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.unbound = 请为此组件选择设备
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.forbidden = 您无权访问这些数据
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.unsupported = 此数据源无法读取已存储的历史记录
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.failed = 无法读取历史记录
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.empty = 此时段内没有读数
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.baseline = 正常
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.noData = 暂无读数
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.levels.critical = 危急
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.levels.major = 严重
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.levels.minor = 次要
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.levels.warning = 警告
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.levels.info = 提示
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.levels.normal = 正常
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.lane = (name, shares, runs) => `${name}：${shares}。${runs}`
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.basis = (bucket) => `每 ${bucket} 平均值的状态`
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.basisTitle = (bucket) => `每段表示其 ${bucket} 平均值所处的状态，而非状态变化的精确时刻：在 ${bucket} 时间桶内变化的信号按该时间桶平均值的状态显示。`
+frontend/packages/widgets/src/state-timeline-strings.ts :: STATE_TIMELINE_STRINGS.segment = (state, from, to) => `${state}，${from} 至 ${to}`
+frontend/packages/widgets/src/status-grid-strings.ts :: STATUS_GRID_STRINGS.ok = 正常
+frontend/packages/widgets/src/status-grid-strings.ts :: STATUS_GRID_STRINGS.none = 暂无读数
+frontend/packages/widgets/src/status-grid-strings.ts :: STATUS_GRID_STRINGS.chooseMeasurement = 请选择方格显示的测量项
+frontend/packages/widgets/src/status-grid-strings.ts :: STATUS_GRID_STRINGS.levels.critical = 危急
+frontend/packages/widgets/src/status-grid-strings.ts :: STATUS_GRID_STRINGS.levels.major = 严重
+frontend/packages/widgets/src/status-grid-strings.ts :: STATUS_GRID_STRINGS.levels.minor = 次要
+frontend/packages/widgets/src/status-grid-strings.ts :: STATUS_GRID_STRINGS.levels.warning = 警告
+frontend/packages/widgets/src/status-grid-strings.ts :: STATUS_GRID_STRINGS.levels.info = 提示
+frontend/packages/widgets/src/status-grid-strings.ts :: STATUS_GRID_STRINGS.levels.normal = 正常
+frontend/packages/widgets/src/status-grid-strings.ts :: STATUS_GRID_STRINGS.tile = (device, reading, group) => `${device}：${reading}，${group}`
+frontend/packages/widgets/src/table-strings.ts :: TABLE_STRINGS.measurement = 测量项
+frontend/packages/widgets/src/table-strings.ts :: TABLE_STRINGS.value = 值
+frontend/packages/widgets/src/table-strings.ts :: TABLE_STRINGS.time = 时间
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.range = 时间范围
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.pause = 暂停
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.resume = 继续
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.paused = 已暂停
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.pausedAt = (time) => `暂停于 ${time}`
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.actionsLive = 命令仍会发送
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.custom = 自定义范围
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.from = 开始
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.to = 结束
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.apply = 应用
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.cancel = 取消
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.zone = (zone, offset) => `时间以 ${zone}（${offset}）显示。共享链接使用 UTC。`
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.fixed = 固定时间窗口
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.backToLive = 返回实时视图
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.copyLink = 复制链接
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.linkCopied = 链接已复制
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.loadFailed = 无法加载时间范围选择器，请重试。
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.dismiss = 关闭
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.ignored = (reason, raw) => `已忽略链接的时间窗口：${reason}（${raw}）。当前显示实时仪表板。`
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.incomplete = 必须同时提供 from 和 to
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.unzoned = 时间必须使用带时区的 ISO 8601 格式，例如 2026-10-22T02:00:00Z 或 +02:00
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.problem.unparseable = 请输入开始和结束时间。
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.problem.order = 开始时间必须早于结束时间。
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.problem.tooShort = 时间窗口至少为一分钟。
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.problem.tooLong = 时间窗口最多为 31 天。
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.problem.future = 结束时间不能在未来。
+frontend/packages/widgets/src/time-range-strings.ts :: TIME_RANGE_STRINGS.absolute.problem.tooEarly = 开始时间过早。
+frontend/packages/widgets/src/widgets/time-series-chart.tsx :: SPAN_STRINGS.from = (time: string) => `从 ${time} 起`
+frontend/packages/widgets/src/widgets/time-series-chart.tsx :: SPAN_STRINGS.pinned = (span: string) => `固定为 ${span}：仪表板的时间范围不适用于此图。`
+frontend/packages/widgets/src/widgets/time-series-chart.tsx :: SPAN_STRINGS.cut = (time: string, span: string) => `仅显示 ${time} 以来的数据，未覆盖整个 ${span}：为限制内存，较早的样本已丢弃。`
+frontend/packages/widget-sdk/src/empty-state.tsx :: WIDGET_EMPTY_STRINGS.unbound.title = 尚未选择设备
+frontend/packages/widget-sdk/src/empty-state.tsx :: WIDGET_EMPTY_STRINGS.unbound.detail = 请选择设备以在此组件中显示其数据。
+frontend/packages/widget-sdk/src/empty-state.tsx :: WIDGET_EMPTY_STRINGS.notReported.title = 此设备不报告该测量项
+frontend/packages/widget-sdk/src/empty-state.tsx :: WIDGET_EMPTY_STRINGS.notReported.detail = (m) => `此设备的配置文件未包含${m ? `“${m}”` : '此测量项'}，因此不会报告其数据。`
+frontend/packages/widget-sdk/src/empty-state.tsx :: WIDGET_EMPTY_STRINGS.noData.title = 此范围内暂无数据
+frontend/packages/widget-sdk/src/empty-state.tsx :: WIDGET_EMPTY_STRINGS.noData.detail = (m) => `所选时间范围内未收到${m ? `“${m}”的` : ''}数据。`
+frontend/packages/widget-sdk/src/empty-state.tsx :: WIDGET_EMPTY_STRINGS.forbidden.title = 无访问权限
+frontend/packages/widget-sdk/src/empty-state.tsx :: WIDGET_EMPTY_STRINGS.forbidden.detail = 您无权访问这些数据。
+frontend/packages/widget-sdk/src/empty-state.tsx :: WIDGET_EMPTY_STRINGS.error.title = 数据不可用
+frontend/packages/widget-sdk/src/empty-state.tsx :: WIDGET_EMPTY_STRINGS.error.detail = 数据源未响应。
+frontend/packages/widget-sdk/src/empty-state.tsx :: LAST_VALUE_STRINGS.lastValue = (value, age) => `上次读数 ${value} · ${age}`
+frontend/packages/widget-sdk/src/export-menu.ts :: WORDS.button = 导出数据
+frontend/packages/widget-sdk/src/export-menu.ts :: WORDS.csv = 下载 CSV
+frontend/packages/widget-sdk/src/export-menu.ts :: WORDS.image = 下载图片（PNG）
+frontend/packages/widget-sdk/src/freshness.ts :: FRESHNESS_STRINGS.stale = 已过期
+frontend/packages/widget-sdk/src/freshness.ts :: FRESHNESS_STRINGS.ageLabel = 最新样本
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: title = 仪表板
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: description = 此租户的实时仪表板
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: newDashboard = 新建仪表板
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: loading = 正在加载仪表板…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: empty = 暂无仪表板。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: delete = 删除
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: deleteTitle = 删除仪表板
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: deleteConfirm = 删除“{{token}}”？此操作无法撤销。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: deleted = 已删除仪表板“{{token}}”
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: created = 已创建仪表板“{{token}}”
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: createDashboard = 创建仪表板
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: createTokenPlaceholder = ops-overview
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: detailLoading = 正在加载仪表板…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: detailNotFound = 未找到仪表板“{{token}}”。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: detailNotPublished = 仪表板“{{token}}”尚未发布，请联系作者发布。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: detailParseError = 无法显示此仪表板：{{error}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: schemaTooNew = 此仪表板由更新版本的 DeviceChain 保存。请升级控制台后再打开。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: detailInvalidDefinition = 仪表板定义无效。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceDiscardTitle = 放弃未保存的更改？
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceDiscardDescription = 未保存的仪表板更改将丢失。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceDiscardConfirm = 放弃
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceSaved = 仪表板已保存
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceConflictMessage = 此仪表板已在其他位置更改。请重新加载页面获取最新版本，再重新应用更改。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceRollbackParseError = 已回滚，但无法解析返回的版本。请重新加载页面。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceClipboardUnavailable = 此处无法使用剪贴板，请改用下载。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceTemplateCopied = 已复制模板（未绑定）
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceDefinitionCopied = 已复制定义
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceUnsavedChanges = 未保存的更改
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceConnectionLabel = 实时数据连接
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceConnectionLive = 实时
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceConnectionReconnecting = 正在重新连接
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceConnectionOffline = 离线
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceUnknownOptionsRemoved = 已移除所有组件均不使用的选项。请检查并保存。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceNoUnknownOptions = 没有可移除的未知选项。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceSaving = 正在保存…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceHistory = 历史记录
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceExport = 导出
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceDownloadJson = 下载 JSON
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceCopyJson = 复制 JSON
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceCopyTemplate = 复制为模板（未绑定）
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspacePreview = 预览
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspacePreviewHint = 使用模拟数据预览（无需设备）
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceEdit = 编辑
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceAddWidget = 添加组件
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceDone = 完成
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceTitleLabel = 标题
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceTitlePlaceholder = 仪表板标题
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceColumns = 列数
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceMinCellSize = 最小单元格
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceGutter = 间距
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspacePadding = 内边距
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceSize = 大小
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceSizeFill = 填满区域
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceSizeWidth = 固定宽度
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceSizeHeight = 固定高度
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspacePx = px
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceDensity = 密度
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceDensityCompact = 紧凑
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceDensityComfortable = 舒适
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceDensityWall = 大屏显示
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceConvertedNotice = 已从旧版网格转换。请检查布局并保存，以保留新格式。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceConvertedWindowsNotice_one = 此仪表板的图表（{{charts}}）原先仅保留样本数，没有时间跨度。现在跟随仪表板的时间范围；如需不同的时长，请在设置中固定。保存以保留新格式。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceConvertedWindowsNotice_other = 此仪表板的 {{count}} 个图表（{{charts}}）原先仅保留样本数，没有时间跨度。现在跟随仪表板的时间范围；如需不同的时长，请在图表设置中固定。保存以保留新格式。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceTimeRange = 时间范围
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeLabel = 时间范围
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangePause = 暂停
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeResume = 继续
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangePaused = 已暂停
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangePausedAt = 暂停于 {{time}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeActionsLive = 命令仍会发送
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionHistoryTitle = 版本历史
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionHistoryDescription = 将当前草稿发布为不可修改的版本并展示给查看者，或在不更改草稿的情况下启用旧版本，也可将草稿回滚至旧版本。历史记录只能追加。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionPublishHeading = 发布当前草稿
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionLabelField = 标签
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionLabelHint = 可选，例如发布名称或 v1.2.0。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionLabelPlaceholder = v1.0.0
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionDescriptionPlaceholder = 此版本更改了什么？
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionSaveBeforePublish = 请先保存更改，再发布。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionPublishButton = 发布版本
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionPublishedHeading = 已发布版本
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionLoading = 正在加载版本…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionEmpty = 尚未发布任何版本。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionColumnVersion = 版本
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionColumnPublished = 发布时间
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionColumnBy = 发布者
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionRollback = 回滚
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionLoadMore = 加载更早的版本
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionOlderNotShown = 显示最新 {{count}} 个版本，未列出更早的版本。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionPublished = 已发布版本 {{version}}，查看者现在将看到此版本
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionPublishGoesLive = 发布后，查看者将看到新版本。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionLive = 当前展示
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionActivate = 设为展示版本
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionActivated = 查看者现在将看到版本 {{version}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionPublishConflict = 此仪表板已在其他位置更改。请重新加载页面后再发布。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionRollbackConflict = 此仪表板已在其他位置更改。请重新加载页面后再回滚。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionPublishBlocked_one = 此仪表板有 {{count}} 个组件选项需要修复后才能发布。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionPublishBlocked_other = 此仪表板有 {{count}} 个组件选项需要修复后才能发布。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionStripUnknownOptions = 移除未知选项
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: optionIssueMissing = {{key}} 为必填项，但尚未设置
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: optionIssueUnknown = 此组件不使用 {{key}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: optionIssueType = {{key}} 的类型错误
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: optionIssueEnum = {{key}} 不是允许的值
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: optionIssueRange = {{key}} 超出允许范围
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: optionIssueJson = {{key}} 不是有效的 JSON
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: optionIssueInvariant = {{key}} 与其他选项冲突
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionRollbackConfirmTitle = 回滚至版本 {{version}}？
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionRollbackConfirmDescription = 这将用该版本替换当前草稿。当前草稿（包括已保存但未发布的更改）将丢失。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionRolledBack = 已回滚至版本 {{version}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerSelectDevice = 选择设备…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerSelectCustomer = 选择客户…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerSelectArea = 选择区域…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerSelectAsset = 选择资产…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerSearchDevices = 搜索设备…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerSearchCustomers = 搜索客户…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerSearchAreas = 搜索区域…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerSearchAssets = 搜索资产…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerEmptyDevices = 未找到设备。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerEmptyCustomers = 未找到客户。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerEmptyAreas = 未找到区域。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerEmptyAssets = 未找到资产。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerFailedDevices = 无法加载设备。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerFailedCustomers = 无法加载客户。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerFailedAreas = 无法加载区域。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerFailedAssets = 无法加载资产。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerSelectDeviceType = 选择设备类型…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerSearchDeviceTypes = 搜索设备类型…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerEmptyDeviceTypes = 未找到设备类型。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerFailedDeviceTypes = 无法加载设备类型。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pickerUnknownDeviceType = 未知类型 {{token}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetListMoveUp = 将第 {{n}} 行上移
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetListMoveDown = 将第 {{n}} 行下移
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetClosePanel = 关闭面板
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetUnknownTitle = 不支持的组件
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetUnknownType = 类型：{{type}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetUnknownBody = 此组件由更新版本添加，当前控制台无法显示或配置。保存时会保留其原始内容，您仍可移动、调整大小或删除它。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelDataSource = 数据源
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelTargetDevice = 目标设备
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelScope = 范围
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetDerivedFromParentWithSlot = 继承父级上下文（槽位 <mono>{{slotName}}</mono>）。此组件随所选上下文及下钻操作更新。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetDerivedFromParentNoSlot = 继承父级上下文。此组件随所选上下文及下钻操作更新。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetBoundViaSlot = 通过槽位 <mono>{{slotName}}</mono> 绑定
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetNoScopeSelected = 尚未选择范围，显示整个租户的所有告警。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelText = 文本
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelAlign = 对齐方式
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlignLeft = 左对齐
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlignCenter = 居中
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlignRight = 右对齐
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelFontSize = 文字大小
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintFontSize = 舒适密度下文字的像素高度，会随仪表板密度缩放。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelImageUrl = 图片 URL
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelAltText = 替代文本
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelFit = 适应方式
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetFitContain = 完整显示
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetFitCover = 覆盖区域
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetFitFill = 拉伸
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelLinearStyle = 样式
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLinearStyleBar = 条形
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLinearStyleThermometer = 温度计
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelOrientation = 方向
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetOrientationHorizontal = 从左到右
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetOrientationVertical = 从下到上
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelReadout = 读数显示
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetReadoutValue = 数值
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetReadoutPercent = 量程百分比
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelStat = 统计值
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintStat = 选择此时段内要显示的统计值。最新读数不覆盖时段，仅为最近收到的读数。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetStatAvg = 平均值
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetStatMin = 最小值
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetStatMax = 最大值
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetStatSum = 总和
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetStatCount = 读数数量
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetStatLast = 最新读数
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelSort = 排序
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetSortNone = 按数据源顺序
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetSortAscending = 从小到大
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetSortDescending = 从大到小
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelOnAt = 开启阈值
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintScaleMin = 量程空端对应的值。必填，组件不会自动推断范围。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintScaleMax = 量程满端对应的值。必填，且必须大于最小值。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintBatteryRange = 最小值和最大值留空时使用百分比量程（0 至 100）；同时设置两者可显示伏特等其他单位。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintOnAt = 对于开关信号，值达到或超过此值时灯亮，低于此值时灯灭。留空则有值时保持亮起，并按所属区间着色。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelParameter = 参数
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelStep = 步长
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelControlMode = 模式
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetControlModeSlider = 滑块
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetControlModeStepper = 步进控件
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintControlParameter = 此控件设置的命令参数。命令恰有一个类型匹配的参数时可留空；有多个参数时控件不会自行选择。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintSliderRange = 仅当命令定义未限制此参数范围时使用。命令定义的范围始终优先。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintSliderStep = 相邻值之间的间隔。留空时，整数参数默认为 1，其他参数默认为范围的百分之一。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintSignalThresholds = 信号等级，最低值在前：每行对应一格，读数达到该值时亮起，并按严重程度着色。至少两行，最多八行。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelTitle = 标题
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelMin = 最小值
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelMax = 最大值
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelUnit = 单位
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelMeasurement = 测量项
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintMeasurement = 要显示的测量项。留空时显示数据源选中的第一项。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelWindow = 保留的样本数
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintWindow = 此组件所有测量项在内存中保留的样本总数，用于限制内存，不改变可见内容。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelWindowSeconds = 时间跨度
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintWindowSeconds = 组件覆盖的历史时长，以秒为单位（60 至 604800）。留空则跟随查看者可更改的仪表板时间范围；设置后将此组件固定为指定时长。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelMarkAlarms = 标记告警
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintMarkAlarms = 在图中绘制此设备的告警：从触发至清除显示淡色区域，顶部按严重程度着色。最多显示最新 30 个事件，并注明未显示的数量。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelMarkAlarmsScope = 要标记的告警
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintMarkAlarmsScope = 选择图中标记的告警。“仅此图的测量项”（新图的默认选项）排除其他测量项的告警，例如发动机图中的轮胎告警；测量项未知的告警列在图下方，不绘制。“设备的所有告警”标记全部告警，与此选项出现前保存的图表一致。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetMarkAlarmsScopeSeries = 仅此图的测量项
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetMarkAlarmsScopeDevice = 设备的所有告警
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetPlaceholderWholeDevice = 设备的所有告警
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelMarkCommands = 标记命令
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintMarkCommands = 在发送给此设备的每条命令的发送时间绘制一条线，并标注命令名称及执行结果。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintChartAxisMin = 数值轴下限。留空时由图表自动选择。低于此值的读数或阈值仍会显示，坐标轴会自动扩展以将其纳入。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintChartAxisMax = 数值轴上限，必须大于最小值。留空时由图表自动选择。高于此值的读数或阈值仍会显示，坐标轴会自动扩展以将其纳入。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelStaleAfter = 过期时长（秒）
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintStaleAfter = 最新样本超过此时长后，数值变灰并标记为已过期。留空时仅显示样本距今时间，不会将组件标为过期。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelPrecision = 精度
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelState = 状态
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetStateHint = 要包含的告警状态。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelSeverity = 严重程度
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetSeverityHint = 仅显示一种严重程度。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelAcknowledged = 确认状态
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAcknowledgedHint = 按是否已确认筛选。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelMaxRows = 最大行数
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetMaxRowsAlarmHint = 滚动前显示的最新告警数量。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelAlarmGroupBy = 分组方式
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintAlarmGroupBy = 每种设备类型显示一个选项卡，徽标显示其活动告警数量。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlarmGroupByNone = 单个表格
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlarmGroupByDeviceType = 设备类型
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelAlarmDeviceTypes = 设备类型选项卡
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintAlarmDeviceTypes = 选择显示选项卡的设备类型及其顺序。留空时显示所有有活动告警的类型；未列出的类型仅显示在“全部”中。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelAlarmDeviceTypeToken = 设备类型
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetMaxRowsCommandHint = 历史记录中滚动前显示的最近命令数量。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintPrecision = 数值的小数位数（留空表示完整精度）。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelTileUrl = 瓦片源 URL
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTileUrlHint = 栅格瓦片模板，例如 https://tiles.example.com/{z}/{x}/{y}.png。留空则使用租户底图，适用于大多数仪表板。此处设置仅覆盖当前仪表板，并须提供供应商许可证要求的署名。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelAttribution = 署名
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAttributionHint = 瓦片供应商要求的署名，将显示在地图上。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTileUncredited = 此瓦片 URL 缺少署名，已忽略并改用租户底图。瓦片源与许可证要求的署名必须同时提供。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetPlaceholderAny = 任意
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelThresholds = 阈值
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintThresholds = 每行从其数值开始一个严重程度区间，延续至下一行。低于第一行及处于正常区间时保留组件的常规颜色，仅异常等级着色。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelThresholdValue = 起始值
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelThresholdLevel = 严重程度
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelThresholdLabel = 标签
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetPlaceholderThresholdLevel = 选择严重程度
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetSeverityNormal = 正常
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetSeverityWarning = 警告
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetSeverityMinor = 次要
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetSeverityMajor = 严重
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetSeverityCritical = 危急
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetListAdd = 添加
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetListRemove = 删除第 {{n}} 行
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetPlaceholderDefault = 默认
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetFlashOnChange = 变化时闪烁
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetFlashOnChangeHint = 数值上升时短暂显示绿色，下降时短暂显示红色。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetPlaceholderNone = 无
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelKind = 种类
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetKindAnchor = 锚点
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelMeasurements = 测量项
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetMeasurementsHint = 以逗号分隔；留空表示全部。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetMetricChoicesLabel = 此设备配置文件发布的指标
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetMetricCalculatedTitle = 每次读数到达时通过公式计算，并非设备上报。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetMetricCalculated = 计算值
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelRelationship = 关系
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelTargetType = 目标类型
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelTarget = 目标
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCommandHeading = 命令
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCommandSelectDevice = 请先选择目标设备，再选择命令。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCommandLoading = 正在加载命令…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCommandLoadError = 无法加载命令：{{error}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCommandStale = 此设备无法使用“{{commandName}}”，请在下方选择命令。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCommandNoneDefined = 此设备的配置文件未定义命令，请在其设备配置文件中添加命令定义。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCommandFieldHint = 此按钮下发的命令。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCommandSelectPlaceholder = 选择命令
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCommandUnpublishedHint = 此配置文件尚未发布，定义暂不强制执行，任何命令均可接受。发布后，此按钮将遵循命令约定。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCommandDraftOnlyLabel = 已编写但尚未发布，暂不可选：
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCommandDraftOnlyPublishHint_one = 发布设备配置文件后即可在此使用。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCommandDraftOnlyPublishHint_other = 发布设备配置文件后即可在此使用。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetContextHeading = 上下文
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetContextEmptyHint = 请添加绑定到客户、区域或资产的组件作为父级上下文，此槽位随后即可跟随它。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelBindsTo = 绑定方式
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetBindsToHint = 根级：直接选择或通过上下文选择器选择。限定范围：跟随父级上下文（例如所选建筑内的设备）。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelParentSlot = 父级槽位
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetPlaceholderSelectParent = 选择父级
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelStrategy = 策略
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetStrategyHint = 首个成员：自动跟随父级的第一个成员。手动：保留所选成员（选择器提供父级的成员）。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetContextModeRoot = 根级上下文
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetContextModeScoped = 限定于父级
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetScopeStrategyFirst = 首个成员
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetScopeStrategyManual = 手动选择
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetSelectionTargetHeading = 选择目标
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetSelectionTargetEmptyHint = 此仪表板尚无槽位。请先将组件绑定到设备或锚点，此选择器随后即可更改其绑定。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelTargetSlot = 目标槽位
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTargetSlotHint = 此选择器更改绑定的槽位。限定范围的槽位成为成员选择器，根级槽位成为上下文选择器。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetPlaceholderSelectSlot = 选择槽位
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetRoleMemberOf = {{parent}} 的成员
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetRoleContext = 上下文
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetRoleDevice = 设备
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlarmStateActive = 活动
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlarmStateCleared = 已清除
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlarmSeverityCritical = 危急
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlarmSeverityMajor = 严重
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlarmSeverityMinor = 次要
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlarmSeverityWarning = 警告
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlarmSeverityIndeterminate = 未确定
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlarmAckUnacknowledged = 未确认
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetAlarmAckAcknowledged = 已确认
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeTimeseriesChart = 时序图
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeLatestCard = 最新值卡片
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeGauge = 仪表
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeTable = 表格
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeLabel = 文本标签
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeImage = 图片
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeAlarmTable = 告警表格
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeAlarmCount = 告警数量
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeCommandButton = 命令按钮
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeEntitySelector = 实体选择器
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeMap = 地图
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeLinearGauge = 线性仪表
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeLevelGauge = 液位计
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeBattery = 电池
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeStatusLight = 状态灯
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeSignalBars = 信号格
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeCompass = 罗盘
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeProgressRing = 进度环
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeCommandSlider = 命令滑块
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeCommandToggle = 命令开关
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeStatCard = 统计卡片
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeBarChart = 柱状图
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypePieChart = 饼图
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCategoryTelemetry = 遥测
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCategoryStatic = 静态
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCategoryAlarms = 告警
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCategoryControl = 控制
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCategoryNavigation = 导航
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetCategoryLocation = 位置
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetMenuDetail = {{id}} · v{{version}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetNotInstalled = 当前控制台未安装此组件类型，无法显示其设置。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionActivateConfirmTitle = 向查看者展示版本 {{version}}？
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionUnresolvedWarning_one = 警告：当前控制台无法解析该版本中的 {{count}} 个组件，安装对应的软件包后才能在此显示：
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionUnresolvedWarning_other = 警告：当前控制台无法解析该版本中的 {{count}} 个组件，安装对应的软件包后才能在此显示：
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionUnresolvedUnchecked = 当前控制台无法读取该版本以检查不支持的组件，因此尚未检查。您仍可继续。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionUnresolvedBlocked_one = 当前控制台无法解析此仪表板中的 {{count}} 个组件，无法发布新版本。请安装对应的软件包或移除组件。保存草稿仍会保留原有设置。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionUnresolvedBlocked_other = 当前控制台无法解析此仪表板中的 {{count}} 个组件，无法发布新版本。请安装对应的软件包或移除组件。保存草稿仍会保留原有设置。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: unresolvedReasonUnregistered = 当前控制台未安装其软件包
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: unresolvedReasonUnversioned = 保存时未包含版本信息
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: unresolvedReasonInvalidMetadata = 保存的版本信息无效
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: unresolvedReasonOptionsVersion = 保存的设置版本与已安装软件包使用的版本不同
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: unresolvedReasonSdkIncompatible = 为其他版本的组件 SDK 编写
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetVersionDrift = 使用版本 {{authored}} 创建，当前控制台使用版本 {{installed}} 显示；请检查外观是否正确。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetEditorFailed = 此组件的设置编辑器出错并已停止。其他更改已保留，详细信息请查看浏览器控制台。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetEditorWriteFailed = 设置编辑器尝试保存此组件不支持的值，因此未做更改：{{error}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetEditorServiceFailed = 设置编辑器向控制台请求信息时失败：{{error}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importDashboard = 导入仪表板
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importDescription = 从导出的 JSON 创建新仪表板。将使用新标识保存为草稿，不会覆盖或发布任何内容。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importJsonLabel = 仪表板 JSON
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importJsonHint = 粘贴导出的定义，或选择 .json 文件。仪表板最大为 1 MiB，不计缩进。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importChooseFile = 选择文件
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importReview = 检查
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importChecking = 正在检查定义及其绑定…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importRetry = 重试
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importTokenHint = 新仪表板的标识，不能与现有仪表板重复。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importCreate = 创建草稿
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importDraftNote = 仪表板将创建为草稿。准备就绪后可在编辑器中发布。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importErrorEmpty = 没有可导入的内容。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importErrorTooLarge = 定义超过 {{limit}} MiB 的限制。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importErrorTextTooLarge = 文本超过导入允许读取的 {{limit}} MiB。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importErrorNotJson = 不是有效的 JSON：{{detail}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importErrorInvalid = 当前控制台无法读取此仪表板定义：{{detail}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importUnresolvedHeading = 当前控制台无法解析的组件：{{n}} 个
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importUnresolvedNote = 它们会按原始内容作为占位组件保留在草稿中。安装或移除所有这些组件后才能发布。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importOptionIssuesHeading = 待检查的组件选项：{{n}} 个
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importConcreteNote = {{n}} 个组件直接指定了设备或实体，而非通过槽位。请在编辑器中检查，它们可能不存在于此租户中。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importExternalHeading = 从 {{n}} 个外部站点加载内容
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importExternalNote = 每次打开仪表板时，都会从这些站点获取定义中的图片、地图瓦片或背景。请在编辑器中移除不认识的站点。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importBindingsHeading = 待检查的绑定
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importBindingsNote = 为每项选择此租户中的实体，或留空以导入未绑定的槽位，稍后再绑定。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importBindingUnbound = 尚未绑定。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importBindingMissing = 此租户中不存在{{kind}}“{{token}}”。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importBindingLeaveUnbound = 保持未绑定
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importBindingUnsupported = 此绑定指定的实体类型无法在当前控制台中查找，将以未绑定状态导入。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importKindDevice = 设备
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importKindCustomer = 客户
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importKindArea = 区域
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: importKindAsset = 资产
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: clone = 克隆
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: cloneName = {{name}} 的副本
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceClone = 克隆为新仪表板…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: linkBlockedTitle = 此链接无法按要求打开仪表板
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: linkUnknownSlot = 仪表板没有名为“{{slot}}”的槽位。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: linkNotDeviceSlot = 槽位“{{slot}}”接受设备组，而非单台设备。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: linkDuplicateSlot = 链接多次指定了槽位“{{slot}}”。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: linkDerivedSlot = 槽位“{{slot}}”跟随其他槽位，链接无法选择其设备。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: linkInvalidToken = “{{token}}”不是有效的设备标识（槽位“{{slot}}”）。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: linkMissing = 设备“{{token}}”（槽位“{{slot}}”）不存在，或您无权访问。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: linkFailed = 无法检查设备“{{token}}”（槽位“{{slot}}”）。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: linkOpenWithout = 忽略此项并打开仪表板
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: linkRetry = 重试
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: linkChecking = 正在检查链接…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: templatesHeading = 或从模板开始
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: templatesNote = 起始布局，保存前可绑定到您自己的设备，将创建为草稿。其中的测量项名称（如 temperature 和 humidity）仅为示例，请在编辑器中改为设备实际报告的名称。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: templateFleetOverviewName = 设备群概览
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: templateFleetOverviewDescription = 按严重程度统计活动告警、告警表格，以及您选择的重点设备。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: templateDeviceDetailName = 设备详情
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: templateDeviceDetailDescription = 单台设备的最新值、仪表、遥测图、位置和告警。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: templateAlarmsBoardName = 告警看板
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: templateAlarmsBoardDescription = 整个租户的活动及最近清除告警的数量和表格。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: syntheticGenerator_sine = 正弦波
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: syntheticGenerator_ramp = 斜坡
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: syntheticGenerator_random-walk = 随机游走
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasWidgetLabel = {{name}}，大小 {{size}}，位于第 {{col}} 列、第 {{row}} 行。方向键移动，按住 Shift 和方向键调整大小。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasWidgetLabelRelative = {{name}}，相对其他组件放置。方向键移动，按住 Shift 和方向键以四分之一单元格为单位移动。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasAnnounce = {{name}} 现为 {{size}}，位于第 {{col}} 列、第 {{row}} 行
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasAnnounceOffset = {{name}} 现相对锚点偏移 {{x}}、{{y}} 个单元格
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasPlacementLabel = 放置方式
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasPlacementGrid = 网格
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasPlacementRelative = 相对于…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasPickHost = 点击要依附的组件，或将焦点移至该组件并按 Enter。按 Esc 取消。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasAnchorLabel = 主组件上的锚点
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasAnchorTopLeft = 左上
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasAnchorTop = 顶部
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasAnchorTopRight = 右上
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasAnchorLeft = 左侧
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasAnchorCenter = 中心
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasAnchorRight = 右侧
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasAnchorBottomLeft = 左下
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasAnchorBottom = 底部
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasAnchorBottomRight = 右下
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasDuplicate = 复制副本
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: canvasCopy = 复制
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceHistoryControls = 撤销和重做
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceUndo = 撤销
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceUndoHint = 撤销（Ctrl+Z，Mac 上为 Cmd+Z）
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceRedo = 重做
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceRedoHint = 重做（Ctrl+Shift+Z 或 Ctrl+Y，Mac 上为 Cmd+Shift+Z）
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspacePaste = 粘贴
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspacePasteHint = 粘贴此标签页中最近复制的组件（Ctrl+V 从剪贴板粘贴）
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspacePasteEmpty = 没有可粘贴的内容，请先复制组件。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspacePasteRefused = 未粘贴：此控制台无法使用 {{type}}。{{reason}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspacePasteTooNew = 未粘贴：此组件在更新版本的 DeviceChain 中复制。请升级控制台后再粘贴。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: workspaceWidgetCopied = 已复制 {{name}}。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyUndid = 已撤销{{edit}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyRedid = 已重做{{edit}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_move = 移动 {{name}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_resize = 调整 {{name}} 的大小
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_offset = 移动 {{name}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_delete = 删除 {{name}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_placement = 放置 {{name}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_anchor = 更改 {{name}} 的锚点
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_add = 添加 {{name}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_duplicate = 复制 {{name}} 的副本
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_paste = 粘贴 {{name}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_options = 更改 {{name}} 的设置
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_datasource = 更改 {{name}} 的数据源
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_scope = 更改 {{name}} 的上下文
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_candidates = 更改 {{name}} 的选择器类型
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelPickerAreaType = 选择器区域类型
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelPickerAssetType = 选择器资产类型
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetPickerTypeHint = 此选择器列出的类型标识，例如楼层类型，避免列出所有区域。留空则列出查看者可见的全部项目。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_title = 更改标题
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_canvas = 更改画布设置
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_fit = 适应限制
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: historyEdit_strip = 移除未知选项
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: announceDuplicated = 已复制 {{name}} 的副本
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: announceCopied = 已复制 {{name}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: announcePasted = 已粘贴 {{name}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pasteUnboundMissing = 已粘贴 {{name}}，但未绑定数据源：此仪表板没有槽位 {{slot}}。请在组件设置中选择数据源。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pasteUnboundDifferent = 已粘贴 {{name}}，但未绑定数据源：此仪表板的槽位 {{slot}} 显示其他内容。请在组件设置中选择数据源。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pasteUnboundTenant = 已粘贴 {{name}}，但未绑定数据源：它从其他租户复制，设备不能跨租户复制。请在组件设置中选择数据源。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: pasteUnboundDismiss = 关闭
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: layoutFindingSpan = 大小超出此组件支持的范围
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: layoutFindingOverrun = 超出网格右边缘
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: layoutFindingOffCanvas = 位于画布之外
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: layoutFindingNoLayout = 此组件未声明大小限制
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: layoutFindingTitle = 标题与主题行重复
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetMenuFootprint = {{size}} 个网格单元
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: layoutFitToLimits = 适应限制
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: layoutFitToLimitsHint = 将所有组件调整至支持的大小，并移回画布内
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: layoutFitted = 已将组件调整至支持的大小范围。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: layoutAlreadyFits = 所有组件均已符合大小限制。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionLayoutBlocked_one = {{count}} 个组件超出支持的大小范围或位于画布外，修复后才能发布此仪表板。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: versionLayoutBlocked_other = {{count}} 个组件超出支持的大小范围或位于画布外，修复后才能发布此仪表板。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeFleetTable = 设备群表格
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelColumns = 列
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintColumns = 每个测量列的标题、单位和精度。未配置的列显示测量项名称。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelColumnHeading = 列标题
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelSortBy = 排序依据
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintSortBy = 表格排序所用的测量项。留空则按设备名称排序。查看者可通过列标题重新排序。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelSortDescending = 从大到小
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelPageSize = 每页设备数
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelAgeLag = 落后时显示距今时间（秒）
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintAgeLag = 仅当读数比表中最新读数至少早此秒数，或已过期时，在其下方显示距今时间。留空则显示所有读数的距今时间。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelGroupBy = 每条柱形代表
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintGroupBy = 柱形代表单台设备的各个测量项，或设备组中各台设备在下方所选测量项的值。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetGroupByMeasurement = 测量项
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetGroupByDevice = 设备
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelSeriesBy = 每条曲线代表
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintSeriesBy = 曲线代表单台设备的各个测量项，或设备组中各台设备在下方所选测量项的值。每台设备一条曲线时，已存储的历史数据按时间桶平均值绘制，图表会注明这一点。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelMaxSeries = 最多曲线数
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintMaxSeries = 每台设备一条曲线时的最大设备数（默认 5，最多 12）。每条曲线需要一次历史读取，超过五条后颜色重复。更大的设备组仅显示前几台设备，并注明省略的数量。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeFleetCount = 设备群计数
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeDeviceStatus = 设备状态
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeOnlineDoughnut = 在线状态环形图
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeHistoryTable = 历史记录表格
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelOldestFirst = 最早在前
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelRowsPerPage = 每页行数
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelFleetShow = 计数
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintFleetShow = 需要关注的设备：所选测量项的最新读数处于下方阈值异常区间的设备数。设备：组内设备总数。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetFleetShowAttention = 需要关注的设备
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetFleetShowDevices = 设备
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeAlarmSeverity = 告警严重程度
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelAlarmSeverityType = 设备类型
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintAlarmSeverityType = 仅统计此设备类型上的告警。留空则统计范围内的所有告警，无论来源。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelSparkline = 显示趋势
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintSparkline = 在数值下方绘制卡片时段内的测量趋势。卡片过小时不显示，以保证数值可读。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: descriptionShared = 与您共享的仪表板。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: emptyShared = 尚未有人与您共享仪表板。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: share = 共享
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareTitle = 共享 {{name}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareDescription = 访问范围限定于所选客户或组的用户可在此处及仪表板应用中查看列表并打开已发布版本，不会看到草稿。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareLoading = 正在加载此仪表板的共享对象…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareNotPublished = 此仪表板尚未发布，发布后所选客户和组即可看到。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareCustomersLabel = 客户
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareCustomersDescription = 与下方的组共同替换当前列表。两者均留空表示不与任何人共享。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareCustomersPlaceholder = 选择客户
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareCustomersSearchPlaceholder = 筛选客户…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareCustomersEmpty = 没有匹配的客户。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareGroupsLabel = 设备组
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareGroupsDescription = 访问范围限定于这些组之一的成员可看到此仪表板。仅提供用作访问范围的组；如缺少某组，请在该组页面启用其访问范围功能。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareGroupsPlaceholder = 选择组
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareGroupsSearchPlaceholder = 筛选组…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareGroupsEmpty = 没有匹配的访问范围组。请在组页面启用其访问范围功能。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareTargetMissing = 所选客户已不存在，或所选组不再是访问范围。请重新加载后重试。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: shareSave = 保存共享设置
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: sharedToast_one = 已将 {{name}} 与 {{count}} 个客户或组共享。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: sharedToast_other = 已将 {{name}} 与 {{count}} 个客户和组共享。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: sharedWithNobody = {{name}} 已停止与所有人共享。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileAction = 创建仪表板
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileTitle = 为此设备类型创建仪表板
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileIntro = 根据配置文件的声明创建起始仪表板：设备选择器、每个测量项一张卡片、每种单位一张图表，以及告警和可安全发送的命令。之后可自由编辑。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileDefaultName = {{name}} 仪表板
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileLoading = 正在读取配置文件…
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileLoadError = 无法读取配置文件。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileNoMeasurements = 此配置文件未声明测量项，无法据此创建仪表板。请添加测量项后重试。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileDeviceLabel = 设备
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileChartTitle = 遥测
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileAlarmsTitle = 告警
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfilePreview = 布局预览
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileSummaryCards_one = {{count}} 张测量卡片
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileSummaryCards_other = {{count}} 张测量卡片
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileSummaryCommands_one = {{count}} 个命令按钮
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileSummaryCommands_other = {{count}} 个命令按钮
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileMeasurementsLeftOut = 显示 {{total}} 个测量项中的 {{shown}} 个。其余测量项可在编辑器中添加。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileCommandsLeftOut_one = 已省略 {{count}} 条不适合从仪表板发送的命令（具有破坏性或影响未知）。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileCommandsLeftOut_other = 已省略 {{count}} 条不适合从仪表板发送的命令（具有破坏性或影响未知）。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileNoDevice = 此类型暂无设备，选择器将以未绑定状态开始。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileBasisDraft = 配置文件从未发布，因此根据草稿创建。草稿中的测量项须在配置文件发布后才会被接受。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileInvalid = 生成的仪表板无效：{{detail}}
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: boardFromProfileCreate = 创建草稿并打开编辑器
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsCustom = 自定义范围
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsFrom = 开始
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsTo = 结束
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsApply = 应用
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsCancel = 取消
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsZone = 时间以 {{zone}}（{{offset}}）显示。共享链接使用 UTC。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsProblemUnparseable = 请输入开始和结束时间。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsProblemOrder = 开始时间必须早于结束时间。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsProblemTooShort = 时间窗口至少为一分钟。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsProblemTooLong = 时间窗口最多为 31 天。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsProblemFuture = 结束时间不能在未来。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsProblemTooEarly = 开始时间过早。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsFixed = 固定时间窗口
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsBackToLive = 返回实时视图
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsCopyLink = 复制链接
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsLinkCopied = 链接已复制
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsLoadFailed = 无法加载时间范围选择器，请重试。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsDismiss = 关闭
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsIgnored = 已忽略链接的时间窗口：{{reason}}（{{raw}}）。当前显示实时仪表板。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsIncomplete = 必须同时提供 from 和 to
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: timeRangeAbsUnzoned = 时间必须使用带时区的 ISO 8601 格式，例如 2026-10-22T02:00:00Z 或 +02:00
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeScadaSymbol = 工业监控符号
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelScadaSymbol = 符号
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintScadaSymbol = 要绘制的工艺符号。泵、电机和风机运行时旋转，阀门开合，管道显示流向，断路器闭合或跳闸，灯发光，储罐按液位填充。储罐和传感器显示数值，其他符号显示工作状态。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetScadaPump = 泵
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetScadaValve = 阀门
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetScadaTank = 储罐
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetScadaMotor = 电机
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetScadaFan = 风机
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetScadaPipe = 管段
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetScadaSensor = 传感器
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetScadaBreaker = 断路器
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetScadaLight = 灯
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintScadaOnAt = 达到或超过此值时符号开启：泵或电机运行、阀门打开、断路器闭合、灯亮。默认为 1，适用于开启为 1、关闭为 0 的信号。对于管道，此值为有效流量的最小值，负流量表示反向。储罐和传感器不使用此值。处于严重或危急阈值区间时，符号显示为故障。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeStatusGrid = 状态网格
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetTypeStateTimeline = 状态时间线
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetLabelWorstFirst = 最严重在前
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintWorstFirst = 将处于最严重区间的设备放在网格左上角。关闭时保留设备群原有顺序。
+frontend/apps/console/src/i18n/locales/zh-CN/dashboards.json :: widgetHintStateThresholds = 状态按从低到高排列。每行从其数值开始一个状态，延续至下一行；请设置标签（如停止、运行、故障）和着色等级。低于第一行时显示正常。每段表示一个时间桶平均值的状态。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: change = 更改
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: connectionLabel = 实时数据连接
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: connectionLive = 实时
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: connectionOffline = 离线
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: connectionReconnecting = 正在重新连接
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: enterFullscreen = 全屏
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: exitFullscreen = 退出全屏
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: pause = 暂停
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: paused = 已暂停
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: pausedAt = 暂停于 {{time}}
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: actionsLive = 命令仍会发送
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: resume = 继续
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: themeToDark = 深色主题
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: themeToLight = 浅色主题
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: timeRange = 时间范围
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: linkBlockedTitle = 此链接无法按要求打开仪表板
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: linkUnknownSlot = 仪表板没有名为“{{slot}}”的槽位。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: linkNotDeviceSlot = 槽位“{{slot}}”接受设备组，而非单台设备。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: linkDuplicateSlot = 链接多次指定了槽位“{{slot}}”。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: linkDerivedSlot = 槽位“{{slot}}”跟随其他槽位，链接无法选择其设备。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: linkInvalidToken = “{{token}}”不是有效的设备标识（槽位“{{slot}}”）。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: linkMissing = 设备“{{token}}”（槽位“{{slot}}”）不存在，或您无权访问。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: linkFailed = 无法检查设备“{{token}}”（槽位“{{slot}}”）。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: linkOpenWithout = 忽略此项并打开仪表板
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: linkRetry = 重试
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: linkChecking = 正在检查链接…
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: untitled = 仪表板
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absCustom = 自定义范围
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absFrom = 开始
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absTo = 结束
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absApply = 应用
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absCancel = 取消
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absZone = 时间以 {{zone}}（{{offset}}）显示。共享链接使用 UTC。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absProblemUnparseable = 请输入开始和结束时间。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absProblemOrder = 开始时间必须早于结束时间。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absProblemTooShort = 时间窗口至少为一分钟。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absProblemTooLong = 时间窗口最多为 31 天。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absProblemFuture = 结束时间不能在未来。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absProblemTooEarly = 开始时间过早。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absFixed = 固定时间窗口
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absBackToLive = 返回实时视图
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absCopyLink = 复制链接
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absLinkCopied = 链接已复制
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absLoadFailed = 无法加载时间范围选择器，请重试。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absDismiss = 关闭
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absIgnored = 已忽略链接的时间窗口：{{reason}}（{{raw}}）。当前显示实时仪表板。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absIncomplete = 必须同时提供 from 和 to
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: absUnzoned = 时间必须使用带时区的 ISO 8601 格式，例如 2026-10-22T02:00:00Z 或 +02:00
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateProgress = 第 {{n}} 个仪表板，共 {{total}} 个
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotatePause = 暂停轮播
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateResume = 继续轮播
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotatePaused = 轮播已暂停
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotatePausedWhileUsed = 使用仪表板时轮播已暂停
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateNext = 下一个仪表板
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotatePrevious = 上一个仪表板
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateLoadingNext = 正在加载下一个仪表板…
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateNoneLoaded = 无法打开此轮播中的任何仪表板。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateDismiss = 关闭
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateNoteToken = 轮播：“{{value}}”不是仪表板标识，已跳过。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateNoteNone = 轮播至少需要 {{min}} 个仪表板标识，当前没有可用项。链接将打开仪表板列表。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateNoteOne = 轮播至少需要 {{min}} 个仪表板标识。当前显示唯一可用的仪表板。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateNoteTooMany = 轮播最多包含 {{max}} 个仪表板，已移除多出的 {{dropped}} 个。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateNoteEveryUnparseable = 已忽略间隔“{{value}}”：请使用整数秒。当前使用 {{seconds}} 秒。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateNoteEveryTooShort = 已忽略间隔“{{value}}”：至少为 {{min}} 秒。当前使用 {{seconds}} 秒。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateNoteEveryTooLong = 已忽略间隔“{{value}}”：最多为 {{max}} 秒。当前使用 {{seconds}} 秒。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateNoteEveryAlone = 已忽略间隔（every）：它仅在同时提供 rotate 时生效。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateNoteDashboard = 已设置 rotate，因此忽略 dashboard 参数。
+frontend/apps/dashboard/src/i18n/locales/zh-CN/view.json :: rotateNoteSkipped = 已跳过“{{token}}”：{{reason}}
+
+Validation results
+
+npm ci: passed, using this worktree's own node_modules (not a junction).
+npm run typecheck: passed across all workspaces. Codegen was not required.
+npm test -w @devicechain/widgets -w @devicechain/dashboards -w @devicechain/widget-sdk: exit 0.
+Widgets: 86 files passed; 1,803 tests passed.
+Dashboards: 55 files passed; 873 tests passed, 5 skipped.
+Widget SDK: 30 files passed; 346 tests passed.
+Console i18n: 9 files passed; 144 tests passed.
+Dashboard app i18n: 6 files passed; 122 tests passed.
+git diff --check: passed.
+No commits were created.

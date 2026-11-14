@@ -42,6 +42,7 @@ const widget: WidgetInstance = {
 
 describe('telemetry table headers', () => {
   it.each([
+    { locale: 'zh-CN', headers: ['测量项', '值', '时间'] },
     { locale: 'es', headers: ['Medición', 'Valor', 'Hora'] },
     { locale: 'es-MX', headers: ['Medición', 'Valor', 'Hora'] },
     { locale: 'en', headers: ['Measurement', 'Value', 'Time'] },
