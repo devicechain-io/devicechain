@@ -6,7 +6,7 @@
 // but it lives on the `/echarts` subpath with the rest of the chart helpers so the SDK root
 // stays chart-free.
 
-import { useMemo, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 
 import { useWidgetThemeRoot } from '../context';
 import { severityColorsAt, severityFallbackColors, type AlarmLevel } from '../severity';
@@ -59,58 +59,54 @@ export function resolveChartTheme(el: Element): ChartTheme {
   };
 }
 
-// --- shared chart-theme store ------------------------------------------------
-//
-// Charts need concrete colors resolved from the CSS-variable theme. Rather than
-// have every chart widget mount its own MutationObserver on <html> and recompute
-// the same theme, one page-wide observer resolves it once per change and every
-// widget reads the shared, memoized value via useSyncExternalStore — so a busy
-// dashboard pays O(1), not O(number of charts), per theme toggle.
+// One store per theme root: charts in the same embed share a snapshot and observer.
+// Weak keys allow an unmounted embed's container and store to be collected.
+const themeStores = new WeakMap<Element, ReturnType<typeof createThemeStore>>();
 
-let sharedTheme: ChartTheme | null = null;
-const themeListeners = new Set<() => void>();
-let themeObserver: MutationObserver | null = null;
+function createThemeStore(root: Element) {
+  let theme: ChartTheme | null = null;
+  const listeners = new Set<() => void>();
+  let observer: MutationObserver | null = null;
+  const recompute = () => { theme = resolveChartTheme(root); };
 
-function recomputeTheme(): void {
-  sharedTheme = resolveChartTheme(document.documentElement);
-}
-
-function subscribeTheme(listener: () => void): () => void {
-  if (!themeObserver) {
-    recomputeTheme();
-    themeObserver = new MutationObserver(() => {
-      recomputeTheme();
-      for (const l of themeListeners) l();
-    });
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class', 'style'],
-    });
-  }
-  themeListeners.add(listener);
-  return () => {
-    themeListeners.delete(listener);
-    if (themeListeners.size === 0 && themeObserver) {
-      themeObserver.disconnect();
-      themeObserver = null;
-      sharedTheme = null;
-    }
+  return {
+    getSnapshot: (): ChartTheme => {
+      if (!theme) recompute();
+      return theme as ChartTheme;
+    },
+    subscribe: (listener: () => void): (() => void) => {
+      if (!observer) {
+        recompute();
+        observer = new MutationObserver(() => {
+          recompute();
+          for (const notify of listeners) notify();
+        });
+        // A host can override tokens locally or inherit a palette from an ancestor.
+        // Observe only those elements, never unrelated descendants of the page.
+        for (let element: Element | null = root; element; element = element.parentElement) {
+          observer.observe(element, { attributes: true, attributeFilter: ['class', 'style'] });
+        }
+      }
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0 && observer) {
+          observer.disconnect();
+          observer = null;
+          theme = null;
+        }
+      };
+    },
   };
 }
 
-function getThemeSnapshot(): ChartTheme {
-  if (!sharedTheme) recomputeTheme();
-  return sharedTheme as ChartTheme;
-}
-
-// useChartTheme returns the current chart colors and re-renders the caller when
-// the document theme changes (a light/dark class or inline-style swap on <html>).
+// Resolve live colors at the host's container, or at <html> for the default theme.
 export function useChartTheme(): ChartTheme {
-  const shared = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getThemeSnapshot);
-  // A host that scopes its tokens to a container says so (WidgetThemeRoot); its tokens are
-  // fixed for the container's life, so they are read once there rather than observed.
-  const root = useWidgetThemeRoot();
-  const scoped = useMemo(() => (root ? resolveChartTheme(root) : null), [root]);
-  return scoped ?? shared;
+  const root = useWidgetThemeRoot() ?? document.documentElement;
+  let store = themeStores.get(root);
+  if (!store) {
+    store = createThemeStore(root);
+    themeStores.set(root, store);
+  }
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }
-
