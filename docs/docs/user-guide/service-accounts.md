@@ -55,6 +55,8 @@ The secret is shown **only once**. DeviceChain stores a keyed digest of it, neve
 itself, so nothing can show it to you again. Copy it into your integration's secret store now. If
 it is lost, rotate the secret (below).
 
+The reveal dialog stays open when you press Escape or click outside it. Copy the value, then choose **Done** to close it. This also applies after rotating a secret or reissuing an invitation.
+
 Every secret expires. A new secret is valid for 365 days unless the API is told otherwise (1 to
 730 days). The **Secrets** column shows how many secrets are working, their last four characters,
 and when the next one expires.

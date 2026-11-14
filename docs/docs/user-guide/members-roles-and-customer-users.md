@@ -57,6 +57,8 @@ The link is shown **only once**. The server keeps no copy it could show you agai
 is lost, reissue the invitation (below), which stops the old link working. A link is valid for 7
 days. Until the person accepts, their membership stays disabled and is marked **Invited**.
 
+The reveal dialog stays open when you press Escape or click outside it. Copy the value, then choose **Done** to close it. This also applies after rotating a secret or reissuing an invitation.
+
 The answer is the same whether or not the person already has a DeviceChain account, so inviting
 someone does not tell you whether they have one.
 

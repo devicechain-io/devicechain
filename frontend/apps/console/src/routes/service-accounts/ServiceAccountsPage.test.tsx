@@ -284,6 +284,13 @@ describe('copying the secret', () => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     await reveal();
     const button = screen.getByRole('button', { name: 'Copy client secret' });
+    fireEvent.keyDown(screen.getByLabelText('Client secret'), { key: 'Escape' });
+    const overlay = document.querySelector('[data-slot="dialog-overlay"]')!;
+    fireEvent.pointerDown(overlay, { button: 0, pointerType: 'mouse' });
+    fireEvent.click(overlay);
+    expect(screen.getByLabelText('Client secret')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
+
     expect(button.outerHTML).not.toContain('dcsas_the-one-time-secret');
     fireEvent.click(button);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('dcsas_the-one-time-secret'));

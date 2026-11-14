@@ -58,6 +58,8 @@ mostrarte, así que si el enlace se pierde, vuelve a emitir la invitación (más
 efecto el enlace anterior. Un enlace es válido durante 7 días. Hasta que la persona acepta, su
 membresía sigue deshabilitada y se marca como **Invitado**.
 
+El diálogo permanece abierto al pulsar Escape o hacer clic fuera de él. Copia el valor y elige **Done** para cerrarlo. Esto también se aplica al rotar un secreto o volver a emitir una invitación.
+
 La respuesta es la misma tanto si la persona ya tiene una cuenta de DeviceChain como si no, así que
 invitar a alguien no te revela si tiene una.
 
