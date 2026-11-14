@@ -17,7 +17,7 @@
 // of statuses, so it broke in total silence — and silently, in the operator's favour, is
 // the worst way for it to break.
 import '@/i18n/config';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -149,6 +149,35 @@ function cancelControlFor(status: string): HTMLElement | null {
   if (!row) throw new Error(`no row rendered for ${status}`);
   return within(row).queryByRole('button', { name: CANCEL });
 }
+
+describe('DeviceCommandsPanel keyboard issue', () => {
+  it('ignores repeated Enter and blocks Enter and clicks until the request settles', async () => {
+    respondToIssue({ kind: 'created' });
+    const answerReads = gqlMock.getMockImplementation()!;
+    let finish!: (value: unknown) => void;
+    gqlMock.mockImplementation((...args: unknown[]) =>
+      String(args[1]).includes('mutation CreateCommand')
+        ? new Promise((resolve) => { finish = resolve; })
+        : answerReads(...args),
+    );
+    render(<DeviceCommandsPanel deviceToken="therm-1" canIssue canCancel />);
+    const input = await screen.findByPlaceholderText('e.g. reboot');
+    fireEvent.change(input, { target: { value: 'reboot' } });
+    const requests = () => gqlMock.mock.calls.filter((c) => String(c[1]).includes('mutation CreateCommand'));
+    fireEvent.keyDown(input, { key: 'Enter', repeat: true });
+    expect(requests()).toHaveLength(0);
+    act(() => {
+      fireEvent.keyDown(input, { key: 'Enter' });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      fireEvent.click(screen.getByRole('button', { name: 'Issue command' }));
+    });
+    expect(requests()).toHaveLength(1);
+    await act(async () => finish({ createCommand: { command: null, rejection: { code: 'NO', reason: 'refused' } } }));
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(requests()).toHaveLength(2);
+    await act(async () => finish({ createCommand: { command: null, rejection: { code: 'NO', reason: 'refused' } } }));
+  });
+});
 
 describe('DeviceCommandsPanel cancel control', () => {
   // 🔴🔴 THE ONE THAT MATTERS, and what it asserts is that CANCELLABLE ≠ NON-TERMINAL.
