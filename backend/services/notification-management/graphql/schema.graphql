@@ -795,7 +795,7 @@ type Mutation {
     # expectedUpdatedAt is an optional optimistic-concurrency precondition: pass the
     # updatedAt you last read, or the one an update returned, and the update is refused
     # with nothing written if the policy has changed since ("notification policy was
-    # modified by another writer; reload and try again"; this is not the CONFLICT code).
+    # modified by another writer; reload and try again"; code STALE_WRITE, not CONFLICT).
     # Omit it and the last write wins.
     updateNotificationPolicy(
         """Token of the policy to update."""
@@ -805,7 +805,7 @@ type Mutation {
         """
         The updatedAt value you last read, as an RFC 3339 timestamp. If the policy has
         changed since, nothing is written and the call fails with "notification policy was
-        modified by another writer; reload and try again" (no error code). Omit it to
+        modified by another writer; reload and try again" (extensions.code STALE_WRITE). Omit it to
         overwrite unconditionally.
         """
         expectedUpdatedAt: String

@@ -59,9 +59,11 @@ identity token. `areaPath(area)` returns the HTTP path and `areaKey(area)` the
 functional area before any slash.
 
 Failures arrive as a `GraphQLRequestError` carrying the HTTP status and the
-GraphQL error list. `isForbiddenError(err)` is the one classification worth
-special-casing, because "you may not do that" is a different thing to show a
-user than "the request did not arrive".
+GraphQL error list. `isForbiddenError(err)` distinguishes a permission refusal
+from a failed request. `isStaleWrite(err)` recognizes an optimistic-concurrency
+refusal by `extensions.code: STALE_WRITE`, with the phrase `modified by another
+writer` as a fallback for older servers. Keep the unsaved draft and ask the user
+to reload before retrying; a stale write is distinct from a uniqueness `CONFLICT`.
 
 ## Authentication
 

@@ -20,6 +20,7 @@
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
+import { isStaleWrite } from '@devicechain/client';
 import { PageShell } from '@/components/ui/page-shell';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -71,7 +72,7 @@ import '@/routes/admin/ai-providers/catalog';
 //     switching to that kind on a provider with no stored endpoint is therefore REFUSED,
 //     and the operator would have to visit the other tab first to make a legal request.
 //   - `expectedUpdatedAt` is a per-save precondition. Two independent submits would have
-//     the second fail with CONFLICT unless each re-baselined from the previous response.
+//     the second fail with STALE_WRITE unless each re-baselined from the previous response.
 //
 // So the page may be split into independent per-tab forms once BOTH hold: `kind` and
 // `endpoint` sit on the same tab, and each tab advances its own `expectedUpdatedAt`
@@ -215,8 +216,9 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
       setEditor((e) => ({ ...e, secret: { mode: nextHasSecret ? 'keep' : 'set', value: '' } }));
       toast(t('providerSavedToast'));
     } catch (err) {
-      toast(errMessage(err), 'error');
-      setFormError(errMessage(err));
+      const message = isStaleWrite(err) ? t('providerStaleWrite') : errMessage(err);
+      toast(message, 'error');
+      setFormError(message);
     } finally {
       setSaving(false);
     }
