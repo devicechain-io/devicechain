@@ -523,7 +523,9 @@ mutations = [
     ("never-succeeded", "PeriodicTaskStalled", "!=", "=="),
     ("unwanted", "ProcessorLoopDropping", 'result="dropped"', 'result="unwanted"'),
     ("device-state", "ProcessorLoopDropping", '__name__!="devicechain_devicestate_state_messages_total",', ""),
-    ("loop-label", "ProcessorLoopDropping", '"loop", "$1"', '"loop", "broken"'),
+    ("reset-blind", "ProcessorLoopDropping", "increase(", "delta("),
+    ("job-grouping", "ProcessorLoopDropping", "sum by (job)", "sum by (instance)"),
+    ("replica-age", "PeriodicTaskStalled", 'on (job, instance) group_left ()\n      (time() - process_start_time_seconds{namespace="dci-devicechain"})', 'on (job) group_left ()\n      (time() - min by (job) (process_start_time_seconds{namespace="dci-devicechain"}))'),
 ]
 for name, alert, old, new in mutations:
     mutant = copy.deepcopy(doc)

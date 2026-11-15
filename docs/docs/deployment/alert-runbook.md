@@ -1251,15 +1251,15 @@ A client is sending tokens that enforce mode would refuse
 
 A maintenance task is not completing successful passes
 
-**What it means and what to do.** No replica of this job and task has succeeded within three declared pass intervals plus five minutes, or the task has never succeeded and the job has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task.
+**What it means and what to do.** No replica of this job and task has succeeded within three declared pass intervals plus five minutes, or the task has never succeeded and a replica declaring its interval has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task.
 
 ### ProcessorLoopDropping {#processorloopdropping}
 
 **Severity:** `warning` · **Rule group:** `devicechain.uniform-signals`
 
-A processor loop is giving up on messages
+A job has processor loops giving up on messages
 
-**What it means and what to do.** In the last 15 minutes, this job and loop gave up on messages after their delivery attempts were exhausted. Check the job and loop labels and the service logs for the failed operation, then check its database, broker and downstream dependencies. Policy-refused traffic counted as unwanted does not trigger this alert. Device-state discards are covered separately by DeviceStateDroppingEvents.
+**What it means and what to do.** In the last 15 minutes, processor loops in this job gave up on messages after their delivery attempts were exhausted. To find the loop, query \{__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_messages_total", result="dropped"\} restricted to this job. Check the service logs for the failed operation, then its database, broker and downstream dependencies. Policy-refused traffic counted as unwanted does not trigger this alert. Device-state discards are covered separately by DeviceStateDroppingEvents.
 
 ## `devicechain.update-management`
 

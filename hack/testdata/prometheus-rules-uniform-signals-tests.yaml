@@ -10,17 +10,17 @@ tests:
   - name: all replicas NaN on young processes
     interval: 1m
     input_series:
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: 60x60
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="b"}
         values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="b"}
         values: 60x60
-      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: 1500x60
-      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="b"}
         values: 1500x60
     alert_rule_test:
       - eval_time: 30m
@@ -29,11 +29,11 @@ tests:
   - name: interval unset despite an old process
     interval: 1m
     input_series:
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
-      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: -3600x60
     alert_rule_test:
       - eval_time: 30m
@@ -42,11 +42,11 @@ tests:
   - name: unset interval also suppresses stale success
     interval: 1m
     input_series:
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: '0x60'
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
-      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: -3600x60
     alert_rule_test:
       - eval_time: 30m
@@ -55,23 +55,23 @@ tests:
   - name: fresh lock winner suppresses stale and never winning replicas
     interval: 1m
     input_series:
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: '0x60'
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: 60x60
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="b"}
         values: 0+60x60
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="b"}
         values: 60x60
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="c"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="c"}
         values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="c"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="c"}
         values: 60x60
-      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: -3600x60
-      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="b"}
         values: -3600x60
-      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="c"}
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="c"}
         values: -3600x60
     alert_rule_test:
       - eval_time: 30m
@@ -80,11 +80,11 @@ tests:
   - name: stalled success respects threshold and ten minute hold
     interval: 1m
     input_series:
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: '0x60'
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: 60x60
-      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: -3600x60
     alert_rule_test:
       - eval_time: 8m
@@ -104,15 +104,15 @@ tests:
             exp_annotations: &id001
               runbook_url: https://docs.devicechain.io/deployment/alert-runbook#periodictaskstalled
               summary: A maintenance task is not completing successful passes
-              description: No replica of this job and task has succeeded within three declared pass intervals plus five minutes, or the task has never succeeded and the job has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task.
+              description: No replica of this job and task has succeeded within three declared pass intervals plus five minutes, or the task has never succeeded and a replica declaring its interval has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task.
   - name: three declared intervals rather than a fixed timeout
     interval: 1m
     input_series:
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: '0x60'
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: 600x60
-      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: -3600x60
     alert_rule_test:
       - eval_time: 35m
@@ -133,17 +133,17 @@ tests:
   - name: all NaN on old processes fires once per job and task
     interval: 1m
     input_series:
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: 60x60
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="b"}
         values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="b"}
         values: 60x60
-      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: -3600x60
-      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="b"}
         values: -3600x60
     alert_rule_test:
       - eval_time: 9m
@@ -161,9 +161,9 @@ tests:
   - name: never succeeded without a process age stays quiet
     interval: 1m
     input_series:
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: 60x60
     alert_rule_test:
       - eval_time: 30m
@@ -172,21 +172,21 @@ tests:
   - name: tasks and jobs are independent
     interval: 1m
     input_series:
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: '0x60'
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: 60x60
-      - series: devicechain_devicemanagement_other_task_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_other_task_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: 0+60x60
-      - series: devicechain_devicemanagement_other_task_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_other_task_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: 60x60
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="other",pod="a"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="other",instance="a"}
         values: 0+60x60
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="other",pod="a"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="other",instance="a"}
         values: 60x60
-      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
         values: -3600x60
-      - series: process_start_time_seconds{namespace="dci-devicechain",job="other",pod="a"}
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="other",instance="a"}
         values: -3600x60
     alert_rule_test:
       - eval_time: 30m
@@ -201,7 +201,7 @@ tests:
   - name: unwanted increments are not give ups
     interval: 1m
     input_series:
-      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="processor",pod="a",result="unwanted"}
+      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="processor",instance="a",result="unwanted"}
         values: 0+1x60
     alert_rule_test:
       - eval_time: 30m
@@ -210,7 +210,7 @@ tests:
   - name: device state drops have a dedicated alert
     interval: 1m
     input_series:
-      - series: devicechain_devicestate_state_messages_total{namespace="dci-devicechain",job="processor",pod="a",result="dropped"}
+      - series: devicechain_devicestate_state_messages_total{namespace="dci-devicechain",job="processor",instance="a",result="dropped"}
         values: 0+1x60
     alert_rule_test:
       - eval_time: 30m
@@ -219,9 +219,9 @@ tests:
   - name: non device state drops fire immediately and clear after the window
     interval: 1m
     input_series:
-      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="processor",pod="a",result="dropped"}
+      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="processor",instance="a",result="dropped"}
         values: 0x9 1x50
-      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="processor",pod="b",result="dropped"}
+      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="processor",instance="b",result="dropped"}
         values: '0x60'
     alert_rule_test:
       - eval_time: 9m
@@ -234,19 +234,20 @@ tests:
               severity: warning
               devicechain_instance: devicechain
               job: processor
-              loop: resolve
             exp_annotations: &id002
               runbook_url: https://docs.devicechain.io/deployment/alert-runbook#processorloopdropping
-              summary: A processor loop is giving up on messages
-              description: In the last 15 minutes, this job and loop gave up on messages after their delivery attempts were exhausted. Check the job and loop labels and the service logs for the failed operation, then check its database, broker and downstream dependencies. Policy-refused traffic counted as unwanted does not trigger this alert. Device-state discards are covered separately by DeviceStateDroppingEvents.
+              summary: A job has processor loops giving up on messages
+              description: 'In the last 15 minutes, processor loops in this job gave up on messages after their delivery attempts were exhausted. To find the loop, query {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_messages_total", result="dropped"} restricted to this job. Check the service logs for the failed operation, then its database, broker and downstream dependencies. Policy-refused traffic counted as unwanted does not trigger this alert. Device-state discards are covered separately by DeviceStateDroppingEvents.'
       - eval_time: 26m
         alertname: ProcessorLoopDropping
         exp_alerts: []
-  - name: counter resets retain loop labels
+  # At 30m the range is (15m, 30m]: reset at 21m, then nine drops.
+  # increase is positive; reset-blind delta sees 9 - 100 and stays quiet.
+  - name: counter reset inside the window still detects drops
     interval: 1m
     input_series:
-      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="processor",pod="a",result="dropped"}
-        values: 0+1x10 0+1x49
+      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="processor",instance="a",result="dropped"}
+        values: 100x20 0+1x39
     alert_rule_test:
       - eval_time: 30m
         alertname: ProcessorLoopDropping
@@ -255,7 +256,6 @@ tests:
               severity: warning
               devicechain_instance: devicechain
               job: processor
-              loop: resolve
             exp_annotations: *id002
   - name: idle installation
     interval: 1m
@@ -270,13 +270,13 @@ tests:
   - name: another namespace is excluded
     interval: 1m
     input_series:
-      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-other",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-other",job="maintenance",instance="a"}
         values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
-      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-other",job="maintenance",pod="a"}
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-other",job="maintenance",instance="a"}
         values: 60x60
-      - series: process_start_time_seconds{namespace="dci-other",job="maintenance",pod="a"}
+      - series: process_start_time_seconds{namespace="dci-other",job="maintenance",instance="a"}
         values: -3600x60
-      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-other",job="processor",pod="a",result="dropped"}
+      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-other",job="processor",instance="a",result="dropped"}
         values: 0+1x60
     alert_rule_test:
       - eval_time: 30m
@@ -285,3 +285,30 @@ tests:
       - eval_time: 30m
         alertname: ProcessorLoopDropping
         exp_alerts: []
+  - name: an old replica without the task cannot age a fresh declaring replica
+    interval: 1m
+    input_series:
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="old"}
+        values: -3600x60
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="new"}
+        values: 1500x60
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="new"}
+        values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="new"}
+        values: 60x60
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+      - eval_time: 43m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+      - eval_time: 44m
+        alertname: PeriodicTaskStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: maintenance
+              task: sweep
+            exp_annotations: *id001
