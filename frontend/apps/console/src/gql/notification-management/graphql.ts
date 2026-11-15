@@ -223,7 +223,7 @@ export type NotificationChannelsQueryVariables = Exact<{
 }>;
 
 
-export type NotificationChannelsQuery = { notificationChannels: { results: Array<{ token: string, name: string | null, channelType: string, enabled: boolean }> } };
+export type NotificationChannelsQuery = { notificationChannels: { results: Array<{ token: string, name: string | null, channelType: string, enabled: boolean }>, pagination: { totalRecords: number | null } } };
 
 export type CreateNotificationPolicyMutationVariables = Exact<{
   request: NotificationPolicyCreateRequest;
@@ -354,6 +354,9 @@ export const NotificationChannelsDocument = new TypedDocumentString(`
       name
       channelType
       enabled
+    }
+    pagination {
+      totalRecords
     }
   }
 }

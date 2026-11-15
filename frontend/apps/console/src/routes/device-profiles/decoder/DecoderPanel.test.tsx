@@ -43,10 +43,10 @@ beforeEach(() => {
 });
 
 const METRICS = [
-  { metricKey: 'temperature', dataType: 'DOUBLE', calculated: false },
-  { metricKey: 'door', dataType: 'LONG', calculated: false },
-  { metricKey: 'heat_index', dataType: 'DOUBLE', calculated: true },
-  { metricKey: 'label', dataType: 'STRING', calculated: false },
+  { token: 'temperature', metricKey: 'temperature', dataType: 'DOUBLE', calculated: false },
+  { token: 'door', metricKey: 'door', dataType: 'LONG', calculated: false },
+  { token: 'heat_index', metricKey: 'heat_index', dataType: 'DOUBLE', calculated: true },
+  { token: 'label', metricKey: 'label', dataType: 'STRING', calculated: false },
 ];
 
 function docFor(over: (st: EditorState) => void = () => {}): string {

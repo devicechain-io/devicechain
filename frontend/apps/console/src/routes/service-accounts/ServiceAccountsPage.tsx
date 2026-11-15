@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { listAll } from '@/lib/api/list-all';
 import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Check, Copy, MoreHorizontal, Plus } from 'lucide-react';
@@ -62,7 +63,6 @@ import { MAX_SCOPE_ENTRIES } from '@/routes/members/MemberAccessSheet';
 import { memberErrorMessage } from '@/routes/members/memberErrors';
 
 const PAGE_SIZE = 50;
-const CUSTOMER_PAGE = { pageNumber: 1, pageSize: 1000 };
 /** The server's bounds on a rotation's overlap (hours) and a secret's lifetime (days). */
 export const MAX_OVERLAP_HOURS = 168;
 export const DEFAULT_OVERLAP_HOURS = 24;
@@ -364,8 +364,8 @@ export function AccountForm({
   const [busy, setBusy] = useState(false);
 
   const { data: roleList } = useQuery(listTenantRoles, []);
-  const { data: customerPage } = useQuery(() => listCustomers(CUSTOMER_PAGE), []);
-  const { data: accessGroups } = useQuery(listAccessScopeGroups, []);
+  const { current: customerPage, error: customersError } = useQuery(() => listAll(page => listCustomers(page)), []);
+  const { current: accessGroups, error: groupsError } = useQuery(listAccessScopeGroups, []);
   const roleOptions = useMemo<ComboboxOption[]>(
     () =>
       (roleList ?? []).map((r) => ({
@@ -421,6 +421,8 @@ export function AccountForm({
 
   return (
     <div className="space-y-4">
+      {customersError && <p role="alert" className="text-sm text-destructive">{customersError}</p>}
+      {groupsError && <p role="alert" className="text-sm text-destructive">{groupsError}</p>}
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
       {!account && (
         <>
