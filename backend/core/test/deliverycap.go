@@ -24,8 +24,9 @@ type deliveryCapFinding struct {
 }
 
 // deliveryCapChecksUnder scans production Go outside core/messaging. It reads other
-// modules, so repository tests must run with -count=1. Known blind spot: an aliased
-// count (n := msg.NumDelivered; if n >= max) is not caught by this syntax rule.
+// modules, so repository tests must run with -count=1. Comparison operands are
+// searched recursively, but a count stored in a variable first (n := msg.NumDelivered;
+// if n >= messaging.MaxDeliver) is still not caught by this syntax-only rule.
 func deliveryCapChecksUnder(root string) ([]deliveryCapFinding, map[string]bool, error) {
 	var found []deliveryCapFinding
 	visited := map[string]bool{}
@@ -89,7 +90,8 @@ func deliveryCapChecksUnder(root string) ([]deliveryCapFinding, map[string]bool,
 				case *ast.BinaryExpr:
 					switch x.Op {
 					case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ:
-						if (deliveredSelector(x.X) && capName(x.Y)) || (deliveredSelector(x.Y) && capName(x.X)) {
+						if (containsExpression(x.X, deliveredSelector) && containsExpression(x.Y, capName)) ||
+							(containsExpression(x.Y, deliveredSelector) && containsExpression(x.X, capName)) {
 							kind = "raw"
 						}
 					}
@@ -120,6 +122,18 @@ func deliveryCapChecksUnder(root string) ([]deliveryCapFinding, map[string]bool,
 		return nil, nil, fmt.Errorf("scanning %s parsed no Go files", root)
 	}
 	return found, visited, nil
+}
+
+// Search only within comparison operands so standalone budget arithmetic is allowed.
+func containsExpression(expr ast.Expr, matches func(ast.Expr) bool) bool {
+	found := false
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if e, ok := n.(ast.Expr); ok && matches(e) {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 func deliveredSelector(expr ast.Expr) bool {
