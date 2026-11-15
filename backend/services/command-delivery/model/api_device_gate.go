@@ -364,7 +364,7 @@ func (api *Api) DeletedGateTenants(ctx context.Context) ([]string, error) {
 
 // CancelHeldCommand changes only HELD, leaving any concurrent release or claim alone.
 func (api *Api) CancelHeldCommand(ctx context.Context, id uint) (bool, error) {
-	result := api.RDB.DB(ctx).Model(&Command{}).Where("id = ? AND status = ?", id, CommandHeld.String()).
+	result := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: id}}).Where("id = ? AND status = ?", id, CommandHeld.String()).
 		Updates(terminalUpdate(CommandCancelled, OutcomeNotDelivered, nil))
 	return result.RowsAffected > 0, result.Error
 }
