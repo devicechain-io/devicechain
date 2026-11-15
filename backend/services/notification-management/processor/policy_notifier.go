@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -530,13 +531,16 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	// escalation substrate, so the page that just went out would never be followed up.
 	// recordTimeout bounds each ATTEMPT and is smaller than dispatchMargin so the first
 	// still lands inside AckWait; a held re-run is kept alive by the hold's beats.
+	// The escalation window starts when the page went out, so the time is taken once here: a
+	// write held through a store outage must not move the window to when the write landed.
+	pagedAt := n.clock()
 	var recorded *model.NotificationState
 	if err := storehold.Settle(ctx, func(c context.Context) error {
 		rctx, rcancel := context.WithTimeout(c, recordTimeout)
 		defer rcancel()
 		var err error
 		recorded, err = n.api.RecordPagedFrom(rctx, event.AlarmToken, event.AlarmKey, event.Severity,
-			event.RaisedTime, event.OccurredTime, pagedTargets(tally.targets), eventSource(event), event.OccurredTime)
+			event.RaisedTime, event.OccurredTime, pagedTargets(tally.targets), eventSource(event), event.OccurredTime, pagedAt)
 		return err
 	}); err != nil {
 		log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
@@ -760,7 +764,7 @@ func (n *PolicyNotifier) throttled(event *dmmodel.AlarmStateChangeEvent,
 // delivered and failed channels returns ErrPassPartial so the scheduler can account for
 // the incomplete service without repeating the claimed tier.
 //
-// Escalation uses ONE shared clock and tier per alarm (state.LastNotifiedAt /
+// Escalation uses ONE shared clock and tier per alarm (escalationBase(state) /
 // EscalationLevel), not per policy: when several escalation-enabled policies match one
 // alarm, the shortest window drives re-notification and every policy's cap is measured
 // against the shared tier. See NotificationPolicy.EscalateAfterSeconds for the semantics
@@ -915,25 +919,36 @@ func (n *PolicyNotifier) appendRuleDeliveries(policyToken, severity string,
 // escalation enabled, its per-alarm window has elapsed since the last notification, and
 // the alarm has not yet reached the policy's effective escalation cap.
 //
-// The window is measured wall-clock now minus LastNotifiedAt. LastNotifiedAt is first
-// stamped by dispatch from the alarm event's OccurredTime, so an alarm whose RAISED is
-// processed from a backlog (a restart replaying downtime) can be seen as already past its
-// window and draw one spurious re-notification on the next tick — it self-corrects, since
-// ClaimEscalation re-stamps the window with wall-clock time. Fully separating "when we
-// notified" (wall clock) from the event's occurred time is a deferred refinement.
+// The window starts at the notifier-clock page time. Legacy rows fall back to their
+// last notification stamp; an old pod's later escalation claim takes precedence during
+// rolling upgrades so overlapping versions cannot shorten the next tier's window.
 func escalationDue(state *model.NotificationState, p *model.NotificationPolicy,
 	now time.Time, defaultMax int) bool {
 	if !p.EscalateAfterSeconds.Valid || p.EscalateAfterSeconds.Int64 <= 0 {
 		return false
 	}
-	if !state.LastNotifiedAt.Valid {
+	base := escalationBase(state)
+	if !base.Valid {
 		return false
 	}
 	if state.EscalationLevel >= effectiveMaxEscalations(p, defaultMax) {
 		return false
 	}
 	window := time.Duration(p.EscalateAfterSeconds.Int64) * time.Second
-	return now.Sub(state.LastNotifiedAt.Time) >= window
+	return now.Sub(base.Time) >= window
+}
+
+// escalationBase uses the most recent page or claim, including claims by old pods
+// which only update LastEscalatedAt. Legacy rows retain their previous clock basis.
+func escalationBase(state *model.NotificationState) sql.NullTime {
+	base := state.EscalationBaseAt
+	if state.LastEscalatedAt.Valid && (!base.Valid || state.LastEscalatedAt.Time.After(base.Time)) {
+		base = state.LastEscalatedAt
+	}
+	if !base.Valid {
+		return state.LastNotifiedAt
+	}
+	return base
 }
 
 // effectiveMaxEscalations is the policy's own MaxEscalations when set (> 0), else the

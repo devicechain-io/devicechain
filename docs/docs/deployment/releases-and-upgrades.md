@@ -782,6 +782,13 @@ Creating a `SOLAR` campaign, reading its elements (`campaignElements`) or cycles
 
 - **Upgrade note:** OTA downloads now allow one in-flight stream per (tenant, device, assignment) on each replica. While another tenant holds a slot, a tenant at or above half of `updates.maxConcurrentDownloads` (rounded down, minimum one; eight with the default of 16) cannot start another stream. A lone tenant may use all slots. Excess requests receive the existing 503 busy response with `Retry-After: 5`; retry after that delay. No configuration change is required.
 
+#### The HTTP device-uplink route limits guessing {#v160-device-uplink-guessing}
+
+The opt-in HTTP device-uplink route (`httpIngest.deviceUplinks`) now limits requests per source address (`429` with `Retry-After`). After repeated credential failures for a device, it stops answering authentication guesses (`503` with `Retry-After`) instead of repeating `401`. While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time).
+
+- **Devices on the broker's MQTT connection are unaffected.**
+- **Back off on `503`**, even when presenting a wrong credential: wait at least `Retry-After` before retrying.
+
 #### Before you upgrade {#v160-before-upgrade}
 
 - **Entity attributes are unique per key.** The upgrade collapses duplicate live rows from concurrent first writes, keeping the lowest row ID, and queues group membership and configuration repairs. The index build briefly blocks attribute writes. While old and new replicas overlap, an old replica that loses a concurrent first write may refuse it; retry the write. No configuration change is needed.
@@ -814,6 +821,8 @@ Authoring or publishing an automated action now requires the authority to perfor
 #### Bounded Sparkplug tracking {#v160-sparkplug-limits}
 
 **Upgrade note:** Each Sparkplug source now tracks at most 50,000 node sessions, including at most 1,024 nodes that have not sent NBIRTH. New identities past a limit are dropped without ingestion or a rebirth request; existing nodes can still rebirth, and online sessions are never evicted. Idle placeholders expire after 10 minutes, offline sessions after 24 hours; at capacity, births reclaim the oldest offline sessions. The liveness history holds at most 50,000 identities, prunes old entries on pressure, and refuses further new entries while full (while it is full, a probe does not declare an unrecorded identity silent). Group, node and device topic levels longer than 256 characters are refused, matching the existing device-registration ceiling. Capacity refusals are counted by `devicechain_sparkplugingest_session_refused_total` with `reason` values `placeholder_cap`, `session_cap` or `seen_cap`. Capacity and queue-full warnings are each limited to one per source per 10 minutes; per-message logs move to debug. No configuration change is needed for rolling upgrades.
+
+- **Opt-in rule ceiling:** device-profile publish and rollback enforce `rulesPerTenant` only when the tenant tier explicitly sets it. Absent/null values and older user-management schemas preserve existing behavior; unchanged or reduced rule counts never read user-management. Other lookup failures fail closed only for rule increases.
 
 #### Metrics and health endpoints moved to the ops port {#v160-ops-port}
 
@@ -867,6 +876,12 @@ The operator admin API now limits an identity whose system role is not superuser
 Change review normally excludes people who only deleted rules, metrics or commands on other profiles from draft authors. Deletes not attributed to a row, from before the upgrade or a not-yet-upgraded pod during a rolling upgrade, are handled conservatively: if a definition disappeared from the reviewed profile without an attributed delete explaining it, everyone who made an unattributed delete since that definition's last attributed change counts as an author. Reviews already run keep the author list they recorded; run a new review if an approver was excluded. Deleting a profile now writes one audit entry per definition it removes.
 
 - **Nothing needs doing.** Run a new review if an approver was excluded by an unrelated deletion.
+
+#### Escalation timing {#v160-escalation-clock}
+
+The escalation window is now counted from when the page was sent. An alarm raised from a late-arriving reading no longer escalates on the next scheduler pass, and a device clock ahead of the platform no longer delays escalation.
+
+- **Nothing needs doing.** The upgrade adds a nullable timestamp automatically; existing open alarms retain their previous timing until their next page.
 
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 

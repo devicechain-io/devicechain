@@ -233,7 +233,7 @@ func TestIntegrationNotificationWritersBlockAndReadCommittedState(t *testing.T) 
 						if method == "MarkCleared" {
 							return a.MarkCleared(waitCtx, token, "key", "CRITICAL", raised, stamp.Add(time.Hour))
 						}
-						_, err := a.RecordPagedFrom(waitCtx, token, "key", "CRITICAL", raised, stamp, nil, AlarmSource{}, time.Time{})
+						_, err := a.RecordPagedFrom(waitCtx, token, "key", "CRITICAL", raised, stamp, nil, AlarmSource{}, time.Time{}, stamp)
 						return err
 					})
 				}()
@@ -308,7 +308,7 @@ func TestIntegrationNotificationConcurrentFirstInserts(t *testing.T) {
 						done <- api.MarkCleared(callCtx, method, "key", "CRITICAL", raised, raised)
 						return
 					}
-					_, err := api.RecordPagedFrom(callCtx, method, "key", "CRITICAL", raised, raised, nil, AlarmSource{}, time.Time{})
+					_, err := api.RecordPagedFrom(callCtx, method, "key", "CRITICAL", raised, raised, nil, AlarmSource{}, time.Time{}, raised)
 					done <- err
 				}()
 			}
