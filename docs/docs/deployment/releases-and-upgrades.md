@@ -850,6 +850,10 @@ A payload decoder failure that is redelivered (for example after a restart with 
 
 A console tab whose session ended no longer continues under a session another tab opened for a different tenant or user; it returns to sign-in.
 
+#### A new relationship's event is stored {#v160-new-relationship-event}
+
+A `NewRelationship` event a device sends is now stored and listed by `events` (event type `0`) with its anchors. Before this release it was retried, then recorded as an ingest failure with reason `API_CALL_FAILED`, although the relationship had been created. An event of a type the event store does not hold is now refused on its first delivery with reason `INVALID` instead of being retried. Events sent before the upgrade are not restored.
+
 - **Nothing needs doing.**
 
 #### Invalid ingest failures name the device {#v160-invalid-failures-name-the-device}

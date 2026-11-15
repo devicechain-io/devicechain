@@ -897,6 +897,12 @@ Una pestaña de la consola cuya sesión ha terminado ya no continúa con una ses
 
 - **No es necesario hacer nada.**
 
+#### Se almacena el evento de una nueva relación {#v160-new-relationship-event}
+
+Un evento `NewRelationship` enviado por un dispositivo ahora se almacena y aparece en `events` (tipo de evento `0`) con sus anclajes. Antes de esta versión se reintentaba y después se registraba como un fallo de ingesta con el motivo `API_CALL_FAILED`, aunque la relación se había creado. Un evento de un tipo que el almacén de eventos no admite ahora se rechaza en su primera entrega con el motivo `INVALID`, en lugar de reintentarse. Los eventos enviados antes de la actualización no se recuperan.
+
+- **No hay que hacer nada.**
+
 #### Los fallos de ingesta inválidos identifican el dispositivo {#v160-invalid-failures-name-the-device}
 
 Los fallos de ingesta con motivo `INVALID` que device-management registró para un evento legible (un valor que incumple la definición de su métrica, un evento de más de 366 días o un rechazo del decodificador) ahora identifican el dispositivo y el tipo de evento, y se limitan por dispositivo como cualquier otro motivo. Antes de esta versión se mostraban sin dispositivo y compartían un límite de diez registros por hora para todo el tenant. Los registros indexados antes de la actualización no se reescriben.
