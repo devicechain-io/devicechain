@@ -535,6 +535,12 @@ dcctl bootstrap local devicechain
 - `device-state` 现在还会每 10 分钟使用实例的服务凭据向 `device-management` 查询哪些设备仍然存在，并清除此前（包括升级之前）删除的设备遗留的实时状态。查询失败时不会清除任何数据。如果未配置服务密钥或 `device-management` 与 `user-management` 端点，则跳过该检查，并在启动时记录警告。
 - 平台在删除前接受但在删除后才处理的读数，仍可能短暂地重新生成已删除设备的实时状态。现在每条读数都会标明由哪台设备产生，因此以相同令牌创建的设备的第一条读数会重置实时状态；如果没有设备持有该令牌，定期检查会将其清除；已删除设备的读数绝不会应用到其继任设备。滚动升级期间仍在 `v1.6` 上的 Pod 产生的读数不带此标识，仍按原方式应用。
 
+#### 已删除设备的告警会结束并停止升级 {#v170-deleted-device-alarms}
+
+- 删除设备或其他实体时，其每个活动告警现在都会以携带新的 `clearReason: ORIGINATOR_DELETED` 的 `CLEARED` 事件结束（`alarmStream` 订阅的 `AlarmEvent` 上也新增了可为空的 `clearReason` 字段）。升级随即停止，启用了 `notifyOnClear` 的策略会说明告警因其设备被删除而结束。
+- `notification-management` 在再次发送通知前还会使用实例的服务凭据向 `device-management` 查询，并结束已不存在的告警的未结束通知，包括升级前的删除操作遗留的通知。如果查询失败，仍会发送通知；失败次数计入 `escalation_lookup_errors_total`。请参阅[已删除设备的告警](../guides/notification-channels.md#deleted-originator)。
+- 在滚动升级期间新旧 Pod 并存时，`v1.6` 的 `notification-management` Pod 会将此类清除视为普通清除，由 `v1.6` 的 `device-management` Pod 处理的删除不会发出清除事件；每次再次通知前的检查会停止其升级，定期检查会在这些通知满一小时后将其结束。
+
 ### v1.6.0 — CA 轮换不再断开设备连接 {#v160-upgrade}
 
 - **MCP 内存限制：**超过 256 KiB 的下游 GraphQL 响应和超过 1,000 个时间桶的聚合结果会被整体拒绝；请缩短时间范围、选择单个指标或增大聚合间隔。POST 请求和携带请求体的请求在读取或解析前受到限制：每个调用者最多同时处理 4 个请求，每个进程最多 64 个。消息准入为每个批量请求最多预留 4 个名额；符合配置的批量请求（默认最多 16 条）会在此上限内分组执行工具。每条消息仍计入调用者的速率限制；超出限制的请求返回 HTTP 429 和 Retry-After。HTTP 请求结束时会取消工具执行并释放执行名额。请求体读取预算会在工具执行前释放，单个请求体仍限制为 1 MiB。无需更改配置。

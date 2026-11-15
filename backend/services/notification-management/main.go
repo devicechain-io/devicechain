@@ -5,7 +5,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/egress"
@@ -17,11 +19,13 @@ import (
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-notification-management/config"
 	"github.com/devicechain-io/dc-notification-management/graphql"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/devicechain-io/dc-notification-management/processor"
 	"github.com/devicechain-io/dc-notification-management/schema"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -272,6 +276,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// delivery path: a ledger write can never delay or block a page.
 			AttemptLedger = processor.NewAttemptLedger(Api, NotifyMetrics.LedgerWrites())
 			Notifier.Ledger = AttemptLedger
+			if infra.ServiceAuth.Secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+				log.Warn().Msg("Alarm backstop is disabled: service secret or device-management/user-management endpoint is not configured; existing orphan alarms may keep escalating")
+			} else {
+				client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "notification-management", []string{string(auth.AlarmRead)})
+				Notifier.AlarmLookup = processor.NewAlarmLookup(client, fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port))
+			}
 
 			// Retention sweep: prune cleared per-alarm state older than the retention window so
 			// the notification state stays bounded (ADR-017 N.C). A negative interval disables
@@ -281,6 +291,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 					Configuration.StateRetention(), Configuration.AttemptRetention(),
 					Configuration.RetentionSweepInterval(),
 					core.NewNoOpLifecycleCallbacks())
+				RetentionSweeper.Notifier = Notifier
 				if err := RetentionSweeper.Initialize(ctx); err != nil {
 					return err
 				}

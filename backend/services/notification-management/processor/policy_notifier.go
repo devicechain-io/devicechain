@@ -112,11 +112,13 @@ func perChannelWorstCase(attempts int, timeout time.Duration) time.Duration {
 // attempted (so a redelivery can never double-send a channel that already
 // succeeded).
 type PolicyNotifier struct {
-	api      *model.Api
-	store    secrets.SecretStore
-	adapters map[string]ChannelAdapter
-	attempts int
-	timeout  time.Duration
+	AlarmLookup  AlarmLookup
+	lookupErrors prometheus.Counter
+	api          *model.Api
+	store        secrets.SecretStore
+	adapters     map[string]ChannelAdapter
+	attempts     int
+	timeout      time.Duration
 
 	// budget is the whole-dispatch deadline one alarm is worth, defaulted from
 	// dispatchBudget by the constructor. It is a FIELD rather than the constant read
@@ -234,6 +236,7 @@ func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, 
 		budget:        dispatchBudget,
 		TenantDeleted: tenantDeleted,
 		refused:       metrics.deliveriesRefused,
+		lookupErrors:  metrics.escalationLookupErrors,
 		quiet:         metrics.quietHours,
 	}
 }
@@ -780,6 +783,15 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 		log.Debug().Str("alarm", state.AlarmToken).
 			Msg("Not escalating: the tenant has been deleted.")
 		return nil
+	}
+
+	if n.AlarmLookup != nil {
+		alarms, err := n.lookupAlarms(ctx, []string{state.AlarmToken})
+		if err == nil && (alarms[state.AlarmToken] == "" || alarms[state.AlarmToken] == "CLEARED") {
+			return n.endOrphan(ctx, state, now)
+		}
+		// D4: deliberately FAIL OPEN on a lookup error. An unavailable owner must
+		// not suppress an escalation page; lookupAlarms counts every errored call.
 	}
 
 	deliveries := n.planEscalation(state, policies, now, defaultMax)

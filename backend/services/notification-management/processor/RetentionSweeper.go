@@ -35,6 +35,7 @@ type RetentionSweeper struct {
 
 	Microservice *core.Microservice
 	Api          *model.Api
+	Notifier     *PolicyNotifier
 	retention    time.Duration
 
 	// attemptRetention is how long a delivery-ledger row is kept. Zero leaves the ledger
@@ -75,6 +76,13 @@ func (s *RetentionSweeper) runOnce(ctx context.Context) error {
 		default:
 		}
 		visited++
+		if s.Notifier != nil {
+			if err := s.Notifier.SweepOrphans(core.WithTenant(ctx, tenant), time.Now()); err != nil {
+				failed++
+				lastErr = err
+				continue
+			}
+		}
 		removed, err := s.Api.PruneResolvedStates(core.WithTenant(ctx, tenant), before)
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Msg("Retention sweep: prune failed")

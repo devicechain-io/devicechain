@@ -366,7 +366,11 @@ func (api *Api) describeAlarmDevice(ctx context.Context, event *AlarmStateChange
 	if len(devices) == 0 {
 		return
 	}
-	d := devices[0]
+	describeAlarmDevice(event, devices[0])
+}
+
+// describeAlarmDevice copies the same device snapshot for ordinary and deletion clears.
+func describeAlarmDevice(event *AlarmStateChangeEvent, d *Device) {
 	event.DeviceToken = d.Token
 	if d.Name.Valid {
 		event.DeviceName = d.Name.String

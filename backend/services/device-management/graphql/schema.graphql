@@ -7559,7 +7559,14 @@ type Mutation {
 # severity move, the prior severity, alongside a snapshot of the alarm after the
 # change. Address the alarm by token to re-query it; the originator is the uniform
 # (type, id) reference, with originatorToken resolved on demand for a device.
+"""Why an alarm ended, when it was cleared for a lifecycle reason."""
+enum AlarmClearReason {
+    ORIGINATOR_DELETED
+}
+
 type AlarmEvent {
+    """The lifecycle reason for clearing the alarm; absent for ordinary clears."""
+    clearReason: AlarmClearReason
     # One of RAISED, ESCALATED, DEESCALATED, CLEARED, ACKNOWLEDGED.
     eventType: String!
     # Token of the alarm this event is about (stable across its lifecycle).

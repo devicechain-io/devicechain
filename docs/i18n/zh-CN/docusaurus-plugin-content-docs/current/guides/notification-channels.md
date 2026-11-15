@@ -234,6 +234,12 @@ mutation {
 
 两人同时编辑同一策略可能相互覆盖：双方修改的字段只保留最后保存值，而 `rules` 替换整体集合，第二次保存会丢弃第一次所有规则。要防止，请将读取时的 `updatedAt`（或上次更新返回的值）作为 `expectedUpdatedAt` 发送。此后策略已改变时，更新拒绝，提示“notification policy was modified by another writer; reload and try again”，不写入任何内容。重新加载、重新应用更改，再次发送。
 
+#### 已删除设备的告警 {#deleted-originator}
+
+删除设备（或产生告警的其他实体）时，其仍处于活动状态的每个告警都会以一个携带 `clearReason: ORIGINATOR_DELETED` 的 `CLEARED` 事件结束。该告警的升级随即停止；启用了 `notifyOnClear` 的策略会通知曾为其发送通知的渠道：该告警因其设备被删除而结束。Webhook 负载和 PagerDuty 详情中也会携带相同的 `clearReason`。
+
+在再次发送告警通知之前，调度器还会向 `device-management` 查询该告警是否仍然存在。已不存在的告警，或 `device-management` 报告为已清除的告警，会停止升级。**如果该查询失败**（例如 `device-management` 不可用），**仍会发送通知**：在故障期间漏发真实的通知，比为设备刚被删除的告警多发一次通知更糟。每次查询失败都会计入 `escalation_lookup_errors_total` 指标。定期检查还会结束超过一小时、其告警已不存在的未结束通知。如果未配置服务密钥或 `device-management` 与 `user-management` 端点，这些检查将关闭，启动时记录警告，升级行为与以前相同。
+
 ### 静默时段 {#quiet-hours}
 
 **静默时段**用来避免策略在不合适的时间（例如深夜）打扰人员。策略处于静默时段内时，会**暂存**通知而不是发送，并在静默时段结束时发出。每条策略都有自己的静默时段，因此夜班策略和日班团队的策略可以遵循不同的时间表。

@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/entityevent"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -24,6 +26,7 @@ import (
 // leaves no fact. A publish acknowledged before a crash may be repeated: delivery is
 // at least once, with a stable tenant-scoped broker deduplication ID.
 type PendingEntityDeletion struct {
+	Cascade     *datatypes.JSON
 	ID          uint64    `gorm:"primaryKey;autoIncrement;index:idx_pending_entity_deletions_tenant_id,priority:2"`
 	TenantId    string    `gorm:"not null;size:128;index:idx_pending_entity_deletions_tenant_id,priority:1"`
 	EntityType  string    `gorm:"not null;size:64"`
@@ -58,14 +61,23 @@ func entityTenantOnTx(tx *gorm.DB, model any, id uint) (string, error) {
 // queueEntityDeletedOnTx records the deletion fact inside the delete's transaction. A failure
 // must roll back the delete rather than lose its announcement.
 //
-// The time is taken HERE, by this process's clock, and stored: every retry publishes the same
+// The caller takes one deletion time from this process's clock and stores it: every retry publishes the same
 // DeletedTime, however late. It is this service's clock, not the database's, on purpose. The
 // consumers order a deletion against other lifecycle times this service stamps from its own
 // clock (a device's create on the roster, an attribute write), and a deletion stamped from a
 // clock running ahead of those would outrank a re-creation made just after it.
-func queueEntityDeletedOnTx(tx *gorm.DB, api *Api, tenant string, etype entity.Type, id uint, token string) error {
+func queueEntityDeletedOnTx(tx *gorm.DB, tenant string, etype entity.Type, id uint, token string, deletedTime time.Time, events []*AlarmStateChangeEvent) error {
+	var cascade *datatypes.JSON
+	if len(events) > 0 {
+		encoded, err := json.Marshal(events)
+		if err != nil {
+			return fmt.Errorf("encoding deletion alarm cascade: %w", err)
+		}
+		value := datatypes.JSON(encoded)
+		cascade = &value
+	}
 	if err := tx.Create(&PendingEntityDeletion{TenantId: tenant, EntityType: string(etype), EntityId: id,
-		EntityToken: token, DeletedTime: api.deletionNow()}).Error; err != nil {
+		EntityToken: token, DeletedTime: deletedTime, Cascade: cascade}).Error; err != nil {
 		return fmt.Errorf("queueing entity deletion: %w", err)
 	}
 	return nil
@@ -79,6 +91,9 @@ func (api *Api) deletionNow() time.Time {
 	}
 	return time.Now().UTC()
 }
+
+// ErrNoDeletionAlarmPublisher refuses to discard queued clears without a publisher.
+var ErrNoDeletionAlarmPublisher = errors.New("no alarm publisher is wired; queued alarm clears cannot be published")
 
 // ErrNoEntityDeletedPublisher refuses a misleading successful pass with no publisher.
 var ErrNoEntityDeletedPublisher = errors.New("no entity deletion publisher is wired; queued deletions cannot be published")
@@ -139,7 +154,29 @@ func (api *Api) drainTenantEntityDeletions(ctx context.Context, pageSize int) (i
 	}
 	done := make([]uint64, 0, len(rows))
 	var pubErr error
+rowLoop:
 	for _, row := range rows {
+		var cascade []*AlarmStateChangeEvent
+		if row.Cascade != nil {
+			if err := json.Unmarshal(*row.Cascade, &cascade); err != nil {
+				pubErr = fmt.Errorf("decoding deletion alarm cascade: %w", err)
+				break
+			}
+		}
+		for i, alarm := range cascade {
+			if api.AlarmPublisher == nil {
+				pubErr = ErrNoDeletionAlarmPublisher
+				break rowLoop
+			}
+			if alarm == nil {
+				pubErr = errors.New("nil alarm in deletion cascade")
+				break rowLoop
+			}
+			if err := api.AlarmPublisher.PublishAlarmEventDedup(ctx, alarm, fmt.Sprintf("entity-deletion-%s-%d-alarm-%d", row.TenantId, row.ID, i)); err != nil {
+				pubErr = &entityDeletionPublishError{err: err}
+				break rowLoop
+			}
+		}
 		event := &entityevent.EntityDeletedEvent{EntityType: entity.Type(row.EntityType), EntityId: row.EntityId, EntityToken: row.EntityToken, DeletedTime: row.DeletedTime}
 		if err := api.EntityDeletedPublisher.PublishEntityDeleted(ctx, event); err != nil {
 			pubErr = &entityDeletionPublishError{err: err}

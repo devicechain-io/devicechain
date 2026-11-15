@@ -234,6 +234,13 @@ func (r *AlarmEventResolver) AlarmKey() string { return r.E.AlarmKey }
 
 func (r *AlarmEventResolver) MetricKey() string { return r.E.MetricKey }
 
+func (r *AlarmEventResolver) ClearReason() *string {
+	if r.E.ClearReason != model.AlarmClearReasonOriginatorDeleted {
+		return nil
+	}
+	return &r.E.ClearReason
+}
+
 func (r *AlarmEventResolver) State() string { return r.E.State }
 
 func (r *AlarmEventResolver) Severity() string { return r.E.Severity }

@@ -118,6 +118,7 @@ func (np *NotificationProcessor) pacer() *core.ReadPacer {
 // It is a type of its own so it can be built in a DIFFERENT PHASE from the processor
 // that reads it. See NewNotifyMetrics.
 type NotifyMetrics struct {
+	escalationLookupErrors prometheus.Counter
 	// deadLettered counts alarms recorded as dead letters. The other outcome — a letter
 	// that could not be written, the only one on this path where an alarm nobody was paged
 	// about leaves no record at all — is counted by the dead-letter sink itself, on the
@@ -154,7 +155,8 @@ type NotifyMetrics struct {
 // MustRegister panics on the duplicate.
 func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
 	return NotifyMetrics{
-		metrics: ms.NewProcessorMetrics("notify"),
+		escalationLookupErrors: ms.NewCounter("escalation_lookup_errors_total", "Errored alarm backstop lookups; escalation deliberately fails open."),
+		metrics:                ms.NewProcessorMetrics("notify"),
 		deadLettered: ms.NewCounter("notifications_dead_lettered_total",
 			"Alarms written to the dead-letter stream after every delivery attempt failed, so an "+
 				"operator can see which pages were never sent (ADR-024)."),
