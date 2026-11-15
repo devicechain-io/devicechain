@@ -756,6 +756,18 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The release in development (`v1.6`) and the three most recent minor releases (`v1.5`, `v1.4` and `v1.3`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
 
+### v1.7.0 — shard-group ingest is held, never dead-lettered {#v170-upgrade}
+
+These notes are for the next release in development and grow until it ships. Nothing below changes an instance that has not set `infrastructure.nats.shardGroups`.
+
+#### Shard groups hold work instead of dead-lettering it {#v170-shard-groups}
+
+- **A backlog in any group pauses MQTT forwarding for every group.** The capture reader stops fetching while any group's `inbound-events` stream is refusing, so the backlog waits in the capture stream undelivered. Earlier, events for a backlogged group other than group zero were retried and, after five deliveries, routed to `failed-decode`. Per-group isolation of MQTT capture is not provided.
+- **HTTP ingest is admitted per tenant.** With shard groups enabled, an HTTP or integration request is refused only when its own tenant's group is refusing, and a refusal, including one caused by an unavailable placement, answers `503` with a `Retry-After` header. Other publish errors still answer a plain `503`.
+- **A missing or unusable placement holds ingest.** While the placement table is absent, cannot be adopted, or names a group at or above `nats.shardGroups.count`, sharded ingest is held and retried rather than dead-lettered. The new gauge `jetstream_shard_placement_unavailable` reads 1 in each affected service, and the `JetStreamShardPlacementUnavailable` alert fires after two minutes. Restore a compatible placement table to resume.
+- **A placement can no longer name a group the streams cannot route.** With shard groups configured, assigning a vpartition to a group at or above `count` is refused, and the placement mirror refuses to publish such a table (its pass fails and the `placement_mirror` alert fires). Raise `count` first.
+- **A service that cannot route a sharded stream stops at startup.** If the configuration shards `resolved-events` while device-state or event-processing is deployed, those services refuse to start with a named error instead of silently reading only group zero. Shard only `inbound-events` on an instance that runs them.
+
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 
 - **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 time buckets are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 64 per process before reading or parsing. Message admission reserves up to 4 slots per batch; valid configured batches (16 entries by default) execute tools in waves within that cap. Every entry still counts toward the caller's rate limit; excess requests receive HTTP 429 with Retry-After. Tools are cancelled and execution slots released when their HTTP request ends. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.
