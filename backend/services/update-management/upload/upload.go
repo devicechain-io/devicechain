@@ -35,7 +35,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -273,34 +272,20 @@ func (h *Handler) discard(ref blob.Ref, token string) {
 // authenticate verifies a tenant ACCESS token (never a service token) and returns its
 // claims, writing the refusal itself on any failure.
 func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (*auth.Claims, bool) {
-	const prefix = "Bearer "
-	authz := r.Header.Get("Authorization")
-	if len(authz) <= len(prefix) || !strings.EqualFold(authz[:len(prefix)], prefix) {
-		refuse(w, r, http.StatusUnauthorized, "missing bearer token")
-		return nil, false
-	}
-	v := h.validator()
-	if v == nil {
-		refuse(w, r, http.StatusUnauthorized, "authentication is not available")
-		return nil, false
-	}
-	claims, err := v.Validate(authz[len(prefix):])
+	result, err := (auth.BearerAuth{Plane: auth.PlaneUpload, Verify: auth.AccessVerifier(h.validator), Policy: h.policy}).Authenticate(r)
 	if err != nil {
-		refuse(w, r, http.StatusUnauthorized, "invalid token")
+		msg := "invalid token"
+		switch err.(*auth.BearerError).Reason {
+		case auth.BearerMissing:
+			msg = "missing bearer token"
+		case auth.BearerUnavailable:
+			msg = "authentication is not available"
+		}
+		refuse(w, r, http.StatusUnauthorized, msg)
 		return nil, false
 	}
-	// 🔴 AFTER Validate, NEVER BEFORE: the audience rule runs on a token whose signature,
-	// expiry and type were verified, so a forged token never reaches it and cannot drive
-	// the counters. It runs before anything reads the body. A refusal is the same 401 an
-	// invalid token gets, so a caller cannot tell the two apart.
-	var p *auth.PlanePolicy
-	if h.policy != nil {
-		p = h.policy()
-	}
-	if err := p.Admit(claims, auth.PlaneUpload); err != nil {
-		refuse(w, r, http.StatusUnauthorized, "invalid token")
-		return nil, false
-	}
+	claims := result.Claims
+
 	return claims, true
 }
 
