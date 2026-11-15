@@ -5,10 +5,10 @@ package processor
 
 import (
 	"context"
-	"math/rand/v2"
 	"sync"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/devicechain-io/dc-update-management/model"
 	"github.com/rs/zerolog/log"
@@ -23,14 +23,13 @@ import (
 // to one outcome, and a device report that lands between the read and the write wins or loses
 // cleanly. Replicas are staggered with jitter so they do not all read at once.
 type DeadlineSweeper struct {
-	api      *model.Api
-	interval time.Duration
-	page     int
-	metrics  *UpdateReportsMetrics
+	api     *model.Api
+	page    int
+	metrics *UpdateReportsMetrics
 
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	mu       sync.Mutex
+	task     *core.PeriodicTask
+	makeTask func() *core.PeriodicTask
 }
 
 // sweepPage bounds how many attempts one pass examines. A backlog larger than a page is worked off
@@ -38,58 +37,64 @@ type DeadlineSweeper struct {
 const sweepPage = 200
 
 // NewDeadlineSweeper builds the sweep. interval must be positive.
-func NewDeadlineSweeper(api *model.Api, interval time.Duration, metrics *UpdateReportsMetrics) *DeadlineSweeper {
+func NewDeadlineSweeper(api *model.Api, interval time.Duration, metrics *UpdateReportsMetrics, ms *core.Microservice) *DeadlineSweeper {
 	if interval <= 0 {
 		panic("processor.NewDeadlineSweeper: interval must be positive")
 	}
-	return &DeadlineSweeper{api: api, interval: interval, page: sweepPage, metrics: metrics}
+	s := &DeadlineSweeper{api: api, page: sweepPage, metrics: metrics}
+	opts := []core.PeriodicTaskOption{core.WithDetachedContext()}
+	if ms != nil {
+		opts = append(opts, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("deadline_sweep")))
+	}
+	// A fresh lifecycle per start preserves the wrapper's ability to restart after Stop.
+	s.makeTask = func() *core.PeriodicTask {
+		return core.NewPeriodicTask("update-management", "deadline-sweep", interval,
+			s.runOnce, core.NewNoOpLifecycleCallbacks(), opts...)
+	}
+	return s
 }
 
 // Start launches the loop. It is idempotent.
 func (s *DeadlineSweeper) Start(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.cancel != nil {
+	if s.task != nil {
 		return
 	}
-	ctx, s.cancel = context.WithCancel(ctx)
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		// The first pass after a start is delayed by a jittered fraction of the interval.
-		timer := time.NewTimer(jitter(s.interval))
-		defer timer.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-			}
-			s.Pass(ctx)
-			timer.Reset(s.interval)
-		}
-	}()
+	s.task = s.makeTask()
+	_ = s.task.Initialize(ctx)
+	_ = s.task.Start(ctx)
 }
 
 // Stop ends the loop and waits for the pass in flight.
 func (s *DeadlineSweeper) Stop() {
 	s.mu.Lock()
-	cancel := s.cancel
-	s.cancel = nil
-	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	defer s.mu.Unlock()
+	if s.task != nil {
+		_ = s.task.Stop(context.Background())
+		s.task = nil
 	}
-	s.wg.Wait()
+}
+
+func (s *DeadlineSweeper) runOnce(ctx context.Context) error {
+	_, err := s.sweep(ctx)
+	return err
 }
 
 // Pass runs one sweep and records what it did. Exported so a test (and an operator tool) can drive
 // a pass without waiting for the timer.
 func (s *DeadlineSweeper) Pass(ctx context.Context) model.SweepResult {
-	res, err := s.api.SweepDeadlines(ctx, s.page)
+	res, err := s.sweep(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("The update deadline sweep failed; it is retried at the next pass.")
-		return res
+	}
+	return res
+}
+
+func (s *DeadlineSweeper) sweep(ctx context.Context) (model.SweepResult, error) {
+	res, err := s.api.SweepDeadlines(ctx, s.page)
+	if err != nil {
+		return res, err
 	}
 	if s.metrics != nil && s.metrics.expired != nil {
 		s.metrics.expired.WithLabelValues(string(ota.StateTimedOut)).Add(float64(res.TimedOut))
@@ -98,9 +103,5 @@ func (s *DeadlineSweeper) Pass(ctx context.Context) model.SweepResult {
 	if res.TimedOut+res.Unknown > 0 {
 		log.Info().Int("timedOut", res.TimedOut).Int("unknown", res.Unknown).Msg("Update attempts passed their deadline.")
 	}
-	return res
-}
-
-func jitter(d time.Duration) time.Duration {
-	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
+	return res, nil
 }

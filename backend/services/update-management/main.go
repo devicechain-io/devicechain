@@ -219,13 +219,13 @@ func wireSecrets(ctx context.Context, api *model.Api) error {
 
 // startSweeper starts the deadline sweep at the configured cadence.
 func startSweeper() {
-	Sweeper = processor.NewDeadlineSweeper(Api, time.Duration(Configuration.Updates.SweepIntervalSeconds)*time.Second, &ReportsMetrics)
+	Sweeper = processor.NewDeadlineSweeper(Api, time.Duration(Configuration.Updates.SweepIntervalSeconds)*time.Second, &ReportsMetrics, Microservice)
 	Sweeper.Start(context.Background())
 }
 
 // startRolloutDriver starts the group-rollout driver.
 func startRolloutDriver() {
-	Rollouts = processor.NewRolloutDriver(Api, processor.RolloutInterval)
+	Rollouts = processor.NewRolloutDriver(Api, processor.RolloutInterval, Microservice)
 	Rollouts.Start(context.Background())
 }
 

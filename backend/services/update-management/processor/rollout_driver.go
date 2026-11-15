@@ -98,61 +98,60 @@ func (m *RolloutMetrics) Observe(res model.RolloutStepResult, err error) {
 	}
 }
 
-// RolloutDriver steps every RUNNING group rollout on a fixed cadence. Like the deadline sweep it
+// RolloutDriver steps every RUNNING group rollout on a jittered cadence. Like the deadline sweep it
 // runs on every replica with no leader: each step takes its rollout's row lock with SKIP LOCKED, so
 // two replicas never step one rollout at once, and a replica that finds the row held moves on.
 type RolloutDriver struct {
-	api      *model.Api
-	interval time.Duration
+	api *model.Api
 
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	mu       sync.Mutex
+	task     *core.PeriodicTask
+	makeTask func() *core.PeriodicTask
 }
 
 // NewRolloutDriver builds the driver. interval must be positive.
-func NewRolloutDriver(api *model.Api, interval time.Duration) *RolloutDriver {
+func NewRolloutDriver(api *model.Api, interval time.Duration, ms *core.Microservice) *RolloutDriver {
 	if interval <= 0 {
 		panic("processor.NewRolloutDriver: interval must be positive")
 	}
-	return &RolloutDriver{api: api, interval: interval}
+	d := &RolloutDriver{api: api}
+	opts := []core.PeriodicTaskOption{core.WithDetachedContext()}
+	if ms != nil {
+		opts = append(opts, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("rollout_driver")))
+	}
+	// A fresh lifecycle per start preserves the wrapper's ability to restart after Stop.
+	d.makeTask = func() *core.PeriodicTask {
+		return core.NewPeriodicTask("update-management", "rollout-driver", interval,
+			d.runOnce, core.NewNoOpLifecycleCallbacks(), opts...)
+	}
+	return d
 }
 
 // Start launches the loop. It is idempotent.
 func (d *RolloutDriver) Start(ctx context.Context) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.cancel != nil {
+	if d.task != nil {
 		return
 	}
-	ctx, d.cancel = context.WithCancel(ctx)
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
-		timer := time.NewTimer(jitter(d.interval))
-		defer timer.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-			}
-			d.Pass(ctx)
-			timer.Reset(jitter(d.interval))
-		}
-	}()
+	d.task = d.makeTask()
+	_ = d.task.Initialize(ctx)
+	_ = d.task.Start(ctx)
 }
 
 // Stop ends the loop and waits for the pass in flight.
 func (d *RolloutDriver) Stop() {
 	d.mu.Lock()
-	cancel := d.cancel
-	d.cancel = nil
-	d.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	defer d.mu.Unlock()
+	if d.task != nil {
+		_ = d.task.Stop(context.Background())
+		d.task = nil
 	}
-	d.wg.Wait()
+}
+
+func (d *RolloutDriver) runOnce(ctx context.Context) error {
+	_, err := d.api.AdvanceRollouts(ctx)
+	return err
 }
 
 // Pass steps every RUNNING rollout once. Exported so a test can drive a pass without the timer.
