@@ -21,6 +21,9 @@ import (
 // ErrUnplacedTenant refuses a publish whose tenant placement cannot be established.
 var ErrUnplacedTenant = errors.New("messaging: tenant has no valid shard-group placement")
 
+// ErrShardRoutingNotEnabled refuses reads of instance-sharded streams without routing.
+var ErrShardRoutingNotEnabled = errors.New("messaging: shard-group routing is not enabled")
+
 // ShardGroupRouter is satisfied by partition.Router. An error never means group zero.
 type ShardGroupRouter interface {
 	ShardGroup(tenant string) (int, error)
@@ -194,8 +197,24 @@ func (nmgr *NatsManager) freezeStreamRouting() {
 	nmgr.streamMu.Unlock()
 }
 
+// refuseUnroutedRead prevents a reader on an unrouted manager from silently binding
+// only group 0 and losing every other group's tenants.
+func (nmgr *NatsManager) refuseUnroutedRead(suffix string) error {
+	if nmgr.Microservice == nil {
+		return nil
+	}
+	cfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
+	if cfg != nil && cfg.Count >= 2 && slices.Contains(cfg.Suffixes, suffix) && nmgr.streamSharding() == nil {
+		return fmt.Errorf("%w: service must enable shard-group routing (call shardgroups.Enable) before reading suffix %q", ErrShardRoutingNotEnabled, suffix)
+	}
+	return nil
+}
+
 func (nmgr *NatsManager) refuseShardedRead(suffix, slice string) error {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedRead(suffix); err != nil {
+		return err
+	}
 	s := nmgr.streamSharding()
 	if s.selects(suffix) && s.cfg.Count >= 2 {
 		return fmt.Errorf("messaging: %s not supported for a sharded suffix yet: %q", slice, suffix)
