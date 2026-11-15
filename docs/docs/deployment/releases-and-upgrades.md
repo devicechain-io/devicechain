@@ -754,7 +754,15 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 ## Recent releases {#recent-releases}
 
-The release in development (`v1.6`) and the three most recent minor releases (`v1.5`, `v1.4` and `v1.3`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
+The release in development (`v1.7`) and the three most recent minor releases (`v1.6`, `v1.5` and `v1.4`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
+
+### v1.7.0 — in development {#v170-upgrade}
+
+`v1.7.0` is an in-place upgrade from `v1.6.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
+
+#### Behaviour changes {#v170-behaviour-changes}
+
+- **`dcctl ha verify --probe-mqtt` authenticates again.** From `v1.1.0` the broker accepted only event-sources' platform login over MQTT, but the probe presented the broker administrator's login, so it was refused on every instance `dcctl` builds. It now presents the event-sources login, which the broker already accepts over MQTT; no broker permission changes. A refused probe now names the login it presented. You rarely need the flag: event-sources' own connection creates the broker's MQTT streams.
 
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 

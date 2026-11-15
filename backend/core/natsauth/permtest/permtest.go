@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,6 +59,9 @@ type settings struct {
 	extra map[string]any
 	// bare leaves the broker's streams and buckets uncreated (see WithoutReconcile).
 	bare bool
+	// mqttCapable, when non-nil, holds every login to allowed_connection_types (see
+	// WithConnectionTypes).
+	mqttCapable []string
 }
 
 // Option adjusts the generated users, or the server configuration around them.
@@ -82,6 +86,28 @@ func WithoutReconcile() Option { return func(s *settings) { s.bare = true } }
 // deployed broker runs it.
 func WithMQTT() Option {
 	return func(s *settings) { s.extra["mqtt"] = map[string]any{"host": "127.0.0.1", "port": -1} }
+}
+
+// WithConnectionTypes holds every login to allowed_connection_types the way the deployed broker
+// does when dcctl sets the nats module's mqtt_capable_users (it always does): STANDARD for every
+// login, plus MQTT for the ones named. Without it the logins are unrestricted, which is what no
+// dcctl-built broker has run since the restriction shipped, so a test of anything that connects
+// over MQTT on a static login needs this to be a test of the real broker.
+func WithConnectionTypes(mqttCapable ...string) Option {
+	return func(s *settings) { s.mqttCapable = append([]string{}, mqttCapable...) }
+}
+
+// connectionTypes is the attribute WithConnectionTypes adds to one login, or nothing.
+func (s *settings) connectionTypes(user string, into map[string]any) map[string]any {
+	if s.mqttCapable == nil {
+		return into
+	}
+	types := []string{"STANDARD"}
+	if slices.Contains(s.mqttCapable, user) {
+		types = append(types, "MQTT")
+	}
+	into["allowed_connection_types"] = types
+	return into
 }
 
 // Without removes one subject from every login's publish allow-list. It is the negative control:
@@ -143,7 +169,7 @@ func Start(t testing.TB, instance string, opts ...Option) *Broker {
 	for account, byUser := range users {
 		var list []map[string]any
 		for u, p := range byUser {
-			list = append(list, map[string]any{"user": u, "password": Password(u), "permissions": p})
+			list = append(list, set.connectionTypes(u, map[string]any{"user": u, "password": Password(u), "permissions": p}))
 		}
 		acct := map[string]any{"users": list}
 		if account == natsauth.AppAccount {
@@ -155,7 +181,8 @@ func Start(t testing.TB, instance string, opts ...Option) *Broker {
 	// the account, because the account is the boundary.
 	accounts[natsauth.IdentityAccount] = map[string]any{
 		"jetstream": "enabled",
-		"users":     []map[string]any{{"user": natsauth.IdentityUser, "password": Password(natsauth.IdentityUser)}},
+		"users": []map[string]any{set.connectionTypes(natsauth.IdentityUser,
+			map[string]any{"user": natsauth.IdentityUser, "password": Password(natsauth.IdentityUser)})},
 	}
 	cfg := map[string]any{
 		"host":           "127.0.0.1",
