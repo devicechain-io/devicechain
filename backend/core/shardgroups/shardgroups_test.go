@@ -5,6 +5,7 @@ package shardgroups
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strconv"
 	"testing"
@@ -82,6 +83,16 @@ func TestConfiguredShardingFollowsAndRefusesInvalidPlacement(t *testing.T) {
 		return err != nil
 	}, 5*time.Second, 10*time.Millisecond)
 	require.ErrorIs(t, w.WriteMessages(core.WithTenant(context.Background(), "tenant"), messaging.Message{Value: []byte("deleted")}), messaging.ErrUnplacedTenant)
+
+	// A valid placement keeps answering through ShardGroup until the watch is cancelled.
+	_, err = kv.Put(partition.TableKey, raw)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return placementError(m) == nil }, 5*time.Second, 10*time.Millisecond)
+	require.Never(t, func() bool { return placementError(m) != nil }, 100*time.Millisecond, 10*time.Millisecond)
+	stop()
+	require.Eventually(t, func() bool {
+		return errors.Is(placementError(m), messaging.ErrUnplacedTenant)
+	}, 5*time.Second, 10*time.Millisecond)
 }
 
 // Probe the same tenant routing used by the live-feed service without publishing.
