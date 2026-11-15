@@ -154,6 +154,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+
 	// Every Prometheus instrument this service keeps for its whole life, built in the
 	// INITIALIZE phase. See buildMetrics for why the phase matters.
 	metrics := buildMetrics()
@@ -190,7 +193,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		built, rec, err := buildIngester(writer)
+		built, rec, err := buildIngester(writer, peers)
 		if err != nil {
 			return err
 		}
@@ -198,7 +201,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		reconciler = rec
 		// Built beside the ingester, and only with it: every client that ingests charges
 		// its DATA readings against the tenant's ingest ceiling.
-		limiter = buildSampleLimiter(Microservice.InstanceConfiguration.Infrastructure, Configuration.IngestRateLimit,
+		limiter = buildSampleLimiter(peers, Configuration.IngestRateLimit,
 			adapter.IngestLimiterMetrics{SamplesShed: Microservice.NewCounter("ingest_samples_shed_total",
 				"Sparkplug readings dropped at the tenant's ingest ceiling (counted in readings).")},
 			governance.NewUnresolvedAdmissions(Microservice, governance.Ingest))
@@ -226,7 +229,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		})
 
 	if Configuration.AnyCommandsEnabled() {
-		d, err := buildDispatcher(clients, dispatchMetrics)
+		d, err := buildDispatcher(clients, dispatchMetrics, peers)
 		if err != nil {
 			return err
 		}
@@ -293,10 +296,10 @@ func commandDeliveryEndpoint(infra mscfg.InfrastructureConfiguration) (string, e
 	if infra.ServiceAuth.Secret == "" {
 		return "", fmt.Errorf("service secret not configured (infrastructure.serviceAuth) — sparkplug-ingest cannot claim commands")
 	}
-	if infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
+	if !infra.CommandDelivery.Endpoint().Configured() {
 		return "", fmt.Errorf("command-delivery endpoint not configured (infrastructure.commandDelivery) — sparkplug-ingest has sources with commands enabled and cannot claim, park or answer them")
 	}
-	return fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port), nil
+	return infra.CommandDelivery.Endpoint().GraphQLURL(), nil
 }
 
 // buildDispatcher assembles the command dispatcher over the built sources. It is called only when
@@ -308,7 +311,7 @@ func commandDeliveryEndpoint(infra mscfg.InfrastructureConfiguration) (string, e
 // hands one back when the device cannot be addressed. command:write would also let it create and
 // cancel commands for any tenant, which it has no business doing. It is a client of its own, apart
 // from the ingest path's, so neither can be widened by the other's needs.
-func buildDispatcher(clients []*host.Client, dm downlink.Metrics) (*downlink.Dispatcher, error) {
+func buildDispatcher(clients []*host.Client, dm downlink.Metrics, peers *svcclient.Peers) (*downlink.Dispatcher, error) {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	url, err := commandDeliveryEndpoint(infra)
 	if err != nil {
@@ -331,8 +334,7 @@ func buildDispatcher(clients []*host.Client, dm downlink.Metrics) (*downlink.Dis
 	if err != nil {
 		return nil, err
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest",
-		[]string{string(auth.CommandRead), string(auth.CommandClaim), string(auth.CommandPark)})
+	client := peers.Client(auth.CommandRead, auth.CommandClaim, auth.CommandPark)
 
 	sources := make([]downlink.Source, 0, len(clients))
 	for _, c := range clients {
@@ -562,16 +564,16 @@ func closePublishWriters() {
 // adapter.IngestLimiter alone (NewSampleLimiter): the Sparkplug session machine must
 // observe every message, so there is no message stage to shed at. The token is a separate
 // service token scoped to tenant:read alone, like the tenant gate's.
-func buildSampleLimiter(infra mscfg.InfrastructureConfiguration, cfg config.IngestRateLimit,
+func buildSampleLimiter(peers *svcclient.Peers, cfg config.IngestRateLimit,
 	metrics adapter.IngestLimiterMetrics, unresolved func(core.CeilingSource)) *adapter.IngestLimiter {
 	def := governance.Limits{RatePerSecond: cfg.ReadingsPerSecond, Burst: cfg.Burst}
 	resolve := core.StaticCeiling(def.RatePerSecond, def.Burst)
-	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+	seam, peerErr := peers.UserManagement(auth.TenantRead)
+	if peerErr != nil {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant Sparkplug ingest overrides disabled; metering every tenant at the platform default.")
 	} else {
-		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest",
-			[]string{string(auth.TenantRead)})
-		umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+		client := seam.Client
+		umURL := seam.URL
 		resolve = governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest).Ceiling
 	}
 	return adapter.NewSampleLimiter(resolve, metrics, unresolved)
@@ -585,7 +587,7 @@ func buildSampleLimiter(infra mscfg.InfrastructureConfiguration, cfg config.Inge
 // not at runtime (ADR-022). The service token carries device:read (lookup by external
 // id), device:write (auto-registration), and state:read (failover reconciliation reads
 // the device-state presence projection, ADR-067 SP4b) only — least privilege.
-func buildIngester(writer messaging.MessageWriter) (*host.Ingester, *host.Reconciler, error) {
+func buildIngester(writer messaging.MessageWriter, peers *svcclient.Peers) (*host.Ingester, *host.Reconciler, error) {
 	if writer == nil {
 		return nil, nil, fmt.Errorf("inbound-events writer is nil — the durable emit path was not wired before the ingester was built")
 	}
@@ -598,8 +600,7 @@ func buildIngester(writer messaging.MessageWriter) (*host.Ingester, *host.Reconc
 	if err != nil {
 		return nil, nil, err
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest",
-		[]string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.StateRead)})
+	client := peers.Client(auth.DeviceRead, auth.DeviceWrite, auth.StateRead)
 
 	ingestMetrics := buildIngestMetrics()
 	// The ADR-077 gate. A Sparkplug publisher's devices do pass the broker auth-callout,
@@ -607,7 +608,7 @@ func buildIngester(writer messaging.MessageWriter) (*host.Ingester, *host.Reconc
 	// CONNECT, and a Sparkplug host application publishes on behalf of devices over its
 	// own long-lived connection, which a purge does not interrupt. A SEPARATE service
 	// token from the client above, scoped to tenant:read alone.
-	gate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest", safetyGates)
+	gate := governance.NewTenantLifecycleGateFor(peers, safetyGates)
 	registrar := host.NewRegistrar(client, graphqlURL, gate)
 	commandRegistrar = registrar
 	tenantGate = gate
@@ -644,10 +645,10 @@ func buildIngestMetrics() host.IngestMetrics {
 // reach device-state on failover would leave devices stranded CONNECTED after a missed
 // death — so a missing coordinate must surface at startup, not as a silent gap.
 func deviceStateEndpoint(infra mscfg.InfrastructureConfiguration) (string, error) {
-	if infra.DeviceState.Hostname == "" || infra.DeviceState.Port == 0 {
+	if !infra.DeviceState.Endpoint().Configured() {
 		return "", fmt.Errorf("device-state endpoint not configured (infrastructure.deviceState) — sparkplug-ingest cannot reconcile presence on failover and would strand devices connected after a missed death")
 	}
-	return fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port), nil
+	return infra.DeviceState.Endpoint().GraphQLURL(), nil
 }
 
 // ingestEndpoint validates the infrastructure the ingest path needs and returns
@@ -659,10 +660,10 @@ func ingestEndpoint(infra mscfg.InfrastructureConfiguration) (string, error) {
 	if infra.ServiceAuth.Secret == "" {
 		return "", fmt.Errorf("service secret not configured (infrastructure.serviceAuth) — sparkplug-ingest cannot resolve devices and would drop all telemetry")
 	}
-	if infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+	if !infra.DeviceManagement.Endpoint().Configured() {
 		return "", fmt.Errorf("device-management endpoint not configured (infrastructure.deviceManagement) — sparkplug-ingest cannot resolve devices and would drop all telemetry")
 	}
-	return fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port), nil
+	return infra.DeviceManagement.Endpoint().GraphQLURL(), nil
 }
 
 // resolveBroker builds one source's MQTT connection: TLS is selected by the URL
