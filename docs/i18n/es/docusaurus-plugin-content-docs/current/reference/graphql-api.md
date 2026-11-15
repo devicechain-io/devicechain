@@ -863,6 +863,8 @@ omite de una lista, o la operación responde `NOT_FOUND`. Una suscripción `meas
 dispositivo ajeno a sus clientes se acepta y no entrega nada. Cualquier otra operación responde
 `FORBIDDEN` con `extensions.reason` igual a `SCOPE_UNSUPPORTED`.
 
+`measurementStream(deviceTokens: [String!], name: String)` acepta hasta 1000 tokens de dispositivo en una sola suscripción; se ignoran los duplicados. La lista no puede estar vacía ni combinarse con `deviceToken`. Omita ambos argumentos de dispositivo para recibir lecturas de todos los dispositivos. Los mismos filtros de ámbito de acceso y nombre se aplican a cada lectura.
+
 Un evento registrado mientras el dispositivo no pertenecía a ningún cliente no es visible para un
 miembro con acceso limitado. Tampoco lo es una alarma generada antes de esta versión: las alarmas
 registran sus clientes solo a partir de esta versión. El estado en vivo de un dispositivo anterior a

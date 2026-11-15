@@ -10,6 +10,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/integrity"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
@@ -69,8 +71,9 @@ func decodeMeasurements(msg messaging.Message, tenant string) []messaging.Keyed[
 // scope is accepted and simply stays silent, exactly as one naming a device that never
 // reports would — which also tells the caller nothing about whether that device exists.
 func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
-	DeviceToken *string
-	Name        *string
+	DeviceToken  *string
+	DeviceTokens *[]string
+	Name         *string
 }) (<-chan *MeasurementEventResolver, error) {
 	scope, err := auth.AuthorizeScoped(ctx, auth.EventRead)
 	if err != nil {
@@ -82,6 +85,25 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 	}
 
 	var keys []string
+	if args.DeviceTokens != nil {
+		if args.DeviceToken != nil {
+			return nil, integrity.NewRefusal(integrity.ClassInvalid, "deviceTokens cannot be combined with deviceToken")
+		}
+		tokens := *args.DeviceTokens
+		if len(tokens) == 0 {
+			return nil, integrity.NewRefusal(integrity.ClassInvalid, "deviceTokens must not be empty")
+		}
+		if len(tokens) > rdb.MaxLookupKeys {
+			return nil, limit.Exceeded("deviceTokens", len(tokens), rdb.MaxLookupKeys)
+		}
+		seen := make(map[string]struct{}, len(tokens))
+		for _, token := range tokens {
+			if _, ok := seen[token]; !ok {
+				seen[token] = struct{}{}
+				keys = append(keys, token)
+			}
+		}
+	}
 	if args.DeviceToken != nil {
 		keys = []string{*args.DeviceToken}
 	}

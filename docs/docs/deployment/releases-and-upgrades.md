@@ -764,6 +764,10 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 - **Live measurement, alarm, and detection subscriptions share feeds per tenant.** Each service pod now reads each tenant's live feed once for `measurementStream`, `alarmStream`, and `detectionStream`, decoding each message once and dispatching by device, alarm originator, or detection profile before applying each subscriber's filters and access scope. A dashboard with many subscriptions no longer multiplies the decoding work per event. What a subscription receives is unchanged. Each of the three subscription types has its own ceiling of 5,000 concurrent subscriptions per tenant per pod; exceeding it returns `LIMIT_EXCEEDED`. Close unused live views or spread clients across pods.
 
+#### Additions {#v170-additions}
+
+- `measurementStream(deviceTokens:)` streams readings from up to 1000 devices on one subscription. A pod still on v1.6 rejects the argument during the rolling upgrade, so clients should send it only once every event-management pod runs v1.7, or fall back to one subscription per device when it is refused.
+
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 
 - **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 time buckets are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 64 per process before reading or parsing. Message admission reserves up to 4 slots per batch; valid configured batches (16 entries by default) execute tools in waves within that cap. Every entry still counts toward the caller's rate limit; excess requests receive HTTP 429 with Retry-After. Tools are cancelled and execution slots released when their HTTP request ends. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.
