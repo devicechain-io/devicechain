@@ -31,6 +31,7 @@ type Detector interface {
 	SetExpected(key SeriesKey, since time.Time)
 	RemoveExpected(key SeriesKey)
 	ClearRaised(key SeriesKey)
+	ClearRaisedIfNotAfter(key SeriesKey, at time.Time)
 	Drain() []Detection
 	DrainLateSamples() uint64
 	Watermark() time.Time

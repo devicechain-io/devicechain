@@ -15,7 +15,7 @@ import (
 type expectedArmer interface {
 	CarryRaised(successor map[string]string, skip func(core.SeriesKey) bool) int
 	IsRaised(core.SeriesKey) bool
-	ClearRaised(core.SeriesKey)
+	ClearRaisedIfNotAfter(core.SeriesKey, time.Time)
 	SetExpected(key core.SeriesKey, since time.Time)
 	RemoveExpected(key core.SeriesKey)
 	ExpectedKeys() []core.SeriesKey
@@ -181,6 +181,7 @@ func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry, skip func(core.SeriesKe
 	// threshold latches created after the actual version transition.
 	moved := 0
 	if !had || prev.version != a.ActiveVersionToken {
+		d.invalidateDeferredThresholds()
 		moved = d.carryHandoff(pairs, skip, nil)
 	}
 	if had && prev.version != a.ActiveVersionToken {
@@ -564,8 +565,8 @@ func (d *DeadmanArmer) carryHandoff(pairs map[string]string, skip func(core.Seri
 // ThresholdEmitted settles predecessor latches as soon as a successor speaks,
 // even during replay when no deferred-pair record survives. Clearing emits no
 // Resolved: the successor's own edges now represent the alarm. This runs on the
-// processor loop; ConcurrentSharded.ClearRaised queues the drop in the owning
-// shard, just like the processor's publication drops, before the snapshot barrier.
+// processor loop in engine emission order. The conditional clear preserves any
+// newer episode already processed by a concurrent shard.
 func (d *DeadmanArmer) ThresholdEmitted(det core.Detection) {
 	if det.Kind != core.Threshold {
 		return
@@ -574,15 +575,15 @@ func (d *DeadmanArmer) ThresholdEmitted(det core.Detection) {
 	if sr, ok := d.reg.Lookup(key.Rule); ok {
 		if profile, _, parsed := ProfileAndRuleToken(key.Rule); parsed {
 			for _, old := range d.thresholdPredecessors[profKey{sr.Tenant, profile}][key.Rule] {
-				// Threshold ClearRaised is a no-op when already unlatched. Avoid
-				// an IsRaised read/barrier for each predecessor on concurrent engines.
-				d.engine.ClearRaised(core.SeriesKey{Rule: old, Series: key.Series})
+				d.engine.ClearRaisedIfNotAfter(core.SeriesKey{Rule: old, Series: key.Series}, det.At)
 			}
 		}
 	}
 	for old, next := range d.deferredThresholds {
 		if key == next {
-			d.engine.ClearRaised(old)
+			if current, paired := d.CarriedSuccessor(old); paired && current == next {
+				d.engine.ClearRaisedIfNotAfter(old, det.At)
+			}
 			delete(d.deferredThresholds, old)
 		} else if key == old && det.Edge == core.EdgeResolved {
 			// The old key's own resolve has already unlatched it.
@@ -594,7 +595,14 @@ func (d *DeadmanArmer) ThresholdEmitted(det core.Detection) {
 // ThresholdPublished also fences Reconcile against successor edges published
 // during replay. An old Resolved stays invalidating even if it later re-raises.
 func (d *DeadmanArmer) ThresholdPublished(det core.Detection, replay bool) {
-	d.ThresholdEmitted(det)
+	if det.Kind == core.Threshold {
+		key := core.SeriesKey{Rule: det.RuleID, Series: det.Series}
+		for old, next := range d.deferredThresholds {
+			if key == next || (key == old && det.Edge == core.EdgeResolved) {
+				delete(d.deferredThresholds, old)
+			}
+		}
+	}
 	if !replay || det.Kind != core.Threshold {
 		return
 	}
@@ -604,6 +612,16 @@ func (d *DeadmanArmer) ThresholdPublished(det core.Detection, replay bool) {
 	key := core.SeriesKey{Rule: det.RuleID, Series: det.Series}
 	if d.replayThresholdEdges[key] != core.EdgeResolved {
 		d.replayThresholdEdges[key] = det.Edge
+	}
+}
+
+// invalidateDeferredThresholds runs after the active view changes, before a
+// handoff can record new deferrals. A rollback must never retain an old pairing.
+func (d *DeadmanArmer) invalidateDeferredThresholds() {
+	for old, next := range d.deferredThresholds {
+		if current, paired := d.CarriedSuccessor(old); !paired || current != next {
+			delete(d.deferredThresholds, old)
+		}
 	}
 }
 

@@ -506,6 +506,11 @@ func (c *ConcurrentSharded) ClearRaised(key SeriesKey) {
 	c.ownerAsync(c.ownerOf(key.Rule, key.Series), func(e *Engine) { e.ClearRaised(key) })
 }
 
+// ClearRaisedIfNotAfter checks and clears together in the owning shard.
+func (c *ConcurrentSharded) ClearRaisedIfNotAfter(key SeriesKey, at time.Time) {
+	c.ownerCall(c.ownerOf(key.Rule, key.Series), func(e *Engine) { e.ClearRaisedIfNotAfter(key, at) })
+}
+
 // Collect returns the detections the shards have made so far without waiting, in exactly the order
 // one engine would have emitted them: by operation, then by the place inside the operation (ord.go:
 // timers, then panes, then released samples, then the message's events in message order), then by

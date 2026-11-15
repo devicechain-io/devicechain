@@ -270,6 +270,10 @@ func (s *Sharded) RemoveExpected(key SeriesKey) { s.owner(key).RemoveExpected(ke
 // ClearRaised drops a raised latch in the shard that holds it.
 func (s *Sharded) ClearRaised(key SeriesKey) { s.owner(key).ClearRaised(key) }
 
+func (s *Sharded) ClearRaisedIfNotAfter(key SeriesKey, at time.Time) {
+	s.owner(key).ClearRaisedIfNotAfter(key, at)
+}
+
 // Drain returns and clears the detections every shard emitted. Order is each shard's emission order
 // in turn: per series it is the order a single engine would give, and across series it is not
 // promised.

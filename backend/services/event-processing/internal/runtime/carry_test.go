@@ -54,7 +54,7 @@ func TestCarryPairsAllRetainedVersionsByKind(t *testing.T) {
 	}
 }
 
-// Startup has no deferred-pair records. Both edge hooks must settle all retained
+// Startup has no deferred-pair records. Emission must settle retained
 // predecessors, while leaving other series, profiles, tenants and kinds alone.
 func TestThresholdEdgesClearRetainedPredecessors(t *testing.T) {
 	for _, published := range []bool{false, true} {
@@ -83,14 +83,14 @@ func TestThresholdEdgesClearRetainedPredecessors(t *testing.T) {
 				e.ProcessEvent(core.Event{Seq: uint64(i + 1), Key: key, Time: ts(i + 1), Match: true})
 			}
 			e.Drain()
-			det := core.Detection{RuleID: v3.Compiled.ID, Series: "dev", Kind: core.Threshold, Edge: core.EdgeResolved}
+			det := core.Detection{RuleID: v3.Compiled.ID, Series: "dev", Kind: core.Threshold, Edge: core.EdgeResolved, At: ts(20)}
 			if published {
 				d.ThresholdPublished(det, true)
 			} else {
 				d.ThresholdEmitted(det)
 			}
 			for i, key := range keys {
-				if got, want := e.IsRaised(key), i >= 2; got != want {
+				if got, want := e.IsRaised(key), published || i >= 2; got != want {
 					t.Errorf("%+v raised=%v, want %v", key, got, want)
 				}
 			}
@@ -102,13 +102,13 @@ func TestThresholdEdgesClearRetainedPredecessors(t *testing.T) {
 			reg.Upsert(v4)
 			e.UpsertRule(v4.Compiled.Core)
 			d.ApplyActiveVersion(ActiveEntry{Tenant: "acme", ProfileToken: "p", ActiveVersionToken: "p@v4", PublishedAt: ts(30)}, func(core.SeriesKey) bool { return true })
-			d.ThresholdEmitted(core.Detection{RuleID: v4.Compiled.ID, Series: "untouched", Kind: core.Threshold, Edge: core.EdgeRaised})
+			d.ThresholdEmitted(core.Detection{RuleID: v4.Compiled.ID, Series: "untouched", Kind: core.Threshold, Edge: core.EdgeRaised, At: ts(30)})
 			if e.IsRaised(keys[2]) {
 				t.Fatal("live pairing refresh did not settle the skipped-version latch")
 			}
 			d.RemoveTenant("acme")
 			e.ProcessEvent(core.Event{Seq: 7, Key: keys[0], Time: ts(31), Match: true})
-			d.ThresholdEmitted(core.Detection{RuleID: v4.Compiled.ID, Series: "dev", Kind: core.Threshold, Edge: core.EdgeResolved})
+			d.ThresholdEmitted(core.Detection{RuleID: v4.Compiled.ID, Series: "dev", Kind: core.Threshold, Edge: core.EdgeResolved, At: ts(40)})
 			if !e.IsRaised(keys[0]) {
 				t.Fatal("erased tenant retained its predecessor pairing")
 			}

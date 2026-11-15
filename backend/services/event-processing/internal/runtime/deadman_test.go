@@ -30,7 +30,7 @@ type armCall struct {
 
 func (f *fakeArmer) CarryRaised(map[string]string, func(core.SeriesKey) bool) int { return 0 }
 func (f *fakeArmer) IsRaised(core.SeriesKey) bool                                 { return false }
-func (f *fakeArmer) ClearRaised(core.SeriesKey)                                   {}
+func (f *fakeArmer) ClearRaisedIfNotAfter(core.SeriesKey, time.Time)              {}
 
 func newFakeArmer() *fakeArmer { return &fakeArmer{armed: map[core.SeriesKey]time.Time{}} }
 

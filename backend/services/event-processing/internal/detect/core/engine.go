@@ -1472,6 +1472,14 @@ func (e *Engine) IsRaised(key SeriesKey) bool {
 	return ok
 }
 
+// ClearRaisedIfNotAfter settles only the episode represented by an edge at at.
+// A newer raise may already exist when a concurrent engine's output is collected.
+func (e *Engine) ClearRaisedIfNotAfter(key SeriesKey, at time.Time) {
+	if raised, ok := e.raised[key]; ok && !raised.After(at) {
+		e.ClearRaised(key)
+	}
+}
+
 // ClearRaised drops the two-edge latch for a series WITHOUT emitting a Resolved — the escape hatch
 // for the runtime when it TERMINALLY drops a Raised detection (a stale-roster absence, an orphan/
 // backstop reject, a marshal failure) after emit already latched it. Without it the latch would
