@@ -171,6 +171,18 @@ export interface BoundDevicesWording {
 }
 ```
 
+## `.:BuiltinOptionIssue`
+
+```ts
+// served as BuiltinOptionIssue
+export interface OptionIssue {
+    widgetType: WidgetType;
+    key: string;
+    code: OptionIssueCode;
+    message: string;
+}
+```
+
 ## `.:CandidatesState`
 
 ```ts

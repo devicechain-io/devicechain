@@ -158,6 +158,8 @@ Cada campo de ubicación es un **string** JSON, incluidos los numéricos. Cada u
 
 #### NewRelationship {#new-relationship-payload}
 
+Cuando se crea la relación, su evento se conserva en el historial de eventos como un sobre con sus anclajes.
+
 Crea una relación desde el dispositivo emisor hacia otra entidad del mismo tenant. Este payload no tiene array `entries`, y sus tres claves se leen por su nombre exacto, así que las mayúsculas importan. Una clave ausente no se rechaza al decodificar el mensaje: se lee como un string vacío, y el evento falla después en la resolución, como en los casos siguientes.
 
 Un dispositivo no puede crear relaciones de propiedad ni de contención: un `NewRelationship` que nombre un tipo con seguimiento (incluido `assigned` y cualquier tipo del tenant marcado con seguimiento) o el tipo integrado `contains` se rechaza y se registra en `failed-events` con motivo `Invalid` en su primera entrega, sin reintentos. Asigna los dispositivos con un código de reclamación o la mutación `createEntityRelationship`. Los tipos sin seguimiento, incluido `member`, funcionan como antes.

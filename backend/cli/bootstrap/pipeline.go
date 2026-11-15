@@ -138,6 +138,11 @@ type State struct {
 	// is on: every path that never runs the detection (bootstrap, upgrade, a State built by hand, a
 	// detection error) lands on the noisy side, never the silent one.
 	UnscrapedControlPlane []string
+	// BackupStandardDisk is install's reading that the cluster provisions GKE persistent disks,
+	// so the backup store's new volume gets a dedicated pd-standard class
+	// (settleBackupStandardDisk). Set only by install; false everywhere else, which is the
+	// cluster root's own default.
+	BackupStandardDisk bool
 	// AlertRouting is the alert-routing flags of `dcctl install` or `dcctl upgrade`. The zero
 	// value asks for nothing, which keeps whatever routing the cluster already has.
 	AlertRouting AlertRoutingRequest
