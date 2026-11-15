@@ -754,7 +754,19 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 ## Recent releases {#recent-releases}
 
-The release in development (`v1.6`) and the three most recent minor releases (`v1.5`, `v1.4` and `v1.3`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
+The release in development (`v1.7`) and the three most recent minor releases (`v1.6`, `v1.5` and `v1.4`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
+
+### v1.7.0 — in development {#v170-upgrade}
+
+`v1.7.0` is an in-place upgrade from `v1.6.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
+
+#### Publishing threshold rules keeps existing alarms {#v170-publish-keeps-alarms}
+
+Publishing a profile preserves an already-raised threshold rule when its rule token and condition type continue. This carry, together with the existing absence-rule handoff, avoids re-sending commands, webhook calls and connector publishes while a device stays in breach. Changes to actions or severity apply from the next rising edge for these rules. Other rule kinds, including repeating and correlation rules, may still repeat their actions on a publish while a device stays in breach.
+
+While an old event-processing pod still holds the detection lease during a rolling upgrade, no carry happens, which is the previous behaviour.
+
+- **Nothing needs doing.**
 
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 

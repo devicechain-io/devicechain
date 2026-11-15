@@ -15,6 +15,7 @@ import (
 type expectedArmer interface {
 	CarryRaised(successor map[string]string, skip func(core.SeriesKey) bool) int
 	IsRaised(core.SeriesKey) bool
+	ClearRaised(core.SeriesKey)
 	SetExpected(key core.SeriesKey, since time.Time)
 	RemoveExpected(key core.SeriesKey)
 	ExpectedKeys() []core.SeriesKey
@@ -98,19 +99,23 @@ type DeadmanArmer struct {
 	// Only handoffs actually deferred for pending output may be retried. Late
 	// historical latches created after a handoff are never retry candidates.
 	deferredThresholds map[core.SeriesKey]core.SeriesKey
+	// Inverse of the current threshold pairing, including every retained old
+	// version. Built on membership changes, not on the per-detection hot path.
+	thresholdPredecessors map[profKey]map[string][]string
 	// Replay publications fence the once-only post-replay carry. These are
-	// transient; neither map changes the snapshot or the rolling-upgrade wire.
+	// transient; the carry bookkeeping changes no snapshot or rolling-upgrade wire.
 	replayThresholdEdges map[core.SeriesKey]core.EdgeKind
 }
 
 // NewDeadmanArmer builds an empty armer over the rule registry and the engine.
 func NewDeadmanArmer(reg *RuleRegistry, engine expectedArmer) *DeadmanArmer {
 	return &DeadmanArmer{
-		reg:       reg,
-		engine:    engine,
-		active:    map[profKey]activeState{},
-		roster:    map[devKey]rosterMember{},
-		byProfile: map[profKey]map[string]struct{}{},
+		reg:                   reg,
+		engine:                engine,
+		active:                map[profKey]activeState{},
+		roster:                map[devKey]rosterMember{},
+		byProfile:             map[profKey]map[string]struct{}{},
+		thresholdPredecessors: map[profKey]map[string][]string{},
 	}
 }
 
@@ -170,11 +175,13 @@ func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry, skip func(core.SeriesKe
 	pk := profKey{a.Tenant, a.ProfileToken}
 	prev, had := d.active[pk]
 	d.active[pk] = activeState{version: a.ActiveVersionToken, publishedAt: a.PublishedAt}
+	pairs := d.successors(a.Tenant, a.ProfileToken)
+	d.indexThresholdPredecessors(pk, pairs)
 	// Redelivered active facts must not start a fresh handoff for historical
 	// threshold latches created after the actual version transition.
 	moved := 0
 	if !had || prev.version != a.ActiveVersionToken {
-		moved = d.carryHandoff(d.successors(a.Tenant, a.ProfileToken), skip, nil)
+		moved = d.carryHandoff(pairs, skip, nil)
 	}
 	if had && prev.version != a.ActiveVersionToken {
 		for dev := range d.byProfile[pk] {
@@ -206,6 +213,9 @@ func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry, skip func(core.SeriesKe
 func (d *DeadmanArmer) loadMembership(rosters []RosterEntry, actives []ActiveEntry) {
 	for _, a := range actives {
 		d.active[profKey{a.Tenant, a.ProfileToken}] = activeState{version: a.ActiveVersionToken, publishedAt: a.PublishedAt}
+	}
+	for pk := range d.active {
+		d.indexThresholdPredecessors(pk, d.successors(pk.tenant, pk.profileToken))
 	}
 	for _, e := range rosters {
 		d.roster[devKey{e.Tenant, e.DeviceToken}] = rosterMember{profileToken: e.ProfileToken, expectedSince: e.ExpectedSince}
@@ -293,6 +303,16 @@ func (d *DeadmanArmer) successors(tenant, profile string) map[string]string {
 		}
 	}
 	return out
+}
+
+func (d *DeadmanArmer) indexThresholdPredecessors(pk profKey, pairs map[string]string) {
+	previous := map[string][]string{}
+	for old, next := range pairs {
+		if sr, ok := d.reg.Lookup(old); ok && sr.Compiled.Core.Kind == core.Threshold {
+			previous[next] = append(previous[next], old)
+		}
+	}
+	d.thresholdPredecessors[pk] = previous
 }
 
 // CarriedForward reports a same-kind successor in the device's current profile.
@@ -393,6 +413,7 @@ func (d *DeadmanArmer) reset() {
 	d.active = map[profKey]activeState{}
 	d.roster = map[devKey]rosterMember{}
 	d.byProfile = map[profKey]map[string]struct{}{}
+	d.thresholdPredecessors = map[profKey]map[string][]string{}
 }
 
 // RemoveTenant drops one tenant's membership views and transient carry records, and reports how many entries it
@@ -413,6 +434,11 @@ func (d *DeadmanArmer) reset() {
 func (d *DeadmanArmer) RemoveTenant(tenant string) int {
 	if tenant == "" {
 		return 0
+	}
+	for pk := range d.thresholdPredecessors {
+		if pk.tenant == tenant {
+			delete(d.thresholdPredecessors, pk)
+		}
 	}
 	for old := range d.deferredThresholds {
 		if t, ok := RuleTenant(old.Rule); ok && t == tenant {
@@ -462,8 +488,8 @@ func (d *DeadmanArmer) Reconcile(rosters []RosterEntry, actives []ActiveEntry, s
 	d.loadMembership(rosters, actives)
 	// Carry only POST-replay: a pre-replay move would discard a pre-handoff
 	// resolve already published by the original run, leaving a cleared alarm latched.
-	// Publications during this replay fence stale predecessor latches. The
-	// snapshot contains no published-edge history from before its sequence.
+	// Keep the replay fence as well as successor-edge cleanup: an old recovery
+	// followed by an old re-raise must still prevent carrying that replay episode.
 	d.deferredThresholds = nil
 	for pk := range d.active {
 		pairs := d.successors(pk.tenant, pk.profileToken)
@@ -535,15 +561,31 @@ func (d *DeadmanArmer) carryHandoff(pairs map[string]string, skip func(core.Seri
 	})
 }
 
-// ThresholdEmitted invalidates a deferred handoff as soon as a successor edge
-// or an old recovery is emitted. Retrying publication cannot revive that pair.
+// ThresholdEmitted settles predecessor latches as soon as a successor speaks,
+// even during replay when no deferred-pair record survives. Clearing emits no
+// Resolved: the successor's own edges now represent the alarm. This runs on the
+// processor loop; ConcurrentSharded.ClearRaised queues the drop in the owning
+// shard, just like the processor's publication drops, before the snapshot barrier.
 func (d *DeadmanArmer) ThresholdEmitted(det core.Detection) {
 	if det.Kind != core.Threshold {
 		return
 	}
 	key := core.SeriesKey{Rule: det.RuleID, Series: det.Series}
+	if sr, ok := d.reg.Lookup(key.Rule); ok {
+		if profile, _, parsed := ProfileAndRuleToken(key.Rule); parsed {
+			for _, old := range d.thresholdPredecessors[profKey{sr.Tenant, profile}][key.Rule] {
+				// Threshold ClearRaised is a no-op when already unlatched. Avoid
+				// an IsRaised read/barrier for each predecessor on concurrent engines.
+				d.engine.ClearRaised(core.SeriesKey{Rule: old, Series: key.Series})
+			}
+		}
+	}
 	for old, next := range d.deferredThresholds {
-		if key == next || (key == old && det.Edge == core.EdgeResolved) {
+		if key == next {
+			d.engine.ClearRaised(old)
+			delete(d.deferredThresholds, old)
+		} else if key == old && det.Edge == core.EdgeResolved {
+			// The old key's own resolve has already unlatched it.
 			delete(d.deferredThresholds, old)
 		}
 	}

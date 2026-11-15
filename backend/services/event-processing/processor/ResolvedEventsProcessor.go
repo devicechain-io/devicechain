@@ -1612,6 +1612,11 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		observedWatermark := rp.restoredWatermark
 		rp.closeDetector()
 		rp.engine = rp.newDetector()
+		if rp.armer != nil {
+			// Threshold edge cleanup now mutates the engine through the armer.
+			// Keep it on the replacement even before post-replay reconcile.
+			rp.armer.BindEngine(rp.engine)
+		}
 		rp.dirty = false
 		rp.committedSeq = 0
 		// Clear the stale row (the deliberate backward move Save's monotonic guard

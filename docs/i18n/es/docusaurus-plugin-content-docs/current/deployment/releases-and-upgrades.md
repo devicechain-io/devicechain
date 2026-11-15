@@ -799,7 +799,19 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 ## Versiones recientes {#recent-releases}
 
-La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (`v1.5`, `v1.4` y `v1.3`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (`v1.6`, `v1.5` y `v1.4`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+
+### v1.7.0 — en desarrollo {#v170-upgrade}
+
+`v1.7.0` es una actualización in situ desde `v1.6.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
+
+#### Publicar reglas de umbral conserva las alarmas existentes {#v170-publish-keeps-alarms}
+
+Publicar un perfil conserva el estado de una regla de umbral que ya está en alarma si mantiene su token y su tipo de condición. Este traspaso, junto con el traspaso existente de las reglas de ausencia, evita volver a enviar comandos, llamadas webhook y publicaciones a conectores mientras un dispositivo siga incumpliendo la condición. Los cambios de acciones o gravedad se aplican desde el siguiente flanco de subida de estas reglas. Los demás tipos de regla, incluidas las de repetición y correlación, pueden seguir repitiendo sus acciones al publicar mientras el dispositivo siga incumpliendo la condición.
+
+Mientras un pod antiguo de event-processing siga manteniendo la concesión de detección durante una actualización gradual, no se transfiere el estado de alarma, como ocurría antes.
+
+- **No hay que hacer nada.**
 
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 
