@@ -225,7 +225,7 @@ func customerTypeFamily() putest.Family[*Api] {
 		},
 		NewRequest: func() any { return new(CustomerTypeUpdateRequest) },
 		Update: func(api *Api, ctx context.Context, token string, req any) error {
-			_, err := api.UpdateCustomerType(ctx, token, req.(*CustomerTypeUpdateRequest))
+			_, err := api.UpdateCustomerType(ctx, token, nil, req.(*CustomerTypeUpdateRequest))
 			return err
 		},
 		Fields: append(brandedFields(
