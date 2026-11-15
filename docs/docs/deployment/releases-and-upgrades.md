@@ -756,6 +756,10 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The release in development (`v1.6`) and the three most recent minor releases (`v1.5`, `v1.4` and `v1.3`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
 
+### v1.7.0 — facet type-change protection {#v170-upgrade}
+
+Changing a facet's value type is now refused while live SHARED attributes in the same tenant, member family and key hold non-null values tagged with its old type. Clear or migrate those values before changing the declaration. Same-type label and vocabulary edits remain available. No schema migration or configuration change is needed. The check takes effect as device-management pods are replaced; older pods still accept these changes during the rolling upgrade. Pause facet type changes until the rollout finishes.
+
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 
 - **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 time buckets are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 64 per process before reading or parsing. Message admission reserves up to 4 slots per batch; valid configured batches (16 entries by default) execute tools in waves within that cap. Every entry still counts toward the caller's rate limit; excess requests receive HTTP 429 with Retry-After. Tools are cancelled and execution slots released when their HTTP request ends. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.

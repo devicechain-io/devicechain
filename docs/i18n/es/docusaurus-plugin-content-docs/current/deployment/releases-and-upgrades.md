@@ -801,6 +801,10 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (`v1.5`, `v1.4` y `v1.3`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
 
+### v1.7.0 — protección al cambiar el tipo de faceta {#v170-upgrade}
+
+Se rechaza cambiar el tipo de valor de una faceta mientras existan atributos SHARED activos del mismo tenant, familia de miembros y clave con valores no nulos del tipo anterior. Borre o migre esos valores antes de cambiar la declaración. Se pueden seguir editando la etiqueta y el vocabulario sin cambiar el tipo. No se necesita migración del esquema ni cambio de configuración. La comprobación se activa al reemplazar los pods de device-management; los pods antiguos todavía aceptan estos cambios durante la actualización gradual. Suspenda los cambios de tipo de faceta hasta que termine el despliegue.
+
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 
 - **Límites de memoria de MCP:** se rechazan por completo las respuestas GraphQL de más de 256 KiB y las agregaciones de más de 1.000 bloques temporales; reduce el intervalo de fechas, selecciona una métrica o amplía los bloques temporales. Los POST y las solicitudes con cuerpo se limitan a 4 en curso por usuario y 64 por proceso antes de leer o analizar el cuerpo. La admisión de mensajes reserva hasta 4 plazas por lote; los lotes válidos según la configuración (16 entradas por defecto) ejecutan las herramientas por grupos dentro de ese límite. Cada entrada sigue contando para el límite de frecuencia del usuario; las solicitudes adicionales reciben HTTP 429 con Retry-After. Al terminar la solicitud HTTP, se cancelan las herramientas y se liberan sus plazas de ejecución. La reserva de lectura del cuerpo se libera antes de ejecutar la herramienta; se mantiene el límite de 1 MiB por solicitud. No requiere cambios de configuración.
