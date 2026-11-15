@@ -6,8 +6,10 @@ package placement
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/partition"
 	"github.com/stretchr/testify/require"
 )
@@ -75,14 +77,14 @@ func newTable() partition.Table {
 func TestSyncMakesTheMirrorEqualTheTable(t *testing.T) {
 	b := newBucket()
 	src := &source{table: newTable()}
-	require.NoError(t, Sync(context.Background(), src, b))
+	require.NoError(t, Sync(context.Background(), src, b, nil))
 	require.NoError(t, partition.Verify(b, src.table))
 
 	// A change in the database reaches the mirror on the next pass, and only then.
 	src.table.Groups[2] = 2
 	src.table.Generation++
 	require.Error(t, partition.Verify(b, src.table))
-	require.NoError(t, Sync(context.Background(), src, b))
+	require.NoError(t, Sync(context.Background(), src, b, nil))
 	require.NoError(t, partition.Verify(b, src.table))
 }
 
@@ -90,7 +92,7 @@ func TestSyncMakesTheMirrorEqualTheTable(t *testing.T) {
 // table must say so, not return nil.
 func TestSyncReportsAMirrorThatDoesNotHoldTheTable(t *testing.T) {
 	lying := &lyingBucket{bucket: *newBucket()}
-	require.Error(t, Sync(context.Background(), &source{table: newTable()}, lying))
+	require.Error(t, Sync(context.Background(), &source{table: newTable()}, lying, nil))
 }
 
 // lyingBucket accepts every write and stores something else.
@@ -111,7 +113,7 @@ func TestSyncRefusesAMirrorWithAnotherPAndItIsFatal(t *testing.T) {
 	b := newBucket()
 	require.NoError(t, partition.Publish(b, partition.NewTable(partition.DefaultP*2)))
 
-	err := Sync(context.Background(), &source{table: newTable()}, b)
+	err := Sync(context.Background(), &source{table: newTable()}, b, nil)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, partition.ErrPChanged))
 	require.True(t, IsFatal(err))
@@ -119,7 +121,7 @@ func TestSyncRefusesAMirrorWithAnotherPAndItIsFatal(t *testing.T) {
 
 func TestOtherFailuresAreNotFatal(t *testing.T) {
 	b := newBucket()
-	err := Sync(context.Background(), &source{err: errors.New("db away")}, b)
+	err := Sync(context.Background(), &source{err: errors.New("db away")}, b, nil)
 	require.Error(t, err)
 	require.False(t, IsFatal(err))
 	require.Empty(t, b.m, "an unreadable table must not blank or seed the mirror")
@@ -136,7 +138,7 @@ func TestSyncRereadsOnceWhenItsReadWentStale(t *testing.T) {
 	stale := newTable()
 	stale.Generation = 4
 	src := &source{table: stale, after: func(s *source) { s.table = newer }}
-	require.NoError(t, Sync(context.Background(), src, b))
+	require.NoError(t, Sync(context.Background(), src, b, nil))
 	require.Equal(t, 2, src.reads)
 	require.NoError(t, partition.Verify(b, newer), "the mirror must never have gone backwards")
 }
@@ -150,7 +152,7 @@ func TestSyncGivesUpAfterOneReread(t *testing.T) {
 	stale := newTable()
 	stale.Generation = 4
 	src := &source{table: stale}
-	err := Sync(context.Background(), src, b)
+	err := Sync(context.Background(), src, b, nil)
 	require.True(t, errors.Is(err, partition.ErrStale), "%v", err)
 	require.Equal(t, 2, src.reads)
 	require.False(t, IsFatal(err))
@@ -170,16 +172,16 @@ func TestALazyBucketRetriesItsOpenUntilItWorks(t *testing.T) {
 	src := &source{table: newTable()}
 
 	for i := 0; i < 2; i++ {
-		err := Sync(context.Background(), src, lazy)
+		err := Sync(context.Background(), src, lazy, nil)
 		require.ErrorContains(t, err, "broker away")
 		require.False(t, IsFatal(err))
 	}
 	require.Empty(t, real.m)
 
-	require.NoError(t, Sync(context.Background(), src, lazy))
+	require.NoError(t, Sync(context.Background(), src, lazy, nil))
 	require.NoError(t, partition.Verify(real, src.table))
 	opens = 0
-	require.NoError(t, Sync(context.Background(), src, lazy))
+	require.NoError(t, Sync(context.Background(), src, lazy, nil))
 	require.Equal(t, 0, opens, "an opened bucket is kept")
 }
 
@@ -192,14 +194,42 @@ func TestPeriodicPassReportsAChangedPLoudly(t *testing.T) {
 
 	b := newBucket()
 	require.NoError(t, partition.Publish(b, partition.NewTable(partition.DefaultP*2)))
-	err := mirrorPass(&source{table: newTable()}, b, onFatal)(context.Background())
+	err := mirrorPass(&source{table: newTable()}, b, nil, onFatal)(context.Background())
 	require.Error(t, err)
 	require.True(t, IsFatal(err))
 	require.Len(t, reported, 1)
 	require.True(t, IsFatal(reported[0]))
 
 	reported = nil
-	err = mirrorPass(&source{err: errors.New("db away")}, newBucket(), onFatal)(context.Background())
+	err = mirrorPass(&source{err: errors.New("db away")}, newBucket(), nil, onFatal)(context.Background())
 	require.Error(t, err)
 	require.Empty(t, reported)
+}
+
+func TestSyncNatsShardGroupLimit(t *testing.T) {
+	for _, configured := range []bool{true, false} {
+		for _, group := range []int{1, 2, 3} {
+			t.Run(fmt.Sprintf("configured=%t/group=%d", configured, group), func(t *testing.T) {
+				var cfg *config.NatsShardGroupsConfiguration
+				if configured {
+					cfg = &config.NatsShardGroupsConfiguration{Count: 2}
+				}
+				table := newTable()
+				table.Groups[3] = group
+				b := newBucket()
+				err := Sync(context.Background(), &source{table: table}, b, cfg)
+				if configured && group >= 2 {
+					require.ErrorContains(t, err, fmt.Sprintf("group %d, count 2", group))
+					require.ErrorContains(t, err, "nats.shardGroups.count must be raised first")
+					require.Empty(t, b.m)
+					require.Zero(t, b.next, "invalid placement must never write the bucket")
+					require.Error(t, mirrorPass(&source{table: table}, b, cfg, func(error) {})(context.Background()))
+					require.Zero(t, b.next)
+				} else {
+					require.NoError(t, err)
+					require.NoError(t, partition.Verify(b, table))
+				}
+			})
+		}
+	}
 }
