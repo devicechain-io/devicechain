@@ -4,6 +4,7 @@
 package main
 
 import (
+	"github.com/devicechain-io/dc-microservice/service"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -26,7 +27,7 @@ func gateReading(t *testing.T, area string) (*governance.SafetyGates, func(gate 
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: area}
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
-	gates := governance.NewSafetyGates(ms)
+	gates := service.FromManagers(ms, service.Managers{}).SafetyGates()
 	return gates, func(gate string) (float64, bool) {
 		families, err := reg.Gather()
 		require.NoError(t, err)
@@ -78,9 +79,8 @@ func TestIngestTenantGateRecordsItsDecision(t *testing.T) {
 // The gate decisions this service makes, by function name.
 var decisions = []string{"ingestTenantGates"}
 
-// callSitesPassTheServiceGates is a SOURCE-LEVEL check, chosen because afterMicroserviceInitialized
-// cannot run in a unit test (it needs the whole microservice, a database and a broker). It parses
-// main.go and asserts three things the helper tests cannot see: the gauge is built exactly once, in
+// This source-level check complements the catalog boot test, which drives the real
+// initializer with optional gates disabled. It parses main.go and pins all gate decisions: the service gates are obtained exactly once, in
 // afterMicroserviceInitialized, into safetyGates; every call to a gate decision passes exactly
 // safetyGates (a nil, or a handle built somewhere else, would leave the series absent and the
 // SafetyGateDisabled alert blind); and each decision is called at least once (so a renamed or
@@ -109,7 +109,11 @@ func TestEveryGateDecisionIsCalledWithTheServiceGates(t *testing.T) {
 			case *ast.SelectorExpr:
 				name = f.Sel.Name
 			}
-			if name == "NewSafetyGates" {
+			if name == "SafetyGates" {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				require.True(t, ok)
+				id, ok := sel.X.(*ast.Ident)
+				assert.True(t, ok && id.Name == "Svc", "gates must come from Svc")
 				built++
 				assert.Equal(t, "afterMicroserviceInitialized", fn.Name.Name,
 					"the gauge must be built on the initialize path, once")
@@ -128,7 +132,7 @@ func TestEveryGateDecisionIsCalledWithTheServiceGates(t *testing.T) {
 		})
 		return false
 	})
-	assert.Equal(t, 1, built, "NewSafetyGates must be called exactly once")
+	assert.Equal(t, 1, built, "Svc.SafetyGates must be called exactly once")
 	for _, want := range decisions {
 		assert.GreaterOrEqualf(t, calls[want], 1, "no call to %s found: renamed, or no longer wired", want)
 	}

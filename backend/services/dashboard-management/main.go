@@ -52,8 +52,7 @@ func main() {
 			Postprocess: afterMicroserviceStarted,
 		},
 		Stopper: core.LifecycleCallback{
-			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Preprocess: beforeMicroserviceStopped,
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -88,6 +87,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// deleted (ADR-081). No subscriptions. core/service builds all three and owns the order
 	// of all four lifecycle phases.
 	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
 			Migrations: model.Migrations,
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
@@ -125,7 +125,7 @@ func afterRdb(ctx context.Context, m *service.Managers) error {
 	// leaves the gate off with a warning; the per-area erasure fence is the guarantee.
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
-	Api.TenantDeleted = governance.NewTenantLifecycleGateFor(peers, governance.NewSafetyGates(Microservice))
+	Api.TenantDeleted = governance.NewTenantLifecycleGateFor(peers, Svc.SafetyGates())
 	wireShareChecker(infra.ServiceAuth.Secret, infra)
 
 	// Report the size of this schema's append-only history tables (ADR-023): a dashboard version history only

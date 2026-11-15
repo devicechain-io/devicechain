@@ -195,8 +195,7 @@ func main() {
 			Postprocess: afterMicroserviceStarted,
 		},
 		Stopper: core.LifecycleCallback{
-			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Preprocess: beforeMicroserviceStopped,
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -989,9 +988,6 @@ func wireIntegrationsCeilingResolver(peers *svcclient.Peers) {
 var safetyGates *governance.SafetyGates
 
 func afterMicroserviceInitialized(ctx context.Context) error {
-	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
-	// registration panics, and the gates below are decided in callbacks that can run again.
-	safetyGates = governance.NewSafetyGates(Microservice)
 	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
 	// Parse configuration.
 	err := parseConfiguration()
@@ -1019,6 +1015,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// the broker manager exists — which is why almost everything below is in AfterNats
 	// rather than AfterRdb.
 	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Migrations: schema.Migrations,
@@ -1138,6 +1135,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			},
 		},
 	})
+	safetyGates = Svc.SafetyGates()
 	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}

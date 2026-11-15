@@ -20,7 +20,6 @@ import (
 	"github.com/devicechain-io/dc-device-management/processor"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -100,7 +99,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 	require.NoError(t, parseConfiguration())
 	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
-	safetyGates = governance.NewSafetyGates(Microservice)
+	safetyGates = service.FromManagers(Microservice, service.Managers{}).SafetyGates()
 
 	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.PendingOwnershipFact{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.AgentProposal{})...)
 	RdbManager = &rdb.RdbManager{Database: db}

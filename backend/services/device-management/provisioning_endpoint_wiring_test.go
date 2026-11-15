@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/service"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -71,7 +72,7 @@ func wireProvisioning(t *testing.T, mutate func(*config.DeviceManagementConfigur
 		f(Microservice)
 	}
 	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
-	safetyGates = governance.NewSafetyGates(Microservice)
+	safetyGates = service.FromManagers(Microservice, service.Managers{}).SafetyGates()
 	Configuration = config.NewDeviceManagementConfiguration()
 	if mutate != nil {
 		mutate(Configuration)
@@ -273,7 +274,7 @@ func TestAnEmptyTrustedProxyListIsWarnedAbout(t *testing.T) {
 		Microservice.UseMetricsRegistry(prometheus.NewRegistry())
 		Microservice.InstanceConfiguration.Infrastructure.Http.TrustedProxies = proxies
 		servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
-		safetyGates = governance.NewSafetyGates(Microservice)
+		safetyGates = service.FromManagers(Microservice, service.Managers{}).SafetyGates()
 		Configuration = config.NewDeviceManagementConfiguration()
 		Api = model.NewApi(&rdb.RdbManager{})
 		buildProvisioningMetrics()
