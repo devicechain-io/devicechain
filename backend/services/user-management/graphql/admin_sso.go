@@ -340,6 +340,21 @@ func (r *AdminResolver) UpdateIdpConnection(ctx context.Context, args struct {
 	if err := auth.Authorize(ctx, auth.UserWrite); err != nil {
 		return nil, err
 	}
+	if args.Request.GroupsClaim.Set {
+		detail, err := r.sso(ctx).IdpConnection(ctx, args.Token)
+		if err != nil {
+			return nil, err
+		}
+		groupsClaim, err := args.Request.GroupsClaim.ApplyToRequired("groupsClaim", detail.Connection.GroupsClaim)
+		if err != nil {
+			return nil, err
+		}
+		if groupsClaim != detail.Connection.GroupsClaim {
+			if err := r.getAdminService(ctx).CheckAdminConnectionRecord(ctx, &detail.Connection); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return wrapIdp(r.sso(ctx).UpdateIdpConnection(ctx, args.Token, &args.Request))
 }
 
@@ -388,6 +403,9 @@ func (r *AdminResolver) SetIdpConnectionTenants(ctx context.Context, args struct
 	if err := auth.Authorize(ctx, auth.UserWrite); err != nil {
 		return nil, err
 	}
+	if err := r.getAdminService(ctx).CheckAdminConnectionGrants(ctx, args.Token); err != nil {
+		return nil, err
+	}
 	return wrapIdp(r.sso(ctx).SetIdpConnectionTenants(ctx, args.Token, args.Tenants))
 }
 
@@ -428,6 +446,12 @@ func (r *AdminResolver) LinkIdentity(ctx context.Context, args struct{ Email, Co
 	if err := auth.Authorize(ctx, auth.UserWrite); err != nil {
 		return false, err
 	}
+	if err := r.getAdminService(ctx).CheckAdminIdentity(ctx, args.Email); err != nil {
+		return false, err
+	}
+	if err := r.getAdminService(ctx).CheckAdminConnectionGrants(ctx, args.Connection); err != nil {
+		return false, err
+	}
 	if err := r.sso(ctx).LinkIdentity(ctx, args.Email, args.Connection, args.Subject); err != nil {
 		return false, err
 	}
@@ -437,6 +461,9 @@ func (r *AdminResolver) LinkIdentity(ctx context.Context, args struct{ Email, Co
 // UnlinkIdentity removes a link (requires user:write).
 func (r *AdminResolver) UnlinkIdentity(ctx context.Context, args struct{ Email, Connection string }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.UserWrite); err != nil {
+		return false, err
+	}
+	if err := r.getAdminService(ctx).CheckAdminIdentity(ctx, args.Email); err != nil {
 		return false, err
 	}
 	return r.sso(ctx).UnlinkIdentity(ctx, args.Email, args.Connection)
@@ -466,7 +493,13 @@ func (r *AdminResolver) ApproveSsoLinkRequest(ctx context.Context, args struct {
 	if args.MembershipDisposition != nil {
 		disposition = *args.MembershipDisposition
 	}
-	if err := r.sso(ctx).ApproveSsoLinkRequest(ctx, id, disposition); err != nil {
+	authorize := func(target *iam.Identity, conn *iam.IdpConnection) error {
+		if err := r.getAdminService(ctx).CheckAdminIdentityRecord(ctx, target); err != nil {
+			return err
+		}
+		return r.getAdminService(ctx).CheckAdminConnectionRecord(ctx, conn)
+	}
+	if err := r.sso(ctx).ApproveSsoLinkRequestFor(ctx, id, disposition, authorize); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -501,8 +534,13 @@ func (r *AdminResolver) SetIdpRoleMappings(ctx context.Context, args struct {
 		return nil, err
 	}
 	in := make([]identity.RoleMappingInput, 0, len(args.Mappings))
+	tokens := make([]string, 0, len(args.Mappings))
 	for _, m := range args.Mappings {
 		in = append(in, identity.RoleMappingInput{Group: m.Group, Role: m.Role})
+		tokens = append(tokens, m.Role)
+	}
+	if err := r.getAdminService(ctx).CheckAdminIdpRoleMappings(ctx, args.Connection, args.Tenant, tokens); err != nil {
+		return nil, err
 	}
 	ack := args.AcknowledgeFullAuthority != nil && *args.AcknowledgeFullAuthority
 	return wrapIdp(r.sso(ctx).SetIdpRoleMappings(ctx, args.Connection, args.Tenant, in, ack))
@@ -517,6 +555,9 @@ func (r *AdminResolver) SetIdpJit(ctx context.Context, args struct {
 	AcknowledgeFullAuthority *bool
 }) (*IdpConnectionResolver, error) {
 	if err := auth.Authorize(ctx, auth.UserWrite); err != nil {
+		return nil, err
+	}
+	if err := r.getAdminService(ctx).CheckAdminIdpJit(ctx, args.Connection, args.DefaultTenantRoles); err != nil {
 		return nil, err
 	}
 	ack := args.AcknowledgeFullAuthority != nil && *args.AcknowledgeFullAuthority

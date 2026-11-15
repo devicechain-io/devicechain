@@ -104,6 +104,8 @@ mutation {
 
 ## 编辑或删除窗口 {#edit-or-delete-a-window}
 
+停用设备的等待命令不会因解绑或删除窗口而释放。设备启用且类型可解析后，命令会跟随设备类型的窗口。
+
 `updateMaintenanceWindow` 是部分更新：省略的字段保持不变。
 
 ```graphql

@@ -72,5 +72,6 @@ var (
 		NewAgentSafetySchema(),
 		NewAutomationReviewsSchema(),
 		NewAutomationReviewEnforcementSchema(),
+		NewEntityAttributeUniqueKeySchema(),
 	}
 )
