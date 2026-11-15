@@ -614,7 +614,7 @@ func TestApplyOCSPRevokedOnAnyPathWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(v.Chains) != 2 {
-		t.Skipf("the verifier built %d path(s) here", len(v.Chains))
+		t.Fatalf("the verifier built %d path(s) here", len(v.Chains))
 	}
 	res := OCSPResults{}
 	for _, tg := range v.OCSPTargets() {

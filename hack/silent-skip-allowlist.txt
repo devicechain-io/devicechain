@@ -1,0 +1,89 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+# Exact package and test/subtest names only; every exception needs a reason.
+# Untagged suites include opt-in measurements and parent/child harnesses.
+github.com/devicechain-io/dc-microservice/config TestFetchHoldBudgetRejectsOverflowBeforeConversion/first_overflowing_millisecond # On 32-bit hosts the fixture value does not fit the platform int.
+github.com/devicechain-io/dc-microservice/config TestFetchHoldBudgetRejectsOverflowBeforeConversion/maximum_int64 # On 32-bit hosts the fixture value does not fit the platform int.
+github.com/devicechain-io/dc-microservice/core TestHttpServerShutdownReleasesThePortEvenBeforeServing # Requires Linux's published ephemeral port range.
+github.com/devicechain-io/dc-microservice/core TestPortHolderProbeNamesTheHolderOfALivePort # Requires Linux /proc/net/tcp.
+github.com/devicechain-io/dc-microservice/core TestPortHolderProbeNamesADualStackHolderOfALivePort # Requires Linux /proc/net/tcp6 and IPv6 support.
+github.com/devicechain-io/dc-microservice/core TestStartOutsideAutoAssignRangeBindsOutsideTheRange # Requires Linux's published ephemeral port range.
+github.com/devicechain-io/dc-microservice/messaging TestAMessageStoreLeaderMoveUnderLoadDuplicatesButNeverLosesAPubackedMessage # Cluster fixture uses Unix sockets, unavailable on Windows.
+github.com/devicechain-io/dc-microservice/messaging TestAMessageStoreLeaderMoveDuringDurableCreationNeverLosesAPubackedMessage # Cluster fixture uses Unix sockets, unavailable on Windows.
+github.com/devicechain-io/dc-microservice/messaging TestPerfInterestRetention # Opt-in DC_FCPERF broker measurement.
+github.com/devicechain-io/dc-microservice/messaging TestPerfRawDrain # Opt-in DC_FCPERF broker measurement.
+github.com/devicechain-io/dc-microservice/messaging TestPerfStoreReaderSustained # Opt-in DC_FCPERF broker measurement.
+github.com/devicechain-io/dc-microservice/messaging TestPerfStoreMemory # Opt-in DC_FCPERF broker measurement.
+github.com/devicechain-io/dc-microservice/payloaddecode TestPerfGate # DECODE_PERF_GATE runs in a dedicated CI step; also gated under -short/-race.
+github.com/devicechain-io/dc-microservice/payloaddecode TestPerfGateGoesRedWithSlowNative # DECODE_PERF_GATE runs in a dedicated CI step; also gated under -short/-race.
+github.com/devicechain-io/dc-microservice/payloaddecode TestCostTrackerOverhead # DECODE_PERF_GATE runs in a dedicated CI step; also gated under -short/-race.
+github.com/devicechain-io/dc-microservice/schedule TestRigSolarFleetAtItsOwnDusk # -short excludes the 50k-fixture rig.
+github.com/devicechain-io/dc-microservice/schedule TestRigSolarCatchesAPlantedUTCDayDefect # -short excludes the 50k-fixture rig.
+github.com/devicechain-io/dc-microservice/schedule TestRigEveryWallTimeEveryDayOfAYear # -short excludes the year-long zone rig.
+github.com/devicechain-io/dc-microservice/schedule TestRigCatchesAPlantedWrongTimeZone # -short excludes the year-long zone rig.
+github.com/devicechain-io/dc-microservice/selfreg TestAMaterialFileOthersCanReadIsRefused # Windows has no POSIX permission modes.
+github.com/devicechain-io/dc-microservice/selfreg TestADanglingSymlinkDoesNotLoop # Windows symlinks require privileges.
+github.com/devicechain-io/dcctl/bootstrap TestDestroyInProgressSeparatesPresentAbsentAndCouldNotTell/could_not_tell # Host permission semantics cannot simulate an unstatable marker (Windows or privileged user).
+github.com/devicechain-io/dcctl/bootstrap TestRefuseUnfinishedDestroyRefusesAMarkedInstanceAndFailsClosed/a_marker_that_could_not_be_checked_is_refused_too # Host permission semantics cannot simulate an unstatable marker (Windows or privileged user).
+github.com/devicechain-io/dcctl/bootstrap TestDestroyReportsWhatItSparedEvenWhenItFails # Host permission semantics cannot simulate an unreadable directory.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseResizeGrowsOnlyWhatTheBudgetHolds # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseResizeShrinkGivesConnectionsBack # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseResizeOfAnUnchangedNeedIgnoresALoweredBudget # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseResizeLimitsAnUnlimitedOwnLogin # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseResizeRefusesALoginThatIsMissingOrNotOurs # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseResizeThroughTheUpgradeSteps # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseLoginsCannotReachEachOthersDatabases # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseRerunTakesTheNewPassword # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseRefusesADatabaseItDidNotCreate # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseRefusesARoleItDidNotCreate # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseDropRemovesBothAndIsIdempotent # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestTheProvisionerStatementConvergesTheRole # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestADropBlockedByASuperuserSessionIsRetryable # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseAdmitsOnlyWhatTheBudgetHolds # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseRefusesAdmissionBesideAnUnlimitedLogin # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestInstanceDatabaseInstallWaitsForTheStoreToRunWithItsBudget # Opt-in DCCTL_TEST_POSTGRES_URL database suite requires a real PostgreSQL server.
+github.com/devicechain-io/dcctl/bootstrap TestListInstancesReportsTheDestroyMarkerAndWhenItCouldNotBeChecked/a_marker_that_could_not_be_checked # Host permission semantics cannot simulate an unstatable marker (Windows or privileged user).
+github.com/devicechain-io/dcctl/bootstrap TestTofuIsHandedTheFileTheClientReads/instance_apply # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestTofuIsHandedTheFileTheClientReads/instance_apply_on_the_current_context # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestTofuIsHandedTheFileTheClientReads/destroy # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestTofuIsHandedTheFileTheClientReads/namespace_import # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestTofuIsHandedTheFileTheClientReads/plan # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestAMultiFileKUBECONFIGIsMergedNotTruncated # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestTofuIsRefusedWhenItsClusterIsNotTheClients/another_server # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestTofuIsRefusedWhenItsClusterIsNotTheClients/the_same_server,_another_CA # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestTheCurrentContextIsFrozenWhenTheRunnerIsBuilt # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestASavedPlanIsOnlyAppliedToTheClusterItWasMadeFor # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestAPlanLeavesNoMergedKubeconfigBehind # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestEachRunnerSiteIsHandedTheCallersKubeContext # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestLiveObjectStoreRolloutCheck # Live object-store rollout runs under hack/tofu-rerun-rig.sh with a real cluster.
+github.com/devicechain-io/dcctl/bootstrap TestAnInterruptedApplyWhoseOutputPipeIsHeldIsAbandoned # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestTheDestroyLeavesOutTheOutputsItWorkedOutWithoutTheInstancesSettings # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestApplyStillPrintsItsOutputs # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestTofuExecStreamsProgressNotReads # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestTofuInitMovesTheLockToThePins # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dcctl/bootstrap TestAFailedProgressCommandStillQuietsStdout # Windows cannot execute the POSIX fake tofu.
+github.com/devicechain-io/dc-device-management/model TestWritePreSemanticSnapshotFixture # Historical pre-semantic fixture writer; only run on the pre-change commit (snapshot_identity_seed_test.go:143).
+github.com/devicechain-io/dcctl/internal/kubeisolation TestLeakOnPurpose # Parent/child harness instrument runs only in the designated subprocess.
+github.com/devicechain-io/dcctl/internal/kubeisolation TestABlindInstrumentIsRefused # Parent/child harness instrument runs only in the designated subprocess.
+github.com/devicechain-io/dcctl/backup TestSymlinkEscape # Windows symlink creation may require privileges.
+github.com/devicechain-io/dcctl/bootstrap TestASymlinkIntoTheStateDirectoryIsAlsoRefused # Windows symlink creation may require privileges.
+github.com/devicechain-io/dcctl/product TestExportNeverDeletesThroughASymlinkedManagedDirectory/device-types # Windows symlink creation may require privileges.
+github.com/devicechain-io/dcctl/product TestExportNeverDeletesThroughASymlinkedManagedDirectory/profiles # Windows symlink creation may require privileges.
+github.com/devicechain-io/dcctl/product TestExportNeverDeletesThroughASymlinkedManagedDirectory/integrations # Windows symlink creation may require privileges.
+github.com/devicechain-io/dcctl/product TestExportNeverDeletesThroughASymlinkedManagedDirectory/dashboards # Windows symlink creation may require privileges.
+github.com/devicechain-io/dcctl/product TestExportNeverDeletesThroughASymlinkedManagedDirectory/connectors # Windows symlink creation may require privileges.
+github.com/devicechain-io/dcctl/product TestExportRefusesASymlinkedEntryAndKeepsTheBundle # Windows symlink creation may require privileges.
+github.com/devicechain-io/dcctl/product TestConfinedRejectsAPathThatResolvesOutside # Windows symlink creation may require privileges.
+github.com/devicechain-io/dcctl/product TestExportRefusesAManagedDirectoryLinkedToAnotherInsideTheBundle # Windows symlink creation may require privileges.
+github.com/devicechain-io/dc-command-delivery/model TestRigFiftyThousandFixturesDimAtTheirOwnDusk # Opt-in DC_SCHEDULE_RIG 50k-fixture campaign measurement.
+github.com/devicechain-io/dc-command-delivery/model TestRigCondemnsAPlantedWrongLocationSource # Opt-in DC_SCHEDULE_RIG 50k-fixture campaign measurement.
+github.com/devicechain-io/dc-event-processing/processor TestLoopPhaseOverhead # Opt-in DC_LOOP_PHASE_BENCH stopwatch overhead measurement.
+github.com/devicechain-io/dc-event-sources/processor TestFailClosedOnAClusterUnderLoadLosesNoPubackedMessage # Unix-socket cluster fixture unavailable on Windows; -short omits the minutes-long load run.
+github.com/devicechain-io/dc-event-sources/processor TestReplayLegacyGateAgainstTheStrictExpectations # RATEGATE_REPLAY_STRICT is an opt-in negative control expected to fail on the legacy gate.
+github.com/devicechain-io/dc-outbound-connectors/publish TestATarpitBrokerDoesNotOutliveTheSend # Descriptor-count probe requires Linux /proc/self/fd.
+github.com/devicechain-io/dc-edge-agent/agent TestEdgeBrokerGrantsMoreThanAThousandQoS1Subscriptions # -short omits the 1,050-consumer broker fixture.
+github.com/devicechain-io/dc-edge-agent/agent TestStockBrokerStillCapsQoS1Subscriptions # -short omits the 1,050-consumer broker fixture.
+github.com/devicechain-io/dc-playground TestACancelledCommandDoesNotWaitOnItsChild # Windows child process does not inherit the output pipe needed by this fixture.
+github.com/devicechain-io/dc-broker/nats-server TestJetStreamIntegrityBench # Opt-in DCB_RUN / DCB_JSRUN broker throughput measurement.
+github.com/devicechain-io/dc-broker/nats-server TestTLSThroughputBench # Opt-in DCB_RUN / DCB_JSRUN broker throughput measurement.
+github.com/devicechain-io/dc-device-management/processor TestCalloutThrottlesPasswordConnectsAgainstARealBroker # Timing guard: on a host slower than the backoff delay the connect lands after it and nothing is measured; failing would make the test flaky.

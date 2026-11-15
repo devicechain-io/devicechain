@@ -219,6 +219,9 @@ func latestFinalReleaseTag(t *testing.T) string {
 	raw, err := cmd.Output()
 	if err != nil {
 		if _, lookupErr := exec.LookPath("git"); lookupErr != nil {
+			if os.Getenv("DC_REQUIRE_TAGS") != "" {
+				t.Fatal("DC_REQUIRE_TAGS: git is missing; CI fetches tags; a skip here only happens in a tagless checkout")
+			}
 			t.Skip("git is missing; CI fetches tags; a skip here only happens in a tagless checkout")
 		}
 		t.Fatalf("listing release tags: %v", err)
@@ -232,6 +235,9 @@ func latestFinalReleaseTag(t *testing.T) string {
 		}
 	}
 	if latest == "" {
+		if os.Getenv("DC_REQUIRE_TAGS") != "" {
+			t.Fatal("DC_REQUIRE_TAGS: no final vMAJOR.MINOR.PATCH tag is present; CI fetches tags; a skip here only happens in a tagless checkout")
+		}
 		t.Skip("no final vMAJOR.MINOR.PATCH tag is present; CI fetches tags; a skip here only happens in a tagless checkout")
 	}
 	return latest

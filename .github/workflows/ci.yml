@@ -311,8 +311,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # The bootstrap snapshot-currency test reads the release tags.
-          fetch-tags: true
+          # The bootstrap snapshot-currency test requires complete release tags.
+          fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
@@ -585,8 +585,13 @@ jobs:
       - name: govulncheck (reachable vulnerabilities)
         run: hack/govulncheck.sh "${{ matrix.module }}"
 
+      - name: silent-skip gate self-test
+        run: bash hack/check-no-silent-skips.sh --self-test
+
       - name: go test
         working-directory: ${{ matrix.module }}
+        env:
+          DC_REQUIRE_TAGS: "1"
         # Every package, the operator's controllers included. That package holds
         # the CEL suite the `envtest binaries` step installs an API server for, and
         # it used to be dropped here as "a scaffold that asserts nothing" — so the
@@ -614,7 +619,17 @@ jobs:
         # others) that already take about 8 minutes locally. Under the default, a
         # slower runner would fail it as a panic in whichever test was running, which
         # reads as that test hanging rather than the package being long.
-        run: go test -count=1 -timeout 20m ./...
+        shell: bash
+        run: |
+          set -uo pipefail
+          output="$RUNNER_TEMP/go-test.json"
+          # The JSON stream feeds the skip gate; the log shows the plain test output.
+          go test -json -count=1 -timeout 20m ./... | tee "$output" | jq -rj 'select(.Action == "output") | .Output // empty'
+          test_status=${PIPESTATUS[0]}
+          gate_status=0
+          bash "$GITHUB_WORKSPACE/hack/check-no-silent-skips.sh" "$output" || gate_status=$?
+          if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+          exit "$gate_status"
 
       # The payload decoder's timing gates, alone: the perf gate (decode against Cut A's
       # flatten, paired in one process) and the ns-per-declared-cost checks. They are timing
