@@ -346,7 +346,7 @@ dcctl secrets escrow show ~/backups/my-instance-rootkey.escrow
 | `device-commands` | stream | rebuildable | commands are re-dispatched from the command-delivery store by its sweep |
 | `device-desired` | stream | rebuildable | the current desired state is held in the database and sent to a device again on its next sync |
 | `device-reports` | stream | rebuildable | a device sends its reports again, and its state is held in the database |
-| `device-events-capture` | stream | must-back-up | raw device telemetry already acknowledged to the device and not yet forwarded; the database holds no copy of it. No backup tool ships in this release. Telemetry acknowledged and not yet forwarded when the cluster is lost is the recovery gap, so keep the capture backlog drained. |
+| `device-events-capture` | stream | must-back-up | raw device telemetry already acknowledged to the device and not yet forwarded; the database holds no copy of it. Freeze producers and consumers, then export with dcctl backup and verify with dcctl backup inspect --verify. Coordinate the database recovery cutoff separately; restore --plan is read-only and does not apply a restore. |
 | `command-responses` | stream | transient | a device answer not yet consumed; the command it answers is settled from its stored state as unanswered |
 | `connector-dispatch` | stream | transient | outbound deliveries not yet attempted; in flight, at least once |
 | `lpwan-downlink-events` | stream | transient | a network-server report not yet matched to its command; a lost report is settled by the pending record's deadline as unanswered |
@@ -360,7 +360,7 @@ dcctl secrets escrow show ~/backups/my-instance-rootkey.escrow
 | `raise-alarm` | stream | transient | an in-flight request from detection, which evaluates again on the next event |
 | `failed-decode` | stream | transient | a diagnostic record of an event that could not be decoded |
 | `failed-events` | stream | transient | records not yet stored by their consumer; the event store keeps each one once it is consumed |
-| `connector-dispatch.dead` | stream | must-back-up | the only record of an outbound delivery that could not be made, kept for the operator to inspect. No backup tool ships in this release. The records cannot be recovered once the stream is lost. |
+| `connector-dispatch.dead` | stream | must-back-up | the only record of an outbound delivery that could not be made, kept for the operator to inspect. Export with dcctl backup while producers and consumers are frozen, then verify with dcctl backup inspect --verify. Records absent from the backup cannot be recovered once the stream is lost; restore --plan does not apply a restore. |
 | `dead-letters` | stream | transient | letters not yet stored by their consumer; the database keeps each one once it is consumed |
 | `max-deliveries` | stream | transient | broker advisories for deliveries that ran out; empty in steady state |
 | `dc_refresh_tokens` | bucket | transient | a live session token; people sign in again |
@@ -388,6 +388,28 @@ dcctl secrets escrow show ~/backups/my-instance-rootkey.escrow
 <!-- durability:end -->
 
 此表由平台自身的声明生成，因此它列出的是运行中的服务所创建的内容。没有分类，就无法添加消息流或存储桶。
+
+### 导出流和对象内容 {#export-streams-objects}
+
+以下 `v1.6.0` 命令处于**预览**阶段。它们补充数据库备份和根密钥托管；不会导出任何数据库或根密钥，不会选择数据库恢复截止点，也不会协调维护模式。
+
+导出前请冻结生产者、消费者、上传和删除操作。对于文件系统后端，请在本地以只读方式挂载或导出 blob PVC：`--blob-directory` 指向包含实例目录的根目录（本例中实例目录为 `devicechain/`）。命令不会创建 PVC 导出 Job。实例目录缺失或存在未完成的上传时，导出会失败。对于 S3，省略 `--blob-directory`：使用已部署的 bucket/endpoint 配置及运维人员的标准 AWS 凭据链，不会从服务 Pod 中获取凭据。
+
+```bash
+dcctl backup devicechain --destination ./backup-set --blob-directory /mnt/blob-export
+dcctl backup inspect ./backup-set --verify
+dcctl restore devicechain --from ./backup-set --plan --blob-directory /mnt/target-blob-export
+```
+
+`backup` 要求目标目录尚不存在，且实例已安装。`--kube-context <context>` 选择集群；`--nats-url <url>` 可替代默认的 broker 端口转发。备份和恢复规划都使用已部署的 broker 管理员凭据及 TLS；broker 需具备此版本的快照/分块确认权限。规划命令的 `--blob-directory` 读取目标 PVC 导出，而非源备份。
+
+导出包括所有已声明的检查点保留平台流（即使为空）及其消费者、存在时的 `$MQTT_msgs`，以及实例前缀下所有已完成对象，包括未被引用的内容。缺少必需的平台流会导致导出失败；MQTT 网关流缺省时会显式记录。流文件包含原生快照及配置/状态元数据；对象 tar 包含内容及原始引用、大小、SHA-256 哈希索引（S3 返回时还包含内容类型/版本 ID）。文件检查完成后最后发布 `manifest.json`。导出失败可能留下无清单的诊断文件；请改用新目录重试。仅凭这些文件不能证明数据库/流/对象处于协调一致的恢复检查点。
+
+`backup inspect --verify` 必须带 `--verify`，不访问集群，也不写入。它验证清单及每个已列出快照的大小和 SHA-256；出错时返回非零状态。成功仅证明所列字节与清单一致：不验证清单真实性，不检查原生归档内部，也不证明清单完整或检查点一致。
+
+`restore --plan` 必须带 `--from` 和 `--plan`；**尚未实现执行恢复**。连接前先验证本地字节、实例/租户身份、必需清单覆盖范围及可用快照元数据，然后读取目标流状态和对象字节，输出 create/replace/skip 操作而不执行。缺少身份的旧清单可检查，但不能用于规划。缺失需保留的条目、未知条目或错误策略均被拒绝。仅当 `absent_gateway_streams` 中显式记录且目标也不存在时，才允许省略 `$MQTT_msgs`。
+
+对于非空目标流，缺少最后消息时间、时间戳更新、序列号更高或消息更多都会导致拒绝。目标对象有额外内容或内容不同（包括后端不同）也会拒绝；匹配对象会跳过，相同内容的子集可补齐。目标存储缺失或不可读属于错误。`--force-foreign` 仅允许实例/租户身份不匹配：不会绕过覆盖范围或数据丢失检查，也不迁移 subject、租户、blob 引用或后端。规划期间请冻结目标写入；输出只是一次观察，不是锁，也不为后续执行预留状态。
 
 ### 对象存储 {#object-store-backup}
 

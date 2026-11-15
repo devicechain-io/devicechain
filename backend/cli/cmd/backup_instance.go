@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/devicechain-io/dc-k8s/functionalarea"
 	"github.com/devicechain-io/dc-microservice/blob"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -51,6 +52,26 @@ func backupInstance(ctx context.Context, opts backupOptions) error {
 		return fmt.Errorf("instance %q is not installed", opts.InstanceID)
 	}
 	cfg.ApplyDefaults()
+	decl, err := bootstrap.ReadInstanceCR(ctx, opts.KubeContext, opts.InstanceID)
+	if err != nil {
+		return err
+	}
+	if decl == nil {
+		return fmt.Errorf("instance declaration required to resolve enabled functional areas")
+	}
+	areas, err := bootstrap.ResolveEnabledAreas(decl.Spec.Profile, decl.Spec.ExtraFunctionalAreas)
+	if err != nil {
+		return err
+	}
+	if len(areas) == 0 {
+		base, err := functionalarea.ResolveAndValidate(decl.Spec.Profile, nil)
+		if err != nil {
+			return err
+		}
+		for _, a := range base {
+			areas = append(areas, string(a))
+		}
+	}
 	bc := cfg.Infrastructure.Blob
 	if bc.Backend == "" || bc.Backend == blob.BackendFilesystem {
 		if opts.BlobDirectory == "" {
@@ -119,13 +140,13 @@ func backupInstance(ctx context.Context, opts backupOptions) error {
 		return backup.ExportBlobs(ctx, blob.Config{Backend: bc.Backend, Directory: bc.Directory, Bucket: bc.Bucket, Region: bc.Region, Endpoint: bc.Endpoint, UsePathStyle: bc.UsePathStyle}, opts.InstanceID, w)
 	}
 	if opts.RestorePlan != nil {
-		actions, err := opts.RestorePlan.Plan(ctx, nc, export)
+		actions, err := opts.RestorePlan.Plan(ctx, nc, export, areas)
 		if err != nil {
 			return err
 		}
 		return backup.WritePlan(opts.PlanOutput, actions)
 	}
-	return backup.Create(ctx, nc, opts.InstanceID, opts.Destination, export)
+	return backup.Create(ctx, nc, opts.InstanceID, opts.Destination, export, areas)
 }
 
 // Match the diagnostic commands' transport policy: resolve TLS through the

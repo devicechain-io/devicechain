@@ -298,6 +298,8 @@ func (suite *InboundEventsProcessorTestSuite) TestValidNewAssignmentEvent() {
 	suite.Resolved.Mock.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
 	suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*dmodel.Device{buildDevice()}, nil)
 	suite.API.Mock.On("EntityRelationshipsByToken", mock.Anything, mock.Anything).Return([]*dmodel.EntityRelationship{}, nil)
+	// "controls" is an untracked tenant type, which a device may still assert.
+	suite.API.Mock.On("EntityRelationshipTypesByToken").Return([]*dmodel.EntityRelationshipType{{Tracked: false}}, nil)
 	suite.API.Mock.On("CreateEntityRelationship", mock.Anything, mock.Anything).Return(buildDeviceRelationship(), nil)
 	// The complete membership stamp (ADR-062 S5) reads the device's existing tracked anchors.
 	suite.API.Mock.On("TrackedRelationshipsForDevice", mock.Anything, mock.Anything).Return(

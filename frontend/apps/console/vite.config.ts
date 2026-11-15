@@ -5,6 +5,8 @@ import { loadEnv, searchForWorkspaceRoot } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
+import { transformAsync } from '@babel/core';
+import { babelOptimizerPlugin } from '@graphql-codegen/client-preset';
 
 // The frontend talks to the DeviceChain services over GraphQL. Each functional
 // area serves its own /graphql endpoint; the cluster ingress (deploy/helm
@@ -22,7 +24,31 @@ import path from 'path';
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
-    plugins: [react(), tailwindcss()],
+    // Codegen's optimizer turns graphql(`...`) into direct document imports, so
+    // production can discard the generated lookup maps and duplicate query text.
+    plugins: [react(), tailwindcss(), {
+      name: 'graphql-document-imports',
+      apply: 'build',
+      enforce: 'pre',
+      async transform(source, id) {
+        if (!/\/src\/lib\/api\/[^/]+\.ts$/.test(id.replaceAll('\\', '/'))) return;
+        const area = /import\s*\{\s*graphql\s*\}\s*from\s*['"]@\/gql\/([^'"]+)['"]/.exec(source)?.[1];
+        if (!area) return;
+        const result = await transformAsync(source, {
+          filename: id,
+          babelrc: false,
+          configFile: false,
+          parserOpts: { plugins: ['typescript'] },
+          plugins: [[babelOptimizerPlugin, {
+            artifactDirectory: path.resolve(__dirname, 'src/gql', area),
+            gqlTagName: 'graphql',
+          }]],
+          sourceMaps: true,
+        });
+        if (!result?.code) throw new Error(`GraphQL document optimization failed: ${id}`);
+        return { code: result.code, map: result.map };
+      },
+    }],
     build: {
       // Hashed build output lives under /_app/, NOT Vite's default /assets/: the console has a
       // client-side route at /assets/<token> (the asset registry), and a static directory of the

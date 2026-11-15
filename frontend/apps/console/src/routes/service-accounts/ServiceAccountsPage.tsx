@@ -36,6 +36,7 @@ import {
   DataTableHeaderCell,
   DataTableRow,
 } from '@/components/ui/data-table';
+import { RevealOnceDialog } from '@/components/RevealOnceDialog';
 import { FormDrawer } from '@/components/registry';
 import { useAuth } from '@/auth/AuthProvider';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -153,9 +154,7 @@ export default function ServiceAccountsPage() {
         </FormDrawer>
       )}
       {sheet?.kind === 'issued' && (
-        <FormDrawer shot="service-account-secret" open onOpenChange={(o) => !o && close()} title={t('saIssuedTitle')}>
-          <SecretIssued credentials={sheet.credentials} onDone={close} />
-        </FormDrawer>
+        <SecretIssued credentials={sheet.credentials} onDone={close} />
       )}
       <div className="space-y-6">
         {loading && !data ? (
@@ -533,7 +532,7 @@ function RotateForm({ account, onIssued }: { account: ServiceAccount; onIssued: 
 export function SecretIssued({ credentials, onDone }: { credentials: ServiceAccountCredentials; onDone: () => void }) {
   const { t } = useTranslation('members');
   return (
-    <div className="space-y-4" data-shot="service-account-secret">
+    <RevealOnceDialog title={t('saIssuedTitle')} shot="service-account-secret" onDone={onDone} doneLabel={t('done')}>
       <FormField label={t('saClientIdLabel')} htmlFor={CLIENT_ID_INPUT_ID}>
         <div className="flex items-center gap-2">
           <Input id={CLIENT_ID_INPUT_ID} readOnly value={credentials.clientId} className="font-mono text-xs" />
@@ -561,8 +560,7 @@ export function SecretIssued({ credentials, onDone }: { credentials: ServiceAcco
         <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
         <span>{t('saSecretShownOnce')}</span>
       </p>
-      <Button onClick={onDone}>{t('done')}</Button>
-    </div>
+    </RevealOnceDialog>
   );
 }
 

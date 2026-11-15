@@ -152,13 +152,16 @@ func (s *Service) CreateRole(ctx context.Context, in RoleInput) (*iam.Role, erro
 // the role and says nothing about authorities must still leave a valid role behind.
 // Validating first, then mutating, then writing is what makes an unknown authority
 // refuse the whole update rather than half-apply it.
-func (s *Service) UpdateRole(ctx context.Context, scope, token string, request *RoleUpdateRequest) (*iam.Role, error) {
+func (s *Service) UpdateRole(ctx context.Context, scope, token string, request *RoleUpdateRequest, expectedUpdatedAt *string) (*iam.Role, error) {
 	rs, err := parseScope(scope)
 	if err != nil {
 		return nil, err
 	}
 	r, err := s.loadRole(ctx, rs, token)
 	if err != nil {
+		return nil, err
+	}
+	if err := rdb.RefuseIfMoved(r.UpdatedAt, expectedUpdatedAt, iam.ErrRoleConflict); err != nil {
 		return nil, err
 	}
 	authorities := request.Authorities.ApplyTo(r.Authorities)
@@ -168,7 +171,12 @@ func (s *Service) UpdateRole(ctx context.Context, scope, token string, request *
 	r.Name = request.Name.ApplyToNullString(r.Name)
 	r.Description = request.Description.ApplyToNullString(r.Description)
 	r.Authorities = authorities
-	if err := s.iam.UpdateRole(ctx, r); err != nil {
+	if expectedUpdatedAt != nil {
+		err = s.iam.SaveRoleIfUnmoved(ctx, r)
+	} else {
+		err = s.iam.UpdateRole(ctx, r)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return s.iam.CatalogueRoleByScopeToken(ctx, rs, token)

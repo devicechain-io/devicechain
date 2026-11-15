@@ -12,6 +12,12 @@ El servicio evalúa sobre el tiempo del evento y persiste su estado, de modo que
 **Disponible hoy:** la detección y las acciones son el motor de detección en vivo de la plataforma, con los ocho [tipos de condición](#condition-types) (umbrales estáticos o determinados por atributos) y las cuatro [acciones](#automated-actions) con guardas por acción. Las reglas se autoran de tres maneras sobre un mismo esquema —generador de formularios, lienzo visual de automatización y, con el servicio de IA habilitado, una puerta "Describir" en lenguaje natural—, todas [validadas por el mismo compilador](#authoring--previewing-rules) antes de publicar, y el lienzo puede previsualizar un borrador contra historial reproducido. El [ciclo de vida de alarma](#the-alarm-lifecycle) de cuatro estados con escalamiento de severidad en el mismo lugar, las suscripciones en vivo a alarmas y detecciones, y la [notificación](#reaching-a-human) por correo electrónico/webhook con escalamiento ya están implementados.
 :::
 
+## Autoridades para acciones automatizadas
+
+Crear o publicar una acción automatizada requiere la autoridad para ejecutarla. Crear o actualizar una regla con una acción `sendCommand`, y publicar o volver a una versión de perfil cuyas reglas habilitadas incluyan una, requiere `command:write` además de `device:write`. Las acciones `httpCall` y `publish` requieren `connector:write`. Un rol que solo tenga `device:write` puede seguir creando y publicando reglas que únicamente generen alarmas.
+
+La autoridad se comprueba sobre la regla efectiva en cada creación o actualización, incluso si está deshabilitada. La publicación y la reversión comprueban todas las reglas habilitadas de la versión seleccionada, incluso si solo cambió una métrica. Quien publica debe tener las autoridades de las acciones; quien aprueba la revisión de automatización no las necesita. Adoptar un perfil cuyas acciones ya fueron autorizadas no requiere estas autoridades adicionales.
+
 ## Dónde viven las reglas
 
 Defines las reglas de detección sobre un **[perfil de dispositivo](./domain-model.md)**, el contrato de capacidades versionado compartido por uno o más tipos de dispositivo. El perfil está versionado (borrador → publicar → revertir), así que cambias la lógica de detección de una flota igual que cambias sus definiciones de métricas y comandos: autoras un borrador, lo publicas de forma atómica y lo reviertes si hace falta. Todo dispositivo que resuelve a ese perfil adopta sus reglas automáticamente.
