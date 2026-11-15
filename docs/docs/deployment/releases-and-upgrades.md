@@ -756,6 +756,10 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The release in development (`v1.6`) and the three most recent minor releases (`v1.5`, `v1.4` and `v1.3`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
 
+### v1.7.0 — the AI inference rate limit holds across replicas {#v170-upgrade}
+
+AI inference now keeps each tenant's rate and burst budget in its own service database, so every ai-inference replica spends from the same budget and a restarted replica no longer starts with a fresh burst. The upgrade appends one migration that creates the admission-state table; configuration and APIs are unchanged. The shared limiter fails closed: if the database cannot be read or updated, the request is refused rather than admitted against a local allowance. The per-tenant ceiling itself is still looked up from user-management and still falls back to the platform default when user-management is unreachable. During a rolling upgrade, old pods keep their process-local budgets until they are replaced, so the shared ceiling is fully in force once every ai-inference pod runs `v1.7.0`.
+
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 
 - **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 time buckets are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 64 per process before reading or parsing. Message admission reserves up to 4 slots per batch; valid configured batches (16 entries by default) execute tools in waves within that cap. Every entry still counts toward the caller's rate limit; excess requests receive HTTP 429 with Retry-After. Tools are cancelled and execution slots released when their HTTP request ends. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.
