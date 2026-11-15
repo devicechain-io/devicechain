@@ -50,12 +50,14 @@ func (s *SnapshotStore) EnsureStreamTopology(ctx context.Context, suffix string,
 		if !sharded {
 			return nil
 		}
-		floor, err := lockSnapshotFloor(tx, "singleton")
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		if floor.StreamSeq > 0 {
+		// Topology is recorded at the start of the FIRST sharded term, before any replay or
+		// checkpoint, so any existing checkpoint here was written unsharded. A sequence of
+		// zero is not freshness: an unsharded engine can checkpoint armed dead-man timers
+		// before it has applied a single resolved event.
+		if _, err := lockSnapshotFloor(tx, "singleton"); err == nil {
 			return ErrShardingDetectionHistory
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
 		}
 		return tx.Create(&DetectStreamTopology{ID: "singleton", BaseSuffix: suffix,
 			GroupCount: groups, CreatedAt: time.Now().UTC(), FormatVersion: 1}).Error

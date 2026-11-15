@@ -30,6 +30,24 @@ func TestDetectStreamTopologyMigrationReplay(t *testing.T) {
 	require.Error(t, db.Create(&DetectStreamTopology{ID: "other"}).Error, "the table permits only the singleton key")
 }
 
+// A zero-sequence checkpoint is still history: an unsharded engine can checkpoint
+// armed dead-man timers before it applies any resolved event.
+func TestDetectStreamTopologyRefusesZeroSequenceHistory(t *testing.T) {
+	db := sqlitetest.OpenMemory(t, &gorm.Config{Logger: logger.Discard})
+	require.NoError(t, rdb.RegisterTenantScoping(db))
+	for _, m := range Migrations {
+		require.NoError(t, m.Migrate(db))
+	}
+	s := NewSnapshotStore(&rdb.RdbManager{Database: db})
+	ctx := context.Background()
+	require.NoError(t, s.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: 0, Watermark: time.Now().UTC(),
+		Payload: []byte(`{"lastSeq":0,"timers":[{"rule":"t1:r","series":"d1"}]}`)}))
+	require.ErrorIs(t, s.EnsureStreamTopology(ctx, "resolved-events", 2, true), ErrShardingDetectionHistory)
+	var count int64
+	require.NoError(t, db.Model(&DetectStreamTopology{}).Count(&count).Error)
+	require.Zero(t, count, "refusal must not leave a manifest")
+}
+
 func TestDetectStreamTopologyTransitions(t *testing.T) {
 	for _, history := range []int64{0, 42} {
 		t.Run(map[bool]string{true: "history", false: "fresh"}[history > 0], func(t *testing.T) {
