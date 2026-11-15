@@ -821,6 +821,8 @@ Crear una campaña `SOLAR`, leer sus elementos (`campaignElements`) o ciclos (`c
 
 #### Antes de actualizar {#v160-before-upgrade}
 
+- **Los atributos de entidad son únicos por clave.** La actualización elimina duplicados activos de escrituras iniciales simultáneas, conserva el menor ID y encola la reparación de pertenencias a grupos y configuración. La creación del índice bloquea brevemente las escrituras de atributos. Durante el despliegue gradual, una réplica antigua puede rechazar una escritura inicial concurrente; vuelva a intentarla. No se requiere cambiar la configuración.
+
 Revise la configuración de instancia editada a mano antes de desplegar los pods. Estos rechazos son nuevos desde `v1.5.0`; los ajustes de servicio inválidos impiden el arranque y pueden dejar los pods reiniciándose. Las claves de servicio siguientes van bajo `functionalAreas.<area>.config`.
 
 - **La planificación de campañas cede el turno entre inquilinos.** Cada inquilino planifica como máximo 1.000.000 de elementos de campaña y 128 ciclos por pasada, y no inicia ningún ciclo nuevo una vez agotado un presupuesto de planificación de 2 segundos; un ciclo ya iniciado siempre termina, y el progreso se guarda tras cada ciclo para que los restantes continúen en la siguiente pasada. Las consultas de grupo y de ubicación de dispositivos agotan su tiempo a los 2 segundos y se informan como error de la pasada sin marcar la campaña como fallida. Se ejecutan hasta cuatro inquilinos simultáneamente. Los planes grandes pueden completar su ventana de 36 horas en varias pasadas. Estos límites no requieren configuración nueva ni migración y se aplican al actualizar los pods de command-delivery.

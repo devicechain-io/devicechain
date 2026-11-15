@@ -824,7 +824,15 @@ func initAgentEffectsDrain() error {
 // createNatsComponents on every broker start.
 func initOwnershipDrain() error {
 	OwnershipDrain = core.NewPeriodicTask(Microservice.FunctionalArea, "ownership-drain", ownershipDrainInterval,
-		func(ctx context.Context) error { return Api.DrainOwnershipFactsLocked(ctx) },
+		func(ctx context.Context) error {
+			repairErr := Api.DrainAttributeRepairs(ctx)
+			// A failed repair stays queued, but must not hold up unrelated ownership facts.
+			ownershipErr := Api.DrainOwnershipFactsLocked(ctx)
+			if repairErr != nil {
+				return repairErr
+			}
+			return ownershipErr
+		},
 		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(OwnershipDrainMetrics))
 	return OwnershipDrain.Initialize(context.Background())
 }
