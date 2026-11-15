@@ -52,6 +52,17 @@ describe('the explained empty state', () => {
     expect(lastValueHint('4', 'hace 3 d', 'es')).toBe('Último valor 4 · hace 3 d');
   });
 
+  it('explains every empty state in Chinese and preserves measurement names', () => {
+    for (const kind of KINDS) {
+      const { container, unmount } = render(<WidgetEmptyState kind={kind} measurement="fuel_level" locale="zh-CN" />);
+      expect(container.querySelector('[data-empty-title]')!.textContent).toMatch(/[\u3400-\u9fff]/u);
+      expect(container.querySelector('[data-empty-detail]')!.textContent).toMatch(/[\u3400-\u9fff]/u);
+      if (kind === 'not-reported' || kind === 'no-data') expect(container.textContent).toContain('fuel_level');
+      unmount();
+    }
+    expect(lastValueHint('4', '3天前', 'zh-CN')).toBe('上次读数 4 · 3天前');
+  });
+
   it('gives way to the title as the widget shrinks: the sentence, then the hint, then the glyph', () => {
     const at = (width: number, height: number) =>
       render(
