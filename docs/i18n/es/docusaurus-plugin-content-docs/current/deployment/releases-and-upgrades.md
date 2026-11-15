@@ -799,7 +799,15 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 ## Versiones recientes {#recent-releases}
 
-La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (`v1.5`, `v1.4` y `v1.3`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (`v1.6`, `v1.5` y `v1.4`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+
+### v1.7.0 — in development {#v170-upgrade}
+
+`v1.7.0` is an in-place upgrade from `v1.6.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
+
+#### Behaviour changes {#v170-behaviour-changes}
+
+- **List totals saturate instead of wrapping.** A list whose matching rows exceed 2,147,483,647 now reports `totalRecords` as 2,147,483,647 instead of a wrapped, possibly negative number, and `pageStart`/`pageEnd` no longer overflow on very large page numbers.
 
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 
