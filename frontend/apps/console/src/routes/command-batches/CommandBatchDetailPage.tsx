@@ -68,7 +68,9 @@ export default function CommandBatchDetailPage() {
   // cancellation stamp and count, the live still-held count behind the confirm dialog, and
   // every command row's status — so one counter drives all three re-reads.
   const [reloadKey, reload] = useReload();
-  const { data, loading, error } = useQuery(() => getCommandBatch(token), [token, reloadKey]);
+  const { data: loaded, loading, error } = useQuery(() => getCommandBatch(token), [token, reloadKey]);
+  // Sticky results belong to this detail only when their token matches the route.
+  const data = loaded?.token === token ? loaded : null;
 
   // First-load gating only: useQuery re-enters `loading` on a refetch while keeping the
   // prior data, so a bare `loading` check would unmount the whole page on every refresh.
@@ -93,7 +95,7 @@ export default function CommandBatchDetailPage() {
       </PageShell>
     );
   }
-  return <CommandBatchDetail batch={data} reloadKey={reloadKey} onCancelled={reload} />;
+  return <CommandBatchDetail key={token} batch={data} reloadKey={reloadKey} onCancelled={reload} />;
 }
 
 function CommandBatchDetail({

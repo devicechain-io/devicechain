@@ -48,7 +48,9 @@ export default function IdentityProviderDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
   const token = decodeURIComponent(rawToken ?? '');
   const [version, reload] = useReload();
-  const { data, loading, error } = useQuery(() => getIdpConnection(token), [token, version]);
+  const { data: loaded, loading, error } = useQuery(() => getIdpConnection(token), [token, version]);
+  // Sticky results belong to this detail only when their token matches the route.
+  const data = loaded?.token === token ? loaded : null;
 
   if (loading && !data) {
     return (
@@ -71,7 +73,7 @@ export default function IdentityProviderDetailPage() {
       </PageShell>
     );
   }
-  return <Editor connection={data} reading={loading} onChanged={reload} />;
+  return <Editor key={token} connection={data} reading={loading} onChanged={reload} />;
 }
 
 function Editor({
