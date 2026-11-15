@@ -909,6 +909,12 @@ La revisión de cambios normalmente no considera autoras del borrador a las pers
 
 - **No es necesario hacer nada.** Ejecuta una nueva revisión si se excluyó a un aprobador por una eliminación en otro perfil.
 
+#### Plazo de escalado {#v160-escalation-clock}
+
+El plazo de escalado ahora se cuenta desde el envío de la notificación. Una alarma generada por una lectura que llega con retraso ya no escala en la siguiente pasada del planificador, y un reloj de dispositivo adelantado respecto a la plataforma ya no retrasa el escalado.
+
+- **No hay que hacer nada.** La actualización añade automáticamente una marca de tiempo que admite valores nulos; las alarmas abiertas existentes conservan el cálculo anterior hasta su siguiente notificación.
+
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
 
 `v1.5.0` es una actualización in situ desde `v1.4.0`: ejecuta `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de la nueva versión para ambos comandos** y pasa a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Se ejecutan cuatro migraciones añadidas: tres en `device-management` y una en `user-management`. Añaden la barrera de desactivación del agente y la bandeja de salida de efectos, las revisiones de automatización y su exigencia, y la columna de generación de actuación. Consulta [Cambios de esquema y vuelta atrás](#v150-going-back). Si vienes de `v1.3.0` o anterior, lee primero las [notas de `v1.4.0`](#v140-upgrade).

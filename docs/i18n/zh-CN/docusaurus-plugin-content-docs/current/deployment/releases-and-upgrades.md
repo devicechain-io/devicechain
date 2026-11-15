@@ -620,6 +620,12 @@ MCP 发现现在提供 `read-only` 和 `location`，并在 MCP 的 `agentActuati
 
 - **无需操作。** 如果某位批准人因其他配置文件上的删除操作而被排除，请重新运行审查。
 
+#### 升级通知计时 {#v160-escalation-clock}
+
+升级通知的等待时间现在从通知发送时开始计算。由延迟到达的读数触发的告警不再在调度器下一次运行时立即升级，设备时钟快于平台时钟也不再延迟升级通知。
+
+- **无需操作。** 升级会自动添加一个可为空的时间戳列；现有未关闭告警在下次发送通知前仍按原来的方式计时。
+
 ### v1.5.0 — 自动化变更先评审，代理审批绑定登录会话 {#v150-upgrade}
 
 `v1.5.0` 是从 `v1.4.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。**两个命令都使用新版本的 `dcctl`**，并向 `dcctl install` 提供集群原有设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级会运行四项追加迁移：`device-management` 三项，`user-management` 一项。它们添加代理停用屏障和效果发件箱、自动化评审及其强制执行机制，以及执行代次列。参见[模式变更与回退](#v150-going-back)。如果来自 `v1.3.0` 或更早版本，请先阅读 [`v1.4.0` 说明](#v140-upgrade)。
