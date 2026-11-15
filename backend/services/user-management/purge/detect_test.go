@@ -17,7 +17,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/streams"
 )
 
 // The DETECT store, driven over a REAL BROKER against a REAL CATALOG QUERY.
@@ -45,6 +47,72 @@ const (
 	// the responder rather than pass unnoticed.
 	detectTenant = "acme-corp"
 )
+
+func TestDetectExpectedPartitionsIncludeConfiguredGroups(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		groups *config.NatsShardGroupsConfiguration
+		want   []string
+	}{
+		{"resolved", &config.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.ResolvedEvents}}, []string{"singleton", "resolved-events-g1", "retired-partition"}},
+		{"unsharded", nil, []string{"singleton", "retired-partition"}},
+		{"inbound-only", &config.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.InboundEvents}}, []string{"singleton", "retired-partition"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := configuredDetectStore(t, detectConn{}, detectCatalog(t, true, "singleton", "retired-partition"), tc.groups)
+			ids, err := d.checkpointedPartitions(context.Background())
+			require.NoError(t, err)
+			require.ElementsMatch(t, tc.want, ids)
+		})
+	}
+	// The reported case: only g0 has ever checkpointed.
+	d := configuredDetectStore(t, detectConn{}, detectCatalog(t, true, "singleton"),
+		&config.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.ResolvedEvents}})
+	ids, err := d.checkpointedPartitions(context.Background())
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"singleton", "resolved-events-g1"}, ids)
+}
+
+func TestDetectUncheckpointedGroupFailureDefersUntilRetry(t *testing.T) {
+	url := detectRig(t)
+	runEngine(t, detectDial(t, url), answersWith(messaging.DetectPurgeReply{PartitionId: "singleton"}))
+	runEngine(t, detectDial(t, url), func(pass int) []messaging.DetectPurgeReply {
+		// g0 answers first, which must not finish the gather before g1's answer.
+		time.Sleep(50 * time.Millisecond)
+		reply := messaging.DetectPurgeReply{PartitionId: "resolved-events-g1"}
+		if pass == 1 {
+			reply.Error = "g1 eviction unavailable"
+		}
+		return []messaging.DetectPurgeReply{reply}
+	})
+	d := configuredDetectStore(t, detectConn{detectDial(t, url)}, detectCatalog(t, true, "singleton"),
+		&config.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.ResolvedEvents}})
+	for _, retry := range []bool{false, true} {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		out, err := d.Erase(ctx, detectTenant, time.Now())
+		cancel()
+		require.NoError(t, err)
+		if retry {
+			require.True(t, out.Clean(), out.Reason())
+		} else {
+			require.False(t, out.Clean(), "g0 cannot complete erasure while g1 still holds state")
+			require.Contains(t, out.Reason(), "g1 eviction unavailable")
+			require.Contains(t, out.Reason(), "resolved-events-g1")
+		}
+	}
+}
+
+func configuredDetectStore(t *testing.T, conn messaging.Connection, db Database, groups *config.NatsShardGroupsConfiguration) *Detect {
+	t.Helper()
+	for _, store := range DefaultStores(nil, nil, conn, detectInstance, nil, nil, groups) {
+		if d, ok := store.(*Detect); ok {
+			d.db = db
+			return d
+		}
+	}
+	t.Fatal("DefaultStores omitted DETECT")
+	return nil
+}
 
 // detectRig starts a plain broker — no JetStream, because the eviction is core NATS
 // request/reply — and returns its client URL. Port -1 lets the server pick a free one, the

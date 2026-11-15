@@ -11,6 +11,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/shardgroups"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/tenantpurge"
 )
 
 // workerIdentity binds scalar positions to one physical stream for the worker's lifetime.
@@ -22,13 +23,10 @@ type workerIdentity struct {
 	replay              messaging.GroupReplaySource
 }
 
-const singletonPartition = "singleton"
+const singletonPartition = tenantpurge.DetectSingletonPartition
 
 func groupPartition(group int) string {
-	if group == 0 {
-		return singletonPartition
-	}
-	return messaging.GroupSuffix(streams.ResolvedEvents, group)
+	return tenantpurge.DetectGroupPartition(group)
 }
 
 // GroupSnapshotPartition is the checkpoint namespace for one physical stream.
