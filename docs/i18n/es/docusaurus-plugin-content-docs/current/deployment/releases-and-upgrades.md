@@ -818,6 +818,11 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 - En el primer arranque tras la actualización, `command-delivery` también lee las eliminaciones que el broker de mensajes aún conserva, de modo que los comandos que dejaron los dispositivos eliminados en los últimos días se cancelan de la misma forma.
 - Mientras conviven pods antiguos y nuevos durante la actualización gradual, un pod `v1.6` aún puede enviar uno de esos comandos hasta que se sustituye.
 
+#### Se eliminan las comparticiones que nombran un cliente o grupo eliminado {#v170-deleted-anchor-shares}
+
+- Al eliminar un cliente o un grupo de acceso, `dashboard-management` elimina las comparticiones de dashboards que lo nombran. Si esa limpieza falla de forma persistente, el aviso se conserva ahora en el flujo de mensajes fallidos en lugar de descartarse.
+- `dashboard-management` también comprueba cada 15 minutos, con las credenciales de servicio de la instancia, que el cliente o grupo de cada compartición sigue existiendo, y elimina las comparticiones que dejaron eliminaciones anteriores, incluso de antes de la actualización. Nunca elimina nada si esa consulta falla.
+
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 
 - **Límites de memoria de MCP:** se rechazan por completo las respuestas GraphQL de más de 256 KiB y las agregaciones de más de 1.000 bloques temporales; reduce el intervalo de fechas, selecciona una métrica o amplía los bloques temporales. Los POST y las solicitudes con cuerpo se limitan a 4 en curso por usuario y 64 por proceso antes de leer o analizar el cuerpo. La admisión de mensajes reserva hasta 4 plazas por lote; los lotes válidos según la configuración (16 entradas por defecto) ejecutan las herramientas por grupos dentro de ese límite. Cada entrada sigue contando para el límite de frecuencia del usuario; las solicitudes adicionales reciben HTTP 429 con Retry-After. Al terminar la solicitud HTTP, se cancelan las herramientas y se liberan sus plazas de ejecución. La reserva de lectura del cuerpo se libera antes de ejecutar la herramienta; se mantiene el límite de 1 MiB por solicitud. No requiere cambios de configuración.

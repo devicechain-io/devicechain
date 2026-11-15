@@ -773,6 +773,11 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 - On first start after the upgrade, `command-delivery` also reads the deletions still retained on the message broker, so commands left behind by devices deleted in the last few days are cancelled the same way.
 - While old and new pods overlap during the rolling upgrade, a `v1.6` pod can still send such a command until it is replaced.
 
+#### Shares naming a deleted customer or group are removed {#v170-deleted-anchor-shares}
+
+- When a customer or access group is deleted, `dashboard-management` removes the dashboard shares that name it. If that cleanup keeps failing, the announcement is now kept on the dead-letter stream instead of being discarded.
+- `dashboard-management` also checks every 15 minutes, with the instance's service credentials, that each share's customer or group still exists, and removes shares left behind by earlier deletions, including ones from before the upgrade. It never removes anything when that lookup fails.
+
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 
 - **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 time buckets are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 64 per process before reading or parsing. Message admission reserves up to 4 slots per batch; valid configured batches (16 entries by default) execute tools in waves within that cap. Every entry still counts toward the caller's rate limit; excess requests receive HTTP 429 with Retry-After. Tools are cancelled and execution slots released when their HTTP request ends. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.
