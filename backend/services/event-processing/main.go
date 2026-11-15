@@ -45,10 +45,6 @@ var DetectTermGate *processor.TermGate
 
 var stopStreamSharding context.CancelFunc
 
-// Tests in package main may exercise the complete wiring. There is deliberately
-// no config, environment or command-line bypass in a production binary.
-var refuseResolvedEventShards = true
-
 var (
 	Microservice  *core.Microservice
 	Configuration *config.EventProcessingConfiguration
@@ -172,8 +168,12 @@ func buildMetrics() {
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	shardCfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
 	grouped := shardCfg != nil && slices.Contains(shardCfg.Suffixes, streams.ResolvedEvents)
-	if grouped && refuseResolvedEventShards {
-		return fmt.Errorf("event-processing: resolved-events sharded startup refused: missing S7 support-guard lift, per-partition purge erasure and N x K ceiling (S3b)")
+	groups := 1
+	if grouped {
+		groups = shardCfg.Count
+	}
+	if err := config.ValidateDetectWorkers(groups, Configuration.DetectShards); err != nil {
+		return err
 	}
 	stop, err := shardgroups.Enable(nmgr)
 	if err != nil {
@@ -312,6 +312,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	ResolvedEventsProcessor.Lease = detectLease
 	ResolvedEventsProcessor.Gate = DetectTermGate
+	ResolvedEventsProcessor.ValidateTopology = func(ctx context.Context) error {
+		return SnapshotStore.EnsureStreamTopology(ctx, streams.ResolvedEvents, groups, grouped)
+	}
 	ResolvedEventsProcessor.RuleUpdatesReader = ruleReader
 	ResolvedEventsProcessor.RuleStore = DetectRuleStore
 	// Dead-man read-model wiring (ADR-051 slice 4c-2b): the consumers persist the roster and
@@ -366,6 +369,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err := ResolvedEventsProcessor.Initialize(context.Background()); err != nil {
 		return err
 	}
+	// Assembly must precede construction: the responder captures every partition.
+	TenantPurgeResponder = processor.NewTenantPurgeResponder(nmgr.Conn(),
+		Microservice.InstanceId, ResolvedEventsProcessor)
 
 	// The REACT dispatcher (ADR-051 slice 5b/5c): a separate durable consumer of the derived-event
 	// stream this service also produces, consuming only while this replica holds the DETECT term (see
@@ -827,8 +833,6 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	// It also still means a request cannot reach a replica whose GraphQL and NATS managers
 	// are not up, which is what makes the answer — refusal or eviction — a considered one
 	// rather than an artefact of half-built wiring.
-	TenantPurgeResponder = processor.NewTenantPurgeResponder(NatsManager.Conn(),
-		Microservice.InstanceId, ResolvedEventsProcessor)
 	if err := TenantPurgeResponder.Start(); err != nil {
 		return err
 	}
