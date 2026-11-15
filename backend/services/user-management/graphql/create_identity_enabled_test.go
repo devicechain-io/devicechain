@@ -26,8 +26,9 @@ import (
 func TestCreateIdentityHonoursExplicitEnabledFalse(t *testing.T) {
 	db := putest.NewSQLiteDB(t, &iam.Role{}, &iam.Identity{}, &iam.Membership{})
 	rdbm := &rdb.RdbManager{Database: db}
-	svc := admin.NewService(iam.NewStore(rdbm), 300*time.Second, 12*time.Hour, nil)
-	ctx := adminCtx(string(auth.UserWrite), string(auth.UserRead))
+	store := iam.NewStore(rdbm)
+	svc := admin.NewService(store, 300*time.Second, 12*time.Hour, nil)
+	ctx := storedAdminCtx(t, store, string(auth.UserWrite), string(auth.UserRead))
 	ctx = context.WithValue(ctx, ContextAdminKey, svc)
 	schema := gqlcore.MustParseSchema(AdminSchemaContent, &AdminResolver{})
 

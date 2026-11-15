@@ -43,7 +43,10 @@ func newSsoServed(t *testing.T) *ssoServed {
 	gate := core.NewReadinessGate()
 	require.True(t, gate.MarkReady(mgr.Validator()))
 	adminSchema := gqlcore.MustParseSchema(umgraphql.AdminSchemaContent, &umgraphql.AdminResolver{})
-	adm := gqlcore.NewAdminHttpHandler(adminSchema, map[gqlcore.ContextKey]interface{}{umgraphql.ContextAdminSsoKey: mgr}, gate)
+	adm := gqlcore.NewAdminHttpHandler(adminSchema, map[gqlcore.ContextKey]interface{}{
+		umgraphql.ContextAdminSsoKey: mgr,
+		umgraphql.ContextAdminKey:    identity.AdminServiceForTest(mgr),
+	}, gate)
 
 	mux := http.NewServeMux()
 	mux.Handle(identity.SsoCallbackPattern, identity.SsoCallbackHandler(mgr))

@@ -41,6 +41,9 @@ func (r *AdminResolver) RevokeSessions(ctx context.Context, args struct{ Email s
 	if err := auth.Authorize(ctx, auth.UserWrite); err != nil {
 		return 0, err
 	}
+	if err := r.getAdminService(ctx).CheckAdminIdentity(ctx, args.Email); err != nil {
+		return 0, err
+	}
 	n, err := r.sso(ctx).RevokeSessions(ctx, args.Email)
 	if err != nil {
 		return 0, err
@@ -51,6 +54,9 @@ func (r *AdminResolver) RevokeSessions(ctx context.Context, args struct{ Email s
 // ClearPassword removes an identity's password and ends its sessions (requires user:write).
 func (r *AdminResolver) ClearPassword(ctx context.Context, args struct{ Email string }) (*AdminIdentityResolver, error) {
 	if err := auth.Authorize(ctx, auth.UserWrite); err != nil {
+		return nil, err
+	}
+	if err := r.getAdminService(ctx).CheckAdminIdentity(ctx, args.Email); err != nil {
 		return nil, err
 	}
 	id, err := r.sso(ctx).ClearPassword(ctx, args.Email)

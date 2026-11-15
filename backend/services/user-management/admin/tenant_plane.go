@@ -25,8 +25,8 @@ import (
 
 // Delegated tenant administration (ADR-081): a tenant's own administrators manage its
 // members, invitations and the roles it owns, on the tenant's data plane, under rules that
-// keep the delegation from becoming an escalation. The operator's admin plane keeps full
-// control beside it and is not bound by these rules.
+// keep the delegation from becoming an escalation. The operator's admin plane checks
+// authority coverage separately against live system roles.
 //
 // The rules, all server-side and each a named refusal:
 //
@@ -1042,6 +1042,9 @@ func (s *Service) UpdateTenantRole(ctx context.Context, token string, request *R
 		if err != nil {
 			return err
 		}
+		if missing := a.held.missingFrom(r.Authorities); missing != "" {
+			return refuse(CodeEscalation, "you cannot change a role granting %q, which you do not hold", missing)
+		}
 		authorities := request.Authorities.ApplyTo(r.Authorities)
 		if err := requireDefinable(a, authorities); err != nil {
 			return err
@@ -1050,6 +1053,11 @@ func (s *Service) UpdateTenantRole(ctx context.Context, token string, request *R
 			holders, err := tx.MembershipsHoldingRole(ctx, r.ID)
 			if err != nil {
 				return err
+			}
+			for i := range holders {
+				if err := s.requireAbove(a, &holders[i]); err != nil {
+					return err
+				}
 			}
 			before, err := tx.TenantMemberships(ctx, caller.Tenant)
 			if err != nil {

@@ -870,3 +870,67 @@ func TestSetMemberAccessIsAllOrNothing(t *testing.T) {
 	_, err = e.s.SetMemberAccess(deputy, "boss@acme.example", nil, nil)
 	require.Equal(t, CodeEscalation, refusalCode(err), "got %v", err)
 }
+
+func TestRoleEditCannotStripWhatTheEditorDoesNotHold(t *testing.T) {
+	e := newPlaneEnv(t)
+	ctx := context.Background()
+	original := []string{"member:write", "member:read", "role:write", "device:write"}
+	e.member(t, "boss@acme.example", "acme", []string{iam.TenantAdminRoleToken})
+	for _, role := range []TenantRoleInput{
+		{Token: "admins", Authorities: original},
+		{Token: "carol", Authorities: []string{"member:write"}},
+		{Token: "editor", Authorities: []string{"role:write"}},
+	} {
+		_, err := e.s.CreateTenantRole(as("boss@acme.example", "acme", "*"), role)
+		require.NoError(t, err)
+	}
+	for _, member := range []struct{ email, role string }{{"alice", "admins"}, {"bob", "admins"}, {"carol", "carol"}, {"dave", "editor"}} {
+		e.member(t, member.email+"@acme.example", "acme", []string{member.role})
+	}
+	for _, authorities := range [][]string{{}, {"device:read"}} {
+		_, err := e.s.UpdateTenantRole(as("dave@acme.example", "acme", "role:write"), "admins", &RoleUpdateRequest{Authorities: dcgraphql.OptionalStringListOf(authorities)})
+		require.Equal(t, CodeEscalation, refusalCode(err))
+		role, err := e.s.iam.TenantOwnedRole(ctx, "acme", "admins")
+		require.NoError(t, err)
+		require.Equal(t, original, role.Authorities)
+	}
+}
+
+func TestRoleEditCannotStripAMemberAboveTheEditor(t *testing.T) {
+	for _, above := range []bool{true, false} {
+		t.Run(fmt.Sprint(above), func(t *testing.T) {
+			e := newPlaneEnv(t)
+			ctx := context.Background()
+			e.member(t, "boss@acme.example", "acme", []string{iam.TenantAdminRoleToken})
+			boss := as("boss@acme.example", "acme", "*")
+			for _, role := range []TenantRoleInput{
+				{Token: "editor", Authorities: []string{"role:write", "device:write"}},
+				{Token: "x", Authorities: []string{"device:write"}},
+				{Token: "y", Authorities: []string{"member:write"}},
+			} {
+				_, err := e.s.CreateTenantRole(boss, role)
+				require.NoError(t, err)
+			}
+			e.member(t, "erin@acme.example", "acme", []string{"editor"})
+			e.member(t, "bob@acme.example", "acme", []string{"x"})
+			roles := []string{"x"}
+			if above {
+				roles = append(roles, "y")
+			}
+			e.member(t, "alice@acme.example", "acme", roles)
+			_, err := e.s.UpdateTenantRole(as("erin@acme.example", "acme", "role:write", "device:write"), "x", &RoleUpdateRequest{Authorities: dcgraphql.OptionalStringListOf([]string{})})
+			if above {
+				require.Equal(t, CodeEscalation, refusalCode(err))
+			} else {
+				require.NoError(t, err)
+			}
+			role, err := e.s.iam.TenantOwnedRole(ctx, "acme", "x")
+			require.NoError(t, err)
+			if above {
+				require.Equal(t, []string{"device:write"}, role.Authorities)
+			} else {
+				require.Empty(t, role.Authorities)
+			}
+		})
+	}
+}
