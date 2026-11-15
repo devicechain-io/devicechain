@@ -60,6 +60,8 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/command-delivery/processor/StrandedReconciler.go": {"CommandDeliveryProcessor.reconcileStrandedPage"},
 	"backend/services/command-delivery/processor/WindowRestamp.go":      {"CommandDeliveryProcessor.restampWindows"},
 	"backend/services/device-management/model/ownership_outbox.go":      {"Api.DrainOwnershipFacts"},
+	// The attribute-repair drain lists the tenants that have queued repairs (no row is read), then repairs each tenant's rows under core.WithTenant.
+	"backend/services/device-management/model/api_attribute_repairs.go": {"Api.DrainAttributeRepairs"},
 	// The agent-effect relay lists the tenants that have queued effects, then drains each tenant's rows under core.WithTenant.
 	"backend/services/device-management/model/agent_effect_outbox.go":        {"Api.DrainAgentEffects"},
 	"backend/services/device-management/model/api_profile_decoder_health.go": {"Api.TrimDecoderHealth"},

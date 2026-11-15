@@ -209,7 +209,7 @@ func TestTheWalkAdvancesAndThenRestarts(t *testing.T) {
 		page = append(page, heldFor(uint(i), "c", "acme"))
 	}
 	api := &fakeApi{heldPage: page}
-	proc := reconcilerWith(api, &scriptedReader{})
+	proc := reconcilerWith(api, &scriptedReader{states: map[string]presence.State{"dev-c": asserted(false, mqttSource)}})
 
 	proc.reconcileHolds(context.Background())
 	if proc.reconcileCursor != uint(reconcilePageSize) {

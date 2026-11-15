@@ -36,6 +36,9 @@ func newRetiredTokenApi(t *testing.T) (*Api, context.Context) {
 		&CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &Device{}, &DeviceType{},
 		&EntityRelationship{}, &PendingOwnershipFact{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{},
 	), "migrate")
+	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatal(err)
+	}
 	api := NewApi(&rdb.RdbManager{Database: db})
 	ctx := core.WithTenant(context.Background(), "acme")
 	seedRetailType(t, api, ctx)

@@ -135,6 +135,7 @@ var purgeSeedExemptions = map[string]string{
 	"device-management.issued_group_tokens":                      representedTenantPredicate,
 	"device-management.maintenance_windows":                      representedTenantPredicate,
 	"device-management.metric_definitions":                       representedTenantPredicate,
+	"device-management.pending_attribute_repairs":                representedTenantPredicate,
 	"device-management.pending_ownership_facts":                  representedTenantPredicate,
 	"device-management.pending_revocation_expansion_serials":     representedTenantPredicate,
 	"device-management.pending_revocation_expansions":            representedTenantPredicate,
