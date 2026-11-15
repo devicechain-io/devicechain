@@ -59,8 +59,13 @@ type PAlarmStateChangeEvent struct {
 	DeviceToken     string `protobuf:"bytes,17,opt,name=device_token,json=deviceToken,proto3" json:"device_token,omitempty"`
 	DeviceName      string `protobuf:"bytes,18,opt,name=device_name,json=deviceName,proto3" json:"device_name,omitempty"`
 	DeviceTypeToken string `protobuf:"bytes,19,opt,name=device_type_token,json=deviceTypeToken,proto3" json:"device_type_token,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// clear_reason says why a CLEARED event ended the alarm when that was not the alarm's own
+	// condition clearing: "ORIGINATOR_DELETED" when the device or other entity the alarm was
+	// raised on was deleted. Empty otherwise, and then absent from the wire, so every other
+	// event's bytes are unchanged; an older consumer ignores it and ends the alarm on CLEARED.
+	ClearReason   string `protobuf:"bytes,20,opt,name=clear_reason,json=clearReason,proto3" json:"clear_reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PAlarmStateChangeEvent) Reset() {
@@ -215,6 +220,13 @@ func (x *PAlarmStateChangeEvent) GetDeviceName() string {
 func (x *PAlarmStateChangeEvent) GetDeviceTypeToken() string {
 	if x != nil {
 		return x.DeviceTypeToken
+	}
+	return ""
+}
+
+func (x *PAlarmStateChangeEvent) GetClearReason() string {
+	if x != nil {
+		return x.ClearReason
 	}
 	return ""
 }
@@ -656,7 +668,7 @@ var File_proto_dc_device_management_events_proto protoreflect.FileDescriptor
 
 const file_proto_dc_device_management_events_proto_rawDesc = "" +
 	"\n" +
-	"'proto/dc-device-management-events.proto\x12\x1fio.devicechain.devicemanagement\"\xdf\x05\n" +
+	"'proto/dc-device-management-events.proto\x12\x1fio.devicechain.devicemanagement\"\x82\x06\n" +
 	"\x16PAlarmStateChangeEvent\x12\x1d\n" +
 	"\n" +
 	"event_type\x18\x01 \x01(\tR\teventType\x12\x1f\n" +
@@ -682,7 +694,8 @@ const file_proto_dc_device_management_events_proto_rawDesc = "" +
 	"\fdevice_token\x18\x11 \x01(\tR\vdeviceToken\x12\x1f\n" +
 	"\vdevice_name\x18\x12 \x01(\tR\n" +
 	"deviceName\x12*\n" +
-	"\x11device_type_token\x18\x13 \x01(\tR\x0fdeviceTypeTokenB\x14\n" +
+	"\x11device_type_token\x18\x13 \x01(\tR\x0fdeviceTypeToken\x12!\n" +
+	"\fclear_reason\x18\x14 \x01(\tR\vclearReasonB\x14\n" +
 	"\x12_previous_severityB\x12\n" +
 	"\x10_acknowledged_byB\r\n" +
 	"\v_last_valueJ\x04\b\r\x10\x0eR\amessage\"\xaf\x01\n" +
