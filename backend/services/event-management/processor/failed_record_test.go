@@ -4,7 +4,13 @@
 package processor
 
 import (
+	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/devicechain-io/dc-event-management/model"
+	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
@@ -42,8 +48,8 @@ func TestParseFailedRecordFromEachWriter(t *testing.T) {
 	assert.NotEmpty(t, rec.Error)
 }
 
-// An Invalid record archives bytes that would not parse: they are never read, and the record
-// is still a record.
+// An event-management Invalid record may archive junk bytes. Decoding them is non-fatal:
+// it still records the refusal, without a device or event type.
 func TestParseFailedRecordInvalidReadsNoPayload(t *testing.T) {
 	junk := []byte{0xff, 0xfe, 0x01}
 	rec, err := ParseFailedRecord(failedRecordBytes(t, resolvedevent.FailureReason_Invalid, "event-management", "message could not be parsed", junk))
@@ -64,4 +70,68 @@ func TestParseFailedRecordSurvivesAMalformedPayload(t *testing.T) {
 func TestParseFailedRecordRefusesAnEnvelopeThatDoesNotDecode(t *testing.T) {
 	_, err := ParseFailedRecord([]byte{0xff, 0xff, 0xff, 0xff})
 	assert.Error(t, err)
+}
+
+// Match OnUnresolvedEvent's archived payload and failed-event envelope.
+func validationRefusalBytes(t *testing.T, device, integration string) []byte {
+	t.Helper()
+	event := &esmodel.UnresolvedEvent{
+		Device: device, IntegrationIdentifier: integration, EventType: eventtype.Measurement,
+		Payload: &esmodel.UnresolvedMeasurementsPayload{},
+	}
+	if device == "" && integration != "" {
+		event.EventType = eventtype.IntegrationUplink
+		event.Payload = &esmodel.UnresolvedIntegrationUplinkPayload{}
+	}
+	payload, err := esproto.MarshalUnresolvedEvent(event)
+	require.NoError(t, err)
+	failed, err := resolvedevent.MarshalFailedEvent(resolvedevent.NewFailedEvent(uint(resolvedevent.FailureReason_Invalid),
+		areaDeviceManagement, "event could not be resolved", fmt.Errorf("value is not numeric"), payload))
+	require.NoError(t, err)
+	return failed
+}
+
+func TestAValidationRefusalIsIndexedUnderItsDevice(t *testing.T) {
+	for _, tc := range []struct{ name, device, integration, want string }{
+		{"device", "pump-7", "", "pump-7"},
+		{"integration", "", "uplink-7", "uplink-7"},
+		{"device takes precedence", "pump-7", "uplink-7", "pump-7"},
+		{"overflow marker is sanitized", model.OverflowDeviceToken, "", model.ClaimedDeviceToken(model.OverflowDeviceToken)},
+		{"long token is bounded", strings.Repeat("x", 300), "", model.ClaimedDeviceToken(strings.Repeat("x", 300))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, err := ParseFailedRecord(validationRefusalBytes(t, tc.device, tc.integration))
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, rec.DeviceToken)
+			require.NotNil(t, rec.EventType)
+			wantType := eventtype.Measurement
+			if tc.device == "" {
+				wantType = eventtype.IntegrationUplink
+			}
+			assert.EqualValues(t, wantType, *rec.EventType)
+			assert.True(t, rec.PayloadRetained)
+		})
+	}
+}
+
+func TestParseFailedRecordInvalidWithoutReadableIdentity(t *testing.T) {
+	for _, service := range []string{areaDeviceManagement, areaEventManagement} {
+		for _, tc := range []struct {
+			name    string
+			payload []byte
+		}{
+			{"no payload", nil},
+			{"junk", []byte{0xff, 0xfe, 0x01}},
+			// An unknown protobuf field decodes successfully to an otherwise empty message.
+			{"empty message", []byte{0xf8, 0x07, 0x01}},
+		} {
+			t.Run(service+"/"+tc.name, func(t *testing.T) {
+				rec, err := ParseFailedRecord(failedRecordBytes(t, resolvedevent.FailureReason_Invalid, service, "invalid", tc.payload))
+				require.NoError(t, err)
+				assert.Empty(t, rec.DeviceToken)
+				assert.Nil(t, rec.EventType)
+				assert.Equal(t, len(tc.payload) > 0, rec.PayloadRetained)
+			})
+		}
+	}
 }
