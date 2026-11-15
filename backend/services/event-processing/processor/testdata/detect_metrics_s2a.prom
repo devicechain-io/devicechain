@@ -1,0 +1,430 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# HELP devicechain_eventprocessing_detect_applied_stream_seq Highest JetStream stream sequence captured in the committed snapshot.
+# TYPE devicechain_eventprocessing_detect_applied_stream_seq gauge
+devicechain_eventprocessing_detect_applied_stream_seq 0
+# HELP devicechain_eventprocessing_detect_barrier_wait_seconds How long the loop waited for every detection shard to drain its queue, for a snapshot, a rule change or a query that needs all of them. Most of a checkpoint's cost with concurrent shards is here.
+# TYPE devicechain_eventprocessing_detect_barrier_wait_seconds histogram
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="0.0001"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="0.00025"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="0.0005"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="0.001"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="0.0025"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="0.005"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="0.01"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="0.025"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="0.05"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="0.1"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="0.25"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="0.5"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="1"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="2.5"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="10"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_bucket{le="+Inf"} 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_sum 0
+devicechain_eventprocessing_detect_barrier_wait_seconds_count 0
+# HELP devicechain_eventprocessing_detect_checkpoint_duration_seconds Wall-clock cost of each committed snapshot (serialize plus store), as a distribution. detect_checkpoint_seconds keeps only the last one.
+# TYPE devicechain_eventprocessing_detect_checkpoint_duration_seconds histogram
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="0.001"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="0.0025"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="0.005"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="0.01"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="0.025"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="0.05"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="0.1"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="0.25"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="0.5"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="1"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="2.5"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="5"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="10"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="30"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_bucket{le="+Inf"} 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_sum 0
+devicechain_eventprocessing_detect_checkpoint_duration_seconds_count 0
+# HELP devicechain_eventprocessing_detect_checkpoint_failures_total Scheduled DETECT checkpoints that did not commit, by stage (publish, serialize, save). A checkpoint call that outlives its deadline counts against the stage it was stuck in. A stale-writer refusal is not counted here: that ends the process.
+# TYPE devicechain_eventprocessing_detect_checkpoint_failures_total counter
+devicechain_eventprocessing_detect_checkpoint_failures_total{stage="publish"} 0
+devicechain_eventprocessing_detect_checkpoint_failures_total{stage="save"} 0
+devicechain_eventprocessing_detect_checkpoint_failures_total{stage="serialize"} 0
+# HELP devicechain_eventprocessing_detect_checkpoint_save_seconds Time each committed snapshot spent being written to the database: the second part of detect_checkpoint_duration_seconds.
+# TYPE devicechain_eventprocessing_detect_checkpoint_save_seconds histogram
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="0.001"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="0.0025"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="0.005"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="0.01"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="0.025"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="0.05"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="0.1"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="0.25"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="0.5"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="1"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="2.5"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="5"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="10"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="30"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="+Inf"} 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_sum 0
+devicechain_eventprocessing_detect_checkpoint_save_seconds_count 0
+# HELP devicechain_eventprocessing_detect_checkpoint_seconds Wall-clock cost of the last snapshot commit.
+# TYPE devicechain_eventprocessing_detect_checkpoint_seconds gauge
+devicechain_eventprocessing_detect_checkpoint_seconds 0
+# HELP devicechain_eventprocessing_detect_checkpoint_serialize_seconds Time each committed snapshot spent serializing the engine's state: the first part of detect_checkpoint_duration_seconds.
+# TYPE devicechain_eventprocessing_detect_checkpoint_serialize_seconds histogram
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="0.001"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="0.0025"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="0.005"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="0.01"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="0.025"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="0.05"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="0.1"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="0.25"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="0.5"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="1"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="2.5"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="5"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="10"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="30"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_bucket{le="+Inf"} 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_sum 0
+devicechain_eventprocessing_detect_checkpoint_serialize_seconds_count 0
+# HELP devicechain_eventprocessing_detect_checkpoints_total Committed DETECT snapshot checkpoints.
+# TYPE devicechain_eventprocessing_detect_checkpoints_total counter
+devicechain_eventprocessing_detect_checkpoints_total 0
+# HELP devicechain_eventprocessing_detect_consumer_ack_pending Delivered-but-unacked messages on the resolved-events durable consumer (in-flight work).
+# TYPE devicechain_eventprocessing_detect_consumer_ack_pending gauge
+devicechain_eventprocessing_detect_consumer_ack_pending 0
+# HELP devicechain_eventprocessing_detect_consumer_pending Undelivered messages waiting on the resolved-events durable consumer (the primary DETECT lag signal).
+# TYPE devicechain_eventprocessing_detect_consumer_pending gauge
+devicechain_eventprocessing_detect_consumer_pending 0
+# HELP devicechain_eventprocessing_detect_derived_events_published_total Derived signal events published (ADR-037).
+# TYPE devicechain_eventprocessing_detect_derived_events_published_total counter
+devicechain_eventprocessing_detect_derived_events_published_total 0
+# HELP devicechain_eventprocessing_detect_derived_publish_ack_seconds Time each published derived event waited for the broker to acknowledge it, from the write to the acknowledgement. Positive outcomes only. It is not detection latency: a detection waits for its checkpoint before it is written.
+# TYPE devicechain_eventprocessing_detect_derived_publish_ack_seconds histogram
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="0.0001"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="0.00025"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="0.0005"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="0.001"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="0.0025"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="0.005"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="0.01"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="0.025"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="0.05"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="0.1"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="0.25"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="0.5"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="1"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="2.5"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="10"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_bucket{le="+Inf"} 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_sum 0
+devicechain_eventprocessing_detect_derived_publish_ack_seconds_count 0
+# HELP devicechain_eventprocessing_detect_derived_publish_failures_total Derived-event publishes that did not get a positive acknowledgement, by outcome: unknown (a timeout: the event may have been stored) or failed (the broker refused it). Each defers its checkpoint and is retried with the same bytes and broker dedup id, so a stored one is not stored twice.
+# TYPE devicechain_eventprocessing_detect_derived_publish_failures_total counter
+devicechain_eventprocessing_detect_derived_publish_failures_total{outcome="failed"} 0
+devicechain_eventprocessing_detect_derived_publish_failures_total{outcome="unknown"} 0
+# HELP devicechain_eventprocessing_detect_derived_publish_lane_waits_total Detections that waited for an earlier detection of the same device (or correlation anchor) to be acknowledged before they could be sent, with derivedPublishing.maxInFlight above 1. A high share of all published detections means a few busy series, which a wider window cannot overlap.
+# TYPE devicechain_eventprocessing_detect_derived_publish_lane_waits_total counter
+devicechain_eventprocessing_detect_derived_publish_lane_waits_total 0
+# HELP devicechain_eventprocessing_detect_derived_publish_outstanding Derived events sent and waiting for the broker's acknowledgement right now (bounded by derivedPublishing.maxInFlight). Zero between checkpoints.
+# TYPE devicechain_eventprocessing_detect_derived_publish_outstanding gauge
+devicechain_eventprocessing_detect_derived_publish_outstanding 0
+# HELP devicechain_eventprocessing_detect_derived_publish_outstanding_bytes Payload bytes of those derived events (bounded by derivedPublishing.maxBufferedBytes, except that a single larger event is sent on its own).
+# TYPE devicechain_eventprocessing_detect_derived_publish_outstanding_bytes gauge
+devicechain_eventprocessing_detect_derived_publish_outstanding_bytes 0
+# HELP devicechain_eventprocessing_detect_derived_publish_pass_seconds Time each checkpoint spent publishing its buffered detections, from the first send to the last acknowledgement, whether or not every one succeeded. Detections wait in the buffer for their checkpoint before this starts, so it is not detection latency.
+# TYPE devicechain_eventprocessing_detect_derived_publish_pass_seconds histogram
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="0.001"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="0.0025"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="0.005"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="0.01"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="0.025"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="0.05"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="0.1"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="0.25"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="0.5"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="1"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="2.5"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="5"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="10"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="30"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_bucket{le="+Inf"} 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_sum 0
+devicechain_eventprocessing_detect_derived_publish_pass_seconds_count 0
+# HELP devicechain_eventprocessing_detect_derived_publish_stale_outcomes_total Publish outcomes refused because they did not belong to a publish the current checkpoint was waiting for. Always zero unless something is wrong; a non-zero value is a bug to report.
+# TYPE devicechain_eventprocessing_detect_derived_publish_stale_outcomes_total counter
+devicechain_eventprocessing_detect_derived_publish_stale_outcomes_total 0
+# HELP devicechain_eventprocessing_detect_derived_publish_window_full_seconds_total Seconds a checkpoint spent waiting for an acknowledgement while another detection was ready to send but the in-flight limit or byte budget had no room. With derivedPublishing.maxInFlight 1 that is nearly all of the publish wait.
+# TYPE devicechain_eventprocessing_detect_derived_publish_window_full_seconds_total counter
+devicechain_eventprocessing_detect_derived_publish_window_full_seconds_total 0
+# HELP devicechain_eventprocessing_detect_duplicate_events_skipped_total Events DETECT skipped because an event with the same identity (tenant, device, type, occurred time, alternate id, payload) was already applied inside the recent window: a duplicate the resolved stream delivered under a second sequence, such as a republish across a rolling upgrade or a residual of envelope settlement. Each is an event that would otherwise have been applied twice. A sustained non-zero rate means something upstream is storing events twice.
+# TYPE devicechain_eventprocessing_detect_duplicate_events_skipped_total counter
+devicechain_eventprocessing_detect_duplicate_events_skipped_total 0
+# HELP devicechain_eventprocessing_detect_events_applied_total Resolved events fed into the DETECT engine.
+# TYPE devicechain_eventprocessing_detect_events_applied_total counter
+devicechain_eventprocessing_detect_events_applied_total 0
+# HELP devicechain_eventprocessing_detect_fact_persist_retries_total Retries of a fact projection write (rules, roster, attributes, deletions) that failed with a non-terminal error. The fact stays unacked and this consumer is blocked behind it until a retry commits.
+# TYPE devicechain_eventprocessing_detect_fact_persist_retries_total counter
+devicechain_eventprocessing_detect_fact_persist_retries_total 0
+# HELP devicechain_eventprocessing_detect_fact_reconcile_failures_total Reconcile attempts against device-management that did not complete, by projection (tenants, rules, roster, attributes). The projection is left exactly as it was — a failed read never deletes — and the next sweep retries.
+# TYPE devicechain_eventprocessing_detect_fact_reconcile_failures_total counter
+devicechain_eventprocessing_detect_fact_reconcile_failures_total{projection="attributes"} 0
+devicechain_eventprocessing_detect_fact_reconcile_failures_total{projection="roster"} 0
+devicechain_eventprocessing_detect_fact_reconcile_failures_total{projection="rules"} 0
+devicechain_eventprocessing_detect_fact_reconcile_failures_total{projection="tenants"} 0
+# HELP devicechain_eventprocessing_detect_fact_reconcile_repairs_total Projection rows the detection engine repaired from device-management because the notification for a change never arrived, by projection (rules, profile_active, roster, attributes). Each one is a change that had not reached detection until the reconcile found it.
+# TYPE devicechain_eventprocessing_detect_fact_reconcile_repairs_total counter
+devicechain_eventprocessing_detect_fact_reconcile_repairs_total{projection="attributes"} 0
+devicechain_eventprocessing_detect_fact_reconcile_repairs_total{projection="profile_active"} 0
+devicechain_eventprocessing_detect_fact_reconcile_repairs_total{projection="roster"} 0
+devicechain_eventprocessing_detect_fact_reconcile_repairs_total{projection="rules"} 0
+# HELP devicechain_eventprocessing_detect_fanout_eval_errors_total Leaf-predicate evaluation errors during fan-out (the sample is skipped for that rule, not fed as a non-match).
+# TYPE devicechain_eventprocessing_detect_fanout_eval_errors_total counter
+devicechain_eventprocessing_detect_fanout_eval_errors_total 0
+# HELP devicechain_eventprocessing_detect_fanout_events_total Per-rule core events produced by the resolved-event fan-out.
+# TYPE devicechain_eventprocessing_detect_fanout_events_total counter
+devicechain_eventprocessing_detect_fanout_events_total 0
+# HELP devicechain_eventprocessing_detect_guard_prime_events_total Events read from the stream to prime the duplicate-event guard, summed over term builds.
+# TYPE devicechain_eventprocessing_detect_guard_prime_events_total counter
+devicechain_eventprocessing_detect_guard_prime_events_total 0
+# HELP devicechain_eventprocessing_detect_guard_prime_partial_total Term builds whose priming found the stream no longer reaching back the guard's whole retention (the oldest message is newer than the retention before the restored position and is not the first ever written). A duplicate of an event older than that is applied twice. Non-zero means stream retention is shorter than the redelivery span.
+# TYPE devicechain_eventprocessing_detect_guard_prime_partial_total counter
+devicechain_eventprocessing_detect_guard_prime_partial_total 0
+# HELP devicechain_eventprocessing_detect_guard_prime_seconds Wall-clock seconds the last term build spent reading the stream to prime the duplicate-event guard. Zero until a build primed one. It is the part of a leader change that grows with the event rate.
+# TYPE devicechain_eventprocessing_detect_guard_prime_seconds gauge
+devicechain_eventprocessing_detect_guard_prime_seconds 0
+# HELP devicechain_eventprocessing_detect_idle_advances_total Wall-clock idle advances that produced at least one detection.
+# TYPE devicechain_eventprocessing_detect_idle_advances_total counter
+devicechain_eventprocessing_detect_idle_advances_total 0
+# HELP devicechain_eventprocessing_detect_idle_detections_total Detections produced by wall-clock idle advance (absence/duration/session firing on silence).
+# TYPE devicechain_eventprocessing_detect_idle_detections_total counter
+devicechain_eventprocessing_detect_idle_detections_total 0
+# HELP devicechain_eventprocessing_detect_is_leader 1 while this replica holds the DETECT partition lease, from acquisition rather than from the end of the term build.
+# TYPE devicechain_eventprocessing_detect_is_leader gauge
+devicechain_eventprocessing_detect_is_leader 0
+# HELP devicechain_eventprocessing_detect_late_samples_total Samples that arrived too far behind the watermark to be used, counted once per rule that declined them: after their own trailing window had passed it (Repeating, SlidingAgg, Correlation), or, for a Duration rule, a matching reading more than the rule's hold behind it or a non-matching reading from inside the run of an alarm already raised, older than the raise. A store-and-forward device uploading buffered readings is the usual cause; a sustained non-zero rate means those rules are evaluating less than the device sent.
+# TYPE devicechain_eventprocessing_detect_late_samples_total counter
+devicechain_eventprocessing_detect_late_samples_total 0
+# HELP devicechain_eventprocessing_detect_live 1 while this replica is consuming inside a held leadership term; 0 while standing by OR while building a term it has already acquired.
+# TYPE devicechain_eventprocessing_detect_live gauge
+devicechain_eventprocessing_detect_live 0
+# HELP devicechain_eventprocessing_detect_live_gap_fills_total Times live consumption met a message whose stream sequence was more than one past the engine's and read the missing range from the stream, by outcome: filled (the range was read and held messages), absent_only (the stream held none of it: purged or evicted), failed (an attempt to read the range did not complete; live consumption parks and the attempt repeats every tick, so a sustained outage counts every attempt, not once).
+# TYPE devicechain_eventprocessing_detect_live_gap_fills_total counter
+devicechain_eventprocessing_detect_live_gap_fills_total{outcome="absent_only"} 0
+devicechain_eventprocessing_detect_live_gap_fills_total{outcome="failed"} 0
+devicechain_eventprocessing_detect_live_gap_fills_total{outcome="filled"} 0
+# HELP devicechain_eventprocessing_detect_live_gap_sequences_total Stream sequences inside live gap fills, by outcome: applied (a message the broker had counted as delivered that never reached the loop, now applied), absent (not in the stream: purged or evicted), skipped (read back unprocessable, and recorded as handled without applying anything). A non-zero applied rate means deliveries are being lost between the broker and this loop.
+# TYPE devicechain_eventprocessing_detect_live_gap_sequences_total counter
+devicechain_eventprocessing_detect_live_gap_sequences_total{outcome="absent"} 0
+devicechain_eventprocessing_detect_live_gap_sequences_total{outcome="applied"} 0
+devicechain_eventprocessing_detect_live_gap_sequences_total{outcome="skipped"} 0
+# HELP devicechain_eventprocessing_detect_live_keys Total live keyed window/timer state entries across all tenants (the per-tenant state-budget aggregate).
+# TYPE devicechain_eventprocessing_detect_live_keys gauge
+devicechain_eventprocessing_detect_live_keys 0
+# HELP devicechain_eventprocessing_detect_loop_heartbeat_timestamp_seconds Unix time of the last pass of the DETECT single-writer loop, refreshed at least once per tick while a term is live. Stale while detect_is_leader and detect_live read 1 means the loop is hung inside a call.
+# TYPE devicechain_eventprocessing_detect_loop_heartbeat_timestamp_seconds gauge
+devicechain_eventprocessing_detect_loop_heartbeat_timestamp_seconds 0
+# HELP devicechain_eventprocessing_detect_loop_seconds_total Wall-clock seconds the live detection loop has spent in each phase, by phase: fetch_wait (idle, waiting for the next message or tick), decode, plan (rule fan-out), apply (the engine), publish (a checkpoint handing detections to the broker), save (a checkpoint committing the snapshot), ack, gapfill (reading missed sequences), control (rule and roster updates, purges, ticker housekeeping), parked (live messages switched off behind an uncommitted idle advance or an unreadable gap), probe (the ticker's broker backlog round trips). The phases partition the loop's time, so a phase's rate is its share of wall time and the non-wait phases summing to 1 means the loop is saturated.
+# TYPE devicechain_eventprocessing_detect_loop_seconds_total counter
+devicechain_eventprocessing_detect_loop_seconds_total{phase="ack"} 0
+devicechain_eventprocessing_detect_loop_seconds_total{phase="apply"} 0
+devicechain_eventprocessing_detect_loop_seconds_total{phase="control"} 0
+devicechain_eventprocessing_detect_loop_seconds_total{phase="decode"} 0
+devicechain_eventprocessing_detect_loop_seconds_total{phase="fetch_wait"} 0
+devicechain_eventprocessing_detect_loop_seconds_total{phase="gapfill"} 0
+devicechain_eventprocessing_detect_loop_seconds_total{phase="parked"} 0
+devicechain_eventprocessing_detect_loop_seconds_total{phase="plan"} 0
+devicechain_eventprocessing_detect_loop_seconds_total{phase="probe"} 0
+devicechain_eventprocessing_detect_loop_seconds_total{phase="publish"} 0
+devicechain_eventprocessing_detect_loop_seconds_total{phase="save"} 0
+# HELP devicechain_eventprocessing_detect_pending_timers Entries in the timer wheel's pending-deadline heap: one per key with an armed absence, session, duration or held-resolve timer (a deadline reset moves the key's entry).
+# TYPE devicechain_eventprocessing_detect_pending_timers gauge
+devicechain_eventprocessing_detect_pending_timers 0
+# HELP devicechain_eventprocessing_detect_restore_seconds Time to restore engine state from the snapshot store at startup.
+# TYPE devicechain_eventprocessing_detect_restore_seconds gauge
+devicechain_eventprocessing_detect_restore_seconds 0
+# HELP devicechain_eventprocessing_detect_retained_samples Total per-sample records retained by window-shaped rules across all tenants (repeating/sliding-aggregate windows and correlation members).
+# TYPE devicechain_eventprocessing_detect_retained_samples gauge
+devicechain_eventprocessing_detect_retained_samples 0
+# HELP devicechain_eventprocessing_detect_rule_stat_admission_contended_total Rule-health admissions that found the accumulator busy (its background writer swapping or settling a batch) and waited for it. Each wait is bounded by a constant-time step, never by a database call.
+# TYPE devicechain_eventprocessing_detect_rule_stat_admission_contended_total counter
+devicechain_eventprocessing_detect_rule_stat_admission_contended_total 0
+# HELP devicechain_eventprocessing_detect_rule_stat_batch_rows Distinct rule rows in each rule-health batch write.
+# TYPE devicechain_eventprocessing_detect_rule_stat_batch_rows histogram
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="1"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="2"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="4"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="8"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="16"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="32"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="64"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="128"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="256"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="512"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="1024"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="4096"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="16384"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="65536"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_bucket{le="+Inf"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_sum 0
+devicechain_eventprocessing_detect_rule_stat_batch_rows_count 0
+# HELP devicechain_eventprocessing_detect_rule_stat_batch_updates Fire updates (published detections) carried by each rule-health batch write: how many single-row writes it stands in for.
+# TYPE devicechain_eventprocessing_detect_rule_stat_batch_updates histogram
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="1"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="2"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="4"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="8"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="16"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="32"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="64"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="128"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="256"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="512"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="1024"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="4096"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="16384"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="65536"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_bucket{le="+Inf"} 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_sum 0
+devicechain_eventprocessing_detect_rule_stat_batch_updates_count 0
+# HELP devicechain_eventprocessing_detect_rule_stat_oldest_pending_seconds Age of the oldest rule-health update not yet written: how stale the console's fire counts may be. Normally under the flush interval plus one write.
+# TYPE devicechain_eventprocessing_detect_rule_stat_oldest_pending_seconds gauge
+devicechain_eventprocessing_detect_rule_stat_oldest_pending_seconds 0
+# HELP devicechain_eventprocessing_detect_rule_stat_pending_bytes Accounted memory of the pending rule-health updates, across the active, detached and in-flight sets (bounded by ruleHealth.maxPendingBytes).
+# TYPE devicechain_eventprocessing_detect_rule_stat_pending_bytes gauge
+devicechain_eventprocessing_detect_rule_stat_pending_bytes 0
+# HELP devicechain_eventprocessing_detect_rule_stat_pending_keys Distinct rules with fire updates not yet written, across the active, detached and in-flight sets (bounded by ruleHealth.maxPendingKeys).
+# TYPE devicechain_eventprocessing_detect_rule_stat_pending_keys gauge
+devicechain_eventprocessing_detect_rule_stat_pending_keys 0
+# HELP devicechain_eventprocessing_detect_rule_stat_updates_admitted_total Published detections admitted to the rule-health fire counters, to be written in the background.
+# TYPE devicechain_eventprocessing_detect_rule_stat_updates_admitted_total counter
+devicechain_eventprocessing_detect_rule_stat_updates_admitted_total 0
+# HELP devicechain_eventprocessing_detect_rule_stat_updates_coalesced_total Admitted rule-health fire updates that merged into a rule's pending count rather than adding a row to the next write.
+# TYPE devicechain_eventprocessing_detect_rule_stat_updates_coalesced_total counter
+devicechain_eventprocessing_detect_rule_stat_updates_coalesced_total 0
+# HELP devicechain_eventprocessing_detect_rule_stat_updates_discarded_total Rule-health fire updates that will never be written, by reason: full (the pending budget was exhausted, so the update was refused at admission), overflow (the rule's pending count is at its ceiling), closed (admitted after the leadership term ended), write_failed (its batch failed or timed out and was not retried), purged (its tenant was deleted first), shutdown (still pending when the term ended). Detection is unaffected; the console's fire counts are short by this much.
+# TYPE devicechain_eventprocessing_detect_rule_stat_updates_discarded_total counter
+devicechain_eventprocessing_detect_rule_stat_updates_discarded_total{reason="closed"} 0
+devicechain_eventprocessing_detect_rule_stat_updates_discarded_total{reason="full"} 0
+devicechain_eventprocessing_detect_rule_stat_updates_discarded_total{reason="overflow"} 0
+devicechain_eventprocessing_detect_rule_stat_updates_discarded_total{reason="purged"} 0
+devicechain_eventprocessing_detect_rule_stat_updates_discarded_total{reason="shutdown"} 0
+devicechain_eventprocessing_detect_rule_stat_updates_discarded_total{reason="write_failed"} 0
+# HELP devicechain_eventprocessing_detect_rule_stat_updates_written_total Rule-health fire updates committed to the database.
+# TYPE devicechain_eventprocessing_detect_rule_stat_updates_written_total counter
+devicechain_eventprocessing_detect_rule_stat_updates_written_total 0
+# HELP devicechain_eventprocessing_detect_rule_stat_write_failures_total Rule-health fire counter batch writes (one tenant's transaction) that failed or timed out and were discarded, not retried. Detection is unaffected (the counters are written off the detection loop), but the console's rule-health counts fall short while this rises; the fires lost are in detect_rule_stat_updates_discarded_total with reason write_failed, and the cause is in the service log.
+# TYPE devicechain_eventprocessing_detect_rule_stat_write_failures_total counter
+devicechain_eventprocessing_detect_rule_stat_write_failures_total 0
+# HELP devicechain_eventprocessing_detect_rule_stat_write_seconds Time each rule-health fire counter batch write (one tenant's transaction, including the tenant-deletion check it makes first) took on the background writer. It is not detection-loop time. Failed writes are included; they are also counted in detect_rule_stat_write_failures_total.
+# TYPE devicechain_eventprocessing_detect_rule_stat_write_seconds histogram
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="0.0001"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="0.00025"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="0.0005"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="0.001"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="0.0025"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="0.005"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="0.01"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="0.025"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="0.05"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="0.1"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="0.25"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="0.5"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="1"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="2.5"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="10"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_bucket{le="+Inf"} 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_sum 0
+devicechain_eventprocessing_detect_rule_stat_write_seconds_count 0
+# HELP devicechain_eventprocessing_detect_rules_active Rules loaded into the DETECT engine.
+# TYPE devicechain_eventprocessing_detect_rules_active gauge
+devicechain_eventprocessing_detect_rules_active 0
+# HELP devicechain_eventprocessing_detect_shard_busy_seconds_total Seconds each detection shard has spent applying operations. The rate is the shard's utilisation; one shard far above the others is a hot key, all of them near 1 means detectShards is the limit.
+# TYPE devicechain_eventprocessing_detect_shard_busy_seconds_total counter
+devicechain_eventprocessing_detect_shard_busy_seconds_total{shard="0"} 0
+devicechain_eventprocessing_detect_shard_busy_seconds_total{shard="1"} 0
+# HELP devicechain_eventprocessing_detect_shard_invariant_violations_total Times the detection shards disagreed on the watermark or the position at a snapshot, or with the loop on the position. The snapshot is refused. Any increase is a defect.
+# TYPE devicechain_eventprocessing_detect_shard_invariant_violations_total counter
+devicechain_eventprocessing_detect_shard_invariant_violations_total 0
+# HELP devicechain_eventprocessing_detect_shard_live_keys Live windows, timers and latches each detection shard holds, sampled on the state-budget tick. An uneven spread is key skew.
+# TYPE devicechain_eventprocessing_detect_shard_live_keys gauge
+devicechain_eventprocessing_detect_shard_live_keys{shard="0"} 0
+devicechain_eventprocessing_detect_shard_live_keys{shard="1"} 0
+# HELP devicechain_eventprocessing_detect_shard_queue_depth Operations queued for each detection shard, sampled on the loop's tick. A queue that stays near its bound means that shard is the slowest and the loop is waiting on it.
+# TYPE devicechain_eventprocessing_detect_shard_queue_depth gauge
+devicechain_eventprocessing_detect_shard_queue_depth{shard="0"} 0
+devicechain_eventprocessing_detect_shard_queue_depth{shard="1"} 0
+# HELP devicechain_eventprocessing_detect_shards How many ways the live detection engine's keyed state is split (the detectShards setting; 1 is the unsplit engine). Set when the engine is built or restored.
+# TYPE devicechain_eventprocessing_detect_shards gauge
+devicechain_eventprocessing_detect_shards 0
+# HELP devicechain_eventprocessing_detect_snapshot_bytes Serialized size of the last DETECT snapshot payload.
+# TYPE devicechain_eventprocessing_detect_snapshot_bytes gauge
+devicechain_eventprocessing_detect_snapshot_bytes 0
+# HELP devicechain_eventprocessing_detect_stale_absence_dropped_total Absence RAISES (and their paired clears) dropped at publish because the device left the rule's scope (deleted/disabled/re-typed/version superseded), plus republish handoff clears.
+# TYPE devicechain_eventprocessing_detect_stale_absence_dropped_total counter
+devicechain_eventprocessing_detect_stale_absence_dropped_total 0
+# HELP devicechain_eventprocessing_detect_superseded_frontier_dropped_total Non-absence frontier-triggered detections (Duration/Session/Aggregate) dropped at publish because their profile version is superseded (ADR-057 D6).
+# TYPE devicechain_eventprocessing_detect_superseded_frontier_dropped_total counter
+devicechain_eventprocessing_detect_superseded_frontier_dropped_total 0
+# HELP devicechain_eventprocessing_detect_tenants_over_live_key_budget Tenants currently exceeding the per-tenant live-key budget (ADR-023).
+# TYPE devicechain_eventprocessing_detect_tenants_over_live_key_budget gauge
+devicechain_eventprocessing_detect_tenants_over_live_key_budget 0
+# HELP devicechain_eventprocessing_detect_tenants_over_retained_sample_budget Tenants currently exceeding the per-tenant retained-sample budget (ADR-023).
+# TYPE devicechain_eventprocessing_detect_tenants_over_retained_sample_budget gauge
+devicechain_eventprocessing_detect_tenants_over_retained_sample_budget 0
+# HELP devicechain_eventprocessing_detect_tenants_over_rule_budget Tenants currently exceeding the per-tenant rule-count budget (ADR-023).
+# TYPE devicechain_eventprocessing_detect_tenants_over_rule_budget gauge
+devicechain_eventprocessing_detect_tenants_over_rule_budget 0
+# HELP devicechain_eventprocessing_detect_tick_last_success_timestamp_seconds Unix time of the last pass of the detect_tick task that completed its work; NaN until one has.
+# TYPE devicechain_eventprocessing_detect_tick_last_success_timestamp_seconds gauge
+devicechain_eventprocessing_detect_tick_last_success_timestamp_seconds NaN
+# HELP devicechain_eventprocessing_detect_tick_pass_duration_seconds How long one pass of the detect_tick task took.
+# TYPE devicechain_eventprocessing_detect_tick_pass_duration_seconds histogram
+devicechain_eventprocessing_detect_tick_pass_duration_seconds_bucket{le="0.1"} 0
+devicechain_eventprocessing_detect_tick_pass_duration_seconds_bucket{le="0.5"} 0
+devicechain_eventprocessing_detect_tick_pass_duration_seconds_bucket{le="1"} 0
+devicechain_eventprocessing_detect_tick_pass_duration_seconds_bucket{le="5"} 0
+devicechain_eventprocessing_detect_tick_pass_duration_seconds_bucket{le="15"} 0
+devicechain_eventprocessing_detect_tick_pass_duration_seconds_bucket{le="60"} 0
+devicechain_eventprocessing_detect_tick_pass_duration_seconds_bucket{le="300"} 0
+devicechain_eventprocessing_detect_tick_pass_duration_seconds_bucket{le="900"} 0
+devicechain_eventprocessing_detect_tick_pass_duration_seconds_bucket{le="3600"} 0
+devicechain_eventprocessing_detect_tick_pass_duration_seconds_bucket{le="+Inf"} 0
+devicechain_eventprocessing_detect_tick_pass_duration_seconds_sum 0
+devicechain_eventprocessing_detect_tick_pass_duration_seconds_count 0
+# HELP devicechain_eventprocessing_detect_tick_passes_total Passes made by the detect_tick task, by outcome.
+# TYPE devicechain_eventprocessing_detect_tick_passes_total counter
+devicechain_eventprocessing_detect_tick_passes_total{outcome="cancelled"} 0
+devicechain_eventprocessing_detect_tick_passes_total{outcome="complete"} 0
+devicechain_eventprocessing_detect_tick_passes_total{outcome="failed"} 0
+devicechain_eventprocessing_detect_tick_passes_total{outcome="partial"} 0
+devicechain_eventprocessing_detect_tick_passes_total{outcome="skipped"} 0
+# HELP devicechain_eventprocessing_detect_watermark_lag_seconds Wall-clock time minus the engine watermark at the last checkpoint.
+# TYPE devicechain_eventprocessing_detect_watermark_lag_seconds gauge
+devicechain_eventprocessing_detect_watermark_lag_seconds 0
+# HELP devicechain_eventprocessing_rule_health_flush_last_success_timestamp_seconds Unix time of the last pass of the rule_health_flush task that completed its work; NaN until one has.
+# TYPE devicechain_eventprocessing_rule_health_flush_last_success_timestamp_seconds gauge
+devicechain_eventprocessing_rule_health_flush_last_success_timestamp_seconds NaN
+# HELP devicechain_eventprocessing_rule_health_flush_pass_duration_seconds How long one pass of the rule_health_flush task took.
+# TYPE devicechain_eventprocessing_rule_health_flush_pass_duration_seconds histogram
+devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_bucket{le="0.1"} 0
+devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_bucket{le="0.5"} 0
+devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_bucket{le="1"} 0
+devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_bucket{le="5"} 0
+devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_bucket{le="15"} 0
+devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_bucket{le="60"} 0
+devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_bucket{le="300"} 0
+devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_bucket{le="900"} 0
+devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_bucket{le="3600"} 0
+devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_bucket{le="+Inf"} 0
+devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_sum 0
+devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_count 0
+# HELP devicechain_eventprocessing_rule_health_flush_passes_total Passes made by the rule_health_flush task, by outcome.
+# TYPE devicechain_eventprocessing_rule_health_flush_passes_total counter
+devicechain_eventprocessing_rule_health_flush_passes_total{outcome="cancelled"} 0
+devicechain_eventprocessing_rule_health_flush_passes_total{outcome="complete"} 0
+devicechain_eventprocessing_rule_health_flush_passes_total{outcome="failed"} 0
+devicechain_eventprocessing_rule_health_flush_passes_total{outcome="partial"} 0
+devicechain_eventprocessing_rule_health_flush_passes_total{outcome="skipped"} 0
