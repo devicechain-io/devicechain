@@ -899,6 +899,12 @@ La API de administración del operador ahora limita una identidad cuyo rol de si
 - **API del inquilino:** un administrador del inquilino solo puede cambiar un rol del inquilino si posee todos los permisos que concede, y solo puede quitarle permisos si posee todos los que poseen sus miembros.
 - **Qué comprobar:** un rol de sistema delegado que necesite administrar superusuarios o definir roles con permisos superiores a los suyos ahora recibe `ESCALATION`; realice esos cambios como superusuario.
 
+#### Autores del borrador tras eliminar definiciones {#v160-review-deleters}
+
+La revisión de cambios normalmente no considera autoras del borrador a las personas que solo eliminaron reglas, métricas o comandos en otros perfiles. Las eliminaciones no atribuidas a una fila, anteriores a la actualización o realizadas por un pod aún sin actualizar durante una actualización gradual, se tratan de forma conservadora: si desapareció una definición del perfil revisado sin una eliminación atribuida que lo explique, toda persona que haya realizado una eliminación no atribuida desde el último cambio atribuido de esa definición cuenta como autora. Las revisiones ya ejecutadas conservan la lista de autores que registraron; ejecuta una nueva revisión si se excluyó a un aprobador. Al eliminar un perfil, ahora se escribe una entrada de auditoría por cada definición que se elimina.
+
+- **No es necesario hacer nada.** Ejecuta una nueva revisión si se excluyó a un aprobador por una eliminación en otro perfil.
+
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
 
 `v1.5.0` es una actualización in situ desde `v1.4.0`: ejecuta `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de la nueva versión para ambos comandos** y pasa a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Se ejecutan cuatro migraciones añadidas: tres en `device-management` y una en `user-management`. Añaden la barrera de desactivación del agente y la bandeja de salida de efectos, las revisiones de automatización y su exigencia, y la columna de generación de actuación. Consulta [Cambios de esquema y vuelta atrás](#v150-going-back). Si vienes de `v1.3.0` o anterior, lee primero las [notas de `v1.4.0`](#v140-upgrade).
