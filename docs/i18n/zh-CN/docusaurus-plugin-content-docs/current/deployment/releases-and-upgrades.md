@@ -524,6 +524,10 @@ dcctl bootstrap local devicechain
 - 非跟踪类型（包括 `member`）仍会被创建，除非租户已将该类型标记为跟踪。`NewRelationship` 事件本身不再把新目标作为锚点携带：非跟踪关系不代表归属，因此该事件按设备现有的锚点限定范围，与其下一个遥测事件相同。
 - 滚动升级期间，仍运行 v1.5 的 Pod 在被替换之前仍会创建该关系。
 
+#### 太阳活动需要安装位置访问权限 {#v160-solar-campaign-position}
+
+创建 `SOLAR` 活动、读取其元素（`campaignElements`）或周期（`campaignCycles`），以及重试其失败项（`retryCampaignFailed`），现在还需要 `location:installed:read`（或 `location:read`）。太阳计划中每台设备的时间会透露该设备的安装位置；对于只有一台设备的组，周期计数也可能透露由位置推导出的结果。`CRON` 和 `CALENDAR` 活动保持不变。请为管理太阳活动的角色添加此权限。
+
 #### 升级前 {#v160-before-upgrade}
 
 滚动更新 Pod 前，请检查手工编辑的实例配置。以下拒绝条件均为 `v1.5.0` 之后新增；无效的服务设置会阻止启动，可能导致 Pod 反复崩溃重启。下列服务键位于 `functionalAreas.<area>.config` 下。
