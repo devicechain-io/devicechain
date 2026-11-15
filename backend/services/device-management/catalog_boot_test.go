@@ -27,6 +27,7 @@ import (
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
@@ -57,9 +58,11 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevEffects := AgentEffectsDrain
 	prevCallout, prevBackoff, prevKickDrain, prevTenants := CalloutResponder, MqttStoreBackoff, SessionKickDrain, ProvisioningTenants
 	prevReaper := AgentProposalReaper
+	prevPeers := servicePeers
 	prevPin := IssuerPin
 	ProvisioningTenants = nil
 	t.Cleanup(func() {
+		servicePeers = prevPeers
 		ProvisioningTenants, IssuerPin = prevTenants, prevPin
 		Microservice, Configuration, NatsManager, RdbManager, Svc = prevMs, prevCfg, prevNats, prevRdb, prevSvc
 		Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates = prevApi, prevCached, prevKey, prevTransit, prevGates
@@ -96,6 +99,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	Microservice.Readiness.MarkReadyWithoutAuthSurface()
 	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 	require.NoError(t, parseConfiguration())
+	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
 	safetyGates = governance.NewSafetyGates(Microservice)
 
 	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.PendingOwnershipFact{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.AgentProposal{})...)
