@@ -756,6 +756,10 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The release in development (`v1.6`) and the three most recent minor releases (`v1.5`, `v1.4` and `v1.3`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
 
+### v1.7.0 — legacy text seal usage {#v170-upgrade}
+
+Two process counters, `devicechain_credential_legacy_text_seal_reads_total` and `devicechain_credential_legacy_text_seal_writes_total`, count use of the legacy text form of sealed device credentials on the event wire. Writes count text seals encoded when `infrastructure.messaging.wireFormat` is `legacy`; reads count every conversion of a text seal found in a message, including malformed or empty values and redeliveries. Binary-only traffic increments neither. Both start at zero and carry no labels, so they expose no credential or tenant data. The legacy text form is still read and written exactly as before; nothing is removed. No configuration or migration is needed; during a rolling upgrade only updated pods expose the counters.
+
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 
 - **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 time buckets are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 64 per process before reading or parsing. Message admission reserves up to 4 slots per batch; valid configured batches (16 entries by default) execute tools in waves within that cap. Every entry still counts toward the caller's rate limit; excess requests receive HTTP 429 with Retry-After. Tools are cancelled and execution slots released when their HTTP request ends. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.
