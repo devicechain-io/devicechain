@@ -36,7 +36,7 @@
 # the edit, because they are read out of the same tree the edit changes.
 #
 # So the walk starts from what actually INSTALLS a chart — a `helm_release` whose
-# repository is a remote URL — and works outward to the value that decides its
+# repository resolves to a remote URL — and works outward to the value that decides its
 # version. A chart cannot leave that set without ceasing to be installed, which is the
 # only kind of removal that should silently stop being checked.
 #
@@ -51,6 +51,12 @@
 #
 # WHAT IT DOES NOT CHECK
 #
+# OCI charts use the same exact version check: Helm selects the registry tag
+# corresponding to that version. This offline guard does not verify a registry
+# digest, tag existence, or tag immutability (a registry can retarget a tag).
+# Repository expressions may chain local.* and var.* defaults; unsupported or
+# unresolved expressions fail closed. Bundled local charts are counted separately.
+#
 # That the pinned version exists, or that the chart still behaves the way the module
 # assumes. Both would need the chart fetched at check time, making a green gate depend
 # on someone else's CDN — the exact failure this repo already fights. Those live with
@@ -61,6 +67,11 @@
 # are exercised by hack/check-tofu-validations.sh.
 
 set -euo pipefail
+
+if [ "${1:-}" = "--self-test" ]; then
+	bash "$(dirname "$0")/check-chart-pins-self-test.sh"
+	exit $?
+fi
 
 cd "$(dirname "$0")/.."
 
@@ -78,7 +89,8 @@ tofu_root=deploy/opentofu
 # smaller. Nothing goes red. Nothing says the set shrank.
 #
 # Roots come from hack/tofu-roots.sh, which refuses an empty list.
-mapfile -t root_dirs < <(bash "$(dirname "$0")/tofu-roots.sh")
+roots=$(bash "$(dirname "$0")/tofu-roots.sh")
+mapfile -t root_dirs <<<"$roots"
 root_mains=()
 root_var_files=()
 for _root in "${root_dirs[@]}"; do
@@ -150,39 +162,78 @@ pinned_default() {
 # reads carries one, and failing to match is a loud failure here, never a silent pass.
 uncomment() { sed 's/[[:space:]]*#.*$//'; }
 
-# --- 1. Find every remotely-sourced helm_release and the expression that versions it.
-#
-# Emits: <module dir> TAB <release name> TAB <version expression>
+# --- 1. Account for EVERY helm_release, including bundled charts.
+# Resolve scalar repository references after reading all module .tf files, so
+# definition order and chained locals/defaults cannot hide an installed chart.
+# This deliberately supports a small HCL subset; anything else fails closed.
+# Emits: <module dir> TAB <release name> TAB <version expression or <local>>
 releases=$(
 	for f in "$tofu_root"/modules/*/main.tf; do
 		dir=$(basename "$(dirname "$f")")
-		uncomment <"$f" | awk -v dir="$dir" '
-			/^resource "helm_release"/ { inres = 1; name = $3; gsub(/"/, "", name); repo = ""; ver = "<none>"; next }
-			inres && /^[[:space:]]*repository[[:space:]]*=/ { repo = $3; gsub(/"/, "", repo) }
-			inres && /^[[:space:]]*version[[:space:]]*=/    { sub(/^[[:space:]]*version[[:space:]]*=[[:space:]]*/, ""); ver = $0 }
-			inres && /^}/ {
-				inres = 0
-				if (repo ~ /^https?:\/\//) print dir "\t" name "\t" ver
+		cat "$(dirname "$f")"/*.tf | uncomment | awk -v dir="$dir" '
+			function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+			function resolve(s, depth) {
+				s = trim(s)
+				if (depth > 32) return ""
+				if (s ~ /^"[^"\n]*"$/) return substr(s, 2, length(s)-2)
+				if (s ~ /^(local|var)\.[A-Za-z_][A-Za-z_0-9]*$/ && s in defs)
+					return resolve(defs[s], depth+1)
+				return ""
+			}
+			# Ignore description/template heredocs, including resource-looking prose.
+			heredoc { if (trim($0) == heredoc) heredoc = ""; next }
+			/<<-?[A-Za-z_][A-Za-z_0-9]*[[:space:]]*$/ {
+				heredoc = $0; sub(/^.*<<-?/, "", heredoc); heredoc = trim(heredoc); next
+			}
+			/^locals[[:space:]]*{/ { scope = "local"; next }
+			/^variable "/ { scope = "var"; vname = $2; gsub(/"/, "", vname); next }
+			scope == "local" && /^[[:space:]]+[A-Za-z_][A-Za-z_0-9]*[[:space:]]*=/ {
+				key = $1; expr = $0; sub(/^[^=]*=[[:space:]]*/, "", expr); defs["local." key] = trim(expr)
+			}
+			scope == "var" && /^[[:space:]]*default[[:space:]]*=/ {
+				expr = $0; sub(/^[^=]*=[[:space:]]*/, "", expr); defs["var." vname] = trim(expr)
+			}
+			/^resource "helm_release"/ { inres = 1; name = $3; gsub(/"/, "", name); repo = ""; chart = ""; ver = "<none>"; next }
+			inres && /^[[:space:]]*repository[[:space:]]*=/ { repo = $0; sub(/^[^=]*=[[:space:]]*/, "", repo) }
+			inres && /^[[:space:]]*chart[[:space:]]*=/ { chart = $0; sub(/^[^=]*=[[:space:]]*/, "", chart) }
+			inres && /^[[:space:]]*version[[:space:]]*=/ { ver = $0; sub(/^[^=]*=[[:space:]]*/, "", ver); ver = trim(ver) }
+			/^}/ {
+				scope = ""
+				if (inres) { names[++n] = name; repos[n] = repo; charts[n] = chart; versions[n] = ver; inres = 0 }
+			}
+			END {
+				for (i=1; i<=n; i++) {
+					r = resolve(repos[i], 0); c = resolve(charts[i], 0)
+					if (r ~ /^(https?|oci):\/\/[^[:space:]]+$/)
+						print dir "\t" names[i] "\t" versions[i]
+					else if (repos[i] == "" && c ~ /^\$\{path.module\}\//)
+						print dir "\t" names[i] "\t<local>"
+					else print "FAIL: modules/" dir ": unresolved repository for helm_release " names[i] ": " repos[i] > "/dev/stderr"
+				}
 			}
 		'
 	done
 )
 
-# 🔴 THE PARSER'S OWN CONTROL. Everything below loops over what that awk found, so a
-# walk that matches nothing would report a clean pass over zero charts — the shape of
-# gate that cannot fail. No count floor above zero is needed or wanted: a chart leaves
-# this set only by ceasing to be installed, and a chart nobody installs is correctly
-# not checked.
+# Count declarations independently of repository resolution and the module parser.
+# A new file/layout or unsupported indirection must never shrink coverage silently.
+total=$(find "$tofu_root" -type d -name .terraform -prune -o -type f -name '*.tf' -print |
+	while IFS= read -r f; do
+		uncomment <"$f" | grep -E '^[[:space:]]*resource[[:space:]]+"helm_release"[[:space:]]+' || true
+	done | wc -l)
 found=$(printf '%s' "$releases" | grep -c . || true)
-if [ "$found" -eq 0 ]; then
-	echo "FAIL: found no remotely-sourced helm_release resources under $tofu_root/modules." >&2
-	echo "      This check iterates over what it parses, so zero would otherwise be" >&2
-	echo "      reported as success. Either every chart moved or this parser is broken." >&2
+if [ "$found" -eq 0 ] || [ "$found" -ne "$total" ]; then
+	echo "FAIL: discovered $found charts but counted $total helm_release resources under $tofu_root; refusing incomplete coverage." >&2
 	exit 1
 fi
 
+local_charts=0
 while IFS=$'\t' read -r dir release ver; do
 	[ -n "$dir" ] || continue
+	if [ "$ver" = "<local>" ]; then
+		local_charts=$((local_charts + 1))
+		continue
+	fi
 
 	# --- 2. The version must come from exactly one module variable.
 	case "$ver" in
@@ -255,7 +306,7 @@ while IFS=$'\t' read -r dir release ver; do
 done <<<"$releases"
 
 if [ "$rc" -eq 0 ]; then
-	echo "OK: all $found third-party charts are pinned to an exact version, module and root agreeing."
+	echo "OK: all $((found - local_charts)) third-party charts are pinned to an exact version, module and root agreeing ($found/$total helm_release resources accounted for, $local_charts bundled charts)."
 fi
 
 exit "$rc"
