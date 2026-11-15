@@ -774,6 +774,8 @@ The `detectionStream` subscription no longer delivers detections of rules that t
 - Untracked types, including `member`, are still created, unless your tenant marked that type tracked. The `NewRelationship` event itself no longer carries the new target as an anchor: an untracked relationship is not ownership, so the event is scoped by the device's existing anchors, as its next telemetry event is.
 - During the rolling upgrade, pods still on v1.5 create the edge until they are replaced.
 
+MCP discovery now offers `read-only` and `location`, plus `act:*` when `agentActuation.enabled` is true on MCP. Challenges let clients use this metadata instead of pinning `read-only`. Admission still requires only `read-only`; action tools retain their scope and permission checks. No configuration change is required; existing tokens remain valid. Reauthorize clients to grant newly discovered scopes, and enable actuation on the authorization server too when using proposals.
+
 #### Solar campaigns need installed-position access {#v160-solar-campaign-position}
 
 Creating a `SOLAR` campaign, reading its elements (`campaignElements`) or cycles (`campaignCycles`), and retrying its failures (`retryCampaignFailed`) now also requires `location:installed:read` (or `location:read`). A solar schedule's per-device times reveal each device's installed position; even cycle counts can reveal position-derived results for a group with one device. `CRON` and `CALENDAR` campaigns are unchanged. Add this authority to any role that manages solar campaigns.

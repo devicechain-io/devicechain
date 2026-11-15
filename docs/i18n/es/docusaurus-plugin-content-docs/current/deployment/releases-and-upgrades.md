@@ -819,6 +819,8 @@ La suscripción `detectionStream` ya no entrega detecciones de reglas que compru
 - Los tipos sin seguimiento, incluido `member`, se siguen creando, salvo que tu tenant haya marcado ese tipo con seguimiento. El propio evento `NewRelationship` ya no lleva el nuevo destino como ancla: una relación sin seguimiento no es propiedad, así que el evento queda acotado por las anclas existentes del dispositivo, igual que su siguiente evento de telemetría.
 - Durante la actualización gradual, los pods que siguen en v1.5 crean la relación hasta que se sustituyen.
 
+El descubrimiento MCP ahora ofrece `read-only` y `location`, además de `act:*` cuando `agentActuation.enabled` está activado en MCP. Los desafíos permiten usar estos metadatos en vez de fijar `read-only`. El acceso sigue requiriendo solo `read-only`; las herramientas de acción conservan sus controles de ámbitos y permisos. No hay que cambiar la configuración; los tokens existentes siguen siendo válidos. Vuelva a autorizar los clientes para conceder los ámbitos descubiertos y active también la actuación en el servidor de autorización para usar propuestas.
+
 #### Las campañas solares necesitan acceso a la posición instalada {#v160-solar-campaign-position}
 
 Crear una campaña `SOLAR`, leer sus elementos (`campaignElements`) o ciclos (`campaignCycles`) y reintentar sus fallos (`retryCampaignFailed`) ahora requiere además `location:installed:read` (o `location:read`). Las horas por dispositivo de un calendario solar revelan la posición instalada de cada dispositivo; incluso los recuentos de un ciclo pueden revelar resultados derivados de la posición en un grupo de un solo dispositivo. Las campañas `CRON` y `CALENDAR` no cambian. Añade esta autoridad a cualquier rol que gestione campañas solares.
