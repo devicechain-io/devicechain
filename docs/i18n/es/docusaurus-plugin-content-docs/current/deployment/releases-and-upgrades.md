@@ -835,6 +835,10 @@ Revise la configuración de instancia editada a mano antes de desplegar los pods
 | `infrastructure.nats.shardGroups` | Enrutamiento opcional por tenant para los dos streams de ingesta; su ausencia conserva el enrutamiento actual. Los streams de grupo multiplican las reservas por `count`: calcule la capacidad antes de activarlo. Actívelo solo tras completar el despliegue. |
 | `dcctl backup`, `dcctl backup inspect --verify`, `dcctl restore --plan` | Comandos en **vista previa** para conjuntos locales de copias de streams/objetos, verificación de bytes y planificación de restauración de solo lectura. No hay comando que aplique la restauración ni checkpoint coordinado de bases de datos. Véase [Exportar streams y contenido de objetos](./disaster-recovery.md#export-streams-objects). |
 
+#### Autoridades para acciones automatizadas {#v160-action-authorities}
+
+Crear o publicar una acción automatizada requiere la autoridad para ejecutarla. Crear o actualizar una regla con una acción `sendCommand`, y publicar o volver a una versión de perfil cuyas reglas habilitadas incluyan una, requiere `command:write` además de `device:write`. Las acciones `httpCall` y `publish` requieren `connector:write`. Un rol que solo tenga `device:write` puede seguir creando y publicando reglas que únicamente generen alarmas. Las reglas ya publicadas siguen ejecutándose; se comprueban en la siguiente publicación o reversión. Revise los roles que crean automatizaciones antes de actualizar. Las réplicas antiguas de `device-management` no aplican esta comprobación hasta que se sustituyan.
+
 #### Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación {#v160-broker-reload}
 
 Una recarga completa del broker cerraba todas las conexiones admitidas por el callout de autenticación, entre ellas las de todos los dispositivos MQTT que se autentican con un nombre de usuario. El broker ahora se compila con `nats-server` `v2.15.3`, por lo que un cambio en el conjunto de CA del Secret TLS del broker (una rotación de CA), o una recarga manual, mantiene abiertas esas conexiones. Una recarga sin reinicio solo ocurre cuando el sidecar config-reloader del chart envía SIGHUP porque cambió el Secret TLS montado, o cuando un operador ejecuta `nats-server --signal reload` a mano.
@@ -862,6 +866,12 @@ Un fallo del decodificador de carga útil que se vuelve a entregar (por ejemplo,
 Una pestaña de la consola cuya sesión ha terminado ya no continúa con una sesión que otra pestaña abrió para otro inquilino o usuario; vuelve al inicio de sesión.
 
 - **No es necesario hacer nada.**
+
+#### Los fallos de ingesta inválidos identifican el dispositivo {#v160-invalid-failures-name-the-device}
+
+Los fallos de ingesta con motivo `INVALID` que device-management registró para un evento legible (un valor que incumple la definición de su métrica, un evento de más de 366 días o un rechazo del decodificador) ahora identifican el dispositivo y el tipo de evento, y se limitan por dispositivo como cualquier otro motivo. Antes de esta versión se mostraban sin dispositivo y compartían un límite de diez registros por hora para todo el tenant. Los registros indexados antes de la actualización no se reescriben.
+
+- **No hay que hacer nada.** No se recuperan registros históricos. Ahora se aplican los límites existentes: diez registros por dispositivo y motivo por hora, con un máximo de 1000 registros detallados por tenant y motivo por hora. Una carga inválida en toda la flota puede alcanzar ese máximo.
 
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
 
