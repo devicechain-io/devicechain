@@ -773,6 +773,10 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 - On first start after the upgrade, `command-delivery` also reads the deletions still retained on the message broker, so commands left behind by devices deleted in the last few days are cancelled the same way.
 - While old and new pods overlap during the rolling upgrade, a `v1.6` pod can still send such a command until it is replaced.
 
+#### Event anchors of a re-created entity are kept {#v170-deleted-entity-anchors}
+
+- When a device, customer, area, asset or group is deleted, `event-management` removes the anchors of the events it received before the delete. It used to decide by the time the device reported, so a device re-created with the same token that uploaded buffered readings dated before the delete could lose the anchors of those readings, and they then no longer appeared under their customer, area or asset. It now decides by the time the platform received each event.
+
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 
 - **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 time buckets are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 64 per process before reading or parsing. Message admission reserves up to 4 slots per batch; valid configured batches (16 entries by default) execute tools in waves within that cap. Every entry still counts toward the caller's rate limit; excess requests receive HTTP 429 with Retry-After. Tools are cancelled and execution slots released when their HTTP request ends. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.
