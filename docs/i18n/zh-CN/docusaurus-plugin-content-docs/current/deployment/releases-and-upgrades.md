@@ -518,7 +518,7 @@ dcctl bootstrap local devicechain
 
 #### 行为变化 {#v170-behaviour-changes}
 
-- **检测引擎根据快照开销安排快照间隔。** `checkpointEvents` 现在是快照之间的最少事件数：检测状态较大时，引擎降低快照频率，但间隔最长不超过 `checkpointIntervalSeconds`，且缓冲的确认达到消费者上限的一半时始终触发检查点。崩溃后可能重放超过 `checkpointEvents` 个事件。无需更改设置。
+- **检测引擎根据快照开销安排快照间隔。** 达到 `checkpointEvents` 个事件后不再立即生成快照：引擎还会等待上一次快照开销的四倍时间，因此检测状态较大时，引擎降低快照频率，但间隔最长不超过 `checkpointIntervalSeconds`，且缓冲的确认达到消费者上限的一半时始终触发检查点。崩溃后可能重放超过 `checkpointEvents` 个事件。无需更改设置。
 
 ### v1.6.0 — CA 轮换不再断开设备连接 {#v160-upgrade}
 

@@ -807,7 +807,7 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Cambios de comportamiento {#v170-behaviour-changes}
 
-- **El motor de detección espacia sus instantáneas según su coste.** `checkpointEvents` es ahora el mínimo de eventos entre instantáneas: con un estado de detección grande, el motor crea instantáneas con menos frecuencia, sin superar `checkpointIntervalSeconds` entre ellas, y siempre cuando las confirmaciones almacenadas alcanzan la mitad del límite del consumidor. Tras un fallo puede reproducir más de `checkpointEvents` eventos. No hay cambios de configuración.
+- **El motor de detección espacia sus instantáneas según su coste.** Alcanzar `checkpointEvents` eventos ya no crea una instantánea de inmediato: el motor espera además a que pase cuatro veces el coste de la última instantánea, por lo que con un estado de detección grande el motor crea instantáneas con menos frecuencia, sin superar `checkpointIntervalSeconds` entre ellas, y siempre cuando las confirmaciones almacenadas alcanzan la mitad del límite del consumidor. Tras un fallo puede reproducir más de `checkpointEvents` eventos. No hay cambios de configuración.
 
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 

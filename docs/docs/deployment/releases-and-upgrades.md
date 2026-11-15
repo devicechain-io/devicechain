@@ -762,7 +762,7 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### Behaviour changes {#v170-behaviour-changes}
 
-- **The detection engine spaces its snapshots by their cost.** `checkpointEvents` is now the minimum number of events between snapshots: with large detection state the engine snapshots less often, never more than `checkpointIntervalSeconds` apart, and always when buffered acknowledgements reach half the consumer's limit. After a crash it may replay more than `checkpointEvents` events. No setting changes.
+- **The detection engine spaces its snapshots by their cost.** Reaching `checkpointEvents` events no longer snapshots at once: the engine also waits until four times the last snapshot's cost has passed, so with large detection state the engine snapshots less often, never more than `checkpointIntervalSeconds` apart, and always when buffered acknowledgements reach half the consumer's limit. After a crash it may replay more than `checkpointEvents` events. No setting changes.
 
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 
