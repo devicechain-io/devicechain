@@ -799,7 +799,15 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 ## Versiones recientes {#recent-releases}
 
-La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (`v1.5`, `v1.4` y `v1.3`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (`v1.6`, `v1.5` y `v1.4`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+
+### v1.7.0 — en desarrollo {#v170-upgrade}
+
+`v1.7.0` es una actualización in situ desde `v1.6.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
+
+#### Cambios de comportamiento {#v170-behaviour-changes}
+
+- **El motor de detección espacia sus instantáneas según su coste.** `checkpointEvents` es ahora el mínimo de eventos entre instantáneas: con un estado de detección grande, el motor crea instantáneas con menos frecuencia, sin superar `checkpointIntervalSeconds` entre ellas, y siempre cuando las confirmaciones almacenadas alcanzan la mitad del límite del consumidor. Tras un fallo puede reproducir más de `checkpointEvents` eventos. No hay cambios de configuración.
 
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 

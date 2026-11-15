@@ -80,7 +80,10 @@ type Config struct {
 	// Suffix is the resolved-events subject suffix, used to open the replay reader on
 	// the same stream the live durable reader consumes.
 	Suffix string
-	// CheckpointEvents is the max applied events between snapshot commits.
+	// CheckpointEvents is the minimum applied events between count-triggered commits.
+	// Commits are spaced by at least 4x the last snapshot cost, capped at
+	// CheckpointInterval, and forced when buffered acks reach half the consumer's
+	// max-ack-pending.
 	CheckpointEvents int
 	// CheckpointInterval is the max wall-clock time between commits, so a quiet
 	// stream still checkpoints (and its buffered acks are released).
@@ -490,6 +493,8 @@ type ResolvedEventsProcessor struct {
 	// publishPasses numbers publishPending's passes, so an outcome can name the pass it belongs to.
 	publishPasses  uint64
 	lastCheckpoint time.Time
+	// lastCheckpointCost is serialization plus save time of the last committed snapshot.
+	lastCheckpointCost time.Duration
 	// flushDetections' last failure; see there.
 	flushFailedAt time.Time
 	// detOrd numbers buffered detections (pendingDetection.ord).
@@ -1642,7 +1647,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		if rp.applyResolved(msg) {
 			replayed += rp.appliedEvents
 		}
-		if replayed >= rp.cfg.CheckpointEvents {
+		if replayed >= rp.cfg.CheckpointEvents && rp.clock.Now().Sub(rp.lastCheckpoint) >= rp.checkpointMinSpacing() {
 			rp.checkpoint(rp.pctx())
 			replayed = 0
 		}
@@ -1918,10 +1923,23 @@ func (rp *ResolvedEventsProcessor) handle(msg messaging.Message) {
 	rp.pendingEvents += rp.appliedEvents
 }
 
-// checkpointDue is whether enough has been applied since the last checkpoint: CheckpointEvents
-// messages (which bounds the broker's ack-pending) or that many events (which bounds the replay).
+const (
+	checkpointDutyFactor         = 4
+	ackPendingCheckpointOverride = messaging.ReaderMaxAckPending / 2
+)
+
+// checkpointMinSpacing bounds snapshot work relative to consumption time while
+// preserving the configured maximum interval between checkpoints.
+func (rp *ResolvedEventsProcessor) checkpointMinSpacing() time.Duration {
+	return min(checkpointDutyFactor*rp.lastCheckpointCost, rp.cfg.CheckpointInterval)
+}
+
+// checkpointDue gates count-triggered commits by snapshot cost, with an override
+// that releases buffered acknowledgements before the consumer exhausts its limit.
 func (rp *ResolvedEventsProcessor) checkpointDue() bool {
-	return len(rp.pendingAcks) >= rp.cfg.CheckpointEvents || rp.pendingEvents >= rp.cfg.CheckpointEvents
+	return len(rp.pendingAcks) >= ackPendingCheckpointOverride ||
+		((len(rp.pendingAcks) >= rp.cfg.CheckpointEvents || rp.pendingEvents >= rp.cfg.CheckpointEvents) &&
+			rp.clock.Now().Sub(rp.lastCheckpoint) >= rp.checkpointMinSpacing())
 }
 
 // applyResolved parses a resolved-event message, fans it out across the applicable rules
@@ -2996,6 +3014,8 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 
 		// Observability (owned by this loop, ADR-051 thread).
 		now := rp.clock.Now()
+		rp.lastCheckpointCost = now.Sub(start)
+		rp.metrics.recordCheckpointMinSpacing(rp.checkpointMinSpacing())
 		rp.metrics.recordCheckpoint(rp.engine.LastSeq(), now.Sub(start).Seconds(), serializeDur, saveDur, len(payload), now.Sub(wm).Seconds())
 	}
 
