@@ -46,8 +46,8 @@ func (*buildReadinessFacts) Roster(context.Context, string) ([]dmmodel.DeviceRos
 	return []dmmodel.DeviceRosterEntry{{DeviceToken: "lost", ProfileToken: "p", ExpectedSince: testBase}}, nil
 }
 
-// The first real g0 tick launches a sweep while g1 is blocked before constructing
-// its armer. No reconcile I/O (and hence no child signal) may cross that boundary.
+// g1 is blocked before constructing its armer. No reconciliation, and hence no
+// child signal, may happen before every worker has built.
 func TestGroupReconcileWaitsForChildBuild(t *testing.T) {
 	r := newGroupRig(t)
 	p0, p1 := membershipFixture(t, r)
@@ -91,10 +91,11 @@ func TestGroupReconcileWaitsForChildBuild(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("child build did not reach hold")
 	}
-	require.Eventually(t, p0.factReconciling.Load, 5*time.Second, time.Millisecond, "g0's first tick did not launch reconciliation")
-	// Observe ordering explicitly as well as running under the race detector.
-	require.Never(t, func() bool { return source.calls.Load() != 0 }, 150*time.Millisecond, time.Millisecond,
-		"reconciliation touched device-management while the child armer was still unbuilt")
+	// Worker loops now start only after every worker has built, so no g0 tick (and
+	// so no reconciliation) can happen while g1 is still building; the termReady
+	// gate in runFactReconcile is the second line of defence. Observe both.
+	require.Never(t, func() bool { return p0.factReconciling.Load() || source.calls.Load() != 0 }, 300*time.Millisecond, time.Millisecond,
+		"reconciliation started or touched device-management while the child armer was still unbuilt")
 	close(held.release)
 	released = true
 	err := <-done
