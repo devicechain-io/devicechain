@@ -551,6 +551,11 @@ func infraVarsIn(st *State, rootdir string) []string {
 	// Which ingress controllers the cluster root runs, planned by install from what the cluster
 	// runs now. Empty on every other path: the instance root declares none of them.
 	vars = append(vars, st.ClusterFrontEndVars...)
+	// The backup store's disk type, decided by install from the cluster's StorageClasses so the
+	// cluster root's plan does not depend on a value it could only read after apply.
+	if st.BackupStandardDisk {
+		vars = append(vars, backupStandardDiskVar+"=true")
+	}
 	// The observability stack is default-on (like Postgres/Timescale); --no-monitoring
 	// skips it for a cluster that already has the Prometheus Operator.
 	if st.NoMonitoring {
