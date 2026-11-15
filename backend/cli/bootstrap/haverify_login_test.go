@@ -80,11 +80,11 @@ func TestTheMQTTProbeAuthenticatesOnABrokerThatHoldsLoginsToTheirConnectionTypes
 	addr := fmt.Sprintf("127.0.0.1:%d", b.MQTTPort(t))
 	fastProbeRetries(t)
 
-	user, password, err := mqttProbeLogin(cfg)
+	user, _, err := mqttProbeLogin(cfg)
 	require.NoError(t, err)
 	require.Contains(t, capable, user, "the probe presents a login the apply does not let speak MQTT")
-	require.NoError(t, mqttProbe(addr, nil, user, password),
-		"the probe was refused on a broker built the way dcctl builds it")
+	// Through the function the command calls, so a call site that chose another login fails here.
+	require.NoError(t, probeMqttAt(addr, cfg), "the probe was refused on a broker built the way dcctl builds it")
 
 	// NEGATIVE CONTROL: the administrator's login, which is what the probe presented through v1.6,
 	// is refused over MQTT by this same broker. So the pass above is the login's doing, not a broker

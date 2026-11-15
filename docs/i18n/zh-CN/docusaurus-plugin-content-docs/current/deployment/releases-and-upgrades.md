@@ -518,7 +518,7 @@ dcctl bootstrap local devicechain
 
 #### 行为变化 {#v170-behaviour-changes}
 
-- **`dcctl ha verify --probe-mqtt` 重新可以通过认证。** 自 `v1.1.0` 起，代理只允许 event-sources 的平台登录凭据通过 MQTT 连接，而探测使用的是代理管理员的登录凭据，因此在 `dcctl` 构建的每个实例上都会被拒绝。现在探测使用 event-sources 的登录凭据，代理本来就允许它通过 MQTT 连接；代理权限没有任何变化。探测被拒绝时，错误信息会注明所用的登录凭据。通常无需使用该选项：event-sources 自身的连接就会创建代理的 MQTT 流。
+- **`dcctl ha verify --probe-mqtt` 重新可以通过认证。** 自 `v1.1.0` 起，在按功能区划分的代理登录凭据中，代理只允许 event-sources 的登录凭据通过 MQTT 连接，而探测使用的是代理管理员的登录凭据，因此在每个使用按功能区划分的代理登录凭据的实例上都会被拒绝。现在探测使用 event-sources 的登录凭据，代理本来就允许它通过 MQTT 连接；代理权限没有任何变化。探测被拒绝时，错误信息会注明所用的登录凭据。通常无需使用该选项：event-sources 自身的连接就会创建代理的 MQTT 流。
 
 ### v1.6.0 — CA 轮换不再断开设备连接 {#v160-upgrade}
 

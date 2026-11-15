@@ -807,7 +807,7 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Cambios de comportamiento {#v170-behaviour-changes}
 
-- **`dcctl ha verify --probe-mqtt` vuelve a autenticarse.** Desde `v1.1.0` el broker solo aceptaba por MQTT el inicio de sesión de plataforma de event-sources, pero la sonda presentaba el del administrador del broker, por lo que se rechazaba en todas las instancias que crea `dcctl`. Ahora presenta el inicio de sesión de event-sources, que el broker ya acepta por MQTT; no cambia ningún permiso del broker. Una sonda rechazada indica ahora el inicio de sesión que presentó. Rara vez hace falta la opción: la propia conexión de event-sources crea los flujos MQTT del broker.
+- **`dcctl ha verify --probe-mqtt` vuelve a autenticarse.** Desde `v1.1.0`, de los inicios de sesión del broker por área, el broker solo aceptaba por MQTT el de event-sources, pero la sonda presentaba el del administrador del broker, por lo que se rechazaba en todas las instancias con inicios de sesión del broker por área. Ahora presenta el inicio de sesión de event-sources, que el broker ya acepta por MQTT; no cambia ningún permiso del broker. Una sonda rechazada indica ahora el inicio de sesión que presentó. Rara vez hace falta la opción: la propia conexión de event-sources crea los flujos MQTT del broker.
 
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 
