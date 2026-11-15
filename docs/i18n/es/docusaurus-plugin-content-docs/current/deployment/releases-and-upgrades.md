@@ -823,6 +823,8 @@ La suscripción `detectionStream` ya no entrega detecciones de reglas que compru
 
 Crear una campaña `SOLAR`, leer sus elementos (`campaignElements`) o ciclos (`campaignCycles`) y reintentar sus fallos (`retryCampaignFailed`) ahora requiere además `location:installed:read` (o `location:read`). Las horas por dispositivo de un calendario solar revelan la posición instalada de cada dispositivo; incluso los recuentos de un ciclo pueden revelar resultados derivados de la posición en un grupo de un solo dispositivo. Las campañas `CRON` y `CALENDAR` no cambian. Añade esta autoridad a cualquier rol que gestione campañas solares.
 
+- **Nota de actualización:** Las descargas OTA permiten un flujo simultáneo por (inquilino, dispositivo, asignación) en cada réplica. Mientras otro inquilino ocupe un cupo, un inquilino que alcance o supere la mitad de `updates.maxConcurrentDownloads` (redondeada hacia abajo, mínimo uno; ocho con el valor predeterminado de 16) no puede iniciar otro flujo. Un único inquilino puede usar todos los cupos. Las solicitudes que excedan estos límites reciben la respuesta 503 de ocupado con `Retry-After: 5`; reintente tras ese plazo. No se requiere cambiar la configuración.
+
 #### Antes de actualizar {#v160-before-upgrade}
 
 - **Los atributos de entidad son únicos por clave.** La actualización elimina duplicados activos de escrituras iniciales simultáneas, conserva el menor ID y encola la reparación de pertenencias a grupos y configuración. La creación del índice bloquea brevemente las escrituras de atributos. Durante el despliegue gradual, una réplica antigua puede rechazar una escritura inicial concurrente; vuelva a intentarla. No se requiere cambiar la configuración.

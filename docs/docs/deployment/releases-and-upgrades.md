@@ -778,6 +778,8 @@ The `detectionStream` subscription no longer delivers detections of rules that t
 
 Creating a `SOLAR` campaign, reading its elements (`campaignElements`) or cycles (`campaignCycles`), and retrying its failures (`retryCampaignFailed`) now also requires `location:installed:read` (or `location:read`). A solar schedule's per-device times reveal each device's installed position; even cycle counts can reveal position-derived results for a group with one device. `CRON` and `CALENDAR` campaigns are unchanged. Add this authority to any role that manages solar campaigns.
 
+- **Upgrade note:** OTA downloads now allow one in-flight stream per (tenant, device, assignment) on each replica. While another tenant holds a slot, a tenant at or above half of `updates.maxConcurrentDownloads` (rounded down, minimum one; eight with the default of 16) cannot start another stream. A lone tenant may use all slots. Excess requests receive the existing 503 busy response with `Retry-After: 5`; retry after that delay. No configuration change is required.
+
 #### Before you upgrade {#v160-before-upgrade}
 
 - **Entity attributes are unique per key.** The upgrade collapses duplicate live rows from concurrent first writes, keeping the lowest row ID, and queues group membership and configuration repairs. The index build briefly blocks attribute writes. While old and new replicas overlap, an old replica that loses a concurrent first write may refuse it; retry the write. No configuration change is needed.
