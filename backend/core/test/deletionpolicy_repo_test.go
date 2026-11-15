@@ -26,13 +26,13 @@ var repositoryDeletionPolicies = map[string]deletionPolicy{
 	"backend/services/device-management/model/model_profile_decoder.go:ProfileDecoderSample": {
 		deletionHistory, "Failing uplink input is frozen with CreatedAt and profile/version for decoder replay, not used as current device state. StoreDecoderSample keeps only 20 samples per profile; profile deletion cascades them."},
 	"backend/services/device-state/model/dropped_measurements.go:DroppedMeasurement": {
-		deletionBounded, "Diagnostic projection has no deletion handling until its deletion consumer lands. enforceDroppedBound keeps newest keys within MaxDroppedMeasurementsPerDevice, with no time expiry guarantee."},
+		deletionPurge, "processor/deletion_processor.go -> ApplyDeviceDeleted deletes the device's drop rows with its live view; a higher-incarnation update resets them (projection_merge foldIncarnations); the orphan sweep removes rows of devices that no longer exist."},
 	"backend/services/device-state/model/model.go:DeviceState": {
-		deletionBounded, "Live last-known projection has no deletion handling until its deletion consumer lands; old values survive until newer facts overwrite them, with no TTL guarantee."},
+		deletionPurge, "ApplyDeviceDeleted (entity-deleted consumer) hard-deletes the row when its incarnation or creation time belongs to the deleted device; the merge drops lower-incarnation updates and resets on a higher one; the orphan sweep deletes rows of missing or different devices."},
 	"backend/services/device-state/model/model.go:LatestLocation": {
-		deletionBounded, "Live location projection has no deletion handling until its deletion consumer lands; a newer location can overwrite it, but there is no TTL guarantee."},
+		deletionPurge, "Deleted with the device's live view by ApplyDeviceDeleted, on a higher-incarnation reset in the merge, and by the orphan sweep; a lower-incarnation update writes no position."},
 	"backend/services/device-state/model/model.go:LatestMeasurement": {
-		deletionBounded, "Live per-metric projection has no deletion handling until its deletion consumer lands; newer samples overwrite keys, with no TTL guarantee."},
+		deletionPurge, "Deleted with the device's live view by ApplyDeviceDeleted, on a higher-incarnation reset in the merge, and by the orphan sweep; a lower-incarnation update writes no reading."},
 	"backend/services/event-management/model/events.go:AlertEvent": {
 		deletionHistory, "Write-time alert payload records OccurredTime and event/payload identity; retained as historical telemetry under DataLifecyclePolicy retention, not a live device projection. Token queries can include old history."},
 	"backend/services/event-management/model/events.go:Event": {
@@ -60,15 +60,15 @@ var repositoryDeletionPolicies = map[string]deletionPolicy{
 	"backend/services/event-processing/model/model.go:DeviceRoster": {
 		deletionTerminate, "handleEntityDeletedFact calls DeviceRosterStore.Delete: Deleted=true tombstone is excluded from LoadAll and disarmed. LastEventAt fences stale facts; newer lifecycle facts can replace it."},
 	"backend/services/notification-management/model/model_state.go:NotificationState": {
-		deletionBounded, "No entity-deletion consumer: escalation continues until acknowledgement/clear or effectiveMaxEscalations. The cap bounds re-pages, not row lifetime; remembered device tokens have no deletion TTL."},
+		deletionTerminate, "The deletion outbox publishes a CLEARED alarm event (clear_reason ORIGINATOR_DELETED) for each active alarm, which ends the lifecycle; the escalation backstop and the orphan sweep end states whose alarm device-management no longer has. A failed lookup pages anyway (deliberate fail-open), so this row may page once more before it ends."},
 	"backend/services/outbound-connectors/lpwan/pending.go:LpwanPendingAck": {
 		deletionBounded, "No entity-deletion consumer; LPWAN report settlement or the deadline sweep claims and deletes pending acknowledgements at DeadlineAt. Responses carry command token and dispatch nonce."},
 	"backend/services/update-management/model/model_rollouts.go:UpdateRolloutTarget": {
-		deletionBounded, "Frozen rollout targets have no entity-deletion hook until its deletion consumer lands; rollout cancellation/dispatch checks are not an incarnation fence or a deletion TTL."},
+		deletionTerminate, "DeviceDeleted (entity-deleted consumer) marks the dispatched targets of the deleted device's ended assignments CANCELLED."},
 	"backend/services/update-management/model/model_updates.go:UpdateAssignment": {
-		deletionBounded, "No deletion handling until its deletion consumer lands: append-only assignments remain current until superseded, with no deletion TTL or incarnation fence."},
+		deletionTerminate, "DeviceDeleted ends the deleted incarnation's non-terminal assignments through the cancel path or superseded_at; every device-facing path serves an assignment only to the device incarnation it was made for (assignmentIsForDevice)."},
 	"backend/services/update-management/model/model_updates.go:UpdateAttempt": {
-		deletionBounded, "No deletion handling until its deletion consumer lands; the OTA reducer's timeout/cancellation bounds attempts, but retained rows have no deletion TTL or incarnation fence."},
+		deletionTerminate, "The deleted device's attempts are cancelled through the existing cancel reducer when it allows, otherwise their assignment is superseded; the device-facing gate refuses reports and downloads against them."},
 }
 
 func TestDeletionPolicyRepository(t *testing.T) {
