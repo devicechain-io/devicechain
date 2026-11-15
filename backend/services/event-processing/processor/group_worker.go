@@ -85,6 +85,9 @@ func (rp *ResolvedEventsProcessor) termWorkers() []*ResolvedEventsProcessor {
 // buildWorkers builds serially to bound restore/replay pressure. Any worker failure ends
 // the common term; none of the children acquires a lease or opens/closes the gate.
 func (rp *ResolvedEventsProcessor) buildWorkers(ctx context.Context) error {
+	if rp.ruleRouting != nil {
+		rp.ruleRouting.termReady = make(chan struct{})
+	}
 	for _, w := range rp.termWorkers() {
 		if w != rp {
 			w.procMu.Lock()
@@ -110,6 +113,7 @@ func (rp *ResolvedEventsProcessor) buildWorkers(ctx context.Context) error {
 	// The one shared fact consumer starts only after every worker has reset its
 	// term channels, loaded its projection and launched its single-writer loop.
 	if rp.ruleRouting != nil {
+		close(rp.ruleRouting.termReady)
 		if rp.RuleUpdatesReader != nil {
 			rp.readerWG.Add(1)
 			go rp.runRuleConsumer()
