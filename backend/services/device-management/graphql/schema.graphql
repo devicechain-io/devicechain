@@ -1685,6 +1685,8 @@ type GeoFenceSnapshotEntrySearchResults {
 # snapshot freezes only what changes what a rule computes, so a typo fix in a fence's name
 # does not make history read differently.
 type GeoFenceSnapshotEntry {
+    # Frozen GeoFence.id. Null for snapshots written by older pods; tokens may be reused.
+    fenceId: ID
     # The stable per-tenant token a rule names this fence by.
     token: String!
     # The geometry envelope as it stood at this version — NOT the fence's current geometry.
