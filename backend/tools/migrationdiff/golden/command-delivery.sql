@@ -233,7 +233,8 @@ CREATE TABLE "command-delivery".commands (
  delivery_evidence character varying(32),
  delivery_mode character varying(16),
  max_attempts integer,
- delivery_attempts integer
+ delivery_attempts integer,
+ device_incarnation bigint
 );
 CREATE TABLE "command-delivery".device_gate_syncs (
  id bigint NOT NULL,
@@ -246,7 +247,8 @@ CREATE TABLE "command-delivery".device_gates (
  device_token character varying(128) NOT NULL,
  disabled boolean NOT NULL,
  updated_at timestamp with time zone,
- deleted_through timestamp with time zone
+ deleted_through timestamp with time zone,
+ deleted_incarnation bigint
 );
 CREATE TABLE "command-delivery".purged_tenants (
  token character varying(128) NOT NULL,
