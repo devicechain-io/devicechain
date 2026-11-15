@@ -286,10 +286,17 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	//
 	// core/service stops them in exactly that order, for every service. Pinned next door
 	// in graphql_shutdown_order_test.go, which drives this function.
+	//
+	// The shard-placement watch stops AFTER Svc.Stop, not before it: cancelling it makes
+	// the placement router refuse every publish, and Svc.Stop drains GraphQL first, so a
+	// presence-demotion mutation still in flight would fail with ErrUnplacedTenant
+	// although the broker connection is up. Cancelling a watch whose connection has
+	// already drained is harmless.
+	err = Svc.Stop(ctx)
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
-	return Svc.Stop(ctx)
+	return err
 }
 
 // Called before microservice has been terminated.
