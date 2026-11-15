@@ -33,6 +33,10 @@ func deviceConfigurationCtx(t *testing.T) context.Context {
 		&model.DeviceConfigurationState{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := rdb.CreatePartialUniqueIndex(db, &model.EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatal(err)
+	}
+
 	ctx := core.WithTenant(context.Background(), "acme")
 	ctx = withAuthorities(ctx, auth.DeviceWrite, auth.DeviceRead)
 	ctx = context.WithValue(ctx, gqlcore.ContextApiKey, model.NewApi(&rdb.RdbManager{Database: db}))

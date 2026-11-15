@@ -109,3 +109,10 @@ func NewServedSsoManager(t *testing.T) *ServedSso {
 
 // ChallengeForTest is the S256 code challenge for a browser secret.
 func ChallengeForTest(verifier string) string { return pkceChallenge(verifier) }
+
+// AdminServiceForTest builds the admin control-plane Service over the manager's own store,
+// so a served admin schema in the external test package carries both services, as the
+// running service's admin handler does.
+func AdminServiceForTest(m *Manager) *admin.Service {
+	return admin.NewService(m.iam, 300*time.Second, 12*time.Hour, nil)
+}
