@@ -164,6 +164,8 @@ func (a natsAck) InProgress() error { return a.nm.InProgress() }
 // microservice. It mirrors the former KafkaManager's lifecycle shape so the
 // service mains change minimally.
 type NatsManager struct {
+	liveHubs sync.Map // key string -> lazy *LiveHub[T]; see SharedLiveHub
+
 	Microservice *core.Microservice
 
 	// admin makes this manager the BROKER ADMINISTRATOR's: the one holder of the right to

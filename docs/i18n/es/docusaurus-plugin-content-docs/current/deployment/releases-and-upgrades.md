@@ -807,7 +807,7 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Cambios de comportamiento {#v170-behaviour-changes}
 
-- **Las suscripciones de mediciones en vivo comparten un flujo por inquilino.** Cada pod de event-management ahora lee una sola vez las lecturas en vivo de un inquilino y entrega a cada suscripción `measurementStream` solo las lecturas de su dispositivo, de modo que un panel con muchos dispositivos ya no multiplica el trabajo por evento. Lo que recibe una suscripción no cambia. Un pod rechaza más de 5.000 suscripciones `measurementStream` simultáneas por inquilino con `LIMIT_EXCEEDED`; cierre las vistas en vivo que no utilice o distribuya los clientes entre varios pods.
+- **Las suscripciones de mediciones, alarmas y detecciones en vivo comparten flujos por inquilino.** Cada pod de servicio ahora lee una sola vez cada flujo en vivo del inquilino para `measurementStream`, `alarmStream` y `detectionStream`, decodifica cada mensaje una vez y lo distribuye por dispositivo, originador de alarma o perfil de detecci?n antes de aplicar los filtros y el ?mbito de acceso de cada suscriptor. Un panel con muchas suscripciones ya no multiplica el trabajo de decodificaci?n por evento. Lo que recibe una suscripci?n no cambia. Cada uno de los tres tipos de suscripci?n tiene su propio l?mite de 5.000 suscripciones simult?neas por inquilino y por pod; superarlo devuelve `LIMIT_EXCEEDED`. Cierre las vistas en vivo que no utilice o distribuya los clientes entre varios pods.
 
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 

@@ -762,7 +762,7 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### Behaviour changes {#v170-behaviour-changes}
 
-- **Live measurement subscriptions share one feed per tenant.** Each event-management pod now reads a tenant's live readings once and hands each `measurementStream` subscription only its device's readings, so a dashboard with many devices no longer multiplies the work per event. What a subscription receives is unchanged. A pod refuses more than 5,000 concurrent `measurementStream` subscriptions per tenant with `LIMIT_EXCEEDED`; close unused live views or spread clients across pods.
+- **Live measurement, alarm, and detection subscriptions share feeds per tenant.** Each service pod now reads each tenant's live feed once for `measurementStream`, `alarmStream`, and `detectionStream`, decoding each message once and dispatching by device, alarm originator, or detection profile before applying each subscriber's filters and access scope. A dashboard with many subscriptions no longer multiplies the decoding work per event. What a subscription receives is unchanged. Each of the three subscription types has its own ceiling of 5,000 concurrent subscriptions per tenant per pod; exceeding it returns `LIMIT_EXCEEDED`. Close unused live views or spread clients across pods.
 
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 
