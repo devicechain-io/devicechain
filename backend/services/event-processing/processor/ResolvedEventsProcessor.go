@@ -1089,11 +1089,11 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	// independently of the resolved stream (the roster projection's monotonic ordering resolves
 	// cross-fact races, not the stream order), so they need no ordering against it; each stops on
 	// procCancel and is joined by readerWG.
-	if rp.RosterReader != nil {
+	if rp.RosterReader != nil && rp.ruleRouting == nil {
 		rp.readerWG.Add(1)
 		go rp.runRosterConsumer()
 	}
-	if rp.EntityDeletedReader != nil {
+	if rp.EntityDeletedReader != nil && rp.ruleRouting == nil {
 		rp.readerWG.Add(1)
 		go rp.runEntityDeletedConsumer()
 	}
@@ -1181,6 +1181,9 @@ func (rp *ResolvedEventsProcessor) drainFactToHead(reader messaging.MessageReade
 		return nil // reader cannot report backlog (scaffold/test): no durable projection to catch up
 	}
 	applied := 0
+	// A group build must read once even if consumer accounting has not yet
+	// observed newly published facts. Keep the unsharded startup path unchanged.
+	initialRead := rp.ruleRouting != nil
 	for {
 		if rp.pctx().Err() != nil {
 			return rp.pctx().Err() // shutdown during catch-up
@@ -1191,7 +1194,7 @@ func (rp *ResolvedEventsProcessor) drainFactToHead(reader messaging.MessageReade
 		if err != nil {
 			return fmt.Errorf("catch-up backlog probe for %s facts: %w", kind, err)
 		}
-		if pending == 0 && ackPending == 0 {
+		if pending == 0 && ackPending == 0 && !initialRead {
 			// Fully drained AND acked: nothing undelivered, nothing in our fetch buffer or in flight.
 			log.Info().Str("kind", kind).Int("applied", applied).Msg("Caught up fact projection to head before replay.")
 			return nil
@@ -1199,6 +1202,7 @@ func (rp *ResolvedEventsProcessor) drainFactToHead(reader messaging.MessageReade
 		// Work remains — undelivered messages, or ones already fetched into our local buffer. Drain
 		// everything currently available in one inner pass (re-probing per message would cost an RPC
 		// each), bounding each read so it cannot block forever.
+		initialRead = false
 		read := 0
 		for {
 			rctx, rcancel := context.WithTimeout(rp.pctx(), factCatchUpReadTimeout)
@@ -1257,6 +1261,10 @@ func (rp *ResolvedEventsProcessor) startDeadmanGate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load active-version projection for dead-man gate: %w", err)
 	}
+	rosters, actives, err = rp.ownedMembership(rosters, actives)
+	if err != nil {
+		return err
+	}
 	rp.armer.LoadMembership(toRosterEntries(rosters), toActiveEntries(actives))
 	return nil
 }
@@ -1294,6 +1302,10 @@ func (rp *ResolvedEventsProcessor) reconcileDeadmanArming(ctx context.Context) e
 	actives, err := rp.ProfileActiveStore.LoadAll(ctx)
 	if err != nil {
 		return fmt.Errorf("load active-version projection for dead-man reconcile: %w", err)
+	}
+	rosters, actives, err = rp.ownedMembership(rosters, actives)
+	if err != nil {
+		return err
 	}
 	rp.armer.Reconcile(toRosterEntries(rosters), toActiveEntries(actives))
 	log.Info().Int("rostered", len(rosters)).Int("profiles", len(actives)).
@@ -2528,6 +2540,12 @@ func (rp *ResolvedEventsProcessor) detectStaleOwner(ctx context.Context) bool {
 // concern is inert; the deferred teardown path (ADR-023/052) that adds removal-driving facts
 // owns making them replay-durable.
 func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
+	if upd.active != nil {
+		if err := rp.ownsRuleTenant(upd.active.Tenant); err != nil {
+			rp.refuseRulePlacement(err)
+			return
+		}
+	}
 	for _, sr := range upd.upserts {
 		if err := rp.ownsRuleTenant(sr.Tenant); err != nil {
 			rp.refuseRulePlacement(err)
@@ -2601,6 +2619,10 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 // The state is serialized, so a drop that removed anything dirties the loop and the next checkpoint
 // captures it; otherwise a restart would replay the dropped latch back to life.
 func (rp *ResolvedEventsProcessor) applySeriesDrop(sd seriesDrop) {
+	if err := rp.ownsRuleTenant(sd.tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return
+	}
 	stale := func(string, time.Time, bool) bool { return true }
 	if rp.RosterStore != nil {
 		rctx, cancel := context.WithTimeout(rp.pctx(), loopReadTimeout)
@@ -2659,6 +2681,10 @@ func (rp *ResolvedEventsProcessor) reconcileDetectionState(ctx context.Context) 
 	if err != nil {
 		return fmt.Errorf("load roster lifecycle for detection-state reconcile: %w", err)
 	}
+	rows, _, err = rp.ownedMembership(rows, nil)
+	if err != nil {
+		return err
+	}
 	type devKey struct{ tenant, token string }
 	byDev := make(map[devKey]model.DeviceRoster, len(rows))
 	for _, r := range rows {
@@ -2701,6 +2727,10 @@ func (rp *ResolvedEventsProcessor) reconcileDetectionState(ctx context.Context) 
 // re-arms — rather than blocking the single-writer loop on a retry. A device with no row (never
 // happens post-persist) or a tombstone reads as not-live and disarms.
 func (rp *ResolvedEventsProcessor) applyArmRecheck(au armUpdate) {
+	if err := rp.ownsRuleTenant(au.tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return
+	}
 	if rp.armer == nil || rp.RosterStore == nil {
 		return
 	}

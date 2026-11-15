@@ -29,6 +29,12 @@ import (
 // reconcile rebuild arming). The persist already committed the row, so a recheck is never lost to a
 // dropped in-memory signal — at worst it is re-derived by reconcile.
 func (rp *ResolvedEventsProcessor) signalArmRecheck(tenant, deviceToken string) bool {
+	owner, err := rp.ruleWorker(tenant)
+	if err != nil {
+		rp.refuseRulePlacement(err)
+		return false
+	}
+	rp = owner
 	if rp.armer == nil {
 		return true
 	}
@@ -132,6 +138,10 @@ func (rp *ResolvedEventsProcessor) handleRosterFact(msg messaging.Message, signa
 		rp.ackFact(msg, "device-roster")
 		return true
 	}
+	if _, err := rp.ruleWorker(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return false
+	}
 	if reason, bad := rosterFactPoison(ev); bad {
 		log.Warn().Str("device", ev.DeviceToken).Str("subject", msg.Subject).Str("reason", reason).
 			Msg("Dropping malformed device-roster fact.")
@@ -209,6 +219,10 @@ func (rp *ResolvedEventsProcessor) handleEntityDeletedFact(msg messaging.Message
 		rp.ackFact(msg, "entity-deleted")
 		return true
 	}
+	if _, err := rp.ruleWorker(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return false
+	}
 	// Only a device deletion touches these projections; every other entity type (groups, assets,
 	// relationships, anchors) is consumed elsewhere (event-management) and ignored here.
 	// DeletedTime is the lifecycle clock both teardowns are ordered on, so a stale redelivered
@@ -273,6 +287,12 @@ func (rp *ResolvedEventsProcessor) handleEntityDeletedFact(msg messaging.Message
 // signalSeriesDrop marshals a deleted device's detection-state teardown onto the single-writer loop.
 // Returns false ONLY on shutdown mid-send.
 func (rp *ResolvedEventsProcessor) signalSeriesDrop(tenant, deviceToken string) bool {
+	owner, err := rp.ruleWorker(tenant)
+	if err != nil {
+		rp.refuseRulePlacement(err)
+		return false
+	}
+	rp = owner
 	if rp.seriesDrops == nil { // scaffold path: no loop to tell
 		return true
 	}

@@ -199,7 +199,8 @@ func (rp *ResolvedEventsProcessor) admitGroupSnapshot(payload []byte) error {
 	return visit(value)
 }
 
-// attachRoutedRuleWorkers is private until all fact kinds and S3/S7 are ready.
+// attachRoutedRuleWorkers installs rule and membership routing, and is private
+// until the remaining fact kinds and S3/S7 are ready.
 // Exactly the supervisor owns the fact durable and reconciliation client.
 func (rp *ResolvedEventsProcessor) attachRoutedRuleWorkers(nmgr *messaging.NatsManager, children ...*ResolvedEventsProcessor) error {
 	workers := append([]*ResolvedEventsProcessor{rp}, children...)
@@ -210,10 +211,13 @@ func (rp *ResolvedEventsProcessor) attachRoutedRuleWorkers(nmgr *messaging.NatsM
 			return fmt.Errorf("group rules require distinct registries and fresh routing")
 		}
 		seen[w.registry] = true
-		if g > 0 && (w.RuleUpdatesReader != nil || w.DeviceManagement != nil) {
+		if (w.RosterStore != nil || w.RosterReader != nil || w.EntityDeletedReader != nil) && (w.RosterStore == nil || w.ProfileActiveStore == nil) {
+			return fmt.Errorf("group membership requires roster and active-version projections")
+		}
+		if g > 0 && (w.RuleUpdatesReader != nil || w.RosterReader != nil || w.EntityDeletedReader != nil || w.DeviceManagement != nil) {
 			return fmt.Errorf("only the supervisor owns fact consumers and reconcile")
 		}
-		if w.RuleStore != rp.RuleStore || w.ProfileActiveStore != rp.ProfileActiveStore {
+		if w.RuleStore != rp.RuleStore || w.ProfileActiveStore != rp.ProfileActiveStore || w.RosterStore != rp.RosterStore {
 			return fmt.Errorf("group rules require one durable projection set")
 		}
 	}
