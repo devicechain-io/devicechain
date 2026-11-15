@@ -24,6 +24,9 @@ type GroupReplaySource struct {
 // selected group. Physical group names are never accepted as catalog entries.
 func (nmgr *NatsManager) NewGroupReplaySource(baseSuffix string, group int) (GroupReplaySource, error) {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedRead(baseSuffix); err != nil {
+		return GroupReplaySource{}, err
+	}
 	s := nmgr.streamSharding()
 	if !s.selects(baseSuffix) {
 		return GroupReplaySource{}, fmt.Errorf("messaging: suffix %q is not selected for stream sharding", baseSuffix)
@@ -54,6 +57,11 @@ func (s GroupReplaySource) NewRangeReader(first, last uint64) (ReplayReader, err
 // Unselected suffixes retain the legacy replay behavior, including no tenant requirement.
 func (nmgr *NatsManager) NewTenantReplayReaderFromTime(ctx context.Context, baseSuffix string, start time.Time) (ReplayReader, time.Time, error) {
 	nmgr.freezeStreamRouting()
+	// A document that shards the suffix on a manager that never enabled routing must
+	// refuse, not fall back to the base stream: that is every other group's history missing.
+	if err := nmgr.refuseUnroutedRead(baseSuffix); err != nil {
+		return nil, time.Time{}, err
+	}
 	if !nmgr.streamSharding().selects(baseSuffix) {
 		return nmgr.NewReplayReaderFromTime(baseSuffix, start)
 	}

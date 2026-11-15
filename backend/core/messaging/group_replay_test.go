@@ -142,3 +142,19 @@ func TestTenantReplayUnselectedMatchesLegacy(t *testing.T) {
 	drainGroupReplay(t, legacy, 0, 1, 1, 0)
 	drainGroupReplay(t, r, 0, 1, 1, 0)
 }
+
+// A document that shards the suffix, on a manager that never enabled routing, refuses
+// rather than falling back to the base stream (every other group's history missing).
+func TestGroupReplayRefusesConfiguredButUnroutedManager(t *testing.T) {
+	m := n1Manager(t, false)
+	_, err := m.ensureStream(streams.ResolvedEvents)
+	require.NoError(t, err)
+	_, err = m.js.Publish(ScopedSubject("test", "tenant", streams.ResolvedEvents), []byte("g0/1"))
+	require.NoError(t, err)
+	m.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups = n1Config(streams.ResolvedEvents)
+
+	_, _, err = m.NewTenantReplayReaderFromTime(n1Context("tenant"), streams.ResolvedEvents, time.Time{})
+	require.ErrorIs(t, err, ErrShardRoutingNotEnabled)
+	_, err = m.NewGroupReplaySource(streams.ResolvedEvents, 0)
+	require.ErrorIs(t, err, ErrShardRoutingNotEnabled)
+}
