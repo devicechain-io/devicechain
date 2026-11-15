@@ -203,7 +203,7 @@ variable "storage" {
 }
 
 variable "storage_class" {
-  description = "StorageClass for the data volume. Empty uses the cluster default. For anything but a scratch install, a class whose reclaimPolicy is Retain."
+  description = "StorageClass for NEW data volumes. Empty selects a dedicated pd-standard class on GKE and the cluster default elsewhere. Existing claims keep their class. An explicit class overrides detection."
   type        = string
   default     = ""
 }
@@ -269,6 +269,36 @@ locals {
 # reference them by `key:` and MinIO's own container reads them below. One Secret,
 # two readers, named in the outputs.
 
+# Detect the provisioner, not the kube-context name or a provider-specific class
+# name. An explicit override avoids discovery entirely. Read failures abort the plan.
+data "kubernetes_resources" "storage_classes" {
+  count       = var.storage_class == "" ? 1 : 0
+  api_version = "storage.k8s.io/v1"
+  kind        = "StorageClass"
+}
+
+locals {
+  gke_standard_backup = var.storage_class == "" ? anytrue([
+    for sc in data.kubernetes_resources.storage_classes[0].objects :
+    sc.provisioner == "pd.csi.storage.gke.io" || sc.provisioner == "kubernetes.io/gce-pd"
+  ]) : false
+}
+
+# GKE's built-in standard-rwo is pd-balanced and consumes SSD quota too.
+# Bulk backups need pd-standard. This class is private to the backup volume;
+# neither the cluster default nor the database/broker classes are changed.
+resource "kubernetes_storage_class_v1" "backup_standard" {
+  count = local.gke_standard_backup ? 1 : 0
+  metadata {
+    name = "${var.name}-standard"
+  }
+  storage_provisioner    = "pd.csi.storage.gke.io"
+  parameters             = { type = "pd-standard" }
+  reclaim_policy         = "Retain"
+  volume_binding_mode    = "WaitForFirstConsumer"
+  allow_volume_expansion = true
+}
+
 resource "kubernetes_persistent_volume_claim_v1" "data" {
   metadata {
     name      = "${var.name}-data"
@@ -283,7 +313,7 @@ resource "kubernetes_persistent_volume_claim_v1" "data" {
         storage = var.storage
       }
     }
-    storage_class_name = var.storage_class != "" ? var.storage_class : null
+    storage_class_name = var.storage_class != "" ? var.storage_class : (local.gke_standard_backup ? kubernetes_storage_class_v1.backup_standard[0].metadata[0].name : null)
   }
 
   # 🔴 The default StorageClass on most clusters -- and on kind -- is
@@ -310,7 +340,8 @@ resource "kubernetes_persistent_volume_claim_v1" "data" {
   # size is the one reader. Growing is a `kubectl patch` of this claim.
   # tests/keeps_live_size.tftest.hcl holds this to its behaviour.
   lifecycle {
-    ignore_changes = [spec[0].resources[0].requests]
+    # Both settings are creation-only. Changing a class would replace the PVC.
+    ignore_changes = [spec[0].resources[0].requests, spec[0].storage_class_name]
   }
 }
 

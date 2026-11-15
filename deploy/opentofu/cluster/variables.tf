@@ -952,7 +952,7 @@ variable "backup_object_store_storage" {
 }
 
 variable "backup_object_store_storage_class" {
-  description = "StorageClass for the in-cluster object store's volume. Empty uses the cluster default."
+  description = "StorageClass for NEW in-cluster object store volumes. Empty selects a dedicated pd-standard class on GKE, and the cluster default elsewhere. Explicit values override this selection. Existing PVCs keep their class through upgrades; changing this setting never migrates a volume."
   type        = string
   default     = ""
 }

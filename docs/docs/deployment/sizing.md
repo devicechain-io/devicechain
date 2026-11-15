@@ -203,3 +203,23 @@ An instance keeps the size it was bootstrapped with. Moving an existing instance
 is not part of this release; until then, state the settings you want in an overlay, which wins
 over any size. Whatever the size, a JetStream volume cannot be grown by `dcctl`: see
 [how long the event streams can wait out an outage](./observability.md#outage-runway) for the procedure.
+
+## GKE backup storage {#gke-backup-storage}
+
+On GKE, new in-cluster backup volumes use `dc-object-store-standard`, a dedicated
+CSI StorageClass with `type: pd-standard` and `Retain` reclaim policy. Bulk backups
+do not need SSD. GKE's built-in `standard-rwo` uses `pd-balanced`, which still
+consumes SSD quota. JetStream and database storage classes are unchanged.
+Machine series that cannot attach `pd-standard` disks (for example C3, C4 and N4)
+need `backup_object_store_storage_class` set to a class their nodes support.
+`perf-20k` keeps the backup store at the cluster default of `160Gi`; its preset
+sets JetStream to `40Gi` and the event store to `260Gi`.
+
+Override `backup_object_store_storage_class` in the cluster OpenTofu variables to
+choose a different class for a **new** backup volume. Other providers continue to
+use their cluster default. Discovery errors fail the plan; an explicit override
+bypasses discovery. Existing PVCs keep both their size and storage class through
+`dcctl install` re-runs and upgrades, even when this override changes. This does
+not migrate existing SSD backups: moving them requires a separately planned data
+migration. Grow an existing volume with `kubectl patch` if its class supports
+expansion.

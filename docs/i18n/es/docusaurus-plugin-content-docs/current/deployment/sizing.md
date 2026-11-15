@@ -210,3 +210,24 @@ superposición, que prevalece sobre cualquier tamaño. Sea cual sea el tamaño, 
 ampliar un volumen de JetStream: consulta
 [cuánto tiempo pueden esperar los flujos de eventos durante una interrupción](./observability.md#outage-runway)
 para el procedimiento.
+
+## Almacenamiento de copias en GKE {#gke-backup-storage}
+
+En GKE, los volúmenes nuevos de copias de seguridad dentro del clúster usan
+`dc-object-store-standard`, una StorageClass CSI dedicada con `type: pd-standard`
+y política `Retain`. Las copias masivas no necesitan SSD. La clase integrada de
+GKE `standard-rwo` usa `pd-balanced`, que también consume cuota SSD. Las clases de
+JetStream y las bases de datos no cambian. Las series de máquinas que no admiten
+discos `pd-standard` (por ejemplo C3, C4 y N4) necesitan
+`backup_object_store_storage_class` con una clase que sus nodos admitan. `perf-20k` mantiene el valor del clúster
+para las copias (`160Gi`); configura JetStream con `40Gi` y el almacén de eventos
+con `260Gi`.
+
+Use `backup_object_store_storage_class` en las variables OpenTofu del clúster para
+elegir otra clase para un volumen **nuevo**. Los demás proveedores conservan la
+clase predeterminada del clúster. Un error de detección detiene el plan; una clase
+explícita omite la detección. Los PVC existentes conservan su tamaño y clase al
+repetir `dcctl install` y durante las actualizaciones, aunque cambie esta variable.
+No se migran automáticamente las copias existentes en SSD; trasladarlas requiere
+una migración de datos planificada por separado. Amplíe un volumen existente con
+`kubectl patch` si su clase admite expansión.
