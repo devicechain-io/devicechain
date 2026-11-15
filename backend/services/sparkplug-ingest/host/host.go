@@ -927,7 +927,9 @@ func (c *Client) goWhileLive(sessionCtx context.Context, wg *sync.WaitGroup, fn 
 // aborts without emitting if the session ends mid-window, like the connect probe.
 func (c *Client) presenceProbeLoop(ctx context.Context) {
 	round := &probeRound{slots: probeSlots(c.probeInterval, c.probeWindow)}
-	ticker := time.NewTicker(c.probeInterval / time.Duration(round.slots))
+	interval := c.probeInterval / time.Duration(round.slots)
+	c.metrics.PresenceProbePass.SetInterval(interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {

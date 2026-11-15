@@ -1163,3 +1163,24 @@ func (m *DetectMetrics) RuleStatPending(keys int, bytes int64, oldest time.Durat
 	m.ruleStatPendingBytes.Set(float64(bytes))
 	m.ruleStatOldestPending.Set(oldest.Seconds())
 }
+
+// setTickInterval declares the cadence when the corresponding loop starts.
+func (m *DetectMetrics) setTickInterval(interval time.Duration) {
+	if m != nil {
+		m.tickPass.SetInterval(interval)
+	}
+}
+
+// setRuleStatFlushInterval declares the cadence when the corresponding loop starts.
+func (m *DetectMetrics) setRuleStatFlushInterval(interval time.Duration) {
+	if m != nil {
+		m.ruleStatFlushPass.SetInterval(interval)
+	}
+}
+
+// setShedSummaryInterval declares the cadence when the corresponding loop starts.
+func (m *ReactMetrics) setShedSummaryInterval(interval time.Duration) {
+	if m != nil {
+		m.shedSummaryPass.SetInterval(interval)
+	}
+}
