@@ -116,6 +116,13 @@ func (rp *ResolvedEventsProcessor) attachGroupWorkers(children ...*ResolvedEvent
 		}
 	}
 	rp.groupWorkers = append([]*ResolvedEventsProcessor(nil), children...)
+	// Reuse the supervisor's process-owned collectors. Each group gets its own
+	// gauge recording handle and shard sampling cursors, including group zero.
+	if metrics := rp.metrics; metrics != nil {
+		for g, w := range workers {
+			w.metrics = metrics.ForGroup(g, len(workers))
+		}
+	}
 	for _, w := range children {
 		w.Gate, w.supervised = rp.Gate, true
 	}
