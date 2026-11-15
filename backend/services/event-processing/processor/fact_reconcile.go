@@ -148,6 +148,16 @@ func (rp *ResolvedEventsProcessor) startFactReconcile() {
 func (rp *ResolvedEventsProcessor) runFactReconcile() {
 	defer rp.readerWG.Done()
 	defer rp.factReconciling.Store(false)
+	// Group zero's loop can tick while a child is still restoring. The sweep
+	// signals child channels and reads their armers, just like the shared fact
+	// consumers, so it must wait for the same all-workers-built boundary.
+	if rp.ruleRouting != nil && rp.ruleRouting.termReady != nil {
+		select {
+		case <-rp.ruleRouting.termReady:
+		case <-rp.pctx().Done():
+			return
+		}
+	}
 	rp.reconcileFacts(rp.pctx())
 }
 

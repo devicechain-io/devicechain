@@ -25,6 +25,10 @@ type groupRuleRouting struct {
 	workers []*ResolvedEventsProcessor
 	owners  map[string]int
 	err     error
+
+	// termReady is replaced before any term loop starts and closed only after
+	// every worker has built, at the shared fact consumers' launch point.
+	termReady chan struct{}
 }
 
 func (r *groupRuleRouting) group(tenant string) (int, error) {
