@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -1246,17 +1247,7 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) error {
 		}
 		return delivered
 	})
-	// 🔴 `ran` IS READ BEFORE `err`, BECAUSE TryAdvisoryLock RETURNS `true, fn()` — so a
-	// non-nil error means the LOCK failed only when the body never ran. Labelling every
-	// error as a lock-acquisition failure was harmless while the body always returned nil,
-	// and became wrong the moment the body started reporting its own failures.
-	if !ran {
-		if err != nil {
-			return fmt.Errorf("acquiring the command sweep lock: %w", err)
-		}
-		return core.ErrPassSkipped
-	}
-	if err != nil {
+	if err := rdb.SingletonResult(ran, err, "command-delivery-sweep"); err != nil {
 		return err
 	}
 	if expiryErr != nil {

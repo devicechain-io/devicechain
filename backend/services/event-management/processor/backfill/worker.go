@@ -134,18 +134,9 @@ func NewWorker(ms *core.Microservice, rdbm *rdb.RdbManager, roster Roster, cfg C
 
 // RunOnce makes one pass: under the instance lock, one slice of work for each active job.
 func (w *Worker) RunOnce(ctx context.Context) error {
-	ran, err := w.rdb.TryAdvisoryLockSession(ctx, rdb.AdvisoryLockKey(lockName), func(db *gorm.DB) error {
+	return w.rdb.SingletonPassSession(ctx, lockName, func(db *gorm.DB) error {
 		return w.pass(ctx, db)
 	})
-	// `ran` before `err`: TryAdvisoryLockSession returns `true, fn()`, so a non-nil error is the
-	// lock's only when the body never ran.
-	if !ran {
-		if err != nil {
-			return fmt.Errorf("acquiring the backfill lock: %w", err)
-		}
-		return core.ErrPassSkipped
-	}
-	return err
 }
 
 func (w *Worker) pass(ctx context.Context, db *gorm.DB) error {

@@ -162,18 +162,11 @@ func (c *Coordinator) RunOnce(ctx context.Context) error {
 	ran, err := c.tryLock(ctx, func() error {
 		return c.pass(ctx)
 	})
-	if err != nil {
-		return err
-	}
-	if !ran {
-		// 🔑 SKIPPED, NOT SUCCEEDED. Reported as success this would move the last-success
-		// timestamp, so an instance where every replica was declining — a lock nobody
-		// released — would report itself freshly swept forever, which is the outage that
-		// timestamp exists to reveal.
+	err = rdb.SingletonResult(ran, err, coordinatorLockName)
+	if errors.Is(err, core.ErrPassSkipped) {
 		c.observeLedger(ctx)
-		return core.ErrPassSkipped
 	}
-	return nil
+	return err
 }
 
 // observeLedger refreshes this replica's gauges from the shared rows, on a tick where a

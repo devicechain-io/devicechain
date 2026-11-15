@@ -10,6 +10,7 @@ import (
 	"github.com/devicechain-io/dc-command-delivery/model"
 	"github.com/devicechain-io/dc-command-delivery/presence"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 )
 
@@ -57,15 +58,7 @@ func (cproc *CommandDeliveryProcessor) reconcileHolds(ctx context.Context) error
 			}
 		}
 	})
-	// `ran` before `err`: TryAdvisoryLock returns `true, fn()`, so a non-nil error is the
-	// lock's only when the body never ran. See sweepLocked.
-	if !ran {
-		if err != nil {
-			return fmt.Errorf("acquiring the hold-reconcile lock: %w", err)
-		}
-		return core.ErrPassSkipped
-	}
-	return err
+	return rdb.SingletonResult(ran, err, "command-delivery-hold-reconcile")
 }
 
 // reconcileOnePage walks one bounded page of held commands and releases what it can.
