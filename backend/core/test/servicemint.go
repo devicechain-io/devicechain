@@ -75,6 +75,8 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 	}
 	var sites []serviceMintSite
 	areas := map[string]string{}
+	deadletterAliases, deadletterCalls := 0, 0
+	deadletterValid := true
 	err = filepath.WalkDir(filepath.Join(root, "backend"), func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -97,6 +99,7 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		deadletter := strings.HasPrefix(rel, "backend/core/deadletter/")
 		imports := map[string]string{}
 		for _, imp := range f.Imports {
 			p, _ := strconv.Unquote(imp.Path.Value)
@@ -109,6 +112,9 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 				name = imp.Name.Name
 			}
 			imports[name] = pkg
+			if name == "." && (pkg == "svcclient" || pkg == "governance") {
+				sites = append(sites, serviceMintSite{File: rel, Func: packageLevelSite, Unresolved: "dot-import of " + pkg})
+			}
 		}
 		qualified := func(expr ast.Expr) string {
 			if sel, ok := expr.(*ast.SelectorExpr); ok {
@@ -126,6 +132,49 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 			if fun, ok := decl.(*ast.FuncDecl); ok {
 				fn = funcSiteName(fun)
 			}
+			// Match AST identity: a constructor used as an argument or assigned to
+			// a variable must not disappear merely because another call contains it.
+			callFunctions := map[ast.Node]bool{}
+			nonReferences := map[ast.Node]bool{}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				switch node := n.(type) {
+				case *ast.CallExpr:
+					callFunctions[node.Fun] = true
+				case *ast.FuncDecl:
+					nonReferences[node.Name] = true
+				case *ast.SelectorExpr:
+					nonReferences[node.Sel] = true
+				case *ast.ValueSpec:
+					for _, name := range node.Names {
+						nonReferences[name] = true
+					}
+				case *ast.Field:
+					for _, name := range node.Names {
+						nonReferences[name] = true
+					}
+				case *ast.TypeSpec:
+					nonReferences[node.Name] = true
+				}
+				return true
+			})
+			var sanctionedAlias ast.Expr
+			if gen, ok := decl.(*ast.GenDecl); ok && deadletter && gen.Tok == token.VAR {
+				for _, spec := range gen.Specs {
+					v := spec.(*ast.ValueSpec)
+					for _, name := range v.Names {
+						if name.Name != "tenantLifecycleGate" {
+							continue
+						}
+						deadletterAliases++
+						if len(v.Names) == 1 && len(v.Values) == 1 && qualified(v.Values[0]) == "governance.NewTenantLifecycleGate" {
+							sanctionedAlias = v.Values[0]
+						} else {
+							deadletterValid = false
+							sites = append(sites, serviceMintSite{File: rel, Func: fn, Unresolved: "tenantLifecycleGate must be initialized to governance.NewTenantLifecycleGate"})
+						}
+					}
+				}
+			}
 			// Only these exact implementations may forward a dynamic subject. The
 			// dead-letter alias is attributed through each service's producer below.
 			ledgered := false
@@ -133,6 +182,13 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 				_, ledgered = forwarders["governance."+fn]
 			}
 			ast.Inspect(decl, func(n ast.Node) bool {
+				if expr, ok := n.(ast.Expr); ok {
+					q := qualified(expr)
+					_, forwarded := forwarders[q]
+					if (q == "svcclient.New" || forwarded) && !nonReferences[n] && !callFunctions[n] && expr != sanctionedAlias {
+						sites = append(sites, serviceMintSite{File: rel, Func: fn, Unresolved: "constructor reference is not a direct call: " + q})
+					}
+				}
 				if sel, ok := n.(*ast.SelectorExpr); ok {
 					q := qualified(sel)
 					if q == "service.NatsSpec" || q == "deadletter.NewProducer" {
@@ -145,6 +201,16 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
 					return true
+				}
+				if id, ok := call.Fun.(*ast.Ident); ok && deadletter && id.Name == "tenantLifecycleGate" {
+					deadletterCalls++
+					if len(call.Args) <= 2 {
+						deadletterValid = false
+						sites = append(sites, serviceMintSite{File: rel, Func: fn, Unresolved: "tenantLifecycleGate missing FunctionalArea subject"})
+					} else if subject, ok := call.Args[2].(*ast.SelectorExpr); !ok || subject.Sel.Name != "FunctionalArea" {
+						deadletterValid = false
+						sites = append(sites, serviceMintSite{File: rel, Func: fn, Unresolved: "tenantLifecycleGate subject must end in .FunctionalArea"})
+					}
 				}
 				q := qualified(call.Fun)
 				forward, forwarded := forwarders[q]
@@ -197,13 +263,19 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 	if err != nil {
 		return nil, err
 	}
+	if deadletterAliases != 1 || deadletterCalls == 0 {
+		deadletterValid = false
+		sites = append(sites, serviceMintSite{File: "backend/core/deadletter", Func: packageLevelSite, Unresolved: "tenantLifecycleGate requires exactly one constructor alias and at least one FunctionalArea call"})
+	}
 	areaNames := make([]string, 0, len(areas))
 	for area := range areas {
 		areaNames = append(areaNames, area)
 	}
 	sort.Strings(areaNames)
 	for _, area := range areaNames {
-		sites = append(sites, serviceMintSite{File: areas[area], Caller: area, Authorities: []string{"tenant:read"}, Kind: "area"})
+		if deadletterValid {
+			sites = append(sites, serviceMintSite{File: areas[area], Caller: area, Authorities: []string{"tenant:read"}, Kind: "area"})
+		}
 	}
 	dirs, err := os.ReadDir(filepath.Join(root, "backend/services"))
 	if err != nil {

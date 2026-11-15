@@ -24,6 +24,7 @@ func writeMintFixture(t *testing.T, root, name, source string) {
 // Each planted defect must be named, not merely cause some unrelated failure.
 func TestServiceMintFixtureNegativeControls(t *testing.T) {
 	root := t.TempDir()
+	writeDeadletterMintFixture(t, root)
 	writeMintFixture(t, root, "backend/core/auth/authority.go", `package auth
 type Authority string
 const (TenantRead Authority = "tenant:read"; DeviceRead Authority = "device:read")`)
@@ -101,6 +102,114 @@ func NewTenantLifecycleGates(cfg any, secret, subject string, gates any) { s.New
 	}
 	if problems := strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}, "missing": {"tenant:read"}}), "\n"); !strings.Contains(problems, "NewTenantLifecycleGates: non-literal subject") {
 		t.Fatalf("damaged forwarder grant was not reported: %s", problems)
+	}
+}
+
+func writeDeadletterMintFixture(t *testing.T, root string) {
+	t.Helper()
+	writeMintFixture(t, root, "backend/core/deadletter/recorder.go", `package deadletter
+import g "github.com/devicechain-io/dc-microservice/governance"
+var tenantLifecycleGate = g.NewTenantLifecycleGate`)
+	writeMintFixture(t, root, "backend/core/deadletter/deadletter.go", `package deadletter
+func gate() { tenantLifecycleGate(nil, "", p.ms.FunctionalArea, nil) }`)
+}
+
+// These trees deliberately contain function-value mints and forbidden imports.
+// Repairing each tree also proves its finding is not an unrelated ceiling error.
+func TestServiceMintReferenceNegativeControls(t *testing.T) {
+	for _, fixture := range []struct {
+		name, source, finding string
+	}{
+		{"client alias", `import s "github.com/devicechain-io/dc-microservice/svcclient"
+func escaped() { mint := s.New; mint(nil, "", "fixture", nil) }`, "main.go:escaped: constructor reference"},
+		{"client argument", `import s "github.com/devicechain-io/dc-microservice/svcclient"
+func escaped() { consume(s.New) }`, "main.go:escaped: constructor reference"},
+		{"gate alias", `import g "github.com/devicechain-io/dc-microservice/governance"
+func escaped() { mint := g.NewTenantLifecycleGate; mint(nil, "", "fixture", nil) }`, "main.go:escaped: constructor reference"},
+		{"gates argument", `import g "github.com/devicechain-io/dc-microservice/governance"
+func escaped() { consume(g.NewTenantLifecycleGates) }`, "main.go:escaped: constructor reference"},
+		{"client dot import", `import . "github.com/devicechain-io/dc-microservice/svcclient"
+func escaped() { New(nil, "", "fixture", nil) }`, "dot-import of svcclient"},
+		{"governance dot import", `import . "github.com/devicechain-io/dc-microservice/governance"
+func escaped() { NewTenantLifecycleGate(nil, "", "fixture", nil) }`, "dot-import of governance"},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			root := newAreaMintFixture(t)
+			writeMintFixture(t, root, "backend/services/fixture/main.go", "package fixture\n"+fixture.source)
+			sites, err := serviceMintSitesUnder(root, serviceMintForwarders)
+			if err != nil {
+				t.Fatal(err)
+			}
+			problems := strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+			if !strings.Contains(problems, fixture.finding) {
+				t.Fatalf("planted defect was not reported (%s):\n%s", fixture.finding, problems)
+			}
+			writeMintFixture(t, root, "backend/services/fixture/main.go", "package fixture")
+			assertAreaMintFixturePasses(t, root)
+		})
+	}
+}
+
+func newAreaMintFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	writeMintFixture(t, root, "backend/core/auth/authority.go", `package auth
+type Authority string
+const TenantRead Authority = "tenant:read"`)
+	writeDeadletterMintFixture(t, root)
+	writeMintFixture(t, root, "backend/services/fixture/area.go", `package fixture
+import service "github.com/devicechain-io/dc-microservice/service"
+var _ = service.NatsSpec{}`)
+	return root
+}
+
+func assertAreaMintFixturePasses(t *testing.T, root string) {
+	t.Helper()
+	sites, err := serviceMintSitesUnder(root, serviceMintForwarders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problems := checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}); len(problems) != 0 {
+		t.Fatal(problems)
+	}
+}
+
+func TestServiceMintDeadletterNegativeControls(t *testing.T) {
+	for _, fixture := range []struct {
+		name, file, source, finding string
+	}{
+		{"literal subject", "other.go", `package deadletter
+func badGate() { tenantLifecycleGate(nil, "", "unknown", nil) }`, "other.go:badGate: tenantLifecycleGate subject must end in .FunctionalArea"},
+		{"wrong constructor", "recorder.go", `package deadletter
+import g "github.com/devicechain-io/dc-microservice/governance"
+var tenantLifecycleGate = g.NewTenantLifecycleGates`, "tenantLifecycleGate must be initialized to governance.NewTenantLifecycleGate"},
+		{"missing alias", "recorder.go", "package deadletter", "requires exactly one constructor alias"},
+		{"missing call", "deadletter.go", "package deadletter", "at least one FunctionalArea call"},
+		{"missing subject", "other.go", `package deadletter
+func badGate() { tenantLifecycleGate(nil, "") }`, "other.go:badGate: tenantLifecycleGate missing FunctionalArea subject"},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			root := newAreaMintFixture(t)
+			assertAreaMintFixturePasses(t, root)
+			path := "backend/core/deadletter/" + fixture.file
+			writeMintFixture(t, root, path, fixture.source)
+			sites, err := serviceMintSitesUnder(root, serviceMintForwarders)
+			if err != nil {
+				t.Fatal(err)
+			}
+			problems := strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+			if !strings.Contains(problems, fixture.finding) {
+				t.Fatalf("planted defect was not reported (%s):\n%s", fixture.finding, problems)
+			}
+			for _, site := range sites {
+				if site.Kind == "area" {
+					t.Fatalf("invalid dead-letter mint still attributed to area: %+v", site)
+				}
+			}
+			writeMintFixture(t, root, path, "package deadletter")
+			writeDeadletterMintFixture(t, root)
+			assertAreaMintFixturePasses(t, root)
+		})
 	}
 }
 
