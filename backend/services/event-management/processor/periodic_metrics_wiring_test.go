@@ -10,18 +10,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-event-management/processor"
-	"github.com/devicechain-io/dc-event-management/processor/backfill"
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
-// Use the production constructors; registration must not depend on a running sweep or store.
+// Use the production constructor; registration must not depend on a running sweep or store.
+// The rollup tail is deliberately not instrumented yet: its RunOnce returns nil when the lock is
+// held or every window is deferred, which pass metrics would count as a complete pass.
 func TestPeriodicPassMetricsWiring(t *testing.T) {
 	ms := &core.Microservice{FunctionalArea: "event-management"}
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
 	processor.NewUsageRollupSweep(ms, nil, nil, processor.UsageRollupInterval, core.NewNoOpLifecycleCallbacks())
-	backfill.NewTailSweeper(ms, nil, backfill.Config{}, nil, core.NewNoOpLifecycleCallbacks())
-	tasks := []string{"usage_rollup", "rollup_tail"}
+	tasks := []string{"usage_rollup"}
 	subsystem := "eventmanagement"
 
 	families, err := reg.Gather()
