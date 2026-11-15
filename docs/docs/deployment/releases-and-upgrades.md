@@ -832,6 +832,15 @@ Ingest failures with reason `INVALID` that device-management recorded for a read
 
 - **Nothing needs doing.** There is no backfill. The existing limits now apply: ten records per device and reason per hour, capped at 1,000 itemized records per tenant and reason per hour. A fleet-wide invalid payload can reach that cap.
 
+#### Delegated administrators cannot grant or act above what they hold {#v160-no-escalation}
+
+The operator admin API now limits an identity whose system role is not superuser to the authorities its current system roles grant. The tenant API also checks the current role and its members before a tenant role is narrowed.
+
+- **Operator admin API:** a delegated identity can assign only system roles whose authorities it holds; can act on another identity (password, sign-in links, sessions, enable or delete, system roles) only if it holds everything that identity's system roles grant; and can create, change or delete a role only within the authorities it holds.
+- **Memberships and sign-in role mappings:** on the operator admin API, a delegated identity can add or change a tenant membership only with tenant roles whose authorities it holds, can change, disable or remove a membership only if it holds everything that membership's roles grant, and can map identity-provider groups or just-in-time sign-ins only to tenant roles it holds. Acting on another identity also requires holding everything its tenant memberships grant, and linking accounts to, re-scoping, or changing the groups claim of a tenant identity-provider connection requires holding every role that connection grants.
+- **Tenant API:** a tenant administrator can change a tenant role only if they hold every authority it grants, and can remove authorities from it only if they hold everything its members hold.
+- **What to check:** a delegated system role that needs to administer superusers or define roles beyond its own authorities now gets `ESCALATION`; make those changes as a superuser.
+
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
 `v1.5.0` is an in-place upgrade from `v1.4.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Four appended migrations run on upgrade: three in `device-management` and one in `user-management`. They add the agent kill fence and effect outbox, automation reviews and review enforcement, and the actuation generation column. See [Schema changes and going back](#v150-going-back). Coming from `v1.3.0` or earlier, read the [`v1.4.0` notes](#v140-upgrade) first.
