@@ -222,6 +222,7 @@ func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []re
 		Source:              event.Source,
 		AltId:               event.AltId,
 		SourceDeviceToken:   device.Token,
+		DeviceIncarnation:   uint64(device.ID),
 		ExternalId:          externalId,
 		DeviceTypeToken:     scope.DeviceTypeToken,
 		ProfileVersionToken: scope.ProfileVersionToken,
@@ -298,7 +299,7 @@ func (rez *EventResolver) unionMemberships(ctx context.Context, api model.Device
 		}
 		for _, m := range ms {
 			if i == 0 && m.AccessScope && t.Type == string(entity.TypeDevice) {
-				access = append(access, resolvedevent.ResolvedAnchor{AnchorType: auth.AnchorKindGroup, AnchorToken: m.GroupToken})
+				access = append(access, resolvedevent.ResolvedAnchor{AnchorType: auth.AnchorKindGroup, AnchorToken: m.GroupToken, EntityId: m.GroupId})
 			}
 			k := mkey{m.GroupToken, m.SelectorVersion}
 			if _, dup := seen[k]; dup {
@@ -444,7 +445,7 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	// reads as untracked and stamps nothing.
 	anchors := existing
 	if created.RelationshipType.Tracked {
-		newAnchor := resolvedevent.ResolvedAnchor{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID}
+		newAnchor := resolvedevent.ResolvedAnchor{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID, EntityId: created.TargetId}
 		if !slices.ContainsFunc(anchors, func(a resolvedevent.ResolvedAnchor) bool {
 			return a.AnchorType == newAnchor.AnchorType && a.AnchorToken == newAnchor.AnchorToken
 		}) {
@@ -1132,6 +1133,7 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, api model.DeviceMan
 			AnchorType:     r.TargetType,
 			AnchorToken:    r.TargetToken,
 			RelationshipId: r.ID,
+			EntityId:       r.TargetId,
 		})
 		targets = append(targets, model.MembershipTarget{Type: r.TargetType, Id: r.TargetId})
 	}

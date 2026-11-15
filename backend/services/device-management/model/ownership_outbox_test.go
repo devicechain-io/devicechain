@@ -57,6 +57,7 @@ func TestALeaveWhoseFactCouldNotBePublishedIsPublishedLater(t *testing.T) {
 	pub.fail = nil
 	require.Equal(t, 2, pub.count(), "the queued fact was not published once the broker came back")
 	require.Equal(t, "dozer-01", pub.last().DeviceToken)
+	require.Equal(t, uint64(deviceIdByToken(t, api, ctx, "dozer-01")), pub.last().DeviceIncarnation)
 	require.Empty(t, pub.last().Anchors, "the published fact still names the owner the device left")
 	// The fact's precedence in device-state is its ChangedTime plus a settle window: a time
 	// before the change would let an event received before the removal override it.
