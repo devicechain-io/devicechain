@@ -35,6 +35,9 @@ func newReconcileDoorApi(t *testing.T) (*Api, context.Context, *capturePublished
 	require.NoError(t, db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{},
 		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{},
 		&EntityAttribute{}, &EntityGroupMembership{}, &EntityGroupFacetRef{}))
+	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatal(err)
+	}
 	api := NewApi(&rdb.RdbManager{Database: db})
 	rules, roster, attrs := &capturePublishedRules{}, &captureRoster{}, &captureAttr{}
 	api.DetectionRulesPublishedPublisher = rules

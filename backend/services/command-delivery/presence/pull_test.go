@@ -78,9 +78,8 @@ func TestWithPullChannelsMarksOnlyThePullDevices(t *testing.T) {
 	}
 }
 
-// TestWithPullChannelsHoldsEverythingWhenItCannotAsk is the fail-closed direction, and the error
-// is reported so the hold reconciler declines to release.
-func TestWithPullChannelsHoldsEverythingWhenItCannotAsk(t *testing.T) {
+// An undecided channel defers, without guessing that the device uses pull.
+func TestWithPullChannelsDefersWhenItCannotAsk(t *testing.T) {
 	boom := errors.New("device-management unreachable")
 	r := WithPullChannels(fixedReader{states: map[string]State{"a": {Known: true, Active: true}}}, fixedPull{err: boom})
 	got, err := r.StatesFor(context.Background(), []string{"a", "b"})
@@ -88,12 +87,12 @@ func TestWithPullChannelsHoldsEverythingWhenItCannotAsk(t *testing.T) {
 		t.Fatalf("err = %v, want the resolver's", err)
 	}
 	for _, d := range []string{"a", "b"} {
-		if Decide(got[d], Capabilities{}) != Hold {
-			t.Errorf("%s: an undecided device must be held, got %v", d, Decide(got[d], Capabilities{}))
+		if got[d].PullChannel || !got[d].PullUnknown || Decide(got[d], Capabilities{}) != Defer {
+			t.Errorf("%s: an undecided device must defer: %+v", d, got[d])
 		}
 	}
 	if Resolved(got, "b", err) != true {
-		t.Errorf("a device the read answered about (held) should count as resolved only via the map")
+		t.Errorf("a device explicitly marked undecided should count as resolved only via the map")
 	}
 }
 

@@ -35,6 +35,8 @@ A device may hold several tracked relationships, such as a customer *and* an are
 
 ## Attributes and events {#attributes-vs-events}
 
+Each attribute key holds one current value per entity and scope; setting it again replaces that value.
+
 DeviceChain separates current state from history:
 
 - **Events** are the append-only, time-series record of everything a device reports: measurements, locations, alerts, command invocations and responses, and state changes. They live in TimescaleDB hypertables.

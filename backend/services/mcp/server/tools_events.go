@@ -101,7 +101,7 @@ type AggregateMeasurementsInput struct {
 	Name            string `json:"name,omitempty" jsonschema:"optional metric name to aggregate (omit for all). Omitting it returns one row per bucket per metric, so a wide window over many metrics is refused sooner"`
 	StartTime       string `json:"startTime" jsonschema:"inclusive RFC3339 start time (required)"`
 	EndTime         string `json:"endTime,omitempty" jsonschema:"RFC3339 end time; defaults to now"`
-	IntervalSeconds int    `json:"intervalSeconds" jsonschema:"time-bucket width in seconds (required, e.g. 3600 for hourly). A request is capped at 10,000 buckets (window / interval) and at 50,000 rows (buckets x distinct metric names that match the request's filters; 1 name when name is given), so keep the window and interval proportionate"`
+	IntervalSeconds int    `json:"intervalSeconds" jsonschema:"time-bucket width in seconds (required, e.g. 3600 for hourly). MCP also refuses results over 1,000 rows or 256 KiB. A request is capped at 10,000 buckets (window / interval) and at 50,000 rows (buckets x distinct metric names that match the request's filters; 1 name when name is given), so keep the window and interval proportionate"`
 }
 
 // MeasurementBucket is one time bucket of one metric. The metric name is what the device
@@ -130,6 +130,10 @@ type measurementBucketRaw struct {
 type AggregateMeasurementsOutput struct {
 	Buckets []MeasurementBucket `json:"buckets"`
 }
+
+// Bound the per-row provenance/output expansion even when compact upstream rows
+// fit the byte ceiling. Refuse the whole result; never return a truncated trend.
+const maxAggregateBuckets = 1000
 
 var aggregateMeasurementsQuery = newDocument("event-management", `query AggregateMeasurements($criteria: MeasurementAggregationCriteria!) {
   bucketedMeasurements(criteria: $criteria) {
@@ -166,6 +170,9 @@ func (t *Tools) AggregateMeasurements(ctx context.Context, req *mcp.CallToolRequ
 	}
 	if err := t.gql.Query(ctx, aggregateMeasurementsQuery, token, map[string]any{"criteria": criteria}, &resp); err != nil {
 		return nil, AggregateMeasurementsOutput{}, err
+	}
+	if len(resp.BucketedMeasurements) > maxAggregateBuckets {
+		return nil, AggregateMeasurementsOutput{}, fmt.Errorf("aggregate_measurements exceeds %d rows; narrow the request (a shorter time range, a wider interval, or one metric)", maxAggregateBuckets)
 	}
 	out := AggregateMeasurementsOutput{Buckets: []MeasurementBucket{}}
 	for _, b := range resp.BucketedMeasurements {

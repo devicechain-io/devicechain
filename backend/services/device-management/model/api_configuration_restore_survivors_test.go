@@ -101,7 +101,7 @@ func TestARestoreWhoseWrittenDocumentDiffersIsAConflictAndMintsNothing(t *testin
 	}
 	armed := true
 	db := api.RDB.Database
-	if err := db.Callback().Update().After("gorm:update").Register("test:interleave", func(d *gorm.DB) {
+	if err := db.Callback().Create().After("gorm:create").Register("test:interleave", func(d *gorm.DB) {
 		row, ok := d.Statement.Dest.(*EntityAttribute)
 		if !armed || !ok || row.AttrKey != "z" {
 			return
@@ -115,7 +115,7 @@ func TestARestoreWhoseWrittenDocumentDiffersIsAConflictAndMintsNothing(t *testin
 	}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = db.Callback().Update().Remove("test:interleave") })
+	t.Cleanup(func() { _ = db.Callback().Create().Remove("test:interleave") })
 
 	_, err = api.RestoreDeviceConfiguration(ctx, "dev", target.Revision)
 	if armed {

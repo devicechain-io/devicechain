@@ -131,6 +131,8 @@ cosas:
 
 ## Editar o eliminar una ventana {#edit-or-delete-a-window}
 
+Los comandos en espera de un dispositivo deshabilitado no se liberan al desvincular o eliminar su ventana. Siguen el tipo de dispositivo cuando se habilita y se puede resolver el tipo.
+
 `updateMaintenanceWindow` es una actualización parcial: omite un campo para dejarlo como está.
 
 ```graphql

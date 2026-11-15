@@ -89,7 +89,7 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *G
 			ResourceMetadataURL: metadataURL(resourceID),
 			Scopes:              []string{coreauth.ScopeReadOnly},
 		},
-	)(core.BufferBody(limitMessages(streamable, limits), maxRequestBodyBytes))
+	)(bufferRequestBody(limitMessages(streamable, limits)))
 	// limitMessages sits inside the buffering because it reads the body, and inside the
 	// bearer check because it keys on the verified subject.
 	// The body is buffered INSIDE the bearer check, so a caller with no valid token is
@@ -120,6 +120,7 @@ func newServer(gql *GraphQLClient, opts ...Option) (*mcp.Server, *Catalog) {
 	}
 	registerProposals(s, c, t, o.actuation)
 	s.AddReceivingMiddleware(filterActionScopes(c))
+	s.AddReceivingMiddleware(limitToolExecution)
 	// Every tools/call this server answers writes one audit record (audit.go). It is a
 	// middleware on the served server rather than a wrapper inside register, so a call
 	// that never reaches a handler — an unknown tool, arguments that fail validation — is
