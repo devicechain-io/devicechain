@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -115,7 +116,7 @@ func NewRolloutDriver(api *model.Api, interval time.Duration, ms *core.Microserv
 		panic("processor.NewRolloutDriver: interval must be positive")
 	}
 	d := &RolloutDriver{api: api}
-	opts := []core.PeriodicTaskOption{core.WithDetachedContext()}
+	var opts []core.PeriodicTaskOption
 	if ms != nil {
 		opts = append(opts, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("rollout_driver")))
 	}
@@ -149,9 +150,24 @@ func (d *RolloutDriver) Stop() {
 	}
 }
 
+// runOnce is the scheduled pass. A failure to list running rollouts fails the pass; individual
+// step failures (already logged per rollout by AdvanceRollouts) make it partial or failed through
+// core.PassResult, so a driver whose every step fails does not read as healthy.
 func (d *RolloutDriver) runOnce(ctx context.Context) error {
-	_, err := d.api.AdvanceRollouts(ctx)
-	return err
+	res, err := d.api.AdvanceRollouts(ctx)
+	if err != nil {
+		return fmt.Errorf("the rollout driver could not list running rollouts: %w", err)
+	}
+	return rolloutPassResult(res)
+}
+
+// rolloutPassResult maps one pass's step tally onto the periodic-task outcome.
+func rolloutPassResult(res model.AdvanceResult) error {
+	var lastErr error
+	if res.Failed > 0 {
+		lastErr = fmt.Errorf("%d of %d rollout steps failed", res.Failed, res.Stepped)
+	}
+	return core.PassResult(res.Stepped, res.Failed, lastErr)
 }
 
 // Pass steps every RUNNING rollout once. Exported so a test can drive a pass without the timer.

@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -42,7 +43,7 @@ func NewDeadlineSweeper(api *model.Api, interval time.Duration, metrics *UpdateR
 		panic("processor.NewDeadlineSweeper: interval must be positive")
 	}
 	s := &DeadlineSweeper{api: api, page: sweepPage, metrics: metrics}
-	opts := []core.PeriodicTaskOption{core.WithDetachedContext()}
+	var opts []core.PeriodicTaskOption
 	if ms != nil {
 		opts = append(opts, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("deadline_sweep")))
 	}
@@ -76,9 +77,13 @@ func (s *DeadlineSweeper) Stop() {
 	}
 }
 
+// runOnce is the scheduled pass. It returns the error Pass only logs, so the pass outcome is
+// classified (and logged, rate-limited, by the periodic task) instead of counted as complete.
 func (s *DeadlineSweeper) runOnce(ctx context.Context) error {
-	_, err := s.sweep(ctx)
-	return err
+	if _, err := s.sweep(ctx); err != nil {
+		return fmt.Errorf("the update deadline sweep failed: %w", err)
+	}
+	return nil
 }
 
 // Pass runs one sweep and records what it did. Exported so a test (and an operator tool) can drive
