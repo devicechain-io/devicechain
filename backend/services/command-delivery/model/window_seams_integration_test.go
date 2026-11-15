@@ -271,14 +271,14 @@ func TestPostgresADeletedDevicesCommandsAreNeitherKeptNorClaimed(t *testing.T) {
 	old := pgCommand(t, api, a, "old", "valve-7", CommandHeld, time.Time{}, time.Time{}, "")
 	other := pgCommand(t, api, b, "other", "valve-7", CommandQueued, time.Time{}, time.Time{}, "")
 	deleted := time.Now().UTC().Add(time.Second)
-	n, err := api.CancelDeletedDeviceCommands(a, "valve-7", deleted)
+	n, err := api.CancelDeletedDeviceCommands(a, "valve-7", 0, deleted)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, n)
 	require.Equal(t, CommandCancelled.String(), loadOrFail(t, api, a, old.ID).Status)
 	require.Equal(t, CommandQueued.String(), loadOrFail(t, api, b, other.ID).Status, "another tenant's device was touched")
 
 	// An older redelivered fact does not lower the floor.
-	_, err = api.CancelDeletedDeviceCommands(a, "valve-7", deleted.Add(-time.Hour))
+	_, err = api.CancelDeletedDeviceCommands(a, "valve-7", 0, deleted.Add(-time.Hour))
 	require.NoError(t, err)
 	var gate DeviceGate
 	require.NoError(t, api.RDB.DB(a).Where("device_token = ?", "valve-7").First(&gate).Error)
@@ -309,4 +309,31 @@ func TestPostgresADeletedDevicesCommandsAreNeitherKeptNorClaimed(t *testing.T) {
 	_, ok, err = api.MarkSent(b, other.ID)
 	require.NoError(t, err)
 	require.True(t, ok, "another tenant's floor-free device was refused")
+}
+
+func TestPostgresDeletionIncarnationAndRetirement(t *testing.T) {
+	api := newPostgresApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	other := core.WithTenant(context.Background(), "B")
+	at := time.Now().UTC().Add(-time.Hour)
+	_, err := api.CancelDeletedDeviceCommands(ctx, "valve-7", 17, at)
+	require.NoError(t, err)
+	stale := pgCommand(t, api, ctx, "late-stale", "valve-7", CommandQueued, time.Time{}, time.Time{}, "")
+	fresh := pgCommand(t, api, ctx, "skewed-fresh", "valve-7", CommandQueued, time.Time{}, time.Time{}, "")
+	foreign := pgCommand(t, api, other, "foreign", "valve-7", CommandQueued, time.Time{}, time.Time{}, "")
+	require.NoError(t, api.RDB.DB(ctx).Model(stale).Update("device_incarnation", 17).Error)
+	require.NoError(t, api.RDB.DB(ctx).Model(fresh).Updates(map[string]any{"device_incarnation": 23, "created_at": at.Add(-time.Hour)}).Error)
+	_, ok, err := api.MarkSent(ctx, stale.ID)
+	require.NoError(t, err)
+	assert.False(t, ok, "identity must cover a row newer than the time floor")
+	n, err := api.RetireCoveredCommands(ctx, 1)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, n)
+	got := loadOrFail(t, api, ctx, stale.ID)
+	assert.Equal(t, CommandCancelled.String(), got.Status)
+	assert.Equal(t, OutcomeNotDelivered.String(), got.Outcome.String)
+	assert.Equal(t, CommandQueued.String(), loadOrFail(t, api, other, foreign.ID).Status)
+	_, ok, err = api.MarkSent(ctx, fresh.ID)
+	require.NoError(t, err)
+	assert.True(t, ok, "a larger incarnation must survive a creation clock before deletion")
 }

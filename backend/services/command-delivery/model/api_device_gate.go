@@ -57,7 +57,20 @@ func (api *Api) deletedCovers(ctx context.Context) *gorm.DB {
 		Where(clause.Eq{Column: clause.Column{Table: gate, Name: "tenant_id"}, Value: clause.Column{Table: commands, Name: "tenant_id"}}).
 		Where(clause.Eq{Column: clause.Column{Table: gate, Name: "device_token"}, Value: clause.Column{Table: commands, Name: "device_token"}}).
 		Where(clause.Neq{Column: clause.Column{Table: gate, Name: "deleted_through"}, Value: nil}).
-		Where(clause.Lte{Column: clause.Column{Table: commands, Name: "created_at"}, Value: clause.Column{Table: gate, Name: "deleted_through"}})
+		Where(clause.Or(
+			clause.And(
+				clause.Neq{Column: clause.Column{Table: commands, Name: "device_incarnation"}, Value: nil},
+				clause.Neq{Column: clause.Column{Table: gate, Name: "deleted_incarnation"}, Value: nil},
+				clause.Lte{Column: clause.Column{Table: commands, Name: "device_incarnation"}, Value: clause.Column{Table: gate, Name: "deleted_incarnation"}},
+			),
+			clause.And(
+				clause.Or(
+					clause.Eq{Column: clause.Column{Table: commands, Name: "device_incarnation"}, Value: nil},
+					clause.Eq{Column: clause.Column{Table: gate, Name: "deleted_incarnation"}, Value: nil},
+				),
+				clause.Lte{Column: clause.Column{Table: commands, Name: "created_at"}, Value: clause.Column{Table: gate, Name: "deleted_through"}},
+			),
+		))
 }
 
 // DatabaseNow is the database's clock, falling back to this process's where the database has no
@@ -284,27 +297,34 @@ func (api *Api) CancelDeviceCommands(ctx context.Context, deviceToken string) (i
 	return res.RowsAffected, nil
 }
 
-// CancelDeletedDeviceCommands records a monotone deletion floor and cancels unsent commands
-// through that instant atomically. The comparison spans device-management's deletion clock
-// and this service's creation clock, so its bound is only as good as the pods' clock skew.
-// A command validated before deletion but inserted after this fact was applied remains a
-// hole to be closed by the later device-incarnation slice.
-func (api *Api) CancelDeletedDeviceCommands(ctx context.Context, deviceToken string, deletedTime time.Time) (int64, error) {
+// CancelDeletedDeviceCommands records monotone deletion bounds and cancels unsent
+// commands of that incarnation. Unknown identities retain the time fallback.
+func (api *Api) CancelDeletedDeviceCommands(ctx context.Context, deviceToken string, incarnation uint64, deletedTime time.Time) (int64, error) {
 	deletedTime = deletedTime.UTC()
 	var count int64
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		existing := clause.Column{Table: tx.NamingStrategy.TableName("device_gates"), Name: "deleted_through"}
-		row := &DeviceGate{DeviceToken: deviceToken, DeletedThrough: sql.NullTime{Time: deletedTime, Valid: true}}
+		row := &DeviceGate{DeviceToken: deviceToken, DeletedThrough: sql.NullTime{Time: deletedTime, Valid: true}, DeletedIncarnation: nullableIncarnation(incarnation)}
+		updates := map[string]any{
+			"deleted_through": gorm.Expr("CASE WHEN ? IS NULL OR ? < ? THEN ? ELSE ? END", existing, existing, deletedTime, deletedTime, existing),
+		}
+		if incarnation > 0 {
+			prior := clause.Column{Table: tx.NamingStrategy.TableName("device_gates"), Name: "deleted_incarnation"}
+			updates["deleted_incarnation"] = gorm.Expr("CASE WHEN ? IS NULL OR ? < ? THEN ? ELSE ? END", prior, prior, incarnation, incarnation, prior)
+		}
 		if err := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}},
-			DoUpdates: clause.Assignments(map[string]any{
-				"deleted_through": gorm.Expr("CASE WHEN ? IS NULL OR ? < ? THEN ? ELSE ? END", existing, existing, deletedTime, deletedTime, existing),
-			}),
+			Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}},
+			DoUpdates: clause.Assignments(updates),
 		}).Create(row).Error; err != nil {
 			return err
 		}
-		result := tx.Model(&Command{}).
-			Where("device_token = ? AND status IN ? AND created_at <= ?", deviceToken, cancellableStatusStrings(), deletedTime).
+		query := tx.Model(&Command{}).Where("device_token = ? AND status IN ?", deviceToken, cancellableStatusStrings())
+		if incarnation > 0 {
+			query = query.Where("(device_incarnation IS NOT NULL AND device_incarnation <= ?) OR (device_incarnation IS NULL AND created_at <= ?)", incarnation, deletedTime)
+		} else {
+			query = query.Where("created_at <= ?", deletedTime)
+		}
+		result := query.
 			Updates(terminalUpdate(CommandCancelled, OutcomeNotDelivered, nil))
 		count = result.RowsAffected
 		return result.Error
@@ -313,4 +333,46 @@ func (api *Api) CancelDeletedDeviceCommands(ctx context.Context, deviceToken str
 		return 0, err
 	}
 	return count, nil
+}
+
+// nullableIncarnation leaves unknown identities NULL, including on old-pod writes.
+func nullableIncarnation(id uint64) sql.NullInt64 {
+	return sql.NullInt64{Int64: int64(id), Valid: id > 0}
+}
+
+// RetireCoveredCommands cancels a bounded page of this tenant's covered unsent rows.
+func (api *Api) RetireCoveredCommands(ctx context.Context, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	ids := api.RDB.DB(ctx).Model(&Command{}).Select("id").
+		Where("status IN ?", cancellableStatusStrings()).
+		Where("EXISTS (?)", api.deletedCovers(ctx)).Order("id").Limit(limit)
+	result := api.RDB.DB(ctx).Model(&Command{}).Where("id IN (?)", ids).
+		Where("status IN ?", cancellableStatusStrings()).
+		Updates(terminalUpdate(CommandCancelled, OutcomeNotDelivered, nil))
+	return result.RowsAffected, result.Error
+}
+
+// DeletedGateTenants lists only tenant identities; callers must scope every write.
+func (api *Api) DeletedGateTenants(ctx context.Context) ([]string, error) {
+	var tenants []string
+	err := api.RDB.DB(ctx).Model(&DeviceGate{}).Distinct("tenant_id").
+		Where("deleted_through IS NOT NULL").Order("tenant_id").Pluck("tenant_id", &tenants).Error
+	return tenants, err
+}
+
+// CancelHeldCommand changes only HELD, leaving any concurrent release or claim alone.
+func (api *Api) CancelHeldCommand(ctx context.Context, id uint) (bool, error) {
+	result := api.RDB.DB(ctx).Model(&Command{}).Where("id = ? AND status = ?", id, CommandHeld.String()).
+		Updates(terminalUpdate(CommandCancelled, OutcomeNotDelivered, nil))
+	return result.RowsAffected > 0, result.Error
+}
+
+// HeldCommandsForDevice pages one device's HELD rows inside the tenant fence.
+func (api *Api) HeldCommandsForDevice(ctx context.Context, token string, afterID uint, limit int) ([]*Command, error) {
+	var commands []*Command
+	err := api.RDB.DB(ctx).Where("device_token = ? AND status = ? AND id > ?", token, CommandHeld.String(), afterID).
+		Order("id ASC").Limit(limit).Find(&commands).Error
+	return commands, err
 }

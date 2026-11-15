@@ -36,7 +36,7 @@ func TestADeletedDevicesHeldCommandsAreCancelledAndANewDevicesAreNot(t *testing.
 	sent := deletionCommand(t, api, ctx, "sent", CommandSent, at.Add(-time.Second))
 	newer := deletionCommand(t, api, ctx, "new", CommandQueued, at.Add(time.Second))
 	other := deletionCommand(t, api, gateCtx("B"), "other-tenant", CommandQueued, at)
-	n, err := api.CancelDeletedDeviceCommands(ctx, "valve-7", at)
+	n, err := api.CancelDeletedDeviceCommands(ctx, "valve-7", 0, at)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), n)
 	for _, c := range cancelled {
@@ -58,7 +58,7 @@ func TestTheClaimRefusesACommandTheDeletionCovers(t *testing.T) {
 			api := newTestApi(t)
 			ctx := gateCtx("A")
 			at := time.Now().UTC().Truncate(time.Second)
-			_, err := api.CancelDeletedDeviceCommands(ctx, "valve-7", at)
+			_, err := api.CancelDeletedDeviceCommands(ctx, "valve-7", 0, at)
 			require.NoError(t, err)
 			old := deletionCommand(t, api, ctx, "old", CommandQueued, at.Add(-time.Second))
 			newer := deletionCommand(t, api, ctx, "new", CommandQueued, at.Add(time.Second))
@@ -94,9 +94,9 @@ func TestDeletionFloorIsMonotoneAndPreservesDisabled(t *testing.T) {
 	t2 := t1.Add(2 * time.Second)
 	_, err := api.SetDeviceDisabled(ctx, "valve-7", true)
 	require.NoError(t, err)
-	_, err = api.CancelDeletedDeviceCommands(ctx, "valve-7", t2)
+	_, err = api.CancelDeletedDeviceCommands(ctx, "valve-7", 0, t2)
 	require.NoError(t, err)
-	_, err = api.CancelDeletedDeviceCommands(ctx, "valve-7", t1)
+	_, err = api.CancelDeletedDeviceCommands(ctx, "valve-7", 0, t1)
 	require.NoError(t, err)
 	var gate DeviceGate
 	require.NoError(t, api.RDB.DB(ctx).Where("device_token = ?", "valve-7").First(&gate).Error)
@@ -141,7 +141,7 @@ func TestDeletedDeviceCancellationIsAtomic(t *testing.T) {
 	c := deletionCommand(t, api, ctx, "old", CommandQueued, at)
 	require.NoError(t, api.RDB.DB(ctx).Exec(`CREATE TRIGGER refuse_cancel BEFORE UPDATE ON commands
  BEGIN SELECT RAISE(ABORT, 'write refused'); END`).Error)
-	count, err := api.CancelDeletedDeviceCommands(ctx, "valve-7", at)
+	count, err := api.CancelDeletedDeviceCommands(ctx, "valve-7", 0, at)
 	require.Error(t, err)
 	assert.Zero(t, count)
 	var gates int64
@@ -159,7 +159,7 @@ func TestTheDispatchReadsDoNotOfferACommandTheDeletionCovers(t *testing.T) {
 			api := newTestApi(t)
 			ctx := gateCtx("A")
 			at := time.Now().UTC().Truncate(time.Second)
-			_, err := api.CancelDeletedDeviceCommands(ctx, "valve-7", at)
+			_, err := api.CancelDeletedDeviceCommands(ctx, "valve-7", 0, at)
 			require.NoError(t, err)
 			deletionCommand(t, api, ctx, "old", status, at.Add(-time.Second))
 			deletionCommand(t, api, ctx, "new", status, at.Add(time.Second))
@@ -191,7 +191,7 @@ func TestAConfirmationOfADispatchTheDeletionCoversIsRefused(t *testing.T) {
 	oldNonce, ok, err := api.MarkSent(ctx, old.ID)
 	require.NoError(t, err)
 	require.True(t, ok)
-	_, err = api.CancelDeletedDeviceCommands(ctx, "valve-7", at)
+	_, err = api.CancelDeletedDeviceCommands(ctx, "valve-7", 0, at)
 	require.NoError(t, err)
 	require.Equal(t, CommandSent.String(), loadOrFail(t, api, ctx, old.ID).Status, "the cancel reached a SENT command")
 	_, ok, err = api.ConfirmDispatch(ctx, "old", oldNonce)
@@ -213,7 +213,7 @@ func TestTheSweepReadsDoNotOfferACommandTheDeletionCovers(t *testing.T) {
 	api := newTestApi(t)
 	ctx := gateCtx("A")
 	at := time.Now().UTC().Truncate(time.Second)
-	_, err := api.CancelDeletedDeviceCommands(ctx, "valve-7", at)
+	_, err := api.CancelDeletedDeviceCommands(ctx, "valve-7", 0, at)
 	require.NoError(t, err)
 	deletionCommand(t, api, ctx, "old", CommandQueued, at.Add(-time.Second))
 	deletionCommand(t, api, ctx, "new", CommandQueued, at.Add(time.Second))
@@ -223,4 +223,27 @@ func TestTheSweepReadsDoNotOfferACommandTheDeletionCovers(t *testing.T) {
 	queued, err := api.QueuedCommandsForDevice(ctx, "valve-7", 32)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"new"}, tokensOf(queued))
+}
+
+func TestDeviceIncarnationMigrationReplaysPartialApplication(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{NamingStrategy: schema.NamingStrategy{TablePrefix: "area_"}})
+	require.NoError(t, err)
+	// Simulate interruption after commands received its column but before gates did.
+	require.NoError(t, db.Exec("CREATE TABLE area_commands (id integer PRIMARY KEY, device_incarnation bigint)").Error)
+	require.NoError(t, db.Exec("CREATE TABLE area_device_gates (id integer PRIMARY KEY)").Error)
+	require.NoError(t, db.Exec("INSERT INTO area_commands (id, device_incarnation) VALUES (1, 42)").Error)
+	for range 2 {
+		require.NoError(t, NewDeviceIncarnationSchema().Migrate(db))
+	}
+	var command struct{ DeviceIncarnation sql.NullInt64 }
+	require.NoError(t, db.Table("area_commands").First(&command).Error)
+	assert.Equal(t, sql.NullInt64{Int64: 42, Valid: true}, command.DeviceIncarnation)
+	// Old writers can still omit both new columns.
+	require.NoError(t, db.Exec("INSERT INTO area_commands (id) VALUES (2)").Error)
+	require.NoError(t, db.Exec("INSERT INTO area_device_gates (id) VALUES (1)").Error)
+	var gate struct{ DeletedIncarnation sql.NullInt64 }
+	require.NoError(t, db.Table("area_device_gates").First(&gate).Error)
+	assert.False(t, gate.DeletedIncarnation.Valid)
+	assert.False(t, db.Migrator().HasTable("area_command_incarnation_snapshots"))
+	assert.False(t, db.Migrator().HasTable("area_gate_incarnation_snapshots"))
 }

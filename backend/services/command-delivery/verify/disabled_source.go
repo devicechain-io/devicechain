@@ -107,3 +107,31 @@ func (s *DisabledSource) LiveDevices(ctx context.Context, tenant string, deviceT
 	}
 	return live, nil
 }
+
+// DeviceIncarnations reads each distinct token in bounded requests. A missing response
+// is an error, so an unavailable owner cannot be mistaken for a deleted device.
+func (s *DisabledSource) DeviceIncarnations(ctx context.Context, tenant string, tokens []string) (map[string]uint64, error) {
+	ids := make(map[string]uint64)
+	for start := 0; start < len(tokens); start += disabledPageSize {
+		chunk := tokens[start:min(start+disabledPageSize, len(tokens))]
+		var out struct {
+			DevicesByToken *[]deviceIdentity `json:"devicesByToken"`
+		}
+		if err := s.client.Query(ctx, s.dmURL, tenant,
+			`query($tokens: [String!]!) { devicesByToken(tokens: $tokens) { token id } }`,
+			map[string]any{"tokens": chunk}, &out); err != nil {
+			return nil, err
+		}
+		if out.DevicesByToken == nil {
+			return nil, fmt.Errorf("device-management returned no device identities")
+		}
+		for _, device := range *out.DevicesByToken {
+			id := parseDeviceIncarnation(device)
+			if id == 0 {
+				return nil, fmt.Errorf("device-management returned no valid identity for %q", device.Token)
+			}
+			ids[device.Token] = id
+		}
+	}
+	return ids, nil
+}

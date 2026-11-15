@@ -162,6 +162,9 @@ type CommandDeliveryProcessor struct {
 	DeviceCommandsWriter     messaging.MessageWriter
 	Api                      model.CommandDeliveryApi
 
+	// Nil uses the API's advisory lock; tests can run the pass on SQLite.
+	reconcileLock func(context.Context, func() error) (bool, error)
+
 	// Hold keeps a command RESPONSE unacked, outside its delivery budget, while the relational
 	// store cannot take writes (core/storehold). A response is the device's only copy of what it
 	// did: at its last delivery it used to be lettered and acked, and the letter's write-back

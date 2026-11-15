@@ -38,6 +38,8 @@ type DeviceGate struct {
 	// DeletedThrough is the latest deletion floor; NULL means no deletion was observed.
 	// It is separate from GORM soft deletion and survives token reuse.
 	DeletedThrough sql.NullTime
+	// DeletedIncarnation is the greatest deleted device row id observed; NULL is unknown.
+	DeletedIncarnation sql.NullInt64
 
 	// UpdatedAt is when this row last changed state. The corrective walk only touches a row older
 	// than the instant it started reading, so a fact that landed during the walk always wins.

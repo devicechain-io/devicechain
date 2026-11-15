@@ -335,3 +335,15 @@ type failingRosterApi struct{}
 func (failingRosterApi) SetDeviceDisabled(context.Context, string, bool) (bool, error) {
 	return false, errors.New("database is down")
 }
+
+func (f *fakeSource) DeviceIncarnations(ctx context.Context, tenant string, tokens []string) (map[string]uint64, error) {
+	live, err := f.LiveDevices(ctx, tenant, tokens)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]uint64)
+	for _, token := range live {
+		ids[token] = 1
+	}
+	return ids, nil
+}

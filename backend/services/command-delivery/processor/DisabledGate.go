@@ -35,6 +35,7 @@ import (
 // DisabledSource is what the sync reads: the tenants of the instance, and the devices
 // device-management has disabled for one of them.
 type DisabledSource interface {
+	DeviceIncarnations(ctx context.Context, tenant string, tokens []string) (map[string]uint64, error)
 	Tenants(ctx context.Context) ([]string, error)
 	DisabledDevices(ctx context.Context, tenant string) ([]string, error)
 	// LiveDevices answers which of the named devices still exist in the tenant. A device that
@@ -194,7 +195,42 @@ func (cproc *CommandDeliveryProcessor) ResumeDevice(ctx context.Context, tenant,
 		return nil
 	}
 	tenantCtx := core.WithTenant(ctx, tenant)
-	released, err := reader.ReleaseHeldForDevice(tenantCtx, deviceToken)
+	var released int64
+	var err error
+	if cproc.DisabledSource == nil {
+		released, err = reader.ReleaseHeldForDevice(tenantCtx, deviceToken)
+	} else {
+		heldReader, ok := cproc.Api.(interface {
+			HeldCommandsForDevice(context.Context, string, uint, int) ([]*model.Command, error)
+		})
+		if !ok {
+			return fmt.Errorf("the Api cannot read held commands for identity verification")
+		}
+		ids, ok := cproc.deviceIdentities(tenantCtx, tenant, []string{deviceToken})
+		if !ok {
+			return nil
+		}
+		// Release only rows verified by the same identity check as the reconciler.
+		// A bulk release could include an unverified row inserted during this walk.
+		for cursor := uint(0); ; {
+			commands, readErr := heldReader.HeldCommandsForDevice(tenantCtx, deviceToken, cursor, reconcilePageSize)
+			if readErr != nil {
+				return readErr
+			}
+			for _, cmd := range commands {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if cproc.keepHeldDevice(tenantCtx, cmd, ids) {
+					cproc.releaseHold(tenantCtx, cmd)
+				}
+			}
+			if len(commands) < reconcilePageSize {
+				break
+			}
+			cursor = commands[len(commands)-1].ID
+		}
+	}
 	if err != nil {
 		log.Error().Err(err).Str("tenant", tenant).Str("device", deviceToken).
 			Msg("Could not release the commands held for an enabled device.")
