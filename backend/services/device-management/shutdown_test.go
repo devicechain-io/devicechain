@@ -13,6 +13,7 @@ import (
 
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-device-management/graphql"
@@ -110,6 +111,7 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 		FunctionalArea: area,
 		Readiness:      core.NewReadinessGate(),
 	}
+	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
 	Microservice.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{
 		Hostname: host,
 		Port:     port,
@@ -153,18 +155,18 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	// The ownership drain is stopped unconditionally too. Initialized, not started: its pass
 	// would need the Api this test does not build.
 	OwnershipDrain = core.NewPeriodicTask(area, "ownership-drain", time.Hour,
-		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("ownership_drain"))
 	require.NoError(t, OwnershipDrain.Initialize(context.Background()))
 	AgentEffectsDrain = core.NewPeriodicTask(area, "agent-effects-drain", time.Hour,
-		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("agent_effects_drain"))
 	require.NoError(t, AgentEffectsDrain.Initialize(context.Background()))
 	AgentKillConsumer = processor.NewAgentKillConsumer(Microservice, nil, nil, model.NewKillFeed(0, nil), nil)
 	require.NoError(t, AgentKillConsumer.Initialize(context.Background()))
 	SessionKickDrain = core.NewPeriodicTask(area, "session-kick-drain", time.Hour,
-		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("session_kick_drain"))
 	require.NoError(t, SessionKickDrain.Initialize(context.Background()))
 	AgentProposalReaper = core.NewPeriodicTask(area, "agent-proposal-reaper", time.Hour,
-		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("agent_proposal_reaper"))
 	require.NoError(t, AgentProposalReaper.Initialize(context.Background()))
 	// And the decode accounting, which the stopper stops and then flushes. A fresh one: an earlier test of
 	// the package may have left the global stopped.
@@ -172,7 +174,7 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	t.Cleanup(func() { DecodeAccountant, DecodeAccounting = prevAccountant, prevAccounting })
 	DecodeAccountant = processor.NewDecodeAccountant(nil, "test", nil)
 	DecodeAccounting = core.NewPeriodicTask(area, "decode-accounting", time.Hour,
-		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("decode_accounting"))
 	require.NoError(t, DecodeAccounting.Initialize(context.Background()))
 
 	// The callout responder is nil-guarded in the stopper; there is nothing to stop.

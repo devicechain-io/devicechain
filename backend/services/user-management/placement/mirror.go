@@ -148,5 +148,5 @@ func NewMirrorTask(ms *core.Microservice, src Source, bucket partition.Bucket, i
 	callbacks core.LifecycleCallbacks) *core.PeriodicTask {
 	return core.NewPeriodicTask(ms.FunctionalArea, "placement-mirror", interval,
 		mirrorPass(src, bucket, logChangedP),
-		callbacks, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("placement_mirror")))
+		callbacks, ms.NewPeriodicTaskMetrics("placement_mirror"))
 }

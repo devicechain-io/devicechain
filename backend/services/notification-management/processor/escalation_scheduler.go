@@ -60,7 +60,7 @@ func NewEscalationScheduler(ms *core.Microservice, api *model.Api, notifier *Pol
 	interval time.Duration, defaultMax int, callbacks core.LifecycleCallbacks) *EscalationScheduler {
 	s := &EscalationScheduler{Microservice: ms, Api: api, Notifier: notifier, defaultMax: defaultMax}
 	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "escalation-scheduler", interval,
-		s.runOnce, callbacks, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("escalation_scheduler")))
+		s.runOnce, callbacks, ms.NewPeriodicTaskMetrics("escalation_scheduler"))
 	return s
 }
 

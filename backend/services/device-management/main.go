@@ -766,7 +766,7 @@ func initSessionKickDrain() error {
 	}
 	SessionKickDrain = core.NewPeriodicTask(Microservice.FunctionalArea, "session-kick-drain", sessionKickDrainInterval,
 		func(ctx context.Context) error { return Api.DrainSessionKicksLocked(ctx) },
-		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(SessionKickDrainMetrics))
+		core.NewNoOpLifecycleCallbacks(), SessionKickDrainMetrics, core.WithImmediateFirstPass())
 	return SessionKickDrain.Initialize(context.Background())
 }
 
@@ -781,7 +781,7 @@ func initAgentProposalReaper() error {
 			_, err := Api.ExpireAgentProposals(ctx)
 			return err
 		},
-		core.NewNoOpLifecycleCallbacks(), core.WithPassMetrics(Microservice.NewPeriodicTaskMetrics("agent_proposal_reaper")))
+		core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("agent_proposal_reaper"))
 	return AgentProposalReaper.Initialize(context.Background())
 }
 
@@ -806,7 +806,7 @@ func initDecodeAccounting() error {
 	DecodeAccountant = processor.NewDecodeAccountant(Api, replica, DecodeAccountingMetrics)
 	DecodeAccounting = core.NewPeriodicTask(Microservice.FunctionalArea, "decode-accounting", decodeAccountingInterval,
 		func(ctx context.Context) error { return DecodeAccountant.Flush(ctx) },
-		core.NewNoOpLifecycleCallbacks(), core.WithPassMetrics(Microservice.NewPeriodicTaskMetrics("decode_accounting")))
+		core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("decode_accounting"))
 	return DecodeAccounting.Initialize(context.Background())
 }
 
@@ -815,7 +815,7 @@ func initDecodeAccounting() error {
 func initAgentEffectsDrain() error {
 	AgentEffectsDrain = core.NewPeriodicTask(Microservice.FunctionalArea, "agent-effects-drain", ownershipDrainInterval,
 		func(ctx context.Context) error { return Api.DrainAgentEffectsLocked(ctx) },
-		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(AgentEffectsDrainMetrics))
+		core.NewNoOpLifecycleCallbacks(), AgentEffectsDrainMetrics, core.WithImmediateFirstPass())
 	return AgentEffectsDrain.Initialize(context.Background())
 }
 
@@ -833,7 +833,7 @@ func initOwnershipDrain() error {
 			}
 			return ownershipErr
 		},
-		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(OwnershipDrainMetrics))
+		core.NewNoOpLifecycleCallbacks(), OwnershipDrainMetrics, core.WithImmediateFirstPass())
 	return OwnershipDrain.Initialize(context.Background())
 }
 
