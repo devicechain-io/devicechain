@@ -121,8 +121,9 @@ func (rc *RosterConsumer) handle(ctx context.Context, msg messaging.Message) {
 // retryOrDrop leaves a transiently failed fact unacked for redelivery, or dead-letters and acks it
 // once the redelivery cap is reached. A deleted tenant is settled where it stands (messaging.Dispose).
 func (rc *RosterConsumer) retryOrDrop(ctx context.Context, msg messaging.Message, token string, err error) {
-	lossCtx := log.With().Str("device", token).Str("loss", "LOST device-roster fact: it could be neither applied nor dead-lettered.").Logger().WithContext(ctx)
+	lossCtx := log.With().Str("device", token).Logger().WithContext(ctx)
 	d, _ := rc.dead.Settle(lossCtx, msg, err, deadletter.Exhausted{
+		Lost:      "LOST device-roster fact: it could be neither applied nor dead-lettered.",
 		Summary:   "a device-roster fact could not be applied after every delivery attempt",
 		Reference: token, MaxPayload: maxDeadLetterPayload,
 	})

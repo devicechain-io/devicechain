@@ -4,7 +4,9 @@
 package deadletter_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -17,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog"
 )
 
 type settleAck struct {
@@ -129,6 +132,38 @@ func TestSettleResult(t *testing.T) {
 	for d, want := range map[messaging.Disposition]string{messaging.Retry: core.ResultRetry, messaging.Exhausted: core.ResultFailed, messaging.TenantErased: core.ResultErased} {
 		if got := deadletter.Result(d); got != want {
 			t.Errorf("Result(%v)=%q, want %q", d, got, want)
+		}
+	}
+}
+
+// A letter that cannot be written logs the consumer's own LOST sentence as the message, so an
+// operator's existing search for it still matches; with none supplied, a generic one.
+func TestSettleLogsTheCallersLostSentence(t *testing.T) {
+	boom := errors.New("store unavailable")
+	for _, tc := range []struct{ lost, want string }{
+		{lost: "LOST device report: it could be neither applied nor dead-lettered.", want: "LOST device report: it could be neither applied nor dead-lettered."},
+		{lost: "", want: "LOST message: it could be neither applied nor dead-lettered."},
+	} {
+		ms := &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
+		ms.UseMetricsRegistry(prometheus.NewRegistry())
+		p := deadletter.NewProducer(ms)
+		p.UseTenantGate(func(string) bool { return false })
+		w := &settleWriter{}
+		w.On("WriteMessages").Return(boom).Times(3)
+		var buf bytes.Buffer
+		logger := zerolog.New(&buf)
+		ctx := logger.WithContext(core.WithTenant(context.Background(), "acme"))
+		msg := messaging.NewConsumedMessage("test.acme.raise-alarm", []byte("x"), messaging.MaxDeliver, nil, &settleAck{}).
+			WithOrigin(messaging.Origin{Suffix: streams.RaiseAlarm, Stream: "s", Consumer: "c", Seq: 1})
+		p.NewSink(w).Settle(ctx, msg, boom, deadletter.Exhausted{Summary: "s", Reference: "r", Lost: tc.lost})
+		var line struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &line); err != nil {
+			t.Fatalf("log line %q: %v", buf.String(), err)
+		}
+		if line.Message != tc.want {
+			t.Fatalf("LOST message = %q, want %q", line.Message, tc.want)
 		}
 	}
 }

@@ -397,8 +397,9 @@ func (rc *ReportsConsumer) retryOrDrop(ctx context.Context, msg messaging.Messag
 	if len(msg.Value) > maxDeadLetterPayload {
 		settleErr = fmt.Errorf("%w (payload truncated to %d of %d bytes)", err, maxDeadLetterPayload, len(msg.Value))
 	}
-	lossCtx := log.With().Str("device", token).Str("loss", "LOST device report: it could be neither applied nor dead-lettered.").Logger().WithContext(ctx)
+	lossCtx := log.With().Str("device", token).Logger().WithContext(ctx)
 	d, _ := rc.dead.Settle(lossCtx, msg, settleErr, deadletter.Exhausted{
+		Lost:      "LOST device report: it could be neither applied nor dead-lettered.",
 		Summary:   "a device report could not be applied after every delivery attempt",
 		Reference: token, MaxPayload: maxDeadLetterPayload,
 	})

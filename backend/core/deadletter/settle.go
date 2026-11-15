@@ -18,6 +18,9 @@ type Exhausted struct {
 	Summary    string
 	Reference  string
 	MaxPayload int // 0 = whole payload; positive values keep the first N bytes.
+	// Lost is the message of the error line logged when the letter cannot be written, so each
+	// consumer keeps its own searchable LOST sentence. Empty uses a generic one.
+	Lost string
 }
 
 // Settle leaves Retry untouched (never nak), acks TenantErased without a letter,
@@ -44,8 +47,11 @@ func (s *Sink) Settle(ctx context.Context, msg messaging.Message, err error, x E
 			if logger.GetLevel() == zerolog.Disabled {
 				logger = &log.Logger
 			}
-			logger.Error().Err(werr).Str("subject", msg.Subject).Str("reference", x.Reference).
-				Msg("LOST message: it could be neither applied nor dead-lettered.")
+			lost := x.Lost
+			if lost == "" {
+				lost = "LOST message: it could be neither applied nor dead-lettered."
+			}
+			logger.Error().Err(werr).Str("subject", msg.Subject).Str("reference", x.Reference).Msg(lost)
 		} else {
 			lettered = true
 		}

@@ -374,8 +374,9 @@ func (rc *RaiseAlarmConsumer) retryOrDrop(msg messaging.Message, done func(strin
 	if !ok {
 		sink = nil
 	}
-	lossCtx := log.With().Str("what", what).Str("loss", "LOST raise-alarm edge: it could be neither applied nor dead-lettered.").Logger().WithContext(ctx)
+	lossCtx := log.With().Str("what", what).Logger().WithContext(ctx)
 	d, lettered := sink.Settle(lossCtx, msg, err, deadletter.Exhausted{
+		Lost: "LOST raise-alarm edge: it could be neither applied nor dead-lettered.",
 		Summary: "an alarm edge could not be applied after every delivery attempt, so an alarm " +
 			"that should have been raised or cleared was not",
 		Reference: what,
