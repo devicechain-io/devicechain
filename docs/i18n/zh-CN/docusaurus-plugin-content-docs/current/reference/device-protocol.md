@@ -204,6 +204,11 @@ MQTT 无法回应设备，因此平台无法处理的载荷会记录下来供运
 
 **通过 HTTP**，同样的能力是 `event-sources` 服务上的 `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink`。设备在请求头中出示自己的凭据（`Authorization: Bearer <token>`，或 `X-DeviceChain-Credential-Type`、`-Id`、`-Secret`），因为二进制正文无处携带凭据；没有凭据时该路由返回 `401`。只有运维人员在 `event-sources` 上设置了 `httpIngest.deviceUplinks` 时它才存在，否则返回 `404`。
 
+| HTTP | 响应 |
+| --- | --- |
+| `429` | 来自此来源地址的请求超出限额。`Retry-After` 指示何时重试。 |
+| `503` | 在此设备的凭据遭到猜测期间，该设备的每条 HTTP 上行请求（包括使用正确凭据的请求）都会收到 `503` 和 `Retry-After`，直到暂停结束（每次最长 60 秒）。通过代理的 MQTT 连接通信的设备不受影响。 |
+
 ## 命令下发 {#command-delivery}
 
 设备在其 `device-commands` 主题上收到的内容，命令每派发一次就收到一次。下发是**仅实时**的：命令发布时未连接并订阅的设备收不到它，平台也无从得知。见[接收命令](../guides/connecting-a-device.md#receiving-commands)。

@@ -349,7 +349,7 @@ func TestRecordedSourceIsNotRegressedByAnOlderEvent(t *testing.T) {
 	t0 := time.Now().UTC().Truncate(time.Second)
 	rec := func(at, sourceAt time.Time, src AlarmSource) {
 		t.Helper()
-		if _, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, at, nil, src, sourceAt); err != nil {
+		if _, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, at, nil, src, sourceAt, at); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -371,7 +371,7 @@ func TestRecordedSourceAdvancesAfterEscalation(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
 	t0 := time.Now().UTC().Truncate(time.Second)
-	row, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, t0, nil, AlarmSource{DeviceName: "Old"}, t0)
+	row, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, t0, nil, AlarmSource{DeviceName: "Old"}, t0, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestRecordedSourceAdvancesAfterEscalation(t *testing.T) {
 		t.Fatalf("claim = %v, %v", claimed, err)
 	}
 	newer := t0.Add(time.Minute)
-	row, err = api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, newer, nil, AlarmSource{DeviceName: "New"}, newer)
+	row, err = api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, newer, nil, AlarmSource{DeviceName: "New"}, newer, newer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestSourceOrderingUsesDatabasePrecision(t *testing.T) {
 	rec := func(sat time.Time, name string) {
 		t.Helper()
 		if _, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, t0, nil,
-			AlarmSource{DeviceName: name}, sat); err != nil {
+			AlarmSource{DeviceName: name}, sat, t0); err != nil {
 			t.Fatal(err)
 		}
 	}
