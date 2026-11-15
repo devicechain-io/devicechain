@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/stretchr/testify/assert"
@@ -18,6 +19,7 @@ import (
 )
 
 func TestDeviceIncarnationsLookupChunksAndKeepsIdentities(t *testing.T) {
+	const createdAt = "2026-01-02T03:04:05.123456+02:00"
 	calls := 0
 	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -32,12 +34,12 @@ func TestDeviceIncarnationsLookupChunksAndKeepsIdentities(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		assert.True(t, strings.Contains(body.Query, "{ token id }"))
+		assert.True(t, strings.Contains(body.Query, "{ token id createdAt }"))
 		assert.LessOrEqual(t, len(body.Variables.Tokens), disabledPageSize)
 		devices := make([]map[string]string, 0, len(body.Variables.Tokens))
 		for _, token := range body.Variables.Tokens {
 			if token != "gone" {
-				devices = append(devices, map[string]string{"token": token, "id": "42"})
+				devices = append(devices, map[string]string{"token": token, "id": "42", "createdAt": createdAt})
 			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"devicesByToken": devices}})
@@ -52,8 +54,11 @@ func TestDeviceIncarnationsLookupChunksAndKeepsIdentities(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, calls)
 	assert.Len(t, ids, disabledPageSize)
-	assert.EqualValues(t, 42, ids["dev-0"])
-	assert.EqualValues(t, 42, ids[fmt.Sprintf("dev-%d", disabledPageSize-1)])
+	wantCreatedAt, err := time.Parse(time.RFC3339, createdAt)
+	require.NoError(t, err)
+	want := DeviceIdentity{ID: 42, CreatedAt: wantCreatedAt}
+	assert.Equal(t, want, ids["dev-0"])
+	assert.Equal(t, want, ids[fmt.Sprintf("dev-%d", disabledPageSize-1)])
 	_, exists := ids["gone"]
 	assert.False(t, exists)
 }
@@ -61,7 +66,10 @@ func TestDeviceIncarnationsLookupChunksAndKeepsIdentities(t *testing.T) {
 func TestDeviceIncarnationsLookupRejectsUnavailableOrInvalidIdentity(t *testing.T) {
 	for _, body := range []string{
 		`{"data":{}}`,
-		`{"data":{"devicesByToken":[{"token":"dev","id":"bad"}]}}`,
+		`{"data":{"devicesByToken":[{"token":"dev","id":"bad","createdAt":"2026-01-02T03:04:05Z"}]}}`,
+		`{"data":{"devicesByToken":[{"token":"dev","id":"42"}]}}`,
+		`{"data":{"devicesByToken":[{"token":"dev","id":"42","createdAt":"bad"}]}}`,
+		`{"data":{"devicesByToken":[{"token":"valid","id":"41","createdAt":"2026-01-02T03:04:05Z"},{"token":"dev","id":"42"}]}}`,
 		`{"errors":[{"message":"unavailable"}]}`,
 	} {
 		t.Run(body, func(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-command-delivery/model"
 	"github.com/devicechain-io/dc-command-delivery/presence"
+	"github.com/devicechain-io/dc-command-delivery/verify"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -21,30 +22,39 @@ import (
 
 type identitySource struct {
 	fakeSource
-	ids    map[string]uint64
+	ids    map[string]verify.DeviceIdentity
 	err    error
 	calls  int
 	tokens []string
 }
 
-func (s *identitySource) DeviceIncarnations(_ context.Context, tenant string, tokens []string) (map[string]uint64, error) {
+func (s *identitySource) DeviceIncarnations(_ context.Context, tenant string, tokens []string) (map[string]verify.DeviceIdentity, error) {
 	s.calls++
 	s.tokens = append([]string{}, tokens...)
 	return s.ids, s.err
 }
 
 func TestHeldReleaseVerifiesDeviceIncarnation(t *testing.T) {
+	deviceCreatedAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	for _, tc := range []struct {
-		name     string
-		ids      map[string]uint64
-		err      error
-		want     model.CommandStatus
-		releases int
+		name      string
+		ids       map[string]verify.DeviceIdentity
+		legacy    bool
+		createdAt time.Time
+		err       error
+		want      model.CommandStatus
+		releases  int
 	}{
-		{name: "absent", ids: map[string]uint64{}, want: model.CommandCancelled},
-		{name: "different", ids: map[string]uint64{"dev": 23}, want: model.CommandCancelled},
-		{name: "matching", ids: map[string]uint64{"dev": 17}, want: model.CommandQueued, releases: 2},
-		{name: "lookup error", ids: map[string]uint64{"dev": 17}, err: errors.New("owner down"), want: model.CommandHeld},
+		{name: "absent", ids: map[string]verify.DeviceIdentity{}, want: model.CommandCancelled},
+		{name: "different", ids: map[string]verify.DeviceIdentity{"dev": {ID: 23}}, want: model.CommandCancelled},
+		{name: "matching", ids: map[string]verify.DeviceIdentity{"dev": {ID: 17}}, want: model.CommandQueued, releases: 2},
+		{name: "lookup error", ids: map[string]verify.DeviceIdentity{"dev": {ID: 17}}, err: errors.New("owner down"), want: model.CommandHeld},
+		{name: "legacy before device", legacy: true, createdAt: deviceCreatedAt.Add(-time.Second),
+			ids: map[string]verify.DeviceIdentity{"dev": {ID: 17, CreatedAt: deviceCreatedAt}}, want: model.CommandCancelled},
+		{name: "legacy after device", legacy: true, createdAt: deviceCreatedAt.Add(time.Second),
+			ids: map[string]verify.DeviceIdentity{"dev": {ID: 17, CreatedAt: deviceCreatedAt}}, want: model.CommandQueued, releases: 2},
+		{name: "legacy at device creation", legacy: true, createdAt: deviceCreatedAt,
+			ids: map[string]verify.DeviceIdentity{"dev": {ID: 17, CreatedAt: deviceCreatedAt}}, want: model.CommandQueued, releases: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := realApi(t)
@@ -52,8 +62,13 @@ func TestHeldReleaseVerifiesDeviceIncarnation(t *testing.T) {
 			var commands []*model.Command
 			for _, token := range []string{"hold-1", "hold-2"} {
 				cmd := queueFor(t, api, token, "dev")
-				cmd.DeviceIncarnation = sql.NullInt64{Int64: 17, Valid: true}
-				require.NoError(t, api.RDB.DB(ctx).Model(cmd).Update("device_incarnation", cmd.DeviceIncarnation).Error)
+				cmd.DeviceIncarnation = sql.NullInt64{Int64: 17, Valid: !tc.legacy}
+				if tc.legacy {
+					cmd.CreatedAt = tc.createdAt
+				}
+				require.NoError(t, api.RDB.DB(ctx).Model(cmd).Updates(map[string]any{
+					"device_incarnation": cmd.DeviceIncarnation, "created_at": cmd.CreatedAt,
+				}).Error)
 				held, err := api.HoldCommand(ctx, cmd.ID)
 				require.NoError(t, err)
 				require.True(t, held)
@@ -89,17 +104,26 @@ func TestHeldReleaseVerifiesDeviceIncarnation(t *testing.T) {
 }
 
 func TestResumeDeviceVerifiesDeviceIncarnation(t *testing.T) {
+	deviceCreatedAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	for _, tc := range []struct {
-		name     string
-		ids      map[string]uint64
-		err      error
-		want     model.CommandStatus
-		releases int
+		name      string
+		ids       map[string]verify.DeviceIdentity
+		legacy    bool
+		createdAt time.Time
+		err       error
+		want      model.CommandStatus
+		releases  int
 	}{
-		{name: "absent", ids: map[string]uint64{}, want: model.CommandCancelled},
-		{name: "different", ids: map[string]uint64{"dev": 23}, want: model.CommandCancelled},
-		{name: "matching", ids: map[string]uint64{"dev": 17}, want: model.CommandSent, releases: 2},
-		{name: "lookup error", ids: map[string]uint64{"dev": 17}, err: errors.New("owner down"), want: model.CommandHeld},
+		{name: "absent", ids: map[string]verify.DeviceIdentity{}, want: model.CommandCancelled},
+		{name: "different", ids: map[string]verify.DeviceIdentity{"dev": {ID: 23}}, want: model.CommandCancelled},
+		{name: "matching", ids: map[string]verify.DeviceIdentity{"dev": {ID: 17}}, want: model.CommandSent, releases: 2},
+		{name: "lookup error", ids: map[string]verify.DeviceIdentity{"dev": {ID: 17}}, err: errors.New("owner down"), want: model.CommandHeld},
+		{name: "legacy before device", legacy: true, createdAt: deviceCreatedAt.Add(-time.Second),
+			ids: map[string]verify.DeviceIdentity{"dev": {ID: 17, CreatedAt: deviceCreatedAt}}, want: model.CommandCancelled},
+		{name: "legacy after device", legacy: true, createdAt: deviceCreatedAt.Add(time.Second),
+			ids: map[string]verify.DeviceIdentity{"dev": {ID: 17, CreatedAt: deviceCreatedAt}}, want: model.CommandSent, releases: 2},
+		{name: "legacy at device creation", legacy: true, createdAt: deviceCreatedAt,
+			ids: map[string]verify.DeviceIdentity{"dev": {ID: 17, CreatedAt: deviceCreatedAt}}, want: model.CommandSent, releases: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := realApi(t)
@@ -107,8 +131,13 @@ func TestResumeDeviceVerifiesDeviceIncarnation(t *testing.T) {
 			var commands []*model.Command
 			for _, token := range []string{"hold-1", "hold-2"} {
 				cmd := queueFor(t, api, token, "dev")
-				cmd.DeviceIncarnation = sql.NullInt64{Int64: 17, Valid: true}
-				require.NoError(t, api.RDB.DB(ctx).Model(cmd).Update("device_incarnation", cmd.DeviceIncarnation).Error)
+				cmd.DeviceIncarnation = sql.NullInt64{Int64: 17, Valid: !tc.legacy}
+				if tc.legacy {
+					cmd.CreatedAt = tc.createdAt
+				}
+				require.NoError(t, api.RDB.DB(ctx).Model(cmd).Updates(map[string]any{
+					"device_incarnation": cmd.DeviceIncarnation, "created_at": cmd.CreatedAt,
+				}).Error)
 				held, err := api.HoldCommand(ctx, cmd.ID)
 				require.NoError(t, err)
 				require.True(t, held)

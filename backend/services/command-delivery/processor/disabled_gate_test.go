@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-command-delivery/model"
 	"github.com/devicechain-io/dc-command-delivery/presence"
+	"github.com/devicechain-io/dc-command-delivery/verify"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 
@@ -336,14 +337,14 @@ func (failingRosterApi) SetDeviceDisabled(context.Context, string, bool) (bool, 
 	return false, errors.New("database is down")
 }
 
-func (f *fakeSource) DeviceIncarnations(ctx context.Context, tenant string, tokens []string) (map[string]uint64, error) {
+func (f *fakeSource) DeviceIncarnations(ctx context.Context, tenant string, tokens []string) (map[string]verify.DeviceIdentity, error) {
 	live, err := f.LiveDevices(ctx, tenant, tokens)
 	if err != nil {
 		return nil, err
 	}
-	ids := make(map[string]uint64)
+	ids := make(map[string]verify.DeviceIdentity)
 	for _, token := range live {
-		ids[token] = 1
+		ids[token] = verify.DeviceIdentity{ID: 1, CreatedAt: time.Unix(0, 0)}
 	}
 	return ids, nil
 }

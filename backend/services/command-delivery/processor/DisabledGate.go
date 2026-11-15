@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
+	"github.com/devicechain-io/dc-command-delivery/verify"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/rs/zerolog/log"
 )
@@ -35,7 +36,7 @@ import (
 // DisabledSource is what the sync reads: the tenants of the instance, and the devices
 // device-management has disabled for one of them.
 type DisabledSource interface {
-	DeviceIncarnations(ctx context.Context, tenant string, tokens []string) (map[string]uint64, error)
+	DeviceIncarnations(ctx context.Context, tenant string, tokens []string) (map[string]verify.DeviceIdentity, error)
 	Tenants(ctx context.Context) ([]string, error)
 	DisabledDevices(ctx context.Context, tenant string) ([]string, error)
 	// LiveDevices answers which of the named devices still exist in the tenant. A device that

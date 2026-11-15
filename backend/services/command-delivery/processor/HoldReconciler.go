@@ -9,6 +9,7 @@ import (
 
 	"github.com/devicechain-io/dc-command-delivery/model"
 	"github.com/devicechain-io/dc-command-delivery/presence"
+	"github.com/devicechain-io/dc-command-delivery/verify"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/rs/zerolog/log"
 )
@@ -333,11 +334,11 @@ func (cproc *CommandDeliveryProcessor) retireCoveredCommands(ctx context.Context
 	}
 }
 
-func (cproc *CommandDeliveryProcessor) heldDeviceIdentities(ctx context.Context, batch tenantBatch) (map[string]uint64, bool) {
+func (cproc *CommandDeliveryProcessor) heldDeviceIdentities(ctx context.Context, batch tenantBatch) (map[string]verify.DeviceIdentity, bool) {
 	return cproc.deviceIdentities(ctx, batch.tenant, distinctDevices(batch.commands))
 }
 
-func (cproc *CommandDeliveryProcessor) deviceIdentities(ctx context.Context, tenant string, tokens []string) (map[string]uint64, bool) {
+func (cproc *CommandDeliveryProcessor) deviceIdentities(ctx context.Context, tenant string, tokens []string) (map[string]verify.DeviceIdentity, bool) {
 	// Degraded mode without device-management retains the existing presence-only behaviour.
 	if cproc.DisabledSource == nil {
 		return nil, true
@@ -350,18 +351,27 @@ func (cproc *CommandDeliveryProcessor) deviceIdentities(ctx context.Context, ten
 	}
 	// A configured source returning nil successfully means an empty roster, not degraded mode.
 	if ids == nil {
-		ids = make(map[string]uint64)
+		ids = make(map[string]verify.DeviceIdentity)
 	}
 	return ids, true
 }
 
-func (cproc *CommandDeliveryProcessor) keepHeldDevice(ctx context.Context, cmd *model.Command, ids map[string]uint64) bool {
+func (cproc *CommandDeliveryProcessor) keepHeldDevice(ctx context.Context, cmd *model.Command, ids map[string]verify.DeviceIdentity) bool {
 	if ids == nil {
 		return true
 	}
-	id, exists := ids[cmd.DeviceToken]
-	if exists && (!cmd.DeviceIncarnation.Valid || uint64(cmd.DeviceIncarnation.Int64) == id) {
-		return true
+	identity, exists := ids[cmd.DeviceToken]
+	if exists {
+		if cmd.DeviceIncarnation.Valid {
+			if uint64(cmd.DeviceIncarnation.Int64) == identity.ID {
+				return true
+			}
+		} else if !cmd.CreatedAt.Before(identity.CreatedAt) {
+			// This compares command-delivery's clock with device-management's clock.
+			// Skew can only cancel a legitimate legacy command created within the skew
+			// of its device's creation, which is the safe direction.
+			return true
+		}
 	}
 	canceller, ok := cproc.Api.(heldCommandCanceller)
 	if !ok {
