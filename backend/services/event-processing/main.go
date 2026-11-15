@@ -18,7 +18,6 @@ import (
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-event-processing/processor"
 	"github.com/devicechain-io/dc-microservice/auth"
-	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/governance"
@@ -613,10 +612,7 @@ func buildDrafter(peers *svcclient.Peers) *nldraft.Drafter {
 	}
 	url := infra.AiInference.Endpoint().GraphQLURL()
 	log.Info().Str("aiInference", url).Msg("NL→rule drafting ENABLED (ADR-056 slice 1): candidates compile through the DETECT firewall at the platform-default limits.")
-	return nldraft.NewDrafter(processor.NewInferenceClient(svcclient.Seam{
-		Client: peers.With(svcclient.WithQueryTimeout(mscfg.AiInferenceCallerTimeout)).Client(auth.AIInfer),
-		URL:    url,
-	}), rules.DefaultLimits(), 0)
+	return nldraft.NewDrafter(processor.NewInferenceClient(processor.NewInferenceSeam(peers, url)), rules.DefaultLimits(), 0)
 }
 
 // Called after microservice has been initialized.

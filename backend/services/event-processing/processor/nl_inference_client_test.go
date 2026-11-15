@@ -29,10 +29,7 @@ func inferenceTestSeam(um config.UserManagementConfiguration, url string) svccli
 	infra := config.InfrastructureConfiguration{UserManagement: um}
 	infra.ServiceAuth.Secret = "secret"
 	peers := svcclient.NewPeers(infra, "event-processing")
-	return svcclient.Seam{
-		Client: peers.With(svcclient.WithQueryTimeout(config.AiInferenceCallerTimeout)).Client(auth.AIInfer),
-		URL:    url,
-	}
+	return NewInferenceSeam(peers, url)
 }
 
 func goodMint(w http.ResponseWriter, _ *http.Request) {
@@ -90,8 +87,7 @@ func refusal(message, code string) http.HandlerFunc {
 
 // The caller must outwait ai-inference. A model that answers after svcclient's default 10s
 // bound — well inside ai-inference's own inference timeout — is a SUCCESS, not an error the
-// author reads as an outage. The fixture supplies the same Peers.With timeout option as main
-// to the NewInferenceClient adapter.
+// author reads as an outage. The fixture builds the seam through the production helper.
 func TestInferenceClientOutwaitsTheDefaultBound(t *testing.T) {
 	um, url := fakeAiInference(t, candidateAfter(11*time.Second))
 	c := NewInferenceClient(inferenceTestSeam(um, url))

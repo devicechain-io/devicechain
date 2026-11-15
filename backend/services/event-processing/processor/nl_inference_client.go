@@ -12,6 +12,8 @@ import (
 
 	"github.com/devicechain-io/dc-event-processing/internal/nldraft"
 	"github.com/devicechain-io/dc-microservice/aiwire"
+	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
@@ -36,11 +38,17 @@ type inferenceClient struct {
 	url    string
 }
 
-// NewInferenceClient wraps the drafter's inference seam: an isolated service-token client
-// carrying ai:infer, aimed at ai-inference's GraphQL URL. The caller builds it through
-// Peers.With(WithQueryTimeout(config.AiInferenceCallerTimeout)) so it outwaits the callee's
-// ceiling and lets ai-inference's own timeout answer arrive. It returns the drafter's
-// interface so the concrete adapter stays package-private.
+// NewInferenceSeam builds an isolated ai:infer service-token client aimed at url.
+// Its query timeout outwaits the callee's ceiling so ai-inference's own timeout answer arrives.
+func NewInferenceSeam(peers *svcclient.Peers, url string) svcclient.Seam {
+	return svcclient.Seam{
+		Client: peers.With(svcclient.WithQueryTimeout(config.AiInferenceCallerTimeout)).Client(auth.AIInfer),
+		URL:    url,
+	}
+}
+
+// NewInferenceClient wraps the drafter's inference seam built by NewInferenceSeam.
+// It returns the drafter's interface so the concrete adapter stays package-private.
 func NewInferenceClient(seam svcclient.Seam) nldraft.Inferer {
 	return &inferenceClient{client: seam.Client, url: seam.URL}
 }
