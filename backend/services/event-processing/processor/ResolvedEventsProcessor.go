@@ -226,6 +226,7 @@ type Config struct {
 // never fires ahead of an unconsumed backlog during an outage, re-bind, or rolling-update overlap.
 type ResolvedEventsProcessor struct {
 	worker               *workerIdentity
+	ruleRouting          *groupRuleRouting
 	groupWorkers         []*ResolvedEventsProcessor
 	supervised           bool
 	Microservice         *core.Microservice
@@ -892,13 +893,16 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 // adding state to this type.
 func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	rp.resetForTerm()
+	if err := rp.prepareGroupRules(ctx); err != nil {
+		return err
+	}
 	// Before the replay, which can checkpoint and so publish detections that count as fires.
 	if err := rp.startRuleHealth(); err != nil {
 		return err
 	}
 	// Attach the durables for this term. Doing it here rather than at the END of the
 	// previous term is what keeps a bind failure visible: see bindTermReaders.
-	if rp.leadershipEnabled() {
+	if rp.leadershipEnabled() && !(rp.ruleRouting != nil && !rp.supervised) {
 		if err := rp.bindTermReaders(); err != nil {
 			return fmt.Errorf("event-processing: could not bind DETECT durables for this leadership term: %w", err)
 		}
@@ -941,8 +945,10 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	// purges attributes), so a deleted device's dynamic bound is current too; it does NOT drain the
 	// attribute-SET stream, so a bound CHANGED (not purged) while down still replays against its pre-down
 	// value — the accepted dynamic-threshold non-determinism documented at startAttributeView, unchanged.
-	if err := rp.catchUpFactProjections(); err != nil {
-		return err
+	if rp.ruleRouting == nil {
+		if err := rp.catchUpFactProjections(); err != nil {
+			return err
+		}
 	}
 	// Build the dynamic-threshold view BEFORE replay (ADR-051 slice 4c-3b-2): replayToHead re-feeds
 	// events through applyResolved, which reads attrView to resolve a rule's dynamic bound. If the
@@ -1068,7 +1074,7 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	// Launch the live rule-update consumer after the loop is running (so the ruleUpdates
 	// channel has a receiver) and after replay is complete (so the startup rule set is
 	// already in place). Both goroutines stop on procCancel and are joined by readerWG.
-	if rp.RuleUpdatesReader != nil {
+	if rp.RuleUpdatesReader != nil && rp.ruleRouting == nil {
 		rp.readerWG.Add(1)
 		go rp.runRuleConsumer()
 	}
@@ -1319,6 +1325,10 @@ func (rp *ResolvedEventsProcessor) reconcileRegistry(ctx context.Context) error 
 	if err != nil {
 		return fmt.Errorf("reload rule projection for post-replay registry reconcile: %w", err)
 	}
+	scoped, err = rp.ownedRules(scoped)
+	if err != nil {
+		return err
+	}
 	fresh := make(map[string]struct{}, len(scoped))
 	upserted, changed, removed := 0, 0, 0
 	for i := range scoped {
@@ -1549,6 +1559,9 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 		rp.metrics.recordRestore(0, 0)
 		log.Info().Str("partition", rp.partitionID()).Msg("No prior DETECT snapshot; starting from empty engine.")
 		return nil
+	}
+	if err := rp.admitGroupSnapshot(snap.Payload); err != nil {
+		return fmt.Errorf("DETECT snapshot placement for partition %q: %w", rp.partitionID(), err)
 	}
 	engine, err := rp.restoreDetector(snap.Payload)
 	if err != nil {
@@ -1781,6 +1794,10 @@ func (rp *ResolvedEventsProcessor) run() {
 				rp.checkpoint(rp.pctx())
 			}
 		case <-ticker.C:
+			if err := rp.checkRulePlacement(); err != nil {
+				rp.refuseRulePlacement(err)
+				return
+			}
 			tickStarted := time.Now()
 			rp.phases.enter(phaseControl)
 			rp.phases.flush()
@@ -1968,6 +1985,10 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping resolved event with no parseable tenant in subject %q", msg.Subject)
 		return rp.skipPoison(msg.StreamSeq)
+	}
+	if err := rp.ownsRuleTenant(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return false
 	}
 	if msg.IsEnvelope() {
 		return rp.applyEnvelope(msg, tenant)
@@ -2455,6 +2476,19 @@ func (rp *ResolvedEventsProcessor) detectStaleOwner(ctx context.Context) bool {
 // concern is inert; the deferred teardown path (ADR-023/052) that adds removal-driving facts
 // owns making them replay-durable.
 func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
+	for _, sr := range upd.upserts {
+		if err := rp.ownsRuleTenant(sr.Tenant); err != nil {
+			rp.refuseRulePlacement(err)
+			return
+		}
+	}
+	for _, id := range upd.removals {
+		tenant, _ := runtime.RuleTenant(id)
+		if err := rp.ownsRuleTenant(tenant); err != nil {
+			rp.refuseRulePlacement(err)
+			return
+		}
+	}
 	// Whether a detection may be published early is judged from its rule, at the moment it is
 	// taken into the buffer. A concurrent engine's shards may still hold detections made under the
 	// rule being replaced, so take them in first, as the single engine's per-message drain already has.
@@ -2767,6 +2801,12 @@ func (rp *ResolvedEventsProcessor) handleRuleFact(msg messaging.Message, signal 
 		rp.ackRuleFact(msg)
 		return true
 	}
+	owner, err := rp.ruleWorker(tenant)
+	if err != nil {
+		rp.refuseRulePlacement(err)
+		return false // leave the fact unacked; placement is an instance failure
+	}
+	rp = owner // persistence is shared; only this worker's channel receives the update
 	// Persist BEFORE ack (durability): the projection — not the finite-retention stream —
 	// is the restart source of truth. Retry in-process until it commits (or shutdown) so a
 	// DB outage cannot lose the rule to the broker's finite redelivery (MaxDeliver); the
@@ -2893,6 +2933,10 @@ func (rp *ResolvedEventsProcessor) forceCheckpoint(ctx context.Context) bool {
 }
 
 func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool) bool {
+	if err := rp.checkRulePlacement(); err != nil {
+		rp.refuseRulePlacement(err)
+		return false
+	}
 	// 🔴 EVERY NETWORK CALL IN A CHECKPOINT RUNS UNDER A DEADLINE, each phase under its own (the
 	// publish and the Save below). This is the single-writer loop, and these calls are on a
 	// context that otherwise has none: a black-holed database or broker socket would hold the
@@ -3085,6 +3129,10 @@ func earlyPublishableKind(kind detectcore.RuleKind, readsAttributes bool) bool {
 // stopped answering costs one bounded attempt per interval and not one per tick; the checkpoint
 // it falls back to retries the same buffer and reports the failure.
 func (rp *ResolvedEventsProcessor) flushDetections(ctx context.Context) {
+	if err := rp.checkRulePlacement(); err != nil {
+		rp.refuseRulePlacement(err)
+		return
+	}
 	if rp.stale || len(rp.pendingDets) == 0 || (!rp.flushFailedAt.IsZero() && !rp.flushFailedAt.Before(rp.lastCheckpoint)) {
 		return
 	}

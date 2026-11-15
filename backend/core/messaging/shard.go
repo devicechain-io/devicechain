@@ -102,6 +102,29 @@ func (nmgr *NatsManager) tenantSuffix(tenant, suffix string) (string, error) {
 	return GroupSuffix(suffix, g), nil
 }
 
+// TenantShardGroup resolves a tenant's current group without creating a handle.
+// Unsharded suffixes retain group zero; configured but unenabled routing refuses.
+func (nmgr *NatsManager) TenantShardGroup(tenant, suffix string) (int, error) {
+	if err := nmgr.refuseUnroutedRead(suffix); err != nil {
+		return 0, err
+	}
+	if tenant == "" {
+		return 0, core.ErrNoTenant
+	}
+	s := nmgr.streamSharding()
+	if !s.selects(suffix) {
+		return 0, nil
+	}
+	g, err := s.router.ShardGroup(tenant)
+	if err != nil {
+		return 0, fmt.Errorf("%w: tenant %q: %w", ErrUnplacedTenant, tenant, err)
+	}
+	if g < 0 || g >= s.cfg.Count {
+		return 0, fmt.Errorf("%w: tenant %q has group %d outside [0,%d)", ErrUnplacedTenant, tenant, g, s.cfg.Count)
+	}
+	return g, nil
+}
+
 // declaredSuffix recognizes only group names enabled by this manager's configuration.
 func (nmgr *NatsManager) declaredSuffix(suffix string) string {
 	s := nmgr.streamSharding()

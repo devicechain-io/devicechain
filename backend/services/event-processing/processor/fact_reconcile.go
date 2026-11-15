@@ -356,6 +356,12 @@ func publishedRuleOf(row model.DetectRule) dmmodel.PublishedDetectionRule {
 // ruleUpdate, so applyRuleUpdate installs the rules before it arms against them.
 func (rp *ResolvedEventsProcessor) signalRuleRepair(ctx context.Context, tenant, profileToken, versionToken string,
 	changed []dmmodel.PublishedDetectionRule, removed []string) error {
+	owner, err := rp.ruleWorker(tenant)
+	if err != nil {
+		rp.refuseRulePlacement(err)
+		return err
+	}
+	rp = owner
 	compiled, _ := runtime.CompilePublishedRules(tenant, versionToken, changed)
 	if !rp.seedFencesForPublishedRules(compiled) {
 		return errReconcileShutdown

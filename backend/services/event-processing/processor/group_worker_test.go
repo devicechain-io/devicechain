@@ -39,7 +39,7 @@ type groupRig struct {
 	store   *model.SnapshotStore
 }
 
-func newGroupRig(t *testing.T) *groupRig {
+func newGroupRig(t *testing.T, routers ...messaging.ShardGroupRouter) *groupRig {
 	t.Helper()
 	r := &groupRig{b: startDetectBroker(t), gate: NewTermGate(), store: brokerStore(t)}
 	ms := &core.Microservice{InstanceId: r.b.instance, FunctionalArea: "event-processing"}
@@ -47,8 +47,12 @@ func newGroupRig(t *testing.T) *groupRig {
 	ms.InstanceConfiguration.Infrastructure.Nats = r.b.natsConfig()
 	cfg := &mscfg.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.ResolvedEvents}}
 	ms.InstanceConfiguration.Infrastructure.Nats.ShardGroups = cfg
+	var router messaging.ShardGroupRouter = groupTestRouter{}
+	if len(routers) > 0 {
+		router = routers[0]
+	}
 	r.nm = messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(nm *messaging.NatsManager) error {
-		if err := nm.EnableStreamSharding(groupTestRouter{}, cfg); err != nil {
+		if err := nm.EnableStreamSharding(router, cfg); err != nil {
 			return err
 		}
 		var err error
