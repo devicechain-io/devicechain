@@ -91,16 +91,34 @@ func (rp *ResolvedEventsProcessor) buildWorkers(ctx context.Context) error {
 			w.procCtx, w.procCancel = ctx, rp.pcancel
 			w.procMu.Unlock()
 		}
+	}
+	if rp.ruleRouting != nil {
+		// Catch up the ONE shared fact projection before any worker loads rules or
+		// replays events. In particular, g0 must not replay under pre-catch-up rules.
+		if err := rp.bindTermReaders(); err != nil {
+			return fmt.Errorf("bind shared rule facts: %w", err)
+		}
+		if err := rp.catchUpFactProjections(); err != nil {
+			return err
+		}
+	}
+	for _, w := range rp.termWorkers() {
 		if err := w.buildTerm(ctx); err != nil {
 			return fmt.Errorf("DETECT partition %q: %w", w.partitionID(), err)
 		}
 	}
+	// The one shared fact consumer starts only after every worker has reset its
+	// term channels, loaded its projection and launched its single-writer loop.
+	if rp.ruleRouting != nil && rp.RuleUpdatesReader != nil {
+		rp.readerWG.Add(1)
+		go rp.runRuleConsumer()
+	}
 	return nil
 }
 
-// attachGroupWorkers is an internal test hook, not an activation API. Until S2b,
-// only workers with explicitly isolated fixture registries and no fact projections
-// are accepted. In particular, duplicating global roster loads could arm other tenants.
+// attachGroupWorkers is an internal test hook, not an activation API. Rule
+// projections require attachRoutedRuleWorkers; other fact kinds remain refused
+// until their routing is implemented. Global roster loads must never arm every group.
 func (rp *ResolvedEventsProcessor) attachGroupWorkers(children ...*ResolvedEventsProcessor) error {
 	if rp.worker == nil || rp.worker.group != 0 || rp.partitionID() != singletonPartition || !rp.leadershipEnabled() {
 		return fmt.Errorf("group supervisor requires group zero and the singleton lease/gate")
@@ -110,8 +128,9 @@ func (rp *ResolvedEventsProcessor) attachGroupWorkers(children ...*ResolvedEvent
 		if w == nil || w.worker == nil || w.worker.group != g || (g > 0 && w.Lease != nil) || len(w.groupWorkers) != 0 {
 			return fmt.Errorf("invalid group worker %d: workers cannot acquire leases or supervise workers", g)
 		}
-		if w.RuleUpdatesReader != nil || w.RosterReader != nil || w.EntityDeletedReader != nil || w.AttributeReader != nil || w.FenceSetReader != nil ||
-			w.RuleStore != nil || w.RosterStore != nil || w.ProfileActiveStore != nil || w.AttributeStore != nil || w.DeviceManagement != nil || w.FenceSets != nil || w.VersionedFenceSets != nil {
+		if ((w.RuleUpdatesReader != nil || w.RuleStore != nil || w.ProfileActiveStore != nil || w.DeviceManagement != nil) && w.ruleRouting == nil) ||
+			w.RosterReader != nil || w.EntityDeletedReader != nil || w.AttributeReader != nil || w.FenceSetReader != nil ||
+			w.RosterStore != nil || w.AttributeStore != nil || w.FenceSets != nil || w.VersionedFenceSets != nil || w.FenceManifests != nil {
 			return fmt.Errorf("group workers require S2b fact routing before using fact projections")
 		}
 	}
