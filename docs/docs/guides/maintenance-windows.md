@@ -127,6 +127,8 @@ in `EXPIRED`. In a batch it is a per-device refusal, and the whole batch is refu
 
 ## Edit or delete a window {#edit-or-delete-a-window}
 
+A disabled device's waiting commands are not released by detaching or deleting its window. They follow the device type when it is enabled and the type can be resolved.
+
 `updateMaintenanceWindow` is a partial update: omit a field to leave it alone.
 
 ```graphql

@@ -1374,6 +1374,15 @@ jobs:
       # two real defects (an unquoted $(...) here and an unquoted ${REGISTRY} in
       # release.yml). Run it locally as:
       #   actionlint -shellcheck=/path/to/shellcheck
+      # The runner image stopped shipping shellcheck (2026-11-14), so install it from the
+      # image's signed apt repository rather than depend on what the image happens to carry.
+      - name: Install shellcheck
+        run: |
+          command -v shellcheck >/dev/null || {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq shellcheck
+          }
+          shellcheck --version
       - name: actionlint
         run: |
           GOWORK=off hack/go-mod-download.sh --retry -- go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12

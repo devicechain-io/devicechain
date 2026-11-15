@@ -175,6 +175,12 @@ func newDmWorld(t *testing.T) *dmWorld {
 		&dmmodel.DeviceConfigurationRevision{}, &dmmodel.DeviceConfigurationState{}); err != nil {
 		t.Fatalf("migrate device-management: %v", err)
 	}
+	// The one-live-row-per-key index the appended migration builds; attribute writes
+	// upsert against it, so AutoMigrate of the live model alone cannot serve them.
+	if err := rdb.CreatePartialUniqueIndex(db, &dmmodel.EntityAttribute{}, "uix_entity_attributes_key",
+		"tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatalf("attribute key index: %v", err)
+	}
 	w := &dmWorld{t: t, api: dmmodel.NewApi(&rdb.RdbManager{Database: db}),
 		ctx:   dccore.WithTenant(context.Background(), "acme"),
 		rules: &fenceFactWriter{}, roster: &fenceFactWriter{}, attrs: &fenceFactWriter{}}

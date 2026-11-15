@@ -31,6 +31,8 @@ campaña, y reintentar sus fallos, requiere `command:write`. Leer requiere `comm
 operación requiere además `device:read`, porque una campaña nombra un grupo y su seguimiento lista
 los dispositivos del grupo. Un miembro limitado a una parte del tenant no puede usar campañas.
 
+Crear una campaña `SOLAR`, leer sus elementos (`campaignElements`) o ciclos (`campaignCycles`) y reintentar sus fallos (`retryCampaignFailed`) ahora requiere además `location:installed:read` (o `location:read`). Las horas por dispositivo de un calendario solar revelan la posición instalada de cada dispositivo; incluso los recuentos de un ciclo pueden revelar resultados derivados de la posición en un grupo de un solo dispositivo. Las campañas `CRON` y `CALENDAR` no cambian. Añade esta autoridad a cualquier rol que gestione campañas solares.
+
 ## Crear una campaña {#create-a-campaign}
 
 ```graphql
