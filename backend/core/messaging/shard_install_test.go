@@ -46,6 +46,6 @@ func TestPerServerPlacementTagExpansion(t *testing.T) {
 		t.Setenv("SERVER_NAME", name)
 		opts, err := natsserver.ProcessConfigFile(path)
 		require.NoError(t, err)
-		require.Equal(t, []string{name}, opts.Tags)
+		require.Equal(t, []string{name}, []string(opts.Tags))
 	}
 }

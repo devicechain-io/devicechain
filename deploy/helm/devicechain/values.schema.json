@@ -248,13 +248,23 @@
                   "description": "The message broker connection and the JetStream ceilings. The chart validates only the capacity keys named below; the services validate the rest at startup.",
                   "properties": {
                     "shardGroups": {
+                        "description": "Optional NATS shard groups, off when absent. Splits each listed per-event stream into count groups that tenants are placed across. Needs 2-5 groups on R1 streams with at least three broker servers, and cannot be combined with ha. Each listed stream reserves its full byte ceiling in every group. Once set, carry the block forward in every replacement values file: an upgrade that drops it, lowers count or removes a suffix is refused, because the groups may hold data.",
                         "type": "object",
                         "additionalProperties": false,
                         "required": ["count", "suffixes"],
                         "properties": {
-                          "count": {"type": "integer", "minimum": 2, "maximum": 5},
-                          "suffixes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "enum": ["inbound-events", "resolved-events"]}},
-                          "placementTags": {"type": "object", "propertyNames": {"pattern": "^[0-4]$"}, "additionalProperties": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"type": "string"}}}
+                          "count": {
+                            "description": "Total number of groups, counting the existing group zero (2-5). It cannot be lowered on upgrade.",
+                            "type": "integer", "minimum": 2, "maximum": 5
+                          },
+                          "suffixes": {
+                            "description": "Per-event streams to split into groups: inbound-events, resolved-events, or both. resolved-events is refused while device-state or event-processing is deployed, since those consumers read only group zero. A stream cannot be removed on upgrade.",
+                            "type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "enum": ["inbound-events", "resolved-events"]}
+                          },
+                          "placementTags": {
+                            "description": "Broker placement per group, keyed by group number (0 to count-1). Each value is a one-element list naming the dc-nats pod that holds the group, and it must be that group's own pod (group 1 on dc-nats-1). A group left out is placed on its own pod.",
+                            "type": "object", "propertyNames": {"pattern": "^[0-4]$"}, "additionalProperties": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"type": "string"}}
+                          }
                         }
                       },
                       "mqttDeviceUplinks": {
