@@ -758,6 +758,8 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 
+- **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 time buckets are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 64 per process before reading or parsing. Message admission reserves up to 4 slots per batch; valid configured batches (16 entries by default) execute tools in waves within that cap. Every entry still counts toward the caller's rate limit; excess requests receive HTTP 429 with Retry-After. Tools are cancelled and execution slots released when their HTTP request ends. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.
+
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
 #### Security: a device can no longer assign itself to a customer, area or asset {#v160-device-relationship-refused}
@@ -768,10 +770,17 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 - Untracked types, including `member`, are still created, unless your tenant marked that type tracked. The `NewRelationship` event itself no longer carries the new target as an anchor: an untracked relationship is not ownership, so the event is scoped by the device's existing anchors, as its next telemetry event is.
 - During the rolling upgrade, pods still on v1.5 create the edge until they are replaced.
 
+#### Solar campaigns need installed-position access {#v160-solar-campaign-position}
+
+Creating a `SOLAR` campaign, reading its elements (`campaignElements`) or cycles (`campaignCycles`), and retrying its failures (`retryCampaignFailed`) now also requires `location:installed:read` (or `location:read`). A solar schedule's per-device times reveal each device's installed position; even cycle counts can reveal position-derived results for a group with one device. `CRON` and `CALENDAR` campaigns are unchanged. Add this authority to any role that manages solar campaigns.
+
 #### Before you upgrade {#v160-before-upgrade}
+
+- **Entity attributes are unique per key.** The upgrade collapses duplicate live rows from concurrent first writes, keeping the lowest row ID, and queues group membership and configuration repairs. The index build briefly blocks attribute writes. While old and new replicas overlap, an old replica that loses a concurrent first write may refuse it; retry the write. No configuration change is needed.
 
 Review hand-edited instance configuration before rolling pods. These refusals are new since `v1.5.0`; invalid service settings stop startup and can leave pods crash-looping. Service keys below live under `functionalAreas.<area>.config`.
 
+- **Campaign planning yields between tenants.** Each tenant plans at most 1,000,000 campaign elements and 128 cycles per pass, and starts no new cycle after a 2-second planning budget; a cycle already started always finishes, and progress is saved after each cycle so the remaining cycles resume next pass. Group and device-location lookups for planning time out after 2 seconds and are reported as a pass error without marking the campaign failed. Up to four tenants run concurrently. Large plans may fill their 36-hour window over multiple passes. These limits need no new configuration or migration and take effect as command-delivery pods roll forward.
 - **Signing-key retention must cover refresh tokens when rotation is on.** In `user-management`, when `auth.signingKeyMaxAgeDays > 0`, `auth.signingKeyRetentionDays × 86400` must be at least `auth.refreshTokenTtlSeconds` after defaults are applied; equality is allowed. Previously rotation silently lengthened a shorter retention. `0` retention takes 8 days, and the default refresh TTL is 604800 seconds (7 days). Increase retention or reduce the refresh TTL before upgrading. With rotation off, this comparison does not apply. The chart does not compare these fields, and `dcctl` already refuses overlays of this auth block.
 - **Token TTL overflow is refused.** `user-management` now rejects `auth.accessTokenTtlSeconds` or `auth.refreshTokenTtlSeconds` above **9223372036 seconds**, before conversion to a duration. `0` still takes the defaults (900 and 604800 seconds respectively); negative TTLs were already invalid. The Helm schema also enforces the upper bound.
 - **Tenant-purge overflow is refused.** In `user-management`, `tenantPurge.intervalSeconds`, `tenantPurge.settleSeconds` and `tenantPurge.tokenHoldSeconds` cannot exceed **9223372036 seconds**. Existing rules still apply: a negative interval disables the coordinator; negative settle/hold values are refused, and the settle and token-hold safety floors remain.
@@ -791,6 +800,8 @@ Review hand-edited instance configuration before rolling pods. These refusals ar
 #### Automated action authorities {#v160-action-authorities}
 
 Authoring or publishing an automated action now requires the authority to perform it. Creating or updating a rule with a `sendCommand` action, and publishing or rolling back to a profile version whose enabled rules include one, requires `command:write` in addition to `device:write`. `httpCall` and `publish` actions require `connector:write`. A role that holds `device:write` alone can still author and publish rules that only raise alarms. Rules already published keep running; they are checked at the next publish or rollback. Review the roles that author automation before upgrading. Older `device-management` replicas do not enforce this until they are replaced.
+
+**Command holds.** Deleted maintenance windows no longer release waiting commands unconditionally. Commands whose device type now has no window are released within about a minute; disabled devices or unresolved types stay gated until resolved and then follow their type. If a device's command channel cannot be resolved, its commands stay `QUEUED`, never published, until the first delivery sweep after recovery (30 seconds by default), instead of entering `HELD`. The hold reconciler continues while releasing commands, up to half its interval, and stops at a page with no releases. New counter: `command_delivery_dispatch_deferred_total`. Nothing needs doing. Older pods retain their previous behavior until the rolling upgrade completes.
 
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
 
@@ -829,6 +840,15 @@ A `NewRelationship` event a device sends is now stored and listed by `events` (e
 Ingest failures with reason `INVALID` that device-management recorded for a readable event (a value that fails its metric's definition, an event older than 366 days, a decoder refusal) now name the device and the event type, and are bounded per device like every other reason. Before this release they were listed with no device and shared one bound of ten records an hour for the whole tenant. Records indexed before the upgrade are not rewritten.
 
 - **Nothing needs doing.** There is no backfill. The existing limits now apply: ten records per device and reason per hour, capped at 1,000 itemized records per tenant and reason per hour. A fleet-wide invalid payload can reach that cap.
+
+#### Delegated administrators cannot grant or act above what they hold {#v160-no-escalation}
+
+The operator admin API now limits an identity whose system role is not superuser to the authorities its current system roles grant. The tenant API also checks the current role and its members before a tenant role is narrowed.
+
+- **Operator admin API:** a delegated identity can assign only system roles whose authorities it holds; can act on another identity (password, sign-in links, sessions, enable or delete, system roles) only if it holds everything that identity's system roles grant; and can create, change or delete a role only within the authorities it holds.
+- **Memberships and sign-in role mappings:** on the operator admin API, a delegated identity can add or change a tenant membership only with tenant roles whose authorities it holds, can change, disable or remove a membership only if it holds everything that membership's roles grant, and can map identity-provider groups or just-in-time sign-ins only to tenant roles it holds. Acting on another identity also requires holding everything its tenant memberships grant, and linking accounts to, re-scoping, or changing the groups claim of a tenant identity-provider connection requires holding every role that connection grants.
+- **Tenant API:** a tenant administrator can change a tenant role only if they hold every authority it grants, and can remove authorities from it only if they hold everything its members hold.
+- **What to check:** a delegated system role that needs to administer superusers or define roles beyond its own authorities now gets `ESCALATION`; make those changes as a superuser.
 
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
