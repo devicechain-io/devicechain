@@ -1364,6 +1364,18 @@ func (e *Engine) pruneFellKey(key SeriesKey) {
 	}
 }
 
+// sameEpisodeInstant reports whether a fresh raise at input time at would not be strictly after
+// the key's last falling edge f: at its emitted instant, or (when that resolve was clamped up to
+// its raise) anywhere from its decision time up to its emitted instant. Such a raise is stamped
+// one microsecond after f.at so the series' edges keep increasing. A raise strictly older than
+// the fall's decision time keeps its own time: a stale match must not become a newer edge.
+func sameEpisodeInstant(at time.Time, f fallMemo) bool {
+	if at.Equal(f.at) {
+		return true
+	}
+	return !f.input.IsZero() && !at.Before(f.input) && !at.After(f.at)
+}
+
 // latch gives a fresh equal-input episode a distinct database microsecond.
 func (e *Engine) latch(key SeriesKey, at time.Time) (time.Time, bool) {
 	e.pruneFellKey(key)
@@ -1371,7 +1383,7 @@ func (e *Engine) latch(key SeriesKey, at time.Time) (time.Time, bool) {
 		return at, false
 	}
 	delete(e.raiseInputs, key)
-	if f, ok := e.fell[key]; !e.disableEdgeBump && ok && (at.Equal(f.at) || (!f.input.IsZero() && at.Equal(f.input))) {
+	if f, ok := e.fell[key]; !e.disableEdgeBump && ok && sameEpisodeInstant(at, f) {
 		e.raiseInputs[key] = at
 		at = f.at.Add(time.Microsecond)
 	}

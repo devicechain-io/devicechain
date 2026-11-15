@@ -762,7 +762,7 @@ The release in development (`v1.8`) and the three most recent minor releases (`v
 
 #### Same-timestamp edges {#v180-same-timestamp-edges}
 
-When a reading clears a rule and another reading with the same timestamp breaches it again, the alarm stays active and its raise is stamped one microsecond later. Readings at that original timestamp that arrive afterwards are treated as older than the alarm. Devices should send distinct timestamps.
+When a reading clears a rule and another reading with the same timestamp breaches it again, the alarm stays active and its raise is stamped one microsecond later. A later healthy reading at that original timestamp still clears the alarm. Devices should send distinct timestamps.
 
 - **Nothing needs doing.**
 

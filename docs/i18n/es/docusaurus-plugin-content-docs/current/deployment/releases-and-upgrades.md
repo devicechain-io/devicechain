@@ -807,7 +807,7 @@ La versión en desarrollo (`v1.8`) y las tres versiones menores más recientes (
 
 #### Transiciones con la misma marca de tiempo {#v180-same-timestamp-edges}
 
-Cuando una lectura despeja una regla y otra lectura con la misma marca de tiempo vuelve a incumplirla, la alarma permanece activa y su activación se registra un microsegundo después. Las lecturas con la marca de tiempo original que llegan posteriormente se consideran anteriores a la alarma. Los dispositivos deben enviar marcas de tiempo distintas.
+Cuando una lectura despeja una regla y otra lectura con la misma marca de tiempo vuelve a incumplirla, la alarma permanece activa y su activación se registra un microsegundo después. Una lectura normal posterior con esa marca de tiempo original sigue despejando la alarma. Los dispositivos deben enviar marcas de tiempo distintas.
 
 - **No es necesario hacer nada.**
 

@@ -234,3 +234,41 @@ func auditGoldenEdgeBumps(t *testing.T) {
 }
 
 func TestGoldenEdgeBumpAudit(t *testing.T) { auditGoldenEdgeBumps(t) }
+
+// After two same-instant cycles the memo is {at: T+2µs, input: T}. A breach whose input lies
+// inside that span (T+1µs) is not strictly after the fall, so it must be stamped past T+2µs
+// rather than emitted behind the preceding Resolved.
+func TestRaiseBetweenFallInputAndEmittedTimeIsBumped(t *testing.T) {
+	rules := []Rule{{ID: "r", Kind: Threshold, Op: GT, Thresh: 30}}
+	key := SeriesKey{Rule: "r", Series: "d"}
+	t3 := at(3)
+	for _, kind := range []string{"engine", "shard4", "concurrent"} {
+		e := compatRestore(t, kind, rules, []byte(`{}`))
+		var edges []Detection
+		feed := func(seq uint64, when time.Time, match bool) {
+			e.ProcessEvent(Event{Seq: seq, Key: key, Time: when, Value: 50, HasValue: true, Match: match})
+			edges = append(edges, e.Drain()...)
+		}
+		feed(1, at(1), true)
+		feed(2, t3, false)
+		feed(3, t3, true)
+		feed(4, t3, false)
+		feed(5, t3, true)
+		feed(6, t3, false)
+		feed(7, t3.Add(time.Microsecond), true)
+		e.Advance(at(4))
+		edges = append(edges, e.Drain()...)
+		if len(edges) == 0 {
+			t.Fatalf("%s: no edges", kind)
+		}
+		for i := 1; i < len(edges); i++ {
+			if !edges[i].At.After(edges[i-1].At) && !(edges[i-1].Edge == EdgeRaised && edges[i].Edge == EdgeResolved && edges[i].At.Equal(edges[i-1].At)) {
+				t.Fatalf("%s: edge %d not after edge %d: %+v", kind, i, i-1, edges)
+			}
+		}
+		last := edges[len(edges)-1]
+		if last.Edge != EdgeRaised || !last.At.After(t3.Add(2*time.Microsecond)) {
+			t.Fatalf("%s: final raise %+v, want a Raised after %v (edges %+v)", kind, last, t3.Add(2*time.Microsecond), edges)
+		}
+	}
+}
