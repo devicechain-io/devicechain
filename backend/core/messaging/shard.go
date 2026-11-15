@@ -268,3 +268,40 @@ func (nmgr *NatsManager) publishMetricSuffix(subject, suffix string) string {
 	}
 	return subject[strings.LastIndexByte(subject, '.')+1:]
 }
+
+// readerDownstreams covers every stream a reader can forward into before its next fetch.
+func (nmgr *NatsManager) readerDownstreams(base string, group *int) []string {
+	if base == "" {
+		return nil
+	}
+	s := nmgr.streamSharding()
+	if !s.selects(base) {
+		return []string{base}
+	}
+	if group != nil {
+		return []string{GroupSuffix(base, *group)}
+	}
+	out := make([]string, s.cfg.Count)
+	for g := range out {
+		out[g] = GroupSuffix(base, g)
+	}
+	return out
+}
+
+func (r *natsReader) downstreamRefusal() error {
+	for _, suffix := range r.downstreams {
+		if err := r.nmgr.Backpressure(suffix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// requireForwarder keeps sharded forwarding writers behind a declared reader's gates.
+// Async writers have their own admission policy and use an internal constructor instead.
+func (nmgr *NatsManager) requireForwarder(suffix string) error {
+	if nmgr.streamSharding().selects(suffix) && !slices.Contains(streams.ForwardersInto(suffix), nmgr.Microservice.FunctionalArea) {
+		return fmt.Errorf("messaging: area %q must declare forwarding into sharded suffix %q in core/streams", nmgr.Microservice.FunctionalArea, suffix)
+	}
+	return nil
+}
