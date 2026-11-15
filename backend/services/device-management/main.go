@@ -781,7 +781,7 @@ func initAgentProposalReaper() error {
 			_, err := Api.ExpireAgentProposals(ctx)
 			return err
 		},
-		core.NewNoOpLifecycleCallbacks())
+		core.NewNoOpLifecycleCallbacks(), core.WithPassMetrics(Microservice.NewPeriodicTaskMetrics("agent_proposal_reaper")))
 	return AgentProposalReaper.Initialize(context.Background())
 }
 
@@ -806,7 +806,7 @@ func initDecodeAccounting() error {
 	DecodeAccountant = processor.NewDecodeAccountant(Api, replica, DecodeAccountingMetrics)
 	DecodeAccounting = core.NewPeriodicTask(Microservice.FunctionalArea, "decode-accounting", decodeAccountingInterval,
 		func(ctx context.Context) error { return DecodeAccountant.Flush(ctx) },
-		core.NewNoOpLifecycleCallbacks())
+		core.NewNoOpLifecycleCallbacks(), core.WithPassMetrics(Microservice.NewPeriodicTaskMetrics("decode_accounting")))
 	return DecodeAccounting.Initialize(context.Background())
 }
 
