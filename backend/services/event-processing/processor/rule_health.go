@@ -71,7 +71,7 @@ func (rp *ResolvedEventsProcessor) stopRuleHealth(graceful bool, parent context.
 	ctx, cancel := rp.ruleHealthStopContext(parent)
 	defer cancel()
 	if dropped := h.Stop(ctx, graceful); dropped > 0 {
-		log.Info().Int64("fires", dropped).Bool("graceful", graceful).Str("partition", rp.cfg.PartitionId).
+		log.Info().Int64("fires", dropped).Bool("graceful", graceful).Str("partition", rp.partitionID()).
 			Msg("Rule-health fire counts still pending when the DETECT term ended were discarded; the " +
 				"console's fire counts are short by this many (detection is unaffected).")
 	}

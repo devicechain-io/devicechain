@@ -249,7 +249,9 @@ func (rp *ResolvedEventsProcessor) heldNow() bool {
 // leadershipEnabled reports whether this processor takes a lease. It is false on
 // the scaffold and unit-test paths, which run the engine directly with no broker
 // coordination; those behave exactly as they did before ADR-070.
-func (rp *ResolvedEventsProcessor) leadershipEnabled() bool { return rp.Lease != nil && rp.Gate != nil }
+func (rp *ResolvedEventsProcessor) leadershipEnabled() bool {
+	return (rp.Lease != nil || rp.supervised) && rp.Gate != nil
+}
 
 // termHandle is one live leadership term: the lease, its ownership signal, the
 // context every loop in the term selects on, and the renewer to join at teardown.
@@ -404,12 +406,12 @@ func (rp *ResolvedEventsProcessor) beginTermWithRetry() (*termHandle, error) {
 		}
 		if errors.Is(err, errTermBuildFailed) {
 			rp.termBuildFailures++
-			log.Error().Err(err).Int("consecutive", rp.termBuildFailures).Str("partition", rp.cfg.PartitionId).
+			log.Error().Err(err).Int("consecutive", rp.termBuildFailures).Str("partition", rp.partitionID()).
 				Msg("DETECT term build failed; the partition was released and will be re-acquired")
 			if rp.termBuildFailures >= maxConsecutiveTermBuildFailures {
 				return nil, fmt.Errorf("event-processing: %d consecutive DETECT term builds failed for partition %q; "+
 					"this pod holds the lease and detects nothing, so it gives up and lets a replacement take the "+
-					"partition: %w", rp.termBuildFailures, rp.cfg.PartitionId, err)
+					"partition: %w", rp.termBuildFailures, rp.partitionID(), err)
 			}
 			continue
 		}
@@ -438,19 +440,19 @@ func (rp *ResolvedEventsProcessor) acquireWithBackoff() (*messaging.Lease, bool,
 		// Asked BEFORE the Create, because the Create is what destroys the answer: the
 		// lease bucket keeps one revision per key, so our own entry replaces the delete
 		// marker that distinguishes a clean release from an expiry.
-		clean := rp.Lease.PriorOwnerReleasedCleanly(rp.cfg.PartitionId)
-		lease, err := rp.Lease.Acquire(rp.cfg.PartitionId)
+		clean := rp.Lease.PriorOwnerReleasedCleanly(rp.partitionID())
+		lease, err := rp.Lease.Acquire(rp.partitionID())
 		if err == nil {
 			return lease, clean, nil
 		}
 		if errors.Is(err, messaging.ErrLeaseHeld) {
 			if !logged {
-				log.Info().Str("partition", rp.cfg.PartitionId).
+				log.Info().Str("partition", rp.partitionID()).
 					Msg("DETECT partition is held by another replica; standing by to take it over")
 				logged = true
 			}
 		} else {
-			log.Warn().Err(err).Str("partition", rp.cfg.PartitionId).
+			log.Warn().Err(err).Str("partition", rp.partitionID()).
 				Msg("DETECT lease acquisition failed; retrying, because a broker outage must not evict a pod")
 		}
 		select {
@@ -470,11 +472,17 @@ func (rp *ResolvedEventsProcessor) beginTerm() (*termHandle, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Info().Str("partition", rp.cfg.PartitionId).Uint64("epoch", lease.Epoch()).
+	log.Info().Str("partition", rp.partitionID()).Uint64("epoch", lease.Epoch()).
 		Msg("DETECT acquired the partition lease")
 
 	// A fresh context for this term's loops, consumers and store calls.
 	rp.newTermContext()
+	// A root build can fail before it reaches a child. Discard every child's old
+	// term residue now, so failed setup cannot flush an earlier term's detections.
+	for _, w := range rp.groupWorkers {
+		w.resetForTerm()
+		w.engine = nil
+	}
 	handle := &termHandle{lease: lease, ctx: rp.pctx()}
 
 	// is_leader goes up HERE, at acquire, not after the build. See setLeader.
@@ -485,7 +493,7 @@ func (rp *ResolvedEventsProcessor) beginTerm() (*termHandle, error) {
 	if err != nil {
 		// No holder signal means no gate, and no gate means the readers would consume
 		// ungoverned. Give the partition back rather than run unguarded.
-		log.Error().Err(err).Str("partition", rp.cfg.PartitionId).
+		log.Error().Err(err).Str("partition", rp.partitionID()).
 			Msg("DETECT could not watch its lease key; releasing the partition and standing by")
 		rp.endTerm(handle)
 		return nil, err
@@ -497,7 +505,7 @@ func (rp *ResolvedEventsProcessor) beginTerm() (*termHandle, error) {
 	go func() {
 		defer close(keepAliveDone)
 		if kerr := lease.KeepAlive(handle.ctx, renewInterval); kerr != nil {
-			log.Warn().Err(kerr).Str("partition", rp.cfg.PartitionId).
+			log.Warn().Err(kerr).Str("partition", rp.partitionID()).
 				Msg("DETECT lease renewal has definitively failed; ending the term")
 			rp.pcancel()
 		}
@@ -519,7 +527,7 @@ func (rp *ResolvedEventsProcessor) beginTerm() (*termHandle, error) {
 	// So an ordinary rollout, where the departing pod released, skips the wait; a fresh
 	// install pays it once for want of evidence; and every ambiguous case pays it.
 	if !priorReleasedCleanly {
-		log.Info().Str("partition", rp.cfg.PartitionId).Dur("slack", termSlack).
+		log.Info().Str("partition", rp.partitionID()).Dur("slack", termSlack).
 			Msg("DETECT cannot prove the previous owner released this partition; waiting it out before reading any state")
 		select {
 		case <-handle.ctx.Done():
@@ -529,13 +537,13 @@ func (rp *ResolvedEventsProcessor) beginTerm() (*termHandle, error) {
 		}
 	}
 
-	if err := rp.buildTerm(handle.ctx); err != nil {
+	if err := rp.buildWorkers(handle.ctx); err != nil {
 		rp.endTerm(handle)
 		return nil, fmt.Errorf("%w: %w", errTermBuildFailed, err)
 	}
 	rp.termBuildFailures = 0
 	rp.metrics.setDetectLive(true)
-	log.Info().Str("partition", rp.cfg.PartitionId).Msg("DETECT term is live")
+	log.Info().Str("partition", rp.partitionID()).Msg("DETECT term is live")
 	return handle, nil
 }
 
@@ -548,7 +556,7 @@ func (rp *ResolvedEventsProcessor) beginTerm() (*termHandle, error) {
 func (rp *ResolvedEventsProcessor) awaitTermEnd(handle *termHandle) {
 	select {
 	case <-handle.holder.Lost():
-		log.Warn().Str("partition", rp.cfg.PartitionId).
+		log.Warn().Str("partition", rp.partitionID()).
 			Msg("DETECT lost the partition to another owner; ending the term")
 	case <-handle.ctx.Done():
 	}
@@ -561,7 +569,9 @@ func (rp *ResolvedEventsProcessor) endTerm(handle *termHandle) {
 	//    the six loop goroutines and the pump; readerWG joins them, so past this
 	//    point nothing is mid-persist.
 	rp.pcancel()
-	rp.readerWG.Wait()
+	for _, w := range rp.termWorkers() {
+		w.readerWG.Wait()
+	}
 	if handle.keepAliveDone != nil {
 		// 2. Join the renewer BEFORE releasing. The revision CAS is NOT what this
 		//    buys any more: Lease.Release serializes itself against an in-flight
@@ -576,7 +586,9 @@ func (rp *ResolvedEventsProcessor) endTerm(handle *termHandle) {
 	// 3. Withdraw the readers' reply-inbox interest. This is what stops a pull
 	//    request buffered across a disconnect from being served after the successor
 	//    takes over. It is local and works while disconnected, unlike the bind.
-	rp.unbindTermReaders()
+	for _, w := range rp.termWorkers() {
+		w.unbindTermReaders()
+	}
 	// 4. Flush LAST, and before the release. finalCheckpoint runs on a fresh
 	//    background context so the term cancel above does not stop it, and it still
 	//    holds the lease here, so its holder check passes.
@@ -593,8 +605,10 @@ func (rp *ResolvedEventsProcessor) endTerm(handle *termHandle) {
 	//    expire, and its successor then waited for the expiry and for termSlack. A
 	//    release that lands leaves the marker PriorOwnerReleasedCleanly reads, so the
 	//    successor skips both.
-	rp.finalCheckpoint()
-	rp.closeDetector() // after the term's last use of the engine; its shard goroutines end here
+	for _, w := range rp.termWorkers() {
+		w.finalCheckpoint()
+		w.closeDetector()
+	}
 	rp.Gate.Exit()
 	// Not consuming from here on, though the entry may stay ours on the server for as
 	// long as the release retries — which is why is_leader stays up until after it.
@@ -611,13 +625,13 @@ func (rp *ResolvedEventsProcessor) endTerm(handle *termHandle) {
 		// Informational, like the case below: our own hold is relinquished regardless.
 		// It also covers a release that DID land and lost its reply — the retry then
 		// finds nothing of ours — so the message must not read as a failure.
-		log.Info().Err(err).Str("partition", rp.cfg.PartitionId).
+		log.Info().Err(err).Str("partition", rp.partitionID()).
 			Msg("DETECT found no lease entry of its own left to release (an earlier attempt may already have " +
 				"released it, or it expired), or its validity window closed before the broker answered")
 	default:
 		// A release that never landed leaves the entry to age out — the crash-path
 		// handover, no corruption.
-		log.Warn().Err(err).Str("partition", rp.cfg.PartitionId).
+		log.Warn().Err(err).Str("partition", rp.partitionID()).
 			Msg("DETECT could not release its lease before its shutdown deadline; the entry will expire and " +
 				"the next leader then waits out its handover period")
 	}
@@ -625,7 +639,9 @@ func (rp *ResolvedEventsProcessor) endTerm(handle *termHandle) {
 	// 5. The rule-health counters, AFTER the release: a health projection must not hold the
 	//    partition from its successor. A graceful stop flushes within its budget; a lost
 	//    term discards. Either way the worker is joined here, before another term can start.
-	rp.stopRuleHealth(rp.stopBegun != nil && rp.stopBegun.Err() != nil, context.Background())
+	for _, w := range rp.termWorkers() {
+		w.stopRuleHealth(rp.stopBegun != nil && rp.stopBegun.Err() != nil, context.Background())
+	}
 }
 
 // bindTermReaders attaches every durable this term consumes.
@@ -682,5 +698,5 @@ func (rp *ResolvedEventsProcessor) termReaders() []messaging.TermBoundReader {
 // A nil Microservice is FailNow's to report.
 func (rp *ResolvedEventsProcessor) failProcess(err error) {
 	rp.Microservice.FailNow(fmt.Errorf("event-processing: DETECT leadership has stopped for partition %q and cannot resume; "+
-		"this pod holds no partition and detects nothing, so it exits to be replaced: %w", rp.cfg.PartitionId, err))
+		"this pod holds no partition and detects nothing, so it exits to be replaced: %w", rp.partitionID(), err))
 }

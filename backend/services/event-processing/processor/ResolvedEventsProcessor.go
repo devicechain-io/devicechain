@@ -225,6 +225,9 @@ type Config struct {
 // durable's pending + ack-pending backlog is zero), not read-loop silence, so a restored timer
 // never fires ahead of an unconsumed backlog during an outage, re-bind, or rolling-update overlap.
 type ResolvedEventsProcessor struct {
+	worker               *workerIdentity
+	groupWorkers         []*ResolvedEventsProcessor
+	supervised           bool
 	Microservice         *core.Microservice
 	ResolvedEventsReader messaging.MessageReader
 	Replay               ReplayOpener
@@ -844,6 +847,9 @@ func (rp *ResolvedEventsProcessor) Start(ctx context.Context) error {
 // the partition IF it holds it. detect_is_leader and detect_live are the signals that
 // say which replica is doing the work, and the chart's alerts read them across pods.
 func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
+	if rp.supervised {
+		return fmt.Errorf("group workers are started only by the singleton supervisor")
+	}
 	// A lease with no gate would take the partition and then consume ungoverned —
 	// the fail-open shape this whole change exists to remove, arrived at by a wiring
 	// slip rather than a design one. Refuse to start instead: leadershipEnabled() is
@@ -865,7 +871,7 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	// milliseconds, and a log line claiming otherwise would send an operator looking for a
 	// leader that is right here. acquireWithBackoff logs the actual standby state, once,
 	// when the partition turns out to be held.
-	log.Info().Str("partition", rp.cfg.PartitionId).
+	log.Info().Str("partition", rp.partitionID()).
 		Msg("DETECT leadership supervisor started; this replica is Ready and leads as soon as it holds the partition.")
 	rp.supWG.Add(1)
 	go func() {
@@ -996,7 +1002,7 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 		// higher checkpoint: fail startup rather than launch a pod whose DETECT loop is halted
 		// but whose health endpoints read green (a silently-dead singleton). The leader keeps
 		// consuming; this pod backs off and retries into a clean single-writer replay.
-		return fmt.Errorf("event-processing: DETECT checkpoint is stale at startup for partition %q (another writer owns it); not starting", rp.cfg.PartitionId)
+		return fmt.Errorf("event-processing: DETECT checkpoint is stale at startup for partition %q (another writer owns it); not starting", rp.partitionID())
 	}
 	rp.lastCheckpoint = rp.clock.Now()
 	// Seed the idle-advance clock at startup so the first guard interval of live consumption
@@ -1531,9 +1537,9 @@ func (rp *ResolvedEventsProcessor) restoreDetector(payload []byte) (detectcore.D
 func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 	rp.closeDetector() // the previous term's engine, if it had shard goroutines
 	start := rp.clock.Now()
-	snap, ok, err := rp.Store.Load(ctx, rp.cfg.PartitionId)
+	snap, ok, err := rp.Store.Load(ctx, rp.partitionID())
 	if err != nil {
-		return fmt.Errorf("load snapshot for partition %q: %w", rp.cfg.PartitionId, err)
+		return fmt.Errorf("load snapshot for partition %q: %w", rp.partitionID(), err)
 	}
 	if !ok {
 		rp.engine = rp.newDetector()
@@ -1541,12 +1547,12 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 		rp.restoredWatermark = time.Time{}
 		rp.committedSeq = 0
 		rp.metrics.recordRestore(0, 0)
-		log.Info().Str("partition", rp.cfg.PartitionId).Msg("No prior DETECT snapshot; starting from empty engine.")
+		log.Info().Str("partition", rp.partitionID()).Msg("No prior DETECT snapshot; starting from empty engine.")
 		return nil
 	}
 	engine, err := rp.restoreDetector(snap.Payload)
 	if err != nil {
-		return fmt.Errorf("restore engine from snapshot for partition %q: %w", rp.cfg.PartitionId, err)
+		return fmt.Errorf("restore engine from snapshot for partition %q: %w", rp.partitionID(), err)
 	}
 	rp.engine = engine
 	// Take both axes from the ROW rather than the restored engine: the compare-and-swap
@@ -1555,13 +1561,13 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 	rp.restoredWatermark = snap.Watermark
 	rp.committedSeq = uint64(snap.StreamSeq)
 	rp.metrics.recordRestore(rp.clock.Now().Sub(start).Seconds(), uint64(snap.StreamSeq))
-	log.Info().Str("partition", rp.cfg.PartitionId).Uint64("lastSeq", engine.LastSeq()).
+	log.Info().Str("partition", rp.partitionID()).Uint64("lastSeq", engine.LastSeq()).
 		Time("watermark", engine.Watermark()).Msg("Restored DETECT engine from snapshot.")
 	if v := engine.RestoredFrontier(); v < detectcore.FrontierVersion {
 		// Written before the frontier was clamped to broker append time: a device clock that ran ahead may have
 		// carried it up to the resolver's future-skew bound past real time. It only moves forward, so it
 		// corrects itself once real time catches up; say so rather than leave an early absence unexplained.
-		log.Warn().Str("partition", rp.cfg.PartitionId).Int("frontierVersion", v).Int("current", detectcore.FrontierVersion).
+		log.Warn().Str("partition", rp.partitionID()).Int("frontierVersion", v).Int("current", detectcore.FrontierVersion).
 			Msg("Restored a DETECT snapshot whose watermark predates the append-time clamp; it may run ahead of real time until time catches up.")
 	}
 	return nil
@@ -1582,7 +1588,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		return err
 	}
 	startSeq := rp.engine.LastSeq() + 1
-	reader, head, err := rp.Replay.NewReplayReader(rp.cfg.Suffix, startSeq)
+	reader, head, err := rp.openReplay(startSeq)
 	if err != nil {
 		return fmt.Errorf("open replay reader from seq %d: %w", startSeq, err)
 	}
@@ -1600,7 +1606,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		if rp.leadershipEnabled() && !rp.heldNow() {
 			return fmt.Errorf("refusing to reset the DETECT snapshot for partition %q: this "+
 				"replica lost the partition during its term build, and the successor is "+
-				"leading from that checkpoint", rp.cfg.PartitionId)
+				"leading from that checkpoint", rp.partitionID())
 		}
 		observed := rp.restoredSeq
 		observedWatermark := rp.restoredWatermark
@@ -1614,8 +1620,8 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		// the engine — the store refuses the delete if the row has moved since (see Reset), which
 		// is what stops a replica that lost its term mid-build from clearing the checkpoint
 		// its successor is already committing to.
-		if err := rp.Store.Reset(rp.pctx(), rp.cfg.PartitionId, observed, observedWatermark); err != nil {
-			return fmt.Errorf("reset stale snapshot for partition %q: %w", rp.cfg.PartitionId, err)
+		if err := rp.Store.Reset(rp.pctx(), rp.partitionID(), observed, observedWatermark); err != nil {
+			return fmt.Errorf("reset stale snapshot for partition %q: %w", rp.partitionID(), err)
 		}
 		// The durable was created at the stale row's sequence plus one, past everything the new
 		// stream holds, so it would deliver nothing until the stream's head caught up with it
@@ -2419,13 +2425,13 @@ func (rp *ResolvedEventsProcessor) detectStaleOwner(ctx context.Context) bool {
 	// The same deadline discipline as the checkpoint: this read runs on the loop, and an
 	// unanswered one must come back as the "transient blip" below rather than hold the loop.
 	readCtx, cancel := context.WithTimeout(ctx, rp.checkpointTimeout())
-	seq, ok, err := rp.Store.LoadCommittedSeq(readCtx, rp.cfg.PartitionId)
+	seq, ok, err := rp.Store.LoadCommittedSeq(readCtx, rp.partitionID())
 	cancel()
 	if err != nil || !ok {
 		return false
 	}
 	if uint64(seq) > rp.engine.LastSeq() {
-		log.Error().Str("partition", rp.cfg.PartitionId).Int64("committedSeq", seq).
+		log.Error().Str("partition", rp.partitionID()).Int64("committedSeq", seq).
 			Uint64("appliedSeq", rp.engine.LastSeq()).
 			Msg("Idle-advance fenced: another writer owns a higher checkpoint (split brain); halting this writer.")
 		rp.haltStaleWriter()
@@ -2923,7 +2929,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	// therefore the loss path's publish guard, not a graceful-shutdown nicety — which
 	// is also why endTerm flushes BEFORE releasing the lease rather than after.
 	if rp.leadershipEnabled() && !rp.heldNow() {
-		log.Warn().Str("partition", rp.cfg.PartitionId).
+		log.Warn().Str("partition", rp.partitionID()).
 			Msg("DETECT refused a checkpoint because this replica no longer holds the partition; the messages stay unacked and redeliver to the leader")
 		return false
 	}
@@ -2958,7 +2964,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 		}
 		wm := rp.engine.Watermark()
 		snap := &model.DetectSnapshot{
-			PartitionId: rp.cfg.PartitionId,
+			PartitionId: rp.partitionID(),
 			StreamSeq:   int64(rp.engine.LastSeq()),
 			Watermark:   wm,
 			Payload:     payload,
@@ -2976,7 +2982,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 				// one cycle). Our unacked messages redeliver to the leader on the shared durable,
 				// so detection continues there; the durable single-writer guarantee is Slice-6's
 				// singleton deploy, of which this is the runtime safety net.
-				log.Error().Err(err).Str("partition", rp.cfg.PartitionId).
+				log.Error().Err(err).Str("partition", rp.partitionID()).
 					Msg("DETECT checkpoint refused as stale (split-brain); halting this writer.")
 				rp.haltStaleWriter()
 				return false
@@ -3161,7 +3167,7 @@ func (rp *ResolvedEventsProcessor) ackThroughCommitted() {
 		return
 	}
 	if rp.leadershipEnabled() && !rp.heldNow() {
-		log.Warn().Str("partition", rp.cfg.PartitionId).Uint64("committedSeq", rp.committedSeq).
+		log.Warn().Str("partition", rp.partitionID()).Uint64("committedSeq", rp.committedSeq).
 			Msg("DETECT lost the partition between committing its snapshot and acknowledging; the messages stay " +
 				"unacked and redeliver to the leader, which drops them as already applied")
 		return
@@ -3218,7 +3224,7 @@ func (rp *ResolvedEventsProcessor) haltStaleWriter() {
 		rp.supCancel()
 	}
 	err := fmt.Errorf("event-processing: the DETECT checkpoint for partition %q was refused as stale — "+
-		"another writer owns a higher checkpoint, so this replica can never commit again", rp.cfg.PartitionId)
+		"another writer owns a higher checkpoint, so this replica can never commit again", rp.partitionID())
 	// Called from the single-writer loop, which FailNow's teardown (ExecuteStop) joins; safe
 	// because FailNow returns at once and tears down on its own goroutine. A nil Microservice
 	// is FailNow's to report.
