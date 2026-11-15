@@ -155,7 +155,7 @@ func TestGroupRulePlacementRefuses(t *testing.T) {
 	// The rule subset must not admit any of the unrouted projection kinds.
 	p0.ruleRouting, p1.ruleRouting = nil, nil
 	p0.groupWorkers, p1.supervised = nil, false
-	p1.RosterStore = &model.DeviceRosterStore{}
+	p1.AttributeStore = &model.DeviceAttributeStore{}
 	require.ErrorContains(t, p0.attachRoutedRuleWorkers(r.nm, p1), "S2b")
 }
 

@@ -403,6 +403,10 @@ func (rp *ResolvedEventsProcessor) signalRuleRepair(ctx context.Context, tenant,
 // Once every replica runs this release, every re-type and re-point stores the instant.
 func (rp *ResolvedEventsProcessor) reconcileTenantRoster(ctx context.Context, tenant string, settledBefore time.Time) (map[reconcileProjection]int, error) {
 	counts := make(map[reconcileProjection]int)
+	if _, err := rp.ruleWorker(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return counts, err
+	}
 	if rp.RosterStore == nil {
 		return counts, nil
 	}

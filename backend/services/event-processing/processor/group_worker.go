@@ -109,16 +109,26 @@ func (rp *ResolvedEventsProcessor) buildWorkers(ctx context.Context) error {
 	}
 	// The one shared fact consumer starts only after every worker has reset its
 	// term channels, loaded its projection and launched its single-writer loop.
-	if rp.ruleRouting != nil && rp.RuleUpdatesReader != nil {
-		rp.readerWG.Add(1)
-		go rp.runRuleConsumer()
+	if rp.ruleRouting != nil {
+		if rp.RuleUpdatesReader != nil {
+			rp.readerWG.Add(1)
+			go rp.runRuleConsumer()
+		}
+		if rp.RosterReader != nil {
+			rp.readerWG.Add(1)
+			go rp.runRosterConsumer()
+		}
+		if rp.EntityDeletedReader != nil {
+			rp.readerWG.Add(1)
+			go rp.runEntityDeletedConsumer()
+		}
 	}
 	return nil
 }
 
 // attachGroupWorkers is an internal test hook, not an activation API. Rule
-// projections require attachRoutedRuleWorkers; other fact kinds remain refused
-// until their routing is implemented. Global roster loads must never arm every group.
+// and membership projections require attachRoutedRuleWorkers. Attribute and fence
+// inputs remain refused until their routing is implemented.
 func (rp *ResolvedEventsProcessor) attachGroupWorkers(children ...*ResolvedEventsProcessor) error {
 	if rp.worker == nil || rp.worker.group != 0 || rp.partitionID() != singletonPartition || !rp.leadershipEnabled() {
 		return fmt.Errorf("group supervisor requires group zero and the singleton lease/gate")
@@ -129,8 +139,8 @@ func (rp *ResolvedEventsProcessor) attachGroupWorkers(children ...*ResolvedEvent
 			return fmt.Errorf("invalid group worker %d: workers cannot acquire leases or supervise workers", g)
 		}
 		if ((w.RuleUpdatesReader != nil || w.RuleStore != nil || w.ProfileActiveStore != nil || w.DeviceManagement != nil) && w.ruleRouting == nil) ||
-			w.RosterReader != nil || w.EntityDeletedReader != nil || w.AttributeReader != nil || w.FenceSetReader != nil ||
-			w.RosterStore != nil || w.AttributeStore != nil || w.FenceSets != nil || w.VersionedFenceSets != nil || w.FenceManifests != nil {
+			((w.RosterReader != nil || w.EntityDeletedReader != nil || w.RosterStore != nil) && w.ruleRouting == nil) || w.AttributeReader != nil || w.FenceSetReader != nil ||
+			w.AttributeStore != nil || w.FenceSets != nil || w.VersionedFenceSets != nil || w.FenceManifests != nil {
 			return fmt.Errorf("group workers require S2b fact routing before using fact projections")
 		}
 	}
