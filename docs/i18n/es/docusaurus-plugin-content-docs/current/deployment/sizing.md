@@ -225,8 +225,10 @@ con `260Gi`.
 
 Use `backup_object_store_storage_class` en las variables OpenTofu del clúster para
 elegir otra clase para un volumen **nuevo**. Los demás proveedores conservan la
-clase predeterminada del clúster. Un error de detección detiene el plan; una clase
-explícita omite la detección. Los PVC existentes conservan su tamaño y clase al
+clase predeterminada del clúster. `dcctl install` reconoce GKE por el aprovisionador
+CSI de discos persistentes en las StorageClasses del clúster y establece
+`backup_object_store_gke_standard_disk`; si aplica la raíz del clúster usted mismo,
+establezca esa variable en GKE. Una clase explícita tiene prioridad. Los PVC existentes conservan su tamaño y clase al
 repetir `dcctl install` y durante las actualizaciones, aunque cambie esta variable.
 No se migran automáticamente las copias existentes en SSD; trasladarlas requiere
 una migración de datos planificada por separado. Amplíe un volumen existente con

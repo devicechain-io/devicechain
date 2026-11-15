@@ -952,9 +952,22 @@ variable "backup_object_store_storage" {
 }
 
 variable "backup_object_store_storage_class" {
-  description = "StorageClass for NEW in-cluster object store volumes. Empty selects a dedicated pd-standard class on GKE, and the cluster default elsewhere. Explicit values override this selection. Existing PVCs keep their class through upgrades; changing this setting never migrates a volume."
+  description = "StorageClass for NEW in-cluster object store volumes. Empty uses the dedicated pd-standard class when backup_object_store_gke_standard_disk is set, and the cluster default otherwise. Explicit values override this selection. Existing PVCs keep their class through upgrades; changing this setting never migrates a volume."
   type        = string
   default     = ""
+}
+
+variable "backup_object_store_gke_standard_disk" {
+  description = <<-EOT
+    GKE only: create a dedicated pd-standard StorageClass for the in-cluster object store
+    and give it to a NEW volume when backup_object_store_storage_class is empty, so bulk
+    backups draw on the HDD quota instead of the SSD quota that standard-rwo (pd-balanced)
+    and premium-rwo share. dcctl install sets it when the cluster's StorageClasses name
+    the GKE persistent-disk provisioner. A variable rather than detection here because the
+    decision has to be known when a fresh cluster is planned. An existing volume keeps its class.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "allow_backup_destination_removal" {

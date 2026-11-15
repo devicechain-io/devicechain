@@ -18,10 +18,8 @@ func TestBackupStoragePolicyShips(t *testing.T) {
 		name string
 		want string
 	}{
-		{"discovery is overridable", `count = var.storage_class == "" ? 1 : 0`},
-		{"GKE CSI detection", `sc.provisioner == "pd.csi.storage.gke.io"`},
-		{"GKE migrated in-tree detection", `sc.provisioner == "kubernetes.io/gce-pd"`},
-		{"other providers do not get a class", `count = local.gke_standard_backup ? 1 : 0`},
+		{"decided from inputs known at plan time", `gke_standard_backup = var.storage_class == "" && var.standard_disk_class`},
+		{"only the GKE input creates a class", `count = local.gke_standard_backup ? 1 : 0`},
 		{"HDD quota", `parameters = { type = "pd-standard" }`},
 		{"CSI provisioner", `storage_provisioner = "pd.csi.storage.gke.io"`},
 		{"new PVC selection and override", `storage_class_name = var.storage_class != "" ? var.storage_class : (local.gke_standard_backup ? kubernetes_storage_class_v1.backup_standard[0].metadata[0].name : null)`},
@@ -33,11 +31,23 @@ func TestBackupStoragePolicyShips(t *testing.T) {
 			}
 		})
 	}
+	// 🔴 NO CLUSTER READ MAY DECIDE THE CLASS. A data source listing the cluster's
+	// StorageClasses is unknown when a fresh cluster is planned, and a count that depends
+	// on it fails the plan of every new install.
+	if strings.Contains(compact, `data "kubernetes_resources"`) {
+		t.Fatal("the object-store module must not read the cluster to choose its class; the caller passes standard_disk_class")
+	}
 	root, err := fs.ReadFile(OpenTofuCluster(), "main.tf")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(strings.Fields(string(root)), " "), "storage_class = var.backup_object_store_storage_class") {
-		t.Fatal("cluster root must pass the operator's backup class override to the module")
+	rootCompact := strings.Join(strings.Fields(string(root)), " ")
+	for _, want := range []string{
+		"storage_class = var.backup_object_store_storage_class",
+		"standard_disk_class = var.backup_object_store_gke_standard_disk",
+	} {
+		if !strings.Contains(rootCompact, want) {
+			t.Fatalf("cluster root must pass %q to the object-store module", want)
+		}
 	}
 }

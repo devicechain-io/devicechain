@@ -1,13 +1,11 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 
-mock_provider "kubernetes" {
-  mock_data "kubernetes_resources" {
-    defaults = {
-      objects = [{ provisioner = "pd.csi.storage.gke.io" }]
-    }
-  }
-}
+# The backup volume's class is decided from INPUTS, never by listing the cluster's
+# StorageClasses: on a fresh cluster such a listing is unknown at plan time, and a
+# count that depends on it fails the plan of every new install.
+
+mock_provider "kubernetes" {}
 
 variables {
   namespace = "dc-system"
@@ -17,6 +15,9 @@ variables {
 
 run "gke_uses_hdd_not_ssd_quota" {
   command = plan
+  variables {
+    standard_disk_class = true
+  }
   assert {
     condition     = kubernetes_persistent_volume_claim_v1.data.spec[0].storage_class_name == "dc-object-store-standard"
     error_message = "new GKE backup PVC must use the dedicated standard disk class"
@@ -33,12 +34,8 @@ run "gke_uses_hdd_not_ssd_quota" {
 
 run "other_providers_keep_the_cluster_default" {
   command = plan
-  override_data {
-    target = data.kubernetes_resources.storage_classes
-    values = { objects = [{ provisioner = "ebs.csi.aws.com" }] }
-  }
   assert {
-    condition     = length(kubernetes_storage_class_v1.backup_standard) == 0 && !local.gke_standard_backup
+    condition     = length(kubernetes_storage_class_v1.backup_standard) == 0 && !local.gke_standard_backup && kubernetes_persistent_volume_claim_v1.data.spec[0].storage_class_name != "dc-object-store-standard"
     error_message = "other providers must retain the cluster default"
   }
 }
@@ -46,22 +43,22 @@ run "other_providers_keep_the_cluster_default" {
 run "explicit_override_wins" {
   command = plan
   variables {
-    storage_class = "custom-retained"
+    standard_disk_class = true
+    storage_class       = "custom-retained"
   }
   assert {
-    condition     = length(data.kubernetes_resources.storage_classes) == 0 && length(kubernetes_storage_class_v1.backup_standard) == 0 && kubernetes_persistent_volume_claim_v1.data.spec[0].storage_class_name == "custom-retained"
-    error_message = "an explicit class must bypass detection and reach a new PVC"
+    condition     = length(kubernetes_storage_class_v1.backup_standard) == 0 && kubernetes_persistent_volume_claim_v1.data.spec[0].storage_class_name == "custom-retained"
+    error_message = "an explicit class must win over the standard disk class and reach a new PVC"
   }
 }
 
-# The upgrade this change must survive: a claim created before detection existed
-# (no class in the configuration, the cluster default chosen by the API server)
-# is re-planned on GKE. The class is immutable, so a planned change would replace
-# the claim; it must stay where it is.
-run "pre_detection_claim_is_created" {
-  override_data {
-    target = data.kubernetes_resources.storage_classes
-    values = { objects = [] }
+# The upgrade this change must survive: a claim created before the standard disk
+# class existed (no class in the configuration, the cluster default chosen by the
+# API server) is re-planned on GKE. The class is immutable, so a planned change
+# would replace the claim; it must stay where it is.
+run "pre_standard_class_claim_is_created" {
+  variables {
+    standard_disk_class = false
   }
 }
 
@@ -69,8 +66,15 @@ run "upgrade_on_gke_leaves_the_existing_claim_class" {
   plan_options {
     refresh = false
   }
+  variables {
+    standard_disk_class = true
+  }
   assert {
     condition     = kubernetes_persistent_volume_claim_v1.data.spec[0].storage_class_name != "dc-object-store-standard"
     error_message = "an upgrade on GKE moved an existing claim onto the new class; the claim would be replaced"
+  }
+  assert {
+    condition     = length(kubernetes_storage_class_v1.backup_standard) == 1
+    error_message = "the upgrade should still create the class for any volume made later"
   }
 }

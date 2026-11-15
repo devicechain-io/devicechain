@@ -203,9 +203,22 @@ variable "storage" {
 }
 
 variable "storage_class" {
-  description = "StorageClass for NEW data volumes. Empty selects a dedicated pd-standard class on GKE and the cluster default elsewhere. Existing claims keep their class. An explicit class overrides detection."
+  description = "StorageClass for NEW data volumes. Empty uses the dedicated pd-standard class when standard_disk_class is set, and the cluster default otherwise. Existing claims keep their class. An explicit class wins over both."
   type        = string
   default     = ""
+}
+
+variable "standard_disk_class" {
+  description = <<-EOT
+    Create a dedicated GKE pd-standard StorageClass for this store and give it to a NEW
+    data volume when storage_class is empty. Only for GKE: the class names the
+    pd.csi.storage.gke.io provisioner. The caller decides this from what it already
+    knows about the cluster, so the decision is known at PLAN time; detecting it here
+    from the cluster's StorageClasses would leave the class's count unknown on a fresh
+    cluster and fail the plan. An existing claim keeps whatever class it was created with.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "resources" {
@@ -269,19 +282,9 @@ locals {
 # reference them by `key:` and MinIO's own container reads them below. One Secret,
 # two readers, named in the outputs.
 
-# Detect the provisioner, not the kube-context name or a provider-specific class
-# name. An explicit override avoids discovery entirely. Read failures abort the plan.
-data "kubernetes_resources" "storage_classes" {
-  count       = var.storage_class == "" ? 1 : 0
-  api_version = "storage.k8s.io/v1"
-  kind        = "StorageClass"
-}
-
 locals {
-  gke_standard_backup = var.storage_class == "" ? anytrue([
-    for sc in data.kubernetes_resources.storage_classes[0].objects :
-    sc.provisioner == "pd.csi.storage.gke.io" || sc.provisioner == "kubernetes.io/gce-pd"
-  ]) : false
+  # From inputs alone, so the class's count is known when a fresh cluster is planned.
+  gke_standard_backup = var.storage_class == "" && var.standard_disk_class
 }
 
 # GKE's built-in standard-rwo is pd-balanced and consumes SSD quota too.

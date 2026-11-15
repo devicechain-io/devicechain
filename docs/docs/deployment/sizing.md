@@ -217,8 +217,10 @@ sets JetStream to `40Gi` and the event store to `260Gi`.
 
 Override `backup_object_store_storage_class` in the cluster OpenTofu variables to
 choose a different class for a **new** backup volume. Other providers continue to
-use their cluster default. Discovery errors fail the plan; an explicit override
-bypasses discovery. Existing PVCs keep both their size and storage class through
+use their cluster default. `dcctl install` recognises GKE by the persistent-disk
+CSI provisioner on the cluster's StorageClasses and sets
+`backup_object_store_gke_standard_disk`; when you apply the cluster root yourself,
+set that variable on GKE. An explicit class wins over it. Existing PVCs keep both their size and storage class through
 `dcctl install` re-runs and upgrades, even when this override changes. This does
 not migrate existing SSD backups: moving them requires a separately planned data
 migration. Grow an existing volume with `kubectl patch` if its class supports

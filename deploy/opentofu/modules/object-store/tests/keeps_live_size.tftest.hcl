@@ -23,11 +23,7 @@
 # here. (Terraform 1.13's mock refresh does return the stored object; the
 # no-refresh form passes on both, and on both it fails without the rule.)
 
-mock_provider "kubernetes" {
-  mock_data "kubernetes_resources" {
-    defaults = { objects = [] }
-  }
-}
+mock_provider "kubernetes" {}
 
 variables {
   namespace = "dc-system"

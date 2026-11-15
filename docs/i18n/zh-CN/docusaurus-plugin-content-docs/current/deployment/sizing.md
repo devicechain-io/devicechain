@@ -184,7 +184,8 @@ SSD 配额。JetStream 和数据库的存储类保持不变。无法挂载 `pd-s
 `160Gi`；该预设将 JetStream 设为 `40Gi`，事件存储设为 `260Gi`。
 
 可通过集群 OpenTofu 变量 `backup_object_store_storage_class` 为**新卷**指定其他
-存储类。其他提供商继续使用集群默认存储类。检测失败会终止计划；显式指定存储类可
-跳过检测。重新运行 `dcctl install` 或升级时，已有 PVC 保留原有容量和存储类，
+存储类。其他提供商继续使用集群默认存储类。`dcctl install` 根据集群 StorageClass 中的
+GKE 持久磁盘 CSI 驱动识别 GKE，并设置 `backup_object_store_gke_standard_disk`；如果自行
+应用集群根配置，请在 GKE 上设置该变量。显式指定的存储类优先。重新运行 `dcctl install` 或升级时，已有 PVC 保留原有容量和存储类，
 即使修改此变量也不会改变。这不会自动迁移已有 SSD 备份；迁移需要单独规划数据搬迁。
 如果原存储类支持扩容，可用 `kubectl patch` 扩大已有卷。
