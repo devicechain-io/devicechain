@@ -1682,8 +1682,9 @@ func writeIntegrationUplink(ctx context.Context, source string, msg messaging.Me
 func writeInbound(ctx context.Context, source string, msg messaging.Message) error {
 	err := publishInbound(ctx, msg)
 	// The gate can close between a source's admit check and this publish; the refusal is
-	// counted the same way, and the source answers it as it answers any refusal.
-	if errors.Is(err, messaging.ErrStreamBackpressure) {
+	// counted the same way, and the source answers it as it answers any refusal, including a
+	// placement refusal (the envelope path counts both too).
+	if messaging.IsRefusal(err) {
 		countBackpressured(source)
 	}
 	return err
