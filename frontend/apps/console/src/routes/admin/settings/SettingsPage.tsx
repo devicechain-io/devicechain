@@ -39,6 +39,7 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listSettings, setSetting, clearSetting, type Setting } from '@/lib/api/settings';
+import { formatDateTime } from '@/lib/format';
 // 🔴 A setting written here can be one another module has memoised — entity.token_masks
 // is, by lib/token-masks.ts, for the life of the tab. Without this the operator saves a
 // new token mask, opens a create form, and sees the OLD pattern presented as this
@@ -265,7 +266,7 @@ function SettingPanel({
       {setting.overridden && setting.updatedBy && (
         <p className="text-xs text-muted-foreground">
           {t('overriddenByLabel', { by: setting.updatedBy })}
-          {setting.updatedAt ? ` · ${new Date(setting.updatedAt).toLocaleString()}` : ''}
+          {setting.updatedAt ? ` · ${formatDateTime(setting.updatedAt)}` : ''}
         </p>
       )}
 

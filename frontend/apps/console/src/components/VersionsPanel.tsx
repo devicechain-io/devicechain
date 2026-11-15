@@ -44,10 +44,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
 
-function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleString();
-}
+import { formatDateTime } from '@/lib/format';
 
 /** One row of an append-only version history, as every versioned resource returns it. */
 export interface PublishedVersion {
@@ -266,7 +263,7 @@ export function VersionsPanel<V extends PublishedVersion>({
                   {v.label || <span className="text-muted-foreground">—</span>}
                 </DataTableCell>
                 <DataTableCell className="whitespace-nowrap text-muted-foreground">
-                  {fmtTime(v.publishedAt)}
+                  {formatDateTime(v.publishedAt)}
                 </DataTableCell>
                 <DataTableCell className="text-muted-foreground" data-shot-pii>
                   {v.publishedBy || '—'}
