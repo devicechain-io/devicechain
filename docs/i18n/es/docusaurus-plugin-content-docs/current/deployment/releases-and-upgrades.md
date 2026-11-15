@@ -836,6 +836,12 @@ La ruta HTTP de cargas útiles de dispositivos, que se activa con `httpIngest.de
 - **Los dispositivos conectados por MQTT al broker no se ven afectados.**
 - **Espera antes de reintentar tras un `503`**, incluso si presentas una credencial incorrecta: espera al menos el tiempo indicado por `Retry-After`.
 
+#### ingress-nginx ya no acepta snippets de configuración {#v160-nginx-snippets-off}
+
+`dcctl install` desactiva los snippets de configuración en el controlador `ingress-nginx` que el clúster conserva y restablece su nivel de riesgo de anotaciones al valor predeterminado del controlador. Antes de aplicar cambios, la instalación se niega a continuar mientras algún Ingress de la clase de ese controlador lleve una anotación `*-snippet`, e identifica cada Ingress y anotación. Actualiza la instancia propietaria con `dcctl upgrade`, o elimina la anotación, y vuelve a ejecutar `dcctl install`.
+
+Ningún chart desde `v0.25.2` establece snippets. Los clústeres nuevos, que solo ejecutan Traefik, no se ven afectados. Este cambio llega a cada clúster en su siguiente `dcctl install`.
+
 #### Antes de actualizar {#v160-before-upgrade}
 
 - **Los atributos de entidad son únicos por clave.** La actualización elimina duplicados activos de escrituras iniciales simultáneas, conserva el menor ID y encola la reparación de pertenencias a grupos y configuración. La creación del índice bloquea brevemente las escrituras de atributos. Durante el despliegue gradual, una réplica antigua puede rechazar una escritura inicial concurrente; vuelva a intentarla. No se requiere cambiar la configuración.
@@ -1933,9 +1939,7 @@ conjunto de claves y emite su token en el puerto interno. Consulta
 
 - **El chart ya no fija ningún snippet de configuración de nginx.**
 - **El controlador de ingress que instala `dcctl install` no cambia en esta versión** y sigue aceptando
-  snippets, porque las instancias aún no actualizadas dependen de ellos. Una versión posterior los
-  desactiva, tras una comprobación de `dcctl install` que se niega a continuar mientras algún Ingress de la
-  clase del controlador siga llevando una anotación `*-snippet`.
+  snippets, porque las instancias aún no actualizadas dependen de ellos. [v1.6.0 los desactiva](#v160-nginx-snippets-off), tras una comprobación previa de `dcctl install`.
 - **Los verificadores de tokens externos no se ven afectados:** usan el `jwks_uri` de los metadatos del
   servidor de autorización, `/oauth/jwks`, que sigue siendo público.
 

@@ -547,6 +547,12 @@ MCP 发现现在提供 `read-only` 和 `location`，并在 MCP 的 `agentActuati
 - **通过代理的 MQTT 连接通信的设备不受影响。**
 - **收到 `503` 时应退避重试**，即使提交的是错误凭据：至少等待 `Retry-After` 指定的时间再重试。
 
+#### ingress-nginx 不再接受配置片段 {#v160-nginx-snippets-off}
+
+`dcctl install` 会关闭集群保留的 `ingress-nginx` 控制器上的配置片段，并将其注解风险级别恢复为控制器的默认值。在应用更改前，只要该控制器类的任何 Ingress 带有 `*-snippet` 注解，安装就会拒绝继续，并列出每个 Ingress 和注解。请使用 `dcctl upgrade` 升级所属实例，或移除该注解，然后重新运行 `dcctl install`。
+
+自 `v0.25.2` 起，没有任何 chart 设置配置片段。仅运行 Traefik 的新集群不受影响。此更改会在集群下一次运行 `dcctl install` 时生效。
+
 #### 升级前 {#v160-before-upgrade}
 
 - **每个实体和作用域中的属性键只保留一个值。** 升级会合并并发首次写入产生的重复活动行，保留 ID 最小的行，并排队修复组成员关系和配置。创建索引期间会短暂阻塞属性写入。在新旧副本共存期间，旧副本可能拒绝发生竞争的首次写入；请重试。无需更改配置。
@@ -1612,8 +1618,7 @@ chart 的 API ingress 上的一个 nginx 配置片段（snippet）。**因此，
 
 - **chart 不再设置任何 nginx 配置片段。**
 - **`dcctl install` 安装的 ingress 控制器在本版本中保持不变**，仍接受配置片段，因为尚未升级的实例依赖
-  它们。后续版本会关闭配置片段，并由 `dcctl install` 的检查把关：只要该控制器类的任何 Ingress 仍带有
-  `*-snippet` 注解，它就拒绝继续。
+  它们。[v1.6.0 会关闭配置片段](#v160-nginx-snippets-off)，并由 `dcctl install` 的预检把关。
 - **外部令牌校验方不受影响：**它们使用授权服务器元数据中的 `jwks_uri`，即 `/oauth/jwks`，该端点仍然公开。
 
 #### 预期情况 {#v0252-during}
