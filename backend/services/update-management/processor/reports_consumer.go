@@ -393,49 +393,29 @@ func (rc *ReportsConsumer) grant(ctx context.Context, device, assignment string)
 // lettered nowhere.
 func (rc *ReportsConsumer) retryOrDrop(ctx context.Context, msg messaging.Message, token string, done func(string),
 	err error, what string) {
-	switch messaging.Dispose(msg, err) {
+	settleErr := err
+	if len(msg.Value) > maxDeadLetterPayload {
+		settleErr = fmt.Errorf("%w (payload truncated to %d of %d bytes)", err, maxDeadLetterPayload, len(msg.Value))
+	}
+	lossCtx := log.With().Str("device", token).Str("loss", "LOST device report: it could be neither applied nor dead-lettered.").Logger().WithContext(ctx)
+	d, _ := rc.dead.Settle(lossCtx, msg, settleErr, deadletter.Exhausted{
+		Summary:   "a device report could not be applied after every delivery attempt",
+		Reference: token, MaxPayload: maxDeadLetterPayload,
+	})
+	switch d {
 	case messaging.TenantErased:
 		log.Info().Str("what", what).Str("device", token).
 			Msg("Dropping a device report for a deleted tenant; this area's data has been erased.")
-		msg.Ack()
-		done(core.ResultErased)
+		done(deadletter.Result(d))
 		return
 	case messaging.Exhausted:
 		log.Error().Err(err).Str("what", what).Str("device", token).Int("attempts", msg.NumDelivered).
 			Msg("Device report failed past the redelivery cap; dead-lettering.")
-		rc.deadLetter(ctx, msg, token, "a device report could not be applied after every delivery attempt", err)
-		msg.Ack()
-		done(core.ResultFailed)
+		done(deadletter.Result(d))
 		return
 	}
 	log.Warn().Err(err).Str("what", what).Str("device", token).Msg("Device report failed; will retry on redelivery.")
-	done(core.ResultRetry)
-}
-
-// deadLetter files a letter about msg. The payload is bounded: a device chooses its bytes.
-func (rc *ReportsConsumer) deadLetter(ctx context.Context, msg messaging.Message, token, summary string, cause error) {
-	if rc.dead == nil {
-		return
-	}
-	detail := ""
-	if cause != nil {
-		detail = cause.Error()
-	}
-	payload := msg.Value
-	if len(payload) > maxDeadLetterPayload {
-		payload = payload[:maxDeadLetterPayload]
-		detail += fmt.Sprintf(" (payload truncated to %d of %d bytes)", maxDeadLetterPayload, len(msg.Value))
-	}
-	if err := rc.dead.WriteFor(ctx, msg, deadletter.Envelope{
-		Reason:     deadletter.ReasonExhausted,
-		Summary:    summary,
-		Detail:     detail,
-		Reference:  token,
-		OccurredAt: time.Now().UTC(),
-		Payload:    payload,
-	}); err != nil {
-		log.Error().Err(err).Str("device", token).Msg("LOST device report: it could be neither applied nor dead-lettered.")
-	}
+	done(deadletter.Result(d))
 }
 
 // Stop component.

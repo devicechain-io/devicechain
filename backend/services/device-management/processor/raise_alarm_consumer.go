@@ -16,7 +16,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
-	"time"
 )
 
 // RaiseAlarmConsumer is the discrete NATS consumer for REACT alarm-edge requests (ADR-051 slice 5c /
@@ -366,12 +365,26 @@ func (rc *RaiseAlarmConsumer) held(msgctx context.Context, msg messaging.Message
 // refuses the write on every delivery, and there is no alarm left to raise or resolve, so the
 // edge is settled on the delivery it arrived on and lettered nowhere.
 func (rc *RaiseAlarmConsumer) retryOrDrop(msg messaging.Message, done func(string), err error, what string) {
-	switch messaging.Dispose(msg, err) {
+	ctx := rc.procCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, _, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
+	sink := rc.dead
+	if !ok {
+		sink = nil
+	}
+	lossCtx := log.With().Str("what", what).Str("loss", "LOST raise-alarm edge: it could be neither applied nor dead-lettered.").Logger().WithContext(ctx)
+	d, lettered := sink.Settle(lossCtx, msg, err, deadletter.Exhausted{
+		Summary: "an alarm edge could not be applied after every delivery attempt, so an alarm " +
+			"that should have been raised or cleared was not",
+		Reference: what,
+	})
+	switch d {
 	case messaging.TenantErased:
 		log.Info().Str("what", what).
 			Msg("Dropping a raise-alarm edge for a deleted tenant; this area's data has been erased.")
-		msg.Ack()
-		done(core.ResultErased)
+		done(deadletter.Result(d))
 		return
 	case messaging.Exhausted:
 		// Dropping an edge past the cap is a genuine loss for an edge-triggered producer: a dropped
@@ -380,16 +393,17 @@ func (rc *RaiseAlarmConsumer) retryOrDrop(msg messaging.Message, done func(strin
 		// happen — the integrator's in-process CAS retry keeps a conflict from consuming attempts.
 		log.Error().Err(err).Str("what", what).Int("attempts", msg.NumDelivered).
 			Msg("Raise-alarm edge failed past redelivery cap; dead-lettering (edge-triggered: it will not re-emit until the condition next changes)")
-		rc.deadLetter(msg, what, err)
-		msg.Ack()
-		done(core.ResultFailed)
+		if lettered {
+			rc.deadLettered.Inc()
+		}
+		done(deadletter.Result(d))
 		return
 	}
 	// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery — an
 	// immediate nak would burn MaxDeliver in ~1.4ms inside a downstream outage.
 	// Reference disposition: event-sources' settler (ADR-030).
 	log.Warn().Err(err).Str("what", what).Msg("Raise-alarm failed; will retry on redelivery")
-	done(core.ResultRetry)
+	done(deadletter.Result(d))
 }
 
 // Stop component.
@@ -414,46 +428,4 @@ func (rc *RaiseAlarmConsumer) Terminate(ctx context.Context) error {
 // ExecuteTerminate is a no-op; the reader is owned by the NATS manager.
 func (rc *RaiseAlarmConsumer) ExecuteTerminate(context.Context) error {
 	return nil
-}
-
-// deadLetter records a raise-alarm edge that could not be applied.
-//
-// 🔑 THIS CONSUMER IS THE DOWNSTREAM OF REACT'S raiseAlarm ACTION, which is why it needed
-// an arm as much as REACT did. REACT dead-lettering a detection it could not dispatch
-// covers one hop; an edge that REACT dispatched successfully could still die here, and the
-// loss is the same one this function's caller describes — a dropped raise does not re-emit
-// until the condition falls and re-breaches, a dropped resolve strands the alarm.
-//
-// The tenant comes from the message's own subject rather than from any ambient context:
-// this consumer processes every tenant's edges on one loop, so there is no ambient tenant
-// to inherit, and the writer is fail-closed on a context without one.
-func (rc *RaiseAlarmConsumer) deadLetter(msg messaging.Message, what string, cause error) {
-	if rc.dead == nil {
-		return
-	}
-	ctx, _, ok := messaging.TenantContextFromSubject(rc.procCtx, msg.Subject)
-	if !ok {
-		// Unattributable: not this tenant's to file. The caller drops it, as it always did.
-		return
-	}
-	detail := ""
-	if cause != nil {
-		detail = cause.Error()
-	}
-	// WriteFor fills the kind (raise-alarm's declared one), subject, sequence, attempts and
-	// correlation from msg, and the dedup id the max-delivery recorder shares.
-	if err := rc.dead.WriteFor(ctx, msg, deadletter.Envelope{
-		Reason: deadletter.ReasonExhausted,
-		Summary: "an alarm edge could not be applied after every delivery attempt, so an alarm " +
-			"that should have been raised or cleared was not",
-		Detail:     detail,
-		Reference:  what,
-		OccurredAt: time.Now().UTC(),
-		Payload:    msg.Value,
-	}); err != nil {
-		log.Error().Err(err).Str("what", what).
-			Msg("LOST raise-alarm edge: it could be neither applied nor dead-lettered.")
-		return
-	}
-	rc.deadLettered.Inc()
 }

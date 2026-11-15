@@ -19,21 +19,17 @@ var sanctionedFinalDeliveryCallers = map[deliveryCapSite]string{
 }
 
 var sanctionedDisposeCallers = map[deliveryCapSite]string{
+	{"backend/core/deadletter/settle.go", "Sink.Settle"}:                                                                   "Owns the shared dead-letter and acknowledgement tail.",
 	{"backend/services/command-delivery/processor/CommandDeliveryProcessor.go", "CommandDeliveryProcessor.handleResponse"}: "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/command-delivery/processor/DeadLetterWriteback.go", "DeadLetterWriteback.Handle"}:                   "Owns the handling error and consumer-specific acknowledgement effects.",
-	{"backend/services/command-delivery/processor/RosterConsumer.go", "RosterConsumer.retryOrDrop"}:                        "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/dashboard-management/processor/share_reconciler.go", "ShareReconciler.handle"}:                      "Owns the handling error and consumer-specific acknowledgement effects.",
-	{"backend/services/device-management/processor/device_reports_consumer.go", "DeviceReportsConsumer.retryOrDrop"}:       "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/device-management/processor/event_resolver.go", "EventResolver.Process"}:                            "Owns the handling error and consumer-specific acknowledgement effects.",
-	{"backend/services/device-management/processor/raise_alarm_consumer.go", "RaiseAlarmConsumer.retryOrDrop"}:             "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/device-state/processor/ownership_processor.go", "OwnershipProcessor.handle"}:                        "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/device-state/processor/StateProcessor.go", "StateProcessor.dispose"}:                                "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/event-management/processor/EntityAnchorReconciler.go", "EntityAnchorReconciler.handle"}:             "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/event-management/processor/failed_events_indexer.go", "FailedEventsIndexer.handle"}:                 "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/event-management/processor/persist_batch.go", "EventPersistenceWorker.dispose"}:                     "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/notification-management/processor/NotificationProcessor.go", "NotificationProcessor.dispatchOne"}:   "Owns the handling error and consumer-specific acknowledgement effects.",
-	{"backend/services/update-management/processor/reports_consumer.go", "ReportsConsumer.retryOrDrop"}:                    "Owns the handling error and consumer-specific acknowledgement effects.",
-	{"backend/services/update-management/processor/roster_consumer.go", "RosterConsumer.retryOrDrop"}:                      "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/user-management/deadletters/consumer.go", "Consumer.handle"}:                                        "Owns the handling error and consumer-specific acknowledgement effects.",
 }
 

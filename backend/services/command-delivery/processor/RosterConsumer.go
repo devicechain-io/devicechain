@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -159,30 +158,17 @@ func (rc *RosterConsumer) handle(ctx context.Context, msg messaging.Message) {
 // retryOrDrop leaves a transiently failed fact unacked for redelivery, or dead-letters and acks it
 // once the redelivery cap is reached. A deleted tenant is settled where it stands (messaging.Dispose).
 func (rc *RosterConsumer) retryOrDrop(ctx context.Context, msg messaging.Message, token string, err error) {
-	switch messaging.Dispose(msg, err) {
+	lossCtx := log.With().Str("device", token).Str("loss", "LOST device-roster fact: it could be neither applied nor dead-lettered.").Logger().WithContext(ctx)
+	d, _ := rc.dead.Settle(lossCtx, msg, err, deadletter.Exhausted{
+		Summary:   "a device-roster fact could not be applied after every delivery attempt",
+		Reference: token, MaxPayload: maxDeadLetterPayload,
+	})
+	switch d {
 	case messaging.TenantErased:
-		msg.Ack()
 		return
 	case messaging.Exhausted:
 		log.Error().Err(err).Str("device", token).Int("attempts", msg.NumDelivered).
 			Msg("Device-roster fact failed past the redelivery cap; dead-lettering.")
-		if rc.dead != nil {
-			payload := msg.Value
-			if len(payload) > maxDeadLetterPayload {
-				payload = payload[:maxDeadLetterPayload]
-			}
-			if derr := rc.dead.WriteFor(ctx, msg, deadletter.Envelope{
-				Reason:     deadletter.ReasonExhausted,
-				Summary:    "a device-roster fact could not be applied after every delivery attempt",
-				Detail:     err.Error(),
-				Reference:  token,
-				OccurredAt: time.Now().UTC(),
-				Payload:    payload,
-			}); derr != nil {
-				log.Error().Err(derr).Str("device", token).Msg("LOST device-roster fact: it could be neither applied nor dead-lettered.")
-			}
-		}
-		msg.Ack()
 		return
 	}
 	log.Warn().Err(err).Str("device", token).Msg("Device-roster fact failed; will retry on redelivery.")
