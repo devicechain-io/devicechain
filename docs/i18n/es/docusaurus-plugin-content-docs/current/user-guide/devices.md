@@ -195,7 +195,8 @@ registros del anterior:
   puede descargar sus artefactos.
 - **Las alarmas** del dispositivo anterior se eliminan, y sus reglas de detección olvidan su
   estado, de modo que la primera lectura del dispositivo nuevo que cumpla una regla genera una
-  alarma nueva.
+  alarma nueva. Cada alarma que seguía activa termina con un despeje que indica que se eliminó el
+  dispositivo, así que sus notificaciones dejan de escalar.
 - **El historial de eventos** se conserva. Los eventos que la plataforma recibió del dispositivo
   anterior siguen almacenados, pero dejan de aparecer bajo el cliente, el área o el activo al que
   pertenecía. Los eventos que envía el dispositivo nuevo aparecen con normalidad, aunque los
@@ -217,12 +218,12 @@ si es anterior al dispositivo que ahora tiene su token.
 
 - Una lectura que la plataforma aceptó antes de la eliminación pero procesó después puede
   recuperar brevemente el estado en vivo del dispositivo anterior. Si ningún dispositivo tiene el
-  token, la comprobación periódica lo elimina. Si mientras tanto se creó un dispositivo nuevo con
-  ese token, esa lectura puede permanecer en el estado en vivo del nuevo hasta que vuelva a
-  informar.
-- **Las notificaciones** que ya estaban escalando por una alarma del dispositivo anterior no se
-  detienen con la eliminación. Reconócelas o resuélvelas en el canal de la política de
-  notificaciones.
+  token, la comprobación periódica lo elimina. Si se creó un dispositivo nuevo con ese token, su
+  primera lectura lo sustituye, y una lectura del dispositivo anterior nunca se aplica al nuevo.
+- Antes de volver a enviar una notificación de una alarma, la plataforma comprueba que la alarma
+  sigue existiendo. Si esa comprobación falla, la notificación se envía igualmente, para que una
+  caída no silencie una alarma real. Consulta
+  [Alarmas de un dispositivo eliminado](/guides/notification-channels#deleted-originator).
 - Durante una actualización, mientras conviven versiones antiguas y nuevas de los servicios, una
   eliminación que atiende una versión antigua sigue el comportamiento anterior hasta que esa
   versión se sustituye. Consulta

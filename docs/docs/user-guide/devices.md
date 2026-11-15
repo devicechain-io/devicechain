@@ -179,7 +179,8 @@ new device with the same token. The new device starts with none of the old devic
 - **Update assignments** that were pending for the old device are ended, and their rollout targets
   show as cancelled. The new device is not offered them and cannot download their artifacts.
 - **Alarms** raised on the old device are deleted, and its detection rules forget their state, so
-  the new device's first matching reading raises a new alarm.
+  the new device's first matching reading raises a new alarm. Each alarm that was still active
+  ends with a clear that says the device was deleted, so its notifications stop escalating.
 - **Event history** is kept. Events the platform received from the old device stay stored, but they
   are no longer listed under the customer, area or asset the device belonged to. Events the new
   device sends are listed as usual, even if the device reports them with a time before the delete.
@@ -199,10 +200,11 @@ older than the device that now holds its token.
 
 - A reading the platform accepted before the delete, but processed after it, can briefly bring
   back the old device's live state. If no device holds the token, the periodic check removes it.
-  If a new device was created at the token in the meantime, that reading can remain on the new
-  device's live state until the new device reports again.
-- **Notifications** already escalating for one of the old device's alarms are not stopped by the
-  delete. Acknowledge or resolve them in the notification policy's channel.
+  If a new device was created at the token, its first reading replaces it, and a reading of the
+  old device is never applied to the new one.
+- Before re-sending a notification for an alarm, the platform checks that the alarm still exists.
+  If that check fails, the notification is sent anyway, so an outage cannot silence a real alarm.
+  See [Alarms of a deleted device](/guides/notification-channels#deleted-originator).
 - During an upgrade, while old and new service versions run side by side, a delete handled by an
   old version follows the old behaviour until that version is replaced. See
   [Releases and upgrades](/deployment/releases-and-upgrades#v170-upgrade).
