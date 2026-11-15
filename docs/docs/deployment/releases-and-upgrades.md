@@ -885,6 +885,10 @@ The escalation window is now counted from when the page was sent. An alarm raise
 
 - **Nothing needs doing.** The upgrade adds a nullable timestamp automatically; existing open alarms retain their previous timing until their next page.
 
+#### Stricter checks on HTTP credentials {#v160-http-credentials}
+
+An `httpCall` action can no longer name a connector's credential. A secret handle in the `connector/` namespace is refused when a rule is published, and a published rule that uses one is dead-lettered with outcome `invalid` instead of sending the connector's credential. Older `outbound-connectors` replicas do not enforce this until they are replaced.
+
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
 `v1.5.0` is an in-place upgrade from `v1.4.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Four appended migrations run on upgrade: three in `device-management` and one in `user-management`. They add the agent kill fence and effect outbox, automation reviews and review enforcement, and the actuation generation column. See [Schema changes and going back](#v150-going-back). Coming from `v1.3.0` or earlier, read the [`v1.4.0` notes](#v140-upgrade) first.
