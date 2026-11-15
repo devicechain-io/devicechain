@@ -510,7 +510,15 @@ dcctl bootstrap local devicechain
 
 ## 近期版本 {#recent-releases}
 
-此处完整记录正在开发的版本（`v1.6`）及最近的三个次版本（`v1.5`、`v1.4` 和 `v1.3`），按从新到旧排列。下方还保留 `v0.27.0` 至 `v0.24.0` 的详细说明。
+此处完整记录正在开发的版本（`v1.7`）及最近的三个次版本（`v1.6`、`v1.5` 和 `v1.4`），按从新到旧排列。下方还保留 `v0.27.0` 至 `v0.24.0` 的详细说明。
+
+### v1.7.0 — 开发中 {#v170-upgrade}
+
+`v1.7.0` 是从 `v1.6.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
+
+#### 行为变化 {#v170-behaviour-changes}
+
+- **事件列表查询在 60 秒后停止。** `events`、`locationEvents`、`measurementEvents`、`alertEvents`、`stateChangeEvents` 和 `bucketedMeasurements` 读取若未在 60 秒内完成，现在会被取消并返回要求缩小时间范围的错误，不再一直占用数据库连接直到完成。作用域受限的调用者指定锚点的读取仍保留 15 秒的时限。
 
 ### v1.6.0 — CA 轮换不再断开设备连接 {#v160-upgrade}
 
