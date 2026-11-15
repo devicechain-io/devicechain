@@ -151,6 +151,17 @@ func (s *Store) CreateIdentity(ctx context.Context, id *Identity) error {
 	return s.sys(ctx).Create(id).Error
 }
 
+// UnknownCatalogueRoleError identifies an unknown catalogue token without changing
+// the validation message returned to existing callers.
+type UnknownCatalogueRoleError struct {
+	Scope RoleScope
+	Token string
+}
+
+func (e *UnknownCatalogueRoleError) Error() string {
+	return fmt.Sprintf("no %s role with token %q", e.Scope, e.Token)
+}
+
 // CatalogueRolesByScopeTokens resolves a set of role tokens within a single scope of the
 // operator's CATALOGUE, erroring if any token is unknown — so an assignment that names a
 // non-existent (or wrong-scope) role fails closed rather than silently granting nothing.
@@ -183,7 +194,7 @@ func (s *Store) CatalogueRolesByScopeTokens(ctx context.Context, scope RoleScope
 		}
 		for _, t := range uniq {
 			if _, ok := found[t]; !ok {
-				return nil, fmt.Errorf("no %s role with token %q", scope, t)
+				return nil, &UnknownCatalogueRoleError{Scope: scope, Token: t}
 			}
 		}
 	}

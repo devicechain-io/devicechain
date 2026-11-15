@@ -308,7 +308,9 @@ El cuerpo del `200` y el de una respuesta se publican como [command-pull.schema.
 
 Cada comando que entrega una consulta queda reclamado por ella, de modo que dos solicitudes, dos réplicas o un reintento nunca reciben el mismo comando. Una solicitud abierta pregunta a la plataforma por los comandos del dispositivo cada un par de segundos, así que un comando emitido mientras el dispositivo consulta le llega en pocos segundos.
 
-**Activarlo durante una actualización.** Actualiza primero device-management y fija el `commandChannel` de un tipo de dispositivo en `HTTP_PULL` solo cuando todas las réplicas de todos los servicios estén actualizadas. Una réplica de command-delivery anterior a este canal publica los comandos de un dispositivo de consulta en un subject que nadie lee, y caducan. Una réplica ya actualizada mientras device-management aún no lo está no puede saber qué dispositivos consultan, así que retiene los comandos de todos los dispositivos por los que pregunta y los libera cuando device-management responde; los dispositivos ordinarios se retrasan durante ese tiempo, pero nunca se envían al lugar equivocado.
+**Activarlo durante una actualización.** Actualiza primero device-management y establece `commandChannel` en `HTTP_PULL` solo cuando todas las réplicas de todos los servicios estén actualizadas. Una réplica anterior al canal publica los comandos en un subject sin lectores y terminan por tiempo de espera. Si no se puede resolver el canal, los comandos afectados siguen `QUEUED`, sin publicarse ni pasar a `HELD`. Se reconsideran en la primera pasada de entrega tras la recuperación (30 segundos por defecto); las respuestas decididas de la caché o de lecturas parciales siguen siendo válidas. Los comandos que ya estaban `HELD` siguen retenidos mientras el canal sea desconocido.
+
+Si no se puede resolver el canal de un comando, sigue `QUEUED` para la siguiente pasada; un comando que ya está `HELD` sigue retenido. El reconciliador continúa por páginas con liberaciones hasta la mitad de su intervalo y se detiene en la primera página sin liberaciones.
 
 **Acuse de recibo.** Un comando cuyo acuse no llega en 60 segundos se entrega de nuevo en la siguiente consulta, con un `attempt` mayor, hasta agotar sus `maxAttempts` (3 salvo que el comando fije otro, hasta 10). Después falla con el resultado [`NOT_DELIVERED`](#outcome) y sin hora de entrega. Esto descansa en que el dispositivo acuse antes de actuar: un comando sin acuse es uno sobre el que no se ha visto actuar al dispositivo, así que enviarlo otra vez es seguro. Un dispositivo que actúa primero y acusa después puede recibir un comando dos veces y no debe apoyarse en el acuse para evitarlo.
 
@@ -470,8 +472,10 @@ comandos cuya retención se movió porque la ventana se editó o se eliminó, se
 de que volviera el dispositivo, o porque su tipo de dispositivo pasó a otra ventana o se quedó sin
 ventana.
 
-- Eliminar una ventana se rechaza mientras algún tipo de dispositivo la use. Si una ventana
-  desaparece de todos modos, los comandos en espera se liberan y se despachan con normalidad.
+- Eliminar una ventana se rechaza mientras algún tipo de dispositivo la use. Una ventana
+  eliminada no permite despachar comandos: solo una respuesta positiva de que el tipo ya no tiene
+  ventana los libera. Los dispositivos deshabilitados y los tipos sin resolver siguen retenidos,
+  conservando el token de la ventana eliminada hasta que se resuelvan.
 - Si un dispositivo está desconectado durante toda una apertura, su comando sin entregar ya no
   puede reclamarse en cuanto la ventana se cierra, y ese mismo pase lo mueve a la siguiente
   apertura. Si la entrega de comandos no puede contactar con el propietario de la ventana, los

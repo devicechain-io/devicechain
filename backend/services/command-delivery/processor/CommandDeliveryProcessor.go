@@ -625,6 +625,8 @@ func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, b
 		// and an instance with no gate wired at all. All three must deliver.
 		state := states[cmd.DeviceToken]
 		switch presence.Decide(state, cproc.capabilities()) {
+		case presence.Defer:
+			incr(cproc.DispatchDeferred, 1)
 		case presence.Hold:
 			cproc.holdCommand(tenantCtx, cmd)
 		case presence.Undeliverable:
@@ -681,8 +683,18 @@ func (cproc *CommandDeliveryProcessor) presenceStates(ctx context.Context, devic
 	states, err := cproc.Presence.StatesFor(ctx, devices)
 	if err != nil {
 		incr(cproc.PresenceReadErrors, 1)
+		var ungated, deferred int
+		for _, device := range devices {
+			s := states[device]
+			if s.PullUnknown {
+				deferred++
+			} else if !s.Known && !s.PullChannel {
+				ungated++
+			}
+		}
 		log.Warn().Err(err).Int("asked", len(devices)).Int("answered", len(states)).
-			Msg("Could not read presence for some of this tenant's devices; those commands dispatch ungated.")
+			Int("presenceUnknown", ungated).Int("channelUndecided", deferred).
+			Msg("Devices with no presence answer dispatch ungated; devices whose command channel is undecided stay queued.")
 	}
 	return states
 }
