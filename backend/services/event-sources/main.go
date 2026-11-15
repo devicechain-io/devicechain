@@ -246,6 +246,8 @@ var (
 	// tenant, whose values here are exactly the unverified strings off the wire
 	// (ADR-023 G.3).
 	TenantGoneCounter *prometheus.CounterVec
+	// PlacementUnavailableCounter counts captured messages held during a placement outage.
+	PlacementUnavailableCounter prometheus.Counter
 	// BackpressureCounter counts inbound messages refused because inbound-events is applying
 	// backpressure: a reader of it is so far behind that accepting more would discard events
 	// it has not read. Apart from RateLimitedCounter because the cause is the platform, not
@@ -444,6 +446,9 @@ func initializeMetrics() {
 		"total_msg_tenant_deleted",
 		"Count of inbound messages refused because their tenant has been deleted and its data is being reclaimed",
 		[]string{"source"})
+	PlacementUnavailableCounter = Microservice.NewCounter(
+		"total_msg_placement_unavailable",
+		"Count of captured messages left unacknowledged because shard placement is unavailable")
 	ExternalMqttOwnerGauge = Microservice.NewGaugeVec(
 		"external_mqtt_owner",
 		"1 on the pod that reads an external MQTT broker source, 0 on the others; per source, the sum across pods should be 1",
@@ -1137,6 +1142,7 @@ func buildEventSources() error {
 				gateway := processor.NewGatewayJetStreamSource(Microservice, source.Id, decoder,
 					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
 					ingestGate, readingGate, meterAt)
+				gateway.UsePlacementUnavailableCounter(PlacementUnavailableCounter)
 				// Held so createNatsComponents can hand it the capture reader and its
 				// inbound-events writer once they exist. Sources are built in the
 				// INITIALIZE phase and readers and writers are created in START, so there
@@ -1153,6 +1159,7 @@ func buildEventSources() error {
 				StoreSource = processor.NewGatewayJetStreamSource(Microservice, source.Id, decoder,
 					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
 					ingestGate, readingGate, meterAt)
+				StoreSource.UsePlacementUnavailableCounter(PlacementUnavailableCounter)
 				StoreSource.UseMessageStore()
 				if LagCredit != nil {
 					StoreSource.UseLagCredit(LagCredit, processor.StreamStore)

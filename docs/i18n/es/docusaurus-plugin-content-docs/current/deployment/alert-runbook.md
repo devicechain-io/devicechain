@@ -997,6 +997,14 @@ The device capture reader dropped messages that no device published
 
 **Qué significa y qué hacer.** Durable ‹durable› on stream ‹stream› was handed messages stored under a subject it does not read, and dropped them without passing them on: ‹value› in the last 15 minutes. Its broker-side consumer reads the whole stream unfiltered, so the reader itself keeps only the subjects devices publish telemetry on. Device publishes never land there under another subject, so a dropped message was put into the stream some other way, most likely by a push consumer on another stream whose delivery subject is a device telemetry subject. Nothing was forwarded and no device event is missing, but whoever can create such a consumer is writing into device intake: look for push consumers with a device telemetry delivery subject (nats consumer ls on each stream) and at which login created them. The reader logs the subject and sequence of the first message it drops.
 
+### JetStreamShardPlacementUnavailable {#jetstreamshardplacementunavailable}
+
+**Gravedad:** `warning` · **Grupo de reglas:** `devicechain.jetstream-delivery`
+
+A service has no usable shard placement table and is holding ingest forwarding
+
+**Qué significa y qué hacer.** Pod ‹pod› of ‹job› has had no usable shard placement table for two minutes: the table in its KV mirror is missing, cannot be adopted, or names a shard group at or above nats.shardGroups.count. Ingest forwarding into the sharded streams is held; these messages are not dead-lettered. Check user-management's placement mirror and its placement_mirror pass alert, and the affected service's logs. Restore a compatible placement table or raise nats.shardGroups.count to include every group the table names so forwarding can resume.
+
 ### JetStreamStreamNearFull {#jetstreamstreamnearfull}
 
 **Gravedad:** `info` · **Grupo de reglas:** `devicechain.jetstream-delivery`
