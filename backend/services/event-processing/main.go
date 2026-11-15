@@ -27,6 +27,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/shardgroups"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
@@ -40,6 +41,8 @@ const singletonPartition = "singleton"
 // DetectTermGate carries the current leadership term from the processor to the
 // durables it gates. See processor.TermGate.
 var DetectTermGate *processor.TermGate
+
+var stopStreamSharding func()
 
 var (
 	Microservice  *core.Microservice
@@ -162,6 +165,11 @@ func buildMetrics() {
 }
 
 func createNatsComponents(nmgr *messaging.NatsManager) error {
+	stop, err := shardgroups.Enable(nmgr)
+	if err != nil {
+		return err
+	}
+	stopStreamSharding = stop
 	// The leadership gate every DETECT durable below is created with (ADR-070). It is
 	// built FIRST and shared, because a reader's gate predicate is fixed at creation
 	// and the processor that will lead with these readers does not exist yet. Closed
@@ -839,7 +847,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// deadline less releaseShutdownHeadroom), so the NATS manager it needs is still up.
 	// core/service walks them in exactly that order, for every service. Pinned next door in
 	// graphql_shutdown_order_test.go, which drives this function.
-	return Svc.Stop(ctx)
+	err := Svc.Stop(ctx)
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
+	return err
 }
 
 // Called before microservice has been terminated.
