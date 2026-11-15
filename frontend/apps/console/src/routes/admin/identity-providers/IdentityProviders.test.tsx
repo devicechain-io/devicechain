@@ -15,7 +15,7 @@
 import i18n from '@/i18n/config';
 import { GraphQLRequestError } from '@devicechain/client';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
@@ -862,5 +862,32 @@ describe('timestamps and the callback address', () => {
       .getAllByRole('button')
       .filter((b) => (b.getAttribute('aria-label') ?? '').split(/\s+/).includes(url));
     expect(labelled.length).toBe(1);
+  });
+});
+
+describe('detail token changes', () => {
+  it.each([false, true])('drops the previous provider during navigation (failure=%s)', async (fail) => {
+    let resolve!: (value: unknown) => void;
+    let reject!: (error: Error) => void;
+    const pending = new Promise((yes, no) => { resolve = yes; reject = no; });
+    api.getIdpConnection.mockImplementation((token: string) => token === 'next-sso' ? pending : Promise.resolve(connection()));
+    render(<MemoryRouter initialEntries={['/admin/identity-providers/acme-sso']}>
+      <Link to="/admin/identity-providers/next-sso">Next provider</Link>
+      <Routes><Route path="/admin/identity-providers/:token" element={<IdentityProviderDetailPage />} /></Routes>
+    </MemoryRouter>);
+    await screen.findByText('Acme SSO');
+    openTab(/Settings/);
+    fireEvent.click(screen.getByRole('link', { name: 'Next provider' }));
+    await waitFor(() => expect(screen.queryByText('Acme SSO')).toBeNull());
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+    if (fail) {
+      reject(new Error('offline'));
+      await screen.findByText('Failed to load data.');
+      expect(screen.queryByText('Acme SSO')).toBeNull();
+    } else {
+      resolve(connection({ token: 'next-sso', name: 'Next SSO' }));
+      await screen.findByText('Next SSO');
+      expect(screen.getByRole('tab', { name: 'Endpoints' }).getAttribute('data-state')).toBe('active');
+    }
   });
 });
