@@ -776,9 +776,13 @@ The `detectionStream` subscription no longer delivers detections of rules that t
 - Untracked types, including `member`, are still created, unless your tenant marked that type tracked. The `NewRelationship` event itself no longer carries the new target as an anchor: an untracked relationship is not ownership, so the event is scoped by the device's existing anchors, as its next telemetry event is.
 - During the rolling upgrade, pods still on v1.5 create the edge until they are replaced.
 
+MCP discovery now offers `read-only` and `location`, plus `act:*` when `agentActuation.enabled` is true on MCP. Challenges let clients use this metadata instead of pinning `read-only`. Admission still requires only `read-only`; action tools retain their scope and permission checks. No configuration change is required; existing tokens remain valid. Reauthorize clients to grant newly discovered scopes, and enable actuation on the authorization server too when using proposals.
+
 #### Solar campaigns need installed-position access {#v160-solar-campaign-position}
 
 Creating a `SOLAR` campaign, reading its elements (`campaignElements`) or cycles (`campaignCycles`), and retrying its failures (`retryCampaignFailed`) now also requires `location:installed:read` (or `location:read`). A solar schedule's per-device times reveal each device's installed position; even cycle counts can reveal position-derived results for a group with one device. `CRON` and `CALENDAR` campaigns are unchanged. Add this authority to any role that manages solar campaigns.
+
+- **Upgrade note:** OTA downloads now allow one in-flight stream per (tenant, device, assignment) on each replica. While another tenant holds a slot, a tenant at or above half of `updates.maxConcurrentDownloads` (rounded down, minimum one; eight with the default of 16) cannot start another stream. A lone tenant may use all slots. Excess requests receive the existing 503 busy response with `Retry-After: 5`; retry after that delay. No configuration change is required.
 
 #### Before you upgrade {#v160-before-upgrade}
 
@@ -808,6 +812,10 @@ Review hand-edited instance configuration before rolling pods. These refusals ar
 Authoring or publishing an automated action now requires the authority to perform it. Creating or updating a rule with a `sendCommand` action, and publishing or rolling back to a profile version whose enabled rules include one, requires `command:write` in addition to `device:write`. `httpCall` and `publish` actions require `connector:write`. A role that holds `device:write` alone can still author and publish rules that only raise alarms. Rules already published keep running; they are checked at the next publish or rollback. Review the roles that author automation before upgrading. Older `device-management` replicas do not enforce this until they are replaced.
 
 **Command holds.** Deleted maintenance windows no longer release waiting commands unconditionally. Commands whose device type now has no window are released within about a minute; disabled devices or unresolved types stay gated until resolved and then follow their type. If a device's command channel cannot be resolved, its commands stay `QUEUED`, never published, until the first delivery sweep after recovery (30 seconds by default), instead of entering `HELD`. The hold reconciler continues while releasing commands, up to half its interval, and stops at a page with no releases. New counter: `command_delivery_dispatch_deferred_total`. Nothing needs doing. Older pods retain their previous behavior until the rolling upgrade completes.
+
+#### Bounded Sparkplug tracking {#v160-sparkplug-limits}
+
+**Upgrade note:** Each Sparkplug source now tracks at most 50,000 node sessions, including at most 1,024 nodes that have not sent NBIRTH. New identities past a limit are dropped without ingestion or a rebirth request; existing nodes can still rebirth, and online sessions are never evicted. Idle placeholders expire after 10 minutes, offline sessions after 24 hours; at capacity, births reclaim the oldest offline sessions. The liveness history holds at most 50,000 identities, prunes old entries on pressure, and refuses further new entries while full (while it is full, a probe does not declare an unrecorded identity silent). Group, node and device topic levels longer than 256 characters are refused, matching the existing device-registration ceiling. Capacity refusals are counted by `devicechain_sparkplugingest_session_refused_total` with `reason` values `placeholder_cap`, `session_cap` or `seen_cap`. Capacity and queue-full warnings are each limited to one per source per 10 minutes; per-message logs move to debug. No configuration change is needed for rolling upgrades.
 
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
 
@@ -851,6 +859,12 @@ The operator admin API now limits an identity whose system role is not superuser
 - **Memberships and sign-in role mappings:** on the operator admin API, a delegated identity can add or change a tenant membership only with tenant roles whose authorities it holds, can change, disable or remove a membership only if it holds everything that membership's roles grant, and can map identity-provider groups or just-in-time sign-ins only to tenant roles it holds. Acting on another identity also requires holding everything its tenant memberships grant, and linking accounts to, re-scoping, or changing the groups claim of a tenant identity-provider connection requires holding every role that connection grants.
 - **Tenant API:** a tenant administrator can change a tenant role only if they hold every authority it grants, and can remove authorities from it only if they hold everything its members hold.
 - **What to check:** a delegated system role that needs to administer superusers or define roles beyond its own authorities now gets `ESCALATION`; make those changes as a superuser.
+
+#### Draft authors after definition deletes {#v160-review-deleters}
+
+Change review normally excludes people who only deleted rules, metrics or commands on other profiles from draft authors. Deletes not attributed to a row, from before the upgrade or a not-yet-upgraded pod during a rolling upgrade, are handled conservatively: if a definition disappeared from the reviewed profile without an attributed delete explaining it, everyone who made an unattributed delete since that definition's last attributed change counts as an author. Reviews already run keep the author list they recorded; run a new review if an approver was excluded. Deleting a profile now writes one audit entry per definition it removes.
+
+- **Nothing needs doing.** Run a new review if an approver was excluded by an unrelated deletion.
 
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
