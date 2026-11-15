@@ -762,6 +762,8 @@ export declare class DashboardHub implements WidgetDataSource, WidgetActions {
     private readonly alarmReconcilers;
     private readonly commandReconcilers;
     private readonly streams;
+    private readonly groups;
+    private multiDeviceUnsupported;
     private readonly alarmDisposers;
     private readonly commandDisposers;
     private readonly locationDisposers;
@@ -810,6 +812,9 @@ export declare class DashboardHub implements WidgetDataSource, WidgetActions {
     private availabilityToken;
     private resolveDevices;
     private resolveBinding;
+    private attachDevices;
+    private fallbackGroup;
+    private openGroup;
     private attach;
     private ensureStream;
     private fanout;

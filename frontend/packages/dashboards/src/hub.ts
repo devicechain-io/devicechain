@@ -5,9 +5,9 @@
 //
 // It multiplexes every widget's live telemetry over the SDK's single per-area
 // graphql-ws connection: many widgets bound to the same device share ONE upstream
-// measurementStream subscription (ref-counted), so a crowded dashboard opens one
-// stream per distinct device token, not one per widget. A per-widget subscription
-// model fans out badly on a crowded board. The Hub owns the subscription
+// measurementStream subscription (ref-counted). Device bindings open one stream
+// per distinct token; anchor members share operations in groups of up to 1000.
+// The Hub owns the subscription
 // lifecycle; widgets just hand it a datasource selector and a sink.
 
 import { windowCriteria, type EventWindow } from './event-window';
@@ -38,6 +38,7 @@ import type { MemberBucketCriteria, MemberRef, MemberRoster, MemberSeed, MemberS
 import { BUCKETED_MEASUREMENTS, type MeasurementBucket } from './queries';
 import {
   MEASUREMENT_STREAM,
+  MEASUREMENT_STREAM_MULTI,
   type MeasurementStreamResult,
   type MeasurementStreamVariables,
 } from './internal/measurement-doc';
@@ -454,6 +455,23 @@ interface DeviceStream {
   unsubscribe: () => void;
 }
 
+// One operation owns a fixed token list; each device retains its own subscribers.
+interface GroupStream {
+  members: Map<string, DeviceStream>;
+  unsubscribe: () => void;
+}
+
+// Only a schema refusal of this argument establishes an older server. Merely naming
+// deviceTokens (an authorization or size error, for example) does not.
+function refusesDeviceTokens(err: unknown): boolean {
+  if (Array.isArray(err)) return err.some(refusesDeviceTokens);
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { message?: unknown; errors?: unknown; graphQLErrors?: unknown };
+  if (typeof e.message === 'string' &&
+      /(?:unknown argument ["']deviceTokens["']|argument ["']deviceTokens["'][^\n]*not defined)/i.test(e.message)) return true;
+  return refusesDeviceTokens(e.errors) || refusesDeviceTokens(e.graphQLErrors);
+}
+
 export class DashboardHub implements WidgetDataSource, WidgetActions {
   private readonly resolver: DeviceResolver;
   // The viewer's authorities (for can()); '*' is the superuser wildcard.
@@ -466,6 +484,8 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   private readonly commandReconcilers = new Set<() => void>();
   // One entry per distinct device token that has at least one subscriber.
   private readonly streams = new Map<string, DeviceStream>();
+  private readonly groups = new Set<GroupStream>();
+  private multiDeviceUnsupported = false;
   // Live alarm-subscription disposers. The alarm channel isn't ref-counted through
   // `streams` (it holds a poll/debounce/trigger per subscription, not a shared device
   // stream), so its disposers are tracked here for disposeAll() to reach — otherwise an
@@ -520,9 +540,7 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     this.resolveDevices(datasource)
       .then((groups) => {
         if (disposed) return;
-        for (const group of groups) {
-          detachers.push(this.attach(group.deviceToken, group.names, sink));
-        }
+        detachers.push(...this.attachDevices(groups, sink, datasource.kind === 'anchor'));
       })
       .catch((err) => {
         if (!disposed) sink.error?.(err);
@@ -542,15 +560,15 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
       .then(({ roster, names }) => {
         if (disposed) return;
         sink.roster(roster);
-        for (const member of roster.members) {
-          detachers.push(
-            this.attach(member.token, names, {
-              next: (sample) => sink.next(sample),
-              error: (err) => sink.error?.(err),
-              reconnected: () => sink.reconnected?.(),
-            }),
-          );
-        }
+        detachers.push(...this.attachDevices(
+          roster.members.map((member) => ({ deviceToken: member.token, names })),
+          {
+            next: (sample) => sink.next(sample),
+            error: (err) => sink.error?.(err),
+            reconnected: () => sink.reconnected?.(),
+          },
+          datasource.kind === 'anchor',
+        ));
       })
       .catch((err) => {
         if (disposed) return;
@@ -1227,6 +1245,7 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   // subscription's poll + trigger. Iterate a copy of the disposer sets since each
   // removes itself as it runs.
   disposeAll(): void {
+    for (const group of [...this.groups]) group.unsubscribe();
     for (const stream of this.streams.values()) stream.unsubscribe();
     this.streams.clear();
     for (const stream of this.deadStreams) stream.unsubscribe();
@@ -1343,6 +1362,128 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     return tokens.map((deviceToken) => ({ deviceToken, names }));
   }
 
+  // Attach before opening a group, including for a synchronous validation refusal.
+  // Existing streams are shared, so an overlapping device is never subscribed twice.
+  private attachDevices(
+    devices: Array<{ deviceToken: string; names: Set<string> }>,
+    sink: WidgetStreamSink,
+    grouped: boolean,
+  ): Array<() => void> {
+    if (!grouped || this.multiDeviceUnsupported) {
+      return devices.map((d) => this.attach(d.deviceToken, d.names, sink));
+    }
+    const missing = [...new Set(devices.map((d) => d.deviceToken))].filter((t) => !this.streams.has(t));
+    const pending: GroupStream[] = [];
+    for (let i = 0; i < missing.length; i += 1000) {
+      const group: GroupStream = { members: new Map(), unsubscribe: () => {} };
+      for (const token of missing.slice(i, i + 1000)) {
+        const stream: DeviceStream = {
+          subscribers: new Set(),
+          unsubscribe: () => {
+            group.members.delete(token);
+            if (group.members.size === 0) group.unsubscribe();
+          },
+        };
+        group.members.set(token, stream);
+        this.streams.set(token, stream);
+      }
+      pending.push(group);
+    }
+    const detachers = devices.map((d) => this.attach(d.deviceToken, d.names, sink));
+    for (const group of pending) {
+      // An earlier chunk can have refused synchronously.
+      if (this.multiDeviceUnsupported) this.fallbackGroup(group);
+      else this.openGroup(group);
+    }
+    return detachers;
+  }
+
+  private fallbackGroup(group: GroupStream): void {
+    group.unsubscribe();
+    for (const [token, stream] of group.members) {
+      if (this.streams.get(token) === stream) this.streams.delete(token);
+      // Reuse the subscriber set: the original widget detachers still own it.
+      if (stream.subscribers.size) this.ensureStream(token, stream);
+    }
+    group.members.clear();
+  }
+
+  private openGroup(group: GroupStream): void {
+    this.groups.add(group);
+    const handle = this.connection.register();
+    const variables: MeasurementStreamVariables = { deviceTokens: [...group.members.keys()], name: null };
+    let closeSocket: (() => void) | undefined;
+    let operationOpen = true;
+    let up = true;
+    let ended = 0;
+    let reopen: ReturnType<typeof setTimeout> | undefined;
+    const closeOperation = (): void => {
+      if (!operationOpen) return;
+      operationOpen = false;
+      clearTimeout(reopen);
+      closeSocket?.();
+    };
+    group.unsubscribe = () => {
+      closeOperation();
+      handle.release();
+      this.groups.delete(group);
+    };
+    const resumed = (): void => {
+      if (!operationOpen) return;
+      for (const stream of group.members.values()) {
+        for (const subscriber of stream.subscribers) subscriber.sink.reconnected?.();
+      }
+    };
+    const open = (): void => {
+      closeSocket = subscribe(EVENT_AREA, MEASUREMENT_STREAM_MULTI, variables, adapter);
+      if (!operationOpen) closeSocket(); // synchronous refusal, including on reopen
+    };
+    const adapter: SubscriptionSink<MeasurementStreamResult> = {
+      next: (data) => {
+        if (!operationOpen) return;
+        ended = 0;
+        const sample = data.measurementStream;
+        const stream = group.members.get(sample.deviceToken);
+        if (stream && this.streams.get(sample.deviceToken) === stream) this.fanout(sample.deviceToken, sample);
+      },
+      connected: (wasRetry) => {
+        up = true;
+        handle.connected();
+        if (wasRetry) resumed();
+      },
+      closed: () => {
+        up = false;
+        handle.closed();
+      },
+      complete: () => {
+        // Same reopen rules as the per-device operation: never revive sign-out or teardown.
+        if (!operationOpen || !up) return;
+        closeSocket?.();
+        reopen = setTimeout(() => {
+          open();
+          resumed();
+        }, Math.min(1000 * 2 ** ended++, 30_000));
+      },
+      error: (err) => {
+        if (!operationOpen) return;
+        if (refusesDeviceTokens(err)) {
+          this.multiDeviceUnsupported = true;
+          this.fallbackGroup(group);
+          return;
+        }
+        closeOperation();
+        // Evict with the same identity guard as ensureStream. Keep the shared connection
+        // handle until EVERY member detaches, even after a fatal socket close.
+        for (const [token, stream] of group.members) {
+          if (this.streams.get(token) === stream) this.streams.delete(token);
+          if (stream.subscribers.size) this.deadStreams.add(stream);
+          for (const subscriber of stream.subscribers) subscriber.sink.error?.(err);
+        }
+      },
+    };
+    open();
+  }
+
   // attach registers a subscriber on a device's stream (opening the upstream on
   // the first subscriber) and returns a detacher that drops it and closes the
   // upstream once the last subscriber leaves.
@@ -1366,11 +1507,11 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     };
   }
 
-  private ensureStream(deviceToken: string): DeviceStream {
+  private ensureStream(deviceToken: string, retained?: DeviceStream): DeviceStream {
     const existing = this.streams.get(deviceToken);
     if (existing) return existing;
 
-    const stream: DeviceStream = { subscribers: new Set(), unsubscribe: () => {} };
+    const stream: DeviceStream = retained ?? { subscribers: new Set(), unsubscribe: () => {} };
     // Register before subscribing so that even a synchronously-delivered first
     // sample resolves through fanout (unsubscribe stays the no-op placeholder only
     // for the brief window until subscribe() returns the real disposer).
