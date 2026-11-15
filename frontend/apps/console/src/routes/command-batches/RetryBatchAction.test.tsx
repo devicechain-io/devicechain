@@ -125,13 +125,13 @@ beforeEach(() => {
   });
 });
 
-function renderPage() {
+function renderPage(inPlace = false) {
   render(
     <ConfirmProvider>
       <MemoryRouter initialEntries={['/command-batches/batch-1']}>
         <Routes>
           <Route path="/command-batches/:token" element={<CommandBatchDetailPage />} />
-          <Route path="/command-batches/retry-1" element={<div>retry page</div>} />
+          {!inPlace && <Route path="/command-batches/retry-1" element={<div>retry page</div>} />}
         </Routes>
       </MemoryRouter>
     </ConfirmProvider>,
@@ -254,4 +254,26 @@ describe('the link between a batch and its retries', () => {
     );
     expect(screen.getByRole('link', { name: 'later-2' })).toBeTruthy();
   });
+});
+
+// The real retry success navigates to the same route component with a new token.
+it('replaces the batch after retry navigation in place and closes the previous retry panel', async () => {
+  const original = gqlMock.getMockImplementation()!;
+  let resolve!: (value: unknown) => void;
+  const pending = new Promise((yes) => { resolve = yes; });
+  gqlMock.mockImplementation((service: string, document: unknown, variables: unknown) => {
+    if (String(document).includes('query CommandBatchesByToken') &&
+        (variables as { tokens: string[] }).tokens[0] === 'retry-1') return pending;
+    return original(service, document, variables);
+  });
+  renderPage(true);
+  await openPanel();
+  fireEvent.click(await screen.findByRole('button', { name: 'Retry 2 devices' }));
+  await waitFor(() => expect(world.retryCalls).toHaveLength(1));
+  await waitFor(() => expect(screen.queryByText('Summary')).toBeNull());
+  expect(screen.queryByText('Retry unsuccessful devices')).toBeNull();
+  resolve({ commandBatchesByToken: [batch({ token: 'retry-1', name: 'retried reboot', retryOf: 'batch-1' })] });
+  await screen.findByText('retried reboot');
+  expect(screen.queryByText('Retry unsuccessful devices')).toBeNull();
+  expect(screen.getByRole('link', { name: 'batch-1' }).getAttribute('href')).toBe('/command-batches/batch-1');
 });
