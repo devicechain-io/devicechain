@@ -233,10 +233,14 @@ var exemptions = []Exemption{
 		Reason: "Instance-wide stream suffix, group count and format version only; no tenant data or checkpoint partitions.",
 	},
 	{
+		Schema: "event-processing", Name: "detect_stream_topology", Class: ClassExempt,
+		Reason: "Instance-wide stream suffix, group count and format version only; no tenant data or checkpoint partitions.",
+	},
+	{
 		Schema: "event-processing", Name: "detect_snapshots", Class: ClassExternal, Store: "detect",
 		Reason: "🔴 HOLDS TENANT DATA THAT THIS SWEEP CANNOT REACH, and is erased by the `detect` " +
-			"store instead. One row per DETECT partition, and GA ships a single partition per " +
-			"instance, so this is one opaque blob containing EVERY tenant's open detection windows " +
+			"store instead. One row per DETECT partition (one per instance, or one per shard group " +
+			"when resolved-events is sharded), each an opaque blob holding EVERY one of its tenants' open detection windows " +
 			"and timers — including buffered event values for the purged tenant. It has no tenant " +
 			"column because the engine keys tenancy inside the payload (on the rule id), which no " +
 			"SQL predicate can address. Deleting the row is not the answer either: it is the " +
