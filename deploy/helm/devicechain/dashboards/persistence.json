@@ -3489,7 +3489,7 @@
             "uid": "${datasource}"
           },
           "expr": "topk(10, max by (job, table) ({__name__=~\"devicechain_[a-z0-9]+_append_only_table_bytes\", namespace=\"$namespace\"}))",
-          "legendFormat": "{{table}}"
+          "legendFormat": "{{job}} / {{table}}"
         }
       ],
       "fieldConfig": {
@@ -3544,7 +3544,7 @@
             "uid": "${datasource}"
           },
           "expr": "topk(10, max by (job, table) ({__name__=~\"devicechain_[a-z0-9]+_append_only_table_rows_estimate\", namespace=\"$namespace\"}))",
-          "legendFormat": "{{table}}"
+          "legendFormat": "{{job}} / {{table}}"
         }
       ],
       "fieldConfig": {
