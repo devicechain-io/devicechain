@@ -799,7 +799,15 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 ## Versiones recientes {#recent-releases}
 
-La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (`v1.5`, `v1.4` y `v1.3`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (`v1.6`, `v1.5` y `v1.4`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+
+### v1.7.0 — en desarrollo {#v170-upgrade}
+
+`v1.7.0` es una actualización in situ desde `v1.6.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
+
+#### Cambios de comportamiento {#v170-behaviour-changes}
+
+- **Las entidades nuevas se incorporan a los grupos dinámicos coincidentes al crearse.** Un dispositivo, activo, área o cliente creado después de que un grupo dinámico empezara a usarse en una regla de detección o como ámbito de acceso ahora se incorpora al crearse si el selector del grupo coincide con una entidad sin atributos (por ejemplo, una condición negada como `!("retired" in attr)`). Los miembros de ese ámbito de acceso ahora ven los dispositivos creados después de que el grupo empezara a usarse, y las reglas limitadas al grupo los evalúan. Las entidades creadas antes de la actualización se incorporarán mediante un cambio posterior. Mientras convivan pods antiguos y nuevos durante la actualización gradual, una entidad creada a través de un pod v1.6 no se incorporará hasta entonces.
 
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 

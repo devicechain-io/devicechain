@@ -32,7 +32,7 @@ func newRetiredTokenApi(t *testing.T) (*Api, context.Context) {
 	t.Helper()
 	db := sqlitetest.OpenMemory(t, nil)
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
-	require.NoError(t, db.AutoMigrate(
+	require.NoError(t, db.AutoMigrate(&EntityGroupFacetRef{},
 		&CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &Device{}, &DeviceType{},
 		&EntityRelationship{}, &PendingOwnershipFact{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{},
 	), "migrate")
