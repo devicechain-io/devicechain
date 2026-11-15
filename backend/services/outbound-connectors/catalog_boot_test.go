@@ -11,8 +11,10 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -88,9 +90,12 @@ func startUnderCatalog(t *testing.T, rawConfig string, configure func(*core.Micr
 	safetyGates = governance.NewSafetyGates(Microservice)
 	// As afterMicroserviceInitialized: core/service builds the broker side, buildMetrics hands
 	// the producer on, the limiter is the unconfigured (platform default) one.
-	Svc = service.New(Microservice, service.Spec{Nats: &service.NatsSpec{OnCreate: createNatsComponents}})
+	peers := svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
+	Svc = service.New(Microservice, service.Spec{Nats: &service.NatsSpec{OnCreate: func(nmgr *messaging.NatsManager) error {
+		return createNatsComponents(nmgr, peers)
+	}}})
 	buildMetrics()
-	RateLimiter = buildEgressLimiter(Configuration, Microservice.InstanceConfiguration.Infrastructure, EgressUnresolved)
+	RateLimiter = buildEgressLimiter(Configuration, peers, EgressUnresolved)
 
 	ctx := context.Background()
 	require.NoError(t, Svc.Initialize(ctx), "initializing under the catalog")
