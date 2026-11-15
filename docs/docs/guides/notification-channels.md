@@ -216,6 +216,8 @@ Two more settings shape delivery:
 
 Escalation is safe to run on several replicas: each escalation tier is claimed before it is sent, so exactly one replica delivers it. Each alarm has **one shared escalation clock and tier**. If several escalating policies match, the shortest window sets the cadence, and every cap counts against the shared tier.
 
+The escalation window starts when the platform sends the page, independently of the device event timestamp.
+
 ```graphql
 mutation {
   createNotificationPolicy(request: {
