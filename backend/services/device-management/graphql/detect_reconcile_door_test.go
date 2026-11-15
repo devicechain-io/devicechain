@@ -34,6 +34,10 @@ func reconcileDoorApi(t *testing.T) *model.Api {
 		&model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{}, &model.DeviceProfileActivation{}, &model.MetricDefinition{}, &model.CommandDefinition{},
 		&model.DetectionRule{}, &model.DetectionRuleScopeRef{}, &model.EntityAttribute{},
 		&model.EntityGroupMembership{}, &model.EntityGroupFacetRef{}))
+	if err := rdb.CreatePartialUniqueIndex(db, &model.EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatal(err)
+	}
+
 	api := model.NewApi(&rdb.RdbManager{Database: db})
 	ctx := core.WithTenant(context.Background(), "acme")
 
