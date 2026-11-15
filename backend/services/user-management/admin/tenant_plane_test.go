@@ -641,7 +641,7 @@ func TestTheAdminPlaneCannotEditATenantsOwnRole(t *testing.T) {
 	e.member(t, "boss@acme.example", "acme", []string{iam.TenantAdminRoleToken})
 	_, err := e.s.CreateTenantRole(as("boss@acme.example", "acme", "*"), TenantRoleInput{Token: "tech", Authorities: []string{"device:read"}})
 	require.NoError(t, err)
-	_, err = e.s.UpdateRole(context.Background(), "tenant", "tech", &RoleUpdateRequest{Name: dcgraphql.OptionalStringOf("hijacked")})
+	_, err = e.s.UpdateRole(context.Background(), "tenant", "tech", &RoleUpdateRequest{Name: dcgraphql.OptionalStringOf("hijacked")}, nil)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	roles, err := e.s.ListRoles(context.Background(), nil)
 	require.NoError(t, err)

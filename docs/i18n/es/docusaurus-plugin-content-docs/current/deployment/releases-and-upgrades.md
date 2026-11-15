@@ -805,6 +805,38 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
+#### Seguridad: un dispositivo ya no puede asignarse a un cliente, área o activo {#v160-device-relationship-refused}
+
+- Un evento `NewRelationship` que nombre un tipo de relación con seguimiento (el tipo integrado `assigned` o cualquier tipo marcado con seguimiento) o el tipo integrado `contains` se rechaza y se registra en el flujo `failed-events` con motivo `Invalid` en su primera entrega, sin reintentos. Esto cambia lo que hace un evento de dispositivo aceptado; la [política de versiones](./versioning-policy.md) lo permite para una corrección de seguridad.
+- Asigna los dispositivos con un código de reclamación o con la mutación `createEntityRelationship`.
+- Las relaciones creadas anteriormente por los dispositivos no se eliminan. Revisa las relaciones con seguimiento de tus dispositivos.
+- Los tipos sin seguimiento, incluido `member`, se siguen creando, salvo que tu tenant haya marcado ese tipo con seguimiento. El propio evento `NewRelationship` ya no lleva el nuevo destino como ancla: una relación sin seguimiento no es propiedad, así que el evento queda acotado por las anclas existentes del dispositivo, igual que su siguiente evento de telemetría.
+- Durante la actualización gradual, los pods que siguen en v1.5 crean la relación hasta que se sustituyen.
+
+#### Antes de actualizar {#v160-before-upgrade}
+
+Revise la configuración de instancia editada a mano antes de desplegar los pods. Estos rechazos son nuevos desde `v1.5.0`; los ajustes de servicio inválidos impiden el arranque y pueden dejar los pods reiniciándose. Las claves de servicio siguientes van bajo `functionalAreas.<area>.config`.
+
+- **La retención de claves debe cubrir los tokens de renovación si la rotación está activa.** En `user-management`, cuando `auth.signingKeyMaxAgeDays > 0`, `auth.signingKeyRetentionDays × 86400` debe ser al menos `auth.refreshTokenTtlSeconds` tras aplicar los valores predeterminados; se admite la igualdad. Antes, la rotación alargaba silenciosamente una retención menor. Una retención de `0` toma 8 días y el TTL de renovación predeterminado es 604800 segundos (7 días). Aumente la retención o reduzca el TTL antes de actualizar. Sin rotación, esta comparación no se aplica. El chart no compara estos campos y `dcctl` ya rechaza las superposiciones de este bloque auth.
+- **Se rechaza el desbordamiento del TTL de tokens.** `user-management` rechaza ahora `auth.accessTokenTtlSeconds` o `auth.refreshTokenTtlSeconds` por encima de **9223372036 segundos**, antes de convertirlos en una duración. `0` sigue tomando los valores predeterminados (900 y 604800 segundos respectivamente); los TTL negativos ya eran inválidos. El esquema de Helm también aplica el límite superior.
+- **Se rechaza el desbordamiento de la purga de tenants.** En `user-management`, `tenantPurge.intervalSeconds`, `tenantPurge.settleSeconds` y `tenantPurge.tokenHoldSeconds` no pueden superar **9223372036 segundos**. Siguen las reglas existentes: un intervalo negativo desactiva el coordinador; los valores settle/hold negativos se rechazan y se mantienen sus mínimos de seguridad.
+- **Se rechaza el desbordamiento de cartas muertas.** En `user-management`, `deadLetters.retentionDays` no puede superar **106751 días** y `deadLetters.sweepSeconds` no puede superar **9223372036 segundos**. Se mantienen las reglas existentes de valores predeterminados, desactivación y retención mínima.
+- **Se rechaza el desbordamiento de las sondas de presencia Sparkplug.** En `sparkplug-ingest`, `presence.probeSeconds` y `presence.probeWindowSeconds` no pueden superar **9223372036 segundos**. `0` sigue tomando 1800 y 10 segundos respectivamente. Se mantienen los mínimos: un intervalo explícito es de al menos 60 segundos; una ventana explícita es de al menos 5 segundos y estrictamente menor que el intervalo.
+- **Mantenga ausente `infrastructure.nats.shardGroups` durante todo el despliegue v1.5 → v1.6.** Un pod `v1.5` rechaza esta nueva clave como desconocida si carga la nueva configuración durante el despliegue. Termine de actualizar todos los pods antes de activarla. Si se incluye, `count` debe ser 2–16; los sufijos deben ser únicos y limitarse a `inbound-events` y `resolved-events`; las claves de `placementTags` deben ser números de grupo entre 1 y `count - 1`, con etiquetas no vacías ni compuestas solo por espacios. Los bloques inválidos se rechazan.
+
+#### Nuevos valores y comandos {#v160-values-commands}
+
+| Ajuste o comando | Cambio / acción del operador |
+|---|---|
+| `--size perf-20k` | Nuevo preajuste de rendimiento: solicitud del broker de 6 CPU / 6Gi, límite de memoria de 10Gi, JetStream de 40Gi y almacenamiento de eventos de 260Gi. No promete el objetivo de latencia PUBACK de 50 ms; el preajuste aún no se ha medido tal como está definido. |
+| GKE `nats_jetstream_storage_class` | Los brokers nuevos usan `premium-rwo` (`pd-ssd`) cuando existe esa clase GKE; se rechaza una clase GKE `premium-rwo` con otro tipo de disco. Prevalecen los valores explícitos. Los brokers/PVC existentes y las actualizaciones conservan su clase; esto no migra discos. |
+| `infrastructure.nats.shardGroups` | Enrutamiento opcional por tenant para los dos streams de ingesta; su ausencia conserva el enrutamiento actual. Los streams de grupo multiplican las reservas por `count`: calcule la capacidad antes de activarlo. Actívelo solo tras completar el despliegue. |
+| `dcctl backup`, `dcctl backup inspect --verify`, `dcctl restore --plan` | Comandos en **vista previa** para conjuntos locales de copias de streams/objetos, verificación de bytes y planificación de restauración de solo lectura. No hay comando que aplique la restauración ni checkpoint coordinado de bases de datos. Véase [Exportar streams y contenido de objetos](./disaster-recovery.md#export-streams-objects). |
+
+#### Autoridades para acciones automatizadas {#v160-action-authorities}
+
+Crear o publicar una acción automatizada requiere la autoridad para ejecutarla. Crear o actualizar una regla con una acción `sendCommand`, y publicar o volver a una versión de perfil cuyas reglas habilitadas incluyan una, requiere `command:write` además de `device:write`. Las acciones `httpCall` y `publish` requieren `connector:write`. Un rol que solo tenga `device:write` puede seguir creando y publicando reglas que únicamente generen alarmas. Las reglas ya publicadas siguen ejecutándose; se comprueban en la siguiente publicación o reversión. Revise los roles que crean automatizaciones antes de actualizar. Las réplicas antiguas de `device-management` no aplican esta comprobación hasta que se sustituyan.
+
 #### Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación {#v160-broker-reload}
 
 Una recarga completa del broker cerraba todas las conexiones admitidas por el callout de autenticación, entre ellas las de todos los dispositivos MQTT que se autentican con un nombre de usuario. El broker ahora se compila con `nats-server` `v2.15.3`, por lo que un cambio en el conjunto de CA del Secret TLS del broker (una rotación de CA), o una recarga manual, mantiene abiertas esas conexiones. Una recarga sin reinicio solo ocurre cuando el sidecar config-reloader del chart envía SIGHUP porque cambió el Secret TLS montado, o cuando un operador ejecuta `nats-server --signal reload` a mano.
@@ -826,6 +858,18 @@ Un fallo del decodificador de carga útil que se vuelve a entregar (por ejemplo,
 #### Métricas y una alerta para las acciones de agentes (Preview) {#v160-agent-metrics}
 
 `device-management` informa ahora de las acciones de agentes: propuestas por tipo y resultado, aprobaciones por resultado, ejecuciones por tipo y resultado con su duración, y propuestas que caducaron. El panel Platform incorpora una fila **Agent actions (preview)**, y una nueva alerta de aviso, `AgentExecutionsFailing`, se dispara cuando las aprobaciones finales no llegan a completarse de forma continuada. Las denegaciones no la disparan: un cambio de dependencia, una denegación de la política, una barrera de desactivación cerrada o una denegación del aprobador se cuentan con su propio resultado. Las métricas figuran en la [referencia de métricas](./metrics-reference.md), y la alerta tiene una entrada en el [manual de alertas](./alert-runbook.md#agentexecutionsfailing). Como las acciones de agentes, están en Preview: los nombres y las etiquetas aún pueden cambiar en una versión menor.
+
+#### Una pestaña de la consola ya no continúa con el inicio de sesión de otra pestaña {#v160-console-tab-session}
+
+Una pestaña de la consola cuya sesión ha terminado ya no continúa con una sesión que otra pestaña abrió para otro inquilino o usuario; vuelve al inicio de sesión.
+
+- **No es necesario hacer nada.**
+
+#### Los fallos de ingesta inválidos identifican el dispositivo {#v160-invalid-failures-name-the-device}
+
+Los fallos de ingesta con motivo `INVALID` que device-management registró para un evento legible (un valor que incumple la definición de su métrica, un evento de más de 366 días o un rechazo del decodificador) ahora identifican el dispositivo y el tipo de evento, y se limitan por dispositivo como cualquier otro motivo. Antes de esta versión se mostraban sin dispositivo y compartían un límite de diez registros por hora para todo el tenant. Los registros indexados antes de la actualización no se reescriben.
+
+- **No hay que hacer nada.** No se recuperan registros históricos. Ahora se aplican los límites existentes: diez registros por dispositivo y motivo por hora, con un máximo de 1000 registros detallados por tenant y motivo por hora. Una carga inválida en toda la flota puede alcanzar ese máximo.
 
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
 

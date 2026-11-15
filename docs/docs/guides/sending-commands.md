@@ -5,6 +5,8 @@ title: Sending a Command
 
 # Sending a Command
 
+Before you start, register the target device and, for a declared command vocabulary, attach and publish a profile that declares the command. To complete the lifecycle, connect a device client that can receive commands and report their outcomes; an HTTP telemetry POST alone cannot do that. The [quickstart continuation](../quickstart/first-device.md#next-an-alarm-and-a-command) walks through this setup.
+
 This guide covers the operator's half of two-way command dispatch: you issue a command, tell
 an accepted one from a refused one, and follow it to an outcome. The device's half — receiving
 a command and reporting what happened — is in
@@ -20,6 +22,12 @@ The first step below is the one exception. Finding out what a device accepts is 
 `device-management` query. It uses a different endpoint,
 `https://<your-host>/api/device-management/graphql`, and a different authority,
 `device:read`.
+
+## Automated action authorities
+
+Authoring or publishing an automated action now requires the authority to perform it. Creating or updating a rule with a `sendCommand` action, and publishing or rolling back to a profile version whose enabled rules include one, requires `command:write` in addition to `device:write`. `httpCall` and `publish` actions require `connector:write`. A role that holds `device:write` alone can still author and publish rules that only raise alarms.
+
+Action authority is checked on the effective rule on every create or update, even for disabled rules. Publishing and rolling back check all enabled rules in the selected profile version, even when only a metric changed. The publisher must hold the action authorities; an automation-review approver does not need them. Adopting a profile whose actions were already authorized does not require these additional authorities.
 
 ## Find out what the device accepts {#find-out-what-the-device-accepts}
 
@@ -58,8 +66,7 @@ mutation {
     token: "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
     deviceToken: "sensor-001",
     name: "reboot",          # the commandKey, not the display name
-    payload: "{\"delaySeconds\":5}",
-    expiresAt: "2026-08-15T00:00:00Z"
+    payload: "{\"delaySeconds\":5}"
   }) {
     command { token status queuedTime }
     rejection { code reason }

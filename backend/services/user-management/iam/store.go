@@ -5,6 +5,7 @@ package iam
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -399,7 +400,22 @@ func (s *Store) CreateRole(ctx context.Context, r *Role) error {
 // UpdateRole persists the mutable fields of an already-loaded role (name,
 // description, authorities). Save writes by primary key.
 func (s *Store) UpdateRole(ctx context.Context, r *Role) error {
-	return s.sys(ctx).Save(r).Error
+	return rdb.AdvancingFrom(s.sys(ctx), r.UpdatedAt).Save(r).Error
+}
+
+// ErrRoleConflict tells an editor to reload a role that changed since it was read.
+var ErrRoleConflict = rdb.NewStaleWriteError("role")
+
+// SaveRoleIfUnmoved atomically persists an already validated role only while its
+// loaded version still matches. Keep the loaded record for audit identity.
+func (s *Store) SaveRoleIfUnmoved(ctx context.Context, r *Role) error {
+	authorities, err := json.Marshal(r.Authorities)
+	if err != nil {
+		return err
+	}
+	return rdb.UpdateIfUnmoved(s.sys(ctx), r, r.UpdatedAt, map[string]any{
+		"name": r.Name, "description": r.Description, "authorities": string(authorities),
+	}, ErrRoleConflict)
 }
 
 // DeleteRole clears the role's assignment join rows (from the identity system-role,
