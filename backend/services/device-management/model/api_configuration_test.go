@@ -49,6 +49,9 @@ func configTestApiAt(t *testing.T, dsn string) (*Api, context.Context) {
 		&DeviceConfigurationRevision{}, &DeviceConfigurationState{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatal(err)
+	}
 	return NewApi(&rdb.RdbManager{Database: db}), core.WithTenant(context.Background(), "acme")
 }
 
