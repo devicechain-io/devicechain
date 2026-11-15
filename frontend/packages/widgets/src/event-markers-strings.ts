@@ -34,7 +34,7 @@ export interface EventMarkerStrings {
   failed: Record<EventKind, string>;
 }
 
-export const EVENT_MARKER_STRINGS: Record<'en' | 'es', EventMarkerStrings> = {
+export const EVENT_MARKER_STRINGS: Record<'en' | 'es' | 'zh-CN', EventMarkerStrings> = {
   en: {
     events: (n) => `Events in this range (${n})`,
     otherAlarms: (n) => `Other alarms on this device (${n})`,
@@ -89,8 +89,19 @@ export const EVENT_MARKER_STRINGS: Record<'en' | 'es', EventMarkerStrings> = {
     notInRecording: { alarm: 'Marcadores de alarmas: no están en esta grabación', command: 'Marcadores de comandos: no están en esta grabación' },
     failed: { alarm: 'No se pudieron cargar los marcadores de alarmas', command: 'No se pudieron cargar los marcadores de comandos' },
   },
+  'zh-CN': {
+    events: (n) => `此范围内的事件（${n}）`, otherAlarms: (n) => `此设备的其他告警（${n}）`,
+    noMeasurement: '测量项未知', aboutMeasurement: (m) => `关于 ${m}`, alarm: '告警', command: '命令',
+    severity: { CRITICAL: '危急', MAJOR: '严重', MINOR: '次要', WARNING: '警告', INDETERMINATE: '未确定' },
+    raised: (t) => `触发于 ${t}`, cleared: (t) => `清除于 ${t}`, stillActive: '仍处于活动状态', sent: (t) => `发送于 ${t}`,
+    outcome: { SUCCESSFUL: '成功', FAILED: '失败', TIMEOUT: '超时', EXPIRED: '已过期', CANCELLED: '已取消', QUEUED: '已排队', SENT: '已发送，等待回复', HELD: '已暂缓', PARKED: '已搁置' },
+    more: (n) => `另有 ${n} 条未显示`,
+    notInRecording: { alarm: '告警标记：此录制中未包含', command: '命令标记：此录制中未包含' },
+    failed: { alarm: '无法加载告警标记', command: '无法加载命令标记' },
+  },
 };
 
 export function eventMarkerStrings(locale: string | undefined = viewerLocale()): EventMarkerStrings {
-  return locale?.toLowerCase().split('-')[0] === 'es' ? EVENT_MARKER_STRINGS.es : EVENT_MARKER_STRINGS.en;
+  const language = locale?.toLowerCase().split('-')[0];
+  return language === 'es' ? EVENT_MARKER_STRINGS.es : language === 'zh' ? EVENT_MARKER_STRINGS['zh-CN'] : EVENT_MARKER_STRINGS.en;
 }
