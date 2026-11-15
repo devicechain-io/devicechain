@@ -79,10 +79,8 @@ func TestWithoutAPullLayerBehaviourIsUnchanged(t *testing.T) {
 	}
 }
 
-// TestAnUndecidableChannelHoldsRatherThanPublishes: when device-management cannot say which
-// devices are pull devices, publishing risks stranding a pull device's command; holding only delays
-// anyone else's.
-func TestAnUndecidableChannelHoldsRatherThanPublishes(t *testing.T) {
+// An undecided channel leaves commands queued and recovers on the next sweep.
+func TestAnUndecidableChannelDefersUntilTheNextSweep(t *testing.T) {
 	api := &fakeApi{lockAvailable: true, pending: []*model.Command{queued(1, "c1")}}
 	writer := &recordingWriter{}
 	proc := procWith(api, writer)
@@ -92,8 +90,13 @@ func TestAnUndecidableChannelHoldsRatherThanPublishes(t *testing.T) {
 
 	proc.sweepLocked(context.Background())
 
-	if writer.count() != 0 || len(api.held) != 1 {
-		t.Fatalf("published %d held %v; an undecided channel must hold", writer.count(), api.held)
+	if writer.count() != 0 || len(api.held) != 0 || len(api.markedSent) != 0 {
+		t.Fatalf("published %d held %v; an undecided channel must stay queued", writer.count(), api.held)
+	}
+	proc.Presence = presence.WithPullChannels(presence.Empty{}, pullSet{})
+	proc.sweepLocked(context.Background())
+	if writer.count() != 1 || len(api.markedSent) != 1 {
+		t.Fatalf("recovery without reconciliation: published %d, claimed %v", writer.count(), api.markedSent)
 	}
 }
 

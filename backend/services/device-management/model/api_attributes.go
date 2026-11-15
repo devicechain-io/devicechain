@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // This file holds the current-state EntityAttribute API (ADR-012). Attributes
@@ -60,29 +61,6 @@ func (api *Api) SetEntityAttribute(ctx context.Context,
 		return nil, err
 	}
 
-	// Upsert: update an existing (entity, scope, key) row or create a new one.
-	existing := &EntityAttribute{}
-	result := api.RDB.DB(ctx).Where(
-		"entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",
-		request.EntityType, entityId, request.Scope, request.AttrKey).First(existing)
-	if result.Error == nil {
-		existing.ValueType = request.ValueType
-		existing.Value = rdb.NullStrOf(request.Value)
-		existing.LastUpdated = time.Now()
-		// Same-txn membership recompute (ADR-062 S2): a SHARED-scope facet change can move
-		// this entity in/out of a rule-scoped group, so the read-model is updated in the
-		// write's transaction (a no-op when no rule references the changed key).
-		if err := api.writeAttrThenRecompute(ctx, request.EntityType, entityId, request.AttrKey, request.Scope,
-			func(db *gorm.DB) error { return db.Save(existing).Error }); err != nil {
-			return nil, err
-		}
-		api.emitDeviceAttributeForSet(ctx, request, existing.LastUpdated)
-		return existing, nil
-	}
-	if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		return nil, result.Error
-	}
-
 	created := &EntityAttribute{
 		EntityType:  request.EntityType,
 		EntityId:    entityId,
@@ -93,11 +71,21 @@ func (api *Api) SetEntityAttribute(ctx context.Context,
 		LastUpdated: time.Now(),
 	}
 	if err := api.writeAttrThenRecompute(ctx, request.EntityType, entityId, request.AttrKey, request.Scope,
-		func(db *gorm.DB) error { return db.Create(created).Error }); err != nil {
+		func(db *gorm.DB) error { return upsertAttributeOnTx(db, created) }); err != nil {
 		return nil, err
 	}
 	api.emitDeviceAttributeForSet(ctx, request, created.LastUpdated)
 	return created, nil
+}
+
+// upsertAttributeOnTx lets the database serialize competing writes to the same live key.
+// RETURNING preserves the stored identity and creation time on an update.
+func upsertAttributeOnTx(db *gorm.DB, row *EntityAttribute) error {
+	return db.Clauses(clause.OnConflict{
+		Columns:     []clause.Column{{Name: "tenant_id"}, {Name: "entity_type"}, {Name: "entity_id"}, {Name: "scope"}, {Name: "attr_key"}},
+		TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "deleted_at IS NULL"}}},
+		DoUpdates:   clause.AssignmentColumns([]string{"value_type", "value", "last_updated", "updated_at"}),
+	}, clause.Returning{}).Create(row).Error
 }
 
 // emitDeviceAttributeForSet emits a device-attribute fact for a just-committed attribute
