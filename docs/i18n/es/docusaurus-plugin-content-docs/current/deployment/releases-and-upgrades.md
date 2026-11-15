@@ -807,6 +807,10 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
+#### Las detecciones en vivo de reglas de geocercas necesitan acceso a la ubicación {#v160-detection-stream-location}
+
+La suscripción `detectionStream` ya no entrega detecciones de reglas que comprueban si un dispositivo está dentro de una geocerca a quien no tenga `location:read`, al igual que la vista previa de reglas. Las demás detecciones no cambian. Un panel o agente que supervise reglas de geocercas necesita un rol o token que incluya acceso a la ubicación. Un token emitido con el ámbito OAuth de solo lectura no incluye `location:read`.
+
 #### Seguridad: un dispositivo ya no puede asignarse a un cliente, área o activo {#v160-device-relationship-refused}
 
 - Un evento `NewRelationship` que nombre un tipo de relación con seguimiento (el tipo integrado `assigned` o cualquier tipo marcado con seguimiento) o el tipo integrado `contains` se rechaza y se registra en el flujo `failed-events` con motivo `Invalid` en su primera entrega, sin reintentos. Esto cambia lo que hace un evento de dispositivo aceptado; la [política de versiones](./versioning-policy.md) lo permite para una corrección de seguridad.

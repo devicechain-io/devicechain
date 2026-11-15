@@ -518,6 +518,10 @@ dcctl bootstrap local devicechain
 
 `v1.6.0` 是从 `v1.5.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
 
+#### 地理围栏规则的实时检测需要位置访问权限 {#v160-detection-stream-location}
+
+`detectionStream` 订阅不再向缺少 `location:read` 权限的调用者发送测试设备是否位于地理围栏内的规则的检测结果，与规则预览的权限要求保持一致。其他检测结果不变。监视地理围栏规则的仪表板或智能体需要使用包含位置访问权限的角色或令牌。通过只读 OAuth 作用域签发的令牌不包含 `location:read`。
+
 #### 安全：设备不能再将自身分配给客户、区域或资产 {#v160-device-relationship-refused}
 
 - 如果 `NewRelationship` 事件指定了跟踪关系类型（内置 `assigned` 或任何标记为跟踪的类型）或内置 `contains`，则在第一次投递时拒绝该事件，并以原因 `Invalid` 记录到 `failed-events` 流，不会重试。这改变了已接受的设备事件的行为；[版本策略](./versioning-policy.md)允许安全修复作出此类更改。
