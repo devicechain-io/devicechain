@@ -1,0 +1,73 @@
+{{/*
+Generic maintenance-task and processor-loop warnings.
+Task success is aggregated across replicas: a replica that never wins a distributed
+lock must not alert while another replica is completing the work. NaN means no
+success yet; only a declared interval and an old process make that actionable.
+Loop labels are extracted before increase removes metric names; a subquery supplies
+the range vector needed by increase. Device-state already has its own discard warning.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: uniform-signals
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.uniform-signals
+      rules:
+        - alert: PeriodicTaskStalled
+          expr: |
+            (
+              time() - max by (job, task) (label_replace(
+                {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_last_success_timestamp_seconds",namespace="{{ $ns }}"},
+                "task", "$1", "__name__", "[^_]+_[^_]+_(.+)_last_success_timestamp_seconds"))
+              > 3 * max by (job, task) (label_replace(
+                {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_pass_interval_seconds",namespace="{{ $ns }}"},
+                "task", "$1", "__name__", "[^_]+_[^_]+_(.+)_pass_interval_seconds")) + 300
+            )
+            or
+            (
+              (
+                time() - min by (job) (process_start_time_seconds{namespace="{{ $ns }}"})
+                > on (job) group_right ()
+                (3 * max by (job, task) (label_replace(
+                  {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_pass_interval_seconds",namespace="{{ $ns }}"},
+                  "task", "$1", "__name__", "[^_]+_[^_]+_(.+)_pass_interval_seconds")) + 300)
+              )
+              and on (job, task)
+              (
+                max by (job, task) (label_replace(
+                  {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_last_success_timestamp_seconds",namespace="{{ $ns }}"},
+                  "task", "$1", "__name__", "[^_]+_[^_]+_(.+)_last_success_timestamp_seconds"))
+                !=
+                max by (job, task) (label_replace(
+                  {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_last_success_timestamp_seconds",namespace="{{ $ns }}"},
+                  "task", "$1", "__name__", "[^_]+_[^_]+_(.+)_last_success_timestamp_seconds"))
+              )
+            )
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#periodictaskstalled"
+            summary: "A maintenance task is not completing successful passes"
+            description: "No replica of this job and task has succeeded within three declared pass intervals plus five minutes, or the task has never succeeded and the job has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task."
+        - alert: ProcessorLoopDropping
+          expr: |
+            sum by (job, loop) (increase(label_replace(
+              {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_messages_total",__name__!="devicechain_devicestate_state_messages_total",result="dropped",namespace="{{ $ns }}"},
+              "loop", "$1", "__name__", "[^_]+_[^_]+_(.+)_messages_total")[15m:])) > 0
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#processorloopdropping"
+            summary: "A processor loop is giving up on messages"
+            description: "In the last 15 minutes, this job and loop gave up on messages after their delivery attempts were exhausted. Check the job and loop labels and the service logs for the failed operation, then check its database, broker and downstream dependencies. Policy-refused traffic counted as unwanted does not trigger this alert. Device-state discards are covered separately by DeviceStateDroppingEvents."
+{{- end }}

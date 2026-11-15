@@ -502,13 +502,20 @@ TOKEN_TAIL = re.compile(r"[A-Za-z0-9_.:-]*")
 # this check said nothing about. A misspelled suffix there selects nothing, and the
 # alert over it evaluates an empty vector and never fires.
 #
-# The form the chart uses is resolved: the subsystem is a wildcard, and the
-# SUFFIX after it must be a registered Go literal, exactly as the metric part of a
-# literal series must be. Any OTHER regex after `devicechain_` is reported rather than
+# The subsystem may be a wildcard with a registered Go literal suffix, or both
+# subsystem and task/loop may be wildcards with a registered helper-family suffix.
+# Histogram/summary helpers require a derived series suffix. Any OTHER regex after
+# `devicechain_` is reported rather than
 # skipped, because a form this check does not understand is a form it cannot vouch for.
 # Each literal branch ends at its quote or the next complete selector alternative.
 # A prefix match alone would silently accept an unresolvable suffix such as metric*.
-REGEX_SELECTOR = re.compile(r"devicechain_(\[a-z0-9\]\+)_([a-z0-9_]+)(?=\\?[\"']|\|devicechain_)")
+REGEX_SELECTOR = re.compile(r"devicechain_(\[a-z0-9\]\+(?:_\[a-z0-9_\]\+)?)_([a-z0-9_]+)(?=\\?[\"']|\|devicechain_)")
+HELPER_SUFFIXES = {
+    suffix.lstrip("_") + derived
+    for families in HELPER_FAMILIES.values()
+    for suffix, kind in families
+    for derived in DERIVED_SUFFIXES.get(kind, ("",))
+}
 NAME_CHAR = re.compile(r"[a-z0-9_]")
 
 seen = {}
@@ -527,7 +534,8 @@ for path in dashboards + rule_files:
             problems.append(
                 "%s... (in %s) follows devicechain_ with a form this check cannot resolve.\n"
                 "    A selector by name must be devicechain_[a-z0-9]+_<metric>,\n"
-                "    with <metric> a registered name; anything else is\n"
+                "    with <metric> a registered name, or add _[a-z0-9_]+ before a\n"
+                "    registered helper-family suffix; anything else is\n"
                 "    a selector nothing here can vouch for." % (token, rel))
             continue
         regex_seen.setdefault((sel.group(1), sel.group(2)), set()).add(rel)
@@ -573,6 +581,12 @@ for series in sorted(seen):
         )
 
 for (form, suffix) in sorted(regex_seen):
+    if form.endswith("_[a-z0-9_]+"):
+        if suffix not in HELPER_SUFFIXES:
+            problems.append(
+                "devicechain_%s_%s (in %s) has no registered helper-family suffix %r"
+                % (form, suffix, ", ".join(sorted(regex_seen[(form, suffix)])), suffix))
+        continue
     if bare_histogram(suffix):
         problems.append("devicechain_%s_%s (in %s)\n%s" % (
             form, suffix, ", ".join(sorted(regex_seen[(form, suffix)])), BARE_HISTOGRAM))
@@ -622,6 +636,7 @@ EXTERNAL_SERIES = {
     "go_memstats_heap_inuse_bytes",
     "process_max_fds",
     "process_open_fds",
+    "process_start_time_seconds",
     "process_resident_memory_bytes",
     # kube-state-metrics
     "kube_cnpg_backup_stopped_at",
@@ -1622,6 +1637,10 @@ spec:
           expr: histogram_quantile(0.99, sum by (le) (rate({__name__=~"devicechain_[a-z0-9]+_lat_seconds_bucket", namespace="dc"}[5m]))) > 1
           labels:
             devicechain_instance: dc
+        - alert: ProbeGenericHelper
+          expr: max({__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_pass_interval_seconds", namespace="dc"}) > 0
+          labels:
+            devicechain_instance: dc
         - alert: ProbeExternalInline
           expr: min(kube_pod_status_ready{namespace="dc"}) < 1
           labels:
@@ -1724,6 +1743,10 @@ PY
     'devicechain_.+_probe_total' 'a greedy subsystem regex selector' 'devicechain_.+_probe_total'
   absentcase "$tmpl/prometheusrule-probe.yaml" 'devicechain_[a-z0-9]+_probe_total' \
     'devicechain_[a-z0-9]+_probe_total*' 'a wildcard after a literal metric suffix' 'devicechain_[a-z0-9]+_probe_total*'
+  absentcase "$tmpl/prometheusrule-probe.yaml" 'devicechain_[a-z0-9]+_probe_total' \
+    'devicechain_[a-z0-9]+_[a-z0-9_]+_pass_intervl_seconds' 'a misspelled generic helper suffix' 'devicechain_[a-z0-9]+_[a-z0-9_]+_pass_intervl_seconds'
+  absentcase "$tmpl/prometheusrule-probe.yaml" 'devicechain_[a-z0-9]+_[a-z0-9_]+_pass_interval_seconds' \
+    'devicechain_[a-z0-9]+_[a-z0-9_]+_probe_total' 'a generic suffix outside the helper families' 'devicechain_[a-z0-9]+_[a-z0-9_]+_probe_total'
   absentcase "$dash/probe.json" 'devicechain_selftestarea_sweep_pass_interval_seconds' \
     'devicechain_selftestarea_sweep_pass_intervl_seconds' 'a misspelled periodic interval suffix' 'devicechain_selftestarea_sweep_pass_intervl_seconds'
   G1='(sum(increase(devicechain_selftestarea_probe_total{namespace=\"$namespace\"}[1h])) or vector(0))'
@@ -2169,7 +2192,7 @@ FIXTURE
   if check_tile_parity "$tmp/parity" >/dev/null 2>&1; then fail "did not flag a test expression that drifted from its tile"; fi
   echo "  ok: a promtool expression that drifted from its tile is caught"
 
-  echo "self-test passed: 91 defects, each planted alone, each caught; a clean tree and chart pass"
+  echo "self-test passed: 93 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
 

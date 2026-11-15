@@ -508,6 +508,45 @@ run_rule_tests() {
   fi
 }
 
+# Prove the uniform-signal assertions reject broken subjects, using isolated copies
+# of the rendered rules. A tool failure is not an assertion failure: require
+# promtool's named alert mismatch, after the clean rules have passed above.
+check_uniform_signal_controls() {
+  local rules="$1" tests="$2" controls="$3"
+  mkdir -p "$controls"
+  python3 - "$rules" "$controls" <<'PY'
+import copy, os, sys, yaml
+doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+mutations = [
+    ("replica-min", "PeriodicTaskStalled", "max by (job, task)", "min by (job, task)"),
+    ("inverted-staleness", "PeriodicTaskStalled", "> 3 *", "< 3 *"),
+    ("never-succeeded", "PeriodicTaskStalled", "!=", "=="),
+    ("unwanted", "ProcessorLoopDropping", 'result="dropped"', 'result="unwanted"'),
+    ("device-state", "ProcessorLoopDropping", '__name__!="devicechain_devicestate_state_messages_total",', ""),
+    ("loop-label", "ProcessorLoopDropping", '"loop", "$1"', '"loop", "broken"'),
+]
+for name, alert, old, new in mutations:
+    mutant = copy.deepcopy(doc)
+    rule = next(r for g in mutant["groups"] for r in g["rules"] if r.get("alert") == alert)
+    if old not in rule["expr"]:
+        sys.exit("uniform-signal control did not apply: " + name)
+    rule["expr"] = rule["expr"].replace(old, new)
+    with open(os.path.join(sys.argv[2], name + ".yaml"), "w", encoding="utf-8") as f:
+        yaml.safe_dump(mutant, f)
+PY
+  local mutant output
+  for mutant in "$controls"/*.yaml; do
+    if output="$(run_rule_tests uniform-signals "$controls/stage" "$mutant" "$tests" 2>&1)"; then
+      fail "uniform-signal tests accepted the $(basename "$mutant") defect"
+    fi
+    if ! grep -q 'FAILED' <<<"$output" ||
+       ! grep -Eq 'alertname: (PeriodicTaskStalled|ProcessorLoopDropping)' <<<"$output"; then
+      fail "uniform-signal control failed without an alert assertion mismatch: $output"
+    fi
+    note "uniform-signal negative control rejected $(basename "$mutant")"
+  done
+}
+
 # ---------------------------------------------------------------------------
 # SELF-TEST. 🔴 EACH DEFECT IS PLANTED ALONE. A self-test that plants several at
 # once is satisfied by a checker that finds any ONE of them and is blind to the
@@ -1157,7 +1196,7 @@ helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=
 
 # The rule files this repository knows it ships. Literal, not derived from what
 # rendered: deriving it would restate the render's own output and assert nothing.
-required_groups=(notification-management database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing event-sources device-management container-restarts area-availability safety-gates edge device-state update-management broker event-management token-audience payload-decoder)
+required_groups=(uniform-signals notification-management database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing event-sources device-management container-restarts area-availability safety-gates edge device-state update-management broker event-management token-audience payload-decoder)
 
 extract_rules "$work/rendered.yaml" "$work" "${required_groups[@]}" ||
   fail "the chart did not render the PrometheusRules this check requires"
@@ -1248,6 +1287,7 @@ where the comparison binds."
 # files encode one group's semantics each and an unrelated rule's labels showing up
 # in the results would be a failure here for no reason.
 declare -A rule_tests=(
+  [uniform-signals]="$repo_root/hack/testdata/prometheus-rules-uniform-signals-tests.yaml"
   [notification-management]="$repo_root/hack/testdata/prometheus-rules-notification-management-tests.yaml"
   [database-backup]="$repo_root/hack/testdata/prometheus-rules-tests.yaml"
   [database-storage]="$repo_root/hack/testdata/prometheus-rules-storage-tests.yaml"
@@ -1307,6 +1347,9 @@ expression. A failure here means a rule fires when it should not, or -- far wors
 -- stays silent on a state this platform is supposed to catch."
 
   note "the $group rules fire on the states they claim to"
+  if [ "$group" = uniform-signals ]; then
+    check_uniform_signal_controls "$work/rule-$group.yaml" "$tests_file" "$work/uniform-controls"
+  fi
 done
 
 # ---------------------------------------------------------------------------

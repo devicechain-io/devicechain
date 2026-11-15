@@ -1,0 +1,287 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Run via hack/check-prometheus-rules.sh against the rendered chart group.
+# Quiet cases guard lock losers, undeclared intervals, startup and policy refusals.
+rule_files:
+  - rendered-rules.yaml
+evaluation_interval: 1m
+tests:
+  - name: all replicas NaN on young processes
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: 60x60
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+        values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+        values: 60x60
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: 1500x60
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+        values: 1500x60
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+  - name: interval unset despite an old process
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: -3600x60
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+  - name: unset interval also suppresses stale success
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: '0x60'
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: -3600x60
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+  - name: fresh lock winner suppresses stale and never winning replicas
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: '0x60'
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: 60x60
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+        values: 0+60x60
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+        values: 60x60
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="c"}
+        values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="c"}
+        values: 60x60
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: -3600x60
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+        values: -3600x60
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="c"}
+        values: -3600x60
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+  - name: stalled success respects threshold and ten minute hold
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: '0x60'
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: 60x60
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: -3600x60
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: PeriodicTaskStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: maintenance
+              task: sweep
+            exp_annotations: &id001
+              runbook_url: https://docs.devicechain.io/deployment/alert-runbook#periodictaskstalled
+              summary: A maintenance task is not completing successful passes
+              description: No replica of this job and task has succeeded within three declared pass intervals plus five minutes, or the task has never succeeded and the job has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task.
+  - name: three declared intervals rather than a fixed timeout
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: '0x60'
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: 600x60
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: -3600x60
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+      - eval_time: 46m
+        alertname: PeriodicTaskStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: maintenance
+              task: sweep
+            exp_annotations: *id001
+  - name: all NaN on old processes fires once per job and task
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: 60x60
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+        values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+        values: 60x60
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: -3600x60
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="b"}
+        values: -3600x60
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: PeriodicTaskStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: maintenance
+              task: sweep
+            exp_annotations: *id001
+  - name: never succeeded without a process age stays quiet
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: 60x60
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+  - name: tasks and jobs are independent
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: '0x60'
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: 60x60
+      - series: devicechain_devicemanagement_other_task_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: 0+60x60
+      - series: devicechain_devicemanagement_other_task_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: 60x60
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-devicechain",job="other",pod="a"}
+        values: 0+60x60
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-devicechain",job="other",pod="a"}
+        values: 60x60
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",pod="a"}
+        values: -3600x60
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="other",pod="a"}
+        values: -3600x60
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PeriodicTaskStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: maintenance
+              task: sweep
+            exp_annotations: *id001
+  - name: unwanted increments are not give ups
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="processor",pod="a",result="unwanted"}
+        values: 0+1x60
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ProcessorLoopDropping
+        exp_alerts: []
+  - name: device state drops have a dedicated alert
+    interval: 1m
+    input_series:
+      - series: devicechain_devicestate_state_messages_total{namespace="dci-devicechain",job="processor",pod="a",result="dropped"}
+        values: 0+1x60
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ProcessorLoopDropping
+        exp_alerts: []
+  - name: non device state drops fire immediately and clear after the window
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="processor",pod="a",result="dropped"}
+        values: 0x9 1x50
+      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="processor",pod="b",result="dropped"}
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ProcessorLoopDropping
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ProcessorLoopDropping
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: processor
+              loop: resolve
+            exp_annotations: &id002
+              runbook_url: https://docs.devicechain.io/deployment/alert-runbook#processorloopdropping
+              summary: A processor loop is giving up on messages
+              description: In the last 15 minutes, this job and loop gave up on messages after their delivery attempts were exhausted. Check the job and loop labels and the service logs for the failed operation, then check its database, broker and downstream dependencies. Policy-refused traffic counted as unwanted does not trigger this alert. Device-state discards are covered separately by DeviceStateDroppingEvents.
+      - eval_time: 26m
+        alertname: ProcessorLoopDropping
+        exp_alerts: []
+  - name: counter resets retain loop labels
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="processor",pod="a",result="dropped"}
+        values: 0+1x10 0+1x49
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ProcessorLoopDropping
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: processor
+              loop: resolve
+            exp_annotations: *id002
+  - name: idle installation
+    interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: ProcessorLoopDropping
+        exp_alerts: []
+  - name: another namespace is excluded
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_sweep_last_success_timestamp_seconds{namespace="dci-other",job="maintenance",pod="a"}
+        values: NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN
+      - series: devicechain_devicemanagement_sweep_pass_interval_seconds{namespace="dci-other",job="maintenance",pod="a"}
+        values: 60x60
+      - series: process_start_time_seconds{namespace="dci-other",job="maintenance",pod="a"}
+        values: -3600x60
+      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-other",job="processor",pod="a",result="dropped"}
+        values: 0+1x60
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: ProcessorLoopDropping
+        exp_alerts: []
