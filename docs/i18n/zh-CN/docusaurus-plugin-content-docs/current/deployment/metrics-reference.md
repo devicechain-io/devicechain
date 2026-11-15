@@ -29,6 +29,7 @@ title: 指标参考
 | `command_delivery_claims_lost_total{path}` | 因另一个分发器先领取了指令而放弃的分发，按失败的分发路径区分。“sweep”是周期扫描，“nudge”是指令入队时发出的分发；两者争夺同一行属预期且安全（领取是比较并设置），因此应读取某一路径上有速率而另一路径没有，而不是总数。 |
 | `command_delivery_claims_stranded_total` | 因发布失败、释放也失败而停留在 SENT 的指令。在 LwM2M 上，滞留调和器会重新装载这些指令；在 MQTT 上它们仍会作为 TIMEOUT 过期，错误地归咎于设备。 |
 | `command_delivery_dispatches_exhausted_total` | 因平台向其设备发布的次数达到配置上限而失败的指令，平台因此停止重试。每一行记录为 FAILED 并指明平台为原因，而不是一直重试到 TTL，再针对一个它从未到达的设备记录 TIMEOUT。 |
+| `command_delivery_dispatch_deferred_total` | 因无法确定命令通道而继续排队的命令；每次延后投递尝试均计数。 |
 | `command_delivery_holds_placed_total` | 因设备确定缺席而被扣留、不予分发的指令。 |
 | `command_delivery_holds_released_total` | 因设备回来而被放回分发队列的扣留指令。 |
 | `command_delivery_nudges_applied_total` | 恰好找到一条排队指令并使其通过投递门的分发触发。不是发布次数：在线状态门仍可能扣留该指令或使其失败，与扫描周期上的情况完全相同。 |

@@ -14,8 +14,8 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/solar"
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -38,20 +38,23 @@ func (f fakeSites) DeviceSites(_ context.Context, tokens []string) (map[string]S
 	return out, nil
 }
 
-// newCampaignTestApi builds an Api over ONE connection, so goroutines racing a pass
-// interleave at statement granularity (which is where a claim race lives) without the
-// separate in-memory databases a pooled SQLite would hand each connection.
+// newCampaignTestApi builds an Api over ONE working connection, so racing passes
+// interleave at statement granularity (which is where a claim race lives). An anchor
+// keeps the shared in-memory database alive when a planning deadline closes the
+// working connection; reopening must not silently produce an empty database.
 func newCampaignTestApi(t *testing.T) *Api {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := sqlitetest.OpenMemory(t, &gorm.Config{})
 	sqlDB, err := db.DB()
 	if err != nil {
 		t.Fatal(err)
 	}
-	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxOpenConns(2)
+	anchor, err := sqlDB.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = anchor.Close() })
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatal(err)
 	}

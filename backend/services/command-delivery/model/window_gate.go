@@ -257,12 +257,9 @@ func (api *Api) WaitingWindows(ctx context.Context, after WaitingWindow, limit i
 // window's CURRENT schedule, and reports how many rows it changed. Called under the window's
 // tenant.
 //
-//   - window gone: the hold is cleared (both bounds and the token), and the commands dispatch
-//     as ordinary ones. Deleting a window that device types still use is refused upstream,
-//     so this is a window removed after its last type let go of it. (A type that was
-//     UNASSIGNED, or re-pointed to another window, does not make its old window gone: the
-//     window still exists for every other type using it. That case is RepointWindow's, which
-//     the pass runs first, through the device type's current assignment.)
+//   - window gone: close the stamp, retaining its token and start so the row remains
+//     findable but cannot dispatch in a stale opening. Only RepointWindow releases a
+//     device the owner positively decided is ungated; silence never releases it.
 //   - window open now: every row is bound to the current opening — a future start is brought
 //     forward to now, and the close is set to this opening's. That releases a row that was
 //     waiting for it and re-admits one whose earlier opening passed unclaimed.
@@ -287,8 +284,10 @@ func (api *Api) RestampWindow(ctx context.Context, windowToken string, opening W
 	}
 	switch {
 	case !opening.Found:
-		return update("1 = 1", nil,
-			map[string]any{"dispatch_after": nil, "dispatch_until": nil, "window_token": nil})
+		// Only RepointWindow may release a positively resolved device. Close any stale
+		// opening and keep the token so subsequent passes can resolve the remaining rows.
+		return update("(dispatch_until IS NULL OR dispatch_until > ?)", []any{now},
+			map[string]any{"dispatch_until": now})
 	case opening.OpenNow:
 		// A start already past is kept (any past start admits, and it records when the row
 		// became sendable); only a future one is pulled forward. The close must match.
