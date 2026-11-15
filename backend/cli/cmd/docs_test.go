@@ -18,6 +18,44 @@ var docsRoot = filepath.Join("..", "..", "..", "docs")
 
 const regenerate = "regenerate with: cd backend/cli && go run . docs --out ../../docs"
 
+// Keep the evaluator on one published-image recipe across all living locales.
+// Compact must not silently trade away backups or root-key escrow.
+func TestLaptopRecipeInPublishedDocs(t *testing.T) {
+	for _, tree := range []string{
+		"docs",
+		"i18n/es/docusaurus-plugin-content-docs/current",
+		"i18n/zh-CN/docusaurus-plugin-content-docs/current",
+	} {
+		t.Run(tree, func(t *testing.T) {
+			read := func(page string) string {
+				t.Helper()
+				data, err := os.ReadFile(filepath.Join(docsRoot, filepath.FromSlash(tree), filepath.FromSlash(page)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return normalize(data)
+			}
+			quickstart := read("quickstart/first-device.md")
+			recipe := "dcctl install local --compact --no-tls=false\ndcctl bootstrap local devicechain --host localhost --no-tls\n"
+			if !strings.Contains(quickstart, recipe) {
+				t.Error("laptop recipe must use compact published images while retaining cert-manager, backups and escrow")
+			}
+			for _, required := range []string{"4", "8 GiB", "Git Bash", "WSL", "Pending", "../deployment/bootstrap.md#--compact"} {
+				if !strings.Contains(quickstart, required) {
+					t.Errorf("laptop prerequisites missing %q", required)
+				}
+			}
+			bootstrap := read("deployment/bootstrap.md")
+			if !strings.Contains(bootstrap, "../quickstart/first-device.md#1-bring-up-an-instance") {
+				t.Error("bootstrap must link to the canonical laptop recipe")
+			}
+			if strings.Contains(bootstrap, "dcctl install local --dev\ndcctl bootstrap local devicechain --dev") {
+				t.Error("bootstrap still offers the competing source-build laptop recipe")
+			}
+		})
+	}
+}
+
 // normalize makes the comparison independent of the checkout's line endings: a Windows
 // checkout may materialize the committed pages with CRLF.
 func normalize(b []byte) string { return strings.ReplaceAll(string(b), "\r\n", "\n") }

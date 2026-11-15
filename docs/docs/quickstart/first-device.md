@@ -28,6 +28,14 @@ You need `dcctl` plus four tools on your `PATH`: `docker`, `kubectl`,
 `dcctl install` and `dcctl bootstrap` each run a preflight first, and **stop** if one of the four
 tools is missing. A gap costs you the first ten seconds rather than ten minutes.
 
+- **Docker resources:** plan for at least **4 CPUs and 8 GiB of memory available to Docker**,
+  leaving memory for your host OS too. These are the existing preflight recommendations,
+  not an enforced minimum or a measured guarantee. The laptop recipe below uses `--compact`
+  to lower scheduling requests and omit monitoring; without it, pods that do not fit can
+  stay `Pending` until the install times out. See [compact sizing](../deployment/bootstrap.md#--compact).
+- **On Windows**, run the Bash examples in Git Bash or WSL, not PowerShell. Use the
+  PowerShell block below only to download the Windows binary. In WSL, install the Linux
+  tools inside WSL and enable Docker Desktop's WSL integration for that distribution.
 - You do not need the `helm` command. `dcctl` carries the chart inside itself and installs it
   through Helm's Go library, and the preflight does not check for the binary.
 - `ko` and `cloud-provider-kind` are only warnings. You need `ko` solely to build images from
@@ -95,9 +103,14 @@ the release's signatures as well, see [Verifying releases](../deployment/verifyi
 Prepare the cluster once, then create the instance on it:
 
 ```bash
-dcctl install local
+dcctl install local --compact --no-tls=false
 dcctl bootstrap local devicechain --host localhost --no-tls
 ```
+
+`--compact` is chosen once for the cluster and inherited by the instance. Keeping
+`--no-tls=false` at install retains cert-manager and database backups; the bootstrap's
+`--no-tls` serves only this instance over HTTP. This recipe uses published images and keeps
+root-key escrow enabled. `--dev` instead builds from source and skips escrow on bootstrap.
 
 :::note In a script or CI job
 `dcctl bootstrap` asks for a passphrase to seal the root-key escrow artifact. With no terminal to

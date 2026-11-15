@@ -104,12 +104,7 @@ curl --cacert instance-ca.pem https://<host>/
 
 该颁发机构有效期十年。主机证书续期不会改变它，且 chart 固定了其私钥（`rotationPolicy: Never`），因此即使颁发机构被重新签发，仍能验证旧机构签发的证书。只有删除该机构自身的 Secret（`devicechain-tls-ca`）才会创建新的机构，此时客户端需要重新获取 `ca.crt`。从旧版 chart 升级的实例会保留原有的自签名证书直到下次续期；删除 `devicechain-tls` Secret 可立即由该颁发机构重新签发。已迁移到 Gateway 的实例会一直使用 `devicechain-tls-gateway`，其中是同一机构签发的新叶子证书，因此请改从该 Secret 获取 `ca.crt`。
 
-完整标志见[安装标志](#install-flags)。笔记本上：
-
-```bash
-dcctl install local --dev
-dcctl bootstrap local devicechain --dev
-```
+完整标志见[安装标志](#install-flags)。在笔记本上，请遵循[快速入门步骤](../quickstart/first-device.md#1-bring-up-an-instance)，包括其 [CPU、内存和 Windows shell 前提条件](../quickstart/first-device.md#prerequisites)。
 
 集群 install 未完成时，bootstrap 拒绝并提示应运行的安装命令，upgrade 同样拒绝。
 

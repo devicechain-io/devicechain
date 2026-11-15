@@ -162,12 +162,9 @@ curl --cacert instance-ca.pem https://<host>/
 
 The authority lasts ten years. Renewing the host certificate keeps it, and the chart pins its private key (`rotationPolicy: Never`), so even a re-issued authority still verifies what the old one signed. Only deleting the authority's own Secret (`devicechain-tls-ca`) creates a new one, and clients must then fetch `ca.crt` again. An instance upgraded from an earlier chart keeps its previous self-signed certificate until it next renews; delete the `devicechain-tls` Secret to have it reissued from the authority at once. An instance that has moved to the Gateway serves `devicechain-tls-gateway` for good, a new leaf from the same authority, so fetch `ca.crt` from that Secret instead.
 
-The flags are listed under [Install flags](#install-flags). On a laptop:
-
-```bash
-dcctl install local --dev
-dcctl bootstrap local devicechain --dev
-```
+The flags are listed under [Install flags](#install-flags). For a laptop, follow the
+[quickstart recipe](../quickstart/first-device.md#1-bring-up-an-instance), including its
+[CPU, memory and Windows shell prerequisites](../quickstart/first-device.md#prerequisites).
 
 `dcctl bootstrap` refuses on a cluster where `dcctl install` has not completed, and the
 refusal names the install command to run. `dcctl upgrade` refuses in the same case.

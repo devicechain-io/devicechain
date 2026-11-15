@@ -29,6 +29,15 @@ más abajo en [Requisitos previos](#prerequisites).
 **detienen** si falta alguna de las cuatro herramientas. Una carencia te cuesta los diez primeros
 segundos y no diez minutos.
 
+- **Recursos de Docker:** prevé al menos **4 CPU y 8 GiB de memoria disponibles para Docker**,
+  dejando memoria también para el sistema operativo. Son las recomendaciones actuales de la
+  comprobación previa, no un mínimo obligatorio ni una garantía medida. La receta para portátil
+  de abajo usa `--compact` para reducir las reservas y omitir la monitorización; sin él, los pods
+  que no caben pueden seguir en `Pending` hasta agotar el tiempo de instalación.
+  Consulta [el tamaño compacto](../deployment/bootstrap.md#--compact).
+- **En Windows**, ejecuta los ejemplos Bash en Git Bash o WSL, no en PowerShell. Usa el bloque
+  PowerShell de abajo solo para descargar el binario de Windows. En WSL, instala las herramientas
+  de Linux dentro de WSL y activa la integración WSL de Docker Desktop para esa distribución.
 - No necesitas el comando `helm`. `dcctl` lleva el chart dentro y lo instala con la biblioteca Go de
   Helm, y la comprobación previa no busca el binario.
 - `ko` y `cloud-provider-kind` son solo advertencias. `ko` hace falta únicamente para compilar
@@ -95,9 +104,15 @@ que instala. Para comprobar además las firmas de la versión, consulta
 Prepara el clúster una vez y después crea la instancia en él:
 
 ```bash
-dcctl install local
+dcctl install local --compact --no-tls=false
 dcctl bootstrap local devicechain --host localhost --no-tls
 ```
+
+`--compact` se elige una vez para el clúster y la instancia lo hereda. Mantener
+`--no-tls=false` al instalar conserva cert-manager y las copias de seguridad de las bases de
+datos; `--no-tls` en bootstrap sirve solo esta instancia por HTTP. Esta receta usa imágenes
+publicadas y mantiene la custodia de la clave raíz. `--dev` compila desde el código y omite
+la custodia al ejecutar bootstrap.
 
 :::note En un script o un trabajo de CI
 `dcctl bootstrap` pide una frase de contraseña para sellar el artefacto de custodia de la clave raíz. Sin un terminal donde preguntarla se detiene con `no escrow passphrase and no terminal to ask at`. Facilítala sin interacción, con un archivo o con una variable de entorno:

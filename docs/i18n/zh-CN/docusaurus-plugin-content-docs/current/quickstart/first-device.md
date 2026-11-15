@@ -24,6 +24,8 @@ import YouTubeLite from '@site/src/components/YouTubeLite';
 
 `dcctl install` 和 `dcctl bootstrap` 都会先运行预检。如果这四个工具中有任何一个缺失，命令就会**停止**。这样你只会花十秒发现缺失，而不是等上十分钟。
 
+- **Docker 资源：**计划为 Docker 提供至少 **4 个 CPU 和 8 GiB 内存**，并为宿主操作系统预留内存。这是现有预检的建议，不是强制下限或经过测量的保证。下方的笔记本安装步骤使用 `--compact` 降低调度资源请求并省去监控；不使用它时，无法容纳的 Pod 可能一直处于 `Pending`，直到安装超时。参见[紧凑配置](../deployment/bootstrap.md#--compact)。
+- **在 Windows 上**，请在 Git Bash 或 WSL 中运行 Bash 示例，不要使用 PowerShell。下方的 PowerShell 代码块仅用于下载 Windows 二进制文件。在 WSL 中，请在 WSL 内安装 Linux 工具，并为该发行版启用 Docker Desktop 的 WSL 集成。
 - 不需要 `helm` 命令。`dcctl` 自带 Chart，并通过 Helm 的 Go 库安装，预检不会检查这个二进制文件。
 - 缺少 `ko` 和 `cloud-provider-kind` 只会产生警告。只有从源码构建镜像（`--build`）时才需要 `ko`。
 - 无需事先准备集群。`dcctl install local` 会查找名为 `devicechain` 的 kind 集群（或通过 `--cluster` 指定的名称）；如果不存在，就会询问是否创建。`--kube-context <name>` 可指向你已有的集群，该命令绝不会创建或删除这个集群。
@@ -72,9 +74,11 @@ Expand-Archive dcctl_<version>_windows_amd64.zip -DestinationPath .
 先准备一次集群，再在其中创建实例：
 
 ```bash
-dcctl install local
+dcctl install local --compact --no-tls=false
 dcctl bootstrap local devicechain --host localhost --no-tls
 ```
+
+`--compact` 在集群安装时选择一次，由实例继承。安装时保留 `--no-tls=false` 可保留 cert-manager 和数据库备份；bootstrap 的 `--no-tls` 仅使此实例通过 HTTP 提供服务。本步骤使用已发布的镜像，并保留根密钥托管。`--dev` 则从源码构建，并在 bootstrap 时跳过托管。
 
 :::note 在脚本或 CI 任务中
 `dcctl bootstrap` 会要求输入口令，用来封存根密钥托管（escrow）制品。没有终端可供询问时，它会报错 `no escrow passphrase and no terminal to ask at` 并停止。可以不经交互提供口令，用文件或环境变量均可：

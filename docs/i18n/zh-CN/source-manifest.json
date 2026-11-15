@@ -107,8 +107,8 @@
       "translationSha256": "718bf812e55940ed97bdcd615889d7f4cd2568e39c121c6fdd935005a74d554b"
     },
     "deployment/bootstrap.md": {
-      "sourceSha256": "8c1e2aa65aa17cf715f6fbbdc7a80cf84b8f4eae7ffd7723e9c620808f6e7155",
-      "translationSha256": "65b8c2fe71d57e1740d19b10ad7994f8988a71f61aeb7183bfc2a08f4a7bfb7d"
+      "sourceSha256": "620dd8d75454450787fa2ba2d30c9aa5fd1d10f619b83bb25409de238aa98ce2",
+      "translationSha256": "3bd231affae66fc665d2ce3d5a043ba7f247ecc75f063138c22435d19a71dabb"
     },
     "deployment/cluster-lock.md": {
       "sourceSha256": "1f023271ebfdba3cbab4a140db9606d0827bd12f7c96000c5c6bc946b588b148",
@@ -311,8 +311,8 @@
       "translationSha256": "6376f182ce42bf34e1945d9b315f5ee2602ab8de46473a481133452ce2695608"
     },
     "quickstart/first-device.md": {
-      "sourceSha256": "7feb8b03ca56f9c3b48971da29a937812a89feeb102d4a2f73fa6d83ccd89c23",
-      "translationSha256": "77380404031e09dba84155fc74711db682c6ba6cd2d6c8c1d2eb4886599a0584"
+      "sourceSha256": "ba43274888d16cf190e0b1a8c5062938a3ff1d87047fe973693cb0300e79dc54",
+      "translationSha256": "b07ef467589e725055f311596433296cc38f254d8248d62df955d6535c5007db"
     },
     "reference/csharp-sdk.md": {
       "sourceSha256": "7c2ff25f32b4e14b3d51c27a5729ab0bd08c6e90302dc5ab1ea1bbf7be73ae50",
