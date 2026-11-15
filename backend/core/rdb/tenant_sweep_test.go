@@ -6,10 +6,10 @@ package rdb
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
-	"gorm.io/gorm"
 )
 
 func TestTenantsWith(t *testing.T) {
@@ -25,8 +25,30 @@ func TestTenantsWith(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, []string{"A", "B"}) {
 		t.Fatalf("tenants = %v, %v", got, err)
 	}
-	got, err = manager.TenantsWith(ctx, &widget{}, func(db *gorm.DB) *gorm.DB { return db.Where("name = ?", "drop") })
-	if err != nil || !reflect.DeepEqual(got, []string{"A"}) {
-		t.Fatalf("filtered tenants = %v, %v", got, err)
+}
+
+func TestTenantsWithPlainTenant(t *testing.T) {
+	db := newTestDB(t)
+	type plainTenant struct{ Tenant string }
+	if err := db.AutoMigrate(&plainTenant{}); err != nil {
+		t.Fatal(err)
+	}
+	manager := &RdbManager{Database: db}
+	for _, tenant := range []string{"B", "A", "A"} {
+		if err := manager.DB(core.WithTenant(context.Background(), tenant)).Create(&plainTenant{}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := manager.TenantsWith(core.WithTenant(context.Background(), "A"), &plainTenant{})
+	if err != nil || !reflect.DeepEqual(got, []string{"A", "B"}) {
+		t.Fatalf("tenants = %v, %v", got, err)
+	}
+}
+
+func TestTenantsWithRefusesModelWithoutTenant(t *testing.T) {
+	manager := &RdbManager{Database: newTestDB(t)}
+	got, err := manager.TenantsWith(context.Background(), &gadget{})
+	if err == nil || !strings.Contains(err.Error(), "no tenant field") || len(got) != 0 {
+		t.Fatalf("tenants = %v, %v; want missing tenant field error", got, err)
 	}
 }

@@ -17,9 +17,13 @@ type TenantSweep struct{ Visited, Failed int }
 // ForEachTenant visits tenants in order under their own tenant contexts, checking
 // cancellation before each visit. Errors are counted and isolated to one tenant,
 // unless they wrap ErrStopSweep. Empty tokens fail closed without calling fn.
+// System contexts are refused before any visit.
 // The completed tally is classified by PassResult. It does not log.
 func ForEachTenant(ctx context.Context, tenants []string, fn func(context.Context, string) error) (TenantSweep, error) {
 	var sweep TenantSweep
+	if IsSystemContext(ctx) {
+		return sweep, errors.New("ForEachTenant refuses a system context")
+	}
 	var lastErr error
 	for _, tenant := range tenants {
 		if err := ctx.Err(); err != nil {

@@ -85,31 +85,31 @@ func (s *RetentionSweeper) runOnce(ctx context.Context) error {
 	if sweepErr != nil && sweepErr == ctx.Err() {
 		return sweepErr
 	}
-	visited, failed := sweep.Visited, sweep.Failed
 	if lastErr == nil && sweep.Failed > 0 {
-		// Only empty tokens can fail without reaching the callback.
+		// Empty tokens fail before the callback; keep their raw error for the combined tally.
 		lastErr = core.ErrNoTenant
 	}
 	if s.attemptRetention > 0 {
-		v, f, err := s.pruneAttempts(ctx)
-		visited += v
-		failed += f
+		attempts, err := s.pruneAttempts(ctx)
+		sweep.Visited += attempts.Visited
+		sweep.Failed += attempts.Failed
 		if err != nil {
 			lastErr = err
 		}
 	}
-	return core.PassResult(visited, failed, lastErr)
+	return core.PassResult(sweep.Visited, sweep.Failed, lastErr)
 }
 
 // pruneAttempts deletes every tenant's delivery-ledger rows older than the ledger's
 // retention window, tenant by tenant under that tenant's context.
-func (s *RetentionSweeper) pruneAttempts(ctx context.Context) (visited, failed int, lastErr error) {
+func (s *RetentionSweeper) pruneAttempts(ctx context.Context) (sweep core.TenantSweep, lastErr error) {
 	before := time.Now().Add(-s.attemptRetention)
 	tenants, err := s.Api.RDB.TenantsWith(ctx, &model.NotificationAttempt{})
 	if err != nil {
-		return 1, 1, fmt.Errorf("listing tenants with delivery-ledger rows: %w", err)
+		return core.TenantSweep{Visited: 1, Failed: 1}, fmt.Errorf("listing tenants with delivery-ledger rows: %w", err)
 	}
-	sweep, sweepErr := core.ForEachTenant(ctx, tenants, func(tctx context.Context, tenant string) error {
+	var sweepErr error
+	sweep, sweepErr = core.ForEachTenant(ctx, tenants, func(tctx context.Context, tenant string) error {
 		removed, err := s.Api.PruneNotificationAttempts(tctx, before)
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Msg("Retention sweep: delivery-ledger prune failed")
@@ -127,5 +127,5 @@ func (s *RetentionSweeper) pruneAttempts(ctx context.Context) (visited, failed i
 	} else if lastErr == nil && sweep.Failed > 0 {
 		lastErr = core.ErrNoTenant
 	}
-	return sweep.Visited, sweep.Failed, lastErr
+	return sweep, lastErr
 }

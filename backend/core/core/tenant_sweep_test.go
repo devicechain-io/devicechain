@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -53,5 +54,18 @@ func TestForEachTenant(t *testing.T) {
 				t.Fatal("all of two must be a plain failure")
 			}
 		})
+	}
+}
+
+func TestForEachTenantRefusesSystemContext(t *testing.T) {
+	for _, tenants := range [][]string{nil, {"A"}} {
+		called := false
+		sweep, err := ForEachTenant(WithSystemContext(WithTenant(context.Background(), "parent")), tenants, func(context.Context, string) error {
+			called = true
+			return nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "system context") || sweep != (TenantSweep{}) || called {
+			t.Fatalf("sweep=%+v, err=%v, called=%v; want immediate system-context refusal", sweep, err, called)
+		}
 	}
 }
