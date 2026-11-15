@@ -66,7 +66,7 @@ func post(t *testing.T, ts *httptest.Server, token, body string) (*http.Response
 func batchOf(n int) string {
 	entries := make([]string, n)
 	for i := range entries {
-		entries[i] = `{"jsonrpc":"2.0","id":` + string(rune('0'+i%10)) + `,"method":"tools/call","params":{"name":"list_devices","arguments":{}}}`
+		entries[i] = `{"jsonrpc":"2.0","id":` + strconv.Itoa(i) + `,"method":"tools/call","params":{"name":"list_devices","arguments":{}}}`
 	}
 	return "[" + strings.Join(entries, ",") + "]"
 }
@@ -89,8 +89,44 @@ func rpcError(t *testing.T, raw string) (code int, msg string) {
 	return out.Error.Code, out.Error.Message
 }
 
-// A batch over the cap is refused WHOLE with a JSON-RPC error: no entry runs, and the
-// refusal names the cap rather than silently dropping the tail.
+// A valid configured batch executes every entry, even above the concurrency cap.
+func TestConfiguredFullBatchExecutesEveryEntry(t *testing.T) {
+	for _, size := range []int{16, 24} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			limits := DefaultLimits()
+			limits.MaxBatchEntries = size
+			ts, tokenFor, hits := limitedServer(t, limits)
+			token := tokenFor("batch@b.c")
+			resp, raw := post(t, ts, token, `{"jsonrpc":"2.0","id":100,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"batch-test","version":"1"}}}`)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("initialize: status %d: %s", resp.StatusCode, raw)
+			}
+			req, err := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(batchOf(size)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Mcp-Session-Id", resp.Header.Get("Mcp-Session-Id"))
+			req.Header.Set("Mcp-Protocol-Version", "2025-03-26")
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			resp, err = (&http.Client{Timeout: testGiveUp}).Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != http.StatusOK || hits.Load() != int64(size) || strings.Contains(string(body), `"isError":true`) {
+				t.Fatalf("full batch: status %d, reads %d, want %d successful calls: %s", resp.StatusCode, hits.Load(), size, body)
+			}
+		})
+	}
+}
+
+// A batch over the cap is refused whole; no entry runs and the error names the cap.
 func TestOverCapBatchIsRefusedWhole(t *testing.T) {
 	ts, tokenFor, hits := limitedServer(t, Limits{MaxBatchEntries: 4, CallsPerSecond: 1000, CallsBurst: 1000})
 	resp, raw := post(t, ts, tokenFor("a@b.c"), batchOf(5))

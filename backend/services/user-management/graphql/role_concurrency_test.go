@@ -19,13 +19,13 @@ import (
 )
 
 func TestAdminRoleExpectedUpdatedAt(t *testing.T) {
-	db := putest.NewSQLiteDB(t, &iam.Role{})
+	db := putest.NewSQLiteDB(t, &iam.Role{}, &iam.Identity{}, &iam.Membership{})
 	// Unconditional saves must advance even when a clock has not moved.
 	frozen := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
 	db.NowFunc = func() time.Time { return frozen }
 	store := iam.NewStore(&rdb.RdbManager{Database: db})
 	svc := admin.NewService(store, 0, 0, nil)
-	ctx := context.WithValue(adminCtx(string(auth.RoleWrite)), ContextAdminKey, svc)
+	ctx := context.WithValue(storedAdminCtx(t, store, string(auth.RoleWrite), string(auth.RoleRead)), ContextAdminKey, svc)
 	role, err := svc.CreateRole(ctx, admin.RoleInput{Scope: "system", Token: "ops", Name: "original"})
 	require.NoError(t, err)
 	schema := gql.MustParseSchema(AdminSchemaContent, &AdminResolver{})

@@ -34,6 +34,8 @@ const (
 	// waiting would be a lie of a different kind — the device returns and delivery still
 	// cannot happen.
 	Undeliverable
+	// Defer leaves the command untouched until its command channel can be resolved.
+	Defer
 )
 
 // State is the projection's answer for one device, reduced to what the gate needs.
@@ -47,6 +49,8 @@ type State struct {
 	// by WithPullChannels, never by a projection, and it is independent of Known because a
 	// device that has never produced an event is still a pull device.
 	PullChannel bool
+	// PullUnknown means the command channel could not be resolved.
+	PullUnknown bool
 }
 
 // Reader reads the live presence projection for a set of devices in one tenant.
@@ -220,6 +224,9 @@ func Decide(s State, caps Capabilities) Verdict {
 	// releases a pull device's command either.
 	if s.PullChannel {
 		return Hold
+	}
+	if s.PullUnknown {
+		return Defer
 	}
 	if !s.Known {
 		// No row at all: the platform has never been told anything about this device.

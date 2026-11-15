@@ -47,6 +47,7 @@ ALTER SEQUENCE "device-management".integration_unregistered_devices_id_seq OWNED
 ALTER SEQUENCE "device-management".integrations_id_seq OWNED BY "device-management".integrations.id;
 ALTER SEQUENCE "device-management".maintenance_windows_id_seq OWNED BY "device-management".maintenance_windows.id;
 ALTER SEQUENCE "device-management".metric_definitions_id_seq OWNED BY "device-management".metric_definitions.id;
+ALTER SEQUENCE "device-management".pending_attribute_repairs_id_seq OWNED BY "device-management".pending_attribute_repairs.id;
 ALTER SEQUENCE "device-management".profile_decoder_healths_id_seq OWNED BY "device-management".profile_decoder_healths.id;
 ALTER SEQUENCE "device-management".profile_decoder_samples_id_seq OWNED BY "device-management".profile_decoder_samples.id;
 ALTER SEQUENCE "device-management".provisioning_profiles_id_seq OWNED BY "device-management".provisioning_profiles.id;
@@ -262,6 +263,9 @@ ALTER TABLE ONLY "device-management".maintenance_windows ALTER COLUMN id SET DEF
 ALTER TABLE ONLY "device-management".metric_definitions
  ADD CONSTRAINT metric_definitions_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".metric_definitions ALTER COLUMN id SET DEFAULT nextval('"device-management".metric_definitions_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".pending_attribute_repairs
+ ADD CONSTRAINT pending_attribute_repairs_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".pending_attribute_repairs ALTER COLUMN id SET DEFAULT nextval('"device-management".pending_attribute_repairs_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".pending_ownership_facts
  ADD CONSTRAINT pending_ownership_facts_pkey PRIMARY KEY (tenant_id, device_id);
 ALTER TABLE ONLY "device-management".pending_revocation_expansion_serials
@@ -771,6 +775,12 @@ CREATE SEQUENCE "device-management".maintenance_windows_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".metric_definitions_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".pending_attribute_repairs_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -1631,6 +1641,15 @@ CREATE TABLE "device-management".metric_definitions (
  semantic_property text,
  semantic_point_class text
 );
+CREATE TABLE "device-management".pending_attribute_repairs (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ entity_type text,
+ entity_id bigint,
+ scope text,
+ attr_key text,
+ created_at timestamp with time zone
+);
 CREATE TABLE "device-management".pending_ownership_facts (
  tenant_id character varying(128) NOT NULL,
  device_id bigint NOT NULL,
@@ -1779,6 +1798,7 @@ CREATE UNIQUE INDEX uix_device_types_tenant_token ON "device-management".device_
 CREATE UNIQUE INDEX uix_devices_tenant_external_id ON "device-management".devices USING btree (tenant_id, external_id) WHERE ((deleted_at IS NULL) AND (external_id IS NOT NULL));
 CREATE UNIQUE INDEX uix_devices_tenant_token ON "device-management".devices USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_dr_scope_ref ON "device-management".detection_rule_scope_refs USING btree (device_profile_id, rule_token);
+CREATE UNIQUE INDEX uix_entity_attributes_key ON "device-management".entity_attributes USING btree (tenant_id, entity_type, entity_id, scope, attr_key) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_entity_group_facet_ref ON "device-management".entity_group_facet_refs USING btree (group_id, selector_version, facet_key);
 CREATE UNIQUE INDEX uix_entity_group_membership ON "device-management".entity_group_memberships USING btree (group_id, selector_version, entity_type, entity_id);
 CREATE UNIQUE INDEX uix_entity_group_versions_group_version ON "device-management".entity_group_versions USING btree (entity_group_id, version);
@@ -1794,6 +1814,7 @@ CREATE UNIQUE INDEX uix_integration_unregistered_devices_key ON "device-manageme
 CREATE UNIQUE INDEX uix_integrations_tenant_token ON "device-management".integrations USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_maintenance_windows_tenant_token ON "device-management".maintenance_windows USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_metric_definitions_tenant_token ON "device-management".metric_definitions USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_pending_attribute_repairs_key ON "device-management".pending_attribute_repairs USING btree (tenant_id, entity_type, entity_id, scope, attr_key);
 CREATE UNIQUE INDEX uix_profile_decoder_healths_window ON "device-management".profile_decoder_healths USING btree (tenant_id, device_profile_id, profile_version, window_start, replica);
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_provision_key ON "device-management".provisioning_profiles USING btree (tenant_id, provision_key) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_token ON "device-management".provisioning_profiles USING btree (tenant_id, token) WHERE (deleted_at IS NULL);

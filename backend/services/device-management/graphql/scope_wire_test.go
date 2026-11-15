@@ -71,6 +71,10 @@ func seedScopeFixture(t *testing.T, db *gorm.DB, extra ...any) scopeFixture {
 		&model.AreaType{}, &model.Asset{}, &model.AssetType{}}, extra...)...); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := rdb.CreatePartialUniqueIndex(db, &model.EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatal(err)
+	}
+
 	f := scopeFixture{db: db, api: model.NewApi(&rdb.RdbManager{Database: db})}
 	ctx := f.operator()
 	if _, err := f.api.CreateDeviceType(ctx, &model.DeviceTypeCreateRequest{Token: "pump"}); err != nil {

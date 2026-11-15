@@ -196,8 +196,8 @@ func (cproc *CommandDeliveryProcessor) restampWindows(ctx context.Context) error
 						Msg("Moved waiting commands off a maintenance window their device type no longer uses.")
 				}
 				if err != nil {
-					// Not fatal to the window's own re-stamp: the rows not moved are still on this
-					// window, and its schedule still applies to them.
+					// The window's own re-stamp keeps unresolved rows gated, closing the
+					// stamp if the window was deleted.
 					log.Warn().Err(err).Str("tenant", pair.TenantId).Str("window", pair.WindowToken).
 						Msg("Could not check which window waiting commands' device types use now; they stay on the window they were stamped with.")
 					if firstErr == nil {
@@ -227,8 +227,12 @@ func (cproc *CommandDeliveryProcessor) restampWindows(ctx context.Context) error
 		}
 		if moved > 0 {
 			incr(cproc.WindowRestamps, float64(moved))
-			log.Info().Str("tenant", pair.TenantId).Str("window", pair.WindowToken).Int64("commands", moved).
-				Msg("Moved commands waiting on a maintenance window to its current schedule.")
+			event := log.Info().Str("tenant", pair.TenantId).Str("window", pair.WindowToken).Int64("commands", moved)
+			if !opening.Found {
+				event.Msg("Commands are stamped with a maintenance window that no longer exists; they stay held until their device's type can be resolved.")
+			} else {
+				event.Msg("Moved commands waiting on a maintenance window to its current schedule.")
+			}
 		}
 	}
 	if firstErr != nil {

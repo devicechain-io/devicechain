@@ -148,7 +148,7 @@ func TestAnOlderDeviceManagementIsNamedAndNeverReadAsNoPullDevices(t *testing.T)
 	q := &fakeQuery{err: errors.New(`svcclient: graphql: Cannot query field "commandPullDevices" on type "Query".`)}
 	p := NewPullChannels(q, "http://dm")
 	got, err := p.PullDevices(tenantCtx(), []string{"d1"})
-	if !errors.Is(err, ErrPullChannelsUnsupported) || got != nil {
+	if !errors.Is(err, ErrPullChannelsUnsupported) || len(got) != 0 {
 		t.Fatalf("got %v, %v; want ErrPullChannelsUnsupported and no answer", got, err)
 	}
 	q.err = nil

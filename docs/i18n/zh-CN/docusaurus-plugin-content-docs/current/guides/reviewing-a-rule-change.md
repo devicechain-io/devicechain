@@ -13,11 +13,15 @@ GraphQL 类型和操作可能在次要版本中变更。保护需要主动启用
 
 ## 开始之前 {#before-you-start}
 
+**情节开始后，请预留约 2 小时 42 分钟用于记录，另加准备和审查的时间。** 本教程记录实时遥测数据。此审查不支持快进或回填模式。如果想先快速体验，请尝试[你的第一台设备](../quickstart/first-device.md)，之后再回到这里完成完整对比。
+
 你需要运行中的 DeviceChain 实例、`dcctl`，以及在 `dcctl sim create` 为模拟器创建的租户中拥有成员资格的两名人员。编辑和运行审查的人员需要在自己的无范围限制会话中持有 `device:write` 和 `event:read`。批准者需要这些权限、不受范围限制的成员资格，并已注册双因素认证。读取审查还需要 `device:read` 和 `event:read`。
 
 请由另一名人员批准：默认情况下，运行者和草稿作者都不能批准。模拟器使用第二因素登录时，`dcctl sim` 支持 `--otp`；请参阅 [dcctl 双因素认证](../guides/two-factor-authentication.md#dcctl)。
 
 ## 记录 Night Shift 情节 {#record-night-shift}
+
+### 开始记录 {#start-recording}
 
 创建模拟器租户和登录账户：
 
@@ -31,7 +35,13 @@ dcctl sim create nightshift --manifest towerpulse --episode night-shift
 dcctl sim run nightshift
 ```
 
-在另一个终端中获取记录的窗口：
+### 记录期间 {#while-recording}
+
+保持模拟器运行。在控制台中查看五台设备及其遥测数据，按下文准备草稿 A，但先不要发布，并请第二名人员检查自己的成员资格和双因素认证。在历史数据积累期间，阅读审查期望和预期结果。等到情节开始约 2 小时 42 分钟后，再运行审查。
+
+### 获取审查窗口 {#get-review-windows}
+
+在另一个终端中获取情节的窗口时间：
 
 ```bash
 dcctl sim windows nightshift
@@ -44,7 +54,7 @@ INCIDENT	<start RFC3339>	<end RFC3339>
 NORMAL	<start RFC3339>	<end RFC3339>
 ```
 
-情节开始前，该命令会提示你先运行模拟器。情节开始时会记录起始时刻。INCIDENT 为起始后的第 45 至 95 分钟；NORMAL 为第 105 至 160 分钟。请等待到开始后约 2 小时 42 分钟，使 NORMAL 的结束时间至少早于审查两分钟。
+情节开始前，该命令会提示你先运行模拟器。情节开始时会记录起始时刻。INCIDENT 为起始后的第 45 至 95 分钟；NORMAL 为第 105 至 160 分钟。输出窗口时间并不意味着记录已完成：只有在 NORMAL 结束至少两分钟后，才能运行审查。修改 `--emit-interval` 只会改变采样频率，不会改变情节的实际经过时间。
 
 前 45 分钟用于稳定运行。INCIDENT 期间，`tp-vav-tower-f1-south` 温度过高，但随附规则未能检测到。NORMAL 期间，`tp-vav-tower-f3-north` 有一段不应触发制冷的正常短暂升温；`tp-vav-tower-f5-west` 举行会议，作为对照。
 
