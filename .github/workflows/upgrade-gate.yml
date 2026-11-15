@@ -85,7 +85,7 @@ on:
   # a second copy waiting to happen, and reintroducing one is now itself a CI failure
   # — see claim 2 in that script, which fails if this trigger grows a filter again.
   pull_request:
-    branches: [main]
+    branches: [main, 'release-*-lts']
 
   # Manual runs default to --build: the skew-free test of the checked-out tree,
   # which is what a developer wants and what a release must NOT settle for.
