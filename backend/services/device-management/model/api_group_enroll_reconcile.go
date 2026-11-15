@@ -65,17 +65,13 @@ func (api *Api) reconcileMembershipEnrollment(ctx context.Context) error {
 		attemptedTenants++
 		for _, ref := range refs {
 			groupCount++
-			addedSentinel, ids, err := api.reconcileEnrollmentGroup(tenantCtx, ref)
+			addedSentinel, addedMembers, err := api.reconcileEnrollmentGroup(tenantCtx, ref)
+			sentinels += addedSentinel
+			memberships += addedMembers
 			if err != nil {
 				log.Error().Err(err).Str("tenant", tenant).Uint("group_id", ref.GroupId).
 					Str("group", ref.GroupToken).Int32("version", ref.SelectorVersion).Msg("Could not reconcile membership enrollment")
 				continue
-			}
-			sentinels += addedSentinel
-			memberships += len(ids)
-			api.evictMemberships(tenantCtx, ref.MemberType, ids)
-			if addedSentinel > 0 {
-				api.evictScopedGroupsExist(tenantCtx)
 			}
 		}
 	}
@@ -131,34 +127,46 @@ func enrollmentReconcileRefs(db *gorm.DB) ([]EntityGroupFacetRef, error) {
 	}), nil
 }
 
-func (api *Api) reconcileEnrollmentGroup(ctx context.Context, ref EntityGroupFacetRef) (int, []uint, error) {
+// enrollmentRepairPageSize bounds memory and time holding the family lock, including
+// the ownership queue's per-page deduplication work.
+var enrollmentRepairPageSize = 500
+
+// enrollmentRegistrationOnTx must be called under the membership family lock.
+// A missing registration is normal: deregistration can run between repair pages.
+func enrollmentRegistrationOnTx(tx *gorm.DB, ref EntityGroupFacetRef) (registered, accessPinned bool, err error) {
+	var group EntityGroup
+	err = tx.Where("id = ?", ref.GroupId).First(&group).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	var refs, pins int64
+	if err = tx.Model(&EntityGroupFacetRef{}).Where("group_id = ? AND selector_version = ?", ref.GroupId, ref.SelectorVersion).Count(&refs).Error; err != nil {
+		return false, false, err
+	}
+	if err = tx.Model(&DetectionRuleScopeRef{}).Where("group_token = ? AND group_version = ?", group.Token, ref.SelectorVersion).Count(&pins).Error; err != nil {
+		return false, false, err
+	}
+	accessPinned = group.IsAccessScope() && group.ActiveVersion.Valid && group.ActiveVersion.Int32 == ref.SelectorVersion
+	return refs > 0 || pins > 0 || accessPinned, accessPinned, nil
+}
+
+func (api *Api) reconcileEnrollmentGroup(ctx context.Context, ref EntityGroupFacetRef) (int, int, error) {
 	var sentinel int
-	var ids []uint
+	var frozen EntityGroupVersion
+	var repair bool
+	// Restore the creation marker in its own short transaction, so creates can
+	// enroll immediately while the historical membership backfill progresses.
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := api.lockMembershipFamily(ctx, tx, ref.MemberType); err != nil {
 			return err
 		}
-		// Re-read registration under the lock: a concurrent deregister must not be resurrected.
-		var group EntityGroup
-		err := tx.Where("id = ?", ref.GroupId).First(&group).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
-		if err != nil {
+		registered, _, err := enrollmentRegistrationOnTx(tx, ref)
+		if err != nil || !registered {
 			return err
 		}
-		var refs, pins int64
-		if err := tx.Model(&EntityGroupFacetRef{}).Where("group_id = ? AND selector_version = ?", ref.GroupId, ref.SelectorVersion).Count(&refs).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&DetectionRuleScopeRef{}).Where("group_token = ? AND group_version = ?", group.Token, ref.SelectorVersion).Count(&pins).Error; err != nil {
-			return err
-		}
-		accessPinned := group.IsAccessScope() && group.ActiveVersion.Valid && group.ActiveVersion.Int32 == ref.SelectorVersion
-		if refs == 0 && pins == 0 && !accessPinned {
-			return nil
-		}
-		var frozen EntityGroupVersion
 		err = tx.Where("entity_group_id = ? AND version = ?", ref.GroupId, ref.SelectorVersion).First(&frozen).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
@@ -170,53 +178,77 @@ func (api *Api) reconcileEnrollmentGroup(ctx context.Context, ref EntityGroupFac
 		if err != nil {
 			return err
 		}
-		empty, err := sel.MatchesEmpty()
-		if err != nil {
+		repair, err = sel.MatchesEmpty()
+		if err != nil || !repair {
 			return err
-		}
-		if !empty {
-			return nil
 		}
 		marker := EntityGroupFacetRef{GroupId: ref.GroupId, SelectorVersion: ref.SelectorVersion, GroupToken: ref.GroupToken, MemberType: frozen.MemberType, FacetKey: createEnrollFacetKey}
 		res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&marker)
-		if res.Error != nil {
-			return res.Error
-		}
 		sentinel = int(res.RowsAffected)
-		members, err := api.membersMatchingFrozenOnTx(ctx, tx, &frozen)
-		if err != nil {
-			return err
-		}
-		var existing []uint
-		if err := tx.Model(&EntityGroupMembership{}).Where("group_id = ? AND selector_version = ?", ref.GroupId, ref.SelectorVersion).Pluck("entity_id", &existing).Error; err != nil {
-			return err
-		}
-		have := make(map[uint]bool, len(existing))
-		for _, id := range existing {
-			have[id] = true
-		}
-		rows := make([]EntityGroupMembership, 0)
-		for _, member := range members {
-			if !have[member.Id] {
-				ids = append(ids, member.Id)
-				rows = append(rows, EntityGroupMembership{EntityType: frozen.MemberType, EntityId: member.Id, GroupId: ref.GroupId, SelectorVersion: ref.SelectorVersion, GroupToken: ref.GroupToken})
-			}
-		}
-		if len(rows) == 0 {
-			return nil
-		}
-		if err := rdb.CreateChunked(tx.Clauses(clause.OnConflict{DoNothing: true}), &rows).Error; err != nil {
-			return err
-		}
-		if accessPinned && frozen.MemberType == "device" {
-			// LAST: no more locks after taking ownership outbox row locks.
-			_, err = queueOwnershipOnTx(tx, ids)
-			return err
-		}
-		return nil
+		return res.Error
 	})
 	if err != nil {
-		return 0, nil, err
+		return 0, 0, err
 	}
-	return sentinel, ids, nil
+	if sentinel > 0 {
+		api.evictScopedGroupsExist(ctx)
+	}
+	if !repair {
+		return sentinel, 0, nil
+	}
+	frag, args, table, err := api.lowerSelectorSource(ctx, frozen.MemberType, frozen.Selector)
+	if err != nil {
+		return sentinel, 0, err
+	}
+	memberModel, _, _ := memberModelAndTable(frozen.MemberType)
+	var lastId uint
+	var added int
+	for {
+		var ids []uint
+		var inserted int
+		err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := api.lockMembershipFamily(ctx, tx, frozen.MemberType); err != nil {
+				return err
+			}
+			registered, accessPinned, err := enrollmentRegistrationOnTx(tx, ref)
+			if err != nil || !registered {
+				return err
+			}
+			existing := tx.Model(&EntityGroupMembership{}).Select("1").
+				Where("group_id = ? AND selector_version = ? AND entity_type = ?", ref.GroupId, ref.SelectorVersion, frozen.MemberType).
+				Where("entity_id = " + table + ".id")
+			if err := tx.Model(memberModel).Where(table+".id > ?", lastId).
+				Where(frag, args...).Where("NOT EXISTS (?)", existing).
+				Order(table+".id").Limit(enrollmentRepairPageSize).Pluck(table+".id", &ids).Error; err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				return nil
+			}
+			rows := make([]EntityGroupMembership, 0, len(ids))
+			for _, id := range ids {
+				rows = append(rows, EntityGroupMembership{EntityType: frozen.MemberType, EntityId: id, GroupId: ref.GroupId, SelectorVersion: ref.SelectorVersion, GroupToken: ref.GroupToken})
+			}
+			res := rdb.CreateChunked(tx.Clauses(clause.OnConflict{DoNothing: true}), &rows)
+			if res.Error != nil {
+				return res.Error
+			}
+			inserted = int(res.RowsAffected)
+			if accessPinned && frozen.MemberType == "device" {
+				// LAST: no more locks after taking ownership outbox row locks.
+				_, err = queueOwnershipOnTx(tx, ids)
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			return sentinel, added, err
+		}
+		if len(ids) == 0 {
+			return sentinel, added, nil
+		}
+		added += inserted
+		api.evictMemberships(ctx, frozen.MemberType, ids)
+		lastId = ids[len(ids)-1]
+	}
 }
