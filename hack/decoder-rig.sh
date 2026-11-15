@@ -602,6 +602,7 @@ cmd_selftest() {
     deadman_pid_file="$rig_tmp/selftest-deadman.pid"
     # Keep both planted processes contained even if an assertion fails.
     # shellcheck disable=SC2317 # invoked by the EXIT trap below
+    # shellcheck disable=SC2329 # invoked by the EXIT trap below
     selftest_deadman_cleanup() {
       local pid child
       for pid in "$decoy" "$timer" $timer_children; do

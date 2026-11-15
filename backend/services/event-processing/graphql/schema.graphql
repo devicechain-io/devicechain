@@ -858,7 +858,8 @@ type Subscription {
     Streams a device profile's detections as they fire: every raised or resolved edge of a rule
     belonging to the profile, including rules with no alarm action. Live from the moment of
     subscription, with no backfill; use ruleHealth or previewRule for history. Scoped to the
-    caller's tenant. An empty profileToken is an error. Requires device:read.
+    caller's tenant. An empty profileToken is an error. Requires device:read; detections of rules
+    that test geofence containment are delivered only to a caller that also holds location:read.
     """
     # Streams a device profile's DETECT detections as they fire (ADR-037 / ADR-057, slice 7c):
     # every firing whose rule belongs to the profile, RAISED or RESOLVED, including a rule with
