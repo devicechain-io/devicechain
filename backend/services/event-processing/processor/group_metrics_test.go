@@ -5,10 +5,13 @@ package processor
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -16,6 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 const metricFixtureHeader = "# Copyright The DeviceChain Authors\n# SPDX-License-Identifier: Apache-2.0\n\n"
@@ -111,11 +115,8 @@ func TestDetectGroupMetrics(t *testing.T) {
 				t.Fatal("worker handle recreated")
 			}
 			// All configured workers count, including one not started yet.
-			a.setDetectLive(true)
 			a.loopHeartbeat.Set(100)
-			assertMetric(t, reg, "groups_live", nil, 0)
 			assertMetric(t, reg, "groups_loop_heartbeat_timestamp_seconds", nil, 0)
-			b.setDetectLive(true)
 			b.loopHeartbeat.Set(90)
 			a.appliedStreamSeq.Set(1000)
 			b.appliedStreamSeq.Set(2)
@@ -141,7 +142,6 @@ func TestDetectGroupMetrics(t *testing.T) {
 			assertMetric(t, reg, "groups_snapshot_bytes", nil, 50)
 			assertMetric(t, reg, "groups_live_keys", nil, 11)
 			assertMetric(t, reg, "groups_loop_heartbeat_timestamp_seconds", nil, 90)
-			assertMetric(t, reg, "groups_live", nil, 1)
 			assertMetric(t, reg, "events_applied_total", nil, 2)
 			for _, w := range []*DetectMetrics{a, b} {
 				w.bindShards(k)
@@ -164,16 +164,82 @@ func TestDetectGroupMetrics(t *testing.T) {
 			assertMetric(t, reg, "group_shard_live_keys", map[string]string{"group": "1", "shard": "0"}, 11)
 			assertMetric(t, reg, "shard_queue_depth", map[string]string{"shard": "0"}, 1)
 			assertMetric(t, reg, "shard_busy_seconds_total", map[string]string{"shard": "0"}, 1)
-			// Losing one term clears only that group's state and process reductions.
-			b.setDetectLive(false)
-			b.clearTermGauges()
-			assertMetric(t, reg, "groups_live", nil, 0)
-			assertMetric(t, reg, "groups_consumer_pending", nil, 4)
-			assertMetric(t, reg, "groups_snapshot_bytes", nil, 20)
-			assertMetric(t, reg, "group_applied_stream_seq", map[string]string{"group": "0"}, 1000)
 			if bytes.Contains(metricText(t, reg), []byte("detect_groups_applied_stream_seq")) {
 				t.Fatal("sequence positions were aggregated")
 			}
+		})
+	}
+}
+
+func TestDetectGroupMetricsTermLifecycle(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		t.Run(fmt.Sprint("lost=", lost), func(t *testing.T) {
+			r := newGroupRig(t)
+			p0, p1 := r.worker(t, 0), r.worker(t, 1)
+			ms, reg := metricService()
+			p0.metrics = NewDetectMetrics(ms)
+			dl, err := r.nm.NewDistributedLease(messaging.DefaultLeaseTTL)
+			require.NoError(t, err)
+			p0.Lease, p0.Gate = dl, r.gate
+			require.NoError(t, p0.attachGroupWorkers(p1))
+			require.NoError(t, p0.ExecuteInitialize(context.Background()))
+			// Match the supervisor fixture: prove a clean prior release to skip termSlack.
+			prior, err := dl.Acquire(singletonPartition)
+			require.NoError(t, err)
+			require.NoError(t, prior.ReleaseWithin(context.Background()))
+			h, err := p0.beginTerm()
+			require.NoError(t, err)
+			ended := false
+			t.Cleanup(func() {
+				if !ended {
+					p0.endTerm(h)
+				}
+			})
+			// Keep checking teardown even if the start assertion fails.
+			t.Run("live", func(t *testing.T) {
+				for g := range p0.termWorkers() {
+					assertMetric(t, reg, "group_live", map[string]string{"group": fmt.Sprint(g)}, 1)
+				}
+				assertMetric(t, reg, "groups_live", nil, 1)
+			})
+			// Seed nonzero term readings, including state gauges without labelled series.
+			// Gauge handles are safe to update while the real worker loops run.
+			termGauges := func(m *DetectMetrics) []prometheus.Gauge {
+				return []prometheus.Gauge{
+					m.consumerPending, m.consumerAckPending, m.watermarkLagSeconds,
+					m.checkpointSeconds, m.snapshotBytes, m.restoreSeconds, m.appliedStreamSeq,
+					m.liveKeys, m.retainedSamples, m.pendingTimers,
+					m.tenantsOverRuleBudget, m.tenantsOverLiveKeyBudget, m.tenantsOverRetainedSampleBudget,
+				}
+			}
+			for _, w := range p0.termWorkers() {
+				for _, gauge := range termGauges(w.metrics) {
+					gauge.Set(42)
+				}
+			}
+			if lost {
+				require.NoError(t, h.lease.ReleaseWithin(context.Background()))
+				done := make(chan struct{})
+				go func() { p0.awaitTermEnd(h); close(done) }()
+				select {
+				case <-done:
+				case <-time.After(10 * time.Second):
+					t.Fatal("lease loss did not end the term")
+				}
+			} else {
+				p0.endTerm(h)
+			}
+			ended = true
+			for g, w := range p0.termWorkers() {
+				assertMetric(t, reg, "group_live", map[string]string{"group": fmt.Sprint(g)}, 0)
+				for i, gauge := range termGauges(w.metrics) {
+					require.Zero(t, testutil.ToFloat64(gauge), "group %d term gauge %d", g, i)
+				}
+			}
+			assertMetric(t, reg, "groups_live", nil, 0)
+			assertMetric(t, reg, "groups_consumer_pending", nil, 0)
+			assertMetric(t, reg, "groups_snapshot_bytes", nil, 0)
+			assertMetric(t, reg, "groups_live_keys", nil, 0)
 		})
 	}
 }
