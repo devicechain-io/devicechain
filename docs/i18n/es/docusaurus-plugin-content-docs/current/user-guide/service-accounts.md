@@ -57,6 +57,8 @@ El secreto se muestra **una sola vez**. DeviceChain guarda un resumen con clave,
 en sí, así que nada puede volver a mostrártelo. Cópialo ahora en el almacén de secretos de tu
 integración. Si se pierde, rota el secreto (más abajo).
 
+El diálogo permanece abierto al pulsar Escape o hacer clic fuera de él. Copia el valor y elige **Done** para cerrarlo. Esto también se aplica al rotar un secreto o volver a emitir una invitación.
+
 Todos los secretos caducan. Un secreto nuevo es válido durante 365 días salvo que se indique otra
 cosa a la API (de 1 a 730 días). La columna **Secretos** muestra cuántos secretos funcionan, sus
 últimos cuatro caracteres y cuándo caduca el siguiente.
