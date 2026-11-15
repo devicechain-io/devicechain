@@ -58,6 +58,8 @@ export interface SessionTokensOptions {
 }
 
 export interface SessionTokens {
+  /** Force one shared refresh after a 401. Never reuse a rejected token on failure. */
+  forceRefresh: (rejectedToken?: string) => Promise<string | null>;
   /** A usable access token, refreshing first when it is within the skew of expiry; null when signed out or ended. */
   getAccessToken: () => Promise<string | null>;
   /** Forget any in-flight refresh (the host cleared or replaced the session itself). */
@@ -110,6 +112,7 @@ function expiryMs(token: string): number | undefined {
 export function createSessionTokens(opts: SessionTokensOptions): SessionTokens {
   const skew = opts.skewSeconds ?? DEFAULT_SKEW_SECONDS;
   let inFlight: Promise<Outcome> | null = null;
+  let lastRefresh: { from: string; pair: TokenPair } | null = null;
 
   // The skew for one access token: the configured one, or half its lifetime if that is less.
   const skewFor = (token: string): number => {
@@ -133,7 +136,9 @@ export function createSessionTokens(opts: SessionTokensOptions): SessionTokens {
           // A promise cannot be cancelled, so guard here: if the live session is no
           // longer the one this refresh started from, drop the result.
           if (opts.read() !== current) return { kind: 'stale' };
-          opts.apply({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
+          const next = { accessToken: pair.accessToken, refreshToken: pair.refreshToken };
+          opts.apply(next);
+          lastRefresh = { from: current.accessToken, pair: next };
           return { kind: 'ok', token: pair.accessToken };
         } catch (err) {
           // Only end the session this refresh belonged to, not one since replaced.
@@ -233,8 +238,27 @@ export function createSessionTokens(opts: SessionTokensOptions): SessionTokens {
 
   return {
     getAccessToken,
+    forceRefresh: async (rejectedToken) => {
+      const current = opts.read();
+      if (!current) return null;
+      // A late 401 must not refresh or end a replacement session.
+      if (rejectedToken !== undefined && current.accessToken !== rejectedToken) {
+        // A sibling request may have finished refreshing before this 401 arrived.
+        return lastRefresh?.pair === current && lastRefresh.from === rejectedToken
+          ? current.accessToken : null;
+      }
+      if (isExpired(current.refreshToken, 0)) {
+        end();
+        return null;
+      }
+      const out = await refreshShared(current);
+      if (out.kind === 'ok') return out.token;
+      if (out.kind === 'transient' && opts.read() === current) end(out.err);
+      return null;
+    },
     reset: () => {
       inFlight = null;
+      lastRefresh = null;
     },
     startAutoRefresh,
   };

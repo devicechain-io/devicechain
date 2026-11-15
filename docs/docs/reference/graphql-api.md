@@ -39,6 +39,16 @@ curl -s https://docs.devicechain.io/schema/device-management.graphql
 
 ## Endpoints {#endpoints}
 
+The console and dashboard viewer recover from an authenticated HTTP 401 with one forced
+tenant-token refresh and one replay of the same operation. A failed refresh or a second 401
+ends that session. Identity tokens cannot be refreshed; a 401 ends the identity session.
+
+External `@devicechain/client` hosts opt in with `setUnauthorizedHandler({ refresh, onEnd })`.
+Use `session.forceRefresh(token)` in `refresh` for the tenant lane and return null for the
+identity lane. In `onEnd(error, token, identity)`, end only the session still owning that token.
+Anonymous login and refresh calls never trigger recovery. Without the handler, the SDK still
+throws `GraphQLRequestError` with status 401 immediately.
+
 The ingress routes `/api/<area>/graphql` to each functional-area service and strips the prefix, so
 the request reaches that service's own `/graphql`. Every endpoint below is therefore
 `https://<your-host>/api/<area>/graphql`:

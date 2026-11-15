@@ -25,6 +25,7 @@ import {
   decodeToken,
   gql,
   setAuthTokenGetter,
+  setUnauthorizedHandler,
   type TokenPair,
 } from '@devicechain/client';
 import {
@@ -151,7 +152,21 @@ export default function App() {
   // resolves its token through it, so a refreshed token reaches the hub by that route.
   useEffect(() => {
     setAuthTokenGetter(() => session.getAccessToken());
-    return () => setAuthTokenGetter(null);
+    setUnauthorizedHandler({
+      refresh: (token, identity) => identity ? Promise.resolve(null) : session.forceRefresh(token),
+      onEnd: (_err, token, identity) => {
+        if (identity || pairRef.current?.accessToken !== token) return;
+        pairRef.current = null;
+        session.reset();
+        setToken(null);
+        setLoaded(null);
+        setSessionEnded(true);
+      },
+    });
+    return () => {
+      setAuthTokenGetter(null);
+      setUnauthorizedHandler(null);
+    };
   }, [session]);
 
   // Refresh ahead of expiry while signed in. A wall display holds a websocket and makes no

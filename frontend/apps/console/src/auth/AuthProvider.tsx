@@ -26,6 +26,7 @@ import {
 import {
   setAuthTokenGetter,
   setIdentityTokenGetter,
+  setUnauthorizedHandler,
   createSessionTokens,
   decodeToken,
   isExpired,
@@ -413,12 +414,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setAuthTokenGetter(getToken);
     setIdentityTokenGetter(getIdentityToken);
+    setUnauthorizedHandler({
+      refresh: (token, identity) => identity ? Promise.resolve(null) : session.forceRefresh(token),
+      onEnd: (_err, token, identity) => {
+        if (identity) {
+          if (identityRef.current?.identityToken === token) expireIdentity();
+        } else if (tokensRef.current?.accessToken === token) {
+          expireTenant();
+        }
+      },
+    });
     setIsLoading(false);
     return () => {
       setAuthTokenGetter(null);
       setIdentityTokenGetter(null);
+      setUnauthorizedHandler(null);
     };
-  }, [getToken, getIdentityToken]);
+  }, [getToken, getIdentityToken, session, expireIdentity, expireTenant]);
 
   // Step 1: authenticate the identity and start the identity session (used by the
   // admin console). A tenant session is not started until a tenant is selected.

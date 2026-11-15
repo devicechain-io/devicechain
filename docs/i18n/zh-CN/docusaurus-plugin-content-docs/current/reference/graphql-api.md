@@ -36,6 +36,15 @@ curl -s https://docs.devicechain.io/schema/device-management.graphql
 
 ## 端点 {#endpoints}
 
+控制台和仪表盘查看器在已认证的 HTTP 请求收到 401 时，会强制刷新一次租户令牌，
+并重放一次相同操作。如果刷新失败或再次收到 401，则结束该会话。
+身份令牌无法刷新；收到 401 时会结束身份会话。
+
+外部 `@devicechain/client` 宿主通过 `setUnauthorizedHandler({ refresh, onEnd })` 启用此行为。
+在 `refresh` 中，租户平面使用 `session.forceRefresh(token)`，身份平面返回 null。
+在 `onEnd(error, token, identity)` 中，只结束仍持有该令牌的会话。
+匿名登录和刷新调用不会触发恢复。未设置处理器时，SDK 仍会立即抛出状态为 401 的 `GraphQLRequestError`。
+
 Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀，
 让请求到达服务自身的 `/graphql`。因此以下每个端点都是 `https://<your-host>/api/<area>/graphql`：
 

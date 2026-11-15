@@ -50,6 +50,54 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('forceRefresh', () => {
+  it('refreshes an unexpired rejected token and shares the exchange with concurrent callers', async () => {
+    let release!: (p: TokenPair) => void;
+    const refresh = vi.fn().mockReturnValue(new Promise<TokenPair>((r) => (release = r)));
+    const { state, tokens } = host(pair(300), refresh);
+    const rejected = state.pair!.accessToken;
+    const calls = [tokens.forceRefresh(rejected), tokens.forceRefresh(rejected)];
+    const next = pair(900);
+    release(next);
+    expect(await Promise.all(calls)).toEqual([next.accessToken, next.accessToken]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(state.ended).toEqual([]);
+    // A delayed 401 from a sibling request reuses that exchange rather than rotating again.
+    expect(await tokens.forceRefresh(rejected)).toBe(next.accessToken);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends on a transient refresh failure instead of reusing a rejected unexpired token', async () => {
+    const err = new GraphQLRequestError('offline', 0);
+    const { state, tokens } = host(pair(300), vi.fn().mockRejectedValue(err));
+    expect(await tokens.forceRefresh()).toBeNull();
+    expect(state.ended).toEqual([err]);
+    expect(state.pair).toBeNull();
+  });
+
+  it('does not refresh a session that replaced the rejected token', async () => {
+    const refresh = vi.fn();
+    const { state, tokens } = host(pair(900), refresh);
+    const current = state.pair;
+    expect(await tokens.forceRefresh(jwt(300))).toBeNull();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(state.pair).toBe(current);
+    expect(state.ended).toEqual([]);
+  });
+
+  it('drops a forced refresh after sign-out', async () => {
+    let release!: (p: TokenPair) => void;
+    const { state, tokens } = host(pair(300), () => new Promise((r) => (release = r)));
+    const call = tokens.forceRefresh();
+    state.pair = null;
+    tokens.reset();
+    release(pair(900));
+    expect(await call).toBeNull();
+    expect(state.pair).toBeNull();
+    expect(state.ended).toEqual([]);
+  });
+});
+
 describe('getAccessToken', () => {
   it('returns the held token without refreshing while it is outside the skew', async () => {
     const refresh = vi.fn();
