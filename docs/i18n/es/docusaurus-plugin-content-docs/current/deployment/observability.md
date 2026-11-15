@@ -47,13 +47,13 @@ e `insecure: true`; para TLS, use una URL `https://` e `insecure: false`.
 El receptor se despliega por separado; DeviceChain no lo instala.
 
 Un endpoint HTTP sin ruta publica en `/v1/traces`; indique una ruta (para un receptor tras un
-prefijo) y se usa tal cual. El exportador sigue leyendo las variables est�ndar
+prefijo) y se usa tal cual. El exportador sigue leyendo las variables estándar
 `OTEL_EXPORTER_OTLP_*`, por lo que, si las define en un pod, pueden anular estos valores.
 
 El muestreo respeta al padre entre servicios de DeviceChain: una traza muestreada en el primer
 servicio sigue muestreada en el resto del flujo. El `traceparent` de un dispositivo o de quien
 llama a la API nunca decide el muestreo: la solicitud inicia una traza local nueva enlazada a la
-del llamante. Los eventos que fallan la resoluci�n y van a la cola de errores, y los eventos
+del llamante. Los eventos que fallan la resolución y van a la cola de errores, y los eventos
 republicados para reintento, inician una traza nueva en lugar de continuar la original.
 Si se omite `samplingRatio`, se muestrea el 10 % de las nuevas trazas raíz. El valor explícito
 `0` no muestrea nuevas raíces y `1` las muestrea todas. Empiece con un valor bajo en flotas
@@ -66,6 +66,14 @@ Dimensione juntos la retención y el muestreo. Para desactivarlo, establezca `en
 y reinicie; desactivado, no crea exportadores ni goroutines de trazado.
 
 ## Lo que expone cada servicio
+
+El puerto HTTP **8080** sirve `/metrics`, `/healthz` y `/readyz` sin autenticación.
+Las rutas públicas del chart también las reenvían como `/api/<area>/metrics`,
+`/api/<area>/healthz` y `/api/<area>/readyz` para áreas con API pública.
+Restrínjalas en el perímetro público, conservando las sondas y la recogida de métricas
+dentro del clúster; [Endurecimiento de producción](./production-hardening.md#edge-rule)
+incluye la regla y su verificación. `/graphiql` tampoco exige autenticación cuando se
+habilitan las herramientas de desarrollo; está deshabilitado por defecto.
 
 Cada servicio de área funcional se instrumenta a sí mismo con métricas de cliente de Prometheus y
 sirve las dos sondas estándar de Kubernetes:

@@ -12,6 +12,13 @@ Para notificar una vulnerabilidad, siga el proceso de la
 
 ## Límites de confianza de un vistazo {#boundaries}
 
+El puerto público del servicio también sirve rutas operativas sin autenticación:
+`/metrics`, `/healthz`, `/readyz` y `/graphiql` si se habilitan las herramientas de
+desarrollo (deshabilitadas por defecto). El chart las reenvía bajo `/api/<area>/`
+para cada área con API pública. Aplique la [regla de endurecimiento del perímetro](../deployment/production-hardening.md#edge-rule)
+antes de abrir la instancia a Internet; conserva las sondas y la recogida de métricas
+directas dentro del clúster. Las operaciones GraphQL aplican su propia autenticación y permisos.
+
 | Límite | Qué separa ambos lados | Quién lo hace cumplir |
 | --- | --- | --- |
 | Inquilino frente a inquilino | Cada fila de un inquilino y cada asunto de mensaje lleva el inquilino | Un ámbito de base de datos en cada consulta y asuntos por inquilino en el broker |

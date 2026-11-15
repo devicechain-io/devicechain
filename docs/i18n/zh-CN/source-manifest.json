@@ -79,8 +79,8 @@
       "translationSha256": "3197df09513f734a289b126c52cfd9f8479df4423033178ed9609808dc8b993a"
     },
     "concepts/security-model.md": {
-      "sourceSha256": "7b1171a9fc5c4753cfeac584c93c8b78b9c66f37d6093bc1fc6a61cbc236c8b2",
-      "translationSha256": "e524bd262a1aa7a873cf144663accdd30e10b14a8979c2cf8750d9996c44ffbe"
+      "sourceSha256": "9e2effea086407ac4cc09d097b227d347264c2b0513049b2a01890e437b3795c",
+      "translationSha256": "22608609355d45be909eeda48add60e2f4f4fecc4da9c82910ec0057bac8e577"
     },
     "concepts/single-sign-on.md": {
       "sourceSha256": "9979f642b5846262c252585b0e00da2c96703cc6313a4fa38813f14b96d504b4",
@@ -151,8 +151,12 @@
       "translationSha256": "508efa80d4246bcaf71172f0f52007a592f162c53252a14887e62807033dfdac"
     },
     "deployment/observability.md": {
-      "sourceSha256": "9e6058112aa2e2d590d028bb1d644ac205fc3f112a96d7b054c717ab1115ebd0",
-      "translationSha256": "c49d15ee37f57cbd3e52e1c97342e014ad6fc8b84b0db0f59fbcdf9b7cd6e0da"
+      "sourceSha256": "d91d675028fe1404eb3785b187bc094f14257744f7da73d5461121ab80fa7a2e",
+      "translationSha256": "5ce3a5c6e6289ad3b6a39da669bdd9e5094e761941656b936d7c2e471592c968"
+    },
+    "deployment/production-hardening.md": {
+      "sourceSha256": "7e4f92661a32d25d8190cfc36f786accba53c3184dd704192acf287b3e8e08f4",
+      "translationSha256": "7f635eb876e24d95fab77ec7f35b9734406c3c028934d8a3f8a5e0bf035d8e3d"
     },
     "deployment/releases-and-upgrades.md": {
       "sourceSha256": "61c8b01f7a7611c4451068d139fca765613b786fb3fd99d38d386e1c44122b5f",

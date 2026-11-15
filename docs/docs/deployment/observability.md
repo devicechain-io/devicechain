@@ -66,6 +66,14 @@ disabled tracing constructs no exporter or tracing goroutines.
 
 ## What every service exposes
 
+The service HTTP port **8080** serves `/metrics`, `/healthz` and `/readyz` without
+authentication. The chart's public prefix routes also forward them as
+`/api/<area>/metrics`, `/api/<area>/healthz` and `/api/<area>/readyz` for areas with
+a public API. Restrict these at the public edge while keeping in-cluster probes and
+scrapes working; [Production hardening](./production-hardening.md#edge-rule) gives
+the block rule and verification steps. `/graphiql` is also unauthenticated when
+developer tools are enabled; it is disabled by default.
+
 Each functional-area service instruments itself with Prometheus client metrics and
 serves the two standard Kubernetes probes:
 

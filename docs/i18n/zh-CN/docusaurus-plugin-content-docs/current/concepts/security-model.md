@@ -10,6 +10,12 @@ title: 安全模型
 
 ## 信任边界一览 {#boundaries}
 
+服务公共端口也提供无需身份验证的运维路径：`/metrics`、`/healthz`、`/readyz`，
+以及启用开发工具时的 `/graphiql`（默认禁用）。对于具有公共 API 的区域，chart 会在
+`/api/<area>/` 下转发这些路径。将实例开放到互联网之前，请应用
+[生产加固边缘规则](../deployment/production-hardening.md#edge-rule)，并保留集群内直接探测与指标抓取。
+这些路径与 GraphQL 操作不同；GraphQL 操作会实施各自的身份验证与权限检查。
+
 | 边界 | 两侧如何区分 | 由谁强制执行 |
 | --- | --- | --- |
 | 租户与租户 | 每个租户拥有的行和每个消息 subject 都带有租户 | 每次查询上的数据库作用域，以及代理上按租户划分的 subject |
