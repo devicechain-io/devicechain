@@ -56,6 +56,8 @@ func TestASecondCycleOfTheSameAlarmEscalates(t *testing.T) {
 	n := testNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa})
 	n.api = api
 	n.store = &fakeSecretStore{}
+	clock := now
+	n.now = func() time.Time { return clock }
 	notify := func(e *dmmodel.AlarmStateChangeEvent) {
 		t.Helper()
 		if err := n.Notify(ctx, e); err != nil {
@@ -68,6 +70,7 @@ func TestASecondCycleOfTheSameAlarmEscalates(t *testing.T) {
 	// its database hands back.
 	c1 := now.Add(-2 * time.Hour).Add(123 * time.Nanosecond)
 	c1db := c1.Truncate(time.Microsecond)
+	clock = c1
 	notify(cycleEvent(dmmodel.AlarmEventRaised, c1, c1))
 	notify(cycleEvent(dmmodel.AlarmEventAcknowledged, c1db, c1.Add(time.Minute)))
 	notify(cycleEvent(dmmodel.AlarmEventCleared, c1db, c1.Add(10*time.Minute)))
@@ -77,6 +80,7 @@ func TestASecondCycleOfTheSameAlarmEscalates(t *testing.T) {
 
 	// Cycle two: re-raised on the same token and paged twenty minutes ago.
 	c2 := now.Add(-20 * time.Minute)
+	clock = c2
 	notify(cycleEvent(dmmodel.AlarmEventRaised, c2, c2))
 	if fa.calls != 2 {
 		t.Fatalf("cycle two's RAISED paged %d time(s) in all, want 2", fa.calls)
