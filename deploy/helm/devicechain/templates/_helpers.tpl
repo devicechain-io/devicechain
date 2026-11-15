@@ -1726,6 +1726,32 @@ the filtered document by accident.
   {{- $_ := set $cfg "infrastructure" dict -}}
 {{- end -}}
 {{- $infra := index $cfg "infrastructure" -}}
+{{- $nats := get $infra "nats" | default dict -}}
+{{- if hasKey $nats "shardGroups" -}}
+  {{- $shards := get $nats "shardGroups" -}}
+  {{- $areas := splitList "," (include "devicechain.enabledAreas" .) -}}
+  {{- if and (has "resolved-events" $shards.suffixes) (or (has "device-state" $areas) (has "event-processing" $areas)) -}}
+    {{- fail "resolved-events shardGroups requires group readers in every deployed consumer; device-state and event-processing are not wired yet (select inbound-events only)" -}}
+  {{- end -}}
+  {{- if ne (int (get $nats "streamReplicas" | default 1)) 1 -}}
+    {{- fail "shardGroups placement requires streamReplicas=1" -}}
+  {{- end -}}
+  {{- $tags := get $shards "placementTags" | default dict -}}
+  {{- range $key, $value := $tags -}}
+    {{- if or (not (regexMatch "^[0-4]$" $key)) (ge (int $key) (int $shards.count)) -}}
+      {{- fail "shardGroups placementTags key must name a configured group" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- range $g := until (int $shards.count) -}}
+    {{- $key := toString $g -}}
+    {{- $want := list (printf "dc-nats-%d" $g) -}}
+    {{- if and (hasKey $tags $key) (ne (toJson (get $tags $key)) (toJson $want)) -}}
+      {{- fail "shardGroups placementTags must select the corresponding dc-nats pod" -}}
+    {{- end -}}
+    {{- $_ := set $tags $key $want -}}
+  {{- end -}}
+  {{- $_ := set $shards "placementTags" $tags -}}
+{{- end -}}
 {{- if hasKey $infra "egress" -}}
   {{- $egress := index $infra "egress" -}}
   {{- if and $egress (empty (get $egress "devAllowedDestinations")) -}}

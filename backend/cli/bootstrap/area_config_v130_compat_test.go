@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -214,14 +215,21 @@ func parseFinalReleaseTag(tag string) ([3]int, bool) {
 
 func latestFinalReleaseTag(t *testing.T) string {
 	t.Helper()
-	cmd := exec.Command("git", "tag", "--list", "v*")
+	// A read-only tag probe of this checkout. Container copies can have another
+	// owner; trust only these exact paths, without changing persistent Git config.
+	moduleDir, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Dir(filepath.Dir(moduleDir))
+	cmd := exec.Command("git", "-c", "safe.directory="+repoDir, "-c", "safe.directory="+moduleDir, "tag", "--list", "v*")
 	cmd.Dir = "."
-	raw, err := cmd.Output()
+	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		if _, lookupErr := exec.LookPath("git"); lookupErr != nil {
 			t.Skip("git is missing; CI fetches tags; a skip here only happens in a tagless checkout")
 		}
-		t.Fatalf("listing release tags: %v", err)
+		t.Fatalf("listing release tags: %v\n%s", err, raw)
 	}
 	latest := ""
 	var highest [3]int

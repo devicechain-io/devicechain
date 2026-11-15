@@ -635,6 +635,10 @@ generated from the schema; do not edit it by hand.
 | `instance.config.infrastructure.tokenAudience.areaBaseUrl` | string | - | Derived by the chart: the ingress origin plus /api, set only when the origin is https or a loopback host. Refused if set by hand. |
 | `instance.config.infrastructure.tokenAudience.mcpResources` | array | - | Derived by the chart: the MCP area's resolved resource URL when that area is deployed. Refused if set by hand. |
 | `instance.config.infrastructure.nats` | object | - | The message broker connection and the JetStream ceilings. The chart validates only the capacity keys named below; the services validate the rest at startup. |
+| `instance.config.infrastructure.nats.shardGroups` | object | - | Optional NATS shard groups, off when absent. Splits each listed per-event stream into count groups that tenants are placed across. Needs 2-5 groups on R1 streams with at least three broker servers, and cannot be combined with ha. Each listed stream reserves its full byte ceiling in every group. Once set, carry the block forward in every replacement values file: an upgrade that drops it, lowers count or removes a suffix is refused, because the groups may hold data. |
+| `instance.config.infrastructure.nats.shardGroups.count` | integer | - | Total number of groups, counting the existing group zero (2-5). It cannot be lowered on upgrade. |
+| `instance.config.infrastructure.nats.shardGroups.suffixes` | array | - | Per-event streams to split into groups: inbound-events, resolved-events, or both. resolved-events is refused while device-state or event-processing is deployed, since those consumers read only group zero. A stream cannot be removed on upgrade. |
+| `instance.config.infrastructure.nats.shardGroups.placementTags` | object | - | Broker placement per group, keyed by group number (0 to count-1). Each value is a one-element list naming the dc-nats pod that holds the group, and it must be that group's own pod (group 1 on dc-nats-1). A group left out is placed on its own pod. |
 | `instance.config.infrastructure.nats.mqttDeviceUplinks` | boolean | - | Whether a device may publish its own payload to its raw-payload MQTT topic, for the decoder on its device type's profile to read. Off by default. Turn it on only after every event-sources and device-management replica runs a release that knows the topic. |
 | `instance.config.infrastructure.nats.streamDesignRate` | integer | `0` | Events a second the whole instance is expected to ingest at its peak, across tenants. The streams that carry one message per event (inbound-events, resolved-events, the device capture stream) are sized to hold at least this rate for streamRunwayMinutes. It is the rate the disk is sized for, not a rate limit. 0 sizes them by streamMaxBytes alone. |
 | `instance.config.infrastructure.nats.streamRunwayMinutes` | integer | `15` | Minutes of events at streamDesignRate the per-event streams are sized to hold. Between 10 (the alerts that warn the runway is running out need that long to fire before the platform stops accepting events) and 10080, the 7 days after which the broker discards a message whatever the ceiling. 0 means 15. |
@@ -824,3 +828,40 @@ generated from the schema; do not edit it by hand.
 | `functionalAreas.<area>.profiler.blockRate` | integer | - | Turn on block-profile sampling for a profiling run: nanoseconds blocked per sampled event (1 samples every event). 0 (default) leaves the block profile off. Needs enabled: true. |
 | `functionalAreas.<area>.profiler.mutexFraction` | integer | - | Turn on mutex-profile sampling for a profiling run: sample 1 in this many contended events. 0 (default) leaves the mutex profile off. Needs enabled: true. |
 <!-- values:end -->
+
+### Opt-in NATS shard groups
+
+After this release has rolled to every service replica,
+`dcctl upgrade ... --values shard-groups.yaml` can opt the ingest streams into tenant
+placement. The setting is absent by default:
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      nats:
+        shardGroups:
+          count: 3
+          suffixes: [inbound-events]
+```
+
+This install path supports 2-5 groups with R1 streams (`--ha` is refused). dcctl
+provisions three or five broker servers and preserves the values on upgrades.
+The chart derives placement tags `dc-nats-0`, `dc-nats-1`, and so on; group zero
+keeps its existing stream and subject names. Each broker advertises its own
+server name as a tag. Explicit placement tags must match those pod names.
+An operator using OpenTofu directly sets `nats_shard_groups` in the instance root
+(or `shard_groups` on the NATS module) and provisions at least that many servers.
+The broker's default release name is `dc-nats`; a custom broker must supply
+matching server tags and placement configuration itself.
+
+Group streams reserve their full byte ceilings independently. Grow the JetStream
+volume before enabling them if dcctl's reservation check refuses the setting.
+Tenant placement must also be populated: an unplaced tenant's publish is refused.
+Keep the block absent until all old service pods have finished rolling; older
+builds reject the new configuration key.
+
+The default profile currently supports sharding `inbound-events` only. Sharding
+`resolved-events` is refused while device-state or event-processing is deployed:
+those consumers still read only group zero. A deployment consisting of the
+ingest-only profile plus event-management has group readers for both streams.
