@@ -2321,6 +2321,9 @@ func (r *natsReader) recreateUnfiltered(fromSubject string, fromList []string) e
 // and every advisory it took would be one no recorder lettered.
 func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (MessageReader, error) {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedRead(suffix); err != nil {
+		return nil, err
+	}
 	if streams.ShapeOf(suffix) == streams.ShapeAdvisory {
 		return nil, fmt.Errorf("messaging: %q is read only by the max-delivery recorder (RecordMaxDeliveries), "+
 			"not through NewReader", suffix)
@@ -2934,6 +2937,9 @@ func (r *natsReader) dropPending() {
 // drops messages (bounded buffer) rather than stalling the pipeline.
 func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffix string) (<-chan Message, error) {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedRead(suffix); err != nil {
+		return nil, err
+	}
 	if err := nmgr.requireReader(suffix, streams.ReadLive); err != nil {
 		return nil, err
 	}
