@@ -827,6 +827,13 @@ Crear una campaña `SOLAR`, leer sus elementos (`campaignElements`) o ciclos (`c
 
 - **Nota de actualización:** Las descargas OTA permiten un flujo simultáneo por (inquilino, dispositivo, asignación) en cada réplica. Mientras otro inquilino ocupe un cupo, un inquilino que alcance o supere la mitad de `updates.maxConcurrentDownloads` (redondeada hacia abajo, mínimo uno; ocho con el valor predeterminado de 16) no puede iniciar otro flujo. Un único inquilino puede usar todos los cupos. Las solicitudes que excedan estos límites reciben la respuesta 503 de ocupado con `Retry-After: 5`; reintente tras ese plazo. No se requiere cambiar la configuración.
 
+#### La ruta HTTP de cargas útiles de dispositivos limita los intentos de adivinar credenciales {#v160-device-uplink-guessing}
+
+La ruta HTTP de cargas útiles de dispositivos, que se activa con `httpIngest.deviceUplinks`, ahora limita las solicitudes por dirección de origen (`429` con `Retry-After`). Tras fallos repetidos de credenciales para un dispositivo, deja de responder a los intentos de autenticación (`503` con `Retry-After`) en lugar de repetir `401`. Mientras se intenta adivinar la credencial de este dispositivo, todas sus cargas útiles HTTP, incluidas las que presentan la credencial correcta, reciben `503` con `Retry-After` hasta que termina la pausa (como máximo 60 segundos cada vez).
+
+- **Los dispositivos conectados por MQTT al broker no se ven afectados.**
+- **Espera antes de reintentar tras un `503`**, incluso si presentas una credencial incorrecta: espera al menos el tiempo indicado por `Retry-After`.
+
 #### Antes de actualizar {#v160-before-upgrade}
 
 - **Los atributos de entidad son únicos por clave.** La actualización elimina duplicados activos de escrituras iniciales simultáneas, conserva el menor ID y encola la reparación de pertenencias a grupos y configuración. La creación del índice bloquea brevemente las escrituras de atributos. Durante el despliegue gradual, una réplica antigua puede rechazar una escritura inicial concurrente; vuelva a intentarla. No se requiere cambiar la configuración.

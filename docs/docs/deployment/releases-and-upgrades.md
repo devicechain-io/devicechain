@@ -782,6 +782,13 @@ Creating a `SOLAR` campaign, reading its elements (`campaignElements`) or cycles
 
 - **Upgrade note:** OTA downloads now allow one in-flight stream per (tenant, device, assignment) on each replica. While another tenant holds a slot, a tenant at or above half of `updates.maxConcurrentDownloads` (rounded down, minimum one; eight with the default of 16) cannot start another stream. A lone tenant may use all slots. Excess requests receive the existing 503 busy response with `Retry-After: 5`; retry after that delay. No configuration change is required.
 
+#### The HTTP device-uplink route limits guessing {#v160-device-uplink-guessing}
+
+The opt-in HTTP device-uplink route (`httpIngest.deviceUplinks`) now limits requests per source address (`429` with `Retry-After`). After repeated credential failures for a device, it stops answering authentication guesses (`503` with `Retry-After`) instead of repeating `401`. While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time).
+
+- **Devices on the broker's MQTT connection are unaffected.**
+- **Back off on `503`**, even when presenting a wrong credential: wait at least `Retry-After` before retrying.
+
 #### Before you upgrade {#v160-before-upgrade}
 
 - **Entity attributes are unique per key.** The upgrade collapses duplicate live rows from concurrent first writes, keeping the lowest row ID, and queues group membership and configuration repairs. The index build briefly blocks attribute writes. While old and new replicas overlap, an old replica that loses a concurrent first write may refuse it; retry the write. No configuration change is needed.

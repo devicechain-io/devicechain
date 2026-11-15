@@ -206,6 +206,11 @@ Enable `mqttDeviceUplinks` only once every `event-sources` and `device-managemen
 
 **Over HTTP**, the same capability is `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink` on the `event-sources` service. The device presents its own credential in headers (`Authorization: Bearer <token>`, or `X-DeviceChain-Credential-Type`, `-Id` and `-Secret`), because a binary body has nowhere to carry one, and the route answers `401` without one. It exists only when the operator sets `httpIngest.deviceUplinks` on `event-sources`; otherwise it is `404`.
 
+| HTTP | Response |
+| --- | --- |
+| `429` | Requests from this source address exceed the allowance. `Retry-After` says when to retry. |
+| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). Devices on the broker's MQTT connection are unaffected. |
+
 ## Command delivery {#command-delivery}
 
 What a device receives on its `device-commands` topic, once for each dispatch of a command. Delivery is **live-only**: a device that is not connected and subscribed when the command is published does not receive it, and the platform is not told either way. See [Receiving commands](../guides/connecting-a-device.md#receiving-commands).
