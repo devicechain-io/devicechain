@@ -10,28 +10,29 @@ import (
 	"gorm.io/gorm"
 )
 
-type commandIncarnationSnapshot struct {
-	DeviceIncarnation sql.NullInt64 `gorm:"type:bigint"`
-}
-
-type gateIncarnationSnapshot struct {
-	DeletedIncarnation sql.NullInt64 `gorm:"type:bigint"`
-}
-
-// NewDeviceIncarnationSchema adds nullable identities so old pods can still insert rows.
+// NewDeviceIncarnationSchema adds the nullable device id a command was validated for and the
+// deleted device id a gate's floor covers. Old pods leave both NULL.
+//
+// The snapshots are declared inside the migration and named for the tables they alter, so the
+// area's naming strategy derives commands and device_gates (with the area prefix) from the type
+// names; no TableName method, which would bypass that prefix.
 func NewDeviceIncarnationSchema() *gormigrate.Migration {
+	type command struct {
+		DeviceIncarnation sql.NullInt64 `gorm:"type:bigint"`
+	}
+	type deviceGate struct {
+		DeletedIncarnation sql.NullInt64 `gorm:"type:bigint"`
+	}
 	return &gormigrate.Migration{
 		ID: "20261118120000",
 		Migrate: func(tx *gorm.DB) error {
-			commands := tx.Table(tx.NamingStrategy.TableName("commands"))
-			if !commands.Migrator().HasColumn(&commandIncarnationSnapshot{}, "DeviceIncarnation") {
-				if err := commands.Migrator().AddColumn(&commandIncarnationSnapshot{}, "DeviceIncarnation"); err != nil {
+			if !tx.Migrator().HasColumn(&command{}, "DeviceIncarnation") {
+				if err := tx.Migrator().AddColumn(&command{}, "DeviceIncarnation"); err != nil {
 					return err
 				}
 			}
-			gates := tx.Table(tx.NamingStrategy.TableName("device_gates"))
-			if !gates.Migrator().HasColumn(&gateIncarnationSnapshot{}, "DeletedIncarnation") {
-				return gates.Migrator().AddColumn(&gateIncarnationSnapshot{}, "DeletedIncarnation")
+			if !tx.Migrator().HasColumn(&deviceGate{}, "DeletedIncarnation") {
+				return tx.Migrator().AddColumn(&deviceGate{}, "DeletedIncarnation")
 			}
 			return nil
 		},
