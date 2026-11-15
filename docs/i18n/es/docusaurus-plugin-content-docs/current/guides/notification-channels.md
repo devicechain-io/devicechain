@@ -216,6 +216,8 @@ Dos ajustes más moldean la entrega:
 
 El escalado es seguro de ejecutar en varias réplicas: cada nivel de escalado se reclama antes de enviarse, así que exactamente una réplica lo entrega. Cada alarma tiene **un único reloj y nivel de escalado compartidos**. Si coinciden varias políticas con escalado, la ventana más corta fija la cadencia y cada tope cuenta contra el nivel compartido.
 
+El plazo de escalado comienza cuando la plataforma envía la notificación, independientemente de la marca de tiempo del evento del dispositivo.
+
 ```graphql
 mutation {
   createNotificationPolicy(request: {
