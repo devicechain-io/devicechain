@@ -803,6 +803,8 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 
+- **Almacenamiento de copias en GKE:** los PVC nuevos usan una clase dedicada `pd-standard` (no `standard-rwo`/`pd-balanced`, que consume cuota SSD). Puede elegir otra con `backup_object_store_storage_class`. Las actualizaciones conservan el tamaño y la clase de los PVC existentes, sin migración automática. Los demás proveedores no cambian.
+
 - **Límites de memoria de MCP:** se rechazan por completo las respuestas GraphQL de más de 256 KiB y las agregaciones de más de 1.000 bloques temporales; reduce el intervalo de fechas, selecciona una métrica o amplía los bloques temporales. Los POST y las solicitudes con cuerpo se limitan a 4 en curso por usuario y 64 por proceso antes de leer o analizar el cuerpo. La admisión de mensajes reserva hasta 4 plazas por lote; los lotes válidos según la configuración (16 entradas por defecto) ejecutan las herramientas por grupos dentro de ese límite. Cada entrada sigue contando para el límite de frecuencia del usuario; las solicitudes adicionales reciben HTTP 429 con Retry-After. Al terminar la solicitud HTTP, se cancelan las herramientas y se liberan sus plazas de ejecución. La reserva de lectura del cuerpo se libera antes de ejecutar la herramienta; se mantiene el límite de 1 MiB por solicitud. No requiere cambios de configuración.
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
@@ -833,6 +835,12 @@ La ruta HTTP de cargas útiles de dispositivos, que se activa con `httpIngest.de
 
 - **Los dispositivos conectados por MQTT al broker no se ven afectados.**
 - **Espera antes de reintentar tras un `503`**, incluso si presentas una credencial incorrecta: espera al menos el tiempo indicado por `Retry-After`.
+
+#### ingress-nginx ya no acepta snippets de configuración {#v160-nginx-snippets-off}
+
+`dcctl install` desactiva los snippets de configuración en el controlador `ingress-nginx` que el clúster conserva y restablece su nivel de riesgo de anotaciones al valor predeterminado del controlador. Antes de aplicar cambios, la instalación se niega a continuar mientras algún Ingress de la clase de ese controlador lleve una anotación `*-snippet`, e identifica cada Ingress y anotación. Actualiza la instancia propietaria con `dcctl upgrade`, o elimina la anotación, y vuelve a ejecutar `dcctl install`.
+
+Ningún chart desde `v0.25.2` establece snippets. Los clústeres nuevos, que solo ejecutan Traefik, no se ven afectados. Este cambio llega a cada clúster en su siguiente `dcctl install`.
 
 #### Antes de actualizar {#v160-before-upgrade}
 
@@ -869,6 +877,68 @@ Crear o publicar una acción automatizada requiere la autoridad para ejecutarla.
 
 - **Techo de reglas opcional:** la publicación y reversión de perfiles aplican `rulesPerTenant` solo si el nivel lo fija explícitamente. Los valores ausentes/null y esquemas antiguos de user-management conservan el comportamiento existente; mantener o reducir reglas nunca consulta user-management. Otros fallos de consulta solo rechazan aumentos de reglas.
 
+#### Exportaciones npm heredadas obsoletas {#v160-npm-deprecations}
+
+Las siguientes exportaciones quedan obsoletas en `v1.6.0` y siguen funcionando sin cambios. Actualice las importaciones o llamadas con los reemplazos indicados. No se elimina ninguna exportación. La eliminación requiere una versión mayor tras al menos dos versiones menores de obsolescencia; si empieza en 1.6, no podrá eliminarse nada antes de una versión mayor posterior a 1.7. `BuiltinOptionIssue` nombra la forma existente del problema de un widget integrado (`widgetType`); el tipo general `@devicechain/dashboards.OptionIssue` (`widgetId`) sigue siendo compatible.
+
+- `@devicechain/widgets` / `pickSample` queda obsoleta; use `@devicechain/widget-sdk.pickSample`.
+- `@devicechain/widgets` / `optBoolean` queda obsoleta; use `@devicechain/widget-sdk.optBoolean`.
+- `@devicechain/widgets` / `WidgetProps` queda obsoleta; use `@devicechain/widget-sdk.WidgetProps`.
+- `@devicechain/widgets` / `WidgetComponent` queda obsoleta; use `@devicechain/widget-sdk.WidgetComponent`.
+- `@devicechain/widgets` / `WidgetFrame` queda obsoleta; use `@devicechain/widget-sdk.WidgetFrame`.
+- `@devicechain/widgets` / `WidgetSubjectProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetSubjectProvider`.
+- `@devicechain/widgets` / `WidgetSelectProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetSelectProvider`.
+- `@devicechain/widgets` / `useWidgetSelect` queda obsoleta; use `@devicechain/widget-sdk.useWidgetSelect`.
+- `@devicechain/widgets` / `WidgetTimeZoneProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetTimeZoneProvider`.
+- `@devicechain/widgets` / `useWidgetTimeZone` queda obsoleta; use `@devicechain/widget-sdk.useWidgetTimeZone`.
+- `@devicechain/widgets` / `WidgetThemeRootProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetThemeRootProvider`.
+- `@devicechain/widgets` / `useWidgetThemeRoot` queda obsoleta; use `@devicechain/widget-sdk.useWidgetThemeRoot`.
+- `@devicechain/widgets` / `WidgetCandidatesProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetCandidatesProvider`.
+- `@devicechain/widgets` / `useWidgetCandidates` queda obsoleta; use `@devicechain/widget-sdk.useWidgetCandidates`.
+- `@devicechain/widgets` / `useFlashOnChange` queda obsoleta; use `@devicechain/widget-sdk.useFlashOnChange`.
+- `@devicechain/widgets` / `flashTextStyle` queda obsoleta; use `@devicechain/widget-sdk.flashTextStyle`.
+- `@devicechain/widgets` / `flashBackgroundStyle` queda obsoleta; use `@devicechain/widget-sdk.flashBackgroundStyle`.
+- `@devicechain/widgets` / `FlashValue` queda obsoleta; use `@devicechain/widget-sdk.FlashValue`.
+- `@devicechain/widgets` / `fitValueFont` queda obsoleta; use `@devicechain/widget-sdk.fitValueFont`.
+- `@devicechain/widgets` / `useMeasurementStream` queda obsoleta; use `@devicechain/widget-sdk.useMeasurementStream`.
+- `@devicechain/widgets` / `useAlarmStream` queda obsoleta; use `@devicechain/widget-sdk.useAlarmStream`.
+- `@devicechain/widgets` / `useCommandStream` queda obsoleta; use `@devicechain/widget-sdk.useCommandStream`.
+- `@devicechain/widgets` / `useLocationStream` queda obsoleta; use `@devicechain/widget-sdk.useLocationStream`.
+- `@devicechain/widgets` / `useDatasourceAvailability` queda obsoleta; use `@devicechain/widget-sdk.useDatasourceAvailability`.
+- `@devicechain/widgets` / `useDashboardHub` queda obsoleta; use `@devicechain/widget-sdk.useDashboardHub`.
+- `@devicechain/widgets` / `useHubConnectionState` queda obsoleta; use `@devicechain/widget-sdk.useHubConnectionState`.
+- `@devicechain/widgets` / `HubConnectionBadge` queda obsoleta; use `@devicechain/widget-sdk.HubConnectionBadge`.
+- `@devicechain/widgets` / `useResolvedBindings` queda obsoleta; use `@devicechain/widget-sdk.useResolvedBindings`.
+- `@devicechain/widgets` / `useViewerBindings` queda obsoleta; use `@devicechain/widget-sdk.useViewerBindings`.
+- `@devicechain/widgets` / `useSlotCandidates` queda obsoleta; use `@devicechain/widget-sdk.useSlotCandidates`.
+- `@devicechain/widgets` / `useCandidates` queda obsoleta; use `@devicechain/widget-sdk.useCandidates`.
+- `@devicechain/widgets` / `css` queda obsoleta; use `@devicechain/widget-sdk.css`.
+- `@devicechain/widgets` / `FlashDirection` queda obsoleta; use `@devicechain/widget-sdk.FlashDirection`.
+- `@devicechain/widgets` / `WidgetFrameProps` queda obsoleta; use `@devicechain/widget-sdk.WidgetFrameProps`.
+- `@devicechain/widgets` / `WidgetSelect` queda obsoleta; use `@devicechain/widget-sdk.WidgetSelect`.
+- `@devicechain/widgets` / `WidgetCandidates` queda obsoleta; use `@devicechain/widget-sdk.WidgetCandidates`.
+- `@devicechain/widgets` / `MeasurementStreamState` queda obsoleta; use `@devicechain/widget-sdk.MeasurementStreamState`.
+- `@devicechain/widgets` / `AlarmStreamState` queda obsoleta; use `@devicechain/widget-sdk.AlarmStreamState`.
+- `@devicechain/widgets` / `CommandStreamState` queda obsoleta; use `@devicechain/widget-sdk.CommandStreamState`.
+- `@devicechain/widgets` / `LocationStreamState` queda obsoleta; use `@devicechain/widget-sdk.LocationStreamState`.
+- `@devicechain/widgets` / `CandidatesState` queda obsoleta; use `@devicechain/widget-sdk.CandidatesState`.
+- `@devicechain/widgets` / `DatasourceAvailability` queda obsoleta; use `@devicechain/widget-sdk.DatasourceAvailability`.
+- `@devicechain/widgets` / `HubConnectionBadgeProps` queda obsoleta; use `@devicechain/widget-sdk.HubConnectionBadgeProps`.
+- `@devicechain/widgets` / `ThemeVar` queda obsoleta; use `@devicechain/widget-sdk.ThemeVar`.
+- `@devicechain/widgets` / `EChart` queda obsoleta; use `@devicechain/widget-sdk/echarts.EChart`.
+- `@devicechain/widgets` / `buildLineOption` queda obsoleta; use `@devicechain/widget-sdk/echarts.buildLineOption`.
+- `@devicechain/widgets` / `buildGaugeOption` queda obsoleta; use `@devicechain/widget-sdk/echarts.buildGaugeOption`.
+- `@devicechain/widgets` / `resolveChartTheme` queda obsoleta; use `@devicechain/widget-sdk/echarts.resolveChartTheme`.
+- `@devicechain/widgets` / `useChartTheme` queda obsoleta; use `@devicechain/widget-sdk/echarts.useChartTheme`.
+- `@devicechain/widgets` / `EChartOption` queda obsoleta; use `@devicechain/widget-sdk/echarts.EChartOption`.
+- `@devicechain/widgets` / `LineChartOptions` queda obsoleta; use `@devicechain/widget-sdk/echarts.LineChartOptions`.
+- `@devicechain/widgets` / `GaugeChartOptions` queda obsoleta; use `@devicechain/widget-sdk/echarts.GaugeChartOptions`.
+- `@devicechain/widgets` / `ChartTheme` queda obsoleta; use `@devicechain/widget-sdk/echarts.ChartTheme`.
+- `@devicechain/widgets` / `WIDGET_CHANNEL` queda obsoleta; use `builtinWidgetDescriptors[id].channel`.
+- `@devicechain/widgets` / `WIDGET_BINDS_DATASOURCE` queda obsoleta; use `builtinWidgetDescriptors[id].datasource.mode !== 'none'`.
+- `@devicechain/widgets` / `isTerminalStatus` queda obsoleta; use `@devicechain/dashboards.isTerminalCommandStatus`.
+- `@devicechain/widgets` / `OptionIssue` queda obsoleta; use `@devicechain/widgets.BuiltinOptionIssue`.
+
 #### Las métricas y los endpoints de salud pasan al puerto ops {#v160-ops-port}
 
 Las métricas y los endpoints de salud de los servicios se han separado del puerto de la API. `/metrics`, `/healthz` y `/readyz` se sirven en el puerto 8083 (`ops`) de los pods y del Service de cada área y ya no son accesibles mediante `/api/<area>/...`. Los ServiceMonitors y las sondas del chart se actualizan automáticamente. Si recopilas métricas de los pods con tu propia configuración de Prometheus, cambia el puerto de destino de 8080 a 8083. Durante el despliegue gradual, no se recopilan métricas de los pods que aún no se han reemplazado.
@@ -901,6 +971,12 @@ Una pestaña de la consola cuya sesión ha terminado ya no continúa con una ses
 
 - **No es necesario hacer nada.**
 
+#### Se almacena el evento de una nueva relación {#v160-new-relationship-event}
+
+Un evento `NewRelationship` enviado por un dispositivo ahora se almacena y aparece en `events` (tipo de evento `0`) con sus anclajes. Antes de esta versión se reintentaba y después se registraba como un fallo de ingesta con el motivo `API_CALL_FAILED`, aunque la relación se había creado. Un evento de un tipo que el almacén de eventos no admite ahora se rechaza en su primera entrega con el motivo `INVALID`, en lugar de reintentarse. Los eventos enviados antes de la actualización no se recuperan.
+
+- **No hay que hacer nada.**
+
 #### Los fallos de ingesta inválidos identifican el dispositivo {#v160-invalid-failures-name-the-device}
 
 Los fallos de ingesta con motivo `INVALID` que device-management registró para un evento legible (un valor que incumple la definición de su métrica, un evento de más de 366 días o un rechazo del decodificador) ahora identifican el dispositivo y el tipo de evento, y se limitan por dispositivo como cualquier otro motivo. Antes de esta versión se mostraban sin dispositivo y compartían un límite de diez registros por hora para todo el tenant. Los registros indexados antes de la actualización no se reescriben.
@@ -927,6 +1003,10 @@ La revisión de cambios normalmente no considera autoras del borrador a las pers
 El plazo de escalado ahora se cuenta desde el envío de la notificación. Una alarma generada por una lectura que llega con retraso ya no escala en la siguiente pasada del planificador, y un reloj de dispositivo adelantado respecto a la plataforma ya no retrasa el escalado.
 
 - **No hay que hacer nada.** La actualización añade automáticamente una marca de tiempo que admite valores nulos; las alarmas abiertas existentes conservan el cálculo anterior hasta su siguiente notificación.
+
+#### Comprobaciones más estrictas de las credenciales HTTP {#v160-http-credentials}
+
+Una acción `httpCall` ya no puede nombrar la credencial de un conector. Un manejador de secreto del espacio de nombres `connector/` se rechaza al publicar una regla, y una regla publicada que lo use se envía a la cola de mensajes no entregados con el resultado `invalid`, en lugar de enviar la credencial del conector. Las réplicas antiguas de `outbound-connectors` no aplican esta restricción hasta que se sustituyen.
 
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
 
@@ -1863,9 +1943,7 @@ conjunto de claves y emite su token en el puerto interno. Consulta
 
 - **El chart ya no fija ningún snippet de configuración de nginx.**
 - **El controlador de ingress que instala `dcctl install` no cambia en esta versión** y sigue aceptando
-  snippets, porque las instancias aún no actualizadas dependen de ellos. Una versión posterior los
-  desactiva, tras una comprobación de `dcctl install` que se niega a continuar mientras algún Ingress de la
-  clase del controlador siga llevando una anotación `*-snippet`.
+  snippets, porque las instancias aún no actualizadas dependen de ellos. [v1.6.0 los desactiva](#v160-nginx-snippets-off), tras una comprobación previa de `dcctl install`.
 - **Los verificadores de tokens externos no se ven afectados:** usan el `jwks_uri` de los metadatos del
   servidor de autorización, `/oauth/jwks`, que sigue siendo público.
 
