@@ -158,6 +158,8 @@ Every location field is a JSON **string**, including the numeric ones. Each must
 
 #### NewRelationship {#new-relationship-payload}
 
+When the relationship is created, its event is kept in event history as an envelope with its anchors.
+
 Creates one relationship from the sending device to another entity in the same tenant. This payload has no `entries` array, and its three keys are read by their exact names, so their case matters. A missing key is not refused when the message is decoded: it reads as an empty string, and the event then fails at resolution like the cases below.
 
 A device cannot create ownership or containment relationships: a `NewRelationship` naming a tracked type (including `assigned` and any tenant-defined type marked tracked) or the built-in `contains` is refused and recorded on `failed-events` with reason `Invalid` on its first delivery, without retries. Assign devices with a claim code or the `createEntityRelationship` mutation. Untracked types, including `member`, work as before.
