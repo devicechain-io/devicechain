@@ -827,6 +827,13 @@ Crear una campaña `SOLAR`, leer sus elementos (`campaignElements`) o ciclos (`c
 
 - **Nota de actualización:** Las descargas OTA permiten un flujo simultáneo por (inquilino, dispositivo, asignación) en cada réplica. Mientras otro inquilino ocupe un cupo, un inquilino que alcance o supere la mitad de `updates.maxConcurrentDownloads` (redondeada hacia abajo, mínimo uno; ocho con el valor predeterminado de 16) no puede iniciar otro flujo. Un único inquilino puede usar todos los cupos. Las solicitudes que excedan estos límites reciben la respuesta 503 de ocupado con `Retry-After: 5`; reintente tras ese plazo. No se requiere cambiar la configuración.
 
+#### La ruta HTTP de cargas útiles de dispositivos limita los intentos de adivinar credenciales {#v160-device-uplink-guessing}
+
+La ruta HTTP de cargas útiles de dispositivos, que se activa con `httpIngest.deviceUplinks`, ahora limita las solicitudes por dirección de origen (`429` con `Retry-After`). Tras fallos repetidos de credenciales para un dispositivo, deja de responder a los intentos de autenticación (`503` con `Retry-After`) en lugar de repetir `401`. Mientras se intenta adivinar la credencial de este dispositivo, todas sus cargas útiles HTTP, incluidas las que presentan la credencial correcta, reciben `503` con `Retry-After` hasta que termina la pausa (como máximo 60 segundos cada vez).
+
+- **Los dispositivos conectados por MQTT al broker no se ven afectados.**
+- **Espera antes de reintentar tras un `503`**, incluso si presentas una credencial incorrecta: espera al menos el tiempo indicado por `Retry-After`.
+
 #### Antes de actualizar {#v160-before-upgrade}
 
 - **Los atributos de entidad son únicos por clave.** La actualización elimina duplicados activos de escrituras iniciales simultáneas, conserva el menor ID y encola la reparación de pertenencias a grupos y configuración. La creación del índice bloquea brevemente las escrituras de atributos. Durante el despliegue gradual, una réplica antigua puede rechazar una escritura inicial concurrente; vuelva a intentarla. No se requiere cambiar la configuración.
@@ -859,6 +866,8 @@ Crear o publicar una acción automatizada requiere la autoridad para ejecutarla.
 #### Seguimiento acotado de Sparkplug {#v160-sparkplug-limits}
 
 **Nota de actualización:** Cada fuente Sparkplug conserva como máximo 50.000 sesiones de nodo, incluidas 1.024 sin NBIRTH. Las identidades nuevas que superen un límite se descartan sin ingesta ni solicitud de renacimiento; los nodos existentes pueden renacer y las sesiones en línea nunca se expulsan. Los marcadores inactivos caducan a los 10 minutos y las sesiones sin conexión a las 24 horas; al alcanzar el límite, los nacimientos recuperan las sesiones sin conexión más antiguas. El historial de actividad admite 50.000 identidades: bajo presión elimina entradas antiguas y rechaza nuevas entradas si sigue lleno (mientras está lleno, una sonda no declara silenciosa una identidad no registrada). Se rechazan los niveles de grupo, nodo y dispositivo con más de 256 caracteres, de acuerdo con el límite del registro de dispositivos. Las negativas se cuentan en `devicechain_sparkplugingest_session_refused_total`, con `reason` igual a `placeholder_cap`, `session_cap` o `seen_cap`. Los avisos de capacidad y de cola llena se limitan, cada tipo, a uno por fuente cada 10 minutos; los registros por mensaje pasan a debug. No hace falta cambiar la configuración para una actualización gradual.
+
+- **Techo de reglas opcional:** la publicación y reversión de perfiles aplican `rulesPerTenant` solo si el nivel lo fija explícitamente. Los valores ausentes/null y esquemas antiguos de user-management conservan el comportamiento existente; mantener o reducir reglas nunca consulta user-management. Otros fallos de consulta solo rechazan aumentos de reglas.
 
 **La planificación de notificaciones está limitada por inquilino.** Cuatro trabajadores atienden a los inquilinos en orden rotativo. Cada inquilino deja de iniciar liberaciones y escalaciones tras el doble del presupuesto total de envío (80 segundos con los valores predeterminados) mientras otro inquilino espera un trabajador; si nadie espera, el inquilino continúa; una alarma ya iniciada conserva su presupuesto completo y las restantes quedan pendientes para el siguiente ciclo. Los avisos de resolución se procesan dentro de cada trabajo con su propio presupuesto. Los canales que agotan sus intentos por tiempo de espera se omiten durante el resto del trabajo; una escalación dirigida solo a esos canales conserva su nivel y se reintenta en el siguiente ciclo. La primera prueba aún puede consumir un nivel. No se requiere cambiar la configuración y la existente funciona durante las actualizaciones graduales.
 
@@ -910,6 +919,12 @@ La API de administración del operador ahora limita una identidad cuyo rol de si
 La revisión de cambios normalmente no considera autoras del borrador a las personas que solo eliminaron reglas, métricas o comandos en otros perfiles. Las eliminaciones no atribuidas a una fila, anteriores a la actualización o realizadas por un pod aún sin actualizar durante una actualización gradual, se tratan de forma conservadora: si desapareció una definición del perfil revisado sin una eliminación atribuida que lo explique, toda persona que haya realizado una eliminación no atribuida desde el último cambio atribuido de esa definición cuenta como autora. Las revisiones ya ejecutadas conservan la lista de autores que registraron; ejecuta una nueva revisión si se excluyó a un aprobador. Al eliminar un perfil, ahora se escribe una entrada de auditoría por cada definición que se elimina.
 
 - **No es necesario hacer nada.** Ejecuta una nueva revisión si se excluyó a un aprobador por una eliminación en otro perfil.
+
+#### Plazo de escalado {#v160-escalation-clock}
+
+El plazo de escalado ahora se cuenta desde el envío de la notificación. Una alarma generada por una lectura que llega con retraso ya no escala en la siguiente pasada del planificador, y un reloj de dispositivo adelantado respecto a la plataforma ya no retrasa el escalado.
+
+- **No hay que hacer nada.** La actualización añade automáticamente una marca de tiempo que admite valores nulos; las alarmas abiertas existentes conservan el cálculo anterior hasta su siguiente notificación.
 
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
 
