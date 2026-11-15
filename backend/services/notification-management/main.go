@@ -262,10 +262,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// counts refused deliveries) and the NATS manager that consume them. This callback
 			// runs once, in the initialize phase, which is what makes it the safe place.
 			buildMetrics()
-			peers, err := svcclient.NewPeers(infra, Microservice.FunctionalArea)
-			if err != nil {
-				return err
-			}
+			peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
 			Notifier = processor.NewPolicyNotifier(Api, secretStore, Configuration.DeliveryAttempts,
 				Configuration.DeliveryTimeout(),
 				governance.NewTenantLifecycleGateFor(peers, safetyGates),

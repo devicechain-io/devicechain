@@ -285,10 +285,7 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 	}
 
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	peers, err := svcclient.NewPeers(infra, Microservice.FunctionalArea)
-	if err != nil {
-		return nil, err
-	}
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
 	api.TenantDeleted = governance.NewTenantLifecycleGateFor(peers, governance.NewSafetyGates(Microservice))
 	url, peerErr := peers.URL(infra.DeviceManagement.Endpoint())
 

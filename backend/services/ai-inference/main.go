@@ -97,10 +97,7 @@ func buildInferenceResolver() *inference.Resolver {
 	}
 
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	peers, err := svcclient.NewPeers(infra, Microservice.FunctionalArea)
-	if err != nil {
-		panic(err)
-	}
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
 	var facts inference.TenantFactsReader
 	var client *svcclient.Client
 	seam, peerErr := peers.UserManagement(auth.TenantRead)

@@ -19,7 +19,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
-	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
@@ -60,9 +59,7 @@ func startBroker(t *testing.T) *natsserver.Server {
 func newRecorderRig(t *testing.T, srv *natsserver.Server, suffixes ...string) *recorderRig {
 	t.Helper()
 	addr := srv.Addr().(*net.TCPAddr)
-	// Distinct valid areas keep the two-area broker test isolated and satisfy peer identity validation.
-	areas := auth.ServiceCallerNames()
-	area := areas[int(recorderAreaSeq.Add(1))%len(areas)]
+	area := fmt.Sprintf("rec-area-%d", recorderAreaSeq.Add(1))
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: area, Readiness: core.NewReadinessGate()}
 	ms.InstanceConfiguration.Infrastructure.Nats = config.NatsConfiguration{Hostname: addr.IP.String(), Port: uint32(addr.Port)}
 	ms.Readiness.MarkReadyWithoutAuthSurface()
@@ -450,7 +447,7 @@ func abandoned(suffix string, final bool) messaging.MaxDelivery {
 func TestAFailedLetterIsLostOnlyOnTheFinalDelivery(t *testing.T) {
 	for _, suffix := range []string{streams.RaiseAlarm, streams.ConnectorDispatch} {
 		t.Run(suffix+"/final", func(t *testing.T) {
-			area := "device-management"
+			area := "rec-final-" + strings.ReplaceAll(suffix, ".", "-")
 			r, reg, letters, copies := failingRecorder(t, area)
 			outcome, err := r.record(context.Background(), abandoned(suffix, true))
 			require.NoError(t, err, "an error on the final delivery strands the advisory uncounted")
@@ -459,7 +456,7 @@ func TestAFailedLetterIsLostOnlyOnTheFinalDelivery(t *testing.T) {
 			require.Equal(t, writeAttempts, letters.calls+copies.calls, "the write was not retried before giving up")
 		})
 		t.Run(suffix+"/not-final", func(t *testing.T) {
-			area := "device-management"
+			area := "rec-early-" + strings.ReplaceAll(suffix, ".", "-")
 			r, reg, _, _ := failingRecorder(t, area)
 			outcome, err := r.record(context.Background(), abandoned(suffix, false))
 			require.Error(t, err, "a failure before the final delivery must be retried by redelivery")

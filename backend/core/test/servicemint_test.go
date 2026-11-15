@@ -245,7 +245,7 @@ import s "github.com/devicechain-io/dc-microservice/svcclient"
 import a "github.com/devicechain-io/dc-microservice/auth"
 import g "github.com/devicechain-io/dc-microservice/governance"
 func peerCalls() {
- peers, _ := s.NewPeers(infra, ms.FunctionalArea)
+ peers := s.NewPeers(infra, ms.FunctionalArea)
  peers.Client(a.DeviceRead)
  peers.Seam(target, a.DeviceRead)
  peers.UserManagement(a.DeviceRead)
@@ -300,7 +300,7 @@ func peerCalls() {
 	if !strings.Contains(problems, "constructor reference is not a direct call") {
 		t.Fatalf("method alias escaped: %s", problems)
 	}
-	writeMintFixture(t, root, "backend/services/fixture/peers.go", strings.Replace(source, "peers, _ := s.NewPeers", "factory := s.NewPeers; peers, _ := factory", 1))
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", strings.Replace(source, "peers := s.NewPeers", "factory := s.NewPeers; peers := factory", 1))
 	sites, err = serviceMintSitesUnder(root, serviceMintForwarders)
 	if err != nil {
 		t.Fatal(err)

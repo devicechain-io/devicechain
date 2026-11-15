@@ -542,10 +542,7 @@ func (p *Producer) TenantDeleted(tenant string) bool {
 		infra := p.ms.InstanceConfiguration.Infrastructure
 		// nil gates: the owning service reports the gate's state on its own gauge, and this
 		// is the same configuration read a second time.
-		peers, err := svcclient.NewPeers(infra, p.ms.FunctionalArea)
-		if err != nil {
-			panic(err)
-		}
+		peers := svcclient.NewPeers(infra, p.ms.FunctionalArea)
 		p.gate = tenantLifecycleGate(peers, nil)
 	})
 	return p.gate != nil && p.gate(tenant)

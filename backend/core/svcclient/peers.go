@@ -5,7 +5,6 @@ package svcclient
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -25,14 +24,12 @@ type Peers struct {
 	opts  []Option
 }
 
-func NewPeers(infra config.InfrastructureConfiguration, area string) (*Peers, error) {
+// NewPeers accepts any non-blank functional area; service ceilings are checked by the repository guard.
+func NewPeers(infra config.InfrastructureConfiguration, area string) *Peers {
 	if strings.TrimSpace(area) == "" {
 		panic("svcclient: blank functional area")
 	}
-	if _, ok := auth.ServiceCeiling(area); !ok {
-		return nil, fmt.Errorf("svcclient: no service ceiling for %q", area)
-	}
-	return &Peers{infra: infra, area: area}, nil
+	return &Peers{infra: infra, area: area}
 }
 
 // Area is the calling service's token subject and log identity.

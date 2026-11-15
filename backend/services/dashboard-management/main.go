@@ -124,10 +124,7 @@ func afterRdb(ctx context.Context, m *service.Managers) error {
 	// re-land dashboard rows behind the purge sweep. Nil (user-management unconfigured)
 	// leaves the gate off with a warning; the per-area erasure fence is the guarantee.
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	peers, err := svcclient.NewPeers(infra, Microservice.FunctionalArea)
-	if err != nil {
-		return err
-	}
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
 	Api.TenantDeleted = governance.NewTenantLifecycleGateFor(peers, governance.NewSafetyGates(Microservice))
 	wireShareChecker(infra.ServiceAuth.Secret, infra)
 
@@ -152,10 +149,7 @@ func afterRdb(ctx context.Context, m *service.Managers) error {
 // unchecked — said once, here, at startup.
 func wireShareChecker(secret string, infra mscfg.InfrastructureConfiguration) {
 	infra.ServiceAuth.Secret = secret
-	peers, err := svcclient.NewPeers(infra, Microservice.FunctionalArea)
-	if err != nil {
-		panic(err)
-	}
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
 	url, err := peers.URL(infra.DeviceManagement.Endpoint())
 	if err != nil {
 		log.Warn().Msg("Service secret or device-management endpoint not configured — dashboards cannot be shared with customers or groups.")

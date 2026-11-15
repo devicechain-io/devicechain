@@ -14,10 +14,7 @@ import (
 
 func TestPeers(t *testing.T) {
 	infra := config.InfrastructureConfiguration{}
-	p, err := NewPeers(infra, "dashboard-management")
-	if err != nil {
-		t.Fatal(err)
-	}
+	p := NewPeers(infra, "dashboard-management")
 	missing := func(err error, key string) {
 		t.Helper()
 		var m MissingError
@@ -26,15 +23,15 @@ func TestPeers(t *testing.T) {
 		}
 	}
 	missing(p.Ready(), "infrastructure.serviceAuth.secret")
-	_, err = p.UserManagement(auth.TenantRead)
+	_, err := p.UserManagement(auth.TenantRead)
 	missing(err, "infrastructure.serviceAuth.secret")
 	infra.ServiceAuth.Secret = "secret"
-	p, _ = NewPeers(infra, "dashboard-management")
+	p = NewPeers(infra, "dashboard-management")
 	missing(p.Ready(), "infrastructure.userManagement")
 	_, err = p.UserManagement(auth.TenantRead)
 	missing(err, "infrastructure.userManagement")
 	infra.UserManagement = config.UserManagementConfiguration{Hostname: "um", Port: 8080, InternalPort: 8082}
-	p, _ = NewPeers(infra, "dashboard-management")
+	p = NewPeers(infra, "dashboard-management")
 	_, err = p.Seam(infra.DeviceManagement.Endpoint(), auth.DeviceRead)
 	missing(err, "infrastructure.deviceManagement")
 	if err := p.Ready(); err != nil {
@@ -54,9 +51,6 @@ func TestPeers(t *testing.T) {
 	copy := p.With(WithQueryTimeout(time.Minute))
 	if copy.Client().http.Timeout != time.Minute || p.Client().http.Timeout == time.Minute {
 		t.Fatal("With mutated original")
-	}
-	if _, err := NewPeers(infra, "unknown"); err == nil {
-		t.Fatal("unknown area accepted")
 	}
 }
 
