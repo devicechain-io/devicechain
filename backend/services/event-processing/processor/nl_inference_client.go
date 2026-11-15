@@ -12,8 +12,6 @@ import (
 
 	"github.com/devicechain-io/dc-event-processing/internal/nldraft"
 	"github.com/devicechain-io/dc-microservice/aiwire"
-	"github.com/devicechain-io/dc-microservice/auth"
-	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
@@ -38,21 +36,13 @@ type inferenceClient struct {
 	url    string
 }
 
-// NewInferenceClient builds the drafter's inference seam: a service-token client (least-privilege
-// ai:infer, minted from user-management at umCfg with the shared secret) aimed at ai-inference's
-// GraphQL URL. It returns the drafter's interface so the concrete adapter stays package-private.
-//
-// It builds the svcclient itself rather than taking one, because the client's TIMEOUT is part of
-// this seam's contract and a caller-supplied client would be free to get it wrong. The default
-// svcclient bound (10s) is far below ai-inference's inference timeout (40s by default, up to
-// config.AiInferenceMaxCallTimeout), so a default client cut slow models off first and turned
-// ai-inference's honest "timed out" into an opaque transport error the author read as an outage.
-// This client outwaits the callee's CEILING (config.AiInferenceCallerTimeout), so whatever the
-// operator configured, ai-inference's own answer is the one that arrives.
-func NewInferenceClient(umCfg config.UserManagementConfiguration, secret, url string) nldraft.Inferer {
-	client := svcclient.New(umCfg, secret, "event-processing", []string{string(auth.AIInfer)},
-		svcclient.WithQueryTimeout(config.AiInferenceCallerTimeout))
-	return &inferenceClient{client: client, url: url}
+// NewInferenceClient wraps the drafter's inference seam: an isolated service-token client
+// carrying ai:infer, aimed at ai-inference's GraphQL URL. The caller builds it through
+// Peers.With(WithQueryTimeout(config.AiInferenceCallerTimeout)) so it outwaits the callee's
+// ceiling and lets ai-inference's own timeout answer arrive. It returns the drafter's
+// interface so the concrete adapter stays package-private.
+func NewInferenceClient(seam svcclient.Seam) nldraft.Inferer {
+	return &inferenceClient{client: seam.Client, url: seam.URL}
 }
 
 // Infer carries one prompt to the active provider under the given tenant and returns the raw

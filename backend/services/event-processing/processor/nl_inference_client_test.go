@@ -20,9 +20,20 @@ import (
 	"github.com/devicechain-io/dc-microservice/aiwire"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func inferenceTestSeam(um config.UserManagementConfiguration, url string) svcclient.Seam {
+	infra := config.InfrastructureConfiguration{UserManagement: um}
+	infra.ServiceAuth.Secret = "secret"
+	peers := svcclient.NewPeers(infra, "event-processing")
+	return svcclient.Seam{
+		Client: peers.With(svcclient.WithQueryTimeout(config.AiInferenceCallerTimeout)).Client(auth.AIInfer),
+		URL:    url,
+	}
+}
 
 func goodMint(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{Token: "tok", ExpiresAt: 1 << 40})
@@ -79,11 +90,11 @@ func refusal(message, code string) http.HandlerFunc {
 
 // The caller must outwait ai-inference. A model that answers after svcclient's default 10s
 // bound — well inside ai-inference's own inference timeout — is a SUCCESS, not an error the
-// author reads as an outage. Built through NewInferenceClient, the constructor main wires, so
-// this exercises the caller's real timeout rather than a client the test assembled.
+// author reads as an outage. The fixture supplies the same Peers.With timeout option as main
+// to the NewInferenceClient adapter.
 func TestInferenceClientOutwaitsTheDefaultBound(t *testing.T) {
 	um, url := fakeAiInference(t, candidateAfter(11*time.Second))
-	c := NewInferenceClient(um, "secret", url)
+	c := NewInferenceClient(inferenceTestSeam(um, url))
 
 	out, err := c.Infer(context.Background(), "acme", "prompt", "")
 	require.NoError(t, err, "a model slower than 10s but inside ai-inference's own timeout was cut off by the caller")
@@ -107,7 +118,7 @@ func TestInferenceClientClassifiesOnTheCode(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			um, url := fakeAiInference(t, tc.answer)
-			_, err := NewInferenceClient(um, "secret", url).Infer(context.Background(), "acme", "prompt", "")
+			_, err := NewInferenceClient(inferenceTestSeam(um, url)).Infer(context.Background(), "acme", "prompt", "")
 			require.Error(t, err)
 			assert.Equal(t, tc.timedOut, errors.Is(err, nldraft.ErrTimedOut), "timed out? %v", err)
 			assert.Equal(t, tc.rlt, errors.Is(err, nldraft.ErrRateLimited), "rate limited? %v", err)
@@ -120,7 +131,7 @@ func TestInferenceClientClassifiesTheCallerDeadline(t *testing.T) {
 	um, url := fakeAiInference(t, candidateAfter(5*time.Second))
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	_, err := NewInferenceClient(um, "secret", url).Infer(ctx, "acme", "prompt", "")
+	_, err := NewInferenceClient(inferenceTestSeam(um, url)).Infer(ctx, "acme", "prompt", "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, nldraft.ErrTimedOut)
 }
@@ -133,7 +144,7 @@ func TestInferenceClientMintFailureIsNotATimeout(t *testing.T) {
 		um, url := fakePeers(t, func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "no", http.StatusInternalServerError)
 		}, candidateAfter(0))
-		_, err := NewInferenceClient(um, "secret", url).Infer(context.Background(), "acme", "prompt", "")
+		_, err := NewInferenceClient(inferenceTestSeam(um, url)).Infer(context.Background(), "acme", "prompt", "")
 		require.Error(t, err)
 		assert.False(t, errors.Is(err, nldraft.ErrTimedOut), "%v", err)
 	})
@@ -148,7 +159,7 @@ func TestInferenceClientMintFailureIsNotATimeout(t *testing.T) {
 		t.Cleanup(func() { close(release) }) // runs before the server's Close (LIFO)
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
-		_, err := NewInferenceClient(um, "secret", url).Infer(ctx, "acme", "prompt", "")
+		_, err := NewInferenceClient(inferenceTestSeam(um, url)).Infer(ctx, "acme", "prompt", "")
 		require.Error(t, err)
 		assert.False(t, errors.Is(err, nldraft.ErrTimedOut), "a slow mint was reported as a slow model: %v", err)
 	})

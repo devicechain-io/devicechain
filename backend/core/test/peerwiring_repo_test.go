@@ -9,15 +9,13 @@ import (
 )
 
 var peerWiringLedger = map[string]peerWiringCount{
-	"backend/core/config/endpoint.go":                                    {1, 0},
-	"backend/core/governance/lifecycle_resolver.go":                      {0, 1},
-	"backend/services/event-processing/main.go":                          {7, 5},
-	"backend/services/event-processing/processor/nl_inference_client.go": {0, 1},
-	"backend/services/event-sources/main.go":                             {6, 5},
-	"backend/services/event-sources/presence_wiring.go":                  {5, 3},
-	"backend/services/lwm2m-ingest/main.go":                              {4, 1},
-	"backend/services/mcp/server/graphql.go":                             {1, 0},
-	"backend/services/sparkplug-ingest/main.go":                          {4, 3},
+	"backend/core/config/endpoint.go":                   {1, 0},
+	"backend/core/governance/lifecycle_resolver.go":     {0, 1},
+	"backend/services/event-sources/main.go":            {6, 5},
+	"backend/services/event-sources/presence_wiring.go": {5, 3},
+	"backend/services/lwm2m-ingest/main.go":             {4, 1},
+	"backend/services/mcp/server/graphql.go":            {1, 0},
+	"backend/services/sparkplug-ingest/main.go":         {4, 3},
 }
 
 func TestPeerWiringLedger(t *testing.T) {
@@ -31,7 +29,7 @@ func TestPeerWiringLedger(t *testing.T) {
 		mints += count.mints
 	}
 	t.Logf("peer wiring: %d urls, %d mints", urls, mints)
-	if urls < 28 || mints < 19 {
+	if urls < 21 || mints < 13 {
 		t.Fatal("peer wiring scan is empty")
 	}
 	if problems := checkPeerWiring(found, peerWiringLedger); len(problems) != 0 {
