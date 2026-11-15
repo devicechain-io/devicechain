@@ -2144,8 +2144,12 @@ construida por una versión anterior, de antes de que existiera `dcctl install`,
 excepción: también hay que recrear su clúster; consulta
 [Versiones y actualizaciones](./releases-and-upgrades.md#pre-declaration-recreate).
 
-Si el propio clúster de kind ya no existe —borrado con `kind delete cluster`—, destroy no tiene
-nada que desinstalar y lo dice, limpiando solo el estado local. Eso es el directorio de la
+Si el propio clúster de kind ya no existe —borrado con `kind delete cluster`—, destroy solo
+limpia el estado local cuando la instancia tiene un registro de su clúster y el contexto
+registrado ya no responde. Una suposición nunca demuestra que el clúster haya desaparecido.
+Sin registro se ejecuta la desinstalación normal, que falla si no se puede acceder al clúster;
+indique `--kube-context` o elimine manualmente el directorio de la instancia si su clúster
+realmente ha desaparecido. Eso es el directorio de la
 instancia y el directorio propio del clúster en `~/.devicechain/clusters/<cluster-uid>/`, que
 creó `dcctl install` y que `kind delete cluster` dejó atrás (consulta
 [Instalar el clúster](#install)). Mientras lo hace, imprime:
