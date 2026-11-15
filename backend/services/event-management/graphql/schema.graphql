@@ -15,11 +15,13 @@ type SearchResultsPagination {
     pageStart: Int
     """
     Position of the last result of this page within the full result set (1-based, inclusive).
-    Capped at totalRecords.
+    When a total is included, capped at totalRecords.
     """
     pageEnd: Int
     """Number of records matching the criteria across all pages."""
     totalRecords: Int
+    """Whether another page follows this one. Always set by event list queries; with the default includeTotal it equals pageEnd < totalRecords."""
+    hasMore: Boolean
 }
 
 """
@@ -251,6 +253,13 @@ by occurred time.
 """
 # Criteria used when searching for events. Times are RFC3339 strings.
 input EventSearchCriteria {
+    """
+    Omitted or true: totalRecords is the exact count of matching events (the default).
+    False: no count is run, totalRecords is null, pageStart/pageEnd describe the rows
+    returned, and hasMore says whether another page follows. Use false for large histories.
+    An empty count-free page has pageEnd = pageStart - 1 and hasMore false.
+    """
+    includeTotal: Boolean
     """Page to return, starting at 1; values below 1 are treated as 1."""
     pageNumber: Int!
     """Results per page. Values below 1 become 100; values above 1000 are capped at 1000."""

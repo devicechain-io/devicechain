@@ -119,6 +119,8 @@ query {
 }
 ```
 
+`EventSearchCriteria.includeTotal` 为可选字段：省略或设为 true 时，保留精确的 `totalRecords` 计数。大型历史记录可设为 false 以跳过计数，此时 `totalRecords` 为 null。五个事件列表查询（`events`、`locationEvents`、`measurementEvents`、`alertEvents`、`stateChangeEvents`）均返回 `SearchResultsPagination.hasMore`；请求此字段即可判断是否应读取下一页。默认设置下，它等于 `pageEnd < totalRecords`。不计算总数时，`pageStart` 和 `pageEnd` 描述返回的行；空页面的 `pageEnd = pageStart - 1`，且 `hasMore: false`。请等所有 event-management Pod 均运行 v1.7 后再发送 `includeTotal`。
+
 - 所有实体都以 token 命名，包括锚点内部。
 - 两个时间边界都包含端点，按 `occurredTime` 筛选：即设备报告的时刻，而非平台存储的时刻。
 - 结果按从新到旧排列。
