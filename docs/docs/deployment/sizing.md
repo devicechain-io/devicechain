@@ -89,7 +89,7 @@ The shape (the replicas and CPU limits above, and the 12,000 events a second) wa
 
 ### How long the event store volume lasts {#event-store-volume}
 
-A stored event costs about 756 bytes in the event store, indexes included and before compression (345 bytes in the events table and 454 in the measurements table). At a saturated 12,000 events a second that is 32.7 GB an hour, so the `160Gi` volume holds about three and a half hours of continuous ingest after the log allowance and working room. `perf-16k` sets `260Gi`, which holds about four hours at 16,000 events a second (43.6 GB an hour). These are burst and benchmark volumes, not retention. Chunks older than `lifecycle.compressAfterDays` (7 by default) are compressed, so for sustained use set the data lifecycle and size the volume for it: see [Sizing the event store](./tuning-an-instance.md#event-store-sizing). The `DatabaseVolumeFillsWithinDay` alert fires when the volume is on course to fill.
+Use [756 bytes per stored event](./tuning-an-instance.md#event-store-sizing). At a saturated 12,000 events a second that is 32.66 GB an hour, so the `160Gi` volume holds about three and a half hours of continuous ingest after the log allowance and working room. `perf-16k` sets `260Gi`, which holds about four hours at 16,000 events a second (43.5 GB an hour). These are burst and benchmark volumes, not retention. Chunks older than `lifecycle.compressAfterDays` (7 by default) are compressed, so for sustained use set the data lifecycle and size the volume for it: see [Sizing the event store](./tuning-an-instance.md#event-store-sizing). The `DatabaseVolumeFillsWithinDay` alert fires when the volume is on course to fill.
 
 ## What `perf-16k` sets {#perf-16k}
 
