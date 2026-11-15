@@ -762,7 +762,7 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### Behaviour changes {#v170-behaviour-changes}
 
-- **New entities join matching dynamic groups when they are created.** A device, asset, area or customer created after a dynamic group was put in use by a detection rule or as an access scope is now enrolled at creation when the group's selector matches an entity with no attributes (for example a negated condition such as `!("retired" in attr)`). Members of such an access scope now see devices created after the group was put in use, and group-scoped rules evaluate them. Entities created before the upgrade are enrolled by a later change. While old and new pods overlap during the rolling upgrade, an entity created through a v1.6 pod is not enrolled until then.
+- **New entities join matching dynamic groups when they are created.** A device, asset, area or customer created after a dynamic group was put in use by a detection rule or as an access scope is now enrolled at creation when the group's selector matches an entity with no attributes (for example a negated condition such as `!("retired" in attr)`). Members of such an access scope now see devices created after the group was put in use, and group-scoped rules evaluate them. On the first start after the upgrade, existing entities that should already have been members are added, so members of such an access scope may see devices they could not see before and group-scoped rules start evaluating them. An entity created, or a group put in use, through a v1.6 pod during the rolling upgrade is repaired at the next start of a v1.7 pod.
 
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/devicechain-io/dc-microservice/actiongate"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/automationreview"
@@ -37,9 +38,10 @@ import (
 )
 
 var (
-	stopStreamSharding context.CancelFunc
-	Microservice       *core.Microservice
-	Configuration      *config.DeviceManagementConfiguration
+	membershipEnrollmentOnce sync.Once
+	stopStreamSharding       context.CancelFunc
+	Microservice             *core.Microservice
+	Configuration            *config.DeviceManagementConfiguration
 
 	// Svc owns the three managers below and the order of all four of their lifecycle
 	// phases. They stay named here because the rest of this service refers to them
@@ -1163,6 +1165,18 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := Svc.Start(ctx); err != nil {
 		return err
 	}
+
+	// Post-migration, insert-only backstop. Run in the background so a large
+	// tenant or a peer holding the startup lock never delays readiness. Partial
+	// failures are logged and retried at the next process start, never fatal.
+	membershipEnrollmentOnce.Do(func() {
+		api := Api
+		go func() {
+			if err := api.ReconcileMembershipEnrollment(ctx); err != nil {
+				log.Error().Err(err).Msg("Membership enrollment startup reconcile could not run; continuing startup")
+			}
+		}()
+	})
 
 	// Start inbound events processor.
 	err := InboundEventsProcessor.Start(ctx)
