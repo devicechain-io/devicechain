@@ -63,8 +63,24 @@ export const WIDGET_EMPTY_STRINGS: Record<'en' | 'es', WidgetEmptyStrings> = {
   },
 };
 
+// Additional catalogs stay internal so the published record keeps its original key type.
+const ZH_EMPTY_STRINGS: WidgetEmptyStrings = {
+  unbound: { title: '尚未选择设备', detail: '请选择设备以在此组件中显示其数据。' },
+  notReported: {
+    title: '此设备不报告该测量项',
+    detail: (m) => `此设备的配置文件未包含${m ? `“${m}”` : '此测量项'}，因此不会报告其数据。`,
+  },
+  noData: {
+    title: '此范围内暂无数据',
+    detail: (m) => `所选时间范围内未收到${m ? `“${m}”的` : ''}数据。`,
+  },
+  forbidden: { title: '无访问权限', detail: '您无权访问这些数据。' },
+  error: { title: '数据不可用', detail: '数据源未响应。' },
+};
+
 export function widgetEmptyStrings(locale: string | undefined = viewerLocale()): WidgetEmptyStrings {
-  return locale?.toLowerCase().split('-')[0] === 'es' ? WIDGET_EMPTY_STRINGS.es : WIDGET_EMPTY_STRINGS.en;
+  const language = locale?.toLowerCase().split('-')[0];
+  return language === 'es' ? WIDGET_EMPTY_STRINGS.es : language === 'zh' ? ZH_EMPTY_STRINGS : WIDGET_EMPTY_STRINGS.en;
 }
 
 // The glyph per kind. Quiet and non-alarming; the access refusal keeps the circle-slash the board's
@@ -153,7 +169,7 @@ export function WidgetEmptyState({ kind, measurement, hint, detail, locale }: Wi
   );
 }
 
-// The words of the hint, in the widget packages' two languages.
+// The words of the hint, in the widget packages' languages.
 export interface LastValueStrings {
   lastValue: (value: string, age: string) => string;
 }
@@ -163,6 +179,9 @@ export const LAST_VALUE_STRINGS: Record<'en' | 'es', LastValueStrings> = {
   es: { lastValue: (value, age) => `Último valor ${value} · ${age}` },
 };
 
+const ZH_LAST_VALUE_STRINGS: LastValueStrings = { lastValue: (value, age) => `上次读数 ${value} · ${age}` };
+
 export function lastValueHint(value: string, age: string, locale: string | undefined = viewerLocale()): string {
-  return (locale?.toLowerCase().split('-')[0] === 'es' ? LAST_VALUE_STRINGS.es : LAST_VALUE_STRINGS.en).lastValue(value, age);
+  const language = locale?.toLowerCase().split('-')[0];
+  return (language === 'es' ? LAST_VALUE_STRINGS.es : language === 'zh' ? ZH_LAST_VALUE_STRINGS : LAST_VALUE_STRINGS.en).lastValue(value, age);
 }
