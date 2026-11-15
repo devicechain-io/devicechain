@@ -24,6 +24,7 @@ type Keyed[T any] struct {
 type LiveOpener func(context.Context, string) (<-chan Message, error)
 
 // LiveHub decodes one live feed per tenant and routes immutable values by key.
+// Each subscriber buffers 256 upstream messages as batches of matching values.
 type LiveHub[T any] struct {
 	name    string
 	open    LiveOpener
@@ -36,7 +37,7 @@ type LiveHub[T any] struct {
 }
 
 type liveSubscriber[T any] struct {
-	out  chan T
+	out  chan []T
 	done chan struct{}
 	keys map[string]struct{}
 }
@@ -58,12 +59,14 @@ func NewLiveHub[T any](name string, open LiveOpener, decode func(Message, string
 // Dropped counts values discarded because a subscriber buffer was full.
 func (h *LiveHub[T]) Dropped() uint64 { return h.dropped.Load() }
 
-// OnDrop installs a nonblocking hook before the hub is used. Called once per drop.
+// OnDrop installs a nonblocking hook before the hub is used. Called once per dropped value.
 func (h *LiveHub[T]) OnDrop(f func()) { h.onDrop = f }
 
 // Subscribe joins a confirmed tenant feed. Empty keys subscribe to every value.
+// It buffers 256 upstream messages, each as one ordered batch of matching values.
+// Each subscriber owns its batch slices; the values themselves remain shared read-only.
 // Cancellation removes the subscriber before closing its buffered channel.
-func (h *LiveHub[T]) Subscribe(ctx context.Context, tenant string, keys []string) (<-chan T, error) {
+func (h *LiveHub[T]) Subscribe(ctx context.Context, tenant string, keys []string) (<-chan []T, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -99,7 +102,7 @@ func (h *LiveHub[T]) Subscribe(ctx context.Context, tenant string, keys []string
 			t.cancel = cancel
 			go h.run(upctx, tenant, t, up)
 		}
-		s := &liveSubscriber[T]{out: make(chan T, liveBuffer), done: make(chan struct{}), keys: make(map[string]struct{})}
+		s := &liveSubscriber[T]{out: make(chan []T, liveBuffer), done: make(chan struct{}), keys: make(map[string]struct{})}
 		t.subs[s] = struct{}{}
 		for _, key := range keys {
 			s.keys[key] = struct{}{}
@@ -182,26 +185,32 @@ func (h *LiveHub[T]) run(ctx context.Context, tenant string, t *liveTenant[T], u
 				t.mu.Unlock()
 				return
 			}
+			batches := make(map[*liveSubscriber[T]][]T)
 			for _, v := range values {
 				for s := range t.keys[v.Key] {
-					h.send(s, v.Value)
+					batches[s] = append(batches[s], v.Value)
 				}
 				for s := range t.wild {
-					h.send(s, v.Value)
+					batches[s] = append(batches[s], v.Value)
 				}
+			}
+			for s, batch := range batches {
+				h.send(s, batch)
 			}
 			t.mu.Unlock()
 		}
 	}
 }
 
-func (h *LiveHub[T]) send(s *liveSubscriber[T], value T) {
+func (h *LiveHub[T]) send(s *liveSubscriber[T], batch []T) {
 	select {
-	case s.out <- value:
+	case s.out <- batch:
 	default:
-		h.dropped.Add(1)
+		h.dropped.Add(uint64(len(batch)))
 		if h.onDrop != nil {
-			h.onDrop()
+			for range batch {
+				h.onDrop()
+			}
 		}
 	}
 }

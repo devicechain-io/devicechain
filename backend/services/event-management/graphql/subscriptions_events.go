@@ -106,28 +106,30 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 		defer close(out)
 		// Hub values, Payload and Entries are shared and must remain read-only.
 		// measurementFromResolved builds fresh models; identity derivation only reads payloads.
-		for resolved := range live {
-			if !inScope(scope, resolved) {
-				continue
-			}
-			payload, ok := resolved.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
-			if !ok {
-				continue
-			}
-			for _, entry := range payload.Entries {
-				for _, mx := range entry.Entries {
-					if args.Name != nil && mx.Name != *args.Name {
-						continue
-					}
-					me, merr := measurementFromResolved(tenant, resolved, entry, mx)
-					if merr != nil {
-						log.Debug().Err(merr).Msg("subscription: skipping a reading with no derivable identity")
-						continue
-					}
-					select {
-					case out <- &MeasurementEventResolver{M: me, S: r, C: ctx}:
-					case <-ctx.Done():
-						return
+		for batch := range live {
+			for _, resolved := range batch {
+				if !inScope(scope, resolved) {
+					continue
+				}
+				payload, ok := resolved.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
+				if !ok {
+					continue
+				}
+				for _, entry := range payload.Entries {
+					for _, mx := range entry.Entries {
+						if args.Name != nil && mx.Name != *args.Name {
+							continue
+						}
+						me, merr := measurementFromResolved(tenant, resolved, entry, mx)
+						if merr != nil {
+							log.Debug().Err(merr).Msg("subscription: skipping a reading with no derivable identity")
+							continue
+						}
+						select {
+						case out <- &MeasurementEventResolver{M: me, S: r, C: ctx}:
+						case <-ctx.Done():
+							return
+						}
 					}
 				}
 			}

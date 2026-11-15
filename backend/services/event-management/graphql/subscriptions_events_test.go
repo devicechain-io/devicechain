@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/eventenvelope"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -120,6 +121,7 @@ func TestMeasurementStreamSharedFeed(t *testing.T) {
 	all := subscribe(nil, nil, nil)
 	require.Equal(t, int64(1), opens.Load())
 	at := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	var members []eventenvelope.Event
 	for i := 0; i < 10; i++ {
 		owner := "globex"
 		if i%2 == 0 {
@@ -130,8 +132,18 @@ func TestMeasurementStreamSharedFeed(t *testing.T) {
 			Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{OccurredTime: at, Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: fmt.Sprint(i)}, {Name: "humidity", Value: "60"}}}}}}
 		data, err := resolvedevent.MarshalResolvedEvent(e)
 		require.NoError(t, err)
-		upstream <- messaging.Message{Value: data}
+		if i == 0 {
+			upstream <- messaging.Message{Value: data}
+		} else {
+			members = append(members, eventenvelope.Event{Index: uint32(i - 1), Bytes: data})
+		}
 	}
+	// Queue an envelope burst before reading any subscriber, preserving the same
+	// scope, name and device filtering assertions for every event in the batch.
+	body, err := eventenvelope.Encode(eventenvelope.Header{Kind: eventenvelope.KindResolved, Tenant: "tenant1"}, members)
+	require.NoError(t, err)
+	upstream <- messaging.NewConsumedMessage("test.tenant1.resolved-events", body, 0,
+		map[string]string{eventenvelope.HeaderName: eventenvelope.HeaderValue}, nil)
 	receive := func(ch <-chan *MeasurementEventResolver) *MeasurementEventResolver {
 		select {
 		case v, ok := <-ch:
@@ -169,7 +181,7 @@ func TestMeasurementStreamSharedFeed(t *testing.T) {
 			require.Equal(t, fmt.Sprintf("device-%d", i), v.M.DeviceToken)
 		}
 	}
-	require.Equal(t, int64(10), decodes.Load())
+	require.Equal(t, int64(2), decodes.Load())
 	// Drain to natural completion so cancellation cannot hide an unwanted reading.
 	close(upstream)
 	for _, ch := range append(chans, scoped, named, all) {

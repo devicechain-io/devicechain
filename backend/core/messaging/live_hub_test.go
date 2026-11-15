@@ -96,7 +96,7 @@ func TestLiveHubFanout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var wg sync.WaitGroup
-	chans := make([]<-chan string, 500)
+	chans := make([]<-chan []string, 500)
 	for i := range chans {
 		wg.Add(1)
 		go func(i int) {
@@ -121,17 +121,17 @@ func TestLiveHubFanout(t *testing.T) {
 			key := fmt.Sprint(i)
 			value := fmt.Sprintf("%d/%s", round, key)
 			f.feed("one").ch <- Message{Key: []byte(key), Value: []byte(value)}
-			require.Equal(t, "one:"+value, hubReceive(t, ch))
-			require.Equal(t, "one:"+value, hubReceive(t, wild))
+			require.Equal(t, []string{"one:" + value}, hubReceive(t, ch))
+			require.Equal(t, []string{"one:" + value}, hubReceive(t, wild))
 		}
 	}
 	require.Equal(t, int64(1500), decoded.Load())
 	f.feed("two").ch <- Message{Key: []byte("0"), Value: []byte("isolated")}
-	require.Equal(t, "two:isolated", hubReceive(t, other))
+	require.Equal(t, []string{"two:isolated"}, hubReceive(t, other))
 	for _, ch := range chans {
 		select {
 		case v := <-ch:
-			t.Fatalf("unexpected %s", v)
+			t.Fatalf("unexpected %v", v)
 		default:
 		}
 	}
@@ -149,7 +149,7 @@ func TestLiveHubFanout(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, f.count("one"))
 	f.feed("one").ch <- Message{Key: []byte("0"), Value: []byte("fresh")}
-	require.Equal(t, "one:fresh", hubReceive(t, ch))
+	require.Equal(t, []string{"one:fresh"}, hubReceive(t, ch))
 }
 
 func TestLiveHubLifecycleRace(t *testing.T) {
@@ -167,29 +167,91 @@ func TestLiveHubLifecycleRace(t *testing.T) {
 		<-done
 		hubClosed(t, ch)
 		f.feed("one").ch <- Message{Value: []byte("alive")}
-		require.Equal(t, "one:alive", hubReceive(t, ch2))
+		require.Equal(t, []string{"one:alive"}, hubReceive(t, ch2))
 		stop()
 		hubClosed(t, ch2)
 	}
 }
 
+func TestLiveHubMessageBatches(t *testing.T) {
+	var f hubFake
+	var decoded atomic.Int64
+	h := NewLiveHub("test", f.open, func(msg Message, tenant string) []Keyed[int] {
+		base := int(msg.Value[0]) * 64
+		values := make([]Keyed[int], 64)
+		for i := range values {
+			values[i] = Keyed[int]{Key: fmt.Sprint(i % 2), Value: base + i}
+		}
+		decoded.Add(1)
+		return values
+	}, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wild, err := h.Subscribe(ctx, "one", nil)
+	require.NoError(t, err)
+	keyed, err := h.Subscribe(ctx, "one", []string{"1", "1"})
+	require.NoError(t, err)
+	missing, err := h.Subscribe(ctx, "one", []string{"missing"})
+	require.NoError(t, err)
+	for i := 0; i < 100; i++ {
+		f.feed("one").ch <- Message{Value: []byte{byte(i)}}
+	}
+	// Wait for dispatch to complete before either subscriber starts reading.
+	require.Eventually(t, func() bool { return len(wild) == 100 && len(keyed) == 100 }, 5*time.Second, time.Millisecond)
+	require.Equal(t, int64(100), decoded.Load())
+	require.Zero(t, h.Dropped())
+	for i := 0; i < 100; i++ {
+		batch := hubReceive(t, wild)
+		require.Len(t, batch, 64)
+		for j, value := range batch {
+			require.Equal(t, i*64+j, value)
+		}
+		// The keyed batch must have its own backing slice.
+		for j := range batch {
+			batch[j] = -1
+		}
+		matches := hubReceive(t, keyed)
+		require.Len(t, matches, 32)
+		for j, value := range matches {
+			require.Equal(t, i*64+j*2+1, value)
+		}
+	}
+	close(f.feed("one").ch)
+	hubClosed(t, wild)
+	hubClosed(t, keyed)
+	hubClosed(t, missing)
+	require.Zero(t, h.Dropped())
+}
+
 func TestLiveHubSlowSubscriber(t *testing.T) {
 	var f hubFake
-	h := NewLiveHub("test", f.open, hubDecode, 0)
+	h := NewLiveHub("test", f.open, func(msg Message, tenant string) []Keyed[string] {
+		value := tenant + ":" + string(msg.Value)
+		return []Keyed[string]{{Value: value}, {Value: value + "/second"}}
+	}, 0)
 	var drops atomic.Uint64
 	h.OnDrop(func() { drops.Add(1) })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, err := h.Subscribe(ctx, "one", nil)
+	slow, err := h.Subscribe(ctx, "one", nil)
 	require.NoError(t, err)
 	fast, err := h.Subscribe(ctx, "one", nil)
 	require.NoError(t, err)
 	for i := 0; i < 1000; i++ {
-		value := fmt.Sprint(i)
-		f.feed("one").ch <- Message{Value: []byte(value)}
-		require.Equal(t, "one:"+value, hubReceive(t, fast))
+		value := "one:" + fmt.Sprint(i)
+		f.feed("one").ch <- Message{Value: []byte(fmt.Sprint(i))}
+		require.Equal(t, []string{value, value + "/second"}, hubReceive(t, fast))
 	}
-	require.Eventually(t, func() bool { return h.Dropped() == 1000-liveBuffer && drops.Load() == 1000-liveBuffer }, 5*time.Second, time.Millisecond)
+	wantDrops := uint64((1000 - liveBuffer) * 2)
+	require.Eventually(t, func() bool { return h.Dropped() == wantDrops && drops.Load() == wantDrops }, 5*time.Second, time.Millisecond)
+	require.Len(t, slow, liveBuffer)
+	for i := 0; i < liveBuffer; i++ {
+		value := "one:" + fmt.Sprint(i)
+		require.Equal(t, []string{value, value + "/second"}, hubReceive(t, slow))
+	}
+	close(f.feed("one").ch)
+	hubClosed(t, slow)
+	hubClosed(t, fast)
 }
 
 func TestLiveHubDeathLimitAndOpenFailure(t *testing.T) {
@@ -228,7 +290,7 @@ func TestLiveHubDeathLimitAndOpenFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, f.count("one"))
 	f.feed("one").ch <- Message{Value: []byte("reopened")}
-	require.Equal(t, "one:reopened", hubReceive(t, fresh))
+	require.Equal(t, []string{"one:reopened"}, hubReceive(t, fresh))
 }
 
 func TestLiveHubEmbeddedNATS(t *testing.T) {
@@ -253,7 +315,7 @@ func TestLiveHubEmbeddedNATS(t *testing.T) {
 	baseline := srv.NumSubscriptions()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	chans := make([]<-chan string, 500)
+	chans := make([]<-chan []string, 500)
 	for i := range chans {
 		chans[i], err = h.Subscribe(ctx, "acme", []string{fmt.Sprint(i)})
 		require.NoError(t, err)
@@ -263,7 +325,7 @@ func TestLiveHubEmbeddedNATS(t *testing.T) {
 		for i, ch := range chans {
 			value := fmt.Sprint(i)
 			require.NoError(t, nc.Publish(ScopedSubject("test", "acme", streams.AlarmEvents), []byte(value)))
-			require.Equal(t, value, hubReceive(t, ch))
+			require.Equal(t, []string{value}, hubReceive(t, ch))
 		}
 	}
 	require.Equal(t, int64(1000), decoded.Load())
@@ -278,7 +340,7 @@ func TestLiveHubEmbeddedNATS(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, baseline+1, srv.NumSubscriptions())
 	require.NoError(t, nc.Publish(ScopedSubject("test", "acme", streams.AlarmEvents), []byte("fresh")))
-	require.Equal(t, "fresh", hubReceive(t, ch))
+	require.Equal(t, []string{"fresh"}, hubReceive(t, ch))
 	stop()
 	hubClosed(t, ch)
 	require.Eventually(t, func() bool { return srv.NumSubscriptions() == baseline }, 5*time.Second, time.Millisecond)
@@ -303,7 +365,7 @@ func TestLiveHubOpenOwnership(t *testing.T) {
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	type result struct {
-		ch  <-chan string
+		ch  <-chan []string
 		err error
 	}
 	first, second := make(chan result, 1), make(chan result, 1)
@@ -326,7 +388,7 @@ func TestLiveHubOpenOwnership(t *testing.T) {
 	require.NoError(t, upctx.Err())
 	require.Equal(t, int64(1), opens.Load())
 	upstream <- Message{Value: []byte("still live")}
-	require.Equal(t, "one:still live", hubReceive(t, b.ch))
+	require.Equal(t, []string{"one:still live"}, hubReceive(t, b.ch))
 	cancel2()
 	hubClosed(t, b.ch)
 	hubCancelled(t, upctx)
