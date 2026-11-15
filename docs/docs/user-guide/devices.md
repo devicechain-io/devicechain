@@ -192,8 +192,8 @@ Records left behind by deletes made before this version are handled too. A perio
 the live state of devices that no longer exist, and an update assignment made for an earlier
 device at the same token is not offered to the device that holds it now. Commands are cancelled
 for deletes the message broker still retains when the upgraded service first starts, which covers
-the last few days. A command left from an older delete can still be sent to a new device at that
-token, so cancel it from the new device's **Commands** tab.
+the last few days. A command waiting from an older delete is cancelled instead of sent when it is
+older than the device that now holds its token.
 
 ### Limits {#deleting-a-device-limits}
 

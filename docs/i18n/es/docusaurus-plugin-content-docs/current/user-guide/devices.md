@@ -210,9 +210,8 @@ comprobación periódica elimina el estado en vivo de los dispositivos que ya no
 asignación de actualización hecha para un dispositivo anterior con el mismo token no se ofrece al
 dispositivo que lo tiene ahora. Los comandos se cancelan para las eliminaciones que el broker de
 mensajes aún conserva cuando el servicio actualizado arranca por primera vez, lo que cubre los
-últimos días. Un comando que quede de una eliminación más antigua aún puede enviarse a un
-dispositivo nuevo con ese token, así que cancélalo desde la pestaña **Comandos** del dispositivo
-nuevo.
+últimos días. Un comando en espera de una eliminación más antigua se cancela en lugar de enviarse
+si es anterior al dispositivo que ahora tiene su token.
 
 ### Límites {#deleting-a-device-limits}
 
