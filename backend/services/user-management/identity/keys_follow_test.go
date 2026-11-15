@@ -295,3 +295,19 @@ func TestFollowerRetriesAMissingPrivateHalfAndCountsFailures(t *testing.T) {
 type countingInc struct{ n int }
 
 func (c *countingInc) Inc() { c.n++ }
+
+// A manager with no key store (the zero value the HTTP-surface tests route against)
+// must refuse the follow loudly, not dereference the missing store: JWKS calls the
+// follow on every request, and a panic there drops the connection instead of serving
+// the last known keys.
+func TestFollowWithNoKeyStoreFailsInsteadOfPanicking(t *testing.T) {
+	m := &Manager{}
+	var changed bool
+	var err error
+	require.NotPanics(t, func() { changed, err = m.followSigningKeys(context.Background()) })
+	require.False(t, changed)
+	require.ErrorContains(t, err, "no signing-key store")
+	jwks, jerr := m.JWKS(context.Background())
+	require.NoError(t, jerr)
+	require.NotEmpty(t, jwks)
+}

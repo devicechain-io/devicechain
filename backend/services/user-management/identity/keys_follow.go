@@ -50,6 +50,11 @@ func (m *Manager) followSigningKeys(ctx context.Context) (changed bool, err erro
 		}
 		m.lastMissingKid = missingKid
 	}()
+	if m.db == nil {
+		// A manager with no key store has nothing to follow. Fail loudly (logged and
+		// counted above) rather than dereference it; JWKS keeps serving the last known keys.
+		return false, errors.New("no signing-key store to follow")
+	}
 	var rows []model.SigningKey
 	// Signing keys are instance-wide, not tenant data; every replica must read
 	// the same key set under the sanctioned system context.
