@@ -11,7 +11,6 @@ import (
 var peerWiringLedger = map[string]peerWiringCount{
 	"backend/core/config/endpoint.go":               {1, 0},
 	"backend/core/governance/lifecycle_resolver.go": {0, 1},
-	"backend/services/lwm2m-ingest/main.go":         {4, 1},
 	"backend/services/mcp/server/graphql.go":        {1, 0},
 }
 
@@ -26,7 +25,7 @@ func TestPeerWiringLedger(t *testing.T) {
 		mints += count.mints
 	}
 	t.Logf("peer wiring: %d urls, %d mints", urls, mints)
-	if urls < 6 || mints < 2 {
+	if urls < 2 || mints < 1 {
 		t.Fatal("peer wiring scan is empty")
 	}
 	if problems := checkPeerWiring(found, peerWiringLedger); len(problems) != 0 {
