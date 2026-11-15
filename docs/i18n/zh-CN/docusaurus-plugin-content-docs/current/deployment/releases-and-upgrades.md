@@ -548,6 +548,8 @@ dcctl bootstrap local devicechain
 
 编写或发布自动化动作需要具备执行该动作的权限。创建或更新包含 `sendCommand` 动作的规则，以及发布或回滚到启用规则中包含该动作的配置文件版本，除了 `device:write` 之外，还需要 `command:write`。`httpCall` 和 `publish` 动作需要 `connector:write`。仅具备 `device:write` 的角色仍可编写和发布只触发告警的规则。 已发布的规则继续运行；系统将在下次发布或回滚时进行检查。升级前，请检查负责编写自动化规则的角色。旧版 `device-management` 副本在被替换之前不会执行此检查。
 
+**命令保留。** 删除维护窗口不再无条件释放等待的命令。明确确认设备类型已无窗口的命令仍会在约一分钟内释放；停用设备或尚未解析类型的命令继续受限，解析后跟随其类型。无法确定命令通道时，命令保持 `QUEUED` 且绝不发布，恢复后的首次投递扫描再处理（默认 30 秒），不再转为 `HELD`。保留协调器会在持续释放命令时继续读取，最多使用协调间隔的一半，遇到没有释放的页面便停止。新增计数器：`command_delivery_dispatch_deferred_total`。无需操作。滚动升级完成前，旧副本仍采用原有行为。
+
 #### 完整重载代理会保持认证调用已放行的设备连接 {#v160-broker-reload}
 
 过去，完整重载代理会关闭认证调用已放行的所有连接，其中包括所有使用用户名进行认证的 MQTT 设备。代理现在基于 `nats-server` `v2.15.3` 构建，因此更改代理 TLS Secret 中的 CA 包（CA 轮换）或手动重载时，会保持这些连接打开。只有当 chart 的 config-reloader 边车因挂载的 TLS Secret 发生变化而发送 SIGHUP，或操作员手动运行 `nats-server --signal reload` 时，才会发生不重启的重载。

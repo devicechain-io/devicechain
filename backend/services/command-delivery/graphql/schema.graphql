@@ -137,12 +137,14 @@ type Command implements Model & TokenReference & MetadataEntity {
     timestamp; null when the command is not gated by a window. While the status is QUEUED, HELD
     or PARKED and this is in the future the command is waiting for the window; it stays QUEUED
     while it waits. A past value means the opening has begun. A command that is not sent before
-    that opening closes is moved to the next one.
+    that opening closes is moved to the next one. The window may since have been deleted
+    while the command waits for its device type to be resolved.
     """
     dispatchAfter: String
     """
     The token of the maintenance window that gates the command, or null when it is not gated.
     Editing that window moves the commands still waiting on it to the new schedule.
+    The token may name a deleted window while the command waits for its device type to be resolved.
     """
     maintenanceWindowToken: String
     """
