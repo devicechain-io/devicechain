@@ -803,7 +803,9 @@ func buildDeviceUplinkRoute(ingest config.HttpIngest, peers *svcclient.Peers) *p
 // broker captured; nil only when device-management cannot be reached from here.
 func newDeviceUplinkRoute(peers *svcclient.Peers) *processor.DeviceUplinkRoute {
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	if infra.ServiceAuth.Secret == "" || !infra.DeviceManagement.Endpoint().Configured() {
+	// Hostname only, as before the peer migration: the MQTT gateway shares this route, so a
+	// stricter check here would change what it does with a captured uplink.
+	if infra.DeviceManagement.Hostname == "" {
 		return nil
 	}
 	client := peers.Client(auth.DeviceRead)

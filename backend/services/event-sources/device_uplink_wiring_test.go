@@ -133,7 +133,7 @@ func TestAnMqttDeviceUplinkKeepsTheBrokersMarkAndItsDedupID(t *testing.T) {
 	require.False(t, got.AuthenticatedTransport)
 }
 
-func TestDeviceUplinkRequiresEndpointAndServiceSecret(t *testing.T) {
+func TestDeviceUplinkRouteNeedsOnlyTheDeviceManagementHostname(t *testing.T) {
 	saved := Microservice
 	t.Cleanup(func() { Microservice = saved })
 	Microservice = &core.Microservice{FunctionalArea: "event-sources"}
@@ -143,15 +143,16 @@ func TestDeviceUplinkRequiresEndpointAndServiceSecret(t *testing.T) {
 	peers := func() *svcclient.Peers {
 		return svcclient.NewPeers(*infra, Microservice.FunctionalArea)
 	}
-	// No user-management guard is added: this site historically builds the client lazily.
+	// The guard is the hostname alone, unchanged by the peer migration: the MQTT gateway uses
+	// this route too, and a missing port or secret fails at lookup time, as it always did.
 	require.NotNil(t, newDeviceUplinkRoute(peers()))
 	infra.DeviceManagement.Port = 0
-	require.Nil(t, newDeviceUplinkRoute(peers()))
+	require.NotNil(t, newDeviceUplinkRoute(peers()))
 	infra.DeviceManagement.Port = 8080
-	infra.DeviceManagement.Hostname = ""
-	require.Nil(t, newDeviceUplinkRoute(peers()))
-	infra.DeviceManagement.Hostname = "devices"
 	infra.ServiceAuth.Secret = ""
+	require.NotNil(t, newDeviceUplinkRoute(peers()))
+	infra.ServiceAuth.Secret = "secret"
+	infra.DeviceManagement.Hostname = ""
 	require.Nil(t, newDeviceUplinkRoute(peers()))
 }
 
