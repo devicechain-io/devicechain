@@ -280,11 +280,14 @@ const (
 	// no dead letter, no failed-events copy — because a record of an erased tenant's data
 	// is the thing the erasure removes. See messaging.Dispose.
 	ResultErased = "erased"
+	// ResultUnwanted: settled on first delivery because the sender's traffic is refused by
+	// policy (disabled device, decode failure past its record budget). Not a loss.
+	ResultUnwanted = "unwanted"
 )
 
 // processorResults is every result a ProcessorMetrics reports, in the order above. Each
 // is exported at zero from construction; see NewProcessorMetrics.
-var processorResults = []string{ResultOK, ResultInvalid, ResultFailed, ResultDropped, ResultRetry, ResultErased}
+var processorResults = []string{ResultOK, ResultInvalid, ResultFailed, ResultDropped, ResultRetry, ResultErased, ResultUnwanted}
 
 // GaugeSample is one series of a gauge read at scrape time: the label values (in the order the
 // gauge was declared with) and the value.

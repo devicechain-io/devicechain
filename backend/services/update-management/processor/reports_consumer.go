@@ -348,7 +348,7 @@ func (rc *ReportsConsumer) settleDisabled(err error, msg messaging.Message, toke
 	log.Debug().Str("device", token).Str("kind", kind).Msg("Discarding a device report from a disabled device.")
 	rc.rejected.WithLabelValues(rejectedDeviceDisabled).Inc()
 	msg.Ack()
-	done(core.ResultDropped)
+	done(core.ResultUnwanted)
 	return true
 }
 
