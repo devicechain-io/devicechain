@@ -87,8 +87,13 @@ func TestGroupPurgeCommitRetryAndRestart(t *testing.T) {
 				case <-time.After(6 * time.Second):
 					t.Fatal("gather did not end")
 				}
-				require.Len(t, result.Replies, 1, "a failed group commit must not reply")
-				require.Equal(t, singletonPartition, result.Replies[0].PartitionId)
+				require.Len(t, result.Replies, 2, "a failed group commit must report its failure")
+				failures := map[string]string{}
+				for _, reply := range result.Replies {
+					failures[reply.PartitionId] = reply.Error
+				}
+				require.Empty(t, failures[singletonPartition])
+				require.NotEmpty(t, failures[groupPartition(1)])
 				snap, ok, err := second.store.Load(context.Background(), groupPartition(1))
 				require.NoError(t, err)
 				require.True(t, ok)
@@ -139,4 +144,56 @@ func TestGroupPurgeCommitRetryAndRestart(t *testing.T) {
 			require.ErrorIs(t, err, nats.ErrNoResponders)
 		})
 	}
+}
+
+func TestGroupPurgeBeforeFirstCheckpointReportsFailureAndRetries(t *testing.T) {
+	nc := purgeConn(t, purgeBroker(t))
+	first := newEvictionRig(t, newTestStore(t), "globex")
+	second := newEvictionRig(t, newTestStore(t), "acme", "globex")
+	second.rp.worker = &workerIdentity{group: 1, partition: groupPartition(1)}
+	// The rig seeded a singleton row; g1 has live state but has never written its row.
+	_, exists, err := second.store.Load(context.Background(), groupPartition(1))
+	require.NoError(t, err)
+	require.False(t, exists)
+	first.rp.groupWorkers = []*ResolvedEventsProcessor{second.rp}
+	first.start(t)
+	defer first.stop()
+	second.start(t)
+	defer second.stop()
+	responder := NewTenantPurgeResponder(nc, evictInstance, first.rp)
+	// Fail before the loop can erase the tenant, then allow the real eviction on retry.
+	realEvict := responder.children[0].evict
+	var fail atomic.Bool
+	fail.Store(true)
+	responder.children[0].evict = func(ctx context.Context, tenant string) (int64, error) {
+		if fail.Load() {
+			return 0, errors.New("g1 eviction unavailable")
+		}
+		return realEvict(ctx, tenant)
+	}
+	require.NoError(t, responder.Start())
+	defer responder.Stop()
+	// Use the expanded expected set; failures must still be recorded explicitly.
+	for _, retry := range []bool{false, true} {
+		fail.Store(!retry)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		result, err := messaging.PurgeTenantDetect(ctx, nc, evictInstance, "acme",
+			[]string{singletonPartition, groupPartition(1)})
+		cancel()
+		require.NoError(t, err)
+		require.Len(t, result.Replies, 2)
+		for _, reply := range result.Replies {
+			if reply.PartitionId == groupPartition(1) {
+				if retry {
+					require.Empty(t, reply.Error)
+				} else {
+					require.Contains(t, reply.Error, "g1 eviction unavailable")
+				}
+			}
+		}
+	}
+	snapshot, exists, err := second.store.Load(context.Background(), groupPartition(1))
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.NotContains(t, string(snapshot.Payload), "acme/")
 }

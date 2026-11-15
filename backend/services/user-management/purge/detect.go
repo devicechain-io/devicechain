@@ -10,7 +10,9 @@ import (
 	"slices"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/tenantpurge"
 	"github.com/rs/zerolog/log"
 )
@@ -54,15 +56,20 @@ const detectSchema = "event-processing"
 // It is the opposite case from the broker's unattributable MQTT sessions, which are
 // counted rather than deferred precisely because no operator action could ever clear them.
 type Detect struct {
-	conn       messaging.Connection
-	db         Database
-	instanceId string
+	conn        messaging.Connection
+	db          Database
+	instanceId  string
+	shardGroups *config.NatsShardGroupsConfiguration
 }
 
 // NewDetect builds the store over the service's NATS connection (how it reaches the
 // engines) and its own database handle (how it learns which partitions exist).
-func NewDetect(conn messaging.Connection, db Database, instanceId string) *Detect {
-	return &Detect{conn: conn, db: db, instanceId: instanceId}
+func NewDetect(conn messaging.Connection, db Database, instanceId string, groups ...*config.NatsShardGroupsConfiguration) *Detect {
+	d := &Detect{conn: conn, db: db, instanceId: instanceId}
+	if len(groups) > 0 {
+		d.shardGroups = groups[0]
+	}
+	return d
 }
 
 func (d *Detect) Name() string { return StoreDetect }
@@ -123,18 +130,20 @@ func (d *Detect) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 	return d.outcome(tenant, partitions, res), nil
 }
 
-// checkpointedPartitions lists the partitions holding a durable checkpoint.
-//
-// This is the set an answer is REQUIRED from, and it is derived from the data rather than
-// declared: GA runs one DETECT partition per instance, but the column exists so a sharded
-// fleet can checkpoint per shard, and a store that assumed one would report the whole
-// engine clean the moment the first partition replied. An engine that is running but has
-// never checkpointed is outside this set and is still counted when it answers — it holds
-// state no row names yet, and its first eviction writes the row that names it.
+// checkpointedPartitions requires every durable partition and, when resolved-events
+// is sharded, every configured group. A group can hold live state before its first row.
 func (d *Detect) checkpointedPartitions(ctx context.Context) ([]string, error) {
 	var ids []string
 	if err := d.db.DB(ctx).Raw(tenantpurge.DetectPartitionsQuery).Scan(&ids).Error; err != nil {
 		return nil, fmt.Errorf("listing the DETECT partitions holding a checkpoint: %w", err)
+	}
+	if d.shardGroups != nil && slices.Contains(d.shardGroups.Suffixes, streams.ResolvedEvents) {
+		for group := 0; group < d.shardGroups.Count; group++ {
+			id := tenantpurge.DetectGroupPartition(group)
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
 	}
 	return ids, nil
 }

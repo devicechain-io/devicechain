@@ -371,13 +371,12 @@ func (rp *ResolvedEventsProcessor) dropTenantBuffers(victim func(ruleID string) 
 // is running. Staying subscribed keeps the broker answering "there is interest here"; the
 // refusal below supplies the rest.
 type TenantPurgeResponder struct {
-	conn         *nats.Conn
-	instanceId   string
-	partition    string
-	evict        func(ctx context.Context, tenant string) (int64, error)
-	sub          *nats.Subscription
-	children     []*TenantPurgeResponder
-	deferFailure bool
+	conn       *nats.Conn
+	instanceId string
+	partition  string
+	evict      func(ctx context.Context, tenant string) (int64, error)
+	sub        *nats.Subscription
+	children   []*TenantPurgeResponder
 }
 
 // NewTenantPurgeResponder wires a responder to a running processor.
@@ -390,10 +389,8 @@ func NewTenantPurgeResponder(conn *nats.Conn, instanceId string,
 		evict:      rp.EvictTenant,
 	}
 	if len(rp.groupWorkers) > 0 {
-		r.deferFailure = true
 		for _, worker := range rp.groupWorkers {
 			child := NewTenantPurgeResponder(conn, instanceId, worker)
-			child.deferFailure = true
 			r.children = append(r.children, child)
 		}
 	}
@@ -467,9 +464,8 @@ func (r *TenantPurgeResponder) Stop() error {
 
 // handle evicts one tenant and replies with what happened.
 //
-// The legacy singleton replies with an error on failure. Group responders leave a
-// failed partition outstanding instead; the coordinator's SQL-discovered checkpoint
-// set makes that silence a deferral. Neither path sends a CLEAN reply before commit.
+// Every partition reports failures explicitly, including before its first checkpoint
+// row exists. Only a successful eviction can answer CLEAN.
 func (r *TenantPurgeResponder) handle(msg *nats.Msg) {
 	if msg.Reply == "" {
 		log.Warn().Msg("Ignoring a DETECT tenant-eviction request with no reply subject.")
@@ -488,11 +484,6 @@ func (r *TenantPurgeResponder) handle(msg *nats.Msg) {
 		cancel()
 		reply.Evicted = evicted
 		if err != nil {
-			// Group partitions owe a committed reply individually. On failure,
-			// leave this partition outstanding so the coordinator retries.
-			if r.deferFailure {
-				return
-			}
 			reply.Error = err.Error()
 			log.Warn().Err(err).Str("tenant", req.Tenant).Str("partition", r.partition).
 				Msg("DETECT tenant eviction did not complete; reporting the tenant as still held.")
