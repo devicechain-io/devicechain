@@ -74,6 +74,9 @@ type GeoFenceCapRefusalCounter interface {
 }
 
 type Api struct {
+	// DeviceCredentialChecker shares password backoff between HTTP uplinks and MQTT connects.
+	DeviceCredentialChecker *credential.Checker
+
 	// RuleComparer is nil when recorded comparison is unavailable; runs fail closed.
 	RuleComparer      RuleComparer
 	PrincipalStanding PrincipalStandingChecker

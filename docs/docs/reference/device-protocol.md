@@ -209,7 +209,9 @@ Enable `mqttDeviceUplinks` only once every `event-sources` and `device-managemen
 | HTTP | Response |
 | --- | --- |
 | `429` | Requests from this source address exceed the allowance. `Retry-After` says when to retry. |
-| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). Devices on the broker's MQTT connection are unaffected. |
+| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). |
+
+**Wrong device passwords count once, whichever way they arrive.** A wrong password presented on the HTTP device-uplink route now counts toward the same per-credential hold as a wrong MQTT password, across all replicas, so guesses can no longer be split between the two to get twice the attempts. While a credential is held, an HTTP uplink with it is answered `503` with `Retry-After` and an MQTT connect with it is refused, as before.
 
 ## Command delivery {#command-delivery}
 

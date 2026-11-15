@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -489,4 +490,14 @@ func TestDeviceUplinkMQTTPasswordGuessesShareTheDeviceHold(t *testing.T) {
 		require.Equal(t, status, r.Code)
 	}
 	require.Equal(t, 5, h.plans.calls)
+}
+
+func TestDeviceUplinkThrottledGraphQLAnswerIsRetryable(t *testing.T) {
+	h := newDeviceHarness(t, fplan())
+	h.plans.err = &svcclient.GraphQLError{Messages: []string{"credential held"}, Codes: []string{"THROTTLED"}}
+	rec := h.post(uplinkPath, "", "x", bearer)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.NotEmpty(t, rec.Header().Get("Retry-After"))
+	require.Empty(t, h.published)
+	require.Equal(t, 1, h.plans.calls)
 }
