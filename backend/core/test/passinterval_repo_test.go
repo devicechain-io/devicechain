@@ -98,6 +98,8 @@ func declareGlobal() { shared.SetInterval(1) }
 // package globals keep their package identity, and parameters and locals keep
 // their declaration's identity, including shadowed bindings. This is a wiring guard,
 // not alias analysis: pass the metrics value directly at the declaration site.
+// It does not prove reachability: an uncalled setter method also satisfies it.
+// Wrapper-declared loops need start-path tests (see event-processing/processor).
 func passIntervalGaps(root string) (map[string]string, error) {
 	recorded, declared := map[string]string{}, map[string]bool{}
 	fset := token.NewFileSet()
