@@ -15,12 +15,17 @@ const h = vi.hoisted(() => ({
     closed: boolean;
   }>,
   refuseImmediately: false,
+  resultError: undefined as string | undefined,
 }));
 
 vi.mock('@devicechain/client', () => ({
   subscribe: (_area: string, doc: unknown, variables: MeasurementStreamVariables, sink: SubscriptionSink<MeasurementStreamResult>) => {
     const op = { doc, variables, sink, closed: false };
     h.operations.push(op);
+    if (h.resultError && variables.deviceTokens) {
+      sink.errors?.([{ message: h.resultError }]);
+      sink.complete?.();
+    }
     if (h.refuseImmediately && variables.deviceTokens) sink.error?.([{ message: 'Unknown argument "deviceTokens" on field "Subscription.measurementStream".' }]);
     return () => { op.closed = true; };
   },
@@ -46,6 +51,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   h.operations.length = 0;
   h.refuseImmediately = false;
+  h.resultError = undefined;
 });
 afterEach(() => { hub?.disposeAll(); vi.useRealTimers(); });
 
@@ -134,6 +140,54 @@ describe('anchor measurement groups', () => {
     await flush();
     expect(h.operations.slice(4)).toHaveLength(3);
     expect(h.operations.slice(4).every((o) => o.doc === MEASUREMENT_STREAM)).toBe(true);
+  });
+
+  it('falls back on an error-only result followed by complete and remembers the refusal', async () => {
+    setup();
+    h.resultError = refusal[0].message;
+    const fleet = sink();
+    const leave = hub.subscribeWidget(anchor(), fleet);
+    await flush();
+    expect(h.operations[0].closed).toBe(true);
+    expect(h.operations.slice(1).map((o) => o.variables)).toEqual(
+      ['a', 'b', 'c'].map((deviceToken) => ({ deviceToken, name: null })),
+    );
+    expect(h.operations.slice(1).every((o) => o.doc === MEASUREMENT_STREAM)).toBe(true);
+    [1, 2, 3].forEach((i) => emit(i, ['a', 'b', 'c'][i - 1]));
+    expect(fleet.next).toHaveBeenCalledTimes(3);
+    expect(fleet.error).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.operations).toHaveLength(4);
+    expect(h.operations.filter((o) => o.doc === MEASUREMENT_STREAM_MULTI)).toHaveLength(1);
+    leave();
+    const later = sink();
+    hub.subscribeWidget(anchor(), later);
+    await flush();
+    expect(h.operations.slice(4).map((o) => o.variables)).toEqual(
+      ['a', 'b', 'c'].map((deviceToken) => ({ deviceToken, name: null })),
+    );
+    expect(h.operations.slice(4).every((o) => o.doc === MEASUREMENT_STREAM)).toBe(true);
+    [4, 5, 6].forEach((i) => emit(i, ['a', 'b', 'c'][i - 4]));
+    expect(later.next).toHaveBeenCalledTimes(3);
+    expect(later.error).not.toHaveBeenCalled();
+  });
+
+  it('reopens the group with backoff after an unrelated error-only result and complete', async () => {
+    setup();
+    h.resultError = 'Forbidden';
+    const fleet = sink();
+    hub.subscribeWidget(anchor(), fleet);
+    await flush();
+    expect(h.operations).toHaveLength(1);
+    expect(hub.openStreamCount).toBe(3);
+    expect(fleet.error).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(h.operations).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.operations).toHaveLength(2);
+    expect(h.operations.every((o) => o.doc === MEASUREMENT_STREAM_MULTI)).toBe(true);
+    expect(h.operations[1].variables).toEqual({ deviceTokens: ['a', 'b', 'c'], name: null });
+    expect(fleet.error).not.toHaveBeenCalled();
   });
 
   it.each(['Forbidden: deviceTokens are outside your scope', 'LIMIT_EXCEEDED: deviceTokens exceeds 1000'])('propagates %s and preserves dead connection accounting until detach', async (message) => {

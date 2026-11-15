@@ -1439,6 +1439,12 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
       if (!operationOpen) closeSocket(); // synchronous refusal, including on reopen
     };
     const adapter: SubscriptionSink<MeasurementStreamResult> = {
+      errors: (errs) => {
+        if (operationOpen && refusesDeviceTokens({ errors: errs })) {
+          this.multiDeviceUnsupported = true;
+          this.fallbackGroup(group);
+        }
+      },
       next: (data) => {
         if (!operationOpen) return;
         ended = 0;
