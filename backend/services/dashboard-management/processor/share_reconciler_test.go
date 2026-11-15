@@ -6,7 +6,11 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/devicechain-io/dc-microservice/entityevent"
+	dctest "github.com/devicechain-io/dc-microservice/test"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,4 +136,48 @@ func TestTheReconcilersDispositions(t *testing.T) {
 	ack = &stubAck{}
 	r.handle(context.Background(), deleted(t, "instance1.acme-tenant.entity-deleted", entity.TypeCustomer, "acme", time.Now(), messaging.MaxDeliver, ack))
 	require.Equal(t, 1, ack.acked)
+}
+
+type dispositionRemover struct{ err error }
+
+func (f dispositionRemover) DeleteSharesOfEntity(context.Context, string, string, time.Time) (int64, error) {
+	return 0, f.err
+}
+
+func TestDeliveryCapDispositionEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		err             error
+		delivered, acks int
+		exhausted       bool
+	}{
+		{"exhausted", errors.New("db down"), messaging.MaxDeliver, 1, true},
+		{"erased final", fmt.Errorf("write: %w", rdb.ErrTenantPurged), messaging.MaxDeliver, 1, false},
+		{"erased early", rdb.ErrTenantPurged, 1, 1, false},
+		{"hold released", fmt.Errorf("write: %w", messaging.ErrHoldReleased), messaging.MaxDeliver, 0, false},
+		{"retry", errors.New("db down"), messaging.MaxDeliver - 1, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := logSink.Capture(t)
+			r := &ShareReconciler{Shares: dispositionRemover{tc.err}}
+			ack := &stubAck{}
+			r.handle(context.Background(), deleted(t, "instance1.acme.entity-deleted", entity.TypeCustomer, "acme", time.Now(), tc.delivered, ack))
+			require.Equal(t, tc.acks, ack.acked)
+			if got := strings.Contains(logs.String(), "Giving up on entity-deleted event after max delivery attempts"); got != tc.exhausted {
+				t.Errorf("exhausted log = %v; logs: %s", got, logs.String())
+			}
+			if tc.err == rdb.ErrTenantPurged || strings.HasPrefix(tc.name, "erased") {
+				if !strings.Contains(logs.String(), `"level":"debug"`) || !strings.Contains(logs.String(), "Dropping message for an erased tenant") {
+					t.Errorf("missing erased debug log: %s", logs.String())
+				}
+			}
+		})
+	}
+}
+
+var logSink *dctest.LogSink
+
+func TestMain(m *testing.M) {
+	logSink = dctest.InstallLogSink()
+	os.Exit(m.Run())
 }

@@ -18,10 +18,8 @@ import (
 // to make that a property of the tree rather than a fact about today's code.
 //
 // 🔴 THE DEFECT THEY GUARD AGAINST IS A FUTURE ONE, AND IT IS SILENT. Consumers spread
-// across the service estate decide "this is the final attempt, write the dead letter and
-// ack" with `msg.NumDelivered >= messaging.MaxDeliver`, reading the package constant
-// (`grep -rn 'messaging.MaxDeliver' --include='*.go' backend` enumerates them; no tally
-// is written down here, because the one this file used to carry was already wrong). Their
+// across the service estate give up through Dispose and FinalDelivery, which read the
+// package constant. Their callers are ledgered in core/test. Their
 // consumer's ACTUAL limit comes from consumerConfig. Those are the same number today
 // only because there is one constant. Introduce per-tier (or per-consumer) tuning
 // without carrying the value to the arms and the two diverge:

@@ -880,7 +880,7 @@ func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string) 
 			// never dead-lettered as poison.
 			return
 		}
-		if msg.NumDelivered >= messaging.MaxDeliver {
+		if messaging.FinalDelivery(msg) {
 			// The worker may have ALREADY tried the failed-decode route and failed —
 			// that is what ErrDeadLetterUnavailable marks. Re-attempting a route that
 			// has just failed would publish the same payload again to a stream that is
