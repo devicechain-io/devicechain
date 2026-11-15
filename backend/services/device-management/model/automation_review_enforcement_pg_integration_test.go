@@ -944,15 +944,19 @@ func TestPGInFlightEditAuthorIsCountedWithoutAJournalLock(t *testing.T) {
 	tx := r.api.RDB.DB(ctx).Begin()
 	require.NoError(t, tx.Error)
 	defer tx.Rollback()
-	res := tx.Model(&DetectionRule{}).Where("id = ?", r.rule.ID).
+	// Match the product update path: the loaded model supplies the audit key.
+	// A WHERE predicate alone would leave an unkeyed update, which draftAuthors
+	// deliberately ignores (the legacy fallback applies only to deletes).
+	res := tx.Model(r.rule).Where("id = ?", r.rule.ID).
 		Update("definition", datatypes.JSON(`{"metric":"temp_c","threshold":24}`))
 	require.NoError(t, res.Error)
 	require.EqualValues(t, 1, res.RowsAffected)
 	table, err := journalTable(tx, &DetectionRule{})
 	require.NoError(t, err)
-	var journalCount int64
-	require.NoError(t, tx.Model(&rdb.AuditEvent{}).Where("table_name = ? AND actor = ? AND operation = ?", table, "late-editor", "update").Count(&journalCount).Error)
-	require.EqualValues(t, 1, journalCount)
+	var journal []rdb.AuditEvent
+	require.NoError(t, tx.Where("table_name = ? AND actor = ? AND operation = ?", table, "late-editor", "update").Find(&journal).Error)
+	require.Len(t, journal, 1)
+	require.Equal(t, strconv.FormatUint(uint64(r.rule.ID), 10), journal[0].EntityPK)
 	publishCtx, cancel := context.WithTimeout(r.ctx, 2*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
