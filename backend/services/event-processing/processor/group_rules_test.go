@@ -152,11 +152,11 @@ func TestGroupRulePlacementRefuses(t *testing.T) {
 	a := &fakeAck{}
 	require.False(t, p0.handleRuleFact(factMsg(t, 2, "other", "p@2", a, dmmodel.PublishedDetectionRule{Token: "r", Definition: validFactRule}), true))
 	require.Zero(t, a.acks, "an ownership refusal must leave the fact unacked")
-	// The rule subset must not admit any of the unrouted projection kinds.
+	// Mutable views may share only the same durable projection set.
 	p0.ruleRouting, p1.ruleRouting = nil, nil
 	p0.groupWorkers, p1.supervised = nil, false
 	p1.AttributeStore = &model.DeviceAttributeStore{}
-	require.ErrorContains(t, p0.attachRoutedRuleWorkers(r.nm, p1), "S2b")
+	require.ErrorContains(t, p0.attachRoutedRuleWorkers(r.nm, p1), "one durable projection set")
 }
 
 func TestGroupRuleSupervisorLiveFacts(t *testing.T) {

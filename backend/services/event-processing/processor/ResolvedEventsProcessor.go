@@ -1069,8 +1069,12 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	// The projection is fresh as of here, so start the periodic sweep's clock now rather than
 	// letting a zero value fire one immediately on the first tick.
 	rp.lastFenceReconcile = rp.clock.Now()
-	rp.readerWG.Add(1)
-	go rp.run()
+	// Group loops also launch periodic source repair. None may start until every
+	// sibling has finished initializing its loop-owned views and term channels.
+	if rp.ruleRouting == nil {
+		rp.readerWG.Add(1)
+		go rp.run()
+	}
 	// Launch the live rule-update consumer after the loop is running (so the ruleUpdates
 	// channel has a receiver) and after replay is complete (so the startup rule set is
 	// already in place). Both goroutines stop on procCancel and are joined by readerWG.
@@ -1096,7 +1100,7 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	// persisting each fact before acking and then signaling the loop to re-read the device into the
 	// live attrView (slice 4c-3b-2), so a rule's dynamic bound tracks the current value. It stops on
 	// procCancel and is joined by readerWG.
-	if rp.AttributeReader != nil {
+	if rp.AttributeReader != nil && rp.ruleRouting == nil {
 		rp.readerWG.Add(1)
 		go rp.runAttributeConsumer()
 	}
@@ -1104,7 +1108,7 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	// a version and announces its MANIFEST, which this consumer resolves off-loop — fetching only
 	// the geometry it does not already hold — and hands to the loop. It stops on procCancel and is
 	// joined by readerWG.
-	if rp.FenceSetReader != nil {
+	if rp.FenceSetReader != nil && rp.ruleRouting == nil {
 		rp.readerWG.Add(1)
 		go rp.runFenceSetConsumer()
 	}
@@ -1123,6 +1127,14 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 // running yet); the live consumers, launched after replay, resume from the advanced durable position for
 // incremental updates. Runs on the startup goroutine, before startDeadmanGate + replay.
 func (rp *ResolvedEventsProcessor) catchUpFactProjections() error {
+	// Preserve legacy replay semantics. Group workers load the shared attribute
+	// projection only after the singleton consumer has caught up, without signals.
+	if rp.ruleRouting != nil && rp.AttributeReader != nil {
+		if err := rp.drainFactToHead(rp.AttributeReader, "device-attribute",
+			func(m messaging.Message) bool { return rp.handleAttributeProjection(m, false) }); err != nil {
+			return err
+		}
+	}
 	if rp.RosterReader != nil {
 		if err := rp.drainFactToHead(rp.RosterReader, "device-roster",
 			func(m messaging.Message) bool { return rp.handleRosterFact(m, false) }); err != nil {
@@ -1431,6 +1443,19 @@ func (rp *ResolvedEventsProcessor) reconcileAttributeView(ctx context.Context) e
 	if err != nil {
 		return fmt.Errorf("load device-attribute projection for dynamic-threshold view: %w", err)
 	}
+	if rp.ruleRouting != nil {
+		owned := make([]model.DeviceAttribute, 0, len(rows))
+		for _, row := range rows {
+			owner, err := rp.ruleWorker(row.Tenant)
+			if err != nil {
+				return err
+			}
+			if owner == rp {
+				owned = append(owned, row)
+			}
+		}
+		rows = owned
+	}
 	rp.attrView.Reconcile(toAttrEntries(rows))
 	log.Info().Int("attributes", len(rows)).Msg("Reconciled DETECT dynamic-threshold view from the device-attribute projection.")
 	return nil
@@ -1497,6 +1522,9 @@ func (rp *ResolvedEventsProcessor) reconcileFenceView(ctx context.Context) error
 	tenants := rp.registry.TenantsWithFenceRules()
 	seeded := 0
 	for _, tenant := range tenants {
+		if err := rp.ownsRuleTenant(tenant); err != nil {
+			return err
+		}
 		set, err := rp.FenceSets.CurrentFenceSet(ctx, tenant)
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).
@@ -1519,6 +1547,10 @@ func (rp *ResolvedEventsProcessor) reconcileFenceView(ctx context.Context) error
 // sequence (the view is re-derived from device-management's durable snapshots on restart, never
 // snapshotted here) — so it needs no checkpoint of its own.
 func (rp *ResolvedEventsProcessor) applyFenceSet(fu fenceUpdate) {
+	if err := rp.ownsRuleTenant(fu.tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return
+	}
 	if rp.fenceView == nil {
 		return
 	}
@@ -2744,6 +2776,10 @@ func (rp *ResolvedEventsProcessor) retryArmRechecks(deadline time.Time) {
 // A transient store error skips the recheck — the projection is durable, and the next fact for the
 // device or the restart reconcile re-reads it — rather than blocking the single-writer loop on a retry.
 func (rp *ResolvedEventsProcessor) applyAttrRecheck(at attrUpdate) {
+	if err := rp.ownsRuleTenant(at.tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return
+	}
 	if rp.attrView == nil || rp.AttributeStore == nil {
 		return
 	}

@@ -187,10 +187,10 @@ func TestGroupMembershipPlacementRefuses(t *testing.T) {
 	require.True(t, live)
 	require.False(t, row.Deleted)
 	require.Error(t, p1.startDeadmanGate(context.Background()))
-	// All unimplemented projections remain behind the existing S2b refusal.
+	// A mismatched attribute projection is refused at attachment.
 	p0.ruleRouting, p1.ruleRouting, p0.groupWorkers, p1.supervised = nil, nil, nil, false
 	p0.AttributeStore = &model.DeviceAttributeStore{}
-	require.ErrorContains(t, p0.attachRoutedRuleWorkers(r.nm, p1), "S2b")
+	require.ErrorContains(t, p0.attachRoutedRuleWorkers(r.nm, p1), "one durable projection set")
 }
 
 func membershipRuleMessage(t *testing.T, tenant string) messaging.Message {

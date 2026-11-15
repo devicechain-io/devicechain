@@ -506,6 +506,10 @@ func sameRosterRow(a, b model.DeviceRoster) bool {
 // number is left alone whatever its instant. Each repaired device's view entry is re-read on the
 // loop, as after a delivered fact.
 func (rp *ResolvedEventsProcessor) reconcileTenantAttributes(ctx context.Context, tenant string, settledBefore time.Time) (map[reconcileProjection]int, error) {
+	if _, err := rp.ruleWorker(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return nil, err
+	}
 	counts := make(map[reconcileProjection]int)
 	if rp.AttributeStore == nil {
 		return counts, nil

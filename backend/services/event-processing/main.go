@@ -45,6 +45,10 @@ var DetectTermGate *processor.TermGate
 
 var stopStreamSharding context.CancelFunc
 
+// Tests in package main may exercise the complete wiring. There is deliberately
+// no config, environment or command-line bypass in a production binary.
+var refuseResolvedEventShards = true
+
 var (
 	Microservice  *core.Microservice
 	Configuration *config.EventProcessingConfiguration
@@ -166,11 +170,10 @@ func buildMetrics() {
 }
 
 func createNatsComponents(nmgr *messaging.NatsManager) error {
-	// No production bypass: the package-private group worker hook is for tests only.
-	// S2b fact routing and S3/S7 are required before resolved-events can be activated.
 	shardCfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
-	if shardCfg != nil && slices.Contains(shardCfg.Suffixes, streams.ResolvedEvents) {
-		return fmt.Errorf("event-processing: resolved-events shard workers are test-only until S2b fact routing and S7 activation; production startup refused")
+	grouped := shardCfg != nil && slices.Contains(shardCfg.Suffixes, streams.ResolvedEvents)
+	if grouped && refuseResolvedEventShards {
+		return fmt.Errorf("event-processing: resolved-events sharded startup refused: missing S7 support-guard lift, per-partition purge erasure and N x K ceiling (S3b)")
 	}
 	stop, err := shardgroups.Enable(nmgr)
 	if err != nil {
@@ -199,8 +202,19 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	//
 	// It acknowledges at a FLOOR: one ack per checkpoint that deletes everything at or below the
 	// committed snapshot's sequence, on a durable created at that sequence (ResolvedEventsReaderOptions).
-	revents, err := nmgr.NewReader(streams.ResolvedEvents,
-		append([]messaging.ReaderOption{gated}, processor.ResolvedEventsReaderOptions(SnapshotStore, singletonPartition)...)...)
+	var revents messaging.MessageReader
+	var groupReaders []messaging.MessageReader
+	if grouped {
+		groupReaders, err = shardgroups.NewReadersWith(nmgr, streams.ResolvedEvents, func(g int) []messaging.ReaderOption {
+			return append([]messaging.ReaderOption{gated}, processor.ResolvedEventsReaderOptions(SnapshotStore, processor.GroupSnapshotPartition(g))...)
+		})
+		if err == nil {
+			revents = groupReaders[0]
+		}
+	} else {
+		revents, err = nmgr.NewReader(streams.ResolvedEvents,
+			append([]messaging.ReaderOption{gated}, processor.ResolvedEventsReaderOptions(SnapshotStore, singletonPartition)...)...)
+	}
 	if err != nil {
 		return err
 	}
@@ -259,10 +273,14 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
-	scoped, err := processor.NewStoreRuleSource(DetectRuleStore).Load(context.Background())
-	if err != nil {
-		return err
+	var scoped []runtime.ScopedRule
+	if !grouped {
+		scoped, err = processor.NewStoreRuleSource(DetectRuleStore).Load(context.Background())
+		if err != nil {
+			return err
+		}
 	}
+	// Group terms load their own tenants after the singleton fact catch-up.
 	RuleRegistry = runtime.NewRuleRegistry(scoped)
 
 	// The checkpointing DETECT processor: feeds each resolved event into the owned
@@ -330,6 +348,21 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// rule, active-version, roster and attribute projections with device-management at the start
 	// of every term and every five minutes, and repairs what a lost fact left behind.
 	ResolvedEventsProcessor.DeviceManagement = DeviceManagementFacts
+	if grouped {
+		children := make([]*processor.ResolvedEventsProcessor, 0, len(groupReaders)-1)
+		for g := 1; g < len(groupReaders); g++ {
+			worker := processor.NewResolvedEventsProcessor(Microservice, groupReaders[g], nmgr,
+				SnapshotStore, runtime.NewRuleRegistry(nil), derivedWriter, RuleStatStore, cfg,
+				core.NewNoOpLifecycleCallbacks(), DetectMetrics)
+			worker.RuleStore, worker.RosterStore, worker.ProfileActiveStore = DetectRuleStore, DeviceRosterStore, ProfileActiveStore
+			worker.AttributeStore = DeviceAttributeStore
+			worker.FenceSets, worker.VersionedFenceSets, worker.FenceManifests = CurrentFenceSets, FenceSets, FenceManifests
+			children = append(children, worker)
+		}
+		if err := ResolvedEventsProcessor.ConfigureGroupWorkers(nmgr, children...); err != nil {
+			return err
+		}
+	}
 	if err := ResolvedEventsProcessor.Initialize(context.Background()); err != nil {
 		return err
 	}

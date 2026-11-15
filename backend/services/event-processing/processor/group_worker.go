@@ -29,6 +29,33 @@ func groupPartition(group int) string {
 	return messaging.GroupSuffix(streams.ResolvedEvents, group)
 }
 
+// GroupSnapshotPartition is the checkpoint namespace for one physical stream.
+// Group zero preserves the legacy singleton row and durable start position.
+func GroupSnapshotPartition(group int) string { return groupPartition(group) }
+
+// ConfigureGroupWorkers binds fresh processors to their immutable replay sources
+// and installs the singleton fact router. The caller constructs group readers with
+// NewReadersWith and supplies the same durable projections to every processor.
+// Production activation remains refused by main until the S7 support-guard lift.
+func (rp *ResolvedEventsProcessor) ConfigureGroupWorkers(nmgr *messaging.NatsManager, children ...*ResolvedEventsProcessor) error {
+	cfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
+	workers := append([]*ResolvedEventsProcessor{rp}, children...)
+	if cfg == nil || len(workers) != cfg.Count {
+		return fmt.Errorf("DETECT requires exactly one worker per configured group")
+	}
+	for g, w := range workers {
+		if w == nil || w.worker != nil {
+			return fmt.Errorf("DETECT group %d requires a fresh worker", g)
+		}
+		source, err := nmgr.NewGroupReplaySource(streams.ResolvedEvents, g)
+		if err != nil {
+			return err
+		}
+		w.worker = &workerIdentity{group: g, physical: messaging.GroupSuffix(streams.ResolvedEvents, g), partition: groupPartition(g), replay: source}
+	}
+	return rp.attachRoutedRuleWorkers(nmgr, children...)
+}
+
 func (rp *ResolvedEventsProcessor) partitionID() string {
 	if rp.worker != nil {
 		return rp.worker.partition
@@ -54,8 +81,8 @@ func (rp *ResolvedEventsProcessor) openRange(first, last uint64) (messaging.Repl
 }
 
 // groupInputs is deliberately private: S2 has no production activation switch.
-// Package tests can construct fresh group workers here; fact routing, metrics and purge
-// aggregation must be finished before main may use this path (S2b/S3/S7).
+// Package tests can construct fresh group workers here. Main uses NewReadersWith
+// and ConfigureGroupWorkers behind its S3/S7 startup refusal.
 func groupInputs(nmgr *messaging.NatsManager, store committedSeqLoader, gate *TermGate) ([]workerIdentity, []messaging.MessageReader, error) {
 	cfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
 	if cfg == nil || gate == nil {
@@ -110,9 +137,13 @@ func (rp *ResolvedEventsProcessor) buildWorkers(ctx context.Context) error {
 			return fmt.Errorf("DETECT partition %q: %w", w.partitionID(), err)
 		}
 	}
-	// The one shared fact consumer starts only after every worker has reset its
-	// term channels, loaded its projection and launched its single-writer loop.
+	// Start loops together: the supervisor's periodic source repair can signal any
+	// worker, so it must obey the same initialization barrier as the fact consumers.
 	if rp.ruleRouting != nil {
+		for _, w := range rp.termWorkers() {
+			w.readerWG.Add(1)
+			go w.run()
+		}
 		close(rp.ruleRouting.termReady)
 		if rp.RuleUpdatesReader != nil {
 			rp.readerWG.Add(1)
@@ -126,13 +157,20 @@ func (rp *ResolvedEventsProcessor) buildWorkers(ctx context.Context) error {
 			rp.readerWG.Add(1)
 			go rp.runEntityDeletedConsumer()
 		}
+		if rp.AttributeReader != nil {
+			rp.readerWG.Add(1)
+			go rp.runAttributeConsumer()
+		}
+		if rp.FenceSetReader != nil {
+			rp.readerWG.Add(1)
+			go rp.runFenceSetConsumer()
+		}
 	}
 	return nil
 }
 
-// attachGroupWorkers is an internal test hook, not an activation API. Rule
-// and membership projections require attachRoutedRuleWorkers. Attribute and fence
-// inputs remain refused until their routing is implemented.
+// attachGroupWorkers validates the singleton supervisor relationship. Rule
+// and all fact projections require attachRoutedRuleWorkers.
 func (rp *ResolvedEventsProcessor) attachGroupWorkers(children ...*ResolvedEventsProcessor) error {
 	if rp.worker == nil || rp.worker.group != 0 || rp.partitionID() != singletonPartition || !rp.leadershipEnabled() {
 		return fmt.Errorf("group supervisor requires group zero and the singleton lease/gate")
@@ -143,8 +181,8 @@ func (rp *ResolvedEventsProcessor) attachGroupWorkers(children ...*ResolvedEvent
 			return fmt.Errorf("invalid group worker %d: workers cannot acquire leases or supervise workers", g)
 		}
 		if ((w.RuleUpdatesReader != nil || w.RuleStore != nil || w.ProfileActiveStore != nil || w.DeviceManagement != nil) && w.ruleRouting == nil) ||
-			((w.RosterReader != nil || w.EntityDeletedReader != nil || w.RosterStore != nil) && w.ruleRouting == nil) || w.AttributeReader != nil || w.FenceSetReader != nil ||
-			w.AttributeStore != nil || w.FenceSets != nil || w.VersionedFenceSets != nil || w.FenceManifests != nil {
+			((w.RosterReader != nil || w.EntityDeletedReader != nil || w.RosterStore != nil || w.AttributeReader != nil || w.FenceSetReader != nil ||
+				w.AttributeStore != nil || w.FenceSets != nil || w.VersionedFenceSets != nil || w.FenceManifests != nil) && w.ruleRouting == nil) {
 			return fmt.Errorf("group workers require S2b fact routing before using fact projections")
 		}
 	}
