@@ -66,6 +66,9 @@ func replacementTestApi(t *testing.T) (*Api, context.Context) {
 		&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{},
 		&EntityAttribute{}, &Alarm{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupMembership{},
 	), "migrate")
+	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatal(err)
+	}
 	require.NoError(t, db.Exec(
 		`CREATE UNIQUE INDEX idx_device_credential_lookup ON device_credentials `+
 			`(tenant_id, credential_type, credential_id) WHERE deleted_at IS NULL`).Error,
