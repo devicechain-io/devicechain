@@ -582,6 +582,68 @@ MCP 发现现在提供 `read-only` 和 `location`，并在 MCP 的 `agentActuati
 
 - **可选规则上限：** 设备配置发布和回滚仅在租户层级显式设置 `rulesPerTenant` 时执行上限。缺失/null 值及旧版 user-management 架构保留现有行为；保持或减少规则数量不会读取 user-management。其他查询错误仅拒绝增加规则的更改。
 
+#### 旧版 npm 导出已弃用 {#v160-npm-deprecations}
+
+以下导出在 `v1.6.0` 中被弃用，但仍按原样工作。请将导入或调用更新为下列替代项。本次不会移除任何导出。只有在弃用至少两个次要版本之后，才能在主要版本中移除；从 1.6 开始弃用的导出，最早也只能在 1.7 之后的某个主要版本中移除。`BuiltinOptionIssue` 表示现有的内置组件问题结构（`widgetType`）；通用的 `@devicechain/dashboards.OptionIssue`（`widgetId`）仍受支持。
+
+- `@devicechain/widgets` / `pickSample` 已弃用；请改用 `@devicechain/widget-sdk.pickSample`。
+- `@devicechain/widgets` / `optBoolean` 已弃用；请改用 `@devicechain/widget-sdk.optBoolean`。
+- `@devicechain/widgets` / `WidgetProps` 已弃用；请改用 `@devicechain/widget-sdk.WidgetProps`。
+- `@devicechain/widgets` / `WidgetComponent` 已弃用；请改用 `@devicechain/widget-sdk.WidgetComponent`。
+- `@devicechain/widgets` / `WidgetFrame` 已弃用；请改用 `@devicechain/widget-sdk.WidgetFrame`。
+- `@devicechain/widgets` / `WidgetSubjectProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetSubjectProvider`。
+- `@devicechain/widgets` / `WidgetSelectProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetSelectProvider`。
+- `@devicechain/widgets` / `useWidgetSelect` 已弃用；请改用 `@devicechain/widget-sdk.useWidgetSelect`。
+- `@devicechain/widgets` / `WidgetTimeZoneProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetTimeZoneProvider`。
+- `@devicechain/widgets` / `useWidgetTimeZone` 已弃用；请改用 `@devicechain/widget-sdk.useWidgetTimeZone`。
+- `@devicechain/widgets` / `WidgetThemeRootProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetThemeRootProvider`。
+- `@devicechain/widgets` / `useWidgetThemeRoot` 已弃用；请改用 `@devicechain/widget-sdk.useWidgetThemeRoot`。
+- `@devicechain/widgets` / `WidgetCandidatesProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetCandidatesProvider`。
+- `@devicechain/widgets` / `useWidgetCandidates` 已弃用；请改用 `@devicechain/widget-sdk.useWidgetCandidates`。
+- `@devicechain/widgets` / `useFlashOnChange` 已弃用；请改用 `@devicechain/widget-sdk.useFlashOnChange`。
+- `@devicechain/widgets` / `flashTextStyle` 已弃用；请改用 `@devicechain/widget-sdk.flashTextStyle`。
+- `@devicechain/widgets` / `flashBackgroundStyle` 已弃用；请改用 `@devicechain/widget-sdk.flashBackgroundStyle`。
+- `@devicechain/widgets` / `FlashValue` 已弃用；请改用 `@devicechain/widget-sdk.FlashValue`。
+- `@devicechain/widgets` / `fitValueFont` 已弃用；请改用 `@devicechain/widget-sdk.fitValueFont`。
+- `@devicechain/widgets` / `useMeasurementStream` 已弃用；请改用 `@devicechain/widget-sdk.useMeasurementStream`。
+- `@devicechain/widgets` / `useAlarmStream` 已弃用；请改用 `@devicechain/widget-sdk.useAlarmStream`。
+- `@devicechain/widgets` / `useCommandStream` 已弃用；请改用 `@devicechain/widget-sdk.useCommandStream`。
+- `@devicechain/widgets` / `useLocationStream` 已弃用；请改用 `@devicechain/widget-sdk.useLocationStream`。
+- `@devicechain/widgets` / `useDatasourceAvailability` 已弃用；请改用 `@devicechain/widget-sdk.useDatasourceAvailability`。
+- `@devicechain/widgets` / `useDashboardHub` 已弃用；请改用 `@devicechain/widget-sdk.useDashboardHub`。
+- `@devicechain/widgets` / `useHubConnectionState` 已弃用；请改用 `@devicechain/widget-sdk.useHubConnectionState`。
+- `@devicechain/widgets` / `HubConnectionBadge` 已弃用；请改用 `@devicechain/widget-sdk.HubConnectionBadge`。
+- `@devicechain/widgets` / `useResolvedBindings` 已弃用；请改用 `@devicechain/widget-sdk.useResolvedBindings`。
+- `@devicechain/widgets` / `useViewerBindings` 已弃用；请改用 `@devicechain/widget-sdk.useViewerBindings`。
+- `@devicechain/widgets` / `useSlotCandidates` 已弃用；请改用 `@devicechain/widget-sdk.useSlotCandidates`。
+- `@devicechain/widgets` / `useCandidates` 已弃用；请改用 `@devicechain/widget-sdk.useCandidates`。
+- `@devicechain/widgets` / `css` 已弃用；请改用 `@devicechain/widget-sdk.css`。
+- `@devicechain/widgets` / `FlashDirection` 已弃用；请改用 `@devicechain/widget-sdk.FlashDirection`。
+- `@devicechain/widgets` / `WidgetFrameProps` 已弃用；请改用 `@devicechain/widget-sdk.WidgetFrameProps`。
+- `@devicechain/widgets` / `WidgetSelect` 已弃用；请改用 `@devicechain/widget-sdk.WidgetSelect`。
+- `@devicechain/widgets` / `WidgetCandidates` 已弃用；请改用 `@devicechain/widget-sdk.WidgetCandidates`。
+- `@devicechain/widgets` / `MeasurementStreamState` 已弃用；请改用 `@devicechain/widget-sdk.MeasurementStreamState`。
+- `@devicechain/widgets` / `AlarmStreamState` 已弃用；请改用 `@devicechain/widget-sdk.AlarmStreamState`。
+- `@devicechain/widgets` / `CommandStreamState` 已弃用；请改用 `@devicechain/widget-sdk.CommandStreamState`。
+- `@devicechain/widgets` / `LocationStreamState` 已弃用；请改用 `@devicechain/widget-sdk.LocationStreamState`。
+- `@devicechain/widgets` / `CandidatesState` 已弃用；请改用 `@devicechain/widget-sdk.CandidatesState`。
+- `@devicechain/widgets` / `DatasourceAvailability` 已弃用；请改用 `@devicechain/widget-sdk.DatasourceAvailability`。
+- `@devicechain/widgets` / `HubConnectionBadgeProps` 已弃用；请改用 `@devicechain/widget-sdk.HubConnectionBadgeProps`。
+- `@devicechain/widgets` / `ThemeVar` 已弃用；请改用 `@devicechain/widget-sdk.ThemeVar`。
+- `@devicechain/widgets` / `EChart` 已弃用；请改用 `@devicechain/widget-sdk/echarts.EChart`。
+- `@devicechain/widgets` / `buildLineOption` 已弃用；请改用 `@devicechain/widget-sdk/echarts.buildLineOption`。
+- `@devicechain/widgets` / `buildGaugeOption` 已弃用；请改用 `@devicechain/widget-sdk/echarts.buildGaugeOption`。
+- `@devicechain/widgets` / `resolveChartTheme` 已弃用；请改用 `@devicechain/widget-sdk/echarts.resolveChartTheme`。
+- `@devicechain/widgets` / `useChartTheme` 已弃用；请改用 `@devicechain/widget-sdk/echarts.useChartTheme`。
+- `@devicechain/widgets` / `EChartOption` 已弃用；请改用 `@devicechain/widget-sdk/echarts.EChartOption`。
+- `@devicechain/widgets` / `LineChartOptions` 已弃用；请改用 `@devicechain/widget-sdk/echarts.LineChartOptions`。
+- `@devicechain/widgets` / `GaugeChartOptions` 已弃用；请改用 `@devicechain/widget-sdk/echarts.GaugeChartOptions`。
+- `@devicechain/widgets` / `ChartTheme` 已弃用；请改用 `@devicechain/widget-sdk/echarts.ChartTheme`。
+- `@devicechain/widgets` / `WIDGET_CHANNEL` 已弃用；请改用 `builtinWidgetDescriptors[id].channel`。
+- `@devicechain/widgets` / `WIDGET_BINDS_DATASOURCE` 已弃用；请改用 `builtinWidgetDescriptors[id].datasource.mode !== 'none'`。
+- `@devicechain/widgets` / `isTerminalStatus` 已弃用；请改用 `@devicechain/dashboards.isTerminalCommandStatus`。
+- `@devicechain/widgets` / `OptionIssue` 已弃用；请改用 `@devicechain/widgets.BuiltinOptionIssue`。
+
 #### 完整重载代理会保持认证调用已放行的设备连接 {#v160-broker-reload}
 
 过去，完整重载代理会关闭认证调用已放行的所有连接，其中包括所有使用用户名进行认证的 MQTT 设备。代理现在基于 `nats-server` `v2.15.3` 构建，因此更改代理 TLS Secret 中的 CA 包（CA 轮换）或手动重载时，会保持这些连接打开。只有当 chart 的 config-reloader 边车因挂载的 TLS Secret 发生变化而发送 SIGHUP，或操作员手动运行 `nats-server --signal reload` 时，才会发生不重启的重载。
