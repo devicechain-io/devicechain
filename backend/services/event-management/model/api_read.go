@@ -618,7 +618,8 @@ func readEventPage[T any](ctx context.Context, manager *rdb.RdbManager, mdl rdb.
 	if err := db.Find(&rows).Error; err != nil {
 		return nil, pag, err
 	}
-	more := pag.PageEnd < pag.TotalRecords
+	// int64: a page number near MaxInt32 times the page size overflows the int32 page fields.
+	more := int64(max(criteria.Pagination.PageNumber, 1))*int64(criteria.Pagination.EffectivePageSize()) < int64(pag.TotalRecords)
 	pag.HasMore = &more
 	return rows, pag, nil
 }

@@ -762,7 +762,7 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### Additions {#v170-additions}
 
-- **Event lists without a total.** `EventSearchCriteria.includeTotal: false` skips the exact count of matching events, which dominates a page read on a large history; `totalRecords` is then null and the new `SearchResultsPagination.hasMore` says whether another page follows. `hasMore` is also set with the default. During the rolling upgrade, a pod still on v1.6 rejects `includeTotal` as an unknown field, so send it only once every event-management pod runs v1.7.
+- **Event lists without a total.** `EventSearchCriteria.includeTotal: false` skips the exact count of matching events, which dominates a page read on a large history; `totalRecords` is then null and the new `SearchResultsPagination.hasMore` says whether another page follows. `hasMore` is also set with the default. During the rolling upgrade, a pod still on v1.6 rejects both `includeTotal` and a selection of `hasMore` as unknown fields, so use either only once every event-management pod runs v1.7.
 
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 

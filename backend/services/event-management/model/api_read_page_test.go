@@ -153,3 +153,28 @@ func checkEventPages[T any](t *testing.T, api *Api, ctx context.Context, name st
 		}
 	})
 }
+
+// The default path's hasMore must not inherit the int32 overflow of pageEnd: a page far past the
+// end of a 4-row result has nothing after it.
+func TestDefaultHasMoreAtTheLargestPage(t *testing.T) {
+	api := newReadTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	for i := 0; i < 4; i++ {
+		at := time.Date(2026, 1, 1, 0, i, 0, 0, time.UTC)
+		if err := api.RDB.DB(ctx).Create(&Event{EventId: []byte{byte(i + 1)}, DeviceToken: "device", OccurredTime: at, Source: "test"}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		page, size int32
+		more       bool
+	}{{2147483647, 2, false}, {0, 2, true}, {1, 2, true}, {2, 2, false}} {
+		r, err := api.Events(ctx, EventSearchCriteria{Pagination: rdb.Pagination{PageNumber: tc.page, PageSize: tc.size}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Pagination.HasMore == nil || *r.Pagination.HasMore != tc.more {
+			t.Fatalf("page %d size %d: hasMore %v, want %v (pagination %+v)", tc.page, tc.size, r.Pagination.HasMore, tc.more, r.Pagination)
+		}
+	}
+}

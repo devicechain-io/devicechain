@@ -169,7 +169,7 @@ query {
 }
 ```
 
-`EventSearchCriteria.includeTotal` is optional: omitted or true preserves the exact `totalRecords` count. Set it to false for large histories to skip the count; `totalRecords` is then null. All five event list queries (`events`, `locationEvents`, `measurementEvents`, `alertEvents`, `stateChangeEvents`) return `SearchResultsPagination.hasMore`; request it to decide whether to read another page. With the default, it equals `pageEnd < totalRecords`. Without a total, `pageStart` and `pageEnd` describe returned rows; an empty page has `pageEnd = pageStart - 1` and `hasMore: false`. Send `includeTotal` only after every event-management pod runs v1.7.
+`EventSearchCriteria.includeTotal` is optional: omitted or true preserves the exact `totalRecords` count. Set it to false for large histories to skip the count; `totalRecords` is then null. All five event list queries (`events`, `locationEvents`, `measurementEvents`, `alertEvents`, `stateChangeEvents`) return `SearchResultsPagination.hasMore`; request it to decide whether to read another page. With the default, it equals `pageEnd < totalRecords`. Without a total, `pageStart` and `pageEnd` describe returned rows; an empty page has `pageEnd = pageStart - 1` and `hasMore: false`. Send `includeTotal` or select `hasMore` only after every event-management pod runs v1.7; an older pod rejects both.
 
 - Entities are named by token throughout, including inside the anchor.
 - Both time bounds are inclusive, and they filter on `occurredTime`: the instant the device

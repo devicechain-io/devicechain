@@ -38,6 +38,7 @@ func (r *SearchResultsPaginationResolver) HasMore() *bool {
 	if r.M.TotalRecordsAbsent {
 		return nil
 	}
-	more := r.M.PageEnd < r.M.TotalRecords
+	// A wrapped (negative) pageEnd from a huge page number is past the end, not before it.
+	more := r.M.PageEnd >= 0 && r.M.PageEnd < r.M.TotalRecords
 	return &more
 }

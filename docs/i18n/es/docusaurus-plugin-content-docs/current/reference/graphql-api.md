@@ -177,7 +177,7 @@ query {
 }
 ```
 
-`EventSearchCriteria.includeTotal` es opcional: omitido o true conserva el recuento exacto de `totalRecords`. Use false para historiales grandes y omitir el recuento; `totalRecords` será null. Las cinco consultas de listas (`events`, `locationEvents`, `measurementEvents`, `alertEvents`, `stateChangeEvents`) devuelven `SearchResultsPagination.hasMore`; solicítelo para decidir si leer otra página. Con el valor predeterminado, equivale a `pageEnd < totalRecords`. Sin total, `pageStart` y `pageEnd` describen las filas devueltas; una página vacía tiene `pageEnd = pageStart - 1` y `hasMore: false`. Envíe `includeTotal` solo cuando todos los pods de event-management ejecuten v1.7.
+`EventSearchCriteria.includeTotal` es opcional: omitido o true conserva el recuento exacto de `totalRecords`. Use false para historiales grandes y omitir el recuento; `totalRecords` será null. Las cinco consultas de listas (`events`, `locationEvents`, `measurementEvents`, `alertEvents`, `stateChangeEvents`) devuelven `SearchResultsPagination.hasMore`; solicítelo para decidir si leer otra página. Con el valor predeterminado, equivale a `pageEnd < totalRecords`. Sin total, `pageStart` y `pageEnd` describen las filas devueltas; una página vacía tiene `pageEnd = pageStart - 1` y `hasMore: false`. Envíe `includeTotal` o seleccione `hasMore` solo cuando todos los pods de event-management ejecuten v1.7; un pod anterior rechaza ambos.
 
 - Las entidades se nombran por token en todo momento, incluido dentro del anclaje.
 - Ambos límites de tiempo son inclusivos y filtran por `occurredTime`: el instante en que el

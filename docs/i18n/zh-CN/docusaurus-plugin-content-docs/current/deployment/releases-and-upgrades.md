@@ -518,7 +518,7 @@ dcctl bootstrap local devicechain
 
 #### 新增功能 {#v170-additions}
 
-- **不计算总数的事件列表。** `EventSearchCriteria.includeTotal: false` 跳过匹配事件的精确计数；在大型历史记录中，计数占据了页面读取的大部分时间。此时 `totalRecords` 为 null，新增的 `SearchResultsPagination.hasMore` 表示是否还有下一页。使用默认设置时也会返回 `hasMore`。滚动升级期间，仍运行 v1.6 的 Pod 会将 `includeTotal` 作为未知字段拒绝，因此请等所有 event-management Pod 均运行 v1.7 后再发送该字段。
+- **不计算总数的事件列表。** `EventSearchCriteria.includeTotal: false` 跳过匹配事件的精确计数；在大型历史记录中，计数占据了页面读取的大部分时间。此时 `totalRecords` 为 null，新增的 `SearchResultsPagination.hasMore` 表示是否还有下一页。使用默认设置时也会返回 `hasMore`。滚动升级期间，仍运行 v1.6 的 Pod 会将 `includeTotal` 以及对 `hasMore` 的选择都作为未知字段拒绝，因此请等所有 event-management Pod 均运行 v1.7 后再使用其中任何一个。
 
 ### v1.6.0 — CA 轮换不再断开设备连接 {#v160-upgrade}
 

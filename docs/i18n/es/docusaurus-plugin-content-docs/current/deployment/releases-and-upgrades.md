@@ -807,7 +807,7 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Adiciones {#v170-additions}
 
-- **Listas de eventos sin total.** `EventSearchCriteria.includeTotal: false` omite el recuento exacto de eventos coincidentes, que domina la lectura de una página en un historial grande; `totalRecords` pasa a ser null y el nuevo `SearchResultsPagination.hasMore` indica si hay otra página. `hasMore` también se establece con el valor predeterminado. Durante la actualización gradual, un pod que aún ejecuta v1.6 rechaza `includeTotal` como campo desconocido; envíelo solo cuando todos los pods de event-management ejecuten v1.7.
+- **Listas de eventos sin total.** `EventSearchCriteria.includeTotal: false` omite el recuento exacto de eventos coincidentes, que domina la lectura de una página en un historial grande; `totalRecords` pasa a ser null y el nuevo `SearchResultsPagination.hasMore` indica si hay otra página. `hasMore` también se establece con el valor predeterminado. Durante la actualización gradual, un pod que aún ejecuta v1.6 rechaza como campos desconocidos tanto `includeTotal` como la selección de `hasMore`; use cualquiera de los dos solo cuando todos los pods de event-management ejecuten v1.7.
 
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 
