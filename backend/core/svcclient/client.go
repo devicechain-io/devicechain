@@ -361,6 +361,11 @@ func (c *Client) serviceToken(ctx context.Context) (string, error) {
 
 	ch := c.group.DoChan("mint", func() (any, error) {
 		minted, expiresAt, err := c.mint(context.Background())
+		result := "ok"
+		if err != nil {
+			result = "error"
+		}
+		serviceTokenMints.WithLabelValues(result).Inc()
 		if err != nil {
 			return "", err
 		}
