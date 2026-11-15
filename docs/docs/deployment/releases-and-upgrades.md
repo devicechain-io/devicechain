@@ -762,7 +762,7 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### Behaviour changes {#v170-behaviour-changes}
 
-- **Measurement aggregates now age out with retention.** With `lifecycle.retentionDays` set in event-management, the per-minute measurement aggregates behind charts and bucketed reads are now dropped one chunk interval (rounded up to a day) after the raw readings, and bucketed reads no longer return aggregates older than that window. On the first start after the upgrade, aggregate history older than the window is dropped and charts over that range show no data. Instances with `retentionDays: 0` (the default) are unaffected. During the rolling upgrade, pods still on v1.6 keep serving older aggregates until they are replaced.
+- **Measurement aggregates now age out with retention.** With `lifecycle.retentionDays` set in event-management, the per-minute measurement aggregates behind charts and bucketed reads are now dropped one chunk interval (rounded up to a day) after the raw readings, and bucketed reads no longer return aggregates older than that window. From the first start after the upgrade, bucketed reads stop returning aggregate history older than the window, so charts over that range show no data; a background job then deletes that history, a whole storage chunk at a time. Instances with `retentionDays: 0` (the default) are unaffected. During the rolling upgrade, pods still on v1.6 keep serving older aggregates until they are replaced.
 
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 

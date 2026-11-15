@@ -74,12 +74,8 @@ func refreshRetentionRollup(t *testing.T, sys *gorm.DB) {
 func TestIntegrationRetentionReachesTheRollup(t *testing.T) {
 	mgr := newPostgresManager(t, freshInstance(t, "itrollupretention"))
 	sys := systemDB(mgr)
-	require.NoError(t, ApplyDataLifecyclePolicies(context.Background(), mgr, DataLifecyclePolicy{
-		ChunkIntervalHours: 24, CompressAfterDays: 0, RetentionDays: 30, FailedEventRetentionDays: 7,
-	}))
-	jobs := rollupRetentionJobs(t, sys)
-	require.Len(t, jobs, 1)
-	assert.Equal(t, "31 days", jobs[0].DropAfter)
+	// Seed and materialize BEFORE any retention policy exists, so the background scheduler
+	// cannot drop the raw seed (or its aggregate) before the precondition below is checked.
 	now := time.Now().UTC().Truncate(time.Minute)
 	seedRollupRetentionReading(t, sys, "old", now.Add(-80*24*time.Hour))
 	seedRollupRetentionReading(t, sys, "recent", now.Add(-time.Hour))
@@ -89,6 +85,12 @@ func TestIntegrationRetentionReachesTheRollup(t *testing.T) {
 	var oldBefore int64
 	require.NoError(t, sys.Table(table).Where("bucket < ?", now.Add(-41*24*time.Hour)).Count(&oldBefore).Error)
 	require.Positive(t, oldBefore, "refresh must materialize old data before retention runs")
+	require.NoError(t, ApplyDataLifecyclePolicies(context.Background(), mgr, DataLifecyclePolicy{
+		ChunkIntervalHours: 24, CompressAfterDays: 0, RetentionDays: 30, FailedEventRetentionDays: 7,
+	}))
+	jobs := rollupRetentionJobs(t, sys)
+	require.Len(t, jobs, 1)
+	assert.Equal(t, "31 days", jobs[0].DropAfter)
 	require.NoError(t, sys.Exec(`CALL run_job(?)`, jobs[0].JobID).Error)
 	var old, recent int64
 	require.NoError(t, sys.Table(table).Where("bucket < ?", now.Add(-41*24*time.Hour)).Count(&old).Error)
