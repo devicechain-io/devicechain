@@ -1667,7 +1667,8 @@ CREATE TABLE "device-management".pending_entity_deletions (
  entity_type character varying(64) NOT NULL,
  entity_id bigint NOT NULL,
  entity_token character varying(255) NOT NULL,
- deleted_time timestamp with time zone NOT NULL
+ deleted_time timestamp with time zone NOT NULL,
+ cascade jsonb
 );
 CREATE TABLE "device-management".pending_ownership_facts (
  tenant_id character varying(128) NOT NULL,
