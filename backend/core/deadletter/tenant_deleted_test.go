@@ -7,9 +7,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
 // stubDeletedTenants makes the tenant-deletion gate answer "deleted" for the given tenants, and
@@ -18,7 +18,7 @@ func stubDeletedTenants(t *testing.T, deleted ...string) *int {
 	t.Helper()
 	builds := 0
 	prev := tenantLifecycleGate
-	tenantLifecycleGate = func(config.UserManagementConfiguration, string, string, *governance.SafetyGates) func(string) bool {
+	tenantLifecycleGate = func(*svcclient.Peers, *governance.SafetyGates) func(string) bool {
 		builds++
 		return func(tenant string) bool {
 			for _, d := range deleted {

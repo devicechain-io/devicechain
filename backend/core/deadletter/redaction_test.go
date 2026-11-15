@@ -80,7 +80,7 @@ func TestRecorderRedactsByDeclaredAuthorship(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			p, _ := testProducer(t, "rec-redact-"+name)
+			p, _ := testProducer(t, "device-management")
 			letters := &fakeWriter{}
 			r := &maxDeliveryRecorder{
 				producer:  p,
@@ -101,7 +101,7 @@ func TestRecorderRedactsByDeclaredAuthorship(t *testing.T) {
 // The size check is made on what would be stored, after redaction: a body whose redacted
 // form fits is kept (as its description), not dropped for the size of the original.
 func TestRecorderSizeChecksTheRedactedPayload(t *testing.T) {
-	p, _ := testProducer(t, "rec-size")
+	p, _ := testProducer(t, "device-management")
 	letters := &fakeWriter{}
 	r := &maxDeliveryRecorder{
 		producer:  p,
@@ -214,7 +214,7 @@ func TestALetterKeepsNoAccessTokenCredentialIdOnAnyWritePath(t *testing.T) {
 		requireNoToken(t, w)
 	})
 	t.Run("recorder", func(t *testing.T) {
-		p, _ := testProducer(t, "rec-redact-credential-id")
+		p, _ := testProducer(t, "device-management")
 		w := &fakeWriter{}
 		r := &maxDeliveryRecorder{producer: p, sink: &Sink{writer: w, source: p.source, onLoss: func(error) {}},
 			maxLetter: 1 << 20}

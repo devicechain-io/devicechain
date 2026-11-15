@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-ai-inference/config"
@@ -98,17 +97,22 @@ func buildInferenceResolver() *inference.Resolver {
 	}
 
 	infra := Microservice.InstanceConfiguration.Infrastructure
+	peers, err := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+	if err != nil {
+		panic(err)
+	}
 	var facts inference.TenantFactsReader
 	var client *svcclient.Client
-	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+	seam, peerErr := peers.UserManagement(auth.TenantRead)
+	if peerErr != nil {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — a tenant's external-routing consent and tier cannot be read; the NL-authoring inference path is unavailable (fail-closed, ADR-056/065). The ai:admin provider smoke test is unaffected.")
 		facts = inference.NewDeniedTenantFactsReader("service-to-service auth is not configured")
 	} else {
 		// One service-token client backs both reads: the tenant facts (consent + tier)
 		// and the rate overrides come from the same tenantGovernance query under the same
 		// least-privilege tenant:read.
-		client = svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "ai-inference", []string{string(auth.TenantRead)})
-		umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+		client = seam.Client
+		umURL := seam.URL
 		facts = inference.NewServiceTenantFactsReader(client, umURL)
 		log.Info().Str("userManagement", umURL).
 			Float64("requestsPerMinute", Configuration.InferenceRequestsPerMinute).
@@ -132,7 +136,7 @@ func buildRateLimiter(def governance.Limits, infra mscfg.InfrastructureConfigura
 	if client == nil {
 		return core.NewTenantRateLimiter(core.StaticCeiling(def.RatePerSecond, def.Burst), counted)
 	}
-	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	umURL := infra.UserManagement.Endpoint().GraphQLURL()
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.AIInference)
 	return core.NewTenantRateLimiter(resolver.Ceiling, counted)
 }

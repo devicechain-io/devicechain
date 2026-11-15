@@ -233,3 +233,104 @@ func TestServiceMintDamagedTableNegativeControls(t *testing.T) {
 		})
 	}
 }
+
+// Planted peer-wiring defects must be attributed to the service directory and named.
+func TestServiceMintPeersNegativeControls(t *testing.T) {
+	root := newAreaMintFixture(t)
+	writeMintFixture(t, root, "backend/core/auth/authority.go", `package auth
+type Authority string
+const (TenantRead Authority = "tenant:read"; DeviceRead Authority = "device:read")`)
+	source := `package fixture
+import s "github.com/devicechain-io/dc-microservice/svcclient"
+import a "github.com/devicechain-io/dc-microservice/auth"
+import g "github.com/devicechain-io/dc-microservice/governance"
+func peerCalls() {
+ peers, _ := s.NewPeers(infra, ms.FunctionalArea)
+ peers.Client(a.DeviceRead)
+ peers.Seam(target, a.DeviceRead)
+ peers.UserManagement(a.DeviceRead)
+ tuned := peers.With(option)
+ tuned.Client(a.DeviceRead)
+ copied := peers
+ copied.Client(a.DeviceRead)
+ peers.With(option).UserManagement(a.DeviceRead)
+ g.NewTenantLifecycleGateFor(peers, nil)
+ g.NewTenantLifecycleGatesFor(peers, nil)
+}
+`
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", source)
+	sites, err := serviceMintSitesUnder(root, serviceMintForwarders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, site := range sites {
+		if strings.HasSuffix(site.File, "/peers.go") {
+			count++
+			if site.Caller != "fixture" || site.Unresolved != "" {
+				t.Fatalf("bad attribution: %+v", site)
+			}
+		}
+	}
+	if count != 8 {
+		t.Fatalf("got %d peer sites, want 8", count)
+	}
+	problems := strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+	if strings.Count(problems, "requests device:read outside ceiling") != 6 {
+		t.Fatalf("excess peer grants escaped: %s", problems)
+	}
+	source = strings.ReplaceAll(source, "a.DeviceRead", "a.TenantRead")
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", source)
+	assertAreaMintFixturePasses(t, root)
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", strings.ReplaceAll(source, "ms.FunctionalArea", `"fixture"`))
+	sites, err = serviceMintSitesUnder(root, serviceMintForwarders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems = strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+	if !strings.Contains(problems, "NewPeers subject must end in .FunctionalArea") {
+		t.Fatalf("literal area escaped: %s", problems)
+	}
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", strings.Replace(source, "peers.Client(a.TenantRead)", "alias := peers.Client; _ = alias", 1))
+	sites, err = serviceMintSitesUnder(root, serviceMintForwarders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems = strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+	if !strings.Contains(problems, "constructor reference is not a direct call") {
+		t.Fatalf("method alias escaped: %s", problems)
+	}
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", strings.Replace(source, "peers, _ := s.NewPeers", "factory := s.NewPeers; peers, _ := factory", 1))
+	sites, err = serviceMintSitesUnder(root, serviceMintForwarders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems = strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+	if !strings.Contains(problems, "constructor reference is not a direct call: svcclient.NewPeers") {
+		t.Fatalf("factory alias escaped: %s", problems)
+	}
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", source+`
+func nested() { consume(s.NewPeers(infra, "fixture")) }
+`)
+	sites, err = serviceMintSitesUnder(root, serviceMintForwarders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems = strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+	if !strings.Contains(problems, "peers.go:nested: NewPeers subject must end in .FunctionalArea") {
+		t.Fatalf("nested constructor subject escaped: %s", problems)
+	}
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", source)
+	writeMintFixture(t, root, "backend/core/governance/lifecycle_resolver.go", `package governance
+import s "github.com/devicechain-io/dc-microservice/svcclient"
+import a "github.com/devicechain-io/dc-microservice/auth"
+func NewTenantLifecycleGatesFor(p *s.Peers, gates any) { p.UserManagement(a.DeviceRead) }`)
+	sites, err = serviceMintSitesUnder(root, serviceMintForwarders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems = strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+	if !strings.Contains(problems, "NewTenantLifecycleGatesFor: non-literal subject") {
+		t.Fatalf("changed forwarder grant escaped: %s", problems)
+	}
+}

@@ -27,7 +27,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -286,18 +285,20 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 	}
 
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	api.TenantDeleted = governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret,
-		"update-management", governance.NewSafetyGates(Microservice))
+	peers, err := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+	if err != nil {
+		return nil, err
+	}
+	api.TenantDeleted = governance.NewTenantLifecycleGateFor(peers, governance.NewSafetyGates(Microservice))
+	url, peerErr := peers.URL(infra.DeviceManagement.Endpoint())
 
 	switch {
-	case infra.ServiceAuth.Secret == "":
+	case peerErr == (svcclient.MissingError{Key: "infrastructure.serviceAuth.secret"}):
 		log.Warn().Msg("Service secret not configured - createArtifact, assignArtifact and startUpdateRollout will be REFUSED, and every device-facing update message (reports, syncs, download requests, downloads) will be REFUSED and retried: profiles, devices and groups cannot be looked up in device-management.")
-	case infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0:
+	case peerErr != nil:
 		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) - createArtifact, assignArtifact and startUpdateRollout will be REFUSED, and every device-facing update message (reports, syncs, download requests, downloads) will be REFUSED and retried: profiles, devices and groups cannot be looked up.")
 	default:
-		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "update-management",
-			[]string{string(auth.DeviceRead)})
-		url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+		client := peers.Client(auth.DeviceRead)
 		checker := profilecheck.New(client, url)
 		api.Profiles = checker
 		api.Devices = checker
