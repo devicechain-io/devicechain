@@ -939,6 +939,27 @@ Las siguientes exportaciones quedan obsoletas en `v1.6.0` y siguen funcionando s
 - `@devicechain/widgets` / `isTerminalStatus` queda obsoleta; use `@devicechain/dashboards.isTerminalCommandStatus`.
 - `@devicechain/widgets` / `OptionIssue` queda obsoleta; use `@devicechain/widgets.BuiltinOptionIssue`.
 
+#### Grupos de particiones de NATS opcionales {#v160-nats-shard-groups}
+
+Los grupos de particiones de NATS siguen desactivados por defecto. Una instancia nueva
+puede activarlos mediante `--values` en `instance.config.infrastructure.nats.shardGroups`
+al instalarse. La opción admite entre 2 y 5 grupos con flujos R1 en un clúster de al
+menos tres servidores del broker, y rechaza `--ha`. Las etiquetas de colocación usan los
+nombres de los pods `dc-nats`; las etiquetas explícitas deben coincidir con esos nombres.
+Los perfiles predeterminados permiten particionar `inbound-events`; se rechaza
+`resolved-events` si se despliega device-state o event-processing, porque esos
+consumidores solo leen el grupo cero. Cada flujo seleccionado reserva su límite completo
+de bytes en cada grupo, y `dcctl` comprueba esa reserva antes de crear o modificar
+cualquier infraestructura, así que amplíe primero el volumen de JetStream si la
+comprobación lo rechaza.
+
+`dcctl upgrade` rechaza activar los grupos de particiones en una instancia existente cuyo
+broker es un único servidor, porque no se admite convertir en clúster un servidor
+JetStream independiente que contiene datos. También rechaza una actualización cuyo
+`--values` (o `--reset-values`) eliminaría un bloque `shardGroups` registrado, reduciría su
+`count` o quitaría un flujo de sus `suffixes`, ya que los grupos pueden contener datos:
+mantenga el bloque en cada archivo de valores de reemplazo.
+
 #### Las métricas y los endpoints de salud pasan al puerto ops {#v160-ops-port}
 
 Las métricas y los endpoints de salud de los servicios se han separado del puerto de la API. `/metrics`, `/healthz` y `/readyz` se sirven en el puerto 8083 (`ops`) de los pods y del Service de cada área y ya no son accesibles mediante `/api/<area>/...`. Los ServiceMonitors y las sondas del chart se actualizan automáticamente. Si recopilas métricas de los pods con tu propia configuración de Prometheus, cambia el puerto de destino de 8080 a 8083. Durante el despliegue gradual, no se recopilan métricas de los pods que aún no se han reemplazado.
@@ -1007,6 +1028,12 @@ El plazo de escalado ahora se cuenta desde el envío de la notificación. Una al
 #### Comprobaciones más estrictas de las credenciales HTTP {#v160-http-credentials}
 
 Una acción `httpCall` ya no puede nombrar la credencial de un conector. Un manejador de secreto del espacio de nombres `connector/` se rechaza al publicar una regla, y una regla publicada que lo use se envía a la cola de mensajes no entregados con el resultado `invalid`, en lugar de enviar la credencial del conector. Las réplicas antiguas de `outbound-connectors` no aplican esta restricción hasta que se sustituyen.
+
+#### `dcctl destroy` rechaza rutas como instancia y ya no confía en un clúster supuesto {#v160-destroy-instance-name}
+
+`dcctl destroy` rechaza un argumento de instancia que no sea un nombre simple (`.`, `..` o cualquier valor que contenga un separador de ruta). Las versiones anteriores lo resolvían como un directorio bajo `~/.devicechain/instances` y eliminaban el destino resultante.
+
+- **El estado local requiere pruebas.** `dcctl destroy` solo borra el estado local de un clúster ausente cuando la instancia tiene un registro de su clúster y el contexto registrado de ese clúster ya no responde. Una instancia sin registro pasa por la desinstalación normal, que falla si no se puede acceder al clúster; indique `--kube-context` o elimine manualmente el directorio de la instancia si su clúster realmente ha desaparecido.
 
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
 

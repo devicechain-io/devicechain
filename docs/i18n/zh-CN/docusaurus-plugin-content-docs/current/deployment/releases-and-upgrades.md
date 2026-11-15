@@ -650,6 +650,22 @@ MCP 发现现在提供 `read-only` 和 `location`，并在 MCP 的 `agentActuati
 - `@devicechain/widgets` / `isTerminalStatus` 已弃用；请改用 `@devicechain/dashboards.isTerminalCommandStatus`。
 - `@devicechain/widgets` / `OptionIssue` 已弃用；请改用 `@devicechain/widgets.BuiltinOptionIssue`。
 
+#### 可选的 NATS 分片组 {#v160-nats-shard-groups}
+
+NATS 分片组默认仍处于关闭状态。新实例可在安装时通过 `--values` 在
+`instance.config.infrastructure.nats.shardGroups` 处启用。该设置支持 2–5 个分组，
+使用 R1 流，且要求集群至少有三台代理服务器，并拒绝 `--ha`。放置标签使用对应的
+`dc-nats` Pod 名称；显式标签必须与这些名称一致。默认配置文件支持对 `inbound-events`
+分片；当部署了 device-state 或 event-processing 时会拒绝 `resolved-events`，因为这些
+消费者仍只读取第零组。每个选定的流都会在每个分组中预留其完整的字节上限，`dcctl`
+会在创建或更改任何基础设施之前检查该预留，因此如果检查拒绝，请先扩容 JetStream 卷。
+
+对于代理为单台服务器的现有实例，`dcctl upgrade` 会拒绝启用分片组，因为不支持将
+已存有数据的独立 JetStream 服务器转换为集群。如果某次升级的 `--values`（或
+`--reset-values`）会删除已记录的 `shardGroups` 块、降低其 `count`，或从其 `suffixes`
+中移除某个流，该升级也会被拒绝，因为这些分组可能存有数据：请在每个替换用的 values
+文件中保留该块。
+
 #### 指标和健康检查端点移至 ops 端口 {#v160-ops-port}
 
 服务指标和健康端点已从 API 端口移出。每个功能区域的 Pod 和 Service 在端口 8083（`ops`）提供 `/metrics`、`/healthz` 和 `/readyz`，无法再通过 `/api/<area>/...` 访问。chart 的 ServiceMonitor 和探针会自动更新。如果使用自己的 Prometheus 配置抓取 Pod 指标，请将目标端口从 8080 改为 8083。滚动升级期间，尚未替换的 Pod 不会被抓取指标。
@@ -718,6 +734,12 @@ MCP 发现现在提供 `read-only` 和 `location`，并在 MCP 的 `agentActuati
 #### 对 HTTP 凭据的更严格检查 {#v160-http-credentials}
 
 `httpCall` 动作不能再指定连接器的凭据。发布规则时，`connector/` 命名空间中的密钥句柄会被拒绝；已发布规则若使用此类句柄，会以 `invalid` 结果进入死信队列，而不会发送连接器的凭据。旧版 `outbound-connectors` 副本在被替换之前不会执行此限制。
+
+#### `dcctl destroy` 拒绝将路径作为实例名称，并且不再信任猜测的集群 {#v160-destroy-instance-name}
+
+`dcctl destroy` 会拒绝不是简单名称的实例参数（`.`、`..` 或任何包含路径分隔符的值）。早期版本会将其解析为 `~/.devicechain/instances` 下的目录，并删除解析后的目标。
+
+- **清理本地状态需要依据。** 只有当实例拥有集群记录且该集群记录中的上下文不再响应时，`dcctl destroy` 才会清理缺失集群的本地状态。没有记录的实例会执行正常卸载；如果无法连接集群，卸载会失败。请传入 `--kube-context`，或者在确认集群确实已不存在时手动删除该实例的目录。
 
 ### v1.5.0 — 自动化变更先评审，代理审批绑定登录会话 {#v150-upgrade}
 
