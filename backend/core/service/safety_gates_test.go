@@ -66,8 +66,11 @@ func (p refreshProbe) Fetch(context.Context, string) (governance.Limits, error) 
 
 // A fixture stop must not terminally close refreshes for the rest of this binary.
 func TestFixtureStopLeavesRefreshesRunning(t *testing.T) {
-	for _, svc := range []*Service{FromManagers(nil, Managers{}), FromManagers(testMicroservice(t), Managers{}), New(testMicroservice(t), Spec{})} {
-		require.NoError(t, svc.Stop(context.Background()))
+	for _, svc := range []*Service{nil, FromManagers(nil, Managers{}), FromManagers(testMicroservice(t), Managers{}), New(testMicroservice(t), Spec{})} {
+		if svc != nil {
+			require.NoError(t, svc.Stop(context.Background()))
+		}
+		require.NoError(t, svc.StopRefreshes(context.Background()))
 		fetched := make(refreshProbe, 1)
 		resolver := governance.NewTenantLimitResolver(fetched, governance.Limits{RatePerSecond: 1, Burst: 1}, "stop-test")
 		resolver.Ceiling("tenant")
@@ -98,11 +101,20 @@ func TestOwnedRefreshStop(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	require.NoError(t, New(nil, Spec{GovernanceRefreshes: true}).Stop(ctx))
+	svc := New(nil, Spec{GovernanceRefreshes: true})
+	// Stop alone leaves refreshes running: they are joined by StopRefreshes, which a service
+	// runs as its Stopper.Postprocess, after the microservice's own stop.
+	require.NoError(t, svc.Stop(ctx))
+	select {
+	case <-cancelled:
+		t.Fatal("Stop closed the refreshes; that belongs to StopRefreshes")
+	default:
+	}
+	require.NoError(t, svc.StopRefreshes(ctx))
 	select {
 	case <-cancelled:
 	default:
-		t.Fatal("Stop returned without cancelling and joining the owned refresh")
+		t.Fatal("StopRefreshes returned without cancelling and joining the owned refresh")
 	}
 }
 

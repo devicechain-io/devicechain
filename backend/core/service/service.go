@@ -177,8 +177,8 @@ type GraphQLSpec struct {
 // wiring in the middle of building them.
 type Spec struct {
 	// GovernanceRefreshes declares that this service wires governance resolvers (including
-	// those hidden inside gates). Stop joins their process-global refreshes after managers
-	// stop successfully. Leave false for services without those resolvers. The group is
+	// those hidden inside gates). StopRefreshes joins their process-global refreshes; the
+	// service calls it as its Stopper.Postprocess. Leave false for services without those resolvers. The group is
 	// process-global and terminal; tests stopping real Specs must use a child process.
 	GovernanceRefreshes bool
 
@@ -386,18 +386,23 @@ func (s *Service) Start(ctx context.Context) error {
 	})
 }
 
-// Stop stops the managers in the reverse order, then joins governance refreshes
-// when the Spec declares ownership. FromManagers never stops process-global refreshes.
+// Stop stops the managers in the reverse order.
 func (s *Service) Stop(ctx context.Context) error {
-	if err := s.reverse(ctx, "stopping", func(c core.LifecycleComponent) func(context.Context) error {
+	return s.reverse(ctx, "stopping", func(c core.LifecycleComponent) func(context.Context) error {
 		return c.Stop
-	}); err != nil {
-		return err
+	})
+}
+
+// StopRefreshes joins the process-global governance refreshes when the Spec declares it
+// owns them; otherwise (no Spec, a FromManagers service, or a nil service) it does nothing.
+// A service calls it as its Stopper.Postprocess, AFTER the microservice's own stop: that is
+// where each service stopped its refreshes before this moved into core, and keeping the
+// position keeps a refresh-stop timeout from skipping the microservice's stop work.
+func (s *Service) StopRefreshes(ctx context.Context) error {
+	if s == nil || s.spec == nil || !s.spec.GovernanceRefreshes {
+		return nil
 	}
-	if s.spec != nil && s.spec.GovernanceRefreshes {
-		return governance.StopRefreshes(ctx)
-	}
-	return nil
+	return governance.StopRefreshes(ctx)
 }
 
 // Terminate terminates the managers in the reverse order.

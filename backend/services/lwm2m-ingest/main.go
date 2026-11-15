@@ -174,7 +174,8 @@ func main() {
 			Postprocess: afterMicroserviceStarted,
 		},
 		Stopper: core.LifecycleCallback{
-			Preprocess: beforeMicroserviceStopped,
+			Preprocess:  beforeMicroserviceStopped,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  func(context.Context) error { return nil },
