@@ -124,6 +124,12 @@ func (r *placementStreamRouter) ShardGroup(tenant string) (int, error) {
 // NewReaders creates one reader for each selected group, or exactly
 // the legacy reader when this suffix is not sharded.
 func NewReaders(nmgr *messaging.NatsManager, suffix string) ([]messaging.MessageReader, error) {
+	return NewReadersWith(nmgr, suffix, nil)
+}
+
+// NewReadersWith supplies independent options for each group, including group zero
+// on the legacy path. The group binding is applied after the supplied options.
+func NewReadersWith(nmgr *messaging.NatsManager, suffix string, options func(group int) []messaging.ReaderOption) ([]messaging.MessageReader, error) {
 	cfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
 	selected := cfg != nil && slices.Contains(cfg.Suffixes, suffix)
 	n := 1
@@ -133,6 +139,9 @@ func NewReaders(nmgr *messaging.NatsManager, suffix string) ([]messaging.Message
 	readers := make([]messaging.MessageReader, 0, n)
 	for g := 0; g < n; g++ {
 		var opts []messaging.ReaderOption
+		if options != nil {
+			opts = append(opts, options(g)...)
+		}
 		if selected {
 			opts = append(opts, messaging.ReaderWithShardGroup(g))
 		}
