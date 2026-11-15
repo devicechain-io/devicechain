@@ -12,6 +12,12 @@ The service evaluates on event time and persists its state, so a restart re-deri
 **Available today:** detection and actions are the platform's live detection engine, with all eight [condition types](#condition-types) (static or attribute-driven thresholds) and all four [actions](#automated-actions) with per-action guards. Rules are authored three ways over one schema — form builder, visual automation canvas, and, with the AI service enabled, a natural-language "Describe" door — all [validated by the same compiler](#authoring--previewing-rules) before publish, and the canvas can preview a draft against replayed history. The four-state [alarm lifecycle](#the-alarm-lifecycle) with in-place severity escalation, live alarm and detection subscriptions, and email/webhook [notification](#reaching-a-human) with escalation are all in place.
 :::
 
+## Automated action authorities
+
+Authoring or publishing an automated action now requires the authority to perform it. Creating or updating a rule with a `sendCommand` action, and publishing or rolling back to a profile version whose enabled rules include one, requires `command:write` in addition to `device:write`. `httpCall` and `publish` actions require `connector:write`. A role that holds `device:write` alone can still author and publish rules that only raise alarms.
+
+Action authority is checked on the effective rule on every create or update, even for disabled rules. Publishing and rolling back check all enabled rules in the selected profile version, even when only a metric changed. The publisher must hold the action authorities; an automation-review approver does not need them. Adopting a profile whose actions were already authorized does not require these additional authorities.
+
 ## Where rules live
 
 You define detection rules on a **[device profile](./domain-model.md)**, the versioned capability contract shared by one or more device types. The profile is versioned (draft → publish → rollback), so you change a fleet's detection logic the same way you change its metric and command definitions: author a draft, publish it atomically, and roll it back if needed. Every device that resolves to the profile picks up its rules automatically.

@@ -805,6 +805,14 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
+#### Seguridad: un dispositivo ya no puede asignarse a un cliente, área o activo {#v160-device-relationship-refused}
+
+- Un evento `NewRelationship` que nombre un tipo de relación con seguimiento (el tipo integrado `assigned` o cualquier tipo marcado con seguimiento) o el tipo integrado `contains` se rechaza y se registra en el flujo `failed-events` con motivo `Invalid` en su primera entrega, sin reintentos. Esto cambia lo que hace un evento de dispositivo aceptado; la [política de versiones](./versioning-policy.md) lo permite para una corrección de seguridad.
+- Asigna los dispositivos con un código de reclamación o con la mutación `createEntityRelationship`.
+- Las relaciones creadas anteriormente por los dispositivos no se eliminan. Revisa las relaciones con seguimiento de tus dispositivos.
+- Los tipos sin seguimiento, incluido `member`, se siguen creando, salvo que tu tenant haya marcado ese tipo con seguimiento. El propio evento `NewRelationship` ya no lleva el nuevo destino como ancla: una relación sin seguimiento no es propiedad, así que el evento queda acotado por las anclas existentes del dispositivo, igual que su siguiente evento de telemetría.
+- Durante la actualización gradual, los pods que siguen en v1.5 crean la relación hasta que se sustituyen.
+
 #### Antes de actualizar {#v160-before-upgrade}
 
 Revise la configuración de instancia editada a mano antes de desplegar los pods. Estos rechazos son nuevos desde `v1.5.0`; los ajustes de servicio inválidos impiden el arranque y pueden dejar los pods reiniciándose. Las claves de servicio siguientes van bajo `functionalAreas.<area>.config`.
@@ -825,6 +833,10 @@ Revise la configuración de instancia editada a mano antes de desplegar los pods
 | GKE `nats_jetstream_storage_class` | Los brokers nuevos usan `premium-rwo` (`pd-ssd`) cuando existe esa clase GKE; se rechaza una clase GKE `premium-rwo` con otro tipo de disco. Prevalecen los valores explícitos. Los brokers/PVC existentes y las actualizaciones conservan su clase; esto no migra discos. |
 | `infrastructure.nats.shardGroups` | Enrutamiento opcional por tenant para los dos streams de ingesta; su ausencia conserva el enrutamiento actual. Los streams de grupo multiplican las reservas por `count`: calcule la capacidad antes de activarlo. Actívelo solo tras completar el despliegue. |
 | `dcctl backup`, `dcctl backup inspect --verify`, `dcctl restore --plan` | Comandos en **vista previa** para conjuntos locales de copias de streams/objetos, verificación de bytes y planificación de restauración de solo lectura. No hay comando que aplique la restauración ni checkpoint coordinado de bases de datos. Véase [Exportar streams y contenido de objetos](./disaster-recovery.md#export-streams-objects). |
+
+#### Autoridades para acciones automatizadas {#v160-action-authorities}
+
+Crear o publicar una acción automatizada requiere la autoridad para ejecutarla. Crear o actualizar una regla con una acción `sendCommand`, y publicar o volver a una versión de perfil cuyas reglas habilitadas incluyan una, requiere `command:write` además de `device:write`. Las acciones `httpCall` y `publish` requieren `connector:write`. Un rol que solo tenga `device:write` puede seguir creando y publicando reglas que únicamente generen alarmas. Las reglas ya publicadas siguen ejecutándose; se comprueban en la siguiente publicación o reversión. Revise los roles que crean automatizaciones antes de actualizar. Las réplicas antiguas de `device-management` no aplican esta comprobación hasta que se sustituyan.
 
 #### Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación {#v160-broker-reload}
 
@@ -853,6 +865,12 @@ Un fallo del decodificador de carga útil que se vuelve a entregar (por ejemplo,
 Una pestaña de la consola cuya sesión ha terminado ya no continúa con una sesión que otra pestaña abrió para otro inquilino o usuario; vuelve al inicio de sesión.
 
 - **No es necesario hacer nada.**
+
+#### Los fallos de ingesta inválidos identifican el dispositivo {#v160-invalid-failures-name-the-device}
+
+Los fallos de ingesta con motivo `INVALID` que device-management registró para un evento legible (un valor que incumple la definición de su métrica, un evento de más de 366 días o un rechazo del decodificador) ahora identifican el dispositivo y el tipo de evento, y se limitan por dispositivo como cualquier otro motivo. Antes de esta versión se mostraban sin dispositivo y compartían un límite de diez registros por hora para todo el tenant. Los registros indexados antes de la actualización no se reescriben.
+
+- **No hay que hacer nada.** No se recuperan registros históricos. Ahora se aplican los límites existentes: diez registros por dispositivo y motivo por hora, con un máximo de 1000 registros detallados por tenant y motivo por hora. Una carga inválida en toda la flota puede alcanzar ese máximo.
 
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
 
