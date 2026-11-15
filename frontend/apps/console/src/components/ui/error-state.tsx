@@ -23,7 +23,7 @@ export function ErrorState({ description, details, className }: ErrorStateProps)
     );
   }
   return (
-    <div className={cn('flex items-center justify-center h-64', className)} data-shot="error">
+    <div role="alert" className={cn('flex items-center justify-center h-64', className)} data-shot="error">
       <p className="text-destructive text-sm">{description}</p>
     </div>
   );
