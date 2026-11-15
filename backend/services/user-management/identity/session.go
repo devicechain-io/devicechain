@@ -629,6 +629,10 @@ func (m *Manager) hasSsoWayIn(ctx context.Context, id *iam.Identity) (bool, erro
 	return false, nil
 }
 
+// SetSessionStore installs the session store supplied by Initialize, allowing an
+// embedded manager to use session administration without initializing token issuance.
+func (m *Manager) SetSessionStore(store nats.KeyValue) { m.refreshKV = store }
+
 // endSessionRecords deletes every sign-in record the index lists for email, and the index
 // entries with them. Deleting what is already gone is not an error, so a retry after a
 // partial failure finishes the job.

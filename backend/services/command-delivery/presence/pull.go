@@ -6,7 +6,8 @@ package presence
 import "context"
 
 // PullResolver says which of a set of devices take their commands over the HTTP pull channel.
-// An error means nothing was decided about any of them.
+// With no error, absence means not pull. With an error, only entries present in the
+// map were decided, including explicit false entries.
 type PullResolver interface {
 	PullDevices(ctx context.Context, deviceTokens []string) (map[string]bool, error)
 }
@@ -34,13 +35,9 @@ type pullReader struct {
 // on it, and the stranded-SENT pass sees it, all through the one Decide, so no path can publish
 // a pull device's command or return it to the queue.
 //
-// 🔴 WHEN THE RESOLVER CANNOT ANSWER, EVERY DEVICE ASKED ABOUT IS HELD, AND THE ERROR IS
-// REPORTED. Publishing a pull device's command marks it SENT against a device that can never
-// receive it, and nothing undoes that; holding a device that turns out not to be a pull device
-// only delays its command, and the hold reconciler releases it once the question can be
-// answered. The two mistakes are not the same size, so the uncertain case takes the cheap one.
-// The reconciler reads the error as "do not release", so the delay lasts exactly as long as
-// the outage does.
+// An undecided channel defers without changing the command: the sweep leaves it queued,
+// and the reconciler leaves an existing hold alone. Decided partial answers still apply.
+// Recovery takes the next delivery sweep, without a durable hold to reconcile.
 func WithPullChannels(inner Reader, resolver PullResolver) Reader {
 	if resolver == nil {
 		return inner
@@ -58,24 +55,17 @@ func (r *pullReader) StatesFor(ctx context.Context, deviceTokens []string) (map[
 		states = map[string]State{}
 	}
 	pull, perr := r.resolver.PullDevices(ctx, deviceTokens)
-	if perr != nil {
-		for _, token := range deviceTokens {
-			s := states[token]
-			s.PullChannel = true
+	for _, token := range deviceTokens {
+		isPull, decided := pull[token]
+		s, present := states[token]
+		s.PullChannel = isPull
+		s.PullUnknown = perr != nil && !decided
+		if present || isPull || s.PullUnknown || (perr != nil && decided && err == nil) {
 			states[token] = s
 		}
-		if err == nil {
-			err = perr
-		}
-		return states, err
 	}
-	for token, isPull := range pull {
-		if !isPull {
-			continue
-		}
-		s := states[token]
-		s.PullChannel = true
-		states[token] = s
+	if err == nil {
+		err = perr
 	}
 	return states, err
 }

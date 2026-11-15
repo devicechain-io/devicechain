@@ -17,7 +17,14 @@ func TestAutomationReviewEnforcementMigrationIsReplayable(t *testing.T) {
 	require.NoError(t, db.Exec("CREATE TABLE device_profile_versions (id integer PRIMARY KEY)").Error)
 	migration := NewAutomationReviewEnforcementSchema()
 	require.Equal(t, "20261126120000", migration.ID)
-	require.Equal(t, migration.ID, Migrations[len(Migrations)-1].ID)
+	require.Condition(t, func() bool {
+		for _, registered := range Migrations {
+			if registered.ID == migration.ID {
+				return true
+			}
+		}
+		return false
+	}, "migration must remain registered when later migrations are appended")
 	require.NoError(t, migration.Migrate(db))
 	require.NoError(t, migration.Migrate(db))
 	for _, table := range []string{"automation_review_policies", "automation_review_policy_changes", "automation_review_break_glass"} {

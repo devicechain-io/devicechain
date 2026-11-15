@@ -554,19 +554,39 @@ func TestRestampBringsAHoldForwardWhenTheWindowIsOpenNow(t *testing.T) {
 	}
 }
 
-func TestRestampReleasesRowsWhoseWindowWasDeleted(t *testing.T) {
+func TestRestampClosesRowsWhoseWindowWasDeleted(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
-	id := seedHoldRow(t, api, ctx, "orphan", "d1", CommandQueued, inAnHour())
-	if _, err := api.RestampWindow(ctx, "mw", WindowOpening{Found: false}, time.Now()); err != nil {
+	id := seedHoldRow(t, api, ctx, "orphan", "d1", CommandQueued, anHourAgo())
+	seedHoldRow(t, api, ctx, "sent", "d2", CommandSent, anHourAgo())
+	now := time.Now()
+	if err := api.RDB.DB(ctx).Model(&Command{}).Where("id = ?", id).
+		Update("dispatch_until", now.Add(time.Hour)).Error; err != nil {
 		t.Fatal(err)
 	}
-	row := commandRow(t, api, ctx, "orphan")
-	if row.DispatchAfter.Valid || row.DispatchUntil.Valid || row.WindowToken.Valid {
-		t.Fatalf("hold survived its window: %v %v", row.DispatchAfter, row.WindowToken)
+	seedHoldRow(t, api, ctx, "no-close", "d3", CommandParked, anHourAgo())
+	if moved, err := api.RestampWindow(ctx, "mw", WindowOpening{Found: false}, now); err != nil || moved != 2 {
+		t.Fatalf("closed %d rows: %v", moved, err)
 	}
-	if _, claimed, _ := api.MarkSent(ctx, id); !claimed {
-		t.Fatal("a row whose window is gone is still unclaimable")
+	if moved, err := api.RestampWindow(ctx, "mw", WindowOpening{Found: false}, now.Add(time.Second)); err != nil || moved != 0 {
+		t.Fatalf("unchanged pass wrote %d rows: %v", moved, err)
+	}
+	if row := commandRow(t, api, ctx, "sent"); row.DispatchUntil.Valid || !row.WindowToken.Valid {
+		t.Fatalf("a sent row was changed: %+v", row)
+	}
+	row := commandRow(t, api, ctx, "orphan")
+	if !row.DispatchAfter.Valid || !row.WindowToken.Valid || row.WindowToken.String != "mw" ||
+		!row.DispatchUntil.Valid || row.DispatchUntil.Time.After(now) {
+		t.Fatalf("deleted window must retain a closed, findable stamp: %+v", row)
+	}
+	if _, claimed, err := api.MarkSent(ctx, id); err != nil || claimed {
+		t.Fatalf("a deleted window admitted a start: %v, %v", claimed, err)
+	}
+	if moved, err := api.RepointWindow(ctx, "mw", "reboot", []string{"d1"}, nil); err != nil || moved != 1 {
+		t.Fatalf("positive ungated answer did not release the row: %d, %v", moved, err)
+	}
+	if _, claimed, err := api.MarkSent(ctx, id); err != nil || !claimed {
+		t.Fatalf("resolved ungated command cannot dispatch: %v, %v", claimed, err)
 	}
 }
 
