@@ -199,6 +199,7 @@ psql_at() { # namespace pod sql -> stdout
   k exec -n "$1" "$2" -c postgres -- psql -X -At -v ON_ERROR_STOP=1 -d postgres -c "$3"
 }
 # shellcheck disable=SC2317  # called by name from dbstats_tables (lib/dbstats.sh)
+# shellcheck disable=SC2329 # passed by name to dbstats_tables in hack/lib/dbstats.sh
 psql_db() { # namespace pod database sql -> stdout
   k exec -n "$1" "$2" -c postgres -- psql -X -At -v ON_ERROR_STOP=1 -d "$3" -c "$4"
 }
