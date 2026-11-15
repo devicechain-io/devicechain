@@ -262,7 +262,7 @@ func TestAHeldReleaseDoesNotRegressANewerSource(t *testing.T) {
 	newer := event.OccurredTime.Add(time.Minute)
 	n.adapters[model.ChannelTypeSMTP] = &funcAdapter{fn: func(int) error {
 		_, err := api.RecordPagedFrom(ctx, event.AlarmToken, event.AlarmKey, event.Severity,
-			event.RaisedTime, newer, nil, model.AlarmSource{DeviceName: "New"}, newer)
+			event.RaisedTime, newer, nil, model.AlarmSource{DeviceName: "New"}, newer, clock)
 		return err
 	}}
 	clock = quietEnds

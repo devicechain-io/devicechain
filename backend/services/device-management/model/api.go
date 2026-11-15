@@ -245,6 +245,9 @@ type Api struct {
 	// unbounded: with nothing wired a tenant is still held to the default.
 	IntegrationsCeiling IntegrationsCeilingResolver
 
+	// RulesCeiling supplies the tier limit on active rules; nil uses the platform default.
+	RulesCeiling RulesCeilingResolver
+
 	// IntegrationChecker compares the bearer token of an inbound integration through the
 	// credential Checker (credential.KindIntegration, under EnrollmentKeys.Integration). The
 	// kind is Unthrottled, so it needs no attempt store. It is built by
