@@ -184,8 +184,9 @@ docker rm -f kind-registry   # the local image registry, if you used --build
 ```
 
 kind knows nothing about `~/.devicechain/clusters/`, so deleting the cluster this way leaves
-its directory behind. The next `dcctl destroy` of an instance that was on that cluster finds
-the cluster gone and removes the directory along with the instance's own local state — see
+its directory behind. The next `dcctl destroy` of an instance recorded on that cluster removes
+the directory along with the instance's own local state only if the recorded context no longer
+answers — see
 [Removing an instance](#destroy). Or remove it by hand, once its `cluster.json` has confirmed
 which cluster it belonged to.
 
@@ -1988,8 +1989,11 @@ bootstrapping it again under the same name is how you recreate an instance. An i
 by an older release, before `dcctl install` existed, is the exception: its cluster has to be
 recreated too — see [Releases & Upgrades](./releases-and-upgrades.md#pre-declaration-recreate).
 
-If the kind cluster itself is already gone — deleted with `kind delete cluster` — destroy has
-nothing to uninstall and says so, clearing local state only. That is the instance's directory,
+If the kind cluster itself is already gone — deleted with `kind delete cluster` — destroy
+clears local state only when the instance has a record of its cluster and the recorded
+context no longer answers. A guess is never evidence that the cluster is gone. Without a
+record, the normal uninstall runs and fails if the cluster cannot be reached; pass
+`--kube-context`, or remove the instance's directory by hand if its cluster is really gone. That is the instance's directory,
 and the cluster's own directory under `~/.devicechain/clusters/<cluster-uid>/`, which
 `dcctl install` created and `kind delete cluster` left behind (see
 [Install the cluster](#install)). As it does, it prints:

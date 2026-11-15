@@ -894,6 +894,25 @@ The following exports are deprecated in `v1.6.0` and keep working unchanged. Upd
 - `@devicechain/widgets` / `isTerminalStatus` is deprecated; use `@devicechain/dashboards.isTerminalCommandStatus`.
 - `@devicechain/widgets` / `OptionIssue` is deprecated; use `@devicechain/widgets.BuiltinOptionIssue`.
 
+#### Optional NATS shard groups {#v160-nats-shard-groups}
+
+NATS shard groups remain off by default. A new instance can opt in through `--values`
+at `instance.config.infrastructure.nats.shardGroups` when it is installed. The setting
+supports 2-5 groups with R1 streams on a cluster of at least three broker servers, and
+refuses `--ha`. Placement tags use the corresponding `dc-nats` pod names; explicit tags
+must match those names. The default profiles support sharding `inbound-events`;
+`resolved-events` is refused while device-state or event-processing is deployed because
+those consumers still read only group zero. Each selected stream reserves its full byte
+ceiling in every group, and `dcctl` checks that reservation before it creates or changes
+any infrastructure, so grow the JetStream volume first if the check refuses it.
+
+`dcctl upgrade` refuses to enable shard groups on an existing instance whose broker is a
+single server, because turning a standalone JetStream server that holds data into a
+cluster is not supported. It also refuses an upgrade whose `--values` (or
+`--reset-values`) would drop a recorded `shardGroups` block, lower its `count`, or remove a stream from its
+`suffixes`, since the groups may hold data: carry the block forward in every replacement
+values file.
+
 - **Upgrade note:** Outbound connector dispatches and LoRaWAN downlinks now limit each tenant to half of each replica's send pool (rounded down, minimum one), derived from `maxConcurrentSends`. Excess messages wait for broker redelivery without occupying send workers. A pool of one still serializes tenants; use at least two workers for isolation. No new configuration is needed; the limit takes effect as each pod upgrades.
 
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
@@ -958,6 +977,12 @@ The escalation window is now counted from when the page was sent. An alarm raise
 #### Stricter checks on HTTP credentials {#v160-http-credentials}
 
 An `httpCall` action can no longer name a connector's credential. A secret handle in the `connector/` namespace is refused when a rule is published, and a published rule that uses one is dead-lettered with outcome `invalid` instead of sending the connector's credential. Older `outbound-connectors` replicas do not enforce this until they are replaced.
+
+#### `dcctl destroy` refuses a path as an instance and no longer trusts a guessed cluster {#v160-destroy-instance-name}
+
+`dcctl destroy` refuses an instance argument that is not a plain name (`.`, `..`, or anything containing a path separator). Earlier releases resolved it as a directory under `~/.devicechain/instances` and removed what it resolved to.
+
+- **Local state needs evidence.** `dcctl destroy` clears local state for a missing cluster only when the instance has a record of its cluster and that cluster's recorded context no longer answers. An instance with no record goes through the normal uninstall, which fails if the cluster cannot be reached; pass `--kube-context`, or remove the instance's directory by hand if its cluster is really gone.
 
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
