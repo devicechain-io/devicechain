@@ -512,13 +512,13 @@ dcctl bootstrap local devicechain
 
 此处完整记录正在开发的版本（`v1.7`）及最近的三个次版本（`v1.6`、`v1.5` 和 `v1.4`），按从新到旧排列。下方还保留 `v0.27.0` 至 `v0.24.0` 的详细说明。
 
-### v1.7.0 — in development {#v170-upgrade}
+### v1.7.0 — 开发中 {#v170-upgrade}
 
-`v1.7.0` is an in-place upgrade from `v1.6.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
+`v1.7.0` 是从 `v1.6.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
 
-#### Behaviour changes {#v170-behaviour-changes}
+#### 行为变化 {#v170-behaviour-changes}
 
-- **List totals saturate instead of wrapping.** A list whose matching rows exceed 2,147,483,647 now reports `totalRecords` as 2,147,483,647 instead of a wrapped, possibly negative number, and `pageStart`/`pageEnd` no longer overflow on very large page numbers.
+- **列表总数现在会饱和到上限，而不再溢出回绕。** 当列表中匹配的行数超过 2,147,483,647 时，`totalRecords` 现在报告为 2,147,483,647，而不是回绕后可能为负数的值；页码非常大时，`pageStart`/`pageEnd` 也不再溢出。
 
 ### v1.6.0 — CA 轮换不再断开设备连接 {#v160-upgrade}
 
