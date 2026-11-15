@@ -1322,8 +1322,8 @@ func onMessageReceived(source string, raw []byte) {
 // against source. The HTTP and external-MQTT sources ask it before reading a message.
 //
 // The answer itself comes from inboundBackpressure; this adds the accounting.
-func admitInbound(source string) error {
-	err := inboundBackpressure()
+func admitInbound(tenant, source string) error {
+	err := inboundBackpressure(tenant)
 	if err != nil {
 		BackpressureCounter.WithLabelValues(source).Inc()
 	}
@@ -1336,11 +1336,11 @@ func admitInbound(source string) error {
 //
 // With no manager it refuses: an answer of "accepting" from a process that cannot see the
 // stream is the fail-open this exists to prevent.
-var inboundBackpressure = func() error {
+var inboundBackpressure = func(tenant string) error {
 	if NatsManager == nil {
 		return messaging.ErrStreamBackpressure
 	}
-	return NatsManager.Backpressure(streams.InboundEvents)
+	return NatsManager.AdmitPublish(tenant, streams.InboundEvents)
 }
 
 // onTenantGone accounts for a message refused by the ADR-077 lifecycle gate. Same

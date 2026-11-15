@@ -296,7 +296,7 @@ func (es *HttpEventSource) handleDeviceUplink(w http.ResponseWriter, r *http.Req
 	if rt.Charged != nil {
 		rt.Charged(charge)
 	}
-	if err := es.admit(es.Id); err != nil {
+	if err := es.admit(tenant, es.Id); err != nil {
 		rt.result(DeviceUplinkBackpressure)
 		writeBackpressured(w)
 		return
@@ -314,7 +314,7 @@ func (es *HttpEventSource) handleDeviceUplink(w http.ResponseWriter, r *http.Req
 	}
 	if err := rt.Publish(es.Id, tenant, event, carried, ""); err != nil {
 		switch {
-		case errors.Is(err, messaging.ErrStreamBackpressure):
+		case messaging.IsRefusal(err):
 			rt.result(DeviceUplinkBackpressure)
 			writeBackpressured(w)
 		case errors.Is(err, ErrEventNotBuilt):
