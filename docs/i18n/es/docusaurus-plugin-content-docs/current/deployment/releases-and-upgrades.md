@@ -801,6 +801,19 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (`v1.5`, `v1.4` y `v1.3`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
 
+### v1.7.0 — el historial reciente de geocercas sobrevive al reinicio {#v170-upgrade}
+
+Al iniciar, event-processing carga desde device-management la versión actual del conjunto de
+geocercas y hasta tres versiones anteriores antes de reproducir los eventos. Los eventos históricos
+recientes pueden usar la geometría de su versión sin esperar un hecho de geocercas ni una vista
+previa. Las versiones más antiguas y las lecturas fallidas siguen sin resolverse y generan errores
+de contención contabilizados; no se precarga todo el historial. La reconciliación de inicio
+reintenta las versiones ausentes y omite las que ya están en memoria.
+
+Actualiza in situ con el procedimiento gradual habitual. No requiere cambios de esquema,
+configuración ni API pública. Los pods antiguos mantienen su comportamiento de inicio, que solo
+carga la versión actual, hasta que se sustituyen.
+
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 
 - **Límites de memoria de MCP:** se rechazan por completo las respuestas GraphQL de más de 256 KiB y las agregaciones de más de 1.000 bloques temporales; reduce el intervalo de fechas, selecciona una métrica o amplía los bloques temporales. Los POST y las solicitudes con cuerpo se limitan a 4 en curso por usuario y 64 por proceso antes de leer o analizar el cuerpo. La admisión de mensajes reserva hasta 4 plazas por lote; los lotes válidos según la configuración (16 entradas por defecto) ejecutan las herramientas por grupos dentro de ese límite. Cada entrada sigue contando para el límite de frecuencia del usuario; las solicitudes adicionales reciben HTTP 429 con Retry-After. Al terminar la solicitud HTTP, se cancelan las herramientas y se liberan sus plazas de ejecución. La reserva de lectura del cuerpo se libera antes de ejecutar la herramienta; se mantiene el límite de 1 MiB por solicitud. No requiere cambios de configuración.

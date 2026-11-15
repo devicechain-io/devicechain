@@ -756,6 +756,17 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The release in development (`v1.6`) and the three most recent minor releases (`v1.5`, `v1.4` and `v1.3`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
 
+### v1.7.0 — recent fence-set history survives restart {#v170-upgrade}
+
+During startup, event-processing now hydrates the current fence-set version and up to three
+preceding versions from device-management before replay. Recent historical events can use their
+stamped geometry without waiting for a fence fact or preview. Older versions and failed archive
+reads remain unresolved and produce counted containment errors; this does not preload all history.
+Startup reconciliation retries missing versions and skips versions already held.
+
+Upgrade in place with the usual rolling procedure. No schema, configuration, or public API change
+is required. Old pods keep their existing current-version startup behavior until replaced.
+
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 
 - **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 time buckets are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 64 per process before reading or parsing. Message admission reserves up to 4 slots per batch; valid configured batches (16 entries by default) execute tools in waves within that cap. Every entry still counts toward the caller's rate limit; excess requests receive HTTP 429 with Retry-After. Tools are cancelled and execution slots released when their HTTP request ends. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.
