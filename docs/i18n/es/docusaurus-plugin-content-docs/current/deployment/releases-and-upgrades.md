@@ -808,7 +808,7 @@ La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (
 #### Las eliminaciones se avisan de forma fiable {#v170-deletion-announcements}
 
 - Al eliminar un dispositivo, cliente, área, activo o grupo, el aviso a los demás servicios se registra ahora en la misma transacción de base de datos que la eliminación, y `device-management` lo sigue publicando hasta que el broker de mensajes lo acepta. Antes, un aviso perdido por una caída del broker o un reinicio en el momento equivocado no se enviaba nunca, de modo que los dashboards compartidos, los anclajes de eventos y el estado de detección de la entidad eliminada podían quedarse atrás.
-- El aviso lleva la hora en que la base de datos registró la eliminación.
+- El aviso lleva la hora de la eliminación, por tarde que se publique.
 - Mientras conviven pods antiguos y nuevos durante la actualización gradual, las eliminaciones que atiende un pod `v1.6` se avisan de la forma anterior.
 - No requiere cambios de configuración.
 
