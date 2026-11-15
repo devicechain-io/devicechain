@@ -79,7 +79,7 @@ type fixtureDevices map[string]string
 
 func (f fixtureDevices) DeviceOf(_ context.Context, tenant, device string) (model.DeviceFacts, bool, error) {
 	p, ok := f[tenant+"/"+device]
-	return model.DeviceFacts{Profile: p}, ok, nil
+	return model.DeviceFacts{Incarnation: 1, Profile: p}, ok, nil
 }
 
 type fixtureProfiles struct{}

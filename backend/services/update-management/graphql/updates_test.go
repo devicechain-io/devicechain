@@ -32,7 +32,7 @@ type devices struct {
 
 func (d devices) DeviceOf(_ context.Context, tenant, device string) (model.DeviceFacts, bool, error) {
 	p, ok := d.profiles[tenant+"/"+device]
-	return model.DeviceFacts{Profile: p, Disabled: d.disabled[tenant+"/"+device]}, ok, nil
+	return model.DeviceFacts{Incarnation: 1, Profile: p, Disabled: d.disabled[tenant+"/"+device]}, ok, nil
 }
 
 type sink struct{ n int }
