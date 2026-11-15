@@ -22,9 +22,16 @@ export type PresenceTransition = StateChangeEventsQuery['stateChangeEvents']['re
 // both event lists on the compatible documents for the rest of this session.
 let useLegacyEventLists = false;
 
+// Exactly the two validation refusals an older server gives for the new fields: an unknown
+// input field and an unknown selection. Any other error that merely names them is not one.
+const LEGACY_REFUSALS = [
+  /Field "includeTotal" is not defined by type "EventSearchCriteria"/,
+  /Cannot query field "hasMore" on type "SearchResultsPagination"/,
+];
+
 function isLegacyEventListError(error: unknown): boolean {
   return error instanceof GraphQLRequestError &&
-    !!error.errors?.some(({ message }) => /\b(includeTotal|hasMore)\b/.test(message));
+    !!error.errors?.some(({ message }) => LEGACY_REFUSALS.some((refusal) => refusal.test(message)));
 }
 
 type EventListOptions = {
