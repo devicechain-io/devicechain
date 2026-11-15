@@ -43,9 +43,15 @@ func Sync(ctx context.Context, src Source, bucket partition.Bucket, groups *conf
 		if err != nil {
 			return fmt.Errorf("reading the placement table: %w", err)
 		}
-		if groups != nil && table.S() > groups.Count {
-			return fmt.Errorf("placement names shard group %d, count %d; nats.shardGroups.count must be raised first",
-				table.S()-1, groups.Count)
+		if groups != nil {
+			// Each group is compared directly: Table.S() is the highest group plus one, which
+			// overflows for a group of math.MaxInt.
+			for vp, g := range table.Groups {
+				if g >= groups.Count {
+					return fmt.Errorf("placement names shard group %d, count %d (vpartition %d); nats.shardGroups.count must be raised first",
+						g, groups.Count, vp)
+				}
+			}
 		}
 		if err = partition.Publish(bucket, table); err != nil {
 			if errors.Is(err, partition.ErrStale) {

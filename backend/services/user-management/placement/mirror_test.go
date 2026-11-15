@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/config"
@@ -232,4 +233,15 @@ func TestSyncNatsShardGroupLimit(t *testing.T) {
 			})
 		}
 	}
+}
+
+// Table.S() is the highest group plus one, so a group of math.MaxInt would overflow a
+// comparison made through it; the limit compares each group directly.
+func TestSyncNatsShardGroupLimitMaxInt(t *testing.T) {
+	table := newTable()
+	table.Groups[3] = math.MaxInt
+	b := newBucket()
+	err := Sync(context.Background(), &source{table: table}, b, &config.NatsShardGroupsConfiguration{Count: 2})
+	require.ErrorContains(t, err, "nats.shardGroups.count must be raised first")
+	require.Zero(t, b.next, "invalid placement must never write the bucket")
 }
