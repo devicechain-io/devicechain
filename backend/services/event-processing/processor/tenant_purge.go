@@ -371,22 +371,33 @@ func (rp *ResolvedEventsProcessor) dropTenantBuffers(victim func(ruleID string) 
 // is running. Staying subscribed keeps the broker answering "there is interest here"; the
 // refusal below supplies the rest.
 type TenantPurgeResponder struct {
-	conn       *nats.Conn
-	instanceId string
-	partition  string
-	evict      func(ctx context.Context, tenant string) (int64, error)
-	sub        *nats.Subscription
+	conn         *nats.Conn
+	instanceId   string
+	partition    string
+	evict        func(ctx context.Context, tenant string) (int64, error)
+	sub          *nats.Subscription
+	children     []*TenantPurgeResponder
+	deferFailure bool
 }
 
 // NewTenantPurgeResponder wires a responder to a running processor.
 func NewTenantPurgeResponder(conn *nats.Conn, instanceId string,
 	rp *ResolvedEventsProcessor) *TenantPurgeResponder {
-	return &TenantPurgeResponder{
+	r := &TenantPurgeResponder{
 		conn:       conn,
 		instanceId: instanceId,
 		partition:  rp.partitionID(),
 		evict:      rp.EvictTenant,
 	}
+	if len(rp.groupWorkers) > 0 {
+		r.deferFailure = true
+		for _, worker := range rp.groupWorkers {
+			child := NewTenantPurgeResponder(conn, instanceId, worker)
+			child.deferFailure = true
+			r.children = append(r.children, child)
+		}
+	}
+	return r
 }
 
 // Start subscribes to this instance's eviction subject.
@@ -429,6 +440,14 @@ func (r *TenantPurgeResponder) Start() error {
 		return fmt.Errorf("subscribing to the DETECT tenant-eviction subject %q: %w", subject, err)
 	}
 	r.sub = sub
+	// One serial subscription per partition: a slow commit must not prevent an
+	// empty sibling from answering CLEAN. All subscriptions live across terms.
+	for _, child := range r.children {
+		if err := child.Start(); err != nil {
+			_ = r.Stop()
+			return err
+		}
+	}
 	log.Info().Str("subject", subject).Str("partition", r.partition).
 		Msg("DETECT tenant-eviction responder subscribed.")
 	return nil
@@ -436,19 +455,21 @@ func (r *TenantPurgeResponder) Start() error {
 
 // Stop tears down the subscription.
 func (r *TenantPurgeResponder) Stop() error {
-	if r.sub == nil {
-		return nil
+	var err error
+	for _, child := range r.children {
+		err = errors.Join(err, child.Stop())
 	}
-	return r.sub.Unsubscribe()
+	if r.sub == nil {
+		return err
+	}
+	return errors.Join(err, r.sub.Unsubscribe())
 }
 
 // handle evicts one tenant and replies with what happened.
 //
-// It ALWAYS replies when it can, including on failure. Silence and "I hold nothing" are
-// the same observation to a caller that only sees a timeout, and they are opposite facts:
-// the whole reason the reply carries an error field is so a partition that could not
-// commit is recorded as still holding the tenant instead of being counted as one that
-// answered clean.
+// The legacy singleton replies with an error on failure. Group responders leave a
+// failed partition outstanding instead; the coordinator's SQL-discovered checkpoint
+// set makes that silence a deferral. Neither path sends a CLEAN reply before commit.
 func (r *TenantPurgeResponder) handle(msg *nats.Msg) {
 	if msg.Reply == "" {
 		log.Warn().Msg("Ignoring a DETECT tenant-eviction request with no reply subject.")
@@ -467,6 +488,11 @@ func (r *TenantPurgeResponder) handle(msg *nats.Msg) {
 		cancel()
 		reply.Evicted = evicted
 		if err != nil {
+			// Group partitions owe a committed reply individually. On failure,
+			// leave this partition outstanding so the coordinator retries.
+			if r.deferFailure {
+				return
+			}
 			reply.Error = err.Error()
 			log.Warn().Err(err).Str("tenant", req.Tenant).Str("partition", r.partition).
 				Msg("DETECT tenant eviction did not complete; reporting the tenant as still held.")

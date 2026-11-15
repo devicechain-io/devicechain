@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	epconfig "github.com/devicechain-io/dc-event-processing/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/shardgroups"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -16,6 +17,7 @@ import (
 // A nil identity preserves the legacy constructor and its injectable replay seam.
 type workerIdentity struct {
 	group               int
+	groups              int // set before any engine starts
 	physical, partition string
 	replay              messaging.GroupReplaySource
 }
@@ -176,6 +178,13 @@ func (rp *ResolvedEventsProcessor) attachGroupWorkers(children ...*ResolvedEvent
 		return fmt.Errorf("group supervisor requires group zero and the singleton lease/gate")
 	}
 	workers := append([]*ResolvedEventsProcessor{rp}, children...)
+	for _, w := range workers {
+		if w != nil {
+			if err := epconfig.ValidateDetectWorkers(len(workers), w.cfg.Shards); err != nil {
+				return err
+			}
+		}
+	}
 	for g, w := range workers {
 		if w == nil || w.worker == nil || w.worker.group != g || (g > 0 && w.Lease != nil) || len(w.groupWorkers) != 0 {
 			return fmt.Errorf("invalid group worker %d: workers cannot acquire leases or supervise workers", g)
@@ -187,6 +196,26 @@ func (rp *ResolvedEventsProcessor) attachGroupWorkers(children ...*ResolvedEvent
 		}
 	}
 	rp.groupWorkers = append([]*ResolvedEventsProcessor(nil), children...)
+	for _, w := range workers {
+		w.worker.groups = len(workers)
+		// Assembly precedes fact admission. Constructors already size from the
+		// instance document; only isolated fixtures need replacement channels.
+		if cap(w.ruleUpdates) != 64/len(workers) {
+			w.ruleUpdates = make(chan ruleUpdate, 64/len(workers))
+		}
+		if cap(w.armUpdates) != 256/len(workers) {
+			w.armUpdates = make(chan armUpdate, 256/len(workers))
+		}
+		if cap(w.attrUpdates) != 256/len(workers) {
+			w.attrUpdates = make(chan attrUpdate, 256/len(workers))
+		}
+		if cap(w.seriesDrops) != 256/len(workers) {
+			w.seriesDrops = make(chan seriesDrop, 256/len(workers))
+		}
+		if cap(w.fenceUpdates) != 32/len(workers) {
+			w.fenceUpdates = make(chan fenceUpdate, 32/len(workers))
+		}
+	}
 	// Reuse the supervisor's process-owned collectors. Each group gets its own
 	// gauge recording handle and shard sampling cursors, including group zero.
 	if metrics := rp.metrics; metrics != nil {
