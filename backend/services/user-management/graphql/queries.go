@@ -362,3 +362,8 @@ func (r *SchemaResolver) IdentityMemberships(ctx context.Context, args struct {
 	}
 	return out, nil
 }
+
+func (r *TenantGovernanceResolver) RulesPerTenant() (*int32, error) {
+	v, _ := r.t.EffectiveRulesPerTenant()
+	return util.IntPtrInt32("rulesPerTenant", v)
+}
