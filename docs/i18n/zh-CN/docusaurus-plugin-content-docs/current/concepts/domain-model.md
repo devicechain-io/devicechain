@@ -35,6 +35,8 @@ DeviceChain 不将设备绑定到唯一固定的 `(customer, area, asset)` 分�
 
 ## 属性与事件 {#attributes-vs-events}
 
+每个实体和作用域中的属性键只保留一个当前值；再次设置该键会替换原值。
+
 DeviceChain 将当前状态与历史记录分开：
 
 - **事件**是设备上报的所有内容的只追加时序记录：测量、位置、警报、命令调用与响应，以及状态变更。它们保存在 TimescaleDB 超表中。
