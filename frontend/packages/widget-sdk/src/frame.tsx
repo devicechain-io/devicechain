@@ -29,6 +29,7 @@ import {
   WidgetBodySizeProvider,
 } from './context';
 import { FreshnessReadout, StaleBadge, useFreshness } from './freshness-readout';
+import { viewerLocale } from './freshness';
 import { useElementSize } from './hooks';
 import { css } from './theme';
 import { makeWidgetScale, type WidgetScale } from './scale';
@@ -273,6 +274,7 @@ interface ExportSlotProps {
 }
 
 function ExportSlot(props: ExportSlotProps) {
+  const locale = viewerLocale();
   const host = useRef<HTMLDivElement>(null);
   // What the menu reads when it is opened: the widget as it is then, not as it was at mount.
   const latest = useRef(props);
@@ -290,7 +292,7 @@ function ExportSlot(props: ExportSlotProps) {
       live = false;
       unmount?.();
     };
-  }, []);
+  }, [locale]);
   return (
     <div
       ref={host}
