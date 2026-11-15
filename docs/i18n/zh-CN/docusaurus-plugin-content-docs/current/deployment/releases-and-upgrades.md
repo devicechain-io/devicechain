@@ -608,7 +608,7 @@ dcctl bootstrap local devicechain
 
 ### v1.5.0 — 自动化变更先评审，代理审批绑定登录会话 {#v150-upgrade}
 
-`v1.5.0` 是从 `v1.4.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。**两个命令都使用新版本的 `dcctl`**，并向 `dcctl install` 提供集群原有设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级会运行四项追加迁移：`device-management` 三项，`user-management` 一项。它们添加代理停用屏障和效果发件箱、自动化评审及其强制执行机制，以及执行代次列。参见[模式变更与回退](#v150-going-back)。如果来自 `v1.3.0` 或更早版本，请先阅读 [`v1.4.0` 说明](#v140-upgrade)。
+`v1.5.0` 是从 `v1.4.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。**两个命令都使用新版本的 `dcctl`**，并向 `dcctl install` 提供集群原有设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级会运行四项追加迁移：`device-management` 三项，`user-management` 一项。它们添加代理停用屏障和效果发件箱、自动化评审及其强制执行机制，以及执行代次列。参见[模式变更与回退](#v150-going-back)。如果来自 `v1.3.0` 或更早版本，请先逐一升级经过每个中间次版本（包括 `v1.4.x`），再升级到 `v1.5.0`。先按照 [`v1.4.0` 说明](#v140-upgrade)，使用该版本的 `dcctl` 和版本号完成升级。
 
 ```bash
 dcctl install local --version v1.5.0
@@ -754,7 +754,7 @@ MCP 新增 `propose_alarm_action`、`get_proposal` 和 `list_my_proposals`，仅
 
 ### v1.4.0：LoRaWAN 确认下行、通过 MQTT 发送设备自有载荷，以及标明设备的通知 {#v140-upgrade}
 
-`v1.4.0` 是从 `v1.3.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见 [v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。**两个命令都要使用新版本的 `dcctl`**，并给 `dcctl install` 传入安装集群时使用的设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级时会运行十个追加的迁移（`device-management` 两个，`notification-management` 四个，`outbound-connectors` 两个，`user-management` 两个）；它们新增表和列。清除通知时间戳迁移还会在 `notify_on_clear` 为 true 且 `notify_on_clear_since IS NULL` 时设置 `notify_on_clear_since = updated_at`。参见[架构变更与回退](#v140-going-back)。如果从 `v1.2.0` 或更早版本升级，请先阅读 [`v1.3.0` 的说明](#v130-upgrade)，并在按其操作时使用 `--version v1.4.0`。
+`v1.4.0` 是从 `v1.3.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见 [v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。**两个命令都要使用新版本的 `dcctl`**，并给 `dcctl install` 传入安装集群时使用的设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级时会运行十个追加的迁移（`device-management` 两个，`notification-management` 四个，`outbound-connectors` 两个，`user-management` 两个）；它们新增表和列。清除通知时间戳迁移还会在 `notify_on_clear` 为 true 且 `notify_on_clear_since IS NULL` 时设置 `notify_on_clear_since = updated_at`。参见[架构变更与回退](#v140-going-back)。如果从 `v1.2.0` 或更早版本升级，请先逐一升级经过每个中间次版本（包括 `v1.3.x`），再升级到 `v1.4.0`。先按照 [`v1.3.0` 的说明](#v130-upgrade)，使用该版本的 `dcctl` 和版本号完成升级。
 
 ```bash
 dcctl install local --version v1.4.0
@@ -928,7 +928,7 @@ AI 代理可以提议确认或清除告警。此预览功能默认关闭，最�
 
 ### v1.3.0：命令可送达 HTTP 和 LoRaWAN 设备，每次投递都留有凭据 {#v130-upgrade}
 
-`v1.3.0` 是从 `v1.2.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入安装集群时使用的设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级时会运行十个追加的迁移（`device-management` 五个，`command-delivery` 两个，`event-management` 两个，`notification-management` 一个），并且每个区域的审计日志各增加四个可为空的列；它们新增表、可为空的列和索引，不改动任何已有行。参见[架构变更与回退](#v130-going-back)。请按上面的顺序在升级实例之前运行 `dcctl install`：它还会让 Alertmanager 改用 `dcctl` 写入的路由配置（参见[告警送达真人](#v130-alert-routing)）。**令牌受众现在默认强制执行：** 升级之前请阅读[令牌受众默认强制执行](#v130-token-audience)，如果你自己编写实例配置，更要如此。如果从 `v1.1.0` 升级，请先阅读 [`v1.2.0` 的说明](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-upgrade)，并在按其操作时使用 `--version v1.3.0`。
+`v1.3.0` 是从 `v1.2.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入安装集群时使用的设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级时会运行十个追加的迁移（`device-management` 五个，`command-delivery` 两个，`event-management` 两个，`notification-management` 一个），并且每个区域的审计日志各增加四个可为空的列；它们新增表、可为空的列和索引，不改动任何已有行。参见[架构变更与回退](#v130-going-back)。请按上面的顺序在升级实例之前运行 `dcctl install`：它还会让 Alertmanager 改用 `dcctl` 写入的路由配置（参见[告警送达真人](#v130-alert-routing)）。**令牌受众现在默认强制执行：** 升级之前请阅读[令牌受众默认强制执行](#v130-token-audience)，如果你自己编写实例配置，更要如此。如果从 `v1.1.0` 或更早版本升级，请先逐一升级经过每个中间次版本（包括 `v1.2.x`），再升级到 `v1.3.0`。先按照 [`v1.2.0` 的说明](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-upgrade)，使用该版本的 `dcctl` 和版本号完成升级。
 
 ```bash
 dcctl install local --version v1.3.0
@@ -1217,7 +1217,7 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 
 #### 架构变更与回退 {#v130-going-back}
 
-追加了以下迁移。每个新列都允许为空，每张新表开始时都为空，因此运行在新架构上的 `v1.2.0` 服务写入的行仍然可以存储。
+以下迁移均为追加式增量迁移。新列允许为空，新表开始时为空，以便新旧 Pod 在滚动升级期间共存。这不代表支持降级。
 
 - **信任锚上的 OCSP**（`device-management`，迁移 `20261113100000`）。`device_trust_anchors` 上两个可为空的列：`ocsp_mode` 和 `ocsp_responder_url`。空模式读作 `OFF`。
 - **HTTP 命令渠道**（`device-management`，迁移 `20261114120000`）。`device_types` 上一个可为空的列 `command_channel`。空值读作 `PUBLISH`。
@@ -1230,7 +1230,7 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 - **活动**（`command-delivery`，迁移 `20261116120000`）。三张新表 `campaigns`、`campaign_cycles` 和 `campaign_elements`，以及它们的索引。
 - **语义绑定**（`device-management`，迁移 `20261120120000`）。类型、关系类型和指标表上用于绑定的可为空列，以及一张新表 `semantic_contexts`。
 
-**回退到 `v1.2.0` 时，数据库中无需撤销任何内容：** 新的表、列和索引保留原处，`v1.2.0` 的服务会忽略它们。回退之前，请把每个信任锚的 OCSP 模式改回 `OFF`，把每个设备类型的 `commandChannel` 改回 `PUBLISH`，并关闭 `httpIngest.deviceUplinks`、`lpwanDownlink.enabled` 和 webhook 签名，因为 `v1.2.0` 不认识它们。条件允许时请向前升级：升级失败可以通过再次运行 `dcctl upgrade` 来修复。
+**升级只能向前进行；不要降级到 `v1.2.0`，也不要使用 `helm rollback`。** 如果升级失败，请修复原因并使用目标版本的工具重试 `dcctl upgrade`，升级到修复版本，或按照[灾难恢复](./disaster-recovery.md)流程从备份恢复。参见[支持的升级路径](./versioning-policy.md#upgrade-paths)。
 
 #### 已知问题 {#v130-known-issues}
 
