@@ -194,6 +194,8 @@ func (r *AdminTenantResolver) EffectiveScalarSettings() []*AdminTenantScalarSett
 		// No override level: the count is set on the tier only, so override is always nil.
 		row(iam.CalculatedMetricsPerProfileConfigKey, "Calculated metrics per profile",
 			m.EffectiveCalculatedMetricsPerProfile, m.Tier.CalculatedMetricsPerProfile(), nil),
+		row(iam.RulesPerTenantConfigKey, "Rules per tenant",
+			m.EffectiveRulesPerTenant, m.Tier.RulesPerTenant(), nil),
 		row(iam.IntegrationsPerTenantConfigKey, "Integrations per tenant",
 			m.EffectiveIntegrationsPerTenant, m.Tier.IntegrationsPerTenant(), nil),
 	}
