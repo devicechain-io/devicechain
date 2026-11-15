@@ -727,7 +727,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devicechain_eventmanagement_persist_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "expr": "sum(rate(devicechain_eventmanagement_persist_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__rate_interval]))",
           "legendFormat": "persist"
         },
         {
@@ -736,7 +736,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devicechain_devicestate_state_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "expr": "sum(rate(devicechain_devicestate_state_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__rate_interval]))",
           "legendFormat": "state"
         },
         {
@@ -745,7 +745,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devicechain_devicemanagement_resolve_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "expr": "sum(rate(devicechain_devicemanagement_resolve_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__rate_interval]))",
           "legendFormat": "resolve"
         },
         {
@@ -754,7 +754,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devicechain_devicemanagement_device_reports_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "expr": "sum(rate(devicechain_devicemanagement_device_reports_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__rate_interval]))",
           "legendFormat": "device reports"
         },
         {
@@ -763,7 +763,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devicechain_devicemanagement_raise_alarm_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "expr": "sum(rate(devicechain_devicemanagement_raise_alarm_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__rate_interval]))",
           "legendFormat": "raise alarm"
         },
         {
@@ -772,7 +772,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devicechain_commanddelivery_response_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "expr": "sum(rate(devicechain_commanddelivery_response_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__rate_interval]))",
           "legendFormat": "response"
         },
         {
@@ -781,7 +781,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devicechain_notificationmanagement_notify_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "expr": "sum(rate(devicechain_notificationmanagement_notify_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__rate_interval]))",
           "legendFormat": "notify"
         },
         {
@@ -790,7 +790,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devicechain_updatemanagement_update_reports_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__rate_interval]))",
+          "expr": "sum(rate(devicechain_updatemanagement_update_reports_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__rate_interval]))",
           "legendFormat": "update reports"
         }
       ],
@@ -926,7 +926,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round((sum(increase(devicechain_eventmanagement_persist_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_devicestate_state_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_devicemanagement_resolve_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_devicemanagement_device_reports_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_devicemanagement_raise_alarm_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_commanddelivery_response_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_notificationmanagement_notify_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)) + (sum(increase(devicechain_updatemanagement_update_reports_messages_total{namespace=\"$namespace\", result!=\"ok\"}[$__range])) or vector(0)))",
+          "expr": "round((sum(increase(devicechain_eventmanagement_persist_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__range])) or vector(0)) + (sum(increase(devicechain_devicestate_state_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__range])) or vector(0)) + (sum(increase(devicechain_devicemanagement_resolve_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__range])) or vector(0)) + (sum(increase(devicechain_devicemanagement_device_reports_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__range])) or vector(0)) + (sum(increase(devicechain_devicemanagement_raise_alarm_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__range])) or vector(0)) + (sum(increase(devicechain_commanddelivery_response_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__range])) or vector(0)) + (sum(increase(devicechain_notificationmanagement_notify_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__range])) or vector(0)) + (sum(increase(devicechain_updatemanagement_update_reports_messages_total{namespace=\"$namespace\", result!~\"ok|unwanted\"}[$__range])) or vector(0)))",
           "instant": true
         }
       ],
