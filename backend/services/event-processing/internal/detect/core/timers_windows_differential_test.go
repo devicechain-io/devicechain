@@ -189,8 +189,12 @@ func goldenSnapshotBytes(t testing.TB, b []byte) []byte {
 		t.Fatal(err)
 	}
 	s.Fell = nil
-	for i := range s.Raised {
-		s.Raised[i].Input = nil
+	// raised.input is NOT stripped: this release never bumps, so a fresh run or a continuation
+	// of a v1.6 snapshot must never write one. Assert it rather than hide it.
+	for _, r := range s.Raised {
+		if r.Input != nil {
+			t.Fatalf("raised %s/%s carries an input time; this release must never write one", r.Rule, r.Series)
+		}
 	}
 	b, err := json.Marshal(s)
 	if err != nil {
