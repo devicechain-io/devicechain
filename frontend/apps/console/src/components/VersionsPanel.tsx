@@ -203,11 +203,9 @@ export function VersionsPanel<V extends PublishedVersion>({
         <div className="space-y-4">
           <FormField
             label={t('versions:labelFieldLabel')}
-            htmlFor="v-label"
             description={t('versions:labelHint')}
           >
             <Input
-              id="v-label"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               placeholder={t('versions:labelPlaceholder')}
@@ -215,11 +213,9 @@ export function VersionsPanel<V extends PublishedVersion>({
           </FormField>
           <FormField
             label={t('common:colDescription')}
-            htmlFor="v-desc"
             description={t('versions:descHint')}
           >
             <Textarea
-              id="v-desc"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
