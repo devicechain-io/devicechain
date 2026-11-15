@@ -469,6 +469,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// core/service is where the order now lives.
 	Svc = service.New(Microservice, service.Spec{
 		Rdb: &service.RdbSpec{
+			AppendOnly: nil, // Audit journal only.
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Migrations: model.Migrations,
 			Config:     Configuration.RdbConfiguration,

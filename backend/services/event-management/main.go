@@ -373,6 +373,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// in AfterRdb that has to happen between two of the constructions.
 	Svc = service.New(Microservice, service.Spec{
 		Rdb: &service.RdbSpec{
+			AppendOnly: nil, // Audit journal only.
 			// 🔴 THE EVENT STORE, NOT THE RELATIONAL ONE. This service's tables are
 			// hypertables and live in the instance's TimescaleDB cluster, which is a
 			// different database from the one every other area opens. It is named here

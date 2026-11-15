@@ -211,6 +211,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// in AfterRdb that has to happen between two of the constructions.
 	Svc = service.New(Microservice, service.Spec{
 		Rdb: &service.RdbSpec{
+			AppendOnly: nil, // Audit journal only.
 			// The per-tenant channels, policies, and per-alarm notification state are
 			// served from the relational store.
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,

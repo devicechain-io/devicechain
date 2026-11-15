@@ -645,6 +645,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// in AfterRdb that has to happen between two of the constructions.
 	Svc = service.New(Microservice, service.Spec{
 		Rdb: &service.RdbSpec{
+			AppendOnly: nil, // Audit journal only.
 			// This chain includes the snapshot-store migrations, which the manager runs
 			// under the startup advisory lock.
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
