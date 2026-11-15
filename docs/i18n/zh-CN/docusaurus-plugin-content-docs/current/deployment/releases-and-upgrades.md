@@ -650,6 +650,22 @@ MCP 发现现在提供 `read-only` 和 `location`，并在 MCP 的 `agentActuati
 - `@devicechain/widgets` / `isTerminalStatus` 已弃用；请改用 `@devicechain/dashboards.isTerminalCommandStatus`。
 - `@devicechain/widgets` / `OptionIssue` 已弃用；请改用 `@devicechain/widgets.BuiltinOptionIssue`。
 
+#### 可选的 NATS 分片组 {#v160-nats-shard-groups}
+
+NATS 分片组默认仍处于关闭状态。新实例可在安装时通过 `--values` 在
+`instance.config.infrastructure.nats.shardGroups` 处启用。该设置支持 2–5 个分组，
+使用 R1 流，且要求集群至少有三台代理服务器，并拒绝 `--ha`。放置标签使用对应的
+`dc-nats` Pod 名称；显式标签必须与这些名称一致。默认配置文件支持对 `inbound-events`
+分片；当部署了 device-state 或 event-processing 时会拒绝 `resolved-events`，因为这些
+消费者仍只读取第零组。每个选定的流都会在每个分组中预留其完整的字节上限，`dcctl`
+会在创建或更改任何基础设施之前检查该预留，因此如果检查拒绝，请先扩容 JetStream 卷。
+
+对于代理为单台服务器的现有实例，`dcctl upgrade` 会拒绝启用分片组，因为不支持将
+已存有数据的独立 JetStream 服务器转换为集群。如果某次升级的 `--values`（或
+`--reset-values`）会删除已记录的 `shardGroups` 块、降低其 `count`，或从其 `suffixes`
+中移除某个流，该升级也会被拒绝，因为这些分组可能存有数据：请在每个替换用的 values
+文件中保留该块。
+
 #### 完整重载代理会保持认证调用已放行的设备连接 {#v160-broker-reload}
 
 过去，完整重载代理会关闭认证调用已放行的所有连接，其中包括所有使用用户名进行认证的 MQTT 设备。代理现在基于 `nats-server` `v2.15.3` 构建，因此更改代理 TLS Secret 中的 CA 包（CA 轮换）或手动重载时，会保持这些连接打开。只有当 chart 的 config-reloader 边车因挂载的 TLS Secret 发生变化而发送 SIGHUP，或操作员手动运行 `nats-server --signal reload` 时，才会发生不重启的重载。
