@@ -27,8 +27,9 @@ import (
 // wheel that pushed an entry per event, a window that always built both deques), and every run
 // here must reproduce them exactly. A golden is a SHA-256 over the whole observable output of a
 // seed: every detection (rule, series, kind, edge, At, Value, HasValue) in drain order, plus the
-// full Engine.Snapshot() bytes at every checkpoint — so a change to a timer's deadline, to firing
-// order, to a generation number, or to anything serialized moves the hash.
+// Engine.Snapshot() bytes at every checkpoint, except the additive fell/input state — so a change
+// to a timer's deadline, to firing order, to a generation number, or to other serialized state
+// moves the hash.
 //
 // Beyond the hashes, for the first goldenSnapshotSeeds seeds the golden carries the OLD engine's
 // literal mid-run snapshot. TestTimersWindowsOldSnapshotRestores restores those bytes into the
@@ -179,6 +180,25 @@ type diffResult struct {
 	midSnap []byte
 }
 
+// goldenSnapshotBytes excludes only the new compatibility state from historical snapshot
+// comparisons. fell is write-only in this release; detections are still compared exactly.
+func goldenSnapshotBytes(t testing.TB, b []byte) []byte {
+	t.Helper()
+	var s snapshot
+	if err := json.Unmarshal(b, &s); err != nil {
+		t.Fatal(err)
+	}
+	s.Fell = nil
+	for i := range s.Raised {
+		s.Raised[i].Input = nil
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 func diffRun(t testing.TB, e *Engine, msgs []diffMsg, from, snapAt int, restoreEvery int, rules []Rule) diffResult {
 	t.Helper()
 	h := sha256.New()
@@ -198,7 +218,7 @@ func diffRun(t testing.TB, e *Engine, msgs []diffMsg, from, snapAt int, restoreE
 			t.Fatalf("%s: snapshot: %v", label, err)
 		}
 		h.Write([]byte("S|"))
-		h.Write(b)
+		h.Write(goldenSnapshotBytes(t, b))
 		h.Write([]byte{'\n'})
 	}
 	for i := from; i < len(msgs); i++ {
@@ -292,7 +312,7 @@ func computeSeed(t testing.TB, seed int64) goldenSeed {
 		t.Fatalf("seed %d: restore mid: %v", seed, err)
 	}
 	tail := diffRun(t, re, msgs, mid, -1, 0, rules)
-	sum := sha256.Sum256(full.midSnap)
+	sum := sha256.Sum256(goldenSnapshotBytes(t, full.midSnap))
 	g := goldenSeed{
 		Seed: seed, Messages: len(msgs), Events: full.events, Dets: full.dets, Fired: full.fired,
 		Hash: full.hash, TailHash: tail.hash, Mid: mid, MidHash: hex.EncodeToString(sum[:]),
@@ -319,6 +339,8 @@ func loadGolden(t testing.TB) goldenDoc {
 // TestTimersWindowsGolden is the differential test: the current engine's whole observable output,
 // over goldenSeeds randomized streams, equals what the pre-change engine produced.
 func TestTimersWindowsGolden(t *testing.T) {
+	// Exclude fell (write-only state in this release) and optional input from snapshot hashes;
+	// the detection stream is compared exactly against the unchanged recorded golden.
 	if os.Getenv("TIMERS_GOLDEN_UPDATE") == "1" {
 		var d goldenDoc
 		for s := int64(0); s < goldenSeeds; s++ {
@@ -360,9 +382,11 @@ func TestTimersWindowsGolden(t *testing.T) {
 }
 
 // TestTimersWindowsOldSnapshotRestores restores snapshots WRITTEN BY THE PRE-CHANGE ENGINE and
-// requires the current one to (a) re-serialize them byte-for-byte and (b) continue to the tail
-// the old engine produced.
+// requires the current one to (a) re-serialize them byte-for-byte except for the additive
+// fell/input state and (b) continue to the tail the old engine produced.
 func TestTimersWindowsOldSnapshotRestores(t *testing.T) {
+	// Exclude fell (write-only state in this release) and optional input from snapshot bytes;
+	// the continued detection stream is compared exactly against the unchanged recorded golden.
 	d := loadGolden(t)
 	n := 0
 	for _, g := range d.Seeds {
@@ -382,7 +406,7 @@ func TestTimersWindowsOldSnapshotRestores(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(again, old) {
+		if !bytes.Equal(goldenSnapshotBytes(t, again), goldenSnapshotBytes(t, old)) {
 			t.Fatalf("seed %d: restoring the old snapshot and re-snapshotting changes its bytes", g.Seed)
 		}
 		if got := diffRun(t, e, msgs, g.Mid, -1, 0, rules); got.hash != g.OldTail {
