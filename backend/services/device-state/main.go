@@ -38,9 +38,8 @@ var (
 
 	Api *model.Api
 
-	ResolvedEventsReader messaging.MessageReader
-	InboundEventsWriter  messaging.MessageWriter
-	StateProcessor       *processor.StateProcessor
+	InboundEventsWriter messaging.MessageWriter
+	StateProcessors     []*processor.StateProcessor
 
 	// OwnershipProcessor restamps a device's live view with its owners from
 	// device-management's ownership-changed facts (ADR-081), so a device that is sold and
@@ -122,9 +121,10 @@ func wireDroppedEvictions(api *model.Api) {
 // everything the NATS callback builds belongs to the connection, and a second registration
 // of the same collector panics. It is a function of its own so a test can check the
 // configuration reaches the processor, which nothing else exercises.
-func newStateProcessor(reader messaging.MessageReader) *processor.StateProcessor {
+func newStateProcessor(reader messaging.MessageReader, opts ...processor.StateProcessorOption) *processor.StateProcessor {
+	opts = append(opts, processor.WithProjection(Configuration.Projection))
 	return processor.NewStateProcessor(Microservice, reader, core.NewNoOpLifecycleCallbacks(), Api,
-		StateMetrics, InactivitySweepMetrics, processor.WithProjection(Configuration.Projection))
+		StateMetrics, InactivitySweepMetrics, opts...)
 }
 
 // Create messaging components used by this microservice.
@@ -134,13 +134,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	stopStreamSharding = stop
-	// Create reader for resolved events (wildcard across tenants). This is a
-	// second, independent consumer fanning out alongside event-management.
-	revents, err := nmgr.NewReader(streams.ResolvedEvents)
+	// Read every resolved-events group (wildcard across tenants), independently
+	// of event-management. Without sharding this keeps the legacy reader and durable.
+	revents, err := shardgroups.NewReaders(nmgr, streams.ResolvedEvents)
 	if err != nil {
 		return err
 	}
-	ResolvedEventsReader = revents
 
 	// The service's ONE producer, and this is the only place it can be built: the
 	// operator demotion mutation (ADR-067) publishes onto the shared inbound-events
@@ -158,11 +157,20 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	InboundEventsWriter = inbound
 	Api.SetDemotionEmitter(model.NewDemotionEmitter(InboundEventsWriter, time.Now))
 
-	// Add and initialize device state processor.
-	StateProcessor = newStateProcessor(ResolvedEventsReader)
-	err = StateProcessor.Initialize(context.Background())
-	if err != nil {
-		return err
+	// A tenant belongs to one group, preserving per-device ordering. All
+	// processors share the process-scoped collectors built by buildMetrics.
+	StateProcessors = make([]*processor.StateProcessor, 0, len(revents))
+	for group, reader := range revents {
+		var opts []processor.StateProcessorOption
+		// The inactivity sweep spans all tenants, so only group 0 runs it.
+		if group > 0 {
+			opts = append(opts, processor.WithoutInactivityMonitor())
+		}
+		sp := newStateProcessor(reader, opts...)
+		if err := sp.Initialize(context.Background()); err != nil {
+			return err
+		}
+		StateProcessors = append(StateProcessors, sp)
 	}
 
 	// The device ownership-changed facts: a second, much quieter stream, consumed on its own
@@ -255,22 +263,24 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
-	// Start device state processor. It is built by the NATS manager's oncreate callback,
+	// Start every device state processor. It is built by the NATS manager's oncreate callback,
 	// so it does not exist until the line above has run.
-	err := StateProcessor.Start(ctx)
-	if err != nil {
-		return err
+	for _, sp := range StateProcessors {
+		if err := sp.Start(ctx); err != nil {
+			return err
+		}
 	}
 	return OwnershipProcessor.Start(ctx)
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
-	// Stop both consumers before the managers: each reads from the broker and writes to the
+	// Stop all consumers before the managers: each reads from the broker and writes to the
 	// database.
-	err := StateProcessor.Stop(ctx)
-	if err != nil {
-		return err
+	for _, sp := range StateProcessors {
+		if err := sp.Stop(ctx); err != nil {
+			return err
+		}
 	}
 	if err := OwnershipProcessor.Stop(ctx); err != nil {
 		return err
@@ -292,7 +302,7 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// presence-demotion mutation still in flight would fail with ErrUnplacedTenant
 	// although the broker connection is up. Cancelling a watch whose connection has
 	// already drained is harmless.
-	err = Svc.Stop(ctx)
+	err := Svc.Stop(ctx)
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
@@ -301,10 +311,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
-	// Terminate both consumers.
-	err := StateProcessor.Terminate(ctx)
-	if err != nil {
-		return err
+	// Terminate all consumers.
+	for _, sp := range StateProcessors {
+		if err := sp.Terminate(ctx); err != nil {
+			return err
+		}
 	}
 	if err := OwnershipProcessor.Terminate(ctx); err != nil {
 		return err
