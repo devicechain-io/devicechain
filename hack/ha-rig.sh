@@ -238,19 +238,32 @@ EOF
 # Each default must appear exactly once as a hostPort in the source, or this refuses:
 # a substitution that matched nothing would publish the old port and fail later as a
 # kind port clash that names neither the variable nor this function.
+#
+# 🔴 ONE sed pass, each line rewritten at most once (`t` ends the script for a line a
+# substitution changed). Three passes in a row CASCADE: DC_HA_RIG_HTTP_PORT=8443 makes
+# the HTTP line 8443, and the HTTPS pass then rewrites it again.
+#
+# 🔴 Every file operation carries its own `|| fail`. This runs inside a command
+# substitution, where bash does not apply errexit to the commands within, so a failed
+# cp or sed would otherwise fall through to the printf and hand back a broken config.
 ha_cluster_config() {
   local src="$repo_root/deploy/local/kind-cluster-ha.yaml" out="$rig_tmp/kind-cluster-ha.yaml"
   local pair from to n
-  cp "$src" "$out"
+  local -a script=()
   for pair in "8080:$ha_http_port" "8443:$ha_https_port" "11883:$ha_mqtt_port"; do
     from="${pair%%:*}" to="${pair#*:}"
     [[ "$to" =~ ^[0-9]+$ ]] && ((to >= 1 && to <= 65535)) ||
       fail "host port '$to' (replacing $from) is not a port number"
-    n="$(grep -cE "^[[:space:]]*hostPort: $from([[:space:]]|$)" "$src" || true)"
+    n="$(grep -cE "^[[:space:]]*hostPort: $from([[:space:]]|$)" "$src")" || [[ "$n" == 0 ]] ||
+      fail "could not read $src"
     [[ "$n" == 1 ]] ||
       fail "$src publishes hostPort $from $n time(s), not once, so it cannot be moved to $to"
-    sed -E "s/^([[:space:]]*hostPort: )$from([[:space:]]|$)/\1$to\2/" "$out" >"$out.next"
-    mv "$out.next" "$out"
+    script+=(-e "s/^([[:space:]]*hostPort: )$from([[:space:]]|\$)/\1$to\2/" -e t)
+  done
+  sed -E "${script[@]}" "$src" >"$out" || fail "could not write the HA cluster config to $out"
+  for to in "$ha_http_port" "$ha_https_port" "$ha_mqtt_port"; do
+    grep -qE "^[[:space:]]*hostPort: $to([[:space:]]|$)" "$out" ||
+      fail "the HA cluster config at $out does not publish host port $to"
   done
   printf '%s' "$out"
 }
