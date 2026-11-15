@@ -298,6 +298,7 @@ const sidebars: SidebarsConfig = {
           collapsed: false,
           items: [
             'deployment/observability',
+            'deployment/troubleshooting',
             'deployment/alert-runbook',
             'deployment/grafana-boards',
             'deployment/metrics-reference',
