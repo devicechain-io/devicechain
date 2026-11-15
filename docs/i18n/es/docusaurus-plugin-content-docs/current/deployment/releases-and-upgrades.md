@@ -799,7 +799,15 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 ## Versiones recientes {#recent-releases}
 
-La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (`v1.5`, `v1.4` y `v1.3`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (`v1.6`, `v1.5` y `v1.4`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+
+### v1.7.0 — en desarrollo {#v170-upgrade}
+
+`v1.7.0` es una actualización in situ desde `v1.6.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
+
+#### Cambios de comportamiento {#v170-behaviour-changes}
+
+- **Los agregados de mediciones ahora caducan con la retención.** Con `lifecycle.retentionDays` configurado en event-management, los agregados de mediciones por minuto que sustentan los gráficos y las lecturas por intervalos ahora se eliminan un intervalo de chunk (redondeado hacia arriba a días completos) después de las lecturas sin procesar, y las lecturas por intervalos ya no devuelven agregados anteriores a esa ventana. En el primer arranque tras la actualización, se elimina el historial de agregados anterior a la ventana y los gráficos de ese rango no muestran datos. Las instancias con `retentionDays: 0` (el valor predeterminado) no se ven afectadas. Durante la actualización gradual, los pods que aún ejecutan v1.6 siguen sirviendo agregados antiguos hasta que se sustituyen.
 
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 

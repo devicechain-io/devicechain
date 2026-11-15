@@ -535,6 +535,15 @@ func (api *Api) bucketedMeasurementsFromRollup(ctx context.Context, criteria Mea
 // aggregation reads, tenant-scoped through the MeasurementRollup model like the raw path.
 func (api *Api) rollupMeasurementScope(ctx context.Context, criteria MeasurementAggregationCriteria) *gorm.DB {
 	db := api.RDB.DB(ctx).Model(&MeasurementRollup{})
+	// Retention jobs drop whole chunks, and materialization chunks are 10x raw
+	// chunks. Without this floor expired buckets remain readable for up to that long.
+	if api.RollupRetentionDays > 0 {
+		now := time.Now
+		if api.now != nil {
+			now = api.now
+		}
+		db = db.Where("bucket >= ?", now().Add(-time.Duration(api.RollupRetentionDays)*24*time.Hour))
+	}
 	if criteria.DeviceToken != nil {
 		db = db.Where("device_token = ?", *criteria.DeviceToken)
 	}

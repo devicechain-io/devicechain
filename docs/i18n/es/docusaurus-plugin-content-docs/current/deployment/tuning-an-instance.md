@@ -179,6 +179,8 @@ hay que dimensionar a propósito. Tres cifras lo deciden.
 - **Retención.** `lifecycle.retentionDays` es 0 por defecto, es decir, conserva los datos para
   siempre. Una instancia pensada para funcionar indefinidamente debería fijarlo; entonces el volumen
   solo tiene que contener la ventana más la semana sin comprimir.
+  Los agregados de mediciones por minuto que sustentan los gráficos caducan también, un
+  intervalo de chunk después (redondeado hacia arriba a días completos).
 
 Como regla, la ventana sin comprimir necesita lecturas por segundo × (1 + métricas calculadas) × bytes por fila × 86 400 segundos × días, dejando libre una cuarta parte del volumen para el registro de
 escritura anticipada, el mantenimiento y el crecimiento. A los 600 bytes medidos y 10 000 lecturas por segundo son unos 520 GB al día, así que los siete días sin comprimir por defecto son unos 3,6 TB. Añade lo que

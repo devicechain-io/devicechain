@@ -24,6 +24,14 @@ type Api struct {
 	// kill-switch, set from config in main). The zero value keeps the rollup path on.
 	RollupReadsDisabled bool
 
+	// RollupRetentionDays sets the rollup read floor; 0 means no floor. Set from
+	// the same DataLifecyclePolicy that ApplyDataLifecyclePolicies reconciles,
+	// so the retention job and read floor cannot be configured apart.
+	RollupRetentionDays int
+
+	// now is the rollup read clock; nil defaults to time.Now.
+	now func() time.Time
+
 	// Backfill is what the calculated-metric backfill API checks a request against (ADR-082).
 	// Nil until main builds it; every start is then UNAVAILABLE.
 	Backfill *BackfillRuntime

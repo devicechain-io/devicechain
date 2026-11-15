@@ -418,7 +418,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if lc.FailedEventRetentionDays != nil { // normally set by ApplyDefaults; guard against a nil deref
 				failedEventRetentionDays = *lc.FailedEventRetentionDays
 			}
-			if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager, model.DataLifecyclePolicy{
+			policy := model.DataLifecyclePolicy{
 				ChunkIntervalHours:       lc.ChunkIntervalHours,
 				CompressAfterDays:        compressAfterDays,
 				RetentionDays:            lc.RetentionDays,
@@ -427,7 +427,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				// the uniform window. Collapsing it to an int here would lose the distinction
 				// between "unset" and an explicit 0 (retention off for location only).
 				LocationRetentionDays: lc.LocationRetentionDays,
-			}); err != nil {
+			}
+			Api.RollupRetentionDays = policy.RollupRetentionDays()
+			if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager, policy); err != nil {
 				return err
 			}
 
