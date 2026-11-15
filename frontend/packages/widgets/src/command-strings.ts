@@ -24,7 +24,7 @@ interface CommandStrings {
   status: Record<string, string>;
 }
 
-const COMMAND_STRINGS: Record<'en' | 'es', CommandStrings> = {
+const COMMAND_STRINGS: Record<'en' | 'es' | 'zh-CN', CommandStrings> = {
   en: {
     send: (label) => `Send ${label}`,
     sending: 'Sending…',
@@ -73,8 +73,18 @@ const COMMAND_STRINGS: Record<'en' | 'es', CommandStrings> = {
       EXPIRED: 'Caducado', CANCELLED: 'Cancelado',
     },
   },
+  'zh-CN': {
+    send: (label) => `发送 ${label}`, sending: '正在发送…', noCommand: '尚未配置命令。',
+    noPermission: '您没有下发命令的权限。', noSeam: '此视图中无法使用命令。', noDevice: '尚未为此命令选择设备。',
+    sendFailed: '无法下发命令，请重试。', historyFailed: '无法加载命令历史记录。', loading: '正在加载…', empty: '尚未下发任何命令。',
+    structuredHint: (required) => `${required ? '必填的' : ''}结构化参数，此处暂不支持。`,
+    structured: '结构化参数，此处暂不支持', required: '必填', number: '必须为数字', integer: '必须为整数',
+    minimum: (value) => `必须 ≥ ${value}`, maximum: (value) => `必须 ≤ ${value}`,
+    status: { QUEUED: '已排队', SENT: '已发送', HELD: '已暂缓', PARKED: '已搁置', SUCCESSFUL: '成功', FAILED: '失败', TIMEOUT: '超时', EXPIRED: '已过期', CANCELLED: '已取消' },
+  },
 };
 
 export function commandStrings(locale: string | undefined = viewerLocale()): CommandStrings {
-  return locale?.toLowerCase().split('-')[0] === 'es' ? COMMAND_STRINGS.es : COMMAND_STRINGS.en;
+  const language = locale?.toLowerCase().split('-')[0];
+  return language === 'es' ? COMMAND_STRINGS.es : language === 'zh' ? COMMAND_STRINGS['zh-CN'] : COMMAND_STRINGS.en;
 }
