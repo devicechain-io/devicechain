@@ -815,6 +815,19 @@ const dockerBuildNetEnv = "DOCKER_BUILD_NET"
 // stepInfraApply deploys the shared data/infra stack via OpenTofu, driving the
 // tofu/terraform binary through terraform-exec.
 func stepInfraApply(ctx context.Context, st *State) error {
+	// Check the planned fresh-install reservation before creating infrastructure.
+	// The Helm step also checks the applied broker's actual ceiling.
+	cfg, err := shardGroupsFromValues(authoringValues(st))
+	if err != nil {
+		return err
+	}
+	if cfg != nil {
+		planned := *st
+		planned.LiveVolumes.JetStream = jetStreamStorageFor(st)
+		if err := precheckJetStreamReservation(ctx, &planned); err != nil {
+			return err
+		}
+	}
 	if err := checkHaNodeCapacity(ctx, st); err != nil {
 		return err
 	}
@@ -894,6 +907,18 @@ func stepInstallCore(ctx context.Context, st *State) error {
 // stepHelmInstall installs (or upgrades) the per-instance chart via the Helm Go
 // SDK, blocking until the rendered workloads are ready.
 func stepHelmInstall(ctx context.Context, st *State) error {
+	// A fresh shard-group install must fit the broker that the infra step just
+	// provisioned, before any hook creates the multiplied stream reservations.
+	cfg, err := shardGroupsFromValues(authoringValues(st))
+	if err != nil {
+		return err
+	}
+	if cfg != nil && !st.DryRun {
+		if err := precheckJetStreamReservation(ctx, st); err != nil {
+			return err
+		}
+	}
+
 	// The broker that was actually provisioned must be able to host the replica
 	// factor this install is about to configure. Checked here — after the infra
 	// apply, before the chart — because that is the only point where BOTH halves of
