@@ -89,18 +89,72 @@ func TestUnroutedReadControls(t *testing.T) {
 	t.Run("nil-microservice", func(t *testing.T) {
 		require.NoError(t, (&NatsManager{}).refuseUnroutedRead(streams.ResolvedEvents))
 	})
-	for _, mode := range []string{"sync", "ordered"} {
-		t.Run("writer/"+mode, func(t *testing.T) {
-			m, _ := metricsManager(t, srv)
-			m.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups = n1Config(streams.ResolvedEvents)
-			if mode == "sync" {
-				_, err := m.NewWriter(streams.ResolvedEvents)
-				require.NoError(t, err)
-			} else {
-				w, err := m.NewOrderedWriter(streams.ResolvedEvents, WriterResolution, 4)
-				require.NoError(t, err)
+}
+
+func unroutedWriteConstructors() []struct {
+	name string
+	open func(*NatsManager, string) error
+} {
+	return []struct {
+		name string
+		open func(*NatsManager, string) error
+	}{
+		{"NewWriter", func(m *NatsManager, s string) error { _, err := m.NewWriter(s); return err }},
+		{"NewOrderedWriter", func(m *NatsManager, s string) error {
+			w, err := m.NewOrderedWriter(s, WriterCapture, 4)
+			if err == nil {
 				w.Close()
 			}
-		})
+			return err
+		}},
+		{"NewAsyncWriter", func(m *NatsManager, s string) error {
+			w, err := m.NewAsyncWriter(s, WriterCapture, 4, true)
+			if err == nil {
+				w.Close()
+			}
+			return err
+		}},
+		{"NewRoundPublisher", func(m *NatsManager, s string) error { _, err := m.NewRoundPublisher(s); return err }},
+	}
+}
+
+func TestUnroutedWriteConstructorsRefuse(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	for _, tc := range unroutedWriteConstructors() {
+		for _, enforced := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/enforced=%t", tc.name, enforced), func(t *testing.T) {
+				m, _ := metricsManager(t, srv)
+				m.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups = n1Config(streams.InboundEvents)
+				m.Microservice.Deployed = enforced
+				err := tc.open(m, streams.InboundEvents)
+				require.ErrorIs(t, err, ErrShardRoutingNotEnabled)
+				require.ErrorContains(t, err, streams.InboundEvents)
+				require.ErrorContains(t, err, "shardgroups.Enable")
+			})
+		}
+	}
+}
+
+func TestUnroutedWriteControls(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	for _, tc := range unroutedWriteConstructors() {
+		for _, control := range []string{"nil-config", "unselected-suffix", "count-one", "enabled-routing"} {
+			t.Run(tc.name+"/"+control, func(t *testing.T) {
+				m, _ := metricsManager(t, srv)
+				cfg := n1Config(streams.InboundEvents)
+				switch control {
+				case "nil-config":
+					cfg = nil
+				case "unselected-suffix":
+					cfg = n1Config(streams.ResolvedEvents)
+				case "count-one":
+					cfg.Count = 1
+				case "enabled-routing":
+					require.NoError(t, m.EnableStreamSharding(shardRouterFunc(n1Router), cfg))
+				}
+				m.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups = cfg
+				require.NoError(t, tc.open(m, streams.InboundEvents))
+			})
+		}
 	}
 }

@@ -86,7 +86,10 @@ type asyncItem struct {
 // barrier that makes reuse across terms possible.
 func (nmgr *NatsManager) NewAsyncWriter(suffix string, writer PublishWriter, window int, refuseOnBackpressure bool) (AsyncWriter, error) {
 	nmgr.freezeStreamRouting()
-	ow, err := nmgr.NewOrderedWriter(suffix, writer, window)
+	if err := nmgr.refuseUnroutedWrite(suffix); err != nil {
+		return nil, err
+	}
+	ow, err := nmgr.newOrderedWriter(suffix, writer, window)
 	if err != nil {
 		return nil, err
 	}

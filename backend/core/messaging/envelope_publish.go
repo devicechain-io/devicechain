@@ -111,6 +111,9 @@ type roundPublisher struct {
 // NewRoundPublisher builds the RoundPublisher for suffix; the stream is created if needed.
 func (nmgr *NatsManager) NewRoundPublisher(suffix string) (RoundPublisher, error) {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedWrite(suffix); err != nil {
+		return nil, err
+	}
 	if err := nmgr.requireWriter(suffix); err != nil {
 		return nil, err
 	}

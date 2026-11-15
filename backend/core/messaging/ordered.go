@@ -153,6 +153,14 @@ type orderedPending struct {
 // would release end anyway when the connection closes.
 func (nmgr *NatsManager) NewOrderedWriter(suffix string, writer PublishWriter, window int) (OrderedWriter, error) {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedWrite(suffix); err != nil {
+		return nil, err
+	}
+	return nmgr.newOrderedWriter(suffix, writer, window)
+}
+
+// newOrderedWriter requires its caller to freeze and validate stream routing.
+func (nmgr *NatsManager) newOrderedWriter(suffix string, writer PublishWriter, window int) (OrderedWriter, error) {
 	if window < 1 || window > MaxOrderedWindow {
 		return nil, fmt.Errorf("messaging: ordered writer window %d is outside [1, %d]", window, MaxOrderedWindow)
 	}

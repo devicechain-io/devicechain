@@ -1301,6 +1301,9 @@ type natsWriter struct {
 // context.
 func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedWrite(suffix); err != nil {
+		return nil, err
+	}
 	if err := nmgr.requireWriter(suffix); err != nil {
 		return nil, err
 	}
