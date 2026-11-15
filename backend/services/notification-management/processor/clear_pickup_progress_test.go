@@ -243,6 +243,8 @@ func TestSchedulerWithDeliveredAndTimedOutChannelsIsPartial(t *testing.T) {
 			if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
 				t.Fatal(err)
 			}
+			// Let the full window since dispatch elapse before testing timed delivery.
+			n.now = func() time.Time { return time.Now().Add(20 * time.Minute) }
 			if !tc.escalate {
 				if err := api.MarkCleared(ctx, "a1", "k", "CRITICAL", raised, raised.Add(time.Second)); err != nil {
 					t.Fatal(err)
