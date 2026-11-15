@@ -137,12 +137,14 @@ type Command implements Model & TokenReference & MetadataEntity {
     timestamp; null when the command is not gated by a window. While the status is QUEUED, HELD
     or PARKED and this is in the future the command is waiting for the window; it stays QUEUED
     while it waits. A past value means the opening has begun. A command that is not sent before
-    that opening closes is moved to the next one.
+    that opening closes is moved to the next one. The window may since have been deleted
+    while the command waits for its device type to be resolved.
     """
     dispatchAfter: String
     """
     The token of the maintenance window that gates the command, or null when it is not gated.
     Editing that window moves the commands still waiting on it to the new schedule.
+    The token may name a deleted window while the command waits for its device type to be resolved.
     """
     maintenanceWindowToken: String
     """
@@ -1193,14 +1195,14 @@ type Query {
         """Maximum campaigns to return, 1 to 200. Absent or out of range means 100."""
         limit: Int
     ): [Campaign!]!
-    """Lists a campaign's cycles, newest first. Requires command:read and device:read."""
+    """Lists a campaign's cycles, newest first. Requires command:read and device:read. A SOLAR campaign also requires location:installed:read (or location:read)."""
     campaignCycles(
         """Token of the campaign."""
         campaignToken: String!
         """Maximum cycles to return, 1 to 200. Absent or out of range means 50."""
         limit: Int
     ): [CampaignCycle!]!
-    """Pages through a cycle's elements in id order. Requires command:read and device:read."""
+    """Pages through a cycle's elements in id order. Requires command:read and device:read. A SOLAR campaign also requires location:installed:read (or location:read)."""
     campaignElements(
         """Token of the campaign."""
         campaignToken: String!
@@ -1495,6 +1497,7 @@ type Mutation {
     """
     Creates a campaign. A refused definition comes back as a rejection. Requires command:write and
     device:read.
+    A SOLAR campaign also requires location:installed:read (or location:read).
     """
     createCampaign(
         """The campaign to create."""
@@ -1521,6 +1524,7 @@ type Mutation {
     Re-sends a cycle's command to the elements that did not succeed, through the batch retry, so a
     device whose command is in flight or already succeeded is never sent a second copy, and one whose
     outcome is unknown is sent one only with includeUnknown. Requires command:write and device:read.
+    A SOLAR campaign also requires location:installed:read (or location:read).
     """
     retryCampaignFailed(
         """Token of the campaign."""

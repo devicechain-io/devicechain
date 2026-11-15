@@ -30,10 +30,12 @@ func TestAdminMissesCarryNotFound(t *testing.T) {
 		&iam.OAuthClient{}, &iam.Identity{}, &iam.Membership{},
 		&iam.IdpConnection{}, &iam.SsoLinkRequest{})
 	rdbm := &rdb.RdbManager{Database: db}
-	svc := admin.NewService(iam.NewStore(rdbm), 300*time.Second, 12*time.Hour, nil)
+	store := iam.NewStore(rdbm)
+	svc := admin.NewService(store, 300*time.Second, 12*time.Hour, nil)
 	mgr := identity.NewManager(nil, rdbm, nil, nil, 0, 0, "", identity.BootstrapConfig{}, nil)
 
-	ctx := adminCtx(string(auth.RoleWrite), string(auth.TenantWrite), string(auth.ClientWrite),
+	// The admin plane reads the caller's system roles live, so the caller must exist.
+	ctx := storedAdminCtx(t, store, string(auth.RoleWrite), string(auth.TenantWrite), string(auth.ClientWrite),
 		string(auth.UserWrite), string(auth.UserRead))
 	ctx = context.WithValue(ctx, ContextAdminKey, svc)
 	ctx = context.WithValue(ctx, ContextAdminSsoKey, mgr)

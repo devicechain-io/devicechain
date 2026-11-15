@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
 	"github.com/stretchr/testify/require"
 )
@@ -85,6 +86,9 @@ func ownershipFixture(t *testing.T) (*Api, context.Context, *captureOwnership) {
 		Authorities: []string{"*"}})
 	// The customer-delete cascade's tables, which the hierarchy store does not carry.
 	require.NoError(t, api.RDB.Database.AutoMigrate(&EntityAttribute{}, &Alarm{}, &EntityGroup{}, &EntityGroupMembership{}))
+	if err := rdb.CreatePartialUniqueIndex(api.RDB.Database, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatal(err)
+	}
 	seedDeviceForHierarchy(t, api, ctx, "dozer-01")
 	ct := &CustomerType{}
 	ct.Token = "operator"
