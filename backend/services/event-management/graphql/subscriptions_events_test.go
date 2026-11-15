@@ -261,6 +261,9 @@ func TestMeasurementStreamDeviceTokensRefusals(t *testing.T) {
 	device := "device-1"
 	empty := []string{}
 	tokens := []string{device}
+	blank := []string{device, ""}
+	wildcard := []string{"*"}
+	dotted := []string{"a.b"}
 	overLimit := make([]string, rdb.MaxLookupKeys+1)
 	for i := range overLimit {
 		overLimit[i] = device // The cap bounds raw input, before deduplication.
@@ -275,6 +278,9 @@ func TestMeasurementStreamDeviceTokensRefusals(t *testing.T) {
 		{"both with empty list", &device, &empty, "INVALID_VALUE"},
 		{"empty list", nil, &empty, "INVALID_VALUE"},
 		{"over limit", nil, &overLimit, "LIMIT_EXCEEDED"},
+		{"blank token", nil, &blank, "INVALID_VALUE"},
+		{"wildcard token", nil, &wildcard, "INVALID_VALUE"},
+		{"subject separator", nil, &dotted, "INVALID_VALUE"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := scopedCtx(nil, "tenant1", nil, string(auth.EventRead))

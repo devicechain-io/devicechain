@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -98,6 +99,11 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 		}
 		seen := make(map[string]struct{}, len(tokens))
 		for _, token := range tokens {
+			// A new argument, so its entries are held to the token grammar: a malformed token
+			// can never match a device and would only make a silent subscription.
+			if err := core.ValidateToken(token); err != nil {
+				return nil, integrity.NewRefusal(integrity.ClassInvalid, fmt.Sprintf("deviceTokens: %v", err))
+			}
 			if _, ok := seen[token]; !ok {
 				seen[token] = struct{}{}
 				keys = append(keys, token)
