@@ -177,6 +177,58 @@ conectarse y recibir comandos.
 La lista completa de lo que hace la deshabilitación, incluidas la configuración y las alarmas,
 está en [Deshabilitar un dispositivo](../guides/device-credentials.md#disabling-a-device).
 
+## Qué hace la eliminación de un dispositivo {#deleting-a-device}
+
+La eliminación de un dispositivo no se puede deshacer. El dispositivo, sus credenciales, alias,
+atributos, pertenencias a grupos y relaciones se eliminan de inmediato, y su token queda libre:
+puedes crear un dispositivo nuevo con el mismo token. El dispositivo nuevo no hereda ninguno de los
+registros del anterior:
+
+- **El estado en vivo, las últimas lecturas y la posición** se eliminan. Los miembros del
+  propietario del dispositivo nuevo no ven la última posición ni las lecturas del anterior.
+- **Los comandos** que la plataforma aún tenía para el dispositivo anterior (en cola, retenidos o
+  aparcados) se cancelan. Un comando creado para el dispositivo anterior nunca se envía al nuevo,
+  ni siquiera uno ya entregado a un transporte y aún no confirmado. Los comandos que envíes al
+  dispositivo nuevo salen con normalidad.
+- **Las asignaciones de actualización** pendientes del dispositivo anterior terminan, y sus
+  objetivos de despliegue se muestran como cancelados. Al dispositivo nuevo no se le ofrecen ni
+  puede descargar sus artefactos.
+- **Las alarmas** del dispositivo anterior se eliminan, y sus reglas de detección olvidan su
+  estado, de modo que la primera lectura del dispositivo nuevo que cumpla una regla genera una
+  alarma nueva.
+- **El historial de eventos** se conserva. Los eventos que la plataforma recibió del dispositivo
+  anterior siguen almacenados, pero dejan de aparecer bajo el cliente, el área o el activo al que
+  pertenecía. Los eventos que envía el dispositivo nuevo aparecen con normalidad, aunque los
+  informe con una hora anterior a la eliminación.
+
+Los servicios se enteran de una eliminación a través del broker de mensajes. Si el broker no está
+disponible, la eliminación se completa igualmente y los demás servicios se ponen al día cuando
+vuelve. Hasta entonces, los registros del dispositivo anterior pueden seguir visibles.
+
+También se tratan los registros que dejaron eliminaciones anteriores a esta versión. Una
+comprobación periódica elimina el estado en vivo de los dispositivos que ya no existen, y una
+asignación de actualización hecha para un dispositivo anterior con el mismo token no se ofrece al
+dispositivo que lo tiene ahora. Los comandos se cancelan para las eliminaciones que el broker de
+mensajes aún conserva cuando el servicio actualizado arranca por primera vez, lo que cubre los
+últimos días. Un comando que quede de una eliminación más antigua aún puede enviarse a un
+dispositivo nuevo con ese token, así que cancélalo desde la pestaña **Comandos** del dispositivo
+nuevo.
+
+### Límites {#deleting-a-device-limits}
+
+- Una lectura que la plataforma aceptó antes de la eliminación pero procesó después puede
+  recuperar brevemente el estado en vivo del dispositivo anterior. Si ningún dispositivo tiene el
+  token, la comprobación periódica lo elimina. Si mientras tanto se creó un dispositivo nuevo con
+  ese token, esa lectura puede permanecer en el estado en vivo del nuevo hasta que vuelva a
+  informar.
+- **Las notificaciones** que ya estaban escalando por una alarma del dispositivo anterior no se
+  detienen con la eliminación. Reconócelas o resuélvelas en el canal de la política de
+  notificaciones.
+- Durante una actualización, mientras conviven versiones antiguas y nuevas de los servicios, una
+  eliminación que atiende una versión antigua sigue el comportamiento anterior hasta que esa
+  versión se sustituye. Consulta
+  [Versiones y actualizaciones](/deployment/releases-and-upgrades#v170-upgrade).
+
 ## La página del dispositivo
 
 Selecciona un dispositivo en la lista para abrir su página. La cabecera muestra el nombre del
