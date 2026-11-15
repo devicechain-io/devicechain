@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
 // 🔴 WHAT THIS FILE EXISTS FOR: Api.Nudger is written during NatsManager.START, and the
@@ -86,6 +87,9 @@ func startNatsWiringFixture(t *testing.T) *messaging.NatsManager {
 		FunctionalArea: area,
 		Readiness:      core.NewReadinessGate(),
 	}
+	prevPeers := servicePeers
+	t.Cleanup(func() { servicePeers = prevPeers })
+	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
 	Microservice.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{
 		Hostname: host,
 		Port:     port,
