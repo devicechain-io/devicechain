@@ -11,10 +11,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/entityevent"
 	"github.com/devicechain-io/dc-microservice/messaging"
 
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -113,6 +111,12 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 	}
 	var trackingSources ownershipQueued
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// The deletion fact names the entity's own tenant (entityTenantOnTx), read before the
+		// row is gone.
+		tenant, err := entityTenantOnTx(tx, model, id)
+		if err != nil {
+			return err
+		}
 		// Before the delete removes the relationship edges, capture the devices that
 		// track this entity as a target — their cached tracked-relationship set turns
 		// stale once the edge is gone (ADR-044 F2), and each may have lost an owner, so
@@ -156,25 +160,16 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 		if err := tx.Unscoped().Where("token = ?", token).Delete(model).Error; err != nil {
 			return err
 		}
+		// Commit the deletion fact with the delete; ownership queueing must stay last.
+		if err := queueEntityDeletedOnTx(tx, api, tenant, etype, id, token); err != nil {
+			return err
+		}
 		trackingSources, err = queueOwnershipOnTx(tx, sources)
 		return err
 	})
 	if err != nil {
 		return false, err
 	}
-	// Announce the deletion so cross-service reference holders can reconcile
-	// (ADR-044). Emitted after the transaction commits — never for a rolled-back
-	// delete — and best-effort: the delete is the source of truth, and a missed event is
-	// repaired by the holders' own sweeps against this service (ADR-044 decision 3) —
-	// event-management's anchor reconciliation sweep, and event-processing's reconcile of
-	// its device roster and threshold attributes — so a publish failure is logged, not
-	// surfaced.
-	api.emitEntityDeleted(ctx, &entityevent.EntityDeletedEvent{
-		EntityType:  etype,
-		EntityId:    id,
-		EntityToken: token,
-		DeletedTime: time.Now().UTC(),
-	})
 	// Drop the hot-path caches this delete invalidated so ingest stops resolving the
 	// removed entity and re-creating its anchors within the cache TTL (ADR-044 F2).
 	api.evictEntityDelete(ctx, etype, id, token, trackingSources)
