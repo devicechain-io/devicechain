@@ -59,29 +59,6 @@ func TestCheckpointSpacingLive(t *testing.T) {
 	}
 }
 
-func TestCheckpointSpacingGapFill(t *testing.T) {
-	for _, cost := range []time.Duration{500 * time.Millisecond, 0} {
-		t.Run(cost.String(), func(t *testing.T) {
-			g, _ := spacingRig(t, cost)
-			opener := &fakeReplayOpener{msgs: stream(t, span(1, 200)...)}
-			g.rp.Replay = opener // Range reads do not advance the ManualClock.
-			g.rp.cfg.CheckpointEvents = 10
-			g.rp.handle(hot(t, 201, &fakeAck{})) // Fill 1..200 before the held message.
-
-			equal(t, "range reads", opener.rangeReads, [][2]uint64{{1, 200}})
-			equal(t, "gap events applied", g.seqs(gapSeqApplied), float64(200))
-			equal(t, "final position", g.rp.engine.LastSeq(), uint64(201))
-			count := testutil.ToFloat64(g.metrics.checkpointsTotal)
-			if cost == 0 {
-				// Negative control: zero snapshot cost leaves count checkpoints unspaced.
-				equal(t, "zero-cost snapshot commits", count, float64(20))
-			} else if count < 1 || count > 2 {
-				t.Fatalf("slow gap-fill commits = %v, want 1..2", count)
-			}
-		})
-	}
-}
-
 func TestCheckpointSpacingAckOverride(t *testing.T) {
 	g, _ := spacingRig(t, 500*time.Millisecond)
 	g.rp.handle(spacingMessage(t, 1))

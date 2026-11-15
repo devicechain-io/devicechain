@@ -221,9 +221,7 @@ func (rp *ResolvedEventsProcessor) fillRange(from, to uint64) (err error) {
 			sinceCheckpoint += uint64(rp.appliedEvents)
 		}
 		// A wide gap would otherwise hold every detection it fires until the end of the fill.
-		// Spaced by the snapshot's cost, as the live and replay checkpoints are (checkpointMinSpacing).
-		if rp.cfg.CheckpointEvents > 0 && sinceCheckpoint >= uint64(rp.cfg.CheckpointEvents) &&
-			rp.clock.Now().Sub(rp.lastCheckpoint) >= rp.checkpointMinSpacing() {
+		if rp.cfg.CheckpointEvents > 0 && sinceCheckpoint >= uint64(rp.cfg.CheckpointEvents) {
 			rp.checkpoint(rp.pctx())
 			sinceCheckpoint = 0
 		}
