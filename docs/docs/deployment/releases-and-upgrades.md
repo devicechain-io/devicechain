@@ -767,6 +767,12 @@ The release in development (`v1.6`) and the three most recent minor releases (`v
 - While old and new pods overlap during the rolling upgrade, deletes handled by a `v1.6` pod are announced the old way.
 - No configuration change is needed.
 
+#### A deleted device's undelivered commands are cancelled {#v170-deleted-device-commands}
+
+- When a device is deleted, `command-delivery` cancels the commands it still held for it (queued, held or parked) and refuses to send any command created before the delete, including one already handed to a transport and not yet confirmed. A device later created with the same token does not receive them; commands created for it after the delete are sent as usual.
+- On first start after the upgrade, `command-delivery` also reads the deletions still retained on the message broker, so commands left behind by devices deleted in the last few days are cancelled the same way.
+- While old and new pods overlap during the rolling upgrade, a `v1.6` pod can still send such a command until it is replaced.
+
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 
 - **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 time buckets are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 64 per process before reading or parsing. Message admission reserves up to 4 slots per batch; valid configured batches (16 entries by default) execute tools in waves within that cap. Every entry still counts toward the caller's rate limit; excess requests receive HTTP 429 with Retry-After. Tools are cancelled and execution slots released when their HTTP request ends. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.
