@@ -31,10 +31,8 @@ type mintForwarder struct {
 	Authorities []string
 }
 
-// Legacy constructors take the subject at parameter 2. The For variants carry it in Peers.
+// Lifecycle constructors carry the calling subject in Peers.
 var serviceMintForwarders = map[string]mintForwarder{
-	"governance.NewTenantLifecycleGate":     {2, []string{"tenant:read"}},
-	"governance.NewTenantLifecycleGates":    {2, []string{"tenant:read"}},
 	"governance.NewTenantLifecycleGateFor":  {-1, []string{"tenant:read"}},
 	"governance.NewTenantLifecycleGatesFor": {-1, []string{"tenant:read"}},
 }
@@ -217,11 +215,11 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 							continue
 						}
 						deadletterAliases++
-						if len(v.Names) == 1 && len(v.Values) == 1 && (qualified(v.Values[0]) == "governance.NewTenantLifecycleGate" || qualified(v.Values[0]) == "governance.NewTenantLifecycleGateFor") {
+						if len(v.Names) == 1 && len(v.Values) == 1 && qualified(v.Values[0]) == "governance.NewTenantLifecycleGateFor" {
 							sanctionedAlias = v.Values[0]
 						} else {
 							deadletterValid = false
-							sites = append(sites, serviceMintSite{File: rel, Func: fn, Unresolved: "tenantLifecycleGate must be initialized to governance.NewTenantLifecycleGate"})
+							sites = append(sites, serviceMintSite{File: rel, Func: fn, Unresolved: "tenantLifecycleGate must be initialized to governance.NewTenantLifecycleGateFor"})
 						}
 					}
 				}

@@ -25,24 +25,18 @@ var comment = "http://%s:%d/graphql"
 	if found[file] != (peerWiringCount{1, 1}) {
 		t.Fatalf("AST scan counted comment/string or missed calls: %v", found)
 	}
-	for _, tc := range []struct {
-		name   string
-		ledger map[string]peerWiringCount
-	}{
-		{"absent", nil},
-		{"too low", map[string]peerWiringCount{file: {0, 0}}},
-		{"too high", map[string]peerWiringCount{file: {2, 2}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			problems := strings.Join(checkPeerWiring(found, tc.ledger), "\n")
-			for _, kind := range []string{"urls", "mints"} {
-				if !strings.Contains(problems, file+": "+kind) {
-					t.Fatalf("planted %s mismatch escaped: %s", kind, problems)
-				}
-			}
-		})
+	// Neither a missing entry nor URL permission may excuse a direct mint.
+	for _, allowed := range []map[string]bool{nil, {file: true}} {
+		problems := strings.Join(checkPeerWiring(found, allowed), "\n")
+		if !strings.Contains(problems, file+": mints") {
+			t.Fatalf("planted mint escaped: %s", problems)
+		}
+		if allowed == nil && !strings.Contains(problems, file+": urls") {
+			t.Fatalf("planted URL escaped: %s", problems)
+		}
 	}
-	if problems := checkPeerWiring(found, map[string]peerWiringCount{file: {1, 1}}); len(problems) != 0 {
+	// URL permission is per file, with no count ledger.
+	if problems := checkPeerWiring(map[string]peerWiringCount{file: {2, 0}}, map[string]bool{file: true}); len(problems) != 0 {
 		t.Fatal(problems)
 	}
 	writeMintFixture(t, root, file, `package fixture
@@ -52,7 +46,7 @@ var text = "http://%s:%d/graphql"`)
 	if err != nil || len(found) != 0 {
 		t.Fatalf("comment-only source counted: %v, %v", found, err)
 	}
-	if len(checkPeerWiring(found, map[string]peerWiringCount{file: {1, 1}})) != 2 {
-		t.Fatal("removed calls did not fail ledger")
+	if len(checkPeerWiring(found, map[string]bool{file: true})) != 1 {
+		t.Fatal("removed URL did not fail allowlist")
 	}
 }

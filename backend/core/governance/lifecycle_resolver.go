@@ -7,7 +7,6 @@ import (
 	"context"
 
 	"github.com/devicechain-io/dc-microservice/auth"
-	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
 )
@@ -26,7 +25,7 @@ const LifecycleActive = "active"
 // Its consumers are deliberately not listed here. The set spans the device plane
 // (connect-auth, the ingest fronts, command dispatch) and outbound egress, and it has
 // already grown twice since this was written — a list frozen in a comment only ever drifts
-// away from the tree. Ask the tree: `grep -rl NewTenantLifecycleGate backend`.
+// away from the tree. Ask the tree: `grep -rl NewTenantLifecycleGateFor backend`.
 //
 // Two consumers are worth naming for their ASYMMETRY rather than for being on the list.
 // On the ingest and command paths, a call this gate admits a moment too late is data that
@@ -86,7 +85,7 @@ func NewTenantLifecycleResolver(client *svcclient.Client, umURL string) *TenantL
 	}
 }
 
-// NewTenantLifecycleGate builds the ADR-077 lifecycle gate for one service: the
+// NewTenantLifecycleGateFor builds the ADR-077 lifecycle gate for one service: the
 // closure its data path calls to decide whether a tenant has been deleted. It returns
 // NIL when user-management is not configured, which every caller must treat as "the gate
 // is off" rather than as an error.
@@ -105,41 +104,17 @@ func NewTenantLifecycleResolver(client *svcclient.Client, umURL string) *TenantL
 //     start would make user-management a hard dependency of the device plane, which is
 //     the same availability trade the resolver's fail-open rejects, only louder.
 //
-// subject names the calling service in the minted token, as svcclient.New expects.
+// p carries the calling service and its configured peers.
 //
 // gates records whether the gate came up (GateTenantLifecycle), so a service that started with it
 // OFF is visible as safety_gate_enabled == 0 rather than only as a startup WARN. It may be nil.
-func NewTenantLifecycleGate(umCfg config.UserManagementConfiguration, serviceSecret, subject string, gates *SafetyGates) func(string) bool {
-	gate, _ := NewTenantLifecycleGates(umCfg, serviceSecret, subject, gates)
-	return gate
-}
-
-// NewTenantLifecycleGates is NewTenantLifecycleGate plus the STRICT reading of the same cache: the
-// second closure reports a tenant as gone unless an authoritative live answer says it is active
-// (see TenantLifecycleResolver.GoneOrUnverified). Both are nil when user-management is not
-// configured. They share one resolver, so the strict reading adds no lookups of its own.
-func NewTenantLifecycleGates(umCfg config.UserManagementConfiguration, serviceSecret, subject string, gates *SafetyGates) (gate, strict func(string) bool) {
-	if serviceSecret == "" || umCfg.Hostname == "" || umCfg.Port == 0 {
-		log.Warn().Str("service", subject).
-			Msg("user-management endpoint or service secret not configured — this service will NOT refuse work for tenants that have been deleted.")
-		gates.Set(GateTenantLifecycle, false)
-		return nil, nil
-	}
-	gates.Set(GateTenantLifecycle, true)
-	client := svcclient.New(umCfg, serviceSecret, subject, []string{string(auth.TenantRead)})
-	umURL := umCfg.Endpoint().GraphQLURL()
-	log.Info().Str("service", subject).Str("userManagement", umURL).
-		Msg("Work for tenants that have been deleted will be refused (tenant deletion lifecycle).")
-	r := NewTenantLifecycleResolver(client, umURL)
-	return r.Deleted, r.GoneOrUnverified
-}
-
-// NewTenantLifecycleGateFor builds an isolated tenant:read gate for the caller.
 func NewTenantLifecycleGateFor(p *svcclient.Peers, gates *SafetyGates) func(string) bool {
 	gate, _ := NewTenantLifecycleGatesFor(p, gates)
 	return gate
 }
 
+// NewTenantLifecycleGatesFor adds the strict reading of the same cache. Both closures
+// are nil when user-management is not configured and share one resolver.
 func NewTenantLifecycleGatesFor(p *svcclient.Peers, gates *SafetyGates) (gate, strict func(string) bool) {
 	seam, err := p.UserManagement(auth.TenantRead)
 	if err != nil {

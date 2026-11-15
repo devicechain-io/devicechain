@@ -34,7 +34,7 @@ func peerWiringUnder(root string) (map[string]peerWiringCount, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || strings.HasPrefix(rel, "backend/core/svcclient/") {
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
 		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
@@ -64,7 +64,7 @@ func peerWiringUnder(root string) (map[string]peerWiringCount, error) {
 			if !ok {
 				return true
 			}
-			if imports[id.Name] == mintModule+"svcclient" && sel.Sel.Name == "New" {
+			if imports[id.Name] == mintModule+"svcclient" && sel.Sel.Name == "New" && !strings.HasPrefix(rel, "backend/core/svcclient/") {
 				count.mints++
 			}
 			if imports[id.Name] == "fmt" && sel.Sel.Name == "Sprintf" && len(call.Args) > 0 {
@@ -82,22 +82,20 @@ func peerWiringUnder(root string) (map[string]peerWiringCount, error) {
 	return counts, err
 }
 
-func checkPeerWiring(found, ledger map[string]peerWiringCount) []string {
-	files := map[string]bool{}
-	for file := range found {
-		files[file] = true
-	}
-	for file := range ledger {
-		files[file] = true
-	}
+// Only these files may format peer URLs. Direct mints belong inside svcclient.
+func checkPeerWiring(found map[string]peerWiringCount, allowedURLs map[string]bool) []string {
 	var problems []string
-	for file := range files {
-		got, want := found[file], ledger[file]
-		if got.urls != want.urls {
-			problems = append(problems, fmt.Sprintf("%s: urls got %d, ledger %d", file, got.urls, want.urls))
+	for file, count := range found {
+		if count.urls > 0 && !allowedURLs[file] {
+			problems = append(problems, fmt.Sprintf("%s: urls outside allowlist (%d)", file, count.urls))
 		}
-		if got.mints != want.mints {
-			problems = append(problems, fmt.Sprintf("%s: mints got %d, ledger %d", file, got.mints, want.mints))
+		if count.mints > 0 {
+			problems = append(problems, fmt.Sprintf("%s: mints outside svcclient (%d)", file, count.mints))
+		}
+	}
+	for file := range allowedURLs {
+		if found[file].urls == 0 {
+			problems = append(problems, fmt.Sprintf("%s: urls allowlist entry has no site", file))
 		}
 	}
 	sort.Strings(problems)
