@@ -140,9 +140,9 @@ func inBudget(evs []Event, order []int, lateness time.Duration) bool {
 
 func fmtDet(d Detection) string {
 	if d.Edge == EdgeResolved {
-		return fmt.Sprintf("Resolved@%d", int(d.At.Sub(base).Seconds()))
+		return fmt.Sprintf("Resolved@%g", d.At.Sub(base).Seconds())
 	}
-	return fmt.Sprintf("Raised@%d=%g", int(d.At.Sub(base).Seconds()), d.Value)
+	return fmt.Sprintf("Raised@%g=%g", d.At.Sub(base).Seconds(), d.Value)
 }
 
 func describeSeries(evs []Event, s string) string {
@@ -178,21 +178,32 @@ func oracleSeries(r Rule, evs []Event, s string) []string {
 		return a.Value < b.Value
 	})
 	var out []string
-	var raisedAt *time.Time
+	var raisedAt, fellAt *time.Time
+	var raisedInput, fellInput time.Time
 	raise := func(t time.Time, v float64) {
 		if raisedAt != nil {
 			return
 		}
+		raisedInput = t
+		if fellAt != nil && (t.Equal(*fellAt) || t.Equal(fellInput)) {
+			t = fellAt.Add(time.Microsecond)
+		}
 		tt := t
 		raisedAt = &tt
-		out = append(out, fmt.Sprintf("Raised@%d=%g", int(t.Sub(base).Seconds()), v))
+		out = append(out, fmt.Sprintf("Raised@%g=%g", t.Sub(base).Seconds(), v))
 	}
 	clear := func(t time.Time) {
-		if raisedAt == nil || t.Before(*raisedAt) {
+		if raisedAt == nil || t.Before(raisedInput) {
 			return
 		}
+		fellInput = t
+		if t.Before(*raisedAt) {
+			t = *raisedAt
+		}
 		raisedAt = nil
-		out = append(out, fmt.Sprintf("Resolved@%d", int(t.Sub(base).Seconds())))
+		ft := t
+		fellAt = &ft
+		out = append(out, fmt.Sprintf("Resolved@%g", t.Sub(base).Seconds()))
 	}
 	switch r.Kind {
 	case DeltaRate:
@@ -307,5 +318,48 @@ func TestASampleAtTheFinalInstantIsStillPlaced(t *testing.T) {
 	if len(d) != 2 || d[0].Edge != EdgeRaised || !d[0].At.Equal(at(10)) || d[0].Value != 100 ||
 		d[1].Edge != EdgeResolved || !d[1].At.Equal(at(20)) {
 		t.Fatalf("want Raised@10 (+100 against the same-instant base) then Resolved@20, got %+v", d)
+	}
+}
+
+// assertStrictEpisodeEdges checks the class-wide edge contract for nonzero-duration
+// episodes. Existing zero-duration raise/resolve pairs remain valid; a fresh episode
+// must always follow the preceding resolve strictly while its memo is retained.
+func assertStrictEpisodeEdges(t *testing.T, ds []Detection) {
+	t.Helper()
+	last := map[SeriesKey]Detection{}
+	for _, d := range ds {
+		key := SeriesKey{Rule: d.RuleID, Series: d.Series}
+		if prev, ok := last[key]; ok {
+			if d.Edge == prev.Edge || !d.At.After(prev.At) {
+				t.Fatalf("key %+v: edges must alternate and strictly advance: %+v then %+v", key, prev, d)
+			}
+		} else if d.Edge != EdgeRaised {
+			t.Fatalf("key %+v starts with resolve", key)
+		}
+		last[key] = d
+	}
+}
+
+// Every temporal kind shares the same three raise primitives. Exercise all of
+// them with equal-time episode boundaries, independent of window arithmetic.
+func emitEpisodeEdges(e *Engine, r Rule, key SeriesKey) {
+	e.emit(r, key, at(1))
+	e.resolve(r, key, at(2))
+	e.emitValue(r, key, at(2), 42)
+	e.resolve(r, key, at(3))
+	e.emitSampleAt(r, Event{Key: key, Value: 43, HasValue: true}, at(3))
+	e.resolve(r, key, at(4))
+}
+
+func TestEveryKindHasStrictEpisodeEdges(t *testing.T) {
+	for kind := Threshold; kind <= Connectivity; kind++ {
+		r := Rule{ID: "r", Kind: kind}
+		e := NewEngine([]Rule{r}, 0)
+		emitEpisodeEdges(e, r, SeriesKey{Rule: "r", Series: "d"})
+		ds := e.Drain()
+		if len(ds) != 6 {
+			t.Fatalf("kind %v: want six edges, got %+v", kind, ds)
+		}
+		assertStrictEpisodeEdges(t, ds)
 	}
 }

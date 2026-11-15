@@ -172,24 +172,33 @@ func TestSnapshotCompatMemoLifecycle(t *testing.T) {
 			}
 		})
 	}
-	t.Run("ordinary-fall-and-no-bump", func(t *testing.T) {
-		e := NewEngine(rules, 0)
-		for i, match := range []bool{true, false, true} {
-			at := now
-			if i == 0 {
-				at = now.Add(-time.Second)
+	for _, bump := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ordinary-fall/bump=%v", bump), func(t *testing.T) {
+			e := NewEngine(rules, 0)
+			e.disableEdgeBump = !bump
+			want := now
+			wantInputs := 0
+			if bump {
+				want = want.Add(time.Microsecond)
+				wantInputs = 1
 			}
-			e.ProcessEvent(Event{Seq: uint64(i + 1), Key: key, Time: at, Match: match})
-		}
-		got := e.Drain()
-		if len(got) != 3 || got[1].Edge != EdgeResolved || !got[1].At.Equal(now) || !got[2].At.Equal(now) {
-			t.Fatalf("fresh edges changed: %+v", got)
-		}
-		m := e.fell[key]
-		if !m.at.Equal(now) || !m.input.IsZero() || !m.frontier.Equal(e.Watermark()) || len(e.raiseInputs) != 0 {
-			t.Fatalf("fresh state: %+v", m)
-		}
-	})
+			for i, match := range []bool{true, false, true} {
+				at := now
+				if i == 0 {
+					at = now.Add(-time.Second)
+				}
+				e.ProcessEvent(Event{Seq: uint64(i + 1), Key: key, Time: at, Match: match})
+			}
+			got := e.Drain()
+			if len(got) != 3 || got[1].Edge != EdgeResolved || !got[1].At.Equal(now) || !got[2].At.Equal(want) {
+				t.Fatalf("fresh edges changed: %+v", got)
+			}
+			m := e.fell[key]
+			if !m.at.Equal(now) || !m.input.IsZero() || !m.frontier.Equal(e.Watermark()) || len(e.raiseInputs) != wantInputs {
+				t.Fatalf("fresh state: %+v", m)
+			}
+		})
+	}
 }
 
 // Explicit newest instants from a future writer override even a later inferred sample floor.

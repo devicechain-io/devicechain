@@ -7,6 +7,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 )
 
 // TestLiveLoopHandsTheEngineEachMessagesReceipt drives the live loop, not the engine: a threshold
@@ -47,5 +49,21 @@ func TestLiveLoopHandsTheEngineEachMessagesReceipt(t *testing.T) {
 	}
 	if !w.events[0].OccurredTime.Equal(behind) {
 		t.Fatalf("the raise is stamped %v, want the reading's own time %v", w.events[0].OccurredTime, behind)
+	}
+}
+
+func TestLiveLoopLaggingSameInstantFallThenRise(t *testing.T) {
+	w := &derivedCapture{}
+	rp := stampingProcessor(t, thresholdReg(t), w)
+	wall := testBase.Add(time.Hour)
+	behind := testBase.Add(time.Minute)
+	rp.handle(stampedMsg(t, 1, "live", "20", wall, wall, wall))
+	rp.handle(stampedMsg(t, 2, "lagging", "90", behind.Add(-time.Second), wall, wall))
+	rp.handle(stampedMsg(t, 3, "lagging", "20", behind, wall, wall.Add(time.Second)))
+	rp.handle(stampedMsg(t, 4, "lagging", "90", behind, wall, wall.Add(2*time.Second)))
+	rp.checkpoint(context.Background())
+	if len(w.events) != 3 || w.events[1].Edge != runtime.EdgeResolved || w.events[2].Edge != runtime.EdgeRaised ||
+		!w.events[1].OccurredTime.Equal(behind) || !w.events[2].OccurredTime.Equal(behind.Add(time.Microsecond)) {
+		t.Fatalf("prompt lagging fall@T and rise@T must publish the raise at T+1us: %+v", w.events)
 	}
 }

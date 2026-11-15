@@ -249,6 +249,9 @@ type Engine struct {
 	slides   map[SeriesKey]*slidingState    // SlidingAgg: trailing sliding-window state per series
 	corr     map[SeriesKey]map[string]int64 // Correlation: anchor → member → last unix-nanos seen
 	expected map[SeriesKey]expectedState    // Absence: dead-man arming for never-seen devices (ADR-051 slice 4c-2b)
+	// disableEdgeBump is a test seam for the v1.7 compatibility reader.
+	disableEdgeBump bool
+
 	// newest is the per-series newest event time, matching or not, for the kinds that read a
 	// series as of its newest reading. For the trailing-window kinds (Repeating, SlidingAgg,
 	// Correlation) it is the evaluation instant: a sample older than it is folded into the window
@@ -282,11 +285,9 @@ type Engine struct {
 	// an alarm the latest reading still supports (review D3/F2). It is snapshotted, so the level and
 	// its origin survive a restart.
 	raised map[SeriesKey]time.Time
-	// raiseInputs preserves restored decision times so the next release can bump timestamps
-	// while older pods can still resolve safely. Fresh raises never populate it.
+	// raiseInputs holds decision times when emitted raise timestamps are bumped.
 	raiseInputs map[SeriesKey]time.Time
-	// fell is written now so the next release can bump timestamps across rolling pods.
-	// This version never uses the memo to change an edge time.
+	// fell retains emitted and input times to order same-instant episodes.
 	fell map[SeriesKey]fallMemo
 	// presenceState is the Connectivity kind's per-series ordering cursor (ADR-067 S3b): the
 	// last-applied presence transition (session epoch, time, connected). It is the engine-side
@@ -1363,13 +1364,17 @@ func (e *Engine) pruneFellKey(key SeriesKey) {
 	}
 }
 
-// latch keeps the reading time unchanged in this compatibility reader.
+// latch gives a fresh equal-input episode a distinct database microsecond.
 func (e *Engine) latch(key SeriesKey, at time.Time) (time.Time, bool) {
 	e.pruneFellKey(key)
 	if _, ok := e.raised[key]; ok {
 		return at, false
 	}
 	delete(e.raiseInputs, key)
+	if f, ok := e.fell[key]; !e.disableEdgeBump && ok && (at.Equal(f.at) || (!f.input.IsZero() && at.Equal(f.input))) {
+		e.raiseInputs[key] = at
+		at = f.at.Add(time.Microsecond)
+	}
 	e.raised[key] = at
 	return at, true
 }
@@ -1542,7 +1547,7 @@ type snapRaised struct {
 	Input *time.Time `json:"input,omitempty"`
 }
 
-// snapFell preserves emitted and decision times for the next release's timestamp bump.
+// snapFell preserves emitted and decision times across rolling pods.
 type snapFell struct {
 	Rule             string     `json:"rule"`
 	Series           string     `json:"series"`

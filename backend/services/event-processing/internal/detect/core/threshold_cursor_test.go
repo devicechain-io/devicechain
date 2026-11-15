@@ -90,11 +90,10 @@ func newestDecides(evs []Event, s string) (level, decided bool) {
 // edges is fmtDets without its trailing separator, for comparing against a literal.
 func edges(ds []Detection) string { return strings.TrimSpace(fmtDets(ds)) }
 
-// raisedBy reports whether a raise is stamped at, and carries the value of, a matching reading of
-// the series.
-func raisedBy(evs []Event, s string, d Detection) bool {
+// raisedBy checks the matching source reading, including a stamp bumped past the preceding fall.
+func raisedBy(evs []Event, s string, d Detection, fall time.Time) bool {
 	for _, e := range evs {
-		if e.Key.Series == s && e.Match && e.Time.Equal(d.At) && e.Value == d.Value {
+		if e.Key.Series == s && e.Match && (e.Time.Equal(d.At) || (!e.Time.After(fall) && d.At.Equal(fall.Add(time.Microsecond)))) && e.Value == d.Value {
 			return true
 		}
 	}
@@ -105,13 +104,17 @@ func raisedBy(evs []Event, s string, d Detection) bool {
 // order, each its own message stamped at its own time, against a frontier that trails the newest
 // time seen by the lateness. A RAISED series refuses a reading older than its newest one, by up to
 // the horizon; a reading older still is applied as it would be with no cursor and restarts the
-// cursor (at the raise, if that is newer). An UNRAISED series holds nothing and refuses a match
+// cursor (at the raise, if that is newer). An UNRAISED series retains its last fall for ten
+// minutes from the recording frontier; only an equal-time fresh raise is bumped. It refuses a match
 // behind the frontier whose message may be a redelivery (redelivered[i] for the i-th reading; nil
 // means every message may be). It returns the edges, the number of readings refused, and the number
 // of matches behind the frontier that raised because their message reached the stream promptly.
 func refThreshold(evs []Event, redelivered []bool, lateness time.Duration) ([]Detection, uint64, int) {
-	type st struct{ raisedAt, cursor time.Time }
+	type st struct{ raisedAt, input, cursor time.Time }
 	state := map[string]*st{}
+	fell := map[string]time.Time{}
+	fellInputs := map[string]time.Time{}
+	recorded := map[string]time.Time{}
 	var frontier time.Time
 	first := true
 	var out []Detection
@@ -122,6 +125,9 @@ func refThreshold(evs []Event, redelivered []bool, lateness time.Duration) ([]De
 			frontier, first = f, false
 		}
 		s := e.Key.Series
+		if _, ok := fell[s]; ok && frontier.Sub(recorded[s]) > thresholdCursorHorizon {
+			delete(fell, s)
+		}
 		x, up := state[s]
 		if !up {
 			if !e.Match {
@@ -134,8 +140,12 @@ func refThreshold(evs []Event, redelivered []bool, lateness time.Duration) ([]De
 				}
 				prompt++
 			}
-			state[s] = &st{raisedAt: e.Time, cursor: e.Time}
-			out = append(out, Detection{RuleID: "r", Series: s, Kind: Threshold, At: e.Time, Value: e.Value, HasValue: e.HasValue})
+			raiseAt := e.Time
+			if f, ok := fell[s]; ok && (raiseAt.Equal(f) || raiseAt.Equal(fellInputs[s])) {
+				raiseAt = f.Add(time.Microsecond)
+			}
+			state[s] = &st{raisedAt: raiseAt, input: e.Time, cursor: e.Time}
+			out = append(out, Detection{RuleID: "r", Series: s, Kind: Threshold, At: raiseAt, Value: e.Value, HasValue: e.HasValue})
 			continue
 		}
 		if e.Time.Before(x.cursor) && e.Time.Add(thresholdCursorHorizon).After(x.cursor.Add(-time.Nanosecond)) {
@@ -143,12 +153,19 @@ func refThreshold(evs []Event, redelivered []bool, lateness time.Duration) ([]De
 			continue
 		}
 		cur := e.Time
-		if x.raisedAt.After(cur) {
-			cur = x.raisedAt
+		if x.input.After(cur) {
+			cur = x.input
 		}
-		if !e.Match && !e.Time.Before(x.raisedAt) {
+		if !e.Match && !e.Time.Before(x.input) {
 			delete(state, s)
-			out = append(out, Detection{RuleID: "r", Series: s, Kind: Threshold, At: e.Time, Edge: EdgeResolved})
+			fallAt := e.Time
+			if fallAt.Before(x.raisedAt) {
+				fallAt = x.raisedAt
+			}
+			fell[s] = fallAt
+			fellInputs[s] = e.Time
+			recorded[s] = frontier
+			out = append(out, Detection{RuleID: "r", Series: s, Kind: Threshold, At: fallAt, Edge: EdgeResolved})
 			continue
 		}
 		x.cursor = cur
@@ -247,7 +264,11 @@ func TestThresholdUnderReorderMatchesItsSpecification(t *testing.T) {
 						if ds[i].Edge == EdgeResolved && ds[i].At.Before(ds[i-1].At) {
 							t.Fatalf("trial %d K=%d series %s: a resolve is stamped before its raise: %s", trial, k, s, fmtDets(ds))
 						}
-						if ds[i].Edge == EdgeRaised && !raisedBy(evs, s, ds[i]) {
+						var fall time.Time
+						if i > 0 {
+							fall = ds[i-1].At
+						}
+						if ds[i].Edge == EdgeRaised && !raisedBy(evs, s, ds[i], fall) {
 							t.Fatalf("trial %d K=%d series %s: %s is not a matching reading of the series", trial, k, s, fmtDet(ds[i]))
 						}
 					}
@@ -266,7 +287,9 @@ func TestThresholdUnderReorderMatchesItsSpecification(t *testing.T) {
 						clearChecked++
 						if gotLevel {
 							staleReraise++
-							if len(ds) < 1 || !ds[len(ds)-1].At.Before(newestOf(evs, s)) {
+							last := len(ds) - 1
+							bumped := last > 0 && ds[last].At.Equal(ds[last-1].At.Add(time.Microsecond))
+							if !ds[last].At.Before(newestOf(evs, s)) && !bumped {
 								t.Fatalf("trial %d series %s: ended raised although the newest reading did not match, and not by an older match: %s", trial, s, fmtDets(ds))
 							}
 						}
@@ -319,8 +342,8 @@ func mainThreshold(evs []Event) []Detection {
 	return out
 }
 
-// TestThresholdInOrderReadingsAreUnchanged: a stream in time order — ties at one instant in either
-// match order, quiet spells longer than the horizon, several series interleaved — gets exactly the
+// TestThresholdInOrderReadingsAreUnchanged: a stream with distinct increasing timestamps,
+// quiet spells longer than the horizon and several series interleaved gets exactly the
 // edges and stamps it did before the cursor, and nothing is counted late.
 func TestThresholdInOrderReadingsAreUnchanged(t *testing.T) {
 	rng := rand.New(rand.NewSource(77))
@@ -330,7 +353,8 @@ func TestThresholdInOrderReadingsAreUnchanged(t *testing.T) {
 		n := 20 + rng.Intn(100)
 		for i := 0; i < n; i++ {
 			switch rng.Intn(8) {
-			case 0: // a tie at the same instant
+			case 0:
+				sec++ // distinct timestamps: same-instant episode boundaries intentionally change
 			case 1:
 				sec += int(thresholdCursorHorizon/time.Second) + rng.Intn(60) // quiet past the horizon
 			default:
@@ -492,7 +516,7 @@ func TestThresholdRedeliveryBehindTheFrontierIsLate(t *testing.T) {
 // carries the receipt of its first delivery and is stored again an AckWait later, so it is refused
 // and counted late rather than raising again stamped before the clear. The same reading reaching
 // the platform afresh — a device sending it again — is a new reading as far as the engine can
-// tell: it raises, stamped at 10, as every such reading did before the bound, and the device's next
+// tell: it still raises, stamped at its original instant, and the device's next
 // reading heals it. Telling those apart needs the series' own newest time, which an unraised series
 // does not keep.
 func TestThresholdRedeliveredMatchCannotReraiseAfterAClear(t *testing.T) {
@@ -528,9 +552,9 @@ func TestThresholdRedeliveredMatchCannotReraiseAfterAClear(t *testing.T) {
 //
 //   - RAISED: match@1, match@3, then non-match@2 is refused — it is older than the newest reading,
 //     which matched — and counted late. Before the cursor it cleared the alarm.
-//   - UNRAISED: match@1, non-match@3, then match@2 inside the budget raises at 2, stamped before the
-//     clear at 3, exactly as before the cursor: an unraised series holds no cursor, and the reading
-//     is not behind the frontier. The next reading heals it.
+//   - UNRAISED: match@1, non-match@3, then match@2 inside the budget still raises, stamped
+//     at 2, behind the clear at 3. No stale re-raise refusal is introduced.
+//     The next reading heals it.
 //
 // A reading AT the cursor's instant is not stale.
 func TestThresholdStaleReadingInsideTheBudget(t *testing.T) {

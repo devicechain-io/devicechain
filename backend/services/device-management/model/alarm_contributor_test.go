@@ -10,6 +10,21 @@ import (
 
 func ts(sec int) time.Time { return time.Unix(int64(sec), 0).UTC() }
 
+// An equal-time fresh DETECT episode follows its resolve by one database microsecond.
+// Delivery order must not change the resulting alarm level.
+func TestAlarmContributorBumpedRaiseAfterResolveIsActive(t *testing.T) {
+	times := []time.Time{ts(10), ts(20), ts(20).Add(time.Microsecond)}
+	for _, order := range [][3]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}} {
+		cs := contributorSet{}
+		for _, i := range order {
+			cs.apply("r", i != 1, "MAJOR", times[i])
+		}
+		if severity, active := cs.activeSeverity(); !active || severity != "MAJOR" {
+			t.Fatalf("order %v: want active MAJOR, got %v %q", order, active, severity)
+		}
+	}
+}
+
 // edge is one contributor edge for the property tests.
 type edge struct {
 	rule   string
@@ -229,5 +244,19 @@ func TestContributorUnknownTierStaysActive(t *testing.T) {
 	sev, active := cs.activeSeverity()
 	if !active || sev != "MAJOR" {
 		t.Fatalf("an unknown tier must not clear or dominate; want active MAJOR, got active=%v sev=%q", active, sev)
+	}
+}
+
+// These are the engine's emitted edges for match@1, non-match@3, match@2.
+func TestAlarmContributorStrictlyStaleRaiseLeavesCleared(t *testing.T) {
+	for _, order := range [][3]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}} {
+		times := []time.Time{ts(1), ts(3), ts(2)}
+		cs := contributorSet{}
+		for _, i := range order {
+			cs.apply("r", i != 1, "MAJOR", times[i])
+		}
+		if _, active := cs.activeSeverity(); active {
+			t.Fatalf("order %v: stale raise@2 must leave alarm CLEARED behind resolve@3", order)
+		}
 	}
 }

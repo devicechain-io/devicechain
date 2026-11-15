@@ -754,7 +754,21 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 ## Recent releases {#recent-releases}
 
-The release in development (`v1.6`) and the three most recent minor releases (`v1.5`, `v1.4` and `v1.3`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
+The release in development (`v1.8`) and the three most recent minor releases (`v1.7`, `v1.6` and `v1.5`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
+
+### v1.8.0 — in development {#v180-upgrade}
+
+`v1.8.0` is an in-place upgrade from `v1.7.0`, and requires it: every event-processing pod must run `v1.7.x` before this release rolls out, because a `v1.7` pod is the oldest that reads the detection checkpoints this release writes. These notes are for the release in development and grow until it ships.
+
+#### Same-timestamp edges {#v180-same-timestamp-edges}
+
+When a reading clears a rule and another reading with the same timestamp breaches it again, the alarm stays active and its raise is stamped one microsecond later. Readings at that original timestamp that arrive afterwards are treated as older than the alarm. Devices should send distinct timestamps.
+
+- **Nothing needs doing.**
+
+### v1.7.0 — in development {#v170-upgrade}
+
+`v1.7.0` is an in-place upgrade from `v1.6.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
 ### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
 

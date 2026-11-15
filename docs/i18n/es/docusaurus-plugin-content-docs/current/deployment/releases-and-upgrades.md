@@ -799,7 +799,21 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 ## Versiones recientes {#recent-releases}
 
-La versión en desarrollo (`v1.6`) y las tres versiones menores más recientes (`v1.5`, `v1.4` y `v1.3`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+La versión en desarrollo (`v1.8`) y las tres versiones menores más recientes (`v1.7`, `v1.6` y `v1.5`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+
+### v1.8.0 — en desarrollo {#v180-upgrade}
+
+`v1.8.0` es una actualización in situ desde `v1.7.0`, y la requiere: todos los pods de event-processing deben ejecutar `v1.7.x` antes de desplegar esta versión, porque un pod `v1.7` es el más antiguo que lee los puntos de control de detección que escribe esta versión. Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
+
+#### Transiciones con la misma marca de tiempo {#v180-same-timestamp-edges}
+
+Cuando una lectura despeja una regla y otra lectura con la misma marca de tiempo vuelve a incumplirla, la alarma permanece activa y su activación se registra un microsegundo después. Las lecturas con la marca de tiempo original que llegan posteriormente se consideran anteriores a la alarma. Los dispositivos deben enviar marcas de tiempo distintas.
+
+- **No es necesario hacer nada.**
+
+### v1.7.0 — en desarrollo {#v170-upgrade}
+
+`v1.7.0` es una actualización in situ desde `v1.6.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
 
 ### v1.6.0 — una rotación de CA ya no desconecta los dispositivos {#v160-upgrade}
 
