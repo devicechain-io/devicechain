@@ -46,7 +46,8 @@ const (
 // pinned by TestStructLiteralMicroserviceMethods rather than asserted here:
 //
 //	Safe — they behave as they do on a constructed Microservice:
-//	  Banner, Mux, RegisterProbes, Live, MarkNotLive, NewHttpServer, MetricsSubsystem,
+//	  Banner, Mux, OpsMux, RegisterProbes, Live, MarkNotLive, NewHttpServer, NewOpsServer,
+//	  MetricsSubsystem,
 //	  MetricsRegisterer, MetricsHandler, UseMetricsRegistry, NewCounter, NewCounterVec, NewGauge,
 //	  NewGaugeVec, NewScrapedGaugeVec, NewHistogramVec, NewProcessorMetrics, NewPeriodicTaskMetrics, LoadInstanceConfiguration,
 //	  LoadInstanceConfigurationFrom, LoadMicroserviceConfiguration,
