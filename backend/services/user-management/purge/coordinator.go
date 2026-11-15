@@ -162,11 +162,12 @@ func (c *Coordinator) RunOnce(ctx context.Context) error {
 	ran, err := c.tryLock(ctx, func() error {
 		return c.pass(ctx)
 	})
-	err = rdb.SingletonResult(ran, err, coordinatorLockName)
-	if errors.Is(err, core.ErrPassSkipped) {
+	if !ran && err == nil {
+		// Report a skip, not success: otherwise the last-success timestamp would
+		// keep advancing even while every replica declines the lock.
 		c.observeLedger(ctx)
 	}
-	return err
+	return rdb.SingletonResult(ran, err, coordinatorLockName)
 }
 
 // observeLedger refreshes this replica's gauges from the shared rows, on a tick where a

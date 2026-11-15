@@ -14,10 +14,15 @@ import (
 	"strings"
 )
 
-type singletonLockSite struct{ File, Function string }
+type singletonLockSite struct{ File, Function, Primitive string }
 
-// singletonLockSitesUnder enumerates selector calls, including calls in closures
-// attributed to their enclosing declaration. Aliased method values are not caught.
+type singletonLockSanction struct {
+	Count  int
+	Reason string
+}
+
+// singletonLockSitesUnder enumerates selector references, including parenthesised
+// calls and method values, with closures attributed to their enclosing declaration.
 // The primitive's implementation package and test fixtures are excluded.
 func singletonLockSitesUnder(root string) ([]singletonLockSite, error) {
 	var sites []singletonLockSite
@@ -52,13 +57,9 @@ func singletonLockSitesUnder(root string) ([]singletonLockSite, error) {
 				name = funcSiteName(fn)
 			}
 			ast.Inspect(decl, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
+				sel, ok := n.(*ast.SelectorExpr)
 				if ok && (sel.Sel.Name == "TryAdvisoryLock" || sel.Sel.Name == "TryAdvisoryLockSession") {
-					sites = append(sites, singletonLockSite{rel, name})
+					sites = append(sites, singletonLockSite{rel, name, sel.Sel.Name})
 				}
 				return true
 			})
@@ -75,21 +76,23 @@ func singletonLockSitesUnder(root string) ([]singletonLockSite, error) {
 }
 
 // singletonLockLedgerErrors checks both directions, so stale sanctions also fail.
-func singletonLockLedgerErrors(sites []singletonLockSite, ledger map[singletonLockSite]string) []string {
-	found := map[singletonLockSite]bool{}
+func singletonLockLedgerErrors(sites []singletonLockSite, ledger map[singletonLockSite]singletonLockSanction) []string {
+	found := map[singletonLockSite]int{}
 	var issues []string
 	for _, site := range sites {
-		found[site] = true
-		if strings.TrimSpace(ledger[site]) == "" {
-			issues = append(issues, fmt.Sprintf("unsanctioned try-lock caller: %s %s", site.File, site.Function))
+		found[site]++
+	}
+	for site, count := range found {
+		if count != ledger[site].Count {
+			issues = append(issues, fmt.Sprintf("try-lock reference count: %s %s %s: got %d, want %d", site.File, site.Function, site.Primitive, count, ledger[site].Count))
 		}
 	}
-	for site, reason := range ledger {
-		if !found[site] {
-			issues = append(issues, fmt.Sprintf("stale try-lock caller: %s %s", site.File, site.Function))
+	for site, sanction := range ledger {
+		if found[site] == 0 {
+			issues = append(issues, fmt.Sprintf("stale try-lock caller: %s %s %s", site.File, site.Function, site.Primitive))
 		}
-		if strings.TrimSpace(reason) == "" {
-			issues = append(issues, "missing try-lock reason")
+		if sanction.Count <= 0 || strings.TrimSpace(sanction.Reason) == "" {
+			issues = append(issues, "missing try-lock count or reason")
 		}
 	}
 	sort.Strings(issues)
