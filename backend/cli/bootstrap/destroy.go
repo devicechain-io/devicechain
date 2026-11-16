@@ -7,7 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
+	"syscall"
+	"time"
 
 	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/fatih/color"
@@ -21,6 +25,7 @@ var errDestroyAborted = errors.New("aborted by operator")
 // DestroyOptions drives an instance destroy.
 type DestroyOptions struct {
 	Options
+	bindingSource BindingSource
 	// WithoutState removes the instance without running `tofu destroy` over its
 	// infrastructure state: the chart release, the database and login, and the
 	// namespace. For an instance whose state is lost, or cannot be destroyed from.
@@ -42,9 +47,13 @@ type DestroyOptions struct {
 // all of them, so no single instance's teardown may take them down — whether or not dcctl
 // created the cluster. Deleting a cluster is done with the tool that made it.
 func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error {
+	if err := ValidateDestroyableInstanceName(opts.Instance); err != nil {
+		return err
+	}
 	fmt.Println(GreenUnderline(fmt.Sprintf("\nDestroy instance %q on provider %q", opts.Instance, provider.Name())))
 
 	binding, source := ResolveBinding(opts.Options)
+	opts.bindingSource = source
 	announceBinding(binding, source, opts.Instance)
 	if err := refuseUnreadable(source, opts.Instance); err != nil {
 		return err
@@ -94,17 +103,30 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 	// instance is still deployed, so the state must survive to describe it, and the error
 	// is returned rather than swallowed.
 	//
-	// 🔴 ONLY A NAMED CLUSTER MAY BE DECLARED GONE. For a binding carrying no cluster
-	// name, ClusterExists falls back to "is this context still in kubeconfig", and a
-	// kubeconfig entry's absence is not a cluster's absence — a different KUBECONFIG
-	// would look exactly like a deleted cluster, and clearing the state on that reading
-	// would throw away the tfstate of a live instance. So an unnamed binding skips the
-	// shortcut and goes through the uninstall, which fails loudly if the cluster really
-	// is unreachable.
-	if binding.Cluster != "" {
+	// 🔴 ONLY A RECORDED BINDING WHOSE RECORDED CONTEXT NO LONGER ANSWERS MAY BE DECLARED
+	// GONE. For a binding carrying no cluster name, ClusterExists falls back to "is this
+	// context still in kubeconfig", and a kubeconfig entry's absence is not a cluster's
+	// absence. A GUESSED binding (no record), or one named only by --kube-context, is no
+	// evidence either: a live instance installed into a cluster of another name would
+	// lose its tfstate on that reading. And kind's listing is only what the Docker daemon
+	// kind reaches can see, so even a recorded binding is declared gone only after its
+	// recorded context fails to answer (corroborateClusterGone). Every other binding
+	// skips the shortcut and goes through the uninstall, which fails loudly if the
+	// cluster really is unreachable.
+	if source == BindingFromRecord && binding.Cluster != "" {
 		exists, err := provider.ClusterExists(ctx, binding)
 		if err != nil {
 			return fail("checking whether the cluster exists", err)
+		}
+		if !exists {
+			gone, err := corroborateClusterGone(ctx, binding)
+			if err != nil {
+				return err
+			}
+			if !gone {
+				fmt.Println(color.YellowString("kind's listing disagrees with the recorded context %s, which still answers; continuing uninstall.", binding.KubeContext))
+			}
+			exists = !gone
 		}
 		if !exists {
 			fmt.Println(color.YellowString(
@@ -143,7 +165,7 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 	} else {
 		var err error
 		if stateHasResources, err = refuseUndestroyableInstance(ctx, opts.KubeContext, opts.Instance); err != nil {
-			return err
+			return destroyBindingError(err, source, opts.Instance)
 		}
 	}
 
@@ -180,7 +202,7 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 		if destroyNeedsNoFurtherWork(err) {
 			return nil
 		}
-		return err
+		return destroyBindingError(err, source, opts.Instance)
 	}
 	// LAST, and only here: every failure above returns first, so a destroy that did not
 	// finish keeps the state a re-run resumes from.
@@ -189,6 +211,64 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 	}
 	fmt.Println(destroyedLine(opts.Instance, binding.describe(), leftDatabase, leftArchive, opts.WithoutState))
 	return nil
+}
+
+// kubeContexts is the disk-only context lookup seam used before corroborating loss.
+var kubeContexts = KubeContexts
+
+func corroborateClusterGone(ctx context.Context, binding ClusterBinding) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	names, _, err := kubeContexts()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err != nil {
+		return false, fail("reading kubeconfig contexts", err)
+	}
+	for _, name := range names {
+		if name != binding.KubeContext {
+			continue
+		}
+		probe, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		uid, err := identifyCluster(probe, binding.KubeContext)
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if err != nil {
+			if clusterUnreachable(err) {
+				return true, nil
+			}
+			return false, fmt.Errorf("recorded context %q answered but its identity could not be read, so local state was kept: %w", binding.KubeContext, err)
+		}
+		if binding.ClusterUID != "" && uid != binding.ClusterUID {
+			return false, fmt.Errorf("recorded context %q answers as a different cluster (UID %q, recorded %q); refusing destroy; local state kept", binding.KubeContext, uid, binding.ClusterUID)
+		}
+		return false, nil
+	}
+	return true, nil
+}
+
+// clusterUnreachable recognizes transport failures through the identity probe's wrappers.
+// The caller must check the parent context before treating a probe timeout as evidence.
+func clusterUnreachable(err error) bool {
+	var op *net.OpError
+	var dns *net.DNSError
+	var request *url.Error
+	return errors.As(err, &op) || errors.As(err, &dns) ||
+		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		(errors.As(err, &request) && request.Timeout())
+}
+
+func destroyBindingError(err error, source BindingSource, instance string) error {
+	if source != BindingGuessed || errors.Is(err, errDestroyAborted) {
+		return err
+	}
+	return fmt.Errorf("%w\n  dcctl has no record of this instance's cluster, so it will not treat the missing cluster as proof; pass --kube-context to name the cluster, or, if the cluster really is gone, delete ~/.devicechain/instances/%s by hand", err, instance)
 }
 
 // destroyedLine is the closing line of a destroy that uninstalled the instance.
@@ -411,6 +491,9 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 // leaving them behind is how nine orphaned state directories accumulated on one machine
 // with nothing able to report them.
 func removeInstanceState(opts DestroyOptions) error {
+	if err := ValidateDestroyableInstanceName(opts.Instance); err != nil {
+		return err
+	}
 	doing(fmt.Sprintf("removing local state (~/.devicechain/instances/%s)", opts.Instance))
 	var keptEscrow []string
 	var removeErr error

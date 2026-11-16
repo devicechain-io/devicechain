@@ -119,6 +119,12 @@ func resolveForeignRelease(ctx context.Context, kubeContext string, opts Destroy
 		fmt.Println(color.YellowString("  the local record for %q was KEPT: %v", opts.Instance, keep))
 		return fail("uninstalling release", refusal)
 	}
+	if opts.bindingSource == BindingGuessed {
+		fmt.Println(color.YellowString(
+			"  dcctl has no record of where instance %q was installed, so a cluster that does not hold it is no proof it is gone; its local record was KEPT.", opts.Instance))
+		// Destroy adds the guessed binding's recovery hint to this refusal.
+		return fail("uninstalling release", refusal)
+	}
 
 	// Closes the `doing` line the caller opened. Not "failed." — the uninstall was
 	// refused and that refusal is the correct outcome; what follows is the rest of it.

@@ -29,6 +29,10 @@ import (
 // still has that login (an upgraded instance before its retirement). Every other broker, a fresh
 // install and a retired instance included, is rendered without it.
 func BrokerPermissionsJSON(instance string, withSharedLogin bool) (string, error) {
+	return brokerPermissionsJSON(instance, withSharedLogin, nil)
+}
+
+func brokerPermissionsJSON(instance string, withSharedLogin bool, shards *config.NatsShardGroupsConfiguration) (string, error) {
 	var (
 		users map[string]map[string]natsauth.Permissions
 		err   error
@@ -40,6 +44,9 @@ func BrokerPermissionsJSON(instance string, withSharedLogin bool) (string, error
 	}
 	if err != nil {
 		return "", fmt.Errorf("generating the broker permissions for instance %q: %w", instance, err)
+	}
+	if err := natsauth.AddShardGroupPermissions(instance, users, shards); err != nil {
+		return "", err
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -73,11 +80,16 @@ func writeBrokerPermissionsVarFile(rootdir string, st *State) error {
 		}
 		return nil
 	}
-	doc, err := BrokerPermissionsJSON(st.Instance, sharedLoginRetainedFor(st))
+	shards, err := shardGroupsFromValues(authoringValues(st))
 	if err != nil {
 		return err
 	}
-	raw, err := json.Marshal(map[string]string{"nats_service_users": doc})
+	doc, err := brokerPermissionsJSON(st.Instance, sharedLoginRetainedFor(st), shards)
+	if err != nil {
+		return err
+	}
+	vars := map[string]any{"nats_service_users": doc}
+	raw, err := json.Marshal(vars)
 	if err != nil {
 		return err
 	}

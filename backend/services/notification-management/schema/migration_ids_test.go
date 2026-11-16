@@ -17,4 +17,8 @@ import (
 // of a real Postgres would see it.
 func TestMigrationIDsAreAcceptedByGormigrate(t *testing.T) {
 	require.NoError(t, rdb.CheckMigrationIDs(Migrations))
+	require.Equal(t, "20261114000100", Migrations[len(Migrations)-1].ID)
+	for _, previous := range Migrations[:len(Migrations)-1] {
+		require.Less(t, previous.ID, Migrations[len(Migrations)-1].ID)
+	}
 }
