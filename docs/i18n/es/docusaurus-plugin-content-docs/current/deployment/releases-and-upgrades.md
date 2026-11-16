@@ -807,6 +807,8 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Antes de actualizar a v1.7.0 {#v170-before-upgrade}
 
+- **Membresías gestionadas por un IdP:** las mutaciones del operador que deshabilitan, eliminan o cambian los roles de una membresía ahora devuelven `MANAGED_BY_IDP` mientras su conexión exista y siga atendiendo al tenant; de lo contrario, el siguiente inicio de sesión SSO desharía esos cambios. Para revocar el acceso, deshabilita la identidad, retira a la persona de los grupos del proveedor o deja de atender al tenant con esa conexión. Las membresías no gestionadas y aquellas cuya conexión ya no existe o ya no atiende al tenant siguen siendo editables; la habilitación conserva sus comprobaciones actuales.
+
 #### Novedades de v1.7.0 {#v170-whats-new}
 
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}

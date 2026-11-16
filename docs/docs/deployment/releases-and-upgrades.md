@@ -762,6 +762,8 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### Before you upgrade to v1.7.0 {#v170-before-upgrade}
 
+- **IdP-managed memberships:** operator mutations that disable, remove or change the roles of a membership now return `MANAGED_BY_IDP` while its connection exists and still serves the tenant; SSO sign-in would otherwise undo those edits. To revoke access, disable the identity, remove the person from the provider's groups, or stop the connection serving the tenant. Unmanaged memberships and managed memberships whose connection is gone or no longer serves the tenant remain editable; enabling keeps its existing checks.
+
 #### What is new in v1.7.0 {#v170-whats-new}
 
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
