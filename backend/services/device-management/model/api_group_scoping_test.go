@@ -126,6 +126,61 @@ func TestRegister_BackfillsMembershipAndReverseIndex(t *testing.T) {
 	}
 }
 
+func TestRegister_EmptyMatchFacetRef(t *testing.T) {
+	for _, tc := range []struct {
+		source string
+		want   int64
+	}{
+		{`!("retired" in attr)`, 1},
+		{`"retired" in attr`, 0},
+		{`!(attr["climate"] == "arid")`, 1},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			api, ctx := newScopingTestApi(t)
+			g := createDynamicGroup(t, api, ctx, "empty-match", tc.source)
+			v, err := api.PublishEntityGroup(ctx, g.Token, nil, nil, "tester")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Editing the draft must not change the frozen version's marker.
+			if err := api.RDB.DB(ctx).Model(g).Update("selector", `"other" in attr`).Error; err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ {
+				if err := api.RegisterGroupVersionForScoping(ctx, g.Token, v.Version); err != nil {
+					t.Fatal(err)
+				}
+				var refs []EntityGroupFacetRef
+				if err := api.RDB.DB(ctx).Where("group_id = ? AND selector_version = ? AND facet_key = ?",
+					g.ID, v.Version, createEnrollFacetKey).Find(&refs).Error; err != nil {
+					t.Fatal(err)
+				}
+				assert.Len(t, refs, int(tc.want), "registration %d: exactly one marker iff empty matches", i)
+				for _, ref := range refs {
+					assert.Equal(t, "device", ref.MemberType)
+					assert.Equal(t, g.Token, ref.GroupToken)
+				}
+			}
+			if err := api.DeregisterGroupVersionForScoping(ctx, g.Token, v.Version); err != nil {
+				t.Fatal(err)
+			}
+			var count int64
+			assert.NoError(t, api.RDB.DB(ctx).Unscoped().Model(&EntityGroupFacetRef{}).
+				Where("group_id = ? AND selector_version = ?", g.ID, v.Version).Count(&count).Error)
+			assert.Zero(t, count, "deregister hard-deletes ordinary refs and the marker")
+			if err := api.RegisterGroupVersionForScoping(ctx, g.Token, v.Version); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := api.DeleteEntityGroup(ctx, g.Token); err != nil {
+				t.Fatal(err)
+			}
+			assert.NoError(t, api.RDB.DB(ctx).Unscoped().Model(&EntityGroupFacetRef{}).
+				Where("group_id = ?", g.ID).Count(&count).Error)
+			assert.Zero(t, count, "group purge also hard-deletes the marker")
+		})
+	}
+}
+
 // Backfill pages through more than one page (the loop is 1-based; a 0-based start would
 // fetch page 1 twice and duplicate-insert). Members are seeded with direct inserts to keep
 // the test fast; Register must materialize every one exactly once.
