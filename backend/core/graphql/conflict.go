@@ -9,6 +9,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/conflict"
+	"github.com/devicechain-io/dc-microservice/credbinding"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/limit"
 	gqlerrors "github.com/graph-gophers/graphql-go/errors"
@@ -35,6 +36,8 @@ const CodeForbidden = "FORBIDDEN"
 // code — CONFLICT for a taken unique value, REFERENCE_VIOLATION for a refused reference
 // between records, INVALID_VALUE for any other refused value — and removes any database
 // wording from its message. It mutates errs in place.
+// Credential-binding refusals also retain SECRET_RESUPPLY_REQUIRED and their changed
+// field names through service wrappers.
 //
 // 🔴 WHY HERE, AND WHY IT CANNOT BE LEFT TO graphql-go. graphql-go copies a resolver
 // error's Extensions() only by DIRECT type assertion on the error the resolver returned,
@@ -90,8 +93,11 @@ func answerIntegrity(errs []*gqlerrors.QueryError) {
 		}
 		err := qe.ResolverError
 		chosen, reason := "", ""
+		var resupply *credbinding.ResupplyRequiredError
 		if errors.Is(err, auth.ErrForbidden) {
 			chosen, reason = CodeForbidden, auth.ForbiddenReason(err)
+		} else if errors.As(err, &resupply) {
+			chosen = credbinding.Code
 		} else if _, ok := limit.As(err); ok {
 			chosen = limit.Code
 		} else if class, ok := integrity.Refused(err); ok {
@@ -109,6 +115,9 @@ func answerIntegrity(errs []*gqlerrors.QueryError) {
 				ext := make(map[string]any, len(qe.Extensions)+2)
 				maps.Copy(ext, qe.Extensions)
 				ext["code"] = chosen
+				if chosen == credbinding.Code {
+					ext["changed"] = resupply.Extensions()["changed"]
+				}
 				if _, has := ext["reason"]; reason != "" && !has {
 					ext["reason"] = reason
 				}

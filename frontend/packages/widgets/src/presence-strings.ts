@@ -29,7 +29,7 @@ export interface PresenceStrings {
   chartLabel: (online: number, offline: number, unknown: number) => string;
 }
 
-export const PRESENCE_STRINGS: Record<'en' | 'es', PresenceStrings> = {
+export const PRESENCE_STRINGS: Record<'en' | 'es' | 'zh-CN', PresenceStrings> = {
   en: {
     online: 'Online',
     offline: 'Offline',
@@ -64,8 +64,18 @@ export const PRESENCE_STRINGS: Record<'en' | 'es', PresenceStrings> = {
     noStatusYet: (n) => `${n} sin estado todavía`,
     chartLabel: (online, offline, unknown) => `${online} en línea, ${offline} sin conexión, ${unknown} sin estado todavía`,
   },
+  'zh-CN': {
+    online: '在线', offline: '离线', unknown: '暂无状态', neverSeen: '从未上报',
+    lastSeen: (when) => `最后上报于 ${when}`, failed: '无法读取状态', unsupported: '此数据源无法读取设备状态',
+    unbound: '请为此组件选择设备', oneDevice: '此卡片显示单台设备，但当前绑定的是设备组。',
+    useDoughnut: '请将其绑定到单台设备，或使用在线/离线环形图显示此组。',
+    ofTotal: (total) => `共 ${total} 台`, onlineCaption: '在线', notRead: (n) => `${n} 台无法读取`,
+    noStatusYet: (n) => `${n} 台暂无状态`,
+    chartLabel: (online, offline, unknown) => `${online} 台在线，${offline} 台离线，${unknown} 台暂无状态`,
+  },
 };
 
 export function presenceStrings(locale: string | undefined = viewerLocale()): PresenceStrings {
-  return locale?.toLowerCase().split('-')[0] === 'es' ? PRESENCE_STRINGS.es : PRESENCE_STRINGS.en;
+  const language = locale?.toLowerCase().split('-')[0];
+  return language === 'es' ? PRESENCE_STRINGS.es : language === 'zh' ? PRESENCE_STRINGS['zh-CN'] : PRESENCE_STRINGS.en;
 }

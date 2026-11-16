@@ -352,6 +352,7 @@ EOF
       # shellcheck disable=SC2030 # local to this subshell on purpose
       ROOT="$ws"
       # shellcheck disable=SC2317 # called indirectly, through the command run below
+      # shellcheck disable=SC2329 # self-test stub: overrides exempt_modules, called through its callers
       exempt_modules() { printf '%s\n' "$set"; }
       unset GOWORK
       "$@"
@@ -454,12 +455,14 @@ EOF
   # shellcheck disable=SC2317 # called indirectly, through probe
   with_padded_ws() {
     # shellcheck disable=SC2317 # called indirectly, through the command run below
+    # shellcheck disable=SC2329 # self-test stub: overrides workspace_modules, called through its callers
     workspace_modules() { printf '%s\n' "$pad_ws"; }
     "$@"
   }
   # shellcheck disable=SC2317 # called indirectly, through probe
   stub_race() {
     # shellcheck disable=SC2317 # called indirectly, by do_module
+    # shellcheck disable=SC2329 # self-test stub: overrides race_test, called through do_module
     race_test() { echo "race_test stubbed: $*"; }
     "$@"
   }

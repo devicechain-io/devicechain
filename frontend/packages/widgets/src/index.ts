@@ -66,7 +66,16 @@ export { preloadWidgets } from './preload';
 // Read-only by-id views of the built-in descriptors (channel, datasource binding), and the
 // widget contract. The registrations above are the source of truth; these are derived.
 export { WIDGET_CHANNEL, WIDGET_BINDS_DATASOURCE, type WidgetChannel } from './registry';
-export { pickSample, optBoolean, type WidgetProps, type WidgetComponent } from '@devicechain/widget-sdk';
+export {
+  /** @deprecated Import pickSample from `@devicechain/widget-sdk` instead. */
+  pickSample,
+  /** @deprecated Import optBoolean from `@devicechain/widget-sdk` instead. */
+  optBoolean,
+  /** @deprecated Import WidgetProps from `@devicechain/widget-sdk` instead. */
+  type WidgetProps,
+  /** @deprecated Import WidgetComponent from `@devicechain/widget-sdk` instead. */
+  type WidgetComponent,
+} from '@devicechain/widget-sdk';
 
 // The tenant basemap seam. A host installs the provider; map widgets read it.
 export { TenantBasemapProvider, useTenantBasemap } from './basemap-context';
@@ -96,7 +105,9 @@ export {
   type EnumOptionSpec,
   type ListItemFieldSpec,
   type ListOptionSpec,
+  /** @deprecated Use BuiltinOptionIssue from `@devicechain/widgets` instead. */
   type OptionIssue,
+  type OptionIssue as BuiltinOptionIssue,
   type OptionIssueCode,
 } from './options';
 
@@ -161,55 +172,104 @@ export {
 // ambient host contexts may be defined) and are re-exported so existing imports keep resolving;
 // the chart helpers come from its `/echarts` subpath.
 export {
+  /** @deprecated Import WidgetFrame from `@devicechain/widget-sdk` instead. */
   WidgetFrame,
+  /** @deprecated Import WidgetSubjectProvider from `@devicechain/widget-sdk` instead. */
   WidgetSubjectProvider,
+  /** @deprecated Import WidgetSelectProvider from `@devicechain/widget-sdk` instead. */
   WidgetSelectProvider,
+  /** @deprecated Import useWidgetSelect from `@devicechain/widget-sdk` instead. */
   useWidgetSelect,
+  /** @deprecated Import WidgetTimeZoneProvider from `@devicechain/widget-sdk` instead. */
   WidgetTimeZoneProvider,
+  /** @deprecated Import useWidgetTimeZone from `@devicechain/widget-sdk` instead. */
   useWidgetTimeZone,
+  /** @deprecated Import WidgetThemeRootProvider from `@devicechain/widget-sdk` instead. */
   WidgetThemeRootProvider,
+  /** @deprecated Import useWidgetThemeRoot from `@devicechain/widget-sdk` instead. */
   useWidgetThemeRoot,
+  /** @deprecated Import WidgetCandidatesProvider from `@devicechain/widget-sdk` instead. */
   WidgetCandidatesProvider,
+  /** @deprecated Import useWidgetCandidates from `@devicechain/widget-sdk` instead. */
   useWidgetCandidates,
+  /** @deprecated Import useFlashOnChange from `@devicechain/widget-sdk` instead. */
   useFlashOnChange,
+  /** @deprecated Import flashTextStyle from `@devicechain/widget-sdk` instead. */
   flashTextStyle,
+  /** @deprecated Import flashBackgroundStyle from `@devicechain/widget-sdk` instead. */
   flashBackgroundStyle,
+  /** @deprecated Import FlashValue from `@devicechain/widget-sdk` instead. */
   FlashValue,
+  /** @deprecated Import fitValueFont from `@devicechain/widget-sdk` instead. */
   fitValueFont,
+  /** @deprecated Import useMeasurementStream from `@devicechain/widget-sdk` instead. */
   useMeasurementStream,
+  /** @deprecated Import useAlarmStream from `@devicechain/widget-sdk` instead. */
   useAlarmStream,
+  /** @deprecated Import useCommandStream from `@devicechain/widget-sdk` instead. */
   useCommandStream,
+  /** @deprecated Import useLocationStream from `@devicechain/widget-sdk` instead. */
   useLocationStream,
+  /** @deprecated Import useDatasourceAvailability from `@devicechain/widget-sdk` instead. */
   useDatasourceAvailability,
+  /** @deprecated Import useDashboardHub from `@devicechain/widget-sdk` instead. */
   useDashboardHub,
+  /** @deprecated Import useHubConnectionState from `@devicechain/widget-sdk` instead. */
   useHubConnectionState,
+  /** @deprecated Import HubConnectionBadge from `@devicechain/widget-sdk` instead. */
   HubConnectionBadge,
+  /** @deprecated Import useResolvedBindings from `@devicechain/widget-sdk` instead. */
   useResolvedBindings,
+  /** @deprecated Import useViewerBindings from `@devicechain/widget-sdk` instead. */
   useViewerBindings,
+  /** @deprecated Import useSlotCandidates from `@devicechain/widget-sdk` instead. */
   useSlotCandidates,
+  /** @deprecated Import useCandidates from `@devicechain/widget-sdk` instead. */
   useCandidates,
+  /** @deprecated Import css from `@devicechain/widget-sdk` instead. */
   css,
+  /** @deprecated Import FlashDirection from `@devicechain/widget-sdk` instead. */
   type FlashDirection,
+  /** @deprecated Import WidgetFrameProps from `@devicechain/widget-sdk` instead. */
   type WidgetFrameProps,
+  /** @deprecated Import WidgetSelect from `@devicechain/widget-sdk` instead. */
   type WidgetSelect,
+  /** @deprecated Import WidgetCandidates from `@devicechain/widget-sdk` instead. */
   type WidgetCandidates,
+  /** @deprecated Import MeasurementStreamState from `@devicechain/widget-sdk` instead. */
   type MeasurementStreamState,
+  /** @deprecated Import AlarmStreamState from `@devicechain/widget-sdk` instead. */
   type AlarmStreamState,
+  /** @deprecated Import CommandStreamState from `@devicechain/widget-sdk` instead. */
   type CommandStreamState,
+  /** @deprecated Import LocationStreamState from `@devicechain/widget-sdk` instead. */
   type LocationStreamState,
+  /** @deprecated Import CandidatesState from `@devicechain/widget-sdk` instead. */
   type CandidatesState,
+  /** @deprecated Import DatasourceAvailability from `@devicechain/widget-sdk` instead. */
   type DatasourceAvailability,
+  /** @deprecated Import HubConnectionBadgeProps from `@devicechain/widget-sdk` instead. */
   type HubConnectionBadgeProps,
+  /** @deprecated Import ThemeVar from `@devicechain/widget-sdk` instead. */
   type ThemeVar,
 } from '@devicechain/widget-sdk';
 export {
+  /** @deprecated Import EChart from `@devicechain/widget-sdk/echarts` instead. */
   EChart,
+  /** @deprecated Import buildLineOption from `@devicechain/widget-sdk/echarts` instead. */
   buildLineOption,
+  /** @deprecated Import buildGaugeOption from `@devicechain/widget-sdk/echarts` instead. */
   buildGaugeOption,
+  /** @deprecated Import resolveChartTheme from `@devicechain/widget-sdk/echarts` instead. */
   resolveChartTheme,
+  /** @deprecated Import useChartTheme from `@devicechain/widget-sdk/echarts` instead. */
   useChartTheme,
+  /** @deprecated Import EChartOption from `@devicechain/widget-sdk/echarts` instead. */
   type EChartOption,
+  /** @deprecated Import LineChartOptions from `@devicechain/widget-sdk/echarts` instead. */
   type LineChartOptions,
+  /** @deprecated Import GaugeChartOptions from `@devicechain/widget-sdk/echarts` instead. */
   type GaugeChartOptions,
+  /** @deprecated Import ChartTheme from `@devicechain/widget-sdk/echarts` instead. */
   type ChartTheme,
 } from '@devicechain/widget-sdk/echarts';
