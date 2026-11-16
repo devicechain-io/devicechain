@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Errors returned by the claim operations. They are sentinels so a caller can
@@ -74,6 +75,11 @@ func (api *Api) InitiateDeviceClaim(ctx context.Context, request *DeviceClaimIni
 		// customer keeps ownership of a device they sold.
 		var queued ownershipQueued
 		err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+			// The outer read only locates the row. Decide resale ownership from
+			// its current state while holding the row lock.
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(existing, existing.ID).Error; err != nil {
+				return err
+			}
 			if ClaimStatus(existing.Status) == ClaimStatusClaimed && existing.ClaimedByCustomerId.Valid {
 				if err := tx.Where(
 					"source_type = ? AND source_id = ? AND target_type = ? AND target_id = ?",
@@ -83,13 +89,23 @@ func (api *Api) InitiateDeviceClaim(ctx context.Context, request *DeviceClaimIni
 					return err
 				}
 			}
-			existing.ClaimSecretDigest = secretDigest
-			existing.Status = string(ClaimStatusOpen)
-			existing.ExpiresAt = expiresAt
-			existing.ClaimedTime = sql.NullTime{}
-			existing.ClaimedByCustomerId = sql.NullInt64{}
-			if err := tx.Save(existing).Error; err != nil {
-				return err
+			// SQLite ignores FOR UPDATE. Guard the write against the snapshot
+			// we used to revoke ownership, and roll that revoke back on conflict.
+			res := tx.Model(existing).
+				Where("id = ? AND status = ? AND updated_at = ?", existing.ID, existing.Status, existing.UpdatedAt).
+				Updates(map[string]interface{}{
+					"claim_secret_digest":    secretDigest,
+					"claim_secret":           nil,
+					"status":                 string(ClaimStatusOpen),
+					"expires_at":             expiresAt,
+					"claimed_time":           sql.NullTime{},
+					"claimed_by_customer_id": sql.NullInt64{},
+				})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				return ErrClaimNotOpen
 			}
 			// The prior owner's edge is gone: device-state is owed the device's new owners.
 			var err error
@@ -371,14 +387,13 @@ func (api *Api) CancelDeviceClaim(ctx context.Context, deviceToken string) (bool
 		}
 		return false, err
 	}
-	if ClaimStatus(claim.Status) != ClaimStatusOpen {
-		return false, nil
+	res := api.RDB.DB(ctx).Model(&DeviceClaim{}).
+		Where("id = ? AND status = ?", claim.ID, string(ClaimStatusOpen)).
+		Update("status", string(ClaimStatusCanceled))
+	if res.Error != nil {
+		return false, res.Error
 	}
-	claim.Status = string(ClaimStatusCanceled)
-	if err := api.RDB.DB(ctx).Save(claim).Error; err != nil {
-		return false, err
-	}
-	return true, nil
+	return res.RowsAffected != 0, nil
 }
 
 // DeviceClaimByDeviceToken returns the device's current claim (operator
