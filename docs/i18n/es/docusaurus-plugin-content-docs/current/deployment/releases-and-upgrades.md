@@ -859,6 +859,7 @@ Novedades:
 Qué requiere acción, en el orden en que debe hacerse:
 
 - **Nota de actualización: herramientas.** Instala OpenTofu 1.10 o posterior (o Terraform 1.10 o posterior) en el equipo que ejecuta `dcctl`; la comprobación previa verifica su presencia, no la versión. Usa la herramienta v1.6.0, instala con los ajustes del clúster y después actualiza cada instancia. No hay degradación de versión.
+- **Nota de actualización: el bróker se reinicia.** La actualización sustituye la imagen del bróker, así que cada pod del bróker se reinicia. Con `--mqtt-fail-closed` desactivado (el valor predeterminado), un mensaje QoS 1 que el bróker confirma mientras un stream cambia de líder puede perderse. Actívalo antes de actualizar (`dcctl upgrade --mqtt-fail-closed`) si los dispositivos no deben perder mensajes confirmados ([MQTT con cierre seguro](./observability.md#mqtt-fail-closed)).
 - **Nota de actualización: comprobación previa de `dcctl install`.** En un clúster que conserva su controlador `ingress-nginx`, la instalación se niega a continuar mientras algún Ingress de esa clase lleve una anotación `*-snippet`. Actualiza antes la instancia propietaria o elimina la anotación ([detalles](#v160-nginx-snippets-off)).
 
 **Corrige la configuración antes de reiniciar.** Revisa la configuración de instancia editada a mano; los ajustes inválidos impiden el arranque. Las claves de servicio siguientes van bajo `functionalAreas.<area>.config`.
