@@ -317,7 +317,7 @@ discover() {
 svc_counter() {
   local dep="$1" metric="$2" sel port pod pods body total=0 n
   sel="$(k -n "$namespace" get deploy "$dep" -o json | jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')"
-  port="$(k -n "$namespace" get deploy "$dep" -o json | jq -r '[.spec.template.spec.containers[0].ports[] | select(.name == "graphql" or .name == "http" or .name == "metrics")][0].containerPort // empty')"
+  port="$(k -n "$namespace" get deploy "$dep" -o json | jq -r '[.spec.template.spec.containers[0].ports[] | select(.name == "ops")][0].containerPort // empty')"
   [[ -n "$port" ]] || fail "$dep exposes no port to read metrics from"
   pods="$(k -n "$namespace" get pods -l "$sel" --field-selector=status.phase=Running -o json | jq -r '.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name')"
   [[ -n "$pods" ]] || fail "no live $dep pod to read metrics from"

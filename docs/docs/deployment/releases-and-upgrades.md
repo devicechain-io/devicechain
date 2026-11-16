@@ -913,6 +913,10 @@ cluster is not supported. It also refuses an upgrade whose `--values` (or
 `suffixes`, since the groups may hold data: carry the block forward in every replacement
 values file.
 
+#### Metrics and health endpoints moved to the ops port {#v160-ops-port}
+
+Service metrics and health endpoints moved off the API port. `/metrics`, `/healthz` and `/readyz` are served on port 8083 (`ops`) of each area's pods and Service and are no longer reachable through `/api/<area>/...`. The chart's ServiceMonitors and probes follow automatically. If you scrape pods with your own Prometheus configuration, change the target port from 8080 to 8083. During the rollout, pods not yet replaced are not scraped.
+
 - **Upgrade note:** Outbound connector dispatches and LoRaWAN downlinks now limit each tenant to half of each replica's send pool (rounded down, minimum one), derived from `maxConcurrentSends`. Excess messages wait for broker redelivery without occupying send workers. A pool of one still serializes tenants; use at least two workers for isolation. No new configuration is needed; the limit takes effect as each pod upgrades.
 
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
@@ -983,6 +987,12 @@ An `httpCall` action can no longer name a connector's credential. A secret handl
 `dcctl destroy` refuses an instance argument that is not a plain name (`.`, `..`, or anything containing a path separator). Earlier releases resolved it as a directory under `~/.devicechain/instances` and removed what it resolved to.
 
 - **Local state needs evidence.** `dcctl destroy` clears local state for a missing cluster only when the instance has a record of its cluster and that cluster's recorded context no longer answers. An instance with no record goes through the normal uninstall, which fails if the cluster cannot be reached; pass `--kube-context`, or remove the instance's directory by hand if its cluster is really gone.
+
+#### Signing-key rotation reaches every replica {#v160-signing-key-follow}
+
+With `auth.signingKeyMaxAgeDays` set, user-management now rotates an over-age signing key while it runs: about 15 minutes after a replica starts, and whenever the key crosses the age afterwards, not only at startup. Every replica adopts the new key within 30 seconds, and validates and serves it straight away when it sees a token or a key request that needs it. Earlier releases applied a rotation only in the replica that made it, so with more than one replica some sign-ins failed until the others restarted.
+
+- **Nothing needs doing.** Nothing changes when the setting is 0.
 
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
