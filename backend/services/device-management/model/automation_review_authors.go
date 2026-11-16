@@ -56,16 +56,26 @@ func (api *Api) draftAuthors(ctx context.Context, profile *DeviceProfile, baseli
 	if len(boundary) != 0 {
 		after = boundary[0].ID
 	}
+	removed := []map[string]bool{{}, {}, {}, {}}
 	ids := []map[string]bool{{}, {}, {}, {strconv.FormatUint(uint64(profile.ID), 10): true}}
-	for _, snap := range []*ProfileSnapshot{baselineSnap, draftSnap} {
+	for which, snap := range []*ProfileSnapshot{baselineSnap, draftSnap} {
+		track := func(kind int, id uint) {
+			key := strconv.FormatUint(uint64(id), 10)
+			ids[kind][key] = true
+			if which == 0 {
+				removed[kind][key] = true
+			} else {
+				delete(removed[kind], key)
+			}
+		}
 		for _, m := range snap.Metrics {
-			ids[0][strconv.FormatUint(uint64(m.ID), 10)] = true
+			track(0, m.ID)
 		}
 		for _, c := range snap.Commands {
-			ids[1][strconv.FormatUint(uint64(c.ID), 10)] = true
+			track(1, c.ID)
 		}
 		for _, r := range snap.Rules {
-			ids[2][strconv.FormatUint(uint64(r.ID), 10)] = true
+			track(2, r.ID)
 		}
 	}
 	actors := map[string]bool{}
@@ -80,25 +90,25 @@ func (api *Api) draftAuthors(ctx context.Context, profile *DeviceProfile, baseli
 				keys = append(keys, k)
 			}
 		}
-		// A statement that matched by condition rather than by one key (a delete by token, a bulk
-		// update) is journaled with no entity_pk, so it cannot be attributed to this profile or
-		// ruled out. It counts: over-including excludes more people from approval, never fewer.
-		keys = append(keys, "")
-		var rows []rdb.AuditEvent
-		query := db.Where("category = ? AND table_name = ?", rdb.AuditCategoryMutation, table).
+		var rows []string
+		query := db.Model(&rdb.AuditEvent{}).Where("category = ? AND table_name = ?", rdb.AuditCategoryMutation, table).
 			Where("entity_pk IN ?", keys)
 		if len(changed[i]) == 0 {
 			query = query.Where("id > ?", after)
 		} else {
-			// Unknown keys may have affected a differing row, so include their history too.
-			query = query.Where("(id > ? OR entity_pk IN ?)", after, append(changed[i], ""))
+			// Include all historical writers of differing keyed rows.
+			query = query.Where("(id > ? OR entity_pk IN ?)", after, changed[i])
 		}
-		if err := query.Find(&rows).Error; err != nil {
+		if err := query.Distinct("actor").Pluck("actor", &rows).Error; err != nil {
 			return nil, err
 		}
-		for _, row := range rows {
-			if row.Actor != "" && row.Actor != "system" {
-				actors[row.Actor] = true
+		legacy, err := legacyReviewDeleteActors(db, model, table, removed[i])
+		if err != nil {
+			return nil, err
+		}
+		for _, actor := range append(rows, legacy...) {
+			if actor != "" && actor != "system" {
+				actors[actor] = true
 			}
 		}
 	}
@@ -108,6 +118,54 @@ func (api *Api) draftAuthors(ctx context.Context, profile *DeviceProfile, baseli
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// legacyReviewDeleteActors must stay indefinitely: pre-upgrade journal rows and
+// deletes by not-yet-upgraded pods during a rolling upgrade have no key. Only an
+// unexplained removal needs this conservative fallback. A moved row is still live;
+// a soft-deleted row needs attribution just like a physically removed row.
+// A delete takes the row lock after its last write, so its journal id exceeds
+// that write's id. Publication is not a safe floor: a delete can race publication.
+func legacyReviewDeleteActors(db *gorm.DB, model any, table string, removed map[string]bool) ([]string, error) {
+	journal := func() *gorm.DB {
+		return db.Model(&rdb.AuditEvent{}).Where("category = ? AND table_name = ?", rdb.AuditCategoryMutation, table)
+	}
+	var floor uint
+	unresolved := false
+	for id := range removed {
+		if id == "0" {
+			continue
+		}
+		var deleted int64
+		if err := journal().Where("entity_pk = ? AND operation = ?", id, "delete").Count(&deleted).Error; err != nil {
+			return nil, err
+		}
+		if deleted != 0 {
+			continue
+		}
+		var present int64
+		if err := db.Model(model).Where("id = ?", id).Count(&present).Error; err != nil {
+			return nil, err
+		}
+		if present != 0 {
+			continue
+		}
+		var latest uint
+		if err := journal().Where("entity_pk = ?", id).Select("COALESCE(MAX(id), 0)").Scan(&latest).Error; err != nil {
+			return nil, err
+		}
+		if !unresolved || latest < floor {
+			floor = latest
+		}
+		unresolved = true
+	}
+	if !unresolved {
+		return nil, nil
+	}
+	var actors []string
+	err := journal().Where("entity_pk = ? AND operation = ? AND id > ?", "", "delete", floor).
+		Distinct("actor").Pluck("actor", &actors).Error
+	return actors, err
 }
 
 // Compare row content with the same canonicalization used by snapshot digests;

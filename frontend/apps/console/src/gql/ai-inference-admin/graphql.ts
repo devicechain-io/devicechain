@@ -66,9 +66,16 @@ export type AiProviderUpdateRequest = {
    * remove the override and use the kind's built-in address. Null is refused for
    * openai-compatible, which has no built-in address; a change of kind is checked against
    * the stored endpoint in the same way.
+   *
+   * Changing the type or credential destination while a credential is stored requires secret
+   * in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
    */
   endpoint?: string | null | undefined;
-  /** New provider kind. Omit it to keep the stored kind; an explicit null is refused. */
+  /**
+   * New provider kind. Omit it to keep the stored kind; an explicit null is refused.
+   * Changing the type or credential destination while a credential is stored requires secret
+   * in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
+   */
   kind?: string | null | undefined;
   /** New model identifier. Omit it to keep the stored one; an explicit null is refused. */
   model?: string | null | undefined;
@@ -83,6 +90,9 @@ export type AiProviderUpdateRequest = {
   /**
    * The write-only API key. Omit it to keep the stored key, send a value to replace it, or
    * send null or an empty string to delete it.
+   *
+   * Changing the type or credential destination while a credential is stored requires secret
+   * in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
    */
   secret?: string | null | undefined;
 };

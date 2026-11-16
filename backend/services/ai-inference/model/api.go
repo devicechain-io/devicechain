@@ -16,6 +16,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credbinding"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
@@ -310,9 +311,27 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 	if err != nil {
 		return nil, err
 	}
+	beforeBinding, afterBinding := providerBinding(current.Kind, current.Endpoint), providerBinding(kind, endpoint)
+	bindingChanged := len(beforeBinding.Diff(afterBinding)) != 0
+	if err := credbinding.Guard("AI provider", token, beforeBinding, afterBinding, request.Secret.Set, func() (bool, error) { return api.Secrets.Exists(ctx, AIProviderSecretRef(current.ID)) }); err != nil {
+		return nil, err
+	}
 	name := request.Name.ApplyToNullString(current.Name)
 	description := request.Description.ApplyToNullString(current.Description)
 	secret := updatedSecret(request.Secret)
+	if bindingChanged && request.Secret.Set {
+		// When the destination moves, change the secret first so a store failure
+		// cannot leave the new destination using the old destination's credential.
+		if expectedUpdatedAt != nil {
+			if err := rdb.RefuseIfMoved(current.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
+				return nil, err
+			}
+		}
+		if err := api.applyProviderSecret(ctx, current.ID, secret); err != nil {
+			return nil, err
+		}
+		secret = nil // Already applied; the reload must not write it again.
+	}
 
 	fields := map[string]any{
 		"name":        name,
