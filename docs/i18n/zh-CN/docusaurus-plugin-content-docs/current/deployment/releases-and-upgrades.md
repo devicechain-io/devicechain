@@ -666,6 +666,10 @@ NATS 分片组默认仍处于关闭状态。新实例可在安装时通过 `--va
 中移除某个流，该升级也会被拒绝，因为这些分组可能存有数据：请在每个替换用的 values
 文件中保留该块。
 
+#### 指标和健康检查端点移至 ops 端口 {#v160-ops-port}
+
+服务指标和健康端点已从 API 端口移出。每个功能区域的 Pod 和 Service 在端口 8083（`ops`）提供 `/metrics`、`/healthz` 和 `/readyz`，无法再通过 `/api/<area>/...` 访问。chart 的 ServiceMonitor 和探针会自动更新。如果使用自己的 Prometheus 配置抓取 Pod 指标，请将目标端口从 8080 改为 8083。滚动升级期间，尚未替换的 Pod 不会被抓取指标。
+
 #### 完整重载代理会保持认证调用已放行的设备连接 {#v160-broker-reload}
 
 过去，完整重载代理会关闭认证调用已放行的所有连接，其中包括所有使用用户名进行认证的 MQTT 设备。代理现在基于 `nats-server` `v2.15.3` 构建，因此更改代理 TLS Secret 中的 CA 包（CA 轮换）或手动重载时，会保持这些连接打开。只有当 chart 的 config-reloader 边车因挂载的 TLS Secret 发生变化而发送 SIGHUP，或操作员手动运行 `nats-server --signal reload` 时，才会发生不重启的重载。

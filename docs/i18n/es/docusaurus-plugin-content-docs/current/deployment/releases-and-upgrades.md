@@ -960,6 +960,10 @@ JetStream independiente que contiene datos. También rechaza una actualización 
 `count` o quitaría un flujo de sus `suffixes`, ya que los grupos pueden contener datos:
 mantenga el bloque en cada archivo de valores de reemplazo.
 
+#### Las métricas y los endpoints de salud pasan al puerto ops {#v160-ops-port}
+
+Las métricas y los endpoints de salud de los servicios se han separado del puerto de la API. `/metrics`, `/healthz` y `/readyz` se sirven en el puerto 8083 (`ops`) de los pods y del Service de cada área y ya no son accesibles mediante `/api/<area>/...`. Los ServiceMonitors y las sondas del chart se actualizan automáticamente. Si recopilas métricas de los pods con tu propia configuración de Prometheus, cambia el puerto de destino de 8080 a 8083. Durante el despliegue gradual, no se recopilan métricas de los pods que aún no se han reemplazado.
+
 #### Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación {#v160-broker-reload}
 
 Una recarga completa del broker cerraba todas las conexiones admitidas por el callout de autenticación, entre ellas las de todos los dispositivos MQTT que se autentican con un nombre de usuario. El broker ahora se compila con `nats-server` `v2.15.3`, por lo que un cambio en el conjunto de CA del Secret TLS del broker (una rotación de CA), o una recarga manual, mantiene abiertas esas conexiones. Una recarga sin reinicio solo ocurre cuando el sidecar config-reloader del chart envía SIGHUP porque cambió el Secret TLS montado, o cuando un operador ejecuta `nats-server --signal reload` a mano.

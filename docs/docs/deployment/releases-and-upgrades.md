@@ -913,6 +913,10 @@ cluster is not supported. It also refuses an upgrade whose `--values` (or
 `suffixes`, since the groups may hold data: carry the block forward in every replacement
 values file.
 
+#### Metrics and health endpoints moved to the ops port {#v160-ops-port}
+
+Service metrics and health endpoints moved off the API port. `/metrics`, `/healthz` and `/readyz` are served on port 8083 (`ops`) of each area's pods and Service and are no longer reachable through `/api/<area>/...`. The chart's ServiceMonitors and probes follow automatically. If you scrape pods with your own Prometheus configuration, change the target port from 8080 to 8083. During the rollout, pods not yet replaced are not scraped.
+
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
 
 A full broker reload used to close every connection the auth callout had admitted, which includes every MQTT device that authenticates with a username. The broker is now built on `nats-server` `v2.15.3`, so a change to the CA bundle in the broker's TLS Secret (a CA rotation), or a manual reload, keeps those connections open. A reload without a restart happens only when the chart's config-reloader sidecar sends SIGHUP because the mounted TLS Secret changed, or when an operator runs `nats-server --signal reload` by hand.
