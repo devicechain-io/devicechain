@@ -410,3 +410,27 @@ func TestSourceOrderingUsesDatabasePrecision(t *testing.T) {
 		t.Fatalf("name = %q, want new", got)
 	}
 }
+
+// Oldest notification first keeps newly claimed rows behind the remaining backlog.
+func TestOpenNotificationStatesOldestFirst(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+	now := time.Now().UTC()
+	for i, token := range []string{"newest", "middle", "oldest"} {
+		if err := api.RecordNotification(ctx, token, "k", "CRITICAL", testCycle, now.Add(-time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	states, err := api.OpenNotificationStates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 3 {
+		t.Fatalf("got %d states", len(states))
+	}
+	for i, want := range []string{"oldest", "middle", "newest"} {
+		if states[i].AlarmToken != want {
+			t.Fatalf("position %d = %s, want %s", i, states[i].AlarmToken, want)
+		}
+	}
+}

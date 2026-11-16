@@ -477,6 +477,7 @@ func (api *Api) OpenNotificationStates(ctx context.Context) ([]*NotificationStat
 	found := make([]*NotificationState, 0)
 	result := api.RDB.DB(ctx).
 		Where("cleared_at IS NULL AND acknowledged_at IS NULL AND last_notified_at IS NOT NULL").
+		Order("last_notified_at ASC").Order("id ASC").
 		Find(&found)
 	return found, result.Error
 }
