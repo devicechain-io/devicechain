@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/devicechain-io/dc-event-processing/connectorwire"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
 	"github.com/devicechain-io/dc-microservice/httpsink"
@@ -654,6 +655,10 @@ func validateHTTPCall(ruleID string, i int, h *HTTPCallAction) error {
 	}
 	if err := validateSecretHandle(h.SecretRef); err != nil {
 		return invalid(ruleID, "actions", "action %d httpCall secretRef: %v", i, err)
+	}
+	if strings.HasPrefix(h.SecretRef, connectorwire.ConnectorSecretPrefix) {
+		return invalid(ruleID, "actions", "action %d httpCall secretRef: the %q namespace holds connector credentials "+
+			"and cannot be used as an httpCall credential", i, connectorwire.ConnectorSecretPrefix)
 	}
 	if webhooksig.InReservedNamespace(h.SecretRef) {
 		return invalid(ruleID, "actions", "action %d httpCall secretRef: the %q namespace holds webhook signing "+
