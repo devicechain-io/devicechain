@@ -240,7 +240,7 @@ sink_total() {
 held_now() {
   local p v
   p="$(kn get pods -o name | grep '/event-management-' | sed -n 1p | cut -d/ -f2)"
-  v="$(MSYS_NO_PATHCONV=1 k get --raw "/api/v1/namespaces/$namespace/pods/$p:8080/proxy/metrics" |
+  v="$(MSYS_NO_PATHCONV=1 k get --raw "/api/v1/namespaces/$namespace/pods/$p:8083/proxy/metrics" |
     awk '/^devicechain_eventmanagement_persist_store_held_events/ {print $2}')"
   printf '%s' "${v:-0}"
 }

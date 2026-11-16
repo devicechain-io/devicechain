@@ -12,11 +12,13 @@ export interface TableStrings {
   time: string;
 }
 
-export const TABLE_STRINGS: Record<'en' | 'es', TableStrings> = {
+export const TABLE_STRINGS: Record<'en' | 'es' | 'zh-CN', TableStrings> = {
   en: { measurement: 'Measurement', value: 'Value', time: 'Time' },
   es: { measurement: 'Medición', value: 'Valor', time: 'Hora' },
+  'zh-CN': { measurement: '测量项', value: '值', time: '时间' },
 };
 
 export function tableStrings(locale: string | undefined = viewerLocale()): TableStrings {
-  return locale?.toLowerCase().split('-')[0] === 'es' ? TABLE_STRINGS.es : TABLE_STRINGS.en;
+  const language = locale?.toLowerCase().split('-')[0];
+  return language === 'es' ? TABLE_STRINGS.es : language === 'zh' ? TABLE_STRINGS['zh-CN'] : TABLE_STRINGS.en;
 }

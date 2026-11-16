@@ -53,7 +53,10 @@ The password or secret key is the connector's **credential**. It is write-only: 
 console only tells you that a credential is configured, and never shows it again. To change it,
 click **Replace** and enter a new value; to remove it, click **Clear**, and **Undo** takes the Clear
 back before you save. **Clear** is not offered when the type requires a credential: always for AWS,
-and for Kafka when SASL is on.
+and for Kafka when SASL is on. If you change the broker URLs or another credential destination,
+choose **Replace** and supply the credential again before saving.
+
+Known limitation: a credential re-supplied for a new destination is also used by the currently published version until the new draft is published, so publish promptly.
 
 The console checks required fields as you go, but the server checks the whole configuration again
 when you save and again when the connector sends. When a connector sends, the platform also refuses a destination
@@ -62,6 +65,8 @@ that resolves to a private or internal address, unless your operator has allowed
 
 Click **Create connector** to save it. A new connector is a **draft**: no rule can publish through it
 until you publish a version, as described below.
+
+Changing the type or credential destination requires `secret` in the same request when a credential is stored; omission returns `SECRET_RESUPPLY_REQUIRED`. Re-supply the credential, or use `secret: null` to remove it. With `dcctl product apply`, set the manifest's credential handle before changing its destination. Topic, QoS and identity-only edits keep the credential.
 
 ## Editing a connector
 
@@ -88,7 +93,8 @@ version rules dispatch through.
   while there are unsaved changes.
 - **Restore** copies an earlier version's configuration back into the draft, replacing any unsaved
   edits. It does not change what rules use: publish afterwards to make it the live version. The
-  credential is not versioned, so restoring a version leaves the current credential as it is.
+  credential is not versioned. Restore keeps it only when the destination binding is unchanged;
+  otherwise use `updateConnector` with the target configuration and re-supply the credential.
 
 ## Related
 
