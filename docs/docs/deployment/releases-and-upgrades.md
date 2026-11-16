@@ -762,6 +762,8 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### Before you upgrade to v1.7.0 {#v170-before-upgrade}
 
+- **Campaign error details are sanitized.** `Campaign.lastError` keeps actionable configuration messages; internal failures show a generic retry message, with full details logged server-side. Messages remain capped at 500 bytes and truncate at a UTF-8 boundary. The GraphQL field and type are unchanged.
+
 #### What is new in v1.7.0 {#v170-whats-new}
 
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}

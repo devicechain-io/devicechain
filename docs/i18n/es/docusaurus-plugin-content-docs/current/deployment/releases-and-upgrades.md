@@ -807,6 +807,8 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Antes de actualizar a v1.7.0 {#v170-before-upgrade}
 
+- **Se filtran los detalles de error de las campañas.** `Campaign.lastError` conserva los mensajes de configuración que permiten actuar; los fallos internos muestran un mensaje genérico de reintento y los detalles completos se registran en el servidor. Los mensajes siguen limitados a 500 bytes y se truncan en un límite UTF-8. El campo GraphQL y su tipo no cambian.
+
 #### Novedades de v1.7.0 {#v170-whats-new}
 
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}

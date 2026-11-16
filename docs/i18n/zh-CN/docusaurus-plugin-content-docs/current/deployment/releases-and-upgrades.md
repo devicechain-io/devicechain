@@ -518,6 +518,8 @@ dcctl bootstrap local devicechain
 
 #### 升级到 v1.7.0 前 {#v170-before-upgrade}
 
+- **活动错误详情经过脱敏。** `Campaign.lastError` 保留可据以修正配置的消息；内部故障显示通用重试消息，完整详情记录在服务端日志中。消息仍限制为 500 字节，并在 UTF-8 字符边界截断。GraphQL 字段及其类型保持不变。
+
 #### v1.7.0 新增内容 {#v170-whats-new}
 
 ### v1.6.0 — 更严格的权限检查，代理重载时设备保持连接 {#v160-upgrade}
