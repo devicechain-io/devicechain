@@ -1622,6 +1622,22 @@ jobs:
       - name: Translated docs match English file-for-file
         run: hack/check-docs-locale-parity.sh
 
+      # Release-notes FRAGMENTS: a PR adds docs/release-notes/unreleased/<slug>.md instead of
+      # editing the release-notes page, so merges stop conflicting every other open PR. The
+      # release-notes PR folds them in with hack/assemble-release-notes.py. Golden tests and one
+      # test per refusal first, then the negative control (--check must exit 1 on each planted
+      # bad fragment), then every fragment in the tree: all three locales present, a known
+      # section, front matter that parses, no ADR reference, matching structure per locale.
+      - name: Release-notes assembler tests
+        working-directory: hack
+        run: python3 -m unittest -v test_assemble_release_notes
+
+      - name: Release-notes fragment check self-test
+        run: python3 hack/assemble-release-notes.py --self-test
+
+      - name: Release-notes fragments are well-formed
+        run: python3 hack/assemble-release-notes.py --check
+
       # An alert is a page at 3 a.m. and the docs are its runbook. The chart's
       # PrometheusRule templates and the docs were edited independently, and a
       # quarter of the shipped alerts had no docs mention at all. Prove the check can
