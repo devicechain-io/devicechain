@@ -320,6 +320,13 @@ func (nmgr *NatsManager) ReconcileBroker(ctx context.Context, areas []string) (*
 			return report, fmt.Errorf("messaging: %q is not a platform functional area (known: %v)", a, streams.PlatformAreas)
 		}
 	}
+	if cfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups; cfg != nil && nmgr.streamSharding() == nil {
+		// Administration needs the group definitions, never tenant placement or a
+		// publisher. A missing placement mirror must not prevent creating streams.
+		if err := nmgr.EnableStreamSharding(brokerAdminRouter{}, cfg); err != nil {
+			return report, err
+		}
+	}
 	nmgr.reconciled = func(kind, name, action string) {
 		report.Actions = append(report.Actions, ReconcileAction{Kind: kind, Name: name, Action: action})
 	}
@@ -402,3 +409,8 @@ func (nmgr *NatsManager) streamSubjects(suffix string) []string {
 	}
 	return out
 }
+
+// The administrator never publishes tenant data.
+type brokerAdminRouter struct{}
+
+func (brokerAdminRouter) ShardGroup(string) (int, error) { return 0, ErrUnplacedTenant }

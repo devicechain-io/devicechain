@@ -45,11 +45,15 @@ type protectedResourceMetadata struct {
 // ProtectedResourceMetadataHandler serves the RFC 9728 document. resourceID is
 // this server's identifier (the token audience); issuer is the AS. The document is
 // public (unauthenticated discovery) and cacheable.
-func ProtectedResourceMetadataHandler(resourceID, issuer string) http.Handler {
+func ProtectedResourceMetadataHandler(resourceID, issuer string, opts ...Option) http.Handler {
+	o := options{}
+	for _, opt := range opts {
+		opt(&o)
+	}
 	body, err := json.Marshal(protectedResourceMetadata{
 		Resource:               resourceID,
 		AuthorizationServers:   []string{issuer},
-		ScopesSupported:        append([]string(nil), coreauth.SupportedScopes...),
+		ScopesSupported:        coreauth.SupportedScopesFor(o.actuation),
 		BearerMethodsSupported: []string{"header"},
 	})
 	if err != nil {
