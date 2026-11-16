@@ -512,6 +512,14 @@ dcctl bootstrap local devicechain
 
 最近三个次要版本（`v1.6`、`v1.5` 和 `v1.4`）按从新到旧的顺序提供完整说明。下方还保留了 `v0.27.0` 至 `v0.24.0` 的详细说明。
 
+### v1.7.0 — 开发中 {#v170-upgrade}
+
+`v1.7.0` 是从 `v1.6.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
+
+#### 升级到 v1.7.0 前 {#v170-before-upgrade}
+
+#### v1.7.0 新增内容 {#v170-whats-new}
+
 ### v1.6.0 — 更严格的权限检查，代理重载时设备保持连接 {#v160-upgrade}
 
 `v1.6.0` 可从 `v1.5.0` 原地升级：先为集群运行 `dcctl install`，再为每个实例运行一次 `dcctl upgrade`，详见[滚动升级](#rolling-upgrades)。**两个命令都使用 v1.6.0 的 `dcctl`**，并向 `dcctl install` 提供集群设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。`device-management` 新增一个迁移，使当前实体属性键保持唯一并排队执行修复。参见[v1.6.0 的架构变更与回退](#v160-going-back)。若从 `v1.4.0` 或更早版本升级，请先阅读 [`v1.5.0` 说明](#v150-upgrade)。

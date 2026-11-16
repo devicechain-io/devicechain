@@ -756,6 +756,14 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The three most recent minor releases (`v1.6`, `v1.5` and `v1.4`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
 
+### v1.7.0 — in development {#v170-upgrade}
+
+`v1.7.0` is an in-place upgrade from `v1.6.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
+
+#### Before you upgrade to v1.7.0 {#v170-before-upgrade}
+
+#### What is new in v1.7.0 {#v170-whats-new}
+
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the v1.6.0 `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. One appended migration in `device-management` makes live entity attribute keys unique and queues repairs. See [Schema changes in v1.6.0 and going back](#v160-going-back). Coming from `v1.4.0` or earlier, read the [`v1.5.0` notes](#v150-upgrade) first.

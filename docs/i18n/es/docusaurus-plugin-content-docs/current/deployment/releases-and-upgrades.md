@@ -801,6 +801,14 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 Las tres versiones menores más recientes (`v1.6`, `v1.5` y `v1.4`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
 
+### v1.7.0 — en desarrollo {#v170-upgrade}
+
+`v1.7.0` es una actualización in situ desde `v1.6.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
+
+#### Antes de actualizar a v1.7.0 {#v170-before-upgrade}
+
+#### Novedades de v1.7.0 {#v170-whats-new}
+
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de v1.6.0 para ambos comandos**, y proporciona a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Una migración añadida en `device-management` hace únicas las claves de atributos activos y encola reparaciones. Consulta [Cambios de esquema en v1.6.0 y vuelta atrás](#v160-going-back). Si vienes de `v1.4.0` o anterior, lee primero las [notas de `v1.5.0`](#v150-upgrade).
