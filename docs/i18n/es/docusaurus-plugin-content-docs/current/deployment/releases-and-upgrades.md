@@ -1031,6 +1031,12 @@ Una acción `httpCall` ya no puede nombrar la credencial de un conector. Un mane
 
 - **El estado local requiere pruebas.** `dcctl destroy` solo borra el estado local de un clúster ausente cuando la instancia tiene un registro de su clúster y el contexto registrado de ese clúster ya no responde. Una instancia sin registro pasa por la desinstalación normal, que falla si no se puede acceder al clúster; indique `--kube-context` o elimine manualmente el directorio de la instancia si su clúster realmente ha desaparecido.
 
+#### La rotación de claves de firma llega a todas las réplicas {#v160-signing-key-follow}
+
+Con `auth.signingKeyMaxAgeDays` configurado, user-management ahora rota una clave de firma demasiado antigua mientras se ejecuta: unos 15 minutos después de que arranque una réplica y cada vez que la clave supere esa edad después, no solo al arrancar. Todas las réplicas adoptan la nueva clave en un máximo de 30 segundos y la validan y publican en cuanto reciben un token o una solicitud de claves que la necesita. Las versiones anteriores aplicaban la rotación solo en la réplica que la realizaba, por lo que, con más de una réplica, algunos inicios de sesión fallaban hasta que las demás se reiniciaban.
+
+- **No hace falta hacer nada.** Nada cambia cuando el ajuste es 0.
+
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
 
 `v1.5.0` es una actualización in situ desde `v1.4.0`: ejecuta `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de la nueva versión para ambos comandos** y pasa a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Se ejecutan cuatro migraciones añadidas: tres en `device-management` y una en `user-management`. Añaden la barrera de desactivación del agente y la bandeja de salida de efectos, las revisiones de automatización y su exigencia, y la columna de generación de actuación. Consulta [Cambios de esquema y vuelta atrás](#v150-going-back). Si vienes de `v1.3.0` o anterior, lee primero las [notas de `v1.4.0`](#v140-upgrade).

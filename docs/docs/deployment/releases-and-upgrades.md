@@ -982,6 +982,12 @@ An `httpCall` action can no longer name a connector's credential. A secret handl
 
 - **Local state needs evidence.** `dcctl destroy` clears local state for a missing cluster only when the instance has a record of its cluster and that cluster's recorded context no longer answers. An instance with no record goes through the normal uninstall, which fails if the cluster cannot be reached; pass `--kube-context`, or remove the instance's directory by hand if its cluster is really gone.
 
+#### Signing-key rotation reaches every replica {#v160-signing-key-follow}
+
+With `auth.signingKeyMaxAgeDays` set, user-management now rotates an over-age signing key while it runs: about 15 minutes after a replica starts, and whenever the key crosses the age afterwards, not only at startup. Every replica adopts the new key within 30 seconds, and validates and serves it straight away when it sees a token or a key request that needs it. Earlier releases applied a rotation only in the replica that made it, so with more than one replica some sign-ins failed until the others restarted.
+
+- **Nothing needs doing.** Nothing changes when the setting is 0.
+
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
 `v1.5.0` is an in-place upgrade from `v1.4.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Four appended migrations run on upgrade: three in `device-management` and one in `user-management`. They add the agent kill fence and effect outbox, automation reviews and review enforcement, and the actuation generation column. See [Schema changes and going back](#v150-going-back). Coming from `v1.3.0` or earlier, read the [`v1.4.0` notes](#v140-upgrade) first.
