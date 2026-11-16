@@ -96,7 +96,13 @@ func TestIntegrationRetentionDisablePermissionDenied(t *testing.T) {
 	require.NoError(t, db.Exec(fmt.Sprintf(`GRANT USAGE ON SCHEMA %q TO %q`, lifecycleSchema, role)).Error)
 	// Use autocommit statements on a pinned connection: an earlier best-effort
 	// failure must not abort a transaction and mask the retention permission error.
-	require.NoError(t, db.Connection(func(conn *gorm.DB) error {
+	require.NoError(t, db.Connection(func(pinned *gorm.DB) error {
+		// Connection hands over a non-session *gorm.DB, whose Error is STICKY: after
+		// the probe fails, every later Exec on it is skipped and returns that stale
+		// error. applyOne's own removal would then "fail" without being sent, and
+		// RESET ROLE would never run, returning the connection to the pool still
+		// under the role. A session gives every statement a fresh error.
+		conn := pinned.Session(&gorm.Session{})
 		require.NoError(t, conn.Exec(fmt.Sprintf(`SET ROLE %q`, role)).Error)
 		defer func() { require.NoError(t, conn.Exec("RESET ROLE").Error) }()
 		probe := conn.Exec(removeRetentionPolicyStmt("events")).Error
