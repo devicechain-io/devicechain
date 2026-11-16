@@ -30,7 +30,7 @@ export interface StateTimelineStrings {
   segment: (state: string, from: string, to: string) => string;
 }
 
-export const STATE_TIMELINE_STRINGS: Record<'en' | 'es', StateTimelineStrings> = {
+export const STATE_TIMELINE_STRINGS: Record<'en' | 'es' | 'zh-CN', StateTimelineStrings> = {
   en: {
     loading: 'Loading',
     unbound: 'Choose a device for this widget',
@@ -54,17 +54,28 @@ export const STATE_TIMELINE_STRINGS: Record<'en' | 'es', StateTimelineStrings> =
     unsupported: 'Esta fuente de datos no puede leer el historial almacenado',
     failed: 'No se pudo leer el historial',
     empty: 'No hay lecturas en este intervalo',
-    baseline: 'Normal',
+    baseline: 'Sin incidencias',
     noData: 'Sin lecturas',
-    levels: { critical: 'Crítico', major: 'Mayor', minor: 'Menor', warning: 'Aviso', info: 'Info', normal: 'Normal' },
+    levels: { critical: 'Crítico', major: 'Mayor', minor: 'Menor', warning: 'Aviso', info: 'Información', normal: 'Sin incidencias' },
     lane: (name, shares, runs) => `${name}: ${shares}. ${runs}`,
     basis: (bucket) => `estado del promedio de cada ${bucket}`,
     basisTitle: (bucket) =>
       `Cada tramo es el estado en que estaba su promedio de ${bucket}, no el instante exacto del cambio: una señal que cambia dentro de un intervalo de ${bucket} se lee como el estado del promedio de ese intervalo.`,
     segment: (state, from, to) => `${state}, de ${from} a ${to}`,
   },
+  'zh-CN': {
+    loading: '正在加载', unbound: '请为此组件选择设备', forbidden: ACCESS_STRINGS['zh-CN'].forbidden,
+    unsupported: '此数据源无法读取已存储的历史记录', failed: '无法读取历史记录', empty: '此时段内没有读数',
+    baseline: '正常', noData: '暂无读数',
+    levels: { critical: '危急', major: '严重', minor: '次要', warning: '警告', info: '提示', normal: '正常' },
+    lane: (name, shares, runs) => `${name}：${shares}。${runs}`,
+    basis: (bucket) => `每 ${bucket} 平均值的状态`,
+    basisTitle: (bucket) => `每段表示其 ${bucket} 平均值所处的状态，而非状态变化的精确时刻：在 ${bucket} 时间桶内变化的信号按该时间桶平均值的状态显示。`,
+    segment: (state, from, to) => `${state}，${from} 至 ${to}`,
+  },
 };
 
 export function stateTimelineStrings(): StateTimelineStrings {
-  return viewerLocale()?.toLowerCase().startsWith('es') ? STATE_TIMELINE_STRINGS.es : STATE_TIMELINE_STRINGS.en;
+  const language = viewerLocale()?.toLowerCase().split('-')[0];
+  return language === 'es' ? STATE_TIMELINE_STRINGS.es : language === 'zh' ? STATE_TIMELINE_STRINGS['zh-CN'] : STATE_TIMELINE_STRINGS.en;
 }

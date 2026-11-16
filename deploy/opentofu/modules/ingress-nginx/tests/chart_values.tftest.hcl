@@ -13,6 +13,20 @@
 
 mock_provider "helm" {}
 
+run "shared_controller_disables_snippets" {
+  command = plan
+
+  assert {
+    condition     = yamldecode(helm_release.ingress_nginx.values[0]).controller.allowSnippetAnnotations == false
+    error_message = "the shared ingress-nginx controller must refuse snippet annotations"
+  }
+
+  assert {
+    condition     = !can(yamldecode(helm_release.ingress_nginx.values[0]).controller.config["annotations-risk-level"])
+    error_message = "the annotations risk level must use the controller default"
+  }
+}
+
 run "a_cloud_install_keeps_the_client_address" {
   command = plan
 

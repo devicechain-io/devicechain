@@ -195,7 +195,7 @@ Operator 无法接管 StatefulSet 的数据目录，因此不支持原地升级�
 
 #### Ingress 与自带控制器 {#ingress-controller}
 
-集群安装会部署一个 Ingress 控制器，每个实例的路由由 Chart 提供。边缘不承担任何安全控制：服务令牌签发端点和签名密钥集由 `user-management` 在一个没有任何 Ingress 路由指向的内部端口上提供，因此无论使用哪种控制器，公开端口对它们都返回 404。签发端点由共享的服务密钥保护，该密钥以恒定时间比较。Chart 的路由不带任何配置 snippet。仍在运行 `ingress-nginx` 的集群上，它在本版本中仍接受 snippet，因为尚未升级的实例依赖它们。
+集群安装会部署一个 Ingress 控制器，每个实例的路由由 Chart 提供。边缘不承担任何安全控制：服务令牌签发端点和签名密钥集由 `user-management` 在一个没有任何 Ingress 路由指向的内部端口上提供，因此无论使用哪种控制器，公开端口对它们都返回 404。签发端点由共享的服务密钥保护，该密钥以恒定时间比较。Chart 的路由不带任何配置 snippet。在保留 `ingress-nginx` 的集群上，`dcctl install` 会关闭配置片段，并恢复控制器默认的注解风险级别。只要该控制器类的任何 Ingress 带有 `*-snippet` 注解，它就会先拒绝继续，并列出每一项：请使用 `dcctl upgrade` 升级所属实例，或移除该注解，然后重新运行 `dcctl install`。参见 [v1.6.0 升级说明](./releases-and-upgrades.md#v160-nginx-snippets-off)。
 
 如果你自带控制器，请路由 Chart 的五个 Ingress。实现了 Gateway API 的控制器也可以改为提供 Chart 渲染出的 Gateway 和 HTTPRoute（`ingress.controller: gateway`；Chart 的 README 列出了这类控制器必须做到的事）：
 
@@ -919,7 +919,7 @@ aws s3 rm --recursive s3://devicechain-tsdb/<path>/ --endpoint-url http://127.0.
 
 销毁不删除集群或 `dcctl install` 的前置组件，下一次初始化无需先安装。删除再以同名初始化是重建实例的方法。但早于 `dcctl install` 的实例还需重建集群，见[版本与升级](./releases-and-upgrades.md#pre-declaration-recreate)。
 
-kind 集群已由 `kind delete cluster` 删除时，没有可卸载对象，销毁会说明并只清理本地状态，包括实例目录及 `dcctl install` 创建、kind 删除后留下的 `~/.devicechain/clusters/<cluster-uid>/` 集群目录，见[安装集群](#install)。会打印：
+kind 集群已由 `kind delete cluster` 删除时，只有实例拥有集群记录且记录中的上下文不再响应，销毁才会清理本地状态。猜测绝不会作为集群已不存在的依据。没有记录时会执行正常卸载，无法连接集群则失败；请传入 `--kube-context`，或者确认集群确实已不存在后手动删除实例目录。清理范围，包括实例目录及 `dcctl install` 创建、kind 删除后留下的 `~/.devicechain/clusters/<cluster-uid>/` 集群目录，见[安装集群](#install)。会打印：
 
 ```text
 removing the gone cluster's local state (~/.devicechain/clusters/<cluster-uid>)

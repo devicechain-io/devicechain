@@ -85,6 +85,8 @@ Las horas de silencio no son [ventanas de mantenimiento](../guides/maintenance-w
 ventana de mantenimiento pertenece a un tipo de dispositivo y retiene comandos disruptivos; las
 horas de silencio pertenecen a una política de notificación y retienen sus avisos.
 
+El planificador atiende hasta cuatro inquilinos a la vez en orden rotativo. Las liberaciones y escalaciones dejan de iniciar alarmas cuando un inquilino ha consumido el doble del presupuesto total de envío (80 segundos de forma predeterminada) mientras otro inquilino espera un trabajador; si nadie espera, continúa. El resto queda pendiente para el siguiente ciclo. Las alarmas ya iniciadas conservan todo su presupuesto y los avisos de resolución se procesan en el mismo trabajo con un presupuesto separado. Así, un canal lento no bloquea a todos los inquilinos durante toda su cola. En cada trabajo se omiten los canales que agotan sus intentos por tiempo de espera; los canales sanos siguen recibiendo las alarmas de varios canales. Las escalaciones dirigidas solo a canales omitidos conservan su nivel y se prueban en el siguiente ciclo. La primera prueba fallida aún puede consumir un nivel. La métrica `devicechain_notificationmanagement_tenant_slice_exhausted_total` registra los límites alcanzados sin etiqueta de inquilino; el registro identifica al inquilino.
+
 ## Relacionado
 
 - [Horas de silencio](../guides/notification-channels.md#quiet-hours), para saber qué se retiene y
