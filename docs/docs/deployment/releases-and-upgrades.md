@@ -762,6 +762,8 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### Before you upgrade to v1.7.0 {#v170-before-upgrade}
 
+- **Token masks that generate nothing are refused.** A token mask whose only placeholders have an explicit width of 0, such as `dev{numeric-0}`, gives every entity the same token, and saving the token-masks setting with one is now refused. A stored mask like this keeps its value, but the next save of the setting fails until it is fixed, so change it to a positive width (`{numeric-4}`), an omitted width (`{alphanumeric}`), `{slug}` or `{uuid}` before you upgrade.
+
 #### What is new in v1.7.0 {#v170-whats-new}
 
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}

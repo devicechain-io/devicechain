@@ -807,6 +807,8 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Antes de actualizar a v1.7.0 {#v170-before-upgrade}
 
+- **Se rechazan las máscaras de token que no generan nada.** Una máscara de token cuyos únicos marcadores tienen un ancho explícito de 0, como `dev{numeric-0}`, da a todas las entidades el mismo token, y ahora se rechaza guardar el ajuste de máscaras de token que la contenga. Una máscara así ya guardada conserva su valor, pero el siguiente guardado del ajuste falla hasta que se corrija, así que cámbiala antes de actualizar a un ancho positivo (`{numeric-4}`), un ancho omitido (`{alphanumeric}`), `{slug}` o `{uuid}`.
+
 #### Novedades de v1.7.0 {#v170-whats-new}
 
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}
