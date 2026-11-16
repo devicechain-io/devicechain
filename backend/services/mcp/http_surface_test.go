@@ -101,30 +101,8 @@ func status(t *testing.T, method, url string) int {
 	return resp.StatusCode
 }
 
-// Every pattern this service registers, asserted ONE AT A TIME.
-//
-// 🔴 THIS ROUTE SET IS A PROTOCOL CONTRACT. A client discovers this server by spec —
-// POST the resource identifier, read the WWW-Authenticate challenge, fetch the metadata
-// URL it names — so dropping any one of these is not a degraded service, it is a broken
-// contract that clients hit at discovery time.
-//
-// 🔴 AND ON THIS SERVICE AN UNMOUNTED ROUTE DOES NOT ANSWER 404. The MCP endpoint is
-// mounted at "/", so anything that stops being registered falls through to the catch-all
-// and is answered with a 401 BEARER CHALLENGE instead. For a probe that is the worse of
-// the two failures by some way: /readyz answering 401 is never 200, so every pod stays
-// unready forever and the whole area leaves its Service endpoints — and the symptom
-// points at authentication rather than at routing. (The ingest services have no
-// catch-all, so there the same mistake really does surface as a 404. Copying the wording
-// across is what made it wrong here.)
-//
-// Seven cases for six patterns: the well-known subtree gets two, one for the document
-// it does serve and one for a path it must refuse, because the guard inside it is a
-// behaviour of its own rather than a second spelling of the same route.
-//
-// A case per pattern, not one case for the set: a table that asserted "none of these is
-// 404" would pass with the catch-all answering all of them, which is both the precedence
-// failure this most needs to exclude and — per the paragraph above — not even the status
-// code it would produce.
+// Every public MCP pattern must resolve on the public listener, including both
+// RFC 9728 metadata locations. Probes use the separate ops listener.
 func TestEveryRegisteredPatternResolves(t *testing.T) {
 	base := serveMcp(t)
 
@@ -155,18 +133,6 @@ func TestEveryRegisteredPatternResolves(t *testing.T) {
 			path: server.ProtectedResourceMetadataPath + "/not-this-one", want: http.StatusNotFound,
 			why: "the subtree pattern must answer here rather than falling through to the root-mounted MCP endpoint, which would return a bearer challenge to a request for a public document",
 		},
-		{
-			name: "liveness", method: http.MethodGet, path: "/healthz", want: http.StatusOK,
-			why: "an exact pattern must beat the catch-all at /",
-		},
-		{
-			name: "readiness", method: http.MethodGet, path: "/readyz", want: http.StatusOK,
-			why: "an exact pattern must beat the catch-all at /",
-		},
-		{
-			name: "metrics", method: http.MethodGet, path: "/metrics", want: http.StatusOK,
-			why: "an exact pattern must beat the catch-all at /",
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, tc.want, status(t, tc.method, base+tc.path), tc.why)
@@ -174,11 +140,19 @@ func TestEveryRegisteredPatternResolves(t *testing.T) {
 	}
 }
 
-// The catch-all must still take everything the specific patterns do not.
-//
-// The counterweight to the precedence cases above: "the probes beat /" is also
-// satisfied by a mux where / matches nothing at all, which would break every MCP
-// request while leaving all three probe assertions green.
+func TestOperationalEndpointsUseTheOpsListener(t *testing.T) {
+	public := serveMcp(t)
+	ops := "http://" + Svc.OpsAddr()
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		require.Equal(t, http.StatusOK, status(t, http.MethodGet, ops+path))
+		// The public root is the MCP handler, so these paths get its bearer
+		// challenge rather than the operational handler's successful response.
+		require.Equal(t, http.StatusUnauthorized, status(t, http.MethodGet, public+path))
+	}
+	require.Equal(t, http.StatusNotFound, status(t, http.MethodGet, ops+server.ProtectedResourceMetadataPath))
+}
+
+// The public catch-all must still reach the MCP handler for unmatched paths.
 func TestTheCatchAllStillTakesEverythingElse(t *testing.T) {
 	base := serveMcp(t)
 
