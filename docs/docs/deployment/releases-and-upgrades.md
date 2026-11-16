@@ -917,6 +917,8 @@ values file.
 
 Service metrics and health endpoints moved off the API port. `/metrics`, `/healthz` and `/readyz` are served on port 8083 (`ops`) of each area's pods and Service and are no longer reachable through `/api/<area>/...`. The chart's ServiceMonitors and probes follow automatically. If you scrape pods with your own Prometheus configuration, change the target port from 8080 to 8083. During the rollout, pods not yet replaced are not scraped.
 
+- **Upgrade note:** Outbound connector dispatches and LoRaWAN downlinks now limit each tenant to half of each replica's send pool (rounded down, minimum one), derived from `maxConcurrentSends`. Excess messages wait for broker redelivery without occupying send workers. A pool of one still serializes tenants; use at least two workers for isolation. No new configuration is needed; the limit takes effect as each pod upgrades.
+
 **Notification scheduling is bounded per tenant.** Four workers serve tenants in rotating order. Each tenant stops starting releases and escalations after twice the whole-dispatch budget (80 seconds at the defaults) while another tenant is waiting for a worker; a tenant nobody is waiting behind keeps going; an alarm already started keeps its full budget, and remaining alarms stay due for the next tick. Clear announcements run within each tenant job under their own budget. Channels that exhaust their timeout attempts are skipped for the rest of that tenant job; an escalation routed only to those channels keeps its tier and is retried next tick. The first probe can still spend a tier. No configuration change is needed, and existing configuration works throughout rolling upgrades.
 
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
@@ -993,6 +995,10 @@ An `httpCall` action can no longer name a connector's credential. A secret handl
 With `auth.signingKeyMaxAgeDays` set, user-management now rotates an over-age signing key while it runs: about 15 minutes after a replica starts, and whenever the key crosses the age afterwards, not only at startup. Every replica adopts the new key within 30 seconds, and validates and serves it straight away when it sees a token or a key request that needs it. Earlier releases applied a rotation only in the replica that made it, so with more than one replica some sign-ins failed until the others restarted.
 
 - **Nothing needs doing.** Nothing changes when the setting is 0.
+
+#### Re-pointing a stored credential requires supplying it again {#v160-credential-resupply}
+
+**Re-pointing a stored credential.** `updateConnector`, `rollbackConnector`, `updateNotificationChannel` and `updateAiProvider` refuse with `SECRET_RESUPPLY_REQUIRED` when a request changes the type or the destination of a connector, notification channel or AI provider that holds a stored credential and does not send `secret` in the same request. Send the credential again, or `secret: null` to remove it. Edits that do not move the destination (name, topic, QoS, custom headers, link base URL, model, enabled) are unaffected, and existing connectors, channels and providers keep delivering. To roll a connector back to a version with a different destination, re-point it with `updateConnector` and its credential instead. With `dcctl product apply`, set the connector's credential handle when a manifest changes its destination. Older replicas do not enforce this until they are replaced.
 
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 

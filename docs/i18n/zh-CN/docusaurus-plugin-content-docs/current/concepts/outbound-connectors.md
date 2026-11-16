@@ -118,3 +118,5 @@ outbound-connectors 服务在**独立进程**中运行，与 event-processing �
 - **[事件处理与告警](./event-processing.md)**：规则和动作的编写位置。
 - **[架构](./architecture.md)**：outbound-connectors 在服务体系中的位置。
 - 凭据保存在[密钥处理](./architecture.md#secret-handling)介绍的加密**密钥存储**中。
+
+如果连接器持有已存储凭据，更改类型或凭据目标时必须在同一请求中发送 `secret`；省略时将返回 `SECRET_RESUPPLY_REQUIRED`。请重新提供凭据，或使用 `secret: null` 删除凭据。使用 `dcctl product apply` 更改目标前，请设置清单中的凭据句柄。主题、QoS 和身份字段的编辑会保留凭据。
