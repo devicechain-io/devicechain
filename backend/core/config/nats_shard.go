@@ -14,8 +14,9 @@ import (
 // Group streams multiply each selected stream reservation by Count.
 type NatsShardGroupsConfiguration struct {
 	// Count is the total number of groups, including the existing group zero.
-	Count         int              `json:"count"`
-	Suffixes      []string         `json:"suffixes"`
+	Count    int      `json:"count"`
+	Suffixes []string `json:"suffixes"`
+	// PlacementTags accepts groups 0 through Count-1, including the existing group zero.
 	PlacementTags map[int][]string `json:"placementTags,omitempty"`
 }
 

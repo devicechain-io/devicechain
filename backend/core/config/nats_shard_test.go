@@ -65,8 +65,9 @@ func TestNatsShardGroupsTypedValidation(t *testing.T) {
 
 func TestNatsShardGroupsPlacementTagsRoundTrip(t *testing.T) {
 	var cfg config.InstanceConfiguration
-	require.NoError(t, core.LoadConfiguration(shardDocument(`{"count":3,"suffixes":["inbound-events","resolved-events"],"placementTags":{"1":["rack-a"],"2":["rack-b","ssd"]}}`), &cfg))
+	require.NoError(t, core.LoadConfiguration(shardDocument(`{"count":3,"suffixes":["inbound-events","resolved-events"],"placementTags":{"0":["dc-nats-0"],"1":["rack-a"],"2":["rack-b","ssd"]}}`), &cfg))
 	want := cfg.Infrastructure.Nats.ShardGroups
+	require.Equal(t, []string{"dc-nats-0"}, want.PlacementTags[0])
 	require.Equal(t, []string{"rack-a"}, want.PlacementTags[1])
 	require.Equal(t, []string{"rack-b", "ssd"}, want.PlacementTags[2])
 	encoded, err := json.Marshal(cfg)
