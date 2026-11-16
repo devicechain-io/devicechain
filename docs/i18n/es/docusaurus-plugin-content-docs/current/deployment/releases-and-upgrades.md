@@ -807,6 +807,8 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Antes de actualizar a v1.7.0 {#v170-before-upgrade}
 
+- Las solicitudes de inicio de SSO, verificación MFA y autenticación reforzada desde direcciones IPv6 del mismo /64 ahora comparten un límite de frecuencia por origen, para evitar que la rotación de direcciones dentro de ese bloque agote la cuota global compartida. Los límites IPv4, los tamaños de ráfaga y los intervalos de reposición no cambian.
+
 #### Novedades de v1.7.0 {#v170-whats-new}
 
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}

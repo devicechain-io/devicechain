@@ -762,6 +762,8 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### Before you upgrade to v1.7.0 {#v170-before-upgrade}
 
+- SSO begin, MFA verification, and step-up requests from IPv6 addresses in the same /64 now share a per-source rate limit, preventing address rotation within that block from draining the shared global allowance. IPv4 limits and all burst sizes and refill intervals are unchanged.
+
 #### What is new in v1.7.0 {#v170-whats-new}
 
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
