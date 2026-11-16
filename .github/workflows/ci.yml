@@ -35,7 +35,12 @@ jobs:
     outputs:
       services: ${{ steps.svc.outputs.services }}
       modules: ${{ steps.mod.outputs.modules }}
-      integration: ${{ steps.integ.outputs.integration }}
+      # The FULL integration plan, which every leg re-checks against fresh discovery (DC_IT_PLAN).
+      integration_all: ${{ steps.integ.outputs.integration }}
+      # What this run executes, from hack/ci-select.py: a subset on a pull request, all of it otherwise.
+      integration: ${{ steps.select.outputs.integration }}
+      go_legs: ${{ steps.select.outputs.go_legs }}
+      frontend: ${{ steps.select.outputs.frontend }}
       smoke: ${{ steps.smoke.outputs.smoke }}
     steps:
       # 🔴 fetch-depth: 0 — the upgrade-rig self-test below reads the TAG HISTORY.
@@ -269,6 +274,53 @@ jobs:
           printf 'LEG\tMODULES\n'
           jq -r '.[] | [.name, .modules] | @tsv' <<<"$plan"
 
+      # The selection's own guards, before its answer is used. The self-test proves the rails can
+      # trip (a reverse dependency, go.work/.github/hack, an unknown path outside every module, an
+      # empty diff); `check` proves the reader and split tables still describe the tree, and that
+      # no module's Go code reaches outside the module from a package the reader table does not
+      # name; go-leg's self-test proves a split package's shards partition its tests.
+      - name: leg selection self-tests and tables
+        run: |
+          python3 hack/ci-select.py --self-test
+          python3 hack/ci-select.py check
+          hack/go-leg.sh --self-test
+
+      # 🔴 AFFECTED-MODULE SELECTION, PULL REQUESTS ONLY. A pull request runs the Go legs of the
+      # modules its diff (against the merge base) changes, every module that requires one of them
+      # through go.mod, transitively, and the test packages that READ a changed file from outside
+      # their module (hack/ci-select.py's READERS table). Push, merge_group, schedule and dispatch
+      # run everything; so does a change to go.work, go.work.sum, .github/ or hack/, a file outside
+      # every module the tables do not account for, an empty diff, and any failure of the selection
+      # itself. The log below names every module skipped and why. `modules` above is still the
+      # count-cross-checked FULL list; this selects from it.
+      #
+      # If this step fails outright (as opposed to falling back to everything), discover fails and
+      # ci-complete fails with it: an unknown selection is never read as an empty one.
+      - name: Select affected legs
+        id: select
+        env:
+          DISCOVERED_MODULES: ${{ steps.mod.outputs.modules }}
+          INTEGRATION_PLAN: ${{ steps.integ.outputs.integration }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          sel="$(python3 hack/ci-select.py plan)"
+          go_legs="$(jq -c '.go' <<<"$sel")"
+          integ="$(jq -c '.integration' <<<"$sel")"
+          frontend="$(jq -r '.frontend' <<<"$sel")"
+          case "$frontend" in true|false) ;; *) echo "::error::frontend verdict is '$frontend'"; exit 1 ;; esac
+          # A run that is not a pull request must plan every module; the script asserts the same.
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] && [ "$(jq -r '.full' <<<"$sel")" != true ]; then
+            echo "::error::a $GITHUB_EVENT_NAME run selected a subset"
+            exit 1
+          fi
+          {
+            echo "go_legs=$go_legs"
+            echo "integration=$integ"
+            echo "frontend=$frontend"
+          } >> "$GITHUB_OUTPUT"
+
       # The race detector exits 0 when it finds nothing, which makes "no data
       # races" and "never instrumented" the same result. Dropping -race from the
       # command, a toolchain built without cgo or a missing C compiler each turn
@@ -328,13 +380,23 @@ jobs:
   # Per-module Go validation: fmt, build, vet, test.
   # go.work makes the module the working directory for each matrix entry.
   # ---------------------------------------------------------------------------
+  #
+  # 🔴 ONE ENTRY PER LEG, NOT PER MODULE. hack/ci-select.py plans the legs: a module runs as one
+  # leg, or (SPLITS) as shards of its slowest packages plus one catch-all leg that runs the rest
+  # and carries the module's static checks (`entry.static`: gofmt, build, vet, tidy, the workspace
+  # sum, govulncheck), so those run once per module. A leg selected only because its tests read a
+  # changed file runs just those packages, with no static checks: its module's code did not change.
+  # Skipped when the plan has no Go legs (a pull request touching nothing Go reads); ci-complete
+  # accepts that skip only when discover succeeded and planned zero legs.
   go:
+    name: go (${{ matrix.entry.module }}${{ matrix.entry.leg != '' && format(' / {0}', matrix.entry.leg) || '' }})
     needs: discover
+    if: needs.discover.outputs.go_legs != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        module: ${{ fromJson(needs.discover.outputs.modules) }}
+        entry: ${{ fromJson(needs.discover.outputs.go_legs) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -375,8 +437,8 @@ jobs:
           # are hashed together so the key stays per-module, and go.mod moving is
           # precisely when dependencies changed anyway.
           cache-dependency-path: |
-            ${{ matrix.module }}/go.mod
-            ${{ matrix.module }}/go.sum
+            ${{ matrix.entry.module }}/go.mod
+            ${{ matrix.entry.module }}/go.sum
 
       # Prefetch the module graph with a bounded retry, then a different-infrastructure
       # fallback, so one dropped stream from the module proxy does not fail this job
@@ -388,15 +450,26 @@ jobs:
         env:
           # The windows vet step below loads files the linux listing skips (x/sys/windows
           # and friends), so prefetch that package set too or the vet step downloads it bare.
-          DC_GOMOD_EXTRA_GOOS: ${{ matrix.module == 'backend/cli' && 'windows' || '' }}
+          DC_GOMOD_EXTRA_GOOS: ${{ matrix.entry.module == 'backend/cli' && 'windows' || '' }}
           # The tidy step at the end resolves the module ALONE and loads the tests of its
           # dependencies, every OS and every tag: a different, larger set than the build's,
           # and the step where both observed proxy stream resets landed. Prefetch it too.
-          DC_GOMOD_TIDY: "1"
-        run: hack/go-mod-download.sh "${{ matrix.module }}"
+          DC_GOMOD_TIDY: ${{ matrix.entry.static && '1' || '' }}
+        run: hack/go-mod-download.sh "${{ matrix.entry.module }}"
+
+      # Which packages (and, for a shard, which tests) this leg runs; the test and race steps both
+      # read the result. hack/go-leg.sh derives a catch-all as `go list ./...` minus the split
+      # packages and proves the arithmetic, and deals a shard round-robin over `go test -list`.
+      - name: Resolve this leg's packages
+        env:
+          LEG_PKGS: ${{ matrix.entry.pkgs }}
+          LEG_EXCLUDE: ${{ matrix.entry.exclude }}
+          LEG_SHARD: ${{ matrix.entry.shard }}
+        run: hack/go-leg.sh "${{ matrix.entry.module }}" "$RUNNER_TEMP/leg-args"
 
       - name: gofmt
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         run: |
           # gofmt -l prints files that need formatting; any output is a failure.
           out="$(gofmt -l .)"
@@ -407,11 +480,13 @@ jobs:
           fi
 
       - name: go build
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         run: go build ./...
 
       - name: go vet
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         run: go vet ./...
 
       # 🔴 THE OPERATOR'S CRD CARRIES CEL RULES, AND CEL IS ENFORCED BY AN API
@@ -444,21 +519,21 @@ jobs:
       # than passing silently (setup-envtest also re-verifies the archive checksum on use).
       - name: Read the envtest version
         id: envtest-version
-        if: matrix.module == 'backend/k8s' || matrix.module == 'backend/cli'
+        if: matrix.entry.module == 'backend/k8s' || matrix.entry.module == 'backend/cli'
         working-directory: backend/k8s
         run: |
           version="$(sed -n 's/^ENVTEST_K8S_VERSION[[:space:]]*=[[:space:]]*//p' Makefile | tr -d '[:space:]')"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache the envtest assets
-        if: matrix.module == 'backend/k8s' || matrix.module == 'backend/cli'
+        if: matrix.entry.module == 'backend/k8s' || matrix.entry.module == 'backend/cli'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/dc-envtest
           key: envtest-${{ runner.os }}-${{ runner.arch }}-${{ steps.envtest-version.outputs.version }}
 
       - name: envtest binaries
-        if: matrix.module == 'backend/k8s' || matrix.module == 'backend/cli'
+        if: matrix.entry.module == 'backend/k8s' || matrix.entry.module == 'backend/cli'
         working-directory: backend/k8s
         run: |
           set -euo pipefail
@@ -494,8 +569,8 @@ jobs:
       # gate that cannot fail: the artifact looks authoritative precisely because
       # nothing is comparing it to its source.
       - name: generated manifests are up to date
-        if: matrix.module == 'backend/k8s'
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.module == 'backend/k8s' && matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         run: |
           set -euo pipefail
           make manifests generate
@@ -539,7 +614,8 @@ jobs:
       # CLAUDE.md runs too, so the gate a maintainer runs before pushing and
       # the gate that runs here cannot drift apart.
       - name: workspace sum is complete
-        run: hack/check-go-work-sum.sh --module "${{ matrix.module }}"
+        if: matrix.entry.static
+        run: hack/check-go-work-sum.sh --module "${{ matrix.entry.module }}"
 
       # Build-tagged tests are invisible to every step above: `go build`, `go vet` and
       # `go test` all skip a file whose tags are not set, so a tagged suite compiles
@@ -552,7 +628,8 @@ jobs:
       # against the code they test. That is the cheap half of the guarantee, and it is
       # the half that actually decays. Running them is a separate, deliberate job.
       - name: go vet (build-tagged suites)
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         run: go vet -tags "integration interop" ./...
 
       # dcctl ships for Windows, and its tests must at least COMPILE there: a test-only
@@ -567,8 +644,8 @@ jobs:
       # test package imports envtest and so does not build on Windows either, two
       # platform-neutral tests in it included.
       - name: go vet (windows)
-        if: matrix.module == 'backend/cli'
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.module == 'backend/cli' && matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         env:
           GOOS: windows
         run: go vet -tags "integration interop" ./...
@@ -610,10 +687,11 @@ jobs:
       # deploy to the matrix genuinely buys is build, vet and test coverage. Do not
       # read this step's green on that module as scanning coverage that was gained.
       - name: govulncheck (reachable vulnerabilities)
-        run: hack/govulncheck.sh "${{ matrix.module }}"
+        if: matrix.entry.static
+        run: hack/govulncheck.sh "${{ matrix.entry.module }}"
 
       - name: go test
-        working-directory: ${{ matrix.module }}
+        working-directory: ${{ matrix.entry.module }}
         # Every package, the operator's controllers included. That package holds
         # the CEL suite the `envtest binaries` step installs an API server for, and
         # it used to be dropped here as "a scaffold that asserts nothing" — so the
@@ -641,7 +719,10 @@ jobs:
         # others) that already take about 8 minutes locally. Under the default, a
         # slower runner would fail it as a panic in whichever test was running, which
         # reads as that test hanging rather than the package being long.
-        run: go test -count=1 -timeout 20m ./...
+        run: |
+          set -euo pipefail
+          mapfile -t args < "$RUNNER_TEMP/leg-args"
+          go test -count=1 -timeout 20m "${args[@]}"
 
       # The payload decoder's timing gates, alone: the perf gate (decode against Cut A's
       # flatten, paired in one process) and the ns-per-declared-cost checks. They are timing
@@ -650,8 +731,8 @@ jobs:
       # going (-p 1, after the suite). DECODE_PERF_GATE=1 is what turns it on; without it the
       # tests skip, and this step is the only place they run.
       - name: payload decoder perf gate
-        if: matrix.module == 'backend/core'
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.module == 'backend/core' && matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         env:
           DECODE_PERF_GATE: "1"
         run: go test -count=1 -p 1 -run '^(TestPerfGate|TestPerfGateGoesRed|TestNativeCostsMatchMeasuredTime|TestFixedCostNativesDoNotScaleWithTheFrame|TestNativeCostChecksFlagUnderDeclaration|TestCostTrackerOverhead)' -v ./payloaddecode/
@@ -665,8 +746,8 @@ jobs:
       # the count of skipped templates and of the shell commands no rule covers (kubectl,
       # curl, helm, ...) is on the page of every run, not implied by a green tick.
       - name: docs commands exist (coverage report)
-        if: matrix.module == 'backend/cli'
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.module == 'backend/cli' && (matrix.entry.static || contains(matrix.entry.pkgs, './cmd/'))
+        working-directory: ${{ matrix.entry.module }}
         run: go test -count=1 -run '^TestPublishedDocsCommandsExist$' -v ./cmd/
 
       # event-processing's broker suites a second time, with fetch-ahead ON. A hand-built
@@ -677,8 +758,8 @@ jobs:
       # integration suites run once with each setting. Only the processor package builds
       # a detect broker; the rest of the module does not read the switch.
       - name: go test (event-processing, fetch-ahead on)
-        if: matrix.module == 'backend/services/event-processing'
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.module == 'backend/services/event-processing' && matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         env:
           DC_TEST_FETCH_AHEAD: "1"
         run: go test -count=1 -timeout 20m ./processor/
@@ -707,10 +788,11 @@ jobs:
       # equally consistent with the instrumentation being off.
       - name: race detector
         env:
-          MODULE: ${{ matrix.module }}
+          MODULE: ${{ matrix.entry.module }}
         run: |
           set -euo pipefail
-          hack/go-race.sh "$MODULE" 2>&1 | tee /tmp/go-race.log
+          mapfile -t args < "$RUNNER_TEMP/leg-args"
+          hack/go-race.sh "$MODULE" "${args[@]}" 2>&1 | tee /tmp/go-race.log
           # Fixed strings, not a pattern: the module path is data, and a regex
           # here would only be one metacharacter away from matching the wrong
           # module or nothing at all.
@@ -746,8 +828,8 @@ jobs:
       # evict older warm entries), not avoided. A proxy outage fails this step as a
       # refusal (exit 2), never as "tidy".
       - name: go.mod and go.sum are tidy
-        if: ${{ !cancelled() }}
-        run: hack/check-go-mod-tidy.sh --module "${{ matrix.module }}"
+        if: ${{ !cancelled() && matrix.entry.static }}
+        run: hack/check-go-mod-tidy.sh --module "${{ matrix.entry.module }}"
 
   # NOTE: a golangci-lint job is intentionally omitted for now — no golangci-lint
   # release yet supports Go 1.26 (it refuses: "the Go language version used to
@@ -1250,6 +1332,9 @@ jobs:
   integration:
     name: integration (${{ matrix.leg.name }})
     needs: discover
+    # The selected legs (all of them off a pull request). Skipped when none are selected, which
+    # ci-complete accepts only alongside a successful discover that planned zero.
+    if: needs.discover.outputs.integration != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -1277,7 +1362,7 @@ jobs:
 
       - name: integration tests against a real PostgreSQL
         env:
-          DC_IT_PLAN: ${{ needs.discover.outputs.integration }}
+          DC_IT_PLAN: ${{ needs.discover.outputs.integration_all }}
           LEG_MODULES: ${{ matrix.leg.modules }}
         run: hack/integration-tests.sh --modules "$LEG_MODULES"
 
@@ -1760,7 +1845,12 @@ jobs:
   # ---------------------------------------------------------------------------
   # Frontend: codegen drift check, typecheck, unit tests, build.
   # ---------------------------------------------------------------------------
+  # Skipped on a pull request whose diff the frontend reads none of (hack/ci-select.py
+  # FRONTEND_INPUTS: frontend/**, every GraphQL schema the codegen reads, event-processing's rule
+  # sources the console's lockstep tests import, deploy/helm, hack/), and only then.
   frontend:
+    needs: discover
+    if: needs.discover.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -3454,8 +3544,13 @@ jobs:
       - video-capture
     steps:
       # ANY result other than success fails the gate, including `skipped` and
-      # `cancelled`. No job in this workflow is conditional, so a skip here means
-      # an upstream failed or the run was cancelled — both of which must block.
+      # `cancelled` — with exactly three exceptions, each tied to discover's own
+      # answer: `go` may be skipped when discover SUCCEEDED and planned zero Go legs,
+      # `integration` when it succeeded and planned zero integration legs, and
+      # `frontend` when it succeeded and said the diff reaches nothing the frontend
+      # reads. A skip for any other reason (an upstream failed, the run was
+      # cancelled, discover failed and so produced no plan) still blocks: the
+      # exception reads the plan, never the absence of one.
       # The results arrive through the environment rather than interpolated into
       # the script, so nothing from the workflow context is ever executed as shell.
       - name: every job succeeded
@@ -3469,8 +3564,28 @@ jobs:
             exit 1
           fi
           column -t /tmp/results || cat /tmp/results
-          if grep -qv '^success' /tmp/results; then
+          # skip_ok <job> prints the reason a skipped <job> is intended, or nothing.
+          skip_ok() {
+            jq -r --arg job "$1" '
+              .discover as $d
+              | if $d.result != "success" then empty
+                elif $job == "go" and $d.outputs.go_legs == "[]" then "discover planned no Go legs"
+                elif $job == "integration" and $d.outputs.integration == "[]" then "discover planned no integration legs"
+                elif $job == "frontend" and $d.outputs.frontend == "false" then "the diff reaches nothing the frontend reads"
+                else empty end' <<<"$NEEDS"
+          }
+          bad=0
+          while IFS=$'\t' read -r result job; do
+            [ "$result" = success ] && continue
+            if [ "$result" = skipped ] && why="$(skip_ok "$job")" && [ -n "$why" ]; then
+              echo "  $job skipped on purpose: $why"
+              continue
+            fi
+            echo "::error::$job: $result"
+            bad=1
+          done < /tmp/results
+          if [ "$bad" -ne 0 ]; then
             echo "::error::one or more required jobs did not succeed (see the table above)"
             exit 1
           fi
-          echo "all $(wc -l < /tmp/results) jobs succeeded"
+          echo "all $(wc -l < /tmp/results) jobs succeeded or were skipped by the plan"
