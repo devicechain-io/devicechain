@@ -766,7 +766,7 @@ dcctl upgrade local devicechain --version v1.6.0 --dry-run
 dcctl upgrade local devicechain --version v1.6.0
 ```
 
-The [versioning and upgrade policy](./versioning-policy.md) applies. This release adds covered interfaces and removes none. The device relationship refusal and stricter authority checks are security fixes permitted by the policy. Agent actions, rule evaluation and the new backup and restore-planning commands are [Preview](./versioning-policy.md#preview-interfaces). Helm values and instance configuration are outside the covered compatibility surface; keep shard groups absent until the rollout completes.
+The [versioning and upgrade policy](./versioning-policy.md) applies. This release adds covered interfaces, removes none, and deprecates legacy npm exports, which keep working ([details](#v160-npm-deprecations)). The device relationship refusal and stricter authority checks are security fixes permitted by the policy. Agent actions, rule evaluation and the new backup and restore-planning commands are [Preview](./versioning-policy.md#preview-interfaces). Helm values and instance configuration are outside the covered compatibility surface; keep shard groups absent until the rollout completes.
 
 What is new:
 
@@ -776,17 +776,33 @@ What is new:
 - [Live detections of geofence rules need location access](#v160-detection-stream-location)
 - [Solar campaigns need installed-position access](#v160-solar-campaign-position)
 - [Automated action authorities](#v160-action-authorities)
+- [The tier's rule limit applies when a profile is published](#v160-rule-ceiling)
+- [Draft authors after definition deletes](#v160-review-deleters)
 - [Delegated administrators cannot grant or act above what they hold](#v160-no-escalation)
 - [Security: a device can no longer assign itself to a customer, area or asset](#v160-device-relationship-refused)
+- [A new relationship's event is stored](#v160-new-relationship-event)
+- [The HTTP device-uplink route limits guessing](#v160-device-uplink-guessing)
+- [Stricter checks on HTTP credentials](#v160-http-credentials)
+- [Re-pointing a stored credential requires supplying it again](#v160-credential-resupply)
+- [Signing-key rotation reaches every replica](#v160-signing-key-follow)
+- [ingress-nginx no longer accepts configuration snippets](#v160-nginx-snippets-off)
+- [Metrics and health endpoints moved to the ops port](#v160-ops-port)
+- [`dcctl destroy` refuses a path as an instance and no longer trusts a guessed cluster](#v160-destroy-instance-name)
 - [MCP memory limits](#v160-mcp-memory)
+- [MCP discovery advertises the scopes the server enforces](#v160-mcp-discovery)
 - [API validation and administration](#v160-api-checks)
 - [Command holds](#v160-command-holds)
 - [Campaign planning yields between tenants](#v160-campaign-planning)
+- [Downloads, sends and notifications are shared between tenants](#v160-tenant-fairness)
+- [Escalation timing](#v160-escalation-clock)
+- [Bounded Sparkplug tracking](#v160-sparkplug-limits)
 - [Entity attributes are unique per key](#v160-entity-attributes)
+- [Optional NATS shard groups](#v160-nats-shard-groups)
 - [Stream and object backups (Preview)](#v160-backup)
 - [Console and dashboard authoring](#v160-console-dashboards)
 - [A console tab no longer continues under another tab's sign-in](#v160-console-tab-session)
 - [Authoring tools and SDKs](#v160-authoring-tools)
+- [Legacy npm exports are deprecated](#v160-npm-deprecations)
 - [A redelivered decoder failure uses the record budget](#v160-decoder-redelivery-budget)
 - [Invalid ingest failures name the device](#v160-invalid-failures-name-the-device)
 - [Metrics and an alert for agent actions (Preview)](#v160-agent-metrics)
@@ -798,6 +814,7 @@ What is new:
 What needs action, in the order to do it:
 
 - **Upgrade note: tooling.** Install OpenTofu 1.10 or later (or Terraform 1.10 or later) on the machine running `dcctl`; preflight checks presence, not version. Use the v1.6.0 tool, install with the cluster's settings, then upgrade each instance. There is no downgrade.
+- **Upgrade note: `dcctl install` preflight.** On a cluster that kept its `ingress-nginx` controller, install refuses while any Ingress of that class carries a `*-snippet` annotation. Upgrade the owning instance or remove the annotation first ([details](#v160-nginx-snippets-off)).
 
 **Correct configuration before restarting.** Review hand-edited instance configuration; invalid service settings stop startup. Service keys below live under `functionalAreas.<area>.config`.
 
@@ -813,14 +830,16 @@ What needs action, in the order to do it:
 - **Upgrade note:** Automation authors need `command:write` for `sendCommand` and `connector:write` for `httpCall` or `publish`, in addition to `device:write`, including publish and rollback. Review delegated administrator roles: operations above their current authorities now return `ESCALATION`; use a superuser for those operations.
 - **Upgrade note:** Replace device-authored tracked or `contains` `NewRelationship` assignments with claim codes or `createEntityRelationship`. Review existing tracked relationships; the upgrade does not remove them. Old pods still accept the events during the roll.
 - **Upgrade note:** Narrow MCP queries that exceed 256 KiB responses or 1,000 time buckets and handle HTTP 429 with `Retry-After`. Keep draft `evaluateRules` graphs at or below 256 detection rules; oversized graphs are refused before compilation. Renew expired automation reviews before publishing.
+- **Upgrade note: credentials and senders.** Clients that change the type or destination of a connector, notification channel or AI provider holding a stored credential must send `secret` in the same request ([details](#v160-credential-resupply)). A rule whose `httpCall` names a `connector/` secret handle is refused at publish, and dead-lettered if it is already published ([details](#v160-http-credentials)). HTTP uplink senders must back off on `429` and `503` with `Retry-After` ([details](#v160-device-uplink-guessing)).
 
 **During and after the rollout.**
 
-- **Keep `infrastructure.nats.shardGroups` absent throughout the v1.5 → v1.6 roll.** A `v1.5` pod rejects this new key as unknown if it loads the new configuration mid-roll. Finish upgrading all pods before opting in. When present, `count` must be 2–16; suffixes must be unique and limited to `inbound-events` and `resolved-events`; `placementTags` keys must be group numbers 1 through `count - 1`, with nonblank tag strings. Invalid blocks are refused.
+- **Keep `infrastructure.nats.shardGroups` absent throughout the v1.5 → v1.6 roll.** A `v1.5` pod rejects this new key as unknown if it loads the new configuration mid-roll. Finish upgrading all pods before opting in. When present, `count` must be 2–16; suffixes must be unique and limited to `inbound-events` and `resolved-events`; `placementTags` keys must be group numbers 1 through `count - 1`, with nonblank tag strings. Invalid blocks are refused. What `dcctl` accepts is narrower: see [Optional NATS shard groups](#v160-nats-shard-groups).
 
 - **Entity attributes are unique per key.** The upgrade collapses duplicate live rows from concurrent first writes, keeping the lowest row ID, and queues group membership and configuration repairs. The index build briefly blocks attribute writes. While old and new replicas overlap, an old replica contending on a concurrent first write may refuse it; retry the write. No configuration change is needed.
 
 - **Upgrade note:** Add `AgentExecutionsFailing` to alert routing, and mirror `nats:2.15.3-alpine` if you keep the upstream-broker fallback ready. Freeze writers before using the new backup commands.
+- **Upgrade note: scrape port.** If your own Prometheus configuration scrapes pods, change the target port from 8080 to 8083; the chart's ServiceMonitors and probes follow automatically ([details](#v160-ops-port)).
 
 #### New values and commands {#v160-values-commands}
 
@@ -828,7 +847,8 @@ What needs action, in the order to do it:
 |---|---|
 | `--size perf-20k` | New throughput sizing preset: broker request 6 CPUs / 6Gi, memory limit 10Gi, JetStream 40Gi and event storage 260Gi. It does not promise the 50 ms PUBACK latency target; the preset has not yet been measured as written. |
 | GKE `nats_jetstream_storage_class` | New brokers default to `premium-rwo` (`pd-ssd`) when that GKE class exists; a GKE `premium-rwo` class with a different disk type is refused. Explicit overrides win. Existing brokers/PVCs and upgrades keep their storage class; this does not migrate disks. |
-| `infrastructure.nats.shardGroups` | Opt-in tenant routing for the two ingest streams; absent preserves existing routing. Group streams multiply reservations by `count`, so budget capacity before enabling it. Enable only after the roll completes. |
+| GKE `backup_object_store_storage_class` | New backup PVCs use a dedicated `pd-standard` class; GKE's `standard-rwo` uses `pd-balanced` and still consumes SSD quota. Override it with this variable. Existing PVCs keep their size and class on upgrades; no automatic migration occurs. Other providers are unchanged. |
+| `infrastructure.nats.shardGroups` | Opt-in tenant routing for the two ingest streams; absent preserves existing routing. Group streams multiply reservations by `count`, so budget capacity before enabling it. Enable only after the roll completes; see [Optional NATS shard groups](#v160-nats-shard-groups). |
 | `dcctl backup`, `dcctl backup inspect --verify`, `dcctl restore --plan` | **Preview** commands for local stream/object backup sets, byte verification and read-only restore planning. There is no restore apply command or coordinated database checkpoint. See [Exporting streams and object content](./disaster-recovery.md#export-streams-objects). |
 
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
@@ -855,6 +875,16 @@ Creating a `SOLAR` campaign, reading its elements (`campaignElements`) or cycles
 
 Authoring or publishing an automated action now requires the authority to perform it. Creating or updating a rule with a `sendCommand` action, and publishing or rolling back to a profile version whose enabled rules include one, requires `command:write` in addition to `device:write`. `httpCall` and `publish` actions require `connector:write`. A role that holds `device:write` alone can still author and publish rules that only raise alarms. Rules already published keep running; they are checked at the next publish or rollback. Review the roles that author automation before upgrading. Older `device-management` replicas do not enforce this until they are replaced.
 
+#### The tier's rule limit applies when a profile is published {#v160-rule-ceiling}
+
+- **Opt-in rule ceiling:** device-profile publish and rollback enforce `rulesPerTenant` only when the tenant tier explicitly sets it. Absent/null values and older user-management schemas preserve existing behavior; unchanged or reduced rule counts never read user-management. Other lookup failures fail closed only for rule increases.
+
+#### Draft authors after definition deletes {#v160-review-deleters}
+
+Change review normally excludes people who only deleted rules, metrics or commands on other profiles from draft authors. Deletes not attributed to a row, from before the upgrade or a not-yet-upgraded pod during a rolling upgrade, are handled conservatively: if a definition disappeared from the reviewed profile without an attributed delete explaining it, everyone who made an unattributed delete since that definition's last attributed change counts as an author. Reviews already run keep the author list they recorded; run a new review if an approver was excluded. Deleting a profile now writes one audit entry per definition it removes.
+
+- **Nothing needs doing.** Run a new review if an approver was excluded by an unrelated deletion.
+
 #### Delegated administrators cannot grant or act above what they hold {#v160-no-escalation}
 
 The operator admin API now limits an identity whose system role is not superuser to the authorities its current system roles grant. The tenant API also checks the current role and its members before a tenant role is narrowed.
@@ -873,9 +903,56 @@ The operator admin API now limits an identity whose system role is not superuser
 - During the rolling upgrade, pods still on v1.5 create the edge until they are replaced.
 - New counter `resolve_relationship_refused_total` counts these refusals without tenant or device labels; the warning log names the tenant and correlation.
 
+#### A new relationship's event is stored {#v160-new-relationship-event}
+
+A `NewRelationship` event a device sends is now stored and listed by `events` (event type `0`) with its anchors. Before this release it was retried, then recorded as an ingest failure with reason `API_CALL_FAILED`, although the relationship had been created. An event of a type the event store does not hold is now refused on its first delivery with reason `INVALID` instead of being retried. Events sent before the upgrade are not restored.
+
+- **Nothing needs doing.**
+
+#### The HTTP device-uplink route limits guessing {#v160-device-uplink-guessing}
+
+The opt-in HTTP device-uplink route (`httpIngest.deviceUplinks`) now limits requests per source address (`429` with `Retry-After`). After repeated credential failures for a device, it stops answering authentication guesses (`503` with `Retry-After`) instead of repeating `401`. While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time).
+
+- **Devices on the broker's MQTT connection are unaffected.**
+- **Back off on `503`**, even when presenting a wrong credential: wait at least `Retry-After` before retrying.
+
+#### Stricter checks on HTTP credentials {#v160-http-credentials}
+
+An `httpCall` action can no longer name a connector's credential. A secret handle in the `connector/` namespace is refused when a rule is published, and a published rule that uses one is dead-lettered with outcome `invalid` instead of sending the connector's credential. Older `outbound-connectors` replicas do not enforce this until they are replaced.
+
+#### Re-pointing a stored credential requires supplying it again {#v160-credential-resupply}
+
+**Re-pointing a stored credential.** `updateConnector`, `rollbackConnector`, `updateNotificationChannel` and `updateAiProvider` refuse with `SECRET_RESUPPLY_REQUIRED` when a request changes the type or the destination of a connector, notification channel or AI provider that holds a stored credential and does not send `secret` in the same request. Send the credential again, or `secret: null` to remove it. Edits that do not move the destination (name, topic, QoS, custom headers, link base URL, model, enabled) are unaffected, and existing connectors, channels and providers keep delivering. To roll a connector back to a version with a different destination, re-point it with `updateConnector` and its credential instead. With `dcctl product apply`, set the connector's credential handle when a manifest changes its destination. Older replicas do not enforce this until they are replaced.
+
+#### Signing-key rotation reaches every replica {#v160-signing-key-follow}
+
+With `auth.signingKeyMaxAgeDays` set, user-management now rotates an over-age signing key while it runs: about 15 minutes after a replica starts, and whenever the key crosses the age afterwards, not only at startup. Every replica adopts the new key within 30 seconds, and validates and serves it straight away when it sees a token or a key request that needs it. Earlier releases applied a rotation only in the replica that made it, so with more than one replica some sign-ins failed until the others restarted.
+
+- **Nothing needs doing.** Nothing changes when the setting is 0.
+
+#### ingress-nginx no longer accepts configuration snippets {#v160-nginx-snippets-off}
+
+`dcctl install` turns configuration snippets off on a cluster's retained `ingress-nginx` controller and returns its annotations risk level to the controller default. Before applying, install refuses while any Ingress of that controller's class carries a `*-snippet` annotation, naming each Ingress and annotation. Upgrade the instance that owns it with `dcctl upgrade`, or remove the annotation, then re-run `dcctl install`.
+
+No chart since `v0.25.2` sets a snippet. Fresh clusters, which run Traefik only, are unaffected. This change reaches a cluster at its next `dcctl install`.
+
+#### Metrics and health endpoints moved to the ops port {#v160-ops-port}
+
+Service metrics and health endpoints moved off the API port. `/metrics`, `/healthz` and `/readyz` are served on port 8083 (`ops`) of each area's pods and Service and are no longer reachable through `/api/<area>/...`. The chart's ServiceMonitors and probes follow automatically. If you scrape pods with your own Prometheus configuration, change the target port from 8080 to 8083. During the rollout, pods not yet replaced are not scraped.
+
+#### `dcctl destroy` refuses a path as an instance and no longer trusts a guessed cluster {#v160-destroy-instance-name}
+
+`dcctl destroy` refuses an instance argument that is not a plain name (`.`, `..`, or anything containing a path separator). Earlier releases resolved it as a directory under `~/.devicechain/instances` and removed what it resolved to.
+
+- **Local state needs evidence.** `dcctl destroy` clears local state for a missing cluster only when the instance has a record of its cluster and that cluster's recorded context no longer answers. An instance with no record goes through the normal uninstall, which fails if the cluster cannot be reached; pass `--kube-context`, or remove the instance's directory by hand if its cluster is really gone.
+
 #### MCP memory limits {#v160-mcp-memory}
 
 - **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 time buckets are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 64 per process before reading or parsing. Message admission reserves up to 4 slots per batch; valid configured batches (16 entries by default) execute tools in waves within that cap. Every entry still counts toward the caller's rate limit; excess requests receive HTTP 429 with Retry-After. Tools are cancelled and execution slots released when their HTTP request ends. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.
+
+#### MCP discovery advertises the scopes the server enforces {#v160-mcp-discovery}
+
+MCP discovery now offers `read-only` and `location`, plus `act:*` when `agentActuation.enabled` is true on MCP. Challenges let clients use this metadata instead of pinning `read-only`. Admission still requires only `read-only`; action tools retain their scope and permission checks. No configuration change is required; existing tokens remain valid. Reauthorize clients to grant newly discovered scopes, and enable actuation on the authorization server too when using proposals.
 
 #### API validation and administration {#v160-api-checks}
 
@@ -894,9 +971,44 @@ Deleted maintenance windows no longer release waiting commands unconditionally. 
 
 - **Campaign planning yields between tenants.** Each tenant plans at most 1,000,000 campaign elements and 128 cycles per pass, and starts no new cycle after a 2-second planning budget; a cycle already started always finishes, and progress is saved after each cycle so the remaining cycles resume next pass. Group and device-location lookups for planning time out after 2 seconds and are reported as a pass error without marking the campaign failed. Up to four tenants run concurrently. Large plans may fill their 36-hour window over multiple passes. These limits need no new configuration or migration and take effect as command-delivery pods roll forward.
 
+#### Downloads, sends and notifications are shared between tenants {#v160-tenant-fairness}
+
+- **OTA downloads:** OTA downloads now allow one in-flight stream per (tenant, device, assignment) on each replica. While another tenant holds a slot, a tenant at or above half of `updates.maxConcurrentDownloads` (rounded down, minimum one; eight with the default of 16) cannot start another stream. A lone tenant may use all slots. Excess requests receive the existing 503 busy response with `Retry-After: 5`; retry after that delay. No configuration change is required.
+- **Connector sends and LoRaWAN downlinks:** Outbound connector dispatches and LoRaWAN downlinks now limit each tenant to half of each replica's send pool (rounded down, minimum one), derived from `maxConcurrentSends`. Excess messages wait for broker redelivery without occupying send workers. A pool of one still serializes tenants; use at least two workers for isolation. No new configuration is needed; the limit takes effect as each pod upgrades.
+- **Notification scheduling is bounded per tenant.** Four workers serve tenants in rotating order. Each tenant stops starting releases and escalations after twice the whole-dispatch budget (80 seconds at the defaults) while another tenant is waiting for a worker; a tenant nobody is waiting behind keeps going; an alarm already started keeps its full budget, and remaining alarms stay due for the next tick. Clear announcements run within each tenant job under their own budget. Channels that exhaust their timeout attempts are skipped for the rest of that tenant job; an escalation routed only to those channels keeps its tier and is retried next tick. The first probe can still spend a tier. No configuration change is needed, and existing configuration works throughout rolling upgrades.
+
+#### Escalation timing {#v160-escalation-clock}
+
+The escalation window is now counted from when the page was sent. An alarm raised from a late-arriving reading no longer escalates on the next scheduler pass, and a device clock ahead of the platform no longer delays escalation.
+
+- **Nothing needs doing.** The upgrade adds a nullable timestamp automatically; existing open alarms retain their previous timing until their next page.
+
+#### Bounded Sparkplug tracking {#v160-sparkplug-limits}
+
+**Upgrade note:** Each Sparkplug source now tracks at most 50,000 node sessions, including at most 1,024 nodes that have not sent NBIRTH. New identities past a limit are dropped without ingestion or a rebirth request; existing nodes can still rebirth, and online sessions are never evicted. Idle placeholders expire after 10 minutes, offline sessions after 24 hours; at capacity, births reclaim the oldest offline sessions. The liveness history holds at most 50,000 identities, prunes old entries on pressure, and refuses further new entries while full (while it is full, a probe does not declare an unrecorded identity silent). Group, node and device topic levels longer than 256 characters are refused, matching the existing device-registration ceiling. Capacity refusals are counted by `devicechain_sparkplugingest_session_refused_total` with `reason` values `placeholder_cap`, `session_cap` or `seen_cap`. Capacity and queue-full warnings are each limited to one per source per 10 minutes; per-message logs move to debug. No configuration change is needed for rolling upgrades.
+
 #### Entity attributes are unique per key {#v160-entity-attributes}
 
 - **Entity attributes are unique per key.** The upgrade collapses duplicate live rows from concurrent first writes, keeping the lowest row ID, and queues group membership and configuration repairs. The index build briefly blocks attribute writes. While old and new replicas overlap, an old replica contending on a concurrent first write may refuse it; retry the write. No configuration change is needed.
+
+#### Optional NATS shard groups {#v160-nats-shard-groups}
+
+NATS shard groups remain off by default. A new instance can opt in through `--values`
+at `instance.config.infrastructure.nats.shardGroups` when it is installed. The setting
+supports 2-5 groups with R1 streams on a cluster of at least three broker servers, and
+refuses `--ha`. Placement tags use the corresponding `dc-nats` pod names; explicit tags
+must match those names. The default profiles support sharding `inbound-events`;
+`resolved-events` is refused while device-state or event-processing is deployed because
+those consumers still read only group zero. Each selected stream reserves its full byte
+ceiling in every group, and `dcctl` checks that reservation before it creates or changes
+any infrastructure, so grow the JetStream volume first if the check refuses it.
+
+`dcctl upgrade` refuses to enable shard groups on an existing instance whose broker is a
+single server, because turning a standalone JetStream server that holds data into a
+cluster is not supported. It also refuses an upgrade whose `--values` (or
+`--reset-values`) would drop a recorded `shardGroups` block, lower its `count`, or remove a stream from its
+`suffixes`, since the groups may hold data: carry the block forward in every replacement
+values file.
 
 #### Stream and object backups (Preview) {#v160-backup}
 
@@ -924,6 +1036,68 @@ A console tab whose session ended no longer continues under a session another ta
 - From `frontend`, `npm run create-widget -- acme/tank-level ../my-widget` creates a typed custom-widget package with SDK peers and refuses an existing destination. If peer versions are `0.0.0-dev`, set released versions before installing.
 - Rule and connector authoring JSON Schemas can be emitted with `go run ./cmd/rule-schema` from `backend/services/event-processing` and `go run ./cmd/connector-schema mqtt` from `backend/services/outbound-connectors`.
 - Published client and widget SDK packages now include their agent guidance.
+
+#### Legacy npm exports are deprecated {#v160-npm-deprecations}
+
+The following exports are deprecated in `v1.6.0` and keep working unchanged. Update imports or calls to the replacements below. No export is removed. Removal requires a major release after at least two minor releases of deprecation; with deprecation starting in 1.6, no removal is eligible before a major after 1.7. `BuiltinOptionIssue` names the existing built-in issue shape (`widgetType`); the general `@devicechain/dashboards.OptionIssue` (`widgetId`) remains supported.
+
+- `@devicechain/widgets` / `pickSample` is deprecated; use `@devicechain/widget-sdk.pickSample`.
+- `@devicechain/widgets` / `optBoolean` is deprecated; use `@devicechain/widget-sdk.optBoolean`.
+- `@devicechain/widgets` / `WidgetProps` is deprecated; use `@devicechain/widget-sdk.WidgetProps`.
+- `@devicechain/widgets` / `WidgetComponent` is deprecated; use `@devicechain/widget-sdk.WidgetComponent`.
+- `@devicechain/widgets` / `WidgetFrame` is deprecated; use `@devicechain/widget-sdk.WidgetFrame`.
+- `@devicechain/widgets` / `WidgetSubjectProvider` is deprecated; use `@devicechain/widget-sdk.WidgetSubjectProvider`.
+- `@devicechain/widgets` / `WidgetSelectProvider` is deprecated; use `@devicechain/widget-sdk.WidgetSelectProvider`.
+- `@devicechain/widgets` / `useWidgetSelect` is deprecated; use `@devicechain/widget-sdk.useWidgetSelect`.
+- `@devicechain/widgets` / `WidgetTimeZoneProvider` is deprecated; use `@devicechain/widget-sdk.WidgetTimeZoneProvider`.
+- `@devicechain/widgets` / `useWidgetTimeZone` is deprecated; use `@devicechain/widget-sdk.useWidgetTimeZone`.
+- `@devicechain/widgets` / `WidgetThemeRootProvider` is deprecated; use `@devicechain/widget-sdk.WidgetThemeRootProvider`.
+- `@devicechain/widgets` / `useWidgetThemeRoot` is deprecated; use `@devicechain/widget-sdk.useWidgetThemeRoot`.
+- `@devicechain/widgets` / `WidgetCandidatesProvider` is deprecated; use `@devicechain/widget-sdk.WidgetCandidatesProvider`.
+- `@devicechain/widgets` / `useWidgetCandidates` is deprecated; use `@devicechain/widget-sdk.useWidgetCandidates`.
+- `@devicechain/widgets` / `useFlashOnChange` is deprecated; use `@devicechain/widget-sdk.useFlashOnChange`.
+- `@devicechain/widgets` / `flashTextStyle` is deprecated; use `@devicechain/widget-sdk.flashTextStyle`.
+- `@devicechain/widgets` / `flashBackgroundStyle` is deprecated; use `@devicechain/widget-sdk.flashBackgroundStyle`.
+- `@devicechain/widgets` / `FlashValue` is deprecated; use `@devicechain/widget-sdk.FlashValue`.
+- `@devicechain/widgets` / `fitValueFont` is deprecated; use `@devicechain/widget-sdk.fitValueFont`.
+- `@devicechain/widgets` / `useMeasurementStream` is deprecated; use `@devicechain/widget-sdk.useMeasurementStream`.
+- `@devicechain/widgets` / `useAlarmStream` is deprecated; use `@devicechain/widget-sdk.useAlarmStream`.
+- `@devicechain/widgets` / `useCommandStream` is deprecated; use `@devicechain/widget-sdk.useCommandStream`.
+- `@devicechain/widgets` / `useLocationStream` is deprecated; use `@devicechain/widget-sdk.useLocationStream`.
+- `@devicechain/widgets` / `useDatasourceAvailability` is deprecated; use `@devicechain/widget-sdk.useDatasourceAvailability`.
+- `@devicechain/widgets` / `useDashboardHub` is deprecated; use `@devicechain/widget-sdk.useDashboardHub`.
+- `@devicechain/widgets` / `useHubConnectionState` is deprecated; use `@devicechain/widget-sdk.useHubConnectionState`.
+- `@devicechain/widgets` / `HubConnectionBadge` is deprecated; use `@devicechain/widget-sdk.HubConnectionBadge`.
+- `@devicechain/widgets` / `useResolvedBindings` is deprecated; use `@devicechain/widget-sdk.useResolvedBindings`.
+- `@devicechain/widgets` / `useViewerBindings` is deprecated; use `@devicechain/widget-sdk.useViewerBindings`.
+- `@devicechain/widgets` / `useSlotCandidates` is deprecated; use `@devicechain/widget-sdk.useSlotCandidates`.
+- `@devicechain/widgets` / `useCandidates` is deprecated; use `@devicechain/widget-sdk.useCandidates`.
+- `@devicechain/widgets` / `css` is deprecated; use `@devicechain/widget-sdk.css`.
+- `@devicechain/widgets` / `FlashDirection` is deprecated; use `@devicechain/widget-sdk.FlashDirection`.
+- `@devicechain/widgets` / `WidgetFrameProps` is deprecated; use `@devicechain/widget-sdk.WidgetFrameProps`.
+- `@devicechain/widgets` / `WidgetSelect` is deprecated; use `@devicechain/widget-sdk.WidgetSelect`.
+- `@devicechain/widgets` / `WidgetCandidates` is deprecated; use `@devicechain/widget-sdk.WidgetCandidates`.
+- `@devicechain/widgets` / `MeasurementStreamState` is deprecated; use `@devicechain/widget-sdk.MeasurementStreamState`.
+- `@devicechain/widgets` / `AlarmStreamState` is deprecated; use `@devicechain/widget-sdk.AlarmStreamState`.
+- `@devicechain/widgets` / `CommandStreamState` is deprecated; use `@devicechain/widget-sdk.CommandStreamState`.
+- `@devicechain/widgets` / `LocationStreamState` is deprecated; use `@devicechain/widget-sdk.LocationStreamState`.
+- `@devicechain/widgets` / `CandidatesState` is deprecated; use `@devicechain/widget-sdk.CandidatesState`.
+- `@devicechain/widgets` / `DatasourceAvailability` is deprecated; use `@devicechain/widget-sdk.DatasourceAvailability`.
+- `@devicechain/widgets` / `HubConnectionBadgeProps` is deprecated; use `@devicechain/widget-sdk.HubConnectionBadgeProps`.
+- `@devicechain/widgets` / `ThemeVar` is deprecated; use `@devicechain/widget-sdk.ThemeVar`.
+- `@devicechain/widgets` / `EChart` is deprecated; use `@devicechain/widget-sdk/echarts.EChart`.
+- `@devicechain/widgets` / `buildLineOption` is deprecated; use `@devicechain/widget-sdk/echarts.buildLineOption`.
+- `@devicechain/widgets` / `buildGaugeOption` is deprecated; use `@devicechain/widget-sdk/echarts.buildGaugeOption`.
+- `@devicechain/widgets` / `resolveChartTheme` is deprecated; use `@devicechain/widget-sdk/echarts.resolveChartTheme`.
+- `@devicechain/widgets` / `useChartTheme` is deprecated; use `@devicechain/widget-sdk/echarts.useChartTheme`.
+- `@devicechain/widgets` / `EChartOption` is deprecated; use `@devicechain/widget-sdk/echarts.EChartOption`.
+- `@devicechain/widgets` / `LineChartOptions` is deprecated; use `@devicechain/widget-sdk/echarts.LineChartOptions`.
+- `@devicechain/widgets` / `GaugeChartOptions` is deprecated; use `@devicechain/widget-sdk/echarts.GaugeChartOptions`.
+- `@devicechain/widgets` / `ChartTheme` is deprecated; use `@devicechain/widget-sdk/echarts.ChartTheme`.
+- `@devicechain/widgets` / `WIDGET_CHANNEL` is deprecated; use `builtinWidgetDescriptors[id].channel`.
+- `@devicechain/widgets` / `WIDGET_BINDS_DATASOURCE` is deprecated; use `builtinWidgetDescriptors[id].datasource.mode !== 'none'`.
+- `@devicechain/widgets` / `isTerminalStatus` is deprecated; use `@devicechain/dashboards.isTerminalCommandStatus`.
+- `@devicechain/widgets` / `OptionIssue` is deprecated; use `@devicechain/widgets.BuiltinOptionIssue`.
 
 #### A redelivered decoder failure uses the record budget {#v160-decoder-redelivery-budget}
 
@@ -1578,9 +1752,7 @@ internal port. See [Endpoints that never leave the cluster](../concepts/security
 
 - **The chart no longer sets an nginx configuration snippet.**
 - **The ingress controller `dcctl install` sets up is unchanged in this release** and still accepts
-  snippets, because instances not yet upgraded rely on them. A later release turns snippets off, behind a
-  `dcctl install` check that refuses while any Ingress of the controller's class still carries a
-  `*-snippet` annotation.
+  snippets, because instances not yet upgraded rely on them. [v1.6.0 turns snippets off](#v160-nginx-snippets-off), behind a `dcctl install` preflight.
 - **External token verifiers are unaffected:** they use the `jwks_uri` in the authorization-server
   metadata, `/oauth/jwks`, which stays public.
 

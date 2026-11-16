@@ -158,6 +158,8 @@ Every location field is a JSON **string**, including the numeric ones. Each must
 
 #### NewRelationship {#new-relationship-payload}
 
+When the relationship is created, its event is kept in event history as an envelope with its anchors.
+
 Creates one relationship from the sending device to another entity in the same tenant. This payload has no `entries` array, and its three keys are read by their exact names, so their case matters. A missing key is not refused when the message is decoded: it reads as an empty string, and the event then fails at resolution like the cases below.
 
 A device cannot create ownership or containment relationships: a `NewRelationship` naming a tracked type (including `assigned` and any tenant-defined type marked tracked) or the built-in `contains` is refused and recorded on `failed-events` with reason `Invalid` on its first delivery, without retries. Assign devices with a claim code or the `createEntityRelationship` mutation. Untracked types, including `member`, work as before.
@@ -205,6 +207,11 @@ Enable `mqttDeviceUplinks` only once every `event-sources` and `device-managemen
 :::
 
 **Over HTTP**, the same capability is `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink` on the `event-sources` service. The device presents its own credential in headers (`Authorization: Bearer <token>`, or `X-DeviceChain-Credential-Type`, `-Id` and `-Secret`), because a binary body has nowhere to carry one, and the route answers `401` without one. It exists only when the operator sets `httpIngest.deviceUplinks` on `event-sources`; otherwise it is `404`.
+
+| HTTP | Response |
+| --- | --- |
+| `429` | Requests from this source address exceed the allowance. `Retry-After` says when to retry. |
+| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). Devices on the broker's MQTT connection are unaffected. |
 
 ## Command delivery {#command-delivery}
 

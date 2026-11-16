@@ -62,11 +62,11 @@
   "theme": "tighter authority checks and devices connected through broker reloads",
   "breaking": false,
   "highlights": [
-    "Upgrade in place from v1.5.0 with the v1.6.0 dcctl: install with your cluster settings, then upgrade each instance. Use OpenTofu 1.10 or later, correct newly refused configuration and review roles and device relationships first; enable shard groups only after the rollout.",
+    "Upgrade in place from v1.5.0 with the v1.6.0 dcctl: install with your cluster settings, then upgrade each instance. Use OpenTofu 1.10 or later, correct newly refused configuration and review roles, stored credentials and device relationships first.",
     "Geofence detections and solar campaigns require location access, automation authors need authority for their actions, and delegated administrators cannot grant or act above their own authorities. Device events can no longer assign ownership.",
     "CA rotation and manual broker reloads keep authenticated devices connected. Configuration or image changes still restart broker pods and require devices to reconnect.",
     "Preview backup commands export streams and objects, verify local bytes, and produce a read-only restore plan. They do not coordinate database checkpoints or apply a restore.",
     "Dashboard layouts can be arranged per breakpoint, the rule editor adds Filter, Exists and Math forms, and command submissions and one-time secret dialogs handle retries and accidental clicks more reliably.",
-    "MCP responses and concurrent requests have explicit memory bounds. Campaign planning shares time between tenants; command holds remain gated through maintenance-window changes. Agent actions gain metrics and a failure alert."
+    "MCP responses and concurrent requests have explicit memory bounds. Campaign planning, OTA downloads, connector sends and notification escalations share capacity between tenants; command holds remain gated through maintenance-window changes. Agent actions gain metrics and a failure alert."
   ]
 }

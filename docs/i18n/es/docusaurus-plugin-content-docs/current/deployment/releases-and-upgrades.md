@@ -811,7 +811,7 @@ dcctl upgrade local devicechain --version v1.6.0 --dry-run
 dcctl upgrade local devicechain --version v1.6.0
 ```
 
-Se aplica la [política de versiones y actualizaciones](./versioning-policy.md). Esta versión añade interfaces cubiertas y no elimina ninguna. El rechazo de relaciones de dispositivos y las comprobaciones de autoridad más estrictas son correcciones de seguridad permitidas por la política. Las acciones de agentes, la evaluación de reglas y los nuevos comandos de copia y planificación de restauración son [Preview](./versioning-policy.md#preview-interfaces). Los valores de Helm y la configuración de instancia quedan fuera de la compatibilidad cubierta; mantén ausentes los grupos de shards hasta completar el despliegue.
+Se aplica la [política de versiones y actualizaciones](./versioning-policy.md). Esta versión añade interfaces cubiertas, no elimina ninguna y declara obsoletas exportaciones npm heredadas, que siguen funcionando ([detalles](#v160-npm-deprecations)). El rechazo de relaciones de dispositivos y las comprobaciones de autoridad más estrictas son correcciones de seguridad permitidas por la política. Las acciones de agentes, la evaluación de reglas y los nuevos comandos de copia y planificación de restauración son [Preview](./versioning-policy.md#preview-interfaces). Los valores de Helm y la configuración de instancia quedan fuera de la compatibilidad cubierta; mantén ausentes los grupos de shards hasta completar el despliegue.
 
 Novedades:
 
@@ -821,17 +821,33 @@ Novedades:
 - [Las detecciones en vivo de reglas de geocercas necesitan acceso a la ubicación](#v160-detection-stream-location)
 - [Las campañas solares necesitan acceso a la posición instalada](#v160-solar-campaign-position)
 - [Autoridades para acciones automatizadas](#v160-action-authorities)
+- [El límite de reglas del nivel se aplica al publicar un perfil](#v160-rule-ceiling)
+- [Autores del borrador tras eliminar definiciones](#v160-review-deleters)
 - [Los administradores delegados no pueden conceder permisos ni actuar por encima de los que poseen](#v160-no-escalation)
 - [Seguridad: un dispositivo ya no puede asignarse a un cliente, área o activo](#v160-device-relationship-refused)
+- [Se almacena el evento de una nueva relación](#v160-new-relationship-event)
+- [La ruta HTTP de cargas útiles de dispositivos limita los intentos de adivinar credenciales](#v160-device-uplink-guessing)
+- [Comprobaciones más estrictas de las credenciales HTTP](#v160-http-credentials)
+- [Redirigir una credencial almacenada exige volver a proporcionarla](#v160-credential-resupply)
+- [La rotación de claves de firma llega a todas las réplicas](#v160-signing-key-follow)
+- [ingress-nginx ya no acepta snippets de configuración](#v160-nginx-snippets-off)
+- [Las métricas y los endpoints de salud pasan al puerto ops](#v160-ops-port)
+- [`dcctl destroy` rechaza rutas como instancia y ya no confía en un clúster supuesto](#v160-destroy-instance-name)
 - [Límites de memoria de MCP](#v160-mcp-memory)
+- [El descubrimiento MCP anuncia los ámbitos que aplica el servidor](#v160-mcp-discovery)
 - [Validación de API y administración](#v160-api-checks)
 - [Retención de comandos](#v160-command-holds)
 - [La planificación de campañas cede el turno entre tenants](#v160-campaign-planning)
+- [Las descargas, los envíos y las notificaciones se reparten entre tenants](#v160-tenant-fairness)
+- [Plazo de escalado](#v160-escalation-clock)
+- [Seguimiento acotado de Sparkplug](#v160-sparkplug-limits)
 - [Los atributos de entidad son únicos por clave](#v160-entity-attributes)
+- [Grupos de particiones de NATS opcionales](#v160-nats-shard-groups)
 - [Copias de streams y objetos (Preview)](#v160-backup)
 - [Creación en la consola y los paneles](#v160-console-dashboards)
 - [Una pestaña de la consola ya no continúa con el inicio de sesión de otra pestaña](#v160-console-tab-session)
 - [Herramientas de creación y SDK](#v160-authoring-tools)
+- [Exportaciones npm heredadas obsoletas](#v160-npm-deprecations)
 - [Un fallo de decodificación reenviado usa el presupuesto de registros](#v160-decoder-redelivery-budget)
 - [Los fallos de ingesta inválidos identifican el dispositivo](#v160-invalid-failures-name-the-device)
 - [Métricas y una alerta para las acciones de agentes (Preview)](#v160-agent-metrics)
@@ -843,6 +859,7 @@ Novedades:
 Qué requiere acción, en el orden en que debe hacerse:
 
 - **Nota de actualización: herramientas.** Instala OpenTofu 1.10 o posterior (o Terraform 1.10 o posterior) en el equipo que ejecuta `dcctl`; la comprobación previa verifica su presencia, no la versión. Usa la herramienta v1.6.0, instala con los ajustes del clúster y después actualiza cada instancia. No hay degradación de versión.
+- **Nota de actualización: comprobación previa de `dcctl install`.** En un clúster que conserva su controlador `ingress-nginx`, la instalación se niega a continuar mientras algún Ingress de esa clase lleve una anotación `*-snippet`. Actualiza antes la instancia propietaria o elimina la anotación ([detalles](#v160-nginx-snippets-off)).
 
 **Corrige la configuración antes de reiniciar.** Revisa la configuración de instancia editada a mano; los ajustes inválidos impiden el arranque. Las claves de servicio siguientes van bajo `functionalAreas.<area>.config`.
 
@@ -858,14 +875,16 @@ Qué requiere acción, en el orden en que debe hacerse:
 - **Nota de actualización:** Los autores de automatización necesitan `command:write` para `sendCommand` y `connector:write` para `httpCall` o `publish`, además de `device:write`, incluso al publicar o revertir. Revisa los roles de administrador delegado: las operaciones que superan sus autoridades actuales devuelven `ESCALATION`; usa un superusuario para esas operaciones.
 - **Nota de actualización:** Sustituye las asignaciones `NewRelationship` con seguimiento o `contains` enviadas por dispositivos por códigos de reclamación o `createEntityRelationship`. Revisa las relaciones con seguimiento existentes; la actualización no las elimina. Los pods antiguos siguen aceptando los eventos durante el despliegue.
 - **Nota de actualización:** Reduce las consultas MCP que superen 256 KiB de respuesta o 1.000 bloques temporales y maneja HTTP 429 con `Retry-After`. Limita los grafos borrador de `evaluateRules` a 256 reglas de detección; los grafos mayores se rechazan antes de compilar. Renueva las revisiones de automatización caducadas antes de publicar.
+- **Nota de actualización: credenciales y emisores.** Los clientes que cambien el tipo o el destino de un conector, canal de notificación o proveedor de IA con una credencial almacenada deben enviar `secret` en la misma solicitud ([detalles](#v160-credential-resupply)). Una regla cuyo `httpCall` nombre un manejador de secreto `connector/` se rechaza al publicarla y, si ya está publicada, se envía a la cola de mensajes no entregados ([detalles](#v160-http-credentials)). Los emisores de cargas útiles HTTP deben esperar ante `429` y `503` con `Retry-After` ([detalles](#v160-device-uplink-guessing)).
 
 **Durante y después del despliegue.**
 
-- **Mantenga ausente `infrastructure.nats.shardGroups` durante todo el despliegue v1.5 → v1.6.** Un pod `v1.5` rechaza esta nueva clave como desconocida si carga la nueva configuración durante el despliegue. Termine de actualizar todos los pods antes de activarla. Si se incluye, `count` debe ser 2–16; los sufijos deben ser únicos y limitarse a `inbound-events` y `resolved-events`; las claves de `placementTags` deben ser números de grupo entre 1 y `count - 1`, con etiquetas no vacías ni compuestas solo por espacios. Los bloques inválidos se rechazan.
+- **Mantenga ausente `infrastructure.nats.shardGroups` durante todo el despliegue v1.5 → v1.6.** Un pod `v1.5` rechaza esta nueva clave como desconocida si carga la nueva configuración durante el despliegue. Termine de actualizar todos los pods antes de activarla. Si se incluye, `count` debe ser 2–16; los sufijos deben ser únicos y limitarse a `inbound-events` y `resolved-events`; las claves de `placementTags` deben ser números de grupo entre 1 y `count - 1`, con etiquetas no vacías ni compuestas solo por espacios. Los bloques inválidos se rechazan. Lo que acepta `dcctl` es más restringido: véase [Grupos de particiones de NATS opcionales](#v160-nats-shard-groups).
 
 - **Los atributos de entidad son únicos por clave.** La actualización elimina duplicados activos de escrituras iniciales simultáneas, conserva el menor ID y encola la reparación de pertenencias a grupos y configuración. La creación del índice bloquea brevemente las escrituras de atributos. Durante el despliegue gradual, una réplica antigua puede rechazar una escritura inicial concurrente; vuelva a intentarla. No se requiere cambiar la configuración.
 
 - **Nota de actualización:** Añade `AgentExecutionsFailing` al enrutamiento de alertas y replica `nats:2.15.3-alpine` si mantienes preparada la alternativa del broker original. Detén las escrituras antes de usar los nuevos comandos de copia.
+- **Nota de actualización: puerto de métricas.** Si tu propia configuración de Prometheus recopila métricas de los pods, cambia el puerto de destino de 8080 a 8083; los ServiceMonitors y las sondas del chart se actualizan automáticamente ([detalles](#v160-ops-port)).
 
 #### Nuevos valores y comandos {#v160-values-commands}
 
@@ -873,7 +892,8 @@ Qué requiere acción, en el orden en que debe hacerse:
 |---|---|
 | `--size perf-20k` | Nuevo preajuste de rendimiento: solicitud del broker de 6 CPU / 6Gi, límite de memoria de 10Gi, JetStream de 40Gi y almacenamiento de eventos de 260Gi. No promete el objetivo de latencia PUBACK de 50 ms; el preajuste aún no se ha medido tal como está definido. |
 | GKE `nats_jetstream_storage_class` | Los brokers nuevos usan `premium-rwo` (`pd-ssd`) cuando existe esa clase GKE; se rechaza una clase GKE `premium-rwo` con otro tipo de disco. Prevalecen los valores explícitos. Los brokers/PVC existentes y las actualizaciones conservan su clase; esto no migra discos. |
-| `infrastructure.nats.shardGroups` | Enrutamiento opcional por tenant para los dos streams de ingesta; su ausencia conserva el enrutamiento actual. Los streams de grupo multiplican las reservas por `count`: calcule la capacidad antes de activarlo. Actívelo solo tras completar el despliegue. |
+| GKE `backup_object_store_storage_class` | Los PVC nuevos de copias usan una clase dedicada `pd-standard` (no `standard-rwo`/`pd-balanced`, que consume cuota SSD). Esta variable permite elegir otra. Las actualizaciones conservan el tamaño y la clase de los PVC existentes, sin migración automática. Los demás proveedores no cambian. |
+| `infrastructure.nats.shardGroups` | Enrutamiento opcional por tenant para los dos streams de ingesta; su ausencia conserva el enrutamiento actual. Los streams de grupo multiplican las reservas por `count`: calcule la capacidad antes de activarlo. Actívelo solo tras completar el despliegue; véase [Grupos de particiones de NATS opcionales](#v160-nats-shard-groups). |
 | `dcctl backup`, `dcctl backup inspect --verify`, `dcctl restore --plan` | Comandos en **vista previa** para conjuntos locales de copias de streams/objetos, verificación de bytes y planificación de restauración de solo lectura. No hay comando que aplique la restauración ni checkpoint coordinado de bases de datos. Véase [Exportar streams y contenido de objetos](./disaster-recovery.md#export-streams-objects). |
 
 #### Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación {#v160-broker-reload}
@@ -900,6 +920,16 @@ Crear una campaña `SOLAR`, leer sus elementos (`campaignElements`) o ciclos (`c
 
 Crear o publicar una acción automatizada requiere la autoridad para ejecutarla. Crear o actualizar una regla con una acción `sendCommand`, y publicar o volver a una versión de perfil cuyas reglas habilitadas incluyan una, requiere `command:write` además de `device:write`. Las acciones `httpCall` y `publish` requieren `connector:write`. Un rol que solo tenga `device:write` puede seguir creando y publicando reglas que únicamente generen alarmas. Las reglas ya publicadas siguen ejecutándose; se comprueban en la siguiente publicación o reversión. Revise los roles que crean automatizaciones antes de actualizar. Las réplicas antiguas de `device-management` no aplican esta comprobación hasta que se sustituyan.
 
+#### El límite de reglas del nivel se aplica al publicar un perfil {#v160-rule-ceiling}
+
+- **Techo de reglas opcional:** la publicación y reversión de perfiles aplican `rulesPerTenant` solo si el nivel lo fija explícitamente. Los valores ausentes/null y esquemas antiguos de user-management conservan el comportamiento existente; mantener o reducir reglas nunca consulta user-management. Otros fallos de consulta solo rechazan aumentos de reglas.
+
+#### Autores del borrador tras eliminar definiciones {#v160-review-deleters}
+
+La revisión de cambios normalmente no considera autoras del borrador a las personas que solo eliminaron reglas, métricas o comandos en otros perfiles. Las eliminaciones no atribuidas a una fila, anteriores a la actualización o realizadas por un pod aún sin actualizar durante una actualización gradual, se tratan de forma conservadora: si desapareció una definición del perfil revisado sin una eliminación atribuida que lo explique, toda persona que haya realizado una eliminación no atribuida desde el último cambio atribuido de esa definición cuenta como autora. Las revisiones ya ejecutadas conservan la lista de autores que registraron; ejecuta una nueva revisión si se excluyó a un aprobador. Al eliminar un perfil, ahora se escribe una entrada de auditoría por cada definición que se elimina.
+
+- **No es necesario hacer nada.** Ejecuta una nueva revisión si se excluyó a un aprobador por una eliminación en otro perfil.
+
 #### Los administradores delegados no pueden conceder permisos ni actuar por encima de los que poseen {#v160-no-escalation}
 
 La API de administración del operador ahora limita una identidad cuyo rol de sistema no sea superusuario a los permisos que conceden sus roles de sistema actuales. La API del inquilino también comprueba el rol actual y sus miembros antes de reducir los permisos de un rol del inquilino.
@@ -918,9 +948,56 @@ La API de administración del operador ahora limita una identidad cuyo rol de si
 - Durante la actualización gradual, los pods que siguen en v1.5 crean la relación hasta que se sustituyen.
 - El nuevo contador `resolve_relationship_refused_total` cuenta estos rechazos sin etiquetas de tenant o dispositivo; el log de advertencia indica el tenant y la correlación.
 
+#### Se almacena el evento de una nueva relación {#v160-new-relationship-event}
+
+Un evento `NewRelationship` enviado por un dispositivo ahora se almacena y aparece en `events` (tipo de evento `0`) con sus anclajes. Antes de esta versión se reintentaba y después se registraba como un fallo de ingesta con el motivo `API_CALL_FAILED`, aunque la relación se había creado. Un evento de un tipo que el almacén de eventos no admite ahora se rechaza en su primera entrega con el motivo `INVALID`, en lugar de reintentarse. Los eventos enviados antes de la actualización no se recuperan.
+
+- **No hay que hacer nada.**
+
+#### La ruta HTTP de cargas útiles de dispositivos limita los intentos de adivinar credenciales {#v160-device-uplink-guessing}
+
+La ruta HTTP de cargas útiles de dispositivos, que se activa con `httpIngest.deviceUplinks`, ahora limita las solicitudes por dirección de origen (`429` con `Retry-After`). Tras fallos repetidos de credenciales para un dispositivo, deja de responder a los intentos de autenticación (`503` con `Retry-After`) en lugar de repetir `401`. Mientras se intenta adivinar la credencial de este dispositivo, todas sus cargas útiles HTTP, incluidas las que presentan la credencial correcta, reciben `503` con `Retry-After` hasta que termina la pausa (como máximo 60 segundos cada vez).
+
+- **Los dispositivos conectados por MQTT al broker no se ven afectados.**
+- **Espera antes de reintentar tras un `503`**, incluso si presentas una credencial incorrecta: espera al menos el tiempo indicado por `Retry-After`.
+
+#### Comprobaciones más estrictas de las credenciales HTTP {#v160-http-credentials}
+
+Una acción `httpCall` ya no puede nombrar la credencial de un conector. Un manejador de secreto del espacio de nombres `connector/` se rechaza al publicar una regla, y una regla publicada que lo use se envía a la cola de mensajes no entregados con el resultado `invalid`, en lugar de enviar la credencial del conector. Las réplicas antiguas de `outbound-connectors` no aplican esta restricción hasta que se sustituyen.
+
+#### Redirigir una credencial almacenada exige volver a proporcionarla {#v160-credential-resupply}
+
+**Cambiar el destino de una credencial almacenada.** `updateConnector`, `rollbackConnector`, `updateNotificationChannel` y `updateAiProvider` rechazan la solicitud con `SECRET_RESUPPLY_REQUIRED` si cambia el tipo o destino de un conector, canal de notificación o proveedor de IA con una credencial almacenada y no incluye `secret` en la misma solicitud. Vuelve a enviar la credencial o usa `secret: null` para eliminarla. Los cambios que no modifican el destino (nombre, tema, QoS, cabeceras personalizadas, URL base de enlaces, modelo, habilitación) no se ven afectados; los conectores, canales y proveedores existentes siguen funcionando. Para restaurar un conector a una versión con otro destino, usa `updateConnector` con su credencial. Con `dcctl product apply`, establece el identificador de credencial del conector cuando el manifiesto cambie su destino. Las réplicas antiguas no aplican esta comprobación hasta que sean reemplazadas.
+
+#### La rotación de claves de firma llega a todas las réplicas {#v160-signing-key-follow}
+
+Con `auth.signingKeyMaxAgeDays` configurado, user-management ahora rota una clave de firma demasiado antigua mientras se ejecuta: unos 15 minutos después de que arranque una réplica y cada vez que la clave supere esa edad después, no solo al arrancar. Todas las réplicas adoptan la nueva clave en un máximo de 30 segundos y la validan y publican en cuanto reciben un token o una solicitud de claves que la necesita. Las versiones anteriores aplicaban la rotación solo en la réplica que la realizaba, por lo que, con más de una réplica, algunos inicios de sesión fallaban hasta que las demás se reiniciaban.
+
+- **No hace falta hacer nada.** Nada cambia cuando el ajuste es 0.
+
+#### ingress-nginx ya no acepta snippets de configuración {#v160-nginx-snippets-off}
+
+`dcctl install` desactiva los snippets de configuración en el controlador `ingress-nginx` que el clúster conserva y restablece su nivel de riesgo de anotaciones al valor predeterminado del controlador. Antes de aplicar cambios, la instalación se niega a continuar mientras algún Ingress de la clase de ese controlador lleve una anotación `*-snippet`, e identifica cada Ingress y anotación. Actualiza la instancia propietaria con `dcctl upgrade`, o elimina la anotación, y vuelve a ejecutar `dcctl install`.
+
+Ningún chart desde `v0.25.2` establece snippets. Los clústeres nuevos, que solo ejecutan Traefik, no se ven afectados. Este cambio llega a cada clúster en su siguiente `dcctl install`.
+
+#### Las métricas y los endpoints de salud pasan al puerto ops {#v160-ops-port}
+
+Las métricas y los endpoints de salud de los servicios se han separado del puerto de la API. `/metrics`, `/healthz` y `/readyz` se sirven en el puerto 8083 (`ops`) de los pods y del Service de cada área y ya no son accesibles mediante `/api/<area>/...`. Los ServiceMonitors y las sondas del chart se actualizan automáticamente. Si recopilas métricas de los pods con tu propia configuración de Prometheus, cambia el puerto de destino de 8080 a 8083. Durante el despliegue gradual, no se recopilan métricas de los pods que aún no se han reemplazado.
+
+#### `dcctl destroy` rechaza rutas como instancia y ya no confía en un clúster supuesto {#v160-destroy-instance-name}
+
+`dcctl destroy` rechaza un argumento de instancia que no sea un nombre simple (`.`, `..` o cualquier valor que contenga un separador de ruta). Las versiones anteriores lo resolvían como un directorio bajo `~/.devicechain/instances` y eliminaban el destino resultante.
+
+- **El estado local requiere pruebas.** `dcctl destroy` solo borra el estado local de un clúster ausente cuando la instancia tiene un registro de su clúster y el contexto registrado de ese clúster ya no responde. Una instancia sin registro pasa por la desinstalación normal, que falla si no se puede acceder al clúster; indique `--kube-context` o elimine manualmente el directorio de la instancia si su clúster realmente ha desaparecido.
+
 #### Límites de memoria de MCP {#v160-mcp-memory}
 
 - **Límites de memoria de MCP:** se rechazan por completo las respuestas GraphQL de más de 256 KiB y las agregaciones de más de 1.000 bloques temporales; reduce el intervalo de fechas, selecciona una métrica o amplía los bloques temporales. Los POST y las solicitudes con cuerpo se limitan a 4 en curso por usuario y 64 por proceso antes de leer o analizar el cuerpo. La admisión de mensajes reserva hasta 4 plazas por lote; los lotes válidos según la configuración (16 entradas por defecto) ejecutan las herramientas por grupos dentro de ese límite. Cada entrada sigue contando para el límite de frecuencia del usuario; las solicitudes adicionales reciben HTTP 429 con Retry-After. Al terminar la solicitud HTTP, se cancelan las herramientas y se liberan sus plazas de ejecución. La reserva de lectura del cuerpo se libera antes de ejecutar la herramienta; se mantiene el límite de 1 MiB por solicitud. No requiere cambios de configuración.
+
+#### El descubrimiento MCP anuncia los ámbitos que aplica el servidor {#v160-mcp-discovery}
+
+El descubrimiento MCP ahora ofrece `read-only` y `location`, además de `act:*` cuando `agentActuation.enabled` está activado en MCP. Los desafíos permiten usar estos metadatos en vez de fijar `read-only`. El acceso sigue requiriendo solo `read-only`; las herramientas de acción conservan sus controles de ámbitos y permisos. No hay que cambiar la configuración; los tokens existentes siguen siendo válidos. Vuelva a autorizar los clientes para conceder los ámbitos descubiertos y active también la actuación en el servidor de autorización para usar propuestas.
 
 #### Validación de API y administración {#v160-api-checks}
 
@@ -939,9 +1016,46 @@ Eliminar una ventana de mantenimiento ya no libera incondicionalmente los comand
 
 - **La planificación de campañas cede el turno entre inquilinos.** Cada inquilino planifica como máximo 1.000.000 de elementos de campaña y 128 ciclos por pasada, y no inicia ningún ciclo nuevo una vez agotado un presupuesto de planificación de 2 segundos; un ciclo ya iniciado siempre termina, y el progreso se guarda tras cada ciclo para que los restantes continúen en la siguiente pasada. Las consultas de grupo y de ubicación de dispositivos agotan su tiempo a los 2 segundos y se informan como error de la pasada sin marcar la campaña como fallida. Se ejecutan hasta cuatro inquilinos simultáneamente. Los planes grandes pueden completar su ventana de 36 horas en varias pasadas. Estos límites no requieren configuración nueva ni migración y se aplican al actualizar los pods de command-delivery.
 
+#### Las descargas, los envíos y las notificaciones se reparten entre tenants {#v160-tenant-fairness}
+
+- **Descargas OTA:** Las descargas OTA permiten un flujo simultáneo por (inquilino, dispositivo, asignación) en cada réplica. Mientras otro inquilino ocupe un cupo, un inquilino que alcance o supere la mitad de `updates.maxConcurrentDownloads` (redondeada hacia abajo, mínimo uno; ocho con el valor predeterminado de 16) no puede iniciar otro flujo. Un único inquilino puede usar todos los cupos. Las solicitudes que excedan estos límites reciben la respuesta 503 de ocupado con `Retry-After: 5`; reintente tras ese plazo. No se requiere cambiar la configuración.
+- **Envíos de conectores y downlinks LoRaWAN:** Los envíos de conectores salientes y los downlinks LoRaWAN limitan ahora cada tenant a la mitad del grupo de envíos de cada réplica (redondeada hacia abajo, mínimo uno), según `maxConcurrentSends`. Los mensajes que superan el límite esperan la reentrega del broker sin ocupar trabajadores de envío. Un grupo de uno sigue serializando los tenants; use al menos dos trabajadores para aislarlos. No requiere nueva configuración; el límite se aplica al actualizar cada pod.
+- **La planificación de notificaciones está limitada por inquilino.** Cuatro trabajadores atienden a los inquilinos en orden rotativo. Cada inquilino deja de iniciar liberaciones y escalaciones tras el doble del presupuesto total de envío (80 segundos con los valores predeterminados) mientras otro inquilino espera un trabajador; si nadie espera, el inquilino continúa; una alarma ya iniciada conserva su presupuesto completo y las restantes quedan pendientes para el siguiente ciclo. Los avisos de resolución se procesan dentro de cada trabajo con su propio presupuesto. Los canales que agotan sus intentos por tiempo de espera se omiten durante el resto del trabajo; una escalación dirigida solo a esos canales conserva su nivel y se reintenta en el siguiente ciclo. La primera prueba aún puede consumir un nivel. No se requiere cambiar la configuración y la existente funciona durante las actualizaciones graduales.
+
+#### Plazo de escalado {#v160-escalation-clock}
+
+El plazo de escalado ahora se cuenta desde el envío de la notificación. Una alarma generada por una lectura que llega con retraso ya no escala en la siguiente pasada del planificador, y un reloj de dispositivo adelantado respecto a la plataforma ya no retrasa el escalado.
+
+- **No hay que hacer nada.** La actualización añade automáticamente una marca de tiempo que admite valores nulos; las alarmas abiertas existentes conservan el cálculo anterior hasta su siguiente notificación.
+
+#### Seguimiento acotado de Sparkplug {#v160-sparkplug-limits}
+
+**Nota de actualización:** Cada fuente Sparkplug conserva como máximo 50.000 sesiones de nodo, incluidas 1.024 sin NBIRTH. Las identidades nuevas que superen un límite se descartan sin ingesta ni solicitud de renacimiento; los nodos existentes pueden renacer y las sesiones en línea nunca se expulsan. Los marcadores inactivos caducan a los 10 minutos y las sesiones sin conexión a las 24 horas; al alcanzar el límite, los nacimientos recuperan las sesiones sin conexión más antiguas. El historial de actividad admite 50.000 identidades: bajo presión elimina entradas antiguas y rechaza nuevas entradas si sigue lleno (mientras está lleno, una sonda no declara silenciosa una identidad no registrada). Se rechazan los niveles de grupo, nodo y dispositivo con más de 256 caracteres, de acuerdo con el límite del registro de dispositivos. Las negativas se cuentan en `devicechain_sparkplugingest_session_refused_total`, con `reason` igual a `placeholder_cap`, `session_cap` o `seen_cap`. Los avisos de capacidad y de cola llena se limitan, cada tipo, a uno por fuente cada 10 minutos; los registros por mensaje pasan a debug. No hace falta cambiar la configuración para una actualización gradual.
+
 #### Los atributos de entidad son únicos por clave {#v160-entity-attributes}
 
 - **Los atributos de entidad son únicos por clave.** La actualización elimina duplicados activos de escrituras iniciales simultáneas, conserva el menor ID y encola la reparación de pertenencias a grupos y configuración. La creación del índice bloquea brevemente las escrituras de atributos. Durante el despliegue gradual, una réplica antigua puede rechazar una escritura inicial concurrente; vuelva a intentarla. No se requiere cambiar la configuración.
+
+#### Grupos de particiones de NATS opcionales {#v160-nats-shard-groups}
+
+Los grupos de particiones de NATS siguen desactivados por defecto. Una instancia nueva
+puede activarlos mediante `--values` en `instance.config.infrastructure.nats.shardGroups`
+al instalarse. La opción admite entre 2 y 5 grupos con flujos R1 en un clúster de al
+menos tres servidores del broker, y rechaza `--ha`. Las etiquetas de colocación usan los
+nombres de los pods `dc-nats`; las etiquetas explícitas deben coincidir con esos nombres.
+Los perfiles predeterminados permiten particionar `inbound-events`; se rechaza
+`resolved-events` si se despliega device-state o event-processing, porque esos
+consumidores solo leen el grupo cero. Cada flujo seleccionado reserva su límite completo
+de bytes en cada grupo, y `dcctl` comprueba esa reserva antes de crear o modificar
+cualquier infraestructura, así que amplíe primero el volumen de JetStream si la
+comprobación lo rechaza.
+
+`dcctl upgrade` rechaza activar los grupos de particiones en una instancia existente cuyo
+broker es un único servidor, porque no se admite convertir en clúster un servidor
+JetStream independiente que contiene datos. También rechaza una actualización cuyo
+`--values` (o `--reset-values`) eliminaría un bloque `shardGroups` registrado, reduciría su
+`count` o quitaría un flujo de sus `suffixes`, ya que los grupos pueden contener datos:
+mantenga el bloque en cada archivo de valores de reemplazo.
 
 #### Copias de streams y objetos (Preview) {#v160-backup}
 
@@ -969,6 +1083,68 @@ Una pestaña de la consola cuya sesión ha terminado ya no continúa con una ses
 - Desde `frontend`, `npm run create-widget -- acme/tank-level ../my-widget` crea un paquete de widget tipado con SDK como dependencias pares y rechaza un destino existente. Si las versiones pares son `0.0.0-dev`, establece versiones publicadas antes de instalar.
 - Puedes generar esquemas JSON de reglas y conectores con `go run ./cmd/rule-schema` desde `backend/services/event-processing` y `go run ./cmd/connector-schema mqtt` desde `backend/services/outbound-connectors`.
 - Los paquetes publicados de SDK de cliente y widgets incluyen ahora su guía para agentes.
+
+#### Exportaciones npm heredadas obsoletas {#v160-npm-deprecations}
+
+Las siguientes exportaciones quedan obsoletas en `v1.6.0` y siguen funcionando sin cambios. Actualice las importaciones o llamadas con los reemplazos indicados. No se elimina ninguna exportación. La eliminación requiere una versión mayor tras al menos dos versiones menores de obsolescencia; si empieza en 1.6, no podrá eliminarse nada antes de una versión mayor posterior a 1.7. `BuiltinOptionIssue` nombra la forma existente del problema de un widget integrado (`widgetType`); el tipo general `@devicechain/dashboards.OptionIssue` (`widgetId`) sigue siendo compatible.
+
+- `@devicechain/widgets` / `pickSample` queda obsoleta; use `@devicechain/widget-sdk.pickSample`.
+- `@devicechain/widgets` / `optBoolean` queda obsoleta; use `@devicechain/widget-sdk.optBoolean`.
+- `@devicechain/widgets` / `WidgetProps` queda obsoleta; use `@devicechain/widget-sdk.WidgetProps`.
+- `@devicechain/widgets` / `WidgetComponent` queda obsoleta; use `@devicechain/widget-sdk.WidgetComponent`.
+- `@devicechain/widgets` / `WidgetFrame` queda obsoleta; use `@devicechain/widget-sdk.WidgetFrame`.
+- `@devicechain/widgets` / `WidgetSubjectProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetSubjectProvider`.
+- `@devicechain/widgets` / `WidgetSelectProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetSelectProvider`.
+- `@devicechain/widgets` / `useWidgetSelect` queda obsoleta; use `@devicechain/widget-sdk.useWidgetSelect`.
+- `@devicechain/widgets` / `WidgetTimeZoneProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetTimeZoneProvider`.
+- `@devicechain/widgets` / `useWidgetTimeZone` queda obsoleta; use `@devicechain/widget-sdk.useWidgetTimeZone`.
+- `@devicechain/widgets` / `WidgetThemeRootProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetThemeRootProvider`.
+- `@devicechain/widgets` / `useWidgetThemeRoot` queda obsoleta; use `@devicechain/widget-sdk.useWidgetThemeRoot`.
+- `@devicechain/widgets` / `WidgetCandidatesProvider` queda obsoleta; use `@devicechain/widget-sdk.WidgetCandidatesProvider`.
+- `@devicechain/widgets` / `useWidgetCandidates` queda obsoleta; use `@devicechain/widget-sdk.useWidgetCandidates`.
+- `@devicechain/widgets` / `useFlashOnChange` queda obsoleta; use `@devicechain/widget-sdk.useFlashOnChange`.
+- `@devicechain/widgets` / `flashTextStyle` queda obsoleta; use `@devicechain/widget-sdk.flashTextStyle`.
+- `@devicechain/widgets` / `flashBackgroundStyle` queda obsoleta; use `@devicechain/widget-sdk.flashBackgroundStyle`.
+- `@devicechain/widgets` / `FlashValue` queda obsoleta; use `@devicechain/widget-sdk.FlashValue`.
+- `@devicechain/widgets` / `fitValueFont` queda obsoleta; use `@devicechain/widget-sdk.fitValueFont`.
+- `@devicechain/widgets` / `useMeasurementStream` queda obsoleta; use `@devicechain/widget-sdk.useMeasurementStream`.
+- `@devicechain/widgets` / `useAlarmStream` queda obsoleta; use `@devicechain/widget-sdk.useAlarmStream`.
+- `@devicechain/widgets` / `useCommandStream` queda obsoleta; use `@devicechain/widget-sdk.useCommandStream`.
+- `@devicechain/widgets` / `useLocationStream` queda obsoleta; use `@devicechain/widget-sdk.useLocationStream`.
+- `@devicechain/widgets` / `useDatasourceAvailability` queda obsoleta; use `@devicechain/widget-sdk.useDatasourceAvailability`.
+- `@devicechain/widgets` / `useDashboardHub` queda obsoleta; use `@devicechain/widget-sdk.useDashboardHub`.
+- `@devicechain/widgets` / `useHubConnectionState` queda obsoleta; use `@devicechain/widget-sdk.useHubConnectionState`.
+- `@devicechain/widgets` / `HubConnectionBadge` queda obsoleta; use `@devicechain/widget-sdk.HubConnectionBadge`.
+- `@devicechain/widgets` / `useResolvedBindings` queda obsoleta; use `@devicechain/widget-sdk.useResolvedBindings`.
+- `@devicechain/widgets` / `useViewerBindings` queda obsoleta; use `@devicechain/widget-sdk.useViewerBindings`.
+- `@devicechain/widgets` / `useSlotCandidates` queda obsoleta; use `@devicechain/widget-sdk.useSlotCandidates`.
+- `@devicechain/widgets` / `useCandidates` queda obsoleta; use `@devicechain/widget-sdk.useCandidates`.
+- `@devicechain/widgets` / `css` queda obsoleta; use `@devicechain/widget-sdk.css`.
+- `@devicechain/widgets` / `FlashDirection` queda obsoleta; use `@devicechain/widget-sdk.FlashDirection`.
+- `@devicechain/widgets` / `WidgetFrameProps` queda obsoleta; use `@devicechain/widget-sdk.WidgetFrameProps`.
+- `@devicechain/widgets` / `WidgetSelect` queda obsoleta; use `@devicechain/widget-sdk.WidgetSelect`.
+- `@devicechain/widgets` / `WidgetCandidates` queda obsoleta; use `@devicechain/widget-sdk.WidgetCandidates`.
+- `@devicechain/widgets` / `MeasurementStreamState` queda obsoleta; use `@devicechain/widget-sdk.MeasurementStreamState`.
+- `@devicechain/widgets` / `AlarmStreamState` queda obsoleta; use `@devicechain/widget-sdk.AlarmStreamState`.
+- `@devicechain/widgets` / `CommandStreamState` queda obsoleta; use `@devicechain/widget-sdk.CommandStreamState`.
+- `@devicechain/widgets` / `LocationStreamState` queda obsoleta; use `@devicechain/widget-sdk.LocationStreamState`.
+- `@devicechain/widgets` / `CandidatesState` queda obsoleta; use `@devicechain/widget-sdk.CandidatesState`.
+- `@devicechain/widgets` / `DatasourceAvailability` queda obsoleta; use `@devicechain/widget-sdk.DatasourceAvailability`.
+- `@devicechain/widgets` / `HubConnectionBadgeProps` queda obsoleta; use `@devicechain/widget-sdk.HubConnectionBadgeProps`.
+- `@devicechain/widgets` / `ThemeVar` queda obsoleta; use `@devicechain/widget-sdk.ThemeVar`.
+- `@devicechain/widgets` / `EChart` queda obsoleta; use `@devicechain/widget-sdk/echarts.EChart`.
+- `@devicechain/widgets` / `buildLineOption` queda obsoleta; use `@devicechain/widget-sdk/echarts.buildLineOption`.
+- `@devicechain/widgets` / `buildGaugeOption` queda obsoleta; use `@devicechain/widget-sdk/echarts.buildGaugeOption`.
+- `@devicechain/widgets` / `resolveChartTheme` queda obsoleta; use `@devicechain/widget-sdk/echarts.resolveChartTheme`.
+- `@devicechain/widgets` / `useChartTheme` queda obsoleta; use `@devicechain/widget-sdk/echarts.useChartTheme`.
+- `@devicechain/widgets` / `EChartOption` queda obsoleta; use `@devicechain/widget-sdk/echarts.EChartOption`.
+- `@devicechain/widgets` / `LineChartOptions` queda obsoleta; use `@devicechain/widget-sdk/echarts.LineChartOptions`.
+- `@devicechain/widgets` / `GaugeChartOptions` queda obsoleta; use `@devicechain/widget-sdk/echarts.GaugeChartOptions`.
+- `@devicechain/widgets` / `ChartTheme` queda obsoleta; use `@devicechain/widget-sdk/echarts.ChartTheme`.
+- `@devicechain/widgets` / `WIDGET_CHANNEL` queda obsoleta; use `builtinWidgetDescriptors[id].channel`.
+- `@devicechain/widgets` / `WIDGET_BINDS_DATASOURCE` queda obsoleta; use `builtinWidgetDescriptors[id].datasource.mode !== 'none'`.
+- `@devicechain/widgets` / `isTerminalStatus` queda obsoleta; use `@devicechain/dashboards.isTerminalCommandStatus`.
+- `@devicechain/widgets` / `OptionIssue` queda obsoleta; use `@devicechain/widgets.BuiltinOptionIssue`.
 
 #### Un fallo de decodificación reenviado usa el presupuesto de registros {#v160-decoder-redelivery-budget}
 
@@ -1619,9 +1795,7 @@ conjunto de claves y emite su token en el puerto interno. Consulta
 
 - **El chart ya no fija ningún snippet de configuración de nginx.**
 - **El controlador de ingress que instala `dcctl install` no cambia en esta versión** y sigue aceptando
-  snippets, porque las instancias aún no actualizadas dependen de ellos. Una versión posterior los
-  desactiva, tras una comprobación de `dcctl install` que se niega a continuar mientras algún Ingress de la
-  clase del controlador siga llevando una anotación `*-snippet`.
+  snippets, porque las instancias aún no actualizadas dependen de ellos. [v1.6.0 los desactiva](#v160-nginx-snippets-off), tras una comprobación previa de `dcctl install`.
 - **Los verificadores de tokens externos no se ven afectados:** usan el `jwks_uri` de los metadatos del
   servidor de autorización, `/oauth/jwks`, que sigue siendo público.
 

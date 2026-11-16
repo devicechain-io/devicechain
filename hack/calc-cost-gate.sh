@@ -463,7 +463,7 @@ dm_counter() {
   pods="$(k -n "$NS" get pods -l devicechain.io/functional-area=device-management -o jsonpath='{.items[*].metadata.name}')"
   [[ -n "$pods" ]] || die "no device-management pods in $NS"
   for p in $pods; do
-    v="$(k -n "$NS" get --raw "/api/v1/namespaces/$NS/pods/$p:8080/proxy/metrics" \
+    v="$(k -n "$NS" get --raw "/api/v1/namespaces/$NS/pods/$p:8083/proxy/metrics" \
         | awk -v n="$1" '$1 !~ /^#/ && $1 ~ ("(^|_)" n "(\\{|$)") {s += $2} END {printf "%.0f", s}')" \
         || die "could not read /metrics of $p"
     total=$((total + v))

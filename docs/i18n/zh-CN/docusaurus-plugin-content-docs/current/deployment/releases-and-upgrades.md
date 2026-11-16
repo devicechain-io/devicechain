@@ -522,7 +522,7 @@ dcctl upgrade local devicechain --version v1.6.0 --dry-run
 dcctl upgrade local devicechain --version v1.6.0
 ```
 
-适用[版本与升级策略](./versioning-policy.md)。本版本新增受保障的接口，不移除任何接口。拒绝设备创建特定关系及更严格的权限检查属于策略允许的安全修复。代理操作、规则求值以及新增的备份和恢复规划命令属于 [Preview](./versioning-policy.md#preview-interfaces)。Helm 值和实例配置不在兼容性保障范围内；滚动升级完成前应保持分片组配置缺省。
+适用[版本与升级策略](./versioning-policy.md)。本版本新增受保障的接口，不移除任何接口，并弃用旧版 npm 导出，这些导出仍可正常使用（[详情](#v160-npm-deprecations)）。拒绝设备创建特定关系及更严格的权限检查属于策略允许的安全修复。代理操作、规则求值以及新增的备份和恢复规划命令属于 [Preview](./versioning-policy.md#preview-interfaces)。Helm 值和实例配置不在兼容性保障范围内；滚动升级完成前应保持分片组配置缺省。
 
 新增内容：
 
@@ -532,17 +532,33 @@ dcctl upgrade local devicechain --version v1.6.0
 - [地理围栏规则的实时检测需要位置访问权限](#v160-detection-stream-location)
 - [太阳活动需要安装位置访问权限](#v160-solar-campaign-position)
 - [自动化动作的权限](#v160-action-authorities)
+- [发布配置文件时应用层级的规则上限](#v160-rule-ceiling)
+- [删除定义后的草稿作者](#v160-review-deleters)
 - [委派管理员不能授予或操作超出自身权限的内容](#v160-no-escalation)
 - [安全：设备不能再将自身分配给客户、区域或资产](#v160-device-relationship-refused)
+- [存储新建关系的事件](#v160-new-relationship-event)
+- [HTTP 设备上行路由限制凭据猜测](#v160-device-uplink-guessing)
+- [对 HTTP 凭据的更严格检查](#v160-http-credentials)
+- [更改已存储凭据的目标时必须重新提供凭据](#v160-credential-resupply)
+- [签名密钥轮换同步到所有副本](#v160-signing-key-follow)
+- [ingress-nginx 不再接受配置片段](#v160-nginx-snippets-off)
+- [指标和健康检查端点移至 ops 端口](#v160-ops-port)
+- [`dcctl destroy` 拒绝将路径作为实例名称，并且不再信任猜测的集群](#v160-destroy-instance-name)
 - [MCP 内存限制](#v160-mcp-memory)
+- [MCP 发现会公布服务器执行的范围](#v160-mcp-discovery)
 - [API 验证与管理](#v160-api-checks)
 - [命令保留](#v160-command-holds)
 - [活动规划在租户之间让出执行机会](#v160-campaign-planning)
+- [下载、发送和通知在租户之间公平分配](#v160-tenant-fairness)
+- [升级通知计时](#v160-escalation-clock)
+- [Sparkplug 跟踪容量上限](#v160-sparkplug-limits)
 - [实体属性的键保持唯一](#v160-entity-attributes)
+- [可选的 NATS 分片组](#v160-nats-shard-groups)
 - [流和对象备份（Preview）](#v160-backup)
 - [控制台和仪表盘编辑](#v160-console-dashboards)
 - [控制台标签页不再沿用其他标签页的登录会话](#v160-console-tab-session)
 - [编写工具与 SDK](#v160-authoring-tools)
+- [旧版 npm 导出已弃用](#v160-npm-deprecations)
 - [重新投递的解码失败使用记录预算](#v160-decoder-redelivery-budget)
 - [无效的摄取失败记录会标明设备](#v160-invalid-failures-name-the-device)
 - [代理操作的指标和告警（Preview）](#v160-agent-metrics)
@@ -554,6 +570,7 @@ dcctl upgrade local devicechain --version v1.6.0
 需要采取的操作，按执行顺序排列：
 
 - **升级说明：工具。** 在运行 `dcctl` 的机器上安装 OpenTofu 1.10 或更新版本（也可使用 Terraform 1.10 或更新版本）；预检只检查是否存在，不检查版本。使用 v1.6.0 工具按集群设置执行安装，再升级每个实例。不支持降级。
+- **升级说明：`dcctl install` 预检。** 在保留 `ingress-nginx` 控制器的集群上，只要该类的任何 Ingress 带有 `*-snippet` 注解，安装就会拒绝继续。请先升级所属实例或移除该注解（[详情](#v160-nginx-snippets-off)）。
 
 **重启前修正配置。** 检查手工编辑的实例配置；无效的服务设置会阻止启动。以下服务键位于 `functionalAreas.<area>.config` 下。
 
@@ -569,14 +586,16 @@ dcctl upgrade local devicechain --version v1.6.0
 - **升级说明：** 自动化编写者除 `device:write` 外，使用 `sendCommand` 还需 `command:write`，使用 `httpCall` 或 `publish` 还需 `connector:write`，发布和回滚时也会检查。检查委派管理员角色：超出其当前权限的操作现在返回 `ESCALATION`；请使用超级用户执行这些操作。
 - **升级说明：** 将设备发送的带跟踪类型或 `contains` 的 `NewRelationship` 分配改为认领码或 `createEntityRelationship`。检查现有跟踪关系；升级不会移除这些关系。滚动期间旧 Pod 仍会接受这些事件。
 - **升级说明：** 缩小响应超过 256 KiB 或聚合超过 1,000 个时间桶的 MCP 查询，并处理带 `Retry-After` 的 HTTP 429。将 `evaluateRules` 草稿图限制在 256 条检测规则以内；超限图会在编译前被拒绝。发布前重新运行已过期的自动化审查。
+- **升级说明：凭据与发送方。** 更改持有已存储凭据的连接器、通知渠道或 AI 提供方的类型或目标时，客户端必须在同一请求中发送 `secret`（[详情](#v160-credential-resupply)）。`httpCall` 指定 `connector/` 密钥句柄的规则在发布时会被拒绝，已发布的此类规则会进入死信队列（[详情](#v160-http-credentials)）。HTTP 上行发送方收到带 `Retry-After` 的 `429` 或 `503` 时必须退避（[详情](#v160-device-uplink-guessing)）。
 
 **滚动期间与完成后。**
 
-- **在整个 v1.5 → v1.6 滚动更新期间保持 `infrastructure.nats.shardGroups` 缺省。** 如果 `v1.5` Pod 在滚动更新中加载新配置，会将这个新键作为未知字段拒绝。所有 Pod 升级完成后再启用。配置该块时，`count` 必须为 2–16；后缀必须唯一且仅限 `inbound-events` 和 `resolved-events`；`placementTags` 的键必须为 1 到 `count - 1` 的组编号，标签字符串不得为空或仅含空白。无效配置块会被拒绝。
+- **在整个 v1.5 → v1.6 滚动更新期间保持 `infrastructure.nats.shardGroups` 缺省。** 如果 `v1.5` Pod 在滚动更新中加载新配置，会将这个新键作为未知字段拒绝。所有 Pod 升级完成后再启用。配置该块时，`count` 必须为 2–16；后缀必须唯一且仅限 `inbound-events` 和 `resolved-events`；`placementTags` 的键必须为 1 到 `count - 1` 的组编号，标签字符串不得为空或仅含空白。无效配置块会被拒绝。`dcctl` 接受的范围更窄：参见[可选的 NATS 分片组](#v160-nats-shard-groups)。
 
 - **每个实体和作用域中的属性键只保留一个值。** 升级会合并并发首次写入产生的重复活动行，保留 ID 最小的行，并排队修复组成员关系和配置。创建索引期间会短暂阻塞属性写入。在新旧副本共存期间，旧副本可能拒绝发生竞争的首次写入；请重试。无需更改配置。
 
 - **升级说明：** 将 `AgentExecutionsFailing` 加入告警路由；若保留上游代理备用方案，请同步 `nats:2.15.3-alpine`。使用新增备份命令前暂停写入。
+- **升级说明：抓取端口。** 如果使用自己的 Prometheus 配置抓取 Pod 指标，请将目标端口从 8080 改为 8083；chart 的 ServiceMonitor 和探针会自动更新（[详情](#v160-ops-port)）。
 
 #### 新增值和命令 {#v160-values-commands}
 
@@ -584,7 +603,8 @@ dcctl upgrade local devicechain --version v1.6.0
 |---|---|
 | `--size perf-20k` | 新增吞吐量规格预设：broker 请求 6 CPU / 6Gi，内存上限 10Gi，JetStream 40Gi，事件存储 260Gi。不承诺 50 ms 的 PUBACK 延迟目标；尚未按该预设的完整配置进行实测。 |
 | GKE `nats_jetstream_storage_class` | 存在相应 GKE 类时，新 broker 默认使用 `premium-rwo`（`pd-ssd`）；若 GKE `premium-rwo` 类使用其他磁盘类型则拒绝。显式覆盖优先。已有 broker/PVC 和升级保持原存储类；此操作不会迁移磁盘。 |
-| `infrastructure.nats.shardGroups` | 为两个摄取流按租户路由，需主动启用；缺省时保持原路由。分组流会将预留容量乘以 `count`，启用前需规划容量。仅在滚动更新完成后启用。 |
+| GKE `backup_object_store_storage_class` | 新建的备份 PVC 默认使用专用 `pd-standard` 存储类，而非消耗 SSD 配额的 `standard-rwo`/`pd-balanced`。可用此变量覆盖。升级保留已有 PVC 的容量和存储类，不会自动迁移磁盘。其他提供商保持不变。 |
+| `infrastructure.nats.shardGroups` | 为两个摄取流按租户路由，需主动启用；缺省时保持原路由。分组流会将预留容量乘以 `count`，启用前需规划容量。仅在滚动更新完成后启用；参见[可选的 NATS 分片组](#v160-nats-shard-groups)。 |
 | `dcctl backup`、`dcctl backup inspect --verify`、`dcctl restore --plan` | **预览**命令，用于本地流/对象备份集、字节验证和只读恢复规划。目前没有执行恢复的命令，也不协调数据库检查点。参见[导出流和对象内容](./disaster-recovery.md#export-streams-objects)。 |
 
 #### 完整重载代理会保持认证调用已放行的设备连接 {#v160-broker-reload}
@@ -611,6 +631,16 @@ dcctl upgrade local devicechain --version v1.6.0
 
 编写或发布自动化动作需要具备执行该动作的权限。创建或更新包含 `sendCommand` 动作的规则，以及发布或回滚到启用规则中包含该动作的配置文件版本，除了 `device:write` 之外，还需要 `command:write`。`httpCall` 和 `publish` 动作需要 `connector:write`。仅具备 `device:write` 的角色仍可编写和发布只触发告警的规则。 已发布的规则继续运行；系统将在下次发布或回滚时进行检查。升级前，请检查负责编写自动化规则的角色。旧版 `device-management` 副本在被替换之前不会执行此检查。
 
+#### 发布配置文件时应用层级的规则上限 {#v160-rule-ceiling}
+
+- **可选规则上限：** 设备配置发布和回滚仅在租户层级显式设置 `rulesPerTenant` 时执行上限。缺失/null 值及旧版 user-management 架构保留现有行为；保持或减少规则数量不会读取 user-management。其他查询错误仅拒绝增加规则的更改。
+
+#### 删除定义后的草稿作者 {#v160-review-deleters}
+
+变更审查通常不会将仅删除了其他配置文件上的规则、指标或命令的人员视为草稿作者。对于未归属到具体行的删除操作（升级前执行的操作，或滚动升级期间由尚未升级的 pod 执行的操作），系统仍采取保守处理：如果审查中的配置文件缺少某个定义，且没有已归属的删除操作能够解释，则自该定义最后一次已归属的变更以来，所有执行过未归属删除操作的人员都算作作者。已运行的审查保留当时记录的作者列表；如果某位批准人被排除，请重新运行审查。删除配置文件时，现在会为其删除的每个定义写入一条审计记录。
+
+- **无需操作。** 如果某位批准人因其他配置文件上的删除操作而被排除，请重新运行审查。
+
 #### 委派管理员不能授予或操作超出自身权限的内容 {#v160-no-escalation}
 
 运营方管理 API 现在将系统角色不是超级用户的身份限制在其当前系统角色授予的权限内。租户 API 在缩减租户角色权限前，也会检查该角色的当前权限及其成员。
@@ -629,9 +659,56 @@ dcctl upgrade local devicechain --version v1.6.0
 - 滚动升级期间，仍运行 v1.5 的 Pod 在被替换之前仍会创建该关系。
 - 新增计数器 `resolve_relationship_refused_total` 统计此类拒绝，不带租户或设备标签；警告日志会标明租户和关联信息。
 
+#### 存储新建关系的事件 {#v160-new-relationship-event}
+
+设备发送的 `NewRelationship` 事件现在会连同其锚点一起存储，并显示在 `events`（事件类型 `0`）中。在此版本之前，即使关系已创建成功，该事件仍会被重试，随后以 `API_CALL_FAILED` 原因记录为摄取失败。对于事件存储不支持的事件类型，现在会在首次投递时以 `INVALID` 原因拒绝，而不再重试。升级前发送的事件不会恢复。
+
+- **无需进行任何操作。**
+
+#### HTTP 设备上行路由限制凭据猜测 {#v160-device-uplink-guessing}
+
+通过 `httpIngest.deviceUplinks` 按需启用的 HTTP 设备上行路由现在会按来源地址限制请求（返回 `429` 和 `Retry-After`）。某个设备的凭据反复验证失败后，路由将暂停回答认证猜测（返回 `503` 和 `Retry-After`），而不再重复返回 `401`。在此设备的凭据遭到猜测期间，该设备的每条 HTTP 上行请求（包括使用正确凭据的请求）都会收到 `503` 和 `Retry-After`，直到暂停结束（每次最长 60 秒）。
+
+- **通过代理的 MQTT 连接通信的设备不受影响。**
+- **收到 `503` 时应退避重试**，即使提交的是错误凭据：至少等待 `Retry-After` 指定的时间再重试。
+
+#### 对 HTTP 凭据的更严格检查 {#v160-http-credentials}
+
+`httpCall` 动作不能再指定连接器的凭据。发布规则时，`connector/` 命名空间中的密钥句柄会被拒绝；已发布规则若使用此类句柄，会以 `invalid` 结果进入死信队列，而不会发送连接器的凭据。旧版 `outbound-connectors` 副本在被替换之前不会执行此限制。
+
+#### 更改已存储凭据的目标时必须重新提供凭据 {#v160-credential-resupply}
+
+**更改已存储凭据的目标。** `updateConnector`、`rollbackConnector`、`updateNotificationChannel` 和 `updateAiProvider` 会在以下情况下返回 `SECRET_RESUPPLY_REQUIRED`：请求更改持有已存储凭据的连接器、通知渠道或 AI 提供方的类型或目标，但未在同一请求中发送 `secret`。请重新提供凭据，或使用 `secret: null` 删除凭据。不改变目标的编辑（名称、主题、QoS、自定义请求头、链接基础 URL、模型、启用状态）不受影响，现有连接器、渠道和提供方会继续投递。若要将连接器回滚到目标不同的版本，请改用 `updateConnector` 并提供凭据。使用 `dcctl product apply` 时，如果清单更改目标，请设置连接器的凭据句柄。旧副本在被替换之前不会执行此检查。
+
+#### 签名密钥轮换同步到所有副本 {#v160-signing-key-follow}
+
+设置 `auth.signingKeyMaxAgeDays` 后，user-management 现在会在运行期间轮换超龄的签名密钥：副本启动约 15 分钟后开始检查，此后每当密钥超过设定年龄时都会轮换，不再只在启动时轮换。所有副本会在 30 秒内采用新密钥，并在遇到需要该密钥的令牌或密钥请求时立即采用它来验证令牌和提供公钥。早期版本仅在执行轮换的副本中应用新密钥，因此在有多个副本时，部分登录会失败，直到其他副本重启。
+
+- **无需操作。** 当此设置为 0 时，行为不变。
+
+#### ingress-nginx 不再接受配置片段 {#v160-nginx-snippets-off}
+
+`dcctl install` 会关闭集群保留的 `ingress-nginx` 控制器上的配置片段，并将其注解风险级别恢复为控制器的默认值。在应用更改前，只要该控制器类的任何 Ingress 带有 `*-snippet` 注解，安装就会拒绝继续，并列出每个 Ingress 和注解。请使用 `dcctl upgrade` 升级所属实例，或移除该注解，然后重新运行 `dcctl install`。
+
+自 `v0.25.2` 起，没有任何 chart 设置配置片段。仅运行 Traefik 的新集群不受影响。此更改会在集群下一次运行 `dcctl install` 时生效。
+
+#### 指标和健康检查端点移至 ops 端口 {#v160-ops-port}
+
+服务指标和健康端点已从 API 端口移出。每个功能区域的 Pod 和 Service 在端口 8083（`ops`）提供 `/metrics`、`/healthz` 和 `/readyz`，无法再通过 `/api/<area>/...` 访问。chart 的 ServiceMonitor 和探针会自动更新。如果使用自己的 Prometheus 配置抓取 Pod 指标，请将目标端口从 8080 改为 8083。滚动升级期间，尚未替换的 Pod 不会被抓取指标。
+
+#### `dcctl destroy` 拒绝将路径作为实例名称，并且不再信任猜测的集群 {#v160-destroy-instance-name}
+
+`dcctl destroy` 会拒绝不是简单名称的实例参数（`.`、`..` 或任何包含路径分隔符的值）。早期版本会将其解析为 `~/.devicechain/instances` 下的目录，并删除解析后的目标。
+
+- **清理本地状态需要依据。** 只有当实例拥有集群记录且该集群记录中的上下文不再响应时，`dcctl destroy` 才会清理缺失集群的本地状态。没有记录的实例会执行正常卸载；如果无法连接集群，卸载会失败。请传入 `--kube-context`，或者在确认集群确实已不存在时手动删除该实例的目录。
+
 #### MCP 内存限制 {#v160-mcp-memory}
 
 - **MCP 内存限制：**超过 256 KiB 的下游 GraphQL 响应和超过 1,000 个时间桶的聚合结果会被整体拒绝；请缩短时间范围、选择单个指标或增大聚合间隔。POST 请求和携带请求体的请求在读取或解析前受到限制：每个调用者最多同时处理 4 个请求，每个进程最多 64 个。消息准入为每个批量请求最多预留 4 个名额；符合配置的批量请求（默认最多 16 条）会在此上限内分组执行工具。每条消息仍计入调用者的速率限制；超出限制的请求返回 HTTP 429 和 Retry-After。HTTP 请求结束时会取消工具执行并释放执行名额。请求体读取预算会在工具执行前释放，单个请求体仍限制为 1 MiB。无需更改配置。
+
+#### MCP 发现会公布服务器执行的范围 {#v160-mcp-discovery}
+
+MCP 发现现在提供 `read-only` 和 `location`，并在 MCP 的 `agentActuation.enabled` 开启时提供 `act:*`。认证质询允许客户端使用这些元数据，不再将范围固定为 `read-only`。接入仍只要求 `read-only`；操作工具保留各自的范围和权限检查。无需更改配置，现有令牌继续有效。请重新授权客户端以授予新发现的范围；使用提案时还需在授权服务器上开启代理操作。
 
 #### API 验证与管理 {#v160-api-checks}
 
@@ -650,9 +727,41 @@ dcctl upgrade local devicechain --version v1.6.0
 
 - **活动规划在租户之间轮流进行。** 每个租户每轮最多规划 1,000,000 个活动元素和 128 个周期；规划预算 2 秒用完后不再开始新的周期，已开始的周期总会完成，每个周期完成后都会保存进度，其余周期在下一轮继续。规划时的分组和设备位置查询在 2 秒后超时，作为本轮错误上报，但不会将活动标记为失败。最多同时处理四个租户。大型计划可能需要多轮才能填满 36 小时窗口。这些限制无需新配置或迁移，随 command-delivery Pod 滚动升级生效。
 
+#### 下载、发送和通知在租户之间公平分配 {#v160-tenant-fairness}
+
+- **OTA 下载：** 每个副本的 OTA 下载现在限制每个（租户、设备、分配）最多一个进行中的流。只有当其他租户占用下载名额时，已达到或超过 `updates.maxConcurrentDownloads` 一半的租户（向下取整，至少一个；默认总数为 16 时为八个）才会被拒绝启动新流。单个租户可以使用全部名额。超出限制的请求返回现有的 503 busy 响应和 `Retry-After: 5`；请在该延迟后重试。无需更改配置。
+- **连接器发送和 LoRaWAN 下行：** 出站连接器派发和 LoRaWAN 下行现在将每个租户的并发数限制为每个副本发送池的一半（向下取整，至少一个），由 `maxConcurrentSends` 决定。超出限制的消息等待代理重新投递，不占用发送工作线程。只有一个工作线程的池仍会串行处理租户；至少使用两个才能提供隔离。无需新增配置；每个 Pod 升级后即应用此限制。
+- **通知调度按租户限制处理时间。** 四个工作线程按轮换顺序处理租户。当有其他租户在等待工作线程时，达到完整发送预算的两倍（默认 80 秒）后，该租户不再启动新的暂存通知释放或升级通知；已启动的警报仍保留完整发送预算，其余警报留待下一轮。恢复通知在各租户任务内使用独立预算处理。某个渠道的超时重试耗尽后，本次租户任务将跳过该渠道；仅发往这些渠道的升级通知保留升级级别，并在下一轮重试。首次探测仍可能消耗一个级别。无需更改配置，现有配置在滚动升级期间仍然有效。
+
+#### 升级通知计时 {#v160-escalation-clock}
+
+升级通知的等待时间现在从通知发送时开始计算。由延迟到达的读数触发的告警不再在调度器下一次运行时立即升级，设备时钟快于平台时钟也不再延迟升级通知。
+
+- **无需操作。** 升级会自动添加一个可为空的时间戳列；现有未关闭告警在下次发送通知前仍按原来的方式计时。
+
+#### Sparkplug 跟踪容量上限 {#v160-sparkplug-limits}
+
+**升级说明：** 每个 Sparkplug 来源最多跟踪 50,000 个节点会话，其中未发送 NBIRTH 的节点最多 1,024 个。达到上限后，新的身份消息会被丢弃，不写入数据，也不请求重生；现有节点仍可重生，在线会话不会被驱逐。空闲占位会话在 10 分钟后过期，离线会话在 24 小时后过期；达到容量上限时，新生节点可回收最旧的离线会话。活动历史最多保留 50,000 个身份，容量不足时清理旧记录，仍满时拒绝新记录（已满期间，探测不会将未记录的身份判定为静默）。组、节点和设备主题层级超过 256 个字符时会被拒绝，与现有设备注册上限一致。 容量拒绝通过 `devicechain_sparkplugingest_session_refused_total` 统计，`reason` 为 `placeholder_cap`、`session_cap` 或 `seen_cap`。容量和队列已满警告分别限制为每个来源每 10 分钟一次，逐消息日志改为 debug。滚动升级无需更改配置。
+
 #### 实体属性的键保持唯一 {#v160-entity-attributes}
 
 - **每个实体和作用域中的属性键只保留一个值。** 升级会合并并发首次写入产生的重复活动行，保留 ID 最小的行，并排队修复组成员关系和配置。创建索引期间会短暂阻塞属性写入。在新旧副本共存期间，旧副本可能拒绝发生竞争的首次写入；请重试。无需更改配置。
+
+#### 可选的 NATS 分片组 {#v160-nats-shard-groups}
+
+NATS 分片组默认仍处于关闭状态。新实例可在安装时通过 `--values` 在
+`instance.config.infrastructure.nats.shardGroups` 处启用。该设置支持 2–5 个分组，
+使用 R1 流，且要求集群至少有三台代理服务器，并拒绝 `--ha`。放置标签使用对应的
+`dc-nats` Pod 名称；显式标签必须与这些名称一致。默认配置文件支持对 `inbound-events`
+分片；当部署了 device-state 或 event-processing 时会拒绝 `resolved-events`，因为这些
+消费者仍只读取第零组。每个选定的流都会在每个分组中预留其完整的字节上限，`dcctl`
+会在创建或更改任何基础设施之前检查该预留，因此如果检查拒绝，请先扩容 JetStream 卷。
+
+对于代理为单台服务器的现有实例，`dcctl upgrade` 会拒绝启用分片组，因为不支持将
+已存有数据的独立 JetStream 服务器转换为集群。如果某次升级的 `--values`（或
+`--reset-values`）会删除已记录的 `shardGroups` 块、降低其 `count`，或从其 `suffixes`
+中移除某个流，该升级也会被拒绝，因为这些分组可能存有数据：请在每个替换用的 values
+文件中保留该块。
 
 #### 流和对象备份（Preview） {#v160-backup}
 
@@ -680,6 +789,68 @@ dcctl upgrade local devicechain --version v1.6.0
 - 在 `frontend` 中运行 `npm run create-widget -- acme/tank-level ../my-widget` 可生成带类型的自定义组件包，将 SDK 作为对等依赖，并拒绝已有目标目录。若对等版本为 `0.0.0-dev`，请在安装前改为已发布版本。
 - 在 `backend/services/event-processing` 中运行 `go run ./cmd/rule-schema`，或在 `backend/services/outbound-connectors` 中运行 `go run ./cmd/connector-schema mqtt`，可输出规则和连接器编写所需的 JSON Schema。
 - 已发布的客户端和组件 SDK 包现在包含其代理指导文件。
+
+#### 旧版 npm 导出已弃用 {#v160-npm-deprecations}
+
+以下导出在 `v1.6.0` 中被弃用，但仍按原样工作。请将导入或调用更新为下列替代项。本次不会移除任何导出。只有在弃用至少两个次要版本之后，才能在主要版本中移除；从 1.6 开始弃用的导出，最早也只能在 1.7 之后的某个主要版本中移除。`BuiltinOptionIssue` 表示现有的内置组件问题结构（`widgetType`）；通用的 `@devicechain/dashboards.OptionIssue`（`widgetId`）仍受支持。
+
+- `@devicechain/widgets` / `pickSample` 已弃用；请改用 `@devicechain/widget-sdk.pickSample`。
+- `@devicechain/widgets` / `optBoolean` 已弃用；请改用 `@devicechain/widget-sdk.optBoolean`。
+- `@devicechain/widgets` / `WidgetProps` 已弃用；请改用 `@devicechain/widget-sdk.WidgetProps`。
+- `@devicechain/widgets` / `WidgetComponent` 已弃用；请改用 `@devicechain/widget-sdk.WidgetComponent`。
+- `@devicechain/widgets` / `WidgetFrame` 已弃用；请改用 `@devicechain/widget-sdk.WidgetFrame`。
+- `@devicechain/widgets` / `WidgetSubjectProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetSubjectProvider`。
+- `@devicechain/widgets` / `WidgetSelectProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetSelectProvider`。
+- `@devicechain/widgets` / `useWidgetSelect` 已弃用；请改用 `@devicechain/widget-sdk.useWidgetSelect`。
+- `@devicechain/widgets` / `WidgetTimeZoneProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetTimeZoneProvider`。
+- `@devicechain/widgets` / `useWidgetTimeZone` 已弃用；请改用 `@devicechain/widget-sdk.useWidgetTimeZone`。
+- `@devicechain/widgets` / `WidgetThemeRootProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetThemeRootProvider`。
+- `@devicechain/widgets` / `useWidgetThemeRoot` 已弃用；请改用 `@devicechain/widget-sdk.useWidgetThemeRoot`。
+- `@devicechain/widgets` / `WidgetCandidatesProvider` 已弃用；请改用 `@devicechain/widget-sdk.WidgetCandidatesProvider`。
+- `@devicechain/widgets` / `useWidgetCandidates` 已弃用；请改用 `@devicechain/widget-sdk.useWidgetCandidates`。
+- `@devicechain/widgets` / `useFlashOnChange` 已弃用；请改用 `@devicechain/widget-sdk.useFlashOnChange`。
+- `@devicechain/widgets` / `flashTextStyle` 已弃用；请改用 `@devicechain/widget-sdk.flashTextStyle`。
+- `@devicechain/widgets` / `flashBackgroundStyle` 已弃用；请改用 `@devicechain/widget-sdk.flashBackgroundStyle`。
+- `@devicechain/widgets` / `FlashValue` 已弃用；请改用 `@devicechain/widget-sdk.FlashValue`。
+- `@devicechain/widgets` / `fitValueFont` 已弃用；请改用 `@devicechain/widget-sdk.fitValueFont`。
+- `@devicechain/widgets` / `useMeasurementStream` 已弃用；请改用 `@devicechain/widget-sdk.useMeasurementStream`。
+- `@devicechain/widgets` / `useAlarmStream` 已弃用；请改用 `@devicechain/widget-sdk.useAlarmStream`。
+- `@devicechain/widgets` / `useCommandStream` 已弃用；请改用 `@devicechain/widget-sdk.useCommandStream`。
+- `@devicechain/widgets` / `useLocationStream` 已弃用；请改用 `@devicechain/widget-sdk.useLocationStream`。
+- `@devicechain/widgets` / `useDatasourceAvailability` 已弃用；请改用 `@devicechain/widget-sdk.useDatasourceAvailability`。
+- `@devicechain/widgets` / `useDashboardHub` 已弃用；请改用 `@devicechain/widget-sdk.useDashboardHub`。
+- `@devicechain/widgets` / `useHubConnectionState` 已弃用；请改用 `@devicechain/widget-sdk.useHubConnectionState`。
+- `@devicechain/widgets` / `HubConnectionBadge` 已弃用；请改用 `@devicechain/widget-sdk.HubConnectionBadge`。
+- `@devicechain/widgets` / `useResolvedBindings` 已弃用；请改用 `@devicechain/widget-sdk.useResolvedBindings`。
+- `@devicechain/widgets` / `useViewerBindings` 已弃用；请改用 `@devicechain/widget-sdk.useViewerBindings`。
+- `@devicechain/widgets` / `useSlotCandidates` 已弃用；请改用 `@devicechain/widget-sdk.useSlotCandidates`。
+- `@devicechain/widgets` / `useCandidates` 已弃用；请改用 `@devicechain/widget-sdk.useCandidates`。
+- `@devicechain/widgets` / `css` 已弃用；请改用 `@devicechain/widget-sdk.css`。
+- `@devicechain/widgets` / `FlashDirection` 已弃用；请改用 `@devicechain/widget-sdk.FlashDirection`。
+- `@devicechain/widgets` / `WidgetFrameProps` 已弃用；请改用 `@devicechain/widget-sdk.WidgetFrameProps`。
+- `@devicechain/widgets` / `WidgetSelect` 已弃用；请改用 `@devicechain/widget-sdk.WidgetSelect`。
+- `@devicechain/widgets` / `WidgetCandidates` 已弃用；请改用 `@devicechain/widget-sdk.WidgetCandidates`。
+- `@devicechain/widgets` / `MeasurementStreamState` 已弃用；请改用 `@devicechain/widget-sdk.MeasurementStreamState`。
+- `@devicechain/widgets` / `AlarmStreamState` 已弃用；请改用 `@devicechain/widget-sdk.AlarmStreamState`。
+- `@devicechain/widgets` / `CommandStreamState` 已弃用；请改用 `@devicechain/widget-sdk.CommandStreamState`。
+- `@devicechain/widgets` / `LocationStreamState` 已弃用；请改用 `@devicechain/widget-sdk.LocationStreamState`。
+- `@devicechain/widgets` / `CandidatesState` 已弃用；请改用 `@devicechain/widget-sdk.CandidatesState`。
+- `@devicechain/widgets` / `DatasourceAvailability` 已弃用；请改用 `@devicechain/widget-sdk.DatasourceAvailability`。
+- `@devicechain/widgets` / `HubConnectionBadgeProps` 已弃用；请改用 `@devicechain/widget-sdk.HubConnectionBadgeProps`。
+- `@devicechain/widgets` / `ThemeVar` 已弃用；请改用 `@devicechain/widget-sdk.ThemeVar`。
+- `@devicechain/widgets` / `EChart` 已弃用；请改用 `@devicechain/widget-sdk/echarts.EChart`。
+- `@devicechain/widgets` / `buildLineOption` 已弃用；请改用 `@devicechain/widget-sdk/echarts.buildLineOption`。
+- `@devicechain/widgets` / `buildGaugeOption` 已弃用；请改用 `@devicechain/widget-sdk/echarts.buildGaugeOption`。
+- `@devicechain/widgets` / `resolveChartTheme` 已弃用；请改用 `@devicechain/widget-sdk/echarts.resolveChartTheme`。
+- `@devicechain/widgets` / `useChartTheme` 已弃用；请改用 `@devicechain/widget-sdk/echarts.useChartTheme`。
+- `@devicechain/widgets` / `EChartOption` 已弃用；请改用 `@devicechain/widget-sdk/echarts.EChartOption`。
+- `@devicechain/widgets` / `LineChartOptions` 已弃用；请改用 `@devicechain/widget-sdk/echarts.LineChartOptions`。
+- `@devicechain/widgets` / `GaugeChartOptions` 已弃用；请改用 `@devicechain/widget-sdk/echarts.GaugeChartOptions`。
+- `@devicechain/widgets` / `ChartTheme` 已弃用；请改用 `@devicechain/widget-sdk/echarts.ChartTheme`。
+- `@devicechain/widgets` / `WIDGET_CHANNEL` 已弃用；请改用 `builtinWidgetDescriptors[id].channel`。
+- `@devicechain/widgets` / `WIDGET_BINDS_DATASOURCE` 已弃用；请改用 `builtinWidgetDescriptors[id].datasource.mode !== 'none'`。
+- `@devicechain/widgets` / `isTerminalStatus` 已弃用；请改用 `@devicechain/dashboards.isTerminalCommandStatus`。
+- `@devicechain/widgets` / `OptionIssue` 已弃用；请改用 `@devicechain/widgets.BuiltinOptionIssue`。
 
 #### 重新投递的解码失败使用记录预算 {#v160-decoder-redelivery-budget}
 
@@ -1298,8 +1469,7 @@ chart 的 API ingress 上的一个 nginx 配置片段（snippet）。**因此，
 
 - **chart 不再设置任何 nginx 配置片段。**
 - **`dcctl install` 安装的 ingress 控制器在本版本中保持不变**，仍接受配置片段，因为尚未升级的实例依赖
-  它们。后续版本会关闭配置片段，并由 `dcctl install` 的检查把关：只要该控制器类的任何 Ingress 仍带有
-  `*-snippet` 注解，它就拒绝继续。
+  它们。[v1.6.0 会关闭配置片段](#v160-nginx-snippets-off)，并由 `dcctl install` 的预检把关。
 - **外部令牌校验方不受影响：**它们使用授权服务器元数据中的 `jwks_uri`，即 `/oauth/jwks`，该端点仍然公开。
 
 #### 预期情况 {#v0252-during}
