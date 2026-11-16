@@ -764,6 +764,8 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### What is new in v1.7.0 {#v170-whats-new}
 
+- **Campaign cron steps.** A step far larger than its field's range, such as `40-59/9223372036854775803`, no longer overflows into minutes outside the range it names. It selects only the range's first value, as any step larger than the range already did. Every expression accepted before is still accepted.
+
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the v1.6.0 `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. One appended migration in `device-management` makes live entity attribute keys unique and queues repairs. See [Schema changes in v1.6.0 and going back](#v160-going-back). Coming from `v1.4.0` or earlier, read the [`v1.5.0` notes](#v150-upgrade) first.
