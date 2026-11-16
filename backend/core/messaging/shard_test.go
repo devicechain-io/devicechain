@@ -222,6 +222,7 @@ func TestStreamShardingAllWriterPaths(t *testing.T) {
 	for _, path := range []string{"sync", "ordered", "async", "round"} {
 		t.Run(path, func(t *testing.T) {
 			m := n1Manager(t, true)
+			m.Microservice.FunctionalArea = "device-management"
 			var publish func(context.Context, Message) error
 			await := func(submit func(func(error))) error {
 				done := make(chan error, 1)
@@ -280,6 +281,7 @@ func TestStreamShardingAllWriterPaths(t *testing.T) {
 
 func TestStreamShardingEnvelopesStayWithinOneTenantGroup(t *testing.T) {
 	m := n1Manager(t, true)
+	m.Microservice.FunctionalArea = "event-sources"
 	w, err := m.NewRoundPublisher(streams.InboundEvents)
 	require.NoError(t, err)
 	f := newTestFormer(t, FormerConfig{MaxMembers: 2})

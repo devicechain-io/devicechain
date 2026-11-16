@@ -1,7 +1,7 @@
 {{/*
 One ServiceMonitor per enabled functional area (gated on metrics.enabled).
-Metrics ride on the graphql port 8080 (the shared HTTP mux), so each monitor
-selects the area's Service and scrapes its named `graphql` port at /metrics.
+Metrics use the dedicated ops port 8083, so each monitor
+selects the area's Service and scrapes its named `ops` port at /metrics.
 ServiceMonitor is a Prometheus-Operator CRD; this whole file is skipped when
 metrics.enabled is false (set it false on clusters without those CRDs).
 */}}
@@ -24,7 +24,7 @@ spec:
     matchLabels:
       {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 6 }}
   endpoints:
-    - port: graphql
+    - port: ops
       path: /metrics
 {{- end }}
 {{- end }}

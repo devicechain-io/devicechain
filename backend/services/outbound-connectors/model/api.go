@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
+	"github.com/devicechain-io/dc-microservice/credbinding"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
@@ -199,9 +200,33 @@ func (api *Api) UpdateConnector(ctx context.Context, token string, request *Conn
 	if err != nil {
 		return nil, err
 	}
+	beforeBinding, afterBinding := connectorspec.Binding(current.Type, current.Config), connectorspec.Binding(connectorType, cfg)
+	bindingChanged := len(beforeBinding.Diff(afterBinding)) != 0
+	if err := credbinding.Guard("connector", token, beforeBinding, afterBinding, request.Secret.Set, func() (bool, error) {
+		ref, err := ConnectorSecretRef(ctx, current.ID)
+		if err != nil {
+			return false, err
+		}
+		return api.Secrets.Exists(ctx, ref)
+	}); err != nil {
+		return nil, err
+	}
 	name := request.Name.ApplyToNullString(current.Name)
 	description := request.Description.ApplyToNullString(current.Description)
 	secret := updatedSecret(request.Secret)
+	if bindingChanged && request.Secret.Set {
+		// When the destination moves, change the secret first so a store failure
+		// cannot leave the new destination using the old destination's credential.
+		if expectedUpdatedAt != nil {
+			if err := rdb.RefuseIfMoved(current.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
+				return nil, err
+			}
+		}
+		if err := api.applyConnectorSecret(ctx, current.ID, secret); err != nil {
+			return nil, err
+		}
+		secret = nil // Already applied; the reload must not write it again.
+	}
 
 	// No precondition → unconditional last-write-wins (non-interactive callers that
 	// don't track a version).
@@ -488,6 +513,15 @@ func (api *Api) RollbackConnector(ctx context.Context, token string, version int
 		return nil, err
 	}
 
+	if err := credbinding.Guard("connector", token, connectorspec.Binding(conn.Type, conn.Config), connectorspec.Binding(snapshot.Type, snapshot.Config), false, func() (bool, error) {
+		ref, err := ConnectorSecretRef(ctx, conn.ID)
+		if err != nil {
+			return false, err
+		}
+		return api.Secrets.Exists(ctx, ref)
+	}); err != nil {
+		return nil, fmt.Errorf("rollback requires re-pointing with updateConnector supplying the credential: %w", err)
+	}
 	conn.Type = snapshot.Type
 	conn.Config = snapshot.Config
 	if err := rdb.AdvancingFrom(api.RDB.DB(ctx), conn.UpdatedAt).Save(conn).Error; err != nil {
