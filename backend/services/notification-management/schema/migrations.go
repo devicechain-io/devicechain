@@ -33,5 +33,6 @@ var (
 		NewClearAnnouncementSchema(),
 		NewNotifyOnClearSinceSchema(),
 		NewStateSourceSchema(),
+		NewEscalationBaseSchema(),
 	}
 )

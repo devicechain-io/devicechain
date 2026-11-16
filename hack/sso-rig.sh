@@ -163,8 +163,8 @@ create_cluster() {
 sso_outcome_total() {
   local outcome="$1" connection="${2:-}" deploy port selector pods pod body total=0 n
   deploy="$(sso_stub_um_deploy)"
-  port="$(k -n "$namespace" get "$deploy" -o jsonpath='{.spec.template.spec.containers[0].ports[?(@.name=="graphql")].containerPort}')"
-  [[ -n "$port" ]] || fail "user-management has no container port named graphql to read metrics from"
+  port="$(k -n "$namespace" get "$deploy" -o jsonpath='{.spec.template.spec.containers[0].ports[?(@.name=="ops")].containerPort}')"
+  [[ -n "$port" ]] || fail "user-management has no container port named ops to read metrics from"
   selector="$(k -n "$namespace" get "$deploy" -o json |
     jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')"
   pods="$(k -n "$namespace" get pods -l "$selector" --field-selector=status.phase=Running -o name)"

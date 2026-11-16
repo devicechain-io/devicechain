@@ -317,8 +317,10 @@ HTTP answers the device. Every answer that depends on the device is given only a
 | `404` | The route is not turned on. |
 | `413` | The body is over the cap for what the decoder reads (4 KiB of frame, 64 KiB of JSON) or over 1 MiB. |
 | `422` | The device's type has no decoder. The payload is never read as an event. |
+| `429` | Requests from this source address exceed the allowance. `Retry-After` says when to retry. |
 | `429` | The tenant is over its ingest ceiling, by messages or by readings. `Retry-After` says when to retry. |
 | `500` | The platform could not build the message. Not retryable by the device. |
+| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). Devices on the broker's MQTT connection are unaffected. |
 | `503` | The decoder lookup is unavailable, ingest is applying backpressure, or the downstream stream could not take the payload. `Retry-After` is set for the first two and says when to retry. |
 
 MQTT cannot answer a device, so the platform records what happened instead. The [Device Protocol Reference](../reference/device-protocol.md#raw-payload) has the full table; in short:
@@ -328,7 +330,7 @@ MQTT cannot answer a device, so the platform records what happened instead. The 
 - **A tenant over its ceiling** is shed: over HTTP the device is told `429`; over MQTT the message is acknowledged and dropped, and counted in `total_msg_rate_limited` or `total_msg_reading_limited`.
 - **A decision the platform cannot make yet** (device-management cannot be asked, or backpressure) is retried: HTTP answers `503`, and an MQTT message waits and is offered again.
 
-An operator watches `device_uplink_requests_total` (HTTP) and `device_uplink_messages_total` (MQTT), each by `result` (`accepted`, `bad_request`, `unauthorized`, `too_large`, `no_decoder`, `rate_limited`, `plan_unavailable`, `backpressure`, `publish_failed`, `internal_error`), and `device_uplink_charged_readings_total` for the readings charged.
+An operator watches `device_uplink_requests_total` (HTTP) and `device_uplink_messages_total` (MQTT), each by `result` (`accepted`, `bad_request`, `unauthorized`, `too_large`, `no_decoder`, `rate_limited`, `source_limited`, `held`, `plan_unavailable`, `backpressure`, `publish_failed`, `internal_error`), and `device_uplink_charged_readings_total` for the readings charged.
 
 A payload counts against the tenant's ingest ceilings once as a message and then as readings, at least the decoder's [maximum readings](#max-readings), as for an integration.
 

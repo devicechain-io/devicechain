@@ -107,7 +107,7 @@ func assertScrapeMentions(t *testing.T, ms *core.Microservice, names ...string) 
 	}
 
 	rec := httptest.NewRecorder()
-	ms.Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	ms.OpsMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/metrics returned %d, want 200: %s", rec.Code, rec.Body.String())
 	}

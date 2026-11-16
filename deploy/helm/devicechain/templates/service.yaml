@@ -19,6 +19,10 @@ spec:
       protocol: TCP
       port: {{ $root.Values.service.port }}
       targetPort: graphql
+    - name: ops
+      protocol: TCP
+      port: {{ include "devicechain.opsPort" $root }}
+      targetPort: ops
     {{- if eq $area "user-management" }}
     {{- /* The internal listener: service-token mint + JWKS. ClusterIP only, never routed. */}}
     - name: internal-auth
