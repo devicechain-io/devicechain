@@ -289,7 +289,8 @@ jobs:
       # modules its diff (against the merge base) changes, every module that requires one of them
       # through go.mod, transitively, and the test packages that READ a changed file from outside
       # their module (hack/ci-select.py's READERS table). Push, merge_group, schedule and dispatch
-      # run everything; so does a change to go.work, go.work.sum, .github/ or hack/, a file outside
+      # run everything; so does a change to go.work, go.work.sum, any go.mod or go.sum (the workspace
+      # resolves one version of each dependency for every module), .github/ or hack/, a file outside
       # every module the tables do not account for, an empty diff, and any failure of the selection
       # itself. The log below names every module skipped and why. `modules` above is still the
       # count-cross-checked FULL list; this selects from it.

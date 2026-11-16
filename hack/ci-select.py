@@ -27,7 +27,7 @@ package that has no row and no written reason, so a new reader cannot be added s
 FAIL SAFE, NOT FAIL QUIET
 -------------------------
 Everything runs when: the event is not a pull_request (push to main, merge_group, schedule,
-workflow_dispatch), go.work / go.work.sum / .github / hack changed, a changed file sits outside
+workflow_dispatch), go.work, go.work.sum, any go.mod or go.sum, .github or hack changed, a changed file sits outside
 every module and matches neither a READERS row nor an INERT glob, the diff cannot be computed or
 is empty, or the selection raises. Each of those prints the reason it ran everything. A module that
 is skipped is printed with the reason it was skipped. Nothing is capped.
@@ -58,9 +58,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # hack/**: the scripts the go jobs call (go-mod-download, go-race, govulncheck, the tidy and
 #   workspace-sum checks, this file, go-leg.sh) and files tests read (hack/vocab/sources.lock,
 #   hack/dr-rig.sh, hack/verify-release-signatures.sh, every hack/ path a published doc quotes).
+# **/go.mod, **/go.sum: a workspace resolves ONE version of each external dependency for all of
+#   its modules (minimal version selection over every member's go.mod), so a bump in one module's
+#   go.mod can move what every other module builds and tests against. The require graph below
+#   cannot see that, so any go.mod/go.sum change runs everything.
 FULL_TRIGGERS = [
     "go.work",
     "go.work.sum",
+    "**/go.mod",
+    "**/go.sum",
     ".github/**",
     "hack/**",
 ]
@@ -126,15 +132,16 @@ READERS = [
     ("backend/cli", "sim", ["backend/sims/dc-simulator/sim/handshake.go"], [], "sim/handshake_lockstep_test.go:30"),
     # core/test walks every .go file in the repository (logsink, defaultorder, sharedcache, ...).
     ("backend/core", "test", ["**/*.go", "go.work"], [], "test/*_repo_test.go"),
-    # core/test/frontend runs vitest in frontend/packages/widgets and frontend/apps/console.
-    ("backend/core", "test/frontend", ["frontend/**"], [], "test/frontend/state_test.go:24"),
     ("backend/core", "backupset", [
         "backend/**/*.go",
         "docs/**/disaster-recovery.md",
     ], NONTEST, "backupset/backupset_test.go:120,248"),
     ("backend/core", "graphql/schemaplane", [SDL], [], "graphql/schemaplane/schemaplane_test.go:19"),
     ("backend/core", "rdb/partialupdatetest", ["backend/services/*/model/*.go"], NONTEST, "rdb/partialupdatetest/savescan_test.go:133"),
-    ("backend/core", "config", ["deploy/opentofu/modules/traefik/main.tf"], [], "config/edge_timeout_lockstep_test.go:24"),
+    ("backend/core", "config", [
+        "deploy/opentofu/modules/traefik/main.tf",
+        "docs/**/releases-and-upgrades.md",
+    ], [], "config/edge_timeout_lockstep_test.go:24, config/nats_shard_docs_test.go:20"),
     ("backend/core", "natsauth", ["deploy/opentofu/modules/nats/main.tf"], [], "natsauth/identity_account_test.go:241"),
     ("backend/core", "messaging", [
         "deploy/helm/devicechain/templates/prometheusrule-broker.yaml",
@@ -242,6 +249,7 @@ IN_MODULE = {
     ("backend/core", "secrets"): "hack/dr-rig.sh (hack/** runs everything)",
     ("backend/tools/redlines", "."): "temp fixtures only",
     ("examples/ota-device", "internal/testutil"): "runtime.Caller root is its own module",
+    ("backend/core", "test/frontend"): "build-tagged `frontend`, so the go job never compiles it; the frontend job runs the same vitest suites",
     ("backend/core", "core"): "\"..\" appears only in a comment about os.ReadDir",
     ("backend/core", "replication"): "\"..\" appears only in a comment",
     ("backend/core", "webhooksig"): "\"..\" is a refused path segment",
@@ -389,6 +397,11 @@ FRONTEND_INPUTS = [
     "frontend/**",
     "backend/services/*/graphql/**",
     "backend/services/event-processing/**",
+    "backend/services/user-management/settingsdefs/**",  # admin/settings/sections.test.ts:27
+    "backend/services/user-management/basemap/**",       # basemap/placeholders.test.ts:50
+    "backend/services/user-management/iam/tierconfig.go",  # admin/tiers/tierConfig.test.ts:191
+    "backend/core/governance/**",                        # admin/tiers/tierConfig.test.ts:190-225
+    "docs/src/**",                                       # packages/brand/tools/verify.mjs:107
     "deploy/helm/**",
     "deploy/nginx.conf",
     "hack/**",
@@ -414,7 +427,7 @@ def select(ws, changed_files):
 
     for f in files:
         if match(f, FULL_TRIGGERS):
-            s.everything("%s changed (a workspace, workflow or hack/ file)" % f)
+            s.everything("%s changed (a workspace, go.mod/go.sum, workflow or hack/ file)" % f)
             continue
         owner = ws.owner(f)
         if owner:
@@ -609,6 +622,18 @@ def cmd_check():
                 return True
         return False
 
+    # 🔴 PER FILE, NOT ONLY PER PACKAGE. A package that already has a READERS row would accept a
+    # new file reading something the row does not name (core/config gained a docs reader that way,
+    # beside its row for a .tf file). So every escaping file is also pinned by path in
+    # hack/ci-select-escapes.txt: a file not listed there fails until someone has read what it
+    # reads, extended READERS to match, and listed it; a listed file that no longer escapes is stale.
+    known = set()
+    with open(os.path.join(ROOT, "hack", "ci-select-escapes.txt"), encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                known.add(line)
+    seen = set()
     for module in ws.dirs:
         base = os.path.join(ROOT, module)
         for dirpath, dirnames, filenames in os.walk(base):
@@ -622,8 +647,44 @@ def cmd_check():
                 if not n.endswith(".go"):
                     continue
                 with open(os.path.join(dirpath, n), encoding="utf-8", errors="replace") as fh:
-                    if ESCAPE_RE.search(fh.read()) and not allowed(module, norm_pkg(rel)):
-                        errs.append("%s/%s/%s may read outside its module: add a READERS row for (%s, %s) or an IN_MODULE reason" % (module, rel, n, module, norm_pkg(rel)))
+                    if not ESCAPE_RE.search(fh.read()):
+                        continue
+                path = module + "/" + (n if rel == "." else rel + "/" + n)
+                seen.add(path)
+                if not allowed(module, norm_pkg(rel)):
+                    errs.append("%s may read outside its module: add a READERS row for (%s, %s) or an IN_MODULE reason" % (path, module, norm_pkg(rel)))
+                elif path not in known:
+                    errs.append("%s may read outside its module and is not in hack/ci-select-escapes.txt: check that READERS names what it reads, then list it" % path)
+    for path in sorted(known - seen):
+        errs.append("hack/ci-select-escapes.txt lists %s, which no longer exists or no longer reaches outside its module" % path)
+
+    # The frontend job's reads outside frontend/: every string literal in its sources naming a path
+    # under another top-level tree must fall inside FRONTEND_INPUTS, or a change there would skip it.
+    lit = re.compile(r"""['"`]((?:\.\./)*(?:backend|docs|deploy|hack|sdks|demos|examples|testdata)/[A-Za-z0-9_./*-]+)['"`]""")
+    for dirpath, dirnames, filenames in os.walk(os.path.join(ROOT, "frontend")):
+        dirnames[:] = [d for d in dirnames if d not in ("node_modules", "dist", "build", "coverage") and not d.startswith(".")]
+        for n in filenames:
+            if not n.endswith((".ts", ".tsx", ".js", ".mjs", ".cjs", ".mts")):
+                continue
+            src = os.path.join(dirpath, n)
+            with open(src, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+            for m in lit.finditer(text):
+                raw = m.group(1)
+                if raw.startswith(".."):
+                    target = os.path.normpath(os.path.join(dirpath, raw))
+                else:
+                    # a bare literal is either repo-root-relative (tierConfig.test.ts) or relative to
+                    # a frontend directory (board-replay's testdata/...): only the first can be outside.
+                    target = os.path.join(ROOT, raw.split("*")[0].rstrip("/"))
+                    if not os.path.exists(target):
+                        continue
+                rel = os.path.relpath(target, ROOT).replace("\\", "/")
+                if rel.startswith("..") or rel.startswith("frontend/"):
+                    continue
+                probe = rel.replace("*", "x")
+                if not (match(probe, FRONTEND_INPUTS) or match(probe + "/x", FRONTEND_INPUTS)):
+                    errs.append("%s names %s, outside FRONTEND_INPUTS: a change there would skip the frontend job" % (os.path.relpath(src, ROOT).replace("\\", "/"), rel))
     if errs:
         for e in errs:
             print("::error::" + e)
@@ -706,10 +767,12 @@ def self_test():
 
         print("==> fail safe")
         # Each named trigger must fire as ITSELF, not only through the unknown-file rule behind it.
-        for f, what, why in [("go.work", "go.work", "workspace, workflow or hack/"),
-                             ("go.work.sum", "go.work.sum", "workspace, workflow or hack/"),
-                             (".github/workflows/ci.yml", ".github", "workspace, workflow or hack/"),
-                             ("hack/go-race.sh", "hack/", "workspace, workflow or hack/"),
+        for f, what, why in [("go.work", "go.work", "workspace, go.mod/go.sum, workflow or hack/"),
+                             ("go.work.sum", "go.work.sum", "workspace, go.mod/go.sum, workflow or hack/"),
+                             (".github/workflows/ci.yml", ".github", "workspace, go.mod/go.sum, workflow or hack/"),
+                             ("hack/go-race.sh", "hack/", "workspace, go.mod/go.sum, workflow or hack/"),
+                             ("backend/tools/tool/go.mod", "a go.mod (shared dependency versions)", "workspace, go.mod/go.sum, workflow or hack/"),
+                             ("backend/services/svc-a/go.sum", "a go.sum", "workspace, go.mod/go.sum, workflow or hack/"),
                              ("mystery/file.txt", "an unknown file outside every module", "no reader row or inert glob")]:
             s = select(ws, ["backend/tools/tool/x.go", f])
             expect(s.full and s.modules == set(ws.dirs) and s.frontend and any(why in r for r in s.reasons),
