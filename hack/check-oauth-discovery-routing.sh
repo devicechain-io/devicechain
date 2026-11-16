@@ -304,7 +304,7 @@ if FRONT == "nginx":
     # user-management serves the service-token mint and the JWKS on an INTERNAL listener that
     # no route reaches, so the public port answers 404 for them with no ingress in front. That
     # is why the chart carries no configuration-snippet (the shared controller is tightened
-    # in a later release, once no instance still needs one). Three things must stay true of the RENDER for that to hold:
+    # by dcctl install after checking that no served Ingress carries one). Three things must stay true of the RENDER for that to hold:
     #   (a) no Ingress carries a snippet annotation of any kind (a snippet is how an edge rule
     #       would creep back in, and it is the attack class behind IngressNightmare);
     #   (b) no Ingress backend names the internal port, by name or number;

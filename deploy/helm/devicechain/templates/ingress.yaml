@@ -1,4 +1,5 @@
 {{/*
+Public API routes target only the graphql port; metrics and probes use ops (8083), never routed.
 Optional Ingress exposing the console + GraphQL/HTTP surface, with cert-manager
 TLS. Rendered when ingress.controller is nginx (DEPRECATED, no longer the default); gateway.yaml renders the
 same routing as a Gateway API Gateway + HTTPRoutes when it is gateway, and a test in
@@ -67,8 +68,8 @@ spec:
       http:
         paths:
           {{- /* An area that serves no external API gets no public /api route: the
-                 route would expose its Prometheus endpoint unauthenticated rather
-                 than expose an API. The set is named in devicechain.areasWithoutPublicApi
+                 route would serve no API. Metrics and probes live on the ops
+                 port, which no public route may target. The set is named in devicechain.areasWithoutPublicApi
                  — it used to be an inline "ne sparkplug-ingest" here, and lwm2m-ingest
                  was added in exactly the same shape without it. */ -}}
           {{- $noPublicApi := splitList "," (include "devicechain.areasWithoutPublicApi" $root) }}
