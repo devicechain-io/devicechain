@@ -39,7 +39,7 @@ var (
 	Api *model.Api
 
 	InboundEventsWriter messaging.MessageWriter
-	StateProcessors     []*processor.StateProcessor
+	StateProcessors     stateProcessorGroup
 
 	// OwnershipProcessor restamps a device's live view with its owners from
 	// device-management's ownership-changed facts (ADR-081), so a device that is sold and
@@ -265,10 +265,8 @@ func afterMicroserviceStarted(ctx context.Context) error {
 
 	// Start every device state processor. It is built by the NATS manager's oncreate callback,
 	// so it does not exist until the line above has run.
-	for _, sp := range StateProcessors {
-		if err := sp.Start(ctx); err != nil {
-			return err
-		}
+	if err := StateProcessors.Start(ctx); err != nil {
+		return err
 	}
 	return OwnershipProcessor.Start(ctx)
 }
@@ -277,10 +275,8 @@ func afterMicroserviceStarted(ctx context.Context) error {
 func beforeMicroserviceStopped(ctx context.Context) error {
 	// Stop all consumers before the managers: each reads from the broker and writes to the
 	// database.
-	for _, sp := range StateProcessors {
-		if err := sp.Stop(ctx); err != nil {
-			return err
-		}
+	if err := StateProcessors.Stop(ctx); err != nil {
+		return err
 	}
 	if err := OwnershipProcessor.Stop(ctx); err != nil {
 		return err
@@ -312,10 +308,8 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
 	// Terminate all consumers.
-	for _, sp := range StateProcessors {
-		if err := sp.Terminate(ctx); err != nil {
-			return err
-		}
+	if err := StateProcessors.Terminate(ctx); err != nil {
+		return err
 	}
 	if err := OwnershipProcessor.Terminate(ctx); err != nil {
 		return err
