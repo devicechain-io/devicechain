@@ -64,7 +64,7 @@ A connector is a **tenant-scoped resource** with the same lifecycle as a [device
 
 - a **type** (`mqtt`, `kafka`, `aws_sns`, `aws_sqs`)
 - the **destination config** for that type: broker addresses, topic, queue or ARN, and options such as QoS or TLS
-- an optional **credential**, referenced by handle. The value is written into the secret store and **never returned in cleartext**, exactly like a notification channel's secret.
+- an optional **credential**, referenced by handle. The value is written into the secret store and **never returned in cleartext**, exactly like a notification channel's secret. Changing the type or credential destination requires `secret` in the same request when a credential is stored; omission returns `SECRET_RESUPPLY_REQUIRED`. Re-supply the credential, or use `secret: null` to remove it. With `dcctl product apply`, set the manifest's credential handle before changing its destination. Topic, QoS and identity-only edits keep the credential.
 
 Because connectors are tenant-level, one tenant never sees or sends through another tenant's connectors.
 

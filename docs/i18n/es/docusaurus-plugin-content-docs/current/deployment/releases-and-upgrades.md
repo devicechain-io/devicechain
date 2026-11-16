@@ -1043,6 +1043,10 @@ Con `auth.signingKeyMaxAgeDays` configurado, user-management ahora rota una clav
 
 - **No hace falta hacer nada.** Nada cambia cuando el ajuste es 0.
 
+#### Redirigir una credencial almacenada exige volver a proporcionarla {#v160-credential-resupply}
+
+**Cambiar el destino de una credencial almacenada.** `updateConnector`, `rollbackConnector`, `updateNotificationChannel` y `updateAiProvider` rechazan la solicitud con `SECRET_RESUPPLY_REQUIRED` si cambia el tipo o destino de un conector, canal de notificaci?n o proveedor de IA con una credencial almacenada y no incluye `secret` en la misma solicitud. Vuelve a enviar la credencial o usa `secret: null` para eliminarla. Los cambios que no modifican el destino (nombre, tema, QoS, cabeceras personalizadas, URL base de enlaces, modelo, habilitaci?n) no se ven afectados; los conectores, canales y proveedores existentes siguen funcionando. Para restaurar un conector a una versi?n con otro destino, usa `updateConnector` con su credencial. Con `dcctl product apply`, establece el identificador de credencial del conector cuando el manifiesto cambie su destino. Las r?plicas antiguas no aplican esta comprobaci?n hasta que sean reemplazadas.
+
 ### v1.5.0 — cambios de automatización revisados y aprobaciones de agentes vinculadas al inicio de sesión {#v150-upgrade}
 
 `v1.5.0` es una actualización in situ desde `v1.4.0`: ejecuta `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de la nueva versión para ambos comandos** y pasa a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Se ejecutan cuatro migraciones añadidas: tres en `device-management` y una en `user-management`. Añaden la barrera de desactivación del agente y la bandeja de salida de efectos, las revisiones de automatización y su exigencia, y la columna de generación de actuación. Consulta [Cambios de esquema y vuelta atrás](#v150-going-back). Si vienes de `v1.3.0` o anterior, lee primero las [notas de `v1.4.0`](#v140-upgrade).

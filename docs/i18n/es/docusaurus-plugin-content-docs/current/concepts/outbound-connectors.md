@@ -118,3 +118,5 @@ El servicio outbound-connectors se ejecuta en su **propio proceso**, separado de
 - **[Procesamiento de Eventos y Alarmas](./event-processing.md)**: donde se crean las reglas y sus acciones.
 - **[Arquitectura](./architecture.md)**: dónde se ubica outbound-connectors entre los servicios.
 - Las credenciales se guardan en el **almacén de secretos** cifrado descrito en [Manejo de secretos](./architecture.md#secret-handling).
+
+Cambiar el tipo o destino de una credencial almacenada requiere `secret` en la misma solicitud; omitirlo devuelve `SECRET_RESUPPLY_REQUIRED`. Vuelve a enviar la credencial o bórrala con `secret: null`. Con `dcctl product apply`, establece el identificador de credencial del manifiesto antes de cambiar su destino. Los cambios de tema, QoS e identidad conservan la credencial.

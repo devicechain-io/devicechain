@@ -26,7 +26,7 @@ title: 配置通知渠道
 
 **更新**时，`secret` 字段行为如下：
 
-- **省略**则保留现有密钥，不必再次发送。
+- **省略**则保留现有密钥，更改类型或凭据目标时必须重新发送。
 - 发送非空值会替换。
 - 发送 `null` 或空字符串会清除。
 - 配置声明 `bearer` 或 `header` 认证的 webhook 渠道，清除密钥会被拒绝。若希望端点匿名，请在同一请求将 `auth` 改为 `none`。
@@ -370,3 +370,5 @@ query {
 5. **查看投递记录。** `notificationAttempts(criteria: {pageNumber: 1, pageSize: 20, alarmToken: "..."})` 列出该告警的每次尝试及其结果。`FAILED` 或 `REFUSED` 记录带有 `errorCode` 和服务提供方的 `errorMessage`；参见[投递记录](#delivery-ledger)。
 
 确认或解除告警会停止后续升级。状态行在通知历史旁记录 `acknowledgedAt`/`clearedAt`。如果告警解除后其条件再次出现，平台会重新打开同一个告警，其状态行也会为新周期重新开始：在该周期被确认或解除之前，升级会再次进行。
+
+如果渠道持有已存储凭据，更改渠道类型、webhook URL 或认证方式、SMTP 主机/端口/安全模式或 PagerDuty 区域时，必须在同一请求中发送 `secret`。省略时将返回 `SECRET_RESUPPLY_REQUIRED`，且不会写入任何更改。请重新提供凭据，或使用 `secret: null` 删除凭据。名称、自定义请求头和链接基础 URL 的编辑会保留凭据。

@@ -994,6 +994,10 @@ With `auth.signingKeyMaxAgeDays` set, user-management now rotates an over-age si
 
 - **Nothing needs doing.** Nothing changes when the setting is 0.
 
+#### Re-pointing a stored credential requires supplying it again {#v160-credential-resupply}
+
+**Re-pointing a stored credential.** `updateConnector`, `rollbackConnector`, `updateNotificationChannel` and `updateAiProvider` refuse with `SECRET_RESUPPLY_REQUIRED` when a request changes the type or the destination of a connector, notification channel or AI provider that holds a stored credential and does not send `secret` in the same request. Send the credential again, or `secret: null` to remove it. Edits that do not move the destination (name, topic, QoS, custom headers, link base URL, model, enabled) are unaffected, and existing connectors, channels and providers keep delivering. To roll a connector back to a version with a different destination, re-point it with `updateConnector` and its credential instead. With `dcctl product apply`, set the connector's credential handle when a manifest changes its destination. Older replicas do not enforce this until they are replaced.
+
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
 `v1.5.0` is an in-place upgrade from `v1.4.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Four appended migrations run on upgrade: three in `device-management` and one in `user-management`. They add the agent kill fence and effect outbox, automation reviews and review enforcement, and the actuation generation column. See [Schema changes and going back](#v150-going-back). Coming from `v1.3.0` or earlier, read the [`v1.4.0` notes](#v140-upgrade) first.
