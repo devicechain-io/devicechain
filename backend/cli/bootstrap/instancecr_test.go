@@ -46,7 +46,7 @@ func TestInstanceSpecIsAClosedList(t *testing.T) {
 	want := []string{
 		"brokerMaxConnections", "cluster", "cnpg", "compact", "extraFunctionalAreas", "grafanaSSO", "ha",
 		"host", "imageRegistry", "imageVersion", "managed", "monitoring", "mqttDeviceUplinks", "mqttExposure", "mqttFailClosed", "mqttHost", "objectStore", "profile",
-		"provider", "restored", "restoredAt", "size", "tls", "trustedProxies", "trustedProxiesExplicit",
+		"provider", "restored", "restoredAt", "shardGroups", "size", "tls", "trustedProxies", "trustedProxiesExplicit",
 	}
 	got := specJSONFields(t)
 	if !reflect.DeepEqual(got, want) {

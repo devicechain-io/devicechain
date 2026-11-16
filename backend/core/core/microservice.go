@@ -46,7 +46,8 @@ const (
 // pinned by TestStructLiteralMicroserviceMethods rather than asserted here:
 //
 //	Safe — they behave as they do on a constructed Microservice:
-//	  Banner, Mux, RegisterProbes, Live, MarkNotLive, NewHttpServer, MetricsSubsystem,
+//	  Banner, Mux, OpsMux, RegisterProbes, Live, MarkNotLive, NewHttpServer, NewOpsServer,
+//	  MetricsSubsystem,
 //	  MetricsRegisterer, MetricsHandler, UseMetricsRegistry, NewCounter, NewCounterVec, NewGauge,
 //	  NewGaugeVec, NewScrapedGaugeVec, NewHistogramVec, NewProcessorMetrics, NewPeriodicTaskMetrics, LoadInstanceConfiguration,
 //	  LoadInstanceConfigurationFrom, LoadMicroserviceConfiguration,
@@ -167,6 +168,10 @@ type Microservice struct {
 	// collision hazard, since each Microservice gets its own.
 	muxOnce sync.Once
 	mux     *http.ServeMux
+
+	// OpsMux is separate from the publicly routed API mux.
+	opsMuxOnce sync.Once
+	opsMux     *http.ServeMux
 
 	// profiler is the opt-in profiling listener, nil unless ENV_PROFILER_ADDRESS asked
 	// for one and ExecuteStart started it. It is a SEPARATE server on a separate address,
