@@ -756,6 +756,19 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The three most recent minor releases (`v1.6`, `v1.5` and `v1.4`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
 
+### v1.7.0 — client authentication and query metrics {#v170-upgrade}
+
+Adds `devicechain_svcclient_queries_total{result="ok|error"}` and
+`devicechain_svcclient_query_duration_seconds` for calls after the scoped-caller gate,
+including validation and token acquisition. `devicechain_svcclient_service_token_mint_duration_seconds`
+measures actual mint attempts, including failures, excluding cache hits and single-flight waiters.
+`devicechain_userclient_logins_total{result="ok|error|mfa_challenge"}` counts login
+exchanges; MFA verification and tenant selection are separate operations and are not counted.
+`devicechain_userclient_refreshes_total{result="ok|error"}` counts refresh exchanges
+before any login fallback. All new series start at zero and carry no tenant, credential,
+query, or endpoint labels. Rolling upgrades need no configuration or database changes;
+these metrics appear as each process upgrades.
+
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the v1.6.0 `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. One appended migration in `device-management` makes live entity attribute keys unique and queues repairs. See [Schema changes in v1.6.0 and going back](#v160-going-back). Coming from `v1.4.0` or earlier, read the [`v1.5.0` notes](#v150-upgrade) first.

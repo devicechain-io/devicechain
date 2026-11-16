@@ -512,6 +512,18 @@ dcctl bootstrap local devicechain
 
 最近三个次要版本（`v1.6`、`v1.5` 和 `v1.4`）按从新到旧的顺序提供完整说明。下方还保留了 `v0.27.0` 至 `v0.24.0` 的详细说明。
 
+### v1.7.0 — 客户端认证与查询指标 {#v170-upgrade}
+
+新增 `devicechain_svcclient_queries_total{result="ok|error"}` 和
+`devicechain_svcclient_query_duration_seconds`，统计通过调用者范围检查后的调用，
+包括本地校验和获取令牌的时间。`devicechain_svcclient_service_token_mint_duration_seconds`
+统计实际服务令牌签发尝试的耗时，包括失败，不计缓存命中或等待共享签发的调用者。
+`devicechain_userclient_logins_total{result="ok|error|mfa_challenge"}` 统计 login
+交换；MFA 验证和租户选择是独立操作，不计入该指标。
+`devicechain_userclient_refreshes_total{result="ok|error"}` 统计刷新交换，
+在回退到 login 之前记录结果。所有新增序列从零开始，不含租户、凭据、查询或端点标签。
+滚动升级无需修改配置或数据库；各进程升级后即可提供这些指标。
+
 ### v1.6.0 — 更严格的权限检查，代理重载时设备保持连接 {#v160-upgrade}
 
 `v1.6.0` 可从 `v1.5.0` 原地升级：先为集群运行 `dcctl install`，再为每个实例运行一次 `dcctl upgrade`，详见[滚动升级](#rolling-upgrades)。**两个命令都使用 v1.6.0 的 `dcctl`**，并向 `dcctl install` 提供集群设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。`device-management` 新增一个迁移，使当前实体属性键保持唯一并排队执行修复。参见[v1.6.0 的架构变更与回退](#v160-going-back)。若从 `v1.4.0` 或更早版本升级，请先阅读 [`v1.5.0` 说明](#v150-upgrade)。

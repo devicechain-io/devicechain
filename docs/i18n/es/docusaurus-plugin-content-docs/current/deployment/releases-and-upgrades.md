@@ -801,6 +801,20 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 Las tres versiones menores más recientes (`v1.6`, `v1.5` y `v1.4`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
 
+### v1.7.0 — métricas de autenticación y consultas de clientes {#v170-upgrade}
+
+Añade `devicechain_svcclient_queries_total{result="ok|error"}` y
+`devicechain_svcclient_query_duration_seconds` para llamadas posteriores al control de
+alcance, incluidas la validación y la obtención del token.
+`devicechain_svcclient_service_token_mint_duration_seconds` mide los intentos reales de
+emisión, incluidos los fallidos, sin contar la caché ni quienes esperan una emisión compartida.
+`devicechain_userclient_logins_total{result="ok|error|mfa_challenge"}` cuenta los
+intercambios de login; la verificación MFA y la selección de tenant son operaciones separadas
+y no se cuentan. `devicechain_userclient_refreshes_total{result="ok|error"}` cuenta
+las renovaciones antes de recurrir al login. Todas las series nuevas empiezan en cero y
+no incluyen etiquetas de tenant, credenciales, consulta ni endpoint. La actualización gradual
+no requiere cambios de configuración ni de base de datos; las métricas aparecen al actualizar cada proceso.
+
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de v1.6.0 para ambos comandos**, y proporciona a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Una migración añadida en `device-management` hace únicas las claves de atributos activos y encola reparaciones. Consulta [Cambios de esquema en v1.6.0 y vuelta atrás](#v160-going-back). Si vienes de `v1.4.0` o anterior, lee primero las [notas de `v1.5.0`](#v150-upgrade).
