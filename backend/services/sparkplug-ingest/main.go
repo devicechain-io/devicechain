@@ -38,6 +38,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/partition"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/shardgroups"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-sparkplug-ingest/config"
@@ -59,11 +60,12 @@ const (
 )
 
 var (
-	Microservice  *core.Microservice
-	Configuration *config.SparkplugConfiguration
-	Manager       *host.Manager
-	NatsManager   *messaging.NatsManager
-	Lease         *messaging.DistributedLease
+	stopStreamSharding context.CancelFunc
+	Microservice       *core.Microservice
+	Configuration      *config.SparkplugConfiguration
+	Manager            *host.Manager
+	NatsManager        *messaging.NatsManager
+	Lease              *messaging.DistributedLease
 
 	// PublishWriters are the AsyncWriters the sources publish through, one per source and each
 	// built ONCE for the life of the process (not per leadership term: a writer holds a reply
@@ -171,6 +173,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 	NatsManager = Svc.Nats
+	stop, err := shardgroups.Enable(NatsManager)
+	if err != nil {
+		return err
+	}
+	stopStreamSharding = stop
 
 	// The ingest pipeline (device resolution + durable emit) is REQUIRED whenever the
 	// adapter has any source to ingest from — a source with an unreachable device
@@ -929,10 +936,16 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// 🔴 AFTER the unwind above, never before it: the unwind ends in a lease release, a KV
 	// write over the broker connection Svc.Stop drains. Svc then stops the broker and,
 	// last, the probe server, so /metrics answers through the whole of this.
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
 	return Svc.Stop(ctx)
 }
 
 // afterMicroserviceTerminated releases the broker's resources.
 func afterMicroserviceTerminated(ctx context.Context) error {
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
 	return Svc.Terminate(ctx)
 }
