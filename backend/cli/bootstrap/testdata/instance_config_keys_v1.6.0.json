@@ -1,6 +1,6 @@
 {
   "retired": {
-    "infrastructure.metrics.httpPort": "Metrics are served on the GraphQL/HTTP port (8080) at /metrics through the shared mux; there is no separate metrics listener and this port was never bound. Delete the key. Scrape discovery is controlled by the chart's metrics.enabled value, which renders the ServiceMonitor against the graphql port."
+    "infrastructure.metrics.httpPort": "Metrics are served on the operations port (8083) at /metrics on a separate mux; this configuration key does not control the listener. Delete the key. Scrape discovery is controlled by the chart's metrics.enabled value, which renders the ServiceMonitor against the ops port."
   },
   "tree": {
     "fields": {
@@ -142,6 +142,19 @@
                 "fields": {
                   "Ca": {},
                   "Enabled": {}
+                }
+              },
+              "shardGroups": {
+                "fields": {
+                  "count": {},
+                  "placementTags": {
+                    "map": {
+                      "elem": {}
+                    }
+                  },
+                  "suffixes": {
+                    "elem": {}
+                  }
                 }
               }
             }
