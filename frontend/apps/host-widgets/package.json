@@ -21,8 +21,8 @@
     "@devicechain/widgets": "0.0.0-dev"
   },
   "devDependencies": {
-    "@babel/core": "^8.1.0",
-    "@babel/eslint-parser": "^8.0.7",
+    "@babel/core": "^8.1.2",
+    "@babel/eslint-parser": "^8.1.2",
     "@babel/preset-react": "^8.0.1",
     "@babel/preset-typescript": "^8.0.7",
     "@types/react": "^19.3.0",

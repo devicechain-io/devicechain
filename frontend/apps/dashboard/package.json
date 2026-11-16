@@ -24,25 +24,25 @@
     "echarts": "^6.0.0",
     "i18next": "^26.5.12",
     "i18next-browser-languagedetector": "^8.3.0",
-    "maplibre-gl": "^6.16.0",
+    "maplibre-gl": "^6.18.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-i18next": "^17.1.13"
   },
   "devDependencies": {
-    "@babel/core": "^8.1.0",
-    "@babel/eslint-parser": "^8.0.7",
+    "@babel/core": "^8.1.2",
+    "@babel/eslint-parser": "^8.1.2",
     "@babel/preset-react": "^8.0.1",
     "@babel/preset-typescript": "^8.0.7",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.2.1",
+    "@vitejs/plugin-react": "^6.3.0",
     "eslint": "^10.14.0",
     "eslint-plugin-i18next": "^6.1.5",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "jsdom": "^31.0.0",
+    "jsdom": "^31.0.1",
     "typescript": "~7.0.2",
-    "vite": "^8.3.6",
+    "vite": "^8.3.8",
     "vitest": "^5.1.0"
   }
 }
