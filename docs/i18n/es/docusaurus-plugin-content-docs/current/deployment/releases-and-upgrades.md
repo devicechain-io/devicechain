@@ -809,6 +809,7 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Novedades de v1.7.0 {#v170-whats-new}
 
+
 - **Un `dcctl bootstrap` rechazado deja el registro local de la instancia tal como estaba.** Cuando bootstrap se niega a ejecutarse sobre una instancia que ya está en marcha, `~/.devicechain/instances/<instance>/instance.json` se restaura byte a byte, incluido su `createdAt`. Antes, la ejecución rechazada lo reescribía con su propia hora de creación y su versión de dcctl.
 
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}

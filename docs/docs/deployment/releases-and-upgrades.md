@@ -764,6 +764,7 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### What is new in v1.7.0 {#v170-whats-new}
 
+
 - **A refused `dcctl bootstrap` leaves the local instance record as it found it.** When bootstrap refuses to run over an instance that is already running, `~/.devicechain/instances/<instance>/instance.json` is restored byte for byte, including its `createdAt`. Before, the refused run rewrote it with its own creation time and dcctl version.
 
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
