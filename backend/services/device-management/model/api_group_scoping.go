@@ -240,6 +240,24 @@ func (api *Api) registerGroupVersionOnTx(ctx context.Context, tx *gorm.DB, group
 			return nil, err
 		}
 	}
+	sel, err := selector.Compile(frozen.Selector, frozen.MemberType)
+	if err != nil {
+		return nil, err
+	}
+	matchesEmpty, err := sel.MatchesEmpty()
+	if err != nil {
+		return nil, err
+	}
+	if matchesEmpty {
+		ref := &EntityGroupFacetRef{
+			FacetKey: createEnrollFacetKey, MemberType: frozen.MemberType,
+			GroupId: group.ID, SelectorVersion: frozen.Version, GroupToken: group.Token,
+		}
+		// Also safe if a selector explicitly references the reserved key itself.
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(ref).Error; err != nil {
+			return nil, err
+		}
+	}
 	// Backfill under the lock: read the full member set on the tx, then batch-insert.
 	members, err := api.membersMatchingFrozenOnTx(ctx, tx, frozen)
 	if err != nil {
@@ -477,6 +495,9 @@ func (api *Api) afterMembershipRecompute(ctx context.Context, entityType string,
 // reverse-index row). The resolver checks it once per event (cached) to short-circuit the
 // per-entity membership reads entirely for a tenant not using rule scoping — ADR-062
 // Decision 7 pay-nothing: zero scoped groups ⇒ no stamp, no per-target lookups.
+// The empty-match sentinel counts as a ref too. Currently every lowerable selector
+// has at least one facet leaf (bare constants and non-facet predicates are rejected),
+// so zero-key selectors cannot exist and this does not change the existence result.
 func (api *Api) AnyScopedGroups(ctx context.Context) (bool, error) {
 	rows := make([]EntityGroupFacetRef, 0, 1)
 	if err := api.RDB.DB(ctx).Select("id").Limit(1).Find(&rows).Error; err != nil {
