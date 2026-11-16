@@ -60,6 +60,8 @@ type DispatchConsumer struct {
 	// on the final delivery is counted on its dead_letter_lost_total — the one series the
 	// DeadLetterWriteLost alert selects, by name, for every service that loses a letter.
 	deadLetters *deadletter.Producer
+	letters     *dispatchLetterBudget
+	letterWG    sync.WaitGroup
 
 	// rate is the per-tenant outbound egress limiter (ADR-060 SD-3). nil disables egress rate
 	// limiting (every dispatch admitted; the bounded worker pool + per-send timeout still bound
@@ -161,6 +163,7 @@ func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageW
 		dead:          dead,
 		deadIndex:     index,
 		deadLetters:   deadLetters,
+		letters:       newDispatchLetterBudget(deadLetters, deadIndex),
 		executor:      executor,
 		metrics:       metrics,
 		rate:          rate,
@@ -179,6 +182,11 @@ func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageW
 // (the reader is live) from main's afterMicroserviceStarted.
 func (c *DispatchConsumer) Start(ctx context.Context) error {
 	c.procCtx, c.procCancel = context.WithCancel(context.Background())
+	c.letterWG.Add(1)
+	go func() {
+		defer c.letterWG.Done()
+		c.letters.run(c.procCtx)
+	}()
 	// One place per worker and no more: the capacity reader already holds at most `workers`
 	// dispatches, so a deeper channel would never fill — and a deeper one in front of a reader
 	// WITHOUT capacity is how a burst came to sit past AckWait and be sent twice.
@@ -214,6 +222,10 @@ func (c *DispatchConsumer) Stop(ctx context.Context) error {
 			close(c.messages)
 		}
 		c.workerWG.Wait()
+		c.letterWG.Wait()
+		flushCtx, cancel := context.WithTimeout(context.Background(), dispatchLetterFlushTimeout)
+		defer cancel()
+		c.letters.flush(flushCtx)
 	})
 	return nil
 }
@@ -438,7 +450,7 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 			// warn would flood the log for exactly the over-quota tenant this fires on.
 			log.Debug().Err(err).Str("rule", req.RuleID).Str("tenant", tenant).Str("action", action).
 				Msg("Connector dispatch shed: tenant over its outbound egress rate beyond the smoothing budget; dead-lettering.")
-			c.deadLetter(tctx, msg, req.RuleID, action, outcomeRateLimited)
+			c.budgetedDeadLetter(tctx, msg, req.RuleID, action, outcomeRateLimited, nil)
 			return
 		}
 	}
@@ -455,9 +467,7 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 	default:
 		// Terminal (unsupported kind / malformed config that bypassed the publish gate): a redelivery
 		// cannot help, so dead-letter it visibly rather than churn the cap or silently drop it.
-		log.Error().Err(res.err).Str("rule", req.RuleID).Str("tenant", tenant).
-			Msg("Connector dispatch is terminally undeliverable; dead-lettering.")
-		c.deadLetter(tctx, msg, req.RuleID, action, res.outcome)
+		c.budgetedDeadLetter(tctx, msg, req.RuleID, action, res.outcome, res.err)
 	}
 }
 
