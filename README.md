@@ -57,21 +57,33 @@ More on the [DeviceChain YouTube channel](https://www.youtube.com/@devicechain-i
 
 ### Try it locally
 
-You need Docker, `kubectl`, `kind` and OpenTofu on your `PATH`, plus `dcctl` from the
-[releases page](https://github.com/devicechain-io/devicechain/releases). Most of the time is the
+You need Docker, `kubectl`, `kind` and OpenTofu 1.10 or later on your `PATH`, plus `dcctl` and
+`dc-simulator` from the [releases page](https://github.com/devicechain-io/devicechain/releases).
+Give Docker at least 4 CPUs, 8 GB of memory and 40 GB of free disk. Most of the time is the
 bootstrap; the [quickstart](https://docs.devicechain.io/quickstart/first-device) budgets about half
-an hour end to end.
+an hour end to end. The commands are for a bash shell (on Windows, Git Bash or WSL).
 
 ```bash
-dcctl install local                                        # a kind cluster and what instances share
+dcctl install local --compact                              # a kind cluster sized for a laptop
 dcctl bootstrap local devicechain --host localhost --no-tls # an instance, served at http://localhost/
-dcctl sim create demo                                      # a tenant and a sign-in for it
+dcctl sim create building --manifest buildingpulse         # a tenant and a sign-in for it
 ```
 
-Open http://localhost/ and sign in as `demo@sim.devicechain.local`, the identity `sim create`
-made for the tenant `sim-demo`. Its password is the `simPassword` field in
-`~/.devicechain/sims/demo.json`. (The bootstrap also prints a password for
-`superuser@devicechain.local`, which administers the instance and sees no tenant data.)
+The simulator sends its readings to the device ingest port, which a local install does not
+publish. Forward it in a second terminal and leave it running, then start the simulator:
+
+```bash
+kubectl -n dci-devicechain port-forward svc/event-sources 8081:8081   # second terminal
+dcctl sim run building --simulator ./dc-simulator                     # Ctrl+C stops it
+```
+
+It provisions twelve thermostats across three buildings, with a rule that raises an alarm when a
+temperature goes above 30, and then sends readings every five seconds. Open http://localhost/ and
+sign in as `building@sim.devicechain.local`, the identity `sim create` made for the tenant
+`sim-building`. Its password is the `simPassword` field in `~/.devicechain/sims/building.json`.
+Under **Monitor → Alarms**, `bp-over-temp` alarms raise and clear as the temperatures rise and
+fall. (The bootstrap also prints a password for `superuser@devicechain.local`, which administers
+the instance and sees no tenant data.)
 [Your first device](https://docs.devicechain.io/quickstart/first-device) continues from here: it
 creates a device, sends a reading with `curl` and shows it in the console.
 
