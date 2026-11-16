@@ -960,6 +960,10 @@ JetStream independiente que contiene datos. También rechaza una actualización 
 `count` o quitaría un flujo de sus `suffixes`, ya que los grupos pueden contener datos:
 mantenga el bloque en cada archivo de valores de reemplazo.
 
+#### Las métricas y los endpoints de salud pasan al puerto ops {#v160-ops-port}
+
+Las métricas y los endpoints de salud de los servicios se han separado del puerto de la API. `/metrics`, `/healthz` y `/readyz` se sirven en el puerto 8083 (`ops`) de los pods y del Service de cada área y ya no son accesibles mediante `/api/<area>/...`. Los ServiceMonitors y las sondas del chart se actualizan automáticamente. Si recopilas métricas de los pods con tu propia configuración de Prometheus, cambia el puerto de destino de 8080 a 8083. Durante el despliegue gradual, no se recopilan métricas de los pods que aún no se han reemplazado.
+
 #### Una recarga completa del broker mantiene los dispositivos admitidos por el callout de autenticación {#v160-broker-reload}
 
 Una recarga completa del broker cerraba todas las conexiones admitidas por el callout de autenticación, entre ellas las de todos los dispositivos MQTT que se autentican con un nombre de usuario. El broker ahora se compila con `nats-server` `v2.15.3`, por lo que un cambio en el conjunto de CA del Secret TLS del broker (una rotación de CA), o una recarga manual, mantiene abiertas esas conexiones. Una recarga sin reinicio solo ocurre cuando el sidecar config-reloader del chart envía SIGHUP porque cambió el Secret TLS montado, o cuando un operador ejecuta `nats-server --signal reload` a mano.
@@ -1030,6 +1034,12 @@ Una acción `httpCall` ya no puede nombrar la credencial de un conector. Un mane
 `dcctl destroy` rechaza un argumento de instancia que no sea un nombre simple (`.`, `..` o cualquier valor que contenga un separador de ruta). Las versiones anteriores lo resolvían como un directorio bajo `~/.devicechain/instances` y eliminaban el destino resultante.
 
 - **El estado local requiere pruebas.** `dcctl destroy` solo borra el estado local de un clúster ausente cuando la instancia tiene un registro de su clúster y el contexto registrado de ese clúster ya no responde. Una instancia sin registro pasa por la desinstalación normal, que falla si no se puede acceder al clúster; indique `--kube-context` o elimine manualmente el directorio de la instancia si su clúster realmente ha desaparecido.
+
+#### La rotación de claves de firma llega a todas las réplicas {#v160-signing-key-follow}
+
+Con `auth.signingKeyMaxAgeDays` configurado, user-management ahora rota una clave de firma demasiado antigua mientras se ejecuta: unos 15 minutos después de que arranque una réplica y cada vez que la clave supere esa edad después, no solo al arrancar. Todas las réplicas adoptan la nueva clave en un máximo de 30 segundos y la validan y publican en cuanto reciben un token o una solicitud de claves que la necesita. Las versiones anteriores aplicaban la rotación solo en la réplica que la realizaba, por lo que, con más de una réplica, algunos inicios de sesión fallaban hasta que las demás se reiniciaban.
+
+- **No hace falta hacer nada.** Nada cambia cuando el ajuste es 0.
 
 #### Redirigir una credencial almacenada exige volver a proporcionarla {#v160-credential-resupply}
 

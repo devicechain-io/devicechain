@@ -36,7 +36,7 @@ type profilerListener struct {
 //     0.0.0.0 if it is meant.
 //   - The port must be 1-65535. Port 0 would bind SOME port, which nobody could then
 //     port-forward to without reading the log.
-//   - The port may not be HttpPort, which the service's own server binds a moment later.
+//   - The port may not be HttpPort or OpsPort, which the service binds separately.
 //     Refusing it here names the profiler; letting it through would fail the SERVICE's
 //     bind instead, and that error would point at the wrong listener.
 func profilerAddress() (addr string, ok bool, err error) {
@@ -62,6 +62,9 @@ func profilerAddress() (addr string, ok bool, err error) {
 	n, err := strconv.ParseUint(port, 10, 16)
 	if err != nil || n == 0 {
 		return refuse(fmt.Sprintf("the port %q is not a number from 1 to 65535", port))
+	}
+	if n == OpsPort {
+		return refuse(fmt.Sprintf("port %d is the service operations port", OpsPort))
 	}
 	if n == HttpPort {
 		return refuse(fmt.Sprintf("port %d is the service's own HTTP port", HttpPort))

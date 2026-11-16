@@ -1005,8 +1005,8 @@ discover() {
   [[ -n "$broker_host" ]] || fail "no Service in $namespace names an mqtt port"
   mqtt_port="$(kn get svc "$broker_host" -o json | jq -r '[.spec.ports[] | select(.name == "mqtt")][0].port')"
   es_metrics_port="$(kn get pods -l devicechain.io/functional-area=event-sources -o json |
-    jq -r '[.items[0].spec.containers[0].ports[]? | select(.name | test("metric"))][0].containerPort // empty')"
-  [[ -n "$es_metrics_port" ]] || es_metrics_port=8080
+    jq -r '[.items[0].spec.containers[0].ports[]? | select(.name == "ops")][0].containerPort // empty')"
+  [[ -n "$es_metrics_port" ]] || es_metrics_port=8083
   note "broker MQTT at $broker_host:$mqtt_port; event-sources metrics on :$es_metrics_port"
   es_metric_present device_uplink_messages_total || fail "event-sources serves no device_uplink_messages_total"
 }
