@@ -803,6 +803,12 @@ func buildDeviceUplinkRoute(ingest config.HttpIngest) *processor.DeviceUplinkRou
 	return newDeviceUplinkRoute()
 }
 
+const (
+	deviceUplinkSourceBurst = 600
+	deviceUplinkSourceEvery = 20 * time.Millisecond
+	deviceUplinkSourceKeys  = 4096
+)
+
 // newDeviceUplinkRoute is the device-uplink route's dependencies, without asking whether an
 // operator switched a transport on. The MQTT wire is switched on at the broker (the grant to publish
 // to the uplink topic, infrastructure.nats.mqttDeviceUplinks), so this service serves whatever the
@@ -812,11 +818,23 @@ func newDeviceUplinkRoute() *processor.DeviceUplinkRoute {
 	if infra.DeviceManagement.Hostname == "" {
 		return nil
 	}
+	trusted, err := infra.Http.TrustedProxyPrefixes()
+	if err != nil {
+		log.Error().Err(err).Msg("Invalid trusted proxies for device uplinks")
+		return nil
+	}
+	sources, err := sourcelimit.New(sourcelimit.Limits{Burst: deviceUplinkSourceBurst, Every: deviceUplinkSourceEvery, MaxKeys: deviceUplinkSourceKeys})
+	if err != nil {
+		log.Error().Err(err).Msg("Unable to build device uplink source limiter")
+		return nil
+	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.DeviceRead)})
 	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
 	return &processor.DeviceUplinkRoute{
-		Plans:   integration.NewDeviceDecoders(integration.NewDM(client, dmURL), integration.DeviceDecoderConfig{}),
-		Publish: onDeviceUplinkDecoded,
+		Sources:        sources,
+		TrustedProxies: trusted,
+		Plans:          integration.NewDeviceDecoders(integration.NewDM(client, dmURL), integration.DeviceDecoderConfig{}),
+		Publish:        onDeviceUplinkDecoded,
 		Result: func(result string) {
 			if DeviceUplinkRequestsCounter != nil {
 				DeviceUplinkRequestsCounter.WithLabelValues(result).Inc()
