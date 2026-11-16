@@ -807,6 +807,7 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Antes de actualizar a v1.7.0 {#v170-before-upgrade}
 
+
 - **`dcctl install`, `dcctl bootstrap` y `dcctl preflight` comprueban la versión de OpenTofu o Terraform.** La comprobación previa ahora rechaza un binario anterior al `required_version` que declara la configuración de OpenTofu incluida en dcctl (actualmente `>= 1.10`), una versión preliminar o un binario cuya versión no puede leer. Antes solo comprobaba que el binario existiera, por lo que una instalación con OpenTofu 1.9 fallaba en `tofu init` cuando ya había actualizado el operador. Si ambos están instalados, se sigue prefiriendo OpenTofu, y es el binario que se comprueba. Instala OpenTofu o Terraform estable 1.10 o posterior antes de ejecutar el `dcctl install` de v1.7.0. `--skip-preflight` sigue omitiendo la comprobación.
 
 #### Novedades de v1.7.0 {#v170-whats-new}
