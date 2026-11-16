@@ -16,15 +16,12 @@ encoded — pub/sub (ADR-003) makes an absent peer safe, so only hard edges gate
 {{/*
 devicechain.areasWithoutPublicApi — functional areas that serve NO external API.
 
-They register only /metrics and the probes on the default mux: no GraphQL schema,
-no bearer-token auth gate. Giving one a public /api/<area> route therefore does not
-expose an API — it exposes an UNAUTHENTICATED PROMETHEUS ENDPOINT, which leaks
-device and tenant counts, error rates and broker topology to anyone who can reach
-the ingress host.
+They serve metrics and probes only on the separate ops port, with no GraphQL schema.
+A public API route to their otherwise unused GraphQL port serves no purpose.
 
 🔴 This is a LIST rather than an inline name check because it was a name check, and
 the second such area was added without it. Adding an area here is the one step that
-keeps a metrics-only service off the public router; if you add an ingest-style area
+keeps a probes-only service off the public router; if you add an ingest-style area
 that serves no schema, add it here in the same commit.
 */}}
 {{- define "devicechain.areasWithoutPublicApi" -}}
@@ -1609,7 +1606,7 @@ that has to be right about it.
 {{- if $p.enabled -}}
 {{- $addr := $p.address | default "127.0.0.1:6060" -}}
 {{- $port := regexFind "[0-9]+$" $addr -}}
-{{- $taken := list (toString $root.Values.service.port) -}}
+{{- $taken := list (toString $root.Values.service.port) (include "devicechain.opsPort" $root) -}}
 {{- range $x := get .areaCfg "extraPorts" | default list -}}
 {{- if eq (upper ($x.protocol | default "TCP")) "TCP" -}}
 {{- $taken = append $taken (toString $x.port) -}}
@@ -1726,6 +1723,32 @@ the filtered document by accident.
   {{- $_ := set $cfg "infrastructure" dict -}}
 {{- end -}}
 {{- $infra := index $cfg "infrastructure" -}}
+{{- $nats := get $infra "nats" | default dict -}}
+{{- if hasKey $nats "shardGroups" -}}
+  {{- $shards := get $nats "shardGroups" -}}
+  {{- $areas := splitList "," (include "devicechain.enabledAreas" .) -}}
+  {{- if and (has "resolved-events" $shards.suffixes) (or (has "device-state" $areas) (has "event-processing" $areas)) -}}
+    {{- fail "resolved-events shardGroups requires group readers in every deployed consumer; device-state and event-processing are not wired yet (select inbound-events only)" -}}
+  {{- end -}}
+  {{- if ne (int (get $nats "streamReplicas" | default 1)) 1 -}}
+    {{- fail "shardGroups placement requires streamReplicas=1" -}}
+  {{- end -}}
+  {{- $tags := get $shards "placementTags" | default dict -}}
+  {{- range $key, $value := $tags -}}
+    {{- if or (not (regexMatch "^[0-4]$" $key)) (ge (int $key) (int $shards.count)) -}}
+      {{- fail "shardGroups placementTags key must name a configured group" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- range $g := until (int $shards.count) -}}
+    {{- $key := toString $g -}}
+    {{- $want := list (printf "dc-nats-%d" $g) -}}
+    {{- if and (hasKey $tags $key) (ne (toJson (get $tags $key)) (toJson $want)) -}}
+      {{- fail "shardGroups placementTags must select the corresponding dc-nats pod" -}}
+    {{- end -}}
+    {{- $_ := set $tags $key $want -}}
+  {{- end -}}
+  {{- $_ := set $shards "placementTags" $tags -}}
+{{- end -}}
 {{- if hasKey $infra "egress" -}}
   {{- $egress := index $infra "egress" -}}
   {{- if and $egress (empty (get $egress "devAllowedDestinations")) -}}
@@ -1867,4 +1890,19 @@ depends on who composes the instance config:
 {{- fail "mqttExposure.mode gateway needs the Gateway the instance already ships: set ingress.enabled and ingress.controller gateway, or use mqttExposure.mode loadbalancer." -}}
 {{- end -}}
 {{- dict "mode" $mode "host" $host "brokerService" $svc | toJson -}}
+{{- end -}}
+
+{{/* Must equal core.OpsPort. Cluster-only; never target this port from a public route. */}}
+{{- define "devicechain.opsPort" -}}
+{{- if eq (int .Values.service.port) 8083 -}}
+{{- fail "service.port: 8083 is reserved for operations; public routes must use the API port." -}}
+{{- end -}}
+{{- range $area, $cfg := .Values.functionalAreas -}}
+{{- range $p := $cfg.extraPorts -}}
+{{- if or (eq $p.name "ops") (eq (int $p.port) 8083) -}}
+{{- fail (printf "functionalAreas.%s.extraPorts: ops and port 8083 are reserved for operations." $area) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- 8083 -}}
 {{- end -}}

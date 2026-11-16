@@ -53,7 +53,7 @@ export interface FleetStrings {
   drill: (device: string) => string;
 }
 
-export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
+export const FLEET_STRINGS: Record<'en' | 'es' | 'zh-CN', FleetStrings> = {
   en: {
     device: 'Device',
     loading: 'Loading',
@@ -122,8 +122,27 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     sortBy: (column) => `Ordenar por ${column}`,
     drill: (device) => `Mostrar ${device} en los widgets enlazados`,
   },
+  'zh-CN': {
+    device: '设备', loading: '正在加载', notReported: '不报告此测量项', unread: '尚未加载',
+    noData: '此范围内暂无数据', failed: '无法读取', unbound: '请为此组件选择设备组',
+    forbidden: ACCESS_STRINGS['zh-CN'].forbidden, unsupported: '此数据源无法列出设备群',
+    noMembers: '此组中没有设备', noMeasurement: '请选择要比较的测量项',
+    oneDevice: '此组件显示单台设备，但当前绑定的是设备组，会将组内设备的读数混在一起。',
+    useFleetTable: '请将其绑定到单台设备，或使用设备群表格显示此组。',
+    usePerDevice: '请设置为每台设备一条柱形以进行比较，或将其绑定到单台设备。',
+    useLinePerDevice: '请设置为每台设备一条曲线以进行比较，或将其绑定到单台设备。',
+    stale: '已过期', noMeasurementCount: '请选择要监测的测量项', noBands: '请添加阈值以标明需要关注的情况',
+    countOf: (total) => `共 ${total} 台`, needAttention: '需要关注', devices: '台设备',
+    notReporting: (n) => `${n} 台未报告数据`, notMeasured: (n) => `${n} 台不报告此测量项`,
+    noneMeasured: '此组中没有设备报告此测量项',
+    noneMeasuredShown: (shown, total) => `已读取 ${total} 台设备中的 ${shown} 台，均不报告此测量项`,
+    notRead: (n) => `${n} 台无法读取`, truncated: (shown, total) => `显示 ${total} 台设备中的 ${shown} 台`,
+    range: (from, to, of) => `第 ${from}–${to} 项，共 ${of} 项`, previous: '上一页', next: '下一页',
+    sortBy: (column) => `按${column}排序`, drill: (device) => `在关联组件中显示 ${device}`,
+  },
 };
 
 export function fleetStrings(locale: string | undefined = viewerLocale()): FleetStrings {
-  return locale?.toLowerCase().split('-')[0] === 'es' ? FLEET_STRINGS.es : FLEET_STRINGS.en;
+  const language = locale?.toLowerCase().split('-')[0];
+  return language === 'es' ? FLEET_STRINGS.es : language === 'zh' ? FLEET_STRINGS['zh-CN'] : FLEET_STRINGS.en;
 }
