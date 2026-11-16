@@ -1071,6 +1071,7 @@ mantenga el bloque en cada archivo de valores de reemplazo.
 - Los diálogos de secretos e invitaciones de una sola visualización requieren **Done** para cerrar; Escape y los clics fuera mantienen el valor visible. Las páginas de detalle ignoran respuestas obsoletas tras navegar.
 - El disparo de lotes reutiliza el token de idempotencia al reintentar y el panel de comandos ignora envíos duplicados. Los widgets de control de comandos limpian el estado pendiente al cambiar de dispositivo; la clasificación de alarmas agrupa las actualizaciones durante tormentas de eventos.
 - Un panel repite la consulta de tipo de dispositivo si antes no encontró ninguno. Las paletas de gráficos por ámbito se actualizan al cambiar el tema del host. Los documentos GraphQL usan importaciones directas para reducir el paquete de consola.
+- El texto restante de los widgets compartidos de los paneles está traducido al español y al chino simplificado.
 
 #### Una pestaña de la consola ya no continúa con el inicio de sesión de otra pestaña {#v160-console-tab-session}
 

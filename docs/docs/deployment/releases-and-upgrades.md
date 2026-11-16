@@ -1024,6 +1024,7 @@ values file.
 - One-time secret and invitation dialogs require **Done** to close; Escape and outside clicks leave the value visible. Detail pages ignore stale responses after navigation.
 - Batch fire reuses its idempotency token on retries, and the device command panel ignores duplicate submits. Command-control widgets clear pending state when the device changes; alarm triage coalesces refreshes during event storms.
 - A dashboard retries a device-type lookup after an earlier miss. Scoped chart palettes refresh when the host theme changes. GraphQL documents use direct imports to reduce the console bundle.
+- The remaining text of the shared dashboard widgets is translated into Spanish and Simplified Chinese.
 
 #### A console tab no longer continues under another tab's sign-in {#v160-console-tab-session}
 
