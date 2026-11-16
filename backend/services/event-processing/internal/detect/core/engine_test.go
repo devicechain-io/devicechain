@@ -338,7 +338,7 @@ func TestLiveKeyCounts(t *testing.T) {
 	e.ProcessEvent(Event{Seq: 7, Key: SeriesKey{Rule: "acme/p@1/corr", Series: "area1"}, Member: "mB", Time: at(1), Match: true})
 	e.ProcessEvent(Event{Seq: 8, Key: SeriesKey{Rule: "acme/p@1/corr", Series: "area1"}, Member: "mC", Time: at(1), Match: true})
 	// conn: a DISCONNECT raises (cursor + latch) then a CONNECT resolves (latch cleared) — but the
-	// ordering CURSOR persists, so the rule keeps ONE live key after the alarm clears. This is the
+	// ordering CURSOR persists alongside the bounded fall memo, so two live keys remain. This is the
 	// entry the ADR-023 budget must see (never expires; one per device-ever-seen).
 	e.ProcessEvent(Event{Seq: 9, Key: SeriesKey{Rule: "acme/p@1/conn", Series: "d1"}, Time: at(1), Presence: &PresenceEdge{SessionId: 100, Claim: presence.ClaimDisconnected}})
 	e.ProcessEvent(Event{Seq: 10, Key: SeriesKey{Rule: "acme/p@1/conn", Series: "d1"}, Time: at(2), Presence: &PresenceEdge{SessionId: 200, Claim: presence.ClaimConnected}})
@@ -348,8 +348,9 @@ func TestLiveKeyCounts(t *testing.T) {
 	if counts["acme/p@1/dur"] != 4 || counts["acme/p@1/delta"] != 1 || counts["acme/p@1/agg"] != 1 {
 		t.Fatalf("live-key counts wrong: %+v", counts)
 	}
-	if counts["acme/p@1/conn"] != 1 {
-		t.Fatalf("the connectivity ordering cursor must be a counted live key that survives resolve (1), got %d — the ADR-023 budget would be blind to it", counts["acme/p@1/conn"])
+	// Resolving retains one bounded fall memo in addition to the ordering cursor.
+	if counts["acme/p@1/conn"] != 2 {
+		t.Fatalf("the connectivity cursor and falling memo must both be counted (2), got %d — the ADR-023 budget would be blind to it", counts["acme/p@1/conn"])
 	}
 	if counts["acme/p@1/abs"] != 1 {
 		t.Fatalf("a heartbeat-armed absence timer (wheel-only) must be counted, not 0; got %d", counts["acme/p@1/abs"])

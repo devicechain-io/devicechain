@@ -118,7 +118,8 @@ func (r Receipt) redelivered() bool {
 // observable; a series that goes fully silent stays raised (see the package note on silence —
 // Absence covers the went-dark case). Stale readings are refused as described above.
 func (e *Engine) applyThreshold(ev Event, r Rule) {
-	raisedAt, raised := e.raised[ev.Key]
+	_, raised := e.raised[ev.Key]
+	raisedAt := e.raiseInput(ev.Key)
 	if !raised {
 		// No cursor outside an alarm. One can be left behind only by ClearRaised (a raise the
 		// runtime dropped), and it must not outlive the latch it belonged to.

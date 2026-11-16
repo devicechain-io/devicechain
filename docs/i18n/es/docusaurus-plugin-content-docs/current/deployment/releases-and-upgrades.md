@@ -809,6 +809,13 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Novedades de v1.7.0 {#v170-whats-new}
 
+#### Las eliminaciones se avisan de forma fiable {#v170-deletion-announcements}
+
+- Al eliminar un dispositivo, cliente, área, activo o grupo, el aviso a los demás servicios se registra ahora en la misma transacción de base de datos que la eliminación, y `device-management` lo sigue publicando hasta que el broker de mensajes lo acepta. Antes, un aviso perdido por una caída del broker o un reinicio en el momento equivocado no se enviaba nunca, de modo que los dashboards compartidos, los anclajes de eventos y el estado de detección de la entidad eliminada podían quedarse atrás.
+- El aviso lleva la hora de la eliminación, por tarde que se publique.
+- Mientras conviven pods antiguos y nuevos durante la actualización gradual, las eliminaciones que atiende un pod `v1.6` se avisan de la forma anterior.
+- No requiere cambios de configuración.
+
 - **Las reclamaciones de dispositivos respetan los canjes simultáneos.** Cancelar una reclamación que acaba de canjearse devuelve `false` y la mantiene canjeada. Reabrir una reclamación revoca la relación del propietario actual antes de volver a ofrecerla; si cambia durante la reapertura, la operación se rechaza y puede reintentarse.
 
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}
@@ -890,7 +897,7 @@ Qué requiere acción, en el orden en que debe hacerse:
 
 **Durante y después del despliegue.**
 
-- **Mantenga ausente `infrastructure.nats.shardGroups` durante todo el despliegue v1.5 → v1.6.** Un pod `v1.5` rechaza esta nueva clave como desconocida si carga la nueva configuración durante el despliegue. Termine de actualizar todos los pods antes de activarla. Si se incluye, `count` debe ser 2–16; los sufijos deben ser únicos y limitarse a `inbound-events` y `resolved-events`; las claves de `placementTags` deben ser números de grupo entre 1 y `count - 1`, con etiquetas no vacías ni compuestas solo por espacios. Los bloques inválidos se rechazan. Lo que acepta `dcctl` es más restringido: véase [Grupos de particiones de NATS opcionales](#v160-nats-shard-groups).
+- **Mantenga ausente `infrastructure.nats.shardGroups` durante todo el despliegue v1.5 → v1.6.** Un pod `v1.5` rechaza esta nueva clave como desconocida si carga la nueva configuración durante el despliegue. Termine de actualizar todos los pods antes de activarla. Si se incluye, `count` debe ser 2–16; los sufijos deben ser únicos y limitarse a `inbound-events` y `resolved-events`; las claves de `placementTags` deben ser números de grupo en `0..count-1`, incluido el grupo cero existente, con etiquetas no vacías ni compuestas solo por espacios. `dcctl` deriva una etiqueta de ubicación `dc-nats-<group>` para cada grupo, incluida `dc-nats-0`. Los bloques inválidos se rechazan. Lo que acepta `dcctl` es más restringido: véase [Grupos de particiones de NATS opcionales](#v160-nats-shard-groups).
 
 - **Los atributos de entidad son únicos por clave.** La actualización elimina duplicados activos de escrituras iniciales simultáneas, conserva el menor ID y encola la reparación de pertenencias a grupos y configuración. La creación del índice bloquea brevemente las escrituras de atributos. Durante el despliegue gradual, una réplica antigua puede rechazar una escritura inicial concurrente; vuelva a intentarla. No se requiere cambiar la configuración.
 
