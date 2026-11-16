@@ -12,8 +12,8 @@ import (
 
 func TestParseSMTPConfigDefaults(t *testing.T) {
 	// STARTTLS default + default submission port.
-	cfg, err := parseSMTPConfig(channelWith("s", model.ChannelTypeSMTP,
-		`{"host":"smtp.example.com","from":"alarms@example.com"}`))
+	raw := `{"host":"smtp.example.com","from":"alarms@example.com"}`
+	cfg, err := model.ParseSMTPConfig("s", &raw)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -22,8 +22,8 @@ func TestParseSMTPConfigDefaults(t *testing.T) {
 	}
 
 	// Implicit TLS defaults to 465.
-	cfg, _ = parseSMTPConfig(channelWith("s", model.ChannelTypeSMTP,
-		`{"host":"h","from":"f","security":"tls"}`))
+	raw = `{"host":"h","from":"f","security":"tls"}`
+	cfg, _ = model.ParseSMTPConfig("s", &raw)
 	if cfg.Port != 465 {
 		t.Fatalf("tls port = %d, want 465", cfg.Port)
 	}
@@ -36,7 +36,7 @@ func TestParseSMTPConfigValidation(t *testing.T) {
 		`{"host":"h","from":"f","security":"x"}`, // unknown security
 	}
 	for _, c := range cases {
-		if _, err := parseSMTPConfig(channelWith("s", model.ChannelTypeSMTP, c)); err == nil {
+		if _, err := model.ParseSMTPConfig("s", &c); err == nil {
 			t.Fatalf("expected error for %s", c)
 		}
 	}
