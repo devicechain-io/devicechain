@@ -280,6 +280,9 @@ func attemptErrorCode(status string, err error) string {
 	case model.AttemptStatusSent:
 		return ""
 	case model.AttemptStatusNotAttempted:
+		if errors.Is(err, errChannelTimedOutThisPass) {
+			return model.AttemptErrorTimeout
+		}
 		if err != nil {
 			return model.AttemptErrorSecretUnavailable
 		}

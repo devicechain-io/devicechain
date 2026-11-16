@@ -17,6 +17,8 @@ boards are implemented and validated end-to-end: an instance overview and seven 
 boards, described in [Grafana boards](./grafana-boards.md), with alert rules alongside them.
 :::
 
+Metrics (`/metrics`) and health probes (`/healthz`, `/readyz`) use port 8083 (`ops`) on each area's pods and Service. Public `/api/<area>/...` routes target only the API port (`graphql`, 8080); they cannot reach these operational endpoints. When supplying your own ingress controller, route the API to `graphql` and never to `ops`.
+
 ## Distributed tracing (OpenTelemetry)
 
 Tracing is **off by default**. When enabled, GraphQL requests and HTTP/MQTT device ingest
@@ -1935,7 +1937,7 @@ one replica, forward to the pod you mean by name (`kubectl port-forward pod/<nam
 
 `profiler.address` sets where the listener binds. It must be an IP address and a port, for
 example `0.0.0.0:6060` for a profiler that collects from other pods. The service refuses to
-start on a host name, a missing port, or its own port 8080.
+start on a host name, a missing port, or its own port 8080 or 8083.
 
 :::warning Any address other than loopback is open to the cluster network
 The listener has no authentication, and the chart renders no network policy that limits who
