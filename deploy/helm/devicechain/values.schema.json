@@ -342,7 +342,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 65535,
-          "description": "HTTP port every service listens on. It serves the GraphQL API, /healthz, /readyz and /metrics."
+          "description": "Public HTTP port every service listens on. It serves the GraphQL API; /healthz, /readyz and /metrics are on the separate ops port 8083, which no route targets."
         }
       },
       "description": "The Service exposed for each functional area."
@@ -375,7 +375,7 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Render one ServiceMonitor per enabled functional area, scraping /metrics on the named graphql port. Requires the Prometheus Operator CRDs; set false on a cluster without them."
+          "description": "Render one ServiceMonitor per enabled functional area, scraping /metrics on the named ops port. Requires the Prometheus Operator CRDs; set false on a cluster without them."
         },
         "grafanaDashboards": {
           "type": "boolean",
@@ -1117,7 +1117,7 @@
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 106751,
-                    "description": "user-management: rotate the token signing key at startup once it is older than this many days. 0 or absent turns age-based rotation off; a negative value, or one above 106751, is refused here and by the service at startup."
+                    "description": "user-management: rotate the token signing key while running once it is older than this many days, after a 15-minute startup grace. Replicas follow new keys within 30 seconds. 0 or absent turns age-based rotation off; a negative value, or one above 106751, is refused here and by the service at startup."
                   },
                   "signingKeyRetentionDays": {
                     "type": "integer",
