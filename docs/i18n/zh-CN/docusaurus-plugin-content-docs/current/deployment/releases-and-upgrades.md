@@ -520,6 +520,8 @@ dcctl bootstrap local devicechain
 
 #### v1.7.0 新增内容 {#v170-whats-new}
 
+- **MCP 服务器每进程 64 个进行中请求的上限现在可以达到，超出的请求会收到 HTTP 429。** 共享请求体预算此前只能容纳 63 个最大尺寸的请求体，因此第 64 个并发请求会在达到 MCP 上限之前收到带 `Retry-After: 1` 的 HTTP 503。该预算现在可容纳 64 个（增加 64 字节），超出上限的请求会收到带 `Retry-After: 1` 的 HTTP 429，与文档一致。每个调用者 4 个进行中请求的上限和 1 MiB 的请求体上限保持不变。
+
 ### v1.6.0 — 更严格的权限检查，代理重载时设备保持连接 {#v160-upgrade}
 
 `v1.6.0` 可从 `v1.5.0` 原地升级：先为集群运行 `dcctl install`，再为每个实例运行一次 `dcctl upgrade`，详见[滚动升级](#rolling-upgrades)。**两个命令都使用 v1.6.0 的 `dcctl`**，并向 `dcctl install` 提供集群设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。`device-management` 新增一个迁移，使当前实体属性键保持唯一并排队执行修复。参见[v1.6.0 的架构变更与回退](#v160-going-back)。若从 `v1.4.0` 或更早版本升级，请先阅读 [`v1.5.0` 说明](#v150-upgrade)。

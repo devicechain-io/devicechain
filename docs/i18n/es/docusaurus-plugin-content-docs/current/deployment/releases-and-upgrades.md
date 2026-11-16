@@ -809,6 +809,8 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Novedades de v1.7.0 {#v170-whats-new}
 
+- **El límite de 64 solicitudes en curso por proceso del servidor MCP es alcanzable, y la solicitud que lo supera recibe HTTP 429.** El presupuesto compartido de cuerpos de solicitud solo admitía 63 cuerpos de tamaño máximo, por lo que la solicitud simultánea número 64 recibía HTTP 503 con `Retry-After: 1` antes de alcanzar el límite de MCP. Ahora el presupuesto admite 64 (crece 64 bytes), y las solicitudes que superan el límite reciben HTTP 429 con `Retry-After: 1`, como está documentado. El límite de 4 en curso por llamante y el máximo de 1 MiB por cuerpo de solicitud no cambian.
+
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de v1.6.0 para ambos comandos**, y proporciona a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Una migración añadida en `device-management` hace únicas las claves de atributos activos y encola reparaciones. Consulta [Cambios de esquema en v1.6.0 y vuelta atrás](#v160-going-back). Si vienes de `v1.4.0` o anterior, lee primero las [notas de `v1.5.0`](#v150-upgrade).
