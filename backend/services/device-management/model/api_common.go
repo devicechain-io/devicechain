@@ -266,15 +266,6 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 		}
 	}
 
-	// The asset hierarchy's structural contract (ADR-072) is enforced HERE as well
-	// as in SetAssetParent, because this generic mutation can create a "contains"
-	// edge directly. An invariant checked only in the convenience door is an
-	// invariant with a public bypass. No-op for every other relationship type.
-	if err := api.admitContainmentEdge(api.RDB.DB(ctx), request.RelationshipType,
-		request.SourceType, sourceId, request.TargetType, targetId); err != nil {
-		return nil, err
-	}
-
 	if err := api.checkTrackedCeiling(ctx, api.RDB.DB(ctx), rtmatches[0], request.SourceType, sourceId, 1); err != nil {
 		return nil, err
 	}
@@ -292,6 +283,22 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 		TargetId:           targetId,
 		TargetToken:        request.Target,
 		RelationshipTypeId: rtmatches[0].ID,
+	}
+	if request.RelationshipType == ContainmentRelationshipType {
+		// Admission acquires the tenant's transaction-scoped hierarchy lock. The
+		// insert must use that transaction too, so a rival checks committed state.
+		err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := api.admitContainmentEdge(tx, request.RelationshipType,
+				request.SourceType, sourceId, request.TargetType, targetId); err != nil {
+				return err
+			}
+			return tx.Create(created).Error
+		})
+		if err != nil {
+			return nil, err
+		}
+		created.RelationshipType = *rtmatches[0]
+		return created, nil
 	}
 	if created.SourceType != string(entity.TypeDevice) {
 		if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
