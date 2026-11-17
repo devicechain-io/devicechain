@@ -17,10 +17,12 @@ import (
 	"testing"
 )
 
-// Matching payloads for the four event types PersistEvent type-asserts. Built fresh
+// Matching payloads for the five event types PersistEvent type-asserts. Built fresh
 // per case so a test can not mutate another's fixture.
 func matchingPayloadFor(etype eventtype.EventType) interface{} {
 	switch etype {
+	case eventtype.NewRelationship:
+		return &resolvedevent.ResolvedNewRelationshipPayload{RelationshipTypeId: 42}
 	case eventtype.Location:
 		lat, lon := "33.7490", "-84.3880"
 		return &resolvedevent.ResolvedLocationsPayload{
@@ -46,6 +48,7 @@ func matchingPayloadFor(etype eventtype.EventType) interface{} {
 // PersistEvent fail in these tests is the payload type assertion itself.
 func persistingMockApi() *emtest.MockApi {
 	api := new(emtest.MockApi)
+	api.Mock.On("CreateEnvelopeEvents", mock.Anything).Return(nil)
 	api.Mock.On("CreateLocationEvents", mock.Anything, mock.Anything).Return([]*model.LocationEvent{{}}, nil)
 	api.Mock.On("CreateMeasurementEvents", mock.Anything, mock.Anything).Return([]*model.MeasurementEvent{{}}, nil)
 	api.Mock.On("CreateAlertEvents", mock.Anything, mock.Anything).Return([]*model.AlertEvent{{}}, nil)
@@ -59,10 +62,10 @@ func persistingMockApi() *emtest.MockApi {
 // dispatch loop in Process classifies with errors.Is(err, ErrDeterministic) — anything
 // unwrapped falls to the default branch and is treated as TRANSIENT, so the event is
 // left unacked and redelivered until messaging.MaxDeliver, then misfiled as an
-// ApiCallFailed rather than as invalid data. So each of the four type-asserting cases
+// ApiCallFailed rather than as invalid data. So each of the five type-asserting cases
 // must wrap ErrDeterministic.
 //
-// The table is deliberately one row per case in PersistEvent's switch: a fifth event
+// The table is deliberately one row per case in PersistEvent's switch: a new event
 // type that gains a payload assertion without the wrapper shows up here as a missing
 // row rather than as silence.
 func TestPayloadTypeMismatchIsDeterministic(t *testing.T) {
@@ -73,6 +76,11 @@ func TestPayloadTypeMismatchIsDeterministic(t *testing.T) {
 		etype        eventtype.EventType
 		wrongPayload interface{}
 	}{
+		{
+			name:         "new relationship event carrying a measurements payload",
+			etype:        eventtype.NewRelationship,
+			wrongPayload: matchingPayloadFor(eventtype.Measurement),
+		},
 		{
 			name:         "location event carrying a measurements payload",
 			etype:        eventtype.Location,
@@ -123,7 +131,7 @@ func TestPayloadTypeMismatchIsDeterministic(t *testing.T) {
 // persistence behaviour — but "must not be a deterministic failure".
 func TestMatchingPayloadIsNotDeterministicFailure(t *testing.T) {
 	for _, etype := range []eventtype.EventType{
-		eventtype.Location, eventtype.Measurement, eventtype.Alert, eventtype.StateChange,
+		eventtype.NewRelationship, eventtype.Location, eventtype.Measurement, eventtype.Alert, eventtype.StateChange,
 	} {
 		t.Run(etype.String(), func(t *testing.T) {
 			worker := &EventPersistenceWorker{Api: persistingMockApi()}

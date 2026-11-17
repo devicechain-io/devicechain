@@ -213,6 +213,7 @@ func TestANewerEventUpdatesSourceAfterEscalation(t *testing.T) {
 		t.Fatalf("states = %v, %v", states, err)
 	}
 	escAt := n.clock()
+	n.now = func() time.Time { return escAt }
 	if err := n.Escalate(ctx, states[0], enabledPolicies(t, api, ctx), escAt, 5); err != nil {
 		t.Fatal(err)
 	}

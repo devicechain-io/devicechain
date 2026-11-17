@@ -52,7 +52,7 @@ type DetectionRulesPublishedEvent struct {
 }
 
 // DetectionRulesPublishedPublisher publishes detection-rules-published events
-// (ADR-051 slice 4b-3). Like the alarm and entity-deleted publishers it is best-effort
+// (ADR-051 slice 4b-3). Like the alarm publisher it is best-effort
 // and side-band to the publish: a marshal/publish failure is logged by the implementation,
 // never surfaced to the caller — a NATS hiccup must not fail or retry the profile publish.
 // The emit is at-most-once (ADR-044 async-fact posture): a DELIVERED fact is durably
