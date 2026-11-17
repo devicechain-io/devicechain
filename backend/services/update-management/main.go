@@ -128,6 +128,12 @@ func parseConfiguration() error {
 	return nil
 }
 
+// appendOnlyModels are this schema's tables that only grow, reported by the storage-growth
+// collector (the audit journal is added for every schema). An assignment row is never deleted
+// - a newer one only stamps SupersededAt on it - so every assignment ever made stays, and the
+// history grows with every rollout and every per-device assignment.
+var appendOnlyModels = []any{&model.UpdateAssignment{}}
+
 // Called after microservice has been initialized.
 func afterMicroserviceInitialized(ctx context.Context) error {
 	if err := parseConfiguration(); err != nil {
@@ -141,7 +147,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	Svc = service.New(Microservice, service.Spec{
 		Rdb: &service.RdbSpec{
-			AppendOnly: nil, // Audit journal only.
+			AppendOnly: appendOnlyModels,
 			Migrations: schema.Migrations,
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Config:     Configuration.RdbConfiguration,
