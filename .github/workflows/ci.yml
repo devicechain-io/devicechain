@@ -37,7 +37,8 @@ permissions:
 #                  running and one PENDING run per group, and a newer pending run
 #                  replaces the older pending one. So the run in progress always
 #                  finishes, and the newest main commit always gets a run -- but a
-#                  commit merged while another was already pending is skipped.
+#                  PENDING run is skipped (cancelled before it starts) when a newer
+#                  push replaces it, so that commit gets no run of its own.
 #   push elsewhere grouped by commit SHA (no such trigger today; kept so adding one
 #                  for a release branch or tag cannot silently collapse its runs).
 #   dispatch       a group of its own (run_id): a chosen commit is never queued
