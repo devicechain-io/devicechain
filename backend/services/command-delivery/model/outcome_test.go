@@ -182,9 +182,11 @@ func TestEveryTerminatingWriterStampsItsOutcome(t *testing.T) {
 func expire(sent bool) func(*testing.T, *Api, context.Context) string {
 	return func(t *testing.T, api *Api, ctx context.Context) string {
 		sysctx := core.WithSystemContext(ctx)
-		past := time.Now().Add(-time.Hour).Format(time.RFC3339)
+		// The sent case must claim before expiry, then let the sweep see a later instant.
+		horizon := time.Now().Add(time.Hour)
+		expires := horizon.Format(time.RFC3339)
 		created, err := api.CreateCommand(ctx, &CommandCreateRequest{
-			Token: "lapse", DeviceToken: "d", Name: "x", ExpiresAt: &past,
+			Token: "lapse", DeviceToken: "d", Name: "x", ExpiresAt: &expires,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -194,7 +196,7 @@ func expire(sent bool) func(*testing.T, *Api, context.Context) string {
 				t.Fatalf("claim: %v %v", won, err)
 			}
 		}
-		if n, _, err := api.ExpireStale(sysctx, time.Now()); err != nil || n != 1 {
+		if n, _, err := api.ExpireStale(sysctx, horizon.Add(time.Second)); err != nil || n != 1 {
 			t.Fatalf("ExpireStale: n=%d err=%v", n, err)
 		}
 		return "lapse"

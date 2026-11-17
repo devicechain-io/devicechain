@@ -141,3 +141,7 @@ Como una única réplica es propietaria de la conexión al broker, la ingesta de
 **Tu primer dispositivo en unos 30 minutos.** Instala DeviceChain en local, conecta un dispositivo simulado y observa cómo llega su telemetría. [Empezar el inicio rápido →](../quickstart/first-device.md)
 
 :::
+
+## Seguimiento acotado de Sparkplug
+
+Cada fuente Sparkplug conserva como máximo 50.000 sesiones de nodo, incluidas 1.024 sin NBIRTH. Las identidades nuevas que superen un límite se descartan sin ingesta ni solicitud de renacimiento; los nodos existentes pueden renacer y las sesiones en línea nunca se expulsan. Los marcadores inactivos caducan a los 10 minutos y las sesiones sin conexión a las 24 horas; al alcanzar el límite, los nacimientos recuperan las sesiones sin conexión más antiguas. El historial de actividad admite 50.000 identidades: bajo presión elimina entradas antiguas y rechaza nuevas entradas si sigue lleno (mientras está lleno, una sonda no declara silenciosa una identidad no registrada). Se rechazan los niveles de grupo, nodo y dispositivo con más de 256 caracteres, de acuerdo con el límite del registro de dispositivos. Las negativas se cuentan en `devicechain_sparkplugingest_session_refused_total`, con `reason` igual a `placeholder_cap`, `session_cap` o `seen_cap`. Los avisos de capacidad y de cola llena se limitan, cada tipo, a uno por fuente cada 10 minutos; los registros por mensaje pasan a debug. No hace falta cambiar la configuración para una actualización gradual.

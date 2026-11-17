@@ -23,5 +23,8 @@ const LETTER_INDEX: Record<string, 0 | 1 | 2 | 3> = { N: 0, E: 1, S: 2, W: 3 };
 // The nearest of the eight points (N, NE, E, ...), written with the locale's letters.
 export function cardinalOf(heading: number, letters: LevelStrings['cardinals']): string {
   const point = EIGHT_POINT[Math.round(heading / 45) % 8];
-  return [...point].map((c) => letters[LETTER_INDEX[c]]).join('');
+  const parts = [...point].map((c) => letters[LETTER_INDEX[c]]);
+  // Chinese compound directions put east/west first: 东北, not 北东.
+  if (letters[0] === '北') parts.reverse();
+  return parts.join('');
 }
