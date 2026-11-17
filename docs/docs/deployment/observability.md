@@ -17,6 +17,8 @@ boards are implemented and validated end-to-end: an instance overview and seven 
 boards, described in [Grafana boards](./grafana-boards.md), with alert rules alongside them.
 :::
 
+Metrics (`/metrics`) and health probes (`/healthz`, `/readyz`) use port 8083 (`ops`) on each area's pods and Service. Public `/api/<area>/...` routes target only the API port (`graphql`, 8080); they cannot reach these operational endpoints. When supplying your own ingress controller, route the API to `graphql` and never to `ops`. [Production hardening](./production-hardening.md#public-port) lists what each port serves and how to check the public edge from outside.
+
 ## Distributed tracing (OpenTelemetry)
 
 Tracing is **off by default**. When enabled, GraphQL requests and HTTP/MQTT device ingest
@@ -65,14 +67,6 @@ Budget retention and sampling together. Set `enabled: false` and restart to turn
 disabled tracing constructs no exporter or tracing goroutines.
 
 ## What every service exposes
-
-The service HTTP port **8080** serves `/metrics`, `/healthz` and `/readyz` without
-authentication. The chart's public prefix routes also forward them as
-`/api/<area>/metrics`, `/api/<area>/healthz` and `/api/<area>/readyz` for areas with
-a public API. Restrict these at the public edge while keeping in-cluster probes and
-scrapes working; [Production hardening](./production-hardening.md#edge-rule) gives
-the block rule and verification steps. `/graphiql` is also unauthenticated when
-developer tools are enabled; it is disabled by default.
 
 Each functional-area service instruments itself with Prometheus client metrics and
 serves the two standard Kubernetes probes:
@@ -1943,7 +1937,7 @@ one replica, forward to the pod you mean by name (`kubectl port-forward pod/<nam
 
 `profiler.address` sets where the listener binds. It must be an IP address and a port, for
 example `0.0.0.0:6060` for a profiler that collects from other pods. The service refuses to
-start on a host name, a missing port, or its own port 8080.
+start on a host name, a missing port, or its own port 8080 or 8083.
 
 :::warning Any address other than loopback is open to the cluster network
 The listener has no authentication, and the chart renders no network policy that limits who

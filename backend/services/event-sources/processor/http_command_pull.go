@@ -53,9 +53,10 @@ import (
 //
 // wait is the longest a GET holds the request open, in seconds: 0 to 30, 25 by default (under
 // the idle timeouts of the usual ingress). A GET with a wait costs one counted poller against its
-// tenant's cap, and over the cap is answered 429 with a Retry-After; a GET with wait=0 is never
-// held and is not counted. While held, the request asks the platform for the device's commands
-// every PollInterval, so any replica can serve any device and no state lives in this process.
+// tenant's cap and one against its device's (maxPollersPerDevice), and over either cap is
+// answered 429 with a Retry-After; a GET with wait=0 is never held and is not counted. While
+// held, the request asks the platform for the device's commands every PollInterval, so any replica
+// can serve any device and no state lives in this process.
 
 // Results of a command-pull request (the result label of http_command_pull_requests_total).
 const (
@@ -88,6 +89,12 @@ const (
 	MaxPullWait     = 30
 	// DefaultPollInterval is how often a held GET asks the platform for the device's commands.
 	DefaultPollInterval = 2 * time.Second
+	// maxPollersPerDevice is how many waiting GETs one (tenant, device) may hold on a replica.
+	// The protocol is serial, so a well-behaved device holds one; the second slot admits a
+	// device whose previous connection is gone on its side (a NAT rebind, a client timeout,
+	// a cellular handover) but not yet seen closed here, so a legitimate reconnect is not
+	// refused for up to MaxPullWait. One device still occupies at most 2 of its tenant's slots.
+	maxPollersPerDevice = 2
 	// maxPullResponseBytes caps a device's response body.
 	maxPullResponseBytes = 128 << 10
 	// pullBatch is how many commands one GET hands out at most.
@@ -163,9 +170,10 @@ type CommandPullRoute struct {
 	PollInterval time.Duration
 	Metrics      CommandPullMetrics
 
-	mu      sync.Mutex
-	pollers map[string]int
-	stop    chan struct{}
+	mu            sync.Mutex
+	pollers       map[string]int
+	devicePollers map[[2]string]int // (tenant, device), sharing the tenant count's lock
+	stop          chan struct{}
 }
 
 // Validate refuses a route built without a part of it.
@@ -219,26 +227,36 @@ func (rt *CommandPullRoute) stopped() <-chan struct{} {
 	return rt.stop
 }
 
-// acquire counts a held GET against the tenant's cap, reporting whether there was room.
-func (rt *CommandPullRoute) acquire(tenant string) bool {
+// acquire counts a held GET against both caps atomically, reporting whether there was room.
+func (rt *CommandPullRoute) acquire(tenant, device string) bool {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	if rt.pollers == nil {
 		rt.pollers = make(map[string]int)
 	}
-	if rt.pollers[tenant] >= rt.MaxPollersPerTenant {
+	key := [2]string{tenant, device}
+	if rt.pollers[tenant] >= rt.MaxPollersPerTenant || rt.devicePollers[key] >= maxPollersPerDevice {
 		return false
 	}
+	if rt.devicePollers == nil {
+		rt.devicePollers = make(map[[2]string]int)
+	}
 	rt.pollers[tenant]++
+	rt.devicePollers[key]++
 	if rt.Metrics.Pollers != nil {
 		rt.Metrics.Pollers(1)
 	}
 	return true
 }
 
-func (rt *CommandPullRoute) release(tenant string) {
+func (rt *CommandPullRoute) release(tenant, device string) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
+	key := [2]string{tenant, device}
+	rt.devicePollers[key]--
+	if rt.devicePollers[key] == 0 {
+		delete(rt.devicePollers, key)
+	}
 	if rt.pollers[tenant] > 0 {
 		rt.pollers[tenant]--
 		if rt.pollers[tenant] == 0 {
@@ -388,13 +406,13 @@ func (es *HttpEventSource) handleCommandPoll(w http.ResponseWriter, r *http.Requ
 		wait = min(n, MaxPullWait)
 	}
 	if wait > 0 {
-		if !rt.acquire(tenant) {
+		if !rt.acquire(tenant, device) {
 			m.request("poll", PullResultPollerCap)
 			w.Header().Set("Retry-After", "5")
-			http.Error(w, "too many commands polls are waiting for this tenant; retry later", http.StatusTooManyRequests)
+			http.Error(w, "too many command polls are waiting for this tenant or device; retry later", http.StatusTooManyRequests)
 			return
 		}
-		defer rt.release(tenant)
+		defer rt.release(tenant, device)
 	}
 
 	deadline := time.NewTimer(time.Duration(wait) * time.Second)

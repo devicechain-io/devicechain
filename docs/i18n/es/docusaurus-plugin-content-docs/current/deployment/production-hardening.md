@@ -3,29 +3,34 @@
 
 # Endurecimiento de producción {#production-hardening}
 
-Antes de abrir una instancia a Internet, restrinja los endpoints operativos en el perímetro,
-use certificados TLS de confianza y restrinja el acceso al clúster. Esta página describe los
-listeners actuales; versiones anteriores pueden exponer otra superficie. Actualice antes de
-confiar en la separación del listener interno descrita aquí.
+Antes de abrir una instancia a Internet, compruebe qué sirve su puerto público, use certificados
+TLS de confianza y restrinja el acceso al clúster. Esta página describe los listeners de la
+versión actual. Antes de v1.6.0, las métricas y las sondas de salud se servían en el puerto
+público de la API y eran accesibles mediante `/api/<area>/...`; actualice antes de confiar en la
+separación descrita aquí.
 
-## Puerto público y autenticación {#public-port}
+## Puerto público y puerto de operaciones {#public-port}
 
-El puerto HTTP del servicio es **8080**. El chart reenvía `/api/<area>/<path>` a `/<path>`
-en cada área con API pública. La ruta por prefijo también reenvía endpoints operativos;
-no añade autenticación. Estas rutas son accesibles sin un token de DeviceChain:
+Los pods y el Service de cada área tienen dos puertos HTTP:
 
-| Ruta del servicio | Ruta externa | Qué sirve |
-| --- | --- | --- |
-| `/metrics` | `/api/<area>/metrics` | Métricas de Prometheus, incluidas etiquetas operativas; limite el acceso a clientes de monitorización. |
-| `/healthz` | `/api/<area>/healthz` | Estado de actividad; los detalles del fallo quedan en los logs. |
-| `/readyz` | `/api/<area>/readyz` | Estado de disponibilidad. |
-| `/graphiql` | `/api/<area>/graphiql` | HTML del explorador solo con herramientas de desarrollo habilitadas; deshabilitadas por defecto. |
+| Puerto | Nombre | Qué sirve | Enrutado desde fuera |
+| --- | --- | --- | --- |
+| **8080** | `graphql` | `/graphql`, las rutas HTTP propias del área y `/graphiql` con herramientas de desarrollo habilitadas | Sí: el chart reenvía `/api/<area>/<path>` a `/<path>` |
+| **8083** | `ops` | `/metrics`, `/healthz` y `/readyz` | No: ninguna ruta del chart apunta a él |
+
+Los endpoints operativos responden sin autenticación; por eso están en un puerto al que no llega
+ninguna ruta pública. A través de la ruta pública por prefijo, `/api/<area>/metrics`,
+`/api/<area>/healthz` y `/api/<area>/readyz` devuelven **404**: el puerto de la API no sirve
+esas rutas. Las sondas de Kubernetes y los ServiceMonitor de Prometheus del chart usan el puerto
+`ops` directamente dentro del clúster. Consulte [Observabilidad](./observability.md).
+
+`/graphiql` sirve la página del explorador sin autenticación cuando se habilitan las herramientas
+de desarrollo. Están deshabilitadas por defecto, y la introspección del esquema se deshabilita con
+ellas.
 
 `/graphql` también es accesible antes de iniciar sesión: la autenticación y autorización dependen
 de la operación. El inicio de sesión, el inicio de SSO y el descubrimiento público deben funcionar
 sin token; las operaciones protegidas siguen exigiendo credenciales verificadas y permisos.
-Bloquear el explorador no bloquea las consultas GraphQL. La introspección del esquema está
-deshabilitada por defecto junto con las herramientas de desarrollo.
 
 La emisión de tokens de servicio `/auth/service-token` y las claves de firma `/auth/jwks` están
 en el listener interno separado de user-management, no en el puerto 8080. El chart no publica
@@ -33,16 +38,21 @@ ninguna ruta a ese listener; el puerto público devuelve 404 para esas rutas. Ma
 interno. Los perfiles Go están deshabilitados por defecto y usan otro listener de loopback al
 habilitarlos; consulte [Perfilar un servicio](./observability.md#profiling).
 
-## Bloquear rutas operativas en el perímetro {#edge-rule}
+## Su propia entrada o perímetro {#edge-rule}
 
-En un proxy inverso NGINX **delante de** la entrada o Gateway del chart, añada esta ubicación
-al bloque HTTPS `server` de la instancia, antes de la ubicación de proxy general. `devicechain_edge`
-representa el upstream existente hacia la entrada o Gateway. NGINX compara ubicaciones con la URI
-normalizada, sin la cadena de consulta. Esta regla bloquea las rutas y sus descendientes para
-todas las áreas, antes de reescribir el prefijo:
+Si aporta su propio controlador de entrada, Gateway o proxy inverso, dirija la API solo al puerto
+`graphql`, nunca a `ops` ni al listener interno de user-management. Cierre el acceso público
+directo a puertos de nodo, balanceadores y puertos de servicio distintos de su perímetro, para que
+nadie llegue al puerto `ops` rodeándolo.
+
+Si habilita las herramientas de desarrollo en una instancia accesible desde Internet, bloquee
+también el explorador en el perímetro. En un proxy inverso NGINX **delante de** la entrada o
+Gateway del chart, añada esta ubicación al bloque HTTPS `server` de la instancia, antes de la
+ubicación de proxy general. `devicechain_edge` representa el upstream existente hacia la entrada
+o Gateway:
 
 ```nginx
-location ~* ^/api/[^/]+/(metrics|healthz|readyz|graphiql)(/|$) {
+location ~* ^/api/[^/]+/graphiql(/|$) {
     return 403;
 }
 location / {
@@ -50,14 +60,12 @@ location / {
 }
 ```
 
-Es una configuración de proxy inverso, no una anotación de ingress ni un filtro portable de Gateway
-API. En otro perímetro, aplique la misma denegación a las rutas normalizadas antes de reenviar.
-Compruebe que ninguna ubicación regex anterior ni ubicación `^~` la omita. Cierre el acceso público
-directo a la entrada/Gateway y los puertos de servicio para evitar eludir la regla.
-Las sondas de Kubernetes y el ServiceMonitor de Prometheus deben mantener sus rutas directas dentro
-del clúster, sin pasar por esta denegación pública. Consulte [Observabilidad](./observability.md).
+Bloquear el explorador no bloquea las consultas GraphQL y, con las herramientas de desarrollo
+habilitadas, la introspección del esquema sigue disponible en `/graphql`. Mantenga las
+herramientas de desarrollo deshabilitadas en una instancia expuesta a Internet.
 
-Tras recargar la configuración del perímetro, compruebe desde fuera sin credenciales:
+Tras una instalación, una actualización o un cambio en el perímetro, compruebe desde fuera sin
+credenciales:
 
 ```bash
 curl -i https://INSTANCE_HOST/api/device-management/metrics
@@ -66,10 +74,12 @@ curl -i https://INSTANCE_HOST/api/device-management/readyz
 curl -i https://INSTANCE_HOST/api/device-management/graphiql
 ```
 
-Cada petición debe devolver **403**, también con cadena de consulta o barra final. Repita para cada
-área pública habilitada. Confirme que funcionan el inicio de sesión y una petición GraphQL autorizada,
-que las sondas siguen sanas y que Prometheus sigue recogiendo métricas. Cualquier respuesta operativa
-desde fuera indica que el despliegue de la regla ha fallado.
+`/metrics`, `/healthz` y `/readyz` deben devolver **404**, o **403** si su propio perímetro
+también los bloquea. `/graphiql` debe devolver 404 con las herramientas de desarrollo
+deshabilitadas, o 403 con la regla anterior. Repita para cada área pública habilitada. Confirme
+que funcionan el inicio de sesión y una petición GraphQL autorizada, que las sondas siguen sanas y
+que Prometheus sigue recogiendo métricas. Cualquier respuesta de métricas o de salud desde fuera
+indica un perímetro que enruta al puerto `ops`.
 
 ## Controles del clúster y las credenciales {#controls}
 
@@ -77,8 +87,8 @@ desde fuera indica que el despliegue de la regla ha fallado.
   [Conexión desde fuera](./connecting-from-outside.md).
 - Configure [proxies de confianza](./bootstrap.md#trusted-proxies) para la cadena real, de modo que
   los límites por dirección usen la dirección de origen prevista.
-- Restrinja el acceso de red a bases de datos, broker, monitorización y puertos internos;
-  una regla pública no aísla los pods de otras cargas del clúster.
+- Restrinja el acceso de red a bases de datos, broker, monitorización y puertos internos de los
+  servicios, incluido `ops`; un perímetro público no aísla los pods de otras cargas del clúster.
 - Limite los permisos de Kubernetes para leer Secrets, ejecutar en pods o redirigir puertos.
   Mantenga los perfiles deshabilitados fuera de sesiones de diagnóstico controladas.
 - Proteja la clave raíz de la instancia y las copias de seguridad, y ensaye la

@@ -349,7 +349,7 @@ func TestRecordedSourceIsNotRegressedByAnOlderEvent(t *testing.T) {
 	t0 := time.Now().UTC().Truncate(time.Second)
 	rec := func(at, sourceAt time.Time, src AlarmSource) {
 		t.Helper()
-		if _, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, at, nil, src, sourceAt); err != nil {
+		if _, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, at, nil, src, sourceAt, at); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -371,7 +371,7 @@ func TestRecordedSourceAdvancesAfterEscalation(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
 	t0 := time.Now().UTC().Truncate(time.Second)
-	row, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, t0, nil, AlarmSource{DeviceName: "Old"}, t0)
+	row, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, t0, nil, AlarmSource{DeviceName: "Old"}, t0, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestRecordedSourceAdvancesAfterEscalation(t *testing.T) {
 		t.Fatalf("claim = %v, %v", claimed, err)
 	}
 	newer := t0.Add(time.Minute)
-	row, err = api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, newer, nil, AlarmSource{DeviceName: "New"}, newer)
+	row, err = api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, newer, nil, AlarmSource{DeviceName: "New"}, newer, newer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestSourceOrderingUsesDatabasePrecision(t *testing.T) {
 	rec := func(sat time.Time, name string) {
 		t.Helper()
 		if _, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, t0, nil,
-			AlarmSource{DeviceName: name}, sat); err != nil {
+			AlarmSource{DeviceName: name}, sat, t0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -408,5 +408,29 @@ func TestSourceOrderingUsesDatabasePrecision(t *testing.T) {
 	states, _ := api.NotificationStatesByAlarmToken(ctx, []string{"alarm-1"})
 	if got := states[0].Source().DeviceName; got != "new" {
 		t.Fatalf("name = %q, want new", got)
+	}
+}
+
+// Oldest notification first keeps newly claimed rows behind the remaining backlog.
+func TestOpenNotificationStatesOldestFirst(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+	now := time.Now().UTC()
+	for i, token := range []string{"newest", "middle", "oldest"} {
+		if err := api.RecordNotification(ctx, token, "k", "CRITICAL", testCycle, now.Add(-time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	states, err := api.OpenNotificationStates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 3 {
+		t.Fatalf("got %d states", len(states))
+	}
+	for i, want := range []string{"oldest", "middle", "newest"} {
+		if states[i].AlarmToken != want {
+			t.Fatalf("position %d = %s, want %s", i, states[i].AlarmToken, want)
+		}
 	}
 }

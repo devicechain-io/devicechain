@@ -18,7 +18,7 @@
     <RepositoryUrl>https://github.com/devicechain-io/devicechain</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <!-- Renders on nuget.org, same rule as Description: no ADR citations. -->
-    <PackageTags>iot;iiot;devicechain;mqtt;graphql;telemetry;unity;device-management</PackageTags>
+    <PackageTags>iot;iiot;iot-platform;devicechain;mqtt;graphql;telemetry;unity;device-management</PackageTags>
 
     <!-- 🔴 PACKAGE.md, not the repository README. ../../README.md is written for
          someone reading this repo and cites ADRs freely; a PackageReadmeFile is

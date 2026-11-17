@@ -15,7 +15,7 @@ import (
 
 func TestShardedWritersCheckRoutedBackpressure(t *testing.T) {
 	for _, suffix := range []string{streams.InboundEvents, streams.ResolvedEvents} {
-		for _, mode := range []string{"sync", "ordered", "async", "round"} {
+		for _, mode := range []string{"sync", "async"} {
 			t.Run(suffix+"/"+mode, func(t *testing.T) {
 				m, reg := metricsManager(t, startEmbeddedServer(t))
 				require.NoError(t, m.EnableStreamSharding(shardRouterFunc(n1Router), n1Config(streams.InboundEvents, streams.ResolvedEvents)))

@@ -12,12 +12,10 @@ Para notificar una vulnerabilidad, siga el proceso de la
 
 ## Límites de confianza de un vistazo {#boundaries}
 
-El puerto público del servicio también sirve rutas operativas sin autenticación:
-`/metrics`, `/healthz`, `/readyz` y `/graphiql` si se habilitan las herramientas de
-desarrollo (deshabilitadas por defecto). El chart las reenvía bajo `/api/<area>/`
-para cada área con API pública. Aplique la [regla de endurecimiento del perímetro](../deployment/production-hardening.md#edge-rule)
-antes de abrir la instancia a Internet; conserva las sondas y la recogida de métricas
-directas dentro del clúster. Las operaciones GraphQL aplican su propia autenticación y permisos.
+Las métricas y las sondas de salud responden sin autenticación, por lo que se sirven en un puerto
+de operaciones separado al que no llega ninguna ruta pública; el puerto público sirve GraphQL,
+cuyas operaciones aplican su propia autenticación y permisos. [Endurecimiento de producción](../deployment/production-hardening.md)
+enumera qué sirve cada puerto y cómo comprobar el perímetro público antes de abrir la instancia a Internet.
 
 | Límite | Qué separa ambos lados | Quién lo hace cumplir |
 | --- | --- | --- |

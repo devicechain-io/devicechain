@@ -3,28 +3,32 @@
 
 # Production hardening {#production-hardening}
 
-Before opening an instance to the internet, restrict its operational endpoints at the edge,
-use trusted TLS certificates, and restrict cluster access. This page describes the current
-service listeners; older releases can expose a different surface. Upgrade before relying on
-the internal-listener boundary described below.
+Before opening an instance to the internet, check what its public port serves, use trusted TLS
+certificates, and restrict cluster access. This page describes the service listeners of the
+current release. Before v1.6.0, metrics and health probes were served on the public API port and
+reachable through `/api/<area>/...`; upgrade before relying on the boundary described below.
 
-## Public port and authentication {#public-port}
+## Public port and operations port {#public-port}
 
-The service HTTP port is **8080**. The chart forwards `/api/<area>/<path>` to `/<path>`
-on each area with a public API. That prefix route also forwards operational endpoints;
-it does not add authentication. These paths are reachable without a DeviceChain token:
+Each area's pods and Service have two HTTP ports:
 
-| Service path | External path | What it serves |
-| --- | --- | --- |
-| `/metrics` | `/api/<area>/metrics` | Prometheus metrics, including operational labels; restrict to monitoring clients. |
-| `/healthz` | `/api/<area>/healthz` | Liveness status; failure details stay in service logs. |
-| `/readyz` | `/api/<area>/readyz` | Readiness status. |
-| `/graphiql` | `/api/<area>/graphiql` | Explorer HTML only when developer tools are enabled; disabled by default. |
+| Port | Name | What it serves | Routed from outside |
+| --- | --- | --- | --- |
+| **8080** | `graphql` | `/graphql`, the area's own HTTP routes, and `/graphiql` when developer tools are enabled | Yes: the chart forwards `/api/<area>/<path>` to `/<path>` |
+| **8083** | `ops` | `/metrics`, `/healthz` and `/readyz` | No: no chart route targets it |
+
+The operational endpoints answer without authentication, which is why they live on a port no
+public route reaches. Through the public prefix route, `/api/<area>/metrics`,
+`/api/<area>/healthz` and `/api/<area>/readyz` return **404**: the API port does not serve those
+paths at all. Kubernetes probes and the chart's Prometheus ServiceMonitors use the `ops` port
+directly inside the cluster. See [Observability](./observability.md).
+
+`/graphiql` serves the explorer page without authentication when developer tools are enabled.
+Developer tools are disabled by default, and schema introspection is disabled with them.
 
 `/graphql` is also reachable before sign-in: authentication and authorization depend on the
 operation. Login, SSO initiation and public discovery must work before a user has a token;
-protected operations still require verified credentials and permissions. Blocking the explorer
-does not block GraphQL queries. Schema introspection is disabled with developer tools by default.
+protected operations still require verified credentials and permissions.
 
 The service-token mint `/auth/service-token` and signing-key set `/auth/jwks` are on
 user-management's separate internal listener, not port 8080. The chart publishes no route to
@@ -32,16 +36,20 @@ that listener; the public port returns 404 for those paths. Keep its Service int
 Go profiles are off by default and use a separate loopback listener when enabled;
 see [Profiling a service](./observability.md#profiling).
 
-## Block operational paths at the edge {#edge-rule}
+## Your own ingress or edge {#edge-rule}
 
-For an NGINX reverse proxy **in front of** the chart's ingress or Gateway, add this location
-to the instance's HTTPS `server` block, before the general proxy location. `devicechain_edge`
-stands for your existing upstream to the ingress or Gateway. NGINX matches locations against
-the normalized URI, without the query string. This rule blocks the paths and their descendants
-for every area, before prefix rewriting:
+When you supply your own ingress controller, Gateway or reverse proxy, route the API only to
+the `graphql` port, never to `ops`, and never to user-management's internal listener. Close
+direct public access to node ports, load balancers and service ports other than your edge, so
+callers cannot reach the `ops` port by going around it.
+
+If you enable developer tools on an instance reachable from the internet, block the explorer at
+the edge as well. For an NGINX reverse proxy **in front of** the chart's ingress or Gateway, add
+this location to the instance's HTTPS `server` block, before the general proxy location.
+`devicechain_edge` stands for your existing upstream to the ingress or Gateway:
 
 ```nginx
-location ~* ^/api/[^/]+/(metrics|healthz|readyz|graphiql)(/|$) {
+location ~* ^/api/[^/]+/graphiql(/|$) {
     return 403;
 }
 location / {
@@ -49,14 +57,11 @@ location / {
 }
 ```
 
-This is a reverse-proxy configuration, not an ingress annotation or a portable Gateway API
-filter. On another edge, implement the same deny rule on normalized paths before forwarding.
-Ensure no earlier regex location or `^~` location bypasses it. Close direct public access to
-the upstream ingress/Gateway and service ports so callers cannot bypass the rule.
-Keep Kubernetes probes and the Prometheus ServiceMonitor using their direct in-cluster paths;
-they must not pass through this public deny rule. See [Observability](./observability.md).
+Blocking the explorer does not block GraphQL queries, and with developer tools enabled schema
+introspection stays available on `/graphql`. Keep developer tools disabled on an
+internet-facing instance.
 
-After reloading the edge configuration, check from outside without credentials:
+After an install, an upgrade or an edge change, check from outside without credentials:
 
 ```bash
 curl -i https://INSTANCE_HOST/api/device-management/metrics
@@ -65,10 +70,11 @@ curl -i https://INSTANCE_HOST/api/device-management/readyz
 curl -i https://INSTANCE_HOST/api/device-management/graphiql
 ```
 
-Each must return **403**, including with a query string or a trailing slash. Repeat for every
-enabled public area. Confirm sign-in and an authorized GraphQL request still work, probes stay
-healthy, and Prometheus still scrapes the services. Treat any operational response from outside
-as a failed rollout of the edge rule.
+`/metrics`, `/healthz` and `/readyz` must return **404**, or **403** if your own edge also
+blocks them. `/graphiql` must return 404 with developer tools disabled, or 403 with the rule
+above. Repeat for every enabled public area. Confirm sign-in and an authorized GraphQL request
+still work, probes stay healthy, and Prometheus still scrapes the services. Treat any metrics or
+health response from outside as an edge that routes to the `ops` port.
 
 ## Cluster and credential controls {#controls}
 
@@ -76,8 +82,8 @@ as a failed rollout of the edge rule.
   [Connecting from outside](./connecting-from-outside.md).
 - Configure [trusted proxies](./bootstrap.md#trusted-proxies) for the actual proxy chain so
   client-address limits use the intended source address.
-- Restrict network access to databases, the broker, monitoring and internal service ports;
-  a public edge rule does not isolate pods from other cluster workloads.
+- Restrict network access to databases, the broker, monitoring and internal service ports,
+  including `ops`; a public edge does not isolate pods from other cluster workloads.
 - Limit Kubernetes permissions to read Secrets, exec into pods or port-forward. Keep profiling
   disabled outside a controlled diagnostic session.
 - Protect the instance root key and backup material, and rehearse

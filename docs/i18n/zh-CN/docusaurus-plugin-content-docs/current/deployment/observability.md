@@ -11,6 +11,8 @@ DeviceChain 内置可观测性：每个服务都提供 **Prometheus 指标**和�
 监控栈（由 `dcctl install` 部署 kube-prometheus-stack）及其 Grafana 仪表盘已经实现并经过端到端验证：一个实例总览和七个阶段仪表盘，详见 [Grafana 仪表盘](./grafana-boards.md)，并附带告警规则。
 :::
 
+每个功能区域的 Pod 和 Service 在端口 8083（`ops`）提供指标（`/metrics`）和健康探针（`/healthz`、`/readyz`）。公开的 `/api/<area>/...` 路由仅指向 API 端口（`graphql`，8080），无法访问这些运维端点。使用自己的入口控制器时，应将 API 路由到 `graphql`，切勿路由到 `ops`。[生产环境加固](./production-hardening.md#public-port)列出了每个端口提供的内容，以及如何从外部检查公共边缘。
+
 ## 分布式追踪（OpenTelemetry）
 
 追踪**默认关闭**。启用后，GraphQL 请求和 HTTP/MQTT 设备接入会创建 span。
@@ -55,12 +57,6 @@ GraphQL 变量或文档正文。记录内容包括租户 ID、传输方式、操
 设置 `enabled: false` 并重启即可关闭；关闭时不会创建导出器或追踪 goroutine。
 
 ## 每个服务暴露什么 {#what-every-service-exposes}
-
-服务 HTTP 端口 **8080** 无需身份验证即可提供 `/metrics`、`/healthz` 和 `/readyz`。
-对于具有公共 API 的区域，chart 的公共前缀路由也将它们转发为 `/api/<area>/metrics`、
-`/api/<area>/healthz` 和 `/api/<area>/readyz`。请在公共边缘限制这些路径，同时保留集群内
-探针与指标抓取；[生产环境加固](./production-hardening.md#edge-rule)提供了阻止规则与验证步骤。
-启用开发工具时，`/graphiql` 也无需身份验证；默认禁用。
 
 每个功能领域服务使用 Prometheus 客户端指标，并提供两个标准 Kubernetes 探针：
 
@@ -1103,7 +1099,7 @@ Deployment 转发只到**一个** Pod。多副本时按名称选择目标：`kub
 
 ### 使用其他地址 {#another-address}
 
-`profiler.address` 设置绑定位置，必须 IP 加端口，例如其他 Pod 收集使用 `0.0.0.0:6060`。主机名、缺端口或服务自身 8080 会阻止启动。
+`profiler.address` 设置绑定位置，必须 IP 加端口，例如其他 Pod 收集使用 `0.0.0.0:6060`。主机名、缺端口或服务自身 8080 或 8083 会阻止启动。
 
 :::warning 非回环地址向集群网络开放
 监听器没有认证，chart 没有限制连接者的网络策略。因此非回环绑定时，能到 Pod IP 的任何对象都可读分析，除非自行添加 ingress 网络策略。服务在此地址启动时会警告。

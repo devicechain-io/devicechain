@@ -17,6 +17,8 @@ están implementados y validados de extremo a extremo: un resumen de la instanci
 descritos en [Paneles de Grafana](./grafana-boards.md), con reglas de alerta incluidas.
 :::
 
+Las métricas (`/metrics`) y las sondas de salud (`/healthz`, `/readyz`) usan el puerto 8083 (`ops`) de los pods y del Service de cada área. Las rutas públicas `/api/<area>/...` apuntan únicamente al puerto de la API (`graphql`, 8080) y no permiten acceder a estos endpoints operativos. Si utilizas tu propio controlador de entrada, dirige la API a `graphql`, nunca a `ops`. [Endurecimiento de producción](./production-hardening.md#public-port) enumera qué sirve cada puerto y cómo comprobar el perímetro público desde fuera.
+
 ## Trazado distribuido (OpenTelemetry)
 
 El trazado está **desactivado de forma predeterminada**. Al activarlo, las solicitudes GraphQL
@@ -66,14 +68,6 @@ Dimensione juntos la retención y el muestreo. Para desactivarlo, establezca `en
 y reinicie; desactivado, no crea exportadores ni goroutines de trazado.
 
 ## Lo que expone cada servicio
-
-El puerto HTTP **8080** sirve `/metrics`, `/healthz` y `/readyz` sin autenticación.
-Las rutas públicas del chart también las reenvían como `/api/<area>/metrics`,
-`/api/<area>/healthz` y `/api/<area>/readyz` para áreas con API pública.
-Restrínjalas en el perímetro público, conservando las sondas y la recogida de métricas
-dentro del clúster; [Endurecimiento de producción](./production-hardening.md#edge-rule)
-incluye la regla y su verificación. `/graphiql` tampoco exige autenticación cuando se
-habilitan las herramientas de desarrollo; está deshabilitado por defecto.
 
 Cada servicio de área funcional se instrumenta a sí mismo con métricas de cliente de Prometheus y
 sirve las dos sondas estándar de Kubernetes:
@@ -2037,7 +2031,7 @@ réplica, reenvía al pod que quieres por su nombre (`kubectl port-forward pod/<
 
 `profiler.address` fija dónde escucha el listener. Debe ser una dirección IP y un puerto, por
 ejemplo `0.0.0.0:6060` para un perfilador que recoge datos desde otros pods. El servicio se niega a
-arrancar con un nombre de host, sin puerto o con su propio puerto 8080.
+arrancar con un nombre de host, sin puerto o con su propio puerto 8080 o 8083.
 
 :::warning Cualquier dirección que no sea loopback queda abierta a la red del clúster
 El listener no tiene autenticación, y el chart no genera ninguna network policy que limite quién

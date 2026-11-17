@@ -12,12 +12,10 @@ To report a vulnerability, follow the process in the
 
 ## Trust boundaries at a glance {#boundaries}
 
-The public service port also serves operational paths without authentication:
-`/metrics`, `/healthz`, `/readyz`, and `/graphiql` when developer tools are enabled
-(disabled by default). The chart forwards these under `/api/<area>/` for each area
-with a public API. Apply the [Production hardening edge rule](../deployment/production-hardening.md#edge-rule)
-before opening the instance to the internet; it preserves direct in-cluster probes and scrapes.
-This is separate from GraphQL operations, which enforce their own authentication and permissions.
+Metrics and health probes answer without authentication, so they are served on a separate
+operations port that no public route reaches; the public port serves GraphQL, whose operations
+enforce their own authentication and permissions. [Production hardening](../deployment/production-hardening.md)
+lists what each port serves and how to check the public edge before opening the instance to the internet.
 
 | Boundary | What separates the two sides | Enforced by |
 | --- | --- | --- |
