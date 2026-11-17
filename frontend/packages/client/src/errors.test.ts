@@ -3,8 +3,33 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { errorCode, isForbiddenError, isScopeUnsupportedError } from './errors';
+import { errorCode, isForbiddenError, isScopeUnsupportedError, isStaleWrite } from './errors';
 import { GraphQLRequestError } from './transport';
+
+describe('isStaleWrite', () => {
+  it('recognizes the code in any error entry regardless of wording', () => {
+    expect(isStaleWrite(new GraphQLRequestError('Reworded', 200, [
+      { message: 'Other failure', extensions: { code: 'OTHER' } },
+      { message: 'Obsolete revision', extensions: { code: 'STALE_WRITE' } },
+    ]))).toBe(true);
+  });
+
+  it('recognizes older servers by their phrase, including errors without a list', () => {
+    const message = 'provider was modified by another writer; reload and try again';
+    expect(isStaleWrite(new GraphQLRequestError('GraphQL error', 200, [{ message }]))).toBe(true);
+    expect(isStaleWrite(new GraphQLRequestError(message, 200))).toBe(true);
+    expect(isStaleWrite(new Error(message))).toBe(true);
+  });
+
+  it('does not confuse uniqueness conflicts or unrelated failures with stale writes', () => {
+    expect(isStaleWrite(new GraphQLRequestError('Duplicate', 200, [
+      { message: 'modified by another writer', extensions: { code: 'CONFLICT' } },
+    ]))).toBe(false);
+    expect(isStaleWrite(new Error('Network unavailable'))).toBe(false);
+    expect(isStaleWrite(null)).toBe(false);
+    expect(isStaleWrite('modified by another writer')).toBe(false);
+  });
+});
 
 describe('isForbiddenError', () => {
   it('recognizes the backend refusal message graphql-go surfaces over HTTP 200', () => {

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/chacha20poly1305"
 )
@@ -27,6 +28,38 @@ func testTransit(t *testing.T, fill byte) *SecretTransit {
 	tr, err := DeriveSecretTransit(root)
 	require.NoError(t, err)
 	return tr
+}
+
+func TestLegacyTextSealUsageCounters(t *testing.T) {
+	tr := testTransit(t, 1)
+	reads := testutil.ToFloat64(legacyTextSealReads)
+	writes := testutil.ToFloat64(legacyTextSealWrites)
+	sealed, err := tr.Seal("acme", "sensor-1", "password")
+	require.NoError(t, err)
+	_, err = tr.Open("acme", "sensor-1", sealed)
+	require.NoError(t, err)
+	require.Equal(t, reads, testutil.ToFloat64(legacyTextSealReads))
+	require.Equal(t, writes, testutil.ToFloat64(legacyTextSealWrites))
+
+	text, err := SealedText(sealed)
+	require.NoError(t, err)
+	require.Equal(t, writes+1, testutil.ToFloat64(legacyTextSealWrites))
+	converted := SealedFromText(text)
+	require.Equal(t, sealed, converted)
+	require.Equal(t, reads+1, testutil.ToFloat64(legacyTextSealReads))
+	// Redelivery and malformed/empty legacy fields must not hide legacy-path use.
+	for i, value := range []string{text, "dcs2$invalid$!!!", "plaintext", ""} {
+		converted = SealedFromText(value)
+		require.NotNil(t, converted)
+		require.Equal(t, reads+float64(i)+2, testutil.ToFloat64(legacyTextSealReads))
+		if i > 0 {
+			_, err = tr.Open("acme", "sensor-1", converted)
+			require.ErrorIs(t, err, ErrSealedSecretInvalid)
+		}
+	}
+	_, err = SealedText(nil)
+	require.ErrorIs(t, err, ErrSealedSecretInvalid)
+	require.Equal(t, writes+1, testutil.ToFloat64(legacyTextSealWrites), "rejected writes emit no text seal")
 }
 
 func TestSecretTransitRoundTrip(t *testing.T) {

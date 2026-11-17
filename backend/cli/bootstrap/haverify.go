@@ -379,7 +379,13 @@ func probeMqttVia(restCfg *rest.Config, namespace, pod string, natscfg config.Na
 		return fmt.Errorf("opening a port-forward to the MQTT listener on %s: %w", pod, err)
 	}
 	defer stop()
+	return probeMqttAt(fmt.Sprintf("127.0.0.1:%d", local), natscfg)
+}
 
+// probeMqttAt runs the probe against an MQTT listener at addr: the instance's TLS settings and the
+// login mqttProbeLogin chooses. Split from probeMqttVia so a test drives the same choice the
+// command makes, without a port-forward.
+func probeMqttAt(addr string, natscfg config.NatsConfiguration) error {
 	tlsCfg, err := natscfg.TLSConfig(natscfg.Hostname)
 	if err != nil {
 		return err
@@ -387,15 +393,41 @@ func probeMqttVia(restCfg *rest.Config, namespace, pod string, natscfg config.Na
 	if tlsCfg != nil {
 		tlsCfg.ServerName = natscfg.Hostname
 	}
-	addr := fmt.Sprintf("127.0.0.1:%d", local)
-	user, password, err := operatorLogin(natscfg)
+	user, password, err := mqttProbeLogin(natscfg)
 	if err != nil {
 		return err
 	}
 	if err := mqttProbe(addr, tlsCfg, user, password); err != nil {
-		return fmt.Errorf("MQTT probe: %w", err)
+		return fmt.Errorf("MQTT probe (as %s): %w", user, err)
 	}
 	return nil
+}
+
+// mqttProbeLogin is the login the MQTT probe presents: the one per-area login the broker lets
+// speak MQTT (mqttPlatformPrincipal, event-sources'), which is the login event-sources itself
+// connects to this listener with.
+//
+// 🔴 NOT operatorLogin. The probe presented the broker administrator's login until v1.7, and from
+// v1.1.0 every broker dcctl builds holds that login (and every per-area login but this one) to
+// allowed_connection_types STANDARD, so the probe was refused on every dcctl-built instance with
+// a message blaming device authentication. Presenting this login widens nothing: it is a login the
+// broker already accepts over MQTT, read from the Secret dcctl already reads for the others, and
+// the probe opens a clean session, publishes nothing, subscribes to nothing and disconnects.
+//
+// An instance that predates per-area logins connects as the document's user, as operatorLogin
+// does; that is the login every area used then, and the broker did not restrict its connection
+// types.
+func mqttProbeLogin(natscfg config.NatsConfiguration) (user, password string, err error) {
+	if !natscfg.Auth.AreaLogins {
+		return natscfg.Auth.User, natscfg.Auth.Password, nil
+	}
+	password = natscfg.Auth.AreaPasswords[mqttPlatformPrincipal]
+	if password == "" {
+		return "", "", fmt.Errorf("the instance has a login for every principal, and %s's (Secret %s) is absent "+
+			"or holds no password. It is the only per-area login the broker accepts over MQTT, so there is no "+
+			"login to probe the MQTT listener with", mqttPlatformPrincipal, natsLoginSecretName("<instance>", mqttPlatformPrincipal))
+	}
+	return natsauth.LoginUser(mqttPlatformPrincipal), password, nil
 }
 
 // operatorLogin is the broker login dcctl's own diagnostics present: the broker administrator's,
