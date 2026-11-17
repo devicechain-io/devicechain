@@ -197,16 +197,25 @@ func (api *Api) CreateArea(ctx context.Context, request *AreaCreateRequest) (*Ar
 	}
 	// The fence is checked and the area written in ONE transaction holding the fence's row lock,
 	// so a concurrent delete of the fence cannot slip between them (see DeleteGeoFence).
+	var change membershipChange
 	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if created.BoundaryFenceToken.Valid {
 			if err := lockGeoFenceOnTx(tx, created.BoundaryFenceToken.String); err != nil {
 				return err
 			}
 		}
-		return tx.Create(created).Error
+		if err := tx.Create(created).Error; err != nil {
+			return err
+		}
+		change, err = api.enrollNewEntitiesOnTx(ctx, tx, "area", []uint{created.ID})
+		if err != nil {
+			return err
+		}
+		return nil
 	}); err != nil {
 		return nil, err
 	}
+	api.afterMembershipRecompute(ctx, "area", created.ID, change)
 	return created, nil
 }
 

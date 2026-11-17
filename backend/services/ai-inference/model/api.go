@@ -343,27 +343,20 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 		"enabled":     enabled,
 	}
 
-	// No precondition → unconditional last-write-wins: save the loaded row with the new
-	// fields.
-	//
-	// 🔴 THIS COMMENT USED TO SAY "unlike a map Updates", AND THAT RULE IS WRONG. What
-	// reaches the audit journal is decided by the value handed to Save or Model — the
-	// callback reads the primary key and the label off THAT — not by whether the update
-	// carries a struct or a map. The guarded branch below is a map Updates and records
-	// both, because it hands over `current` as well. The old wording named the wrong
-	// cause, which is how the branch twelve lines down came to be written through a
-	// zero-value model while the comment above it looked like a warning that had been
-	// heeded.
+	// No precondition: last-write-wins for the folded fields, pinned to the loaded row's
+	// primary key. It writes only `fields`, so the token is left alone and a concurrent
+	// rename survives, and a row deleted since the read matches nothing and answers
+	// not-found. (gorm's Save wrote every column, and when its UPDATE matched nothing it
+	// fell back to an upsert that re-inserted the deleted provider.) The loaded row is
+	// handed to Model because that value, not the map, is what the audit journal reads the
+	// id and label from.
 	if expectedUpdatedAt == nil {
-		current.Name = name
-		current.Description = description
-		current.Kind = kind
-		current.Endpoint = endpoint
-		current.ModelID = modelID
-		current.Params = params
-		current.Enabled = enabled
-		if err := rdb.AdvancingFrom(api.sys(ctx), current.UpdatedAt).Save(current).Error; err != nil {
-			return nil, err
+		res := rdb.AdvancingFrom(api.sys(ctx), current.UpdatedAt).Model(current).Updates(fields)
+		if res.Error != nil {
+			return nil, res.Error
+		}
+		if res.RowsAffected == 0 {
+			return nil, gorm.ErrRecordNotFound
 		}
 		return api.reloadWithSecret(ctx, token, current.ID, secret)
 	}
@@ -617,8 +610,9 @@ func (api *Api) DeleteAIProvider(ctx context.Context, token string) (bool, error
 		return false, err
 	}
 
-	// A plain predicate on the token, with no second guard on the DELETE itself. This
-	// deliberately dropped a `is_platform_baseline = false` predicate (and its
+	// Delete the row that was checked, by its primary key, and hand Delete that loaded row:
+	// the value handed to Delete is what the audit journal reads the id and label from. There
+	// is no second guard on the DELETE itself. That deliberately dropped a `is_platform_baseline = false` predicate (and its
 	// ErrProviderInUse branch) that guarded the retired instance-wide baseline, and the
 	// reason it is now UNNECESSARY rather than merely tidier is worth being precise
 	// about, since removing a check reads like weakening one:
@@ -632,7 +626,7 @@ func (api *Api) DeleteAIProvider(ctx context.Context, token string) (bool, error
 	// arm of assertProviderNotGranted already refuses on it. The database enforces the
 	// race the hand-written predicate was covering: the protection that had to be
 	// hand-written is now the protection that was already there.
-	res := api.sys(ctx).Unscoped().Where("token = ?", token).Delete(&AIProvider{})
+	res := api.sys(ctx).Unscoped().Delete(matches[0])
 	if res.Error != nil {
 		return false, res.Error
 	}

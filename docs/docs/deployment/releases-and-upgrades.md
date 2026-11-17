@@ -762,6 +762,9 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### Before you upgrade to v1.7.0 {#v170-before-upgrade}
 
+
+- **`dcctl install`, `dcctl bootstrap` and `dcctl preflight` check the OpenTofu or Terraform version.** The preflight now refuses a binary older than the `required_version` that dcctl's bundled OpenTofu configuration declares (currently `>= 1.10`), a prerelease, or one whose version it cannot read. Before, it checked only that the binary was present, so an install on OpenTofu 1.9 failed at `tofu init` after it had already updated the operator. OpenTofu is still preferred when both are installed, and it is the binary checked. Install a stable OpenTofu or Terraform 1.10 or later before you run the v1.7.0 `dcctl install`. `--skip-preflight` still skips the check.
+
 #### What is new in v1.7.0 {#v170-whats-new}
 
 #### Deletions are announced reliably {#v170-deletion-announcements}
@@ -770,6 +773,9 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 - The announcement carries the time of the delete, however late it is published.
 - While old and new pods overlap during the rolling upgrade, deletes handled by a `v1.6` pod are announced the old way.
 - No configuration change is needed.
+
+
+- **The MCP server's limit of 64 requests in flight per process is reachable, and the request past it receives HTTP 429.** The shared request-body budget held only 63 maximum-size bodies, so the 64th concurrent request received HTTP 503 with `Retry-After: 1` before the MCP limit was reached. The budget now holds 64 (it grows by 64 bytes), and requests beyond the limit receive HTTP 429 with `Retry-After: 1`, as documented. The limit of 4 in flight per caller and the 1 MiB request-body ceiling are unchanged.
 
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
 
