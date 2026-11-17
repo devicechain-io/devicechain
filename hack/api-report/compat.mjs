@@ -43,10 +43,17 @@ const FN_RETURNING = /^(export declare function [A-Za-z_$][\w$]*(?:<.*>)?\(.*\))
 /**
  * Whether the one changed line of a function is a NARROWED return type: the same signature
  * returning an interface the package exports that extends the old return type. Return types are
- * covariant, so every caller written against the old type still type-checks: a v1.6 caller of
+ * covariant, so every caller that READS the result still type-checks: a v1.6 caller of
  * `createSessionTokens(): SessionTokens` is unaffected by it returning
  * `ManagedSessionTokens extends SessionTokens`. Only that exact shape: a parameter, an overload,
  * a generic or a structural "wider" type is still compared line by line.
+ *
+ * 🔴 DANGEROUS, NOT SAFE. A caller that uses the return type as an INPUT type - typing a mock
+ * or a stand-in as `ReturnType<typeof createSessionTokens>` - must now supply the subtype's
+ * extra members, and stops compiling. That is the same case as an added required member: a
+ * break only for a consumer that constructs the type, which a declaration does not show. So it
+ * is reported, never fails, and the release notes tell such callers to type against the old,
+ * still-exported name.
  */
 function narrowedReturn(lost, gained, head) {
   if (lost.length !== 1 || gained.length !== 1) return null;
@@ -91,7 +98,7 @@ export function diffModels(base, head) {
     if (lost.length === 0 && gained.length === 0) continue;
     const narrowed = narrowedReturn(lost, gained, head);
     if (narrowed) {
-      changes.push({ id, kind: 'return-narrowed', level: 'safe', detail: narrowed });
+      changes.push({ id, kind: 'return-narrowed', level: 'dangerous', detail: narrowed });
       continue;
     }
     if (lost.length > 0) {

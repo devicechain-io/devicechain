@@ -30,7 +30,9 @@ test('an added REQUIRED member is reported, never failing', () => {
   assert.equal(c[0].level, 'dangerous');
 });
 
-test('a return type narrowed to an exported interface extending it is safe', () => {
+// Dangerous, not safe: `ReturnType<typeof make>` used as an input type (a mock) now needs the
+// subtype's extra members. Reported, and never failing: it is not a break for a caller that reads.
+test('a return type narrowed to an exported interface extending it is dangerous, and does not fail', () => {
   const fn = (r) => [`export declare function make(opts: Opts): ${r};`];
   const base = m({ '.:make': fn('Tokens'), '.:Tokens': ['export interface Tokens {', '}'] });
   const head = m({
@@ -39,7 +41,10 @@ test('a return type narrowed to an exported interface extending it is safe', () 
     '.:Managed': ['export interface Managed extends Tokens {', '    f: () => void;', '}'],
   });
   const c = diffModels(base, head).filter((x) => x.id === '.:make');
-  assert.deepEqual(c.map((x) => [x.kind, x.level]), [['return-narrowed', 'safe']]);
+  assert.deepEqual(c.map((x) => [x.kind, x.level]), [['return-narrowed', 'dangerous']]);
+  const r = reconcile(c.map((x) => ({ ...x, pkg: 'p' })), [], 'v1');
+  assert.deepEqual(r.failures, []);
+  assert.deepEqual(r.dangerous.map((x) => x.kind), ['return-narrowed']);
 });
 
 // The negative controls: each of these is still a break, so the rule above is not "any change
