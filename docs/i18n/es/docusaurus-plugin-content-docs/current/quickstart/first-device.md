@@ -375,7 +375,7 @@ declarados. Renueva `DC_TOKEN` con el paso 3 si ha caducado.
 
 1. En **Devices → Device Profiles**, crea un perfil con token `temp-probe-profile`, nombre
    **Temperature probe profile** y categoría **sensor**. En **Metrics**, añade una métrica con token
-   y clave `temperature`, tipo **DOUBLE** y unidad `Cel`.
+   y clave `temperature`, tipo de dato **Double** y unidad `Cel`.
 2. En **Devices → Device Types**, abre `temp-probe`. En **Profile**, adjunta `temp-probe-profile`.
    Consulta [Tipos de dispositivo y perfiles](../user-guide/device-types-and-profiles.md).
 3. En **Detection Rules** del perfil, elige **New detection rule → Form**. Indica token
@@ -395,8 +395,8 @@ declarados. Renueva `DC_TOKEN` con el paso 3 si ha caducado.
    [Recibir comandos](../guides/connecting-a-device.md#receiving-commands) para iniciar un suscriptor
    MQTT (instala los clientes Mosquitto y usa la CA de la instancia como indica esa guía).
    Usa host `localhost`, id de cliente `devicechain:sim-demo:sensor-001:sub`, usuario
-   `sim-demo:$DC_CRED_ID` (expande la variable), contraseña `$DC_CRED_ID` para su credencial
-   `ACCESS_TOKEN` y tema `devicechain/sim-demo/device-commands/sensor-001`. Déjalo conectado. Para conexiones locales a `localhost`, sigue también las instrucciones de la guía sobre el nombre de host TLS.
+   `sim-demo:$DC_CRED_ID` (expande la variable), sin contraseña (una credencial `ACCESS_TOKEN` se conecta solo con el usuario; una conexión que además envía una contraseña se comprueba como `MQTT_BASIC` y se rechaza)
+   y tema `devicechain/sim-demo/device-commands/sensor-001`. Déjalo conectado. Para conexiones locales a `localhost`, sigue también las instrucciones de la guía sobre el nombre de host TLS.
 3. Emite este comando de prueba inocuo en la API del inquilino:
 
 ```bash

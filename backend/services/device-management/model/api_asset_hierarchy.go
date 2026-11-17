@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
@@ -106,6 +107,22 @@ func (api *Api) EnsureContainmentType(ctx context.Context) (*EntityRelationshipT
 		"Built-in asset-hierarchy relationship (parent contains child).", false)
 }
 
+// lockAssetHierarchy serializes a tenant's containment writers until commit.
+// It must precede every hierarchy read, including a re-parent's delete lookup,
+// on the SAME transaction as admission and insert. READ COMMITTED is required:
+// after a lock wait, admission must see the previous holder's committed writes.
+// A child-specific lock cannot prevent cycles involving different children.
+func lockAssetHierarchy(tx *gorm.DB) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	tenant, ok := core.TenantFromContext(tx.Statement.Context)
+	if !ok {
+		return core.ErrNoTenant
+	}
+	return tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", tenant+":asset-hierarchy").Error
+}
+
 // admitContainmentEdge is the ONE gate every containment edge passes through,
 // whichever door created it. It is a no-op for every other relationship type, so
 // the generic edge API keeps its "no legal (source, type, target) triple table"
@@ -127,6 +144,9 @@ func (api *Api) admitContainmentEdge(tx *gorm.DB, relationshipToken string,
 
 	if relationshipToken != ContainmentRelationshipType {
 		return nil
+	}
+	if err := lockAssetHierarchy(tx); err != nil {
+		return err
 	}
 	if sourceType != string(entity.TypeAsset) || targetType != string(entity.TypeAsset) {
 		return fmt.Errorf("%w (got %s -> %s)", ErrContainmentEndsMustBeAssets, sourceType, targetType)
@@ -269,6 +289,9 @@ func (api *Api) SetAssetParent(ctx context.Context, childToken, parentToken stri
 
 	var created *EntityRelationship
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockAssetHierarchy(tx); err != nil {
+			return err
+		}
 		if err := api.clearAssetParentOn(tx, childId); err != nil {
 			return err
 		}

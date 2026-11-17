@@ -67,12 +67,14 @@ export function checkWidgetCompatibility(
   if (ref.optionsVersion !== descriptor.optionsVersion) {
     return {
       code: 'options-version',
+      versions: { authored: ref.optionsVersion, installed: descriptor.optionsVersion },
       message: `"${id}" was saved with settings version ${ref.optionsVersion}; the installed widget uses settings version ${descriptor.optionsVersion}`,
     };
   }
   if (ref.sdkApiVersion !== undefined && ref.sdkApiVersion !== descriptor.sdkApiVersion) {
     return {
       code: 'sdk-incompatible',
+      versions: { authored: ref.sdkApiVersion, installed: descriptor.sdkApiVersion },
       message: `"${id}" was authored for widget SDK API ${ref.sdkApiVersion}; the installed widget uses API ${descriptor.sdkApiVersion}`,
     };
   }

@@ -62,6 +62,8 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/command-delivery/processor/StrandedReconciler.go": {"CommandDeliveryProcessor.reconcileStrandedPage"},
 	"backend/services/command-delivery/processor/WindowRestamp.go":      {"CommandDeliveryProcessor.restampWindows"},
 	"backend/services/device-management/model/ownership_outbox.go":      {"Api.DrainOwnershipFacts"},
+	// The entity-deletion drain lists the tenants that have queued deletion facts (no row is read), then publishes and deletes each tenant's rows under core.WithTenant.
+	"backend/services/device-management/model/deletion_outbox.go": {"Api.DrainEntityDeletions"},
 	// The attribute-repair drain lists the tenants that have queued repairs (no row is read), then repairs each tenant's rows under core.WithTenant.
 	"backend/services/device-management/model/api_attribute_repairs.go": {"Api.DrainAttributeRepairs"},
 	// The agent-effect relay lists the tenants that have queued effects, then drains each tenant's rows under core.WithTenant.
@@ -106,11 +108,12 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/user-management/iam/purge.go":                              {"Store.PurgeRecords"},
 	"backend/services/user-management/iam/store.go":                              {"Store.AuditEvents", "Store.sys"},
 	"backend/services/user-management/identity/keys.go": {
-		"Manager.activeKeyAge", "Manager.loadSigningKeysLocked", "Manager.rotateSigningKeyLocked",
+		"Manager.rotateIfOlderThanLocked", "Manager.loadSigningKeysLocked", "Manager.rotateSigningKeyLocked",
 	},
-	"backend/services/user-management/purge/coordinator.go": {"Coordinator.observeLedger", "Coordinator.purgeTenant", "Coordinator.pass"},
-	"backend/services/user-management/purge/relational.go":  {"Relational.handle"},
-	"backend/services/user-management/settings/store.go":    {"Store.sys"},
+	"backend/services/user-management/identity/keys_follow.go": {"Manager.followSigningKeys"},
+	"backend/services/user-management/purge/coordinator.go":    {"Coordinator.observeLedger", "Coordinator.purgeTenant", "Coordinator.pass"},
+	"backend/services/user-management/purge/relational.go":     {"Relational.handle"},
+	"backend/services/user-management/settings/store.go":       {"Store.sys"},
 }
 
 // Every bypass of tenant isolation in the workspace is declared.

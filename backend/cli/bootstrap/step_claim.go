@@ -69,6 +69,9 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 				return err
 			}
 		}
+		if existing != nil {
+			st.ShardGroups = existing.Spec.ShardGroups.DeepCopy()
+		}
 		if existing != nil && st.MqttDeviceUplinks == nil {
 			st.MqttDeviceUplinks = copyBoolPtr(existing.Spec.MQTTDeviceUplinks)
 		}
@@ -289,6 +292,7 @@ func applyDeclaration(st *State, spec dcv1beta1.InstanceSpec) {
 	// existed keeps the platform default rather than being handed a decision.
 	st.MqttFailClosed = copyBoolPtr(spec.MQTTFailClosed)
 	st.MqttDeviceUplinks = copyBoolPtr(spec.MQTTDeviceUplinks)
+	st.ShardGroups = spec.ShardGroups.DeepCopy()
 	st.TrustedProxies = append([]string(nil), spec.TrustedProxies...)
 	st.TrustedProxiesExplicit = spec.TrustedProxiesExplicit
 	st.MQTTExposure, st.MQTTHost = spec.MQTTExposure, spec.MQTTHost
