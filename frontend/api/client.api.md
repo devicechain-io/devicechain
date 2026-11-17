@@ -96,6 +96,7 @@ export declare const MAX_TOKEN_LEN = 128;
 ```ts
 export interface ManagedSessionTokens extends SessionTokens {
     forceRefresh: (rejectedToken?: string) => Promise<string | null>;
+    exchange: (spend: (refreshToken: string) => Promise<TokenPair>) => Promise<string>;
 }
 ```
 
