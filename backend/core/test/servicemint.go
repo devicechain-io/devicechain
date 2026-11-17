@@ -31,10 +31,12 @@ type mintForwarder struct {
 	Authorities []string
 }
 
-// Subject is parameter 2 in both constructors (including the grouped string parameters).
+// Legacy constructors take the subject at parameter 2. The For variants carry it in Peers.
 var serviceMintForwarders = map[string]mintForwarder{
-	"governance.NewTenantLifecycleGate":  {2, []string{"tenant:read"}},
-	"governance.NewTenantLifecycleGates": {2, []string{"tenant:read"}},
+	"governance.NewTenantLifecycleGate":     {2, []string{"tenant:read"}},
+	"governance.NewTenantLifecycleGates":    {2, []string{"tenant:read"}},
+	"governance.NewTenantLifecycleGateFor":  {-1, []string{"tenant:read"}},
+	"governance.NewTenantLifecycleGatesFor": {-1, []string{"tenant:read"}},
 }
 
 var noServiceToken = map[string]string{
@@ -132,6 +134,55 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 			if fun, ok := decl.(*ast.FuncDecl); ok {
 				fn = funcSiteName(fun)
 			}
+			peerVars := map[string]bool{}
+			if fun, ok := decl.(*ast.FuncDecl); ok {
+				for _, field := range fun.Type.Params.List {
+					if star, ok := field.Type.(*ast.StarExpr); ok && qualified(star.X) == "svcclient.Peers" {
+						for _, name := range field.Names {
+							peerVars[name.Name] = true
+						}
+					}
+				}
+			}
+			// Follow local aliases and With chains without treating unrelated Client methods as mints.
+			var peerExpr func(ast.Expr) bool
+			peerExpr = func(expr ast.Expr) bool {
+				switch expr := expr.(type) {
+				case *ast.Ident:
+					return peerVars[expr.Name]
+				case *ast.ParenExpr:
+					return peerExpr(expr.X)
+				case *ast.CallExpr:
+					if sel, ok := expr.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "With" {
+						return peerExpr(sel.X)
+					}
+				}
+				return false
+			}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				assign, ok := n.(*ast.AssignStmt)
+				if !ok || len(assign.Rhs) != 1 || len(assign.Lhs) == 0 {
+					return true
+				}
+				valid := peerExpr(assign.Rhs[0])
+				if call, ok := assign.Rhs[0].(*ast.CallExpr); ok && qualified(call.Fun) == "svcclient.NewPeers" && len(call.Args) == 2 {
+					area, ok := call.Args[1].(*ast.SelectorExpr)
+					valid = ok && area.Sel.Name == "FunctionalArea"
+				}
+				if id, ok := assign.Lhs[0].(*ast.Ident); ok && valid {
+					peerVars[id.Name] = true
+				}
+				return true
+			})
+			peerMethod := func(expr ast.Expr) string {
+				if sel, ok := expr.(*ast.SelectorExpr); ok && peerExpr(sel.X) {
+					switch sel.Sel.Name {
+					case "Client", "Seam", "UserManagement":
+						return sel.Sel.Name
+					}
+				}
+				return ""
+			}
 			// Match AST identity: a constructor used as an argument or assigned to
 			// a variable must not disappear merely because another call contains it.
 			callFunctions := map[ast.Node]bool{}
@@ -166,7 +217,7 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 							continue
 						}
 						deadletterAliases++
-						if len(v.Names) == 1 && len(v.Values) == 1 && qualified(v.Values[0]) == "governance.NewTenantLifecycleGate" {
+						if len(v.Names) == 1 && len(v.Values) == 1 && (qualified(v.Values[0]) == "governance.NewTenantLifecycleGate" || qualified(v.Values[0]) == "governance.NewTenantLifecycleGateFor") {
 							sanctionedAlias = v.Values[0]
 						} else {
 							deadletterValid = false
@@ -185,7 +236,7 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 				if expr, ok := n.(ast.Expr); ok {
 					q := qualified(expr)
 					_, forwarded := forwarders[q]
-					if (q == "svcclient.New" || forwarded) && !nonReferences[n] && !callFunctions[n] && expr != sanctionedAlias {
+					if (q == "svcclient.New" || q == "svcclient.NewPeers" || forwarded || peerMethod(expr) != "") && !nonReferences[n] && !callFunctions[n] && expr != sanctionedAlias {
 						sites = append(sites, serviceMintSite{File: rel, Func: fn, Unresolved: "constructor reference is not a direct call: " + q})
 					}
 				}
@@ -204,7 +255,12 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 				}
 				if id, ok := call.Fun.(*ast.Ident); ok && deadletter && id.Name == "tenantLifecycleGate" {
 					deadletterCalls++
-					if len(call.Args) <= 2 {
+					if len(call.Args) == 2 {
+						if !peerExpr(call.Args[0]) {
+							deadletterValid = false
+							sites = append(sites, serviceMintSite{File: rel, Func: fn, Unresolved: "tenantLifecycleGate missing FunctionalArea subject"})
+						}
+					} else if len(call.Args) <= 2 {
 						deadletterValid = false
 						sites = append(sites, serviceMintSite{File: rel, Func: fn, Unresolved: "tenantLifecycleGate missing FunctionalArea subject"})
 					} else if subject, ok := call.Args[2].(*ast.SelectorExpr); !ok || subject.Sel.Name != "FunctionalArea" {
@@ -213,8 +269,20 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 					}
 				}
 				q := qualified(call.Fun)
+				if q == "svcclient.NewPeers" {
+					valid := false
+					if len(call.Args) == 2 {
+						if area, ok := call.Args[1].(*ast.SelectorExpr); ok {
+							valid = area.Sel.Name == "FunctionalArea"
+						}
+					}
+					if !valid {
+						sites = append(sites, serviceMintSite{File: rel, Func: fn, Unresolved: "NewPeers subject must end in .FunctionalArea"})
+					}
+				}
 				forward, forwarded := forwarders[q]
-				if q != "svcclient.New" && !forwarded {
+				method := peerMethod(call.Fun)
+				if q != "svcclient.New" && !forwarded && method == "" {
 					return true
 				}
 				site := serviceMintSite{File: rel, Func: fn, Kind: "direct"}
@@ -224,14 +292,38 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 					site.Kind = "forwarder"
 					site.Authorities = append([]string(nil), forward.Authorities...)
 				}
-				if subject >= len(call.Args) {
+				if method != "" || (forwarded && subject == -1) {
+					parts := strings.Split(rel, "/")
+					valid := method != ""
+					if forwarded && len(call.Args) > 0 {
+						valid = peerExpr(call.Args[0])
+					}
+					if len(parts) > 3 && parts[1] == "services" && valid {
+						site.Caller = parts[2]
+					} else {
+						site.Unresolved = "non-literal subject"
+					}
+				} else if subject >= len(call.Args) {
 					site.Unresolved = "missing subject"
 				} else if caller, ok := mintLiteral(call.Args[subject]); ok {
 					site.Caller = caller
 				} else {
 					site.Unresolved = "non-literal subject"
 				}
-				if !forwarded {
+				if method != "" {
+					start := 0
+					if method == "Seam" {
+						start = 1
+					}
+					for _, arg := range call.Args[start:] {
+						value, ok := authorities[strings.TrimPrefix(qualified(arg), "auth.")]
+						if !ok {
+							site.Unresolved += " unreadable authorities"
+						} else {
+							site.Authorities = append(site.Authorities, value)
+						}
+					}
+				} else if !forwarded {
 					if len(call.Args) <= 3 {
 						site.Unresolved += " unreadable authorities"
 					} else {
@@ -247,7 +339,7 @@ func serviceMintSitesUnder(root string, forwarders map[string]mintForwarder) ([]
 					// Verify the implementation still mints exactly its ledger grant.
 					want := forwarders["governance."+fn].Authorities
 					if strings.Join(site.Authorities, ",") == strings.Join(want, ",") {
-						if !forwarded {
+						if !forwarded || method != "" {
 							site.Ledgered = true
 							sites = append(sites, site)
 						}

@@ -5,7 +5,6 @@ package governance
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
@@ -128,10 +127,31 @@ func NewTenantLifecycleGates(umCfg config.UserManagementConfiguration, serviceSe
 	}
 	gates.Set(GateTenantLifecycle, true)
 	client := svcclient.New(umCfg, serviceSecret, subject, []string{string(auth.TenantRead)})
-	umURL := fmt.Sprintf("http://%s:%d/graphql", umCfg.Hostname, umCfg.Port)
+	umURL := umCfg.Endpoint().GraphQLURL()
 	log.Info().Str("service", subject).Str("userManagement", umURL).
 		Msg("Work for tenants that have been deleted will be refused (tenant deletion lifecycle).")
 	r := NewTenantLifecycleResolver(client, umURL)
+	return r.Deleted, r.GoneOrUnverified
+}
+
+// NewTenantLifecycleGateFor builds an isolated tenant:read gate for the caller.
+func NewTenantLifecycleGateFor(p *svcclient.Peers, gates *SafetyGates) func(string) bool {
+	gate, _ := NewTenantLifecycleGatesFor(p, gates)
+	return gate
+}
+
+func NewTenantLifecycleGatesFor(p *svcclient.Peers, gates *SafetyGates) (gate, strict func(string) bool) {
+	seam, err := p.UserManagement(auth.TenantRead)
+	if err != nil {
+		log.Warn().Str("service", p.Area()).
+			Msg("user-management endpoint or service secret not configured — this service will NOT refuse work for tenants that have been deleted.")
+		gates.Set(GateTenantLifecycle, false)
+		return nil, nil
+	}
+	gates.Set(GateTenantLifecycle, true)
+	log.Info().Str("service", p.Area()).Str("userManagement", seam.URL).
+		Msg("Work for tenants that have been deleted will be refused (tenant deletion lifecycle).")
+	r := NewTenantLifecycleResolver(seam.Client, seam.URL)
 	return r.Deleted, r.GoneOrUnverified
 }
 
