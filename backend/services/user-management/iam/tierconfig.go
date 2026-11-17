@@ -129,6 +129,9 @@ const CalculatedMetricsPerProfileConfigKey = governance.CalculatedMetricsPerProf
 // It has NO per-tenant override column: the count is packaging, set on the tier.
 const IntegrationsPerTenantConfigKey = governance.IntegrationsPerTenantField
 
+// RulesPerTenantConfigKey bounds enabled rules across active profile versions.
+const RulesPerTenantConfigKey = governance.RulesPerTenantField
+
 // MfaRequiredConfigKey is the tier config key that forces a second factor on for every tenant
 // of the tier: the FLOOR under a tenant's own mfaRequired flag. A boolean, unlike every other
 // key here, so it is a flag and not a scalar (see TierFlagKeys).
@@ -164,6 +167,7 @@ func buildTierConfigKeys() map[string]tierConfigKey {
 	keys[GeoFencePositionBudgetConfigKey] = tierConfigKey{validate: validateGeoFencePositionBudget}
 	keys[CalculatedMetricsPerProfileConfigKey] = tierConfigKey{validate: validateCalculatedMetricsPerProfile}
 	keys[IntegrationsPerTenantConfigKey] = tierConfigKey{validate: validateIntegrationsPerTenant}
+	keys[RulesPerTenantConfigKey] = tierConfigKey{validate: validateRulesPerTenant}
 	keys[MfaRequiredConfigKey] = tierConfigKey{validate: validateMfaRequired}
 	return keys
 }
@@ -566,4 +570,16 @@ func (t *TenantTier) positiveInt(key string, validate func(any) error) *int {
 	}
 	i := int(*f)
 	return &i
+}
+
+// validateRulesPerTenant accepts zero (no active rules) through GraphQL Int's maximum.
+func validateRulesPerTenant(v any) error {
+	f, ok := toFloat(v)
+	if !ok || math.IsNaN(f) || math.IsInf(f, 0) || f != math.Trunc(f) || f < 0 || f > math.MaxInt32 {
+		return fmt.Errorf("must be a whole number between 0 and %d rules per tenant", math.MaxInt32)
+	}
+	return nil
+}
+func (t *TenantTier) RulesPerTenant() *int {
+	return t.positiveInt(RulesPerTenantConfigKey, validateRulesPerTenant)
 }
