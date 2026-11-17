@@ -102,6 +102,10 @@ const (
 	// HarborpulseDefectLegacyDecoderFixed gives the legacy gauge the good decoder, so nothing fails
 	// to decode.
 	HarborpulseDefectLegacyDecoderFixed = "legacy-decoder-fixed"
+	// HarborpulseDefectFloodClearBetweenTiers makes every gauge drop out below the minor tier for
+	// a few readings each time its water climbs into a higher tier, so its flood alarm clears and
+	// is reactivated (under the same token) between tiers instead of escalating in place.
+	HarborpulseDefectFloodClearBetweenTiers = "flood-clear-between-tiers"
 	// The S4 defects are declared with the fleet operations they break (harborpulse_s4.go).
 )
 
@@ -109,12 +113,12 @@ const (
 func HarborpulseDefects() []string {
 	return []string{
 		HarborpulseDefectAirLockBasin, HarborpulseDefectDropBackfill, HarborpulseDefectEastLampMislabelled,
-		HarborpulseDefectFeederMiswired, HarborpulseDefectFloodSplitKey, HarborpulseDefectFlushUngated,
-		HarborpulseDefectHolidayDropped, HarborpulseDefectLampUnsited, HarborpulseDefectLegacyDecoderFixed,
-		HarborpulseDefectLoftsUnderBasin, HarborpulseDefectLoraWrongScale, HarborpulseDefectMQTTUnreachable,
-		HarborpulseDefectNightDimAllLights, HarborpulseDefectRefuseDerate, HarborpulseDefectSilenceNorthLamp,
-		HarborpulseDefectTruckStaysHome, HarborpulseDefectUnscopedWatch, HarborpulseDefectUnsignedWebhook,
-		HarborpulseDefectWrongWellDepth,
+		HarborpulseDefectFeederMiswired, HarborpulseDefectFloodClearBetweenTiers, HarborpulseDefectFloodSplitKey,
+		HarborpulseDefectFlushUngated, HarborpulseDefectHolidayDropped, HarborpulseDefectLampUnsited,
+		HarborpulseDefectLegacyDecoderFixed, HarborpulseDefectLoftsUnderBasin, HarborpulseDefectLoraWrongScale,
+		HarborpulseDefectMQTTUnreachable, HarborpulseDefectNightDimAllLights, HarborpulseDefectRefuseDerate,
+		HarborpulseDefectSilenceNorthLamp, HarborpulseDefectTruckStaysHome, HarborpulseDefectUnscopedWatch,
+		HarborpulseDefectUnsignedWebhook, HarborpulseDefectWrongWellDepth,
 	}
 }
 
@@ -134,7 +138,7 @@ const HarborpulseMaxDayLength = 24 * time.Hour
 type harborDefects struct {
 	floodSplitKey, refuseDerate, airLockBasin, silenceNorthLamp, dropBackfill bool
 	unsignedWebhook, mqttUnreachable, truckStaysHome, wrongWellDepth          bool
-	loraWrongScale, legacyDecoderFixed                                        bool
+	loraWrongScale, legacyDecoderFixed, floodClearBetweenTiers                bool
 	eastLampMislabelled, unscopedWatch, nightDimAllLights, lampUnsited        bool
 	holidayDropped, flushUngated, loftsUnderBasin, feederMiswired             bool
 	names                                                                     []string
@@ -154,6 +158,10 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 				o.DayLength, HarborpulseMinDayLength, HarborpulseMaxDayLength, harborpulseDayLength)
 		}
 		s.dayLength = o.DayLength
+	}
+	if need := harborBufferNeed(s.dayLength, s.load.Interval()); need > harborMaxBufferCap {
+		return fmt.Errorf("--day-length %s at a %s cadence buffers %d readings per charger through the feeder outage, "+
+			"more than the %d a charger can hold: lengthen the cadence or shorten the day", s.dayLength, s.load.Interval(), need, harborMaxBufferCap)
 	}
 	names, err := parseDefects(o.Defects, HarborpulseDefects())
 	if err != nil {
@@ -200,6 +208,8 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 			d.loftsUnderBasin = true
 		case HarborpulseDefectFeederMiswired:
 			d.feederMiswired = true
+		case HarborpulseDefectFloodClearBetweenTiers:
+			d.floodClearBetweenTiers = true
 		}
 	}
 	s.defects = d
@@ -803,6 +813,7 @@ func (s *harborpulse) ensureModel() *harborModel {
 	defer s.mu.Unlock()
 	if s.model == nil {
 		s.model = newHarborModelWith(s.seed, s.dayLength, s.defects)
+		s.model.bufferCap = harborBufferCapFor(s.dayLength, s.load.Interval())
 	}
 	return s.model
 }

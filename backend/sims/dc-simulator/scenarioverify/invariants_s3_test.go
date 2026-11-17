@@ -38,6 +38,30 @@ func signed(t time.Time, path, body string, secrets ...string) scenariosink.Webh
 	return w
 }
 
+// dutyMailData is the DATA of the mail notification-management sends the duty officer for one
+// page, in its default rendering: an ALARM names the transition on its first line, an ESCALATION
+// says the alarm is still unacknowledged; both carry the device in a "Device token:" field.
+func dutyMailData(recipient, device, key, trigger string) string {
+	field := func(label, value string) string { return fmt.Sprintf("%-18s %s\r\n", label+":", value) }
+	var subject, body string
+	switch trigger {
+	case "ESCALATION":
+		subject = fmt.Sprintf("[MAJOR] Alarm still unresolved (escalation 1): %s on %s", key, device)
+		body = fmt.Sprintf("Alarm %s is still unacknowledged and uncleared after 1 notification(s).\r\n\r\n", key) +
+			field("Device", device) + field("Device token", device) + field("Severity", "MAJOR") + field("Escalation", "1")
+	default:
+		subject = fmt.Sprintf("[MAJOR] Alarm raised: %s on %s", key, device)
+		body = fmt.Sprintf("Alarm %s raised on %s.\r\n\r\n", key, device) +
+			field("Device", device) + field("Device token", device) + field("Severity", "MAJOR") + field("State", "ACTIVE")
+	}
+	return "From: alerts@devicechain.example\r\nTo: " + recipient + "\r\nSubject: " + subject +
+		"\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + body
+}
+
+func dutyMailAt(t time.Time, recipient, device, key, trigger string) scenariosink.Mail {
+	return scenariosink.Mail{At: t, To: []string{recipient}, Data: dutyMailData(recipient, device, key, trigger)}
+}
+
 // cleanS3 is the S3 beats as a working platform answers them.
 func (d *day) cleanS3() {
 	s := S3{Tenant: testTenant, Seed: 1, SigningSecret: testSecret, WrongSecret: testWrongSecret,
@@ -49,14 +73,21 @@ func (d *day) cleanS3() {
 		s.Sink.Messages = append(s.Sink.Messages, scenariosink.Message{At: at(18.0), Topic: sim.HarborpulseBulletinTopic(testTenant),
 			QoS: 1, Payload: `{"device":"` + g + `"}`})
 		s.Attempts[token] = append(s.Attempts[token], Attempt{At: at(18.0), AlarmToken: token, Trigger: "ALARM", Status: "SENT"})
-		s.Sink.Mail = append(s.Sink.Mail, scenariosink.Mail{At: at(18.0), To: []string{recipient}})
+		s.Sink.Mail = append(s.Sink.Mail, dutyMailAt(at(18.0), recipient, g, sim.HarborpulseFloodAlarmKey, "ALARM"))
 		if g == AckGauge {
 			s.Ack = Ack{Device: g, Token: token, At: at(18.1)}
 			continue
 		}
 		s.Attempts[token] = append(s.Attempts[token], Attempt{At: at(19.5), AlarmToken: token, Trigger: "ESCALATION", Status: "SENT"})
-		s.Sink.Mail = append(s.Sink.Mail, scenariosink.Mail{At: at(19.5), To: []string{recipient}})
+		s.Sink.Mail = append(s.Sink.Mail, dutyMailAt(at(19.5), recipient, g, sim.HarborpulseFloodAlarmKey, "ESCALATION"))
 	}
+	// Mail to the same recipient about other alarms: the pumps' wet wells, a gauge's surge. It
+	// stands in for none of the flood pages.
+	for _, p := range fleetOf(sim.HarborpulsePumpType, "") {
+		s.Sink.Mail = append(s.Sink.Mail, dutyMailAt(at(17.3), recipient, p, sim.HarborpulseWetWellAlarmKey, "ALARM"),
+			dutyMailAt(at(17.9), recipient, p, sim.HarborpulseWetWellAlarmKey, "ESCALATION"))
+	}
+	s.Sink.Mail = append(s.Sink.Mail, dutyMailAt(at(19.6), recipient, "hp-gauge-basin-1", sim.HarborpulseSurgeAlarmKey, "ESCALATION"))
 	for _, g := range fleetOf(sim.HarborpulseGaugeType, sim.HarborpulseOutageQuay) {
 		s.Sink.Webhooks = append(s.Sink.Webhooks, signed(at(18.3), sim.HarborpulseWebhookPath, `{"device":"`+g+`"}`, testSecret))
 	}
@@ -152,6 +183,30 @@ func TestEachS3ControlTurnsExactlyItsInvariantRed(t *testing.T) {
 		{"pages the sink never received", "(none)", InvNotifyEscalates, "the sink received", func(d *day) {
 			d.s3.Sink.Mail = d.s3.Sink.Mail[:3]
 		}},
+		// One gauge's escalation mail lost, every other mail kept: the acknowledged gauge's page and
+		// the other alarms' mail to the same recipient must not make up for it.
+		{"one gauge's escalation mail dropped", "(none: a platform that loses one page)", InvNotifyEscalates,
+			"hp-gauge-basin-1: the platform recorded 1 ESCALATION pages SENT for its flood alarm but the sink received 0", func(d *day) {
+				var kept []scenariosink.Mail
+				for _, m := range d.s3.Sink.Mail {
+					if dev, key, trig, _ := dutyMail(m.Data); dev == "hp-gauge-basin-1" && key == sim.HarborpulseFloodAlarmKey && trig == "ESCALATION" {
+						continue
+					}
+					kept = append(kept, m)
+				}
+				if len(kept) != len(d.s3.Sink.Mail)-1 {
+					panic(fmt.Sprintf("dropped %d mails, want exactly one", len(d.s3.Sink.Mail)-len(kept)))
+				}
+				d.s3.Sink.Mail = kept
+			}},
+		{"one gauge's escalation mailed as another trigger", "(none)", InvNotifyEscalates,
+			"hp-gauge-basin-2: the platform recorded 1 ESCALATION", func(d *day) {
+				for i, m := range d.s3.Sink.Mail {
+					if dev, key, trig, _ := dutyMail(m.Data); dev == "hp-gauge-basin-2" && key == sim.HarborpulseFloodAlarmKey && trig == "ESCALATION" {
+						d.s3.Sink.Mail[i] = dutyMailAt(m.At, sim.HarborpulseDutyRecipient(testTenant), dev, key, "ALARM")
+					}
+				}
+			}},
 		{"the acknowledged gauge escalated anyway", "(the verifier's own control)", InvNotifyAckControl, "although it was acknowledged", func(d *day) {
 			tok := "a-" + AckGauge
 			d.s3.Attempts[tok] = append(d.s3.Attempts[tok], Attempt{At: at(19.5), AlarmToken: tok, Trigger: "ESCALATION", Status: "SENT"})
@@ -259,4 +314,76 @@ func TestFoldedDecodeFailuresThatDidNotGrowAreRed(t *testing.T) {
 		*d = *foldedLegacyDay(98, 160)
 		d.s3.DecodeFailures[sim.HarborpulseLegacyGauge][9].Error = "decode_failed: timeout"
 	})
+}
+
+// An alarm the platform reactivates keeps its token across sim days, and its attempt list is the
+// token's whole history. Another day's pages must neither stand in for today's nor count against
+// today's acknowledgement.
+func TestNotificationAttemptsAreJudgedOnTheWatchedDayOnly(t *testing.T) {
+	yesterday := func(h float64) time.Time { return at(h).Add(-testClock.DayLength) }
+
+	// Yesterday the acknowledged gauge went unacknowledged and was escalated; today it was
+	// acknowledged in time. The control holds, and nothing else turns red.
+	d := cleanDay()
+	ack := "a-" + AckGauge
+	d.s3.Attempts[ack] = append([]Attempt{
+		{At: yesterday(18.0), AlarmToken: ack, Trigger: "ALARM", Status: "SENT"},
+		{At: yesterday(19.5), AlarmToken: ack, Trigger: "ESCALATION", Status: "SENT"},
+	}, d.s3.Attempts[ack]...)
+	for _, inv := range Evaluate(d.observe()) {
+		if !inv.Passed {
+			t.Fatalf("yesterday's escalation of the acknowledged gauge turned %s red: %s", inv.Name, inv.Detail)
+		}
+	}
+
+	// Yesterday a gauge was paged and escalated; today it was paged and never escalated.
+	// Yesterday's escalation does not stand in for today's.
+	evaluateOneRed(t, InvNotifyEscalates, "hp-gauge-basin-1: paged but never escalated", func(d *day) {
+		tok := "a-hp-gauge-basin-1"
+		d.s3.Attempts[tok] = append([]Attempt{
+			{At: yesterday(18.0), AlarmToken: tok, Trigger: "ALARM", Status: "SENT"},
+			{At: yesterday(19.5), AlarmToken: tok, Trigger: "ESCALATION", Status: "SENT"},
+		}, d.s3.Attempts[tok][:1]...)
+	})
+
+	// Yesterday's attempts are not counted against today's mail either: a gauge paged twice
+	// yesterday and once today needs today's mail only.
+	d = cleanDay()
+	tok := "a-hp-gauge-east-1"
+	d.s3.Attempts[tok] = append([]Attempt{
+		{At: yesterday(18.0), AlarmToken: tok, Trigger: "ALARM", Status: "SENT"},
+		{At: yesterday(18.2), AlarmToken: tok, Trigger: "ALARM", Status: "SENT"},
+		{At: yesterday(19.5), AlarmToken: tok, Trigger: "ESCALATION", Status: "SENT"},
+	}, d.s3.Attempts[tok]...)
+	for _, inv := range Evaluate(d.observe()) {
+		if !inv.Passed {
+			t.Fatalf("yesterday's pages turned %s red: %s", inv.Name, inv.Detail)
+		}
+	}
+}
+
+// The mail parser reads the rendering it is matched against, and refuses what it cannot attribute.
+func TestDutyMailIsAttributedToItsDeviceAlarmAndTrigger(t *testing.T) {
+	r := sim.HarborpulseDutyRecipient(testTenant)
+	for _, c := range []struct{ trigger string }{{"ALARM"}, {"ESCALATION"}} {
+		dev, key, trig, ok := dutyMail(dutyMailData(r, "hp-gauge-east-2", sim.HarborpulseFloodAlarmKey, c.trigger))
+		if !ok || dev != "hp-gauge-east-2" || key != sim.HarborpulseFloodAlarmKey || trig != c.trigger {
+			t.Fatalf("%s mail read as %q %q %q %v", c.trigger, dev, key, trig, ok)
+		}
+	}
+	if _, _, _, ok := dutyMail("Subject: hello\r\n\r\nAlarm flood-level raised on somewhere.\r\n"); ok {
+		t.Fatal("a mail naming no device was attributed")
+	}
+}
+
+// One stale failure folded in after the baseline was read is not failures inside the watch.
+func TestFoldedGrowthOfOneIsNotTheWatchsFailures(t *testing.T) {
+	evaluateOneRed(t, InvDecoderFailureVisible, "suppressed count grew", func(d *day) {
+		*d = *foldedLegacyDay(98, 99)
+	})
+	for _, inv := range Evaluate(foldedLegacyDay(98, 98+minSuppressedGrowth).observe()) {
+		if !inv.Passed {
+			t.Fatalf("%s failed on growth of %d: %s", inv.Name, minSuppressedGrowth, inv.Detail)
+		}
+	}
 }

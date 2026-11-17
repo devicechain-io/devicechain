@@ -310,8 +310,17 @@ const (
 	// harborMaxGap bounds how much wall time one advance integrates: a sim stopped for an hour
 	// resumes where it stopped instead of replaying the hour in one tick.
 	harborMaxGap = time.Minute
-	// harborBufferCap bounds a charger's store-and-forward buffer, as a device's memory would.
+	// harborBufferCap is the least a charger's store-and-forward buffer holds. The buffer is
+	// bounded, as a device's memory would be, but sized from the day so that a clean outage never
+	// overflows it: a reading evicted after the ledger counted it would turn the clean day red.
 	harborBufferCap = 512
+	// harborMaxBufferCap is the most a charger's buffer may be sized to; a day-length and cadence
+	// that would need more are refused (ConfigureScenario).
+	harborMaxBufferCap = 1 << 16
+	// harborTierDip is how long the flood-clear-between-tiers defect holds a gauge below the minor
+	// tier when its water climbs into a higher one: five of the verifier's two-second polls, and
+	// short enough to leave the major tier visible on East Quay at the default day.
+	harborTierDip = 12 * time.Second
 	// harborDropNth is how often the drop-backfill defect loses a buffered reading.
 	harborDropNth = 5
 )
@@ -352,6 +361,13 @@ type harborModel struct {
 	// uplinks counts each LoRaWAN gauge's uplinks: its frame counter, which also alternates the
 	// frame layout it sends.
 	uplinks map[string]int
+	// bufferCap is how many readings a charger's buffer holds (harborBufferCapFor).
+	bufferCap int
+	// tier and dipUntil are the flood-clear-between-tiers defect's state, per gauge: the highest
+	// flood tier its water has reached since it last fell below the minor tier, and the elapsed
+	// time its dropout ends.
+	tier     map[string]int
+	dipUntil map[string]time.Duration
 	// ledger is what each charger BUFFERED in each outage, keyed by device and sim day: the
 	// expectation a verifier holds the platform's stored readings against. It counts what the
 	// device took, not what it delivered, so a delivery that loses readings shows as a shortfall.
@@ -372,6 +388,8 @@ func newHarborModelWith(seed int64, dayLength time.Duration, defects harborDefec
 		seed: seed, dayLength: dayLength, defects: defects, devices: map[string]harborDevice{}, pumps: map[string]*harborPumpState{},
 		cap: map[string]float64{}, dim: map[string]float64{}, flushes: map[string]int{}, kwh: map[string]float64{}, lastMeter: map[string]time.Duration{},
 		buffers: map[string][]harborBuffered{}, ledger: map[harborLedgerKey]*ScenarioBackfill{}, uplinks: map[string]int{},
+		bufferCap: harborBufferCapFor(dayLength, DefaultEmitInterval),
+		tier:      map[string]int{}, dipUntil: map[string]time.Duration{},
 	}
 	for _, d := range harborLayout() {
 		m.devices[d.token] = d
@@ -448,8 +466,12 @@ func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time)
 	sample := int64(elapsed / time.Second)
 	switch d.kind {
 	case harborGauge:
+		level := harborGaugeLevel(m.seed, d, h, sample)
+		if m.defects.floodClearBetweenTiers {
+			level = m.dipBetweenTiers(token, level, elapsed)
+		}
 		return map[string]float64{
-			HarborpulseWaterLevelKey: round3(harborGaugeLevel(m.seed, d, h, sample)),
+			HarborpulseWaterLevelKey: round3(level),
 			HarborpulseBatteryKey:    round3(3.6 + harborNoise(m.seed, token, sample, 0.01)),
 		}
 	case harborPump:
@@ -495,8 +517,8 @@ func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time)
 		if harborOutage(d.quay, h) {
 			m.recordBuffered(token, harborDayOf(elapsed, m.dayLength), at)
 			buf := append(m.buffers[token], harborBuffered{at: at, values: values})
-			if len(buf) > harborBufferCap {
-				buf = buf[len(buf)-harborBufferCap:]
+			if len(buf) > m.bufferCap {
+				buf = buf[len(buf)-m.bufferCap:]
 			}
 			m.buffers[token] = buf
 			return nil
@@ -558,8 +580,8 @@ func (m *harborModel) requeue(token string, readings []harborBuffered) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	buf := append(append([]harborBuffered{}, readings...), m.buffers[token]...)
-	if len(buf) > harborBufferCap {
-		buf = buf[len(buf)-harborBufferCap:]
+	if len(buf) > m.bufferCap {
+		buf = buf[len(buf)-m.bufferCap:]
 	}
 	m.buffers[token] = buf
 }
@@ -637,6 +659,53 @@ func (m *harborModel) recordBuffered(token string, day int, at time.Time) {
 	}
 	e.Buffered++
 	e.Last = stamp
+	e.Times = append(e.Times, stamp)
+}
+
+// harborBufferNeed is how many readings one charger buffers through one feeder outage of a day of
+// dayLength, at one reading per interval (the ticker drops a tick rather than doubling up).
+func harborBufferNeed(dayLength, interval time.Duration) int {
+	outage := time.Duration((harborOutageTo - harborOutageFrom) / 24 * float64(dayLength))
+	return int((outage+interval-1)/interval) + 1
+}
+
+// harborBufferCapFor sizes a charger's buffer for the day: twice one outage, since readings the
+// ingress refused go back on the buffer and may still be there when the next day's outage begins.
+func harborBufferCapFor(dayLength, interval time.Duration) int {
+	return max(harborBufferCap, 2*harborBufferNeed(dayLength, interval))
+}
+
+// dipBetweenTiers is the flood-clear-between-tiers defect: when the gauge's water climbs into a
+// flood tier above the highest it has reached, it reads below the minor tier for harborTierDip,
+// so the platform clears its flood alarm and reactivates it at the higher tier. Caller holds m.mu.
+func (m *harborModel) dipBetweenTiers(token string, level float64, elapsed time.Duration) float64 {
+	t := harborFloodTier(level)
+	switch {
+	case t == 0:
+		m.tier[token] = 0
+	case t > m.tier[token]:
+		if m.tier[token] > 0 {
+			m.dipUntil[token] = elapsed + harborTierDip
+		}
+		m.tier[token] = t
+	}
+	if elapsed < m.dipUntil[token] {
+		return HarborpulseFloodMinorM - 0.3
+	}
+	return level
+}
+
+// harborFloodTier is the flood tier a water level is in: 0 below minor, 1 minor, 2 major, 3 critical.
+func harborFloodTier(level float64) int {
+	switch {
+	case level > HarborpulseFloodCriticalM:
+		return 3
+	case level > HarborpulseFloodMajorM:
+		return 2
+	case level > HarborpulseFloodMinorM:
+		return 1
+	}
+	return 0
 }
 
 // backfillLedger is every outage's buffered readings so far, by device then day.
@@ -645,7 +714,9 @@ func (m *harborModel) backfillLedger() []ScenarioBackfill {
 	defer m.mu.Unlock()
 	out := make([]ScenarioBackfill, 0, len(m.ledger))
 	for _, e := range m.ledger {
-		out = append(out, *e)
+		c := *e
+		c.Times = append([]string(nil), e.Times...)
+		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Device != out[j].Device {

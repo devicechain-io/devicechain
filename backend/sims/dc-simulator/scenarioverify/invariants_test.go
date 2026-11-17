@@ -5,6 +5,7 @@ package scenarioverify
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,9 @@ type day struct {
 	backfill []Backfill
 	s3       S3
 	s4       S4
+	// gaps are spans, by alarm token, in which the alarm is cleared and then reactivated under the
+	// same token, as the platform does.
+	gaps map[string][][2]float64
 }
 
 func cleanDay() *day {
@@ -142,6 +146,7 @@ func backfillOf(device string) Backfill {
 	for t := b.First; t.Before(at(21.25)); t = t.Add(5 * time.Second) {
 		b.Buffered++
 		b.Last = t
+		b.Taken = append(b.Taken, t)
 		b.Stored = append(b.Stored, t)
 	}
 	return b
@@ -154,6 +159,11 @@ func (d *day) observe() Observations {
 		o.Polls = append(o.Polls, t)
 		for _, l := range d.alarms {
 			if s, ok := l.sampleAt(t); ok {
+				for _, g := range d.gaps[l.token] {
+					if !t.Before(at(g[0])) && t.Before(at(g[1])) {
+						s.State = sim.AlarmStateClearedWire
+					}
+				}
 				o.Alarms = append(o.Alarms, s)
 			}
 		}
@@ -204,6 +214,27 @@ func TestEachControlTurnsExactlyItsInvariantRed(t *testing.T) {
 						d.alarms[i].steps = []step{{17.2, minor}, {17.6, major}, {21.0, minor}}
 						d.alarms = append(d.alarms, lifecycle{"c-" + l.device, l.device, sim.HarborpulseFloodSplitAlarmKey,
 							[]step{{18.0, critical}}, 20.5})
+					}
+				}
+			},
+		},
+		{
+			// The platform reactivates a cleared alarm under the SAME token, so one token through
+			// the storm is not proof it escalated in place.
+			name: "flood alarm cleared between tiers", defect: sim.HarborpulseDefectFloodClearBetweenTiers, want: InvFloodEscalates,
+			because: "between its first and last ACTIVE",
+			mutate: func(d *day) {
+				d.gaps = map[string][][2]float64{}
+				for i, l := range d.alarms {
+					if l.key != sim.HarborpulseFloodAlarmKey {
+						continue
+					}
+					if strings.Contains(l.device, "-east-") {
+						d.alarms[i].steps = []step{{17.2, minor}, {17.8, major}, {18.2, critical}, {20.5, major}, {21.0, minor}}
+						d.gaps[l.token] = [][2]float64{{17.6, 17.8}, {18.0, 18.2}}
+					} else {
+						d.alarms[i].steps = []step{{17.4, minor}, {18.1, major}, {20.8, minor}}
+						d.gaps[l.token] = [][2]float64{{17.9, 18.1}}
 					}
 				}
 			},
@@ -292,6 +323,18 @@ func TestEachControlTurnsExactlyItsInvariantRed(t *testing.T) {
 			},
 		},
 		{
+			name: "interior backfill times rewritten, count kept", defect: "(none: a platform that stores every reading but not at its own time)", want: InvBackfillStored,
+			because: "stored at a time it never took",
+			mutate: func(d *day) {
+				for i := range d.backfill {
+					st := d.backfill[i].Stored
+					for j := 1; j < len(st)-1; j++ {
+						st[j] = st[j].Add(time.Second)
+					}
+				}
+			},
+		},
+		{
 			name: "backfill stamped with its arrival time", defect: "(none: the platform defect the check exists for)", want: InvBackfillStored,
 			because: "0 stored",
 			mutate: func(d *day) {
@@ -315,7 +358,7 @@ func TestEachControlTurnsExactlyItsInvariantRed(t *testing.T) {
 	}
 	for _, c := range controls {
 		t.Run(c.name, func(t *testing.T) {
-			if want, ok := Controls[c.want]; ok && !strings.HasPrefix(c.defect, "(") && want != c.defect {
+			if want, ok := Controls[c.want]; ok && !strings.HasPrefix(c.defect, "(") && !slices.Contains(strings.Split(want, ","), c.defect) {
 				t.Fatalf("Controls[%s] = %q, this test plants %q", c.want, want, c.defect)
 			}
 			d := cleanDay()
@@ -356,8 +399,10 @@ func TestEveryNamedDefectIsOneTheSimulatorKnows(t *testing.T) {
 			inv == InvNotifyEscalates || inv == InvNotifyAckControl {
 			continue // their controls are run by the verifier itself, in the same day
 		}
-		if !known[ctl] {
-			t.Errorf("%s's control %q is not a defect the simulator can plant", inv, ctl)
+		for _, c := range strings.Split(ctl, ",") {
+			if !known[c] {
+				t.Errorf("%s's control %q is not a defect the simulator can plant", inv, c)
+			}
 		}
 	}
 }
