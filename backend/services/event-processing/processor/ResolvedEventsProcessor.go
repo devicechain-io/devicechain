@@ -3104,6 +3104,10 @@ func (rp *ResolvedEventsProcessor) flushDetections(ctx context.Context) {
 	if rp.leadershipEnabled() && !rp.heldNow() {
 		return // the checkpoint's ownership check, ahead of the same publish
 	}
+	// Collect already-queued edges before selecting the flush buffer, so a
+	// superseded raise and its clear meet the same publish-time drop gate.
+	// A later IsRaised barrier waits for shards without absorbing their output.
+	rp.syncDetector()
 	type lane struct{ tenant, series string }
 	held := map[lane]bool{}
 	var flush, keep []pendingDetection
