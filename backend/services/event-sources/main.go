@@ -468,7 +468,8 @@ func initializeMetrics() {
 		"total_http_ingest_refused",
 		"Count of HTTP /events requests refused synchronously with a 401, by reason: the tenant in the path "+
 			"does not exist, or the credential in the body does not authenticate. The sender sees one answer "+
-			"for both",
+			"for both. A body that does not decode, addressed to a tenant that does not exist, is counted "+
+			"as unknown_tenant too, and answered as any malformed body",
 		[]string{"source", "reason"})
 	CredentialCheckCounter = Microservice.NewCounterVec(
 		"total_http_credential_checks",
