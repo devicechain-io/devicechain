@@ -38,8 +38,9 @@ import { DERIVED_TOKEN_PREFIX } from '@/routes/trust-anchors/anchorRules';
 
 export default function ProvisioningProfileDetailPage() {
   const { t } = useTranslation('provisioning');
-  const { token: rawToken } = useParams<{ token: string }>();
-  const token = decodeURIComponent(rawToken ?? '');
+  // The router hands the param over already decoded. Decoding it again turned a token
+  // holding a '%' into a different token, or threw on one such as "a%zz".
+  const token = useParams<{ token: string }>().token ?? '';
   const [version, reload] = useReload();
   const { data: profile, loading, error } = useQuery(() => getProvisioningProfile(token), [token, version]);
 

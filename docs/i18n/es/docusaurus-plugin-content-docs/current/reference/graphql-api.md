@@ -42,6 +42,18 @@ curl -s https://docs.devicechain.io/schema/device-management.graphql
 
 ## Endpoints {#endpoints}
 
+La consola y el visor de paneles responden a un HTTP 401 autenticado con una renovación forzada
+del token de inquilino y una repetición de la misma operación. Si el servidor rechaza la renovación o
+se recibe otro 401, finalizan esa sesión. Si la renovación falla de forma transitoria (sin
+respuesta, un 5xx o un 429), la solicitud falla con ese error y la sesión se conserva, de modo
+que una interrupción nunca cierra la sesión de nadie. Los tokens de identidad no se renuevan; un 401 finaliza la sesión de identidad.
+
+Los hosts externos de `@devicechain/client` activan este comportamiento con `setUnauthorizedHandler({ refresh, onEnd })`.
+Usa `session.forceRefresh(token)` en `refresh` para el plano de inquilino y devuelve null para el
+plano de identidad. En `onEnd(error, token, identity)`, finaliza solo la sesión que aún posee ese token.
+Las llamadas anónimas de inicio de sesión y renovación nunca activan la recuperación. Sin el handler,
+el SDK sigue lanzando `GraphQLRequestError` con estado 401 inmediatamente.
+
 El ingress enruta `/api/<area>/graphql` a cada servicio de área funcional y quita el prefijo, de modo
 que la solicitud llega al `/graphql` propio de ese servicio. Por tanto, todos los endpoints siguientes
 son `https://<tu-host>/api/<area>/graphql`:

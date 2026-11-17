@@ -1419,7 +1419,7 @@
       "id": 20,
       "type": "timeseries",
       "title": "Rate-limited messages by source and priority",
-      "description": "Messages shed at a tenant's ingest ceiling per second, by source and by priority class (the class says how important the shed traffic was; lower-priority traffic is shed first). The second line counts individual readings dropped, which can exceed messages when a message carries several.",
+      "description": "Messages shed at a tenant's ingest ceiling per second, by source and by priority class (the class says how important the shed traffic was; lower-priority traffic is shed first). Readings counts individual readings dropped, which can exceed messages when a message carries several. Messages at readings ceiling counts messages dropped because their readings exceeded the ceiling.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1448,6 +1448,15 @@
           },
           "expr": "sum by (source, shed_class) (rate(devicechain_eventsources_total_readings_rate_limited{namespace=\"$namespace\"}[$__rate_interval]))",
           "legendFormat": "readings {{source}} / {{shed_class}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (source, shed_class) (rate(devicechain_eventsources_total_msg_reading_limited{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "messages at readings ceiling {{source}} / {{shed_class}}"
         }
       ],
       "fieldConfig": {

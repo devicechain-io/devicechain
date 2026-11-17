@@ -4,14 +4,17 @@
 package main
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-update-management/config"
 	"github.com/devicechain-io/dc-update-management/model"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,15 +83,63 @@ func TestTheRosterReaderStartsFromNewFacts(t *testing.T) {
 	require.Contains(t, string(src), "nmgr.NewReader(streams.DeviceRoster, messaging.ReaderWithDeliverNew())")
 }
 
-func TestStartSweeperStartsTheConfiguredSweep(t *testing.T) {
+func TestStartSweeperAndRolloutDriverRegisterPassOutcomes(t *testing.T) {
 	prevCfg, prevApi, prevSweeper, prevMetrics := Configuration, Api, Sweeper, ReportsMetrics
-	t.Cleanup(func() { Configuration, Api, Sweeper, ReportsMetrics = prevCfg, prevApi, prevSweeper, prevMetrics })
+	prevMs, prevRollouts := Microservice, Rollouts
+	prevRolloutStats, prevDownloads := RolloutStats, DownloadStats
+	prevSweepPass, prevRolloutPass := SweepPassMetrics, RolloutPassMetrics
+	t.Cleanup(func() {
+		if Sweeper != nil {
+			Sweeper.Stop(context.Background())
+		}
+		if Rollouts != nil {
+			Rollouts.Stop(context.Background())
+		}
+		Configuration, Api, Sweeper, ReportsMetrics = prevCfg, prevApi, prevSweeper, prevMetrics
+		Microservice, Rollouts = prevMs, prevRollouts
+		RolloutStats, DownloadStats = prevRolloutStats, prevDownloads
+		SweepPassMetrics, RolloutPassMetrics = prevSweepPass, prevRolloutPass
+	})
 	Configuration = config.NewUpdateManagementConfiguration()
 	Configuration.Updates.SweepIntervalSeconds = 3600
 	Api = &model.Api{}
-	Sweeper = nil
+	Sweeper, Rollouts = nil, nil
+	reg := prometheus.NewRegistry()
+	Microservice = &core.Microservice{InstanceId: "inst", FunctionalArea: "update-management"}
+	Microservice.UseMetricsRegistry(reg)
+	buildMetrics()
 
-	startSweeper()
-	require.NotNil(t, Sweeper, "startSweeper started nothing")
-	Sweeper.Stop()
+	// Twice: the loops are built on every start, so a collector they registered themselves would
+	// panic as a duplicate on the second start.
+	for range 2 {
+		require.NoError(t, startSweeper())
+		require.NoError(t, startRolloutDriver())
+		require.NotNil(t, Sweeper, "startSweeper started nothing")
+		require.NotNil(t, Rollouts, "startRolloutDriver started nothing")
+		require.NoError(t, Sweeper.Stop(context.Background()))
+		require.NoError(t, Rollouts.Stop(context.Background()))
+	}
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	for _, task := range []string{"deadline_sweep", "rollout_driver"} {
+		name := "devicechain_updatemanagement_" + task + "_passes_total"
+		outcomes := map[string]float64{}
+		for _, family := range families {
+			if family.GetName() != name {
+				continue
+			}
+			for _, metric := range family.GetMetric() {
+				for _, label := range metric.GetLabel() {
+					if label.GetName() == "outcome" {
+						outcomes[label.GetValue()] = metric.GetCounter().GetValue()
+					}
+				}
+			}
+		}
+		require.Equal(t, map[string]float64{
+			core.PassComplete: 0, core.PassPartial: 0, core.PassFailed: 0,
+			core.PassSkipped: 0, core.PassCancelled: 0,
+		}, outcomes, "%s must expose every outcome at zero before its first pass", name)
+	}
 }

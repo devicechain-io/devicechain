@@ -164,7 +164,7 @@ query {
 
 以 `ops@acme.example` 登录（密码在 `.state/tour-a/customer-password` 中）。该用户会看到：
 
-- 只有 **Dashboards**、**Alarms** 和 **Devices** 的侧边栏，没有其他内容；
+- 只有 **Home**、**Dashboards**、**Alarms** 和 **Devices** 的侧边栏，没有其他内容；
 - 一个设备，`coldroom-a1`；
 - 一个仪表板 `tour-a-customer`，带有实时读数和他们自己冷库的告警；
 - 看不到 `coldroom-a2`，看不到它的读数和告警，也看不到运维人员的看板。
@@ -179,9 +179,11 @@ PASS  createCommand boost-cooling was accepted (QUEUED), not rejected
 PASS  your own command reached SUCCESSFUL (the device answered; last status: SUCCESSFUL)
 PASS  the operator sees both devices (2)
 PASS  the operator sees alarms on both devices (2 devices with alarms)
+PASS  the operator sees both dashboards (2)
 PASS  the customer sees exactly coldroom-a1 (saw: coldroom-a1)
 PASS  the customer sees alarms for coldroom-a1 only (saw: coldroom-a1)
 PASS  the customer reads no state of coldroom-a2 (0 measurements)
+PASS  the customer reads coldroom-a1's latest readings (2)
 PASS  the customer lists only the board shared with them (saw: tour-a-customer)
 PASS  the operator's board is invisible to the customer
 PASS  the read-only customer user cannot send a command (refused: FORBIDDEN)

@@ -35,19 +35,19 @@ Budget about 45 minutes once an instance is up.
   ```
 
 Three settings say where your instance is. Each has a default that matches a plain
-`dcctl install local` followed by `dcctl bootstrap local tour --host localhost --no-tls`, and each can
+`dcctl install local` followed by `dcctl bootstrap local devicechain --host localhost --no-tls`, and each can
 be overridden from the environment:
 
 | Variable | Default | Set it when |
 | --- | --- | --- |
 | `DC_URL` | `http://localhost` | The console is served on another host or port. |
-| `INSTANCE` | `tour` | Your `dcctl` instance has another name. It names the namespace `dci-<instance>`, which the scripts read the broker's certificate authority and the superuser's password from. |
+| `INSTANCE` | `devicechain` | Your `dcctl` instance has another name. It names the namespace `dci-<instance>`, which the scripts read the broker's certificate authority and the superuser's password from. |
 | `MQTT_HOST` | `devicechain-control-plane` | Your kind cluster is not named `devicechain`. It is the cluster node's container name, `<cluster>-control-plane`. |
 
 If your `kubectl` has more than one context, also set `KUBE_CONTEXT`.
 
 ```bash
-export DC_URL=http://localhost INSTANCE=devicechain MQTT_HOST=devicechain-control-plane
+export DC_URL=http://localhost MQTT_HOST=devicechain-control-plane
 ```
 
 The simulated devices are containers on the `kind` Docker network, so they reach the broker's MQTT

@@ -42,7 +42,7 @@ import (
 // literally, for the reason migrations.go gives.
 func NewAlarmPositionDerivedSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "20261203090000",
+		ID: "20261217090000",
 		Migrate: func(tx *gorm.DB) error {
 			if err := tx.Exec(`ALTER TABLE "device-management"."alarms" ` +
 				`ADD COLUMN IF NOT EXISTS position_derived boolean;`).Error; err != nil {

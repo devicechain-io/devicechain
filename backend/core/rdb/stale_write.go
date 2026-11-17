@@ -37,8 +37,8 @@ import (
 // caller read it. Each service declares ONE as a package variable (conventionally
 // ErrConflict) so errors.Is identifies it.
 //
-// 🔴 IT IS NOT A UNIQUENESS CONFLICT AND MUST NEVER BECOME ONE: it has no Extensions()
-// and is never a conflict.Error. CONFLICT tells a client "the value is already taken",
+// It is never a conflict.Error: its code is STALE_WRITE, not CONFLICT.
+// CONFLICT tells a client "the value is already taken",
 // which a client may read as "already exists, carry on" — and for a lost update that
 // would report a save that never happened as done.
 type StaleWriteError struct {
@@ -58,11 +58,15 @@ func NewStaleWriteError(subject string) *StaleWriteError {
 
 // Error is "<subject> was modified by another writer; reload and try again".
 //
-// 🔴 THE WORDING IS A WIRE CONTRACT. The refusal carries no extensions.code, so the
-// console recognises it by the phrase "modified by another writer". Change the sentence
-// and a stale save stops being recognised as one.
+// The wording is a wire contract: older consoles recognise the refusal by the phrase
+// "modified by another writer", so it must stay even with the machine-readable code.
 func (e *StaleWriteError) Error() string {
 	return e.subject + " was modified by another writer; reload and try again"
+}
+
+// Extensions identifies a stale save to GraphQL clients without changing its message.
+func (e *StaleWriteError) Extensions() map[string]any {
+	return map[string]any{"code": "STALE_WRITE"}
 }
 
 // staleWriteLayout MUST equal the layout core/graphql.FormatTime serves `updatedAt` in,
