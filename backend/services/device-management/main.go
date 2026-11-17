@@ -149,6 +149,11 @@ var (
 	// paths enforce the expiry themselves, so it only makes the ledger say so.
 	AgentProposalReaper *core.PeriodicTask
 
+	// AlarmPositionClassifier classifies alarms whose position dependency is not known yet
+	// (model/position_classify.go): what a replica older than the column writes during a rolling
+	// upgrade. Such an alarm is withheld from a caller without location:read until classified.
+	AlarmPositionClassifier *core.PeriodicTask
+
 	// DecodeAccountant is the payload decoders' accounting: the per-(tenant, device type) record
 	// budget a failing decoder is held to, the health tallies and the failure samples. It is the
 	// resolver pool's DecodeObserver; DecodeAccounting flushes it once a minute.
@@ -431,6 +436,13 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	// in-process credential cache.
 	caches, err := model.InitializeCaches(nmgr, cfg)
 	if err != nil {
+		return nil, nil, err
+	}
+
+	// An alarm a geofence rule raised is not read by a caller without location:read, on every
+	// alarm read path (model/position_withholding.go). Registered here, on the one handle every
+	// Api of the process reads through, so no read path can be built without it.
+	if err := model.RegisterPositionWithholding(rdbm.Database); err != nil {
 		return nil, nil, err
 	}
 
@@ -781,7 +793,7 @@ func initSessionKickDrain() error {
 	}
 	SessionKickDrain = core.NewPeriodicTask(Microservice.FunctionalArea, "session-kick-drain", sessionKickDrainInterval,
 		func(ctx context.Context) error { return Api.DrainSessionKicksLocked(ctx) },
-		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(SessionKickDrainMetrics))
+		core.NewNoOpLifecycleCallbacks(), SessionKickDrainMetrics, core.WithImmediateFirstPass())
 	return SessionKickDrain.Initialize(context.Background())
 }
 
@@ -796,8 +808,28 @@ func initAgentProposalReaper() error {
 			_, err := Api.ExpireAgentProposals(ctx)
 			return err
 		},
-		core.NewNoOpLifecycleCallbacks(), core.WithPassMetrics(Microservice.NewPeriodicTaskMetrics("agent_proposal_reaper")))
+		core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("agent_proposal_reaper"))
 	return AgentProposalReaper.Initialize(context.Background())
+}
+
+// alarmPositionClassifierInterval is how often unclassified alarms are classified: the longest an
+// alarm written by an older replica during a rolling upgrade stays withheld from a caller without
+// location:read when it need not be.
+const alarmPositionClassifierInterval = time.Minute
+
+// initAlarmPositionClassifier builds the alarm position classifier. Every replica runs it: a pass
+// is one conditional UPDATE of the unclassified rows, so two passes at once each classify what the
+// other has not, and a pass with nothing to do is a probe of a partial index. It runs a first pass
+// at start, so the alarms an older replica wrote before this one started wait no longer.
+func initAlarmPositionClassifier() error {
+	AlarmPositionClassifier = core.NewPeriodicTask(Microservice.FunctionalArea, "alarm-position-classifier", alarmPositionClassifierInterval,
+		func(ctx context.Context) error {
+			_, err := Api.ClassifyUnclassifiedAlarms(ctx)
+			return err
+		},
+		core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("alarm_position_classifier"),
+		core.WithImmediateFirstPass())
+	return AlarmPositionClassifier.Initialize(context.Background())
 }
 
 // decodeAccountingInterval is how often the decoders' health tallies and failure samples are
@@ -821,7 +853,7 @@ func initDecodeAccounting() error {
 	DecodeAccountant = processor.NewDecodeAccountant(Api, replica, DecodeAccountingMetrics)
 	DecodeAccounting = core.NewPeriodicTask(Microservice.FunctionalArea, "decode-accounting", decodeAccountingInterval,
 		func(ctx context.Context) error { return DecodeAccountant.Flush(ctx) },
-		core.NewNoOpLifecycleCallbacks(), core.WithPassMetrics(Microservice.NewPeriodicTaskMetrics("decode_accounting")))
+		core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("decode_accounting"))
 	return DecodeAccounting.Initialize(context.Background())
 }
 
@@ -830,7 +862,7 @@ func initDecodeAccounting() error {
 func initAgentEffectsDrain() error {
 	AgentEffectsDrain = core.NewPeriodicTask(Microservice.FunctionalArea, "agent-effects-drain", ownershipDrainInterval,
 		func(ctx context.Context) error { return Api.DrainAgentEffectsLocked(ctx) },
-		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(AgentEffectsDrainMetrics))
+		core.NewNoOpLifecycleCallbacks(), AgentEffectsDrainMetrics, core.WithImmediateFirstPass())
 	return AgentEffectsDrain.Initialize(context.Background())
 }
 
@@ -838,7 +870,7 @@ func initAgentEffectsDrain() error {
 func initEntityDeletionDrain() error {
 	EntityDeletionDrain = core.NewPeriodicTask(Microservice.FunctionalArea, "entity-deletion-drain", ownershipDrainInterval,
 		func(ctx context.Context) error { return Api.DrainEntityDeletionsLocked(ctx) },
-		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(EntityDeletionDrainMetrics))
+		core.NewNoOpLifecycleCallbacks(), EntityDeletionDrainMetrics, core.WithImmediateFirstPass())
 	return EntityDeletionDrain.Initialize(context.Background())
 }
 
@@ -856,7 +888,7 @@ func initOwnershipDrain() error {
 			}
 			return ownershipErr
 		},
-		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(OwnershipDrainMetrics))
+		core.NewNoOpLifecycleCallbacks(), OwnershipDrainMetrics, core.WithImmediateFirstPass())
 	return OwnershipDrain.Initialize(context.Background())
 }
 
@@ -1105,6 +1137,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initAgentProposalReaper(); err != nil {
 				return err
 			}
+			if err = initAlarmPositionClassifier(); err != nil {
+				return err
+			}
 			if err = initDecodeAccounting(); err != nil {
 				return err
 			}
@@ -1234,6 +1269,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err = AgentProposalReaper.Start(ctx); err != nil {
 		return err
 	}
+	if err = AlarmPositionClassifier.Start(ctx); err != nil {
+		return err
+	}
 
 	// Start flushing the payload decoders' health and failure samples.
 	if DecodeAccounting != nil {
@@ -1339,6 +1377,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := AgentProposalReaper.Stop(ctx); err != nil {
 		return err
 	}
+	if err := AlarmPositionClassifier.Stop(ctx); err != nil {
+		return err
+	}
 
 	// Stop inbound events processor.
 	err := InboundEventsProcessor.Stop(ctx)
@@ -1400,6 +1441,9 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		return err
 	}
 	if err := AgentProposalReaper.Terminate(ctx); err != nil {
+		return err
+	}
+	if err := AlarmPositionClassifier.Terminate(ctx); err != nil {
 		return err
 	}
 	if DecodeAccounting != nil {

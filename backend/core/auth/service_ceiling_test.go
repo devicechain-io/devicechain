@@ -103,7 +103,7 @@ func TestServiceCeilingTableIsPinned(t *testing.T) {
 		"command-delivery":        {"device:read", "location:installed:read", "state:read", "tenant:read"},
 		"dashboard-management":    {"device:read", "tenant:read"},
 		"device-management":       {"device:read", "tenant:read"},
-		"device-state":            {"tenant:read"},
+		"device-state":            {"device:read", "tenant:read"},
 		"event-management":        {"device:read", "tenant:read"},
 		"event-processing":        {"ai:infer", "command:write", "device:read", "tenant:read"},
 		"event-sources":           {"command:claim", "command:wake", "device:read", "state:read", "tenant:read"},

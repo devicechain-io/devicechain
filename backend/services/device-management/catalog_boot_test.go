@@ -58,7 +58,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevEffects := AgentEffectsDrain
 	prevDeletion := EntityDeletionDrain
 	prevCallout, prevBackoff, prevKickDrain, prevTenants := CalloutResponder, MqttStoreBackoff, SessionKickDrain, ProvisioningTenants
-	prevReaper := AgentProposalReaper
+	prevReaper, prevClassifier := AgentProposalReaper, AlarmPositionClassifier
 	prevPeers := servicePeers
 	prevPin := IssuerPin
 	ProvisioningTenants = nil
@@ -71,7 +71,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		AgentEffectsDrain = prevEffects
 		EntityDeletionDrain = prevDeletion
 		CalloutResponder, MqttStoreBackoff, SessionKickDrain = prevCallout, prevBackoff, prevKickDrain
-		AgentProposalReaper = prevReaper
+		AgentProposalReaper, AlarmPositionClassifier = prevReaper, prevClassifier
 	})
 
 	issuer, err := nkeys.CreateAccount()
@@ -131,6 +131,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 				return err
 			}
 			if err = initAgentProposalReaper(); err != nil {
+				return err
+			}
+			if err = initAlarmPositionClassifier(); err != nil {
 				return err
 			}
 			if err = initDecodeAccounting(); err != nil {

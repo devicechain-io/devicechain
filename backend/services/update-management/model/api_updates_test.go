@@ -19,7 +19,9 @@ import (
 
 // fakeDevices maps tenant/device to a profile token.
 type fakeDevices struct {
-	profiles map[string]string
+	profiles     map[string]string
+	incarnations map[string]uint64
+	createdAt    map[string]time.Time
 	// disabled is the set of tenant/device keys an operator has disabled.
 	disabled map[string]bool
 	err      error
@@ -33,7 +35,11 @@ func (f *fakeDevices) DeviceOf(_ context.Context, tenant, device string) (Device
 		return DeviceFacts{}, false, f.err
 	}
 	p, ok := f.profiles[tenant+"/"+device]
-	return DeviceFacts{Profile: p, Disabled: f.disabled[tenant+"/"+device]}, ok, nil
+	id := f.incarnations[tenant+"/"+device]
+	if id == 0 {
+		id = 1
+	}
+	return DeviceFacts{Incarnation: id, CreatedAt: f.createdAt[tenant+"/"+device], Profile: p, Disabled: f.disabled[tenant+"/"+device]}, ok, nil
 }
 
 type published struct {

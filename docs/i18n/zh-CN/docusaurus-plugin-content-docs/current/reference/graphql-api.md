@@ -75,6 +75,9 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 
 - 读取设备凭据需要 `device:write`，不是 `device:read`。
 - `latestLocation` 需要 `location:read`，其他同属 `device-state` 的接口需要 `state:read`。
+- 由检测地理围栏包含关系的规则触发的告警，只有同时拥有 `location:read` 的调用方才能读取：其触发和清除时间就是设备进入和离开围栏的时间。
+  没有该权限时，告警查询、告警计数、`alarmDispositions` 和 `alarmStream` 都会略去该告警，`acknowledgeAlarm`、`clearAlarm`
+  和 `setAlarmDisposition` 的响应与未知令牌相同。同一规则的检测结果也按相同条件从 `detectionStream` 中略去。
 - 固定资产的安装位置（`Device.installedPosition`、`Asset.installedPosition`）需要 `location:installed:read`，
   而 `location:read` 包含该权限。这是安装数据，绝不会回退到设备上报的位置。
   调用者若两项权限都没有，读取任何设备和资产时都会得到 `positionWithheld: true`，无论它是否有位置；
@@ -677,6 +680,8 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 | 设备类型、设备配置文件及其版本、指标和命令定义、客户类型 | 全部可见，因为这些是配置。只能读取，不能修改。 |
 
 成员看不到的记录，其响应与不存在的记录完全相同：要么不出现在列表中，要么操作返回 `NOT_FOUND`。针对不属于这些客户的设备发起的 `measurementStream` 订阅会被接受，但不会推送任何内容。其他所有操作都返回 `FORBIDDEN`，且 `extensions.reason` 为 `SCOPE_UNSUPPORTED`。
+
+`measurementStream(deviceTokens: [String!], name: String)` 可在一次订阅中接受最多 1000 个设备令牌，重复令牌会被忽略。列表不能为空，也不能与 `deviceToken` 同时使用。省略这两个设备参数可接收所有设备的读数。每条读数仍应用相同的访问范围和名称过滤条件。
 
 设备不属于任何客户期间记录的事件，访问权限受限的成员看不到。在此版本之前产生的告警同样看不到：告警从此版本开始才记录其所属客户。设备在此版本之前的实时状态，要等设备再次上报或更换所有者后才可见。告警保留其产生时的所属客户，因此客户出售设备后，仍能看到其拥有该设备期间产生的告警，包括仍处于活动状态的告警。
 

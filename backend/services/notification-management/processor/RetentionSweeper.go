@@ -55,7 +55,7 @@ func NewRetentionSweeperWithLedger(ms *core.Microservice, api *model.Api, retent
 	interval time.Duration, callbacks core.LifecycleCallbacks) *RetentionSweeper {
 	s := &RetentionSweeper{Microservice: ms, Api: api, retention: retention, attemptRetention: attemptRetention}
 	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "retention-sweep", interval,
-		s.runOnce, callbacks, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("retention_sweep")))
+		s.runOnce, callbacks, ms.NewPeriodicTaskMetrics("retention_sweep"))
 	return s
 }
 

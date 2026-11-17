@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-command-delivery/presence"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/transport"
 	"github.com/rs/zerolog/log"
 )
@@ -142,14 +143,7 @@ func (cproc *CommandDeliveryProcessor) reconcileStranded(ctx context.Context) er
 	ran, err := cproc.Api.TryStrandedLock(ctx, func() error {
 		return cproc.reconcileStrandedPage(ctx)
 	})
-	// `ran` before `err`: see sweepLocked.
-	if !ran {
-		if err != nil {
-			return fmt.Errorf("acquiring the stranded-reconcile lock: %w", err)
-		}
-		return core.ErrPassSkipped
-	}
-	return err
+	return rdb.SingletonResult(ran, err, "command-delivery-stranded-reconcile")
 }
 
 // reconcileStrandedPage walks one bounded page of long-lived SENT commands.

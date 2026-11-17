@@ -640,7 +640,7 @@ type DeviceManagementApi interface {
 	// per edge) into the (device, alarmKey) alarm's contributor set and re-derives its state
 	// (max-tier severity over the active set; cleared when the set empties). The raise-alarm consumer
 	// routes both edges here.
-	ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time) error
+	ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time, requiresPosition *bool) error
 
 	// Entity attributes (ADR-012).
 	SetEntityAttribute(ctx context.Context, request *EntityAttributeSetRequest) (*EntityAttribute, error)

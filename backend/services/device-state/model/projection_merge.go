@@ -53,8 +53,8 @@ var deviceStateKey = []string{"tenant_id", "device_token"}
 
 // notFolded is what foldedStateColumns has and the fold never reads or writes: the row's
 // soft-delete marker (not touched by applyEvent or newDeviceState), and updated_at, which a
-// write stamps rather than folds.
-var notFolded = map[string]bool{"deleted_at": true, "updated_at": true}
+// write stamps rather than folds. Incarnation is learned only by the orphan sweep.
+var notFolded = map[string]bool{"deleted_at": true, "updated_at": true, "incarnation": true}
 
 // foldedStateColumns is every column of device_states a batch may write over a row it has
 // folded: all of them but the row's identity — its primary key, created_at, and
