@@ -109,6 +109,8 @@ spec:
         - ports:
             - port: 8080
               protocol: TCP
+            - port: 8083
+              protocol: TCP
         - from:
             - podSelector: {}
           ports:
@@ -223,6 +225,8 @@ spec:
     ingress:
         - ports:
             - port: 8080
+              protocol: TCP
+            - port: 8083
               protocol: TCP
         - from:
             - podSelector: {}

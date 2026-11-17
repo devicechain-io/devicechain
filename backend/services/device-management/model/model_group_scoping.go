@@ -8,6 +8,14 @@ import (
 	"gorm.io/gorm"
 )
 
+// createEnrollFacetKey marks a frozen selector that matches an entity with no
+// attributes. The control character reserves it from ordinary operator keys.
+// It fits FacetKey's non-null size:256 column: Postgres text permits U+0001
+// (only NUL is forbidden). If an attribute with this exact key is ever written,
+// recomputeMembershipForAttr simply re-evaluates these groups correctly: a harmless
+// extra evaluation, so attribute writes need no special refusal.
+const createEnrollFacetKey = "\x01empty"
+
 // This file defines the ADR-062 S2 membership subsystem's persisted shapes: the
 // membership read-model (which entities belong to which rule-scoped group@version)
 // and the facet-key reverse index (which group@versions a facet key affects). Both
@@ -48,7 +56,8 @@ type EntityGroupMembership struct {
 // SHARED-scope write of facet_key on a member of MemberType need only recompute the
 // group@versions this table lists for (facet_key, member_type) — O(groups-referencing-K)
 // rather than every registered group. It is populated from the frozen selector's
-// Keys() at register time and GC'd at deregister.
+// Keys() at register time, plus createEnrollFacetKey when MatchesEmpty is true,
+// and GC'd at deregister.
 type EntityGroupFacetRef struct {
 	gorm.Model
 	rdb.TenantScoped
