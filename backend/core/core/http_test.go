@@ -75,7 +75,7 @@ func TestRegisterProbesServesTheChartsProbeContract(t *testing.T) {
 
 	status := func(path string) int {
 		rec := httptest.NewRecorder()
-		ms.Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		ms.OpsMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		return rec.Code
 	}
 
@@ -109,7 +109,7 @@ func TestRegisterProbesServesTheChartsProbeContract(t *testing.T) {
 	dead.MarkNotLive(errors.New("broker connection closed permanently"))
 	deadStatus := func(path string) (int, string) {
 		rec := httptest.NewRecorder()
-		dead.Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		dead.OpsMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		return rec.Code, rec.Body.String()
 	}
 	for _, p := range probeContract {
@@ -140,7 +140,7 @@ func TestRegisterProbesTreatsANilGateAsNotReady(t *testing.T) {
 	ms.RegisterProbes(nil)
 
 	rec := httptest.NewRecorder()
-	ms.Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	ms.OpsMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("/readyz with no gate = %d, want 503; a server with no readiness evidence must not join Service endpoints", rec.Code)
 	}
@@ -148,7 +148,7 @@ func TestRegisterProbesTreatsANilGateAsNotReady(t *testing.T) {
 	// The counterweight: failing closed on readiness must not take liveness with it, or
 	// a pod with an unwired gate is restarted forever instead of merely held back.
 	rec = httptest.NewRecorder()
-	ms.Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	ms.OpsMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK {
 		t.Errorf("/healthz with no gate = %d, want 200", rec.Code)
 	}
@@ -170,7 +170,7 @@ func TestRegisterProbesServesTheMicroservicesOwnMetrics(t *testing.T) {
 	ms.RegisterProbes(NewReadinessGate())
 
 	rec := httptest.NewRecorder()
-	ms.Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	ms.OpsMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
 
 	for _, want := range []string{
@@ -221,7 +221,7 @@ func TestHttpServerLifecycleOverARealListener(t *testing.T) {
 	gate.MarkReadyWithoutAuthSurface()
 	ms.RegisterProbes(gate)
 
-	srv := ms.NewHttpServer(0) // 0: let the OS pick, so this test needs no fixed port
+	srv := NewHttpServerForHandler(0, ms.OpsMux()) // 0: let the OS pick, so this test needs no fixed port
 	if got := srv.Addr(); got != "" {
 		t.Errorf("Addr() before Start = %q, want empty", got)
 	}
@@ -521,7 +521,7 @@ func TestHttpServerCloseStopsAServingServer(t *testing.T) {
 	gate.MarkReadyWithoutAuthSurface()
 	ms.RegisterProbes(gate)
 
-	srv := startOutsideAutoAssignRange(t, ms.Mux())
+	srv := startOutsideAutoAssignRange(t, ms.OpsMux())
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 	addr := srv.Addr()
 
@@ -659,7 +659,7 @@ func TestHttpServerShutdownIsSafeToCallConcurrently(t *testing.T) {
 	gate.MarkReadyWithoutAuthSurface()
 	ms.RegisterProbes(gate)
 
-	srv := startOutsideAutoAssignRange(t, ms.Mux())
+	srv := startOutsideAutoAssignRange(t, ms.OpsMux())
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 	addr := srv.Addr()
 
@@ -753,7 +753,7 @@ func TestHttpServerShutdownBeforeStartLeavesItStartable(t *testing.T) {
 	gate.MarkReadyWithoutAuthSurface()
 	ms.RegisterProbes(gate)
 
-	srv := ms.NewHttpServer(0)
+	srv := NewHttpServerForHandler(0, ms.OpsMux())
 	if err := srv.Shutdown(context.Background()); err != nil {
 		t.Errorf("Shutdown before Start = %v, want nil", err)
 	}

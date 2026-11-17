@@ -273,7 +273,10 @@ func buildRows(pevent model.Event, event resolvedevent.ResolvedEvent, rows *mode
 		}
 		rows.Parents, rows.Alerts, err = model.BuildAlertRows(alertRequests(pevent, *payload))
 	default:
-		return fmt.Errorf("unhandled event type in grouped persistence: %s", event.EventType.String())
+		// Unknown types are refused on first delivery. During rolling upgrades, old pods
+		// will dead-letter a newly added type rather than retry it onto a new pod.
+		// TestEveryPublishedEventTypeIsPersistedOrRefusedDeterministically pins the supported set.
+		return fmt.Errorf("%w: unhandled event type in persistence: %s", ErrDeterministic, event.EventType.String())
 	}
 	return err
 }

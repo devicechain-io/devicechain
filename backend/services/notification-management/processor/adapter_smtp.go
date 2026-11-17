@@ -6,7 +6,6 @@ package processor
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
 	"mime"
 	"net/smtp"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/egress"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/httpsink"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/rs/zerolog/log"
@@ -45,18 +45,6 @@ func (a *smtpAdapter) egressGuard() *egress.Guard {
 	return a.guard
 }
 
-// smtpConfig is the SMTP channel's connection settings (the channel's non-secret
-// Config JSON). Security selects the transport: "starttls" (default) upgrades a
-// plaintext connection, "tls" dials an implicitly-encrypted port (465), "none" sends
-// in cleartext (test/loopback only).
-type smtpConfig struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	From     string `json:"from"`
-	Username string `json:"username"`
-	Security string `json:"security"`
-}
-
 const (
 	smtpSecurityStartTLS = "starttls"
 	smtpSecurityTLS      = "tls"
@@ -68,7 +56,7 @@ const (
 // config names a username.
 func (a *smtpAdapter) Deliver(ctx context.Context, channel *model.NotificationChannel,
 	secret string, recipients []string, msg *RenderedNotification) error {
-	cfg, err := parseSMTPConfig(channel)
+	cfg, err := model.ParseSMTPConfig(channel.Token, dcgraphql.MetadataStr(channel.Config))
 	if err != nil {
 		return err
 	}
@@ -141,7 +129,7 @@ func (a *smtpAdapter) Deliver(ctx context.Context, channel *model.NotificationCh
 // connection deadline from the context so every step of the SMTP conversation —
 // including the greeting read inside NewClient, which nothing else bounds — cannot
 // hang a dispatch worker (and thus shutdown) against a black-hole endpoint.
-func (a *smtpAdapter) dial(ctx context.Context, cfg *smtpConfig) (*smtp.Client, error) {
+func (a *smtpAdapter) dial(ctx context.Context, cfg *model.SMTPConfig) (*smtp.Client, error) {
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	// The host comes from the channel's Config JSON, so it is tenant-supplied and until
 	// now was dialed with no address check of any kind — an SMTP channel pointed at
@@ -204,38 +192,6 @@ func ensureNoCRLF(field, value string) error {
 		return fmt.Errorf("smtp %s %q contains a line break", field, value)
 	}
 	return nil
-}
-
-// parseSMTPConfig unmarshals and defaults/validates the channel's SMTP config.
-func parseSMTPConfig(channel *model.NotificationChannel) (*smtpConfig, error) {
-	cfg := &smtpConfig{}
-	if channel.Config != nil {
-		if err := json.Unmarshal([]byte(*channel.Config), cfg); err != nil {
-			return nil, fmt.Errorf("smtp channel %q has invalid config: %w", channel.Token, err)
-		}
-	}
-	if cfg.Host == "" {
-		return nil, fmt.Errorf("smtp channel %q config is missing host", channel.Token)
-	}
-	if cfg.From == "" {
-		return nil, fmt.Errorf("smtp channel %q config is missing from", channel.Token)
-	}
-	if cfg.Security == "" {
-		cfg.Security = smtpSecurityStartTLS
-	}
-	switch cfg.Security {
-	case smtpSecurityStartTLS, smtpSecurityTLS, smtpSecurityNone:
-	default:
-		return nil, fmt.Errorf("smtp channel %q has unknown security %q (want starttls|tls|none)", channel.Token, cfg.Security)
-	}
-	if cfg.Port == 0 {
-		if cfg.Security == smtpSecurityTLS {
-			cfg.Port = 465
-		} else {
-			cfg.Port = 587
-		}
-	}
-	return cfg, nil
 }
 
 // buildEmail renders the RFC 5322 message: headers plus the plaintext body.

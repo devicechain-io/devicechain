@@ -103,9 +103,22 @@ was written) is finished with --republish.
 Credentials: a connector's credential is sent only to a connector that has none, from the
 environment variable its handle names; --rotate-secrets sends it to every connector. A new
 inbound integration gets a server-generated bearer token that this command does not capture;
-rotate it to issue one.`,
+run 'dcctl product rotate-integration-token <integration-token>' to issue one.`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runProductApply,
+	SilenceUsage: true,
+}
+
+var productRotateIntegrationTokenCmd = &cobra.Command{
+	Use:   "rotate-integration-token <integration-token>",
+	Short: "Issue a new bearer token for an inbound integration",
+	Long: `Replace an inbound integration's bearer token with a server-generated token.
+The old token stops working immediately with no overlap. The new token is shown only this once.
+
+Only the issued token is printed to stdout, followed by a newline, so it can be captured by
+a shell. A warning is written to stderr. This command does not save the token to a file.`,
+	Args:         cobra.ExactArgs(1),
+	RunE:         runProductRotateIntegrationToken,
 	SilenceUsage: true,
 }
 
@@ -129,7 +142,7 @@ func init() {
 	}
 	productApplyCmd.Flags().Bool("yes", false, "apply without printing the plan first")
 
-	productCmd.AddCommand(productExportCmd, productPlanCmd, productApplyCmd)
+	productCmd.AddCommand(productExportCmd, productPlanCmd, productApplyCmd, productRotateIntegrationTokenCmd)
 	rootCmd.AddCommand(productCmd)
 }
 
@@ -158,6 +171,20 @@ func productSession(cmd *cobra.Command) (product.Client, product.Endpoints, erro
 		Connectors:       connectorsURL(e.DashboardMgmtGraphQL),
 		Dashboards:       e.DashboardMgmtGraphQL,
 	}, nil
+}
+
+func runProductRotateIntegrationToken(cmd *cobra.Command, args []string) error {
+	c, ep, err := productSession(cmd)
+	if err != nil {
+		return err
+	}
+	issued, err := product.RotateIntegrationToken(cmd.Context(), c, ep, args[0])
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "A new token was issued for %s; any previous token stopped working at once.\n", args[0])
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), issued)
+	return err
 }
 
 func runProductExport(cmd *cobra.Command, args []string) error {

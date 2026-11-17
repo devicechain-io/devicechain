@@ -36,7 +36,7 @@ title: 出站连接器
 
 `httpCall` 直接向指定端点发送 HTTP 请求。你通过针对触发结果的 **CEL 表达式**组织请求体，只发送接收方需要的字段。URL、方法、标头和请求体模板都保存在动作上，因此单次 webhook 无需单独设置。
 
-认证可选，使用**密钥句柄**。令牌保存在**密钥存储**中，发送时作为 `Authorization: Bearer <token>` 标头提供。标头名称和认证方案不可配置，因此这种方式不能用于要求自定义 API 密钥标头的接收方。如果动作指定的句柄下没有密钥，调用绝不会在缺少凭据的情况下发出：它会以 `invalid` 结果写入一次死信，不再重试。没有机制重放它，因此该次触发的调用不会执行；请修正动作的密钥句柄，让后续触发正常认证。
+认证可选，使用**密钥句柄**。令牌保存在**密钥存储**中，发送时作为 `Authorization: Bearer <token>` 标头提供。标头名称和认证方案不可配置，因此这种方式不能用于要求自定义 API 密钥标头的接收方。如果动作指定的句柄下没有密钥，调用绝不会在缺少凭据的情况下发出：它会以 `invalid` 结果写入一次死信，不再重试。没有机制重放它，因此该次触发的调用不会执行；请修正动作的密钥句柄，让后续触发正常认证。 `connector/` 命名空间中的句柄会被拒绝；`httpCall` 绝不会发送连接器的凭据。
 
 `httpCall` 也可以**签名**，让接收方验证请求确实来自 DeviceChain 且未被篡改。在动作的 `signingSecretRef` 中指定签名密钥，调用就会携带 Standard Webhooks 规范的 `webhook-id`、`webhook-timestamp` 和 `webhook-signature` 请求头。除非你设置，否则默认关闭。参见[为出站 Webhook 签名](../guides/signed-webhooks.md)。
 
@@ -118,3 +118,5 @@ outbound-connectors 服务在**独立进程**中运行，与 event-processing �
 - **[事件处理与告警](./event-processing.md)**：规则和动作的编写位置。
 - **[架构](./architecture.md)**：outbound-connectors 在服务体系中的位置。
 - 凭据保存在[密钥处理](./architecture.md#secret-handling)介绍的加密**密钥存储**中。
+
+如果连接器持有已存储凭据，更改类型或凭据目标时必须在同一请求中发送 `secret`；省略时将返回 `SECRET_RESUPPLY_REQUIRED`。请重新提供凭据，或使用 `secret: null` 删除凭据。使用 `dcctl product apply` 更改目标前，请设置清单中的凭据句柄。主题、QoS 和身份字段的编辑会保留凭据。

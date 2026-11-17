@@ -278,6 +278,7 @@ func (c *Client) recoveryWorker(ctx context.Context) {
 // longest-waiting first, with each one's next request pushed out by a doubled interval up to the
 // cap (and to the ceiling after recoveryCeilingAfter requests).
 func (c *Client) recoverOnce() {
+	c.sessions.SweepIdle()
 	now := c.now()
 	type due struct {
 		key        nodeKey
