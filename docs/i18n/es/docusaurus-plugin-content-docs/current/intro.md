@@ -8,7 +8,7 @@ import YouTubeLite from '@site/src/components/YouTubeLite';
 
 # DeviceChain
 
-DeviceChain es una **Plataforma de Habilitación de Aplicaciones IoT** nativa de la nube, construida en Go y React. Conecta, gestiona y procesa datos de flotas de dispositivos grandes y heterogéneas. Cubre el ciclo de vida del dispositivo, la ingesta de telemetría, el comando y control, el modelado organizacional y la multitenencia, y expone todo ello a través de una API GraphQL y de paneles embebibles con control de versiones.
+DeviceChain es una **plataforma IoT** de código abierto que se ejecuta en Kubernetes, construida en Go y React y lista para agentes de IA. Conecta, gestiona y procesa datos de flotas de dispositivos grandes y heterogéneas. Cubre el ciclo de vida del dispositivo, la ingesta de telemetría, el comando y control, el modelado organizacional y la multitenencia, y expone todo ello a través de una API GraphQL, de paneles embebibles con control de versiones y de un [servidor MCP](./concepts/mcp.md) opcional que permite a los asistentes de IA leer la flota con los permisos del propio usuario.
 
 DeviceChain es una reconstrucción desde cero de la plataforma SiteWhere. Conserva el modelo de dominio probado de SiteWhere y reemplaza el pesado stack Java/Spring por microservicios eficientes y operativamente simples que se ejecutan en cualquier clúster de Kubernetes.
 

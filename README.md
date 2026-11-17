@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-**DeviceChain is an Apache 2.0 IoT platform you run on Kubernetes.** Devices connect over MQTT, HTTP, Sparkplug B or LwM2M, or through a LoRaWAN network server. Rules raise alarms and send commands back, and dashboards, over-the-air updates and multi-tenant access are built in. There is no device cap and no enterprise edition.
+**DeviceChain is an Apache 2.0 IoT platform you run on Kubernetes, ready for AI agents.** Devices connect over MQTT, HTTP, Sparkplug B or LwM2M, or through a LoRaWAN network server. Rules raise alarms and send commands back, and dashboards, over-the-air updates and multi-tenant access are built in. An optional [MCP server](https://docs.devicechain.io/concepts/mcp) lets Claude, Cursor or VS Code read devices, telemetry, alarms and commands with the signed-in user's own token, and an assistant's proposals to acknowledge or clear alarms wait for a person to approve them (Preview). There is no device cap and no enterprise edition.
 
 <p align="center">
   <a href="https://devicechain.io/#see-it-run"><img src="branding/media/sitepulse-loop.webp" width="720" alt="A haul truck in a 3D quarry: its telemetry arrives over MQTT, a low-fuel rule fires, a refuel command is sent, the truck heads for the fuel bay while other trucks keep to their own lanes of the two-way haul road, it refuels, and the command completes."></a>
@@ -89,7 +89,7 @@ creates a device, sends a reading with `curl` and shows it in the console.
 
 [Docs](https://docs.devicechain.io) · [Examples](examples/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Discussions](https://github.com/devicechain-io/devicechain/discussions) · [Releases](https://github.com/devicechain-io/devicechain/releases)
 
-The current release is **v1.5.0**; **v1.6** is in progress. See [Status](#status) for the compatibility promises.
+The current release is **v1.6.0**; **v1.7** is in progress. See [Status](#status) for the compatibility promises.
 
 DeviceChain™ takes in telemetry from device fleets, keeps a record of each device and the assets,
 areas and customers it belongs to, detects conditions in the data as it arrives, and sends
