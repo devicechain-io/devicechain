@@ -709,10 +709,11 @@ def migrations_verdict(s, files, graph):
 # still runs every package of every selected leg. Every other event races everything, and the
 # main run is the net for a race this narrower scope does not reach.
 #
-# 🔴 WHY ONE LEVEL OF IMPORTERS AND NOT THE CLOSURE. Replayed over the last 80 merged pull
-# requests (70 of them narrowable), with partial legs counted at their full cost, direct importers
-# cut the race minutes by at least 47% and the full reverse-import closure by at least 38%: the
-# closure of a core package reaches most of the workspace. A race lives in code that runs
+# 🔴 WHY ONE LEVEL OF IMPORTERS AND NOT THE CLOSURE. Replayed over 80 merged pull requests (70
+# of them narrowable) with the measured per-leg race minutes, direct importers cut the race minutes
+# by at least 30% (partial legs at full cost; ~42% scaling them by the share of packages raced),
+# and the full reverse-import closure by at least 23% (~32%): the closure of a core package reaches
+# most of the workspace. A race lives in code that runs
 # concurrently, and the tests most likely to drive a changed package's code concurrently are its
 # own and those of the packages written against its API, its direct importers. A race reachable
 # only through a deeper chain surfaces on main's full run instead: that is the tradeoff the
