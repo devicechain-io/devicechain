@@ -143,7 +143,10 @@ The socket carries subscriptions only; send queries and mutations over HTTP. The
 server closes it with code `4401` when the access token it opened with expires.
 `subscribe` handles that close for you: it reconnects once with a freshly resolved
 token, subscribes again, and reports the reconnect as `connected(true)`, so re-query
-anything you must not miss when you see it.
+anything you must not miss when you see it. A reconnect whose token getter fails
+transiently (the access token has expired and the refresh got no response, a 5xx or a
+429) is retried with the same back-off as a dropped network, rather than ending the
+subscription with that error. A refused refresh still ends the session.
 
 For a subscription with no variables, the third argument is still required:
 `subscribe(area, document, undefined, sink)`. Call the returned `unsubscribe()`
