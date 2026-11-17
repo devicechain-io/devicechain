@@ -277,7 +277,8 @@ func (c *Client) query(ctx context.Context, baseURL, tenant, query string, varia
 		Errors []struct {
 			Message    string `json:"message"`
 			Extensions struct {
-				Code string `json:"code"`
+				Code              string `json:"code"`
+				RetryAfterSeconds int    `json:"retryAfterSeconds"`
 			} `json:"extensions"`
 		} `json:"errors"`
 	}
@@ -288,6 +289,7 @@ func (c *Client) query(ctx context.Context, baseURL, tenant, query string, varia
 		gqlErr := &GraphQLError{URL: baseURL, Messages: make([]string, 0, len(envelope.Errors))}
 		for _, e := range envelope.Errors {
 			gqlErr.Messages = append(gqlErr.Messages, e.Message)
+			gqlErr.RetryAfterSeconds = max(gqlErr.RetryAfterSeconds, e.Extensions.RetryAfterSeconds)
 			if e.Extensions.Code != "" {
 				gqlErr.Codes = append(gqlErr.Codes, e.Extensions.Code)
 			}
@@ -336,6 +338,8 @@ type GraphQLError struct {
 	URL      string
 	Messages []string
 	Codes    []string
+	// RetryAfterSeconds is the longest retry hint supplied by the peer, or zero if absent.
+	RetryAfterSeconds int
 }
 
 func (e *GraphQLError) Error() string {
