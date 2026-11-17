@@ -16,14 +16,16 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/shardgroups"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
-	Microservice  *core.Microservice
-	Configuration *config.DeviceStateConfiguration
+	stopStreamSharding context.CancelFunc
+	Microservice       *core.Microservice
+	Configuration      *config.DeviceStateConfiguration
 
 	// Svc owns the three managers below and the order of all four of their lifecycle
 	// phases. They stay named here because the rest of this service refers to them
@@ -127,6 +129,11 @@ func newStateProcessor(reader messaging.MessageReader) *processor.StateProcessor
 
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
+	stop, err := shardgroups.Enable(nmgr)
+	if err != nil {
+		return err
+	}
+	stopStreamSharding = stop
 	// Create reader for resolved events (wildcard across tenants). This is a
 	// second, independent consumer fanning out alongside event-management.
 	revents, err := nmgr.NewReader(streams.ResolvedEvents)
@@ -279,7 +286,17 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	//
 	// core/service stops them in exactly that order, for every service. Pinned next door
 	// in graphql_shutdown_order_test.go, which drives this function.
-	return Svc.Stop(ctx)
+	//
+	// The shard-placement watch stops AFTER Svc.Stop, not before it: cancelling it makes
+	// the placement router refuse every publish, and Svc.Stop drains GraphQL first, so a
+	// presence-demotion mutation still in flight would fail with ErrUnplacedTenant
+	// although the broker connection is up. Cancelling a watch whose connection has
+	// already drained is harmless.
+	err = Svc.Stop(ctx)
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
+	return err
 }
 
 // Called before microservice has been terminated.
@@ -299,5 +316,8 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the
 	// pair that actually closes handles.
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
 	return Svc.Terminate(ctx)
 }

@@ -132,6 +132,11 @@ const SPAN_STRINGS = {
     cut: (time: string, span: string) =>
       `Se muestra desde ${time}, no todo el intervalo de ${span}: se descartaron las muestras más antiguas para acotar la memoria.`,
   },
+  'zh-CN': {
+    from: (time: string) => `从 ${time} 起`,
+    pinned: (span: string) => `固定为 ${span}：仪表板的时间范围不适用于此图。`,
+    cut: (time: string, span: string) => `仅显示 ${time} 以来的数据，未覆盖整个 ${span}：为限制内存，较早的样本已丢弃。`,
+  },
 };
 
 const DAY_MS = 86_400_000;
@@ -151,7 +156,8 @@ function SpanBadge({ widget, data }: { widget: WidgetProps['widget']; data: Meas
   const cutAt = data.truncatedBefore;
   if (!showSpan && !cutAt) return null;
 
-  const words = viewerLocale()?.toLowerCase().startsWith('es') ? SPAN_STRINGS.es : SPAN_STRINGS.en;
+  const language = viewerLocale()?.toLowerCase().split('-')[0];
+  const words = language === 'es' ? SPAN_STRINGS.es : language === 'zh' ? SPAN_STRINGS['zh-CN'] : SPAN_STRINGS.en;
   const label = span === undefined ? '' : spanLabel(span);
   // A start more than a day back prints its date, or "from 09:14" would name the wrong day.
   const end = range?.paused && range.pausedAt !== undefined ? range.pausedAt : Date.now();
