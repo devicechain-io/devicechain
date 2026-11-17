@@ -126,14 +126,16 @@ var (
 	// may run again after a failed start, and a second registration would panic.
 	OcspMetrics *processor.OcspMetrics
 
-	// OwnershipDrain publishes the device ownership facts writes queue in their own
-	// transactions (ADR-081, model/ownership_outbox.go), one replica at a time.
-	AgentEffectsDrain        *core.PeriodicTask
-	AgentEffectsDrainMetrics *core.PeriodicTaskMetrics
-	AgentEffectsExhausted    prometheus.Counter
-	AgentKillConsumer        *processor.AgentKillConsumer
-	OwnershipDrain           *core.PeriodicTask
-	OwnershipDrainMetrics    *core.PeriodicTaskMetrics
+	// EntityDeletionDrain retries committed deletion facts until the broker acknowledges
+	// them, one replica at a time (model/deletion_outbox.go).
+	EntityDeletionDrain        *core.PeriodicTask
+	EntityDeletionDrainMetrics *core.PeriodicTaskMetrics
+	AgentEffectsDrain          *core.PeriodicTask
+	AgentEffectsDrainMetrics   *core.PeriodicTaskMetrics
+	AgentEffectsExhausted      prometheus.Counter
+	AgentKillConsumer          *processor.AgentKillConsumer
+	OwnershipDrain             *core.PeriodicTask
+	OwnershipDrainMetrics      *core.PeriodicTaskMetrics
 
 	// SessionKickDrain retries the broker session kicks a provisioning revoke or reset left
 	// unconfirmed (model.PendingSessionKick), so a kick does not wait for an operator to
@@ -264,6 +266,7 @@ func buildMetrics() {
 		CredentialMisconfigured.WithLabelValues(path)
 	}
 	OwnershipDrainMetrics = Microservice.NewPeriodicTaskMetrics("ownership_drain")
+	EntityDeletionDrainMetrics = Microservice.NewPeriodicTaskMetrics("entity_deletion_drain")
 	AgentEffectsDrainMetrics = Microservice.NewPeriodicTaskMetrics("agent_effects_drain")
 	AgentEffectsExhausted = Microservice.NewCounter("agent_effects_exhausted_total",
 		"Agent effect outbox rows retained after exhausting their publication attempts.")
@@ -615,8 +618,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		AlarmEventMetrics)
 
 	// Add the entity-deleted writer and inject a publisher over it into the shared
-	// Api (ADR-044): the delete paths (deleteEdgeEntity) emit an entity-deletion
-	// event so event-management can reconcile dangling event_anchors.
+	// Api (ADR-044): the outbox drain publishes committed deletions so cross-service
+	// reference holders can remove dangling state.
 	devents, err := nmgr.NewWriter(streams.EntityDeleted)
 	if err != nil {
 		return err
@@ -817,6 +820,14 @@ func initAgentEffectsDrain() error {
 		func(ctx context.Context) error { return Api.DrainAgentEffectsLocked(ctx) },
 		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(AgentEffectsDrainMetrics))
 	return AgentEffectsDrain.Initialize(context.Background())
+}
+
+// initEntityDeletionDrain initializes the process-owned deletion outbox task.
+func initEntityDeletionDrain() error {
+	EntityDeletionDrain = core.NewPeriodicTask(Microservice.FunctionalArea, "entity-deletion-drain", ownershipDrainInterval,
+		func(ctx context.Context) error { return Api.DrainEntityDeletionsLocked(ctx) },
+		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(EntityDeletionDrainMetrics))
+	return EntityDeletionDrain.Initialize(context.Background())
 }
 
 // initOwnershipDrain builds and initializes the ownership drain. Once, in the initialize
@@ -1081,6 +1092,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initAgentEffectsDrain(); err != nil {
 				return err
 			}
+			if err = initEntityDeletionDrain(); err != nil {
+				return err
+			}
 			if err = initOwnershipDrain(); err != nil {
 				return err
 			}
@@ -1204,6 +1218,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := AgentEffectsDrain.Start(ctx); err != nil {
 		return err
 	}
+	if err := EntityDeletionDrain.Start(ctx); err != nil {
+		return err
+	}
 	if err = OwnershipDrain.Start(ctx); err != nil {
 		return err
 	}
@@ -1318,6 +1335,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := AgentEffectsDrain.Stop(ctx); err != nil {
 		return err
 	}
+	if err := EntityDeletionDrain.Stop(ctx); err != nil {
+		return err
+	}
 	if err := OwnershipDrain.Stop(ctx); err != nil {
 		return err
 	}
@@ -1374,6 +1394,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
 	if err := AgentEffectsDrain.Terminate(ctx); err != nil {
+		return err
+	}
+	if err := EntityDeletionDrain.Terminate(ctx); err != nil {
 		return err
 	}
 	if err := OwnershipDrain.Terminate(ctx); err != nil {
