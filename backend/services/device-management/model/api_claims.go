@@ -292,6 +292,13 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 	}
 	var queued ownershipQueued
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// A containment redemption takes the tenant's hierarchy lock before it writes
+		// the claim row, so every door takes that lock before any other write.
+		if relType.Token == ContainmentRelationshipType {
+			if err := lockAssetHierarchy(tx); err != nil {
+				return err
+			}
+		}
 		// 🔴 THE REDEMPTION IS WRITTEN AGAINST THE SECRET IT WAS VERIFIED AGAINST. The compare-and-set
 		// holds both secret columns to what was read, so a re-open that lands between the
 		// verification and this write (a new pod's, or an old pod's) leaves zero rows affected and

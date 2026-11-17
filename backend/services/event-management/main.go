@@ -123,6 +123,7 @@ func parseConfiguration() error {
 // registry panics. Initialize is where the process's own singletons are made, which is
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
+	graphql.InitLiveSubscriptionMetrics(Microservice)
 	AnalyticsMetrics = model.NewAnalyticsMetrics(Microservice)
 	PersistMetrics = processor.NewPersistMetrics(Microservice)
 	BackfillMetrics = backfill.NewMetrics(Microservice)
@@ -418,7 +419,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if lc.FailedEventRetentionDays != nil { // normally set by ApplyDefaults; guard against a nil deref
 				failedEventRetentionDays = *lc.FailedEventRetentionDays
 			}
-			if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager, model.DataLifecyclePolicy{
+			policy := model.DataLifecyclePolicy{
 				ChunkIntervalHours:       lc.ChunkIntervalHours,
 				CompressAfterDays:        compressAfterDays,
 				RetentionDays:            lc.RetentionDays,
@@ -427,7 +428,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				// the uniform window. Collapsing it to an int here would lose the distinction
 				// between "unset" and an explicit 0 (retention off for location only).
 				LocationRetentionDays: lc.LocationRetentionDays,
-			}); err != nil {
+			}
+			Api.RollupRetentionDays = policy.RollupRetentionDays()
+			if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager, policy); err != nil {
 				return err
 			}
 
@@ -625,10 +628,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	//
 	// core/service stops them in exactly that order, for every service. Pinned next door in
 	// graphql_shutdown_order_test.go, which drives this function.
+	err := Svc.Stop(ctx)
+	// Keep placement available to publishes until the service's managers finish stopping.
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
-	return Svc.Stop(ctx)
+	return err
 }
 
 // Called before microservice has been terminated.
@@ -639,8 +644,10 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
 	// that actually closes handles.
+	err := Svc.Terminate(ctx)
+	// Release the placement watch only after the service's managers terminate.
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
-	return Svc.Terminate(ctx)
+	return err
 }

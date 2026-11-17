@@ -64,6 +64,12 @@ Para los canales en vivo del hub, la reproducción de grabaciones, el historial 
 [README de paneles](https://github.com/devicechain-io/devicechain/tree/main/frontend/packages/dashboards).
 La [guía de API de .NET y Unity](./csharp-sdk.md) cubre esas plataformas por separado.
 
+`isStaleWrite(err)` de `@devicechain/client` reconoce un rechazo por concurrencia
+optimista mediante `extensions.code: STALE_WRITE`, con la frase
+`modified by another writer` como alternativa para servidores anteriores. Conserva el
+borrador sin guardar y pide al usuario que recargue antes de reintentar. Este rechazo
+es distinto de un `CONFLICT` de unicidad.
+
 ## Versiones y dist-tags
 
 Los cinco paquetes se publican juntos, en una sola versión, desde la misma release que corta la
