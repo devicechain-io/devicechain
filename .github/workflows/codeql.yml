@@ -105,9 +105,7 @@ on:
   # Sixty PR runs in six hours, each ~14 min (build 8-12 min, analysis ~3.5 min), on a
   # runner pool the `ci` workflow already saturates. The lever taken is not a matrix
   # (every objection above still holds — one job, one category) but building FEWER
-  # modules in the one job on a pull request: see "Select the modules to analyze". A
-  # replay of 80 merged commits selected a mean of 12 of 39 modules on the PRs that
-  # trigger this workflow, and every module on two of them.
+  # packages in the one job on a pull request: see "Select what to analyze".
   pull_request:
     branches: [main]
     paths:
@@ -162,10 +160,13 @@ jobs:
 
     steps:
       # A pull request needs history to find the merge base its diff is taken from (the
-      # module selection below). Push and schedule analyze every module and need none.
+      # selection below). Push and schedule analyze every module and need none.
+      # 🔴 '0' IS A STRING ON PURPOSE: in an Actions expression the NUMBER 0 is falsy, so
+      # `cond && 0 || 1` is always 1, the merge base is never found, and every pull request
+      # silently falls back to the full analysis.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
@@ -179,54 +180,74 @@ jobs:
       - name: go mod download
         run: hack/go-mod-download.sh --workspace
 
-      # Select the modules BEFORE init, on purpose. Between init and analyze every `go`
-      # invocation is intercepted by the CodeQL tracer; `go list -m` and the selection are
+      # Select what to build BEFORE init, on purpose. Between init and analyze every `go`
+      # invocation is intercepted by the CodeQL tracer; `go list` and the selection are
       # queries, not builds, and there is no reason to make the extractor reason about them.
       # Resolving the list up front keeps the traced region to actual compilation.
       #
-      # 🔴 ON A PULL REQUEST, ONLY THE MODULES THE CHANGE CAN REACH. The PR analysis is
+      # 🔴 ON A PULL REQUEST, ONLY THE PACKAGES THE CHANGE CAN REACH. The PR analysis is
       # DIFF-INFORMED: it reports alerts only in the files the pull request changed, so the
       # rest of the tree is analyzed for one reason alone — a data-flow path through a changed
-      # file that starts or ends in unchanged code. hack/ci-select.py codeql builds the module
-      # of every changed .go file plus every module that requires it, transitively: building a
-      # module compiles every workspace package it imports, so the callee side comes with the
-      # build, and the reverse-require closure brings the callers (a service handler flowing
-      # into a changed sink in core). What is left out is code that can neither call into nor
-      # be called by anything the pull request changed.
+      # file that starts or ends in unchanged code. hack/ci-select.py codeql selects every
+      # package that imports a changed one, transitively (the callers, up to each main that
+      # links it: a service handler flowing into a changed sink in core), and then every
+      # workspace package those import (the callees a flow passes through). So every program
+      # that links a changed package is built whole. Each package is named as a build target,
+      # because building an imported module is not extracting it: the Go extractor extracts
+      # bodies only for the packages it was asked to build. What is left out is code that is
+      # in no program with the change.
       #
       # Everything is analyzed when a dependency version moves (go.work, go.work.sum, any
       # go.mod/go.sum), when this workflow or the selection changes, for a .go file outside
-      # every module, and when the selection fails for any reason — a failure falls back to
-      # `go list -m` rather than to nothing. Push to main and the weekly schedule always
-      # analyze every module, and they remain what main's code-scanning state is made of.
-      - name: Select the modules to analyze
+      # every module or in no package, and when the selection fails for any reason — a failure
+      # falls back to every module rather than to nothing. Push to main and the weekly schedule
+      # always analyze every module, and they remain what main's code-scanning state is made of.
+      #
+      # The plan is one line per module, `<dir><TAB><packages>`. A named package whose files a
+      # plain build excludes (only test files, or build tags) is dropped here by `go list`,
+      # because `go build` refuses such a package outright.
+      - name: Select what to analyze
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          list="${RUNNER_TEMP}/modules.txt"
-          go list -m -f '{{.Dir}}' > "${RUNNER_TEMP}/all-modules.txt"
-          all="$(grep -c . "${RUNNER_TEMP}/all-modules.txt" || true)"
+          plan="${RUNNER_TEMP}/plan.txt"
+          go list -m -f '{{.Dir}}{{"\t"}}./...' > "${RUNNER_TEMP}/all.txt"
+          all="$(grep -c . "${RUNNER_TEMP}/all.txt" || true)"
           if [ "$all" -eq 0 ]; then
             echo "::error::go list -m reported no workspace modules; there is nothing to analyze"
             exit 1
           fi
-          if ! python3 hack/ci-select.py codeql > "$list"; then
-            echo "::warning::the module selection failed; analyzing every module"
-            cp "${RUNNER_TEMP}/all-modules.txt" "$list"
+          if ! python3 hack/ci-select.py codeql > "${RUNNER_TEMP}/selected.txt"; then
+            echo "::warning::the selection failed; analyzing every module"
+            cp "${RUNNER_TEMP}/all.txt" "${RUNNER_TEMP}/selected.txt"
           fi
-          got="$(grep -c . "$list" || true)"
+          : > "$plan"
+          while IFS=$'\t' read -r m pkgs; do
+            pkgs="${pkgs%$'\r'}"
+            [ -n "$m" ] || continue
+            if [ "$pkgs" = "./..." ]; then
+              printf '%s\t./...\n' "$m" >> "$plan"
+              continue
+            fi
+            # shellcheck disable=SC2086 # pkgs is a space-separated list of package args
+            keep="$(cd "$m" && go list -e -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' $pkgs | paste -sd' ' -)"
+            [ -z "$keep" ] || printf '%s\t%s\n' "$m" "$keep" >> "$plan"
+          done < "${RUNNER_TEMP}/selected.txt"
+          got="$(grep -c . "$plan" || true)"
           if [ "$got" -eq 0 ]; then
-            echo "::warning::the module selection chose nothing; analyzing every module"
-            cp "${RUNNER_TEMP}/all-modules.txt" "$list"
+            echo "::warning::the selection chose nothing buildable; analyzing every module"
+            cp "${RUNNER_TEMP}/all.txt" "$plan"
             got="$all"
           fi
-          if [ "$GITHUB_EVENT_NAME" != pull_request ] && [ "$got" -ne "$all" ]; then
-            echo "::error::a $GITHUB_EVENT_NAME run must analyze all $all modules, and selected $got"
+          whole="$(grep -c $'\t\./\.\.\.$' "$plan" || true)"
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] && [ "$whole" -ne "$all" ]; then
+            echo "::error::a $GITHUB_EVENT_NAME run must analyze all $all modules whole, and planned $whole"
             exit 1
           fi
-          echo "Modules to analyze: $got of $all"
+          echo "Analyzing $got of $all modules ($whole whole):"
+          cat "$plan"
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
@@ -244,14 +265,15 @@ jobs:
       #     build and report success.
       #   - the subshell `( cd ... )` keeps each module's cd from leaking into the
       #     next iteration.
-      - name: Build the selected workspace modules
+      - name: Build the selected packages
         run: |
           rc=0
-          while read -r m; do
-            echo "::group::go build $m"
-            ( cd "$m" && go build ./... ) || { echo "FAILED: $m"; rc=1; }
+          while IFS=$'\t' read -r m pkgs; do
+            echo "::group::go build $m: $pkgs"
+            # shellcheck disable=SC2086 # pkgs is a space-separated list of package args
+            ( cd "$m" && go build $pkgs ) || { echo "FAILED: $m"; rc=1; }
             echo "::endgroup::"
-          done < "${RUNNER_TEMP}/modules.txt"
+          done < "${RUNNER_TEMP}/plan.txt"
           exit "$rc"
 
       - name: Perform CodeQL analysis

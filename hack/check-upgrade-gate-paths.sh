@@ -175,6 +175,12 @@ GATE_PATHS=(
   # running the version the services were upgraded to; dcctl also compiles its API
   # types, manifests and functional-area table (k8s/api, apply, config, functionalarea).
   'backend/k8s/**'
+  # The broker the drill restarts during the upgrade (dc-nats-server, built from this tree
+  # with its own main) and the broker administrator the chart runs as its pre-upgrade hook
+  # Job (dc-broker-admin). Either failing to start, or reconciling accounts differently, is
+  # an upgrade failure with no service code in the diff.
+  'backend/broker/**'
+  'backend/admin/**'
   # The deploy module: the chart (it renders what an instance runs, and a chart change is
   # what broke the upgrade procedure in v0.11.0), the OpenTofu roots the chart is applied
   # on top of, the image build the drill runs (deploy/local/build-images.sh) and the
@@ -533,6 +539,7 @@ PY
            backend/core/config/instance.go backend/services/device-state/config/config.go \
            backend/core/kv/buckets.go backend/services/user-management/schema/seed.go \
            backend/core/secrets/escrow/escrow.go backend/core/natsauth/x.go \
+           backend/broker/dc-nats-server/main.go backend/admin/dc-broker-admin/main.go \
            deploy/local/build-images.sh hack/lib/sso-stub-idp.sh backend/cli/cmd/install.go; do
     out="$(printf '%s\n' "$f" | match_changed 2>/dev/null)"
     [ "$out" = "run=true" ] || { echo "SELF-TEST FAILED: $f did not run the drill (got '$out')" >&2; return 1; }

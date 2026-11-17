@@ -421,6 +421,7 @@ class PackageGraph:
     def __init__(self, ws, root=ROOT):
         self.ws = ws
         self.pkgs = {}
+        self.missing = set()  # workspace imports with no package in the tree, from the last closure()
         bypath = sorted(ws.modpaths.items(), key=lambda kv: -len(kv[0]))
 
         def resolve(imp):
@@ -455,7 +456,8 @@ class PackageGraph:
         """roots: [(dir, recursive)]. Every package the roots' test binaries compile: the roots
         with their test imports, then everything reachable through ordinary imports."""
         start = set()
-        for d, recursive in roots:
+        self.missing = set()
+        for d, recursive, *_ in roots:
             for p in self.pkgs:
                 if p == d or (recursive and p.startswith(d + "/")):
                     start.add(p)
@@ -467,7 +469,10 @@ class PackageGraph:
             todo.extend(self.pkgs[p][0] | self.pkgs[p][1])
         while todo:
             p = todo.pop()
-            if p in out or p not in self.pkgs:
+            if p in out:
+                continue
+            if p not in self.pkgs:
+                self.missing.add(p)
                 continue
             out.add(p)
             todo.extend(self.pkgs[p][0])
@@ -545,11 +550,17 @@ FRONTEND_INPUTS = [
 #   - backend/core ./rdb/...: the guest-connection integration suite;
 #   - backend/cli ./bootstrap: dcctl's per-instance database suite (`-run` filtered, but the whole
 #     package's test binary is compiled, so the whole package is an input).
-# (dir, recursive). A change runs the jobs when it reaches a package these roots compile.
+# (dir, recursive, readers). A change runs the jobs when it reaches a package these roots compile,
+# or when it matches a READERS row of a package whose tests they RUN (readers=True): those tests
+# read files no import edge shows (core/rdb/partialupdatetest parses every service's model source).
+# cli/bootstrap is False on purpose: the script runs it with -run 'InstanceDatabase|Provisioner|
+# ADropBlockedByASuperuserSession', and the files holding those tests (instancedb*_test.go,
+# objectstore_storage_class_test.go) read nothing outside the module (none is in
+# hack/ci-select-escapes.txt); its READERS row is for the package's OTHER tests.
 MIGRATION_ROOTS = [
-    ("backend/tools/migrationdiff", True),
-    ("backend/core/rdb", True),
-    ("backend/cli/bootstrap", False),
+    ("backend/tools/migrationdiff", True, True),
+    ("backend/core/rdb", True, True),
+    ("backend/cli/bootstrap", False, False),
 ]
 # Non-Go inputs the jobs read directly: the operand image they build and launch
 # (deploy/images/timescaledb/build.sh, standalone.sh). hack/** (migration-diff.sh,
@@ -570,7 +581,22 @@ def migrations_verdict(s, files, graph):
         s.migrations, s.migrations_why = True, "runs: no package graph to decide from"
         return
     closure = graph.closure(MIGRATION_ROOTS)
+    if graph.missing:
+        # An import of a workspace package that has no Go file left: the change deleted it, and a
+        # build of the roots would now fail. "Cannot tell" runs the jobs.
+        s.migrations, s.migrations_why = True, "runs: the roots import %s, which has no Go file in this tree" % sorted(graph.missing)[0]
+        return
+    readers = []
+    for module, pkg, globs, excl, why in READERS:
+        d = module if norm_pkg(pkg) == "." else module + "/" + norm_pkg(pkg)
+        for root, recursive, use_readers in MIGRATION_ROOTS:
+            if use_readers and (d == root or (recursive and d.startswith(root + "/"))):
+                readers.append((globs, excl, "%s (%s)" % (d, why)))
     for f in files:
+        for globs, excl, who in readers:
+            if match(f, globs) and not match(f, excl):
+                s.migrations, s.migrations_why = True, "runs: %s is read by %s, whose tests these jobs run" % (f, who)
+                return
         if match(f, MIGRATION_INPUTS):
             s.migrations, s.migrations_why = True, "runs: %s is an input of migration-diff.sh" % f
             return
@@ -649,12 +675,14 @@ CODEQL_FULL = [
 ]
 
 
-def codeql_select(ws, files):
-    """(modules, reasons). modules is every module when the analysis must cover everything."""
+def codeql_select(ws, files, graph=None):
+    """(modules, packages, reasons). packages is {module: [package args]} naming exactly what to
+    build, or None to build every selected module whole (./...). Every module, whole, when the
+    analysis must cover everything."""
     files = [f.strip().replace("\\", "/") for f in files if f.strip()]
     if not files:
-        return list(ws.dirs), ["the diff is empty, so there is nothing to select from"]
-    full, seeds = [], {}
+        return list(ws.dirs), None, ["the diff is empty, so there is nothing to select from"]
+    full, seeds, pkg_seeds = [], {}, {}
     for f in files:
         if match(f, CODEQL_FULL):
             full.append("%s changed (a dependency version or the analysis itself)" % f)
@@ -662,23 +690,79 @@ def codeql_select(ws, files):
             owner = ws.owner(f)
             if owner:
                 seeds.setdefault(owner, f)
+                d = os.path.dirname(f)
+                if graph is not None:
+                    if d in graph.pkgs:
+                        pkg_seeds.setdefault(d, f)
+                    elif not re.search(r"(^|/)(testdata|vendor)(/|$)|(^|/)[._][^/]*/", d + "/"):
+                        # A Go file in a directory that is no longer a package: a package was
+                        # deleted. Its importers changed too, but "cannot tell" analyzes everything.
+                        full.append("%s is in no package of this tree (a deleted package?)" % f)
             elif not match(f, ["_legacy/**"]):
                 full.append("%s is a Go file outside every workspace module" % f)
     if full:
-        return list(ws.dirs), full
+        return list(ws.dirs), None, full
     if not seeds:
         # The workflow only triggers on Go-shaped changes, so reaching here with no module to
         # build means something unforeseen. An unknown selection is never an empty one.
-        return list(ws.dirs), ["no changed Go file is in a workspace module, which the trigger should not allow"]
-    mods = ws.closure(seeds)
-    why = ["%s: %s" % (m, ("changed: " + seeds[m]) if m in seeds else "requires a changed module") for m in sorted(mods)]
-    return [m for m in ws.dirs if m in mods], why
+        return list(ws.dirs), None, ["no changed Go file is in a workspace module, which the trigger should not allow"]
+    if graph is None:
+        # No package graph: the module-level answer. The callers are the reverse-require closure;
+        # 🔴 AND EVERYTHING THOSE REQUIRE, because compiling an imported module is NOT extracting
+        # it — the Go extractor extracts bodies only for the packages it was asked to build.
+        callers = ws.closure(seeds)
+        mods, todo = set(), list(callers)
+        while todo:
+            m = todo.pop()
+            if m not in mods:
+                mods.add(m)
+                todo.extend(ws.requires.get(m, ()))
+        return [m for m in ws.dirs if m in mods], None, ["%s: %s" % (m, "changed: " + seeds[m] if m in seeds else "requires or is required by a changed module") for m in sorted(mods)]
+    # THE PACKAGE-LEVEL ANSWER. Every package that imports a changed one, transitively (the
+    # callers, up to every main that links it), and then every package those import (the
+    # callees, whose bodies a flow passes through). Every program that links a changed package
+    # is therefore built whole, and each package is named as a build target so its bodies are
+    # extracted rather than loaded for types. Only non-test imports count: `go build` compiles
+    # no test, so CodeQL never sees one. A change to test files alone selects the package itself.
+    rimports = {}
+    for p, (imps, _) in graph.pkgs.items():
+        for i in imps:
+            rimports.setdefault(i, set()).add(p)
+    callers, todo = set(), list(pkg_seeds)
+    while todo:
+        p = todo.pop()
+        if p not in callers:
+            callers.add(p)
+            todo.extend(rimports.get(p, ()))
+    build, todo = set(), list(callers)
+    graph.missing = set()
+    while todo:
+        p = todo.pop()
+        if p in build:
+            continue
+        if p not in graph.pkgs:
+            graph.missing.add(p)
+            continue
+        build.add(p)
+        todo.extend(graph.pkgs[p][0])
+    if graph.missing:
+        return list(ws.dirs), None, ["a selected package imports %s, which has no Go file in this tree" % sorted(graph.missing)[0]]
+    pkgs = {}
+    for p in sorted(build):
+        m = ws.owner(p)
+        rel = os.path.relpath(p, m).replace("\\", "/") if p != m else "."
+        pkgs.setdefault(m, []).append(pkg_arg(rel).rstrip("/") if rel != "." else ".")
+    why = ["%s: changed (%s)" % (p, pkg_seeds[p]) for p in sorted(pkg_seeds)]
+    why.append("%d packages import those, transitively; %d packages are built in all" % (len(callers) - len(pkg_seeds), len(build)))
+    return [m for m in ws.dirs if m in pkgs], pkgs, why
 
 
 def cmd_codeql():
-    """Prints the module dirs to build, one per line, on stdout; the reasoning on stderr."""
+    """Prints one line per module to build on stdout, `<module dir><TAB><package args>`, where the
+    args are `./...` for the whole module. The reasoning goes to stderr."""
     event = os.environ.get("GITHUB_EVENT_NAME", "")
     ws = load_workspace()
+    pkgs = None
     if event != "pull_request":
         mods, why = list(ws.dirs), ["the event is %r: only a pull_request is narrowed" % event]
     else:
@@ -687,21 +771,23 @@ def cmd_codeql():
             print("changed files (%d):" % len(files), file=sys.stderr)
             for f in files:
                 print("  " + f, file=sys.stderr)
-            mods, why = codeql_select(ws, files)
+            mods, pkgs, why = codeql_select(ws, files, PackageGraph(ws))
         except Exception as e:  # noqa: BLE001 - any failure to select means analyze everything
             print("::warning::CodeQL module selection failed (%s: %s); analyzing everything" % (type(e).__name__, e), file=sys.stderr)
-            mods, why = list(ws.dirs), ["the selection itself failed: %s" % e]
+            mods, pkgs, why = list(ws.dirs), None, ["the selection itself failed: %s" % e]
     if not mods:
         raise RuntimeError("selected no modules")
-    full = sorted(mods) == sorted(ws.dirs)
-    print("CODEQL: %s (%d of %d modules)" % ("every module" if full else "a subset", len(mods), len(ws.dirs)), file=sys.stderr)
+    full = pkgs is None and sorted(mods) == sorted(ws.dirs)
+    if event != "pull_request" and not full:
+        raise RuntimeError("a %s run selected a subset" % event)
+    print("CODEQL: %s (%d of %d modules)" % ("every module, whole" if full else "a subset", len(mods), len(ws.dirs)), file=sys.stderr)
     for w in why:
         print("  " + w, file=sys.stderr)
     for m in ws.dirs:
         if m not in mods:
-            print("  SKIPPED  %s: no changed Go file is in it or in a module it requires" % m, file=sys.stderr)
+            print("  SKIPPED  %s: no package in it imports, or is imported by an importer of, a changed package" % m, file=sys.stderr)
     for m in mods:
-        print(m)
+        print("%s	%s" % (m, "./..." if pkgs is None else " ".join(pkgs[m])))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -712,7 +798,7 @@ def cmd_migration_deps():
     graph = PackageGraph(ws)
     mine = graph.closure(MIGRATION_ROOTS)
     theirs = set()
-    for d, recursive in MIGRATION_ROOTS:
+    for d, recursive, _ in MIGRATION_ROOTS:
         owner = ws.owner(d)
         rel = os.path.relpath(os.path.join(ROOT, d), os.path.join(ROOT, owner)).replace("\\", "/")
         pattern = ("./" + rel + "/...") if recursive else ("./" + rel)
@@ -990,7 +1076,7 @@ def cmd_replay(shas):
         files = changed_files(sha + "^", sha)
         s = select(ws, files, graph)
         go, integ = plan(ws, s, integration_plan)
-        cq, _ = codeql_select(ws, files)
+        cq, cqp, _ = codeql_select(ws, files, graph)
         print("=" * 100)
         print(title)
         print("changed files: %d (%s%s)" % (len(files), ", ".join(files[:4]), ", ..." if len(files) > 4 else ""))
@@ -1003,7 +1089,8 @@ def cmd_replay(shas):
             len(go), len(integ), len(integration_plan), " ".join(l["name"] for l in integ) or "-", "run" if s.frontend else "skip"))
         print("  migrations: %s   codeql: %s" % (
             "run" if s.migrations else "skip",
-            ("all %d modules" % len(cq)) if len(cq) == len(ws.dirs) else ("%d modules (%s)" % (len(cq), " ".join(m.split("/")[-1] for m in cq)))))
+            ("all %d modules" % len(cq)) if cqp is None and len(cq) == len(ws.dirs) else ("%d packages in %d modules (%s)" % (
+                sum(len(v) for v in (cqp or {}).values()) if cqp else -1, len(cq), " ".join(m.split("/")[-1] for m in cq)))))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1106,13 +1193,14 @@ def self_test():
             "backend/core/messaging/m.go": 'package messaging\n\n// import "example.com/core/rdb"\n',
             "backend/services/svc-a/x.go": 'package svca\n\n/* import "example.com/core/messaging" */\n',
             "backend/tools/tool/main.go": 'package main\n\nimport "example.com/core/rdb/sub"\n\nfunc main() {}\n',
+            "backend/cli/cli.go": 'package cli\n',
         }
         with tempfile.TemporaryDirectory() as tmp:
             for rel, body in tree.items():
                 os.makedirs(os.path.join(tmp, os.path.dirname(rel)), exist_ok=True)
                 with open(os.path.join(tmp, rel), "w", encoding="utf-8") as fh:
                     fh.write(body)
-            MIGRATION_ROOTS = [("backend/core/rdb", True), ("backend/tools/tool", True)]
+            MIGRATION_ROOTS = [("backend/core/rdb", True, True), ("backend/tools/tool", True, True), ("backend/cli", False, False)]
             try:
                 g = PackageGraph(ws, root=tmp)
                 expect(go_imports(tree["backend/core/rdb/rdb.go"]) == {"fmt", "example.com/core/sqlnull"},
@@ -1130,7 +1218,28 @@ def self_test():
                 expect(not mig("backend/core/messaging/m.go"), "a package nothing imports (or imports in a comment) does NOT run them")
                 expect(not mig("docs/x.md", "frontend/a.ts"), "docs and frontend do NOT run them")
                 expect(select(ws, ["backend/core/leaf/l.go"]).migrations, "with no package graph, they run")
-                MIGRATION_ROOTS = [("backend/core/nosuch", True)]
+                # READERS of a package whose tests the jobs RUN count; of one they only compile, not.
+                READERS.append(("backend/core", "rdb/sub", ["backend/services/*/model/*.go"], ["**/*_test.go"], "t"))
+                READERS.append(("backend/cli", ".", ["frontend/**"], [], "t"))
+                expect(mig("backend/services/svc-b/model/m.go"), "a file a run root package's tests READ runs them")
+                expect(not mig("backend/services/svc-b/model/m_test.go"), "...but not one its row excludes")
+                expect(not mig("frontend/a.ts"), "a reader row of a root whose tests are -run filtered does not")
+                # CodeQL at package level: the importers of a changed package (transitively) and
+                # everything they import, each named; nothing that neither calls nor is called.
+                cqp = lambda *fs: codeql_select(ws, list(fs), g)[1]
+                expect(cqp("backend/core/leaf/l.go") == {"backend/core": ["./leaf", "./rdb", "./sqlnull"]},
+                       "codeql builds a changed package, its transitive importers and their imports: %s" % cqp("backend/core/leaf/l.go"))
+                expect(cqp("backend/core/rdb/sub/sub.go") == {"backend/core": ["./rdb/sub"], "backend/tools/tool": ["."]},
+                       "...across modules, up to the main that links it: %s" % cqp("backend/core/rdb/sub/sub.go"))
+                expect(cqp("backend/services/svc-a/x.go") == {"backend/services/svc-a": ["."]}, "a package nothing imports builds alone")
+                expect(codeql_select(ws, ["backend/core/gone/x.go"], g)[1] is None, "a Go file in no package (deleted?) analyzes everything")
+                # A deleted package that a root still imports: unknown, so they run.
+                with open(os.path.join(tmp, "backend/core/leaf/l2.go"), "w", encoding="utf-8") as fh:
+                    fh.write('package leaf\n\nimport "example.com/core/gone"\n')
+                g2 = PackageGraph(ws, root=tmp)
+                expect(select(ws, ["docs/x.md"], g2).migrations, "an import of a package with no Go file left runs them")
+                expect(codeql_select(ws, ["backend/core/leaf/l.go"], g2)[1] is None, "...and analyzes everything")
+                MIGRATION_ROOTS = [("backend/core/nosuch", True, True)]
                 try:
                     select(ws, ["backend/core/leaf/l.go"], g)
                     expect(False, "a root with no package raises (and so fails safe in cmd_plan)")
@@ -1140,15 +1249,17 @@ def self_test():
                 MIGRATION_ROOTS = saved_roots
 
         print("==> codeql")
-        cq = lambda *fs: set(codeql_select(ws, list(fs))[0])
+        cq = lambda *fs: set(codeql_select(ws, list(fs))[0])  # no graph: the module-level fallback
         everything = set(ws.dirs)
-        expect(cq("backend/core/x.go") == {"backend/core", "backend/services/svc-a", "backend/services/svc-b", "backend/cli"},
-               "a core change analyzes core and everything that requires it, transitively")
-        expect(cq("backend/services/svc-a/h.go") == {"backend/services/svc-a", "backend/services/svc-b"},
-               "a service change analyzes it and its dependants")
-        expect(cq("backend/services/svc-a/README.md", "backend/services/svc-b/x.go") == {"backend/services/svc-b"},
+        expect(cq("backend/core/x.go") == {"backend/core", "backend/services/svc-a", "backend/services/svc-b", "backend/cli", "deploy"},
+               "a core change analyzes core, everything that requires it, transitively, and what those require")
+        expect(cq("backend/services/svc-a/h.go") == {"backend/services/svc-a", "backend/services/svc-b", "backend/core"},
+               "a service change analyzes it, its dependants and the modules it requires (their bodies)")
+        expect(cq("backend/services/svc-b/x.go") == {"backend/services/svc-b", "backend/services/svc-a", "backend/core"},
+               "the required modules are followed transitively")
+        expect(cq("backend/services/svc-a/README.md", "backend/tools/tool/x.go") == {"backend/tools/tool"},
                "a non-Go file seeds nothing")
-        expect(cq("_legacy/x.go", "backend/services/svc-b/x.go") == {"backend/services/svc-b"}, "_legacy/ is never analyzed")
+        expect(cq("_legacy/x.go", "backend/tools/tool/x.go") == {"backend/tools/tool"}, "_legacy/ is never analyzed")
         for f, what in [("backend/tools/tool/go.mod", "a go.mod"), ("go.work.sum", "go.work.sum"),
                         (".github/workflows/codeql.yml", "the workflow"), ("hack/ci-select.py", "the selection"),
                         ("mystery/x.go", "a Go file outside every module")]:
