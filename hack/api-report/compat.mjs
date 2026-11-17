@@ -7,7 +7,7 @@
 
 /**
  * One difference between two models of the same package.
- *   kind: export-removed | export-changed | member-added | export-added
+ *   kind: export-removed | export-changed | member-added | export-added | return-narrowed
  *   level: breaking | dangerous | safe
  */
 
@@ -35,6 +35,30 @@ function keyed(lines) {
     if (/[{([<]\s*$/.test(l)) open.push({ indent, key });
     return { line: l, key };
   });
+}
+
+// A function declaration whose return type is a bare name: `export declare function f(...): R;`.
+const FN_RETURNING = /^(export declare function [A-Za-z_$][\w$]*(?:<.*>)?\(.*\)): ([A-Za-z_$][\w$]*);$/;
+
+/**
+ * Whether the one changed line of a function is a NARROWED return type: the same signature
+ * returning an interface the package exports that extends the old return type. Return types are
+ * covariant, so every caller written against the old type still type-checks: a v1.6 caller of
+ * `createSessionTokens(): SessionTokens` is unaffected by it returning
+ * `ManagedSessionTokens extends SessionTokens`. Only that exact shape: a parameter, an overload,
+ * a generic or a structural "wider" type is still compared line by line.
+ */
+function narrowedReturn(lost, gained, head) {
+  if (lost.length !== 1 || gained.length !== 1) return null;
+  const was = FN_RETURNING.exec(stem(lost[0]).trim() + ';');
+  const now = FN_RETURNING.exec(stem(gained[0]).trim() + ';');
+  if (!was || !now || was[1] !== now[1] || was[2] === now[2]) return null;
+  const sub = head.get(`.:${now[2]}`);
+  const opener = sub?.[0]?.trim() ?? '';
+  const m = /^export interface [A-Za-z_$][\w$]* extends (.+?) \{$/.exec(opener);
+  if (!m || !opener.startsWith(`export interface ${now[2]} `)) return null;
+  const bases = m[1].split(',').map((b) => b.trim());
+  return bases.includes(was[2]) ? `${was[2]} -> ${now[2]} (extends ${was[2]})` : null;
 }
 
 /** Multiset difference a \ b, as an array of a's lines (order of a kept). */
@@ -65,6 +89,11 @@ export function diffModels(base, head) {
     const lost = minus(was, now);
     const gained = minus(now, was);
     if (lost.length === 0 && gained.length === 0) continue;
+    const narrowed = narrowedReturn(lost, gained, head);
+    if (narrowed) {
+      changes.push({ id, kind: 'return-narrowed', level: 'safe', detail: narrowed });
+      continue;
+    }
     if (lost.length > 0) {
       changes.push({
         id,

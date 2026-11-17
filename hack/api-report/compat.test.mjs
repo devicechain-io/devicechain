@@ -30,6 +30,42 @@ test('an added REQUIRED member is reported, never failing', () => {
   assert.equal(c[0].level, 'dangerous');
 });
 
+test('a return type narrowed to an exported interface extending it is safe', () => {
+  const fn = (r) => [`export declare function make(opts: Opts): ${r};`];
+  const base = m({ '.:make': fn('Tokens'), '.:Tokens': ['export interface Tokens {', '}'] });
+  const head = m({
+    '.:make': fn('Managed'),
+    '.:Tokens': ['export interface Tokens {', '}'],
+    '.:Managed': ['export interface Managed extends Tokens {', '    f: () => void;', '}'],
+  });
+  const c = diffModels(base, head).filter((x) => x.id === '.:make');
+  assert.deepEqual(c.map((x) => [x.kind, x.level]), [['return-narrowed', 'safe']]);
+});
+
+// The negative controls: each of these is still a break, so the rule above is not "any change
+// to a return type".
+test('a return type changed to an unrelated type, or with the parameters, is still a break', () => {
+  const tokens = ['export interface Tokens {', '}'];
+  const cases = [
+    // the new type does not extend the old one
+    [['export declare function make(opts: Opts): Other;'], { '.:Other': ['export interface Other {', '}'] }],
+    // it extends it, but the parameters changed too
+    [['export declare function make(opts: Opts, x: number): Managed;'], { '.:Managed': ['export interface Managed extends Tokens {', '}'] }],
+    // it extends something, but not the old return type
+    [['export declare function make(opts: Opts): Other;'], { '.:Other': ['export interface Other extends Unrelated {', '}'] }],
+    // the subtype is not exported
+    [['export declare function make(opts: Opts): Managed;'], {}],
+    // a WIDER type: the old one extends the new
+    [['export declare function make(opts: Opts): Base;'], { '.:Base': ['export interface Base {', '}'] }],
+  ];
+  for (const [line, extra] of cases) {
+    const base = m({ '.:make': ['export declare function make(opts: Opts): Tokens;'], '.:Tokens': tokens });
+    const head = m({ '.:make': line, '.:Tokens': tokens, ...extra });
+    const c = diffModels(base, head).filter((x) => x.id === '.:make');
+    assert.deepEqual(c.map((x) => [x.kind, x.level]), [['export-changed', 'breaking']], line[0]);
+  }
+});
+
 test('appending after the last union arm is not a change to that arm', () => {
   const c = diffModels(
     m({ '.:T': ['export declare const T: readonly [', "    'a'", '];'] }),

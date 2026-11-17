@@ -8,6 +8,8 @@
 #   hack/check-npm-api.sh v0.24.0          # baseline: the tag given
 #   hack/check-npm-api.sh --update         # rewrite frontend/api/*.api.md from the built packages
 #   hack/check-npm-api.sh --self-test      # prove both checks can fail, through this script
+#   hack/check-npm-api.sh --print-baseline # dry run: print the baseline HEAD would be compared with
+#   hack/check-npm-api.sh --self-test-baseline  # the baseline rule against planted histories (no build)
 #
 # Needs the packages BUILT (cd frontend && npm ci && npm run build:packages) and this tool's own
 # dependencies (cd hack/api-report && npm ci).
@@ -30,9 +32,16 @@
 # This complements hack/widget-package-proof.sh and `npm run verify:packages`, which prove the
 # packed artifact RESOLVES and LOADS; neither notices that an export disappeared.
 #
-# THE BASELINE is the nearest STABLE tag REACHABLE from HEAD (hack/api-baseline.sh), and no tag is
-# a failure, never a skip. Declarations (frontend/api/breaks.txt) expire when the baseline moves
-# and fail when stale, like every other surface.
+# THE BASELINE is the newest release a consumer of HEAD's line could be running (npm_baseline
+# below): the highest stable vX.Y.Z by semver, REACHABLE OR NOT, leaving out a release cut on a
+# LATER line than HEAD's. No tag is a failure, never a skip. Declarations
+# (frontend/api/breaks.txt) expire when the baseline moves and fail when stale, like every other
+# surface.
+#
+# 🔴 It used to be the nearest stable tag reachable from HEAD (hack/api-baseline.sh), and that
+# skips every minor: vX.Y.0 is tagged on release-X.Y, which main never contains, so main was
+# compared with v1.5.0 while v1.6.0 was out. The same bug, in the changelog, is #2812's
+# hack/changelog-base.sh: "the highest stable tag semver-lower than the new one".
 #
 # 🔴 THE BASELINE'S DECLARATIONS ARE REBUILT FROM ITS SOURCES, not read from a committed file: the
 # first baseline predates these reports, and a frozen baseline report is the one place a hand edit
@@ -53,6 +62,106 @@ TOOL="$ROOT/hack/api-report"
 REPORTS="$FRONTEND/api"
 BREAKS="$REPORTS/breaks.txt"
 WORK="$FRONTEND/.api-baseline"
+
+STABLE_TAG_RE='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+RELEASE_TAG_RE='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
+
+# npm_baseline [repo]: the baseline for the HEAD of repo (default: this checkout).
+#
+#   - HEAD carries a release tag (vX.Y.Z or vX.Y.Z-<prerelease>, a release build): the highest
+#     stable tag semver-LOWER than its X.Y.Z, reachable or not. That is exactly
+#     hack/changelog-base.sh's rule (#2812), and the call to switch to once it lands.
+#   - otherwise HEAD is a version in development, above every release on its line, so the rule
+#     reads "the highest stable tag", leaving out the releases that are not behind HEAD's line:
+#     one cut AFTER HEAD on HEAD's own branch (it descends from HEAD), and one cut on a branch
+#     that left HEAD's history BEFORE the newest release HEAD contains (R). On release-1.5,
+#     v1.6.0's branch point is the 1.5 freeze, which v1.5.x contains, so a fix there is compared
+#     with v1.5.x and not with a minor that added things.
+npm_baseline() {
+  local repo="${1:-.}" tags here r t fp cands="" best
+  git -C "$repo" rev-parse --verify --quiet HEAD >/dev/null || { echo "::error::$repo has no HEAD" >&2; return 1; }
+  tags="$(git -C "$repo" tag --list 'v*')" || { echo "::error::could not list the tags of $repo" >&2; return 1; }
+  tags="$(printf '%s\n' "$tags" | tr -d '\r' | grep -E "$STABLE_TAG_RE" || true)"
+  if [ -z "$tags" ]; then
+    echo "::error::no stable vX.Y.Z release tag in $repo. A clone without tags is the usual cause (check out with fetch-depth: 0); a check with no baseline compares against nothing and must not pass." >&2
+    return 1
+  fi
+  here="$(git -C "$repo" tag --points-at HEAD --list 'v*' | tr -d '\r' | grep -E "$RELEASE_TAG_RE" | sort -V | tail -n1 || true)"
+  if [ -n "$here" ]; then
+    # Its X.Y.Z, so a candidate's base is the release below the one it is a candidate for.
+    here="${here%%-*}"
+    best="$(printf '%s\n' "$tags" "$here" | sort -V -u | awk -v h="$here" '$0 == h { print prev; exit } { prev = $0 }')"
+    [ -n "$best" ] || { echo "::error::$here is the first stable release; there is no earlier one to compare with." >&2; return 1; }
+    echo "$best"
+    return 0
+  fi
+  r="$(git -C "$repo" describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' HEAD 2>/dev/null || true)"
+  if [ -z "$r" ]; then
+    echo "::error::no stable vX.Y.Z release tag is reachable from HEAD. A shallow clone is the usual cause (check out with fetch-depth: 0); a check with no baseline compares against nothing and must not pass." >&2
+    return 1
+  fi
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    if git -C "$repo" merge-base --is-ancestor "$t" HEAD; then
+      cands+="$t"$'\n'
+      continue
+    fi
+    git -C "$repo" merge-base --is-ancestor HEAD "$t" && continue # cut after HEAD, on its line
+    fp="$(git -C "$repo" merge-base "$t" HEAD)" || { echo "::error::no merge base of $t and HEAD" >&2; return 1; }
+    git -C "$repo" merge-base --is-ancestor "$fp" "$r" || cands+="$t"$'\n'
+  done <<<"$tags"
+  best="$(printf '%s' "$cands" | sort -V | tail -n1)"
+  [ -n "$best" ] || { echo "::error::no baseline found for HEAD" >&2; return 1; }
+  echo "$best"
+}
+
+# The baseline rule against planted histories, each with its required answer. Needs only git.
+baseline_self_test() {
+  local tmp g got
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'; trap - RETURN" RETURN
+  g() { git -C "$tmp/r" -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c tag.gpgsign=false "$@" >/dev/null; }
+  git init -q -b main "$tmp/r"
+  # main: c1 (v1.0.0) - F14 - F15 - F16 - head
+  # release-1.4 from F14 tags v1.4.0; release-1.5 from F15 tags v1.5.0 and v1.5.1 and has a fix
+  # after it; release-1.6 from F16 tags v1.6.0-rc.1 and v1.6.0.
+  g commit -q --allow-empty -m c1; g tag v1.0.0
+  g commit -q --allow-empty -m F14; g branch release-1.4
+  g commit -q --allow-empty -m F15; g branch release-1.5
+  g commit -q --allow-empty -m F16; g branch release-1.6
+  g commit -q --allow-empty -m head
+  g checkout -q release-1.4; g commit -q --allow-empty -m r14; g tag v1.4.0
+  g checkout -q release-1.5; g commit -q --allow-empty -m r15; g tag v1.5.0
+  g commit -q --allow-empty -m r151; g tag v1.5.1
+  g commit -q --allow-empty -m fix15
+  g checkout -q release-1.6; g commit -q --allow-empty -m rc; g tag v1.6.0-rc.1
+  g commit -q --allow-empty -m pre16
+  g commit -q --allow-empty -m r16; g tag v1.6.0
+
+  expect_baseline() { # <what> <ref> <want>
+    g checkout -q "$2"
+    got="$(npm_baseline "$tmp/r" 2>&1)" || { echo "self-test: baseline for $1 failed: $got" >&2; return 1; }
+    [ "$got" = "$3" ] || { echo "self-test: baseline for $1 is $got, want $3" >&2; return 1; }
+  }
+  # main is compared with v1.6.0, though only v1.0.0 is reachable from it.
+  expect_baseline "main" main v1.6.0 || return 1
+  # A fix on release-1.5 is compared with its own line, not with the later v1.6.0.
+  expect_baseline "a fix on release-1.5" release-1.5 v1.5.1 || return 1
+  # A release build: the highest stable tag below it (never a candidate, never itself).
+  expect_baseline "the v1.6.0 tag" v1.6.0 v1.5.1 || return 1
+  expect_baseline "the v1.5.1 tag" v1.5.1 v1.5.0 || return 1
+  # A candidate build: the release below the one it is a candidate for.
+  expect_baseline "the v1.6.0-rc.1 tag" v1.6.0-rc.1 v1.5.1 || return 1
+  # An untagged commit on release-1.6 before v1.6.0: v1.6.0 is in its future, not its baseline.
+  expect_baseline "release-1.6 before its first release" v1.6.0~1 v1.5.1 || return 1
+
+  # No stable tag at all is a failure, never an empty baseline.
+  git init -q -b main "$tmp/r2"
+  git -C "$tmp/r2" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --allow-empty -m c1
+  if got="$(npm_baseline "$tmp/r2" 2>&1)"; then echo "self-test: a repository with no tag gave baseline '$got'" >&2; return 1; fi
+  echo "npm-api baseline self-test: main -> v1.6.0 (unreachable), a release-1.5 fix -> v1.5.1, a release or candidate tag -> the stable tag below it, a commit before a release on its branch -> the one before, no tag fails"
+}
 
 # api_cli <args...>: the tool, with exit 2 (could not run) kept apart from 1 (a finding).
 api_cli() { node "$TOOL/cli.mjs" "$@"; }
@@ -179,10 +288,23 @@ self_test() {
   # 12. The verdict mapping the wrappers use.
   verdict_self_test || return 1
 
+  # 13. The baseline rule.
+  baseline_self_test || return 1
+
   echo "npm-api self-test: committed reports match; a drifted and a missing report fail; identical trees pass; a removed export, member and manifest subpath fail naming them; declared passes; expired and stale fail; an added required member is reported only"
 }
 
 case "${1:-}" in
+  --print-baseline)
+    [ $# -eq 1 ] || { echo "usage: $0 --print-baseline" >&2; exit 2; }
+    npm_baseline "$ROOT"
+    exit
+    ;;
+  --self-test-baseline)
+    [ $# -eq 1 ] || { echo "usage: $0 --self-test-baseline" >&2; exit 2; }
+    baseline_self_test
+    exit
+    ;;
   --self-test)
     [ $# -eq 1 ] || { echo "usage: $0 --self-test" >&2; exit 2; }
     preflight || exit 1
@@ -199,9 +321,13 @@ case "${1:-}" in
     ;;
 esac
 
-[ $# -le 1 ] || { echo "usage: $0 [baseline-tag | --update | --self-test]" >&2; exit 2; }
+[ $# -le 1 ] || { echo "usage: $0 [baseline-tag | --update | --self-test | --print-baseline | --self-test-baseline]" >&2; exit 2; }
 preflight || exit 1
-baseline="$(resolve_baseline "${1:-}")" || exit 1
+if [ -n "${1:-}" ]; then
+  baseline="$(resolve_baseline "$1")" || exit 1
+else
+  baseline="$(npm_baseline "$ROOT")" || exit 1
+fi
 echo "npm API baseline: $baseline"
 
 log="$(mktemp)"

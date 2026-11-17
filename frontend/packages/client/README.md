@@ -132,7 +132,9 @@ client-side. They decode, they do not verify — the server is the authority.
 HTTP 401 recovery is opt-in through `setUnauthorizedHandler({ refresh, onEnd })`.
 For an authenticated request, `refresh(token, identity)` may return a new bearer
 for **one replay** of the same operation. Use `session.forceRefresh(token)` for
-tenant tokens: it bypasses the expiry check, shares an in-flight refresh, and never
+tenant tokens (`createSessionTokens` returns a `ManagedSessionTokens`, on which it is
+always present; it is optional on `SessionTokens`, so an object a host builds to that
+v1.6 type still type-checks): it bypasses the expiry check, shares an in-flight refresh, and never
 returns the rejected token. When the server refuses the refresh it ends the session
 and returns null; when the refresh fails transiently (no response, a 5xx or a 429)
 it throws that error and keeps the session, whatever `transientRefreshErrors` says. It

@@ -88,8 +88,12 @@ export interface SessionTokens {
    * refresh). Rejects with the refresh's error when it failed transiently: the session is kept,
    * and a later call tries again. Never hands back the rejected token. It rejects whatever
    * `transientRefreshErrors` says: a null here tells `setUnauthorizedHandler` the session ended.
+   *
+   * Optional HERE because v1.6 had no such member, and a host that builds its own
+   * `SessionTokens` must still type-check. What `createSessionTokens` returns always has it:
+   * see `ManagedSessionTokens`. Without it a host has no 401 recovery, as in v1.6.
    */
-  forceRefresh: (rejectedToken?: string) => Promise<string | null>;
+  forceRefresh?: (rejectedToken?: string) => Promise<string | null>;
   /**
    * A usable access token, refreshing first when it is within the skew of expiry; null when
    * signed out or ended. When the access token has expired and the refresh failed transiently,
@@ -104,6 +108,11 @@ export interface SessionTokens {
    * as the refresh token is valid. Returns a stop function.
    */
   startAutoRefresh: () => () => void;
+}
+
+/** What `createSessionTokens` returns: a `SessionTokens` whose `forceRefresh` is always present. */
+export interface ManagedSessionTokens extends SessionTokens {
+  forceRefresh: (rejectedToken?: string) => Promise<string | null>;
 }
 
 const DEFAULT_SKEW_SECONDS = 30;
@@ -146,7 +155,7 @@ function expiryMs(token: string): number | undefined {
   return exp === undefined ? undefined : exp * 1000;
 }
 
-export function createSessionTokens(opts: SessionTokensOptions): SessionTokens {
+export function createSessionTokens(opts: SessionTokensOptions): ManagedSessionTokens {
   const skew = opts.skewSeconds ?? DEFAULT_SKEW_SECONDS;
   const mode = opts.transientRefreshErrors;
   // Fail closed: a misspelt mode from an untyped caller must not quietly mean the default.

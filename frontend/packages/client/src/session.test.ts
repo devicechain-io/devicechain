@@ -3,7 +3,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
-import { createSessionTokens, type SessionTokensOptions, type TokenPair } from './session';
+import {
+  createSessionTokens,
+  type ManagedSessionTokens,
+  type SessionTokens,
+  type SessionTokensOptions,
+  type TokenPair,
+} from './session';
 import { GraphQLRequestError } from './transport';
 
 const NOW = Date.UTC(2026, 9, 14, 12, 0, 0);
@@ -353,6 +359,19 @@ describe('transient vs definitive refresh failures', () => {
     await expect(tokens.forceRefresh(held.accessToken)).rejects.toBe(err);
     expect(state.ended).toEqual([]);
     expect(state.pair).toBe(held);
+  });
+
+  // Type-level, held by typecheck: a SessionTokens a host built to the v1.6 shape (no
+  // forceRefresh) still type-checks, and what createSessionTokens returns has forceRefresh
+  // without `?.`, as a ManagedSessionTokens that is also a SessionTokens.
+  it('keeps the v1.6 SessionTokens shape constructible, and createSessionTokens managed', () => {
+    const v16: SessionTokens = { getAccessToken: async () => null, reset: () => {}, startAutoRefresh: () => () => {} };
+    expect(v16.forceRefresh).toBeUndefined();
+    const { tokens } = host(null, vi.fn());
+    const managed: ManagedSessionTokens = tokens;
+    const plain: SessionTokens = managed;
+    expect(typeof managed.forceRefresh).toBe('function');
+    expect(plain.forceRefresh).toBe(managed.forceRefresh);
   });
 
   it('refuses an unknown transientRefreshErrors mode instead of defaulting it', () => {
