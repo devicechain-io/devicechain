@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { Check, ChevronsUpDown, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { FIELD_POPOVER_WIDTH } from './popover-width';
+import { useFormFieldId, useFormFieldLabelId } from './form-field-context';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 export interface ComboboxOption {
@@ -59,10 +60,11 @@ interface ComboboxProps {
   // nothing about what is being chosen.
   //
   // 🔴 Applied as aria-labelledby pointing at BOTH a hidden label and the trigger
-  // itself, not as a plain aria-label. aria-label REPLACES an element's content
+  // value text, not as a plain aria-label. aria-label REPLACES an element's content
   // as its accessible name, so naming the control that way would trade one half
   // of the announcement for the other: "Entity type" with no indication of what
-  // is currently selected. The self-reference is the standard way to keep both.
+  // is currently selected. Referencing the value's span keeps both, even when a
+  // native label also names the trigger.
   ariaLabel?: string;
   className?: string;
 }
@@ -84,7 +86,9 @@ export function Combobox({
 }: ComboboxProps) {
   const { t } = useTranslation('common');
   const generatedId = useId();
-  const triggerId = id ?? `combobox-${generatedId}`;
+  const triggerId = useFormFieldId(id) ?? `combobox-${generatedId}`;
+  const fieldLabelId = useFormFieldLabelId(triggerId);
+  const valueId = `${triggerId}-value`;
   const labelId = `${triggerId}-label`;
   const placeholderText = placeholder ?? t('select');
   const searchPlaceholderText = searchPlaceholder ?? t('search');
@@ -138,11 +142,12 @@ export function Combobox({
         id={triggerId}
         data-shot="combobox"
         type="button"
-        aria-labelledby={ariaLabel ? `${labelId} ${triggerId}` : undefined}
+        aria-labelledby={ariaLabel ? `${labelId} ${valueId}` : fieldLabelId ? `${fieldLabelId} ${valueId}` : undefined}
         disabled={disabled}
         className={cn(triggerClasses, selected?.wrap && 'h-auto min-h-10', className)}
       >
         <span
+          id={valueId}
           title={selected ? optionLabel(selected) : undefined}
           className={cn(selected?.wrap ? 'min-w-0 break-all text-left' : 'truncate', !selected && 'text-muted-foreground')}
         >

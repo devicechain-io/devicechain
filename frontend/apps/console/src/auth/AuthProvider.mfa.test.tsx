@@ -9,7 +9,7 @@
 //                   the sessions itself.
 
 import { act, cleanup, render } from '@testing-library/react';
-import { GraphQLRequestError, resolveAuthToken } from '@devicechain/client';
+import { gql, GraphQLRequestError, resolveAuthToken, type TypedDocument } from '@devicechain/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
@@ -58,7 +58,55 @@ beforeEach(() => {
   Object.values(h).forEach((m) => m.mockReset());
   window.localStorage.clear();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+describe('HTTP 401 session recovery', () => {
+  const query = 'query { test }' as unknown as TypedDocument<{ test: boolean }, Record<string, never>>;
+
+  beforeEach(() => {
+    window.localStorage.setItem('dc-auth', JSON.stringify({ accessToken: ACCESS, refreshToken: REFRESH }));
+    window.localStorage.setItem('dc-identity', JSON.stringify({ identityToken: OLD_ID, superuser: false, memberships: [] }));
+  });
+
+  it('refreshes an unexpired tenant token once and replays without signing out', async () => {
+    const next = { accessToken: jwt({ tenant: 'acme', exp: future, jti: 'fresh' }), refreshToken: REFRESH };
+    h.refresh.mockResolvedValue(next);
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { test: true } })));
+    vi.stubGlobal('fetch', fetcher);
+    mount();
+    await act(async () => { expect(await gql('device-management', query)).toEqual({ test: true }); });
+    expect(h.refresh).toHaveBeenCalledExactlyOnceWith(REFRESH);
+    expect(auth.isAuthenticated).toBe(true);
+    expect(stored('dc-auth')).toEqual(next);
+  });
+
+  it('clears the tenant session with the expired reason after the replay is refused', async () => {
+    h.refresh.mockResolvedValue({ accessToken: ACCESS, refreshToken: REFRESH });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+    mount();
+    await act(async () => { await expect(gql('device-management', query)).rejects.toMatchObject({ status: 401 }); });
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(auth.isAuthenticated).toBe(false);
+    expect(stored('dc-auth')).toBeNull();
+    expect(consumeSessionExpired()).toBe('expired');
+    expect(auth.isIdentityAuthenticated).toBe(true);
+  });
+
+  it('ends a rejected identity session without attempting a tenant refresh', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+    mount();
+    await act(async () => { await expect(gql('user-management/admin', query)).rejects.toMatchObject({ status: 401 }); });
+    expect(h.refresh).not.toHaveBeenCalled();
+    expect(auth.isIdentityAuthenticated).toBe(false);
+    expect(consumeSessionExpired()).toBe('expired');
+    expect(auth.isAuthenticated).toBe(true);
+  });
+});
 
 describe('verifyMfa', () => {
   it('starts the identity session the way a password sign-in does', async () => {

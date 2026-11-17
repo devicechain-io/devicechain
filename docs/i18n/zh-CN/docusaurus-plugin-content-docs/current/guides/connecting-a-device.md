@@ -346,6 +346,17 @@ mosquitto_sub \
   -t "devicechain/acme/device-commands/sensor-001"
 ```
 
+以上是 `MQTT_BASIC` 的形式：用户名加密码。`ACCESS_TOKEN` 凭据**没有密码**。令牌就是用户名的后半部分，并且完全省略 `-P`。代理会把带有密码的连接当作 `MQTT_BASIC` 处理，因此随访问令牌发送任何密码（即使只是占位符）都会被拒绝：
+
+```bash
+mosquitto_sub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001:sub' \
+  -u 'acme:<accessToken>' \
+  -t "devicechain/acme/device-commands/sensor-001"
+```
+
 每条消息都是 JSON 封装：
 
 ```json
@@ -376,6 +387,18 @@ mosquitto_pub \
   -h <mqtt-host> -p 1883 \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
+  -t "devicechain/acme/command-responses/sensor-001" \
+  -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
+```
+
+使用 `ACCESS_TOKEN` 凭据时，按照与订阅相同的方式连接，不带 `-P`：
+
+```bash
+mosquitto_pub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001' \
+  -u 'acme:<accessToken>' \
   -t "devicechain/acme/command-responses/sensor-001" \
   -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
 ```

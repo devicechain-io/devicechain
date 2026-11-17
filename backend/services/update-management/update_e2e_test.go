@@ -693,7 +693,7 @@ func TestAnotherDeviceOrTenantCannotDownloadSomeoneElsesAssignment(t *testing.T)
 }
 
 func newSweeperForTest() *processor.DeadlineSweeper {
-	return processor.NewDeadlineSweeper(Api, time.Minute, &ReportsMetrics)
+	return processor.NewDeadlineSweeper(Api, time.Minute, &ReportsMetrics, nil)
 }
 
 func (f *e2e) assignmentOf(tenant, token string) *model.UpdateAssignmentView {
