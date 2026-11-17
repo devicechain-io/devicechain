@@ -5,11 +5,10 @@ package model
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/rs/zerolog/log"
-	"gorm.io/gorm"
 )
 
 // Alarm position CLASSIFICATION: deciding, in device-management, whether an alarm is
@@ -47,33 +46,36 @@ import (
 // 🔴 schema/migration_alarm_position_derived.go carries the same statement as a literal, as a
 // migration must. They are kept identical by TestClassifierMatchesTheMigration.
 
-// classifyAlarmsTemplate classifies every unclassified alarm (or, with the extra predicate, one).
-// %[1]s alarms, %[2]s device_profiles, %[3]s detection_rules, %[4]s device_profile_versions, %[5]s
-// an extra WHERE conjunct.
+// classifyAlarmsSQL classifies every unclassified alarm; a caller narrows it to one alarm by
+// appending " AND a.tenant_id = ? AND a.id = ?". It is a CONSTANT with unqualified table names on purpose: the
+// connection's search_path is pinned to this area's schema (core/rdb), and a constant is what the
+// raw-SQL guard (backend/tools/rdbguard) can read, so the tables this cross-tenant statement
+// touches are visible to it and to its allow-list entry. Every join binds p.tenant_id to the
+// alarm's own tenant_id, so a rule is only ever resolved within the alarm's tenant.
 //
 // The published snapshot's keys are what ProfileSnapshot marshals to: the rule list under
 // "rules" (its json tag) and each rule's "Token" and "Definition" (DetectionRule carries no json
 // tags, so the stored key is the Go field name). TestProfileSnapshotStoredKeysArePinned pins them.
-const classifyAlarmsTemplate = `
-UPDATE %[1]s AS a
+const classifyAlarmsSQL = `
+UPDATE alarms AS a
    SET position_derived = (
        jsonb_typeof(a.contributors) = 'object'
        AND EXISTS (
            SELECT 1
              FROM jsonb_object_keys(a.contributors) AS k(key)
              CROSS JOIN LATERAL (
-                 SELECT count(*) AS found, coalesce(bool_or(d.def LIKE '%%inFence%%'), false) AS fence
+                 SELECT count(*) AS found, coalesce(bool_or(d.def LIKE '%inFence%'), false) AS fence
                    FROM (
                        SELECT r.definition::text AS def
-                         FROM %[2]s AS p
-                         JOIN %[3]s AS r ON r.device_profile_id = p.id
+                         FROM device_profiles AS p
+                         JOIN detection_rules AS r ON r.device_profile_id = p.id
                         WHERE p.tenant_id = a.tenant_id
                           AND p.token = split_part(k.key, '/', 1)
                           AND r.token = split_part(k.key, '/', 2)
                        UNION ALL
                        SELECT (e.rule -> 'Definition')::text AS def
-                         FROM %[2]s AS p
-                         JOIN %[4]s AS v ON v.device_profile_id = p.id
+                         FROM device_profiles AS p
+                         JOIN device_profile_versions AS v ON v.device_profile_id = p.id
                         CROSS JOIN LATERAL jsonb_array_elements(
                               CASE WHEN jsonb_typeof(v.snapshot -> 'rules') = 'array'
                                    THEN v.snapshot -> 'rules' ELSE '[]'::jsonb END) AS e(rule)
@@ -83,29 +85,14 @@ UPDATE %[1]s AS a
                    ) AS d
              ) AS s
             WHERE strpos(k.key, '/') = 0 OR s.found = 0 OR s.fence))
- WHERE a.position_derived IS NULL%[5]s;`
-
-// ClassifyAlarmsSQL renders the classifier for the given (already quoted) table names. extra is
-// appended to the WHERE clause verbatim; pass "" to classify every unclassified alarm.
-func ClassifyAlarmsSQL(alarms, profiles, rules, versions, extra string) string {
-	return fmt.Sprintf(classifyAlarmsTemplate, alarms, profiles, rules, versions, extra)
-}
-
-// classifySQL renders the classifier against this database's own table names (the area's schema
-// prefix comes from the naming strategy, as for every other model).
-func (api *Api) classifySQL(extra string) string {
-	db := api.RDB.Database
-	stmt := &gorm.Statement{DB: db}
-	q := func(model string) string { return stmt.Quote(db.NamingStrategy.TableName(model)) }
-	return ClassifyAlarmsSQL(q("Alarm"), q("DeviceProfile"), q("DetectionRule"), q("DeviceProfileVersion"), extra)
-}
+ WHERE a.position_derived IS NULL`
 
 // ClassifyUnclassifiedAlarms classifies every alarm whose position_derived is NULL, across all
 // tenants, and returns how many it classified. It is the periodic pass described above: one
 // conditional UPDATE, so two replicas running it at once each classify what the other has not.
 // The partial index on unclassified alarms keeps a pass with nothing to do a cheap probe.
 func (api *Api) ClassifyUnclassifiedAlarms(ctx context.Context) (int64, error) {
-	res := api.RDB.Database.WithContext(ctx).Exec(api.classifySQL(""))
+	res := api.RDB.Database.WithContext(ctx).Exec(classifyAlarmsSQL)
 	if res.Error != nil {
 		return 0, res.Error
 	}
@@ -118,15 +105,30 @@ func (api *Api) ClassifyUnclassifiedAlarms(ctx context.Context) (int64, error) {
 // classifyAlarm classifies one alarm, if it is still unclassified. A failure is logged and left
 // to the periodic pass: the alarm stays NULL, which already withholds it from a caller without
 // location:read, so nothing is shown that should not be while it waits.
+//
+// It binds the alarm's tenant from the context as well as its id: the alarm is the one the
+// integrator just folded for that tenant, and the statement may not reach any other.
 func (api *Api) classifyAlarm(ctx context.Context, id uint) {
-	if err := api.RDB.Database.WithContext(ctx).Exec(api.classifySQL(" AND a.id = ?"), id).Error; err != nil {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		log.Warn().Uint("alarm", id).Msg("Cannot classify an alarm without a tenant; it stays withheld until the next classification pass.")
+		return
+	}
+	if err := api.RDB.Database.WithContext(ctx).Exec(classifyAlarmsSQL+" AND a.tenant_id = ? AND a.id = ?", tenant, id).Error; err != nil {
 		log.Warn().Err(err).Uint("alarm", id).
 			Msg("Could not classify an alarm's position dependency; it stays withheld until the next classification pass.")
 	}
 }
 
-// normalizeClassifierSQL collapses whitespace, so a test can compare two renderings of the
-// statement without caring how either is indented.
+// normalizeClassifierSQL reduces a rendering of the classifier to a comparable form: the
+// area's schema qualifier and the trailing semicolon dropped, whitespace collapsed. The migration
+// names its tables schema-qualified, as migrations here do; the service relies on search_path.
 func normalizeClassifierSQL(s string) string {
+	s = strings.ReplaceAll(s, `"device-management".`, "")
+	s = strings.TrimSuffix(strings.TrimSpace(s), ";")
+	s = strings.ReplaceAll(s, `"alarms"`, "alarms")
+	for _, t := range []string{"device_profiles", "detection_rules", "device_profile_versions"} {
+		s = strings.ReplaceAll(s, `"`+t+`"`, t)
+	}
 	return strings.Join(strings.Fields(s), " ")
 }

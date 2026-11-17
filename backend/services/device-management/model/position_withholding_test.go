@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/schema"
@@ -217,12 +218,19 @@ func TestUnclassifiedAlarmsAreWithheld(t *testing.T) {
 }
 
 // TestClassifierMatchesTheMigration: the service's classifier and the migration's literal copy
-// are one statement. Rendered against the area's schema-qualified tables they must agree.
+// are one statement. The migration names the area's tables schema-qualified and the service relies
+// on search_path; with that qualifier removed they must agree, word for word. The control: a copy
+// with any token changed must NOT agree, so the comparison is not vacuous.
 func TestClassifierMatchesTheMigration(t *testing.T) {
-	got := ClassifyAlarmsSQL(`"device-management"."alarms"`, `"device-management"."device_profiles"`,
-		`"device-management"."detection_rules"`, `"device-management"."device_profile_versions"`, "")
-	if normalizeClassifierSQL(got) != normalizeClassifierSQL(schema.AlarmPositionClassifySQL) {
-		t.Fatalf("the classifier and the migration diverged:\nservice:   %s\nmigration: %s",
-			normalizeClassifierSQL(got), normalizeClassifierSQL(schema.AlarmPositionClassifySQL))
+	service, migration := normalizeClassifierSQL(classifyAlarmsSQL), normalizeClassifierSQL(schema.AlarmPositionClassifySQL)
+	if service != migration {
+		t.Fatalf("the classifier and the migration diverged:\nservice:   %s\nmigration: %s", service, migration)
+	}
+	if !strings.Contains(migration, "v.snapshot -> 'rules'") || !strings.Contains(migration, "s.found = 0") {
+		t.Fatalf("the comparison must cover the statement's body: %s", migration)
+	}
+	altered := strings.Replace(schema.AlarmPositionClassifySQL, "s.found = 0", "s.found = 1", 1)
+	if normalizeClassifierSQL(altered) == service {
+		t.Fatalf("normalizing must not erase a real difference")
 	}
 }
