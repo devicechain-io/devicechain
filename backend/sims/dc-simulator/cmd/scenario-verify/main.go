@@ -11,8 +11,8 @@
 //	                            (to CRITICAL on East Quay only) and clearing
 //	pump-commanded              start-pump SUCCESSFUL, the pump running and its well falling, the
 //	                            well never reaching the pump's own float
-//	derate-obeyed               derate SUCCESSFUL, the cap reported at 11 kW, connector-hot cleared
-//	                            before the long session ends
+//	derate-obeyed               derate SUCCESSFUL, the cap reported at 11 kW, the connector reading
+//	                            below the rule's level before the long session ends, connector-hot cleared
 //	air-lock-only-east          pump-air-lock for the East Quay pump only, inside its window
 //	correlation-fires           previewRule of quay-flooding fires for East Quay only
 //	correlation-control-is-red  the same preview with a count no quay reaches is judged red

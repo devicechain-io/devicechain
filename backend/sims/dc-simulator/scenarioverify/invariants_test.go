@@ -97,7 +97,13 @@ func cleanDay() *day {
 		if t.After(answered) {
 			v = sim.HarborpulseDeratedKw
 		}
-		d.readings[c] = append(d.readings[c], Reading{Name: sim.HarborpulseMaxKwKey, At: t, Value: v})
+		temp := 91.0
+		if t.After(answered.Add(10 * time.Second)) {
+			temp = 60.5
+		}
+		d.readings[c] = append(d.readings[c],
+			Reading{Name: sim.HarborpulseMaxKwKey, At: t, Value: v},
+			Reading{Name: sim.HarborpulseConnectorKey, At: t, Value: temp})
 	}
 
 	d.corr = Preview{OK: true, Firings: []Firing{
@@ -229,7 +235,19 @@ func TestEachControlTurnsExactlyItsInvariantRed(t *testing.T) {
 				}
 				for i, l := range d.alarms {
 					if l.key == sim.HarborpulseConnectorHotAlarmKey {
-						d.alarms[i].clear = 15.6
+						d.alarms[i].clear = 16.1
+					}
+				}
+			},
+		},
+		{
+			name: "the derate is acknowledged but not applied", defect: "(none: a device that answers without acting)", want: InvDerateObeyed,
+			because: "did not cool it",
+			mutate: func(d *day) {
+				c := sim.HarborpulseHotCharger
+				for i, r := range d.readings[c] {
+					if r.Name == sim.HarborpulseConnectorKey && r.At.Before(at(sim.HarborpulseOverheatTo)) {
+						d.readings[c][i].Value = 91
 					}
 				}
 			},

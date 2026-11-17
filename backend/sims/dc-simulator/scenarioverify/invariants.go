@@ -367,8 +367,8 @@ func pumpCommanded(o Observations) error {
 }
 
 // derateObeyed: the overheating charger's connector-hot fires, a derate reaches SUCCESSFUL, the
-// charger then reports its cap at the derated power, and the alarm clears before the long session
-// ends — so it was the derate that cooled it.
+// charger then reports its cap at the derated power and its connector cools below the rule's level
+// before the long session ends (so it was the derate that cooled it), and the alarm clears.
 func derateObeyed(o Observations) error {
 	c := sim.HarborpulseHotCharger
 	from, to := o.at(WatchFrom), o.at(derateTo)
@@ -390,12 +390,24 @@ func derateObeyed(o Observations) error {
 	if !capped {
 		return fmt.Errorf("%s: derate answered at %s but the charger never reported its cap at %.0f kW", c, cmd.Responded.Format(time.RFC3339), sim.HarborpulseDeratedKw)
 	}
+	// The derate's effect, in the telemetry: the connector reads below the rule's level while the
+	// long session is still running. Without the derate it stays hot until the session ends. (The
+	// alarm itself clears on a one-minute average, which on a 24-minute day lands too close to the
+	// session's end to tell the two apart.)
 	sessionEnds := o.at(sim.HarborpulseOverheatTo)
-	cleared := samples(o, active[0].At, sessionEnds, func(a AlarmSample) bool {
+	cooled := false
+	for _, r := range readingsOf(o, c, sim.HarborpulseConnectorKey, cmd.Responded, sessionEnds) {
+		cooled = cooled || r.Value < sim.HarborpulseConnectorHotC
+	}
+	if !cooled {
+		return fmt.Errorf("%s: the connector never read below %.0f C between the derate (%s) and the end of the session (%s): the derate did not cool it",
+			c, sim.HarborpulseConnectorHotC, cmd.Responded.Format(time.RFC3339), sessionEnds.Format(time.RFC3339))
+	}
+	cleared := samples(o, active[0].At, to, func(a AlarmSample) bool {
 		return a.Token == active[0].Token && a.State == sim.AlarmStateClearedWire
 	})
 	if len(cleared) == 0 {
-		return fmt.Errorf("%s: connector-hot did not clear before the session ended (%s): the derate did not cool it", c, sessionEnds.Format(time.RFC3339))
+		return fmt.Errorf("%s: connector-hot did not clear by %s", c, to.Format(time.RFC3339))
 	}
 	return nil
 }

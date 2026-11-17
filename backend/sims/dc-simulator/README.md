@@ -619,7 +619,7 @@ the sim's own identity:
 | --- | --- | --- |
 | `flood-escalates` | each gauge keeps ONE flood alarm, raised at MINOR, escalating in place (CRITICAL on East Quay only, MAJOR elsewhere) and clearing | `--scenario-defect flood-split-key` (the critical tier under a key of its own) |
 | `pump-commanded` | a `start-pump` reaches SUCCESSFUL, the pump then runs and its well falls, and the well never reaches the pump's own float | `--no-command-far-end` |
-| `derate-obeyed` | a `derate` reaches SUCCESSFUL, the charger reports its cap at 11 kW, and `connector-hot` clears before the long session ends | `--scenario-defect refuse-derate` |
+| `derate-obeyed` | a `derate` reaches SUCCESSFUL, the charger reports its cap at 11 kW, its connector reads below the rule's level before the long session ends (so the derate cooled it, not the session ending), and `connector-hot` clears | `--scenario-defect refuse-derate` |
 | `air-lock-only-east` | `pump-air-lock` for the East Quay pump only, inside its window | `--scenario-defect air-lock-basin` |
 | `correlation-fires` | `previewRule` of `hp-quay-flooding` over the storm fires for East Quay only | the verifier previews the same rule with a count no quay reaches, in the same day (`correlation-control-is-red`) |
 | `outage-blast-radius` | `light-silent` / `charger-offline` for exactly the East Quay lamps and chargers, inside the outage, all cleared after it | `--scenario-defect silence-north-lamp` |

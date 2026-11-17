@@ -17,8 +17,8 @@
 #                               CRITICAL on East Quay only, and clearing
 #   pump-commanded              start-pump SUCCESSFUL, the pump running and its well falling, the
 #                               well never reaching the pump's own float
-#   derate-obeyed               derate SUCCESSFUL, the cap reported at 11 kW, connector-hot cleared
-#                               before the long session ends
+#   derate-obeyed               derate SUCCESSFUL, the cap reported at 11 kW, the connector reading
+#                               below the rule's level before the long session ends, the alarm cleared
 #   air-lock-only-east          pump-air-lock for the East Quay pump only, inside its window
 #   correlation-fires           previewRule of quay-flooding fires for East Quay only
 #   correlation-control-is-red  the same preview with a count no quay reaches is judged red (the
@@ -260,14 +260,14 @@ stop_all() {
 }
 trap stop_all EXIT
 
-forward() { # forward <log> <target> <local:remote>; keeps the forward up across pod restarts
-  start_bg "$state_dir/$1" bash -c "while :; do kubectl --kubeconfig '$kubeconfig' --context '$kube_context' -n '$namespace' port-forward '$2' '$3' || true; sleep 2; done"
-  local port="${3%%:*}"
+forward() { # forward <log> <namespace> <target> <local:remote>; keeps the forward up across pod restarts
+  start_bg "$state_dir/$1" bash -c "while :; do kubectl --kubeconfig '$kubeconfig' --context '$kube_context' -n '$2' port-forward '$3' '$4' || true; sleep 2; done"
+  local port="${4%%:*}"
   for _ in $(seq 1 60); do
     curl -s -o /dev/null --max-time 2 "http://localhost:$port/" && return 0
     sleep 1
   done
-  fail "nothing answered on localhost:$port (port-forward $2; see $state_dir/$1)"
+  fail "nothing answered on localhost:$port (port-forward $3; see $state_dir/$1)"
 }
 
 build_tools() {
@@ -288,8 +288,8 @@ cmd_run() {
   offline_controls
   k get ns "$namespace" >/dev/null 2>&1 || fail "no instance $instance on $kube_context: run 'hack/harborpulse-rig.sh up' first"
   build_tools
-  forward forward-http.log svc/traefik "$http_port:80"
-  forward forward-ingest.log svc/event-sources "$ingest_port:8081"
+  forward forward-http.log traefik svc/traefik "$http_port:80"
+  forward forward-ingest.log "$namespace" svc/event-sources "$ingest_port:8081"
 
   local stamp r name flags want port i=0 sims=() hs
   stamp="$(date -u +%H%M%S)"
