@@ -132,7 +132,13 @@ func connectorFamily() putest.Family[*Api] {
 			// expectedUpdatedAt is nil: the optimistic-concurrency precondition is a
 			// different contract with its own tests, and passing one here would make
 			// every property depend on a timestamp round trip.
-			_, err := api.UpdateConnector(ctx, token, req.(*ConnectorUpdateRequest), nil)
+			// Destination edits deliberately re-supply the known fixture credential.
+			// Dedicated binding tests separately assert that omission refuses without writes.
+			edit := req.(*ConnectorUpdateRequest)
+			if !edit.Secret.Set && (edit.Type.Set || edit.Config.Set) {
+				edit.Secret = dcgraphql.OptionalStringOf("s3cret")
+			}
+			_, err := api.UpdateConnector(ctx, token, edit, nil)
 			return err
 		},
 		Fields: []putest.Field{

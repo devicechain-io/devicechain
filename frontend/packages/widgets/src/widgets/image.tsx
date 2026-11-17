@@ -16,6 +16,7 @@ import {
 } from '@devicechain/widget-sdk';
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
+import { sharedStrings } from '../shared-strings';
 
 const FITS = new Set(['contain', 'cover', 'fill']);
 
@@ -40,7 +41,7 @@ export function Image({ widget }: WidgetProps<null>) {
             fontSize: fontVar('md'),
           }}
         >
-          No image URL
+          {sharedStrings().noImage}
         </div>
       )}
     </WidgetFrame>

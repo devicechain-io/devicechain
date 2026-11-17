@@ -5,9 +5,9 @@
 // database's copy.
 //
 // The database is the authority; the mirror exists so that no hot path ever queries a database
-// to route. Nothing reads the mirror yet, so a stale or missing one changes no behaviour in this
-// release; what this package must never do is let it DISAGREE quietly, which is why every pass
-// verifies after it writes.
+// to route. With nats.shardGroups configured, event-sources, device-management and
+// event-management route sharded streams through this mirror. Every pass verifies after
+// writing so a disagreement is reported for operator repair.
 package placement
 
 import (
@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/partition"
 	"github.com/rs/zerolog/log"
@@ -28,18 +29,29 @@ type Source interface {
 }
 
 // Sync copies the database's table into the mirror and verifies that the mirror now holds
-// exactly it. It returns partition.ErrPChanged (wrapped) when the mirror records a different P.
+// exactly it. It refuses tables naming a group outside configured nats.shardGroups.count
+// before touching the bucket. It returns partition.ErrPChanged (wrapped) for a different P.
 //
 // A publisher whose read of the database went stale (another replica published a newer
 // generation first) is refused by the mirror (partition.ErrStale); it re-reads and offers the
 // newer table once, instead of waiting a whole interval.
-func Sync(ctx context.Context, src Source, bucket partition.Bucket) error {
+func Sync(ctx context.Context, src Source, bucket partition.Bucket, groups *config.NatsShardGroupsConfiguration) error {
 	var err error
 	for attempt := 0; attempt < 2; attempt++ {
 		var table partition.Table
 		table, err = src.Placement(ctx)
 		if err != nil {
 			return fmt.Errorf("reading the placement table: %w", err)
+		}
+		if groups != nil {
+			// Each group is compared directly: Table.S() is the highest group plus one, which
+			// overflows for a group of math.MaxInt.
+			for vp, g := range table.Groups {
+				if g >= groups.Count {
+					return fmt.Errorf("placement names shard group %d, count %d (vpartition %d); nats.shardGroups.count must be raised first",
+						g, groups.Count, vp)
+				}
+			}
 		}
 		if err = partition.Publish(bucket, table); err != nil {
 			if errors.Is(err, partition.ErrStale) {
@@ -54,9 +66,9 @@ func Sync(ctx context.Context, src Source, bucket partition.Bucket) error {
 
 // LazyBucket opens its KV bucket on first use and retries the open on every use until it works.
 //
-// The mirror is read by nothing yet, so being unable to open it must not stop the service from
-// starting; it must only fail the mirror's own passes, which retry. A bucket opened eagerly at
-// start would turn an unreachable or full broker into a service that does not come up.
+// An unavailable mirror fails passes, which retry, while the identity provider stays up.
+// Sharded stream routing holds or refuses work until a usable mirror is available. Opening
+// eagerly would turn an unreachable or full broker into an identity service startup failure.
 type LazyBucket struct {
 	open func() (partition.Bucket, error)
 
@@ -108,16 +120,11 @@ func (l *LazyBucket) Update(key string, value []byte, revision uint64) error {
 }
 
 // IsFatal reports whether a Sync error is the one that stops the service AT START: the P the
-// database records is not the P the mirror records. Everything else (the broker is away, a bucket
-// is full) is transient or harmless today and is retried by the periodic pass.
+// database records is not the P the mirror records. Other failures are retried by periodic passes.
 //
-// 🔴 ONLY THE START ACTS ON IT, ON PURPOSE. Past start the same error fails the periodic pass
-// loudly (the pass is counted failed, so the placement_mirror alert fires, and each failure is
-// logged at error with the cause) but does not take the process down: this service is the
-// instance's identity provider, nothing reads the mirror yet, and a mirror that disagrees with
-// the database mid-run is a hand edit of the bucket, not a database that has moved. Exiting every
-// replica at once over it would turn that into a login outage for a value no request depends on.
-// The day something routes by the mirror, this is the place to revisit.
+// Only startup acts on this by stopping the service. Periodic failures are logged and counted
+// for the placement_mirror alert while the identity provider stays up. Sharded stream routing
+// holds or refuses work when the mirror is unusable; operators must repair the disagreement.
 func IsFatal(err error) bool { return errors.Is(err, partition.ErrPChanged) }
 
 // logChangedP is how a periodic pass says a changed P out loud: at error, with what it means. It
@@ -125,16 +132,16 @@ func IsFatal(err error) bool { return errors.Is(err, partition.ErrPChanged) }
 func logChangedP(err error) {
 	log.Error().Err(err).Msg("The placement mirror records a different P from the database. This will not " +
 		"clear on retry: the vpartition count is fixed for the life of the instance. Every pass fails until " +
-		"the mirror or the database is repaired. The service keeps running because nothing routes by the " +
-		"mirror yet; a restart refuses to start.")
+		"the mirror or the database is repaired. The identity provider keeps running; sharded stream " +
+		"routing holds or refuses work while the mirror is unusable. A restart refuses to start.")
 }
 
 // mirrorPass is one scheduled pass. A changed P is returned as itself (wrapped), so the pass is
 // counted failed, and is reported through onFatal. onFatal is a parameter so a test can observe it
 // without swapping the global logger, which no test in the repository may do.
-func mirrorPass(src Source, bucket partition.Bucket, onFatal func(error)) func(ctx context.Context) error {
+func mirrorPass(src Source, bucket partition.Bucket, groups *config.NatsShardGroupsConfiguration, onFatal func(error)) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
-		err := Sync(ctx, src, bucket)
+		err := Sync(ctx, src, bucket, groups)
 		if IsFatal(err) {
 			onFatal(err)
 		}
@@ -144,9 +151,9 @@ func mirrorPass(src Source, bucket partition.Bucket, onFatal func(error)) func(c
 
 // NewMirrorTask schedules Sync. The first pass is the caller's, at start; this one keeps an
 // unchanged mirror alive (its entries expire) and picks up a changed placement.
-func NewMirrorTask(ms *core.Microservice, src Source, bucket partition.Bucket, interval time.Duration,
+func NewMirrorTask(ms *core.Microservice, src Source, bucket partition.Bucket, groups *config.NatsShardGroupsConfiguration, interval time.Duration,
 	callbacks core.LifecycleCallbacks) *core.PeriodicTask {
 	return core.NewPeriodicTask(ms.FunctionalArea, "placement-mirror", interval,
-		mirrorPass(src, bucket, logChangedP),
+		mirrorPass(src, bucket, groups, logChangedP),
 		callbacks, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("placement_mirror")))
 }
