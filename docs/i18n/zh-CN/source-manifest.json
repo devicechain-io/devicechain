@@ -194,6 +194,10 @@
       "sourceSha256": "20d1753acf2e8a59369457b53da17606719ee47385ab389aea163c3d2b7361cf",
       "translationSha256": "b9035fe6417015a3618aad1dcf84781adff8baeb729f8fdacddef911a652543b"
     },
+    "guides/chirpstack-uplinks.md": {
+      "sourceSha256": "23da9cfd2f9528f1e1e4fbdfe28f48cd67b928d2ceb38046eb4999acf005d8ae",
+      "translationSha256": "b0ba13053cbe4097b0acc09ea2a5167538a22895104ae98d212e034f5c77e758"
+    },
     "guides/commanding-a-fleet.md": {
       "sourceSha256": "59741bbb8f8c61d996d81ad24f2e71428b1b3ce6cf6ddb90a0ae81750dbed99b",
       "translationSha256": "679a6ce8417260e0492f385afe8a047a2af524e95cc9dd5d29351c91af93d767"
@@ -286,6 +290,10 @@
       "sourceSha256": "f8416680f192476200f8ff4d1ae0b2ce2ccc110d87a9da70cf0319de980a39d8",
       "translationSha256": "438c8e78260bc3c2339e4839f4defa49df064d9260fdf4ef0464e4d860e1b527"
     },
+    "guides/the-things-stack-uplinks.md": {
+      "sourceSha256": "63cfae0533ee9bd8f3c9a5d49c6ae00ed2d9495f156138dbaffab51800d30d1b",
+      "translationSha256": "f32fc521453436aa5ebc5db5b650efd88cd9023c44221d70e98d23ecb68164ee"
+    },
     "guides/two-factor-authentication.md": {
       "sourceSha256": "b8693123ad02660806202824d31131974bdce968f7a37fc9c3a4c358a4d9023b",
       "translationSha256": "9a7a1cc4d6f4e3176d0e73f7fd372362e6e48512b0b5e2805b49914b0665cf1f"
@@ -303,16 +311,16 @@
       "translationSha256": "161df67a0815f393d31cd8ab10191ddacd9c9b03f2b651156de9512d0714289a"
     },
     "intro.md": {
-      "sourceSha256": "af500b940eef8cfe0b300f8e46d5f08751bf758874edaf854076d8efc8826573",
-      "translationSha256": "88e1592fd166a547ba64dea3622bc2f8d64c7fd0081ab57bc3208330583e57c4"
+      "sourceSha256": "d5e95234d801cb09efca7ee8ea7d310535526fcadecd5c4b004f38a18b310c70",
+      "translationSha256": "6bd4e0e6afe94727716dfc090934105fd39195be33ddaba19570aa986325e70a"
     },
     "quickstart/feature-tour.md": {
-      "sourceSha256": "c20841fce098a4865ce990b38285f743ce81ec81c2706c5a24bb84ca628d780f",
-      "translationSha256": "0643d0f49e4fe3f21bfdde90761dff048296f6217a295b3739542f4439402d69"
+      "sourceSha256": "aa9d5f60c96f88c20de870932345bb6aaa4b77d939cba83cd2142dc082299964",
+      "translationSha256": "e2621db89a1e0f7f7d7ea22e38cfb6e875689e45fc530d3be9cfea33c2c8396d"
     },
     "quickstart/first-device.md": {
-      "sourceSha256": "7feb8b03ca56f9c3b48971da29a937812a89feeb102d4a2f73fa6d83ccd89c23",
-      "translationSha256": "77380404031e09dba84155fc74711db682c6ba6cd2d6c8c1d2eb4886599a0584"
+      "sourceSha256": "ee6ff97bebc8c90a25e31e9c41f6b268aa12772e4131e5b4af9afba7b83c8219",
+      "translationSha256": "731fbe063b0f1641f1ad5cc3ef68a9bb99015d57ce1e1e73b0029dc86d06be90"
     },
     "reference/csharp-sdk.md": {
       "sourceSha256": "7c2ff25f32b4e14b3d51c27a5729ab0bd08c6e90302dc5ab1ea1bbf7be73ae50",

@@ -238,7 +238,7 @@ can run unattended.
 
 Sign in as `ops@acme.example` (the password is in `.state/tour-a/customer-password`). The user sees:
 
-- a sidebar of **Dashboards**, **Alarms** and **Devices**, and nothing else;
+- a sidebar of **Home**, **Dashboards**, **Alarms** and **Devices**, and nothing else;
 - one device, `coldroom-a1`;
 - one dashboard, `tour-a-customer`, with live readings and the alarm for their own room;
 - no sign of `coldroom-a2`, its readings, its alarms or the operator's board.
@@ -255,9 +255,11 @@ PASS  createCommand boost-cooling was accepted (QUEUED), not rejected
 PASS  your own command reached SUCCESSFUL (the device answered; last status: SUCCESSFUL)
 PASS  the operator sees both devices (2)
 PASS  the operator sees alarms on both devices (2 devices with alarms)
+PASS  the operator sees both dashboards (2)
 PASS  the customer sees exactly coldroom-a1 (saw: coldroom-a1)
 PASS  the customer sees alarms for coldroom-a1 only (saw: coldroom-a1)
 PASS  the customer reads no state of coldroom-a2 (0 measurements)
+PASS  the customer reads coldroom-a1's latest readings (2)
 PASS  the customer lists only the board shared with them (saw: tour-a-customer)
 PASS  the operator's board is invisible to the customer
 PASS  the read-only customer user cannot send a command (refused: FORBIDDEN)

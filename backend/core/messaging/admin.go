@@ -414,3 +414,4 @@ func (nmgr *NatsManager) streamSubjects(suffix string) []string {
 type brokerAdminRouter struct{}
 
 func (brokerAdminRouter) ShardGroup(string) (int, error) { return 0, ErrUnplacedTenant }
+func (brokerAdminRouter) Ready() error                   { return nil }
