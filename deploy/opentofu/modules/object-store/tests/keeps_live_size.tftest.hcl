@@ -41,7 +41,8 @@ variables {
 # after: every new cluster getting a 20Gi store.
 run "creates_the_volume_at_the_given_size" {
   variables {
-    storage = "30Gi"
+    storage       = "30Gi"
+    storage_class = "premium-rwo"
   }
 
   assert {
@@ -84,22 +85,17 @@ run "a_smaller_size_keeps_the_live_size" {
   }
 }
 
-# The rule ignores the SIZE, not the claim: anything else on it still follows the
-# configuration. Without this run, `ignore_changes = all` passes every run above
-# while silently freezing the storage class (and the labels) at whatever the
-# first apply wrote. Last, because a new class replaces the claim.
-run "a_new_storage_class_is_still_applied" {
+# A later class override must never replace or mutate a live PVC.
+run "a_new_storage_class_keeps_the_live_claim" {
   plan_options {
     refresh = false
   }
-
   variables {
     storage       = "8Gi"
     storage_class = "retained"
   }
-
   assert {
-    condition     = kubernetes_persistent_volume_claim_v1.data.spec[0].storage_class_name == "retained"
-    error_message = "a re-apply with a new storage_class did not reach the claim; the lifecycle rule is ignoring more than the size"
+    condition     = kubernetes_persistent_volume_claim_v1.data.spec[0].storage_class_name == "premium-rwo"
+    error_message = "changing storage_class must leave an existing PVC alone"
   }
 }

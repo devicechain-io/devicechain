@@ -1398,6 +1398,20 @@ func ForwardsInto(suffix, area string) string {
 	return bySuffix[suffix].Forwards[area]
 }
 
+// ForwardersInto returns the areas declared to forward from any stream into suffix.
+func ForwardersInto(suffix string) []string {
+	var areas []string
+	for _, stream := range All {
+		for area, downstream := range stream.Forwards {
+			if downstream == suffix && !slices.Contains(areas, area) {
+				areas = append(areas, area)
+			}
+		}
+	}
+	slices.Sort(areas)
+	return areas
+}
+
 // IsDeclared reports whether a suffix names a declared stream.
 //
 // The transport refuses to create a stream for anything this rejects. That is

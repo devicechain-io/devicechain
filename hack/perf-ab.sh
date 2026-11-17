@@ -199,6 +199,7 @@ psql_at() { # namespace pod sql -> stdout
   k exec -n "$1" "$2" -c postgres -- psql -X -At -v ON_ERROR_STOP=1 -d postgres -c "$3"
 }
 # shellcheck disable=SC2317  # called by name from dbstats_tables (lib/dbstats.sh)
+# shellcheck disable=SC2329 # passed by name to dbstats_tables in hack/lib/dbstats.sh
 psql_db() { # namespace pod database sql -> stdout
   k exec -n "$1" "$2" -c postgres -- psql -X -At -v ON_ERROR_STOP=1 -d "$3" -c "$4"
 }
@@ -374,7 +375,7 @@ shed_snap() { # label
   mkdir -p "$raw/$1"
   mapfile -t es_pods < <(k get pods -n "$ns" -o json | jq -r '.items[]|select(.metadata.name|test("^event-sources-"))|.metadata.name' | tr -d '\r')
   for p in "${es_pods[@]}"; do
-    k get --raw "/api/v1/namespaces/$ns/pods/$p:8080/proxy/metrics" \
+    k get --raw "/api/v1/namespaces/$ns/pods/$p:8083/proxy/metrics" \
       | grep -E '^devicechain_eventsources_total_(msg_rate_limited|msg_reading_limited|readings_rate_limited|msg_publish_failed|msg_backpressured)[{ ]' > "$raw/$1/shed-$p.prom" || true
   done
 }

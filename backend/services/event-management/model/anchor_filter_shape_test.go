@@ -167,23 +167,27 @@ func TestAScopedCallerCannotReadTheAnchorFilterModelDirectly(t *testing.T) {
 
 // A scoped caller's anchor-filtered read is bounded: past the deadline it ends with a clean
 // error naming the cause rather than running on. The deadline is shrunk so the test needs
-// no slow query. The controls: the same read without an anchor, and the same anchored
-// read by an unscoped caller, are not bounded (their cost is the caller's own to ask for).
+// no slow query. Reads without an anchor and unscoped reads use the general bound too.
 func TestAScopedAnchorFilteredReadPastItsDeadlineEndsInACleanError(t *testing.T) {
 	api, _, ctx := shapeFixture(t)
 	old := scopedAnchorReadTimeout
+	oldEvent := eventReadTimeout
+	eventReadTimeout = 30 * time.Millisecond
+	t.Cleanup(func() { eventReadTimeout = oldEvent })
 	scopedAnchorReadTimeout = 20 * time.Millisecond
 	t.Cleanup(func() { scopedAnchorReadTimeout = old })
 	// sqlite ignores a context, so stand in for a slow Postgres query that pgx would cancel:
 	// a statement that carries a deadline waits for it and fails with the context's error,
-	// and one that carries none runs normally.
-	require.NoError(t, api.RDB.Database.Callback().Query().Before("gorm:query").Register("test:wait_for_deadline",
-		func(tx *gorm.DB) {
-			if _, ok := tx.Statement.Context.Deadline(); ok {
-				<-tx.Statement.Context.Done()
-				_ = tx.AddError(tx.Statement.Context.Err())
-			}
-		}))
+	// exercising the same cancellation path for both bounds.
+	waitForDeadline := func(tx *gorm.DB) {
+		if _, ok := tx.Statement.Context.Deadline(); ok {
+			<-tx.Statement.Context.Done()
+			_ = tx.AddError(tx.Statement.Context.Err())
+		}
+	}
+	require.NoError(t, api.RDB.Database.Callback().Query().Before("gorm:query").Register("test:wait_for_deadline", waitForDeadline))
+	// The rollup aggregation reads through Scan, which runs the Row callbacks.
+	require.NoError(t, api.RDB.Database.Callback().Row().Before("gorm:row").Register("test:wait_for_deadline", waitForDeadline))
 	area, floor := "area", "floor-shared"
 	anchored := EventSearchCriteria{AnchorType: &area, AnchorToken: &floor,
 		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}}
@@ -202,11 +206,38 @@ func TestAScopedAnchorFilteredReadPastItsDeadlineEndsInACleanError(t *testing.T)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	_, err = api.AlertEvents(scoped, anchored)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	_, err = api.StateChangeEvents(scoped, anchored)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	_, err = api.BucketedMeasurements(scoped, agg)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 
 	_, err = api.Events(scoped, plain)
-	assert.NoError(t, err, "control: a scoped read with no anchor is not bounded here")
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), eventReadTimeout.String())
 	_, err = api.Events(ctx(), anchored)
-	assert.NoError(t, err, "control: an unscoped anchored read is not bounded")
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), eventReadTimeout.String())
+	_, err = api.Events(ctx(), plain)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), eventReadTimeout.String())
+
+	// The aggregation itself, not only its distinct-name probe: a named read skips the probe, on
+	// the raw path (an anchor keeps a read off the rollup) and on the rollup path (no anchor).
+	kw := "kw"
+	named := agg
+	named.Name = &kw
+	_, err = api.BucketedMeasurements(ctx(), named)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), eventReadTimeout.String())
+	rollup := MeasurementAggregationCriteria{StartTime: &start, EndTime: &end, IntervalSeconds: 60, Name: &kw}
+	_, err = api.BucketedMeasurements(ctx(), rollup)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), eventReadTimeout.String())
+
+	// Fast reads still succeed under the general bound.
+	require.NoError(t, api.RDB.Database.Callback().Query().Remove("test:wait_for_deadline"))
+	require.NoError(t, api.RDB.Database.Callback().Row().Remove("test:wait_for_deadline"))
+	eventReadTimeout = oldEvent
+	_, err = api.Events(ctx(), plain)
+	assert.NoError(t, err)
 }
