@@ -103,11 +103,11 @@ describe('the access-scope switch', () => {
 
   // Someone else published between this view's render and the click: the server refuses the
   // stated version, and the panel says so and reloads rather than reporting a publish.
-  it('says so, and reloads, when the group moved on before the first publish', async () => {
+  it.each([undefined, 'STALE_WRITE'])('recognizes a stale publish with code %s and reloads', async (code) => {
     h.group = group({ activeVersion: null });
     h.publish.mockRejectedValue(
       new GraphQLRequestError('entity group was modified by another writer; reload and try again', 200, [
-        { message: 'entity group was modified by another writer; reload and try again' },
+        { message: code ? 'Obsolete revision' : 'entity group was modified by another writer; reload and try again', extensions: code ? { code } : undefined },
       ]),
     );
     render(<AccessScopePanel token="north" />);

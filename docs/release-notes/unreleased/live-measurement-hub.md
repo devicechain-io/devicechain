@@ -4,12 +4,12 @@ section: whats-new
 
 ## en
 
-- **Live measurement subscriptions share one feed per tenant.** Each event-management pod now reads a tenant's live readings once and hands each `measurementStream` subscription only its device's readings, so a dashboard with many devices no longer multiplies the work per event. What a subscription receives is unchanged. A pod refuses more than 5,000 concurrent `measurementStream` subscriptions per tenant with `LIMIT_EXCEEDED`; close unused live views or spread clients across pods.
+- **Live measurement, alarm, and detection subscriptions share feeds per tenant.** Each service pod now reads each tenant's live feed once for `measurementStream`, `alarmStream`, and `detectionStream`, decoding each message once and dispatching by device, alarm originator, or detection profile before applying each subscriber's filters and access scope. A dashboard with many subscriptions no longer multiplies the decoding work per event. What a subscription receives is unchanged. The new per-pod subscription ceiling is under [Before you upgrade to v1.7.0](#v170-before-upgrade).
 
 ## es
 
-- **Las suscripciones de mediciones en vivo comparten un flujo por inquilino.** Cada pod de event-management ahora lee una sola vez las lecturas en vivo de un inquilino y entrega a cada suscripción `measurementStream` solo las lecturas de su dispositivo, de modo que un panel con muchos dispositivos ya no multiplica el trabajo por evento. Lo que recibe una suscripción no cambia. Un pod rechaza más de 5.000 suscripciones `measurementStream` simultáneas por inquilino con `LIMIT_EXCEEDED`; cierre las vistas en vivo que no utilice o distribuya los clientes entre varios pods.
+- **Las suscripciones en vivo comparten un flujo por inquilino.** Cada pod lee ahora una sola vez el flujo en vivo de un inquilino y entrega a cada suscripción solo lo que le corresponde: las lecturas de su dispositivo en `measurementStream`, las alarmas de su originador en `alarmStream` y las detecciones de su perfil en `detectionStream`, de modo que un panel con muchos dispositivos ya no multiplica el trabajo por evento. Lo que recibe una suscripción no cambia. El nuevo límite de suscripciones por pod está en [Antes de actualizar a v1.7.0](#v170-before-upgrade).
 
 ## zh-CN
 
-- **实时测量订阅按租户共享一个数据流。** 每个 event-management Pod 现在只读取一次租户的实时读数，并仅向每个 `measurementStream` 订阅分发其设备的读数，因此包含大量设备的仪表板不再让每个事件的处理工作成倍增加。订阅收到的内容保持不变。每个 Pod 对每个租户最多允许 5,000 个并发 `measurementStream` 订阅，超出时返回 `LIMIT_EXCEEDED`；请关闭不用的实时视图，或将客户端分散到多个 Pod。
+- **实时订阅按租户共享一个数据流。** 每个 Pod 现在只读取一次租户的实时数据流，并只向每个订阅分发属于它的内容：`measurementStream` 收到其设备的读数，`alarmStream` 收到其发起方的告警，`detectionStream` 收到其配置文件的检测结果，因此包含大量设备的仪表板不再让每个事件的处理工作成倍增加。订阅收到的内容保持不变。新的每 Pod 订阅上限见[升级到 v1.7.0 前](#v170-before-upgrade)。
