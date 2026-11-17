@@ -163,7 +163,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(w, r, http.StatusServiceUnavailable, "too many uploads are in progress; retry shortly")
 		return
 	}
-	if err := h.api.ClaimUpload(ctx, artifact); err != nil {
+	stamp, err := h.api.ClaimUpload(ctx, artifact)
+	if err != nil {
 		var re *model.RefusalError
 		if errors.As(err, &re) {
 			refuse(w, r, http.StatusConflict, re.Msg)
@@ -173,7 +174,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(w, r, http.StatusInternalServerError, "internal error")
 		return
 	}
-	defer h.release(artifact)
+	defer h.release(artifact, stamp)
 
 	// 3. Stream.
 	rc := http.NewResponseController(w)
@@ -224,7 +225,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 5. Commit.
-	if err := h.api.CompleteUpload(ctx, artifact, ref); err != nil {
+	if err := h.api.CompleteUpload(ctx, artifact, stamp, ref); err != nil {
 		h.discard(ref, token)
 		var re *model.RefusalError
 		if errors.As(err, &re) {
@@ -248,11 +249,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // request for the same reason discard does: the usual reason to be here with a dead request
 // is a client that went away, and the lease must still be freed so a retry is not made to
 // wait out its expiry.
-func (h *Handler) release(a *model.Artifact) {
+func (h *Handler) release(a *model.Artifact, stamp time.Time) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), cleanupBudget)
 	defer cancel()
 	ctx = core.WithTenant(ctx, a.TenantId)
-	if err := h.api.ReleaseUpload(ctx, a); err != nil {
+	if err := h.api.ReleaseUpload(ctx, a, stamp); err != nil {
 		log.Warn().Err(err).Str("artifact", a.Token).Msg("could not release an artifact upload lease; it expires on its own")
 	}
 }
