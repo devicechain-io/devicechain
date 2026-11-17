@@ -8,6 +8,9 @@
 import { viewerLocale } from '@devicechain/widget-sdk';
 
 export interface AlarmStrings {
+  countUnit: (count: number) => string;
+  worst: (severity: string) => string;
+  countLabel: (count: number, severity: string | undefined) => string;
   // The tab strip's accessible name.
   tabsLabel: string;
   // The first tab: every alarm in scope.
@@ -58,8 +61,11 @@ export interface AlarmStrings {
   };
 }
 
-export const ALARM_STRINGS: Record<'en' | 'es', AlarmStrings> = {
+export const ALARM_STRINGS: Record<'en' | 'es' | 'zh-CN', AlarmStrings> = {
   en: {
+    countUnit: (n) => n === 1 ? 'alarm' : 'alarms',
+    worst: (severity) => `worst ${severity}`,
+    countLabel: (n, severity) => `${n} ${n === 1 ? 'alarm' : 'alarms'}${severity ? `, worst severity ${severity}` : ''}`,
     tabsLabel: 'Alarms by device type',
     all: 'All',
     deviceType: 'Device type',
@@ -98,6 +104,9 @@ export const ALARM_STRINGS: Record<'en' | 'es', AlarmStrings> = {
     },
   },
   es: {
+    countUnit: (n) => n === 1 ? 'alarma' : 'alarmas',
+    worst: (severity) => `la peor: ${severity}`,
+    countLabel: (n, severity) => `${n} ${n === 1 ? 'alarma' : 'alarmas'}${severity ? `, mayor severidad: ${severity}` : ''}`,
     tabsLabel: 'Alarmas por tipo de dispositivo',
     all: 'Todas',
     deviceType: 'Tipo de dispositivo',
@@ -135,8 +144,30 @@ export const ALARM_STRINGS: Record<'en' | 'es', AlarmStrings> = {
       failed: 'No se pudieron leer los recuentos de alarmas.',
     },
   },
+  'zh-CN': {
+    countUnit: () => '条告警',
+    worst: (severity) => `最高严重程度：${severity}`,
+    countLabel: (n, severity) => `${n} 条告警${severity ? `，最高严重程度：${severity}` : ''}`,
+    tabsLabel: '按设备类型查看告警', all: '全部', deviceType: '设备类型',
+    activeBadge: (n, worst) => `${n} 条活动告警，最高严重程度：${worst}`,
+    severity: { CRITICAL: '危急', MAJOR: '严重', MINOR: '次要', WARNING: '警告', INDETERMINATE: '未确定' },
+    rows: {
+      scrollLabel: '告警', severity: '严重程度', status: '状态', originator: '来源', alarm: '告警', value: '值',
+      raised: '触发时间', actions: '操作', active: '活动', acknowledged: '已确认', cleared: '已清除',
+      loading: '正在加载…', empty: '暂无告警', acknowledge: '确认', clear: '清除',
+      acknowledgeAlarm: (key) => `确认告警 ${key}`, clearAlarm: (key) => `清除告警 ${key}`,
+      failed: '操作失败，请重试', drill: (token) => `在关联组件中显示 ${token}`,
+      shown: (shown, total) => `显示 ${total} 条中的 ${shown} 条`,
+    },
+    breakdown: {
+      label: '按严重程度查看告警', total: (n) => `${n} 条告警`, ofType: (n, type) => `${type} 类型设备上的 ${n} 条告警`,
+      item: (severity, n) => `${severity}：${n}`, loading: '正在加载告警…',
+      unsupported: '此数据源无法按严重程度统计告警。', failed: '无法读取告警数量。',
+    },
+  },
 };
 
 export function alarmStrings(locale: string | undefined = viewerLocale()): AlarmStrings {
-  return locale?.toLowerCase().split('-')[0] === 'es' ? ALARM_STRINGS.es : ALARM_STRINGS.en;
+  const language = locale?.toLowerCase().split('-')[0];
+  return language === 'es' ? ALARM_STRINGS.es : language === 'zh' ? ALARM_STRINGS['zh-CN'] : ALARM_STRINGS.en;
 }

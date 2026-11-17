@@ -986,3 +986,5 @@ DeviceChain 提供的每个客户端每次请求只发送一次登录，所以�
    此大小适用于每个状态桶，因此确认 JetStream 卷有足够空间容纳增加的容量。
 
 Schema 稳定后，将根据它们生成详细的逐类型参考页面。
+
+`SECRET_RESUPPLY_REQUIRED` 表示更新会改变已存储凭据的目标或发送方式。使用 `updateConnector`、`updateNotificationChannel` 或 `updateAiProvider` 时，请在同一请求中重新发送 `secret`，或使用 `secret: null` 删除凭据。若连接器回滚的目标不同，请改用 `updateConnector` 并提供目标配置和凭据。

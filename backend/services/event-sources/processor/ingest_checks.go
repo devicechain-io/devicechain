@@ -69,7 +69,7 @@ func (c *IngestChecks) count(source, tenant, device, reason string) {
 		device = device[:64]
 	}
 	log.Warn().Str("source", source).Str("tenant", tenant).Str("device", device).Str("reason", reason).
-		Msg("Refused an HTTP event with 401 before queueing it (logged at most once a second per reason; see total_http_ingest_refused).")
+		Msg("Refused an HTTP event before queueing it (logged at most once a second per reason; see total_http_ingest_refused).")
 }
 
 // sampler lets one event through per interval per key.

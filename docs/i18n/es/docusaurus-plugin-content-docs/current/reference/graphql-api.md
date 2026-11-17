@@ -1267,3 +1267,5 @@ Cuando se dispare la alerta, lo más probable es que alguien esté probando much
 
 Se generarán páginas de referencia detalladas por tipo a partir de los esquemas a medida que se
 estabilicen.
+
+`SECRET_RESUPPLY_REQUIRED` indica que una actualización cambiaría el destino o la presentación de una credencial almacenada. En `updateConnector`, `updateNotificationChannel` o `updateAiProvider`, vuelve a enviar `secret` en la misma solicitud o bórralo con `secret: null`. Para restaurar un conector con otro destino, usa `updateConnector` con la configuración de destino y su credencial.
