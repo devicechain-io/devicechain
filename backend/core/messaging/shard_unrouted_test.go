@@ -150,6 +150,13 @@ func TestUnroutedWriteControls(t *testing.T) {
 				case "count-one":
 					cfg.Count = 1
 				case "enabled-routing":
+					// A routed ordered writer or round publisher on a sharded suffix must
+					// also come from an area that declares forwarding into it
+					// (requireForwarder), so build every handle from such an area: the
+					// control is that routing enabled lets the handle be built at all.
+					forwarders := streams.ForwardersInto(streams.InboundEvents)
+					require.NotEmpty(t, forwarders)
+					m.Microservice.FunctionalArea = forwarders[0]
 					require.NoError(t, m.EnableStreamSharding(shardRouterFunc(n1Router), cfg))
 				}
 				m.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups = cfg
