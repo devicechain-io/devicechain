@@ -40,7 +40,7 @@ const docsVersions = {
 
 const config: Config = {
   title: 'DeviceChain',
-  tagline: 'A modern, cloud-native IoT Application Enablement Platform',
+  tagline: 'The open-source IoT platform, ready for AI agents',
   favicon: 'img/favicon.svg',
 
   url: 'https://docs.devicechain.io',
@@ -197,6 +197,21 @@ const config: Config = {
     // twitter:image). It is the marketing site's card, kept identical so a
     // shared link looks the same whichever site it points at.
     image: 'img/social-card.png',
+    // The site-wide default description and keywords. A docs page replaces the description
+    // with its own (from front matter or its first paragraph), so this is what a page
+    // without one, and the site as a whole, is described by.
+    metadata: [
+      {
+        name: 'description',
+        content:
+          'DeviceChain is the open-source IoT platform, ready for AI agents, that you run on Kubernetes: MQTT, HTTP, Sparkplug B, LwM2M and LoRaWAN ingest, rules, alarms, commands, OTA updates, dashboards and an optional MCP server for AI assistants.',
+      },
+      {
+        name: 'keywords',
+        content:
+          'iot platform, open-source iot, self-hosted iot, mqtt, sparkplug b, lwm2m, lorawan, kubernetes, mcp server, ai agents, ota updates',
+      },
+    ],
     navbar: {
       title: 'DeviceChain',
       logo: {

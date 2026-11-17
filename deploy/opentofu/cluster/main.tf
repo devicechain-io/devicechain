@@ -249,6 +249,9 @@ module "object_store" {
   # object store and are supplied rather than minted.
   storage       = var.backup_object_store_storage
   storage_class = var.backup_object_store_storage_class
+  # Decided by the caller from inputs, never by listing the cluster's classes:
+  # the class's count must be known when a fresh cluster is planned.
+  standard_disk_class = var.backup_object_store_gke_standard_disk
 
   depends_on = [module.namespace]
 }
