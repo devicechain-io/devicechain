@@ -16,6 +16,7 @@ func TestSingletonLockKeys(t *testing.T) {
 		want int64
 	}{
 		{agentEffectsDrainLockName, 2217645974197667389},
+		{entityDeletionDrainLockName, -8927562942761546113},
 		{ownershipDrainLockName, 5481199707940735846},
 		{sessionKickDrainLockName, 286895151743108058},
 	} {
