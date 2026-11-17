@@ -175,6 +175,7 @@ export interface SessionTokensOptions {
     refresh: (refreshToken: string) => Promise<TokenPair>;
     onEnd: (err?: unknown) => void;
     skewSeconds?: number;
+    transientRefreshErrors?: 'null' | 'throw';
 }
 ```
 

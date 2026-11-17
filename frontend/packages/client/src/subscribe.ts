@@ -98,9 +98,10 @@ function clientFor(area: Area): AreaClient {
       // 4409, 4429) are fatal inside graphql-ws whatever this answers, so an expired or
       // refused token still reaches subscribe() below and the session flow, never a loop.
       //
-      // 🔴 And a token that could not be had FOR NOW. The session's getAccessToken throws when
-      // the held access token has expired and the refresh failed transiently (no response, a
-      // 5xx, a 429): nothing was refused and the session is kept. connectionParams lets that
+      // 🔴 And a token that could not be had FOR NOW. The session's getAccessToken, under
+      // transientRefreshErrors: 'throw', throws when the held access token has expired and the
+      // refresh failed transiently (no response, a 5xx, a 429): nothing was refused and the
+      // session is kept. connectionParams lets that
       // throw reach graphql-ws, which reports it here first and then closes the socket with
       // 4005; answering false made every subscription on the area error out over an outage of
       // the identity service, and nothing reopened them. It is retried like a dropped socket,

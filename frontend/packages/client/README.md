@@ -97,7 +97,7 @@ const session = createSessionTokens({
     (await gql('user-management', REFRESH, { refreshToken }, { anonymous: true })).refresh,
   onEnd: (err) => {
     store.pair = null;
-    showSignIn(err); // refused, lapsed, or offline past expiry
+    showSignIn(err); // the server refused the refresh, or the refresh token lapsed
   },
 });
 setAuthTokenGetter(session.getAccessToken);
@@ -108,10 +108,23 @@ const stop = session.startAutoRefresh(); // optional: refresh on a timer, not on
 
 A refusal from the server, such as an invalid or revoked refresh token, ends the
 session at once. A transient failure never does: no response, a 5xx, or a 429. While
-the access token is still valid, callers keep getting it; once it has expired,
-`getAccessToken` rejects with the transient error and the next call tries again.
-`startAutoRefresh` retries with jittered backoff for as long as the refresh token is
-valid. A session that only ever fails transiently ends when its refresh token lapses.
+the access token is still valid, callers keep getting it. Once it has expired,
+`getAccessToken` resolves to `null` for that call, the session is kept, and the next
+call tries again. `startAutoRefresh` retries with jittered backoff for as long as the
+refresh token is valid. A session that only ever fails transiently ends when its
+refresh token lapses.
+
+A `null` sends the request without a token, so the server answers it with a 401. To
+fail it with the outage instead, opt in with `transientRefreshErrors: 'throw'`:
+
+```ts
+const session = createSessionTokens({ ...options, transientRefreshErrors: 'throw' });
+```
+
+`getAccessToken` then rejects with the transient error (a `GraphQLRequestError` with
+status 0, 429 or 5xx) in that window, and still resolves to `null` when signed out or
+after a refusal. `gql` rejects with that error, and a subscription reconnect retries
+it with its usual back-off. The console and the dashboard app run in this mode.
 
 `decodeToken`, `isExpired` and `hasAuthority` are exported for reading claims
 client-side. They decode, they do not verify — the server is the authority.
@@ -122,7 +135,7 @@ for **one replay** of the same operation. Use `session.forceRefresh(token)` for
 tenant tokens: it bypasses the expiry check, shares an in-flight refresh, and never
 returns the rejected token. When the server refuses the refresh it ends the session
 and returns null; when the refresh fails transiently (no response, a 5xx or a 429)
-it throws that error and keeps the session, exactly as `getAccessToken` does. It
+it throws that error and keeps the session, whatever `transientRefreshErrors` says. It
 returns null for a token belonging to a replaced session. Identity tokens have no
 refresh path; return null for that lane. Anonymous login/refresh requests never
 invoke the handler. If recovery returns null or the replay also gets 401,
@@ -161,9 +174,10 @@ The socket carries subscriptions only; send queries and mutations over HTTP. The
 server closes it with code `4401` when the access token it opened with expires.
 `subscribe` handles that close for you: it reconnects once with a freshly resolved
 token, subscribes again, and reports the reconnect as `connected(true)`, so re-query
-anything you must not miss when you see it. A reconnect whose token getter fails
-transiently (the access token has expired and the refresh got no response, a 5xx or a
-429) is retried with the same back-off as a dropped network, rather than ending the
+anything you must not miss when you see it. A reconnect whose token getter rejects
+with a transient refresh error (as `getAccessToken` does under
+`transientRefreshErrors: 'throw'` when the access token has expired and the refresh got
+no response, a 5xx or a 429) is retried with the same back-off as a dropped network, rather than ending the
 subscription with that error. A refused refresh still ends the session.
 
 For a subscription with no variables, the third argument is still required:
