@@ -1,4 +1,5 @@
 {{/*
+Public API routes target only the graphql port; metrics and probes use ops (8083), never routed.
 The same routing as ingress.yaml, expressed as Gateway API objects: one Gateway and the
 HTTPRoutes that attach to it. Rendered when ingress.enabled and ingress.controller is
 gateway; the Ingress objects are then not rendered, so exactly one front end serves the
