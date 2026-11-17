@@ -290,7 +290,8 @@ func initializeOrphanSweep(ctx context.Context) error {
 		log.Warn().Msg("Orphan sweep disabled: service secret or endpoints are not configured; degraded mode relies on deletion facts alone")
 		return nil
 	}
-	client := svcclient.NewPeers(infra, Microservice.FunctionalArea).Client(auth.DeviceRead, auth.TenantRead)
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+	client := peers.Client(auth.DeviceRead, auth.TenantRead)
 	source := &processor.DeviceLookup{Client: client,
 		DMURL:     infra.DeviceManagement.Endpoint().GraphQLURL(),
 		UMURL:     infra.UserManagement.Endpoint().GraphQLURL(),
