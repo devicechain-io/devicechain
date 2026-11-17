@@ -209,7 +209,7 @@ type MqttEventSource struct {
 	readings ReadingGate
 	// admit reports whether the ingest pipeline is accepting events (see
 	// HttpEventSource.admit). Asked after the tenant's own ceiling. Never nil.
-	admit func(source string) error
+	admit func(tenant, source string) error
 	// owns reports whether this pod still owns the source (see OwnedMqttSource), and is
 	// asked FIRST for every message: a message delivered to a pod that has lost the source
 	// is dropped, because the pod that took it over is reading the same messages and this
@@ -285,7 +285,7 @@ func NewMqttEventSource(id string, clientID string, config map[string]string, tl
 	received func(string, []byte),
 	publisher EventPublisher,
 	failed func(string, string, []byte, error) error,
-	allow RateGate, readings ReadingGate, admit func(source string) error, owns func() bool,
+	allow RateGate, readings ReadingGate, admit func(tenant, source string) error, owns func() bool,
 	fail func(error)) (*MqttEventSource, error) {
 	if fail == nil {
 		return nil, errNoFailHook
@@ -513,7 +513,7 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 	// by admit (total_msg_backpressured), which is all that can be done on a broker the
 	// platform does not own. The platform's own broker keeps such messages instead, in the
 	// capture stream (see GatewayJetStreamSource).
-	if es.admit(es.Id) != nil {
+	if es.admit(tenant, es.Id) != nil {
 		return
 	}
 
