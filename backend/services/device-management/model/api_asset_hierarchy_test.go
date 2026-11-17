@@ -37,7 +37,7 @@ func hierarchyTestApi(t *testing.T) (*Api, context.Context) {
 	require.NoError(t, db.AutoMigrate(&EntityGroupFacetRef{},
 		&AssetType{}, &Asset{}, &DeviceType{}, &Device{},
 		&CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &DeviceClaim{},
-		&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{},
+		&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{},
 	), "migrate")
 
 	api := NewApi(&rdb.RdbManager{Database: db})

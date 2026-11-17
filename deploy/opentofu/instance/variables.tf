@@ -1018,3 +1018,9 @@ variable "backup_secret_access_key_key" {
   type        = string
   default     = "MINIO_ROOT_PASSWORD"
 }
+
+variable "nats_shard_groups" {
+  description = "Opt-in shard group count; zero leaves the broker configuration unchanged."
+  type        = number
+  default     = 0
+}

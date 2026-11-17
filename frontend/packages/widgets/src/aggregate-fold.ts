@@ -19,6 +19,7 @@ import {
   type MeasurementAggregate,
   type MeasurementBucket,
 } from '@devicechain/dashboards';
+import { aggregateStrings } from './aggregate-strings';
 
 export class AggregateFieldsError extends Error {
   constructor(message: string) {
@@ -33,14 +34,14 @@ export function aggregateBuckets(buckets: readonly MeasurementBucket[]): Record<
   const out: Record<string, MeasurementAggregate> = {};
   for (const b of buckets) {
     if (typeof b.count !== 'number') {
-      throw new AggregateFieldsError(`the bucket at ${b.bucketStart} for "${b.name}" carries no reading count`);
+      throw new AggregateFieldsError(aggregateStrings().missingCount(b.bucketStart, b.name));
     }
     if (b.count === 0) continue;
     const { min, max, sum } = b;
     if (min == null || max == null || sum == null) {
       const missing = [min == null && 'min', max == null && 'max', sum == null && 'sum'].filter(Boolean);
       throw new AggregateFieldsError(
-        `the bucket at ${b.bucketStart} for "${b.name}" holds ${b.count} readings but no ${missing.join(', ')}`,
+        aggregateStrings().missingFields(b.bucketStart, b.name, b.count, missing.join(', ')),
       );
     }
     const a = out[b.name];
