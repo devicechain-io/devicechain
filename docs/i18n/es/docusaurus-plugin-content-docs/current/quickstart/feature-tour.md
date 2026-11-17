@@ -36,19 +36,19 @@ Calcula unos 45 minutos una vez que haya una instancia en marcha.
   ```
 
 Tres ajustes indican dónde está tu instancia. Cada uno tiene un valor por defecto que coincide con un
-`dcctl install local` normal seguido de `dcctl bootstrap local tour --host localhost --no-tls`, y cada
+`dcctl install local` normal seguido de `dcctl bootstrap local devicechain --host localhost --no-tls`, y cada
 uno puede sustituirse desde el entorno:
 
 | Variable | Valor por defecto | Defínela cuando |
 | --- | --- | --- |
 | `DC_URL` | `http://localhost` | La consola se sirve en otro host o puerto. |
-| `INSTANCE` | `tour` | Tu instancia de `dcctl` tiene otro nombre. Da nombre al namespace `dci-<instance>`, del que los scripts leen la autoridad certificadora del broker y la contraseña del superusuario. |
+| `INSTANCE` | `devicechain` | Tu instancia de `dcctl` tiene otro nombre. Da nombre al namespace `dci-<instance>`, del que los scripts leen la autoridad certificadora del broker y la contraseña del superusuario. |
 | `MQTT_HOST` | `devicechain-control-plane` | Tu clúster de kind no se llama `devicechain`. Es el nombre del contenedor del nodo del clúster, `<cluster>-control-plane`. |
 
 Si tu `kubectl` tiene más de un contexto, define también `KUBE_CONTEXT`.
 
 ```bash
-export DC_URL=http://localhost INSTANCE=devicechain MQTT_HOST=devicechain-control-plane
+export DC_URL=http://localhost MQTT_HOST=devicechain-control-plane
 ```
 
 Los dispositivos simulados son contenedores de la red de Docker `kind`, así que llegan al puerto de
