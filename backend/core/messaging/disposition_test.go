@@ -85,3 +85,11 @@ func TestDisposeNeverExhaustsAReleasedHold(t *testing.T) {
 		t.Fatalf("Dispose(released, last delivery) = %v; want Retry", got)
 	}
 }
+
+func TestDisposeNeverExhaustsUnplacedTenant(t *testing.T) {
+	for delivered := 1; delivered <= MaxDeliver+1; delivered++ {
+		if got := Dispose(Message{NumDelivered: delivered}, fmt.Errorf("forward: %w", ErrUnplacedTenant)); got != Retry {
+			t.Fatalf("Dispose(unplaced, delivery %d) = %v; want Retry", delivered, got)
+		}
+	}
+}

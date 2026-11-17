@@ -466,6 +466,12 @@ func (rp *ResolvedEventsProcessor) acquireWithBackoff() (*messaging.Lease, bool,
 
 // beginTerm acquires the partition, waits out the previous owner, and builds a term.
 func (rp *ResolvedEventsProcessor) beginTerm() (*termHandle, error) {
+	return rp.beginTermWithWait(time.After)
+}
+
+// beginTermWithWait lets tests control the handover timer without shortening the
+// production safety bound or replacing the lease's watch, renew and release path.
+func (rp *ResolvedEventsProcessor) beginTermWithWait(after func(time.Duration) <-chan time.Time) (*termHandle, error) {
 	lease, priorReleasedCleanly, err := rp.acquireWithBackoff()
 	if err != nil {
 		return nil, err
@@ -525,7 +531,7 @@ func (rp *ResolvedEventsProcessor) beginTerm() (*termHandle, error) {
 		case <-handle.ctx.Done():
 			rp.endTerm(handle)
 			return nil, handle.ctx.Err()
-		case <-time.After(termSlack):
+		case <-after(termSlack):
 		}
 	}
 
