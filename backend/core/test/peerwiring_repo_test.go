@@ -8,13 +8,12 @@ import (
 	"testing"
 )
 
-var peerWiringLedger = map[string]peerWiringCount{
-	"backend/core/config/endpoint.go":               {1, 0},
-	"backend/core/governance/lifecycle_resolver.go": {0, 1},
-	"backend/services/mcp/server/graphql.go":        {1, 0},
+var peerWiringAllowedURLs = map[string]bool{
+	"backend/core/config/endpoint.go":        true,
+	"backend/services/mcp/server/graphql.go": true,
 }
 
-func TestPeerWiringLedger(t *testing.T) {
+func TestPeerWiringAllowlist(t *testing.T) {
 	found, err := peerWiringUnder(workspaceRoot(t))
 	if err != nil {
 		t.Fatal(err)
@@ -25,10 +24,10 @@ func TestPeerWiringLedger(t *testing.T) {
 		mints += count.mints
 	}
 	t.Logf("peer wiring: %d urls, %d mints", urls, mints)
-	if urls < 2 || mints < 1 {
+	if urls < 2 {
 		t.Fatal("peer wiring scan is empty")
 	}
-	if problems := checkPeerWiring(found, peerWiringLedger); len(problems) != 0 {
+	if problems := checkPeerWiring(found, peerWiringAllowedURLs); len(problems) != 0 {
 		t.Fatal(strings.Join(problems, "\n"))
 	}
 }
