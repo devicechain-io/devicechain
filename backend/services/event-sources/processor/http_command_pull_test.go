@@ -236,6 +236,7 @@ func TestPollClampsAWaitOverTheMaximum(t *testing.T) {
 
 func TestPollerCapPerTenantIsEnforced(t *testing.T) {
 	h := newPullHarness(t, nil) // cap 2
+	h.backend.tokens["tok-d3"] = &PullDevice{Token: "d3", OptedIn: true}
 	var wg sync.WaitGroup
 	held := func(path, token string) {
 		defer wg.Done()
@@ -250,7 +251,7 @@ func TestPollerCapPerTenantIsEnforced(t *testing.T) {
 		return h.rt.pollers["acme"] == 2
 	}, 2*time.Second, 10*time.Millisecond)
 
-	over := h.do(t, http.MethodGet, pullPath+"?wait=2", "tok-d1", "")
+	over := h.do(t, http.MethodGet, "/inst-1/acme/devices/d3/commands?wait=2", "tok-d3", "")
 	assert.Equal(t, http.StatusTooManyRequests, over.StatusCode)
 	assert.NotEmpty(t, over.Header.Get("Retry-After"))
 	assert.Equal(t, 1, h.count("poll/poller_cap"))
