@@ -127,6 +127,9 @@ func installClusterVars(ctx context.Context, st *State, typed kubernetes.Interfa
 	if err := settleClusterFrontEnd(ctx, st, typed); err != nil {
 		return nil, err
 	}
+	if err := settleBackupStandardDisk(ctx, st, typed); err != nil {
+		return nil, err
+	}
 	cluster, _, err := splitVars(infraVars(st))
 	return cluster, err
 }

@@ -67,6 +67,8 @@ func TestAStalledClearChannelDoesNotDelayEscalation(t *testing.T) {
 		}
 	}
 
+	// Advance beyond the window measured from dispatch, independently of event time.
+	n.now = func() time.Time { return time.Now().Add(20 * time.Minute) }
 	s := &EscalationScheduler{Api: api, Notifier: n, defaultMax: 5}
 	start = time.Now()
 	if err := s.runOnce(context.Background()); err == nil {

@@ -172,7 +172,9 @@ func newDmWorld(t *testing.T) *dmWorld {
 		&dmmodel.DetectionRule{}, &dmmodel.DetectionRuleScopeRef{}, &dmmodel.EntityAttribute{},
 		&dmmodel.EntityGroupMembership{}, &dmmodel.EntityGroupFacetRef{}, &dmmodel.EntityRelationship{},
 		&dmmodel.EntityRelationshipType{}, &dmmodel.Alarm{}, &dmmodel.DeviceCredential{}, &dmmodel.DeviceReplacement{}, &dmmodel.DeviceAlias{},
-		&dmmodel.DeviceConfigurationRevision{}, &dmmodel.DeviceConfigurationState{}); err != nil {
+		&dmmodel.DeviceConfigurationRevision{}, &dmmodel.DeviceConfigurationState{},
+		// A device delete queues its deletion fact in the same transaction (the outbox).
+		&dmmodel.PendingEntityDeletion{}); err != nil {
 		t.Fatalf("migrate device-management: %v", err)
 	}
 	// The one-live-row-per-key index the appended migration builds; attribute writes

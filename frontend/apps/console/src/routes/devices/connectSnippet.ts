@@ -32,8 +32,15 @@ export const PLACEHOLDER = {
   accessToken: '<access-token>',
 } as const;
 
-// The broker's MQTT listener port (TLS) and the HTTP ingest listener's default port.
-export const MQTT_PORT = 1883;
+// The port a device outside the cluster reaches the broker on. Every way an operator exposes
+// the broker (the Gateway's TLS passthrough listener, or a LoadBalancer Service) publishes the
+// broker's TLS listener on 8883 and nothing else: 1883 is the broker's port INSIDE the cluster,
+// never published, so a command aimed at the exposed host on 1883 could not connect. A local
+// kind cluster maps 1883 on the machine instead, which the hint under the commands says.
+export const MQTT_PORT = 8883;
+// The broker's port on a local kind cluster, where dcctl maps it to localhost.
+export const LOCAL_MQTT_PORT = 1883;
+// The HTTP ingest listener's default port.
 export const HTTP_INGEST_PORT = 8081;
 // The file name the instance CA is saved under, as the device guide names it.
 export const CA_FILE = 'instance-ca.crt';
