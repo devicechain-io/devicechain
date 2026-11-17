@@ -207,10 +207,10 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 	host, port := startEmbeddedNats(t)
 
 	prevMs, prevGql, prevNats, prevRdb := Microservice, GraphQLManager, NatsManager, RdbManager
-	prevProc, prevWriter, prevSvc, prevOwners := StateProcessor, InboundEventsWriter, Svc, OwnershipProcessor
+	prevProc, prevWriter, prevSvc, prevOwners := StateProcessors, InboundEventsWriter, Svc, OwnershipProcessor
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, RdbManager = prevMs, prevGql, prevNats, prevRdb
-		StateProcessor, InboundEventsWriter, Svc, OwnershipProcessor = prevProc, prevWriter, prevSvc, prevOwners
+		StateProcessors, InboundEventsWriter, Svc, OwnershipProcessor = prevProc, prevWriter, prevSvc, prevOwners
 	})
 
 	area := fmt.Sprintf("device-state-shutdown-%d", time.Now().UnixNano())
@@ -272,10 +272,10 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 	// there and it has to be stoppable. Initialized-not-started is enough: this test is
 	// about what happens AFTER it stops, and a stop from Initialized is legal precisely
 	// so a half-started service still tears itself down.
-	StateProcessor = processor.NewStateProcessor(Microservice, nil,
+	StateProcessors = []*processor.StateProcessor{processor.NewStateProcessor(Microservice, nil,
 		core.NewNoOpLifecycleCallbacks(), nil, processor.NewStateMetrics(Microservice),
-		Microservice.NewPeriodicTaskMetrics("inactivity_sweep"))
-	require.NoError(t, StateProcessor.Initialize(context.Background()))
+		Microservice.NewPeriodicTaskMetrics("inactivity_sweep"))}
+	require.NoError(t, StateProcessors[0].Initialize(context.Background()))
 	// The ownership consumer is stopped unconditionally too, for the same reason.
 	OwnershipProcessor = processor.NewOwnershipProcessor(Microservice, nil, nil, core.NewNoOpLifecycleCallbacks())
 	require.NoError(t, OwnershipProcessor.Initialize(context.Background()))

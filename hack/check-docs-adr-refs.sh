@@ -15,6 +15,8 @@
 #
 #   Rendered documentation   docs/docs, docs/versioned_docs, docs/versioned_sidebars,
 #                            docs/i18n, docs/blog, docs/src             -> NO ADR refs
+#   Release-notes fragments  docs/release-notes (folded into the release-notes
+#                            page by hack/assemble-release-notes.py)    -> NO ADR refs
 #   Draft feature docs       docs-drafts/**/*.md, body only            -> NO ADR refs
 #   npm registry metadata    frontend/packages/*/package.json          -> NO ADR refs
 #   npm package readme       frontend/packages/*/README.md, scanned whole -> NO ADR refs
@@ -73,7 +75,10 @@ cd "$ROOT"
 # translations live under docs/i18n/<locale>/.../version-X.Y (already covered by
 # docs/i18n). A snapshot is a copy cut from a tree this guard already passed, so it
 # starts clean, and scanning it keeps a hand-edit of a frozen page honest.
-TARGETS=(docs/docs docs/versioned_docs docs/versioned_sidebars docs/i18n docs/blog docs/src)
+# docs/release-notes holds the release-notes FRAGMENTS: not rendered where they sit, but
+# hack/assemble-release-notes.py inserts them verbatim into the release-notes page, so they
+# are published prose from the PR that writes them.
+TARGETS=(docs/docs docs/versioned_docs docs/versioned_sidebars docs/i18n docs/blog docs/src docs/release-notes)
 PATTERN='ADR-[0-9]{3}'
 
 scan() {
