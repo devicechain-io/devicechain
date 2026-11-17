@@ -159,6 +159,12 @@ jobs:
       - name: release-highlights guard self-test
         run: hack/check-release-highlights.sh --self-test
 
+      # The release job's changelog base runs only on a tag, and a wrong base publishes a
+      # changelog that starts a minor too early (v1.5.0's started at v1.3.0). The self-test is
+      # the part that runs on every PR, before a release needs the base.
+      - name: changelog base self-test
+        run: hack/changelog-base.sh --self-test
+
       # The chart stamp runs only on a tag; a broken flag mislabels a release in Artifact Hub.
       # The self-test is the part that runs on every PR, before a release needs the stamp.
       - name: chart prerelease stamp self-test
