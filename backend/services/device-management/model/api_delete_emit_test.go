@@ -17,13 +17,14 @@ import (
 )
 
 // captureEntityPublisher records the entity-deletion events emitted, so a test can
-// assert the delete path published them (ADR-044).
+// assert the drain published them (ADR-044).
 type captureEntityPublisher struct {
 	events []*entityevent.EntityDeletedEvent
 }
 
-func (c *captureEntityPublisher) PublishEntityDeleted(_ context.Context, e *entityevent.EntityDeletedEvent) {
+func (c *captureEntityPublisher) PublishEntityDeleted(_ context.Context, e *entityevent.EntityDeletedEvent) error {
 	c.events = append(c.events, e)
+	return nil
 }
 
 func newDeleteEmitTestApi(t *testing.T) *Api {
@@ -39,7 +40,7 @@ func newDeleteEmitTestApi(t *testing.T) *Api {
 	// attributes, alarms, and (for a device) credentials before the row — so every
 	// table it touches must exist.
 	if err := db.AutoMigrate(&EntityGroupFacetRef{}, &Device{}, &DeviceType{}, &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{}, &IntegrationUnregisteredDevice{}, &DeviceConfigurationRevision{}, &DeviceConfigurationState{}, &PendingSessionKick{}, &PendingRevocationKick{}, &PendingRevocationExpansion{}, &PendingRevocationExpansionSerial{},
-		&EntityRelationship{}, &PendingOwnershipFact{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{}); err != nil {
+		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
@@ -48,9 +49,8 @@ func newDeleteEmitTestApi(t *testing.T) *Api {
 	return NewApi(&rdb.RdbManager{Database: db})
 }
 
-// DeleteDevice (via deleteEdgeEntity) emits an entity-deletion event on success —
-// the whole point of ADR-044 decision 2 — and emits nothing when the token resolves
-// to no entity or when no publisher is wired.
+// DeleteDevice queues a deletion fact; the drain publishes it after commit.
+// A token resolving to no entity queues nothing.
 func TestDeleteDevice_EmitsEntityDeleted(t *testing.T) {
 	api := newDeleteEmitTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
@@ -66,6 +66,9 @@ func TestDeleteDevice_EmitsEntityDeleted(t *testing.T) {
 	deleted, err := api.DeleteDevice(ctx, "dev-1")
 	assert.NoError(t, err)
 	assert.True(t, deleted)
+	assert.Empty(t, capture.events, "the delete published by itself; only the drain publishes")
+	_, err = api.DrainEntityDeletions(ctx, EntityDeletionDrainPageSize)
+	assert.NoError(t, err)
 	if assert.Len(t, capture.events, 1, "a successful delete emits exactly one event") {
 		assert.Equal(t, entity.TypeDevice, capture.events[0].EntityType)
 		assert.Equal(t, dev.ID, capture.events[0].EntityId)
