@@ -15,15 +15,46 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Run the full suite on a chosen commit. Pushes to main share ONE queue (see
+  # concurrency below), so a main commit merged in a burst may never get a push run
+  # of its own. When a specific commit needs its own green run -- a release tag, or
+  # bisecting a main break across a burst -- dispatch it:
+  #   gh workflow run ci.yml --ref vX.Y.Z-rc.N        # a tag
+  #   git push origin <sha>:refs/heads/ci/<name>      # any other commit, then
+  #   gh workflow run ci.yml --ref ci/<name>
+  # A dispatch always selects every job (hack/ci-select.py), like a push.
+  workflow_dispatch:
 
 # Least privilege: validation jobs only need to read the repo.
 permissions:
   contents: read
 
-# Keep each pushed commit in its own group so later main pushes cannot replace it.
-# This fits the existing concurrency block; superseded PR runs still cancel.
+# Who waits for whom, by event:
+#
+#   pull_request   grouped by the PR's ref, and a new push to the PR CANCELS the run
+#                  in progress: a superseded head is not evidence about anything.
+#   push to main   ONE group for the branch, never cancelled. GitHub keeps at most one
+#                  running and one PENDING run per group, and a newer pending run
+#                  replaces the older pending one. So the run in progress always
+#                  finishes, and the newest main commit always gets a run -- but a
+#                  commit merged while another was already pending is skipped.
+#   push elsewhere grouped by commit SHA (no such trigger today; kept so adding one
+#                  for a release branch or tag cannot silently collapse its runs).
+#   dispatch       a group of its own (run_id): a chosen commit is never queued
+#                  behind, or replaced by, the main queue.
+#
+# Why main is a queue and not one run per commit: each main run is the FULL suite
+# (~460 job-minutes; ci-select.py selects everything off a pull_request), and a merge
+# burst of 32 PRs once queued 28 of them, starving every open PR of runners. Every PR
+# must already be green to merge, and each main run tests the whole tree up to its
+# commit, so a skipped commit is covered by the next main run; a break found there is
+# bisected with the workflow_dispatch above.
+#
+# (Before this, push runs were grouped per SHA. Earlier still they were grouped by ref
+# with cancel-in-progress on, so each merge cancelled the RUNNING main run and main
+# could go hours without a completed run. Neither failure is possible here.)
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  group: ci-${{ github.workflow }}-${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && github.ref || github.event_name == 'push' && github.sha || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
