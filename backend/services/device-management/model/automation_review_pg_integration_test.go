@@ -106,3 +106,7 @@ func TestAutomationReviewPostgresEvidenceAndPublication(t *testing.T) {
 		require.EqualValues(t, 1, events[0].RowsAffected)
 	}
 }
+
+func TestDeleterOnAnotherProfileCanApprovePostgres(t *testing.T) {
+	testDeleterOnAnotherProfileCanApprove(t, newPGEnforcementRig(t))
+}

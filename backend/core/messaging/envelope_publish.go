@@ -109,9 +109,14 @@ type roundPublisher struct {
 }
 
 // NewRoundPublisher builds the RoundPublisher for suffix; the stream is created if needed.
+// A selected sharded suffix requires a declared forwarding reader in this area. Like the
+// ordered writer, a round publisher forwards already-fetched messages without refusing.
 func (nmgr *NatsManager) NewRoundPublisher(suffix string) (RoundPublisher, error) {
 	nmgr.freezeStreamRouting()
 	if err := nmgr.refuseUnroutedWrite(suffix); err != nil {
+		return nil, err
+	}
+	if err := nmgr.requireForwarder(suffix); err != nil {
 		return nil, err
 	}
 	if err := nmgr.requireWriter(suffix); err != nil {
@@ -140,12 +145,6 @@ func (r *roundPublisher) Publish(ctx context.Context, msg Message) (out PubAckIn
 	subject, err := r.nmgr.tenantSubject(ctx, r.suffix, "")
 	if err != nil {
 		return PubAckInfo{}, err
-	}
-	if r.nmgr.streamSharding().selects(r.suffix) && !msg.BypassBackpressure {
-		if err := r.nmgr.publishBackpressure(ctx, r.suffix); err != nil {
-			r.nmgr.countRoutedRefused(ctx, r.suffix, 1)
-			return PubAckInfo{}, err
-		}
 	}
 	nm, spans := startPublishMessage(ctx, subject, r.suffix, msg)
 	if len(spans) > 0 {

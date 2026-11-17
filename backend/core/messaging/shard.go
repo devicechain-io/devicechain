@@ -21,12 +21,14 @@ import (
 // ErrUnplacedTenant refuses a publish whose tenant placement cannot be established.
 var ErrUnplacedTenant = errors.New("messaging: tenant has no valid shard-group placement")
 
-// ErrShardRoutingNotEnabled refuses handles on instance-sharded streams without routing.
+// ErrShardRoutingNotEnabled refuses read and write handles on instance-sharded streams without routing.
 var ErrShardRoutingNotEnabled = errors.New("messaging: shard-group routing is not enabled")
 
-// ShardGroupRouter is satisfied by partition.Router. An error never means group zero.
+// ShardGroupRouter holds an adoptable placement. An error never means group zero.
 type ShardGroupRouter interface {
 	ShardGroup(tenant string) (int, error)
+	// Ready returns nil when routing has an adoptable placement.
+	Ready() error
 }
 
 // A non-nil snapshot also represents disabled routing, so frozen legacy
@@ -39,9 +41,7 @@ type streamShards struct {
 	cfg    config.NatsShardGroupsConfiguration
 }
 
-// EnableStreamSharding installs the opt-in routing seam once. Services do not call it yet.
-// Group streams multiply each selected stream's disk reservation by Count; budget
-// accounting is deferred to a later slice.
+// EnableStreamSharding installs the opt-in routing seam once before opening handles.
 func (nmgr *NatsManager) EnableStreamSharding(router ShardGroupRouter, cfg *config.NatsShardGroupsConfiguration) error {
 	if router == nil {
 		return fmt.Errorf("messaging: nil shard-group router")
@@ -85,6 +85,16 @@ func (nmgr *NatsManager) streamSharding() *streamShards {
 
 func (s *streamShards) selects(suffix string) bool {
 	return s != nil && slices.Contains(s.cfg.Suffixes, suffix)
+}
+
+func (nmgr *NatsManager) routingRefusal(suffix string) error {
+	s := nmgr.streamSharding()
+	if s.selects(suffix) {
+		if err := s.router.Ready(); err != nil {
+			return fmt.Errorf("%w: %w", ErrUnplacedTenant, err)
+		}
+	}
+	return nil
 }
 
 func (nmgr *NatsManager) tenantSuffix(tenant, suffix string) (string, error) {
@@ -295,4 +305,44 @@ func (nmgr *NatsManager) publishMetricSuffix(subject, suffix string) string {
 		return suffix
 	}
 	return subject[strings.LastIndexByte(subject, '.')+1:]
+}
+
+// readerDownstreams covers every stream a reader can forward into before its next fetch.
+func (nmgr *NatsManager) readerDownstreams(base string, group *int) []string {
+	if base == "" {
+		return nil
+	}
+	s := nmgr.streamSharding()
+	if !s.selects(base) {
+		return []string{base}
+	}
+	if group != nil {
+		return []string{GroupSuffix(base, *group)}
+	}
+	out := make([]string, s.cfg.Count)
+	for g := range out {
+		out[g] = GroupSuffix(base, g)
+	}
+	return out
+}
+
+func (r *natsReader) downstreamRefusal() error {
+	for _, suffix := range r.downstreams {
+		if err := r.nmgr.routingRefusal(r.nmgr.declaredSuffix(suffix)); err != nil {
+			return err
+		}
+		if err := r.nmgr.Backpressure(suffix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// requireForwarder keeps sharded forwarding writers behind a declared reader's gates.
+// Async writers have their own admission policy and use an internal constructor instead.
+func (nmgr *NatsManager) requireForwarder(suffix string) error {
+	if nmgr.streamSharding().selects(suffix) && !slices.Contains(streams.ForwardersInto(suffix), nmgr.Microservice.FunctionalArea) {
+		return fmt.Errorf("messaging: area %q must declare forwarding into sharded suffix %q in core/streams", nmgr.Microservice.FunctionalArea, suffix)
+	}
+	return nil
 }
