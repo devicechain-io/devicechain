@@ -774,6 +774,9 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 - While old and new pods overlap during the rolling upgrade, deletes handled by a `v1.6` pod are announced the old way.
 - No configuration change is needed.
 
+
+- **The MCP server's limit of 64 requests in flight per process is reachable, and the request past it receives HTTP 429.** The shared request-body budget held only 63 maximum-size bodies, so the 64th concurrent request received HTTP 503 with `Retry-After: 1` before the MCP limit was reached. The budget now holds 64 (it grows by 64 bytes), and requests beyond the limit receive HTTP 429 with `Retry-After: 1`, as documented. The limit of 4 in flight per caller and the 1 MiB request-body ceiling are unchanged.
+
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the v1.6.0 `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. One appended migration in `device-management` makes live entity attribute keys unique and queues repairs. See [Schema changes in v1.6.0 and going back](#v160-going-back). Coming from `v1.4.0` or earlier, read the [`v1.5.0` notes](#v150-upgrade) first.
