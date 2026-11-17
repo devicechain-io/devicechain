@@ -2544,6 +2544,10 @@ export type UnresolvedWidgetCode = 'unregistered' | 'unversioned' | 'invalid-met
 export interface UnresolvedWidgetReason {
     code: UnresolvedWidgetCode;
     message: string;
+    versions?: {
+        authored: number;
+        installed: number;
+    };
 }
 ```
 

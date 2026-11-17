@@ -57,25 +57,14 @@ func NewAnchorReconciliationSweep(ms *core.Microservice, api emmodel.EventManage
 // so only in a warning per tenant. The backstop being down for a week looked exactly like the
 // backstop finding nothing, which is the state it is normally in.
 func (s *AnchorReconciliationSweep) runOnce(ctx context.Context) error {
-	tenants, err := s.Api.DistinctAnchorTenants(core.WithSystemContext(ctx))
+	tenants, err := s.Api.DistinctAnchorTenants(ctx)
 	if err != nil {
 		return fmt.Errorf("listing tenants with anchors: %w", err)
 	}
-	var visited, failed int
-	var lastErr error
-	for _, tenant := range tenants {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		visited++
-		if err := s.sweepTenant(ctx, tenant); err != nil {
-			failed++
-			lastErr = err
-		}
-	}
-	return core.PassResult(visited, failed, lastErr)
+	_, err = core.ForEachTenant(ctx, tenants, func(tctx context.Context, tenant string) error {
+		return s.sweepTenant(tctx, tenant)
+	})
+	return err
 }
 
 // sweepTenant reconciles one tenant's anchors against device-management, ONE PAGE AT A

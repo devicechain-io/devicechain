@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/config"
+	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-event-sources/processor"
+	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -36,7 +38,7 @@ func TestAdmitInboundRefusesWithoutAManager(t *testing.T) {
 	initializeMetrics()
 	NatsManager = nil
 
-	err := admitInbound("http1")
+	err := admitInbound("", "http1")
 	require.ErrorIs(t, err, messaging.ErrStreamBackpressure)
 	require.Equal(t, float64(1), testutil.ToFloat64(BackpressureCounter.WithLabelValues("http1")))
 }
@@ -167,4 +169,86 @@ func TestHttpIngestAnswers503InsteadOfEvictingUnreadEvents(t *testing.T) {
 	require.Equal(t, "10", retryAfter, "a backpressure 503 must say when to retry")
 	require.Equal(t, float64(posts-18), testutil.ToFloat64(BackpressureCounter.WithLabelValues("http1")),
 		"every refused POST is counted against its source")
+}
+
+type httpAdmitRouter struct{}
+
+func (httpAdmitRouter) Ready() error { return nil }
+func (httpAdmitRouter) ShardGroup(tenant string) (int, error) {
+	if tenant == "tenant-b" {
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func TestHttpShardAdmissionUsesTenantGate(t *testing.T) {
+	savedMs, savedNats, savedCounter := Microservice, NatsManager, BackpressureCounter
+	t.Cleanup(func() { Microservice, NatsManager, BackpressureCounter = savedMs, savedNats, savedCounter })
+	srv, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true,
+		StoreDir: dctest.JetStreamStoreDir(t),
+	})
+	require.NoError(t, err)
+	go srv.Start()
+	require.True(t, srv.ReadyForConnections(10*time.Second))
+	t.Cleanup(srv.Shutdown)
+	u, err := url.Parse(srv.ClientURL())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(u.Port())
+	require.NoError(t, err)
+	ms := &core.Microservice{InstanceId: "inst-1", FunctionalArea: "event-sources"}
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	ms.InstanceConfiguration.Infrastructure.Nats.Hostname = u.Hostname()
+	ms.InstanceConfiguration.Infrastructure.Nats.Port = uint32(port)
+	ms.InstanceConfiguration.Infrastructure.Nats.StreamMaxMsgs = 20
+	Microservice = ms
+	initializeMetrics()
+	m := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(*messaging.NatsManager) error { return nil })
+	require.NoError(t, m.EnableStreamSharding(httpAdmitRouter{}, &mscfg.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.InboundEvents}}))
+	require.NoError(t, m.Initialize(context.Background()))
+	t.Cleanup(func() { _ = m.Stop(context.Background()) })
+	NatsManager = m
+	_, err = m.NewWriter(streams.InboundEvents)
+	require.NoError(t, err)
+	nc, err := nats.Connect(srv.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	// A real resolver durable never reads group zero; group one remains empty.
+	_, err = js.AddConsumer(messaging.StreamName("inst-1", streams.InboundEvents), &nats.ConsumerConfig{
+		Durable:   messaging.ReaderDurableName("inst-1", "device-management", streams.InboundEvents),
+		AckPolicy: nats.AckExplicitPolicy,
+	})
+	require.NoError(t, err)
+	for i := 0; i < 18; i++ {
+		_, err = js.Publish(messaging.ScopedSubject("inst-1", "tenant-a", streams.InboundEvents), []byte("backlog"))
+		require.NoError(t, err)
+	}
+	m.MeasureBackpressureForTesting(t, streams.InboundEvents)
+	m.MeasureBackpressureForTesting(t, messaging.GroupSuffix(streams.InboundEvents, 1))
+	require.ErrorIs(t, m.Backpressure(streams.InboundEvents), messaging.ErrStreamBackpressure)
+	require.NoError(t, m.Backpressure(messaging.GroupSuffix(streams.InboundEvents, 1)))
+	source, err := processor.NewHttpEventSource("http-shards", map[string]string{}, "inst-1", config.HttpIngest{},
+		processor.NewJsonDecoder(map[string]string{}), func(string, []byte) {},
+		func(string, string, *model.UnresolvedEvent, interface{}, string) error { return nil },
+		func(string, string, []byte, error) error { return nil }, nil,
+		func(string, string, time.Time, bool, processor.Origin, int) bool { return true }, admitInbound, nil)
+	require.NoError(t, err)
+	source.Port = 0
+	require.NoError(t, source.Initialize(context.Background()))
+	require.NoError(t, source.Start(context.Background()))
+	t.Cleanup(func() { _ = source.Stop(context.Background()) })
+	for _, tenant := range []string{"tenant-b", "tenant-a"} {
+		resp, err := http.Post("http://"+source.Addr()+"/inst-1/"+tenant+"/events", "application/json",
+			strings.NewReader(`{"device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"t":"1"}}]}}`))
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		if tenant == "tenant-b" {
+			require.Equal(t, http.StatusAccepted, resp.StatusCode)
+		} else {
+			require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+			require.Equal(t, "10", resp.Header.Get("Retry-After"))
+		}
+	}
 }

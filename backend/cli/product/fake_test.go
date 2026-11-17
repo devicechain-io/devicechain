@@ -321,6 +321,12 @@ func (f *fakeTenant) dispatch(op string, v map[string]any) (any, error) {
 		f.integrations[t] = r
 		f.tokensIssued++
 		return map[string]any{"createIntegration": map[string]any{"integration": map[string]any{"token": t}}}, nil
+	case "ProductRotateIntegrationToken":
+		if f.integrations[tok] == nil {
+			return nil, fmt.Errorf("fake: no integration %q", tok)
+		}
+		f.tokensIssued++
+		return map[string]any{"rotateIntegrationToken": map[string]any{"issuedToken": fmt.Sprintf("issued-%d", f.tokensIssued)}}, nil
 	case "ProductUpdateIntegration":
 		d := f.integrations[tok]
 		if d == nil {

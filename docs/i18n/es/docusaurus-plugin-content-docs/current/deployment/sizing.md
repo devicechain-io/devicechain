@@ -202,6 +202,16 @@ prevalecen sobre el tamaño predefinido en la creación inicial, antes de que ex
 Para las demás variables de OpenTofu del tamaño, `dcctl` omite las que hayas indicado para que
 prevalezca tu valor. La línea que imprime `dcctl bootstrap` nombra el tamaño que aplicó.
 
+La topología del broker es la otra excepción. `dcctl` siempre pasa `ha` y
+`nats_cluster_replicas` por sí mismo, así que un valor que indiques para cualquiera de las dos
+queda sustituido. El número de servidores y el número de réplicas por stream se fijan juntos a
+partir de `--ha` (un servidor y una réplica sin él, tres y tres con él). Los grupos de
+fragmentación elevan el número de servidores a tres como mínimo, con al menos un servidor por grupo. Así se evita un clúster en el que
+todos los streams tienen una sola réplica y se pagan servidores que no guardan ninguna copia.
+Un broker de varios servidores con streams de una sola réplica y sin grupos de fragmentación no
+se puede construir con `dcctl`. Cuando indicas cualquiera de las dos variables, `dcctl bootstrap`
+y `dcctl upgrade` imprimen una nota que dice que se ha sustituido.
+
 ## Cambiar el tamaño de una instancia en ejecución {#changing}
 
 Una instancia conserva el tamaño con el que se hizo el bootstrap. Pasar una instancia existente a
@@ -210,3 +220,26 @@ superposición, que prevalece sobre cualquier tamaño. Sea cual sea el tamaño, 
 ampliar un volumen de JetStream: consulta
 [cuánto tiempo pueden esperar los flujos de eventos durante una interrupción](./observability.md#outage-runway)
 para el procedimiento.
+
+## Almacenamiento de copias en GKE {#gke-backup-storage}
+
+En GKE, los volúmenes nuevos de copias de seguridad dentro del clúster usan
+`dc-object-store-standard`, una StorageClass CSI dedicada con `type: pd-standard`
+y política `Retain`. Las copias masivas no necesitan SSD. La clase integrada de
+GKE `standard-rwo` usa `pd-balanced`, que también consume cuota SSD. Las clases de
+JetStream y las bases de datos no cambian. Las series de máquinas que no admiten
+discos `pd-standard` (por ejemplo C3, C4 y N4) necesitan
+`backup_object_store_storage_class` con una clase que sus nodos admitan. `perf-20k` mantiene el valor del clúster
+para las copias (`160Gi`); configura JetStream con `40Gi` y el almacén de eventos
+con `260Gi`.
+
+Use `backup_object_store_storage_class` en las variables OpenTofu del clúster para
+elegir otra clase para un volumen **nuevo**. Los demás proveedores conservan la
+clase predeterminada del clúster. `dcctl install` reconoce GKE por el aprovisionador
+CSI de discos persistentes en las StorageClasses del clúster y establece
+`backup_object_store_gke_standard_disk`; si aplica la raíz del clúster usted mismo,
+establezca esa variable en GKE. Una clase explícita tiene prioridad. Los PVC existentes conservan su tamaño y clase al
+repetir `dcctl install` y durante las actualizaciones, aunque cambie esta variable.
+No se migran automáticamente las copias existentes en SSD; trasladarlas requiere
+una migración de datos planificada por separado. Amplíe un volumen existente con
+`kubectl patch` si su clase admite expansión.

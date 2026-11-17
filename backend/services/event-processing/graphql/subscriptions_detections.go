@@ -69,18 +69,24 @@ func (r *SchemaResolver) GetNats(ctx context.Context) *messaging.NatsManager {
 
 // DetectionStream streams a device profile's DETECT detections to the subscriber as they fire
 // (ADR-037 / ADR-057, slice 7c). It taps the caller tenant's derived-event feed — the same
-// first-class signal the REACT dispatcher consumes — and pushes every firing whose rule belongs
+// first-class signal the REACT dispatcher consumes — and pushes authorized firings whose rule belongs
 // to the given profile, including a rule with NO alarm action (a pure emitted signal), which the
-// alarm stream would miss: a detection feed must show ALL firings, so it taps the derived-event
+// alarm stream would miss: a detection feed must include pure signals, so it taps the derived-event
 // stream, not the alarm stream. Both edges (raised and resolved, ADR-057) are streamed. The feed
 // is live from subscribe time onward with no backfill. The shared feed is torn down when
-// its last subscriber disconnects (ctx cancelled). Tenant-scoped; gated on device:read.
+// its last subscriber disconnects (ctx cancelled). Requires device:read; detections of rules that
+// test geofence containment are delivered only to a caller that also holds location:read.
+//
+// The tenant feed is shared, but authorization is not: the hub fans out by profile only, and
+// each subscription applies its OWN caller's location:read filter to what it receives, so one
+// subscriber's authorities never decide what another subscriber sees.
 func (r *SchemaResolver) DetectionStream(ctx context.Context, args struct {
 	ProfileToken string
 }) (<-chan *DetectionEventResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
+	canLocate := auth.Authorize(ctx, auth.LocationRead) == nil
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
 		return nil, core.ErrNoTenant
@@ -91,7 +97,7 @@ func (r *SchemaResolver) DetectionStream(ctx context.Context, args struct {
 
 	// SubscribeLive scopes to "{instance}.{tenant}.derived-events", so every delivered event is
 	// already this tenant's — hub dispatch narrows to the requested profile only.
-	live, err := detectionHub(r.GetNats(ctx)).Subscribe(ctx, tenant, []string{args.ProfileToken})
+	live, err := r.liveDetections(ctx).Subscribe(ctx, tenant, []string{args.ProfileToken})
 	if err != nil {
 		return nil, err
 	}
@@ -99,8 +105,12 @@ func (r *SchemaResolver) DetectionStream(ctx context.Context, args struct {
 	out := make(chan *DetectionEventResolver)
 	go func() {
 		defer close(out)
+		filter := positionFilter{store: r.DetectRules}
 		for batch := range live {
 			for _, ev := range batch {
+				if !canLocate && !filter.allow(ctx, ev.de.RuleID) {
+					continue
+				}
 				select {
 				case out <- &DetectionEventResolver{de: ev.de, ruleToken: ev.ruleToken}:
 				case <-ctx.Done():
@@ -110,6 +120,21 @@ func (r *SchemaResolver) DetectionStream(ctx context.Context, args struct {
 		}
 	}()
 	return out, nil
+}
+
+// liveDetections is the manager's shared hub in production. A resolver whose Live seam is set
+// (a test feeding a channel without a broker) gets a private hub over that seam instead, so
+// the subscription still runs through the same decode, dispatch and filter path.
+func (r *SchemaResolver) liveDetections(ctx context.Context) *messaging.LiveHub[liveDetection] {
+	if r.Live == nil {
+		return detectionHub(r.GetNats(ctx))
+	}
+	open := func(ctx context.Context, tenant string) (<-chan messaging.Message, error) {
+		return r.Live(ctx, tenant, streams.DerivedEvents)
+	}
+	hub := messaging.NewLiveHub(streams.DerivedEvents, open, detectionDecode, messaging.DefaultMaxLiveSubscribersPerTenant)
+	hub.OnDrop(detectionDropHook)
+	return hub
 }
 
 // DetectionEventResolver resolves one detection on the live feed. ruleToken is parsed from the

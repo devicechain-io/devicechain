@@ -6,9 +6,14 @@ package graphql
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-device-management/processor"
+	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,8 +43,12 @@ func (f scopeFixture) credentialFor(t *testing.T, device string) {
 
 func (f scopeFixture) mqttCredentialFor(t *testing.T, device string) {
 	t.Helper()
+	checker, err := credential.NewChecker(credentialtest.NewStore(), processor.DeviceCredentialPolicies,
+		credential.WithDeviceSecretKey(dmtest.DeviceSecretKey()))
+	require.NoError(t, err)
+	f.api.DeviceCredentialChecker = checker
 	pw := pumpMqttPw
-	_, err := f.api.CreateDeviceCredential(f.operator(), &model.DeviceCredentialCreateRequest{
+	_, err = f.api.CreateDeviceCredential(f.operator(), &model.DeviceCredentialCreateRequest{
 		Token: device + "-mqtt", DeviceToken: device, CredentialType: string(model.CredentialMqttBasic),
 		CredentialId: pumpMqttID + device, CredentialValue: &pw, Enabled: true})
 	require.NoError(t, err)
@@ -220,4 +229,36 @@ func TestBrokerAssertedDeviceDecoderIsServiceOnly(t *testing.T) {
 			t.Errorf("brokerAssertedDeviceDecoder was admitted for %s: %v %v", who, res.data, res.errs)
 		}
 	}
+}
+
+func TestDeviceDecoderPasswordBackoffAndMissingChecker(t *testing.T) {
+	f, _ := newIntegrationDecoderFixture(t)
+	f.mqttCredentialFor(t, "acme-pump")
+	f.publishDecoder(t, wireFrameDecoder)
+	now := time.Now()
+	checker, err := credential.NewChecker(credentialtest.NewStore(), processor.DeviceCredentialPolicies,
+		credential.WithDeviceSecretKey(dmtest.DeviceSecretKey()), credential.WithClock(func() time.Time { return now }))
+	require.NoError(t, err)
+	f.api.DeviceCredentialChecker = checker
+	good, wrong := pumpMqttPw, "wrong"
+	ask := func(pw *string) served {
+		return askDecoder(t, service(f), "acme-pump", "MQTT_BASIC", pumpMqttID+"acme-pump", pw)
+	}
+	require.Equal(t, true, deviceDecoderPlanOf(t, ask(&good))["present"])
+	for i := 0; i < processor.DeviceCredentialPolicy.Free; i++ {
+		got := ask(&wrong)
+		require.Empty(t, got.errs)
+		require.Nil(t, got.data["deviceDecoder"])
+	}
+	got := ask(&good)
+	require.Len(t, got.errs, 1)
+	require.Equal(t, "THROTTLED", got.errs[0].Extensions["code"])
+	require.EqualValues(t, 1, got.errs[0].Extensions["retryAfterSeconds"])
+	now = now.Add(time.Second)
+	require.Equal(t, true, deviceDecoderPlanOf(t, ask(&good))["present"])
+	f.api.DeviceCredentialChecker = nil
+	require.NotEmpty(t, ask(&good).errs)
+	require.NotEmpty(t, ask(nil).errs)
+	f.credentialFor(t, "acme-pump")
+	require.Equal(t, true, deviceDecoderPlanOf(t, askDecoder(t, service(f), "acme-pump", "ACCESS_TOKEN", pumpToken+"acme-pump", nil))["present"])
 }

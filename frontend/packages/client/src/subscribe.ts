@@ -19,12 +19,15 @@
 // token, and reports the reconnect to the sink as connected(true) so a consumer
 // re-queries whatever it may have missed. graphql-ws treats 4401 as fatal and does
 // not retry it on its own. Any other dropped socket is retried for as long as the
-// operation is wanted, with a capped, jittered back-off (clientFor).
+// operation is wanted, with a capped, jittered back-off (clientFor). So is a connect that
+// could not get a token because refreshing it failed transiently after the held one had
+// expired (see shouldRetry).
 
 import type { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 import type { GraphQLFormattedError } from 'graphql';
 import { createClient, type Client } from 'graphql-ws';
 
+import { isTransientRefreshError } from './session';
 import { areaPath, resolveAuthToken, type Area } from './transport';
 
 // The graphql-transport-ws close code for an unauthorized connection. Mid-session
@@ -95,7 +98,17 @@ function clientFor(area: Area): AreaClient {
       // this client is not. The closes that say the request itself is wrong (4400, 4401,
       // 4409, 4429) are fatal inside graphql-ws whatever this answers, so an expired or
       // refused token still reaches subscribe() below and the session flow, never a loop.
-      shouldRetry: (err) => (typeof Event != 'undefined' && err instanceof Event) || hasCode(err),
+      //
+      // 🔴 And a token that could not be had FOR NOW. The session's getAccessToken throws when
+      // the held access token has expired and the refresh failed transiently (no response, a
+      // 5xx, a 429): nothing was refused and the session is kept. connectionParams lets that
+      // throw reach graphql-ws, which reports it here first and then closes the socket with
+      // 4005; answering false made every subscription on the area error out over an outage of
+      // the identity service, and nothing reopened them. It is retried like a dropped socket,
+      // with the same back-off. A refused refresh is not transient: the session ends, the next
+      // connect carries no token, and the server's 4401 at connect is surfaced as before.
+      shouldRetry: (err) =>
+        (typeof Event != 'undefined' && err instanceof Event) || hasCode(err) || isTransientRefreshError(err),
     });
     const state: AreaClient = { client, acked: false, lastCloseWasAcked: false };
     // Registered once, here, before any subscription can register its own — so on a

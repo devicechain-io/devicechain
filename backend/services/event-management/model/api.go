@@ -24,6 +24,14 @@ type Api struct {
 	// kill-switch, set from config in main). The zero value keeps the rollup path on.
 	RollupReadsDisabled bool
 
+	// RollupRetentionDays sets the rollup read floor; 0 means no floor. Set from
+	// the same DataLifecyclePolicy that ApplyDataLifecyclePolicies reconciles,
+	// so the retention job and read floor cannot be configured apart.
+	RollupRetentionDays int
+
+	// now is the rollup read clock; nil defaults to time.Now.
+	now func() time.Time
+
 	// Backfill is what the calculated-metric backfill API checks a request against (ADR-082).
 	// Nil until main builds it; every start is then UNAVAILABLE.
 	Backfill *BackfillRuntime
@@ -51,6 +59,7 @@ type EventManagementApi interface {
 	CreateLocationEvents(ctx context.Context, db *gorm.DB, requests []*LocationEventCreateRequest) ([]*LocationEvent, error)
 	CreateMeasurementEvents(ctx context.Context, db *gorm.DB, requests []*MeasurementEventCreateRequest) ([]*MeasurementEvent, error)
 	CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*AlertEventCreateRequest) ([]*AlertEvent, error)
+	CreateEnvelopeEvents(ctx context.Context, db *gorm.DB, events []*Event) error
 	CreateStateChangeEvents(ctx context.Context, db *gorm.DB, requests []*StateChangeEventCreateRequest) ([]*StateChangeEvent, int64, error)
 
 	// CreateEventRows writes one tenant's parent and payload rows, built for any number of
@@ -236,6 +245,11 @@ func (api *Api) EventExistsByAltId(ctx context.Context, db *gorm.DB, deviceToken
 // so it discriminates within one event rather than merely repeating the parent's key.
 func canonicalPayloadEntry(v any) ([]byte, error) {
 	return json.Marshal(v)
+}
+
+// CreateEnvelopeEvents stores only event envelopes, without a service-specific payload.
+func (api *Api) CreateEnvelopeEvents(ctx context.Context, db *gorm.DB, events []*Event) error {
+	return upsertParentEvents(ctx, db, events)
 }
 
 // upsertParentEvents inserts the parent `events` rows for a batch of child event

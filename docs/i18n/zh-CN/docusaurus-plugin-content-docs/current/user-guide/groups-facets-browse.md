@@ -91,6 +91,8 @@ dcctl attr unset device meter-0042 floor --tenant acme --email you@example.com -
 
 保存时平台会再次检查选择器，并拒绝它无法高效运行的选择器。保存后，该分组会出现在该类别的 **Saved dynamic groups** 下，显示其令牌、名称和选择器。点击 **Members** 可查看当前属于它的成员；每次打开时都会根据选择器重新计算该列表。
 
+否定选择器（例如 `!("retired" in attr)`）从实体创建之时起就包含没有属性的实体；当组被检测规则或访问范围启用时，这些实体也会立即加入。
+
 ## 相关内容 {#related}
 
 - [分面与动态分组](/concepts/domain-model#facets-and-dynamic-groups)

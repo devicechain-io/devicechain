@@ -190,15 +190,30 @@ spec:
         # Warning, not critical: nothing is broken or at risk of loss — the instance
         # is simply not getting what it is paying for, and the fix is a config
         # change rather than an incident.
+        #
+        # 🔴 EXCEPT WHERE THE CLUSTER IS THE POINT: SHARD GROUPS. A shard-group instance
+        # runs at least three servers with every stream at one replica BY DESIGN — each
+        # group is an R1 stream pinned to its own server, so the servers are there for
+        # throughput, not for copies — and this fired on it continuously. The exclusion
+        # is read from broker state like everything else here: a group stream is one a
+        # pod reports under its group name (<suffix>-g1, -g2, …, messaging.GroupSuffix),
+        # and only a shard-group instance has one. A clustered R1 broker with no group
+        # stream is still the mis-set HA toggle, and still fires.
         - alert: JetStreamClusterUnused
           expr: |
-            max (
-              {__name__=~"devicechain_.+_jetstream_broker_clustered", namespace="{{ $ns }}"}
-            ) == 1
-            and on()
-            max (
-              {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}"}
-            ) == 1
+            (
+              max (
+                {__name__=~"devicechain_.+_jetstream_broker_clustered", namespace="{{ $ns }}"}
+              ) == 1
+              and on()
+              max (
+                {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}"}
+              ) == 1
+            )
+            unless on()
+            count (
+              {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}", stream=~".+-g[1-9][0-9]*"}
+            ) > 0
           for: 15m
           labels:
             severity: warning
@@ -214,7 +229,9 @@ spec:
               replica factor is the chart's
               (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets
               both from one value. If the single-server topology is what you intended, scale the
-              NATS cluster back down rather than leaving it running unused.
+              NATS cluster back down rather than leaving it running unused. (An instance with NATS
+              shard groups runs a multi-server, single-replica broker on purpose, and does not
+              raise this.)
         # The counterweight to the four above: the stream whose replication NOBODY can read.
         #
         # A pod that cannot read a stream's StreamInfo DELETES that stream's triple

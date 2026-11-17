@@ -165,7 +165,9 @@ func (e *env) artifact(t *testing.T, tenant, token string, content []byte) *mode
 	ref, err := e.store.Put(ctx, blob.Key{Tenant: tenant, Purpose: model.BlobPurpose, ID: token + "-object"},
 		bytes.NewReader(content), blob.PutOptions{MaxSize: int64(len(content))})
 	require.NoError(t, err)
-	require.NoError(t, e.api.CompleteUpload(ctx, a, ref))
+	stamp, err := e.api.ClaimUpload(ctx, a)
+	require.NoError(t, err)
+	require.NoError(t, e.api.CompleteUpload(ctx, a, stamp, ref))
 	a, err = e.api.ArtifactByToken(ctx, token)
 	require.NoError(t, err)
 	return a

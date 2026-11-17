@@ -70,6 +70,12 @@ func TestStructLiteralMicroserviceMethods(t *testing.T) {
 		// --- Safe: no constructor-only field is on the path at all. ---
 		{name: "Banner", call: func(t *testing.T, ms *Microservice) { ms.Banner() }},
 		{name: "Mux", call: func(t *testing.T, ms *Microservice) { assert.NotNil(t, ms.Mux()) }},
+		{name: "OpsMux", call: func(t *testing.T, ms *Microservice) {
+			mux := ms.OpsMux()
+			require.NotNil(t, mux)
+			assert.Same(t, mux, ms.OpsMux(), "the operations mux must be reused")
+			assert.NotSame(t, ms.Mux(), mux, "operations must be separate from public routes")
+		}},
 		{name: "RegisterProbes", call: func(t *testing.T, ms *Microservice) { ms.RegisterProbes(nil) }},
 		// The liveness latch works at its zero value: a struct literal starts live and can
 		// be marked not live, exactly as a constructed Microservice can.
@@ -79,6 +85,15 @@ func TestStructLiteralMicroserviceMethods(t *testing.T) {
 			assert.ErrorContains(t, ms.Live(), "gone")
 		}},
 		{name: "NewHttpServer", call: func(t *testing.T, ms *Microservice) { assert.NotNil(t, ms.NewHttpServer(0)) }},
+		{name: "NewOpsServer", call: func(t *testing.T, ms *Microservice) {
+			server := ms.NewOpsServer()
+			require.NotNil(t, server)
+			require.NotNil(t, server.server)
+			assert.Equal(t, ":8083", server.server.Addr, "must use the chart's operations port")
+			assert.Same(t, ms.OpsMux(), server.server.Handler)
+			assert.NotSame(t, ms.Mux(), server.server.Handler)
+			assert.Empty(t, server.Addr(), "construction must not bind a listener")
+		}},
 		{name: "MetricsSubsystem", call: func(t *testing.T, ms *Microservice) { _ = ms.MetricsSubsystem() }},
 		{name: "MetricsHandler", call: func(t *testing.T, ms *Microservice) { assert.NotNil(t, ms.MetricsHandler()) }},
 		{name: "UseMetricsRegistry", call: func(t *testing.T, ms *Microservice) { ms.UseMetricsRegistry(nil) }},
