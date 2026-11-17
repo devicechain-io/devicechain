@@ -163,17 +163,19 @@ func TestThePodStopsBeingReadyButKeepsServingForTheWholeWindow(t *testing.T) {
 	ms.Mux().HandleFunc("/work", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	})
+	ops := httptest.NewServer(ms.OpsMux())
+	defer ops.Close()
 	server = httptest.NewServer(ms.Mux())
 
 	var readyzDuringWindow, workDuringWindow int
 	drainSleep = func(time.Duration) {
-		readyzDuringWindow = statusOf(server.URL + "/readyz")
+		readyzDuringWindow = statusOf(ops.URL + "/readyz")
 		workDuringWindow = statusOf(server.URL + "/work")
 	}
 
 	// Ready and serving before anything is asked to stop, so the two readings below
 	// are a CHANGE rather than a state that was always true.
-	require.Equal(t, http.StatusOK, statusOf(server.URL+"/readyz"))
+	require.Equal(t, http.StatusOK, statusOf(ops.URL+"/readyz"))
 	require.Equal(t, http.StatusTeapot, statusOf(server.URL+"/work"))
 
 	ms.ShutDownNow()

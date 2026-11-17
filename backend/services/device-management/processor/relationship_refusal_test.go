@@ -28,7 +28,7 @@ func relationshipEvent(kind, targetType, target string) *esmodel.UnresolvedEvent
 }
 func relationshipRig(t *testing.T) *resolveRig {
 	rig := newCountingResolveRig(t, false, nil)
-	require.NoError(t, rig.db.AutoMigrate(&model.Customer{}, &model.Area{}, &model.Asset{}, &model.EntityGroup{}, &model.PendingOwnershipFact{}))
+	require.NoError(t, rig.db.AutoMigrate(&model.Customer{}, &model.Area{}, &model.Asset{}, &model.EntityGroup{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}))
 	for _, token := range []string{"alpha", "bravo"} {
 		c := &model.Customer{}
 		c.Token = token
