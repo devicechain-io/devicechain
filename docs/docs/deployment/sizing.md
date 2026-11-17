@@ -197,6 +197,15 @@ variables take precedence over the size preset on initial creation, before the v
 For other preset OpenTofu variables, `dcctl` omits any variable you have supplied, so your value
 wins. The line `dcctl bootstrap` prints names the size it applied.
 
+The broker's topology is the other exception. `dcctl` always passes `ha` and
+`nats_cluster_replicas` itself, so a value you state for either is overridden. The server
+count and the per-stream replica count are set together from `--ha` (one server and one
+replica without it, three and three with it). Shard groups raise the server count to at least
+three, with at least one server per group. This keeps a cluster from running with every stream at one replica, paying
+for servers that hold no copies. A multi-server broker with single-replica streams and no
+shard groups cannot be built with `dcctl`. When you state either variable, `dcctl bootstrap`
+and `dcctl upgrade` print a note saying it was overridden.
+
 ## Changing the size of a running instance {#changing}
 
 An instance keeps the size it was bootstrapped with. Moving an existing instance to another size

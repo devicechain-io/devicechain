@@ -97,6 +97,81 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
+  # The placement gauge exists at 0 only on services using shard-group routing.
+  # A missing series is also quiet; neither case should create an alert.
+  - name: a healthy shard placement gauge stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_shard_placement_unavailable{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: JetStreamShardPlacementUnavailable
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: JetStreamShardPlacementUnavailable
+        exp_alerts: []
+
+  - name: an absent shard placement gauge stays quiet
+    interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: JetStreamShardPlacementUnavailable
+        exp_alerts: []
+
+  - name: a shard placement blip shorter than two minutes stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_shard_placement_unavailable{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources"}'
+        values: '0 1 0x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: JetStreamShardPlacementUnavailable
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: JetStreamShardPlacementUnavailable
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: JetStreamShardPlacementUnavailable
+        exp_alerts: []
+
+  - name: a sustained unavailable shard placement fires after two minutes
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_shard_placement_unavailable{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: JetStreamShardPlacementUnavailable
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: JetStreamShardPlacementUnavailable
+        exp_alerts:
+          - exp_labels:
+              namespace: dci-devicechain
+              pod: dc-event-sources-7c9f-aaaaa
+              job: devicechain/event-sources
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamshardplacementunavailable"
+              summary: "A service has no usable shard placement table and is holding ingest forwarding"
+              description: "Pod dc-event-sources-7c9f-aaaaa of devicechain/event-sources has had no usable shard placement table for two minutes: the table in its KV mirror is missing, cannot be adopted, or names a shard group at or above nats.shardGroups.count. Ingest forwarding into the sharded streams is held; these messages are not dead-lettered. Check user-management's placement mirror and its placement_mirror pass alert, and the affected service's logs. Restore a compatible placement table or raise nats.shardGroups.count to include every group the table names so forwarding can resume."
+      - eval_time: 10m
+        alertname: JetStreamShardPlacementUnavailable
+        exp_alerts:
+          - exp_labels:
+              namespace: dci-devicechain
+              pod: dc-event-sources-7c9f-aaaaa
+              job: devicechain/event-sources
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamshardplacementunavailable"
+              summary: "A service has no usable shard placement table and is holding ingest forwarding"
+              description: "Pod dc-event-sources-7c9f-aaaaa of devicechain/event-sources has had no usable shard placement table for two minutes: the table in its KV mirror is missing, cannot be adopted, or names a shard group at or above nats.shardGroups.count. Ingest forwarding into the sharded streams is held; these messages are not dead-lettered. Check user-management's placement mirror and its placement_mirror pass alert, and the affected service's logs. Restore a compatible placement table or raise nats.shardGroups.count to include every group the table names so forwarding can resume."
+
   # ------------------------------------------------------------------
   # A live consumer loses messages to a full stream. Both replicas of the
   # reading service count the same removal; the alert is one per durable.

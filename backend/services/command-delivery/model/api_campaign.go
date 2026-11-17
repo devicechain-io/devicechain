@@ -70,6 +70,9 @@ const (
 	// Planning resolves the group, so it is the expensive step; inside the window a pass only
 	// fires what is due.
 	campaignReplanMargin = time.Hour
+	// campaignMembershipFreshness amortizes group resolution while solar devices trickle
+	// due across 15-second passes, without letting an hours-later step reuse the first check.
+	campaignMembershipFreshness = time.Minute
 
 	// campaignClaimPage bounds the elements one pass claims for one campaign, and so the
 	// size of the biggest batch a pass creates.
@@ -1241,11 +1244,13 @@ func (api *Api) supersedeOlderFirings(ctx context.Context, c *Campaign, now time
 		Updates(map[string]any{"status": string(ElementSkipped), "reason": SkipSuperseded, "updated_at": now}).Error
 }
 
-// recheckDueMembership resolves the group again for every cycle that has just started to fall
-// due, and skips, as NOT_IN_GROUP, the pending elements of devices that have left it since the
-// cycle was planned (up to CampaignPlanAhead earlier). A cycle is checked once, when its first
-// element falls due. It returns the cycles it could NOT check: those are not sent this pass,
-// because commanding a device that may have left the group is the failure the check exists for.
+// recheckDueMembership checks cycles before their first due element and again when a due
+// PENDING element's due time exceeds the last check by campaignMembershipFreshness. Later
+// steps and per-device solar instants therefore refresh membership without resolving on every
+// 15-second pass. One resolution serves all such cycles this pass; pending elements of devices
+// that left since planning are skipped as NOT_IN_GROUP, and each check advances its timestamp.
+// It returns the cycles it could NOT check: those are not sent this pass, because commanding
+// a device that may have left the group is the failure the check exists for.
 //
 // A device that JOINED the group after planning is not added to a cycle already planned; it is
 // in the next cycle planned. That is a documented limitation.
@@ -1260,10 +1265,28 @@ func (api *Api) recheckDueMembership(ctx context.Context, c *Campaign, now time.
 	if len(cycleIDs) == 0 {
 		return nil, nil
 	}
-	var unchecked []uint
-	if err := db.Model(&CampaignCycle{}).Where("id IN ? AND membership_checked_at IS NULL", cycleIDs).
-		Order("id ASC").Pluck("id", &unchecked).Error; err != nil {
+	var cycles []CampaignCycle
+	if err := db.Select("id", "membership_checked_at").Where("id IN ?", cycleIDs).
+		Order("id ASC").Find(&cycles).Error; err != nil {
 		return cycleIDs, err
+	}
+	var unchecked []uint
+	for _, cycle := range cycles {
+		if cycle.MembershipCheckedAt.Valid {
+			// Compare due times, not pass times: a backlog already covered by a check
+			// must not resolve the group repeatedly while waiting for a claim-page slot.
+			var due []uint
+			if err := db.Model(&CampaignElement{}).
+				Where("cycle_id = ? AND status = ? AND due_at <= ? AND due_at > ?",
+					cycle.ID, string(ElementPending), now, cycle.MembershipCheckedAt.Time.Add(campaignMembershipFreshness)).
+				Limit(1).Pluck("id", &due).Error; err != nil {
+				return cycleIDs, err
+			}
+			if len(due) == 0 {
+				continue
+			}
+		}
+		unchecked = append(unchecked, cycle.ID)
 	}
 	if len(unchecked) == 0 {
 		return nil, nil
@@ -1310,7 +1333,8 @@ func (api *Api) recheckDueMembership(ctx context.Context, c *Campaign, now time.
 				break
 			}
 		}
-		if err := db.Model(&CampaignCycle{ID: cycleID}).Where("id = ? AND membership_checked_at IS NULL", cycleID).
+		if err := db.Model(&CampaignCycle{ID: cycleID}).
+			Where("id = ? AND (membership_checked_at IS NULL OR membership_checked_at < ?)", cycleID, checkedAt).
 			Update("membership_checked_at", checkedAt).Error; err != nil {
 			return unchecked, err
 		}

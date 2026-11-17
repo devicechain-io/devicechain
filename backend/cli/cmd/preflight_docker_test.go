@@ -27,6 +27,9 @@ func fakeHost(t *testing.T, have func(name string) bool) (ran *[][]string) {
 	}
 	runCmd = func(name string, args ...string) string {
 		calls = append(calls, append([]string{name}, args...))
+		if name == "/fake/tofu" || name == "/fake/terraform" {
+			return `{"terraform_version":"1.10.0"}`
+		}
 		return "" // no daemon, no cluster
 	}
 	return &calls

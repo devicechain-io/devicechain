@@ -60,8 +60,9 @@ func startEmbeddedNats(t *testing.T) (string, uint32) {
 type shutdownProbe struct {
 	seq int
 
-	graphqlStoppedAt int
-	natsStoppedAt    int
+	graphqlStoppedAt  int
+	deletionStoppedAt int
+	natsStoppedAt     int
 
 	// publishErr and roundTrip are a REAL publish and a real round trip through the
 	// broker, performed at the instant the GraphQL server has finished draining. They
@@ -209,9 +210,11 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 
 	prevMs, prevGql, prevNats, prevRdb := Microservice, GraphQLManager, NatsManager, RdbManager
 	prevProc, prevWriteback, prevApi, prevSvc := CommandDeliveryProcessor, DeadLetterWriteback, Api, Svc
+	prevDeletion := DeletionConsumer
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, RdbManager = prevMs, prevGql, prevNats, prevRdb
 		CommandDeliveryProcessor, DeadLetterWriteback, Api, Svc = prevProc, prevWriteback, prevApi, prevSvc
+		DeletionConsumer = prevDeletion
 	})
 
 	area := fmt.Sprintf("command-delivery-shutdown-%d", time.Now().UnixNano())
@@ -272,6 +275,15 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 	DeadLetterWriteback = writeback
 	require.NoError(t, DeadLetterWriteback.Initialize(context.Background()))
 
+	deletionCallbacks := core.NewNoOpLifecycleCallbacks()
+	deletionCallbacks.Stopper.Postprocess = func(context.Context) error {
+		probe.seq++
+		probe.deletionStoppedAt = probe.seq
+		return nil
+	}
+	DeletionConsumer = processor.NewDeletionConsumer(Microservice, idleReader{}, deletionCallbacks, Api, nil)
+	require.NoError(t, DeletionConsumer.Initialize(context.Background()))
+
 	// Leave nothing behind for the rest of the package: a failed require unwinds through
 	// Cleanup without ever closing this connection, and the client reconnects forever.
 	mgr := NatsManager
@@ -311,6 +323,8 @@ func TestGraphQLServerStopsBeforeTheNatsConnection(t *testing.T) {
 	err := beforeMicroserviceStopped(context.Background())
 
 	probe.assertGraphQLStoppedFirst(t)
+	require.Positive(t, probe.deletionStoppedAt)
+	require.Less(t, probe.deletionStoppedAt, probe.natsStoppedAt, "deletion consumer must stop before its broker")
 
 	// Required presence: the RdbManager is the last thing the stopper touches and this
 	// fixture cannot initialize it, so its refusal is what proves the stopper ran to the

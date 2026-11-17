@@ -355,6 +355,17 @@ mosquitto_sub \
   -t "devicechain/acme/device-commands/sensor-001"
 ```
 
+Esa es la forma de `MQTT_BASIC`: un usuario y una contraseña. Una credencial `ACCESS_TOKEN` **no tiene contraseña**. El token es la segunda mitad del usuario, y `-P` se omite por completo. El broker interpreta como `MQTT_BASIC` una conexión que lleva contraseña, así que un token de acceso enviado con cualquier contraseña, aunque sea un marcador de posición, se rechaza:
+
+```bash
+mosquitto_sub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001:sub' \
+  -u 'acme:<accessToken>' \
+  -t "devicechain/acme/device-commands/sensor-001"
+```
+
 Cada mensaje es un sobre (envelope) JSON:
 
 ```json
@@ -385,6 +396,18 @@ mosquitto_pub \
   -h <mqtt-host> -p 1883 \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
+  -t "devicechain/acme/command-responses/sensor-001" \
+  -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
+```
+
+Con una credencial `ACCESS_TOKEN`, conéctate igual que para la suscripción, sin `-P`:
+
+```bash
+mosquitto_pub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001' \
+  -u 'acme:<accessToken>' \
   -t "devicechain/acme/command-responses/sensor-001" \
   -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
 ```
