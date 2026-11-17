@@ -86,7 +86,7 @@ func newDeviceHarness(t *testing.T, plan *integration.DecoderPlan) *deviceHarnes
 			h.readings = append(h.readings, n)
 			return true
 		},
-		func(string) error { return h.admitErr }, nil)
+		func(string, string) error { return h.admitErr }, nil)
 	require.NoError(t, err)
 	rt := &DeviceUplinkRoute{
 		Sources: testUplinkSources(t, 600),
@@ -281,7 +281,7 @@ func TestDeviceUplinkRefusals(t *testing.T) {
 func TestDeviceUplinkRouteExistsOnlyWhenEnabled(t *testing.T) {
 	es, err := NewHttpEventSource("http", map[string]string{}, "inst", config.HttpIngest{}, NewJsonDecoder(nil),
 		func(string, []byte) {}, nil, nil, nil, func(_, _ string, _ time.Time, _ bool, _ Origin, _ int) bool { return true },
-		func(string) error { return nil }, nil)
+		func(string, string) error { return nil }, nil)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, uplinkPath, strings.NewReader("x"))
 	rec := httptest.NewRecorder()

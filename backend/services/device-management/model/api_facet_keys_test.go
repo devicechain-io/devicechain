@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -24,7 +25,7 @@ func newFacetKeyTestApi(t *testing.T) *Api {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&FacetKey{}); err != nil {
+	if err := db.AutoMigrate(&FacetKey{}, &EntityAttribute{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return NewApi(&rdb.RdbManager{Database: db})
@@ -149,4 +150,114 @@ func TestDeleteFacetKey(t *testing.T) {
 	if _, err := api.SetFacetKey(ctx, &FacetKeySetRequest{MemberType: "device", Key: "manufacturer", ValueType: "STRING"}); err == nil {
 		t.Error("expected a set on a system facet to be refused")
 	}
+}
+
+// A refused type change must preserve the entire declaration, while an edit
+// retaining the type remains legal even when shared values exist.
+func TestSetFacetKey_TypeChangeWithValues(t *testing.T) {
+	for _, oldType := range []string{"STRING", "LONG", "DOUBLE", "BOOLEAN", "JSON"} {
+		t.Run(oldType, func(t *testing.T) {
+			api := newFacetKeyTestApi(t)
+			ctx := core.WithTenant(context.Background(), "acme")
+			before, err := api.SetFacetKey(ctx, &FacetKeySetRequest{
+				MemberType: "area", Key: "climate", ValueType: oldType,
+				Label: strp("Original"), Values: &[]string{"original"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			attr := &EntityAttribute{EntityType: "area", EntityId: 42, Scope: "SHARED",
+				AttrKey: "climate", ValueType: oldType, Value: sql.NullString{String: "", Valid: true}}
+			if err := api.RDB.DB(ctx).Create(attr).Error; err != nil {
+				t.Fatal(err)
+			}
+			newType := "LONG"
+			if oldType == "LONG" {
+				newType = "STRING"
+			}
+			got, err := api.SetFacetKey(ctx, &FacetKeySetRequest{
+				MemberType: "area", Key: "climate", ValueType: newType, Label: strp("Changed"),
+			})
+			assert.Nil(t, got)
+			if assert.Error(t, err) {
+				assert.Contains(t, err.Error(), "clear or migrate")
+			}
+			var stored FacetKey
+			if err := api.RDB.DB(ctx).First(&stored, before.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			assert.Equal(t, before.ValueType, stored.ValueType)
+			assert.Equal(t, before.Label, stored.Label)
+			assert.Equal(t, before.Values, stored.Values)
+			_, err = api.SetFacetKey(ctx, &FacetKeySetRequest{
+				MemberType: "area", Key: "climate", ValueType: oldType, Label: strp("New label"),
+			})
+			assert.NoError(t, err, "same-type edits remain legal")
+		})
+	}
+}
+
+func TestSetFacetKey_TypeChangeIgnoresUnrelatedValues(t *testing.T) {
+	for _, kind := range []string{"absent", "tenant", "family", "key", "CLIENT", "SERVER", "type", "null", "deleted"} {
+		t.Run(kind, func(t *testing.T) {
+			api := newFacetKeyTestApi(t)
+			ctx := core.WithTenant(context.Background(), "acme")
+			before, err := api.SetFacetKey(ctx, &FacetKeySetRequest{MemberType: "area", Key: "climate", ValueType: "STRING"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			attr := &EntityAttribute{EntityType: "area", EntityId: 42, Scope: "SHARED",
+				AttrKey: "climate", ValueType: "STRING", Value: rdb.NullStrOf(strp("arid"))}
+			attrCtx := ctx
+			switch kind {
+			case "tenant":
+				attrCtx = core.WithTenant(context.Background(), "other")
+			case "family":
+				attr.EntityType = "device"
+			case "key":
+				attr.AttrKey = "country"
+			case "CLIENT", "SERVER":
+				attr.Scope = kind
+			case "type":
+				attr.ValueType = "LONG"
+			case "null":
+				attr.Value = rdb.NullStrOf(nil)
+			}
+			if kind != "absent" {
+				if err := api.RDB.DB(attrCtx).Create(attr).Error; err != nil {
+					t.Fatal(err)
+				}
+				if kind == "deleted" {
+					if err := api.RDB.DB(attrCtx).Delete(attr).Error; err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			got, err := api.SetFacetKey(ctx, &FacetKeySetRequest{MemberType: "area", Key: "climate", ValueType: "LONG"})
+			if assert.NoError(t, err) && assert.NotNil(t, got) {
+				assert.Equal(t, before.ID, got.ID)
+				assert.Equal(t, "LONG", got.ValueType)
+			}
+		})
+	}
+}
+
+func TestSetFacetKey_TypeChangeLookupFailure(t *testing.T) {
+	api := newFacetKeyTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	before, err := api.SetFacetKey(ctx, &FacetKeySetRequest{MemberType: "area", Key: "climate", ValueType: "STRING"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := api.RDB.Database.Migrator().DropTable(&EntityAttribute{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := api.SetFacetKey(ctx, &FacetKeySetRequest{MemberType: "area", Key: "climate", ValueType: "LONG"})
+	assert.Nil(t, got)
+	assert.Error(t, err, "a failed lookup must refuse the type change")
+	var stored FacetKey
+	if err := api.RDB.DB(ctx).First(&stored, before.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, "STRING", stored.ValueType)
 }

@@ -784,7 +784,7 @@ func initAgentProposalReaper() error {
 			_, err := Api.ExpireAgentProposals(ctx)
 			return err
 		},
-		core.NewNoOpLifecycleCallbacks())
+		core.NewNoOpLifecycleCallbacks(), core.WithPassMetrics(Microservice.NewPeriodicTaskMetrics("agent_proposal_reaper")))
 	return AgentProposalReaper.Initialize(context.Background())
 }
 
@@ -809,7 +809,7 @@ func initDecodeAccounting() error {
 	DecodeAccountant = processor.NewDecodeAccountant(Api, replica, DecodeAccountingMetrics)
 	DecodeAccounting = core.NewPeriodicTask(Microservice.FunctionalArea, "decode-accounting", decodeAccountingInterval,
 		func(ctx context.Context) error { return DecodeAccountant.Flush(ctx) },
-		core.NewNoOpLifecycleCallbacks())
+		core.NewNoOpLifecycleCallbacks(), core.WithPassMetrics(Microservice.NewPeriodicTaskMetrics("decode_accounting")))
 	return DecodeAccounting.Initialize(context.Background())
 }
 
@@ -1385,10 +1385,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// ack/clear mutation tries to publish an alarm event to a NATS connection that is
 	// already shutting down (mirrors the start order). core/service walks them in exactly
 	// that order, for every service.
+	err = Svc.Stop(ctx)
+	// Keep placement available to publishes until the service's managers finish stopping.
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
-	return Svc.Stop(ctx)
+	return err
 }
 
 // Called before microservice has been terminated.
@@ -1441,10 +1443,12 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
 	// that actually closes handles, and which both consumers above still precede.
+	err = Svc.Terminate(ctx)
+	// Release the placement watch only after the service's managers terminate.
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
-	return Svc.Terminate(ctx)
+	return err
 }
 
 // resolvedEnvelopesOn reports infrastructure.messaging.envelopes.resolved: whether this service
