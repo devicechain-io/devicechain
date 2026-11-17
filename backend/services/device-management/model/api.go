@@ -6,7 +6,6 @@ package model
 import (
 	"context"
 	"github.com/devicechain-io/dc-microservice/actiongate"
-	"github.com/devicechain-io/dc-microservice/entityevent"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -117,9 +116,8 @@ type Api struct {
 	// event stream for every transition.
 	AlarmPublisher AlarmEventPublisher
 
-	// EntityDeletedPublisher emits entity-deletion events (ADR-044) so cross-service
-	// reference holders can reconcile. Injected at wiring time like AlarmPublisher and
-	// may be nil (tests / pre-wiring), disabling emission.
+	// EntityDeletedPublisher acknowledges deletion facts from the transactional outbox.
+	// Injected at wiring time; a nil publisher makes the drain fail and retain its rows.
 	EntityDeletedPublisher EntityEventPublisher
 
 	// CacheEvictor drops cached entries a write invalidates (ADR-044 F2). Without
@@ -247,6 +245,9 @@ type Api struct {
 	// hold. NIL MEANS THE PLATFORM DEFAULT (governance.DefaultIntegrationsPerTenant), never
 	// unbounded: with nothing wired a tenant is still held to the default.
 	IntegrationsCeiling IntegrationsCeilingResolver
+
+	// RulesCeiling supplies the tier limit on active rules; nil uses the platform default.
+	RulesCeiling RulesCeilingResolver
 
 	// IntegrationChecker compares the bearer token of an inbound integration through the
 	// credential Checker (credential.KindIntegration, under EnrollmentKeys.Integration). The
@@ -381,16 +382,6 @@ func (api *Api) describeAlarmDevice(ctx context.Context, event *AlarmStateChange
 	}
 }
 
-// emitEntityDeleted publishes an entity-deletion event when a publisher is wired,
-// and is a no-op otherwise. Like emitAlarmEvent it is best-effort and must be called
-// after the delete has committed: deleteEdgeEntity emits only once its transaction
-// returns nil, so the event never fires for a rolled-back delete.
-func (api *Api) emitEntityDeleted(ctx context.Context, event *entityevent.EntityDeletedEvent) {
-	if api.EntityDeletedPublisher != nil {
-		api.EntityDeletedPublisher.PublishEntityDeleted(ctx, event)
-	}
-}
-
 // emitDetectionRulesPublished publishes a detection-rules-published event when a
 // publisher is wired, and is a no-op otherwise (ADR-051 slice 4b-3). Like the other
 // emit helpers it is best-effort and must be called AFTER the publish transaction has
@@ -441,7 +432,7 @@ func (api *Api) emitGeoFenceSet(ctx context.Context, manifest *GeoFenceSetManife
 }
 
 // evictEntityDelete drops the caches a delete invalidated when an evictor is wired,
-// and is a no-op otherwise. Called post-commit alongside emitEntityDeleted.
+// and is a no-op otherwise. Called after the delete and its outbox fact commit.
 //
 // The devices in sources tracked the deleted entity, so each has lost an owner (or an
 // anchor): the delete's transaction queued their ownership facts (queueOwnershipOnTx), and

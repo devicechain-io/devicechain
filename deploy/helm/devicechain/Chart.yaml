@@ -1,9 +1,10 @@
 apiVersion: v2
 name: devicechain
 description: >-
-  Cloud-native, self-hosted IoT platform — device management, MQTT/Sparkplug/LwM2M
-  ingest, TimescaleDB telemetry, a CEL rule engine with alarms, dashboards, and a
-  web console. Deploys one Deployment + Service per enabled functional area.
+  Open-source, self-hosted IoT platform, ready for AI agents — device management,
+  MQTT/Sparkplug/LwM2M and LoRaWAN ingest, TimescaleDB telemetry, a CEL rule engine
+  with alarms and commands, OTA updates, dashboards, and an optional MCP server for AI
+  assistants. Deploys one Deployment + Service per enabled functional area.
 type: application
 version: 0.1.0
 appVersion: "0.0.1"
@@ -22,6 +23,9 @@ keywords:
   - telemetry
   - timescaledb
   - self-hosted
+  - lorawan
+  - mcp
+  - ota
 maintainers:
   - name: The DeviceChain Authors
     url: https://github.com/devicechain-io/devicechain

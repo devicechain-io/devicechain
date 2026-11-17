@@ -24,7 +24,7 @@ import (
 // registers on every DeviceChain HTTP server.
 func healthz(ms *core.Microservice) int {
 	rec := httptest.NewRecorder()
-	ms.Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	ms.OpsMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	return rec.Code
 }
 

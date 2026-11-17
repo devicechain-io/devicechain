@@ -362,9 +362,7 @@ La instalación del clúster configura un controlador de ingress y cada instanci
 el borde es un control de seguridad: el emisor de tokens de servicio y el conjunto de claves de firma los sirve
 `user-management` en un puerto interno al que no apunta ninguna ruta del ingress, de modo que el puerto público
 responde 404 para ellos detrás de cualquier controlador. El emisor está protegido por el secreto de servicio
-compartido, que se compara en tiempo constante. Las rutas del chart no llevan ningún snippet de configuración. `ingress-nginx`, en un clúster que
-aún lo ejecuta, sigue aceptando snippets en esta versión, porque las instancias que aún no se han actualizado
-dependen de ellos.
+compartido, que se compara en tiempo constante. Las rutas del chart no llevan ningún snippet de configuración. En un clúster que conserva `ingress-nginx`, `dcctl install` desactiva los snippets y restablece el nivel de riesgo de anotaciones predeterminado del controlador. Primero se niega a continuar mientras algún Ingress de la clase de ese controlador lleve una anotación `*-snippet`, e identifica cada uno: actualiza su instancia propietaria con `dcctl upgrade`, o elimina la anotación, y vuelve a ejecutar `dcctl install`. Consulta [las notas de actualización de v1.6.0](./releases-and-upgrades.md#v160-nginx-snippets-off).
 
 Si traes tu propio controlador, enruta los cinco ingress del chart. Un controlador que implemente la Gateway API puede servir en su lugar el Gateway y los HTTPRoutes que genera el chart (`ingress.controller: gateway`; el README del chart lista lo que debe hacer ese controlador):
 
@@ -2146,8 +2144,12 @@ construida por una versión anterior, de antes de que existiera `dcctl install`,
 excepción: también hay que recrear su clúster; consulta
 [Versiones y actualizaciones](./releases-and-upgrades.md#pre-declaration-recreate).
 
-Si el propio clúster de kind ya no existe —borrado con `kind delete cluster`—, destroy no tiene
-nada que desinstalar y lo dice, limpiando solo el estado local. Eso es el directorio de la
+Si el propio clúster de kind ya no existe —borrado con `kind delete cluster`—, destroy solo
+limpia el estado local cuando la instancia tiene un registro de su clúster y el contexto
+registrado ya no responde. Una suposición nunca demuestra que el clúster haya desaparecido.
+Sin registro se ejecuta la desinstalación normal, que falla si no se puede acceder al clúster;
+indique `--kube-context` o elimine manualmente el directorio de la instancia si su clúster
+realmente ha desaparecido. Eso es el directorio de la
 instancia y el directorio propio del clúster en `~/.devicechain/clusters/<cluster-uid>/`, que
 creó `dcctl install` y que `kind delete cluster` dejó atrás (consulta
 [Instalar el clúster](#install)). Mientras lo hace, imprime:
