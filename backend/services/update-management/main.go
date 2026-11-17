@@ -111,7 +111,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -144,6 +144,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Microservice.StartInstanceAuthGate(ctx)
 
 	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
 			Migrations: schema.Migrations,
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
@@ -293,7 +294,7 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
-	api.TenantDeleted = governance.NewTenantLifecycleGateFor(peers, governance.NewSafetyGates(Microservice))
+	api.TenantDeleted = governance.NewTenantLifecycleGateFor(peers, Svc.SafetyGates())
 	url, peerErr := peers.URL(infra.DeviceManagement.Endpoint())
 
 	switch {
