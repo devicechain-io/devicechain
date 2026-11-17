@@ -168,7 +168,7 @@ func TestDisarmThenMessageKeepsOrderIdentityAndNotEarly(t *testing.T) {
 	w := &orderWriter{store: rp.Store, partition: rp.cfg.PartitionId}
 	rp.publisher = runtime.NewPublisher(w, reg, (*DetectMetrics)(nil))
 	rp.RosterStore = newProcRosterStore(t)
-	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase})
+	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase}, nil)
 	rp.armer.ApplyDeviceMembership(runtime.RosterEntry{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase}, true)
 	eng.Advance(testBase.Add(11 * time.Second))
 	rp.drainDetections(testBase.Add(11*time.Second), true)

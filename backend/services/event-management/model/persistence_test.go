@@ -75,6 +75,7 @@ func TestMeasurementsQueryableByEachAnchor(t *testing.T) {
 	occurred := time.Date(2026, 7, 1, 20, 0, 0, 0, time.UTC)
 
 	parent := Event{DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, Source: "http1"}
+	parent.EventId = DeriveEventId("acme", &parent, []byte("temperature=21.5"))
 	if _, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
 		[]*MeasurementEventCreateRequest{{Event: parent,
 			EntryOccurredTime: parent.OccurredTime, Name: "temperature", Value: f64(21.5)}}); err != nil {
@@ -82,8 +83,8 @@ func TestMeasurementsQueryableByEachAnchor(t *testing.T) {
 	}
 	// The device is assigned to a customer AND an area: one anchor row per target.
 	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
-		{DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
-		{DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorToken: "area-9"},
+		{EventId: parent.EventId, DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
+		{EventId: parent.EventId, DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorToken: "area-9"},
 	}); err != nil {
 		t.Fatalf("CreateEventAnchors: %v", err)
 	}
@@ -118,6 +119,7 @@ func TestCreateMeasurementEventsWritesParentAndChildren(t *testing.T) {
 		Source:        "http1",
 		ProcessedTime: occurred,
 	}
+	parent.EventId = DeriveEventId("acme", &parent, []byte("temperature=21.5,humidity=48"))
 	// The two children carry DIFFERENT instants under one parent — the store-and-forward
 	// shape. A test where both matched the parent's time would pass even if the child rows
 	// silently inherited the envelope, which is the defect per-sample times remove.

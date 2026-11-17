@@ -68,11 +68,13 @@ func startNatsWiringFixture(t *testing.T) *messaging.NatsManager {
 
 	prevMs, prevCfg, prevNats, prevRdb, prevApi, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Api, Svc
 	prevProc, prevWriteback := CommandDeliveryProcessor, DeadLetterWriteback
+	prevRoster, prevDeletion := RosterConsumer, DeletionConsumer
 	prevResponses, prevCommands := CommandResponsesReader, DeviceCommandsWriter
 	prevDelivery, prevWritebackMetrics := DeliveryMetrics, WritebackMetrics
 	t.Cleanup(func() {
 		Microservice, Configuration, NatsManager, RdbManager, Api, Svc = prevMs, prevCfg, prevNats, prevRdb, prevApi, prevSvc
 		CommandDeliveryProcessor, DeadLetterWriteback = prevProc, prevWriteback
+		RosterConsumer, DeletionConsumer = prevRoster, prevDeletion
 		CommandResponsesReader, DeviceCommandsWriter = prevResponses, prevCommands
 		DeliveryMetrics, WritebackMetrics = prevDelivery, prevWritebackMetrics
 	})
