@@ -197,7 +197,7 @@ judge() {
 offline_controls() {
   say "offline controls (no cluster)"
   (cd "$repo_root/backend/sims/dc-simulator" &&
-    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn' ./scenarioverify/ >/dev/null &&
+    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn|TestFoldedDecodeFailures' ./scenarioverify/ >/dev/null &&
     go test -count=1 ./scenariosink/ >/dev/null) ||
     fail "the verifier's or the sink's own controls failed (go test ./scenarioverify/ ./scenariosink/ in backend/sims/dc-simulator)"
   pass "the verifier: a clean day passes, each planted defect turns exactly its invariant red"

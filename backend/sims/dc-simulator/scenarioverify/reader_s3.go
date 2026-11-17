@@ -38,7 +38,7 @@ const (
 
 	queryFailedEvents = `query ScenarioFailedEvents($c: FailedEventSearchCriteria!) {
   failedEvents(criteria: $c) {
-    results { occurredTime reason deviceToken error }
+    results { id occurredTime reason deviceToken error suppressed }
     pagination { totalRecords }
   }
 }`
@@ -68,10 +68,17 @@ type DecoderHealth struct {
 }
 
 // DecodeFailure is one DECODE_FAILED record.
+//
+// A record is not one failure. event-management keeps at most ten records per (device, reason) in
+// any sliding hour and folds every failure past that into the newest record's Suppressed count, so
+// a device that fails steadily writes its ten records in the first minutes and then only grows a
+// count on a record older than any watch that starts later in the hour.
 type DecodeFailure struct {
-	At     time.Time `json:"at"`
-	Device string    `json:"device"`
-	Error  string    `json:"error"`
+	ID         string    `json:"id"`
+	At         time.Time `json:"at"`
+	Device     string    `json:"device"`
+	Error      string    `json:"error"`
+	Suppressed int       `json:"suppressed"`
 }
 
 // RotateSigningSecret replaces the secret under handle with a new one this verifier holds, and
@@ -192,10 +199,12 @@ func (r *Reader) DecodeFailures(ctx context.Context, device string) ([]DecodeFai
 		var resp struct {
 			FailedEvents struct {
 				Results []struct {
+					ID           string  `json:"id"`
 					OccurredTime string  `json:"occurredTime"`
 					Reason       string  `json:"reason"`
 					DeviceToken  *string `json:"deviceToken"`
 					Error        string  `json:"error"`
+					Suppressed   *int    `json:"suppressed"`
 				} `json:"results"`
 				Pagination struct {
 					TotalRecords *int `json:"totalRecords"`
@@ -217,7 +226,12 @@ func (r *Reader) DecodeFailures(ctx context.Context, device string) ([]DecodeFai
 			if err != nil {
 				return nil, fmt.Errorf("decode failure of %s: occurredTime %q: %w", device, f.OccurredTime, err)
 			}
-			out = append(out, DecodeFailure{At: at, Device: device, Error: f.Error})
+			// The judge matches a record across two reads by its id and reads the failures folded
+			// into it from suppressed, so a record with neither is refused rather than read as zero.
+			if f.ID == "" || f.Suppressed == nil {
+				return nil, fmt.Errorf("decode failure of %s at %s: the server returned no id or no suppressed count", device, f.OccurredTime)
+			}
+			out = append(out, DecodeFailure{ID: f.ID, At: at, Device: device, Error: f.Error, Suppressed: *f.Suppressed})
 		}
 		if len(out) >= *resp.FailedEvents.Pagination.TotalRecords || len(resp.FailedEvents.Results) < failedPageSize {
 			return out, nil

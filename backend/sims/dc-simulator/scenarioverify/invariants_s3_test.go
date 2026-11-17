@@ -88,7 +88,7 @@ func (d *day) cleanS3() {
 	for _, g := range append(sim.HarborpulseLoraGauges(), sim.HarborpulseLegacyGauge) {
 		for t, n := at(WatchFrom).Add(time.Second), 0; t.Before(at(WatchTo)); t, n = t.Add(5*time.Second), n+1 {
 			if g == sim.HarborpulseLegacyGauge && n%2 == 1 {
-				s.DecodeFailures[g] = append(s.DecodeFailures[g], DecodeFailure{At: t, Device: g,
+				s.DecodeFailures[g] = append(s.DecodeFailures[g], DecodeFailure{ID: fmt.Sprintf("df-%d", n), At: t, Device: g,
 					Error: "eval_error at sections[1].outputs[1].expr: u16be: offset 5 is out of range"})
 				continue
 			}
@@ -215,4 +215,48 @@ func TestWithoutASinkTheSinkInvariantsAreNotJudged(t *testing.T) {
 			t.Fatalf("%s failed without a sink: %s", inv.Name, inv.Detail)
 		}
 	}
+}
+
+// foldedLegacyDay is a clean day whose legacy gauge wrote its ten records of the hour before the
+// watch: through the watch the platform only folds its failures into the newest one's suppressed
+// count, which grows from atWatch to atEnd.
+func foldedLegacyDay(atWatch, atEnd int) *day {
+	d := cleanDay()
+	g := sim.HarborpulseLegacyGauge
+	var start, end []DecodeFailure
+	for i := 0; i < 10; i++ {
+		f := DecodeFailure{ID: fmt.Sprintf("early-%d", i), At: at(WatchFrom).Add(-time.Duration(10-i) * time.Minute), Device: g,
+			Error: "decode_failed: eval_error: sections[1].outputs[1].expr: u16be: reads 2 byte(s) at offset 5 of a 6-byte frame"}
+		start, end = append(start, f), append(end, f)
+	}
+	start[9].Suppressed, end[9].Suppressed = atWatch, atEnd
+	d.s3.LegacyFailuresAtWatch, d.s3.DecodeFailures[g] = start, end
+	return d
+}
+
+// A steadily failing device spends its hourly record bound in minutes, so a watch later in the hour
+// sees its failures only as growth in an older record's suppressed count. That growth is the
+// watch's failures on record, and the invariant holds on it.
+func TestFoldedDecodeFailuresCountThroughTheWatch(t *testing.T) {
+	for _, inv := range Evaluate(foldedLegacyDay(98, 160).observe()) {
+		if !inv.Passed {
+			t.Fatalf("%s failed on a day whose decode failures were folded: %s", inv.Name, inv.Detail)
+		}
+	}
+}
+
+// ...but only growth during the watch counts: a folded count that did not move, or a record the
+// watch never saw at its start, shows nothing about this day.
+func TestFoldedDecodeFailuresThatDidNotGrowAreRed(t *testing.T) {
+	evaluateOneRed(t, InvDecoderFailureVisible, "suppressed count grew", func(d *day) {
+		*d = *foldedLegacyDay(98, 98)
+	})
+	evaluateOneRed(t, InvDecoderFailureVisible, "suppressed count grew", func(d *day) {
+		*d = *foldedLegacyDay(98, 160)
+		d.s3.LegacyFailuresAtWatch = nil
+	})
+	evaluateOneRed(t, InvDecoderFailureVisible, "not the evaluation error", func(d *day) {
+		*d = *foldedLegacyDay(98, 160)
+		d.s3.DecodeFailures[sim.HarborpulseLegacyGauge][9].Error = "decode_failed: timeout"
+	})
 }

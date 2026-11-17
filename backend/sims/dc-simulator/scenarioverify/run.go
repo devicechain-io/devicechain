@@ -209,6 +209,11 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 	if err := sleepUntil(ctx, from); err != nil {
 		return err
 	}
+	// The legacy gauge's decode failures as the watch begins: after its first ten in an hour the
+	// platform folds the rest into an older record's count, which only a before-and-after shows.
+	if obs.S3.LegacyFailuresAtWatch, err = reader.DecodeFailures(ctx, sim.HarborpulseLegacyGauge); err != nil {
+		return noVerdict{err}
+	}
 
 	// The watch: the alarm list every Poll, the clock every few polls (a restarted sim has a new
 	// day, and its beats would land where this run is not looking).

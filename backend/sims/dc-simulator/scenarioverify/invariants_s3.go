@@ -67,6 +67,9 @@ type S3 struct {
 	Ack                        Ack
 	Health                     map[string]DecoderHealth
 	DecodeFailures             map[string][]DecodeFailure
+	// LegacyFailuresAtWatch is the legacy gauge's DECODE_FAILED records as they stood when the watch
+	// began, so the judge can tell the failures folded into an older record during the watch.
+	LegacyFailuresAtWatch []DecodeFailure
 }
 
 func init() {
@@ -452,15 +455,25 @@ func decoderFailureVisible(o Observations) error {
 	if h.Failed < 1 || h.Decoded < 1 {
 		problems = append(problems, fmt.Sprintf("the legacy decoder's health: %.0f decoded, %.0f failed; want both", h.Decoded, h.Failed))
 	}
+	// The watch's failures are on record either as records written in it or, once the hourly bound
+	// has been reached (ten records a device, then folded), as growth in an older record's
+	// suppressed count since the watch began. A record that existed at the start and did not grow
+	// shows nothing about this day.
+	before := map[string]int{}
+	for _, f := range o.S3.LegacyFailuresAtWatch {
+		before[f.ID] = f.Suppressed
+	}
 	var fails []DecodeFailure
 	for _, f := range o.S3.DecodeFailures[g] {
 		if inWindow(f.At, o.at(WatchFrom), o.end()) {
+			fails = append(fails, f)
+		} else if was, ok := before[f.ID]; ok && f.Suppressed > was {
 			fails = append(fails, f)
 		}
 	}
 	sort.Slice(fails, func(i, j int) bool { return fails[i].At.Before(fails[j].At) })
 	if len(fails) == 0 {
-		problems = append(problems, g+": no DECODE_FAILED record through the watch")
+		problems = append(problems, g+": no DECODE_FAILED record through the watch, and no earlier record's suppressed count grew in it")
 	}
 	for _, f := range fails {
 		if !strings.Contains(f.Error, "eval_error") {
