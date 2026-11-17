@@ -29,6 +29,7 @@ import {
   type CalculatedMetricBackfillJob,
 } from '@/lib/api/event-management';
 import '@/i18n/lazy/deviceProfiles';
+import { formatDateTime, formatNumber } from '@/lib/format';
 
 /** How often an active job's counters are re-read. */
 export const BACKFILL_POLL_MS = 5000;
@@ -47,13 +48,6 @@ const KNOWN_REASONS = [
   'eval_error',
   'ambiguous',
 ];
-
-function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleString();
-}
-
-const num = (n: number) => n.toLocaleString();
 
 function statusVariant(status: string): 'success' | 'destructive' | 'warning' | 'secondary' {
   if (status === 'SUCCEEDED') return 'success';
@@ -148,7 +142,7 @@ export function BackfillJobs({
                   {t('backfillJobVersion', { version: j.profileVersion })} · {j.metricKeys.join(', ')}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {fmtTime(j.from)} – {fmtTime(j.to)}
+                  {formatDateTime(j.from)} – {formatDateTime(j.to)}
                 </div>
                 {j.warnings.map((w) => (
                   <div key={w} className="text-xs text-amber-600 dark:text-amber-500">
@@ -171,29 +165,29 @@ export function BackfillJobs({
                 )}
                 <div className="text-xs text-muted-foreground">
                   {j.devicesTotal == null
-                    ? t('backfillDevicesDone', { done: num(j.devicesDone) })
-                    : t('backfillDevicesOf', { done: num(j.devicesDone), total: num(j.devicesTotal) })}
+                    ? t('backfillDevicesDone', { done: formatNumber(j.devicesDone) })
+                    : t('backfillDevicesOf', { done: formatNumber(j.devicesDone), total: formatNumber(j.devicesTotal) })}
                 </div>
               </DataTableCell>
               <DataTableCell className="text-xs tabular-nums">
-                <div>{t('backfillWritten', { count: num(j.written) })}</div>
+                <div>{t('backfillWritten', { count: formatNumber(j.written) })}</div>
                 <div className="text-muted-foreground">
-                  {t('backfillSamplesPresent', { samples: num(j.samples), present: num(j.alreadyPresent) })}
+                  {t('backfillSamplesPresent', { samples: formatNumber(j.samples), present: formatNumber(j.alreadyPresent) })}
                 </div>
                 {j.skipped.map((s) => (
                   <div key={s.reason} className="text-muted-foreground">
                     {t('backfillSkipped', {
-                      count: num(s.count),
+                      count: formatNumber(s.count),
                       reason: KNOWN_REASONS.includes(s.reason) ? t(`backfillSkip.${s.reason}`) : s.reason,
                     })}
                   </div>
                 ))}
                 {j.windowsCompressed > 0 && (
-                  <div className="text-muted-foreground">{t('backfillCompressed', { count: num(j.windowsCompressed) })}</div>
+                  <div className="text-muted-foreground">{t('backfillCompressed', { count: formatNumber(j.windowsCompressed) })}</div>
                 )}
                 {j.windowsBeyondRetention > 0 && (
                   <div className="text-muted-foreground">
-                    {t('backfillBeyondRetention', { count: num(j.windowsBeyondRetention) })}
+                    {t('backfillBeyondRetention', { count: formatNumber(j.windowsBeyondRetention) })}
                   </div>
                 )}
               </DataTableCell>
