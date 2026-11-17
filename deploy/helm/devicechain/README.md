@@ -1,9 +1,10 @@
 # DeviceChain Helm chart
 
-[DeviceChain](https://devicechain.io) is a cloud-native, self-hosted IoT platform:
-device management, MQTT / Sparkplug / LwM2M ingest, TimescaleDB telemetry, a CEL
-rule engine with alarms and outbound connectors, versioned dashboards, and a web
-console. It is Apache-2.0 and multi-tenant — one shared set of services serves
+[DeviceChain](https://devicechain.io) is an open-source, self-hosted IoT platform,
+ready for AI agents: device management, MQTT / Sparkplug / LwM2M and LoRaWAN ingest,
+TimescaleDB telemetry, a CEL rule engine with alarms and outbound connectors,
+versioned dashboards, over-the-air updates, an optional MCP server for AI assistants,
+and a web console. It is Apache-2.0 and multi-tenant — one shared set of services serves
 every tenant, with isolation enforced in storage and messaging rather than by
 per-tenant pods. Full documentation: [docs.devicechain.io](https://docs.devicechain.io).
 

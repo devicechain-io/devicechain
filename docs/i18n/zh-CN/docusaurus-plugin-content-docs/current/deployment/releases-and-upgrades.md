@@ -518,6 +518,9 @@ dcctl bootstrap local devicechain
 
 #### 升级到 v1.7.0 前 {#v170-before-upgrade}
 
+
+- **`dcctl install`、`dcctl bootstrap` 和 `dcctl preflight` 会检查 OpenTofu 或 Terraform 的版本。** 预检现在会拒绝低于 dcctl 内置 OpenTofu 配置所声明的 `required_version`（目前为 `>= 1.10`）的二进制文件、预发布版本，以及无法读取版本的二进制文件。此前预检只检查二进制文件是否存在，因此使用 OpenTofu 1.9 的安装会在已经更新 Operator 之后才在 `tofu init` 处失败。两者都已安装时仍优先使用 OpenTofu，检查的也是它。运行 v1.7.0 的 `dcctl install` 之前，请安装 1.10 或更高的稳定版 OpenTofu 或 Terraform。`--skip-preflight` 仍会跳过此检查。
+
 #### v1.7.0 新增内容 {#v170-whats-new}
 
 #### 删除通知可靠送达 {#v170-deletion-announcements}
@@ -526,6 +529,9 @@ dcctl bootstrap local devicechain
 - 无论通知多晚发布，都携带删除操作发生的时间。
 - 在滚动升级期间新旧 Pod 并存时，由 `v1.6` Pod 处理的删除仍按旧方式通知。
 - 无需更改配置。
+
+
+- **MCP 服务器每进程 64 个进行中请求的上限现在可以达到，超出的请求会收到 HTTP 429。** 共享请求体预算此前只能容纳 63 个最大尺寸的请求体，因此第 64 个并发请求会在达到 MCP 上限之前收到带 `Retry-After: 1` 的 HTTP 503。该预算现在可容纳 64 个（增加 64 字节），超出上限的请求会收到带 `Retry-After: 1` 的 HTTP 429，与文档一致。每个调用者 4 个进行中请求的上限和 1 MiB 的请求体上限保持不变。
 
 ### v1.6.0 — 更严格的权限检查，代理重载时设备保持连接 {#v160-upgrade}
 

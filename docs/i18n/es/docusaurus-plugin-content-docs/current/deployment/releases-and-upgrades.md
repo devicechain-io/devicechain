@@ -807,6 +807,9 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Antes de actualizar a v1.7.0 {#v170-before-upgrade}
 
+
+- **`dcctl install`, `dcctl bootstrap` y `dcctl preflight` comprueban la versión de OpenTofu o Terraform.** La comprobación previa ahora rechaza un binario anterior al `required_version` que declara la configuración de OpenTofu incluida en dcctl (actualmente `>= 1.10`), una versión preliminar o un binario cuya versión no puede leer. Antes solo comprobaba que el binario existiera, por lo que una instalación con OpenTofu 1.9 fallaba en `tofu init` cuando ya había actualizado el operador. Si ambos están instalados, se sigue prefiriendo OpenTofu, y es el binario que se comprueba. Instala OpenTofu o Terraform estable 1.10 o posterior antes de ejecutar el `dcctl install` de v1.7.0. `--skip-preflight` sigue omitiendo la comprobación.
+
 #### Novedades de v1.7.0 {#v170-whats-new}
 
 #### Las eliminaciones se avisan de forma fiable {#v170-deletion-announcements}
@@ -815,6 +818,9 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 - El aviso lleva la hora de la eliminación, por tarde que se publique.
 - Mientras conviven pods antiguos y nuevos durante la actualización gradual, las eliminaciones que atiende un pod `v1.6` se avisan de la forma anterior.
 - No requiere cambios de configuración.
+
+
+- **El límite de 64 solicitudes en curso por proceso del servidor MCP es alcanzable, y la solicitud que lo supera recibe HTTP 429.** El presupuesto compartido de cuerpos de solicitud solo admitía 63 cuerpos de tamaño máximo, por lo que la solicitud simultánea número 64 recibía HTTP 503 con `Retry-After: 1` antes de alcanzar el límite de MCP. Ahora el presupuesto admite 64 (crece 64 bytes), y las solicitudes que superan el límite reciben HTTP 429 con `Retry-After: 1`, como está documentado. El límite de 4 en curso por llamante y el máximo de 1 MiB por cuerpo de solicitud no cambian.
 
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}
 

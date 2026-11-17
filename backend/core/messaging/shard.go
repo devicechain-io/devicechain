@@ -24,9 +24,11 @@ var ErrUnplacedTenant = errors.New("messaging: tenant has no valid shard-group p
 // ErrShardRoutingNotEnabled refuses reads of instance-sharded streams without routing.
 var ErrShardRoutingNotEnabled = errors.New("messaging: shard-group routing is not enabled")
 
-// ShardGroupRouter is satisfied by partition.Router. An error never means group zero.
+// ShardGroupRouter holds an adoptable placement. An error never means group zero.
 type ShardGroupRouter interface {
 	ShardGroup(tenant string) (int, error)
+	// Ready returns nil when routing has an adoptable placement.
+	Ready() error
 }
 
 // A non-nil snapshot also represents disabled routing, so frozen legacy
@@ -83,6 +85,16 @@ func (nmgr *NatsManager) streamSharding() *streamShards {
 
 func (s *streamShards) selects(suffix string) bool {
 	return s != nil && slices.Contains(s.cfg.Suffixes, suffix)
+}
+
+func (nmgr *NatsManager) routingRefusal(suffix string) error {
+	s := nmgr.streamSharding()
+	if s.selects(suffix) {
+		if err := s.router.Ready(); err != nil {
+			return fmt.Errorf("%w: %w", ErrUnplacedTenant, err)
+		}
+	}
+	return nil
 }
 
 func (nmgr *NatsManager) tenantSuffix(tenant, suffix string) (string, error) {
@@ -307,6 +319,9 @@ func (nmgr *NatsManager) readerDownstreams(base string, group *int) []string {
 
 func (r *natsReader) downstreamRefusal() error {
 	for _, suffix := range r.downstreams {
+		if err := r.nmgr.routingRefusal(r.nmgr.declaredSuffix(suffix)); err != nil {
+			return err
+		}
 		if err := r.nmgr.Backpressure(suffix); err != nil {
 			return err
 		}
