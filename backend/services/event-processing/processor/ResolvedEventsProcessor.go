@@ -1934,12 +1934,20 @@ func (rp *ResolvedEventsProcessor) checkpointMinSpacing() time.Duration {
 	return min(checkpointDutyFactor*rp.lastCheckpointCost, rp.cfg.CheckpointInterval)
 }
 
+// checkpointCountReached is whether enough has been applied since the last checkpoint:
+// CheckpointEvents messages (which bounds the broker's ack-pending) or that many events
+// (which bounds the replay), or buffered acks at the override that releases them before the
+// consumer exhausts its limit. It is the trigger without the cost spacing.
+func (rp *ResolvedEventsProcessor) checkpointCountReached() bool {
+	return len(rp.pendingAcks) >= ackPendingCheckpointOverride ||
+		len(rp.pendingAcks) >= rp.cfg.CheckpointEvents || rp.pendingEvents >= rp.cfg.CheckpointEvents
+}
+
 // checkpointDue gates count-triggered commits by snapshot cost, with an override
 // that releases buffered acknowledgements before the consumer exhausts its limit.
 func (rp *ResolvedEventsProcessor) checkpointDue() bool {
 	return len(rp.pendingAcks) >= ackPendingCheckpointOverride ||
-		((len(rp.pendingAcks) >= rp.cfg.CheckpointEvents || rp.pendingEvents >= rp.cfg.CheckpointEvents) &&
-			rp.clock.Now().Sub(rp.lastCheckpoint) >= rp.checkpointMinSpacing())
+		(rp.checkpointCountReached() && rp.clock.Now().Sub(rp.lastCheckpoint) >= rp.checkpointMinSpacing())
 }
 
 // applyResolved parses a resolved-event message, fans it out across the applicable rules

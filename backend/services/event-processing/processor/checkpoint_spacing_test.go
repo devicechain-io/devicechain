@@ -186,3 +186,37 @@ func TestCheckpointSpacingReplay(t *testing.T) {
 		})
 	}
 }
+
+// The retry that completes a parked gap fill acks the held message on its own tick even when
+// the snapshot is slow. The fill commits its own checkpoints by count, unspaced, so the
+// spacing window is open when the held message is applied; a spaced trigger would leave its
+// ack to the next interval tick. The rig's snapshot costs 500ms on a manual clock, so the
+// window is open deterministically rather than only when a real clock measures a nonzero cost.
+func TestCheckpointSpacingDoesNotDelayTheRetrysHeldAck(t *testing.T) {
+	g, _ := spacingRig(t, 500*time.Millisecond)
+	opener := &flakyRanger{failOpens: 1}
+	opener.msgs = stream(t, 2)
+	g.rp.Replay = opener
+	g.rp.cfg.CheckpointEvents = 1
+	g.rp.handle(hot(t, 1, &fakeAck{}))
+	held := &fakeAck{}
+	g.rp.handle(hot(t, 3, held)) // 2 missing; the broker is unreachable
+	if g.rp.gapHeld == nil {
+		t.Fatal("not parked")
+	}
+	g.rp.retryGapFill()
+	if g.rp.gapHeld != nil {
+		t.Fatal("the retry did not complete")
+	}
+	if g.rp.checkpointMinSpacing() == 0 {
+		t.Fatal("no spacing window: the fill's own checkpoint did not commit, so this proves nothing")
+	}
+	if held.acks != 1 {
+		t.Fatalf("held message acked %d times by the retry's own checkpoint, want 1", held.acks)
+	}
+	snap, ok, _ := g.rp.Store.Load(context.Background(), "singleton")
+	if !ok || snap.StreamSeq != 3 {
+		t.Fatalf("checkpoint after the retry = %+v (ok=%v), want seq 3", snap, ok)
+	}
+	equal(t, "buffered acks", len(g.rp.pendingAcks), 0)
+}
