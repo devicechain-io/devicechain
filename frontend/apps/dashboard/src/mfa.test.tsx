@@ -9,16 +9,17 @@
 // the per-source rate limit reads as itself, an expired challenge sends the viewer back, and a
 // tenant that needs a factor the account lacks says so (this viewer cannot enrol).
 
-import { GraphQLRequestError } from '@devicechain/client';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { GraphQLRequestError, type UnauthorizedHandler } from '@devicechain/client';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ gql: vi.fn() }));
+const h = vi.hoisted(() => ({ gql: vi.fn(), unauthorized: null as UnauthorizedHandler | null }));
 
 vi.mock('@devicechain/client', async (orig) => ({
   ...(await orig<typeof import('@devicechain/client')>()),
   gql: (...a: unknown[]) => h.gql(...a),
   setAuthTokenGetter: () => {},
+  setUnauthorizedHandler: (handler: UnauthorizedHandler | null) => { h.unauthorized = handler; },
 }));
 
 import App from './App';
@@ -61,6 +62,26 @@ beforeEach(async () => {
   await i18n.changeLanguage('en');
 });
 afterEach(cleanup);
+
+it('shows the session-ended overlay on a final 401 only for the current token and unregisters on unmount', async () => {
+  serve({
+    login: () => ({ login: ONE_TENANT }),
+    select: () => ({ selectTenant: { accessToken: 'a.b.c', refreshToken: 'r' } }),
+  });
+  const view = render(<App />);
+  fireEvent.change(screen.getByLabelText(t('signIn:emailLabel')), { target: { value: 'v@acme.com' } });
+  fireEvent.change(screen.getByLabelText(t('signIn:passwordLabel')), { target: { value: 'hunter2' } });
+  fireEvent.submit(screen.getByRole('button', { name: t('signIn:submit') }));
+  await waitFor(() => expect(screen.queryByLabelText(t('signIn:passwordLabel'))).toBeNull());
+  expect(h.unauthorized).not.toBeNull();
+  const err = new GraphQLRequestError('Request failed (401)', 401);
+  act(() => h.unauthorized!.onEnd(err, 'old-token', false));
+  expect(screen.queryByRole('alertdialog')).toBeNull();
+  act(() => h.unauthorized!.onEnd(err, 'a.b.c', false));
+  expect(screen.getByRole('alertdialog')).toBeTruthy();
+  view.unmount();
+  expect(h.unauthorized).toBeNull();
+});
 
 describe('the code step', () => {
   it('appears when the password is right but the account is held for its second factor', async () => {

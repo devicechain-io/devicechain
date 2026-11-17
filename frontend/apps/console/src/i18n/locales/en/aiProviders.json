@@ -49,6 +49,7 @@
   "providerDeletedToast": "Provider “{{token}}” deleted",
   "providerNotFound": "Provider “{{token}}” not found.",
   "providerSavedToast": "Provider saved",
+  "providerStaleWrite": "This provider changed since you loaded it. Reload and try again; your changes have not been saved.",
   "replaceButton": "Replace",
   "saveProviderButton": "Save provider",
   "searchKindsPlaceholder": "Search kinds…",

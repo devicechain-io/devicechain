@@ -11,12 +11,7 @@
 import { useTranslation } from 'react-i18next';
 import { Info, TriangleAlert } from 'lucide-react';
 import { sparkplugOutcome } from './sparkplugCommands';
-
-function when(iso: string | undefined): string | undefined {
-  if (!iso) return undefined;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? undefined : d.toLocaleString();
-}
+import { formatDateTime } from '@/lib/format';
 
 export function SparkplugOutcomeNote({
   command,
@@ -48,18 +43,18 @@ export function SparkplugOutcomeNote({
       text = t('sparkplugOutcomeConfirmed', {
         metric: outcome.metric ?? '',
         value: outcome.value ?? '',
-        at: when(outcome.at) ?? t('sparkplugOutcomeUnknownTime'),
+        at: formatDateTime(outcome.at, t('sparkplugOutcomeUnknownTime')),
         via: outcome.via,
       });
       break;
     case 'confirmedByBirth':
-      text = t('sparkplugOutcomeConfirmedBirth', { at: when(outcome.at) ?? t('sparkplugOutcomeUnknownTime') });
+      text = t('sparkplugOutcomeConfirmedBirth', { at: formatDateTime(outcome.at, t('sparkplugOutcomeUnknownTime')) });
       break;
     case 'alreadyAtValue':
       text = t('sparkplugOutcomeUnchanged', {
         metric: outcome.metric ?? '',
         value: outcome.value ?? '',
-        since: when(outcome.since) ?? t('sparkplugOutcomeUnknownTime'),
+        since: formatDateTime(outcome.since, t('sparkplugOutcomeUnknownTime')),
       });
       break;
   }

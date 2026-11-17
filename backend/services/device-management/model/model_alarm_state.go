@@ -100,6 +100,16 @@ type Alarm struct {
 	// alarm raised before the stamp existed is invisible to them. Only the raise path writes
 	// it; a scoped caller's acknowledge or clear may never touch it.
 	ScopeAnchors rdb.Anchors `gorm:"type:text[]"`
+
+	// PositionDerived is true once a rule that tests geofence containment has contributed to the
+	// alarm (RaiseAlarmRequest.RequiresPosition). Such an alarm says when its device entered or
+	// left a fence, so a caller without location:read never reads it (position_withholding.go),
+	// exactly as it never receives the rule's live detections. true is sticky: once set it is never
+	// cleared, because the alarm's history already carries the position. false is "no such rule
+	// has contributed". NULL is "not classified yet": an alarm written by a replica older than the
+	// column, or folded from an edge whose producer predates the flag. NULL is withheld like true
+	// and classified by position_classify.go. Only the integrator and the classifier write it.
+	PositionDerived *bool
 }
 
 // DefaultOrder implements rdb.Sortable. An alarm does not follow the registry default:

@@ -154,7 +154,11 @@ func (d *doctor) checkTools(provider string, opts doctorOpts) {
 		label := strings.Join(c.names, "/")
 		switch {
 		case found != "":
-			d.pass(found)
+			if c.names[0] == "tofu" {
+				d.checkTofuVersion()
+			} else {
+				d.pass(found)
+			}
 		case c.required:
 			d.fail(label+" not found", c.guidance)
 		default:

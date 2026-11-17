@@ -20,6 +20,7 @@ import { ToggleButton } from '@/components/ui/toggle-button';
 import { errMessage } from '@/routes/common';
 import { previewRule, type PreviewResult, type PreviewFiring, type NodeTraceStep } from '@/lib/api/event-processing';
 import { listMetricDefinitions } from '@/lib/api/device-management';
+import { formatDateTime } from '@/lib/format';
 import '@/i18n/lazy/deviceProfiles';
 
 // The window presets (hours back from now). A preview is capped server-side to 24h. The label is
@@ -291,7 +292,7 @@ function FiringCells({ firing: f }: { firing: PreviewFiring }) {
         {f.signal === 'raised' ? t('previewRaise') : t('previewResolve')}
       </span>
       <span className="font-mono text-muted-foreground">{f.series}</span>
-      <span className="ml-auto tabular-nums text-muted-foreground">{new Date(f.occurredAt).toLocaleString()}</span>
+      <span className="ml-auto tabular-nums text-muted-foreground">{formatDateTime(f.occurredAt)}</span>
     </>
   );
 }
