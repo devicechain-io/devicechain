@@ -57,7 +57,7 @@ func TestHTTPCallWithAMissingSecretIsTerminal(t *testing.T) {
 // reported as sent.
 func TestHTTPCallWithAnEmptyStoredSecretSendsNothing(t *testing.T) {
 	srv, hits := countingEndpoint(t)
-	store := &fakeSecretStore{values: map[string][]byte{"webhook/auth": []byte("")}}
+	store := &fakeSecretStore{values: map[string][]byte{"http-credential/webhook/auth": []byte("")}}
 	res := newTestExecutor(store).Execute(context.Background(), httpCallWithHandle(srv.URL))
 	if got := hits.Load(); got != 0 {
 		t.Fatalf("the endpoint received %d unauthenticated request(s) (outcome %s)", got, res.outcome)

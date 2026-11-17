@@ -27,13 +27,10 @@ variable "release_name" {
 
 variable "chart_version" {
   description = <<-EOT
-    ingress-nginx chart version. PINNED, and the pin is not hygiene — the values
-    below re-enable configuration snippets and lower the annotations risk level,
-    a surface upstream has tightened repeatedly. 4.15.1 ships controller 1.15.1,
-    which is where this recipe was verified: the instance chart's Ingress admits.
-    When that gating moves again the failure does not look like a version problem:
-    the Ingress is rejected by the admission webhook midway through bootstrap,
-    with the controller reporting a snippet or risk-level error.
+    ingress-nginx chart version. Pinned so controller and admission behaviour change
+    only on a deliberate chart bump. Configuration snippets are disabled, and the
+    annotations risk level is left at the controller default. 4.15.1 ships
+    controller 1.15.1.
 
     Bumping is a deliberate act: install the new chart, then apply an instance and
     confirm its Ingress ADMITS. Keep the root's ingress_nginx_chart_version in step
@@ -185,38 +182,16 @@ locals {
       enabled = true
     }
     ingressClass = var.ingress_class
-    # 🔴 SNIPPETS STAY ON IN THIS RELEASE, ON PURPOSE, AND THE CHART NO LONGER NEEDS THEM.
-    # This controller is SHARED by every instance on the cluster. The documented order
-    # is `dcctl install` (this module) and then `dcctl upgrade` per instance, so for a
-    # while there are instances still on an older chart whose `devicechain-api` Ingress
-    # carries a configuration-snippet. A controller that refuses snippets skips the
-    # whole Ingress, so every /api route of such an instance would go dark, and stay
-    # dark for one whose upgrade is refused. The current chart sets no snippet (the
-    # service-token mint is served on an internal listener no route reaches), and
-    # hack/check-oauth-discovery-routing.sh fails a render that adds one.
-    #
-    # The controller is tightened in the NEXT release (allowSnippetAnnotations=false,
-    # annotations-risk-level left at its default), behind a `dcctl install` preflight
-    # that refuses while any Ingress of the controller's class still carries a
-    # *-snippet annotation.
-    #
-    # The older instance Ingress uses a configuration-snippet annotation.
-    # Upstream has been tightening that surface for several releases — snippets went
-    # off by default, then a separate annotations risk level was added, and what that
-    # level evaluates has changed again since. Both switches are re-enabled here, or
-    # the instance chart's helm apply is rejected by the admission webhook ("Snippet
-    # directives are disabled" / "risky annotation"). Local-dev trust boundary: the
-    # only Ingress author is the DeviceChain chart itself.
-    #
-    # 🔴 No release boundary is named on purpose. The two that used to be written here
-    # were wrong, and a version number in a comment is a claim about someone else's
-    # changelog that nothing in this repo re-checks. What IS verified is the pin:
-    # chart 4.15.1 / controller 1.15.1 admits the instance Ingress with these values,
-    # measured on a live cluster. That is why the version is pinned rather than
-    # tracked — so the next tightening arrives as a bump somebody chose.
-    allowSnippetAnnotations = true
+    # Snippets are disabled on this shared controller, and the annotations risk level
+    # stays at the controller default. Before applying, `dcctl install` refuses while
+    # any Ingress of this controller's class carries a *-snippet annotation, including
+    # cluster-owned and ACME solver Ingresses. Upgrade the owning instance with
+    # `dcctl upgrade`, or remove the annotation, then re-run `dcctl install`.
+    # No DeviceChain chart since v0.25.2 sets a snippet; the service-token mint is
+    # served on an internal listener no route reaches. The render check in
+    # hack/check-oauth-discovery-routing.sh rejects any new snippet annotation.
+    allowSnippetAnnotations = false
     config = {
-      "annotations-risk-level" = "Critical"
       # Stated although it is the controller's default. The services key per-source limits on
       # the X-Forwarded-For this controller writes, and they believe it only from the
       # controller's own pods (infrastructure.http.trustedProxies): with this OFF the controller
