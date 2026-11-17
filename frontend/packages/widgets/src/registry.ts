@@ -24,12 +24,14 @@ type Descriptors = typeof builtinWidgetDescriptors;
 const entries = Object.entries(builtinWidgetDescriptors) as Array<[BuiltinWidgetId, Descriptors[BuiltinWidgetId]]>;
 
 // A built-in's data channel, as its descriptor declares it.
+/** @deprecated Use builtinWidgetDescriptors[id].channel instead. */
 export const WIDGET_CHANNEL: { readonly [K in BuiltinWidgetId]: Descriptors[K]['channel'] } = Object.freeze(
   Object.fromEntries(entries.map(([id, d]) => [id, d.channel])),
 ) as { readonly [K in BuiltinWidgetId]: Descriptors[K]['channel'] };
 
 // Whether a built-in binds a DATASOURCE -- the entity whose data it reads. Derived from the
 // descriptor's datasource mode: `none` binds nothing (label, image, the entity selector).
+/** @deprecated Use builtinWidgetDescriptors[id].datasource.mode !== 'none' instead. */
 export const WIDGET_BINDS_DATASOURCE: { readonly [K in BuiltinWidgetId]: boolean } = Object.freeze(
   Object.fromEntries(entries.map(([id, d]) => [id, d.datasource.mode !== 'none'])),
 ) as { readonly [K in BuiltinWidgetId]: boolean };

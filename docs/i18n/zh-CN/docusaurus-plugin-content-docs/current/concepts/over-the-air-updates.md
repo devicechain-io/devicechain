@@ -41,10 +41,18 @@ title: 空中（OTA）更新
 | `maxArtifactBytes` | 512 MiB | 单个制品的最大大小，不得超过 `maxTenantArtifactBytes`。 |
 | `maxTenantArtifactBytes` | 2 GiB | 一个租户全部制品的总大小上限。 |
 | `maxConcurrentUploads` | 4 | 单个副本同时处理的上传数。 |
-| `maxConcurrentDownloads` | 16 | 单个副本同时提供的下载数。 |
+| `maxConcurrentDownloads` | 16 | 单个副本为所有租户同时提供的下载总数。参见下文的准入限制。 |
 | `capabilityTtlSeconds` | 900 | 下载授权的有效期。十五分钟同时也是上限；更大的值会在启动时被拒绝。 |
 | `sweepIntervalSeconds` | 30 | 平台查找设备已失去响应的尝试的间隔。 |
 | `deadlines.*` | 见[下文](#deadlines) | 平台在尝试的每个阶段等待多久。 |
+
+每个副本对每个（租户、设备、分配）只允许一个进行中的下载，即使设备续期下载授权也是如此。
+每个租户的份额为 `max(1, floor(maxConcurrentDownloads / 2))`（默认为八个）。只有当其他租户占用名额时，
+已达到或超过其份额的租户才不能启动新流；已有流会继续。如果没有其他租户占用名额，单个租户可以使用全部可用名额。
+这些限制在每个副本上独立生效。
+
+被拒绝的下载返回 HTTP **503** 和 `Retry-After: 5`。连接中断后，恢复下载可能在约 **30 秒**内持续收到此响应，
+直到服务器察觉断开并释放之前的流。设备必须将 503 视为可重试响应，并遵守 `Retry-After` 后再重试，包括恢复下载时。
 
 负值、未知键，或者相对路径、包含凭据或查询参数的 `downloadBaseUrl`，都会在启动时被拒绝。
 

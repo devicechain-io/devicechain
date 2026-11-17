@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -98,5 +99,18 @@ func TestEveryDestroyFormBuildsItsOptionsInOnePlace(t *testing.T) {
 	}
 	if calls["destroyEveryInstance"] == 0 {
 		t.Error("--all (destroyEveryInstance) does not build its options through destroyOptionsFor")
+	}
+}
+
+func TestDestroyCommandRefusesPathShapedInstance(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("KUBECONFIG", filepath.Join(home, "kubeconfig"))
+	orig := destroyAll
+	destroyAll = false
+	t.Cleanup(func() { destroyAll = orig })
+	if err := destroyCmd.RunE(destroyCmd, []string{"local", ".."}); err == nil || !strings.Contains(err.Error(), "is not a plain name") {
+		t.Fatalf("expected plain name refusal, got %v", err)
 	}
 }
