@@ -26,6 +26,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/devicechain-io/dc-microservice/credbinding"
 )
 
 // ErrUnsupportedType is returned for a connector type with no registered target builder
@@ -45,21 +47,22 @@ type Target interface{ isTarget() }
 // and validation are ONE function so the write path and the dispatch path run the same
 // rules.
 type builder struct {
-	parse  func(config []byte) (Target, error)
-	secret func(t Target, secret string) (Target, error)
+	binding func([]byte) credbinding.Binding
+	parse   func(config []byte) (Target, error)
+	secret  func(t Target, secret string) (Target, error)
 }
 
 // builders is the registered target set. Adding a target type means adding a parser here
 // and a client in the publish package; the `publish` REACT action is unchanged (the type
 // selects the transport).
 var builders = map[string]builder{
-	"mqtt":    {parse: parseMQTT, secret: withMQTTSecret},
-	"kafka":   {parse: parseKafka, secret: withKafkaSecret},
-	"aws_sns": {parse: parseSNS, secret: withSNSSecret},
-	"aws_sqs": {parse: parseSQS, secret: withSQSSecret},
+	"mqtt":    {parse: parseMQTT, binding: mqttBinding, secret: withMQTTSecret},
+	"kafka":   {parse: parseKafka, binding: kafkaBinding, secret: withKafkaSecret},
+	"aws_sns": {parse: parseSNS, binding: snsBinding, secret: withSNSSecret},
+	"aws_sqs": {parse: parseSQS, binding: sqsBinding, secret: withSQSSecret},
 	// lorawan_downlink links an inbound integration to its network server's downlink API. It is
 	// executed by the downlink adapter, never by the REACT publish sender.
-	LoRaWANDownlinkType: {parse: parseLoRaWANDownlink, secret: withLoRaWANDownlinkSecret},
+	LoRaWANDownlinkType: {parse: parseLoRaWANDownlink, binding: lorawanBinding, secret: withLoRaWANDownlinkSecret},
 	// gcp_pubsub has no delivery implementation in this build. When it ships it will
 	// authenticate with a credential stored on the connector, as the AWS targets do,
 	// never with the pod's ambient identity.

@@ -148,6 +148,7 @@ func TestProfilerAddressRules(t *testing.T) {
 		"127.0.0.1:65536":                     "not a number from 1 to 65535",
 		"127.0.0.1:+1":                        "not a number from 1 to 65535",
 		"127.0.0.1:x":                         "not a number from 1 to 65535",
+		"127.0.0.1:" + strconv.Itoa(OpsPort):  "the service operations port",
 		"127.0.0.1:" + strconv.Itoa(HttpPort): "the service's own HTTP port",
 	}
 	for v, why := range refused {

@@ -16,15 +16,60 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
 	"strconv"
+	"sync"
 )
 
-// MeasurementStream streams measurement events to the subscriber as they resolve
-// (ADR-037). It taps the live resolved-events feed for the caller's tenant, maps
-// each resolved measurement entry to the same MeasurementEvent shape the query
-// returns, and applies the optional device / name filters — so a live chart and
-// a historical query share one type. The feed is torn down when the client
-// unsubscribes or disconnects (ctx cancelled). Named distinctly from the
-// measurementEvents query because both resolve off the one root resolver.
+// Factories are test seams, replaced only before creating a hub.
+var measurementLiveOpener = func(nmgr *messaging.NatsManager) messaging.LiveOpener {
+	return func(ctx context.Context, tenant string) (<-chan messaging.Message, error) {
+		return nmgr.SubscribeLive(ctx, tenant, streams.ResolvedEvents)
+	}
+}
+var measurementDecode = decodeMeasurements
+var measurementHubs = struct {
+	sync.Mutex
+	hubs map[*messaging.NatsManager]*messaging.LiveHub[*resolvedevent.ResolvedEvent]
+	drop func()
+}{hubs: make(map[*messaging.NatsManager]*messaging.LiveHub[*resolvedevent.ResolvedEvent])}
+
+// InitLiveSubscriptionMetrics runs once during process initialization, never per connection.
+func InitLiveSubscriptionMetrics(ms *core.Microservice) {
+	counter := ms.NewCounterVec("live_subscription_dropped_total", "Live values dropped for slow subscribers.", []string{"suffix"}).WithLabelValues(streams.ResolvedEvents)
+	measurementHubs.Lock()
+	measurementHubs.drop = counter.Inc
+	measurementHubs.Unlock()
+}
+
+func measurementHub(nmgr *messaging.NatsManager) *messaging.LiveHub[*resolvedevent.ResolvedEvent] {
+	measurementHubs.Lock()
+	defer measurementHubs.Unlock()
+	if hub := measurementHubs.hubs[nmgr]; hub != nil {
+		return hub
+	}
+	hub := messaging.NewLiveHub(streams.ResolvedEvents, measurementLiveOpener(nmgr), measurementDecode, messaging.DefaultMaxLiveSubscribersPerTenant)
+	hub.OnDrop(measurementHubs.drop)
+	measurementHubs.hubs[nmgr] = hub
+	return hub
+}
+
+func decodeMeasurements(msg messaging.Message, tenant string) []messaging.Keyed[*resolvedevent.ResolvedEvent] {
+	var values []messaging.Keyed[*resolvedevent.ResolvedEvent]
+	for _, value := range eventValues(msg, tenant) {
+		resolved, err := resolvedevent.UnmarshalResolvedEvent(value)
+		if err != nil {
+			log.Debug().Err(err).Msg("subscription: skipping undecodable resolved event")
+			continue
+		}
+		if resolved.EventType == eventtype.Measurement {
+			values = append(values, messaging.Keyed[*resolvedevent.ResolvedEvent]{Key: resolved.SourceDeviceToken, Value: resolved})
+		}
+	}
+	return values
+}
+
+// MeasurementStream shares one live resolved-events feed per tenant, decoding once
+// and dispatching by device before applying each caller's scope and name filters.
+// The last client disconnect tears down the tenant's feed.
 //
 // A SCOPED caller (ADR-081) is admitted, and receives a reading only when its resolved
 // event carries an anchor in the caller's scope (inScope) — the same rule the stored
@@ -47,7 +92,11 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 		return nil, core.ErrNoTenant
 	}
 
-	live, err := r.GetNats(ctx).SubscribeLive(ctx, tenant, streams.ResolvedEvents)
+	var keys []string
+	if args.DeviceToken != nil {
+		keys = []string{*args.DeviceToken}
+	}
+	live, err := measurementHub(r.GetNats(ctx)).Subscribe(ctx, tenant, keys)
 	if err != nil {
 		return nil, err
 	}
@@ -55,19 +104,10 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 	out := make(chan *MeasurementEventResolver)
 	go func() {
 		defer close(out)
-		for msg := range live {
-			for _, value := range eventValues(msg, tenant) {
-				resolved, err := resolvedevent.UnmarshalResolvedEvent(value)
-				if err != nil {
-					log.Debug().Err(err).Msg("subscription: skipping undecodable resolved event")
-					continue
-				}
-				if resolved.EventType != eventtype.Measurement {
-					continue
-				}
-				if args.DeviceToken != nil && resolved.SourceDeviceToken != *args.DeviceToken {
-					continue
-				}
+		// Hub values, Payload and Entries are shared and must remain read-only.
+		// measurementFromResolved builds fresh models; identity derivation only reads payloads.
+		for batch := range live {
+			for _, resolved := range batch {
 				if !inScope(scope, resolved) {
 					continue
 				}

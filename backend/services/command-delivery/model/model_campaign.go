@@ -124,8 +124,8 @@ type CampaignCycle struct {
 	GroupVersion sql.NullInt32
 	// Resolved is how many devices the group held when the cycle was planned.
 	Resolved int
-	// MembershipCheckedAt is when the group was resolved again as the cycle first fell due, and
-	// the devices that had left it skipped. Null until then; a cycle is not sent before it.
+	// MembershipCheckedAt is the last group recheck, refreshed as later elements fall due.
+	// Devices that have left are skipped. Null until the first check; not sent before it.
 	MembershipCheckedAt sql.NullTime
 }
 
