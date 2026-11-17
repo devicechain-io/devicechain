@@ -81,13 +81,17 @@ const (
 	HarborpulseDefectSilenceNorthLamp = "silence-north-lamp"
 	// HarborpulseDefectDropBackfill loses every fifth buffered reading on restore.
 	HarborpulseDefectDropBackfill = "drop-backfill"
+	// HarborpulseDefectFloodClearBetweenTiers makes every gauge drop out below the minor tier for
+	// a few readings each time its water climbs into a higher tier, so its flood alarm clears and
+	// is reactivated (under the same token) between tiers instead of escalating in place.
+	HarborpulseDefectFloodClearBetweenTiers = "flood-clear-between-tiers"
 )
 
 // HarborpulseDefects lists every defect harborpulse knows, sorted.
 func HarborpulseDefects() []string {
 	return []string{
-		HarborpulseDefectAirLockBasin, HarborpulseDefectDropBackfill, HarborpulseDefectFloodSplitKey,
-		HarborpulseDefectRefuseDerate, HarborpulseDefectSilenceNorthLamp,
+		HarborpulseDefectAirLockBasin, HarborpulseDefectDropBackfill, HarborpulseDefectFloodClearBetweenTiers,
+		HarborpulseDefectFloodSplitKey, HarborpulseDefectRefuseDerate, HarborpulseDefectSilenceNorthLamp,
 	}
 }
 
@@ -105,8 +109,8 @@ const HarborpulseMinDayLength = harborpulseDayLength
 const HarborpulseMaxDayLength = 24 * time.Hour
 
 type harborDefects struct {
-	floodSplitKey, refuseDerate, airLockBasin, silenceNorthLamp, dropBackfill bool
-	names                                                                     []string
+	floodSplitKey, refuseDerate, airLockBasin, silenceNorthLamp, dropBackfill, floodClearBetweenTiers bool
+	names                                                                                             []string
 }
 
 // ConfigureScenario applies --day-length and --scenario-defect.
@@ -123,6 +127,10 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 				o.DayLength, HarborpulseMinDayLength, HarborpulseMaxDayLength, harborpulseDayLength)
 		}
 		s.dayLength = o.DayLength
+	}
+	if need := harborBufferNeed(s.dayLength, s.load.Interval()); need > harborMaxBufferCap {
+		return fmt.Errorf("--day-length %s at a %s cadence buffers %d readings per charger through the feeder outage, "+
+			"more than the %d a charger can hold: lengthen the cadence or shorten the day", s.dayLength, s.load.Interval(), need, harborMaxBufferCap)
 	}
 	names, err := parseDefects(o.Defects, HarborpulseDefects())
 	if err != nil {
@@ -141,6 +149,8 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 			d.silenceNorthLamp = true
 		case HarborpulseDefectDropBackfill:
 			d.dropBackfill = true
+		case HarborpulseDefectFloodClearBetweenTiers:
+			d.floodClearBetweenTiers = true
 		}
 	}
 	s.defects = d
@@ -557,6 +567,7 @@ func (s *harborpulse) ensureModel() *harborModel {
 	defer s.mu.Unlock()
 	if s.model == nil {
 		s.model = newHarborModelWith(s.seed, s.dayLength, s.defects)
+		s.model.bufferCap = harborBufferCapFor(s.dayLength, s.load.Interval())
 	}
 	return s.model
 }

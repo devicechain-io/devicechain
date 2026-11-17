@@ -76,15 +76,18 @@ type ScenarioClock struct {
 	Backfill []ScenarioBackfill `json:"backfill,omitempty"`
 }
 
-// ScenarioBackfill is what one device buffered in one outage: how many readings, and the times
-// the first and last were taken. A verifier holds the platform's stored readings in [First, Last]
-// against Buffered.
+// ScenarioBackfill is what one device buffered in one outage: how many readings, the times the
+// first and last were taken, and the time of every one. A verifier holds the platform's stored
+// readings in [First, Last] to exactly that set of times.
 type ScenarioBackfill struct {
 	Device   string `json:"device"`
 	Day      int    `json:"day"`
 	Buffered int    `json:"buffered"`
 	First    string `json:"first"`
 	Last     string `json:"last"`
+	// Times is when each buffered reading was taken, oldest first, RFC 3339 with nanoseconds: the
+	// exact set a verifier holds the stored readings in [First, Last] to.
+	Times []string `json:"times"`
 }
 
 // ScenarioClockReporter is a Sim with a compressed day to report on /status.

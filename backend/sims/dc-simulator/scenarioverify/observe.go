@@ -101,13 +101,15 @@ type Preview struct {
 	Firings  []Firing `json:"firings"`
 }
 
-// Backfill is one charger's outage: what the device buffered (the sim's ledger) and the times of
-// the readings the platform stored inside it.
+// Backfill is one charger's outage: what the device buffered (the sim's ledger: how many readings,
+// the first and last, and the time each was taken) and the times of the readings the platform
+// stored inside it.
 type Backfill struct {
 	Device   string      `json:"device"`
 	Buffered int         `json:"buffered"`
 	First    time.Time   `json:"first"`
 	Last     time.Time   `json:"last"`
+	Taken    []time.Time `json:"taken"`
 	Stored   []time.Time `json:"stored"`
 }
 

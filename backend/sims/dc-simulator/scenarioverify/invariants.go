@@ -34,11 +34,12 @@ const (
 	InvBackfillStored     = "backfill-stored"
 )
 
-// Controls maps each invariant to the defect that must turn it red. The pump's control is the
+// Controls maps each invariant to the defect that must turn it red (several, comma separated, when
+// more than one defect is planted for it). The pump's control is the
 // simulator's --no-command-far-end (nothing answers start-pump); the correlation's is run by the
 // verifier itself in the same day (InvCorrelationControl).
 var Controls = map[string]string{
-	InvFloodEscalates:     sim.HarborpulseDefectFloodSplitKey,
+	InvFloodEscalates:     sim.HarborpulseDefectFloodSplitKey + "," + sim.HarborpulseDefectFloodClearBetweenTiers,
 	InvPumpCommanded:      "no-command-far-end",
 	InvDerateObeyed:       sim.HarborpulseDefectRefuseDerate,
 	InvAirLockOnlyEast:    sim.HarborpulseDefectAirLockBasin,
@@ -243,7 +244,8 @@ func readingsOf(o Observations, device, name string, from, to time.Time) []Readi
 // ---- the invariants -----------------------------------------------------------------------------
 
 // floodEscalates: each gauge keeps ONE flood alarm through the storm, which is raised at MINOR,
-// escalates in place (to CRITICAL on East Quay, to MAJOR and no further elsewhere) and clears.
+// escalates in place (to CRITICAL on East Quay, to MAJOR and no further elsewhere) without
+// clearing on the way, and clears.
 func floodEscalates(o Observations) error {
 	from, to := o.at(stormFrom), o.end()
 	var problems []string
@@ -267,6 +269,16 @@ func floodEscalates(o Observations) error {
 		}
 		if len(tokens) != 1 {
 			problems = append(problems, fmt.Sprintf("%s: %d flood alarms active (keys %s), not one escalating in place", g, len(tokens), strings.Join(sortedKeys(keys), ", ")))
+			continue
+		}
+		// In place means never cleared on the way: the platform reactivates a cleared alarm under
+		// the SAME token, so one token alone does not show that it escalated in place.
+		raised, lastActive := active[0].At, active[len(active)-1].At
+		if cleared := samples(o, raised, lastActive, func(a AlarmSample) bool {
+			return a.Token == active[0].Token && a.State == sim.AlarmStateClearedWire
+		}); len(cleared) > 0 {
+			problems = append(problems, fmt.Sprintf("%s: flood alarm cleared at %s between its first and last ACTIVE (%s .. %s), not escalating in place",
+				g, cleared[0].At.Format(time.RFC3339), raised.Format(time.RFC3339), lastActive.Format(time.RFC3339)))
 			continue
 		}
 		if active[0].Severity != sim.AlarmSeverityMinorWire {
@@ -501,8 +513,11 @@ func outageBlastRadius(o Observations) error {
 }
 
 // backfillStored: every reading an East Quay charger buffered through the outage is stored, at
-// the time it was TAKEN. The window [First, Last] holds no live reading (the charger sent nothing
-// live while its feeder was down), so a platform that stamped the arrival time stores none there.
+// the time it was TAKEN, and nothing else is stored in the outage. The window [First, Last] holds
+// no live reading (the charger sent nothing live while its feeder was down), so the times stored
+// there must be EXACTLY the ledger's times: a platform that stamped the arrival time stores none
+// there, one that lost a reading stores one fewer, and one that rewrote a time stores one the
+// ledger does not have — at the same count.
 func backfillStored(o Observations) error {
 	want := fleetOf(sim.HarborpulseChargerType, sim.HarborpulseOutageQuay)
 	got := map[string]time.Time{}
@@ -518,15 +533,38 @@ func backfillStored(o Observations) error {
 			problems = append(problems, b.Device+": buffered nothing")
 			continue
 		}
-		distinct := map[int64]bool{}
+		if len(b.Taken) != b.Buffered {
+			problems = append(problems, fmt.Sprintf("%s: the ledger counts %d buffered readings but carries %d times", b.Device, b.Buffered, len(b.Taken)))
+			continue
+		}
+		taken := map[int64]bool{}
+		for _, t := range b.Taken {
+			taken[t.UnixMicro()] = true
+		}
+		stored := map[int64]bool{}
+		var extra []string
 		for _, t := range b.Stored {
-			if !t.Before(b.First.Add(-time.Millisecond)) && !t.After(b.Last.Add(time.Millisecond)) {
-				distinct[t.UnixMicro()] = true
+			if t.Before(b.First.Add(-time.Millisecond)) || t.After(b.Last.Add(time.Millisecond)) {
+				continue
+			}
+			stored[t.UnixMicro()] = true
+			if !taken[t.UnixMicro()] {
+				extra = append(extra, t.UTC().Format(time.RFC3339Nano))
 			}
 		}
-		if len(distinct) != b.Buffered {
-			problems = append(problems, fmt.Sprintf("%s: buffered %d readings from %s to %s, %d stored at their own times",
-				b.Device, b.Buffered, b.First.Format(time.RFC3339), b.Last.Format(time.RFC3339), len(distinct)))
+		missing := 0
+		for us := range taken {
+			if !stored[us] {
+				missing++
+			}
+		}
+		if missing > 0 || len(extra) > 0 {
+			sort.Strings(extra)
+			if len(extra) > 3 {
+				extra = append(extra[:3], "...")
+			}
+			problems = append(problems, fmt.Sprintf("%s: buffered %d readings from %s to %s, %d stored at their own times, %d missing, %d stored at a time it never took (%s)",
+				b.Device, b.Buffered, b.First.Format(time.RFC3339), b.Last.Format(time.RFC3339), len(taken)-missing, missing, len(extra), strings.Join(extra, ", ")))
 		}
 	}
 	if len(problems) > 0 {
