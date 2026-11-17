@@ -30,6 +30,19 @@ permissions:
 
 jobs:
   cla:
+    # On the JOB, not the step: a comment that is neither a signature nor "recheck" (every review
+    # and discussion comment on every PR and issue) used to start a runner whose only step was then
+    # skipped -- 92 of 368 cla jobs in one measured day, each holding one of the 60 shared slots.
+    # A skipped job takes none.
+    #
+    # The required `cla` check is unaffected. It is the check run of the pull_request_target job,
+    # which runs on the PR's head commit exactly as before. An issue_comment run belongs to the
+    # default branch's head (GITHUB_SHA there is main's tip), so its job -- run or skipped -- never
+    # was the PR's check; after a signature the action re-runs the pull_request_target run instead.
+    if: >
+      (github.event.comment.body == 'recheck' ||
+       github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') ||
+      github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     permissions:
       actions: write # CLA Assistant Lite re-runs the check workflow after a signature
@@ -38,10 +51,6 @@ jobs:
       statuses: write # report the CLA status back onto the PR
     steps:
       - name: CLA Assistant
-        if: >
-          (github.event.comment.body == 'recheck' ||
-           github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') ||
-          github.event_name == 'pull_request_target'
         uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

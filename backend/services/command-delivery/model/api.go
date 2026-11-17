@@ -1189,14 +1189,19 @@ func drainableStatusStrings() []string {
 // nonce, and the caller must not publish.
 func (api *Api) MarkSent(ctx context.Context, id uint) (string, bool, error) {
 	nonce := newDispatchNonce()
-	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
+	// Expiry and the dispatch window share one claim instant; the sweep settles refusals.
+	now := time.Now()
+	liveSQL, liveArgs := liveWhere(now)
+	heldSQL, heldArgs := dispatchableNowWhere(now)
 	res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: id}}).
 		Where("id = ? AND status IN ?", id, claimableStatusStrings()).
+		Where(liveSQL, liveArgs...).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
+		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Where(heldSQL, heldArgs...).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
-			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
+			"sent_time":      sql.NullTime{Time: now, Valid: true},
 			"dispatch_nonce": sql.NullString{String: nonce, Valid: true},
 		})
 	if res.Error != nil {
@@ -1786,6 +1791,7 @@ func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit
 		Where(liveSQL, liveArgs...).
 		Where(heldSQL, heldArgs...).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
+		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Order("id ASC").
 		Limit(limit).
 		Find(&found)
@@ -1847,14 +1853,18 @@ func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit
 // it back would leave that transport unable to settle anything it delivered.
 func (api *Api) MarkSentByToken(ctx context.Context, token string) (string, bool, error) {
 	nonce := newDispatchNonce()
-	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
+	now := time.Now()
+	liveSQL, liveArgs := liveWhere(now)
+	heldSQL, heldArgs := dispatchableNowWhere(now)
 	res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("token = ? AND status IN ?", token, claimableStatusStrings()).
+		Where(liveSQL, liveArgs...).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
+		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Where(heldSQL, heldArgs...).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
-			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
+			"sent_time":      sql.NullTime{Time: now, Valid: true},
 			"dispatch_nonce": sql.NullString{String: nonce, Valid: true},
 		})
 	if res.Error != nil {
@@ -1988,6 +1998,10 @@ func (api *Api) rotateDispatch(ctx context.Context, where string, args []any) (s
 		Where("status = ?", CommandSent.String()).
 		Where(heldSQL, heldArgs...).
 		Where("(batch_id IS NULL OR batch_id NOT IN (?))", api.cancelledBatchIds(ctx)).
+		// A dispatch claimed before its device was deleted is still SENT, so the deletion's
+		// cancel does not reach it; the confirmation is the last point before the transport
+		// acts, and a device re-created at the token must not receive it.
+		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Updates(map[string]any{
 			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
 			"dispatch_nonce": sql.NullString{String: next, Valid: true},
@@ -2625,8 +2639,11 @@ func (api *Api) TryReconcileLock(ctx context.Context, fn func() error) (bool, er
 func (api *Api) PendingCommands(ctx context.Context) ([]*Command, error) {
 	found := make([]*Command, 0)
 	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
+	// A command a device deletion covers is never offered: its claim would be refused on every
+	// pass, and it would sit in this read until its time to live ran out.
 	result := api.RDB.DB(ctx).Where("status IN ?", sweepableStatusStrings()).
 		Where(heldSQL, heldArgs...).
+		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Order("id ASC").Find(&found)
 	if result.Error != nil {
 		return nil, result.Error

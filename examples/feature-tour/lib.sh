@@ -12,7 +12,7 @@
 # non-default cluster:
 #
 #   DC_URL      where the instance's ingress is reached (default http://localhost)
-#   INSTANCE    the dcctl instance name, which names its namespace dci-<instance> (default tour)
+#   INSTANCE    the dcctl instance name, which names its namespace dci-<instance> (default devicechain)
 #   KUBE_CONTEXT  the kubectl context of the cluster (default: the current one)
 #   MQTT_HOST   the kind node's container name, <cluster>-control-plane (default devicechain-control-plane)
 #   MQTT_PORT   the broker's node port (default 31883)
@@ -40,7 +40,7 @@ for _v in DC_URL INSTANCE KUBE_CONTEXT MQTT_HOST MQTT_PORT; do
 done
 
 DC_URL="${DC_URL:-http://localhost}"
-INSTANCE="${INSTANCE:-tour}"
+INSTANCE="${INSTANCE:-devicechain}"
 MQTT_HOST="${MQTT_HOST:-devicechain-control-plane}"
 MQTT_PORT="${MQTT_PORT:-31883}"
 DC_ADMIN_EMAIL="${DC_ADMIN_EMAIL:-superuser@devicechain.local}"
