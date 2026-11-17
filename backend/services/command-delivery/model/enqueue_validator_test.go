@@ -14,8 +14,9 @@ import (
 
 // stubValidator is a canned CommandEnqueueValidator that records what it was asked.
 type stubValidator struct {
-	err     error
-	anchors []string
+	incarnation uint64
+	err         error
+	anchors     []string
 
 	calledDevice  string
 	calledCommand string
@@ -23,12 +24,12 @@ type stubValidator struct {
 	callCount     int
 }
 
-func (s *stubValidator) ValidateEnqueue(_ context.Context, deviceToken string, commandKey string, payload []byte) ([]string, error) {
+func (s *stubValidator) ValidateEnqueue(_ context.Context, deviceToken string, commandKey string, payload []byte) ([]string, uint64, error) {
 	s.callCount++
 	s.calledDevice = deviceToken
 	s.calledCommand = commandKey
 	s.calledPayload = string(payload)
-	return s.anchors, s.err
+	return s.anchors, s.incarnation, s.err
 }
 
 // CreateCommand gates on the enqueue validator (ADR-043 decision 3): a rejection

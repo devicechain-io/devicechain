@@ -40,7 +40,7 @@ type capturedQuery struct {
 // half to drift, in a file whose subject is the verdict relay.
 func newSvcClient(t *testing.T) *svcclient.Client {
 	t.Helper()
-	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mint := httptest.NewServer(identityAwareHandler(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{Token: "svc-token", ExpiresAt: 1 << 40})
 	}))
 	t.Cleanup(mint.Close)
@@ -56,7 +56,7 @@ func newSvcClient(t *testing.T) *svcclient.Client {
 func newValidator(t *testing.T, allowed bool, reason *string) (*EnqueueValidator, *capturedQuery) {
 	t.Helper()
 	captured := &capturedQuery{}
-	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	dm := httptest.NewServer(identityAwareHandler(func(w http.ResponseWriter, r *http.Request) {
 		captured.tenant = r.Header.Get(auth.ServiceTenantHeader)
 		var body struct {
 			Variables map[string]any `json:"variables"`
@@ -88,7 +88,7 @@ func TestValidateEnqueue_Allowed(t *testing.T) {
 	v, captured := newValidator(t, true, nil)
 	ctx := core.WithTenant(context.Background(), "tenant-a")
 
-	if _, err := v.ValidateEnqueue(ctx, "dev-1", "drive", []byte(`{"speed":10}`)); err != nil {
+	if _, _, err := v.ValidateEnqueue(ctx, "dev-1", "drive", []byte(`{"speed":10}`)); err != nil {
 		t.Fatalf("expected the command to be allowed: %v", err)
 	}
 	if captured.tenant != "tenant-a" {
@@ -107,7 +107,7 @@ func TestValidateEnqueue_RejectionIsTyped(t *testing.T) {
 	v, _ := newValidator(t, false, &reason)
 	ctx := core.WithTenant(context.Background(), "tenant-a")
 
-	_, err := v.ValidateEnqueue(ctx, "dev-1", "drive", nil)
+	_, _, err := v.ValidateEnqueue(ctx, "dev-1", "drive", nil)
 	if err == nil {
 		t.Fatal("expected a rejection")
 	}
@@ -130,7 +130,7 @@ func TestValidateEnqueue_AbsentPayloadIsNull(t *testing.T) {
 	v, captured := newValidator(t, true, nil)
 	ctx := core.WithTenant(context.Background(), "tenant-a")
 
-	if _, err := v.ValidateEnqueue(ctx, "dev-1", "ping", nil); err != nil {
+	if _, _, err := v.ValidateEnqueue(ctx, "dev-1", "ping", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !captured.payloadSent {
@@ -143,7 +143,7 @@ func TestValidateEnqueue_AbsentPayloadIsNull(t *testing.T) {
 
 func TestValidateEnqueue_NoTenant(t *testing.T) {
 	v, _ := newValidator(t, true, nil)
-	if _, err := v.ValidateEnqueue(context.Background(), "dev-1", "drive", nil); err == nil {
+	if _, _, err := v.ValidateEnqueue(context.Background(), "dev-1", "drive", nil); err == nil {
 		t.Fatal("expected an error with no tenant in context — a tenantless service call must never be issued")
 	}
 }
@@ -156,12 +156,12 @@ func TestValidateEnqueue_NoTenant(t *testing.T) {
 func TestValidateEnqueue_OutageErrorsNotRejection(t *testing.T) {
 	v, _ := newValidator(t, true, nil)
 	// Point the validator at a closed port.
-	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	dead := httptest.NewServer(identityAwareHandler(func(http.ResponseWriter, *http.Request) {}))
 	url := dead.URL
 	dead.Close()
 	v.url = url
 
-	_, err := v.ValidateEnqueue(core.WithTenant(context.Background(), "tenant-a"), "dev-1", "drive", nil)
+	_, _, err := v.ValidateEnqueue(core.WithTenant(context.Background(), "tenant-a"), "dev-1", "drive", nil)
 	if err == nil {
 		t.Fatal("expected an error when device-management is unreachable")
 	}
@@ -174,7 +174,7 @@ func TestValidateEnqueue_OutageErrorsNotRejection(t *testing.T) {
 // A GraphQL-level error (e.g. the caller lacks device:read) must also fail closed
 // as a transport error rather than being read as a permissive verdict.
 func TestValidateEnqueue_GraphQLErrorFailsClosed(t *testing.T) {
-	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	dm := httptest.NewServer(identityAwareHandler(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"errors": []map[string]any{{"message": "not authorized"}},
 		})
@@ -183,7 +183,7 @@ func TestValidateEnqueue_GraphQLErrorFailsClosed(t *testing.T) {
 
 	v := NewEnqueueValidator(newSvcClient(t), dm.URL)
 
-	_, err := v.ValidateEnqueue(core.WithTenant(context.Background(), "tenant-a"), "dev-1", "drive", nil)
+	_, _, err := v.ValidateEnqueue(core.WithTenant(context.Background(), "tenant-a"), "dev-1", "drive", nil)
 	if err == nil {
 		t.Fatal("a GraphQL error must fail closed, not pass the command through")
 	}
@@ -206,7 +206,7 @@ func TestValidateEnqueue_GraphQLErrorFailsClosed(t *testing.T) {
 func codedValidator(t *testing.T, code any) (*EnqueueValidator, *string) {
 	t.Helper()
 	sentQuery := new(string)
-	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	dm := httptest.NewServer(identityAwareHandler(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Query string `json:"query"`
 		}
@@ -241,7 +241,7 @@ func TestValidateEnqueue_RelaysTheVerdictCode(t *testing.T) {
 	v, sentQuery := codedValidator(t, "DEVICE_NOT_FOUND")
 	ctx := core.WithTenant(context.Background(), "tenant-a")
 
-	_, err := v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
+	_, _, err := v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
 	var rejection *model.EnqueueRejected
 	if !errors.As(err, &rejection) {
 		t.Fatalf("expected a typed rejection, got %T (%v)", err, err)
@@ -264,7 +264,7 @@ func TestValidateEnqueue_UncodedRejectionStaysARejection(t *testing.T) {
 	v, _ := codedValidator(t, nil)
 	ctx := core.WithTenant(context.Background(), "tenant-a")
 
-	_, err := v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
+	_, _, err := v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
 	var rejection *model.EnqueueRejected
 	if !errors.As(err, &rejection) {
 		t.Fatalf("an uncoded rejection is still a rejection, got %T (%v)", err, err)

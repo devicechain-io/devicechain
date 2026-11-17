@@ -57,7 +57,7 @@ func holdAssignments(t *testing.T) map[string]bool {
 
 func TestEveryDatabaseConsumerIsBuiltWithAStoreHold(t *testing.T) {
 	got := holdAssignments(t)
-	for _, name := range []string{"ReportsConsumer", "RosterConsumer"} {
+	for _, name := range []string{"ReportsConsumer", "RosterConsumer", "DeletionConsumer"} {
 		require.True(t, got[name], "main.go no longer gives %s its store hold", name)
 	}
 }

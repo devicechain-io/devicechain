@@ -27,6 +27,7 @@ import { useReload } from '@/routes/common';
 import { useDetectionStream } from '@/lib/hooks/use-detection-stream';
 import { listRuleHealth, type DetectionEvent } from '@/lib/api/event-processing';
 import '@/i18n/lazy/deviceProfiles';
+import { formatDateTime } from '@/lib/format';
 
 const Dash = () => <span className="text-muted-foreground">—</span>;
 
@@ -35,12 +36,6 @@ const Dash = () => <span className="text-muted-foreground">—</span>;
 const FEED_CAP = 50;
 
 type FeedItem = DetectionEvent & { key: number };
-
-const fmtTime = (iso: string | null | undefined): string => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString();
-};
 
 function StatusBadge({ status }: { status: string }) {
   const { t } = useTranslation('deviceProfiles');
@@ -126,7 +121,7 @@ export function RuleHealthPanel({ profileToken }: { profileToken: string }) {
                   <DataTableCell>
                     {r.lastFiredAt ? (
                       <span className="tabular-nums">
-                        {fmtTime(r.lastFiredAt)}
+                        {formatDateTime(r.lastFiredAt)}
                         {r.lastSignal && <span className="ml-1 text-muted-foreground">({r.lastSignal})</span>}
                       </span>
                     ) : (
@@ -162,7 +157,7 @@ export function RuleHealthPanel({ profileToken }: { profileToken: string }) {
             <DataTableBody>
               {feed.map((f) => (
                 <DataTableRow key={f.key}>
-                  <DataTableCell className="tabular-nums text-muted-foreground">{fmtTime(f.occurredTime)}</DataTableCell>
+                  <DataTableCell className="tabular-nums text-muted-foreground">{formatDateTime(f.occurredTime)}</DataTableCell>
                   <DataTableCell>
                     <span className="font-medium">{f.ruleToken}</span>
                     <span className="ml-1 text-xs text-muted-foreground">{f.kind}</span>

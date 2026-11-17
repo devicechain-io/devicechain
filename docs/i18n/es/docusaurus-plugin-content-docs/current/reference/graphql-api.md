@@ -42,6 +42,18 @@ curl -s https://docs.devicechain.io/schema/device-management.graphql
 
 ## Endpoints {#endpoints}
 
+La consola y el visor de paneles responden a un HTTP 401 autenticado con una renovación forzada
+del token de inquilino y una repetición de la misma operación. Si el servidor rechaza la renovación o
+se recibe otro 401, finalizan esa sesión. Si la renovación falla de forma transitoria (sin
+respuesta, un 5xx o un 429), la solicitud falla con ese error y la sesión se conserva, de modo
+que una interrupción nunca cierra la sesión de nadie. Los tokens de identidad no se renuevan; un 401 finaliza la sesión de identidad.
+
+Los hosts externos de `@devicechain/client` activan este comportamiento con `setUnauthorizedHandler({ refresh, onEnd })`.
+Usa `session.forceRefresh(token)` en `refresh` para el plano de inquilino y devuelve null para el
+plano de identidad. En `onEnd(error, token, identity)`, finaliza solo la sesión que aún posee ese token.
+Las llamadas anónimas de inicio de sesión y renovación nunca activan la recuperación. Sin el handler,
+el SDK sigue lanzando `GraphQLRequestError` con estado 401 inmediatamente.
+
 El ingress enruta `/api/<area>/graphql` a cada servicio de área funcional y quita el prefijo, de modo
 que la solicitud llega al `/graphql` propio de ese servicio. Por tanto, todos los endpoints siguientes
 son `https://<tu-host>/api/<area>/graphql`:
@@ -75,6 +87,11 @@ llamador. Algunas autoridades no coinciden con la intuición:
 - Leer credenciales de dispositivo requiere `device:write`, no `device:read`.
 - `latestLocation` requiere `location:read`, mientras que sus hermanas en `device-state` requieren
   `state:read`.
+- Una alarma generada por una regla que comprueba la pertenencia a una geocerca solo la lee quien además
+  tiene `location:read`: sus horas de activación y de borrado son la entrada y la salida del dispositivo de la
+  geocerca. Sin ella, las consultas de alarmas, los recuentos de alarmas, `alarmDispositions` y `alarmStream`
+  omiten la alarma, y `acknowledgeAlarm`, `clearAlarm` y `setAlarmDisposition` responden como ante un token
+  desconocido. Las detecciones de esa misma regla se omiten de `detectionStream` en los mismos términos.
 - La posición instalada de un activo fijo (`Device.installedPosition`, `Asset.installedPosition`) requiere
   `location:installed:read`, que está incluida en `location:read`. Es un dato de instalación y nunca recurre
   a una posición comunicada por el dispositivo. Sin ninguno de esos permisos, recibes `positionWithheld: true`
@@ -862,6 +879,8 @@ Un registro que el miembro no puede ver se responde exactamente igual que uno qu
 omite de una lista, o la operación responde `NOT_FOUND`. Una suscripción `measurementStream` para un
 dispositivo ajeno a sus clientes se acepta y no entrega nada. Cualquier otra operación responde
 `FORBIDDEN` con `extensions.reason` igual a `SCOPE_UNSUPPORTED`.
+
+`measurementStream(deviceTokens: [String!], name: String)` acepta hasta 1000 tokens de dispositivo en una sola suscripción; se ignoran los duplicados. La lista no puede estar vacía ni combinarse con `deviceToken`. Omita ambos argumentos de dispositivo para recibir lecturas de todos los dispositivos. Los mismos filtros de ámbito de acceso y nombre se aplican a cada lectura.
 
 Un evento registrado mientras el dispositivo no pertenecía a ningún cliente no es visible para un
 miembro con acceso limitado. Tampoco lo es una alarma generada antes de esta versión: las alarmas
