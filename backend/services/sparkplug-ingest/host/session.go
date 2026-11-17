@@ -5,6 +5,7 @@ package host
 
 import (
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,7 +52,11 @@ type nodeKey struct {
 // that require a rebirth. It is NOT durable — a clean-session Host rebuilds it
 // from births on reconnect (SP4 reconstructs via rebirth-all on failover).
 type nodeSession struct {
-	// online is true between an accepted NBIRTH and its matching NDEATH.
+	born        bool
+	lastTouched time.Time
+
+	// online is true from an accepted NBIRTH until its matching NDEATH or a
+	// liveness-probe timeout.
 	online bool
 
 	// bdSeq is the birth/death sequence declared by the NBIRTH that opened this
@@ -140,6 +145,14 @@ type SessionTracker struct {
 	mu       sync.Mutex
 	sessions map[nodeKey]*nodeSession
 
+	placeholders int
+	nonOnline    int
+
+	placeholderLimit int
+	sessionLimit     int
+
+	lastPlaceholderSweep time.Time
+
 	now     func() time.Time
 	backoff time.Duration
 	rebirth func(group, node string)
@@ -174,6 +187,9 @@ type SessionTracker struct {
 // message yields at most one node-or-device transition, except an NDEATH, which
 // cascades a DISCONNECTED to the node AND every known child device.
 type Observation struct {
+	// Refused is the capacity reason; a refusal contributes no data or presence.
+	Refused string
+
 	Samples  []Sample
 	Presence []PresenceEvent
 	// Skipped accounts for the metrics of this message that produced no Sample.
@@ -229,6 +245,9 @@ func NewSessionTracker(now func() time.Time, backoff time.Duration, rebirth func
 		backoff = defaultRebirthBackoff
 	}
 	return &SessionTracker{
+		placeholderLimit: maxPlaceholderSessions,
+		sessionLimit:     maxNodeSessions,
+
 		sessions: map[nodeKey]*nodeSession{},
 		now:      now,
 		backoff:  backoff,
@@ -266,7 +285,7 @@ func (tr *SessionTracker) Observe(top Topic, p *sppb.Payload) Observation {
 		return Observation{}
 	}
 	key := nodeKey{top.GroupID, top.EdgeNodeID}
-	samples, presence, rebirth := tr.step(key, top, p)
+	samples, presence, rebirth, refused := tr.step(key, top, p)
 	if rebirth && tr.rebirth != nil {
 		tr.rebirth(key.group, key.node)
 	}
@@ -276,7 +295,7 @@ func (tr *SessionTracker) Observe(top Topic, p *sppb.Payload) Observation {
 	reports := tr.reports
 	tr.reports = nil
 	tr.mu.Unlock()
-	return Observation{Samples: samples, Presence: presence, Skipped: skipped, Reports: reports}
+	return Observation{Samples: samples, Presence: presence, Skipped: skipped, Reports: reports, Refused: refused}
 }
 
 // extract is samplesFrom plus the accounting of what it skipped. The caller holds tr.mu.
@@ -293,9 +312,39 @@ func (tr *SessionTracker) extract(p *sppb.Payload, s *nodeSession, device string
 // only for an accepted BIRTH or DATA message; presence is non-nil for an accepted
 // BIRTH (CONNECTED) or DEATH (DISCONNECTED); a rejected message yields neither and
 // (subject to backoff) a rebirth.
-func (tr *SessionTracker) step(key nodeKey, top Topic, p *sppb.Payload) ([]Sample, []PresenceEvent, bool) {
+func (tr *SessionTracker) step(key nodeKey, top Topic, p *sppb.Payload) ([]Sample, []PresenceEvent, bool, string) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
+	now := tr.now()
+	s := tr.sessions[key]
+	if s == nil {
+		if top.MessageType != NBIRTH && tr.placeholders >= tr.placeholderLimit {
+			if tr.lastPlaceholderSweep.IsZero() || now.Sub(tr.lastPlaceholderSweep) >= 30*time.Second {
+				tr.sweepIdleLocked(now, true)
+				tr.lastPlaceholderSweep = now
+			}
+			if tr.placeholders >= tr.placeholderLimit {
+				return nil, nil, false, "placeholder_cap"
+			}
+		}
+		if len(tr.sessions) >= tr.sessionLimit {
+			if top.MessageType != NBIRTH || tr.nonOnline == 0 {
+				return nil, nil, false, "session_cap"
+			}
+			tr.evictOfflineLocked()
+		}
+		if top.MessageType != NBIRTH {
+			key = nodeKey{strings.Clone(key.group), strings.Clone(key.node)}
+		}
+	} else {
+		s.lastTouched = now
+	}
+	samples, presence, rebirth := tr.stepAccepted(key, top, p)
+	return samples, presence, rebirth, ""
+}
+
+// stepAccepted runs with mu held after capacity admission.
+func (tr *SessionTracker) stepAccepted(key nodeKey, top Topic, p *sppb.Payload) ([]Sample, []PresenceEvent, bool) {
 	tr.cur = stepContext{key: key, mt: top.MessageType}
 
 	// NBIRTH is the authoritative reset: it rebuilds the session from scratch, so
@@ -311,8 +360,10 @@ func (tr *SessionTracker) step(key nodeKey, top Topic, p *sppb.Payload) ([]Sampl
 	// yet seen a birth from (else a storm of pre-birth data cannot be throttled).
 	s := tr.sessions[key]
 	if s == nil {
-		s = &nodeSession{aliases: map[uint64]string{}, devices: map[string]uint64{}}
+		s = &nodeSession{lastTouched: tr.now(), aliases: map[uint64]string{}, devices: map[string]uint64{}}
 		tr.sessions[key] = s
+		tr.placeholders++
+		tr.nonOnline++
 	}
 
 	switch top.MessageType {
@@ -393,8 +444,19 @@ func (tr *SessionTracker) onNBirth(key nodeKey, p *sppb.Payload) ([]Sample, []Pr
 		return tr.extract(p, prev, ""), nil
 	}
 	replaced := tr.sessions[key]
+	if replaced != nil {
+		if !replaced.born {
+			tr.placeholders--
+		}
+		if !replaced.online {
+			tr.nonOnline--
+		}
+	}
 	epoch := tr.nextEpoch()
 	s := &nodeSession{
+		born:        true,
+		lastTouched: tr.now(),
+
 		online:       true,
 		bdSeq:        bd,
 		hasBdSeq:     hasBd,
@@ -408,7 +470,7 @@ func (tr *SessionTracker) onNBirth(key nodeKey, p *sppb.Payload) ([]Sample, []Pr
 	addAliases(s.aliases, p)
 	tr.rebuildNodeMetrics(s, p)
 	s.types.record("", p)
-	tr.sessions[key] = s
+	tr.sessions[nodeKey{strings.Clone(key.group), strings.Clone(key.node)}] = s
 	// 🔴 A NEW SESSION REPLACING AN ONLINE ONE ENDS THAT ONE'S CHILDREN. The previous session
 	// never saw its NDEATH (a lost will, a broker bounce, a Host that was down for it), so its
 	// born devices are about to be dropped with it — and the new session's own NDEATH cascades
@@ -478,6 +540,7 @@ func (tr *SessionTracker) onNDeath(key nodeKey, s *nodeSession, p *sppb.Payload)
 		})
 	}
 	s.online = false
+	tr.nonOnline++
 	s.aliases = map[uint64]string{}
 	s.types = birthTypes{}
 	s.devices = map[string]uint64{}

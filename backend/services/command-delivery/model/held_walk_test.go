@@ -27,22 +27,23 @@ func seedHeld(t *testing.T, api *Api, ctx context.Context, n int) []uint {
 	return ids
 }
 
-// TestTheTwoSweepLocksDoNotCollide.
+// TestAllPassLockKeysDoNotCollide.
 //
-// 🔑 A COLLISION HERE WOULD BE INVISIBLE. Both locks are Postgres advisory locks keyed by
-// a HASH of their name, so two names that happened to hash alike — or a copy-paste that
-// reused one name — would silently serialize the minutes-cadence reconcile walk against
-// the 30-second delivery sweep. Nothing would error; delivery would just intermittently
-// skip a tick while a reconcile pass ran, which reads as ordinary lock contention. The
-// whole point of the second lock is that the slow pass cannot starve the fast one.
-func TestTheTwoSweepLocksDoNotCollide(t *testing.T) {
-	if sweepLockName == reconcileLockName {
-		t.Fatal("the delivery sweep and the hold reconciler must not share a lock name")
-	}
-	if rdb.AdvisoryLockKey(sweepLockName) == rdb.AdvisoryLockKey(reconcileLockName) {
-		t.Fatalf("the two lock names hash to the same advisory key (%d); the reconcile walk would "+
-			"serialize against the delivery sweep and neither would report anything wrong",
-			rdb.AdvisoryLockKey(sweepLockName))
+// 🔑 A COLLISION HERE WOULD BE INVISIBLE. Every background pass holds a Postgres advisory
+// lock keyed by a HASH of its name, so two names that happened to hash alike — or a
+// copy-paste that reused one name — would silently serialize one pass against another:
+// the minutes-cadence reconcile walk or the stranded pass against the 30-second delivery
+// sweep. Nothing would error; delivery would just intermittently skip a tick while a slow
+// pass ran, which reads as ordinary lock contention. The point of separate locks is that
+// no slow pass can starve the fast one, so every pair is checked, by name and by key.
+func TestAllPassLockKeysDoNotCollide(t *testing.T) {
+	names := []string{sweepLockName, reconcileLockName, strandedLockName}
+	for i, a := range names {
+		for _, b := range names[i+1:] {
+			if a == b || rdb.AdvisoryLockKey(a) == rdb.AdvisoryLockKey(b) {
+				t.Fatalf("pass locks %q and %q collide", a, b)
+			}
+		}
 	}
 }
 

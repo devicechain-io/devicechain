@@ -5,9 +5,11 @@ package processor
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -147,7 +149,8 @@ type PolicyNotifier struct {
 	refused *prometheus.CounterVec
 
 	// quiet counts quiet-hours outcomes. MAY BE NIL; read it through countQuiet.
-	quiet *prometheus.CounterVec
+	quiet          *prometheus.CounterVec
+	sliceExhausted prometheus.Counter
 
 	// dead records a held notification whose release will never be sent. Set once the
 	// dead-letter stream exists (UseDeadLetters, from the NATS callback), read on the
@@ -226,15 +229,16 @@ func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, 
 				"inside the whole-dispatch budget; a channel's last retries will be cut short.")
 	}
 	return &PolicyNotifier{
-		api:           api,
-		store:         store,
-		adapters:      newAdapterRegistry(guard, store),
-		attempts:      attempts,
-		timeout:       timeout,
-		budget:        dispatchBudget,
-		TenantDeleted: tenantDeleted,
-		refused:       metrics.deliveriesRefused,
-		quiet:         metrics.quietHours,
+		api:            api,
+		store:          store,
+		adapters:       newAdapterRegistry(guard, store),
+		attempts:       attempts,
+		timeout:        timeout,
+		budget:         dispatchBudget,
+		TenantDeleted:  tenantDeleted,
+		refused:        metrics.deliveriesRefused,
+		quiet:          metrics.quietHours,
+		sliceExhausted: metrics.tenantSliceExhausted,
 	}
 }
 
@@ -530,13 +534,16 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	// escalation substrate, so the page that just went out would never be followed up.
 	// recordTimeout bounds each ATTEMPT and is smaller than dispatchMargin so the first
 	// still lands inside AckWait; a held re-run is kept alive by the hold's beats.
+	// The escalation window starts when the page went out, so the time is taken once here: a
+	// write held through a store outage must not move the window to when the write landed.
+	pagedAt := n.clock()
 	var recorded *model.NotificationState
 	if err := storehold.Settle(ctx, func(c context.Context) error {
 		rctx, rcancel := context.WithTimeout(c, recordTimeout)
 		defer rcancel()
 		var err error
 		recorded, err = n.api.RecordPagedFrom(rctx, event.AlarmToken, event.AlarmKey, event.Severity,
-			event.RaisedTime, event.OccurredTime, pagedTargets(tally.targets), eventSource(event), event.OccurredTime)
+			event.RaisedTime, event.OccurredTime, pagedTargets(tally.targets), eventSource(event), event.OccurredTime, pagedAt)
 		return err
 	}); err != nil {
 		log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
@@ -625,8 +632,14 @@ func (n *PolicyNotifier) deliverAll(ctx context.Context, deliveries []delivery,
 	ac := newAttemptContext(alarm, trigger, rendered)
 	var tally dispatchTally
 	for i, d := range deliveries {
+		if pass := passFromContext(ctx); pass != nil && pass.timedOut[d.channel.ID] {
+			tally.unattempted++
+			n.Ledger.record(ctx, ac.row(d, model.AttemptStatusNotAttempted, 0, n.attempts,
+				time.Now(), 0, false, errChannelTimedOutThisPass))
+			continue
+		}
 		if ctx.Err() != nil {
-			tally.unattempted = len(deliveries) - i
+			tally.unattempted += len(deliveries) - i
 			for _, skipped := range deliveries[i:] {
 				n.Ledger.record(ctx, ac.row(skipped, model.AttemptStatusNotAttempted, 0, n.attempts,
 					time.Now(), 0, false, nil))
@@ -760,7 +773,7 @@ func (n *PolicyNotifier) throttled(event *dmmodel.AlarmStateChangeEvent,
 // delivered and failed channels returns ErrPassPartial so the scheduler can account for
 // the incomplete service without repeating the claimed tier.
 //
-// Escalation uses ONE shared clock and tier per alarm (state.LastNotifiedAt /
+// Escalation uses ONE shared clock and tier per alarm (escalationBase(state) /
 // EscalationLevel), not per policy: when several escalation-enabled policies match one
 // alarm, the shortest window drives re-notification and every policy's cap is measured
 // against the shared tier. See NotificationPolicy.EscalateAfterSeconds for the semantics
@@ -786,16 +799,26 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 	if len(deliveries) == 0 {
 		return nil
 	}
-	// The same whole-dispatch budget the event-driven path uses, for a different reason.
-	// There is no AckWait here — the scheduler is a timer, not a consumer — but its tick
-	// walks EVERY tenant and every open alarm on ONE goroutine, so an unbounded
-	// re-notification is an outage for every tenant behind it in the loop, not just for
-	// this alarm. Bounding both paths identically also means a channel cannot be slow
-	// enough to matter on one and not the other.
+	// Do not burn a tier when every destination already exhausted its timeout
+	// attempts in this tenant job. A new job probes again; no memo is persisted.
+	if pass := passFromContext(ctx); pass != nil {
+		allTimedOut := true
+		for _, d := range deliveries {
+			if !pass.timedOut[d.channel.ID] {
+				allTimedOut = false
+				break
+			}
+		}
+		if allTimedOut {
+			return fmt.Errorf("alarm %q: %w", state.AlarmToken, errChannelTimedOutThisPass)
+		}
+	}
+	// Each admitted alarm retains the full dispatch budget, independent of the
+	// tenant slice. Claim-before-send still arbitrates overlapping replicas.
 	ectx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
 	defer cancel()
 
-	claimed, err := n.api.ClaimEscalation(ectx, state.AlarmToken, state.EscalationLevel, state.CycleRaisedAt, now)
+	claimed, err := n.api.ClaimEscalation(ectx, state.AlarmToken, state.EscalationLevel, state.CycleRaisedAt, n.clock())
 	if err != nil {
 		// 🔴 A PURGED TENANT IS TERMINAL HERE TOO. ClaimEscalation is an UPDATE, so the
 		// ADR-077 erasure fence refuses it — and this is the path the gate above is least
@@ -915,25 +938,36 @@ func (n *PolicyNotifier) appendRuleDeliveries(policyToken, severity string,
 // escalation enabled, its per-alarm window has elapsed since the last notification, and
 // the alarm has not yet reached the policy's effective escalation cap.
 //
-// The window is measured wall-clock now minus LastNotifiedAt. LastNotifiedAt is first
-// stamped by dispatch from the alarm event's OccurredTime, so an alarm whose RAISED is
-// processed from a backlog (a restart replaying downtime) can be seen as already past its
-// window and draw one spurious re-notification on the next tick — it self-corrects, since
-// ClaimEscalation re-stamps the window with wall-clock time. Fully separating "when we
-// notified" (wall clock) from the event's occurred time is a deferred refinement.
+// The window starts at the notifier-clock page time. Legacy rows fall back to their
+// last notification stamp; an old pod's later escalation claim takes precedence during
+// rolling upgrades so overlapping versions cannot shorten the next tier's window.
 func escalationDue(state *model.NotificationState, p *model.NotificationPolicy,
 	now time.Time, defaultMax int) bool {
 	if !p.EscalateAfterSeconds.Valid || p.EscalateAfterSeconds.Int64 <= 0 {
 		return false
 	}
-	if !state.LastNotifiedAt.Valid {
+	base := escalationBase(state)
+	if !base.Valid {
 		return false
 	}
 	if state.EscalationLevel >= effectiveMaxEscalations(p, defaultMax) {
 		return false
 	}
 	window := time.Duration(p.EscalateAfterSeconds.Int64) * time.Second
-	return now.Sub(state.LastNotifiedAt.Time) >= window
+	return now.Sub(base.Time) >= window
+}
+
+// escalationBase uses the most recent page or claim, including claims by old pods
+// which only update LastEscalatedAt. Legacy rows retain their previous clock basis.
+func escalationBase(state *model.NotificationState) sql.NullTime {
+	base := state.EscalationBaseAt
+	if state.LastEscalatedAt.Valid && (!base.Valid || state.LastEscalatedAt.Time.After(base.Time)) {
+		base = state.LastEscalatedAt
+	}
+	if !base.Valid {
+		return state.LastNotifiedAt
+	}
+	return base
 }
 
 // effectiveMaxEscalations is the policy's own MaxEscalations when set (> 0), else the
@@ -957,6 +991,8 @@ func effectiveMaxEscalations(p *model.NotificationPolicy, defaultMax int) int {
 // returned an error, and the event still churned the redelivery budget and died as an
 // ordinary exhausted delivery — the exact operator-facing outcome the refusal exists to
 // replace, one layer up from where it was fixed.
+var errChannelTimedOutThisPass = errors.New("channel exhausted its timeout attempts in this tenant pass")
+
 type deliveryResult int
 
 const (
@@ -1007,6 +1043,15 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 		started := time.Now()
 		err := adapter.Deliver(dctx, d.channel, d.secret, d.recipients, rendered)
 		latency := time.Since(started)
+		// Memoise only an endpoint timeout that exhausted the configured attempts,
+		// not cancellation or a whole-dispatch budget cutting the channel short.
+		var timeoutErr net.Error
+		if attempt == n.attempts && ctx.Err() == nil &&
+			(errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeoutErr) && timeoutErr.Timeout())) {
+			if pass := passFromContext(ctx); pass != nil {
+				pass.timedOut[d.channel.ID] = true
+			}
+		}
 		cancel()
 		status := attemptStatus(err)
 		ledgerErr := err
