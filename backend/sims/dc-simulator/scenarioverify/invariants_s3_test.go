@@ -1,0 +1,218 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package scenarioverify
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/devicechain-io/dc-microservice/webhooksig"
+	"github.com/devicechain-io/dc-simulator/scenariosink"
+	"github.com/devicechain-io/dc-simulator/sim"
+)
+
+const testTenant = "hprig-clean"
+
+// Two valid secrets, fixed so the tests are reproducible: the one the verifier rotated in, and the
+// control's, which the platform never had.
+const (
+	testSecret      = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+	testWrongSecret = "whsec_dGhlIGNvbnRyb2wncyBvd24gc2VjcmV0IGtleQ=="
+)
+
+func signed(t time.Time, path, body string, secrets ...string) scenariosink.Webhook {
+	w := scenariosink.Webhook{At: t, Path: path, Body: body, Headers: map[string][]string{"Content-Type": {"application/json"}}}
+	if len(secrets) > 0 {
+		id := fmt.Sprintf("msg-%d", t.UnixNano())
+		sig, err := webhooksig.Sign(id, t, []byte(body), secrets...)
+		if err != nil {
+			panic(err)
+		}
+		w.Headers["Webhook-Id"] = []string{id}
+		w.Headers["Webhook-Timestamp"] = []string{webhooksig.Timestamp(t)}
+		w.Headers["Webhook-Signature"] = []string{sig}
+	}
+	return w
+}
+
+// cleanS3 is the S3 beats as a working platform answers them.
+func (d *day) cleanS3() {
+	s := S3{Tenant: testTenant, Seed: 1, SigningSecret: testSecret, WrongSecret: testWrongSecret,
+		Attempts: map[string][]Attempt{}, Health: map[string]DecoderHealth{}, DecodeFailures: map[string][]DecodeFailure{},
+		Sink: &scenariosink.Received{}}
+	recipient := sim.HarborpulseDutyRecipient(testTenant)
+	for _, g := range fleetOf(sim.HarborpulseGaugeType, "") {
+		token := "a-" + g
+		s.Sink.Messages = append(s.Sink.Messages, scenariosink.Message{At: at(18.0), Topic: sim.HarborpulseBulletinTopic(testTenant),
+			QoS: 1, Payload: `{"device":"` + g + `"}`})
+		s.Attempts[token] = append(s.Attempts[token], Attempt{At: at(18.0), AlarmToken: token, Trigger: "ALARM", Status: "SENT"})
+		s.Sink.Mail = append(s.Sink.Mail, scenariosink.Mail{At: at(18.0), To: []string{recipient}})
+		if g == AckGauge {
+			s.Ack = Ack{Device: g, Token: token, At: at(18.1)}
+			continue
+		}
+		s.Attempts[token] = append(s.Attempts[token], Attempt{At: at(19.5), AlarmToken: token, Trigger: "ESCALATION", Status: "SENT"})
+		s.Sink.Mail = append(s.Sink.Mail, scenariosink.Mail{At: at(19.5), To: []string{recipient}})
+	}
+	for _, g := range fleetOf(sim.HarborpulseGaugeType, sim.HarborpulseOutageQuay) {
+		s.Sink.Webhooks = append(s.Sink.Webhooks, signed(at(18.3), sim.HarborpulseWebhookPath, `{"device":"`+g+`"}`, testSecret))
+	}
+	// Another tenant's deliveries reach the same sink and verify under none of this one's keys.
+	s.Sink.Webhooks = append(s.Sink.Webhooks, signed(at(18.3), sim.HarborpulseWebhookPath, `{"device":"hp-gauge-north-1"}`,
+		"whsec_YW5vdGhlciB0ZW5hbnQncyBzZWNyZXQga2V5IQ=="))
+	s.Sink.Messages = append(s.Sink.Messages, scenariosink.Message{At: at(18.0), Topic: sim.HarborpulseBulletinTopic("other"), Payload: `{"device":"hp-truck-1"}`})
+
+	d.alarms = append(d.alarms, lifecycle{"f-truck", "hp-truck-1", sim.HarborpulseTruckFenceAlarmKey,
+		[]step{{17.8, sim.AlarmSeverityWarningWire}}, 21.8})
+
+	// Each pump's calculated fill beside every wet well reading it stored (the air-locked pump's
+	// well is not otherwise modelled here, so it gets a steady one).
+	for _, p := range fleetOf(sim.HarborpulsePumpType, "") {
+		var fills []Reading
+		for _, r := range d.readings[p] {
+			if r.Name == sim.HarborpulseWetWellKey {
+				fills = append(fills, Reading{Name: sim.HarborpulseWellFillKey, At: r.At, Value: r.Value / sim.HarborpulseWellDepthM * 100})
+			}
+		}
+		if len(fills) == 0 {
+			for t := at(16.1); t.Before(at(21.9)); t = t.Add(5 * time.Second) {
+				d.readings[p] = append(d.readings[p], Reading{Name: sim.HarborpulseWetWellKey, At: t, Value: 1.5})
+				fills = append(fills, Reading{Name: sim.HarborpulseWellFillKey, At: t, Value: 37.5})
+			}
+		}
+		d.readings[p] = append(d.readings[p], fills...)
+	}
+	for _, g := range append(sim.HarborpulseLoraGauges(), sim.HarborpulseLegacyGauge) {
+		for t, n := at(WatchFrom).Add(time.Second), 0; t.Before(at(WatchTo)); t, n = t.Add(5*time.Second), n+1 {
+			if g == sim.HarborpulseLegacyGauge && n%2 == 1 {
+				s.DecodeFailures[g] = append(s.DecodeFailures[g], DecodeFailure{At: t, Device: g,
+					Error: "eval_error at sections[1].outputs[1].expr: u16be: offset 5 is out of range"})
+				continue
+			}
+			v, _ := sim.HarborpulseLoraLevelAt(1, g, t.Sub(testClock.StartedAt), testClock.DayLength)
+			d.readings[g] = append(d.readings[g], Reading{Name: sim.HarborpulseWaterLevelKey, At: t, Value: v})
+		}
+	}
+	s.Health[sim.HarborpulseLoraGaugeProfile] = DecoderHealth{Decoded: 360}
+	s.Health[sim.HarborpulseLegacyGaugeProfile] = DecoderHealth{Decoded: 60, Failed: 60, LastError: "eval_error"}
+	d.s3 = s
+}
+
+// evaluateOneRed applies mutate to a clean day and asserts that exactly want turns red, because of
+// a detail containing because.
+func evaluateOneRed(t *testing.T, want, because string, mutate func(*day)) {
+	t.Helper()
+	d := cleanDay()
+	mutate(d)
+	for _, inv := range Evaluate(d.observe()) {
+		switch {
+		case inv.Name == want && inv.Passed:
+			t.Fatalf("%s stayed green with the defect planted: it cannot fail", inv.Name)
+		case inv.Name == want && !strings.Contains(inv.Detail, because):
+			t.Fatalf("%s is red for another reason: %s", inv.Name, inv.Detail)
+		case inv.Name != want && !inv.Passed:
+			t.Fatalf("the control for %s also turned %s red (%s): it is not a control of one thing", want, inv.Name, inv.Detail)
+		}
+	}
+}
+
+func TestEachS3ControlTurnsExactlyItsInvariantRed(t *testing.T) {
+	controls := []struct {
+		name, defect, want, because string
+		mutate                      func(*day)
+	}{
+		{"the flood webhook unsigned", sim.HarborpulseDefectUnsignedWebhook, InvWebhookSigned, "never verified for", func(d *day) {
+			for i, w := range d.s3.Sink.Webhooks {
+				d.s3.Sink.Webhooks[i] = signed(w.At, w.Path, w.Body)
+			}
+		}},
+		{"the flood webhook signed with another key", "(none: a platform signing with a stale key)", InvWebhookSigned, "never verified for", func(d *day) {
+			for i, w := range d.s3.Sink.Webhooks {
+				d.s3.Sink.Webhooks[i] = signed(w.At, w.Path, w.Body, "whsec_c3RhbGUga2V5IHN0YWxlIGtleSBzdGFsZSBrZXk=")
+			}
+		}},
+		{"a body tampered after signing", "(none)", InvWebhookSigned, "never verified for", func(d *day) {
+			d.s3.Sink.Webhooks[0].Body = strings.Replace(d.s3.Sink.Webhooks[0].Body, "}", " }", 1)
+		}},
+		{"the control's secret verifies too", "(the verifier's own control)", InvWebhookControl, "never had", func(d *day) {
+			for i, w := range d.s3.Sink.Webhooks[:3] {
+				d.s3.Sink.Webhooks[i] = signed(w.At, w.Path, w.Body, testSecret, testWrongSecret)
+			}
+		}},
+		{"the bulletin connector unreachable", sim.HarborpulseDefectMQTTUnreachable, InvMQTTBulletin, "never published for", func(d *day) {
+			d.s3.Sink.Messages = nil
+		}},
+		{"a gauge never escalated", "(none)", InvNotifyEscalates, "never escalated", func(d *day) {
+			tok := "a-hp-gauge-basin-1"
+			d.s3.Attempts[tok] = d.s3.Attempts[tok][:1]
+		}},
+		{"pages the sink never received", "(none)", InvNotifyEscalates, "the sink received", func(d *day) {
+			d.s3.Sink.Mail = d.s3.Sink.Mail[:3]
+		}},
+		{"the acknowledged gauge escalated anyway", "(the verifier's own control)", InvNotifyAckControl, "although it was acknowledged", func(d *day) {
+			tok := "a-" + AckGauge
+			d.s3.Attempts[tok] = append(d.s3.Attempts[tok], Attempt{At: at(19.5), AlarmToken: tok, Trigger: "ESCALATION", Status: "SENT"})
+		}},
+		{"the truck never leaves the depot", sim.HarborpulseDefectTruckStaysHome, InvTruckFence, "never raised for", func(d *day) {
+			var kept []lifecycle
+			for _, l := range d.alarms {
+				if l.key != sim.HarborpulseTruckFenceAlarmKey {
+					kept = append(kept, l)
+				}
+			}
+			d.alarms = kept
+		}},
+		{"the fence alarm never clears", "(none)", InvTruckFence, "still active", func(d *day) {
+			for i, l := range d.alarms {
+				if l.key == sim.HarborpulseTruckFenceAlarmKey {
+					d.alarms[i].clear = 30
+				}
+			}
+		}},
+		{"the pumps carry the wrong well depth", sim.HarborpulseDefectWrongWellDepth, InvWellFill, "not level over", func(d *day) {
+			for p, rs := range d.readings {
+				for i, r := range rs {
+					if r.Name == sim.HarborpulseWellFillKey {
+						d.readings[p][i].Value = r.Value * sim.HarborpulseWellDepthM / 5
+					}
+				}
+			}
+		}},
+		{"the gauges encode millimetres", sim.HarborpulseDefectLoraWrongScale, InvLoraDecoded, "not what the gauge sent", func(d *day) {
+			for _, g := range sim.HarborpulseLoraGauges() {
+				for i := range d.readings[g] {
+					d.readings[g][i].Value *= 10
+				}
+			}
+		}},
+		{"the legacy gauge's decoder fixed", sim.HarborpulseDefectLegacyDecoderFixed, InvDecoderFailureVisible, "want both", func(d *day) {
+			d.s3.Health[sim.HarborpulseLegacyGaugeProfile] = DecoderHealth{Decoded: 120}
+			d.s3.DecodeFailures[sim.HarborpulseLegacyGauge] = nil
+		}},
+	}
+	for _, c := range controls {
+		t.Run(c.name, func(t *testing.T) {
+			if want := Controls[c.want]; !strings.HasPrefix(c.defect, "(") && want != c.defect {
+				t.Fatalf("Controls[%s] = %q, this test plants %q", c.want, want, c.defect)
+			}
+			evaluateOneRed(t, c.want, c.because, c.mutate)
+		})
+	}
+}
+
+// Without a sink the five sink invariants are not judged at all, rather than judged green.
+func TestWithoutASinkTheSinkInvariantsAreNotJudged(t *testing.T) {
+	d := cleanDay()
+	d.s3.Sink = nil
+	for _, inv := range Evaluate(d.observe()) {
+		if sliceHas(SinkInvariants, inv.Name) {
+			t.Fatalf("%s was judged without a sink", inv.Name)
+		}
+		if !inv.Passed {
+			t.Fatalf("%s failed without a sink: %s", inv.Name, inv.Detail)
+		}
+	}
+}

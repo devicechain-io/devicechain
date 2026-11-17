@@ -345,8 +345,31 @@ func payloadOf(devEUI string, n int, r Readings, binary bool) (fr []byte, port i
 	return frame(devEUI, n), 1, r.decoded()
 }
 
+// BuildFrame makes the n-th ChirpStack v4 uplink of one device carrying an application frame of
+// the caller's own layout on fPort port, with no decoded object: the platform decodes it with the
+// device profile's payload decoder. Like Build it is pure, so a resend is the same bytes and the
+// same deduplication key.
+func BuildFrame(c Config, runID, devEUI string, n int, at time.Time, port int, fr []byte) (Request, error) {
+	if c.NS != ChirpStack {
+		return Request{}, fmt.Errorf("BuildFrame plays a ChirpStack network server, not %q", c.NS)
+	}
+	gateways := c.Gateways
+	if gateways < 1 {
+		gateways = 2
+	}
+	body, err := chirpstackMessage(runID, strings.ToUpper(devEUI), n, at, fr, port, nil, gateways)
+	if err != nil {
+		return Request{}, err
+	}
+	return Request{URL: strings.TrimRight(c.URL, "/") + "?event=up", ContentType: "application/json", Body: body}, nil
+}
+
 func chirpstackUplink(runID, devEUI string, n int, at time.Time, r Readings, gateways int, binary bool) ([]byte, error) {
 	fr, port, object := payloadOf(devEUI, n, r, binary)
+	return chirpstackMessage(runID, devEUI, n, at, fr, port, object, gateways)
+}
+
+func chirpstackMessage(runID, devEUI string, n int, at time.Time, fr []byte, port int, object map[string]any, gateways int) ([]byte, error) {
 	rx := make([]map[string]any, gateways)
 	for i := range rx {
 		rx[i] = map[string]any{"gatewayId": gatewayID(i), "rssi": -80 - 7*i, "snr": 8.5 - 2.5*float64(i)}

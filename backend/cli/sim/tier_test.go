@@ -197,15 +197,18 @@ func TestOnlyScenariosThatNeedATierAreMapped(t *testing.T) {
 	if spec, ok := TierForManifest("towerpulse"); !ok || spec.Token != "tp-showcase" {
 		t.Fatalf("towerpulse: %v %v", spec, ok)
 	}
+	if spec, ok := TierForManifest("harborpulse"); !ok || spec.Token != "hp-showcase" || spec.Config["calculatedMetricsPerProfile"] < 1 {
+		t.Fatalf("harborpulse: %v %v", spec, ok)
+	}
 	for _, id := range KnownManifestIds {
-		if id == "towerpulse" {
+		if id == "towerpulse" || id == "harborpulse" {
 			continue
 		}
 		if _, ok := TierForManifest(id); ok {
 			t.Errorf("%s is mapped to a tier of its own", id)
 		}
 	}
-	if TowerpulseShowcaseTier.Token == DefaultTenantTier {
+	if TowerpulseShowcaseTier.Token == DefaultTenantTier || HarborpulseShowcaseTier.Token == DefaultTenantTier {
 		t.Error("the showcase tier must not be a platform default tier")
 	}
 }

@@ -9,9 +9,10 @@
 # WHAT THIS GATES
 #
 # harborpulse drives seven DETECT rule kinds, two command-carrying rules whose commands change the
-# telemetry, an area correlation and a store-and-forward burst through one 24-minute sim day.
-# scenario-verify reads the platform back over the tenant GraphQL APIs as the sim's own identity
-# and judges eight invariants:
+# telemetry, an area correlation, a store-and-forward burst, a geofence rule, a calculated metric,
+# LoRaWAN gauges decoded by tenant decoders, a signed webhook, an MQTT connector and an escalating
+# mail notification through one 24-minute sim day. scenario-verify reads the platform back over the
+# tenant GraphQL APIs as the sim's own identity, and the in-cluster sink's record, and judges:
 #
 #   flood-escalates             one flood alarm per gauge, raised at MINOR, escalating in place to
 #                               CRITICAL on East Quay only, and clearing
@@ -26,6 +27,27 @@
 #   outage-blast-radius         light-silent / charger-offline for exactly the East Quay devices
 #   backfill-stored             every reading a charger buffered in the outage is stored at the
 #                               time it was taken
+#   truck-fence                 truck-in-flood-plain while the truck is in the flood plain fence
+#   well-fill-calculated        each pump's calculated well fill is its level over its well's depth
+#   lora-decoded                each LoRaWAN gauge's uplinks decoded to exactly the level it sent
+#   decoder-failure-visible     the legacy gauge's undecodable uplinks recorded as DECODE_FAILED
+#   webhook-signed              the flood webhook reached the sink for exactly the East Quay gauges,
+#                               signed with the tenant's secret
+#   webhook-signature-control-is-red  the same deliveries under a secret the platform never had are
+#                               judged red (the verifier runs this control itself)
+#   mqtt-bulletin               a flood bulletin on the tenant's MQTT topic for every gauge
+#   notify-escalates            each gauge's flood alarm paged the duty officer and, unacknowledged,
+#                               paged again; the mail reached the sink
+#   notify-ack-control-is-red   the gauge the verifier acknowledged was paged and not escalated
+#                               (the verifier runs this control itself)
+#
+# THE SINK. The webhook, the MQTT bulletins and the mail go to ONE pod inside the cluster
+# (cmd/scenario-sink in namespace harborpulse-sinks, service hp-sink), so the rig needs no route out
+# of the cluster. The platform's egress guard refuses a private address unless the operator admits
+# it, so `up` creates the sink BEFORE the instance and bootstraps it with
+# --dev-allow-egress <the sink's ClusterIP> and --enable-area outbound-connectors. Every sim's
+# deliveries land in the same sink; the verifier tells its own apart by the tenant's signing secret
+# (webhooks), the tenant in the topic (MQTT) and in the recipient (mail).
 #
 # It is a manual rig like hack/outage-rig.sh and hack/ota-rig.sh, and it follows their one rule: a
 # check is worth nothing until it has been shown to fail. So beside the clean day it runs one day
@@ -38,6 +60,12 @@
 #   air-lock-basin      --scenario-defect air-lock-basin    air-lock-only-east
 #   silence-north-lamp  --scenario-defect silence-north-lamp outage-blast-radius
 #   drop-backfill       --scenario-defect drop-backfill     backfill-stored
+#   unsigned-webhook    --scenario-defect unsigned-webhook  webhook-signed
+#   mqtt-unreachable    --scenario-defect mqtt-unreachable  mqtt-bulletin
+#   truck-stays-home    --scenario-defect truck-stays-home  truck-fence
+#   wrong-well-depth    --scenario-defect wrong-well-depth  well-fill-calculated
+#   lora-wrong-scale    --scenario-defect lora-wrong-scale  lora-decoded
+#   legacy-decoder-fixed --scenario-defect legacy-decoder-fixed decoder-failure-visible
 #
 # The clean day must exit 0. Each control must exit 1 WITH its own invariant red; a control that
 # exits 0 means the invariant cannot fail, and the rig fails. Other invariants a control turns red
@@ -54,15 +82,21 @@
 # USING AN INSTANCE YOU ALREADY HAVE. Set DC_HPRIG_KUBECONFIG and DC_HPRIG_KUBE_CONTEXT (and
 # DC_HPRIG_INSTANCE) and skip `up`: `run` then uses that instance. The rig still refuses the shared
 # developer cluster (kind-devicechain) by name, and never changes a kubeconfig's current context.
+# `run` deploys the sink there too (it needs ko and the cluster's localhost:5000 registry), but it
+# cannot admit the sink's address to that instance's egress: the instance must run
+# outbound-connectors and allow the sink's ClusterIP (`dcctl upgrade --dev-allow-egress <ip>` on a
+# local cluster), or every delivery is refused and the sink invariants are red.
 #
 # OFFLINE CONTROLS (`controls`, and run first by `run`): the verifier's own unit controls (a clean
 # day passes; each planted defect turns exactly its invariant red), and this script's judge fed
 # fabricated reports.
 #
-# Knobs: DC_HPRIG_CONTROLS=none runs the clean day alone; DC_HPRIG_KEEP=1 keeps the sims' tenants
-# afterwards; DC_HPRIG_SIM_PORT is the first sim's control port (the rest follow).
+# Knobs: DC_HPRIG_CONTROLS=none runs the clean day alone, or a comma list of control names runs
+# those (thirteen sims at once is a lot for a laptop); DC_HPRIG_KEEP=1 keeps the sims' tenants
+# afterwards; DC_HPRIG_SIM_PORT is the first sim's control port (the rest follow);
+# DC_HPRIG_SINK_PORT is the loopback port-forward to the sink.
 #
-# Requires: kind, kubectl, docker, jq, curl, go (and ko, unless DC_HPRIG_VERSION names a release).
+# Requires: kind, kubectl, docker, jq, curl, go and ko (ko builds the sink image).
 # A run takes about 40 minutes: a sim day is 24 minutes and the verifier waits for the next whole
 # one.
 
@@ -77,6 +111,8 @@ http_port="${DC_HPRIG_HTTP_PORT:-28180}"     # loopback port-forward to the ingr
 ingest_port="${DC_HPRIG_INGEST_PORT:-28181}" # loopback port-forward to event-sources
 mqtt_port="${DC_HPRIG_MQTT_PORT:-21983}"     # kind host port -> the broker's MQTT NodePort
 sim_port="${DC_HPRIG_SIM_PORT:-18190}"
+sink_port="${DC_HPRIG_SINK_PORT:-28182}" # loopback port-forward to the in-cluster sink
+sink_ns=harborpulse-sinks
 version="${DC_HPRIG_VERSION:-}"
 controls="${DC_HPRIG_CONTROLS:-all}"
 min_free_gb="${DC_HPRIG_MIN_FREE_GB:-60}"
@@ -120,6 +156,12 @@ runs=(
   "air-lock-basin|--scenario-defect air-lock-basin|air-lock-only-east"
   "silence-north-lamp|--scenario-defect silence-north-lamp|outage-blast-radius"
   "drop-backfill|--scenario-defect drop-backfill|backfill-stored"
+  "unsigned-webhook|--scenario-defect unsigned-webhook|webhook-signed"
+  "mqtt-unreachable|--scenario-defect mqtt-unreachable|mqtt-bulletin"
+  "truck-stays-home|--scenario-defect truck-stays-home|truck-fence"
+  "wrong-well-depth|--scenario-defect wrong-well-depth|well-fill-calculated"
+  "lora-wrong-scale|--scenario-defect lora-wrong-scale|lora-decoded"
+  "legacy-decoder-fixed|--scenario-defect legacy-decoder-fixed|decoder-failure-visible"
 )
 
 # ---------------------------------------------------------------------------
@@ -155,9 +197,11 @@ judge() {
 offline_controls() {
   say "offline controls (no cluster)"
   (cd "$repo_root/backend/sims/dc-simulator" &&
-    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn' ./scenarioverify/ >/dev/null) ||
-    fail "the verifier's own controls failed (go test ./scenarioverify/ in backend/sims/dc-simulator)"
+    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn' ./scenarioverify/ >/dev/null &&
+    go test -count=1 ./scenariosink/ >/dev/null) ||
+    fail "the verifier's or the sink's own controls failed (go test ./scenarioverify/ ./scenariosink/ in backend/sims/dc-simulator)"
   pass "the verifier: a clean day passes, each planted defect turns exactly its invariant red"
+  pass "the sink: what real MQTT, SMTP and HTTP clients deliver is recorded exactly"
 
   local d="$state_dir/judge" out
   mkdir -p "$d"
@@ -189,10 +233,69 @@ disk_guard() {
 
 cluster_exists() { grep -qx -- "$cluster" <<<"$(kind get clusters 2>/dev/null)"; }
 
+# deploy_sinks builds the sink image into the cluster's local registry and runs it; prints nothing.
+deploy_sinks() {
+  need ko
+  local tag image
+  tag="hprig-sink-$(git -C "$repo_root" rev-parse --short=8 HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
+  image="localhost:5000/scenario-sink:$tag"
+  (cd "$repo_root/backend/sims/dc-simulator" &&
+    KO_DOCKER_REPO=localhost:5000/scenario-sink \
+      "$repo_root/hack/ko-build.sh" --bare --tags "$tag" --platform linux/amd64 ./cmd/scenario-sink >/dev/null) ||
+    fail "could not build the sink image (ko, and the localhost:5000 registry dcctl install creates)"
+  k apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $sink_ns
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hp-sink
+  namespace: $sink_ns
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: hp-sink}
+  template:
+    metadata:
+      labels: {app: hp-sink}
+    spec:
+      containers:
+        - name: sink
+          image: $image
+          args: ["--http", ":8080", "--mqtt", ":1883", "--smtp", ":2525"]
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: mqtt, containerPort: 1883}
+            - {name: smtp, containerPort: 2525}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hp-sink
+  namespace: $sink_ns
+spec:
+  selector: {app: hp-sink}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}
+    - {name: mqtt, port: 1883, targetPort: 1883}
+    - {name: smtp, port: 2525, targetPort: 2525}
+EOF
+  k -n "$sink_ns" rollout status deploy/hp-sink --timeout 180s >/dev/null || fail "the sink did not become ready"
+}
+
+# sink_ip is the sink Service's ClusterIP: the address the platform dials, and so the one its egress
+# guard must admit.
+sink_ip() { k -n "$sink_ns" get svc hp-sink -o jsonpath='{.spec.clusterIP}'; }
+
 cmd_up() {
   ((own_cluster)) || fail "DC_HPRIG_KUBECONFIG is set: this rig uses that instance and does not create one"
   need kind; need kubectl; need docker; need jq; need go
-  [[ -n "$version" ]] || need ko
+  need ko
   disk_guard
   if ! cluster_exists; then
     say "creating kind cluster $cluster"
@@ -222,9 +325,18 @@ EOF
   make -C "$(winpath "$repo_root")/backend/cli" build >/dev/null
   local images=(--build --version "hprig-$(git -C "$repo_root" rev-parse --short=8 HEAD)-$(date -u +%Y%m%dT%H%M%SZ)")
   [[ -z "$version" ]] || images=(--version "$version")
-  say "installing prerequisites and bootstrapping $instance (${images[*]})"
+  say "installing prerequisites (${images[*]})"
   "$dcctl" install local --yes --cluster "$cluster" --compact "${images[@]}"
-  "$dcctl" bootstrap local "$instance" --yes --no-escrow --cluster "$cluster" --host localhost --no-tls "${images[@]}"
+  # The sink first: the instance's egress allowance names its address.
+  say "deploying the scenario sink"
+  deploy_sinks
+  local ip
+  ip="$(sink_ip)"
+  [[ "$ip" =~ ^[0-9.]+$ ]] || fail "the sink has no ClusterIP ($ip)"
+  note "sink at $ip; the instance admits it with --dev-allow-egress"
+  say "bootstrapping $instance with outbound-connectors"
+  "$dcctl" bootstrap local "$instance" --yes --no-escrow --cluster "$cluster" --host localhost --no-tls \
+    --enable-area outbound-connectors --dev-allow-egress "$ip" "${images[@]}"
   say "UP COMPLETE: run 'hack/harborpulse-rig.sh run'"
 }
 
@@ -288,8 +400,14 @@ cmd_run() {
   offline_controls
   k get ns "$namespace" >/dev/null 2>&1 || fail "no instance $instance on $kube_context: run 'hack/harborpulse-rig.sh up' first"
   build_tools
+  if ! k -n "$sink_ns" get deploy hp-sink >/dev/null 2>&1; then
+    say "deploying the scenario sink"
+    deploy_sinks
+    note "the sink is at $(sink_ip): the instance must admit it (dcctl upgrade --dev-allow-egress) and run outbound-connectors"
+  fi
   forward forward-http.log traefik svc/traefik "$http_port:80"
   forward forward-ingest.log "$namespace" svc/event-sources "$ingest_port:8081"
+  forward forward-sink.log "$sink_ns" svc/hp-sink "$sink_port:8080"
 
   local stamp r name flags want port i=0 sims=() hs
   stamp="$(date -u +%H%M%S)"
@@ -330,7 +448,8 @@ cmd_run() {
   local vpids=()
   for s in "${sims[@]}"; do
     IFS='|' read -r sname port want_inv hsp <<<"$s"
-    "$verifier" --handshake "$hsp" --sim "http://127.0.0.1:$port" --report "$(winpath "$state_dir/$sname.report.json")" \
+    "$verifier" --handshake "$hsp" --sim "http://127.0.0.1:$port" --sink "http://127.0.0.1:$sink_port" \
+      --report "$(winpath "$state_dir/$sname.report.json")" \
       >"$state_dir/$sname.verify.log" 2>&1 &
     vpids+=("$!")
   done

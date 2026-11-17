@@ -50,7 +50,7 @@ go run . --handshake /path/to/handshake.json [--port 8090]
 ### Driving load
 
 The built-in scenarios are sized as **demos** — devicepulse is 1 device,
-buildingpulse is 12, widgetlab is 7, fleetpulse is 6, towerpulse is 31, harborpulse is 33 and sitepulse is 19 (18 machines and one
+buildingpulse is 12, widgetlab is 7, fleetpulse is 6, towerpulse is 31, harborpulse is 37 and sitepulse is 19 (18 machines and one
 plant; its devices publish their own telemetry, so the sim itself emits nothing), all at a 5s cadence, which is
 the right default for watching the presentation page and far too small to measure what
 an instance costs. Three flags override that; each also reads an env var, and each
@@ -572,9 +572,9 @@ here: a presence drop is the Unity device plane's business.
 `harborpulse` drives more of the platform at once than any other scenario. One utility tenant
 runs a fictional harbour district of three quays (North Quay, East Quay, the Basin): 9 tide
 gauges, 3 stormwater pump controllers, 12 street lights, 6 EV chargers, 2 building meters (each
-owned by a customer, one of whom gets a login limited to their building) and a flood-response
-truck, 33 named devices. It plays one **compressed day** on a loop, 24 sim hours in 24 minutes,
-starting at 06:00:
+owned by a customer, one of whom gets a login limited to their building), a flood-response
+truck, and 4 LoRaWAN tide gauges behind a network server this process plays: 37 named devices. It
+plays one **compressed day** on a loop, 24 sim hours in 24 minutes, starting at 06:00:
 
 | Sim time | What happens | What the platform does |
 | --- | --- | --- |
@@ -586,7 +586,8 @@ starting at 06:00:
 | 18:30-20:30 | Three East Quay gauges above 2.1 m together | `hp-quay-flooding` (area correlation) fires for East Quay. It raises nothing: the platform forbids actions on a correlation rule |
 | 17:00-21:00 | Wet wells fill | `hp-wet-well-high` raises MAJOR and sends `start-pump {duty_pct: 100}`; the well drains and the alarm clears, more than once |
 | 19:00-20:30 | The East Quay pump air-locks: it runs and moves nothing | `hp-pump-air-lock` (held 30 s, over two metrics in CEL) raises CRITICAL |
-| 17:00-22:30 | The truck drives from the depot to the flood plain and back | location events against two geofences |
+| 17:00-22:30 | The truck drives from the depot to the flood plain and back | location events against two geofences; `hp-truck-in-flood-plain` (`geo.inFence`) raises WARNING while it is in the flood plain and clears when it leaves |
+| 17:00-21:00 | Gauges pass the major and critical levels | `hp-flood-bulletin` publishes a bulletin through the MQTT connector `hp-bulletin-mqtt`; `hp-flood-webhook` calls the town's emergency webhook, signed with the handle `harborpulse/flood-emergency` (East Quay only); the policy `hp-duty-escalation` mails the duty officer about every MAJOR or CRITICAL alarm and mails again 30 seconds later (on the escalation sweep's next pass) if nobody acknowledged it |
 | 19:45-21:15 | The East Quay feeder fails | its lamps and chargers go silent: `hp-light-silent` / `hp-charger-offline` (absence) raise MAJOR for exactly those; the chargers buffer their readings and send them, with their original timestamps, when power returns |
 
 Every reading is a function of the seed, the sim time and the device, except what a command
@@ -595,6 +596,29 @@ device has applied it, so an unobeyed command shows in the telemetry (the well r
 own float switch at 3.2 m; the charger stays hot). Midnight resets derates and dimming so the next
 day's beats repeat. `harborpulse_test.go` replays the day against each rule's own published
 threshold, window, hold, count and timeout, with the commands obeyed and, as a control, ignored.
+
+Each pump's `well_fill_pct` is a **calculated metric**, its wet well level over the well's depth,
+a constant (`well_depth_m`, 4 m) the pump carries. A calculated metric needs a tier that allows
+one, so `dcctl sim create --manifest harborpulse` packages the tenant at the tier `hp-showcase`.
+
+The **LoRaWAN gauges** (`hp-lora-gauge-north`, `-east`, `-basin` and `hp-legacy-gauge-basin`)
+send one uplink each per tick through the ChirpStack v4 integration `hp-chirpstack`, a raw frame
+with no decoded object, so the platform decodes it with the profile's tenant decoder. Their
+firmware alternates two frame layouts. `hp-lora-gauge-profile` decodes both; the legacy gauge's
+`hp-legacy-gauge-profile` carries a decoder that reads the newer layout's battery past the end of
+the frame, so every other uplink of that gauge is recorded as DECODE_FAILED and shows in its
+decoder health. `harborpulse_s3_test.go` runs both decoders, and the well fill formula, through the
+platform's own compilers.
+
+**Where it delivers.** The webhook, the MQTT bulletins and the duty officer's mail all go to one
+in-cluster sink, `hp-sink.harborpulse-sinks.svc.cluster.local` (`cmd/scenario-sink`, which
+`hack/harborpulse-rig.sh` deploys), so the rule definitions are constants. The platform's egress
+guard refuses a private address unless the operator admits it, so an instance that should deliver
+needs the sink's ClusterIP allowed (`dcctl bootstrap|upgrade --dev-allow-egress <ip>` on a local
+cluster) and the `outbound-connectors` area (`--enable-area outbound-connectors`). Without them the
+scenario still provisions and runs, and every delivery is refused rather than sent. A handshake
+written by an older dcctl lacks the outbound-connectors, notification and integration endpoints and
+is refused at bootstrap: re-create the sim.
 
 It publishes two boards: `hp-dashboard`, the operator's (a quay picker, alarms by severity and
 devices online on that quay, every gauge of the quay against the three flood tiers, the response
@@ -611,9 +635,14 @@ that detects it.
 
 **Verifying a day (`scenario-verify`).** `cmd/scenario-verify` watches the next whole sim day of a
 running harborpulse sim and judges what the platform did, read back over the tenant GraphQL APIs as
-the sim's own identity:
+the sim's own identity, and, with `--sink`, the in-cluster sink's record:
 
-    go run ./cmd/scenario-verify --handshake ~/.devicechain/sims/<name>.json --sim http://127.0.0.1:8090 --report day.json
+    go run ./cmd/scenario-verify --handshake ~/.devicechain/sims/<name>.json --sim http://127.0.0.1:8090 \
+      --sink http://127.0.0.1:28182 --report day.json
+
+It makes two writes of its own: it rotates the flood webhook's signing secret to one it holds (the
+platform shows a secret once, to whoever minted it), and it acknowledges `hp-gauge-north-2`'s flood
+alarm ten seconds after it reaches MAJOR, as the escalation's control.
 
 | Invariant | Holds when | Planted defect that must turn it red |
 | --- | --- | --- |
@@ -624,15 +653,25 @@ the sim's own identity:
 | `correlation-fires` | `previewRule` of `hp-quay-flooding` over the storm fires for East Quay only | the verifier previews the same rule with a count no quay reaches, in the same day (`correlation-control-is-red`) |
 | `outage-blast-radius` | `light-silent` / `charger-offline` for exactly the East Quay lamps and chargers, inside the outage, all cleared after it | `--scenario-defect silence-north-lamp` |
 | `backfill-stored` | every reading a charger buffered is stored at the time it was taken | `--scenario-defect drop-backfill` (every fifth buffered reading lost) |
+| `truck-fence` | `truck-in-flood-plain` for the truck alone, raised as it enters the flood plain and cleared after it leaves | `--scenario-defect truck-stays-home` |
+| `well-fill-calculated` | each pump's stored `well_fill_pct` is its wet well level over 4 m, as a percentage | `--scenario-defect wrong-well-depth` (the pumps carry 5 m) |
+| `lora-decoded` | each current LoRaWAN gauge's stored levels are exactly what it encoded, and its decoder failed nothing | `--scenario-defect lora-wrong-scale` (millimetres where the decoder reads centimetres) |
+| `decoder-failure-visible` | the legacy gauge's undecodable uplinks are recorded as DECODE_FAILED with the evaluation error, its decoder health counts failures and successes, and its readable uplinks are stored | `--scenario-defect legacy-decoder-fixed` |
+| `webhook-signed` (sink) | the flood webhook reached the sink for exactly the East Quay gauges, signed with the tenant's secret | `--scenario-defect unsigned-webhook` |
+| `webhook-signature-control-is-red` (sink) | the same deliveries checked against a secret the platform never had are judged red | none: it is `webhook-signed`'s control, run in the same day |
+| `mqtt-bulletin` (sink) | a bulletin on the tenant's topic for every gauge | `--scenario-defect mqtt-unreachable` (the connector aimed at a port nothing listens on) |
+| `notify-escalates` (sink) | every gauge's flood alarm paged the duty officer and, unacknowledged, paged again, and the mail reached the sink | the verifier acknowledges `hp-gauge-north-2` before its escalation (`notify-ack-control-is-red`) |
+| `notify-ack-control-is-red` (sink) | `hp-gauge-north-2`, acknowledged by the verifier, was paged and NOT paged again | none: it is `notify-escalates`' control, run in the same day |
 
 It exits 0 when every invariant holds, 1 when one fails and 2 with no verdict (the sim unreachable,
 its day not started or restarted mid-watch, a gap in the alarm polls a flood tier could hide in, or
-a failed read). `hack/harborpulse-rig.sh` runs the clean day and every planted defect side by side
+a failed read). Without `--sink` the five sink invariants are not judged and the report names them
+as omitted. `hack/harborpulse-rig.sh` runs the clean day and every planted defect side by side
 on a cluster of its own and fails if the clean day is not green or a control does not turn its own
 invariant red. The defects exist only for that: never run a demonstration with one.
 
-The features the scenario does not drive yet (outbound connectors, notifications, campaigns,
-LoRaWAN gauges, OTA, MQTT devices) are planned follow-ups.
+The features the scenario does not drive yet (groups, campaigns, OTA, MQTT and X.509 devices,
+desired configuration) are planned follow-ups.
 
 ### The command far end
 
@@ -1122,11 +1161,15 @@ a snapshot taken at page load would not.
   provisions a member limited to one customer.
 - `sim/harborpulse*.go` — the waterfront scenario: the manifest and rules (`harborpulse.go`) and
   the compressed day, its planted faults and the command effects (`harborpulse_model.go`), and
-  its boards (`harborpulse_dashboard.go`). `sim/rulekinds.go` builds its duration,
-  rate-of-change, repeating and correlation rules; `sim/scenario.go` is the scenario clock and
-  options a scenario with a day takes.
+  its boards (`harborpulse_dashboard.go`), and the LoRaWAN gauges, their frames and decoders
+  (`harborpulse_lora.go`). `sim/rulekinds.go` builds its duration, rate-of-change, repeating,
+  correlation, geofence and delivery rules; `sim/outbound.go` provisions connectors, webhook
+  signing handles, notification channels and policies and inbound integrations; `sim/scenario.go`
+  is the scenario clock and options a scenario with a day takes.
 - `scenarioverify/` and `cmd/scenario-verify` — the harborpulse oracle: the watch, the read-back
   and the invariants, each unit-tested against the defect that must turn it red.
+- `scenariosink/` and `cmd/scenario-sink` — the in-cluster receiver of a scenario's webhooks, MQTT
+  publishes and mail, which records them for the verifier.
 - `sim/lifecycle.go` — the `CREATED -> BOOTSTRAPPED -> RUNNING <-> STOPPED`
   FSM and the control HTTP API.
 - `sim/presentation.go` — serves the static page + its `/config.json`.

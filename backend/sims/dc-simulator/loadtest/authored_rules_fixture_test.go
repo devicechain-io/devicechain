@@ -237,6 +237,7 @@ var mirroredAlarmSeverityWire = map[string]string{
 	mirrorKey("harborpulse", sim.HarborpulseChargerOfflineRule): sim.AlarmSeverityMajorWire,
 	mirrorKey("harborpulse", sim.HarborpulseConnectorHotRule):   sim.AlarmSeverityMajorWire,
 	mirrorKey("harborpulse", sim.HarborpulsePeakDemandRule):     sim.AlarmSeverityMinorWire,
+	mirrorKey("harborpulse", sim.HarborpulseTruckFenceRule):     sim.AlarmSeverityWarningWire,
 	mirrorKey("loadtest", HarnessRuleToken):                     harnessAlarmSeverityWire,
 	mirrorKey("loadtest", HarnessCommandRuleToken):              harnessAlarmSeverityWire,
 }

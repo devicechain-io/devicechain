@@ -81,13 +81,31 @@ const (
 	HarborpulseDefectSilenceNorthLamp = "silence-north-lamp"
 	// HarborpulseDefectDropBackfill loses every fifth buffered reading on restore.
 	HarborpulseDefectDropBackfill = "drop-backfill"
+	// HarborpulseDefectUnsignedWebhook publishes the flood webhook rule without its signing handle,
+	// so the town's emergency endpoint receives deliveries nobody can authenticate.
+	HarborpulseDefectUnsignedWebhook = "unsigned-webhook"
+	// HarborpulseDefectMQTTUnreachable points the bulletin connector at a port nothing listens on.
+	HarborpulseDefectMQTTUnreachable = "mqtt-unreachable"
+	// HarborpulseDefectTruckStaysHome keeps the response truck at the depot all day.
+	HarborpulseDefectTruckStaysHome = "truck-stays-home"
+	// HarborpulseDefectWrongWellDepth provisions every pump with a well depth that is not the
+	// depth the well fill formula is judged against.
+	HarborpulseDefectWrongWellDepth = "wrong-well-depth"
+	// HarborpulseDefectLoraWrongScale makes the LoRaWAN gauges encode their level in millimetres,
+	// where their decoder reads centimetres.
+	HarborpulseDefectLoraWrongScale = "lora-wrong-scale"
+	// HarborpulseDefectLegacyDecoderFixed gives the legacy gauge the good decoder, so nothing fails
+	// to decode.
+	HarborpulseDefectLegacyDecoderFixed = "legacy-decoder-fixed"
 )
 
 // HarborpulseDefects lists every defect harborpulse knows, sorted.
 func HarborpulseDefects() []string {
 	return []string{
 		HarborpulseDefectAirLockBasin, HarborpulseDefectDropBackfill, HarborpulseDefectFloodSplitKey,
-		HarborpulseDefectRefuseDerate, HarborpulseDefectSilenceNorthLamp,
+		HarborpulseDefectLegacyDecoderFixed, HarborpulseDefectLoraWrongScale, HarborpulseDefectMQTTUnreachable,
+		HarborpulseDefectRefuseDerate, HarborpulseDefectSilenceNorthLamp, HarborpulseDefectTruckStaysHome,
+		HarborpulseDefectUnsignedWebhook, HarborpulseDefectWrongWellDepth,
 	}
 }
 
@@ -106,6 +124,8 @@ const HarborpulseMaxDayLength = 24 * time.Hour
 
 type harborDefects struct {
 	floodSplitKey, refuseDerate, airLockBasin, silenceNorthLamp, dropBackfill bool
+	unsignedWebhook, mqttUnreachable, truckStaysHome, wrongWellDepth          bool
+	loraWrongScale, legacyDecoderFixed                                        bool
 	names                                                                     []string
 }
 
@@ -141,6 +161,18 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 			d.silenceNorthLamp = true
 		case HarborpulseDefectDropBackfill:
 			d.dropBackfill = true
+		case HarborpulseDefectUnsignedWebhook:
+			d.unsignedWebhook = true
+		case HarborpulseDefectMQTTUnreachable:
+			d.mqttUnreachable = true
+		case HarborpulseDefectTruckStaysHome:
+			d.truckStaysHome = true
+		case HarborpulseDefectWrongWellDepth:
+			d.wrongWellDepth = true
+		case HarborpulseDefectLoraWrongScale:
+			d.loraWrongScale = true
+		case HarborpulseDefectLegacyDecoderFixed:
+			d.legacyDecoderFixed = true
 		}
 	}
 	s.defects = d
@@ -232,7 +264,81 @@ const (
 	HarborpulseChargerType = "hp-ev-charger"
 	HarborpulseMeterType   = "hp-building-meter"
 	HarborpulseTruckType   = "hp-response-truck"
+
+	// The LoRaWAN tide gauges: battery gauges behind a network server, one per quay with a
+	// current decoder and one older gauge whose profile carries a decoder written for a frame
+	// layout it no longer sends.
+	HarborpulseLoraGaugeProfile   = "hp-lora-gauge-profile"
+	HarborpulseLegacyGaugeProfile = "hp-legacy-gauge-profile"
+	HarborpulseLoraGaugeType      = "hp-lora-tide-gauge"
+	HarborpulseLegacyGaugeType    = "hp-legacy-tide-gauge"
+	// HarborpulseIntegration is the ChirpStack v4 integration the network server posts through.
+	HarborpulseIntegration = "hp-chirpstack"
 )
+
+// The in-cluster sinks the platform delivers to. They are one pod the rig runs
+// (hack/harborpulse-rig.sh, cmd/scenario-sink), reached at a fixed cluster DNS name, so the rule
+// definitions that name it are constants and the committed authored-rules fixture holds them. The
+// platform's egress guard refuses a private destination unless the operator admits it, so an
+// instance must allow the sink's address (the rig passes it to `dcctl bootstrap
+// --dev-allow-egress`); without that every delivery is refused, and the platform records the
+// refusal rather than sending.
+const (
+	HarborpulseSinkNamespace = "harborpulse-sinks"
+	HarborpulseSinkHost      = "hp-sink." + HarborpulseSinkNamespace + ".svc.cluster.local"
+	HarborpulseSinkHTTPPort  = 8080
+	HarborpulseSinkMQTTPort  = 1883
+	HarborpulseSinkSMTPPort  = 2525
+	// harborSinkDeadPort is a port the sink does not listen on (the mqtt-unreachable defect).
+	harborSinkDeadPort = 1884
+
+	// HarborpulseWebhookPath is where the flood webhook posts on the sink.
+	HarborpulseWebhookPath = "/hooks/flood-emergency"
+	// HarborpulseSigningHandle is the handle the flood webhook is signed with.
+	HarborpulseSigningHandle = "harborpulse/flood-emergency"
+	// HarborpulseFloodWebhookRule calls the town's emergency webhook when a gauge passes the
+	// critical flood level.
+	HarborpulseFloodWebhookRule = "hp-flood-webhook"
+	// HarborpulseBulletinRule publishes a flood bulletin to the MQTT connector when a gauge passes
+	// the major flood level.
+	HarborpulseBulletinRule      = "hp-flood-bulletin"
+	HarborpulseBulletinConnector = "hp-bulletin-mqtt"
+	// harborBulletinTopic is the bulletin connector's topic; TenantPlaceholder makes it the sim's own.
+	harborBulletinTopic = "harborpulse/" + TenantPlaceholder + "/flood-bulletin"
+
+	// The duty officer's mail channel and the policy that pages it about MAJOR and CRITICAL
+	// alarms and pages again after HarborpulseEscalateAfter if nobody acknowledged.
+	HarborpulseDutyChannel = "hp-duty-mail"
+	HarborpulseDutyPolicy  = "hp-duty-escalation"
+	harborDutyRecipient    = "duty-" + TenantPlaceholder + "@port-alder.example"
+	// HarborpulseEscalateAfter is short because the day is compressed: a gauge stays at MAJOR for
+	// under three wall minutes, and the escalation sweep runs once a minute, so a page at +30 s lands
+	// at most ninety seconds after the first while the alarm is still at MAJOR.
+	HarborpulseEscalateAfter = 30 * time.Second
+
+	// The flood-response truck's geofence rule.
+	HarborpulseTruckFenceRule     = "hp-truck-in-flood-plain"
+	HarborpulseTruckFenceAlarmKey = "truck-in-flood-plain"
+
+	// The pump's calculated well fill: its wet well level over the well's depth, a constant the
+	// device carries.
+	HarborpulseWellFillKey       = "well_fill_pct"
+	HarborpulseWellDepthConstant = "well_depth_m"
+	HarborpulseWellDepthM        = 4.0
+	harborWrongWellDepthM        = 5.0
+	harborpulseWellFillFormula   = HarborpulseWetWellKey + " / device." + HarborpulseWellDepthConstant + " * 100.0"
+)
+
+// HarborpulseWebhookURL is the flood webhook's destination.
+func HarborpulseWebhookURL() string {
+	return fmt.Sprintf("http://%s:%d%s", HarborpulseSinkHost, HarborpulseSinkHTTPPort, HarborpulseWebhookPath)
+}
+
+// HarborpulseBulletinTopic is the bulletin connector's topic for a tenant.
+func HarborpulseBulletinTopic(tenant string) string { return withTenant(harborBulletinTopic, tenant) }
+
+// HarborpulseDutyRecipient is the address the duty policy pages for a tenant.
+func HarborpulseDutyRecipient(tenant string) string { return withTenant(harborDutyRecipient, tenant) }
 
 // Metric vocabulary.
 const (
@@ -348,9 +454,18 @@ func (s *harborpulse) Manifest() SimManifest {
 		if _, seen := pops[d.deviceType]; !seen {
 			order = append(order, d.deviceType)
 		}
-		pops[d.deviceType] = append(pops[d.deviceType], InstanceSpec{
-			Token: d.token, ExternalId: d.externalId, Areas: []string{d.quay}, Customer: d.customer,
-		})
+		in := InstanceSpec{Token: d.token, ExternalId: d.externalId, Areas: []string{d.quay}, Customer: d.customer}
+		if d.devEUI != "" {
+			in.Aliases = []AliasSpec{{Scheme: AliasSchemeDevEUI, Value: d.devEUI}}
+		}
+		if d.kind == harborPump {
+			depth := HarborpulseWellDepthM
+			if s.defects.wrongWellDepth {
+				depth = harborWrongWellDepthM
+			}
+			in.Constants = map[string]float64{HarborpulseWellDepthConstant: depth}
+		}
+		pops[d.deviceType] = append(pops[d.deviceType], in)
 	}
 	var populations []PopulationSpec
 	for _, t := range order {
@@ -379,12 +494,14 @@ func (s *harborpulse) Manifest() SimManifest {
 		},
 		GeoFences: harborpulseGeoFences(),
 		Profiles: []ProfileSpec{
-			harborpulseGaugeProfile(s.defects.floodSplitKey),
+			harborpulseGaugeProfile(s.defects.floodSplitKey, s.defects.unsignedWebhook),
 			harborpulsePumpProfile(),
 			harborpulseLightProfile(),
 			harborpulseChargerProfile(),
 			harborpulseMeterProfile(),
 			harborpulseTruckProfile(),
+			harborpulseLoraProfile(HarborpulseLoraGaugeProfile, "Harborpulse LoRaWAN Tide Gauge Profile", HarborpulseLoraDecoder),
+			harborpulseLoraProfile(HarborpulseLegacyGaugeProfile, "Harborpulse Legacy Tide Gauge Profile", harborLegacyDecoder(s.defects.legacyDecoderFixed)),
 		},
 		DeviceTypes: []DeviceTypeSpec{
 			{Token: HarborpulseGaugeType, Name: "Tide Gauge", ProfileToken: HarborpulseGaugeProfile},
@@ -393,9 +510,20 @@ func (s *harborpulse) Manifest() SimManifest {
 			{Token: HarborpulseChargerType, Name: "EV Charger", ProfileToken: HarborpulseChargerProfile},
 			{Token: HarborpulseMeterType, Name: "Building Meter", ProfileToken: HarborpulseMeterProfile},
 			{Token: HarborpulseTruckType, Name: "Flood Response Truck", ProfileToken: HarborpulseTruckProfile},
+			{Token: HarborpulseLoraGaugeType, Name: "LoRaWAN Tide Gauge", ProfileToken: HarborpulseLoraGaugeProfile},
+			{Token: HarborpulseLegacyGaugeType, Name: "Legacy LoRaWAN Tide Gauge", ProfileToken: HarborpulseLegacyGaugeProfile},
 		},
 		Populations:   populations,
 		CustomerUsers: []CustomerUserSpec{{Email: HarborpulseLoftsOwnerEmail, CustomerToken: HarborpulseLoftsToken}},
+
+		WebhookSigningHandles: []string{HarborpulseSigningHandle},
+		Connectors:            []ConnectorSpec{harborpulseBulletinConnector(s.defects.mqttUnreachable)},
+		NotificationChannels:  []NotificationChannelSpec{harborpulseDutyChannel()},
+		NotificationPolicies:  []NotificationPolicySpec{harborpulseDutyPolicy()},
+		Integrations: []IntegrationSpec{{
+			Token: HarborpulseIntegration, Name: "Port Alder LoRaWAN network server", Type: integrationTypeChirpStack4,
+			DeviceTypeTokens: []string{HarborpulseLoraGaugeType, HarborpulseLegacyGaugeType},
+		}},
 	})
 	// The operator's board and the Lofts owner's, bound to the devices this manifest provisions.
 	manifest.Dashboards = harborpulseDashboards(manifest.Expand(manifest.Seed))
@@ -404,7 +532,11 @@ func (s *harborpulse) Manifest() SimManifest {
 
 // harborpulseGaugeProfile is the tide gauge. splitKey is the flood-split-key defect: the critical
 // tier is filed under an alarm key of its own.
-func harborpulseGaugeProfile(splitKey bool) ProfileSpec {
+func harborpulseGaugeProfile(splitKey, unsignedWebhook bool) ProfileSpec {
+	signing := HarborpulseSigningHandle
+	if unsignedWebhook {
+		signing = ""
+	}
 	tier := func(token, name string, level float64, severity string) DetectionRuleSpec {
 		key := HarborpulseFloodAlarmKey
 		if splitKey && severity == SeverityCritical {
@@ -437,6 +569,19 @@ func harborpulseGaugeProfile(splitKey bool) ProfileSpec {
 				Metric: HarborpulseWaterLevelKey, Op: OpGt, Threshold: HarborpulseQuayFloodingM,
 				Count: HarborpulseQuayFloodingN, Window: HarborpulseQuayFloodWindow, Enabled: true,
 			}.Spec(),
+			// Out of the tenant: the town's emergency webhook at the critical level (signed, so
+			// the endpoint can tell the platform from anyone else), and a bulletin on the
+			// harbour's MQTT broker at the major level.
+			DeliveryRule{
+				Token: HarborpulseFloodWebhookRule, Name: "Harborpulse flood emergency webhook", Metric: HarborpulseWaterLevelKey,
+				Op: OpGt, Threshold: HarborpulseFloodCriticalM,
+				Webhook: &WebhookDelivery{URL: HarborpulseWebhookURL(), SigningHandle: signing}, Enabled: true,
+			}.Spec(),
+			DeliveryRule{
+				Token: HarborpulseBulletinRule, Name: "Harborpulse flood bulletin", Metric: HarborpulseWaterLevelKey,
+				Op: OpGt, Threshold: HarborpulseFloodMajorM,
+				Publish: &PublishDelivery{Connector: HarborpulseBulletinConnector}, Enabled: true,
+			}.Spec(),
 		},
 	}
 }
@@ -449,6 +594,7 @@ func harborpulsePumpProfile() ProfileSpec {
 			{Key: HarborpulsePumpRunningKey, Name: "Pump running (0 or 1)", DataType: "INT"},
 			{Key: HarborpulsePumpCurrentKey, Name: "Motor current", DataType: "DOUBLE", Unit: "A"},
 			{Key: HarborpulseFlowKey, Name: "Flow", DataType: "DOUBLE", Unit: "L/s"},
+			{Key: HarborpulseWellFillKey, Name: "Wet well fill", DataType: "DOUBLE", Unit: "%", Expression: harborpulseWellFillFormula},
 		},
 		Commands: []CommandSpec{
 			{Token: HarborpulseStartPumpDef, CommandKey: HarborpulseStartPumpKey, Name: "Start pump", ParameterSchema: harborpulseStartPumpSchema},
@@ -545,6 +691,55 @@ func harborpulseTruckProfile() ProfileSpec {
 	return ProfileSpec{
 		Token: HarborpulseTruckProfile, Name: "Harborpulse Response Truck Profile", Category: "vehicle",
 		Metrics: []MetricSpec{{Key: HarborpulseSpeedKey, Name: "Speed", DataType: "DOUBLE", Unit: "m/s"}},
+		DetectionRules: []DetectionRuleSpec{
+			FenceAlarmRule{
+				Token: HarborpulseTruckFenceRule, Name: "Harborpulse truck in the flood plain", Fence: HarborpulseFloodPlainFence,
+				Severity: SeverityWarning, AlarmKey: HarborpulseTruckFenceAlarmKey, Enabled: true,
+			}.Spec(),
+		},
+	}
+}
+
+// harborpulseLoraProfile is a LoRaWAN tide gauge: the readings its decoder turns its frames into.
+func harborpulseLoraProfile(token, name, decoder string) ProfileSpec {
+	return ProfileSpec{
+		Token: token, Name: name, Category: "water",
+		Metrics: []MetricSpec{
+			{Key: HarborpulseWaterLevelKey, Name: "Water level above quay datum", DataType: "DOUBLE", Unit: "m"},
+			{Key: HarborpulseBatteryKey, Name: "Battery", DataType: "DOUBLE", Unit: "V"},
+		},
+		Decoder: decoder,
+	}
+}
+
+func harborpulseBulletinConnector(unreachable bool) ConnectorSpec {
+	port := HarborpulseSinkMQTTPort
+	if unreachable {
+		port = harborSinkDeadPort
+	}
+	config, _ := json.Marshal(map[string]any{
+		"urls":  []string{fmt.Sprintf("tcp://%s:%d", HarborpulseSinkHost, port)},
+		"topic": harborBulletinTopic,
+		"qos":   1,
+	})
+	return ConnectorSpec{Token: HarborpulseBulletinConnector, Name: "Harbour flood bulletins", Type: connectorTypeMQTT, Config: string(config)}
+}
+
+func harborpulseDutyChannel() NotificationChannelSpec {
+	config, _ := json.Marshal(map[string]any{
+		"host": HarborpulseSinkHost, "port": HarborpulseSinkSMTPPort, "from": "harborpulse@port-alder.example", "security": "none",
+	})
+	return NotificationChannelSpec{Token: HarborpulseDutyChannel, Name: "Duty officer mail", ChannelType: notificationChannelSMTP, Config: string(config)}
+}
+
+func harborpulseDutyPolicy() NotificationPolicySpec {
+	return NotificationPolicySpec{
+		Token: HarborpulseDutyPolicy, Name: "Duty officer, escalating",
+		EscalateAfterSeconds: int(HarborpulseEscalateAfter / time.Second), MaxEscalations: 1,
+		Rules: []NotificationRuleSpec{
+			{Severity: AlarmSeverityMajorWire, ChannelToken: HarborpulseDutyChannel, Recipients: []string{harborDutyRecipient}},
+			{Severity: AlarmSeverityCriticalWire, ChannelToken: HarborpulseDutyChannel, Recipients: []string{harborDutyRecipient}},
+		},
 	}
 }
 
@@ -593,7 +788,18 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	if backErr != nil {
 		log.Error().Err(backErr).Msg("flush harborpulse buffered readings failed")
 	}
-	return errors.Join(measErr, locErr, backErr)
+	loraErr := s.sendLoraUplinks(ctx, rt, model, elapsed, stamp)
+	if loraErr != nil {
+		log.Error().Err(loraErr).Msg("send harborpulse LoRaWAN uplinks failed")
+	}
+	return errors.Join(measErr, locErr, backErr, loraErr)
+}
+
+// startedAt is the first tick, the instant the day is measured from.
+func (s *harborpulse) startedAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.started
 }
 
 // flushBackfill sends the readings chargers buffered while their feeder was down, oldest first,
@@ -690,6 +896,11 @@ const (
 	// HarborpulseOverheatTo is when the Basin charger's long session ends, sim hours: a
 	// connector-hot alarm that clears before it was cooled by the derate, not by the session ending.
 	HarborpulseOverheatTo = harborOverheatTo
+	// HarborpulseTruckInPlainFrom and HarborpulseTruckInPlainTo are when the response truck is
+	// inside the flood plain fence, sim hours: it crosses the fence three quarters of the way out
+	// at 17:45 and back out a quarter of the way home at 21:45.
+	HarborpulseTruckInPlainFrom = 17.75
+	HarborpulseTruckInPlainTo   = 21.75
 )
 
 // HarborpulseQuayFloodingDefinition is the quay-flooding correlation's rule definition with its
