@@ -301,7 +301,17 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 		if err != nil {
 			return noVerdict{err}
 		}
+		if len(b.Times) != b.Buffered {
+			return noVerdictf("the sim's backfill ledger for %s counts %d buffered readings but carries %d times", b.Device, b.Buffered, len(b.Times))
+		}
 		bf := Backfill{Device: b.Device, Buffered: b.Buffered, First: first, Last: last}
+		for _, s := range b.Times {
+			t, err := time.Parse(time.RFC3339Nano, s)
+			if err != nil {
+				return noVerdictf("the sim's backfill ledger for %s has an unparseable time %q", b.Device, s)
+			}
+			bf.Taken = append(bf.Taken, t)
+		}
 		for _, r := range readings {
 			// One row per reading: the metric the charger-offline rule watches.
 			if r.Name == sim.HarborpulseChargerPowerKey {

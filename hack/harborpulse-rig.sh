@@ -15,7 +15,7 @@
 # tenant GraphQL APIs as the sim's own identity, and the in-cluster sink's record, and judges:
 #
 #   flood-escalates             one flood alarm per gauge, raised at MINOR, escalating in place to
-#                               CRITICAL on East Quay only, and clearing
+#                               CRITICAL on East Quay only without clearing on the way, and clearing
 #   pump-commanded              start-pump SUCCESSFUL, the pump running and its well falling, the
 #                               well never reaching the pump's own float
 #   derate-obeyed               derate SUCCESSFUL, the cap reported at 11 kW, the connector reading
@@ -26,7 +26,7 @@
 #                               verifier runs this control itself, in the same day)
 #   outage-blast-radius         light-silent / charger-offline for exactly the East Quay devices
 #   backfill-stored             every reading a charger buffered in the outage is stored at the
-#                               time it was taken
+#                               time it was taken, and nothing else in the outage: the exact set
 #   truck-fence                 truck-in-flood-plain while the truck is in the flood plain fence
 #   well-fill-calculated        each pump's calculated well fill is its level over its well's depth
 #   lora-decoded                each LoRaWAN gauge's uplinks decoded to exactly the level it sent
@@ -55,6 +55,7 @@
 #
 #   control             planted as                          must turn red
 #   flood-split-key     --scenario-defect flood-split-key   flood-escalates
+#   flood-clear-between-tiers  --scenario-defect flood-clear-between-tiers  flood-escalates
 #   no-far-end          --no-command-far-end                pump-commanded
 #   refuse-derate       --scenario-defect refuse-derate     derate-obeyed
 #   air-lock-basin      --scenario-defect air-lock-basin    air-lock-only-east
@@ -81,7 +82,9 @@
 #
 # USING AN INSTANCE YOU ALREADY HAVE. Set DC_HPRIG_KUBECONFIG and DC_HPRIG_KUBE_CONTEXT (and
 # DC_HPRIG_INSTANCE) and skip `up`: `run` then uses that instance. The rig still refuses the shared
-# developer cluster (kind-devicechain) by name, and never changes a kubeconfig's current context.
+# developer cluster (kind devicechain) under any context name: it resolves the context's cluster
+# entry, server and CA, and the nodes its API server reports. It never changes a kubeconfig's
+# current context.
 # `run` deploys the sink there too (it needs ko and the cluster's localhost:5000 registry), but it
 # cannot admit the sink's address to that instance's egress: the instance must run
 # outbound-connectors and allow the sink's ClusterIP (`dcctl upgrade --dev-allow-egress <ip>` on a
@@ -142,15 +145,81 @@ red() { printf '    RED (as designed) %s\n' "$*"; }
 fail() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not on PATH"; }
 
-[[ "$cluster" != devicechain && "$kube_context" != kind-devicechain ]] ||
-  { echo "refusing: kind-devicechain is the shared developer cluster" >&2; exit 2; }
-
 k() { kubectl --kubeconfig "$kubeconfig" --context "$kube_context" "$@"; }
+
+# ---------------------------------------------------------------------------
+# The shared developer cluster (kind "devicechain") is never this rig's, under ANY name. A context
+# is only a label: an alias for it in another kubeconfig reaches the same API server. So the guard
+# resolves what the selected context actually points at (its cluster entry, server and CA) and
+# compares that with the shared cluster's own (from kind, and from the default kubeconfig); and
+# before changing anything it asks the API server for its nodes, which kind names
+# <cluster>-control-plane whatever a kubeconfig calls the cluster.
+# ---------------------------------------------------------------------------
+refuse_shared() { echo "refusing: $* -- that is the shared developer cluster (kind devicechain)" >&2; exit 2; }
+
+# ctx_identity <kubeconfig> <context>: "<cluster entry>|<server>|<CA data>" of what the context
+# points at, or nothing when the kubeconfig has no such context.
+ctx_identity() {
+  kubectl config view --kubeconfig "$1" --context "$2" --minify --raw \
+    -o jsonpath='{.contexts[0].context.cluster}|{.clusters[0].cluster.server}|{.clusters[0].cluster.certificate-authority-data}' 2>/dev/null || true
+}
+
+# norm_server: one spelling per loopback server, so localhost:N and 127.0.0.1:N compare equal.
+norm_server() {
+  local s="${1%/}"
+  s="${s/:\/\/localhost:/://127.0.0.1:}"
+  s="${s/:\/\/\[::1\]:/://127.0.0.1:}"
+  printf '%s' "$s"
+}
+
+bounded() { if command -v timeout >/dev/null 2>&1; then timeout 60 "$@"; else "$@"; fi; }
+
+guard_not_shared() {
+  [[ "$cluster" != devicechain && "$kube_context" != kind-devicechain ]] || refuse_shared "cluster '$cluster', context '$kube_context'"
+  [[ -f "$kubeconfig" ]] || return 0 # this rig's own cluster, not created yet
+  local mine entry server ca
+  mine="$(ctx_identity "$kubeconfig" "$kube_context")"
+  [[ -n "$mine" ]] || return 0
+  IFS='|' read -r entry server ca <<<"$mine"
+  [[ "$entry" != kind-devicechain ]] || refuse_shared "context '$kube_context' points at the cluster entry kind-devicechain"
+  local shared_cfg="$state_dir/shared-cluster.kubeconfig" src theirs s_entry s_server s_ca
+  for src in default kind; do
+    theirs=""
+    if [[ "$src" == kind ]]; then
+      # Bounded: kind asks docker, which can be slow to answer for a cluster that is stopped.
+      if command -v kind >/dev/null 2>&1 && bounded kind get kubeconfig --name devicechain >"$shared_cfg" 2>/dev/null; then
+        theirs="$(ctx_identity "$(winpath "$shared_cfg")" kind-devicechain)"
+      fi
+      rm -f "$shared_cfg"
+    elif [[ -f "$HOME/.kube/config" ]]; then
+      theirs="$(ctx_identity "$(winpath "$HOME/.kube/config")" kind-devicechain)"
+    fi
+    [[ -n "$theirs" ]] || continue
+    IFS='|' read -r s_entry s_server s_ca <<<"$theirs"
+    [[ -z "$s_server" || "$(norm_server "$server")" != "$(norm_server "$s_server")" ]] ||
+      refuse_shared "context '$kube_context' points at $server, the shared cluster's server (from $src, entry $s_entry)"
+    [[ -z "$s_ca" || "$ca" != "$s_ca" ]] ||
+      refuse_shared "context '$kube_context' trusts the shared cluster's CA (from $src, entry $s_entry)"
+  done
+}
+
+# guard_live: the API server the context reaches is not the shared cluster. Run before anything
+# that changes a cluster. An unreachable one passes: nothing can be changed through it.
+guard_live() {
+  local nodes
+  nodes="$(k get nodes -o name --request-timeout=10s 2>/dev/null || true)"
+  if grep -Eq '^node/devicechain-(control-plane|worker[0-9]*)$' <<<"$nodes"; then
+    refuse_shared "context '$kube_context' reaches nodes $(tr '\n' ' ' <<<"$nodes")"
+  fi
+}
+
+guard_not_shared
 
 # The runs: name | simulator flags | the invariant it must turn red ("" for the clean day).
 runs=(
   "clean||"
   "flood-split-key|--scenario-defect flood-split-key|flood-escalates"
+  "flood-clear-between-tiers|--scenario-defect flood-clear-between-tiers|flood-escalates"
   "no-far-end|--no-command-far-end|pump-commanded"
   "refuse-derate|--scenario-defect refuse-derate|derate-obeyed"
   "air-lock-basin|--scenario-defect air-lock-basin|air-lock-only-east"
@@ -344,6 +413,7 @@ cmd_down() {
   ((own_cluster)) || fail "DC_HPRIG_KUBECONFIG is set: this rig did not create that cluster and will not delete it"
   need kind
   if cluster_exists; then
+    guard_live
     k get ns kube-system >/dev/null 2>&1 ||
       fail "kind cluster $cluster exists but is not in $kubeconfig: not this rig's; refusing to delete it"
     local uid
@@ -358,23 +428,47 @@ cmd_down() {
 # ---------------------------------------------------------------------------
 # a run
 # ---------------------------------------------------------------------------
-bg_pids=()
-start_bg() { # start_bg <log> <command...>
+# Every background process starts in a process group of its own (job control is on while it
+# starts; `setsid` is not in Git Bash) and is stopped as a group. Killing only a port-forward
+# loop's bash leaves its foreground kubectl listening, which a later run's readiness probe then
+# takes for its own forward. Sims and verifiers are stopped before the tenants are destroyed; the
+# forwards, which the destroy goes through, after.
+bg_pids=()  # sims and verifiers
+fwd_pids=() # port-forward loops
+last_bg=""
+start_bg() { # start_bg <log> <command...>; leaves the pid (= its process group) in last_bg
   local log="$1"
   shift
-  "$@" >"$log" 2>&1 &
-  bg_pids+=("$!")
+  set -m
+  "$@" </dev/null >"$log" 2>&1 &
+  last_bg="$!"
+  set +m
+}
+stop_group() { # stop_group <pid...>: TERM each process group, then reap its leader
+  local p
+  for p in "$@"; do kill -TERM -- "-$p" 2>/dev/null || kill -TERM "$p" 2>/dev/null || true; done
+  for p in "$@"; do wait "$p" 2>/dev/null || true; done
+}
+stop_procs() {
+  ((${#bg_pids[@]} == 0)) || stop_group "${bg_pids[@]}"
+  bg_pids=()
+}
+stop_forwards() {
+  ((${#fwd_pids[@]} == 0)) || stop_group "${fwd_pids[@]}"
+  fwd_pids=()
 }
 stop_all() {
-  local p
-  for p in "${bg_pids[@]}"; do kill "$p" 2>/dev/null || true; done
-  bg_pids=()
+  stop_procs
+  stop_forwards
 }
 trap stop_all EXIT
 
 forward() { # forward <log> <namespace> <target> <local:remote>; keeps the forward up across pod restarts
-  start_bg "$state_dir/$1" bash -c "while :; do kubectl --kubeconfig '$kubeconfig' --context '$kube_context' -n '$2' port-forward '$3' '$4' || true; sleep 2; done"
   local port="${4%%:*}"
+  ! curl -s -o /dev/null --max-time 2 "http://localhost:$port/" ||
+    fail "something already answers on localhost:$port before its port-forward started (a forward left by another run?)"
+  start_bg "$state_dir/$1" bash -c "while :; do kubectl --kubeconfig '$kubeconfig' --context '$kube_context' -n '$2' port-forward '$3' '$4' || true; sleep 2; done"
+  fwd_pids+=("$last_bg")
   for _ in $(seq 1 60); do
     curl -s -o /dev/null --max-time 2 "http://localhost:$port/" && return 0
     sleep 1
@@ -398,6 +492,7 @@ selected() { # selected <run-name>: whether DC_HPRIG_CONTROLS includes it
 cmd_run() {
   need kubectl; need jq; need curl; need go
   offline_controls
+  guard_live
   k get ns "$namespace" >/dev/null 2>&1 || fail "no instance $instance on $kube_context: run 'hack/harborpulse-rig.sh up' first"
   build_tools
   if ! k -n "$sink_ns" get deploy hp-sink >/dev/null 2>&1; then
@@ -425,6 +520,7 @@ cmd_run() {
     hs="$(winpath "$HOME/.devicechain/sims/$sname.json")"
     # shellcheck disable=SC2086 # the flags are words on purpose
     start_bg "$state_dir/$sname.sim.log" "$simulator" --handshake "$hs" --port "$port" $flags
+    bg_pids+=("$last_bg")
     sims+=("$sname|$port|$want|$hs")
   done
 
@@ -448,10 +544,10 @@ cmd_run() {
   local vpids=()
   for s in "${sims[@]}"; do
     IFS='|' read -r sname port want_inv hsp <<<"$s"
-    "$verifier" --handshake "$hsp" --sim "http://127.0.0.1:$port" --sink "http://127.0.0.1:$sink_port" \
-      --report "$(winpath "$state_dir/$sname.report.json")" \
-      >"$state_dir/$sname.verify.log" 2>&1 &
-    vpids+=("$!")
+    start_bg "$state_dir/$sname.verify.log" "$verifier" --handshake "$hsp" --sim "http://127.0.0.1:$port" \
+      --sink "http://127.0.0.1:$sink_port" --report "$(winpath "$state_dir/$sname.report.json")"
+    bg_pids+=("$last_bg")
+    vpids+=("$last_bg")
   done
 
   local bad=0 rc why idx=0
@@ -475,13 +571,14 @@ cmd_run() {
     fi
   done
 
-  stop_all
+  stop_procs
   if [[ "${DC_HPRIG_KEEP:-0}" != 1 ]]; then
     for s in "${sims[@]}"; do
       "$dcctl" sim destroy "${s%%|*}" -i "$instance" -s "localhost:$http_port" --kube-context "$kube_context" \
         >"$state_dir/${s%%|*}.destroy.log" 2>&1 || note "could not destroy ${s%%|*} (see its destroy log)"
     done
   fi
+  stop_forwards
   ((bad == 0)) || fail "the harborpulse rig is red"
   say "ALL CHECKS PASSED"
 }
