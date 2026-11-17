@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/payloaddecode/plancost"
+	"github.com/devicechain-io/dc-microservice/sourcelimit"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,7 +33,8 @@ type devicePlanFake struct {
 	err   error
 	calls int
 	// valid is the set of credential ids device-management authenticates; any other is refused.
-	valid map[string]bool
+	valid  map[string]bool
+	secret string
 }
 
 func (f *devicePlanFake) DeviceDecoder(_ context.Context, _, _ string, cred integration.DeviceCredential) (*integration.DecoderPlan, error) {
@@ -41,7 +44,7 @@ func (f *devicePlanFake) DeviceDecoder(_ context.Context, _, _ string, cred inte
 	if f.err != nil {
 		return nil, f.err
 	}
-	if !f.valid[cred.ID] {
+	if !f.valid[cred.ID] || (f.secret != "" && (cred.Secret == nil || *cred.Secret != f.secret)) {
 		return nil, nil
 	}
 	if f.plan == nil {
@@ -86,7 +89,8 @@ func newDeviceHarness(t *testing.T, plan *integration.DecoderPlan) *deviceHarnes
 		func(string, string) error { return h.admitErr }, nil)
 	require.NoError(t, err)
 	rt := &DeviceUplinkRoute{
-		Plans: integration.NewDeviceDecoders(h.plans, integration.DeviceDecoderConfig{}),
+		Sources: testUplinkSources(t, 600),
+		Plans:   integration.NewDeviceDecoders(h.plans, integration.DeviceDecoderConfig{}),
 		Publish: func(_, _ string, e *model.UnresolvedEvent, p interface{}, _ string) error {
 			if h.pubErr != nil {
 				return h.pubErr
@@ -376,4 +380,113 @@ func TestDeviceUplinkAsksTheCredentialItPresented(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, h.post(uplinkPath, "", "x", map[string]string{"Authorization": "Bearer tok-2"}).Code,
 		"another credential for the same device is not served the first one's answer")
 	require.Equal(t, 2, h.plans.calls)
+}
+
+func testUplinkSources(t *testing.T, burst int) *sourcelimit.Limiter {
+	t.Helper()
+	l, err := sourcelimit.New(sourcelimit.Limits{Burst: burst, Every: time.Hour, MaxKeys: 16})
+	require.NoError(t, err)
+	return l
+}
+
+func TestTheUplinkRouteStopsAnsweringGuesses(t *testing.T) {
+	h := newDeviceHarness(t, fplan())
+	h.plans.valid = map[string]bool{"S": true}
+	for i := 0; i < 5; i++ {
+		require.Equal(t, 401, h.post(uplinkPath, "", "x", map[string]string{"Authorization": fmt.Sprintf("Bearer wrong-%d", i)}).Code)
+	}
+	for i := 5; i < 56; i++ {
+		secret := fmt.Sprintf("wrong-%d", i)
+		if i == 55 {
+			secret = "S"
+		}
+		r := h.post(uplinkPath, "", "x", map[string]string{"Authorization": "Bearer " + secret})
+		require.Equal(t, 503, r.Code)
+		require.NotEmpty(t, r.Header().Get("Retry-After"))
+	}
+	require.Equal(t, 5, h.plans.calls)
+	require.Equal(t, DeviceUplinkHeld, h.results[len(h.results)-1])
+}
+
+func TestTheUplinkRouteLimitsASource(t *testing.T) {
+	h := newDeviceHarness(t, fplan())
+	h.es.deviceUplinks.Sources = testUplinkSources(t, 2)
+	for i := 0; i < 2; i++ {
+		require.Equal(t, 401, h.post(uplinkPath, "", "x", map[string]string{"Authorization": fmt.Sprintf("Bearer wrong-%d", i)}).Code)
+	}
+	r := h.post(uplinkPath, "", "x", bearer)
+	require.Equal(t, 429, r.Code)
+	require.Equal(t, "3600", r.Header().Get("Retry-After"))
+	require.Equal(t, 2, h.plans.calls)
+	require.Equal(t, DeviceUplinkSourceLimited, h.results[len(h.results)-1])
+}
+
+func TestTheUplinkRouteHoldsACachedCorrectCredentialToo(t *testing.T) {
+	h := newDeviceHarness(t, fplan())
+	now := time.Unix(1000, 0)
+	h.es.deviceUplinks.Plans = integration.NewDeviceDecoders(h.plans, integration.DeviceDecoderConfig{Now: func() time.Time { return now }})
+	require.Equal(t, 202, h.post(uplinkPath, "", "x", bearer).Code)
+	for i := 0; i < 5; i++ {
+		require.Equal(t, 401, h.post(uplinkPath, "", "x", map[string]string{"Authorization": fmt.Sprintf("Bearer wrong-%d", i)}).Code)
+	}
+	for _, headers := range []map[string]string{bearer, {"Authorization": "Bearer wrong-held"}} {
+		r := h.post(uplinkPath, "", "x", headers)
+		require.Equal(t, 503, r.Code)
+		require.NotEmpty(t, r.Header().Get("Retry-After"))
+	}
+	require.Equal(t, 6, h.plans.calls, "held requests never reach the backend")
+	require.Equal(t, 202, h.post("/inst/acme/devices/meter-2/uplink", "", "x", bearer).Code)
+	now = now.Add(time.Second)
+	require.Equal(t, 202, h.post(uplinkPath, "", "x", bearer).Code)
+	require.Equal(t, 7, h.plans.calls, "the elapsed hold permits the cached answer unchanged")
+}
+
+func TestDeviceUplinkHoldExpiresAndSuccessClearsFailures(t *testing.T) {
+	h := newDeviceHarness(t, fplan())
+	now := time.Unix(1000, 0)
+	h.es.deviceUplinks.Plans = integration.NewDeviceDecoders(h.plans, integration.DeviceDecoderConfig{Now: func() time.Time { return now }})
+	wrong := func(i int) int {
+		return h.post(uplinkPath, "", "x", map[string]string{"Authorization": fmt.Sprintf("Bearer wrong-%d", i)}).Code
+	}
+	for i := 0; i < 5; i++ {
+		require.Equal(t, 401, wrong(i))
+	}
+	require.Equal(t, 503, h.post(uplinkPath, "", "x", bearer).Code)
+	now = now.Add(time.Second)
+	require.Equal(t, 202, h.post(uplinkPath, "", "x", bearer).Code)
+	for i := 5; i < 9; i++ {
+		require.Equal(t, 401, wrong(i))
+	}
+	// A different successful credential forces a backend authentication and clears the count.
+	require.Equal(t, 202, h.post(uplinkPath, "", "x", map[string]string{"Authorization": "Bearer u"}).Code)
+	for i := 9; i < 13; i++ {
+		require.Equal(t, 401, wrong(i))
+	}
+}
+
+func TestDeviceUplinkMissingSourceLimiterFailsClosed(t *testing.T) {
+	h := newDeviceHarness(t, fplan())
+	h.es.deviceUplinks.Sources = nil
+	r := h.post(uplinkPath, "", "x", bearer)
+	require.Equal(t, 503, r.Code)
+	require.NotEmpty(t, r.Header().Get("Retry-After"))
+	require.Zero(t, h.plans.calls)
+}
+
+func TestDeviceUplinkMQTTPasswordGuessesShareTheDeviceHold(t *testing.T) {
+	h := newDeviceHarness(t, fplan())
+	h.plans.secret = "S"
+	for i := 0; i < 6; i++ {
+		secret := fmt.Sprintf("wrong-%d", i)
+		status := 401
+		if i == 5 {
+			secret = "S"
+			status = 503
+		}
+		r := h.post(uplinkPath, "", "x", map[string]string{
+			headerCredentialType: "MQTT_BASIC", headerCredentialID: "u", headerCredentialSecret: secret,
+		})
+		require.Equal(t, status, r.Code)
+	}
+	require.Equal(t, 5, h.plans.calls)
 }

@@ -57,6 +57,9 @@ func (nmgr *NatsManager) AdmitPublish(tenant, suffix string) error {
 	return first
 }
 
+// ErrShardRoutingNotEnabled refuses reads of instance-sharded streams without routing.
+var ErrShardRoutingNotEnabled = errors.New("messaging: shard-group routing is not enabled")
+
 // ShardGroupRouter holds an adoptable placement. An error never means group zero.
 type ShardGroupRouter interface {
 	ShardGroup(tenant string) (int, error)
@@ -74,9 +77,7 @@ type streamShards struct {
 	cfg    config.NatsShardGroupsConfiguration
 }
 
-// EnableStreamSharding installs the opt-in routing seam once. Services do not call it yet.
-// Group streams multiply each selected stream's disk reservation by Count; budget
-// accounting is deferred to a later slice.
+// EnableStreamSharding installs the opt-in routing seam once before opening handles.
 func (nmgr *NatsManager) EnableStreamSharding(router ShardGroupRouter, cfg *config.NatsShardGroupsConfiguration) error {
 	if router == nil {
 		return fmt.Errorf("messaging: nil shard-group router")
@@ -242,8 +243,24 @@ func (nmgr *NatsManager) freezeStreamRouting() {
 	nmgr.streamMu.Unlock()
 }
 
+// refuseUnroutedRead prevents a reader on an unrouted manager from silently binding
+// only group 0 and losing every other group's tenants.
+func (nmgr *NatsManager) refuseUnroutedRead(suffix string) error {
+	if nmgr.Microservice == nil {
+		return nil
+	}
+	cfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
+	if cfg != nil && cfg.Count >= 2 && slices.Contains(cfg.Suffixes, suffix) && nmgr.streamSharding() == nil {
+		return fmt.Errorf("%w: service must enable shard-group routing (call shardgroups.Enable) before reading suffix %q", ErrShardRoutingNotEnabled, suffix)
+	}
+	return nil
+}
+
 func (nmgr *NatsManager) refuseShardedRead(suffix, slice string) error {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedRead(suffix); err != nil {
+		return err
+	}
 	s := nmgr.streamSharding()
 	if s.selects(suffix) && s.cfg.Count >= 2 {
 		return fmt.Errorf("messaging: %s not supported for a sharded suffix yet: %q", slice, suffix)

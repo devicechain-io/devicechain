@@ -30,6 +30,9 @@ var destroyCmd = &cobra.Command{
 	Short: "Destroy a DeviceChain instance",
 	Long: `Removes a DeviceChain instance — the inverse of bootstrap.
 
+The instance argument must be a plain instance name, with no path separators;
+"." and ".." are refused.
+
 This deletes the instance and ALL ITS DATA, in this order: its Helm release; its
 own infrastructure — the broker and event store — by "tofu destroy" over the
 instance's infrastructure state; its database and login on the shared relational
@@ -65,9 +68,13 @@ from the instance's name. --kube-context may name that same context; one naming
 a different context is refused, and the refusal says how to remove a record that
 is wrong. With no record, --kube-context says where the instance is. An instance
 bootstrapped before dcctl recorded this has no record, and with no --kube-context
-destroy falls back to guessing the cluster from the instance name — saying so as
-it goes. Run "dcctl instances list" to see which instances are in that state.
-If the cluster is already gone, only the local state is cleared.
+destroy guesses the cluster from the instance name and says so; a guess is never
+used to declare the cluster gone. Run "dcctl instances list" to see these instances.
+Local state for a missing cluster is cleared only when the instance has a record
+of its cluster and that cluster's recorded context no longer answers. Otherwise
+the normal uninstall runs and fails if the cluster cannot be reached. Pass
+--kube-context to name the cluster, or remove the instance's directory by hand
+if its cluster is really gone.
 
 Use --all to destroy every instance on this machine.`,
 	// Not ExactArgs(2): `--all` takes no instance, because the whole point of it is that
@@ -83,6 +90,9 @@ Use --all to destroy every instance on this machine.`,
 		}
 		if len(args) != 2 {
 			return fmt.Errorf("accepts 2 args (provider and instance), or --all with none; received %d", len(args))
+		}
+		if err := bootstrap.ValidateDestroyableInstanceName(args[1]); err != nil {
+			return err
 		}
 		provider, err := bootstrap.Get(args[0])
 		if err != nil {

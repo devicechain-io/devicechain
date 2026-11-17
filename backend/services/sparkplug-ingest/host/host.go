@@ -117,6 +117,8 @@ type Broker struct {
 // Metrics are the optional Prometheus counters the receive path updates. Any nil
 // field is skipped, so the host is usable in tests without a registry.
 type Metrics struct {
+	SessionRefused *prometheus.CounterVec // capacity refusals, labelled reason
+
 	Messages        *prometheus.CounterVec // labeled "type" (NBIRTH/NDATA/STATE/…)
 	DecodeErrors    prometheus.Counter
 	RebirthRequests prometheus.Counter // rebirth NCMDs the session machine emitted
@@ -292,6 +294,16 @@ type Client struct {
 	reconciler reconcileSource
 	seenMu     sync.Mutex
 	seen       map[string]time.Time
+
+	seenPrunedAt time.Time
+	// seenRefusedAt is the last time markSeen could not record a new identity because
+	// the seen map was full. An identity absent from the map since then may have spoken,
+	// so seenSince cannot vouch that it was silent (see seenSince).
+	seenRefusedAt time.Time
+
+	capacityWarnedAt atomic.Int64
+	queueWarnedAt    atomic.Int64
+
 	// probeWindow is how long the reconcile probe waits before declaring silent nodes
 	// dead (config.Presence.ProbeWindowSeconds, ADR-067 SP4b). It must comfortably exceed
 	// a healthy node's rebirth→births round trip so a live-but-slow node is not falsely
@@ -1120,6 +1132,7 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	// has no node session.
 	if !rec.Topic.IsState && rec.Payload != nil && c.ingester != nil {
 		obs := c.sessions.Observe(rec.Topic, rec.Payload)
+		c.countSessionRefusal(obs.Refused)
 		c.reported(obs.Reports)
 		c.countSkipped(obs.Skipped)
 		if obs.Skipped.Oversize > 0 {
@@ -1153,7 +1166,9 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	} else if !rec.Topic.IsState && rec.Payload != nil {
 		// Decode-only (nil ingester, the SP1/SP2 posture): still advance the session
 		// machine so rebirth decisions and logging are unchanged.
-		c.reported(c.sessions.Observe(rec.Topic, rec.Payload).Reports)
+		obs := c.sessions.Observe(rec.Topic, rec.Payload)
+		c.countSessionRefusal(obs.Refused)
+		c.reported(obs.Reports)
 	}
 	c.logRecord(rec)
 }
@@ -1468,6 +1483,7 @@ func (c *Client) drainPublishes() {
 // have been heard from earlier in the session; see presenceProbeLoop. `trigger` labels the
 // probe's metrics.
 func (c *Client) reconcileProbe(ctx context.Context, devices []AssertedDevice, since time.Time, trigger string) {
+	probeStarted := c.now()
 	// One probe at a time: a periodic tick checks this before reading the projection.
 	c.probing.Store(true)
 	defer c.probing.Store(false)
@@ -1509,6 +1525,11 @@ func (c *Client) reconcileProbe(ctx context.Context, devices []AssertedDevice, s
 	}
 
 	now := c.now()
+	for key := range rebirthed {
+		if !c.seenSince(nodeExternalId(key), since) {
+			c.sessions.markProbeOffline(key, probeStarted)
+		}
+	}
 	stale := make([]PresenceEvent, 0)
 	for _, d := range devices {
 		key, ok := parseReconcileNodeKey(d.ExternalId)
@@ -1545,6 +1566,8 @@ func (c *Client) reconcileProbe(ctx context.Context, devices []AssertedDevice, s
 func (c *Client) resetSeen() {
 	c.seenMu.Lock()
 	c.seen = make(map[string]time.Time)
+	c.seenPrunedAt = time.Time{}
+	c.seenRefusedAt = time.Time{}
 	c.seenMu.Unlock()
 }
 
@@ -1553,10 +1576,26 @@ func (c *Client) resetSeen() {
 func (c *Client) markSeen(externalId string) {
 	now := c.now()
 	c.seenMu.Lock()
+	defer c.seenMu.Unlock()
 	if c.seen != nil {
+		if _, exists := c.seen[externalId]; !exists && len(c.seen) >= maxSeenIDs {
+			if c.seenPrunedAt.IsZero() || now.Sub(c.seenPrunedAt) >= 30*time.Second {
+				ttl := max(c.probeWindow, c.probeInterval)
+				for id, last := range c.seen {
+					if now.Sub(last) > ttl {
+						delete(c.seen, id)
+					}
+				}
+				c.seenPrunedAt = now
+			}
+			if len(c.seen) >= maxSeenIDs {
+				c.seenRefusedAt = now
+				c.countSessionRefusal("seen_cap")
+				return
+			}
+		}
 		c.seen[externalId] = now
 	}
-	c.seenMu.Unlock()
 }
 
 // seenSince reports whether an external id has produced traffic on this session at or
@@ -1565,7 +1604,14 @@ func (c *Client) seenSince(externalId string, since time.Time) bool {
 	c.seenMu.Lock()
 	defer c.seenMu.Unlock()
 	last, ok := c.seen[externalId]
-	return ok && !last.Before(since)
+	if !ok {
+		// 🔴 A FULL MAP IS NOT SILENCE. An identity that spoke while the map was full was
+		// never recorded, so "absent" no longer means "silent": answering false would let
+		// the probe declare a live device DISCONNECTED. Report it as heard instead; the
+		// seen_cap refusal counter is what makes the full map loud.
+		return !c.seenRefusedAt.IsZero() && !c.seenRefusedAt.Before(since)
+	}
+	return !last.Before(since)
 }
 
 // parseReconcileNodeKey extracts the edge node ({group}, {node}) from a device's
@@ -1643,7 +1689,9 @@ func (c *Client) enqueueRebirth(group, node string) {
 		if c.metrics.RebirthDropped != nil {
 			c.metrics.RebirthDropped.Inc()
 		}
-		log.Warn().Str("tenant", c.tenant).Str("group", group).Str("node", node).Msg("Rebirth queue full; dropping request.")
+		if c.warnCapacity(&c.queueWarnedAt) {
+			log.Warn().Str("tenant", c.tenant).Str("group", group).Str("node", node).Msg("Rebirth queue full; dropping request.")
+		}
 	}
 }
 
@@ -1721,7 +1769,7 @@ func (c *Client) logRecord(rec Record) {
 		e.Int64("timestamp", int64(rec.PayloadTimestamp)).Msg("Received Host STATE.")
 		return
 	}
-	e := log.Info().Str("tenant", c.tenant).Str("type", rec.Label()).Str("group", rec.Topic.GroupID).Str("node", rec.Topic.EdgeNodeID)
+	e := log.Debug().Str("tenant", c.tenant).Str("type", rec.Label()).Str("group", rec.Topic.GroupID).Str("node", rec.Topic.EdgeNodeID)
 	if rec.Topic.IsDevice() {
 		e = e.Str("device", rec.Topic.DeviceID)
 	}

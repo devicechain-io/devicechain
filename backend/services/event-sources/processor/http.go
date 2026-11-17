@@ -254,7 +254,16 @@ func (es *HttpEventSource) handleTracedEvent(w http.ResponseWriter, r *http.Requ
 	// Received now: HTTP has no durable backlog in front of it.
 	event, payload, err := es.Decoder.Decode(body, time.Time{})
 	if err != nil {
-		es.failed(es.Id, tenant, body, err)
+		// A body addressed to a tenant that does not exist is not recorded: the failed-decode
+		// stream is instance-wide and bounded, and invented tenant names would evict real
+		// tenants' records. It is counted as an unknown-tenant refusal, and answered exactly
+		// as any other malformed body, so the answer does not say whether the tenant exists.
+		// An unavailable check reports false (fail-open), and the body is recorded as before.
+		if es.checks != nil && es.checks.refusedTenant(r.Context(), tenant) {
+			es.checks.count(es.Id, tenant, "", RefusedUnknownTenant)
+		} else {
+			es.failed(es.Id, tenant, body, err)
+		}
 		// Not JSON at all: nothing in it can be pointed at, so it is a plain-text 400.
 		// JSON that is well formed and says something the platform refuses is still a 400, with a JSON body
 		// that names the value (an RFC 6901 pointer), so the sender can fix the field rather than guess.

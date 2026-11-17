@@ -11,6 +11,8 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,8 +20,10 @@ import (
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtype"
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/integrationcodec"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/sourcelimit"
 	"github.com/rs/zerolog/log"
 )
 
@@ -44,10 +48,11 @@ import (
 // it chooses the charge and whether the bytes are carried at all.
 //
 // 🔴 NOTHING IS SAID BEFORE THE CREDENTIAL IS PROVEN. A caller who does not hold the device's
-// credential gets one answer, 401, whether the device exists and whether its type has a decoder: the
+// credential gets the same 401 regardless of whether the device exists or has a decoder, until
+// source limiting or a per-device failure hold suppresses the verdict. The
 // refusals that depend on the device (no decoder, the shape of the body) come only after, so they
-// reach only its own holder. The tenant's message gate and the lookup budgets are charged to the
-// tenant the credential was proven for, never to the tenant the URL names.
+// reach only its own holder. Tenant budgets are charged only after authentication; cold lookup
+// budgets are replica-wide and failure holds are per device.
 //
 // 🔴 THE ROUTE IS OFF UNLESS THE OPERATOR TURNS IT ON (httpIngest.deviceUplinks). It publishes an
 // uplink that carries no integration mark, which a device-management from before this route
@@ -56,6 +61,8 @@ import (
 
 // Results of a device-uplink request (the result label of device_uplink_requests_total).
 const (
+	DeviceUplinkSourceLimited = "source_limited"
+	DeviceUplinkHeld          = "held"
 	DeviceUplinkAccepted      = "accepted"
 	DeviceUplinkBadRequest    = "bad_request"
 	DeviceUplinkUnauthorized  = "unauthorized"
@@ -70,7 +77,7 @@ const (
 
 // DeviceUplinkResults lists every result, so a series can be exported at zero.
 var DeviceUplinkResults = []string{
-	DeviceUplinkAccepted, DeviceUplinkBadRequest, DeviceUplinkUnauthorized, DeviceUplinkTooLarge, DeviceUplinkNoDecoder,
+	DeviceUplinkSourceLimited, DeviceUplinkHeld, DeviceUplinkAccepted, DeviceUplinkBadRequest, DeviceUplinkUnauthorized, DeviceUplinkTooLarge, DeviceUplinkNoDecoder,
 	DeviceUplinkRateLimited, DeviceUplinkPlanUnavail, DeviceUplinkBackpressure,
 	DeviceUplinkPublishFailed, DeviceUplinkInternalError,
 }
@@ -87,6 +94,9 @@ const (
 type DeviceUplinkRoute struct {
 	// Plans says which devices' types have a payload decoder. Required.
 	Plans *integration.DeviceDecoders
+	// Sources limits HTTP requests before authentication. MQTT capture does not use it.
+	Sources        *sourcelimit.Limiter
+	TrustedProxies []netip.Prefix
 	// Publish writes the device's IntegrationUplink to the uplink stream and returns whether it was
 	// durably published (processor.ErrEventNotBuilt when the message could not be built).
 	// dedupID names the message for the stream's duplicate window: "" on HTTP, which has no stable id
@@ -218,15 +228,31 @@ func (es *HttpEventSource) handleDeviceUplink(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// 🔴 THE CREDENTIAL IS PROVEN BEFORE ANYTHING ELSE IS DECIDED OR SAID, and before the body is read.
-	// Device-management authenticates it while it resolves the plan; every way of not being
-	// authenticated is this one 401, so an anonymous caller learns nothing about the device or its
-	// type. Not knowing the answer is never "unauthenticated" and never "no decoder": the device is
-	// told to retry.
+	if rt.Sources == nil {
+		rt.result(DeviceUplinkPlanUnavail)
+		w.Header().Set("Retry-After", retryAfterSeconds)
+		http.Error(w, "source limiter is unavailable; retry later", http.StatusServiceUnavailable)
+		return
+	}
+	if !rt.Sources.Allow(sourcelimit.SourceKey(gqlcore.TrustedSourceAddr(r, rt.TrustedProxies))) {
+		rt.result(DeviceUplinkSourceLimited)
+		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(rt.Sources.Every().Seconds()+0.999))))
+		http.Error(w, "too many requests from this source; retry later", http.StatusTooManyRequests)
+		return
+	}
+	// Authentication verdicts reach the HTTP sender. Bound guesses by source first and by device
+	// inside Lookup, before reading the body. A held lookup discloses no credential verdict.
+
 	look, err := rt.Plans.Lookup(r.Context(), tenant, device, integration.DeviceCredential{Type: *ctype, ID: *cid, Secret: csecret})
 	if err != nil {
-		log.Warn().Err(err).Msg("Device decoder lookup failed; refusing the uplink")
-		rt.result(DeviceUplinkPlanUnavail)
+		if errors.Is(err, integration.ErrDeviceDecoderHeld) {
+			// Not logged per request: a held device is one being guessed at, and a line per guess
+			// would hand the guesser the log volume. The result label counts them.
+			rt.result(DeviceUplinkHeld)
+		} else {
+			log.Warn().Err(err).Msg("Device decoder lookup failed; refusing the uplink")
+			rt.result(DeviceUplinkPlanUnavail)
+		}
 		w.Header().Set("Retry-After", retryAfterSeconds)
 		http.Error(w, "decoder lookup is unavailable; retry later", http.StatusServiceUnavailable)
 		return
