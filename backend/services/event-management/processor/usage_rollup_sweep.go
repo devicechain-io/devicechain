@@ -62,8 +62,7 @@ const usageRollupLock = "event-management/usage-rollup"
 func NewUsageRollupSweep(ms *core.Microservice, rdbm *rdb.RdbManager, api usageRoller,
 	interval time.Duration, callbacks core.LifecycleCallbacks) *UsageRollupSweep {
 	s := &UsageRollupSweep{lock: rdbm, api: api, now: time.Now}
-	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "usage-rollup", interval, s.RunOnce, callbacks,
-		core.WithPassMetrics(ms.NewPeriodicTaskMetrics("usage_rollup")))
+	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "usage-rollup", interval, s.RunOnce, callbacks, ms.NewPeriodicTaskMetrics("usage_rollup"))
 	return s
 }
 
