@@ -1045,7 +1045,7 @@ A consumer ran out of delivery attempts because it could not save its checkpoint
 
 The NATS broker is clustered but nothing on it is replicated
 
-**含义与处理方式.** This instance is connected to a CLUSTERED NATS broker while every stream and KV bucket is configured for a single replica, so it is paying for a multi-server cluster and surviving zero node losses. Both halves of the toggle have to move together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the replica factor is the chart's (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets both from one value. If the single-server topology is what you intended, scale the NATS cluster back down rather than leaving it running unused.
+**含义与处理方式.** This instance is connected to a CLUSTERED NATS broker while every stream and KV bucket is configured for a single replica, so it is paying for a multi-server cluster and surviving zero node losses. Both halves of the toggle have to move together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the replica factor is the chart's (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets both from one value. If the single-server topology is what you intended, scale the NATS cluster back down rather than leaving it running unused. (An instance with NATS shard groups runs a multi-server, single-replica broker on purpose, and does not raise this.)
 
 ### JetStreamLeaseBucketNotReplicated {#jetstreamleasebucketnotreplicated}
 
