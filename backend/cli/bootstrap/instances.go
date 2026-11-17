@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dcctl/dcdir"
@@ -143,6 +144,24 @@ func (r InstanceRecord) Binding() ClusterBinding {
 // TestTheInstanceNameCeilingIsTheOneHelmActuallyEnforces pins both ends against the real
 // validator rather than against this constant.
 const maxInstanceNameLen = 50
+
+// ValidateDestroyableInstanceName permits legacy names but confines deletion to a
+// plain name directly under the instances directory.
+func ValidateDestroyableInstanceName(name string) error {
+	invalid := fmt.Errorf("instance name %q is not a plain name: destroy takes the name of an instance under ~/.devicechain/instances", name)
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") ||
+		filepath.VolumeName(name) != "" || filepath.Base(name) != name {
+		return invalid
+	}
+	dir, err := dcdir.Sibling(dcdir.Instances)
+	if err != nil {
+		return fmt.Errorf("%w: %v", invalid, err)
+	}
+	if filepath.Dir(filepath.Clean(filepath.Join(dir, name))) != filepath.Clean(dir) {
+		return invalid
+	}
+	return nil
+}
 
 // ValidateInstanceName rejects names that cannot safely become a directory under
 // ~/.devicechain/instances.

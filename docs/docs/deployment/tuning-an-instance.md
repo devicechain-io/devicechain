@@ -177,6 +177,8 @@ Add the extra measurement rows from calculated metrics and any compressed histor
 quarter of the volume free for WAL, maintenance and growth; increase that allowance if your
 configured WAL budget requires more space.
 
+Event list reads stop after 60 seconds (15 seconds for a scoped caller naming an anchor); for large histories, narrow the time range or filter on a device to avoid timing out on the exact count performed for every page.
+
 Three alerts watch the volume, in the order you want to hear them: `DatabaseVolumeFillsWithinDay`
 (on course to fill within 24 hours), `DatabaseVolumeFillingFast` (within the hour) and
 `DatabaseVolumeCritical` (95% full). If the database stops taking writes anyway,

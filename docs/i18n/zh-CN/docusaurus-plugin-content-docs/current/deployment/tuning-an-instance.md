@@ -142,6 +142,8 @@ event-sources Pod 上设置 `EVENT_SOURCES_INGEST_METERING`。这不是 `instanc
 还需加上计算指标的额外测量行和已压缩历史数据。卷容量应留出四分之一供 WAL、维护和增长使用；
 如果配置的 WAL 预算需要更多空间，请增加这部分预留。
 
+事件列表读取在 60 秒后停止（作用域受限的调用者指定锚点时为 15 秒）；对于大量历史数据，请缩小时间范围或按设备筛选，以免每页的精确计数耗尽时限。
+
 三条告警按您希望收到的顺序监视该卷：`DatabaseVolumeFillsWithinDay`（将在 24 小时内写满）、
 `DatabaseVolumeFillingFast`（一小时内）和 `DatabaseVolumeCritical`（已满 95%）。如果数据库仍然停止写入，
 `EventStoreRefusingWrites` 会触发，`event-management` 会保留无法存储的事件而不是丢弃它们

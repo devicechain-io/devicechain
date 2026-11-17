@@ -185,6 +185,8 @@ Añade las filas de medición adicionales de las métricas calculadas y el histo
 Deja libre una cuarta parte del volumen para el WAL, el mantenimiento y el crecimiento; aumenta
 ese margen si la asignación de WAL configurada requiere más espacio.
 
+Las lecturas de listas de eventos se detienen a los 60 segundos (15 segundos para un usuario con ámbito limitado que especifica un ancla); en historiales grandes, acota el intervalo de tiempo o filtra por dispositivo para evitar que el recuento exacto de cada página agote ese plazo.
+
 Tres alertas vigilan el volumen, en el orden en que conviene enterarse: `DatabaseVolumeFillsWithinDay`
 (va camino de llenarse en 24 horas), `DatabaseVolumeFillingFast` (en una hora) y
 `DatabaseVolumeCritical` (95 % lleno). Si la base de datos deja de aceptar escrituras de todos

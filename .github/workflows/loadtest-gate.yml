@@ -220,6 +220,13 @@ jobs:
           rm -f kind
           kind version
 
+      - name: Raise inotify limits for kind
+        # The runner image's fs.inotify.max_user_instances is 128 (2026-11-15), below the 256
+        # dcctl preflight requires for a kind cluster, so the preflight refuses to bootstrap.
+        run: |
+          sudo sysctl -w fs.inotify.max_user_instances=512
+          sudo sysctl -w fs.inotify.max_user_watches=524288
+
       # OpenTofu: dcctl's "Apply infrastructure" step shells out to `tofu`
       # (preferred over terraform) for the postgres/timescale modules. tofu_wrapper
       # off so `exec.LookPath("tofu")` finds the real binary, not the action's shim.
