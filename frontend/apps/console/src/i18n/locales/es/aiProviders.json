@@ -49,6 +49,7 @@
   "providerDeletedToast": "Proveedor “{{token}}” eliminado",
   "providerNotFound": "No se encontró el proveedor “{{token}}”.",
   "providerSavedToast": "Proveedor guardado",
+  "providerStaleWrite": "Este proveedor cambió desde que lo cargaste. Recarga e inténtalo de nuevo; tus cambios no se han guardado.",
   "replaceButton": "Reemplazar",
   "saveProviderButton": "Guardar proveedor",
   "searchKindsPlaceholder": "Buscar tipos…",
