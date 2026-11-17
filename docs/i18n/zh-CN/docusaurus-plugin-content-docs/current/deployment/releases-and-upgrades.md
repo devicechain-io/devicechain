@@ -535,7 +535,7 @@ dcctl bootstrap local devicechain
 
 ### v1.6.0 — 更严格的权限检查，代理重载时设备保持连接 {#v160-upgrade}
 
-`v1.6.0` 可从 `v1.5.0` 原地升级：先为集群运行 `dcctl install`，再为每个实例运行一次 `dcctl upgrade`，详见[滚动升级](#rolling-upgrades)。**两个命令都使用 v1.6.0 的 `dcctl`**，并向 `dcctl install` 提供集群设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。`device-management` 新增一个迁移，使当前实体属性键保持唯一并排队执行修复。参见[v1.6.0 的架构变更与回退](#v160-going-back)。若从 `v1.4.0` 或更早版本升级，请先阅读 [`v1.5.0` 说明](#v150-upgrade)。
+`v1.6.0` 可从 `v1.5.0` 原地升级：先为集群运行 `dcctl install`，再为每个实例运行一次 `dcctl upgrade`，详见[滚动升级](#rolling-upgrades)。**两个命令都使用 v1.6.0 的 `dcctl`**，并向 `dcctl install` 提供集群设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。`device-management` 新增一个迁移，使当前实体属性键保持唯一并排队执行修复。参见[v1.6.0 的架构变更与回退](#v160-going-back)。若从 `v1.4.x` 或更早版本升级，请先逐个升级经过每个中间的次版本（包括 `v1.5.x`），并按各版本的说明使用该版本自己的 `dcctl` 和 `--version`：跳过次版本不是经过测试的路径（参见[支持的升级路径](./versioning-policy.md#upgrade-paths)）。`v1.5.0` 的说明见 [`v1.5.0` 说明](#v150-upgrade)。
 
 ```bash
 dcctl install local --version v1.6.0
@@ -905,7 +905,7 @@ NATS 分片组默认仍处于关闭状态。新实例可在安装时通过 `--va
 
 ### v1.5.0 — 自动化变更先评审，代理审批绑定登录会话 {#v150-upgrade}
 
-`v1.5.0` 是从 `v1.4.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。**两个命令都使用新版本的 `dcctl`**，并向 `dcctl install` 提供集群原有设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级会运行四项追加迁移：`device-management` 三项，`user-management` 一项。它们添加代理停用屏障和效果发件箱、自动化评审及其强制执行机制，以及执行代次列。参见[模式变更与回退](#v150-going-back)。如果来自 `v1.3.0` 或更早版本，请先阅读 [`v1.4.0` 说明](#v140-upgrade)。
+`v1.5.0` 是从 `v1.4.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。**两个命令都使用新版本的 `dcctl`**，并向 `dcctl install` 提供集群原有设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级会运行四项追加迁移：`device-management` 三项，`user-management` 一项。它们添加代理停用屏障和效果发件箱、自动化评审及其强制执行机制，以及执行代次列。参见[模式变更与回退](#v150-going-back)。如果来自 `v1.3.x` 或更早版本，请先逐个升级经过每个中间的次版本（包括 `v1.4.x`），并按各版本的说明使用该版本自己的 `dcctl` 和 `--version`：跳过次版本不是经过测试的路径（参见[支持的升级路径](./versioning-policy.md#upgrade-paths)）。`v1.4.0` 的说明见 [`v1.4.0` 说明](#v140-upgrade)。
 
 ```bash
 dcctl install local --version v1.5.0
@@ -1051,7 +1051,7 @@ MCP 新增 `propose_alarm_action`、`get_proposal` 和 `list_my_proposals`，仅
 
 ### v1.4.0：LoRaWAN 确认下行、通过 MQTT 发送设备自有载荷，以及标明设备的通知 {#v140-upgrade}
 
-`v1.4.0` 是从 `v1.3.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见 [v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。**两个命令都要使用新版本的 `dcctl`**，并给 `dcctl install` 传入安装集群时使用的设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级时会运行十个追加的迁移（`device-management` 两个，`notification-management` 四个，`outbound-connectors` 两个，`user-management` 两个）；它们新增表和列。清除通知时间戳迁移还会在 `notify_on_clear` 为 true 且 `notify_on_clear_since IS NULL` 时设置 `notify_on_clear_since = updated_at`。参见[架构变更与回退](#v140-going-back)。如果从 `v1.2.0` 或更早版本升级，请先阅读 [`v1.3.0` 的说明](https://github.com/devicechain-io/devicechain/blob/v1.3.0/docs/docs/deployment/releases-and-upgrades.md#v130-upgrade)，并在按其操作时使用 `--version v1.4.0`。
+`v1.4.0` 是从 `v1.3.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见 [v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。**两个命令都要使用新版本的 `dcctl`**，并给 `dcctl install` 传入安装集群时使用的设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级时会运行十个追加的迁移（`device-management` 两个，`notification-management` 四个，`outbound-connectors` 两个，`user-management` 两个）；它们新增表和列。清除通知时间戳迁移还会在 `notify_on_clear` 为 true 且 `notify_on_clear_since IS NULL` 时设置 `notify_on_clear_since = updated_at`。参见[架构变更与回退](#v140-going-back)。如果从 `v1.2.x` 或更早版本升级，请先逐个升级经过每个中间的次版本（包括 `v1.3.x`），并按各版本的说明使用该版本自己的 `dcctl` 和 `--version`：跳过次版本不是经过测试的路径（参见[支持的升级路径](./versioning-policy.md#upgrade-paths)）。`v1.3.0` 的说明见 [`v1.3.0` 的说明](https://github.com/devicechain-io/devicechain/blob/v1.3.0/docs/docs/deployment/releases-and-upgrades.md#v130-upgrade)。
 
 ```bash
 dcctl install local --version v1.4.0
