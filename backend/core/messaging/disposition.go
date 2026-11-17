@@ -55,6 +55,8 @@ type tenantErased interface{ TenantErased() bool }
 //
 //   - Retry, on ANY delivery, when err is (or wraps) ErrHoldReleased: shutdown ended a store hold
 //     and the message was never judged.
+//   - Retry, on ANY delivery, when err is (or wraps) ErrUnplacedTenant: placement is
+//     unavailable, so this is not a failure of the message.
 //   - TenantErased, on ANY delivery, when err is (or wraps) the erasure fence's refusal. It
 //     comes first, so the final delivery of an erased tenant's message is not lettered either.
 //   - Exhausted on the final delivery (NumDelivered >= MaxDeliver).
@@ -73,7 +75,7 @@ func Dispose(msg Message, err error) Disposition {
 	}
 	var erased tenantErased
 	switch {
-	case errors.Is(err, ErrHoldReleased):
+	case errors.Is(err, ErrHoldReleased), errors.Is(err, ErrUnplacedTenant):
 		return Retry
 	case errors.As(err, &erased) && erased.TenantErased():
 		return TenantErased

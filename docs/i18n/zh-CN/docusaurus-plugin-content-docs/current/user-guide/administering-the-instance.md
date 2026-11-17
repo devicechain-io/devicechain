@@ -231,3 +231,5 @@ AI 提供商界面需要可选的 AI 服务。这些截图中的实例没有运�
 - [租户删除](/deployment/tenant-deletion)：删除会擦除什么、保留什么，以及需要多长时间。
 - [单点登录](/concepts/single-sign-on)和[配置单点登录](/guides/configuring-sso)。
 - [系统设置](/concepts/system-settings)：实例范围的默认值。
+
+如果提供方持有已存储 API 密钥，更改 `kind` 或实际生效的 `endpoint` 时，必须在同一 `updateAiProvider` 请求中发送 `secret`；省略时将返回 `SECRET_RESUPPLY_REQUIRED`。请重新提供密钥，或使用 `secret: null` 删除密钥。名称、模型和启用状态的编辑，以及显式发送该类型的默认端点，都会保留密钥。

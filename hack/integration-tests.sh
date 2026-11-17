@@ -12,7 +12,10 @@
 #
 #   hack/integration-tests.sh              # start a container, run everything, tear it down
 #   DC_IT_PGPORT=5432 hack/integration-tests.sh --no-container   # against a server you started
-#   hack/integration-tests.sh --self-test  # prove the no-tests-ran guard can fire (needs no server)
+#   hack/integration-tests.sh --matrix     # print CI legs using cheap discovery only
+#   hack/integration-tests.sh --modules "backend/core"  # run only these discovered modules
+#   hack/integration-tests.sh --self-test  # prove the test and plan guards (no docker or go)
+# --modules and --no-container can be combined in either order.
 #
 # 🔴 IT RUNS EACH MODULE'S WHOLE TAGGED SUITE, WITH NO -run FILTER, AND THAT IS DELIBERATE.
 # The first version of this filtered by name (`-run Integration`, `-run PurgeDrill`) and covered
@@ -28,6 +31,68 @@
 # the tag), so a build-constraint spelling the text match does not know is a failure rather than
 # an untested file. Tagged Benchmarks are measurement rigs and are listed, not run.
 set -u
+
+# These modules each take minutes, so each gets its own CI leg; everything else shares one
+# "small" leg. This list decides GROUPING, never coverage: an unlisted module still runs there.
+HEAVY=(backend/core backend/services/device-management backend/services/event-management backend/services/user-management backend/services/event-processing)
+
+# Compare independently derived newline lists and name every coverage difference.
+check_plan_covers() {
+  local missing extra
+  missing=$(comm -23 <(printf '%s\n' "$2" | sed '/^$/d' | sort -u) <(printf '%s\n' "$1" | sed '/^$/d' | sort -u))
+  extra=$(comm -13 <(printf '%s\n' "$2" | sed '/^$/d' | sort -u) <(printf '%s\n' "$1" | sed '/^$/d' | sort -u))
+  [ -z "$missing" ] || printf 'discovered but unplanned: %s\n' "$missing"
+  [ -z "$extra" ] || printf 'planned but undiscovered: %s\n' "$extra"
+  [ -z "$missing$extra" ]
+}
+
+# Pure grouping of discovered workspace-relative modules; coverage is checked before JSON leaves.
+build_plan() {
+  local h m found heavy name cache plan planned discovered
+  local legs=() small=()
+  [ $# -gt 0 ] || { echo "no discovered integration modules; refusing an empty plan" >&2; return 1; }
+  discovered=$(printf '%s\n' "$@")
+  for h in "${HEAVY[@]}"; do
+    found=0
+    for m in "$@"; do [ "$m" != "$h" ] || found=1; done
+    [ "$found" = 1 ] || { echo "stale HEAVY entry: $h lost its tagged tests or moved; edit HEAVY" >&2; return 1; }
+    cache=$(printf '%s/go.mod\n%s/go.sum' "$h" "$h")
+    legs+=("$(jq -cn --arg name "${h##*/}" --arg modules "$h" --arg cache "$cache" '{name:$name,modules:$modules,cache:$cache}')") || return 1
+  done
+  for m in "$@"; do
+    heavy=0
+    for h in "${HEAVY[@]}"; do [ "$m" != "$h" ] || heavy=1; done
+    [ "$heavy" = 1 ] || small+=("$m")
+  done
+  if [ ${#small[@]} -gt 0 ]; then
+    cache=$(for m in "${small[@]}"; do printf '%s/go.mod\n%s/go.sum\n' "$m" "$m"; done)
+    legs+=("$(jq -cn --arg modules "${small[*]}" --arg cache "$cache" '{name:"small",modules:$modules,cache:$cache}')") || return 1
+  fi
+  plan=$(printf '%s\n' "${legs[@]}" | jq -cs '.') || return 1
+  planned=$(jq -r '.[].modules | split(" ")[]' <<<"$plan") || return 1
+  check_plan_covers "$planned" "$discovered" >&2 || return 1
+  printf '%s\n' "$plan"
+}
+
+CONTAINER=1
+MODE=run
+SELECTED=0
+requested=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-container) CONTAINER=0 ;;
+    --self-test) MODE=self-test ;;
+    --matrix) MODE=matrix ;;
+    --modules)
+      [ $# -ge 2 ] || { echo "--modules needs a value" >&2; exit 1; }
+      shift
+      read -r -a requested <<<"$1"
+      [ ${#requested[@]} -gt 0 ] || { echo "--modules must not be empty" >&2; exit 1; }
+      SELECTED=1 ;;
+    *) echo "unknown option: $1" >&2; exit 1 ;;
+  esac
+  shift
+done
 
 # ran_count reads a `go test -v` transcript on stdin and reports how many tests actually STARTED.
 # It is a function so --self-test can exercise the same expression the run below trusts.
@@ -78,7 +143,7 @@ never_started() {
 # has been shown to fire. This one exists because a `-run` filter that matches nothing exits 0 with
 # "no tests to run", which is indistinguishable from a pass — the exact way the first draft of this
 # script reported success while skipping 5 of 13 tagged tests.
-if [ "${1:-}" = "--self-test" ]; then
+if [ "$MODE" = "self-test" ]; then
   empty=$(printf 'testing: warning: no tests to run\nPASS\nok  \tfoo\t0.001s\n' | ran_count)
   if [ "$empty" -ne 0 ]; then
     echo "self-test FAILED: the guard counted $empty started tests in a transcript that ran none"
@@ -112,12 +177,40 @@ if [ "${1:-}" = "--self-test" ]; then
   for no in '//go:build !integration' '//go:build interop' '//go:build integrationx' '// integration notes'; do
     if grep -qE "$TAG_RE" <<<"$no"; then echo "self-test FAILED: tag matcher accepted [$no]"; exit 1; fi
   done
-  echo "self-test passed: the no-tests-ran and per-test guards fire on a bad run and stay silent on a real one"
+  # Plan counterweights prove grouping, ordering and cache inputs, not merely rejection.
+  plan=$(build_plan "${HEAVY[@]}" backend/other-one backend/other-two) || exit 1
+  jq -e 'length == 6 and (map(.name) == ["core","device-management","event-management","user-management","event-processing","small"]) and (.[5].modules == "backend/other-one backend/other-two") and (.[5].cache == "backend/other-one/go.mod\nbackend/other-one/go.sum\nbackend/other-two/go.mod\nbackend/other-two/go.sum")' <<<"$plan" >/dev/null || { echo "self-test FAILED: mixed plan"; exit 1; }
+  plan=$(build_plan "${HEAVY[@]}") || exit 1
+  jq -e 'length == 5 and all(.name != "small")' <<<"$plan" >/dev/null || { echo "self-test FAILED: heavy-only plan"; exit 1; }
+  if out=$(build_plan "${HEAVY[@]:1}" 2>&1); then echo "self-test FAILED: stale HEAVY accepted"; exit 1; fi
+  [[ "$out" == *"${HEAVY[0]}"* ]] || { echo "self-test FAILED: stale entry not named"; exit 1; }
+  if build_plan >/dev/null 2>&1; then echo "self-test FAILED: empty plan accepted"; exit 1; fi
+  out=$(check_plan_covers $'one\ntwo' $'two\none') || { echo "self-test FAILED: identical coverage rejected"; exit 1; }
+  [ -z "$out" ] || { echo "self-test FAILED: identical coverage noisy"; exit 1; }
+  if out=$(check_plan_covers one $'one\nmissing'); then echo "self-test FAILED: missing module accepted"; exit 1; fi
+  [[ "$out" == *missing* ]] || { echo "self-test FAILED: missing module not named"; exit 1; }
+  if out=$(check_plan_covers $'one\nextra' one); then echo "self-test FAILED: extra module accepted"; exit 1; fi
+  [[ "$out" == *extra* ]] || { echo "self-test FAILED: extra module not named"; exit 1; }
+  echo "self-test passed: no-tests-ran, per-test and plan checks reject bad inputs and accept real coverage"
   exit 0
 fi
 
-CONTAINER=1
-[ "${1:-}" = "--no-container" ] && CONTAINER=0
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+# go list -m enumerates the workspace without loading packages or downloading their dependencies.
+workspace=$(go list -m -f '{{.Dir}}') || exit 1
+workspace=${workspace//$'\r'/}
+modules=()
+while IFS= read -r m; do
+  [ -n "$m" ] || continue
+  m=${m//\\//}
+  ( cd "$m" && [ -n "$(tagged_files)" ] ) || continue
+  modules+=("${m#"$root"/}")
+done <<<"$workspace"
+if [ "$MODE" = matrix ]; then
+  build_plan "${modules[@]}"
+  exit $?
+fi
 
 NAME=dc-integration-tests
 # The SAME digest-pinned image hack/migration-diff.sh uses. Pinned rather than tracking
@@ -147,15 +240,31 @@ if [ "$CONTAINER" = "1" ]; then
     done
     [ "$pulled" = "1" ] || { echo "could not pull $IMAGE after 3 attempts"; exit 1; }
   fi
-  docker run -d --name "$NAME" -e POSTGRES_PASSWORD=postgres -P "$IMAGE" >/dev/null || {
-    echo "failed to start $IMAGE"; exit 1; }
   trap 'docker rm -f "$NAME" >/dev/null 2>&1' EXIT
-  DC_IT_PGPORT=$(docker port "$NAME" 5432/tcp | sed -n '1s/.*://p')
-  for _ in $(seq 1 90); do
-    docker exec "$NAME" pg_isready -U postgres >/dev/null 2>&1 && break
-    sleep 2
+  # TCP avoids the entrypoint's socket-only temporary init server. Require a real query too.
+  start_and_wait() {
+    docker run -d --name "$NAME" -e POSTGRES_PASSWORD=postgres -P "$IMAGE" >/dev/null || return 1
+    DC_IT_PGPORT=$(docker port "$NAME" 5432/tcp | sed -n '1s/.*://p')
+    for _ in $(seq 1 90); do
+      if docker exec "$NAME" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 &&
+         [ "$(docker exec "$NAME" psql -h 127.0.0.1 -U postgres -tAc 'select 1' 2>/dev/null)" = 1 ]; then
+        return 0
+      fi
+      sleep 2
+    done
+    return 1
+  }
+  ready=0
+  for attempt in 1 2; do
+    echo "starting postgres (attempt $attempt of 2)"
+    if start_and_wait; then ready=1; break; fi
+    # 🔴 ON FAILURE, KEEP THE EVIDENCE before replacing the failed container.
+    docker ps -a --filter "name=$NAME"
+    docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' "$NAME"
+    docker logs "$NAME" 2>&1 | tail -80
+    docker rm -f "$NAME" >/dev/null 2>&1
   done
-  docker exec "$NAME" pg_isready -U postgres || { echo "postgres never became ready"; exit 1; }
+  [ "$ready" = 1 ] || { echo "postgres never became ready"; exit 1; }
 fi
 
 export DC_IT_PGPORT="${DC_IT_PGPORT:-5432}"
@@ -166,21 +275,16 @@ echo "postgres on ${DC_IT_PGHOST}:${DC_IT_PGPORT}"
 
 # The workspace enumerates its own modules, so a module that GAINS an integration test is covered
 # the day it does — no list here to fall out of step with go.work.
-modules=()
-for m in $(go list -m -f '{{.Dir}}'); do
-  ( cd "$m" && [ -n "$(tagged_files)" ] ) || continue
-  modules+=("$m")
-done
 # Cross-check the count against a second, independent parse, the way CI's go-module discovery does:
 # a loose matcher above would otherwise shrink the set with no one the wiser. This one asks the
 # package loader instead of the text: a module is integration-gated iff `go list` sees more test
 # files with the tag than without it.
 want=0
-for m in $(go list -m -f '{{.Dir}}'); do
+while IFS= read -r m; do
   tw=$(cd "$m" && go list -tags integration -f '{{len .TestGoFiles}} {{len .XTestGoFiles}}' ./... 2>/dev/null | awk '{s+=$1+$2} END{print s+0}')
   to=$(cd "$m" && go list -f '{{len .TestGoFiles}} {{len .XTestGoFiles}}' ./... 2>/dev/null | awk '{s+=$1+$2} END{print s+0}')
   if [ "$tw" -gt "$to" ]; then want=$((want + 1)); fi
-done
+done <<<"$workspace"
 if [ "$want" -ne ${#modules[@]} ]; then
   echo "module discovery disagrees: grep found ${#modules[@]} integration-tagged modules, go list found $want"
   exit 1
@@ -190,9 +294,24 @@ if [ ${#modules[@]} -eq 0 ]; then
   exit 1
 fi
 
+# 🔴 Each leg checks the WHOLE plan against fresh, package-loader-cross-checked discovery.
+if [ "${DC_IT_PLAN+x}" = x ]; then
+  planned=$(jq -er '[.[].modules | split(" ")[]] | join("\n")' <<<"$DC_IT_PLAN") || exit 1
+  check_plan_covers "$planned" "$(printf '%s\n' "${modules[@]}")" >&2 || exit 1
+fi
+if [ "$SELECTED" = 1 ]; then
+  for m in "${requested[@]}"; do
+    found=0
+    for discovered in "${modules[@]}"; do [ "$m" != "$discovered" ] || found=1; done
+    [ "$found" = 1 ] || { echo "requested module is not integration-discovered: $m" >&2; exit 1; }
+  done
+  modules=("${requested[@]}")
+fi
+
 rc=0
 for m in "${modules[@]}"; do
-  name=${m#"$PWD"/}
+  name=$m
+  m="$root/$m"
   echo "=== $name ==="
   # -timeout: go test's default of 10 minutes is per PACKAGE, and event-management's model
   # package builds tables of hundreds of chunks to test the chunk ceiling of its startup

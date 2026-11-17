@@ -611,6 +611,9 @@ Destroy a DeviceChain instance
 
 Removes a DeviceChain instance — the inverse of bootstrap.
 
+The instance argument must be a plain instance name, with no path separators;
+"." and ".." are refused.
+
 This deletes the instance and ALL ITS DATA, in this order: its Helm release; its
 own infrastructure — the broker and event store — by "tofu destroy" over the
 instance's infrastructure state; its database and login on the shared relational
@@ -646,9 +649,13 @@ from the instance's name. --kube-context may name that same context; one naming
 a different context is refused, and the refusal says how to remove a record that
 is wrong. With no record, --kube-context says where the instance is. An instance
 bootstrapped before dcctl recorded this has no record, and with no --kube-context
-destroy falls back to guessing the cluster from the instance name — saying so as
-it goes. Run "dcctl instances list" to see which instances are in that state.
-If the cluster is already gone, only the local state is cleared.
+destroy guesses the cluster from the instance name and says so; a guess is never
+used to declare the cluster gone. Run "dcctl instances list" to see these instances.
+Local state for a missing cluster is cleared only when the instance has a record
+of its cluster and that cluster's recorded context no longer answers. Otherwise
+the normal uninstall runs and fails if the cluster cannot be reached. Pass
+--kube-context to name the cluster, or remove the instance's directory by hand
+if its cluster is really gone.
 
 Use --all to destroy every instance on this machine.
 
@@ -1513,6 +1520,7 @@ Every bundle is also scanned for values shaped like a secret, and one that holds
 * [dcctl product apply](#dcctl-product-apply)	 - Make the tenant hold the bundle, then publish
 * [dcctl product export](#dcctl-product-export)	 - Write the tenant's product to a directory
 * [dcctl product plan](#dcctl-product-plan)	 - Show what applying a bundle would change, without changing it
+* [dcctl product rotate-integration-token](#dcctl-product-rotate-integration-token)	 - Issue a new bearer token for an inbound integration
 
 ## dcctl product apply {#dcctl-product-apply}
 
@@ -1540,7 +1548,7 @@ was written) is finished with --republish.
 Credentials: a connector's credential is sent only to a connector that has none, from the
 environment variable its handle names; --rotate-secrets sends it to every connector. A new
 inbound integration gets a server-generated bearer token that this command does not capture;
-rotate it to issue one.
+run 'dcctl product rotate-integration-token \<integration-token>' to issue one.
 
 ```
 dcctl product apply <dir> [flags]
@@ -1652,6 +1660,45 @@ dcctl product plan <dir> [flags]
       --no-publish                converge drafts and stop; do not publish
       --republish                 publish every profile, connector and dashboard in the bundle even if nothing seems to have changed
       --rotate-secrets            send every connector credential whose handle is set, not only to connectors without one
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --kinds string      comma-separated kinds to include: device-types, profiles, integrations, connectors, dashboards (export default: all)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant to read or change (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
+
+## dcctl product rotate-integration-token {#dcctl-product-rotate-integration-token}
+
+Issue a new bearer token for an inbound integration
+
+### Synopsis
+
+Replace an inbound integration's bearer token with a server-generated token.
+The old token stops working immediately with no overlap. The new token is shown only this once.
+
+Only the issued token is printed to stdout, followed by a newline, so it can be captured by
+a shell. A warning is written to stderr. This command does not save the token to a file.
+
+```
+dcctl product rotate-integration-token <integration-token> [flags]
+```
+
+### Options
+
+```
+  -h, --help   help for rotate-integration-token
 ```
 
 ### Options inherited from parent commands

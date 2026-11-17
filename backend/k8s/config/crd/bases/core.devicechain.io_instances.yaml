@@ -341,6 +341,47 @@ spec:
                   completed.
                 format: date-time
                 type: string
+              shardGroups:
+                description: ShardGroups is absent by default; opt in after all pods
+                  have rolled.
+                properties:
+                  count:
+                    maximum: 5
+                    minimum: 2
+                    type: integer
+                  placementTags:
+                    additionalProperties:
+                      description: ShardPlacementTags selects one broker server.
+                      items:
+                        maxLength: 9
+                        type: string
+                      maxItems: 1
+                      type: array
+                    maxProperties: 5
+                    type: object
+                  suffixes:
+                    items:
+                      enum:
+                      - inbound-events
+                      - resolved-events
+                      type: string
+                    maxItems: 2
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: set
+                required:
+                - count
+                - suffixes
+                type: object
+                x-kubernetes-validations:
+                - message: placementTags must select the corresponding dc-nats pod
+                    of a configured group
+                  rule: '!has(self.placementTags) || self.placementTags.all(k, (k
+                    == ''0'' && self.count > 0 && self.placementTags[k] == [''dc-nats-0''])
+                    || (k == ''1'' && self.count > 1 && self.placementTags[k] == [''dc-nats-1''])
+                    || (k == ''2'' && self.count > 2 && self.placementTags[k] == [''dc-nats-2''])
+                    || (k == ''3'' && self.count > 3 && self.placementTags[k] == [''dc-nats-3''])
+                    || (k == ''4'' && self.count > 4 && self.placementTags[k] == [''dc-nats-4'']))'
               size:
                 description: |-
                   Size names the size preset the instance runs ("compact", "perf-12k", "perf-16k"); empty is base. It
@@ -398,6 +439,9 @@ spec:
                 devices dial it and the broker''s certificate must carry it'
               rule: '!has(self.mqttExposure) || self.mqttExposure == ''none'' || (has(self.mqttHost)
                 && size(self.mqttHost) > 0)'
+            - message: shardGroups requires R1 streams and cannot be combined with
+                ha
+              rule: '!has(self.shardGroups) || !has(self.ha) || !self.ha'
           status:
             description: |-
               InstanceStatus is the OBSERVED state, and the operator is its only writer.

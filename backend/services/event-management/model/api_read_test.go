@@ -46,6 +46,7 @@ func seedEvent(t *testing.T, api *Api, tenant string, deviceToken string, occurr
 		OccurredTime: occurred,
 		Source:       "test",
 	}
+	ev.EventId = DeriveEventId(tenant, ev, nil)
 	if err := api.RDB.DB(ctx).Create(ev).Error; err != nil {
 		t.Fatalf("seed under %s failed: %v", tenant, err)
 	}
