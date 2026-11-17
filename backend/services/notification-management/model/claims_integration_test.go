@@ -224,6 +224,12 @@ func TestIntegrationNotificationWritersBlockAndReadCommittedState(t *testing.T) 
 				waitCtx := context.WithValue(ctx, claimsControlKey{}, broken)
 				go func() {
 					done <- api.RDB.DB(waitCtx).Connection(func(db *gorm.DB) error {
+						db = claimsConnectionSession(db)
+						// Negative control: the PID probe and writer must still reach Postgres
+						// after an expected error on this pinned connection.
+						if err := db.Exec("SELECT 1 / 0").Error; err == nil {
+							return errors.New("division by zero unexpectedly succeeded")
+						}
 						var pid int
 						if err := db.Raw("SELECT pg_backend_pid()").Scan(&pid).Error; err != nil {
 							return err
@@ -233,7 +239,7 @@ func TestIntegrationNotificationWritersBlockAndReadCommittedState(t *testing.T) 
 						if method == "MarkCleared" {
 							return a.MarkCleared(waitCtx, token, "key", "CRITICAL", raised, stamp.Add(time.Hour))
 						}
-						_, err := a.RecordPagedFrom(waitCtx, token, "key", "CRITICAL", raised, stamp, nil, AlarmSource{}, time.Time{})
+						_, err := a.RecordPagedFrom(waitCtx, token, "key", "CRITICAL", raised, stamp, nil, AlarmSource{}, time.Time{}, stamp)
 						return err
 					})
 				}()
@@ -308,7 +314,7 @@ func TestIntegrationNotificationConcurrentFirstInserts(t *testing.T) {
 						done <- api.MarkCleared(callCtx, method, "key", "CRITICAL", raised, raised)
 						return
 					}
-					_, err := api.RecordPagedFrom(callCtx, method, "key", "CRITICAL", raised, raised, nil, AlarmSource{}, time.Time{})
+					_, err := api.RecordPagedFrom(callCtx, method, "key", "CRITICAL", raised, raised, nil, AlarmSource{}, time.Time{}, raised)
 					done <- err
 				}()
 			}

@@ -33,13 +33,13 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 
 	savedMs, savedCfg, savedApi := Microservice, Configuration, Api
 	savedState, savedSweep := StateMetrics, InactivitySweepMetrics
-	savedProc, savedOwners, savedNats, savedSvc := StateProcessor, OwnershipProcessor, NatsManager, Svc
-	savedWriter, savedRdr, savedOwnRdr := InboundEventsWriter, ResolvedEventsReader, OwnershipReader
+	savedProc, savedOwners, savedNats, savedSvc := StateProcessors, OwnershipProcessor, NatsManager, Svc
+	savedWriter, savedOwnRdr := InboundEventsWriter, OwnershipReader
 	t.Cleanup(func() {
 		Microservice, Configuration, Api = savedMs, savedCfg, savedApi
 		StateMetrics, InactivitySweepMetrics = savedState, savedSweep
-		StateProcessor, OwnershipProcessor, NatsManager, Svc = savedProc, savedOwners, savedNats, savedSvc
-		InboundEventsWriter, ResolvedEventsReader, OwnershipReader = savedWriter, savedRdr, savedOwnRdr
+		StateProcessors, OwnershipProcessor, NatsManager, Svc = savedProc, savedOwners, savedNats, savedSvc
+		InboundEventsWriter, OwnershipReader = savedWriter, savedOwnRdr
 	})
 
 	Microservice = &core.Microservice{
@@ -68,7 +68,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	NatsManager = Svc.Nats
 	t.Cleanup(func() {
 		// A refused start leaves no processors to stop; do not let a nil deref mask the refusal.
-		if StateProcessor != nil && OwnershipProcessor != nil {
+		if StateProcessors != nil && OwnershipProcessor != nil {
 			if err := beforeMicroserviceStopped(context.Background()); err != nil {
 				t.Logf("stopping the service: %v", err)
 			}
@@ -80,7 +80,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NoError(t, afterMicroserviceStarted(ctx), "start under the catalog (both processors)")
 	Microservice.Readiness.MarkReadyWithoutAuthSurface()
 
-	require.NotNil(t, ResolvedEventsReader, "resolved-events reader")
+	require.Len(t, StateProcessors, 1, "resolved-events processor")
 	require.NotNil(t, InboundEventsWriter, "inbound-events writer")
 	require.NotNil(t, OwnershipReader, "device-ownership reader")
 	// No lazily opened streams: the service has no other NewWriter/NewReader/SubscribeLive/
