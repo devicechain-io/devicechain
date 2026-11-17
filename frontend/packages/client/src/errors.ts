@@ -16,6 +16,17 @@
 
 import { GraphQLRequestError } from './transport';
 
+/** True for an optimistic-concurrency refusal. Keeps the phrase fallback for older servers. */
+export function isStaleWrite(err: unknown): boolean {
+  if (err instanceof GraphQLRequestError && err.errors?.length) {
+    return err.errors.some((entry) =>
+      entry.extensions?.code === 'STALE_WRITE' ||
+      (!entry.extensions?.code && entry.message.includes('modified by another writer')),
+    );
+  }
+  return err instanceof Error && err.message.includes('modified by another writer');
+}
+
 // The backend's authorization gate returns core/auth's ErrForbidden, whose text
 // is "forbidden: missing required authority"; graphql-go surfaces a resolver
 // error verbatim as the entry's `message`, over HTTP 200. Anchoring the match at

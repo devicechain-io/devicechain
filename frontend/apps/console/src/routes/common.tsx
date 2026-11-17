@@ -16,6 +16,7 @@ import type { TFunction } from 'i18next';
 import { ArrowLeft, CheckCircle2, CircleSlash, Trash2 } from 'lucide-react';
 import { GraphQLRequestError } from '@devicechain/client';
 import { Badge } from '@/components/ui/badge';
+import { formatDate } from '@/lib/format';
 
 // useReload returns a version counter and a bump function; pass the version in a
 // useQuery deps array to refetch a list after a mutation.
@@ -94,7 +95,7 @@ export function PurgeBadge({ state, epoch }: { state: string; epoch?: string | n
   return (
     <Badge variant="destructive" className="gap-1">
       <Trash2 size={12} /> {t('purgeStatePurging')}
-      {epoch ? ` — ${t('purgeStateSince', { when: new Date(epoch).toLocaleDateString() })}` : ''}
+      {epoch ? ` — ${t('purgeStateSince', { when: formatDate(epoch) })}` : ''}
     </Badge>
   );
 }

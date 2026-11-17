@@ -83,4 +83,8 @@ const (
 	// row. Both are gated through the authored-rules fixture.
 	SeverityMinor          = "minor"
 	AlarmSeverityMinorWire = "MINOR"
+
+	// The warning tier, the same kind of pair: harborpulse's surge-rising rule raises at it.
+	SeverityWarning          = "warning"
+	AlarmSeverityWarningWire = "WARNING"
 )
