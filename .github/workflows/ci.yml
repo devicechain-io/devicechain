@@ -869,7 +869,24 @@ jobs:
           set -euo pipefail
           case "$DC_RACE_SCOPE" in
             all) mapfile -t args < "$RUNNER_TEMP/leg-args" ;;
-            changed) read -r -a args <<<"$RACE_PKGS" ;;
+            changed)
+              # The plan reads packages from the source, tags and all, so a package whose every
+              # file a build constraint excludes on this runner (an integration-only or
+              # frontend-only directory) can be named, and `go test` refuses one outright. Those
+              # are dropped. Any OTHER failure to resolve a package is doubt, and doubt races the
+              # whole leg.
+              read -r -a want <<<"$RACE_PKGS"
+              if js="$(cd "$MODULE" && go list -e -json "${want[@]}")" \
+                 && [ "$(jq -s '[.[] | select(.Error and (.Error.Err | test("build constraints exclude all Go files") | not))] | length' <<<"$js")" = 0 ]; then
+                mapfile -t args < <(jq -rs '.[] | select(.Error | not) | .ImportPath' <<<"$js")
+                [ "${#args[@]}" -gt 0 ] || DC_RACE_SCOPE=none
+              else
+                echo "::warning::could not resolve the race packages ($RACE_PKGS); racing the whole leg"
+                DC_RACE_SCOPE=all
+                mapfile -t args < "$RUNNER_TEMP/leg-args"
+              fi
+              export DC_RACE_SCOPE
+              ;;
             none) args=() ;;
             *) echo "::error::race_scope is '$DC_RACE_SCOPE', not all, changed or none"; exit 1 ;;
           esac
