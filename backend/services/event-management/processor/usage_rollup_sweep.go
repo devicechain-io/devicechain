@@ -72,13 +72,7 @@ func (s *UsageRollupSweep) RunOnce(ctx context.Context) error {
 	ran, err := s.lock.TryAdvisoryLockSession(ctx, rdb.AdvisoryLockKey(usageRollupLock), func(db *gorm.DB) error {
 		return s.rollup(ctx, db)
 	})
-	if err != nil {
-		return err
-	}
-	if !ran {
-		return core.ErrPassSkipped
-	}
-	return nil
+	return rdb.SingletonResult(ran, err, usageRollupLock)
 }
 
 // rollup finalizes owed hours, then prunes the working rows of days long final. A failure is
