@@ -146,6 +146,9 @@ type clusterFrontEnd struct {
 	// NginxIngresses are the Ingress objects ingress-nginx serves ("namespace/name"),
 	// without the one object this root owns, Grafana's, which moves with the controller.
 	NginxIngresses []string
+	// NginxSnippetIngresses includes every served Ingress, including cluster-owned and ACME
+	// solver objects, with one "namespace/name (annotation-key)" entry per snippet annotation.
+	NginxSnippetIngresses []string
 }
 
 // frontEndFacts adds what this instance already has.
@@ -305,6 +308,11 @@ func frontEndFactsFrom(classes []networkingv1.IngressClass, ings []networkingv1.
 		if !ingressServedByNginx(ing, nginxClasses, nginxIsDefault) {
 			continue
 		}
+		for key := range ing.Annotations {
+			if strings.HasSuffix(key, "-snippet") {
+				f.NginxSnippetIngresses = append(f.NginxSnippetIngresses, ing.Namespace+"/"+ing.Name+" ("+key+")")
+			}
+		}
 		if isACMESolverIngress(ing) {
 			// cert-manager's HTTP-01 solver Ingress lives for the length of one challenge and is not
 			// the instance's: counting it would re-render the legacy Ingress objects after a drop and
@@ -319,6 +327,7 @@ func frontEndFactsFrom(classes []networkingv1.IngressClass, ings []networkingv1.
 		}
 	}
 	sort.Strings(f.NginxIngresses)
+	sort.Strings(f.NginxSnippetIngresses)
 	return f
 }
 
@@ -635,6 +644,17 @@ func (e *ErrLegacyIngressInUse) Error() string {
 		len(e.Ingresses), strings.Join(shown, "\n  "), more)
 }
 
+// ErrIngressSnippetsInUse refuses to disable snippets while a served Ingress still carries one.
+type ErrIngressSnippetsInUse struct {
+	Ingresses []string
+}
+
+func (e *ErrIngressSnippetsInUse) Error() string {
+	return fmt.Sprintf("dcctl install disables snippets on the retained ingress-nginx controller, but these Ingress annotations are still in use:\n  %s\n"+
+		"Upgrade the instance that owns each Ingress with `dcctl upgrade`, or remove the annotation, then re-run `dcctl install`. Nothing has been changed",
+		strings.Join(e.Ingresses, "\n  "))
+}
+
 // clusterFrontEndPlan is what `dcctl install` asks of the cluster root.
 type clusterFrontEndPlan struct {
 	// Vars are the -var settings, "name=value".
@@ -677,6 +697,9 @@ func planClusterFrontEnd(f clusterFrontEnd, local, removeLegacy bool) (clusterFr
 		}
 		p.Notes = append(p.Notes, "removing ingress-nginx; no Ingress object names its class")
 	default:
+		if len(f.NginxSnippetIngresses) > 0 {
+			return clusterFrontEndPlan{}, &ErrIngressSnippetsInUse{Ingresses: f.NginxSnippetIngresses}
+		}
 		// 🔴 SAID OUT LOUD, BECAUSE THE ROOT'S DEFAULT IS NOW OFF. enable_ingress_nginx defaults to
 		// false (a new cluster never gets the retired controller), so a cluster that has it keeps it
 		// only by being told to; leaving it to the default would be a removal.

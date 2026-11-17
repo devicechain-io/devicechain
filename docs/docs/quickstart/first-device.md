@@ -382,7 +382,7 @@ commands. Refresh `DC_TOKEN` with step 3 if it has expired.
 
 1. Under **Devices → Device Profiles**, create a profile with token `temp-probe-profile`, name
    **Temperature probe profile** and category **sensor**. In **Metrics**, add a metric with token
-   and key `temperature`, type **DOUBLE** and unit `Cel`.
+   and key `temperature`, data type **Double** and unit `Cel`.
 2. Under **Devices → Device Types**, open `temp-probe`. On **Profile**, attach
    `temp-probe-profile`. See [Device types and profiles](../user-guide/device-types-and-profiles.md).
 3. On the profile's **Detection Rules** tab, choose **New detection rule → Form**. Set token
@@ -402,8 +402,9 @@ commands. Refresh `DC_TOKEN` with step 3 if it has expired.
    [Receiving commands](../guides/connecting-a-device.md#receiving-commands) to start an MQTT
    subscriber (install the Mosquitto clients and use the instance CA as described in that guide).
    Use host `localhost`, client id `devicechain:sim-demo:sensor-001:sub`, username
-   `sim-demo:$DC_CRED_ID` (expand the shell variable), password `$DC_CRED_ID` for its `ACCESS_TOKEN`
-   credential, and topic `devicechain/sim-demo/device-commands/sensor-001`. Keep it connected. For local `localhost` connections, follow the guide's TLS hostname instructions as well.
+   `sim-demo:$DC_CRED_ID` (expand the shell variable), no password (an `ACCESS_TOKEN`
+   credential connects with the username alone; a connect that also sends a password is checked
+   as an `MQTT_BASIC` credential and refused), and topic `devicechain/sim-demo/device-commands/sensor-001`. Keep it connected. For local `localhost` connections, follow the guide's TLS hostname instructions as well.
 3. Issue this harmless test command on the tenant API:
 
 ```bash

@@ -105,10 +105,11 @@ const stop = session.startAutoRefresh(); // optional: refresh on a timer, not on
 ```
 
 A refusal from the server, such as an invalid or revoked refresh token, ends the
-session at once. A transient failure does not: no response, a 5xx, or a 429. While
-the access token is still valid, callers keep getting it, and
-`startAutoRefresh` retries with jittered backoff. The session ends only when the
-access token actually expires.
+session at once. A transient failure never does: no response, a 5xx, or a 429. While
+the access token is still valid, callers keep getting it; once it has expired,
+`getAccessToken` rejects with the transient error and the next call tries again.
+`startAutoRefresh` retries with jittered backoff for as long as the refresh token is
+valid. A session that only ever fails transiently ends when its refresh token lapses.
 
 `decodeToken`, `isExpired` and `hasAuthority` are exported for reading claims
 client-side. They decode, they do not verify — the server is the authority.
