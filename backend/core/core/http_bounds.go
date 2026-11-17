@@ -36,7 +36,9 @@ const (
 	// request but not how many are buffered together, and a process that runs out of
 	// memory takes every endpoint it serves down with it — for user-management, sign-in
 	// across the whole instance.
-	BodyBufferBudget = 64 << 20
+	// Include the oversize-detection byte for each of 64 one-MiB bodies, so
+	// MCP's 64-request admission cap is reachable without an earlier 503.
+	BodyBufferBudget = 64 * ((1 << 20) + 1)
 )
 
 // bodyBudget is the process-wide reservation BufferBody draws on. A variable only so a
