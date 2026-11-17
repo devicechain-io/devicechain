@@ -149,6 +149,8 @@ eficiente. Una vez guardado, el grupo aparece en **Grupos dinámicos guardados**
 token, su nombre y su selector. Haz clic en **Miembros** para ver quién pertenece a él ahora mismo; la
 lista se calcula a partir del selector cada vez que la abres.
 
+Un selector negado como `!("retired" in attr)` incluye las entidades sin atributos desde el momento en que se crean, incluida su incorporación cuando el grupo se usa en una regla de detección o como ámbito de acceso.
+
 ## Relacionado
 
 - [Facetas y grupos dinámicos](../concepts/domain-model.md#facets-and-dynamic-groups)

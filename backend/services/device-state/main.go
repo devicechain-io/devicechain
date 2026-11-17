@@ -42,9 +42,8 @@ var (
 
 	Api *model.Api
 
-	ResolvedEventsReader messaging.MessageReader
-	InboundEventsWriter  messaging.MessageWriter
-	StateProcessor       *processor.StateProcessor
+	InboundEventsWriter messaging.MessageWriter
+	StateProcessors     stateProcessorGroup
 
 	// OwnershipProcessor restamps a device's live view with its owners from
 	// device-management's ownership-changed facts (ADR-081), so a device that is sold and
@@ -128,9 +127,10 @@ func wireDroppedEvictions(api *model.Api) {
 // everything the NATS callback builds belongs to the connection, and a second registration
 // of the same collector panics. It is a function of its own so a test can check the
 // configuration reaches the processor, which nothing else exercises.
-func newStateProcessor(reader messaging.MessageReader) *processor.StateProcessor {
+func newStateProcessor(reader messaging.MessageReader, opts ...processor.StateProcessorOption) *processor.StateProcessor {
+	opts = append(opts, processor.WithProjection(Configuration.Projection))
 	return processor.NewStateProcessor(Microservice, reader, core.NewNoOpLifecycleCallbacks(), Api,
-		StateMetrics, InactivitySweepMetrics, processor.WithProjection(Configuration.Projection))
+		StateMetrics, InactivitySweepMetrics, opts...)
 }
 
 // Create messaging components used by this microservice.
@@ -140,13 +140,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	stopStreamSharding = stop
-	// Create reader for resolved events (wildcard across tenants). This is a
-	// second, independent consumer fanning out alongside event-management.
-	revents, err := nmgr.NewReader(streams.ResolvedEvents)
+	// Read every resolved-events group (wildcard across tenants), independently
+	// of event-management. Without sharding this keeps the legacy reader and durable.
+	revents, err := shardgroups.NewReaders(nmgr, streams.ResolvedEvents)
 	if err != nil {
 		return err
 	}
-	ResolvedEventsReader = revents
 
 	// The service's ONE producer, and this is the only place it can be built: the
 	// operator demotion mutation (ADR-067) publishes onto the shared inbound-events
@@ -164,11 +163,20 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	InboundEventsWriter = inbound
 	Api.SetDemotionEmitter(model.NewDemotionEmitter(InboundEventsWriter, time.Now))
 
-	// Add and initialize device state processor.
-	StateProcessor = newStateProcessor(ResolvedEventsReader)
-	err = StateProcessor.Initialize(context.Background())
-	if err != nil {
-		return err
+	// A tenant belongs to one group, preserving per-device ordering. All
+	// processors share the process-scoped collectors built by buildMetrics.
+	StateProcessors = make([]*processor.StateProcessor, 0, len(revents))
+	for group, reader := range revents {
+		var opts []processor.StateProcessorOption
+		// The inactivity sweep spans all tenants, so only group 0 runs it.
+		if group > 0 {
+			opts = append(opts, processor.WithoutInactivityMonitor())
+		}
+		sp := newStateProcessor(reader, opts...)
+		if err := sp.Initialize(context.Background()); err != nil {
+			return err
+		}
+		StateProcessors = append(StateProcessors, sp)
 	}
 
 	// The device ownership-changed facts: a second, much quieter stream, consumed on its own
@@ -183,6 +191,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err := OwnershipProcessor.Initialize(context.Background()); err != nil {
 		return err
 	}
+	// The entity-deleted facts: ONE consumer for the whole service, however many
+	// resolved-events groups there are. The facts are not sharded — shard placement
+	// covers only inbound-events and resolved-events, and the instance config refuses any
+	// other suffix — so there is one stream to read, not one per group. And a group owns a
+	// device's EVENTS, not its STATE: every StateProcessor writes through the one Api into
+	// the one store and keeps no per-device state of its own, so purging a device through
+	// that Api purges it whichever group projected it. deletion_wiring_test.go pins both:
+	// a device projected by group 1 is purged, and the config premise is checked so that
+	// sharding these facts one day fails a test instead of reading only group 0's subject.
 	deletions, err := nmgr.NewReader(streams.EntityDeleted)
 	if err != nil {
 		return err
@@ -297,10 +314,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
-	// Start device state processor. It is built by the NATS manager's oncreate callback,
+	// Start every device state processor. It is built by the NATS manager's oncreate callback,
 	// so it does not exist until the line above has run.
-	err := StateProcessor.Start(ctx)
-	if err != nil {
+	if err := StateProcessors.Start(ctx); err != nil {
 		return err
 	}
 	if err := OwnershipProcessor.Start(ctx); err != nil {
@@ -327,10 +343,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 			return err
 		}
 	}
-	// Stop both consumers before the managers: each reads from the broker and writes to the
+	// Stop all consumers before the managers: each reads from the broker and writes to the
 	// database.
-	err := StateProcessor.Stop(ctx)
-	if err != nil {
+	if err := StateProcessors.Stop(ctx); err != nil {
 		return err
 	}
 	if err := OwnershipProcessor.Stop(ctx); err != nil {
@@ -353,7 +368,7 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// presence-demotion mutation still in flight would fail with ErrUnplacedTenant
 	// although the broker connection is up. Cancelling a watch whose connection has
 	// already drained is harmless.
-	err = Svc.Stop(ctx)
+	err := Svc.Stop(ctx)
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
@@ -372,9 +387,8 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 			return err
 		}
 	}
-	// Terminate both consumers.
-	err := StateProcessor.Terminate(ctx)
-	if err != nil {
+	// Terminate all consumers.
+	if err := StateProcessors.Terminate(ctx); err != nil {
 		return err
 	}
 	if err := OwnershipProcessor.Terminate(ctx); err != nil {
