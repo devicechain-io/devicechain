@@ -774,6 +774,9 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 - While old and new pods overlap during the rolling upgrade, deletes handled by a `v1.6` pod are announced the old way.
 - No configuration change is needed.
 
+
+- **A refused `dcctl bootstrap` leaves the local instance record as it found it.** When bootstrap refuses to run over an instance that is already running, `~/.devicechain/instances/<instance>/instance.json` is restored byte for byte, including its `createdAt`. Before, the refused run rewrote it with its own creation time and dcctl version.
+
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the v1.6.0 `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. One appended migration in `device-management` makes live entity attribute keys unique and queues repairs. See [Schema changes in v1.6.0 and going back](#v160-going-back). Coming from `v1.4.x` or earlier, upgrade through each intervening minor first, including `v1.5.x`, following each release's notes with that release's own `dcctl` and `--version`: skipping a minor is not a tested path (see [Supported upgrade paths](./versioning-policy.md#upgrade-paths)). For `v1.5.0`, those are the [`v1.5.0` notes](#v150-upgrade).

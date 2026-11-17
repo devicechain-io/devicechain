@@ -819,6 +819,9 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 - Mientras conviven pods antiguos y nuevos durante la actualización gradual, las eliminaciones que atiende un pod `v1.6` se avisan de la forma anterior.
 - No requiere cambios de configuración.
 
+
+- **Un `dcctl bootstrap` rechazado deja el registro local de la instancia tal como estaba.** Cuando bootstrap se niega a ejecutarse sobre una instancia que ya está en marcha, `~/.devicechain/instances/<instance>/instance.json` se restaura byte a byte, incluido su `createdAt`. Antes, la ejecución rechazada lo reescribía con su propia hora de creación y su versión de dcctl.
+
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de v1.6.0 para ambos comandos**, y proporciona a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Una migración añadida en `device-management` hace únicas las claves de atributos activos y encola reparaciones. Consulta [Cambios de esquema en v1.6.0 y vuelta atrás](#v160-going-back). Si vienes de `v1.4.x` o anterior, actualiza antes a través de cada versión menor intermedia, incluida `v1.5.x`, siguiendo las notas de cada versión con su propio `dcctl` y su `--version`: saltarse una versión menor no es una ruta probada (consulta [Rutas de actualización admitidas](./versioning-policy.md#upgrade-paths)). Para `v1.5.0`, son las [notas de `v1.5.0`](#v150-upgrade).
