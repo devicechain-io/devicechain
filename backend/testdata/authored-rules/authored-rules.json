@@ -9,6 +9,102 @@
       "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"bp-over-temp\"},\"type\":\"raiseAlarm\"}],\"name\":\"Building Pulse over-temperature\",\"severity\":\"major\",\"type\":\"threshold\",\"when\":{\"metric\":\"temperature\",\"op\":\"gt\",\"threshold\":30}}"
     },
     {
+      "producer": "harborpulse",
+      "ruleToken": "hp-charger-offline",
+      "profileToken": "hp-charger-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MAJOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"charger-offline\"},\"type\":\"raiseAlarm\"}],\"name\":\"Harborpulse charger offline\",\"severity\":\"major\",\"timeout\":\"45s\",\"type\":\"absence\",\"when\":{}}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-connector-hot",
+      "profileToken": "hp-charger-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MAJOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"connector-hot\"},\"type\":\"raiseAlarm\"},{\"sendCommand\":{\"command\":\"derate\",\"expiresAfter\":\"10m\",\"payload\":\"{\\\"max_kw\\\":11}\"},\"type\":\"sendCommand\"}],\"agg\":\"avg\",\"metric\":\"connector_temp_c\",\"name\":\"Harborpulse connector hot\",\"op\":\"gt\",\"severity\":\"major\",\"threshold\":70,\"type\":\"aggregate\",\"window\":\"1m0s\",\"windowMode\":\"sliding\"}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-flood-critical",
+      "profileToken": "hp-gauge-profile",
+      "enabled": true,
+      "alarmSeverityWire": "CRITICAL",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"flood-level\"},\"type\":\"raiseAlarm\"}],\"name\":\"Harborpulse flood level critical\",\"severity\":\"critical\",\"type\":\"threshold\",\"when\":{\"metric\":\"water_level_m\",\"op\":\"gt\",\"threshold\":2.2}}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-flood-major",
+      "profileToken": "hp-gauge-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MAJOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"flood-level\"},\"type\":\"raiseAlarm\"}],\"name\":\"Harborpulse flood level major\",\"severity\":\"major\",\"type\":\"threshold\",\"when\":{\"metric\":\"water_level_m\",\"op\":\"gt\",\"threshold\":1.8}}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-flood-minor",
+      "profileToken": "hp-gauge-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MINOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"flood-level\"},\"type\":\"raiseAlarm\"}],\"name\":\"Harborpulse flood level minor\",\"severity\":\"minor\",\"type\":\"threshold\",\"when\":{\"metric\":\"water_level_m\",\"op\":\"gt\",\"threshold\":1.4}}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-lamp-flicker",
+      "profileToken": "hp-light-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MINOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"lamp-flicker\"},\"type\":\"raiseAlarm\"}],\"count\":3,\"name\":\"Harborpulse lamp flicker\",\"severity\":\"minor\",\"type\":\"repeating\",\"when\":{\"metric\":\"lamp_fault\",\"op\":\"gt\",\"threshold\":0.5},\"window\":\"1m0s\"}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-light-silent",
+      "profileToken": "hp-light-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MAJOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"light-silent\"},\"type\":\"raiseAlarm\"}],\"name\":\"Harborpulse light silent\",\"severity\":\"major\",\"timeout\":\"45s\",\"type\":\"absence\",\"when\":{}}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-peak-demand",
+      "profileToken": "hp-meter-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MINOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"peak-demand\"},\"type\":\"raiseAlarm\"}],\"agg\":\"avg\",\"metric\":\"kw\",\"name\":\"Harborpulse peak demand\",\"op\":\"gt\",\"severity\":\"minor\",\"threshold\":150,\"type\":\"aggregate\",\"window\":\"1m0s\",\"windowMode\":\"sliding\"}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-pump-air-lock",
+      "profileToken": "hp-pump-profile",
+      "enabled": true,
+      "alarmSeverityWire": "CRITICAL",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"pump-air-lock\"},\"type\":\"raiseAlarm\"}],\"hold\":\"30s\",\"name\":\"Harborpulse pump air lock\",\"severity\":\"critical\",\"type\":\"duration\",\"when\":{\"cel\":\"m[\\\"pump_running\\\"] \\u003e 0.5 \\u0026\\u0026 m[\\\"pump_current_a\\\"] \\u003c 2.0\"}}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-quay-flooding",
+      "profileToken": "hp-gauge-profile",
+      "enabled": true,
+      "alarmSeverityWire": "",
+      "definition": "{\"anchorType\":\"area\",\"count\":3,\"name\":\"Harborpulse quay flooding\",\"type\":\"correlation\",\"when\":{\"metric\":\"water_level_m\",\"op\":\"gt\",\"threshold\":2.1},\"window\":\"2m0s\"}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-surge-rising",
+      "profileToken": "hp-gauge-profile",
+      "enabled": true,
+      "alarmSeverityWire": "WARNING",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"surge-rising\"},\"type\":\"raiseAlarm\"}],\"metric\":\"water_level_m\",\"name\":\"Harborpulse surge rising\",\"op\":\"gt\",\"rate\":true,\"severity\":\"warning\",\"threshold\":0.01,\"type\":\"deltaRate\",\"when\":{}}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-wet-well-high",
+      "profileToken": "hp-pump-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MAJOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"wet-well-high\"},\"type\":\"raiseAlarm\"},{\"sendCommand\":{\"command\":\"start-pump\",\"expiresAfter\":\"10m\",\"payload\":\"{\\\"duty_pct\\\":100}\"},\"type\":\"sendCommand\"}],\"name\":\"Harborpulse wet well high\",\"severity\":\"major\",\"type\":\"threshold\",\"when\":{\"metric\":\"wet_well_m\",\"op\":\"gt\",\"threshold\":2.5}}"
+    },
+    {
       "producer": "loadtest",
       "ruleToken": "harness-cmd-overtemp",
       "profileToken": "harness-cmd-profile",
