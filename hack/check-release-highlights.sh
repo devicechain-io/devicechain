@@ -78,6 +78,8 @@ set -euo pipefail
 THEME_MAX_CHARS=72
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The guard's own hack/: the self-test points ROOT at a planted repository, never at this one.
+HACK_DIR="$ROOT/hack"
 
 # Prints one `field: text` line per published field citing an ADR; empty output passes.
 #
@@ -189,16 +191,14 @@ check() {
   fi
 }
 
-# release_baseline <tag>: the nearest STABLE tag before the release. Counted from the release's
-# parent when the tag exists (the tag being released is on HEAD and would otherwise find itself),
-# from HEAD when it does not (running the guard by hand before tagging). Release candidates are
-# not baselines: nobody runs one.
+# release_baseline <tag>: the release the tag is compared with - hack/changelog-base.sh's rule,
+# the one every compatibility check (hack/api-baseline.sh) uses for a release or candidate build,
+# so a break declared against the checks' baseline is the break this guard sees. The highest
+# stable tag semver-LOWER than <tag>, reachable or not: vX.Y.0 is tagged on release-X.Y, which the
+# next minor's branch never contains, so "the nearest reachable" judged v1.7.0 against v1.5.0.
+# Nothing on stdout is the first release; a non-zero status is a base that cannot be determined.
 release_baseline() {
-  local tag="$1" from="HEAD"
-  if git -C "$ROOT" rev-parse --verify --quiet "refs/tags/${tag}^{commit}" >/dev/null; then
-    from="refs/tags/${tag}^{commit}^"
-  fi
-  git -C "$ROOT" describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' "$from" 2>/dev/null || true
+  (cd "$ROOT" && "$HACK_DIR/changelog-base.sh" "$1" 2>/dev/null)
 }
 
 # breaks_findings <tag> <baseline> <highlights> <declared-lines-file>: one line per problem.
@@ -221,10 +221,13 @@ breaks_findings() {
 # breaks_gate <tag> <highlights>: the whole rule against the real repository. Prints problems.
 breaks_gate() {
   local tag="$1" hl="$2" baseline declared out
-  baseline="$(release_baseline "$tag")"
+  if ! baseline="$(release_baseline "$tag")"; then
+    echo "no baseline can be determined for $tag (see hack/changelog-base.sh $tag); a release that cannot say what it is compared with is refused"
+    return 0
+  fi
   if [ -z "$baseline" ]; then
     if [ "$(git -C "$ROOT" rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
-      echo "no stable release tag is reachable before $tag and this clone is shallow; check out with fetch-depth: 0 so the declared breaks can be compared with a baseline"
+      echo "no stable release tag is found before $tag and this clone is shallow; check out with fetch-depth: 0 so the declared breaks can be compared with a baseline"
     else
       echo "note: no stable release before $tag, so no break can be declared against one" >&2
     fi
@@ -391,8 +394,8 @@ if [ "${1:-}" = "--self-test" ]; then
   bf "the first 1.0 may break what 0.x declared"                v1.0.0       v0.30.0 true  "$one"  ok
   bf "1.x minor, nothing declared"                              v1.1.0       v1.0.0  false "$none" ok
 
-  # Baseline resolution in a throwaway repository: counted from the release's PARENT, stable
-  # tags only. The guard's own repository is not used, so a real tag cannot make this pass.
+  # Baseline resolution in a throwaway repository: semver-lower stable tags only, reachable or
+  # not. The guard's own repository is not used, so a real tag cannot make this pass.
   repo="$tmp/repo"; mkdir -p "$repo"
   (
     cd "$repo"
@@ -400,14 +403,26 @@ if [ "${1:-}" = "--self-test" ]; then
     git commit -q --allow-empty -m a && git tag v0.1.0
     git commit -q --allow-empty -m b && git tag v0.2.0-rc.1
     git commit -q --allow-empty -m c && git tag v0.2.0
+    # v0.3.0 on a release branch the next minor never contains: still v0.4.0's baseline.
+    git checkout -q -b release-0.3 && git commit -q --allow-empty -m r3 && git tag v0.3.0
+    git checkout -q - && git commit -q --allow-empty -m d
   )
   REAL_ROOT="$ROOT"; ROOT="$repo"
   [ "$(release_baseline v0.2.0)" = v0.1.0 ]      || { echo "  FAIL: the baseline of v0.2.0 is not v0.1.0 (a release tag found itself, or an rc counted)" >&2; exit 1; }
   [ "$(release_baseline v0.2.0-rc.1)" = v0.1.0 ] || { echo "  FAIL: the baseline of an rc is not the previous stable tag" >&2; exit 1; }
-  [ "$(release_baseline v0.3.0)" = v0.2.0 ]      || { echo "  FAIL: a tag not yet created does not resolve from HEAD" >&2; exit 1; }
-  [ -z "$(release_baseline v0.1.0)" ]            || { echo "  FAIL: the first release has a baseline" >&2; exit 1; }
+  [ "$(release_baseline v0.3.0)" = v0.2.0 ]      || { echo "  FAIL: the baseline of v0.3.0 is not v0.2.0" >&2; exit 1; }
+  [ "$(release_baseline v0.4.0)" = v0.3.0 ]      || { echo "  FAIL: a release cut on a branch the next minor does not contain is not its baseline" >&2; exit 1; }
+  ! release_baseline v0.0.9 >/dev/null          || { echo "  FAIL: a release below every stable tag was given a baseline instead of refused" >&2; exit 1; }
+  # The first stable release, after its own candidate: no baseline, and not a refusal.
+  ROOT="$tmp/first"; mkdir -p "$ROOT"
+  (
+    cd "$ROOT"
+    git init -q . && git config user.email t@example.com && git config user.name t
+    git commit -q --allow-empty -m a && git tag v0.1.0-rc.1 && git tag v0.1.0
+  )
+  first="$(release_baseline v0.1.0)" && [ -z "$first" ] || { echo "  FAIL: the first release has a baseline ('$first'), or is refused" >&2; exit 1; }
   ROOT="$REAL_ROOT"
-  echo "  ok: the baseline is the nearest stable tag before the release, never the release itself"
+  echo "  ok: the baseline is the highest stable tag below the release, reachable or not, never the release itself"
 
   # The listing and the rule, joined, on the REAL tree's own baseline: a break declared against
   # it must be listed by hack/api-declared-breaks.sh and refused when the highlights say the

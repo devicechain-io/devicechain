@@ -165,6 +165,12 @@ jobs:
       - name: changelog base self-test
         run: hack/changelog-base.sh --self-test
 
+      # Every compatibility check picks its baseline in hack/api-baseline.sh, by a rule that
+      # reads tags AND branch topology (main is compared with a minor tagged on a release branch
+      # main never contains), so it is proven on planted histories, not on whatever tags exist.
+      - name: compatibility baseline self-test
+        run: hack/api-baseline.sh --self-test
+
       # The chart stamp runs only on a tag; a broken flag mislabels a release in Artifact Hub.
       # The self-test is the part that runs on every PR, before a release needs the stamp.
       - name: chart prerelease stamp self-test
