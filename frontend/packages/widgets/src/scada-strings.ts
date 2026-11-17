@@ -24,7 +24,7 @@ export interface ScadaStrings {
 
 const SWITCH = (stopped: string, running: string, fault: string, unknown: string): Record<ScadaState, string> => ({ stopped, running, fault, unknown });
 
-export const SCADA_STRINGS: Record<'en' | 'es', ScadaStrings> = {
+export const SCADA_STRINGS: Record<'en' | 'es' | 'zh-CN', ScadaStrings> = {
   en: {
     symbols: { pump: 'Pump', valve: 'Valve', tank: 'Tank', motor: 'Motor', fan: 'Fan', pipe: 'Pipe', sensor: 'Sensor', breaker: 'Breaker', light: 'Light' },
     states: {
@@ -59,8 +59,19 @@ export const SCADA_STRINGS: Record<'en' | 'es', ScadaStrings> = {
     reverse: 'inverso',
     label: (symbol, state) => `${symbol}: ${state}`,
   },
+  'zh-CN': {
+    symbols: { pump: '泵', valve: '阀门', tank: '储罐', motor: '电机', fan: '风机', pipe: '管道', sensor: '传感器', breaker: '断路器', light: '指示灯' },
+    states: {
+      pump: SWITCH('已停止', '运行中', '故障', '暂无数据'), valve: SWITCH('已关闭', '已打开', '故障', '暂无数据'),
+      tank: SWITCH('液位', '液位', '告警', '暂无数据'), motor: SWITCH('已停止', '运行中', '故障', '暂无数据'),
+      fan: SWITCH('已停止', '运行中', '故障', '暂无数据'), pipe: SWITCH('无流量', '流动中', '故障', '暂无数据'),
+      sensor: SWITCH('读数', '读数', '告警', '暂无数据'), breaker: SWITCH('已断开', '已闭合', '已跳闸', '暂无数据'),
+      light: SWITCH('关', '开', '故障', '暂无数据'),
+    }, forward: '正向', reverse: '反向', label: (symbol, state) => `${symbol}：${state}`,
+  },
 };
 
 export function scadaStrings(locale: string | undefined = viewerLocale()): ScadaStrings {
-  return locale?.toLowerCase().startsWith('es') ? SCADA_STRINGS.es : SCADA_STRINGS.en;
+  const language = locale?.toLowerCase().split('-')[0];
+  return language === 'es' ? SCADA_STRINGS.es : language === 'zh' ? SCADA_STRINGS['zh-CN'] : SCADA_STRINGS.en;
 }

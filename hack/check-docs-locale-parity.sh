@@ -64,6 +64,14 @@
 # admonitions. It skips a page that exists on one side only, because reporting the
 # file set is this script's job and two guards should not own one failure.
 #
+# RELEASE-NOTES FRAGMENTS (docs/release-notes/unreleased) are outside every tree this
+# compares, deliberately: one fragment file carries all three locales, so there is no
+# per-locale file set to compare. Their parity is checked by
+# `hack/assemble-release-notes.py --check` (every locale present and non-empty, the same
+# headings, anchors, fences and admonitions in each), which the docs CI job runs beside
+# this guard. Once assembled, the text lives in the release-notes page of every locale,
+# which this guard and the structure-parity check then cover like any other page.
+#
 #   hack/check-docs-locale-parity.sh              # check
 #   hack/check-docs-locale-parity.sh --self-test  # prove the check can fail
 

@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { errorCode } from '@devicechain/client';
+import { errorCode, isStaleWrite } from '@devicechain/client';
 import { useAuth } from '@/auth/AuthProvider';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Button } from '@/components/ui/button';
@@ -19,7 +19,6 @@ import { errMessage, useReload } from '@/routes/common';
 import {
   MAX_ACCESS_SCOPE_GROUPS,
   accessScopeEligibility,
-  GROUP_MOVED_MARKER,
   getGroupAccess,
   publishEntityGroup,
   setGroupAccessScope,
@@ -84,7 +83,7 @@ export function AccessScopePanel({ token }: { token: string }) {
       toast(t('groupAccessPublishedToast', { token, version: published }));
       reload();
     } catch (err) {
-      if (errMessage(err).includes(GROUP_MOVED_MARKER)) {
+      if (isStaleWrite(err)) {
         setFormError(t('groupAccessPublishStale'));
         reload();
       } else {

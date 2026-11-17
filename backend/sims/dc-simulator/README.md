@@ -28,7 +28,7 @@ identity and drives the same tenant-facing surfaces a real integration would.
    population default to the scenario's own demo sizing (~5s) and are
    overridable — see [Driving load](#driving-load).
 5. **Receives** commands, for a scenario whose manifest declares a **command far
-   end** (widgetlab, towerpulse and fleetpulse; sitepulse declares one too, `external`, and attaches no receiver). Telemetry over HTTP ingress is one-way, so a scenario whose
+   end** (widgetlab, towerpulse, harborpulse and fleetpulse; sitepulse declares one too, `external`, and attaches no receiver). Telemetry over HTTP ingress is one-way, so a scenario whose
    dashboard offers a command-button otherwise enqueues real commands nothing
    answers: they reach `SENT` and expire days later, with every layer reporting
    success. Such a scenario subscribes every device to its own command topic on
@@ -50,7 +50,7 @@ go run . --handshake /path/to/handshake.json [--port 8090]
 ### Driving load
 
 The built-in scenarios are sized as **demos** — devicepulse is 1 device,
-buildingpulse is 12, widgetlab is 7, fleetpulse is 6, towerpulse is 31 and sitepulse is 19 (18 machines and one
+buildingpulse is 12, widgetlab is 7, fleetpulse is 6, towerpulse is 31, harborpulse is 33 and sitepulse is 19 (18 machines and one
 plant; its devices publish their own telemetry, so the sim itself emits nothing), all at a 5s cadence, which is
 the right default for watching the presentation page and far too small to measure what
 an instance costs. Three flags override that; each also reads an env var, and each
@@ -66,7 +66,7 @@ defaults to the scenario's own sizing:
 devices chosen in source for their behaviour is a composed fixture, not a scale vehicle:
 resizing it would leave its boards pointing at devices the run never provisions, so it
 refuses the flag at startup rather than provisioning a topology its own boards do not
-match. widgetlab and towerpulse are. devicepulse, buildingpulse and fleetpulse take any size
+match. widgetlab, towerpulse and harborpulse are. devicepulse, buildingpulse and fleetpulse take any size
 (buildingpulse's board binds named devices too, but it is rebuilt from the resized
 population). sitepulse takes any machine count: `--devices n` gives each of its three
 machine kinds `n` devices and leaves its single crusher plant at one. Its board
@@ -567,6 +567,39 @@ A presenter can drop a chiller out of turn (`DropChiller` on the Sim); a restart
 The silent chiller keeps its MQTT session in this process, so the online doughnut does not drop
 here: a presence drop is the Unity device plane's business.
 
+### Harborpulse (a waterfront district)
+
+`harborpulse` drives more of the platform at once than any other scenario. One utility tenant
+runs a fictional harbour district of three quays (North Quay, East Quay, the Basin): 9 tide
+gauges, 3 stormwater pump controllers, 12 street lights, 6 EV chargers, 2 building meters (each
+owned by a customer, one of whom gets a login limited to their building) and a flood-response
+truck, 33 named devices. It plays one **compressed day** on a loop, 24 sim hours in 24 minutes,
+starting at 06:00:
+
+| Sim time | What happens | What the platform does |
+| --- | --- | --- |
+| 08:30-09:45 | The Ferry Terminal's demand passes its cap | `hp-peak-demand` (1-minute sliding average) raises MINOR |
+| 11:00-12:00 | One East Quay lamp's driver reports intermittent faults | `hp-lamp-flicker` (repeating, 3 in a minute) raises MINOR |
+| 14:00-15:30 | A Basin charger's connector overheats | `hp-connector-hot` (sliding average) raises MAJOR and sends `derate {max_kw: 11}`; the charger obeys and cools |
+| 17:00-18:30 | Storm surge: every gauge rises fast | `hp-surge-rising` (rate of change) raises WARNING |
+| 17:00-21:00 | The king tide and the surge | three thresholds share the alarm key `flood-level`: each gauge's ONE alarm escalates MINOR to MAJOR, and to CRITICAL on East Quay only, then eases |
+| 18:30-20:30 | Three East Quay gauges above 2.1 m together | `hp-quay-flooding` (area correlation) fires for East Quay. It raises nothing: the platform forbids actions on a correlation rule |
+| 17:00-21:00 | Wet wells fill | `hp-wet-well-high` raises MAJOR and sends `start-pump {duty_pct: 100}`; the well drains and the alarm clears, more than once |
+| 19:00-20:30 | The East Quay pump air-locks: it runs and moves nothing | `hp-pump-air-lock` (held 30 s, over two metrics in CEL) raises CRITICAL |
+| 17:00-22:30 | The truck drives from the depot to the flood plain and back | location events against two geofences |
+| 19:45-21:15 | The East Quay feeder fails | its lamps and chargers go silent: `hp-light-silent` / `hp-charger-offline` (absence) raise MAJOR for exactly those; the chargers buffer their readings and send them, with their original timestamps, when power returns |
+
+Every reading is a function of the seed, the sim time and the device, except what a command
+changes: a wet well, a charger's cap, a lamp's dim level. A command is answered only after the
+device has applied it, so an unobeyed command shows in the telemetry (the well reaches the pump's
+own float switch at 3.2 m; the charger stays hot). Midnight resets derates and dimming so the next
+day's beats repeat. `harborpulse_test.go` replays the day against each rule's own published
+threshold, window, hold, count and timeout, with the commands obeyed and, as a control, ignored.
+
+The day's assertions against a running instance, and the features the scenario does not drive
+yet (outbound connectors, notifications, campaigns, LoRaWAN gauges, OTA, MQTT devices), are
+planned follow-ups.
+
 ### The command far end
 
 A device that only POSTs telemetry cannot receive anything, so a scenario with a
@@ -582,7 +615,7 @@ on its manifest, which has three settings:
 | `internal` | this process, per device | yes | allowed |
 | `external` | a presentation client in another process — a Unity player that IS the device | no | allowed |
 
-widgetlab, towerpulse and fleetpulse are `internal`; sitepulse is `external`; devicepulse and buildingpulse are `none`. Both far-end modes
+widgetlab, towerpulse, harborpulse and fleetpulse are `internal`; sitepulse is `external`; devicepulse and buildingpulse are `none`. Both far-end modes
 must still declare a command vocabulary on a profile: for `external` that vocabulary
 is the whole contract with the other process, since it is what that client subscribes
 for and what the board's widget enqueues against.
@@ -1053,6 +1086,9 @@ a snapshot taken at page load would not.
   only when its job is done (`towerpulse_model.go`), and the boards (`towerpulse_dashboard.go`, and the annex owner's `towerpulse_annex_dashboard.go`).
   `sim/windowrule.go` builds its windowed and absence rules, and `sim/customeruser.go`
   provisions a member limited to one customer.
+- `sim/harborpulse*.go` — the waterfront scenario: the manifest and rules (`harborpulse.go`) and
+  the compressed day, its planted faults and the command effects (`harborpulse_model.go`).
+  `sim/rulekinds.go` builds its duration, rate-of-change, repeating and correlation rules.
 - `sim/lifecycle.go` — the `CREATED -> BOOTSTRAPPED -> RUNNING <-> STOPPED`
   FSM and the control HTTP API.
 - `sim/presentation.go` — serves the static page + its `/config.json`.

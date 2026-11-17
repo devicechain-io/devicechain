@@ -3,7 +3,10 @@
 
 package model
 
-import "time"
+import (
+	"database/sql"
+	"time"
+)
 
 // DeviceGate is command-delivery's record of whether one device is disabled.
 //
@@ -31,6 +34,10 @@ type DeviceGate struct {
 
 	// Disabled is true while the device is disabled.
 	Disabled bool `gorm:"not null"`
+
+	// DeletedThrough is the latest deletion floor; NULL means no deletion was observed.
+	// It is separate from GORM soft deletion and survives token reuse.
+	DeletedThrough sql.NullTime
 
 	// UpdatedAt is when this row last changed state. The corrective walk only touches a row older
 	// than the instant it started reading, so a fact that landed during the walk always wins.

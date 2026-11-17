@@ -482,6 +482,7 @@ See the [security model](../concepts/security-model.md).
 ## Related {#related}
 
 - [LoRaWAN Uplink to Alarm](./lorawan-uplink-to-alarm.md): a walkthrough from a binary uplink through an integration and a decoder to a detection rule and an alarm.
+- [Send ChirpStack Uplinks to DeviceChain](./chirpstack-uplinks.md) and [Send The Things Network / The Things Stack Uplinks to DeviceChain](./the-things-stack-uplinks.md): step-by-step setup of each network server, with its codec or with a payload decoder.
 - [Payload decoders](./payload-decoders.md): turn a raw frame or a network server's decoded object into measurements.
 - [Devices](../user-guide/devices.md): the device form, with its **Aliases** field.
 - [Connecting a Device](./connecting-a-device.md): the MQTT and HTTP paths a device uses itself.

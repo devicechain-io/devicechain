@@ -39,7 +39,7 @@ func assetPropertyTestApi(t *testing.T) (*Api, context.Context) {
 	db := sqlitetest.OpenMemory(t, nil)
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
 	require.NoError(t, rdb.RegisterTokenGrammar(db), "register token grammar")
-	require.NoError(t, db.AutoMigrate(&AssetType{}, &Asset{}, &AssetTypeVersion{}), "migrate")
+	require.NoError(t, db.AutoMigrate(&EntityGroupFacetRef{}, &AssetType{}, &Asset{}, &AssetTypeVersion{}), "migrate")
 
 	require.NoError(t, db.Exec(`PRAGMA foreign_keys = ON`).Error, "enable foreign keys")
 	var fk int

@@ -6,6 +6,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -121,6 +122,27 @@ func (s *Sharded) RemoveRule(id string) {
 		e.RemoveRule(id)
 	}
 }
+
+// CarryRaised collects every old owner before inserting into the NEW key's owner.
+func (s *Sharded) CarryRaised(successor map[string]string, skip func(SeriesKey) bool) int {
+	var entries []carriedRaised
+	for _, e := range s.shards {
+		entries = append(entries, e.takeRaised(successor, skip)...)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if !entries[i].at.Equal(entries[j].at) {
+			return entries[i].at.After(entries[j].at)
+		}
+		return entries[i].newest.After(entries[j].newest)
+	})
+	for _, x := range entries {
+		s.owner(x.key).putRaised(x)
+	}
+	return len(entries)
+}
+
+// IsRaised asks the owner of the successor key.
+func (s *Sharded) IsRaised(key SeriesKey) bool { return s.owner(key).IsRaised(key) }
 
 // RemoveMatching evicts every selected rule from every shard and reports how many entries went,
 // as a single engine would. The rule set is replicated, so each removed rule is counted once per
@@ -247,6 +269,10 @@ func (s *Sharded) RemoveExpected(key SeriesKey) { s.owner(key).RemoveExpected(ke
 
 // ClearRaised drops a raised latch in the shard that holds it.
 func (s *Sharded) ClearRaised(key SeriesKey) { s.owner(key).ClearRaised(key) }
+
+func (s *Sharded) ClearRaisedIfNotAfter(key SeriesKey, at time.Time) {
+	s.owner(key).ClearRaisedIfNotAfter(key, at)
+}
 
 // Drain returns and clears the detections every shard emitted. Order is each shard's emission order
 // in turn: per series it is the order a single engine would give, and across series it is not
@@ -403,6 +429,7 @@ func restoreSharded(k int, salt uint32, rules []Rule, allowedLateness time.Durat
 	splitBy(snap.Corr, k, salt, func(x snapCorr) (string, string) { return x.Rule, x.Series }, func(i int, x snapCorr) { parts[i].Corr = append(parts[i].Corr, x) })
 	splitBy(snap.Expected, k, salt, func(x snapExpected) (string, string) { return x.Rule, x.Series }, func(i int, x snapExpected) { parts[i].Expected = append(parts[i].Expected, x) })
 	splitBy(snap.Raised, k, salt, func(x snapRaised) (string, string) { return x.Rule, x.Series }, func(i int, x snapRaised) { parts[i].Raised = append(parts[i].Raised, x) })
+	splitBy(snap.Fell, k, salt, func(x snapFell) (string, string) { return x.Rule, x.Series }, func(i int, x snapFell) { parts[i].Fell = append(parts[i].Fell, x) })
 	splitBy(snap.Presence, k, salt, func(x snapPresence) (string, string) { return x.Rule, x.Series }, func(i int, x snapPresence) { parts[i].Presence = append(parts[i].Presence, x) })
 	splitBy(snap.Pending, k, salt, func(x snapPending) (string, string) { return x.Rule, x.Series }, func(i int, x snapPending) { parts[i].Pending = append(parts[i].Pending, x) })
 	splitBy(snap.Newest, k, salt, func(x snapNewest) (string, string) { return x.Rule, x.Series }, func(i int, x snapNewest) { parts[i].Newest = append(parts[i].Newest, x) })

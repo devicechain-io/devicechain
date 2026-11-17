@@ -815,6 +815,33 @@ const dockerBuildNetEnv = "DOCKER_BUILD_NET"
 // stepInfraApply deploys the shared data/infra stack via OpenTofu, driving the
 // tofu/terraform binary through terraform-exec.
 func stepInfraApply(ctx context.Context, st *State) error {
+	// Check the planned fresh-install reservation before creating infrastructure.
+	// The Helm step also checks the applied broker's actual ceiling.
+	cfg, err := shardGroupsFromValues(authoringValues(st))
+	if err != nil {
+		return err
+	}
+	if cfg != nil {
+		// The volume the apply will provision, the operator's stated size included: judging
+		// the preset's instead refused an operator who had already grown it, with advice to
+		// grow it. A size dcctl cannot read is left to the check after the apply.
+		planned := *st
+		volume, unread := plannedJetStreamVolume(st)
+		if unread == "" {
+			planned.LiveVolumes.JetStream = volume
+			if planned.LiveMaxFileStore == "" {
+				if v, stated, readable := operatorStatedValue(st, "nats_jetstream_max_file_store"); stated && readable && v != "" {
+					planned.LiveMaxFileStore = v
+				}
+			}
+			if err := precheckJetStreamReservation(ctx, &planned); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("  %s JetStream reservation not checked before the infrastructure apply (%s); it is "+
+				"checked against the provisioned volume before the chart is installed\n", color.YellowString("note:"), unread)
+		}
+	}
 	if err := checkHaNodeCapacity(ctx, st); err != nil {
 		return err
 	}
@@ -894,6 +921,18 @@ func stepInstallCore(ctx context.Context, st *State) error {
 // stepHelmInstall installs (or upgrades) the per-instance chart via the Helm Go
 // SDK, blocking until the rendered workloads are ready.
 func stepHelmInstall(ctx context.Context, st *State) error {
+	// A fresh shard-group install must fit the broker that the infra step just
+	// provisioned, before any hook creates the multiplied stream reservations.
+	cfg, err := shardGroupsFromValues(authoringValues(st))
+	if err != nil {
+		return err
+	}
+	if cfg != nil && !st.DryRun {
+		if err := precheckJetStreamReservation(ctx, st); err != nil {
+			return err
+		}
+	}
+
 	// The broker that was actually provisioned must be able to host the replica
 	// factor this install is about to configure. Checked here — after the infra
 	// apply, before the chart — because that is the only point where BOTH halves of
