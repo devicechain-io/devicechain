@@ -57,7 +57,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevEffects := AgentEffectsDrain
 	prevDeletion := EntityDeletionDrain
 	prevCallout, prevBackoff, prevKickDrain, prevTenants := CalloutResponder, MqttStoreBackoff, SessionKickDrain, ProvisioningTenants
-	prevReaper, prevClassifier := AgentProposalReaper, AlarmPositionClassifier
+	prevReaper, prevClassifier, prevMarkerHeal := AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal
 	prevPin := IssuerPin
 	ProvisioningTenants = nil
 	t.Cleanup(func() {
@@ -68,7 +68,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		AgentEffectsDrain = prevEffects
 		EntityDeletionDrain = prevDeletion
 		CalloutResponder, MqttStoreBackoff, SessionKickDrain = prevCallout, prevBackoff, prevKickDrain
-		AgentProposalReaper, AlarmPositionClassifier = prevReaper, prevClassifier
+		AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal = prevReaper, prevClassifier, prevMarkerHeal
 	})
 
 	issuer, err := nkeys.CreateAccount()
@@ -130,6 +130,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 				return err
 			}
 			if err = initAlarmPositionClassifier(); err != nil {
+				return err
+			}
+			if err = initCreateEnrollMarkerHeal(); err != nil {
 				return err
 			}
 			if err = initDecodeAccounting(); err != nil {
