@@ -114,7 +114,7 @@ func TestAGatedDetectionWaitsForTheCheckpoint(t *testing.T) {
 	w := &edgeWriter{}
 	rp.publisher = runtime.NewPublisher(w, rp.registry, (*DetectMetrics)(nil))
 	rp.clock = newAtomicClock(testBase)
-	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase})
+	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase}, nil)
 	rp.armer.ApplyDeviceMembership(runtime.RosterEntry{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase}, true)
 	eng.Advance(testBase.Add(11 * time.Second))
 	// Drained as an event-driven batch would be: the kind, not the source, must keep it back.
