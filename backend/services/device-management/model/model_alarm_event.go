@@ -108,6 +108,8 @@ type AlarmStateChangeEvent struct {
 	DeviceToken     string
 	DeviceName      string
 	DeviceTypeToken string
+	// PositionDerived carries the alarm row's verdict; nil means unknown.
+	PositionDerived *bool
 }
 
 // AlarmEventPublisher publishes alarm state-change events (ADR-041). Emission is
@@ -164,6 +166,11 @@ func newAlarmStateChangeEvent(a *Alarm, etype AlarmEventType, prevSeverity strin
 		RaisedTime:       a.RaisedTime,
 		OccurredTime:     occurredTime,
 		ScopeAnchors:     append([]string(nil), a.ScopeAnchors...),
+	}
+	if a.PositionDerived != nil {
+		// A copy: the event outlives this call and must not alias the row's field.
+		verdict := *a.PositionDerived
+		ev.PositionDerived = &verdict
 	}
 	if a.AcknowledgedBy.Valid {
 		by := a.AcknowledgedBy.String

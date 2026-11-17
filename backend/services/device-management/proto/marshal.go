@@ -39,6 +39,7 @@ func MarshalAlarmStateChangeEvent(event *model.AlarmStateChangeEvent) ([]byte, e
 		DeviceToken:     event.DeviceToken,
 		DeviceName:      event.DeviceName,
 		DeviceTypeToken: event.DeviceTypeToken,
+		PositionDerived: event.PositionDerived,
 	}
 	if event.PreviousSeverity != "" {
 		ps := event.PreviousSeverity
@@ -87,6 +88,7 @@ func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEven
 		DeviceToken:     pbevent.DeviceToken,
 		DeviceName:      pbevent.DeviceName,
 		DeviceTypeToken: pbevent.DeviceTypeToken,
+		PositionDerived: pbevent.PositionDerived,
 	}
 	if pbevent.PreviousSeverity != nil {
 		event.PreviousSeverity = *pbevent.PreviousSeverity

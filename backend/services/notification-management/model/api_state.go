@@ -21,7 +21,7 @@ import (
 // (the dispatcher has not yet notified about the alarm).
 func (api *Api) NotificationStatesByAlarmToken(ctx context.Context, alarmTokens []string) ([]*NotificationState, error) {
 	found := make([]*NotificationState, 0)
-	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "alarm_token", alarmTokens); err != nil {
+	if err := rdb.FindByKeys(notificationHistoryRead(api.RDB.DB(ctx), false), &found, "alarm_token", alarmTokens); err != nil {
 		return nil, err
 	}
 	return found, nil
@@ -34,6 +34,7 @@ func (api *Api) NotificationStates(ctx context.Context,
 	criteria NotificationStateSearchCriteria) (*NotificationStateSearchResults, error) {
 	results := make([]NotificationState, 0)
 	db, pag := api.RDB.ListOf(ctx, &NotificationState{}, func(result *gorm.DB) *gorm.DB {
+		result = notificationHistoryRead(result, false)
 		if criteria.AlarmKey != nil {
 			result = result.Where("alarm_key = ?", *criteria.AlarmKey)
 		}
@@ -126,9 +127,16 @@ func (api *Api) RecordPagedFrom(ctx context.Context, alarmToken, alarmKey, sever
 			return result.Error
 		}
 		out = found
+		positionChanged := false
+		if src.PositionObserved || src.PositionDerived != nil {
+			positionChanged = found.applyPosition(src.PositionDerived)
+		}
 		if !enterCycle(found, raised) {
 			// A notification about an EARLIER cycle (an unordered redelivery). The row
-			// describes a newer cycle; nothing about this one belongs on it.
+			// describes a newer cycle; only the alarm-wide position verdict belongs on it.
+			if positionChanged {
+				return tx.Model(found).Update("position_derived", found.PositionDerived).Error
+			}
 			return nil
 		}
 		fillOnly := found.SourceAt.Valid && !sourceAt.After(found.SourceAt.Time)
@@ -274,16 +282,16 @@ func (api *Api) UnclaimClearAnnouncement(ctx context.Context, alarmToken string,
 // later out-of-order RAISED cannot resurrect it into an escalating open row. raisedTime
 // names the alarm cycle acknowledged (see markTerminal).
 func (api *Api) MarkAcknowledged(ctx context.Context, alarmToken, alarmKey, severity string,
-	raisedTime, at time.Time) error {
-	return api.markTerminal(ctx, alarmToken, alarmKey, severity, "acknowledged_at", raisedTime, at)
+	raisedTime, at time.Time, position ...*bool) error {
+	return api.markTerminal(ctx, alarmToken, alarmKey, severity, "acknowledged_at", raisedTime, at, position...)
 }
 
 // MarkCleared stamps ClearedAt on the alarm's state row so escalation stops and the
 // retention sweep can prune it after the grace window. Upsert tombstone, like
 // MarkAcknowledged.
 func (api *Api) MarkCleared(ctx context.Context, alarmToken, alarmKey, severity string,
-	raisedTime, at time.Time) error {
-	return api.markTerminal(ctx, alarmToken, alarmKey, severity, "cleared_at", raisedTime, at)
+	raisedTime, at time.Time, position ...*bool) error {
+	return api.markTerminal(ctx, alarmToken, alarmKey, severity, "cleared_at", raisedTime, at, position...)
 }
 
 // markTerminal records a terminal (acknowledged or cleared) transition on the alarm's
@@ -320,7 +328,7 @@ func (api *Api) MarkCleared(ctx context.Context, alarmToken, alarmKey, severity 
 //   - an EARLIER cycle is a stale redelivery and changes nothing — so cycle one's
 //     late acknowledgement cannot silence cycle two.
 func (api *Api) markTerminal(ctx context.Context, alarmToken, alarmKey, severity, column string,
-	raisedTime, at time.Time) error {
+	raisedTime, at time.Time, position ...*bool) error {
 	raised := cycleKey(raisedTime)
 	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		found := &NotificationState{}
@@ -335,13 +343,24 @@ func (api *Api) markTerminal(ctx context.Context, alarmToken, alarmKey, severity
 					CycleRaisedAt: raised,
 				}
 				stamp(tombstone, column, at)
+				if len(position) > 0 {
+					tombstone.applyPosition(position[0])
+				}
 				return tx.Create(tombstone).Error
 			}
 			return result.Error
 		}
+		positionChanged := false
+		if len(position) > 0 {
+			positionChanged = found.applyPosition(position[0])
+		}
 		before := found.CycleRaisedAt
 		if !enterCycle(found, raised) {
-			// A transition of an EARLIER cycle: stale, and it must not touch this one.
+			// An EARLIER cycle cannot touch lifecycle stamps, but its alarm-wide
+			// position verdict still applies.
+			if positionChanged {
+				return tx.Model(found).Update("position_derived", found.PositionDerived).Error
+			}
 			return nil
 		}
 		// Stamp only when still NULL (within this cycle) so a redelivered terminal event
@@ -354,6 +373,9 @@ func (api *Api) markTerminal(ctx context.Context, alarmToken, alarmKey, severity
 			// Nothing to stamp, but the row adopted a cycle it had none recorded for
 			// (see enterCycle); keep that, so the next event can be ordered.
 			return tx.Save(found).Error
+		}
+		if positionChanged {
+			return tx.Model(found).Update("position_derived", found.PositionDerived).Error
 		}
 		return nil
 	})

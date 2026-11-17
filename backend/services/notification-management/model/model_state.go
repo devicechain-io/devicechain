@@ -41,6 +41,9 @@ type NotificationState struct {
 	AlarmToken string `gorm:"not null;size:128"`
 	AlarmKey   string `gorm:"not null;size:256"`
 	Severity   string `gorm:"size:16"`
+	// PositionDerived is the alarm's classification. True is sticky across cycles;
+	// nil is unknown (including old producers/rows) and is withheld like true.
+	PositionDerived *bool
 
 	// Notification progress (written by the N.C dispatcher).
 	FirstNotifiedAt sql.NullTime
@@ -109,21 +112,32 @@ type NotificationState struct {
 // AlarmSource is the originator facts an alarm event carries that a state row keeps. The zero
 // value is "nothing known" and changes nothing on the row.
 type AlarmSource struct {
-	OriginatorType  string
-	OriginatorId    uint
-	DeviceToken     string
-	DeviceName      string
-	DeviceTypeToken string
+	// PositionObserved distinguishes an event with an unknown verdict from an
+	// internal bookkeeping call carrying no event at all.
+	PositionObserved bool
+	PositionDerived  *bool
+	OriginatorType   string
+	OriginatorId     uint
+	DeviceToken      string
+	DeviceName       string
+	DeviceTypeToken  string
 }
 
-// IsZero reports whether the source states nothing.
-func (a AlarmSource) IsZero() bool { return a == AlarmSource{} }
+// IsZero reports whether the source states no originator facts. Position
+// classification is alarm-wide and must not advance the device-name clock.
+func (a AlarmSource) IsZero() bool {
+	a.PositionObserved, a.PositionDerived = false, nil
+	return a == AlarmSource{}
+}
 
 // applySource writes the facts the source states onto the row. A field the source leaves empty keeps
 // what the row has: an event from a producer that predates a field must not erase it.
 // With fillOnly the row keeps what it already has and only the unknown fields are filled: an
 // older event, finishing late, must not put a stale name back over a newer one.
 func (s *NotificationState) applySource(a AlarmSource, fillOnly bool) {
+	if a.PositionObserved || a.PositionDerived != nil {
+		s.applyPosition(a.PositionDerived)
+	}
 	if fillOnly {
 		cur := s.Source()
 		if cur.OriginatorType != "" {

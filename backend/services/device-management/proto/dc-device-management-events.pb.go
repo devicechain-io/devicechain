@@ -59,6 +59,9 @@ type PAlarmStateChangeEvent struct {
 	DeviceToken     string `protobuf:"bytes,17,opt,name=device_token,json=deviceToken,proto3" json:"device_token,omitempty"`
 	DeviceName      string `protobuf:"bytes,18,opt,name=device_name,json=deviceName,proto3" json:"device_name,omitempty"`
 	DeviceTypeToken string `protobuf:"bytes,19,opt,name=device_type_token,json=deviceTypeToken,proto3" json:"device_type_token,omitempty"`
+	// Alarm.PositionDerived: absent means unknown, withheld like true by readers
+	// without location:read. An older producer leaves this absent.
+	PositionDerived *bool `protobuf:"varint,20,opt,name=position_derived,json=positionDerived,proto3,oneof" json:"position_derived,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -217,6 +220,13 @@ func (x *PAlarmStateChangeEvent) GetDeviceTypeToken() string {
 		return x.DeviceTypeToken
 	}
 	return ""
+}
+
+func (x *PAlarmStateChangeEvent) GetPositionDerived() bool {
+	if x != nil && x.PositionDerived != nil {
+		return *x.PositionDerived
+	}
+	return false
 }
 
 // *
@@ -645,7 +655,7 @@ var File_proto_dc_device_management_events_proto protoreflect.FileDescriptor
 
 const file_proto_dc_device_management_events_proto_rawDesc = "" +
 	"\n" +
-	"'proto/dc-device-management-events.proto\x12\x1fio.devicechain.devicemanagement\"\xdf\x05\n" +
+	"'proto/dc-device-management-events.proto\x12\x1fio.devicechain.devicemanagement\"\xa4\x06\n" +
 	"\x16PAlarmStateChangeEvent\x12\x1d\n" +
 	"\n" +
 	"event_type\x18\x01 \x01(\tR\teventType\x12\x1f\n" +
@@ -671,10 +681,12 @@ const file_proto_dc_device_management_events_proto_rawDesc = "" +
 	"\fdevice_token\x18\x11 \x01(\tR\vdeviceToken\x12\x1f\n" +
 	"\vdevice_name\x18\x12 \x01(\tR\n" +
 	"deviceName\x12*\n" +
-	"\x11device_type_token\x18\x13 \x01(\tR\x0fdeviceTypeTokenB\x14\n" +
+	"\x11device_type_token\x18\x13 \x01(\tR\x0fdeviceTypeToken\x12.\n" +
+	"\x10position_derived\x18\x14 \x01(\bH\x03R\x0fpositionDerived\x88\x01\x01B\x14\n" +
 	"\x12_previous_severityB\x12\n" +
 	"\x10_acknowledged_byB\r\n" +
-	"\v_last_valueJ\x04\b\r\x10\x0eR\amessage\"\xaf\x01\n" +
+	"\v_last_valueB\x13\n" +
+	"\x11_position_derivedJ\x04\b\r\x10\x0eR\amessage\"\xaf\x01\n" +
 	"\x17PPublishedDetectionRule\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1e\n" +
 	"\n" +

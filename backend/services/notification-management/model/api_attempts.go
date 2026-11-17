@@ -32,6 +32,7 @@ func (api *Api) NotificationAttempts(ctx context.Context,
 	}
 	results := make([]NotificationAttempt, 0)
 	db, pag := api.RDB.ListOf(ctx, &NotificationAttempt{}, func(result *gorm.DB) *gorm.DB {
+		result = notificationHistoryRead(result, true)
 		if criteria.AlarmToken != nil {
 			result = result.Where("alarm_token = ?", *criteria.AlarmToken)
 		}

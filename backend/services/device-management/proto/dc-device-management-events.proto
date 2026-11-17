@@ -51,6 +51,9 @@ message PAlarmStateChangeEvent {
     string device_token = 17;
     string device_name = 18;
     string device_type_token = 19;
+    // Alarm.PositionDerived: absent means unknown, withheld like true by readers
+    // without location:read. An older producer leaves this absent.
+    optional bool position_derived = 20;
 }
 
 /**
