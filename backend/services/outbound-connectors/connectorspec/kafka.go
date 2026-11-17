@@ -4,8 +4,11 @@
 package connectorspec
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/devicechain-io/dc-microservice/credbinding"
 )
 
 // kafkaSASLConfig is the optional SASL auth block. The password is NEVER in the config — it
@@ -112,3 +115,14 @@ func withKafkaSecret(t Target, secret string) (Target, error) {
 	k.SASL = &sasl
 	return k, nil
 }
+
+func kafkaBinding(raw []byte) credbinding.Binding {
+	var c kafkaConfig
+	if json.Unmarshal(raw, &c) != nil {
+		return credbinding.Opaque("kafka", raw)
+	}
+	c.Addresses = canonicalSet(c.Addresses)
+	return credbinding.Fields(credbinding.New("kafka"), &c, kafkaFields)
+}
+
+var kafkaFields = map[string]bool{"addresses": false, "topic": true, "clientId": true, "tls": false, "sasl": false, "sasl.mechanism": false, "sasl.username": true}
