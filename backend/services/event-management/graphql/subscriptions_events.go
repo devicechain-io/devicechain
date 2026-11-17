@@ -16,7 +16,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
 	"strconv"
-	"sync"
 )
 
 // Factories are test seams, replaced only before creating a hub.
@@ -26,30 +25,20 @@ var measurementLiveOpener = func(nmgr *messaging.NatsManager) messaging.LiveOpen
 	}
 }
 var measurementDecode = decodeMeasurements
-var measurementHubs = struct {
-	sync.Mutex
-	hubs map[*messaging.NatsManager]*messaging.LiveHub[*resolvedevent.ResolvedEvent]
-	drop func()
-}{hubs: make(map[*messaging.NatsManager]*messaging.LiveHub[*resolvedevent.ResolvedEvent])}
+var measurementDropHook func()
 
 // InitLiveSubscriptionMetrics runs once during process initialization, never per connection.
 func InitLiveSubscriptionMetrics(ms *core.Microservice) {
 	counter := ms.NewCounterVec("live_subscription_dropped_total", "Live values dropped for slow subscribers.", []string{"suffix"}).WithLabelValues(streams.ResolvedEvents)
-	measurementHubs.Lock()
-	measurementHubs.drop = counter.Inc
-	measurementHubs.Unlock()
+	measurementDropHook = counter.Inc
 }
 
 func measurementHub(nmgr *messaging.NatsManager) *messaging.LiveHub[*resolvedevent.ResolvedEvent] {
-	measurementHubs.Lock()
-	defer measurementHubs.Unlock()
-	if hub := measurementHubs.hubs[nmgr]; hub != nil {
+	return messaging.SharedLiveHub(nmgr, streams.ResolvedEvents, func() *messaging.LiveHub[*resolvedevent.ResolvedEvent] {
+		hub := messaging.NewLiveHub(streams.ResolvedEvents, measurementLiveOpener(nmgr), measurementDecode, messaging.DefaultMaxLiveSubscribersPerTenant)
+		hub.OnDrop(measurementDropHook)
 		return hub
-	}
-	hub := messaging.NewLiveHub(streams.ResolvedEvents, measurementLiveOpener(nmgr), measurementDecode, messaging.DefaultMaxLiveSubscribersPerTenant)
-	hub.OnDrop(measurementHubs.drop)
-	measurementHubs.hubs[nmgr] = hub
-	return hub
+	})
 }
 
 func decodeMeasurements(msg messaging.Message, tenant string) []messaging.Keyed[*resolvedevent.ResolvedEvent] {

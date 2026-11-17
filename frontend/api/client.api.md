@@ -159,6 +159,7 @@ export interface ScopeAnchorRef {
 
 ```ts
 export interface SessionTokens {
+    forceRefresh: (rejectedToken?: string) => Promise<string | null>;
     getAccessToken: () => Promise<string | null>;
     reset: () => void;
     startAutoRefresh: () => () => void;
@@ -204,6 +205,15 @@ export interface TokenPair {
 export type TypedDocument<TResult, TVariables> = DocumentTypeDecoration<TResult, TVariables> & {
     toString(): string;
 };
+```
+
+## `.:UnauthorizedHandler`
+
+```ts
+export interface UnauthorizedHandler {
+    refresh: (token: string, identity: boolean) => Promise<string | null>;
+    onEnd: (error: GraphQLRequestError, token: string, identity: boolean) => void;
+}
 ```
 
 ## `.:areaKey`
@@ -308,6 +318,12 @@ export declare function isScopeUnsupportedError(err: unknown): boolean;
 export declare function isScoped(claims: DecodedClaims | null): boolean;
 ```
 
+## `.:isStaleWrite`
+
+```ts
+export declare function isStaleWrite(err: unknown): boolean;
+```
+
 ## `.:isValidToken`
 
 ```ts
@@ -378,6 +394,12 @@ export declare function setAuthTokenGetter(getter: (() => Promise<string | null>
 
 ```ts
 export declare function setIdentityTokenGetter(getter: (() => Promise<string | null>) | null): void;
+```
+
+## `.:setUnauthorizedHandler`
+
+```ts
+export declare function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void;
 ```
 
 ## `.:subscribe`

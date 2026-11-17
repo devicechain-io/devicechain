@@ -28,6 +28,10 @@ type armCall struct {
 	since time.Time
 }
 
+func (f *fakeArmer) CarryRaised(map[string]string, func(core.SeriesKey) bool) int { return 0 }
+func (f *fakeArmer) IsRaised(core.SeriesKey) bool                                 { return false }
+func (f *fakeArmer) ClearRaisedIfNotAfter(core.SeriesKey, time.Time)              {}
+
 func newFakeArmer() *fakeArmer { return &fakeArmer{armed: map[core.SeriesKey]time.Time{}} }
 
 func (f *fakeArmer) SetExpected(key core.SeriesKey, since time.Time) {
@@ -106,7 +110,7 @@ func TestArmerArmsWhenRuleThenDeviceArrive(t *testing.T) {
 	fe := newFakeArmer()
 	d := NewDeadmanArmer(reg, fe)
 
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}, nil)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(50)}, true)
 
 	want := core.SeriesKey{Rule: ComposeRuleID("t1", "p1@v1/r1"), Series: "dev"}
@@ -130,7 +134,7 @@ func TestArmerArmsWhenDeviceThenRuleArrive(t *testing.T) {
 	if got := fe.armedKeys(); len(got) != 0 {
 		t.Fatalf("device with unknown active version should defer arming, got %v", got)
 	}
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(200)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(200)}, nil)
 	want := core.SeriesKey{Rule: ComposeRuleID("t1", "p1@v1/r1"), Series: "dev"}
 	if got := fe.armedKeys(); len(got) != 1 || got[0] != want || !fe.armed[want].Equal(ts(200)) {
 		t.Fatalf("rule fact did not arm the deferred device at base 200: %v (%v)", got, fe.armed)
@@ -142,7 +146,7 @@ func TestArmerDeleteDisarms(t *testing.T) {
 	reg := NewRuleRegistry([]ScopedRule{absScoped("t1", "p1@v1", "r1")})
 	fe := newFakeArmer()
 	d := NewDeadmanArmer(reg, fe)
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}, nil)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(50)}, true)
 
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev"}, false)
@@ -150,7 +154,7 @@ func TestArmerDeleteDisarms(t *testing.T) {
 		t.Fatalf("deleted device still armed: %v", got)
 	}
 	// A subsequent publish must not resurrect the deleted device (dropped from byProfile).
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(300)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(300)}, nil)
 	if got := fe.armedKeys(); len(got) != 0 {
 		t.Fatalf("publish re-armed a deleted device: %v", got)
 	}
@@ -162,8 +166,8 @@ func TestArmerRetypeMovesProfile(t *testing.T) {
 	reg := NewRuleRegistry([]ScopedRule{absScoped("t1", "p1@v1", "r1"), absScoped("t1", "p2@v1", "rX")})
 	fe := newFakeArmer()
 	d := NewDeadmanArmer(reg, fe)
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)})
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p2", ActiveVersionToken: "p2@v1", PublishedAt: ts(100)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}, nil)
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p2", ActiveVersionToken: "p2@v1", PublishedAt: ts(100)}, nil)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(50)}, true)
 
 	// Re-type to p2 (membership began now); old p1 arming removed, new p2 arming added.
@@ -181,11 +185,11 @@ func TestArmerVersionTransitionDisarmsSuperseded(t *testing.T) {
 	reg := NewRuleRegistry([]ScopedRule{absScoped("t1", "p1@v1", "r1"), absScoped("t1", "p1@v2", "r1")})
 	fe := newFakeArmer()
 	d := NewDeadmanArmer(reg, fe)
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}, nil)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "devA", ProfileToken: "p1", ExpectedSince: ts(10)}, true)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "devB", ProfileToken: "p1", ExpectedSince: ts(10)}, true)
 
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: ts(400)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: ts(400)}, nil)
 	got := fe.armedKeys()
 	wantA := core.SeriesKey{Rule: ComposeRuleID("t1", "p1@v2/r1"), Series: "devA"}
 	wantB := core.SeriesKey{Rule: ComposeRuleID("t1", "p1@v2/r1"), Series: "devB"}
@@ -206,13 +210,13 @@ func TestArmerZeroPublishedAtSkips(t *testing.T) {
 	reg := NewRuleRegistry([]ScopedRule{absScoped("t1", "p1@v1", "r1")})
 	fe := newFakeArmer()
 	d := NewDeadmanArmer(reg, fe)
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1"}) // zero PublishedAt
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1"}, nil) // zero PublishedAt
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(10)}, true)
 	if len(fe.sets) != 0 {
 		t.Fatalf("zero publishedAt should skip arming, got %v", fe.sets)
 	}
 	// A subsequent real publish (non-zero) then arms the device.
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(500)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(500)}, nil)
 	key := core.SeriesKey{Rule: ComposeRuleID("t1", "p1@v1/r1"), Series: "dev"}
 	if got := fe.armedKeys(); len(got) != 1 || got[0] != key || !fe.armed[key].Equal(ts(500)) {
 		t.Fatalf("real publish did not arm the previously-skipped device at base 500: %v (%v)", got, fe.armed)
@@ -228,12 +232,12 @@ func TestArmerVersionTransitionToRulelessVersionDisarms(t *testing.T) {
 	reg := NewRuleRegistry([]ScopedRule{absScoped("t1", "p1@v1", "r1"), thrScoped("t1", "p1@v2", "r1")})
 	fe := newFakeArmer()
 	d := NewDeadmanArmer(reg, fe)
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}, nil)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(10)}, true)
 	if len(fe.armedKeys()) != 1 {
 		t.Fatalf("setup: device should be armed under v1")
 	}
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: ts(400)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: ts(400)}, nil)
 	if got := fe.armedKeys(); len(got) != 0 {
 		t.Fatalf("transition to a ruleless version left the v1 dead-man armed: %v", got)
 	}
@@ -249,7 +253,7 @@ func TestArmerFleetArmUsesPerDeviceExpectedSince(t *testing.T) {
 	d := NewDeadmanArmer(reg, fe)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "young", ProfileToken: "p1", ExpectedSince: ts(900)}, true)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "old", ProfileToken: "p1", ExpectedSince: ts(10)}, true)
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}, nil)
 	young := core.SeriesKey{Rule: ComposeRuleID("t1", "p1@v1/r1"), Series: "young"}
 	old := core.SeriesKey{Rule: ComposeRuleID("t1", "p1@v1/r1"), Series: "old"}
 	if !fe.armed[young].Equal(ts(900)) { // expectedSince 900 > publishedAt 100
@@ -267,14 +271,14 @@ func TestArmerRetypeToUnknownProfileThenPublish(t *testing.T) {
 	reg := NewRuleRegistry([]ScopedRule{absScoped("t1", "p1@v1", "r1"), absScoped("t1", "p2@v1", "rX")})
 	fe := newFakeArmer()
 	d := NewDeadmanArmer(reg, fe)
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}, nil)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(50)}, true)
 	// Re-type to p2 whose active version is not yet known: old p1 arming removed, new deferred.
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p2", ExpectedSince: ts(500)}, true)
 	if got := fe.armedKeys(); len(got) != 0 {
 		t.Fatalf("re-type to an unknown-active profile should defer, got %v", got)
 	}
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p2", ActiveVersionToken: "p2@v1", PublishedAt: ts(600)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p2", ActiveVersionToken: "p2@v1", PublishedAt: ts(600)}, nil)
 	want := core.SeriesKey{Rule: ComposeRuleID("t1", "p2@v1/rX"), Series: "dev"}
 	if got := fe.armedKeys(); len(got) != 1 || got[0] != want || !fe.armed[want].Equal(ts(600)) {
 		t.Fatalf("p2 publish did not arm the re-typed deferred device at base 600: %v (%v)", got, fe.armed)
@@ -291,7 +295,7 @@ func TestArmerAgainstRealEngine(t *testing.T) {
 	eng := core.NewEngine(reg.Cores(), 0) // engine holds the absence rule (contract: engine-first)
 	d := NewDeadmanArmer(reg, eng)
 
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}, nil)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(50)}, true)
 	// Grace base = max(50,100)=100, Timeout 10 → deadline 110. Advance past it.
 	eng.Advance(ts(111))
@@ -324,7 +328,7 @@ func TestArmerReconcileRebuildsAndSweeps(t *testing.T) {
 	d := NewDeadmanArmer(reg, fe)
 	d.Reconcile(
 		[]RosterEntry{{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(50)}},
-		[]ActiveEntry{{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}},
+		[]ActiveEntry{{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}}, nil,
 	)
 	live := core.SeriesKey{Rule: ComposeRuleID("t1", "p1@v1/r1"), Series: "dev"}
 	if got := fe.armedKeys(); len(got) != 1 || got[0] != live {
@@ -440,7 +444,7 @@ func TestReconcileSweepsHeartbeatAbsenceTimers(t *testing.T) {
 	d := NewDeadmanArmer(reg, fe)
 	d.Reconcile(
 		[]RosterEntry{{Tenant: "t1", DeviceToken: "live", ProfileToken: "p1", ExpectedSince: ts(50)}},
-		[]ActiveEntry{{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}},
+		[]ActiveEntry{{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}}, nil,
 	)
 	var goneSwept, liveSwept bool
 	for _, k := range fe.rms {
@@ -469,7 +473,7 @@ func TestArmerDisabledDeviceIsDisarmedAndReArmedOnEnable(t *testing.T) {
 	reg := NewRuleRegistry([]ScopedRule{absScoped("t1", "p1@v1", "r1")})
 	fe := newFakeArmer()
 	d := NewDeadmanArmer(reg, fe)
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}, nil)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(50)}, true)
 	key := core.SeriesKey{Rule: ComposeRuleID("t1", "p1@v1/r1"), Series: "dev"}
 	if !d.AbsenceLive(key) {
@@ -485,7 +489,7 @@ func TestArmerDisabledDeviceIsDisarmedAndReArmedOnEnable(t *testing.T) {
 		t.Fatal("a heartbeat-armed absence for a disabled device would still publish")
 	}
 	// A later publish of the profile must not re-arm it.
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(700)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(700)}, nil)
 	if got := fe.armedKeys(); len(got) != 0 {
 		t.Fatalf("a publish re-armed a disabled device: %v", got)
 	}

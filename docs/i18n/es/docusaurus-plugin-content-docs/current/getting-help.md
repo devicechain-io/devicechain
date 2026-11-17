@@ -10,6 +10,9 @@ una página no te dijo lo que necesitabas, cuéntanoslo. Un informe temprano e i
 que uno pulido y tardío, porque la hoja de ruta y esta documentación cambian en respuesta a lo que la gente
 se encuentra.
 
+Para incidentes operativos, empieza por [Solución de problemas y operaciones habituales](./deployment/troubleshooting.md)
+para encontrar las comprobaciones y el procedimiento de recuperación según el síntoma.
+
 ## Adónde acudir
 
 | Lo que tienes | Adónde va |

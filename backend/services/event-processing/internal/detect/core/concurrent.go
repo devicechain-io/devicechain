@@ -377,6 +377,16 @@ func (c *ConcurrentSharded) UpsertRule(r Rule) { c.direct(func() { c.s.UpsertRul
 // caller that removes a rule between an operation and its Drain can tell, and none does.
 func (c *ConcurrentSharded) RemoveRule(id string) { c.direct(func() { c.s.RemoveRule(id) }) }
 
+// CarryRaised moves latches across shards with all workers idle.
+func (c *ConcurrentSharded) CarryRaised(successor map[string]string, skip func(SeriesKey) bool) int {
+	return directResult(c, func() int { return c.s.CarryRaised(successor, skip) })
+}
+
+// IsRaised reads with all workers idle, like the publish path's other queries.
+func (c *ConcurrentSharded) IsRaised(key SeriesKey) bool {
+	return directResult(c, func() bool { return c.s.IsRaised(key) })
+}
+
 // RemoveMatching is Sharded.RemoveMatching, at a barrier.
 func (c *ConcurrentSharded) RemoveMatching(match func(ruleID string) bool) int {
 	return directResult(c, func() int { return c.s.RemoveMatching(match) })
@@ -494,6 +504,11 @@ func (c *ConcurrentSharded) RemoveExpected(key SeriesKey) {
 // ClearRaised drops a raised latch in the owning shard, in band.
 func (c *ConcurrentSharded) ClearRaised(key SeriesKey) {
 	c.ownerAsync(c.ownerOf(key.Rule, key.Series), func(e *Engine) { e.ClearRaised(key) })
+}
+
+// ClearRaisedIfNotAfter checks and clears together in the owning shard.
+func (c *ConcurrentSharded) ClearRaisedIfNotAfter(key SeriesKey, at time.Time) {
+	c.ownerCall(c.ownerOf(key.Rule, key.Series), func(e *Engine) { e.ClearRaisedIfNotAfter(key, at) })
 }
 
 // Collect returns the detections the shards have made so far without waiting, in exactly the order
