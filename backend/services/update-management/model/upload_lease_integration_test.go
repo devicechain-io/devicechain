@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/blob"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -41,7 +42,9 @@ func TestUploadLeaseOwnershipOnPostgres(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, db.Close())
 		})
-		api := NewApi(mgr, nil, Limits{MaxArtifactBytes: 1000, ConfiguredMaxArtifactBytes: 1000, MaxTenantArtifactBytes: 1000})
+		store, err := blob.New(ctx, blob.Config{Backend: blob.BackendFilesystem, Directory: t.TempDir()}, instance)
+		require.NoError(t, err)
+		api := NewApi(mgr, store, Limits{MaxArtifactBytes: 1000, ConfiguredMaxArtifactBytes: 1000, MaxTenantArtifactBytes: 1000})
 		api.Profiles = &fakeProfiles{known: map[string][]string{"acme": {"gateway"}}}
 		return api
 	})
