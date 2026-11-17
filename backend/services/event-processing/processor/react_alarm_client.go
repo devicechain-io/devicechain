@@ -64,6 +64,8 @@ func (c *alarmClient) Dispatch(ctx context.Context, req react.AlarmRequest) erro
 		Severity:     req.Severity,
 		Value:        req.Value,
 		OccurredTime: req.OccurredTime,
+
+		RequiresPosition: req.RequiresPosition,
 	})
 	if err != nil {
 		return fmt.Errorf("react: marshal alarm request for device %q: %w", req.DeviceToken, err)

@@ -432,6 +432,13 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 		return nil, nil, err
 	}
 
+	// An alarm a geofence rule raised is not read by a caller without location:read, on every
+	// alarm read path (model/position_withholding.go). Registered here, on the one handle every
+	// Api of the process reads through, so no read path can be built without it.
+	if err := model.RegisterPositionWithholding(rdbm.Database); err != nil {
+		return nil, nil, err
+	}
+
 	// Wrap api around rdb manager, then wrap a caching decorator over it for the hot
 	// inbound-event resolution path.
 	api := model.NewApi(rdbm)

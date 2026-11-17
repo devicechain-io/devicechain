@@ -909,7 +909,8 @@ CREATE TABLE "device-management".alarms (
  last_value numeric,
  contributors jsonb,
  contributor_version bigint DEFAULT 0 NOT NULL,
- scope_anchors text[]
+ scope_anchors text[],
+ position_derived boolean
 );
 CREATE TABLE "device-management".area_types (
  id bigint NOT NULL,

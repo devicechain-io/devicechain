@@ -38,6 +38,7 @@ type edgeArgs struct {
 	edge, severity              string
 	value                       *float64
 	occurredTime                time.Time
+	requiresPosition            bool
 }
 
 func fptr(v float64) *float64 { return &v }
@@ -52,9 +53,9 @@ func (f *fakeAlarmApi) RaiseAlarm(context.Context, uint, string, string, string,
 	return nil
 }
 
-func (f *fakeAlarmApi) ApplyAlarmContributorEdge(_ context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time) error {
+func (f *fakeAlarmApi) ApplyAlarmContributorEdge(_ context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time, requiresPosition bool) error {
 	f.edgeCalls++
-	f.lastEdge = edgeArgs{deviceId, alarmKey, metricKey, ruleID, edge, severity, value, occurredTime}
+	f.lastEdge = edgeArgs{deviceId, alarmKey, metricKey, ruleID, edge, severity, value, occurredTime, requiresPosition}
 	return f.edgeErr
 }
 
@@ -128,6 +129,24 @@ func TestRaiseAlarmConsumerApplies(t *testing.T) {
 	rcNil.handle(context.Background(), raiseMsg(t, "acme", req, 0, &fakeAck{}))
 	if apiNil.edgeCalls != 1 || apiNil.lastEdge.value != nil {
 		t.Fatalf("a value-less request must apply with a nil value; got calls=%d value=%v", apiNil.edgeCalls, apiNil.lastEdge.value)
+	}
+}
+
+// TestRaiseAlarmConsumerCarriesPositionDependency: the wire's requiresPosition reaches the
+// integrator on both edges, from the real wire bytes, and its absence (a producer older than the
+// field) reads as false.
+func TestRaiseAlarmConsumerCarriesPositionDependency(t *testing.T) {
+	for _, c := range []struct {
+		edge string
+		set  bool
+	}{{model.AlarmEdgeRaised, true}, {model.AlarmEdgeResolved, true}, {model.AlarmEdgeRaised, false}} {
+		api := &fakeAlarmApi{devices: []*model.Device{{}}}
+		req := validReq()
+		req.Edge, req.RequiresPosition = c.edge, c.set
+		newTestConsumer(api).handle(context.Background(), raiseMsg(t, "acme", req, 0, &fakeAck{}))
+		if api.edgeCalls != 1 || api.lastEdge.requiresPosition != c.set {
+			t.Fatalf("%s edge, requiresPosition=%v: calls=%d got %v", c.edge, c.set, api.edgeCalls, api.lastEdge.requiresPosition)
+		}
 	}
 }
 

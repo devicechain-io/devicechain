@@ -65,6 +65,9 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 
 - 读取设备凭据需要 `device:write`，不是 `device:read`。
 - `latestLocation` 需要 `location:read`，其他同属 `device-state` 的接口需要 `state:read`。
+- 由检测地理围栏包含关系的规则触发的告警，只有同时拥有 `location:read` 的调用方才能读取：其触发和清除时间就是设备进入和离开围栏的时间。
+  没有该权限时，告警查询、告警计数、`alarmDispositions` 和 `alarmStream` 都会略去该告警，`acknowledgeAlarm`、`clearAlarm`
+  和 `setAlarmDisposition` 的响应与未知令牌相同。同一规则的检测结果也按相同条件从 `detectionStream` 中略去。
 - 固定资产的安装位置（`Device.installedPosition`、`Asset.installedPosition`）需要 `location:installed:read`，
   而 `location:read` 包含该权限。这是安装数据，绝不会回退到设备上报的位置。
   调用者若两项权限都没有，读取任何设备和资产时都会得到 `positionWithheld: true`，无论它是否有位置；

@@ -59,8 +59,12 @@ import (
 // still-breaching alarm is transient by design (pure reference counting: the condition still holds). A
 // RESOLVE edge can therefore emit a RAISED reactivation; whether operator clear should instead tombstone
 // the set is a slice-6 product call.
+//
+// requiresPosition is RaiseAlarmRequest.RequiresPosition: the contributing rule tests geofence
+// containment, so the alarm is marked position-derived (Alarm.PositionDerived) by the same write
+// that folds the edge, and stays so.
 func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
-	alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time) error {
+	alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time, requiresPosition bool) error {
 	if alarmKey == "" || ruleID == "" {
 		return fmt.Errorf("alarm-edge requires a non-empty alarm key and rule id")
 	}
@@ -82,7 +86,7 @@ func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
 	const maxCASAttempts = 5
 	var err error
 	for attempt := 0; attempt < maxCASAttempts; attempt++ {
-		if err = api.applyContributorEdgeOnce(ctx, deviceId, alarmKey, metricKey, ruleID, raised, severity, value, occurredTime); !errors.Is(err, errAlarmContributorConflict) {
+		if err = api.applyContributorEdgeOnce(ctx, deviceId, alarmKey, metricKey, ruleID, raised, severity, value, occurredTime, requiresPosition); !errors.Is(err, errAlarmContributorConflict) {
 			return err // success (nil), an idempotent no-op (nil), or a non-conflict error
 		}
 	}
@@ -93,7 +97,7 @@ func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
 // errAlarmContributorConflict when its optimistic CAS loses to a concurrent write, which the caller
 // retries. Split out so the CAS retry re-reads the row (and its fresh version) each attempt.
 func (api *Api) applyContributorEdgeOnce(ctx context.Context, deviceId uint,
-	alarmKey, metricKey, ruleID string, raised bool, severity string, value *float64, occurredTime time.Time) error {
+	alarmKey, metricKey, ruleID string, raised bool, severity string, value *float64, occurredTime time.Time, requiresPosition bool) error {
 	existing, err := api.alarmByOriginatorKey(ctx, string(entity.TypeDevice), deviceId, alarmKey)
 	if err != nil {
 		return err
@@ -129,9 +133,9 @@ func (api *Api) applyContributorEdgeOnce(ctx context.Context, deviceId uint,
 
 	if existing == nil {
 		return api.createAlarmFromContributors(ctx, deviceId, alarmKey, metricKey,
-			newSeverity, anyActive, lastValue, encoded, occurredTime)
+			newSeverity, anyActive, lastValue, encoded, occurredTime, requiresPosition)
 	}
-	return api.updateAlarmFromContributors(ctx, existing, newSeverity, anyActive, lastValue, encoded, occurredTime)
+	return api.updateAlarmFromContributors(ctx, existing, newSeverity, anyActive, lastValue, encoded, occurredTime, requiresPosition)
 }
 
 // createAlarmFromContributors persists a brand-new alarm row for a device that had none. The common
@@ -142,7 +146,7 @@ func (api *Api) applyContributorEdgeOnce(ctx context.Context, deviceId uint,
 // alarm never became visibly active.
 func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 	alarmKey, metricKey, severity string, anyActive bool, lastValue sql.NullFloat64,
-	contributors []byte, occurredTime time.Time) error {
+	contributors []byte, occurredTime time.Time, requiresPosition bool) error {
 	// The scope stamp (ADR-081): the device's owners NOW, at the alarm's first raise. Read
 	// before the row exists so a failed read leaves no unstamped alarm behind — the edge
 	// stays unacked and the redelivery stamps it. An unstamped alarm would be invisible to
@@ -163,6 +167,9 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 		LastValue:          lastValue,
 		Contributors:       contributors,
 		ContributorVersion: 1,
+	}
+	if requiresPosition {
+		created.PositionDerived = &requiresPosition
 	}
 	if anyActive {
 		created.State = string(AlarmStateActive)
@@ -198,7 +205,7 @@ var errAlarmContributorConflict = errors.New("alarm-edge: concurrent contributor
 // (CLEARED→ACTIVE, resets ack), escalate/de-escalate or value-update (ACTIVE→ACTIVE), clear
 // (ACTIVE→CLEARED), and a tombstone-only contributor update that leaves the row CLEARED.
 func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm,
-	severity string, anyActive bool, lastValue sql.NullFloat64, contributors []byte, occurredTime time.Time) error {
+	severity string, anyActive bool, lastValue sql.NullFloat64, contributors []byte, occurredTime time.Time, requiresPosition bool) error {
 	prevState := existing.State
 	prevSeverity := existing.Severity
 	prevVersion := existing.ContributorVersion
@@ -206,6 +213,11 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 	updates := map[string]interface{}{
 		"contributors":        contributors,
 		"contributor_version": prevVersion + 1,
+	}
+	// Sticky: a geofence contributor marks the alarm in the same CAS write that folds its edge, and
+	// no edge ever unmarks it (Alarm.PositionDerived).
+	if requiresPosition {
+		updates["position_derived"] = true
 	}
 	// A value rides only on an edge that HAS one (a raise carrying a reading). When the edge carries
 	// none (every resolve, and a silence-driven raise), keep the row's existing last value rather than
@@ -287,6 +299,9 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 		// The CAS lost: a concurrent fold or operator transition changed (state, contributor_version)
 		// since the read. Retry — do NOT drop the edge (the accumulator would lose it forever).
 		return errAlarmContributorConflict
+	}
+	if requiresPosition {
+		existing.PositionDerived = &requiresPosition
 	}
 	if mutate != nil {
 		mutate()

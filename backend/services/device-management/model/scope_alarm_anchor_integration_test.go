@@ -74,7 +74,7 @@ func (r anchorRig) edge(t *testing.T, device, key string, edge string, sev Alarm
 	t.Helper()
 	v := 99.0
 	require.NoError(t, r.api.ApplyAlarmContributorEdge(r.operator, r.devices[device], key, "temp", "rule-"+key,
-		edge, string(sev), &v, at))
+		edge, string(sev), &v, at, false))
 }
 
 func anchorKeys(t *testing.T, r anchorRig, ctx context.Context, kind, token string) []string {

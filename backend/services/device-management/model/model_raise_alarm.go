@@ -50,6 +50,13 @@ type RaiseAlarmRequest struct {
 	// it was the last). The consumer routes on it (comparing the shared constant, never a literal).
 	// Absent decodes as raised (the producer always sets it explicitly).
 	Edge string `json:"edge,omitempty"`
+	// RequiresPosition is set when the raising rule tests geofence containment (judged by
+	// event-processing's compiler, the same judgement that withholds the rule's live detections
+	// from a caller without location:read). The integrator records it on the alarm
+	// (Alarm.PositionDerived), and every read of the alarm by such a caller then withholds it:
+	// the alarm's raise and clear times are the device's entry into and exit from the fence.
+	// Absent decodes as false, which is what a producer older than the field sends.
+	RequiresPosition bool `json:"requiresPosition,omitempty"`
 	// MetricKey is the metric the rule watched, stamped onto the alarm row for context. May be
 	// empty for a rule whose shape carries no single metric (e.g. a raw-CEL leaf).
 	MetricKey string `json:"metricKey,omitempty"`

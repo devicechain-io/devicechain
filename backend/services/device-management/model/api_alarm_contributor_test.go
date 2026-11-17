@@ -47,14 +47,14 @@ const dev = uint(42)
 func raiseEdge(t *testing.T, api *Api, ctx context.Context, key, rule, sev string, sec int) {
 	t.Helper()
 	v := 1.0
-	if err := api.ApplyAlarmContributorEdge(ctx, dev, key, "temperature", rule, AlarmEdgeRaised, sev, &v, tsec(sec)); err != nil {
+	if err := api.ApplyAlarmContributorEdge(ctx, dev, key, "temperature", rule, AlarmEdgeRaised, sev, &v, tsec(sec), false); err != nil {
 		t.Fatalf("raise %s@%d: %v", rule, sec, err)
 	}
 }
 
 func resolveEdge(t *testing.T, api *Api, ctx context.Context, key, rule string, sec int) {
 	t.Helper()
-	if err := api.ApplyAlarmContributorEdge(ctx, dev, key, "temperature", rule, AlarmEdgeResolved, "", nil, tsec(sec)); err != nil {
+	if err := api.ApplyAlarmContributorEdge(ctx, dev, key, "temperature", rule, AlarmEdgeResolved, "", nil, tsec(sec), false); err != nil {
 		t.Fatalf("resolve %s@%d: %v", rule, sec, err)
 	}
 }
@@ -220,7 +220,7 @@ func TestIntegratorCASConflictRetries(t *testing.T) {
 	// Folding another edge onto the STALE snapshot must lose the CAS and signal retry.
 	cs := contributorSet{"r1": {Tier: "MAJOR", DecisionTs: tsec(10), Active: true}, "r2": {Tier: "CRITICAL", DecisionTs: tsec(15), Active: true}}
 	enc, _ := cs.encode()
-	err := api.updateAlarmFromContributors(ctx, stale, "CRITICAL", true, sql.NullFloat64{}, enc, tsec(15))
+	err := api.updateAlarmFromContributors(ctx, stale, "CRITICAL", true, sql.NullFloat64{}, enc, tsec(15), false)
 	if !errors.Is(err, errAlarmContributorConflict) {
 		t.Fatalf("a stale-version write must return the retryable conflict error; got %v", err)
 	}
@@ -235,7 +235,7 @@ func TestIntegratorResolvePreservesLastValue(t *testing.T) {
 	// MAJOR (no value), then CRITICAL carrying value 91 → row last_value 91, severity CRITICAL.
 	raiseEdge(t, api, ctx, "k", "major", "MAJOR", 10)
 	v := 91.0
-	if err := api.ApplyAlarmContributorEdge(ctx, dev, "k", "temperature", "crit", AlarmEdgeRaised, "CRITICAL", &v, tsec(11)); err != nil {
+	if err := api.ApplyAlarmContributorEdge(ctx, dev, "k", "temperature", "crit", AlarmEdgeRaised, "CRITICAL", &v, tsec(11), false); err != nil {
 		t.Fatalf("raise crit: %v", err)
 	}
 	if a := loadAlarm(t, api, ctx, "k"); !a.LastValue.Valid || a.LastValue.Float64 != 91 {

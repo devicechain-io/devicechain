@@ -41,7 +41,7 @@ func (a *laneApi) DevicesByToken(_ context.Context, tokens []string) ([]*model.D
 	return []*model.Device{d}, nil
 }
 
-func (a *laneApi) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, alarmKey, _, _, _, severity string, _ *float64, _ time.Time) error {
+func (a *laneApi) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, alarmKey, _, _, _, severity string, _ *float64, _ time.Time, _ bool) error {
 	tenant, _ := core.TenantFromContext(ctx)
 	id := fmt.Sprintf("%s/%d/%s", tenant, deviceId, alarmKey)
 	a.mu.Lock()

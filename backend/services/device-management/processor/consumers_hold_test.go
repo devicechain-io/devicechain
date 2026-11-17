@@ -49,11 +49,11 @@ type failingEdgeApi struct {
 	calls    atomic.Int32
 }
 
-func (f *failingEdgeApi) ApplyAlarmContributorEdge(ctx context.Context, d uint, a, m, r, e, s string, v *float64, o time.Time) error {
+func (f *failingEdgeApi) ApplyAlarmContributorEdge(ctx context.Context, d uint, a, m, r, e, s string, v *float64, o time.Time, p bool) error {
 	if f.calls.Add(1) <= f.failures {
 		return f.err
 	}
-	return f.fakeAlarmApi.ApplyAlarmContributorEdge(ctx, d, a, m, r, e, s, v, o)
+	return f.fakeAlarmApi.ApplyAlarmContributorEdge(ctx, d, a, m, r, e, s, v, o, p)
 }
 
 // THE REGRESSION: an alarm edge is edge-TRIGGERED, so a dropped raise is never re-emitted. A

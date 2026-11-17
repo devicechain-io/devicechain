@@ -75,6 +75,11 @@ llamador. Algunas autoridades no coinciden con la intuición:
 - Leer credenciales de dispositivo requiere `device:write`, no `device:read`.
 - `latestLocation` requiere `location:read`, mientras que sus hermanas en `device-state` requieren
   `state:read`.
+- Una alarma generada por una regla que comprueba la pertenencia a una geocerca solo la lee quien además
+  tiene `location:read`: sus horas de activación y de borrado son la entrada y la salida del dispositivo de la
+  geocerca. Sin ella, las consultas de alarmas, los recuentos de alarmas, `alarmDispositions` y `alarmStream`
+  omiten la alarma, y `acknowledgeAlarm`, `clearAlarm` y `setAlarmDisposition` responden como ante un token
+  desconocido. Las detecciones de esa misma regla se omiten de `detectionStream` en los mismos términos.
 - La posición instalada de un activo fijo (`Device.installedPosition`, `Asset.installedPosition`) requiere
   `location:installed:read`, que está incluida en `location:read`. Es un dato de instalación y nunca recurre
   a una posición comunicada por el dispositivo. Sin ninguno de esos permisos, recibes `positionWithheld: true`
