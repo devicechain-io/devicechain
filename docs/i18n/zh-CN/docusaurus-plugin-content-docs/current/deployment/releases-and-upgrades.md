@@ -510,19 +510,28 @@ dcctl bootstrap local devicechain
 
 ## 近期版本 {#recent-releases}
 
-最近三个次要版本（`v1.6`、`v1.5` 和 `v1.4`）按从新到旧的顺序提供完整说明。下方还保留了 `v0.27.0` 至 `v0.24.0` 的详细说明。
+此处完整记录正在开发的版本（`v1.7`）及最近的三个次版本（`v1.6`、`v1.5` 和 `v1.4`），按从新到旧排列。下方还保留 `v0.27.0` 至 `v0.24.0` 的详细说明。
 
-### v1.7.0 — 客户端认证与查询指标 {#v170-upgrade}
+### v1.7.0 — 开发中 {#v170-upgrade}
 
-新增 `devicechain_svcclient_queries_total{result="ok|error"}` 和
-`devicechain_svcclient_query_duration_seconds`，统计通过调用者范围检查后的调用，
-包括本地校验和获取令牌的时间。`devicechain_svcclient_service_token_mint_duration_seconds`
-统计实际服务令牌签发尝试的耗时，包括失败，不计缓存命中或等待共享签发的调用者。
-`devicechain_userclient_logins_total{result="ok|error|mfa_challenge"}` 统计 login
-交换；MFA 验证和租户选择是独立操作，不计入该指标。
-`devicechain_userclient_refreshes_total{result="ok|error"}` 统计刷新交换，
-在回退到 login 之前记录结果。所有新增序列从零开始，不含租户、凭据、查询或端点标签。
-滚动升级无需修改配置或数据库；各进程升级后即可提供这些指标。
+`v1.7.0` 是从 `v1.6.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[滚动升级](#rolling-upgrades)。这些说明针对正在开发的版本，并会持续补充直到发布。
+
+#### 升级到 v1.7.0 前 {#v170-before-upgrade}
+
+
+- **`dcctl install`、`dcctl bootstrap` 和 `dcctl preflight` 会检查 OpenTofu 或 Terraform 的版本。** 预检现在会拒绝低于 dcctl 内置 OpenTofu 配置所声明的 `required_version`（目前为 `>= 1.10`）的二进制文件、预发布版本，以及无法读取版本的二进制文件。此前预检只检查二进制文件是否存在，因此使用 OpenTofu 1.9 的安装会在已经更新 Operator 之后才在 `tofu init` 处失败。两者都已安装时仍优先使用 OpenTofu，检查的也是它。运行 v1.7.0 的 `dcctl install` 之前，请安装 1.10 或更高的稳定版 OpenTofu 或 Terraform。`--skip-preflight` 仍会跳过此检查。
+
+#### v1.7.0 新增内容 {#v170-whats-new}
+
+#### 删除通知可靠送达 {#v170-deletion-announcements}
+
+- 删除设备、客户、区域、资产或分组时，发给其他服务的通知现在与删除操作在同一个数据库事务中记录，`device-management` 会持续发布该通知，直到消息代理接受为止。此前，因代理中断或在不恰当的时刻重启而丢失的通知永远不会再发送，已删除实体的仪表板共享、事件锚点和检测状态因此可能残留。
+- 无论通知多晚发布，都携带删除操作发生的时间。
+- 在滚动升级期间新旧 Pod 并存时，由 `v1.6` Pod 处理的删除仍按旧方式通知。
+- 无需更改配置。
+
+
+- **MCP 服务器每进程 64 个进行中请求的上限现在可以达到，超出的请求会收到 HTTP 429。** 共享请求体预算此前只能容纳 63 个最大尺寸的请求体，因此第 64 个并发请求会在达到 MCP 上限之前收到带 `Retry-After: 1` 的 HTTP 503。该预算现在可容纳 64 个（增加 64 字节），超出上限的请求会收到带 `Retry-After: 1` 的 HTTP 429，与文档一致。每个调用者 4 个进行中请求的上限和 1 MiB 的请求体上限保持不变。
 
 ### v1.6.0 — 更严格的权限检查，代理重载时设备保持连接 {#v160-upgrade}
 
@@ -582,6 +591,7 @@ dcctl upgrade local devicechain --version v1.6.0
 需要采取的操作，按执行顺序排列：
 
 - **升级说明：工具。** 在运行 `dcctl` 的机器上安装 OpenTofu 1.10 或更新版本（也可使用 Terraform 1.10 或更新版本）；预检只检查是否存在，不检查版本。使用 v1.6.0 工具按集群设置执行安装，再升级每个实例。不支持降级。
+- **升级说明：broker 会重启。** 此次升级会替换 broker 镜像，因此每个 broker pod 都会重启。在 `--mqtt-fail-closed` 关闭（默认）时，broker 在某个 stream 切换 leader 期间已确认的 QoS 1 消息可能丢失。如果设备不能丢失已确认的消息，请在升级前将其开启（`dcctl upgrade --mqtt-fail-closed`）（[fail-closed MQTT](./observability.md#mqtt-fail-closed)）。
 - **升级说明：`dcctl install` 预检。** 在保留 `ingress-nginx` 控制器的集群上，只要该类的任何 Ingress 带有 `*-snippet` 注解，安装就会拒绝继续。请先升级所属实例或移除该注解（[详情](#v160-nginx-snippets-off)）。
 
 **重启前修正配置。** 检查手工编辑的实例配置；无效的服务设置会阻止启动。以下服务键位于 `functionalAreas.<area>.config` 下。
@@ -602,7 +612,7 @@ dcctl upgrade local devicechain --version v1.6.0
 
 **滚动期间与完成后。**
 
-- **在整个 v1.5 → v1.6 滚动更新期间保持 `infrastructure.nats.shardGroups` 缺省。** 如果 `v1.5` Pod 在滚动更新中加载新配置，会将这个新键作为未知字段拒绝。所有 Pod 升级完成后再启用。配置该块时，`count` 必须为 2–16；后缀必须唯一且仅限 `inbound-events` 和 `resolved-events`；`placementTags` 的键必须为 1 到 `count - 1` 的组编号，标签字符串不得为空或仅含空白。无效配置块会被拒绝。`dcctl` 接受的范围更窄：参见[可选的 NATS 分片组](#v160-nats-shard-groups)。
+- **在整个 v1.5 → v1.6 滚动更新期间保持 `infrastructure.nats.shardGroups` 缺省。** 如果 `v1.5` Pod 在滚动更新中加载新配置，会将这个新键作为未知字段拒绝。所有 Pod 升级完成后再启用。配置该块时，`count` 必须为 2–16；后缀必须唯一且仅限 `inbound-events` 和 `resolved-events`；`placementTags` 的键必须为 `0..count-1` 范围内的组编号，包括现有的第零组，标签字符串不得为空或仅含空白。`dcctl` 为每个组生成 `dc-nats-<group>` 放置标签，包括 `dc-nats-0`。无效配置块会被拒绝。`dcctl` 接受的范围更窄：参见[可选的 NATS 分片组](#v160-nats-shard-groups)。
 
 - **每个实体和作用域中的属性键只保留一个值。** 升级会合并并发首次写入产生的重复活动行，保留 ID 最小的行，并排队修复组成员关系和配置。创建索引期间会短暂阻塞属性写入。在新旧副本共存期间，旧副本可能拒绝发生竞争的首次写入；请重试。无需更改配置。
 

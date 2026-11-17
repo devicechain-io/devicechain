@@ -15,9 +15,10 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
-const prevRelease = "v1.5.0"
+const prevRelease = "v1.6.0"
 
-// Frozen from v1.5.0:backend/core/cmddownlink/wire.go:ResponseEnvelope.
+// Source commit: d5b2e7b42758f15e5bd4873f484801a1525aad45 (all v1.6.0 citations below).
+// Frozen from v1.6.0:backend/core/cmddownlink/wire.go:ResponseEnvelope.
 // Field order and tags are verbatim; PublishResponseContext marshals this struct.
 type responseEnvelopePrev struct {
 	CommandToken string  `json:"commandToken"`
@@ -49,6 +50,10 @@ const (
 // reasonPayload encodes {"reason":"X"}; success maps marshal with sorted keys.
 // Variable error inputs are pinned to concrete examples: ErrBadLink, an out-of-range
 // fPort, HTTP 400 with no gRPC name, and the egress guard's ErrBlocked.
+// Re-generated from the source commit above by invoking Adapter.handle/awaitAck,
+// AckFeed.handle/Sweep and capturing ResponseWriter message bytes in a disposable
+// lpwan test. All 23 cases compared byte for byte unchanged; none added or removed.
+// HTTP 400 used ChirpStack.Enqueue; the blocked error used classifyTransport.
 // Their text originates in adapter.go, params.go:ParamError.Error/ParseParams and
 // chirpstack.go:ChirpStack.Enqueue/classifyTransport in the same tag.
 const (

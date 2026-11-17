@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
@@ -30,6 +31,10 @@ var ErrTierReorderMismatch = errors.New("reorder token list does not match the c
 // fail-closed tenant guard (ADR-015) — the same lane the SigningKey uses.
 type Store struct {
 	db *rdb.RdbManager
+
+	// NatsShardGroups bounds placement assignments when stream sharding is configured.
+	// Set from the mounted instance document before using the store.
+	NatsShardGroups *config.NatsShardGroupsConfiguration
 }
 
 // NewStore wraps an RdbManager.
