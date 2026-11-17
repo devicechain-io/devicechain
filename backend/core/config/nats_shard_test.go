@@ -37,9 +37,8 @@ func TestNatsShardGroupsTypedValidation(t *testing.T) {
 		{"count-one", `{"count":1}`, "at least 2"},
 		{"unknown-suffix", `{"count":2,"suffixes":["typo"]}`, "not declared"},
 		{"duplicate-suffix", `{"count":2,"suffixes":["inbound-events","inbound-events"]}`, "repeated"},
-		{"tag-zero", `{"count":2,"placementTags":{"0":["rack"]}}`, "within 1..1"},
-		{"tag-negative", `{"count":2,"placementTags":{"-1":["rack"]}}`, "within 1..1"},
-		{"tag-count", `{"count":2,"placementTags":{"2":["rack"]}}`, "within 1..1"},
+		{"tag-negative", `{"count":2,"placementTags":{"-1":["rack"]}}`, "within 0..1"},
+		{"tag-count", `{"count":2,"placementTags":{"2":["rack"]}}`, "within 0..1"},
 		{"tag-nonnumeric", `{"count":2,"placementTags":{"one":["rack"]}}`, "decode failed"},
 		{"tag-empty", `{"count":2,"placementTags":{"1":[""]}}`, "non-empty"},
 		{"tag-whitespace", `{"count":2,"placementTags":{"1":[" "]}}`, "non-empty"},
@@ -66,8 +65,9 @@ func TestNatsShardGroupsTypedValidation(t *testing.T) {
 
 func TestNatsShardGroupsPlacementTagsRoundTrip(t *testing.T) {
 	var cfg config.InstanceConfiguration
-	require.NoError(t, core.LoadConfiguration(shardDocument(`{"count":3,"suffixes":["inbound-events","resolved-events"],"placementTags":{"1":["rack-a"],"2":["rack-b","ssd"]}}`), &cfg))
+	require.NoError(t, core.LoadConfiguration(shardDocument(`{"count":3,"suffixes":["inbound-events","resolved-events"],"placementTags":{"0":["dc-nats-0"],"1":["rack-a"],"2":["rack-b","ssd"]}}`), &cfg))
 	want := cfg.Infrastructure.Nats.ShardGroups
+	require.Equal(t, []string{"dc-nats-0"}, want.PlacementTags[0])
 	require.Equal(t, []string{"rack-a"}, want.PlacementTags[1])
 	require.Equal(t, []string{"rack-b", "ssd"}, want.PlacementTags[2])
 	encoded, err := json.Marshal(cfg)

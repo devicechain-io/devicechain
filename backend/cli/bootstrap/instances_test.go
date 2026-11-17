@@ -342,7 +342,7 @@ func TestDestroyUsesTheRecordedClusterNotTheInstanceName(t *testing.T) {
 // The other half of the same defect: a cluster that really is gone must be REPORTED as
 // gone, not silently counted as a successful teardown.
 func TestDestroySaysSoWhenTheClusterIsAlreadyGone(t *testing.T) {
-	fakeHome(t)
+	home := destroyTestHome(t)
 	writeRecord(t, InstanceRecord{Instance: "upgrig", Provider: "local", Cluster: "devicechain-upgrade", KubeContext: "kind-devicechain-upgrade", Managed: true})
 	p := &fakeProvider{name: "local", present: map[string]bool{}}
 
@@ -358,6 +358,10 @@ func TestDestroySaysSoWhenTheClusterIsAlreadyGone(t *testing.T) {
 	if !strings.Contains(out, "devicechain-upgrade") {
 		t.Error("the output never names the cluster it expected to find")
 	}
+	if _, err := os.Stat(filepath.Join(home, ".devicechain", "instances", "upgrig")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("instance state survived: %v", err)
+	}
+
 }
 
 // 🔴 DESTROY NEVER DELETES A CLUSTER, MANAGED OR ADOPTED. There is no deletion call left to
@@ -429,20 +433,20 @@ func TestTheProviderCannotBeAskedToDeleteACluster(t *testing.T) {
 // 🔴 D4: no record must degrade LOUDLY. Asserting the exit code alone would pass on the
 // old, silent behaviour — the sentence is the fix.
 func TestDestroyWithoutARecordSaysItIsGuessing(t *testing.T) {
-	fakeHome(t)
+	destroyTestHome(t)
 	p := &fakeProvider{name: "local", present: map[string]bool{}}
-
+	var err error
 	out := captureOutput(t, func() {
-		if err := Destroy(context.Background(), p, DestroyOptions{Options: Options{Instance: "legacy", AssumeYes: true}}); err != nil {
-			t.Errorf("Destroy: %v", err)
-		}
+		err = Destroy(context.Background(), p, DestroyOptions{Options: Options{Instance: "legacy", AssumeYes: true}})
 	})
-
 	if !strings.Contains(out, "GUESSING") {
 		t.Fatalf("output must say it is guessing, got:\n%s", out)
 	}
-	if strings.Join(p.asked, ",") != "legacy" {
-		t.Fatalf("the guess should still act, on the conventional name: asked %v", p.asked)
+	if err == nil || !strings.Contains(err.Error(), "--kube-context") {
+		t.Fatalf("expected unreachable guessed binding with recovery hint, got %v", err)
+	}
+	if p.existsCalls != 0 {
+		t.Fatalf("guess consulted cluster listing: %v", p.asked)
 	}
 }
 

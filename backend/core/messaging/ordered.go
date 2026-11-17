@@ -137,22 +137,33 @@ type orderedPending struct {
 // It refuses a window outside [1, 1024], a writer name outside the PublishWriter vocabulary
 // and a suffix with no tenant-wide publish path (a per-device suffix, a device-events or
 // advisory capture) — at construction, where the mistake is a startup error, rather than on
-// every publish.
+// every publish. With sharding enabled on suffix, the area must declare a forwarding
+// reader into it so that every destination gate is checked before fetching.
 //
 // 🔴 IT NEVER REFUSES FOR BACKPRESSURE, even on a stream that applies it. Its callers are
 // forwarding hops (capture to inbound, inbound to resolved) whose source message is already
 // fetched: a refusal here would leave that message unacked to spend another of its
 // MaxDeliver deliveries, and a message that spends them all is routed away as poison. Those
 // hops stop FETCHING instead — NewReader parks a reader whose area forwards into a gated
-// stream (streams.Stream.Forwards) — so what reaches this writer was fetched while the gate
-// was open, and at most a fetch batch lands in the margin the gate keeps below the ceiling.
+// stream (streams.Stream.Forwards), covering every group an ungrouped reader can reach.
+// What reaches this writer was fetched while those gates were open, and at most a fetch
+// batch lands in the margin the gate keeps below the ceiling.
 //
 // The writer lives as long as the connection it was built on; Close settles what it has in
 // flight. It does not call the context's CleanupPublisher: that closes a channel nats.go's
 // status fan-out may be sending on, and the reply subscription and reconnect goroutine it
 // would release end anyway when the connection closes.
 func (nmgr *NatsManager) NewOrderedWriter(suffix string, writer PublishWriter, window int) (OrderedWriter, error) {
+	return nmgr.newOrderedWriter(suffix, writer, window, false)
+}
+
+func (nmgr *NatsManager) newOrderedWriter(suffix string, writer PublishWriter, window int, async bool) (OrderedWriter, error) {
 	nmgr.freezeStreamRouting()
+	if !async {
+		if err := nmgr.requireForwarder(suffix); err != nil {
+			return nil, err
+		}
+	}
 	if window < 1 || window > MaxOrderedWindow {
 		return nil, fmt.Errorf("messaging: ordered writer window %d is outside [1, %d]", window, MaxOrderedWindow)
 	}
@@ -254,13 +265,6 @@ func (o *orderedWriter) publishGuardedAck(ctx context.Context, msg Message, done
 	if guard != nil {
 		if err := guard(); err != nil {
 			o.pending <- orderedPending{err: err, reported: true, done: done}
-			return
-		}
-	}
-	if o.nmgr.streamSharding().selects(o.suffix) && !msg.BypassBackpressure {
-		if err := o.nmgr.publishBackpressure(ctx, o.suffix); err != nil {
-			o.nmgr.countRoutedRefused(ctx, o.suffix, 1)
-			o.pending <- orderedPending{err: err, done: done}
 			return
 		}
 	}
