@@ -16,6 +16,8 @@ export {
   resolveAuthToken,
   setAuthTokenGetter,
   setIdentityTokenGetter,
+  setUnauthorizedHandler,
+  type UnauthorizedHandler,
   GraphQLRequestError,
   type GraphQLErrorEntry,
   type Area,
