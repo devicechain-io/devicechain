@@ -79,15 +79,16 @@ func (api *Api) RecordNotification(ctx context.Context, alarmToken, alarmKey, se
 // once its targets are recorded, that an unannounced clear is now owed.
 func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity string,
 	raisedTime, at time.Time, targets []PagedTarget) (*NotificationState, error) {
-	return api.RecordPagedFrom(ctx, alarmToken, alarmKey, severity, raisedTime, at, targets, AlarmSource{}, time.Time{})
+	return api.RecordPagedFrom(ctx, alarmToken, alarmKey, severity, raisedTime, at, targets, AlarmSource{}, time.Time{}, at)
 }
 
 // RecordPagedFrom is RecordPaged that also keeps the alarm's source (originator and device
 // facts) on the row, so a notification rendered from the row alone can name the device. An
 // empty field of src leaves the stored value alone. sourceAt is the event occurrence time;
-// delivery and escalation stamps do not order source facts.
+// delivery and escalation stamps do not order source facts. notifiedAt is the notifier-clock
+// time the page was sent, advanced independently and only forward within the cycle.
 func (api *Api) RecordPagedFrom(ctx context.Context, alarmToken, alarmKey, severity string,
-	raisedTime, at time.Time, targets []PagedTarget, src AlarmSource, sourceAt time.Time) (*NotificationState, error) {
+	raisedTime, at time.Time, targets []PagedTarget, src AlarmSource, sourceAt, notifiedAt time.Time) (*NotificationState, error) {
 	raised := cycleKey(raisedTime)
 	// The database keeps microseconds; an event time compared raw against what it stored would
 	// let an older event inside the same microsecond pass as newer.
@@ -102,13 +103,14 @@ func (api *Api) RecordPagedFrom(ctx context.Context, alarmToken, alarmKey, sever
 		if result.Error != nil {
 			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 				created := &NotificationState{
-					AlarmToken:      alarmToken,
-					AlarmKey:        alarmKey,
-					Severity:        severity,
-					FirstNotifiedAt: sql.NullTime{Time: at, Valid: true},
-					LastNotifiedAt:  sql.NullTime{Time: at, Valid: true},
-					NotifyCount:     1,
-					CycleRaisedAt:   raised,
+					AlarmToken:       alarmToken,
+					AlarmKey:         alarmKey,
+					Severity:         severity,
+					FirstNotifiedAt:  sql.NullTime{Time: at, Valid: true},
+					LastNotifiedAt:   sql.NullTime{Time: at, Valid: true},
+					EscalationBaseAt: sql.NullTime{Time: notifiedAt, Valid: true},
+					NotifyCount:      1,
+					CycleRaisedAt:    raised,
 				}
 				created.applySource(src, false)
 				if !src.IsZero() && !sourceAt.IsZero() {
@@ -137,6 +139,9 @@ func (api *Api) RecordPagedFrom(ctx context.Context, alarmToken, alarmKey, sever
 		found.PagedTargets = mergePaged(found.PagedTargets, found.CycleRaisedAt, targets)
 		if len(targets) > 0 {
 			found.PagedCycle = found.CycleRaisedAt
+		}
+		if !found.EscalationBaseAt.Valid || notifiedAt.After(found.EscalationBaseAt.Time) {
+			found.EscalationBaseAt = sql.NullTime{Time: notifiedAt, Valid: true}
 		}
 		found.NotifyCount++
 		if !found.FirstNotifiedAt.Valid {
@@ -425,6 +430,7 @@ func startCycle(s *NotificationState, raised sql.NullTime) {
 	s.ClearedAt = sql.NullTime{}
 	s.EscalationLevel = 0
 	s.LastEscalatedAt = sql.NullTime{}
+	s.EscalationBaseAt = sql.NullTime{}
 	s.FirstNotifiedAt = sql.NullTime{}
 	s.NotifyCount = 0
 	s.ClearNotifiedAt = sql.NullTime{}
@@ -471,6 +477,7 @@ func (api *Api) OpenNotificationStates(ctx context.Context) ([]*NotificationStat
 	found := make([]*NotificationState, 0)
 	result := api.RDB.DB(ctx).
 		Where("cleared_at IS NULL AND acknowledged_at IS NULL AND last_notified_at IS NOT NULL").
+		Order("last_notified_at ASC").Order("id ASC").
 		Find(&found)
 	return found, result.Error
 }
@@ -508,10 +515,11 @@ func (api *Api) ClaimEscalation(ctx context.Context, alarmToken string, expected
 	}
 	result := q.
 		Updates(map[string]any{
-			"escalation_level":  gorm.Expr("escalation_level + 1"),
-			"last_escalated_at": at,
-			"last_notified_at":  at,
-			"notify_count":      gorm.Expr("notify_count + 1"),
+			"escalation_level":   gorm.Expr("escalation_level + 1"),
+			"last_escalated_at":  at,
+			"escalation_base_at": at,
+			"last_notified_at":   at,
+			"notify_count":       gorm.Expr("notify_count + 1"),
 		})
 	return result.RowsAffected == 1, result.Error
 }

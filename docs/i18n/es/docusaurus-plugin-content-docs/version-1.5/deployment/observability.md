@@ -47,13 +47,13 @@ e `insecure: true`; para TLS, use una URL `https://` e `insecure: false`.
 El receptor se despliega por separado; DeviceChain no lo instala.
 
 Un endpoint HTTP sin ruta publica en `/v1/traces`; indique una ruta (para un receptor tras un
-prefijo) y se usa tal cual. El exportador sigue leyendo las variables est�ndar
+prefijo) y se usa tal cual. El exportador sigue leyendo las variables estándar
 `OTEL_EXPORTER_OTLP_*`, por lo que, si las define en un pod, pueden anular estos valores.
 
 El muestreo respeta al padre entre servicios de DeviceChain: una traza muestreada en el primer
 servicio sigue muestreada en el resto del flujo. El `traceparent` de un dispositivo o de quien
 llama a la API nunca decide el muestreo: la solicitud inicia una traza local nueva enlazada a la
-del llamante. Los eventos que fallan la resoluci�n y van a la cola de errores, y los eventos
+del llamante. Los eventos que fallan la resolución y van a la cola de errores, y los eventos
 republicados para reintento, inician una traza nueva en lugar de continuar la original.
 Si se omite `samplingRatio`, se muestrea el 10 % de las nuevas trazas raíz. El valor explícito
 `0` no muestrea nuevas raíces y `1` las muestrea todas. Empiece con un valor bajo en flotas

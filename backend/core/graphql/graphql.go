@@ -16,8 +16,7 @@ import (
 )
 
 const (
-	// GRAPHQL_PORT is the port the GraphQL server binds: the one HTTP port every service
-	// serves on, named core.HttpPort.
+	// GRAPHQL_PORT is the public API port the GraphQL server binds, named core.HttpPort.
 	GRAPHQL_PORT = core.HttpPort
 
 	// graphiqlEndpoint is the GraphQL URL the /graphiql explorer page posts to. It
@@ -37,8 +36,8 @@ const (
 	// served by NONE of them — the page loaded and every query it sent 404'd.
 	//
 	// The only GraphQL route ExecuteInitialize registers is "/graphql" (it also
-	// registers "/graphiql", and RegisterProbes adds "/metrics", "/healthz" and
-	// "/readyz"). Keep this resolving onto it.
+	// registers "/graphiql"; RegisterProbes adds the operational endpoints
+	// on a separate mux). Keep this resolving onto it.
 	graphiqlEndpoint = "graphql"
 )
 
@@ -70,9 +69,8 @@ type GraphQLManager struct {
 	// listenPort EXISTS. A field defaulted only by the constructor is one refactor away
 	// from being dropped, and net.Listen reads 0 as "pick anything" — so all eleven
 	// services would bind a random port, log a successful start and report healthy,
-	// while the chart's probes and its ServiceMonitor went on addressing the container
-	// port by name and found nothing there. Every pod goes unready, instance-wide,
-	// presenting as a probe fault rather than a port one. The zero value is the value a
+	// while public routes went on addressing the container port by name
+	// and found nothing there. The API would be unreachable despite healthy probes. The zero value is the value a
 	// mistake produces, so it has to be the safe one.
 	Port int32
 
@@ -81,6 +79,10 @@ type GraphQLManager struct {
 	// ExecuteInitialize builds it, and only for a schema with a Subscription root;
 	// it is nil before that has run, and always nil for any other schema.
 	subscriptions *SubscriptionHandler
+
+	opsServer *core.HttpServer
+	// Keep the test ops listener ephemeral when a restart pins the API port.
+	opsServerEphemeral bool
 
 	lifecycle core.LifecycleManager
 }
@@ -171,7 +173,7 @@ func (gql *GraphQLManager) ExecuteInitialize(context.Context) error {
 		mux.Handle("/graphiql", graphiqlHandler)
 	}
 
-	// /metrics, /healthz and /readyz, which every DeviceChain HTTP server serves and
+	// /metrics, /healthz and /readyz on the separate ops mux, which
 	// the chart addresses by name.
 	gql.Microservice.RegisterProbes(gql.Gate)
 	return nil
@@ -204,13 +206,29 @@ func (gql *GraphQLManager) Start(ctx context.Context) error {
 // The bind is synchronous and its error is returned, so a port collision refuses
 // startup instead of being logged from inside a goroutine while the service reports
 // success and runs with no HTTP surface at all.
-func (gql *GraphQLManager) ExecuteStart(context.Context) error {
+func (gql *GraphQLManager) ExecuteStart(ctx context.Context) error {
+	gql.opsServer = gql.Microservice.NewOpsServer()
+	if gql.Port == ephemeralPort || gql.opsServerEphemeral {
+		gql.opsServerEphemeral = true
+		gql.opsServer = core.NewHttpServerForHandler(0, gql.Microservice.OpsMux())
+	}
+	if err := gql.opsServer.Start(); err != nil {
+		return err
+	}
 	gql.Server = gql.Microservice.NewHttpServer(gql.listenPort())
 	if err := gql.Server.Start(); err != nil {
-		return err
+		return errors.Join(err, gql.opsServer.Shutdown(ctx))
 	}
 	log.Info().Str("addr", gql.Server.Addr()).Msg("Started GraphQL server.")
 	return nil
+}
+
+// OpsAddr is the ops listener's bound address, or "" before Start.
+func (gql *GraphQLManager) OpsAddr() string {
+	if gql.opsServer == nil {
+		return ""
+	}
+	return gql.opsServer.Addr()
 }
 
 // ephemeralPort asks the operating system for an unused port.
@@ -271,10 +289,14 @@ func (gql *GraphQLManager) ExecuteStop(ctx context.Context) error {
 	// guards against a CALLER, not against the lifecycle. GraphQLManager is exported and
 	// every service drives Stop by hand; one that stops without having started would
 	// otherwise get a nil dereference where a no-op belongs.
-	if gql.Server == nil {
-		return subErr
+	var httpErr, opsErr error
+	if gql.Server != nil {
+		httpErr = gql.Server.Shutdown(ctx)
 	}
-	if err := errors.Join(subErr, gql.Server.Shutdown(ctx)); err != nil {
+	if gql.opsServer != nil {
+		opsErr = gql.opsServer.Shutdown(ctx)
+	}
+	if err := errors.Join(subErr, httpErr, opsErr); err != nil {
 		return err
 	}
 	log.Info().Int32("port", GRAPHQL_PORT).Msg("GraphQL server shut down successfully.")

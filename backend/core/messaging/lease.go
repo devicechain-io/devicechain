@@ -130,6 +130,8 @@ func (l *DistributedLease) Acquire(partition string) (*Lease, error) {
 	// until the entry expires, and then pays the handover wait. ownRevision cannot
 	// claim it, because holder identity is per call. Renew and Release, whose lease
 	// knows its uuid, do recover the same lost-reply case.
+	// Anchor before sending: the broker applies the write before its reply arrives.
+	sent := time.Now()
 	rev, err := l.kv.Create(key, []byte(holder))
 	if errors.Is(err, nats.ErrKeyExists) {
 		return nil, ErrLeaseHeld
@@ -137,7 +139,7 @@ func (l *DistributedLease) Acquire(partition string) (*Lease, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Lease{kv: l.kv, key: key, holder: holder, epoch: rev, ttl: l.ttl, rev: rev, lastRenew: time.Now()}, nil
+	return &Lease{kv: l.kv, key: key, holder: holder, epoch: rev, ttl: l.ttl, rev: rev, lastRenew: sent}, nil
 }
 
 // PriorOwnerReleasedCleanly reports whether the partition's most recent state is an
@@ -274,7 +276,8 @@ type Lease struct {
 	// lastRenew anchors the validity window: we still hold the lease until
 	// lastRenew+ttl even when NATS is briefly unreachable, because no standby can
 	// Acquire our partition until the server-side entry TTL-expires. Refreshed on
-	// every successful Renew.
+	// every successful Renew, anchored at the send so reply latency cannot extend
+	// our window past the broker's expiry.
 	lastRenew time.Time
 	released  bool
 }
@@ -309,6 +312,7 @@ func (lease *Lease) Renew() error {
 	rev := lease.rev
 	lease.mu.Unlock()
 
+	sent := time.Now()
 	newRev, err := lease.kv.Update(lease.key, []byte(lease.holder), rev)
 	if errors.Is(err, nats.ErrKeyRevisionMismatch) && lease.withinWindow() {
 		// 🔴 A REFUSED CAS IS NOT PROOF SOMEONE ELSE OWNS THE ENTRY. A JetStream publish
@@ -328,6 +332,7 @@ func (lease *Lease) Renew() error {
 		// timeout, the same bound a plain Renew has, which is what DETECT's termSlack
 		// budgets for.
 		if cur, ours, gerr := lease.ownRevision(); gerr == nil && ours && lease.withinWindow() {
+			sent = time.Now()
 			newRev, err = lease.kv.Update(lease.key, []byte(lease.holder), cur)
 		}
 	}
@@ -340,7 +345,7 @@ func (lease *Lease) Renew() error {
 
 	lease.mu.Lock()
 	lease.rev = newRev
-	lease.lastRenew = time.Now()
+	lease.lastRenew = sent
 	lease.mu.Unlock()
 	return nil
 }
