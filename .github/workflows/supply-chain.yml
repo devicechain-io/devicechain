@@ -33,6 +33,11 @@ on:
 permissions:
   contents: read
 
+# Superseded PR runs cancel; scheduled and dispatched runs never cancel each other.
+concurrency:
+  group: supply-chain-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   guards:
     name: security.txt and VEX tool

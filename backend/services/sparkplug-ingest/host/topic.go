@@ -6,6 +6,7 @@ package host
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // MessageType is a Sparkplug B message type as it appears in the topic (the
@@ -106,6 +107,12 @@ func ParseTopic(topic string) (Topic, error) {
 	}
 	if parts[1] == "" || parts[3] == "" {
 		return Topic{}, fmt.Errorf("topic %q: empty group or node id", topic)
+	}
+	// A level cannot be longer than device registration's external-id ceiling.
+	for _, index := range []int{1, 3, 4} {
+		if index < len(parts) && utf8.RuneCountInString(parts[index]) > 256 {
+			return Topic{}, fmt.Errorf("Sparkplug identity level exceeds 256 characters")
+		}
 	}
 	t := Topic{GroupID: parts[1], MessageType: mt, EdgeNodeID: parts[3]}
 	if isDevice {

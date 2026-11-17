@@ -378,3 +378,39 @@ func TestTheAPIServerRefusesToChangeOrRemoveTheObjectStore(t *testing.T) {
 		t.Errorf("growing the volume was refused: %v", err)
 	}
 }
+
+func TestShardGroupsCRDValidation(t *testing.T) {
+	c := withAPIServer(t)
+	cases := []struct {
+		name  string
+		cfg   *dcv1beta1.ShardGroupsSpec
+		valid bool
+	}{
+		{"shards-off", nil, true},
+		{"shards-ha", &dcv1beta1.ShardGroupsSpec{Count: 2, Suffixes: []string{"inbound-events"}}, false},
+		{"shards-on", &dcv1beta1.ShardGroupsSpec{Count: 2, Suffixes: []string{"inbound-events", "resolved-events"}}, true},
+		{"shards-placed", &dcv1beta1.ShardGroupsSpec{Count: 2, Suffixes: []string{"inbound-events"}, PlacementTags: map[string]dcv1beta1.ShardPlacementTags{"0": {"dc-nats-0"}, "1": {"dc-nats-1"}}}, true},
+		{"shards-small", &dcv1beta1.ShardGroupsSpec{Count: 1, Suffixes: []string{"inbound-events"}}, false},
+		{"shards-large", &dcv1beta1.ShardGroupsSpec{Count: 6, Suffixes: []string{"inbound-events"}}, false},
+		{"shards-empty", &dcv1beta1.ShardGroupsSpec{Count: 2, Suffixes: []string{}}, false},
+		{"shards-typo", &dcv1beta1.ShardGroupsSpec{Count: 2, Suffixes: []string{"typo"}}, false},
+		{"shards-duplicate", &dcv1beta1.ShardGroupsSpec{Count: 2, Suffixes: []string{"inbound-events", "inbound-events"}}, false},
+		{"shards-wrong-tag", &dcv1beta1.ShardGroupsSpec{Count: 2, Suffixes: []string{"inbound-events"}, PlacementTags: map[string]dcv1beta1.ShardPlacementTags{"1": {"dc-nats-0"}}}, false},
+		{"shards-outside", &dcv1beta1.ShardGroupsSpec{Count: 2, Suffixes: []string{"inbound-events"}, PlacementTags: map[string]dcv1beta1.ShardPlacementTags{"2": {"dc-nats-2"}}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inst := newInstance(tc.name, func(i *dcv1beta1.Instance) { i.Spec.ShardGroups = tc.cfg })
+			if tc.name == "shards-ha" {
+				inst.Spec.HA = true
+			}
+			err := c.Create(t.Context(), inst)
+			if tc.valid && err != nil {
+				t.Fatalf("valid config rejected: %v", err)
+			}
+			if !tc.valid && !apierrors.IsInvalid(err) {
+				t.Fatalf("invalid config accepted or wrong refusal: %v", err)
+			}
+		})
+	}
+}

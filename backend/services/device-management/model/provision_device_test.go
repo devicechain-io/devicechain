@@ -1235,10 +1235,20 @@ func foreignKeyViolation(t *testing.T) error {
 	db := putest.NewSQLiteDB(t)
 	var got error
 	require.NoError(t, db.Connection(func(tx *gorm.DB) error {
+		// Connection supplies a shared statement; clone it before the expected error.
+		tx = tx.Session(&gorm.Session{})
 		require.NoError(t, tx.Exec(`PRAGMA foreign_keys = ON`).Error)
 		require.NoError(t, tx.Exec(`CREATE TABLE fk_parent (id integer primary key)`).Error)
 		require.NoError(t, tx.Exec(`CREATE TABLE fk_child (parent_id integer references fk_parent(id))`).Error)
 		got = tx.Exec(`INSERT INTO fk_child (parent_id) VALUES (42)`).Error
+		// Prove the refusal did not poison the pinned handle, and that a valid
+		// parent/child pair really reaches the same connection's tables afterwards.
+		require.Error(t, got)
+		require.NoError(t, tx.Exec(`INSERT INTO fk_parent (id) VALUES (42)`).Error)
+		require.NoError(t, tx.Exec(`INSERT INTO fk_child (parent_id) VALUES (42)`).Error)
+		var count int64
+		require.NoError(t, tx.WithContext(core.WithSystemContext(context.Background())).Table("fk_child").Count(&count).Error)
+		require.EqualValues(t, 1, count)
 		return nil
 	}))
 	require.Error(t, got)

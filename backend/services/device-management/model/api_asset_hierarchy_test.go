@@ -37,7 +37,7 @@ func hierarchyTestApi(t *testing.T) (*Api, context.Context) {
 	require.NoError(t, db.AutoMigrate(
 		&AssetType{}, &Asset{}, &DeviceType{}, &Device{},
 		&CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &DeviceClaim{},
-		&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{},
+		&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{},
 	), "migrate")
 
 	api := NewApi(&rdb.RdbManager{Database: db})
@@ -551,6 +551,7 @@ func TestClaimDeviceCannotWriteAContainmentEdge(t *testing.T) {
 	})
 	require.NoError(t, err, "open claim")
 
+	locks := observeHierarchyLock(t, api)
 	_, err = api.ClaimDevice(ctx, &DeviceClaimRequest{
 		DeviceToken:      "dozer-01",
 		ClaimSecret:      secret,
@@ -559,6 +560,11 @@ func TestClaimDeviceCannotWriteAContainmentEdge(t *testing.T) {
 	}, time.Now())
 	require.ErrorIs(t, err, ErrContainmentEndsMustBeAssets,
 		"a claim redeemed as \"contains\" wrote a device-to-customer containment edge")
+	require.Positive(t, *locks, "claim containment admission must take the lock even for invalid ends")
+	before := *locks
+	require.NoError(t, api.RDB.Database.Callback().Query().Remove("test:hierarchy-lock"))
+	require.NoError(t, api.RDB.Database.Callback().Row().Remove("test:hierarchy-lock"))
+	require.NoError(t, api.RDB.Database.Callback().Create().Remove("test:hierarchy-lock"))
 
 	// The counterweight: the SAME claim redeemed with the assignment type succeeds, so
 	// the gate refuses one type rather than breaking claims.
@@ -572,6 +578,7 @@ func TestClaimDeviceCannotWriteAContainmentEdge(t *testing.T) {
 	}, time.Now())
 	require.NoError(t, err, "a legitimate claim was refused")
 	require.NotNil(t, edge, "no edge returned")
+	require.Equal(t, before, *locks, "non-containment claims must not lock the hierarchy")
 }
 
 // seedDeviceForHierarchy creates one device, for the tests that need a non-asset

@@ -1626,12 +1626,23 @@ it there. Read the two together before reading either as an upgrade defect."
 # is INCONCLUSIVE and must not read as "unchanged" — see the emptiness checks at both ends
 # of the comparison. `helm list` rather than `helm status`: a release that is not there at
 # all yields an empty selection rather than a non-zero exit, which those checks catch and
-# name, where `helm status`'s error would have to be parsed. `--all` because a release left
+# name, where `helm status`'s error would have to be parsed. Include all statuses: a release left
 # FAILED or PENDING by a half-run upgrade still has objects in the cluster, and a drill
 # that only looked at healthy ones would call that damage invisible.
 helm_fingerprint() {
-  local out
-  out="$(helm --kube-context "$kube_context" list -n "$helm_namespace" --all -o json)" ||
+  local out version
+  # Expanded as ${a[@]+"${a[@]}"} below: an empty array under set -u is an
+  # unbound-variable error on bash before 4.4 (macOS ships 3.2).
+  local status_args=()
+  version="$(helm version --short)" || fail "could not determine the Helm version"
+  case "$version" in
+    v3.*) status_args=(--all) ;;
+    # Helm 4 removed --all and lists every status when no status filter is set
+    # ("By default, it lists all releases in any status", helm list --help).
+    v4.*) ;;
+    *) fail "unsupported Helm version '$version'; cannot select every release status" ;;
+  esac
+  out="$(helm --kube-context "$kube_context" list -n "$helm_namespace" ${status_args[@]+"${status_args[@]}"} -o json)" ||
     fail "could not list the Helm releases in namespace $helm_namespace; the drill cannot
 say whether the refused upgrade moved the release, which is not the same as saying it
 did not."
@@ -3124,6 +3135,67 @@ $got"
 # nothing on its own — a check hard-wired to fail would look identical. Proving it
 # reports AGREEMENT when the tags agree is what makes the red mean something.
 selftest() {
+  # Exercise the Helm on PATH, including Helm 4's refusal of Helm 3's --all.
+  (
+    helm_fixture="$(mktemp -d)"
+    trap 'rm -rf "$helm_fixture"' EXIT
+    cat > "$helm_fixture/helm" <<'HELM'
+#!/usr/bin/env bash
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+if [[ "$*" == 'version --short' ]]; then
+  [[ "${HELM_TEST_ERROR:-}" != version ]] || exit 1
+  printf 'v%s.0.0+fixture\n' "$HELM_TEST_MAJOR"
+  exit 0
+fi
+if [[ "$HELM_TEST_MAJOR" == 4 && " $* " == *' --all '* ]]; then
+  echo 'Error: unknown flag: --all' >&2
+  exit 1
+fi
+if [[ "${HELM_TEST_ERROR:-}" == list ]]; then
+  echo 'Error: Kubernetes cluster unreachable' >&2
+  exit 1
+fi
+if [[ "${HELM_TEST_ERROR:-}" == json ]]; then
+  echo 'not JSON'
+  exit 0
+fi
+statuses='deployed failed pending-install pending-upgrade pending-rollback superseded uninstalling uninstalled'
+if [[ " $* " == *' --deployed '* || ( "$HELM_TEST_MAJOR" == 3 && " $* " != *' --all '* ) ]]; then
+  statuses=deployed
+fi
+for status in $statuses; do
+  printf '%s\n' "$status"
+done | jq -Rsc 'split("\n")[:-1] | map({name: ., revision: "2", status: ., chart: "devicechain-1.0.0"}) + [{name: "other", revision: "1", status: "deployed", chart: "other-1.0.0"}]'
+HELM
+    chmod +x "$helm_fixture/helm"
+    export PATH="$helm_fixture:$PATH"
+    export HELM_TEST_MAJOR HELM_TEST_ERROR
+    helm_chart_prefix=devicechain-
+    expected="$(printf '%s\n' 'deployed 2 deployed' 'failed 2 failed' \
+      'pending-install 2 pending-install' 'pending-upgrade 2 pending-upgrade' \
+      'pending-rollback 2 pending-rollback' 'superseded 2 superseded' \
+      'uninstalling 2 uninstalling' 'uninstalled 2 uninstalled' | sort)"
+    for HELM_TEST_MAJOR in 4 3; do
+      HELM_TEST_ERROR=
+      # tr: a Windows jq ends its lines in CRLF; the expectation is built with printf.
+      got="$(helm_fingerprint)" || fail "SELF-TEST FAILED: Helm $HELM_TEST_MAJOR fingerprint failed"
+      got="$(printf '%s' "$got" | tr -d '\r')"
+      [[ "$got" == "$expected" ]] || fail "SELF-TEST FAILED: Helm $HELM_TEST_MAJOR fingerprint omitted releases: $got"
+      for HELM_TEST_ERROR in list version json; do
+        if (helm_fingerprint) > "$helm_fixture/error" 2>&1; then
+          fail "SELF-TEST FAILED: Helm $HELM_TEST_MAJOR $HELM_TEST_ERROR error was swallowed"
+        fi
+        [[ -s "$helm_fixture/error" ]] || fail "SELF-TEST FAILED: Helm error was silent"
+      done
+      note "Helm $HELM_TEST_MAJOR fingerprints every status and refuses unreadable evidence"
+    done
+    HELM_TEST_MAJOR=99 HELM_TEST_ERROR=
+    if (helm_fingerprint) > "$helm_fixture/error" 2>&1; then
+      fail "SELF-TEST FAILED: unsupported Helm major was accepted"
+    fi
+    grep -q 'unsupported Helm' "$helm_fixture/error" || fail "SELF-TEST FAILED: unsupported Helm was not explained"
+  )
   "$repo_root/hack/ensure-operand-image.sh" --self-test
   selftest_logins
   # Needed before expect_mode's self-upgrade case, which asks validate_upgrade_mode to
