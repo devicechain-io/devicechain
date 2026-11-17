@@ -82,6 +82,11 @@ authorities do not line up with intuition:
 
 - Reading device credentials requires `device:write`, not `device:read`.
 - `latestLocation` requires `location:read`, while its `device-state` siblings require `state:read`.
+- An alarm raised by a rule that tests geofence containment is read only by a caller that also holds
+  `location:read`: its raise and clear times are the device entering and leaving the fence. Without it, the
+  alarm queries, the alarm counts, `alarmDispositions` and `alarmStream` leave the alarm out, and
+  `acknowledgeAlarm`, `clearAlarm` and `setAlarmDisposition` answer as for an unknown token. The same rule's
+  detections are left out of `detectionStream` on the same terms.
 - A fixed asset's installed position (`Device.installedPosition`, `Asset.installedPosition`) requires
   `location:installed:read`, which `location:read` includes. It is installation data and never falls back to
   a position the device reported. A caller without either authority reads `positionWithheld: true` on every
@@ -828,6 +833,8 @@ A record the member cannot see is answered exactly as one that does not exist: i
 list, or the operation answers `NOT_FOUND`. A `measurementStream` subscription for a device outside
 the member's customers is accepted and delivers nothing. Every other operation answers `FORBIDDEN`
 with `extensions.reason` set to `SCOPE_UNSUPPORTED`.
+
+`measurementStream(deviceTokens: [String!], name: String)` accepts up to 1000 device tokens on one subscription; duplicates are ignored. The list must not be empty and cannot be combined with `deviceToken`. Omit both device arguments to stream all devices. The same access-scope and name filters apply to every reading.
 
 An event recorded while the device belonged to no customer is not visible to a member with
 limited access. Neither is an alarm raised before this release: alarms record their customers only

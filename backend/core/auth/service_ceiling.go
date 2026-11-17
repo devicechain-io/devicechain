@@ -51,7 +51,7 @@ var serviceCallers = map[string][]Authority{
 	"command-delivery":        {DeviceRead, TenantRead, StateRead, LocationInstalledRead},
 	"dashboard-management":    {DeviceRead, TenantRead},
 	"device-management":       {DeviceRead, TenantRead},
-	"device-state":            {TenantRead},
+	"device-state":            {DeviceRead, TenantRead},
 	"event-management":        {DeviceRead, TenantRead},
 	"event-processing":        {CommandWrite, TenantRead, DeviceRead, AIInfer},
 	"event-sources":           {DeviceRead, TenantRead, StateRead, CommandWake, CommandClaim},

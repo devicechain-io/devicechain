@@ -66,11 +66,11 @@ func requireCalls(t *testing.T, fn string, want ...string) {
 }
 
 func TestTheLifecycleStartsTheConsumerAndTheSweep(t *testing.T) {
-	requireCalls(t, "afterMicroserviceStarted", "Svc.Start", "ReportsConsumer.Start", "RosterConsumer.Start", "startSweeper")
+	requireCalls(t, "afterMicroserviceStarted", "Svc.Start", "ReportsConsumer.Start", "RosterConsumer.Start", "DeletionConsumer.Start", "startSweeper")
 	requireCalls(t, "startSweeper", "processor.NewDeadlineSweeper", "Sweeper.Start")
-	requireCalls(t, "beforeMicroserviceStopped", "Sweeper.Stop", "RosterConsumer.Stop", "ReportsConsumer.Stop", "Svc.Stop")
-	requireCalls(t, "beforeMicroserviceTerminated", "RosterConsumer.Terminate", "ReportsConsumer.Terminate", "Svc.Terminate")
-	requireCalls(t, "createNatsComponents", "ReportsConsumer.Initialize", "RosterConsumer.Initialize", "processor.NewDesiredWriter")
+	requireCalls(t, "beforeMicroserviceStopped", "Sweeper.Stop", "DeletionConsumer.Stop", "RosterConsumer.Stop", "ReportsConsumer.Stop", "Svc.Stop")
+	requireCalls(t, "beforeMicroserviceTerminated", "DeletionConsumer.Terminate", "RosterConsumer.Terminate", "ReportsConsumer.Terminate", "Svc.Terminate")
+	requireCalls(t, "createNatsComponents", "ReportsConsumer.Initialize", "RosterConsumer.Initialize", "DeletionConsumer.Initialize", "processor.NewDesiredWriter")
 	requireCalls(t, "afterMicroserviceInitialized", "buildMetrics", "registerUploadHandler", "registerDownloadHandler")
 }
 
@@ -142,4 +142,10 @@ func TestStartSweeperAndRolloutDriverRegisterPassOutcomes(t *testing.T) {
 			core.PassSkipped: 0, core.PassCancelled: 0,
 		}, outcomes, "%s must expose every outcome at zero before its first pass", name)
 	}
+}
+
+func TestTheDeletionReaderReplaysRetainedFacts(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	require.NoError(t, err)
+	require.Contains(t, string(src), "nmgr.NewReader(streams.EntityDeleted)")
 }

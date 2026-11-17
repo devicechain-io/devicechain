@@ -57,7 +57,10 @@ func TestAlarmStreamSharedFeed(t *testing.T) {
 		case 2:
 			args.Severity, args.AlarmKey = strp("CRITICAL"), strp("over-temp")
 		case 3:
-			ctx = f.member("customer:acme")
+			// sweepMember holds location:read, so this subscriber is judged on its scope alone;
+			// the geofence-alarm gate a subscriber without it gets is covered on its own
+			// (subscriptions_alarms_position_test.go).
+			ctx = f.sweepMember("customer:acme")
 		case 4:
 			args.OriginatorType, args.OriginatorToken = strp("device"), strp("acme-pump")
 		}

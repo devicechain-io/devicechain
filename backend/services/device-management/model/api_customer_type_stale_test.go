@@ -46,7 +46,7 @@ func TestUpdateCustomerTypeStaleReadDoesNotRevertConcurrentEdit(t *testing.T) {
 	}))
 	t.Cleanup(func() { require.NoError(t, db.Callback().Query().Remove(callback)) })
 
-	updated, err := api.UpdateCustomerType(ctx, original.Token, &CustomerTypeUpdateRequest{
+	updated, err := api.UpdateCustomerType(ctx, original.Token, nil, &CustomerTypeUpdateRequest{
 		Name: dcgraphql.OptionalStringOf("Renamed"),
 	})
 	require.NoError(t, err)
@@ -77,7 +77,7 @@ func TestUpdateCustomerTypeStaleReadDoesNotRevertConcurrentEdit(t *testing.T) {
 
 func TestUpdateCustomerTypeEmptyRequestWritesNothing(t *testing.T) {
 	api, ctx, original, statements := customerTypePartialFixture(t)
-	updated, err := api.UpdateCustomerType(ctx, original.Token, &CustomerTypeUpdateRequest{})
+	updated, err := api.UpdateCustomerType(ctx, original.Token, nil, &CustomerTypeUpdateRequest{})
 	require.NoError(t, err)
 	require.Empty(t, customerPartialWrites(statements))
 	rows, err := api.CustomerTypesByToken(ctx, []string{original.Token})
@@ -88,7 +88,7 @@ func TestUpdateCustomerTypeEmptyRequestWritesNothing(t *testing.T) {
 
 func TestUpdateCustomerTypeRefusedRequestWritesNothing(t *testing.T) {
 	api, ctx, original, statements := customerTypePartialFixture(t)
-	_, err := api.UpdateCustomerType(ctx, original.Token, &CustomerTypeUpdateRequest{
+	_, err := api.UpdateCustomerType(ctx, original.Token, nil, &CustomerTypeUpdateRequest{
 		Name:     dcgraphql.OptionalStringOf("Refused"),
 		Metadata: dcgraphql.OptionalStringOf("not JSON"),
 	})

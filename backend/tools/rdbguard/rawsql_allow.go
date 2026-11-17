@@ -171,6 +171,23 @@ var rawSQLAllowList = []siteEntry{
 			"binding tenant_id and trust_anchor_id from the caller on every row it writes. The only formatted-in " +
 			"name is a package constant naming the temp table.",
 	},
+	{
+		Path: "backend/services/device-management/model/position_classify.go", Func: "Api.ClassifyUnclassifiedAlarms", Count: 1,
+		Why: "the alarm position classifier's periodic pass, which spans tenants on purpose: it classifies every " +
+			"alarm whose position_derived is NULL (what a replica older than the column writes during a rolling " +
+			"upgrade) for every tenant, under no caller. It writes only alarms.position_derived, only on NULL rows, " +
+			"and reads device_profiles, detection_rules and device_profile_versions solely through joins that " +
+			"equate p.tenant_id with the alarm's own tenant_id, so a rule is resolved only within its alarm's " +
+			"tenant. The statement is one package constant (classifyAlarmsSQL), the same text the migration " +
+			"runs (TestClassifierMatchesTheMigration).",
+	},
+	{
+		Path: "backend/services/device-management/model/position_classify.go", Func: "Api.classifyAlarm", Count: 1,
+		Why: "classifies the one alarm the integrator just folded from an edge with no position verdict: the " +
+			"classifier constant plus a literal WHERE binding a.tenant_id from the request context and a.id. " +
+			"It writes only that row's position_derived, and its joins equate p.tenant_id with the alarm's " +
+			"tenant_id, as for Api.ClassifyUnclassifiedAlarms.",
+	},
 
 	// --- erasure ---
 	{

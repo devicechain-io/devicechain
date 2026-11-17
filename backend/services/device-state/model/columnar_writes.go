@@ -48,6 +48,9 @@ var deviceStateColumns = []rdb.Column[DeviceState]{
 	rdb.TimeColumn("created_at", func(r *DeviceState) time.Time { return r.CreatedAt }),
 	rdb.TimeColumn("updated_at", func(r *DeviceState) time.Time { return r.UpdatedAt }),
 	rdb.TextColumn("device_token", func(r *DeviceState) string { return r.DeviceToken }),
+	// Inserts start unstamped; conflict arms never assign incarnation. The sweep alone
+	// learns this identity, even if a folded input happens to carry a stamp.
+	rdb.NullInt64Column("incarnation", func(*DeviceState) *int64 { return nil }),
 	rdb.TextColumn("external_id", func(r *DeviceState) string { return r.ExternalId }),
 	rdb.TextColumn("source", func(r *DeviceState) string { return r.Source }),
 	rdb.BoolColumn("active", func(r *DeviceState) bool { return r.Active }),
