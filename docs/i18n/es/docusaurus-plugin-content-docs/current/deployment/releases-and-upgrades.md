@@ -809,6 +809,13 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Novedades de v1.7.0 {#v170-whats-new}
 
+#### Las eliminaciones se avisan de forma fiable {#v170-deletion-announcements}
+
+- Al eliminar un dispositivo, cliente, área, activo o grupo, el aviso a los demás servicios se registra ahora en la misma transacción de base de datos que la eliminación, y `device-management` lo sigue publicando hasta que el broker de mensajes lo acepta. Antes, un aviso perdido por una caída del broker o un reinicio en el momento equivocado no se enviaba nunca, de modo que los dashboards compartidos, los anclajes de eventos y el estado de detección de la entidad eliminada podían quedarse atrás.
+- El aviso lleva la hora de la eliminación, por tarde que se publique.
+- Mientras conviven pods antiguos y nuevos durante la actualización gradual, las eliminaciones que atiende un pod `v1.6` se avisan de la forma anterior.
+- No requiere cambios de configuración.
+
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}
 
 `v1.6.0` es una actualización in situ desde `v1.5.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de v1.6.0 para ambos comandos**, y proporciona a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Una migración añadida en `device-management` hace únicas las claves de atributos activos y encola reparaciones. Consulta [Cambios de esquema en v1.6.0 y vuelta atrás](#v160-going-back). Si vienes de `v1.4.0` o anterior, lee primero las [notas de `v1.5.0`](#v150-upgrade).
