@@ -98,8 +98,9 @@ const MIN_REFRESH_GAP_MS = 10_000;
  * or the server answered 5xx or 429 without a GraphQL error. Anything else (a GraphQL error
  * such as an invalid or revoked refresh token or SSO_REQUIRED, a 400 or 401, or an error that
  * is not a transport error at all) is the server's answer, and asking again would repeat it.
+ * Exported within the package (not from index.ts): subscribe.ts reads the same predicate.
  */
-function isTransientRefreshError(err: unknown): boolean {
+export function isTransientRefreshError(err: unknown): boolean {
   if (!(err instanceof GraphQLRequestError)) return false;
   if (err.errors && err.errors.length > 0) return false;
   return err.status === 0 || err.status === 429 || err.status >= 500;
