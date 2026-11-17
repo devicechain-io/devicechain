@@ -518,6 +518,9 @@ dcctl bootstrap local devicechain
 
 #### 升级到 v1.7.0 前 {#v170-before-upgrade}
 
+
+- **`dcctl install`、`dcctl bootstrap` 和 `dcctl preflight` 会检查 OpenTofu 或 Terraform 的版本。** 预检现在会拒绝低于 dcctl 内置 OpenTofu 配置所声明的 `required_version`（目前为 `>= 1.10`）的二进制文件、预发布版本，以及无法读取版本的二进制文件。此前预检只检查二进制文件是否存在，因此使用 OpenTofu 1.9 的安装会在已经更新 Operator 之后才在 `tofu init` 处失败。两者都已安装时仍优先使用 OpenTofu，检查的也是它。运行 v1.7.0 的 `dcctl install` 之前，请安装 1.10 或更高的稳定版 OpenTofu 或 Terraform。`--skip-preflight` 仍会跳过此检查。
+
 #### v1.7.0 新增内容 {#v170-whats-new}
 
 #### 删除通知可靠送达 {#v170-deletion-announcements}
