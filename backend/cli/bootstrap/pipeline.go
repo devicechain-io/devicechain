@@ -138,6 +138,11 @@ type State struct {
 	// is on: every path that never runs the detection (bootstrap, upgrade, a State built by hand, a
 	// detection error) lands on the noisy side, never the silent one.
 	UnscrapedControlPlane []string
+	// BackupStandardDisk is install's reading that the cluster provisions GKE persistent disks,
+	// so the backup store's new volume gets a dedicated pd-standard class
+	// (settleBackupStandardDisk). Set only by install; false everywhere else, which is the
+	// cluster root's own default.
+	BackupStandardDisk bool
 	// AlertRouting is the alert-routing flags of `dcctl install` or `dcctl upgrade`. The zero
 	// value asks for nothing, which keeps whatever routing the cluster already has.
 	AlertRouting AlertRoutingRequest
@@ -263,6 +268,8 @@ type State struct {
 	// one the declaration already records), merged over what dcctl computes. See
 	// valuesoverlay.go. Nil means none.
 	ValuesOverlay map[string]interface{}
+	// ShardGroups is the optional routing block read from the Instance declaration.
+	ShardGroups *dcv1beta1.ShardGroupsSpec
 	// ValuesOverlayIntent says this run explicitly replaces or resets the overlay,
 	// so historical token-audience enforcement values are not carried.
 	ValuesOverlayIntent bool

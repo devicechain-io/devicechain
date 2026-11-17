@@ -111,12 +111,12 @@ func (api *Api) checkTrackedCeiling(ctx context.Context, db *gorm.DB, rt *Entity
 // checkTrackedFlipCeiling refuses marking a relationship type tracked when that would put
 // any device over MaxTrackedRelationshipsPerDevice: one grouped query over the device
 // edges of every tracked type plus this one, on the tenant-scoped handle.
-func (api *Api) checkTrackedFlipCeiling(ctx context.Context, typeId uint) error {
+func checkTrackedFlipCeiling(tx *gorm.DB, typeId uint) error {
 	var over []uint
-	if err := api.RDB.DB(ctx).Model(&EntityRelationship{}).
+	if err := tx.Model(&EntityRelationship{}).
 		Where("source_type = ? AND (relationship_type_id = ? OR relationship_type_id IN (?))",
 			string(entity.TypeDevice), typeId,
-			api.RDB.DB(ctx).Model(&EntityRelationshipType{}).Select("id").Where("tracked = ?", true)).
+			tx.Model(&EntityRelationshipType{}).Select("id").Where("tracked = ?", true)).
 		Group("source_id").Having("COUNT(*) > ?", MaxTrackedRelationshipsPerDevice).
 		Limit(1).Pluck("source_id", &over).Error; err != nil {
 		return err
