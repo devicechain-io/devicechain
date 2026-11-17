@@ -39,8 +39,9 @@ function ResourceDetail<T>({ resource }: { resource: RegistryResource<T> }) {
   // Resolve one of this family's noun-bearing strings by its fixed suffix.
   const e = (suffix: string, opts?: Record<string, unknown>) =>
     t(`entities:${resource.i18nKey}${suffix}`, opts);
-  const { token: rawToken } = useParams<{ token: string }>();
-  const token = decodeURIComponent(rawToken ?? '');
+  // The router hands the param over already decoded. Decoding it again turned a token
+  // holding a '%' into a different token, or threw on one such as "a%zz".
+  const token = useParams<{ token: string }>().token ?? '';
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
