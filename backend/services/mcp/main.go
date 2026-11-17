@@ -97,15 +97,14 @@ func initializeService(ctx context.Context) error {
 }
 
 // registerHttpRoutes mounts this service's MCP routes on the microservice's OWN mux
-// rather than on http.DefaultServeMux. The mux ends up carrying six patterns, in two
-// groups:
+// rather than on http.DefaultServeMux. The HTTP surface has two groups:
 //
 //   - server.Routes, called here, contributes the MCP endpoint at "/" and the two RFC 9728
 //     protected-resource metadata locations — the exact path and its subtree form.
 //     Which paths those are is a routing decision that belongs to the server package,
 //     which has tests for it.
-//   - core/service contributes /healthz, /readyz and /metrics, as it does for every
-//     service; initializeService is where that happens.
+//   - core/service contributes /healthz, /readyz and /metrics on OpsMux(), as it does
+//     for every service; initializeService is where that happens.
 //
 // 🔴 THAT ROUTE SET IS A PROTOCOL CONTRACT, NOT A CONVENIENCE. A client discovers this
 // server by spec: it POSTs the resource identifier, reads the WWW-Authenticate

@@ -80,8 +80,9 @@ import '@/routes/admin/ai-providers/catalog';
 // next reader to infer a hazard that no longer exists.
 export default function AiProviderDetailPage() {
   const { t } = useTranslation('aiProviders');
-  const { token: rawToken } = useParams<{ token: string }>();
-  const token = decodeURIComponent(rawToken ?? '');
+  // The router hands the param over already decoded. Decoding it again turned a token
+  // holding a '%' into a different token, or threw on one such as "a%zz".
+  const token = useParams<{ token: string }>().token ?? '';
   const { data, loading, error } = useQuery(() => getAiProvider(token), [token]);
   const { data: kinds } = useQuery(listAiProviderKinds, []);
   if (loading) {

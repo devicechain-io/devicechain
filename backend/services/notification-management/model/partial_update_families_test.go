@@ -115,7 +115,13 @@ func notificationChannelFamily() putest.Family[*Api] {
 		Migrate:    []any{&NotificationChannel{}},
 		NewRequest: func() any { return &NotificationChannelUpdateRequest{} },
 		Update: func(api *Api, ctx context.Context, token string, req any) error {
-			_, err := api.UpdateNotificationChannel(ctx, token, req.(*NotificationChannelUpdateRequest))
+			// Destination edits deliberately re-supply the known fixture credential.
+			// Dedicated binding tests separately assert that omission refuses without writes.
+			edit := req.(*NotificationChannelUpdateRequest)
+			if !edit.Secret.Set && (edit.ChannelType.Set || edit.Config.Set) {
+				edit.Secret = dcgraphql.OptionalStringOf(channelSeed.Secret)
+			}
+			_, err := api.UpdateNotificationChannel(ctx, token, edit)
 			return err
 		},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {

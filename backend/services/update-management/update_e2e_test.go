@@ -315,7 +315,9 @@ func (f *e2e) unsignedArtifact(tenant, token, version string, content []byte) {
 	ref, err := Api.Blobs.Put(ctx, blob.Key{Tenant: tenant, Purpose: model.BlobPurpose, ID: token + "-object"},
 		bytes.NewReader(content), blob.PutOptions{MaxSize: int64(len(content))})
 	require.NoError(f.t, err)
-	require.NoError(f.t, Api.CompleteUpload(ctx, a, ref))
+	stamp, err := Api.ClaimUpload(ctx, a)
+	require.NoError(f.t, err)
+	require.NoError(f.t, Api.CompleteUpload(ctx, a, stamp, ref))
 }
 
 // natsLink is the device side of the broker: it publishes on the device own device-reports subject
@@ -691,7 +693,7 @@ func TestAnotherDeviceOrTenantCannotDownloadSomeoneElsesAssignment(t *testing.T)
 }
 
 func newSweeperForTest() *processor.DeadlineSweeper {
-	return processor.NewDeadlineSweeper(Api, time.Minute, &ReportsMetrics)
+	return processor.NewDeadlineSweeper(Api, time.Minute, &ReportsMetrics, nil)
 }
 
 func (f *e2e) assignmentOf(tenant, token string) *model.UpdateAssignmentView {

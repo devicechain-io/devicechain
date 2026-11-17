@@ -72,10 +72,21 @@ The remaining settings bound the service:
 | `maxArtifactBytes` | 512 MiB | The largest single artifact. It may not exceed `maxTenantArtifactBytes`. |
 | `maxTenantArtifactBytes` | 2 GiB | The most one tenant's artifacts may hold in total. |
 | `maxConcurrentUploads` | 4 | Uploads one replica streams at once. |
-| `maxConcurrentDownloads` | 16 | Downloads one replica streams at once. |
+| `maxConcurrentDownloads` | 16 | Downloads one replica streams at once, across all tenants. See the admission limits below. |
 | `capabilityTtlSeconds` | 900 | How long a download grant lives. Fifteen minutes is also the ceiling; a larger value is refused at startup. |
 | `sweepIntervalSeconds` | 30 | How often the platform looks for attempts whose device went quiet. |
 | `deadlines.*` | see [below](#deadlines) | How long the platform waits in each phase of an attempt. |
+
+Each replica allows one in-flight download per (tenant, device, assignment), even if the device
+renews its download grant. A tenant's share is `max(1, floor(maxConcurrentDownloads / 2))`
+(eight by default). While another tenant holds a slot, a tenant at or above its share cannot
+start another stream; existing streams continue. When no other tenant holds a slot, a tenant
+may use all available slots. These limits apply independently on each replica.
+
+A refused download returns HTTP **503** with `Retry-After: 5`. After a dropped connection,
+a resumed download may receive this response for up to about **30 seconds** while the server
+notices the drop and releases the previous stream. Devices must treat 503 as retryable and
+honor `Retry-After` before retrying, including when resuming a download.
 
 A negative value, an unknown key, or a `downloadBaseUrl` that is relative, carries credentials or a
 query is refused at startup.

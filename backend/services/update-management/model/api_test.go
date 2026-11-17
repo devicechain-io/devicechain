@@ -285,7 +285,9 @@ func TestTenantQuotaCountsEveryNonDeletedArtifactAndIsPerTenant(t *testing.T) {
 	// A retired artifact whose bytes are stored still holds them, so it still counts.
 	a, err := env.api.ArtifactByToken(acme, "a")
 	require.NoError(t, err)
-	require.NoError(t, env.api.CompleteUpload(acme, a, blob.Ref{Backend: "filesystem", Key: "inst/acme/artifacts/a"}))
+	stamp, err := env.api.ClaimUpload(acme, a)
+	require.NoError(t, err)
+	require.NoError(t, env.api.CompleteUpload(acme, a, stamp, blob.Ref{Backend: "filesystem", Key: "inst/acme/artifacts/a"}))
 	_, err = env.api.RetireArtifact(acme, "a")
 	require.NoError(t, err)
 	_, err = env.api.CreateArtifact(acme, mk("c", "3", 1))
@@ -434,7 +436,9 @@ func TestRetireIsIdempotentAndKeepsTheContentReference(t *testing.T) {
 	ref, err := env.store.Put(ctx, blob.Key{Tenant: "acme", Purpose: BlobPurpose, ID: "obj1"},
 		bytesReader("data"), blob.PutOptions{})
 	require.NoError(t, err)
-	require.NoError(t, env.api.CompleteUpload(ctx, a, ref))
+	stamp, err := env.api.ClaimUpload(ctx, a)
+	require.NoError(t, err)
+	require.NoError(t, env.api.CompleteUpload(ctx, a, stamp, ref))
 
 	r1, err := env.api.RetireArtifact(ctx, "fw-1")
 	require.NoError(t, err)
@@ -457,8 +461,10 @@ func TestCompleteUploadIsAConditionalTransition(t *testing.T) {
 
 	first := blob.Ref{Backend: "filesystem", Key: "inst/acme/artifacts/one"}
 	second := blob.Ref{Backend: "filesystem", Key: "inst/acme/artifacts/two"}
-	require.NoError(t, env.api.CompleteUpload(ctx, a, first))
-	requireRefusal(t, env.api.CompleteUpload(ctx, a, second), CodeArtifactUploadRaceLost)
+	stamp, err := env.api.ClaimUpload(ctx, a)
+	require.NoError(t, err)
+	require.NoError(t, env.api.CompleteUpload(ctx, a, stamp, first))
+	requireRefusal(t, env.api.CompleteUpload(ctx, a, stamp, second), CodeArtifactUploadRaceLost)
 
 	got, err := env.api.ArtifactByToken(ctx, "fw-1")
 	require.NoError(t, err)
@@ -470,9 +476,11 @@ func TestCompleteUploadIsAConditionalTransition(t *testing.T) {
 		return r
 	}())
 	require.NoError(t, err)
+	stamp, err = env.api.ClaimUpload(ctx, b)
+	require.NoError(t, err)
 	_, err = env.api.RetireArtifact(ctx, "fw-2")
 	require.NoError(t, err)
-	requireRefusal(t, env.api.CompleteUpload(ctx, b, second), CodeArtifactUploadRaceLost)
+	requireRefusal(t, env.api.CompleteUpload(ctx, b, stamp, second), CodeArtifactUploadRaceLost)
 }
 
 func TestDeletedTenantWritesAreRefusedButReadsWork(t *testing.T) {

@@ -246,6 +246,8 @@ var (
 	// tenant, whose values here are exactly the unverified strings off the wire
 	// (ADR-023 G.3).
 	TenantGoneCounter *prometheus.CounterVec
+	// PlacementUnavailableCounter counts captured messages held during a placement outage.
+	PlacementUnavailableCounter prometheus.Counter
 	// BackpressureCounter counts inbound messages refused because inbound-events is applying
 	// backpressure: a reader of it is so far behind that accepting more would discard events
 	// it has not read. Apart from RateLimitedCounter because the cause is the platform, not
@@ -444,6 +446,9 @@ func initializeMetrics() {
 		"total_msg_tenant_deleted",
 		"Count of inbound messages refused because their tenant has been deleted and its data is being reclaimed",
 		[]string{"source"})
+	PlacementUnavailableCounter = Microservice.NewCounter(
+		"total_msg_placement_unavailable",
+		"Count of captured messages left unacknowledged because shard placement is unavailable")
 	ExternalMqttOwnerGauge = Microservice.NewGaugeVec(
 		"external_mqtt_owner",
 		"1 on the pod that reads an external MQTT broker source, 0 on the others; per source, the sum across pods should be 1",
@@ -468,7 +473,8 @@ func initializeMetrics() {
 		"total_http_ingest_refused",
 		"Count of HTTP /events requests refused synchronously with a 401, by reason: the tenant in the path "+
 			"does not exist, or the credential in the body does not authenticate. The sender sees one answer "+
-			"for both",
+			"for both. A body that does not decode, addressed to a tenant that does not exist, is counted "+
+			"as unknown_tenant too, and answered as any malformed body",
 		[]string{"source", "reason"})
 	CredentialCheckCounter = Microservice.NewCounterVec(
 		"total_http_credential_checks",
@@ -798,6 +804,12 @@ func buildDeviceUplinkRoute(ingest config.HttpIngest) *processor.DeviceUplinkRou
 	return newDeviceUplinkRoute()
 }
 
+const (
+	deviceUplinkSourceBurst = 600
+	deviceUplinkSourceEvery = 20 * time.Millisecond
+	deviceUplinkSourceKeys  = 4096
+)
+
 // newDeviceUplinkRoute is the device-uplink route's dependencies, without asking whether an
 // operator switched a transport on. The MQTT wire is switched on at the broker (the grant to publish
 // to the uplink topic, infrastructure.nats.mqttDeviceUplinks), so this service serves whatever the
@@ -807,11 +819,23 @@ func newDeviceUplinkRoute() *processor.DeviceUplinkRoute {
 	if infra.DeviceManagement.Hostname == "" {
 		return nil
 	}
+	trusted, err := infra.Http.TrustedProxyPrefixes()
+	if err != nil {
+		log.Error().Err(err).Msg("Invalid trusted proxies for device uplinks")
+		return nil
+	}
+	sources, err := sourcelimit.New(sourcelimit.Limits{Burst: deviceUplinkSourceBurst, Every: deviceUplinkSourceEvery, MaxKeys: deviceUplinkSourceKeys})
+	if err != nil {
+		log.Error().Err(err).Msg("Unable to build device uplink source limiter")
+		return nil
+	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.DeviceRead)})
 	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
 	return &processor.DeviceUplinkRoute{
-		Plans:   integration.NewDeviceDecoders(integration.NewDM(client, dmURL), integration.DeviceDecoderConfig{}),
-		Publish: onDeviceUplinkDecoded,
+		Sources:        sources,
+		TrustedProxies: trusted,
+		Plans:          integration.NewDeviceDecoders(integration.NewDM(client, dmURL), integration.DeviceDecoderConfig{}),
+		Publish:        onDeviceUplinkDecoded,
 		Result: func(result string) {
 			if DeviceUplinkRequestsCounter != nil {
 				DeviceUplinkRequestsCounter.WithLabelValues(result).Inc()
@@ -1137,6 +1161,7 @@ func buildEventSources() error {
 				gateway := processor.NewGatewayJetStreamSource(Microservice, source.Id, decoder,
 					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
 					ingestGate, readingGate, meterAt)
+				gateway.UsePlacementUnavailableCounter(PlacementUnavailableCounter)
 				// Held so createNatsComponents can hand it the capture reader and its
 				// inbound-events writer once they exist. Sources are built in the
 				// INITIALIZE phase and readers and writers are created in START, so there
@@ -1153,6 +1178,7 @@ func buildEventSources() error {
 				StoreSource = processor.NewGatewayJetStreamSource(Microservice, source.Id, decoder,
 					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
 					ingestGate, readingGate, meterAt)
+				StoreSource.UsePlacementUnavailableCounter(PlacementUnavailableCounter)
 				StoreSource.UseMessageStore()
 				if LagCredit != nil {
 					StoreSource.UseLagCredit(LagCredit, processor.StreamStore)
@@ -1315,8 +1341,8 @@ func onMessageReceived(source string, raw []byte) {
 // against source. The HTTP and external-MQTT sources ask it before reading a message.
 //
 // The answer itself comes from inboundBackpressure; this adds the accounting.
-func admitInbound(source string) error {
-	err := inboundBackpressure()
+func admitInbound(tenant, source string) error {
+	err := inboundBackpressure(tenant)
 	if err != nil {
 		BackpressureCounter.WithLabelValues(source).Inc()
 	}
@@ -1329,11 +1355,11 @@ func admitInbound(source string) error {
 //
 // With no manager it refuses: an answer of "accepting" from a process that cannot see the
 // stream is the fail-open this exists to prevent.
-var inboundBackpressure = func() error {
+var inboundBackpressure = func(tenant string) error {
 	if NatsManager == nil {
 		return messaging.ErrStreamBackpressure
 	}
-	return NatsManager.Backpressure(streams.InboundEvents)
+	return NatsManager.AdmitPublish(tenant, streams.InboundEvents)
 }
 
 // onTenantGone accounts for a message refused by the ADR-077 lifecycle gate. Same
@@ -1675,8 +1701,9 @@ func writeIntegrationUplink(ctx context.Context, source string, msg messaging.Me
 func writeInbound(ctx context.Context, source string, msg messaging.Message) error {
 	err := publishInbound(ctx, msg)
 	// The gate can close between a source's admit check and this publish; the refusal is
-	// counted the same way, and the source answers it as it answers any refusal.
-	if errors.Is(err, messaging.ErrStreamBackpressure) {
+	// counted the same way, and the source answers it as it answers any refusal, including a
+	// placement refusal (the envelope path counts both too).
+	if messaging.IsRefusal(err) {
 		countBackpressured(source)
 	}
 	return err
@@ -2108,10 +2135,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	mqttStoreIngest.stop(ctx)
 
 	// Stop the GraphQL manager, then the broker manager.
+	err := Svc.Stop(ctx)
+	// Keep placement available to publishes until the service's managers finish stopping.
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
-	return Svc.Stop(ctx)
+	return err
 }
 
 // envelopesInbound reports infrastructure.messaging.envelopes.inbound: whether this service
@@ -2172,10 +2201,12 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 
 	// Terminate the GraphQL manager, then the broker manager.
+	err := Svc.Terminate(ctx)
+	// Release the placement watch only after the service's managers terminate.
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
-	return Svc.Terminate(ctx)
+	return err
 }
 
 // failedDecodeMaxBytes bounds the (redacted) body kept on the failed-decode stream.
