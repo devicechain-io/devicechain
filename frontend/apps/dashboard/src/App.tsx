@@ -130,11 +130,11 @@ export default function App() {
         },
         refresh: async (refreshToken) =>
           (await gql('user-management', REFRESH, { refreshToken }, { anonymous: true })).refresh,
-        // Refresh two minutes ahead of expiry rather than the default 30 s. A transient
-        // failure (no network, a 5xx) is retried with backoff until the access token actually
-        // expires, and an unattended wall display wants that window long enough to ride out a
-        // Wi-Fi reconnect. A refusal (revoked or invalid refresh token, SSO required) still
-        // ends the session at once.
+        // Refresh two minutes ahead of expiry rather than the default 30 s, so a Wi-Fi reconnect
+        // rarely leaves the display without a valid token. A transient failure (no network, a
+        // 5xx) never ends the session: it is retried with backoff for as long as the refresh
+        // token is valid. A refusal (revoked or invalid refresh token, SSO required) still ends
+        // the session at once.
         skewSeconds: 120,
         onEnd: (err) => {
           console.warn('/dash: the session ended and could not be refreshed', err);
