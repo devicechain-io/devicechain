@@ -764,6 +764,13 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### What is new in v1.7.0 {#v170-whats-new}
 
+#### Deletions are announced reliably {#v170-deletion-announcements}
+
+- Deleting a device, customer, area, asset or group now records the announcement to the other services in the same database transaction as the delete, and `device-management` keeps publishing it until the message broker accepts it. Before, an announcement lost to a broker outage or a restart at the wrong moment was never sent, so dashboard shares, event anchors and detection state of the deleted entity could stay behind.
+- The announcement carries the time of the delete, however late it is published.
+- While old and new pods overlap during the rolling upgrade, deletes handled by a `v1.6` pod are announced the old way.
+- No configuration change is needed.
+
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
 
 `v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the v1.6.0 `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. One appended migration in `device-management` makes live entity attribute keys unique and queues repairs. See [Schema changes in v1.6.0 and going back](#v160-going-back). Coming from `v1.4.0` or earlier, read the [`v1.5.0` notes](#v150-upgrade) first.
