@@ -799,7 +799,28 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 ## Versiones recientes {#recent-releases}
 
-Las tres versiones menores más recientes (`v1.6`, `v1.5` y `v1.4`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (`v1.6`, `v1.5` y `v1.4`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
+
+### v1.7.0 — en desarrollo {#v170-upgrade}
+
+`v1.7.0` es una actualización in situ desde `v1.6.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Estas notas corresponden a la versión en desarrollo y se amplían hasta su publicación.
+
+#### Antes de actualizar a v1.7.0 {#v170-before-upgrade}
+
+
+- **`dcctl install`, `dcctl bootstrap` y `dcctl preflight` comprueban la versión de OpenTofu o Terraform.** La comprobación previa ahora rechaza un binario anterior al `required_version` que declara la configuración de OpenTofu incluida en dcctl (actualmente `>= 1.10`), una versión preliminar o un binario cuya versión no puede leer. Antes solo comprobaba que el binario existiera, por lo que una instalación con OpenTofu 1.9 fallaba en `tofu init` cuando ya había actualizado el operador. Si ambos están instalados, se sigue prefiriendo OpenTofu, y es el binario que se comprueba. Instala OpenTofu o Terraform estable 1.10 o posterior antes de ejecutar el `dcctl install` de v1.7.0. `--skip-preflight` sigue omitiendo la comprobación.
+
+#### Novedades de v1.7.0 {#v170-whats-new}
+
+#### Las eliminaciones se avisan de forma fiable {#v170-deletion-announcements}
+
+- Al eliminar un dispositivo, cliente, área, activo o grupo, el aviso a los demás servicios se registra ahora en la misma transacción de base de datos que la eliminación, y `device-management` lo sigue publicando hasta que el broker de mensajes lo acepta. Antes, un aviso perdido por una caída del broker o un reinicio en el momento equivocado no se enviaba nunca, de modo que los dashboards compartidos, los anclajes de eventos y el estado de detección de la entidad eliminada podían quedarse atrás.
+- El aviso lleva la hora de la eliminación, por tarde que se publique.
+- Mientras conviven pods antiguos y nuevos durante la actualización gradual, las eliminaciones que atiende un pod `v1.6` se avisan de la forma anterior.
+- No requiere cambios de configuración.
+
+
+- **El límite de 64 solicitudes en curso por proceso del servidor MCP es alcanzable, y la solicitud que lo supera recibe HTTP 429.** El presupuesto compartido de cuerpos de solicitud solo admitía 63 cuerpos de tamaño máximo, por lo que la solicitud simultánea número 64 recibía HTTP 503 con `Retry-After: 1` antes de alcanzar el límite de MCP. Ahora el presupuesto admite 64 (crece 64 bytes), y las solicitudes que superan el límite reciben HTTP 429 con `Retry-After: 1`, como está documentado. El límite de 4 en curso por llamante y el máximo de 1 MiB por cuerpo de solicitud no cambian.
 
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}
 
@@ -859,6 +880,7 @@ Novedades:
 Qué requiere acción, en el orden en que debe hacerse:
 
 - **Nota de actualización: herramientas.** Instala OpenTofu 1.10 o posterior (o Terraform 1.10 o posterior) en el equipo que ejecuta `dcctl`; la comprobación previa verifica su presencia, no la versión. Usa la herramienta v1.6.0, instala con los ajustes del clúster y después actualiza cada instancia. No hay degradación de versión.
+- **Nota de actualización: el bróker se reinicia.** La actualización sustituye la imagen del bróker, así que cada pod del bróker se reinicia. Con `--mqtt-fail-closed` desactivado (el valor predeterminado), un mensaje QoS 1 que el bróker confirma mientras un stream cambia de líder puede perderse. Actívalo antes de actualizar (`dcctl upgrade --mqtt-fail-closed`) si los dispositivos no deben perder mensajes confirmados ([MQTT con cierre seguro](./observability.md#mqtt-fail-closed)).
 - **Nota de actualización: comprobación previa de `dcctl install`.** En un clúster que conserva su controlador `ingress-nginx`, la instalación se niega a continuar mientras algún Ingress de esa clase lleve una anotación `*-snippet`. Actualiza antes la instancia propietaria o elimina la anotación ([detalles](#v160-nginx-snippets-off)).
 
 **Corrige la configuración antes de reiniciar.** Revisa la configuración de instancia editada a mano; los ajustes inválidos impiden el arranque. Las claves de servicio siguientes van bajo `functionalAreas.<area>.config`.
@@ -879,7 +901,7 @@ Qué requiere acción, en el orden en que debe hacerse:
 
 **Durante y después del despliegue.**
 
-- **Mantenga ausente `infrastructure.nats.shardGroups` durante todo el despliegue v1.5 → v1.6.** Un pod `v1.5` rechaza esta nueva clave como desconocida si carga la nueva configuración durante el despliegue. Termine de actualizar todos los pods antes de activarla. Si se incluye, `count` debe ser 2–16; los sufijos deben ser únicos y limitarse a `inbound-events` y `resolved-events`; las claves de `placementTags` deben ser números de grupo entre 1 y `count - 1`, con etiquetas no vacías ni compuestas solo por espacios. Los bloques inválidos se rechazan. Lo que acepta `dcctl` es más restringido: véase [Grupos de particiones de NATS opcionales](#v160-nats-shard-groups).
+- **Mantenga ausente `infrastructure.nats.shardGroups` durante todo el despliegue v1.5 → v1.6.** Un pod `v1.5` rechaza esta nueva clave como desconocida si carga la nueva configuración durante el despliegue. Termine de actualizar todos los pods antes de activarla. Si se incluye, `count` debe ser 2–16; los sufijos deben ser únicos y limitarse a `inbound-events` y `resolved-events`; las claves de `placementTags` deben ser números de grupo en `0..count-1`, incluido el grupo cero existente, con etiquetas no vacías ni compuestas solo por espacios. `dcctl` deriva una etiqueta de ubicación `dc-nats-<group>` para cada grupo, incluida `dc-nats-0`. Los bloques inválidos se rechazan. Lo que acepta `dcctl` es más restringido: véase [Grupos de particiones de NATS opcionales](#v160-nats-shard-groups).
 
 - **Los atributos de entidad son únicos por clave.** La actualización elimina duplicados activos de escrituras iniciales simultáneas, conserva el menor ID y encola la reparación de pertenencias a grupos y configuración. La creación del índice bloquea brevemente las escrituras de atributos. Durante el despliegue gradual, una réplica antigua puede rechazar una escritura inicial concurrente; vuelva a intentarla. No se requiere cambiar la configuración.
 

@@ -754,7 +754,28 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 ## Recent releases {#recent-releases}
 
-The three most recent minor releases (`v1.6`, `v1.5` and `v1.4`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
+The release in development (`v1.7`) and the three most recent minor releases (`v1.6`, `v1.5` and `v1.4`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
+
+### v1.7.0 — in development {#v170-upgrade}
+
+`v1.7.0` is an in-place upgrade from `v1.6.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
+
+#### Before you upgrade to v1.7.0 {#v170-before-upgrade}
+
+
+- **`dcctl install`, `dcctl bootstrap` and `dcctl preflight` check the OpenTofu or Terraform version.** The preflight now refuses a binary older than the `required_version` that dcctl's bundled OpenTofu configuration declares (currently `>= 1.10`), a prerelease, or one whose version it cannot read. Before, it checked only that the binary was present, so an install on OpenTofu 1.9 failed at `tofu init` after it had already updated the operator. OpenTofu is still preferred when both are installed, and it is the binary checked. Install a stable OpenTofu or Terraform 1.10 or later before you run the v1.7.0 `dcctl install`. `--skip-preflight` still skips the check.
+
+#### What is new in v1.7.0 {#v170-whats-new}
+
+#### Deletions are announced reliably {#v170-deletion-announcements}
+
+- Deleting a device, customer, area, asset or group now records the announcement to the other services in the same database transaction as the delete, and `device-management` keeps publishing it until the message broker accepts it. Before, an announcement lost to a broker outage or a restart at the wrong moment was never sent, so dashboard shares, event anchors and detection state of the deleted entity could stay behind.
+- The announcement carries the time of the delete, however late it is published.
+- While old and new pods overlap during the rolling upgrade, deletes handled by a `v1.6` pod are announced the old way.
+- No configuration change is needed.
+
+
+- **The MCP server's limit of 64 requests in flight per process is reachable, and the request past it receives HTTP 429.** The shared request-body budget held only 63 maximum-size bodies, so the 64th concurrent request received HTTP 503 with `Retry-After: 1` before the MCP limit was reached. The budget now holds 64 (it grows by 64 bytes), and requests beyond the limit receive HTTP 429 with `Retry-After: 1`, as documented. The limit of 4 in flight per caller and the 1 MiB request-body ceiling are unchanged.
 
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
 
@@ -814,6 +835,7 @@ What is new:
 What needs action, in the order to do it:
 
 - **Upgrade note: tooling.** Install OpenTofu 1.10 or later (or Terraform 1.10 or later) on the machine running `dcctl`; preflight checks presence, not version. Use the v1.6.0 tool, install with the cluster's settings, then upgrade each instance. There is no downgrade.
+- **Upgrade note: the broker restarts.** The upgrade replaces the broker image, so every broker pod restarts. With `--mqtt-fail-closed` off (the default), a QoS 1 message the broker acknowledges while a stream changes leader can be lost. Turn it on before you upgrade (`dcctl upgrade --mqtt-fail-closed`) if devices must not lose acknowledged messages ([fail-closed MQTT](./observability.md#mqtt-fail-closed)).
 - **Upgrade note: `dcctl install` preflight.** On a cluster that kept its `ingress-nginx` controller, install refuses while any Ingress of that class carries a `*-snippet` annotation. Upgrade the owning instance or remove the annotation first ([details](#v160-nginx-snippets-off)).
 
 **Correct configuration before restarting.** Review hand-edited instance configuration; invalid service settings stop startup. Service keys below live under `functionalAreas.<area>.config`.
@@ -834,7 +856,7 @@ What needs action, in the order to do it:
 
 **During and after the rollout.**
 
-- **Keep `infrastructure.nats.shardGroups` absent throughout the v1.5 → v1.6 roll.** A `v1.5` pod rejects this new key as unknown if it loads the new configuration mid-roll. Finish upgrading all pods before opting in. When present, `count` must be 2–16; suffixes must be unique and limited to `inbound-events` and `resolved-events`; `placementTags` keys must be group numbers 1 through `count - 1`, with nonblank tag strings. Invalid blocks are refused. What `dcctl` accepts is narrower: see [Optional NATS shard groups](#v160-nats-shard-groups).
+- **Keep `infrastructure.nats.shardGroups` absent throughout the v1.5 → v1.6 roll.** A `v1.5` pod rejects this new key as unknown if it loads the new configuration mid-roll. Finish upgrading all pods before opting in. When present, `count` must be 2–16; suffixes must be unique and limited to `inbound-events` and `resolved-events`; `placementTags` keys must be group numbers in `0..count-1`, including the existing group zero, with nonblank tag strings. `dcctl` derives a `dc-nats-<group>` placement tag for every group, including `dc-nats-0`. Invalid blocks are refused. What `dcctl` accepts is narrower: see [Optional NATS shard groups](#v160-nats-shard-groups).
 
 - **Entity attributes are unique per key.** The upgrade collapses duplicate live rows from concurrent first writes, keeping the lowest row ID, and queues group membership and configuration repairs. The index build briefly blocks attribute writes. While old and new replicas overlap, an old replica contending on a concurrent first write may refuse it; retry the write. No configuration change is needed.
 

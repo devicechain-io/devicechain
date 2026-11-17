@@ -73,5 +73,6 @@ var (
 		NewAutomationReviewsSchema(),
 		NewAutomationReviewEnforcementSchema(),
 		NewEntityAttributeUniqueKeySchema(),
+		NewPendingEntityDeletionsSchema(),
 	}
 )

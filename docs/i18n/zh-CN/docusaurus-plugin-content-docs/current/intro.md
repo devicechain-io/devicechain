@@ -8,7 +8,7 @@ import YouTubeLite from '@site/src/components/YouTubeLite';
 
 # DeviceChain {#devicechain}
 
-DeviceChain 是一个使用 Go 和 React 构建的云原生 **IoT 应用使能平台**。它连接和管理大规模、多种类型的设备群，并处理这些设备的数据。平台涵盖设备生命周期、遥测数据接入、命令与控制、组织建模和多租户管理，并通过 GraphQL API 以及可嵌入、支持版本管理的仪表板提供这些功能。
+DeviceChain 是一个运行在 Kubernetes 上的开源 **IoT 平台**，使用 Go 和 React 构建，为 AI 智能体而备。它连接和管理大规模、多种类型的设备群，并处理这些设备的数据。平台涵盖设备生命周期、遥测数据接入、命令与控制、组织建模和多租户管理，并通过 GraphQL API、可嵌入且支持版本管理的仪表板，以及可选的 [MCP 服务器](./concepts/mcp.md)提供这些功能；MCP 服务器让 AI 助手以用户自己的权限读取设备群。
 
 DeviceChain 从头重建了 SiteWhere 平台。它保留了 SiteWhere 经过实践验证的领域模型，将庞大的 Java/Spring 技术栈替换为高效、运维简单的微服务，可运行于任何 Kubernetes 集群。
 
