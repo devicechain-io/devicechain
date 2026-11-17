@@ -171,6 +171,18 @@ func (d *doctor) checkTools(provider string, opts doctorOpts) {
 }
 
 // ---- docker engine ---------------------------------------------------------
+
+// engineMemoryRefuseBelow is the engine memory, in bytes, below which a full-size local
+// install is refused. It sits under the 8Gi recommendation on purpose: a Docker Desktop
+// VM given "8 GB" reports a MemTotal a little under 8GiB (the kernel keeps some), and an
+// operator who set exactly the recommended size must get the warning, not a refusal.
+// Compared on the exact byte value: a floored GiB would read 7.7GiB as 7 and refuse it.
+const engineMemoryRefuseBelow int64 = 15 << 29 // 7.5GiB
+
+// engineMemoryRefused reports whether an engine with b bytes of memory is too small to
+// host a full-size install at all.
+func engineMemoryRefused(b int64) bool { return b < engineMemoryRefuseBelow }
+
 // Returns the docker data-root directory ("" if unknown) for the disk check.
 func (d *doctor) checkDockerEngine(opts doctorOpts) string {
 	section("Docker engine", "🐳")
@@ -196,8 +208,9 @@ func (d *doctor) checkDockerEngine(opts doctorOpts) string {
 		}
 	}
 
+	refuseSmall := opts.FullSizeInstall && opts.hostsKind()
 	capacityIssue := d.warn
-	if opts.FullSizeInstall && opts.hostsKind() {
+	if refuseSmall {
 		capacityIssue = d.fail
 	}
 	const capacityFix = "give Docker >= 4 CPUs and >= 8Gi, or re-run install with --compact for the small-footprint preset"
@@ -210,10 +223,13 @@ func (d *doctor) checkDockerEngine(opts doctorOpts) string {
 	}
 	if b, _ := strconv.ParseInt(runCmd("docker", "info", "--format", "{{.MemTotal}}"), 10, 64); b > 0 {
 		gi := b / (1 << 30)
-		if gi >= 8 {
+		switch {
+		case gi >= 8:
 			d.pass(fmt.Sprintf("engine memory: %dGi", gi))
-		} else {
-			capacityIssue(fmt.Sprintf("engine memory: %dGi", gi), capacityFix)
+		case refuseSmall && engineMemoryRefused(b):
+			d.fail(fmt.Sprintf("engine memory: %.1fGi", float64(b)/(1<<30)), capacityFix)
+		default:
+			d.warn(fmt.Sprintf("engine memory: %.1fGi", float64(b)/(1<<30)), capacityFix)
 		}
 	}
 	if drv := runCmd("docker", "info", "--format", "{{.Driver}}"); drv != "" {

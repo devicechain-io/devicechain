@@ -25,6 +25,14 @@ func TestInstallDockerCapacity(t *testing.T) {
 		{"compact small memory", "8", "4294967296", []string{"--compact"}, 0, 1},
 		{"ample", "8", "17179869184", nil, 0, 0},
 		{"exact thresholds", "4", "8589934592", nil, 0, 0},
+		// Memory refuses below 7.5GiB on the exact byte value and only warns up to 8Gi,
+		// so a Docker Desktop given "8 GB" (about 7.7GiB) is advised, never refused.
+		{"7.4GiB refused", "8", "7945689498", nil, 1, 0},
+		{"one byte under 7.5GiB refused", "8", "8053063679", nil, 1, 0},
+		{"exactly 7.5GiB warns", "8", "8053063680", nil, 0, 1},
+		{"7.6GiB warns", "8", "8160437862", nil, 0, 1},
+		{"Docker Desktop 8 GB warns", "8", "8267812045", nil, 0, 1},
+		{"8GiB passes", "8", "8589934592", nil, 0, 0},
 		{"unreadable", "", "not-a-number", nil, 0, 0},
 		{"unreadable CPU", "not-a-number", "", nil, 0, 0},
 		{"existing cluster", "2", "4294967296", []string{"--kube-context=prod", "--build=false"}, 0, 0},
@@ -89,6 +97,23 @@ func TestInstallDockerCapacity(t *testing.T) {
 				t.Errorf("capacity guidance must name --compact:\n%s", output)
 			}
 		})
+	}
+}
+
+// Negative control for the byte-exact memory floor: the floored-GiB reading the doctor
+// prints, compared against the same 7.5GiB floor, refuses a Docker Desktop given "8 GB"
+// (about 7.7GiB). engineMemoryRefused must not.
+func TestEngineMemoryFloorIsByteExact(t *testing.T) {
+	const desktop8GB int64 = 8267812045 // 7.7GiB
+	floored := desktop8GB / (1 << 30)
+	if !(floored<<30 < engineMemoryRefuseBelow) {
+		t.Fatalf("control is vacuous: floored %dGi is not below the 7.5GiB floor", floored)
+	}
+	if engineMemoryRefused(desktop8GB) {
+		t.Fatal("a 7.7GiB engine was refused; the floor must compare the exact byte value")
+	}
+	if !engineMemoryRefused(7945689498) { // 7.4GiB
+		t.Fatal("a 7.4GiB engine was not refused")
 	}
 }
 
