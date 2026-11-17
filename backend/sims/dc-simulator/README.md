@@ -620,6 +620,39 @@ scenario still provisions and runs, and every delivery is refused rather than se
 written by an older dcctl lacks the outbound-connectors, notification and integration endpoints and
 is refused at bootstrap: re-create the sim.
 
+**Fleet operations.** The district is also run as a fleet:
+
+- **Groups.** Street lights and pumps carry SHARED attributes (`role`, `quay`, and `critical` on
+  the pumps), and four dynamic groups select on them: `hp-all-lights`, `hp-east-quay-lights`,
+  `hp-basin-pumps` and `hp-critical-pumps` (East Quay's and the Basin's). `hp-wet-well-watch`, an
+  early warning at 2.0 m, is **scoped** to `hp-critical-pumps`: every pump's well crosses 2.0 m in
+  the storm, and the North Quay pump's raises nothing.
+- **Campaigns.** Two SOLAR campaigns over `hp-all-lights` (`hp-lights-dusk`, full output at
+  sunset, and `hp-lights-dawn`, trimmed to 50 % at sunrise) are planned per lamp from each lamp's
+  surveyed installed position, so the planned instants run east to west along the promenade, a
+  second or more apart. The dusk campaign declares tomorrow (in the town's zone) a public holiday
+  and plans nothing for it; the dawn campaign, with no holiday, plans that day. As each sim day
+  runs, the sim creates two one-shot CALENDAR campaigns: at 21:30 East Quay's lights are dimmed to
+  40 % (`hp-night-dim-*`), and at 14:00 the Basin pump is sent `flush-well` (`hp-basin-flush-*`).
+- **Maintenance window.** `flush-well` is DISRUPTIVE, and the pump controllers' type carries the
+  window `hp-pump-service-window`, so the 14:00 flush is held until the crew's slot opens at 15:00
+  and runs inside it. The window gates when a disruptive command may START; it does not silence
+  alarms (the platform has no alarm-suppression window).
+- **Hierarchy and graph.** Assets `hp-waterfront` > one site per quay > its pump station, its
+  feeder and its buildings (`hp-bldg-quayside-lofts` on North Quay, `hp-bldg-ferry-terminal` on the
+  Basin). The customer meters are assigned to their buildings and the pumps to their stations. A
+  typed relationship `hp-feeds` joins each quay's feeder to that quay's lights and chargers, so the
+  graph names the East Quay outage's blast radius before it happens.
+
+🔴 **Real time is not compressed.** A campaign trigger and a maintenance window are wall-clock
+schedules, at a resolution of one minute. The CALENDAR jobs and the window's slot are written as
+each sim day runs, at the first whole wall minute after their sim time (a sim hour is a wall minute
+at the default day), and `/status` lists them under `scenario.jobs`. Real sunset and sunrise cannot
+happen inside a 24-minute day: the SOLAR campaigns fire at the real dusk and dawn of wherever the
+lamps stand, and are judged on what the platform PLANNED, never by watching a lamp switch at a
+compressed dusk. Port Alder is fictional, and its coordinates are in open Atlantic water so that no
+map puts it on a real town.
+
 It publishes two boards: `hp-dashboard`, the operator's (a quay picker, alarms by severity and
 devices online on that quay, every gauge of the quay against the three flood tiers, the response
 truck on a map, the East Quay pump's wet well and the Basin charger's connector with their alarms
@@ -662,6 +695,14 @@ alarm ten seconds after it reaches MAJOR, as the escalation's control.
 | `mqtt-bulletin` (sink) | a bulletin on the tenant's topic for every gauge | `--scenario-defect mqtt-unreachable` (the connector aimed at a port nothing listens on) |
 | `notify-escalates` (sink) | every gauge's flood alarm paged the duty officer and, unacknowledged, paged again, and the mail reached the sink | the verifier acknowledges `hp-gauge-north-2` before its escalation (`notify-ack-control-is-red`) |
 | `notify-ack-control-is-red` (sink) | `hp-gauge-north-2`, acknowledged by the verifier, was paged and NOT paged again | none: it is `notify-escalates`' control, run in the same day |
+| `groups-resolve` | each group resolves, as a command target, to exactly the devices its selector should hold | `--scenario-defect east-lamp-mislabelled` (one East Quay lamp tagged North Quay) |
+| `group-scoped-rule` | `wet-well-watch` for exactly the critical pumps, while the North Quay pump's well crossed the same level | `--scenario-defect unscoped-watch` (the rule published without its scope) |
+| `night-dim-campaign` | the day's 21:30 campaign fired once, for exactly East Quay's lights, every command succeeded, those lamps reported 40 % and no other lamp did | `--scenario-defect night-dim-all-lights` |
+| `solar-wave` | for the dusk and dawn campaigns, every lamp's planned instant is the sunset (sunrise) at the position the platform holds for it, and the lamps run east to west | `--scenario-defect lamp-unsited` (one lamp has no position: NO_SITE) |
+| `holiday-skipped` | the dusk campaign declares the day after it was created a holiday, has planned past it, and planned no cycle for it, while the dawn campaign planned it | `--scenario-defect holiday-dropped` |
+| `window-holds-flush` | the day's `flush-well` was queued at 14:00, carries the pump window, was sent only once the window opened and before it closed, and succeeded | `--scenario-defect flush-ungated` (the pump type has no window) |
+| `asset-hierarchy` | each meter is assigned to its building and each pump to its station, each under its own quay's site under the waterfront | `--scenario-defect lofts-under-basin` |
+| `feeder-blast-radius` | each feeder feeds exactly its quay's lights and chargers, and every device the failed feeder feeds went silent in the outage | `--scenario-defect feeder-miswired` (one East Quay lamp on the North Quay feeder) |
 
 It exits 0 when every invariant holds, 1 when one fails and 2 with no verdict (the sim unreachable,
 its day not started or restarted mid-watch, a gap in the alarm polls a flood tier could hide in, or
@@ -1162,7 +1203,8 @@ a snapshot taken at page load would not.
 - `sim/harborpulse*.go` — the waterfront scenario: the manifest and rules (`harborpulse.go`) and
   the compressed day, its planted faults and the command effects (`harborpulse_model.go`), and
   its boards (`harborpulse_dashboard.go`), and the LoRaWAN gauges, their frames and decoders
-  (`harborpulse_lora.go`). `sim/rulekinds.go` builds its duration, rate-of-change, repeating,
+  (`harborpulse_lora.go`), and the fleet operations (`harborpulse_s4.go`; their provisioning is
+  `sim/fleetops.go`). `sim/rulekinds.go` builds its duration, rate-of-change, repeating,
   correlation, geofence and delivery rules; `sim/outbound.go` provisions connectors, webhook
   signing handles, notification channels and policies and inbound integrations; `sim/scenario.go`
   is the scenario clock and options a scenario with a day takes.

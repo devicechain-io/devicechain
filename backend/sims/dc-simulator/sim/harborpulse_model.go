@@ -148,9 +148,13 @@ func upper(s string) string {
 
 // ---- The site: two fences and the truck's route (illustrative coordinates) -------------------
 
+// 🔴 PORT ALDER IS FICTIONAL, AND SO IS WHERE IT STANDS. Every harborpulse coordinate lies in open
+// Atlantic water south-west of Ireland, where no settlement is, so a map that draws the scenario
+// never puts the fictional town on a real one. (The first coordinates sat on a real harbour town.)
+// Keep any new coordinate within a few kilometres of these.
 const (
-	harborDepotLat, harborDepotLon = 50.1500, -5.0700
-	harborPlainLat, harborPlainLon = 50.1520, -5.0600
+	harborDepotLat, harborDepotLon = 49.8000, -12.2100
+	harborPlainLat, harborPlainLon = 49.8020, -12.2000
 )
 
 func harborBox(lat, lon, dLat, dLon float64) [][2]float64 {
@@ -340,6 +344,7 @@ type harborModel struct {
 	pumps     map[string]*harborPumpState
 	cap       map[string]float64
 	dim       map[string]float64
+	flushes   map[string]int
 	kwh       map[string]float64
 	// lastMeter is when each meter last read, for its energy integral.
 	lastMeter map[string]time.Duration
@@ -365,7 +370,7 @@ func newHarborModel(seed int64) *harborModel {
 func newHarborModelWith(seed int64, dayLength time.Duration, defects harborDefects) *harborModel {
 	m := &harborModel{
 		seed: seed, dayLength: dayLength, defects: defects, devices: map[string]harborDevice{}, pumps: map[string]*harborPumpState{},
-		cap: map[string]float64{}, dim: map[string]float64{}, kwh: map[string]float64{}, lastMeter: map[string]time.Duration{},
+		cap: map[string]float64{}, dim: map[string]float64{}, flushes: map[string]int{}, kwh: map[string]float64{}, lastMeter: map[string]time.Duration{},
 		buffers: map[string][]harborBuffered{}, ledger: map[harborLedgerKey]*ScenarioBackfill{}, uplinks: map[string]int{},
 	}
 	for _, d := range harborLayout() {
@@ -594,6 +599,11 @@ func (m *harborModel) command(token, key string, payload json.RawMessage) bool {
 			return false
 		}
 		m.cap[token] = kw
+		return true
+	case d.kind == harborPump && key == HarborpulseFlushKey:
+		// A back-flush: the controller runs it and reports done. It moves no water the model
+		// tracks, so the beat is WHEN it ran, which the maintenance window decides.
+		m.flushes[token]++
 		return true
 	case d.kind == harborLight && key == HarborpulseSetDimKey:
 		level, ok := harborParam(payload, HarborpulseLevelParam, 0, 100)

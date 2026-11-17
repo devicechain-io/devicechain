@@ -10,8 +10,10 @@
 #
 # harborpulse drives seven DETECT rule kinds, two command-carrying rules whose commands change the
 # telemetry, an area correlation, a store-and-forward burst, a geofence rule, a calculated metric,
-# LoRaWAN gauges decoded by tenant decoders, a signed webhook, an MQTT connector and an escalating
-# mail notification through one 24-minute sim day. scenario-verify reads the platform back over the
+# LoRaWAN gauges decoded by tenant decoders, a signed webhook, an MQTT connector, an escalating
+# mail notification, dynamic groups with a group-scoped rule, CALENDAR and SOLAR campaigns with a
+# holiday, a maintenance window, an asset hierarchy and a typed relationship graph through one
+# 24-minute sim day. scenario-verify reads the platform back over the
 # tenant GraphQL APIs as the sim's own identity, and the in-cluster sink's record, and judges:
 #
 #   flood-escalates             one flood alarm per gauge, raised at MINOR, escalating in place to
@@ -40,6 +42,15 @@
 #                               paged again; the mail reached the sink
 #   notify-ack-control-is-red   the gauge the verifier acknowledged was paged and not escalated
 #                               (the verifier runs this control itself)
+#   groups-resolve              each dynamic group resolves to exactly the devices its attributes put in it
+#   group-scoped-rule           wet-well-watch for the critical pumps only, though every well crossed it
+#   night-dim-campaign          the day's CALENDAR dim reached exactly East Quay's lights, which reported 40 %
+#   solar-wave                  every lamp's SOLAR instant is the sun at its platform-held position, east
+#                               to west (judged on the PLANNED cycles: real dusk is not compressed)
+#   holiday-skipped             the dusk campaign planned nothing for its holiday; the dawn one did
+#   window-holds-flush          the DISRUPTIVE flush waited for the pump controllers' maintenance window
+#   asset-hierarchy             meters under their buildings, pumps under their stations, each under its quay
+#   feeder-blast-radius         each feeder feeds its own quay; every device the failed one feeds went silent
 #
 # THE SINK. The webhook, the MQTT bulletins and the mail go to ONE pod inside the cluster
 # (cmd/scenario-sink in namespace harborpulse-sinks, service hp-sink), so the rig needs no route out
@@ -66,6 +77,14 @@
 #   wrong-well-depth    --scenario-defect wrong-well-depth  well-fill-calculated
 #   lora-wrong-scale    --scenario-defect lora-wrong-scale  lora-decoded
 #   legacy-decoder-fixed --scenario-defect legacy-decoder-fixed decoder-failure-visible
+#   east-lamp-mislabelled --scenario-defect east-lamp-mislabelled groups-resolve
+#   unscoped-watch      --scenario-defect unscoped-watch    group-scoped-rule
+#   night-dim-all-lights --scenario-defect night-dim-all-lights night-dim-campaign
+#   lamp-unsited        --scenario-defect lamp-unsited      solar-wave
+#   holiday-dropped     --scenario-defect holiday-dropped   holiday-skipped
+#   flush-ungated       --scenario-defect flush-ungated     window-holds-flush
+#   lofts-under-basin   --scenario-defect lofts-under-basin asset-hierarchy
+#   feeder-miswired     --scenario-defect feeder-miswired   feeder-blast-radius
 #
 # The clean day must exit 0. Each control must exit 1 WITH its own invariant red; a control that
 # exits 0 means the invariant cannot fail, and the rig fails. Other invariants a control turns red
@@ -92,7 +111,7 @@
 # fabricated reports.
 #
 # Knobs: DC_HPRIG_CONTROLS=none runs the clean day alone, or a comma list of control names runs
-# those (thirteen sims at once is a lot for a laptop); DC_HPRIG_KEEP=1 keeps the sims' tenants
+# those (twenty-one sims at once is a lot for a laptop); DC_HPRIG_KEEP=1 keeps the sims' tenants
 # afterwards; DC_HPRIG_SIM_PORT is the first sim's control port (the rest follow);
 # DC_HPRIG_SINK_PORT is the loopback port-forward to the sink.
 #
@@ -162,6 +181,14 @@ runs=(
   "wrong-well-depth|--scenario-defect wrong-well-depth|well-fill-calculated"
   "lora-wrong-scale|--scenario-defect lora-wrong-scale|lora-decoded"
   "legacy-decoder-fixed|--scenario-defect legacy-decoder-fixed|decoder-failure-visible"
+  "east-lamp-mislabelled|--scenario-defect east-lamp-mislabelled|groups-resolve"
+  "unscoped-watch|--scenario-defect unscoped-watch|group-scoped-rule"
+  "night-dim-all-lights|--scenario-defect night-dim-all-lights|night-dim-campaign"
+  "lamp-unsited|--scenario-defect lamp-unsited|solar-wave"
+  "holiday-dropped|--scenario-defect holiday-dropped|holiday-skipped"
+  "flush-ungated|--scenario-defect flush-ungated|window-holds-flush"
+  "lofts-under-basin|--scenario-defect lofts-under-basin|asset-hierarchy"
+  "feeder-miswired|--scenario-defect feeder-miswired|feeder-blast-radius"
 )
 
 # ---------------------------------------------------------------------------
@@ -197,7 +224,7 @@ judge() {
 offline_controls() {
   say "offline controls (no cluster)"
   (cd "$repo_root/backend/sims/dc-simulator" &&
-    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn|TestFoldedDecodeFailures' ./scenarioverify/ >/dev/null &&
+    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestEachS4ControlTurnsExactlyItsInvariantRed|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn|TestFoldedDecodeFailures' ./scenarioverify/ >/dev/null &&
     go test -count=1 ./scenariosink/ >/dev/null) ||
     fail "the verifier's or the sink's own controls failed (go test ./scenarioverify/ ./scenariosink/ in backend/sims/dc-simulator)"
   pass "the verifier: a clean day passes, each planted defect turns exactly its invariant red"

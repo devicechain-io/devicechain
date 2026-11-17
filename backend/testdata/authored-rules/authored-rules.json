@@ -129,6 +129,14 @@
       "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"wet-well-high\"},\"type\":\"raiseAlarm\"},{\"sendCommand\":{\"command\":\"start-pump\",\"expiresAfter\":\"10m\",\"payload\":\"{\\\"duty_pct\\\":100}\"},\"type\":\"sendCommand\"}],\"name\":\"Harborpulse wet well high\",\"severity\":\"major\",\"type\":\"threshold\",\"when\":{\"metric\":\"wet_well_m\",\"op\":\"gt\",\"threshold\":2.5}}"
     },
     {
+      "producer": "harborpulse",
+      "ruleToken": "hp-wet-well-watch",
+      "profileToken": "hp-pump-profile",
+      "enabled": true,
+      "alarmSeverityWire": "WARNING",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"wet-well-watch\"},\"type\":\"raiseAlarm\"}],\"name\":\"Harborpulse wet well watch (critical pumps)\",\"severity\":\"warning\",\"type\":\"threshold\",\"when\":{\"metric\":\"wet_well_m\",\"op\":\"gt\",\"threshold\":2}}"
+    },
+    {
       "producer": "loadtest",
       "ruleToken": "harness-cmd-overtemp",
       "profileToken": "harness-cmd-profile",

@@ -46,6 +46,9 @@ type CommandSpec struct {
 	CommandKey      string
 	Name            string
 	ParameterSchema string
+	// Impact is NORMAL (or "", the platform's default), DISRUPTIVE or DESTRUCTIVE. A disruptive
+	// command waits for its device type's maintenance window before it may start.
+	Impact string
 }
 
 // DetectionRuleSpec is one DETECT rule authored on a profile (ADR-051/057).
@@ -80,6 +83,10 @@ type DetectionRuleSpec struct {
 	// the typo Validate exists to refuse. Validate holds a rule that says so to it: Metric must
 	// be empty and the definition must name no metric where Validate looks.
 	ReadsNoMetric bool
+	// Group is the token of a dynamic entity group the manifest declares, or "" for a rule that
+	// fires for every device of its profile. A scoped rule fires only for the group's members: it
+	// is pinned to the group's active published version when it is provisioned.
+	Group string
 }
 
 // ProfileSpec is a static-singleton device profile (+ its metric definitions,
@@ -137,6 +144,9 @@ type DeviceTypeSpec struct {
 	Token        string
 	Name         string
 	ProfileToken string
+	// MaintenanceWindowToken names the maintenance window that holds this type's disruptive
+	// commands until it opens, or "" for none.
+	MaintenanceWindowToken string
 }
 
 // CustomerTypeSpec / CustomerSpec, AreaTypeSpec / AreaSpec, and AssetTypeSpec /
@@ -226,6 +236,8 @@ type AssetSpec struct {
 	Token          string
 	Name           string
 	AssetTypeToken string
+	// Parent is the asset directly above this one in the asset hierarchy, or "" for a root.
+	Parent string
 }
 
 // DashboardSpec is one dashboard a manifest provisions and publishes. Unlike
@@ -302,6 +314,15 @@ type InstanceSpec struct {
 	// integration resolves an uplink to the device holding the alias. Written at create and
 	// converged on a re-run.
 	Aliases []AliasSpec
+	// Assets are the asset tokens the device is assigned to (a meter to its building, a pump to
+	// its station), after its areas.
+	Assets []string
+	// Attributes are SHARED attributes written on the device: the facets a dynamic group's
+	// selector reads. Converged on a re-run.
+	Attributes []AttributeSpec
+	// Position is where the device is installed, or nil for none: what a SOLAR campaign computes
+	// each device's sunrise and sunset from. Converged on a re-run.
+	Position *PositionSpec
 }
 
 // AliasSpec is one device alias: a scheme (lorawan.deveui) and the value in it.
@@ -350,6 +371,9 @@ type DeviceInstance struct {
 	Metadata string
 	// Aliases are the device's aliases (see InstanceSpec.Aliases).
 	Aliases []AliasSpec
+	// Attributes and Position are InstanceSpec's.
+	Attributes []AttributeSpec
+	Position   *PositionSpec
 }
 
 // CommandFarEndMode says WHO answers a scenario's commands. It is a mode rather
@@ -507,6 +531,14 @@ type SimManifest struct {
 	// Integrations are the inbound integrations a network server posts this scenario's
 	// LoRaWAN devices' uplinks through.
 	Integrations []IntegrationSpec
+	// The fleet operations (see fleetops.go): dynamic device groups (published, and named by
+	// group-scoped rules and campaigns), typed relationship types and the relationships of that
+	// type, maintenance windows a device type names, and campaigns over a group.
+	EntityGroups       []EntityGroupSpec
+	RelationshipTypes  []RelationshipTypeSpec
+	Relationships      []RelationshipSpec
+	MaintenanceWindows []MaintenanceWindowSpec
+	Campaigns          []CampaignSpec
 }
 
 // placeholderPattern matches "{n}" or "{n:0Wd}" (W one or more digits). The
@@ -586,7 +618,7 @@ func (m SimManifest) renderAssignments(pop PopulationSpec, deviceToken string, n
 }
 
 // renderInstanceAssignments is renderAssignments for a named device: its areas in the order
-// declared, then its customer.
+// declared, then its assets, then its customer.
 func (m SimManifest) renderInstanceAssignments(in InstanceSpec) []Assignment {
 	var assignments []Assignment
 	for _, area := range in.Areas {
@@ -594,6 +626,13 @@ func (m SimManifest) renderInstanceAssignments(in InstanceSpec) []Assignment {
 			TargetType:        "area",
 			TargetToken:       area,
 			RelationshipToken: assignmentToken(in.Token, area),
+		})
+	}
+	for _, asset := range in.Assets {
+		assignments = append(assignments, Assignment{
+			TargetType:        "asset",
+			TargetToken:       asset,
+			RelationshipToken: assignmentToken(in.Token, asset),
 		})
 	}
 	customer := in.Customer
@@ -644,6 +683,8 @@ func (m SimManifest) Expand(seed int64) []DeviceInstance {
 					Assignments:     m.renderInstanceAssignments(in),
 					Metadata:        constantsMetadata(in.Constants),
 					Aliases:         in.Aliases,
+					Attributes:      in.Attributes,
+					Position:        in.Position,
 				})
 			}
 			continue
@@ -982,6 +1023,9 @@ func (m SimManifest) Validate() error {
 	}
 
 	if err := m.validateOutbound(typeTokens); err != nil {
+		return err
+	}
+	if err := m.validateFleetOps(typeTokens, assetTokens); err != nil {
 		return err
 	}
 

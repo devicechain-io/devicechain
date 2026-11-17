@@ -60,11 +60,16 @@ type harborpulse struct {
 	model   *harborModel
 	started time.Time
 	now     func() time.Time
+
+	// jobsMu guards the sim days whose jobs are scheduled and the ledger of them (S4).
+	jobsMu    sync.Mutex
+	scheduled map[int]bool
+	jobs      []ScenarioJob
 }
 
 // NewHarborpulse returns the harborpulse Sim seeded from the handshake. Prefer NewSim.
 func NewHarborpulse(seed int64, load Load) Sim {
-	return &harborpulse{seed: seed, load: load, dayLength: harborpulseDayLength, now: time.Now}
+	return &harborpulse{seed: seed, load: load, dayLength: harborpulseDayLength, now: time.Now, scheduled: map[int]bool{}}
 }
 
 // The planted defects harborpulse can run with (--scenario-defect). Each breaks ONE thing the day
@@ -97,15 +102,19 @@ const (
 	// HarborpulseDefectLegacyDecoderFixed gives the legacy gauge the good decoder, so nothing fails
 	// to decode.
 	HarborpulseDefectLegacyDecoderFixed = "legacy-decoder-fixed"
+	// The S4 defects are declared with the fleet operations they break (harborpulse_s4.go).
 )
 
 // HarborpulseDefects lists every defect harborpulse knows, sorted.
 func HarborpulseDefects() []string {
 	return []string{
-		HarborpulseDefectAirLockBasin, HarborpulseDefectDropBackfill, HarborpulseDefectFloodSplitKey,
-		HarborpulseDefectLegacyDecoderFixed, HarborpulseDefectLoraWrongScale, HarborpulseDefectMQTTUnreachable,
-		HarborpulseDefectRefuseDerate, HarborpulseDefectSilenceNorthLamp, HarborpulseDefectTruckStaysHome,
-		HarborpulseDefectUnsignedWebhook, HarborpulseDefectWrongWellDepth,
+		HarborpulseDefectAirLockBasin, HarborpulseDefectDropBackfill, HarborpulseDefectEastLampMislabelled,
+		HarborpulseDefectFeederMiswired, HarborpulseDefectFloodSplitKey, HarborpulseDefectFlushUngated,
+		HarborpulseDefectHolidayDropped, HarborpulseDefectLampUnsited, HarborpulseDefectLegacyDecoderFixed,
+		HarborpulseDefectLoftsUnderBasin, HarborpulseDefectLoraWrongScale, HarborpulseDefectMQTTUnreachable,
+		HarborpulseDefectNightDimAllLights, HarborpulseDefectRefuseDerate, HarborpulseDefectSilenceNorthLamp,
+		HarborpulseDefectTruckStaysHome, HarborpulseDefectUnscopedWatch, HarborpulseDefectUnsignedWebhook,
+		HarborpulseDefectWrongWellDepth,
 	}
 }
 
@@ -126,6 +135,8 @@ type harborDefects struct {
 	floodSplitKey, refuseDerate, airLockBasin, silenceNorthLamp, dropBackfill bool
 	unsignedWebhook, mqttUnreachable, truckStaysHome, wrongWellDepth          bool
 	loraWrongScale, legacyDecoderFixed                                        bool
+	eastLampMislabelled, unscopedWatch, nightDimAllLights, lampUnsited        bool
+	holidayDropped, flushUngated, loftsUnderBasin, feederMiswired             bool
 	names                                                                     []string
 }
 
@@ -173,6 +184,22 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 			d.loraWrongScale = true
 		case HarborpulseDefectLegacyDecoderFixed:
 			d.legacyDecoderFixed = true
+		case HarborpulseDefectEastLampMislabelled:
+			d.eastLampMislabelled = true
+		case HarborpulseDefectUnscopedWatch:
+			d.unscopedWatch = true
+		case HarborpulseDefectNightDimAllLights:
+			d.nightDimAllLights = true
+		case HarborpulseDefectLampUnsited:
+			d.lampUnsited = true
+		case HarborpulseDefectHolidayDropped:
+			d.holidayDropped = true
+		case HarborpulseDefectFlushUngated:
+			d.flushUngated = true
+		case HarborpulseDefectLoftsUnderBasin:
+			d.loftsUnderBasin = true
+		case HarborpulseDefectFeederMiswired:
+			d.feederMiswired = true
 		}
 	}
 	s.defects = d
@@ -228,6 +255,7 @@ func (s *harborpulse) ScenarioClock(now time.Time) *ScenarioClock {
 	if model != nil {
 		c.Backfill = model.backfillLedger()
 	}
+	c.Jobs = s.jobLedger()
 	return c
 }
 
@@ -465,6 +493,7 @@ func (s *harborpulse) Manifest() SimManifest {
 			}
 			in.Constants = map[string]float64{HarborpulseWellDepthConstant: depth}
 		}
+		s.harborFleetOps(d, &in)
 		pops[d.deviceType] = append(pops[d.deviceType], in)
 	}
 	var populations []PopulationSpec
@@ -472,6 +501,11 @@ func (s *harborpulse) Manifest() SimManifest {
 		populations = append(populations, PopulationSpec{OfType: t, Count: len(pops[t]), FixedCount: true, Instances: pops[t]})
 	}
 
+	pumpWindow := HarborpulsePumpWindow
+	if s.defects.flushUngated {
+		pumpWindow = ""
+	}
+	assetTypes, assets := s.harborpulseAssets()
 	manifest := resize(s.load, SimManifest{
 		Name: "harborpulse",
 		Seed: s.seed,
@@ -492,10 +526,12 @@ func (s *harborpulse) Manifest() SimManifest {
 			{Token: HarborpulseEastQuay, Name: "East Quay", AreaTypeToken: HarborpulseQuayTypeToken},
 			{Token: HarborpulseBasin, Name: "The Basin", AreaTypeToken: HarborpulseQuayTypeToken},
 		},
-		GeoFences: harborpulseGeoFences(),
+		AssetTypes: assetTypes,
+		Assets:     assets,
+		GeoFences:  harborpulseGeoFences(),
 		Profiles: []ProfileSpec{
 			harborpulseGaugeProfile(s.defects.floodSplitKey, s.defects.unsignedWebhook),
-			harborpulsePumpProfile(),
+			harborpulsePumpProfile(s.harborpulseWellWatch()),
 			harborpulseLightProfile(),
 			harborpulseChargerProfile(),
 			harborpulseMeterProfile(),
@@ -505,7 +541,8 @@ func (s *harborpulse) Manifest() SimManifest {
 		},
 		DeviceTypes: []DeviceTypeSpec{
 			{Token: HarborpulseGaugeType, Name: "Tide Gauge", ProfileToken: HarborpulseGaugeProfile},
-			{Token: HarborpulsePumpType, Name: "Stormwater Pump Controller", ProfileToken: HarborpulsePumpProfile},
+			{Token: HarborpulsePumpType, Name: "Stormwater Pump Controller", ProfileToken: HarborpulsePumpProfile,
+				MaintenanceWindowToken: pumpWindow},
 			{Token: HarborpulseLightType, Name: "Street Light Controller", ProfileToken: HarborpulseLightProfile},
 			{Token: HarborpulseChargerType, Name: "EV Charger", ProfileToken: HarborpulseChargerProfile},
 			{Token: HarborpulseMeterType, Name: "Building Meter", ProfileToken: HarborpulseMeterProfile},
@@ -524,6 +561,13 @@ func (s *harborpulse) Manifest() SimManifest {
 			Token: HarborpulseIntegration, Name: "Port Alder LoRaWAN network server", Type: integrationTypeChirpStack4,
 			DeviceTypeTokens: []string{HarborpulseLoraGaugeType, HarborpulseLegacyGaugeType},
 		}},
+
+		EntityGroups:       harborpulseGroups(),
+		MaintenanceWindows: []MaintenanceWindowSpec{harborpulsePumpWindow()},
+		RelationshipTypes: []RelationshipTypeSpec{{Token: HarborpulseFeedsType, Name: "Feeds",
+			Description: "An electrical feeder powers the device."}},
+		Relationships: s.harborpulseFeeds(),
+		Campaigns:     s.harborpulseSolarCampaigns(s.now()),
 	})
 	// The operator's board and the Lofts owner's, bound to the devices this manifest provisions.
 	manifest.Dashboards = harborpulseDashboards(manifest.Expand(manifest.Seed))
@@ -586,7 +630,7 @@ func harborpulseGaugeProfile(splitKey, unsignedWebhook bool) ProfileSpec {
 	}
 }
 
-func harborpulsePumpProfile() ProfileSpec {
+func harborpulsePumpProfile(watch DetectionRuleSpec) ProfileSpec {
 	return ProfileSpec{
 		Token: HarborpulsePumpProfile, Name: "Harborpulse Pump Controller Profile", Category: "water",
 		Metrics: []MetricSpec{
@@ -599,6 +643,8 @@ func harborpulsePumpProfile() ProfileSpec {
 		Commands: []CommandSpec{
 			{Token: HarborpulseStartPumpDef, CommandKey: HarborpulseStartPumpKey, Name: "Start pump", ParameterSchema: harborpulseStartPumpSchema},
 			{Token: HarborpulseStopPumpDef, CommandKey: HarborpulseStopPumpKey, Name: "Stop pump"},
+			// A back-flush stops the pump while it runs, so it waits for the crew's slot.
+			{Token: HarborpulseFlushDef, CommandKey: HarborpulseFlushKey, Name: "Flush wet well", Impact: impactDisruptive},
 		},
 		DetectionRules: []DetectionRuleSpec{
 			ThresholdAlarmRule{
@@ -612,6 +658,7 @@ func harborpulsePumpProfile() ProfileSpec {
 				CEL: harborpulseAirLockCEL, Hold: HarborpulseAirLockHold, Severity: SeverityCritical,
 				AlarmKey: HarborpulseAirLockAlarmKey, Enabled: true,
 			}.Spec(),
+			watch,
 		},
 	}
 }
@@ -744,7 +791,11 @@ func harborpulseDutyPolicy() NotificationPolicySpec {
 }
 
 func (s *harborpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
-	return Provision(ctx, rt, s.Manifest())
+	if err := Provision(ctx, rt, s.Manifest()); err != nil {
+		return err
+	}
+	// The campaigns an earlier run created as its days ran would still fire into this one.
+	return deleteCampaignsWithPrefix(ctx, rt, HarborpulseNightDimPrefix, HarborpulseFlushPrefix)
 }
 
 func (s *harborpulse) ensureModel() *harborModel {
@@ -792,7 +843,11 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	if loraErr != nil {
 		log.Error().Err(loraErr).Msg("send harborpulse LoRaWAN uplinks failed")
 	}
-	return errors.Join(measErr, locErr, backErr, loraErr)
+	jobErr := s.scheduleDay(ctx, rt, now)
+	if jobErr != nil {
+		log.Error().Err(jobErr).Msg("schedule the harborpulse day's jobs failed; retrying next tick")
+	}
+	return errors.Join(measErr, locErr, backErr, loraErr, jobErr)
 }
 
 // startedAt is the first tick, the instant the day is measured from.

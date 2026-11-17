@@ -69,6 +69,7 @@ func Evaluate(o Observations) []Invariant {
 		}
 		checks = append(checks, c)
 	}
+	checks = append(checks, s4Checks()...)
 	out := make([]Invariant, 0, len(checks))
 	for _, c := range checks {
 		inv := Invariant{Name: c.name, Passed: true, Control: Controls[c.name]}

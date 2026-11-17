@@ -83,6 +83,9 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 	if err := requireEndpoints(manifest, rt.Endpoints); err != nil {
 		return err
 	}
+	if err := requireFleetOpsEndpoints(manifest, rt.Endpoints); err != nil {
+		return err
+	}
 
 	for _, ct := range manifest.CustomerTypes {
 		if err := ensureCustomerType(ctx, rt, ct); err != nil {
@@ -114,6 +117,10 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 			return fmt.Errorf("provision asset %q: %w", a.Token, err)
 		}
 	}
+	// The hierarchy is placed once every asset exists: a parent may be declared after its child.
+	if err := ensureAssetParents(ctx, rt, manifest.Assets); err != nil {
+		return fmt.Errorf("provision asset hierarchy: %w", err)
+	}
 	for _, g := range manifest.GeoFences {
 		if err := ensureGeoFence(ctx, rt, g); err != nil {
 			return fmt.Errorf("provision geofence %q: %w", g.Token, err)
@@ -130,6 +137,20 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 	for _, c := range manifest.Connectors {
 		if err := ensureConnector(ctx, rt, c); err != nil {
 			return fmt.Errorf("provision connector %q: %w", c.Token, err)
+		}
+	}
+
+	// A group-scoped rule is refused at save unless its group is a PUBLISHED dynamic group, and a
+	// device type is refused a window that does not exist, so both come before profiles and types.
+	// A group is a selector, so it can be published before any device it will hold exists.
+	for _, g := range manifest.EntityGroups {
+		if err := ensureEntityGroup(ctx, rt, g); err != nil {
+			return fmt.Errorf("provision entity group %q: %w", g.Token, err)
+		}
+	}
+	for _, w := range manifest.MaintenanceWindows {
+		if err := ensureMaintenanceWindow(ctx, rt, w); err != nil {
+			return fmt.Errorf("provision maintenance window %q: %w", w.Token, err)
 		}
 	}
 
@@ -164,9 +185,25 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 		}
 	}
 	rt.Devices = devices
+	// The facets a group selector reads, and where each fixture stands: the platform keeps a
+	// group's membership as the attributes are written, and plans a SOLAR campaign from positions.
+	if err := ensureDeviceAttributes(ctx, rt, devices); err != nil {
+		return fmt.Errorf("provision device attributes: %w", err)
+	}
+	if err := ensureInstalledPositions(ctx, rt, devices); err != nil {
+		return fmt.Errorf("provision installed positions: %w", err)
+	}
 
 	if err := ensureAssignments(ctx, rt, devices); err != nil {
 		return fmt.Errorf("provision assignments: %w", err)
+	}
+	for _, t := range manifest.RelationshipTypes {
+		if err := ensureRelationshipType(ctx, rt, t); err != nil {
+			return fmt.Errorf("provision relationship type %q: %w", t.Token, err)
+		}
+	}
+	if err := ensureRelationships(ctx, rt, manifest.Relationships); err != nil {
+		return fmt.Errorf("provision relationships: %w", err)
 	}
 
 	for _, ds := range manifest.Dashboards {
@@ -183,6 +220,14 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 	for _, p := range manifest.NotificationPolicies {
 		if err := ensureNotificationPolicy(ctx, rt, p); err != nil {
 			return fmt.Errorf("provision notification policy %q: %w", p.Token, err)
+		}
+	}
+
+	// A campaign plans from its group's members and, for a SOLAR trigger, their positions, so it
+	// follows both.
+	for _, c := range manifest.Campaigns {
+		if err := ensureCampaign(ctx, rt, c); err != nil {
+			return fmt.Errorf("provision campaign %q: %w", c.Token, err)
 		}
 	}
 
@@ -212,20 +257,23 @@ type deviceProfileInfo struct {
 		CommandKey      string `json:"commandKey"`
 		Name            string `json:"name"`
 		ParameterSchema string `json:"parameterSchema"`
+		Impact          string `json:"impact"`
 	} `json:"commandDefinitions"`
 	DetectionRules []struct {
-		Token      string `json:"token"`
-		Name       string `json:"name"`
-		Definition string `json:"definition"`
-		Enabled    bool   `json:"enabled"`
+		Token              string  `json:"token"`
+		Name               string  `json:"name"`
+		Definition         string  `json:"definition"`
+		Enabled            bool    `json:"enabled"`
+		EntityGroupToken   *string `json:"entityGroupToken"`
+		EntityGroupVersion *int    `json:"entityGroupVersion"`
 	} `json:"detectionRules"`
 }
 
 const queryDeviceProfilesByToken = `query($tokens:[String!]!){` +
 	`deviceProfilesByToken(tokens:$tokens){token activeVersion ` +
 	`metricDefinitions{token name dataType unit expression calculated} ` +
-	`commandDefinitions{token commandKey name parameterSchema} ` +
-	`detectionRules{token name definition enabled}}}`
+	`commandDefinitions{token commandKey name parameterSchema impact} ` +
+	`detectionRules{token name definition enabled entityGroupToken entityGroupVersion}}}`
 
 const mutationCreateDeviceProfile = `mutation($request:DeviceProfileCreateRequest){` +
 	`createDeviceProfile(request:$request){token activeVersion}}`
@@ -315,7 +363,7 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 	// missing the very thing it was asked to provision. Reading the active label
 	// instead makes that self-healing: it does not match, so the reconciled content
 	// is republished.
-	marker := profileContentMarker(p)
+	marker := profileContentMarkerScoped(p, rt.GroupVersions)
 	active, hasActive, err := activeVersionOf(ctx, rt, p.Token)
 	if err != nil {
 		return err
@@ -380,7 +428,11 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 // identity on purpose: reordering is a change a reader would expect to see
 // published, and pretending otherwise would need a canonicalisation step whose only
 // job is to hide it.
-func profileContentMarker(p ProfileSpec) string {
+func profileContentMarker(p ProfileSpec) string { return profileContentMarkerScoped(p, nil) }
+
+// profileContentMarkerScoped is profileContentMarker with the group version each scoped rule is
+// pinned to: a group republished at a new version re-pins its rules, and that is new content.
+func profileContentMarkerScoped(p ProfileSpec, groupVersions map[string]int) string {
 	h := sha256.New()
 	for _, m := range p.Metrics {
 		fmt.Fprintf(h, "metric\x00%s\x00%s\x00%s\x00%s\n", m.Key, m.Name, m.DataType, m.Unit)
@@ -395,8 +447,20 @@ func profileContentMarker(p ProfileSpec) string {
 	for _, c := range p.Commands {
 		fmt.Fprintf(h, "command\x00%s\x00%s\x00%s\x00%s\n", c.Token, c.CommandKey, c.Name, c.ParameterSchema)
 	}
+	for _, c := range p.Commands {
+		// Only a command with a declared impact adds a line, so every earlier profile keeps its marker.
+		if c.Impact != "" {
+			fmt.Fprintf(h, "impact\x00%s\x00%s\n", c.Token, c.Impact)
+		}
+	}
 	for _, r := range p.DetectionRules {
 		fmt.Fprintf(h, "rule\x00%s\x00%s\x00%s\x00%t\n", r.Token, r.Name, r.Definition, r.Enabled)
+	}
+	for _, r := range p.DetectionRules {
+		// Likewise only a scoped rule.
+		if r.Group != "" {
+			fmt.Fprintf(h, "scope\x00%s\x00%s\x00%d\n", r.Token, r.Group, groupVersions[r.Group])
+		}
 	}
 	// Only a profile with a decoder adds a line, so every earlier profile keeps its marker.
 	if p.Decoder != "" {
@@ -630,13 +694,26 @@ func ensureCommandDefinition(ctx context.Context, rt *Runtime, profileToken stri
 	if c.ParameterSchema != "" {
 		req["parameterSchema"] = c.ParameterSchema
 	}
+	impact := c.Impact
+	if impact == "" {
+		impact = impactNormal
+	}
+	if c.Impact != "" {
+		req["impact"] = c.Impact
+	}
 
 	for _, existing := range profile.CommandDefinitions {
 		if existing.Token != c.Token {
 			continue
 		}
-		if existing.CommandKey == c.CommandKey && existing.Name == c.Name && existing.ParameterSchema == c.ParameterSchema {
+		if existing.CommandKey == c.CommandKey && existing.Name == c.Name && existing.ParameterSchema == c.ParameterSchema &&
+			(existing.Impact == "" || existing.Impact == impact) {
 			return nil
+		}
+		// An impact that changed back to the default is written explicitly: an omitted field is
+		// left alone by the partial update.
+		if existing.Impact != "" && existing.Impact != impact {
+			req["impact"] = impact
 		}
 		var updated struct {
 			UpdateCommandDefinition struct {
@@ -679,16 +756,35 @@ func ensureDetectionRule(ctx context.Context, rt *Runtime, profileToken string, 
 		"definition":         r.Definition,
 		"enabled":            r.Enabled,
 	}
+	wantGroup, wantVersion := "", 0
+	if r.Group != "" {
+		v, ok := rt.GroupVersions[r.Group]
+		if !ok {
+			return fmt.Errorf("detection rule %q is scoped to group %q, which has no published version yet", r.Token, r.Group)
+		}
+		wantGroup, wantVersion = r.Group, v
+		req["entityGroupToken"], req["entityGroupVersion"] = r.Group, v
+	}
 
 	for _, existing := range profile.DetectionRules {
 		if existing.Token != r.Token {
 			continue
 		}
+		haveGroup, haveVersion := "", 0
+		if existing.EntityGroupToken != nil && existing.EntityGroupVersion != nil {
+			haveGroup, haveVersion = *existing.EntityGroupToken, *existing.EntityGroupVersion
+		}
+		if haveGroup != "" && wantGroup == "" {
+			// A scope the scenario no longer declares is cleared explicitly: an omitted field
+			// is left alone by the partial update.
+			req["entityGroupToken"], req["entityGroupVersion"] = nil, nil
+		}
 		// Compared as JSON VALUES, not as strings: the platform round-trips a
 		// definition through its own marshaller, so key order and whitespace differ
 		// from what was sent. A byte comparison would report every unchanged rule as
 		// changed and rewrite it on every bootstrap.
-		if existing.Name == r.Name && existing.Enabled == r.Enabled && sameJSON(existing.Definition, r.Definition) {
+		if existing.Name == r.Name && existing.Enabled == r.Enabled && sameJSON(existing.Definition, r.Definition) &&
+			haveGroup == wantGroup && haveVersion == wantVersion {
 			return nil
 		}
 		var updated struct {
@@ -731,7 +827,10 @@ func sameJSON(a, b string) bool {
 
 // --- device type ---------------------------------------------------------------
 
-const queryDeviceTypesByToken = `query($tokens:[String!]!){deviceTypesByToken(tokens:$tokens){token}}`
+const queryDeviceTypesByToken = `query($tokens:[String!]!){deviceTypesByToken(tokens:$tokens){token maintenanceWindow{token}}}`
+
+const mutationUpdateDeviceTypeWindow = `mutation($token:String!,$request:DeviceTypeUpdateRequest!){` +
+	`updateDeviceType(token:$token,request:$request){token}}`
 
 const mutationCreateDeviceType = `mutation($request:DeviceTypeCreateRequest){` +
 	`createDeviceType(request:$request){token}}`
@@ -739,7 +838,10 @@ const mutationCreateDeviceType = `mutation($request:DeviceTypeCreateRequest){` +
 func ensureDeviceType(ctx context.Context, rt *Runtime, dt DeviceTypeSpec) error {
 	var existing struct {
 		DeviceTypesByToken []struct {
-			Token string `json:"token"`
+			Token             string `json:"token"`
+			MaintenanceWindow *struct {
+				Token string `json:"token"`
+			} `json:"maintenanceWindow"`
 		} `json:"deviceTypesByToken"`
 	}
 	if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, queryDeviceTypesByToken,
@@ -747,6 +849,25 @@ func ensureDeviceType(ctx context.Context, rt *Runtime, dt DeviceTypeSpec) error
 		return fmt.Errorf("deviceTypesByToken: %w", err)
 	}
 	if len(existing.DeviceTypesByToken) > 0 {
+		// Only the maintenance window is converged on an existing type: it is what decides when
+		// the type's disruptive commands may start.
+		have := ""
+		if w := existing.DeviceTypesByToken[0].MaintenanceWindow; w != nil {
+			have = w.Token
+		}
+		if have == dt.MaintenanceWindowToken {
+			return nil
+		}
+		var updated struct {
+			UpdateDeviceType struct {
+				Token string `json:"token"`
+			} `json:"updateDeviceType"`
+		}
+		if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationUpdateDeviceTypeWindow,
+			map[string]any{"token": dt.Token, "request": map[string]any{"maintenanceWindowToken": dt.MaintenanceWindowToken}}, &updated); err != nil {
+			return fmt.Errorf("updateDeviceType: %w", err)
+		}
+		log.Info().Str("token", dt.Token).Str("window", dt.MaintenanceWindowToken).Msg("converged device type maintenance window")
 		return nil
 	}
 
@@ -754,6 +875,9 @@ func ensureDeviceType(ctx context.Context, rt *Runtime, dt DeviceTypeSpec) error
 		"token":        dt.Token,
 		"name":         dt.Name,
 		"profileToken": dt.ProfileToken,
+	}
+	if dt.MaintenanceWindowToken != "" {
+		req["maintenanceWindowToken"] = dt.MaintenanceWindowToken
 	}
 	var created struct {
 		CreateDeviceType struct {
