@@ -77,6 +77,9 @@ type doctorOpts struct {
 	Target string
 	// Build is --build: images are built from source into a local registry.
 	Build bool
+	// FullSizeInstall is set only by install after resolving its compact preset.
+	// Other callers retain advisory capacity checks with the zero value.
+	FullSizeInstall bool
 }
 
 // doctorOptsFor is the ONE mapping from a run's flags to what the doctor checks, shared
@@ -169,7 +172,7 @@ func (d *doctor) checkTools(provider string, opts doctorOpts) {
 
 // ---- docker engine ---------------------------------------------------------
 // Returns the docker data-root directory ("" if unknown) for the disk check.
-func (d *doctor) checkDockerEngine() string {
+func (d *doctor) checkDockerEngine(opts doctorOpts) string {
 	section("Docker engine", "🐳")
 	if !haveTool("docker") {
 		d.fail("docker not installed", dockerInstallHint)
@@ -193,11 +196,16 @@ func (d *doctor) checkDockerEngine() string {
 		}
 	}
 
+	capacityIssue := d.warn
+	if opts.FullSizeInstall && opts.hostsKind() {
+		capacityIssue = d.fail
+	}
+	const capacityFix = "give Docker >= 4 CPUs and >= 8Gi, or re-run install with --compact for the small-footprint preset"
 	if n, _ := strconv.Atoi(runCmd("docker", "info", "--format", "{{.NCPU}}")); n > 0 {
 		if n >= 4 {
 			d.pass(fmt.Sprintf("engine CPUs: %d", n))
 		} else {
-			d.warn(fmt.Sprintf("engine CPUs: %d", n), "recommend >= 4 for the full stack")
+			capacityIssue(fmt.Sprintf("engine CPUs: %d", n), capacityFix)
 		}
 	}
 	if b, _ := strconv.ParseInt(runCmd("docker", "info", "--format", "{{.MemTotal}}"), 10, 64); b > 0 {
@@ -205,7 +213,7 @@ func (d *doctor) checkDockerEngine() string {
 		if gi >= 8 {
 			d.pass(fmt.Sprintf("engine memory: %dGi", gi))
 		} else {
-			d.warn(fmt.Sprintf("engine memory: %dGi", gi), "recommend >= 8Gi")
+			capacityIssue(fmt.Sprintf("engine memory: %dGi", gi), capacityFix)
 		}
 	}
 	if drv := runCmd("docker", "info", "--format", "{{.Driver}}"); drv != "" {
@@ -228,7 +236,7 @@ func (d *doctor) checkDocker(opts doctorOpts) string {
 		d.info("not needed — installing into " + opts.KubeContext + " from published images")
 		return ""
 	}
-	return d.checkDockerEngine()
+	return d.checkDockerEngine(opts)
 }
 
 // ---- ports -----------------------------------------------------------------

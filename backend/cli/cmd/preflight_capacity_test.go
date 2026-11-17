@@ -1,0 +1,139 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package cmd
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/devicechain-io/dcctl/bootstrap"
+)
+
+func TestInstallDockerCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		name, cpus, memory string
+		argv               []string
+		fails, warns       int
+	}{
+		{"small CPU", "2", "17179869184", nil, 1, 0},
+		{"three CPUs", "3", "17179869184", nil, 1, 0},
+		{"small memory", "8", "4294967296", nil, 1, 0},
+		{"compact", "2", "17179869184", []string{"--compact"}, 0, 1},
+		{"size compact", "2", "17179869184", []string{"--size=compact"}, 0, 1},
+		{"compact small memory", "8", "4294967296", []string{"--compact"}, 0, 1},
+		{"ample", "8", "17179869184", nil, 0, 0},
+		{"exact thresholds", "4", "8589934592", nil, 0, 0},
+		{"unreadable", "", "not-a-number", nil, 0, 0},
+		{"unreadable CPU", "not-a-number", "", nil, 0, 0},
+		{"existing cluster", "2", "4294967296", []string{"--kube-context=prod", "--build=false"}, 0, 0},
+		{"build for existing cluster", "2", "4294967296", []string{"--kube-context=prod"}, 0, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeDockerCapacity(t, tc.cpus, tc.memory)
+			fakeChecks(t)
+			// Stop every run at preflight, even when capacity passes. A missing
+			// context stops remote-image installs without ever touching a cluster.
+			writeKubeconfig(t)
+			var checked *doctor
+			systemCheck = func(d *doctor, _ string, _ bool) {
+				checked = d
+				d.fails++ // test-only stop, excluded from the assertions below
+			}
+			flags := installCmd.Flags()
+			version := bootstrap.DefaultImageVersion
+			bootstrap.DefaultImageVersion = "v1.8.0"
+			t.Cleanup(func() { bootstrap.DefaultImageVersion = version })
+			for _, name := range []string{"build", "compact", "size", "kube-context", "skip-preflight", "no-tls", "no-monitoring"} {
+				f := flags.Lookup(name)
+				value, changed := f.Value.String(), f.Changed
+				t.Cleanup(func() {
+					if err := f.Value.Set(value); err != nil {
+						t.Fatal(err)
+					}
+					f.Changed = changed
+				})
+			}
+			if err := flags.Lookup("compact").Value.Set("false"); err != nil {
+				t.Fatal(err)
+			}
+			flags.Lookup("compact").Changed = false
+			argv := append([]string{"--build", "--size=", "--kube-context=", "--skip-preflight=false"}, tc.argv...)
+			output := capacityOutput(t, func() {
+				if err := flags.Parse(argv); err != nil {
+					t.Fatal(err)
+				}
+				if err := installCmd.RunE(installCmd, []string{"local"}); err == nil || !strings.Contains(err.Error(), "preflight check(s) failed") {
+					t.Fatalf("expected preflight stop, got %v", err)
+				}
+			})
+			if tc.name == "existing cluster" {
+				if checked != nil || strings.Contains(output, "engine CPUs:") || strings.Contains(output, "engine memory:") {
+					t.Fatalf("remote-image install checked Docker: %s", output)
+				}
+				return
+			}
+			if checked == nil {
+				t.Fatal("install did not reach the doctor")
+			}
+			// The missing --kube-context contributes one unrelated failure.
+			failures := checked.fails - 1
+			if installKubeContext != "" {
+				failures--
+			}
+			if failures != tc.fails || checked.warns != tc.warns {
+				t.Errorf("capacity failures=%d warnings=%d, want %d/%d\n%s", failures, checked.warns, tc.fails, tc.warns, output)
+			}
+			if tc.fails+tc.warns > 0 && !strings.Contains(output, "--compact") {
+				t.Errorf("capacity guidance must name --compact:\n%s", output)
+			}
+		})
+	}
+}
+
+func TestPreflightDockerCapacityRemainsAWarning(t *testing.T) {
+	fakeDockerCapacity(t, "2", "17179869184")
+	d := &doctor{}
+	output := capacityOutput(t, func() { d.checkDocker(doctorOptsFor("", "lab", false)) })
+	if d.fails != 0 || d.warns != 1 || !strings.Contains(output, "--compact") {
+		t.Fatalf("plain preflight must warn with --compact guidance: failures=%d warnings=%d\n%s", d.fails, d.warns, output)
+	}
+}
+
+func fakeDockerCapacity(t *testing.T, cpus, memory string) {
+	t.Helper()
+	fakeHost(t, func(string) bool { return true })
+	baseRun := runCmd
+	runCmd = func(name string, args ...string) string {
+		if name == "docker" {
+			switch strings.Join(args, " ") {
+			case "info --format {{.ServerVersion}}":
+				return "29.0.0"
+			case "info --format {{.NCPU}}":
+				return cpus
+			case "info --format {{.MemTotal}}":
+				return memory
+			}
+		}
+		return baseRun(name, args...)
+	}
+}
+
+func capacityOutput(t *testing.T, fn func()) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	original := os.Stdout
+	os.Stdout = f
+	defer func() { os.Stdout = original }()
+	fn()
+	b, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
