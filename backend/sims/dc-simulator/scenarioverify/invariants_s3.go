@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -222,22 +223,41 @@ func floodTokens(o Observations, g string) []string {
 	return sortedKeys(set)
 }
 
-// gaugePagedAndEscalated reports why gauge g's flood alarm was not paged and then re-paged.
-func gaugePagedAndEscalated(o Observations, g string) error {
-	tokens := floodTokens(o, g)
-	if len(tokens) == 0 {
-		return fmt.Errorf("%s: no flood alarm", g)
+// watchedAttempts are the notification attempts on alarm token t made in the watched storm. An
+// alarm the platform reactivates keeps its token from one sim day to the next, and the attempt list
+// is the token's whole history: another day's pages say nothing about this one.
+func watchedAttempts(o Observations, t string) []Attempt {
+	var out []Attempt
+	for _, a := range o.S3.Attempts[t] {
+		if inWindow(a.At, o.at(stormFrom), o.end()) {
+			out = append(out, a)
+		}
 	}
+	return out
+}
+
+// sentByTrigger counts gauge g's SENT attempts in the watched storm, by trigger, with every
+// attempt's trigger/status for a report.
+func sentByTrigger(o Observations, g string) (map[string]int, []string) {
 	sent := map[string]int{}
 	var statuses []string
-	for _, t := range tokens {
-		for _, a := range o.S3.Attempts[t] {
+	for _, t := range floodTokens(o, g) {
+		for _, a := range watchedAttempts(o, t) {
 			statuses = append(statuses, a.Trigger+"/"+a.Status+a.ErrorCode)
 			if a.Status == "SENT" {
 				sent[a.Trigger]++
 			}
 		}
 	}
+	return sent, statuses
+}
+
+// gaugePagedAndEscalated reports why gauge g's flood alarm was not paged and then re-paged.
+func gaugePagedAndEscalated(o Observations, g string) error {
+	if len(floodTokens(o, g)) == 0 {
+		return fmt.Errorf("%s: no flood alarm", g)
+	}
+	sent, statuses := sentByTrigger(o, g)
 	switch {
 	case sent["ALARM"] == 0:
 		return fmt.Errorf("%s: never paged (attempts: %s)", g, strings.Join(statuses, ", "))
@@ -247,24 +267,62 @@ func gaugePagedAndEscalated(o Observations, g string) error {
 	return nil
 }
 
-// sentFor counts the SENT attempts on the gauges' flood alarms.
-func sentFor(o Observations, gauges []string) int {
-	n := 0
-	for _, g := range gauges {
-		for _, t := range floodTokens(o, g) {
-			for _, a := range o.S3.Attempts[t] {
-				if a.Status == "SENT" {
-					n++
-				}
-			}
-		}
+// The duty mail, as notification-management renders it: a page names the alarm on its first line
+// ("Alarm <key> <verb> on <device>." for an ALARM, "Alarm <key> is still unacknowledged ..." for an
+// ESCALATION) and the device in a "Device token:" field.
+var (
+	mailEscalationLine = regexp.MustCompile(`(?m)^Alarm (\S+) is still unacknowledged`)
+	mailAlarmLine      = regexp.MustCompile(`(?m)^Alarm (\S+) \S+ on `)
+	mailDeviceField    = regexp.MustCompile(`(?m)^Device token:[ \t]+(\S+)[ \t]*\r?$`)
+)
+
+// dutyMail classifies one mail's DATA: the device it names, the alarm key, and the trigger it is a
+// page for (ALARM or ESCALATION). ok is false for a mail it cannot attribute.
+func dutyMail(data string) (device, key, trigger string, ok bool) {
+	m := mailDeviceField.FindStringSubmatch(data)
+	if m == nil {
+		return "", "", "", false
 	}
-	return n
+	device = m[1]
+	if e := mailEscalationLine.FindStringSubmatch(data); e != nil {
+		return device, e[1], "ESCALATION", true
+	}
+	if a := mailAlarmLine.FindStringSubmatch(data); a != nil {
+		return device, a[1], "ALARM", true
+	}
+	return "", "", "", false
+}
+
+// floodMail counts the mail the sink received for recipient through the watched storm that names a
+// flood alarm, by device and trigger, and how much it could not attribute.
+func floodMail(o Observations, recipient string) (map[string]map[string]int, int) {
+	got := map[string]map[string]int{}
+	unattributed := 0
+	for _, m := range o.S3.Sink.Mail {
+		if !inWindow(m.At, o.at(stormFrom), o.end()) || !sliceHas(m.To, recipient) {
+			continue
+		}
+		device, key, trigger, ok := dutyMail(m.Data)
+		if !ok {
+			unattributed++
+			continue
+		}
+		if !strings.HasPrefix(key, sim.HarborpulseFloodAlarmKey) {
+			continue
+		}
+		if got[device] == nil {
+			got[device] = map[string]int{}
+		}
+		got[device][trigger]++
+	}
+	return got, unattributed
 }
 
 // notifyEscalates: every gauge's flood alarm paged the duty officer when it reached MAJOR and paged
-// again when nobody acknowledged it within the policy's escalation window, and the mail reached the
-// sink. The one gauge the verifier acknowledged is the control and is judged there instead.
+// again when nobody acknowledged it within the policy's escalation window, and each of those pages
+// reached the sink as a mail naming that gauge's flood alarm and that trigger: mail about another
+// gauge, another alarm or the other trigger stands in for none of them. The one gauge the verifier
+// acknowledged is the control and is judged there instead.
 func notifyEscalates(o Observations) error {
 	var problems []string
 	var judged []string
@@ -281,16 +339,21 @@ func notifyEscalates(o Observations) error {
 		return fmt.Errorf("%s", strings.Join(problems, "; "))
 	}
 	recipient := sim.HarborpulseDutyRecipient(o.S3.Tenant)
-	mail := 0
-	for _, m := range o.S3.Sink.Mail {
-		for _, to := range m.To {
-			if to == recipient && inWindow(m.At, o.at(stormFrom), o.end()) {
-				mail++
+	mail, unattributed := floodMail(o, recipient)
+	for _, g := range judged {
+		sent, _ := sentByTrigger(o, g)
+		for _, trigger := range []string{"ALARM", "ESCALATION"} {
+			if got := mail[g][trigger]; got < sent[trigger] {
+				problems = append(problems, fmt.Sprintf("%s: the platform recorded %d %s pages SENT for its flood alarm but the sink received %d such mails for %s naming it",
+					g, sent[trigger], trigger, got, recipient))
 			}
 		}
 	}
-	if sent := sentFor(o, judged); mail < sent {
-		return fmt.Errorf("the platform recorded %d pages SENT for the flood alarms but the sink received %d mails for %s", sent, mail, recipient)
+	if len(problems) > 0 {
+		if unattributed > 0 {
+			problems = append(problems, fmt.Sprintf("%d mails to %s named no device and alarm and were not counted", unattributed, recipient))
+		}
+		return fmt.Errorf("%s", strings.Join(problems, "; "))
 	}
 	return nil
 }
@@ -302,7 +365,7 @@ func notifyAckControlIsRed(o Observations) error {
 		return fmt.Errorf("the verifier never acknowledged %s's flood alarm, so the control shows nothing", AckGauge)
 	}
 	sent := false
-	for _, a := range o.S3.Attempts[o.S3.Ack.Token] {
+	for _, a := range watchedAttempts(o, o.S3.Ack.Token) {
 		if a.Trigger == "ESCALATION" {
 			return fmt.Errorf("%s was escalated at %s although it was acknowledged at %s", AckGauge, a.At.Format(time.RFC3339), o.S3.Ack.At.Format(time.RFC3339))
 		}
@@ -445,6 +508,10 @@ func loraDecoded(o Observations) error {
 	return nil
 }
 
+// minSuppressedGrowth is the least growth in a folded record's suppressed count that shows
+// failures inside the watch (decoderFailureVisible).
+const minSuppressedGrowth = 2
+
 // decoderFailureVisible: the legacy gauge's layout-2 uplinks are recorded as DECODE_FAILED, with
 // the evaluation error that caused them, and the decoder health shows them, while its layout-1
 // uplinks still decode and are stored.
@@ -458,7 +525,9 @@ func decoderFailureVisible(o Observations) error {
 	// The watch's failures are on record either as records written in it or, once the hourly bound
 	// has been reached (ten records a device, then folded), as growth in an older record's
 	// suppressed count since the watch began. A record that existed at the start and did not grow
-	// shows nothing about this day.
+	// shows nothing about this day, and neither does growth of ONE: the indexer flushes its folds
+	// about once a second, so a failure from just before the watch can land in the count after the
+	// baseline was read. Growth of minSuppressedGrowth needs a failure inside the watch.
 	before := map[string]int{}
 	for _, f := range o.S3.LegacyFailuresAtWatch {
 		before[f.ID] = f.Suppressed
@@ -467,13 +536,14 @@ func decoderFailureVisible(o Observations) error {
 	for _, f := range o.S3.DecodeFailures[g] {
 		if inWindow(f.At, o.at(WatchFrom), o.end()) {
 			fails = append(fails, f)
-		} else if was, ok := before[f.ID]; ok && f.Suppressed > was {
+		} else if was, ok := before[f.ID]; ok && f.Suppressed-was >= minSuppressedGrowth {
 			fails = append(fails, f)
 		}
 	}
 	sort.Slice(fails, func(i, j int) bool { return fails[i].At.Before(fails[j].At) })
 	if len(fails) == 0 {
-		problems = append(problems, g+": no DECODE_FAILED record through the watch, and no earlier record's suppressed count grew in it")
+		problems = append(problems, fmt.Sprintf("%s: no DECODE_FAILED record through the watch, and no earlier record's suppressed count grew in it by %d or more",
+			g, minSuppressedGrowth))
 	}
 	for _, f := range fails {
 		if !strings.Contains(f.Error, "eval_error") {

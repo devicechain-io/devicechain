@@ -37,7 +37,8 @@
 #                               judged red (the verifier runs this control itself)
 #   mqtt-bulletin               a flood bulletin on the tenant's MQTT topic for every gauge
 #   notify-escalates            each gauge's flood alarm paged the duty officer and, unacknowledged,
-#                               paged again; the mail reached the sink
+#                               paged again; each page reached the sink as a mail naming that
+#                               gauge and that trigger
 #   notify-ack-control-is-red   the gauge the verifier acknowledged was paged and not escalated
 #                               (the verifier runs this control itself)
 #
@@ -266,7 +267,7 @@ judge() {
 offline_controls() {
   say "offline controls (no cluster)"
   (cd "$repo_root/backend/sims/dc-simulator" &&
-    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn|TestFoldedDecodeFailures' ./scenarioverify/ >/dev/null &&
+    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn|TestFoldedDecodeFailures|TestFoldedGrowthOfOne|TestNotificationAttemptsAreJudgedOnTheWatchedDayOnly|TestDutyMailIsAttributed' ./scenarioverify/ >/dev/null &&
     go test -count=1 ./scenariosink/ >/dev/null) ||
     fail "the verifier's or the sink's own controls failed (go test ./scenarioverify/ ./scenariosink/ in backend/sims/dc-simulator)"
   pass "the verifier: a clean day passes, each planted defect turns exactly its invariant red"
