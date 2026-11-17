@@ -3,6 +3,7 @@
 
 import { type ClassValue, clsx } from "clsx";
 import { extendTailwindMerge } from "tailwind-merge";
+import { formatDateTime } from './format';
 
 // tailwind-merge doesn't know our custom @theme font-size tokens and would
 // classify `text-label` etc. as text COLORS — silently dropping them whenever
@@ -26,9 +27,9 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-/** Render an ISO timestamp in the local locale, or an em dash when absent. */
+/** Render an ISO timestamp in the console language, or an em dash when absent. */
 export function formatTime(value?: string | null): string {
-  return value ? new Date(value).toLocaleString() : '—';
+  return formatDateTime(value);
 }
 
 /**

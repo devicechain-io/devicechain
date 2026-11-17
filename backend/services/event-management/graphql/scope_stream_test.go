@@ -142,9 +142,17 @@ func TestAScopedSubscriberReceivesOnlyItsCustomersReadings(t *testing.T) {
 	defer cancel()
 
 	scoped, err := r.MeasurementStream(f.streamCtx(ctx, []string{"customer:acme"}),
-		struct{ DeviceToken, Name *string }{})
+		struct {
+			DeviceToken  *string
+			DeviceTokens *[]string
+			Name         *string
+		}{})
 	require.NoError(t, err, "a scoped member with event:read must be admitted to the stream")
-	unscoped, err := r.MeasurementStream(f.streamCtx(ctx, nil), struct{ DeviceToken, Name *string }{})
+	unscoped, err := r.MeasurementStream(f.streamCtx(ctx, nil), struct {
+		DeviceToken  *string
+		DeviceTokens *[]string
+		Name         *string
+	}{})
 	require.NoError(t, err)
 
 	f.publishReading(t, "shared-device", "customer:globex", "globex-reading", "2")
@@ -175,7 +183,11 @@ func TestAScopedStreamForAnotherCustomersDeviceIsSilent(t *testing.T) {
 
 	device := "globex-device"
 	scoped, err := r.MeasurementStream(f.streamCtx(ctx, []string{"customer:acme"}),
-		struct{ DeviceToken, Name *string }{DeviceToken: &device})
+		struct {
+			DeviceToken  *string
+			DeviceTokens *[]string
+			Name         *string
+		}{DeviceToken: &device})
 	require.NoError(t, err, "no subscribe-time ownership check: the subscription is accepted")
 
 	f.publishReading(t, device, "customer:globex", "globex-reading", "2")

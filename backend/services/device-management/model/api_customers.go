@@ -206,11 +206,19 @@ func (api *Api) CreateCustomer(ctx context.Context, request *CustomerCreateReque
 	// The token is issued and the customer written in ONE transaction, so a token is in
 	// the ledger exactly when a customer was created at it. The ledger's primary key is
 	// what refuses a second issue, race-free, whether the first customer is live or gone.
+	var change membershipChange
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&IssuedCustomerToken{Token: request.Token}).Error; err != nil {
 			return err
 		}
-		return tx.Create(created).Error
+		if err := tx.Create(created).Error; err != nil {
+			return err
+		}
+		change, err = api.enrollNewEntitiesOnTx(ctx, tx, "customer", []uint{created.ID})
+		if err != nil {
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		// A taken token is one of two things, and only one of them is an already-exists.
@@ -224,6 +232,7 @@ func (api *Api) CreateCustomer(ctx context.Context, request *CustomerCreateReque
 		}
 		return nil, err
 	}
+	api.afterMembershipRecompute(ctx, "customer", created.ID, change)
 	return created, nil
 }
 

@@ -8,14 +8,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/core"
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/stretchr/testify/require"
 )
 
 func detectionRule(token, definition string) model.DetectRule {
@@ -182,4 +186,129 @@ func TestDetectionPositionDecisionExpiresWhenARuleIdIsReused(t *testing.T) {
 	if f.allow(ctx, row.RuleId) {
 		t.Fatal("an expired decision was trusted after the rule id came back as a geofence rule")
 	}
+}
+
+func TestDetectionStreamSharedFeed(t *testing.T) {
+	nmgr := &messaging.NatsManager{}
+	upstream := make(chan messaging.Message, 32)
+	var opens, decodes atomic.Int64
+	var upstreamCtx context.Context
+	oldOpen, oldDecode := detectionLiveOpener, detectionDecode
+	detectionLiveOpener = func(*messaging.NatsManager) messaging.LiveOpener {
+		return func(ctx context.Context, tenant string) (<-chan messaging.Message, error) {
+			opens.Add(1)
+			upstreamCtx = ctx
+			require.Equal(t, "acme", tenant)
+			return upstream, nil
+		}
+	}
+	detectionDecode = func(msg messaging.Message, tenant string) []messaging.Keyed[liveDetection] {
+		decodes.Add(1)
+		return decodeDetections(msg, tenant)
+	}
+	defer func() { detectionLiveOpener, detectionDecode = oldOpen, oldDecode }()
+	// Every firing reaching every subscriber is a location:read caller's view; the
+	// withholding path, on this same shared feed, is TestDetectionStreamSharedFeedFiltersPerSubscriber.
+	ctx, cancel := context.WithCancel(core.WithTenant(authedContext(auth.DeviceRead, auth.LocationRead), "acme"))
+	defer cancel()
+	ctx = context.WithValue(ctx, gqlcore.ContextNatsKey, nmgr)
+	chans := make([]<-chan *DetectionEventResolver, 20)
+	for i := range chans {
+		ch, err := (&SchemaResolver{}).DetectionStream(ctx, struct{ ProfileToken string }{fmt.Sprintf("profile-%d", i%4)})
+		require.NoError(t, err)
+		chans[i] = ch
+	}
+	require.Equal(t, int64(1), opens.Load())
+	for i := 0; i < 24; i++ {
+		data, err := json.Marshal(runtime.DerivedEvent{RuleID: fmt.Sprintf("acme/profile-%d@v1/rule-%d", i%4, i), Series: fmt.Sprint(i)})
+		require.NoError(t, err)
+		upstream <- messaging.Message{Value: data}
+	}
+	// Neither malformed JSON nor an unparseable rule id reaches any subscriber.
+	upstream <- messaging.Message{Value: []byte("{")}
+	upstream <- messaging.Message{Value: []byte(`{"ruleId":"invalid"}`)}
+	close(upstream)
+	for i, ch := range chans {
+		for j := i % 4; j < 24; j += 4 {
+			select {
+			case got, ok := <-ch:
+				require.True(t, ok)
+				require.Equal(t, fmt.Sprintf("acme/profile-%d@v1/rule-%d", i%4, j), got.RuleId())
+				require.Equal(t, fmt.Sprintf("rule-%d", j), got.RuleToken())
+				require.Equal(t, fmt.Sprint(j), got.Series())
+			case <-time.After(5 * time.Second):
+				t.Fatal("missing detection")
+			}
+		}
+		select {
+		case _, ok := <-ch:
+			require.False(t, ok, "unexpected detection after expected profile matches")
+		case <-time.After(5 * time.Second):
+			t.Fatal("resolver did not close")
+		}
+	}
+	require.Equal(t, int64(26), decodes.Load())
+	select {
+	case <-upstreamCtx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("shared upstream did not cancel")
+	}
+}
+
+// One shared tenant feed, two subscribers with different authorities: the hub fans out by
+// profile only, and each subscription applies its own caller's location:read filter, so the
+// caller without it is withheld the fence firings while the caller with it still gets them.
+func TestDetectionStreamSharedFeedFiltersPerSubscriber(t *testing.T) {
+	store, _ := evStores(t)
+	if err := store.Upsert(previewCtx(auth.DeviceRead), []model.DetectRule{
+		detectionRule("fence", fenceDraft), detectionRule("threshold", plainDraft),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	nmgr := &messaging.NatsManager{}
+	upstream := make(chan messaging.Message, 8)
+	var opens atomic.Int64
+	oldOpen := detectionLiveOpener
+	detectionLiveOpener = func(*messaging.NatsManager) messaging.LiveOpener {
+		return func(context.Context, string) (<-chan messaging.Message, error) {
+			opens.Add(1)
+			return upstream, nil
+		}
+	}
+	defer func() { detectionLiveOpener = oldOpen }()
+	subscribe := func(authorities ...auth.Authority) <-chan *DetectionEventResolver {
+		ctx, cancel := context.WithTimeout(previewCtx(authorities...), 5*time.Second)
+		t.Cleanup(cancel)
+		ctx = context.WithValue(ctx, gqlcore.ContextNatsKey, nmgr)
+		out, err := (&SchemaResolver{DetectRules: store}).DetectionStream(ctx, struct{ ProfileToken string }{ProfileToken: "p"})
+		require.NoError(t, err)
+		return out
+	}
+	located := subscribe(auth.DeviceRead, auth.LocationRead)
+	unlocated := subscribe(auth.DeviceRead)
+	require.Equal(t, int64(1), opens.Load(), "both subscriptions must share one feed")
+	for _, token := range []string{"fence", "threshold"} {
+		for _, edge := range []string{"raised", "resolved"} {
+			body, err := json.Marshal(runtime.DerivedEvent{RuleID: runtime.PublishedRuleID("acme", "p@1", token), Series: "device-1", Edge: edge})
+			require.NoError(t, err)
+			upstream <- messaging.Message{Value: body}
+		}
+	}
+	close(upstream)
+	drain := func(ch <-chan *DetectionEventResolver) []string {
+		var got []string
+		for {
+			select {
+			case ev, ok := <-ch:
+				if !ok {
+					return got
+				}
+				got = append(got, ev.RuleToken()+":"+ev.Edge())
+			case <-time.After(5 * time.Second):
+				t.Fatal("subscription did not finish")
+			}
+		}
+	}
+	require.Equal(t, []string{"fence:raised", "fence:resolved", "threshold:raised", "threshold:resolved"}, drain(located))
+	require.Equal(t, []string{"threshold:raised", "threshold:resolved"}, drain(unlocated))
 }

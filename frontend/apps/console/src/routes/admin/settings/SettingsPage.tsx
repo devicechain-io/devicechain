@@ -30,8 +30,7 @@ import { PageShell } from '@/components/ui/page-shell';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { LoadingState } from '@/components/ui/loading-state';
-import { ErrorState } from '@/components/ui/error-state';
+import { QueryBoundary } from '@/components/ui/query-boundary';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { HintText } from '@/components/ui/hint-text';
@@ -39,6 +38,7 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listSettings, setSetting, clearSetting, type Setting } from '@/lib/api/settings';
+import { formatDateTime } from '@/lib/format';
 // 🔴 A setting written here can be one another module has memoised — entity.token_masks
 // is, by lib/token-masks.ts, for the life of the tab. Without this the operator saves a
 // new token mask, opens a create form, and sees the OLD pattern presented as this
@@ -47,7 +47,7 @@ import { listSettings, setSetting, clearSetting, type Setting } from '@/lib/api/
 // key, because a gate keyed on a value is a gate that fires only while someone keeps
 // the two spellings in step — and the cost of being wrong is one extra query.
 import { forgetCachedSettings } from '@/lib/token-masks';
-import { useReload, errMessage } from '@/routes/common';
+import { errMessage } from '@/routes/common';
 import { SECTIONS } from './sections';
 import { RAW_JSON_SECTION } from './RawJsonEditor';
 import type { SettingSection } from './registry';
@@ -102,8 +102,9 @@ function seedDraft(setting: Setting, section: SettingSection): Draft {
 
 export default function SettingsPage() {
   const { t } = useTranslation('adminSettings');
-  const [version, reload] = useReload();
-  const { data: settings, loading, error } = useQuery(listSettings, [version]);
+  const query = useQuery(listSettings, [], []);
+  const { data: settings, refetch: reload } = query;
+  const [tab, setTab] = useState<string | null>(null);
 
   // Drafts by setting key. A key with no entry is pristine and re-seeds from the
   // stored value, so a save/reset only has to DELETE its entry.
@@ -128,18 +129,15 @@ export default function SettingsPage() {
     [settings],
   );
 
-  if (loading) {
-    return (
-      <PageShell title={t('title')} description={t('description')}>
-        <LoadingState description={t('loadingSettings')} />
-      </PageShell>
-    );
-  }
   return (
     <PageShell title={t('title')} description={t('description')}>
-      {error && <ErrorState description={error} />}
-      {!error && panels.length === 0 && <EmptyState description={t('noSettingsDefined')} />}
-      <Tabs defaultValue={panels[0]?.setting.key ?? FUNCTIONAL_AREAS_TAB}>
+      <QueryBoundary query={query}>
+        {panels.length === 0 && <EmptyState description={t('noSettingsDefined')} />}
+      </QueryBoundary>
+      {/* Functional areas does not depend on the settings read, so it stays reachable
+          when that read fails; only the first load holds the tabs back. */}
+      {query.status !== 'loading' && (
+      <Tabs value={tab ?? panels[0]?.setting.key ?? FUNCTIONAL_AREAS_TAB} onValueChange={setTab}>
         <TabsList>
           {panels.map(({ setting, section }) => (
             <TabsTrigger key={setting.key} value={setting.key} className="flex items-center gap-1.5">
@@ -168,6 +166,7 @@ export default function SettingsPage() {
           </TabsContent>
         ))}
       </Tabs>
+      )}
     </PageShell>
   );
 }
@@ -265,7 +264,7 @@ function SettingPanel({
       {setting.overridden && setting.updatedBy && (
         <p className="text-xs text-muted-foreground">
           {t('overriddenByLabel', { by: setting.updatedBy })}
-          {setting.updatedAt ? ` · ${new Date(setting.updatedAt).toLocaleString()}` : ''}
+          {setting.updatedAt ? ` · ${formatDateTime(setting.updatedAt)}` : ''}
         </p>
       )}
 

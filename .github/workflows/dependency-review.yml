@@ -20,6 +20,15 @@
 #
 # PR-only by design. It has nothing to compare against on a push to main (there is
 # no base graph), which is why this is its own workflow rather than a job in ci.yml.
+#
+# 🔴 SCOPED TO DIFFS THAT TOUCH A MANIFEST, INSIDE THE JOB. A diff that changes no
+# manifest has the same dependency graph at base and head, so there is nothing to
+# review. `dependency-review` is a REQUIRED check, though, so the workflow cannot be
+# narrowed with `paths:` -- a workflow that does not start reports no check, and the
+# pull request waits on it forever. Instead the job always runs, asks
+# hack/dependency-review-scope.py whether the diff touches a manifest, and runs the
+# action unless the answer is exactly "false". Every other outcome (the file list
+# could not be read, the script failed, printed nothing) runs the review.
 name: dependency-review
 
 on:
@@ -29,6 +38,7 @@ on:
 # requested, so no pull-requests: write is needed.
 permissions:
   contents: read
+  pull-requests: read # list the pull request's changed files
 
 concurrency:
   group: dependency-review-${{ github.ref }}
@@ -38,7 +48,35 @@ jobs:
   dependency-review:
     runs-on: ubuntu-latest
     steps:
+      # The scope script is read from the BASE commit, so a pull request cannot narrow the
+      # review of itself by editing the rule; a change to the rule applies once it has merged.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: hack/dependency-review-scope.py
+          sparse-checkout-cone-mode: false
+
+      # The pull-request files API lists at most 3000 files; a list that long is treated as
+      # unreadable (run the review) rather than as complete. A RENAMED file is listed under its
+      # new name with the old one in previous_filename, and both are checked: renaming a lock
+      # file away removes a manifest as surely as deleting it.
+      - name: Does the diff touch a dependency manifest?
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          verdict=true
+          records="$RUNNER_TEMP/pr-files.tsv"
+          if gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[] | [.filename, (.previous_filename // "")] | @tsv' > "$records" \
+             && [ "$(wc -l < "$records")" -lt 3000 ]; then
+            verdict="$(tr '\t' '\n' < "$records" | python3 hack/dependency-review-scope.py)" || verdict=true
+          else
+            echo "::warning::could not list this pull request's files completely; running the review"
+          fi
+          echo "verdict: $verdict"
+          echo "run=$verdict" >> "$GITHUB_OUTPUT"
 
       # fail-on-severity: moderate — not the action's default (`low`), and not a
       # rubber stamp either. Chosen because `low` in the GitHub Advisory Database
@@ -51,6 +89,7 @@ jobs:
       # escape hatch. If this blocks a PR, the fix is to change the dependency or
       # to add a reviewed, dated entry here — not to make the check advisory.
       - name: Dependency review
+        if: steps.scope.outputs.run != 'false'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: moderate

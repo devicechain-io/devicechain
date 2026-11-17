@@ -44,10 +44,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
 
-function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleString();
-}
+import { formatDateTime } from '@/lib/format';
 
 /** One row of an append-only version history, as every versioned resource returns it. */
 export interface PublishedVersion {
@@ -203,11 +200,9 @@ export function VersionsPanel<V extends PublishedVersion>({
         <div className="space-y-4">
           <FormField
             label={t('versions:labelFieldLabel')}
-            htmlFor="v-label"
             description={t('versions:labelHint')}
           >
             <Input
-              id="v-label"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               placeholder={t('versions:labelPlaceholder')}
@@ -215,11 +210,9 @@ export function VersionsPanel<V extends PublishedVersion>({
           </FormField>
           <FormField
             label={t('common:colDescription')}
-            htmlFor="v-desc"
             description={t('versions:descHint')}
           >
             <Textarea
-              id="v-desc"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
@@ -266,7 +259,7 @@ export function VersionsPanel<V extends PublishedVersion>({
                   {v.label || <span className="text-muted-foreground">—</span>}
                 </DataTableCell>
                 <DataTableCell className="whitespace-nowrap text-muted-foreground">
-                  {fmtTime(v.publishedAt)}
+                  {formatDateTime(v.publishedAt)}
                 </DataTableCell>
                 <DataTableCell className="text-muted-foreground" data-shot-pii>
                   {v.publishedBy || '—'}

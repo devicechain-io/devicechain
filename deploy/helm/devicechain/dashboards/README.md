@@ -185,6 +185,16 @@ The check requires: first panel, type `table`, title `Firing alerts`, at the top
 
 - Select every series with `namespace="$namespace"`. Series names are checked against the Go
   registrations; a name that does not exist fails the check.
+- Keep a visible priority-class breakdown on each board that queries the ingest shedding
+  counters (`total_msg_rate_limited`, `total_msg_reading_limited`,
+  `total_readings_rate_limited`). These expose the bounded `shed_class` vocabulary:
+  `best-effort`, `bronze`, `silver`, `gold`, rather than tenant IDs or tier names.
+  Totals may accompany the breakdown. Use a time series with
+  `sum by (source, shed_class) (rate(<metric>{namespace="$namespace"}[$__rate_interval]))`
+  (the `source` grouping is optional), a visible target and legend, and `{{shed_class}}`
+  in the legend text. The deploy module's `TestDashboardTierCoverage` checks every board,
+  including panels nested in rows; its negative controls prove that totals, hidden targets,
+  missing legends and another metric's breakdown cannot satisfy this rule.
 - Rates over time: `rate(...[$__rate_interval])`, never a fixed window.
 - Events whose healthy count is zero (stranded, refused, lost, poisoned): a **stat** shows
   `round(sum(increase(...[$__range])))` as an instant query, so one occurrence stays visible for
