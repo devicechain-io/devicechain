@@ -223,7 +223,8 @@ func (c *Client) QueryOnBehalfOfScopedCaller(ctx context.Context, baseURL, tenan
 }
 
 // query is the call itself, with the scoped-caller decision already made by the caller.
-func (c *Client) query(ctx context.Context, baseURL, tenant, query string, variables map[string]any, out any) error {
+func (c *Client) query(ctx context.Context, baseURL, tenant, query string, variables map[string]any, out any) (err error) {
+	defer observeQuery(time.Now(), &err)
 	if strings.TrimSpace(tenant) == "" {
 		return fmt.Errorf("svcclient: tenant is required")
 	}
@@ -383,6 +384,8 @@ func (c *Client) serviceToken(ctx context.Context) (string, error) {
 // mint exchanges the shared secret for a fresh service token at user-management's
 // mint endpoint. It returns the token and its expiry; the caller stores them.
 func (c *Client) mint(ctx context.Context) (string, time.Time, error) {
+	started := time.Now()
+	defer func() { mintDuration.Observe(time.Since(started).Seconds()) }()
 	body, err := json.Marshal(auth.ServiceTokenRequest{Subject: c.subject, Authorities: c.authorities})
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("svcclient: marshal mint request: %w", err)
