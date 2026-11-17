@@ -10,10 +10,14 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
@@ -137,4 +141,75 @@ func TestAlarmPositionGateBound(t *testing.T) {
 	if len(g.withheld) != maxWithheldAlarms || len(g.order) != maxWithheldAlarms {
 		t.Fatalf("memory = %d/%d, want the bound %d", len(g.withheld), len(g.order), maxWithheldAlarms)
 	}
+}
+
+// TestAlarmStreamResolverWithholdsGeofenceAlarms drives AlarmStream itself through the shared
+// live hub: one upstream feed carries an event of a geofence alarm and one of a threshold alarm,
+// and of two subscribers on it, the one without location:read receives only the threshold
+// alarm's event while the one holding it receives both.
+func TestAlarmStreamResolverWithholdsGeofenceAlarms(t *testing.T) {
+	f := newScopeFixture(t)
+	require.NoError(t, model.RegisterPositionWithholding(f.api.RDB.Database))
+	acmeID, err := f.api.ResolveEntityToken(f.operator(), "device", "acme-pump")
+	require.NoError(t, err)
+	tenantCtx := core.WithTenant(context.Background(), scopeTenant)
+	at := time.Unix(100, 0).UTC()
+	derived := true
+	for _, a := range []*model.Alarm{
+		{TokenReference: rdb.TokenReference{Token: "fence-alarm"}, AlarmKey: "left-yard", PositionDerived: &derived},
+		{TokenReference: rdb.TokenReference{Token: "temp-alarm"}, AlarmKey: "over-temp"},
+	} {
+		a.OriginatorType, a.OriginatorId, a.ScopeAnchors = "device", acmeID, rdb.Anchors{"customer:acme"}
+		a.State, a.Severity, a.RaisedTime = string(model.AlarmStateActive), string(model.AlarmSeverityMajor), at
+		require.NoError(t, f.api.RDB.Database.WithContext(tenantCtx).Create(a).Error)
+	}
+	alarms, err := f.api.Alarms(f.operator(), model.AlarmSearchCriteria{})
+	require.NoError(t, err)
+	require.Len(t, alarms.Results, 2)
+
+	upstream := make(chan messaging.Message, 4)
+	oldOpen := alarmLiveOpener
+	alarmLiveOpener = func(*messaging.NatsManager) messaging.LiveOpener {
+		return func(context.Context, string) (<-chan messaging.Message, error) { return upstream, nil }
+	}
+	defer func() { alarmLiveOpener = oldOpen }()
+	nmgr := &messaging.NatsManager{}
+
+	subscribe := func(base context.Context) <-chan *AlarmEventResolver {
+		ctx, cancel := context.WithCancel(base)
+		t.Cleanup(cancel)
+		ch, err := (&SchemaResolver{}).AlarmStream(context.WithValue(ctx, gqlcore.ContextNatsKey, nmgr), alarmStreamArgs{})
+		require.NoError(t, err)
+		return ch
+	}
+	viewer := subscribe(f.member("customer:acme"))
+	locator := subscribe(f.sweepMember("customer:acme"))
+
+	for i := range alarms.Results {
+		a := &alarms.Results[i]
+		data, err := dmproto.MarshalAlarmStateChangeEvent(&model.AlarmStateChangeEvent{
+			EventType: model.AlarmEventRaised, AlarmToken: a.Token, OriginatorType: "device", OriginatorId: acmeID,
+			AlarmKey: a.AlarmKey, State: a.State, Severity: a.Severity, ScopeAnchors: []string{"customer:acme"},
+			RaisedTime: at, OccurredTime: at})
+		require.NoError(t, err)
+		upstream <- messaging.Message{Value: data}
+	}
+	close(upstream)
+
+	drain := func(ch <-chan *AlarmEventResolver) []string {
+		var keys []string
+		for {
+			select {
+			case ev, ok := <-ch:
+				if !ok {
+					return keys
+				}
+				keys = append(keys, ev.AlarmKey())
+			case <-time.After(5 * time.Second):
+				t.Fatal("the stream did not close")
+			}
+		}
+	}
+	require.Equal(t, []string{"over-temp"}, drain(viewer), "a subscriber without location:read must not receive the geofence alarm")
+	require.ElementsMatch(t, []string{"left-yard", "over-temp"}, drain(locator))
 }

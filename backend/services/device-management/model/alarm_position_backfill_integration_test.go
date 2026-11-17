@@ -134,4 +134,21 @@ func TestPositionWithholdingOnPostgres(t *testing.T) {
 	labels, err = r.api.AlarmDispositions(located, AlarmDispositionSearchCriteria{})
 	require.NoError(t, err)
 	require.Len(t, labels.Results, 2)
+
+	// A member limited to acme reads within its scope, and location:read is judged for it too:
+	// with it both of acme's alarms, without it only the threshold one.
+	scoped := func(authorities ...auth.Authority) context.Context {
+		names := []string{string(auth.AlarmRead), string(auth.DeviceRead)}
+		for _, a := range authorities {
+			names = append(names, string(a))
+		}
+		return auth.WithClaims(ctx, &auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: r.tenant,
+			ScopeAnchors: []string{"customer:acme"}, Authorities: names})
+	}
+	res, err = r.api.Alarms(scoped(auth.LocationRead), AlarmSearchCriteria{})
+	require.NoError(t, err)
+	require.Len(t, res.Results, 2, "a scoped member holding location:read reads its scope's geofence alarm")
+	res, err = r.api.Alarms(scoped(), AlarmSearchCriteria{})
+	require.NoError(t, err)
+	require.Len(t, res.Results, 1, "a scoped member without location:read does not")
 }

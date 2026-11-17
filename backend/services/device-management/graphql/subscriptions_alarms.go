@@ -138,7 +138,7 @@ type positionGate struct {
 // positionGateFor returns the gate for a subscriber, or nil for one holding location:read, which
 // receives every event its other predicates pass. derived is Api.AlarmPositionDerived.
 func positionGateFor(ctx context.Context, derived func(context.Context, string) (bool, bool, error)) *positionGate {
-	if auth.Authorize(ctx, auth.LocationRead) == nil {
+	if model.CallerHoldsLocationRead(ctx) {
 		return nil
 	}
 	return &positionGate{derived: func(token string) (bool, bool, error) { return derived(ctx, token) }}

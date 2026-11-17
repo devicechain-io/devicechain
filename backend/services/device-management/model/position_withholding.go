@@ -57,6 +57,15 @@ var (
 	alarmDispositionModelType = reflect.TypeOf(AlarmDisposition{})
 )
 
+// CallerHoldsLocationRead reports whether the context's caller holds location:read. It asks
+// through AuthorizeScoped, not Authorize: a member limited to some customers may read alarms
+// (within its scope), and Authorize refuses every such member whatever it holds, which would
+// withhold geofence alarms from a scoped member that was granted location:read.
+func CallerHoldsLocationRead(ctx context.Context) bool {
+	_, err := auth.AuthorizeScoped(ctx, auth.LocationRead)
+	return err == nil
+}
+
 // callerWithoutLocation reports whether the statement runs for a caller that lacks
 // location:read. A context with no claims is not a caller.
 func callerWithoutLocation(db *gorm.DB) bool {
@@ -67,7 +76,7 @@ func callerWithoutLocation(db *gorm.DB) bool {
 	if _, ok := auth.ClaimsFromContext(ctx); !ok {
 		return false
 	}
-	return auth.Authorize(ctx, auth.LocationRead) != nil
+	return !CallerHoldsLocationRead(ctx)
 }
 
 func withholdPositionDerived(db *gorm.DB) {
