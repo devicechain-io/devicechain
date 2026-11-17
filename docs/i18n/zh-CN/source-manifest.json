@@ -315,12 +315,12 @@
       "translationSha256": "6bd4e0e6afe94727716dfc090934105fd39195be33ddaba19570aa986325e70a"
     },
     "quickstart/feature-tour.md": {
-      "sourceSha256": "e726240cfa4e4ca37731159840b60bdc81be91d774f09e6a979242c47a061379",
-      "translationSha256": "5266a949b842be6acb452f38586a0423cb15d943cf6015122a72fbdf3b8419b1"
+      "sourceSha256": "aa9d5f60c96f88c20de870932345bb6aaa4b77d939cba83cd2142dc082299964",
+      "translationSha256": "e2621db89a1e0f7f7d7ea22e38cfb6e875689e45fc530d3be9cfea33c2c8396d"
     },
     "quickstart/first-device.md": {
-      "sourceSha256": "ee6ff97bebc8c90a25e31e9c41f6b268aa12772e4131e5b4af9afba7b83c8219",
-      "translationSha256": "731fbe063b0f1641f1ad5cc3ef68a9bb99015d57ce1e1e73b0029dc86d06be90"
+      "sourceSha256": "4b93312a3083c92aff86eb9060b6ff3bdf88dcaa6510b9571212408dfda03ff2",
+      "translationSha256": "f949563db8f495e162bcf862b2f86cbe7630376c3bfb26927afedab179d5a2c6"
     },
     "reference/csharp-sdk.md": {
       "sourceSha256": "7c2ff25f32b4e14b3d51c27a5729ab0bd08c6e90302dc5ab1ea1bbf7be73ae50",
