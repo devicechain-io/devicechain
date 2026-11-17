@@ -163,7 +163,7 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("agent_effects_drain"))
 	require.NoError(t, AgentEffectsDrain.Initialize(context.Background()))
 	EntityDeletionDrain = core.NewPeriodicTask(area, "entity-deletion-drain", time.Hour,
-		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("entity_deletion_drain"))
 	require.NoError(t, EntityDeletionDrain.Initialize(context.Background()))
 	AgentKillConsumer = processor.NewAgentKillConsumer(Microservice, nil, nil, model.NewKillFeed(0, nil), nil)
 	require.NoError(t, AgentKillConsumer.Initialize(context.Background()))
@@ -174,7 +174,7 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("agent_proposal_reaper"))
 	require.NoError(t, AgentProposalReaper.Initialize(context.Background()))
 	AlarmPositionClassifier = core.NewPeriodicTask(area, "alarm-position-classifier", time.Hour,
-		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("alarm_position_classifier"))
 	require.NoError(t, AlarmPositionClassifier.Initialize(context.Background()))
 	// And the decode accounting, which the stopper stops and then flushes. A fresh one: an earlier test of
 	// the package may have left the global stopped.

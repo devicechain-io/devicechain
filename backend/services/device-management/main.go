@@ -825,7 +825,8 @@ func initAlarmPositionClassifier() error {
 			_, err := Api.ClassifyUnclassifiedAlarms(ctx)
 			return err
 		},
-		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass())
+		core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("alarm_position_classifier"),
+		core.WithImmediateFirstPass())
 	return AlarmPositionClassifier.Initialize(context.Background())
 }
 
@@ -867,7 +868,7 @@ func initAgentEffectsDrain() error {
 func initEntityDeletionDrain() error {
 	EntityDeletionDrain = core.NewPeriodicTask(Microservice.FunctionalArea, "entity-deletion-drain", ownershipDrainInterval,
 		func(ctx context.Context) error { return Api.DrainEntityDeletionsLocked(ctx) },
-		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(EntityDeletionDrainMetrics))
+		core.NewNoOpLifecycleCallbacks(), EntityDeletionDrainMetrics, core.WithImmediateFirstPass())
 	return EntityDeletionDrain.Initialize(context.Background())
 }
 
