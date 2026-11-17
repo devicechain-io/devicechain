@@ -376,7 +376,7 @@ tests:
             exp_annotations:
               runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamclusterunused"
               summary: "The NATS broker is clustered but nothing on it is replicated"
-              description: "This instance is connected to a CLUSTERED NATS broker while every stream and KV bucket is configured for a single replica, so it is paying for a multi-server cluster and surviving zero node losses. Both halves of the toggle have to move together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the replica factor is the chart's (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets both from one value. If the single-server topology is what you intended, scale the NATS cluster back down rather than leaving it running unused."
+              description: "This instance is connected to a CLUSTERED NATS broker while every stream and KV bucket is configured for a single replica, so it is paying for a multi-server cluster and surviving zero node losses. Both halves of the toggle have to move together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the replica factor is the chart's (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets both from one value. If the single-server topology is what you intended, scale the NATS cluster back down rather than leaving it running unused. (An instance with NATS shard groups runs a multi-server, single-replica broker on purpose, and does not raise this.)"
       # A single-replica lease bucket on an instance configured for one replica is not
       # the critical alert's business: its `desired > 1` arm is what says so.
       - eval_time: 15m
@@ -385,6 +385,84 @@ tests:
       - eval_time: 15m
         alertname: JetStreamNotReplicatedAsConfigured
         exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A SHARD-GROUP instance: three servers, every stream at one replica, and the group
+  # streams (inbound-events-g1, -g2) each pinned to its own server. The cluster is there
+  # for throughput, not copies, so JetStreamClusterUnused stays quiet. The negative
+  # control is the case above: the same clustered R1 broker with no group stream fires.
+  # ------------------------------------------------------------------
+  - name: a shard-group instance's clustered single-replica broker raises nothing
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events-g1"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events-g1"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events-g1"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events-g1"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events-g2"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events-g2"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events-g2"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events-g2"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="KV_devicechain_dc_leases"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="KV_devicechain_dc_leases"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="KV_devicechain_dc_leases"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="KV_devicechain_dc_leases"}'
+        values: '1x60'
+      - series: 'devicechain_eventsources_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources"}'
+        values: '1x60'
+    alert_rule_test:
+      - {eval_time: 60m, alertname: JetStreamClusterUnused, exp_alerts: []}
+      - {eval_time: 60m, alertname: JetStreamNotReplicatedAsConfigured, exp_alerts: []}
+      - {eval_time: 60m, alertname: JetStreamLeaseBucketNotReplicated, exp_alerts: []}
+      - {eval_time: 60m, alertname: JetStreamReplicationUnobserved, exp_alerts: []}
+
+  # ------------------------------------------------------------------
+  # Only a GROUP name excludes it. A stream whose name merely contains "-g" (no group
+  # number after it) is not a group stream, and the clustered R1 broker still fires.
+  # ------------------------------------------------------------------
+  - name: a stream name that only looks like a group does not hide JetStreamClusterUnused
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events-gateway"}'
+        values: '1x30'
+      - series: 'devicechain_eventsources_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events-gateway"}'
+        values: '1x30'
+      - series: 'devicechain_eventsources_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events-gateway"}'
+        values: '1x30'
+      - series: 'devicechain_eventsources_jetstream_peers_online{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources", stream="devicechain_inbound-events-gateway"}'
+        values: '1x30'
+      - series: 'devicechain_eventsources_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-sources-7c9d-aaaaa", job="devicechain/event-sources"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: JetStreamClusterUnused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamclusterunused"
+              summary: "The NATS broker is clustered but nothing on it is replicated"
+              description: "This instance is connected to a CLUSTERED NATS broker while every stream and KV bucket is configured for a single replica, so it is paying for a multi-server cluster and surviving zero node losses. Both halves of the toggle have to move together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the replica factor is the chart's (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets both from one value. If the single-server topology is what you intended, scale the NATS cluster back down rather than leaving it running unused. (An instance with NATS shard groups runs a multi-server, single-replica broker on purpose, and does not raise this.)"
 
   # ------------------------------------------------------------------
   # 🔴 A STREAM THIS POD STOPS BEING ABLE TO READ, while it goes on reading another one

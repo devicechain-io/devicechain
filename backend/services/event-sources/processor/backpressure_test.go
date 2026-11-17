@@ -5,6 +5,7 @@ package processor
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func refuseAll(string) error {
+func refuseAll(string, string) error {
 	return &messaging.BackpressureError{Stream: "inst-1_inbound-events", Durable: "d", Ratio: 0.95}
 }
 
@@ -108,7 +109,7 @@ func TestExternalMqttDropsWhileThePipelineRefuses(t *testing.T) {
 	allow := func(string, string, time.Time, bool, Origin) bool { metered = true; return true }
 	es, received := newTestMqttSource(t, allow)
 	asked := 0
-	es.admit = func(string) error { asked++; return refuseAll("") }
+	es.admit = func(string, string) error { asked++; return refuseAll("", "") }
 
 	es.onMessage(nil, &fakeMqttMessage{topic: "inst-1/acme/events", payload: []byte(`{"device":"d1"}`)})
 
@@ -131,4 +132,44 @@ func TestHttpEventDroppedAtConstructionIsA500NotA202(t *testing.T) {
 	assert.Empty(t, rec.Header().Get("Retry-After"))
 	assert.NotContains(t, rec.Body.String(), ErrEventNotBuilt.Error(), "the cause stays in the log")
 	assert.True(t, dec.called)
+}
+
+func TestHttpAdmitUsesResolvedTenant(t *testing.T) {
+	// Group zero refuses; group one accepts. The callback models the two gates
+	// while checking the handler passes the request tenant and source.
+	for _, tenant := range []string{"tenant-b", "tenant-a"} {
+		t.Run(tenant, func(t *testing.T) {
+			admit := func(tenant, source string) error {
+				require.Equal(t, "http-test", source)
+				if tenant == "tenant-b" {
+					return nil
+				}
+				require.Equal(t, "tenant-a", tenant)
+				return messaging.ErrStreamBackpressure
+			}
+
+			es, dec, _ := newTestHttpSourceAdmitting(t, nil, admit, config.HttpIngest{}, nil)
+			rec := httptest.NewRecorder()
+			es.handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/inst-1/"+tenant+"/events", strings.NewReader(canonicalMeasurementBody)))
+			if tenant == "tenant-b" {
+				require.Equal(t, http.StatusAccepted, rec.Code)
+				require.True(t, dec.called)
+			} else {
+				require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+				require.Equal(t, "10", rec.Header().Get("Retry-After"))
+				require.False(t, dec.called)
+			}
+		})
+	}
+}
+
+func TestHttpUnplacedPublishRefusal(t *testing.T) {
+	es, dec, fail := newTestHttpSource(t, nil)
+	dec.publishErr = fmt.Errorf("placement: %w", messaging.ErrUnplacedTenant)
+	rec := httptest.NewRecorder()
+	es.handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/inst-1/acme/events", strings.NewReader(canonicalMeasurementBody)))
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Equal(t, "10", rec.Header().Get("Retry-After"))
+	require.True(t, dec.called)
+	require.False(t, fail.called)
 }

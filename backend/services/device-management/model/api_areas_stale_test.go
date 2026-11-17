@@ -18,7 +18,7 @@ func newAreaBoundaryTestApi(t *testing.T, linked bool) (*Api, context.Context, *
 	t.Helper()
 	api := newGeoFenceTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
-	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).AutoMigrate(&AreaType{}))
+	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).AutoMigrate(&AreaType{}, &EntityGroupFacetRef{}))
 	_, err := api.CreateAreaType(ctx, &AreaTypeCreateRequest{Token: "floor"})
 	require.NoError(t, err)
 	_, err = api.CreateGeoFence(ctx, &GeoFenceCreateRequest{Token: "f", Geometry: yardGeometry})

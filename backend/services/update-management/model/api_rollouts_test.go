@@ -80,7 +80,7 @@ func (s *syncDevices) DeviceOf(_ context.Context, tenant, device string) (Device
 		return DeviceFacts{}, false, s.err
 	}
 	p, ok := s.profiles[tenant+"/"+device]
-	return DeviceFacts{Profile: p, Disabled: s.disabled[tenant+"/"+device], Anchors: []string{}}, ok, nil
+	return DeviceFacts{Incarnation: 1, Profile: p, Disabled: s.disabled[tenant+"/"+device], Anchors: []string{}}, ok, nil
 }
 
 type rolloutEnv struct {
