@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/svcclient"
@@ -63,7 +65,7 @@ func (c *Checker) Missing(ctx context.Context, tenant string, tokens []string) (
 // stamp an assignment is written with. One request, so the two describe the device as one
 // read saw it.
 const deviceFacts = `query($tokens: [String!]!) {
-  devicesByToken(tokens: $tokens) { token enabled deviceType { profile { token } } }
+  devicesByToken(tokens: $tokens) { id createdAt token enabled deviceType { profile { token } } }
   deviceScopeAnchors(deviceTokens: $tokens) { deviceToken anchors }
 }`
 
@@ -77,6 +79,8 @@ func (c *Checker) DeviceOf(ctx context.Context, tenant, deviceToken string) (fac
 	var out struct {
 		DevicesByToken []struct {
 			Token      string `json:"token"`
+			ID         string `json:"id"`
+			CreatedAt  string `json:"createdAt"`
 			Enabled    *bool  `json:"enabled"`
 			DeviceType struct {
 				Profile *struct {
@@ -99,6 +103,15 @@ func (c *Checker) DeviceOf(ctx context.Context, tenant, deviceToken string) (fac
 		// `enabled` is non-null in the schema; an answer without it is not "enabled".
 		if d.Enabled == nil {
 			return model.DeviceFacts{}, false, errors.New("device-management device lookup: the answer carries no enabled flag")
+		}
+		id, err := strconv.ParseUint(d.ID, 10, 63)
+		if err != nil || id == 0 {
+			return model.DeviceFacts{}, false, fmt.Errorf("device-management device lookup: invalid id %q", d.ID)
+		}
+		facts.Incarnation = id
+		facts.CreatedAt, err = time.Parse(time.RFC3339, d.CreatedAt)
+		if err != nil || facts.CreatedAt.IsZero() {
+			return model.DeviceFacts{}, false, fmt.Errorf("device-management device lookup: invalid createdAt %q", d.CreatedAt)
 		}
 		facts.Disabled = !*d.Enabled
 		if d.DeviceType.Profile != nil {

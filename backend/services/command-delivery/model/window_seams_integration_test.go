@@ -260,3 +260,53 @@ func TestPostgresFailUndefinedWaitingFailsOnlyTheNamedWaitingRows(t *testing.T) 
 	assert.Equal(t, CommandQueued.String(), commandRow(t, api, ctx, "u-other-key").Status, "another command key was failed")
 	assert.Equal(t, CommandQueued.String(), commandRow(t, api, other, "u-other-tenant").Status, "another tenant's row was failed")
 }
+
+// The deletion floor on the real engine: the gate upsert keeps the later floor, the cancel is
+// bounded by the delete's time, every claim path refuses a covered command, and a command for
+// the device re-created after the delete is still claimed. SQLite cannot check the correlated
+// subquery against the area's schema-qualified tables, which is what this is for.
+func TestPostgresADeletedDevicesCommandsAreNeitherKeptNorClaimed(t *testing.T) {
+	api := newPostgresApi(t)
+	a, b := core.WithTenant(context.Background(), "A"), core.WithTenant(context.Background(), "B")
+	old := pgCommand(t, api, a, "old", "valve-7", CommandHeld, time.Time{}, time.Time{}, "")
+	other := pgCommand(t, api, b, "other", "valve-7", CommandQueued, time.Time{}, time.Time{}, "")
+	deleted := time.Now().UTC().Add(time.Second)
+	n, err := api.CancelDeletedDeviceCommands(a, "valve-7", deleted)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, n)
+	require.Equal(t, CommandCancelled.String(), loadOrFail(t, api, a, old.ID).Status)
+	require.Equal(t, CommandQueued.String(), loadOrFail(t, api, b, other.ID).Status, "another tenant's device was touched")
+
+	// An older redelivered fact does not lower the floor.
+	_, err = api.CancelDeletedDeviceCommands(a, "valve-7", deleted.Add(-time.Hour))
+	require.NoError(t, err)
+	var gate DeviceGate
+	require.NoError(t, api.RDB.DB(a).Where("device_token = ?", "valve-7").First(&gate).Error)
+	require.True(t, gate.DeletedThrough.Valid)
+	require.WithinDuration(t, deleted, gate.DeletedThrough.Time, time.Millisecond, "the floor moved back")
+
+	// A command the fact did not reach (inserted under the floor) is refused by every claim.
+	raced := pgCommand(t, api, a, "raced", "valve-7", CommandQueued, time.Time{}, time.Time{}, "")
+	_, ok, err := api.MarkSent(a, raced.ID)
+	require.NoError(t, err)
+	require.False(t, ok, "MarkSent claimed a command the deletion covers")
+	_, ok, err = api.MarkSentByToken(a, "raced")
+	require.NoError(t, err)
+	require.False(t, ok, "MarkSentByToken claimed a command the deletion covers")
+	// Another device of the same tenant, its command as old as the raced one, is not covered.
+	bystander := pgCommand(t, api, a, "bystander", "pump-1", CommandQueued, time.Time{}, time.Time{}, "")
+	_, ok, err = api.MarkSent(a, bystander.ID)
+	require.NoError(t, err)
+	require.True(t, ok, "the floor of one device refused another device's command")
+
+	// The re-created device's command, made after the floor, is claimed.
+	require.NoError(t, api.RDB.DB(a).Model(&DeviceGate{}).Where("device_token = ?", "valve-7").
+		Update("deleted_through", time.Now().UTC().Add(-time.Minute)).Error)
+	fresh := pgCommand(t, api, a, "fresh", "valve-7", CommandQueued, time.Time{}, time.Time{}, "")
+	_, ok, err = api.MarkSent(a, fresh.ID)
+	require.NoError(t, err)
+	require.True(t, ok, "a command for the re-created device was refused")
+	_, ok, err = api.MarkSent(b, other.ID)
+	require.NoError(t, err)
+	require.True(t, ok, "another tenant's floor-free device was refused")
+}

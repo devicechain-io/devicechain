@@ -245,7 +245,8 @@ CREATE TABLE "command-delivery".device_gates (
  tenant_id character varying(128) NOT NULL,
  device_token character varying(128) NOT NULL,
  disabled boolean NOT NULL,
- updated_at timestamp with time zone
+ updated_at timestamp with time zone,
+ deleted_through timestamp with time zone
 );
 CREATE TABLE "command-delivery".purged_tenants (
  token character varying(128) NOT NULL,

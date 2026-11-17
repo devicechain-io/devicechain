@@ -31,6 +31,7 @@ import {
   DataTableRow,
 } from '@/components/ui/data-table';
 import { useQuery } from '@/lib/hooks/use-query';
+import { formatDateTime, formatNumber } from '@/lib/format';
 import { FormulaHistory } from './FormulaHistory';
 import { skipLabel } from './FormulaEditor';
 import {
@@ -106,7 +107,7 @@ export function CalculatedHealthSection({
         <>
           <p className="text-xs text-muted-foreground" data-testid="calc-health-basis">
             {health.data.activeSince
-              ? t('calcHealthSince', { version: health.data.version, when: health.data.activeSince.toLocaleString() })
+              ? t('calcHealthSince', { version: health.data.version, when: formatDateTime(health.data.activeSince) })
               : t('calcHealthNoActivation', { version: health.data.version })}
           </p>
           <DataTable>
@@ -173,7 +174,7 @@ function MetricRow({ metric, hours, onWhy }: { metric: MetricHealth; hours: Heal
           <div className="space-y-0.5 text-sm tabular-nums">
             <p>{t('calcHealthComputed', { count: c.computed })}</p>
             <p className="text-xs text-muted-foreground">
-              {c.inputs.map((i) => `${i.key} ${i.count.toLocaleString()}`).join(' · ')}
+              {c.inputs.map((i) => `${i.key} ${formatNumber(i.count)}`).join(' · ')}
             </p>
           </div>
         ) : (

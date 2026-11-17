@@ -91,9 +91,6 @@ func TestMeasurementStreamSharedFeed(t *testing.T) {
 	}
 	defer func() {
 		measurementLiveOpener, measurementDecode = oldOpen, oldDecode
-		measurementHubs.Lock()
-		delete(measurementHubs.hubs, nmgr)
-		measurementHubs.Unlock()
 	}()
 	base, cancel := context.WithCancel(context.Background())
 	defer cancel()

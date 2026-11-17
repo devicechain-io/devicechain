@@ -1089,7 +1089,7 @@ func TestEvictionSweepsTheArmerAndTheAttributeView(t *testing.T) {
 		rp.armer.ApplyActiveVersion(runtime.ActiveEntry{
 			Tenant: tenant, ProfileToken: "prof", ActiveVersionToken: "prof@1",
 			PublishedAt: testBase,
-		})
+		}, nil)
 		rp.armer.ApplyDeviceMembership(runtime.RosterEntry{
 			Tenant: tenant, DeviceToken: "d1", ProfileToken: "prof", ExpectedSince: testBase,
 		}, true)

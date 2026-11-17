@@ -29,6 +29,7 @@ import * as React from 'react';
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useFormFieldId, useFormFieldLabelId } from './form-field-context';
 
 // 🔴 RADIX REFUSES AN ITEM WITH AN EMPTY VALUE — `value=""` is how it spells "nothing
 // selected", so an `<option value="">None</option>` (which the native element handles
@@ -51,24 +52,30 @@ const Value = SelectPrimitive.Value;
 const Trigger = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger>
->(({ className, children, ...props }, ref) => (
-  <SelectPrimitive.Trigger
-    ref={ref}
-    className={cn(
-      'flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm',
-      'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-      'disabled:cursor-not-allowed disabled:opacity-50',
-      '[&>span]:line-clamp-1 [&>span]:text-left',
-      className,
-    )}
-    {...props}
-  >
-    {children}
-    <SelectPrimitive.Icon asChild>
-      <ChevronDown className="size-4 shrink-0 opacity-50" />
-    </SelectPrimitive.Icon>
-  </SelectPrimitive.Trigger>
-));
+>(({ className, children, ...props }, ref) => {
+  const id = useFormFieldId(props.id);
+  const fieldLabelId = useFormFieldLabelId(id);
+  return (
+    <SelectPrimitive.Trigger
+      ref={ref}
+      className={cn(
+        'flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm',
+        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+        'disabled:cursor-not-allowed disabled:opacity-50',
+        '[&>span]:line-clamp-1 [&>span]:text-left',
+        className,
+      )}
+      {...props}
+      id={id}
+      aria-labelledby={props['aria-labelledby'] ?? (fieldLabelId ? `${fieldLabelId} ${id}-value` : undefined)}
+    >
+      <span id={id ? `${id}-value` : undefined}>{children}</span>
+      <SelectPrimitive.Icon asChild>
+        <ChevronDown className="size-4 shrink-0 opacity-50" />
+      </SelectPrimitive.Icon>
+    </SelectPrimitive.Trigger>
+  );
+});
 Trigger.displayName = SelectPrimitive.Trigger.displayName;
 
 const ScrollUpButton = React.forwardRef<

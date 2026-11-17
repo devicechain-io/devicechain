@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -44,6 +45,19 @@ var _ DeviceGateReader = (*Api)(nil)
 func (api *Api) disabledDevices(ctx context.Context) *gorm.DB {
 	return api.RDB.DB(ctx).Model(&DeviceGate{}).
 		Select("tenant_id, device_token").Where("disabled = true")
+}
+
+// deletedCovers correlates the deletion floor to the command being claimed. Resolve both
+// table names through GORM so production's area schema and SQLite use the same predicate.
+func (api *Api) deletedCovers(ctx context.Context) *gorm.DB {
+	db := api.RDB.DB(ctx)
+	gate := db.NamingStrategy.TableName("device_gates")
+	commands := db.NamingStrategy.TableName("commands")
+	return db.Model(&DeviceGate{}).Select("1").
+		Where(clause.Eq{Column: clause.Column{Table: gate, Name: "tenant_id"}, Value: clause.Column{Table: commands, Name: "tenant_id"}}).
+		Where(clause.Eq{Column: clause.Column{Table: gate, Name: "device_token"}, Value: clause.Column{Table: commands, Name: "device_token"}}).
+		Where(clause.Neq{Column: clause.Column{Table: gate, Name: "deleted_through"}, Value: nil}).
+		Where(clause.Lte{Column: clause.Column{Table: commands, Name: "created_at"}, Value: clause.Column{Table: gate, Name: "deleted_through"}})
 }
 
 // DatabaseNow is the database's clock, falling back to this process's where the database has no
@@ -268,4 +282,35 @@ func (api *Api) CancelDeviceCommands(ctx context.Context, deviceToken string) (i
 		return 0, res.Error
 	}
 	return res.RowsAffected, nil
+}
+
+// CancelDeletedDeviceCommands records a monotone deletion floor and cancels unsent commands
+// through that instant atomically. The comparison spans device-management's deletion clock
+// and this service's creation clock, so its bound is only as good as the pods' clock skew.
+// A command validated before deletion but inserted after this fact was applied remains a
+// hole to be closed by the later device-incarnation slice.
+func (api *Api) CancelDeletedDeviceCommands(ctx context.Context, deviceToken string, deletedTime time.Time) (int64, error) {
+	deletedTime = deletedTime.UTC()
+	var count int64
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		existing := clause.Column{Table: tx.NamingStrategy.TableName("device_gates"), Name: "deleted_through"}
+		row := &DeviceGate{DeviceToken: deviceToken, DeletedThrough: sql.NullTime{Time: deletedTime, Valid: true}}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}},
+			DoUpdates: clause.Assignments(map[string]any{
+				"deleted_through": gorm.Expr("CASE WHEN ? IS NULL OR ? < ? THEN ? ELSE ? END", existing, existing, deletedTime, deletedTime, existing),
+			}),
+		}).Create(row).Error; err != nil {
+			return err
+		}
+		result := tx.Model(&Command{}).
+			Where("device_token = ? AND status IN ? AND created_at <= ?", deviceToken, cancellableStatusStrings(), deletedTime).
+			Updates(terminalUpdate(CommandCancelled, OutcomeNotDelivered, nil))
+		count = result.RowsAffected
+		return result.Error
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }

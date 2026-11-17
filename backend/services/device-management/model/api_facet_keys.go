@@ -80,6 +80,20 @@ func (api *Api) SetFacetKey(ctx context.Context, request *FacetKeySetRequest) (*
 		if FacetSource(existing.Source) == FacetSourceSystem {
 			return nil, fmt.Errorf("facet %q for %s is a system facet and cannot be modified", request.Key, request.MemberType)
 		}
+		if existing.ValueType != request.ValueType {
+			// Values belong to shared attributes, not the registry. Never silently
+			// strand them by changing the type used to interpret this facet.
+			var attribute EntityAttribute
+			err := api.RDB.DB(ctx).Select("id").Where(
+				"entity_type = ? AND attr_key = ? AND scope = ? AND value_type = ? AND value IS NOT NULL",
+				request.MemberType, request.Key, string(AttributeScopeShared), existing.ValueType).Take(&attribute).Error
+			if err == nil {
+				return nil, fmt.Errorf("facet %q for %s cannot change value type from %s to %s while SHARED attributes hold values of the old type; clear or migrate those values first", request.Key, request.MemberType, existing.ValueType, request.ValueType)
+			}
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, fmt.Errorf("check existing facet values: %w", err)
+			}
+		}
 		existing.ValueType = request.ValueType
 		existing.Values = values
 		existing.Label = rdb.NullStrOf(request.Label)

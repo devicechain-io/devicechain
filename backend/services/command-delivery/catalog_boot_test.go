@@ -41,12 +41,12 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	broker := permtest.Start(t, instance)
 
 	prevMs, prevCfg, prevNats, prevRdb, prevApi, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Api, Svc
-	prevProc, prevWriteback, prevRoster := CommandDeliveryProcessor, DeadLetterWriteback, RosterConsumer
+	prevProc, prevWriteback, prevRoster, prevDeletion := CommandDeliveryProcessor, DeadLetterWriteback, RosterConsumer, DeletionConsumer
 	prevResponses, prevCommands := CommandResponsesReader, DeviceCommandsWriter
 	prevDelivery, prevWritebackMetrics, prevDL := DeliveryMetrics, WritebackMetrics, DeadLetters
 	t.Cleanup(func() {
 		Microservice, Configuration, NatsManager, RdbManager, Api, Svc = prevMs, prevCfg, prevNats, prevRdb, prevApi, prevSvc
-		CommandDeliveryProcessor, DeadLetterWriteback, RosterConsumer = prevProc, prevWriteback, prevRoster
+		CommandDeliveryProcessor, DeadLetterWriteback, RosterConsumer, DeletionConsumer = prevProc, prevWriteback, prevRoster, prevDeletion
 		CommandResponsesReader, DeviceCommandsWriter = prevResponses, prevCommands
 		DeliveryMetrics, WritebackMetrics, DeadLetters = prevDelivery, prevWritebackMetrics, prevDL
 	})
@@ -84,5 +84,6 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NotNil(t, CommandResponsesReader)
 	require.NotNil(t, DeviceCommandsWriter)
 	require.NotNil(t, RosterConsumer)
+	require.NotNil(t, DeletionConsumer)
 	broker.RequireNoViolations(t)
 }

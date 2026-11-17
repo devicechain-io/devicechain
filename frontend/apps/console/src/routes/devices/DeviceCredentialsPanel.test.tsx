@@ -78,7 +78,7 @@ const callsTo = (name: string) => gqlMock.mock.calls.filter((c) => String(c[1]).
 
 async function pickMqtt() {
   // The type chooser is a popover Combobox: open it by its current value, pick by text.
-  fireEvent.click(screen.getByRole('button', { name: 'ACCESS_TOKEN' }));
+  fireEvent.click(screen.getByLabelText('Type'));
   fireEvent.click(await screen.findByText('MQTT_BASIC'));
 }
 
