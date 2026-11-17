@@ -4,10 +4,15 @@
 package backfill
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/stretchr/testify/require"
 )
 
 // The floor is the LATER of the retention floor and the event-time floor (plus slack): with no
@@ -34,5 +39,110 @@ func TestTheTailFloorIsTheLaterOfRetentionAndTheEventTimeFloor(t *testing.T) {
 	}
 	if !maxAgeFloor.Before(now.Add(-eventtime.MaxAge)) {
 		t.Fatal("the slack must put the floor below the event-time limit")
+	}
+}
+
+// Exercise RunOnce, including scheduling, with deterministic catalog and lock results.
+func TestTailPassOutcomes(t *testing.T) {
+	boom := errors.New("refresh failed")
+	for _, tc := range []struct {
+		name                                        string
+		windows, fail, backoff, lockAt, budgetAfter int
+		notDue, catalogError, lockError, cancelled  bool
+		want                                        error
+		calls                                       int
+		complete                                    bool
+	}{
+		{name: "not yet due", windows: 2, notDue: true, want: core.ErrPassSkipped},
+		{name: "no windows due", complete: true},
+		{name: "all windows already done", windows: -2, complete: true},
+		{name: "all refreshed", windows: 2, calls: 2, complete: true},
+		{name: "lock declined", windows: 2, lockAt: 1, calls: 1, want: core.ErrPassSkipped},
+		{name: "all backed off", windows: 2, backoff: 2, want: core.ErrPassSkipped, complete: true},
+		{name: "backoff then lock decline", windows: 2, backoff: 1, lockAt: 1, calls: 1, want: core.ErrPassSkipped},
+		{name: "budget before any refresh", windows: 2, budgetAfter: -1, want: core.ErrPassSkipped},
+		{name: "refreshed then failed", windows: 2, fail: 1, calls: 2, want: core.ErrPassPartial, complete: true},
+		{name: "refreshed then lock declined", windows: 2, lockAt: 2, calls: 2, want: core.ErrPassPartial},
+		{name: "refreshed with backoff", windows: 2, backoff: 1, calls: 1, want: core.ErrPassPartial, complete: true},
+		{name: "refreshed then budget exhausted", windows: 2, budgetAfter: 1, calls: 1, want: core.ErrPassPartial},
+		{name: "one failed", windows: 1, fail: 1, calls: 1, want: core.ErrPassPartial, complete: true},
+		{name: "all two failed", windows: 2, fail: 2, calls: 2, want: boom, complete: true},
+		{name: "failure then lock declined", windows: 2, fail: 1, lockAt: 2, calls: 2, want: core.ErrPassPartial},
+		{name: "two failures then lock declined", windows: 3, fail: 2, lockAt: 3, calls: 3, want: boom},
+		{name: "failure then budget exhausted", windows: 2, fail: 1, budgetAfter: 1, calls: 1, want: core.ErrPassPartial},
+		{name: "catalog error", catalogError: true, want: boom},
+		{name: "lock acquisition error", windows: 1, lockAt: 1, lockError: true, calls: 1, want: boom},
+		{name: "cancelled", windows: 1, cancelled: true, want: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
+			ms := &core.Microservice{FunctionalArea: "event-management"}
+			ms.UseMetricsRegistry(prometheus.NewRegistry())
+			s := newTailSweeper(ms, nil, Config{ChunkInterval: 24 * time.Hour}, NewMetrics(ms), core.NewNoOpLifecycleCallbacks(), func() time.Time { return clock })
+			s.jitter = func() time.Duration { return 0 }
+			if !tc.notDue {
+				s.nextPass = clock.Add(-time.Second)
+			}
+			scheduled := s.nextPass
+			windows := make([]chunkWindow, max(tc.windows, -tc.windows))
+			for i := range windows {
+				start := clock.Add(-time.Duration(45+i) * 24 * time.Hour)
+				windows[i] = chunkWindow{Start: start, End: start.Add(24 * time.Hour)}
+				if tc.windows < 0 {
+					s.cycleDone[start] = struct{}{}
+				}
+				if i < tc.backoff {
+					s.backoff[start] = tailBackoff{until: clock.Add(time.Hour)}
+				}
+			}
+			reads, calls := 0, 0
+			s.readWindows = func(context.Context, time.Time, time.Time) ([]chunkWindow, error) {
+				reads++
+				if tc.catalogError {
+					return nil, boom
+				}
+				if tc.budgetAfter < 0 {
+					clock = clock.Add(tailBudget + time.Second)
+				}
+				return windows, nil
+			}
+			s.refreshLocked = func(_ context.Context, w chunkWindow) (bool, error) {
+				calls++
+				require.Equal(t, windows[tc.backoff+calls-1], w, "newest first")
+				if calls == tc.lockAt {
+					if tc.lockError {
+						return false, boom
+					}
+					return false, nil
+				}
+				if calls == tc.budgetAfter {
+					clock = clock.Add(tailBudget + time.Second)
+				}
+				if calls <= tc.fail {
+					return true, boom
+				}
+				return true, nil
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.cancelled {
+				cancel()
+			}
+			err := s.RunOnce(ctx)
+			require.True(t, errors.Is(err, tc.want), "got %v, want %v", err, tc.want)
+			require.Equal(t, errors.Is(tc.want, core.ErrPassPartial), errors.Is(err, core.ErrPassPartial))
+			require.Equal(t, errors.Is(tc.want, core.ErrPassSkipped), errors.Is(err, core.ErrPassSkipped))
+			require.Equal(t, tc.calls, calls)
+			if tc.notDue {
+				require.Zero(t, reads)
+			} else {
+				require.Equal(t, 1, reads)
+			}
+			if tc.complete {
+				require.Equal(t, clock.Add(tailInterval), s.nextPass)
+			} else {
+				require.Equal(t, scheduled, s.nextPass)
+			}
+		})
 	}
 }
