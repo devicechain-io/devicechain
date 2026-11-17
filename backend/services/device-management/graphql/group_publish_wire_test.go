@@ -25,8 +25,8 @@ func TestPublishEntityGroupStatesTheVersionItSaw(t *testing.T) {
 	if msg := stale.errs[0].Message; !strings.Contains(msg, "modified by another writer") {
 		t.Fatalf("the stale publish was refused as %q, not as a stale write", msg)
 	}
-	if code := stale.errs[0].Extensions["code"]; code == "CONFLICT" {
-		t.Fatalf("the stale publish carried CONFLICT, which a client reads as done")
+	if code := stale.errs[0].Extensions["code"]; code != "STALE_WRITE" {
+		t.Fatalf("the stale publish carried code %v, want STALE_WRITE", code)
 	}
 	after := serve(t, f.operator(), versions, nil)
 	requireServed(t, after, "versions after the refused publish")

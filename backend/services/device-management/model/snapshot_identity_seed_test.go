@@ -53,7 +53,7 @@ func identityApi(t *testing.T, extra ...any) (*Api, context.Context) {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(append([]any{&DeviceType{}, &AssetType{}, &AssetTypeVersion{}, &Asset{},
+	if err := db.AutoMigrate(append([]any{&EntityGroupFacetRef{}, &DeviceType{}, &AssetType{}, &AssetTypeVersion{}, &Asset{},
 		&DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{}, &MetricDefinition{},
 		&CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}}, extra...)...); err != nil {
 		t.Fatal(err)

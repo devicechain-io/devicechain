@@ -93,6 +93,11 @@ var (
 	// RolloutStats and Rollouts are the group-rollout driver and its instruments.
 	RolloutStats *processor.RolloutMetrics
 	Rollouts     *processor.RolloutDriver
+
+	// SweepPassMetrics and RolloutPassMetrics are the two loops' pass outcomes. Built once on the
+	// initialize path, because the loops themselves are built on every start.
+	SweepPassMetrics   *core.PeriodicTaskMetrics
+	RolloutPassMetrics *core.PeriodicTaskMetrics
 )
 
 func main() {
@@ -191,6 +196,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 func buildMetrics() {
 	ReportsMetrics = processor.NewUpdateReportsMetrics(Microservice)
 	RolloutStats = processor.NewRolloutMetrics(Microservice)
+	SweepPassMetrics = Microservice.NewPeriodicTaskMetrics("deadline_sweep")
+	RolloutPassMetrics = Microservice.NewPeriodicTaskMetrics("rollout_driver")
 	DownloadStats = &download.Metrics{
 		Requests: Microservice.NewCounterVec("update_downloads_total",
 			"Artifact download requests, by outcome: served, aborted (the client went away or the object "+
@@ -218,15 +225,15 @@ func wireSecrets(ctx context.Context, api *model.Api) error {
 }
 
 // startSweeper starts the deadline sweep at the configured cadence.
-func startSweeper() {
-	Sweeper = processor.NewDeadlineSweeper(Api, time.Duration(Configuration.Updates.SweepIntervalSeconds)*time.Second, &ReportsMetrics)
-	Sweeper.Start(context.Background())
+func startSweeper() error {
+	Sweeper = processor.NewDeadlineSweeper(Api, time.Duration(Configuration.Updates.SweepIntervalSeconds)*time.Second, &ReportsMetrics, SweepPassMetrics)
+	return Sweeper.Start(context.Background())
 }
 
 // startRolloutDriver starts the group-rollout driver.
-func startRolloutDriver() {
-	Rollouts = processor.NewRolloutDriver(Api, processor.RolloutInterval)
-	Rollouts.Start(context.Background())
+func startRolloutDriver() error {
+	Rollouts = processor.NewRolloutDriver(Api, processor.RolloutInterval, RolloutPassMetrics)
+	return Rollouts.Start(context.Background())
 }
 
 // registerDownloadHandler mounts the artifact download endpoint on the microservice own mux.
@@ -404,19 +411,24 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := RosterConsumer.Start(ctx); err != nil {
 		return err
 	}
-	startSweeper()
-	startRolloutDriver()
-	return nil
+	if err := startSweeper(); err != nil {
+		return err
+	}
+	return startRolloutDriver()
 }
 
 // Called before microservice has been stopped. The sweep and the consumer, then the managers in
 // their reverse order.
 func beforeMicroserviceStopped(ctx context.Context) error {
 	if Rollouts != nil {
-		Rollouts.Stop()
+		if err := Rollouts.Stop(ctx); err != nil {
+			return err
+		}
 	}
 	if Sweeper != nil {
-		Sweeper.Stop()
+		if err := Sweeper.Stop(ctx); err != nil {
+			return err
+		}
 	}
 	if RosterConsumer != nil {
 		if err := RosterConsumer.Stop(ctx); err != nil {

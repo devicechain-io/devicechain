@@ -90,8 +90,9 @@ func TestDeleteAnchorsForEntity_DeviceAsTarget(t *testing.T) {
 func TestDeleteAnchorsForEntity_TenantScoped(t *testing.T) {
 	api := newPersistenceTestApi(t)
 	acme := core.WithTenant(context.Background(), "acme")
+	occurred := time.Now().UTC()
 	if err := api.CreateEventAnchors(acme, api.RDB.DB(acme), []*EventAnchor{
-		{DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: time.Now().UTC(), AnchorType: "customer", AnchorToken: "cust-3"},
+		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -116,8 +117,8 @@ func TestDeleteAnchorsForEntity_BoundedByBefore(t *testing.T) {
 	newEvent := deletedAt.Add(time.Hour)  // a reused-token device's telemetry
 
 	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
-		{DeviceToken: "gw-1", EventType: eventtype.Measurement, OccurredTime: oldEvent, AnchorType: "customer", AnchorToken: "cust-3"},
-		{DeviceToken: "gw-1", EventType: eventtype.Measurement, OccurredTime: newEvent, AnchorType: "customer", AnchorToken: "cust-3"},
+		{EventId: anchorEventId("gw-1", oldEvent), DeviceToken: "gw-1", EventType: eventtype.Measurement, OccurredTime: oldEvent, AnchorType: "customer", AnchorToken: "cust-3"},
+		{EventId: anchorEventId("gw-1", newEvent), DeviceToken: "gw-1", EventType: eventtype.Measurement, OccurredTime: newEvent, AnchorType: "customer", AnchorToken: "cust-3"},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

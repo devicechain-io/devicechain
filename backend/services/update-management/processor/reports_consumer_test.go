@@ -193,6 +193,93 @@ func TestADownloadRequestIsAnsweredWithAGrantOrACancel(t *testing.T) {
 	require.EqualValues(t, 1, counter(c, "grants", model.GrantNotConfigured))
 }
 
+const downloadRequest = `{"v":1,"kind":"download.request","assignmentId":"asg-1"}`
+
+// A device asking in a loop is answered its burst at once and then once per DownloadRequestEvery;
+// every request it is refused is acked and counted, and no other device, tenant or kind of
+// report is held off by it.
+func TestDownloadRequestsAreBudgetedPerDevice(t *testing.T) {
+	api := &fakeApi{grant: &model.Grant{URL: "https://x.example/download"}}
+	c := newConsumer(t, api)
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	c.downloadGate.now = func() time.Time { return now }
+	c.gate.now = func() time.Time { return now }
+	ack := &ackRecorder{}
+	for range DownloadRequestBurst + 3 {
+		c.handle(context.Background(), messaging.NewConsumedMessage(reportsSubject, []byte(downloadRequest), 1, nil, ack))
+	}
+	require.Len(t, api.grantsFor, DownloadRequestBurst, "the burst is answered, the rest is not")
+	require.Len(t, api.published, DownloadRequestBurst)
+	require.Equal(t, DownloadRequestBurst+3, ack.acks, "throttled requests must be acknowledged")
+	require.EqualValues(t, 3, counter(c, "rejected", rejectedThrottled))
+
+	c.handle(context.Background(), msg("inst.acme.device-reports.dev-2", downloadRequest))
+	require.Len(t, api.grantsFor, DownloadRequestBurst+1, "another device is independent")
+	c.handle(context.Background(), msg("inst.other.device-reports.dev-1", downloadRequest))
+	require.Len(t, api.grantsFor, DownloadRequestBurst+2, "another tenant is independent")
+	c.handle(context.Background(), msg(reportsSubject, `{"v":1,"kind":"sync","bootId":"b","config":{"haveRevision":0}}`))
+	require.Equal(t, 1, api.answers, "download requests must not throttle a sync")
+
+	// One more a DownloadRequestEvery later, and not before.
+	now = now.Add(DownloadRequestEvery - time.Millisecond)
+	c.handle(context.Background(), msg(reportsSubject, downloadRequest))
+	require.Len(t, api.grantsFor, DownloadRequestBurst+2)
+	now = now.Add(time.Millisecond)
+	c.handle(context.Background(), msg(reportsSubject, downloadRequest))
+	require.Len(t, api.grantsFor, DownloadRequestBurst+3)
+}
+
+// Syncs past their own cooldown do not spend a device's download budget.
+func TestSyncsDoNotThrottleDownloadRequests(t *testing.T) {
+	api := &fakeApi{grant: &model.Grant{URL: "https://x.example/download"}}
+	c := newConsumer(t, api)
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	c.downloadGate.now = func() time.Time { return now }
+	c.gate.now = func() time.Time { return now }
+	for range 3 {
+		c.handle(context.Background(), msg(reportsSubject, `{"v":1,"kind":"sync","bootId":"b","config":{"haveRevision":0}}`))
+	}
+	require.EqualValues(t, 2, counter(c, "rejected", rejectedThrottled))
+	c.handle(context.Background(), msg(reportsSubject, downloadRequest))
+	require.Len(t, api.grantsFor, 1, "a throttled sync must not throttle a download request")
+}
+
+// A grant that failed and will be redelivered gives its token back, so the retry is answered
+// even when the device had spent the rest of its budget.
+func TestFailedDownloadGrantDoesNotSpendTheBudget(t *testing.T) {
+	api := &fakeApi{grant: &model.Grant{URL: "https://x.example/download"}}
+	c, reg := newConsumerWithRegistry(t, api)
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	c.downloadGate.now = func() time.Time { return now }
+	for range DownloadRequestBurst - 1 {
+		c.handle(context.Background(), msg(reportsSubject, downloadRequest))
+	}
+	require.Len(t, api.grantsFor, DownloadRequestBurst-1)
+
+	api.grant, api.grantErr = nil, errors.New("database down")
+	ack := &ackRecorder{}
+	c.handle(context.Background(), messaging.NewConsumedMessage(reportsSubject, []byte(downloadRequest), 1, nil, ack))
+	require.Zero(t, ack.acks)
+	require.EqualValues(t, 1, handled(t, reg, core.ResultRetry))
+
+	api.grantErr, api.grant = nil, &model.Grant{URL: "https://x.example/download"}
+	c.handle(context.Background(), messaging.NewConsumedMessage(reportsSubject, []byte(downloadRequest), 2, nil, ack))
+	require.Equal(t, 1, ack.acks)
+	require.Len(t, api.published, DownloadRequestBurst, "the redelivered request is answered")
+	require.Zero(t, counter(c, "rejected", rejectedThrottled))
+}
+
+func TestADownloadRequestGateIsBounded(t *testing.T) {
+	now := time.Unix(1000, 0)
+	g := requestGate{buckets: map[string]requestBucket{}, every: time.Second, burst: 2, now: func() time.Time { return now }}
+	for i := range maxSyncGate {
+		require.True(t, g.allow(string(rune('a'+i%26))+time.Duration(i).String()))
+	}
+	require.False(t, g.allow("one-too-many"), "a full table refuses new devices rather than growing")
+	now = now.Add(2 * time.Second)
+	require.True(t, g.allow("one-too-many"), "entries back at a full bucket are reclaimed")
+}
+
 func TestASyncIsAnsweredOncePerCooldown(t *testing.T) {
 	api := &fakeApi{}
 	c := newConsumer(t, api)
