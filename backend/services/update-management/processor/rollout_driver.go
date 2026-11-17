@@ -110,15 +110,16 @@ type RolloutDriver struct {
 	makeTask func() *core.PeriodicTask
 }
 
-// NewRolloutDriver builds the driver. interval must be positive.
-func NewRolloutDriver(api *model.Api, interval time.Duration, ms *core.Microservice) *RolloutDriver {
+// NewRolloutDriver builds the driver. interval must be positive. passMetrics (nil for none) are
+// registered once by the caller on the initialize path: the driver is built on every start.
+func NewRolloutDriver(api *model.Api, interval time.Duration, passMetrics *core.PeriodicTaskMetrics) *RolloutDriver {
 	if interval <= 0 {
 		panic("processor.NewRolloutDriver: interval must be positive")
 	}
 	d := &RolloutDriver{api: api}
 	var opts []core.PeriodicTaskOption
-	if ms != nil {
-		opts = append(opts, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("rollout_driver")))
+	if passMetrics != nil {
+		opts = append(opts, core.WithPassMetrics(passMetrics))
 	}
 	// A fresh lifecycle per start preserves the wrapper's ability to restart after Stop.
 	d.makeTask = func() *core.PeriodicTask {
@@ -128,26 +129,36 @@ func NewRolloutDriver(api *model.Api, interval time.Duration, ms *core.Microserv
 	return d
 }
 
-// Start launches the loop. It is idempotent.
-func (d *RolloutDriver) Start(ctx context.Context) {
+// Start launches the loop. It is idempotent. It has the lifecycle-verb signature so the service's
+// start and stop callbacks wire it as a component of their own (the start-stop symmetry guard
+// pairs a verb called on a package-level variable, and stops at it rather than reading inside).
+func (d *RolloutDriver) Start(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.task != nil {
-		return
+		return nil
 	}
-	d.task = d.makeTask()
-	_ = d.task.Initialize(ctx)
-	_ = d.task.Start(ctx)
+	task := d.makeTask()
+	if err := task.Initialize(ctx); err != nil {
+		return err
+	}
+	if err := task.Start(ctx); err != nil {
+		return err
+	}
+	d.task = task
+	return nil
 }
 
 // Stop ends the loop and waits for the pass in flight.
-func (d *RolloutDriver) Stop() {
+func (d *RolloutDriver) Stop(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.task != nil {
-		_ = d.task.Stop(context.Background())
-		d.task = nil
+	if d.task == nil {
+		return nil
 	}
+	err := d.task.Stop(ctx)
+	d.task = nil
+	return err
 }
 
 // runOnce is the scheduled pass. A failure to list running rollouts fails the pass; individual

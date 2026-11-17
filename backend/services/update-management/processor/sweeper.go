@@ -37,15 +37,16 @@ type DeadlineSweeper struct {
 // across passes, oldest first.
 const sweepPage = 200
 
-// NewDeadlineSweeper builds the sweep. interval must be positive.
-func NewDeadlineSweeper(api *model.Api, interval time.Duration, metrics *UpdateReportsMetrics, ms *core.Microservice) *DeadlineSweeper {
+// NewDeadlineSweeper builds the sweep. interval must be positive. passMetrics (nil for none) are
+// registered once by the caller on the initialize path: the sweep is built on every start.
+func NewDeadlineSweeper(api *model.Api, interval time.Duration, metrics *UpdateReportsMetrics, passMetrics *core.PeriodicTaskMetrics) *DeadlineSweeper {
 	if interval <= 0 {
 		panic("processor.NewDeadlineSweeper: interval must be positive")
 	}
 	s := &DeadlineSweeper{api: api, page: sweepPage, metrics: metrics}
 	var opts []core.PeriodicTaskOption
-	if ms != nil {
-		opts = append(opts, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("deadline_sweep")))
+	if passMetrics != nil {
+		opts = append(opts, core.WithPassMetrics(passMetrics))
 	}
 	// A fresh lifecycle per start preserves the wrapper's ability to restart after Stop.
 	s.makeTask = func() *core.PeriodicTask {
@@ -55,26 +56,36 @@ func NewDeadlineSweeper(api *model.Api, interval time.Duration, metrics *UpdateR
 	return s
 }
 
-// Start launches the loop. It is idempotent.
-func (s *DeadlineSweeper) Start(ctx context.Context) {
+// Start launches the loop. It is idempotent. It has the lifecycle-verb signature so the service's
+// start and stop callbacks wire it as a component of their own (the start-stop symmetry guard
+// pairs a verb called on a package-level variable, and stops at it rather than reading inside).
+func (s *DeadlineSweeper) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.task != nil {
-		return
+		return nil
 	}
-	s.task = s.makeTask()
-	_ = s.task.Initialize(ctx)
-	_ = s.task.Start(ctx)
+	task := s.makeTask()
+	if err := task.Initialize(ctx); err != nil {
+		return err
+	}
+	if err := task.Start(ctx); err != nil {
+		return err
+	}
+	s.task = task
+	return nil
 }
 
 // Stop ends the loop and waits for the pass in flight.
-func (s *DeadlineSweeper) Stop() {
+func (s *DeadlineSweeper) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.task != nil {
-		_ = s.task.Stop(context.Background())
-		s.task = nil
+	if s.task == nil {
+		return nil
 	}
+	err := s.task.Stop(ctx)
+	s.task = nil
+	return err
 }
 
 // runOnce is the scheduled pass. It returns the error Pass only logs, so the pass outcome is

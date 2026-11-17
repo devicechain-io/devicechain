@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -85,15 +86,19 @@ func TestTheRosterReaderStartsFromNewFacts(t *testing.T) {
 func TestStartSweeperAndRolloutDriverRegisterPassOutcomes(t *testing.T) {
 	prevCfg, prevApi, prevSweeper, prevMetrics := Configuration, Api, Sweeper, ReportsMetrics
 	prevMs, prevRollouts := Microservice, Rollouts
+	prevRolloutStats, prevDownloads := RolloutStats, DownloadStats
+	prevSweepPass, prevRolloutPass := SweepPassMetrics, RolloutPassMetrics
 	t.Cleanup(func() {
 		if Sweeper != nil {
-			Sweeper.Stop()
+			Sweeper.Stop(context.Background())
 		}
 		if Rollouts != nil {
-			Rollouts.Stop()
+			Rollouts.Stop(context.Background())
 		}
 		Configuration, Api, Sweeper, ReportsMetrics = prevCfg, prevApi, prevSweeper, prevMetrics
 		Microservice, Rollouts = prevMs, prevRollouts
+		RolloutStats, DownloadStats = prevRolloutStats, prevDownloads
+		SweepPassMetrics, RolloutPassMetrics = prevSweepPass, prevRolloutPass
 	})
 	Configuration = config.NewUpdateManagementConfiguration()
 	Configuration.Updates.SweepIntervalSeconds = 3600
@@ -102,13 +107,18 @@ func TestStartSweeperAndRolloutDriverRegisterPassOutcomes(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	Microservice = &core.Microservice{InstanceId: "inst", FunctionalArea: "update-management"}
 	Microservice.UseMetricsRegistry(reg)
+	buildMetrics()
 
-	startSweeper()
-	startRolloutDriver()
-	require.NotNil(t, Sweeper, "startSweeper started nothing")
-	require.NotNil(t, Rollouts, "startRolloutDriver started nothing")
-	Sweeper.Stop()
-	Rollouts.Stop()
+	// Twice: the loops are built on every start, so a collector they registered themselves would
+	// panic as a duplicate on the second start.
+	for range 2 {
+		require.NoError(t, startSweeper())
+		require.NoError(t, startRolloutDriver())
+		require.NotNil(t, Sweeper, "startSweeper started nothing")
+		require.NotNil(t, Rollouts, "startRolloutDriver started nothing")
+		require.NoError(t, Sweeper.Stop(context.Background()))
+		require.NoError(t, Rollouts.Stop(context.Background()))
+	}
 
 	families, err := reg.Gather()
 	require.NoError(t, err)
