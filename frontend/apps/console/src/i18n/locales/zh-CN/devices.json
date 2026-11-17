@@ -539,7 +539,7 @@
   "connectCopyAriaLabel": "复制命令",
   "connectCopyFailed": "无法复制到剪贴板",
   "connectPlaceholderInstance": "将 {{placeholder}} 替换为安装实例时选择的实例 ID。它也是该实例的 Kubernetes 命名空间去掉 dci- 前缀后的名称。",
-  "connectPlaceholderMqttHost": "将 {{placeholder}} 替换为运维人员暴露 MQTT 监听器的主机。该监听器使用 TLS：请将实例 CA 证书保存为 {{ca}}。",
+  "connectPlaceholderMqttHost": "将 {{placeholder}} 替换为运维人员暴露 MQTT 监听器的主机，该监听器使用端口 {{port}}。该监听器使用 TLS：请将实例 CA 证书保存为 {{ca}}。在本地 kind 集群上，消息代理改为位于 localhost 的 {{localPort}} 端口。",
   "connectMqttClientId": "请保持客户端 ID（-i）与所示一致。消息代理会拒绝任何其他客户端 ID，包括未设置时客户端库随机生成的 ID。",
   "connectPlaceholderIngestHost": "将 {{placeholder}} 替换为 HTTP 接入监听器的主机。默认情况下它不对集群外暴露；如需快速测试，请转发 event-sources 服务的 8081 端口。",
   "connectPlaceholderPassword": "将两处 {{placeholder}} 都替换为此凭据的密码。它只在设置时显示过一次，无法再次显示。如果遗失，请在“凭据”选项卡上设置新密码。",

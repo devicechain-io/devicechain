@@ -63,5 +63,7 @@
   "mfaResetToast": "已为 {{email}} 重置双因素身份验证",
   "mfaResetNeedsPassword": "该身份最近输入过错误的验证码，因此其密码可能已被他人知晓。请在重置的同时设置新密码。",
   "mfaNewPasswordLabel": "新密码",
-  "mfaResetWithPassword": "重置并设置密码"
+  "mfaResetWithPassword": "重置并设置密码",
+  "managedByIdpShort": "由身份提供方管理",
+  "managedByIdpNotice": "此成员资格由身份提供方管理，该用户下次通过它登录时会撤销在此所做的更改，因此无法在此更改其角色，也无法禁用或移除它。如需更改，请在身份提供方处更改该用户的组。如需撤销访问权限，请禁用该身份、将该用户从提供方的组中移除，或停止该提供方的连接为此租户提供服务。"
 }
