@@ -635,6 +635,10 @@ generated from the schema; do not edit it by hand.
 | `instance.config.infrastructure.tokenAudience.areaBaseUrl` | string | - | Derived by the chart: the ingress origin plus /api, set only when the origin is https or a loopback host. Refused if set by hand. |
 | `instance.config.infrastructure.tokenAudience.mcpResources` | array | - | Derived by the chart: the MCP area's resolved resource URL when that area is deployed. Refused if set by hand. |
 | `instance.config.infrastructure.nats` | object | - | The message broker connection and the JetStream ceilings. The chart validates only the capacity keys named below; the services validate the rest at startup. |
+| `instance.config.infrastructure.nats.shardGroups` | object | - | Optional NATS shard groups, off when absent. Splits each listed per-event stream into count groups that tenants are placed across. Needs 2-5 groups on R1 streams with at least three broker servers, and cannot be combined with ha. Each listed stream reserves its full byte ceiling in every group. Once set, carry the block forward in every replacement values file: an upgrade that drops it, lowers count or removes a suffix is refused, because the groups may hold data. |
+| `instance.config.infrastructure.nats.shardGroups.count` | integer | - | Total number of groups, counting the existing group zero (2-5). It cannot be lowered on upgrade. |
+| `instance.config.infrastructure.nats.shardGroups.suffixes` | array | - | Per-event streams to split into groups: inbound-events, resolved-events, or both. resolved-events is refused while device-state or event-processing is deployed, since those consumers read only group zero. A stream cannot be removed on upgrade. |
+| `instance.config.infrastructure.nats.shardGroups.placementTags` | object | - | Broker placement per group, keyed by group number (0 to count-1). Each value is a one-element list naming the dc-nats pod that holds the group, and it must be that group's own pod (group 1 on dc-nats-1). A group left out is placed on its own pod. |
 | `instance.config.infrastructure.nats.mqttDeviceUplinks` | boolean | - | Whether a device may publish its own payload to its raw-payload MQTT topic, for the decoder on its device type's profile to read. Off by default. Turn it on only after every event-sources and device-management replica runs a release that knows the topic. |
 | `instance.config.infrastructure.nats.streamDesignRate` | integer | `0` | Events a second the whole instance is expected to ingest at its peak, across tenants. The streams that carry one message per event (inbound-events, resolved-events, the device capture stream) are sized to hold at least this rate for streamRunwayMinutes. It is the rate the disk is sized for, not a rate limit. 0 sizes them by streamMaxBytes alone. |
 | `instance.config.infrastructure.nats.streamRunwayMinutes` | integer | `15` | Minutes of events at streamDesignRate the per-event streams are sized to hold. Between 10 (the alerts that warn the runway is running out need that long to fire before the platform stops accepting events) and 10080, the 7 days after which the broker discards a message whatever the ceiling. 0 means 15. |
@@ -646,12 +650,12 @@ generated from the schema; do not edit it by hand.
 | `image.tag` | string | `""` | Image tag for every service. Empty uses the chart's appVersion, which a release sets to the release tag, so a packaged chart deploys the matching images with no override. |
 | `image.pullPolicy` | string | `"IfNotPresent"` | Kubernetes imagePullPolicy applied to every container. |
 | `service` | object | - | The Service exposed for each functional area. |
-| `service.port` | integer | `8080` | HTTP port every service listens on. It serves the GraphQL API, /healthz, /readyz and /metrics. |
+| `service.port` | integer | `8080` | Public HTTP port every service listens on. It serves the GraphQL API; /healthz, /readyz and /metrics are on the separate ops port 8083, which no route targets. |
 | `eventSources` | object | - | Settings that belong to the event-sources area alone. |
 | `eventSources.ingestMetering` | string | `"legacy"` | How event-sources meters a message against its tenant's ingest ceiling. legacy is the gate as it has always run. lagCredit meters fresh traffic at pod time with a measured reader-lag credit, so a short platform stall cannot shed a tenant that stayed within its ceiling, measured per replica from the broker's own delivery metadata. Rendered as the EVENT_SOURCES_INGEST_METERING environment variable, not as an instance configuration key. |
 | `eventEnvelopesEnabled` | boolean | `false` | Restates whether either event-envelope switch is on, for the event-processing memory floor. Under instance.existingSecret the chart cannot read instance.config.infrastructure.messaging.envelopes, so dcctl sets this from the document it wrote. |
 | `metrics` | object | - | Prometheus integration. Metrics are served on the same HTTP port as GraphQL, at /metrics. `enabled` renders a ServiceMonitor per area and requires the Prometheus Operator CRDs; the other keys here are ignored while it is false. See the individual keys for the dashboards, alert rules and PodMonitors it gates. |
-| `metrics.enabled` | boolean | `true` | Render one ServiceMonitor per enabled functional area, scraping /metrics on the named graphql port. Requires the Prometheus Operator CRDs; set false on a cluster without them. |
+| `metrics.enabled` | boolean | `true` | Render one ServiceMonitor per enabled functional area, scraping /metrics on the named ops port. Requires the Prometheus Operator CRDs; set false on a cluster without them. |
 | `metrics.grafanaDashboards` | boolean | `true` | Render one ConfigMap per bundled operations dashboard (event-processing and command-delivery today), labelled for the Grafana sidecar to import. Each board is this instance's own copy with its own uid and title. Set false on clusters that have the Prometheus Operator but no Grafana sidecar. Ignored when metrics.enabled is false. |
 | `metrics.alerts` | boolean | `true` | Render the PrometheusRules for the platform's own services: event-processing, dead-letter and command-delivery rules, among others. Requires the Prometheus Operator CRDs. The database and replication rules are gated separately because they describe infrastructure this chart does not install. Ignored when metrics.enabled is false. |
 | `metrics.natsPodMonitor` | boolean | `true` | Render a PodMonitor scraping the NATS broker's own exporter sidecar, for broker-side cluster health (routes, JetStream RAFT). It targets the namespace in instance.config.infrastructure.nats.hostname. Safe to leave on when the sidecar is absent (no targets are generated); set false for a broker this chart should not monitor. Ignored when metrics.enabled is false. |
@@ -790,7 +794,7 @@ generated from the schema; do not edit it by hand.
 | `functionalAreas.<area>.config.auth` | object | - | user-management: authentication settings. Only the token-lifetime and signing-key keys below are checked here; the service checks the rest at startup. |
 | `functionalAreas.<area>.config.auth.accessTokenTtlSeconds` | integer | - | user-management: how long, in seconds, an access token stays valid. 0 or absent takes the service default (900); a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. |
 | `functionalAreas.<area>.config.auth.refreshTokenTtlSeconds` | integer | - | user-management: how long, in seconds, a refresh token stays valid. 0 or absent takes the service default (604800); a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. |
-| `functionalAreas.<area>.config.auth.signingKeyMaxAgeDays` | integer | - | user-management: rotate the token signing key at startup once it is older than this many days. 0 or absent turns age-based rotation off; a negative value, or one above 106751, is refused here and by the service at startup. |
+| `functionalAreas.<area>.config.auth.signingKeyMaxAgeDays` | integer | - | user-management: rotate the token signing key while running once it is older than this many days, after a 15-minute startup grace. Replicas follow new keys within 30 seconds. 0 or absent turns age-based rotation off; a negative value, or one above 106751, is refused here and by the service at startup. |
 | `functionalAreas.<area>.config.auth.signingKeyRetentionDays` | integer | - | user-management: how many days a rotated-out signing key stays published so the tokens it signed keep verifying. 0 or absent takes the service default (8); a negative value, or one above 106751, is refused here and by the service at startup. With signingKeyMaxAgeDays above 0, a retention shorter than auth.refreshTokenTtlSeconds is refused by the service at startup. |
 | `functionalAreas.<area>.config.updates` | object | - | update-management: the over-the-air update settings. Unset settings take the service defaults. |
 | `functionalAreas.<area>.config.updates.sweepIntervalSeconds` | integer | - | update-management: how often, in seconds, the deadline sweep looks for stalled update attempts. 0 or absent takes the service default; a negative value, or one above 9223372036 (the longest a duration can hold), is refused here and by the service at startup. |
@@ -824,3 +828,40 @@ generated from the schema; do not edit it by hand.
 | `functionalAreas.<area>.profiler.blockRate` | integer | - | Turn on block-profile sampling for a profiling run: nanoseconds blocked per sampled event (1 samples every event). 0 (default) leaves the block profile off. Needs enabled: true. |
 | `functionalAreas.<area>.profiler.mutexFraction` | integer | - | Turn on mutex-profile sampling for a profiling run: sample 1 in this many contended events. 0 (default) leaves the mutex profile off. Needs enabled: true. |
 <!-- values:end -->
+
+### Opt-in NATS shard groups
+
+After this release has rolled to every service replica,
+`dcctl upgrade ... --values shard-groups.yaml` can opt the ingest streams into tenant
+placement. The setting is absent by default:
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      nats:
+        shardGroups:
+          count: 3
+          suffixes: [inbound-events]
+```
+
+This install path supports 2-5 groups with R1 streams (`--ha` is refused). dcctl
+provisions three or five broker servers and preserves the values on upgrades.
+The chart derives placement tags `dc-nats-0`, `dc-nats-1`, and so on; group zero
+keeps its existing stream and subject names. Each broker advertises its own
+server name as a tag. Explicit placement tags must match those pod names.
+An operator using OpenTofu directly sets `nats_shard_groups` in the instance root
+(or `shard_groups` on the NATS module) and provisions at least that many servers.
+The broker's default release name is `dc-nats`; a custom broker must supply
+matching server tags and placement configuration itself.
+
+Group streams reserve their full byte ceilings independently. Grow the JetStream
+volume before enabling them if dcctl's reservation check refuses the setting.
+Tenant placement must also be populated: an unplaced tenant's publish is refused.
+Keep the block absent until all old service pods have finished rolling; older
+builds reject the new configuration key.
+
+The default profile currently supports sharding `inbound-events` only. Sharding
+`resolved-events` is refused while device-state or event-processing is deployed:
+those consumers still read only group zero. A deployment consisting of the
+ingest-only profile plus event-management has group readers for both streams.

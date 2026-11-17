@@ -33,7 +33,7 @@ const _ = uint(rangeDirectMax-config.MaxFetchBatch) + uint(config.MaxFetchBatch-
 // another is issued, so messages arrive in the order a synchronous reader would have seen.
 //
 // WHEN A FUTURE IS STARTED (startAhead): the reader fetches ahead, is not a capacity
-// reader, holds its term, its downstream is not refusing, and the last batches took less
+// reader, holds its term, no downstream gate refuses, and the last batches took less
 // than the hold budget to hand out. Only after a batch that DELIVERED something: after an
 // error or an empty fetch the next call fetches synchronously, so error pacing, the
 // liveness probe and the idle long-poll behave exactly as they do without it.
@@ -113,7 +113,7 @@ func (r *natsReader) startAhead() {
 	}
 	// A hop that forwards into a stream applying backpressure would fetch messages it can
 	// only fail to publish: the same gate ReadMessage parks on before a synchronous fetch.
-	if r.downstream != "" && r.nmgr.Backpressure(r.downstream) != nil {
+	if r.downstreamRefusal() != nil {
 		return
 	}
 	sub := r.sub.Load()

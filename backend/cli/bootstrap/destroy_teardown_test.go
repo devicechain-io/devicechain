@@ -338,9 +338,46 @@ func TestOnlyAnInstanceWithAFootprintIsResumed(t *testing.T) {
 		if !strings.Contains(out, "was not installed") {
 			t.Errorf("a name with nothing here was not reported as a stale record:\n%s", out)
 		}
+		if !r.stateRemoved() {
+			t.Fatal("the recorded binding's stale state survived")
+		}
 		if slices.Contains(r.calls, "tofu destroy kind-c acme") ||
 			slices.Contains(r.calls, "delete namespace "+InstanceNamespace("b")) {
 			t.Errorf("a stale record ran the teardown: %q", r.calls)
+		}
+	})
+	t.Run("no footprint in a guessed cluster keeps local state", func(t *testing.T) {
+		r := newTeardownRig(t, []*release.Release{deviceChainRelease(helmReleaseNameFor("b"), "b")}, []string{"b"}, "b")
+		if err := os.Remove(filepath.Join(r.home, ".devicechain", "instances", "acme", instanceRecordFile)); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(r.home, ".devicechain", "instances", "acme", "infra", "instance", "terraform.tfstate")
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := r.destroy(t, false)
+		var foreign *foreignReleaseError
+		if !errors.As(err, &foreign) || !foreign.Absent {
+			t.Fatalf("want the foreign-release refusal, got %v\n%s", err, out)
+		}
+		for _, hint := range []string{"--kube-context", "~/.devicechain/instances/acme", "by hand"} {
+			if !strings.Contains(err.Error(), hint) {
+				t.Errorf("missing recovery hint %q: %v", hint, err)
+			}
+		}
+		if !strings.Contains(out, "no record of where") || !strings.Contains(out, "no proof it is gone") ||
+			strings.Contains(out, "has been removed") || strings.Contains(out, "destroyed;") {
+			t.Errorf("missing refusal or false success:\n%s", out)
+		}
+		if after, err := os.ReadFile(path); err != nil || string(after) != string(before) {
+			t.Fatalf("guessed binding lost state: %q, %v", after, err)
+		}
+		if got := r.teardownCalls(); len(got) != 0 {
+			t.Errorf("a refused destroy ran teardown: %q", got)
+		}
+		if got := r.releases(t); !slices.Equal(got, []string{helmReleaseNameFor("b")}) {
+			t.Errorf("the neighbour's release changed: %q", got)
 		}
 	})
 	t.Run("a contradictory release is refused even with a footprint", func(t *testing.T) {
