@@ -99,7 +99,7 @@ type fakeDevices struct {
 
 func (f *fakeDevices) DeviceOf(_ context.Context, tenant, device string) (model.DeviceFacts, bool, error) {
 	p, ok := f.profiles[tenant+"/"+device]
-	return model.DeviceFacts{Profile: p, Disabled: f.disabled[tenant+"/"+device]}, ok, nil
+	return model.DeviceFacts{Incarnation: 1, Profile: p, Disabled: f.disabled[tenant+"/"+device]}, ok, nil
 }
 
 type nullDesired struct{}
