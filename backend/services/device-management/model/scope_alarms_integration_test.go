@@ -80,13 +80,13 @@ func (r scopeAlarmRig) raise(t *testing.T, device, key string, at time.Time) {
 	t.Helper()
 	v := 99.0
 	require.NoError(t, r.api.ApplyAlarmContributorEdge(core.WithTenant(context.Background(), r.tenant),
-		r.devices[device], key, "temp", "rule-"+key, AlarmEdgeRaised, string(AlarmSeverityMajor), &v, at))
+		r.devices[device], key, "temp", "rule-"+key, AlarmEdgeRaised, string(AlarmSeverityMajor), &v, at, new(bool)))
 }
 
 func (r scopeAlarmRig) resolve(t *testing.T, device, key string, at time.Time) {
 	t.Helper()
 	require.NoError(t, r.api.ApplyAlarmContributorEdge(core.WithTenant(context.Background(), r.tenant),
-		r.devices[device], key, "temp", "rule-"+key, AlarmEdgeResolved, "", nil, at))
+		r.devices[device], key, "temp", "rule-"+key, AlarmEdgeResolved, "", nil, at, new(bool)))
 }
 
 func (r scopeAlarmRig) alarmKeys(t *testing.T, ctx context.Context) []string {

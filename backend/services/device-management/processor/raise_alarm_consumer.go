@@ -337,7 +337,7 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 
 	if err := rc.held(msgctx, msg, func(c context.Context) error {
 		return rc.Api.ApplyAlarmContributorEdge(c, devices[0].ID, req.AlarmKey, req.MetricKey,
-			req.RuleID, edge, severity.String(), req.Value, req.OccurredTime)
+			req.RuleID, edge, severity.String(), req.Value, req.OccurredTime, req.RequiresPosition)
 	}); err != nil {
 		rc.retryOrDrop(msg, done, err, "apply alarm edge")
 		return

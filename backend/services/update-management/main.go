@@ -88,7 +88,10 @@ var (
 	// disable or enable is felt at once and an enable re-offers its assignment.
 	RosterReader   messaging.MessageReader
 	RosterConsumer *processor.RosterConsumer
-	Sweeper        *processor.DeadlineSweeper
+
+	DeletionReader   messaging.MessageReader
+	DeletionConsumer *processor.DeletionConsumer
+	Sweeper          *processor.DeadlineSweeper
 
 	// RolloutStats and Rollouts are the group-rollout driver and its instruments.
 	RolloutStats *processor.RolloutMetrics
@@ -374,7 +377,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	RosterReader = rosterReader
 	RosterConsumer = processor.NewRosterConsumer(Microservice, rosterReader, core.NewNoOpLifecycleCallbacks(), Api, dead)
 	RosterConsumer.Hold = newStoreHold("device-roster")
-	return RosterConsumer.Initialize(context.Background())
+	if err := RosterConsumer.Initialize(context.Background()); err != nil {
+		return err
+	}
+	deletionReader, err := nmgr.NewReader(streams.EntityDeleted)
+	if err != nil {
+		return err
+	}
+	DeletionReader = deletionReader
+	DeletionConsumer = processor.NewDeletionConsumer(Microservice, deletionReader, core.NewNoOpLifecycleCallbacks(), Api, dead)
+	DeletionConsumer.Hold = newStoreHold("entity-deleted")
+	return DeletionConsumer.Initialize(context.Background())
 }
 
 // newDeadLetterSink builds this service sink over the platform dead-letter stream, stamped by
@@ -411,6 +424,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := RosterConsumer.Start(ctx); err != nil {
 		return err
 	}
+	if err := DeletionConsumer.Start(ctx); err != nil {
+		return err
+	}
 	if err := startSweeper(); err != nil {
 		return err
 	}
@@ -430,6 +446,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 			return err
 		}
 	}
+	if DeletionConsumer != nil {
+		if err := DeletionConsumer.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	if RosterConsumer != nil {
 		if err := RosterConsumer.Stop(ctx); err != nil {
 			return err
@@ -445,6 +466,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated, in the same order as the stop.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if DeletionConsumer != nil {
+		if err := DeletionConsumer.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	if RosterConsumer != nil {
 		if err := RosterConsumer.Terminate(ctx); err != nil {
 			return err
