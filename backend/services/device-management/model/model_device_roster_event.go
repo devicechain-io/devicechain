@@ -41,7 +41,7 @@ type DeviceRosterEvent struct {
 }
 
 // DeviceRosterPublisher publishes device-roster events (ADR-051 slice 4c-2). Like the
-// detection-rules and entity-deleted publishers it is best-effort and side-band to the
+// detection-rules publisher it is best-effort and side-band to the
 // device write: a marshal/publish failure is logged by the implementation, never
 // surfaced to the caller — a NATS hiccup must not fail or retry the device create/update.
 // Emission is at-most-once (ADR-044 async-fact posture): a DELIVERED fact is durably

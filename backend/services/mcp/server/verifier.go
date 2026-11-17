@@ -33,10 +33,9 @@ const (
 // another audience (or with no audience) is rejected, so the MCP server cannot be
 // tricked into acting with a token that was never issued for it.
 //
-// The read-only scope requirement is enforced by the RequireBearerToken middleware
-// (via its Scopes option) against the Scopes this verifier returns; the scope→
-// authority cap itself was already applied at token-issue time in the AS, so the
-// token's authorities are structurally read-only.
+// The read-only admission requirement is enforced by requireReadOnly against the
+// Scopes this verifier returns; the scope→authority cap itself was already applied
+// at token-issue time in the AS.
 //
 // validator is late-bound (the JWKS validator becomes available only once the
 // readiness gate opens), so a nil validator fails closed.
