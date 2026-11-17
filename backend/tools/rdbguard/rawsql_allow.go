@@ -74,6 +74,15 @@ var rawSQLAllowList = []siteEntry{
 			"policy deletes every tenant's rows by age, by operator opt-in; it is table-level " +
 			"configuration with no tenant predicate by design",
 	},
+	{
+		Path: "backend/services/event-management/model/lifecycle.go", Func: "applyRollupRetention", Count: 3,
+		Why: "reconciles the INSTANCE-WIDE TimescaleDB retention policy on the measurement_rollups continuous " +
+			"aggregate: remove_retention_policy/add_retention_policy on the package constant RollupAggregate, " +
+			"formatted in by the same statement builders applyOne uses, with the window in days bound. Two " +
+			"calls to the exec closure on the enable path and one direct Exec on the disable path. Like the raw " +
+			"tables' policy it ages out every tenant's rows by time, by operator opt-in, and is table-level " +
+			"configuration with no tenant predicate by design; it reads and writes no row itself",
+	},
 
 	// --- metering ---
 	{

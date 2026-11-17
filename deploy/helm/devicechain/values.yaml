@@ -1990,6 +1990,8 @@ functionalAreas:
     #       retentionDays: 0        # DROPS chunks older than this, on every event
     #                               # hypertable. It DELETES telemetry, so it is
     #                               # opt-in: 0 (the default) keeps data forever.
+    #                               # Also ages out per-minute measurement aggregates,
+    #                               # kept one raw chunk interval longer, rounded up to a day.
     #       locationRetentionDays: 30
     #                               # retention for DEVICE POSITIONS alone, overriding
     #                               # retentionDays for that one hypertable. Unset (the
