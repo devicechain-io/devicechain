@@ -48,6 +48,7 @@ ALTER SEQUENCE "device-management".integrations_id_seq OWNED BY "device-manageme
 ALTER SEQUENCE "device-management".maintenance_windows_id_seq OWNED BY "device-management".maintenance_windows.id;
 ALTER SEQUENCE "device-management".metric_definitions_id_seq OWNED BY "device-management".metric_definitions.id;
 ALTER SEQUENCE "device-management".pending_attribute_repairs_id_seq OWNED BY "device-management".pending_attribute_repairs.id;
+ALTER SEQUENCE "device-management".pending_entity_deletions_id_seq OWNED BY "device-management".pending_entity_deletions.id;
 ALTER SEQUENCE "device-management".profile_decoder_healths_id_seq OWNED BY "device-management".profile_decoder_healths.id;
 ALTER SEQUENCE "device-management".profile_decoder_samples_id_seq OWNED BY "device-management".profile_decoder_samples.id;
 ALTER SEQUENCE "device-management".provisioning_profiles_id_seq OWNED BY "device-management".provisioning_profiles.id;
@@ -266,6 +267,9 @@ ALTER TABLE ONLY "device-management".metric_definitions ALTER COLUMN id SET DEFA
 ALTER TABLE ONLY "device-management".pending_attribute_repairs
  ADD CONSTRAINT pending_attribute_repairs_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".pending_attribute_repairs ALTER COLUMN id SET DEFAULT nextval('"device-management".pending_attribute_repairs_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".pending_entity_deletions
+ ADD CONSTRAINT pending_entity_deletions_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".pending_entity_deletions ALTER COLUMN id SET DEFAULT nextval('"device-management".pending_entity_deletions_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".pending_ownership_facts
  ADD CONSTRAINT pending_ownership_facts_pkey PRIMARY KEY (tenant_id, device_id);
 ALTER TABLE ONLY "device-management".pending_revocation_expansion_serials
@@ -470,6 +474,7 @@ CREATE INDEX idx_entity_rel_target ON "device-management".entity_relationships U
 CREATE INDEX idx_facet_keys_deleted_at ON "device-management".facet_keys USING btree (deleted_at);
 CREATE INDEX idx_facet_keys_member_type ON "device-management".facet_keys USING btree (member_type);
 CREATE INDEX idx_facet_keys_tenant_id ON "device-management".facet_keys USING btree (tenant_id);
+CREATE INDEX idx_pending_entity_deletions_tenant_id ON "device-management".pending_entity_deletions USING btree (tenant_id, id);
 CREATE INDEX idx_profile_decoder_samples_profile_created ON "device-management".profile_decoder_samples USING btree (tenant_id, device_profile_id, created_at DESC);
 CREATE INDEX idx_provisioning_profiles_trust_anchor ON "device-management".provisioning_profiles USING btree (trust_anchor_id) WHERE (trust_anchor_id IS NOT NULL);
 CREATE INDEX ix_device_credential_chain_links_fingerprint ON "device-management".device_credential_chain_links USING btree (tenant_id, trust_anchor_id, fingerprint);
@@ -781,6 +786,12 @@ CREATE SEQUENCE "device-management".metric_definitions_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".pending_attribute_repairs_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".pending_entity_deletions_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -1649,6 +1660,14 @@ CREATE TABLE "device-management".pending_attribute_repairs (
  scope text,
  attr_key text,
  created_at timestamp with time zone
+);
+CREATE TABLE "device-management".pending_entity_deletions (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ entity_type character varying(64) NOT NULL,
+ entity_id bigint NOT NULL,
+ entity_token character varying(255) NOT NULL,
+ deleted_time timestamp with time zone NOT NULL
 );
 CREATE TABLE "device-management".pending_ownership_facts (
  tenant_id character varying(128) NOT NULL,
