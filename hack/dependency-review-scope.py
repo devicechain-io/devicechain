@@ -31,8 +31,8 @@ MANIFESTS = [
     # npm / yarn / pnpm
     "package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml",
     # NuGet / .NET (sdks/csharp)
-    "*.csproj", "*.fsproj", "*.vbproj", "packages.config", "packages.lock.json",
-    "Directory.Packages.props", "Directory.Build.props", "Directory.Build.targets",
+    "*.csproj", "*.fsproj", "*.vbproj", "*.vcxproj", "*.nuspec", "*.props", "*.targets",
+    "packages.config", "packages.lock.json", "*.deps.json", "paket.dependencies", "paket.lock",
     "nuget.config", "NuGet.Config", "global.json",
     # Unity package manager (sdks/unity)
     "packages-lock.json", "*/Packages/manifest.json",
@@ -42,6 +42,11 @@ MANIFESTS = [
     "requirements*.txt", "pyproject.toml", "poetry.lock", "uv.lock", "Pipfile", "Pipfile.lock",
     "setup.py", "setup.cfg", "Gemfile", "Gemfile.lock", "*.gemspec", "Cargo.toml", "Cargo.lock",
     "composer.json", "composer.lock",
+    # Swift, Dart, Elixir, C/C++, Haskell, Scala
+    "Package.swift", "Package.resolved", "pubspec.yaml", "pubspec.lock", "mix.exs", "mix.lock",
+    "vcpkg.json", "conanfile.txt", "conanfile.py", "*.cabal", "stack.yaml", "build.sbt",
+    # OpenTofu / Terraform: providers and modules are dependencies (deploy/opentofu)
+    "*.tf", "*.tofu", ".terraform.lock.hcl",
     # Containers
     "Dockerfile", "Dockerfile.*", "*.Dockerfile", "*.dockerfile", "Containerfile",
     # GitHub Actions: every `uses:` is a dependency
@@ -88,6 +93,8 @@ def self_test():
         "global.json", "sdks/unity/Packages/manifest.json", "sdks/unity/Packages/packages-lock.json",
         "backend/services/lwm2m-ingest/interop/leshan-client/pom.xml",
         "deploy/images/timescaledb/Dockerfile", "x/Dockerfile.dev", "x/build.Dockerfile",
+        "deploy/opentofu/modules/nats/main.tf", "deploy/opentofu/x.tofu", "deploy/.terraform.lock.hcl",
+        "sdks/csharp/x.nuspec", "native/x.vcxproj", "sdks/csharp/Directory.Build.targets", "app/pubspec.lock",
         ".github/workflows/ci.yml", ".github/actions/thing/action.yml", "docs/requirements.txt",
     ]
     for f in runs:

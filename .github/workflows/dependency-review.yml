@@ -57,7 +57,9 @@ jobs:
           sparse-checkout-cone-mode: false
 
       # The pull-request files API lists at most 3000 files; a list that long is treated as
-      # unreadable (run the review) rather than as complete.
+      # unreadable (run the review) rather than as complete. A RENAMED file is listed under its
+      # new name with the old one in previous_filename, and both are checked: renaming a lock
+      # file away removes a manifest as surely as deleting it.
       - name: Does the diff touch a dependency manifest?
         id: scope
         env:
@@ -66,10 +68,10 @@ jobs:
         run: |
           set -uo pipefail
           verdict=true
-          list="$RUNNER_TEMP/pr-files"
-          if gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename' > "$list" \
-             && [ "$(wc -l < "$list")" -lt 3000 ]; then
-            verdict="$(python3 hack/dependency-review-scope.py < "$list")" || verdict=true
+          records="$RUNNER_TEMP/pr-files.tsv"
+          if gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[] | [.filename, (.previous_filename // "")] | @tsv' > "$records" \
+             && [ "$(wc -l < "$records")" -lt 3000 ]; then
+            verdict="$(tr '\t' '\n' < "$records" | python3 hack/dependency-review-scope.py)" || verdict=true
           else
             echo "::warning::could not list this pull request's files completely; running the review"
           fi
