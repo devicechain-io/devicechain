@@ -4,9 +4,12 @@
 package connectorspec
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/devicechain-io/dc-microservice/credbinding"
 )
 
 // mqttConfig is the DeviceChain-facing MQTT connector config (ADR-060 slice C4b). The
@@ -145,3 +148,14 @@ func withMQTTSecret(t Target, secret string) (Target, error) {
 	m.Password = secret
 	return m, nil
 }
+
+func mqttBinding(raw []byte) credbinding.Binding {
+	var c mqttConfig
+	if json.Unmarshal(raw, &c) != nil {
+		return credbinding.Opaque("mqtt", raw)
+	}
+	c.URLs = canonicalSet(c.URLs)
+	return credbinding.Fields(credbinding.New("mqtt"), &c, mqttFields)
+}
+
+var mqttFields = map[string]bool{"urls": false, "topic": true, "qos": true, "clientId": true, "username": true}

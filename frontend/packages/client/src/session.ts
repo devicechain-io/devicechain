@@ -16,16 +16,20 @@
 //     refused: a GraphQL error such as an invalid, revoked or SSO-gated refresh token, or
 //     any 4xx but 429), ends the session through onEnd and the caller gets null. The host
 //     decides what "ended" looks like.
-//   - a TRANSIENT refresh failure (no response at all, a 5xx, or a 429) does not end a
-//     session whose access token is still valid: the caller is handed that token, and the
-//     next call (or the auto-refresh retry below) tries again. Only once the access token
-//     has actually expired does a transient failure end the session, since there is then
-//     nothing left to authenticate with.
+//   - a TRANSIENT refresh failure (no response at all, a 5xx, or a 429) NEVER ends the
+//     session: the server has not refused anything, and the refresh token is still good. While
+//     the access token is valid the caller is handed it; once it has expired the caller gets
+//     the transient error thrown (its request could not be authenticated right now, which is
+//     what an outage looks like), and the next call (or the auto-refresh retry below) tries
+//     again. Only the refresh token lapsing ends a session that keeps failing transiently.
 //   - startAutoRefresh() refreshes ahead of expiry without waiting for a caller, and
-//     retries a transient failure with jittered exponential backoff until the access
-//     token actually expires. A display that only holds a websocket makes no request that
+//     retries a transient failure with jittered exponential backoff for as long as the
+//     refresh token is valid. A display that only holds a websocket makes no request that
 //     would trigger the lazy path, so without this it would sit on a token that is about
 //     to expire, and a network blip at the wrong moment would end an unattended session.
+//     🔴 It used to give up when the ACCESS token expired, so an outage longer than the
+//     access token's few minutes signed out a wall display whose refresh token had hours
+//     left, and nobody was there to sign it back in.
 
 import { isExpired, decodeToken } from './jwt';
 import { GraphQLRequestError } from './transport';
@@ -43,9 +47,9 @@ export interface SessionTokensOptions {
   /** Exchanges a refresh token for a new pair. */
   refresh: (refreshToken: string) => Promise<TokenPair>;
   /**
-   * The session can no longer be sustained: the refresh token lapsed (`err` undefined), the
-   * server refused the refresh (`err` is what it threw), or transient failures outlasted the
-   * access token (`err` is the last one). The host clears its session here.
+   * The session can no longer be sustained: the refresh token lapsed (`err` undefined), or the
+   * server refused the refresh (`err` is what it threw). A transient failure never ends it. The
+   * host clears its session here.
    */
   onEnd: (err?: unknown) => void;
   /**
@@ -58,13 +62,17 @@ export interface SessionTokensOptions {
 }
 
 export interface SessionTokens {
-  /** A usable access token, refreshing first when it is within the skew of expiry; null when signed out or ended. */
+  /**
+   * A usable access token, refreshing first when it is within the skew of expiry; null when
+   * signed out or ended. Rejects with the refresh's error when the access token has expired and
+   * the refresh failed transiently: the session is kept, and a later call tries again.
+   */
   getAccessToken: () => Promise<string | null>;
   /** Forget any in-flight refresh (the host cleared or replaced the session itself). */
   reset: () => void;
   /**
-   * Refresh ahead of expiry on a timer, retrying a transient failure with backoff until the
-   * access token expires. Returns a stop function.
+   * Refresh ahead of expiry on a timer, retrying a transient failure with backoff for as long
+   * as the refresh token is valid. Returns a stop function.
    */
   startAutoRefresh: () => () => void;
 }
@@ -76,8 +84,9 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 // fleet of displays that lost the network together does not come back in lockstep.
 const RETRY_BASE_MS = 1_000;
 const RETRY_CAP_MS = 30_000;
-// The last retry is aimed this far ahead of the access token's expiry, not at it. No retry is
-// armed within RETRY_BASE_MS before that aim: one that would be is moved onto it instead.
+// While the access token is valid, one retry is aimed this far ahead of its expiry, not at it,
+// so a request made then still has a token. No retry is armed within RETRY_BASE_MS before that
+// aim: one that would be is moved onto it instead. After it, retries carry on at the backoff.
 const RETRY_EXPIRY_MARGIN_MS = 1_000;
 // The shortest gap between two scheduled refreshes. A backstop: if the held token still
 // looks due right after a refresh (the device clock runs well ahead of the server's), the
@@ -164,8 +173,10 @@ export function createSessionTokens(opts: SessionTokensOptions): SessionTokens {
     // A transient failure: the held token is still good if it has not actually expired.
     if (opts.read() !== current) return null;
     if (!isExpired(current.accessToken, 0)) return current.accessToken;
-    end(out.err);
-    return null;
+    // Nothing valid to hand over, but nothing was refused either: keep the session, and fail
+    // this caller with the outage it hit. Returning null would send the request without a
+    // token, and the server's 401 would read as a refusal.
+    throw out.err;
   };
 
   const startAutoRefresh = (): (() => void) => {
@@ -210,18 +221,22 @@ export function createSessionTokens(opts: SessionTokensOptions): SessionTokens {
       if (out.kind !== 'transient') return; // ended, or the host replaced the session
       if (opts.read() !== current) return;
 
-      const left = (expiryMs(current.accessToken) ?? 0) - RETRY_EXPIRY_MARGIN_MS - Date.now();
-      if (left <= 0) {
-        end(out.err);
-        return;
-      }
       const backoff = Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** failures) * (0.5 + Math.random() / 2);
       failures++;
-      // A retry that would land within RETRY_BASE_MS of the final retry's aim (or past it) is
-      // moved onto that aim. Otherwise a backoff that happens to land just short of the aim leaves
-      // the aimed retry following it moments later: two requests back to back, against a
-      // server that may have just answered 429.
-      arm(left - backoff < RETRY_BASE_MS ? left : backoff);
+      const left = (expiryMs(current.accessToken) ?? 0) - RETRY_EXPIRY_MARGIN_MS - Date.now();
+      if (left > 0) {
+        // A retry that would land within RETRY_BASE_MS of the aim before expiry (or past it) is
+        // moved onto that aim. Otherwise a backoff that happens to land just short of the aim
+        // leaves the aimed retry following it moments later: two requests back to back, against
+        // a server that may have just answered 429.
+        arm(left - backoff < RETRY_BASE_MS ? left : backoff);
+        return;
+      }
+      // The access token has expired, but the refresh token may have hours left: keep trying
+      // at the backoff. A retry is never armed past the refresh token's expiry; at it, fire()
+      // finds the refresh token lapsed and ends the session.
+      const refreshLeft = (expiryMs(current.refreshToken) ?? 0) - Date.now();
+      arm(Math.min(backoff, refreshLeft));
     };
 
     schedule();

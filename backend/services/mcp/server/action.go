@@ -28,7 +28,10 @@ type ActionRisk struct {
 	ReadOnly   bool
 }
 
-type options struct{ actuation bool }
+type options struct {
+	actuation   bool
+	sessionCaps *sessionCaps // unexported small-cap test seam; no typed-config key
+}
 
 // Option configures optional MCP capabilities.
 type Option func(*options)
