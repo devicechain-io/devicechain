@@ -5,9 +5,11 @@ package model
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/credbinding"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"gorm.io/datatypes"
 )
@@ -176,7 +178,7 @@ func TestSwitchingABearerWebhookToNoneWhileASecretIsStoredIsRefused(t *testing.T
 	_, err := api.UpdateNotificationChannel(ctx, "hook", &NotificationChannelUpdateRequest{
 		Config: dcgraphql.OptionalStringOf(noneHookConfig),
 	})
-	wantCredentialRefusal(t, err, "never present")
+	wantCredentialRefusal(t, err, "auth")
 	if got := string(*channelRow(t, api, ctx, "hook").Config); got != bearerHookConfig {
 		t.Fatalf("the refused update still changed the config to %q", got)
 	}
@@ -211,19 +213,32 @@ func TestFlippingAnSMTPChannelToWebhookWithItsSMTPConfigIsRefused(t *testing.T) 
 	}
 }
 
-// A valid edit to a channel that already agrees is not refused: the store is asked, and
-// answers yes.
-func TestUpdatingTheURLOfABearerWebhookKeepsItsSecret(t *testing.T) {
+// A destination edit cannot reuse a credential the caller did not supply.
+func TestRepointingABearerWebhookWithoutItsSecretIsRefused(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
 	createChannel(t, api, ctx, "hook", ChannelTypeWebhook, strPtr(bearerHookConfig), strPtr("s"))
 
-	if _, err := api.UpdateNotificationChannel(ctx, "hook", &NotificationChannelUpdateRequest{
+	_, err := api.UpdateNotificationChannel(ctx, "hook", &NotificationChannelUpdateRequest{
 		Config: dcgraphql.OptionalStringOf(bearerHookConfig2),
-	}); err != nil {
-		t.Fatalf("a url change on a bearer channel with its secret was refused: %v", err)
+	})
+	var refusal *credbinding.ResupplyRequiredError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("expected resupply refusal: %v", err)
 	}
-	if got := string(*channelRow(t, api, ctx, "hook").Config); got != bearerHookConfig2 {
+	if refusal.Extensions()["code"] != credbinding.Code {
+		t.Fatalf("wrong code: %v", refusal.Extensions())
+	}
+	row := channelRow(t, api, ctx, "hook")
+	ref, err := ChannelSecretRef(ctx, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := api.Secrets.Resolve(ctx, ref)
+	if err != nil || string(old) != "s" {
+		t.Fatalf("secret=%q err=%v", old, err)
+	}
+	if got := string(*row.Config); got != bearerHookConfig {
 		t.Fatalf("config = %q", got)
 	}
 }

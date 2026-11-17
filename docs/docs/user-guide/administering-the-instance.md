@@ -368,3 +368,5 @@ the branding, map and language for their own tenant; see [Tenant settings](/user
   takes.
 - [Single sign-on](/concepts/single-sign-on) and [Configure single sign-on](/guides/configuring-sso).
 - [System settings](/concepts/system-settings): the instance-wide defaults.
+
+Changing a provider's `kind` or effective `endpoint` while it holds an API key requires `secret` in the same `updateAiProvider` request; omission returns `SECRET_RESUPPLY_REQUIRED`. Supply the key again, or clear it with `secret: null`. Name, model and enabled edits keep the key, as does explicitly sending the kind's default endpoint.

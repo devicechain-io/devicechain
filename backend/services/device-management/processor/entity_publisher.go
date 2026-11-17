@@ -5,6 +5,9 @@ package processor
 
 import (
 	"context"
+	"fmt"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/entityevent"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
@@ -16,13 +19,8 @@ import (
 // processor layer (which owns the messaging writer) and is injected into the shared
 // *Api at wiring time, keeping the model free of a messaging dependency.
 //
-// Publishing is best-effort: the tenant-scoped writer derives the subject from the
-// tenant in the caller's context (the delete runs under the request's tenant), so no
-// tenant plumbing is needed here. A marshal or publish failure is logged and
-// swallowed — the delete is the source of truth, and a missed event is repaired by each
-// holder's own sweep against this service (ADR-044 decision 3): event-management's anchor
-// reconciliation sweep, and event-processing's reconcile of its device roster and
-// threshold attributes. A dropped publish must never fail or retry the delete.
+// The drain deletes a row only after an acknowledged publish. Errors must be returned
+// so a broker outage leaves the fact queued for retry under its own tenant.
 type EntityDeletedWriter struct {
 	writer messaging.MessageWriter
 }
@@ -32,16 +30,25 @@ func NewEntityDeletedWriter(writer messaging.MessageWriter) *EntityDeletedWriter
 	return &EntityDeletedWriter{writer: writer}
 }
 
-// PublishEntityDeleted marshals and publishes an entity-deletion event. It never
-// returns an error (the interface is fire-and-forget); failures are logged.
-func (w *EntityDeletedWriter) PublishEntityDeleted(ctx context.Context, event *entityevent.EntityDeletedEvent) {
+// EntityDeletedDedupID is stable across retries and scoped to a tenant and entity identity.
+func EntityDeletedDedupID(tenant string, etype entity.Type, id uint) string {
+	return fmt.Sprintf("entdel/%s/%s/%d", tenant, etype, id)
+}
+
+// PublishEntityDeleted returns marshal or writer failures to the outbox drain.
+func (w *EntityDeletedWriter) PublishEntityDeleted(ctx context.Context, event *entityevent.EntityDeletedEvent) error {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok || tenant == "" {
+		return fmt.Errorf("publishing entity deletion requires a tenant")
+	}
 	bytes, err := entityevent.MarshalEntityDeletedEvent(event)
 	if err != nil {
 		log.Error().Err(err).Str("entity", event.EntityToken).Msg("Unable to marshal entity-deletion event")
-		return
+		return err
 	}
-	if err := w.writer.WriteMessages(ctx, messaging.Message{Value: bytes}); err != nil {
-		log.Error().Err(err).Str("entityType", string(event.EntityType)).Str("entity", event.EntityToken).
-			Msg("Unable to publish entity-deletion event")
+	err = w.writer.WriteMessages(ctx, messaging.Message{Value: bytes, DedupID: EntityDeletedDedupID(tenant, event.EntityType, event.EntityId)})
+	if err != nil {
+		log.Error().Err(err).Str("entityType", string(event.EntityType)).Str("entity", event.EntityToken).Msg("Unable to publish entity-deletion event")
 	}
+	return err
 }

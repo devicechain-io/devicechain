@@ -232,6 +232,43 @@ func Exists(name string) (bool, error) {
 	return true, nil
 }
 
+// List reads all saved sim records. A missing state directory is an empty list;
+// unreadable directories or records are errors, so callers cannot overlook a sim.
+func List() ([]*Record, error) {
+	dir, err := stateDir()
+	if err != nil {
+		return nil, err
+	}
+	// Stat first: on Windows, reading a FILE as a directory reports "path not found",
+	// which would otherwise pass for an absent directory and select a taken port.
+	info, err := os.Stat(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list sim records: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("list sim records: %s is not a directory", dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("list sim records: %w", err)
+	}
+	var records []*Record
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		r, err := Load(strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, r)
+	}
+	return records, nil
+}
+
 // Delete removes a sim's record (idempotent — a missing record is not an error).
 func Delete(name string) error {
 	path, err := RecordPath(name)

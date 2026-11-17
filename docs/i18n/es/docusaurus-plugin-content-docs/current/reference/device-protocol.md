@@ -158,6 +158,10 @@ Cada campo de ubicación es un **string** JSON, incluidos los numéricos. Cada u
 
 #### NewRelationship {#new-relationship-payload}
 
+Cuando se crea la relación, su evento se conserva en el historial de eventos como un sobre con sus anclajes.
+
+**Se rechaza marcar un tipo de relación como rastreado mientras existan relaciones de ese tipo creadas por dispositivos.** `updateEntityRelationshipType` rechaza marcar el tipo como rastreado mientras existan relaciones de ese tipo creadas por los propios dispositivos, porque pasarían a otorgar propiedad en ese momento; el rechazo las identifica. Elimínelas y después marque el tipo como rastreado.
+
 Crea una relación desde el dispositivo emisor hacia otra entidad del mismo tenant. Este payload no tiene array `entries`, y sus tres claves se leen por su nombre exacto, así que las mayúsculas importan. Una clave ausente no se rechaza al decodificar el mensaje: se lee como un string vacío, y el evento falla después en la resolución, como en los casos siguientes.
 
 Un dispositivo no puede crear relaciones de propiedad ni de contención: un `NewRelationship` que nombre un tipo con seguimiento (incluido `assigned` y cualquier tipo del tenant marcado con seguimiento) o el tipo integrado `contains` se rechaza y se registra en `failed-events` con motivo `Invalid` en su primera entrega, sin reintentos. Asigna los dispositivos con un código de reclamación o la mutación `createEntityRelationship`. Los tipos sin seguimiento, incluido `member`, funcionan como antes.
@@ -205,6 +209,11 @@ Activa `mqttDeviceUplinks` solo cuando todas las réplicas de `event-sources` y 
 :::
 
 **Por HTTP**, la misma capacidad es `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink` en el servicio `event-sources`. El dispositivo presenta su propia credencial en cabeceras (`Authorization: Bearer <token>`, o `X-DeviceChain-Credential-Type`, `-Id` y `-Secret`), porque un cuerpo binario no tiene dónde llevarla, y la ruta responde `401` sin ella. Existe solo cuando el operador establece `httpIngest.deviceUplinks` en `event-sources`; si no, responde `404`.
+
+| HTTP | Respuesta |
+| --- | --- |
+| `429` | Las solicitudes desde esta dirección de origen superan el límite. `Retry-After` indica cuándo reintentar. |
+| `503` | Mientras se intenta adivinar la credencial de este dispositivo, todas sus cargas útiles HTTP, incluidas las que presentan la credencial correcta, reciben `503` con `Retry-After` hasta que termina la pausa (como máximo 60 segundos cada vez). Los dispositivos conectados por MQTT al broker no se ven afectados. |
 
 ## Entrega de comando {#command-delivery}
 

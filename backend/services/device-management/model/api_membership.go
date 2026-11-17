@@ -147,6 +147,18 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 	created := make([]*EntityRelationship, 0, len(requests))
 	var queued ownershipQueued
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// A batch carrying a containment edge takes the tenant's hierarchy lock FIRST,
+		// before it inserts anything. Taking it at the first containment edge instead
+		// would hold the row and index locks of the edges inserted before it while
+		// waiting, the opposite order to every other door.
+		for _, request := range requests {
+			if request.RelationshipType == ContainmentRelationshipType {
+				if err := lockAssetHierarchy(tx); err != nil {
+					return err
+				}
+				break
+			}
+		}
 		for _, request := range requests {
 			rt := typesByToken[request.RelationshipType]
 			if rt == nil {

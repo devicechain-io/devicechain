@@ -13,6 +13,7 @@ require (
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/fatih/color v1.19.0
 	github.com/graph-gophers/graphql-go v1.10.3
+	github.com/hashicorp/go-version v1.9.0
 	github.com/hashicorp/terraform-exec v0.26.0
 	github.com/hashicorp/terraform-json v0.29.0
 	github.com/jackc/pgx/v5 v5.12.0
@@ -105,7 +106,6 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
-	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

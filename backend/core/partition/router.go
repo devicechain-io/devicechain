@@ -47,6 +47,19 @@ type Router struct {
 // succeeds.
 func NewRouter(instanceID string) *Router { return &Router{instanceID: instanceID} }
 
+// Ready reports whether the router holds an adoptable placement.
+func (r *Router) Ready() error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.bad != nil {
+		return r.bad
+	}
+	if r.table == nil {
+		return ErrNoPlacement
+	}
+	return nil
+}
+
 // Update adopts t if it is valid, has the same P as the one held, and is not older. The same
 // generation is accepted only if it is identical, so two authorities that disagree are noticed.
 func (r *Router) Update(t Table) error {
