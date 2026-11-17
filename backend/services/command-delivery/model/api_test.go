@@ -375,14 +375,16 @@ func TestExpireStale(t *testing.T) {
 		t.Fatalf("create q-old failed: %v", err)
 	}
 	// SENT + expired -> TIMEOUT.
+	// Claim while live, then sweep after its horizon. An expired row cannot be claimed.
+	sentExpiry := time.Now().Add(30 * time.Minute).Format(time.RFC3339)
 	sentOld, err := api.CreateCommand(sysctx, &CommandCreateRequest{
-		Token: "s-old", DeviceToken: "d", Name: "x", ExpiresAt: &past,
+		Token: "s-old", DeviceToken: "d", Name: "x", ExpiresAt: &sentExpiry,
 	})
 	if err != nil {
 		t.Fatalf("create s-old failed: %v", err)
 	}
-	if _, _, err := api.MarkSent(sysctx, sentOld.ID); err != nil {
-		t.Fatalf("mark s-old sent failed: %v", err)
+	if _, claimed, err := api.MarkSent(sysctx, sentOld.ID); err != nil || !claimed {
+		t.Fatalf("mark s-old sent: claimed=%v err=%v", claimed, err)
 	}
 	// HELD + expired -> EXPIRED, NOT TIMEOUT. This is the case the vocabulary
 	// exists for: the device was absent for the command's whole life, so the
@@ -406,7 +408,7 @@ func TestExpireStale(t *testing.T) {
 		t.Fatalf("create q-fresh failed: %v", err)
 	}
 
-	count, byFromStatus, err := api.ExpireStale(sysctx, time.Now())
+	count, byFromStatus, err := api.ExpireStale(sysctx, time.Now().Add(45*time.Minute))
 	if err != nil {
 		t.Fatalf("ExpireStale failed: %v", err)
 	}
