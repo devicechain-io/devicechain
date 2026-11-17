@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -79,6 +80,12 @@ func main() {
 		"run a scenario that needs a command far end WITHOUT one. Its command widgets then "+
 			"enqueue commands nothing answers, which reach SENT and expire — an escape hatch for "+
 			"a host that cannot reach the MQTT gateway, not a default")
+	dayLength := flag.Duration("day-length", envDurationOr("DC_SIM_DAY_LENGTH", 0),
+		"harborpulse: wall time one compressed sim day takes, at least 24m (0 keeps the scenario's own 24m day). "+
+			"The rules' windows are wall time, so a longer day stretches every beat and a shorter one is refused")
+	defects := flag.String("scenario-defect", envOr("DC_SIM_SCENARIO_DEFECT", ""),
+		"harborpulse: comma-separated planted defects, each breaking one thing the day demonstrates so a "+
+			"verifier can be shown to fail ("+strings.Join(sim.HarborpulseDefects(), ", ")+"). Never for a demo")
 	externalPlane := flag.Bool("external-device-plane", envBoolOr("DC_SIM_EXTERNAL_DEVICE_PLANE", false),
 		"an EXTERNAL client (e.g. a Unity player) is the device plane: provision and converge the "+
 			"tenant, then idle with the control API and presentation page only -- no telemetry is "+
@@ -211,7 +218,14 @@ func main() {
 	if *publishLog != "" && !*playDevices {
 		log.Fatal().Msg("--publish-log logs what --play-devices publishes; without it this process publishes nothing")
 	}
-	if err := run(*handshakePath, *bind, *port, load, *noFarEnd, devicePlane{play: *playDevices, publishLog: *publishLog, external: *externalPlane}, otaOpts); err != nil {
+	scenario := sim.ScenarioOptions{DayLength: *dayLength}
+	if *defects != "" {
+		scenario.Defects = strings.Split(*defects, ",")
+	}
+	if *dayLength < 0 {
+		log.Fatal().Dur("dayLength", *dayLength).Msg("--day-length is negative")
+	}
+	if err := run(*handshakePath, *bind, *port, load, scenario, *noFarEnd, devicePlane{play: *playDevices, publishLog: *publishLog, external: *externalPlane}, otaOpts); err != nil {
 		log.Fatal().Err(err).Msg("dc-simulator exited")
 	}
 }
@@ -280,7 +294,7 @@ type devicePlane struct {
 	external bool
 }
 
-func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool, plane devicePlane, otaOpts *otafleet.Options) error {
+func run(handshakePath, bind, port string, load sim.Load, scenario sim.ScenarioOptions, noFarEnd bool, plane devicePlane, otaOpts *otafleet.Options) error {
 	hs, err := sim.LoadHandshake(handshakePath)
 	if err != nil {
 		return err
@@ -298,6 +312,15 @@ func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool, plane d
 	driver, err := sim.NewSimEpisode(manifestId, hs.Episode, hs.Seed, load)
 	if err != nil {
 		return err
+	}
+
+	// Before anything reads the manifest: a defect may change it.
+	if err := sim.ConfigureScenario(driver, scenario); err != nil {
+		return err
+	}
+	if len(scenario.Defects) > 0 {
+		log.Warn().Strs("defects", scenario.Defects).Str("manifestId", manifestId).
+			Msg("running with PLANTED DEFECTS: this run exists to show a verifier failing, not to demonstrate anything")
 	}
 
 	sim.RecordEpisodeStart(driver, handshakePath)

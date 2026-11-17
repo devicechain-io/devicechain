@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +52,9 @@ import (
 type harborpulse struct {
 	seed int64
 	load Load
+	// dayLength and defects are the ScenarioOptions; set before the first Manifest or Tick.
+	dayLength time.Duration
+	defects   harborDefects
 
 	mu      sync.Mutex
 	model   *harborModel
@@ -60,7 +64,139 @@ type harborpulse struct {
 
 // NewHarborpulse returns the harborpulse Sim seeded from the handshake. Prefer NewSim.
 func NewHarborpulse(seed int64, load Load) Sim {
-	return &harborpulse{seed: seed, load: load, now: time.Now}
+	return &harborpulse{seed: seed, load: load, dayLength: harborpulseDayLength, now: time.Now}
+}
+
+// The planted defects harborpulse can run with (--scenario-defect). Each breaks ONE thing the day
+// demonstrates, so that the scenario verifier can be shown to turn the matching invariant red.
+const (
+	// HarborpulseDefectFloodSplitKey files the critical flood tier under an alarm key of its own,
+	// so an East Quay gauge holds two alarms instead of one escalating in place.
+	HarborpulseDefectFloodSplitKey = "flood-split-key"
+	// HarborpulseDefectRefuseDerate makes every charger refuse derate.
+	HarborpulseDefectRefuseDerate = "refuse-derate"
+	// HarborpulseDefectAirLockBasin plants the air lock on the Basin pump instead of East Quay's.
+	HarborpulseDefectAirLockBasin = "air-lock-basin"
+	// HarborpulseDefectSilenceNorthLamp silences one North Quay lamp through the East Quay outage.
+	HarborpulseDefectSilenceNorthLamp = "silence-north-lamp"
+	// HarborpulseDefectDropBackfill loses every fifth buffered reading on restore.
+	HarborpulseDefectDropBackfill = "drop-backfill"
+)
+
+// HarborpulseDefects lists every defect harborpulse knows, sorted.
+func HarborpulseDefects() []string {
+	return []string{
+		HarborpulseDefectAirLockBasin, HarborpulseDefectDropBackfill, HarborpulseDefectFloodSplitKey,
+		HarborpulseDefectRefuseDerate, HarborpulseDefectSilenceNorthLamp,
+	}
+}
+
+// HarborpulseFloodSplitAlarmKey is the alarm key the flood-split-key defect files the critical
+// tier under.
+const HarborpulseFloodSplitAlarmKey = HarborpulseFloodAlarmKey + "-critical"
+
+// HarborpulseMinDayLength is the shortest day --day-length accepts: the default. The rules' windows,
+// holds and timeouts are WALL time (a 45 s silence, a 30 s hold, a one-minute average) and the
+// beats are sized against a 24-minute day; a shorter one would make the outage shorter than the
+// silence that detects it. A longer day stretches every beat and keeps them all detectable.
+const HarborpulseMinDayLength = harborpulseDayLength
+
+// HarborpulseMaxDayLength is the longest day --day-length accepts.
+const HarborpulseMaxDayLength = 24 * time.Hour
+
+type harborDefects struct {
+	floodSplitKey, refuseDerate, airLockBasin, silenceNorthLamp, dropBackfill bool
+	names                                                                     []string
+}
+
+// ConfigureScenario applies --day-length and --scenario-defect.
+func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.model != nil {
+		return fmt.Errorf("harborpulse: the day is already running; options are set before it starts")
+	}
+	if o.DayLength != 0 {
+		if o.DayLength < HarborpulseMinDayLength || o.DayLength > HarborpulseMaxDayLength {
+			return fmt.Errorf("--day-length %s is outside [%s, %s]: the rules' windows are wall time and the beats are "+
+				"sized against a %s day, so a shorter day makes beats shorter than the rules that detect them",
+				o.DayLength, HarborpulseMinDayLength, HarborpulseMaxDayLength, harborpulseDayLength)
+		}
+		s.dayLength = o.DayLength
+	}
+	names, err := parseDefects(o.Defects, HarborpulseDefects())
+	if err != nil {
+		return err
+	}
+	d := harborDefects{names: names}
+	for _, n := range names {
+		switch n {
+		case HarborpulseDefectFloodSplitKey:
+			d.floodSplitKey = true
+		case HarborpulseDefectRefuseDerate:
+			d.refuseDerate = true
+		case HarborpulseDefectAirLockBasin:
+			d.airLockBasin = true
+		case HarborpulseDefectSilenceNorthLamp:
+			d.silenceNorthLamp = true
+		case HarborpulseDefectDropBackfill:
+			d.dropBackfill = true
+		}
+	}
+	s.defects = d
+	return nil
+}
+
+// harborBeats is the story, as /status names it: each beat and the sim hours it spans.
+var harborBeats = []struct {
+	name     string
+	from, to float64
+}{
+	{"night", 0, 6.5},
+	{"commute", 7.5, 10},
+	{"peak-demand", 8.5, 9.75},
+	{"lamp-flicker", 11, 12},
+	{"connector-hot", 14, harborOverheatTo},
+	{"storm", 16, 22.5},
+	{"air-lock", harborAirLockFrom, harborAirLockTo},
+	{"feeder-outage", harborOutageFrom, harborOutageTo},
+}
+
+func harborBeatAt(h float64) string {
+	var on []string
+	for _, b := range harborBeats {
+		if h >= b.from && h < b.to {
+			on = append(on, b.name)
+		}
+	}
+	if len(on) == 0 {
+		return "quiet"
+	}
+	return strings.Join(on, ",")
+}
+
+// ScenarioClock reports the compressed day on /status.
+func (s *harborpulse) ScenarioClock(now time.Time) *ScenarioClock {
+	s.mu.Lock()
+	started, dayLength, defects, model := s.started, s.dayLength, s.defects.names, s.model
+	s.mu.Unlock()
+	c := &ScenarioClock{
+		Name: "harborpulse", DayLengthSeconds: dayLength.Seconds(), StartHour: harborpulseStartHour,
+		SimHour: harborpulseStartHour, Defects: defects,
+	}
+	if !started.IsZero() {
+		elapsed := now.Sub(started)
+		c.Started = true
+		c.StartedAt = started.UTC().Format(time.RFC3339Nano)
+		c.Day = harborDayOf(elapsed, dayLength)
+		c.SimHour = harborHourOf(elapsed, dayLength)
+	}
+	c.SimTime = formatSimTime(c.SimHour)
+	c.Beat = harborBeatAt(c.SimHour)
+	if model != nil {
+		c.Backfill = model.backfillLedger()
+	}
+	return c
 }
 
 // Entity tokens. Fixed literals, read from several places, for the reason every scenario's are.
@@ -221,7 +357,7 @@ func (s *harborpulse) Manifest() SimManifest {
 		populations = append(populations, PopulationSpec{OfType: t, Count: len(pops[t]), FixedCount: true, Instances: pops[t]})
 	}
 
-	return resize(s.load, SimManifest{
+	manifest := resize(s.load, SimManifest{
 		Name: "harborpulse",
 		Seed: s.seed,
 		// A composed fixture: its faults are planted on named devices (the East Quay pump, one
@@ -243,7 +379,7 @@ func (s *harborpulse) Manifest() SimManifest {
 		},
 		GeoFences: harborpulseGeoFences(),
 		Profiles: []ProfileSpec{
-			harborpulseGaugeProfile(),
+			harborpulseGaugeProfile(s.defects.floodSplitKey),
 			harborpulsePumpProfile(),
 			harborpulseLightProfile(),
 			harborpulseChargerProfile(),
@@ -261,13 +397,22 @@ func (s *harborpulse) Manifest() SimManifest {
 		Populations:   populations,
 		CustomerUsers: []CustomerUserSpec{{Email: HarborpulseLoftsOwnerEmail, CustomerToken: HarborpulseLoftsToken}},
 	})
+	// The operator's board and the Lofts owner's, bound to the devices this manifest provisions.
+	manifest.Dashboards = harborpulseDashboards(manifest.Expand(manifest.Seed))
+	return manifest
 }
 
-func harborpulseGaugeProfile() ProfileSpec {
+// harborpulseGaugeProfile is the tide gauge. splitKey is the flood-split-key defect: the critical
+// tier is filed under an alarm key of its own.
+func harborpulseGaugeProfile(splitKey bool) ProfileSpec {
 	tier := func(token, name string, level float64, severity string) DetectionRuleSpec {
+		key := HarborpulseFloodAlarmKey
+		if splitKey && severity == SeverityCritical {
+			key = HarborpulseFloodSplitAlarmKey
+		}
 		return ThresholdAlarmRule{
 			Token: token, Name: name, Metric: HarborpulseWaterLevelKey, Op: OpGt, Threshold: level,
-			Severity: severity, AlarmKey: HarborpulseFloodAlarmKey, Enabled: true,
+			Severity: severity, AlarmKey: key, Enabled: true,
 		}.Spec()
 	}
 	return ProfileSpec{
@@ -411,7 +556,7 @@ func (s *harborpulse) ensureModel() *harborModel {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.model == nil {
-		s.model = newHarborModel(s.seed)
+		s.model = newHarborModelWith(s.seed, s.dayLength, s.defects)
 	}
 	return s.model
 }
@@ -508,4 +653,52 @@ func harborParam(payload json.RawMessage, name string, lo, hi float64) (float64,
 		return 0, false
 	}
 	return v, true
+}
+
+// ---- What a verifier needs to know about the day ----------------------------------------------
+
+// HarborpulseDevice is one device of the district, as a verifier addresses it.
+type HarborpulseDevice struct {
+	Token, DeviceType, Quay string
+}
+
+// HarborpulseFleet is every device of the district, in the manifest's order.
+func HarborpulseFleet() []HarborpulseDevice {
+	layout := harborLayout()
+	out := make([]HarborpulseDevice, 0, len(layout))
+	for _, d := range layout {
+		out = append(out, HarborpulseDevice{Token: d.token, DeviceType: d.deviceType, Quay: d.quay})
+	}
+	return out
+}
+
+// The named devices the beats are planted on, and the levels a verifier holds them to.
+const (
+	HarborpulseAirLockPump = harborAirLockPump
+	HarborpulseBasinPump   = harborBasinPump
+	HarborpulseHotCharger  = harborHotCharger
+	HarborpulseOutageQuay  = harborOutageQuay
+	// HarborpulseFloatStartM is the pump's own float switch: a well that reaches it was started
+	// by the float, not by the platform.
+	HarborpulseFloatStartM = harborFloatStart
+	// HarborpulseOutageFrom and HarborpulseOutageTo are the East Quay feeder outage, sim hours.
+	HarborpulseOutageFrom = harborOutageFrom
+	HarborpulseOutageTo   = harborOutageTo
+	// HarborpulseAirLockFrom and HarborpulseAirLockTo are the air lock's window, sim hours.
+	HarborpulseAirLockFrom = harborAirLockFrom
+	HarborpulseAirLockTo   = harborAirLockTo
+	// HarborpulseOverheatTo is when the Basin charger's long session ends, sim hours: a
+	// connector-hot alarm that clears before it was cooled by the derate, not by the session ending.
+	HarborpulseOverheatTo = harborOverheatTo
+)
+
+// HarborpulseQuayFloodingDefinition is the quay-flooding correlation's rule definition with its
+// distinct-gauge count set to count. The manifest's rule is count HarborpulseQuayFloodingN; a
+// verifier previews a count above the gauges a quay has as the control that must not fire.
+func HarborpulseQuayFloodingDefinition(count int) string {
+	return CorrelationSignalRule{
+		Token: HarborpulseQuayFloodingRule, Name: "Harborpulse quay flooding", AnchorType: "area",
+		Metric: HarborpulseWaterLevelKey, Op: OpGt, Threshold: HarborpulseQuayFloodingM,
+		Count: count, Window: HarborpulseQuayFloodWindow, Enabled: true,
+	}.DefinitionJSON()
 }

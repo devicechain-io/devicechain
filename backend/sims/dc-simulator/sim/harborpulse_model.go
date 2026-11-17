@@ -21,18 +21,25 @@ const (
 	harborpulseStartHour = 6.0
 )
 
-// harborHour is the sim hour of day, in [0, 24), at elapsed wall time since the first tick.
-func harborHour(elapsed time.Duration) float64 {
-	h := math.Mod(harborpulseStartHour+24*elapsed.Seconds()/harborpulseDayLength.Seconds(), 24)
+// harborHour is the sim hour of day, in [0, 24), at elapsed wall time since the first tick, for a
+// day of the default length.
+func harborHour(elapsed time.Duration) float64 { return harborHourOf(elapsed, harborpulseDayLength) }
+
+// harborDay is how many midnights have passed since the first tick, for a day of the default length.
+func harborDay(elapsed time.Duration) int { return harborDayOf(elapsed, harborpulseDayLength) }
+
+// harborHourOf is the sim hour of day at elapsed for a day of dayLength.
+func harborHourOf(elapsed, dayLength time.Duration) float64 {
+	h := math.Mod(harborpulseStartHour+24*elapsed.Seconds()/dayLength.Seconds(), 24)
 	if h < 0 {
 		h += 24
 	}
 	return h
 }
 
-// harborDay is how many midnights have passed since the first tick.
-func harborDay(elapsed time.Duration) int {
-	return int(math.Floor((harborpulseStartHour + 24*elapsed.Seconds()/harborpulseDayLength.Seconds()) / 24))
+// harborDayOf is how many midnights have passed at elapsed for a day of dayLength.
+func harborDayOf(elapsed, dayLength time.Duration) int {
+	return int(math.Floor((harborpulseStartHour + 24*elapsed.Seconds()/dayLength.Seconds()) / 24))
 }
 
 type harborKind int
@@ -61,6 +68,8 @@ const (
 	harborFlickerLamp    = "hp-light-east-3"
 	harborHotCharger     = "hp-charger-basin-2"
 	harborAirLockPump    = "hp-pump-east"
+	harborBasinPump      = "hp-pump-basin"
+	harborSilencedLamp   = "hp-light-north-1"
 	harborLoftsMeter     = "hp-meter-quayside-lofts"
 	harborFerryMeter     = "hp-meter-ferry-terminal"
 	harborResponseTruck  = "hp-truck-1"
@@ -167,14 +176,25 @@ func harborSurge(h float64) float64 { return 1.0 * window(17, 18.5, 20.5, 22.5, 
 // harborRain is the storm's inflow into a wet well, metres per wall second.
 func harborRain(h float64) float64 { return 0.025 * window(16, 17, 20, 21, h) }
 
+// The East Quay feeder outage and the Basin charger's long session, sim hours.
+const (
+	harborOutageFrom = 19.75
+	harborOutageTo   = 21.25
+	harborOverheatTo = 15.5
+)
+
 func harborOutage(quay string, h float64) bool {
-	return quay == harborOutageQuay && h >= 19.75 && h < 21.25
+	return quay == harborOutageQuay && h >= harborOutageFrom && h < harborOutageTo
 }
-func harborAirLocked(token string, h float64) bool {
-	return token == harborAirLockPump && h >= 19 && h < 20.5
-}
+
+// The air lock's window, sim hours.
+const (
+	harborAirLockFrom = 19.0
+	harborAirLockTo   = 20.5
+)
+
 func harborOverheating(token string, h float64) bool {
-	return token == harborHotCharger && h >= 14 && h < 15.5
+	return token == harborHotCharger && h >= 14 && h < harborOverheatTo
 }
 
 // harborNoise is a deterministic jitter in [-amp, amp] for (seed, device, sample).
@@ -270,6 +290,8 @@ const (
 	harborMaxGap = time.Minute
 	// harborBufferCap bounds a charger's store-and-forward buffer, as a device's memory would.
 	harborBufferCap = 512
+	// harborDropNth is how often the drop-backfill defect loses a buffered reading.
+	harborDropNth = 5
 )
 
 type harborPumpState struct {
@@ -290,24 +312,40 @@ type harborBackfill struct {
 }
 
 type harborModel struct {
-	mu      sync.Mutex
-	seed    int64
-	devices map[string]harborDevice
-	elapsed time.Duration
-	day     int
-	pumps   map[string]*harborPumpState
-	cap     map[string]float64
-	dim     map[string]float64
-	kwh     map[string]float64
+	mu        sync.Mutex
+	seed      int64
+	dayLength time.Duration
+	defects   harborDefects
+	devices   map[string]harborDevice
+	elapsed   time.Duration
+	day       int
+	pumps     map[string]*harborPumpState
+	cap       map[string]float64
+	dim       map[string]float64
+	kwh       map[string]float64
 	// lastMeter is when each meter last read, for its energy integral.
 	lastMeter map[string]time.Duration
 	buffers   map[string][]harborBuffered
+	// ledger is what each charger BUFFERED in each outage, keyed by device and sim day: the
+	// expectation a verifier holds the platform's stored readings against. It counts what the
+	// device took, not what it delivered, so a delivery that loses readings shows as a shortfall.
+	ledger map[harborLedgerKey]*ScenarioBackfill
+}
+
+type harborLedgerKey struct {
+	token string
+	day   int
 }
 
 func newHarborModel(seed int64) *harborModel {
+	return newHarborModelWith(seed, harborpulseDayLength, harborDefects{})
+}
+
+func newHarborModelWith(seed int64, dayLength time.Duration, defects harborDefects) *harborModel {
 	m := &harborModel{
-		seed: seed, devices: map[string]harborDevice{}, pumps: map[string]*harborPumpState{},
-		cap: map[string]float64{}, dim: map[string]float64{}, kwh: map[string]float64{}, lastMeter: map[string]time.Duration{}, buffers: map[string][]harborBuffered{},
+		seed: seed, dayLength: dayLength, defects: defects, devices: map[string]harborDevice{}, pumps: map[string]*harborPumpState{},
+		cap: map[string]float64{}, dim: map[string]float64{}, kwh: map[string]float64{}, lastMeter: map[string]time.Duration{},
+		buffers: map[string][]harborBuffered{}, ledger: map[harborLedgerKey]*ScenarioBackfill{},
 	}
 	for _, d := range harborLayout() {
 		m.devices[d.token] = d
@@ -339,7 +377,7 @@ func (m *harborModel) advanceTo(elapsed time.Duration) {
 			step = elapsed - m.elapsed
 		}
 		m.elapsed += step
-		if day := harborDay(m.elapsed); day != m.day {
+		if day := harborDayOf(m.elapsed, m.dayLength); day != m.day {
 			// Midnight: the operator's overnight reset. Derates and dimming expire, so the next
 			// day's beats can happen again.
 			m.day = day
@@ -350,9 +388,9 @@ func (m *harborModel) advanceTo(elapsed time.Duration) {
 				m.dim[t] = 100
 			}
 		}
-		h := harborHour(m.elapsed)
+		h := harborHourOf(m.elapsed, m.dayLength)
 		for token, p := range m.pumps {
-			locked := harborAirLocked(token, h)
+			locked := m.airLocked(token, h)
 			if locked || (!p.running && p.well >= harborFloatStart) {
 				if !p.running {
 					p.duty = 100
@@ -380,7 +418,7 @@ func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time)
 	if !ok {
 		return nil
 	}
-	h := harborHour(elapsed)
+	h := harborHourOf(elapsed, m.dayLength)
 	sample := int64(elapsed / time.Second)
 	switch d.kind {
 	case harborGauge:
@@ -392,7 +430,7 @@ func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time)
 		p := m.pumps[token]
 		current, flow := 0.0, 0.0
 		if p.running {
-			if harborAirLocked(token, h) {
+			if m.airLocked(token, h) {
 				current = 0.8 + harborNoise(m.seed, token, sample, 0.1)
 			} else {
 				current = 17.5*p.duty/100 + harborNoise(m.seed, token, sample, 0.3)
@@ -406,7 +444,7 @@ func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time)
 			HarborpulseFlowKey:        round3(flow),
 		}
 	case harborLight:
-		if harborOutage(d.quay, h) {
+		if harborOutage(d.quay, h) || (m.defects.silenceNorthLamp && token == harborSilencedLamp && harborOutage(harborOutageQuay, h)) {
 			return nil
 		}
 		on := harborLampOn(h)
@@ -429,6 +467,7 @@ func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time)
 			HarborpulseMaxKwKey:        m.cap[token],
 		}
 		if harborOutage(d.quay, h) {
+			m.recordBuffered(token, harborDayOf(elapsed, m.dayLength), at)
 			buf := append(m.buffers[token], harborBuffered{at: at, values: values})
 			if len(buf) > harborBufferCap {
 				buf = buf[len(buf)-harborBufferCap:]
@@ -441,7 +480,7 @@ func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time)
 		kw := harborMeterKw(token, h) + harborNoise(m.seed, token, sample, 1.5)
 		// Energy is power over SIM time since the meter's previous reading.
 		if last, seen := m.lastMeter[token]; seen && elapsed > last {
-			m.kwh[token] += kw * 24 * (elapsed - last).Seconds() / harborpulseDayLength.Seconds()
+			m.kwh[token] += kw * 24 * (elapsed - last).Seconds() / m.dayLength.Seconds()
 		}
 		m.lastMeter[token] = elapsed
 		return map[string]float64{HarborpulseMeterKwKey: round3(kw), HarborpulseMeterKwhKey: round3(m.kwh[token])}
@@ -457,18 +496,21 @@ func (m *harborModel) fix(token string, elapsed time.Duration) (Fix, bool) {
 	if d, ok := m.devices[token]; !ok || d.kind != harborTruck {
 		return Fix{}, false
 	}
-	return harborTruckFix(harborHour(elapsed)), true
+	return harborTruckFix(harborHourOf(elapsed, m.dayLength)), true
 }
 
 // takeBackfill hands over every buffer whose feeder is back, oldest reading first.
 func (m *harborModel) takeBackfill(elapsed time.Duration) []harborBackfill {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	h := harborHour(elapsed)
+	h := harborHourOf(elapsed, m.dayLength)
 	var out []harborBackfill
 	for token, buf := range m.buffers {
 		if len(buf) == 0 || harborOutage(m.devices[token].quay, h) {
 			continue
+		}
+		if m.defects.dropBackfill {
+			buf = harborDropEveryNth(buf, harborDropNth)
 		}
 		out = append(out, harborBackfill{token: token, readings: buf})
 		delete(m.buffers, token)
@@ -509,12 +551,15 @@ func (m *harborModel) command(token, key string, payload json.RawMessage) bool {
 		return true
 	case d.kind == harborPump && key == HarborpulseStopPumpKey:
 		// A latched contactor does not open on command; the device says so.
-		if harborAirLocked(token, harborHour(m.elapsed)) {
+		if m.airLocked(token, harborHourOf(m.elapsed, m.dayLength)) {
 			return false
 		}
 		m.pumps[token].running = false
 		return true
 	case d.kind == harborCharger && key == HarborpulseDerateKey:
+		if m.defects.refuseDerate {
+			return false
+		}
 		kw, ok := harborParam(payload, HarborpulseMaxKwParam, 3.7, harborChargerMaxKw)
 		if !ok {
 			return false
@@ -530,6 +575,58 @@ func (m *harborModel) command(token, key string, payload json.RawMessage) bool {
 		return true
 	}
 	return false
+}
+
+// airLocked reports whether the pump is air-locked at sim hour h: the East Quay pump, or the Basin
+// pump when that defect is planted.
+func (m *harborModel) airLocked(token string, h float64) bool {
+	pump := harborAirLockPump
+	if m.defects.airLockBasin {
+		pump = harborBasinPump
+	}
+	return token == pump && h >= harborAirLockFrom && h < harborAirLockTo
+}
+
+// recordBuffered files one buffered reading in the outage ledger. Caller holds m.mu.
+func (m *harborModel) recordBuffered(token string, day int, at time.Time) {
+	k := harborLedgerKey{token: token, day: day}
+	e := m.ledger[k]
+	stamp := at.UTC().Format(time.RFC3339Nano)
+	if e == nil {
+		e = &ScenarioBackfill{Device: token, Day: day, First: stamp}
+		m.ledger[k] = e
+	}
+	e.Buffered++
+	e.Last = stamp
+}
+
+// backfillLedger is every outage's buffered readings so far, by device then day.
+func (m *harborModel) backfillLedger() []ScenarioBackfill {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]ScenarioBackfill, 0, len(m.ledger))
+	for _, e := range m.ledger {
+		out = append(out, *e)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Device != out[j].Device {
+			return out[i].Device < out[j].Device
+		}
+		return out[i].Day < out[j].Day
+	})
+	return out
+}
+
+// harborDropEveryNth is the drop-backfill defect: it loses every nth buffered reading on the way
+// out, as a device with a broken store-and-forward queue would.
+func harborDropEveryNth(buf []harborBuffered, n int) []harborBuffered {
+	out := make([]harborBuffered, 0, len(buf))
+	for i, r := range buf {
+		if (i+1)%n != 0 {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func boolNum(b bool) float64 {
