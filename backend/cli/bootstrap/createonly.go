@@ -14,6 +14,15 @@ import (
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 )
 
+// ErrRebuildRefused identifies a refusal raised by stepRefuseRebuild over a live
+// instance — the rebuild itself, or the observe-mode document it cannot carry. Both
+// come before bootstrap writes anything to the cluster, so the command can restore
+// the local record this run replaced.
+type ErrRebuildRefused struct{ Err error }
+
+func (e *ErrRebuildRefused) Error() string { return e.Err.Error() }
+func (e *ErrRebuildRefused) Unwrap() error { return e.Err }
+
 // stepRefuseRebuild stops a bootstrap aimed at an instance that already exists.
 //
 // 🔴 BOOTSTRAP CREATES. It mints every credential an instance has, because none of
@@ -137,9 +146,9 @@ func bootstrapObserveRefusal(st *State, deployed *config.InstanceConfiguration) 
 	// bootstrap has no --reset-values flag.
 	if deployed != nil && deployed.Infrastructure.TokenAudience.Enforcement == "observe" &&
 		st.ValuesOverlay == nil {
-		return fmt.Errorf("the deployed instance configuration document for instance %q sets "+
+		return &ErrRebuildRefused{Err: fmt.Errorf("the deployed instance configuration document for instance %q sets "+
 			"infrastructure.tokenAudience.enforcement to observe, which v1.4 refuses. Re-run with "+
-			"`--values <file without the key>`. Nothing has been changed", st.Instance)
+			"`--values <file without the key>`. Nothing has been changed", st.Instance)}
 	}
 	return nil
 }
@@ -199,7 +208,7 @@ func rebuildRefusalReason(st *State, deployed *config.InstanceConfiguration, dec
 		return nil
 	}
 
-	return fmt.Errorf(
+	return &ErrRebuildRefused{Err: fmt.Errorf(
 		"instance %q is already running in this cluster, and `dcctl bootstrap` builds an "+
 			"instance rather than changing one. It mints every credential an instance has — the "+
 			"database passwords, the broker's authority and logins, the secret-store root key — "+
@@ -207,5 +216,5 @@ func rebuildRefusalReason(st *State, deployed *config.InstanceConfiguration, dec
 			"  To move it onto a new version:  dcctl upgrade %s %s --version <tag>\n"+
 			"  To rebuild it from nothing:     dcctl destroy %s %s, then bootstrap again\n\n"+
 			"The second takes its data with it",
-		st.Instance, st.Provider, st.Instance, st.Provider, st.Instance)
+		st.Instance, st.Provider, st.Instance, st.Provider, st.Instance)}
 }

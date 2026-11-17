@@ -775,7 +775,7 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 - No configuration change is needed.
 
 
-- **The MCP server's limit of 64 requests in flight per process is reachable, and the request past it receives HTTP 429.** The shared request-body budget held only 63 maximum-size bodies, so the 64th concurrent request received HTTP 503 with `Retry-After: 1` before the MCP limit was reached. The budget now holds 64 (it grows by 64 bytes), and requests beyond the limit receive HTTP 429 with `Retry-After: 1`, as documented. The limit of 4 in flight per caller and the 1 MiB request-body ceiling are unchanged.
+- **A refused `dcctl bootstrap` leaves the local instance record as it found it.** When bootstrap refuses to run over an instance that is already running, `~/.devicechain/instances/<instance>/instance.json` is restored byte for byte, including its `createdAt`. Before, the refused run rewrote it with its own creation time and dcctl version.
 
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
 
