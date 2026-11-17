@@ -5,12 +5,14 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-device-state/config"
 	"github.com/devicechain-io/dc-device-state/graphql"
 	"github.com/devicechain-io/dc-device-state/model"
 	"github.com/devicechain-io/dc-device-state/processor"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -19,7 +21,9 @@ import (
 	"github.com/devicechain-io/dc-microservice/shardgroups"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -46,6 +50,8 @@ var (
 	// then says nothing still leaves its old owner's view.
 	OwnershipReader    messaging.MessageReader
 	OwnershipProcessor *processor.OwnershipProcessor
+	DeletionProcessor  *processor.DeletionProcessor
+	OrphanTask         *core.PeriodicTask
 
 	// StateMetrics is built ONCE, in the initialize phase, and shared by every
 	// StateProcessor the NATS manager's oncreate callback builds. See buildMetrics.
@@ -182,7 +188,25 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	OwnershipReader = owners
 	OwnershipProcessor = newOwnershipProcessor(OwnershipReader)
-	return OwnershipProcessor.Initialize(context.Background())
+	if err := OwnershipProcessor.Initialize(context.Background()); err != nil {
+		return err
+	}
+	// The entity-deleted facts: ONE consumer for the whole service, however many
+	// resolved-events groups there are. The facts are not sharded — shard placement
+	// covers only inbound-events and resolved-events, and the instance config refuses any
+	// other suffix — so there is one stream to read, not one per group. And a group owns a
+	// device's EVENTS, not its STATE: every StateProcessor writes through the one Api into
+	// the one store and keeps no per-device state of its own, so purging a device through
+	// that Api purges it whichever group projected it. deletion_wiring_test.go pins both:
+	// a device projected by group 1 is purged, and the config premise is checked so that
+	// sharding these facts one day fails a test instead of reading only group 0's subject.
+	deletions, err := nmgr.NewReader(streams.EntityDeleted)
+	if err != nil {
+		return err
+	}
+	DeletionProcessor = processor.NewDeletionProcessor(Microservice, deletions, Api, core.NewNoOpLifecycleCallbacks())
+	DeletionProcessor.Hold = storehold.New(Microservice, "device-deletion", storehold.RDBProbe(RdbManager))
+	return DeletionProcessor.Initialize(context.Background())
 }
 
 // newOwnershipProcessor assembles the ownership consumer from this service's globals, with the
@@ -252,7 +276,34 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	}
 	// Published for the rest of the service, which names these managers directly.
 	NatsManager, GraphQLManager = Svc.Nats, Svc.GraphQL
+	if err := initializeOrphanSweep(ctx); err != nil {
+		return err
+	}
 	return nil
+}
+
+// initializeOrphanSweep builds process-owned metrics once, independently of NATS reconnects.
+func initializeOrphanSweep(ctx context.Context) error {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	OrphanTask = nil
+	if infra.ServiceAuth.Secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 ||
+		infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("Orphan sweep disabled: service secret or endpoints are not configured; degraded mode relies on deletion facts alone")
+		return nil
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-state",
+		[]string{string(auth.DeviceRead), string(auth.TenantRead)})
+	source := &processor.DeviceLookup{Client: client,
+		DMURL:     fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port),
+		UMURL:     fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port),
+		ListScope: Microservice.InstanceId}
+	sweep := &processor.OrphanSweep{Api: Api, Source: source,
+		Deleted: Microservice.NewCounter("orphan_sweep_deleted_total", "Device state rows removed by the orphan sweep."),
+		Stamped: Microservice.NewCounter("orphan_sweep_stamped_total", "Device state rows stamped with their incarnation by the orphan sweep.")}
+	OrphanTask = core.NewPeriodicTask(Microservice.FunctionalArea, "orphan-sweep", processor.OrphanSweepInterval,
+		sweep.Run, core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(),
+		core.WithPassMetrics(Microservice.NewPeriodicTaskMetrics("orphan_sweep")))
+	return OrphanTask.Initialize(ctx)
 }
 
 // Called after microservice has been started.
@@ -268,11 +319,30 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := StateProcessors.Start(ctx); err != nil {
 		return err
 	}
-	return OwnershipProcessor.Start(ctx)
+	if err := OwnershipProcessor.Start(ctx); err != nil {
+		return err
+	}
+	if err := DeletionProcessor.Start(ctx); err != nil {
+		return err
+	}
+	if OrphanTask != nil {
+		return OrphanTask.Start(ctx)
+	}
+	return nil
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	if OrphanTask != nil {
+		if err := OrphanTask.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	if DeletionProcessor != nil {
+		if err := DeletionProcessor.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	// Stop all consumers before the managers: each reads from the broker and writes to the
 	// database.
 	if err := StateProcessors.Stop(ctx); err != nil {
@@ -307,6 +377,16 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if OrphanTask != nil {
+		if err := OrphanTask.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if DeletionProcessor != nil {
+		if err := DeletionProcessor.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	// Terminate all consumers.
 	if err := StateProcessors.Terminate(ctx); err != nil {
 		return err
