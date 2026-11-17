@@ -104,10 +104,11 @@ type Alarm struct {
 	// PositionDerived is true once a rule that tests geofence containment has contributed to the
 	// alarm (RaiseAlarmRequest.RequiresPosition). Such an alarm says when its device entered or
 	// left a fence, so a caller without location:read never reads it (position_withholding.go),
-	// exactly as it never receives the rule's live detections. It is sticky: once set it is never
-	// cleared, because the alarm's history already carries the position. NULL is an alarm no such
-	// rule has touched, or one raised by a release older than the column that the upgrade's
-	// backfill did not recognise. Only the integrator writes it.
+	// exactly as it never receives the rule's live detections. true is sticky: once set it is never
+	// cleared, because the alarm's history already carries the position. false is "no such rule
+	// has contributed". NULL is "not classified yet": an alarm written by a replica older than the
+	// column, or folded from an edge whose producer predates the flag. NULL is withheld like true
+	// and classified by position_classify.go. Only the integrator and the classifier write it.
 	PositionDerived *bool
 }
 

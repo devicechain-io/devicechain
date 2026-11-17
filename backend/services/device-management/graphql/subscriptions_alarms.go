@@ -117,19 +117,21 @@ func (f alarmEventFilter) matches(ev *model.AlarmStateChangeEvent) bool {
 const maxWithheldAlarms = 1024
 
 // positionGate decides, for a subscriber without location:read, whether an alarm's events may
-// be pushed. The event does not say whether its alarm is position-derived, so the gate reads
-// the alarm's flag. It fails closed: an alarm that cannot be read, or no longer exists, is
-// withheld.
+// be pushed. The event does not say whether its alarm is position-derived, so the gate reads the
+// alarm's classification. Only an alarm classified NOT position-derived is delivered; a
+// position-derived one, one not classified yet, one that cannot be read and one that no longer
+// exists are withheld (fail closed).
 //
-// Only a WITHHELD verdict is remembered. The flag is sticky (once set it is never cleared), so
-// that verdict never goes stale; a visible alarm can still become position-derived when a
-// geofence rule first contributes to it, so it is asked again on its next event. A failed read
-// is not remembered either, so a store error does not silence an alarm for the rest of the
-// subscription. The memory is bounded (FIFO); an evicted alarm is simply read again.
+// Only a position-derived verdict is remembered. That verdict is sticky (never cleared), so it
+// never goes stale; every other answer can change (a visible alarm can become position-derived
+// when a geofence rule first contributes to it, an unclassified one is classified within a
+// minute), so it is asked again on the alarm's next event. A failed read is not remembered either,
+// so a store error does not silence an alarm for the rest of the subscription. The memory is
+// bounded (FIFO); an evicted alarm is simply read again.
 //
 // One gate per subscription, used from that subscription's goroutine only.
 type positionGate struct {
-	derived  func(token string) (derived, found bool, err error)
+	derived  func(token string) (derived *bool, found bool, err error)
 	withheld map[string]struct{}
 	order    []string
 	next     int
@@ -137,11 +139,11 @@ type positionGate struct {
 
 // positionGateFor returns the gate for a subscriber, or nil for one holding location:read, which
 // receives every event its other predicates pass. derived is Api.AlarmPositionDerived.
-func positionGateFor(ctx context.Context, derived func(context.Context, string) (bool, bool, error)) *positionGate {
+func positionGateFor(ctx context.Context, derived func(context.Context, string) (*bool, bool, error)) *positionGate {
 	if model.CallerHoldsLocationRead(ctx) {
 		return nil
 	}
-	return &positionGate{derived: func(token string) (bool, bool, error) { return derived(ctx, token) }}
+	return &positionGate{derived: func(token string) (*bool, bool, error) { return derived(ctx, token) }}
 }
 
 func (g *positionGate) allows(token string) bool {
@@ -153,10 +155,10 @@ func (g *positionGate) allows(token string) bool {
 		log.Debug().Err(err).Str("alarm", token).Msg("alarm subscription: alarm unreadable; withholding event")
 		return false
 	}
-	if !found {
+	if !found || derived == nil {
 		return false
 	}
-	if !derived {
+	if !*derived {
 		return true
 	}
 	g.remember(token)

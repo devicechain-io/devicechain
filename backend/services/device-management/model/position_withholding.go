@@ -97,9 +97,10 @@ func withholdPositionDerived(db *gorm.DB) {
 		return
 	}
 	if typ == alarmModelType {
-		// NULL is "not position-derived" (see Alarm.PositionDerived).
+		// Only an alarm classified NOT position-derived is read. NULL is "not classified yet"
+		// (position_classify.go) and is withheld like true: fail closed.
 		db.Statement.AddClause(clause.Where{Exprs: []clause.Expression{clause.Expr{
-			SQL:  "? IS NOT TRUE",
+			SQL:  "? IS FALSE",
 			Vars: []any{clause.Column{Table: clause.CurrentTable, Name: "position_derived"}},
 		}}})
 		return
@@ -107,25 +108,25 @@ func withholdPositionDerived(db *gorm.DB) {
 	// A label's row names its alarm's id; leave out the labels of a withheld alarm. The alarms
 	// table is named through the NamingStrategy, which carries the area's schema prefix.
 	db.Statement.AddClause(clause.Where{Exprs: []clause.Expression{clause.Expr{
-		SQL: "NOT EXISTS (SELECT 1 FROM ? AS withheld WHERE withheld.id = ? AND withheld.position_derived IS TRUE)",
+		SQL: "NOT EXISTS (SELECT 1 FROM ? AS withheld WHERE withheld.id = ? AND withheld.position_derived IS NOT FALSE)",
 		Vars: []any{clause.Table{Name: db.NamingStrategy.TableName("Alarm")},
 			clause.Column{Table: clause.CurrentTable, Name: "alarm_id"}},
 	}}})
 }
 
-// AlarmPositionDerived reports whether the alarm named by token is position-derived, and whether
-// it exists at all. It is the live alarm stream's question about an event it is about to push to
-// a caller without location:read, so it is asked WITHOUT the caller's claims: the stream wants
-// the alarm's flag, not the caller's view of it (which would also fold in the caller's scope,
-// already judged on the event's own stamp).
-func (api *Api) AlarmPositionDerived(ctx context.Context, token string) (derived, found bool, err error) {
+// AlarmPositionDerived returns the alarm's position classification (nil while it is not classified
+// yet; see position_classify.go), and whether the alarm exists at all. It is the live alarm
+// stream's question about an event it is about to push to a caller without location:read, so it
+// is asked WITHOUT the caller's claims: the stream wants the alarm's flag, not the caller's view of
+// it (which would also fold in the caller's scope, already judged on the event's own stamp).
+func (api *Api) AlarmPositionDerived(ctx context.Context, token string) (derived *bool, found bool, err error) {
 	var rows []Alarm
 	if err := api.RDB.DB(auth.WithClaims(ctx, nil)).Select("position_derived").
 		Where("token = ?", token).Limit(1).Find(&rows).Error; err != nil {
-		return false, false, err
+		return nil, false, err
 	}
 	if len(rows) == 0 {
-		return false, false, nil
+		return nil, false, nil
 	}
-	return rows[0].PositionDerived != nil && *rows[0].PositionDerived, true, nil
+	return rows[0].PositionDerived, true, nil
 }

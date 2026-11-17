@@ -390,7 +390,7 @@ func (api *MockApi) ClearAlarm(ctx context.Context, token string) (*model.Alarm,
 	return args.Get(0).(*model.Alarm), args.Error(1)
 }
 
-func (api *MockApi) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time, requiresPosition bool) error {
+func (api *MockApi) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time, requiresPosition *bool) error {
 	args := api.Mock.Called()
 	return args.Error(0)
 }

@@ -55,6 +55,7 @@ func NewAlarmClient(writer messaging.MessageWriter) react.AlarmSink {
 // scalar) stamps its real value, while a silence-driven fire and every resolved edge carry nil —
 // device-management then leaves the alarm's last value NULL rather than writing a fabricated 0.
 func (c *alarmClient) Dispatch(ctx context.Context, req react.AlarmRequest) error {
+	requiresPosition := req.RequiresPosition
 	payload, err := dmmodel.MarshalRaiseAlarmRequest(&dmmodel.RaiseAlarmRequest{
 		DeviceToken:  req.DeviceToken,
 		AlarmKey:     req.AlarmKey,
@@ -65,7 +66,9 @@ func (c *alarmClient) Dispatch(ctx context.Context, req react.AlarmRequest) erro
 		Value:        req.Value,
 		OccurredTime: req.OccurredTime,
 
-		RequiresPosition: req.RequiresPosition,
+		// Always sent, true or false: device-management reads an ABSENT flag as an older
+		// producer's and classifies the alarm itself.
+		RequiresPosition: &requiresPosition,
 	})
 	if err != nil {
 		return fmt.Errorf("react: marshal alarm request for device %q: %w", req.DeviceToken, err)

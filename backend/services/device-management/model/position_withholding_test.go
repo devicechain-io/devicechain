@@ -8,6 +8,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/devicechain-io/dc-device-management/schema"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"gorm.io/gorm"
@@ -42,7 +43,7 @@ func caller(authorities ...auth.Authority) context.Context {
 }
 
 // raiseWithPosition drives the integrator as the raise-alarm consumer does: the tenant and no caller.
-func raiseWithPosition(t *testing.T, api *Api, key, rule string, sec int, requiresPosition bool) {
+func raiseWithPosition(t *testing.T, api *Api, key, rule string, sec int, requiresPosition *bool) {
 	t.Helper()
 	v := 1.0
 	ctx := core.WithTenant(context.Background(), "t1")
@@ -66,8 +67,8 @@ func alarmKeys(alarms []Alarm) map[string]bool {
 // caller), read both.
 func TestGeofenceAlarmsWithheldWithoutLocationRead(t *testing.T) {
 	api := newWithholdingTestApi(t)
-	raiseWithPosition(t, api, "left-yard", "p/fence", 10, true)
-	raiseWithPosition(t, api, "over-temp", "p/temp", 10, false)
+	raiseWithPosition(t, api, "left-yard", "p/fence", 10, verdict(true))
+	raiseWithPosition(t, api, "over-temp", "p/temp", 10, verdict(false))
 
 	locator := caller(auth.AlarmRead, auth.AlarmWrite, auth.LocationRead)
 	fence := loadAlarm(t, api, locator, "left-yard")
@@ -75,7 +76,7 @@ func TestGeofenceAlarmsWithheldWithoutLocationRead(t *testing.T) {
 	if fence == nil || temp == nil {
 		t.Fatalf("a caller with location:read must read both alarms: fence=%v temp=%v", fence, temp)
 	}
-	if fence.PositionDerived == nil || !*fence.PositionDerived || temp.PositionDerived != nil {
+	if fence.PositionDerived == nil || !*fence.PositionDerived || temp.PositionDerived == nil || *temp.PositionDerived {
 		t.Fatalf("the integrator must mark only the geofence alarm: fence=%v temp=%v", fence.PositionDerived, temp.PositionDerived)
 	}
 	for _, token := range []string{fence.Token, temp.Token} {
@@ -156,14 +157,14 @@ func TestGeofenceAlarmsWithheldWithoutLocationRead(t *testing.T) {
 // history now carries the fence crossing.
 func TestPositionDerivedIsSticky(t *testing.T) {
 	api := newWithholdingTestApi(t)
-	raiseWithPosition(t, api, "k", "p/temp", 10, false)
+	raiseWithPosition(t, api, "k", "p/temp", 10, verdict(false))
 	viewer := caller(auth.AlarmRead)
 	if a := loadAlarm(t, api, viewer, "k"); a == nil {
 		t.Fatalf("a threshold alarm must be readable without location:read")
 	}
-	raiseWithPosition(t, api, "k", "p/fence", 11, true)
+	raiseWithPosition(t, api, "k", "p/fence", 11, verdict(true))
 	ctx := core.WithTenant(context.Background(), "t1")
-	if err := api.ApplyAlarmContributorEdge(ctx, dev, "k", "temperature", "p/fence", AlarmEdgeResolved, "", nil, tsec(12), true); err != nil {
+	if err := api.ApplyAlarmContributorEdge(ctx, dev, "k", "temperature", "p/fence", AlarmEdgeResolved, "", nil, tsec(12), verdict(true)); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	if a := loadAlarm(t, api, viewer, "k"); a != nil {
@@ -171,7 +172,57 @@ func TestPositionDerivedIsSticky(t *testing.T) {
 	}
 	a := loadAlarm(t, api, ctx, "k")
 	derived, found, err := api.AlarmPositionDerived(viewer, a.Token)
-	if err != nil || !found || !derived {
+	if err != nil || !found || derived == nil || !*derived {
 		t.Fatalf("AlarmPositionDerived must read the flag regardless of the caller: derived=%v found=%v err=%v", derived, found, err)
+	}
+}
+
+func verdict(b bool) *bool { return &b }
+
+// TestUnclassifiedAlarmsAreWithheld: an alarm whose position dependency is not known yet (NULL:
+// written by a replica older than the column, or folded from an edge whose producer predates the
+// flag) is withheld from a caller without location:read until it is classified, as a
+// position-derived one is: fail closed. The classifier is Postgres SQL, so on this database it
+// fails and the alarm stays unclassified, which is exactly the state under test.
+func TestUnclassifiedAlarmsAreWithheld(t *testing.T) {
+	api := newWithholdingTestApi(t)
+	raiseWithPosition(t, api, "old-producer", "p/unknown", 10, nil)
+	raiseWithPosition(t, api, "over-temp", "p/temp", 10, verdict(false))
+	tenantCtx := core.WithTenant(context.Background(), "t1")
+	if a := loadAlarm(t, api, tenantCtx, "old-producer"); a == nil || a.PositionDerived != nil {
+		t.Fatalf("an edge with no verdict must leave a new alarm unclassified: %+v", a)
+	}
+	viewer := caller(auth.AlarmRead)
+	if a := loadAlarm(t, api, viewer, "old-producer"); a != nil {
+		t.Fatalf("an unclassified alarm must be withheld from a caller without location:read")
+	}
+	if a := loadAlarm(t, api, viewer, "over-temp"); a == nil {
+		t.Fatalf("an alarm classified not position-derived must be readable")
+	}
+	if a := loadAlarm(t, api, caller(auth.AlarmRead, auth.LocationRead), "old-producer"); a == nil {
+		t.Fatalf("a caller with location:read reads an unclassified alarm")
+	}
+
+	// An edge with no verdict on an alarm classified false unclassifies it: the older producer's
+	// rule may test a fence. An alarm already marked stays marked.
+	raiseWithPosition(t, api, "over-temp", "p/other", 11, nil)
+	if a := loadAlarm(t, api, tenantCtx, "over-temp"); a.PositionDerived != nil {
+		t.Fatalf("an unknown contributor must unclassify an alarm classified false, got %v", *a.PositionDerived)
+	}
+	raiseWithPosition(t, api, "fence", "p/fence", 10, verdict(true))
+	raiseWithPosition(t, api, "fence", "p/other", 11, nil)
+	if a := loadAlarm(t, api, tenantCtx, "fence"); a.PositionDerived == nil || !*a.PositionDerived {
+		t.Fatalf("an alarm already position-derived must stay so")
+	}
+}
+
+// TestClassifierMatchesTheMigration: the service's classifier and the migration's literal copy
+// are one statement. Rendered against the area's schema-qualified tables they must agree.
+func TestClassifierMatchesTheMigration(t *testing.T) {
+	got := ClassifyAlarmsSQL(`"device-management"."alarms"`, `"device-management"."device_profiles"`,
+		`"device-management"."detection_rules"`, `"device-management"."device_profile_versions"`, "")
+	if normalizeClassifierSQL(got) != normalizeClassifierSQL(schema.AlarmPositionClassifySQL) {
+		t.Fatalf("the classifier and the migration diverged:\nservice:   %s\nmigration: %s",
+			normalizeClassifierSQL(got), normalizeClassifierSQL(schema.AlarmPositionClassifySQL))
 	}
 }

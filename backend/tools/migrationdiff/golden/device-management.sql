@@ -451,6 +451,7 @@ CREATE INDEX "idx_device-management_semantic_contexts_tenant_id" ON "device-mana
 CREATE INDEX idx_alarm_dispositions_alarm ON "device-management".alarm_dispositions USING btree (alarm_id);
 CREATE INDEX idx_alarm_dispositions_tenant_alarm_token ON "device-management".alarm_dispositions USING btree (tenant_id, alarm_token);
 CREATE INDEX idx_alarm_dispositions_tenant_raised ON "device-management".alarm_dispositions USING btree (tenant_id, raised_time);
+CREATE INDEX idx_alarms_position_unclassified ON "device-management".alarms USING btree (id) WHERE (position_derived IS NULL);
 CREATE INDEX idx_alarms_scope_anchors ON "device-management".alarms USING gin (scope_anchors);
 CREATE INDEX idx_areas_boundary_fence ON "device-management".areas USING btree (tenant_id, boundary_fence_token) WHERE (boundary_fence_token IS NOT NULL);
 CREATE INDEX idx_audit_tenant_time ON "device-management".audit_events USING btree (tenant_id, occurred_time DESC);

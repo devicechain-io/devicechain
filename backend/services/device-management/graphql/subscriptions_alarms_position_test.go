@@ -43,7 +43,7 @@ func positionStreamApi(t *testing.T) *model.Api {
 	derived := true
 	for i, a := range []*model.Alarm{
 		{TokenReference: rdb.TokenReference{Token: "fence-alarm"}, AlarmKey: "left-yard", PositionDerived: &derived},
-		{TokenReference: rdb.TokenReference{Token: "temp-alarm"}, AlarmKey: "over-temp"},
+		{TokenReference: rdb.TokenReference{Token: "temp-alarm"}, AlarmKey: "over-temp", PositionDerived: new(bool)},
 	} {
 		a.OriginatorType, a.OriginatorId = "device", uint(i+1)
 		a.State, a.Severity, a.RaisedTime = string(model.AlarmStateActive), string(model.AlarmSeverityMajor), time.Unix(10, 0)
@@ -100,31 +100,35 @@ func TestAlarmStreamWithholdsGeofenceAlarmsWithoutLocationRead(t *testing.T) {
 // withheld; neither verdict is remembered, so the alarm is asked about again next time; a
 // visible alarm is asked about again too, because a geofence rule may contribute to it later.
 func TestAlarmPositionGateFailsClosed(t *testing.T) {
+	no, yes := false, true
 	answers := map[string]struct {
-		derived, found bool
-		err            error
+		derived *bool
+		found   bool
+		err     error
 	}{
-		"broken": {err: errors.New("store down")},
-		"gone":   {},
-		"plain":  {found: true},
+		"broken":       {err: errors.New("store down")},
+		"gone":         {},
+		"unclassified": {found: true},
+		"plain":        {derived: &no, found: true},
+		"fence":        {derived: &yes, found: true},
 	}
 	asked := map[string]int{}
-	g := &positionGate{derived: func(token string) (bool, bool, error) {
+	g := &positionGate{derived: func(token string) (*bool, bool, error) {
 		asked[token]++
 		a := answers[token]
 		return a.derived, a.found, a.err
 	}}
 	for i := 0; i < 2; i++ {
-		if g.allows("broken") || g.allows("gone") {
-			t.Fatalf("an unreadable or missing alarm must be withheld")
+		if g.allows("broken") || g.allows("gone") || g.allows("unclassified") || g.allows("fence") {
+			t.Fatalf("an unreadable, missing, unclassified or position-derived alarm must be withheld")
 		}
 		if !g.allows("plain") {
-			t.Fatalf("an alarm no geofence rule raised must be delivered")
+			t.Fatalf("an alarm classified not position-derived must be delivered")
 		}
 	}
-	for _, token := range []string{"broken", "gone", "plain"} {
-		if asked[token] != 2 {
-			t.Fatalf("%s: asked %d times, want 2 (only a withheld verdict is remembered)", token, asked[token])
+	for token, want := range map[string]int{"broken": 2, "gone": 2, "unclassified": 2, "plain": 2, "fence": 1} {
+		if asked[token] != want {
+			t.Fatalf("%s: asked %d times, want %d (only a position-derived verdict is remembered)", token, asked[token], want)
 		}
 	}
 }
@@ -132,7 +136,8 @@ func TestAlarmPositionGateFailsClosed(t *testing.T) {
 // TestAlarmPositionGateBound: the gate's memory of withheld alarms is bounded, and an evicted
 // alarm is read again rather than delivered.
 func TestAlarmPositionGateBound(t *testing.T) {
-	g := &positionGate{derived: func(string) (bool, bool, error) { return true, true, nil }}
+	yes := true
+	g := &positionGate{derived: func(string) (*bool, bool, error) { return &yes, true, nil }}
 	for i := 0; i < maxWithheldAlarms+10; i++ {
 		if g.allows(string(rune('a'+i%26)) + time.Duration(i).String()) {
 			t.Fatalf("a position-derived alarm must be withheld")
@@ -157,7 +162,7 @@ func TestAlarmStreamResolverWithholdsGeofenceAlarms(t *testing.T) {
 	derived := true
 	for _, a := range []*model.Alarm{
 		{TokenReference: rdb.TokenReference{Token: "fence-alarm"}, AlarmKey: "left-yard", PositionDerived: &derived},
-		{TokenReference: rdb.TokenReference{Token: "temp-alarm"}, AlarmKey: "over-temp"},
+		{TokenReference: rdb.TokenReference{Token: "temp-alarm"}, AlarmKey: "over-temp", PositionDerived: new(bool)},
 	} {
 		a.OriginatorType, a.OriginatorId, a.ScopeAnchors = "device", acmeID, rdb.Anchors{"customer:acme"}
 		a.State, a.Severity, a.RaisedTime = string(model.AlarmStateActive), string(model.AlarmSeverityMajor), at

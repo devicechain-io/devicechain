@@ -3,7 +3,8 @@
 
 //go:build integration
 
-// The upgrade backfill of alarms.position_derived, on the real engine: it is jsonb and
+// The classification of alarms.position_derived (the upgrade backfill, the periodic pass and an
+// edge with no verdict), on the real engine: it is jsonb and
 // split_part SQL that SQLite cannot run, and migration-diff compares schema only, so it never
 // sees which rows the backfill marks.
 //
@@ -13,6 +14,7 @@ package model
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -20,72 +22,173 @@ import (
 	"github.com/devicechain-io/dc-device-management/schema"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
+	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
-func TestAlarmPositionBackfillMarksGeofenceAlarms(t *testing.T) {
-	mgr := newPostgresRdbManager(t)
-	db := mgr.Database
-	tenant := fmt.Sprintf("bf-%d", time.Now().UnixNano())
-	other := tenant + "-other"
-
+// positionRig seeds tenant with profile "tracker" (draft rules "fence", a geofence rule, and
+// "temp", a threshold rule, plus a published version that alone still holds "old-fence", a
+// geofence rule, and "old-temp", a threshold rule, both deleted from the draft since) and other
+// with a profile of the same token whose "fence" rule tests no fence. The published version is the
+// REAL ProfileSnapshot marshalled, so the classifier is tested against the keys the service
+// actually stores.
+func positionRig(t *testing.T, db *gorm.DB, tenant, other string) {
+	t.Helper()
 	profile := func(tenant string) uint {
 		var id uint
 		require.NoError(t, db.Raw(`INSERT INTO "device-management".device_profiles (tenant_id, token) VALUES (?, 'tracker') RETURNING id`, tenant).Scan(&id).Error)
 		return id
 	}
-	p := profile(tenant)
-	profile(other)
-	for token, def := range map[string]string{
-		"fence": `{"type":"threshold","when":{"cel":"!geo.inFence(\"yard\")"}}`,
-		"temp":  `{"type":"threshold","when":{"metric":"t","op":">","threshold":1}}`,
-	} {
+	rule := func(tenant string, profile uint, token, def string) {
 		require.NoError(t, db.Exec(`INSERT INTO "device-management".detection_rules (tenant_id, token, device_profile_id, definition) VALUES (?, ?, ?, ?::jsonb)`,
-			tenant, token, p, def).Error)
+			tenant, token, profile, def).Error)
 	}
-	// A rule only a published version still holds (deleted from the draft since).
+	p := profile(tenant)
+	rule(tenant, p, "fence", `{"type":"threshold","when":{"cel":"!geo.inFence(\"yard\")"}}`)
+	rule(tenant, p, "temp", `{"type":"threshold","when":{"metric":"t","op":">","threshold":1}}`)
+	snapshot, err := json.Marshal(&ProfileSnapshot{Rules: []*DetectionRule{
+		{TokenReference: rdb.TokenReference{Token: "old-fence"}, Definition: datatypes.JSON(`{"type":"duration","when":{"cel":"geo.inFence(\"gate\")"}}`)},
+		{TokenReference: rdb.TokenReference{Token: "temp"}, Definition: datatypes.JSON(`{"type":"threshold","when":{"metric":"t","op":">","threshold":1}}`)},
+		{TokenReference: rdb.TokenReference{Token: "old-temp"}, Definition: datatypes.JSON(`{"type":"threshold","when":{"metric":"t","op":"<","threshold":0}}`)},
+	}})
+	require.NoError(t, err)
 	require.NoError(t, db.Exec(`INSERT INTO "device-management".device_profile_versions (tenant_id, device_profile_id, version, snapshot) VALUES (?, ?, 1, ?::jsonb)`,
-		tenant, p, `{"Rules":[{"Token":"old-fence","Definition":{"type":"duration","when":{"cel":"geo.inFence(\"gate\")"}}}]}`).Error)
+		tenant, p, string(snapshot)).Error)
+	rule(other, profile(other), "fence", `{"type":"threshold","when":{"metric":"t","op":">","threshold":1}}`)
+}
 
-	alarm := func(tenant, key, contributors string) {
-		var c any
-		if contributors != "" {
-			c = contributors
-		}
-		require.NoError(t, db.Exec(`INSERT INTO "device-management".alarms (tenant_id, token, originator_type, originator_id, alarm_key, metric_key, state, severity, raised_time, contributors)
-			VALUES (?, ?, 'device', 1, ?, '', 'ACTIVE', 'MAJOR', now(), ?::jsonb)`, tenant, tenant+"-"+key, key, c).Error)
+// rawAlarm inserts an alarm as a replica older than the column writes one: position_derived NULL.
+func rawAlarm(t *testing.T, db *gorm.DB, tenant, key, contributors string) {
+	t.Helper()
+	var c any
+	if contributors != "" {
+		c = contributors
 	}
-	alarm(tenant, "fence", `{"tracker/fence":{"tier":"MAJOR","active":true}}`)
-	alarm(tenant, "temp", `{"tracker/temp":{"tier":"MAJOR","active":true}}`)
-	alarm(tenant, "old-fence", `{"tracker/old-fence":{"active":false}}`)
-	alarm(tenant, "mixed", `{"tracker/temp":{"active":true},"tracker/fence":{"active":false}}`)
-	alarm(tenant, "legacy", "")
-	alarm(tenant, "null-json", `null`)
-	// Another tenant's profile of the same token has no geofence rule: its alarm is not marked
-	// by this tenant's rules.
-	alarm(other, "fence", `{"tracker/fence":{"active":true}}`)
+	require.NoError(t, db.Exec(`INSERT INTO "device-management".alarms (tenant_id, token, originator_type, originator_id, alarm_key, metric_key, state, severity, raised_time, contributors)
+		VALUES (?, ?, 'device', 1, ?, '', 'ACTIVE', 'MAJOR', now(), ?::jsonb)`, tenant, tenant+"-"+key, key, c).Error)
+}
 
-	// Twice: the migration is re-runnable, and a replay changes nothing it already marked.
+func positionOf(t *testing.T, db *gorm.DB, tenant, key string) *bool {
+	t.Helper()
+	var v sql.NullBool
+	require.NoError(t, db.Raw(`SELECT position_derived FROM "device-management".alarms WHERE tenant_id = ? AND alarm_key = ?`, tenant, key).Row().Scan(&v))
+	if !v.Valid {
+		return nil
+	}
+	return &v.Bool
+}
+
+// seedPositionCases inserts one unclassified alarm per classification case and returns each
+// key's expected verdict.
+func seedPositionCases(t *testing.T, db *gorm.DB, tenant, other string) map[[2]string]bool {
+	t.Helper()
+	cases := map[[2]string]struct {
+		contributors string
+		want         bool
+	}{
+		{tenant, "fence"}: {`{"tracker/fence":{"tier":"MAJOR","active":true}}`, true},
+		{tenant, "temp"}:  {`{"tracker/temp":{"tier":"MAJOR","active":true}}`, false},
+		// Only the published version still holds the rule: read through the real snapshot keys.
+		{tenant, "old-fence"}: {`{"tracker/old-fence":{"active":false}}`, true},
+		// A threshold rule only the published version holds: found there, so NOT position-derived.
+		// This is the case that proves the snapshot is read at all; a geofence rule found nowhere
+		// is marked anyway (unresolvable), which would hide a wrong key.
+		{tenant, "old-temp"}: {`{"tracker/old-temp":{"active":true}}`, false},
+		{tenant, "mixed"}:    {`{"tracker/temp":{"active":true},"tracker/fence":{"active":false}}`, true},
+		// The profile was deleted, taking its rules and versions with it: unresolvable, so
+		// withheld (fail closed).
+		{tenant, "deleted-profile"}: {`{"retired/fence":{"active":true}}`, true},
+		// The profile exists but no draft rule or published version holds the rule any more.
+		{tenant, "deleted-rule"}: {`{"tracker/gone":{"active":true}}`, true},
+		// Not in the "{profile}/{rule}" form at all.
+		{tenant, "unparseable"}: {`{"no-separator":{"active":true}}`, true},
+		// No contributor set: the retired measurement evaluator, which had no geofence predicate.
+		{tenant, "legacy"}:    {"", false},
+		{tenant, "null-json"}: {`null`, false},
+		{tenant, "empty"}:     {`{}`, false},
+		// Another tenant's profile of the same token: judged by ITS rules, not this tenant's.
+		{other, "fence"}: {`{"tracker/fence":{"active":true}}`, false},
+	}
+	want := map[[2]string]bool{}
+	for k, c := range cases {
+		rawAlarm(t, db, k[0], k[1], c.contributors)
+		want[k] = c.want
+	}
+	return want
+}
+
+// TestAlarmPositionBackfillClassifiesEveryAlarm: the upgrade classifies every existing alarm,
+// true or false, including the ones whose rule only a published version holds and the ones whose
+// profile or rule was deleted (fail closed).
+func TestAlarmPositionBackfillClassifiesEveryAlarm(t *testing.T) {
+	db := newPostgresRdbManager(t).Database
+	tenant := fmt.Sprintf("bf-%d", time.Now().UnixNano())
+	other := tenant + "-other"
+	positionRig(t, db, tenant, other)
+	want := seedPositionCases(t, db, tenant, other)
+
+	// Twice: the migration is re-runnable, and a replay changes nothing it already classified.
 	for i := 0; i < 2; i++ {
 		require.NoError(t, schema.NewAlarmPositionDerivedSchema().Migrate(db))
 	}
+	for k, w := range want {
+		got := positionOf(t, db, k[0], k[1])
+		require.True(t, got != nil && *got == w, "%s/%s: position_derived = %v, want %v", k[0], k[1], got, w)
+	}
+}
 
-	marked := func(tenant, key string) *bool {
-		var v sql.NullBool
-		require.NoError(t, db.Raw(`SELECT position_derived FROM "device-management".alarms WHERE tenant_id = ? AND alarm_key = ?`, tenant, key).Row().Scan(&v))
-		if !v.Valid {
-			return nil
-		}
-		return &v.Bool
+// TestUnclassifiedAlarmsAreClassifiedByThePeriodicPass: what a replica older than the column
+// writes during a rolling upgrade (NULL) is classified by the service's own pass, with no second
+// migration, by the same judgement as the backfill.
+func TestUnclassifiedAlarmsAreClassifiedByThePeriodicPass(t *testing.T) {
+	mgr := newPostgresRdbManager(t)
+	db := mgr.Database
+	tenant := fmt.Sprintf("cp-%d", time.Now().UnixNano())
+	other := tenant + "-other"
+	positionRig(t, db, tenant, other)
+	want := seedPositionCases(t, db, tenant, other)
+
+	n, err := NewApi(mgr).ClassifyUnclassifiedAlarms(context.Background())
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, n, int64(len(want)))
+	for k, w := range want {
+		got := positionOf(t, db, k[0], k[1])
+		require.True(t, got != nil && *got == w, "%s/%s: position_derived = %v, want %v", k[0], k[1], got, w)
 	}
-	for key, want := range map[string]bool{"fence": true, "old-fence": true, "mixed": true} {
-		got := marked(tenant, key)
-		require.True(t, got != nil && *got == want, "%s: position_derived = %v, want %v", key, got, want)
+}
+
+// TestAnEdgeWithNoVerdictIsClassifiedAtOnce: an edge from an event-processing replica older than
+// the flag carries no verdict. The integrator does not take that for false: it classifies the
+// alarm from the contributing rule's stored definition in the same call.
+func TestAnEdgeWithNoVerdictIsClassifiedAtOnce(t *testing.T) {
+	mgr := newPostgresRdbManager(t)
+	db := mgr.Database
+	tenant := fmt.Sprintf("nv-%d", time.Now().UnixNano())
+	positionRig(t, db, tenant, tenant+"-other")
+	api := NewApi(mgr)
+	ctx := core.WithTenant(context.Background(), tenant)
+	v := 1.0
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	edge := func(key, rule string, sec int, requiresPosition *bool) {
+		require.NoError(t, api.ApplyAlarmContributorEdge(ctx, 1, key, "", rule, AlarmEdgeRaised,
+			string(AlarmSeverityMajor), &v, at.Add(time.Duration(sec)*time.Second), requiresPosition))
 	}
-	for _, key := range []string{"temp", "legacy", "null-json"} {
-		require.Nil(t, marked(tenant, key), "%s must be left NULL", key)
+	edge("fence", "tracker/fence", 0, nil)
+	edge("temp", "tracker/temp", 0, nil)
+	edge("retired", "retired/fence", 0, nil)
+	for key, w := range map[string]bool{"fence": true, "temp": false, "retired": true} {
+		got := positionOf(t, db, tenant, key)
+		require.True(t, got != nil && *got == w, "%s: position_derived = %v, want %v", key, got, w)
 	}
-	require.Nil(t, marked(other, "fence"), "another tenant's rules must not mark an alarm")
+
+	// An alarm classified false that an older producer's geofence rule then contributes to.
+	no := false
+	edge("shared", "tracker/temp", 0, &no)
+	edge("shared", "tracker/fence", 1, nil)
+	got := positionOf(t, db, tenant, "shared")
+	require.True(t, got != nil && *got, "a geofence contributor with no verdict must mark the alarm, got %v", got)
 }
 
 // TestPositionWithholdingOnPostgres runs the withholding predicates on the real engine: the
@@ -96,11 +199,12 @@ func TestPositionWithholdingOnPostgres(t *testing.T) {
 	require.NoError(t, RegisterPositionWithholding(r.api.RDB.Database))
 	ctx := core.WithTenant(context.Background(), r.tenant)
 	v := 1.0
+	fenced := true
 	at := time.Now().UTC().Truncate(time.Microsecond)
 	require.NoError(t, r.api.ApplyAlarmContributorEdge(ctx, r.devices["acme-pump"], "left-yard", "", "p/fence",
-		AlarmEdgeRaised, string(AlarmSeverityMajor), &v, at, true))
+		AlarmEdgeRaised, string(AlarmSeverityMajor), &v, at, &fenced))
 	require.NoError(t, r.api.ApplyAlarmContributorEdge(ctx, r.devices["acme-pump"], "over-temp", "temp", "p/temp",
-		AlarmEdgeRaised, string(AlarmSeverityMajor), &v, at, false))
+		AlarmEdgeRaised, string(AlarmSeverityMajor), &v, at, new(bool)))
 	all, err := r.api.Alarms(r.operator, AlarmSearchCriteria{})
 	require.NoError(t, err)
 	require.Len(t, all.Results, 2)

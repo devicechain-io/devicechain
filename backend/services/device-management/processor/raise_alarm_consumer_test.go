@@ -38,7 +38,7 @@ type edgeArgs struct {
 	edge, severity              string
 	value                       *float64
 	occurredTime                time.Time
-	requiresPosition            bool
+	requiresPosition            *bool
 }
 
 func fptr(v float64) *float64 { return &v }
@@ -53,7 +53,7 @@ func (f *fakeAlarmApi) RaiseAlarm(context.Context, uint, string, string, string,
 	return nil
 }
 
-func (f *fakeAlarmApi) ApplyAlarmContributorEdge(_ context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time, requiresPosition bool) error {
+func (f *fakeAlarmApi) ApplyAlarmContributorEdge(_ context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time, requiresPosition *bool) error {
 	f.edgeCalls++
 	f.lastEdge = edgeArgs{deviceId, alarmKey, metricKey, ruleID, edge, severity, value, occurredTime, requiresPosition}
 	return f.edgeErr
@@ -133,20 +133,27 @@ func TestRaiseAlarmConsumerApplies(t *testing.T) {
 }
 
 // TestRaiseAlarmConsumerCarriesPositionDependency: the wire's requiresPosition reaches the
-// integrator on both edges, from the real wire bytes, and its absence (a producer older than the
-// field) reads as false.
+// integrator on both edges, from the real wire bytes, and ABSENT (a producer older than the
+// field) reaches it as absent, not as false: the integrator then classifies the alarm itself.
 func TestRaiseAlarmConsumerCarriesPositionDependency(t *testing.T) {
+	yes, no := true, false
 	for _, c := range []struct {
 		edge string
-		set  bool
-	}{{model.AlarmEdgeRaised, true}, {model.AlarmEdgeResolved, true}, {model.AlarmEdgeRaised, false}} {
+		set  *bool
+	}{{model.AlarmEdgeRaised, &yes}, {model.AlarmEdgeResolved, &yes}, {model.AlarmEdgeRaised, &no}, {model.AlarmEdgeRaised, nil}} {
 		api := &fakeAlarmApi{devices: []*model.Device{{}}}
 		req := validReq()
 		req.Edge, req.RequiresPosition = c.edge, c.set
 		newTestConsumer(api).handle(context.Background(), raiseMsg(t, "acme", req, 0, &fakeAck{}))
-		if api.edgeCalls != 1 || api.lastEdge.requiresPosition != c.set {
-			t.Fatalf("%s edge, requiresPosition=%v: calls=%d got %v", c.edge, c.set, api.edgeCalls, api.lastEdge.requiresPosition)
+		got := api.lastEdge.requiresPosition
+		if api.edgeCalls != 1 || (got == nil) != (c.set == nil) || (got != nil && *got != *c.set) {
+			t.Fatalf("%s edge, requiresPosition=%v: calls=%d got %v", c.edge, c.set, api.edgeCalls, got)
 		}
+	}
+	// The wire itself: a producer that predates the field sends no key, which decodes as absent.
+	req, err := model.UnmarshalRaiseAlarmRequest([]byte(`{"deviceToken":"d","alarmKey":"k","ruleId":"p/r","severity":"major","occurredTime":"2026-07-11T12:00:00Z"}`))
+	if err != nil || req.RequiresPosition != nil {
+		t.Fatalf("an older producer's request must decode with the flag absent: %v %v", req.RequiresPosition, err)
 	}
 }
 

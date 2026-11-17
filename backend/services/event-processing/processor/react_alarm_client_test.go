@@ -67,8 +67,8 @@ func TestAlarmClientCarriesThePositionDependency(t *testing.T) {
 		if err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if got.RequiresPosition != want {
-			t.Fatalf("requiresPosition on the wire = %v, want %v", got.RequiresPosition, want)
+		if got.RequiresPosition == nil || *got.RequiresPosition != want {
+			t.Fatalf("requiresPosition on the wire = %v, want %v (always sent, never absent)", got.RequiresPosition, want)
 		}
 	}
 }

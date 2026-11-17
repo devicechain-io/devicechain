@@ -60,11 +60,14 @@ import (
 // RESOLVE edge can therefore emit a RAISED reactivation; whether operator clear should instead tombstone
 // the set is a slice-6 product call.
 //
-// requiresPosition is RaiseAlarmRequest.RequiresPosition: the contributing rule tests geofence
-// containment, so the alarm is marked position-derived (Alarm.PositionDerived) by the same write
-// that folds the edge, and stays so.
+// requiresPosition is RaiseAlarmRequest.RequiresPosition. true: the contributing rule tests
+// geofence containment, so the alarm is marked position-derived (Alarm.PositionDerived) by the
+// same write that folds the edge, and stays so. false: it does not; a new alarm is classified
+// false, an existing one keeps its verdict. nil: the producer predates the field, so the verdict is
+// unknown; the alarm is unclassified (unless already marked) by the same write and then classified
+// here (position_classify.go).
 func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
-	alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time, requiresPosition bool) error {
+	alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time, requiresPosition *bool) error {
 	if alarmKey == "" || ruleID == "" {
 		return fmt.Errorf("alarm-edge requires a non-empty alarm key and rule id")
 	}
@@ -97,7 +100,7 @@ func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
 // errAlarmContributorConflict when its optimistic CAS loses to a concurrent write, which the caller
 // retries. Split out so the CAS retry re-reads the row (and its fresh version) each attempt.
 func (api *Api) applyContributorEdgeOnce(ctx context.Context, deviceId uint,
-	alarmKey, metricKey, ruleID string, raised bool, severity string, value *float64, occurredTime time.Time, requiresPosition bool) error {
+	alarmKey, metricKey, ruleID string, raised bool, severity string, value *float64, occurredTime time.Time, requiresPosition *bool) error {
 	existing, err := api.alarmByOriginatorKey(ctx, string(entity.TypeDevice), deviceId, alarmKey)
 	if err != nil {
 		return err
@@ -146,7 +149,7 @@ func (api *Api) applyContributorEdgeOnce(ctx context.Context, deviceId uint,
 // alarm never became visibly active.
 func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 	alarmKey, metricKey, severity string, anyActive bool, lastValue sql.NullFloat64,
-	contributors []byte, occurredTime time.Time, requiresPosition bool) error {
+	contributors []byte, occurredTime time.Time, requiresPosition *bool) error {
 	// The scope stamp (ADR-081): the device's owners NOW, at the alarm's first raise. Read
 	// before the row exists so a failed read leaves no unstamped alarm behind — the edge
 	// stays unacked and the redelivery stamps it. An unstamped alarm would be invisible to
@@ -168,8 +171,10 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 		Contributors:       contributors,
 		ContributorVersion: 1,
 	}
-	if requiresPosition {
-		created.PositionDerived = &requiresPosition
+	// A verdict on the edge is the alarm's verdict; no verdict leaves it NULL, classified below.
+	if requiresPosition != nil {
+		verdict := *requiresPosition
+		created.PositionDerived = &verdict
 	}
 	if anyActive {
 		created.State = string(AlarmStateActive)
@@ -182,6 +187,9 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 	// self-heals; it is the fold-into-an-existing-row race that needs the version CAS below.
 	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
 		return err
+	}
+	if requiresPosition == nil {
+		api.classifyAlarm(ctx, created.ID)
 	}
 	if anyActive {
 		api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(created, AlarmEventRaised, "", occurredTime))
@@ -205,7 +213,7 @@ var errAlarmContributorConflict = errors.New("alarm-edge: concurrent contributor
 // (CLEARED→ACTIVE, resets ack), escalate/de-escalate or value-update (ACTIVE→ACTIVE), clear
 // (ACTIVE→CLEARED), and a tombstone-only contributor update that leaves the row CLEARED.
 func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm,
-	severity string, anyActive bool, lastValue sql.NullFloat64, contributors []byte, occurredTime time.Time, requiresPosition bool) error {
+	severity string, anyActive bool, lastValue sql.NullFloat64, contributors []byte, occurredTime time.Time, requiresPosition *bool) error {
 	prevState := existing.State
 	prevSeverity := existing.Severity
 	prevVersion := existing.ContributorVersion
@@ -215,9 +223,16 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 		"contributor_version": prevVersion + 1,
 	}
 	// Sticky: a geofence contributor marks the alarm in the same CAS write that folds its edge, and
-	// no edge ever unmarks it (Alarm.PositionDerived).
-	if requiresPosition {
+	// no edge ever unmarks it (Alarm.PositionDerived). An edge with no verdict (an older producer)
+	// may add a contributor that tests a fence, so an alarm not already marked becomes
+	// unclassified in the same write, and is classified after it.
+	alreadyMarked := existing.PositionDerived != nil && *existing.PositionDerived
+	reclassify := requiresPosition == nil && !alreadyMarked
+	switch {
+	case requiresPosition != nil && *requiresPosition:
 		updates["position_derived"] = true
+	case reclassify:
+		updates["position_derived"] = nil
 	}
 	// A value rides only on an edge that HAS one (a raise carrying a reading). When the edge carries
 	// none (every resolve, and a silence-driven raise), keep the row's existing last value rather than
@@ -300,8 +315,13 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 		// since the read. Retry — do NOT drop the edge (the accumulator would lose it forever).
 		return errAlarmContributorConflict
 	}
-	if requiresPosition {
-		existing.PositionDerived = &requiresPosition
+	switch {
+	case requiresPosition != nil && *requiresPosition:
+		marked := true
+		existing.PositionDerived = &marked
+	case reclassify:
+		existing.PositionDerived = nil
+		api.classifyAlarm(ctx, existing.ID)
 	}
 	if mutate != nil {
 		mutate()

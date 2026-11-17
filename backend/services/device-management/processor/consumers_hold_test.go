@@ -49,7 +49,7 @@ type failingEdgeApi struct {
 	calls    atomic.Int32
 }
 
-func (f *failingEdgeApi) ApplyAlarmContributorEdge(ctx context.Context, d uint, a, m, r, e, s string, v *float64, o time.Time, p bool) error {
+func (f *failingEdgeApi) ApplyAlarmContributorEdge(ctx context.Context, d uint, a, m, r, e, s string, v *float64, o time.Time, p *bool) error {
 	if f.calls.Add(1) <= f.failures {
 		return f.err
 	}
