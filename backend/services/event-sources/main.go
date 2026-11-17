@@ -2135,10 +2135,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	mqttStoreIngest.stop(ctx)
 
 	// Stop the GraphQL manager, then the broker manager.
+	err := Svc.Stop(ctx)
+	// Keep placement available to publishes until the service's managers finish stopping.
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
-	return Svc.Stop(ctx)
+	return err
 }
 
 // envelopesInbound reports infrastructure.messaging.envelopes.inbound: whether this service
@@ -2199,10 +2201,12 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 
 	// Terminate the GraphQL manager, then the broker manager.
+	err := Svc.Terminate(ctx)
+	// Release the placement watch only after the service's managers terminate.
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
-	return Svc.Terminate(ctx)
+	return err
 }
 
 // failedDecodeMaxBytes bounds the (redacted) body kept on the failed-decode stream.
