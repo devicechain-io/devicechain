@@ -43,6 +43,13 @@ var rawSQLAllowList = []siteEntry{
 
 	// --- ddl-catalog ---
 	{
+		Path: "backend/core/test/secretstest/postgres.go", Func: "Stores", Count: 2,
+		Why: "integration-test helper only (build tag integration): CREATE SCHEMA and its cleanup's DROP SCHEMA " +
+			"... CASCADE for a throwaway schema whose name is secrets_it_ plus a nanosecond timestamp, formatted " +
+			"in because a schema name cannot be bound and must be unique per run. DDL on that test schema " +
+			"alone; touches no row",
+	},
+	{
 		Path: "backend/core/rdb/storage_growth.go", Func: "measureFromCatalog", Count: 1,
 		Why: "reads relation sizes from the pg_class catalog for one table name; returns no tenant rows",
 	},
