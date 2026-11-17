@@ -181,6 +181,12 @@ func (n *PolicyNotifier) ReleaseHeld(ctx context.Context, policies []*model.Noti
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if sliceExpired(ctx) {
+			if lastErr != nil {
+				return lastErr
+			}
+			return core.ErrPassPartial
+		}
 		if err := n.releaseAlarm(ctx, alarm, groups[alarm], byID, now); err != nil {
 			if errors.Is(err, rdb.ErrTenantPurged) {
 				return nil
@@ -289,7 +295,7 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 			// rather than writing it into the newer cycle as that cycle's first page.
 			var err error
 			recorded, err = n.api.RecordPagedFrom(sctx, alarm, latest.AlarmKey, latest.Severity,
-				event.RaisedTime, now, pagedTargets(tally.targets), eventSource(&event), event.OccurredTime)
+				event.RaisedTime, now, pagedTargets(tally.targets), eventSource(&event), event.OccurredTime, now)
 			return err
 		}); err != nil {
 			log.Error().Err(err).Str("alarm", alarm).

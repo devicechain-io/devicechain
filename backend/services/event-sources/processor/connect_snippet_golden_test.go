@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -279,12 +280,46 @@ func TestConnectSnippetCurlIsAcceptedByHttpIngest(t *testing.T) {
 	}
 }
 
+// The chart templates that publish the broker to devices outside the cluster, one per exposure
+// mode. The snippet's host is "the host your operator exposes the MQTT listener on", so its port
+// is the one these publish, not the broker's in-cluster listener port (1883), which neither
+// publishes: a command on 1883 to the exposed host could not connect.
+const (
+	mqttExposureTemplate = "../../../../deploy/helm/devicechain/templates/mqtt-exposure.yaml"
+	gatewayTemplate      = "../../../../deploy/helm/devicechain/templates/gateway.yaml"
+)
+
+var (
+	loadBalancerMQTTPort = regexp.MustCompile(`- name: mqtts\s+port: (\d+)`)
+	gatewayMQTTPort      = regexp.MustCompile(`- name: mqtt-tls\s+protocol: TLS\s+port: (\d+)`)
+)
+
+// exposedMQTTPort reads the port both exposure modes publish, and fails unless they agree.
+func exposedMQTTPort(t *testing.T) string {
+	t.Helper()
+	port := func(path string, re *regexp.Regexp) string {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		m := re.FindSubmatch(raw)
+		if m == nil {
+			t.Fatalf("%s: no MQTT listener port matching %s", path, re)
+		}
+		return string(m[1])
+	}
+	lb := port(mqttExposureTemplate, loadBalancerMQTTPort)
+	gw := port(gatewayTemplate, gatewayMQTTPort)
+	if lb != gw {
+		t.Fatalf("the exposure modes publish different MQTT ports: loadbalancer %s, gateway %s", lb, gw)
+	}
+	return lb
+}
+
 // The mosquitto_pub publishes on the device's own events topic — the one the broker grants
 // it and this service ingests — a message the real decoder accepts.
 func TestConnectSnippetMqttPublishesTheDevicesOwnEvent(t *testing.T) {
-	cfg := config.EventSourcesConfiguration{}
-	cfg.ApplyDefaults()
-	defaultPort := cfg.EventSources[0].Configuration["port"]
+	exposedPort := exposedMQTTPort(t)
 
 	for _, c := range loadSnippetCases(t) {
 		t.Run(c.Name, func(t *testing.T) {
@@ -293,8 +328,8 @@ func TestConnectSnippetMqttPublishesTheDevicesOwnEvent(t *testing.T) {
 				t.Fatalf("not a mosquitto_pub: %v", argv)
 			}
 			flags := flagValues(t, argv)
-			if p := one(t, flags, "-p"); p != defaultPort {
-				t.Errorf("port = %q, want the MQTT listener's %q", p, defaultPort)
+			if p := one(t, flags, "-p"); p != exposedPort {
+				t.Errorf("port = %q, want the port the broker is exposed on outside the cluster, %q", p, exposedPort)
 			}
 			if len(flags["--cafile"]) != 1 {
 				t.Error("the listener is TLS; the snippet must name the instance CA")
