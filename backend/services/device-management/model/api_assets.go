@@ -226,10 +226,21 @@ func (api *Api) CreateAsset(ctx context.Context, request *AssetCreateRequest) (*
 		AssetType:  matches[0],
 		Properties: propertiesJSON,
 	}
-	result := api.RDB.DB(ctx).Create(created)
-	if result.Error != nil {
-		return nil, result.Error
+	var change membershipChange
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(created).Error; err != nil {
+			return err
+		}
+		change, err = api.enrollNewEntitiesOnTx(ctx, tx, "asset", []uint{created.ID})
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
+	api.afterMembershipRecompute(ctx, "asset", created.ID, change)
 	return created, nil
 }
 

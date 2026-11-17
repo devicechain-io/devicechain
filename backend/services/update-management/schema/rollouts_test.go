@@ -9,12 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRolloutsIDSortsAfterEveryEarlierMigrationAndIsLast(t *testing.T) {
+func TestRolloutsIDSortsAfterEveryEarlierMigration(t *testing.T) {
 	for _, earlier := range []string{BaselineID, ArtifactsID, UploadLeaseID, AssignmentsID, SecretsID, SignersID,
 		AssignmentSignatureID, AssignmentScopeAnchorsID} {
 		require.Greater(t, RolloutsID, earlier)
 	}
-	require.Equal(t, RolloutsID, Migrations[len(Migrations)-1].ID, "a new migration is appended last")
+	require.Equal(t, RolloutsID, Migrations[8].ID)
 }
 
 // Migrations run with UseTransaction:false and replay from the top after a failure.

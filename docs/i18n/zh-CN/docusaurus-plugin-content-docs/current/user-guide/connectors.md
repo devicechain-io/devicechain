@@ -40,6 +40,8 @@ import GuideShot from '@site/src/components/GuideShot';
 
 密码或密钥是连接器的**凭据**。它是只写的：一旦保存，控制台只会告诉你已配置凭据，不会再次显示它。要更改它，点击 **Replace**（替换）并输入新值；要移除它，点击 **Clear**（清除），在保存之前可以用 **Undo**（撤消）撤回 Clear。当类型要求必须有凭据时不提供 **Clear**：AWS 始终如此，Kafka 在启用 SASL 时如此。
 
+已知限制：为新目标重新提供的凭据也会被当前已发布的版本使用，直到新草稿发布，因此请尽快发布。
+
 控制台会在你输入时检查必填字段，但服务器会在你保存时以及连接器发送时再次检查整个配置。连接器发送时，平台还会拒绝解析到私有或内部地址的目的地，除非你的运维人员允许。参见[连接器可以向哪里发送](/concepts/outbound-connectors#destinations)。
 
 点击 **Create connector**（创建连接器）保存。新连接器是**草稿**：在你发布版本之前，没有规则能通过它发布，详见下文。
@@ -59,9 +61,11 @@ import GuideShot from '@site/src/components/GuideShot';
 <GuideShot id="connector-versions" alt="Facilities event broker 连接器的 Versions 选项卡。一行文字写道：Rules dispatch through version 2 (the latest published)。列出两个版本：2，标记为 live，标签为 Route to building-ops topic；以及 1，标签为 Initial；每个都带有发布时间、发布者和 Restore 操作。右上角有 Publish 按钮。" />
 
 - **Publish**（发布）将已保存的草稿冻结为一个新的不可变版本，规则随后通过它发布。你可以添加标签和描述。请先保存草稿：存在未保存的修改时 **Publish** 处于禁用状态。
-- **Restore**（恢复）把较早版本的配置复制回草稿，替换任何未保存的编辑。它不会改变规则所使用的版本：之后需再发布，才会使其成为 live 版本。凭据不做版本管理，因此恢复某个版本时当前凭据保持不变。
+- **Restore**（恢复）把较早版本的配置复制回草稿，替换任何未保存的编辑。它不会改变规则所使用的版本：之后需再发布，才会使其成为 live 版本。凭据不做版本管理。只有目标绑定不变时恢复才会保留凭据；否则请使用 `updateConnector` 并提供目标配置和凭据。
 
 ## 相关内容 {#related}
 
 - [出站连接器](/concepts/outbound-connectors)：publish 与 Webhook 动作、投递、目的地和管控。
 - [事件处理](/concepts/event-processing)：通过连接器发布的规则。
+
+如果连接器持有已存储凭据，更改类型或凭据目标时必须在同一请求中发送 `secret`；省略时将返回 `SECRET_RESUPPLY_REQUIRED`。请重新提供凭据，或使用 `secret: null` 删除凭据。使用 `dcctl product apply` 更改目标前，请设置清单中的凭据句柄。主题、QoS 和身份字段的编辑会保留凭据。

@@ -74,12 +74,12 @@ type HttpEventSource struct {
 	// readings charges a decoded request's readings against its tenant's ingest ceiling; a
 	// false return sheds it with a 429. Never nil (the constructor refuses one).
 	readings ReadingGate
-	// admit reports whether the ingest pipeline is accepting events: nil when it is, an
-	// error matching messaging.ErrStreamBackpressure while inbound-events is refusing
-	// because a reader is far behind. It is asked AFTER both stages of the tenant's own
-	// ceiling, so a tenant over its ceiling is answered 429 and never the shared 503; a
-	// request it refuses has been read and decoded. Never nil (the constructor refuses one).
-	admit func(source string) error
+	// admit reports whether the tenant's ingest stream is accepting events: nil when it is,
+	// a refusal (messaging.IsRefusal) when backpressured or placement is unavailable.
+	// It is asked AFTER both stages of the tenant's own ceiling, so a tenant over its
+	// ceiling is answered 429 and never the shared 503. A refused request has been
+	// read and decoded. Never nil (the constructor refuses one).
+	admit func(tenant, source string) error
 	// earlyClose accounts for a connection that closed without ever delivering a
 	// request, which is what a header-timeout close looks like from the outside. nil
 	// disables the accounting.
@@ -113,7 +113,7 @@ func NewHttpEventSource(id string, srcConfig map[string]string, instanceId strin
 	failed func(string, string, []byte, error) error,
 	allow RateGate,
 	readings ReadingGate,
-	admit func(source string) error,
+	admit func(tenant, source string) error,
 	earlyClose func(string)) (*HttpEventSource, error) {
 	// Refused rather than defaulted to "always admit": an ingest path built without the
 	// question would accept events into a stream that is refusing them, and nothing at the
@@ -254,7 +254,16 @@ func (es *HttpEventSource) handleTracedEvent(w http.ResponseWriter, r *http.Requ
 	// Received now: HTTP has no durable backlog in front of it.
 	event, payload, err := es.Decoder.Decode(body, time.Time{})
 	if err != nil {
-		es.failed(es.Id, tenant, body, err)
+		// A body addressed to a tenant that does not exist is not recorded: the failed-decode
+		// stream is instance-wide and bounded, and invented tenant names would evict real
+		// tenants' records. It is counted as an unknown-tenant refusal, and answered exactly
+		// as any other malformed body, so the answer does not say whether the tenant exists.
+		// An unavailable check reports false (fail-open), and the body is recorded as before.
+		if es.checks != nil && es.checks.refusedTenant(r.Context(), tenant) {
+			es.checks.count(es.Id, tenant, "", RefusedUnknownTenant)
+		} else {
+			es.failed(es.Id, tenant, body, err)
+		}
 		// Not JSON at all: nothing in it can be pointed at, so it is a plain-text 400.
 		// JSON that is well formed and says something the platform refuses is still a 400, with a JSON body
 		// that names the value (an RFC 6901 pointer), so the sender can fix the field rather than guess.
@@ -294,7 +303,7 @@ func (es *HttpEventSource) handleTracedEvent(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Only now the shared gate: this request is within its tenant's own ceiling.
-	if err := es.admit(es.Id); err != nil {
+	if err := es.admit(tenant, es.Id); err != nil {
 		writeBackpressured(w)
 		return
 	}
@@ -313,7 +322,7 @@ func (es *HttpEventSource) handleTracedEvent(w http.ResponseWriter, r *http.Requ
 	if err := es.decoded(es.Id, tenant, event, payload, ""); err != nil {
 		// The gate can close between the admit check and the publish; that refusal is
 		// the same answer as the one above.
-		if errors.Is(err, messaging.ErrStreamBackpressure) {
+		if messaging.IsRefusal(err) {
 			writeBackpressured(w)
 			return
 		}

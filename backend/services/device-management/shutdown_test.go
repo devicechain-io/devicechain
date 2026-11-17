@@ -96,11 +96,13 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	prevMs, prevGql, prevNats, prevSvc := Microservice, GraphQLManager, NatsManager, Svc
 	prevIep, prevRac, prevCallout, prevDrc := InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer
 	prevDrain, prevKickDrain, prevReaper := OwnershipDrain, SessionKickDrain, AgentProposalReaper
+	prevDeletion, prevClassifier := EntityDeletionDrain, AlarmPositionClassifier
 	prevEffects, prevKills := AgentEffectsDrain, AgentKillConsumer
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, Svc = prevMs, prevGql, prevNats, prevSvc
 		InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer = prevIep, prevRac, prevCallout, prevDrc
 		OwnershipDrain, SessionKickDrain, AgentProposalReaper = prevDrain, prevKickDrain, prevReaper
+		EntityDeletionDrain, AlarmPositionClassifier = prevDeletion, prevClassifier
 		AgentEffectsDrain, AgentKillConsumer = prevEffects, prevKills
 	})
 
@@ -158,6 +160,9 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	AgentEffectsDrain = core.NewPeriodicTask(area, "agent-effects-drain", time.Hour,
 		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
 	require.NoError(t, AgentEffectsDrain.Initialize(context.Background()))
+	EntityDeletionDrain = core.NewPeriodicTask(area, "entity-deletion-drain", time.Hour,
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
+	require.NoError(t, EntityDeletionDrain.Initialize(context.Background()))
 	AgentKillConsumer = processor.NewAgentKillConsumer(Microservice, nil, nil, model.NewKillFeed(0, nil), nil)
 	require.NoError(t, AgentKillConsumer.Initialize(context.Background()))
 	SessionKickDrain = core.NewPeriodicTask(area, "session-kick-drain", time.Hour,
@@ -166,6 +171,9 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	AgentProposalReaper = core.NewPeriodicTask(area, "agent-proposal-reaper", time.Hour,
 		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
 	require.NoError(t, AgentProposalReaper.Initialize(context.Background()))
+	AlarmPositionClassifier = core.NewPeriodicTask(area, "alarm-position-classifier", time.Hour,
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
+	require.NoError(t, AlarmPositionClassifier.Initialize(context.Background()))
 	// And the decode accounting, which the stopper stops and then flushes. A fresh one: an earlier test of
 	// the package may have left the global stopped.
 	prevAccountant, prevAccounting := DecodeAccountant, DecodeAccounting

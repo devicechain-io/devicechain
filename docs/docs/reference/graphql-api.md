@@ -39,6 +39,17 @@ curl -s https://docs.devicechain.io/schema/device-management.graphql
 
 ## Endpoints {#endpoints}
 
+The console and dashboard viewer recover from an authenticated HTTP 401 with one forced
+tenant-token refresh and one replay of the same operation. A refused refresh or a second 401
+ends that session. A refresh that fails transiently (no response, a 5xx or a 429) fails the
+request with that error and keeps the session, so an outage never signs anyone out. Identity tokens cannot be refreshed; a 401 ends the identity session.
+
+External `@devicechain/client` hosts opt in with `setUnauthorizedHandler({ refresh, onEnd })`.
+Use `session.forceRefresh(token)` in `refresh` for the tenant lane and return null for the
+identity lane. In `onEnd(error, token, identity)`, end only the session still owning that token.
+Anonymous login and refresh calls never trigger recovery. Without the handler, the SDK still
+throws `GraphQLRequestError` with status 401 immediately.
+
 The ingress routes `/api/<area>/graphql` to each functional-area service and strips the prefix, so
 the request reaches that service's own `/graphql`. Every endpoint below is therefore
 `https://<your-host>/api/<area>/graphql`:
@@ -71,6 +82,11 @@ authorities do not line up with intuition:
 
 - Reading device credentials requires `device:write`, not `device:read`.
 - `latestLocation` requires `location:read`, while its `device-state` siblings require `state:read`.
+- An alarm raised by a rule that tests geofence containment is read only by a caller that also holds
+  `location:read`: its raise and clear times are the device entering and leaving the fence. Without it, the
+  alarm queries, the alarm counts, `alarmDispositions` and `alarmStream` leave the alarm out, and
+  `acknowledgeAlarm`, `clearAlarm` and `setAlarmDisposition` answer as for an unknown token. The same rule's
+  detections are left out of `detectionStream` on the same terms.
 - A fixed asset's installed position (`Device.installedPosition`, `Asset.installedPosition`) requires
   `location:installed:read`, which `location:read` includes. It is installation data and never falls back to
   a position the device reported. A caller without either authority reads `positionWithheld: true` on every
@@ -1194,3 +1210,5 @@ When the alert fires, someone is most likely trying many addresses:
    size applies to every state bucket, so make sure the JetStream volume has room for the increase.
 
 Detailed, per-type reference pages will be generated from the schemas as they stabilize.
+
+`SECRET_RESUPPLY_REQUIRED` means an update would send a stored credential to a different destination or present it differently. On `updateConnector`, `updateNotificationChannel` or `updateAiProvider`, supply `secret` again in the same request, or clear it with `secret: null`. For a connector rollback with a different binding, use `updateConnector` with the target configuration and its credential instead.

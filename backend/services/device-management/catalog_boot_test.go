@@ -55,8 +55,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevApi, prevCached, prevKey, prevTransit, prevGates := Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates
 	prevProc, prevRA, prevDR, prevDrain := InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain
 	prevEffects := AgentEffectsDrain
+	prevDeletion := EntityDeletionDrain
 	prevCallout, prevBackoff, prevKickDrain, prevTenants := CalloutResponder, MqttStoreBackoff, SessionKickDrain, ProvisioningTenants
-	prevReaper := AgentProposalReaper
+	prevReaper, prevClassifier := AgentProposalReaper, AlarmPositionClassifier
 	prevPin := IssuerPin
 	ProvisioningTenants = nil
 	t.Cleanup(func() {
@@ -65,8 +66,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates = prevApi, prevCached, prevKey, prevTransit, prevGates
 		InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain = prevProc, prevRA, prevDR, prevDrain
 		AgentEffectsDrain = prevEffects
+		EntityDeletionDrain = prevDeletion
 		CalloutResponder, MqttStoreBackoff, SessionKickDrain = prevCallout, prevBackoff, prevKickDrain
-		AgentProposalReaper = prevReaper
+		AgentProposalReaper, AlarmPositionClassifier = prevReaper, prevClassifier
 	})
 
 	issuer, err := nkeys.CreateAccount()
@@ -98,7 +100,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NoError(t, parseConfiguration())
 	safetyGates = governance.NewSafetyGates(Microservice)
 
-	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.PendingOwnershipFact{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.AgentProposal{})...)
+	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.AgentProposal{})...)
 	RdbManager = &rdb.RdbManager{Database: db}
 	DeviceSecretKey = dmtest.DeviceSecretKey()
 	SecretTransit = testTransit(t)
@@ -115,6 +117,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 			if err = initAgentEffectsDrain(); err != nil {
 				return err
 			}
+			if err = initEntityDeletionDrain(); err != nil {
+				return err
+			}
 			if err = initOwnershipDrain(); err != nil {
 				return err
 			}
@@ -122,6 +127,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 				return err
 			}
 			if err = initAgentProposalReaper(); err != nil {
+				return err
+			}
+			if err = initAlarmPositionClassifier(); err != nil {
 				return err
 			}
 			if err = initDecodeAccounting(); err != nil {
