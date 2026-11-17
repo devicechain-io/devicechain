@@ -313,3 +313,11 @@ func (t *Tenant) EffectiveIntegrationsPerTenant() (*int, SettingSource) {
 	}
 	return nil, SourcePlatformDefault
 }
+
+// EffectiveRulesPerTenant inherits the platform budget when the tier sets no ceiling.
+func (t *Tenant) EffectiveRulesPerTenant() (*int, SettingSource) {
+	if v := t.Tier.RulesPerTenant(); v != nil {
+		return v, SourceTier
+	}
+	return nil, SourcePlatformDefault
+}

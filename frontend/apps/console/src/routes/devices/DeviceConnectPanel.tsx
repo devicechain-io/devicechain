@@ -36,6 +36,8 @@ import {
   exampleMeasurements,
   httpCommand,
   httpUplinkCommand,
+  LOCAL_MQTT_PORT,
+  MQTT_PORT,
   mqttCommand,
   mqttUplinkCommand,
   PAYLOAD_FILE,
@@ -174,7 +176,12 @@ export function DeviceConnectPanel({ deviceToken, deviceEnabled }: { deviceToken
         <li>{t('connectPlaceholderInstance', { placeholder: PLACEHOLDER.instanceId })}</li>
         {transport === 'mqtt' ? (
           <>
-            <li>{t('connectPlaceholderMqttHost', { placeholder: PLACEHOLDER.mqttHost, ca: CA_FILE })}</li>
+            <li>{t('connectPlaceholderMqttHost', {
+                  placeholder: PLACEHOLDER.mqttHost,
+                  port: MQTT_PORT,
+                  localPort: LOCAL_MQTT_PORT,
+                  ca: CA_FILE,
+                })}</li>
             <li>{t('connectMqttClientId')}</li>
           </>
         ) : (

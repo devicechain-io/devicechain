@@ -123,6 +123,7 @@ func parseConfiguration() error {
 // registry panics. Initialize is where the process's own singletons are made, which is
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
+	graphql.InitLiveSubscriptionMetrics(Microservice)
 	AnalyticsMetrics = model.NewAnalyticsMetrics(Microservice)
 	PersistMetrics = processor.NewPersistMetrics(Microservice)
 	BackfillMetrics = backfill.NewMetrics(Microservice)
