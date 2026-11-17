@@ -521,7 +521,7 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 | `checkpointIntervalSeconds` | 10 | Maximum time between checkpoints, so a quiet stream still commits. **At most 30**: a checkpoint is what acknowledges the stream, so an interval near or past the broker's 60-second acknowledgement window makes messages on a quiet stream redeliver. 30 leaves room for the checkpoint itself, and the service refuses anything longer at startup. |
 | `checkpointTimeoutSeconds` | 10 | How long one checkpoint call (publishing detections, saving the snapshot) may take before it is abandoned and the checkpoint counts as failed, instead of hanging detection on a database or broker that has stopped answering. At most 120. The snapshot save's limit grows by itself, to four times the last save that completed (up to two minutes), so a large engine on a slow database is not stuck failing; raise this only when the very first save is slower than the value. |
 | `maxRuleDurationSeconds` | 86400 | Longest time span a rule may declare — window, hold, silence timeout or session gap. **Enforced**: a longer rule is refused at publish. See below. |
-| `maxRulesPerTenant` | 500 | Per-tenant rule ceiling. **Measured and reported, not enforced** — see below. |
+| `maxRulesPerTenant` | 500 | Runtime reporting threshold. Publish and rollback enforce a rule ceiling **only when the tenant tier explicitly sets `rulesPerTenant`**; an absent or `null` tier value keeps reporting without refusal. |
 | `maxLiveKeysPerTenant` | 1000000 | Per-tenant ceiling on live windows and timers. Also measured, not enforced. |
 | `maxRetainedSamplesPerTenant` | 5000000 | Per-tenant ceiling on readings held inside open windows. Also measured, not enforced. |
 | `outboundCallsPerSecond` | 100 | Per-tenant rate at which outbound connector actions are dispatched, metered on the time the triggering telemetry reached the platform. |
@@ -670,11 +670,8 @@ for the instance. It bounds how much work one reading can cost the single engine
 shares. An expression that iterates over a reading's measurements (`m.all(...)`, `m.exists(...)`)
 is the usual way to reach it; name the measurements you need instead.
 
-:::note The per-tenant state budgets are measured, not enforced
-The three per-tenant ceilings — rules, live keys, and retained samples — raise a metric and a log
-line when a tenant exceeds them. **Nothing stops the tenant.** A single tenant authoring
-pathological rules can still exhaust the shared engine's memory. Watch
-`DetectTenantOverStateBudget` and act on it — the alert is the enforcement.
+:::note Runtime state budgets and explicit tier ceilings
+The runtime thresholds for rules, live keys and retained samples raise metrics and logs when exceeded. Live keys and retained samples remain measured only. Device-management separately enforces `rulesPerTenant` at publish and rollback only when the tenant tier sets it explicitly. It counts enabled rules in active snapshots across the tenant; drafts and superseded versions do not count. A change that keeps or reduces the profile's active rule count always succeeds without reading the ceiling, including when the tenant is over budget. A missing or `null` tier value does not enforce the reporting default of 500. During a rolling upgrade, an older user-management schema also means no explicit ceiling. Other lookup failures refuse only changes that add rules. Watch `DetectTenantOverStateBudget` for runtime state pressure.
 
 Watch **all three** memory dimensions. They fail in different directions and none implies the
 others, so any one of them read alone can look healthy while the engine fills up:
@@ -735,7 +732,7 @@ statement) eight workers applied four to seven times as many alarm changes a sec
 | `DetectLiveDeliveriesRecovered` | Events the broker handed out never reached the engine, and it read them from the stream and applied them in order. Detection is correct. Recurring means connections to the broker are dropping, or two engines are consuming at once. |
 | `DetectFactsRepaired` | The engine corrected state it had not been told about. Detection is right again; recurring means notifications are being lost. |
 | `DeviceFactPublishFailing` | device-management cannot send change notifications. Changes still reach the engine, a few minutes late. |
-| `DetectTenantOverStateBudget` | A tenant is over a ceiling that is not enforced — its rule count, its live windows and timers, or the readings its open windows retain. |
+| `DetectTenantOverStateBudget` | A tenant exceeds a runtime reporting threshold for rules, live windows and timers, or retained readings. Rule activation is separately limited only by an explicit tier `rulesPerTenant`. |
 | `DetectLeaderIsNotConsuming` | A replica owns the partition but is not inside a live term and has committed no checkpoint for ten minutes. It is stuck building a term, which holds the partition against every standby while nothing is detected. A long replay does not trigger it, because a replay checkpoints as it goes. Read the replica's log around its term build and restart that pod so a standby can take over. |
 | `GeoFenceSetPublishFailing` | device-management could not publish a geofence-set manifest: a marshal error, a broker refusal or a transport fault. The fence edit itself succeeded and is durable; what failed is telling the engine, so containment keeps the previous fence set until the five-minute reconcile sweep repairs it. A sustained rate means every fence edit takes minutes to take effect. If it began after a broker configuration change, check that `infrastructure.nats.streamMaxMsgSize` is not set below what a manifest needs; device-management logs a warning naming both sizes at startup. |
 | `DetectFenceArchiveSkew` | The engine asked device-management for a fence-set manifest and was told the query does not exist, so the two services run builds from either side of the manifest-delivery change. Expected briefly while an upgrade rolls, because the two Deployments do not wait for each other. Sustained means device-management is behind, most likely rolled back on its own, and fence edits do not reach the engine until it rolls forward. |

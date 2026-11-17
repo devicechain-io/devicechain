@@ -8,6 +8,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credbinding"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
@@ -144,6 +145,16 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
+	beforeBinding := channelBinding(token, updated.ChannelType, dcgraphql.MetadataStr(updated.Config))
+	afterBinding := channelBinding(token, channelType, config)
+	bindingChanged := len(beforeBinding.Diff(afterBinding)) != 0
+	if request.ChannelType.Set || request.Config.Set {
+		if err := credbinding.Guard("notification channel", token,
+			beforeBinding, afterBinding, request.Secret.Set,
+			func() (bool, error) { return api.channelHasSecretAfter(ctx, updated.ID, dcgraphql.OptionalString{}) }); err != nil {
+			return nil, err
+		}
+	}
 	// A webhook's declared auth and its secret must agree. The pairing is judged only when
 	// the request touches something it depends on — the type, the config, the secret — or
 	// switches the channel ON. That mirrors the catalog check above: a rename or a disable of
@@ -152,8 +163,8 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 	// every alarm. Enabling one is judged, because that is the moment it would start to.
 	//
 	// 🔴 THIS IS THE SAVE-TIME HALF, NOT THE GUARANTEE. The secret write below runs after the
-	// row is saved and outside its transaction, and two concurrent updates can each read a
-	// store the other is about to change, so a channel can still end up declaring bearer
+	// row is saved for an unchanged binding, and outside its transaction. Two concurrent
+	// updates can each read a store the other is about to change, so a channel can still end up declaring bearer
 	// with no secret. Delivery re-checks the same rule (httpsink.Send) and refuses such a
 	// channel terminally; this check exists so the caller hears about the mistake now, from
 	// the request that made it, rather than from a page that never arrived.
@@ -190,6 +201,13 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 	if len(assignments) == 0 && !request.Secret.Set {
 		return updated, nil
 	}
+	if bindingChanged && request.Secret.Set {
+		// When the destination moves, change the secret first so a store failure
+		// cannot leave the new destination using the old destination's credential.
+		if err := api.applyChannelSecret(ctx, updated.ID, request.Secret.Value); err != nil {
+			return nil, err
+		}
+	}
 	// Effective inputs above are needed for credential validation, but omitted
 	// columns may already have changed since the read and must never be assigned.
 	if len(assignments) > 0 {
@@ -201,7 +219,8 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 	// is not one: it lives in the envelope-encrypted store, keyed by the channel's
 	// immutable id. applyChannelSecret owns the fold; it is reached only when the caller
 	// mentioned the field, which is what "omitted preserves" means for a value that
-	// cannot be read back to re-send.
+	// cannot be read back to re-send. When the request moved the destination it was
+	// already applied above, before the row; otherwise it is applied here, after it.
 	//
 	// 🔴 THIS WRITE IS OUTSIDE THE ROW'S TRANSACTION, AND THE UPDATE PATH HAS NO
 	// COMPENSATION WHERE THE CREATE PATH DOES. A store failure here leaves the row already
@@ -210,12 +229,12 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 	// row back (see the Unscoped().Delete above); update cannot, because there is no
 	// earlier state to roll back TO that is any more correct than what is now stored.
 	//
-	// It is left as it is deliberately rather than overlooked. The outcome is convergent:
-	// the fields are already what the caller asked for, so a retry sends the same request
-	// and only the secret write is repeated, and Put/Delete are both idempotent. Making it
-	// atomic means putting the secret store's write inside the row's transaction, which is
-	// a change to the store's contract and belongs with the store, not here.
-	if request.Secret.Set {
+	// It is left as it is deliberately rather than overlooked, and only for an update that
+	// keeps the destination: the fields are already what the caller asked for, so a retry
+	// sends the same request and only the secret write is repeated, and Put/Delete are
+	// both idempotent. An update that moves the destination does not get here with a
+	// secret, because then the old credential would stay bound to the new destination.
+	if request.Secret.Set && !bindingChanged {
 		if err := api.applyChannelSecret(ctx, updated.ID, request.Secret.Value); err != nil {
 			return nil, err
 		}

@@ -185,11 +185,11 @@ func TestTheProfilerIsNeverAPortOfThePodOrItsService(t *testing.T) {
 		t.Fatalf("rendering with the profiler on: %v", err)
 	}
 	dm := podsOf(t, manifest)["device-management"]
-	if !reflect.DeepEqual(dm.servicePorts, []int{8080}) {
-		t.Errorf("device-management's Service ports are %v, want exactly [8080]", dm.servicePorts)
+	if !reflect.DeepEqual(dm.servicePorts, []int{8080, 8083}) {
+		t.Errorf("device-management's Service ports are %v, want exactly [8080 8083]", dm.servicePorts)
 	}
-	if !reflect.DeepEqual(dm.containerPorts, []int{8080}) {
-		t.Errorf("device-management's container ports are %v, want exactly [8080]", dm.containerPorts)
+	if !reflect.DeepEqual(dm.containerPorts, []int{8080, 8083}) {
+		t.Errorf("device-management's container ports are %v, want exactly [8080 8083]", dm.containerPorts)
 	}
 	if n := strings.Count(manifest, "6060"); n != 1 {
 		t.Errorf("6060 appears %d times in the manifest; it should appear once, in the one env value", n)
