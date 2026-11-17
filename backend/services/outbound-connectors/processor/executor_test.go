@@ -36,7 +36,7 @@ func TestExecuteHTTPCallSuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	store := &fakeSecretStore{values: map[string][]byte{"webhook/auth": []byte("tok-abc")}}
+	store := &fakeSecretStore{values: map[string][]byte{"http-credential/webhook/auth": []byte("tok-abc")}}
 	e := newTestExecutor(store)
 	req := &connectorwire.ConnectorDispatchRequest{
 		Kind: connectorwire.ConnectorKindHTTPCall, Tenant: "acme", IdempotencyKey: "idem-1",
@@ -100,7 +100,7 @@ func TestExecuteHTTPCallSecretResolveFailsClosed(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	store := &fakeSecretStore{failRef: "webhook/auth", err: errors.New("db down")}
+	store := &fakeSecretStore{failRef: "http-credential/webhook/auth", err: errors.New("db down")}
 	e := newTestExecutor(store)
 	res := e.Execute(context.Background(), &connectorwire.ConnectorDispatchRequest{
 		Kind: connectorwire.ConnectorKindHTTPCall, Tenant: "acme",

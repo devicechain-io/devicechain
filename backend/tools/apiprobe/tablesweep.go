@@ -296,6 +296,12 @@ var tableSweepExemptions = map[string]string{
 		"one, so the writer is exercised; empty afterwards is the drain having caught up. A row still " +
 		"here a few seconds after the seed means ownership facts are not reaching the broker, which is " +
 		"a finding this bucket should report.",
+	"device-management.pending_entity_deletions": "the deletion outbox: a row is written in the transaction " +
+		"of an entity delete and removed once device-management's drain, which runs every second, has had " +
+		"the deletion fact acknowledged by the broker. No API call leaves a row behind on a healthy instance: " +
+		"the seed deletes nothing (it seeds one of every entity so the drill can watch them survive), and a " +
+		"seeded delete would still be drained to empty before the sweep reads. A row that stays here means " +
+		"deletion facts are not reaching the broker, which is a finding this bucket should report.",
 	"device-management.pending_attribute_repairs": "the queue of attribute keys whose duplicate live rows " +
 		"the one-live-row-per-key migration collapsed: only that migration writes a row, and only for a key " +
 		"that already had two live rows when it ran; the unique index it builds keeps any later write from " +

@@ -51,6 +51,7 @@ func seedAltEvent(t *testing.T, api *Api, tenant, altId string, occurred time.Ti
 		Source:       "test",
 		AltId:        sql.NullString{String: altId, Valid: true},
 	}
+	ev.EventId = DeriveEventId(tenant, ev, nil)
 	if err := api.RDB.DB(ctx).Create(ev).Error; err != nil {
 		t.Fatalf("seed alt event failed: %v", err)
 	}
@@ -106,6 +107,7 @@ func TestAltIdUniqueIndexBackstop(t *testing.T) {
 	ctxA := core.WithTenant(context.Background(), "A")
 	dup := &Event{DeviceToken: "device-100", EventType: eventtype.Alert, OccurredTime: occurred, Source: "dup",
 		AltId: sql.NullString{String: "evt-1", Valid: true}}
+	dup.EventId = DeriveEventId("A", dup, nil)
 	if err := api.RDB.DB(ctxA).Create(dup).Error; err == nil {
 		t.Fatal("expected the partial unique index to reject a duplicate alternateId")
 	}
@@ -114,6 +116,7 @@ func TestAltIdUniqueIndexBackstop(t *testing.T) {
 	// not a redelivery, and is stored.
 	other := &Event{DeviceToken: "device-101", EventType: eventtype.Alert, OccurredTime: occurred, Source: "other",
 		AltId: sql.NullString{String: "evt-1", Valid: true}}
+	other.EventId = DeriveEventId("A", other, nil)
 	if err := api.RDB.DB(ctxA).Create(other).Error; err != nil {
 		t.Fatalf("another device's event with the same alternateId must be stored: %v", err)
 	}
@@ -123,6 +126,7 @@ func TestAltIdUniqueIndexBackstop(t *testing.T) {
 	seedAltEvent(t, api, "B", "evt-1", occurred)
 	for i := 0; i < 2; i++ {
 		ev := &Event{DeviceToken: "device-200", EventType: eventtype.Location, OccurredTime: occurred, Source: "no-alt"}
+		ev.EventId = DeriveEventId("A", ev, []byte{byte(i)})
 		if err := api.RDB.DB(ctxA).Create(ev).Error; err != nil {
 			t.Fatalf("event without an alternateId must not be constrained: %v", err)
 		}
