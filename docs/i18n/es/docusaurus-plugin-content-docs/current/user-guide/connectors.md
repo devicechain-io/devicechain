@@ -56,6 +56,8 @@ cambiarla, haz clic en **Reemplazar** y escribe un valor nuevo; para quitarla, h
 **Deshacer** anula esa limpieza antes de guardar. **Limpiar** no se ofrece cuando el tipo exige una
 credencial: siempre en AWS, y en Kafka cuando SASL está activado.
 
+Limitación conocida: la credencial que vuelves a proporcionar para un nuevo destino también se usa en la versión publicada actualmente hasta que publiques el nuevo borrador, así que publícalo cuanto antes.
+
 La consola comprueba los campos obligatorios sobre la marcha, pero el servidor vuelve a comprobar
 toda la configuración al guardar y de nuevo cuando el conector envía. Cuando un conector envía, la plataforma rechaza
 además un destino que resuelva a una dirección privada o interna, salvo que tu operador lo haya
@@ -89,8 +91,8 @@ la línea sobre la tabla indica la versión a través de la cual despachan las r
   está desactivado mientras haya cambios sin guardar.
 - **Restaurar** copia la configuración de una versión anterior en el borrador y reemplaza los cambios
   sin guardar. No cambia lo que usan las reglas: publica después para convertirla en la versión en
-  vivo. La credencial no tiene versiones, así que restaurar una versión deja la credencial actual
-  como está.
+  vivo. La credencial no tiene versiones. Restaurar solo la conserva si el destino no cambia;
+  si cambia, usa `updateConnector` con la configuración de destino y la credencial.
 
 ## Relacionado
 
@@ -98,3 +100,5 @@ la línea sobre la tabla indica la versión a través de la cual despachan las r
   webhook, la entrega, los destinos y la gobernanza.
 - [Procesamiento de eventos](../concepts/event-processing.md): las reglas que publican a través de
   los conectores.
+
+Cambiar el tipo o destino de una credencial almacenada requiere `secret` en la misma solicitud; omitirlo devuelve `SECRET_RESUPPLY_REQUIRED`. Vuelve a enviar la credencial o bórrala con `secret: null`. Con `dcctl product apply`, establece el identificador de credencial del manifiesto antes de cambiar su destino. Los cambios de tema, QoS e identidad conservan la credencial.
