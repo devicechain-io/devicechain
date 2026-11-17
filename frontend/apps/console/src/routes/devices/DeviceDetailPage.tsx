@@ -59,8 +59,9 @@ const CONNECTIVITY_TAB = 'connectivity';
 
 export default function DeviceDetailPage() {
   const { t } = useTranslation('devices');
-  const { token: rawToken } = useParams<{ token: string }>();
-  const token = decodeURIComponent(rawToken ?? '');
+  // The router hands the param over already decoded. Decoding it again turned a token
+  // holding a '%' into a different token, or threw on one such as "a%zz".
+  const token = useParams<{ token: string }>().token ?? '';
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();

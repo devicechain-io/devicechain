@@ -26,7 +26,7 @@ export function ErrorBanner({ message, onDismiss, details, detailsLabel }: Error
   const showDisclosure = IS_DEV && !!details;
 
   return (
-    <div className="bg-destructive/10 border border-destructive/30 rounded-md px-4 py-3 text-sm text-destructive mb-4">
+    <div role="alert" className="bg-destructive/10 border border-destructive/30 rounded-md px-4 py-3 text-sm text-destructive mb-4">
       <div className="flex items-center justify-between">
         <span>{message}</span>
         <div className="flex items-center gap-3 ml-4">

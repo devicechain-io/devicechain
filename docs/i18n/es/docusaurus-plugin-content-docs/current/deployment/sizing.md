@@ -202,6 +202,16 @@ prevalecen sobre el tamaño predefinido en la creación inicial, antes de que ex
 Para las demás variables de OpenTofu del tamaño, `dcctl` omite las que hayas indicado para que
 prevalezca tu valor. La línea que imprime `dcctl bootstrap` nombra el tamaño que aplicó.
 
+La topología del broker es la otra excepción. `dcctl` siempre pasa `ha` y
+`nats_cluster_replicas` por sí mismo, así que un valor que indiques para cualquiera de las dos
+queda sustituido. El número de servidores y el número de réplicas por stream se fijan juntos a
+partir de `--ha` (un servidor y una réplica sin él, tres y tres con él). Los grupos de
+fragmentación elevan el número de servidores a tres como mínimo, con al menos un servidor por grupo. Así se evita un clúster en el que
+todos los streams tienen una sola réplica y se pagan servidores que no guardan ninguna copia.
+Un broker de varios servidores con streams de una sola réplica y sin grupos de fragmentación no
+se puede construir con `dcctl`. Cuando indicas cualquiera de las dos variables, `dcctl bootstrap`
+y `dcctl upgrade` imprimen una nota que dice que se ha sustituido.
+
 ## Cambiar el tamaño de una instancia en ejecución {#changing}
 
 Una instancia conserva el tamaño con el que se hizo el bootstrap. Pasar una instancia existente a

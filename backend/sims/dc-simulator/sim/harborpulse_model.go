@@ -1,0 +1,542 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package sim
+
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"math"
+	"sort"
+	"sync"
+	"time"
+)
+
+// The harborpulse day. One sim day takes harborpulseDayLength of wall time and starts at
+// harborpulseStartHour, so a fresh run opens on the morning commute and reaches the storm about
+// halfway through. The day loops.
+const (
+	harborpulseDayLength = 24 * time.Minute
+	harborpulseStartHour = 6.0
+)
+
+// harborHour is the sim hour of day, in [0, 24), at elapsed wall time since the first tick.
+func harborHour(elapsed time.Duration) float64 {
+	h := math.Mod(harborpulseStartHour+24*elapsed.Seconds()/harborpulseDayLength.Seconds(), 24)
+	if h < 0 {
+		h += 24
+	}
+	return h
+}
+
+// harborDay is how many midnights have passed since the first tick.
+func harborDay(elapsed time.Duration) int {
+	return int(math.Floor((harborpulseStartHour + 24*elapsed.Seconds()/harborpulseDayLength.Seconds()) / 24))
+}
+
+type harborKind int
+
+const (
+	harborGauge harborKind = iota
+	harborPump
+	harborLight
+	harborCharger
+	harborMeter
+	harborTruck
+)
+
+// harborDevice is one named device of the district.
+type harborDevice struct {
+	token, externalId, deviceType string
+	kind                          harborKind
+	quay                          string
+	// customer is "" for the public realm (the manifest's first customer).
+	customer string
+	index    int
+}
+
+// The planted faults, by device.
+const (
+	harborFlickerLamp    = "hp-light-east-3"
+	harborHotCharger     = "hp-charger-basin-2"
+	harborAirLockPump    = "hp-pump-east"
+	harborLoftsMeter     = "hp-meter-quayside-lofts"
+	harborFerryMeter     = "hp-meter-ferry-terminal"
+	harborResponseTruck  = "hp-truck-1"
+	harborOutageQuay     = HarborpulseEastQuay
+	harborEastQuayOffset = 0.3
+)
+
+var harborQuays = []struct {
+	token, name string
+}{{HarborpulseNorthQuay, "north"}, {HarborpulseEastQuay, "east"}, {HarborpulseBasin, "basin"}}
+
+// harborLayout is the whole fleet, in a fixed order: 9 gauges, 3 pumps, 12 lights, 6 chargers,
+// 2 meters and a truck.
+func harborLayout() []harborDevice {
+	var out []harborDevice
+	add := func(kind harborKind, deviceType, prefix, quay, quayName string, n int) {
+		for i := 1; i <= n; i++ {
+			token := fmt.Sprintf("hp-%s-%s-%d", prefix, quayName, i)
+			ext := fmt.Sprintf("PAW-%s-%s-%d", upper(prefix), upper(quayName), i)
+			out = append(out, harborDevice{token: token, externalId: ext, deviceType: deviceType, kind: kind, quay: quay, index: i})
+		}
+	}
+	for _, q := range harborQuays {
+		add(harborGauge, HarborpulseGaugeType, "gauge", q.token, q.name, 3)
+	}
+	for _, q := range harborQuays {
+		out = append(out, harborDevice{
+			token: "hp-pump-" + q.name, externalId: "PAW-PUMP-" + upper(q.name),
+			deviceType: HarborpulsePumpType, kind: harborPump, quay: q.token, index: 1,
+		})
+	}
+	for _, q := range harborQuays {
+		add(harborLight, HarborpulseLightType, "light", q.token, q.name, 4)
+	}
+	for _, q := range harborQuays {
+		add(harborCharger, HarborpulseChargerType, "charger", q.token, q.name, 2)
+	}
+	out = append(out,
+		harborDevice{token: harborLoftsMeter, externalId: "PAW-METER-LOFTS", deviceType: HarborpulseMeterType,
+			kind: harborMeter, quay: HarborpulseNorthQuay, customer: HarborpulseLoftsToken, index: 1},
+		harborDevice{token: harborFerryMeter, externalId: "PAW-METER-FERRY", deviceType: HarborpulseMeterType,
+			kind: harborMeter, quay: HarborpulseBasin, customer: HarborpulseFerryToken, index: 2},
+		harborDevice{token: harborResponseTruck, externalId: "PAW-TRUCK-1", deviceType: HarborpulseTruckType,
+			kind: harborTruck, quay: HarborpulseBasin, index: 1},
+	)
+	return out
+}
+
+func upper(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'a' && c <= 'z' {
+			b[i] = c - 32
+		}
+	}
+	return string(b)
+}
+
+// ---- The site: two fences and the truck's route (illustrative coordinates) -------------------
+
+const (
+	harborDepotLat, harborDepotLon = 50.1500, -5.0700
+	harborPlainLat, harborPlainLon = 50.1520, -5.0600
+)
+
+func harborBox(lat, lon, dLat, dLon float64) [][2]float64 {
+	return [][2]float64{
+		{lon - dLon, lat - dLat}, {lon + dLon, lat - dLat}, {lon + dLon, lat + dLat}, {lon - dLon, lat + dLat}, {lon - dLon, lat - dLat},
+	}
+}
+
+func harborpulseGeoFences() []GeoFenceSpec {
+	return []GeoFenceSpec{
+		{Token: HarborpulseFloodPlainFence, Name: "East Quay flood plain", Description: "The low streets behind East Quay that flood first.",
+			Ring: harborBox(harborPlainLat, harborPlainLon, 0.0015, 0.0025)},
+		{Token: HarborpulseDepotFence, Name: "Works depot", Description: "Where the response truck is kept.",
+			Ring: harborBox(harborDepotLat, harborDepotLon, 0.0004, 0.0006)},
+	}
+}
+
+// ---- Pure curves -----------------------------------------------------------------------------
+
+func smoothstep(a, b, x float64) float64 {
+	if x <= a {
+		return 0
+	}
+	if x >= b {
+		return 1
+	}
+	t := (x - a) / (b - a)
+	return t * t * (3 - 2*t)
+}
+
+// window is 1 inside [b, c], ramping smoothly from a and down to d.
+func window(a, b, c, d, x float64) float64 { return smoothstep(a, b, x) * (1 - smoothstep(c, d, x)) }
+
+// harborTide is a simplified semi-diurnal tide, 12 h period so the day loops without a step,
+// with high water at 07:00 and 19:00 (the evening one is the king tide the storm rides).
+func harborTide(h float64) float64 { return 0.5 + 0.5*math.Cos(2*math.Pi*(h-19)/12) }
+
+// harborSurge is the storm surge: a fast rise from 17:00, full from 18:30 to 20:30, gone by 22:30.
+func harborSurge(h float64) float64 { return 1.0 * window(17, 18.5, 20.5, 22.5, h) }
+
+// harborRain is the storm's inflow into a wet well, metres per wall second.
+func harborRain(h float64) float64 { return 0.025 * window(16, 17, 20, 21, h) }
+
+func harborOutage(quay string, h float64) bool {
+	return quay == harborOutageQuay && h >= 19.75 && h < 21.25
+}
+func harborAirLocked(token string, h float64) bool {
+	return token == harborAirLockPump && h >= 19 && h < 20.5
+}
+func harborOverheating(token string, h float64) bool {
+	return token == harborHotCharger && h >= 14 && h < 15.5
+}
+
+// harborNoise is a deterministic jitter in [-amp, amp] for (seed, device, sample).
+func harborNoise(seed int64, token string, sample int64, amp float64) float64 {
+	f := fnv.New64a()
+	fmt.Fprintf(f, "%d|%s|%d", seed, token, sample)
+	return amp * (2*float64(f.Sum64()%10001)/10000 - 1)
+}
+
+// harborGaugeOffset is a gauge's fixed installation offset, in [-0.04, 0.04] m.
+func harborGaugeOffset(seed int64, token string) float64 { return harborNoise(seed, token, -1, 0.04) }
+
+func harborGaugeLevel(seed int64, d harborDevice, h float64, sample int64) float64 {
+	level := harborTide(h) + harborSurge(h) + harborGaugeOffset(seed, d.token) + harborNoise(seed, d.token, sample, 0.005)
+	if d.quay == HarborpulseEastQuay {
+		level += harborEastQuayOffset
+	}
+	return level
+}
+
+func harborLampOn(h float64) bool { return h < 6.5 || h >= 18 }
+
+func harborLampFault(token string, h float64) bool {
+	return token == harborFlickerLamp && h >= 11 && h < 12 && int(math.Floor(h*60/10))%2 == 0
+}
+
+// harborAmbient is the air temperature a charger's connector starts from.
+func harborAmbient(h float64) float64 {
+	if h < 6 || h > 20 {
+		return 18
+	}
+	return 18 + 12*math.Sin(math.Pi*(h-6)/14)
+}
+
+// harborChargerDemand is what a charger's session would draw, before its cap.
+func harborChargerDemand(d harborDevice, h float64) float64 {
+	if harborOverheating(d.token, h) {
+		return 22
+	}
+	occ := 0.15 + 0.6*window(7, 8, 9.5, 10.5, h) + 0.5*window(16.5, 17.5, 19.5, 20.5, h)
+	return 22 * occ * (0.8 + 0.2*math.Sin(float64(d.index)*1.7+float64(len(d.quay))))
+}
+
+func harborConnectorTemp(token string, h, power float64) float64 {
+	t := harborAmbient(h) + 1.2*power
+	if harborOverheating(token, h) {
+		t += 1.6 * power
+	}
+	return t
+}
+
+func harborMeterKw(token string, h float64) float64 {
+	if token == harborFerryMeter {
+		return 60 + 110*window(8.0, 8.5, 9.75, 10.25, h)
+	}
+	return 35 + 45*window(17, 18.5, 21.5, 23, h) + 10*window(6.5, 7.5, 8.5, 9.5, h)
+}
+
+// harborTruckFix is the truck's position: at the depot, out to the flood plain from 17:00,
+// parked there from 18:00 to 21:30, back by 22:30.
+func harborTruckFix(h float64) Fix {
+	var frac, speed, heading float64
+	switch {
+	case h >= 17 && h < 18:
+		frac, speed = h-17, 8
+		heading = canonicalHeading(math.Atan2(harborPlainLon-harborDepotLon, harborPlainLat-harborDepotLat) * 180 / math.Pi)
+	case h >= 18 && h < 21.5:
+		frac = 1
+	case h >= 21.5 && h < 22.5:
+		frac, speed = 1-(h-21.5), 8
+		heading = canonicalHeading(math.Atan2(harborDepotLon-harborPlainLon, harborDepotLat-harborPlainLat) * 180 / math.Pi)
+	}
+	return Fix{
+		Latitude:  harborDepotLat + frac*(harborPlainLat-harborDepotLat),
+		Longitude: harborDepotLon + frac*(harborPlainLon-harborDepotLon),
+		Speed:     &speed,
+		Heading:   &heading,
+	}
+}
+
+// ---- The stateful half: what the platform's commands change -----------------------------------
+
+const (
+	harborPumpRate     = 0.05 // m/s drained at 100 % duty
+	harborFloatStart   = 3.2  // the pump's own float switch
+	harborLowCutoff    = 0.8  // the pump's own low-level stop
+	harborWellCeiling  = 4.0  // the well overflows into the street above this
+	harborWellStart    = 1.0
+	harborChargerMaxKw = 22.0
+	harborMaxStep      = time.Second
+	// harborMaxGap bounds how much wall time one advance integrates: a sim stopped for an hour
+	// resumes where it stopped instead of replaying the hour in one tick.
+	harborMaxGap = time.Minute
+	// harborBufferCap bounds a charger's store-and-forward buffer, as a device's memory would.
+	harborBufferCap = 512
+)
+
+type harborPumpState struct {
+	well    float64
+	running bool
+	duty    float64
+}
+
+type harborBuffered struct {
+	at     time.Time
+	values map[string]float64
+}
+
+// harborBackfill is one charger's buffered readings, oldest first.
+type harborBackfill struct {
+	token    string
+	readings []harborBuffered
+}
+
+type harborModel struct {
+	mu      sync.Mutex
+	seed    int64
+	devices map[string]harborDevice
+	elapsed time.Duration
+	day     int
+	pumps   map[string]*harborPumpState
+	cap     map[string]float64
+	dim     map[string]float64
+	kwh     map[string]float64
+	// lastMeter is when each meter last read, for its energy integral.
+	lastMeter map[string]time.Duration
+	buffers   map[string][]harborBuffered
+}
+
+func newHarborModel(seed int64) *harborModel {
+	m := &harborModel{
+		seed: seed, devices: map[string]harborDevice{}, pumps: map[string]*harborPumpState{},
+		cap: map[string]float64{}, dim: map[string]float64{}, kwh: map[string]float64{}, lastMeter: map[string]time.Duration{}, buffers: map[string][]harborBuffered{},
+	}
+	for _, d := range harborLayout() {
+		m.devices[d.token] = d
+		switch d.kind {
+		case harborPump:
+			m.pumps[d.token] = &harborPumpState{well: harborWellStart, duty: 100}
+		case harborCharger:
+			m.cap[d.token] = harborChargerMaxKw
+		case harborLight:
+			m.dim[d.token] = 100
+		}
+	}
+	return m
+}
+
+// advanceTo integrates the wet wells up to elapsed, in steps of at most a second.
+func (m *harborModel) advanceTo(elapsed time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if elapsed <= m.elapsed {
+		return
+	}
+	if elapsed-m.elapsed > harborMaxGap {
+		m.elapsed = elapsed - harborMaxGap
+	}
+	for m.elapsed < elapsed {
+		step := harborMaxStep
+		if elapsed-m.elapsed < step {
+			step = elapsed - m.elapsed
+		}
+		m.elapsed += step
+		if day := harborDay(m.elapsed); day != m.day {
+			// Midnight: the operator's overnight reset. Derates and dimming expire, so the next
+			// day's beats can happen again.
+			m.day = day
+			for t := range m.cap {
+				m.cap[t] = harborChargerMaxKw
+			}
+			for t := range m.dim {
+				m.dim[t] = 100
+			}
+		}
+		h := harborHour(m.elapsed)
+		for token, p := range m.pumps {
+			locked := harborAirLocked(token, h)
+			if locked || (!p.running && p.well >= harborFloatStart) {
+				if !p.running {
+					p.duty = 100
+				}
+				p.running = true
+			}
+			out := 0.0
+			if p.running && !locked {
+				out = harborPumpRate * p.duty / 100
+			}
+			p.well = math.Max(0, math.Min(harborWellCeiling, p.well+(harborRain(h)-out)*step.Seconds()))
+			if p.running && !locked && p.well <= harborLowCutoff {
+				p.running = false
+			}
+		}
+	}
+}
+
+// reading is device token's measurements at elapsed, or nil when it publishes nothing this tick.
+// A charger whose feeder is down buffers the reading it would have sent, stamped at.
+func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time) map[string]float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.devices[token]
+	if !ok {
+		return nil
+	}
+	h := harborHour(elapsed)
+	sample := int64(elapsed / time.Second)
+	switch d.kind {
+	case harborGauge:
+		return map[string]float64{
+			HarborpulseWaterLevelKey: round3(harborGaugeLevel(m.seed, d, h, sample)),
+			HarborpulseBatteryKey:    round3(3.6 + harborNoise(m.seed, token, sample, 0.01)),
+		}
+	case harborPump:
+		p := m.pumps[token]
+		current, flow := 0.0, 0.0
+		if p.running {
+			if harborAirLocked(token, h) {
+				current = 0.8 + harborNoise(m.seed, token, sample, 0.1)
+			} else {
+				current = 17.5*p.duty/100 + harborNoise(m.seed, token, sample, 0.3)
+				flow = 120 * p.duty / 100
+			}
+		}
+		return map[string]float64{
+			HarborpulseWetWellKey:     round3(p.well + harborNoise(m.seed, token, sample, 0.005)),
+			HarborpulsePumpRunningKey: boolNum(p.running),
+			HarborpulsePumpCurrentKey: round3(current),
+			HarborpulseFlowKey:        round3(flow),
+		}
+	case harborLight:
+		if harborOutage(d.quay, h) {
+			return nil
+		}
+		on := harborLampOn(h)
+		power := 0.5
+		if on {
+			power = 80 * m.dim[token] / 100
+		}
+		return map[string]float64{
+			HarborpulseLampOnKey:    boolNum(on),
+			HarborpulseLampPowerKey: round3(power),
+			HarborpulseLampFaultKey: boolNum(harborLampFault(token, h)),
+			HarborpulseDimKey:       m.dim[token],
+		}
+	case harborCharger:
+		power := math.Min(harborChargerDemand(d, h), m.cap[token])
+		values := map[string]float64{
+			HarborpulseChargerPowerKey: round3(power),
+			HarborpulseSessionKey:      boolNum(power > 1),
+			HarborpulseConnectorKey:    round3(harborConnectorTemp(token, h, power) + harborNoise(m.seed, token, sample, 0.3)),
+			HarborpulseMaxKwKey:        m.cap[token],
+		}
+		if harborOutage(d.quay, h) {
+			buf := append(m.buffers[token], harborBuffered{at: at, values: values})
+			if len(buf) > harborBufferCap {
+				buf = buf[len(buf)-harborBufferCap:]
+			}
+			m.buffers[token] = buf
+			return nil
+		}
+		return values
+	case harborMeter:
+		kw := harborMeterKw(token, h) + harborNoise(m.seed, token, sample, 1.5)
+		// Energy is power over SIM time since the meter's previous reading.
+		if last, seen := m.lastMeter[token]; seen && elapsed > last {
+			m.kwh[token] += kw * 24 * (elapsed - last).Seconds() / harborpulseDayLength.Seconds()
+		}
+		m.lastMeter[token] = elapsed
+		return map[string]float64{HarborpulseMeterKwKey: round3(kw), HarborpulseMeterKwhKey: round3(m.kwh[token])}
+	case harborTruck:
+		fix := harborTruckFix(h)
+		return map[string]float64{HarborpulseSpeedKey: *fix.Speed}
+	}
+	return nil
+}
+
+// fix is the device's position this tick; only the truck reports one.
+func (m *harborModel) fix(token string, elapsed time.Duration) (Fix, bool) {
+	if d, ok := m.devices[token]; !ok || d.kind != harborTruck {
+		return Fix{}, false
+	}
+	return harborTruckFix(harborHour(elapsed)), true
+}
+
+// takeBackfill hands over every buffer whose feeder is back, oldest reading first.
+func (m *harborModel) takeBackfill(elapsed time.Duration) []harborBackfill {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	h := harborHour(elapsed)
+	var out []harborBackfill
+	for token, buf := range m.buffers {
+		if len(buf) == 0 || harborOutage(m.devices[token].quay, h) {
+			continue
+		}
+		out = append(out, harborBackfill{token: token, readings: buf})
+		delete(m.buffers, token)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].token < out[j].token })
+	return out
+}
+
+// requeue puts readings that were not delivered back at the FRONT of the device's buffer.
+func (m *harborModel) requeue(token string, readings []harborBuffered) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	buf := append(append([]harborBuffered{}, readings...), m.buffers[token]...)
+	if len(buf) > harborBufferCap {
+		buf = buf[len(buf)-harborBufferCap:]
+	}
+	m.buffers[token] = buf
+}
+
+// command applies one command to the device and reports whether it was accepted. A command the
+// device cannot carry out — an unknown key, a missing or out-of-range argument, a key meant for
+// another kind of device — is refused, never acknowledged.
+func (m *harborModel) command(token, key string, payload json.RawMessage) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.devices[token]
+	if !ok {
+		return false
+	}
+	switch {
+	case d.kind == harborPump && key == HarborpulseStartPumpKey:
+		duty, ok := harborParam(payload, HarborpulseDutyParam, 50, 100)
+		if !ok {
+			return false
+		}
+		p := m.pumps[token]
+		p.running, p.duty = true, duty
+		return true
+	case d.kind == harborPump && key == HarborpulseStopPumpKey:
+		// A latched contactor does not open on command; the device says so.
+		if harborAirLocked(token, harborHour(m.elapsed)) {
+			return false
+		}
+		m.pumps[token].running = false
+		return true
+	case d.kind == harborCharger && key == HarborpulseDerateKey:
+		kw, ok := harborParam(payload, HarborpulseMaxKwParam, 3.7, harborChargerMaxKw)
+		if !ok {
+			return false
+		}
+		m.cap[token] = kw
+		return true
+	case d.kind == harborLight && key == HarborpulseSetDimKey:
+		level, ok := harborParam(payload, HarborpulseLevelParam, 0, 100)
+		if !ok {
+			return false
+		}
+		m.dim[token] = level
+		return true
+	}
+	return false
+}
+
+func boolNum(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
