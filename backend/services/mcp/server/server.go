@@ -25,7 +25,7 @@ const (
 // sessionTimeout bounds idle MCP sessions. The SDK never reaps sessions when this
 // is zero, so an authenticated client that repeatedly re-initializes (exactly what
 // long-lived LLM agents do) would grow the in-memory session map without bound and
-// OOM the pod. Reaping idle sessions caps that.
+// OOM the pod. Reaping idle sessions frees slots in the live-session cap.
 const sessionTimeout = 30 * time.Minute
 
 // maxRequestBodyBytes is the body ceiling on the MCP endpoint, given both to the SDK
@@ -81,6 +81,15 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *G
 		func(*http.Request) *mcp.Server { return mcpServer },
 		&mcp.StreamableHTTPOptions{SessionTimeout: sessionTimeout, MaxRequestBodyBytes: maxRequestBodyBytes},
 	)
+	caps := sessionCaps{total: maxSessions, caller: maxCallerSessions}
+	o := options{}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.sessionCaps != nil {
+		caps = *o.sessionCaps
+	}
+	sessionLimited := limitSessions(streamable, mcpServer, caps)
 
 	// The RS middleware verifies the bearer (signature + audience, via the verifier)
 	// and on failure emits the RFC 9728
@@ -92,7 +101,7 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *G
 		&sdkauth.RequireBearerTokenOptions{
 			ResourceMetadataURL: metadataURL(resourceID),
 		},
-	)(requireReadOnly(bufferRequestBody(limitMessages(streamable, limits)), resourceID))
+	)(requireReadOnly(bufferRequestBody(limitMessages(sessionLimited, limits)), resourceID))
 	// limitMessages sits inside the buffering because it reads the body, and inside the
 	// bearer check because it keys on the verified subject.
 	// The body is buffered INSIDE the bearer check, so a caller with no valid token is
@@ -297,8 +306,8 @@ func metadataURL(resourceID string) string {
 // RFC 8707 audience binding needs them to be: the identifier tokens are minted for is
 // the identifier a client POSTs to.
 //
-// The probe and metrics handlers main.go adds are more specific patterns, so
-// ServeMux still routes them ahead of this catch-all.
+// Probe and metrics handlers are served separately on the operations mux;
+// this catch-all belongs only to the public listener.
 func Routes(mux *http.ServeMux, resourceID, issuer string, validator func() *coreauth.Validator,
 	gql *GraphQLClient, limits Limits, opts ...Option) {
 	mcpHandler, metadataHandler := New(resourceID, issuer, validator, gql, limits, opts...)

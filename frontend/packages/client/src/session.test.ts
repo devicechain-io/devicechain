@@ -191,11 +191,36 @@ describe('transient vs definitive refresh failures', () => {
     expect(state.pair).toBe(held);
   });
 
-  it('a transient failure once the access token has actually expired ends the session', async () => {
-    const err = offline();
-    const { state, tokens } = host(pair(-1), vi.fn().mockRejectedValue(err));
+  it.each([
+    ['no response', offline()],
+    ['a 503', httpError(503)],
+    ['a 429', httpError(429)],
+  ])('%s once the access token has expired fails the caller but keeps the session', async (_, err) => {
+    const next = pair(900);
+    const refresh = vi.fn().mockRejectedValueOnce(err).mockResolvedValueOnce(next);
+    const { state, tokens } = host(pair(-1), refresh);
+    const held = state.pair!;
+    // The caller cannot be given a valid token, so it gets the outage it hit, not a null that
+    // would send its request unauthenticated.
+    await expect(tokens.getAccessToken()).rejects.toBe(err);
+    expect(state.ended).toEqual([]);
+    expect(state.pair).toBe(held);
+    // The refresh token is still good, so the next call refreshes with it.
+    expect(await tokens.getAccessToken()).toBe(next.accessToken);
+    expect(state.ended).toEqual([]);
+  });
+
+  it('a session failing only transiently ends when its refresh token lapses, and not before', async () => {
+    const refresh = vi.fn().mockRejectedValue(offline());
+    const { state, tokens } = host(pair(-1, 60), refresh);
+    await expect(tokens.getAccessToken()).rejects.toBeInstanceOf(GraphQLRequestError);
+    await vi.advanceTimersByTimeAsync(59_000);
+    await expect(tokens.getAccessToken()).rejects.toBeInstanceOf(GraphQLRequestError);
+    expect(state.ended).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(await tokens.getAccessToken()).toBeNull();
-    expect(state.ended).toEqual([err]);
+    expect(state.ended).toEqual([undefined]);
+    expect(refresh).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -242,9 +267,10 @@ describe('startAutoRefresh retries', () => {
   });
 
   // Each case is a sequence of rolls and the attempt times (seconds after start) it must produce
-  // against a token due at +30 s and expiring at +60 s. The final retry is aimed at +59 s, a
-  // second ahead of expiry, and the session ends there; a backoff that would land within a second
-  // of that aim is moved onto it, so no two attempts ever come back to back.
+  // against a token due at +30 s and expiring at +60 s. One retry is aimed at +59 s, a second
+  // ahead of expiry, so a request then still has a token; a backoff that would land within a
+  // second of that aim is moved onto it, so no two attempts ever come back to back. After it the
+  // session is NOT ended: retries carry on at the backoff.
   it.each([
     ['the shortest backoffs', [0], [30, 30.5, 31.5, 33.5, 37.5, 45.5, 59]],
     ['the middle backoffs', [0.5], [30, 30.75, 32.25, 35.25, 41.25, 53.25, 59]],
@@ -253,7 +279,7 @@ describe('startAutoRefresh retries', () => {
     ['a backoff landing just short of the final aim', [1, 1, 1, 1, 0.6875], [30, 31, 33, 37, 45, 59]],
     // ...but one landing a full second short of it is kept: that is far enough apart.
     ['a backoff landing a second short of the final aim', [1, 1, 1, 1, 0.625], [30, 31, 33, 37, 45, 58, 59]],
-  ])('with %s, gives up only when the access token actually expires, not before', async (_, rolls, expected) => {
+  ])('with %s, aims one retry just ahead of expiry and keeps the session past it', async (_, rolls, expected) => {
     const queue = [...rolls];
     random.mockImplementation(() => (queue.length > 1 ? queue.shift()! : queue[0]));
     const at: number[] = [];
@@ -264,17 +290,67 @@ describe('startAutoRefresh retries', () => {
     const { state, tokens } = host(pair(60), refresh);
     const stop = tokens.startAutoRefresh();
 
-    await vi.advanceTimersByTimeAsync(58_999); // the final aim is still a millisecond away
-    expect(state.ended).toEqual([]);
+    await vi.advanceTimersByTimeAsync(58_999); // the aim is still a millisecond away
     expect(at).toEqual(expected.slice(0, -1));
-
-    await vi.advanceTimersByTimeAsync(1); // +59 s: the final attempt fails, and the session ends
+    await vi.advanceTimersByTimeAsync(1); // +59 s: the aimed attempt fails
     expect(at).toEqual(expected);
-    expect(state.ended).toHaveLength(1);
-    expect(state.ended[0]).toBeInstanceOf(GraphQLRequestError);
+    expect(state.ended).toEqual([]);
 
+    await vi.advanceTimersByTimeAsync(120_000); // and the attempts carry on past expiry
+    expect(at.length).toBeGreaterThan(expected.length);
+    expect(at.filter((s) => s > 60).length).toBeGreaterThan(0);
+    expect(state.ended).toEqual([]);
+    stop();
+  });
+
+  it('rides out an outage that outlasts the access token, while the refresh token is valid', async () => {
+    const next = pair(900, 7200);
+    let down = true;
+    const at: number[] = [];
+    const refresh = vi.fn().mockImplementation(async () => {
+      at.push((Date.now() - NOW) / 1000);
+      if (down) throw httpError(503);
+      return next;
+    });
+    const { state, tokens } = host(pair(60, 3600), refresh); // access expires at +60 s
+    const stop = tokens.startAutoRefresh();
+
+    // Ten minutes of outage: ten access-token lifetimes.
     await vi.advanceTimersByTimeAsync(600_000);
-    expect(at).toEqual(expected); // and then stops
+    expect(state.ended).toEqual([]);
+    // The backoff is capped: once it reaches the cap, attempts come no more often than every
+    // 15 s (half the 30 s cap, the shortest jitter) and no less often than every 30 s.
+    const late = at.filter((s) => s > 120);
+    for (let i = 1; i < late.length; i++) {
+      expect(late[i] - late[i - 1]).toBeGreaterThanOrEqual(15);
+      expect(late[i] - late[i - 1]).toBeLessThanOrEqual(30);
+    }
+
+    down = false;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(state.pair).toEqual(next);
+    expect(state.ended).toEqual([]);
+    stop();
+  });
+
+  it('ends a transiently failing session when its refresh token lapses, and then stops', async () => {
+    const at: number[] = [];
+    const refresh = vi.fn().mockImplementation(async () => {
+      at.push((Date.now() - NOW) / 1000);
+      throw offline();
+    });
+    const { state, tokens } = host(pair(60, 300), refresh); // refresh token lapses at +300 s
+    const stop = tokens.startAutoRefresh();
+
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(state.ended).toEqual([]);
+    expect(at.every((s) => s < 300)).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    // Lapsed, not refused: onEnd gets no error, as for any lapsed refresh token.
+    expect(state.ended).toEqual([undefined]);
+    const attempts = at.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(at.length).toBe(attempts);
     stop();
   });
 

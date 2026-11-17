@@ -67,6 +67,9 @@ export type ConnectorUpdateRequest = {
    * New connection settings, as a JSON object serialized to a string of at most 64 KiB.
    * Omit it to keep the stored config; an explicit null is refused. It is validated
    * against the connector's type after this update is applied.
+   *
+   * Changing the type or credential destination while a credential is stored requires secret
+   * in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
    */
   config?: string | null | undefined;
   /** New description, or null to clear it. */
@@ -76,12 +79,18 @@ export type ConnectorUpdateRequest = {
   /**
    * The write-only credential. Omit it to keep the stored credential, send a value to
    * replace it, or send null or an empty string to delete it.
+   *
+   * Changing the type or credential destination while a credential is stored requires secret
+   * in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
    */
   secret?: string | null | undefined;
   /**
    * New connector type. Omit it to keep the stored type; an explicit null is refused. The
    * stored config is checked against the new type, so a change that leaves the config
    * invalid for it is rejected.
+   *
+   * Changing the type or credential destination while a credential is stored requires secret
+   * in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
    */
   type?: string | null | undefined;
 };

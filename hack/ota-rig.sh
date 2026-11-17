@@ -625,8 +625,8 @@ discover() {
   um_selector="$(k -n "$namespace" get deploy update-management -o json |
     jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')"
   um_port="$(k -n "$namespace" get deploy update-management -o json |
-    jq -r '[.spec.template.spec.containers[0].ports[] | select(.name == "graphql" or .name == "http" or .name == "metrics")][0].containerPort // empty')"
-  [[ -n "$um_port" ]] || fail "update-management exposes no graphql/http/metrics port to read metrics from"
+    jq -r '[.spec.template.spec.containers[0].ports[] | select(.name == "ops")][0].containerPort // empty')"
+  [[ -n "$um_port" ]] || fail "update-management exposes no ops port to read metrics from"
   # The ingress certificate's CA: the device's download trust anchor and the rig's API anchor.
   local secret
   # The front end is a Gateway (or, on an older install, an Ingress): its TLS secret either way.

@@ -53,12 +53,13 @@ func (l *sharedInferenceLimiter) Allow(tenant string) bool {
 		}
 		var now float64
 		// Postgres is the production datastore. SQLite exercises the same CAS path
-		// in unit tests; neither path relies on a replica's wall clock.
-		clock := "SELECT EXTRACT(EPOCH FROM clock_timestamp())::double precision"
+		// in unit tests; neither path relies on a replica's wall clock. Each dialect
+		// gets its own literal statement so the raw-SQL guard can read it.
+		clock := db.Raw("SELECT EXTRACT(EPOCH FROM clock_timestamp())::double precision")
 		if db.Dialector.Name() == "sqlite" {
-			clock = "SELECT (julianday('now') - 2440587.5) * 86400.0"
+			clock = db.Raw("SELECT (julianday('now') - 2440587.5) * 86400.0")
 		}
-		if db.Raw(clock).Scan(&now).Error != nil {
+		if clock.Scan(&now).Error != nil {
 			return false
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {

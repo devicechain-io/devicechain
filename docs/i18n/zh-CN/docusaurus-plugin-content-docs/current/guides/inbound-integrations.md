@@ -473,6 +473,7 @@ NaN、无穷大、超出范围、JSON 类型错误或缺少编码器参数，都
 ## 相关内容 {#related}
 
 - [从 LoRaWAN 上行到告警](./lorawan-uplink-to-alarm.md)：从二进制上行出发，经过集成和解码器，直到检测规则和告警的完整演练。
+- [将 ChirpStack 上行发送到 DeviceChain](./chirpstack-uplinks.md)和[将 The Things Network / The Things Stack 上行发送到 DeviceChain](./the-things-stack-uplinks.md)：逐步配置每种网络服务器，使用其编解码器或载荷解码器。
 - [载荷解码器](./payload-decoders.md)：把原始帧或网络服务器解码出的对象转换成测量。
 - [设备](../user-guide/devices.md)：设备表单及其 **Aliases** 字段。
 - [连接设备](./connecting-a-device.md)：设备自行使用的 MQTT 和 HTTP 路径。
