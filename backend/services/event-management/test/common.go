@@ -50,6 +50,10 @@ func (api *MockApi) CreateAlertEvent(ctx context.Context, request *emmodel.Alert
 	return args.Get(0).(*emmodel.AlertEvent), args.Error(1)
 }
 
+func (api *MockApi) CreateEnvelopeEvents(ctx context.Context, db *gorm.DB, events []*emmodel.Event) error {
+	return api.Mock.Called(events).Error(0)
+}
+
 func (api *MockApi) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests []*emmodel.LocationEventCreateRequest) ([]*emmodel.LocationEvent, error) {
 	args := api.Mock.Called()
 	return args.Get(0).([]*emmodel.LocationEvent), args.Error(1)
