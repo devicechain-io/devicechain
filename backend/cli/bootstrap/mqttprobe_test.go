@@ -122,18 +122,19 @@ func TestProbeClientIdIsAcceptableToNats(t *testing.T) {
 	}
 }
 
-// TestConnackRefusalExplainsTheAuthCase covers the refusal an operator will
-// actually hit: a broker with authentication enabled routes device connects
-// through the auth callout, so an unauthenticated probe is turned away. The
-// useful sentence is not "refused" but "the probe cannot pull this lever here".
+// TestConnackRefusalExplainsTheAuthCase covers a refused login: the useful
+// sentence is not "refused" but that the probe's own login was turned away, so
+// nothing was checked, and what pulls the same lever instead.
 func TestConnackRefusalExplainsTheAuthCase(t *testing.T) {
 	for _, code := range []byte{4, 5} {
 		err := readConnackFrom(t, []byte{0x20, 0x02, 0x00, code})
 		if err == nil {
 			t.Fatalf("return code %d must be an error", code)
 		}
-		if !strings.Contains(err.Error(), "authentication enabled") {
-			t.Fatalf("return code %d should explain the auth case; got %q", code, err)
+		for _, want := range []string{"refused the MQTT probe's login", "no replication was checked", "connect a device"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("return code %d should say %q; got %q", code, want, err)
+			}
 		}
 	}
 }
