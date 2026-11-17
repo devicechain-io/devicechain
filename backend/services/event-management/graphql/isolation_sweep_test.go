@@ -57,10 +57,15 @@ func TestIsolationSweep(t *testing.T) {
 	}
 
 	authorities := []string{string(auth.EventRead), string(auth.LocationRead)}
+	// Use the live hub, rather than comparing two identical dependency refusals.
+	stream := startStreamFixture(t)
+	withNats := func(ctx context.Context) context.Context {
+		return context.WithValue(ctx, gqlcore.ContextNatsKey, stream.nats)
+	}
 	out := isolationsweep.Run(t, isolationsweep.Config{
 		Schema:   gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{}),
-		Scoped:   scopedCtx(api, tenant, []string{"customer:acme"}, authorities...),
-		Unscoped: scopedCtx(api, tenant, nil, authorities...),
+		Scoped:   withNats(scopedCtx(api, tenant, []string{"customer:acme"}, authorities...)),
+		Unscoped: withNats(scopedCtx(api, tenant, nil, authorities...)),
 		Probe:    "globex-pump",
 		Hidden:   []string{"globex"},
 		// calculatedEvents' formula, input and range cannot be guessed from their types; with
@@ -70,7 +75,17 @@ func TestIsolationSweep(t *testing.T) {
 			"from": `"2026-09-01T00:00:00Z"`, "to": `"2026-09-02T00:00:00Z"`,
 		},
 	})
-	o, ok := isolationsweep.OutcomeOf(out, "query events")
+	// measurementStream is judged on its live answer, not on a refusal to subscribe. Its
+	// "(all arguments)" document fills deviceToken AND deviceTokens, which the resolver
+	// refuses as a combination before it reaches the hub, so only the plain document
+	// exercises the stream here; the per-device filters are covered by
+	// subscriptions_events_test.go.
+	o, ok := isolationsweep.OutcomeOf(out, "subscription measurementStream")
+	require.True(t, ok, "missing sweep outcome for measurementStream")
+	require.Empty(t, o.Codes, "the sweep must reach the live stream: %+v", o)
+	o, ok = isolationsweep.OutcomeOf(out, "subscription measurementStream (all arguments)")
+	require.True(t, ok && len(o.Codes) == 1, "deviceToken with deviceTokens is refused at subscribe time: %+v", o)
+	o, ok = isolationsweep.OutcomeOf(out, "query events")
 	require.True(t, ok && o.Data, "the opted-in events read answered acme's member %+v", o)
 	o, ok = isolationsweep.OutcomeOf(out, "query calculatedEvents")
 	require.True(t, ok && o.Data, "calculatedEvents did not answer acme's member with data, so the sweep never reached its read: %+v", o)
