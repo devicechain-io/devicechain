@@ -565,9 +565,9 @@ func ErrNotFound(token string) error {
 // object's reference. The transition is a conditional update, so of two concurrent
 // uploads at most one wins and an artifact never changes after it is AVAILABLE; the
 // loser gets ARTIFACT_UPLOAD_CONFLICT and must delete its own object.
-func (api *Api) CompleteUpload(ctx context.Context, a *Artifact, ref blob.Ref) error {
+func (api *Api) CompleteUpload(ctx context.Context, a *Artifact, stamp time.Time, ref blob.Ref) error {
 	res := api.RDB.DB(ctx).Model(identified(a)).
-		Where("id = ? AND state = ?", a.ID, StateUploading).
+		Where("id = ? AND state = ? AND uploading_since = ?", a.ID, StateUploading, stamp).
 		Updates(map[string]any{
 			"state":           StateAvailable,
 			"blob_ref":        sql.NullString{String: ref.String(), Valid: true},
@@ -599,25 +599,27 @@ const claimGrace = time.Minute
 // callers, across every replica, at most one succeeds; the others get
 // ARTIFACT_UPLOAD_IN_PROGRESS and must not read their body. A lease older than the upload
 // window belongs to a process that died, and is taken over.
-func (api *Api) ClaimUpload(ctx context.Context, a *Artifact) error {
-	now := time.Now().UTC()
+func (api *Api) ClaimUpload(ctx context.Context, a *Artifact) (time.Time, error) {
+	// PostgreSQL stores microseconds. Truncate before writing so the returned ownership
+	// stamp compares exactly with the stored value on every supported database.
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	stale := now.Add(-(UploadWindow(a.SizeBytes) + claimGrace))
 	res := api.RDB.DB(ctx).Model(identified(a)).
 		Where("id = ? AND state = ? AND (uploading_since IS NULL OR uploading_since < ?)", a.ID, StateUploading, stale).
 		Update("uploading_since", now)
 	if res.Error != nil {
-		return res.Error
+		return time.Time{}, res.Error
 	}
 	if res.RowsAffected == 0 {
-		return refuse(CodeUploadInProgress, "artifact %q already has an upload in progress", a.Token)
+		return time.Time{}, refuse(CodeUploadInProgress, "artifact %q already has an upload in progress", a.Token)
 	}
-	return nil
+	return now, nil
 }
 
 // ReleaseUpload gives the lease back. It is best effort by design: an expired lease is
 // taken over anyway, and the only cost of a failed release is that a retry waits for it.
-func (api *Api) ReleaseUpload(ctx context.Context, a *Artifact) error {
-	return api.RDB.DB(ctx).Model(identified(a)).Where("id = ?", a.ID).Update("uploading_since", nil).Error
+func (api *Api) ReleaseUpload(ctx context.Context, a *Artifact, stamp time.Time) error {
+	return api.RDB.DB(ctx).Model(identified(a)).Where("id = ? AND uploading_since = ?", a.ID, stamp).Update("uploading_since", nil).Error
 }
 
 // identified is the zero-value model carrying only the identity of a loaded artifact, which

@@ -126,14 +126,16 @@ var (
 	// may run again after a failed start, and a second registration would panic.
 	OcspMetrics *processor.OcspMetrics
 
-	// OwnershipDrain publishes the device ownership facts writes queue in their own
-	// transactions (ADR-081, model/ownership_outbox.go), one replica at a time.
-	AgentEffectsDrain        *core.PeriodicTask
-	AgentEffectsDrainMetrics *core.PeriodicTaskMetrics
-	AgentEffectsExhausted    prometheus.Counter
-	AgentKillConsumer        *processor.AgentKillConsumer
-	OwnershipDrain           *core.PeriodicTask
-	OwnershipDrainMetrics    *core.PeriodicTaskMetrics
+	// EntityDeletionDrain retries committed deletion facts until the broker acknowledges
+	// them, one replica at a time (model/deletion_outbox.go).
+	EntityDeletionDrain        *core.PeriodicTask
+	EntityDeletionDrainMetrics *core.PeriodicTaskMetrics
+	AgentEffectsDrain          *core.PeriodicTask
+	AgentEffectsDrainMetrics   *core.PeriodicTaskMetrics
+	AgentEffectsExhausted      prometheus.Counter
+	AgentKillConsumer          *processor.AgentKillConsumer
+	OwnershipDrain             *core.PeriodicTask
+	OwnershipDrainMetrics      *core.PeriodicTaskMetrics
 
 	// SessionKickDrain retries the broker session kicks a provisioning revoke or reset left
 	// unconfirmed (model.PendingSessionKick), so a kick does not wait for an operator to
@@ -264,6 +266,7 @@ func buildMetrics() {
 		CredentialMisconfigured.WithLabelValues(path)
 	}
 	OwnershipDrainMetrics = Microservice.NewPeriodicTaskMetrics("ownership_drain")
+	EntityDeletionDrainMetrics = Microservice.NewPeriodicTaskMetrics("entity_deletion_drain")
 	AgentEffectsDrainMetrics = Microservice.NewPeriodicTaskMetrics("agent_effects_drain")
 	AgentEffectsExhausted = Microservice.NewCounter("agent_effects_exhausted_total",
 		"Agent effect outbox rows retained after exhausting their publication attempts.")
@@ -615,8 +618,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		AlarmEventMetrics)
 
 	// Add the entity-deleted writer and inject a publisher over it into the shared
-	// Api (ADR-044): the delete paths (deleteEdgeEntity) emit an entity-deletion
-	// event so event-management can reconcile dangling event_anchors.
+	// Api (ADR-044): the outbox drain publishes committed deletions so cross-service
+	// reference holders can remove dangling state.
 	devents, err := nmgr.NewWriter(streams.EntityDeleted)
 	if err != nil {
 		return err
@@ -819,6 +822,14 @@ func initAgentEffectsDrain() error {
 	return AgentEffectsDrain.Initialize(context.Background())
 }
 
+// initEntityDeletionDrain initializes the process-owned deletion outbox task.
+func initEntityDeletionDrain() error {
+	EntityDeletionDrain = core.NewPeriodicTask(Microservice.FunctionalArea, "entity-deletion-drain", ownershipDrainInterval,
+		func(ctx context.Context) error { return Api.DrainEntityDeletionsLocked(ctx) },
+		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(EntityDeletionDrainMetrics))
+	return EntityDeletionDrain.Initialize(context.Background())
+}
+
 // initOwnershipDrain builds and initializes the ownership drain. Once, in the initialize
 // phase: the task belongs to the process, and the publisher it drains through is re-wired by
 // createNatsComponents on every broker start.
@@ -990,6 +1001,19 @@ func wireIntegrationsCeilingResolver() {
 	Api.IntegrationsCeiling = governance.NewIntegrationsCeilingResolver(client, url)
 }
 
+func wireRulesCeilingResolver() {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().
+			Msg("Service secret or user-management endpoint not configured — no tier rule ceiling is enforced (only an explicit tier rulesPerTenant enforces one).")
+		return
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",
+		[]string{string(auth.TenantRead)})
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	Api.RulesCeiling = governance.NewRulesCeilingResolver(client, url)
+}
+
 // Called after microservice has been initialized.
 // safetyGates reports whether this service's optional safety gates are wired
 // (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
@@ -1071,6 +1095,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initAgentEffectsDrain(); err != nil {
 				return err
 			}
+			if err = initEntityDeletionDrain(); err != nil {
+				return err
+			}
 			if err = initOwnershipDrain(); err != nil {
 				return err
 			}
@@ -1096,6 +1123,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			wireGeoFenceCapsResolver()
 			wireCalculatedMetricsCeilingResolver()
 			wireIntegrationsCeilingResolver()
+			wireRulesCeilingResolver()
 			if err = wireProvisioningEndpoint(); err != nil {
 				return err
 			}
@@ -1177,6 +1205,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	// Start draining queued device ownership facts. After Svc.Start, which wired the
 	// publisher the drain publishes through.
 	if err := AgentEffectsDrain.Start(ctx); err != nil {
+		return err
+	}
+	if err := EntityDeletionDrain.Start(ctx); err != nil {
 		return err
 	}
 	if err = OwnershipDrain.Start(ctx); err != nil {
@@ -1293,6 +1324,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := AgentEffectsDrain.Stop(ctx); err != nil {
 		return err
 	}
+	if err := EntityDeletionDrain.Stop(ctx); err != nil {
+		return err
+	}
 	if err := OwnershipDrain.Stop(ctx); err != nil {
 		return err
 	}
@@ -1349,6 +1383,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
 	if err := AgentEffectsDrain.Terminate(ctx); err != nil {
+		return err
+	}
+	if err := EntityDeletionDrain.Terminate(ctx); err != nil {
 		return err
 	}
 	if err := OwnershipDrain.Terminate(ctx); err != nil {

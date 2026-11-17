@@ -357,7 +357,7 @@ func (s *Service) initialize(ctx context.Context, initializeRdb func(context.Con
 	return nil
 }
 
-// HttpAddr is the address this Service's HTTP surface is bound to — the probe server's, or
+// HttpAddr is the address this Service's public HTTP surface is bound to — the probe server's, or
 // the GraphQL manager's when it has one — and "" before Start. It is how a test that drives
 // a service's real start callbacks on an ephemeral port finds out which port it got.
 func (s *Service) HttpAddr() string {
@@ -366,6 +366,17 @@ func (s *Service) HttpAddr() string {
 		return s.probes.server.Addr()
 	case s.GraphQL != nil && s.GraphQL.Server != nil:
 		return s.GraphQL.Server.Addr()
+	}
+	return ""
+}
+
+// OpsAddr is the ops listener's bound address, or "" before Start.
+func (s *Service) OpsAddr() string {
+	switch {
+	case s.probes != nil && s.probes.opsServer != nil:
+		return s.probes.opsServer.Addr()
+	case s.GraphQL != nil:
+		return s.GraphQL.OpsAddr()
 	}
 	return ""
 }

@@ -55,13 +55,16 @@ const partitionConfigID = 1
 
 // ErrPlacementInvalid wraps every refusal of a stored placement that is not a usable table (an
 // assignment outside P, a hole, a pin out of range, too many pins). It is distinct from
-// partition.ErrPChanged on purpose: a broken table is an operator's repair, and since nothing
-// routes by it yet it must not stop the service; a changed P does.
+// partition.ErrPChanged on purpose: a broken table requires operator repair while the identity
+// provider stays up. Sharded stream routing needs a usable mirror; a changed P stops startup.
 var ErrPlacementInvalid = errors.New("iam: the stored placement is not a usable table")
 
 // ErrPlacementNotInitialized is returned by reads of a placement nobody has set up. A reader
 // never gets an empty table in its place: an empty table routes every tenant to nowhere.
 var ErrPlacementNotInitialized = errors.New("iam: the placement table has not been initialized (EnsurePlacement has not run)")
+
+// ErrShardGroupOutsideNatsCount identifies an assignment that stream routing cannot use.
+var ErrShardGroupOutsideNatsCount = errors.New("iam: shard group is outside nats.shardGroups.count")
 
 // EnsurePlacement initializes the placement on first use and verifies it on every later one,
 // returning the table.
@@ -155,10 +158,15 @@ func (s *Store) Placement(ctx context.Context) (partition.Table, error) {
 }
 
 // AssignVPartition moves a vpartition to a shard group. It is a placement CHANGE, the start of a
-// cutover, and bumps the generation; it does not move any data (nothing routes by it yet).
+// cutover, and bumps the generation; it does not move any data. The table drives database
+// shard routing and, when configured, NATS shard-group stream routing via its mirror.
 func (s *Store) AssignVPartition(ctx context.Context, vpartition, shardGroup int) error {
 	if shardGroup < 0 {
 		return fmt.Errorf("iam: shard group %d is negative", shardGroup)
+	}
+	if cfg := s.NatsShardGroups; cfg != nil && shardGroup >= cfg.Count {
+		return fmt.Errorf("%w: group %d, count %d; nats.shardGroups.count must be raised first",
+			ErrShardGroupOutsideNatsCount, shardGroup, cfg.Count)
 	}
 	return s.changePlacement(ctx, func(tx *gorm.DB, cfg PartitionConfig) error {
 		if vpartition < 0 || vpartition >= cfg.P {
