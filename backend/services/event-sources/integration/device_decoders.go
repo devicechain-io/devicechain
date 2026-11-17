@@ -11,6 +11,7 @@ import (
 	"errors"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/payloaddecode/plancost"
@@ -27,6 +28,20 @@ var ErrDeviceDecoderUnsupported = errors.New("integration: device-management doe
 
 // ErrDeviceDecoderBudget is a fill refused because this replica's budget for plan lookups is spent.
 var ErrDeviceDecoderBudget = errors.New("integration: this replica's device-decoder lookup budget is spent")
+
+// ErrDeviceDecoderHeld suppresses authentication verdicts after repeated device failures.
+var ErrDeviceDecoderHeld = errors.New("integration: device-decoder authentication held")
+
+const (
+	deviceDecoderFreeFailures   = 5
+	deviceDecoderFailureEntries = 50_000
+)
+
+type deviceFailureKey struct{ tenant, device string }
+type deviceFailureState struct {
+	count, inFlight    int
+	heldUntil, touched time.Time
+}
 
 const deviceDecoderQuery = `query($deviceToken: String!, $credentialType: String!, $credentialId: String!, $credentialSecret: String) {
   deviceDecoder(deviceToken: $deviceToken, credentialType: $credentialType, credentialId: $credentialId, credentialSecret: $credentialSecret) {
@@ -175,7 +190,8 @@ type DeviceDecoderConfig struct {
 	//     any tenant yet, so it spends from one replica-wide bucket, ColdFillsPerSecond/ColdFillBurst.
 	//     This is the bound on a flood of invented credentials. It is also the limit this design
 	//     cannot remove: while it is empty, a legitimate device on its FIRST contact with this
-	//     replica is answered 503 with Retry-After, and a device already vouched for is unaffected.
+	//     replica is answered 503 with Retry-After. Authenticated refreshes use separate budgets,
+	//     but still obey the per-device failure hold.
 	//   - A REFRESH (an authenticated answer held, now past its TTL) spends from the authenticated
 	//     tenant's own bucket, TenantFillsPerSecond/TenantFillBurst, so one tenant's refreshes cannot
 	//     starve another's, and from the replica's refresh bucket, FillsPerSecond/FillBurst, sized
@@ -280,11 +296,18 @@ func (e deviceDecoderEntry) fresh(now time.Time, cfg DeviceDecoderConfig) bool {
 //
 // 🔴 THE HIT PATH IS THE HOT PATH. It is one read lock, one map read and one fingerprint of the
 // credential per uplink on the device wire (and nothing at all on the routes that do not use it); a
-// fill takes the singleflight and a budget, which a hit never touches.
+// fill takes the singleflight and a budget, which a hit never touches. When failures are tracked,
+// hits also check the per-device hold under failureMu. All non-broker fills reserve
+// a per-device failure slot: HTTP exposes authentication verdicts, so distinct credential guesses
+// must share a failure hold even though they have distinct cache keys.
 type DeviceDecoders struct {
-	cfg     DeviceDecoderConfig
-	backend DeviceDecoderBackend
-	sf      singleflight.Group
+	cfg            DeviceDecoderConfig
+	backend        DeviceDecoderBackend
+	sf             singleflight.Group
+	failureMu      sync.Mutex
+	failures       map[deviceFailureKey]*deviceFailureState
+	tracked        atomic.Int64 // failure entries; zero lets cache hits skip failureMu
+	failureEntries int          // unexported capacity seam for tests
 
 	mu      sync.RWMutex
 	entries map[string]deviceDecoderEntry
@@ -310,7 +333,7 @@ type fillBucket struct {
 func NewDeviceDecoders(backend DeviceDecoderBackend, cfg DeviceDecoderConfig) *DeviceDecoders {
 	cfg = cfg.withDefaults()
 	now := cfg.Now()
-	return &DeviceDecoders{cfg: cfg, backend: backend, entries: make(map[string]deviceDecoderEntry),
+	return &DeviceDecoders{cfg: cfg, backend: backend, failureEntries: deviceDecoderFailureEntries, failures: make(map[deviceFailureKey]*deviceFailureState), entries: make(map[string]deviceDecoderEntry),
 		coldTokens: cfg.ColdFillBurst, coldAt: now, fillTokens: cfg.FillBurst, fillAt: now, tenants: make(map[string]*fillBucket)}
 }
 
@@ -330,6 +353,10 @@ type DeviceLookup struct {
 func (d *DeviceDecoders) Lookup(ctx context.Context, tenant, device string, cred DeviceCredential) (DeviceLookup, error) {
 	key := tenant + "\x00" + device + "\x00" + cred.digest()
 	now := d.cfg.Now()
+	who := deviceFailureKey{tenant, device}
+	if !cred.AssertedByBroker && d.failureHeld(who, now) {
+		return DeviceLookup{}, ErrDeviceDecoderHeld
+	}
 	e, have := d.get(key)
 	if have {
 		if e.fresh(now, d.cfg) {
@@ -355,6 +382,9 @@ func (d *DeviceDecoders) Lookup(ctx context.Context, tenant, device string, cred
 		// just after another flight for this key finished and stored its answer; without this it
 		// would spend a token and ask again for something that is now held.
 		at := d.cfg.Now()
+		if !cred.AssertedByBroker && d.failureHeld(who, at) {
+			return nil, ErrDeviceDecoderHeld
+		}
 		cur, ok := d.get(key)
 		if ok && cur.fresh(at, d.cfg) {
 			return cur, nil
@@ -364,6 +394,17 @@ func (d *DeviceDecoders) Lookup(ctx context.Context, tenant, device string, cred
 		// tenant is the broker's, not an unproven caller's, so it is charged to THAT tenant's bucket
 		// and never spends the cold bucket that bounds a flood of invented credentials.
 		refresh := cred.AssertedByBroker || (ok && cur.authed && at.Sub(cur.at) < d.cfg.StaleMax)
+		var reservation *deviceFailureState
+		// A refresh uses its own budget, but must obey the same hold as a cold lookup.
+		if !cred.AssertedByBroker {
+			var allowed bool
+			reservation, allowed = d.reserveFailure(who, at)
+			if !allowed {
+				return nil, ErrDeviceDecoderHeld
+			}
+			// Also releases reservations on a budget refusal or backend error.
+			defer d.finishFailure(who, reservation)
+		}
 		if !d.takeFill(tenant, refresh, at) {
 			return nil, ErrDeviceDecoderBudget
 		}
@@ -373,6 +414,9 @@ func (d *DeviceDecoders) Lookup(ctx context.Context, tenant, device string, cred
 		plan, err := d.backend.DeviceDecoder(fctx, tenant, device, cred)
 		if err != nil {
 			return nil, err
+		}
+		if reservation != nil {
+			d.recordFailure(who, reservation, plan != nil, d.cfg.Now())
 		}
 		fresh := deviceDecoderEntry{at: d.cfg.Now()}
 		if plan != nil {
@@ -390,6 +434,9 @@ func (d *DeviceDecoders) Lookup(ctx context.Context, tenant, device string, cred
 		err = ctx.Err()
 	}
 	if err != nil {
+		if !cred.AssertedByBroker && (errors.Is(err, ErrDeviceDecoderHeld) || d.failureHeld(who, d.cfg.Now())) {
+			return DeviceLookup{}, ErrDeviceDecoderHeld
+		}
 		// A refusal stored since this request read the entry (by a flight that finished first) is newer
 		// than what it holds, and a stale authentication must never stand in over it.
 		if cur, ok := d.get(key); stale && !errors.Is(err, ErrDeviceDecoderUnsupported) && !(ok && !cur.authed) {
@@ -490,4 +537,92 @@ func (d *DeviceDecoders) put(key string, e deviceDecoderEntry) {
 		evictSome(d.entries, d.cfg.Entries/16+1, func(old deviceDecoderEntry) bool { return e.at.Sub(old.at) >= d.cfg.StaleMax })
 	}
 	d.entries[key] = e
+}
+
+// failureHeld checks the device-wide gate before any cached verdict is served. An elapsed
+// hold permits cache hits without clearing the failures: a cached answer is not new proof.
+func (d *DeviceDecoders) failureHeld(key deviceFailureKey, now time.Time) bool {
+	if d.tracked.Load() == 0 {
+		return false
+	}
+	d.failureMu.Lock()
+	defer d.failureMu.Unlock()
+	s := d.failures[key]
+	return s != nil && s.count >= deviceDecoderFreeFailures && (now.Before(s.heldUntil) || s.inFlight > 0)
+}
+
+// reserveFailure counts pending questions against the free allowance. Once that allowance
+// is spent, only one probe may run after the hold expires, regardless of credential digest.
+func (d *DeviceDecoders) reserveFailure(key deviceFailureKey, now time.Time) (*deviceFailureState, bool) {
+	d.failureMu.Lock()
+	defer d.failureMu.Unlock()
+	s := d.failures[key]
+	if s == nil {
+		if len(d.failures) >= d.failureEntries {
+			// Bound the work even when an attacker fills the table with invented devices.
+			// Map iteration samples entries in randomized order; never evict an active reservation.
+			var oldest deviceFailureKey
+			var candidate *deviceFailureState
+			n := 0
+			for k, old := range d.failures {
+				if old.inFlight == 0 && (candidate == nil || old.touched.Before(candidate.touched)) {
+					oldest, candidate = k, old
+				}
+				n++
+				if n >= 64 {
+					break
+				}
+			}
+			if candidate == nil {
+				return nil, false
+			}
+			delete(d.failures, oldest)
+			d.tracked.Add(-1)
+		}
+		s = &deviceFailureState{}
+		d.failures[key] = s
+		d.tracked.Add(1)
+	}
+	s.touched = now
+	if s.count >= deviceDecoderFreeFailures {
+		if now.Before(s.heldUntil) || s.inFlight > 0 {
+			return nil, false
+		}
+	} else if s.count+s.inFlight >= deviceDecoderFreeFailures {
+		return nil, false
+	}
+	s.inFlight++
+	return s, true
+}
+
+func (d *DeviceDecoders) finishFailure(key deviceFailureKey, s *deviceFailureState) {
+	d.failureMu.Lock()
+	defer d.failureMu.Unlock()
+	s.inFlight--
+	if d.failures[key] == s && s.count == 0 && s.inFlight == 0 {
+		delete(d.failures, key)
+		d.tracked.Add(-1)
+	}
+}
+
+func (d *DeviceDecoders) recordFailure(key deviceFailureKey, s *deviceFailureState, authenticated bool, now time.Time) {
+	d.failureMu.Lock()
+	defer d.failureMu.Unlock()
+	if authenticated {
+		if _, ok := d.failures[key]; ok {
+			delete(d.failures, key)
+			d.tracked.Add(-1)
+		}
+		return
+	}
+	// A successful concurrent authentication supersedes outstanding credential guesses.
+	if s == nil || d.failures[key] != s {
+		return
+	}
+	s.count++
+	s.touched = now
+	if s.count >= deviceDecoderFreeFailures {
+		hold := time.Second * time.Duration(1<<min(s.count-deviceDecoderFreeFailures, 6))
+		s.heldUntil = now.Add(min(hold, 60*time.Second))
+	}
 }
