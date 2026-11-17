@@ -45,6 +45,16 @@ func requireRetentionJobs(t *testing.T, db *gorm.DB, policy DataLifecyclePolicy)
 			want[table] = days
 		}
 	}
+	// The measurement_rollups aggregate carries a job of its own whenever raw
+	// retention is on: one raw chunk interval longer, rounded up to whole days
+	// (minimum one). Also deliberately independent of RollupRetentionDays.
+	if policy.RetentionDays > 0 {
+		margin := (policy.ChunkIntervalHours + 23) / 24
+		if margin < 1 {
+			margin = 1
+		}
+		want[RollupAggregate] = policy.RetentionDays + margin
+	}
 	got := map[string]int{}
 	for _, job := range jobs {
 		require.NotContains(t, got, job.HypertableName, "duplicate retention job")
