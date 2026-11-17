@@ -60,7 +60,7 @@
 # request DECLARE an intended break (see CONTRIBUTING.md, "Changing a public interface"); the
 # pull request cannot know which version ships it, so the version-dependent half lives here,
 # where the tag is known. hack/api-declared-breaks.sh lists every declaration still live against
-# the release's baseline (the nearest stable tag before it), and then:
+# the release's baseline (the highest stable tag below it by semver), and then:
 #
 #   before 1.0.0   a live declaration requires `"breaking": true` in the highlights: a break may
 #                  ship in any release, but the release must SAY so.

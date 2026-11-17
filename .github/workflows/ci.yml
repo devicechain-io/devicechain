@@ -3484,8 +3484,9 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # API compatibility: does this change break a client written against the last
-  # release? Every served GraphQL schema is compared with the same schema at the
-  # nearest stable release tag reachable from HEAD; a breaking change fails unless it
+  # release? Every served GraphQL schema is compared with the same schema at the last
+  # release on HEAD's line (hack/api-baseline.sh: on main, the newest minor, though it
+  # was tagged on a release branch main never contains); a breaking change fails unless it
   # is declared in backend/tools/docsgql/sdlcompat/breaks.txt with a reason, and every
   # @deprecated must carry a reason that names the replacement. The same comparison
   # runs for the dcctl command tree (commands, aliases, flags), the device wire contract
