@@ -820,7 +820,7 @@ describe('timestamps and the callback address', () => {
   // The server sends RFC 3339 with nanoseconds; showing it raw is unreadable. The
   // expectation is computed with the same formatter the rest of the console uses.
   const raw = '2026-10-01T10:00:00.123456789Z';
-  const shown = new Date(raw).toLocaleString();
+  const shown = new Date(raw).toLocaleString('en');
 
   it('formats the fetched and approved times', async () => {
     api.getIdpConnection.mockResolvedValue(

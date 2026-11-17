@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func newStateChangeTestApi(t *testing.T) *Api {
 }
 
 func scReq(device string, occurred time.Time, state string, session uint64) *StateChangeEventCreateRequest {
-	return &StateChangeEventCreateRequest{
+	request := &StateChangeEventCreateRequest{
 		Event: Event{
 			DeviceToken:  device,
 			EventType:    eventtype.StateChange,
@@ -62,6 +63,8 @@ func scReq(device string, occurred time.Time, state string, session uint64) *Sta
 		Reason:    "test",
 		SessionId: session,
 	}
+	request.EventId = DeriveEventId("A", &request.Event, []byte(fmt.Sprintf("%s:%d", state, session)))
+	return request
 }
 
 func countStateChanges(t *testing.T, api *Api, ctx context.Context, device string) int64 {

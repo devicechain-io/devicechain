@@ -116,7 +116,7 @@ func wireIngest(t *testing.T, um *fakeUM, rate float64, burst int) *ingestWiring
 		InboundEventsWriter, FailedDecodeWriter, inboundBackpressure = savedInbound, savedFailed, savedAdmission
 	})
 	// No broker here, so the pipeline is declared open: these tests are about the rate gate.
-	inboundBackpressure = func() error { return nil }
+	inboundBackpressure = func(string) error { return nil }
 
 	reg := prometheus.NewRegistry()
 	Microservice = &core.Microservice{InstanceId: "inst-1", FunctionalArea: "event-sources"}

@@ -23,7 +23,7 @@ func TestGraphQLErrorCarriesExtensionCodes(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"errors": []map[string]any{
 			{"message": "unknown tenant \"ghost\"", "extensions": map[string]any{"code": "UNKNOWN_TENANT"}},
-			{"message": "no code here"},
+			{"message": "no code here", "extensions": map[string]any{"retryAfterSeconds": 17}},
 		}})
 	}))
 	defer target.Close()
@@ -35,6 +35,9 @@ func TestGraphQLErrorCarriesExtensionCodes(t *testing.T) {
 	}
 	if strings.Join(gqlErr.Codes, ",") != "UNKNOWN_TENANT" {
 		t.Errorf("Codes = %q, want exactly the one code the response set", gqlErr.Codes)
+	}
+	if gqlErr.RetryAfterSeconds != 17 {
+		t.Errorf("RetryAfterSeconds = %d, want 17", gqlErr.RetryAfterSeconds)
 	}
 	want := "svcclient: " + target.URL + ": unknown tenant \"ghost\"; no code here"
 	if err.Error() != want {
