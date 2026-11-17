@@ -33,7 +33,7 @@ func NewShareSweep(ms *core.Microservice, api *model.Api) *core.PeriodicTask {
 		s.Changes.WithLabelValues(action).Add(0)
 	}
 	return core.NewPeriodicTask(ms.FunctionalArea, "share-sweep", ShareSweepInterval, s.Run,
-		core.NewNoOpLifecycleCallbacks(), core.WithPassMetrics(ms.NewPeriodicTaskMetrics("share_sweep")))
+		core.NewNoOpLifecycleCallbacks(), ms.NewPeriodicTaskMetrics("share_sweep"))
 }
 
 // Run permits one replica to sweep at a time.
