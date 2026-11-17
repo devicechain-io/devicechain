@@ -520,6 +520,13 @@ dcctl bootstrap local devicechain
 
 #### v1.7.0 新增内容 {#v170-whats-new}
 
+#### 删除通知可靠送达 {#v170-deletion-announcements}
+
+- 删除设备、客户、区域、资产或分组时，发给其他服务的通知现在与删除操作在同一个数据库事务中记录，`device-management` 会持续发布该通知，直到消息代理接受为止。此前，因代理中断或在不恰当的时刻重启而丢失的通知永远不会再发送，已删除实体的仪表板共享、事件锚点和检测状态因此可能残留。
+- 无论通知多晚发布，都携带删除操作发生的时间。
+- 在滚动升级期间新旧 Pod 并存时，由 `v1.6` Pod 处理的删除仍按旧方式通知。
+- 无需更改配置。
+
 ### v1.6.0 — 更严格的权限检查，代理重载时设备保持连接 {#v160-upgrade}
 
 `v1.6.0` 可从 `v1.5.0` 原地升级：先为集群运行 `dcctl install`，再为每个实例运行一次 `dcctl upgrade`，详见[滚动升级](#rolling-upgrades)。**两个命令都使用 v1.6.0 的 `dcctl`**，并向 `dcctl install` 提供集群设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。`device-management` 新增一个迁移，使当前实体属性键保持唯一并排队执行修复。参见[v1.6.0 的架构变更与回退](#v160-going-back)。若从 `v1.4.0` 或更早版本升级，请先阅读 [`v1.5.0` 说明](#v150-upgrade)。
