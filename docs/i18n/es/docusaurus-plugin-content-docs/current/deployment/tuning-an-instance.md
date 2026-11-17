@@ -182,6 +182,8 @@ hay que dimensionar a propósito. Tres cifras lo deciden.
   Los agregados de mediciones por minuto que sustentan los gráficos caducan también, un
   intervalo de chunk después (redondeado hacia arriba a días completos).
 
+Las lecturas de listas de eventos se detienen a los 60 segundos (15 segundos para un usuario con ámbito limitado que especifica un ancla); en historiales grandes, acota el intervalo de tiempo o filtra por dispositivo para evitar que el recuento exacto de cada página agote ese plazo.
+
 Como regla, la ventana sin comprimir necesita lecturas por segundo × (1 + métricas calculadas) × bytes por fila × 86 400 segundos × días, dejando libre una cuarta parte del volumen para el registro de
 escritura anticipada, el mantenimiento y el crecimiento. A los 600 bytes medidos y 10 000 lecturas por segundo son unos 520 GB al día, así que los siete días sin comprimir por defecto son unos 3,6 TB. Añade lo que
 necesiten el historial comprimido y la ventana de retención.

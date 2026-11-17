@@ -36,7 +36,7 @@ The form builder's action picker offers all four actions. A webhook action there
 
 `httpCall` sends an HTTP request directly to an endpoint you specify. You shape the request body with a **CEL expression** over the firing, so you send exactly the fields the receiver expects. The URL, method, headers and body template all live on the action itself, so a one-off webhook needs no separate setup.
 
-Authentication is optional and uses a **secret handle**. The token is stored in the **secret store** and presented at send time as an `Authorization: Bearer <token>` header. The header name and scheme are not configurable, so you cannot authenticate to a receiver that expects a custom API-key header this way. If the action names a handle but no secret is stored under it, the call is never sent without its credential: it is dead-lettered once with the outcome `invalid` and not retried. Nothing replays it, so that firing's call is not made; correct the action's secret handle so later firings authenticate.
+Authentication is optional and uses a **secret handle**. Handles in the `connector/` namespace are refused; an `httpCall` never sends a connector's credential. The token is stored in the **secret store** and presented at send time as an `Authorization: Bearer <token>` header. The header name and scheme are not configurable, so you cannot authenticate to a receiver that expects a custom API-key header this way. If the action names a handle but no secret is stored under it, the call is never sent without its credential: it is dead-lettered once with the outcome `invalid` and not retried. Nothing replays it, so that firing's call is not made; correct the action's secret handle so later firings authenticate.
 
 An `httpCall` can also be **signed**, so the receiver can verify the request came from DeviceChain and was not altered. Name a signing secret in the action's `signingSecretRef` and the call carries the `webhook-id`, `webhook-timestamp` and `webhook-signature` headers of the Standard Webhooks specification. It is off unless you set it. See [Signing Outbound Webhooks](../guides/signed-webhooks.md).
 
@@ -64,7 +64,7 @@ A connector is a **tenant-scoped resource** with the same lifecycle as a [device
 
 - a **type** (`mqtt`, `kafka`, `aws_sns`, `aws_sqs`)
 - the **destination config** for that type: broker addresses, topic, queue or ARN, and options such as QoS or TLS
-- an optional **credential**, referenced by handle. The value is written into the secret store and **never returned in cleartext**, exactly like a notification channel's secret.
+- an optional **credential**, referenced by handle. The value is written into the secret store and **never returned in cleartext**, exactly like a notification channel's secret. Changing the type or credential destination requires `secret` in the same request when a credential is stored; omission returns `SECRET_RESUPPLY_REQUIRED`. Re-supply the credential, or use `secret: null` to remove it. With `dcctl product apply`, set the manifest's credential handle before changing its destination. Topic, QoS and identity-only edits keep the credential.
 
 Because connectors are tenant-level, one tenant never sees or sends through another tenant's connectors.
 

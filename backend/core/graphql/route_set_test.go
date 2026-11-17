@@ -70,9 +70,9 @@ func TestRouteSetWithDevToolsDisabled(t *testing.T) {
 		// case honest: it says what this route does, so a change in that behaviour is
 		// visible here rather than absorbed by a loose matcher.
 		{"/graphql", http.StatusBadRequest, "a bodyless GET reaches the handler and is refused; a 404 would mean the route is not mounted at all"},
-		{"/healthz", http.StatusOK, "the chart's liveness probe addresses this by name"},
-		{"/readyz", http.StatusOK, "the chart's readiness and startup probes address this by name"},
-		{"/metrics", http.StatusOK, "the ServiceMonitor scrapes this path"},
+		{"/healthz", http.StatusNotFound, "liveness is served only by the operations listener"},
+		{"/readyz", http.StatusNotFound, "readiness is served only by the operations listener"},
+		{"/metrics", http.StatusNotFound, "the ServiceMonitor scrapes only the operations listener"},
 		{"/graphiql", http.StatusNotFound, "dev tools are off, so the explorer must NOT be mounted — secure by default"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
@@ -95,10 +95,10 @@ func TestRouteSetWithDevToolsEnabled(t *testing.T) {
 	}
 	// The counterweight: enabling the explorer must not disturb the rest. The bar is
 	// "still mounted", so /graphql keeps its 400 (see the sibling test) and the probes
-	// keep their 200.
+	// stay absent from the public mux.
 	for _, p := range []string{"/healthz", "/readyz", "/metrics"} {
-		if got := muxStatus(t, ms, http.MethodGet, p); got != http.StatusOK {
-			t.Errorf("GET %s = %d with dev tools enabled, want 200", p, got)
+		if got := muxStatus(t, ms, http.MethodGet, p); got != http.StatusNotFound {
+			t.Errorf("GET %s = %d with dev tools enabled, want 404", p, got)
 		}
 	}
 	if got := muxStatus(t, ms, http.MethodGet, "/graphql"); got != http.StatusBadRequest {
@@ -171,13 +171,13 @@ func TestRestartDoesNotPanic(t *testing.T) {
 			}
 			// And over the wire, because a restart that binds but serves nothing is exactly
 			// what a reused http.Server produces and a nil error cannot see.
-			resp, err := http.Get("http://" + gql.Server.Addr() + "/healthz")
+			resp, err := http.Get("http://" + gql.Server.Addr() + "/graphql")
 			if err != nil {
-				t.Fatalf("GET /healthz after restart: %v", err)
+				t.Fatalf("GET /graphql after restart: %v", err)
 			}
 			resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				t.Errorf("GET /healthz after restart = %d, want 200", resp.StatusCode)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("GET /graphql after restart = %d, want 400", resp.StatusCode)
 			}
 		})
 	}

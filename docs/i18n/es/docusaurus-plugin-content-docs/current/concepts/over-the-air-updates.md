@@ -73,10 +73,22 @@ Los demás ajustes acotan el servicio:
 | `maxArtifactBytes` | 512 MiB | El artefacto individual más grande. No puede superar `maxTenantArtifactBytes`. |
 | `maxTenantArtifactBytes` | 2 GiB | Lo máximo que pueden ocupar en total los artefactos de un inquilino. |
 | `maxConcurrentUploads` | 4 | Subidas que una réplica procesa a la vez. |
-| `maxConcurrentDownloads` | 16 | Descargas que una réplica sirve a la vez. |
+| `maxConcurrentDownloads` | 16 | Descargas que una réplica sirve a la vez entre todos los inquilinos. Consulta los límites de admisión abajo. |
 | `capabilityTtlSeconds` | 900 | Cuánto dura una concesión de descarga. Quince minutos es también el máximo; un valor mayor se rechaza al arrancar. |
 | `sweepIntervalSeconds` | 30 | Cada cuánto busca la plataforma intentos cuyo dispositivo ha callado. |
 | `deadlines.*` | consulta [más abajo](#deadlines) | Cuánto espera la plataforma en cada fase de un intento. |
+
+Cada réplica permite una descarga simultánea por (inquilino, dispositivo, asignación), incluso
+si el dispositivo renueva su concesión de descarga. La cuota de un inquilino es
+`max(1, floor(maxConcurrentDownloads / 2))` (ocho por defecto). Mientras otro inquilino ocupe
+un cupo, un inquilino que alcance o supere su cuota no puede iniciar otro flujo; los flujos
+existentes continúan. Si ningún otro inquilino ocupa un cupo, puede usar todos los cupos
+disponibles. Estos límites se aplican de forma independiente en cada réplica.
+
+Una descarga rechazada devuelve HTTP **503** con `Retry-After: 5`. Tras una conexión interrumpida,
+una descarga reanudada puede recibir esta respuesta durante unos **30 segundos** mientras el
+servidor detecta la desconexión y libera el flujo anterior. Los dispositivos deben tratar 503
+como reintentable y respetar `Retry-After` antes de reintentar, también al reanudar una descarga.
 
 Un valor negativo, una clave desconocida, o una `downloadBaseUrl` relativa, con credenciales o con
 query se rechazan al arrancar.

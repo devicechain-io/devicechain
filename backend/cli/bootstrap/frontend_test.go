@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/yaml"
 )
 
@@ -37,6 +38,46 @@ func classedIngress(ns, name, class string) networkingv1.Ingress {
 	return networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
 		Spec:       networkingv1.IngressSpec{IngressClassName: &class},
+	}
+}
+
+func TestInstallRefusesWhileAnNginxIngressCarriesASnippet(t *testing.T) {
+	for _, c := range []struct {
+		name, key       string
+		grafana, solver bool
+	}{
+		{name: "server", key: "nginx.ingress.kubernetes.io/server-snippet"},
+		{name: "configuration", key: "nginx.ingress.kubernetes.io/configuration-snippet"},
+		{name: "auth", key: "nginx.ingress.kubernetes.io/auth-snippet"},
+		{name: "stream", key: "nginx.ingress.kubernetes.io/stream-snippet"},
+		{name: "modsecurity", key: "nginx.ingress.kubernetes.io/modsecurity-snippet"},
+		{name: "any prefix", key: "example.com/custom-snippet"},
+		{name: "cluster owned Grafana", key: "nginx.ingress.kubernetes.io/server-snippet", grafana: true},
+		{name: "ACME solver", key: "nginx.ingress.kubernetes.io/server-snippet", solver: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ing := classedIngress("ns", "name", nginxIngressClass)
+			ing.Annotations = map[string]string{c.key: "#"}
+			if c.grafana {
+				ing.Namespace = monitoringNamespace
+				ing.Labels = map[string]string{"app.kubernetes.io/name": "grafana", "app.kubernetes.io/instance": monitoringReleaseName}
+			}
+			if c.solver {
+				ing.Labels = map[string]string{acmeSolverLabel: "true"}
+			}
+			f := frontEndFactsFrom([]networkingv1.IngressClass{nginxClass()}, []networkingv1.Ingress{ing}, false, nil, "", true)
+			_, err := planClusterFrontEnd(f.clusterFrontEnd, false, false)
+			var snippets *ErrIngressSnippetsInUse
+			if !errors.As(err, &snippets) {
+				t.Fatalf("err = %v, want *ErrIngressSnippetsInUse", err)
+			}
+			if want := []string{ing.Namespace + "/" + ing.Name + " (" + c.key + ")"}; !slices.Equal(snippets.Ingresses, want) {
+				t.Errorf("Ingresses = %v, want %v", snippets.Ingresses, want)
+			}
+			if err == nil || !strings.Contains(err.Error(), ing.Namespace+"/"+ing.Name) || !strings.Contains(err.Error(), c.key) {
+				t.Fatalf("err = %v, want refusal naming the Ingress and annotation", err)
+			}
+		})
 	}
 }
 
@@ -1070,4 +1111,113 @@ func TestAnUpgradeKeepsAnNginxInstanceOnNginxUntilTheClusterHasTraefik(t *testin
 			t.Errorf("a recorded nginx choice was undone: controller=%q legacy=%v", st.IngressController, st.LegacyIngress)
 		}
 	})
+}
+
+func TestInstallSnippetPreflightNegativeControls(t *testing.T) {
+	snippet := "nginx.ingress.kubernetes.io/server-snippet"
+	for _, c := range []struct {
+		name, class                            string
+		snippet, noNginx, remove, clusterOwned bool
+		wantVar                                string
+		wantRemovalError                       bool
+	}{
+		{name: "without annotation keeps nginx", class: nginxIngressClass, wantVar: "enable_ingress_nginx=true"},
+		{name: "another class is unaffected", class: "traefik", snippet: true, wantVar: "enable_ingress_nginx=true"},
+		{name: "no nginx class is unaffected", class: nginxIngressClass, snippet: true, noNginx: true, wantVar: "enable_ingress_nginx=false"},
+		{name: "removal still refuses a served Ingress", class: nginxIngressClass, snippet: true, remove: true, wantRemovalError: true},
+		{name: "removal still excludes cluster owned Ingress", class: nginxIngressClass, snippet: true, remove: true, clusterOwned: true, wantVar: "allow_ingress_nginx_removal=true"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ing := classedIngress("ns", "name", c.class)
+			if c.snippet {
+				ing.Annotations = map[string]string{snippet: "#"}
+			}
+			if c.clusterOwned {
+				ing.Namespace = monitoringNamespace
+				ing.Labels = map[string]string{"app.kubernetes.io/name": "grafana", "app.kubernetes.io/instance": monitoringReleaseName}
+			}
+			classes := []networkingv1.IngressClass{nginxClass()}
+			if c.noNginx {
+				classes = nil
+			}
+			f := frontEndFactsFrom(classes, []networkingv1.Ingress{ing}, false, nil, "", true)
+			plan, err := planClusterFrontEnd(f.clusterFrontEnd, false, c.remove)
+			if c.wantRemovalError {
+				var legacy *ErrLegacyIngressInUse
+				if !errors.As(err, &legacy) {
+					t.Fatalf("err = %v, want *ErrLegacyIngressInUse", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(plan.Vars, c.wantVar) {
+				t.Errorf("Vars = %v, want %s", plan.Vars, c.wantVar)
+			}
+		})
+	}
+}
+
+func TestNginxSnippetFactsAreSortedAndIncludeEveryAnnotation(t *testing.T) {
+	first := classedIngress("a", "first", nginxIngressClass)
+	first.Annotations = map[string]string{"example.com/z-snippet": "", "example.com/a-snippet": "#", "example.com/snippet-other": "#"}
+	last := classedIngress("z", "last", nginxIngressClass)
+	last.Annotations = map[string]string{"example.com/server-snippet": "#"}
+	f := frontEndFactsFrom([]networkingv1.IngressClass{nginxClass()}, []networkingv1.Ingress{last, first}, false, nil, "", true)
+	want := []string{"a/first (example.com/a-snippet)", "a/first (example.com/z-snippet)", "z/last (example.com/server-snippet)"}
+	if !slices.Equal(f.NginxSnippetIngresses, want) {
+		t.Fatalf("snippets = %v, want %v", f.NginxSnippetIngresses, want)
+	}
+	_, err := planClusterFrontEnd(f.clusterFrontEnd, false, false)
+	if err == nil {
+		t.Fatal("snippet annotations were accepted")
+	}
+	for _, entry := range want {
+		if !strings.Contains(err.Error(), entry) {
+			t.Errorf("refusal does not name %s: %v", entry, err)
+		}
+	}
+	for _, remedy := range []string{"dcctl upgrade", "remove the annotation", "re-run `dcctl install`"} {
+		if !strings.Contains(err.Error(), remedy) {
+			t.Errorf("refusal does not give remedy %q: %v", remedy, err)
+		}
+	}
+}
+
+func TestSettleClusterFrontEndRefusesSnippetsBeforeSettingVars(t *testing.T) {
+	class := nginxClass()
+	ing := classedIngress("ns", "name", nginxIngressClass)
+	ing.Annotations = map[string]string{"nginx.ingress.kubernetes.io/server-snippet": "#"}
+	typed := fake.NewSimpleClientset(&class, &ing)
+	st := &State{}
+	err := settleClusterFrontEnd(t.Context(), st, typed)
+	var snippets *ErrIngressSnippetsInUse
+	if !errors.As(err, &snippets) {
+		t.Fatalf("err = %v, want *ErrIngressSnippetsInUse", err)
+	}
+	if st.ClusterFrontEndVars != nil {
+		t.Fatalf("refusal set cluster vars: %v", st.ClusterFrontEndVars)
+	}
+	for _, action := range typed.Actions() {
+		if action.GetVerb() != "list" {
+			t.Errorf("unexpected action before refusal: %v", action)
+		}
+	}
+}
+
+func TestSettleClusterFrontEndFailsWhenIngressListFails(t *testing.T) {
+	class := nginxClass()
+	typed := fake.NewSimpleClientset(&class)
+	denied := errors.New("Ingress list denied")
+	typed.PrependReactor("list", "ingresses", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, denied
+	})
+	st := &State{}
+	if err := settleClusterFrontEnd(t.Context(), st, typed); !errors.Is(err, denied) {
+		t.Fatalf("err = %v, want list error", err)
+	}
+	if st.ClusterFrontEndVars != nil {
+		t.Fatalf("failed list set cluster vars: %v", st.ClusterFrontEndVars)
+	}
 }

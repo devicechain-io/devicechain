@@ -915,7 +915,7 @@ func TestAReadErrorRecordsWhenItWasHandedOut(t *testing.T) {
 func TestAReaderParkedBehindBackpressureCountsOnlyAFresherMeasurement(t *testing.T) {
 	clk := newTestClock()
 	nmgr, gs := gatedManager(t, clk)
-	r := &natsReader{nmgr: nmgr, durable: "parked", downstream: streams.InboundEvents}
+	r := &natsReader{nmgr: nmgr, durable: "parked", downstreams: []string{streams.InboundEvents}}
 	r.sub.Store(&nats.Subscription{}) // never fetched from: the gate refuses before any fetch
 
 	park := func(sampled time.Time) {
