@@ -770,3 +770,43 @@ func TestDeviceDecodersElapsedHoldAllowsOnlyOneProbe(t *testing.T) {
 	wg.Wait()
 	require.EqualValues(t, 1, b.calls.Load())
 }
+
+func TestDeviceDecodersSharedHoldOverridesStaleAuthentication(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		broker bool
+		held   bool
+	}{
+		{"throttled", &svcclient.GraphQLError{Codes: []string{"THROTTLED"}, RetryAfterSeconds: 17}, false, true},
+		{"wrapped throttled", errors.Join(errors.New("lookup"), &svcclient.GraphQLError{Codes: []string{"THROTTLED"}}), false, true},
+		{"transient", errors.New("connection reset"), false, false},
+		{"message is not a code", &svcclient.GraphQLError{Messages: []string{"THROTTLED"}, Codes: []string{"UNAVAILABLE"}}, false, false},
+		{"broker asserted", &svcclient.GraphQLError{Codes: []string{"THROTTLED"}}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ck := &dclock{t: time.Unix(1000, 0)}
+			be := &deviceBackendFake{plan: &DecoderPlan{Present: true}}
+			d := NewDeviceDecoders(be, DeviceDecoderConfig{TTL: time.Second, StaleMax: time.Minute, Now: ck.now})
+			secret := "right"
+			cred := DeviceCredential{Type: "MQTT_BASIC", ID: "u", Secret: &secret, AssertedByBroker: tc.broker}
+			l, err := d.Lookup(context.Background(), "acme", "m1", cred)
+			require.NoError(t, err)
+			require.True(t, l.Authenticated)
+			ck.t = ck.t.Add(2 * time.Second)
+			be.set(nil, tc.err)
+			l, err = d.Lookup(context.Background(), "acme", "m1", cred)
+			if tc.held {
+				require.ErrorIs(t, err, ErrDeviceDecoderHeld)
+				require.ErrorIs(t, err, tc.err)
+				require.False(t, l.Authenticated)
+				require.False(t, l.Stale)
+			} else {
+				require.NoError(t, err)
+				require.True(t, l.Authenticated)
+				require.True(t, l.Stale)
+			}
+			require.EqualValues(t, 2, be.calls.Load())
+		})
+	}
+}

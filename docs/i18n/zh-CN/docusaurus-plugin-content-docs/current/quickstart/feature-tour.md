@@ -25,18 +25,18 @@ title: 功能导览
   cd devicechain/examples/feature-tour
   ```
 
-有三个设置用来说明你的实例在哪里。每个都有默认值，与普通的 `dcctl install local` 之后执行 `dcctl bootstrap local tour --host localhost --no-tls` 相符，也都可以用环境变量覆盖：
+有三个设置用来说明你的实例在哪里。每个都有默认值，与普通的 `dcctl install local` 之后执行 `dcctl bootstrap local devicechain --host localhost --no-tls` 相符，也都可以用环境变量覆盖：
 
 | 变量 | 默认值 | 何时需要设置 |
 | --- | --- | --- |
 | `DC_URL` | `http://localhost` | 控制台在其他主机或端口上提供服务。 |
-| `INSTANCE` | `tour` | 你的 `dcctl` 实例使用了别的名称。它决定命名空间 `dci-<instance>`，脚本从中读取代理的证书颁发机构和超级用户的密码。 |
+| `INSTANCE` | `devicechain` | 你的 `dcctl` 实例使用了别的名称。它决定命名空间 `dci-<instance>`，脚本从中读取代理的证书颁发机构和超级用户的密码。 |
 | `MQTT_HOST` | `devicechain-control-plane` | 你的 kind 集群不叫 `devicechain`。它是集群节点的容器名称，即 `<cluster>-control-plane`。 |
 
 如果你的 `kubectl` 有多个上下文，还需设置 `KUBE_CONTEXT`。
 
 ```bash
-export DC_URL=http://localhost INSTANCE=devicechain MQTT_HOST=devicechain-control-plane
+export DC_URL=http://localhost MQTT_HOST=devicechain-control-plane
 ```
 
 模拟设备是 `kind` Docker 网络上的容器，因此它们通过节点名称访问代理的 MQTT 节点端口。在不是 kind 的集群上，请在任何能访问代理的机器上运行 [`device/coldroom.sh`](https://github.com/devicechain-io/devicechain/blob/main/examples/feature-tour/device/coldroom.sh)，或者让你自己的客户端连接到代理。参见[连接设备](../guides/connecting-a-device.md)。
@@ -164,7 +164,7 @@ query {
 
 以 `ops@acme.example` 登录（密码在 `.state/tour-a/customer-password` 中）。该用户会看到：
 
-- 只有 **Dashboards**、**Alarms** 和 **Devices** 的侧边栏，没有其他内容；
+- 只有 **Home**、**Dashboards**、**Alarms** 和 **Devices** 的侧边栏，没有其他内容；
 - 一个设备，`coldroom-a1`；
 - 一个仪表板 `tour-a-customer`，带有实时读数和他们自己冷库的告警；
 - 看不到 `coldroom-a2`，看不到它的读数和告警，也看不到运维人员的看板。
@@ -179,9 +179,11 @@ PASS  createCommand boost-cooling was accepted (QUEUED), not rejected
 PASS  your own command reached SUCCESSFUL (the device answered; last status: SUCCESSFUL)
 PASS  the operator sees both devices (2)
 PASS  the operator sees alarms on both devices (2 devices with alarms)
+PASS  the operator sees both dashboards (2)
 PASS  the customer sees exactly coldroom-a1 (saw: coldroom-a1)
 PASS  the customer sees alarms for coldroom-a1 only (saw: coldroom-a1)
 PASS  the customer reads no state of coldroom-a2 (0 measurements)
+PASS  the customer reads coldroom-a1's latest readings (2)
 PASS  the customer lists only the board shared with them (saw: tour-a-customer)
 PASS  the operator's board is invisible to the customer
 PASS  the read-only customer user cannot send a command (refused: FORBIDDEN)

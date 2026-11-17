@@ -64,6 +64,11 @@ For live hub channels, recorded playback, history and editor helpers, see the
 [dashboards README](https://github.com/devicechain-io/devicechain/tree/main/frontend/packages/dashboards).
 The [.NET and Unity API guide](./csharp-sdk.md) covers those platforms separately.
 
+`isStaleWrite(err)` from `@devicechain/client` recognizes an optimistic-concurrency
+refusal by `extensions.code: STALE_WRITE`, falling back to the phrase
+`modified by another writer` for older servers. Keep the unsaved draft and ask the
+user to reload before retrying. A stale write is distinct from a uniqueness `CONFLICT`.
+
 ## Versions and dist-tags
 
 All five packages are published together, at one version, from the release that cuts the platform

@@ -819,9 +819,8 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 	// did not filter — or a compromised one — read every command in the tenant,
 	// payloads included. The subject now carries the device, and the broker grant is
 	// narrowed to match, so the isolation is enforced rather than requested.
-	// Claim first. A lost claim means another dispatcher got there — benign, and now
-	// COUNTED rather than silent: while nothing wrote HELD this could not happen at all,
-	// so a standing rate here is the signal that two dispatch paths are overlapping.
+	// Claim first. A refusal can mean another dispatcher got there, expiry, or a gate
+	// closing since the read. None may publish; the existing counters record refusals.
 	nonce, claimed, err := cproc.Api.MarkSent(tenantCtx, cmd.ID)
 	if err != nil {
 		return err
@@ -835,7 +834,7 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 		}
 		incrLabel(cproc.ClaimsLost, string(path))
 		log.Debug().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
-			Msg("Another dispatcher claimed this command first; not publishing it again.")
+			Msg("Command is no longer claimable; not publishing it.")
 		return nil
 	}
 
@@ -890,7 +889,7 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 }
 
 // refusedForDisabled reports whether a refused claim was refused because the command's device is
-// now disabled, rather than lost to another dispatcher. MarkSent folds the disabled record into
+// now disabled, rather than expired or lost to another dispatcher. MarkSent folds the disabled record into
 // its own predicate and cannot say which predicate refused, so the record is asked afterwards.
 //
 // It is a classification for the log and the counters only, never a decision: nothing is
@@ -898,6 +897,10 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 // refusal as the lost claim it was always reported as. The read runs only on a refused claim,
 // so a healthy sweep pays nothing for it.
 func (cproc *CommandDeliveryProcessor) refusedForDisabled(ctx context.Context, cmd *model.Command) bool {
+	// An expired command belongs to the expiry sweep even if its device is disabled too.
+	if cmd.ExpiresAt.Valid && cmd.ExpiresAt.Time.Before(time.Now()) {
+		return false
+	}
 	reader := cproc.gateReader()
 	if reader == nil {
 		return false

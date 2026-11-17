@@ -39,6 +39,8 @@ import (
 // knowing when the number moves. Methods are qualified by receiver, because two types
 // in one file routinely carry methods of the same name.
 var sanctionedSystemContexts = map[string][]string{
+	// Lists only tenant IDs across the model; work remains scoped to each tenant.
+	"backend/core/rdb/tenant_sweep.go":           {"RdbManager.TenantsWith"},
 	"backend/core/rdb/audit.go":                  {"RdbManager.RecordAuthEventLabeled"},
 	"backend/core/rdb/rdb.go":                    {"RdbManager.ExecuteInitialize"},
 	"backend/core/secrets/selftest.go":           {"SelfTest"},
@@ -86,10 +88,9 @@ var sanctionedSystemContexts = map[string][]string{
 		"CountForeignClaimSecretDigests", "CountForeignProvisionSecretDigests",
 		"DigestPlaintextClaimSecrets", "DigestPlaintextProvisionSecrets",
 	},
-	"backend/services/device-state/processor/StateProcessor.go":                {"StateProcessor.runInactivityMonitor"},
-	"backend/services/event-management/model/analytics.go":                     {"ReconcileAnalyticsSurface"},
-	"backend/services/event-management/model/lifecycle.go":                     {"ApplyDataLifecyclePolicies"},
-	"backend/services/event-management/processor/AnchorReconciliationSweep.go": {"AnchorReconciliationSweep.runOnce"},
+	"backend/services/device-state/processor/StateProcessor.go": {"StateProcessor.runInactivityMonitor"},
+	"backend/services/event-management/model/analytics.go":      {"ReconcileAnalyticsSurface"},
+	"backend/services/event-management/model/lifecycle.go":      {"ApplyDataLifecyclePolicies"},
 	"backend/services/event-management/model/usage.go": {"Api.PruneUsageWorkingTables", "Api.RollupUsageHours",
 		"Api.RollupUsagePass"},
 	"backend/services/event-management/processor/backfill/worker.go": {"Worker.pass"},
@@ -103,7 +104,6 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/event-processing/model/device_attribute_store.go":          {"DeviceAttributeStore.LoadAll"},
 	"backend/services/event-processing/model/device_roster_store.go":             {"DeviceRosterStore.LoadAll", "DeviceRosterStore.LoadAllLifecycle"},
 	"backend/services/event-processing/model/profile_active_store.go":            {"ProfileActiveStore.LoadAll"},
-	"backend/services/notification-management/processor/RetentionSweeper.go":     {"RetentionSweeper.runOnce"},
 	"backend/services/notification-management/processor/escalation_scheduler.go": {"EscalationScheduler.runOnce"},
 	"backend/services/user-management/deadletters/context.go":                    {"systemCtx"},
 	"backend/services/user-management/iam/purge.go":                              {"Store.PurgeRecords"},

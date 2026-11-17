@@ -40,8 +40,9 @@ const ID_PREFIX = 'ig-detail';
 
 export default function IntegrationDetailPage() {
   const { t } = useTranslation('integrations');
-  const { token: rawToken } = useParams<{ token: string }>();
-  const token = decodeURIComponent(rawToken ?? '');
+  // The router hands the param over already decoded. Decoding it again turned a token
+  // holding a '%' into a different token, or threw on one such as "a%zz".
+  const token = useParams<{ token: string }>().token ?? '';
   const [version, reload] = useReload();
   const { data, loading, error } = useQuery(() => getIntegration(token), [token, version]);
   // useQuery keeps the previous data while a new read is in flight, so after an in-place move to

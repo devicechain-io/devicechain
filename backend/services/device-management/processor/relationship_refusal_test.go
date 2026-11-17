@@ -11,11 +11,9 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
-	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
-	"strings"
 	"testing"
 	"time"
 )
@@ -85,8 +83,7 @@ func TestDeviceAuthoredOwnershipAndContainmentAreRefused(t *testing.T) {
 }
 func TestAnOldOwnershipEdgeCannotBypassDeviceRefusal(t *testing.T) {
 	rig := relationshipRig(t)
-	token := uuid.NewSHA1(relationshipTokenNamespace, []byte(strings.Join([]string{
-		"acme", "device", "dev", "customer", "bravo", "assigned"}, "\x00"))).String()
+	token := model.DeviceAuthoredRelationshipToken("acme", "dev", "customer", "bravo", "assigned")
 	_, err := rig.api.CreateEntityRelationship(rig.ctx, &model.EntityRelationshipCreateRequest{
 		Token: token, SourceType: "device", Source: "dev", TargetType: "customer", Target: "bravo", RelationshipType: "assigned"})
 	require.NoError(t, err)
@@ -133,8 +130,7 @@ func TestAReservedTypeMarkedTrackedIsRefusedToo(t *testing.T) {
 	require.NoError(t, err)
 	// An edge the device created before the type was marked tracked, under the derived token:
 	// the redelivery must be refused, not answered "found" by the idempotency lookup.
-	token := uuid.NewSHA1(relationshipTokenNamespace, []byte(strings.Join([]string{
-		"acme", "device", "dev", "customer", "bravo", "member"}, "\x00"))).String()
+	token := model.DeviceAuthoredRelationshipToken("acme", "dev", "customer", "bravo", "member")
 	_, err = rig.api.CreateEntityRelationship(rig.ctx, &model.EntityRelationshipCreateRequest{
 		Token: token, SourceType: "device", Source: "dev", TargetType: "customer", Target: "bravo", RelationshipType: "member"})
 	require.NoError(t, err)

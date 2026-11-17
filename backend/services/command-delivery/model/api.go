@@ -1193,15 +1193,19 @@ func drainableStatusStrings() []string {
 // nonce, and the caller must not publish.
 func (api *Api) MarkSent(ctx context.Context, id uint) (string, bool, error) {
 	nonce := newDispatchNonce()
-	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
+	// Expiry and the dispatch window share one claim instant; the sweep settles refusals.
+	now := time.Now()
+	liveSQL, liveArgs := liveWhere(now)
+	heldSQL, heldArgs := dispatchableNowWhere(now)
 	res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: id}}).
 		Where("id = ? AND status IN ?", id, claimableStatusStrings()).
+		Where(liveSQL, liveArgs...).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
 		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Where(heldSQL, heldArgs...).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
-			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
+			"sent_time":      sql.NullTime{Time: now, Valid: true},
 			"dispatch_nonce": sql.NullString{String: nonce, Valid: true},
 		})
 	if res.Error != nil {
@@ -1853,15 +1857,18 @@ func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit
 // it back would leave that transport unable to settle anything it delivered.
 func (api *Api) MarkSentByToken(ctx context.Context, token string) (string, bool, error) {
 	nonce := newDispatchNonce()
-	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
+	now := time.Now()
+	liveSQL, liveArgs := liveWhere(now)
+	heldSQL, heldArgs := dispatchableNowWhere(now)
 	res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("token = ? AND status IN ?", token, claimableStatusStrings()).
+		Where(liveSQL, liveArgs...).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
 		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Where(heldSQL, heldArgs...).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
-			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
+			"sent_time":      sql.NullTime{Time: now, Valid: true},
 			"dispatch_nonce": sql.NullString{String: nonce, Valid: true},
 		})
 	if res.Error != nil {

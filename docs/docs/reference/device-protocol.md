@@ -160,6 +160,8 @@ Every location field is a JSON **string**, including the numeric ones. Each must
 
 When the relationship is created, its event is kept in event history as an envelope with its anchors.
 
+**Marking a relationship type tracked is refused while devices created relationships of it.** `updateEntityRelationshipType` refuses to make a type tracked while relationships of that type that devices created themselves exist, because they would become ownership at that moment; the refusal names them. Delete them, then mark the type tracked.
+
 Creates one relationship from the sending device to another entity in the same tenant. This payload has no `entries` array, and its three keys are read by their exact names, so their case matters. A missing key is not refused when the message is decoded: it reads as an empty string, and the event then fails at resolution like the cases below.
 
 A device cannot create ownership or containment relationships: a `NewRelationship` naming a tracked type (including `assigned` and any tenant-defined type marked tracked) or the built-in `contains` is refused and recorded on `failed-events` with reason `Invalid` on its first delivery, without retries. Assign devices with a claim code or the `createEntityRelationship` mutation. Untracked types, including `member`, work as before.
@@ -211,7 +213,9 @@ Enable `mqttDeviceUplinks` only once every `event-sources` and `device-managemen
 | HTTP | Response |
 | --- | --- |
 | `429` | Requests from this source address exceed the allowance. `Retry-After` says when to retry. |
-| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). Devices on the broker's MQTT connection are unaffected. |
+| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). |
+
+**Wrong device passwords count once, whichever way they arrive.** A wrong password presented on the HTTP device-uplink route now counts toward the same per-credential hold as a wrong MQTT password, across all replicas, so guesses can no longer be split between the two to get twice the attempts. While a credential is held, an HTTP uplink with it is answered `503` with `Retry-After` and an MQTT connect with it is refused, as before.
 
 ## Command delivery {#command-delivery}
 
