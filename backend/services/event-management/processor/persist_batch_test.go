@@ -11,6 +11,7 @@ import (
 	emconfig "github.com/devicechain-io/dc-event-management/config"
 	"github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
@@ -946,3 +947,66 @@ func TestTheWritersRunTheConfiguredSettings(t *testing.T) {
 }
 
 func millis(n int) *int { return &n }
+
+// A relationship between two other tenants' measurements commits with its batch.
+// Unsupported types are the control: one fallback, settled Invalid on delivery one.
+func TestANewRelationshipDoesNotRollBackItsBatchMates(t *testing.T) {
+	for _, unsupported := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unsupported=%v", unsupported), func(t *testing.T) {
+			r := newBatchRig(t, 8)
+			ev := relationshipEvent()
+			msgs := []messaging.Message{
+				consumed(t, r.acks, 0, "tenant-a", 1, batchEvent(0, false, batchT0)),
+				consumed(t, r.acks, 1, "tenant-b", 1, ev),
+				consumed(t, r.acks, 2, "tenant-c", 1, batchEvent(2, false, batchT0)),
+			}
+			if unsupported {
+				// The wire decoder refuses type 5 before persistence. Admit a readable
+				// message, then inject the unsupported discriminator at the batch seam.
+				var batch []pendingEvent
+				for _, msg := range msgs {
+					pending, ok := r.ep.admit(context.Background(), msg, r.ep.metrics.start())
+					if !ok {
+						t.Fatal("fixture was not admitted")
+					}
+					batch = append(batch, pending)
+				}
+				batch[1].event.EventType = eventtype.CommandInvocation
+				r.ep.persistBatch(context.Background(), batch)
+			} else {
+				r.run(msgs)
+			}
+			wantFallback, wantB := 0.0, int64(1)
+			if unsupported {
+				wantFallback, wantB = 1, 0
+			}
+			if got := r.metric(t, metricFallbacks, "", ""); got != wantFallback {
+				t.Errorf("fallbacks=%v; want %v", got, wantFallback)
+			}
+			if !unsupported && r.api.txs.Load() != 1 {
+				t.Errorf("transactions=%d; want 1", r.api.txs.Load())
+			}
+			for tenant, want := range map[string]int64{"tenant-a": 1, "tenant-b": wantB, "tenant-c": 1} {
+				if got := tenantEvents(t, r.db, tenant); got != want {
+					t.Errorf("%s: rows=%d; want %d", tenant, got, want)
+				}
+			}
+			for i := 0; i < 3; i++ {
+				if got := r.acks.acked()[i]; got != 1 {
+					t.Errorf("message %d acked %d times", i, got)
+				}
+			}
+			failures := r.reported()
+			if unsupported {
+				if len(failures) != 1 || failures[0].tenant != "tenant-b" || failures[0].reason != uint(resolvedevent.FailureReason_Invalid) {
+					t.Errorf("failures=%+v; want tenant-b Invalid", failures)
+				}
+				if got := r.metric(t, metricMessages, "result", core.ResultRetry); got != 0 {
+					t.Errorf("retries=%v; want 0", got)
+				}
+			} else if len(failures) != 0 {
+				t.Errorf("failures=%+v", failures)
+			}
+		})
+	}
+}

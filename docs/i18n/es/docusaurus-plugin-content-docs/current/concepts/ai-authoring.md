@@ -90,3 +90,5 @@ Cuando un operador prueba la conectividad de un proveedor desde la consola de ad
 - [Procesamiento de Eventos y Alarmas](./event-processing.md) — el compilador y el motor contra los que redacta la IA.
 - [Niveles y Empaquetado de Inquilinos](./tenant-tiers.md) — cómo se empaqueta el derecho de uso de modelos de IA.
 - [Acceso de IA (MCP)](./mcp.md) — la superficie separada para que los agentes de IA lean la plataforma y, cuando `agentActuation.enabled` está activado en el área mcp, usen [herramientas de propuestas en vista previa](./mcp.md#agent-proposals). Las personas aprueban en la consola; MCP no ejecuta nada.
+
+Cambiar el `kind` o `endpoint` efectivo de un proveedor con una clave almacenada requiere `secret` en la misma solicitud `updateAiProvider`; omitirlo devuelve `SECRET_RESUPPLY_REQUIRED`. Vuelve a enviar la clave o bórrala con `secret: null`. Los cambios de nombre, modelo y habilitación conservan la clave, al igual que enviar explícitamente el endpoint predeterminado del tipo.

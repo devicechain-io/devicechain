@@ -303,7 +303,7 @@ curl -s -X POST http://localhost/api/event-management/graphql \
 
 ### 触发第一条告警 {#first-alarm}
 
-1. 在 **Devices → Device Profiles** 中创建配置文件，令牌为 `temp-probe-profile`，名称为 **Temperature probe profile**，类别为 **sensor**。在 **Metrics** 中添加指标，令牌和键均为 `temperature`，类型为 **DOUBLE**，单位为 `Cel`。
+1. 在 **Devices → Device Profiles** 中创建配置文件，令牌为 `temp-probe-profile`，名称为 **Temperature probe profile**，类别为 **sensor**。在 **Metrics** 中添加指标，令牌和键均为 `temperature`，数据类型为 **Double**，单位为 `Cel`。
 2. 在 **Devices → Device Types** 中打开 `temp-probe`，在 **Profile** 中关联 `temp-probe-profile`。参见[设备类型和配置文件](../user-guide/device-types-and-profiles.md)。
 3. 在配置文件的 **Detection Rules** 中选择 **New detection rule → Form**。令牌设为 `temperature-high`，名称为 **Temperature high**，类型为 **Threshold**，严重程度为 **Warning**，勾选 **Enabled**。条件设为 `temperature > 25`，添加 **Raise alarm** 操作，告警键为 `temperature-high`。保存规则，然后在 **Versions** 中选择 **Publish**。保存的草稿不会运行。参见[检测规则](../user-guide/detection-rules.md)。
 4. 重复第 6 步的 HTTP 请求，将读数改为 `"temperature":"30.0"`。在 **Monitor → Alarms** 中找到 `sensor-001` 的活动告警，再发送 `"temperature":"21.5"` 清除它。必须在发布后发送新读数；旧读数不会自动回放。
@@ -311,7 +311,7 @@ curl -s -X POST http://localhost/api/event-management/graphql \
 ### 发送第一条命令 {#first-command}
 
 1. 在同一配置文件的 **Commands** 中添加命令，令牌和命令键均为 `identify`，名称为 **Identify**，影响为 **Normal**，不设置参数模式。再次 **Publish** 配置文件。
-2. 第 6 步的 HTTP `curl` 无法接收命令。发送前，按[接收命令](../guides/connecting-a-device.md#receiving-commands)启动 MQTT 订阅客户端（安装 Mosquitto 客户端，并按该指南使用实例 CA）。使用主机 `localhost`、客户端 ID `devicechain:sim-demo:sensor-001:sub`、用户名 `sim-demo:$DC_CRED_ID`（展开 shell 变量）、`ACCESS_TOKEN` 凭证的密码 `$DC_CRED_ID`，以及主题 `devicechain/sim-demo/device-commands/sensor-001`。保持连接。本地连接 `localhost` 时，还需按照指南处理 TLS 主机名验证。
+2. 第 6 步的 HTTP `curl` 无法接收命令。发送前，按[接收命令](../guides/connecting-a-device.md#receiving-commands)启动 MQTT 订阅客户端（安装 Mosquitto 客户端，并按该指南使用实例 CA）。使用主机 `localhost`、客户端 ID `devicechain:sim-demo:sensor-001:sub`、用户名 `sim-demo:$DC_CRED_ID`（展开 shell 变量）、不设密码（`ACCESS_TOKEN` 凭证只凭用户名连接；同时发送密码的连接会按 `MQTT_BASIC` 凭证校验并被拒绝），以及主题 `devicechain/sim-demo/device-commands/sensor-001`。保持连接。本地连接 `localhost` 时，还需按照指南处理 TLS 主机名验证。
 3. 在租户 API 上发出这条无害的测试命令：
 
 ```bash

@@ -87,3 +87,5 @@ github.com/devicechain-io/dc-playground TestACancelledCommandDoesNotWaitOnItsChi
 github.com/devicechain-io/dc-broker/nats-server TestJetStreamIntegrityBench # Opt-in DCB_RUN / DCB_JSRUN broker throughput measurement.
 github.com/devicechain-io/dc-broker/nats-server TestTLSThroughputBench # Opt-in DCB_RUN / DCB_JSRUN broker throughput measurement.
 github.com/devicechain-io/dc-device-management/processor TestCalloutThrottlesPasswordConnectsAgainstARealBroker # Timing guard: on a host slower than the backoff delay the connect lands after it and nothing is measured; failing would make the test flaky.
+github.com/devicechain-io/dc-microservice/rdb TestPageSliceTotalsAndEndpointsSaturate # On 32-bit hosts a 3,000,000,000-element slice does not fit the platform int.
+github.com/devicechain-io/dc-event-management/processor TestANewRelationshipRedeliveryIsStoredOnceOnPostgres # Opt-in DC_IT_PGPORT/DC_IT_PGHOST Postgres suite; hack/integration-tests.sh exports both and runs it.

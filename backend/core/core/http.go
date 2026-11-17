@@ -21,12 +21,12 @@ import (
 // is reachable from a cluster network. net/http applies no default.
 const httpReadHeaderTimeout = 5 * time.Second
 
-// HttpPort is the port every DeviceChain service serves its own HTTP surface on — GraphQL
-// where there is one, and always /healthz, /readyz and /metrics. It is the chart's
-// container port: the deployment's probes and the ServiceMonitor address it by name, so a
-// service that bound anything else would run, log a successful start and be unreachable to
-// both. It is spelled once, here; graphql.GRAPHQL_PORT is this value.
+// HttpPort is the publicly routed API port, serving GraphQL and service routes.
+// Operational endpoints are served separately on OpsPort.
 const HttpPort = 8080
+
+// OpsPort serves metrics and health probes. No public route may target this port.
+const OpsPort = 8083
 
 // Mux is the HTTP request multiplexer this microservice owns, created on first use.
 //
@@ -47,7 +47,18 @@ func (ms *Microservice) Mux() *http.ServeMux {
 	return ms.mux
 }
 
-// RegisterProbes registers the three routes every DeviceChain HTTP server serves:
+// OpsMux is the operations multiplexer, created once independently of Mux.
+func (ms *Microservice) OpsMux() *http.ServeMux {
+	ms.opsMuxOnce.Do(func() { ms.opsMux = http.NewServeMux() })
+	return ms.opsMux
+}
+
+// NewOpsServer builds the operations server. Nothing is bound until Start.
+func (ms *Microservice) NewOpsServer() *HttpServer {
+	return NewHttpServerForHandler(OpsPort, ms.OpsMux())
+}
+
+// RegisterProbes registers the three routes only on the operations mux:
 // /healthz, /readyz and /metrics.
 //
 // It is the one definition of a contract the chart depends on: the deployment's liveness,
@@ -68,8 +79,8 @@ func (ms *Microservice) Mux() *http.ServeMux {
 // be restarted by nobody, or the probe itself causes a crash loop — and it turns 503
 // only once a component has called MarkNotLive, which a component does only for a
 // state that nothing but a restart can clear (a broker connection closed permanently
-// and not by this process is the first). The body is a generic "not live": this is the
-// GraphQL port, so the reason goes to the log MarkNotLive writes, not to the caller.
+// and not by this process is the first). The body is a generic "not live": the
+// reason goes to the log MarkNotLive writes, not to the caller.
 //
 // /readyz reports 503 until the auth gate opens, and again once a SIGTERM starts the
 // drain, so a pod leaves its Service endpoints while it can still finish the requests
@@ -82,7 +93,7 @@ func (ms *Microservice) Mux() *http.ServeMux {
 // that panic is the enforcement — a second caller is a routing mistake, not a runtime
 // condition.
 func (ms *Microservice) RegisterProbes(gate *ReadinessGate) {
-	mux := ms.Mux()
+	mux := ms.OpsMux()
 
 	// 🔴 ms.MetricsHandler(), never promhttp.Handler(). Every metric this microservice
 	// constructs is registered on a registry the Microservice owns, and
@@ -151,7 +162,7 @@ type HttpServer struct {
 // Nothing is bound and nothing is served until Start.
 //
 // This is the constructor to reach for when the server carries the microservice's own
-// routes — probes, metrics, GraphQL. A listener that deliberately serves something else
+// routes — GraphQL and other public API endpoints. A listener that deliberately serves something else
 // on its own port (the HTTP event source ingests device telemetry on a port of its own,
 // with its own handler, so a device POST cannot reach the management API) builds its
 // server with NewHttpServerForHandler instead and gets the same bind and restart
