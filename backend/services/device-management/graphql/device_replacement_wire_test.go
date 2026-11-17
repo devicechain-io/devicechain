@@ -47,7 +47,7 @@ func newReplacementWireCtx(t *testing.T, authorities ...auth.Authority) context.
 	if err := rdb.RegisterTokenGrammar(db); err != nil {
 		t.Fatalf("register token grammar: %v", err)
 	}
-	if err := db.AutoMigrate(&model.DeviceType{}, &model.Device{},
+	if err := db.AutoMigrate(&model.EntityGroupFacetRef{}, &model.DeviceType{}, &model.Device{},
 		&model.DeviceCredential{}, &model.DeviceReplacement{}, &model.DeviceAlias{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
