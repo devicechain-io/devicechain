@@ -406,3 +406,5 @@ inquilino pueden anular la marca, el mapa y el idioma para su propio inquilino; 
 - [Inicio de sesión único](../concepts/single-sign-on.md) y
   [Configurar el inicio de sesión único](../guides/configuring-sso.md).
 - [Ajustes del sistema](../concepts/system-settings.md): los valores predeterminados de la instancia.
+
+Cambiar el `kind` o `endpoint` efectivo de un proveedor con una clave almacenada requiere `secret` en la misma solicitud `updateAiProvider`; omitirlo devuelve `SECRET_RESUPPLY_REQUIRED`. Vuelve a enviar la clave o bórrala con `secret: null`. Los cambios de nombre, modelo y habilitación conservan la clave, al igual que enviar explícitamente el endpoint predeterminado del tipo.

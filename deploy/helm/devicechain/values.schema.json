@@ -247,7 +247,27 @@
                   "type": "object",
                   "description": "The message broker connection and the JetStream ceilings. The chart validates only the capacity keys named below; the services validate the rest at startup.",
                   "properties": {
-                    "mqttDeviceUplinks": {
+                    "shardGroups": {
+                        "description": "Optional NATS shard groups, off when absent. Splits each listed per-event stream into count groups that tenants are placed across. Needs 2-5 groups on R1 streams with at least three broker servers, and cannot be combined with ha. Each listed stream reserves its full byte ceiling in every group. Once set, carry the block forward in every replacement values file: an upgrade that drops it, lowers count or removes a suffix is refused, because the groups may hold data.",
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["count", "suffixes"],
+                        "properties": {
+                          "count": {
+                            "description": "Total number of groups, counting the existing group zero (2-5). It cannot be lowered on upgrade.",
+                            "type": "integer", "minimum": 2, "maximum": 5
+                          },
+                          "suffixes": {
+                            "description": "Per-event streams to split into groups: inbound-events, resolved-events, or both. resolved-events is refused while device-state or event-processing is deployed, since those consumers read only group zero. A stream cannot be removed on upgrade.",
+                            "type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "enum": ["inbound-events", "resolved-events"]}
+                          },
+                          "placementTags": {
+                            "description": "Broker placement per group, keyed by group number (0 to count-1). Each value is a one-element list naming the dc-nats pod that holds the group, and it must be that group's own pod (group 1 on dc-nats-1). A group left out is placed on its own pod.",
+                            "type": "object", "propertyNames": {"pattern": "^[0-4]$"}, "additionalProperties": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"type": "string"}}
+                          }
+                        }
+                      },
+                      "mqttDeviceUplinks": {
                       "type": "boolean",
                       "description": "Whether a device may publish its own payload to its raw-payload MQTT topic, for the decoder on its device type's profile to read. Off by default. Turn it on only after every event-sources and device-management replica runs a release that knows the topic."
                     },
@@ -322,7 +342,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 65535,
-          "description": "HTTP port every service listens on. It serves the GraphQL API, /healthz, /readyz and /metrics."
+          "description": "Public HTTP port every service listens on. It serves the GraphQL API; /healthz, /readyz and /metrics are on the separate ops port 8083, which no route targets."
         }
       },
       "description": "The Service exposed for each functional area."
@@ -355,7 +375,7 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Render one ServiceMonitor per enabled functional area, scraping /metrics on the named graphql port. Requires the Prometheus Operator CRDs; set false on a cluster without them."
+          "description": "Render one ServiceMonitor per enabled functional area, scraping /metrics on the named ops port. Requires the Prometheus Operator CRDs; set false on a cluster without them."
         },
         "grafanaDashboards": {
           "type": "boolean",
@@ -1097,7 +1117,7 @@
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 106751,
-                    "description": "user-management: rotate the token signing key at startup once it is older than this many days. 0 or absent turns age-based rotation off; a negative value, or one above 106751, is refused here and by the service at startup."
+                    "description": "user-management: rotate the token signing key while running once it is older than this many days, after a 15-minute startup grace. Replicas follow new keys within 30 seconds. 0 or absent turns age-based rotation off; a negative value, or one above 106751, is refused here and by the service at startup."
                   },
                   "signingKeyRetentionDays": {
                     "type": "integer",
