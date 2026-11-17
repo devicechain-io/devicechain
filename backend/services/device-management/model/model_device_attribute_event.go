@@ -54,7 +54,7 @@ type DeviceAttributeEvent struct {
 }
 
 // DeviceAttributePublisher publishes device-attribute events (ADR-051 slice 4c-3). Like
-// the roster/detection-rules/entity-deleted publishers it is best-effort and side-band
+// the roster and detection-rules publishers it is best-effort and side-band
 // to the attribute write: a marshal/publish failure is logged by the implementation,
 // never surfaced to the caller — a NATS hiccup must not fail or retry the attribute
 // set/delete. Emission is at-most-once (ADR-044 async-fact posture): a DELIVERED fact is
