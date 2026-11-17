@@ -369,6 +369,7 @@ func (api *Api) ProvisionDevice(ctx context.Context, request *ProvisionRequest) 
 	}
 	api.evictDeviceCredentials(ctx, tenant, done.device.ID)
 	if done.outcome == ProvisionCreated {
+		api.afterMembershipRecompute(ctx, "device", done.device.ID, done.change)
 		api.emitDeviceRosterForDevice(ctx, done.device, false)
 	}
 	return result, nil
@@ -400,6 +401,7 @@ func validateProvisionRequest(request *ProvisionRequest) error {
 type provisionDone struct {
 	outcome ProvisionOutcome
 	device  *Device
+	change  membershipChange
 }
 
 // provisionOnce is one transaction of ProvisionDevice: lock, decide, write.
@@ -484,8 +486,12 @@ func (api *Api) provisionOnce(ctx context.Context, tenant string, request *Provi
 		if err := api.insertProvisionedCredential(tx, &profile, created, request); err != nil {
 			return err
 		}
-		done = &provisionDone{outcome: ProvisionCreated, device: created}
-		return nil
+		change, err := api.enrollNewEntitiesOnTx(ctx, tx, "device", []uint{created.ID})
+		if err != nil {
+			return err
+		}
+		done = &provisionDone{outcome: ProvisionCreated, device: created, change: change}
+		return queueAccessChangeOnTx(tx, "device", created.ID, change)
 	})
 	if err != nil {
 		return nil, err

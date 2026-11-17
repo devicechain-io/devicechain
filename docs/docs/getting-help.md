@@ -9,6 +9,9 @@ DeviceChain is developed in the open. If something did not work, or a page did n
 you what you needed, tell us. An early, rough report beats a late, polished one, because the
 roadmap and these docs change in response to what people run into.
 
+For operational incidents, start with [Troubleshooting and routine operations](./deployment/troubleshooting.md)
+to find the relevant checks and recovery procedure by symptom.
+
 ## Where to go
 
 | What you have | Where it goes |

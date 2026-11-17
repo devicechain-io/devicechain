@@ -16,10 +16,12 @@
 
 import type { TextareaHTMLAttributes } from 'react';
 import { cn } from '@/lib/utils';
+import { useFormFieldId } from './form-field-context';
 
 export type TextareaProps = TextareaHTMLAttributes<HTMLTextAreaElement>;
 
 export function Textarea({ className, ...props }: TextareaProps) {
+  const id = useFormFieldId(props.id);
   return (
     <textarea
       className={cn(
@@ -30,6 +32,7 @@ export function Textarea({ className, ...props }: TextareaProps) {
         className,
       )}
       {...props}
+      id={id}
     />
   );
 }

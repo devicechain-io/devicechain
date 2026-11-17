@@ -741,12 +741,28 @@ jobs:
           # "release: not found" into a collapsed group, swallowed by `|| true`, on the
           # one run where the history is the thing worth having.
           echo "::group::helm releases"
-          helm --kube-context "$ctx" list -n default --all || true
-          for rel in $(helm --kube-context "$ctx" list -n default --all -o json 2>/dev/null \
-                         | jq -r '.[] | select(.chart | startswith("devicechain-")) | .name'); do
-            echo "--- history: $rel"
-            helm --kube-context "$ctx" history "$rel" -n default || true
-          done
+          # Every status, on whichever Helm the runner has: Helm 3 needs --all for that,
+          # Helm 4 lists every status by default and refuses --all. A Helm this cannot
+          # place is reported loudly rather than listed with a guessed flag, and the
+          # step still goes on to the diagnostics below instead of ending here.
+          helm_version="$(helm version --short 2>&1)" || true
+          helm_placed=yes
+          status_args=()
+          case "$helm_version" in
+            v3.*) status_args=(--all) ;;
+            v4.*) ;;
+            *) helm_placed=no ;;
+          esac
+          if [ "$helm_placed" = no ]; then
+            echo "::error::cannot tell which helm list flags select every release status (helm version --short: '$helm_version'); release listing skipped"
+          else
+            helm --kube-context "$ctx" list -n default ${status_args[@]+"${status_args[@]}"} || true
+            for rel in $(helm --kube-context "$ctx" list -n default ${status_args[@]+"${status_args[@]}"} -o json \
+                           | jq -r '.[] | select(.chart | startswith("devicechain-")) | .name'); do
+              echo "--- history: $rel"
+              helm --kube-context "$ctx" history "$rel" -n default || true
+            done
+          fi
           echo "::endgroup::"
           echo "::group::not-ready pods"
           kubectl --context "$ctx" get pods -A --field-selector=status.phase!=Running -o yaml || true

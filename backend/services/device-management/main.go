@@ -147,6 +147,11 @@ var (
 	// paths enforce the expiry themselves, so it only makes the ledger say so.
 	AgentProposalReaper *core.PeriodicTask
 
+	// AlarmPositionClassifier classifies alarms whose position dependency is not known yet
+	// (model/position_classify.go): what a replica older than the column writes during a rolling
+	// upgrade. Such an alarm is withheld from a caller without location:read until classified.
+	AlarmPositionClassifier *core.PeriodicTask
+
 	// DecodeAccountant is the payload decoders' accounting: the per-(tenant, device type) record
 	// budget a failing decoder is held to, the health tallies and the failure samples. It is the
 	// resolver pool's DecodeObserver; DecodeAccounting flushes it once a minute.
@@ -233,6 +238,7 @@ func parseConfiguration() error {
 // registry panics. Initialize is where the process's own singletons are made, which is
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
+	graphql.InitLiveSubscriptionMetrics(Microservice)
 	AgentMetrics = model.NewAgentMetrics(
 		Microservice.NewCounterVec("agent_proposals_total", "Non-dry-run proposal calls by kind and outcome; errors count as refused.", []string{"kind", "outcome"}),
 		Microservice.NewCounterVec("agent_approvals_total", "Approval calls by final outcome, counted once across internal retries; errors without a more specific outcome count as refused.", []string{"outcome"}),
@@ -431,6 +437,13 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 		return nil, nil, err
 	}
 
+	// An alarm a geofence rule raised is not read by a caller without location:read, on every
+	// alarm read path (model/position_withholding.go). Registered here, on the one handle every
+	// Api of the process reads through, so no read path can be built without it.
+	if err := model.RegisterPositionWithholding(rdbm.Database); err != nil {
+		return nil, nil, err
+	}
+
 	// Wrap api around rdb manager, then wrap a caching decorator over it for the hot
 	// inbound-event resolution path.
 	api := model.NewApi(rdbm)
@@ -440,6 +453,15 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	api.DeviceSecretKey = key
 	api.EnrollmentKeys = enrollment
 	api.MisconfiguredSecrets = CredentialMisconfigured
+	// HTTP device uplinks need the same shared attempt store even with the callout disabled.
+	// Counts are per credential across replicas. The Checker refuses an unreachable store;
+	// its existing full-store policy also applies to both transports.
+	if key != nil {
+		api.DeviceCredentialChecker, err = processor.NewDeviceCredentialChecker(nmgr, key, credential.WithCounter(CredentialChecks))
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	// The Checker device self-registration compares through. It is built from the SAME two keys
 	// the Api digests with, so that a digest it writes is one this verifies. Without both keys
 	// there is nothing to compare under, and the Api answers ErrProvisioningUnavailable rather
@@ -784,8 +806,27 @@ func initAgentProposalReaper() error {
 			_, err := Api.ExpireAgentProposals(ctx)
 			return err
 		},
-		core.NewNoOpLifecycleCallbacks())
+		core.NewNoOpLifecycleCallbacks(), core.WithPassMetrics(Microservice.NewPeriodicTaskMetrics("agent_proposal_reaper")))
 	return AgentProposalReaper.Initialize(context.Background())
+}
+
+// alarmPositionClassifierInterval is how often unclassified alarms are classified: the longest an
+// alarm written by an older replica during a rolling upgrade stays withheld from a caller without
+// location:read when it need not be.
+const alarmPositionClassifierInterval = time.Minute
+
+// initAlarmPositionClassifier builds the alarm position classifier. Every replica runs it: a pass
+// is one conditional UPDATE of the unclassified rows, so two passes at once each classify what the
+// other has not, and a pass with nothing to do is a probe of a partial index. It runs a first pass
+// at start, so the alarms an older replica wrote before this one started wait no longer.
+func initAlarmPositionClassifier() error {
+	AlarmPositionClassifier = core.NewPeriodicTask(Microservice.FunctionalArea, "alarm-position-classifier", alarmPositionClassifierInterval,
+		func(ctx context.Context) error {
+			_, err := Api.ClassifyUnclassifiedAlarms(ctx)
+			return err
+		},
+		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass())
+	return AlarmPositionClassifier.Initialize(context.Background())
 }
 
 // decodeAccountingInterval is how often the decoders' health tallies and failure samples are
@@ -809,7 +850,7 @@ func initDecodeAccounting() error {
 	DecodeAccountant = processor.NewDecodeAccountant(Api, replica, DecodeAccountingMetrics)
 	DecodeAccounting = core.NewPeriodicTask(Microservice.FunctionalArea, "decode-accounting", decodeAccountingInterval,
 		func(ctx context.Context) error { return DecodeAccountant.Flush(ctx) },
-		core.NewNoOpLifecycleCallbacks())
+		core.NewNoOpLifecycleCallbacks(), core.WithPassMetrics(Microservice.NewPeriodicTaskMetrics("decode_accounting")))
 	return DecodeAccounting.Initialize(context.Background())
 }
 
@@ -1104,6 +1145,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initAgentProposalReaper(); err != nil {
 				return err
 			}
+			if err = initAlarmPositionClassifier(); err != nil {
+				return err
+			}
 			if err = initDecodeAccounting(); err != nil {
 				return err
 			}
@@ -1233,6 +1277,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err = AgentProposalReaper.Start(ctx); err != nil {
 		return err
 	}
+	if err = AlarmPositionClassifier.Start(ctx); err != nil {
+		return err
+	}
 
 	// Start flushing the payload decoders' health and failure samples.
 	if DecodeAccounting != nil {
@@ -1257,21 +1304,12 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		// the resolver's own fail-open, since the erasure guarantee is the per-area fence.
 		infra := Microservice.InstanceConfiguration.Infrastructure
 		gate := calloutTenantGate(infra, safetyGates)
-		// Every MQTT password connect is compared through this Checker, behind a
-		// per-username backoff whose counts every replica shares through the device
-		// credential-attempt bucket. It fails closed when that bucket cannot be reached,
-		// and OPEN, without the backoff, when it is full, since anyone can fill it by
-		// presenting enough distinct usernames (the credential package doc says why).
-		creds, err := processor.NewDeviceCredentialChecker(NatsManager, DeviceSecretKey, credential.WithCounter(CredentialChecks))
-		if err != nil {
-			return err
-		}
 		// The erasure-fence read: refuses a mint for a tenant whose data this area is
 		// erasing, from this service's own schema, with no remote dependency.
 		fenced := func(ctx context.Context, tenant string) error {
 			return rdb.CheckTenantFence(ctx, RdbManager.Database, tenant)
 		}
-		CalloutResponder, err = processor.NewCalloutResponder(NatsManager.Conn(), CachedApi, creds, seeds.IssuerSeed, Microservice.InstanceId, gate, fenced)
+		CalloutResponder, err = processor.NewCalloutResponder(NatsManager.Conn(), CachedApi, Api.DeviceCredentialChecker, seeds.IssuerSeed, Microservice.InstanceId, gate, fenced)
 		if err != nil {
 			return err
 		}
@@ -1347,6 +1385,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := AgentProposalReaper.Stop(ctx); err != nil {
 		return err
 	}
+	if err := AlarmPositionClassifier.Stop(ctx); err != nil {
+		return err
+	}
 
 	// Stop inbound events processor.
 	err := InboundEventsProcessor.Stop(ctx)
@@ -1385,10 +1426,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// ack/clear mutation tries to publish an alarm event to a NATS connection that is
 	// already shutting down (mirrors the start order). core/service walks them in exactly
 	// that order, for every service.
+	err = Svc.Stop(ctx)
+	// Keep placement available to publishes until the service's managers finish stopping.
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
-	return Svc.Stop(ctx)
+	return err
 }
 
 // Called before microservice has been terminated.
@@ -1406,6 +1449,9 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		return err
 	}
 	if err := AgentProposalReaper.Terminate(ctx); err != nil {
+		return err
+	}
+	if err := AlarmPositionClassifier.Terminate(ctx); err != nil {
 		return err
 	}
 	if DecodeAccounting != nil {
@@ -1441,10 +1487,12 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
 	// that actually closes handles, and which both consumers above still precede.
+	err = Svc.Terminate(ctx)
+	// Release the placement watch only after the service's managers terminate.
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
-	return Svc.Terminate(ctx)
+	return err
 }
 
 // resolvedEnvelopesOn reports infrastructure.messaging.envelopes.resolved: whether this service

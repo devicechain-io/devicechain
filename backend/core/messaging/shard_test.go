@@ -26,6 +26,8 @@ type shardRouterFunc func(string) (int, error)
 
 func (f shardRouterFunc) ShardGroup(tenant string) (int, error) { return f(tenant) }
 
+func (f shardRouterFunc) Ready() error { return nil }
+
 func n1Router(tenant string) (int, error) {
 	switch tenant {
 	case "tenant-a":
