@@ -40,8 +40,9 @@ curl -s https://docs.devicechain.io/schema/device-management.graphql
 ## Endpoints {#endpoints}
 
 The console and dashboard viewer recover from an authenticated HTTP 401 with one forced
-tenant-token refresh and one replay of the same operation. A failed refresh or a second 401
-ends that session. Identity tokens cannot be refreshed; a 401 ends the identity session.
+tenant-token refresh and one replay of the same operation. A refused refresh or a second 401
+ends that session. A refresh that fails transiently (no response, a 5xx or a 429) fails the
+request with that error and keeps the session, so an outage never signs anyone out. Identity tokens cannot be refreshed; a 401 ends the identity session.
 
 External `@devicechain/client` hosts opt in with `setUnauthorizedHandler({ refresh, onEnd })`.
 Use `session.forceRefresh(token)` in `refresh` for the tenant lane and return null for the
@@ -1204,3 +1205,5 @@ When the alert fires, someone is most likely trying many addresses:
    size applies to every state bucket, so make sure the JetStream volume has room for the increase.
 
 Detailed, per-type reference pages will be generated from the schemas as they stabilize.
+
+`SECRET_RESUPPLY_REQUIRED` means an update would send a stored credential to a different destination or present it differently. On `updateConnector`, `updateNotificationChannel` or `updateAiProvider`, supply `secret` again in the same request, or clear it with `secret: null`. For a connector rollback with a different binding, use `updateConnector` with the target configuration and its credential instead.

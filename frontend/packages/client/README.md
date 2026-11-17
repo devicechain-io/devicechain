@@ -105,10 +105,11 @@ const stop = session.startAutoRefresh(); // optional: refresh on a timer, not on
 ```
 
 A refusal from the server, such as an invalid or revoked refresh token, ends the
-session at once. A transient failure does not: no response, a 5xx, or a 429. While
-the access token is still valid, callers keep getting it, and
-`startAutoRefresh` retries with jittered backoff. The session ends only when the
-access token actually expires.
+session at once. A transient failure never does: no response, a 5xx, or a 429. While
+the access token is still valid, callers keep getting it; once it has expired,
+`getAccessToken` rejects with the transient error and the next call tries again.
+`startAutoRefresh` retries with jittered backoff for as long as the refresh token is
+valid. A session that only ever fails transiently ends when its refresh token lapses.
 
 `decodeToken`, `isExpired` and `hasAuthority` are exported for reading claims
 client-side. They decode, they do not verify — the server is the authority.
@@ -116,12 +117,15 @@ client-side. They decode, they do not verify — the server is the authority.
 HTTP 401 recovery is opt-in through `setUnauthorizedHandler({ refresh, onEnd })`.
 For an authenticated request, `refresh(token, identity)` may return a new bearer
 for **one replay** of the same operation. Use `session.forceRefresh(token)` for
-tenant tokens: it bypasses the expiry check, shares an in-flight refresh, and ends
-the session on refresh failure rather than returning the rejected token. It returns
-null for a token belonging to a replaced session. Identity tokens have no refresh
-path; return null for that lane. Anonymous login/refresh requests never invoke the
-handler. If recovery returns null, throws, or the replay also gets 401,
+tenant tokens: it bypasses the expiry check, shares an in-flight refresh, and never
+returns the rejected token. When the server refuses the refresh it ends the session
+and returns null; when the refresh fails transiently (no response, a 5xx or a 429)
+it throws that error and keeps the session, exactly as `getAccessToken` does. It
+returns null for a token belonging to a replaced session. Identity tokens have no
+refresh path; return null for that lane. Anonymous login/refresh requests never
+invoke the handler. If recovery returns null or the replay also gets 401,
 `onEnd(error, token, identity)` runs; only clear the session still owning that token.
+If recovery throws, the request fails with that error and `onEnd` does not run.
 Unregister with `setUnauthorizedHandler(null)` on teardown. Without a handler,
 the existing `GraphQLRequestError` with status 401 is unchanged. A replay that
 fails with a network error or another HTTP status follows ordinary error handling.

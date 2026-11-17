@@ -7,6 +7,7 @@ import {
   setAuthTokenGetter, setIdentityTokenGetter, setUnauthorizedHandler,
   type Area, type TypedDocument,
 } from './transport';
+import { createSessionTokens, type TokenPair } from './session';
 
 afterEach(() => {
   setAuthTokenGetter(null);
@@ -55,13 +56,62 @@ describe('HTTP 401 recovery', () => {
     expect(handler.onEnd).toHaveBeenCalledExactlyOnceWith(expect.any(GraphQLRequestError), 'fresh', false);
   });
 
-  it.each(['null', 'throw'])('ends without replay if refresh returns %s', async (failure) => {
+  it('ends without replay if refresh returns null', async () => {
     const { fetcher, handler } = setup([401]);
-    if (failure === 'null') handler.refresh.mockResolvedValue(null);
-    else handler.refresh.mockRejectedValue(new Error('refresh failed'));
+    handler.refresh.mockResolvedValue(null);
     await expect(gql('device-management', document, { id: 'one' })).rejects.toMatchObject({ status: 401 });
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(handler.onEnd).toHaveBeenCalledExactlyOnceWith(expect.any(GraphQLRequestError), 'old', false);
+  });
+
+  it('fails with the refresh error and keeps the session if refresh throws', async () => {
+    const { fetcher, handler } = setup([401]);
+    const outage = new GraphQLRequestError('offline', 0);
+    handler.refresh.mockRejectedValue(outage);
+    await expect(gql('device-management', document, { id: 'one' })).rejects.toBe(outage);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(handler.onEnd).not.toHaveBeenCalled();
+  });
+
+  // The host wiring both apps use: refresh is session.forceRefresh, onEnd clears the session.
+  describe('through session.forceRefresh', () => {
+    function wired(refreshError: GraphQLRequestError) {
+      const fetcher = vi.fn(async () => new Response('{}', { status: 401 }));
+      vi.stubGlobal('fetch', fetcher);
+      const state = { pair: { accessToken: 'old', refreshToken: `h.${btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }))}.s` } as TokenPair | null, ended: 0 };
+      const session = createSessionTokens({
+        read: () => state.pair,
+        apply: (next) => { state.pair = next; },
+        refresh: vi.fn().mockRejectedValue(refreshError),
+        onEnd: () => { state.pair = null; state.ended++; },
+      });
+      setAuthTokenGetter(async () => state.pair?.accessToken ?? null);
+      const onEnd = vi.fn((_e: GraphQLRequestError, token: string) => {
+        if (state.pair?.accessToken === token) { state.pair = null; state.ended++; }
+      });
+      setUnauthorizedHandler({ refresh: (token) => session.forceRefresh(token), onEnd });
+      return { fetcher, state, onEnd };
+    }
+
+    it('a transient refresh failure fails the request and keeps the session', async () => {
+      const outage = new GraphQLRequestError('Request failed (503)', 503);
+      const { fetcher, state, onEnd } = wired(outage);
+      await expect(gql('device-management', document, { id: 'one' })).rejects.toBe(outage);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(onEnd).not.toHaveBeenCalled();
+      expect(state.ended).toBe(0);
+      expect(state.pair?.accessToken).toBe('old');
+    });
+
+    // Negative control: the same wiring DOES end the session when the server refuses the refresh.
+    it('a refused refresh ends the session', async () => {
+      const refused = new GraphQLRequestError('invalid refresh token', 200, [{ message: 'invalid refresh token' }]);
+      const { state, onEnd } = wired(refused);
+      await expect(gql('device-management', document, { id: 'one' })).rejects.toMatchObject({ status: 401 });
+      expect(state.ended).toBe(1);
+      expect(state.pair).toBeNull();
+      expect(onEnd).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('reports the identity lane and never substitutes the tenant bearer', async () => {

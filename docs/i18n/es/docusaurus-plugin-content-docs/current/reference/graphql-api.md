@@ -43,8 +43,10 @@ curl -s https://docs.devicechain.io/schema/device-management.graphql
 ## Endpoints {#endpoints}
 
 La consola y el visor de paneles responden a un HTTP 401 autenticado con una renovación forzada
-del token de inquilino y una repetición de la misma operación. Si falla la renovación o se recibe
-otro 401, finalizan esa sesión. Los tokens de identidad no se renuevan; un 401 finaliza la sesión de identidad.
+del token de inquilino y una repetición de la misma operación. Si el servidor rechaza la renovación o
+se recibe otro 401, finalizan esa sesión. Si la renovación falla de forma transitoria (sin
+respuesta, un 5xx o un 429), la solicitud falla con ese error y la sesión se conserva, de modo
+que una interrupción nunca cierra la sesión de nadie. Los tokens de identidad no se renuevan; un 401 finaliza la sesión de identidad.
 
 Los hosts externos de `@devicechain/client` activan este comportamiento con `setUnauthorizedHandler({ refresh, onEnd })`.
 Usa `session.forceRefresh(token)` en `refresh` para el plano de inquilino y devuelve null para el
@@ -1267,3 +1269,5 @@ Cuando se dispare la alerta, lo más probable es que alguien esté probando much
 
 Se generarán páginas de referencia detalladas por tipo a partir de los esquemas a medida que se
 estabilicen.
+
+`SECRET_RESUPPLY_REQUIRED` indica que una actualización cambiaría el destino o la presentación de una credencial almacenada. En `updateConnector`, `updateNotificationChannel` o `updateAiProvider`, vuelve a enviar `secret` en la misma solicitud o bórralo con `secret: null`. Para restaurar un conector con otro destino, usa `updateConnector` con la configuración de destino y su credencial.

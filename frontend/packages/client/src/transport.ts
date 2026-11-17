@@ -100,7 +100,11 @@ export function setIdentityTokenGetter(getter: (() => Promise<string | null>) | 
 
 /** Opt-in HTTP 401 recovery. Anonymous requests never invoke these callbacks. */
 export interface UnauthorizedHandler {
-  /** Return a refreshed token for one replay, or null when recovery is unavailable. */
+  /**
+   * Return a refreshed token for one replay, or null when recovery is unavailable or was refused
+   * (onEnd then runs). Throw when the refresh failed transiently: the request fails with that
+   * error and onEnd does not run, so the session is kept.
+   */
   refresh: (token: string, identity: boolean) => Promise<string | null>;
   /** Recovery failed or the replay was refused. Only end the session owning this token. */
   onEnd: (error: GraphQLRequestError, token: string, identity: boolean) => void;
@@ -222,11 +226,11 @@ export async function gql<TResult, TVariables>(
   if (res.status === 401 && token && handler && !options?.anonymous) {
     const rejectedToken = token;
     // The refresh call must be anonymous, so it cannot recursively recover itself.
-    try {
-      token = await handler.refresh(rejectedToken, useIdentity);
-    } catch {
-      token = null;
-    }
+    // A refresh that THROWS could not be completed right now (a network failure, a 5xx or a
+    // 429): nothing was refused, so the session is kept, onEnd is not called, and this request
+    // fails with that error. Only a null (a definitive refusal, or no recovery for this token)
+    // or a second 401 ends the session.
+    token = await handler.refresh(rejectedToken, useIdentity);
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
       res = await send();
