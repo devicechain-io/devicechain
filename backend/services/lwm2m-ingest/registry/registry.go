@@ -1073,6 +1073,9 @@ func (r *Registry) clampLifetime(ltSeconds int) time.Duration {
 	var lt time.Duration
 	if ltSeconds <= 0 {
 		lt = r.defaultLife
+	} else if time.Duration(ltSeconds) > r.maxLife/time.Second {
+		// Compare seconds before multiplying to avoid overflowing the duration.
+		lt = r.maxLife
 	} else {
 		lt = time.Duration(ltSeconds) * time.Second
 	}
