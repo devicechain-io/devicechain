@@ -57,8 +57,9 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/update-management/model/api_rollouts.go": {"Api.AdvanceRollouts"},
 	// The campaign tick and the campaign pruner each list the tenants that have campaigns (or
 	// open claims), then do each tenant's work under core.WithTenant.
-	"backend/services/command-delivery/model/api_campaign.go":           {"Api.TickCampaigns", "Api.PruneCampaignHistory"},
-	"backend/services/command-delivery/processor/HoldReconciler.go":     {"CommandDeliveryProcessor.readHeldPage"},
+	"backend/services/command-delivery/model/api_campaign.go": {"Api.TickCampaigns", "Api.PruneCampaignHistory"},
+	// The retirement pass lists gate tenants across the instance, then scopes each bounded cancel.
+	"backend/services/command-delivery/processor/HoldReconciler.go":     {"CommandDeliveryProcessor.readHeldPage", "CommandDeliveryProcessor.retireCoveredCommands"},
 	"backend/services/command-delivery/processor/StrandedReconciler.go": {"CommandDeliveryProcessor.reconcileStrandedPage"},
 	"backend/services/command-delivery/processor/WindowRestamp.go":      {"CommandDeliveryProcessor.restampWindows"},
 	"backend/services/device-management/model/ownership_outbox.go":      {"Api.DrainOwnershipFacts"},
@@ -93,7 +94,7 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/event-management/model/usage.go": {"Api.PruneUsageWorkingTables", "Api.RollupUsageHours",
 		"Api.RollupUsagePass"},
 	"backend/services/event-management/processor/backfill/worker.go": {"Worker.pass"},
-	"backend/services/event-management/processor/backfill/tail.go":   {"TailSweeper.sweep"},
+	"backend/services/event-management/processor/backfill/tail.go":   {"TailSweeper.sweep", "TailSweeper.refreshWithLock"},
 	// The DETECT engine is a per-Instance singleton. At startup it holds no tenant and
 	// must rebuild its rule set, dead-man arming and dynamic-threshold view from every
 	// tenant's rows, so each of these four reads the whole projection. They are the only

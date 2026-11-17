@@ -27,7 +27,7 @@ func scopedMember() context.Context {
 
 func answering(t *testing.T, data map[string]any) string {
 	t.Helper()
-	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	dm := httptest.NewServer(identityAwareHandler(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
 	}))
 	t.Cleanup(dm.Close)
@@ -44,27 +44,27 @@ func TestValidateEnqueueReturnsTheDeviceAnchors(t *testing.T) {
 
 	v := NewEnqueueValidator(newSvcClient(t), answering(t, map[string]any{
 		"validateCommandEnqueue": map[string]any{"allowed": true}, "deviceScopeAnchors": listing}))
-	anchors, err := v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
+	anchors, _, err := v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"customer:acme", "area:n"}, anchors)
 
 	v = NewEnqueueValidator(newSvcClient(t), answering(t, map[string]any{
 		"validateCommandEnqueue": map[string]any{"allowed": false, "code": "COMMAND_NOT_IN_VOCABULARY", "reason": "no"},
 		"deviceScopeAnchors":     listing}))
-	anchors, err = v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
+	anchors, _, err = v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
 	var rejection *model.EnqueueRejected
 	require.True(t, errors.As(err, &rejection))
 	require.Equal(t, []string{"customer:acme", "area:n"}, anchors, "the anchors must travel with a rejection")
 
 	v = NewEnqueueValidator(newSvcClient(t), answering(t, map[string]any{
 		"validateCommandEnqueue": map[string]any{"allowed": true}, "deviceScopeAnchors": []any{}}))
-	anchors, err = v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
+	anchors, _, err = v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
 	require.NoError(t, err)
 	require.Nil(t, anchors, "a device the answer does not name has no anchors, not an empty set")
 
 	v = NewEnqueueValidator(newSvcClient(t), answering(t, map[string]any{
 		"validateCommandEnqueue": map[string]any{"allowed": true}}))
-	_, err = v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
+	_, _, err = v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
 	require.Error(t, err, "an answer without the anchor list was read as a decision")
 	require.False(t, errors.As(err, &rejection), "a broken answer is an availability failure, not a rejection")
 }
@@ -78,7 +78,7 @@ func TestServiceCallsServeAScopedMember(t *testing.T) {
 	v := NewEnqueueValidator(newSvcClient(t), answering(t, map[string]any{
 		"validateCommandEnqueue": map[string]any{"allowed": true},
 		"deviceScopeAnchors":     []map[string]any{{"deviceToken": "dev-1", "anchors": []string{"customer:acme"}}}}))
-	anchors, err := v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
+	anchors, _, err := v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
 	require.NoError(t, err, "the enqueue gate refused to serve a scoped member")
 	require.Equal(t, []string{"customer:acme"}, anchors)
 
@@ -100,7 +100,7 @@ func TestServiceCallsServeAScopedMember(t *testing.T) {
 // opted in, and it must not inherit permission from its neighbours.
 func TestUnmarkedServiceCallsStillRefuseAScopedMember(t *testing.T) {
 	b := NewBatchValidator(newSvcClient(t), answering(t, map[string]any{"validateCommandEnqueueBatch": []any{}}))
-	_, err := b.ValidateEnqueueBatch(scopedMember(), []string{"dev-1"}, "reboot", nil)
+	_, _, err := b.ValidateEnqueueBatch(scopedMember(), []string{"dev-1"}, "reboot", nil)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, auth.ErrScopeUnsupported), "got %v", err)
 }
