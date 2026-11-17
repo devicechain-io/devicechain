@@ -1196,3 +1196,5 @@ When the alert fires, someone is most likely trying many addresses:
    size applies to every state bucket, so make sure the JetStream volume has room for the increase.
 
 Detailed, per-type reference pages will be generated from the schemas as they stabilize.
+
+`SECRET_RESUPPLY_REQUIRED` means an update would send a stored credential to a different destination or present it differently. On `updateConnector`, `updateNotificationChannel` or `updateAiProvider`, supply `secret` again in the same request, or clear it with `secret: null`. For a connector rollback with a different binding, use `updateConnector` with the target configuration and its credential instead.

@@ -6,6 +6,7 @@
 # says out loud which side of that line the module it was handed falls on.
 #
 #   hack/go-race.sh <module>      # run the race detector, or say why it did not
+#   hack/go-race.sh <module> [go test args...]   # the same, on one leg's packages/-run (hack/go-leg.sh)
 #   hack/go-race.sh --list        # coverage table for every workspace module
 #   hack/go-race.sh --self-test   # prove the detector can still go red
 #
@@ -352,6 +353,7 @@ EOF
       # shellcheck disable=SC2030 # local to this subshell on purpose
       ROOT="$ws"
       # shellcheck disable=SC2317 # called indirectly, through the command run below
+      # shellcheck disable=SC2329 # self-test stub: overrides exempt_modules, called through its callers
       exempt_modules() { printf '%s\n' "$set"; }
       unset GOWORK
       "$@"
@@ -454,12 +456,14 @@ EOF
   # shellcheck disable=SC2317 # called indirectly, through probe
   with_padded_ws() {
     # shellcheck disable=SC2317 # called indirectly, through the command run below
+    # shellcheck disable=SC2329 # self-test stub: overrides workspace_modules, called through its callers
     workspace_modules() { printf '%s\n' "$pad_ws"; }
     "$@"
   }
   # shellcheck disable=SC2317 # called indirectly, through probe
   stub_race() {
     # shellcheck disable=SC2317 # called indirectly, by do_module
+    # shellcheck disable=SC2329 # self-test stub: overrides race_test, called through do_module
     race_test() { echo "race_test stubbed: $*"; }
     "$@"
   }
@@ -492,6 +496,18 @@ PREMISE
     return 1
   fi
   echo "  ok: COVERED and run"
+
+  echo "==> Self-test: a leg's packages and -run filter reach the test run unchanged"
+  set +e
+  out="$(probe_padded "" stub_race do_module clean -run '^(TestA|TestB)$' ./x/ 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ] || [[ "$out" != *"race_test stubbed: -run ^(TestA|TestB)\$ ./x/"* ]] || [[ "$out" != *"race: COVERED clean -- "* ]]; then
+    echo "  FAIL: the leg's arguments did not reach the race run (exit $rc):" >&2
+    echo "$out" | sed -n '1,5p' | cut -c1-200 >&2
+    return 1
+  fi
+  echo "  ok: passed through"
 
   echo "==> Self-test: an exempt module stays exempt however early the reader stops"
   out="$(probe "$pad_set" verdict_for skipped)"
@@ -600,6 +616,12 @@ EOF
 # ---------------------------------------------------------------------------
 do_module() {
   local module="$1"
+  shift
+  # The packages (and -run filter) of this leg of the `go` job, as hack/go-leg.sh resolved them;
+  # the whole module when none are given. A split module's legs each pass their own share, and
+  # hack/go-leg.sh is what proves the shares add up to `go list ./...`.
+  local -a targets=("$@")
+  [ "${#targets[@]}" -gt 0 ] || targets=(./...)
   check_set_is_sane
 
   # 🔴 NEVER PIPE A LIST INTO grep -q HERE. In a pipeline, printf writes the list
@@ -631,10 +653,14 @@ do_module() {
     return 0
   fi
 
-  echo "race: COVERED $module -- ${RACE_TEST[*]} ./..."
+  # A shard's -run regex can name hundreds of tests; the verdict line says how many packages and
+  # whether a filter applies, and the leg's own log line (hack/go-leg.sh) says which tests.
+  local shown="${targets[*]}"
+  if [ "${#shown}" -gt 300 ]; then shown="${shown:0:300}... (${#targets[@]} args)"; fi
+  echo "race: COVERED $module -- ${RACE_TEST[*]} $shown"
   # shellcheck disable=SC2031 # the self-test's subshell override is meant not to leak here
   cd "$ROOT/$module"
-  race_test ./...
+  race_test "${targets[@]}"
 }
 
 case "${1:-}" in
@@ -642,5 +668,5 @@ case "${1:-}" in
   --list)      do_list ;;
   "")          echo "usage: $0 <module> | --list | --self-test" >&2; exit 2 ;;
   -*)          echo "usage: $0 <module> | --list | --self-test" >&2; exit 2 ;;
-  *)           do_module "$1" ;;
+  *)           do_module "$@" ;;
 esac

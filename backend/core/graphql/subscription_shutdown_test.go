@@ -371,13 +371,13 @@ func TestOversizedSubscriptionFrameIsRefused(t *testing.T) {
 	// The counterweight: refusing one peer must not take the server with it. A ceiling
 	// that closed the listener, or wedged the handler, would satisfy the assertion
 	// above and be far worse than the hole it closed.
-	resp, err := http.Get("http://" + addr + "/healthz")
+	resp, err := http.Get("http://" + addr + "/graphql")
 	if err != nil {
-		t.Fatalf("GET /healthz after the refusal: %v", err)
+		t.Fatalf("GET /graphql after the refusal: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("GET /healthz after the refusal = %d, want 200", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("GET /graphql after the refusal = %d, want 400", resp.StatusCode)
 	}
 	dialSubscribed(t, addr) // a well-behaved client still connects, subscribes and streams
 }

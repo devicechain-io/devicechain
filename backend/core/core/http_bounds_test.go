@@ -221,6 +221,20 @@ func TestRequestDeadlinesDoesNotWaitOnABodyTheHandlerNeverRead(t *testing.T) {
 	}
 }
 
+// The production budget must fit all 64 MCP body reservations, including each
+// oversize-detection byte, while still bounding concurrent body memory.
+func TestBodyBufferBudgetFitsMCPReservations(t *testing.T) {
+	b := newByteBudget(BodyBufferBudget)
+	for i := 0; i < 64; i++ {
+		if !b.tryAcquire((1 << 20) + 1) {
+			t.Fatalf("body reservation %d did not fit", i+1)
+		}
+	}
+	if b.tryAcquire(1) {
+		t.Fatal("body budget exceeds 64 one-MiB bodies plus their detection bytes")
+	}
+}
+
 // installBudget swaps in a budget of capacity bytes for one test.
 func installBudget(t *testing.T, capacity int64) {
 	t.Helper()

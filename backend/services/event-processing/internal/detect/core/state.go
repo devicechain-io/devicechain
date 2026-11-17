@@ -585,8 +585,8 @@ func (e *Engine) holdLateResolve(ev Event, now time.Time) bool {
 // count. A sliding aggregate is the kind where an in-budget late sample changes the value itself;
 // it holds that edge (holdLateResolve).
 func (e *Engine) staleFallingEdge(ev Event) bool {
-	raisedAt, raised := e.raised[ev.Key]
-	return raised && ev.Time.Before(raisedAt)
+	_, raised := e.raised[ev.Key]
+	return raised && ev.Time.Before(e.raiseInput(ev.Key))
 }
 
 // cancelLateResolve drops a held falling edge (holdLateResolve) once an evaluation has settled
