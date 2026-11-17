@@ -308,6 +308,12 @@ export declare function isScopeUnsupportedError(err: unknown): boolean;
 export declare function isScoped(claims: DecodedClaims | null): boolean;
 ```
 
+## `.:isStaleWrite`
+
+```ts
+export declare function isStaleWrite(err: unknown): boolean;
+```
+
 ## `.:isValidToken`
 
 ```ts
