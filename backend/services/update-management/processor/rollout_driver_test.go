@@ -46,5 +46,5 @@ func TestRolloutMetricsRecordWhatAStepDid(t *testing.T) {
 }
 
 func TestTheRolloutDriverRefusesANonPositiveInterval(t *testing.T) {
-	require.Panics(t, func() { NewRolloutDriver(nil, 0) })
+	require.Panics(t, func() { NewRolloutDriver(nil, 0, nil) })
 }
