@@ -110,6 +110,13 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	adminEmail, _ := cmd.Flags().GetString("admin-email")
 	tls, _ := cmd.Flags().GetBool("tls")
 	controlAddr, _ := cmd.Flags().GetString("control-addr")
+	if !cmd.Flags().Changed("control-addr") {
+		var err error
+		controlAddr, err = sim.NextControlAddr(name)
+		if err != nil {
+			return err
+		}
+	}
 	ingress, _ := cmd.Flags().GetString("ingress")
 	mqttBroker, _ := cmd.Flags().GetString(flagMqttBroker)
 	mqttInsecure := resolveMqttInsecure(cmd.Flags(), tls)
@@ -245,6 +252,7 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	path, _ := sim.RecordPath(name)
 
 	fmt.Printf("✅ sim %q created — tenant %q, scoped identity %q\n\n", name, tenant, email)
+	fmt.Printf("Control address: %s\n\n", controlAddr)
 	if hostHeader != "" {
 		fmt.Printf("ℹ️  the sim reaches %s presenting %q as the Host and TLS server name the Gateway routes on.\n\n",
 			server, hostHeader)

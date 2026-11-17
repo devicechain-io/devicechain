@@ -80,7 +80,10 @@ type Config struct {
 	// Suffix is the resolved-events subject suffix, used to open the replay reader on
 	// the same stream the live durable reader consumes.
 	Suffix string
-	// CheckpointEvents is the max applied events between snapshot commits.
+	// CheckpointEvents is the minimum applied events between count-triggered commits.
+	// Commits are spaced by at least 4x the last snapshot cost, capped at
+	// CheckpointInterval, and forced when buffered acks reach half the consumer's
+	// max-ack-pending.
 	CheckpointEvents int
 	// CheckpointInterval is the max wall-clock time between commits, so a quiet
 	// stream still checkpoints (and its buffered acks are released).
@@ -329,8 +332,8 @@ type ResolvedEventsProcessor struct {
 	FenceSets runtime.CurrentFenceSetSource
 
 	// VersionedFenceSets is the VERSION-ADDRESSED half of the same archive seam, used by the fact
-	// consumer to resolve a POINTER fact — one whose fence set was too large to ride in a single
-	// broker message, so the fact carries the version and nothing else.
+	// consumer to resolve a POINTER fact and by startup to hydrate recent historical versions.
+	// A pointer fact carries only the version when its set is too large for one broker message.
 	//
 	// It is a second field rather than a second use of FenceSets because the two answer different
 	// questions and only one of them is right here: "what is the current set" would install a
@@ -339,8 +342,8 @@ type ResolvedEventsProcessor struct {
 	// the split is enforced by the compiler and not by a comment.
 	//
 	// 🔴 IT IS NEVER CONSULTED ON THE LOOP either — the read happens on the fact consumer's own
-	// goroutine, which is already where the fence compile happens. Nil means a pointer fact cannot
-	// be resolved, which is reported loudly and counted rather than installed as an empty set.
+	// goroutine or during startup before the loop begins. Nil leaves pointer facts and historical
+	// backfill unresolved rather than installing an empty set.
 	VersionedFenceSets runtime.FenceSetSource
 
 	// FenceManifests assembles a fence set from a manifest that ARRIVED — the fence-set fact's
@@ -405,9 +408,9 @@ type ResolvedEventsProcessor struct {
 	// It is fed from BOTH directions, and it needs both. The live feed is the geofence-set fact
 	// stream (FenceSetReader → applyFenceSet): a fence edit mints a version and announces its
 	// frozen set, so the loop's next event evaluates against it with no read at all. The startup
-	// feed is the reconcile (FenceSets → reconcileFenceView), which re-seeds the tenants' current
-	// sets from device-management's archive — because a live cache survives no restart and a fact
-	// stream carries only changes from now on, so the feed alone would leave a restarted engine
+	// feed is the reconcile (FenceSets / VersionedFenceSets → reconcileFenceView), which re-seeds
+	// current and recent retained versions from the archive — because a live cache survives no
+	// restart and a fact stream carries only changes from now on, so the feed alone would leave a restarted engine
 	// blind until somebody happened to edit a fence.
 	//
 	// Neither feed can be complete, and the view does not pretend otherwise: an event may name a
@@ -490,6 +493,8 @@ type ResolvedEventsProcessor struct {
 	// publishPasses numbers publishPending's passes, so an outcome can name the pass it belongs to.
 	publishPasses  uint64
 	lastCheckpoint time.Time
+	// lastCheckpointCost is serialization plus save time of the last committed snapshot.
+	lastCheckpointCost time.Duration
 	// flushDetections' last failure; see there.
 	flushFailedAt time.Time
 	// detOrd numbers buffered detections (pendingDetection.ord).
@@ -983,8 +988,8 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	//
 	// Unlike the attribute view, seeding this one is NOT a determinism compromise: the view is keyed
 	// on the VERSION the event carries, so a replayed event resolves the fences that were live when
-	// it happened or nothing at all — never today's fences under yesterday's stamp. What the current-
-	// version seed cannot do is resolve a SUPERSEDED version; that is a miss, reported as such.
+	// it happened or nothing at all — never today's fences under yesterday's stamp. The current-
+	// version seed also hydrates the recent retained versions; older versions remain counted misses.
 	if err := rp.startFenceView(ctx); err != nil {
 		return err
 	}
@@ -1445,12 +1450,11 @@ func (rp *ResolvedEventsProcessor) startFenceView(ctx context.Context) error {
 // unbounded stretch after a rollout. That is the gap this closes, and it is the reason a live feed
 // alone was never sufficient.
 //
-// WHY THE CURRENT VERSION IS THE RIGHT THING TO SEED: an event resolved from now on is stamped
-// with the version that is current NOW, so seeding the current set makes the live path whole
-// immediately. It does NOT make replay whole — a replayed event stamped with a superseded version
-// is a miss until a fact or a preview resolves it — and that residual is deliberate: it is
-// reported as a loud counted error rather than papered over with "no fences", and the off-loop
-// callers that can afford to block resolve it through FenceSetSource instead.
+// The current version anchors a bounded backfill of the preceding versions, matching the live
+// view's retention bound. Versions are minted consecutively by device-management. This restores
+// recent history before replay without waiting for another fact or a preview. It does not warm
+// the entire archive: older or unavailable versions remain counted misses, never today's geometry
+// under a historical stamp. All reads happen during startup, before the single-writer loop.
 //
 // It runs TWICE at startup, before and after replay, for the same reason reconcileAttributeView
 // does: the pre-replay seed makes replayed containment evaluable, and the post-replay one picks up
@@ -1479,11 +1483,37 @@ func (rp *ResolvedEventsProcessor) reconcileFenceView(ctx context.Context) error
 			continue
 		}
 		rp.fenceView.Put(tenant, set)
+		rp.hydrateRetainedFenceSets(ctx, tenant, set.Version())
 		seeded++
 	}
 	log.Info().Int("tenants", len(tenants)).Int("seeded", seeded).
 		Msg("Reconciled the DETECT geofence projection from device-management's frozen fence sets.")
 	return nil
+}
+
+// hydrateRetainedFenceSets warms only the recent retention window. A failed read leaves that
+// version unknown but must not prevent independent versions from being hydrated. Repeat startup
+// reconciliation skips held versions, and cancellation stops further archive calls.
+func (rp *ResolvedEventsProcessor) hydrateRetainedFenceSets(ctx context.Context, tenant string, current int32) {
+	if rp.VersionedFenceSets == nil {
+		return
+	}
+	for offset := int32(1); offset < int32(runtime.MaxRetainedFenceSetVersions) && offset < current; offset++ {
+		if ctx.Err() != nil {
+			return
+		}
+		version := current - offset
+		if rp.fenceView.For(tenant, version) != nil {
+			continue
+		}
+		set, err := rp.VersionedFenceSets.FenceSetAt(ctx, tenant, version)
+		if err != nil || set == nil || set.Version() != version {
+			log.Error().Err(err).Str("tenant", tenant).Int32("version", version).
+				Msg("Unable to hydrate a retained DETECT fence-set version; containment remains unresolvable.")
+			continue
+		}
+		rp.fenceView.Put(tenant, set)
+	}
 }
 
 // applyFenceSet installs one tenant's FROZEN fence set in the loop-owned projection, on the
@@ -1642,7 +1672,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		if rp.applyResolved(msg) {
 			replayed += rp.appliedEvents
 		}
-		if replayed >= rp.cfg.CheckpointEvents {
+		if replayed >= rp.cfg.CheckpointEvents && rp.clock.Now().Sub(rp.lastCheckpoint) >= rp.checkpointMinSpacing() {
 			rp.checkpoint(rp.pctx())
 			replayed = 0
 		}
@@ -1918,10 +1948,31 @@ func (rp *ResolvedEventsProcessor) handle(msg messaging.Message) {
 	rp.pendingEvents += rp.appliedEvents
 }
 
-// checkpointDue is whether enough has been applied since the last checkpoint: CheckpointEvents
-// messages (which bounds the broker's ack-pending) or that many events (which bounds the replay).
+const (
+	checkpointDutyFactor         = 4
+	ackPendingCheckpointOverride = messaging.ReaderMaxAckPending / 2
+)
+
+// checkpointMinSpacing bounds snapshot work relative to consumption time while
+// preserving the configured maximum interval between checkpoints.
+func (rp *ResolvedEventsProcessor) checkpointMinSpacing() time.Duration {
+	return min(checkpointDutyFactor*rp.lastCheckpointCost, rp.cfg.CheckpointInterval)
+}
+
+// checkpointCountReached is whether enough has been applied since the last checkpoint:
+// CheckpointEvents messages (which bounds the broker's ack-pending) or that many events
+// (which bounds the replay), or buffered acks at the override that releases them before the
+// consumer exhausts its limit. It is the trigger without the cost spacing.
+func (rp *ResolvedEventsProcessor) checkpointCountReached() bool {
+	return len(rp.pendingAcks) >= ackPendingCheckpointOverride ||
+		len(rp.pendingAcks) >= rp.cfg.CheckpointEvents || rp.pendingEvents >= rp.cfg.CheckpointEvents
+}
+
+// checkpointDue gates count-triggered commits by snapshot cost, with an override
+// that releases buffered acknowledgements before the consumer exhausts its limit.
 func (rp *ResolvedEventsProcessor) checkpointDue() bool {
-	return len(rp.pendingAcks) >= rp.cfg.CheckpointEvents || rp.pendingEvents >= rp.cfg.CheckpointEvents
+	return len(rp.pendingAcks) >= ackPendingCheckpointOverride ||
+		(rp.checkpointCountReached() && rp.clock.Now().Sub(rp.lastCheckpoint) >= rp.checkpointMinSpacing())
 }
 
 // applyResolved parses a resolved-event message, fans it out across the applicable rules
@@ -2996,6 +3047,8 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 
 		// Observability (owned by this loop, ADR-051 thread).
 		now := rp.clock.Now()
+		rp.lastCheckpointCost = now.Sub(start)
+		rp.metrics.recordCheckpointMinSpacing(rp.checkpointMinSpacing())
 		rp.metrics.recordCheckpoint(rp.engine.LastSeq(), now.Sub(start).Seconds(), serializeDur, saveDur, len(payload), now.Sub(wm).Seconds())
 	}
 

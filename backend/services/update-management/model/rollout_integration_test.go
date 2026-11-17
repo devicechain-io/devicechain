@@ -89,7 +89,9 @@ func newPGRollouts(t *testing.T, n int) *pgRollouts {
 	require.NoError(t, err)
 	ref, err := store.Put(e.ctx(), blobKey(e.tenant, "fw-2"), bytes.NewReader(content), blobPutOpts(int64(len(content))))
 	require.NoError(t, err)
-	require.NoError(t, a.CompleteUpload(e.ctx(), art, ref))
+	stamp, err := a.ClaimUpload(e.ctx(), art)
+	require.NoError(t, err)
+	require.NoError(t, a.CompleteUpload(e.ctx(), art, stamp, ref))
 	return e
 }
 

@@ -86,6 +86,73 @@ type heldAdmissionBody struct {
 	release <-chan struct{}
 }
 
+// Hold bodies inside the real shared byte budget, before message admission can
+// release it. The 64th maximum-size reservation must fit, and the 65th request
+// must be refused by MCP admission (429), not the shared byte budget (503).
+func TestProcessBodyReadCapIsReachable(t *testing.T) {
+	iss, validator := mustIssuerValidator(t)
+	entered := make(chan struct{}, 64)
+	release := make(chan struct{})
+	done := make(chan int, 64)
+	started := 0
+	t.Cleanup(func() {
+		close(release)
+		for i := 0; i < started; i++ {
+			select {
+			case status := <-done:
+				if status != http.StatusNoContent {
+					t.Errorf("admitted body status %d, want 204", status)
+				}
+			case <-time.After(testGiveUp):
+				t.Error("body reader did not finish")
+			}
+		}
+	})
+	makeHandler := func() http.Handler {
+		return sdkauth.RequireBearerToken(NewTokenVerifier(validator, testResource),
+			&sdkauth.RequireBearerTokenOptions{Scopes: []string{coreauth.ScopeReadOnly}})(
+			bufferRequestBody(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})))
+	}
+	handlers := []http.Handler{makeHandler(), makeHandler()}
+	request := func(caller int, body io.Reader) *http.Request {
+		t.Helper()
+		tok, err := iss.IssueOAuthAccess("acme", fmt.Sprintf("reader%d@b.c", caller), nil, nil,
+			coreauth.ScopeReadOnly, []string{testResource}, false, "mcp", fmt.Sprintf("j-reader%d", caller))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodPost, "/", body)
+		r.Header.Set("Authorization", "Bearer "+tok.Token)
+		return r
+	}
+	for i := 0; i < 64; i++ {
+		r := request(i/4, &heldAdmissionBody{entered: entered, release: release})
+		started++
+		go func(h http.Handler) {
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, r)
+			done <- rr.Code
+		}(handlers[i%2])
+		select {
+		case <-entered:
+		case status := <-done:
+			started--
+			t.Fatalf("body %d refused before the documented cap: status %d", i+1, status)
+		case <-time.After(testGiveUp):
+			t.Fatalf("body %d never entered the reader", i+1)
+		}
+	}
+	rr := httptest.NewRecorder()
+	handlers[1].ServeHTTP(rr, request(16, strings.NewReader("{}")))
+	if rr.Code != http.StatusTooManyRequests || rr.Header().Get("Retry-After") != "1" ||
+		!strings.Contains(rr.Body.String(), `"code":-32029`) {
+		t.Fatalf("process overflow: status %d, Retry-After %q, body %s; want MCP 429",
+			rr.Code, rr.Header().Get("Retry-After"), rr.Body.String())
+	}
+}
+
 func (b *heldAdmissionBody) Read([]byte) (int, error) {
 	b.entered <- struct{}{}
 	<-b.release

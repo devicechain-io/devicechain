@@ -5,8 +5,10 @@ package shardgroups
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,7 +34,8 @@ func TestConfiguredShardingFollowsAndRefusesInvalidPlacement(t *testing.T) {
 	port, err := strconv.Atoi(u.Port())
 	require.NoError(t, err)
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-sources"}
-	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	registry := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(registry)
 	ms.InstanceConfiguration.Infrastructure.Nats.Hostname = u.Hostname()
 	ms.InstanceConfiguration.Infrastructure.Nats.Port = uint32(port)
 	ms.InstanceConfiguration.Infrastructure.Nats.StreamMaxBytes = 8 << 20
@@ -46,6 +49,21 @@ func TestConfiguredShardingFollowsAndRefusesInvalidPlacement(t *testing.T) {
 	stop, err := Enable(m)
 	require.NoError(t, err)
 	t.Cleanup(stop)
+	placementUnavailable := func() float64 {
+		families, err := registry.Gather()
+		require.NoError(t, err)
+		for _, family := range families {
+			if strings.HasSuffix(family.GetName(), "jetstream_shard_placement_unavailable") {
+				return family.Metric[0].Gauge.GetValue()
+			}
+		}
+		t.Fatal("placement availability gauge was not registered")
+		return -1
+	}
+	require.Equal(t, 1.0, placementUnavailable(), "empty initial snapshot must publish unavailable")
+	// The second enable is rejected before registering another copy of the gauge.
+	_, err = Enable(m)
+	require.Error(t, err)
 	w, err := m.NewWriter(streams.InboundEvents)
 	require.NoError(t, err)
 	require.ErrorIs(t, w.WriteMessages(core.WithTenant(context.Background(), "tenant"), messaging.Message{Value: []byte("refused")}), messaging.ErrUnplacedTenant)
@@ -54,6 +72,7 @@ func TestConfiguredShardingFollowsAndRefusesInvalidPlacement(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return w.WriteMessages(core.WithTenant(context.Background(), "tenant"), messaging.Message{Value: []byte("placed")}) == nil
 	}, 5*time.Second, 10*time.Millisecond)
+	require.Zero(t, placementUnavailable())
 	js, err := m.Conn().JetStream()
 	require.NoError(t, err)
 	for suffix, count := range map[string]uint64{"inbound-events": 0, "inbound-events-g1": 1} {
@@ -82,6 +101,17 @@ func TestConfiguredShardingFollowsAndRefusesInvalidPlacement(t *testing.T) {
 		return err != nil
 	}, 5*time.Second, 10*time.Millisecond)
 	require.ErrorIs(t, w.WriteMessages(core.WithTenant(context.Background(), "tenant"), messaging.Message{Value: []byte("deleted")}), messaging.ErrUnplacedTenant)
+	require.Equal(t, 1.0, placementUnavailable())
+
+	// A valid placement keeps answering through ShardGroup until the watch is cancelled.
+	_, err = kv.Put(partition.TableKey, raw)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return placementError(m) == nil }, 5*time.Second, 10*time.Millisecond)
+	require.Never(t, func() bool { return placementError(m) != nil }, 100*time.Millisecond, 10*time.Millisecond)
+	stop()
+	require.Eventually(t, func() bool {
+		return errors.Is(placementError(m), messaging.ErrUnplacedTenant)
+	}, 5*time.Second, 10*time.Millisecond)
 }
 
 // Probe the same tenant routing used by the live-feed service without publishing.
