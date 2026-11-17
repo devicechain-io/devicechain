@@ -262,7 +262,10 @@ input AiProviderUpdateRequest {
     name: String
     """New description, or null to clear it."""
     description: String
-    """New provider kind. Omit it to keep the stored kind; an explicit null is refused."""
+    """New provider kind. Omit it to keep the stored kind; an explicit null is refused.
+    Changing the type or credential destination while a credential is stored requires secret
+    in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
+    """
     # The provider kind. It cannot be cleared: a null is refused rather than stored as
     # a kind nothing can serve.
     kind: String
@@ -271,6 +274,9 @@ input AiProviderUpdateRequest {
     remove the override and use the kind's built-in address. Null is refused for
     openai-compatible, which has no built-in address; a change of kind is checked against
     the stored endpoint in the same way.
+
+    Changing the type or credential destination while a credential is stored requires secret
+    in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
     """
     # The provider API base URL. Null clears the override, returning the provider to
     # its kind's built-in default — REFUSED for a kind that has no default and is
@@ -296,6 +302,9 @@ input AiProviderUpdateRequest {
     """
     The write-only API key. Omit it to keep the stored key, send a value to replace it, or
     send null or an empty string to delete it.
+
+    Changing the type or credential destination while a credential is stored requires secret
+    in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
     """
     # The write-only API key. Omit it to PRESERVE the stored one (it can never be read
     # back to resend), send a value to ROTATE it, or send null — or an empty string —
