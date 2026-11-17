@@ -545,7 +545,7 @@ func (e *Engine) snapshotNewest() []snapNewest {
 	e.pruneNewest()
 	out := make([]snapNewest, 0, len(e.newest))
 	for k, t := range e.newest {
-		if floor, ok := e.newestFloor(k); ok && !t.After(floor) {
+		if floor, ok := e.newestFloor(k); ok && t.Equal(floor) {
 			continue
 		}
 		out = append(out, snapNewest{Rule: k.Rule, Series: k.Series, At: t})
@@ -585,7 +585,7 @@ func (e *Engine) pruneNewest() {
 }
 
 // newestFloor is the instant restoreNewest seeds for key from the rest of the state: its newest
-// retained sample (each kind's own window) and, for a sliding kind, its rising edge. ok is false
+// retained sample (each kind's own window) and, for a sliding kind, its raise's input decision. ok is false
 // when the state holds nothing to seed from. It must agree with restoreNewest exactly, because
 // snapshotNewest omits an instant on the strength of it.
 func (e *Engine) newestFloor(k SeriesKey) (floor time.Time, ok bool) {
@@ -608,9 +608,9 @@ func (e *Engine) newestFloor(k SeriesKey) (floor time.Time, ok bool) {
 	for _, ns := range e.corr[k] {
 		take(time.Unix(0, ns).UTC())
 	}
-	if at, raised := e.raised[k]; raised {
+	if _, raised := e.raised[k]; raised {
 		if r, known := e.rules[k.Rule]; known && slidingKind(r.Kind) {
-			take(at)
+			take(e.raiseInput(k))
 		}
 	}
 	return floor, ok
@@ -619,19 +619,15 @@ func (e *Engine) newestFloor(k SeriesKey) (floor time.Time, ok bool) {
 // slidingKind reports whether a kind reads its window at the series' newest instant (trailingWindow).
 func slidingKind(k RuleKind) bool { return k == Repeating || k == SlidingAgg || k == Correlation }
 
-// restoreNewest reloads the evaluation instants, then seeds one for every series the snapshot
+// restoreNewest seeds the evaluation instants for every series the snapshot
 // holds trailing-window state or a raise for but no instant — a checkpoint written before the
 // instant existed. The seed is the newest time that state proves the series reached: its newest
-// retained sample, and its rising edge (which was stamped at or before the newest event). It is a
+// retained sample, and its raise's input decision (before any dedup bump). It is a
 // lower bound, which is the safe direction: a late sample is read at it or later than it would
 // have been, never before an edge already emitted, so a falling edge is never refused as stale.
 // A series that held no state carries no instant either way, and its next sample starts one.
 func (e *Engine) restoreNewest(in []snapNewest) {
-	for _, x := range in {
-		e.newest[SeriesKey{Rule: x.Rule, Series: x.Series}] = x.At
-	}
-	// A restored instant is already at or after everything below, so seeding leaves it alone; only
-	// a series the snapshot carries no instant for is changed.
+	// First derive the default for snapshots that carry no explicit instant.
 	seed := func(k SeriesKey, t time.Time) {
 		if cur, ok := e.newest[k]; ok && !cur.Before(t) {
 			return
@@ -653,10 +649,16 @@ func (e *Engine) restoreNewest(in []snapNewest) {
 			seed(k, time.Unix(0, ns).UTC())
 		}
 	}
-	for k, at := range e.raised {
+	for k := range e.raised {
 		if r, ok := e.rules[k.Rule]; ok && slidingKind(r.Kind) {
-			seed(k, at)
+			seed(k, e.raiseInput(k))
 		}
+	}
+	// An explicit evaluation instant is authoritative. A bumped raise can be
+	// later than the newest input; using it as the instant shifts window cutoffs
+	// and changes whether a falling edge is held.
+	for _, x := range in {
+		e.newest[SeriesKey{Rule: x.Rule, Series: x.Series}] = x.At
 	}
 }
 
