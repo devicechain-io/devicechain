@@ -84,11 +84,12 @@ const (
 
 // Login exchanges email+password at user-management's data-plane GraphQL endpoint
 // (userGraphQL, tenant-less) for an identity token + memberships.
-func Login(ctx context.Context, httpc *http.Client, userGraphQL, email, password string) (IdentityAuth, error) {
+func Login(ctx context.Context, httpc *http.Client, userGraphQL, email, password string) (result IdentityAuth, err error) {
+	defer func() { observeLogin(err) }()
 	var out struct {
 		Login IdentityAuth `json:"login"`
 	}
-	err := graphqlPost(ctx, httpc, userGraphQL, nil, loginMutation,
+	err = graphqlPost(ctx, httpc, userGraphQL, nil, loginMutation,
 		map[string]any{"email": email, "password": password}, &out)
 	if err != nil {
 		return IdentityAuth{}, err
@@ -177,11 +178,12 @@ func SelectTenant(ctx context.Context, httpc *http.Client, userGraphQL, identity
 // Refresh rotates a refresh token into a fresh access+refresh pair. The server
 // re-resolves authorities and revokes the old refresh jti, so a replayed refresh
 // token cannot mint two live sessions.
-func Refresh(ctx context.Context, httpc *http.Client, userGraphQL, refreshToken string) (AuthToken, error) {
+func Refresh(ctx context.Context, httpc *http.Client, userGraphQL, refreshToken string) (result AuthToken, err error) {
+	defer func() { observeRefresh(err) }()
 	var out struct {
 		Refresh AuthToken `json:"refresh"`
 	}
-	err := graphqlPost(ctx, httpc, userGraphQL, nil, refreshMutation,
+	err = graphqlPost(ctx, httpc, userGraphQL, nil, refreshMutation,
 		map[string]any{"refreshToken": refreshToken}, &out)
 	if err != nil {
 		return AuthToken{}, err

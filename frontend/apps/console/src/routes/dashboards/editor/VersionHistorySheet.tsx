@@ -19,6 +19,7 @@
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isStaleWrite } from '@devicechain/client';
 import { Radio, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -65,7 +66,6 @@ import {
   listDashboardVersions,
   publishDashboard,
   rollbackDashboard,
-  CONFLICT_MARKER,
   type DashboardVersion,
 } from '@/lib/api/dashboards';
 import '@/i18n/lazy/dashboards';
@@ -233,12 +233,12 @@ function VersionHistoryBody({
       setRefreshKey((k) => k + 1);
     } catch (err) {
       const raw = errMessage(err);
-      // Only CONFLICT is re-worded. publishDashboard's own option refusal cannot reach
+      // Only a stale write is re-worded. publishDashboard's own option refusal cannot reach
       // here from this drawer — the button is disabled while `issues` is non-empty, and
       // both checks run the same pure function over the same object — so if it ever
       // does, the raw message (which names the widget and the option) is exactly what
       // should be shown rather than a friendlier sentence that discards it.
-      toast(raw.includes(CONFLICT_MARKER) ? t('versionPublishConflict') : raw, 'error');
+      toast(isStaleWrite(err) ? t('versionPublishConflict') : raw, 'error');
     } finally {
       setBusy(false);
     }
@@ -350,7 +350,7 @@ function VersionHistoryBody({
       onClose();
     } catch (err) {
       const raw = errMessage(err);
-      toast(raw.includes(CONFLICT_MARKER) ? t('versionRollbackConflict') : raw, 'error');
+      toast(isStaleWrite(err) ? t('versionRollbackConflict') : raw, 'error');
     } finally {
       setBusy(false);
     }

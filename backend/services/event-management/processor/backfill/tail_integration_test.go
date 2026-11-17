@@ -231,11 +231,11 @@ func TestIntegrationATailPassThatRunsOutOfBudgetContinuesNextTick(t *testing.T) 
 		return nil
 	}
 	due(s)
-	require.NoError(t, s.RunOnce(context.Background()))
+	require.ErrorIs(t, s.RunOnce(context.Background()), core.ErrPassPartial)
 	require.Len(t, order, 1, "the budget ends the first pass after one window")
 	assert.True(t, s.nextPass.Before(clock), "an unfinished pass stays due")
 
-	require.NoError(t, s.RunOnce(context.Background()))
+	require.ErrorIs(t, s.RunOnce(context.Background()), core.ErrPassPartial)
 	require.NoError(t, s.RunOnce(context.Background()))
 	require.Len(t, order, 3, "each tick takes the next window")
 	assert.True(t, order[0].After(order[1]) && order[1].After(order[2]), "newest first, never repeated: %v", order)
@@ -255,7 +255,7 @@ func TestIntegrationATailPassThatRunsOutOfBudgetContinuesNextTick(t *testing.T) 
 	clock = clock.Add(2 * tailInterval)
 	due(s)
 	order = nil
-	require.NoError(t, s.RunOnce(context.Background()))
+	require.ErrorIs(t, s.RunOnce(context.Background()), core.ErrPassSkipped)
 	close(release)
 	assert.Empty(t, order)
 	assert.True(t, !s.nextPass.After(s.now()), "lost the lock: due again at the next tick")

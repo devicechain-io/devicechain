@@ -41,8 +41,7 @@ func storedPolicyName(t *testing.T, ctx context.Context) (name, updatedAt string
 	return found[0].Name.String, *gqlcore.FormatTime(found[0].UpdatedAt)
 }
 
-// A stale precondition is refused on the wire with the sentence clients recognise, with no
-// CONFLICT code, and nothing is written.
+// A stale precondition is refused with STALE_WRITE and the legacy sentence; nothing is written.
 func TestUpdatePolicyStalePreconditionOnTheWire(t *testing.T) {
 	ctx := newWireCtx(t)
 	seedPolicyWithOneRule(t, ctx)
@@ -55,8 +54,8 @@ func TestUpdatePolicyStalePreconditionOnTheWire(t *testing.T) {
 	if got := res.Errors[0].Message; got != want {
 		t.Fatalf("error message is %q, want %q", got, want)
 	}
-	if code, ok := res.Errors[0].Extensions["code"]; ok {
-		t.Fatalf("a stale save carries extensions.code %v; it must carry none", code)
+	if code := res.Errors[0].Extensions["code"]; code != "STALE_WRITE" {
+		t.Fatalf("a stale save carries extensions.code %v, want STALE_WRITE", code)
 	}
 	if name, _ := storedPolicyName(t, ctx); name != "Original" {
 		t.Fatalf("stored name is %q after a refused save, want %q", name, "Original")
