@@ -301,7 +301,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 		return false, fmt.Errorf("reading the broker's certificate to see whether it needs renewing: %w", err)
 	}
 
-	replicas := haFor(st.HA).ServerReplicas
+	replicas := brokerTopology(st).ServerReplicas
 	wanted := natsServerDNSNames(natsReleaseName, ns, replicas, mqttBrokerNames(st)...)
 	reason, err := leafReissueReason(string(current.Data["tls.crt"]), wanted, time.Now().UTC())
 	if err != nil {

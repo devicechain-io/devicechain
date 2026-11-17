@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/partition"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
@@ -273,4 +274,37 @@ func TestAnUnusableStoredPlacementIsNamedAsSuchAndIsNotAChangedP(t *testing.T) {
 	_, err = s.EnsurePlacement(ctx, partition.DefaultP)
 	require.ErrorIs(t, err, ErrPlacementInvalid)
 	require.False(t, errors.Is(err, partition.ErrPChanged))
+}
+
+func TestAssignVPartitionNatsShardGroupLimit(t *testing.T) {
+	for _, configured := range []bool{true, false} {
+		t.Run(fmt.Sprintf("configured=%t", configured), func(t *testing.T) {
+			s, _ := newPlacementStore(t)
+			if configured {
+				s.NatsShardGroups = &config.NatsShardGroupsConfiguration{Count: 2}
+			}
+			ctx := context.Background()
+			before, err := s.EnsurePlacement(ctx, partition.DefaultP)
+			require.NoError(t, err)
+			err = s.AssignVPartition(ctx, 3, 2)
+			if configured {
+				require.ErrorIs(t, err, ErrShardGroupOutsideNatsCount)
+				require.ErrorContains(t, err, "group 2, count 2")
+				require.ErrorContains(t, err, "nats.shardGroups.count must be raised first")
+				after, readErr := s.Placement(ctx)
+				require.NoError(t, readErr)
+				require.Equal(t, before, after)
+			} else {
+				require.NoError(t, err)
+				after, readErr := s.Placement(ctx)
+				require.NoError(t, readErr)
+				require.Equal(t, 2, after.Groups[3])
+				require.Equal(t, before.Generation+1, after.Generation)
+			}
+			require.NoError(t, s.AssignVPartition(ctx, 3, 1))
+			after, err := s.Placement(ctx)
+			require.NoError(t, err)
+			require.Equal(t, 1, after.Groups[3])
+		})
+	}
 }

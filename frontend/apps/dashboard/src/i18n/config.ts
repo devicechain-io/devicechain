@@ -34,10 +34,13 @@ import esCommon from './locales/es/common.json';
 import esLoad from './locales/es/load.json';
 import esSignIn from './locales/es/signIn.json';
 import esView from './locales/es/view.json';
+import zhView from './locales/zh-CN/view.json';
 
 export interface Locale {
   /** BCP-47 code; also the ./locales/<code>/ directory name and the i18next lng. */
   code: string;
+  /** This locale currently translates dashboard widgets and viewer controls only. */
+  namespaces?: readonly string[];
   /** The language's own endonym, shown in the switcher — never itself translated. */
   label: string;
   /**
@@ -57,6 +60,7 @@ export interface Locale {
 export const SUPPORTED_LOCALES: Locale[] = [
   { code: 'en', label: 'English', badge: 'EN' },
   { code: 'es', label: 'Español', badge: 'ES' },
+  { code: 'zh-CN', label: '简体中文', badge: 'ZH', namespaces: ['view'] },
 ];
 
 export const DEFAULT_LOCALE = 'en';
@@ -77,6 +81,8 @@ export const NAMESPACES = ['common', 'signIn', 'load', 'view'] as const;
 const resources = {
   en: { common: enCommon, signIn: enSignIn, load: enLoad, view: enView },
   es: { common: esCommon, signIn: esSignIn, load: esLoad, view: esView },
+  'zh-CN': { view: zhView },
+  zh: { view: zhView },
 } as const;
 
 void i18n
@@ -85,7 +91,8 @@ void i18n
   .init({
     resources,
     fallbackLng: DEFAULT_LOCALE,
-    supportedLngs: SUPPORTED_LOCALES.map((l) => l.code),
+    // Include the base tag so i18next's regional fallback can reach Simplified Chinese.
+    supportedLngs: [...SUPPORTED_LOCALES.map((l) => l.code), 'zh'],
     // Fall a region variant back onto its base language ("es-MX" -> "es") rather
     // than straight to `en`, so a future regional catalog is reachable.
     nonExplicitSupportedLngs: true,

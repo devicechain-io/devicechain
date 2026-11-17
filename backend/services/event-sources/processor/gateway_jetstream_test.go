@@ -6,11 +6,14 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -426,6 +429,34 @@ func TestAPoisonMessageIsDeadLetteredAndAckedAtMaxDeliver(t *testing.T) {
 
 	_, failed, _, _ := h.counts()
 	require.Equal(t, 1, failed, "the payload must reach failed-decode before being acked, or it is lost silently")
+}
+
+func TestUnplacedCaptureIsHeldAtMaxDeliver(t *testing.T) {
+	for _, unplaced := range []bool{true, false} {
+		t.Run(fmt.Sprint(unplaced), func(t *testing.T) {
+			counter := prometheus.NewCounter(prometheus.CounterOpts{Name: "placement_unavailable"})
+			h := newCaptureHarnessWith(t, func(s *GatewayJetStreamSource) {
+				s.UsePlacementUnavailableCounter(counter)
+			})
+			h.publishErr = errors.New("plain publish failure")
+			if unplaced {
+				h.publishErr = fmt.Errorf("forward: %w", messaging.ErrUnplacedTenant)
+			}
+			ack := &recordingAck{}
+			h.source.handle(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, 11, ack))
+			h.quiesce(t, 1)
+			_, failed, _, _ := h.counts()
+			if unplaced {
+				require.Zero(t, failed)
+				require.Zero(t, ack.counts())
+				require.Equal(t, 1.0, testutil.ToFloat64(counter))
+			} else {
+				require.Equal(t, 1, failed)
+				require.Equal(t, 1, ack.counts())
+				require.Zero(t, testutil.ToFloat64(counter))
+			}
+		})
+	}
 }
 
 // If even the dead-letter route fails, the message must be left UNACKED. Losing

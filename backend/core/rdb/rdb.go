@@ -62,6 +62,19 @@ func (rdb *RdbManager) DB(ctx context.Context) *gorm.DB {
 	return rdb.routed(ctx).WithContext(ctx)
 }
 
+// clampTotal leaves nonnegative values under 2^31 unchanged. Above that, the
+// served Int cannot carry them, so it saturates rather than wrapping.
+// Negative values are defensively clamped to zero.
+func clampTotal(n int64) int32 {
+	if n < 0 {
+		return 0
+	}
+	if n > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(n)
+}
+
 // countAndOrder builds the COUNT and the ordered data query that ListOf and ListAllOf
 // share, returning the data query and the total number of matching rows.
 //
@@ -70,7 +83,7 @@ func (rdb *RdbManager) DB(ctx context.Context) *gorm.DB {
 // everything above that branch was shared by accident of layout rather than by
 // construction, and the ordering note below had to claim the sharing in prose.
 func (rdb *RdbManager) countAndOrder(ctx context.Context, mdl Sortable,
-	filters func(db *gorm.DB) *gorm.DB) (*gorm.DB, int32) {
+	filters func(db *gorm.DB) *gorm.DB) (*gorm.DB, int64) {
 	// Bind the context once (so the tenant-scope callbacks see it) and reuse it
 	// for both the count and data queries; each Model(...) clones a fresh stmt.
 	base := rdb.DB(ctx)
@@ -87,9 +100,8 @@ func (rdb *RdbManager) countAndOrder(ctx context.Context, mdl Sortable,
 		// A failed COUNT cannot supply a total or authorize a data SELECT.
 		return result, 0
 	}
-	total := int32(count)
 
-	return rdb.orderedDataQuery(base, mdl, filters), total
+	return rdb.orderedDataQuery(base, mdl, filters), count
 }
 
 // orderedDataQuery shares filters and ordering across counted and count-free reads.
@@ -141,15 +153,15 @@ func (rdb *RdbManager) ListOf(ctx context.Context, mdl Sortable, filters func(db
 	// Use the effective (defaulted/clamped) page size so the reported span matches
 	// the LIMIT/OFFSET Paginate actually applied (ADR-029).
 	size := pag.EffectivePageSize()
-	last := pag.PageNumber * size
+	last := int64(pag.PageNumber) * int64(size)
 	if total < last {
 		last = total
 	}
 
 	srpag := SearchResultsPagination{
-		PageStart:    (pag.PageNumber-1)*size + 1,
-		PageEnd:      last,
-		TotalRecords: total,
+		PageStart:    clampTotal((int64(pag.PageNumber)-1)*int64(size) + 1),
+		PageEnd:      clampTotal(last),
+		TotalRecords: clampTotal(total),
 	}
 	return result, srpag
 }
@@ -171,14 +183,7 @@ func (rdb *RdbManager) ListPageOf(ctx context.Context, mdl Sortable, filters fun
 	start := (int64(pag.PageNumber)-1)*int64(size) + 1
 	return rdb.orderedDataQuery(rdb.DB(ctx), mdl, filters).Scopes(func(db *gorm.DB) *gorm.DB {
 		return Paginate(pag)(db).Limit(size + 1)
-	}), PageWindow{PageStart: saturatePagePosition(start), size: size}
-}
-
-func saturatePagePosition(n int64) int32 {
-	if n > math.MaxInt32 {
-		return math.MaxInt32
-	}
-	return int32(n)
+	}), PageWindow{PageStart: clampTotal(start), size: size}
 }
 
 // TrimPage removes the lookahead row and describes the returned rows.
@@ -190,7 +195,7 @@ func TrimPage[T any](rows []T, w PageWindow) ([]T, PageWindow) {
 	if w.HasMore {
 		rows = rows[:w.size]
 	}
-	w.PageEnd = saturatePagePosition(int64(w.PageStart) + int64(len(rows)) - 1)
+	w.PageEnd = clampTotal(int64(w.PageStart) + int64(len(rows)) - 1)
 	return rows, w
 }
 
@@ -221,8 +226,8 @@ func (rdb *RdbManager) ListAllOf(ctx context.Context, mdl Sortable,
 	result, total := rdb.countAndOrder(ctx, mdl, filters)
 	return result, SearchResultsPagination{
 		PageStart:    1,
-		PageEnd:      total,
-		TotalRecords: total,
+		PageEnd:      clampTotal(total),
+		TotalRecords: clampTotal(total),
 	}
 }
 
@@ -541,7 +546,7 @@ func (rdb *RdbManager) ExecuteTerminate(context.Context) error {
 // not about what is read from the database. It is not a licence to load a table and slice
 // it; an unbounded row set still belongs behind ListOf's LIMIT.
 func PageSlice[T any](items []T, pag Pagination) ([]T, SearchResultsPagination) {
-	total := int32(len(items))
+	total := int64(len(items))
 	if pag.PageNumber < 1 {
 		pag.PageNumber = 1
 	}
@@ -552,14 +557,14 @@ func PageSlice[T any](items []T, pag Pagination) ([]T, SearchResultsPagination) 
 	if offset < 0 {
 		offset = 0
 	}
-	last := pag.PageNumber * size
+	last := int64(pag.PageNumber) * int64(size)
 	if total < last {
 		last = total
 	}
 	srpag := SearchResultsPagination{
-		PageStart:    (pag.PageNumber-1)*size + 1,
-		PageEnd:      last,
-		TotalRecords: total,
+		PageStart:    clampTotal((int64(pag.PageNumber)-1)*int64(size) + 1),
+		PageEnd:      clampTotal(last),
+		TotalRecords: clampTotal(total),
 	}
 	if offset >= int64(total) {
 		// Past the end: an empty page, exactly as an OFFSET beyond the last row yields.
