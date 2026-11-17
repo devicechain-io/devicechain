@@ -820,7 +820,7 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 - No requiere cambios de configuración.
 
 
-- **El límite de 64 solicitudes en curso por proceso del servidor MCP es alcanzable, y la solicitud que lo supera recibe HTTP 429.** El presupuesto compartido de cuerpos de solicitud solo admitía 63 cuerpos de tamaño máximo, por lo que la solicitud simultánea número 64 recibía HTTP 503 con `Retry-After: 1` antes de alcanzar el límite de MCP. Ahora el presupuesto admite 64 (crece 64 bytes), y las solicitudes que superan el límite reciben HTTP 429 con `Retry-After: 1`, como está documentado. El límite de 4 en curso por llamante y el máximo de 1 MiB por cuerpo de solicitud no cambian.
+- **Un `dcctl bootstrap` rechazado deja el registro local de la instancia tal como estaba.** Cuando bootstrap se niega a ejecutarse sobre una instancia que ya está en marcha, `~/.devicechain/instances/<instance>/instance.json` se restaura byte a byte, incluido su `createdAt`. Antes, la ejecución rechazada lo reescribía con su propia hora de creación y su versión de dcctl.
 
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}
 
