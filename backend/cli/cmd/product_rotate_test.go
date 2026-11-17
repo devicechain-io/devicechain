@@ -83,7 +83,9 @@ func TestProductRotateIntegrationToken(t *testing.T) {
 			root.SetArgs([]string{"product", "rotate-integration-token", "lorawan", "--server", strings.TrimPrefix(srv.URL, "http://"), "--tenant", "tenant", "--email", "operator@example.com", "--password", "pw"})
 			err := root.Execute()
 			if serverError != "" {
-				if err == nil || !strings.Contains(err.Error(), serverError) || stdout.Len() != 0 {
+				// The dial error's wording is the OS's ("connection refused" on Linux,
+				// "actively refused" on Windows), so that case asserts only the failure.
+				if err == nil || (serverError != "connection refused" && !strings.Contains(err.Error(), serverError)) || stdout.Len() != 0 {
 					t.Fatalf("want server error and empty stdout: err=%v stdout=%q", err, stdout.String())
 				}
 			} else {
