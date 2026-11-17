@@ -81,6 +81,8 @@ type Handler struct {
 	window func(size int64) time.Duration
 	// slots bounds the uploads this process streams at once: one token per upload in flight.
 	slots chan struct{}
+	// tenants bounds how many of those slots one tenant holds at once.
+	tenants *tenantShare
 }
 
 // New builds the handler. api carries the object store and the catalogue, and
@@ -91,7 +93,8 @@ func New(api *model.Api, validator ValidatorSource, policy PolicySource, maxConc
 		panic("upload.New: maxConcurrent must be positive")
 	}
 	return &Handler{api: api, validator: validator, policy: policy, idle: idleTimeout,
-		window: model.UploadWindow, slots: make(chan struct{}, maxConcurrent)}
+		window: model.UploadWindow, slots: make(chan struct{}, maxConcurrent),
+		tenants: newTenantShare(maxConcurrent)}
 }
 
 // Register mounts the handler on mux.
@@ -152,9 +155,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Admission, still before the body: a bounded number of uploads per process, then one
-	// per artifact across every replica. Both refuse with the connection closed, so
-	// neither costs a byte of the body that was on its way.
+	// Admission, still before the body: at most half the process's uploads per tenant, a
+	// bounded number per process, then one per artifact across every replica. All refuse with
+	// the connection closed, so none costs a byte of the body that was on its way.
+	if !h.tenants.acquire(claims.Tenant) {
+		w.Header().Set("Retry-After", "5")
+		refuse(w, r, http.StatusServiceUnavailable, "this tenant already holds its share of "+
+			strconv.Itoa(h.tenants.limit)+" concurrent uploads on this replica; retry shortly")
+		return
+	}
+	defer h.tenants.release(claims.Tenant)
 	select {
 	case h.slots <- struct{}{}:
 		defer func() { <-h.slots }()
