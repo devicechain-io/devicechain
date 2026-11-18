@@ -1726,7 +1726,7 @@ func (c *Client) publishRebirth(group, node string) bool {
 		log.Error().Err(err).Str("group", group).Str("node", node).Msg("Failed to encode rebirth command.")
 		return false
 	}
-	if err := c.publishCommand(target, payload); err != nil {
+	if err := c.publishCommand(target, payload, nil); err != nil {
 		if errors.Is(err, errCommandNotConnected) {
 			log.Warn().Str("tenant", c.tenant).Str("group", group).Str("node", node).Msg("Not connected; dropping rebirth command.")
 		} else {
@@ -1750,12 +1750,17 @@ var errCommandNotConnected = errors.New("no live broker session to publish a com
 // fixed ones, QoS 0 and retain false ([tck-id-topics-ncmd-mqtt], [tck-id-topics-dcmd-mqtt],
 // [tck-id-payloads-ncmd-qos], [tck-id-payloads-ncmd-retain], [tck-id-payloads-dcmd-qos],
 // [tck-id-payloads-dcmd-retain]). They are constants, not parameters: no caller may choose them.
-func (c *Client) publishCommand(target CommandTarget, payload []byte) error {
+// onWire, when non-nil, records the command after the connectivity check and immediately before
+// Publish, so even session loss reported inside Publish sees the record.
+func (c *Client) publishCommand(target CommandTarget, payload []byte, onWire func()) error {
 	c.mu.Lock()
 	client := c.mc
 	c.mu.Unlock()
 	if client == nil || !client.IsConnected() {
 		return errCommandNotConnected
+	}
+	if onWire != nil {
+		onWire()
 	}
 	return mqtt.WaitTokenTimeout(client.Publish(target.Topic(), commandQoS, commandRetain, payload), publishTimeout)
 }
