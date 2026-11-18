@@ -138,8 +138,8 @@ it('surfaces a 4401 at connect instead of looping', async () => {
   expect(FakeSocket.all).toHaveLength(1);
 });
 
-// The session's getAccessToken throws when the held access token has expired and the refresh
-// failed transiently (no response, a 5xx, a 429). graphql-ws hands any throw from
+// The session's getAccessToken (under transientRefreshErrors: 'throw', as the console and /dash
+// run it) throws when the held access token has expired and the refresh failed transiently (no response, a 5xx, a 429). graphql-ws hands any throw from
 // connectionParams to shouldRetry and then closes the socket with 4005; answered false, it ends
 // every operation with that error, so an outage of the identity service at the wrong moment
 // used to end every subscription.

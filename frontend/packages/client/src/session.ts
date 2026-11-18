@@ -18,10 +18,18 @@
 //     decides what "ended" looks like.
 //   - a TRANSIENT refresh failure (no response at all, a 5xx, or a 429) NEVER ends the
 //     session: the server has not refused anything, and the refresh token is still good. While
-//     the access token is valid the caller is handed it; once it has expired the caller gets
-//     the transient error thrown (its request could not be authenticated right now, which is
-//     what an outage looks like), and the next call (or the auto-refresh retry below) tries
-//     again. Only the refresh token lapsing ends a session that keeps failing transiently.
+//     the access token is valid the caller is handed it. Once it has expired there is nothing
+//     valid to hand over, and what the caller gets depends on `transientRefreshErrors`:
+//       'null' (the default, and the v1.6 contract of getAccessToken): null, exactly as v1.6
+//         returned. v1.6 also ended the session there; it no longer does, so the next call
+//         (or the auto-refresh retry below) tries again.
+//       'throw' (opt-in): the transient error is thrown, so the request fails with the outage
+//         it hit rather than going out without a token and reading the server's 401 as a
+//         refusal. The console and /dash opt in.
+//     Only the refresh token lapsing ends a session that keeps failing transiently.
+//     🔴 #2752 made 'throw' the only behaviour. getAccessToken is a published export and a
+//     v1.6 caller checks for null, so a promise that now rejected was a contract change in a
+//     minor: it became the opt-in.
 //   - startAutoRefresh() refreshes ahead of expiry without waiting for a caller, and
 //     retries a transient failure with jittered exponential backoff for as long as the
 //     refresh token is valid. A display that only holds a websocket makes no request that
@@ -59,6 +67,17 @@ export interface SessionTokensOptions {
    * tokens never hands out one that is already due, which would refresh on every call.
    */
   skewSeconds?: number;
+  /**
+   * What `getAccessToken` does when the access token has expired and the refresh failed
+   * transiently (no response, a 5xx or a 429). Either way the session is kept and a later call
+   * tries again; `onEnd` is not called.
+   *
+   * - `'null'` (default): resolve to null, as in v1.6.
+   * - `'throw'`: reject with the refresh's error, so the request fails with the outage instead
+   *   of being sent without a token. `subscribe` treats that error as transient: the
+   *   subscription's reconnect retries it.
+   */
+  transientRefreshErrors?: 'null' | 'throw';
 }
 
 export interface SessionTokens {
@@ -67,13 +86,19 @@ export interface SessionTokens {
    * Resolves to the refreshed token, or null when the session is signed out, was replaced since
    * `rejectedToken` was sent, or has ended (the refresh token lapsed or the server refused the
    * refresh). Rejects with the refresh's error when it failed transiently: the session is kept,
-   * and a later call tries again. Never hands back the rejected token.
+   * and a later call tries again. Never hands back the rejected token. It rejects whatever
+   * `transientRefreshErrors` says: a null here tells `setUnauthorizedHandler` the session ended.
+   *
+   * Optional HERE because v1.6 had no such member, and a host that builds its own
+   * `SessionTokens` must still type-check. What `createSessionTokens` returns always has it:
+   * see `ManagedSessionTokens`. Without it a host has no 401 recovery, as in v1.6.
    */
-  forceRefresh: (rejectedToken?: string) => Promise<string | null>;
+  forceRefresh?: (rejectedToken?: string) => Promise<string | null>;
   /**
    * A usable access token, refreshing first when it is within the skew of expiry; null when
-   * signed out or ended. Rejects with the refresh's error when the access token has expired and
-   * the refresh failed transiently: the session is kept, and a later call tries again.
+   * signed out or ended. When the access token has expired and the refresh failed transiently,
+   * the session is kept and a later call tries again; the call resolves to null, or rejects with
+   * the refresh's error under `transientRefreshErrors: 'throw'`.
    */
   getAccessToken: () => Promise<string | null>;
   /** Forget any in-flight refresh (the host cleared or replaced the session itself). */
@@ -83,6 +108,11 @@ export interface SessionTokens {
    * as the refresh token is valid. Returns a stop function.
    */
   startAutoRefresh: () => () => void;
+}
+
+/** What `createSessionTokens` returns: a `SessionTokens` whose `forceRefresh` is always present. */
+export interface ManagedSessionTokens extends SessionTokens {
+  forceRefresh: (rejectedToken?: string) => Promise<string | null>;
 }
 
 const DEFAULT_SKEW_SECONDS = 30;
@@ -125,8 +155,14 @@ function expiryMs(token: string): number | undefined {
   return exp === undefined ? undefined : exp * 1000;
 }
 
-export function createSessionTokens(opts: SessionTokensOptions): SessionTokens {
+export function createSessionTokens(opts: SessionTokensOptions): ManagedSessionTokens {
   const skew = opts.skewSeconds ?? DEFAULT_SKEW_SECONDS;
+  const mode = opts.transientRefreshErrors;
+  // Fail closed: a misspelt mode from an untyped caller must not quietly mean the default.
+  if (mode !== undefined && mode !== 'null' && mode !== 'throw') {
+    throw new TypeError(`createSessionTokens: transientRefreshErrors must be 'null' or 'throw', not ${String(mode)}`);
+  }
+  const throwTransient = mode === 'throw';
   let inFlight: Promise<Outcome> | null = null;
   let lastRefresh: { from: string; pair: TokenPair } | null = null;
 
@@ -185,10 +221,11 @@ export function createSessionTokens(opts: SessionTokensOptions): SessionTokens {
     // A transient failure: the held token is still good if it has not actually expired.
     if (opts.read() !== current) return null;
     if (!isExpired(current.accessToken, 0)) return current.accessToken;
-    // Nothing valid to hand over, but nothing was refused either: keep the session, and fail
-    // this caller with the outage it hit. Returning null would send the request without a
-    // token, and the server's 401 would read as a refusal.
-    throw out.err;
+    // Nothing valid to hand over, but nothing was refused either: keep the session. Under
+    // 'throw' the caller fails with the outage it hit (a null would send the request without a
+    // token, and the server's 401 would read as a refusal); by default it gets v1.6's null.
+    if (throwTransient) throw out.err;
+    return null;
   };
 
   const startAutoRefresh = (): (() => void) => {

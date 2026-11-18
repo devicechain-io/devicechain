@@ -157,6 +157,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		// advisory lock. It is initialized before the secret store, which reads from the
 		// same database.
 		Rdb: &service.RdbSpec{
+			AppendOnly: nil, // Audit journal only.
 			Migrations: schema.Migrations,
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Config:     Configuration.RdbConfiguration,
