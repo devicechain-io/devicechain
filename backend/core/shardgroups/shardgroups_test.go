@@ -19,30 +19,13 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
 func TestConfiguredShardingFollowsAndRefusesInvalidPlacement(t *testing.T) {
-	srv, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true, StoreDir: dctest.JetStreamStoreDir(t), JetStreamMaxStore: dctest.JetStreamMaxStore})
-	require.NoError(t, err)
-	go srv.Start()
-	require.True(t, srv.ReadyForConnections(10*time.Second))
-	t.Cleanup(srv.Shutdown)
-	u, err := url.Parse(srv.ClientURL())
-	require.NoError(t, err)
-	port, err := strconv.Atoi(u.Port())
-	require.NoError(t, err)
-	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-sources"}
-	registry := prometheus.NewRegistry()
-	ms.UseMetricsRegistry(registry)
-	ms.InstanceConfiguration.Infrastructure.Nats.Hostname = u.Hostname()
-	ms.InstanceConfiguration.Infrastructure.Nats.Port = uint32(port)
-	ms.InstanceConfiguration.Infrastructure.Nats.StreamMaxBytes = 8 << 20
-	ms.InstanceConfiguration.Infrastructure.Nats.StreamMaxBytesCold = 1 << 20
-	m := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(*messaging.NatsManager) error { return nil })
-	require.NoError(t, m.Initialize(context.Background()))
-	t.Cleanup(func() { _ = m.Terminate(context.Background()) })
+	m, registry := newReadersManagerWithRegistry(t)
 	m.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups = &mscfg.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.InboundEvents, streams.ResolvedEvents}}
 	kv, err := m.PartitionPlacementStore()
 	require.NoError(t, err)
@@ -120,4 +103,80 @@ func placementError(m *messaging.NatsManager) error {
 	defer cancel()
 	_, err := m.SubscribeLive(ctx, "tenant", streams.ResolvedEvents)
 	return err
+}
+
+func TestNewReadersWithIndependentGroupOptions(t *testing.T) {
+	for _, selected := range []bool{false, true} {
+		t.Run(strconv.FormatBool(selected), func(t *testing.T) {
+			m := newReadersManager(t)
+			m.Microservice.FunctionalArea = "event-processing"
+			n := 1
+			if selected {
+				cfg := &mscfg.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.ResolvedEvents}}
+				m.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups = cfg
+				require.NoError(t, m.EnableStreamSharding(partition.NewRouter("test"), cfg))
+				n = 2
+			}
+			js, err := m.Conn().JetStream()
+			require.NoError(t, err)
+			var calls []int
+			readers, err := NewReadersWith(m, streams.ResolvedEvents, func(group int) []messaging.ReaderOption {
+				calls = append(calls, group)
+				return []messaging.ReaderOption{messaging.ReaderWithAckFloor(func(context.Context) (uint64, error) {
+					return uint64(group + 2), nil
+				})}
+			})
+			require.NoError(t, err)
+			require.Len(t, readers, n)
+			for group, reader := range readers {
+				require.Equal(t, group, calls[group])
+				physical := messaging.GroupSuffix(streams.ResolvedEvents, group)
+				for seq := 1; seq <= 4; seq++ {
+					_, err := js.Publish(messaging.ScopedSubject("test", "tenant", physical), []byte(strconv.Itoa(seq)))
+					require.NoError(t, err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				msg, err := reader.ReadMessage(ctx)
+				cancel()
+				require.NoError(t, err)
+				require.EqualValues(t, group+2, msg.StreamSeq)
+				require.Equal(t, strconv.Itoa(group+2), string(msg.Value))
+				require.ErrorIs(t, msg.Ack(), messaging.ErrAckFloorReader)
+				info, err := js.ConsumerInfo(messaging.StreamName("test", physical), messaging.AckFloorDurableName("test", "event-processing", physical))
+				require.NoError(t, err)
+				require.Equal(t, nats.AckAllPolicy, info.Config.AckPolicy)
+				require.EqualValues(t, group+2, info.Config.OptStartSeq)
+			}
+		})
+	}
+}
+
+func newReadersManager(t *testing.T) *messaging.NatsManager {
+	t.Helper()
+	m, _ := newReadersManagerWithRegistry(t)
+	return m
+}
+
+func newReadersManagerWithRegistry(t *testing.T) (*messaging.NatsManager, *prometheus.Registry) {
+	t.Helper()
+	srv, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true, StoreDir: dctest.JetStreamStoreDir(t), JetStreamMaxStore: dctest.JetStreamMaxStore})
+	require.NoError(t, err)
+	go srv.Start()
+	require.True(t, srv.ReadyForConnections(10*time.Second))
+	t.Cleanup(srv.Shutdown)
+	u, err := url.Parse(srv.ClientURL())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(u.Port())
+	require.NoError(t, err)
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-sources"}
+	registry := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(registry)
+	ms.InstanceConfiguration.Infrastructure.Nats.Hostname = u.Hostname()
+	ms.InstanceConfiguration.Infrastructure.Nats.Port = uint32(port)
+	ms.InstanceConfiguration.Infrastructure.Nats.StreamMaxBytes = 8 << 20
+	ms.InstanceConfiguration.Infrastructure.Nats.StreamMaxBytesCold = 1 << 20
+	m := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(*messaging.NatsManager) error { return nil })
+	require.NoError(t, m.Initialize(context.Background()))
+	t.Cleanup(func() { _ = m.Terminate(context.Background()) })
+	return m, registry
 }
