@@ -1222,7 +1222,9 @@ func (api *Api) supersedeOlderFirings(ctx context.Context, c *Campaign, now time
 // PENDING element's due time exceeds the last check by campaignMembershipFreshness. Later
 // steps and per-device solar instants therefore refresh membership without resolving on every
 // 15-second pass. One resolution serves all such cycles this pass; pending elements of devices
-// that left since planning are skipped as NOT_IN_GROUP, and each check advances its timestamp.
+// that left since planning are skipped as NOT_IN_GROUP when they are due within the freshness
+// window of this check. Later elements stay pending until they fall due and are re-checked
+// then, and each check advances its timestamp.
 // It returns the cycles it could NOT check: those are not sent this pass, because commanding
 // a device that may have left the group is the failure the check exists for.
 //
@@ -1278,12 +1280,19 @@ func (api *Api) recheckDueMembership(ctx context.Context, c *Campaign, now time.
 		members[d] = struct{}{}
 	}
 	checkedAt := api.campaignClock()
+	// This check answers for every element the trigger above will not re-check: those due no
+	// later than checkedAt + campaignMembershipFreshness. Later elements stay PENDING and are
+	// re-checked when they fall due, so a device that rejoins by then still receives them.
+	judgedUntil := checkedAt.Add(campaignMembershipFreshness)
+	if judgedUntil.Before(now) {
+		judgedUntil = now
+	}
 	for _, cycleID := range unchecked {
 		var after uint
 		for {
 			var rows []CampaignElement
 			if err := db.Select("id", "device_token").
-				Where("cycle_id = ? AND status = ? AND id > ?", cycleID, string(ElementPending), after).
+				Where("cycle_id = ? AND status = ? AND id > ? AND due_at <= ?", cycleID, string(ElementPending), after, judgedUntil).
 				Order("id ASC").Limit(campaignRowChunk).Find(&rows).Error; err != nil {
 				return unchecked, err
 			}
@@ -1297,7 +1306,7 @@ func (api *Api) recheckDueMembership(ctx context.Context, c *Campaign, now time.
 				}
 			}
 			if len(gone) > 0 {
-				if err := db.Model(&CampaignElement{}).Where("id IN ? AND status = ?", gone, string(ElementPending)).
+				if err := db.Model(&CampaignElement{}).Where("id IN ? AND status = ? AND due_at <= ?", gone, string(ElementPending), judgedUntil).
 					Updates(map[string]any{"status": string(ElementSkipped), "reason": SkipNotInGroup, "updated_at": now}).Error; err != nil {
 					return unchecked, err
 				}
