@@ -11,6 +11,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // DeleteAnchorsForEntity (ADR-044) removes a deleted entity's anchors: a device by
@@ -89,8 +90,9 @@ func TestDeleteAnchorsForEntity_DeviceAsTarget(t *testing.T) {
 func TestDeleteAnchorsForEntity_TenantScoped(t *testing.T) {
 	api := newPersistenceTestApi(t)
 	acme := core.WithTenant(context.Background(), "acme")
+	occurred := time.Now().UTC()
 	if err := api.CreateEventAnchors(acme, api.RDB.DB(acme), []*EventAnchor{
-		{DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: time.Now().UTC(), AnchorType: "customer", AnchorToken: "cust-3"},
+		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -105,10 +107,8 @@ func TestDeleteAnchorsForEntity_TenantScoped(t *testing.T) {
 	assert.Equal(t, int64(1), remaining, "acme's anchor must survive another tenant's delete")
 }
 
-// A bounded delete (ADR-044 decision-4 amendment) removes only anchors OLDER than
-// the deletion time, so a device that reuses a freed token keeps the anchors of its
-// own (newer) events even if the prior owner's deletion event is replayed. The sweep
-// passes a zero time (unbounded) and is covered by the cases above.
+// Missing parents use the occurred-time fallback. The sweep passes a zero time
+// (unbounded) and is covered by the cases above.
 func TestDeleteAnchorsForEntity_BoundedByBefore(t *testing.T) {
 	api := newPersistenceTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
@@ -117,8 +117,8 @@ func TestDeleteAnchorsForEntity_BoundedByBefore(t *testing.T) {
 	newEvent := deletedAt.Add(time.Hour)  // a reused-token device's telemetry
 
 	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
-		{DeviceToken: "gw-1", EventType: eventtype.Measurement, OccurredTime: oldEvent, AnchorType: "customer", AnchorToken: "cust-3"},
-		{DeviceToken: "gw-1", EventType: eventtype.Measurement, OccurredTime: newEvent, AnchorType: "customer", AnchorToken: "cust-3"},
+		{EventId: anchorEventId("gw-1", oldEvent), DeviceToken: "gw-1", EventType: eventtype.Measurement, OccurredTime: oldEvent, AnchorType: "customer", AnchorToken: "cust-3"},
+		{EventId: anchorEventId("gw-1", newEvent), DeviceToken: "gw-1", EventType: eventtype.Measurement, OccurredTime: newEvent, AnchorType: "customer", AnchorToken: "cust-3"},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -141,4 +141,73 @@ func TestDeleteAnchorsForEntity_BoundedByBefore(t *testing.T) {
 func anchorEventId(device string, occurred time.Time) []byte {
 	ev := Event{DeviceToken: device, EventType: eventtype.Measurement, OccurredTime: occurred}
 	return DeriveEventId("acme", &ev, nil)
+}
+
+func TestDeleteAnchorsForEntity_ProcessedTime(t *testing.T) {
+	assertAnchorCleanupByReceiptTime(t, newPersistenceTestApi(t))
+}
+
+// Shared with the real hypertable test so both engines must preserve exactly the
+// same anchors when an old deletion arrives after a token has been reused.
+func assertAnchorCleanupByReceiptTime(t *testing.T, api *Api) {
+	t.Helper()
+	for _, target := range []struct {
+		name, entityType, entityToken, device, anchorType, anchorToken string
+	}{
+		{"device_source", "device", "pump-7", "pump-7", "customer", "cust-7"},
+		{"customer_target", "customer", "cust-7", "pump-7", "customer", "cust-7"},
+		{"device_target", "device", "pump-7", "tracker", "device", "pump-7"},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			ctx := core.WithTenant(context.Background(), "receipt-"+target.name)
+			deletedAt := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+			var keep [][]byte
+			for _, fixture := range []struct {
+				name                string
+				occurred, processed time.Duration
+				missing, survives   bool
+			}{
+				{"old", -time.Hour, -time.Hour, false, false},
+				{"buffered", -2 * time.Hour, 5 * time.Minute, false, true},
+				{"at_cutoff", -3 * time.Hour, 0, false, true},
+				{"clock_ahead", time.Hour, -time.Hour, false, false},
+				{"orphan_old", -4 * time.Hour, 0, true, false},
+				{"orphan_new", 2 * time.Hour, 0, true, true},
+			} {
+				event := Event{
+					DeviceToken: target.device, EventType: eventtype.Measurement,
+					OccurredTime:  deletedAt.Add(fixture.occurred),
+					ProcessedTime: deletedAt.Add(fixture.processed), Source: "mqtt",
+				}
+				event.EventId = DeriveEventId("receipt-"+target.name, &event, []byte(fixture.name))
+				if !fixture.missing {
+					require.NoError(t, api.RDB.DB(ctx).Create(&event).Error)
+				}
+				require.NoError(t, api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{{
+					EventId: event.EventId, DeviceToken: event.DeviceToken, EventType: event.EventType,
+					OccurredTime: event.OccurredTime, AnchorType: target.anchorType, AnchorToken: target.anchorToken,
+				}}))
+				if fixture.survives {
+					keep = append(keep, event.EventId)
+				}
+			}
+
+			removed, err := api.DeleteAnchorsForEntity(ctx, target.entityType, target.entityToken, deletedAt)
+			require.NoError(t, err)
+			assert.Equal(t, int64(3), removed)
+			var remaining [][]byte
+			require.NoError(t, api.RDB.DB(ctx).Model(&EventAnchor{}).Pluck("event_id", &remaining).Error)
+			assert.ElementsMatch(t, keep, remaining, "buffered, boundary and newer orphan anchors must survive")
+
+			removed, err = api.DeleteAnchorsForEntity(ctx, target.entityType, target.entityToken, deletedAt)
+			require.NoError(t, err)
+			assert.Zero(t, removed, "redelivery is idempotent")
+			removed, err = api.DeleteAnchorsForEntity(ctx, target.entityType, target.entityToken, time.Time{})
+			require.NoError(t, err)
+			assert.Equal(t, int64(3), removed, "the sweep remains unbounded")
+			var parents int64
+			require.NoError(t, api.RDB.DB(ctx).Model(&Event{}).Count(&parents).Error)
+			assert.Equal(t, int64(4), parents, "cleanup only removes anchors")
+		})
+	}
 }

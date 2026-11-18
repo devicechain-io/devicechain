@@ -94,7 +94,8 @@ import {
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useAuth } from '@/auth/AuthProvider';
-import { updateDashboard, deleteDashboard, CONFLICT_MARKER } from '@/lib/api/dashboards';
+import { updateDashboard, deleteDashboard } from '@/lib/api/dashboards';
+import { isStaleWrite } from '@devicechain/client';
 import { errMessage } from '@/routes/common';
 import { DashboardCanvas } from './DashboardCanvas';
 import { UnknownWidgetPanel, WidgetConfigPanel } from './WidgetConfigPanel';
@@ -752,7 +753,7 @@ export function DashboardWorkspace({
       })
       .catch((err: unknown) => {
         const raw = errMessage(err);
-        const message = raw.includes(CONFLICT_MARKER) ? t('workspaceConflictMessage') : raw;
+        const message = isStaleWrite(err) ? t('workspaceConflictMessage') : raw;
         setSaveState({ kind: 'error', message });
       });
   };

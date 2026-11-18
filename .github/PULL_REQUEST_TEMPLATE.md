@@ -16,4 +16,5 @@
 - [ ] Local CI gates pass: `gofmt -l .` (empty), `go build ./...`, `go vet ./...`, `go test ./...`.
 - [ ] Each new or changed **call site** of a helper has a test that would fail if one of its arguments were wrong — not just a test of the helper. A helper's own tests do not cover its callers, and coverage counts a call site as covered because it *ran*, not because anything asserted what it ran with.
 - [ ] Area-specific checks pass where relevant (frontend `codegen`/`typecheck`/`build`, `helm lint`, `tofu validate`).
+- [ ] Release notes, if any, are a new file in `docs/release-notes/unreleased/` (all three languages), not an edit to the release-notes page — see [Release notes](../CONTRIBUTING.md#release-notes).
 - [ ] The change is focused (one logical change) and the PR description explains the "why".

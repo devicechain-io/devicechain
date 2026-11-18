@@ -73,6 +73,9 @@ type GeoFenceCapRefusalCounter interface {
 }
 
 type Api struct {
+	// DeviceCredentialChecker shares password backoff between HTTP uplinks and MQTT connects.
+	DeviceCredentialChecker *credential.Checker
+
 	// RuleComparer is nil when recorded comparison is unavailable; runs fail closed.
 	RuleComparer      RuleComparer
 	PrincipalStanding PrincipalStandingChecker
@@ -242,6 +245,9 @@ type Api struct {
 	// hold. NIL MEANS THE PLATFORM DEFAULT (governance.DefaultIntegrationsPerTenant), never
 	// unbounded: with nothing wired a tenant is still held to the default.
 	IntegrationsCeiling IntegrationsCeilingResolver
+
+	// RulesCeiling supplies the tier limit on active rules; nil uses the platform default.
+	RulesCeiling RulesCeilingResolver
 
 	// IntegrationChecker compares the bearer token of an inbound integration through the
 	// credential Checker (credential.KindIntegration, under EnrollmentKeys.Integration). The
@@ -634,7 +640,7 @@ type DeviceManagementApi interface {
 	// per edge) into the (device, alarmKey) alarm's contributor set and re-derives its state
 	// (max-tier severity over the active set; cleared when the set empties). The raise-alarm consumer
 	// routes both edges here.
-	ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time) error
+	ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time, requiresPosition *bool) error
 
 	// Entity attributes (ADR-012).
 	SetEntityAttribute(ctx context.Context, request *EntityAttributeSetRequest) (*EntityAttribute, error)

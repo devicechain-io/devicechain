@@ -293,11 +293,11 @@ spec:
   devicechain.authInternalPort). That already keeps them off every ingress. This is the second
   layer, enforced by the CNI: only pods in THIS namespace may connect to that port, so a pod in
   another namespace cannot reach the mint even though it can reach the Service by name. The
-  public port stays open to every source, as it is without a policy: the ingress controller
+  public and ops ports stay open to every source, as it is without a policy: the ingress controller
   and the metrics scraper live in other namespaces.
 
   Policies union, so this object only narrows the one port it names: selecting the pods for
-  Ingress makes every port not listed below default-deny, which is why the public port is
+  Ingress makes every port not listed below default-deny, which is why the public and ops ports are
   listed with no `from`.
 */}}
 ---
@@ -318,6 +318,8 @@ spec:
     - ports:
         - protocol: TCP
           port: {{ $root.Values.service.port }}
+        - protocol: TCP
+          port: {{ include "devicechain.opsPort" $root }}
     - from:
         - podSelector: {}
       ports:

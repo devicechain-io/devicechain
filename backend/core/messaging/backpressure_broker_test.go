@@ -390,8 +390,8 @@ func TestAForwardingReaderParksWithoutSpendingDeliveries(t *testing.T) {
 
 	dm := newBPService(t, srv, "device-management", bounds)
 	in := dm.reader(t, streams.InboundEvents)
-	if in.downstream != streams.ResolvedEvents {
-		t.Fatalf("device-management's inbound reader forwards into %q; want %q from the declaration", in.downstream, streams.ResolvedEvents)
+	if !slices.Equal(in.downstreams, []string{streams.ResolvedEvents}) {
+		t.Fatalf("device-management's inbound reader forwards into %q; want %q from the declaration", in.downstreams, streams.ResolvedEvents)
 	}
 	es := newBPService(t, srv, "event-sources", bounds)
 	if err := es.writer(t, streams.InboundEvents).WriteMessages(tenantCtx(), Message{Value: []byte("e")}); err != nil {
