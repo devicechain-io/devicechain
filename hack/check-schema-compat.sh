@@ -4,7 +4,7 @@
 #
 # Do the device wire contract and the topic layout still match the last release?
 #
-#   hack/check-schema-compat.sh                 # every surface, baseline = nearest stable tag
+#   hack/check-schema-compat.sh                 # every surface, baseline: hack/api-baseline.sh
 #   hack/check-schema-compat.sh contract        # one surface: contract | topics | reports
 #   hack/check-schema-compat.sh contract v0.24.0
 #   hack/check-schema-compat.sh --self-test     # prove each surface can fail (or, for reports, cannot)
