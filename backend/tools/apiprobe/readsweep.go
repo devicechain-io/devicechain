@@ -554,6 +554,10 @@ var sweepTokenArgs = map[string]string{
 // are different facts, and collapsing them into silence is how a hole becomes invisible.
 // A reader scanning the sweep's output sees each one printed, with its sentence.
 var sweepExemptions = map[string]string{
+	"device-management.alarmLifecycles": "it reports an alarm's existence and lifecycle state to the " +
+		"notification alarm backstop, and is served on the service plane only (a user token is refused, a " +
+		"tenant administrator's included), so the sweep, which runs as a tenant administrator, has no standing " +
+		"to call it; the alarm rows it reads are read back through alarmsByToken and alarms",
 	"device-management.checkDeviceCredential": "it asks whether a device credential would authenticate, for " +
 		"the HTTP ingest door, and is served on the service plane only (a user token is refused), so the " +
 		"sweep, which runs as a tenant administrator, has no standing to call it and no credential to " +
