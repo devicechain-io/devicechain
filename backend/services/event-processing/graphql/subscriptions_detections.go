@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -60,11 +61,16 @@ func decodeDetections(msg messaging.Message, _ string) []messaging.Keyed[liveDet
 	return []messaging.Keyed[liveDetection]{{Key: profileToken, Value: liveDetection{de: de, ruleToken: ruleToken}}}
 }
 
-// GetNats returns the NATS manager injected as a graphql provider in main.go (ADR-037). It
-// backs the live detection subscription (SubscribeLive); the manager is connected before the
-// subscription server accepts a client, so the provider is always present at subscribe time.
-func (r *SchemaResolver) GetNats(ctx context.Context) *messaging.NatsManager {
-	return ctx.Value(gqlcore.ContextNatsKey).(*messaging.NatsManager)
+// ErrNoNatsManager reports a missing or invalid messaging dependency in the context.
+var ErrNoNatsManager = errors.New("no NATS manager in context")
+
+// GetNats returns the NATS manager injected as a graphql provider in main.go (ADR-037).
+func (r *SchemaResolver) GetNats(ctx context.Context) (*messaging.NatsManager, error) {
+	manager, ok := ctx.Value(gqlcore.ContextNatsKey).(*messaging.NatsManager)
+	if !ok || manager == nil {
+		return nil, ErrNoNatsManager
+	}
+	return manager, nil
 }
 
 // DetectionStream streams a device profile's DETECT detections to the subscriber as they fire
@@ -97,7 +103,11 @@ func (r *SchemaResolver) DetectionStream(ctx context.Context, args struct {
 
 	// SubscribeLive scopes to "{instance}.{tenant}.derived-events", so every delivered event is
 	// already this tenant's — hub dispatch narrows to the requested profile only.
-	live, err := r.liveDetections(ctx).Subscribe(ctx, tenant, []string{args.ProfileToken})
+	hub, err := r.liveDetections(ctx)
+	if err != nil {
+		return nil, err
+	}
+	live, err := hub.Subscribe(ctx, tenant, []string{args.ProfileToken})
 	if err != nil {
 		return nil, err
 	}
@@ -125,16 +135,20 @@ func (r *SchemaResolver) DetectionStream(ctx context.Context, args struct {
 // liveDetections is the manager's shared hub in production. A resolver whose Live seam is set
 // (a test feeding a channel without a broker) gets a private hub over that seam instead, so
 // the subscription still runs through the same decode, dispatch and filter path.
-func (r *SchemaResolver) liveDetections(ctx context.Context) *messaging.LiveHub[liveDetection] {
+func (r *SchemaResolver) liveDetections(ctx context.Context) (*messaging.LiveHub[liveDetection], error) {
 	if r.Live == nil {
-		return detectionHub(r.GetNats(ctx))
+		manager, err := r.GetNats(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return detectionHub(manager), nil
 	}
 	open := func(ctx context.Context, tenant string) (<-chan messaging.Message, error) {
 		return r.Live(ctx, tenant, streams.DerivedEvents)
 	}
 	hub := messaging.NewLiveHub(streams.DerivedEvents, open, detectionDecode, messaging.DefaultMaxLiveSubscribersPerTenant)
 	hub.OnDrop(detectionDropHook)
-	return hub
+	return hub, nil
 }
 
 // DetectionEventResolver resolves one detection on the live feed. ruleToken is parsed from the

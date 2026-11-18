@@ -305,7 +305,11 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	// quietly never fires.
 	var opener preview.ReplayOpener = r.Replay
 	if opener == nil {
-		opener = r.GetNats(ctx)
+		manager, err := r.GetNats(ctx)
+		if err != nil {
+			return nil, err
+		}
+		opener = manager
 	}
 	// The replay gets its own time budget, below the request's deadline, so a long replay ends
 	// as a truncated (degraded) result with a response to deliver rather than as a deadline error.
