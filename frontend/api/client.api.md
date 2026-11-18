@@ -192,6 +192,7 @@ export interface SessionTokensOptions {
 ```ts
 export interface SubscriptionSink<T> {
     next: (data: T) => void;
+    errors?: (errors: ReadonlyArray<GraphQLFormattedError>) => void;
     error?: (err: unknown) => void;
     complete?: () => void;
     connected?: (wasRetry: boolean) => void;

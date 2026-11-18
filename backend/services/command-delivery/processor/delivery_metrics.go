@@ -146,6 +146,9 @@ type DeliveryMetrics struct {
 	// gate that has become a one-way door.
 	HoldsReleased prometheus.Counter
 
+	// HoldsCancelled counts HELD rows cancelled after their device identity disappeared or changed.
+	HoldsCancelled prometheus.Counter
+
 	// WindowRestamps counts commands whose maintenance-window hold was moved to the window's
 	// current schedule: the window was edited, deleted, or closed again while the command's
 	// device was still absent. A steady rate with no window edits means devices are missing
@@ -331,6 +334,8 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 				"never synced anywhere are not dispatched to while it is 0"),
 		DisabledGatePending: ms.NewGauge("command_delivery_disabled_gate_pending_tenants",
 			"Tenants whose disabled-device record this process has not yet read; their commands wait"),
+		HoldsCancelled: ms.NewCounter("command_delivery_holds_cancelled_total",
+			"Held commands cancelled because their device no longer exists or its incarnation changed."),
 		HoldsReleased: ms.NewCounter("command_delivery_holds_released_total",
 			"Withheld commands returned to the dispatch queue because their device came back"),
 		WindowRestamps: ms.NewCounter("command_delivery_window_restamps_total",

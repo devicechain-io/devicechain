@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -153,7 +154,7 @@ func startPresenceAsyncWiring(t *testing.T, window *int, wiring tapWiring,
 
 	Svc = service.FromManagers(Microservice, service.Managers{Nats: NatsManager})
 	EventSources = nil
-	startBrokerPresence(ctx)
+	startBrokerPresence(ctx, svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources"))
 	require.NotNil(t, brokerPresence, "the tap must be running")
 	require.NotNil(t, brokerPresence.conn, "the tap must be running")
 	return w
@@ -532,7 +533,7 @@ func TestTheDemotionRuntimeClosesThePresenceWriter(t *testing.T) {
 
 	var closed atomic.Bool
 	PresenceWriter = &closeProbe{AsyncWriter: closeableNop{}, onClose: func() { closed.Store(true) }}
-	startBrokerPresence(context.Background())
+	startBrokerPresence(context.Background(), svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources"))
 	require.NotNil(t, brokerPresence, "no system-account credential must leave the demotion runtime")
 	require.Nil(t, brokerPresence.conn, "the tap must not have started")
 	require.False(t, closed.Load())

@@ -177,7 +177,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  func(context.Context) error { return nil },
@@ -211,9 +211,6 @@ func parseConfiguration() error {
 var safetyGates *governance.SafetyGates
 
 func afterMicroserviceInitialized(ctx context.Context) error {
-	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
-	// registration panics, and the gates below are decided in callbacks that can run again.
-	safetyGates = governance.NewSafetyGates(Microservice)
 	if err := parseConfiguration(); err != nil {
 		return err
 	}
@@ -236,7 +233,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// presence. Stand up its long-lived collaborators only when there are credentials so an inert
 	// (no-identity) deployment does not demand the durable-emit + device-management coordinates it
 	// will never use.
-	spec := service.Spec{}
+	spec := service.Spec{GovernanceRefreshes: true}
 	if len(Configuration.Security.Identities) > 0 {
 		infra := Microservice.InstanceConfiguration.Infrastructure
 		if ingestURL, deviceStateURL, commandDeliveryURL, err = serviceEndpoints(infra); err != nil {
@@ -248,11 +245,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// The broker when there are credentials, and in every deployment — an inert one included —
 	// the HTTP surface the chart probes.
 	Svc = service.New(Microservice, spec)
+	safetyGates = Svc.SafetyGates()
 	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}
-	// ⚠️ No test drives this initializer — it needs config, credentials and a broker — so
-	// the tests install NatsManager themselves. The line below is what they stand in for.
+	// The catalog boot test drives this initializer against an embedded broker;
+	// other lifecycle fixtures install NatsManager directly.
 	NatsManager = Svc.Nats
 
 	if NatsManager != nil {
@@ -527,6 +525,7 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 		return nil, nil, nil, nil, nil, fmt.Errorf("inbound-events writer is nil — the durable emit path was not wired before the presence layer was built")
 	}
 	infra := Microservice.InstanceConfiguration.Infrastructure
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
 	// TenantRead is added for the ADR-023 governance fetch (per-tenant ingest overrides, L2c):
 	// the same client resolves devices (device:read/write), floors the epoch (state:read), and
 	// reads tenantGovernance (tenant:read). Without the scope the override fetch fails and every
@@ -557,10 +556,8 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	// Folding it into command:claim would have falsified what that authority documents itself to
 	// mean — taking commands OUT of the dispatchable set — and would have granted a re-arm
 	// primitive to every future claim holder.
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest",
-		[]string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.StateRead),
-			string(auth.TenantRead), string(auth.CommandRead), string(auth.CommandClaim),
-			string(auth.CommandPark)})
+	client := peers.Client(auth.DeviceRead, auth.DeviceWrite, auth.StateRead,
+		auth.TenantRead, auth.CommandRead, auth.CommandClaim, auth.CommandPark)
 
 	// The ADR-077 gate. It matters more here than on any other ingest front: an LwM2M
 	// device authenticates at the DTLS-PSK handshake against this server directly, so it
@@ -581,7 +578,7 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	// the ADR-077 erasure fence (rdb.RegisterTenantFence) like every other tenant-scoped
 	// write, so it cannot re-create a projection row for a tenant whose data has been
 	// reclaimed.
-	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest", safetyGates)
+	tenantGate := governance.NewTenantLifecycleGateFor(peers, safetyGates)
 	registrar := adapter.NewRegistrar(client, ingestURL, "lw-", tenantGate)
 	// authenticatedTransport=true: LwM2M devices authenticate at the DTLS-PSK
 	// handshake, and the device token is bound to that authenticated PSK identity
@@ -700,11 +697,11 @@ func buildIngestLimiter(client *svcclient.Client, infra mscfg.InfrastructureConf
 	cfg config.IngestRateLimit, unresolved func(core.CeilingSource)) *adapter.IngestLimiter {
 	def := governance.Limits{RatePerSecond: cfg.ReadingsPerSecond, Burst: cfg.Burst}
 	var resolve core.TenantCeilingResolver
-	if infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+	if !infra.UserManagement.Endpoint().Configured() {
 		log.Warn().Msg("user-management endpoint not configured — per-tenant LwM2M ingest overrides disabled; metering every tenant at the platform default.")
 		resolve = core.StaticCeiling(def.RatePerSecond, def.Burst)
 	} else {
-		umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+		umURL := infra.UserManagement.Endpoint().GraphQLURL()
 		resolve = governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest).Ceiling
 		log.Info().Str("userManagement", umURL).
 			Msg("Per-tenant LwM2M ingest overrides enabled (ADR-023, fail-open to platform default).")
@@ -882,20 +879,20 @@ func ingestEndpoint(infra mscfg.InfrastructureConfiguration) (string, error) {
 	if infra.ServiceAuth.Secret == "" {
 		return "", fmt.Errorf("service secret not configured (infrastructure.serviceAuth) — lwm2m-ingest cannot resolve devices and would refuse all registrations")
 	}
-	if infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+	if !infra.DeviceManagement.Endpoint().Configured() {
 		return "", fmt.Errorf("device-management endpoint not configured (infrastructure.deviceManagement) — lwm2m-ingest cannot resolve devices and would refuse all registrations")
 	}
-	return fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port), nil
+	return infra.DeviceManagement.Endpoint().GraphQLURL(), nil
 }
 
 // deviceStateEndpoint validates the device-state coordinate the epoch floor-read needs and
 // returns its GraphQL URL. Fail closed: without it a restart across a wall-clock step-back could
 // mint stale-rejected epochs.
 func deviceStateEndpoint(infra mscfg.InfrastructureConfiguration) (string, error) {
-	if infra.DeviceState.Hostname == "" || infra.DeviceState.Port == 0 {
+	if !infra.DeviceState.Endpoint().Configured() {
 		return "", fmt.Errorf("device-state endpoint not configured (infrastructure.deviceState) — lwm2m-ingest cannot floor its presence epoch and a restart across a clock step-back could mint stale-rejected epochs")
 	}
-	return fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port), nil
+	return infra.DeviceState.Endpoint().GraphQLURL(), nil
 }
 
 // commandDeliveryEndpoint validates the command-delivery coordinate the downlink needs and returns
@@ -907,10 +904,10 @@ func deviceStateEndpoint(infra mscfg.InfrastructureConfiguration) (string, error
 // LwM2M command could ever reach a device — a downlink that is dead behind a pod reporting Ready,
 // with one warning at startup to say so. Refusing to start says it where it cannot be missed.
 func commandDeliveryEndpoint(infra mscfg.InfrastructureConfiguration) (string, error) {
-	if infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
+	if !infra.CommandDelivery.Endpoint().Configured() {
 		return "", fmt.Errorf("command-delivery endpoint not configured (infrastructure.commandDelivery) — lwm2m-ingest confirms every command with command-delivery before actuating it, so without it no command could reach a device")
 	}
-	return fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port), nil
+	return infra.CommandDelivery.Endpoint().GraphQLURL(), nil
 }
 
 // afterMicroserviceStarted starts the HTTP surface and NATS (so the presence emitter can publish)

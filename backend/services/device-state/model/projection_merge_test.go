@@ -229,7 +229,7 @@ func TestABatchKeepsColumnsItDoesNotFold(t *testing.T) {
 // where gorm still holds the Select. The two reads that lock are the locked path's, and the
 // heartbeat upsert's fallback for a swept device.
 func TestTheLockReadSelectsOnlyTheColumnsTheFoldTouches(t *testing.T) {
-	want := []string{"active", "external_id", "id", "device_token", "last_activity_time",
+	want := []string{"active", "external_id", "id", "device_token", "incarnation", "last_activity_time",
 		"inactivity_alarm_time", "last_connect_time", "last_disconnect_time", "presence_source", "presence_time", "session_id", "source",
 		"scope_anchors", "scope_anchors_at"} // the owners stamp is folded too (applyOwners)
 	sort.Strings(want)

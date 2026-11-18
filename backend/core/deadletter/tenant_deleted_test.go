@@ -5,12 +5,24 @@ package deadletter
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/svcclient"
+	coretest "github.com/devicechain-io/dc-microservice/test"
 )
+
+var tenantGateLogs *coretest.LogSink
+
+func TestMain(m *testing.M) {
+	tenantGateLogs = coretest.InstallLogSink()
+	os.Exit(m.Run())
+}
 
 // stubDeletedTenants makes the tenant-deletion gate answer "deleted" for the given tenants, and
 // counts how often it is BUILT, which must be once per producer however many sinks it hands out.
@@ -18,7 +30,7 @@ func stubDeletedTenants(t *testing.T, deleted ...string) *int {
 	t.Helper()
 	builds := 0
 	prev := tenantLifecycleGate
-	tenantLifecycleGate = func(config.UserManagementConfiguration, string, string, *governance.SafetyGates) func(string) bool {
+	tenantLifecycleGate = func(*svcclient.Peers, *governance.SafetyGates) func(string) bool {
 		builds++
 		return func(tenant string) bool {
 			for _, d := range deleted {
@@ -120,5 +132,62 @@ func TestAGateHandedInIsUsedOnlyBeforeTheFirstLetter(t *testing.T) {
 	}
 	if !p.TenantDeleted("acme") {
 		t.Error("a late gate replaced the answer a sink had already relied on")
+	}
+}
+
+// A ceiling is repository policy, not a runtime prerequisite for the lazy gate.
+func TestTenantGateAcceptsAnAreaWithoutACeiling(t *testing.T) {
+	const area = "synthetic-deadletter-area"
+	if _, ok := auth.ServiceCeiling(area); ok {
+		t.Fatal("test needs an area absent from the ceiling table")
+	}
+	// Exercise the real gate factory, replacing only the lookup closure so construction
+	// can be checked without starting a background request to user-management.
+	previousFactory := tenantLifecycleGate
+	tenantLifecycleGate = func(peers *svcclient.Peers, gates *governance.SafetyGates) func(string) bool {
+		gate := previousFactory(peers, gates)
+		if gate == nil {
+			return nil
+		}
+		return func(string) bool { return false }
+	}
+	t.Cleanup(func() { tenantLifecycleGate = previousFactory })
+	configured := config.InfrastructureConfiguration{}
+	configured.UserManagement = config.UserManagementConfiguration{Hostname: "um", Port: 8080}
+	configured.ServiceAuth.Secret = "secret"
+	for _, tc := range []struct {
+		name    string
+		missing string
+	}{
+		{"configured", ""},
+		{"no secret", "secret"},
+		{"no hostname", "hostname"},
+		{"no port", "port"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _ := testProducer(t, area)
+			infra := configured
+			switch tc.missing {
+			case "secret":
+				infra.ServiceAuth.Secret = ""
+			case "hostname":
+				infra.UserManagement.Hostname = ""
+			case "port":
+				infra.UserManagement.Port = 0
+			}
+			p.ms.InstanceConfiguration.Infrastructure = infra
+			logs := tenantGateLogs.Capture(t)
+			if p.TenantDeleted("acme") {
+				t.Fatal("construction-only lookup or unconfigured gate must fail open")
+			}
+			wantGate := tc.missing == ""
+			if (p.gate != nil) != wantGate {
+				t.Fatalf("gate present = %v, want %v", p.gate != nil, wantGate)
+			}
+			if !wantGate && (!strings.Contains(logs.String(), `"level":"warn"`) ||
+				!strings.Contains(logs.String(), "user-management endpoint or service secret not configured")) {
+				t.Fatalf("missing configuration did not warn: %s", logs.String())
+			}
+		})
 	}
 }

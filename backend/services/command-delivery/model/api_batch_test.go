@@ -51,13 +51,14 @@ func newBatchTestApi(t *testing.T) *Api {
 // countingValidator records how many times the fleet gate was consulted and refuses the
 // device tokens it was told to.
 type countingValidator struct {
-	calls   int
-	devices int
-	refuse  map[string]RejectionCode
+	incarnations map[string]uint64
+	calls        int
+	devices      int
+	refuse       map[string]RejectionCode
 }
 
 func (v *countingValidator) ValidateEnqueueBatch(ctx context.Context, deviceTokens []string,
-	commandKey string, payload []byte) ([]BatchDeviceRefusal, error) {
+	commandKey string, payload []byte) ([]BatchDeviceRefusal, map[string]uint64, error) {
 	v.calls++
 	v.devices += len(deviceTokens)
 	refusals := make([]BatchDeviceRefusal, 0)
@@ -68,15 +69,15 @@ func (v *countingValidator) ValidateEnqueueBatch(ctx context.Context, deviceToke
 			})
 		}
 	}
-	return refusals, nil
+	return refusals, v.incarnations, nil
 }
 
 // failingValidator stands in for an unreachable device-management.
 type failingValidator struct{ calls int }
 
-func (v *failingValidator) ValidateEnqueueBatch(context.Context, []string, string, []byte) ([]BatchDeviceRefusal, error) {
+func (v *failingValidator) ValidateEnqueueBatch(context.Context, []string, string, []byte) ([]BatchDeviceRefusal, map[string]uint64, error) {
 	v.calls++
-	return nil, errors.New("device-management is unreachable")
+	return nil, nil, errors.New("device-management is unreachable")
 }
 
 func deviceTokens(n int) []string {
