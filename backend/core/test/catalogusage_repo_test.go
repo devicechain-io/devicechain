@@ -30,6 +30,10 @@ var dynamicCatalogUses = map[string][]string{
 	"event-processing/internal/preview/preview.go#NewReplayReaderFromTime": {streams.ResolvedEvents},
 	// The automation change review reads the same stream; the comparison resolver passes it.
 	"event-processing/internal/review/run.go#NewReplayReaderFromTime": {streams.ResolvedEvents},
+	// On a sharded install, preview and review read through a tenant's own group source,
+	// built over the same suffix those two callers pass (internal/replayinput/tenant.go).
+	"event-processing/internal/replayinput/tenant.go#NewReplayReader":         {streams.ResolvedEvents},
+	"event-processing/internal/replayinput/tenant.go#NewReplayReaderFromTime": {streams.ResolvedEvents},
 }
 
 // catalogAliases name the constants that stand for a bucket in another package.
