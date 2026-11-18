@@ -313,6 +313,9 @@ func statedValueIn(rootdir, name string) (value string, stated, readable bool) {
 	slices.Sort(auto)
 	decl := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(name) + `\s*=(.*)$`)
 	literal := regexp.MustCompile(`^\s*"([^"\$%]*)"\s*(?:(?:#|//).*)?$`)
+	// Match strings (including escapes) and line comments first so their /* markers
+	// stay literal. Each block comment ends at the first */, not the last in the file.
+	tokens := regexp.MustCompile(`(?s)"(?:\\.|[^"\\])*"|#[^\n]*|//[^\n]*|/\*.*?\*/`)
 	for _, n := range append(fixed, auto...) {
 		b, err := os.ReadFile(filepath.Join(rootdir, n))
 		if err != nil {
@@ -334,10 +337,22 @@ func statedValueIn(rootdir, name string) (value string, stated, readable bool) {
 			}
 			continue
 		}
-		for _, d := range decl.FindAllSubmatch(b, -1) {
+		uncommented := tokens.ReplaceAllStringFunc(string(b), func(token string) string {
+			if !strings.HasPrefix(token, "/*") {
+				return token
+			}
+			// Keep line boundaries and separate tokens on either side of a comment.
+			return strings.Map(func(r rune) rune {
+				if r == '\n' {
+					return r
+				}
+				return ' '
+			}, token)
+		})
+		for _, d := range decl.FindAllStringSubmatch(uncommented, -1) {
 			value, stated, readable = "", true, false
-			if m := literal.FindSubmatch(d[1]); m != nil {
-				value, readable = string(m[1]), true
+			if m := literal.FindStringSubmatch(d[1]); m != nil {
+				value, readable = m[1], true
 			}
 		}
 	}

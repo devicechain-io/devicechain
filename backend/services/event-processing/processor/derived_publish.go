@@ -400,9 +400,6 @@ func (p *publishPass) apply(o publishOutcome) {
 	}
 	p.status[o.ord] = itemAcked
 	d.state = outputAcked
-	if p.rp.armer != nil {
-		p.rp.armer.ThresholdPublished(d.Detection, p.rp.replaying)
-	}
 	// A known positive is kept only so its fire is recorded in order once the items before it
 	// settle, and that needs the identity, not the bytes. Releasing them here is what keeps the
 	// byte budget a bound on everything held: an acknowledged-but-unretired payload holds nothing.
@@ -436,7 +433,7 @@ func (p *publishPass) finish() bool {
 		rp.metrics.recordCheckpointFailure(checkpointStagePublish)
 	}
 	if p.leaseLost {
-		log.Warn().Str("partition", rp.cfg.PartitionId).
+		log.Warn().Str("partition", rp.partitionID()).
 			Msg("DETECT lost the partition while publishing a checkpoint's detections; the rest are not sent and the messages stay unacked")
 	}
 	old := len(rp.pendingDets)

@@ -71,10 +71,13 @@ func (nmgr *NatsManager) KeyValueStore(logical, bucket string, ttl time.Duration
 		return nil, fmt.Errorf("messaging: non-positive ceiling %d for KV bucket %q", maxBytes, bucket)
 	}
 	if !nmgr.mayReconcileBucket(logical) {
+		// Verify-only: the lifetime is not checked. An opener's ttl may legitimately differ from
+		// the bucket's (the lock bucket's openers ask for 5s and 30s; a cache's comes from the
+		// area's own config), and a refusal here would stop the pod.
 		return nmgr.verifyKvBucket(js, logical, bucket, tracked)
 	}
 	if existing, err := js.KeyValue(bucket); err == nil {
-		nmgr.reconcileKvBucketOn(js, bucket, maxBytes, kv.TierFor(logical))
+		nmgr.reconcileKvBucketOn(js, bucket, maxBytes, kv.TierFor(logical), nmgr.reconcilableTTL(logical, ttl))
 		nmgr.noteReconciled("bucket", bucket, "present")
 		tracked(bucket)
 		return existing, nil
@@ -128,17 +131,40 @@ func (nmgr *NatsManager) KeyValueStore(logical, bucket string, ttl time.Duration
 // exactly where it was before this ran; the disk budget is optimistic by that
 // bucket's ceiling until an operator raises the bound or the bucket drains.
 func (nmgr *NatsManager) reconcileKvBucket(bucket string, maxBytes int64, tier kv.Tier) {
-	nmgr.reconcileKvBucketOn(nmgr.js, bucket, maxBytes, tier)
+	nmgr.reconcileKvBucketOn(nmgr.js, bucket, maxBytes, tier, 0)
+}
+
+// reconcilableTTL is the lifetime an existing bucket is brought to on this open, or zero to
+// leave its lifetime alone. Only a value that is the bucket's ONE lifetime is applied:
+//   - the lease bucket's is the fencing window, which lease.go refuses to disagree with rather
+//     than change under a running holder;
+//   - the lock bucket is opened with per-call lifetimes (5s, 30s) by different callers, so
+//     anything but the administrator's declared value would flap it, and a lowered MaxAge
+//     expires locks that are held;
+//   - an identity-account bucket's lifetime belongs to user-management's configuration (the
+//     refresh lifetime is configurable), so the administrator, which declares only the
+//     default, never shortens one and ends live sessions.
+func (nmgr *NatsManager) reconcilableTTL(logical string, ttl time.Duration) time.Duration {
+	switch {
+	case logical == kv.BucketLeases:
+		return 0
+	case logical == kv.BucketLocks && !nmgr.admin:
+		return 0
+	case nmgr.admin && kv.AccountFor(logical) == kv.Identity:
+		return 0
+	}
+	return ttl
 }
 
 // reconcileKvBucketOn is reconcileKvBucket against the JetStream context of the account the
-// bucket lives in.
-func (nmgr *NatsManager) reconcileKvBucketOn(js nats.JetStreamContext, bucket string, maxBytes int64, tier kv.Tier) {
+// bucket lives in. A positive ttl also reconciles expiration; zero preserves it,
+// since applying zero MaxAge would make a previously expiring bucket unlimited.
+func (nmgr *NatsManager) reconcileKvBucketOn(js nats.JetStreamContext, bucket string, maxBytes int64, tier kv.Tier, ttl time.Duration) {
 	stream := kvStreamPrefix + bucket
 	info, err := js.StreamInfo(stream)
 	if err != nil {
 		log.Warn().Err(err).Str("bucket", bucket).
-			Msg("Could not read KV bucket config to apply its disk ceiling; it stays as-is until the next startup")
+			Msg("Could not read KV bucket config to apply its TTL and disk ceiling; it stays as-is until the next startup")
 		return
 	}
 	// The replica factor is reconciled UPWARD, and it is why this function matters
@@ -160,13 +186,33 @@ func (nmgr *NatsManager) reconcileKvBucketOn(js nats.JetStreamContext, bucket st
 	nmgr.reconcileStreamReplicasOn(js, stream, info.Config)
 
 	// Re-read: the replica reconcile above may have updated the stream, and applying
-	// a ceiling from a stale config would revert it.
+	// a TTL or ceiling from a stale config would revert it.
 	info, err = js.StreamInfo(stream)
 	if err != nil {
 		log.Warn().Err(err).Str("bucket", bucket).
-			Msg("Could not re-read KV bucket config after the replica reconcile; its disk ceiling " +
+			Msg("Could not re-read KV bucket config after the replica reconcile; its TTL and disk ceiling " +
 				"stays as-is until the next startup")
 		return
+	}
+	if ttl > 0 && info.Config.MaxAge != ttl {
+		cfg := info.Config
+		previous := cfg.MaxAge
+		cfg.MaxAge = ttl
+		if cfg.Duplicates > ttl {
+			// JetStream refuses a duplicate window longer than MaxAge; CreateKeyValue caps it
+			// at the TTL the same way.
+			cfg.Duplicates = ttl
+		}
+		updated, err := js.UpdateStream(&cfg)
+		if err != nil {
+			log.Warn().Err(err).Str("bucket", bucket).Dur("ttl", ttl).Dur("previous", previous).
+				Msg("Could not apply the TTL to an existing KV bucket; it stays as-is until the next startup")
+		} else {
+			log.Info().Str("bucket", bucket).Dur("ttl", ttl).Dur("previous", previous).
+				Msg("Updated the TTL of an existing KV bucket")
+			// The ceiling update must retain the TTL that just landed.
+			info = updated
+		}
 	}
 	if info.Config.MaxBytes == maxBytes {
 		return

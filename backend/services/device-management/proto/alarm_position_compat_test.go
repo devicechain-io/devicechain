@@ -18,7 +18,7 @@ import (
 )
 
 // olderAlarmEventDescriptor is PAlarmStateChangeEvent as a release before position_derived
-// compiled it: the current descriptor with field 20 and its synthetic oneof removed.
+// compiled it: the current descriptor with field 21 and its synthetic oneof removed.
 func olderAlarmEventDescriptor(t *testing.T) protoreflect.MessageDescriptor {
 	t.Helper()
 	fd := protodesc.ToFileDescriptorProto((&PAlarmStateChangeEvent{}).ProtoReflect().Descriptor().ParentFile())
@@ -32,13 +32,13 @@ func olderAlarmEventDescriptor(t *testing.T) protoreflect.MessageDescriptor {
 	kept := msg.Field[:0]
 	removed := false
 	for _, f := range msg.Field {
-		if f.GetNumber() == 20 {
+		if f.GetNumber() == 21 {
 			removed = true
 			continue
 		}
 		kept = append(kept, f)
 	}
-	require.True(t, removed, "field 20 is not position_derived any more")
+	require.True(t, removed, "field 21 is not position_derived any more")
 	msg.Field = kept
 	oneofs := msg.OneofDecl[:0]
 	for _, o := range msg.OneofDecl {

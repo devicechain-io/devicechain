@@ -178,10 +178,9 @@ export function EntityAttributesPanel({
     () => listEntityAttributes(entityType, entityToken),
     [entityType, entityToken, version],
   );
-  // The group hint is advisory: a failure to load it must not take the panel down, so
-  // its error is folded to an empty list rather than surfaced.
+  // Keep the panel usable when the advisory group hint fails, but show the refusal.
   const groupsQ = useQuery(
-    () => listDynamicGroups(entityType).catch((): DynamicGroup[] => []),
+    () => listDynamicGroups(entityType),
     [entityType],
   );
 
@@ -234,6 +233,7 @@ export function EntityAttributesPanel({
         <p className="mt-1 text-sm text-muted-foreground">{t('valuesIntro')}</p>
       </div>
 
+      {groupsQ.error && <ErrorState description={groupsQ.error} />}
       {facets.length === 0 ? (
         <EmptyState description={t('noFacetsDeclared')} />
       ) : (

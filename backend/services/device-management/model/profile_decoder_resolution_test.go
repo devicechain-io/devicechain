@@ -549,8 +549,14 @@ func TestAMaximalDecoderIsKeptDecodedByTheProductionCache(t *testing.T) {
 	assert.Equal(t, int64(1), decodePlanBuilds.Load()-before, "five reads compiled the decoder more than once: the decoded entry was not kept")
 }
 
+// newMemoryCache is an in-memory cache whose in-process copies outlive any test. These tests
+// count compiles to tell an evicted entry from a kept one, and the default in-process TTL (5 s)
+// would let an entry EXPIRE on a loaded runner mid-test and be compiled again, which reads
+// exactly like an eviction (a CI run of the noisy-tenant test took 14 s and failed so). Expiry
+// is not what they measure; pinning it out leaves only the bounds and the tenant share to evict.
+// A caller's own WithLocalTTL still wins, since options apply in order.
 func newMemoryCache(opts ...messaging.CacheOption) *messaging.Cache {
-	return msgtest.NewMemoryKV().NewCache(opts...)
+	return msgtest.NewMemoryKV().NewCache(append([]messaging.CacheOption{messaging.WithLocalTTL(time.Hour)}, opts...)...)
 }
 
 // A replica's memory for decoders is bounded: each decoded entry is charged what it holds, so a

@@ -36,7 +36,7 @@ La integración solo puede alcanzar dispositivos de los tipos de dispositivo a l
 | `battery` | Integer | `mV` |
 | `door` | Boolean | |
 
-En la consola, crea el perfil y sus métricas como se describe en [Tipos y perfiles de dispositivo](../user-guide/device-types-and-profiles.md), crea un tipo de dispositivo que use el perfil y **publica** el perfil. Con GraphQL:
+En la consola, crea el perfil y sus métricas como se describe en [Tipos y perfiles de dispositivo](../user-guide/device-types-and-profiles.md), crea un tipo de dispositivo que use el perfil y **publica** el perfil. Con GraphQL, envíalo en dos peticiones, porque una mutación puede seleccionar como máximo [cinco campos raíz](../reference/graphql-api.md#request-limits) y con un sexto se rechaza la petición entera:
 
 ```graphql
 mutation {
@@ -45,6 +45,11 @@ mutation {
   humidity: createMetricDefinition(request: { token: "room-sensor-humidity", deviceProfileToken: "room-sensor", metricKey: "humidity", name: "Humidity", dataType: "DOUBLE", unit: "%" }) { metricKey }
   battery: createMetricDefinition(request: { token: "room-sensor-battery", deviceProfileToken: "room-sensor", metricKey: "battery", name: "Battery", dataType: "INT", unit: "mV" }) { metricKey }
   door: createMetricDefinition(request: { token: "room-sensor-door", deviceProfileToken: "room-sensor", metricKey: "door", name: "Door", dataType: "BOOLEAN" }) { metricKey }
+}
+```
+
+```graphql
+mutation {
   createDeviceType(request: { token: "room-sensor", name: "Room sensor", profileToken: "room-sensor" }) { token }
 }
 ```

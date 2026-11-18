@@ -41,6 +41,7 @@ type RenderedNotification struct {
 // stream's name for it (RAISED, ESCALATED, DEESCALATED, CLEARED, ACKNOWLEDGED) or
 // RENOTIFIED for a timed re-page of an unchanged alarm.
 type AlarmFacts struct {
+	ClearReason      string
 	EventType        string
 	AlarmToken       string
 	AlarmKey         string
@@ -66,6 +67,12 @@ type AlarmFacts struct {
 // eventTime is the transition's occurred time already resolved to the event.
 func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotification {
 	verb := verbForEvent(event.EventType)
+	if event.EventType == dmmodel.AlarmEventCleared && event.ClearReason == dmmodel.AlarmClearReasonOriginatorDeleted {
+		verb = "ended because its entity was deleted"
+		if event.OriginatorType == "device" {
+			verb = "ended because its device was deleted"
+		}
+	}
 	originator := fmt.Sprintf("%s %d", event.OriginatorType, event.OriginatorId)
 	// A person reads the device's name, or failing that its token, in preference to a numeric
 	// id; the id stays in the structured payload for anything that wants it.
@@ -125,6 +132,9 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 		"raisedTime":   formatTime(event.RaisedTime),
 		"occurredTime": formatTime(event.OccurredTime),
 	}
+	if event.ClearReason != "" {
+		payload["clearReason"] = event.ClearReason
+	}
 	// The originator is stated only when the event carries one (a clear the scheduler rebuilds
 	// from the state row does not): an unknown value is omitted, never sent as ""/0.
 	if event.OriginatorType != "" {
@@ -157,7 +167,8 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 		shown = "" // nothing to list as the source
 	}
 	facts := AlarmFacts{
-		EventType: event.EventType.String(), AlarmToken: event.AlarmToken, AlarmKey: event.AlarmKey,
+		ClearReason: event.ClearReason,
+		EventType:   event.EventType.String(), AlarmToken: event.AlarmToken, AlarmKey: event.AlarmKey,
 		Severity: event.Severity, PreviousSeverity: event.PreviousSeverity, State: event.State,
 		Originator: shown, DeviceToken: event.DeviceToken, DeviceName: event.DeviceName,
 		DeviceTypeToken: event.DeviceTypeToken, MetricKey: event.MetricKey, Value: event.LastValue,

@@ -7,6 +7,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entityevent"
 	"github.com/stretchr/testify/require"
+	"gorm.io/datatypes"
 )
 
 type lockedDeletionPublisher struct {
@@ -38,6 +40,24 @@ func (p *lockedDeletionPublisher) PublishEntityDeleted(ctx context.Context, _ *e
 	return nil
 }
 
+// cascadeAlarmPublisher acknowledges every queued alarm clear and counts those of one tenant.
+type cascadeAlarmPublisher struct {
+	tenant string
+	mu     sync.Mutex
+	count  int
+}
+
+func (p *cascadeAlarmPublisher) PublishAlarmEvent(context.Context, *AlarmStateChangeEvent) {}
+
+func (p *cascadeAlarmPublisher) PublishAlarmEventDedup(ctx context.Context, _ *AlarmStateChangeEvent, _ string) error {
+	if tenant, _ := core.TenantFromContext(ctx); tenant == p.tenant {
+		p.mu.Lock()
+		p.count++
+		p.mu.Unlock()
+	}
+	return nil
+}
+
 // Pins duplicate publication by concurrent replica drains on Postgres, which SQLite cannot
 // exercise: one advisory-lock holder publishes the fact, and the other skips. The fact carries
 // the time this process stamped at the delete.
@@ -51,6 +71,16 @@ func TestTheDeletionOutboxSerializesDrainsOnTheRealEngine(t *testing.T) {
 	rows := deletionRows(t, api, ctx)
 	require.Len(t, rows, 1)
 	require.True(t, rows[0].DeletedTime.Equal(stamp), "the fact is not dated by the delete")
+	// The drain is cross-tenant and the database is shared with every other test in the package,
+	// some of which delete a device with an active alarm and leave its fact, cascade included,
+	// queued. Queue one such fact here so the pass always meets one, whatever ran before: without
+	// an alarm publisher it fails that tenant, and the pass reports a partial failure.
+	foreign := core.WithTenant(context.Background(), fmt.Sprintf("ownfact-foreign-%d", time.Now().UnixNano()))
+	cascade := datatypes.JSON(`[{"ClearReason":"ORIGINATOR_DELETED","EventType":"CLEARED","AlarmToken":"foreign-alarm","State":"CLEARED"}]`)
+	require.NoError(t, api.RDB.DB(foreign).Create(&PendingEntityDeletion{TenantId: tenantOf(foreign), EntityType: "device",
+		EntityId: 1, EntityToken: "foreign-pump", DeletedTime: stamp, Cascade: &cascade}).Error)
+	alarms := &cascadeAlarmPublisher{tenant: tenantOf(foreign)}
+	api.AlarmPublisher = alarms
 	pub := &lockedDeletionPublisher{tenant: tenantOf(ctx), entered: make(chan struct{}), release: make(chan struct{})}
 	api.EntityDeletedPublisher = pub
 	var release sync.Once
@@ -85,4 +115,8 @@ func TestTheDeletionOutboxSerializesDrainsOnTheRealEngine(t *testing.T) {
 	pub.mu.Unlock()
 	require.Equal(t, 1, count)
 	require.Empty(t, deletionRows(t, api, ctx))
+	alarms.mu.Lock()
+	defer alarms.mu.Unlock()
+	require.Equal(t, 1, alarms.count, "the foreign tenant's queued clear was not published")
+	require.Empty(t, deletionRows(t, api, foreign))
 }

@@ -255,7 +255,7 @@ func (api *Api) drainTenantOwnership(ctx context.Context, pageSize int) (publish
 	}
 	byId := make(map[uint]*DeviceOwnershipChangedEvent, len(facts))
 	for _, f := range facts {
-		byId[f.deviceId] = f
+		byId[uint(f.DeviceIncarnation)] = f
 	}
 	done := make([]PendingOwnershipFact, 0, len(rows))
 	var pubErr error
@@ -347,17 +347,11 @@ const ownershipDrainLockName = "device-management-ownership-drain"
 // is applied once — but would publish every queued fact twice.
 func (api *Api) DrainOwnershipFactsLocked(ctx context.Context) error {
 	var res OwnershipDrainResult
-	ran, err := api.RDB.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey(ownershipDrainLockName), func() error {
+	err := api.RDB.SingletonPass(ctx, ownershipDrainLockName, func() error {
 		var err error
 		res, err = api.DrainOwnershipFacts(ctx, OwnershipDrainPageSize)
 		return err
 	})
-	if !ran {
-		if err != nil {
-			return fmt.Errorf("acquiring the ownership-drain lock: %w", err)
-		}
-		return core.ErrPassSkipped
-	}
 	if res.Published > 0 || res.Removed > 0 {
 		log.Debug().Int("tenants", res.Tenants).Int("published", res.Published).Int("removed", res.Removed).
 			Msg("Published queued device ownership facts")

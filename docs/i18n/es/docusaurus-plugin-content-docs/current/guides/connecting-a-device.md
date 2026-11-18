@@ -543,6 +543,8 @@ La plataforma responde en `device-desired` con una URL que funciona, sin ninguna
 
 Descárgala con un `GET` HTTP. El endpoint responde a peticiones `Range`, así que una descarga interrumpida se reanuda desde los bytes que ya tienes; cuando la concesión caduca, envía de nuevo el mismo `download.request` para obtener otra. Si la asignación ya no es la vigente, la respuesta es un `update.cancel` en lugar de una concesión.
 
+Las peticiones de descarga tienen un presupuesto por dispositivo: la plataforma responde a cinco de golpe y después a una por segundo. Una petición que supera ese presupuesto se descarta sin ninguna respuesta, ni una concesión ni un `update.cancel`, y no se avisa al dispositivo. Por eso nunca esperes una respuesta indefinidamente: si no ha llegado ninguna tras una espera acotada, por ejemplo diez segundos, envía de nuevo el mismo `download.request`.
+
 Informa de cada etapa en `device-reports` con `update.progress`:
 
 ```json
