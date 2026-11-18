@@ -88,6 +88,46 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('subscribe result errors', () => {
+  it('delivers result errors before data, including error-only results before complete', async () => {
+    const { subscribe } = await load();
+    const calls: unknown[] = [];
+    const error = vi.fn();
+    subscribe('event-management', doc, undefined as never, {
+      next: (data) => calls.push(['next', data]),
+      errors: (errors) => calls.push(['errors', errors]),
+      complete: () => calls.push(['complete']),
+      error,
+    });
+    const errors = [{ message: 'Forbidden' }];
+    fake.ops[0].sink.next({ errors });
+    fake.ops[0].sink.complete();
+    expect(calls).toEqual([['errors', errors], ['complete']]);
+    calls.length = 0;
+    fake.ops[0].sink.next({ errors, data: { ticks: 1 } });
+    fake.ops[0].sink.next({ errors: [], data: { ticks: 2 } });
+    expect(calls).toEqual([
+      ['errors', errors], ['next', { ticks: 1 }], ['next', { ticks: 2 }],
+    ]);
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('keeps ignoring result errors when the sink omits errors', async () => {
+    const { subscribe } = await load();
+    const next = vi.fn(), error = vi.fn(), complete = vi.fn();
+    subscribe('event-management', doc, undefined as never, { next, error, complete });
+    const errors = [{ message: 'Forbidden' }];
+    fake.ops[0].sink.next({ errors });
+    fake.ops[0].sink.next({ errors, data: null });
+    expect(next).not.toHaveBeenCalled();
+    fake.ops[0].sink.next({ errors, data: { ticks: 1 } });
+    expect(next).toHaveBeenCalledExactlyOnceWith({ ticks: 1 });
+    fake.ops[0].sink.complete();
+    expect(complete).toHaveBeenCalledOnce();
+    expect(error).not.toHaveBeenCalled();
+  });
+});
+
 describe('subscribe on a 4401 close', () => {
   it('re-subscribes after an acknowledged socket expires, and reports it as a reconnect', async () => {
     const { subscribe } = await load();

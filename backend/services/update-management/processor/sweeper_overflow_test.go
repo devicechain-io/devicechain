@@ -19,3 +19,9 @@ func TestAnOverflowingSweepIntervalPanicsTheSweeper(t *testing.T) {
 		NewDeadlineSweeper(nil, interval, nil, nil)
 	})
 }
+
+func TestTheDeadlineSweeperRefusesMissingPassMetrics(t *testing.T) {
+	require.PanicsWithValue(t, "processor.NewDeadlineSweeper: pass metrics are required", func() {
+		NewDeadlineSweeper(nil, time.Minute, nil, nil)
+	})
+}
