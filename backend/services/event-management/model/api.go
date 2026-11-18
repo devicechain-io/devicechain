@@ -24,6 +24,14 @@ type Api struct {
 	// kill-switch, set from config in main). The zero value keeps the rollup path on.
 	RollupReadsDisabled bool
 
+	// RollupRetentionDays sets the rollup read floor; 0 means no floor. Set from
+	// the same DataLifecyclePolicy that ApplyDataLifecyclePolicies reconciles,
+	// so the retention job and read floor cannot be configured apart.
+	RollupRetentionDays int
+
+	// now is the rollup read clock; nil defaults to time.Now.
+	now func() time.Time
+
 	// Backfill is what the calculated-metric backfill API checks a request against (ADR-082).
 	// Nil until main builds it; every start is then UNAVAILABLE.
 	Backfill *BackfillRuntime
@@ -66,8 +74,8 @@ type EventManagementApi interface {
 
 	// DeleteAnchorsForEntity removes event_anchors rows referencing a deleted
 	// entity (ADR-044): device deletes match device_token, other entities match
-	// (anchor_type, anchor_token). `before` bounds the delete to events older than
-	// it (guards token reuse); a zero value is unbounded (the sweep). Idempotent +
+	// (anchor_type, anchor_token). `before` bounds the delete by platform receipt
+	// time (guards token reuse with buffered telemetry); zero is unbounded (the sweep). Idempotent +
 	// tenant-scoped. Returns rows removed.
 	DeleteAnchorsForEntity(ctx context.Context, entityType string, entityToken string, before time.Time) (int64, error)
 
@@ -659,11 +667,12 @@ func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*
 // callback (the caller stamps the tenant from the event's subject). Returns rows
 // removed.
 //
-// `before` bounds the cleanup to anchors of events that occurred strictly before it
-// (ADR-044 decision-4 amendment, "token = stable identity"): a token freed on delete
-// can be reused (ADR-042), so a redelivered/replayed deletion event must not wipe the
-// anchors of a NEW device that later adopted the same token — those events are newer
-// than the deletion. A zero `before` means unbounded: the reconciliation sweep passes
+// `before` bounds cleanup by the platform's receipt time (events.processed_time),
+// strictly before deletion (ADR-044 decision-4 amendment). A reused token's buffered
+// telemetry may have a device timestamp before the old entity's deletion, but is
+// received after it and must survive a late or replayed deletion fact. Deleted devices
+// cannot resolve new events, so receipt time separates their events from a new owner's.
+// A zero `before` means unbounded: the reconciliation sweep passes
 // it because the sweep only deletes when the token resolves to no entity at all, so
 // every matching anchor is a true orphan.
 func (api *Api) DeleteAnchorsForEntity(ctx context.Context, entityType string, entityToken string, before time.Time) (int64, error) {
@@ -680,7 +689,14 @@ func (api *Api) DeleteAnchorsForEntity(ctx context.Context, entityType string, e
 		db = db.Where("anchor_type = ? AND anchor_token = ?", entityType, entityToken)
 	}
 	if !before.IsZero() {
-		db = db.Where("occurred_time < ?", before)
+		event := api.RDB.DB(ctx).Model(&Event{}).Select("1").
+			Where("events.tenant_id = event_anchors.tenant_id AND events.occurred_time = event_anchors.occurred_time AND events.event_id = event_anchors.event_id")
+		// Probe the full parent key, including the partition time for chunk pruning.
+		// Parent rows can be missing while retention drops each hypertable's chunks
+		// independently (there is no FK). Preserve the occurred-time fallback only
+		// for those orphans; an existing parent's receipt time always takes precedence.
+		db = db.Where("EXISTS (?) OR (NOT EXISTS (?) AND event_anchors.occurred_time < ?)",
+			event.Session(&gorm.Session{}).Where("events.processed_time < ?", before), event, before)
 	}
 	result := db.Delete(&EventAnchor{})
 	return result.RowsAffected, result.Error

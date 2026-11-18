@@ -35,14 +35,14 @@ func TestBuildIngestChecksWiresTheTenantDirectoryAndTheRefusalCounter(t *testing
 
 	// With no authority for tenants, there is no tenant check: the door is as it was.
 	TenantDirectory = nil
-	checks := buildIngestChecks()
+	checks := buildIngestChecks(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources"))
 	require.NotNil(t, checks)
 	require.Nil(t, checks.TenantUnknown, "no user-management means no authority on which tenants exist")
 	require.Nil(t, checks.Credential, "no device-management endpoint means nobody to ask about a credential")
 
 	// With one, an unknown tenant is refused (the first ask waits for the lookup) and a known one is not.
 	TenantDirectory = governance.NewTenantLimitResolver(directoryFetcher{}, governance.Limits{RatePerSecond: 1, Burst: 1}, "ingest")
-	checks = buildIngestChecks()
+	checks = buildIngestChecks(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources"))
 	require.NotNil(t, checks.TenantUnknown)
 	require.True(t, checks.TenantUnknown(context.Background(), "typo"))
 	require.False(t, checks.TenantUnknown(context.Background(), "acme"))

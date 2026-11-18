@@ -104,7 +104,7 @@ const left = (el: HTMLElement) => parseFloat(el.style.left);
 const undoButton = () => screen.getByTestId('undo');
 const redoButton = () => screen.getByTestId('redo');
 const saveDisabled = () => screen.getByRole('button', { name: /^save$/i }).hasAttribute('disabled');
-const titleInput = () => screen.getByLabelText(/^title$/i) as HTMLInputElement;
+const titleInput = () => screen.getByPlaceholderText('Dashboard title') as HTMLInputElement;
 const announcer = () => screen.getByTestId('editor-announcer').textContent;
 
 const POINTER = { pointerId: 1, isPrimary: true, pointerType: 'mouse' };

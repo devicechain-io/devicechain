@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { useQuery } from './use-query';
 
 function deferred<T>() {
@@ -16,6 +16,52 @@ function deferred<T>() {
 }
 
 describe('useQuery data vs current', () => {
+  it('clears an explicit identity before effects and ignores its late failure', async () => {
+    const old = deferred<string>();
+    const fresh = deferred<string>();
+    const seen: { key: string; data: string | null; status: string }[] = [];
+    const { result, rerender } = renderHook(({ key }) => {
+      const query = useQuery(() => key === 'a' ? Promise.resolve('A') : key === 'b' ? old.promise : fresh.promise, [key], [key]);
+      seen.push({ key, data: query.data, status: query.status });
+      return query;
+    }, { initialProps: { key: 'a' } });
+    await waitFor(() => expect(result.current.data).toBe('A'));
+    rerender({ key: 'b' });
+    expect(seen.filter((s) => s.key === 'b').every((s) => s.data === null && s.status === 'loading')).toBe(true);
+    rerender({ key: 'c' });
+    await act(async () => fresh.resolve('C'));
+    await act(async () => old.reject(new Error('late')));
+    expect(result.current.data).toBe('C');
+    expect(result.current.error).toBeNull();
+  });
+
+  it('reports a refresh failure separately, retains data, and retries with the latest loader', async () => {
+    const loader = vi.fn().mockResolvedValueOnce('A').mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce('B');
+    const { result } = renderHook(() => useQuery(loader, [], ['entity']));
+    await waitFor(() => expect(result.current.data).toBe('A'));
+    const refetch = result.current.refetch;
+    act(refetch);
+    expect(result.current.current).toBeUndefined();
+    expect(result.current.data).toBe('A');
+    await waitFor(() => expect(result.current.refreshError).toBe('Failed to load data.'));
+    expect(result.current.status).toBe('success');
+    expect(result.current.current).toBeUndefined();
+    act(refetch);
+    await waitFor(() => expect(result.current.data).toBe('B'));
+    expect(result.current.refreshError).toBeNull();
+    expect(result.current.refetch).toBe(refetch);
+  });
+
+  it('settles synchronous failures and can retry an initial error without changing identity', async () => {
+    const loader = vi.fn().mockImplementationOnce(() => { throw new Error('sync'); }).mockResolvedValueOnce('ok');
+    const { result } = renderHook(() => useQuery(loader, [], ['entity']));
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(result.current.refreshError).toBeNull();
+    act(result.current.refetch);
+    expect(result.current.status).toBe('loading');
+    await waitFor(() => expect(result.current.current).toBe('ok'));
+  });
+
   it('success: data and current are both the answer', async () => {
     const { result } = renderHook(() => useQuery(() => Promise.resolve('a'), []));
     expect(result.current.current).toBeUndefined();

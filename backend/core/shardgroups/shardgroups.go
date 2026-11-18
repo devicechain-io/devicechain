@@ -22,7 +22,8 @@ var ErrGroupsExceedCount = errors.New("shardgroups: placement exceeds configured
 
 // Enable connects opt-in stream routing to the instance's placement mirror.
 // Call before creating any reader or writer. The caller stops the watch after
-// stopping its processors and before stopping or terminating the NATS manager.
+// the service's managers have stopped or terminated, so publishes still draining
+// during shutdown are not refused for placement.
 func Enable(nmgr *messaging.NatsManager) (context.CancelFunc, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := enable(ctx, nmgr); err != nil {

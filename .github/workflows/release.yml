@@ -1037,27 +1037,28 @@ jobs:
       #
       # A reader wants "what changed since the last release I could have been
       # running", which is the previous STABLE tag, and never depends on how
-      # many candidates it took to get here. Computed explicitly below.
+      # many candidates it took to get here. Computed explicitly below and
+      # passed to goreleaser as GORELEASER_PREVIOUS_TAG; its `changelog.use:
+      # github` compares that tag with this one.
       #
-      # Same-commit tags are excluded: re-running a candidate that a stable tag
-      # later pinned to the same commit would otherwise measure zero commits.
-      # An empty result is left unset so goreleaser keeps its own fallback,
-      # which is what the very first release needs.
+      # 🔴 THE BASE IS THE HIGHEST STABLE TAG SEMVER-LOWER THAN THIS ONE, REACHABLE
+      # OR NOT. It used to be the newest stable tag `--merged` into this tag, and
+      # that skips every minor tagged on its release branch, which main never
+      # contains: v1.5.0's changelog started at v1.3.0 (v1.4.0 is on release-1.4),
+      # and v1.7.0's would have started at v1.5.0 (v1.6.0 is on release-1.6). The
+      # compare runs from the two tags' merge base, the previous freeze, so an
+      # unreachable base still gives exactly "main since the previous freeze".
+      # The rule, its first-release case and its refusals are in
+      # hack/changelog-base.sh, whose --self-test runs in CI on every PR.
       - name: Changelog spans from the previous STABLE release
         run: |
-          # The tag listing is its own statement: inside a here-string `<<< "$(a | b)"` a
-          # failing `git tag` is invisible, and the changelog would silently span from the
-          # wrong place. grep finding no stable tag (the very first release) is the one
-          # empty result that is legitimate, hence its `|| true`.
-          cur="$(git rev-list -n1 "${GITHUB_REF_NAME}")"
-          tags="$(git tag --list 'v*' --merged "${GITHUB_REF_NAME}" --sort=-v:refname)"
-          tags="$(printf '%s\n' "$tags" | grep -E '^v[0-9]+[.][0-9]+[.][0-9]+$' || true)"
-          prev=""
-          while read -r t; do
-            [ -z "$t" ] && continue
-            [ "$(git rev-list -n1 "$t")" = "$cur" ] && continue
-            prev="$t"; break
-          done <<< "$tags"
+          # A failure here fails the release: a changelog measured from a guessed base
+          # is published under the tag. Only the very first release (no stable tag at
+          # all) prints nothing and leaves goreleaser its own range.
+          if ! prev="$(hack/changelog-base.sh "${GITHUB_REF_NAME}")"; then
+            echo "::error::No changelog base for ${GITHUB_REF_NAME}; see hack/changelog-base.sh."
+            exit 1
+          fi
           if [ -n "$prev" ]; then
             echo "GORELEASER_PREVIOUS_TAG=$prev" >> "$GITHUB_ENV"
             echo "Changelog: $prev..${GITHUB_REF_NAME} ($(git rev-list --count "$prev..${GITHUB_REF_NAME}") commits)"
