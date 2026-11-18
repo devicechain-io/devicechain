@@ -191,6 +191,30 @@ READERS = [
     ], [], "processor/broker_assertion_test.go:218, integration_marks_test.go:159, connect_snippet_golden_test.go:288-289"),
     ("backend/services/event-sources", "integration", ["backend/services/device-management/graphql/**"], [], "integration/backend_test.go:32"),
     ("backend/services/mcp", "server", [SDL], [], "server/documents_test.go:35"),
+    # Each peer client's recorded documents, validated against the SDL its target serves
+    # (documents_test.go validateDocuments: ../../<target>/graphql).
+    ("backend/services/ai-inference", "inference", ["backend/services/user-management/graphql/**"], [], "inference/documents_test.go"),
+    ("backend/services/event-sources", "adapter", [
+        "backend/services/device-management/graphql/**",
+        "backend/services/device-state/graphql/**",
+    ], [], "adapter/documents_test.go"),
+    ("backend/services/event-sources", "commandpull", [
+        "backend/services/device-management/graphql/**",
+        "backend/services/command-delivery/graphql/**",
+    ], [], "commandpull/documents_test.go"),
+    ("backend/services/event-sources", "credcheck", ["backend/services/device-management/graphql/**"], [], "credcheck/documents_test.go"),
+    ("backend/services/event-sources", "presence", [
+        "backend/services/user-management/graphql/**",
+        "backend/services/device-state/graphql/**",
+        "backend/services/command-delivery/graphql/**",
+    ], [], "presence/documents_test.go"),
+    ("backend/services/lwm2m-ingest", "downlink", [
+        "backend/services/command-delivery/graphql/**",
+        "backend/services/device-management/graphql/**",
+    ], [], "downlink/documents_test.go"),
+    # lpwan: also "../etc/passwd" and "../x" as refused-id fixtures (chirpstack_test.go, tts_test.go).
+    ("backend/services/outbound-connectors", "lpwan", ["backend/services/device-management/graphql/**"], [], "lpwan/documents_test.go"),
+    ("backend/services/update-management", "profilecheck", ["backend/services/device-management/graphql/**"], [], "profilecheck/documents_test.go"),
     ("backend/services/sparkplug-ingest", "downlink", ["frontend/apps/console/src/routes/devices/sparkplugCommands.ts"], [], "downlink/reasons_test.go:89"),
     ("backend/services/update-management", "model", ["deploy/opentofu/modules/traefik/**"], [], "model/edge_lockstep_test.go:31"),
     ("backend/services/user-management", "basemap", ["frontend/apps/console/src/components/basemap/catalog.json"], [], "basemap/catalog_test.go:32"),
@@ -263,7 +287,6 @@ IN_MODULE = {
     ("backend/services/command-delivery", "processor"): "reads ../contract inside its own module",
     ("backend/services/event-processing", "internal/review"): "reads ../replayinput inside its own module",
     ("backend/services/device-management", "graphql"): "\"../x\" is a refused-key fixture",
-    ("backend/services/outbound-connectors", "lpwan"): "\"../etc/passwd\" and \"../x\" are refused-id fixtures",
     ("deploy", "."):"\"../modules/<x>\" appears only in comments; the embed is in-module",
 }
 
