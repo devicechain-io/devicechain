@@ -1589,7 +1589,7 @@ func (rez *EventResolver) Process(ctx context.Context) {
 				// disabled, and a device is disabled precisely when its traffic is unwanted
 				// — often a flood — so a failed-events copy of each event would move the
 				// flood into the dead-letter store. It is counted
-				// (resolve_device_disabled_total) and reported as dropped.
+				// (resolve_device_disabled_total) and reported as unwanted.
 				disposition := messaging.Dispose(unresolved, err)
 				if disposition == messaging.TenantErased || (rez.tenantDeleted != nil && rez.tenantDeleted(tenant)) {
 					log.Info().Str("correlation", correlation).
@@ -1599,7 +1599,7 @@ func (rez *EventResolver) Process(ctx context.Context) {
 				} else if errors.Is(err, model.ErrDeviceDisabled) {
 					log.Debug().Str("correlation", correlation).Err(err).Msg("Discarding an event from a disabled device.")
 					_ = unresolved.Ack()
-					done(core.ResultDropped)
+					done(core.ResultUnwanted)
 				} else if df := (*DecodeFailure)(nil); errors.As(err, &df) && df.Suppressed {
 					// A failed decode past its device type's record budget: counted as suppressed by the
 					// accountant and settled here WITHOUT a failed-events record, so a broken decoder at
@@ -1608,7 +1608,7 @@ func (rez *EventResolver) Process(ctx context.Context) {
 					// Normally their records are out; a failed-events outage may leave them unwritten,
 					// so a redelivery can end suppressed with no record, still counted in the tally.
 					_ = unresolved.Ack()
-					done(core.ResultDropped)
+					done(core.ResultUnwanted)
 				} else if errors.Is(err, model.ErrDeviceAuthoredOwnership) {
 					if rez.relationshipRefused != nil {
 						rez.relationshipRefused.Inc()

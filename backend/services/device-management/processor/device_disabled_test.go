@@ -15,6 +15,7 @@ import (
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -103,6 +104,7 @@ func (suite *InboundEventsProcessorTestSuite) TestADisabledDevicesEventIsDiscard
 	case <-time.After(200 * time.Millisecond):
 	}
 	assert.Equal(suite.T(), 1.0, counterValue(suite, reg, deviceDisabledMetric), "the refusal is counted once")
+	assert.Equal(suite.T(), 1.0, loopResults(suite.T(), reg, "resolve", core.ResultUnwanted))
 }
 
 // presenceEvent is a transport's presence transition for the rig's device, fresh so the
