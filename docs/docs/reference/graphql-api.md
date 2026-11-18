@@ -514,8 +514,8 @@ all. Its one wrinkle is `definition`: the field is nullable so it can be *omitte
 rename a dashboard without resending its whole document, but an explicit `null` on it is
 refused, because a dashboard with no definition is not a thing. It keeps its optional
 `expectedUpdatedAt` precondition. An update that names no field at all writes nothing (not even
-`updatedAt`), while a stale precondition on it is still refused as a stale write (with no
-`extensions.code`).
+`updatedAt`), while a stale precondition on it is still refused as a stale write, with
+`extensions.code` set to `STALE_WRITE`.
 
 **user-management.** Every `update*` takes a dedicated request too:
 
@@ -725,7 +725,7 @@ Some refusals look similar and do not carry `CONFLICT`:
 - Deleting a record that other records still refer to carries `REFERENCE_VIOLATION`. See
   [A reference or a value that is refused](#reference-and-invalid-values).
 
-`updateConnector` refuses a stale `expectedUpdatedAt` with `errors[*].extensions.code` set to `STALE_WRITE`. Nothing is written; the message remains "connector was modified by another writer; reload and try again". This code applies only to connector updates. `CONFLICT` continues to mean a uniqueness collision; errors from other operations are unchanged. Classify by code rather than message text. The console keeps unsaved edits and shows a localized hint to copy them before reloading, then reapply them and retry saving.
+An update whose precondition, such as `expectedUpdatedAt`, no longer matches the record because someone changed it after you read it is refused with `errors[*].extensions.code` set to `STALE_WRITE`. Every service answers a stale write this way: connectors, dashboards, AI providers, notification policies, customer types, entity groups, roles and alarms alike. Nothing is written, and the message is the same as before the code existed: `<record> was modified by another writer; reload and try again`, such as `dashboard was modified by another writer; reload and try again`. `CONFLICT` continues to mean a uniqueness collision and is never used for a stale write. Classify by code rather than message text; `isStaleWrite(err)` in `@devicechain/client` does that, and falls back to the message for an older server. The console recognizes the code wherever it saves with a precondition.
 
 ### A reference or a value that is refused {#reference-and-invalid-values}
 

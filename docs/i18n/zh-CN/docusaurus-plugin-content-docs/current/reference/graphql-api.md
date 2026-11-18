@@ -406,7 +406,7 @@ renameNotificationChannel(token: String!, newToken: String!): NotificationChanne
 特别之处是 `definition`：字段可空是为了能够*省略*，允许只改名而不重发完整文档；
 明确的 `null` 会被拒绝，因为无定义的仪表盘无效。保留可选 `expectedUpdatedAt` 前置条件。
 完全不指定字段的更新不写入任何内容，连 `updatedAt` 也不写；
-但其过时的前置条件仍会被拒绝为过时写入，不带 `extensions.code`。
+但其过时的前置条件仍会被拒绝为过时写入，`extensions.code` 为 `STALE_WRITE`。
 
 **user-management。**每个 `update*` 同样接受专用请求：
 
@@ -590,7 +590,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 - 用已有 token 创建命令不会拒绝，而是返回原命令。参见[发送命令](../guides/sending-commands.md#issue-it)。
 - 删除仍被其他记录引用的记录会携带 `REFERENCE_VIOLATION`。参见[引用或值被拒绝](#reference-and-invalid-values)。
 
-`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码仅适用于连接器更新。`CONFLICT` 仍表示唯一值冲突；其他操作的错误不变。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
+如果更新的前置条件（例如 `expectedUpdatedAt`）与记录不再一致（即在你读取之后有人修改了它），该更新会被拒绝，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。所有服务都以这种方式响应过时写入：连接器、仪表盘、AI 提供方、通知策略、客户类型、实体组、角色和告警均是如此。不会写入任何内容，消息与引入该代码之前相同：`<记录> was modified by another writer; reload and try again`，例如 `dashboard was modified by another writer; reload and try again`。`CONFLICT` 仍表示唯一值冲突，从不用于过时写入。请根据代码而非消息文本分类；`@devicechain/client` 中的 `isStaleWrite(err)` 会这样做，并在较旧的服务器上回退为匹配消息。控制台在所有带前置条件的保存中都会识别该代码。
 
 ### 引用或值被拒绝 {#reference-and-invalid-values}
 
