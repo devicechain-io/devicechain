@@ -240,3 +240,13 @@ func TestGrowthCollectorReportsAZeroRowEstimate(t *testing.T) {
 		}
 	}
 }
+
+// A literal microservice has no registry. Registration must be a no-op even
+// without a database handle; constructing an instrument must not require a scrape.
+func TestRegisterStorageGrowthWithNilRegisterer(t *testing.T) {
+	ms := testMicroservice()
+	if ms.MetricsRegisterer() != nil {
+		t.Fatal("fixture unexpectedly has a registry")
+	}
+	RegisterStorageGrowth(ms, nil)
+}
