@@ -23,9 +23,8 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { Combobox } from '@/components/ui/combobox';
 import { Select, SelectItem } from '@/components/ui/select';
 import { HintText } from '@/components/ui/hint-text';
-import { hasAuthority } from '@devicechain/client';
+import { hasAuthority, isStaleWrite } from '@devicechain/client';
 import { useAuth } from '@/auth/AuthProvider';
-import { CONFLICT_MARKER } from '@/lib/api/connectors';
 import { errMessage } from '@/routes/common';
 import {
   createNotificationPolicy,
@@ -158,7 +157,7 @@ export function NotificationPolicyForm({
     } catch (err) {
       const message = errMessage(err);
       setFormError(
-        message.includes(CONFLICT_MARKER) ? t('entities:notificationPolicyConflict') : message,
+        isStaleWrite(err) ? t('entities:notificationPolicyConflict') : message,
       );
     } finally {
       setBusy(false);

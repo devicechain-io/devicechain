@@ -109,14 +109,18 @@ func majorRuleOnly() OptionalNotificationRuleList {
 	})
 }
 
-// A stale refusal is a lost update, not a taken value, and the console recognises it by
-// its sentence.
+// A stale refusal is a lost update, not a taken value: it is coded STALE_WRITE, never
+// CONFLICT, and older consoles still recognise it by its sentence.
 func TestPolicyErrConflictIsNotAUniquenessConflict(t *testing.T) {
 	if conflict.Is(ErrConflict) {
 		t.Fatalf("ErrConflict (%v) is classified as a uniqueness conflict", ErrConflict)
 	}
-	if _, ok := any(ErrConflict).(interface{ Extensions() map[string]any }); ok {
-		t.Fatal("ErrConflict carries extensions, so it can carry a code")
+	ext, ok := any(ErrConflict).(interface{ Extensions() map[string]any })
+	if !ok {
+		t.Fatal("ErrConflict carries no extensions, so clients cannot read its code")
+	}
+	if code := ext.Extensions()["code"]; code != "STALE_WRITE" {
+		t.Fatalf("ErrConflict carries code %v, want STALE_WRITE", code)
 	}
 	const want = "notification policy was modified by another writer; reload and try again"
 	if got := ErrConflict.Error(); got != want {

@@ -316,7 +316,7 @@ func (u *uplinkRunner) carry(source string, raw rawMessage, mark func(*model.Unr
 			// Terminal, like every build drop (a retry would fail identically), and recorded with its
 			// cause like every other payload that cannot be carried.
 			u.terminal(source, raw, DeviceUplinkInternalError, err, true)
-		case errors.Is(err, messaging.ErrStreamBackpressure):
+		case messaging.IsRefusal(err):
 			u.count(DeviceUplinkBackpressure)
 			raw.settle(err)
 		default:

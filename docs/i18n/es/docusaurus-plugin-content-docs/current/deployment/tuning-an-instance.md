@@ -177,6 +177,8 @@ El almacén de eventos crece con el tráfico; dimensiona su volumen según estas
 - **Retención.** `lifecycle.retentionDays` es 0 por defecto y conserva los datos para siempre.
   Fija una ventana de retención para un funcionamiento indefinido y cuenta por separado el
   historial comprimido y la ventana sin comprimir dentro de ese período.
+  Los agregados de mediciones por minuto que sustentan los gráficos caducan también, un
+  intervalo de chunk después (redondeado hacia arriba a días completos).
 
 Los datos base sin comprimir necesitan eventos por segundo × 756 B × 86 400 segundos × días.
 A 10 000 eventos/s: 10 000 × 756 × 86 400 = 653 184 000 000 B, unos **653 GB/día**;

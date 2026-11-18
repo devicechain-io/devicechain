@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/require"
@@ -57,7 +58,7 @@ func TestAnEmptyAnswerMeansEverythingIsMissing(t *testing.T) {
 func TestDeviceOfReadsTheProfileThroughTheDeviceType(t *testing.T) {
 	q := &fakeQuerier{respond: func(v map[string]any) (string, error) {
 		require.Equal(t, []string{"dev-1"}, v["tokens"])
-		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":{"token":"gateway"}}}],"deviceScopeAnchors":[]}`, nil
+		return `{"devicesByToken":[{"id":"17","createdAt":"2026-11-15T12:13:14Z","token":"dev-1","enabled":true,"deviceType":{"profile":{"token":"gateway"}}}],"deviceScopeAnchors":[]}`, nil
 	}}
 	facts, found, err := New(q, "http://dm/graphql").DeviceOf(context.Background(), "acme", "dev-1")
 	require.NoError(t, err)
@@ -70,7 +71,7 @@ func TestDeviceOfReadsTheProfileThroughTheDeviceType(t *testing.T) {
 func TestDeviceOfDistinguishesNoDeviceNoProfileAndNoAnswer(t *testing.T) {
 	// A device on a type with no profile exists, and has an empty profile.
 	q := &fakeQuerier{respond: func(map[string]any) (string, error) {
-		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":null}}],"deviceScopeAnchors":[]}`, nil
+		return `{"devicesByToken":[{"id":"17","createdAt":"2026-11-15T12:13:14Z","token":"dev-1","enabled":true,"deviceType":{"profile":null}}],"deviceScopeAnchors":[]}`, nil
 	}}
 	facts, found, err := New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
 	require.NoError(t, err)
@@ -103,7 +104,7 @@ func TestDeviceOfDistinguishesNoDeviceNoProfileAndNoAnswer(t *testing.T) {
 // out of the update plane.
 func TestDeviceOfReadsTheDisabledFlagAndRefusesAnAnswerWithoutIt(t *testing.T) {
 	q := &fakeQuerier{respond: func(map[string]any) (string, error) {
-		return `{"devicesByToken":[{"token":"dev-1","enabled":false,"deviceType":{"profile":{"token":"gateway"}}}],"deviceScopeAnchors":[]}`, nil
+		return `{"devicesByToken":[{"id":"17","createdAt":"2026-11-15T12:13:14Z","token":"dev-1","enabled":false,"deviceType":{"profile":{"token":"gateway"}}}],"deviceScopeAnchors":[]}`, nil
 	}}
 	facts, found, err := New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
 	require.NoError(t, err)
@@ -123,7 +124,7 @@ func TestDeviceOfReadsTheDisabledFlagAndRefusesAnAnswerWithoutIt(t *testing.T) {
 // nothing owns has none; an answer without the list is an error, never "nothing owns it".
 func TestDeviceOfReadsTheScopeAnchors(t *testing.T) {
 	q := &fakeQuerier{respond: func(v map[string]any) (string, error) {
-		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":{"token":"gateway"}}}],
+		return `{"devicesByToken":[{"id":"17","createdAt":"2026-11-15T12:13:14Z","token":"dev-1","enabled":true,"deviceType":{"profile":{"token":"gateway"}}}],
 		  "deviceScopeAnchors":[{"deviceToken":"other","anchors":["customer:globex"]},
 		                        {"deviceToken":"dev-1","anchors":["customer:acme","area:north"]}]}`, nil
 	}}
@@ -133,14 +134,14 @@ func TestDeviceOfReadsTheScopeAnchors(t *testing.T) {
 	require.Equal(t, []string{"customer:acme", "area:north"}, facts.Anchors)
 
 	q = &fakeQuerier{respond: func(map[string]any) (string, error) {
-		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":null}}],"deviceScopeAnchors":[]}`, nil
+		return `{"devicesByToken":[{"id":"17","createdAt":"2026-11-15T12:13:14Z","token":"dev-1","enabled":true,"deviceType":{"profile":null}}],"deviceScopeAnchors":[]}`, nil
 	}}
 	facts, _, err = New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
 	require.NoError(t, err)
 	require.Equal(t, []string{}, facts.Anchors)
 
 	q = &fakeQuerier{respond: func(map[string]any) (string, error) {
-		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":null}}]}`, nil
+		return `{"devicesByToken":[{"id":"17","createdAt":"2026-11-15T12:13:14Z","token":"dev-1","enabled":true,"deviceType":{"profile":null}}]}`, nil
 	}}
 	_, _, err = New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
 	require.Error(t, err)
@@ -180,4 +181,53 @@ func TestResolveGroupTargetsKeepsARejectionApartFromAnError(t *testing.T) {
 
 	_, err = New(q, "u").ResolveGroupTargets(context.Background(), "g", nil, "", 10)
 	require.Error(t, err, "no tenant, no lookup")
+}
+
+func TestDeviceOfParsesIdentityAndCreationTimeAndRejectsInvalidIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		id, created string
+		bad         bool
+	}{
+		{"17", "2026-11-15T12:13:14.123Z", false},
+		{"23", "", true},
+		{"17", "0001-01-01T00:00:00Z", true},
+		{"", "", true}, {"garbage", "", true}, {"0", "", true}, {"-1", "", true},
+		{"17", "bad-date", true},
+	} {
+		t.Run(tc.id+"/"+tc.created, func(t *testing.T) {
+			q := &fakeQuerier{respond: func(map[string]any) (string, error) {
+				b, err := json.Marshal(map[string]any{"devicesByToken": []map[string]any{{
+					"id": tc.id, "createdAt": tc.created, "token": "dev-1", "enabled": true,
+				}}, "deviceScopeAnchors": []any{}})
+				return string(b), err
+			}}
+			facts, found, err := New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
+			if tc.bad {
+				require.Error(t, err)
+				require.False(t, found)
+				require.Zero(t, facts.Incarnation)
+				return
+			}
+			require.NoError(t, err)
+			require.True(t, found)
+			if tc.created == "" {
+				require.True(t, facts.CreatedAt.IsZero())
+				require.Equal(t, uint64(23), facts.Incarnation)
+			} else {
+				require.Equal(t, uint64(17), facts.Incarnation)
+				require.Equal(t, time.Date(2026, 11, 15, 12, 13, 14, 123000000, time.UTC), facts.CreatedAt)
+			}
+		})
+	}
+	require.Contains(t, deviceFacts, "{ id createdAt token enabled")
+}
+
+func TestDeviceOfRejectsAnAnswerWithNoId(t *testing.T) {
+	q := &fakeQuerier{respond: func(map[string]any) (string, error) {
+		return `{"devicesByToken":[{"token":"dev-1","enabled":true}],"deviceScopeAnchors":[]}`, nil
+	}}
+	facts, found, err := New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
+	require.Error(t, err)
+	require.False(t, found)
+	require.Zero(t, facts.Incarnation)
 }

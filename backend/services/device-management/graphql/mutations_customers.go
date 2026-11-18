@@ -45,15 +45,16 @@ func (r *SchemaResolver) CreateCustomerType(ctx context.Context, args struct {
 // update naming no fields was a caller error; nothing enforced that, and nothing
 // should.
 func (r *SchemaResolver) UpdateCustomerType(ctx context.Context, args struct {
-	Token   string
-	Request model.CustomerTypeUpdateRequest
+	Token             string
+	ExpectedUpdatedAt *string
+	Request           model.CustomerTypeUpdateRequest
 }) (*CustomerTypeResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateCustomerType(ctx, args.Token, &args.Request)
+	updated, err := api.UpdateCustomerType(ctx, args.Token, args.ExpectedUpdatedAt, &args.Request)
 	if err != nil {
 		return nil, err
 	}

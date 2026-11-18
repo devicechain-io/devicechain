@@ -41,8 +41,9 @@ import { x509ErrorText } from './anchorErrors';
 
 export default function TrustAnchorDetailPage() {
   const { t } = useTranslation('trustAnchors');
-  const { token: rawToken } = useParams<{ token: string }>();
-  const token = decodeURIComponent(rawToken ?? '');
+  // The router hands the param over already decoded. Decoding it again turned a token
+  // holding a '%' into a different token, or threw on one such as "a%zz".
+  const token = useParams<{ token: string }>().token ?? '';
   const [version, reload] = useReload();
   const { data: anchor, loading, error } = useQuery(() => getTrustAnchor(token), [token, version]);
 

@@ -169,6 +169,8 @@ The event store is the one volume whose growth is set by traffic, so size it for
 - **Retention.** `lifecycle.retentionDays` is 0 by default, which keeps data forever. Set a
   retention window for indefinite operation and account separately for compressed history and
   the uncompressed window within that retention period.
+  The per-minute measurement aggregates behind charts age out with it, one chunk interval
+  later (rounded up to a day).
 
 The uncompressed base data needs events per second × 756 B × 86,400 seconds × days.
 At 10,000 events/s: 10,000 × 756 × 86,400 = 653,184,000,000 B, or about **653 GB/day**;
