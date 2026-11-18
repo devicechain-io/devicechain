@@ -101,6 +101,8 @@ type ThresholdAlarmRule struct {
 	// this value does not fire either way, and a curve that only ever touches the
 	// threshold produces no alarm at all in either direction.
 	Threshold float64
+	// ThresholdAttr selects a per-device SHARED/SERVER numeric bound instead of a literal.
+	ThresholdAttr string
 	// Severity is the rule's AUTHORING severity, which is lowercase — see SeverityMajor
 	// in wirevocabulary.go. The uppercase form is a different constant and belongs
 	// nowhere near this field.
@@ -186,16 +188,17 @@ func (r ThresholdAlarmRule) DefinitionJSON() string {
 	// fuel coming back up IS the refuel having worked, not a reason to dispatch again.
 	actions := ruleActions(r.Token, r.AlarmKey, r.CommandKey, r.CommandExpiresAfter, r.CommandPayload)
 
+	when := map[string]any{"metric": r.Metric, "op": string(r.Op), "threshold": r.Threshold}
+	if r.ThresholdAttr != "" {
+		delete(when, "threshold")
+		when["thresholdAttr"] = r.ThresholdAttr
+	}
 	raw, err := json.Marshal(map[string]any{
 		"name":     r.Name,
 		"type":     "threshold",
 		"severity": r.Severity,
-		"when": map[string]any{
-			"metric":    r.Metric,
-			"op":        string(r.Op),
-			"threshold": r.Threshold,
-		},
-		"actions": actions,
+		"when":     when,
+		"actions":  actions,
 	})
 	if err != nil {
 		// Marshaling a static map of strings and floats cannot fail; a failure here is a

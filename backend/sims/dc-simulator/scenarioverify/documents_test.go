@@ -44,6 +44,7 @@ func verifierDocuments() []struct {
 		name, area, doc string
 		vars            map[string]any
 	}{
+		{"queryCalculatedJob", "event-management", queryCalculatedJob, map[string]any{"token": "job"}},
 		{"queryAlarms", "device-management", queryAlarms, map[string]any{
 			"c": map[string]any{"pageNumber": 1, "pageSize": alarmPageSize},
 		}},
@@ -77,8 +78,8 @@ func verifierDocuments() []struct {
 
 func TestEveryVerifierDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 	docs := verifierDocuments()
-	if len(docs) != 10 {
-		t.Fatalf("%d documents listed; the verifier sends 10 — a new one must be listed here", len(docs))
+	if len(docs) != 11 {
+		t.Fatalf("%d documents listed; the verifier sends 11 — a new one must be listed here", len(docs))
 	}
 	for _, d := range docs {
 		if errs := servedSchema(t, d.area).ValidateWithVariables(d.doc, d.vars); len(errs) > 0 {

@@ -130,6 +130,7 @@ func (d *day) cleanS3() {
 	s.Health[sim.HarborpulseLoraGaugeProfile] = DecoderHealth{Decoded: 360}
 	s.Health[sim.HarborpulseLegacyGaugeProfile] = DecoderHealth{Decoded: 60, Failed: 60, LastError: "eval_error"}
 	d.s3 = s
+	d.cleanS3b()
 }
 
 // evaluateOneRed applies mutate to a clean day and asserts that exactly want turns red, because of
@@ -230,7 +231,7 @@ func TestEachS3ControlTurnsExactlyItsInvariantRed(t *testing.T) {
 		{"the pumps carry the wrong well depth", sim.HarborpulseDefectWrongWellDepth, InvWellFill, "not level over", func(d *day) {
 			for p, rs := range d.readings {
 				for i, r := range rs {
-					if r.Name == sim.HarborpulseWellFillKey {
+					if r.Name == sim.HarborpulseWellFillKey && r.At.After(at(16)) {
 						d.readings[p][i].Value = r.Value * sim.HarborpulseWellDepthM / 5
 					}
 				}

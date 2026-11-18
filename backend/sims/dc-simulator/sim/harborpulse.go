@@ -60,6 +60,7 @@ type harborpulse struct {
 	model   *harborModel
 	started time.Time
 	now     func() time.Time
+	s3b     harborS3bState
 }
 
 // NewHarborpulse returns the harborpulse Sim seeded from the handshake. Prefer NewSim.
@@ -106,7 +107,8 @@ const (
 // HarborpulseDefects lists every defect harborpulse knows, sorted.
 func HarborpulseDefects() []string {
 	return []string{
-		HarborpulseDefectAirLockBasin, HarborpulseDefectDropBackfill, HarborpulseDefectFloodClearBetweenTiers,
+		HarborpulseDefectAirLockBasin, HarborpulseDefectAttributeNotUpdated, HarborpulseDefectBackfillWrongWindow,
+		HarborpulseDefectDownlinkNack, HarborpulseDefectDropBackfill, HarborpulseDefectFloodClearBetweenTiers,
 		HarborpulseDefectFloodSplitKey, HarborpulseDefectLegacyDecoderFixed, HarborpulseDefectLoraWrongScale,
 		HarborpulseDefectMQTTUnreachable, HarborpulseDefectRefuseDerate, HarborpulseDefectSilenceNorthLamp,
 		HarborpulseDefectTruckStaysHome, HarborpulseDefectUnsignedWebhook, HarborpulseDefectWrongWellDepth,
@@ -130,6 +132,7 @@ type harborDefects struct {
 	floodSplitKey, refuseDerate, airLockBasin, silenceNorthLamp, dropBackfill bool
 	unsignedWebhook, mqttUnreachable, truckStaysHome, wrongWellDepth          bool
 	loraWrongScale, legacyDecoderFixed, floodClearBetweenTiers                bool
+	attributeNotUpdated, downlinkNack, backfillWrongWindow                    bool
 	names                                                                     []string
 }
 
@@ -159,6 +162,12 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 	d := harborDefects{names: names}
 	for _, n := range names {
 		switch n {
+		case HarborpulseDefectAttributeNotUpdated:
+			d.attributeNotUpdated = true
+		case HarborpulseDefectDownlinkNack:
+			d.downlinkNack = true
+		case HarborpulseDefectBackfillWrongWindow:
+			d.backfillWrongWindow = true
 		case HarborpulseDefectFloodSplitKey:
 			d.floodSplitKey = true
 		case HarborpulseDefectRefuseDerate:
@@ -234,6 +243,10 @@ func (s *harborpulse) ScenarioClock(now time.Time) *ScenarioClock {
 		c.SimHour = harborHourOf(elapsed, dayLength)
 	}
 	c.SimTime = formatSimTime(c.SimHour)
+	s.mu.Lock()
+	c.ThresholdChanges = append([]ThresholdChange(nil), s.s3b.Changes...)
+	c.CalculatedBackfills = append([]CalculatedBackfillBeat(nil), s.s3b.Jobs...)
+	s.mu.Unlock()
 	c.Beat = harborBeatAt(c.SimHour)
 	if model != nil {
 		c.Backfill = model.backfillLedger()
@@ -536,6 +549,8 @@ func (s *harborpulse) Manifest() SimManifest {
 		}},
 	})
 	// The operator's board and the Lofts owner's, bound to the devices this manifest provisions.
+	manifest.Attributes = harborAttributes()
+	manifest.Connectors = append(manifest.Connectors, harborDownlinkConnector())
 	manifest.Dashboards = harborpulseDashboards(manifest.Expand(manifest.Seed))
 	return manifest
 }
@@ -611,6 +626,7 @@ func harborpulsePumpProfile() ProfileSpec {
 			{Token: HarborpulseStopPumpDef, CommandKey: HarborpulseStopPumpKey, Name: "Stop pump"},
 		},
 		DetectionRules: []DetectionRuleSpec{
+			ThresholdAlarmRule{Token: HarborpulseAttributeRule, Name: "Harborpulse shared well alarm", Metric: HarborpulseWetWellKey, Op: OpGt, ThresholdAttr: HarborpulseWellAlarmAttr, Severity: SeverityMinor, AlarmKey: HarborpulseAttributeAlarm, Enabled: true}.Spec(),
 			ThresholdAlarmRule{
 				Token: HarborpulseWetWellRule, Name: "Harborpulse wet well high", Metric: HarborpulseWetWellKey,
 				Op: OpGt, Threshold: HarborpulseWetWellM, Severity: SeverityMajor, AlarmKey: HarborpulseWetWellAlarmKey,
@@ -718,7 +734,8 @@ func harborpulseLoraProfile(token, name, decoder string) ProfileSpec {
 			{Key: HarborpulseWaterLevelKey, Name: "Water level above quay datum", DataType: "DOUBLE", Unit: "m"},
 			{Key: HarborpulseBatteryKey, Name: "Battery", DataType: "DOUBLE", Unit: "V"},
 		},
-		Decoder: decoder,
+		Decoder:  decoder,
+		Commands: []CommandSpec{{Token: token + "-interval", Name: "Set sampling interval", CommandKey: HarborpulseSamplingCommand, ParameterSchema: HarborpulseSamplingSchema, Encoder: HarborpulseSamplingEncoder}},
 	}
 }
 
@@ -779,6 +796,9 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	elapsed := now.Sub(s.started)
 	s.mu.Unlock()
 
+	if err := s.s3bBeats(ctx, rt, elapsed, now); err != nil {
+		return err
+	}
 	model.advanceTo(elapsed)
 	workers := rt.Load.Workers(len(rt.Devices))
 	stamp := now.UTC().Truncate(time.Microsecond)

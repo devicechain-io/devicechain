@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -42,6 +43,7 @@ type ConnectorSpec struct {
 	Name   string
 	Type   string
 	Config string
+	Secret string
 }
 
 // NotificationChannelSpec is one notification channel (notification-management). Config is the
@@ -155,6 +157,24 @@ func (m SimManifest) validateRuleDestinations(r DetectionRuleSpec) error {
 
 // validateOutbound checks the destinations and integrations the manifest declares.
 func (m SimManifest) validateOutbound(typeTokens map[string]bool) error {
+	devices := map[string]bool{}
+	for _, d := range m.Expand(m.Seed) {
+		devices[d.Token] = true
+	}
+	attributes := map[string]bool{}
+	for _, a := range m.Attributes {
+		key := a.Device + "/" + a.Key
+		if !devices[a.Device] || attributes[key] {
+			return fmt.Errorf("attribute %s has unknown device or duplicate natural key", key)
+		}
+		if err := core.ValidateToken(a.Key); err != nil {
+			return err
+		}
+		if math.IsNaN(a.Value) || math.IsInf(a.Value, 0) {
+			return fmt.Errorf("attribute %s is not finite", key)
+		}
+		attributes[key] = true
+	}
 	seen := map[string]bool{}
 	for _, h := range m.WebhookSigningHandles {
 		if h == "" || strings.HasPrefix(h, "/") || seen["handle/"+h] {
@@ -166,8 +186,8 @@ func (m SimManifest) validateOutbound(typeTokens map[string]bool) error {
 		if err := validateTokenOnce(seen, "connector", c.Token); err != nil {
 			return err
 		}
-		if c.Type != connectorTypeMQTT {
-			return fmt.Errorf("connector %q has type %q; this package provisions only %q", c.Token, c.Type, connectorTypeMQTT)
+		if c.Type != connectorTypeMQTT && c.Type != "lorawan_downlink" {
+			return fmt.Errorf("connector %q has type %q; this package provisions %q and lorawan_downlink", c.Token, c.Type, connectorTypeMQTT)
 		}
 		if err := jsonObject(c.Config); err != nil {
 			return fmt.Errorf("connector %q config: %w", c.Token, err)
@@ -412,17 +432,23 @@ func ensureConnector(ctx context.Context, rt *Runtime, c ConnectorSpec) error {
 			} `json:"createConnector"`
 		}
 		req := map[string]any{"token": c.Token, "name": c.Name, "type": c.Type, "config": config}
+		if c.Secret != "" {
+			req["secret"] = withTenant(c.Secret, rt.Tenant)
+		}
 		if err := rt.Session.Query(ctx, url, mutationCreateConnector, map[string]any{"request": req}, &out); err != nil {
 			return fmt.Errorf("createConnector: %w", err)
 		}
 		log.Info().Str("token", c.Token).Msg("created connector")
-	case existing.Connector.Type != c.Type || !sameJSON(existing.Connector.Config, config):
+	case existing.Connector.Type != c.Type || !sameJSON(existing.Connector.Config, config) || c.Secret != "":
 		var out struct {
 			UpdateConnector struct {
 				Token string `json:"token"`
 			} `json:"updateConnector"`
 		}
 		req := map[string]any{"name": c.Name, "type": c.Type, "config": config}
+		if c.Secret != "" {
+			req["secret"] = withTenant(c.Secret, rt.Tenant)
+		}
 		if err := rt.Session.Query(ctx, url, mutationUpdateConnector, map[string]any{"token": c.Token, "request": req}, &out); err != nil {
 			return fmt.Errorf("updateConnector: %w", err)
 		}

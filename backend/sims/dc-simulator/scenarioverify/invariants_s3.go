@@ -36,7 +36,7 @@ const (
 
 // SinkInvariants need the in-cluster sink: without one (--sink) they are not judged, and the
 // report names them as omitted rather than passing them.
-var SinkInvariants = []string{InvWebhookSigned, InvWebhookControl, InvMQTTBulletin, InvNotifyEscalates, InvNotifyAckControl}
+var SinkInvariants = []string{InvDownlinkAcknowledged, InvWebhookSigned, InvWebhookControl, InvMQTTBulletin, InvNotifyEscalates, InvNotifyAckControl}
 
 // AckGauge is the gauge whose flood alarm the verifier acknowledges once it has been paged at MAJOR,
 // before its escalation is due: the in-run control of notify-escalates.
@@ -67,6 +67,9 @@ type S3 struct {
 	SigningSecret, WrongSecret string
 	Attempts                   map[string][]Attempt
 	Ack                        Ack
+	Changes                    []sim.ThresholdChange
+	Jobs                       []CalculatedJob
+	GapBefore                  []Reading
 	Health                     map[string]DecoderHealth
 	DecodeFailures             map[string][]DecodeFailure
 	// LegacyFailuresAtWatch is the legacy gauge's DECODE_FAILED records as they stood when the watch
@@ -95,6 +98,9 @@ func s3Checks() []struct {
 		name string
 		fn   func(Observations) error
 	}{
+		{InvAttributeThresholdMoves, attributeThresholdMoves},
+		{InvDownlinkAcknowledged, downlinkAcknowledged},
+		{InvBackfillCompletes, backfillCompletes},
 		{InvWebhookSigned, func(o Observations) error { return webhookSigned(o, o.S3.SigningSecret) }},
 		{InvWebhookControl, webhookControlIsRed},
 		{InvMQTTBulletin, mqttBulletin},

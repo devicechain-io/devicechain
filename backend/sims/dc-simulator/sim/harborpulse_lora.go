@@ -199,6 +199,19 @@ func (s *harborpulse) sendLoraUplinks(ctx context.Context, rt *Runtime, model *h
 	runID := strconv.FormatInt(s.startedAt().UnixNano(), 10)
 	var errs []error
 	for _, u := range model.loraUplinks(elapsed) {
+		if u.devEUI == HarborpulseSamplingDevEUI {
+			s.mu.Lock()
+			next := s.s3b.nextUplink
+			s.mu.Unlock()
+			if elapsed < next {
+				continue
+			}
+		}
+		pending, pollErr := s.pollGaugeQueue(ctx, rt, u.devEUI)
+		if pollErr != nil {
+			errs = append(errs, pollErr)
+			continue
+		}
 		req, err := lorawan.BuildFrame(cfg, runID, u.devEUI, u.n, at, HarborpulseLoraFPort, u.frame)
 		if err != nil {
 			errs = append(errs, err)
@@ -225,6 +238,14 @@ func (s *harborpulse) sendLoraUplinks(ctx context.Context, rt *Runtime, model *h
 			continue
 		}
 		rt.Stats.Emitted.Add(1)
+		if err := s.answerGaugeQueue(ctx, rt, pending, elapsed, at); err != nil {
+			errs = append(errs, err)
+		}
+		if u.devEUI == HarborpulseSamplingDevEUI {
+			s.mu.Lock()
+			s.s3b.nextUplink = elapsed + s.s3b.interval
+			s.mu.Unlock()
+		}
 	}
 	return errors.Join(errs...)
 }
