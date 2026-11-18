@@ -541,8 +541,8 @@ Su única particularidad es `definition`: el campo es anulable para poder *omiti
 renombra un panel sin reenviar su documento entero, pero un `null` explícito sobre él se rechaza,
 porque un panel sin definición no es nada. Conserva su precondición opcional `expectedUpdatedAt`. Una
 actualización que no nombra ningún campo no escribe nada (ni siquiera `updatedAt`), aunque una
-precondición obsoleta sobre ella se sigue rechazando como escritura obsoleta (sin
-`extensions.code`).
+precondición obsoleta sobre ella se sigue rechazando como escritura obsoleta, con
+`extensions.code` igual a `STALE_WRITE`.
 
 **user-management.** Toda `update*` toma también una petición propia:
 
@@ -766,7 +766,7 @@ Algunos rechazos parecen similares y no llevan `CONFLICT`:
 - Eliminar un registro al que otros registros todavía se refieren lleva `REFERENCE_VIOLATION`.
   Consulta [Una referencia o un valor que se rechaza](#reference-and-invalid-values).
 
-`updateConnector` rechaza un `expectedUpdatedAt` obsoleto con `errors[*].extensions.code` igual a `STALE_WRITE`. No se escribe nada; el mensaje sigue siendo "connector was modified by another writer; reload and try again". Este código solo se aplica a las actualizaciones de conectores. `CONFLICT` sigue indicando una colisión de unicidad; los errores de otras operaciones no cambian. Clasifica por código, no por el texto del mensaje. La consola conserva los cambios sin guardar y muestra una indicación localizada para copiarlos antes de volver a cargar, aplicarlos de nuevo y reintentar guardar.
+Una actualización cuya precondición, como `expectedUpdatedAt`, ya no coincide con el registro porque alguien lo cambió después de que lo leyeras, se rechaza con `errors[*].extensions.code` igual a `STALE_WRITE`. Todos los servicios responden así a una escritura obsoleta: conectores, paneles, proveedores de IA, políticas de notificación, tipos de cliente, grupos de entidades, roles y alarmas por igual. No se escribe nada, y el mensaje es el mismo que antes de que existiera el código: `<registro> was modified by another writer; reload and try again`, por ejemplo `dashboard was modified by another writer; reload and try again`. `CONFLICT` sigue indicando una colisión de unicidad y nunca se usa para una escritura obsoleta. Clasifica por código, no por el texto del mensaje; `isStaleWrite(err)` de `@devicechain/client` lo hace, y recurre al mensaje con un servidor anterior. La consola reconoce el código en todos los guardados con precondición.
 
 ### Una referencia o un valor que se rechaza {#reference-and-invalid-values}
 
