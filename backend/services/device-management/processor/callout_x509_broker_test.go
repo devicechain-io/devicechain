@@ -628,7 +628,7 @@ func TestX509UsernameCannotBeUsedAsAToken(t *testing.T) {
 		Token: "tok-at", DeviceToken: "sensor-001", CredentialType: string(model.CredentialAccessToken),
 		CredentialId: X509Username, Enabled: true})
 	if err != nil {
-		t.Skipf("the token grammar refuses %q, so there is nothing to bypass: %v", X509Username, err)
+		t.Fatalf("the token grammar refuses %q, so there is nothing to bypass: %v", X509Username, err)
 	}
 	before := f.counts()
 	_, err = f.connect(clientIDOf("sensor-001"), certUser(), "")

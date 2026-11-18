@@ -40,6 +40,7 @@ type DetectMetrics struct {
 	eventsAppliedTotal  prometheus.Counter
 	appliedStreamSeq    prometheus.Gauge
 	checkpointSeconds   prometheus.Gauge
+	checkpointSpacing   prometheus.Gauge
 	snapshotBytes       prometheus.Gauge
 	watermarkLagSeconds prometheus.Gauge
 	restoreSeconds      prometheus.Gauge
@@ -221,6 +222,7 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 		eventsAppliedTotal:  ms.NewCounter("detect_events_applied_total", "Resolved events fed into the DETECT engine."),
 		appliedStreamSeq:    ms.NewGauge("detect_applied_stream_seq", "Highest JetStream stream sequence captured in the committed snapshot."),
 		checkpointSeconds:   ms.NewGauge("detect_checkpoint_seconds", "Wall-clock cost of the last snapshot commit."),
+		checkpointSpacing:   ms.NewGauge("detect_checkpoint_min_spacing_seconds", "Minimum spacing between count-triggered DETECT checkpoints, based on the last committed snapshot cost."),
 		snapshotBytes:       ms.NewGauge("detect_snapshot_bytes", "Serialized size of the last DETECT snapshot payload."),
 		watermarkLagSeconds: ms.NewGauge("detect_watermark_lag_seconds", "Wall-clock time minus the engine watermark at the last checkpoint."),
 		restoreSeconds:      ms.NewGauge("detect_restore_seconds", "Time to restore engine state from the snapshot store at startup."),
@@ -872,6 +874,13 @@ func (m *DetectMetrics) recordConsumerLag(pending, ackPending uint64) {
 	m.consumerAckPending.Set(float64(ackPending))
 }
 
+// recordCheckpointMinSpacing records the spacing after a snapshot commits. Nil-safe.
+func (m *DetectMetrics) recordCheckpointMinSpacing(spacing time.Duration) {
+	if m != nil {
+		m.checkpointSpacing.Set(spacing.Seconds())
+	}
+}
+
 // recordCheckpoint records a committed snapshot's cost, size, position, and lag. serialize and
 // save are the two parts of seconds: the engine's serialization and the store's commit.
 func (m *DetectMetrics) recordCheckpoint(appliedSeq uint64, seconds float64, serialize, save time.Duration, bytes int, lagSeconds float64) {
@@ -1171,5 +1180,26 @@ func (m *DetectMetrics) RuleStatPending(keys int, bytes int64, oldest time.Durat
 func (m *DetectMetrics) recordSupersededRaisedDropped() {
 	if m != nil {
 		m.supersededRaisedDropped.Inc()
+	}
+}
+
+// setTickInterval declares the cadence when the corresponding loop starts.
+func (m *DetectMetrics) setTickInterval(interval time.Duration) {
+	if m != nil {
+		m.tickPass.SetInterval(interval)
+	}
+}
+
+// setRuleStatFlushInterval declares the cadence when the corresponding loop starts.
+func (m *DetectMetrics) setRuleStatFlushInterval(interval time.Duration) {
+	if m != nil {
+		m.ruleStatFlushPass.SetInterval(interval)
+	}
+}
+
+// setShedSummaryInterval declares the cadence when the corresponding loop starts.
+func (m *ReactMetrics) setShedSummaryInterval(interval time.Duration) {
+	if m != nil {
+		m.shedSummaryPass.SetInterval(interval)
 	}
 }

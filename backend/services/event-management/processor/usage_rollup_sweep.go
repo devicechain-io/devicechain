@@ -62,7 +62,7 @@ const usageRollupLock = "event-management/usage-rollup"
 func NewUsageRollupSweep(ms *core.Microservice, rdbm *rdb.RdbManager, api usageRoller,
 	interval time.Duration, callbacks core.LifecycleCallbacks) *UsageRollupSweep {
 	s := &UsageRollupSweep{lock: rdbm, api: api, now: time.Now}
-	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "usage-rollup", interval, s.RunOnce, callbacks)
+	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "usage-rollup", interval, s.RunOnce, callbacks, ms.NewPeriodicTaskMetrics("usage_rollup"))
 	return s
 }
 
@@ -71,13 +71,7 @@ func (s *UsageRollupSweep) RunOnce(ctx context.Context) error {
 	ran, err := s.lock.TryAdvisoryLockSession(ctx, rdb.AdvisoryLockKey(usageRollupLock), func(db *gorm.DB) error {
 		return s.rollup(ctx, db)
 	})
-	if err != nil {
-		return err
-	}
-	if !ran {
-		return core.ErrPassSkipped
-	}
-	return nil
+	return rdb.SingletonResult(ran, err, usageRollupLock)
 }
 
 // rollup finalizes owed hours, then prunes the working rows of days long final. A failure is

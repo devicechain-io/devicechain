@@ -5,6 +5,8 @@
 
     hack/ci-select.py plan      # in `discover`: print the go legs, integration legs and frontend verdict
     hack/ci-select.py check     # the reader table and split table still describe the tree
+    hack/ci-select.py codeql    # in codeql.yml: the module dirs the Go analysis builds, one per line
+    hack/ci-select.py migration-deps  # in `migrations`: the import graph covers what `go list` compiles
     hack/ci-select.py replay SHA...   # what a merged commit would have selected (no CI env needed)
     hack/ci-select.py --self-test     # the selection's safety rails, each against a case that must trip it
 
@@ -115,11 +117,12 @@ READERS = [
         "docs/**", "README.md", "**/go.mod", SDL,
         "backend/services/event-management/model/analytics.go",
     ], [], "cmd/docs_*_test.go"),
-    # bootstrap: deployment docs (fence/backupsizing/diskbudget/size_docs), every service's non-test
+    # bootstrap: README.md and deployment docs (fence/backupsizing/diskbudget/size_docs), every service's non-test
     # source (install_test.go:432), service configs (sizing/sparkplug), user-management go.mod
     # (breakglass), core/rdb/postgres.go (install_test.go:473), the broker's main.go/go.mod
     # (brokerimage_test via kube.go repoRoot). deploy/** is the deploy module, which cli requires.
     ("backend/cli", "bootstrap", DOCS_DEPLOY + [
+        "README.md",
         "backend/services/**/*.go",
         "backend/services/user-management/go.mod",
         "backend/core/rdb/postgres.go",
@@ -136,7 +139,11 @@ READERS = [
         "backend/**/*.go",
         "docs/**/disaster-recovery.md",
     ], NONTEST, "backupset/backupset_test.go:120,248"),
-    ("backend/core", "graphql/schemaplane", [SDL], [], "graphql/schemaplane/schemaplane_test.go:19"),
+    ("backend/core", "graphql/schemaplane", [
+        SDL,
+        "frontend/packages/dashboards/src/**",
+        "frontend/apps/dashboard/src/**",
+    ], [], "graphql/schemaplane/schemaplane_test.go:19, frontend_documents_test.go:85"),
     ("backend/core", "rdb/partialupdatetest", ["backend/services/*/model/*.go"], NONTEST, "rdb/partialupdatetest/savescan_test.go:133"),
     ("backend/core", "config", [
         "deploy/opentofu/modules/traefik/main.tf",
@@ -149,6 +156,9 @@ READERS = [
         "deploy/opentofu/modules/nats/main.tf",
     ], [], "messaging/rebalanceable_streams_test.go:32, dedup_window_test.go:443"),
     ("backend/core", "semantic", ["NOTICE"], [], "semantic/semantic_test.go:487"),
+    # core/core: the production-hardening page (hardening_docs_test.go:19); functionalareas*.go
+    # name ".." only in a comment about os.ReadDir.
+    ("backend/core", "core", ["docs/docs/deployment/production-hardening.md"], [], "core/hardening_docs_test.go:19"),
     # functionalarea: the services list, release.yml's ko modules and their RUNBOOK.md, the operator,
     # the chart helpers and Chart.yaml, the local image build, the nats module, the broker image.
     ("backend/k8s", "functionalarea", [
@@ -174,17 +184,47 @@ READERS = [
         "backend/sims/dc-simulator/sim/fleetpulse_speed_limit_schema.json",
     ], [], "model/authored_sim_*_test.go"),
     ("backend/services/device-management", "processor", ["frontend/testdata/connect-snippets/**"], [], "processor/connect_snippet_golden_test.go:32"),
+    # graphql: the console picker documents (console_picker_documents_test.go:27); its other
+    # escaping file only names "../x" as a refused-key fixture.
+    ("backend/services/device-management", "graphql", ["frontend/apps/console/src/lib/api/**"], [], "graphql/console_picker_documents_test.go:27"),
     ("backend/services/event-management", "model", ["docs/**/releases-and-upgrades.md"], [], "model/upgrade_notes_bounds_test.go:34"),
     ("backend/services/event-management", "processor/backfill", ["backend/services/device-management/graphql/**"], [], "processor/backfill/*_test.go"),
     ("backend/services/event-processing", "graphql", ["backend/testdata/authored-rules/**"], [], "graphql/authored_sim_rules_test.go:39"),
-    # event-sources/processor walks every non-test .go file under backend/.
+    # event-sources/processor walks every non-test .go file under backend/; the connect snippet
+    # golden test also reads both templates that publish the external MQTT port.
     ("backend/services/event-sources", "processor", [
         "backend/**/*.go",
         "frontend/testdata/connect-snippets/**",
         "backend/core/integrationcodec/testdata/**",
-    ], [], "processor/broker_assertion_test.go:218, integration_marks_test.go:159"),
+        "deploy/helm/devicechain/templates/mqtt-exposure.yaml",
+        "deploy/helm/devicechain/templates/gateway.yaml",
+    ], [], "processor/broker_assertion_test.go:218, integration_marks_test.go:159, connect_snippet_golden_test.go:288-289"),
     ("backend/services/event-sources", "integration", ["backend/services/device-management/graphql/**"], [], "integration/backend_test.go:32"),
     ("backend/services/mcp", "server", [SDL], [], "server/documents_test.go:35"),
+    # Each peer client's recorded documents, validated against the SDL its target serves
+    # (documents_test.go validateDocuments: ../../<target>/graphql).
+    ("backend/services/ai-inference", "inference", ["backend/services/user-management/graphql/**"], [], "inference/documents_test.go"),
+    ("backend/services/event-sources", "adapter", [
+        "backend/services/device-management/graphql/**",
+        "backend/services/device-state/graphql/**",
+    ], [], "adapter/documents_test.go"),
+    ("backend/services/event-sources", "commandpull", [
+        "backend/services/device-management/graphql/**",
+        "backend/services/command-delivery/graphql/**",
+    ], [], "commandpull/documents_test.go"),
+    ("backend/services/event-sources", "credcheck", ["backend/services/device-management/graphql/**"], [], "credcheck/documents_test.go"),
+    ("backend/services/event-sources", "presence", [
+        "backend/services/user-management/graphql/**",
+        "backend/services/device-state/graphql/**",
+        "backend/services/command-delivery/graphql/**",
+    ], [], "presence/documents_test.go"),
+    ("backend/services/lwm2m-ingest", "downlink", [
+        "backend/services/command-delivery/graphql/**",
+        "backend/services/device-management/graphql/**",
+    ], [], "downlink/documents_test.go"),
+    # lpwan: also "../etc/passwd" and "../x" as refused-id fixtures (chirpstack_test.go, tts_test.go).
+    ("backend/services/outbound-connectors", "lpwan", ["backend/services/device-management/graphql/**"], [], "lpwan/documents_test.go"),
+    ("backend/services/update-management", "profilecheck", ["backend/services/device-management/graphql/**"], [], "profilecheck/documents_test.go"),
     ("backend/services/sparkplug-ingest", "downlink", ["frontend/apps/console/src/routes/devices/sparkplugCommands.ts"], [], "downlink/reasons_test.go:89"),
     ("backend/services/update-management", "model", ["deploy/opentofu/modules/traefik/**"], [], "model/edge_lockstep_test.go:31"),
     ("backend/services/user-management", "basemap", ["frontend/apps/console/src/components/basemap/catalog.json"], [], "basemap/catalog_test.go:32"),
@@ -199,6 +239,14 @@ READERS = [
         "backend/services/event-processing/internal/review/testdata/**",
         "demos/**",
     ], [], "sim/*_test.go"),
+    # scenarioverify/documents_test.go:21 reads the served SDL of the four areas the verifier queries
+    # (documents_test.go:47-59: device-management, command-delivery, event-management, event-processing).
+    ("backend/sims/dc-simulator", "scenarioverify", [
+        "backend/services/device-management/graphql/**",
+        "backend/services/command-delivery/graphql/**",
+        "backend/services/event-management/graphql/**",
+        "backend/services/event-processing/graphql/**",
+    ], [], "scenarioverify/documents_test.go:21"),
     ("backend/sims/dc-simulator", "updater", ["backend/core/ota/testdata/**"], [], "updater/*_test.go"),
     ("backend/tools/apiprobe", ".", [SDL], [], "baseline_test.go, readsweep_test.go, documents_test.go"),
     ("backend/tools/docsgql", ".", ["docs/**", SDL], [], "docsgql_test.go:241"),
@@ -250,13 +298,13 @@ IN_MODULE = {
     ("backend/tools/redlines", "."): "temp fixtures only",
     ("examples/ota-device", "internal/testutil"): "runtime.Caller root is its own module",
     ("backend/core", "test/frontend"): "build-tagged `frontend`, so the go job never compiles it; the frontend job runs the same vitest suites",
-    ("backend/core", "core"): "\"..\" appears only in a comment about os.ReadDir",
     ("backend/core", "replication"): "\"..\" appears only in a comment",
     ("backend/core", "webhooksig"): "\"..\" is a refused path segment",
     ("backend/k8s", "api/v1beta1"): "reads ../../config/crd inside backend/k8s",
     ("backend/services/command-delivery", "processor"): "reads ../contract inside its own module",
     ("backend/services/event-processing", "internal/review"): "reads ../replayinput inside its own module",
     ("backend/services/device-management", "graphql"): "\"../x\" is a refused-key fixture",
+    ("backend/services/outbound-connectors", "connectorspec"): "\"..\" is a refused template path segment",
     ("backend/services/outbound-connectors", "lpwan"): "\"../etc/passwd\" and \"../x\" are refused-id fixtures",
     ("deploy", "."):"\"../modules/<x>\" appears only in comments; the embed is in-module",
 }
@@ -269,7 +317,12 @@ IN_MODULE = {
 SPLITS = {
     "backend/core": {"messaging": 3},
     "backend/services/device-management": {"processor": 3, "model": 2},
-    "backend/cli": {"bootstrap": 2},
+    # 3, not 2: on run 43972121210 the two bootstrap shards took 20.5 and 18.9 min (2.8 min of each is
+    # the `go test -list` compile), the longest legs of the run. A third shard costs one more setup
+    # (~3 min) and brings each to ~13-16 min, under integration (core) at 20.1. device-management's
+    # processor stays at 3: its slow shard (19.3 min) carries one ~350 s test that round-robin cannot
+    # split, so a fourth shard would buy ~1 min on a leg that is not the critical path.
+    "backend/cli": {"bootstrap": 3},
     "backend/services/user-management": {"identity": 2},
     "backend/services/event-processing": {"internal/detect/core": 2},
 }
@@ -326,10 +379,12 @@ def pkg_arg(p):
 # The workspace: module dirs (repo-relative) and the reverse require graph.
 # ---------------------------------------------------------------------------------------------
 class Workspace:
-    def __init__(self, dirs, requires):
-        """dirs: list of module dirs. requires: {dir: set of dirs it requires (workspace only)}."""
+    def __init__(self, dirs, requires, modpaths=None):
+        """dirs: list of module dirs. requires: {dir: set of dirs it requires (workspace only)}.
+        modpaths: {module path: dir}, needed only by the package import graph."""
         self.dirs = sorted(dirs)
         self.requires = requires
+        self.modpaths = modpaths or {}
         self.rdeps = {d: set() for d in self.dirs}
         for d, reqs in requires.items():
             for r in reqs:
@@ -367,7 +422,125 @@ def load_workspace(dirs=None):
         paths[doc["Module"]["Path"]] = d
         reqs[d] = [r["Path"] for r in (doc.get("Require") or [])]
     requires = {d: {paths[p] for p in rs if p in paths} for d, rs in reqs.items()}
-    return Workspace(dirs, requires)
+    return Workspace(dirs, requires, paths)
+
+
+# ---------------------------------------------------------------------------------------------
+# The package import graph, for the jobs that run a FEW packages rather than whole modules.
+# ---------------------------------------------------------------------------------------------
+# The `migrations` jobs build and run three roots (MIGRATION_ROOTS below) and nothing else of
+# Go. Which files can change their result is therefore the set of workspace PACKAGES those roots
+# import, transitively, plus everything those packages embed. A module-level answer would be
+# far too wide here: migrationdiff requires most of the workspace's modules but imports a few
+# packages of each (a service's schema or model package, core's rdb), so it is the package graph
+# that decides.
+#
+# The graph is read from the source with no Go toolchain and no network, which is what lets
+# `discover` compute it before anything is downloaded. It deliberately OVER-approximates:
+# every file's imports count whatever its build tags, so a tag-gated import can only add an
+# edge, never lose one. `migration-deps` cross-checks the result against `go list -deps -test`
+# in the migrations job itself, where the module cache is warm, so an edge this parser cannot
+# see fails that job instead of silently narrowing the selection.
+_IMPORT_HEADER_END = re.compile(r"^(?:func|var|type|const)\b", re.M)
+_IMPORT_BLOCK = re.compile(r"^import\s*\((.*?)\)", re.M | re.S)
+_IMPORT_LINE = re.compile(r'^import\s+(?:[\w.]+\s+)?"([^"]+)"', re.M)
+_IMPORT_SPEC = re.compile(r'(?:^|\n)\s*(?:[\w.]+\s+)?"([^"]+)"')
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+_LINE_COMMENT = re.compile(r"//[^\n]*")
+
+
+def go_imports(text):
+    """The import paths of one Go file. Comments are stripped first, so a commented-out import
+    is not counted; the header ends at the first top-level declaration, as Go requires."""
+    text = _LINE_COMMENT.sub("", _BLOCK_COMMENT.sub("", text))
+    m = _IMPORT_HEADER_END.search(text)
+    head = text[:m.start()] if m else text
+    out = set(_IMPORT_LINE.findall(head))
+    for block in _IMPORT_BLOCK.findall(head):
+        out.update(_IMPORT_SPEC.findall(block))
+    return out
+
+
+class PackageGraph:
+    """Workspace packages by repo-relative dir: {dir: (imports, test_imports)}, both as dirs."""
+
+    def __init__(self, ws, root=ROOT):
+        self.ws = ws
+        self.pkgs = {}
+        self.missing = set()  # workspace imports with no package in the tree, from the last closure()
+        bypath = sorted(ws.modpaths.items(), key=lambda kv: -len(kv[0]))
+
+        def resolve(imp):
+            for mp, d in bypath:
+                if imp == mp:
+                    return d
+                if imp.startswith(mp + "/"):
+                    return d + "/" + imp[len(mp) + 1:]
+            return None
+
+        for module in ws.dirs:
+            base = os.path.join(root, module)
+            for dirpath, dirnames, filenames in os.walk(base):
+                rel = os.path.relpath(dirpath, base).replace("\\", "/")
+                if rel != "." and os.path.exists(os.path.join(dirpath, "go.mod")):
+                    dirnames[:] = []
+                    continue
+                # The go command ignores testdata, vendor and dirs starting with "." or "_".
+                dirnames[:] = [d for d in dirnames if not d.startswith((".", "_")) and d not in ("testdata", "vendor", "node_modules")]
+                gofiles = [n for n in filenames if n.endswith(".go")]
+                if not gofiles:
+                    continue
+                pkg = module if rel == "." else module + "/" + rel
+                imps, timps = set(), set()
+                for n in gofiles:
+                    with open(os.path.join(dirpath, n), encoding="utf-8", errors="replace") as fh:
+                        found = {r for r in (resolve(i) for i in go_imports(fh.read())) if r}
+                    (timps if n.endswith("_test.go") else imps).update(found)
+                self.pkgs[pkg] = (imps, timps)
+
+    def closure(self, roots):
+        """roots: [(dir, recursive)]. Every package the roots' test binaries compile: the roots
+        with their test imports, then everything reachable through ordinary imports."""
+        start = set()
+        self.missing = set()
+        for d, recursive, *_ in roots:
+            for p in self.pkgs:
+                if p == d or (recursive and p.startswith(d + "/")):
+                    start.add(p)
+            if not any(p == d or (recursive and p.startswith(d + "/")) for p in self.pkgs):
+                raise RuntimeError("root %s has no Go package" % d)
+        out, todo = set(), []
+        for p in start:
+            out.add(p)
+            todo.extend(self.pkgs[p][0] | self.pkgs[p][1])
+        while todo:
+            p = todo.pop()
+            if p in out:
+                continue
+            if p not in self.pkgs:
+                self.missing.add(p)
+                continue
+            out.add(p)
+            todo.extend(self.pkgs[p][0])
+        return out
+
+    def hits(self, path, closure):
+        """Can a change to `path` change what a package in `closure` compiles or embeds?
+        A .go file in a package dir belongs to that package. Anything else (an embedded asset,
+        a testdata file, a .go file go ignores) counts for EVERY package above it in its module,
+        which over-approximates embedding and fixture reads rather than guessing at them."""
+        owner = self.ws.owner(path)
+        if not owner:
+            return False
+        d = os.path.dirname(path)
+        if path.endswith(".go") and d in self.pkgs:
+            return d in closure
+        while True:
+            if d in closure:
+                return True
+            if d == owner or "/" not in d:
+                return False
+            d = os.path.dirname(d)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -383,6 +556,14 @@ class Selection:
         self.readers = {}          # module -> {pkg: why}
         self.frontend = True
         self.frontend_why = ""
+        self.migrations = True
+        self.migrations_why = "runs: everything runs"
+        self.draft = False
+        # The race step's scope on a pull request: {module: set of package dirs to race}, a module
+        # missing from it racing nothing; None races every leg in full. See race_select.
+        self.race = None
+        self.race_full = {}        # module -> why its legs race in full anyway (doubt)
+        self.race_why = "full: everything runs"
 
     def everything(self, why):
         self.full = True
@@ -411,10 +592,267 @@ FRONTEND_INPUTS = [
     "package.json",
     "package-lock.json",
 ]
-FRONTEND_INERT = ["backend/**", "deploy/**", "docs/**", "examples/**", "sdks/**", "demos/**", "_legacy/**", "*.md", "LICENSE", "NOTICE"]
+# ---------------------------------------------------------------------------------------------
+# The `migrations` and `migrations-timescaledb-next` jobs: what they run, so what can change them.
+# ---------------------------------------------------------------------------------------------
+# Both jobs run hack/migration-diff.sh verify, and that script runs exactly these Go roots
+# against a real TimescaleDB (see the script for each):
+#   - backend/tools/migrationdiff: `go run .` (verify, coverage, replay) and
+#     `go test -tags integration ./...` (the tenant-purge drill);
+#   - backend/core ./rdb/...: the guest-connection integration suite;
+#   - backend/cli ./bootstrap: dcctl's per-instance database suite (`-run` filtered, but the whole
+#     package's test binary is compiled, so the whole package is an input).
+# (dir, recursive, readers). A change runs the jobs when it reaches a package these roots compile,
+# or when it matches a READERS row of a package whose tests they RUN (readers=True): those tests
+# read files no import edge shows (core/rdb/partialupdatetest parses every service's model source).
+# cli/bootstrap is False on purpose: the script runs it with -run 'InstanceDatabase|Provisioner|
+# ADropBlockedByASuperuserSession', and the files holding those tests (instancedb*_test.go,
+# objectstore_storage_class_test.go) read nothing outside the module (none is in
+# hack/ci-select-escapes.txt); its READERS row is for the package's OTHER tests.
+MIGRATION_ROOTS = [
+    ("backend/tools/migrationdiff", True, True),
+    ("backend/core/rdb", True, True),
+    ("backend/cli/bootstrap", False, False),
+]
+# Non-Go inputs the jobs read directly: the operand image they build and launch
+# (deploy/images/timescaledb/build.sh, standalone.sh). hack/** (migration-diff.sh,
+# check-duplicate-indexes.sh, docker-pull.sh, go-mod-download.sh), .github/**, go.work and every
+# go.mod/go.sum already run everything, so they need no row here.
+MIGRATION_INPUTS = ["deploy/images/timescaledb/**"]
+
+# ---------------------------------------------------------------------------------------------
+# The `image-smoke` legs: one ko build per image module, so what can change one.
+# ---------------------------------------------------------------------------------------------
+# An image is built from its module's Go code and from the workspace modules it requires, so a leg
+# runs when its module is in the whole-module set `select` computes (changed, or requiring a
+# changed module, transitively); a full selection runs every leg. Dependency versions (go.work,
+# go.work.sum, any go.mod/go.sum), the workflow and hack/ (ko-build.sh, the broker smoke scripts)
+# already run everything. ko reads nothing else from a module's own tree that `go build` would not
+# (embeds cannot leave the module), so the only other inputs are these, read by a leg's steps:
+#   - .ko.yaml: the pinned base of EVERY image (hack/ko-build.sh points ko at it);
+#   - backend/k8s runs hack/check-ko-base-used.sh, which scans .github/, hack/, deploy/ and
+#     backend/cli for a ko call that bypasses the wrapper (non-test files);
+#   - backend/services/user-management execs the binary named in backend/cli/bootstrap/breakglass.go.
+# (module, [globs], [excluded globs]); module "*" is every leg.
+SMOKE_INPUTS = [
+    ("*", [".ko.yaml"], []),
+    ("backend/k8s", ["deploy/**", "backend/cli/**"], ["**/*_test.go"]),
+    ("backend/services/user-management", ["backend/cli/bootstrap/breakglass.go"], []),
+]
 
 
-def select(ws, changed_files):
+def smoke_select(s, files, smoke_all):
+    """(legs, {module: why}). Every leg on a full selection; otherwise a leg whose module runs whole,
+    or that a SMOKE_INPUTS row names for a changed file."""
+    if s.full:
+        return list(smoke_all), {m: "everything runs" for m in smoke_all}
+    why = {}
+    for m in smoke_all:
+        if m in s.modules:
+            why[m] = s.via.get(m, "its module runs")
+            continue
+        for module, globs, excl in SMOKE_INPUTS:
+            if module not in ("*", m):
+                continue
+            hit = next((f for f in files if match(f, globs) and not match(f, excl)), None)
+            if hit:
+                why[m] = "%s is an input of its image build" % hit
+                break
+    return [m for m in smoke_all if m in why], why
+
+
+# ---------------------------------------------------------------------------------------------
+# Go build-cache groups: which actions/cache entry a leg restores, and which ONE leg saves it.
+# ---------------------------------------------------------------------------------------------
+# The repository cache is 10 GB, shared by every workflow. One entry per module (39 of them, a
+# measured 16.6 GB of main-saved entries with the module cache included) cannot fit, and an
+# over-full cache evicts continuously, which is how the hit rate fell to 27%. Modules that share
+# a dependency stack share one entry instead: the build cache is content-addressed, so a service
+# restoring the entry device-management saved reuses every compiled package they have in common
+# (core and the whole third-party stack) and compiles only what is its own. Each group is SAVED
+# by exactly one leg, the static leg of its saver, and only on a push to main (ci.yml), so no
+# two legs race for a write-once key and no pull request writes an entry another cannot read.
+# (group, saver module, [module globs]); the first group whose glob matches a module is its group.
+#
+# The groups of their own are the modules whose dependency stacks nothing else shares (helm and
+# client-go, controller-runtime, kafka and the AWS SDK, the simulator's, the tools' and the edge
+# agent's), so restoring the core or services entry would leave most of their build cold. Budget,
+# from the entries main saved on run 44046620451 (module cache included) scaled by the ~58% that
+# is build cache (device-state's module cache measured ~290 MB of its 683 MB entry): cli ~0.8 GB,
+# k8s ~0.6, services ~0.4, outbound-connectors ~0.4, drdrill ~0.35, core ~0.3, simulator ~0.3,
+# migrationdiff ~0.3, apiprobe ~0.25, edge agent ~0.2, ota-device ~0.15: about 4 GB, so the new
+# generation a dependency bump creates fits beside the old one until LRU evicts it.
+# Split shards get no key of their own: a shard is race-bound, and a hit measured ~0 minutes there.
+CACHE_GROUPS = [
+    ("cli", "backend/cli", ["backend/cli"]),
+    ("k8s", "backend/k8s", ["backend/k8s"]),
+    ("outbound-connectors", "backend/services/outbound-connectors", ["backend/services/outbound-connectors"]),
+    ("services", "backend/services/device-management", ["backend/services/*"]),
+    ("dc-simulator", "backend/sims/dc-simulator", ["backend/sims/dc-simulator"]),
+    ("migrationdiff", "backend/tools/migrationdiff", ["backend/tools/migrationdiff"]),
+    ("drdrill", "backend/tools/drdrill", ["backend/tools/drdrill"]),
+    ("apiprobe", "backend/tools/apiprobe", ["backend/tools/apiprobe"]),
+    ("dc-edge-agent", "backend/edge/dc-edge-agent", ["backend/edge/dc-edge-agent"]),
+    ("ota-device", "examples/ota-device", ["examples/ota-device"]),
+    ("core", "backend/core", ["*", "*/*", "*/*/*", "*/*/*/*"]),
+]
+
+
+def cache_group(module):
+    for name, saver, globs in CACHE_GROUPS:
+        if match(module, globs):
+            return name, saver
+    raise RuntimeError("no cache group for %s" % module)
+
+
+FRONTEND_INERT = ["backend/**","deploy/**", "docs/**", "examples/**", "sdks/**", "demos/**", "_legacy/**", "*.md", "LICENSE", "NOTICE"]
+
+
+def migrations_verdict(s, files, graph):
+    """Sets s.migrations. A full selection always runs them; otherwise a changed file must reach
+    a package MIGRATION_ROOTS compile, or be one of MIGRATION_INPUTS."""
+    if s.full:
+        s.migrations, s.migrations_why = True, "runs: everything runs"
+        return
+    if graph is None:
+        s.migrations, s.migrations_why = True, "runs: no package graph to decide from"
+        return
+    closure = graph.closure(MIGRATION_ROOTS)
+    if graph.missing:
+        # An import of a workspace package that has no Go file left: the change deleted it, and a
+        # build of the roots would now fail. "Cannot tell" runs the jobs.
+        s.migrations, s.migrations_why = True, "runs: the roots import %s, which has no Go file in this tree" % sorted(graph.missing)[0]
+        return
+    readers = []
+    for module, pkg, globs, excl, why in READERS:
+        d = module if norm_pkg(pkg) == "." else module + "/" + norm_pkg(pkg)
+        for root, recursive, use_readers in MIGRATION_ROOTS:
+            if use_readers and (d == root or (recursive and d.startswith(root + "/"))):
+                readers.append((globs, excl, "%s (%s)" % (d, why)))
+    for f in files:
+        for globs, excl, who in readers:
+            if match(f, globs) and not match(f, excl):
+                s.migrations, s.migrations_why = True, "runs: %s is read by %s, whose tests these jobs run" % (f, who)
+                return
+        if match(f, MIGRATION_INPUTS):
+            s.migrations, s.migrations_why = True, "runs: %s is an input of migration-diff.sh" % f
+            return
+        if graph.hits(f, closure):
+            s.migrations, s.migrations_why = True, "runs: %s is in a package the migration roots compile" % f
+            return
+    s.migrations = False
+    s.migrations_why = "skipped: no changed file reaches the %d packages migration-diff.sh compiles, or its operand image" % len(closure)
+
+
+# ---------------------------------------------------------------------------------------------
+# The race step on a pull request: which packages it covers
+# ---------------------------------------------------------------------------------------------
+# The race detector was 59% of every Go leg's minutes, and on pull requests only 21% of those
+# minutes were in a module with a changed Go file at all: a change to core raced every module that
+# requires it, whole, on every pull request. On a pull request the race step therefore covers
+# only the packages that hold a changed file and the packages that DIRECTLY import one of them
+# (through their code or their tests), across modules. The plain `go test` step is untouched: it
+# still runs every package of every selected leg. Every other event races everything, and the
+# main run is the net for a race this narrower scope does not reach.
+#
+# 🔴 WHY ONE LEVEL OF IMPORTERS AND NOT THE CLOSURE. Replayed over 80 merged pull requests (70
+# of them narrowable) with the measured per-leg race minutes, direct importers cut the race minutes
+# by at least 30% (partial legs at full cost; ~42% scaling them by the share of packages raced),
+# and the full reverse-import closure by at least 23% (~32%): the closure of a core package reaches
+# most of the workspace. A race lives in code that runs
+# concurrently, and the tests most likely to drive a changed package's code concurrently are its
+# own and those of the packages written against its API, its direct importers. A race reachable
+# only through a deeper chain surfaces on main's full run instead: that is the tradeoff the
+# maintainer accepted, for this step only. Widening to the closure is a change to race_select's
+# importer loop alone.
+#
+# A package whose tests READ a changed file through a READERS row races too, wherever it sits.
+#
+# FAIL SAFE, per module: a changed non-Go file (an embed, a fixture, a golden file, a Go file
+# under testdata/) races its module in full, because any package of the module can read it
+# through a relative path no graph records; so does a Go file in a directory that is no package
+# of this tree (a package was deleted or moved). A full selection, no package graph, or any
+# exception in here races everything.
+_IGNORED_DIR = re.compile(r"(^|/)(testdata|vendor|node_modules)(/|$)|(^|/)[._][^/]*(/|$)")
+
+
+def race_select(ws, s, files, graph):
+    """Sets s.race ({module: set of package dirs}, or None for everything) and s.race_full."""
+    s.race, s.race_full = None, {}
+    if s.full:
+        s.race_why = "full: everything runs"
+        return
+    if graph is None:
+        s.race_why = "full: no package graph to decide from"
+        return
+    try:
+        changed = set()
+        readers = set()
+        for f in files:
+            # A package whose tests READ the file (a READERS row) races, whether or not its module
+            # runs whole and whatever leg (a shard included) carries it: no import edge shows it.
+            for module, pkg, globs, excl, _ in READERS:
+                if match(f, globs) and not match(f, excl):
+                    readers.add(module if norm_pkg(pkg) == "." else module + "/" + norm_pkg(pkg))
+            owner = ws.owner(f)
+            if not owner:
+                continue
+            d = os.path.dirname(f)
+            if not f.endswith(".go") or _IGNORED_DIR.search("" if d == owner else os.path.relpath(d, owner).replace("\\", "/") + "/"):
+                # A non-Go file (or a Go file go ignores, under testdata/ and the like): an embed,
+                # a fixture or a golden file can be read by ANY package of its module, through a
+                # relative path no graph records (dc-edge-agent's agent tests read ../dashboards).
+                s.race_full.setdefault(owner, "%s is not Go source, and no graph says which tests read it" % f)
+                continue
+            if d not in graph.pkgs:
+                s.race_full.setdefault(owner, "%s is in no package of this tree (a deleted or moved package?)" % f)
+                continue
+            changed.add(d)
+        importers = set()
+        for p, (imps, timps) in graph.pkgs.items():
+            if changed & (imps | timps):
+                importers.add(p)
+        race = {}
+        for p in changed | importers | readers:
+            m = ws.owner(p)
+            if m:
+                race.setdefault(m, set()).add(p)
+        s.race = race
+        s.race_changed = changed
+        s.race_why = "changed: %d changed package(s), %d direct importer(s), %d reader package(s), in %d module(s); %d module(s) in full" % (
+            len(changed), len(importers - changed), len(readers - changed - importers), len(race), len(s.race_full))
+    except Exception as e:  # noqa: BLE001 - doubt races everything
+        s.race, s.race_full = None, {}
+        s.race_why = "full: the race selection failed (%s: %s)" % (type(e).__name__, e)
+
+
+def apply_race(s, go):
+    """Annotate each go leg with race_scope (all | changed | none) and race_pkgs."""
+    for leg in go:
+        leg["race_scope"], leg["race_pkgs"] = "all", ""
+        if s.race is None or s.full:
+            continue
+        m = leg["module"]
+        if m in s.race_full or leg["leg"] == "readers":
+            # Doubt, or a reader leg: its packages were selected because a file their tests read
+            # changed, which no import edge describes. Its packages are few; race them all.
+            continue
+        mine = s.race.get(m, set())
+        rel = {"." if p == m else os.path.relpath(p, m).replace("\\", "/") for p in mine}
+        if leg["shard"]:
+            # A shard runs one split package (its share of the tests): all of it, or none.
+            if leg["pkgs"] not in {pkg_arg(r) for r in rel}:
+                leg["race_scope"] = "none"
+            continue
+        split = {norm_pkg(p) for p in SPLITS.get(m, {})}
+        want = sorted(r for r in rel if r not in split)
+        if not want:
+            leg["race_scope"] = "none"
+        else:
+            leg["race_scope"], leg["race_pkgs"] = "changed", " ".join(pkg_arg(r) for r in want)
+
+
+def select(ws, changed_files, graph=None):
     s = Selection()
     files = [f.strip().replace("\\", "/") for f in changed_files if f.strip()]
     if not files:
@@ -453,7 +891,184 @@ def select(ws, changed_files):
     for m in list(s.readers):
         if m in whole:
             del s.readers[m]
+    migrations_verdict(s, files, graph)
+    race_select(ws, s, files, graph)
     return s
+
+
+# ---------------------------------------------------------------------------------------------
+# CodeQL: which modules the Go analysis builds on a pull request
+# ---------------------------------------------------------------------------------------------
+# Go extraction is tracer-based: CodeQL analyzes what the build compiles, and building a module
+# compiles every workspace package it imports. So the analysis of a changed package needs its
+# module built (its imports come with it) AND every module that requires it, transitively,
+# because a taint path can start in a caller: a request handler in a service flowing into a
+# changed sink in core. That is exactly the reverse-require closure `select` already computes.
+#
+# Only Go SOURCE matters to the Go analysis, so the seeds are the owners of changed .go files.
+# Everything is analyzed when the inputs of the analysis itself change: dependency versions
+# (go.work, go.work.sum, any go.mod/go.sum), the workflow and the scripts it runs, or a .go file
+# outside every module (unknown, so assumed to matter). Push, schedule and dispatch are never
+# narrowed: those runs are what keep main's code-scanning state whole-repository.
+CODEQL_FULL = [
+    "go.work",
+    "go.work.sum",
+    "**/go.mod",
+    "**/go.sum",
+    ".github/workflows/codeql.yml",
+    "hack/ci-select.py",
+    "hack/go-mod-download.sh",
+]
+
+
+def codeql_select(ws, files, graph=None):
+    """(modules, packages, reasons). packages is {module: [package args]} naming exactly what to
+    build, or None to build every selected module whole (./...). Every module, whole, when the
+    analysis must cover everything."""
+    files = [f.strip().replace("\\", "/") for f in files if f.strip()]
+    if not files:
+        return list(ws.dirs), None, ["the diff is empty, so there is nothing to select from"]
+    full, seeds, pkg_seeds = [], {}, {}
+    for f in files:
+        if match(f, CODEQL_FULL):
+            full.append("%s changed (a dependency version or the analysis itself)" % f)
+        elif f.endswith(".go"):
+            owner = ws.owner(f)
+            if owner:
+                seeds.setdefault(owner, f)
+                d = os.path.dirname(f)
+                if graph is not None:
+                    if d in graph.pkgs:
+                        pkg_seeds.setdefault(d, f)
+                    elif not re.search(r"(^|/)(testdata|vendor)(/|$)|(^|/)[._][^/]*/", d + "/"):
+                        # A Go file in a directory that is no longer a package: a package was
+                        # deleted. Its importers changed too, but "cannot tell" analyzes everything.
+                        full.append("%s is in no package of this tree (a deleted package?)" % f)
+            elif not match(f, ["_legacy/**"]):
+                full.append("%s is a Go file outside every workspace module" % f)
+    if full:
+        return list(ws.dirs), None, full
+    if not seeds:
+        # The workflow only triggers on Go-shaped changes, so reaching here with no module to
+        # build means something unforeseen. An unknown selection is never an empty one.
+        return list(ws.dirs), None, ["no changed Go file is in a workspace module, which the trigger should not allow"]
+    if graph is None:
+        # No package graph: the module-level answer. The callers are the reverse-require closure;
+        # 🔴 AND EVERYTHING THOSE REQUIRE, because compiling an imported module is NOT extracting
+        # it — the Go extractor extracts bodies only for the packages it was asked to build.
+        callers = ws.closure(seeds)
+        mods, todo = set(), list(callers)
+        while todo:
+            m = todo.pop()
+            if m not in mods:
+                mods.add(m)
+                todo.extend(ws.requires.get(m, ()))
+        return [m for m in ws.dirs if m in mods], None, ["%s: %s" % (m, "changed: " + seeds[m] if m in seeds else "requires or is required by a changed module") for m in sorted(mods)]
+    # THE PACKAGE-LEVEL ANSWER. Every package that imports a changed one, transitively (the
+    # callers, up to every main that links it), and then every package those import (the
+    # callees, whose bodies a flow passes through). Every program that links a changed package
+    # is therefore built whole, and each package is named as a build target so its bodies are
+    # extracted rather than loaded for types. Only non-test imports count: `go build` compiles
+    # no test, so CodeQL never sees one. A change to test files alone selects the package itself.
+    rimports = {}
+    for p, (imps, _) in graph.pkgs.items():
+        for i in imps:
+            rimports.setdefault(i, set()).add(p)
+    callers, todo = set(), list(pkg_seeds)
+    while todo:
+        p = todo.pop()
+        if p not in callers:
+            callers.add(p)
+            todo.extend(rimports.get(p, ()))
+    build, todo = set(), list(callers)
+    graph.missing = set()
+    while todo:
+        p = todo.pop()
+        if p in build:
+            continue
+        if p not in graph.pkgs:
+            graph.missing.add(p)
+            continue
+        build.add(p)
+        todo.extend(graph.pkgs[p][0])
+    if graph.missing:
+        return list(ws.dirs), None, ["a selected package imports %s, which has no Go file in this tree" % sorted(graph.missing)[0]]
+    pkgs = {}
+    for p in sorted(build):
+        m = ws.owner(p)
+        rel = os.path.relpath(p, m).replace("\\", "/") if p != m else "."
+        pkgs.setdefault(m, []).append(pkg_arg(rel).rstrip("/") if rel != "." else ".")
+    why = ["%s: changed (%s)" % (p, pkg_seeds[p]) for p in sorted(pkg_seeds)]
+    why.append("%d packages import those, transitively; %d packages are built in all" % (len(callers) - len(pkg_seeds), len(build)))
+    return [m for m in ws.dirs if m in pkgs], pkgs, why
+
+
+def cmd_codeql():
+    """Prints one line per module to build on stdout, `<module dir><TAB><package args>`, where the
+    args are `./...` for the whole module. The reasoning goes to stderr."""
+    event = os.environ.get("GITHUB_EVENT_NAME", "")
+    ws = load_workspace()
+    pkgs = None
+    if event != "pull_request":
+        mods, why = list(ws.dirs), ["the event is %r: only a pull_request is narrowed" % event]
+    else:
+        try:
+            files = changed_files(os.environ["PR_BASE_SHA"], os.environ["PR_HEAD_SHA"])
+            print("changed files (%d):" % len(files), file=sys.stderr)
+            for f in files:
+                print("  " + f, file=sys.stderr)
+            mods, pkgs, why = codeql_select(ws, files, PackageGraph(ws))
+        except Exception as e:  # noqa: BLE001 - any failure to select means analyze everything
+            print("::warning::CodeQL module selection failed (%s: %s); analyzing everything" % (type(e).__name__, e), file=sys.stderr)
+            mods, pkgs, why = list(ws.dirs), None, ["the selection itself failed: %s" % e]
+    if not mods:
+        raise RuntimeError("selected no modules")
+    full = pkgs is None and sorted(mods) == sorted(ws.dirs)
+    if event != "pull_request" and not full:
+        raise RuntimeError("a %s run selected a subset" % event)
+    print("CODEQL: %s (%d of %d modules)" % ("every module, whole" if full else "a subset", len(mods), len(ws.dirs)), file=sys.stderr)
+    for w in why:
+        print("  " + w, file=sys.stderr)
+    for m in ws.dirs:
+        if m not in mods:
+            print("  SKIPPED  %s: no package in it imports, or is imported by an importer of, a changed package" % m, file=sys.stderr)
+    for m in mods:
+        print("%s	%s" % (m, "./..." if pkgs is None else " ".join(pkgs[m])))
+
+
+# ---------------------------------------------------------------------------------------------
+# migration-deps: the source-parsed closure must contain everything `go list` says is compiled
+# ---------------------------------------------------------------------------------------------
+def cmd_migration_deps():
+    ws = load_workspace()
+    graph = PackageGraph(ws)
+    mine = graph.closure(MIGRATION_ROOTS)
+    theirs = set()
+    for d, recursive, _ in MIGRATION_ROOTS:
+        owner = ws.owner(d)
+        rel = os.path.relpath(os.path.join(ROOT, d), os.path.join(ROOT, owner)).replace("\\", "/")
+        pattern = ("./" + rel + "/...") if recursive else ("./" + rel)
+        if rel == "." and recursive:
+            pattern = "./..."
+        out = subprocess.check_output(
+            ["go", "list", "-deps", "-test", "-tags", "integration", "-f", "{{if not .Standard}}{{.Dir}}{{end}}", pattern],
+            cwd=os.path.join(ROOT, owner), text=True)
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            rel = os.path.relpath(line, ROOT).replace("\\", "/")
+            if not rel.startswith("..") and ws.owner(rel):
+                theirs.add(rel)
+    if not theirs:
+        print("::error::go list reported no workspace package for the migration roots; this check examined nothing")
+        sys.exit(1)
+    missing = sorted(theirs - mine)
+    if missing:
+        for p in missing:
+            print("::error::the migrations jobs compile %s, but hack/ci-select.py's import graph does not reach it, so a change there would skip them" % p)
+        sys.exit(1)
+    print("migration roots: go list compiles %d workspace packages, all inside the %d the selection watches" % (len(theirs), len(mine)))
 
 
 def changed_files(base, head):
@@ -467,6 +1082,16 @@ def changed_files(base, head):
 # ---------------------------------------------------------------------------------------------
 def legs_for(module, pkgs=None):
     """pkgs None = the whole module (static checks + every package); otherwise just those packages."""
+    out = _legs_for(module, pkgs)
+    group, saver = cache_group(module)
+    for leg in out:
+        leg["cache_group"] = group
+        # The one leg that may save its group's entry (ci.yml saves only on a push to main).
+        leg["cache_save"] = bool(leg["static"] and module == saver)
+    return out
+
+
+def _legs_for(module, pkgs=None):
     splits = {norm_pkg(k): v for k, v in SPLITS.get(module, {}).items()}
     out = []
     if pkgs is None:
@@ -502,13 +1127,19 @@ def has_integration(module, pkg):
     return False
 
 
-def plan(ws, s, integration_plan):
+def plan(ws, s, integration_plan, smoke_all=(), files=()):
+    """(go legs, integration legs, smoke legs). A draft pull request plans none of the three: they
+    run when it is marked ready for review, and ci-complete fails a draft run (see ci.yml)."""
+    if s.draft:
+        s.smoke_why = {}
+        return [], [], []
     go = []
     for m in ws.dirs:
         if m in s.modules:
             go.extend(legs_for(m))
         elif m in s.readers:
             go.extend(legs_for(m, list(s.readers[m])))
+    apply_race(s, go)
     integ_modules = set(s.modules)
     for m, pkgs in s.readers.items():
         if any(has_integration(m, p) for p in pkgs):
@@ -522,12 +1153,17 @@ def plan(ws, s, integration_plan):
         if mods != leg["modules"].split():
             leg["modules"] = " ".join(mods)
             leg["cache"] = "\n".join("%s/go.mod\n%s/go.sum" % (x, x) for x in mods)
+        leg["cache_group"] = cache_group(mods[0])[0]
         integ.append(leg)
-    return go, integ
+    smoke, s.smoke_why = smoke_select(s, files, smoke_all)
+    return go, integ, smoke
 
 
-def report(ws, s, go, integ, integration_plan, out=sys.stderr):
+def report(ws, s, go, integ, integration_plan, smoke=(), smoke_all=(), out=sys.stderr):
     p = lambda *a: print(*a, file=out)
+    if s.draft:
+        p("DRAFT: the pull request is a draft, so the go, integration, image-smoke and migrations jobs")
+        p("  are not planned. They run when it is marked ready for review; until then ci-complete fails.")
     if s.full:
         p("SELECTION: everything runs")
         for r in s.reasons:
@@ -544,12 +1180,21 @@ def report(ws, s, go, integ, integration_plan, out=sys.stderr):
                 p("  SKIPPED  %-45s no changed file is in it, in a module it requires, or read by its tests" % m)
     p("go legs: %d" % len(go))
     for g in go:
-        p("  %-45s %-24s static=%s %s%s" % (g["module"], g["leg"] or "-", str(g["static"]).lower(), g["pkgs"] or "./...", (" minus " + g["exclude"]) if g["exclude"] else ""))
+        p("  %-45s %-24s static=%s %s%s  race=%s%s" % (g["module"], g["leg"] or "-", str(g["static"]).lower(), g["pkgs"] or "./...", (" minus " + g["exclude"]) if g["exclude"] else "",
+                                                      g.get("race_scope", "all"), (" " + g["race_pkgs"]) if g.get("race_pkgs") else ""))
+    p("race: " + s.race_why)
+    for m, why in sorted(s.race_full.items()):
+        p("  full     %-45s %s" % (m, why))
     kept = {l["name"] for l in integ}
     p("integration legs: %d of %d" % (len(integ), len(integration_plan)))
     for l in integration_plan:
         p("  %s %-20s %s" % ("run " if l["name"] in kept else "SKIP", l["name"], l["modules"]))
+    p("image-smoke legs: %d of %d" % (len(smoke), len(smoke_all)))
+    why = getattr(s, "smoke_why", {})
+    for m in smoke_all:
+        p("  %s %-45s %s" % ("run " if m in smoke else "SKIP", m, why.get(m, "its module does not run and no image input changed")))
     p("frontend: " + s.frontend_why)
+    p("migrations: " + s.migrations_why)
 
 
 def full_selection(ws, why):
@@ -577,17 +1222,42 @@ def cmd_plan():
                 print("  " + f, file=sys.stderr)
             if len(files) > 200:
                 print("  ... and %d more" % (len(files) - 200), file=sys.stderr)
-            s = select(ws, files)
+            s = select(ws, files, PackageGraph(ws))
         except Exception as e:  # noqa: BLE001 - any failure to select means run everything
             print("::warning::affected-module selection failed (%s: %s); running everything" % (type(e).__name__, e), file=sys.stderr)
             s = full_selection(ws, "the selection itself failed: %s" % e)
-    go, integ = plan(ws, s, integration_plan)
-    if s.full and len({g["module"] for g in go}) != len(ws.dirs):
+            files = []
+        # 🔴 A draft skips the heavy jobs, and only an explicit "true" makes one: anything else
+        # (missing, empty, malformed) runs them. ci-complete FAILS a draft run, so its green can
+        # never stand in for the heavy jobs once the pull request is marked ready.
+        if os.environ.get("PR_DRAFT", "") == "true":
+            mark_draft(s)
+    # The full image list, cross-checked against the tree in discover. Every leg off a pull request.
+    smoke_all = json.loads(os.environ["SMOKE_MODULES"])
+    if not smoke_all:
+        raise RuntimeError("SMOKE_MODULES is empty: no image module to plan from")
+    go, integ, smoke = plan(ws, s, integration_plan, smoke_all, files if event == "pull_request" else [])
+    if s.full and not s.draft and len({g["module"] for g in go}) != len(ws.dirs):
         raise RuntimeError("a full run planned %d modules of %d" % (len({g["module"] for g in go}), len(ws.dirs)))
-    if s.full and len(integ) != len(integration_plan):
+    if s.full and not s.draft and len(integ) != len(integration_plan):
         raise RuntimeError("a full run planned %d integration legs of %d" % (len(integ), len(integration_plan)))
-    report(ws, s, go, integ, integration_plan)
-    print(json.dumps({"go": go, "integration": integ, "frontend": s.frontend, "full": s.full}, separators=(",", ":")))
+    if s.full and not s.draft and smoke != smoke_all:
+        raise RuntimeError("a full run planned %d image-smoke legs of %d" % (len(smoke), len(smoke_all)))
+    if (s.full or event != "pull_request") and any(g["race_scope"] != "all" for g in go):
+        raise RuntimeError("a %s run narrowed the race step" % ("full" if s.full else event))
+    if event != "pull_request" and s.draft:
+        raise RuntimeError("a %s run was planned as a draft" % event)
+    report(ws, s, go, integ, integration_plan, smoke, smoke_all)
+    if s.full and not s.draft and not s.migrations:
+        raise RuntimeError("a full run skipped the migrations jobs")
+    print(json.dumps({"go": go, "integration": integ, "smoke": smoke, "frontend": s.frontend, "migrations": s.migrations,
+                      "full": s.full, "draft": s.draft}, separators=(",", ":")))
+
+
+def mark_draft(s):
+    """A draft pull request: plan none of the heavy jobs (go, integration, image-smoke, migrations)."""
+    s.draft = True
+    s.migrations, s.migrations_why = False, "skipped: the pull request is a draft (runs when it is marked ready)"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -613,6 +1283,22 @@ def cmd_check():
                 errs.append("SPLITS %s %s: no such package" % (module, pkg))
             if not (1 <= n <= 8):
                 errs.append("SPLITS %s %s: shard count %d out of range" % (module, pkg, n))
+
+    # Every module has a cache group, and every group's saver is a workspace module in that group:
+    # a saver that left the workspace would leave its group never saved, silently.
+    for module in ws.dirs:
+        try:
+            cache_group(module)
+        except RuntimeError as e:
+            errs.append(str(e))
+    for name, saver, _ in CACHE_GROUPS:
+        if saver not in ws.dirs:
+            errs.append("CACHE_GROUPS %s: saver %s is not a workspace module" % (name, saver))
+        elif cache_group(saver)[0] != name:
+            errs.append("CACHE_GROUPS %s: saver %s belongs to group %s" % (name, saver, cache_group(saver)[0]))
+    for module, _, _ in SMOKE_INPUTS:
+        if module != "*" and module not in ws.dirs:
+            errs.append("SMOKE_INPUTS names %s, which go.work does not declare" % module)
 
     def allowed(module, pkg):
         if (module, pkg) in declared:
@@ -697,12 +1383,18 @@ def cmd_check():
 # ---------------------------------------------------------------------------------------------
 def cmd_replay(shas):
     ws = load_workspace()
+    graph = PackageGraph(ws)
     integration_plan = json.loads(subprocess.check_output(["bash", os.path.join(ROOT, "hack", "integration-tests.sh"), "--matrix"], cwd=ROOT, text=True))
+    # The image list as discover builds it: every service with a main.go, plus the four fixed images.
+    smoke_all = sorted("backend/services/" + d for d in os.listdir(os.path.join(ROOT, "backend", "services"))
+                       if os.path.exists(os.path.join(ROOT, "backend", "services", d, "main.go")))
+    smoke_all += ["backend/k8s", "backend/edge/dc-edge-agent", "backend/admin/dc-broker-admin", "backend/broker/dc-nats-server"]
     for sha in shas:
         title = subprocess.check_output(["git", "log", "-1", "--format=%h %s", sha], cwd=ROOT, text=True).strip()
         files = changed_files(sha + "^", sha)
-        s = select(ws, files)
-        go, integ = plan(ws, s, integration_plan)
+        s = select(ws, files, graph)
+        go, integ, smoke = plan(ws, s, integration_plan, smoke_all, files)
+        cq, cqp, _ = codeql_select(ws, files, graph)
         print("=" * 100)
         print(title)
         print("changed files: %d (%s%s)" % (len(files), ", ".join(files[:4]), ", ..." if len(files) > 4 else ""))
@@ -713,6 +1405,13 @@ def cmd_replay(shas):
             print("  reader packages: %s" % (", ".join("%s:%s" % (m.split("/")[-1], ",".join(sorted(p))) for m, p in sorted(s.readers.items())) or "-"))
         print("  go legs: %d   integration legs: %d of %d (%s)   frontend: %s" % (
             len(go), len(integ), len(integration_plan), " ".join(l["name"] for l in integ) or "-", "run" if s.frontend else "skip"))
+        scopes = [g["race_scope"] for g in go]
+        print("  race: %s; legs all=%d changed=%d none=%d" % (s.race_why, scopes.count("all"), scopes.count("changed"), scopes.count("none")))
+        print("  image-smoke legs: %d of %d (%s)" % (len(smoke), len(smoke_all), " ".join(m.split("/")[-1] for m in smoke) or "-"))
+        print("  migrations: %s   codeql: %s" % (
+            "run" if s.migrations else "skip",
+            ("all %d modules" % len(cq)) if cqp is None and len(cq) == len(ws.dirs) else ("%d packages in %d modules (%s)" % (
+                sum(len(v) for v in (cqp or {}).values()) if cqp else -1, len(cq), " ".join(m.split("/")[-1] for m in cq)))))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -740,6 +1439,23 @@ def self_test():
         print(("  ok: " if cond else "  FAIL: ") + what)
         if not cond:
             fails.append(what)
+
+    print("==> repository reader regressions")
+    reader_ws = Workspace(
+        ["backend/cli", "backend/services/event-sources", "deploy"],
+        {"backend/cli": {"deploy"}, "backend/services/event-sources": set(), "deploy": set()},
+    )
+    for path, module, pkg in [
+        ("deploy/helm/devicechain/templates/mqtt-exposure.yaml", "backend/services/event-sources", "processor"),
+        ("deploy/helm/devicechain/templates/gateway.yaml", "backend/services/event-sources", "processor"),
+        ("README.md", "backend/cli", "bootstrap"),
+    ]:
+        s = select(reader_ws, [path])
+        expect(not s.full and pkg in s.readers.get(module, {}),
+               "%s alone selects %s/%s" % (path, module, pkg))
+        legs = plan(reader_ws, s, [])[0]
+        expect(any(leg["module"] == module and "./%s/" % pkg in leg["pkgs"].split() for leg in legs),
+               "%s alone plans the %s tests" % (path, pkg))
 
     saved = (READERS, SPLITS)
     READERS = [
@@ -790,25 +1506,254 @@ def self_test():
         expect(select(ws, ["backend/services/svc-a/graphql/schema.graphql"]).frontend, "a schema change runs frontend")
         expect(not select(ws, ["backend/core/x.go"]).frontend, "a core-only change skips frontend")
 
+        print("==> migrations (a package graph over a fake tree on disk)")
+        import tempfile
+        global MIGRATION_ROOTS
+        saved_roots = MIGRATION_ROOTS
+        ws.modpaths = {"example.com/core": "backend/core", "example.com/tool": "backend/tools/tool",
+                       "example.com/svc-a": "backend/services/svc-a", "example.com/svc-b": "backend/services/svc-b",
+                       "example.com/cli": "backend/cli", "example.com/deploy": "deploy"}
+        tree = {
+            # the root, recursive: rdb and rdb/sub
+            "backend/core/rdb/rdb.go": 'package rdb\n\nimport (\n\t"fmt"\n\tsn "example.com/core/sqlnull"\n)\n\nvar _ = fmt.Sprint\nvar _ = sn.X\n',
+            "backend/core/rdb/sub/sub.go": 'package sub\n',
+            # a root's TEST import is compiled into its test binary
+            "backend/core/rdb/rdb_test.go": 'package rdb_test\n\nimport _ "example.com/core/testonly"\n',
+            "backend/core/rdb/testdata/fixture.sql": "",
+            # sqlnull -> leaf: transitive
+            "backend/core/sqlnull/n.go": 'package sqlnull\n\nimport "example.com/core/leaf"\n\nvar X = leaf.Y\n',
+            "backend/core/leaf/l.go": 'package leaf\n\nvar Y = 1\n',
+            # a NON-root's test import is not compiled by anything the jobs run
+            "backend/core/sqlnull/n_test.go": 'package sqlnull\n\nimport _ "example.com/core/deep"\n',
+            "backend/core/deep/d.go": 'package deep\n',
+            "backend/core/testonly/t.go": 'package testonly\n',
+            # imported only from a comment, and not at all
+            "backend/core/messaging/m.go": 'package messaging\n\n// import "example.com/core/rdb"\n',
+            "backend/services/svc-a/x.go": 'package svca\n\n/* import "example.com/core/messaging" */\n',
+            "backend/tools/tool/main.go": 'package main\n\nimport "example.com/core/rdb/sub"\n\nfunc main() {}\n',
+            "backend/cli/cli.go": 'package cli\n',
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel, body in tree.items():
+                os.makedirs(os.path.join(tmp, os.path.dirname(rel)), exist_ok=True)
+                with open(os.path.join(tmp, rel), "w", encoding="utf-8") as fh:
+                    fh.write(body)
+            MIGRATION_ROOTS = [("backend/core/rdb", True, True), ("backend/tools/tool", True, True), ("backend/cli", False, False)]
+            try:
+                g = PackageGraph(ws, root=tmp)
+                expect(go_imports(tree["backend/core/rdb/rdb.go"]) == {"fmt", "example.com/core/sqlnull"},
+                       "an aliased import in a block is read: %s" % go_imports(tree["backend/core/rdb/rdb.go"]))
+                mig = lambda *fs: select(ws, list(fs), g).migrations
+                expect(mig("backend/core/leaf/l.go"), "a package the roots reach TRANSITIVELY runs the migrations jobs")
+                expect(mig("backend/core/testonly/t.go"), "a root's TEST import runs them")
+                expect(mig("backend/core/rdb/sub/sub.go"), "a package under a recursive root runs them")
+                expect(mig("backend/core/rdb/testdata/fixture.sql"), "a fixture under a root package runs them")
+                expect(mig("deploy/images/timescaledb/build.sh"), "the operand image runs them")
+                expect(mig("hack/migration-diff.sh"), "a full selection runs them")
+                expect(mig("backend/core/messaging/m.go", "backend/core/rdb/rdb.go"), "any one reaching file is enough")
+                # THE COUNTERWEIGHTS: "always run" passes every case above.
+                expect(not mig("backend/core/deep/d.go"), "a non-root's test import does NOT run them")
+                expect(not mig("backend/core/messaging/m.go"), "a package nothing imports (or imports in a comment) does NOT run them")
+                expect(not mig("docs/x.md", "frontend/a.ts"), "docs and frontend do NOT run them")
+                expect(select(ws, ["backend/core/leaf/l.go"]).migrations, "with no package graph, they run")
+                # READERS of a package whose tests the jobs RUN count; of one they only compile, not.
+                READERS.append(("backend/core", "rdb/sub", ["backend/services/*/model/*.go"], ["**/*_test.go"], "t"))
+                READERS.append(("backend/cli", ".", ["frontend/**"], [], "t"))
+                expect(mig("backend/services/svc-b/model/m.go"), "a file a run root package's tests READ runs them")
+                expect(not mig("backend/services/svc-b/model/m_test.go"), "...but not one its row excludes")
+                expect(not mig("frontend/a.ts"), "a reader row of a root whose tests are -run filtered does not")
+                # CodeQL at package level: the importers of a changed package (transitively) and
+                # everything they import, each named; nothing that neither calls nor is called.
+                cqp = lambda *fs: codeql_select(ws, list(fs), g)[1]
+                expect(cqp("backend/core/leaf/l.go") == {"backend/core": ["./leaf", "./rdb", "./sqlnull"]},
+                       "codeql builds a changed package, its transitive importers and their imports: %s" % cqp("backend/core/leaf/l.go"))
+                expect(cqp("backend/core/rdb/sub/sub.go") == {"backend/core": ["./rdb/sub"], "backend/tools/tool": ["."]},
+                       "...across modules, up to the main that links it: %s" % cqp("backend/core/rdb/sub/sub.go"))
+                expect(cqp("backend/services/svc-a/x.go") == {"backend/services/svc-a": ["."]}, "a package nothing imports builds alone")
+                expect(codeql_select(ws, ["backend/core/gone/x.go"], g)[1] is None, "a Go file in no package (deleted?) analyzes everything")
+                # THE RACE SCOPE on a pull request: changed packages plus their DIRECT importers,
+                # plus the packages whose tests read a changed file. One reader row, on a SPLIT
+                # package of a module that also runs whole, is all the race cases below see.
+                saved_readers = READERS
+                READERS = [("backend/core", "messaging", ["docs/nats.md"], [], "t"),
+                           ("backend/core", "leaf", ["docs/l*"], ["docs/lx.md"], "t")]
+                def race(*fs):
+                    sel = select(ws, list(fs), g)
+                    return None if sel.race is None else {m: sorted(v) for m, v in sel.race.items()}, sel.race_full
+                expect(race("backend/core/leaf/l.go") == ({"backend/core": ["backend/core/leaf", "backend/core/sqlnull"]}, {}),
+                       "a changed package races with its direct importer, not the importer's importers: %s" % (race("backend/core/leaf/l.go"),))
+                expect(race("backend/core/testonly/t.go")[0] == {"backend/core": ["backend/core/rdb", "backend/core/testonly"]},
+                       "an importer through its TESTS counts: %s" % (race("backend/core/testonly/t.go"),))
+                expect(race("backend/core/rdb/sub/sub.go")[0] == {"backend/core": ["backend/core/rdb/sub"], "backend/tools/tool": ["backend/tools/tool"]},
+                       "importers are followed across modules: %s" % (race("backend/core/rdb/sub/sub.go"),))
+                expect("backend/core" in race("backend/core/rdb/testdata/fixture.sql")[1],
+                       "a fixture races its module in full: any package may read it by a relative path")
+                expect(race("backend/core/rdb/testdata/gen.go")[1].get("backend/core", "").endswith("is not Go source, and no graph says which tests read it"),
+                       "so does a Go file go ignores (testdata), as an input rather than a deleted package")
+                expect(race("docs/ly.md")[0] == {"backend/core": ["backend/core/leaf"]} and race("docs/lx.md") == ({}, {}),
+                       "a reader row's exclusions hold for the race scope too")
+                expect("backend/core" in race("backend/core/rdb/schema.graphql")[1], "so does a non-Go file inside a package (an embed)")
+                expect(race("docs/nats.md") == ({"backend/core": ["backend/core/messaging"]}, {}),
+                       "a file a package's tests READ races that package: %s" % (race("docs/nats.md"),))
+                expect(race("docs/nats.md", "backend/core/leaf/l.go")[0] == {"backend/core": ["backend/core/leaf", "backend/core/messaging", "backend/core/sqlnull"]},
+                       "...also when its module runs whole for another change")
+                expect(race("backend/core/deep/d_test.go")[0] == {"backend/core": ["backend/core/deep", "backend/core/sqlnull"]},
+                       "a changed test file races its package and the packages whose tests import it")
+                expect(race("docs/x.md", "frontend/a.ts") == ({}, {}), "a change outside every module that no package reads races nothing")
+                expect(race("backend/core/gone/x.go")[1].get("backend/core", "").startswith("backend/core/gone/x.go is in no package"),
+                       "a Go file in no package (deleted?) races its module in full: %s" % (race("backend/core/gone/x.go")[1],))
+                expect("backend/core" in race("backend/core/NOTES.txt")[1], "a module-level non-Go file races its module in full")
+                expect(race("hack/x.sh") == (None, {}), "a full selection races everything")
+                expect(select(ws, ["backend/core/leaf/l.go"]).race is None, "no package graph races everything")
+                # Each layer refuses a narrowed full run on its own, not only through the other.
+                full = full_selection(ws, "push")
+                race_select(ws, full, ["backend/core/leaf/l.go"], g)
+                expect(full.race is None, "race_select on a full selection races everything, whatever changed")
+                full.race = {}
+                expect(all(x["race_scope"] == "all" for x in plan(ws, full, [])[0]), "apply_race never narrows a full selection")
+                broken = select(ws, ["backend/core/leaf/l.go"], g)
+                race_select(ws, broken, ["backend/core/leaf/l.go"], object())  # a graph that raises
+                expect(broken.race is None and broken.race_why.startswith("full: the race selection failed"),
+                       "a race selection that raises races everything: %s" % broken.race_why)
+                SPLITS = {"backend/core": {"messaging": 3}}
+                sc = {(x["module"], x["leg"]): x["race_scope"] for x in plan(ws, select(ws, ["docs/nats.md", "backend/core/leaf/l.go"], g), [])[0]}
+                expect([sc[("backend/core", "messaging %d/3" % i)] for i in (1, 2, 3)] == ["all"] * 3,
+                       "the shards of a split READER package race when a file it reads changes: %s" % sc)
+                def scopes(*fs):
+                    go_, _, _ = plan(ws, select(ws, list(fs), g), [])
+                    return {(x["module"], x["leg"]): (x["race_scope"], x["race_pkgs"]) for x in go_}
+                sc = scopes("backend/core/messaging/m.go")
+                expect([sc[("backend/core", "messaging %d/3" % i)][0] for i in (1, 2, 3)] == ["all"] * 3 and sc[("backend/core", "rest")] == ("none", ""),
+                       "a changed split package races every shard of it and not the catch-all: %s" % sc)
+                expect(sc[("backend/services/svc-a", "")] == ("none", "") and sc[("backend/cli", "")] == ("none", ""),
+                       "a module selected only for REQUIRING a changed one races nothing: %s" % sc)
+                sc = scopes("backend/core/leaf/l.go")
+                expect([sc[("backend/core", "messaging %d/3" % i)][0] for i in (1, 2, 3)] == ["none"] * 3
+                       and sc[("backend/core", "rest")] == ("changed", "./leaf/ ./sqlnull/"),
+                       "the catch-all races exactly the changed packages and their importers, minus the split ones: %s" % sc)
+                sc = scopes("backend/services/svc-a/x.go")
+                expect(sc[("backend/services/svc-a", "")] == ("changed", ".") and sc[("backend/services/svc-b", "")] == ("none", ""),
+                       "a module-root package races as '.', and its dependant module, importing nothing of it, races nothing: %s" % sc)
+                sc = scopes("backend/core/gone/x.go", "backend/services/svc-a/x.go")
+                expect(all(v == ("all", "") for (m, _), v in sc.items() if m == "backend/core") and sc[("backend/services/svc-a", "")] == ("changed", "."),
+                       "doubt is per module: core races in full, svc-a only what changed: %s" % sc)
+                READERS = saved_readers
+                sc = scopes("docs/docs/x.md")
+                expect(sc.get(("backend/cli", "readers")) == ("all", ""), "a readers leg races its packages in full: %s" % sc)
+                sc = {k: v for k, v in scopes("hack/x.sh").items()}
+                expect(sc and all(v == ("all", "") for v in sc.values()), "a full selection races every leg in full")
+                s_full = full_selection(ws, "push")
+                expect(all(x["race_scope"] == "all" for x in plan(ws, s_full, [])[0]), "a non-pull-request plan races every leg in full")
+                SPLITS = {"backend/core": {"messaging": 3}}
+                # A deleted package that a root still imports: unknown, so they run.
+                with open(os.path.join(tmp, "backend/core/leaf/l2.go"), "w", encoding="utf-8") as fh:
+                    fh.write('package leaf\n\nimport "example.com/core/gone"\n')
+                g2 = PackageGraph(ws, root=tmp)
+                expect(select(ws, ["docs/x.md"], g2).migrations, "an import of a package with no Go file left runs them")
+                expect(codeql_select(ws, ["backend/core/leaf/l.go"], g2)[1] is None, "...and analyzes everything")
+                MIGRATION_ROOTS = [("backend/core/nosuch", True, True)]
+                try:
+                    select(ws, ["backend/core/leaf/l.go"], g)
+                    expect(False, "a root with no package raises (and so fails safe in cmd_plan)")
+                except RuntimeError:
+                    expect(True, "a root with no package raises (and so fails safe in cmd_plan)")
+            finally:
+                MIGRATION_ROOTS = saved_roots
+
+        print("==> codeql")
+        cq = lambda *fs: set(codeql_select(ws, list(fs))[0])  # no graph: the module-level fallback
+        everything = set(ws.dirs)
+        expect(cq("backend/core/x.go") == {"backend/core", "backend/services/svc-a", "backend/services/svc-b", "backend/cli", "deploy"},
+               "a core change analyzes core, everything that requires it, transitively, and what those require")
+        expect(cq("backend/services/svc-a/h.go") == {"backend/services/svc-a", "backend/services/svc-b", "backend/core"},
+               "a service change analyzes it, its dependants and the modules it requires (their bodies)")
+        expect(cq("backend/services/svc-b/x.go") == {"backend/services/svc-b", "backend/services/svc-a", "backend/core"},
+               "the required modules are followed transitively")
+        expect(cq("backend/services/svc-a/README.md", "backend/tools/tool/x.go") == {"backend/tools/tool"},
+               "a non-Go file seeds nothing")
+        expect(cq("_legacy/x.go", "backend/tools/tool/x.go") == {"backend/tools/tool"}, "_legacy/ is never analyzed")
+        for f, what in [("backend/tools/tool/go.mod", "a go.mod"), ("go.work.sum", "go.work.sum"),
+                        (".github/workflows/codeql.yml", "the workflow"), ("hack/ci-select.py", "the selection"),
+                        ("mystery/x.go", "a Go file outside every module")]:
+            expect(cq("backend/services/svc-b/x.go", f) == everything, "%s analyzes every module" % what)
+        expect(cq() == everything, "an empty diff analyzes every module")
+        expect(cq("docs/x.md") == everything, "no Go seed at all analyzes every module, never none")
+
         print("==> plan")
         integ_plan = [{"name": "core", "modules": "backend/core", "cache": ""},
                       {"name": "small", "modules": "backend/services/svc-a backend/tools/tool", "cache": ""}]
         s = select(ws, ["backend/services/svc-b/x.go"])
-        go, integ = plan(ws, s, integ_plan)
+        go, integ, _ = plan(ws, s, integ_plan)
         expect([g["module"] for g in go] == ["backend/core", "backend/services/svc-b"] and go[0]["pkgs"] == "./test/" and not go[0]["static"],
                "svc-b alone runs svc-b whole and core's repo-walking test package: %s" % [(g["module"], g["pkgs"]) for g in go])
         expect(integ == [], "and no integration leg (neither is integration-selected): %s" % integ)
         s = select(ws, ["backend/services/svc-a/x.go"])
-        go, integ = plan(ws, s, integ_plan)
+        go, integ, _ = plan(ws, s, integ_plan)
         expect([l["modules"] for l in integ] == ["backend/services/svc-a"], "the small leg narrows to the selected module: %s" % integ)
         s = full_selection(ws, "test")
-        go, integ = plan(ws, s, integ_plan)
+        go, integ, _ = plan(ws, s, integ_plan)
         core = [g for g in go if g["module"] == "backend/core"]
         expect([g["leg"] for g in core] == ["messaging 1/3", "messaging 2/3", "messaging 3/3", "rest"]
                and core[-1]["static"] and core[-1]["exclude"] == "./messaging/" and not any(g["static"] for g in core[:-1]),
                "a split module runs N shards plus one static catch-all excluding the split package")
         expect(sum(1 for g in go if g["static"]) == len(ws.dirs), "a full run has exactly one static leg per module")
-        expect(integ == integ_plan, "a full run keeps every integration leg")
+        expect([(l["name"], l["modules"]) for l in integ] == [(l["name"], l["modules"]) for l in integ_plan],
+               "a full run keeps every integration leg")
+
+        print("==> image-smoke")
+        smoke_all = ["backend/services/svc-a", "backend/services/svc-b", "backend/services/user-management", "backend/k8s"]
+        sm = lambda *fs: plan(ws, select(ws, list(fs)), integ_plan, smoke_all, list(fs))[2]
+        expect(sm("backend/core/x.go") == ["backend/services/svc-a", "backend/services/svc-b"],
+               "a core change smokes every image that requires core, transitively: %s" % sm("backend/core/x.go"))
+        expect(sm("backend/services/svc-b/x.go") == ["backend/services/svc-b"], "a service change smokes that image alone")
+        expect(sm("docs/docs/x.md", "README.md", "frontend/a.ts") == [], "a docs/frontend change smokes nothing")
+        expect(sm("backend/tools/tool/x.go") == [], "a module no image requires smokes nothing")
+        expect(sm("backend/cli/bootstrap/breakglass.go") == ["backend/services/user-management", "backend/k8s"],
+               "breakglass.go smokes user-management (its exec path) and k8s (the ko-wrapper scan): %s" % sm("backend/cli/bootstrap/breakglass.go"))
+        expect(sm("backend/cli/bootstrap/x_test.go") == [], "a cli TEST file is no image input")
+        expect(sm("deploy/helm/x.yaml") == ["backend/k8s"], "a deploy/ change smokes k8s (the ko-wrapper scan reads deploy/)")
+        for f in ["hack/ko-build.sh", ".github/workflows/ci.yml", "backend/services/svc-a/go.mod", "go.work", ".ko.yaml"]:
+            expect(sm(f) == smoke_all, "%s smokes every image" % f)
+        s = select(ws, ["backend/core/x.go"])
+        expect(smoke_select(s, ["mystery.txt"], smoke_all)[0] == ["backend/services/svc-a", "backend/services/svc-b"], "smoke_select reads the module set")
+        s.full = True
+        expect(smoke_select(s, [], smoke_all)[0] == smoke_all, "a full selection smokes every image")
+        expect(smoke_select(select(ws, ["x/.ko.yaml"]), ["x/.ko.yaml"], smoke_all)[0] == smoke_all,
+               "an unknown file runs everything, so every image")
+
+        print("==> draft")
+        s = select(ws, ["backend/core/x.go"])
+        mark_draft(s)
+        go, integ, sk = plan(ws, s, integ_plan, smoke_all, ["backend/core/x.go"])
+        expect(go == [] and integ == [] and sk == [] and not s.migrations and s.draft and s.frontend is False,
+               "a draft plans no go, integration, smoke or migrations job: %s %s %s %s" % (len(go), len(integ), len(sk), s.migrations))
+        s = full_selection(ws, "test")
+        mark_draft(s)
+        expect(plan(ws, s, integ_plan, smoke_all, [])[0] == [], "a draft with a full selection still plans no heavy job")
+        expect(not select(ws, ["backend/core/x.go"]).draft and not full_selection(ws, "t").draft, "nothing else is a draft")
+
+        print("==> cache groups")
+        global CACHE_GROUPS
+        saved_groups = CACHE_GROUPS
+        CACHE_GROUPS = [("cli", "backend/cli", ["backend/cli"]), ("services", "backend/services/svc-a", ["backend/services/*"]),
+                        ("core", "backend/core", ["*", "*/*", "*/*/*"])]
+        try:
+            go, integ, _ = plan(ws, full_selection(ws, "t"), integ_plan)
+            savers = sorted((g["cache_group"], g["module"], g["static"]) for g in go if g["cache_save"])
+            expect(savers == [("cli", "backend/cli", True), ("core", "backend/core", True), ("services", "backend/services/svc-a", True)],
+                   "a full plan saves each group from exactly one leg, its saver's static leg: %s" % savers)
+            expect({g["module"]: g["cache_group"] for g in go}["backend/tools/tool"] == "core" and
+                   {g["module"]: g["cache_group"] for g in go}["backend/services/svc-b"] == "services", "a module takes the first group that matches it")
+            expect(not any(g["cache_save"] for g in go if g["module"] == "backend/core" and not g["static"]), "a split shard never saves")
+            expect([l["cache_group"] for l in integ] == ["core", "services"], "an integration leg restores its first module's group")
+            CACHE_GROUPS = [("cli", "backend/cli", ["backend/cli"])]
+            try:
+                legs_for("backend/core")
+                expect(False, "a module in no cache group raises")
+            except RuntimeError:
+                expect(True, "a module in no cache group raises")
+        finally:
+            CACHE_GROUPS = saved_groups
         go = legs_for("backend/core", ["messaging", "test"])
         expect([g["leg"] for g in go] == ["messaging 1/3", "messaging 2/3", "messaging 3/3", "readers"] and go[-1]["pkgs"] == "./test/",
                "a reader-selected split package is still sharded")
@@ -830,6 +1775,10 @@ def main(argv):
         cmd_plan()
     elif argv[0] == "check":
         cmd_check()
+    elif argv[0] == "codeql":
+        cmd_codeql()
+    elif argv[0] == "migration-deps":
+        cmd_migration_deps()
     elif argv[0] == "replay":
         cmd_replay(argv[1:])
     else:

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
@@ -104,7 +103,7 @@ func TestTheLedgerIsTenantScoped(t *testing.T) {
 	if err != nil || removed != 1 {
 		t.Fatalf("prune A removed %d (err %v), want 1", removed, err)
 	}
-	tenants, err := api.DistinctAttemptTenants(core.WithSystemContext(context.Background()))
+	tenants, err := api.RDB.TenantsWith(context.Background(), &NotificationAttempt{})
 	if err != nil || len(tenants) != 1 || tenants[0] != "B" {
 		t.Fatalf("tenants after pruning A = %v (err %v), want [B]", tenants, err)
 	}

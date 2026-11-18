@@ -25,6 +25,7 @@ import {
   decodeToken,
   gql,
   setAuthTokenGetter,
+  setUnauthorizedHandler,
   type TokenPair,
 } from '@devicechain/client';
 import {
@@ -136,6 +137,9 @@ export default function App() {
         // token is valid. A refusal (revoked or invalid refresh token, SSO required) still ends
         // the session at once.
         skewSeconds: 120,
+        // Once the access token has expired, a request made during an outage fails with the
+        // outage instead of going out without a token, and a websocket reconnect retries it.
+        transientRefreshErrors: 'throw',
         onEnd: (err) => {
           console.warn('/dash: the session ended and could not be refreshed', err);
           pairRef.current = null;
@@ -151,7 +155,21 @@ export default function App() {
   // resolves its token through it, so a refreshed token reaches the hub by that route.
   useEffect(() => {
     setAuthTokenGetter(() => session.getAccessToken());
-    return () => setAuthTokenGetter(null);
+    setUnauthorizedHandler({
+      refresh: (token, identity) => identity ? Promise.resolve(null) : session.forceRefresh(token),
+      onEnd: (_err, token, identity) => {
+        if (identity || pairRef.current?.accessToken !== token) return;
+        pairRef.current = null;
+        session.reset();
+        setToken(null);
+        setLoaded(null);
+        setSessionEnded(true);
+      },
+    });
+    return () => {
+      setAuthTokenGetter(null);
+      setUnauthorizedHandler(null);
+    };
   }, [session]);
 
   // Refresh ahead of expiry while signed in. A wall display holds a websocket and makes no

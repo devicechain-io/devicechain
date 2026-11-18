@@ -550,29 +550,33 @@ func (c *wsConnection) awaitInit(connCtx context.Context) (context.Context, time
 // "token"). With the data-plane policy a missing token is allowed (unauthenticated,
 // no tenant, and a zero expiry); a present-but-invalid token is rejected.
 func (c *wsConnection) authenticate(ctx context.Context, payload json.RawMessage) (context.Context, time.Time, error) {
-	token := bearerFromParams(payload)
-	if token == "" {
-		if c.handler.policy.required {
-			return nil, time.Time{}, errors.New("authentication required")
-		}
-		return ctx, time.Time{}, nil
+	value, bare := bearerFromParams(payload)
+	a := bearerAuth(c.handler.policy, c.handler.Gate, auth.PlaneGraphQLWS)
+	var result auth.Authenticated
+	var err error
+	if bare {
+		result, err = a.AuthenticateToken(value, nil)
+	} else {
+		result, err = a.AuthenticateValue(value, nil)
 	}
-	validator := c.handler.validator()
-	if validator == nil {
-		return nil, time.Time{}, errors.New("authentication is not available")
-	}
-	// The WS transport carries no HTTP headers, so service tokens (whose tenant
-	// rides a header) are inapplicable here; the empty resolver makes them resolve
-	// to no tenant and be rejected, leaving access/identity tokens working.
-	claims, tenant, err := c.handler.policy.authenticate(validator, token, func(string) string { return "" })
 	if err != nil {
-		return nil, time.Time{}, errors.New("invalid or expired token")
+		msg := "invalid or expired token"
+		switch err.(*auth.BearerError).Reason {
+		case auth.BearerMissing:
+			if err.(*auth.BearerError).EmptyCredential() {
+				break
+			}
+			if !c.handler.policy.required {
+				return ctx, time.Time{}, nil
+			}
+			msg = "authentication required"
+		case auth.BearerUnavailable:
+			msg = "authentication is not available"
+		}
+		return nil, time.Time{}, errors.New(msg)
 	}
-	// The audience rule, once per connection_init, AFTER the token verified (see HttpHandler).
-	// The refusal carries the same text as an invalid token.
-	if err := c.handler.Gate.AudiencePolicy().Admit(claims, auth.PlaneGraphQLWS); err != nil {
-		return nil, time.Time{}, errors.New("invalid or expired token")
-	}
+	claims, tenant := result.Claims, result.Tenant
+
 	// auth.Validator's parser is built with jwt.WithExpirationRequired()
 	// (auth/validator.go), so a token with no exp is refused above and this cannot
 	// happen today — no test can reach it. It is refused rather than trusted because
@@ -769,15 +773,16 @@ func closeConn(conn *websocket.Conn, code int, reason string) {
 
 // bearerFromParams extracts a token from connection_init connectionParams,
 // accepting either {"Authorization":"Bearer <t>"} (case-insensitive scheme) or a
-// bare {"token":"<t>"}. Returns "" when no credential is present.
-func bearerFromParams(payload json.RawMessage) string {
+// bare {"token":"<t>"}. The bool identifies the bare-token form.
+func bearerFromParams(payload json.RawMessage) (string, bool) {
 	if len(payload) == 0 {
-		return ""
+		return "", false
 	}
 	var params map[string]interface{}
 	if err := json.Unmarshal(payload, &params); err != nil {
-		return ""
+		return "", false
 	}
+	var fallback string
 	for k, v := range params {
 		s, ok := v.(string)
 		if !ok || s == "" {
@@ -785,12 +790,13 @@ func bearerFromParams(payload json.RawMessage) string {
 		}
 		switch {
 		case strings.EqualFold(k, "authorization"):
-			if len(s) > len(bearerPrefix) && strings.EqualFold(s[:len(bearerPrefix)], bearerPrefix) {
-				return s[len(bearerPrefix):]
+			if token, ok := auth.BearerFromValue(s); ok {
+				return token, true
 			}
+			fallback = s
 		case strings.EqualFold(k, "token"):
-			return s
+			return s, true
 		}
 	}
-	return ""
+	return fallback, false
 }

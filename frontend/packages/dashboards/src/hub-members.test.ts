@@ -29,10 +29,11 @@ vi.mock('@devicechain/client', async (importOriginal) => {
     ...actual,
     gql: (...args: unknown[]) => h.gql(...args),
     isForbiddenError: (e: unknown) => (e as { forbidden?: boolean })?.forbidden === true,
-    subscribe: (_a: string, _d: unknown, vars: { deviceToken: string }, sink: { next: (d: unknown) => void }) => {
+    subscribe: (_a: string, _d: unknown, vars: { deviceToken?: string; deviceTokens?: string[] }, sink: { next: (d: unknown) => void }) => {
       h.opened += 1;
-      h.streams.set(vars.deviceToken, sink);
-      return () => h.streams.delete(vars.deviceToken);
+      const tokens = vars.deviceTokens ?? [vars.deviceToken!];
+      for (const token of tokens) h.streams.set(token, sink);
+      return () => { for (const token of tokens) h.streams.delete(token); };
     },
   };
 });
@@ -158,14 +159,14 @@ describe('the live samples', () => {
     ]);
   });
 
-  it('opens one upstream stream per member, shared by every widget on the same anchor, and closes them on dispose', async () => {
+  it('shares one group operation across widgets on the same anchor and closes it on dispose', async () => {
     backend(12);
     const hub = newHub();
     const a = hub.subscribeMembers(ANCHOR, { roster: () => {}, next: () => {} });
     const b = hub.subscribeMembers(ANCHOR, { roster: () => {}, next: () => {} });
     await flush();
     expect(hub.openStreamCount).toBe(12);
-    expect(h.opened).toBe(12);
+    expect(h.opened).toBe(1);
     a();
     expect(hub.openStreamCount).toBe(12);
     b();

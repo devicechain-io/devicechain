@@ -27,7 +27,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -88,11 +87,19 @@ var (
 	// disable or enable is felt at once and an enable re-offers its assignment.
 	RosterReader   messaging.MessageReader
 	RosterConsumer *processor.RosterConsumer
-	Sweeper        *processor.DeadlineSweeper
+
+	DeletionReader   messaging.MessageReader
+	DeletionConsumer *processor.DeletionConsumer
+	Sweeper          *processor.DeadlineSweeper
 
 	// RolloutStats and Rollouts are the group-rollout driver and its instruments.
 	RolloutStats *processor.RolloutMetrics
 	Rollouts     *processor.RolloutDriver
+
+	// SweepPassMetrics and RolloutPassMetrics are the two loops' pass outcomes. Built once on the
+	// initialize path, because the loops themselves are built on every start.
+	SweepPassMetrics   *core.PeriodicTaskMetrics
+	RolloutPassMetrics *core.PeriodicTaskMetrics
 )
 
 func main() {
@@ -107,7 +114,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -128,6 +135,12 @@ func parseConfiguration() error {
 	return nil
 }
 
+// appendOnlyModels are this schema's tables that only grow, reported by the storage-growth
+// collector (the audit journal is added for every schema). An assignment row is never deleted
+// - a newer one only stamps SupersededAt on it - so every assignment ever made stays, and the
+// history grows with every rollout and every per-device assignment.
+var appendOnlyModels = []any{&model.UpdateAssignment{}}
+
 // Called after microservice has been initialized.
 func afterMicroserviceInitialized(ctx context.Context) error {
 	if err := parseConfiguration(); err != nil {
@@ -140,7 +153,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Microservice.StartInstanceAuthGate(ctx)
 
 	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
+			AppendOnly: appendOnlyModels,
 			Migrations: schema.Migrations,
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Config:     Configuration.RdbConfiguration,
@@ -191,6 +206,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 func buildMetrics() {
 	ReportsMetrics = processor.NewUpdateReportsMetrics(Microservice)
 	RolloutStats = processor.NewRolloutMetrics(Microservice)
+	SweepPassMetrics = Microservice.NewPeriodicTaskMetrics("deadline_sweep")
+	RolloutPassMetrics = Microservice.NewPeriodicTaskMetrics("rollout_driver")
 	DownloadStats = &download.Metrics{
 		Requests: Microservice.NewCounterVec("update_downloads_total",
 			"Artifact download requests, by outcome: served, aborted (the client went away or the object "+
@@ -218,15 +235,15 @@ func wireSecrets(ctx context.Context, api *model.Api) error {
 }
 
 // startSweeper starts the deadline sweep at the configured cadence.
-func startSweeper() {
-	Sweeper = processor.NewDeadlineSweeper(Api, time.Duration(Configuration.Updates.SweepIntervalSeconds)*time.Second, &ReportsMetrics)
-	Sweeper.Start(context.Background())
+func startSweeper() error {
+	Sweeper = processor.NewDeadlineSweeper(Api, time.Duration(Configuration.Updates.SweepIntervalSeconds)*time.Second, &ReportsMetrics, SweepPassMetrics)
+	return Sweeper.Start(context.Background())
 }
 
 // startRolloutDriver starts the group-rollout driver.
-func startRolloutDriver() {
-	Rollouts = processor.NewRolloutDriver(Api, processor.RolloutInterval)
-	Rollouts.Start(context.Background())
+func startRolloutDriver() error {
+	Rollouts = processor.NewRolloutDriver(Api, processor.RolloutInterval, RolloutPassMetrics)
+	return Rollouts.Start(context.Background())
 }
 
 // registerDownloadHandler mounts the artifact download endpoint on the microservice own mux.
@@ -286,18 +303,17 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 	}
 
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	api.TenantDeleted = governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret,
-		"update-management", governance.NewSafetyGates(Microservice))
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+	api.TenantDeleted = governance.NewTenantLifecycleGateFor(peers, Svc.SafetyGates())
+	url, peerErr := peers.URL(infra.DeviceManagement.Endpoint())
 
 	switch {
-	case infra.ServiceAuth.Secret == "":
+	case peerErr == (svcclient.MissingError{Key: "infrastructure.serviceAuth.secret"}):
 		log.Warn().Msg("Service secret not configured - createArtifact, assignArtifact and startUpdateRollout will be REFUSED, and every device-facing update message (reports, syncs, download requests, downloads) will be REFUSED and retried: profiles, devices and groups cannot be looked up in device-management.")
-	case infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0:
+	case peerErr != nil:
 		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) - createArtifact, assignArtifact and startUpdateRollout will be REFUSED, and every device-facing update message (reports, syncs, download requests, downloads) will be REFUSED and retried: profiles, devices and groups cannot be looked up.")
 	default:
-		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "update-management",
-			[]string{string(auth.DeviceRead)})
-		url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+		client := peers.Client(auth.DeviceRead)
 		checker := profilecheck.New(client, url)
 		api.Profiles = checker
 		api.Devices = checker
@@ -367,7 +383,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	RosterReader = rosterReader
 	RosterConsumer = processor.NewRosterConsumer(Microservice, rosterReader, core.NewNoOpLifecycleCallbacks(), Api, dead)
 	RosterConsumer.Hold = newStoreHold("device-roster")
-	return RosterConsumer.Initialize(context.Background())
+	if err := RosterConsumer.Initialize(context.Background()); err != nil {
+		return err
+	}
+	deletionReader, err := nmgr.NewReader(streams.EntityDeleted)
+	if err != nil {
+		return err
+	}
+	DeletionReader = deletionReader
+	DeletionConsumer = processor.NewDeletionConsumer(Microservice, deletionReader, core.NewNoOpLifecycleCallbacks(), Api, dead)
+	DeletionConsumer.Hold = newStoreHold("entity-deleted")
+	return DeletionConsumer.Initialize(context.Background())
 }
 
 // newDeadLetterSink builds this service sink over the platform dead-letter stream, stamped by
@@ -404,19 +430,32 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := RosterConsumer.Start(ctx); err != nil {
 		return err
 	}
-	startSweeper()
-	startRolloutDriver()
-	return nil
+	if err := DeletionConsumer.Start(ctx); err != nil {
+		return err
+	}
+	if err := startSweeper(); err != nil {
+		return err
+	}
+	return startRolloutDriver()
 }
 
 // Called before microservice has been stopped. The sweep and the consumer, then the managers in
 // their reverse order.
 func beforeMicroserviceStopped(ctx context.Context) error {
 	if Rollouts != nil {
-		Rollouts.Stop()
+		if err := Rollouts.Stop(ctx); err != nil {
+			return err
+		}
 	}
 	if Sweeper != nil {
-		Sweeper.Stop()
+		if err := Sweeper.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	if DeletionConsumer != nil {
+		if err := DeletionConsumer.Stop(ctx); err != nil {
+			return err
+		}
 	}
 	if RosterConsumer != nil {
 		if err := RosterConsumer.Stop(ctx); err != nil {
@@ -433,6 +472,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated, in the same order as the stop.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if DeletionConsumer != nil {
+		if err := DeletionConsumer.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	if RosterConsumer != nil {
 		if err := RosterConsumer.Terminate(ctx); err != nil {
 			return err

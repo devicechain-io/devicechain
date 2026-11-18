@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/devicechain-io/dc-dashboard-management/config"
 	"github.com/devicechain-io/dc-dashboard-management/graphql"
@@ -22,7 +21,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
@@ -40,6 +38,7 @@ var (
 	// ShareReconciler removes the dashboard shares that name a deleted customer. It is built
 	// in the broker manager's start (createNatsComponents), so it is nil until then.
 	ShareReconciler *processor.ShareReconciler
+	ShareSweep      *core.PeriodicTask
 )
 
 func main() {
@@ -54,7 +53,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -89,7 +88,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// deleted (ADR-081). No subscriptions. core/service builds all three and owns the order
 	// of all four lifecycle phases.
 	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
+			AppendOnly: []any{&model.DashboardVersion{}},
 			Migrations: model.Migrations,
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Config:     Configuration.RdbConfiguration,
@@ -125,16 +126,17 @@ func afterRdb(ctx context.Context, m *service.Managers) error {
 	// re-land dashboard rows behind the purge sweep. Nil (user-management unconfigured)
 	// leaves the gate off with a warning; the per-area erasure fence is the guarantee.
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	Api.TenantDeleted = governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "dashboard-management", governance.NewSafetyGates(Microservice))
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+	Api.TenantDeleted = governance.NewTenantLifecycleGateFor(peers, Svc.SafetyGates())
 	wireShareChecker(infra.ServiceAuth.Secret, infra)
-
-	// Report the size of this schema's append-only history tables (ADR-023): a dashboard version history only
-	// grows, and so does the audit journal the collector adds for every schema. Nothing
-	// prunes either, so the storage floor rises with use and nothing else says how fast.
-	// Registered directly rather than through Microservice.NewGauge because a failed read
-	// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
-	prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
-		&model.DashboardVersion{}))
+	if Api.ShareTargets != nil {
+		ShareSweep = processor.NewShareSweep(Microservice, Api)
+		if err := ShareSweep.Initialize(ctx); err != nil {
+			return err
+		}
+	} else {
+		log.Warn().Msg("Dashboard share sweep not started: device-management lookup is not configured")
+	}
 
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
 	// validator in the background and gate the data plane on readiness rather
@@ -148,13 +150,16 @@ func afterRdb(ctx context.Context, m *service.Managers) error {
 // endpoint there is nobody to ask, and every share naming one is refused rather than written
 // unchecked — said once, here, at startup.
 func wireShareChecker(secret string, infra mscfg.InfrastructureConfiguration) {
-	if secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+	infra.ServiceAuth.Secret = secret
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+	url, err := peers.URL(infra.DeviceManagement.Endpoint())
+	if err != nil {
 		log.Warn().Msg("Service secret or device-management endpoint not configured — dashboards cannot be shared with customers or groups.")
 		return
 	}
-	client := svcclient.New(infra.UserManagement, secret, "dashboard-management", []string{string(auth.DeviceRead)})
+	client := peers.Client(auth.DeviceRead)
 	Api.ShareTargets = sharecheck.New(client,
-		fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port))
+		url)
 }
 
 // createNatsComponents builds the entity-deleted reader and the share reconciler on it. It
@@ -164,7 +169,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
+	writer, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return err
+	}
 	ShareReconciler = processor.NewShareReconciler(Microservice, reader, Api, core.NewNoOpLifecycleCallbacks())
+	ShareReconciler.Dead = Svc.DeadLetters.NewSink(writer)
 	return ShareReconciler.Initialize(context.Background())
 }
 
@@ -173,11 +183,21 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := Svc.Start(ctx); err != nil {
 		return err
 	}
+	if ShareSweep != nil {
+		if err := ShareSweep.Start(ctx); err != nil {
+			return err
+		}
+	}
 	return ShareReconciler.Start(ctx)
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	if ShareSweep != nil {
+		if err := ShareSweep.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	// The reconciler reads from the broker and writes to the database, so it stops before
 	// either does.
 	if ShareReconciler != nil {
@@ -190,5 +210,10 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if ShareSweep != nil {
+		if err := ShareSweep.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	return Svc.Terminate(ctx)
 }

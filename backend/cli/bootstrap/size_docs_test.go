@@ -5,8 +5,12 @@ package bootstrap
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -88,6 +92,96 @@ func TestPublishedSizingTables(t *testing.T) {
 			if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 				t.Fatal(err)
 			}
+		}
+	}
+}
+
+var sizeDocsNumber = regexp.MustCompile(`\b[0-9]+\b`)
+
+func checkSizeDocs(text string) error {
+	numbers := make(map[string]bool)
+	for _, number := range sizeDocsNumber.FindAllString(text, -1) {
+		numbers[number] = true
+	}
+	if numbers["799"] {
+		return fmt.Errorf("contains incorrect 799-byte event size")
+	}
+	if numbers["345"] && numbers["454"] {
+		return fmt.Errorf("contains unverified per-table split")
+	}
+	if !numbers[strconv.Itoa(storedEventBytes)] {
+		return fmt.Errorf("missing canonical %d-byte event size", storedEventBytes)
+	}
+	return nil
+}
+
+// These docs live outside the Go module, so Go's test cache cannot track changes
+// to them. Run with -count=1 to read the current files on every invocation.
+func TestSizeDocs(t *testing.T) {
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate test source")
+	}
+	root := filepath.Join(filepath.Dir(source), "..", "..", "..")
+	for _, docs := range []string{
+		"docs/docs",
+		"docs/i18n/es/docusaurus-plugin-content-docs/current",
+		"docs/i18n/zh-CN/docusaurus-plugin-content-docs/current",
+	} {
+		for _, page := range []string{
+			"tuning-an-instance.md",
+			"sizing.md",
+			"bootstrap.md",
+			"alert-runbook.md",
+		} {
+			t.Run(docs+"/"+page, func(t *testing.T) {
+				content, err := os.ReadFile(filepath.Join(root, docs, "deployment", page))
+				if err != nil {
+					t.Fatal(err)
+				}
+				text := string(content)
+				if err := checkSizeDocs(text); err != nil {
+					t.Fatal(err)
+				}
+				if page == "tuning-an-instance.md" {
+					if !strings.Contains(text, "{#event-store-sizing}") {
+						t.Error("missing canonical sizing anchor")
+					}
+				} else if !strings.Contains(text, canonicalSizingLink(page)) {
+					t.Error("missing link to canonical sizing statement")
+				}
+			})
+		}
+	}
+}
+
+// canonicalSizingLink is how a page reaches the canonical sizing statement. The alert
+// runbook is generated from the alerts' own descriptions (hack/alert-runbook.py), which
+// are also what a notification carries, so its link is the published URL: a relative
+// path would not resolve from an email or a chat message.
+func canonicalSizingLink(page string) string {
+	if page == "alert-runbook.md" {
+		return "https://docs.devicechain.io/deployment/tuning-an-instance#event-store-sizing"
+	}
+	return "./tuning-an-instance.md#event-store-sizing"
+}
+
+func TestSizeDocsNegativeControls(t *testing.T) {
+	canonical := strconv.Itoa(storedEventBytes)
+	for _, text := range []string{canonical, "event size: " + canonical + " bytes"} {
+		if err := checkSizeDocs(text); err != nil {
+			t.Fatalf("valid control rejected: %v", err)
+		}
+	}
+	for _, text := range []string{
+		"799 bytes per event",
+		canonical + " bytes per event; 799 bytes per event",
+		canonical + " bytes (345 in events and 454 in measurements)",
+		"345 in events and 454 in measurements",
+		"no storage figure",
+	} {
+		if err := checkSizeDocs(text); err == nil {
+			t.Errorf("negative control accepted: %q", text)
 		}
 	}
 }

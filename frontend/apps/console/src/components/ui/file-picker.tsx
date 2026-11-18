@@ -22,6 +22,7 @@
 
 import { useRef, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
+import { useFormFieldId, useFormFieldLabelId } from './form-field-context';
 
 export interface FilePickerProps {
   onPick: (file: File) => void;
@@ -42,12 +43,15 @@ export function FilePicker({
   variant = 'outline',
   size = 'sm',
 }: FilePickerProps) {
+  const id = useFormFieldId();
+  const fieldLabelId = useFormFieldLabelId(id);
   const ref = useRef<HTMLInputElement>(null);
   return (
     <>
       <input
         ref={ref}
         type="file"
+        hidden
         accept={accept}
         className="hidden"
         onChange={(e) => {
@@ -57,13 +61,15 @@ export function FilePicker({
         }}
       />
       <Button
+        id={id}
+        aria-labelledby={fieldLabelId ? `${fieldLabelId} ${id}-value` : undefined}
         type="button"
         variant={variant}
         size={size}
         disabled={disabled}
         onClick={() => ref.current?.click()}
       >
-        {children}
+        <span id={id ? `${id}-value` : undefined}>{children}</span>
       </Button>
     </>
   );

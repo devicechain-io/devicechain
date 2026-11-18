@@ -288,6 +288,7 @@ const sidebars: SidebarsConfig = {
           collapsed: false,
           items: [
             'deployment/bootstrap',
+            'deployment/production-hardening',
             'deployment/kubernetes-operator',
             'deployment/cluster-lock',
             'deployment/ingress-cutover',
@@ -300,6 +301,7 @@ const sidebars: SidebarsConfig = {
           collapsed: false,
           items: [
             'deployment/observability',
+            'deployment/troubleshooting',
             'deployment/alert-runbook',
             'deployment/grafana-boards',
             'deployment/metrics-reference',

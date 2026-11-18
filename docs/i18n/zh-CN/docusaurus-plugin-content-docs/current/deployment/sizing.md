@@ -77,7 +77,7 @@ JetStream 卷的大小按设计速率的预留量能装下来确定；升级绝�
 
 ### 事件库卷能撑多久 {#event-store-volume}
 
-在事件库中，一个已存储的事件约占 756 字节，包含索引、未压缩（事件表 345 字节，测量值表 454 字节）。在饱和的每秒 12,000 个事件下，这相当于每小时 32.7 GB，因此 `160Gi` 的卷在扣除日志额度和工作余量之后，大约能容纳三个半小时的持续写入。`perf-16k` 设置 `260Gi`，在每秒 16,000 个事件（每小时 43.6 GB）下大约能撑四个小时。这些是突发和基准测试用的卷，不是留存用的卷。早于 `lifecycle.compressAfterDays`（默认 7）的数据块会被压缩，因此持续使用时请设置数据生命周期并据此确定卷的大小：见[事件库的容量规划](./tuning-an-instance.md#event-store-sizing)。当卷即将写满时，`DatabaseVolumeFillsWithinDay` 告警会触发。
+使用[每个已存储事件 756 字节](./tuning-an-instance.md#event-store-sizing)。满负荷每秒 12,000 个事件时为每小时 32.66 GB，因此扣除日志预留和工作余量后，`160Gi` 卷可容纳约三个半小时的持续摄取。`perf-16k` 设置 `260Gi`，每秒 16,000 个事件时约可容纳四小时（每小时 43.5 GB）。这些是突发和基准测试卷，并非保留期容量。早于 `lifecycle.compressAfterDays`（默认 7 天）的分块会压缩；持续运行时请设置数据生命周期并据此规划容量，见[事件存储容量规划](./tuning-an-instance.md#event-store-sizing)。卷预计将写满时会触发 `DatabaseVolumeFillsWithinDay` 告警。
 
 ## `perf-16k` 设置了什么 {#perf-16k}
 
@@ -169,6 +169,8 @@ Broker、卷以及预写日志的额度：
 5. 你在 `TF_VAR_*`、`terraform.tfvars` 或 `*.auto.tfvars` 文件中声明的 OpenTofu 变量。
 
 现有卷是此顺序的例外。如果已知卷的实际大小，`dcctl` 会将其作为 `nats_jetstream_storage` 和 `timescale_storage` 传入，即使你通过环境变量或 tfvars 文件提供了不同的值。这两个变量仅在卷尚不存在的初次创建时，才由你的值优先于规格预设。对于其他规格预设的 OpenTofu 变量，`dcctl` 会省略你已声明的变量，使你的值优先。`dcctl bootstrap` 打印的那一行会写明所应用的规格。
+
+代理的拓扑是另一个例外。`dcctl` 总是自己传入 `ha` 和 `nats_cluster_replicas`，因此你为其中任何一个声明的值都会被覆盖。服务器数量和每个流的副本数由 `--ha` 一起设定（不带它时为一台服务器、一个副本，带它时为三台、三个）。分片组会把服务器数量提高到至少三台，并且每组至少一台。这样可以避免集群中所有流都只有一个副本、却在为不保存任何副本的服务器付费。使用 `dcctl` 无法构建一个多服务器、单副本流且没有分片组的代理。当你声明了其中任何一个变量时，`dcctl bootstrap` 和 `dcctl upgrade` 会打印一条说明，指出该值已被覆盖。
 
 ## 更改运行中实例的规格 {#changing}
 

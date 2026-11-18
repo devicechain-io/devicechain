@@ -245,6 +245,12 @@ On update, the request's `rules` **replaces** the policy's existing rule set. Om
 
 Two people editing the same policy can overwrite each other: a field both of them change keeps only the last save, and because a `rules` list replaces the whole set, the second save drops every rule the first one wrote. To prevent that, pass `expectedUpdatedAt` with the policy's `updatedAt` as you read it (or as your previous update returned it). If the policy has changed since, the update is refused with "notification policy was modified by another writer; reload and try again" and nothing is written. Reload, reapply your change, and send it again.
 
+#### Alarms of a deleted device {#deleted-originator}
+
+When a device (or another entity an alarm was raised on) is deleted, each of its alarms that was still active ends with a `CLEARED` event that carries `clearReason: ORIGINATOR_DELETED`. Escalation for it stops, and a policy with `notifyOnClear` tells the channels that paged it that the alarm ended because its device was deleted. Webhook payloads and PagerDuty details carry the same `clearReason`.
+
+Before re-paging an alarm, the scheduler also asks `device-management` whether the alarm still exists. An alarm that no longer exists, or that `device-management` reports as cleared, stops escalating. **If that check fails** (for example `device-management` is unavailable), **the page is sent anyway**: missing a real page during an outage is worse than one extra page for an alarm whose device was just deleted. Each failed check is counted by the `escalation_lookup_errors_total` metric. Open notifications older than an hour whose alarm no longer exists are also ended by a periodic check. Without the service secret or the `device-management` and `user-management` endpoints configured, these checks are off, a warning is logged at startup, and escalation behaves as before.
+
 ### Quiet hours {#quiet-hours}
 
 **Quiet hours** keep a policy from paging people at the wrong time, such as overnight. While a policy is inside its quiet hours it **holds** its notifications instead of sending them, and it sends them when the quiet stretch ends. Each policy has its own quiet hours, so a night-shift policy and a day-team policy can follow different schedules.

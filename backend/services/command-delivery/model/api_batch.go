@@ -37,7 +37,7 @@ const batchInsertChunk = 1000
 // means the check could not be PERFORMED and the caller must fail closed.
 type BatchEnqueueValidator interface {
 	ValidateEnqueueBatch(ctx context.Context, deviceTokens []string, commandKey string,
-		payload []byte) ([]BatchDeviceRefusal, error)
+		payload []byte) ([]BatchDeviceRefusal, map[string]uint64, error)
 }
 
 // CreateCommandBatch issues one command to many devices as a single, recorded operation.
@@ -237,7 +237,7 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 	// assumption the metric quietly depends on.
 	acct.targetKind = targetKindLabel(targets.kind)
 
-	refusals, err := api.validateBatchTargets(ctx, targets.deviceTokens, request.Name, payload)
+	refusals, incarnations, err := api.validateBatchTargets(ctx, targets.deviceTokens, request.Name, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -431,7 +431,7 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 			conflicted = true
 			return nil
 		}
-		return insertBatchCommands(tx, created, admitted, payload, expiresAt, holds, stamps)
+		return insertBatchCommands(tx, created, admitted, payload, expiresAt, holds, stamps, incarnations)
 	})
 	if verdict != nil {
 		return nil, verdict
@@ -561,25 +561,29 @@ func dedupeBatchTokens(tokens []string) []string {
 // bound. A failure to REACH the owner fails the whole batch with nothing persisted and the
 // token unspent, so a clean retry is always available.
 func (api *Api) validateBatchTargets(ctx context.Context, tokens []string, name string,
-	payload []byte) ([]BatchDeviceRefusal, error) {
+	payload []byte) ([]BatchDeviceRefusal, map[string]uint64, error) {
 	refusals := make([]BatchDeviceRefusal, 0)
+	incarnations := make(map[string]uint64)
 	if api.BatchValidator == nil {
 		// Matches CreateCommand: when no validator is wired (service secret
 		// unconfigured), the gate is skipped rather than failing every enqueue.
-		return refusals, nil
+		return refusals, incarnations, nil
 	}
 	for start := 0; start < len(tokens); start += batchValidationChunk {
 		end := start + batchValidationChunk
 		if end > len(tokens) {
 			end = len(tokens)
 		}
-		chunk, err := api.BatchValidator.ValidateEnqueueBatch(ctx, tokens[start:end], name, payload)
+		chunk, ids, err := api.BatchValidator.ValidateEnqueueBatch(ctx, tokens[start:end], name, payload)
 		if err != nil {
-			return nil, unavailableOr(err, "cannot enqueue command batch: validation is unavailable")
+			return nil, nil, unavailableOr(err, "cannot enqueue command batch: validation is unavailable")
 		}
 		refusals = append(refusals, chunk...)
+		for token, id := range ids {
+			incarnations[token] = id
+		}
 	}
-	return refusals, nil
+	return refusals, incarnations, nil
 }
 
 // withoutRefused returns the tokens not named in refusals, preserving order.
@@ -723,7 +727,7 @@ func lockTenantForBatch(ctx context.Context, tx *gorm.DB) error {
 // different pairs can collide onto one string) and two full-length tokens exceed the
 // 128-character bound.
 func insertBatchCommands(tx *gorm.DB, batch *CommandBatch, deviceTokens []string,
-	payload []byte, expiresAt sql.NullTime, holds map[string]DispatchHold, stamps map[string][]string) error {
+	payload []byte, expiresAt sql.NullTime, holds map[string]DispatchHold, stamps map[string][]string, incarnations map[string]uint64) error {
 	if len(deviceTokens) == 0 {
 		return nil
 	}
@@ -731,13 +735,14 @@ func insertBatchCommands(tx *gorm.DB, batch *CommandBatch, deviceTokens []string
 	rows := make([]*Command, 0, len(deviceTokens))
 	for i, deviceToken := range deviceTokens {
 		cmd := &Command{
-			DeviceToken: deviceToken,
-			Name:        batch.Name,
-			Status:      CommandQueued.String(),
-			QueuedTime:  queuedTime,
-			ExpiresAt:   expiresAt,
-			BatchId:     sql.NullInt64{Int64: int64(batch.ID), Valid: true},
-			BatchToken:  sql.NullString{String: batch.Token, Valid: true},
+			DeviceToken:       deviceToken,
+			DeviceIncarnation: nullableIncarnation(incarnations[deviceToken]),
+			Name:              batch.Name,
+			Status:            CommandQueued.String(),
+			QueuedTime:        queuedTime,
+			ExpiresAt:         expiresAt,
+			BatchId:           sql.NullInt64{Int64: int64(batch.ID), Valid: true},
+			BatchToken:        sql.NullString{String: batch.Token, Valid: true},
 		}
 		// 🔴 STAMP created_at OURSELVES, ONCE FOR THE WHOLE BATCH. Left to gorm this is
 		// the defect that makes a large batch read back in blocks, newest block first.

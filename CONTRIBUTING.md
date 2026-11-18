@@ -344,7 +344,8 @@ TypeScript because the compiler the frontend pins has no API to read declaration
 The pull request cannot know which version ships it, so two rules apply at release time.
 
 - **The release must say so.** `hack/check-release-highlights.sh <tag>` (the release workflow's first
-  job) lists every declaration still live against the nearest stable tag before the release
+  job) lists every declaration still live against the release's baseline, the highest stable tag
+  below it by semver (`hack/changelog-base.sh`, the same baseline the compatibility checks use)
   (`hack/api-declared-breaks.sh`, every surface above). Before 1.0.0 a live declaration needs
   `"breaking": true` in `.github/release-highlights.json`. From 1.0.0 it is refused unless the release
   is a new major.

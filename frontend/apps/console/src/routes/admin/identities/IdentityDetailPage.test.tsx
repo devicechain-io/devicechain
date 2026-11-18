@@ -141,14 +141,20 @@ describe('a membership the identity provider manages', () => {
     expect(button(t('identities:removeButton')).disabled).toBe(false);
   });
 
-  it('still offers enabling a disabled one, which the server does not refuse for this reason', async () => {
+  // The provider decides whether a membership it manages is active, so the server refuses
+  // enabling one too: the provider disabled it, and its next sign-in would disable it again.
+  it('stops offering enable on a disabled one as well', async () => {
     h.identities = [identity('sso@example.com', [{ tenant: 'acme', enabled: false, roles: [] }])];
-    h.setRoles.mockRejectedValue(managed);
+    h.setEnabled.mockRejectedValue(managed);
     renderAt('sso@example.com');
     await screen.findByText('acme');
-    fireEvent.click(button(t('identities:saveRolesButton')));
-    await screen.findByText(t('identities:managedByIdpNotice'));
     expect(button(t('identities:enable')).disabled).toBe(false);
+    fireEvent.click(button(t('identities:enable')));
+    await screen.findByText(t('identities:managedByIdpNotice'));
+    expect(h.setEnabled).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('this membership is managed by an identity provider')).toBeNull();
+    expect(button(t('identities:enable')).disabled).toBe(true);
     expect(button(t('identities:removeButton')).disabled).toBe(true);
+    expect(button(t('identities:saveRolesButton')).disabled).toBe(true);
   });
 });

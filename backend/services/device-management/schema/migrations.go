@@ -74,5 +74,8 @@ var (
 		NewAutomationReviewEnforcementSchema(),
 		NewEntityAttributeUniqueKeySchema(),
 		NewPendingEntityDeletionsSchema(),
+		NewAlarmPositionDerivedSchema(),
+		NewAlarmPositionStampSchema(),
+		NewDeletionAlarmCascadeSchema(),
 	}
 )

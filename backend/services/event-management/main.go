@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-event-management/config"
@@ -219,26 +218,24 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 // device-management endpoint it queries. It is disabled (with a log line) otherwise:
 // the entity.deleted consumer remains the primary path, so a missing sweep degrades
 // gracefully rather than failing startup.
-func wireAnchorSweep(ctx context.Context) error {
+func wireAnchorSweep(ctx context.Context, peers *svcclient.Peers) error {
 	interval := Configuration.AnchorSweepIntervalSeconds
 	if interval <= 0 {
 		log.Info().Msg("Anchor reconciliation sweep disabled (interval <= 0).")
 		return nil
 	}
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	if infra.ServiceAuth.Secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 ||
-		infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+	seam, err := peers.Seam(infra.DeviceManagement.Endpoint(), auth.DeviceRead)
+	if err != nil {
 		log.Warn().Msg("Service secret, device-management, or user-management endpoint not configured — anchor reconciliation sweep disabled.")
 		return nil
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-management", []string{string(auth.DeviceRead)})
-	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
-	AnchorSweep = processor.NewAnchorReconciliationSweep(Microservice, Api, client, dmURL,
+	AnchorSweep = processor.NewAnchorReconciliationSweep(Microservice, Api, seam.Client, seam.URL,
 		time.Duration(interval)*time.Second, core.NewNoOpLifecycleCallbacks())
 	if err := AnchorSweep.Initialize(ctx); err != nil {
 		return err
 	}
-	log.Info().Str("deviceManagement", dmURL).Int("intervalSeconds", interval).
+	log.Info().Str("deviceManagement", seam.URL).Int("intervalSeconds", interval).
 		Msg("Anchor reconciliation sweep enabled (ADR-044 decision 3).")
 	return nil
 }
@@ -310,7 +307,7 @@ func wireUsage(ctx context.Context) error {
 //
 // With no device-management endpoint or service secret the worker still runs, with no roster:
 // it leaves a job it finds alone and says so, rather than failing a job for a deployment gap.
-func wireBackfill(ctx context.Context) error {
+func wireBackfill(ctx context.Context, peers *svcclient.Peers) error {
 	bc := Configuration.CalculatedBackfill
 	rt, why := newBackfillRuntime(Configuration)
 	// The API is told whether the worker runs, and why not, so a start is refused with that
@@ -330,13 +327,9 @@ func wireBackfill(ctx context.Context) error {
 	}
 	var roster backfill.Roster
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	if infra.ServiceAuth.Secret != "" && infra.DeviceManagement.Hostname != "" && infra.DeviceManagement.Port != 0 &&
-		infra.UserManagement.Hostname != "" && infra.UserManagement.Port != 0 {
-		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-management",
-			[]string{string(auth.DeviceRead)})
-		url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
-		roster = backfill.NewGraphQLRoster(client, url)
-		rt.Plans = backfill.NewGraphQLPlanSource(client, url)
+	if seam, err := peers.Seam(infra.DeviceManagement.Endpoint(), auth.DeviceRead); err == nil {
+		roster = backfill.NewGraphQLRoster(seam.Client, seam.URL)
+		rt.Plans = backfill.NewGraphQLPlanSource(seam.Client, seam.URL)
 	} else {
 		log.Warn().Msg("Service secret, device-management or user-management endpoint not configured — " +
 			"calculated-metric backfill has no roster, and will leave any job it finds waiting; " +
@@ -358,6 +351,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
 	// validator in the background and gate the data plane on readiness rather
 	// than exiting when user-management is briefly unreachable (amends ADR-008).
@@ -374,6 +370,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// in AfterRdb that has to happen between two of the constructions.
 	Svc = service.New(Microservice, service.Spec{
 		Rdb: &service.RdbSpec{
+			AppendOnly: nil, // Audit journal only.
 			// 🔴 THE EVENT STORE, NOT THE RELATIONAL ONE. This service's tables are
 			// hypertables and live in the instance's TimescaleDB cluster, which is a
 			// different database from the one every other area opens. It is named here
@@ -419,7 +416,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if lc.FailedEventRetentionDays != nil { // normally set by ApplyDefaults; guard against a nil deref
 				failedEventRetentionDays = *lc.FailedEventRetentionDays
 			}
-			if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager, model.DataLifecyclePolicy{
+			policy := model.DataLifecyclePolicy{
 				ChunkIntervalHours:       lc.ChunkIntervalHours,
 				CompressAfterDays:        compressAfterDays,
 				RetentionDays:            lc.RetentionDays,
@@ -428,7 +425,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				// the uniform window. Collapsing it to an int here would lose the distinction
 				// between "unset" and an explicit 0 (retention off for location only).
 				LocationRetentionDays: lc.LocationRetentionDays,
-			}); err != nil {
+			}
+			Api.RollupRetentionDays = policy.RollupRetentionDays()
+			if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager, policy); err != nil {
 				return err
 			}
 
@@ -452,10 +451,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// Build the reconciliation sweep (ADR-044 decision 3), the backstop for
 			// entity-deletion events missed by the primary consumer. It needs the Api and
 			// nothing else, which is what makes this the right side of the sequence for it.
-			if err := wireAnchorSweep(ctx); err != nil {
+			if err := wireAnchorSweep(ctx, peers); err != nil {
 				return err
 			}
-			if err := wireBackfill(ctx); err != nil {
+			if err := wireBackfill(ctx, peers); err != nil {
 				return err
 			}
 			if err := wireRollupTail(ctx); err != nil {
@@ -626,10 +625,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	//
 	// core/service stops them in exactly that order, for every service. Pinned next door in
 	// graphql_shutdown_order_test.go, which drives this function.
+	err := Svc.Stop(ctx)
+	// Keep placement available to publishes until the service's managers finish stopping.
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
-	return Svc.Stop(ctx)
+	return err
 }
 
 // Called before microservice has been terminated.
@@ -640,8 +641,10 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
 	// that actually closes handles.
+	err := Svc.Terminate(ctx)
+	// Release the placement watch only after the service's managers terminate.
 	if stopStreamSharding != nil {
 		stopStreamSharding()
 	}
-	return Svc.Terminate(ctx)
+	return err
 }

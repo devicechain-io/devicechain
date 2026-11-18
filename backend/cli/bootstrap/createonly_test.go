@@ -36,6 +36,10 @@ func TestABootstrapOverALiveInstanceIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("a bootstrap aimed at a running instance was allowed to proceed and mint over it")
 	}
+	var refused *ErrRebuildRefused
+	if !errors.As(err, &refused) {
+		t.Fatalf("the command cannot identify the refusal to restore the original local record: %v", err)
+	}
 	if !strings.Contains(err.Error(), "dcctl upgrade") {
 		t.Errorf("the refusal does not name the verb that does this instead: %v", err)
 	}
@@ -183,5 +187,20 @@ func TestEveryWayOfNamingARestoreReachesTheCarveOut(t *testing.T) {
 			t.Errorf("a restore declared through RestorePlan.%s was refused as a rebuild: %v",
 				name, err)
 		}
+	}
+}
+
+// The same step's other refusal over a live instance comes before any cluster write
+// too, so it carries the same type and the command restores the local record after it.
+func TestTheObserveRefusalIsARebuildRefusal(t *testing.T) {
+	deployed := aLiveInstance()
+	deployed.Infrastructure.TokenAudience.Enforcement = "observe"
+	err := bootstrapObserveRefusal(aBootstrapOf(testInstance), deployed)
+	if err == nil {
+		t.Fatal("a bootstrap over an observe-mode document was allowed to proceed")
+	}
+	var refused *ErrRebuildRefused
+	if !errors.As(err, &refused) {
+		t.Fatalf("the command cannot identify the refusal to restore the original local record: %v", err)
 	}
 }

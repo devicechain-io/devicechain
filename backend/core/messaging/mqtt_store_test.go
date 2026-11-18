@@ -61,9 +61,8 @@ func TestReconcileMqttStoresAppliesAndIsIdempotent(t *testing.T) {
 	defer cleanup()
 
 	// Stand in for what the gateway would have created: unbounded, interest
-	// retention. If JetStream refuses the reserved "$" name to a normal client,
-	// there is nothing to assert here and the guarantee is left to the live
-	// cluster.
+	// retention. Creating these streams is a fixture prerequisite; failure must
+	// fail the test rather than leave the applied-bound path untested.
 	const maxBytes = 256 << 20
 	const qos2MaxBytes = 64 << 20
 	for _, name := range mqttGatewayStreams {
@@ -73,8 +72,7 @@ func TestReconcileMqttStoresAppliesAndIsIdempotent(t *testing.T) {
 			Storage:   nats.FileStorage,
 			Retention: nats.InterestPolicy,
 		}); err != nil {
-			t.Skipf("cannot create a %q stream in-process (%v); "+
-				"the applied-bound path is covered on a live cluster", name, err)
+			t.Fatalf("create gateway stream fixture %q: %v", name, err)
 		}
 	}
 
