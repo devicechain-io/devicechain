@@ -15,6 +15,7 @@ import (
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-sparkplug-ingest/config"
 	"github.com/devicechain-io/dc-sparkplug-ingest/host"
 )
@@ -23,7 +24,8 @@ import (
 // full event: at 10/s with a burst of 20, a 300-reading message admits one event and the
 // next admits nothing.
 func TestBuildSampleLimiterMetersAtTheConfiguredCeiling(t *testing.T) {
-	l := buildSampleLimiter(mscfg.InfrastructureConfiguration{}, config.IngestRateLimit{ReadingsPerSecond: 10, Burst: 20},
+	peers := svcclient.NewPeers(mscfg.InfrastructureConfiguration{}, "sparkplug-ingest")
+	l := buildSampleLimiter(peers, config.IngestRateLimit{ReadingsPerSecond: 10, Burst: 20},
 		adapter.IngestLimiterMetrics{}, nil)
 	require.Equal(t, 256, l.AdmitSamples("acme", 300))
 	require.Equal(t, 0, l.AdmitSamples("acme", 300))

@@ -4,11 +4,11 @@ section: whats-new
 
 ## en
 
-- **`dcctl ha verify --probe-mqtt` authenticates again.** From `v1.1.0`, of the per-area broker logins, the broker accepted only event-sources' over MQTT, but the probe presented the broker administrator's login, so it was refused on every instance with per-area broker logins. It now presents the event-sources login, which the broker already accepts over MQTT; no broker permission changes. A refused probe now names the login it presented. You rarely need the flag: event-sources' own connection creates the broker's MQTT streams.
+- **`dcctl ha verify --probe-mqtt` authenticates again.** Since `v1.1.0`, event-sources' login is the only per-area broker login the broker accepts over MQTT, but the probe presented the broker administrator's login, so it was refused on every instance with per-area broker logins. It now presents the event-sources login, which the broker already accepts over MQTT; no broker permission changes. A refused probe now names the login it presented. You rarely need the flag: event-sources' own connection creates the broker's MQTT streams.
 
 ## es
 
-- **`dcctl ha verify --probe-mqtt` vuelve a autenticarse.** Desde `v1.1.0`, de los inicios de sesión del broker por área, el broker solo aceptaba por MQTT el de event-sources, pero la sonda presentaba el del administrador del broker, por lo que se rechazaba en todas las instancias con inicios de sesión del broker por área. Ahora presenta el inicio de sesión de event-sources, que el broker ya acepta por MQTT; no cambia ningún permiso del broker. Una sonda rechazada indica ahora el inicio de sesión que presentó. Rara vez hace falta la opción: la propia conexión de event-sources crea los flujos MQTT del broker.
+- **`dcctl ha verify --probe-mqtt` vuelve a autenticarse.** Desde `v1.1.0`, el de event-sources es el único inicio de sesión del broker por área que el broker acepta por MQTT, pero la sonda presentaba el del administrador del broker, por lo que se rechazaba en todas las instancias con inicios de sesión del broker por área. Ahora presenta el inicio de sesión de event-sources, que el broker ya acepta por MQTT; no cambia ningún permiso del broker. Una sonda rechazada indica ahora el inicio de sesión que presentó. Rara vez hace falta la opción: la propia conexión de event-sources crea los flujos MQTT del broker.
 
 ## zh-CN
 

@@ -81,7 +81,11 @@ func (c *Checker) customers(ctx context.Context, tenant string, tokens []string)
 		return nil, fmt.Errorf("device-management customer lookup: the answer carries no customers")
 	}
 	found := make(map[string]bool, len(*out.CustomersByToken))
+	validateToken := responseTokenValidator(tokens)
 	for _, c := range *out.CustomersByToken {
+		if err := validateToken(c.Token); err != nil {
+			return nil, fmt.Errorf("device-management lookup: %w", err)
+		}
 		found[c.Token] = true
 	}
 	return found, nil
@@ -103,7 +107,11 @@ func (c *Checker) accessGroups(ctx context.Context, tenant string, tokens []stri
 		return nil, fmt.Errorf("device-management group lookup: the answer carries no groups")
 	}
 	found := make(map[string]bool, len(*out.EntityGroupsByToken))
+	validateToken := responseTokenValidator(tokens)
 	for _, g := range *out.EntityGroupsByToken {
+		if err := validateToken(g.Token); err != nil {
+			return nil, fmt.Errorf("device-management lookup: %w", err)
+		}
 		if g.AccessScope == nil {
 			return nil, fmt.Errorf("device-management group lookup: group %q carries no access-scope flag", g.Token)
 		}
@@ -112,4 +120,20 @@ func (c *Checker) accessGroups(ctx context.Context, tenant string, tokens []stri
 		}
 	}
 	return found, nil
+}
+
+// Track every returned token, including groups that are not access scopes.
+func responseTokenValidator(tokens []string) func(string) error {
+	requested := make(map[string]bool, len(tokens))
+	for _, token := range tokens {
+		requested[token] = true
+	}
+	seen := make(map[string]bool, len(tokens))
+	return func(token string) error {
+		if token == "" || !requested[token] || seen[token] {
+			return fmt.Errorf("empty, unrequested, or duplicate entity token %q", token)
+		}
+		seen[token] = true
+		return nil
+	}
 }

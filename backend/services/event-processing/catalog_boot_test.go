@@ -23,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
@@ -90,10 +91,11 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	DeviceRosterStore = model.NewDeviceRosterStore(RdbManager)
 	ProfileActiveStore = model.NewProfileActiveStore(RdbManager)
 	DeviceAttributeStore = model.NewDeviceAttributeStore(RdbManager)
-	FenceSets, CurrentFenceSets, FenceManifests = buildFenceSetSeam()
-	DeviceManagementFacts = buildFactReconcileSeam()
+	peers := svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
+	FenceSets, CurrentFenceSets, FenceManifests = buildFenceSetSeam(peers)
+	DeviceManagementFacts = buildFactReconcileSeam(peers)
 
-	Svc = service.New(Microservice, service.Spec{Nats: &service.NatsSpec{OnCreate: createNatsComponents}})
+	Svc = service.New(Microservice, service.Spec{Nats: &service.NatsSpec{OnCreate: func(nmgr *messaging.NatsManager) error { return createNatsComponents(nmgr, peers) }}})
 	buildMetrics()
 
 	ctx := context.Background()

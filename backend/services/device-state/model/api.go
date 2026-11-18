@@ -48,7 +48,7 @@ type DeviceStateApi interface {
 	AssertedStatesForDemotion(ctx context.Context, source string, tokens *[]string, afterId uint64, limit int) ([]*DeviceState, error)
 	DemoteAssertedPresence(ctx context.Context, source string, tokens *[]string, afterId uint64, limit int, actor, reason string) (*PresenceDemotionResult, error)
 	DeviceStates(ctx context.Context, criteria DeviceStateSearchCriteria) (*DeviceStateSearchResults, error)
-	ApplyDeviceOwnership(ctx context.Context, deviceToken string, anchors []string, changedAt time.Time) (bool, error)
+	ApplyDeviceOwnership(ctx context.Context, deviceToken string, anchors []string, changedAt time.Time, incarnation uint64) (bool, error)
 	SweepInactive(ctx context.Context, now time.Time) (int64, error)
 	MergeLatestMeasurements(ctx context.Context, deviceToken string, inputs []LatestMeasurementInput) error
 	LatestMeasurementsByDeviceToken(ctx context.Context, deviceToken string) ([]*LatestMeasurement, error)
@@ -96,9 +96,10 @@ type PresenceTransition struct {
 // device and is not overwritten by the last non-empty value — it is ordered, by
 // applyOwners.
 type DeviceIdentity struct {
-	ExternalId string
-	Source     string
-	Owners     Owners
+	Incarnation uint64
+	ExternalId  string
+	Source      string
+	Owners      Owners
 }
 
 // blankDeviceState is the row of a device no event has touched: INFERRED, no identity, no
@@ -225,11 +226,19 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 				// first event loses the (tenant_id, device_token) unique index race
 				// and errors out (redelivered), rather than producing a duplicate.
 				found = newDeviceState(deviceToken, occurredAt, pt, id)
+				found.Incarnation = eventIncarnation(id.Incarnation)
 				return tx.Create(found).Error
 			}
 			return result.Error
 		}
-		applyEvent(found, occurredAt, pt, id)
+		devices := map[string][]int{deviceToken: {0}}
+		updates := []ProjectionUpdate{{Incarnation: id.Incarnation, OccurredAt: occurredAt, Presence: pt, Identity: id}}
+		if err := foldIncarnations(tx, found, devices, updates); err != nil {
+			return err
+		}
+		if len(devices[deviceToken]) == 0 {
+			return nil
+		}
 		return tx.Save(found).Error
 	})
 	if err != nil {

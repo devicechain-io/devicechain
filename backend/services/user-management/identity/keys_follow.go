@@ -156,5 +156,5 @@ func (m *Manager) NewSigningKeyFollowTask(maxAge, retention time.Duration) *core
 	m.followFailures = m.ms.NewCounter("signing_key_follow_failures_total", "Failed attempts to follow the instance signing keys.")
 	return core.NewPeriodicTask(m.ms.FunctionalArea, "signing-key-follow", signingKeyFollowInterval,
 		func(ctx context.Context) error { return m.signingKeyFollowTick(ctx, maxAge, retention) },
-		core.NewNoOpLifecycleCallbacks())
+		core.NewNoOpLifecycleCallbacks(), m.ms.NewPeriodicTaskMetrics("signing_key_follow"))
 }

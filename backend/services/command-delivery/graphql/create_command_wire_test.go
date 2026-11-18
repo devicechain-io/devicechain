@@ -35,8 +35,8 @@ type stubEnqueueValidator struct {
 	anchors []string
 }
 
-func (s stubEnqueueValidator) ValidateEnqueue(context.Context, string, string, []byte) ([]string, error) {
-	return s.anchors, s.err
+func (s stubEnqueueValidator) ValidateEnqueue(context.Context, string, string, []byte) ([]string, uint64, error) {
+	return s.anchors, 0, s.err
 }
 
 const createCommandMutation = `mutation($request: CommandCreateRequest!) {

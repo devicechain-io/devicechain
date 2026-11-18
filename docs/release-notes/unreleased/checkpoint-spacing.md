@@ -4,7 +4,7 @@ section: whats-new
 
 ## en
 
-- **The detection engine spaces its snapshots by their cost.** Reaching `checkpointEvents` events no longer snapshots at once: the engine also waits until four times the last snapshot's cost has passed, so with large detection state the engine snapshots less often, never more than `checkpointIntervalSeconds` apart, and always when buffered acknowledgements reach half the consumer's limit. After a crash it may replay more than `checkpointEvents` events. No setting changes.
+- **The detection engine spaces its snapshots by their cost.** Reaching `checkpointEvents` no longer triggers a snapshot immediately: the engine also waits until four times the last snapshot's cost has passed, so with large detection state the engine snapshots less often, never more than `checkpointIntervalSeconds` apart, and always when buffered acknowledgements reach half the consumer's limit. After a crash it may replay more than `checkpointEvents` events. No setting changes.
 
 ## es
 

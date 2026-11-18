@@ -834,6 +834,8 @@ list, or the operation answers `NOT_FOUND`. A `measurementStream` subscription f
 the member's customers is accepted and delivers nothing. Every other operation answers `FORBIDDEN`
 with `extensions.reason` set to `SCOPE_UNSUPPORTED`.
 
+`measurementStream(deviceTokens: [String!], name: String)` accepts up to 1000 device tokens on one subscription; duplicates are ignored. The list must not be empty and cannot be combined with `deviceToken`. Omit both device arguments to stream all devices. The same access-scope and name filters apply to every reading.
+
 An event recorded while the device belonged to no customer is not visible to a member with
 limited access. Neither is an alarm raised before this release: alarms record their customers only
 from this release on. A device's live state from before this release becomes visible when the

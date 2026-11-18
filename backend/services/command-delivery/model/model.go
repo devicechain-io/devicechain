@@ -153,16 +153,18 @@ type Command struct {
 	rdb.TokenReference
 	rdb.MetadataEntity
 
-	DeviceToken     string
-	Name            string
-	Payload         *datatypes.JSON
-	Status          string
-	QueuedTime      time.Time
-	SentTime        sql.NullTime
-	RespondedTime   sql.NullTime
-	ExpiresAt       sql.NullTime
-	ResponsePayload *datatypes.JSON
-	Error           sql.NullString
+	DeviceToken string
+	// DeviceIncarnation is device-management's row id at validation; NULL is unknown.
+	DeviceIncarnation sql.NullInt64
+	Name              string
+	Payload           *datatypes.JSON
+	Status            string
+	QueuedTime        time.Time
+	SentTime          sql.NullTime
+	RespondedTime     sql.NullTime
+	ExpiresAt         sql.NullTime
+	ResponsePayload   *datatypes.JSON
+	Error             sql.NullString
 
 	// Outcome is the class of a FINISHED command (see CommandOutcome), stamped by the write that
 	// terminated it and NULL while the command is live. It is stored, not derived from Status and
