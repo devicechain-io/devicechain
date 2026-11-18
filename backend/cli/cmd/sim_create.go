@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -100,7 +101,7 @@ func resolveMqttInsecure(fs *pflag.FlagSet, tls bool) bool {
 	return !tls
 }
 
-func runSimCreate(cmd *cobra.Command, args []string) error {
+func runSimCreate(cmd *cobra.Command, args []string) (retErr error) {
 	name := args[0]
 	if err := sim.ValidateName(name); err != nil {
 		return err
@@ -113,10 +114,14 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	controlAddr, _ := cmd.Flags().GetString("control-addr")
 	if !cmd.Flags().Changed("control-addr") {
 		var err error
-		controlAddr, err = sim.NextControlAddr(name)
+		var releaseControlAddr func() error
+		controlAddr, releaseControlAddr, err = sim.NextControlAddr(name)
 		if err != nil {
 			return err
 		}
+		defer func() {
+			retErr = errors.Join(retErr, releaseControlAddr())
+		}()
 	}
 	ingress, _ := cmd.Flags().GetString("ingress")
 	mqttBroker, _ := cmd.Flags().GetString(flagMqttBroker)

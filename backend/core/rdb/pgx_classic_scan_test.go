@@ -199,7 +199,12 @@ func TestPgxClassicScanInterfaces(t *testing.T) {
 // either module (Dependabot raises them weekly) must fail here until it is re-read.
 const (
 	pgxClassicGormPostgresVersion = "v1.6.3"
-	pgxClassicPgxVersion          = "v5.12.0"
+	// v5.13.0 re-read against v5.12.0: the whole stdlib package differs only in
+	// Rows.ColumnTypeLength and ColumnTypePrecisionScale (unconstrained varchar/numeric,
+	// time precision). sql_go1.27.go (ScanColumn, isSQLScanDestination), OpenDB and
+	// GetConnector are byte-identical, so the 2026-11-13 measurement in pgx_classic_scan.go
+	// still holds and the exit condition is not met.
+	pgxClassicPgxVersion = "v5.13.0"
 )
 
 // TestPgxClassicScanUpstreamPins is the drift guard for what the method-set tests cannot

@@ -293,7 +293,7 @@ func (rc *DeviceReportsConsumer) refused(ctx context.Context, msg messaging.Mess
 		// Discarded, as update-management and event resolution discard a disabled device's traffic.
 		log.Debug().Str("device", token).Msg("Discarding a configuration report from a disabled device.")
 		msg.Ack()
-		done(core.ResultDropped)
+		done(core.ResultUnwanted)
 		return
 	default:
 		log.Debug().Str("device", token).Str("reason", refusal.Reason).Msg("Device configuration report refused.")

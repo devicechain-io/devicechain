@@ -2088,6 +2088,7 @@ dcctl sim run <name> [flags]
 ### Options
 
 ```
+      --day-length duration      harborpulse only: wall time one compressed sim day takes, e.g. 48m (0 keeps the scenario's own 24m day)
       --emit-interval duration   override the telemetry cadence, e.g. 3s (0 keeps the scenario's own)
   -h, --help                     help for run
       --play-devices             sitepulse only: play the device plane in the simulator instead of a Unity player

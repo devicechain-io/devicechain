@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -473,6 +474,144 @@ func TestAPublishThatFailsOnTheWireIsIndeterminateAndCountsForTheBreaker(t *test
 	require.ErrorAs(t, err, &ind, "a publish that may have reached the broker was reported as not sent")
 	assert.NotErrorIs(t, err, ErrSessionDown)
 	assert.True(t, c.breaker.Disconnected(), "an unknown-outcome publish did not count as a publish for the breaker")
+}
+
+// The receive path can report session loss inside Publish, before its token is returned.
+// Both a successful write and an indeterminate one must already be on the breaker's watch.
+func TestASessionLostBeforeTheCommandWriteReturnsTripsTheBreaker(t *testing.T) {
+	for _, halfOpen := range []bool{false, true} {
+		for _, writeErr := range []error{nil, errors.New("wire write failed")} {
+			t.Run(fmt.Sprintf("halfOpen=%t/error=%v", halfOpen, writeErr), func(t *testing.T) {
+				c, fc, _ := bornClient(t, enabledCommands())
+				clk := newClock()
+				c.now = clk.now
+				c.breaker = NewBreaker(clk.now)
+				if halfOpen {
+					c.breaker.Published()
+					require.True(t, c.breaker.Disconnected())
+					clk.advance(breakerMinBackoff)
+				}
+				initialFailures := c.breaker.failures
+				publishes := 0
+				trips := 0
+				c.SetCommandHooks(CommandHooks{Tripped: func(time.Time) { trips++ }})
+				fc.pubErr = writeErr
+				fc.onPublish = func(string) {
+					publishes++
+					assert.Equal(t, clk.now(), c.breaker.lastPublish)
+					if halfOpen {
+						assert.Equal(t, clk.now(), c.breaker.probePublished)
+					}
+					c.noteSessionLost()
+					assert.Equal(t, BreakerOpen, c.BreakerState(), "session loss before Publish returned missed the command")
+				}
+				ref, err := c.LookupMetric(wireNodeT, "Setpoint")
+				require.NoError(t, err)
+				_, err = c.PublishMetric(context.Background(), ref, 5, nil)
+				if writeErr == nil {
+					require.NoError(t, err)
+				} else {
+					var ind *PublishIndeterminateError
+					require.ErrorAs(t, err, &ind)
+					assert.ErrorIs(t, err, writeErr)
+					assert.NotErrorIs(t, err, ErrSessionDown)
+				}
+				assert.Equal(t, 1, publishes)
+				assert.Equal(t, initialFailures+1, c.breaker.failures)
+				assert.Equal(t, 1, trips)
+				assert.Equal(t, BreakerOpen, c.BreakerState())
+			})
+		}
+	}
+}
+
+// commandConnectionCheck lets a test interleave work at the final connectivity check.
+type commandConnectionCheck struct {
+	*fakeClient
+	check func() bool
+}
+
+func (f *commandConnectionCheck) IsConnected() bool { return f.check() }
+
+func TestANotConnectedCommandLeavesTheBreakerUntouchedAndReleasesItsProbe(t *testing.T) {
+	for _, initial := range []string{"no publish", "old publish", "half-open"} {
+		for _, connection := range []string{"nil client", "disconnected client", "loss during check"} {
+			t.Run(initial+"/"+connection, func(t *testing.T) {
+				c, fc, _ := bornClient(t, enabledCommands())
+				clk := newClock()
+				c.now = clk.now
+				c.breaker = NewBreaker(clk.now)
+				b := c.breaker
+				if initial != "no publish" {
+					b.Published()
+					if initial == "half-open" {
+						require.True(t, b.Disconnected())
+						clk.advance(breakerMinBackoff)
+					} else {
+						clk.advance(breakerWatch)
+					}
+				}
+				state := b.State()
+				lastPublish, probePublished, probing := b.lastPublish, b.probePublished, b.probing
+				openUntil, failures := b.openUntil, b.failures
+				// Keep hostOnline true until publishCommand's connectivity check. Session
+				// loss here must not blame a command that has not reached Publish.
+				c.mc = nil
+				if connection != "nil client" {
+					c.mc = &commandConnectionCheck{fakeClient: fc, check: func() bool {
+						if connection == "loss during check" {
+							c.noteSessionLost()
+						}
+						return false
+					}}
+				}
+				ref, err := c.LookupMetric(wireNodeT, "Setpoint")
+				require.NoError(t, err)
+				_, err = c.PublishMetric(context.Background(), ref, 5, nil)
+				require.ErrorIs(t, err, ErrSessionDown)
+				assert.Empty(t, fc.sentTo(wireNodeT.Topic()))
+				// Compare the stored fields directly, without State settling anything.
+				assert.Equal(t, lastPublish, b.lastPublish)
+				assert.Equal(t, probePublished, b.probePublished)
+				assert.Equal(t, probing, b.probing)
+				assert.Equal(t, state, b.state)
+				assert.Equal(t, openUntil, b.openUntil)
+				assert.Equal(t, failures, b.failures)
+				assert.False(t, b.Disconnected(), "a command never sent must not trip")
+				if initial == "half-open" {
+					require.True(t, b.Admit(), "the not-connected probe did not give its slot back")
+					b.Release()
+				}
+			})
+		}
+	}
+}
+
+func TestANotConnectedCommandDoesNotEraseAnotherCommandsPublish(t *testing.T) {
+	c, fc, _ := bornClient(t, enabledCommands())
+	clk := newClock()
+	c.now = clk.now
+	c.breaker = NewBreaker(clk.now)
+	ref, err := c.LookupMetric(wireNodeT, "Setpoint")
+	require.NoError(t, err)
+	checks := 0
+	c.mc = &commandConnectionCheck{fakeClient: fc, check: func() bool {
+		checks++
+		// A has been admitted but has not passed its connectivity check. B now
+		// publishes on a live connection before A is told it has no connection.
+		c.mc = fc
+		clk.advance(time.Second)
+		_, err := c.PublishMetric(context.Background(), ref, 6, nil)
+		require.NoError(t, err)
+		require.Equal(t, clk.now(), c.breaker.lastPublish)
+		return false
+	}}
+	_, err = c.PublishMetric(context.Background(), ref, 5, nil)
+	require.ErrorIs(t, err, ErrSessionDown)
+	assert.Equal(t, 1, checks)
+	assert.Len(t, fc.sentTo(wireNodeT.Topic()), 1, "only B reached the wire")
+	assert.Equal(t, clk.now(), c.breaker.lastPublish, "A erased B's publish record")
+	assert.True(t, c.breaker.Disconnected(), "B's publish must still trip on disconnect")
 }
 
 // A token that moves to another identity leaves no stale entry for the old one.

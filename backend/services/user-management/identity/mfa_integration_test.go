@@ -212,13 +212,19 @@ func TestMfaPgTheTotpWindowIsPlusOrMinusOneStep(t *testing.T) {
 	e.member(t, "pat@example.com", "pw-1")
 	seed, _ := e.enroll(t, "pat@example.com", "pw-1")
 
+	// Pin both generation and verification after enrollment: crossing a wall-clock step between
+	// generating a code and verifying it would move the offset by one step. A fixed time also
+	// guards against accidentally using the wall clock here.
+	now := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+	e.m.now = func() time.Time { return now }
+
 	for _, tc := range []struct {
 		offset int
 		ok     bool
 	}{{-2, false}, {2, false}, {-1, true}, {0, true}, {1, true}} {
 		e.resetSteps(t)
 		ch := e.challenge(t, "pat@example.com", "pw-1")
-		_, err := e.m.VerifyMfa(ctx, ch.Challenge, credential.GenerateTOTP(seed, at(tc.offset)), "203.0.113.5")
+		_, err := e.m.VerifyMfa(ctx, ch.Challenge, credential.GenerateTOTP(seed, now.Add(time.Duration(tc.offset)*30*time.Second)), "203.0.113.5")
 		if tc.ok {
 			require.NoError(t, err, "offset %d", tc.offset)
 		} else {
