@@ -582,3 +582,197 @@ describe('the skew against short-lived tokens', () => {
     stop();
   });
 });
+
+// A server whose refresh tokens rotate: each one is honoured once, and a second use is refused
+// definitively, as user-management's claim-by-delete does. Both the refresh and the step-up
+// spend through it, which is what made them able to race.
+function rotatingServer(first: TokenPair) {
+  const live = new Set([first.refreshToken]);
+  let n = 0;
+  const spend = (rt: string, gate?: Promise<void>) => async (): Promise<TokenPair> => {
+    if (gate) await gate;
+    if (!live.delete(rt)) throw new GraphQLRequestError('invalid refresh token', 200, [{ message: 'invalid refresh token' }]);
+    n++;
+    const next = { accessToken: jwt(900 + n), refreshToken: jwt(3600 + n) };
+    live.add(next.refreshToken);
+    return next;
+  };
+  return { live, spend };
+}
+
+function deferred() {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  return { gate, open };
+}
+
+describe('exchange (a step-up spends the refresh token through the coordinator)', () => {
+  // The audit's interleaving: a 401 starts a forced refresh with refresh token R while the access
+  // token is still valid; the user then submits a correct step-up code. Before exchange the
+  // step-up spent R too, the server honoured only one, and the loser's refusal ended the session.
+  it('waits out a forced refresh already running, then spends the token it left', async () => {
+    const held = pair(300);
+    const server = rotatingServer(held);
+    const refreshGate = deferred();
+    const refresh = vi.fn((rt: string) => server.spend(rt, refreshGate.gate)());
+    const { state, tokens } = host(held, refresh);
+    const spend = vi.fn((rt: string) => server.spend(rt)());
+
+    const forced = tokens.forceRefresh(held.accessToken);
+    const stepped = tokens.exchange(spend);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spend).not.toHaveBeenCalled(); // still waiting for the forced refresh
+    refreshGate.open();
+
+    const refreshed = await forced;
+    const stepToken = await stepped;
+    expect(refresh).toHaveBeenCalledExactlyOnceWith(held.refreshToken);
+    // The step-up spent the token the forced refresh left, not R again.
+    expect(spend).toHaveBeenCalledTimes(1);
+    expect(spend.mock.calls[0][0]).not.toBe(held.refreshToken);
+    expect(refreshed).not.toBeNull();
+    expect(state.ended).toEqual([]);
+    expect(state.pair?.accessToken).toBe(stepToken);
+    expect(server.live.has(state.pair!.refreshToken)).toBe(true);
+  });
+
+  it('a refresh asked for while it runs (forced, due token, timer) takes its pair instead of spending again', async () => {
+    const held = pair(300);
+    const server = rotatingServer(held);
+    const refresh = vi.fn((rt: string) => server.spend(rt)());
+    const { state, tokens } = host(held, refresh);
+    const stepGate = deferred();
+    const spend = vi.fn((rt: string) => server.spend(rt, stepGate.gate)());
+
+    const stepped = tokens.exchange(spend);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spend).toHaveBeenCalledExactlyOnceWith(held.refreshToken);
+    // A forced refresh that names no rejected token waits and shares.
+    const forced = tokens.forceRefresh();
+    // Another request's 401 for the very token the exchange carries cannot tell itself from the
+    // exchange's own: it fails, without spending and without ending the session.
+    await expect(tokens.forceRefresh(held.accessToken)).rejects.toMatchObject({ status: 401 });
+    // The access token comes due while the exchange runs: the auto-refresh fires into it.
+    const stop = tokens.startAutoRefresh();
+    await vi.advanceTimersByTimeAsync(300_000 - 30_000);
+    stepGate.open();
+    const stepToken = await stepped;
+    expect(await forced).toBe(stepToken);
+    await vi.advanceTimersByTimeAsync(0);
+    stop();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(state.ended).toEqual([]);
+    expect(state.pair?.accessToken).toBe(stepToken);
+  });
+
+  it('a refused code keeps the session, and a refresh waiting on it then goes ahead', async () => {
+    const held = pair(300);
+    const server = rotatingServer(held);
+    const refresh = vi.fn((rt: string) => server.spend(rt)());
+    const { state, tokens } = host(held, refresh);
+    const refused = new GraphQLRequestError('invalid code', 200, [{ message: 'invalid code' }]);
+    const stepGate = deferred();
+    const stepped = tokens.exchange(async () => {
+      await stepGate.gate;
+      throw refused;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const forced = tokens.forceRefresh();
+    stepGate.open();
+    await expect(stepped).rejects.toBe(refused);
+    const next = await forced;
+    expect(refresh).toHaveBeenCalledExactlyOnceWith(held.refreshToken);
+    expect(next).not.toBeNull();
+    expect(state.ended).toEqual([]);
+    expect(state.pair?.accessToken).toBe(next);
+  });
+
+  it("hands its own request the held token, and fails a 401 for it without waiting or ending the session", async () => {
+    const held = pair(300);
+    const refresh = vi.fn();
+    const { state, tokens } = host(held, refresh);
+    const stepGate = deferred();
+    let selfToken: string | null = null;
+    let selfRecovery: Promise<string | null> | undefined;
+    const stepped = tokens.exchange(async () => {
+      // The step-up's own request: it asks for a token, gets a 401, and asks for recovery.
+      selfToken = await tokens.getAccessToken();
+      selfRecovery = tokens.forceRefresh(selfToken!);
+      await expect(selfRecovery).rejects.toMatchObject({ status: 401 });
+      await stepGate.gate;
+      throw new GraphQLRequestError('Request failed (401)', 401);
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(selfToken).toBe(held.accessToken);
+    stepGate.open();
+    await expect(stepped).rejects.toMatchObject({ status: 401 });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(state.ended).toEqual([]);
+    expect(state.pair).toBe(held);
+  });
+
+  it('hands its own request a token that came due mid-exchange, rather than waiting on itself', async () => {
+    const held = pair(60);
+    const refresh = vi.fn();
+    const { state, tokens } = host(held, refresh);
+    const next = pair(900);
+    const stepped = tokens.exchange(async () => {
+      // The access token comes within the skew of expiry while the step-up is in flight.
+      vi.setSystemTime(NOW + 45_000);
+      expect(await tokens.getAccessToken()).toBe(held.accessToken);
+      return next;
+    });
+    expect(await stepped).toBe(next.accessToken);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(state.pair?.accessToken).toBe(next.accessToken);
+  });
+
+  it('drops its pair when the session was signed out while it ran', async () => {
+    const held = pair(300);
+    const { state, tokens } = host(held, vi.fn());
+    const stepGate = deferred();
+    const stepped = tokens.exchange(async () => {
+      await stepGate.gate;
+      return pair(900);
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    state.pair = null;
+    tokens.reset();
+    stepGate.open();
+    await expect(stepped).rejects.toThrow('session changed');
+    expect(state.pair).toBeNull();
+  });
+
+  it('refuses when signed out, without spending anything', async () => {
+    const spend = vi.fn();
+    const { tokens } = host(null, vi.fn());
+    await expect(tokens.exchange(spend)).rejects.toThrow('session unavailable');
+    expect(spend).not.toHaveBeenCalled();
+  });
+
+  it('a refresh that throws synchronously never leaves itself behind as the in-flight use', async () => {
+    const next = pair(900);
+    const refresh = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new GraphQLRequestError('offline', 0);
+      })
+      .mockResolvedValueOnce(next);
+    const { state, tokens } = host(pair(-1), refresh);
+    await expect(tokens.getAccessToken()).resolves.toBeNull();
+    expect(state.ended).toEqual([]);
+    expect(await tokens.getAccessToken()).toBe(next.accessToken);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('a spend that throws synchronously never leaves itself behind as the in-flight use', async () => {
+    const next = pair(900);
+    const refresh = vi.fn().mockResolvedValue(next);
+    const held = pair(300);
+    const { tokens } = host(held, refresh);
+    const boom = new Error('boom');
+    await expect(tokens.exchange(() => { throw boom; })).rejects.toBe(boom);
+    // Nor as the exchange in progress: a 401 for the held token now recovers as usual.
+    expect(await tokens.forceRefresh(held.accessToken)).toBe(next.accessToken);
+  });
+});
