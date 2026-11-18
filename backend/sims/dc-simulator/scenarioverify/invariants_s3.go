@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"mime"
 	"net/http"
 	"regexp"
 	"sort"
@@ -269,28 +270,72 @@ func gaugePagedAndEscalated(o Observations, g string) error {
 
 // The duty mail, as notification-management renders it: a page names the alarm on its first line
 // ("Alarm <key> <verb> on <device>." for an ALARM, "Alarm <key> is still unacknowledged ..." for an
-// ESCALATION) and the device in a "Device token:" field.
+// ESCALATION) and, best-effort, the device in a "Device token:" field. Neither rendering carries
+// an alarm token or link. Both subjects end "<key> on <source>", where the source is the device's
+// name or token when device-management resolved it and otherwise the alarm's originator as
+// "<originatorType> <originatorId>" -- which is what a mail without a "Device token:" field names.
 var (
 	mailEscalationLine = regexp.MustCompile(`(?m)^Alarm (\S+) is still unacknowledged`)
 	mailAlarmLine      = regexp.MustCompile(`(?m)^Alarm (\S+) \S+ on `)
 	mailDeviceField    = regexp.MustCompile(`(?m)^Device token:[ \t]+(\S+)[ \t]*\r?$`)
+	mailSubjectHeader  = regexp.MustCompile(`(?m)^Subject: (.*?)\r?$`)
+	mailSubjectSource  = regexp.MustCompile(`^\[[^\]]*\] Alarm [^:]*: (\S+) on (.+)$`)
 )
 
 // dutyMail classifies one mail's DATA: the device it names, the alarm key, and the trigger it is a
-// page for (ALARM or ESCALATION). ok is false for a mail it cannot attribute.
+// page for (ALARM or ESCALATION). Without a device field it still returns the alarm and trigger,
+// but ok is false until the caller can attribute that alarm from observations.
 func dutyMail(data string) (device, key, trigger string, ok bool) {
 	m := mailDeviceField.FindStringSubmatch(data)
-	if m == nil {
-		return "", "", "", false
+	if m != nil {
+		device = m[1]
 	}
-	device = m[1]
 	if e := mailEscalationLine.FindStringSubmatch(data); e != nil {
-		return device, e[1], "ESCALATION", true
+		return device, e[1], "ESCALATION", device != ""
 	}
 	if a := mailAlarmLine.FindStringSubmatch(data); a != nil {
-		return device, a[1], "ALARM", true
+		return device, a[1], "ALARM", device != ""
 	}
 	return "", "", "", false
+}
+
+// mailSource is the alarm key and source a duty mail's subject names, or "" for either it lacks.
+func mailSource(data string) (key, source string) {
+	h := mailSubjectHeader.FindStringSubmatch(data)
+	if h == nil {
+		return "", ""
+	}
+	subject, err := new(mime.WordDecoder).DecodeHeader(h[1])
+	if err != nil {
+		return "", ""
+	}
+	m := mailSubjectSource.FindStringSubmatch(subject)
+	if m == nil {
+		return "", ""
+	}
+	return m[1], m[2]
+}
+
+// mailAlarmDevice attributes a mail with no "Device token:" field by the originator its subject
+// names: the gauge whose flood alarm, with exactly the mail's key, was observed through the storm
+// with that originator. It answers only when exactly one gauge matches -- AckGauge included, so
+// the acknowledged gauge's mail never stands in for another gauge's -- and "" otherwise.
+func mailAlarmDevice(o Observations, data, key string) string {
+	subjectKey, source := mailSource(data)
+	if source == "" || subjectKey != key || !strings.HasPrefix(key, sim.HarborpulseFloodAlarmKey) {
+		return ""
+	}
+	gauges := fleetOf(sim.HarborpulseGaugeType, "")
+	device := ""
+	for _, a := range samples(o, o.at(stormFrom), o.end(), func(a AlarmSample) bool {
+		return a.Originator == source && a.Key == key && sliceHas(gauges, a.Device)
+	}) {
+		if device != "" && device != a.Device {
+			return ""
+		}
+		device = a.Device
+	}
+	return device
 }
 
 // floodMail counts the mail the sink received for recipient through the watched storm that names a
@@ -303,6 +348,10 @@ func floodMail(o Observations, recipient string) (map[string]map[string]int, int
 			continue
 		}
 		device, key, trigger, ok := dutyMail(m.Data)
+		if !ok && mailDeviceField.FindStringSubmatch(m.Data) == nil {
+			device = mailAlarmDevice(o, m.Data, key)
+			ok = device != ""
+		}
 		if !ok {
 			unattributed++
 			continue
