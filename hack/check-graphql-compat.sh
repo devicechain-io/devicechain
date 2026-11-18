@@ -4,7 +4,7 @@
 #
 # Does any served GraphQL schema break a client written against the last release?
 #
-#   hack/check-graphql-compat.sh            # baseline: nearest stable tag reachable from HEAD
+#   hack/check-graphql-compat.sh            # baseline: hack/api-baseline.sh's rule
 #   hack/check-graphql-compat.sh v0.24.0    # baseline: the tag given
 #   hack/check-graphql-compat.sh --self-test # prove the check can fail, through this script
 #
@@ -12,18 +12,20 @@
 # trees to backend/tools/docsgql/cmd/sdlcompat, which classifies every difference and
 # fails on a breaking one not declared in backend/tools/docsgql/sdlcompat/breaks.txt.
 #
-# THE BASELINE is the nearest STABLE tag REACHABLE from HEAD, not the newest tag in the
-# repository: a fix on a release branch must be compared with that branch's release, not
-# with a later minor that added things, and a release candidate is not a release anyone
-# runs. Same exclusion the upgrade gate makes.
+# THE BASELINE is hack/api-baseline.sh's, shared with every other surface of the gate: the
+# newest release a consumer of HEAD's line could be running (on main, the last minor, though it
+# was tagged on a release branch main never contains), and for a release or candidate build the
+# stable tag its changelog starts at. Release candidates are never a base.
 #
-# 🔴 NO TAG IS A FAILURE, NEVER A SKIP. On a shallow clone `git describe` finds nothing,
-# and a compatibility check that compared against nothing would pass every break. The CI
-# job checks out with fetch-depth: 0 for exactly this.
+# 🔴 NO TAG IS A FAILURE, NEVER A SKIP. On a clone without tags nothing is found, and a
+# compatibility check that compared against nothing would pass every break. The CI job checks
+# out with fetch-depth: 0 for exactly this.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=hack/api-baseline.sh
+. "$ROOT/hack/api-baseline.sh"
 
 # The command is BUILT, not `go run`: `go run` exits 1 for any non-zero exit of the
 # program, which would fold "could not run" (2) into "found a break" (1) — and the
@@ -126,20 +128,7 @@ if [ $# -gt 1 ]; then
   exit 2
 fi
 
-if [ $# -eq 1 ]; then
-  baseline="$1"
-else
-  # '[0-9]*' and the exclusion of any '-' keep release candidates and non-release tags out.
-  baseline="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' HEAD 2>/dev/null || true)"
-  if [ -z "$baseline" ]; then
-    echo "::error::no stable vX.Y.Z release tag is reachable from HEAD. A shallow clone is the usual cause (check out with fetch-depth: 0); a check with no baseline compares against nothing and must not pass." >&2
-    exit 1
-  fi
-fi
-git rev-parse --verify --quiet "${baseline}^{commit}" >/dev/null || {
-  echo "::error::baseline '$baseline' is not a tag or commit in this repository." >&2
-  exit 1
-}
+baseline="$(resolve_baseline "${1:-}")" || exit 1
 echo "GraphQL compatibility baseline: $baseline"
 
 tmp="$(mktemp -d)"

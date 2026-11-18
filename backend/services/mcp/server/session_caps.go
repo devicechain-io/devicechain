@@ -4,6 +4,7 @@
 package server
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"sync"
@@ -38,6 +39,21 @@ func limitSessions(next http.Handler, server *mcp.Server, caps sessionCaps) http
 			next.ServeHTTP(w, r)
 			return
 		}
+		body, err := io.ReadAll(r.Body) // already buffered and bounded
+		if err != nil {
+			writeRPCError(w, http.StatusBadRequest, rpcInvalidRequest, nil, "the request body was not received")
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		n, id, ok := countMessages(body)
+		// Legacy batches can run tools after initialize, holding this process-wide
+		// lock across downstream queries. Refuse before admission, including a
+		// one-entry batch (which countMessages also counts as one message).
+		if !ok || n != 1 || bytes.HasPrefix(bytes.TrimSpace(body), []byte("[")) {
+			writeRPCError(w, http.StatusBadRequest, rpcInvalidRequest, nil,
+				"send initialize on its own, not in a JSON-RPC batch")
+			return
+		}
 		// Serialize admission through SDK creation and response-header capture.
 		// Otherwise two initializes could both observe the final free slot.
 		mu.Lock()
@@ -66,8 +82,6 @@ func limitSessions(next http.Handler, server *mcp.Server, caps sessionCaps) http
 		// cap through len(live). It must not refuse every caller: that would turn one
 		// unrecorded session into a process-wide lockout until it idles out.
 		if len(live) >= caps.total || callerSessions >= caps.caller {
-			body, _ := io.ReadAll(r.Body) // already buffered and bounded
-			_, id, _ := countMessages(body)
 			w.Header().Set("Retry-After", "1")
 			writeRPCError(w, http.StatusTooManyRequests, rpcRateLimited, id,
 				"too many live MCP sessions; reuse an existing session or close unused sessions and retry")

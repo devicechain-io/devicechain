@@ -433,6 +433,10 @@ func (nmgr *NatsManager) NewReplayReader(suffix string, startSeq uint64) (Replay
 	if err := nmgr.requireReader(suffix, streams.ReadEphemeral); err != nil {
 		return nil, 0, err
 	}
+	return nmgr.newReplayReader(suffix, startSeq)
+}
+
+func (nmgr *NatsManager) newReplayReader(suffix string, startSeq uint64) (ReplayReader, uint64, error) {
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	info, err := nmgr.js.StreamInfo(name)
 	if err != nil {
@@ -476,6 +480,10 @@ func (nmgr *NatsManager) NewReplayReaderFromTime(suffix string, startTime time.T
 	if err := nmgr.requireReader(suffix, streams.ReadEphemeral); err != nil {
 		return nil, time.Time{}, err
 	}
+	return nmgr.newReplayReaderFromTime(suffix, startTime)
+}
+
+func (nmgr *NatsManager) newReplayReaderFromTime(suffix string, startTime time.Time) (ReplayReader, time.Time, error) {
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	info, err := nmgr.js.StreamInfo(name)
 	if err != nil {
