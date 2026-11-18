@@ -255,6 +255,14 @@ func TestEmptyMappingDisablesNotDeletes(t *testing.T) {
 	_, err := e.m.SelectTenant(context.Background(), got.IdentityToken, "acme")
 	require.Error(t, err, "a disabled membership cannot be entered")
 
+	// The provider withheld the tenant, so an operator cannot hand it back: enabling would
+	// contradict the provider until the next sign-in disabled it again.
+	_, err = e.admin.SetMembershipEnabled(context.Background(), newcomer, "acme", true)
+	require.ErrorIs(t, err, admin.ErrMembershipManagedByIdp)
+	require.False(t, e.membership(t, newcomer, "acme").Enabled)
+	_, err = e.m.SelectTenant(context.Background(), got.IdentityToken, "acme")
+	require.Error(t, err, "and the person still cannot enter it")
+
 	// A token with no groups claim at all is the same as no groups.
 	e.op.mutate = nil
 	e.signInOK(t, "acme-idp", "sub-nia", newcomer)
@@ -423,8 +431,9 @@ func TestOrphanedManagedMembershipCannotBeReenabled(t *testing.T) {
 	_, err := e.admin.SetMembershipEnabled(ctx, newcomer, "acme", false)
 	require.ErrorIs(t, err, admin.ErrMembershipManagedByIdp)
 	require.True(t, e.membership(t, newcomer, "acme").Enabled)
+	// Nor enabled: the provider decides whether it is active.
 	_, err = e.admin.SetMembershipEnabled(ctx, newcomer, "acme", true)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, admin.ErrMembershipManagedByIdp)
 
 	deleted, err := e.m.DeleteIdpConnection(ctx, "acme-idp")
 	require.NoError(t, err)

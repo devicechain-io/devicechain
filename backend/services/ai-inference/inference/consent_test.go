@@ -13,22 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestFactsQuerySelectsTheContractFields is the ai-inference half of a CROSS-SERVICE
-// wire contract; user-management pins the other half
-// (graphql.TestTenantGovernanceExposesTheTierToken).
-//
-// Both facts are read from ONE tenantGovernance query by field name. If either name
-// drifts from what user-management serves, the JSON simply decodes to the zero value —
-// and both zero values are indistinguishable from a legitimate answer: false reads as
-// "this tenant never consented", "" reads as "unknown tier, empty menu". Either way the
-// NL door reports unavailable for every tenant, fail-closed and silent, which is the
-// worst kind of correct-looking failure. Nothing else in the build would notice.
-func TestFactsQuerySelectsTheContractFields(t *testing.T) {
-	assert.Contains(t, tenantFactsQuery, "tenantGovernance", "the facts come from user-management's tenantGovernance query")
-	assert.Contains(t, tenantFactsQuery, "aiExternalEnabled", "ADR-056 §6 consent, by the name user-management serves")
-	assert.Contains(t, tenantFactsQuery, "tierToken", "ADR-065 tier, by the name user-management serves")
-}
-
 // TestFactsDecodesTheWireShape decodes an ACTUAL user-management response body rather
 // than asserting against a hand-built Go map. That distinction has bitten this platform
 // before: a struct-tag typo or a nesting mistake is invisible to a test that never

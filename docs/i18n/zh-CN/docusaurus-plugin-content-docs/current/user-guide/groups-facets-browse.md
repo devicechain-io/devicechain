@@ -50,7 +50,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 <GuideShot id="facets-new" alt="New facet 抽屉，字段包括设置为 Device 的 Member family、占位符为 climate 的 Attribute key、设置为 STRING 的 Value type、占位符为 arid, temperate, tropical 的 Values 以及 Label，下方是“Save facet”按钮。" />
 
-点击 **Save facet**（保存分面）。没有单独的编辑界面：要修改分面的类型、值或标签，请用相同的成员类别和键重新声明，新的声明会替换旧的。
+点击 **Save facet**（保存分面）。没有单独的编辑界面：要修改分面的类型、值或标签，请用相同的成员类别和键重新声明，新的声明会替换旧的。**类型**的更改是例外：只要该成员类别和键下仍有共享属性保存着旧类型的值，更改就会被拒绝，因此请先清除这些值或将其迁移为新类型。只更改值或标签则不受此限制。
 
 **Delete**（删除）只移除声明。实体上已存储的值保持不变，使用该分面的已保存动态分组也继续有效。
 

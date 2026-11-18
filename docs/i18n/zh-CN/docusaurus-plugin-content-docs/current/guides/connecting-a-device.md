@@ -534,6 +534,8 @@ openssl pkeyutl -sign -rawin -inkey k.pem -in digest | base64 | tr -d '\n'
 
 使用 HTTP `GET` 下载。该端点支持 `Range` 请求，因此中断的下载可以从已持有的字节处续传；授权过期后，再次发送相同的 `download.request` 即可获得新的授权。如果该分配已不是当前分配，平台回复的是 `update.cancel` 而不是授权。
 
+下载请求按设备设有额度：平台一次最多应答五个，之后每秒应答一个。超出额度的请求会被直接丢弃，不会有任何回复，既没有授权也没有 `update.cancel`，设备也不会收到通知。因此不要无限期等待回复：如果在有限的等待时间（例如十秒）后仍未收到回复，就再次发送相同的 `download.request`。
+
 在 `device-reports` 上用 `update.progress` 报告每个阶段：
 
 ```json

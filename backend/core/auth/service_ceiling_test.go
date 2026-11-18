@@ -108,7 +108,7 @@ func TestServiceCeilingTableIsPinned(t *testing.T) {
 		"event-processing":        {"ai:infer", "command:write", "device:read", "tenant:read"},
 		"event-sources":           {"command:claim", "command:wake", "device:read", "state:read", "tenant:read"},
 		"lwm2m-ingest":            {"command:claim", "command:park", "command:read", "device:read", "device:write", "state:read", "tenant:read"},
-		"notification-management": {"tenant:read"},
+		"notification-management": {"alarm:read", "tenant:read"},
 		"outbound-connectors":     {"command:claim", "device:read", "tenant:read"},
 		"sparkplug-ingest":        {"command:claim", "command:park", "command:read", "device:read", "device:write", "state:read", "tenant:read"},
 		"update-management":       {"device:read", "tenant:read"},

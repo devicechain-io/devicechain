@@ -233,14 +233,14 @@ func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*Even
 	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
 	results := make([]Event, 0)
-	db, pag := api.RDB.ListOf(ctx, &Event{}, func(result *gorm.DB) *gorm.DB {
+	rows, pag, err := readEventPage(ctx, api.RDB, &Event{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
 		return api.eventAnchorFilter(ctx, criteria, result)
-	}, criteria.Pagination)
-	db.Find(&results)
-	if db.Error != nil {
-		return nil, boundedReadError(ctx, db.Error, bound)
+	}, criteria, results)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
 	}
+	results = rows
 	return &EventSearchResults{Results: results, Pagination: pag}, nil
 }
 
@@ -255,14 +255,14 @@ func (api *Api) LocationEvents(ctx context.Context, criteria EventSearchCriteria
 	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
 	results := make([]LocationEvent, 0)
-	db, pag := api.RDB.ListOf(ctx, &LocationEvent{}, func(result *gorm.DB) *gorm.DB {
+	rows, pag, err := readEventPage(ctx, api.RDB, &LocationEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
 		return api.anchorFilter(ctx, criteria, result)
-	}, criteria.Pagination)
-	db.Find(&results)
-	if db.Error != nil {
-		return nil, boundedReadError(ctx, db.Error, bound)
+	}, criteria, results)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
 	}
+	results = rows
 	return &LocationEventSearchResults{Results: results, Pagination: pag}, nil
 }
 
@@ -277,14 +277,14 @@ func (api *Api) MeasurementEvents(ctx context.Context, criteria EventSearchCrite
 	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
 	results := make([]MeasurementEvent, 0)
-	db, pag := api.RDB.ListOf(ctx, &MeasurementEvent{}, func(result *gorm.DB) *gorm.DB {
+	rows, pag, err := readEventPage(ctx, api.RDB, &MeasurementEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
 		return api.anchorFilter(ctx, criteria, result)
-	}, criteria.Pagination)
-	db.Find(&results)
-	if db.Error != nil {
-		return nil, boundedReadError(ctx, db.Error, bound)
+	}, criteria, results)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
 	}
+	results = rows
 	return &MeasurementEventSearchResults{Results: results, Pagination: pag}, nil
 }
 
@@ -590,14 +590,14 @@ func (api *Api) AlertEvents(ctx context.Context, criteria EventSearchCriteria) (
 	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
 	results := make([]AlertEvent, 0)
-	db, pag := api.RDB.ListOf(ctx, &AlertEvent{}, func(result *gorm.DB) *gorm.DB {
+	rows, pag, err := readEventPage(ctx, api.RDB, &AlertEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
 		return api.anchorFilter(ctx, criteria, result)
-	}, criteria.Pagination)
-	db.Find(&results)
-	if db.Error != nil {
-		return nil, boundedReadError(ctx, db.Error, bound)
+	}, criteria, results)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
 	}
+	results = rows
 	return &AlertEventSearchResults{Results: results, Pagination: pag}, nil
 }
 
@@ -612,13 +612,35 @@ func (api *Api) StateChangeEvents(ctx context.Context, criteria EventSearchCrite
 	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
 	results := make([]StateChangeEvent, 0)
-	db, pag := api.RDB.ListOf(ctx, &StateChangeEvent{}, func(result *gorm.DB) *gorm.DB {
+	rows, pag, err := readEventPage(ctx, api.RDB, &StateChangeEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
 		return api.anchorFilter(ctx, criteria, result)
-	}, criteria.Pagination)
-	db.Find(&results)
-	if db.Error != nil {
-		return nil, boundedReadError(ctx, db.Error, bound)
+	}, criteria, results)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
 	}
+	results = rows
 	return &StateChangeEventSearchResults{Results: results, Pagination: pag}, nil
+}
+
+// readEventPage keeps both pagination modes on the same filtered, scoped query.
+func readEventPage[T any](ctx context.Context, manager *rdb.RdbManager, mdl rdb.Sortable,
+	filters func(*gorm.DB) *gorm.DB, criteria EventSearchCriteria, rows []T) ([]T, rdb.SearchResultsPagination, error) {
+	if criteria.IncludeTotal != nil && !*criteria.IncludeTotal {
+		db, window := manager.ListPageOf(ctx, mdl, filters, criteria.Pagination)
+		if err := db.Find(&rows).Error; err != nil {
+			return nil, rdb.SearchResultsPagination{}, err
+		}
+		rows, window = rdb.TrimPage(rows, window)
+		return rows, rdb.SearchResultsPagination{PageStart: window.PageStart, PageEnd: window.PageEnd,
+			TotalRecordsAbsent: true, HasMore: &window.HasMore}, nil
+	}
+	db, pag := manager.ListOf(ctx, mdl, filters, criteria.Pagination)
+	if err := db.Find(&rows).Error; err != nil {
+		return nil, pag, err
+	}
+	// int64: a page number near MaxInt32 times the page size overflows the int32 page fields.
+	more := int64(max(criteria.Pagination.PageNumber, 1))*int64(criteria.Pagination.EffectivePageSize()) < int64(pag.TotalRecords)
+	pag.HasMore = &more
+	return rows, pag, nil
 }
