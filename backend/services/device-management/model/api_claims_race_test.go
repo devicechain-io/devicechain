@@ -5,9 +5,12 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -122,4 +125,26 @@ func TestReinitiateDeviceClaimRefusesChangedSnapshot(t *testing.T) {
 			require.EqualValues(t, 1, edges, "a refused reopen must roll back the ownership revoke")
 		})
 	}
+}
+
+// A cancel that lands is journaled against the claim row it changed: the statement is
+// built on the loaded claim, so the audit entry names the row rather than recording an
+// anonymous update to device_claims.
+func TestCancelDeviceClaimIsJournaledAgainstTheClaimRow(t *testing.T) {
+	api, ctx := claimRaceFixture(t)
+	sys := core.WithSystemContext(context.Background())
+	require.NoError(t, api.RDB.Database.WithContext(sys).AutoMigrate(&rdb.AuditEvent{}))
+	require.NoError(t, rdb.RegisterAuditJournal(api.RDB.Database))
+	claim, err := api.DeviceClaimByDeviceToken(ctx, "race-device")
+	require.NoError(t, err)
+
+	canceled, err := api.CancelDeviceClaim(ctx, "race-device")
+	require.NoError(t, err)
+	require.True(t, canceled)
+
+	var rows []rdb.AuditEvent
+	require.NoError(t, api.RDB.DB(sys).
+		Where("table_name = ? AND operation = ?", "device_claims", "update").Find(&rows).Error)
+	require.Len(t, rows, 1)
+	require.Equal(t, fmt.Sprint(claim.ID), rows[0].EntityPK, "the journal must name the canceled claim")
 }

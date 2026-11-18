@@ -394,7 +394,7 @@ func (api *Api) CancelDeviceClaim(ctx context.Context, deviceToken string) (bool
 		}
 		return false, err
 	}
-	res := api.RDB.DB(ctx).Model(&DeviceClaim{}).
+	res := api.RDB.DB(ctx).Model(claim).
 		Where("id = ? AND status = ?", claim.ID, string(ClaimStatusOpen)).
 		Update("status", string(ClaimStatusCanceled))
 	if res.Error != nil {
