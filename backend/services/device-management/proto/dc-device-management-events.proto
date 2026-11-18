@@ -56,6 +56,9 @@ message PAlarmStateChangeEvent {
     // raised on was deleted. Empty otherwise, and then absent from the wire, so every other
     // event's bytes are unchanged; an older consumer ignores it and ends the alarm on CLEARED.
     string clear_reason = 20;
+    // Alarm.PositionDerived: absent means unknown, withheld like true by readers
+    // without location:read. An older producer leaves this absent.
+    optional bool position_derived = 21;
 }
 
 /**

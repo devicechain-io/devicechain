@@ -234,7 +234,8 @@ CREATE TABLE "notification-management".notification_states (
  device_name text,
  device_type_token text,
  source_at timestamp with time zone,
- escalation_base_at timestamp with time zone
+ escalation_base_at timestamp with time zone,
+ position_derived boolean
 );
 CREATE TABLE "notification-management".purged_tenants (
  token character varying(128) NOT NULL,

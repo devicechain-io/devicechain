@@ -180,7 +180,9 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 // eventSource is the originator facts of an alarm event, in the form a state row keeps.
 func eventSource(e *dmmodel.AlarmStateChangeEvent) model.AlarmSource {
 	return model.AlarmSource{
-		OriginatorType: e.OriginatorType, OriginatorId: e.OriginatorId,
+		PositionDerived:  e.PositionDerived,
+		PositionObserved: true,
+		OriginatorType:   e.OriginatorType, OriginatorId: e.OriginatorId,
 		DeviceToken: e.DeviceToken, DeviceName: e.DeviceName, DeviceTypeToken: e.DeviceTypeToken,
 	}
 }

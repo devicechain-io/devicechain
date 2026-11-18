@@ -34,5 +34,6 @@ var (
 		NewNotifyOnClearSinceSchema(),
 		NewStateSourceSchema(),
 		NewEscalationBaseSchema(),
+		NewPositionDerivedSchema(),
 	}
 )
