@@ -419,10 +419,10 @@ func TestOrphanedManagedMembershipCannotBeReenabled(t *testing.T) {
 	e.jit(t, "acme-idp", true, "operator")
 	e.signInOK(t, "acme-idp", "sub-nia", newcomer)
 
-	// While the connection exists, an administrator may toggle it (the next sign-in
-	// recomputes it anyway).
+	// A served membership cannot be disabled locally: the next sign-in would undo it.
 	_, err := e.admin.SetMembershipEnabled(ctx, newcomer, "acme", false)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, admin.ErrMembershipManagedByIdp)
+	require.True(t, e.membership(t, newcomer, "acme").Enabled)
 	_, err = e.admin.SetMembershipEnabled(ctx, newcomer, "acme", true)
 	require.NoError(t, err)
 

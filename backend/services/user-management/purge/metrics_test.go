@@ -6,6 +6,7 @@ package purge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"testing"
 	"time"
@@ -249,4 +250,39 @@ func TestPurgeDurationBucketsResolveJustPastTheHold(t *testing.T) {
 		}
 	}
 	require.LessOrEqual(t, upper, 43200.0+300)
+}
+
+func TestRunOnceObservesLedgerOnlyOnCleanSkip(t *testing.T) {
+	wrappedSkip := fmt.Errorf("callback failed: %w", core.ErrPassSkipped)
+	lockError := errors.New("lock unavailable")
+	for _, tc := range []struct {
+		name      string
+		ran       bool
+		err       error
+		wantErr   error
+		wantGauge float64
+	}{
+		{"skip", false, nil, core.ErrPassSkipped, 1},
+		{"callback wrapping skip", true, wrappedSkip, wrappedSkip, 42},
+		{"lock error", false, lockError, lockError, 42},
+		{"lock error wrapping skip", false, wrappedSkip, wrappedSkip, 42},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.deleteTenant("acme")
+			// Only observeLedger can replace this sentinel with the ledger's one tenant.
+			h.coord.inFlight.Set(42)
+			h.coord.tryLock = func(context.Context, func() error) (bool, error) {
+				return tc.ran, tc.err
+			}
+			err := h.coord.RunOnce(context.Background())
+			require.ErrorIs(t, err, tc.wantErr)
+			if tc.ran {
+				require.Same(t, tc.err, err, "callback errors must pass through unchanged")
+			}
+			m, ok := sample(t, h.reg, metricPrefix+"in_flight", nil)
+			require.True(t, ok)
+			require.Equal(t, tc.wantGauge, m.GetGauge().GetValue())
+		})
+	}
 }

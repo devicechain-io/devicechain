@@ -161,12 +161,12 @@ describe('editing the outbound actions in the form', () => {
     const cmd = { type: 'sendCommand', sendCommand: { command: 'reset' } };
     render(<DetectionRuleForm profileToken="p" entity={rule(withActions([cmd, cmd]))} onDone={() => {}} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Action 1' }));
+    fireEvent.click(screen.getByLabelText('Action 1'));
     fireEvent.click(screen.getByRole('button', { name: /Publish to a connector/ }));
     await waitFor(() => expect(screen.getByLabelText('Connector').hasAttribute('disabled')).toBe(false));
     await selectOption(screen.getByLabelText('Connector'), /Pager \(pager\)/);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Action 2' }));
+    fireEvent.click(screen.getByLabelText('Action 2'));
     fireEvent.click(screen.getByRole('button', { name: /Call a webhook/ }));
     fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://hooks.example.com/new' } });
 

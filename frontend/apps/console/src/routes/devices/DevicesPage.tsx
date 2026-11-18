@@ -7,6 +7,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, Layers, Search, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
+import { formatDate } from '@/lib/format';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listDevices, type DeviceSearchResults } from '@/lib/api/device-management';
 import { isoTime, type CsvColumn } from '@/lib/csv';
@@ -403,7 +404,7 @@ export default function DevicesPage() {
                     </DataTableCell>
                   )}
                   <DataTableCell className="text-muted-foreground">
-                    {device.createdAt ? new Date(device.createdAt).toLocaleDateString() : '—'}
+                    {formatDate(device.createdAt)}
                   </DataTableCell>
                 </DataTableRow>
               ))}

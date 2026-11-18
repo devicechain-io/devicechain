@@ -44,11 +44,11 @@ spec:
         - alert: JetStreamNotReplicatedAsConfigured
           expr: |
             max by (stream, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_desired", namespace="{{ $ns }}"}
             )
             >
             min by (stream, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_actual", namespace="{{ $ns }}"}
             )
           for: 15m
           labels:
@@ -83,11 +83,11 @@ spec:
         - alert: JetStreamReplicaPeersDegraded
           expr: |
             min by (stream, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_peers_online", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_peers_online", namespace="{{ $ns }}"}
             )
             <
             max by (stream, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_actual", namespace="{{ $ns }}"}
             )
           # 20m is kept. A restarting NATS pod is offline for its whole restart, and a
           # freshly lifted replica can be unlisted until it joins; neither is a loss.
@@ -116,11 +116,11 @@ spec:
         - alert: JetStreamReplicaPeersLagging
           expr: |
             max by (stream, job, namespace) (
-              max_over_time({__name__=~"devicechain_.+_jetstream_peers_current", namespace="{{ $ns }}"}[15m])
+              max_over_time({__name__=~"devicechain_[a-z0-9]+_jetstream_peers_current", namespace="{{ $ns }}"}[15m])
             )
             <
             max by (stream, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_actual", namespace="{{ $ns }}"}
             )
           for: 15m
           labels:
@@ -155,11 +155,11 @@ spec:
         - alert: JetStreamLeaseBucketNotReplicated
           expr: |
             min by (stream, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}", stream=~"KV_.*dc_leases"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_actual", namespace="{{ $ns }}", stream=~"KV_.*dc_leases"}
             ) < 3
             and on()
             max (
-              {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_desired", namespace="{{ $ns }}"}
             ) > 1
           for: 15m
           labels:
@@ -190,15 +190,30 @@ spec:
         # Warning, not critical: nothing is broken or at risk of loss — the instance
         # is simply not getting what it is paying for, and the fix is a config
         # change rather than an incident.
+        #
+        # 🔴 EXCEPT WHERE THE CLUSTER IS THE POINT: SHARD GROUPS. A shard-group instance
+        # runs at least three servers with every stream at one replica BY DESIGN — each
+        # group is an R1 stream pinned to its own server, so the servers are there for
+        # throughput, not for copies — and this fired on it continuously. The exclusion
+        # is read from broker state like everything else here: a group stream is one a
+        # pod reports under its group name (<suffix>-g1, -g2, …, messaging.GroupSuffix),
+        # and only a shard-group instance has one. A clustered R1 broker with no group
+        # stream is still the mis-set HA toggle, and still fires.
         - alert: JetStreamClusterUnused
           expr: |
-            max (
-              {__name__=~"devicechain_.+_jetstream_broker_clustered", namespace="{{ $ns }}"}
-            ) == 1
-            and on()
-            max (
-              {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}"}
-            ) == 1
+            (
+              max (
+                {__name__=~"devicechain_[a-z0-9]+_jetstream_broker_clustered", namespace="{{ $ns }}"}
+              ) == 1
+              and on()
+              max (
+                {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_desired", namespace="{{ $ns }}"}
+              ) == 1
+            )
+            unless on()
+            count (
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_desired", namespace="{{ $ns }}", stream=~".+-g[1-9][0-9]*"}
+            ) > 0
           for: 15m
           labels:
             severity: warning
@@ -214,7 +229,9 @@ spec:
               replica factor is the chart's
               (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets
               both from one value. If the single-server topology is what you intended, scale the
-              NATS cluster back down rather than leaving it running unused.
+              NATS cluster back down rather than leaving it running unused. (An instance with NATS
+              shard groups runs a multi-server, single-replica broker on purpose, and does not
+              raise this.)
         # The counterweight to the four above: the stream whose replication NOBODY can read.
         #
         # A pod that cannot read a stream's StreamInfo DELETES that stream's triple
@@ -259,16 +276,16 @@ spec:
           expr: |
             (
               group by (stream, pod, job, namespace) (
-                last_over_time({__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}[6h])
+                last_over_time({__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_actual", namespace="{{ $ns }}"}[6h])
               )
               unless on (stream, pod, job, namespace)
               group by (stream, pod, job, namespace) (
-                {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
+                {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_actual", namespace="{{ $ns }}"}
               )
             )
             and on (pod, job, namespace)
             group by (pod, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_broker_clustered", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_broker_clustered", namespace="{{ $ns }}"}
             )
           # 15m absorbs a missed pass or a NATS pod roll: a stream that is readable again
           # on the next 30s pass has its series back long before this fires.

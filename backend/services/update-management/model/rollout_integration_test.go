@@ -395,7 +395,7 @@ func TestADispatchThatLosesToAHandAssignOfTheSameArtifactAdoptsItOnPostgres(t *t
 	held := a.RDB.DB(e.ctx()).Begin()
 	require.NoError(t, held.Error)
 	defer held.Rollback()
-	hand, err := a.assignInTx(e.ctx(), held, "dev-0", artifact, nil)
+	hand, err := a.assignInTx(e.ctx(), held, "dev-0", artifact, DeviceFacts{Incarnation: 1})
 	require.NoError(t, err)
 
 	reached := make(chan struct{})

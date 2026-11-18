@@ -85,12 +85,19 @@ it.each([
   new GraphQLRequestError('Duplicate token', 200, [{
     message: 'Duplicate token', extensions: { code: 'CONFLICT' },
   }]),
-  new GraphQLRequestError('modified by another writer', 200),
 ])('keeps other failures generic: %s', async (error) => {
   updateConnector.mockRejectedValue(error);
   await editAndSave(en.saveDraft);
   await screen.findByText(error.message);
   expect(toast).toHaveBeenCalledWith(error.message, 'error');
   expect(screen.queryByText(en.staleWrite)).toBeNull();
+  expectDraftRetained(en.saveDraft);
+});
+
+it('recognizes an older server and retains the unsaved draft', async () => {
+  updateConnector.mockRejectedValue(new GraphQLRequestError('modified by another writer', 200));
+  await editAndSave(en.saveDraft);
+  await screen.findByText(en.staleWrite);
+  expect(toast).toHaveBeenCalledWith(en.staleWrite, 'error');
   expectDraftRetained(en.saveDraft);
 });

@@ -50,6 +50,76 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('forceRefresh', () => {
+  it('refreshes an unexpired rejected token and shares the exchange with concurrent callers', async () => {
+    let release!: (p: TokenPair) => void;
+    const refresh = vi.fn().mockReturnValue(new Promise<TokenPair>((r) => (release = r)));
+    const { state, tokens } = host(pair(300), refresh);
+    const rejected = state.pair!.accessToken;
+    const calls = [tokens.forceRefresh(rejected), tokens.forceRefresh(rejected)];
+    const next = pair(900);
+    release(next);
+    expect(await Promise.all(calls)).toEqual([next.accessToken, next.accessToken]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(state.ended).toEqual([]);
+    // A delayed 401 from a sibling request reuses that exchange rather than rotating again.
+    expect(await tokens.forceRefresh(rejected)).toBe(next.accessToken);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['a network failure', new GraphQLRequestError('offline', 0)],
+    ['a 5xx', new GraphQLRequestError('Request failed (503)', 503)],
+    ['a 429', new GraphQLRequestError('Request failed (429)', 429)],
+  ])('keeps the session and throws on %s, never handing back the rejected token', async (_, err) => {
+    const held = pair(300);
+    const next = pair(900);
+    const refresh = vi.fn().mockRejectedValueOnce(err).mockResolvedValueOnce(next);
+    const { state, tokens } = host(held, refresh);
+    await expect(tokens.forceRefresh(held.accessToken)).rejects.toBe(err);
+    expect(state.ended).toEqual([]);
+    expect(state.pair).toBe(held);
+    // Nothing was refused, so the next 401 tries again with the same session.
+    expect(await tokens.forceRefresh(held.accessToken)).toBe(next.accessToken);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(state.ended).toEqual([]);
+  });
+
+  // The negative control for the case above: the same call ends the session when the server
+  // answered and refused, so the transient test is not passing because nothing ever ends.
+  it.each([
+    ['a GraphQL refusal', new GraphQLRequestError('refused', 200, [{ message: 'refused' }])],
+    ['a 401', new GraphQLRequestError('Request failed (401)', 401)],
+  ])('ends the session on %s and resolves null', async (_, err) => {
+    const { state, tokens } = host(pair(300), vi.fn().mockRejectedValue(err));
+    expect(await tokens.forceRefresh(state.pair!.accessToken)).toBeNull();
+    expect(state.ended).toEqual([err]);
+    expect(state.pair).toBeNull();
+  });
+
+  it('does not refresh a session that replaced the rejected token', async () => {
+    const refresh = vi.fn();
+    const { state, tokens } = host(pair(900), refresh);
+    const current = state.pair;
+    expect(await tokens.forceRefresh(jwt(300))).toBeNull();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(state.pair).toBe(current);
+    expect(state.ended).toEqual([]);
+  });
+
+  it('drops a forced refresh after sign-out', async () => {
+    let release!: (p: TokenPair) => void;
+    const { state, tokens } = host(pair(300), () => new Promise((r) => (release = r)));
+    const call = tokens.forceRefresh();
+    state.pair = null;
+    tokens.reset();
+    release(pair(900));
+    expect(await call).toBeNull();
+    expect(state.pair).toBeNull();
+    expect(state.ended).toEqual([]);
+  });
+});
+
 describe('getAccessToken', () => {
   it('returns the held token without refreshing while it is outside the skew', async () => {
     const refresh = vi.fn();
