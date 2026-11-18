@@ -34,7 +34,7 @@ func hierarchyTestApi(t *testing.T) (*Api, context.Context) {
 	db := sqlitetest.OpenMemory(t, nil)
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
 	require.NoError(t, rdb.RegisterTokenGrammar(db), "register token grammar")
-	require.NoError(t, db.AutoMigrate(
+	require.NoError(t, db.AutoMigrate(&EntityGroupFacetRef{},
 		&AssetType{}, &Asset{}, &DeviceType{}, &Device{},
 		&CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &DeviceClaim{},
 		&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{},

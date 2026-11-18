@@ -517,3 +517,17 @@ func TestPlanReportsUnclassifiedTablesByName(t *testing.T) {
 	assert.Contains(t, err.Error(), "exemption registry",
 		"the message must say what to do about it, not just that something is wrong")
 }
+
+// The DETECT stream-topology table is created by a LATER release than this exemption. A
+// user-management pod of this release must classify it (exempt, no tenant data) when a
+// newer event-processing has created it mid-roll, rather than refuse every tenant purge.
+func TestTheDetectStreamTopologyTableIsExemptAheadOfItsMigration(t *testing.T) {
+	plan, err := classify([]column{
+		col("event-processing", "detect_stream_topology", "id", "character varying"),
+		col("event-processing", "detect_stream_topology", "base_suffix", "character varying"),
+		col("event-processing", "detect_stream_topology", "group_count", "bigint"),
+	}, nil, nil)
+	require.NoError(t, err)
+	e := classOf(t, plan, "event-processing", "detect_stream_topology")
+	assert.Equal(t, ClassExempt, e.Class)
+}

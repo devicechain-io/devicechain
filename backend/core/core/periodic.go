@@ -147,7 +147,7 @@ const (
 const defaultPassJitter = 0.10
 
 // PeriodicTaskMetrics are the operator signals for a maintenance pass. Nil-safe, like
-// ProcessorMetrics: a task built without a Microservice records nothing and behaves the same.
+// ProcessorMetrics, for callers that record passes directly. PeriodicTask requires metrics.
 type PeriodicTaskMetrics struct {
 	passes      *prometheus.CounterVec
 	duration    prometheus.Histogram
@@ -333,15 +333,11 @@ func WithDetachedContext() PeriodicTaskOption {
 	return func(t *PeriodicTask) { t.detached = true }
 }
 
-// WithPassMetrics attaches the operator signals. Omitted, the task records nothing.
-func WithPassMetrics(m *PeriodicTaskMetrics) PeriodicTaskOption {
-	return func(t *PeriodicTask) { t.metrics = m }
-}
-
 // NewPeriodicTask builds a task that calls run every interval. name is used for the lifecycle
 // component name and in log lines; the metric names come from PeriodicTaskMetrics.
+// It panics if interval is non-positive or metrics is nil.
 func NewPeriodicTask(area, name string, interval time.Duration, run func(context.Context) error,
-	callbacks LifecycleCallbacks, opts ...PeriodicTaskOption) *PeriodicTask {
+	callbacks LifecycleCallbacks, metrics *PeriodicTaskMetrics, opts ...PeriodicTaskOption) *PeriodicTask {
 	// 🔴 A NON-POSITIVE INTERVAL PANICS, AND THAT IS A PROPERTY BEING PRESERVED RATHER THAN
 	// ADDED. Every adopter built time.NewTicker(interval), which panics on a non-positive
 	// duration — a loud refusal at start. This type schedules with a Timer instead, and
@@ -353,7 +349,10 @@ func NewPeriodicTask(area, name string, interval time.Duration, run func(context
 		panic(fmt.Sprintf("core: periodic task %q needs a positive interval, got %s — to disable "+
 			"a task, do not construct it", name, interval))
 	}
-	t := &PeriodicTask{name: name, interval: interval, run: run, jitter: defaultPassJitter}
+	if metrics == nil {
+		panic(fmt.Sprintf("core: periodic task %q needs pass metrics", name))
+	}
+	t := &PeriodicTask{name: name, interval: interval, run: run, jitter: defaultPassJitter, metrics: metrics}
 	for _, opt := range opts {
 		opt(t)
 	}
@@ -438,7 +437,7 @@ func (t *PeriodicTask) once() {
 
 // RecordPass classifies one pass and files it — the counter, the duration, the last-success
 // stamp, and the log line that matches the outcome. Nil-safe: a nil *PeriodicTaskMetrics still
-// logs, because the log line is not a metric and a task built without metrics is still running.
+// logs, because the log line is not a metric and direct callers may have no metrics.
 //
 // 🔴 IT IS EXPORTED FOR THE LOOPS THAT CANNOT ADOPT PeriodicTask, AND THAT IS THE WHOLE
 // REASON IT IS A METHOD RATHER THAN THREE CALLS. Eight of the thirteen maintenance loops in

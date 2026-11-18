@@ -128,6 +128,9 @@ const (
 	// do not silently diverge (an unset value would default to 1000 on the server).
 	readerMaxAckPending = 65536
 
+	// ReaderMaxAckPending is the maximum number of unacknowledged messages per reader consumer.
+	ReaderMaxAckPending = readerMaxAckPending
+
 	// rebindBackoffMin/Max bound the self-heal retry when a reader's durable consumer
 	// goes away (e.g. deleted by an older pod's Unsubscribe during a rolling update).
 	// The reader re-binds with capped exponential backoff so a persistent failure does
@@ -164,6 +167,8 @@ func (a natsAck) InProgress() error { return a.nm.InProgress() }
 // microservice. It mirrors the former KafkaManager's lifecycle shape so the
 // service mains change minimally.
 type NatsManager struct {
+	liveHubs sync.Map // key string -> lazy *LiveHub[T]; see SharedLiveHub
+
 	Microservice *core.Microservice
 
 	// admin makes this manager the BROKER ADMINISTRATOR's: the one holder of the right to

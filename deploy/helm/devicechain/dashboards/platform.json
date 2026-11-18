@@ -2450,7 +2450,7 @@
       "id": 43,
       "type": "timeseries",
       "title": "Ceilings hit by device traffic",
-      "description": "Device messages and readings turned away because a tenant sent faster than its ceiling, by ingest source. Short bursts are the limiter doing its job. A tenant that stays limited needs a higher ceiling or a quieter fleet.",
+      "description": "Device messages and readings turned away because a tenant sent faster than its ceiling, with totals by ingest source and breakdowns by priority class. Lower-priority traffic is shed first. Short bursts are the limiter doing its job. A tenant that stays limited needs a higher ceiling or a quieter fleet.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -2479,6 +2479,24 @@
           },
           "expr": "sum by (source) (rate(devicechain_eventsources_total_readings_rate_limited{namespace=\"$namespace\"}[$__rate_interval]))",
           "legendFormat": "readings {{source}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (source, shed_class) (rate(devicechain_eventsources_total_msg_rate_limited{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "messages {{source}} / {{shed_class}}"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (source, shed_class) (rate(devicechain_eventsources_total_readings_rate_limited{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "readings {{source}} / {{shed_class}}"
         }
       ],
       "fieldConfig": {

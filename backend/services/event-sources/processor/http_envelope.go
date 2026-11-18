@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"errors"
 
 	"github.com/devicechain-io/dc-microservice/eventenvelope"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -101,7 +100,7 @@ func (h *HTTPEnvelopes) flush(b messaging.FormedBatch) {
 	}
 	answer := func(err error) {
 		for _, p := range pend {
-			if errors.Is(err, messaging.ErrStreamBackpressure) {
+			if messaging.IsRefusal(err) {
 				h.refused(p.source)
 			}
 			p.done <- err
@@ -147,7 +146,7 @@ func (h *HTTPEnvelopes) flush(b messaging.FormedBatch) {
 // single publishes one request's event alone and counts its refusal.
 func (h *HTTPEnvelopes) single(p *httpPending) error {
 	err := h.publish(p.ctx, p.source, p.msg)
-	if errors.Is(err, messaging.ErrStreamBackpressure) {
+	if messaging.IsRefusal(err) {
 		h.refused(p.source)
 	}
 	return err
