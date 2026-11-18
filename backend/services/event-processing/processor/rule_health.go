@@ -53,6 +53,7 @@ func (rp *ResolvedEventsProcessor) startRuleHealth() error {
 	if err != nil {
 		return fmt.Errorf("event-processing: rule-health counters: %w", err)
 	}
+	rp.metrics.setRuleStatFlushInterval(rp.ruleHealthConfig().FlushInterval)
 	h.Start()
 	rp.health = h
 	rp.publisher.SetFireRecorder(h)
