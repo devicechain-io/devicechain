@@ -584,19 +584,15 @@ más abajo.
 
 #### Tamaño del almacén de objetos de respaldo {#backup-store-size}
 
-El almacén predeterminado tiene 160 GiB, dimensionado a partir del almacén de eventos
-predeterminado para que, con una ingesta sostenida, se llene primero el volumen del almacén de
-eventos. Mientras una instancia está tranquila, el log de escritura anticipada que archiva no
-cuesta casi nada. Con ingesta sostenida, el log crece al ritmo de las escrituras: medido en Google
-Kubernetes Engine, hasta unos 1,9 KB por evento ingerido para las dos bases de datos juntas,
-frente a aproximadamente 1 KB por evento de datos almacenados. (Esta página daba antes
-aproximadamente 1 KB por evento para el archivo; esa cifra era baja). 160 GiB guardan el archivo
-de un almacén de eventos de 32 GiB lleno, más un respaldo base completo de cada base de datos, con
-más de un tercio del almacén todavía libre. Así, las alertas del propio almacén de respaldos no
-se disparan, y las alertas del almacén de eventos nombran la causa.
+El almacén de respaldos predeterminado tiene 160 GiB. Con ingesta sostenida, el registro de
+escritura anticipada archivado crece al ritmo de las escrituras. Una medición anterior en GKE dio
+hasta unos 1,9 KB de WAL archivado por evento ingerido para las dos bases de datos juntas;
+es una asignación para el archivo, distinta de los [756 bytes por evento almacenado](./tuning-an-instance.md#event-store-sizing)
+en el almacén de eventos. Reserva espacio para el WAL archivado y los respaldos base completos
+de ambas bases de datos, y mide el uso real para comprobar que el volumen del almacén de eventos
+se llene antes que el almacén de respaldos.
 
-Eso se cumple para una instancia cuyo almacén de eventos se llena en aproximadamente un día. No se
-cumple:
+El almacén de respaldos puede llenarse primero en estos casos:
 
 - **con varias instancias que ingieren de forma continua.** El almacén pertenece al clúster, y
   cada instancia añade su propio archivo. Añade unos 160 GiB por cada una de esas instancias, o
@@ -636,7 +632,7 @@ Cada base de datos comprime con zstd el log que archiva. La cifra de 1,9 KB, y l
 eventos por segundo calculados a partir de ella más arriba, se midieron antes de que esta versión
 comprimiera el log del almacén de eventos, le diera claves encabezadas por el tiempo y archivara con
 zstd, cuando el archivo se comprimía con gzip, así que pecan por exceso: en la prueba de rendimiento
-de la versión, el archivo del almacén de eventos ocupó unos 0,47 KB por evento almacenado. La parte
+de la versión, el archivo del almacén de eventos ocupó unos 0,47 KB de WAL archivado por evento almacenado. La parte
 de la base de datos relacional no se volvió a medir. Sobre el mismo log, la salida de zstd fue entre un 2 % y un 16 %
 menor que la de gzip, así que el cambio no hace crecer el archivo. Un segmento cerrado antes de
 tiempo en una base de datos tranquila ocupa unos 16 KiB, o unos 32 KiB en una base de datos que
@@ -1877,16 +1873,14 @@ la fila de v0.19.0; no se ha medido en el clúster de tres nodos de las cuatro p
 
 #### Volumen del almacén de eventos {#event-store-volume}
 
-Cada instancia del almacén de eventos tiene un volumen de 32Gi, así que tres con `--ha` (4Gi cada
-uno con `--compact`). Una medición almacenada ocupa alrededor de 1,05 KB, y el registro de
-escritura anticipada de la base de datos ocupa alrededor de 1,1 GB más mientras las copias de
-seguridad le siguen el ritmo, así que 32Gi contienen unos 27 millones de eventos: unas siete
-horas de un inquilino que envía a su techo predeterminado completo.
+Cada instancia del almacén de eventos tiene un volumen de 32Gi, tres con `--ha` (4Gi cada
+uno con `--compact`). Con [756 bytes por evento almacenado](./tuning-an-instance.md#event-store-sizing)
+y unos 1,1 GB de WAL residente mientras los respaldos siguen el ritmo, 32Gi contienen unos
+44 millones de eventos antes del margen de trabajo: unas 12 horas al techo predeterminado
+de un inquilino, 1 000 eventos/s.
 
-Una fila de medición costó unos 600 bytes en disco, índices incluidos y antes de comprimir, en una
-prueba posterior (51 millones de filas llenaron 31 GB), así que la cifra anterior es la prudente.
-Cómo dimensionar el volumen para tu tráfico, con métricas calculadas y retención, y cómo ampliarlo
-en línea, está en [Dimensionar el almacén de eventos](./tuning-an-instance.md#event-store-sizing).
+Dimensiona el volumen según el tráfico, las filas de medición adicionales de las métricas calculadas,
+la retención y el margen de WAL: véase [Dimensionar el almacén de eventos](./tuning-an-instance.md#event-store-sizing).
 
 El almacén de eventos comprime las imágenes de página de su registro de escritura anticipada
 (`wal_compression = lz4`). Tras cada punto de control, el primer cambio en una página escribe la
@@ -1900,7 +1894,7 @@ cambia lo que contiene este volumen: el registro sigue ocupando alrededor de 1,1
 copias de seguridad le siguen el ritmo, así que la cifra anterior se mantiene. El
 [tamaño del almacén de respaldos](#backup-store-size) se midió antes de esta compresión, de las
 claves encabezadas por el tiempo y del archivado con zstd, así que peca por exceso: en la prueba de
-rendimiento de la versión, el archivo del almacén de eventos ocupó unos 0,47 KB por evento
+rendimiento de la versión, el archivo del almacén de eventos ocupó unos 0,47 KB de WAL archivado por evento
 almacenado, frente a los 1,9 KB que ese dimensionamiento supone para las dos bases de datos; la
 parte de la base de datos relacional no se volvió a medir. El almacén relacional no comprime su registro.
 

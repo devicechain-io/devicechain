@@ -549,16 +549,14 @@ Lengthening a window keeps more in the backup store: see below.
 
 #### Backup store size {#backup-store-size}
 
-The default store is 160 GiB, sized from the default event store so that, under sustained
-ingest, the event store's volume fills first. While an instance is quiet, the write-ahead log it
-archives costs almost nothing. Under sustained ingest the log grows with the write rate: measured
-on Google Kubernetes Engine, up to about 1.9 KB per ingested event for both databases together,
-against about 1 KB per event of stored data. (This page used to give about 1 KB per event for
-the archive; that figure was low.) 160 GiB holds the archive of a full 32 GiB event store, plus
-one full base backup of each database, with more than a third of the store still free. So the
-backup store's own alerts stay quiet, and the event store's alerts name the cause.
+The default backup store is 160 GiB. Under sustained ingest, archived write-ahead logs grow
+with the write rate. An earlier GKE measurement found up to about 1.9 KB of archived WAL per
+ingested event for both databases together; this is an archive sizing allowance, distinct from
+[756 bytes per stored event](./tuning-an-instance.md#event-store-sizing) in the event store.
+Allow space for archived WAL and full base backups of both databases, and measure actual usage
+to check that the event-store volume fills before the backup store.
 
-That holds for one instance whose event store fills within about a day. It does not hold:
+The backup store may fill first in these cases:
 
 - **for several instances that ingest continuously.** The store belongs to the cluster, and each
   instance adds its own archive. Add about 160 GiB for each such instance, or send backups to an
@@ -593,7 +591,7 @@ log on its own volume until that fills too and the database stops.
 Each database compresses the log it archives with zstd. The 1.9 KB figure, and the 100 and 35
 events per second worked out from it above, were measured before this release compressed the event
 store's log, gave it time-led keys and archived with zstd, while the archive was compressed with
-gzip, so they err large: in the release benchmark the event store's archive took about 0.47 KB per
+gzip, so they err large: in the release benchmark the event store's archive took about 0.47 KB of archived WAL per
 stored event. The relational database's share was not measured again. On the same log, zstd's output was 2% to 16% smaller than
 gzip's, so the switch does not make the archive larger. A segment closed early on a quiet
 database is about 16 KiB, or about 32 KiB on a database that still archives with gzip.
@@ -1745,14 +1743,12 @@ measured on the three-node cluster of the first four rows.
 #### Event store volume {#event-store-volume}
 
 Each event-store instance has a 32Gi volume, so three of them under `--ha` (4Gi each under
-`--compact`). A stored measurement costs about 1.05 KB, and the database's write-ahead log takes
-about 1.1 GB more while backups keep up with it, so 32Gi holds about 27 million events: about
-seven hours of one tenant sending at its full default ceiling.
+`--compact`). Using [756 bytes per stored event](./tuning-an-instance.md#event-store-sizing)
+and about 1.1 GB for resident WAL while backups keep up, 32Gi holds about 44 million events
+before working headroom: about 12 hours at one tenant's default ceiling of 1,000 events/s.
 
-A measurement row measured about 600 bytes on disk, indexes included and before compression, in a later
-benchmark (51 million rows filled 31 GB), so the figure above is the cautious one. How to size the
-volume for your traffic, with calculated metrics and retention, and how to expand it online, is in
-[Sizing the event store](./tuning-an-instance.md#event-store-sizing).
+Size the volume for your traffic, extra measurement rows from calculated metrics, retention and
+WAL headroom: see [Sizing the event store](./tuning-an-instance.md#event-store-sizing).
 
 The event store compresses the page images in its write-ahead log (`wal_compression = lz4`).
 After each checkpoint, the first change to a page writes the whole page into the log, and on this
@@ -1764,7 +1760,7 @@ by about the same proportion (from 5.8 to 3.2 per million events stored). It doe
 this volume holds: the log on it still takes about 1.1 GB while backups keep up with it, so the
 figure above stands. The [backup store sizing](#backup-store-size) was measured before this
 compression, the time-led keys and zstd archiving, so it errs large: in the release benchmark the
-event store's archive took about 0.47 KB per stored event, against the 1.9 KB that sizing assumes
+event store's archive took about 0.47 KB of archived WAL per stored event, against the 1.9 KB archive allowance
 for both databases; the relational database's share was not re-measured. The relational store does not compress its log.
 
 With the [default backup store](#backup-store-size) and one instance, this volume is what fills
