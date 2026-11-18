@@ -48,7 +48,7 @@ afterEach(async () => {
 const deletedLabel = () =>
   i18n.t('adminAudit:deletedTenantOption', {
     token: 'acme',
-    date: new Date(COMPLETED).toLocaleDateString(),
+    date: new Date(COMPLETED).toLocaleDateString(i18n.resolvedLanguage ?? 'en'),
   });
 
 async function openTenantFilter() {

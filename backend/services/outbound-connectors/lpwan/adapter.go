@@ -326,7 +326,7 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 	if !a.inFlight.TryAcquire(tenant) {
 		a.count(ResultThrottled)
 		if err := a.inFlight.Wait(ctx, tenant, msg.InProgress); err != nil {
-			if msg.NumDelivered >= messaging.MaxDeliver {
+			if messaging.FinalDelivery(msg) {
 				a.refuse(msg, j, ResultUnsent, ReasonFailed, "could not wait for downlink capacity: "+err.Error())
 			}
 			return

@@ -765,6 +765,7 @@ func (api *Api) createImportedDevice(ctx context.Context, p *importRow, dt *Devi
 		md := datatypes.JSON(raw)
 		device.Metadata = &md
 	}
+	var change membershipChange
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		// The earmarked profile is locked before the device is inserted, the order a registration
 		// takes them in (see lockEarmarkProfiles).
@@ -791,27 +792,35 @@ func (api *Api) createImportedDevice(ctx context.Context, p *importRow, dt *Devi
 				return err
 			}
 		}
-		if mode != DeviceImportModeCredentials {
-			return nil
+		if mode == DeviceImportModeCredentials {
+			cred, err := buildDeviceCredential(api.DeviceSecretKey, device, &DeviceCredentialCreateRequest{
+				Token:           p.row.Token + importCredentialTokenSuffix,
+				DeviceToken:     p.row.Token,
+				CredentialType:  p.credType,
+				CredentialId:    p.credID,
+				CredentialValue: p.row.CredentialValue,
+				Enabled:         true,
+			})
+			if err != nil {
+				return err
+			}
+			// The device is already written: insert the credential by its id, never through the
+			// association (which would upsert the device row again).
+			if err := tx.Omit("Device").Create(cred).Error; err != nil {
+				return err
+			}
 		}
-		cred, err := buildDeviceCredential(api.DeviceSecretKey, device, &DeviceCredentialCreateRequest{
-			Token:           p.row.Token + importCredentialTokenSuffix,
-			DeviceToken:     p.row.Token,
-			CredentialType:  p.credType,
-			CredentialId:    p.credID,
-			CredentialValue: p.row.CredentialValue,
-			Enabled:         true,
-		})
+		var err error
+		change, err = api.enrollNewEntitiesOnTx(ctx, tx, "device", []uint{device.ID})
 		if err != nil {
 			return err
 		}
-		// The device is already written: insert the credential by its id, never through the
-		// association (which would upsert the device row again).
-		return tx.Omit("Device").Create(cred).Error
+		return queueAccessChangeOnTx(tx, "device", device.ID, change)
 	})
 	if err != nil {
 		return nil, err
 	}
+	api.afterMembershipRecompute(ctx, "device", device.ID, change)
 	device.DeviceType = dt
 	return device, nil
 }

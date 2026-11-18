@@ -166,4 +166,8 @@ message PDeviceOwnershipChangedEvent {
     string device_token = 1;
     repeated string anchors = 2;
     string changed_time = 3;
+    // device_incarnation is device-management's row id of the device, so device-state applies
+    // the fact only to the live view of that device and not to a successor at the same token.
+    // 0 means unknown (a fact from a producer that predates the field).
+    uint64 device_incarnation = 4;
 }

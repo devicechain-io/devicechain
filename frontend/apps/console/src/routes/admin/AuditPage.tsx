@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatTime } from '@/lib/utils';
+import { formatDate } from '@/lib/format';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useDebouncedValue } from '@/lib/hooks/use-debounced-value';
 import {
@@ -110,7 +111,7 @@ export default function AdminAuditPage() {
     (tenants ?? []).map((tr) => tr.token),
     deletions?.results ?? [],
     (token, completedAt) =>
-      t('deletedTenantOption', { token, date: new Date(completedAt).toLocaleDateString() }),
+      t('deletedTenantOption', { token, date: formatDate(completedAt) }),
   );
 
   // Reset to the first page whenever a filter changes.

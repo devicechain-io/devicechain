@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -177,4 +178,14 @@ func TestASourceRefusesANilPublisher(t *testing.T) {
 		func(string, string, []byte, error) error { return nil },
 		nil, admitAllReadings, admitAll, alwaysOwns, func(error) {})
 	require.ErrorIs(t, err, errNoPublisher)
+}
+
+func TestUnplacedExternalPublishIsRefusedWithoutFail(t *testing.T) {
+	r := &publishRecorder{}
+	p, err := NewAsyncEventPublisher("ext", buildOK, r.hooks())
+	require.NoError(t, err)
+	p.SetWriter(&fakeAsyncWriter{outcome: fmt.Errorf("placement: %w", messaging.ErrUnplacedTenant)})
+	require.ErrorIs(t, publishOne(p), messaging.ErrUnplacedTenant)
+	assert.Equal(t, int32(1), r.backpressured.Load())
+	require.Zero(t, r.failed.Load())
 }

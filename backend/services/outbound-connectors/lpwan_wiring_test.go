@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	mscfg "github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-outbound-connectors/config"
@@ -35,7 +37,9 @@ func TestTheLpwanAdapterFailsClosedWithoutWhatItNeeds(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			i := complete()
 			mut(&i)
-			a, f, err := buildLpwan(nil, i, nil)
+			ms := &core.Microservice{FunctionalArea: "outbound-connectors"}
+			peers := svcclient.NewPeers(i, ms.FunctionalArea)
+			a, f, err := buildLpwan(nil, i, peers, nil)
 			require.Error(t, err)
 			require.Nil(t, a)
 			require.Nil(t, f)

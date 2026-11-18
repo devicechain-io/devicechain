@@ -7,6 +7,7 @@
 import { useTranslation } from 'react-i18next';
 import { Clock } from 'lucide-react';
 import { commandWait } from '@/lib/command-waiting';
+import { formatDateTime } from '@/lib/format';
 
 export function CommandWaitingNote({
   command,
@@ -23,7 +24,7 @@ export function CommandWaitingNote({
       data-testid="command-waiting"
     >
       <Clock size={12} />
-      {t('commandWaitingForWindow', { until: wait.until.toLocaleString() })}
+      {t('commandWaitingForWindow', { until: formatDateTime(wait.until) })}
     </span>
   );
 }

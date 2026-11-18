@@ -27,7 +27,8 @@ func TestProjectionStorageCoversEveryHotTable(t *testing.T) {
 // The migration is appended after the existing chain and never edits it: the inactivity alarm
 // time restore (20261106120000) and its final pass (20261107120000) follow it.
 func TestProjectionStorageIsAppendedLast(t *testing.T) {
-	require.Equal(t, "20261104120000", Migrations[len(Migrations)-3].ID)
-	require.Equal(t, "20261106120000", Migrations[len(Migrations)-2].ID)
-	require.Equal(t, "20261107120000", Migrations[len(Migrations)-1].ID)
+	require.Equal(t, "20261104120000", Migrations[len(Migrations)-4].ID)
+	require.Equal(t, "20261106120000", Migrations[len(Migrations)-3].ID)
+	require.Equal(t, "20261107120000", Migrations[len(Migrations)-2].ID)
+	require.Equal(t, "20261115120000", Migrations[len(Migrations)-1].ID)
 }

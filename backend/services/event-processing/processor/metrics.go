@@ -40,6 +40,7 @@ type DetectMetrics struct {
 	eventsAppliedTotal  prometheus.Counter
 	appliedStreamSeq    prometheus.Gauge
 	checkpointSeconds   prometheus.Gauge
+	checkpointSpacing   prometheus.Gauge
 	snapshotBytes       prometheus.Gauge
 	watermarkLagSeconds prometheus.Gauge
 	restoreSeconds      prometheus.Gauge
@@ -120,6 +121,8 @@ type DetectMetrics struct {
 	// event-driven kinds but not its watermark-fired timers/panes, which would otherwise contribute a
 	// false edge under the stable contributor id. Bounded cardinality (no labels).
 	supersededFrontierDropped prometheus.Counter
+	// supersededRaisedDropped counts suppressed threshold raises and their paired clears (no labels).
+	supersededRaisedDropped prometheus.Counter
 
 	// Slice-6c per-tenant state-budget gauges (ADR-023 amendment). Bounded cardinality — NO
 	// per-tenant labels (the G.3 DoS lesson): liveKeys/retainedSamples are AGGREGATE totals across
@@ -219,6 +222,7 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 		eventsAppliedTotal:  ms.NewCounter("detect_events_applied_total", "Resolved events fed into the DETECT engine."),
 		appliedStreamSeq:    ms.NewGauge("detect_applied_stream_seq", "Highest JetStream stream sequence captured in the committed snapshot."),
 		checkpointSeconds:   ms.NewGauge("detect_checkpoint_seconds", "Wall-clock cost of the last snapshot commit."),
+		checkpointSpacing:   ms.NewGauge("detect_checkpoint_min_spacing_seconds", "Minimum spacing between count-triggered DETECT checkpoints, based on the last committed snapshot cost."),
 		snapshotBytes:       ms.NewGauge("detect_snapshot_bytes", "Serialized size of the last DETECT snapshot payload."),
 		watermarkLagSeconds: ms.NewGauge("detect_watermark_lag_seconds", "Wall-clock time minus the engine watermark at the last checkpoint."),
 		restoreSeconds:      ms.NewGauge("detect_restore_seconds", "Time to restore engine state from the snapshot store at startup."),
@@ -257,6 +261,7 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 
 		staleAbsenceDropped:       ms.NewCounter("detect_stale_absence_dropped_total", "Absence RAISES (and their paired clears) dropped at publish because the device left the rule's scope (deleted/disabled/re-typed/version superseded), plus republish handoff clears."),
 		supersededFrontierDropped: ms.NewCounter("detect_superseded_frontier_dropped_total", "Non-absence frontier-triggered detections (Duration/Session/Aggregate) dropped at publish because their profile version is superseded (ADR-057 D6)."),
+		supersededRaisedDropped:   ms.NewCounter("detect_superseded_raised_dropped_total", "Threshold raises (and their paired clears) dropped because the active same-kind successor is raised."),
 
 		liveKeys:                 ms.NewGauge("detect_live_keys", "Total live keyed window/timer state entries across all tenants (the per-tenant state-budget aggregate)."),
 		tenantsOverRuleBudget:    ms.NewGauge("detect_tenants_over_rule_budget", "Tenants currently exceeding the per-tenant rule-count budget (ADR-023)."),
@@ -869,6 +874,13 @@ func (m *DetectMetrics) recordConsumerLag(pending, ackPending uint64) {
 	m.consumerAckPending.Set(float64(ackPending))
 }
 
+// recordCheckpointMinSpacing records the spacing after a snapshot commits. Nil-safe.
+func (m *DetectMetrics) recordCheckpointMinSpacing(spacing time.Duration) {
+	if m != nil {
+		m.checkpointSpacing.Set(spacing.Seconds())
+	}
+}
+
 // recordCheckpoint records a committed snapshot's cost, size, position, and lag. serialize and
 // save are the two parts of seconds: the engine's serialization and the store's commit.
 func (m *DetectMetrics) recordCheckpoint(appliedSeq uint64, seconds float64, serialize, save time.Duration, bytes int, lagSeconds float64) {
@@ -1162,4 +1174,32 @@ func (m *DetectMetrics) RuleStatPending(keys int, bytes int64, oldest time.Durat
 	m.ruleStatPendingKeys.Set(float64(keys))
 	m.ruleStatPendingBytes.Set(float64(bytes))
 	m.ruleStatOldestPending.Set(oldest.Seconds())
+}
+
+// setTickInterval declares the cadence when the corresponding loop starts.
+func (m *DetectMetrics) setTickInterval(interval time.Duration) {
+	if m != nil {
+		m.tickPass.SetInterval(interval)
+	}
+}
+
+// setRuleStatFlushInterval declares the cadence when the corresponding loop starts.
+func (m *DetectMetrics) setRuleStatFlushInterval(interval time.Duration) {
+	if m != nil {
+		m.ruleStatFlushPass.SetInterval(interval)
+	}
+}
+
+// setShedSummaryInterval declares the cadence when the corresponding loop starts.
+func (m *ReactMetrics) setShedSummaryInterval(interval time.Duration) {
+	if m != nil {
+		m.shedSummaryPass.SetInterval(interval)
+	}
+}
+
+// recordSupersededRaisedDropped records a late old-version threshold edge suppressed with its episode after handoff.
+func (m *DetectMetrics) recordSupersededRaisedDropped() {
+	if m != nil {
+		m.supersededRaisedDropped.Inc()
+	}
 }

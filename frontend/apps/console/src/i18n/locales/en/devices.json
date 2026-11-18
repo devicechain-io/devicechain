@@ -539,7 +539,7 @@
   "connectCopyAriaLabel": "Copy command",
   "connectCopyFailed": "Could not copy to the clipboard",
   "connectPlaceholderInstance": "Replace {{placeholder}} with the instance id chosen when the instance was installed. It is also the instance's Kubernetes namespace without its dci- prefix.",
-  "connectPlaceholderMqttHost": "Replace {{placeholder}} with the host your operator exposes the MQTT listener on. The listener uses TLS: save the instance CA certificate as {{ca}}.",
+  "connectPlaceholderMqttHost": "Replace {{placeholder}} with the host your operator exposes the MQTT listener on, which serves port {{port}}. The listener uses TLS: save the instance CA certificate as {{ca}}. On a local kind cluster the broker is on localhost port {{localPort}} instead.",
   "connectMqttClientId": "Keep the client id (-i) as shown. The broker refuses any other, including the random one a client library picks when none is set.",
   "connectPlaceholderIngestHost": "Replace {{placeholder}} with the host of the HTTP ingest listener. It is not exposed outside the cluster by default; for a quick test, forward port 8081 of the event-sources service.",
   "connectPlaceholderPassword": "Replace {{placeholder}} with this credential's password, in both places. It was shown once, when it was set, and cannot be shown again. If it is lost, set a new one on the Credentials tab.",
