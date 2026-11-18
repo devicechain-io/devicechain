@@ -4,15 +4,21 @@
 package main
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -65,14 +71,14 @@ func TestDetectionRuleValidatorRecordsItsDecision(t *testing.T) {
 		gates, read := gateReading(t, "device-management")
 		infra := fullInfra()
 		mutate(&infra)
-		assert.Nil(t, detectionRuleValidator(infra, gates), name)
+		assert.Nil(t, detectionRuleValidator(svcclient.NewPeers(infra, "device-management"), infra.EventProcessing.Endpoint(), gates), name)
 		v, ok := read(governance.GateRuleValidation)
 		assert.True(t, ok, "%s: an OFF gate must be a present series", name)
 		assert.Equal(t, 0.0, v, name)
 	}
 
 	gates, read := gateReading(t, "device-management")
-	assert.NotNil(t, detectionRuleValidator(fullInfra(), gates))
+	assert.NotNil(t, detectionRuleValidator(svcclient.NewPeers(fullInfra(), "device-management"), fullInfra().EventProcessing.Endpoint(), gates))
 	v, ok := read(governance.GateRuleValidation)
 	assert.True(t, ok)
 	assert.Equal(t, 1.0, v)
@@ -84,13 +90,13 @@ func TestCalloutTenantGateRecordsItsDecision(t *testing.T) {
 	gates, read := gateReading(t, "device-management")
 	infra := fullInfra()
 	infra.ServiceAuth.Secret = ""
-	assert.Nil(t, calloutTenantGate(infra, gates))
+	assert.Nil(t, calloutTenantGate(svcclient.NewPeers(infra, "device-management"), gates))
 	v, ok := read(governance.GateTenantLifecycle)
 	assert.True(t, ok)
 	assert.Equal(t, 0.0, v)
 
 	gates, read = gateReading(t, "device-management")
-	assert.NotNil(t, calloutTenantGate(fullInfra(), gates))
+	assert.NotNil(t, calloutTenantGate(svcclient.NewPeers(fullInfra(), "device-management"), gates))
 	v, ok = read(governance.GateTenantLifecycle)
 	assert.True(t, ok)
 	assert.Equal(t, 1.0, v)
@@ -163,9 +169,42 @@ func TestWireDetectionRuleValidatorLeavesAnInterfaceNilWhenOff(t *testing.T) {
 	infra := fullInfra()
 	infra.ServiceAuth.Secret = ""
 	api := &model.Api{}
-	wireDetectionRuleValidator(api, infra, gates)
+	wireDetectionRuleValidator(api, svcclient.NewPeers(infra, "device-management"), infra.EventProcessing.Endpoint(), gates)
 	assert.True(t, api.DetectionRuleValidator == nil, "an OFF gate must not store a typed-nil validator")
 
-	wireDetectionRuleValidator(api, fullInfra(), gates)
+	wireDetectionRuleValidator(api, svcclient.NewPeers(fullInfra(), "device-management"), fullInfra().EventProcessing.Endpoint(), gates)
 	assert.NotNil(t, api.DetectionRuleValidator)
+}
+
+// Exercise the production validator wiring: the service subject and least-privilege
+// grant must reach the internal mint even when its public listener is unavailable.
+func TestDetectionRuleWiringMintsItsOwnAuthorities(t *testing.T) {
+	requests := make(chan auth.ServiceTokenRequest, 1)
+	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, auth.ServiceTokenPath, r.URL.Path)
+		assert.Equal(t, "s3cret", r.Header.Get(auth.ServiceSecretHeader))
+		var request auth.ServiceTokenRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		} else {
+			requests <- request
+		}
+		http.Error(w, "authority unavailable", http.StatusForbidden)
+	}))
+	defer mint.Close()
+	addr := mint.Listener.Addr().(*net.TCPAddr)
+	infra := fullInfra()
+	infra.UserManagement.Hostname = addr.IP.String()
+	infra.UserManagement.Port = 1
+	infra.UserManagement.InternalPort = uint32(addr.Port)
+	ms := &core.Microservice{FunctionalArea: "device-management"}
+	gates, _ := gateReading(t, ms.FunctionalArea)
+	validator := detectionRuleValidator(svcclient.NewPeers(infra, ms.FunctionalArea), infra.EventProcessing.Endpoint(), gates)
+	require.NotNil(t, validator)
+	_, err := validator.ValidateDetectionRules(core.WithTenant(t.Context(), "tenant"), []model.RuleToValidate{{Token: "rule"}})
+	require.Error(t, err)
+	require.Len(t, requests, 1, "validator must mint its own credential")
+	request := <-requests
+	assert.Equal(t, ms.FunctionalArea, request.Subject)
+	assert.Equal(t, []string{string(auth.DeviceRead)}, request.Authorities)
 }
