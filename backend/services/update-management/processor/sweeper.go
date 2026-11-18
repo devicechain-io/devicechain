@@ -37,21 +37,22 @@ type DeadlineSweeper struct {
 // across passes, oldest first.
 const sweepPage = 200
 
-// NewDeadlineSweeper builds the sweep. interval must be positive. passMetrics (nil for none) are
+// NewDeadlineSweeper builds the sweep. interval must be positive. passMetrics are required and
 // registered once by the caller on the initialize path: the sweep is built on every start.
 func NewDeadlineSweeper(api *model.Api, interval time.Duration, metrics *UpdateReportsMetrics, passMetrics *core.PeriodicTaskMetrics) *DeadlineSweeper {
 	if interval <= 0 {
 		panic("processor.NewDeadlineSweeper: interval must be positive")
 	}
-	s := &DeadlineSweeper{api: api, page: sweepPage, metrics: metrics}
-	var opts []core.PeriodicTaskOption
-	if passMetrics != nil {
-		opts = append(opts, core.WithPassMetrics(passMetrics))
+	// Refused here rather than at the first Start: the task is built per start, and a nil here
+	// would otherwise surface only when the service starts, not when it is wired.
+	if passMetrics == nil {
+		panic("processor.NewDeadlineSweeper: pass metrics are required")
 	}
+	s := &DeadlineSweeper{api: api, page: sweepPage, metrics: metrics}
 	// A fresh lifecycle per start preserves the wrapper's ability to restart after Stop.
 	s.makeTask = func() *core.PeriodicTask {
 		return core.NewPeriodicTask("update-management", "deadline-sweep", interval,
-			s.runOnce, core.NewNoOpLifecycleCallbacks(), opts...)
+			s.runOnce, core.NewNoOpLifecycleCallbacks(), passMetrics)
 	}
 	return s
 }
@@ -88,13 +89,14 @@ func (s *DeadlineSweeper) Stop(ctx context.Context) error {
 	return err
 }
 
-// runOnce is the scheduled pass. It returns the error Pass only logs, so the pass outcome is
-// classified (and logged, rate-limited, by the periodic task) instead of counted as complete.
+// runOnce is the scheduled pass. List failures fail the pass; individual transition failures
+// make it partial or failed through core.PassResult instead of being counted as complete.
 func (s *DeadlineSweeper) runOnce(ctx context.Context) error {
-	if _, err := s.sweep(ctx); err != nil {
+	res, err := s.sweep(ctx)
+	if err != nil {
 		return fmt.Errorf("the update deadline sweep failed: %w", err)
 	}
-	return nil
+	return core.PassResult(res.Examined, res.Failed, res.LastErr)
 }
 
 // Pass runs one sweep and records what it did. Exported so a test (and an operator tool) can drive

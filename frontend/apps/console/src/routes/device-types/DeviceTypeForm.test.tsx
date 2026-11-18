@@ -93,6 +93,30 @@ async function choose(token: string) {
   }));
 }
 
+it('offers maintenance windows beyond the former first 1000 rows', async () => {
+  const windows = Array.from({ length: 1001 }, (_, i) => ({ ...WINDOWS[0], id: `w-${i}`, token: `window-${i}`, name: `Window ${i}` }));
+  gqlMock.mockImplementation((_svc: string, doc: unknown, vars: { criteria?: { pageNumber: number; pageSize: number } }) => {
+    if (String(doc).includes('query MaintenanceWindows')) {
+      const { pageNumber, pageSize } = vars.criteria!;
+      return Promise.resolve({ maintenanceWindows: {
+        results: windows.slice((pageNumber - 1) * pageSize, pageNumber * pageSize),
+        pagination: { totalRecords: windows.length },
+      } });
+    }
+    return Promise.resolve({ updateDeviceType: { token: 'thermostat' } });
+  });
+  renderForm(deviceType(null));
+  await choose('window-1000');
+  expect((await save()).request.maintenanceWindowToken).toBe('window-1000');
+});
+
+it('shows the named option limit and disables an incomplete picker', async () => {
+  gqlMock.mockResolvedValue({ maintenanceWindows: { results: WINDOWS, pagination: { totalRecords: 10001 } } });
+  renderForm(deviceType(null));
+  await screen.findByText(/MAX_PICKER_OPTIONS \(10000\)/);
+  expect(document.getElementById('dt-window')!.hasAttribute('disabled')).toBe(true);
+});
+
 describe('DeviceTypeForm maintenance window', () => {
   it('does not mention the window when it was left alone', async () => {
     renderForm(deviceType({ token: 'night', name: 'Night', timezone: 'Europe/Berlin' }));

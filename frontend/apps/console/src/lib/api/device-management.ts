@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Typed GraphQL operations against the device-management service.
+import { listAll } from './list-all';
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/device-management';
 import type {
@@ -922,14 +923,15 @@ export async function getGroupNames(tokens: string[]): Promise<Record<string, st
 // it from a group's name, its members or its `activeVersion` (which is null both for a
 // static group and for a dynamic one that was never published).
 const DEVICE_GROUP_TARGETS = graphql(`
-  query DeviceGroupTargets {
-    entityGroups(criteria: { pageNumber: 1, pageSize: 500, memberType: "device" }) {
+  query DeviceGroupTargets($criteria: EntityGroupSearchCriteria!) {
+    entityGroups(criteria: $criteria) {
       results {
         token
         name
         membershipMode
         activeVersion
       }
+      pagination { totalRecords }
     }
   }
 `);
@@ -938,12 +940,12 @@ export type DeviceGroupTarget = DeviceGroupTargetsQuery['entityGroups']['results
 
 // listDeviceGroupTargets returns the device groups a command batch may be fired at.
 //
-// One large page rather than a paged read: the target picker is a searchable dropdown
-// that filters over fully-materialized options, so a second page it never asks for would
-// simply be a group the operator cannot select and cannot tell is missing.
+// The target picker filters complete options; refuse an incomplete read.
 export async function listDeviceGroupTargets(): Promise<DeviceGroupTarget[]> {
-  const data = await gql('device-management', DEVICE_GROUP_TARGETS, undefined);
-  return data.entityGroups.results;
+  return (await listAll(async page => {
+    const data = await gql('device-management', DEVICE_GROUP_TARGETS, { criteria: { ...page, memberType: 'device' } });
+    return data.entityGroups;
+  })).results;
 }
 
 // ── Device profiles (ADR-045) ─────────────────────────────────────────────
@@ -1284,13 +1286,12 @@ const METRIC_DEFINITIONS = graphql(`
   }
 `);
 
-// A profile's metric vocabulary is small and rendered whole in a tab, so load one
-// large page rather than paginating inside the panel.
+// The vocabulary is rendered whole and supplies pickers; load every page or refuse.
 export async function listMetricDefinitions(profileToken: string): Promise<MetricDefinition[]> {
-  const data = await gql('device-management', METRIC_DEFINITIONS, {
-    criteria: { pageNumber: 1, pageSize: 1000, deviceProfile: profileToken },
-  });
-  return data.metricDefinitions.results;
+  return (await listAll(async page => {
+    const data = await gql('device-management', METRIC_DEFINITIONS, { criteria: { ...page, deviceProfile: profileToken } });
+    return data.metricDefinitions;
+  })).results;
 }
 
 const CREATE_METRIC_DEFINITION = graphql(`
@@ -1402,10 +1403,10 @@ const COMMAND_DEFINITIONS = graphql(`
 `);
 
 export async function listCommandDefinitions(profileToken: string): Promise<CommandDefinition[]> {
-  const data = await gql('device-management', COMMAND_DEFINITIONS, {
-    criteria: { pageNumber: 1, pageSize: 1000, deviceProfile: profileToken },
-  });
-  return data.commandDefinitions.results;
+  return (await listAll(async page => {
+    const data = await gql('device-management', COMMAND_DEFINITIONS, { criteria: { ...page, deviceProfile: profileToken } });
+    return data.commandDefinitions;
+  })).results;
 }
 
 const DEVICE_COMMAND_VOCABULARY = graphql(`
@@ -1601,22 +1602,25 @@ export type ScopeGroup = ScopeGroupsQuery['entityGroups']['results'][number];
 export type ScopeGroupVersion = EntityGroupVersionsQuery['entityGroupVersions'][number];
 
 const SCOPE_GROUPS = graphql(`
-  query ScopeGroups {
-    entityGroups(criteria: { pageNumber: 1, pageSize: 500, membershipMode: "dynamic" }) {
+  query ScopeGroups($criteria: EntityGroupSearchCriteria!) {
+    entityGroups(criteria: $criteria) {
       results {
         token
         name
         memberType
         activeVersion
       }
+      pagination { totalRecords }
     }
   }
 `);
 
 // listScopeGroups returns every dynamic entity group (all families) a rule may scope to.
 export async function listScopeGroups(): Promise<ScopeGroup[]> {
-  const data = await gql('device-management', SCOPE_GROUPS, undefined);
-  return data.entityGroups.results;
+  return (await listAll(async page => {
+    const data = await gql('device-management', SCOPE_GROUPS, { criteria: { ...page, membershipMode: 'dynamic' } });
+    return data.entityGroups;
+  })).results;
 }
 
 const ENTITY_GROUP_VERSIONS = graphql(`
@@ -1637,12 +1641,12 @@ export async function listEntityGroupVersions(token: string): Promise<ScopeGroup
   return data.entityGroupVersions;
 }
 
-// A profile's rule set is small and rendered whole in a tab, so load one large page.
+// The rule set is rendered whole; load every page or refuse.
 export async function listDetectionRules(profileToken: string): Promise<DetectionRule[]> {
-  const data = await gql('device-management', DETECTION_RULES, {
-    criteria: { pageNumber: 1, pageSize: 1000, deviceProfile: profileToken },
-  });
-  return data.detectionRules.results;
+  return (await listAll(async page => {
+    const data = await gql('device-management', DETECTION_RULES, { criteria: { ...page, deviceProfile: profileToken } });
+    return data.detectionRules;
+  })).results;
 }
 
 const CREATE_DETECTION_RULE = graphql(`

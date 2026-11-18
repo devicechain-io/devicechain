@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -218,6 +219,11 @@ type Api struct {
 	// campaignNow is the clock the campaign scheduler stamps with (a campaign's creation and
 	// enable instants, a claim's time). Nil is time.Now; a test sets it to drive time.
 	campaignNow func() time.Time
+	// campaignLog, when set, receives the campaign scheduler's error log in place of the
+	// global logger. Nil is the global logger as it stands at each call; a test sets it to
+	// observe that log, because writing the global zerolog logger races goroutines the
+	// test does not own.
+	campaignLog *zerolog.Logger
 	// HeldCeilingResolver, when set, supplies the per-tenant held-command ceiling.
 	// Nil (the wiring not yet configured, or a unit test) falls back to
 	// DefaultHeldCommandCeiling below — never to "unbounded".

@@ -206,7 +206,7 @@ function respondWith(opts: {
       });
     }
     if (doc.includes('entityGroups')) {
-      need(vars.memberType, family, 'entityGroups.memberType');
+      need(vars.criteria.memberType, family, 'entityGroups.memberType');
       return Promise.resolve({
         entityGroups: {
           results: opts.groups ?? [],

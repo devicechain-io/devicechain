@@ -278,10 +278,15 @@ func Validate(mask string) error {
 		if seg.widthTooLarge {
 			return fmt.Errorf("mask %q declares a width in %s larger than the maximum token length of %d, which could never mint a valid token", mask, seg.raw, core.MaxTokenLen)
 		}
+		// Only numeric and alphanumeric placeholders use widths; an explicit
+		// zero contributes nothing variable, while an absent width uses a default.
+		if (seg.placeholder == typeNumeric || seg.placeholder == typeAlphanumeric) && seg.hasWidth && seg.width == 0 {
+			continue
+		}
 		placeholders++
 	}
 	if placeholders == 0 {
-		return fmt.Errorf("mask %q has no placeholder, so every entity would be given the identical token %q — add {slug}, {alphanumeric-N}, {numeric-N} or {uuid}", mask, mask)
+		return fmt.Errorf("mask %q has no placeholder that generates characters (a width of 0 generates none), so every entity would be given the identical token %q — add {slug}, {alphanumeric-N}, {numeric-N} or {uuid}", mask, Sample(mask))
 	}
 	sample := Sample(mask)
 	if err := core.ValidateToken(sample); err != nil {

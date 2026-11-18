@@ -2085,7 +2085,7 @@ export type PreviewSelectorQueryVariables = Exact<{
 export type PreviewSelectorQuery = { previewSelector: { valid: boolean, error: string | null, members: { results: Array<{ id: string, token: string }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } | null } };
 
 export type DynamicGroupsQueryVariables = Exact<{
-  memberType: string;
+  criteria: EntityGroupSearchCriteria;
 }>;
 
 
@@ -2447,10 +2447,12 @@ export type GroupNamesQueryVariables = Exact<{
 
 export type GroupNamesQuery = { entityGroupsByToken: Array<{ token: string, name: string | null }> };
 
-export type DeviceGroupTargetsQueryVariables = Exact<{ [key: string]: never; }>;
+export type DeviceGroupTargetsQueryVariables = Exact<{
+  criteria: EntityGroupSearchCriteria;
+}>;
 
 
-export type DeviceGroupTargetsQuery = { entityGroups: { results: Array<{ token: string, name: string | null, membershipMode: string, activeVersion: number | null }> } };
+export type DeviceGroupTargetsQuery = { entityGroups: { results: Array<{ token: string, name: string | null, membershipMode: string, activeVersion: number | null }>, pagination: { totalRecords: number | null } } };
 
 export type DeviceProfilesQueryVariables = Exact<{
   criteria: DeviceProfileSearchCriteria;
@@ -2644,10 +2646,12 @@ export type DetectionRulesQueryVariables = Exact<{
 
 export type DetectionRulesQuery = { detectionRules: { results: Array<{ id: string, token: string, name: string | null, description: string | null, definition: string, authoringGraph: string | null, enabled: boolean, metadata: string | null, entityGroupToken: string | null, entityGroupVersion: number | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
-export type ScopeGroupsQueryVariables = Exact<{ [key: string]: never; }>;
+export type ScopeGroupsQueryVariables = Exact<{
+  criteria: EntityGroupSearchCriteria;
+}>;
 
 
-export type ScopeGroupsQuery = { entityGroups: { results: Array<{ token: string, name: string | null, memberType: string, activeVersion: number | null }> } };
+export type ScopeGroupsQuery = { entityGroups: { results: Array<{ token: string, name: string | null, memberType: string, activeVersion: number | null }>, pagination: { totalRecords: number | null } } };
 
 export type EntityGroupVersionsQueryVariables = Exact<{
   token: string;
@@ -4119,15 +4123,8 @@ export const PreviewSelectorDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<PreviewSelectorQuery, PreviewSelectorQueryVariables>;
 export const DynamicGroupsDocument = new TypedDocumentString(`
-    query DynamicGroups($memberType: String!) {
-  entityGroups(
-    criteria: {
-      pageNumber: 1
-      pageSize: 200
-      memberType: $memberType
-      membershipMode: "dynamic"
-    }
-  ) {
+    query DynamicGroups($criteria: EntityGroupSearchCriteria!) {
+  entityGroups(criteria: $criteria) {
     results {
       id
       token
@@ -4964,13 +4961,16 @@ export const GroupNamesDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<GroupNamesQuery, GroupNamesQueryVariables>;
 export const DeviceGroupTargetsDocument = new TypedDocumentString(`
-    query DeviceGroupTargets {
-  entityGroups(criteria: { pageNumber: 1, pageSize: 500, memberType: "device" }) {
+    query DeviceGroupTargets($criteria: EntityGroupSearchCriteria!) {
+  entityGroups(criteria: $criteria) {
     results {
       token
       name
       membershipMode
       activeVersion
+    }
+    pagination {
+      totalRecords
     }
   }
 }
@@ -5319,15 +5319,16 @@ export const DetectionRulesDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<DetectionRulesQuery, DetectionRulesQueryVariables>;
 export const ScopeGroupsDocument = new TypedDocumentString(`
-    query ScopeGroups {
-  entityGroups(
-    criteria: { pageNumber: 1, pageSize: 500, membershipMode: "dynamic" }
-  ) {
+    query ScopeGroups($criteria: EntityGroupSearchCriteria!) {
+  entityGroups(criteria: $criteria) {
     results {
       token
       name
       memberType
       activeVersion
+    }
+    pagination {
+      totalRecords
     }
   }
 }
