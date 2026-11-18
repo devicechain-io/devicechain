@@ -4,6 +4,7 @@
 package tokenmask
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -100,10 +101,36 @@ func TestValidateAcceptsUsableMasks(t *testing.T) {
 		"{uuid}",
 		"dev_{slug}",
 		"{slug}-{numeric-2}",
+		"dev{numeric-1}",
+		"dev{alphanumeric}",
+		"{alphanumeric-0}{uuid}",
+		"{slug-0}",
+		"{uuid-0}",
 	} {
 		if err := Validate(mask); err != nil {
 			t.Errorf("Validate(%q) = %v, want nil", mask, err)
 		}
+	}
+}
+
+func TestValidateRefusesOnlyZeroWidthPlaceholders(t *testing.T) {
+	for _, tc := range []struct{ mask, sample string }{
+		{"dev{numeric-0}", "dev"},
+		{"a{alphanumeric-0}b", "ab"},
+		{"{numeric-0}{alphanumeric-0}x", "x"},
+	} {
+		t.Run(tc.mask, func(t *testing.T) {
+			if got := Sample(tc.mask); got != tc.sample {
+				t.Errorf("Sample(%q) = %q, want %q", tc.mask, got, tc.sample)
+			}
+			err := Validate(tc.mask)
+			if err == nil {
+				t.Fatal("want an error for a mask that always mints the same token")
+			}
+			if !strings.Contains(err.Error(), "has no placeholder") || !strings.Contains(err.Error(), "identical token "+strconv.Quote(tc.sample)) {
+				t.Errorf("error %q does not explain the identical-token defect", err)
+			}
+		})
 	}
 }
 

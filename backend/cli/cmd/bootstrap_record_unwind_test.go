@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
 )
@@ -48,6 +50,43 @@ func recordDirExists(t *testing.T, home, instance string) bool {
 	t.Helper()
 	_, err := os.Stat(filepath.Join(home, ".devicechain", "instances", instance))
 	return err == nil
+}
+
+func TestRebuildRefusalRestoresOriginalRecord(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	original := bootstrap.InstanceRecord{
+		Instance: "bravo", Provider: "local", Cluster: "original-cluster",
+		KubeContext: "kind-original-cluster", ClusterUID: "original-uid",
+		EscrowPath: "/original/escrow", DcctlVersion: "1.6.0",
+		CreatedAt: time.Date(2026, time.November, 1, 0, 0, 0, 0, time.UTC),
+	}
+	if err := bootstrap.WriteInstanceRecord(original); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".devicechain", "instances", "bravo", "instance.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := bootstrap.CapturePriorLocalState("bravo")
+	replacement := original
+	replacement.CreatedAt = original.CreatedAt.Add(time.Hour)
+	replacement.DcctlVersion = "1.7.0"
+	if err := bootstrap.WriteInstanceRecord(replacement); err != nil {
+		t.Fatal(err)
+	}
+	refusal := fmt.Errorf("step %q: %w", "Refuse a rebuild",
+		&bootstrap.ErrRebuildRefused{Err: errors.New("instance bravo is already running")})
+	unwindLocalRecordWhenNothingWasWritten(bootstrap.Options{Instance: "bravo"}, prior, refusal)
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("refused bootstrap changed the original record:\nbefore: %s\nafter: %s", before, after)
+	}
 }
 
 func TestTheCommandLayerClearsTheRecordAfterAHostRefusal(t *testing.T) {
@@ -105,7 +144,7 @@ func TestEveryOtherFailureKeepsTheRecord(t *testing.T) {
 		err  error
 	}{
 		{"a step that failed for some other reason", errors.New("step \"Apply infrastructure\": boom")},
-		{"the rebuild refusal, which is about the SAME instance", errors.New(
+		{"untyped text resembling a rebuild refusal", errors.New(
 			"step \"Refuse a rebuild\": instance \"bravo\" is already running in this cluster")},
 		{"a successful run", nil},
 		// The same words, raised by the APPLY's admission rather than the early check:

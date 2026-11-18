@@ -169,6 +169,8 @@ purpose. Three figures decide it.
 - **Retention.** `lifecycle.retentionDays` is 0 by default, which keeps data forever. An
   instance meant to run indefinitely should set it, and then the volume only has to hold the
   window plus the uncompressed week.
+  The per-minute measurement aggregates behind charts age out with it, one chunk interval
+  later (rounded up to a day).
 
 Event list reads stop after 60 seconds (15 seconds for a scoped caller naming an anchor); for large histories, narrow the time range or filter on a device to avoid timing out on the exact count performed for every page.
 

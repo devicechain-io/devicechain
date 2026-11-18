@@ -8,6 +8,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/payloaddecode/plancost"
 )
 
@@ -129,7 +131,8 @@ func decoderAnswerForType(ctx context.Context, api DeviceManagementApi, deviceTy
 // expired credential, a wrong secret, a credential that belongs to another device or tenant, a
 // device that does not exist), so the answer discloses neither whether a decoder is attached nor
 // whether the device exists to a caller who does not hold the device's credential. The ingest route
-// turns that one answer into one response.
+// turns that one answer into one response. Secret-bearing credentials share the MQTT password
+// backoff; a held check or an unavailable checker returns an error instead of a verdict.
 //
 // It authenticates whatever deviceAuthMode the instance runs: this wire has no unauthenticated
 // form, because the answer selects a decoder and spends the profile's budgets on the device's
@@ -138,6 +141,50 @@ func decoderAnswerForType(ctx context.Context, api DeviceManagementApi, deviceTy
 // It reads through ProfileResolutionByDeviceType like IntegrationDecoder, so what is answered is
 // what the resolver will run.
 func DeviceDecoder(ctx context.Context, api DeviceManagementApi, deviceToken string, presented *PresentedCredential) (*IntegrationDecoderAnswer, error) {
+	if presented != nil && credentialRequiresSecret(presented.CredentialType) {
+		var checker *credential.Checker
+		if provider, ok := api.(interface{ GetDeviceCredentialChecker() *credential.Checker }); ok {
+			checker = provider.GetDeviceCredentialChecker()
+		}
+		if checker == nil {
+			return nil, errors.New("device credential checker unavailable")
+		}
+		tenant, ok := core.TenantFromContext(ctx)
+		if !ok {
+			return nil, core.ErrNoTenant
+		}
+		secret := ""
+		if presented.Secret != nil {
+			secret = *presented.Secret
+		}
+		var device *Device
+		err := checker.Check(ctx, credential.Principal{
+			Kind: credential.KindDeviceCredential, ID: tenant + ":" + presented.CredentialId, Tenant: tenant,
+		}, secret, func(ctx context.Context) (string, error) {
+			d, stored, err := api.ResolveDeviceCredential(ctx, presented, time.Now())
+			switch {
+			case err == nil:
+				device = d
+				return stored, nil
+			case IsCredentialRefusal(err), errors.Is(err, ErrCredentialMisconfigured):
+				// As in the MQTT callout, charge and compare refusals as wrong secrets.
+				return "", nil
+			default:
+				return "", err
+			}
+		})
+		if errors.Is(err, credential.ErrMismatch) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if device == nil || device.Token != deviceToken {
+			return nil, nil
+		}
+		// The connect lookup returns only identity columns, not the device type.
+		return BrokerAssertedDeviceDecoder(ctx, api, deviceToken)
+	}
 	device, err := api.AuthenticateDevice(ctx, presented, time.Now())
 	switch {
 	case err == nil:
@@ -150,4 +197,9 @@ func DeviceDecoder(ctx context.Context, api DeviceManagementApi, deviceToken str
 		return nil, nil
 	}
 	return decoderAnswerForType(ctx, api, device.DeviceTypeId)
+}
+
+// GetDeviceCredentialChecker returns the process-wide device password checker.
+func (api *Api) GetDeviceCredentialChecker() *credential.Checker {
+	return api.DeviceCredentialChecker
 }

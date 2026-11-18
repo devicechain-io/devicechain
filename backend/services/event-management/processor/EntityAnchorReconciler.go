@@ -138,11 +138,17 @@ func (r *EntityAnchorReconciler) handle(ctx context.Context, msg messaging.Messa
 		_ = msg.Ack()
 		return
 	}
-	// Bound the cleanup to events older than the deletion so a replayed deletion
-	// event can't wipe a reused token's newer anchors (ADR-044 decision-4 amendment).
+	// Bound cleanup by the platform's receipt time, strictly before deletion
+	// (ADR-044 decision-4 amendment). A late deletion fact must preserve a reused
+	// token's buffered telemetry even when its device timestamp predates deletion.
 	removed, err := r.Api.DeleteAnchorsForEntity(tctx, string(event.EntityType), event.EntityToken, event.DeletedTime)
 	if err != nil {
-		if msg.NumDelivered >= messaging.MaxDeliver {
+		switch messaging.Dispose(msg, err) {
+		case messaging.TenantErased:
+			log.Debug().Err(err).Msg("Dropping message for an erased tenant")
+			_ = msg.Ack()
+			return
+		case messaging.Exhausted:
 			log.Error().Err(err).Str("entity", event.EntityToken).Int("delivered", msg.NumDelivered).
 				Msg("Giving up on entity-deleted event after max delivery attempts")
 			_ = msg.Ack()

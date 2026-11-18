@@ -211,8 +211,8 @@ func evictionArmer(t *testing.T) (*DeadmanArmer, *fakeArmer) {
 	})
 	fe := newFakeArmer()
 	d := NewDeadmanArmer(reg, fe)
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)})
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "globex", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}, nil)
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "globex", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}, nil)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "acme", DeviceToken: "devA", ProfileToken: "p1", ExpectedSince: ts(50)}, true)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "acme", DeviceToken: "devB", ProfileToken: "p1", ExpectedSince: ts(50)}, true)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "globex", DeviceToken: "devA", ProfileToken: "p1", ExpectedSince: ts(50)}, true)
@@ -245,7 +245,7 @@ func TestArmerRemoveTenantSweepsTheRoster(t *testing.T) {
 	d.RemoveTenant("acme")
 
 	// The token is re-registered and its new owner publishes a profile version.
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: ts(1000)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: ts(1000)}, nil)
 
 	for _, dev := range []string{"devA", "devB"} {
 		if d.AbsenceLive(core.SeriesKey{Rule: ComposeRuleID("acme", "p1@v2/r1"), Series: dev}) {
@@ -288,7 +288,7 @@ func TestArmerRemoveTenantSweepsTheProfileFleetIndex(t *testing.T) {
 	d.RemoveTenant("acme")
 	setsBefore := len(fe.sets)
 
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(1000)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(1000)}, nil)
 
 	if len(fe.sets) != setsBefore {
 		t.Fatalf("a publish re-armed %d device(s) of the purged tenant: %v — the profile→fleet "+
@@ -323,7 +323,7 @@ func TestArmerRemoveTenantSparesTheOtherTenant(t *testing.T) {
 	}
 	// byProfile intact: a publish still reaches its fleet.
 	setsBefore := len(fe.sets)
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "globex", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(1000)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "globex", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(1000)}, nil)
 	if len(fe.sets) == setsBefore {
 		t.Fatal("a publish for the surviving tenant armed nothing — the sweep took its profile→fleet index")
 	}
@@ -385,7 +385,7 @@ func TestViewRemoveTenantSweepsOneTenantsDevices(t *testing.T) {
 // with. The alternative is not a better assertion, it is only the return value.
 func TestArmerAndViewRemoveTenantRefuseTheEmptyTenant(t *testing.T) {
 	d := NewDeadmanArmer(NewRuleRegistry(nil), newFakeArmer())
-	d.ApplyActiveVersion(ActiveEntry{Tenant: "", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)})
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}, nil)
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "", DeviceToken: "devA", ProfileToken: "p1", ExpectedSince: ts(50)}, true)
 
 	if n := d.RemoveTenant(""); n != 0 {

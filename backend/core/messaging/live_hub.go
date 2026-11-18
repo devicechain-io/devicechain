@@ -5,6 +5,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -54,6 +55,19 @@ type liveTenant[T any] struct {
 // NewLiveHub builds a hub for one feed. A nonpositive maximum disables the ceiling.
 func NewLiveHub[T any](name string, open LiveOpener, decode func(Message, string) []Keyed[T], maxPerTenant int) *LiveHub[T] {
 	return &LiveHub[T]{name: name, open: open, decode: decode, max: maxPerTenant, tenants: make(map[string]*liveTenant[T])}
+}
+
+// SharedLiveHub returns the manager's hub for key, building it with build on first use.
+// The hub lives as long as the manager, so a replaced manager takes its hubs with it.
+func SharedLiveHub[T any](nmgr *NatsManager, key string, build func() *LiveHub[T]) *LiveHub[T] {
+	// Only the winning lazy constructor runs. Losing LoadOrStore candidates have
+	// never called build, so they cannot own a hub or an open upstream.
+	value, _ := nmgr.liveHubs.LoadOrStore(key, sync.OnceValue(build))
+	lazy, ok := value.(func() *LiveHub[T])
+	if !ok {
+		panic(fmt.Sprintf("messaging.SharedLiveHub: key %q reused with a different value type", key))
+	}
+	return lazy()
 }
 
 // Dropped counts values discarded because a subscriber buffer was full.

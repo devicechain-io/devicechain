@@ -179,6 +179,8 @@ hay que dimensionar a propósito. Tres cifras lo deciden.
 - **Retención.** `lifecycle.retentionDays` es 0 por defecto, es decir, conserva los datos para
   siempre. Una instancia pensada para funcionar indefinidamente debería fijarlo; entonces el volumen
   solo tiene que contener la ventana más la semana sin comprimir.
+  Los agregados de mediciones por minuto que sustentan los gráficos caducan también, un
+  intervalo de chunk después (redondeado hacia arriba a días completos).
 
 Las lecturas de listas de eventos se detienen a los 60 segundos (15 segundos para un usuario con ámbito limitado que especifica un ancla); en historiales grandes, acota el intervalo de tiempo o filtra por dispositivo para evitar que el recuento exacto de cada página agote ese plazo.
 

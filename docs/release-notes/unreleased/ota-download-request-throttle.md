@@ -1,5 +1,5 @@
 ---
-section: whats-new
+section: before-upgrade
 ---
 
 ## en

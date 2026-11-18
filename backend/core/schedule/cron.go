@@ -100,6 +100,9 @@ func parseField(field string, spec fieldSpec) (uint64, error) {
 		}
 		for v := lo; v <= hi; v += step {
 			set |= 1 << uint(v)
+			if hi-v < step {
+				break // Stop before adding a step that could overflow.
+			}
 		}
 	}
 	return set, nil
