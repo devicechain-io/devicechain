@@ -164,6 +164,13 @@ func prepare(p Params, env *RuleEnvelope, name string) (side, error) {
 
 // Run validates and establishes replay eligibility before opening either window.
 func Run(ctx context.Context, p Params) (Result, error) {
+	if manager, ok := p.Source.(*messaging.NatsManager); ok {
+		var err error
+		p.Source, p.Suffix, err = replayinput.TenantReview(ctx, manager, p.Suffix)
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	if err := validate(p); err != nil {
 		return Result{}, err
 	}

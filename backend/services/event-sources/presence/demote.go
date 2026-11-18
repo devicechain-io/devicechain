@@ -252,6 +252,7 @@ func StartDelayFor(reason TapOffReason, jitter time.Duration) time.Duration {
 // a fleet that is frozen right now.
 func RunDemoteLoop(ctx context.Context, d DemoteRunner, interval, startDelay time.Duration,
 	now func() time.Time, metrics *core.PeriodicTaskMetrics) {
+	metrics.SetInterval(interval)
 	if now == nil {
 		now = time.Now
 	}

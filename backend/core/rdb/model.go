@@ -293,7 +293,10 @@ func Paginate(pag Pagination) func(db *gorm.DB) *gorm.DB {
 
 // Pagination info included with search results.
 type SearchResultsPagination struct {
-	PageStart    int32
-	PageEnd      int32
-	TotalRecords int32
+	// TotalRecordsAbsent marks an explicitly count-free read; zero preserves existing totals.
+	TotalRecordsAbsent bool
+	HasMore            *bool
+	PageStart          int32
+	PageEnd            int32
+	TotalRecords       int32
 }

@@ -206,6 +206,12 @@ its sessions end at their next refresh. Deleting removes the identity and all it
   the roles and choose **Save roles**, or **Disable** or **Remove** the membership. A disabled
   membership keeps the person out of that one tenant. To add one, pick a tenant and roles under
   **Add to tenant** and choose **Add membership**.
+  A membership that an [identity provider](#identity-providers) connection manages cannot be changed
+  here while that connection exists and still serves the tenant: **Save roles**, **Disable** and
+  **Remove** are refused with `MANAGED_BY_IDP`, because the person's next sign-in through the
+  provider would undo the change. To revoke that person's access, disable the identity, remove the
+  person from the provider's groups, or stop the connection serving the tenant. Once the connection
+  is deleted or no longer serves the tenant, the membership can be edited like any other.
 
 <GuideShot id="admin-identity-detail" alt="The page of Maria Chen, maria.chen@acme-properties.example, Enabled, with Disable and Delete buttons. The Access panel has a System roles picker with Save, and a Set password field with Set. The Memberships panel shows sim-acme, Enabled, with the role Facilities viewer and Save roles, Disable and Remove buttons. Below, Add to tenant and Roles pickers and an Add membership button." />
 
@@ -230,7 +236,7 @@ members, invitations and roles themselves, without the admin console; see
 
 <GuideShot id="admin-role-detail" alt="The facilities-viewer tenant role. Scope shows tenant selected and system unavailable. Token facilities-viewer (greyed out), Name Facilities viewer, Description Reads devices, live state, telemetry and alarms, and acknowledges alarms. Changes nothing else. Authorities lists device:read, state:read, event:read, alarm:read, alarm:write, dashboard:read and location:read. A Save changes button and a Delete button." />
 
-## Identity providers
+## Identity providers {#identity-providers}
 
 **Identities → Identity providers** connects outside OpenID Connect providers, such as Google
 Workspace or Microsoft Entra ID, that people sign in through. The list shows each connection's

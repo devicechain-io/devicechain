@@ -132,6 +132,8 @@ query {
 }
 ```
 
+`EventSearchCriteria.includeTotal` 为可选字段：省略或设为 true 时，保留精确的 `totalRecords` 计数。大型历史记录可设为 false 以跳过计数，此时 `totalRecords` 为 null。五个事件列表查询（`events`、`locationEvents`、`measurementEvents`、`alertEvents`、`stateChangeEvents`）均返回 `SearchResultsPagination.hasMore`；请求此字段即可判断是否应读取下一页。默认设置下，它等于 `pageEnd < totalRecords`。不计算总数时，`pageStart` 和 `pageEnd` 描述返回的行；空页面的 `pageEnd = pageStart - 1`，且 `hasMore: false`。请等所有 event-management Pod 均运行 v1.7 后再发送 `includeTotal` 或选择 `hasMore`；较早版本的 Pod 会拒绝两者。
+
 - 所有实体都以 token 命名，包括锚点内部。
 - 两个时间边界都包含端点，按 `occurredTime` 筛选：即设备报告的时刻，而非平台存储的时刻。
 - 结果按从新到旧排列。
@@ -404,7 +406,7 @@ renameNotificationChannel(token: String!, newToken: String!): NotificationChanne
 特别之处是 `definition`：字段可空是为了能够*省略*，允许只改名而不重发完整文档；
 明确的 `null` 会被拒绝，因为无定义的仪表盘无效。保留可选 `expectedUpdatedAt` 前置条件。
 完全不指定字段的更新不写入任何内容，连 `updatedAt` 也不写；
-但其过时的前置条件仍会被拒绝为过时写入，不带 `extensions.code`。
+但其过时的前置条件仍会被拒绝为过时写入，`extensions.code` 为 `STALE_WRITE`。
 
 **user-management。**每个 `update*` 同样接受专用请求：
 
@@ -588,7 +590,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 - 用已有 token 创建命令不会拒绝，而是返回原命令。参见[发送命令](../guides/sending-commands.md#issue-it)。
 - 删除仍被其他记录引用的记录会携带 `REFERENCE_VIOLATION`。参见[引用或值被拒绝](#reference-and-invalid-values)。
 
-`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码仅适用于连接器更新。`CONFLICT` 仍表示唯一值冲突；其他操作的错误不变。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
+如果更新的前置条件（例如 `expectedUpdatedAt`）与记录不再一致（即在你读取之后有人修改了它），该更新会被拒绝，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。所有服务都以这种方式响应过时写入：连接器、仪表盘、AI 提供方、通知策略、客户类型、实体组、角色和告警均是如此。不会写入任何内容，消息与引入该代码之前相同：`<记录> was modified by another writer; reload and try again`，例如 `dashboard was modified by another writer; reload and try again`。`CONFLICT` 仍表示唯一值冲突，从不用于过时写入。请根据代码而非消息文本分类；`@devicechain/client` 中的 `isStaleWrite(err)` 会这样做，并在较旧的服务器上回退为匹配消息。控制台在所有带前置条件的保存中都会识别该代码。
 
 ### 引用或值被拒绝 {#reference-and-invalid-values}
 
@@ -680,6 +682,8 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 | 设备类型、设备配置文件及其版本、指标和命令定义、客户类型 | 全部可见，因为这些是配置。只能读取，不能修改。 |
 
 成员看不到的记录，其响应与不存在的记录完全相同：要么不出现在列表中，要么操作返回 `NOT_FOUND`。针对不属于这些客户的设备发起的 `measurementStream` 订阅会被接受，但不会推送任何内容。其他所有操作都返回 `FORBIDDEN`，且 `extensions.reason` 为 `SCOPE_UNSUPPORTED`。
+
+`measurementStream(deviceTokens: [String!], name: String)` 可在一次订阅中接受最多 1000 个设备令牌，重复令牌会被忽略。列表不能为空，也不能与 `deviceToken` 同时使用。省略这两个设备参数可接收所有设备的读数。每条读数仍应用相同的访问范围和名称过滤条件。
 
 设备不属于任何客户期间记录的事件，访问权限受限的成员看不到。在此版本之前产生的告警同样看不到：告警从此版本开始才记录其所属客户。设备在此版本之前的实时状态，要等设备再次上报或更换所有者后才可见。告警保留其产生时的所属客户，因此客户出售设备后，仍能看到其拥有该设备期间产生的告警，包括仍处于活动状态的告警。
 

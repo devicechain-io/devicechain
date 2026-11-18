@@ -74,6 +74,7 @@ var purgeSeedExemptions = map[string]string{
 	"device-state.latest_measurements":                           representedTenantPredicate,
 	"device-state.purged_tenants":                                purgeTombstone,
 	"ai-inference.ai_function_assignments":                       representedTenantPredicate,
+	"ai-inference.ai_inference_buckets":                          representedTenantPredicate,
 	"ai-inference.ai_inference_migrations":                       migrationTable,
 	"ai-inference.ai_provider_tenant_grants":                     representedTenantPredicate,
 	"ai-inference.ai_provider_tier_grants":                       indirectTable,

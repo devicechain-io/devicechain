@@ -91,6 +91,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
@@ -98,6 +99,7 @@ import (
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
+	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -105,6 +107,9 @@ import (
 
 // RdbSpec is what a service supplies to get a relational database manager.
 type RdbSpec struct {
+	// AppendOnly lists models whose tables only grow; the audit journal is always added.
+	AppendOnly []any
+
 	// Migrations is the service's own migration chain.
 	Migrations []*gormigrate.Migration
 
@@ -174,6 +179,12 @@ type GraphQLSpec struct {
 // Spec describes the managers a service wants and the one place it needs to do its own
 // wiring in the middle of building them.
 type Spec struct {
+	// GovernanceRefreshes declares that this service wires governance resolvers (including
+	// those hidden inside gates). StopRefreshes joins their process-global refreshes; the
+	// service calls it as its Stopper.Postprocess. Leave false for services without those resolvers. The group is
+	// process-global and terminal; tests stopping real Specs must use a child process.
+	GovernanceRefreshes bool
+
 	// Rdb, Nats and GraphQL are each optional: a nil one means the service does not have
 	// that manager, and nothing is built, driven or reported for it.
 	Rdb     *RdbSpec
@@ -239,6 +250,9 @@ type Service struct {
 	// otherwise. It is not in Managers because nothing outside this package drives it.
 	probes *probeServer
 
+	safetyGatesOnce sync.Once
+	safetyGates     *governance.SafetyGates
+
 	// spec is nil for a Service built by FromManagers. It is a pointer so that case is
 	// distinguishable from a Spec that asked for nothing: the zero Spec still gets a probe
 	// surface, and a FromManagers Service gets nothing it did not hand over.
@@ -258,6 +272,16 @@ func New(ms *core.Microservice, spec Spec) *Service {
 	return svc
 }
 
+// SafetyGates returns the service's shared safety-gate metrics, registering only once.
+// A nil service or a fixture without a Microservice runs unmeasured.
+func (s *Service) SafetyGates() *governance.SafetyGates {
+	if s == nil || s.Microservice == nil {
+		return nil
+	}
+	s.safetyGatesOnce.Do(func() { s.safetyGates = governance.NewSafetyGates(s.Microservice) })
+	return s.safetyGates
+}
+
 // FromManagers wraps managers somebody else built, so they can be driven through the same
 // one sequence without this package having constructed them.
 //
@@ -270,8 +294,8 @@ func New(ms *core.Microservice, spec Spec) *Service {
 // A Service built this way has nothing to construct, so Initialize on it does nothing and
 // succeeds — and that includes the probe surface, which a Spec-built Service always gets:
 // the managers handed over may already have registered their routes, and a second
-// RegisterProbes on the same mux panics. Start, Stop and Terminate behave exactly as they
-// do for a Spec-built one.
+// RegisterProbes on the same mux panics. Manager lifecycle order is the same as for a
+// Spec-built service, but Stop never closes process-global governance refreshes.
 func FromManagers(ms *core.Microservice, m Managers) *Service {
 	return &Service{Microservice: ms, Managers: m}
 }
@@ -283,6 +307,14 @@ func FromManagers(ms *core.Microservice, m Managers) *Service {
 // On a Service built by FromManagers there is no Spec, so this returns nil at once: the
 // managers were initialized by whoever built them.
 func (s *Service) Initialize(ctx context.Context) error {
+	return s.initialize(ctx, func(ctx context.Context, manager *rdb.RdbManager) error {
+		return manager.Initialize(ctx)
+	})
+}
+
+// initialize accepts the database initializer so tests can exercise registration and
+// hook ordering without a live Postgres; production uses the manager's Initialize.
+func (s *Service) initialize(ctx context.Context, initializeRdb func(context.Context, *rdb.RdbManager) error) error {
 	if s.spec == nil {
 		return nil
 	}
@@ -296,9 +328,10 @@ func (s *Service) Initialize(ctx context.Context) error {
 	if s.spec.Rdb != nil {
 		s.Rdb = rdb.NewRdbManager(s.Microservice, core.NewNoOpLifecycleCallbacks(),
 			s.spec.Rdb.Migrations, s.spec.Rdb.Instance, s.spec.Rdb.Config)
-		if err := s.Rdb.Initialize(ctx); err != nil {
+		if err := initializeRdb(ctx, s.Rdb); err != nil {
 			return fmt.Errorf("initializing the relational database manager: %w", err)
 		}
+		rdb.RegisterStorageGrowth(s.Microservice, s.Rdb.Database, s.spec.Rdb.AppendOnly...)
 	}
 
 	if s.spec.AfterRdb != nil {
@@ -381,6 +414,18 @@ func (s *Service) Stop(ctx context.Context) error {
 	return s.reverse(ctx, "stopping", func(c core.LifecycleComponent) func(context.Context) error {
 		return c.Stop
 	})
+}
+
+// StopRefreshes joins the process-global governance refreshes when the Spec declares it
+// owns them; otherwise (no Spec, a FromManagers service, or a nil service) it does nothing.
+// A service calls it as its Stopper.Postprocess, AFTER the microservice's own stop: that is
+// where each service stopped its refreshes before this moved into core, and keeping the
+// position keeps a refresh-stop timeout from skipping the microservice's stop work.
+func (s *Service) StopRefreshes(ctx context.Context) error {
+	if s == nil || s.spec == nil || !s.spec.GovernanceRefreshes {
+		return nil
+	}
+	return governance.StopRefreshes(ctx)
 }
 
 // Terminate terminates the managers in the reverse order.

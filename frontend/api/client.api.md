@@ -96,7 +96,6 @@ export declare const MAX_TOKEN_LEN = 128;
 ```ts
 export interface ManagedSessionTokens extends SessionTokens {
     forceRefresh: (rejectedToken?: string) => Promise<string | null>;
-    exchange: (spend: (refreshToken: string) => Promise<TokenPair>) => Promise<string>;
 }
 ```
 
@@ -193,6 +192,7 @@ export interface SessionTokensOptions {
 ```ts
 export interface SubscriptionSink<T> {
     next: (data: T) => void;
+    errors?: (errors: ReadonlyArray<GraphQLFormattedError>) => void;
     error?: (err: unknown) => void;
     complete?: () => void;
     connected?: (wasRetry: boolean) => void;

@@ -127,7 +127,7 @@ const (
 // operator reading the metric.
 func RefuseDeletedTenants(tenantDeleted func(string) bool, next RateGate, onRefused func(source, tenant string)) RateGate {
 	if tenantDeleted == nil {
-		return next // gate unconfigured; see governance.NewTenantLifecycleGate
+		return next // gate unconfigured; see governance.NewTenantLifecycleGateFor
 	}
 	return func(source string, tenant string, sentAt time.Time, redelivery bool, origin Origin) bool {
 		// Deliberately NOT exempt on a redelivery. Metering is exempt because the

@@ -207,7 +207,7 @@ func TestEveryTypeFamilyBinds(t *testing.T) {
 	_, err = api.UpdateAreaType(ctx, "floor", &AreaTypeUpdateRequest{
 		SemanticTypes: dcgraphql.OptionalStringList{Set: true, Value: []string{"brick:Nope"}}})
 	requireRefusal(t, err, semantic.ErrUnknownTerm, "brick:Nope")
-	_, err = api.UpdateCustomerType(ctx, "org", &CustomerTypeUpdateRequest{
+	_, err = api.UpdateCustomerType(ctx, "org", nil, &CustomerTypeUpdateRequest{
 		SemanticTypes: dcgraphql.OptionalStringList{Set: true, Value: []string{"brick:Nope"}}})
 	requireRefusal(t, err, semantic.ErrUnknownTerm, "brick:Nope")
 	_, err = api.UpdateAssetType(ctx, "meter", &AssetTypeUpdateRequest{

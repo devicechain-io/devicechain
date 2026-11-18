@@ -228,6 +228,9 @@ type Config struct {
 // durable's pending + ack-pending backlog is zero), not read-loop silence, so a restored timer
 // never fires ahead of an unconsumed backlog during an outage, re-bind, or rolling-update overlap.
 type ResolvedEventsProcessor struct {
+	worker               *workerIdentity
+	groupWorkers         []*ResolvedEventsProcessor
+	supervised           bool
 	Microservice         *core.Microservice
 	ResolvedEventsReader messaging.MessageReader
 	Replay               ReplayOpener
@@ -545,8 +548,6 @@ type ResolvedEventsProcessor struct {
 	// fetched but the loop has not yet received is not missed by the backlog check.
 	lastLiveRead time.Time
 	dirty        bool
-	// replaying spans replay-to-head, including its final output checkpoint.
-	replaying bool
 	// restoredSeq and restoredWatermark are the checkpoint ROW's values this term restored
 	// from (zero when there was none). They are the compare half of Store.Reset's compare-and-swap:
 	// the only destructive write in a term build is conditioned on the row still being the one this
@@ -851,6 +852,9 @@ func (rp *ResolvedEventsProcessor) Start(ctx context.Context) error {
 // the partition IF it holds it. detect_is_leader and detect_live are the signals that
 // say which replica is doing the work, and the chart's alerts read them across pods.
 func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
+	if rp.supervised {
+		return fmt.Errorf("group workers are started only by the singleton supervisor")
+	}
 	// A lease with no gate would take the partition and then consume ungoverned —
 	// the fail-open shape this whole change exists to remove, arrived at by a wiring
 	// slip rather than a design one. Refuse to start instead: leadershipEnabled() is
@@ -872,7 +876,7 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	// milliseconds, and a log line claiming otherwise would send an operator looking for a
 	// leader that is right here. acquireWithBackoff logs the actual standby state, once,
 	// when the partition turns out to be held.
-	log.Info().Str("partition", rp.cfg.PartitionId).
+	log.Info().Str("partition", rp.partitionID()).
 		Msg("DETECT leadership supervisor started; this replica is Ready and leads as soon as it holds the partition.")
 	rp.supWG.Add(1)
 	go func() {
@@ -1003,7 +1007,7 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 		// higher checkpoint: fail startup rather than launch a pod whose DETECT loop is halted
 		// but whose health endpoints read green (a silently-dead singleton). The leader keeps
 		// consuming; this pod backs off and retries into a clean single-writer replay.
-		return fmt.Errorf("event-processing: DETECT checkpoint is stale at startup for partition %q (another writer owns it); not starting", rp.cfg.PartitionId)
+		return fmt.Errorf("event-processing: DETECT checkpoint is stale at startup for partition %q (another writer owns it); not starting", rp.partitionID())
 	}
 	rp.lastCheckpoint = rp.clock.Now()
 	// Seed the idle-advance clock at startup so the first guard interval of live consumption
@@ -1285,9 +1289,7 @@ func (rp *ResolvedEventsProcessor) reconcileDeadmanArming(ctx context.Context) e
 	if err != nil {
 		return fmt.Errorf("load active-version projection for dead-man reconcile: %w", err)
 	}
-	// A failed final replay checkpoint can leave unpublished edges in the buffer.
-	rp.syncDetector()
-	rp.armer.Reconcile(toRosterEntries(rosters), toActiveEntries(actives), rp.pendingOutputKeys())
+	rp.armer.Reconcile(toRosterEntries(rosters), toActiveEntries(actives))
 	log.Info().Int("rostered", len(rosters)).Int("profiles", len(actives)).
 		Msg("Reconciled DETECT dead-man arming from the roster + active-version projections.")
 	return nil
@@ -1565,9 +1567,9 @@ func (rp *ResolvedEventsProcessor) restoreDetector(payload []byte) (detectcore.D
 func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 	rp.closeDetector() // the previous term's engine, if it had shard goroutines
 	start := rp.clock.Now()
-	snap, ok, err := rp.Store.Load(ctx, rp.cfg.PartitionId)
+	snap, ok, err := rp.Store.Load(ctx, rp.partitionID())
 	if err != nil {
-		return fmt.Errorf("load snapshot for partition %q: %w", rp.cfg.PartitionId, err)
+		return fmt.Errorf("load snapshot for partition %q: %w", rp.partitionID(), err)
 	}
 	if !ok {
 		rp.engine = rp.newDetector()
@@ -1575,12 +1577,12 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 		rp.restoredWatermark = time.Time{}
 		rp.committedSeq = 0
 		rp.metrics.recordRestore(0, 0)
-		log.Info().Str("partition", rp.cfg.PartitionId).Msg("No prior DETECT snapshot; starting from empty engine.")
+		log.Info().Str("partition", rp.partitionID()).Msg("No prior DETECT snapshot; starting from empty engine.")
 		return nil
 	}
 	engine, err := rp.restoreDetector(snap.Payload)
 	if err != nil {
-		return fmt.Errorf("restore engine from snapshot for partition %q: %w", rp.cfg.PartitionId, err)
+		return fmt.Errorf("restore engine from snapshot for partition %q: %w", rp.partitionID(), err)
 	}
 	rp.engine = engine
 	// Take both axes from the ROW rather than the restored engine: the compare-and-swap
@@ -1589,13 +1591,13 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 	rp.restoredWatermark = snap.Watermark
 	rp.committedSeq = uint64(snap.StreamSeq)
 	rp.metrics.recordRestore(rp.clock.Now().Sub(start).Seconds(), uint64(snap.StreamSeq))
-	log.Info().Str("partition", rp.cfg.PartitionId).Uint64("lastSeq", engine.LastSeq()).
+	log.Info().Str("partition", rp.partitionID()).Uint64("lastSeq", engine.LastSeq()).
 		Time("watermark", engine.Watermark()).Msg("Restored DETECT engine from snapshot.")
 	if v := engine.RestoredFrontier(); v < detectcore.FrontierVersion {
 		// Written before the frontier was clamped to broker append time: a device clock that ran ahead may have
 		// carried it up to the resolver's future-skew bound past real time. It only moves forward, so it
 		// corrects itself once real time catches up; say so rather than leave an early absence unexplained.
-		log.Warn().Str("partition", rp.cfg.PartitionId).Int("frontierVersion", v).Int("current", detectcore.FrontierVersion).
+		log.Warn().Str("partition", rp.partitionID()).Int("frontierVersion", v).Int("current", detectcore.FrontierVersion).
 			Msg("Restored a DETECT snapshot whose watermark predates the append-time clamp; it may run ahead of real time until time catches up.")
 	}
 	return nil
@@ -1609,8 +1611,6 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 // resets the engine to empty rather than replaying against sequences the stream no
 // longer holds.
 func (rp *ResolvedEventsProcessor) replayToHead() error {
-	rp.replaying = true
-	defer func() { rp.replaying = false }()
 	// The duplicate guard first: it reads the stream before LastSeq, and the replay reader below
 	// is the last one opened (a snapshot ahead of the stream head primes nothing; the reset below
 	// replaces the guard with the engine).
@@ -1618,7 +1618,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		return err
 	}
 	startSeq := rp.engine.LastSeq() + 1
-	reader, head, err := rp.Replay.NewReplayReader(rp.cfg.Suffix, startSeq)
+	reader, head, err := rp.openReplay(startSeq)
 	if err != nil {
 		return fmt.Errorf("open replay reader from seq %d: %w", startSeq, err)
 	}
@@ -1636,17 +1636,12 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		if rp.leadershipEnabled() && !rp.heldNow() {
 			return fmt.Errorf("refusing to reset the DETECT snapshot for partition %q: this "+
 				"replica lost the partition during its term build, and the successor is "+
-				"leading from that checkpoint", rp.cfg.PartitionId)
+				"leading from that checkpoint", rp.partitionID())
 		}
 		observed := rp.restoredSeq
 		observedWatermark := rp.restoredWatermark
 		rp.closeDetector()
 		rp.engine = rp.newDetector()
-		if rp.armer != nil {
-			// Threshold edge cleanup now mutates the engine through the armer.
-			// Keep it on the replacement even before post-replay reconcile.
-			rp.armer.BindEngine(rp.engine)
-		}
 		rp.dirty = false
 		rp.committedSeq = 0
 		// Clear the stale row (the deliberate backward move Save's monotonic guard
@@ -1655,8 +1650,8 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		// the engine — the store refuses the delete if the row has moved since (see Reset), which
 		// is what stops a replica that lost its term mid-build from clearing the checkpoint
 		// its successor is already committing to.
-		if err := rp.Store.Reset(rp.pctx(), rp.cfg.PartitionId, observed, observedWatermark); err != nil {
-			return fmt.Errorf("reset stale snapshot for partition %q: %w", rp.cfg.PartitionId, err)
+		if err := rp.Store.Reset(rp.pctx(), rp.partitionID(), observed, observedWatermark); err != nil {
+			return fmt.Errorf("reset stale snapshot for partition %q: %w", rp.partitionID(), err)
 		}
 		// The durable was created at the stale row's sequence plus one, past everything the new
 		// stream holds, so it would deliver nothing until the stream's head caught up with it
@@ -1709,6 +1704,7 @@ func (rp *ResolvedEventsProcessor) run() {
 	// Always cancel and join the pump on the way out (including a panic unwind).
 	defer func() { rp.pcancel(); <-pumpDone }()
 
+	rp.metrics.setTickInterval(rp.cfg.TickInterval)
 	ticker := time.NewTicker(rp.cfg.TickInterval)
 	defer ticker.Stop()
 
@@ -2290,9 +2286,6 @@ func (rp *ResolvedEventsProcessor) drainDetections(triggeredAt time.Time, replay
 	}
 	dets := rp.engine.Drain()
 	for _, d := range dets {
-		if rp.armer != nil {
-			rp.armer.ThresholdEmitted(d)
-		}
 		rp.detOrd++
 		rp.pendingDets = append(rp.pendingDets, pendingDetection{
 			Detection: d, triggeredAt: triggeredAt, ord: rp.detOrd,
@@ -2484,13 +2477,13 @@ func (rp *ResolvedEventsProcessor) detectStaleOwner(ctx context.Context) bool {
 	// The same deadline discipline as the checkpoint: this read runs on the loop, and an
 	// unanswered one must come back as the "transient blip" below rather than hold the loop.
 	readCtx, cancel := context.WithTimeout(ctx, rp.checkpointTimeout())
-	seq, ok, err := rp.Store.LoadCommittedSeq(readCtx, rp.cfg.PartitionId)
+	seq, ok, err := rp.Store.LoadCommittedSeq(readCtx, rp.partitionID())
 	cancel()
 	if err != nil || !ok {
 		return false
 	}
 	if uint64(seq) > rp.engine.LastSeq() {
-		log.Error().Str("partition", rp.cfg.PartitionId).Int64("committedSeq", seq).
+		log.Error().Str("partition", rp.partitionID()).Int64("committedSeq", seq).
 			Uint64("appliedSeq", rp.engine.LastSeq()).
 			Msg("Idle-advance fenced: another writer owns a higher checkpoint (split brain); halting this writer.")
 		rp.haltStaleWriter()
@@ -2556,11 +2549,7 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 	// dead-men across the fleet, and arm every rostered device of the profile. Nil active (malformed
 	// token / scaffold) or nil armer skips it.
 	if rp.armer != nil && upd.active != nil {
-		if rp.armer.ApplyActiveVersion(*upd.active, rp.pendingOutputKeys()) > 0 {
-			// The normal checkpoint persists this move. A crash before it can duplicate
-			// an action: accepted at-least-once delivery, without forcing a checkpoint.
-			rp.dirty = true
-		}
+		rp.armer.ApplyActiveVersion(*upd.active)
 	}
 }
 
@@ -2992,7 +2981,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	// therefore the loss path's publish guard, not a graceful-shutdown nicety — which
 	// is also why endTerm flushes BEFORE releasing the lease rather than after.
 	if rp.leadershipEnabled() && !rp.heldNow() {
-		log.Warn().Str("partition", rp.cfg.PartitionId).
+		log.Warn().Str("partition", rp.partitionID()).
 			Msg("DETECT refused a checkpoint because this replica no longer holds the partition; the messages stay unacked and redeliver to the leader")
 		return false
 	}
@@ -3004,7 +2993,6 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	pubCtx, pubCancel := context.WithTimeout(ctx, rp.checkpointTimeout())
 	published := rp.publishPending(pubCtx)
 	pubCancel()
-	rp.carrySettledThresholds()
 	if !published {
 		return false
 	}
@@ -3028,7 +3016,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 		}
 		wm := rp.engine.Watermark()
 		snap := &model.DetectSnapshot{
-			PartitionId: rp.cfg.PartitionId,
+			PartitionId: rp.partitionID(),
 			StreamSeq:   int64(rp.engine.LastSeq()),
 			Watermark:   wm,
 			Payload:     payload,
@@ -3046,7 +3034,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 				// one cycle). Our unacked messages redeliver to the leader on the shared durable,
 				// so detection continues there; the durable single-writer guarantee is Slice-6's
 				// singleton deploy, of which this is the runtime safety net.
-				log.Error().Err(err).Str("partition", rp.cfg.PartitionId).
+				log.Error().Err(err).Str("partition", rp.partitionID()).
 					Msg("DETECT checkpoint refused as stale (split-brain); halting this writer.")
 				rp.haltStaleWriter()
 				return false
@@ -3180,8 +3168,6 @@ func (rp *ResolvedEventsProcessor) flushDetections(ctx context.Context) {
 	ok := rp.publishPending(pubCtx)
 	// What the pass did not retire (all of it on a failure) goes back among the rest, in arrival order.
 	rp.pendingDets = mergeByOrd(rp.pendingDets, keep)
-	// Include held, non-early output before retrying any deferred handoff.
-	rp.carrySettledThresholds()
 	if !ok {
 		rp.flushFailedAt = rp.clock.Now()
 	}
@@ -3235,7 +3221,7 @@ func (rp *ResolvedEventsProcessor) ackThroughCommitted() {
 		return
 	}
 	if rp.leadershipEnabled() && !rp.heldNow() {
-		log.Warn().Str("partition", rp.cfg.PartitionId).Uint64("committedSeq", rp.committedSeq).
+		log.Warn().Str("partition", rp.partitionID()).Uint64("committedSeq", rp.committedSeq).
 			Msg("DETECT lost the partition between committing its snapshot and acknowledging; the messages stay " +
 				"unacked and redeliver to the leader, which drops them as already applied")
 		return
@@ -3292,7 +3278,7 @@ func (rp *ResolvedEventsProcessor) haltStaleWriter() {
 		rp.supCancel()
 	}
 	err := fmt.Errorf("event-processing: the DETECT checkpoint for partition %q was refused as stale — "+
-		"another writer owns a higher checkpoint, so this replica can never commit again", rp.cfg.PartitionId)
+		"another writer owns a higher checkpoint, so this replica can never commit again", rp.partitionID())
 	// Called from the single-writer loop, which FailNow's teardown (ExecuteStop) joins; safe
 	// because FailNow returns at once and tears down on its own goroutine. A nil Microservice
 	// is FailNow's to report.
@@ -3419,52 +3405,26 @@ func rollUpToTenants(byRule map[string]int) (map[string]int, int) {
 	return byTenant, total
 }
 
-// pendingOutputKeys captures unpublished edges of either direction. An acknowledged
-// entry retained behind a failed predecessor has already reached downstream.
-func (rp *ResolvedEventsProcessor) pendingOutputKeys() func(detectcore.SeriesKey) bool {
-	keys := make(map[detectcore.SeriesKey]bool, len(rp.pendingDets))
-	for _, d := range rp.pendingDets {
-		if d.state != outputAcked {
-			keys[detectcore.SeriesKey{Rule: d.RuleID, Series: d.Series}] = true
-		}
-	}
-	return func(key detectcore.SeriesKey) bool { return keys[key] }
-}
-
-// carrySettledThresholds completes handoffs that waited for output publication.
-func (rp *ResolvedEventsProcessor) carrySettledThresholds() {
-	if rp.armer == nil || rp.replaying {
-		return
-	}
-	// An early publish can finish while shards still owe newer edges. Include
-	// those edges before deciding which latches are safe to move.
-	rp.syncDetector()
-	if rp.armer.CarryReadyThresholds(rp.pendingOutputKeys()) > 0 {
-		rp.dirty = true
-	}
-}
-
 // dropSupersededDetections is the publish-time version/membership gate for FRONTIER-triggered
 // detections — the kinds that fire off the shared event-time watermark (a timer or a window/pane close)
 // rather than only on an arriving event, so the fan-out's per-version event scoping does NOT silence a
 // superseded version's retained rule. It runs at the single publish choke point (every event-driven,
 // idle-advance, and replay fire flows through publishPending), evaluated against the loop-owned roster +
-// active views so a membership/version change since arming is honored. The gates are:
+// active views so a membership/version change since arming is honored. Two gates:
 //   - ABSENCE (always frontier-triggered, membership-gated): a RAISE is dropped whenever it is not
 //     AbsenceLive — the device left the rule's scope (deleted / disabled / re-typed / version superseded).
 //     Fail-safe toward a missed absence: AbsenceLive treats an unknown device/rule as NOT live. A RESOLVED
 //     is NOT gated on liveness (it is the clear the departure itself emits for an already-published
 //     raise); it is dropped only when its own raise was dropped in the same pass, or when the rule is
 //     carried forward under the same stable identity by the device's new active version (a republish
-//     handoff, which must not flap the alarm — CarriedForward).
+//     handoff, which must not flap the alarm — AbsenceCarriedForward).
 //   - DURATION / SESSION / AGGREGATE (frontier-triggered, ADR-057 D6): dropped only on a CONFIRMED
 //     version supersession (VersionSuperseded) — otherwise a superseded pane-close/timer would contribute
 //     a false edge to the alarm object under the stable contributor id (a stale unsatisfied pane-close
 //     resolving the ACTIVE version's raise at the same epoch-aligned timestamp = a fail-open false clear).
 //     Fails the OTHER way (keep on uncertainty) so a real alarm is never dropped for an incomplete projection.
 //
-// Live Threshold Raised edges are dropped only for a currently raised successor; their
-// Resolved edges pass unless their own Raised was dropped earlier in this pass. The scaffold path (no armer / no read-models) passes untouched. A drop is
+// Event-driven kinds and the scaffold path (no armer / no read-models) pass through untouched. A drop is
 // TERMINAL (like the tenant backstop), so it never wedges the loop; a dropped Raised clears the engine's
 // two-edge latch so a later legitimate fire is not suppressed.
 func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
@@ -3472,7 +3432,7 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 		return
 	}
 	kept := rp.pendingDets[:0]
-	var droppedRaise map[detectcore.SeriesKey]struct{} // absence/threshold raises dropped in THIS pass
+	var droppedRaise map[detectcore.SeriesKey]struct{} // absence raises dropped in THIS pass
 	for _, d := range rp.pendingDets {
 		if d.state == outputAcked {
 			// Already positively acknowledged and waiting only for the items before it to settle.
@@ -3484,10 +3444,6 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 		key := detectcore.SeriesKey{Rule: d.RuleID, Series: d.Series}
 		var drop bool
 		switch {
-		case d.Kind == detectcore.Threshold && d.Edge == detectcore.EdgeResolved:
-			// This old episode never reached the shared alarm contributor. Historical
-			// clears whose raises were not dropped in this pass remain owed.
-			_, drop = droppedRaise[key]
 		case d.Kind == detectcore.Absence:
 			// Absence is always frontier-triggered AND membership-gated: drop a RAISE on ANY
 			// non-liveness (deleted / disabled / re-typed / version superseded), fail-safe toward a
@@ -3515,12 +3471,6 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 			// contributor id — a fail-open false clear. Drop ONLY on a CONFIRMED version mismatch, so a
 			// real alarm is never dropped for a momentarily-incomplete projection.
 			drop = rp.armer.VersionSuperseded(key)
-		case d.Kind == detectcore.Threshold && d.Edge == detectcore.EdgeRaised && !rp.replaying:
-			// A late threshold raise is redundant only while the paired successor
-			// is currently raised. Replay raises must pass idempotently so their
-			// latches survive for the post-replay carry. On uncertainty, publish.
-			next, paired := rp.armer.CarriedSuccessor(key)
-			drop = paired && rp.armer.VersionSuperseded(key) && rp.armer.CarriedForward(key) && rp.engine.IsRaised(next)
 		}
 		if !drop {
 			kept = append(kept, d)
@@ -3531,7 +3481,7 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 		// Resolved drop needs no clear (resolve already cleared the latch on emit).
 		if d.Edge == detectcore.EdgeRaised {
 			rp.engine.ClearRaised(key)
-			if d.Kind == detectcore.Absence || d.Kind == detectcore.Threshold {
+			if d.Kind == detectcore.Absence {
 				if droppedRaise == nil {
 					droppedRaise = map[detectcore.SeriesKey]struct{}{}
 				}
@@ -3540,10 +3490,8 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 		}
 		if d.Kind == detectcore.Absence {
 			rp.metrics.recordStaleAbsenceDropped()
-		} else if frontierTriggeredKind(d.Kind) {
-			rp.metrics.recordSupersededFrontierDropped()
 		} else {
-			rp.metrics.recordSupersededRaisedDropped()
+			rp.metrics.recordSupersededFrontierDropped()
 		}
 	}
 	rp.pendingDets = kept
@@ -3558,7 +3506,7 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 // if no later reading settles it (detectcore holdLateResolve). These are the kinds whose superseded firings
 // starvation does NOT silence, so they need the publish-time version gate (D6). The purely
 // event-driven kinds (Threshold/Repeating/Correlation) are already version-scoped by the
-// fan-out; only late Threshold raises with a raised successor are gated separately. Absence is handled separately (stricter
+// fan-out and pass through as legitimate late contributions. Absence is handled separately (stricter
 // AbsenceLive membership gate).
 func frontierTriggeredKind(k detectcore.RuleKind) bool {
 	switch k {

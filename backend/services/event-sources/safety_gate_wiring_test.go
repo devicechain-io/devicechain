@@ -4,6 +4,7 @@
 package main
 
 import (
+	"github.com/devicechain-io/dc-microservice/service"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -12,6 +13,7 @@ import (
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,7 +27,7 @@ func gateReading(t *testing.T, area string) (*governance.SafetyGates, func(gate 
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: area}
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
-	gates := governance.NewSafetyGates(ms)
+	gates := service.FromManagers(ms, service.Managers{}).SafetyGates()
 	return gates, func(gate string) (float64, bool) {
 		families, err := reg.Gather()
 		require.NoError(t, err)
@@ -58,14 +60,14 @@ func TestIngestTenantGateRecordsItsDecision(t *testing.T) {
 	infra := fullInfra()
 	infra.UserManagement.Hostname = ""
 	gates, read := gateReading(t, "event-sources")
-	g, _ := ingestTenantGates(infra, gates)
+	g, _ := ingestTenantGates(svcclient.NewPeers(infra, "event-sources"), gates)
 	assert.Nil(t, g)
 	v, ok := read(governance.GateTenantLifecycle)
 	assert.True(t, ok, "an OFF gate must be a present series")
 	assert.Equal(t, 0.0, v)
 
 	gates, read = gateReading(t, "event-sources")
-	g, _ = ingestTenantGates(fullInfra(), gates)
+	g, _ = ingestTenantGates(svcclient.NewPeers(fullInfra(), "event-sources"), gates)
 	assert.NotNil(t, g)
 	v, ok = read(governance.GateTenantLifecycle)
 	assert.True(t, ok)
@@ -77,9 +79,8 @@ func TestIngestTenantGateRecordsItsDecision(t *testing.T) {
 // The gate decisions this service makes, by function name.
 var decisions = []string{"ingestTenantGates"}
 
-// callSitesPassTheServiceGates is a SOURCE-LEVEL check, chosen because afterMicroserviceInitialized
-// cannot run in a unit test (it needs the whole microservice, a database and a broker). It parses
-// main.go and asserts three things the helper tests cannot see: the gauge is built exactly once, in
+// This source-level check complements the catalog boot test, which drives the real
+// initializer with optional gates disabled. It parses main.go and pins all gate decisions: the service gates are obtained exactly once, in
 // afterMicroserviceInitialized, into safetyGates; every call to a gate decision passes exactly
 // safetyGates (a nil, or a handle built somewhere else, would leave the series absent and the
 // SafetyGateDisabled alert blind); and each decision is called at least once (so a renamed or
@@ -108,7 +109,11 @@ func TestEveryGateDecisionIsCalledWithTheServiceGates(t *testing.T) {
 			case *ast.SelectorExpr:
 				name = f.Sel.Name
 			}
-			if name == "NewSafetyGates" {
+			if name == "SafetyGates" {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				require.True(t, ok)
+				id, ok := sel.X.(*ast.Ident)
+				assert.True(t, ok && id.Name == "Svc", "gates must come from Svc")
 				built++
 				assert.Equal(t, "afterMicroserviceInitialized", fn.Name.Name,
 					"the gauge must be built on the initialize path, once")
@@ -127,7 +132,7 @@ func TestEveryGateDecisionIsCalledWithTheServiceGates(t *testing.T) {
 		})
 		return false
 	})
-	assert.Equal(t, 1, built, "NewSafetyGates must be called exactly once")
+	assert.Equal(t, 1, built, "Svc.SafetyGates must be called exactly once")
 	for _, want := range decisions {
 		assert.GreaterOrEqualf(t, calls[want], 1, "no call to %s found: renamed, or no longer wired", want)
 	}
@@ -138,14 +143,14 @@ func TestEveryGateDecisionIsCalledWithTheServiceGates(t *testing.T) {
 // reads gone, so an evicted round is not stepped past on a guess.
 func TestIngestTenantGatesGiveTheWalksAFailClosedReading(t *testing.T) {
 	infra := fullInfra() // user-management at a host nothing answers
-	gate, strict := ingestTenantGates(infra, nil)
+	gate, strict := ingestTenantGates(svcclient.NewPeers(infra, "event-sources"), nil)
 	require.NotNil(t, gate)
 	require.NotNil(t, strict)
 	assert.False(t, gate("cold-tenant"), "premise: the admission gate fails open on a cold tenant")
 	assert.True(t, strict("cold-tenant"), "the walk's reading must fail closed on a cold tenant")
 
 	infra.UserManagement.Hostname = ""
-	gate, strict = ingestTenantGates(infra, nil)
+	gate, strict = ingestTenantGates(svcclient.NewPeers(infra, "event-sources"), nil)
 	assert.Nil(t, gate)
 	assert.Nil(t, strict, "no lifecycle authority: nothing to ask")
 }
