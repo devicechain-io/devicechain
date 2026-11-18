@@ -499,7 +499,7 @@ func TestDeliverWithRetryDeliversForALiveTenant(t *testing.T) {
 	}
 }
 
-// TestAnUnconfiguredGateDelivers pins the fail-open default: NewTenantLifecycleGate returns
+// TestAnUnconfiguredGateDelivers pins the fail-open default: NewTenantLifecycleGateFor returns
 // nil on an instance with no user-management configured, and this service must then behave
 // exactly as it did before the gate existed rather than panic or refuse everything.
 func TestAnUnconfiguredGateDelivers(t *testing.T) {

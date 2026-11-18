@@ -255,7 +255,7 @@ func (api *Api) drainTenantOwnership(ctx context.Context, pageSize int) (publish
 	}
 	byId := make(map[uint]*DeviceOwnershipChangedEvent, len(facts))
 	for _, f := range facts {
-		byId[f.deviceId] = f
+		byId[uint(f.DeviceIncarnation)] = f
 	}
 	done := make([]PendingOwnershipFact, 0, len(rows))
 	var pubErr error
