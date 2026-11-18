@@ -28,8 +28,11 @@ func requiresPositionVerification(ctx context.Context) bool {
 	if _, ok := auth.ClaimsFromContext(ctx); !ok {
 		return false
 	}
-	_, err := auth.AuthorizeScoped(ctx, auth.LocationRead)
-	return err != nil
+	// Authorize, not AuthorizeScoped: this service admits no scoped caller (every resolver
+	// gates with Authorize), so a scoped member never reaches these reads. Should one ever
+	// arrive, Authorize refuses it and its history is verified like any caller without
+	// location:read: fail closed, rather than opting the module in to scoped callers.
+	return auth.Authorize(ctx, auth.LocationRead) != nil
 }
 
 // notificationHistoryRead applies the local cache as a counting/paging pre-filter.

@@ -13,20 +13,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPositionCheckRecognizesScopedLocationGrant(t *testing.T) {
+func TestPositionCheckWithholdsFromScopedCallers(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
-	for _, location := range []bool{false, true} {
-		authorities := []string{string(auth.NotificationRead)}
-		if location {
-			authorities = append(authorities, string(auth.LocationRead))
-		}
-		caller := auth.WithClaims(ctx, &auth.Claims{Authorities: authorities, ScopeAnchors: []string{"customer:acme"}})
-		// Judge only the position check here. The independent tenant-scope callback
-		// still refuses these tenant-wide notification tables to scoped members.
-		filtered := notificationHistoryRead(api.RDB.DB(caller), false)
-		_, withheld := filtered.Statement.Clauses["WHERE"]
-		require.Equal(t, !location, withheld)
+	for _, tc := range []struct {
+		name     string
+		anchors  []string
+		location bool
+		withheld bool
+	}{
+		{"unscoped without location", nil, false, true},
+		{"unscoped with location", nil, true, false},
+		// This service admits no scoped caller; one that arrives anyway is withheld from even
+		// when it holds location:read, so the check never opts the module in to scoped callers.
+		{"scoped without location", []string{"customer:acme"}, false, true},
+		{"scoped with location", []string{"customer:acme"}, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			authorities := []string{string(auth.NotificationRead)}
+			if tc.location {
+				authorities = append(authorities, string(auth.LocationRead))
+			}
+			caller := auth.WithClaims(ctx, &auth.Claims{Authorities: authorities, ScopeAnchors: tc.anchors})
+			filtered := notificationHistoryRead(api.RDB.DB(caller), false)
+			_, withheld := filtered.Statement.Clauses["WHERE"]
+			require.Equal(t, tc.withheld, withheld)
+		})
 	}
 }
 
