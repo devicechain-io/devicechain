@@ -113,6 +113,9 @@ type roundPublisher struct {
 // ordered writer, a round publisher forwards already-fetched messages without refusing.
 func (nmgr *NatsManager) NewRoundPublisher(suffix string) (RoundPublisher, error) {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedWrite(suffix); err != nil {
+		return nil, err
+	}
 	if err := nmgr.requireForwarder(suffix); err != nil {
 		return nil, err
 	}
