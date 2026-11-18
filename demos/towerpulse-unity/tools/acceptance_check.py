@@ -516,7 +516,7 @@ def kube(args, namespace):
 
 
 def counters(namespace):
-    text = kube(["exec", "deploy/dc-nats-box", "--", "wget", "-qO-", "http://device-management:8080/metrics"], namespace)
+    text = kube(["exec", "deploy/dc-nats-box", "--", "wget", "-qO-", "http://device-management:8083/metrics"], namespace)
     out = {}
     for line in text.splitlines():
         m = re.match(r'devicechain_devicemanagement_calcmetric_skipped_total\{reason="(\w+)"\}\s+([0-9.e+]+)', line)

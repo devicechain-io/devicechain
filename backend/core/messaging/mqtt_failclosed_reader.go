@@ -49,6 +49,7 @@ var mqttStoreBindRetry = 2 * time.Second
 // The durable need not exist yet. Close it (MqttStoreReader.Close) when done; the manager's
 // stop releases it too.
 func (nmgr *NatsManager) NewMqttMessageStoreReader(kind MqttFailClosedKind) (*MqttStoreReader, error) {
+	nmgr.freezeStreamRouting()
 	var d *MqttFailClosedDurable
 	for _, x := range MqttFailClosedDurables(nmgr.Microservice.InstanceId) {
 		if x.Kind == kind {
@@ -76,11 +77,11 @@ func (nmgr *NatsManager) NewMqttMessageStoreReader(kind MqttFailClosedKind) (*Mq
 		forwards:     d.Forwards,
 		alsoForwards: d.AlsoForwards,
 		gate:         nmgr.Microservice.Readiness,
-		downstream:   downstream,
+		downstreams:  nmgr.readerDownstreams(downstream, nil),
 		store:        true,
 	}
-	if r.downstream != "" {
-		nmgr.registerBackpressure(r.downstream)
+	for _, downstream := range r.downstreams {
+		nmgr.registerBackpressure(downstream)
 	}
 	r.configureFetch()
 	if nmgr.nc != nil {

@@ -6,12 +6,15 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
 	emtest "github.com/devicechain-io/dc-event-management/test"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/entityevent"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"strings"
 	"testing"
 	"time"
 )
@@ -101,4 +104,37 @@ func TestReconciler_PoisonCeilingDrops(t *testing.T) {
 		&entityevent.EntityDeletedEvent{EntityType: entity.TypeCustomer, EntityId: 3, EntityToken: "cust-3", DeletedTime: time.Now().UTC()}, messaging.MaxDeliver, ack))
 
 	assert.Equal(t, 1, ack.acked)
+}
+
+func TestDeliveryCapDispositionEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		err             error
+		delivered, acks int
+		exhausted       bool
+	}{
+		{"exhausted", errors.New("db down"), messaging.MaxDeliver, 1, true},
+		{"erased final", fmt.Errorf("write: %w", rdb.ErrTenantPurged), messaging.MaxDeliver, 1, false},
+		{"erased early", rdb.ErrTenantPurged, 1, 1, false},
+		{"hold released", fmt.Errorf("write: %w", messaging.ErrHoldReleased), messaging.MaxDeliver, 0, false},
+		{"retry", errors.New("db down"), messaging.MaxDeliver - 1, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := logSink.Capture(t)
+			api := new(emtest.MockApi)
+			api.Mock.On("DeleteAnchorsForEntity", "customer", "acme", mock.Anything).Return(0, tc.err)
+			r := &EntityAnchorReconciler{Api: api}
+			ack := &stubAck{}
+			r.handle(context.Background(), deletedMsg(t, reconcilerSubject, &entityevent.EntityDeletedEvent{EntityType: entity.TypeCustomer, EntityToken: "acme", DeletedTime: time.Now()}, tc.delivered, ack))
+			assert.Equal(t, tc.acks, ack.acked)
+			if got := strings.Contains(logs.String(), "Giving up on entity-deleted event after max delivery attempts"); got != tc.exhausted {
+				t.Errorf("exhausted log = %v; logs: %s", got, logs.String())
+			}
+			if tc.err == rdb.ErrTenantPurged || strings.HasPrefix(tc.name, "erased") {
+				if !strings.Contains(logs.String(), `"level":"debug"`) || !strings.Contains(logs.String(), "Dropping message for an erased tenant") {
+					t.Errorf("missing erased debug log: %s", logs.String())
+				}
+			}
+		})
+	}
 }

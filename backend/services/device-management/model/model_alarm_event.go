@@ -58,6 +58,9 @@ func (t AlarmEventType) Valid() bool {
 // String returns the underlying string value.
 func (t AlarmEventType) String() string { return string(t) }
 
+// AlarmClearReasonOriginatorDeleted identifies a clear caused by entity deletion.
+const AlarmClearReasonOriginatorDeleted = "ORIGINATOR_DELETED"
+
 // AlarmStateChangeEvent is the envelope emitted on each alarm transition. It is a
 // snapshot of the alarm after the transition plus the transition kind and, for a
 // severity change, the prior severity — enough for a subscriber to render the change
@@ -65,6 +68,7 @@ func (t AlarmEventType) String() string { return string(t) }
 // token so a subscriber can resolve or re-query it; the originator is carried as the
 // uniform (type, id) reference (ADR-013).
 type AlarmStateChangeEvent struct {
+	ClearReason    string
 	EventType      AlarmEventType
 	AlarmToken     string
 	OriginatorType string

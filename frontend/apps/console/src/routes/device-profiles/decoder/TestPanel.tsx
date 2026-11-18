@@ -9,6 +9,7 @@
 // reveals its bytes, so the platform treats it as reading them. Hiding the option is a courtesy;
 // the server refuses a read-only caller regardless.
 
+import { listAll } from '@/lib/api/list-all';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Play, Save } from 'lucide-react';
@@ -94,14 +95,14 @@ function WebhookInputs(props: {
   setContentType: (v: string) => void;
 }) {
   const { t } = useTranslation('deviceProfiles');
-  const { data, loading, error } = useQuery(() => listIntegrations({ pageNumber: 1, pageSize: 200 }), []);
+  const { current: data, loading, error } = useQuery(() => listAll(page => listIntegrations({ ...page })), []);
   const options = (data?.results ?? []).map((i) => ({ value: i.token, label: i.name || i.token, description: `${i.type} · ${i.token}` }));
   return (
     <div className="space-y-3">
       <FormField label={t('decTestIntegration')} htmlFor="dec-test-integration" description={t('decTestIntegrationHint')}>
         {loading && !data ? (
           <LoadingState description={t('decTestIntegrationLoading')} />
-        ) : error && !data ? (
+        ) : error ? (
           <p role="alert" className="text-sm text-destructive">{error}</p>
         ) : (
           <Combobox

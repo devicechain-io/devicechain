@@ -30,7 +30,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/proto"
 	"github.com/devicechain-io/dc-microservice/storehold"
-	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -222,6 +221,7 @@ func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []re
 		Source:              event.Source,
 		AltId:               event.AltId,
 		SourceDeviceToken:   device.Token,
+		DeviceIncarnation:   uint64(device.ID),
 		ExternalId:          externalId,
 		DeviceTypeToken:     scope.DeviceTypeToken,
 		ProfileVersionToken: scope.ProfileVersionToken,
@@ -298,7 +298,7 @@ func (rez *EventResolver) unionMemberships(ctx context.Context, api model.Device
 		}
 		for _, m := range ms {
 			if i == 0 && m.AccessScope && t.Type == string(entity.TypeDevice) {
-				access = append(access, resolvedevent.ResolvedAnchor{AnchorType: auth.AnchorKindGroup, AnchorToken: m.GroupToken})
+				access = append(access, resolvedevent.ResolvedAnchor{AnchorType: auth.AnchorKindGroup, AnchorToken: m.GroupToken, EntityId: m.GroupId})
 			}
 			k := mkey{m.GroupToken, m.SelectorVersion}
 			if _, dup := seen[k]; dup {
@@ -330,9 +330,6 @@ func (rez *EventResolver) resolveProfile(ctx context.Context, api model.DeviceMa
 	return res, 0, nil
 }
 
-// relationshipTokenNamespace namespaces the derived tokens of relationships created from events.
-var relationshipTokenNamespace = uuid.MustParse("6f1c3a52-8d0e-5b7a-9c41-2e5d7a9b1c30")
-
 // Create a new relationship based on an inbound event. The source is the
 // originating device; the target is a uniform (type, token) reference (ADR-013).
 func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, device *model.Device,
@@ -350,8 +347,7 @@ func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, devic
 		return nil, reason, err
 	}
 	tenant, _ := core.TenantFromContext(ctx)
-	token := uuid.NewSHA1(relationshipTokenNamespace, []byte(strings.Join([]string{
-		tenant, string(entity.TypeDevice), device.Token, relcreate.TargetType, relcreate.Target, relcreate.RelationshipType}, "\x00"))).String()
+	token := model.DeviceAuthoredRelationshipToken(tenant, device.Token, relcreate.TargetType, relcreate.Target, relcreate.RelationshipType)
 	if found, ferr := rez.Api.EntityRelationshipsByToken(ctx, []string{token}); ferr != nil {
 		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), ferr
 	} else if len(found) > 0 && found[0] != nil {
@@ -444,7 +440,7 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	// reads as untracked and stamps nothing.
 	anchors := existing
 	if created.RelationshipType.Tracked {
-		newAnchor := resolvedevent.ResolvedAnchor{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID}
+		newAnchor := resolvedevent.ResolvedAnchor{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID, EntityId: created.TargetId}
 		if !slices.ContainsFunc(anchors, func(a resolvedevent.ResolvedAnchor) bool {
 			return a.AnchorType == newAnchor.AnchorType && a.AnchorToken == newAnchor.AnchorToken
 		}) {
@@ -1132,6 +1128,7 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, api model.DeviceMan
 			AnchorType:     r.TargetType,
 			AnchorToken:    r.TargetToken,
 			RelationshipId: r.ID,
+			EntityId:       r.TargetId,
 		})
 		targets = append(targets, model.MembershipTarget{Type: r.TargetType, Id: r.TargetId})
 	}

@@ -21,7 +21,7 @@ import (
 // express through a well-typed fixture.
 func newBatchValidatorAgainst(t *testing.T, body string) *BatchValidator {
 	t.Helper()
-	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	dm := httptest.NewServer(identityAwareHandler(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(body))
 	}))
@@ -42,7 +42,7 @@ func TestBatchRefusalsAreRelayedWithTheirCodes(t *testing.T) {
 	  {"deviceToken":"pump-b","code":"DEVICE_NOT_FOUND","reason":"gone"}
 	]}}`)
 
-	refusals, err := validator.ValidateEnqueueBatch(batchCtx(),
+	refusals, _, err := validator.ValidateEnqueueBatch(batchCtx(),
 		[]string{"pump-a", "pump-b", "pump-c"}, "reboot", nil)
 	if err != nil {
 		t.Fatalf("a well-formed verdict must not be an error: %v", err)
@@ -66,7 +66,7 @@ func TestUnknownRefusalCodeIsRelayedNotDropped(t *testing.T) {
 	  {"deviceToken":"pump-a","code":"SOME_FUTURE_CODE","reason":"invented tomorrow"}
 	]}}`)
 
-	refusals, err := validator.ValidateEnqueueBatch(batchCtx(), []string{"pump-a"}, "reboot", nil)
+	refusals, _, err := validator.ValidateEnqueueBatch(batchCtx(), []string{"pump-a"}, "reboot", nil)
 	if err != nil {
 		t.Fatalf("an unrecognized code is still a verdict, not an error: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestUnknownRefusalCodeIsRelayedNotDropped(t *testing.T) {
 func TestHealthyFleetIsAnEmptyList(t *testing.T) {
 	validator := newBatchValidatorAgainst(t, `{"data":{"validateCommandEnqueueBatch":[]}}`)
 
-	refusals, err := validator.ValidateEnqueueBatch(batchCtx(), []string{"pump-a"}, "reboot", nil)
+	refusals, _, err := validator.ValidateEnqueueBatch(batchCtx(), []string{"pump-a"}, "reboot", nil)
 	if err != nil {
 		t.Fatalf("an empty refusal list is the healthy answer, not an error: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestAbsentVerdictIsAnErrorNotUnanimousApproval(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			validator := newBatchValidatorAgainst(t, body)
 
-			refusals, err := validator.ValidateEnqueueBatch(batchCtx(),
+			refusals, _, err := validator.ValidateEnqueueBatch(batchCtx(),
 				[]string{"pump-a", "pump-b"}, "reboot", nil)
 			if err == nil {
 				t.Fatalf("a response carrying no verdict must be an ERROR so the caller "+
@@ -128,7 +128,7 @@ func TestAbsentVerdictIsAnErrorNotUnanimousApproval(t *testing.T) {
 // declared), while "" would be a present-but-unparseable body.
 func TestBatchPayloadIsSentAsNullWhenAbsent(t *testing.T) {
 	var captured map[string]any
-	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	dm := httptest.NewServer(identityAwareHandler(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			Variables map[string]any `json:"variables"`
 		}
@@ -140,7 +140,7 @@ func TestBatchPayloadIsSentAsNullWhenAbsent(t *testing.T) {
 	t.Cleanup(dm.Close)
 	validator := NewBatchValidator(newSvcClient(t), dm.URL)
 
-	if _, err := validator.ValidateEnqueueBatch(batchCtx(), []string{"pump-a"}, "reboot", nil); err != nil {
+	if _, _, err := validator.ValidateEnqueueBatch(batchCtx(), []string{"pump-a"}, "reboot", nil); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
 	payload, present := captured["payload"]

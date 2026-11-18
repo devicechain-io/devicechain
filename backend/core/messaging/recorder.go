@@ -339,7 +339,7 @@ func (h *maxDeliveryHandler) handle(ctx context.Context, msg Message) {
 		h.ack(msg)
 		return
 	}
-	final := msg.NumDelivered >= MaxDeliver
+	final := FinalDelivery(msg)
 	fctx, cancel := context.WithTimeout(ctx, originalFetchTimeout)
 	orig, err := h.nmgr.js.GetMsg(stream, adv.StreamSeq, nats.Context(fctx))
 	cancel()

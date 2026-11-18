@@ -50,7 +50,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 <GuideShot id="facets-new" alt="New facet 抽屉，字段包括设置为 Device 的 Member family、占位符为 climate 的 Attribute key、设置为 STRING 的 Value type、占位符为 arid, temperate, tropical 的 Values 以及 Label，下方是“Save facet”按钮。" />
 
-点击 **Save facet**（保存分面）。没有单独的编辑界面：要修改分面的类型、值或标签，请用相同的成员类别和键重新声明，新的声明会替换旧的。
+点击 **Save facet**（保存分面）。没有单独的编辑界面：要修改分面的类型、值或标签，请用相同的成员类别和键重新声明，新的声明会替换旧的。**类型**的更改是例外：只要该成员类别和键下仍有共享属性保存着旧类型的值，更改就会被拒绝，因此请先清除这些值或将其迁移为新类型。只更改值或标签则不受此限制。
 
 **Delete**（删除）只移除声明。实体上已存储的值保持不变，使用该分面的已保存动态分组也继续有效。
 
@@ -90,6 +90,8 @@ dcctl attr unset device meter-0042 floor --tenant acme --email you@example.com -
 <GuideShot id="browse-save-group" alt="Save as dynamic group 抽屉，显示选择器 attr zone equals offices、带生成按钮的 Token 字段、可选的 Name 字段以及“Save group”按钮。" />
 
 保存时平台会再次检查选择器，并拒绝它无法高效运行的选择器。保存后，该分组会出现在该类别的 **Saved dynamic groups** 下，显示其令牌、名称和选择器。点击 **Members** 可查看当前属于它的成员；每次打开时都会根据选择器重新计算该列表。
+
+否定选择器（例如 `!("retired" in attr)`）从实体创建之时起就包含没有属性的实体；当组被检测规则或访问范围启用时，这些实体也会立即加入。
 
 ## 相关内容 {#related}
 

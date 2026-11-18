@@ -35,6 +35,7 @@ type RetentionSweeper struct {
 
 	Microservice *core.Microservice
 	Api          *model.Api
+	Notifier     *PolicyNotifier
 	retention    time.Duration
 
 	// attemptRetention is how long a delivery-ledger row is kept. Zero leaves the ledger
@@ -55,78 +56,83 @@ func NewRetentionSweeperWithLedger(ms *core.Microservice, api *model.Api, retent
 	interval time.Duration, callbacks core.LifecycleCallbacks) *RetentionSweeper {
 	s := &RetentionSweeper{Microservice: ms, Api: api, retention: retention, attemptRetention: attemptRetention}
 	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "retention-sweep", interval,
-		s.runOnce, callbacks, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("retention_sweep")))
+		s.runOnce, callbacks, ms.NewPeriodicTaskMetrics("retention_sweep"))
 	return s
 }
 
 // runOnce prunes every tenant's cleared state rows older than the retention window.
 func (s *RetentionSweeper) runOnce(ctx context.Context) error {
 	before := time.Now().Add(-s.retention)
-	tenants, err := s.Api.DistinctStateTenants(core.WithSystemContext(ctx))
+	tenants, err := s.Api.RDB.TenantsWith(ctx, &model.NotificationState{})
 	if err != nil {
 		return fmt.Errorf("listing tenants with notification state: %w", err)
 	}
-	var visited, failed int
+	// Classify the combined state and ledger tally once; retaining raw errors
+	// keeps a per-loop partial from masking a combined all-failed pass.
 	var lastErr error
-	for _, tenant := range tenants {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+	sweep, sweepErr := core.ForEachTenant(ctx, tenants, func(tctx context.Context, tenant string) error {
+		if s.Notifier != nil {
+			if err := s.Notifier.SweepOrphans(tctx, time.Now()); err != nil {
+				lastErr = err
+				return err
+			}
 		}
-		visited++
-		removed, err := s.Api.PruneResolvedStates(core.WithTenant(ctx, tenant), before)
+		removed, err := s.Api.PruneResolvedStates(tctx, before)
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Msg("Retention sweep: prune failed")
-			failed++
 			lastErr = err
-			continue
+			return err
 		}
 		if removed > 0 {
 			log.Info().Str("tenant", tenant).Int64("statesPruned", removed).
 				Msg("Retention sweep pruned cleared notification state")
 		}
+		return nil
+	})
+	if sweepErr != nil && sweepErr == ctx.Err() {
+		return sweepErr
+	}
+	if lastErr == nil && sweep.Failed > 0 {
+		// Empty tokens fail before the callback; keep their raw error for the combined tally.
+		lastErr = core.ErrNoTenant
 	}
 	if s.attemptRetention > 0 {
-		// The system context is taken HERE, in the one function declared as a bypass of
-		// tenant isolation, and handed down; pruneAttempts only lists tenants under it.
-		v, f, err := s.pruneAttempts(ctx, core.WithSystemContext(ctx))
-		visited += v
-		failed += f
+		attempts, err := s.pruneAttempts(ctx)
+		sweep.Visited += attempts.Visited
+		sweep.Failed += attempts.Failed
 		if err != nil {
 			lastErr = err
 		}
 	}
-	return core.PassResult(visited, failed, lastErr)
+	return core.PassResult(sweep.Visited, sweep.Failed, lastErr)
 }
 
 // pruneAttempts deletes every tenant's delivery-ledger rows older than the ledger's
 // retention window, tenant by tenant under that tenant's context.
-// sysCtx is ctx with the system context the cross-tenant listing needs.
-func (s *RetentionSweeper) pruneAttempts(ctx, sysCtx context.Context) (visited, failed int, lastErr error) {
+func (s *RetentionSweeper) pruneAttempts(ctx context.Context) (sweep core.TenantSweep, lastErr error) {
 	before := time.Now().Add(-s.attemptRetention)
-	tenants, err := s.Api.DistinctAttemptTenants(sysCtx)
+	tenants, err := s.Api.RDB.TenantsWith(ctx, &model.NotificationAttempt{})
 	if err != nil {
-		return 1, 1, fmt.Errorf("listing tenants with delivery-ledger rows: %w", err)
+		return core.TenantSweep{Visited: 1, Failed: 1}, fmt.Errorf("listing tenants with delivery-ledger rows: %w", err)
 	}
-	for _, tenant := range tenants {
-		select {
-		case <-ctx.Done():
-			return visited, failed, ctx.Err()
-		default:
-		}
-		visited++
-		removed, err := s.Api.PruneNotificationAttempts(core.WithTenant(ctx, tenant), before)
+	var sweepErr error
+	sweep, sweepErr = core.ForEachTenant(ctx, tenants, func(tctx context.Context, tenant string) error {
+		removed, err := s.Api.PruneNotificationAttempts(tctx, before)
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Msg("Retention sweep: delivery-ledger prune failed")
-			failed++
 			lastErr = err
-			continue
+			return err
 		}
 		if removed > 0 {
 			log.Info().Str("tenant", tenant).Int64("attemptsPruned", removed).
 				Msg("Retention sweep pruned delivery-ledger rows")
 		}
+		return nil
+	})
+	if sweepErr != nil && sweepErr == ctx.Err() {
+		lastErr = sweepErr
+	} else if lastErr == nil && sweep.Failed > 0 {
+		lastErr = core.ErrNoTenant
 	}
-	return visited, failed, lastErr
+	return sweep, lastErr
 }

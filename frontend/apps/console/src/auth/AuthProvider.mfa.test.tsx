@@ -9,7 +9,7 @@
 //                   the sessions itself.
 
 import { act, cleanup, render } from '@testing-library/react';
-import { GraphQLRequestError, resolveAuthToken } from '@devicechain/client';
+import { gql, GraphQLRequestError, resolveAuthToken, type TypedDocument } from '@devicechain/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
@@ -58,7 +58,55 @@ beforeEach(() => {
   Object.values(h).forEach((m) => m.mockReset());
   window.localStorage.clear();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+describe('HTTP 401 session recovery', () => {
+  const query = 'query { test }' as unknown as TypedDocument<{ test: boolean }, Record<string, never>>;
+
+  beforeEach(() => {
+    window.localStorage.setItem('dc-auth', JSON.stringify({ accessToken: ACCESS, refreshToken: REFRESH }));
+    window.localStorage.setItem('dc-identity', JSON.stringify({ identityToken: OLD_ID, superuser: false, memberships: [] }));
+  });
+
+  it('refreshes an unexpired tenant token once and replays without signing out', async () => {
+    const next = { accessToken: jwt({ tenant: 'acme', exp: future, jti: 'fresh' }), refreshToken: REFRESH };
+    h.refresh.mockResolvedValue(next);
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { test: true } })));
+    vi.stubGlobal('fetch', fetcher);
+    mount();
+    await act(async () => { expect(await gql('device-management', query)).toEqual({ test: true }); });
+    expect(h.refresh).toHaveBeenCalledExactlyOnceWith(REFRESH);
+    expect(auth.isAuthenticated).toBe(true);
+    expect(stored('dc-auth')).toEqual(next);
+  });
+
+  it('clears the tenant session with the expired reason after the replay is refused', async () => {
+    h.refresh.mockResolvedValue({ accessToken: ACCESS, refreshToken: REFRESH });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+    mount();
+    await act(async () => { await expect(gql('device-management', query)).rejects.toMatchObject({ status: 401 }); });
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(auth.isAuthenticated).toBe(false);
+    expect(stored('dc-auth')).toBeNull();
+    expect(consumeSessionExpired()).toBe('expired');
+    expect(auth.isIdentityAuthenticated).toBe(true);
+  });
+
+  it('ends a rejected identity session without attempting a tenant refresh', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+    mount();
+    await act(async () => { await expect(gql('user-management/admin', query)).rejects.toMatchObject({ status: 401 }); });
+    expect(h.refresh).not.toHaveBeenCalled();
+    expect(auth.isIdentityAuthenticated).toBe(false);
+    expect(consumeSessionExpired()).toBe('expired');
+    expect(auth.isAuthenticated).toBe(true);
+  });
+});
 
 describe('verifyMfa', () => {
   it('starts the identity session the way a password sign-in does', async () => {
@@ -265,5 +313,62 @@ describe('in-session stepUp', () => {
     expect(stored('dc-auth')).toEqual({ accessToken: ACCESS, refreshToken: REFRESH });
     expect(auth.isAuthenticated).toBe(true);
     expect(h.logout).not.toHaveBeenCalled();
+  });
+
+  // 🔴 A 401 forces a refresh with refresh token R while the access token is still valid; the
+  // user then submits a correct code. Refresh tokens rotate, and the server honours one use of
+  // R. Step-up used to wait only for an ordinary refresh, so it spent R alongside the forced
+  // one: the forced refresh was refused, which ended the session, and the step-up's pair then
+  // arrived for a session that was gone. Signed out after a correct code.
+  it('shares the refresh token with a forced refresh after a 401, and stays signed in', async () => {
+    const live = new Set([REFRESH]);
+    let n = 0;
+    const issue = (rt: string) => {
+      if (!live.delete(rt)) {
+        throw new GraphQLRequestError('invalid refresh token', 200, [{ message: 'invalid refresh token' }]);
+      }
+      n++;
+      const next = { accessToken: jwt({ tenant: 'acme', exp: future, jti: `a${n}` }),
+        refreshToken: jwt({ tenant: 'acme', exp: future, jti: `r${n}` }) };
+      live.add(next.refreshToken);
+      return next;
+    };
+    let openRefresh!: () => void;
+    const refreshGate = new Promise<void>((r) => (openRefresh = r));
+    let openStepUp!: () => void;
+    const stepUpGate = new Promise<void>((r) => (openStepUp = r));
+    // The forced refresh is slow to reach the server; the step-up is claimed there at once and
+    // slow to answer, so the refusal of whichever loses arrives first.
+    h.refresh.mockImplementation(async (rt: string) => { await refreshGate; return issue(rt); });
+    h.stepUp.mockImplementation(async (rt: string) => { const pair = issue(rt); await stepUpGate; return pair; });
+    const query = 'query { test }' as unknown as TypedDocument<{ test: boolean }, Record<string, never>>;
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 401 }))
+      .mockResolvedValue(new Response(JSON.stringify({ data: { test: true } }))));
+    mount();
+
+    let request!: Promise<unknown>;
+    let stepped!: Promise<unknown>;
+    await act(async () => {
+      request = gql('device-management', query);
+      await vi.waitFor(() => expect(h.refresh).toHaveBeenCalledTimes(1));
+      stepped = auth.stepUp('123456');
+      await Promise.resolve();
+      openRefresh();
+      await vi.waitFor(() => expect(h.stepUp).toHaveBeenCalled());
+      openStepUp();
+      await Promise.allSettled([request, stepped]);
+    });
+
+    await expect(stepped).resolves.toBeUndefined();
+    await expect(request).resolves.toEqual({ test: true });
+    expect(h.refresh).toHaveBeenCalledExactlyOnceWith(REFRESH);
+    // The step-up spent the token the forced refresh left, never R a second time.
+    expect(h.stepUp).toHaveBeenCalledTimes(1);
+    expect(h.stepUp.mock.calls[0][0]).not.toBe(REFRESH);
+    expect(auth.isAuthenticated).toBe(true);
+    expect(consumeSessionExpired()).toBeNull();
+    expect(live.has(stored('dc-auth').refreshToken)).toBe(true);
+    expect(stored('dc-auth').accessToken).toBe(jwt({ tenant: 'acme', exp: future, jti: 'a2' }));
   });
 });

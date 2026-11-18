@@ -212,7 +212,7 @@ func (g *sysConnGuard) judge(nc *nats.Conn, what string) {
 // It never returns an error. Presence is an enrichment of ingest, not a precondition
 // for it: a broker that will not serve the system account must not stop this service
 // from accepting telemetry.
-func startBrokerPresence(ctx context.Context) {
+func startBrokerPresence(ctx context.Context, peers *svcclient.Peers) {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	cfg := Configuration.BrokerPresence
 
@@ -227,29 +227,29 @@ func startBrokerPresence(ctx context.Context) {
 	switch {
 	case !cfg.IsEnabled():
 		log.Info().Msg("Broker-asserted MQTT presence is disabled by configuration; MQTT presence stays inferred.")
-		tapOff(presence.TapOffDisabled)
+		tapOff(presence.TapOffDisabled, peers)
 		return
 	case infra.Nats.Auth.SysUser == "" || infra.Nats.Auth.SysPassword == "":
 		log.Info().Msg("No NATS system-account credential is configured, so broker-asserted MQTT presence is " +
 			"off and MQTT presence stays inferred. Re-run the bring-up to mint one.")
-		tapOff(presence.TapOffNoSystemCredential)
+		tapOff(presence.TapOffNoSystemCredential, peers)
 		return
 	case !ok:
 		log.Info().Msg("No event source is pointed at the platform broker, so there are no broker " +
 			"connection advisories to read; MQTT presence stays inferred.")
-		tapOff(presence.TapOffNoGatewaySource)
+		tapOff(presence.TapOffNoGatewaySource, peers)
 		return
 	// The PORT is part of "configured", not a detail. Every service call this tap makes
 	// builds its URL as host:port, and the instance config's own Validate already refuses
 	// a user-management coordinate missing either half — so this branch is unreachable on
 	// a validated instance and is written to stay total anyway, because a predicate that
 	// reads half a coordinate is one edit away from being the live check.
-	case infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0:
+	case infra.ServiceAuth.Secret == "" || !infra.UserManagement.Endpoint().Configured():
 		log.Warn().Msg("Broker-asserted MQTT presence needs service-to-service calls to enumerate tenants " +
 			"and read presence state, which are not configured. It stays OFF rather than running without " +
 			"its repair path: a device whose disconnect the broker never announced would otherwise read " +
 			"as connected forever.")
-		tapOff(presence.TapOffNoServiceAuth)
+		tapOff(presence.TapOffNoServiceAuth, peers)
 		return
 	}
 
@@ -261,7 +261,7 @@ func startBrokerPresence(ctx context.Context) {
 			"An unreachable broker is the instance's condition rather than this replica's — the MQTT " +
 			"gateway is in that same broker — so the devices this source asserted are released back to " +
 			"inferred after a settle window, unless the next log line says the release could not start.")
-		tapOff(presence.TapOffBrokerUnreachable)
+		tapOff(presence.TapOffBrokerUnreachable, peers)
 		return
 	}
 
@@ -279,7 +279,7 @@ func startBrokerPresence(ctx context.Context) {
 		guard.close(conn)
 		log.Error().Err(err).Msg("Could not subscribe to the broker's connection advisories; " +
 			"broker-asserted MQTT presence is OFF.")
-		tapOff(presence.TapOffSubscribeFailed)
+		tapOff(presence.TapOffSubscribeFailed, peers)
 		return
 	}
 	// The tap is running: clear every off-reason, not just the one that might be standing.
@@ -294,10 +294,14 @@ func startBrokerPresence(ctx context.Context) {
 	rt := &presenceRuntime{conn: conn, guard: guard, stops: []func(){stopTap, closePresenceWriter},
 		cancel: cancel, stopped: make(chan struct{})}
 
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources",
-		[]string{string(auth.TenantRead), string(auth.StateRead)})
-	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-	dsURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port)
+	client := peers.Client(auth.TenantRead, auth.StateRead)
+	umURL := infra.UserManagement.Endpoint().GraphQLURL()
+	dsURL, err := peers.URL(infra.DeviceState.Endpoint())
+	if err != nil {
+		// The live tap historically starts with an unconfigured projection endpoint;
+		// keep that URL so the repair path reports the same request failure.
+		dsURL = infra.DeviceState.Endpoint().GraphQLURL()
+	}
 	reconciler := presence.NewReconciler(tap, presence.NewRequester(conn),
 		presence.NewGraphQLTenantLister(client, umURL, Microservice.InstanceId),
 		presence.NewGraphQLProjectionReader(client, dsURL),
@@ -332,7 +336,7 @@ func startBrokerPresence(ctx context.Context) {
 		}
 	}
 
-	if stopWaker := attachCommandWake(tap, infra); stopWaker != nil {
+	if stopWaker := attachCommandWake(tap, infra, peers); stopWaker != nil {
 		rt.stops = append(rt.stops, stopWaker)
 	}
 
@@ -360,9 +364,9 @@ func startBrokerPresence(ctx context.Context) {
 // outside: a long-lived MQTT fleet legitimately emits no advisories for days, so the
 // presence counters read the same whether presence is being asserted or silently is not.
 // The canary covers a tap that started and then stopped working. Nothing covered this.
-func tapOff(reason presence.TapOffReason) {
+func tapOff(reason presence.TapOffReason, peers *svcclient.Peers) {
 	PresenceTapOffGauge.WithLabelValues(string(reason)).Set(1)
-	startPresenceDemotion(reason)
+	startPresenceDemotion(reason, peers)
 }
 
 // startPresenceDemotion drains this source's asserted rows back to inferred, when the
@@ -405,7 +409,7 @@ func tapOff(reason presence.TapOffReason) {
 // drain needs a source name to emit under and service-to-service calls to enumerate
 // tenants and read the projection. Missing any of those, it says so and points at the
 // manual door rather than starting a loop that can only fail.
-func startPresenceDemotion(reason presence.TapOffReason) {
+func startPresenceDemotion(reason presence.TapOffReason, peers *svcclient.Peers) {
 	if !reasonIsInstanceWide(reason) {
 		return
 	}
@@ -435,10 +439,9 @@ func startPresenceDemotion(reason presence.TapOffReason) {
 
 	var runner presence.DemoteRunner
 	if drainReady {
-		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources",
-			[]string{string(auth.TenantRead), string(auth.StateRead)})
-		umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-		dsURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port)
+		client := peers.Client(auth.TenantRead, auth.StateRead)
+		umURL := infra.UserManagement.Endpoint().GraphQLURL()
+		dsURL, _ := peers.URL(infra.DeviceState.Endpoint())
 		reader := presence.NewGraphQLProjectionReader(client, dsURL)
 
 		runner = presence.NewDemoter(GatewaySourceId,
@@ -629,16 +632,15 @@ func demotionStartJitter() time.Duration {
 // It needs its own svcclient because the presence client above holds tenant:read and
 // state:read; command:wake is a separate, system-tier authority granted to the transports
 // that own device connections. Reusing that client would mean widening it.
-func attachCommandWake(tap *presence.Tap, infra config.InfrastructureConfiguration) func() {
-	if infra.ServiceAuth.Secret == "" || infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
+func attachCommandWake(tap *presence.Tap, infra config.InfrastructureConfiguration, peers *svcclient.Peers) func() {
+	if infra.ServiceAuth.Secret == "" || !infra.CommandDelivery.Endpoint().Configured() {
 		log.Info().Msg("command-delivery is not configured here, so a returning device's withheld " +
 			"commands are released by command-delivery's own periodic pass rather than the instant " +
 			"the device reconnects.")
 		return nil
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources",
-		[]string{string(auth.CommandWake)})
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port)
+	client := peers.Client(auth.CommandWake)
+	url := infra.CommandDelivery.Endpoint().GraphQLURL()
 	waker, stop := presence.NewWaker(presence.NewGraphQLReleaser(client, url), wakerMetrics())
 	tap.WithWaker(waker)
 	log.Info().Str("commandDelivery", url).

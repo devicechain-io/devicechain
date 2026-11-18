@@ -7,11 +7,12 @@
 // authoring in the console gets real pickers). Selection stores the entity TOKEN
 // — the value dashboard datasources reference.
 
+import { listAll } from '@/lib/api/list-all';
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { useQuery } from '@/lib/hooks/use-query';
-import { getDeviceType, listDevices, listDeviceTypes } from '@/lib/api/device-management';
+import { listDevices, listDeviceTypes } from '@/lib/api/device-management';
 import { listCustomers } from '@/lib/api/customers';
 import { listAreas } from '@/lib/api/areas';
 import { listAssets } from '@/lib/api/assets';
@@ -63,42 +64,33 @@ const KIND_KEYS: Record<
   },
 };
 
-// A generous single page — dashboards reference a handful of entities and the
-// Combobox filters client-side, so one wide page beats paged loading here.
-const PAGE_SIZE = 200;
-
 type Named = { token: string; name?: string | null };
 
-// `truncated` is true when the server holds more rows than the one page fetched, so a stored
-// token missing from `rows` may simply be on a later page and must not be called unknown.
 interface Loaded {
   rows: Named[];
-  truncated: boolean;
 }
 
 // One loader per kind, each returning {token, name} rows for the Combobox.
 async function loadEntities(kind: EntityKind): Promise<Loaded> {
-  const opts = { pageNumber: 1, pageSize: PAGE_SIZE };
   switch (kind) {
     case 'device':
-      return whole((await listDevices(opts)).results);
+      return whole((await listAll(page => listDevices(page))).results);
     case 'customer':
-      return whole((await listCustomers(opts)).results);
+      return whole((await listAll(page => listCustomers(page))).results);
     case 'area':
-      return whole((await listAreas(opts)).results);
+      return whole((await listAll(page => listAreas(page))).results);
     case 'asset':
-      return whole((await listAssets(opts)).results);
+      return whole((await listAll(page => listAssets(page))).results);
     case 'deviceType': {
       // The caller's scope is the server's to apply: this is the tenant catalogue read every
       // member may make (device types are configuration, not device-derived rows).
-      const found = await listDeviceTypes(opts);
-      const total = found.pagination?.totalRecords;
-      return { rows: found.results, truncated: typeof total === 'number' && total > found.results.length };
+      const found = await listAll(page => listDeviceTypes(page));
+      return whole(found.results);
     }
   }
 }
 
-const whole = (rows: Named[]): Loaded => ({ rows, truncated: false });
+const whole = (rows: Named[]): Loaded => ({ rows });
 
 // What a picker needs of its kind's catalogue read: the answer to the current question (`current`,
 // never the sticky display data), a failure, and whether it is in flight.
@@ -159,16 +151,6 @@ function PickerBody({
   // of crashing on `t(undefined.select)`.
   const kindKeys = KIND_KEYS[kind] ?? KIND_KEYS.device;
 
-  // A stored device-type token the first page does not hold is looked up BY TOKEN, so a tenant with
-  // more types than one page still sees its name — or learns, from that answer, that it is gone.
-  // Only for a truncated read: a read that held every row has already answered.
-  const offPage =
-    kind === 'deviceType' && value && current?.truncated && !current.rows.some((r) => r.token === value) ? value : '';
-  const byToken = useQuery(
-    () => (offPage ? getDeviceType(offPage).then((found) => ({ found })) : Promise.resolve(null)),
-    [offPage],
-  );
-
   const options = useMemo<ComboboxOption[]>(() => {
     // While a new kind loads, useQuery keeps the PREVIOUS kind's data — surfacing
     // it would let a fast click store a wrong-kind token (e.g. a customer token as
@@ -182,35 +164,27 @@ function PickerBody({
     // Keep a currently-bound token selectable even if it isn't in the loaded page
     // (or its entity was since removed) — otherwise editing would silently drop it.
     if (value && !opts.some((o) => o.value === value)) {
-      // Name it unknown only on an ANSWER (`current`, never the sticky `data`): a read that held
-      // every row, or the by-token lookup of an off-page token. A loading or failed read proves
-      // nothing about this token, so it shows bare until one of those answers lands.
-      const lookedUp = offPage === value ? byToken.current : undefined;
-      if (lookedUp?.found) {
-        opts.unshift({ value, label: lookedUp.found.name || value, description: lookedUp.found.name ? value : undefined });
-      } else {
-        const absent = current !== undefined && (!current.truncated || (lookedUp != null && lookedUp.found === null));
-        // The "unknown type <token>" text is the one label that carries a token the author must be
-        // able to read in full, so it wraps instead of truncating (a narrow list row cut it off).
-        const named = Boolean(kindKeys.unknown && absent);
-        opts.unshift({ value, label: named ? t(kindKeys.unknown!, { token: value }) : value, wrap: named });
-      }
+      // Only a complete current read can prove that the stored token is unknown.
+      const named = Boolean(kindKeys.unknown && current !== undefined);
+      opts.unshift({ value, label: named ? t(kindKeys.unknown!, { token: value }) : value, wrap: named });
     }
     return opts;
-  }, [current, value, kindKeys, t, offPage, byToken.current]);
+  }, [current, value, kindKeys, t]);
 
   return (
-    <Combobox
-      id={id}
-      ariaLabel={ariaLabel}
-      options={options}
-      value={value}
-      onChange={onChange}
-      placeholder={loading ? t('common:loading') : (placeholder ?? t(kindKeys.select))}
-      searchPlaceholder={t(kindKeys.search)}
-      // Distinguish a failed load from a genuinely empty tenant so the user doesn't
-      // "fix" a widget by rebinding when the real problem was a fetch error.
-      emptyMessage={loading ? t('common:loading') : error ? t(kindKeys.failed) : t(kindKeys.empty)}
-    />
+    <>
+      {error && <p role="alert" className="text-sm text-destructive"><span>{t(kindKeys.failed)}</span> {error}</p>}
+      <Combobox
+        disabled={loading || !!error}
+        id={id}
+        ariaLabel={ariaLabel}
+        options={options}
+        value={value}
+        onChange={onChange}
+        placeholder={loading ? t('common:loading') : (placeholder ?? t(kindKeys.select))}
+        searchPlaceholder={t(kindKeys.search)}
+        emptyMessage={loading ? t('common:loading') : error ? t(kindKeys.failed) : t(kindKeys.empty)}
+      />
+    </>
   );
 }

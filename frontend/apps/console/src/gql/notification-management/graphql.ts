@@ -67,12 +67,19 @@ export type NotificationChannelSearchCriteria = {
  * renameNotificationChannel to change the token.
  */
 export type NotificationChannelUpdateRequest = {
-  /** New channel type (smtp, webhook, slack, teams or pagerduty). Omit it to keep the stored type; an explicit null is refused. */
+  /**
+   * New channel type (smtp, webhook, slack, teams or pagerduty). Omit it to keep the stored type; an explicit null is refused.
+   * Changing the type or credential destination while a credential is stored requires secret
+   * in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
+   */
   channelType?: string | null | undefined;
   /**
    * New connection settings as a JSON object serialized to a string, in the format
    * described on NotificationChannelCreateRequest.config, or null to clear them. For a
    * webhook channel the result must still be valid, including its auth setting.
+   *
+   * Changing the type or credential destination while a credential is stored requires secret
+   * in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
    */
   config?: string | null | undefined;
   /** New description, or null to clear it. */
@@ -88,6 +95,9 @@ export type NotificationChannelUpdateRequest = {
    * replace it, or send null or an empty string to delete it. A webhook channel whose auth
    * is bearer or header cannot be left without a secret, and one whose auth is none cannot
    * have one.
+   *
+   * Changing the type or credential destination while a credential is stored requires secret
+   * in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
    */
   secret?: string | null | undefined;
 };
@@ -223,7 +233,7 @@ export type NotificationChannelsQueryVariables = Exact<{
 }>;
 
 
-export type NotificationChannelsQuery = { notificationChannels: { results: Array<{ token: string, name: string | null, channelType: string, enabled: boolean }> } };
+export type NotificationChannelsQuery = { notificationChannels: { results: Array<{ token: string, name: string | null, channelType: string, enabled: boolean }>, pagination: { totalRecords: number | null } } };
 
 export type CreateNotificationPolicyMutationVariables = Exact<{
   request: NotificationPolicyCreateRequest;
@@ -354,6 +364,9 @@ export const NotificationChannelsDocument = new TypedDocumentString(`
       name
       channelType
       enabled
+    }
+    pagination {
+      totalRecords
     }
   }
 }

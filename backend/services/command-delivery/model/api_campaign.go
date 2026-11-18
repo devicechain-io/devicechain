@@ -15,11 +15,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/maintwindow"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/schedule"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -68,6 +71,9 @@ const (
 	// Planning resolves the group, so it is the expensive step; inside the window a pass only
 	// fires what is due.
 	campaignReplanMargin = time.Hour
+	// campaignMembershipFreshness amortizes group resolution while solar devices trickle
+	// due across 15-second passes, without letting an hours-later step reuse the first check.
+	campaignMembershipFreshness = time.Minute
 
 	// campaignClaimPage bounds the elements one pass claims for one campaign, and so the
 	// size of the biggest batch a pass creates.
@@ -670,11 +676,11 @@ func (api *Api) tickTenant(ctx context.Context, now time.Time, pass string) erro
 func (api *Api) planOrRecord(ctx context.Context, c *Campaign, now time.Time, state *campaignPlanState) error {
 	trigger, err := DecodeTrigger(c.Trigger)
 	if err != nil {
-		return api.recordCampaignError(ctx, c, fmt.Errorf("stored trigger no longer validates: %w", err))
+		return api.recordCampaignError(ctx, c, &campaignConfigurationError{fmt.Errorf("stored trigger no longer validates: %w", err)})
 	}
 	steps, err := DecodeSteps(c.Steps)
 	if err != nil || len(steps) == 0 {
-		return api.recordCampaignError(ctx, c, fmt.Errorf("stored steps are unreadable"))
+		return api.recordCampaignError(ctx, c, &campaignConfigurationError{fmt.Errorf("stored steps are unreadable")})
 	}
 	if err := api.planCampaign(ctx, c, trigger, steps, now, state); err != nil {
 		if errors.Is(err, errCampaignPlanBudget) || errors.Is(err, errCampaignResolutionTimeout) || ctx.Err() != nil {
@@ -689,10 +695,40 @@ func (api *Api) planOrRecord(ctx context.Context, c *Campaign, now time.Time, st
 	return nil
 }
 
+// campaignConfigurationError marks validation at a known tenant-configuration boundary.
+// Ordinary dependency and database errors must never acquire this marker.
+type campaignConfigurationError struct{ error }
+
+func (e *campaignConfigurationError) Unwrap() error { return e.error }
+
+// campaignLogger is the logger the campaign scheduler's errors are written to: the
+// injected one when set, else the global logger.
+func (api *Api) campaignLogger() *zerolog.Logger {
+	if api.campaignLog != nil {
+		return api.campaignLog
+	}
+	return &log.Logger
+}
+
 func (api *Api) recordCampaignError(ctx context.Context, c *Campaign, cause error) error {
-	msg := cause.Error()
+	tenant, _ := core.TenantFromContext(ctx)
+	api.campaignLogger().Error().Err(cause).Str("tenant", tenant).Str("campaign", c.Token).
+		Msg("Campaign planning or membership check failed.")
+	msg := "planning failed because of an internal error; it will be retried"
+	var configuration *campaignConfigurationError
+	var refusal *EnqueueRejected
+	switch {
+	case errors.As(cause, &configuration):
+		msg = configuration.Error()
+	case errors.As(cause, &refusal):
+		msg = refusal.Reason
+	}
 	if len(msg) > 500 {
-		msg = msg[:500]
+		end := 500
+		for !utf8.RuneStart(msg[end]) {
+			end--
+		}
+		msg = msg[:end]
 	}
 	_ = api.RDB.DB(ctx).Model(c).Where("id = ?", c.ID).
 		Update("last_error", sql.NullString{String: msg, Valid: true}).Error
@@ -725,6 +761,9 @@ func (api *Api) planCampaign(ctx context.Context, c *Campaign, trigger *schedule
 	}
 	cycles, err := trigger.Cycles(from, horizon)
 	if err != nil {
+		if errors.Is(err, schedule.ErrInvalid) {
+			return &campaignConfigurationError{err}
+		}
 		return err
 	}
 	through := horizon
@@ -952,7 +991,7 @@ var campaignCreateHook func()
 func (api *Api) fireCampaign(ctx context.Context, c *Campaign, now time.Time, pass string) error {
 	steps, err := DecodeSteps(c.Steps)
 	if err != nil || len(steps) == 0 {
-		return api.recordCampaignError(ctx, c, fmt.Errorf("stored steps are unreadable"))
+		return api.recordCampaignError(ctx, c, &campaignConfigurationError{fmt.Errorf("stored steps are unreadable")})
 	}
 	db := api.RDB.DB(ctx)
 	var errs []error
@@ -1215,11 +1254,15 @@ func (api *Api) supersedeOlderFirings(ctx context.Context, c *Campaign, now time
 		Updates(map[string]any{"status": string(ElementSkipped), "reason": SkipSuperseded, "updated_at": now}).Error
 }
 
-// recheckDueMembership resolves the group again for every cycle that has just started to fall
-// due, and skips, as NOT_IN_GROUP, the pending elements of devices that have left it since the
-// cycle was planned (up to CampaignPlanAhead earlier). A cycle is checked once, when its first
-// element falls due. It returns the cycles it could NOT check: those are not sent this pass,
-// because commanding a device that may have left the group is the failure the check exists for.
+// recheckDueMembership checks cycles before their first due element and again when a due
+// PENDING element's due time exceeds the last check by campaignMembershipFreshness. Later
+// steps and per-device solar instants therefore refresh membership without resolving on every
+// 15-second pass. One resolution serves all such cycles this pass; pending elements of devices
+// that left since planning are skipped as NOT_IN_GROUP when they are due within the freshness
+// window of this check. Later elements stay pending until they fall due and are re-checked
+// then, and each check advances its timestamp.
+// It returns the cycles it could NOT check: those are not sent this pass, because commanding
+// a device that may have left the group is the failure the check exists for.
 //
 // A device that JOINED the group after planning is not added to a cycle already planned; it is
 // in the next cycle planned. That is a documented limitation.
@@ -1234,10 +1277,28 @@ func (api *Api) recheckDueMembership(ctx context.Context, c *Campaign, now time.
 	if len(cycleIDs) == 0 {
 		return nil, nil
 	}
-	var unchecked []uint
-	if err := db.Model(&CampaignCycle{}).Where("id IN ? AND membership_checked_at IS NULL", cycleIDs).
-		Order("id ASC").Pluck("id", &unchecked).Error; err != nil {
+	var cycles []CampaignCycle
+	if err := db.Select("id", "membership_checked_at").Where("id IN ?", cycleIDs).
+		Order("id ASC").Find(&cycles).Error; err != nil {
 		return cycleIDs, err
+	}
+	var unchecked []uint
+	for _, cycle := range cycles {
+		if cycle.MembershipCheckedAt.Valid {
+			// Compare due times, not pass times: a backlog already covered by a check
+			// must not resolve the group repeatedly while waiting for a claim-page slot.
+			var due []uint
+			if err := db.Model(&CampaignElement{}).
+				Where("cycle_id = ? AND status = ? AND due_at <= ? AND due_at > ?",
+					cycle.ID, string(ElementPending), now, cycle.MembershipCheckedAt.Time.Add(campaignMembershipFreshness)).
+				Limit(1).Pluck("id", &due).Error; err != nil {
+				return cycleIDs, err
+			}
+			if len(due) == 0 {
+				continue
+			}
+		}
+		unchecked = append(unchecked, cycle.ID)
 	}
 	if len(unchecked) == 0 {
 		return nil, nil
@@ -1255,12 +1316,19 @@ func (api *Api) recheckDueMembership(ctx context.Context, c *Campaign, now time.
 		members[d] = struct{}{}
 	}
 	checkedAt := api.campaignClock()
+	// This check answers for every element the trigger above will not re-check: those due no
+	// later than checkedAt + campaignMembershipFreshness. Later elements stay PENDING and are
+	// re-checked when they fall due, so a device that rejoins by then still receives them.
+	judgedUntil := checkedAt.Add(campaignMembershipFreshness)
+	if judgedUntil.Before(now) {
+		judgedUntil = now
+	}
 	for _, cycleID := range unchecked {
 		var after uint
 		for {
 			var rows []CampaignElement
 			if err := db.Select("id", "device_token").
-				Where("cycle_id = ? AND status = ? AND id > ?", cycleID, string(ElementPending), after).
+				Where("cycle_id = ? AND status = ? AND id > ? AND due_at <= ?", cycleID, string(ElementPending), after, judgedUntil).
 				Order("id ASC").Limit(campaignRowChunk).Find(&rows).Error; err != nil {
 				return unchecked, err
 			}
@@ -1274,7 +1342,7 @@ func (api *Api) recheckDueMembership(ctx context.Context, c *Campaign, now time.
 				}
 			}
 			if len(gone) > 0 {
-				if err := db.Model(&CampaignElement{}).Where("id IN ? AND status = ?", gone, string(ElementPending)).
+				if err := db.Model(&CampaignElement{}).Where("id IN ? AND status = ? AND due_at <= ?", gone, string(ElementPending), judgedUntil).
 					Updates(map[string]any{"status": string(ElementSkipped), "reason": SkipNotInGroup, "updated_at": now}).Error; err != nil {
 					return unchecked, err
 				}
@@ -1284,7 +1352,8 @@ func (api *Api) recheckDueMembership(ctx context.Context, c *Campaign, now time.
 				break
 			}
 		}
-		if err := db.Model(&CampaignCycle{ID: cycleID}).Where("id = ? AND membership_checked_at IS NULL", cycleID).
+		if err := db.Model(&CampaignCycle{ID: cycleID}).
+			Where("id = ? AND (membership_checked_at IS NULL OR membership_checked_at < ?)", cycleID, checkedAt).
 			Update("membership_checked_at", checkedAt).Error; err != nil {
 			return unchecked, err
 		}

@@ -21,6 +21,7 @@ import (
 // "absent" from a zero value.
 func MarshalAlarmStateChangeEvent(event *model.AlarmStateChangeEvent) ([]byte, error) {
 	pbevent := &PAlarmStateChangeEvent{
+		ClearReason:    event.ClearReason,
 		EventType:      string(event.EventType),
 		AlarmToken:     event.AlarmToken,
 		OriginatorType: event.OriginatorType,
@@ -69,6 +70,7 @@ func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEven
 	}
 
 	event := &model.AlarmStateChangeEvent{
+		ClearReason:    pbevent.ClearReason,
 		EventType:      model.AlarmEventType(pbevent.EventType),
 		AlarmToken:     pbevent.AlarmToken,
 		OriginatorType: pbevent.OriginatorType,
@@ -223,9 +225,10 @@ func parseOptionalTime(s string) (time.Time, error) {
 // MarshalDeviceOwnershipChangedEvent encodes a device ownership-changed fact (ADR-081).
 func MarshalDeviceOwnershipChangedEvent(event *model.DeviceOwnershipChangedEvent) ([]byte, error) {
 	return proto.Marshal(&PDeviceOwnershipChangedEvent{
-		DeviceToken: event.DeviceToken,
-		Anchors:     event.Anchors,
-		ChangedTime: event.ChangedTime.UTC().Format(time.RFC3339Nano),
+		DeviceIncarnation: event.DeviceIncarnation,
+		DeviceToken:       event.DeviceToken,
+		Anchors:           event.Anchors,
+		ChangedTime:       event.ChangedTime.UTC().Format(time.RFC3339Nano),
 	})
 }
 
@@ -254,8 +257,9 @@ func UnmarshalDeviceOwnershipChangedEvent(encoded []byte) (*model.DeviceOwnershi
 		anchors = append(anchors, a)
 	}
 	return &model.DeviceOwnershipChangedEvent{
-		DeviceToken: pbevent.DeviceToken,
-		Anchors:     anchors,
-		ChangedTime: changed,
+		DeviceIncarnation: pbevent.DeviceIncarnation,
+		DeviceToken:       pbevent.DeviceToken,
+		Anchors:           anchors,
+		ChangedTime:       changed,
 	}, nil
 }

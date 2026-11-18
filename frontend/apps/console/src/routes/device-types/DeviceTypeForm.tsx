@@ -8,6 +8,7 @@
 // has always edited), and names the maintenance window ONLY when the operator changed it —
 // `undefined` keeps, `null` detaches (see windowArg.ts).
 
+import { listAll } from '@/lib/api/list-all';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -42,7 +43,7 @@ export function DeviceTypeForm({
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const { data, loading } = useQuery(() => listMaintenanceWindows({ pageNumber: 1, pageSize: 1000 }), []);
+  const { current: data, loading, error } = useQuery(() => listAll(page => listMaintenanceWindows({ ...page })), []);
   const options: ComboboxOption[] = (data?.results ?? []).map((w) => ({
     value: w.token,
     label: w.name ? `${w.name} (${w.token})` : w.token,
@@ -88,6 +89,7 @@ export function DeviceTypeForm({
 
   return (
     <div className="space-y-4">
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
       <FormField
         label={t('common:colToken')}
@@ -119,6 +121,7 @@ export function DeviceTypeForm({
         description={t('entities:deviceTypeMaintenanceWindowHelp')}
       >
         <Combobox
+          disabled={loading || !!error}
           id="dt-window"
           options={options}
           value={windowToken}

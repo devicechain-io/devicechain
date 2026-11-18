@@ -132,6 +132,9 @@ func (a AlarmFacts) open() bool {
 
 // title is the one-line heading of a message.
 func (a AlarmFacts) title(msg *RenderedNotification) string {
+	if a.EventType == "CLEARED" && a.ClearReason == "ORIGINATOR_DELETED" {
+		return fmt.Sprintf("Alarm ended because its entity was deleted: %s", a.AlarmKey)
+	}
 	if a.AlarmKey == "" {
 		return msg.Subject
 	}

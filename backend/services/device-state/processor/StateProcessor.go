@@ -124,6 +124,9 @@ type StateProcessor struct {
 	// nothing about the one already running. See ExecuteStop.
 	monitorWG sync.WaitGroup
 
+	// Only one processor per process sweeps inactivity across all tenants.
+	withoutInactivityMonitor bool
+
 	// inactivityInterval is the monitor's cadence, and ZERO MEANS "use the platform
 	// default". There is no operator knob behind it — the constant in config is the only
 	// production value — so it is unexported and the only thing that sets it is a test:
@@ -262,6 +265,14 @@ func NewStateMetrics(ms *core.Microservice) *StateMetrics {
 // StateProcessorOption configures a StateProcessor.
 type StateProcessorOption func(*StateProcessor)
 
+// WithoutInactivityMonitor disables the all-tenant sweep for additional shard processors.
+// The monitor is enabled by default, including for an unsharded processor.
+func WithoutInactivityMonitor() StateProcessorOption {
+	return func(sp *StateProcessor) {
+		sp.withoutInactivityMonitor = true
+	}
+}
+
 // WithProjection sizes the projection writers from the service's configuration. Without it
 // the processor runs the configuration's defaults.
 func WithProjection(cfg config.ProjectionConfiguration) StateProcessorOption {
@@ -324,6 +335,11 @@ func (sp *StateProcessor) ExecuteInitialize(ctx context.Context) error {
 // confirm its configuration reached it.
 func (sp *StateProcessor) Writers() int {
 	return sp.projection.Writers
+}
+
+// InactivityMonitorEnabled reports whether this processor runs the all-tenant sweep.
+func (sp *StateProcessor) InactivityMonitorEnabled() bool {
+	return !sp.withoutInactivityMonitor
 }
 
 // MaxBatch reports the most events one writer merges in one transaction.
@@ -578,6 +594,7 @@ func (sp *StateProcessor) admitStarted(ctx context.Context, msg messaging.Messag
 	update := model.ProjectionUpdate{
 		Tenant:      tenant,
 		DeviceToken: event.SourceDeviceToken,
+		Incarnation: event.DeviceIncarnation,
 		OccurredAt:  event.OccurredTime,
 		Presence:    pt,
 		Identity: model.DeviceIdentity{ExternalId: event.ExternalId, Source: event.Source,
@@ -694,8 +711,9 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 	}
 }
 
-// mergeAdmitted is the per-message path: the originating device's live state, then its
-// latest values or position, each in a transaction of its own, and the A3 disposition of the
+// mergeAdmitted is the per-message path: stamped events use the atomic projection merge
+// so their children cannot race an incarnation reset. Older producers keep the state and
+// latest-value transactions below, with the A3 disposition of the
 // outcome. A message takes it when the batch it was in (a batch of one included) gave up on it,
 // or when it is merged alone (mergeOne).
 //
@@ -707,6 +725,19 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 // accepted rather than paid for with a read to decide whether to write.
 func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 	msg, event, u := p.msg, p.event, p.update
+
+	if u.Incarnation != 0 {
+		if err := sp.retryOnConflict(p.ctx, func() error {
+			return sp.Api.MergeProjectionBatch(p.ctx, []model.ProjectionUpdate{u})
+		}); err != nil {
+			sp.dispose(p, err, fmt.Sprintf("device projection update for device %s", u.DeviceToken))
+			return
+		}
+		sp.metrics.committed(1)
+		msg.Ack()
+		p.done(core.ResultOK)
+		return
+	}
 
 	// Update the originating device's live connectivity projection for every event.
 	if err := sp.retryOnConflict(p.ctx, func() error {
@@ -943,11 +974,13 @@ func (sp *StateProcessor) ExecuteStart(ctx context.Context) error {
 	// happen-before the Wait meant to hold for it; an Add moved inside the goroutine can be
 	// scheduled after Wait has already seen a zero counter and returned, which is the
 	// "clean stop reported over work still running" this join exists to prevent.
-	sp.monitorWG.Add(1)
-	go func() {
-		defer sp.monitorWG.Done()
-		sp.runInactivityMonitor(ctx)
-	}()
+	if sp.InactivityMonitorEnabled() {
+		sp.monitorWG.Add(1)
+		go func() {
+			defer sp.monitorWG.Done()
+			sp.runInactivityMonitor(ctx)
+		}()
+	}
 	return nil
 }
 

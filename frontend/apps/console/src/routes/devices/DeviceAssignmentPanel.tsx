@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { listAll } from '@/lib/api/list-all';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2 } from 'lucide-react';
@@ -48,13 +49,12 @@ const TARGET_TYPE_LABEL_KEY: Record<AssignmentTargetType, string> = {
 // Load the selectable targets for an assignment target type. Each option's value
 // is the entity token (what the edge stores); the label prefers its name.
 async function loadTargets(type: AssignmentTargetType): Promise<{ value: string; label: string }[]> {
-  const opts = { pageNumber: 1, pageSize: 200 };
   const results =
     type === 'customer'
-      ? (await listCustomers(opts)).results
+      ? (await listAll(page => listCustomers(page))).results
       : type === 'area'
-        ? (await listAreas(opts)).results
-        : (await listAssets(opts)).results;
+        ? (await listAll(page => listAreas(page))).results
+        : (await listAll(page => listAssets(page))).results;
   return results.map((r) => ({ value: r.token, label: r.name || r.token }));
 }
 
@@ -79,7 +79,7 @@ export function DeviceAssignmentPanel({ deviceToken }: { deviceToken: string }) 
   );
 
   // The selectable targets for the chosen type; reloads when the type changes.
-  const { current: targets, loading: targetsLoading } = useQuery(() => loadTargets(targetType), [targetType]);
+  const { current: targets, loading: targetsLoading, error: targetsError } = useQuery(() => loadTargets(targetType), [targetType]);
 
   // Switching target type clears any half-made selection for the previous type.
   const changeType = (t: AssignmentTargetType) => {
@@ -143,9 +143,11 @@ export function DeviceAssignmentPanel({ deviceToken }: { deviceToken: string }) 
           </FormField>
         </div>
         <div className="w-64">
+          {targetsError && <p role="alert" className="text-sm text-destructive">{targetsError}</p>}
           <FormField label={t('targetLabel')}>
             <Combobox
               options={targets ?? []}
+              disabled={targetsLoading || !!targetsError}
               value={target}
               onChange={setTarget}
               placeholder={targetsLoading ? t('targetsLoadingPlaceholder') : t('selectTargetPlaceholder')}
@@ -153,7 +155,7 @@ export function DeviceAssignmentPanel({ deviceToken }: { deviceToken: string }) 
             />
           </FormField>
         </div>
-        <Button onClick={assign} loading={submitting} disabled={submitting}>
+        <Button onClick={assign} loading={submitting} disabled={submitting || !targets}>
           <Plus size={14} /> {t('assign')}
         </Button>
       </div>

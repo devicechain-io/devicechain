@@ -562,11 +562,9 @@ func TestThresholdStaleReadingInsideTheBudget(t *testing.T) {
 	}
 }
 
-// TestThresholdHoldsStateOnlyForRaisedSeries pins the memory contract: keyed state and checkpoint
-// bytes scale with RAISED alarms, not with active series. A fleet of series that report and never
-// raise — and series that raised and cleared — leaves no live key and a checkpoint byte-identical
-// to an engine that saw the same messages with no readings at all. A raised alarm holds its latch
-// and, once a newer reading arrives, its cursor; clearing it drops both.
+// TestThresholdHoldsStateOnlyForRaisedSeries pins the bounded memory contract: series that
+// never raise hold nothing. Raised alarms hold their latch and optionally a cursor. A cleared
+// alarm retains only a falling-edge memo until its recording frontier passes the retention horizon.
 func TestThresholdHoldsStateOnlyForRaisedSeries(t *testing.T) {
 	const n = 2000
 	e := NewEngine([]Rule{thresholdRule}, 5*time.Second)
@@ -623,7 +621,13 @@ func TestThresholdHoldsStateOnlyForRaisedSeries(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		feed(fmt.Sprintf("dev-%d", i), 402, false)
 	}
-	snapEq("every alarm cleared")
+	// Cleared alarms now retain one bounded fall memo each for the next writer release.
+	if n := e.LiveKeyCounts()["r"]; n != 10 {
+		t.Fatalf("fall memo count = %d, want 10", n)
+	}
+	e.Advance(at(1008))
+	bare.Advance(at(1008))
+	snapEq("every falling memo expired")
 }
 
 // TestThresholdRaisedCursorHasNoFrontierHorizon: a raised device that has gone quiet refuses an
@@ -920,8 +924,8 @@ func TestThresholdCursorDoesNotOutliveTheAlarm(t *testing.T) {
 	feedArrivals(e, []Event{thrEv("d", 20, true, 4), thrEv("d", 21, true, 5)}, []int{0, 1}, 4)
 	e.Drain()
 	e.ClearRaised(key)
-	if n := e.LiveKeyCounts()["r"]; n != 0 {
-		t.Fatalf("after ClearRaised the series holds %d live keys, want 0", n)
+	if n := e.LiveKeyCounts()["r"]; n != 1 {
+		t.Fatalf("after ClearRaised only the prior falling memo remains: %d live keys, want 1", n)
 	}
 	feedArrivals(e, []Event{thrEv("d", 30, true, 6), thrEv("d", 31, true, 7)}, []int{0, 1}, 6)
 	e.ClearRaised(key)

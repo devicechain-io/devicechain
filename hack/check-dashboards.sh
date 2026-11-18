@@ -83,6 +83,11 @@
 #
 #   hack/check-dashboards.sh              # check
 #   hack/check-dashboards.sh --self-test  # prove each check can fail, ALONE
+#
+# Companion Go gate: deploy/dashboard_tiers_test.go scans every embedded board
+# for bounded shed_class coverage. A board querying an ingest shedding counter
+# must keep a visible per-class breakdown, even when it also shows totals.
+# This runs in the deploy module's normal test gate, with negative controls.
 
 set -euo pipefail
 

@@ -102,3 +102,8 @@ frontend/.api-selftest/
 
 # hack/decoder-rig.sh: the rig's kubeconfig and state (a cluster credential; never committed)
 /.decoder-rig/
+
+# hack/harborpulse-rig.sh: the rig's kubeconfig, logs and reports (a cluster credential; never committed)
+/.harborpulse-rig/
+
+/backend/cli/.gate-git-tags/

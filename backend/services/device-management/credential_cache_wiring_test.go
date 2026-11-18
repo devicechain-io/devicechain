@@ -36,6 +36,8 @@ import (
 func credentialTables() []any {
 	return []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{}, &model.DeviceProfileActivation{},
 		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
+		// Device creation checks the empty-match enrollment index even with no groups.
+		&model.EntityGroupFacetRef{},
 		&model.DetectionRuleScopeRef{}, &model.DeviceCredential{}, &model.ProvisioningProfile{}, &model.DeviceClaim{}}
 }
 

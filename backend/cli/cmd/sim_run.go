@@ -42,6 +42,7 @@ func init() {
 	simRunCmd.Flags().Bool("play-devices", false, "sitepulse only: play the device plane in the simulator instead of a Unity player")
 	simRunCmd.Flags().String("publish-log", "", "with --play-devices: append every event the ingress accepted to this NDJSON file")
 	simRunCmd.Flags().Duration("emit-interval", 0, "override the telemetry cadence, e.g. 3s (0 keeps the scenario's own)")
+	simRunCmd.Flags().Duration("day-length", 0, "harborpulse only: wall time one compressed sim day takes, e.g. 48m (0 keeps the scenario's own 24m day)")
 	simCmd.AddCommand(simRunCmd)
 }
 
@@ -52,6 +53,7 @@ type simRunOptions struct {
 	playDevices  bool
 	publishLog   string
 	emitInterval time.Duration
+	dayLength    time.Duration
 }
 
 // simRunArgs is dc-simulator's command line for a sim. The control port is taken from
@@ -59,6 +61,9 @@ type simRunOptions struct {
 // started; a record whose address names no port is refused rather than run on a port
 // nothing will look for.
 func simRunArgs(o simRunOptions) ([]string, error) {
+	if o.dayLength < 0 {
+		return nil, errors.New("--day-length must not be negative")
+	}
 	if o.publishLog != "" && !o.playDevices {
 		return nil, errors.New("--publish-log logs what --play-devices publishes; pass both, or neither")
 	}
@@ -75,6 +80,9 @@ func simRunArgs(o simRunOptions) ([]string, error) {
 	}
 	if o.emitInterval > 0 {
 		args = append(args, "--emit-interval", o.emitInterval.String())
+	}
+	if o.dayLength > 0 {
+		args = append(args, "--day-length", o.dayLength.String())
 	}
 	return args, nil
 }
@@ -99,6 +107,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	o.playDevices, _ = cmd.Flags().GetBool("play-devices")
 	o.publishLog, _ = cmd.Flags().GetString("publish-log")
 	o.emitInterval, _ = cmd.Flags().GetDuration("emit-interval")
+	o.dayLength, _ = cmd.Flags().GetDuration("day-length")
 	argv, err := simRunArgs(o)
 	if err != nil {
 		return err

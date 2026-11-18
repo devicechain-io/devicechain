@@ -91,6 +91,15 @@ export declare class GraphQLRequestError extends Error {
 export declare const MAX_TOKEN_LEN = 128;
 ```
 
+## `.:ManagedSessionTokens`
+
+```ts
+export interface ManagedSessionTokens extends SessionTokens {
+    forceRefresh: (rejectedToken?: string) => Promise<string | null>;
+    exchange: (spend: (refreshToken: string) => Promise<TokenPair>) => Promise<string>;
+}
+```
+
 ## `.:MaskProblem`
 
 ```ts
@@ -159,6 +168,7 @@ export interface ScopeAnchorRef {
 
 ```ts
 export interface SessionTokens {
+    forceRefresh?: (rejectedToken?: string) => Promise<string | null>;
     getAccessToken: () => Promise<string | null>;
     reset: () => void;
     startAutoRefresh: () => () => void;
@@ -174,6 +184,7 @@ export interface SessionTokensOptions {
     refresh: (refreshToken: string) => Promise<TokenPair>;
     onEnd: (err?: unknown) => void;
     skewSeconds?: number;
+    transientRefreshErrors?: 'null' | 'throw';
 }
 ```
 
@@ -182,6 +193,7 @@ export interface SessionTokensOptions {
 ```ts
 export interface SubscriptionSink<T> {
     next: (data: T) => void;
+    errors?: (errors: ReadonlyArray<GraphQLFormattedError>) => void;
     error?: (err: unknown) => void;
     complete?: () => void;
     connected?: (wasRetry: boolean) => void;
@@ -206,6 +218,15 @@ export type TypedDocument<TResult, TVariables> = DocumentTypeDecoration<TResult,
 };
 ```
 
+## `.:UnauthorizedHandler`
+
+```ts
+export interface UnauthorizedHandler {
+    refresh: (token: string, identity: boolean) => Promise<string | null>;
+    onEnd: (error: GraphQLRequestError, token: string, identity: boolean) => void;
+}
+```
+
 ## `.:areaKey`
 
 ```ts
@@ -227,7 +248,7 @@ export declare function conformsToMask(mask: string, token: string): boolean;
 ## `.:createSessionTokens`
 
 ```ts
-export declare function createSessionTokens(opts: SessionTokensOptions): SessionTokens;
+export declare function createSessionTokens(opts: SessionTokensOptions): ManagedSessionTokens;
 ```
 
 ## `.:decodeToken`
@@ -308,6 +329,12 @@ export declare function isScopeUnsupportedError(err: unknown): boolean;
 export declare function isScoped(claims: DecodedClaims | null): boolean;
 ```
 
+## `.:isStaleWrite`
+
+```ts
+export declare function isStaleWrite(err: unknown): boolean;
+```
+
 ## `.:isValidToken`
 
 ```ts
@@ -378,6 +405,12 @@ export declare function setAuthTokenGetter(getter: (() => Promise<string | null>
 
 ```ts
 export declare function setIdentityTokenGetter(getter: (() => Promise<string | null>) | null): void;
+```
+
+## `.:setUnauthorizedHandler`
+
+```ts
+export declare function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void;
 ```
 
 ## `.:subscribe`

@@ -32,7 +32,7 @@ type devices struct {
 
 func (d devices) DeviceOf(_ context.Context, tenant, device string) (model.DeviceFacts, bool, error) {
 	p, ok := d.profiles[tenant+"/"+device]
-	return model.DeviceFacts{Profile: p, Disabled: d.disabled[tenant+"/"+device]}, ok, nil
+	return model.DeviceFacts{Incarnation: 1, Profile: p, Disabled: d.disabled[tenant+"/"+device]}, ok, nil
 }
 
 type sink struct{ n int }
@@ -65,7 +65,9 @@ func (p *plane) available(token string, content []byte) {
 	ref, err := p.api.Blobs.Put(ctx, blob.Key{Tenant: "acme", Purpose: model.BlobPurpose, ID: token + "-object"},
 		bytes.NewReader(content), blob.PutOptions{MaxSize: int64(len(content))})
 	require.NoError(p.t, err)
-	require.NoError(p.t, p.api.CompleteUpload(ctx, a, ref))
+	stamp, err := p.api.ClaimUpload(ctx, a)
+	require.NoError(p.t, err)
+	require.NoError(p.t, p.api.CompleteUpload(ctx, a, stamp, ref))
 }
 
 const assignMutation = `mutation($d: String!, $a: String!) { assignArtifact(deviceToken: $d, artifactToken: $a) {

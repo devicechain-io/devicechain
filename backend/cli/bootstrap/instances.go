@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dcctl/dcdir"
@@ -143,6 +144,24 @@ func (r InstanceRecord) Binding() ClusterBinding {
 // TestTheInstanceNameCeilingIsTheOneHelmActuallyEnforces pins both ends against the real
 // validator rather than against this constant.
 const maxInstanceNameLen = 50
+
+// ValidateDestroyableInstanceName permits legacy names but confines deletion to a
+// plain name directly under the instances directory.
+func ValidateDestroyableInstanceName(name string) error {
+	invalid := fmt.Errorf("instance name %q is not a plain name: destroy takes the name of an instance under ~/.devicechain/instances", name)
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") ||
+		filepath.VolumeName(name) != "" || filepath.Base(name) != name {
+		return invalid
+	}
+	dir, err := dcdir.Sibling(dcdir.Instances)
+	if err != nil {
+		return fmt.Errorf("%w: %v", invalid, err)
+	}
+	if filepath.Dir(filepath.Clean(filepath.Join(dir, name))) != filepath.Clean(dir) {
+		return invalid
+	}
+	return nil
+}
 
 // ValidateInstanceName rejects names that cannot safely become a directory under
 // ~/.devicechain/instances.
@@ -327,8 +346,8 @@ func writeRecordFile(dir, name string, contents []byte) error {
 // REASON IS AN ORDERING NOBODY CAN CHANGE. `dcctl bootstrap` records the instance→cluster
 // binding BEFORE the pipeline starts, and deliberately keeps it on every failure: the
 // cluster may already be up by then, and a cluster nothing can name is the orphan the
-// record exists to prevent. That reasoning holds for every failure except the ones
-// stepCheckClusterSingletons raises, and what makes them the exception is WHERE they are
+// record exists to prevent. The exceptions are refusals from stepRefuseRebuild and
+// stepCheckClusterSingletons, and what makes them the exception is WHERE they are
 // raised rather than what they are about — TestTheSingletonStepRunsBeforeAnythingIsWritten
 // holds that step ahead of the declaration. On those the record
 // this run wrote describes nothing, and left behind it is a phantom: `dcctl instances

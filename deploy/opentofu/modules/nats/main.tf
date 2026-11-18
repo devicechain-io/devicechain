@@ -1391,7 +1391,8 @@ locals {
   auth_part = { for k, v in local.auth_merge_content : k => v if var.enable_auth }
   # Absent unless set, so an instance that never asked renders the broker config it always did.
   limits_merge = { for k, v in { max_connections = var.max_connections } : k => v if v > 0 }
-  config_merge = merge(local.auth_part, local.profiling_merge, local.limits_merge)
+  shard_merge  = { for k, v in { server_tags = ["<< $SERVER_NAME >>"] } : k => v if var.shard_groups > 0 }
+  config_merge = merge(local.auth_part, local.profiling_merge, local.limits_merge, local.shard_merge)
   chart_values_encoded = length(local.config_merge) > 0 ? yamlencode(merge(local.chart_values, {
     config = merge(local.chart_values.config, { merge = local.config_merge })
   })) : yamlencode(local.chart_values)
@@ -1562,6 +1563,10 @@ resource "helm_release" "nats" {
   values = [local.chart_values_encoded]
 
   lifecycle {
+    precondition {
+      condition     = var.shard_groups <= local.cluster_replicas
+      error_message = "shard_groups needs at least one distinct NATS server per group; increase cluster_replicas."
+    }
     # The broker image must name a version. An empty tag would render "repository:"
     # (which Kubernetes reads as :latest), installing whatever that pointed at today.
     precondition {
@@ -1768,4 +1773,14 @@ output "cluster_replicas" {
 output "tls_enabled" {
   description = "Whether the broker terminates TLS (drives the matching client-side flag in the instance config)."
   value       = var.enable_tls
+}
+
+# Opt-in only: the upstream chart expands SERVER_NAME independently in every pod.
+variable "shard_groups" {
+  type    = number
+  default = 0
+  validation {
+    condition     = var.shard_groups == 0 || (var.shard_groups >= 2 && var.shard_groups <= 5 && floor(var.shard_groups) == var.shard_groups)
+    error_message = "shard_groups must be 0 (off), or an integer from 2 to 5."
+  }
 }
