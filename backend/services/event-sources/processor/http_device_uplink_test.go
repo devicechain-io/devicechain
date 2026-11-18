@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -489,4 +490,45 @@ func TestDeviceUplinkMQTTPasswordGuessesShareTheDeviceHold(t *testing.T) {
 		require.Equal(t, status, r.Code)
 	}
 	require.Equal(t, 5, h.plans.calls)
+}
+
+func TestDeviceUplinkThrottledGraphQLAnswerIsRetryable(t *testing.T) {
+	h := newDeviceHarness(t, fplan())
+	h.plans.err = &svcclient.GraphQLError{Messages: []string{"credential held"}, Codes: []string{"THROTTLED"}}
+	rec := h.post(uplinkPath, "", "x", bearer)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.NotEmpty(t, rec.Header().Get("Retry-After"))
+	require.Empty(t, h.published)
+	require.Equal(t, 1, h.plans.calls)
+}
+
+func TestDeviceUplinkSharedHoldOverridesStaleAuthentication(t *testing.T) {
+	for _, held := range []bool{true, false} {
+		t.Run(fmt.Sprint("held=", held), func(t *testing.T) {
+			h := newDeviceHarness(t, fplan())
+			h.plans.secret = "right"
+			now := time.Unix(1000, 0)
+			h.es.deviceUplinks.Plans = integration.NewDeviceDecoders(h.plans, integration.DeviceDecoderConfig{
+				TTL: time.Second, StaleMax: time.Minute, Now: func() time.Time { return now },
+			})
+			headers := map[string]string{headerCredentialType: "MQTT_BASIC", headerCredentialID: "u", headerCredentialSecret: "right"}
+			require.Equal(t, http.StatusAccepted, h.post(uplinkPath, "", "x", headers).Code)
+			now = now.Add(2 * time.Second)
+			h.plans.err = errors.New("connection reset")
+			if held {
+				h.plans.err = &svcclient.GraphQLError{Codes: []string{"THROTTLED"}, RetryAfterSeconds: 17}
+			}
+			rec := h.post(uplinkPath, "", "x", headers)
+			if held {
+				require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+				require.Equal(t, "17", rec.Header().Get("Retry-After"))
+				require.Equal(t, DeviceUplinkHeld, h.results[len(h.results)-1])
+				require.Len(t, h.published, 1)
+			} else {
+				require.Equal(t, http.StatusAccepted, rec.Code)
+				require.Len(t, h.published, 2)
+			}
+			require.Equal(t, 2, h.plans.calls)
+		})
+	}
 }

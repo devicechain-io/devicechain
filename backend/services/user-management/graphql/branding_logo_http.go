@@ -73,27 +73,23 @@ func (h *BrandingLogoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 // authenticate verifies a tenant access token and returns its claims. It writes the
 // 401 and returns false on any failure, so callers just return.
 func (h *BrandingLogoHandler) authenticate(w http.ResponseWriter, r *http.Request) (*auth.Claims, bool) {
-	const prefix = "Bearer "
-	authz := r.Header.Get("Authorization")
-	if len(authz) <= len(prefix) || authz[:len(prefix)] != prefix {
-		http.Error(w, "missing bearer token", http.StatusUnauthorized)
-		return nil, false
-	}
-	claims, err := h.validator.Validate(authz[len(prefix):])
+	result, err := (auth.BearerAuth{Plane: auth.PlaneBranding, Verify: auth.AccessVerifier(func() *auth.Validator { return h.validator }), Policy: h.policy}).Authenticate(r)
 	if err != nil {
-		http.Error(w, "invalid token", http.StatusUnauthorized)
+		msg := "invalid token"
+		switch err.(*auth.BearerError).Reason {
+		case auth.BearerMissing:
+			msg = "missing bearer token"
+			if err.(*auth.BearerError).EmptyCredential() && err.(*auth.BearerError).CanonicalScheme() {
+				msg = "invalid token"
+			}
+		case auth.BearerUnavailable:
+			msg = "authentication is not available"
+		}
+		http.Error(w, msg, http.StatusUnauthorized)
 		return nil, false
 	}
-	// 🔴 AFTER Validate, NEVER BEFORE (a forged token must not reach the counters), and before
-	// the body is read. A refusal is the same 401 an invalid token gets.
-	var p *auth.PlanePolicy
-	if h.policy != nil {
-		p = h.policy()
-	}
-	if err := p.Admit(claims, auth.PlaneBranding); err != nil {
-		http.Error(w, "invalid token", http.StatusUnauthorized)
-		return nil, false
-	}
+	claims := result.Claims
+
 	return claims, true
 }
 

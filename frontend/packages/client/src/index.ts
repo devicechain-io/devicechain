@@ -16,6 +16,8 @@ export {
   resolveAuthToken,
   setAuthTokenGetter,
   setIdentityTokenGetter,
+  setUnauthorizedHandler,
+  type UnauthorizedHandler,
   GraphQLRequestError,
   type GraphQLErrorEntry,
   type Area,
@@ -23,7 +25,7 @@ export {
   type TypedDocument,
 } from './transport';
 
-export { isForbiddenError, isScopeUnsupportedError, errorCode } from './errors';
+export { isForbiddenError, isScopeUnsupportedError, isStaleWrite, errorCode } from './errors';
 
 // The client half of the basemap cascade (ADR-079). Lives in the SDK because the
 // console's fence editor, the map widget and the /dash viewer app must all resolve a
@@ -41,6 +43,7 @@ export { subscribe, disposeSubscriptions, type SubscriptionSink } from './subscr
 
 export {
   createSessionTokens,
+  type ManagedSessionTokens,
   type SessionTokens,
   type SessionTokensOptions,
   type TokenPair,

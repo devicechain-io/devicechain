@@ -19,12 +19,27 @@ export interface MeasurementStreamResult {
 
 export interface MeasurementStreamVariables {
   deviceToken?: string | null;
+  deviceTokens?: string[] | null;
   name?: string | null;
 }
 
 export const MEASUREMENT_STREAM = `
   subscription MeasurementStream($deviceToken: String, $name: String) {
     measurementStream(deviceToken: $deviceToken, name: $name) {
+      id
+      deviceToken
+      eventType
+      occurredTime
+      name
+      value
+      classifier
+    }
+  }
+` as unknown as TypedDocument<MeasurementStreamResult, MeasurementStreamVariables>;
+
+export const MEASUREMENT_STREAM_MULTI = `
+  subscription MeasurementStream($deviceTokens: [String!], $name: String) {
+    measurementStream(deviceTokens: $deviceTokens, name: $name) {
       id
       deviceToken
       eventType

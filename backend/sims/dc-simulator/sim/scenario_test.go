@@ -5,6 +5,7 @@ package sim
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -182,6 +183,9 @@ func TestHarborpulseLedgerCountsWhatWasBuffered(t *testing.T) {
 			if !strings.Contains(e.Device, "-east-") || e.Buffered < 10 || e.Day != 0 {
 				t.Fatalf("drop=%v: ledger entry %+v", drop, e)
 			}
+			if len(e.Times) != e.Buffered || e.Times[0] != e.First || e.Times[len(e.Times)-1] != e.Last {
+				t.Fatalf("drop=%v: %s carries %d times for %d buffered, from %v", drop, e.Device, len(e.Times), e.Buffered, e.Times)
+			}
 			want := e.Buffered
 			if drop {
 				want = e.Buffered - e.Buffered/harborDropNth
@@ -190,5 +194,104 @@ func TestHarborpulseLedgerCountsWhatWasBuffered(t *testing.T) {
 				t.Fatalf("drop=%v: %s buffered %d, delivered %d, want %d", drop, e.Device, e.Buffered, delivered[e.Device], want)
 			}
 		}
+	}
+}
+
+// flood-clear-between-tiers drops every gauge below the minor tier for a few readings each time
+// its water climbs into a higher tier, and the clean day never does: on the way up, the water a
+// gauge reports leaves the flood tiers between MINOR and its peak only under the defect.
+func TestHarborpulseFloodClearBetweenTiersDipsOnlyUnderTheDefect(t *testing.T) {
+	base := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+	tiersOf := func(defects harborDefects, gauge string) []int {
+		m := newHarborModelWith(1, harborpulseDayLength, defects)
+		var seq []int
+		for at := time.Duration(0); at <= harborpulseDayLength; at += 5 * time.Second {
+			m.advanceTo(at)
+			if h := harborHour(at); h < 16 || h > 23 {
+				continue
+			}
+			tier := harborFloodTier(m.reading(gauge, at, base.Add(at))[HarborpulseWaterLevelKey])
+			if len(seq) == 0 || seq[len(seq)-1] != tier {
+				seq = append(seq, tier)
+			}
+		}
+		return seq
+	}
+	// The way up: from the first flood tier to the first reading at the peak tier.
+	wayUp := func(seq []int) []int {
+		peak, first, at := 0, -1, 0
+		for i, s := range seq {
+			if s > peak {
+				peak, at = s, i
+			}
+			if s > 0 && first < 0 {
+				first = i
+			}
+		}
+		return seq[first : at+1]
+	}
+	for _, g := range harborTokens(harborGauge, "") {
+		clean := wayUp(tiersOf(harborDefects{}, g))
+		for _, s := range clean {
+			if s == 0 {
+				t.Fatalf("clean %s leaves the flood tiers on the way up: %v", g, clean)
+			}
+		}
+		want := []int{1, 0, 2}
+		if m := newHarborModel(1); m.devices[g].quay == HarborpulseEastQuay {
+			want = []int{1, 0, 2, 0, 3}
+		}
+		if got := wayUp(tiersOf(harborDefects{floodClearBetweenTiers: true}, g)); fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("flood-clear-between-tiers %s goes %v on the way up, want %v (a dip before each higher tier, and every tier seen)", g, got, want)
+		}
+	}
+}
+
+// The clean day's buffer holds a whole outage at any day the sim accepts: a reading evicted after
+// the ledger counted it would turn backfill-stored red with nothing planted.
+func TestHarborpulseLongDayBuffersTheWholeOutage(t *testing.T) {
+	const day = 24 * time.Hour
+	outage := func(m *harborModel) (buffered, delivered int) {
+		base := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+		wall := func(h float64) time.Duration { return time.Duration((h - harborpulseStartHour) / 24 * float64(day)) }
+		from, to := wall(harborOutageFrom-0.1), wall(harborOutageTo+0.1)
+		for at := from; at <= to; at += DefaultEmitInterval {
+			m.advanceTo(at)
+			for _, c := range harborTokens(harborCharger, HarborpulseEastQuay) {
+				m.reading(c, at, base.Add(at))
+			}
+			for _, b := range m.takeBackfill(at) {
+				delivered += len(b.readings)
+			}
+		}
+		for _, e := range m.backfillLedger() {
+			buffered += e.Buffered
+		}
+		return buffered, delivered
+	}
+
+	s := NewHarborpulse(1, Load{}).(*harborpulse)
+	if err := s.ConfigureScenario(ScenarioOptions{DayLength: day}); err != nil {
+		t.Fatalf("a %s day at the default cadence was refused: %v", day, err)
+	}
+	buffered, delivered := outage(s.ensureModel())
+	if perCharger := buffered / len(harborTokens(harborCharger, HarborpulseEastQuay)); perCharger <= harborBufferCap {
+		t.Fatalf("a %s day buffers %d readings per charger, not more than the floor %d: the test shows nothing", day, perCharger, harborBufferCap)
+	}
+	if delivered != buffered {
+		t.Fatalf("a %s day buffered %d readings and delivered %d: the buffer overflowed on a clean day", day, buffered, delivered)
+	}
+
+	// The control: the same day with the old fixed buffer loses readings the ledger counted.
+	fixed := newHarborModelWith(1, day, harborDefects{})
+	fixed.bufferCap = harborBufferCap
+	if b, d := outage(fixed); d >= b {
+		t.Fatalf("with a fixed %d-reading buffer a %s day delivered %d of %d: the overflow this test exists for cannot show", harborBufferCap, day, d, b)
+	}
+
+	// A day and cadence whose outage no charger could hold are refused, not run to a red day.
+	fast := NewHarborpulse(1, Load{EmitInterval: 10 * time.Millisecond})
+	if err := ConfigureScenario(fast, ScenarioOptions{DayLength: day}); err == nil {
+		t.Fatalf("a %s day at a 10ms cadence (%d readings per outage) was accepted", day, harborBufferNeed(day, 10*time.Millisecond))
 	}
 }

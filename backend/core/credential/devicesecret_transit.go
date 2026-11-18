@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
@@ -75,6 +77,18 @@ const (
 // ErrSealedSecretInvalid is Open's refusal: the value is not a sealed secret this key made
 // for this tenant and credential id. A plaintext secret is one.
 var ErrSealedSecretInvalid = errors.New("credential: not a sealed device secret for this credential")
+
+// Count compatibility-path use, without credential, tenant or secret labels. Reads
+// include malformed text: a failed authentication still depends on the legacy path.
+var legacyTextSealReads = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "devicechain_credential_legacy_text_seal_reads_total",
+	Help: "Legacy text seal read attempts, including malformed values and redeliveries.",
+})
+
+var legacyTextSealWrites = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "devicechain_credential_legacy_text_seal_writes_total",
+	Help: "Legacy text seals encoded successfully, before publication.",
+})
 
 // SecretTransit seals and opens a presented device secret for the hop between services.
 type SecretTransit struct {
@@ -193,6 +207,7 @@ func (t *SecretTransit) open(pick func() cipher.AEAD, sealed []byte, aad []byte)
 //
 // 🔴 Delete it, with the text fields it reads, once no stream can hold a message that old.
 func SealedFromText(text string) []byte {
+	legacyTextSealReads.Inc()
 	parts := strings.Split(text, sealedTextSep)
 	if len(parts) == 3 && parts[0] == sealedTextPrefix {
 		id, idErr := hex.DecodeString(parts[1])
@@ -223,6 +238,7 @@ func SealedText(sealed []byte) (string, error) {
 	if len(sealed) <= sealedHeaderN || sealed[0] != sealedMagic {
 		return "", ErrSealedSecretInvalid
 	}
+	legacyTextSealWrites.Inc()
 	return strings.Join([]string{sealedTextPrefix,
 		hex.EncodeToString(sealed[1:sealedHeaderN]),
 		base64.RawStdEncoding.EncodeToString(sealed[sealedHeaderN:])}, sealedTextSep), nil

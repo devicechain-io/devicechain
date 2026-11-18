@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { listAll } from '@/lib/api/list-all';
 import { RegistryTypeForm, groupColumns, type RegistryResource } from '@/components/registry';
 import { MembershipPanel } from '@/components/MembershipPanel';
 import {
@@ -52,7 +53,7 @@ export const assetGroupResource: RegistryResource<AssetGroup> = {
       groupToken={g.token}
       memberType="asset"
       memberI18nKey="asset"
-      loadCandidates={() => listAssets({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
+      loadCandidates={() => listAll(page => listAssets({ ...page })).then((r) => r.results)}
     />
   ),
 };

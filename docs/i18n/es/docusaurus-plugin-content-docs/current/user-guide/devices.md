@@ -177,6 +177,58 @@ conectarse y recibir comandos.
 La lista completa de lo que hace la deshabilitación, incluidas la configuración y las alarmas,
 está en [Deshabilitar un dispositivo](../guides/device-credentials.md#disabling-a-device).
 
+## Qué hace la eliminación de un dispositivo {#deleting-a-device}
+
+La eliminación de un dispositivo no se puede deshacer. El dispositivo, sus credenciales, alias,
+atributos, pertenencias a grupos y relaciones se eliminan de inmediato, y su token queda libre:
+puedes crear un dispositivo nuevo con el mismo token. El dispositivo nuevo no hereda ninguno de los
+registros del anterior:
+
+- **El estado en vivo, las últimas lecturas y la posición** se eliminan. Los miembros del
+  propietario del dispositivo nuevo no ven la última posición ni las lecturas del anterior.
+- **Los comandos** que la plataforma aún tenía para el dispositivo anterior (en cola, retenidos o
+  aparcados) se cancelan. Un comando creado para el dispositivo anterior nunca se envía al nuevo,
+  ni siquiera uno ya entregado a un transporte y aún no confirmado. Los comandos que envíes al
+  dispositivo nuevo salen con normalidad.
+- **Las asignaciones de actualización** pendientes del dispositivo anterior terminan, y sus
+  objetivos de despliegue se muestran como cancelados. Al dispositivo nuevo no se le ofrecen ni
+  puede descargar sus artefactos.
+- **Las alarmas** del dispositivo anterior se eliminan, y sus reglas de detección olvidan su
+  estado, de modo que la primera lectura del dispositivo nuevo que cumpla una regla genera una
+  alarma nueva. Cada alarma que seguía activa termina con un despeje que indica que se eliminó el
+  dispositivo, así que sus notificaciones dejan de escalar.
+- **El historial de eventos** se conserva. Los eventos que la plataforma recibió del dispositivo
+  anterior siguen almacenados, pero dejan de aparecer bajo el cliente, el área o el activo al que
+  pertenecía. Los eventos que envía el dispositivo nuevo aparecen con normalidad, aunque los
+  informe con una hora anterior a la eliminación.
+
+Los servicios se enteran de una eliminación a través del broker de mensajes. Si el broker no está
+disponible, la eliminación se completa igualmente y los demás servicios se ponen al día cuando
+vuelve. Hasta entonces, los registros del dispositivo anterior pueden seguir visibles.
+
+También se tratan los registros que dejaron eliminaciones anteriores a esta versión. Una
+comprobación periódica elimina el estado en vivo de los dispositivos que ya no existen, y una
+asignación de actualización hecha para un dispositivo anterior con el mismo token no se ofrece al
+dispositivo que lo tiene ahora. Los comandos se cancelan para las eliminaciones que el broker de
+mensajes aún conserva cuando el servicio actualizado arranca por primera vez, lo que cubre los
+últimos días. Un comando en espera de una eliminación más antigua se cancela en lugar de enviarse
+si es anterior al dispositivo que ahora tiene su token.
+
+### Límites {#deleting-a-device-limits}
+
+- Una lectura que la plataforma aceptó antes de la eliminación pero procesó después puede
+  recuperar brevemente el estado en vivo del dispositivo anterior. Si ningún dispositivo tiene el
+  token, la comprobación periódica lo elimina. Si se creó un dispositivo nuevo con ese token, su
+  primera lectura lo sustituye, y una lectura del dispositivo anterior nunca se aplica al nuevo.
+- Antes de volver a enviar una notificación de una alarma, la plataforma comprueba que la alarma
+  sigue existiendo. Si esa comprobación falla, la notificación se envía igualmente, para que una
+  caída no silencie una alarma real. Consulta
+  [Alarmas de un dispositivo eliminado](../guides/notification-channels.md#deleted-originator).
+- Durante una actualización, mientras conviven versiones antiguas y nuevas de los servicios, una
+  eliminación que atiende una versión antigua sigue el comportamiento anterior hasta que esa
+  versión se sustituye. Consulta
+  [Versiones y actualizaciones](../deployment/releases-and-upgrades.md#v170-upgrade).
+
 ## La página del dispositivo
 
 Selecciona un dispositivo en la lista para abrir su página. La cabecera muestra el nombre del

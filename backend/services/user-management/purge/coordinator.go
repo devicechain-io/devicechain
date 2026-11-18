@@ -102,8 +102,7 @@ func NewCoordinator(ms *core.Microservice, store *iam.Store, db *rdb.RdbManager,
 		return db.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey(coordinatorLockName), fn)
 	}
 	c.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "tenant-purge", interval,
-		c.RunOnce, callbacks, core.WithImmediateFirstPass(),
-		core.WithPassMetrics(ms.NewPeriodicTaskMetrics("tenant_purge")))
+		c.RunOnce, callbacks, ms.NewPeriodicTaskMetrics("tenant_purge"), core.WithImmediateFirstPass())
 	c.inFlight = ms.NewGauge("tenant_purge_in_flight",
 		"Tenant deletions currently open (a row in iam_tenants whose purge_state is purging)")
 	c.oldestAge = ms.NewGauge("tenant_purge_oldest_age_seconds",
@@ -162,18 +161,12 @@ func (c *Coordinator) RunOnce(ctx context.Context) error {
 	ran, err := c.tryLock(ctx, func() error {
 		return c.pass(ctx)
 	})
-	if err != nil {
-		return err
-	}
-	if !ran {
-		// 🔑 SKIPPED, NOT SUCCEEDED. Reported as success this would move the last-success
-		// timestamp, so an instance where every replica was declining — a lock nobody
-		// released — would report itself freshly swept forever, which is the outage that
-		// timestamp exists to reveal.
+	if !ran && err == nil {
+		// Report a skip, not success: otherwise the last-success timestamp would
+		// keep advancing even while every replica declines the lock.
 		c.observeLedger(ctx)
-		return core.ErrPassSkipped
 	}
-	return nil
+	return rdb.SingletonResult(ran, err, coordinatorLockName)
 }
 
 // observeLedger refreshes this replica's gauges from the shared rows, on a tick where a

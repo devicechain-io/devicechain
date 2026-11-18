@@ -300,7 +300,7 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 			"commit a checkpoint, so it cannot establish that its durable snapshot is free of " +
 			"this tenant — anything evicted from memory would be restored by a restart")}
 	}
-	log.Info().Str("tenant", tenant).Str("partition", rp.cfg.PartitionId).Int64("entries", n).
+	log.Info().Str("tenant", tenant).Str("partition", rp.partitionID()).Int64("entries", n).
 		Msg("Evicted a purged tenant from the DETECT engine and committed the checkpoint.")
 	return tenantPurgeResult{evicted: n}
 }
@@ -384,7 +384,7 @@ func NewTenantPurgeResponder(conn *nats.Conn, instanceId string,
 	return &TenantPurgeResponder{
 		conn:       conn,
 		instanceId: instanceId,
-		partition:  rp.cfg.PartitionId,
+		partition:  rp.partitionID(),
 		evict:      rp.EvictTenant,
 	}
 }

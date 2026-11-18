@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
@@ -41,12 +42,12 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	broker := permtest.Start(t, instance)
 
 	prevMs, prevCfg, prevNats, prevRdb, prevApi, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Api, Svc
-	prevProc, prevWriteback, prevRoster := CommandDeliveryProcessor, DeadLetterWriteback, RosterConsumer
+	prevProc, prevWriteback, prevRoster, prevDeletion := CommandDeliveryProcessor, DeadLetterWriteback, RosterConsumer, DeletionConsumer
 	prevResponses, prevCommands := CommandResponsesReader, DeviceCommandsWriter
 	prevDelivery, prevWritebackMetrics, prevDL := DeliveryMetrics, WritebackMetrics, DeadLetters
 	t.Cleanup(func() {
 		Microservice, Configuration, NatsManager, RdbManager, Api, Svc = prevMs, prevCfg, prevNats, prevRdb, prevApi, prevSvc
-		CommandDeliveryProcessor, DeadLetterWriteback, RosterConsumer = prevProc, prevWriteback, prevRoster
+		CommandDeliveryProcessor, DeadLetterWriteback, RosterConsumer, DeletionConsumer = prevProc, prevWriteback, prevRoster, prevDeletion
 		CommandResponsesReader, DeviceCommandsWriter = prevResponses, prevCommands
 		DeliveryMetrics, WritebackMetrics, DeadLetters = prevDelivery, prevWritebackMetrics, prevDL
 	})
@@ -57,6 +58,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		Deployed:       true,
 		Readiness:      core.NewReadinessGate(),
 	}
+	prevPeers := servicePeers
+	t.Cleanup(func() { servicePeers = prevPeers })
+	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
 	Microservice.InstanceConfiguration.Infrastructure.Nats = broker.NatsConfiguration("command-delivery")
 	Microservice.Readiness.MarkReadyWithoutAuthSurface()
@@ -84,5 +88,6 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NotNil(t, CommandResponsesReader)
 	require.NotNil(t, DeviceCommandsWriter)
 	require.NotNil(t, RosterConsumer)
+	require.NotNil(t, DeletionConsumer)
 	broker.RequireNoViolations(t)
 }

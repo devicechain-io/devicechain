@@ -53,7 +53,7 @@ import enVersions from './locales/en/versions.json';
 export interface Locale {
   /** BCP-47 code; also the ./locales/<code>/ directory name and the i18next lng. */
   code: string;
-  /** This locale currently translates dashboard widgets and viewer controls only. */
+  /** The namespaces this locale translates; every other screen uses the English fallback. */
   namespaces?: readonly string[];
   /** The language's own endonym, shown in the switcher — never itself translated. */
   label: string;
@@ -79,7 +79,7 @@ export interface Locale {
 export const SUPPORTED_LOCALES: Locale[] = [
   { code: 'en', label: 'English', badge: 'EN' },
   { code: 'es', label: 'Español', badge: 'ES' },
-  { code: 'zh-CN', label: '简体中文', badge: 'ZH', namespaces: ['dashboards'] },
+  { code: 'zh-CN', label: '简体中文', badge: 'ZH', namespaces: ['dashboards', 'devices', 'identities'] },
 ];
 
 export const DEFAULT_LOCALE = 'en';

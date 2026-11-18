@@ -6,6 +6,7 @@ package verify
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
@@ -106,4 +107,45 @@ func (s *DisabledSource) LiveDevices(ctx context.Context, tenant string, deviceT
 		}
 	}
 	return live, nil
+}
+
+// DeviceIdentity identifies a device and when its current incarnation was created.
+type DeviceIdentity struct {
+	ID        uint64
+	CreatedAt time.Time
+}
+
+// DeviceIncarnations reads each distinct token in bounded requests. A missing response
+// is an error, so an unavailable owner cannot be mistaken for a deleted device.
+func (s *DisabledSource) DeviceIncarnations(ctx context.Context, tenant string, tokens []string) (map[string]DeviceIdentity, error) {
+	ids := make(map[string]DeviceIdentity)
+	for start := 0; start < len(tokens); start += disabledPageSize {
+		chunk := tokens[start:min(start+disabledPageSize, len(tokens))]
+		var out struct {
+			DevicesByToken *[]struct {
+				deviceIdentity
+				CreatedAt string `json:"createdAt"`
+			} `json:"devicesByToken"`
+		}
+		if err := s.client.Query(ctx, s.dmURL, tenant,
+			`query($tokens: [String!]!) { devicesByToken(tokens: $tokens) { token id createdAt } }`,
+			map[string]any{"tokens": chunk}, &out); err != nil {
+			return nil, err
+		}
+		if out.DevicesByToken == nil {
+			return nil, fmt.Errorf("device-management returned no device identities")
+		}
+		for _, device := range *out.DevicesByToken {
+			id := parseDeviceIncarnation(device.deviceIdentity)
+			if id == 0 {
+				return nil, fmt.Errorf("device-management returned no valid identity for %q", device.Token)
+			}
+			createdAt, err := time.Parse(time.RFC3339, device.CreatedAt)
+			if err != nil {
+				return nil, fmt.Errorf("device-management returned invalid createdAt for %q: %w", device.Token, err)
+			}
+			ids[device.Token] = DeviceIdentity{ID: id, CreatedAt: createdAt}
+		}
+	}
+	return ids, nil
 }

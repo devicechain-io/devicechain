@@ -320,7 +320,7 @@ HTTP answers the device. Every answer that depends on the device is given only a
 | `429` | Requests from this source address exceed the allowance. `Retry-After` says when to retry. |
 | `429` | The tenant is over its ingest ceiling, by messages or by readings. `Retry-After` says when to retry. |
 | `500` | The platform could not build the message. Not retryable by the device. |
-| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). Devices on the broker's MQTT connection are unaffected. |
+| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). Wrong passwords over HTTP now count toward the same per-credential hold as MQTT, so an attack over HTTP can also delay that credential's MQTT reconnects, just as an attack over MQTT already could. |
 | `503` | The decoder lookup is unavailable, ingest is applying backpressure, or the downstream stream could not take the payload. `Retry-After` is set for the first two and says when to retry. |
 
 MQTT cannot answer a device, so the platform records what happened instead. The [Device Protocol Reference](../reference/device-protocol.md#raw-payload) has the full table; in short:

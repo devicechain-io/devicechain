@@ -6,6 +6,7 @@
 // selector without saving it (the live "matches N" preview), a dynamic EntityGroup is
 // created with membershipMode="dynamic" + the composed selector, and a group's members
 // resolve transparently over either mode (static edges | dynamic eval-on-read).
+import { listAll } from './list-all';
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/device-management';
 import type {
@@ -62,8 +63,8 @@ export async function previewSelector(
 }
 
 const DYNAMIC_GROUPS = graphql(`
-  query DynamicGroups($memberType: String!) {
-    entityGroups(criteria: { pageNumber: 1, pageSize: 200, memberType: $memberType, membershipMode: "dynamic" }) {
+  query DynamicGroups($criteria: EntityGroupSearchCriteria!) {
+    entityGroups(criteria: $criteria) {
       results {
         id
         token
@@ -80,10 +81,12 @@ const DYNAMIC_GROUPS = graphql(`
 `);
 
 // listDynamicGroups returns a family's saved dynamic groups (with their selectors) for
-// the browse screen's saved-group list. Groups per family are few; one page suffices.
+// the browse screen's saved-group list, without hiding groups on later pages.
 export async function listDynamicGroups(memberType: string): Promise<DynamicGroup[]> {
-  const data = await gql('device-management', DYNAMIC_GROUPS, { memberType });
-  return data.entityGroups.results;
+  return (await listAll(async page => {
+    const data = await gql('device-management', DYNAMIC_GROUPS, { criteria: { ...page, memberType, membershipMode: 'dynamic' } });
+    return data.entityGroups;
+  })).results;
 }
 
 const GROUP_MEMBERS = graphql(`

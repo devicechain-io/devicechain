@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"regexp"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -434,6 +435,12 @@ func (d *DeviceDecoders) Lookup(ctx context.Context, tenant, device string, cred
 		err = ctx.Err()
 	}
 	if err != nil {
+		// A shared credential hold is an authentication answer, not an outage that stale
+		// authentication may hide. Keep the peer error so the route can read its retry hint.
+		var gqlErr *svcclient.GraphQLError
+		if !cred.AssertedByBroker && errors.As(err, &gqlErr) && slices.Contains(gqlErr.Codes, "THROTTLED") {
+			return DeviceLookup{}, errors.Join(ErrDeviceDecoderHeld, err)
+		}
 		if !cred.AssertedByBroker && (errors.Is(err, ErrDeviceDecoderHeld) || d.failureHeld(who, d.cfg.Now())) {
 			return DeviceLookup{}, ErrDeviceDecoderHeld
 		}
