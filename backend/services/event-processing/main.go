@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/config"
@@ -19,7 +18,6 @@ import (
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-event-processing/processor"
 	"github.com/devicechain-io/dc-microservice/auth"
-	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/governance"
@@ -165,7 +163,7 @@ func buildMetrics() {
 	DeadLetters = Svc.DeadLetters
 }
 
-func createNatsComponents(nmgr *messaging.NatsManager) error {
+func createNatsComponents(nmgr *messaging.NatsManager, peers *svcclient.Peers) error {
 	stop, err := shardgroups.Enable(nmgr)
 	if err != nil {
 		return err
@@ -335,7 +333,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// same projection DETECT rebuilds from — so an action edit takes effect without re-publishing events.
 	// Its raise-alarm sink is always wired (the sole alarm-raise path since 6d), so it always starts; see
 	// wireReactDispatcher.
-	return wireReactDispatcher(nmgr)
+	return wireReactDispatcher(nmgr, peers)
 }
 
 // wireReactDispatcher builds the REACT dispatcher over its action sinks:
@@ -349,7 +347,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 // DeliverNew so a first start on a running cluster begins at the stream head rather than replaying the
 // 7-day derived-event backlog DETECT has published since slice 4a — consuming that history would flood
 // stale alarm/command side effects (the first-start hazard notification-management's reader opts out of).
-func wireReactDispatcher(nmgr *messaging.NatsManager) error {
+func wireReactDispatcher(nmgr *messaging.NatsManager, peers *svcclient.Peers) error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 
 	// send-command sink (nil ⇒ send-command disabled).
@@ -359,8 +357,8 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	} else if infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
 		log.Warn().Msg("command-delivery endpoint not configured (infrastructure.commandDelivery) — REACT send-command dispatch is DISABLED (ADR-051 slice 5b).")
 	} else {
-		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.CommandWrite)})
-		url := fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port)
+		client := peers.Client(auth.CommandWrite)
+		url := infra.CommandDelivery.Endpoint().GraphQLURL()
 		commands = processor.NewCommandClient(client, url)
 		log.Info().Str("commandDelivery", url).Msg("REACT send-command dispatch ENABLED (ADR-051 slice 5b).")
 	}
@@ -395,7 +393,7 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	// budget before publishing a connector-dispatch, dropping over-quota actions at the source so a
 	// runaway rule cannot flood the connector-dispatch stream. Always non-nil (fail-open to the
 	// platform default when per-tenant overrides are not wired) — never unlimited.
-	connectorRate := buildEgressLimiter(Configuration, Microservice.InstanceConfiguration.Infrastructure, EgressUnresolved)
+	connectorRate := buildEgressLimiter(Configuration, peers, EgressUnresolved)
 
 	// One value sizes both the reader's slots and the dispatcher's lanes (react.workers).
 	workers := reactWorkers(Configuration)
@@ -500,19 +498,19 @@ func reactWorkers(c *config.EventProcessingConfiguration) int {
 // this limiter is rebuilt on every NATS start and a collector registered twice panics. Every
 // tenant here comes from the platform's own derived-events stream, so it always gets an
 // allowance of its own.
-func buildEgressLimiter(cfg *config.EventProcessingConfiguration, infra mscfg.InfrastructureConfiguration,
+func buildEgressLimiter(cfg *config.EventProcessingConfiguration, peers *svcclient.Peers,
 	unresolved func(core.CeilingSource)) *core.TenantRateLimiter {
 	def := governance.Limits{
 		RatePerSecond: cfg.OutboundCallsPerSecond,
 		Burst:         cfg.OutboundBurst,
 	}
 	counted := core.WithUnresolvedAdmissions(unresolved)
-	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+	seam, peerErr := peers.UserManagement(auth.TenantRead)
+	if peerErr != nil {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant outbound overrides disabled; metering every tenant at the platform default (ADR-060 SD-3).")
 		return core.NewTenantRateLimiter(core.StaticCeiling(def.RatePerSecond, def.Burst), counted)
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.TenantRead)})
-	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	client, umURL := seam.Client, seam.URL
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Outbound)
 	log.Info().Str("userManagement", umURL).Msg("REACT source-side per-tenant outbound overrides enabled (fail-open to platform default, ADR-060 SD-3).")
 	return core.NewTenantRateLimiter(resolver.Ceiling, counted)
@@ -530,7 +528,7 @@ func buildEgressLimiter(cfg *config.EventProcessingConfiguration, infra mscfg.In
 // geofence preview. That is the fail-closed direction: with no seam every containment call reports
 // an unresolvable fence set and is COUNTED, where a projection quietly seeded with nothing would
 // answer "outside" and read as a healthy rule that never fires.
-func buildFenceSetSeam() (runtime.FenceSetSource, runtime.CurrentFenceSetSource, runtime.FenceManifestResolver) {
+func buildFenceSetSeam(peers *svcclient.Peers) (runtime.FenceSetSource, runtime.CurrentFenceSetSource, runtime.FenceManifestResolver) {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" {
 		log.Warn().Msg("Service secret not configured — geofence evaluation is UNAVAILABLE (ADR-078): containment reports unresolvable rather than 'outside'.")
@@ -540,8 +538,8 @@ func buildFenceSetSeam() (runtime.FenceSetSource, runtime.CurrentFenceSetSource,
 		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) — geofence evaluation is UNAVAILABLE (ADR-078).")
 		return nil, nil, nil
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.DeviceRead)})
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	client := peers.Client(auth.DeviceRead)
+	url := infra.DeviceManagement.Endpoint().GraphQLURL()
 	log.Info().Str("deviceManagement", url).Msg("Geofence fence-set fetch ENABLED (ADR-078): the startup reconcile and the replay preview resolve frozen fence sets from device-management.")
 	// One cache, shared by all three seams the client satisfies. Its bound is counted in
 	// VERTICES rather than entries, because a three-vertex box and a five-hundred-vertex
@@ -558,14 +556,14 @@ func buildFenceSetSeam() (runtime.FenceSetSource, runtime.CurrentFenceSetSource,
 //
 // Enabled only when the shared service secret and device-management's coordinate are set;
 // otherwise nil, and a preview of a draft that reads constants says it cannot read them.
-func buildDeviceConstantsSeam() preview.ConstantSource {
+func buildDeviceConstantsSeam(peers *svcclient.Peers) preview.ConstantSource {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
 		log.Warn().Msg("Service secret or device-management endpoint not configured — a preview of a draft calculated metric that reads device constants cannot read them.")
 		return nil
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.DeviceRead)})
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	client := peers.Client(auth.DeviceRead)
+	url := infra.DeviceManagement.Endpoint().GraphQLURL()
 	return processor.NewDeviceConstantsClient(client, url)
 }
 
@@ -579,7 +577,7 @@ func buildDeviceConstantsSeam() preview.ConstantSource {
 // returns nil, and the reconcile is off: a rule, device or attribute change whose notification
 // was lost then stays lost until the next change — which is the behaviour before the reconcile
 // existed, and is said loudly here rather than discovered.
-func buildFactReconcileSeam() processor.DeviceManagementFacts {
+func buildFactReconcileSeam(peers *svcclient.Peers) processor.DeviceManagementFacts {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	const off = " — the DETECT fact reconcile is OFF: a lost rule, device or attribute notification is repaired only by the next change to the same thing."
 	if infra.ServiceAuth.Secret == "" {
@@ -594,10 +592,10 @@ func buildFactReconcileSeam() processor.DeviceManagementFacts {
 		log.Warn().Msg("user-management endpoint not configured (infrastructure.userManagement)" + off)
 		return nil
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing",
-		[]string{string(auth.TenantRead), string(auth.DeviceRead)})
-	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
-	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	client := peers.Client(auth.TenantRead, auth.DeviceRead)
+	// The guards above establish both URLs; both targets share this one token cache.
+	dmURL, _ := peers.URL(infra.DeviceManagement.Endpoint())
+	umURL, _ := peers.URL(infra.UserManagement.Endpoint())
 	log.Info().Str("deviceManagement", dmURL).Str("userManagement", umURL).
 		Msg("DETECT fact reconcile ENABLED: the leader compares its rules, roster and threshold attributes with device-management at every term start and every five minutes.")
 	return processor.NewDeviceManagementFactsClient(client, dmURL, umURL, Microservice.InstanceId)
@@ -611,7 +609,7 @@ func buildFactReconcileSeam() processor.DeviceManagementFacts {
 // canvas authoring doors are unaffected). ai-inference is an opt-in area, so nil is the common
 // case. The candidate it returns is compiled through this service's OWN rules.Compile firewall at
 // the platform-default limits — the AI proposes, the deterministic compiler disposes.
-func buildDrafter() *nldraft.Drafter {
+func buildDrafter(peers *svcclient.Peers) *nldraft.Drafter {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" {
 		log.Warn().Msg("Service secret not configured — NL→rule drafting is UNAVAILABLE (ADR-056 slice 1).")
@@ -621,9 +619,9 @@ func buildDrafter() *nldraft.Drafter {
 		log.Warn().Msg("ai-inference endpoint not configured (infrastructure.aiInference) — NL→rule drafting is UNAVAILABLE (ADR-056 slice 1).")
 		return nil
 	}
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.AiInference.Hostname, infra.AiInference.Port)
+	url := infra.AiInference.Endpoint().GraphQLURL()
 	log.Info().Str("aiInference", url).Msg("NL→rule drafting ENABLED (ADR-056 slice 1): candidates compile through the DETECT firewall at the platform-default limits.")
-	return nldraft.NewDrafter(processor.NewInferenceClient(infra.UserManagement, infra.ServiceAuth.Secret, url), rules.DefaultLimits(), 0)
+	return nldraft.NewDrafter(processor.NewInferenceClient(processor.NewInferenceSeam(peers, url)), rules.DefaultLimits(), 0)
 }
 
 // Called after microservice has been initialized.
@@ -632,6 +630,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err := parseConfiguration(); err != nil {
 		return err
 	}
+	peers := svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
+
 	// Install the operator-configured rule-duration ceiling into rules.DefaultLimits BEFORE
 	// anything can compile a rule — the GraphQL publish gate is not serving yet and the fact
 	// consumer has not bound — so the publish gate and the runtime fact consumer are guaranteed
@@ -687,16 +687,16 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// Build the ADR-078 fence-set fetch seam BEFORE the NATS manager: createNatsComponents wires
 			// the current-set half into the processor, whose startup reconcile seeds the containment
 			// projection from it, so it must exist by then.
-			FenceSets, CurrentFenceSets, FenceManifests = buildFenceSetSeam()
+			FenceSets, CurrentFenceSets, FenceManifests = buildFenceSetSeam(peers)
 			// Build the fact reconcile's seam alongside it, for the same reason: the processor
 			// is wired from it in createNatsComponents.
-			DeviceManagementFacts = buildFactReconcileSeam()
-			DeviceConstants = buildDeviceConstantsSeam()
+			DeviceManagementFacts = buildFactReconcileSeam(peers)
+			DeviceConstants = buildDeviceConstantsSeam(peers)
 
 			// buildDrafter wires the ADR-056 NL→rule drafting seam (nil ⇒ the draft door reports
 			// unavailable, fail-closed). It is built here so the resolver below can carry it
 			// alongside the stores.
-			Drafter = buildDrafter()
+			Drafter = buildDrafter(peers)
 
 			// Build every Prometheus instrument this service exports, before the NATS manager
 			// that consumes them.
@@ -706,7 +706,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		// createNatsComponents builds the readers + checkpoint processor. The DETECT rule set
 		// is rebuilt from the durable rule projection inside it (ADR-051 slice 4b-3); the
 		// published-rule fact reader created there feeds live updates.
-		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
+		Nats: &service.NatsSpec{OnCreate: func(nmgr *messaging.NatsManager) error {
+			return createNatsComponents(nmgr, peers)
+		}},
 		GraphQL: &service.GraphQLSpec{
 			// The GraphQL surface carries the scaffold health/metrics server (/healthz, /readyz,
 			// /metrics), the ADR-044 detection-rule validation gate (validateDetectionRules — pure,

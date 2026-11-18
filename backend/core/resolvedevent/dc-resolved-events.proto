@@ -51,6 +51,10 @@ message PResolvedAnchor {
 	string anchor_type = 1;
 	string anchor_token = 2;
 	uint64 relationship_id = 3;
+	// anchor_entity_id is device-management's row id of the anchor entity (the relationship's
+	// target), so a consumer can tell a deleted anchor from one re-created at the same token.
+	// 0 means unknown.
+	uint64 anchor_entity_id = 4;
 }
 
 /**
@@ -140,6 +144,12 @@ message PScopeMembership {
 	// it. Empty for every event that did not come through a gateway, and then absent from the
 	// wire, so those events' bytes are exactly what they were.
 	string gateway_token = 19;
+	// device_incarnation is device-management's row id of the reporting device when the event was
+	// resolved. Ids come from a sequence and deletes are hard, so a device re-created at the same
+	// token always has a strictly larger id: a consumer that stamps it on what it stores can tell
+	// the deleted device's data from its successor's. 0 means unknown (an event resolved before the
+	// field existed), and proto3 omits it from the wire, so such events' bytes are unchanged.
+	uint64 device_incarnation = 20;
 }
 
 /**
