@@ -99,15 +99,27 @@ func TestIsolationSweep(t *testing.T) {
 			"expression": `"temp * 2.0"`, "dataType": `"DOUBLE"`, "key": `"temp"`,
 			"from": `"2026-09-01T00:00:00Z"`, "to": `"2026-09-02T00:00:00Z"`,
 		},
+		ArgumentSubsets: map[string]map[string][]string{
+			"subscription measurementStream": {
+				"deviceToken":  {"deviceToken"},
+				"deviceTokens": {"deviceTokens"},
+			},
+		},
 	})
 	// measurementStream is judged on its live answer, not on a refusal to subscribe. Its
 	// "(all arguments)" document fills deviceToken AND deviceTokens, which the resolver
-	// refuses as a combination before it reaches the hub, so only the plain document
-	// exercises the stream here; the per-device filters are covered by
-	// subscriptions_events_test.go.
+	// refuses as a combination before it reaches the hub. The named subsets exercise
+	// each per-device filter separately on the shared live hub.
 	o, ok := isolationsweep.OutcomeOf(out, "subscription measurementStream")
 	require.True(t, ok, "missing sweep outcome for measurementStream")
 	require.Empty(t, o.Codes, "the sweep must reach the live stream: %+v", o)
+	for _, name := range []string{"deviceToken", "deviceTokens"} {
+		o, ok := isolationsweep.OutcomeOf(out, "subscription measurementStream ("+name+")")
+		require.True(t, ok, "missing per-device sweep outcome for %s", name)
+		require.Empty(t, o.Codes, "the per-device sweep must reach the live stream: %+v", o)
+		require.False(t, o.Data, "the hidden device must answer nothing: %+v", o)
+		require.Empty(t, o.Leak)
+	}
 	o, ok = isolationsweep.OutcomeOf(out, "subscription measurementStream (all arguments)")
 	require.True(t, ok && len(o.Codes) == 1, "deviceToken with deviceTokens is refused at subscribe time: %+v", o)
 	o, ok = isolationsweep.OutcomeOf(out, "query events")
