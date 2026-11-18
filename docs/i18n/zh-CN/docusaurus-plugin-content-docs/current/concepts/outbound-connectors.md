@@ -56,7 +56,7 @@ webhook 投递通过以下方式加固：
 
 `gcp_pubsub` 是可识别的类型，但本版本没有投递客户端，因此创建、更新为该类型或发布该类型的连接器都会被拒绝，错误代码为 `UNSUPPORTED`。控制台不提供该类型。早期版本已存储的该类型连接器，如果有 `publish` 指向它，仍会因不受支持而进入死信，不会被无声丢弃。
 
-`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码仅适用于连接器更新。`CONFLICT` 仍表示唯一值冲突；其他操作的错误不变。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
+`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码并非连接器专用：所有服务中的每一次过时写入都会携带它，仪表盘也包括在内。`CONFLICT` 仍表示唯一值冲突。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
 
 ## 连接器是支持版本管理的资源 {#connectors-are-versioned-resources}
 
