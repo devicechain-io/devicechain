@@ -33,7 +33,7 @@ func newDispositionRig(t *testing.T) *dispositionRig {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&Alarm{}, &AlarmDisposition{}))
+	require.NoError(t, db.AutoMigrate(&Alarm{}, &AlarmDisposition{}, &AlarmSuppressionWindow{}, &AlarmCycleSuppression{}))
 	return &dispositionRig{api: NewApi(&rdb.RdbManager{Database: db}), db: db}
 }
 
