@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next';
 import { Check, ChevronsUpDown, Loader2, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { FIELD_POPOVER_WIDTH } from './popover-width';
+import { useFormFieldId, useFormFieldLabelId } from './form-field-context';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { optionLabel, type ComboboxOption } from '@/components/ui/combobox';
 
@@ -70,7 +71,9 @@ export function AsyncCombobox({
 }: AsyncComboboxProps) {
   const { t } = useTranslation('common');
   const generatedId = useId();
-  const triggerId = id ?? `async-combobox-${generatedId}`;
+  const triggerId = useFormFieldId(id) ?? `async-combobox-${generatedId}`;
+  const fieldLabelId = useFormFieldLabelId(triggerId);
+  const valueId = `${triggerId}-value`;
   const labelId = `${triggerId}-label`;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -188,7 +191,7 @@ export function AsyncCombobox({
         id={triggerId}
         data-shot="combobox"
         type="button"
-        aria-labelledby={ariaLabel ? `${labelId} ${triggerId}` : undefined}
+        aria-labelledby={ariaLabel ? `${labelId} ${valueId}` : fieldLabelId ? `${fieldLabelId} ${valueId}` : undefined}
         disabled={disabled}
         className={cn(triggerClasses, className)}
         onKeyDown={(e) => {
@@ -199,7 +202,7 @@ export function AsyncCombobox({
           }
         }}
       >
-        <span title={selected ? optionLabel(selected) : undefined} className={cn('truncate', !selected && 'text-muted-foreground')}>
+        <span id={valueId} title={selected ? optionLabel(selected) : undefined} className={cn('truncate', !selected && 'text-muted-foreground')}>
           {selected ? optionLabel(selected) : (placeholder ?? t('select'))}
         </span>
         {allowClear && selected && !disabled ? (

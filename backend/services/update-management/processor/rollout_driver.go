@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -98,61 +99,87 @@ func (m *RolloutMetrics) Observe(res model.RolloutStepResult, err error) {
 	}
 }
 
-// RolloutDriver steps every RUNNING group rollout on a fixed cadence. Like the deadline sweep it
+// RolloutDriver steps every RUNNING group rollout on a jittered cadence. Like the deadline sweep it
 // runs on every replica with no leader: each step takes its rollout's row lock with SKIP LOCKED, so
 // two replicas never step one rollout at once, and a replica that finds the row held moves on.
 type RolloutDriver struct {
-	api      *model.Api
-	interval time.Duration
+	api *model.Api
 
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	mu       sync.Mutex
+	task     *core.PeriodicTask
+	makeTask func() *core.PeriodicTask
 }
 
-// NewRolloutDriver builds the driver. interval must be positive.
-func NewRolloutDriver(api *model.Api, interval time.Duration) *RolloutDriver {
+// NewRolloutDriver builds the driver. interval must be positive. passMetrics are required and
+// registered once by the caller on the initialize path: the driver is built on every start.
+func NewRolloutDriver(api *model.Api, interval time.Duration, passMetrics *core.PeriodicTaskMetrics) *RolloutDriver {
 	if interval <= 0 {
 		panic("processor.NewRolloutDriver: interval must be positive")
 	}
-	return &RolloutDriver{api: api, interval: interval}
+	// Refused here rather than at the first Start: the task is built per start, and a nil here
+	// would otherwise surface only when the service starts, not when it is wired.
+	if passMetrics == nil {
+		panic("processor.NewRolloutDriver: pass metrics are required")
+	}
+	d := &RolloutDriver{api: api}
+	// A fresh lifecycle per start preserves the wrapper's ability to restart after Stop.
+	d.makeTask = func() *core.PeriodicTask {
+		return core.NewPeriodicTask("update-management", "rollout-driver", interval,
+			d.runOnce, core.NewNoOpLifecycleCallbacks(), passMetrics)
+	}
+	return d
 }
 
-// Start launches the loop. It is idempotent.
-func (d *RolloutDriver) Start(ctx context.Context) {
+// Start launches the loop. It is idempotent. It has the lifecycle-verb signature so the service's
+// start and stop callbacks wire it as a component of their own (the start-stop symmetry guard
+// pairs a verb called on a package-level variable, and stops at it rather than reading inside).
+func (d *RolloutDriver) Start(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.cancel != nil {
-		return
+	if d.task != nil {
+		return nil
 	}
-	ctx, d.cancel = context.WithCancel(ctx)
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
-		timer := time.NewTimer(jitter(d.interval))
-		defer timer.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-			}
-			d.Pass(ctx)
-			timer.Reset(jitter(d.interval))
-		}
-	}()
+	task := d.makeTask()
+	if err := task.Initialize(ctx); err != nil {
+		return err
+	}
+	if err := task.Start(ctx); err != nil {
+		return err
+	}
+	d.task = task
+	return nil
 }
 
 // Stop ends the loop and waits for the pass in flight.
-func (d *RolloutDriver) Stop() {
+func (d *RolloutDriver) Stop(ctx context.Context) error {
 	d.mu.Lock()
-	cancel := d.cancel
-	d.cancel = nil
-	d.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	defer d.mu.Unlock()
+	if d.task == nil {
+		return nil
 	}
-	d.wg.Wait()
+	err := d.task.Stop(ctx)
+	d.task = nil
+	return err
+}
+
+// runOnce is the scheduled pass. A failure to list running rollouts fails the pass; individual
+// step failures (already logged per rollout by AdvanceRollouts) make it partial or failed through
+// core.PassResult, so a driver whose every step fails does not read as healthy.
+func (d *RolloutDriver) runOnce(ctx context.Context) error {
+	res, err := d.api.AdvanceRollouts(ctx)
+	if err != nil {
+		return fmt.Errorf("the rollout driver could not list running rollouts: %w", err)
+	}
+	return rolloutPassResult(res)
+}
+
+// rolloutPassResult maps one pass's step tally onto the periodic-task outcome.
+func rolloutPassResult(res model.AdvanceResult) error {
+	var lastErr error
+	if res.Failed > 0 {
+		lastErr = fmt.Errorf("%d of %d rollout steps failed", res.Failed, res.Stepped)
+	}
+	return core.PassResult(res.Stepped, res.Failed, lastErr)
 }
 
 // Pass steps every RUNNING rollout once. Exported so a test can drive a pass without the timer.

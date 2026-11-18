@@ -7,6 +7,7 @@
 // `common` column atoms.
 
 import type { RegistryColumn } from './types';
+import { formatDate } from '@/lib/format';
 
 export function tokenColumn<T extends { token: string }>(): RegistryColumn<T> {
   return {
@@ -49,7 +50,7 @@ export function descriptionColumn<T extends { description?: string | null }>(): 
 export function createdColumn<T extends { createdAt?: string | null }>(): RegistryColumn<T> {
   return {
     header: 'common:colCreated',
-    cell: (x) => (x.createdAt ? new Date(x.createdAt).toLocaleDateString() : '—'),
+    cell: (x) => formatDate(x.createdAt),
     className: 'text-muted-foreground',
   };
 }

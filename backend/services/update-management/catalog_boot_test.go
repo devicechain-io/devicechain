@@ -27,10 +27,10 @@ import (
 // max-delivery recorder, so a stream, reader mode or durable consumer core/streams does not
 // declare for update-management fails here instead of crash-looping the pod.
 //
-// This service opens nothing lazily: its only broker handles are the four in
+// This service opens nothing lazily: its broker handles are created in
 // createNatsComponents (main.go: DeviceDesired writer, DeadLetters writer via
-// newDeadLetterSink, DeviceReports reader, DeviceRoster reader with DeliverNew), and
-// afterMicroserviceStarted starts both consumers.
+// newDeadLetterSink, DeviceReports reader, DeviceRoster reader with DeliverNew, and
+// EntityDeleted reader with retained facts). All three consumers start with the service.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	instance := fmt.Sprintf("catalogboot%d", time.Now().UnixNano())
 	// The broker holds the area's login to exactly the permissions natsauth generates for it, so this
@@ -41,10 +41,12 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevMs, prevCfg, prevNats, prevApi, prevSvc, prevRdb := Microservice, Configuration, NatsManager, Api, Svc, RdbManager
 	prevReports, prevRoster, prevMetrics, prevDead, prevDL := ReportsConsumer, RosterConsumer, ReportsMetrics, DeadLetters, DownloadStats
 	prevRR, prevRoR, prevSweeper := ReportsReader, RosterReader, Sweeper
+	prevDeletion, prevDeletionReader := DeletionConsumer, DeletionReader
 	t.Cleanup(func() {
 		Microservice, Configuration, NatsManager, Api, Svc, RdbManager = prevMs, prevCfg, prevNats, prevApi, prevSvc, prevRdb
 		ReportsConsumer, RosterConsumer, ReportsMetrics, DeadLetters, DownloadStats = prevReports, prevRoster, prevMetrics, prevDead, prevDL
 		ReportsReader, RosterReader, Sweeper = prevRR, prevRoR, prevSweeper
+		DeletionConsumer, DeletionReader = prevDeletion, prevDeletionReader
 	})
 
 	Microservice = &core.Microservice{
@@ -84,13 +86,15 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	Microservice.Readiness.MarkReadyWithoutAuthSurface()
 
 	// afterMicroserviceStarted without startSweeper: Svc.Start (writers, readers, recorder),
-	// then the two consumers.
+	// then the three consumers.
 	require.NoError(t, Svc.Start(ctx),
-		"starting under the catalog: device-desired and dead-letters writers, device-reports and device-roster readers, max-delivery recorder")
+		"starting under the catalog: device-desired and dead-letters writers, device-reports, device-roster and entity-deleted readers, max-delivery recorder")
 	require.NotNil(t, ReportsConsumer, "createNatsComponents built no device-reports consumer")
 	require.NotNil(t, RosterConsumer, "createNatsComponents built no device-roster consumer")
+	require.NotNil(t, DeletionConsumer, "createNatsComponents built no deletion consumer")
 	require.NotNil(t, Api.Desired, "createNatsComponents wired no device-desired publisher")
 	require.NoError(t, ReportsConsumer.Start(ctx), "starting the device-reports consumer (durable)")
 	require.NoError(t, RosterConsumer.Start(ctx), "starting the device-roster consumer (durable)")
+	require.NoError(t, DeletionConsumer.Start(ctx), "starting the entity-deleted consumer (durable)")
 	broker.RequireNoViolations(t)
 }

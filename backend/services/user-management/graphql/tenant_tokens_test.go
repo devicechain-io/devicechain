@@ -61,7 +61,7 @@ func TestNamingTheAuthorityDoesNotCrossTheTier(t *testing.T) {
 }
 
 // The counterweight: a SERVICE token carrying tenant:read — exactly what
-// governance.NewTenantLifecycleGate mints, and what the presence reconciler will
+// governance.NewTenantLifecycleGateFor mints, and what the presence reconciler will
 // present — must pass the authorization check. Without this, every assertion above is
 // satisfied by a resolver that refuses everyone, and the reconciler would be built
 // against a query it can never call.

@@ -63,6 +63,14 @@ export interface SessionTokensOptions {
 
 export interface SessionTokens {
   /**
+   * Force one shared refresh after a 401, even though the held access token has not expired.
+   * Resolves to the refreshed token, or null when the session is signed out, was replaced since
+   * `rejectedToken` was sent, or has ended (the refresh token lapsed or the server refused the
+   * refresh). Rejects with the refresh's error when it failed transiently: the session is kept,
+   * and a later call tries again. Never hands back the rejected token.
+   */
+  forceRefresh: (rejectedToken?: string) => Promise<string | null>;
+  /**
    * A usable access token, refreshing first when it is within the skew of expiry; null when
    * signed out or ended. Rejects with the refresh's error when the access token has expired and
    * the refresh failed transiently: the session is kept, and a later call tries again.
@@ -98,8 +106,9 @@ const MIN_REFRESH_GAP_MS = 10_000;
  * or the server answered 5xx or 429 without a GraphQL error. Anything else (a GraphQL error
  * such as an invalid or revoked refresh token or SSO_REQUIRED, a 400 or 401, or an error that
  * is not a transport error at all) is the server's answer, and asking again would repeat it.
+ * Exported within the package (not from index.ts): subscribe.ts reads the same predicate.
  */
-function isTransientRefreshError(err: unknown): boolean {
+export function isTransientRefreshError(err: unknown): boolean {
   if (!(err instanceof GraphQLRequestError)) return false;
   if (err.errors && err.errors.length > 0) return false;
   return err.status === 0 || err.status === 429 || err.status >= 500;
@@ -119,6 +128,7 @@ function expiryMs(token: string): number | undefined {
 export function createSessionTokens(opts: SessionTokensOptions): SessionTokens {
   const skew = opts.skewSeconds ?? DEFAULT_SKEW_SECONDS;
   let inFlight: Promise<Outcome> | null = null;
+  let lastRefresh: { from: string; pair: TokenPair } | null = null;
 
   // The skew for one access token: the configured one, or half its lifetime if that is less.
   const skewFor = (token: string): number => {
@@ -142,7 +152,9 @@ export function createSessionTokens(opts: SessionTokensOptions): SessionTokens {
           // A promise cannot be cancelled, so guard here: if the live session is no
           // longer the one this refresh started from, drop the result.
           if (opts.read() !== current) return { kind: 'stale' };
-          opts.apply({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
+          const next = { accessToken: pair.accessToken, refreshToken: pair.refreshToken };
+          opts.apply(next);
+          lastRefresh = { from: current.accessToken, pair: next };
           return { kind: 'ok', token: pair.accessToken };
         } catch (err) {
           // Only end the session this refresh belonged to, not one since replaced.
@@ -248,8 +260,30 @@ export function createSessionTokens(opts: SessionTokensOptions): SessionTokens {
 
   return {
     getAccessToken,
+    forceRefresh: async (rejectedToken) => {
+      const current = opts.read();
+      if (!current) return null;
+      // A late 401 must not refresh or end a replacement session.
+      if (rejectedToken !== undefined && current.accessToken !== rejectedToken) {
+        // A sibling request may have finished refreshing before this 401 arrived.
+        return lastRefresh?.pair === current && lastRefresh.from === rejectedToken
+          ? current.accessToken : null;
+      }
+      if (isExpired(current.refreshToken, 0)) {
+        end();
+        return null;
+      }
+      const out = await refreshShared(current);
+      if (out.kind === 'ok') return out.token;
+      if (out.kind !== 'transient') return null;
+      if (opts.read() !== current) return null;
+      // The server rejected this access token, so it is not handed back; but a transient refresh
+      // failure refused nothing, so the session is kept and the caller gets the outage it hit.
+      throw out.err;
+    },
     reset: () => {
       inFlight = null;
+      lastRefresh = null;
     },
     startAutoRefresh,
   };

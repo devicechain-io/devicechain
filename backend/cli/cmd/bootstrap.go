@@ -719,8 +719,9 @@ func followClusterShape(changed func(string) bool, st *bootstrap.State) error {
 // refusals already qualified, and a third was about to.
 //
 // 🔑 WHAT ENFORCES IT IS WHERE THE ERRORS COME FROM, NOT THIS LIST. Every type below is
-// raised only by stepCheckClusterSingletons, which TestTheSingletonStepRunsBeforeAnythingIsWritten
-// holds ahead of the declaration. The namespace refusal is raised
+// raised only by stepRefuseRebuild or stepCheckClusterSingletons, which run before
+// any instance writes. TestTheSingletonStepRunsBeforeAnythingIsWritten
+// holds both steps ahead of the declaration. The namespace refusal is raised
 // in two places and only ONE of them is typed for that reason — see ErrNamespaceUnavailable;
 // the store refusal is raised in one, and the late half of the same decision stays untyped
 // for exactly that reason — see refuseAPreIsolationDatabase.
@@ -733,8 +734,9 @@ func unwindLocalRecordWhenNothingWasWritten(opts bootstrap.Options, prior bootst
 	var noBudget *bootstrap.ErrConnectionBudget
 	var noNamespace *bootstrap.ErrNamespaceUnavailable
 	var storeDisagrees *bootstrap.ErrStoreAndKeyDisagree
+	var rebuildRefused *bootstrap.ErrRebuildRefused
 	if opts.DryRun || !(errors.As(runErr, &hostTaken) || errors.As(runErr, &noBudget) ||
-		errors.As(runErr, &noNamespace) || errors.As(runErr, &storeDisagrees)) {
+		errors.As(runErr, &noNamespace) || errors.As(runErr, &storeDisagrees) || errors.As(runErr, &rebuildRefused)) {
 		return
 	}
 	removed, err := prior.Restore()

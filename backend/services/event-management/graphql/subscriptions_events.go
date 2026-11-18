@@ -6,17 +6,19 @@ package graphql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/integrity"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
 	"strconv"
-	"sync"
 )
 
 // Factories are test seams, replaced only before creating a hub.
@@ -26,30 +28,20 @@ var measurementLiveOpener = func(nmgr *messaging.NatsManager) messaging.LiveOpen
 	}
 }
 var measurementDecode = decodeMeasurements
-var measurementHubs = struct {
-	sync.Mutex
-	hubs map[*messaging.NatsManager]*messaging.LiveHub[*resolvedevent.ResolvedEvent]
-	drop func()
-}{hubs: make(map[*messaging.NatsManager]*messaging.LiveHub[*resolvedevent.ResolvedEvent])}
+var measurementDropHook func()
 
 // InitLiveSubscriptionMetrics runs once during process initialization, never per connection.
 func InitLiveSubscriptionMetrics(ms *core.Microservice) {
 	counter := ms.NewCounterVec("live_subscription_dropped_total", "Live values dropped for slow subscribers.", []string{"suffix"}).WithLabelValues(streams.ResolvedEvents)
-	measurementHubs.Lock()
-	measurementHubs.drop = counter.Inc
-	measurementHubs.Unlock()
+	measurementDropHook = counter.Inc
 }
 
 func measurementHub(nmgr *messaging.NatsManager) *messaging.LiveHub[*resolvedevent.ResolvedEvent] {
-	measurementHubs.Lock()
-	defer measurementHubs.Unlock()
-	if hub := measurementHubs.hubs[nmgr]; hub != nil {
+	return messaging.SharedLiveHub(nmgr, streams.ResolvedEvents, func() *messaging.LiveHub[*resolvedevent.ResolvedEvent] {
+		hub := messaging.NewLiveHub(streams.ResolvedEvents, measurementLiveOpener(nmgr), measurementDecode, messaging.DefaultMaxLiveSubscribersPerTenant)
+		hub.OnDrop(measurementDropHook)
 		return hub
-	}
-	hub := messaging.NewLiveHub(streams.ResolvedEvents, measurementLiveOpener(nmgr), measurementDecode, messaging.DefaultMaxLiveSubscribersPerTenant)
-	hub.OnDrop(measurementHubs.drop)
-	measurementHubs.hubs[nmgr] = hub
-	return hub
+	})
 }
 
 func decodeMeasurements(msg messaging.Message, tenant string) []messaging.Keyed[*resolvedevent.ResolvedEvent] {
@@ -80,8 +72,9 @@ func decodeMeasurements(msg messaging.Message, tenant string) []messaging.Keyed[
 // scope is accepted and simply stays silent, exactly as one naming a device that never
 // reports would — which also tells the caller nothing about whether that device exists.
 func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
-	DeviceToken *string
-	Name        *string
+	DeviceToken  *string
+	DeviceTokens *[]string
+	Name         *string
 }) (<-chan *MeasurementEventResolver, error) {
 	scope, err := auth.AuthorizeScoped(ctx, auth.EventRead)
 	if err != nil {
@@ -93,6 +86,30 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 	}
 
 	var keys []string
+	if args.DeviceTokens != nil {
+		if args.DeviceToken != nil {
+			return nil, integrity.NewRefusal(integrity.ClassInvalid, "deviceTokens cannot be combined with deviceToken")
+		}
+		tokens := *args.DeviceTokens
+		if len(tokens) == 0 {
+			return nil, integrity.NewRefusal(integrity.ClassInvalid, "deviceTokens must not be empty")
+		}
+		if len(tokens) > rdb.MaxLookupKeys {
+			return nil, limit.Exceeded("deviceTokens", len(tokens), rdb.MaxLookupKeys)
+		}
+		seen := make(map[string]struct{}, len(tokens))
+		for _, token := range tokens {
+			// A new argument, so its entries are held to the token grammar: a malformed token
+			// can never match a device and would only make a silent subscription.
+			if err := core.ValidateToken(token); err != nil {
+				return nil, integrity.NewRefusal(integrity.ClassInvalid, fmt.Sprintf("deviceTokens: %v", err))
+			}
+			if _, ok := seen[token]; !ok {
+				seen[token] = struct{}{}
+				keys = append(keys, token)
+			}
+		}
+	}
 	if args.DeviceToken != nil {
 		keys = []string{*args.DeviceToken}
 	}

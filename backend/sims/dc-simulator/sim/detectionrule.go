@@ -126,10 +126,7 @@ type ThresholdAlarmRule struct {
 	// slice invites the failure that is: event-processing rejects an exact-duplicate action
 	// at publish, so a [x, x] slice takes the whole profile version down with it.
 	//
-	// No payload field, because the modelled command is argument-free.
-	// rules.SendCommandAction does carry an optional "payload" — a JSON OBJECT encoded as a
-	// STRING — and the day a scenario needs arguments it belongs here as a second field
-	// rendered under the same key.
+	// Arguments, when the command takes any, are CommandPayload below.
 	//
 	// 🔴 MEASURED, because the obvious assumption about that field is wrong in the
 	// dangerous direction. The publish gate reads `payload != "" && !isJSONObject(payload)`,
@@ -145,6 +142,10 @@ type ThresholdAlarmRule struct {
 	// 7-day default TTL. Meaningless without CommandKey. A command sent to an offline machine
 	// otherwise sits SENT for a week.
 	CommandExpiresAfter string
+	// CommandPayload is the chained command's argument object (harborpulse's `start-pump
+	// {duty_pct: 100}`), rendered as the action's JSON-object-in-a-string payload only when it
+	// has members — see the empty-string note on CommandKey. Meaningless without CommandKey.
+	CommandPayload map[string]any
 	// Enabled gates the rule at publish AND at load. A disabled rule is inert by design
 	// (the publish gate does not submit it and the liveness check does not require it),
 	// which also means it is published UNCHECKED — so a scenario parking one is
@@ -183,24 +184,7 @@ func (r ThresholdAlarmRule) DefinitionJSON() string {
 	// since a command is a one-shot side effect and re-sending it when the condition CEASED
 	// would double-fire it. For the motivating rule that is exactly the wanted behaviour —
 	// fuel coming back up IS the refuel having worked, not a reason to dispatch again.
-	actions := []any{
-		map[string]any{
-			"type":               actionTypeRaiseAlarm,
-			actionTypeRaiseAlarm: map[string]any{"alarmKey": r.AlarmKey},
-		},
-	}
-	if r.CommandKey != "" {
-		send := map[string]any{"command": r.CommandKey}
-		// Rendered only when set, exactly as the payload rule above: an empty expiresAfter
-		// would be a key the single-action byte-compared fixtures never had.
-		if r.CommandExpiresAfter != "" {
-			send["expiresAfter"] = r.CommandExpiresAfter
-		}
-		actions = append(actions, map[string]any{
-			"type":                actionTypeSendCommand,
-			actionTypeSendCommand: send,
-		})
-	}
+	actions := ruleActions(r.Token, r.AlarmKey, r.CommandKey, r.CommandExpiresAfter, r.CommandPayload)
 
 	raw, err := json.Marshal(map[string]any{
 		"name":     r.Name,

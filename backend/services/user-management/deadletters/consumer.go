@@ -210,7 +210,13 @@ func (c *Consumer) handle(msg messaging.Message) {
 		return
 	}
 	if err := c.store.Record(c.procCtx, tenant, msg.StreamSeq, msg.AppendTime, e); err != nil {
-		if msg.NumDelivered >= messaging.MaxDeliver {
+		switch messaging.Dispose(msg, err) {
+		case messaging.TenantErased:
+			// Unreachable today: the dead-letter table is fence-exempt.
+			log.Debug().Err(err).Msg("Dropping message for an erased tenant")
+			c.ack(msg)
+			return
+		case messaging.Exhausted:
 			// 🔴 NO REDELIVERY FOLLOWS. This is the loss, and it is said plainly rather
 			// than logged as something that will be retried. Acked so the message is not
 			// left dangling on a consumer that will never look at it again.

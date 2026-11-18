@@ -52,6 +52,9 @@ func (api *Api) CreateCustomerType(ctx context.Context, request *CustomerTypeCre
 	return created, nil
 }
 
+// ErrCustomerTypeConflict refuses a customer type save made from a stale copy.
+var ErrCustomerTypeConflict = rdb.NewStaleWriteError("customer type")
+
 // Update an existing customer type, applying only the fields the caller actually
 // sent. The entity is looked up by the `token` ARGUMENT — the request payload no
 // longer carries one, which closes two defects at once: an update can no longer
@@ -62,7 +65,7 @@ func (api *Api) CreateCustomerType(ctx context.Context, request *CustomerTypeCre
 //
 // Only named columns are written; omitted fields remain untouched even when
 // another writer changes them after the read. Null clears a nullable field.
-func (api *Api) UpdateCustomerType(ctx context.Context, token string,
+func (api *Api) UpdateCustomerType(ctx context.Context, token string, expectedUpdatedAt *string,
 	request *CustomerTypeUpdateRequest) (*CustomerType, error) {
 	matches, err := api.CustomerTypesByToken(ctx, []string{token})
 	if err != nil {
@@ -73,6 +76,9 @@ func (api *Api) UpdateCustomerType(ctx context.Context, token string,
 	}
 
 	found := matches[0]
+	if err := rdb.RefuseIfMoved(found.UpdatedAt, expectedUpdatedAt, ErrCustomerTypeConflict); err != nil {
+		return nil, err
+	}
 	assignments := map[string]any{}
 	if request.Name.Set {
 		assignments["name"] = request.Name.ApplyToNullString(found.Name)
@@ -115,6 +121,9 @@ func (api *Api) UpdateCustomerType(ctx context.Context, token string,
 		return found, nil
 	}
 	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if expectedUpdatedAt != nil {
+			return rdb.UpdateIfUnmoved(tx, found, found.UpdatedAt, assignments, ErrCustomerTypeConflict)
+		}
 		res := rdb.AdvancingFrom(tx, found.UpdatedAt).Model(found).Omit(clause.Associations).
 			Where("id = ?", found.ID).Updates(assignments)
 		if res.Error != nil {
@@ -197,11 +206,19 @@ func (api *Api) CreateCustomer(ctx context.Context, request *CustomerCreateReque
 	// The token is issued and the customer written in ONE transaction, so a token is in
 	// the ledger exactly when a customer was created at it. The ledger's primary key is
 	// what refuses a second issue, race-free, whether the first customer is live or gone.
+	var change membershipChange
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&IssuedCustomerToken{Token: request.Token}).Error; err != nil {
 			return err
 		}
-		return tx.Create(created).Error
+		if err := tx.Create(created).Error; err != nil {
+			return err
+		}
+		change, err = api.enrollNewEntitiesOnTx(ctx, tx, "customer", []uint{created.ID})
+		if err != nil {
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		// A taken token is one of two things, and only one of them is an already-exists.
@@ -215,6 +232,7 @@ func (api *Api) CreateCustomer(ctx context.Context, request *CustomerCreateReque
 		}
 		return nil, err
 	}
+	api.afterMembershipRecompute(ctx, "customer", created.ID, change)
 	return created, nil
 }
 
