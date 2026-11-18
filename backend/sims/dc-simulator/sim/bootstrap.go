@@ -233,6 +233,11 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 
 	// Last: a customer user is limited to a customer that must already exist, and the
 	// devices they are meant to see assigned to it.
+	for _, a := range manifest.NumericAttributes {
+		if err := ensureAttribute(ctx, rt, a); err != nil {
+			return fmt.Errorf("provision attribute %s/%s: %w", a.Device, a.Key, err)
+		}
+	}
 	return ensureCustomerUsers(ctx, rt, manifest.CustomerUsers)
 }
 
@@ -258,6 +263,7 @@ type deviceProfileInfo struct {
 		Name            string `json:"name"`
 		ParameterSchema string `json:"parameterSchema"`
 		Impact          string `json:"impact"`
+		Encoder         string `json:"encoder"`
 	} `json:"commandDefinitions"`
 	DetectionRules []struct {
 		Token              string  `json:"token"`
@@ -272,7 +278,7 @@ type deviceProfileInfo struct {
 const queryDeviceProfilesByToken = `query($tokens:[String!]!){` +
 	`deviceProfilesByToken(tokens:$tokens){token activeVersion ` +
 	`metricDefinitions{token name dataType unit expression calculated} ` +
-	`commandDefinitions{token commandKey name parameterSchema impact} ` +
+	`commandDefinitions{token commandKey name parameterSchema impact encoder} ` +
 	`detectionRules{token name definition enabled entityGroupToken entityGroupVersion}}}`
 
 const mutationCreateDeviceProfile = `mutation($request:DeviceProfileCreateRequest){` +
@@ -446,6 +452,9 @@ func profileContentMarkerScoped(p ProfileSpec, groupVersions map[string]int) str
 	}
 	for _, c := range p.Commands {
 		fmt.Fprintf(h, "command\x00%s\x00%s\x00%s\x00%s\n", c.Token, c.CommandKey, c.Name, c.ParameterSchema)
+		if c.Encoder != "" {
+			fmt.Fprintf(h, "encoder\x00%s\x00%s\n", c.Token, c.Encoder)
+		}
 	}
 	for _, c := range p.Commands {
 		// Only a command with a declared impact adds a line, so every earlier profile keeps its marker.
@@ -691,6 +700,8 @@ func ensureCommandDefinition(ctx context.Context, rt *Runtime, profileToken stri
 		"commandKey":         c.CommandKey,
 		"name":               c.Name,
 	}
+	req["parameterSchema"] = nil
+	req["encoder"] = nil
 	if c.ParameterSchema != "" {
 		req["parameterSchema"] = c.ParameterSchema
 	}
@@ -701,13 +712,16 @@ func ensureCommandDefinition(ctx context.Context, rt *Runtime, profileToken stri
 	if c.Impact != "" {
 		req["impact"] = c.Impact
 	}
+	if c.Encoder != "" {
+		req["encoder"] = c.Encoder
+	}
 
 	for _, existing := range profile.CommandDefinitions {
 		if existing.Token != c.Token {
 			continue
 		}
 		if existing.CommandKey == c.CommandKey && existing.Name == c.Name && existing.ParameterSchema == c.ParameterSchema &&
-			(existing.Impact == "" || existing.Impact == impact) {
+			existing.Encoder == c.Encoder && (existing.Impact == "" || existing.Impact == impact) {
 			return nil
 		}
 		// An impact that changed back to the default is written explicitly: an omitted field is

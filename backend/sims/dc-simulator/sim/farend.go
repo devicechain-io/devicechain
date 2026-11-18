@@ -199,6 +199,9 @@ func (l *Lifecycle) attachCommandFarEnd(ctx context.Context) error {
 	}
 
 	for _, d := range l.rt.Devices {
+		if integrationFarEnd(d) {
+			continue
+		}
 		if err := fe.Subscribe(ctx, d.Token, d.CredentialId); err != nil {
 			// Close what did attach: leaving half a cohort connected to a broker on a
 			// failed bootstrap leaks connections across a Reset loop.
@@ -282,4 +285,15 @@ func (l *Lifecycle) Close() {
 		fe.Close()
 	}
 	l.closeUpdateFleet()
+}
+
+// integrationFarEnd identifies devices whose network server owns command delivery. Connecting
+// MQTT for these devices would compete with the integration source used by LPWAN routing.
+func integrationFarEnd(d DeviceInstance) bool {
+	for _, a := range d.Aliases {
+		if a.Scheme == AliasSchemeDevEUI {
+			return true
+		}
+	}
+	return false
 }

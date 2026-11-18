@@ -290,11 +290,20 @@ var ErrUnknownAlarmEventType = errors.New("alarm event type is not one this serv
 // recognized the erasure fence's refusal.
 func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
 	switch event.EventType {
+	case dmmodel.AlarmEventRaised, dmmodel.AlarmEventEscalated, dmmodel.AlarmEventAcknowledged,
+		dmmodel.AlarmEventCleared, dmmodel.AlarmEventDeescalated:
+		if err := n.applyLifecycle(ctx, event.AlarmToken, "position classification", func(c context.Context) error {
+			return n.api.RecordAlarmPosition(c, event.AlarmToken, event.PositionDerived)
+		}); err != nil {
+			return err
+		}
+	}
+	switch event.EventType {
 	case dmmodel.AlarmEventAcknowledged:
 		// Idempotent tombstone upsert; a DB error is safe to retry (no side effects).
 		return n.applyLifecycle(ctx, event.AlarmToken, "acknowledgement", func(c context.Context) error {
 			if err := n.api.MarkAcknowledged(c, event.AlarmToken, event.AlarmKey, event.Severity,
-				event.RaisedTime, event.OccurredTime); err != nil {
+				event.RaisedTime, event.OccurredTime, event.PositionDerived); err != nil {
 				return err
 			}
 			return n.resolveHeld(c, event)
@@ -304,7 +313,7 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 		// that opted in) comes after, claimed separately so it is sent once; see announceClear.
 		if err := n.applyLifecycle(ctx, event.AlarmToken, "clear", func(c context.Context) error {
 			if err := n.api.MarkCleared(c, event.AlarmToken, event.AlarmKey, event.Severity,
-				event.RaisedTime, event.OccurredTime); err != nil {
+				event.RaisedTime, event.OccurredTime, event.PositionDerived); err != nil {
 				return err
 			}
 			return n.resolveHeld(c, event)

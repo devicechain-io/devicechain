@@ -10,6 +10,14 @@
     },
     {
       "producer": "harborpulse",
+      "ruleToken": "hp-attribute-well",
+      "profileToken": "hp-pump-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MINOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"attribute-well-high\"},\"type\":\"raiseAlarm\"}],\"name\":\"Harborpulse shared well alarm\",\"severity\":\"minor\",\"type\":\"threshold\",\"when\":{\"metric\":\"wet_well_m\",\"op\":\"gt\",\"thresholdAttr\":\"well_alarm_m\"}}"
+    },
+    {
+      "producer": "harborpulse",
       "ruleToken": "hp-charger-offline",
       "profileToken": "hp-charger-profile",
       "enabled": true,

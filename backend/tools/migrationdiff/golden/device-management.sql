@@ -1,5 +1,7 @@
 ALTER SEQUENCE "device-management".agent_proposals_id_seq OWNED BY "device-management".agent_proposals.id;
+ALTER SEQUENCE "device-management".alarm_cycle_suppressions_id_seq OWNED BY "device-management".alarm_cycle_suppressions.id;
 ALTER SEQUENCE "device-management".alarm_dispositions_id_seq OWNED BY "device-management".alarm_dispositions.id;
+ALTER SEQUENCE "device-management".alarm_suppression_windows_id_seq OWNED BY "device-management".alarm_suppression_windows.id;
 ALTER SEQUENCE "device-management".alarms_id_seq OWNED BY "device-management".alarms.id;
 ALTER SEQUENCE "device-management".area_types_id_seq OWNED BY "device-management".area_types.id;
 ALTER SEQUENCE "device-management".areas_id_seq OWNED BY "device-management".areas.id;
@@ -60,11 +62,19 @@ ALTER TABLE ONLY "device-management".agent_effect_outboxes
 ALTER TABLE ONLY "device-management".agent_proposals
  ADD CONSTRAINT agent_proposals_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".agent_proposals ALTER COLUMN id SET DEFAULT nextval('"device-management".agent_proposals_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".alarm_cycle_suppressions
+ ADD CONSTRAINT alarm_cycle_suppressions_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".alarm_cycle_suppressions
+ ADD CONSTRAINT fk_alarm_cycle_suppressions_alarm FOREIGN KEY (alarm_id) REFERENCES "device-management".alarms(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "device-management".alarm_cycle_suppressions ALTER COLUMN id SET DEFAULT nextval('"device-management".alarm_cycle_suppressions_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".alarm_dispositions
  ADD CONSTRAINT alarm_dispositions_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".alarm_dispositions
  ADD CONSTRAINT fk_alarm_dispositions_alarm FOREIGN KEY (alarm_id) REFERENCES "device-management".alarms(id) ON DELETE CASCADE;
 ALTER TABLE ONLY "device-management".alarm_dispositions ALTER COLUMN id SET DEFAULT nextval('"device-management".alarm_dispositions_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".alarm_suppression_windows
+ ADD CONSTRAINT alarm_suppression_windows_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".alarm_suppression_windows ALTER COLUMN id SET DEFAULT nextval('"device-management".alarm_suppression_windows_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".alarms
  ADD CONSTRAINT alarms_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".alarms ALTER COLUMN id SET DEFAULT nextval('"device-management".alarms_id_seq'::regclass);
@@ -331,6 +341,9 @@ CREATE INDEX "idx_device-management_agent_proposals_proposer_sub" ON "device-man
 CREATE INDEX "idx_device-management_agent_proposals_state" ON "device-management".agent_proposals USING btree (state);
 CREATE INDEX "idx_device-management_agent_proposals_tenant_id" ON "device-management".agent_proposals USING btree (tenant_id);
 CREATE INDEX "idx_device-management_agent_proposals_token" ON "device-management".agent_proposals USING btree (token);
+CREATE INDEX "idx_device-management_alarm_suppression_windows_deleted_at" ON "device-management".alarm_suppression_windows USING btree (deleted_at);
+CREATE INDEX "idx_device-management_alarm_suppression_windows_tenant_id" ON "device-management".alarm_suppression_windows USING btree (tenant_id);
+CREATE INDEX "idx_device-management_alarm_suppression_windows_token" ON "device-management".alarm_suppression_windows USING btree (token);
 CREATE INDEX "idx_device-management_alarms_deleted_at" ON "device-management".alarms USING btree (deleted_at);
 CREATE INDEX "idx_device-management_alarms_tenant_id" ON "device-management".alarms USING btree (tenant_id);
 CREATE INDEX "idx_device-management_alarms_token" ON "device-management".alarms USING btree (token);
@@ -455,6 +468,7 @@ CREATE INDEX "idx_device-management_provisioning_profiles_tenant_id" ON "device-
 CREATE INDEX "idx_device-management_provisioning_profiles_token" ON "device-management".provisioning_profiles USING btree (token);
 CREATE INDEX "idx_device-management_semantic_contexts_deleted_at" ON "device-management".semantic_contexts USING btree (deleted_at);
 CREATE INDEX "idx_device-management_semantic_contexts_tenant_id" ON "device-management".semantic_contexts USING btree (tenant_id);
+CREATE INDEX idx_alarm_cycle_suppressions_alarm ON "device-management".alarm_cycle_suppressions USING btree (alarm_id);
 CREATE INDEX idx_alarm_dispositions_alarm ON "device-management".alarm_dispositions USING btree (alarm_id);
 CREATE INDEX idx_alarm_dispositions_tenant_alarm_token ON "device-management".alarm_dispositions USING btree (tenant_id, alarm_token);
 CREATE INDEX idx_alarm_dispositions_tenant_raised ON "device-management".alarm_dispositions USING btree (tenant_id, raised_time);
@@ -485,6 +499,7 @@ CREATE INDEX idx_facet_keys_tenant_id ON "device-management".facet_keys USING bt
 CREATE INDEX idx_pending_entity_deletions_tenant_id ON "device-management".pending_entity_deletions USING btree (tenant_id, id);
 CREATE INDEX idx_profile_decoder_samples_profile_created ON "device-management".profile_decoder_samples USING btree (tenant_id, device_profile_id, created_at DESC);
 CREATE INDEX idx_provisioning_profiles_trust_anchor ON "device-management".provisioning_profiles USING btree (trust_anchor_id) WHERE (trust_anchor_id IS NOT NULL);
+CREATE INDEX idx_suppression_tenant_ended ON "device-management".alarm_suppression_windows USING btree (tenant_id, ended_at);
 CREATE INDEX ix_device_credential_chain_links_fingerprint ON "device-management".device_credential_chain_links USING btree (tenant_id, trust_anchor_id, fingerprint);
 CREATE INDEX ix_device_credential_chain_links_issuer_serial ON "device-management".device_credential_chain_links USING btree (tenant_id, trust_anchor_id, issuer_name, serial);
 CREATE INDEX ix_device_profile_activations_profile_id ON "device-management".device_profile_activations USING btree (device_profile_id);
@@ -505,7 +520,19 @@ CREATE SEQUENCE "device-management".agent_proposals_id_seq
  NO MINVALUE
  NO MAXVALUE
  CACHE 1;
+CREATE SEQUENCE "device-management".alarm_cycle_suppressions_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
 CREATE SEQUENCE "device-management".alarm_dispositions_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".alarm_suppression_windows_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -881,6 +908,17 @@ CREATE TABLE "device-management".agent_proposals (
  note character varying(512),
  executed_at timestamp with time zone
 );
+CREATE TABLE "device-management".alarm_cycle_suppressions (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ alarm_id bigint NOT NULL,
+ raised_time timestamp with time zone NOT NULL,
+ alarm_token character varying(255) NOT NULL,
+ window_token character varying(128) NOT NULL,
+ window_name character varying(128),
+ scope_anchors text[]
+);
 CREATE TABLE "device-management".alarm_dispositions (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -894,6 +932,35 @@ CREATE TABLE "device-management".alarm_dispositions (
  recorded_by text,
  recorded_time timestamp with time zone NOT NULL,
  scope_anchors text[]
+);
+CREATE TABLE "device-management".alarm_suppression_windows (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ deleted_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ token character varying(128) NOT NULL,
+ name character varying(128),
+ description character varying(1024),
+ metadata jsonb,
+ reason text NOT NULL,
+ targets jsonb NOT NULL,
+ alarm_keys jsonb,
+ bypass_severity character varying(16),
+ kind character varying(16) NOT NULL,
+ start_time timestamp with time zone,
+ end_time timestamp with time zone,
+ timezone character varying(64),
+ slots jsonb,
+ valid_from timestamp with time zone,
+ valid_until timestamp with time zone,
+ ended_at timestamp with time zone,
+ ended_by text,
+ created_by text,
+ scope_anchors text[],
+ creator_scope text[],
+ creator_scoped boolean DEFAULT false NOT NULL,
+ version bigint DEFAULT 1 NOT NULL
 );
 CREATE TABLE "device-management".alarms (
  id bigint NOT NULL,
@@ -1797,8 +1864,10 @@ CREATE UNIQUE INDEX idx_device_credential_lookup ON "device-management".device_c
 CREATE UNIQUE INDEX idx_metric_definition_profile_key ON "device-management".metric_definitions USING btree (device_profile_id, metric_key);
 CREATE UNIQUE INDEX uix_agent_proposals_request ON "device-management".agent_proposals USING btree (tenant_id, proposer_client, proposer_sub, request_id) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_agent_proposals_tenant_token ON "device-management".agent_proposals USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_alarm_cycle_suppressions_cycle ON "device-management".alarm_cycle_suppressions USING btree (tenant_id, alarm_id, raised_time);
 CREATE UNIQUE INDEX uix_alarm_dispositions_cycle ON "device-management".alarm_dispositions USING btree (tenant_id, alarm_id, raised_time);
 CREATE UNIQUE INDEX uix_alarm_originator_key ON "device-management".alarms USING btree (tenant_id, originator_type, originator_id, alarm_key) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_alarm_suppression_windows_tenant_token ON "device-management".alarm_suppression_windows USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_alarms_tenant_token ON "device-management".alarms USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_area_types_tenant_token ON "device-management".area_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_areas_tenant_token ON "device-management".areas USING btree (tenant_id, token) WHERE (deleted_at IS NULL);

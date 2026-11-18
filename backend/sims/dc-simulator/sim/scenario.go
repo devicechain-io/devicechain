@@ -75,7 +75,9 @@ type ScenarioClock struct {
 	// Backfill is what each store-and-forward device buffered in each outage so far.
 	Backfill []ScenarioBackfill `json:"backfill,omitempty"`
 	// Jobs are the campaigns and maintenance-window openings the sim scheduled for each day.
-	Jobs []ScenarioJob `json:"jobs,omitempty"`
+	Jobs                []ScenarioJob            `json:"jobs,omitempty"`
+	ThresholdChanges    []ThresholdChange        `json:"thresholdChanges,omitempty"`
+	CalculatedBackfills []CalculatedBackfillBeat `json:"calculatedBackfills,omitempty"`
 }
 
 // ScenarioBackfill is what one device buffered in one outage: how many readings, the times the

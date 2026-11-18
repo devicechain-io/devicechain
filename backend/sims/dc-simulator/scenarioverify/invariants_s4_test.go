@@ -5,6 +5,7 @@ package scenarioverify
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -229,9 +230,12 @@ func TestS4MissingDataIsRed(t *testing.T) {
 	evaluateOneRed(t, InvHolidaySkipped, "not judged yet", func(d *day) {
 		d.s4.Campaigns[sim.HarborpulseDuskCampaign].PlannedThrough = time.Date(2026, 11, 16, 23, 0, 0, 0, time.UTC)
 	})
-	evaluateOneRed(t, InvGroupScopedRule, "never above", func(d *day) {
+	// The same curve, lower: it still falls after the start, and never reaches the watch. A well
+	// that never rises also never crosses the pump's own shared threshold, so the attribute
+	// invariant, which judges the same readings, is red with it; the group-scoped rule must still
+	// say why it is red.
+	lower := func(d *day) {
 		for i, r := range d.readings["hp-pump-north"] {
-			// The same curve, lower: it still falls after the start, and never reaches the watch.
 			switch r.Name {
 			case sim.HarborpulseWetWellKey:
 				d.readings["hp-pump-north"][i].Value -= 0.8
@@ -239,7 +243,15 @@ func TestS4MissingDataIsRed(t *testing.T) {
 				d.readings["hp-pump-north"][i].Value -= 0.8 / sim.HarborpulseWellDepthM * 100
 			}
 		}
-	})
+	}
+	evaluateOneRedOf(t, []string{InvGroupScopedRule, InvAttributeThresholdMoves}, lower)
+	d := cleanDay()
+	lower(d)
+	for _, inv := range Evaluate(d.observe()) {
+		if inv.Name == InvGroupScopedRule && !strings.Contains(inv.Detail, "never above") {
+			t.Fatalf("%s: %q does not say the well was never above the watch", inv.Name, inv.Detail)
+		}
+	}
 }
 
 // evaluateOneRedOf asserts exactly the named invariants turn red.

@@ -32,6 +32,9 @@
 #   truck-fence                 truck-in-flood-plain while the truck is in the flood plain fence
 #   well-fill-calculated        each pump's calculated well fill is its level over its well's depth
 #   lora-decoded                each LoRaWAN gauge's uplinks decoded to exactly the level it sent
+#   attribute-threshold-moves   pump alarms follow shared thresholds before/after the change
+#   downlink-acknowledged       one confirmed gauge command succeeds and changes stored cadence
+#   backfill-completes          a platform backfill fills a measured gap with correct values
 #   decoder-failure-visible     the legacy gauge's undecodable uplinks recorded as DECODE_FAILED
 #   webhook-signed              the flood webhook reached the sink for exactly the East Quay gauges,
 #                               signed with the tenant's secret
@@ -79,6 +82,9 @@
 #   wrong-well-depth    --scenario-defect wrong-well-depth  well-fill-calculated
 #   lora-wrong-scale    --scenario-defect lora-wrong-scale  lora-decoded
 #   legacy-decoder-fixed --scenario-defect legacy-decoder-fixed decoder-failure-visible
+#   attribute-not-updated --scenario-defect attribute-not-updated attribute-threshold-moves
+#   downlink-nack       --scenario-defect downlink-nack       downlink-acknowledged
+#   backfill-wrong-window --scenario-defect backfill-wrong-window backfill-completes
 #   east-lamp-mislabelled --scenario-defect east-lamp-mislabelled groups-resolve
 #   unscoped-watch      --scenario-defect unscoped-watch    group-scoped-rule
 #   night-dim-all-lights --scenario-defect night-dim-all-lights night-dim-campaign
@@ -107,7 +113,8 @@
 # current context.
 # `run` deploys the sink there too (it needs ko and the cluster's localhost:5000 registry), but it
 # cannot admit the sink's address to that instance's egress: the instance must run
-# outbound-connectors and allow the sink's ClusterIP (`dcctl upgrade --dev-allow-egress <ip>` on a
+# outbound-connectors with lpwanDownlink.enabled, event-management with calculatedBackfill.enabled
+# and a TSDB pool holding persistence.writers + 1 + 4 connections, and allow the sink's ClusterIP (`dcctl upgrade --dev-allow-egress <ip>` on a
 # local cluster), or every delivery is refused and the sink invariants are red.
 #
 # OFFLINE CONTROLS (`controls`, and run first by `run`): the verifier's own unit controls (a clean
@@ -115,7 +122,7 @@
 # fabricated reports.
 #
 # Knobs: DC_HPRIG_CONTROLS=none runs the clean day alone, or a comma list of control names runs
-# those (twenty-two sims at once is a lot for a laptop); DC_HPRIG_KEEP=1 keeps the sims' tenants
+# those (all control sims at once is a lot for a laptop); DC_HPRIG_KEEP=1 keeps the sims' tenants
 # afterwards; DC_HPRIG_SIM_PORT is the first sim's control port (the rest follow);
 # DC_HPRIG_SINK_PORT is the loopback port-forward to the sink.
 #
@@ -238,6 +245,9 @@ guard_not_shared
 # The runs: name | simulator flags | the invariant it must turn red ("" for the clean day).
 runs=(
   "clean||"
+  "attribute-not-updated|--scenario-defect attribute-not-updated|attribute-threshold-moves"
+  "downlink-nack|--scenario-defect downlink-nack|downlink-acknowledged"
+  "backfill-wrong-window|--scenario-defect backfill-wrong-window|backfill-completes"
   "flood-split-key|--scenario-defect flood-split-key|flood-escalates"
   "flood-clear-between-tiers|--scenario-defect flood-clear-between-tiers|flood-escalates"
   "no-far-end|--no-command-far-end|pump-commanded"
@@ -294,7 +304,7 @@ judge() {
 offline_controls() {
   say "offline controls (no cluster)"
   (cd "$repo_root/backend/sims/dc-simulator" &&
-    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestEachS4ControlTurnsExactlyItsInvariantRed|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn|TestFoldedDecodeFailures|TestFoldedGrowthOfOne|TestNotificationAttemptsAreJudgedOnTheWatchedDayOnly|TestDutyMailIsAttributed' ./scenarioverify/ >/dev/null &&
+    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestEachS3bControlTurnsExactlyItsInvariantRed|TestEachS4ControlTurnsExactlyItsInvariantRed|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn|TestFoldedDecodeFailures|TestFoldedGrowthOfOne|TestNotificationAttemptsAreJudgedOnTheWatchedDayOnly|TestDutyMailIsAttributed' ./scenarioverify/ >/dev/null &&
     go test -count=1 ./scenariosink/ >/dev/null) ||
     fail "the verifier's or the sink's own controls failed (go test ./scenarioverify/ ./scenariosink/ in backend/sims/dc-simulator)"
   pass "the verifier: a clean day passes, each planted defect turns exactly its invariant red"
@@ -431,9 +441,24 @@ EOF
   ip="$(sink_ip)"
   [[ "$ip" =~ ^[0-9.]+$ ]] || fail "the sink has no ClusterIP ($ip)"
   note "sink at $ip; the instance admits it with --dev-allow-egress"
-  say "bootstrapping $instance with outbound-connectors"
+  # The chart derives command-delivery routing and event-sources' acknowledgement feed
+  # from the outbound adapter switch. Never hand-set those derived flags.
+  # The default profile and --compact keep the service pool at 20 and writers at 10:
+  # 10 writers + 1 backfill worker + 4 spare connections fit without a pool overlay.
+  cat >"$state_dir/harborpulse-values.yaml" <<'VALUES'
+functionalAreas:
+  outbound-connectors:
+    config:
+      lpwanDownlink:
+        enabled: true
+  event-management:
+    config:
+      calculatedBackfill:
+        enabled: true
+VALUES
+  say "bootstrapping $instance with LPWAN downlink and calculated backfill"
   "$dcctl" bootstrap local "$instance" --yes --no-escrow --cluster "$cluster" --host localhost --no-tls \
-    --enable-area outbound-connectors --dev-allow-egress "$ip" "${images[@]}"
+    --enable-area outbound-connectors --dev-allow-egress "$ip" --values "$(winpath "$state_dir/harborpulse-values.yaml")" "${images[@]}"
   say "UP COMPLETE: run 'hack/harborpulse-rig.sh run'"
 }
 
@@ -565,7 +590,7 @@ cmd_run() {
       { tail -5 "$state_dir/$sname.create.log" >&2; fail "dcctl sim create $sname failed"; }
     hs="$(winpath "$HOME/.devicechain/sims/$sname.json")"
     # shellcheck disable=SC2086 # the flags are words on purpose
-    start_bg "$state_dir/$sname.sim.log" "$simulator" --handshake "$hs" --port "$port" $flags
+    start_bg "$state_dir/$sname.sim.log" env "DC_SIM_HARBORPULSE_SINK_URL=http://127.0.0.1:$sink_port" "$simulator" --handshake "$hs" --port "$port" $flags
     bg_pids+=("$last_bg")
     sims+=("$sname|$port|$want|$hs")
   done

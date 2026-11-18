@@ -48,7 +48,8 @@ type CommandSpec struct {
 	ParameterSchema string
 	// Impact is NORMAL (or "", the platform's default), DISRUPTIVE or DESTRUCTIVE. A disruptive
 	// command waits for its device type's maintenance window before it may start.
-	Impact string
+	Impact  string
+	Encoder string
 }
 
 // DetectionRuleSpec is one DETECT rule authored on a profile (ADR-051/057).
@@ -539,6 +540,8 @@ type SimManifest struct {
 	Relationships      []RelationshipSpec
 	MaintenanceWindows []MaintenanceWindowSpec
 	Campaigns          []CampaignSpec
+	// NumericAttributes are numeric SHARED attributes a rule reads as its threshold.
+	NumericAttributes []NumericAttributeSpec
 }
 
 // placeholderPattern matches "{n}" or "{n:0Wd}" (W one or more digits). The

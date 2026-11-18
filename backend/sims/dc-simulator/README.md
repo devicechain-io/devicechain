@@ -602,7 +602,7 @@ a constant (`well_depth_m`, 4 m) the pump carries. A calculated metric needs a t
 one, so `dcctl sim create --manifest harborpulse` packages the tenant at the tier `hp-showcase`.
 
 The **LoRaWAN gauges** (`hp-lora-gauge-north`, `-east`, `-basin` and `hp-legacy-gauge-basin`)
-send one uplink each per tick through the ChirpStack v4 integration `hp-chirpstack`, a raw frame
+initially send one uplink each per tick through the ChirpStack v4 integration `hp-chirpstack`, a raw frame
 with no decoded object, so the platform decodes it with the profile's tenant decoder. Their
 firmware alternates two frame layouts. `hp-lora-gauge-profile` decodes both; the legacy gauge's
 `hp-legacy-gauge-profile` carries a decoder that reads the newer layout's battery past the end of
@@ -687,6 +687,9 @@ alarm ten seconds after it reaches MAJOR, as the escalation's control.
 | `outage-blast-radius` | `light-silent` / `charger-offline` for exactly the East Quay lamps and chargers, inside the outage, all cleared after it | `--scenario-defect silence-north-lamp` |
 | `backfill-stored` | every reading a charger buffered is stored at the time it was taken | `--scenario-defect drop-backfill` (every fifth buffered reading lost) |
 | `truck-fence` | `truck-in-flood-plain` for the truck alone, raised as it enters the flood plain and cleared after it leaves | `--scenario-defect truck-stays-home` |
+| `attribute-threshold-moves` | stored wet-well readings and alarms follow each pump's SHARED threshold, including the Basin change from 1.0 to 1.8 m | `--scenario-defect attribute-not-updated` |
+| `downlink-acknowledged` (sink) | one typed command is SUCCESSFUL, one confirmed queue item carries fPort 12 and `000f`, and stored readings follow the new interval | `--scenario-defect downlink-nack` |
+| `backfill-completes` | a SUCCEEDED job writes missing fill values beside every stored input in the gap | `--scenario-defect backfill-wrong-window` |
 | `well-fill-calculated` | each pump's stored `well_fill_pct` is its wet well level over 4 m, as a percentage | `--scenario-defect wrong-well-depth` (the pumps carry 5 m) |
 | `lora-decoded` | each current LoRaWAN gauge's stored levels are exactly what it encoded, and its decoder failed nothing | `--scenario-defect lora-wrong-scale` (millimetres where the decoder reads centimetres) |
 | `decoder-failure-visible` | the legacy gauge's undecodable uplinks are recorded as DECODE_FAILED with the evaluation error, its decoder health counts failures and successes, and its readable uplinks are stored | `--scenario-defect legacy-decoder-fixed` |
@@ -706,13 +709,80 @@ alarm ten seconds after it reaches MAJOR, as the escalation's control.
 
 It exits 0 when every invariant holds, 1 when one fails and 2 with no verdict (the sim unreachable,
 its day not started or restarted mid-watch, a gap in the alarm polls a flood tier could hide in, or
-a failed read). Without `--sink` the five sink invariants are not judged and the report names them
+a failed read). Without `--sink` the six sink invariants are not judged and the report names them
 as omitted. `hack/harborpulse-rig.sh` runs the clean day and every planted defect side by side
 on a cluster of its own and fails if the clean day is not green or a control does not turn its own
 invariant red. The defects exist only for that: never run a demonstration with one.
 
 The features the scenario does not drive yet (groups, campaigns, OTA, MQTT and X.509 devices,
 desired configuration) are planned follow-ups.
+
+### Harborpulse shared thresholds, downlinks and calculated backfill (S3b)
+
+#### Shared attribute thresholds
+
+Every pump carries the numeric SHARED attribute `well_alarm_m`, provisioned with
+`setEntityAttribute`. The separate `hp-attribute-well` rule authors
+`when.thresholdAttr`, with no literal threshold and no pump command. North uses
+1.1 m, East 1.3 m and Basin 1.0 m. At 18:30 the Basin threshold becomes 1.8 m.
+`/status.scenario.thresholdChanges` gives the intended write instant and old/new
+values. The oracle compares settled stored wet-well readings with platform alarm
+samples, including readings between the two bounds before and after the change.
+`attribute-not-updated` skips that write and must turn `attribute-threshold-moves` red.
+
+#### A typed command through the network server
+
+At 16:30 the sim issues one typed `sampling-interval {seconds:15}` command to
+`hp-lora-gauge-north` through `createCommand`. A sim-issued beat gives exactly one
+idempotent command per day; it does not depend on a tide rule's repeated crossings.
+The published command encoder emits confirmed fPort 12, bytes `00 0f`.
+The published `lorawan_downlink` connector links `hp-chirpstack` to the sink's
+ChirpStack v4 REST queue. Its fixture API credential is sealed through the connector
+`secret` field, with a separate credential and queue path for each tenant.
+
+The instance needs `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`.
+The chart derives command-delivery's routing switch and event-sources' report feed
+from it. Command-delivery stamps the integration source, the outbound adapter reads
+the device's DevEUI and published encoder, claims the command, and POSTs with the
+API key to `/chirpstack/<tenant>/api/devices/<devEui>/queue` in the sink.
+The sink reuses `lorawan.Downlink` validation and records each accepted queue item.
+Before a gauge uplink the sim snapshots pending items from the sink; after that
+uplink it sends the existing network-server flow's `txack`, then `ack`, through the
+integration using the issued integration token, queue item ID and fCntDown.
+A queue item arriving during the uplink waits until the next uplink. Applying the
+command changes actual uplink cadence before acknowledgement. `downlink-nack`
+reports `acknowledged:false` and retains the old cadence.
+
+`downlink-acknowledged` requires exactly one platform command to be `SUCCESSFUL`,
+exactly one matching sink queue receipt with the expected confirmed port/bytes,
+and stored gauge readings at the new interval after acknowledgement. It is omitted
+without the verifier's `--sink`. The original tick cadence must be shorter than
+15 seconds to demonstrate the change; the default five-second cadence works.
+The host-side sim reaches the sink through `DC_SIM_HARBORPULSE_SINK_URL`, which the
+rig points at its existing loopback port-forward. Inside the cluster the default
+is the sink service URL. The platform only dials the admitted sink ClusterIP.
+
+#### Calculated metric backfill
+
+For backfill, the Basin pump's depth constant is withheld at 12:00 and restored at
+15:00. The metric stays bound: the shipped formula evaluator skips values whose
+constant is missing while storing the measured wet-well inputs. The oracle reads
+the 14:00–14:30 span before the job starts and requires measured inputs with no
+calculated values. At 16:00 the sim checks `calculatedMetricBackfillAvailability`
+and starts `startCalculatedMetricBackfill` with explicit metric and device lists.
+The window is in the past, within retention and the 90-day limit. The pump profile
+already has the calculated-metric tier allowance supplied by `hp-showcase`.
+The instance must run the calculated-backfill worker with a sufficient TSDB pool;
+the rig's values overlay enables it and supplies 16 pool connections.
+
+`backfill-completes` reads the job through GraphQL, requires `SUCCEEDED`, positive
+sample and written counts, and matches every stored wet-well input in the span to
+`well_fill_pct` at the same instant, using level / 4 m × 100. The job's token and
+intended range appear in `/status.scenario.calculatedBackfills`; completion is
+never inferred from status or simulator counters. `backfill-wrong-window` submits
+a past window missing the gap and must turn this invariant red. Shared thresholds
+and sampling cadence reset for each compressed day, so the watch also works on a
+later day of a looping run.
 
 ### The command far end
 
