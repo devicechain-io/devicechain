@@ -45,5 +45,7 @@ var (
 		NewDeviceTimeIndexSchema(),
 		NewCommandDeliveryEvidenceSchema(),
 		NewCampaignsSchema(),
+		NewDeviceGateDeletedSchema(),
+		NewDeviceIncarnationSchema(),
 	}
 )

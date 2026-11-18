@@ -227,18 +227,11 @@ export async function updateDashboard(
   return data.updateDashboard;
 }
 
-// CONFLICT_MARKER matches the backend's ErrConflict message (dashboard-management
-// model/api.go). A save that fails the optimistic precondition surfaces as a
-// GraphQL error carrying this text; the editor uses it to show a reload-and-retry
-// hint rather than a generic error.
-export const CONFLICT_MARKER = 'modified by another writer';
-
 // INVALID_DEFINITION_MARKER prefixes the error publishDashboard throws when the board it
 // was handed carries option issues.
 //
-// 🔴 IT IS NOT A SECOND CONFLICT_MARKER, AND THE DRAWER DELIBERATELY DOES NOT MATCH ON
-// IT. That constant exists because a backend error cannot carry a type across the wire;
-// this refusal never reaches the network. The drawer names every issue and disables
+// The drawer deliberately does not match on it: this refusal never reaches the
+// network. The drawer names every issue and disables
 // Publish before a call gets here, so reaching this throw means the UI's own check was
 // bypassed — at which point the useful thing to show is WHAT WAS WRONG, not a friendly
 // sentence. An earlier version matched on it and replaced the detail with a generic
@@ -460,7 +453,7 @@ const ROLLBACK_DASHBOARD = graphql(`
 //
 // expectedUpdatedAt is the same precondition as updateDashboard's, and it is REQUIRED
 // (though nullable) for the reason publishDashboard's is: a rollback replaces the whole
-// draft, so one issued from a stale view must fail (the CONFLICT_MARKER error) instead of
+// draft, so one issued from a stale view must fail (a STALE_WRITE error) instead of
 // overwriting an edit it never saw. `null` means "roll back whatever is there".
 export async function rollbackDashboard(
   token: string,

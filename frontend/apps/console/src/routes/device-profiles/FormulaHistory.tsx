@@ -22,6 +22,7 @@ import { errMessage } from '@/routes/common';
 import { getDevice, listMetricDefinitions } from '@/lib/api/device-management';
 import { calculatedEvents, type CalculatedEventsResult } from '@/lib/api/event-management';
 import { optNum } from '@/lib/utils';
+import { formatDateTime, formatNumber } from '@/lib/format';
 import { absentInputs } from './calcHealth';
 import '@/i18n/lazy/deviceProfiles';
 
@@ -115,7 +116,7 @@ export function FormulaHistory({
       setState({
         status: 'error',
         message:
-          errorCode(err) === 'LIMIT_EXCEEDED' ? t('formulaHistoryTooMany', { max: HISTORY_SAMPLE_CAP.toLocaleString() }) : errMessage(err),
+          errorCode(err) === 'LIMIT_EXCEEDED' ? t('formulaHistoryTooMany', { max: formatNumber(HISTORY_SAMPLE_CAP) }) : errMessage(err),
       });
     }
   };
@@ -231,7 +232,7 @@ function HistoryOutcome({
           <ul className="max-h-64 space-y-1 overflow-y-auto text-xs">
             {shown.map((s) => (
               <li key={`${s.eventId}/${s.occurredTime}`} className="flex flex-wrap gap-x-3 font-mono">
-                <span className="text-muted-foreground">{new Date(s.occurredTime).toLocaleString()}</span>
+                <span className="text-muted-foreground">{formatDateTime(s.occurredTime)}</span>
                 <span>{s.inputs.map((i) => `${i.key}=${i.value}`).join(' ')}</span>
                 <span>
                   {'→ '}

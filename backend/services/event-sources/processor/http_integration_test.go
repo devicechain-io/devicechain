@@ -144,7 +144,7 @@ func newRouteHarness(t *testing.T) *routeHarness {
 		}
 		return h.readingsOK.Load()
 	}
-	es, _, _ := newTestHttpSourceGated(t, allow, readings, func(string) error { return h.admitErr }, config.HttpIngest{}, nil)
+	es, _, _ := newTestHttpSourceGated(t, allow, readings, func(string, string) error { return h.admitErr }, config.HttpIngest{}, nil)
 	es.failed = func(_, _ string, _ []byte, err error) error {
 		h.mu.Lock()
 		h.failed = append(h.failed, err)

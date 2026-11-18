@@ -27,10 +27,7 @@ type AnchorRef struct {
 // before. The two reads below are bounded by how much a tenant has ANCHORED, which
 // nothing bounds, and that is the difference that decides which needs a cursor.
 func (api *Api) DistinctAnchorTenants(ctx context.Context) ([]string, error) {
-	tenants := make([]string, 0)
-	err := api.RDB.DB(ctx).Model(&EventAnchor{}).
-		Distinct().Order("tenant_id").Pluck("tenant_id", &tenants).Error
-	return tenants, err
+	return api.RDB.TenantsWith(ctx, &EventAnchor{})
 }
 
 // anchorRefPageSize is how many distinct refs one page of either read below returns.

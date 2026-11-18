@@ -346,8 +346,8 @@ func writeRecordFile(dir, name string, contents []byte) error {
 // REASON IS AN ORDERING NOBODY CAN CHANGE. `dcctl bootstrap` records the instance→cluster
 // binding BEFORE the pipeline starts, and deliberately keeps it on every failure: the
 // cluster may already be up by then, and a cluster nothing can name is the orphan the
-// record exists to prevent. That reasoning holds for every failure except the ones
-// stepCheckClusterSingletons raises, and what makes them the exception is WHERE they are
+// record exists to prevent. The exceptions are refusals from stepRefuseRebuild and
+// stepCheckClusterSingletons, and what makes them the exception is WHERE they are
 // raised rather than what they are about — TestTheSingletonStepRunsBeforeAnythingIsWritten
 // holds that step ahead of the declaration. On those the record
 // this run wrote describes nothing, and left behind it is a phantom: `dcctl instances

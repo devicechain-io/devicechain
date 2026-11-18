@@ -18,9 +18,10 @@ Calcula alrededor de media hora, la mayor parte esperando al arranque inicial.
 
 :::note Qué da por supuesto esta página
 Necesitas `dcctl` más cuatro herramientas en tu `PATH`: `docker`, `kubectl`,
-[`kind`](https://kind.sigs.k8s.io/) y [OpenTofu](https://opentofu.org/) (el binario `tofu`;
-`terraform` también sirve). No necesitas un clúster de antemano. Los detalles están
-más abajo en [Requisitos previos](#prerequisites).
+[`kind`](https://kind.sigs.k8s.io/) y [OpenTofu](https://opentofu.org/) **1.10 o posterior** (el
+binario `tofu`; `terraform` 1.10 o posterior también sirve). No necesitas un clúster de antemano.
+Los detalles están más abajo en [Requisitos previos](#prerequisites). Los comandos posteriores al
+paso de descarga están escritos para una shell bash; en Windows, ejecútalos en Git Bash o WSL.
 :::
 
 ## Requisitos previos {#prerequisites}
@@ -29,6 +30,13 @@ más abajo en [Requisitos previos](#prerequisites).
 **detienen** si falta alguna de las cuatro herramientas. Una carencia te cuesta los diez primeros
 segundos y no diez minutos.
 
+- **OpenTofu 1.10 o posterior.** La comprobación previa verifica que `tofu` (o `terraform`) está
+  instalado, pero no su versión, y una versión anterior falla a mitad de `dcctl install`, al cargar
+  la configuración de infraestructura. `tofu version` muestra la tuya.
+- **Espacio para el clúster.** La comprobación previa avisa cuando Docker tiene menos de 4 CPU o
+  menos de 8 GiB de memoria, y necesita 40 GiB de disco libre para las imágenes y los volúmenes de
+  base de datos. En Docker Desktop, ajústalo en **Settings → Resources**. El paso 1 instala con
+  `--compact`, que reduce lo que pide cada pod para que la instancia quepa en un portátil.
 - No necesitas el comando `helm`. `dcctl` lleva el chart dentro y lo instala con la biblioteca Go de
   Helm, y la comprobación previa no busca el binario.
 - `ko` y `cloud-provider-kind` son solo advertencias. `ko` hace falta únicamente para compilar
@@ -63,7 +71,7 @@ es lo que producen las opciones del paso 1.
 como `dcctl_<versión>_<so>_<arq>`: un `.tar.gz` para Linux y macOS, un `.zip` para Windows, con
 `<so>` igual a `linux`, `darwin` o `windows` y `<arq>` igual a `amd64` o `arm64`. El archivo
 `checksums.txt` de la versión lista el resumen SHA-256 de cada uno. `<versión>` es la versión sin
-la `v` inicial (`0.27.0` para la versión etiquetada `v0.27.0`).
+la `v` inicial (`1.6.0` para la versión etiquetada `v1.6.0`).
 
 En Linux o macOS:
 
@@ -95,9 +103,16 @@ que instala. Para comprobar además las firmas de la versión, consulta
 Prepara el clúster una vez y después crea la instancia en él:
 
 ```bash
-dcctl install local
+dcctl install local --compact
 dcctl bootstrap local devicechain --host localhost --no-tls
 ```
+
+`--compact` dimensiona el clúster para un portátil: peticiones de recursos más bajas, sin pila de
+monitorización y sin cert-manager, y por tanto sin copias de seguridad de la base de datos. Sin él,
+solo los servicios que procesan eventos piden unas 4 CPU, y un pod que no cabe se queda en `Pending`
+hasta que la instalación agota su tiempo. En una máquina con recursos de sobra, omítelo para tener
+monitorización y copias de seguridad. La elección es del clúster y no puede cambiarse mientras se
+ejecute una instancia en él. Consulta [`--compact`](../deployment/bootstrap.md#--compact).
 
 :::note En un script o un trabajo de CI
 `dcctl bootstrap` pide una frase de contraseña para sellar el artefacto de custodia de la clave raíz. Sin un terminal donde preguntarla se detiene con `no escrow passphrase and no terminal to ask at`. Facilítala sin interacción, con un archivo o con una variable de entorno:
@@ -115,7 +130,8 @@ En un clúster kind local, el puerto **1883** de tu máquina llega al broker MQT
 
 `dcctl install` crea el clúster de kind e instala lo que comparten todas sus instancias: el operador
 de DeviceChain y sus definiciones de recurso personalizado, la base de datos relacional, el operador
-CloudNativePG, cert-manager, la monitorización y el ingress. Se ejecuta una vez por clúster, y
+CloudNativePG y el ingress, además de cert-manager y la monitorización cuando se ejecuta sin
+`--compact`. Se ejecuta una vez por clúster, y
 `dcctl bootstrap` se niega en un clúster donde no ha terminado. Consulta
 [Instalar el clúster](../deployment/bootstrap.md#install).
 
@@ -177,9 +193,9 @@ siguiente.
 
 Para ver el inquilino en la consola, cierra la sesión del superusuario e inicia sesión como
 `demo@sim.devicechain.local` con esa contraseña. Esta es la identidad que abre la consola de
-inquilino. Si prefieres no usar `dcctl sim create`, crea la identidad con la mutación
-`createIdentity` de la API de administración de la instancia y concédele el rol de administrador de
-inquilino en el inquilino con `addMembership`.
+inquilino. Si prefieres no usar `dcctl sim create`, crea el inquilino con la mutación
+`createTenant` de la API de administración de la instancia, la identidad con `createIdentity`, y
+concédele el rol de administrador de inquilino en el inquilino con `addMembership`.
 
 :::tip Tomado prestado del simulador
 `dcctl sim create` es la primera mitad del flujo del [simulador](#where-to-go-next). Se usa aquí
@@ -375,7 +391,7 @@ declarados. Renueva `DC_TOKEN` con el paso 3 si ha caducado.
 
 1. En **Devices → Device Profiles**, crea un perfil con token `temp-probe-profile`, nombre
    **Temperature probe profile** y categoría **sensor**. En **Metrics**, añade una métrica con token
-   y clave `temperature`, tipo **DOUBLE** y unidad `Cel`.
+   y clave `temperature`, tipo de dato **Double** y unidad `Cel`.
 2. En **Devices → Device Types**, abre `temp-probe`. En **Profile**, adjunta `temp-probe-profile`.
    Consulta [Tipos de dispositivo y perfiles](../user-guide/device-types-and-profiles.md).
 3. En **Detection Rules** del perfil, elige **New detection rule → Form**. Indica token
@@ -383,7 +399,8 @@ declarados. Renueva `DC_TOKEN` con el paso 3 si ha caducado.
    **Enabled**. Configura la condición `temperature > 25` y añade una acción **Raise alarm** con
    clave de alarma `temperature-high`. Guarda la regla y elige **Publish** en **Versions**. Un
    borrador guardado no se ejecuta. Consulta [Reglas de detección](../user-guide/detection-rules.md).
-4. Repite la petición HTTP del paso 6 con `"temperature":"30.0"`. En **Monitor → Alarms**, busca
+4. Repite la petición HTTP del paso 6 con `"temperature":"30.0"`; la redirección de puerto del
+   paso 5 debe seguir en marcha. En **Monitor → Alarms**, busca
    la alarma activa de `sensor-001`. Envía `"temperature":"21.5"` para resolverla. Envía estas lecturas
    nuevas después de publicar; las anteriores no se reproducen automáticamente.
 
@@ -395,8 +412,8 @@ declarados. Renueva `DC_TOKEN` con el paso 3 si ha caducado.
    [Recibir comandos](../guides/connecting-a-device.md#receiving-commands) para iniciar un suscriptor
    MQTT (instala los clientes Mosquitto y usa la CA de la instancia como indica esa guía).
    Usa host `localhost`, id de cliente `devicechain:sim-demo:sensor-001:sub`, usuario
-   `sim-demo:$DC_CRED_ID` (expande la variable), contraseña `$DC_CRED_ID` para su credencial
-   `ACCESS_TOKEN` y tema `devicechain/sim-demo/device-commands/sensor-001`. Déjalo conectado. Para conexiones locales a `localhost`, sigue también las instrucciones de la guía sobre el nombre de host TLS.
+   `sim-demo:$DC_CRED_ID` (expande la variable), sin contraseña (una credencial `ACCESS_TOKEN` se conecta solo con el usuario; una conexión que además envía una contraseña se comprueba como `MQTT_BASIC` y se rechaza)
+   y tema `devicechain/sim-demo/device-commands/sensor-001`. Déjalo conectado. Para conexiones locales a `localhost`, sigue también las instrucciones de la guía sobre el nombre de host TLS.
 3. Emite este comando de prueba inocuo en la API del inquilino:
 
 ```bash
@@ -438,6 +455,15 @@ curl -s -X POST http://localhost/api/command-delivery/graphql \
   Después contrólalo con `dcctl sim status demo`, `dcctl sim stop demo` y `dcctl sim start demo`.
   El simulador usa el mismo endpoint de ingesta, así que también necesita la redirección de puerto
   del paso 5.
+
+  La simulación `demo` ejecuta el escenario predeterminado, que envía lecturas pero no declara
+  reglas de detección, así que no genera alarmas. Para un escenario que sí las genera, crea una
+  segunda simulación con `dcctl sim create building --manifest buildingpulse` y ejecútala con
+  `dcctl sim run building`: doce termostatos cuya temperatura sube por encima de 30 y vuelve a bajar,
+  lo que genera y resuelve alarmas `bp-over-temp` en **Monitor → Alarms** del inquilino
+  `sim-building`. Inicia sesión como `building@sim.devicechain.local`, con el `simPassword` de
+  `~/.devicechain/sims/building.json`, para verlas. Interrumpe el primer `dcctl sim run` (Ctrl+C)
+  antes de iniciar el segundo, porque ambos usan el mismo puerto de control.
 
 - **[Recorrido por las funciones](./feature-tour.md)**: sigue desde aquí hasta un panel, una regla
   que genera una alarma y envía un comando, la respuesta del dispositivo y un usuario cliente que

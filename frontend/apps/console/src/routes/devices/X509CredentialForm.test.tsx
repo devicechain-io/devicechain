@@ -107,7 +107,7 @@ function renderPanel() {
 }
 
 async function chooseCertificateType() {
-  fireEvent.click(screen.getByRole('button', { name: 'ACCESS_TOKEN' }));
+  fireEvent.click(screen.getByLabelText('Type'));
   // Rows of this type also carry the name as a badge; the open list renders last, in a portal.
   const matches = await screen.findAllByText('X509_CERTIFICATE');
   fireEvent.click(matches[matches.length - 1]);

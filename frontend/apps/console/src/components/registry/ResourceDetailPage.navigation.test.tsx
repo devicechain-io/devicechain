@@ -56,7 +56,10 @@ function resourceWith(save: (token: string, value: string) => void): RegistryRes
     columns: [],
     nameOf: (t) => `name-${t.token}`,
     renderForm: () => null,
-    detailTabs: [{ value: 'draft', label: 'draft-tab', render: (item) => <DraftTab item={item} save={save} /> }],
+    detailTabs: [{ value: 'draft', label: 'draft-tab', render: (item, reload) => <>
+      <button onClick={reload}>refresh</button>
+      <DraftTab item={item} save={save} />
+    </> }],
   };
 }
 
@@ -72,6 +75,30 @@ function GoTo({ to }: { to: string }) {
 afterEach(cleanup);
 
 describe('ResourceDetailPage across a direct entity-to-entity navigation', () => {
+  it('retries an initial failure and preserves the selected tab and draft after a failed refresh', async () => {
+    const resource = resourceWith(vi.fn());
+    resource.load = vi.fn()
+      .mockRejectedValueOnce(new Error('initial'))
+      .mockResolvedValueOnce(STORE.alpha)
+      .mockRejectedValueOnce(new Error('refresh'))
+      .mockResolvedValueOnce({ ...STORE.alpha, value: 'updated' });
+    render(<MemoryRouter initialEntries={['/things/alpha']}>
+      <ConfirmProvider><Routes>
+        <Route path="/things/:token" element={<ResourceDetailPage resource={resource} />} />
+      </Routes></ConfirmProvider>
+    </MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    await screen.findByText('name-alpha');
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'draft-tab' }));
+    fireEvent.change(await screen.findByLabelText('draft'), { target: { value: 'unsaved' } });
+    fireEvent.click(screen.getByRole('button', { name: 'refresh' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(resource.load).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull());
+    expect(screen.getByRole('tab', { name: 'draft-tab' }).getAttribute('aria-selected')).toBe('true');
+    expect((screen.getByLabelText('draft') as HTMLInputElement).value).toBe('unsaved');
+  });
+
   it('a tab draft is seeded from the NEW entity, and its save writes the new entity’s values', async () => {
     const save = vi.fn();
     const resource = resourceWith(save);

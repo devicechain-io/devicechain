@@ -21,6 +21,42 @@ import (
 // ErrUnplacedTenant refuses a publish whose tenant placement cannot be established.
 var ErrUnplacedTenant = errors.New("messaging: tenant has no valid shard-group placement")
 
+// IsRefusal reports whether err is (or wraps) ErrStreamBackpressure or
+// ErrUnplacedTenant: certainly not stored, not about the message, retry later.
+func IsRefusal(err error) bool {
+	return errors.Is(err, ErrStreamBackpressure) || errors.Is(err, ErrUnplacedTenant)
+}
+
+// AdmitPublish checks whether the tenant's stream can accept a publish.
+// Without a tenant, a selected suffix accepts if any group accepts and routing is ready.
+func (nmgr *NatsManager) AdmitPublish(tenant, suffix string) error {
+	s := nmgr.streamSharding()
+	if !s.selects(suffix) {
+		return nmgr.Backpressure(suffix)
+	}
+	if tenant != "" {
+		routed, err := nmgr.tenantSuffix(tenant, suffix)
+		if err != nil {
+			return err
+		}
+		return nmgr.Backpressure(routed)
+	}
+	if err := nmgr.routingRefusal(suffix); err != nil {
+		return err
+	}
+	var first error
+	for g := 0; g < s.cfg.Count; g++ {
+		err := nmgr.Backpressure(GroupSuffix(suffix, g))
+		if err == nil {
+			return nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
 // ErrShardRoutingNotEnabled refuses read and write handles on instance-sharded streams without routing.
 var ErrShardRoutingNotEnabled = errors.New("messaging: shard-group routing is not enabled")
 

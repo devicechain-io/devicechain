@@ -524,3 +524,38 @@ const natsClusterReplicasKey = "natsClusterReplicas"
 // flags — which is precisely the ability to make the two halves disagree that
 // this exists to remove.
 func HaSummary(enabled bool) string { return haFor(enabled).summary() }
+
+// brokerTopologyVars are the OpenTofu variables every dcctl apply states itself, from
+// brokerTopology: the HA toggle and the NATS server count. They are passed as -var on every
+// run, which OpenTofu ranks above TF_VAR_* and any tfvars file, so a value the operator states
+// for either is overridden. That is deliberate: the server count and the per-stream replica
+// count come from one value (see haTopology), and honouring a server count stated on its own
+// would build exactly the three-servers-one-copy cluster that value exists to prevent.
+var brokerTopologyVars = []string{"ha", "nats_cluster_replicas"}
+
+// overriddenTopologyVars names the broker topology variables the operator states in the
+// instance root at rootdir (or in TF_VAR_*), every one of which this apply overrides.
+func overriddenTopologyVars(rootdir string) []string {
+	var out []string
+	for _, name := range brokerTopologyVars {
+		if statedByOperator(rootdir, name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// sayOverriddenTopologyVars says so, rather than overriding the operator in silence: r33a's
+// harness exported TF_VAR_nats_cluster_replicas=3 and got one server without being told.
+func sayOverriddenTopologyVars(st *State, rootdir string) {
+	names := overriddenTopologyVars(rootdir)
+	if len(names) == 0 {
+		return
+	}
+	topology := brokerTopology(st)
+	fmt.Printf("  %s %s stated for this instance, and dcctl sets %s itself (ha=%t, nats_cluster_replicas=%d, "+
+		"from --ha and shard groups), so the stated value is not used. The broker's server count and its "+
+		"stream replica count are kept together; see the sizing guide's \"Which value wins\".\n",
+		color.YellowString("note:"), strings.Join(names, " and "), map[bool]string{true: "them", false: "it"}[len(names) > 1],
+		st.HA, topology.ServerReplicas)
+}
