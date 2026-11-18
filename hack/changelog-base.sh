@@ -28,9 +28,9 @@
 #
 # OUTPUT AND EXIT STATUS.
 #   0, the base on stdout             - the base was found
-#   0, nothing on stdout, a notice    - the FIRST release: no stable tag exists at all, so there
-#                                       is nothing to measure from and the caller keeps the
-#                                       generator's own range
+#   0, nothing on stdout, a notice    - the FIRST release: no stable tag exists other than <tag>'s
+#                                       own X.Y.Z, so there is nothing to measure from and the
+#                                       caller keeps the generator's own range
 #   1, an error on stderr             - no base can be determined: <tag> is not vX.Y.Z or
 #                                       vX.Y.Z-<prerelease>, the tag listing failed, or stable
 #                                       tags exist but none is lower than <tag>
@@ -51,10 +51,14 @@ pick() {
   while IFS= read -r t; do
     t="${t%$'\r'}"
     [[ "$t" =~ $STABLE_RE ]] || continue
-    stable=$((stable + 1))
     maj="${BASH_REMATCH[1]}" min="${BASH_REMATCH[2]}" pat="${BASH_REMATCH[3]}"
-    # Strictly lower than the current tag's X.Y.Z. A stable tag with the SAME X.Y.Z is never
-    # lower: it is the tag itself, or higher than the candidate being released.
+    # The release's own X.Y.Z is skipped BEFORE it is counted: it is the tag being released, or
+    # (for a candidate) the release that candidate is for. Counting it made the first stable
+    # release refuse - v0.1.0 with v0.1.0-rc.1 and v0.1.0 tagged saw one stable tag, none lower,
+    # and exited 1 instead of reporting a first release.
+    (( maj == cmaj && min == cmin && pat == cpat )) && continue
+    stable=$((stable + 1))
+    # Strictly lower than the current tag's X.Y.Z.
     if (( maj < cmaj || (maj == cmaj && (min < cmin || (min == cmin && pat < cpat))) )); then
       if (( maj > bmaj || (maj == bmaj && (min > bmin || (min == bmin && pat > bpat))) )); then
         best="$t" bmaj="$maj" bmin="$min" bpat="$pat"
@@ -103,6 +107,8 @@ self_test() {
   expect "a major boundary"                         v2.0.0       v1.9.0 v1.8.0 v1.9.0 v2.0.0-rc.1
   expect "prerelease-only history is a first release" v0.1.0     EMPTY  v0.1.0-rc.1 v0.1.0-rc.2
   expect "no tags at all is a first release"        v0.1.0       EMPTY  ""
+  expect "the first stable release ignores itself"  v0.1.0       EMPTY  v0.1.0-rc.1 v0.1.0
+  expect "the first release's rc re-run after it"   v0.1.0-rc.2  EMPTY  v0.1.0-rc.1 v0.1.0-rc.2 v0.1.0
   expect "malformed tags are not stable"            v1.7.0       v1.6.0 v1.6.0 v1.6.01 v1.6.9.1 v1.6.9x release-1.6 "v1.6.5 "
   expect "stable tags but none lower is refused"    v0.9.0       FAIL   v1.0.0 v1.1.0
   expect "a non-release tag is refused"             release-1.7  FAIL   v1.6.0

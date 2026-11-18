@@ -11,8 +11,6 @@ Una regla de detección que nadie ha probado es una suposición sobre lo que har
 Los formatos de escenario y de archivo de prueba llevan la versión `devicechain.io/ruletest/v1alpha1` y pueden cambiar de forma incompatible en una versión menor, con el cambio indicado en las notas de actualización de esa versión, hasta que se promuevan. Un archivo con una versión que el `dcctl` instalado no lee se rechaza, y también una clave que no conoce: una expectativa mal escrita que se ignorara pasaría.
 :::
 
-Antes de publicar, consulta [qué hace una publicación con los dispositivos que ya están en alarma](../concepts/event-processing.md#publish-keeps-alarms): las reglas de umbral y el traspaso existente de ausencia conservan el estado de alarma, así que prueba una recuperación seguida de un nuevo incumplimiento para comprobar las acciones modificadas. Los demás tipos de regla pueden repetir sus acciones al publicar mientras el dispositivo siga incumpliendo la condición.
-
 ## Qué comprueba una prueba {#what-a-test-checks}
 
 Una prueba se compone de dos archivos.
