@@ -91,8 +91,8 @@ func (e *Engine) applyDuration(ev Event, r Rule) {
 	st, ok := e.runs[ev.Key]
 	beyond := !ev.Time.Add(r.Hold).After(e.wm.now)
 	if !ev.Match {
-		if raisedAt, raised := e.raised[ev.Key]; raised {
-			if ev.Time.Before(raisedAt) {
+		if _, raised := e.raised[ev.Key]; raised {
+			if ev.Time.Before(e.raiseInput(ev.Key)) {
 				// Older than the raise: the hold was decided before this break arrived. Count it only
 				// when it falls inside the run it contradicts; one that predates the run says nothing.
 				if ok && st.running && !ev.Time.Before(st.since) {

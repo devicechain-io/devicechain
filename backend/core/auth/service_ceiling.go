@@ -41,22 +41,26 @@ var ServiceCeilingVerdicts = []ServiceCeilingVerdict{CeilingWithin, CeilingOver,
 // chosen by the sender, so it is never a label itself.
 const UnknownCallerLabel = "other"
 
-// serviceCallers is the ceiling table, derived from every svcclient.New call site and the
-// tenant-lifecycle gate. It is unexported so no code can widen a ceiling at run time; read it
-// through ServiceCallerNames and CheckServiceCeiling.
+// serviceCallers is derived from, and checked against, every service-token mint site,
+// including the dead-letter producer's lazy tenant-lifecycle gate. The repository AST
+// guard in core/test requires exact agreement in both directions. It is unexported so
+// no code can widen a ceiling at run time; read it through ServiceCallerNames,
+// ServiceCeiling and CheckServiceCeiling.
 var serviceCallers = map[string][]Authority{
 	"ai-inference":            {TenantRead},
-	"command-delivery":        {DeviceRead, TenantRead, StateRead},
+	"command-delivery":        {DeviceRead, TenantRead, StateRead, LocationInstalledRead},
 	"dashboard-management":    {DeviceRead, TenantRead},
 	"device-management":       {DeviceRead, TenantRead},
-	"event-management":        {DeviceRead},
+	"device-state":            {TenantRead},
+	"event-management":        {DeviceRead, TenantRead},
 	"event-processing":        {CommandWrite, TenantRead, DeviceRead, AIInfer},
-	"event-sources":           {DeviceRead, TenantRead, StateRead, CommandWake},
+	"event-sources":           {DeviceRead, TenantRead, StateRead, CommandWake, CommandClaim},
 	"lwm2m-ingest":            {DeviceRead, DeviceWrite, StateRead, TenantRead, CommandRead, CommandClaim, CommandPark},
 	"notification-management": {TenantRead},
-	"outbound-connectors":     {TenantRead},
+	"outbound-connectors":     {TenantRead, CommandClaim, DeviceRead},
 	"sparkplug-ingest":        {TenantRead, DeviceRead, DeviceWrite, StateRead, CommandRead, CommandClaim, CommandPark},
 	"update-management":       {DeviceRead, TenantRead},
+	"user-management":         {TenantRead},
 }
 
 // ServiceCallerNames returns the callers in the table, sorted.

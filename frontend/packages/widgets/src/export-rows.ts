@@ -31,7 +31,7 @@ interface ExportWords {
   latest: string;
 }
 
-const WORDS: Record<'en' | 'es', ExportWords> = {
+const WORDS: Record<'en' | 'es' | 'zh-CN', ExportWords> = {
   en: {
     time: 'Time (UTC)',
     measurement: 'Measurement',
@@ -58,10 +58,15 @@ const WORDS: Record<'en' | 'es', ExportWords> = {
     readingTime: 'hora de la lectura (UTC)',
     latest: 'última',
   },
+  'zh-CN': {
+    time: '时间（UTC）', measurement: '测量项', series: '序列', value: '值', basis: '数据依据', reading: '读数',
+    average: (bucket) => `每 ${bucket} 的平均值`, device: '设备', deviceToken: '设备标识', readingTime: '读数时间（UTC）', latest: '最新值',
+  },
 };
 
 function words(): ExportWords {
-  return viewerLocale()?.toLowerCase().startsWith('es') ? WORDS.es : WORDS.en;
+  const language = viewerLocale()?.toLowerCase().split('-')[0];
+  return language === 'es' ? WORDS.es : language === 'zh' ? WORDS['zh-CN'] : WORDS.en;
 }
 
 function isoOrEmpty(value: string | null): string {
