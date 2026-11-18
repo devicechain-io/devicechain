@@ -604,3 +604,92 @@ describe('locale default editor', () => {
     expect(screen.queryByLabelText(/language tag/i)).toBeNull();
   });
 });
+
+describe('an edit made while a save re-reads the list', () => {
+  // 🔴 The panels stay mounted while the list re-read a save triggers is in
+  // flight, and the list is the sticky display value: until the re-read answers
+  // it still holds the value from BEFORE the save. A draft re-seeded from it
+  // shows the old value, so an edit made in that window is built on the old
+  // value and the second save reverts the first. Each re-read here is a deferred
+  // promise, so the window is held open for exactly as long as the test needs.
+  const KEY = 'some.raw.key';
+
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  async function saveWhileReloadHangs(stored: Row) {
+    const reload = deferred<Row[]>();
+    listSettingsMock.mockReturnValueOnce(reload.promise);
+    setSettingMock.mockResolvedValueOnce(stored);
+    fireEvent.change(rawJson(), { target: { value: stored.value } });
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(listSettingsMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(toastMock).toHaveBeenCalled());
+    return reload;
+  }
+
+  it('shows what was saved, and a second edit builds on it, not on the old value', async () => {
+    await renderWith([setting(KEY, '{"a":0}')]);
+    const reload = await saveWhileReloadHangs(setting(KEY, '{"a":1}', { overridden: true }));
+
+    // The re-read has not answered. The panel shows the saved value anyway…
+    await waitFor(() => expect(rawJson().value).toBe(JSON.stringify({ a: 1 }, null, 2)));
+    // …is not dirty against it, and knows it is now an override.
+    expect(saveButton().disabled).toBe(true);
+    expect(resetButton().disabled).toBe(false);
+
+    // The operator's next edit starts from what they see, and Save sends a value
+    // that still carries the first save.
+    const edited = rawJson().value.replace('"a": 1', '"a": 1, "b": 2');
+    fireEvent.change(rawJson(), { target: { value: edited } });
+    setSettingMock.mockResolvedValueOnce(setting(KEY, '{"a":1,"b":2}', { overridden: true }));
+    listSettingsMock.mockReturnValueOnce(deferred<Row[]>().promise);
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(setSettingMock).toHaveBeenLastCalledWith(KEY, '{"a":1,"b":2}'));
+    reload.resolve([setting(KEY, '{"a":1}', { overridden: true })]);
+  });
+
+  it('applies to Reset too: the default the server answered with is the baseline', async () => {
+    await renderWith([setting(KEY, '{"a":1}', { overridden: true, updatedBy: 'op@example.invalid' })]);
+    const reload = deferred<Row[]>();
+    listSettingsMock.mockReturnValueOnce(reload.promise);
+    clearSettingMock.mockResolvedValueOnce(setting(KEY, '{"a":0}'));
+    fireEvent.click(resetButton());
+    await waitFor(() => expect(listSettingsMock).toHaveBeenCalledTimes(2));
+
+    await waitFor(() => expect(rawJson().value).toBe(JSON.stringify({ a: 0 }, null, 2)));
+    expect(resetButton().disabled).toBe(true);
+    reload.resolve([setting(KEY, '{"a":0}')]);
+  });
+
+  it('keeps the saved value when the re-read fails', async () => {
+    await renderWith([setting(KEY, '{"a":0}')]);
+    const reload = await saveWhileReloadHangs(setting(KEY, '{"a":1}', { overridden: true }));
+    reload.reject(new Error('network'));
+
+    // The list still holds the pre-save value; the write's own answer is newer.
+    await waitFor(() => expect(listSettingsMock).toHaveBeenCalledTimes(2));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(rawJson().value).toBe(JSON.stringify({ a: 1 }, null, 2));
+  });
+
+  // The counterweight: the saved value must not outlive the re-read. Once the list
+  // answers, IT is the baseline — here it carries a later write by someone else,
+  // which a held-over save answer would hide.
+  it('hands back to the list once the re-read answers', async () => {
+    await renderWith([setting(KEY, '{"a":0}')]);
+    const reload = await saveWhileReloadHangs(setting(KEY, '{"a":1}', { overridden: true }));
+    await waitFor(() => expect(rawJson().value).toBe(JSON.stringify({ a: 1 }, null, 2)));
+
+    reload.resolve([setting(KEY, '{"a":7}', { overridden: true })]);
+    await waitFor(() => expect(rawJson().value).toBe(JSON.stringify({ a: 7 }, null, 2)));
+  });
+});
