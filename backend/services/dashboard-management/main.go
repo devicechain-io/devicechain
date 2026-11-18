@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/devicechain-io/dc-dashboard-management/config"
 	"github.com/devicechain-io/dc-dashboard-management/graphql"
@@ -55,7 +54,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -90,6 +89,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// deleted (ADR-081). No subscriptions. core/service builds all three and owns the order
 	// of all four lifecycle phases.
 	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
 			Migrations: model.Migrations,
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
@@ -126,7 +126,8 @@ func afterRdb(ctx context.Context, m *service.Managers) error {
 	// re-land dashboard rows behind the purge sweep. Nil (user-management unconfigured)
 	// leaves the gate off with a warning; the per-area erasure fence is the guarantee.
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	Api.TenantDeleted = governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "dashboard-management", governance.NewSafetyGates(Microservice))
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+	Api.TenantDeleted = governance.NewTenantLifecycleGateFor(peers, Svc.SafetyGates())
 	wireShareChecker(infra.ServiceAuth.Secret, infra)
 	if Api.ShareTargets != nil {
 		ShareSweep = processor.NewShareSweep(Microservice, Api)
@@ -157,13 +158,16 @@ func afterRdb(ctx context.Context, m *service.Managers) error {
 // endpoint there is nobody to ask, and every share naming one is refused rather than written
 // unchecked — said once, here, at startup.
 func wireShareChecker(secret string, infra mscfg.InfrastructureConfiguration) {
-	if secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+	infra.ServiceAuth.Secret = secret
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+	url, err := peers.URL(infra.DeviceManagement.Endpoint())
+	if err != nil {
 		log.Warn().Msg("Service secret or device-management endpoint not configured — dashboards cannot be shared with customers or groups.")
 		return
 	}
-	client := svcclient.New(infra.UserManagement, secret, "dashboard-management", []string{string(auth.DeviceRead)})
+	client := peers.Client(auth.DeviceRead)
 	Api.ShareTargets = sharecheck.New(client,
-		fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port))
+		url)
 }
 
 // createNatsComponents builds the entity-deleted reader and the share reconciler on it. It
