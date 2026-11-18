@@ -585,7 +585,7 @@ outbound connector deliveries, and the object store. Everything else comes back 
 | `detection-rules-published` | stream | rebuildable | a rule publish is re-derived from the stored profile version |
 | `device-roster` | stream | rebuildable | roster changes are projected from the device store |
 | `geofence-set-manifest` | stream | rebuildable | a fence edit is re-derived from the stored fence set |
-| `entity-deleted` | stream | transient | a deletion fan-out in flight; a deletion announced just before the restore point may not have reached every consumer |
+| `entity-deleted` | stream | transient | a deletion fan-out in flight; device-management re-publishes a deletion until the broker acknowledges it, but one acknowledged just before the restore point may not have reached every consumer |
 | `device-ownership` | stream | rebuildable | ownership changes are projected from the stored relationships |
 | `agent-actuation-kills` | stream | rebuildable | the policy head retains the kill state and operators can repeat a kill |
 | `alarm-events` | stream | rebuildable | alarm state is held in the database and notification re-derives from it |

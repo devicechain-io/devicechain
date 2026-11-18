@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/devicechain-io/dc-microservice/credbinding"
 )
 
 // awsCommon is the shared AWS connection config for the SNS/SQS targets. The credential
@@ -167,3 +169,16 @@ func withSQSSecret(t Target, secret string) (Target, error) {
 	s.AWSTarget = a
 	return s, nil
 }
+
+func snsBinding(raw []byte) credbinding.Binding {
+	return configBinding("aws_sns", raw, &snsConfig{}, snsFields)
+}
+func sqsBinding(raw []byte) credbinding.Binding {
+	return configBinding("aws_sqs", raw, &sqsConfig{}, sqsFields)
+}
+
+var snsFields = map[string]bool{"region": false, "endpoint": false, "accessKeyId": true, "topicArn": true}
+
+var sqsFields = map[string]bool{"region": false, "endpoint": false, "accessKeyId": true, "url": true}
+
+var awsFields = map[string]bool{"region": false, "endpoint": false, "accessKeyId": true}

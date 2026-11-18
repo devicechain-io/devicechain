@@ -20,13 +20,13 @@ import (
 	"github.com/devicechain-io/dc-device-management/processor"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
@@ -55,18 +55,22 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevApi, prevCached, prevKey, prevTransit, prevGates := Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates
 	prevProc, prevRA, prevDR, prevDrain := InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain
 	prevEffects := AgentEffectsDrain
+	prevDeletion := EntityDeletionDrain
 	prevCallout, prevBackoff, prevKickDrain, prevTenants := CalloutResponder, MqttStoreBackoff, SessionKickDrain, ProvisioningTenants
-	prevReaper := AgentProposalReaper
+	prevReaper, prevClassifier, prevMarkerHeal := AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal
+	prevPeers := servicePeers
 	prevPin := IssuerPin
 	ProvisioningTenants = nil
 	t.Cleanup(func() {
+		servicePeers = prevPeers
 		ProvisioningTenants, IssuerPin = prevTenants, prevPin
 		Microservice, Configuration, NatsManager, RdbManager, Svc = prevMs, prevCfg, prevNats, prevRdb, prevSvc
 		Api, CachedApi, DeviceSecretKey, SecretTransit, safetyGates = prevApi, prevCached, prevKey, prevTransit, prevGates
 		InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, OwnershipDrain = prevProc, prevRA, prevDR, prevDrain
 		AgentEffectsDrain = prevEffects
+		EntityDeletionDrain = prevDeletion
 		CalloutResponder, MqttStoreBackoff, SessionKickDrain = prevCallout, prevBackoff, prevKickDrain
-		AgentProposalReaper = prevReaper
+		AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal = prevReaper, prevClassifier, prevMarkerHeal
 	})
 
 	issuer, err := nkeys.CreateAccount()
@@ -96,9 +100,10 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	Microservice.Readiness.MarkReadyWithoutAuthSurface()
 	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 	require.NoError(t, parseConfiguration())
-	safetyGates = governance.NewSafetyGates(Microservice)
+	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
+	safetyGates = service.FromManagers(Microservice, service.Managers{}).SafetyGates()
 
-	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.PendingOwnershipFact{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.AgentProposal{})...)
+	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.AgentProposal{})...)
 	RdbManager = &rdb.RdbManager{Database: db}
 	DeviceSecretKey = dmtest.DeviceSecretKey()
 	SecretTransit = testTransit(t)
@@ -115,6 +120,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 			if err = initAgentEffectsDrain(); err != nil {
 				return err
 			}
+			if err = initEntityDeletionDrain(); err != nil {
+				return err
+			}
 			if err = initOwnershipDrain(); err != nil {
 				return err
 			}
@@ -122,6 +130,12 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 				return err
 			}
 			if err = initAgentProposalReaper(); err != nil {
+				return err
+			}
+			if err = initAlarmPositionClassifier(); err != nil {
+				return err
+			}
+			if err = initCreateEnrollMarkerHeal(); err != nil {
 				return err
 			}
 			if err = initDecodeAccounting(); err != nil {

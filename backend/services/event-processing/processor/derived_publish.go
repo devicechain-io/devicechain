@@ -433,7 +433,7 @@ func (p *publishPass) finish() bool {
 		rp.metrics.recordCheckpointFailure(checkpointStagePublish)
 	}
 	if p.leaseLost {
-		log.Warn().Str("partition", rp.cfg.PartitionId).
+		log.Warn().Str("partition", rp.partitionID()).
 			Msg("DETECT lost the partition while publishing a checkpoint's detections; the rest are not sent and the messages stay unacked")
 	}
 	old := len(rp.pendingDets)

@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -51,6 +53,7 @@ type EscalationScheduler struct {
 	Api          *model.Api
 	Notifier     *PolicyNotifier
 	defaultMax   int
+	nextTenant   atomic.Uint64
 }
 
 // NewEscalationScheduler builds the scheduler. interval is the tick period (the
@@ -60,149 +63,176 @@ func NewEscalationScheduler(ms *core.Microservice, api *model.Api, notifier *Pol
 	interval time.Duration, defaultMax int, callbacks core.LifecycleCallbacks) *EscalationScheduler {
 	s := &EscalationScheduler{Microservice: ms, Api: api, Notifier: notifier, defaultMax: defaultMax}
 	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "escalation-scheduler", interval,
-		s.runOnce, callbacks, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("escalation_scheduler")))
+		s.runOnce, callbacks, ms.NewPeriodicTaskMetrics("escalation_scheduler"))
 	return s
 }
 
-// runOnce re-notifies every tenant's due open alarms. It loads each tenant's enabled
-// policies once and, only when at least one has escalation enabled, its open alarm
-// states — so a tenant that uses no escalation costs one policy query and no per-alarm
-// work.
+// escalationWorkers bounds concurrent tenants, never concurrent alarms of one tenant.
+const escalationWorkers = 4
+
+// tenantPass belongs to one worker for one tenant, and is never shared across jobs.
+// Its deadline is an admission bound, not a context deadline: a claimed alarm must
+// retain its entire dispatch budget. The memo expires with this job.
+//
+// The slice is WORK-CONSERVING: it only ends a tenant's job while another tenant of the
+// same pass is still waiting for a worker (contended). A tenant alone with its backlog
+// keeps going rather than idling until the next tick. A nil contended always enforces.
+type tenantPass struct {
+	deadline  time.Time
+	contended func() bool
+	exhausted bool
+	timedOut  map[uint]bool
+}
+
+type tenantPassKey struct{}
+
+func passFromContext(ctx context.Context) *tenantPass {
+	p, _ := ctx.Value(tenantPassKey{}).(*tenantPass)
+	return p
+}
+
+func sliceExpired(ctx context.Context) bool {
+	p := passFromContext(ctx)
+	if p != nil && !time.Now().Before(p.deadline) && (p.contended == nil || p.contended()) {
+		p.exhausted = true
+		return true
+	}
+	return false
+}
+
+type tenantOutcome struct {
+	failed  bool
+	partial bool
+	lastErr error
+}
+
+func (o *tenantOutcome) record(err error) {
+	if err == nil {
+		return
+	}
+	if errors.Is(err, core.ErrPassPartial) {
+		o.partial = true
+	} else {
+		o.failed = true
+		o.lastErr = err
+	}
+}
+
+// runOnce serves tenants on a bounded pool. Rotating admission order prevents a
+// stable prefix of slow tenants from always occupying the first worker wave.
 func (s *EscalationScheduler) runOnce(ctx context.Context) error {
-	now := s.Notifier.clock()
 	tenants, err := s.Api.DistinctStateTenants(core.WithSystemContext(ctx))
 	if err != nil {
 		return fmt.Errorf("listing tenants with notification state: %w", err)
 	}
-	// A tenant whose only alarm so far was held by quiet hours has no notification state
-	// yet — nothing was sent — so the state list alone would never visit it to release.
 	holding, err := s.Api.DistinctDeferralTenants(core.WithSystemContext(ctx))
 	if err != nil {
 		return fmt.Errorf("listing tenants holding notifications for quiet hours: %w", err)
 	}
-	tenants = unionSorted(tenants, holding)
-	var visited int
-	// A tenant is failed at most ONCE however many of its steps failed (policies, release,
-	// open states, escalations, clear pickup): the pass tallies tenants, not errors.
-	failedTenants := make(map[string]bool)
-	failed := func(tenant string) { failedTenants[tenant] = true }
-	partialTenants := make(map[string]bool)
-	var partialErr error
+	tenants = s.tenantOrder(unionSorted(tenants, holding))
+	jobs := make(chan string)
+	// waiting counts tenants of this pass not yet taken by a worker; the slice only
+	// binds while it is non-zero (see tenantPass).
+	var waiting atomic.Int64
+	waiting.Store(int64(len(tenants)))
+	contended := func() bool { return waiting.Load() > 0 }
+	var workers sync.WaitGroup
+	var mu sync.Mutex
+	var visited, failed, partial int
 	var lastErr error
-	var pickups []pendingPickup
+	for i := 0; i < escalationWorkers; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for tenant := range jobs {
+				waiting.Add(-1)
+				outcome := s.serveTenant(ctx, tenant, contended)
+				mu.Lock()
+				visited++
+				if outcome.failed {
+					failed++
+					lastErr = outcome.lastErr
+				}
+				if outcome.partial {
+					partial++
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+walk:
 	for _, tenant := range tenants {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		default:
+			break walk
+		case jobs <- tenant:
 		}
-		visited++
-		tctx := core.WithTenant(ctx, tenant)
-		policies, err := s.Api.EnabledNotificationPolicies(tctx)
-		if err != nil {
-			log.Error().Err(err).Str("tenant", tenant).Msg("Escalation scheduler: failed to load policies")
-			failed(tenant)
-			lastErr = err
-			continue
-		}
-		// Held notifications first: a release stamps the alarm's notification state, which
-		// is what the escalation below measures its window from. A failed release does NOT
-		// skip the tenant's escalation: one channel that is down must not also stop every
-		// other alarm of the tenant from re-paging.
-		releaseFailed := false
-		if err := s.Notifier.ReleaseHeld(tctx, policies, now); err != nil {
-			log.Warn().Err(err).Str("tenant", tenant).
-				Msg("Escalation scheduler: releasing held notifications failed; will retry next tick")
-			releaseFailed = true
-			lastErr = err
-		}
-		// Clears that overtook their page, or failed to send, are not carried by any message
-		// still to be redelivered; this sends them. It runs AFTER the escalation below, so a
-		// channel that is down cannot hold the pages of every tenant behind it, and under one
-		// bounded budget of its own.
-		pickup := func() {
-			pickups = append(pickups, pendingPickup{tenant: tenant, ctx: tctx, policies: policies})
-		}
-		if !anyEscalationEnabled(policies) {
-			pickup()
-			if releaseFailed {
-				failed(tenant)
+	}
+	close(jobs)
+	workers.Wait()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if failed == 0 && partial > 0 {
+		return fmt.Errorf("%d of %d tenants not fully served: %w", partial, visited, core.ErrPassPartial)
+	}
+	return core.PassResult(visited, failed, lastErr)
+}
+
+func (s *EscalationScheduler) tenantOrder(tenants []string) []string {
+	if len(tenants) == 0 {
+		return tenants
+	}
+	offset := int((s.nextTenant.Add(1) - 1) % uint64(len(tenants)))
+	return append(append(make([]string, 0, len(tenants)), tenants[offset:]...), tenants[:offset]...)
+}
+
+// serveTenant releases, escalates and picks up clears under this tenant's context.
+// Only starting an alarm spends the slice; in-flight work keeps its own budget.
+func (s *EscalationScheduler) serveTenant(ctx context.Context, tenant string, contended func() bool) (out tenantOutcome) {
+	now := s.Notifier.clock()
+	pass := &tenantPass{deadline: time.Now().Add(2 * s.Notifier.wholeDispatchBudget()),
+		contended: contended, timedOut: make(map[uint]bool)}
+	tctx := context.WithValue(core.WithTenant(ctx, tenant), tenantPassKey{}, pass)
+	defer func() {
+		if pass.exhausted {
+			if s.Notifier.sliceExhausted != nil {
+				s.Notifier.sliceExhausted.Inc()
 			}
-			continue
+			log.Warn().Str("tenant", tenant).Msg("Notification tenant slice exhausted; unstarted alarms remain due")
 		}
+	}()
+	policies, err := s.Api.EnabledNotificationPolicies(tctx)
+	if err != nil {
+		out.record(err)
+		return
+	}
+	out.record(s.Notifier.ReleaseHeld(tctx, policies, now))
+	if anyEscalationEnabled(policies) {
 		states, err := s.Api.OpenNotificationStates(tctx)
-		if err != nil {
-			log.Error().Err(err).Str("tenant", tenant).Msg("Escalation scheduler: failed to load open states")
-			// The clear pickup reads its own rows, not these: one failed read must not also
-			// leave the tenant's clears unannounced.
-			pickup()
-			failed(tenant)
-			lastErr = err
-			continue
-		}
-		// 🔑 A TENANT WHOSE RE-NOTIFICATIONS FAILED IS A TENANT THAT WAS NOT SERVED, and it
-		// counts. Tallying only the tenant ENUMERATION would report a pass that reached
-		// every tenant and escalated nothing as complete — moving the last-success gauge
-		// while no operator was paged about anything. That is the false-healthy this whole
-		// change exists to remove, one layer further in.
-		escalationFailed := releaseFailed
-		for _, state := range states {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-			if err := s.Notifier.Escalate(tctx, state, policies, now, s.defaultMax); err != nil {
-				log.Warn().Err(err).Str("tenant", tenant).Str("alarm", state.AlarmToken).
-					Msg("Escalation scheduler: re-notification failed; will retry next tick")
-				if errors.Is(err, core.ErrPassPartial) {
-					partialTenants[tenant] = true
-					partialErr = err
-				} else {
-					escalationFailed = true
-					lastErr = err
+		out.record(err)
+		if err == nil {
+			for _, state := range states {
+				if err := ctx.Err(); err != nil {
+					out.record(err)
+					break
+				}
+				if sliceExpired(tctx) {
+					out.record(core.ErrPassPartial)
+					break
+				}
+				if err := s.Notifier.Escalate(tctx, state, policies, now, s.defaultMax); err != nil {
+					log.Warn().Err(err).Str("tenant", tenant).Str("alarm", state.AlarmToken).
+						Msg("Escalation scheduler: re-notification incomplete; will retry next tick")
+					out.record(err)
 				}
 			}
 		}
-		pickup()
-		if escalationFailed {
-			failed(tenant)
-		}
 	}
-	// The pickup of clears runs only after EVERY tenant's escalations, each tenant under its own
-	// bounded budget, so a stalled destination in one tenant delays no tenant's re-pages.
-	for _, pk := range pickups {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		if err := s.Notifier.AnnouncePendingClears(pk.ctx, pk.policies, s.Notifier.clock()); err != nil {
-			log.Warn().Err(err).Str("tenant", pk.tenant).
-				Msg("Escalation scheduler: announcing pending clears failed; will retry next tick")
-			if errors.Is(err, core.ErrPassPartial) {
-				// Delivered, then ran out of its budget with a backlog: keeping up, not broken.
-				// Kept apart from lastErr so it cannot disguise a hard failure as partial.
-				partialTenants[pk.tenant] = true
-				partialErr = err
-			} else {
-				failed(pk.tenant)
-				lastErr = err
-			}
-		}
-	}
-	if len(failedTenants) == 0 && len(partialTenants) > 0 {
-		return fmt.Errorf("%d of %d tenants not fully served (last: %v): %w",
-			len(partialTenants), visited, partialErr, core.ErrPassPartial)
-	}
-	return core.PassResult(visited, len(failedTenants), lastErr)
-}
-
-// pendingPickup is one tenant's clear pickup, deferred to the end of the pass.
-type pendingPickup struct {
-	tenant   string
-	ctx      context.Context
-	policies []*model.NotificationPolicy
+	// Clears have their own bounded pickup budget, even when the page slice was
+	// exhausted. They never wait for another tenant's backlog.
+	out.record(s.Notifier.AnnouncePendingClears(tctx, policies, s.Notifier.clock()))
+	return
 }
 
 // anyEscalationEnabled reports whether any policy has escalation configured, so the

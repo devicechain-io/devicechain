@@ -28,7 +28,6 @@ import (
 	"github.com/devicechain-io/dc-outbound-connectors/model"
 	"github.com/devicechain-io/dc-outbound-connectors/processor"
 	"github.com/devicechain-io/dc-outbound-connectors/schema"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
@@ -81,7 +80,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -122,7 +121,7 @@ func buildMetrics() {
 }
 
 // createNatsComponents wires the durable connector-dispatch consumer and its dead-letter writer.
-func createNatsComponents(nmgr *messaging.NatsManager) error {
+func createNatsComponents(nmgr *messaging.NatsManager, peers *svcclient.Peers) error {
 	// Dead-letter writer: a terminal sink for a dispatch that exhausts the redelivery cap or is
 	// terminally undeliverable (SD-2). Creating the writer auto-provisions its stream.
 	dead, err := nmgr.NewWriter(streams.ConnectorDispatchDead)
@@ -169,7 +168,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// resolver cache — the same MECHANISM the egress limiter uses, not the same instance, so the two
 	// do not share a cache and neither one's misses warm the other.
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	tenantDeleted := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors", safetyGates)
+	tenantDeleted := governance.NewTenantLifecycleGateFor(peers, safetyGates)
 
 	executor, err := newExecutor(infra, processor.NewSecretResolver(SecretStore), Api,
 		time.Duration(Configuration.SendTimeoutMs)*time.Millisecond)
@@ -191,7 +190,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		tenantDeleted, Configuration.MaxConcurrentSends,
 		DispatchMetrics, core.NewReadPacer(Microservice, "connector dispatch"))
 	if Configuration.LpwanDownlink.Enabled {
-		Lpwan, LpwanAcks, err = buildLpwan(nmgr, infra, tenantDeleted)
+		Lpwan, LpwanAcks, err = buildLpwan(nmgr, infra, peers, tenantDeleted)
 		if err != nil {
 			return err
 		}
@@ -209,15 +208,17 @@ const downlinkLookback = 30 * time.Minute
 // 🔑 TWO CLIENTS, EACH WITH THE ONE AUTHORITY IT NEEDS. The claim client holds command:claim and
 // nothing else (command:write would let it create and cancel commands for any tenant); the device
 // client holds device:read, to read a device's DevEUI alias. Neither can be widened by the other.
-func buildLpwan(nmgr *messaging.NatsManager, infra mscfg.InfrastructureConfiguration,
+func buildLpwan(nmgr *messaging.NatsManager, infra mscfg.InfrastructureConfiguration, peers *svcclient.Peers,
 	tenantDeleted func(string) bool) (*lpwan.Adapter, *lpwan.AckFeed, error) {
-	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+	if err := peers.Ready(); err != nil {
 		return nil, nil, fmt.Errorf("lpwanDownlink is enabled but the service secret or user-management endpoint is not configured (infrastructure.serviceAuth, infrastructure.userManagement)")
 	}
-	if infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
+	cdURL, err := peers.URL(infra.CommandDelivery.Endpoint())
+	if err != nil {
 		return nil, nil, fmt.Errorf("lpwanDownlink is enabled but the command-delivery endpoint is not configured (infrastructure.commandDelivery): it could not claim or answer a command")
 	}
-	if infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+	dmURL, err := peers.URL(infra.DeviceManagement.Endpoint())
+	if err != nil {
 		return nil, nil, fmt.Errorf("lpwanDownlink is enabled but the device-management endpoint is not configured (infrastructure.deviceManagement): it could not read a device's DevEUI")
 	}
 	guard, err := egress.FromConfig(infra.Egress)
@@ -240,12 +241,8 @@ func buildLpwan(nmgr *messaging.NatsManager, infra mscfg.InfrastructureConfigura
 	if err != nil {
 		return nil, nil, err
 	}
-	cdURL := fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port)
-	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
-	claimClient := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors",
-		[]string{string(auth.CommandClaim)})
-	deviceClient := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors",
-		[]string{string(auth.DeviceRead)})
+	claimClient := peers.Client(auth.CommandClaim)
+	deviceClient := peers.Client(auth.DeviceRead)
 	log.Info().Str("commandDelivery", cdURL).
 		Msg("LoRaWAN downlink is enabled: consuming device-commands for devices behind inbound integrations.")
 	pending := lpwan.NewDBPending(RdbManager)
@@ -260,7 +257,7 @@ func buildLpwan(nmgr *messaging.NatsManager, infra mscfg.InfrastructureConfigura
 	})
 	adapter := lpwan.New(reader, responses, cmddownlink.NewClaimer(claimClient, cdURL),
 		lpwan.NewStoreLinks(Api, processor.NewSecretResolver(SecretStore)),
-		lpwan.NewServiceDevices(deviceClient, dmURL), lpwan.Router{ChirpStack: lpwan.NewChirpStack(guard), TTS: lpwan.NewTTS(guard)}, LpwanMetrics,
+		lpwan.NewServiceDevices(deviceClient, dmURL), lpwan.Router{ChirpStack: lpwan.NewChirpStack(guard), TTS: lpwan.NewTTS(guard), Webhook: lpwan.NewWebhook(guard)}, LpwanMetrics,
 		lpwan.Options{
 			Workers:       Configuration.MaxConcurrentSends,
 			Rate:          RateLimiter,
@@ -313,21 +310,20 @@ func newDispatchReader(nmgr *messaging.NatsManager, cfg *config.OutboundConnecto
 // (governance.NewUnresolvedAdmissions), built once per process in buildMetrics. Every tenant here
 // comes from the platform's own connector-dispatch stream, so it always gets an allowance of its
 // own.
-func buildEgressLimiter(cfg *config.OutboundConnectorsConfiguration, infra mscfg.InfrastructureConfiguration,
+func buildEgressLimiter(cfg *config.OutboundConnectorsConfiguration, peers *svcclient.Peers,
 	unresolved func(core.CeilingSource)) *core.TenantRateLimiter {
 	def := governance.Limits{
 		RatePerSecond: cfg.OutboundCallsPerSecond,
 		Burst:         cfg.OutboundBurst,
 	}
 	counted := core.WithUnresolvedAdmissions(unresolved)
-	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+	seam, err := peers.UserManagement(auth.TenantRead)
+	if err != nil {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant outbound overrides disabled; metering every tenant at the platform default.")
 		return core.NewTenantRateLimiter(core.StaticCeiling(def.RatePerSecond, def.Burst), counted)
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors", []string{string(auth.TenantRead)})
-	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Outbound)
-	log.Info().Str("userManagement", umURL).Msg("Per-tenant outbound overrides enabled (fail-open to platform default).")
+	resolver := governance.NewServiceLimitResolver(seam.Client, seam.URL, def, governance.Outbound)
+	log.Info().Str("userManagement", seam.URL).Msg("Per-tenant outbound overrides enabled (fail-open to platform default).")
 	return core.NewTenantRateLimiter(resolver.Ceiling, counted)
 }
 
@@ -337,12 +333,11 @@ func buildEgressLimiter(cfg *config.OutboundConnectorsConfiguration, infra mscfg
 var safetyGates *governance.SafetyGates
 
 func afterMicroserviceInitialized(ctx context.Context) error {
-	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
-	// registration panics, and the gates below are decided in callbacks that can run again.
-	safetyGates = governance.NewSafetyGates(Microservice)
 	if err := parseConfiguration(); err != nil {
 		return err
 	}
+
+	peers := svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
 
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the validator in
 	// the background and gate the data plane on readiness rather than exiting when
@@ -359,7 +354,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// which migrations, which oncreate callback, which schema, and the wiring in AfterRdb
 	// that has to happen between two of the constructions.
 	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
+			AppendOnly: []any{&model.ConnectorVersion{}},
 			// This chain includes the secret-store migration, which the rdb manager runs
 			// under the startup advisory lock.
 			Migrations: schema.Migrations,
@@ -385,20 +382,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 			// The per-tenant outbound egress limiter (ADR-060 SD-3). Fail-open to the
 			// platform default when per-tenant overrides are not wired (never unlimited).
-			RateLimiter = buildEgressLimiter(Configuration, Microservice.InstanceConfiguration.Infrastructure, EgressUnresolved)
+			RateLimiter = buildEgressLimiter(Configuration, peers, EgressUnresolved)
 
 			// The connector store (ADR-060 C4a). createNatsComponents binds it into the
 			// executor (publish resolves a ConnectorRef to its latest published version),
 			// and the GraphQL providers below reuse the same instance.
 			Api = model.NewApi(RdbManager, SecretStore)
-
-			// Report the size of this schema's append-only history tables (ADR-023): a connector version history only
-			// grows, and so does the audit journal the collector adds for every schema. Nothing
-			// prunes either, so the storage floor rises with use and nothing else says how fast.
-			// Registered directly rather than through Microservice.NewGauge because a failed read
-			// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
-			prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
-				&model.ConnectorVersion{}))
 
 			// Build every Prometheus instrument this service exports, before the NATS
 			// manager that consumes them.
@@ -407,7 +396,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		},
 		// The secret store, the rate limiter and the Api must already exist when this runs,
 		// which the order above guarantees.
-		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
+		Nats: &service.NatsSpec{OnCreate: func(nmgr *messaging.NatsManager) error {
+			return createNatsComponents(nmgr, peers)
+		}},
 		GraphQL: &service.GraphQLSpec{
 			// The GraphQL surface carries the service identity plus the per-tenant,
 			// versioned Connector CRUD (ADR-060 slice C4). The Api built in AfterRdb is
@@ -423,6 +414,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			},
 		},
 	})
+	safetyGates = Svc.SafetyGates()
 	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}

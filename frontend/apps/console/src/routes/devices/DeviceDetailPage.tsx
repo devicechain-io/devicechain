@@ -59,8 +59,9 @@ const CONNECTIVITY_TAB = 'connectivity';
 
 export default function DeviceDetailPage() {
   const { t } = useTranslation('devices');
-  const { token: rawToken } = useParams<{ token: string }>();
-  const token = decodeURIComponent(rawToken ?? '');
+  // The router hands the param over already decoded. Decoding it again turned a token
+  // holding a '%' into a different token, or threw on one such as "a%zz".
+  const token = useParams<{ token: string }>().token ?? '';
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
@@ -482,7 +483,7 @@ function PresenceTimelinePanel({ deviceToken }: { deviceToken: string }) {
           })}
         </DataTableBody>
       </DataTable>
-      {(data?.pagination.totalRecords ?? 0) > PRESENCE_TIMELINE_PAGE && (
+      {data?.pagination.hasMore && (
         <p className="text-xs text-muted-foreground">{t('showingRecentTransitions')}</p>
       )}
     </div>
@@ -546,8 +547,6 @@ function DeviceEventsPanel({ deviceToken }: { deviceToken: string }) {
     return <EmptyState description={t('noEvents')} />;
   }
 
-  const totalRecords = data?.pagination.totalRecords ?? 0;
-
   return (
     <div className="space-y-3">
       <DataTable>
@@ -570,7 +569,7 @@ function DeviceEventsPanel({ deviceToken }: { deviceToken: string }) {
           ))}
         </DataTableBody>
       </DataTable>
-      {totalRecords > 10 && (
+      {data?.pagination.hasMore && (
         <p className="text-xs text-muted-foreground">{t('showingRecentEvents')}</p>
       )}
     </div>

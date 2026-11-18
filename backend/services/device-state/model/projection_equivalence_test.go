@@ -132,6 +132,17 @@ func referenceMergeLatestLocations(api *Api, ctx context.Context, token string, 
 // mergeOneAtATime is path A for one update.
 func mergeOneAtATime(api *Api, u ProjectionUpdate) error {
 	ctx := core.WithTenant(context.Background(), u.Tenant)
+	if u.Incarnation != 0 {
+		var row DeviceState
+		err := api.RDB.DB(ctx).Where("device_token = ?", u.DeviceToken).First(&row).Error
+		if err == nil && row.Incarnation.Valid && u.Incarnation < uint64(row.Incarnation.Int64) {
+			return nil
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+	}
+	u.Identity.Incarnation = u.Incarnation
 	if _, err := api.MergeDeviceState(ctx, u.DeviceToken, u.OccurredAt, u.Presence, u.Identity); err != nil {
 		return err
 	}
@@ -185,6 +196,7 @@ func projectionRows(t *testing.T, api *Api) []string {
 	}
 	var out []string
 	for _, s := range states {
+		out = append(out, fmt.Sprintf("incarnation %s/%s %v", s.TenantId, s.DeviceToken, s.Incarnation))
 		owners := "null"
 		if s.ScopeAnchors != nil {
 			owners = "[" + strings.Join(s.ScopeAnchors, ",") + "]"
@@ -288,6 +300,11 @@ func fix(tenant, tok string, when time.Time, lat float64) ProjectionUpdate {
 	return u
 }
 
+func withIncarnation(u ProjectionUpdate, incarnation uint64) ProjectionUpdate {
+	u.Incarnation = incarnation
+	return u
+}
+
 func withIdentity(u ProjectionUpdate, ext string) ProjectionUpdate {
 	u.Identity.ExternalId, u.Identity.Source = ext, "mqtt1"
 	return u
@@ -305,6 +322,11 @@ func withOwners(u ProjectionUpdate, received time.Time, anchors ...string) Proje
 func equivalenceCases() []equivalenceCase {
 	const A, B = "tenant-a", "tenant-b"
 	return []equivalenceCase{
+		{name: "equal incarnation", seed: []ProjectionUpdate{withIncarnation(reading(A, "d1", at(0), "temp", 17), 17)}, updates: []ProjectionUpdate{withIncarnation(reading(A, "d1", at(time.Minute), "temp", 23), 17)}, want: []string{"value=23", "{17 true}"}},
+		{name: "stale incarnation dropped", seed: []ProjectionUpdate{withIncarnation(reading(A, "d1", at(0), "temp", 17), 23)}, updates: []ProjectionUpdate{withIncarnation(reading(A, "d1", at(time.Minute), "temp", 99), 17)}, want: []string{"value=17", "{23 true}"}},
+		{name: "newer incarnation resets older clock", seed: []ProjectionUpdate{withIncarnation(reading(A, "d1", at(time.Minute), "temp", 17), 17)}, updates: []ProjectionUpdate{withIncarnation(reading(A, "d1", at(0), "temp", 23), 23)}, want: []string{"value=23", "{23 true}"}},
+		{name: "unstamped stays unstamped", seed: []ProjectionUpdate{reading(A, "d1", at(0), "temp", 17)}, updates: []ProjectionUpdate{withIncarnation(reading(A, "d1", at(time.Minute), "temp", 23), 23)}, want: []string{"value=23", "{0 false}"}},
+		{name: "old producer still folds", seed: []ProjectionUpdate{withIncarnation(reading(A, "d1", at(0), "temp", 17), 23)}, updates: []ProjectionUpdate{reading(A, "d1", at(time.Minute), "temp", 99)}, want: []string{"value=99", "{23 true}"}},
 		{name: "data events out of order on an inferred device",
 			updates: []ProjectionUpdate{data(A, "d1", at(2*time.Minute)), data(A, "d1", at(0)), data(A, "d1", at(time.Minute))},
 			want:    []string{"act=2026-09-20T12:02:00Z"}},

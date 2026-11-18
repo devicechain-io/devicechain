@@ -43,6 +43,13 @@ var rawSQLAllowList = []siteEntry{
 
 	// --- ddl-catalog ---
 	{
+		Path: "backend/core/test/secretstest/postgres.go", Func: "Stores", Count: 2,
+		Why: "integration-test helper only (build tag integration): CREATE SCHEMA and its cleanup's DROP SCHEMA " +
+			"... CASCADE for a throwaway schema whose name is secrets_it_ plus a nanosecond timestamp, formatted " +
+			"in because a schema name cannot be bound and must be unique per run. DDL on that test schema " +
+			"alone; touches no row",
+	},
+	{
 		Path: "backend/core/rdb/storage_growth.go", Func: "measureFromCatalog", Count: 1,
 		Why: "reads relation sizes from the pg_class catalog for one table name; returns no tenant rows",
 	},
@@ -73,6 +80,15 @@ var rawSQLAllowList = []siteEntry{
 			"per policy statement (each call to the exec closure counts as a site). The retention " +
 			"policy deletes every tenant's rows by age, by operator opt-in; it is table-level " +
 			"configuration with no tenant predicate by design",
+	},
+	{
+		Path: "backend/services/event-management/model/lifecycle.go", Func: "applyRollupRetention", Count: 3,
+		Why: "reconciles the INSTANCE-WIDE TimescaleDB retention policy on the measurement_rollups continuous " +
+			"aggregate: remove_retention_policy/add_retention_policy on the package constant RollupAggregate, " +
+			"formatted in by the same statement builders applyOne uses, with the window in days bound. Two " +
+			"calls to the exec closure on the enable path and one direct Exec on the disable path. Like the raw " +
+			"tables' policy it ages out every tenant's rows by time, by operator opt-in, and is table-level " +
+			"configuration with no tenant predicate by design; it reads and writes no row itself",
 	},
 
 	// --- metering ---
@@ -154,6 +170,23 @@ var rawSQLAllowList = []siteEntry{
 		Why: "copies the transaction's TEMP table of newly revoked serials into pending_revocation_expansion_serials, " +
 			"binding tenant_id and trust_anchor_id from the caller on every row it writes. The only formatted-in " +
 			"name is a package constant naming the temp table.",
+	},
+	{
+		Path: "backend/services/device-management/model/position_classify.go", Func: "Api.ClassifyUnclassifiedAlarms", Count: 1,
+		Why: "the alarm position classifier's periodic pass, which spans tenants on purpose: it classifies every " +
+			"alarm whose position_derived is NULL (what a replica older than the column writes during a rolling " +
+			"upgrade, or a stale false the alarm_position_stale trigger re-opened) for every tenant, under no caller. It writes only alarms.position_derived and the contributor version it judged (position_classified_version), only on NULL rows, " +
+			"and reads device_profiles, detection_rules and device_profile_versions solely through joins that " +
+			"equate p.tenant_id with the alarm's own tenant_id, so a rule is resolved only within its alarm's " +
+			"tenant. The statement is one package constant (classifyAlarmsSQL), the same text the migration " +
+			"runs (TestClassifierMatchesTheMigration).",
+	},
+	{
+		Path: "backend/services/device-management/model/position_classify.go", Func: "Api.classifyAlarm", Count: 1,
+		Why: "classifies the one alarm the integrator just folded from an edge with no position verdict: the " +
+			"classifier constant plus a literal WHERE binding a.tenant_id from the request context and a.id. " +
+			"It writes only that row's position_derived and position_classified_version, and its joins equate p.tenant_id with the alarm's " +
+			"tenant_id, as for Api.ClassifyUnclassifiedAlarms.",
 	},
 
 	// --- erasure ---

@@ -41,11 +41,11 @@ func newTestHttpSourceWithIngest(t *testing.T, allow RateGate, ingest config.Htt
 }
 
 // admitAll is an ingest pipeline that is always accepting.
-func admitAll(string) error { return nil }
+func admitAll(string, string) error { return nil }
 
 // newTestHttpSourceAdmitting is newTestHttpSourceWithIngest with the backpressure question
 // spelled out, for the tests that drive a refusal.
-func newTestHttpSourceAdmitting(t *testing.T, allow RateGate, admit func(string) error, ingest config.HttpIngest,
+func newTestHttpSourceAdmitting(t *testing.T, allow RateGate, admit func(string, string) error, ingest config.HttpIngest,
 	earlyClose func(string)) (*HttpEventSource, *capturedDecode, *capturedFailure) {
 	t.Helper()
 	return newTestHttpSourceGated(t, allow, admitAllReadings, admit, ingest, earlyClose)
@@ -53,7 +53,7 @@ func newTestHttpSourceAdmitting(t *testing.T, allow RateGate, admit func(string)
 
 // newTestHttpSourceGated is newTestHttpSourceAdmitting with the reading stage spelled out,
 // for the tests that drive it.
-func newTestHttpSourceGated(t *testing.T, allow RateGate, readings ReadingGate, admit func(string) error,
+func newTestHttpSourceGated(t *testing.T, allow RateGate, readings ReadingGate, admit func(string, string) error,
 	ingest config.HttpIngest, earlyClose func(string)) (*HttpEventSource, *capturedDecode, *capturedFailure) {
 	t.Helper()
 	dec := &capturedDecode{}

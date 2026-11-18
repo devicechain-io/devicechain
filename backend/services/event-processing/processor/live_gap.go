@@ -120,7 +120,7 @@ func (rp *ResolvedEventsProcessor) fillGap(msg messaging.Message) bool {
 				// No supervisor to rebuild the term: ending it alone would leave a Ready pod that
 				// detects nothing, which is the shape haltStaleWriter refuses for the same reason.
 				rp.Microservice.FailNow(fmt.Errorf("event-processing: the live gap %d..%d on partition %q "+
-					"could not be read for %s", from, to, rp.cfg.PartitionId, parked.Round(time.Second)))
+					"could not be read for %s", from, to, rp.partitionID(), parked.Round(time.Second)))
 			}
 			rp.pcancel()
 		}
@@ -142,7 +142,12 @@ func (rp *ResolvedEventsProcessor) retryGapFill() {
 	msg := *rp.gapHeld
 	rp.gapHeld = nil
 	rp.handle(msg) // re-parks on a failed fill
-	if rp.gapHeld == nil && rp.checkpointDue() {
+	// NOT checkpointDue: the cost spacing does not apply here. The fill that just succeeded
+	// commits its own checkpoints by count, unspaced, and each one restarts the spacing window,
+	// so a spaced trigger would leave the held message's ack to the next interval tick. That
+	// message is the oldest delivery the consumer has outstanding -- it has waited out the
+	// park on its ack window -- so it is acked on the tick that applies it, as before spacing.
+	if rp.gapHeld == nil && rp.checkpointCountReached() {
 		rp.checkpoint(rp.pctx())
 	}
 }
@@ -183,10 +188,7 @@ func (rp *ResolvedEventsProcessor) fillRange(from, to uint64) (err error) {
 		rp.metrics.recordGapSequences(gapSeqAbsent, (to-from+1)-delivered)
 	}()
 
-	if rp.Replay == nil {
-		return errors.New("no range reader is configured")
-	}
-	reader, err := rp.Replay.NewRangeReader(rp.cfg.Suffix, from, to)
+	reader, err := rp.openRange(from, to)
 	if err != nil {
 		return fmt.Errorf("open range reader: %w", err)
 	}

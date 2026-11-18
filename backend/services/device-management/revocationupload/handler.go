@@ -262,40 +262,25 @@ func issuerChainPem(values []string) (string, int, string) {
 // authenticate verifies a tenant ACCESS token (never a service token) and returns its claims,
 // writing the refusal itself on any failure.
 func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (*auth.Claims, bool) {
-	const prefix = "Bearer "
-	authz := r.Header.Get("Authorization")
-	if len(authz) <= len(prefix) || !strings.EqualFold(authz[:len(prefix)], prefix) {
-		refuse(w, r, http.StatusUnauthorized, "missing bearer token")
-		return nil, false
-	}
-	var v *auth.Validator
-	if h.validator != nil {
-		v = h.validator()
-	}
-	if v == nil {
-		refuse(w, r, http.StatusUnauthorized, "authentication is not available")
-		return nil, false
-	}
-	claims, err := v.Validate(authz[len(prefix):])
+	result, err := (auth.BearerAuth{Plane: auth.PlaneUpload, Verify: auth.AccessVerifier(h.validator), Policy: h.policy}).Authenticate(r)
 	if err != nil {
-		refuse(w, r, http.StatusUnauthorized, "invalid token")
+		msg := "invalid token"
+		switch err.(*auth.BearerError).Reason {
+		case auth.BearerMissing:
+			msg = "missing bearer token"
+		case auth.BearerUnavailable:
+			msg = "authentication is not available"
+		}
+		refuse(w, r, http.StatusUnauthorized, msg)
 		return nil, false
 	}
-	// 🔴 AFTER Validate, NEVER BEFORE: the audience rule runs on a token whose signature, expiry
-	// and type were verified, so a forged token never reaches it. A refusal is the same 401 an
-	// invalid token gets.
-	var p *auth.PlanePolicy
-	if h.policy != nil {
-		p = h.policy()
-	}
-	if err := p.Admit(claims, auth.PlaneUpload); err != nil {
-		refuse(w, r, http.StatusUnauthorized, "invalid token")
-		return nil, false
-	}
+	claims := result.Claims
+
 	if claims.Tenant == "" {
 		refuse(w, r, http.StatusUnauthorized, "invalid token")
 		return nil, false
 	}
+
 	return claims, true
 }
 

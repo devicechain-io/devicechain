@@ -16,14 +16,16 @@ import YouTubeLite from '@site/src/components/YouTubeLite';
 
 :::note 本页的前提条件
 你需要 `dcctl`，以及 `PATH` 中的四个工具：`docker`、`kubectl`、
-[`kind`](https://kind.sigs.k8s.io/) 和 [OpenTofu](https://opentofu.org/)（即 `tofu` 二进制文件；
-也可以使用 `terraform`）。无需事先准备集群。具体要求见下文的[前提条件](#prerequisites)。
+[`kind`](https://kind.sigs.k8s.io/) 和 **1.10 或更高版本**的 [OpenTofu](https://opentofu.org/)（即 `tofu` 二进制文件；
+也可以使用 1.10 或更高版本的 `terraform`）。无需事先准备集群。具体要求见下文的[前提条件](#prerequisites)。下载步骤之后的命令按 bash shell 编写；在 Windows 上，请在 Git Bash 或 WSL 中运行。
 :::
 
 ## 前提条件 {#prerequisites}
 
 `dcctl install` 和 `dcctl bootstrap` 都会先运行预检。如果这四个工具中有任何一个缺失，命令就会**停止**。这样你只会花十秒发现缺失，而不是等上十分钟。
 
+- **OpenTofu 1.10 或更高版本。** 预检会确认 `tofu`（或 `terraform`）存在，并拒绝早于 1.10 的版本，因此旧的二进制文件会在创建任何资源之前就让运行停止。`tofu version` 会打印你的版本。
+- **足够的集群资源。** 当 Docker 的 CPU 少于 4 个或内存少于 8 GiB 时，预检会发出警告；镜像和数据库卷需要 40 GiB 可用磁盘。在 Docker Desktop 中，可在 **Settings → Resources** 中设置。第 1 步使用 `--compact` 安装，它会降低每个 Pod 的资源请求，使实例能在笔记本电脑上运行。
 - 不需要 `helm` 命令。`dcctl` 自带 Chart，并通过 Helm 的 Go 库安装，预检不会检查这个二进制文件。
 - 缺少 `ko` 和 `cloud-provider-kind` 只会产生警告。只有从源码构建镜像（`--build`）时才需要 `ko`。
 - 无需事先准备集群。`dcctl install local` 会查找名为 `devicechain` 的 kind 集群（或通过 `--cluster` 指定的名称）；如果不存在，就会询问是否创建。`--kube-context <name>` 可指向你已有的集群，该命令绝不会创建或删除这个集群。
@@ -43,7 +45,7 @@ import YouTubeLite from '@site/src/components/YouTubeLite';
 
 ## 获取 dcctl {#get-dcctl}
 
-`dcctl` 是单个文件，作为 `dcctl_<version>_<os>_<arch>` 附在每个 [GitHub 发布版本](https://github.com/devicechain-io/devicechain/releases)上：Linux 和 macOS 为 `.tar.gz`，Windows 为 `.zip`；`<os>` 为 `linux`、`darwin` 或 `windows`，`<arch>` 为 `amd64` 或 `arm64`。发布版本中的 `checksums.txt` 列出了每个文件的 SHA-256 摘要。`<version>` 是不带前导 `v` 的版本号（标签为 `v0.27.0` 的版本写作 `0.27.0`）。
+`dcctl` 是单个文件，作为 `dcctl_<version>_<os>_<arch>` 附在每个 [GitHub 发布版本](https://github.com/devicechain-io/devicechain/releases)上：Linux 和 macOS 为 `.tar.gz`，Windows 为 `.zip`；`<os>` 为 `linux`、`darwin` 或 `windows`，`<arch>` 为 `amd64` 或 `arm64`。发布版本中的 `checksums.txt` 列出了每个文件的 SHA-256 摘要。`<version>` 是不带前导 `v` 的版本号（标签为 `v1.6.0` 的版本写作 `1.6.0`）。
 
 在 Linux 或 macOS 上：
 
@@ -72,9 +74,21 @@ Expand-Archive dcctl_<version>_windows_amd64.zip -DestinationPath .
 先准备一次集群，再在其中创建实例：
 
 ```bash
-dcctl install local
+dcctl install local --compact
 dcctl bootstrap local devicechain --host localhost --no-tls
 ```
+
+`--compact` 按笔记本电脑的规模配置集群：更低的资源请求、不安装监控栈、不安装 cert-manager，因此也没有数据库备份。不加该参数时，仅处理事件的服务就请求约 4 个 CPU，放不下的 Pod 会一直处于 `Pending`，直到安装超时。在资源充足的机器上，可以去掉它以获得监控和备份。这一选择属于集群，集群上有实例运行时无法更改。参见 [`--compact`](../deployment/bootstrap.md#--compact)。
+
+:::tip 在笔记本上保留备份
+如果笔记本有空间容纳 20Gi 的备份存储，安装时加上 `--no-tls=false`，即可在紧凑集群上保留 cert-manager，从而保留数据库备份：
+
+```bash
+dcctl install local --compact --no-tls=false
+```
+
+bootstrap 命令保持不变：它的 `--no-tls` 只让该实例通过普通 HTTP 提供服务。根密钥托管不受这一选择影响；只要不传 `--no-escrow` 或 `--dev`，上面的步骤已经保留了它。
+:::
 
 :::note 在脚本或 CI 任务中
 `dcctl bootstrap` 会要求输入口令，用来封存根密钥托管（escrow）制品。没有终端可供询问时，它会报错 `no escrow passphrase and no terminal to ask at` 并停止。可以不经交互提供口令，用文件或环境变量均可：
@@ -90,7 +104,7 @@ DCCTL_ESCROW_PASSPHRASE='<passphrase>' dcctl bootstrap local devicechain --host 
 
 在本地 kind 集群上，本机的 **1883** 端口连到你首个引导的实例的 MQTT 代理。它使用 TLS；连接方法参见[发布事件](../guides/connecting-a-device.md#publishing-an-event)。
 
-`dcctl install` 创建 kind 集群，并安装集群中所有实例共享的组件：DeviceChain Operator 及其自定义资源定义、关系数据库、CloudNativePG Operator、cert-manager、监控和入口。每个集群只需运行一次；如果集群尚未完成这一步，`dcctl bootstrap` 就会拒绝执行。参见[安装集群](../deployment/bootstrap.md#install)。
+`dcctl install` 创建 kind 集群，并安装集群中所有实例共享的组件：DeviceChain Operator 及其自定义资源定义、关系数据库、CloudNativePG Operator 和入口；不使用 `--compact` 时还包括 cert-manager 和监控。每个集群只需运行一次；如果集群尚未完成这一步，`dcctl bootstrap` 就会拒绝执行。参见[安装集群](../deployment/bootstrap.md#install)。
 
 实例 ID（这里是 `devicechain`）用于两个地方：
 
@@ -134,7 +148,7 @@ cat ~/.devicechain/sims/demo.json
 
 `simPassword` 字段是 `demo@sim.devicechain.local` 的密码。下一步会用到这两项。
 
-要在控制台中查看该租户，请退出超级用户，并以 `demo@sim.devicechain.local` 和该密码登录。这个身份才能打开租户控制台。如果不想使用 `dcctl sim create`，可以通过实例管理 API 的 `createIdentity` 变更操作创建身份，再用 `addMembership` 在该租户中授予其租户管理员角色。
+要在控制台中查看该租户，请退出超级用户，并以 `demo@sim.devicechain.local` 和该密码登录。这个身份才能打开租户控制台。如果不想使用 `dcctl sim create`，可以通过实例管理 API 的 `createTenant` 变更操作创建租户，用 `createIdentity` 创建身份，再用 `addMembership` 在该租户中授予其租户管理员角色。
 
 :::tip 借用模拟器的命令
 `dcctl sim create` 是[模拟器](#where-to-go-next)工作流的前半部分。这里使用它，是因为它会创建租户及限定于该租户的身份，正好满足需求；手动操作则需要调用实例管理 API 的三个变更操作。此后的步骤都使用任何应用都能使用的普通租户 API。
@@ -303,15 +317,15 @@ curl -s -X POST http://localhost/api/event-management/graphql \
 
 ### 触发第一条告警 {#first-alarm}
 
-1. 在 **Devices → Device Profiles** 中创建配置文件，令牌为 `temp-probe-profile`，名称为 **Temperature probe profile**，类别为 **sensor**。在 **Metrics** 中添加指标，令牌和键均为 `temperature`，类型为 **DOUBLE**，单位为 `Cel`。
+1. 在 **Devices → Device Profiles** 中创建配置文件，令牌为 `temp-probe-profile`，名称为 **Temperature probe profile**，类别为 **sensor**。在 **Metrics** 中添加指标，令牌和键均为 `temperature`，数据类型为 **Double**，单位为 `Cel`。
 2. 在 **Devices → Device Types** 中打开 `temp-probe`，在 **Profile** 中关联 `temp-probe-profile`。参见[设备类型和配置文件](../user-guide/device-types-and-profiles.md)。
 3. 在配置文件的 **Detection Rules** 中选择 **New detection rule → Form**。令牌设为 `temperature-high`，名称为 **Temperature high**，类型为 **Threshold**，严重程度为 **Warning**，勾选 **Enabled**。条件设为 `temperature > 25`，添加 **Raise alarm** 操作，告警键为 `temperature-high`。保存规则，然后在 **Versions** 中选择 **Publish**。保存的草稿不会运行。参见[检测规则](../user-guide/detection-rules.md)。
-4. 重复第 6 步的 HTTP 请求，将读数改为 `"temperature":"30.0"`。在 **Monitor → Alarms** 中找到 `sensor-001` 的活动告警，再发送 `"temperature":"21.5"` 清除它。必须在发布后发送新读数；旧读数不会自动回放。
+4. 重复第 6 步的 HTTP 请求，将读数改为 `"temperature":"30.0"`；第 5 步的端口转发必须仍在运行。在 **Monitor → Alarms** 中找到 `sensor-001` 的活动告警，再发送 `"temperature":"21.5"` 清除它。必须在发布后发送新读数；旧读数不会自动回放。
 
 ### 发送第一条命令 {#first-command}
 
 1. 在同一配置文件的 **Commands** 中添加命令，令牌和命令键均为 `identify`，名称为 **Identify**，影响为 **Normal**，不设置参数模式。再次 **Publish** 配置文件。
-2. 第 6 步的 HTTP `curl` 无法接收命令。发送前，按[接收命令](../guides/connecting-a-device.md#receiving-commands)启动 MQTT 订阅客户端（安装 Mosquitto 客户端，并按该指南使用实例 CA）。使用主机 `localhost`、客户端 ID `devicechain:sim-demo:sensor-001:sub`、用户名 `sim-demo:$DC_CRED_ID`（展开 shell 变量）、`ACCESS_TOKEN` 凭证的密码 `$DC_CRED_ID`，以及主题 `devicechain/sim-demo/device-commands/sensor-001`。保持连接。本地连接 `localhost` 时，还需按照指南处理 TLS 主机名验证。
+2. 第 6 步的 HTTP `curl` 无法接收命令。发送前，按[接收命令](../guides/connecting-a-device.md#receiving-commands)启动 MQTT 订阅客户端（安装 Mosquitto 客户端，并按该指南使用实例 CA）。使用主机 `localhost`、客户端 ID `devicechain:sim-demo:sensor-001:sub`、用户名 `sim-demo:$DC_CRED_ID`（展开 shell 变量）、不设密码（`ACCESS_TOKEN` 凭证只凭用户名连接；同时发送密码的连接会按 `MQTT_BASIC` 凭证校验并被拒绝），以及主题 `devicechain/sim-demo/device-commands/sensor-001`。保持连接。本地连接 `localhost` 时，还需按照指南处理 TLS 主机名验证。
 3. 在租户 API 上发出这条无害的测试命令：
 
 ```bash
@@ -335,6 +349,8 @@ curl -s -X POST http://localhost/api/command-delivery/graphql \
   `dcctl sim run` 会自行找到该模拟的 handshake 文件和控制端口；省略 `--simulator` 时，它会在 `PATH` 中查找 `dc-simulator`。从源码检出构建的贡献者可以运行 `cd backend/sims/dc-simulator && make build`，并改用 `./build/dc-simulator`。
 
   然后使用 `dcctl sim status demo`、`dcctl sim stop demo` 和 `dcctl sim start demo` 控制它。模拟器访问的是同一个接入端点，因此同样需要第 5 步的端口转发。
+
+  `demo` 模拟运行的是默认场景，它会发送读数，但没有声明任何检测规则，因此不会产生告警。若想要会产生告警的场景，请用 `dcctl sim create building --manifest buildingpulse` 创建第二个模拟，并用 `dcctl sim run building` 运行：十二个温控器的温度会升到 30 以上再回落，在租户 `sim-building` 的 **Monitor → Alarms** 中产生并清除 `bp-over-temp` 告警。以 `building@sim.devicechain.local` 和 `~/.devicechain/sims/building.json` 中的 `simPassword` 登录即可查看。
 
 - **[功能导览](./feature-tour.md)**：从这里继续，依次完成仪表板、会触发告警并下发命令的规则、设备对命令的应答，以及只能看到自己设备的客户用户，然后以第二个租户再运行一遍同样的导览。
 

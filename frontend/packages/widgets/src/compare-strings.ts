@@ -26,7 +26,7 @@ export interface CompareStrings {
   historyFailedShort: (n: number) => string;
 }
 
-export const COMPARE_STRINGS: Record<'en' | 'es', CompareStrings> = {
+export const COMPARE_STRINGS: Record<'en' | 'es' | 'zh-CN', CompareStrings> = {
   en: {
     capped: (shown, total) => `Showing ${shown} of ${total} devices (the first ${shown}); raise Most lines, up to 12, to see more.`,
     cappedPage: (shown, read, total) =>
@@ -55,8 +55,19 @@ export const COMPARE_STRINGS: Record<'en' | 'es', CompareStrings> = {
     thresholdShort: 'umbrales son referencias',
     historyFailedShort: (n) => `${n} sin leer`,
   },
+  'zh-CN': {
+    capped: (shown, total) => `显示 ${total} 台设备中的前 ${shown} 台；提高“最多曲线数”（最多 12 条）可查看更多。`,
+    cappedPage: (shown, read, total) => `显示 ${total} 台设备中的 ${shown} 台：此组的设备数超过已读取的 ${read} 台，仅绘制前 ${shown} 台。`,
+    bucketed: (bucket) => `每 ${bucket} 的平均值`,
+    bucketedTitle: (bucket) => `已存储的历史记录按每 ${bucket} 时间桶的平均值绘制，每桶一个点；此后实时到达的读数按原值绘制，不取平均。`,
+    thresholdNote: '阈值为参考线；历史数据点是时间桶的平均值，而非单次读数。',
+    historyFailed: (n) => `${n} 台设备的历史记录无法读取；其曲线从实时读数开始。`,
+    cappedShort: (shown, total) => `${total} 台中的 ${shown} 台`, thresholdShort: '阈值仅供参考',
+    historyFailedShort: (n) => `${n} 台未读取`,
+  },
 };
 
 export function compareStrings(locale: string | undefined = viewerLocale()): CompareStrings {
-  return locale?.toLowerCase().split('-')[0] === 'es' ? COMPARE_STRINGS.es : COMPARE_STRINGS.en;
+  const language = locale?.toLowerCase().split('-')[0];
+  return language === 'es' ? COMPARE_STRINGS.es : language === 'zh' ? COMPARE_STRINGS['zh-CN'] : COMPARE_STRINGS.en;
 }

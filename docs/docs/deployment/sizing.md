@@ -89,7 +89,7 @@ The shape (the replicas and CPU limits above, and the 12,000 events a second) wa
 
 ### How long the event store volume lasts {#event-store-volume}
 
-A stored event costs about 756 bytes in the event store, indexes included and before compression (345 bytes in the events table and 454 in the measurements table). At a saturated 12,000 events a second that is 32.7 GB an hour, so the `160Gi` volume holds about three and a half hours of continuous ingest after the log allowance and working room. `perf-16k` sets `260Gi`, which holds about four hours at 16,000 events a second (43.6 GB an hour). These are burst and benchmark volumes, not retention. Chunks older than `lifecycle.compressAfterDays` (7 by default) are compressed, so for sustained use set the data lifecycle and size the volume for it: see [Sizing the event store](./tuning-an-instance.md#event-store-sizing). The `DatabaseVolumeFillsWithinDay` alert fires when the volume is on course to fill.
+Use [756 bytes per stored event](./tuning-an-instance.md#event-store-sizing). At a saturated 12,000 events a second that is 32.66 GB an hour, so the `160Gi` volume holds about three and a half hours of continuous ingest after the log allowance and working room. `perf-16k` sets `260Gi`, which holds about four hours at 16,000 events a second (43.5 GB an hour). These are burst and benchmark volumes, not retention. Chunks older than `lifecycle.compressAfterDays` (7 by default) are compressed, so for sustained use set the data lifecycle and size the volume for it: see [Sizing the event store](./tuning-an-instance.md#event-store-sizing). The `DatabaseVolumeFillsWithinDay` alert fires when the volume is on course to fill.
 
 ## What `perf-16k` sets {#perf-16k}
 
@@ -197,9 +197,40 @@ variables take precedence over the size preset on initial creation, before the v
 For other preset OpenTofu variables, `dcctl` omits any variable you have supplied, so your value
 wins. The line `dcctl bootstrap` prints names the size it applied.
 
+The broker's topology is the other exception. `dcctl` always passes `ha` and
+`nats_cluster_replicas` itself, so a value you state for either is overridden. The server
+count and the per-stream replica count are set together from `--ha` (one server and one
+replica without it, three and three with it). Shard groups raise the server count to at least
+three, with at least one server per group. This keeps a cluster from running with every stream at one replica, paying
+for servers that hold no copies. A multi-server broker with single-replica streams and no
+shard groups cannot be built with `dcctl`. When you state either variable, `dcctl bootstrap`
+and `dcctl upgrade` print a note saying it was overridden.
+
 ## Changing the size of a running instance {#changing}
 
 An instance keeps the size it was bootstrapped with. Moving an existing instance to another size
 is not part of this release; until then, state the settings you want in an overlay, which wins
 over any size. Whatever the size, a JetStream volume cannot be grown by `dcctl`: see
 [how long the event streams can wait out an outage](./observability.md#outage-runway) for the procedure.
+
+## GKE backup storage {#gke-backup-storage}
+
+On GKE, new in-cluster backup volumes use `dc-object-store-standard`, a dedicated
+CSI StorageClass with `type: pd-standard` and `Retain` reclaim policy. Bulk backups
+do not need SSD. GKE's built-in `standard-rwo` uses `pd-balanced`, which still
+consumes SSD quota. JetStream and database storage classes are unchanged.
+Machine series that cannot attach `pd-standard` disks (for example C3, C4 and N4)
+need `backup_object_store_storage_class` set to a class their nodes support.
+`perf-20k` keeps the backup store at the cluster default of `160Gi`; its preset
+sets JetStream to `40Gi` and the event store to `260Gi`.
+
+Override `backup_object_store_storage_class` in the cluster OpenTofu variables to
+choose a different class for a **new** backup volume. Other providers continue to
+use their cluster default. `dcctl install` recognises GKE by the persistent-disk
+CSI provisioner on the cluster's StorageClasses and sets
+`backup_object_store_gke_standard_disk`; when you apply the cluster root yourself,
+set that variable on GKE. An explicit class wins over it. Existing PVCs keep both their size and storage class through
+`dcctl install` re-runs and upgrades, even when this override changes. This does
+not migrate existing SSD backups: moving them requires a separately planned data
+migration. Grow an existing volume with `kubectl patch` if its class supports
+expansion.

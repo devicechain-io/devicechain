@@ -84,53 +84,156 @@ WORKFLOW=".github/workflows/upgrade-gate.yml"
 #     decider that quietly narrowed the decision would otherwise be the one change the
 #     drill never sees.
 #
+# 🔴 THREE ANSWERS, NOT TWO, AND THE THIRD IS WHY THE LIST CAN BE SHORT. Every changed
+# file is classified as one of:
+#   GATE        it matches GATE_PATHS and not GATE_EXCLUDE  -> the drill runs;
+#   KNOWN       it is inside a workspace module (go.work), or matches NOT_UPGRADE
+#                                                            -> no reason to run;
+#   UNKNOWN     anything else: outside every module and on no list -> the drill RUNS.
+# The list used to be the only answer, so a path nobody had thought about (a new top-level
+# tree, VERSION, .ko.yaml) answered `run=false` by default. Now only code the workspace
+# declares, or a tree written down as not reaching the drill, can be skipped; everything
+# unrecognised is assumed to matter. The module list is read from go.work, and an unreadable
+# go.work makes every unlisted path UNKNOWN, so that failure runs the drill too.
+#
+# Re-derived 2026-11-16 from what the drill builds and runs (deploy/local/build-images.sh
+# builds every service, the operator, the broker and the console; dcctl and apiprobe are
+# built from the tree; the rig sources hack/), adding dependency versions, the operator,
+# configuration, KV and broker-auth declarations, secrets, schema packages, the install verb
+# and all of hack/ — and dropping test files and fixtures, which no drill compiles. Replayed
+# over the 80 merged commits before 2026-11-17, see the pull request that made the change.
+#
 # Syntax is GitHub's filter language, kept rather than switched to globs, so that the
 # list stays copy-pasteable back into an `on: paths:` block if this design is ever
 # reversed — and so `**` keeps meaning "crosses directories" while `*` does not.
 GATE_PATHS=(
+  # --- What an instance HOLDS -------------------------------------------------------
+  # Migrations and baselines, the direct cause. Wherever an area keeps them (most in a
+  # schema package, some in model).
   'backend/**/migration*.go'
   'backend/**/baseline*.go'
-  'backend/services/*/graphql/**'
+  # The rest of a schema package: seeds and snapshot structs whose file names are not
+  # migration*/baseline*. A seed edit moves what a fresh row holds and passes
+  # `migration-diff.sh verify`, which captures no rows; only a read-back sees it.
+  'backend/services/*/schema/**'
+  # A stored shape can move with NO migration at all — the geofence-archive class.
   'backend/services/*/model/model_*.go'
+  # The migration runner and the tenant-scope callback every read goes through.
+  'backend/core/rdb/**'
+  # Envelope-encrypted secrets are stored rows sealed under the instance root key, and
+  # dcctl upgrade reconciles the root-key escrow (core/secrets/escrow): a change to
+  # either can leave a stored secret that no longer opens after the upgrade.
+  'backend/core/secrets/**'
+  # --- How it is READ back ------------------------------------------------------------
+  # A served schema, because the drill's read-backs select named fields.
+  'backend/services/*/graphql/**'
+  # apiprobe seeds and reads; a change to the instrument is measured by the instrument.
   'backend/tools/apiprobe/**'
-  'backend/cli/bootstrap/**'
-  'backend/cli/cmd/upgrade.go'
-  # Core messaging: how streams are declared and reconciled, and how consumers are
-  # configured. Neither is a migration, a schema or the chart, yet both are applied
-  # to a LIVE instance's broker by the first new pod, and a declaration the running
-  # broker refuses — or a consumer config it will not update in place — crash-loops
-  # that pod at upgrade. The drill is the only thing in CI that puts an old
-  # instance's streams in front of new code.
+  # --- What the first NEW pod does to a LIVE instance ----------------------------------
+  # Core messaging and stream/KV declarations: the first new pod reconciles them against
+  # the live broker's streams, consumers and buckets, and a declaration the running
+  # broker refuses — or a consumer config it will not update in place — crash-loops that
+  # pod at upgrade with no migration anywhere in the diff.
   'backend/core/streams/**'
   'backend/core/messaging/**'
-  'hack/upgrade-rig.sh'
-  # The stub identity provider the drill creates a single sign-on connection against, and
-  # the trust and egress edits that let the instance reach it. Shared with the SSO rig, so
-  # an edit made for that rig still lands in front of this one.
-  'hack/lib/sso-stub-idp.sh'
-  # The file that decides WHICH drill runs. A change here does not alter what an
-  # instance holds — it alters what the gate measures, which is the one edit the gate
-  # must never be able to make unwatched: moving the recreate ceiling up stands the
-  # data drill down for a release, and moving it down stands the refusal drill down.
-  # Same reasoning as the entry below it, one level out.
-  'hack/upgrade-baseline-policy'
-  'hack/check-upgrade-gate-paths.sh'
-  'deploy/helm/**'
-  # The OpenTofu roots, which were missing and are the one half of an instance's
-  # shape the drill cannot reconstruct from anything else. The gate watched
-  # deploy/helm/** and backend/cli/bootstrap/** — the chart and the code — while the
-  # infrastructure those two are applied ON TOP OF could change unwatched. A PR
-  # touching only the roots answered run=false, and the drill never appeared.
-  #
-  # It matters most exactly when the roots are being split, because the hazard there
-  # is an apply against state written by an older binary, and the drill is the only
-  # thing in CI that puts an old instance in front of a new one.
-  'deploy/opentofu/**'
-  # The root DISCOVERY every tofu gate now iterates over. A change here silently
-  # changes which roots four separate gates cover, so it is the same
-  # watch-the-watcher entry as hack/upgrade-baseline-policy above.
-  'hack/tofu-roots.sh'
+  'backend/core/kv/**'
+  # The broker accounts and credentials. The drill checks that the shared broker login
+  # is kept by the first upgrade and retired by the second, which is natsauth's output.
+  'backend/core/natsauth/**'
+  # Configuration. An old pod and a new one read the SAME instance configuration
+  # document during a rolling upgrade, so a new key, a changed default or a stricter
+  # parse here is what crash-loops the pods the upgrade has not reached yet — the
+  # failure the upgrade drill caught in a release-candidate drill (a defaulted new
+  # config key plus an unconditional stream subject).
+  'backend/core/config/**'
+  'backend/services/*/config/**'
+  # The message wire between old and new pods while both run.
+  'backend/proto/**'
+  'backend/services/*/proto/**'
+  # Dependency versions: one go.work resolves one version of each dependency for every
+  # image the drill builds (the database driver, the NATS client, the ORM), so a bump in
+  # any go.mod can change how every service reads and writes an existing instance.
+  'go.work'
+  'go.work.sum'
+  '**/go.mod'
+  '**/go.sum'
+  # The base image every ko-built image the drill runs is built on.
+  '.ko.yaml'
+  # --- The upgrade PROCEDURE --------------------------------------------------------
+  # 🔴 THE UPGRADE VERB ITSELF, which this list did not cover for one whole release
+  # (see the header). `dcctl upgrade` composes the release's values, reads back every
+  # credential, writes the instance configuration document, re-issues the broker's
+  # certificate and reconciles the root-key escrow. These are the packages it compiles
+  # outside core: bootstrap and the two it imports, plus the three verbs.
+  'backend/cli/bootstrap/**'
+  'backend/cli/dcdir/**'
+  'backend/cli/operator/**'
+  'backend/cli/cmd/upgrade.go'
+  'backend/cli/cmd/install.go'
+  'backend/cli/cmd/bootstrap.go'
+  # The operator: its image is built from this tree and the drill requires it to be
+  # running the version the services were upgraded to; dcctl also compiles its API
+  # types, manifests and functional-area table (k8s/api, apply, config, functionalarea).
+  'backend/k8s/**'
+  # The broker the drill restarts during the upgrade (dc-nats-server, built from this tree
+  # with its own main) and the broker administrator the chart runs as its pre-upgrade hook
+  # Job (dc-broker-admin). Either failing to start, or reconciling accounts differently, is
+  # an upgrade failure with no service code in the diff.
+  'backend/broker/**'
+  'backend/admin/**'
+  # The deploy module: the chart (it renders what an instance runs, and a chart change is
+  # what broke the upgrade procedure in v0.11.0), the OpenTofu roots the chart is applied
+  # on top of, the image build the drill runs (deploy/local/build-images.sh) and the
+  # operand image it loads (deploy/images/).
+  'deploy/**'
+  # --- The instrument -------------------------------------------------------------------
+  # Every script the drill or its workflow runs, sources or reads lives under hack/:
+  # the rig, the baseline policy that decides WHICH drill runs, the stub identity
+  # provider, the tofu-root discovery, the image-pin and pull helpers, and THIS FILE,
+  # which decides whether the drill runs at all. A textual reference walk from the
+  # workflow reaches forty of them, mostly through comments, so a hand list of the
+  # "real" ones would be a judgement nobody can check. All of hack/ runs it instead.
+  'hack/**'
   '.github/workflows/upgrade-gate.yml'
+)
+
+# Inside the paths above, files that can never reach a drill: the drill compiles no test
+# and reads no fixture (it builds images, dcctl and apiprobe, and none of their non-test
+# code embeds a testdata file — checked when this list was written).
+GATE_EXCLUDE=(
+  'backend/**/*_test.go'
+  'backend/**/testdata/**'
+)
+
+# Outside every workspace module, the trees that are KNOWN not to reach the drill. Any
+# other path outside the modules RUNS it: an unrecognised file is assumed to matter
+# (VERSION, a new top-level directory) rather than assumed not to.
+#   docs, docs-drafts, branding, *.md, LICENSE...: prose and assets nothing builds into
+#     an image the drill runs.
+#   frontend: the drill does build the console image, but it serves static files; its
+#     build is the frontend CI job's to fail, and nothing it holds survives an upgrade.
+#   sdks, demos, examples, _legacy: not built by the drill.
+#   backend/testdata: test fixtures (see GATE_EXCLUDE).
+#   .github/** other than this gate's workflow: other workflows, templates and
+#     dependabot config; the drill runs none of them.
+NOT_UPGRADE=(
+  'docs/**'
+  'docs-drafts/**'
+  'branding/**'
+  'frontend/**'
+  'sdks/**'
+  'demos/**'
+  'examples/**'
+  '_legacy/**'
+  'backend/testdata/**'
+  '.github/**'
+  '*.md'
+  'LICENSE'
+  'NOTICE'
+  '.gitignore'
+  '.gitattributes'
+  'global.json'
+  'widget-translations-added.txt'
 )
 
 usage() {
@@ -180,7 +283,7 @@ check_completeness() {
       echo "::error file=${f}::not matched by any pattern in GATE_PATHS, so a PR touching it would NOT run the upgrade drill"
       rc=1
     fi
-  done < <(git ls-files | grep -E '(^|/)(migration[^/]*|baseline[^/]*)\.go$' | grep -v '^_legacy/')
+  done < <(git ls-files | grep -E '(^|/)(migration[^/]*|baseline[^/]*)\.go$' | grep -v '_test\.go$' | grep -v '^_legacy/')
 
   # 🔴 ZERO FILES CHECKED IS A FAILURE, NOT A PASS. If the enumeration above ever
   # returns nothing — a rename, a moved tree, a grep that stopped matching — every
@@ -248,36 +351,84 @@ PY
 # that was never drilled — which is the exact outcome this whole file exists to prevent,
 # and it is indistinguishable from a drill that passed.
 match_changed() {
-  local f matched=() total=0
+  local verdict
+  # One python pass over the whole list, not one interpreter per file: a pull request can
+  # touch hundreds of files and this runs on every one of them.
+  verdict="$(GATE="$(printf '%s\n' "${GATE_PATHS[@]}")" \
+             EXCL="$(printf '%s\n' "${GATE_EXCLUDE[@]}")" \
+             INERT="$(printf '%s\n' "${NOT_UPGRADE[@]}")" \
+             python3 -c '
+import os, re, sys
 
-  while read -r f; do
-    [ -n "$f" ] || continue
-    total=$((total + 1))
-    if matches "$f" "${GATE_PATHS[@]}"; then
-      matched+=("$f")
-    fi
-  done
+def to_re(p):
+    out, i = "", 0
+    while i < len(p):
+        if p[i:i+3] == "**/": out += "(?:.*/)?"; i += 3
+        elif p[i:i+2] == "**": out += ".*"; i += 2
+        elif p[i] == "*":    out += "[^/]*"; i += 1
+        else:                out += re.escape(p[i]); i += 1
+    return re.compile("^" + out + "$")
 
-  # An empty file list is not "nothing to drill", it is "the file list did not arrive".
-  # A pull request always changes at least one file, so zero means the caller's `gh api`
-  # returned nothing, silently, and a `run=false` here would be a vacuous green.
-  if [ "$total" -eq 0 ]; then
-    echo "::warning::no changed files were supplied, which cannot be true of a pull request; running the drill rather than assuming there is nothing to drill" >&2
-    echo "run=true"
-    return 0
-  fi
+def pats(name):
+    return [to_re(x) for x in os.environ[name].splitlines() if x]
 
-  if [ "${#matched[@]}" -eq 0 ]; then
-    echo "None of the ${total} changed file(s) can change what an existing instance holds or how it is read. Skipping the drill." >&2
-    echo "run=false"
-    return 0
-  fi
+gate, excl, inert = pats("GATE"), pats("EXCL"), pats("INERT")
+hit = lambda f, ps: any(r.match(f) for r in ps)
 
-  {
-    echo "${#matched[@]} of ${total} changed file(s) can change what an existing instance holds or how it is read:"
-    printf '    %s\n' "${matched[@]}"
-  } >&2
-  echo "run=true"
+# The workspace modules, from go.work: `use ./dir` lines and `use ( ... )` blocks. A go.work
+# that cannot be read leaves this EMPTY, which makes every unlisted path "outside every
+# module" and therefore unknown, so the failure runs the drill rather than skipping it.
+mods = []
+try:
+    text = re.sub(r"//[^\n]*", "", open("go.work").read())
+    for block in re.findall(r"^use\s*\((.*?)\)", text, re.M | re.S):
+        mods += block.split()
+    mods += re.findall(r"^use\s+([^\s(]+)", text, re.M)
+except OSError as e:
+    print("::warning::could not read go.work (%s); every unlisted path counts as unknown" % e, file=sys.stderr)
+mods = [m[2:] if m.startswith("./") else m for m in mods]
+if not mods:
+    print("::warning::go.work names no modules; every unlisted path counts as unknown", file=sys.stderr)
+inside = lambda f: any(f == m or f.startswith(m + "/") for m in mods)
+
+total, gated, unknown = 0, [], []
+for line in sys.stdin:
+    f = line.strip()
+    if not f:
+        continue
+    total += 1
+    if hit(f, gate) and not hit(f, excl):
+        gated.append(f)
+    elif inside(f) or hit(f, inert):
+        pass
+    else:
+        unknown.append(f)
+
+err = lambda *a: print(*a, file=sys.stderr)
+if total == 0:
+    err("::warning::no changed files were supplied, which cannot be true of a pull request; running the drill rather than assuming there is nothing to drill")
+    print("run=true"); sys.exit(0)
+if gated:
+    err("%d of %d changed file(s) can change what an existing instance holds, how it is read, or how it is upgraded:" % (len(gated), total))
+    for f in gated: err("    " + f)
+if unknown:
+    err("%d of %d changed file(s) are outside every workspace module and on no known list; running the drill rather than assuming they cannot matter:" % (len(unknown), total))
+    for f in unknown: err("    " + f)
+if gated or unknown:
+    print("run=true")
+else:
+    err("None of the %d changed file(s) can change what an existing instance holds or how it is read. Skipping the drill." % total)
+    print("run=false")
+')" || {
+    # The classifier itself failed: "we do not know", which must not read as "nothing to drill".
+    echo "::warning::the path classifier failed; running the drill rather than guessing" >&2
+    verdict="run=true"
+  }
+  case "$verdict" in
+    run=true|run=false) echo "$verdict" ;;
+    *) echo "::warning::the path classifier produced '$verdict'; running the drill rather than guessing" >&2
+       echo "run=true" ;;
+  esac
 }
 
 check() {
@@ -377,9 +528,45 @@ PY
   # `*` must not cross a directory separator, or `backend/services/*/model/model_*.go`
   # would quietly widen to every model file at any depth. This is the property that
   # makes the regex translation necessary; a plain fnmatch would get it wrong.
-  out="$(printf 'backend/services/a/b/model/model_x.go\n' | match_changed 2>/dev/null)"
+  # (A real module, so the path is module code rather than an unknown path outside it.)
+  out="$(printf 'backend/services/device-management/x/model/model_x.go\n' | match_changed 2>/dev/null)"
   [ "$out" = "run=false" ] || { echo "SELF-TEST FAILED: '*' crossed a directory separator (got '$out')" >&2; return 1; }
   echo "    a single '*' does not cross a directory separator"
+
+  # Each added class must RUN as itself (one file per call, so nothing else can carry it).
+  local f
+  for f in backend/services/mcp/go.mod go.work.sum backend/k8s/controllers/instance_controller.go \
+           backend/core/config/instance.go backend/services/device-state/config/config.go \
+           backend/core/kv/buckets.go backend/services/user-management/schema/seed.go \
+           backend/core/secrets/escrow/escrow.go backend/core/natsauth/x.go \
+           backend/broker/dc-nats-server/main.go backend/admin/dc-broker-admin/main.go \
+           deploy/local/build-images.sh hack/lib/sso-stub-idp.sh backend/cli/cmd/install.go; do
+    out="$(printf '%s\n' "$f" | match_changed 2>/dev/null)"
+    [ "$out" = "run=true" ] || { echo "SELF-TEST FAILED: $f did not run the drill (got '$out')" >&2; return 1; }
+  done
+  echo "    dependency versions, the operator, config, KV, secrets, seeds, the image build, hack/ and the install verb RUN the drill"
+
+  # FAIL SAFE: a path outside every module that no list accounts for runs the drill.
+  out="$(printf 'mystery/new-tree/file.txt\n' | match_changed 2>/dev/null)"
+  [ "$out" = "run=true" ] || { echo "SELF-TEST FAILED: an unknown path outside the modules was skipped (got '$out')" >&2; return 1; }
+  echo "    an unknown path outside every module RUNS the drill"
+
+  # THE COUNTERWEIGHT: module code off the list, a test in a gated tree, a fixture and
+  # another workflow skip. Without it, "always run" would pass every case above.
+  out="$(printf 'backend/services/mcp/server/server.go\nbackend/cli/bootstrap/install_test.go\nbackend/core/rdb/testdata/x.sql\n.github/workflows/ci.yml\n' | match_changed 2>/dev/null)"
+  [ "$out" = "run=false" ] || { echo "SELF-TEST FAILED: module code off the list, a test file or another workflow ran the drill (got '$out')" >&2; return 1; }
+  echo "    module code off the list, a test file, a fixture and another workflow SKIP the drill"
+
+  # An unreadable go.work must not make module code look known: with no module list the
+  # same file is outside every module, so it runs.
+  out="$(cd "$tmp" && printf 'backend/services/mcp/server/server.go\n' | match_changed 2>/dev/null)"
+  [ "$out" = "run=true" ] || { echo "SELF-TEST FAILED: a missing go.work did not fail safe (got '$out')" >&2; return 1; }
+  echo "    a missing go.work FAILS SAFE and runs the drill"
+
+  # A classifier that cannot run means "we do not know", never "nothing to drill".
+  out="$(python3() { return 1; }; printf 'docs/README.md\n' | match_changed 2>/dev/null)"
+  [ "$out" = "run=true" ] || { echo "SELF-TEST FAILED: a failed classifier did not fail safe (got '$out')" >&2; return 1; }
+  echo "    a classifier that fails FAILS SAFE and runs the drill"
 
   echo "SELF-TEST PASSED"
 }

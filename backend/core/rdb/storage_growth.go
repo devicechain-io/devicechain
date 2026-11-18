@@ -134,6 +134,14 @@ func NewStorageGrowthCollector(ms *core.Microservice, db *gorm.DB, models ...any
 	}
 }
 
+// RegisterStorageGrowth registers append-only table metrics on the service's registry.
+// The collector always includes the audit journal. A nil registerer is a no-op.
+func RegisterStorageGrowth(ms *core.Microservice, db *gorm.DB, models ...any) {
+	if reg := ms.MetricsRegisterer(); reg != nil {
+		reg.MustRegister(NewStorageGrowthCollector(ms, db, models...))
+	}
+}
+
 // Describe implements prometheus.Collector.
 func (c *StorageGrowthCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.rowsDesc

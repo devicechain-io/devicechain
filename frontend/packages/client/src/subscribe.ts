@@ -19,11 +19,15 @@
 // token, and reports the reconnect to the sink as connected(true) so a consumer
 // re-queries whatever it may have missed. graphql-ws treats 4401 as fatal and does
 // not retry it on its own. Any other dropped socket is retried for as long as the
-// operation is wanted, with a capped, jittered back-off (clientFor).
+// operation is wanted, with a capped, jittered back-off (clientFor). So is a connect that
+// could not get a token because refreshing it failed transiently after the held one had
+// expired (see shouldRetry).
 
 import type { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+import type { GraphQLFormattedError } from 'graphql';
 import { createClient, type Client } from 'graphql-ws';
 
+import { isTransientRefreshError } from './session';
 import { areaPath, resolveAuthToken, type Area } from './transport';
 
 // The graphql-transport-ws close code for an unauthorized connection. Mid-session
@@ -94,7 +98,18 @@ function clientFor(area: Area): AreaClient {
       // this client is not. The closes that say the request itself is wrong (4400, 4401,
       // 4409, 4429) are fatal inside graphql-ws whatever this answers, so an expired or
       // refused token still reaches subscribe() below and the session flow, never a loop.
-      shouldRetry: (err) => (typeof Event != 'undefined' && err instanceof Event) || hasCode(err),
+      //
+      // 🔴 And a token that could not be had FOR NOW. The session's getAccessToken, under
+      // transientRefreshErrors: 'throw', throws when the held access token has expired and the
+      // refresh failed transiently (no response, a 5xx, a 429): nothing was refused and the
+      // session is kept. connectionParams lets that
+      // throw reach graphql-ws, which reports it here first and then closes the socket with
+      // 4005; answering false made every subscription on the area error out over an outage of
+      // the identity service, and nothing reopened them. It is retried like a dropped socket,
+      // with the same back-off. A refused refresh is not transient: the session ends, the next
+      // connect carries no token, and the server's 4401 at connect is surfaced as before.
+      shouldRetry: (err) =>
+        (typeof Event != 'undefined' && err instanceof Event) || hasCode(err) || isTransientRefreshError(err),
     });
     const state: AreaClient = { client, acked: false, lastCloseWasAcked: false };
     // Registered once, here, before any subscription can register its own — so on a
@@ -129,6 +144,11 @@ function isUnauthorizedClose(err: unknown): boolean {
 
 export interface SubscriptionSink<T> {
   next: (data: T) => void;
+  /**
+   * GraphQL errors carried by a result (for example a validation refusal sent as an
+   * error-only result before `complete`). Called before `next` when a result carries both.
+   */
+  errors?: (errors: ReadonlyArray<GraphQLFormattedError>) => void;
   error?: (err: unknown) => void;
   complete?: () => void;
   // Connection-level signals for the shared per-area socket, distinct from the
@@ -146,8 +166,8 @@ export interface SubscriptionSink<T> {
 // subscribe binds a typed subscription document to a sink and returns an
 // unsubscribe function. The document is the same code-generated typed document
 // the query path uses, so the result type is inferred; it must be a subscription,
-// since the server refuses anything else on this socket. Errors from the operation
-// (or the socket) surface via sink.error; normal termination via sink.complete. A
+// since the server refuses anything else on this socket. Result errors surface via
+// sink.errors; operation/socket failures via sink.error; normal termination via sink.complete. A
 // 4401 close of an acknowledged socket — the server ending an expired session — is
 // not surfaced: the operation is re-issued once on a new socket with a fresh token.
 export function subscribe<TResult, TVariables>(
@@ -188,6 +208,7 @@ export function subscribe<TResult, TVariables>(
     const previous = current;
     current = client.subscribe<TResult>(payload, {
       next: (result) => {
+        if (result.errors?.length) sink.errors?.(result.errors);
         if (result.data != null) sink.next(result.data);
       },
       error: (err) => {

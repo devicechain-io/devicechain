@@ -9,6 +9,7 @@
 // limited (honest, not an error) — its devices are still classified and shown,
 // but carry no typed capabilities.
 
+import { listAll } from '@/lib/api/list-all';
 import { useBreakGlass } from '@/routes/automation-reviews/use-break-glass';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -56,8 +57,8 @@ export function ProfilePanel({
   // The picker (and its adopting-type counts) reloads after each change so a
   // freshly created profile appears and shared counts stay accurate.
   const [version, reloadProfiles] = useReload();
-  const { data, loading, error } = useQuery(
-    () => listDeviceProfiles({ pageNumber: 1, pageSize: 1000 }),
+  const { current: data, loading, error } = useQuery(
+    () => listAll(page => listDeviceProfiles({ ...page })),
     [version],
   );
   const profiles = data?.results ?? [];
@@ -247,8 +248,8 @@ export function ProfilePanel({
           )}
           {canWrite ? (
             <>
-              {error && !data ? (
-                <p className="text-sm text-destructive">{t('devices:typeProfileLoadError')}</p>
+              {error ? (
+                <p role="alert" className="text-sm text-destructive">{error}</p>
               ) : (
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                   <div className="flex-1 space-y-1.5">

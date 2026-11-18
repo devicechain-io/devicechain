@@ -377,6 +377,15 @@ func (ep *EventPersistenceWorker) PersistStateChangeEvents(ctx context.Context, 
 	return &EventPersistenceResults{Events: events, Deduped: affected == 0}, nil
 }
 
+// PersistNewRelationshipEvent keeps the envelope only: device-management row IDs in
+// the payload do not cross the storage seam. Anchors are always upserted by the caller.
+func (ep *EventPersistenceWorker) PersistNewRelationshipEvent(ctx context.Context, db *gorm.DB, event model.Event) (*EventPersistenceResults, error) {
+	if err := ep.Api.CreateEnvelopeEvents(ctx, db, []*model.Event{&event}); err != nil {
+		return nil, err
+	}
+	return &EventPersistenceResults{Events: []interface{}{&event}}, nil
+}
+
 // Persists a resolved event to the datastore, in a transaction of its own. The event's
 // relationship anchors (ADR-013) are stored as a set of event_anchors rows alongside the
 // base event, so the same reading is queryable by each of the device's assignment
@@ -478,6 +487,11 @@ func (ep *EventPersistenceWorker) writeEvent(ctx context.Context, tx *gorm.DB, p
 		// first delivery, with the right reason attached.
 		var perr error
 		switch event.EventType {
+		case eventtype.NewRelationship:
+			if _, ok := event.Payload.(*resolvedevent.ResolvedNewRelationshipPayload); !ok {
+				return errPayloadMismatch("new relationship")
+			}
+			results, perr = ep.PersistNewRelationshipEvent(ctx, tx, pevent)
 		case eventtype.Location:
 			payload, ok := event.Payload.(*resolvedevent.ResolvedLocationsPayload)
 			if !ok {
@@ -507,7 +521,10 @@ func (ep *EventPersistenceWorker) writeEvent(ctx context.Context, tx *gorm.DB, p
 			}
 			results, perr = ep.PersistStateChangeEvents(ctx, tx, pevent, *payload)
 		default:
-			return fmt.Errorf("unhandled event type in persistence: %s", event.EventType.String())
+			// Unknown types are refused on first delivery. During rolling upgrades, old pods
+			// will dead-letter a newly added type rather than retry it onto a new pod.
+			// TestEveryPublishedEventTypeIsPersistedOrRefusedDeterministically pins the supported set.
+			return fmt.Errorf("%w: unhandled event type in persistence: %s", ErrDeterministic, event.EventType.String())
 		}
 		if perr != nil {
 			return perr
