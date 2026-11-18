@@ -441,7 +441,7 @@ function MembersTable({
 // members view that resolves eval-on-read off the stored selector.
 function SavedGroups({ family, version }: { family: string; version: number }) {
   const { t } = useTranslation('browse');
-  const { data, loading, error } = useQuery(() => listDynamicGroups(family), [family, version]);
+  const { current: data, loading, error } = useQuery(() => listDynamicGroups(family), [family, version]);
   const [viewing, setViewing] = useState<DynamicGroup | null>(null);
   const groups = data ?? [];
 

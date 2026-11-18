@@ -26,13 +26,10 @@ import (
 // overwrites what it holds with it; an empty Anchors means the device is owned by nobody.
 // The tenant travels on the per-tenant subject.
 type DeviceOwnershipChangedEvent struct {
-	DeviceToken string
-	Anchors     []string
-	ChangedTime time.Time
-
-	// deviceId is the device's row id, which the drain matches the fact to its queued row
-	// by. It is not part of the fact.
-	deviceId uint
+	DeviceIncarnation uint64
+	DeviceToken       string
+	Anchors           []string
+	ChangedTime       time.Time
 }
 
 // DeviceOwnershipPublisher publishes ownership-changed facts for the ownership drain
@@ -117,10 +114,10 @@ func (api *Api) ownershipFacts(ctx context.Context, ids []uint, now time.Time) (
 	facts := make([]*DeviceOwnershipChangedEvent, 0, len(devices))
 	for _, d := range devices {
 		facts = append(facts, &DeviceOwnershipChangedEvent{
-			DeviceToken: d.Token,
-			Anchors:     []string(withGroupAnchors(anchorSetOf(bySource[d.ID]), groups[d.ID])),
-			ChangedTime: now,
-			deviceId:    d.ID,
+			DeviceToken:       d.Token,
+			Anchors:           []string(withGroupAnchors(anchorSetOf(bySource[d.ID]), groups[d.ID])),
+			ChangedTime:       now,
+			DeviceIncarnation: uint64(d.ID),
 		})
 	}
 	return facts, nil

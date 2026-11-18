@@ -433,7 +433,7 @@ func TestHandleLiveTenantIsStillDispatched(t *testing.T) {
 	}
 }
 
-// TestHandleUnconfiguredGateAdmits pins the fail-open default. NewTenantLifecycleGate returns nil on
+// TestHandleUnconfiguredGateAdmits pins the fail-open default. NewTenantLifecycleGateFor returns nil on
 // an instance with no user-management endpoint configured, and this service must then behave exactly
 // as it did before the gate existed rather than panic on the nil call or refuse everything.
 func TestHandleUnconfiguredGateAdmits(t *testing.T) {

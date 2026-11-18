@@ -91,6 +91,15 @@ export declare class GraphQLRequestError extends Error {
 export declare const MAX_TOKEN_LEN = 128;
 ```
 
+## `.:ManagedSessionTokens`
+
+```ts
+export interface ManagedSessionTokens extends SessionTokens {
+    forceRefresh: (rejectedToken?: string) => Promise<string | null>;
+    exchange: (spend: (refreshToken: string) => Promise<TokenPair>) => Promise<string>;
+}
+```
+
 ## `.:MaskProblem`
 
 ```ts
@@ -159,7 +168,7 @@ export interface ScopeAnchorRef {
 
 ```ts
 export interface SessionTokens {
-    forceRefresh: (rejectedToken?: string) => Promise<string | null>;
+    forceRefresh?: (rejectedToken?: string) => Promise<string | null>;
     getAccessToken: () => Promise<string | null>;
     reset: () => void;
     startAutoRefresh: () => () => void;
@@ -175,6 +184,7 @@ export interface SessionTokensOptions {
     refresh: (refreshToken: string) => Promise<TokenPair>;
     onEnd: (err?: unknown) => void;
     skewSeconds?: number;
+    transientRefreshErrors?: 'null' | 'throw';
 }
 ```
 
@@ -183,6 +193,7 @@ export interface SessionTokensOptions {
 ```ts
 export interface SubscriptionSink<T> {
     next: (data: T) => void;
+    errors?: (errors: ReadonlyArray<GraphQLFormattedError>) => void;
     error?: (err: unknown) => void;
     complete?: () => void;
     connected?: (wasRetry: boolean) => void;
@@ -237,7 +248,7 @@ export declare function conformsToMask(mask: string, token: string): boolean;
 ## `.:createSessionTokens`
 
 ```ts
-export declare function createSessionTokens(opts: SessionTokensOptions): SessionTokens;
+export declare function createSessionTokens(opts: SessionTokensOptions): ManagedSessionTokens;
 ```
 
 ## `.:decodeToken`

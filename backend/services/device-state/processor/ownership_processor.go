@@ -19,7 +19,7 @@ import (
 
 // OwnershipApplier is the slice of the projection the ownership consumer writes.
 type OwnershipApplier interface {
-	ApplyDeviceOwnership(ctx context.Context, deviceToken string, anchors []string, changedAt time.Time) (bool, error)
+	ApplyDeviceOwnership(ctx context.Context, deviceToken string, anchors []string, changedAt time.Time, incarnation uint64) (bool, error)
 }
 
 // OwnershipProcessor consumes device-management's device ownership-changed facts (ADR-081)
@@ -143,7 +143,7 @@ func (op *OwnershipProcessor) handle(ctx context.Context, msg messaging.Message)
 		holdCtx = ctx
 	}
 	err = op.Hold.RunCtx(holdCtx, tctx, []messaging.Message{msg}, func(c context.Context) (e error) {
-		applied, e = op.Api.ApplyDeviceOwnership(c, fact.DeviceToken, fact.Anchors, fact.ChangedTime)
+		applied, e = op.Api.ApplyDeviceOwnership(c, fact.DeviceToken, fact.Anchors, fact.ChangedTime, fact.DeviceIncarnation)
 		return e
 	})
 	if err != nil {

@@ -63,11 +63,11 @@ func TestOtherStreamsIgnoreTheRetryHeader(t *testing.T) {
 	defer cleanup()
 	reader, err := nmgr.NewReader(streams.ResolvedEvents)
 	if err != nil {
-		t.Skipf("no reader on resolved-events in the test manager: %v", err)
+		t.Fatalf("no reader on resolved-events in the test manager: %v", err)
 	}
 	writer, err := nmgr.NewWriter(streams.ResolvedEvents)
 	if err != nil {
-		t.Skipf("no writer on resolved-events in the test manager: %v", err)
+		t.Fatalf("no writer on resolved-events in the test manager: %v", err)
 	}
 	subject := ScopedSubject(nmgr.Microservice.InstanceId, "acme", streams.ResolvedEvents)
 	require.NoError(t, writer.WriteMessages(core.WithTenant(context.Background(), "acme"),

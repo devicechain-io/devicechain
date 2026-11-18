@@ -28,8 +28,17 @@ import (
 //     classification task (ClassifyUnclassifiedAlarms, every replica, every minute) classifies
 //     them.
 //
-// So a NULL never outlives the next pass, and a rollout needs no second migration: whatever an
-// old replica writes, the next pass after it classifies.
+// So a NULL never outlives the next pass.
+//
+// A false is a verdict about one contributor SET, and an old replica can change the set under it:
+// folding a geofence rule's edge into an alarm already classified false bumps contributor_version
+// and leaves position_derived as it was. Every classification is therefore stamped with the
+// contributor version it was decided at (alarms.position_classified_version, written by this
+// statement and by the integrator), and a trigger on the table (alarm_position_stale,
+// schema/migration_alarm_position_stamp.go) turns a false whose stamp does not match the version
+// a write leaves back into NULL, in that same write. The old replica's fold cannot leave a stale
+// false readable even for a moment, and the next pass decides it again. Whatever an old replica
+// writes, the next pass after it classifies.
 //
 // The classifier cannot run the compiler, so it makes the conservative textual version of its
 // judgement. An alarm is position-derived when ANY of its contributors (the rule identities
@@ -43,10 +52,13 @@ import (
 // contributor set (raised before the set existed, by the retired measurement evaluator, which had
 // no geofence predicate) is not position-derived.
 //
-// 🔴 schema/migration_alarm_position_derived.go carries the same statement as a literal, as a
+// 🔴 schema/migration_alarm_position_stamp.go carries the same statement as a literal, as a
 // migration must. They are kept identical by TestClassifierMatchesTheMigration.
+// (schema/migration_alarm_position_derived.go carries the earlier, unstamped statement it ran
+// when it added the column; a migration is never edited.)
 
-// classifyAlarmsSQL classifies every unclassified alarm; a caller narrows it to one alarm by
+// classifyAlarmsSQL classifies every unclassified alarm and stamps each verdict with the
+// contributor version it judged; a caller narrows it to one alarm by
 // appending " AND a.tenant_id = ? AND a.id = ?". It is a CONSTANT with unqualified table names on purpose: the
 // connection's search_path is pinned to this area's schema (core/rdb), and a constant is what the
 // raw-SQL guard (backend/tools/rdbguard) can read, so the tables this cross-tenant statement
@@ -84,7 +96,8 @@ UPDATE alarms AS a
                           AND e.rule ->> 'Token' = split_part(k.key, '/', 2)
                    ) AS d
              ) AS s
-            WHERE strpos(k.key, '/') = 0 OR s.found = 0 OR s.fence))
+            WHERE strpos(k.key, '/') = 0 OR s.found = 0 OR s.fence)),
+       position_classified_version = a.contributor_version
  WHERE a.position_derived IS NULL`
 
 // ClassifyUnclassifiedAlarms classifies every alarm whose position_derived is NULL, across all

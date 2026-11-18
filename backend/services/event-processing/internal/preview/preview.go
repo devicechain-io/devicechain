@@ -211,6 +211,9 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 	// fences however it is stamped.
 	fenceSets := runtime.NewLoadingFenceSets(fences, tenant)
 
+	if manager, ok := opener.(*messaging.NatsManager); ok {
+		opener = replayinput.TenantPreview(ctx, manager, suffix)
+	}
 	reader, firstTime, err := opener.NewReplayReaderFromTime(suffix, tr.Start)
 	if err != nil {
 		return Result{}, err

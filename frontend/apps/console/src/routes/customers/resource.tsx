@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { listAll } from '@/lib/api/list-all';
 import { RegistryInstanceForm, tokenColumn, nameColumn, createdColumn, type RegistryResource } from '@/components/registry';
 import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
@@ -47,7 +48,7 @@ export const customerResource: RegistryResource<Customer> = {
       i18nKey="customer"
       entityType="customer"
       defaultTypeToken={c?.customerType?.token}
-      loadTypes={() => listCustomerTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
+      loadTypes={() => listAll(page => listCustomerTypes({ ...page })).then((r) => r.results)}
       create={(req) =>
         createCustomer({
           token: req.token,

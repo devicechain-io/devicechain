@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { listAll } from '@/lib/api/list-all';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FormDrawer } from '@/components/registry';
@@ -19,7 +20,6 @@ import { getDashboardSharing, shareDashboard, type DashboardShareTargets } from 
 import { errMessage } from '@/routes/common';
 import '@/i18n/lazy/dashboards';
 
-const CUSTOMER_PAGE = { pageNumber: 1, pageSize: 1000 };
 
 // ShareDashboardDrawer picks the customers and groups of devices a dashboard is shared with.
 // The members limited to those customers or groups can then list it and open its PUBLISHED
@@ -87,8 +87,8 @@ function ShareEditor({
   const [groups, setGroups] = useState<string[]>(initial.groups);
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const { data: customerPage } = useQuery(() => listCustomers(CUSTOMER_PAGE), []);
-  const { data: accessGroups } = useQuery(listAccessScopeGroups, []);
+  const { current: customerPage, error: customersError } = useQuery(() => listAll(page => listCustomers(page)), []);
+  const { current: accessGroups, error: groupsError } = useQuery(listAccessScopeGroups, []);
   const customerOptions = useMemo<ComboboxOption[]>(() => {
     const known = (customerPage?.results ?? []).map((c) => ({ value: c.token, label: c.name || c.token }));
     const extra = customers.filter((s) => !known.some((k) => k.value === s)).map((s) => ({ value: s }));
@@ -116,6 +116,8 @@ function ShareEditor({
 
   return (
     <div className="space-y-4">
+      {customersError && <p role="alert" className="text-sm text-destructive">{customersError}</p>}
+      {groupsError && <p role="alert" className="text-sm text-destructive">{groupsError}</p>}
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
       {!published && <p className="text-sm text-muted-foreground">{t('shareNotPublished')}</p>}
       <FormField label={t('shareCustomersLabel')} htmlFor="share-customers" description={t('shareCustomersDescription')}>
