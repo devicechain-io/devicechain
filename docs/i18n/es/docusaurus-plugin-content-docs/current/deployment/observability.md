@@ -17,7 +17,7 @@ están implementados y validados de extremo a extremo: un resumen de la instanci
 descritos en [Paneles de Grafana](./grafana-boards.md), con reglas de alerta incluidas.
 :::
 
-Las m�tricas (`/metrics`) y las sondas de salud (`/healthz`, `/readyz`) usan el puerto 8083 (`ops`) de los pods y del Service de cada �rea. Las rutas p�blicas `/api/<area>/...` apuntan �nicamente al puerto de la API (`graphql`, 8080) y no permiten acceder a estos endpoints operativos. Si utilizas tu propio controlador de entrada, dirige la API a `graphql`, nunca a `ops`.
+Las métricas (`/metrics`) y las sondas de salud (`/healthz`, `/readyz`) usan el puerto 8083 (`ops`) de los pods y del Service de cada área. Las rutas públicas `/api/<area>/...` apuntan únicamente al puerto de la API (`graphql`, 8080) y no permiten acceder a estos endpoints operativos. Si utilizas tu propio controlador de entrada, dirige la API a `graphql`, nunca a `ops`. [Endurecimiento de producción](./production-hardening.md#public-port) enumera qué sirve cada puerto y cómo comprobar el perímetro público desde fuera.
 
 ## Trazado distribuido (OpenTelemetry)
 
@@ -539,6 +539,13 @@ los que ese consumidor aún no ha leído.
   techo, cualquier inquilino en un clúster más pequeño y un cliente que publica por HTTP con muchos
   nombres de inquilino, porque un nombre se mide antes de comprobar su credencial. Entonces la
   compuerta rechaza a todos.
+- En una instancia con grupos de fragmentos de NATS, cada grupo tiene su propia copia de un flujo
+  fragmentado y su propia compuerta, así que "todos los inquilinos" significa todos los inquilinos
+  asignados a ese grupo. Una publicación HTTP se admite contra el grupo de su propio inquilino, así
+  que una cola en un grupo no rechaza a un inquilino asignado a un grupo sano. Un lector que reenvía
+  a un flujo fragmentado desde un flujo que no lo está, como `event-sources` al leer el flujo de
+  captura MQTT, puede enviar a cualquier grupo, así que deja de leer mientras cualquiera de ellos
+  esté rechazando.
 - El broker sigue descartando el mensaje más antiguo cuando un flujo está lleno, así que aún se
   puede perder un evento sin leer en tres casos. Los servicios que escriben en el flujo pueden
   gastar, entre dos de sus mediciones, más historial procesado del que se vio descartar al flujo en

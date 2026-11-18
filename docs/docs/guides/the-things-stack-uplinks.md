@@ -36,7 +36,7 @@ The integration can reach only devices of the device types you scope it to, so s
 | `battery` | Integer | `mV` |
 | `door` | Boolean | |
 
-In the console, create the profile and its metrics as described in [Device types and profiles](../user-guide/device-types-and-profiles.md), create a device type that uses the profile, and **publish** the profile. Over GraphQL:
+In the console, create the profile and its metrics as described in [Device types and profiles](../user-guide/device-types-and-profiles.md), create a device type that uses the profile, and **publish** the profile. Over GraphQL, send it as two requests, because one mutation may select at most [five root fields](../reference/graphql-api.md#request-limits) and a sixth gets the whole request refused:
 
 ```graphql
 mutation {
@@ -45,6 +45,11 @@ mutation {
   humidity: createMetricDefinition(request: { token: "room-sensor-humidity", deviceProfileToken: "room-sensor", metricKey: "humidity", name: "Humidity", dataType: "DOUBLE", unit: "%" }) { metricKey }
   battery: createMetricDefinition(request: { token: "room-sensor-battery", deviceProfileToken: "room-sensor", metricKey: "battery", name: "Battery", dataType: "INT", unit: "mV" }) { metricKey }
   door: createMetricDefinition(request: { token: "room-sensor-door", deviceProfileToken: "room-sensor", metricKey: "door", name: "Door", dataType: "BOOLEAN" }) { metricKey }
+}
+```
+
+```graphql
+mutation {
   createDeviceType(request: { token: "room-sensor", name: "Room sensor", profileToken: "room-sensor" }) { token }
 }
 ```

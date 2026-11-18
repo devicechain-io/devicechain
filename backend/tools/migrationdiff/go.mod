@@ -7,7 +7,7 @@ require (
 	github.com/devicechain-io/dc-command-delivery v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-dashboard-management v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-device-management v0.0.1
-	github.com/devicechain-io/dc-device-state v0.0.0-00010101000000-000000000000
+	github.com/devicechain-io/dc-device-state v0.0.1
 	github.com/devicechain-io/dc-event-management v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-event-processing v0.0.1
 	github.com/devicechain-io/dc-microservice v0.0.1

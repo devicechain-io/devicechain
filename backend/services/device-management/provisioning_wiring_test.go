@@ -40,9 +40,12 @@ func TestTheServicesProvisioningCheckerVerifiesWhatItsApiDigests(t *testing.T) {
 	db := putest.NewSQLiteDB(t, credentialTables()...)
 	nmgr := startNatsManager(t, host, port, instance)
 	keys := dmtest.EnrollmentKeys()
-	api, _, err := buildApis(nmgr, &rdb.RdbManager{Database: db}, dmtest.DeviceSecretKey(), keys, config.NewDeviceManagementConfiguration())
+	api, cached, err := buildApis(nmgr, &rdb.RdbManager{Database: db}, dmtest.DeviceSecretKey(), keys, config.NewDeviceManagementConfiguration())
 	require.NoError(t, err)
 	require.NotNil(t, api.ProvisioningChecker, "buildApis did not wire the provisioning Checker")
+	require.False(t, nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Auth.CalloutEnabled())
+	require.NotNil(t, api.DeviceCredentialChecker, "HTTP passwords need backoff with the callout disabled")
+	require.Same(t, api.DeviceCredentialChecker, cached.GetDeviceCredentialChecker())
 
 	ctx := core.WithTenant(context.Background(), "acme")
 	_, err = api.CreateDeviceType(ctx, &model.DeviceTypeCreateRequest{Token: "dt"})

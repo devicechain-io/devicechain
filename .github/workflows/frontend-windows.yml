@@ -44,10 +44,13 @@ on:
 permissions:
   contents: read
 
-# Keep each pushed commit in its own group so later main pushes cannot replace it.
-# This fits the existing concurrency block; superseded PR runs still cancel.
+# One queue for pushes to main: at most one running main run plus ONE pending, and a
+# newer push replaces the pending one (never the running one). See ci.yml's
+# concurrency block for the full rule and why intermediate main commits can go
+# without a run of their own. PR runs still cancel superseded runs; any other event
+# (schedule, dispatch) gets a group of its own (run_id) and never waits behind main.
 concurrency:
-  group: frontend-windows-${{ github.event_name == 'push' && github.sha || github.ref }}
+  group: frontend-windows-${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && github.ref || github.event_name == 'push' && github.sha || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

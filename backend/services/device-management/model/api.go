@@ -73,6 +73,9 @@ type GeoFenceCapRefusalCounter interface {
 }
 
 type Api struct {
+	// DeviceCredentialChecker shares password backoff between HTTP uplinks and MQTT connects.
+	DeviceCredentialChecker *credential.Checker
+
 	// RuleComparer is nil when recorded comparison is unavailable; runs fail closed.
 	RuleComparer      RuleComparer
 	PrincipalStanding PrincipalStandingChecker
@@ -369,7 +372,11 @@ func (api *Api) describeAlarmDevice(ctx context.Context, event *AlarmStateChange
 	if len(devices) == 0 {
 		return
 	}
-	d := devices[0]
+	describeAlarmDevice(event, devices[0])
+}
+
+// describeAlarmDevice copies the same device snapshot for ordinary and deletion clears.
+func describeAlarmDevice(event *AlarmStateChangeEvent, d *Device) {
 	event.DeviceToken = d.Token
 	if d.Name.Valid {
 		event.DeviceName = d.Name.String
@@ -637,7 +644,7 @@ type DeviceManagementApi interface {
 	// per edge) into the (device, alarmKey) alarm's contributor set and re-derives its state
 	// (max-tier severity over the active set; cleared when the set empties). The raise-alarm consumer
 	// routes both edges here.
-	ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time) error
+	ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time, requiresPosition *bool) error
 
 	// Entity attributes (ADR-012).
 	SetEntityAttribute(ctx context.Context, request *EntityAttributeSetRequest) (*EntityAttribute, error)

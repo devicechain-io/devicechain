@@ -174,12 +174,33 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 			"entity_type = ? AND entity_id = ?", string(etype), id).Delete(&EntityAttribute{}).Error; err != nil {
 			return err
 		}
-		// Cascade the entity's alarms (ADR-041): like attributes they address their
-		// originator by uniform (originator_type, originator_id) with no DB foreign
-		// key, so an alarm must not outlive the entity it was raised on.
-		if err := tx.Unscoped().Where(
-			"originator_type = ? AND originator_id = ?", string(etype), id).Delete(&Alarm{}).Error; err != nil {
+		deletedTime := api.deletionNow()
+		// Capture exactly the alarms removed by the cascade, including any raised
+		// after earlier reads in this transaction, so every deleted open alarm clears.
+		var alarms []*Alarm
+		if err := tx.Clauses(clause.Returning{}).Unscoped().Where(
+			"originator_type = ? AND originator_id = ?", string(etype), id).Delete(&alarms).Error; err != nil {
 			return err
+		}
+		var device *Device
+		if len(alarms) > 0 && etype == entity.TypeDevice {
+			device = &Device{}
+			if err := tx.Preload("DeviceType").First(device, id).Error; err != nil {
+				return err
+			}
+		}
+		var alarmEvents []*AlarmStateChangeEvent
+		for _, alarm := range alarms {
+			if alarm.State == "CLEARED" {
+				continue
+			}
+			alarm.State = "CLEARED"
+			event := newAlarmStateChangeEvent(alarm, AlarmEventCleared, "", deletedTime)
+			event.ClearReason = AlarmClearReasonOriginatorDeleted
+			if device != nil {
+				describeAlarmDevice(event, device)
+			}
+			alarmEvents = append(alarmEvents, event)
 		}
 		// Cascade the entity's group memberships (ADR-062 S2): its membership rows address
 		// it by (entity_type, entity_id) with no DB foreign key, mirroring the attribute
@@ -198,7 +219,7 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 			return err
 		}
 		// Commit the deletion fact with the delete; ownership queueing must stay last.
-		if err := queueEntityDeletedOnTx(tx, api, tenant, etype, id, token); err != nil {
+		if err := queueEntityDeletedOnTx(tx, tenant, etype, id, token, deletedTime, alarmEvents); err != nil {
 			return err
 		}
 		trackingSources, err = queueOwnershipOnTx(tx, sources)
