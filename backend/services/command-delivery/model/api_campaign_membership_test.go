@@ -6,7 +6,174 @@ package model
 import (
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
+
+func TestCampaignMembershipPreservesFutureSteps(t *testing.T) {
+	api := newCampaignTestApi(t)
+	ctx := tenantCtx()
+	r := &pagingResolver{members: []string{"a"}}
+	api.GroupTargetResolver = r
+	req := cronRequest("rejoin", "0 20 * * *")
+	for i := 0; i < 2; i++ {
+		delay := int32((i + 1) * 3600)
+		req.Steps = append(req.Steps, CampaignStepInput{Type: StepCommand, Name: strp("dim"), DelaySeconds: &delay})
+	}
+	c, err := api.CreateCampaign(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tick(t, api, at("2026-06-21T22:00:00Z"), "plan")
+	var elements []CampaignElement
+	if err := api.RDB.DB(ctx).Where("campaign_id = ?", c.ID).Order("due_at ASC").Limit(3).Find(&elements).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(elements) != 3 || !elements[1].DueAt.After(elements[0].DueAt.Add(campaignMembershipFreshness)) || !elements[2].DueAt.After(elements[1].DueAt.Add(campaignMembershipFreshness)) {
+		t.Fatal("fixture needs three separated steps")
+	}
+	now := elements[0].DueAt
+	// The scan itself must remain bounded, even though the UPDATE also guards due_at.
+	if err := api.RDB.Database.Callback().Query().After("gorm:query").Register("test:membership-due-scan", func(tx *gorm.DB) {
+		if rows, ok := tx.Statement.Dest.(*[]CampaignElement); ok && len(tx.Statement.Selects) == 2 && tx.Statement.Selects[0] == "id" && tx.Statement.Selects[1] == "device_token" {
+			for _, row := range *rows {
+				for _, e := range elements {
+					if row.ID == e.ID && e.DueAt.After(now) {
+						t.Errorf("membership scan fetched future step %d", e.Step)
+					}
+				}
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	check := func(index int, status, reason string) {
+		t.Helper()
+		var e CampaignElement
+		if err := api.RDB.DB(ctx).First(&e, elements[index].ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if e.Status != status || e.Reason.String != reason {
+			t.Fatalf("step %d = %s/%s, want %s/%s", index+1, e.Status, e.Reason.String, status, reason)
+		}
+	}
+	r.members = nil
+	tick(t, api, now, "step-1-out")
+	check(0, string(ElementSkipped), SkipNotInGroup)
+	check(1, string(ElementPending), "")
+	check(2, string(ElementPending), "")
+	if n := commandsFor(t, api, "a"); n != 0 {
+		t.Fatalf("out-of-group device received %d commands", n)
+	}
+	now = elements[1].DueAt
+	tick(t, api, now, "step-2-out")
+	check(1, string(ElementSkipped), SkipNotInGroup)
+	check(2, string(ElementPending), "")
+	r.members = []string{"a"}
+	pages := r.pages
+	now = elements[2].DueAt
+	tick(t, api, now, "step-3-rejoined")
+	check(2, string(ElementDispatched), "")
+	if n := commandsFor(t, api, "a"); n != 1 || r.pages <= pages {
+		t.Fatalf("rejoined device: commands=%d resolutions=%d (previously %d)", n, r.pages, pages)
+	}
+	var cycle CampaignCycle
+	if err := api.RDB.DB(ctx).First(&cycle, elements[0].CycleId).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !cycle.MembershipCheckedAt.Valid || !cycle.MembershipCheckedAt.Time.Equal(now) {
+		t.Fatalf("membership check timestamp = %v, want %v", cycle.MembershipCheckedAt, now)
+	}
+}
+
+func TestMembershipSkipUpdateRechecksDueTime(t *testing.T) {
+	api := newCampaignTestApi(t)
+	ctx := tenantCtx()
+	api.GroupTargetResolver = &pagingResolver{}
+	now := at("2026-06-22T00:00:00Z")
+	setClock(api, now)
+	c := &Campaign{}
+	c.Token = "rescheduled"
+	if err := api.RDB.DB(ctx).Create(c).Error; err != nil {
+		t.Fatal(err)
+	}
+	cycle := &CampaignCycle{CampaignId: c.ID, CycleKey: "one"}
+	if err := api.RDB.DB(ctx).Create(cycle).Error; err != nil {
+		t.Fatal(err)
+	}
+	e := &CampaignElement{CampaignId: c.ID, CycleId: cycle.ID, DeviceToken: "a", Status: string(ElementPending), DueAt: now}
+	if err := api.RDB.DB(ctx).Create(e).Error; err != nil {
+		t.Fatal(err)
+	}
+	moved := false
+	if err := api.RDB.Database.Callback().Query().After("gorm:query").Register("test:move-due-after-scan", func(tx *gorm.DB) {
+		if rows, ok := tx.Statement.Dest.(*[]CampaignElement); ok && len(*rows) == 1 && len(tx.Statement.Selects) == 2 && tx.Statement.Selects[1] == "device_token" && !moved {
+			moved = true
+			if err := tx.Session(&gorm.Session{NewDB: true}).Exec("UPDATE campaign_elements SET due_at = ? WHERE tenant_id = ? AND id = ?", now.Add(time.Hour), "acme", e.ID).Error; err != nil {
+				t.Error(err)
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if blocked, err := api.recheckDueMembership(ctx, c, now); err != nil || len(blocked) != 0 {
+		t.Fatalf("blocked=%v err=%v", blocked, err)
+	}
+	if err := api.RDB.DB(ctx).First(e, e.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !moved || e.Status != string(ElementPending) || e.Reason.Valid || !e.DueAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("rescheduled element: moved=%v status=%s reason=%v due=%v", moved, e.Status, e.Reason, e.DueAt)
+	}
+}
+
+// A step due inside the freshness window of a check is never re-checked by the trigger, so the
+// check that saw its device leave must answer for it: keeping it PENDING would send it to a
+// device known to be outside the group.
+func TestMembershipCheckJudgesStepsInsideFreshnessWindow(t *testing.T) {
+	api := newCampaignTestApi(t)
+	ctx := tenantCtx()
+	r := &pagingResolver{members: []string{"a"}}
+	api.GroupTargetResolver = r
+	req := cronRequest("close-steps", "0 20 * * *")
+	near := int32(campaignMembershipFreshness / time.Second / 2)
+	far := int32(3600)
+	req.Steps = append(req.Steps,
+		CampaignStepInput{Type: StepCommand, Name: strp("dim"), DelaySeconds: &near},
+		CampaignStepInput{Type: StepCommand, Name: strp("dim"), DelaySeconds: &far})
+	c, err := api.CreateCampaign(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tick(t, api, at("2026-06-21T22:00:00Z"), "plan")
+	var elements []CampaignElement
+	if err := api.RDB.DB(ctx).Where("campaign_id = ?", c.ID).Order("due_at ASC").Limit(3).Find(&elements).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(elements) != 3 || elements[1].DueAt.After(elements[0].DueAt.Add(campaignMembershipFreshness)) {
+		t.Fatal("fixture needs a second step inside the freshness window")
+	}
+	r.members = nil
+	tick(t, api, elements[0].DueAt, "step-1-out")
+	r.members = []string{"a"}
+	tick(t, api, elements[1].DueAt, "step-2-rejoined-within-window")
+	for i, want := range []string{string(ElementSkipped), string(ElementSkipped), string(ElementPending)} {
+		var e CampaignElement
+		if err := api.RDB.DB(ctx).First(&e, elements[i].ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if e.Status != want {
+			t.Fatalf("step %d = %s, want %s", i+1, e.Status, want)
+		}
+	}
+	if n := commandsFor(t, api, "a"); n != 0 {
+		t.Fatalf("device outside the group at the last check received %d commands", n)
+	}
+	tick(t, api, elements[2].DueAt, "step-3-rejoined")
+	if n := commandsFor(t, api, "a"); n != 1 {
+		t.Fatalf("rejoined device received %d commands at step 3, want 1", n)
+	}
+}
 
 func TestCampaignRechecksMembershipBeforeDelayedStep(t *testing.T) {
 	api := newCampaignTestApi(t)

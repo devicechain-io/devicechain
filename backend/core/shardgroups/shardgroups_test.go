@@ -25,7 +25,7 @@ import (
 )
 
 func TestConfiguredShardingFollowsAndRefusesInvalidPlacement(t *testing.T) {
-	m, registry := newMeteredReadersManager(t)
+	m, registry := newReadersManagerWithRegistry(t)
 	m.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups = &mscfg.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.InboundEvents, streams.ResolvedEvents}}
 	kv, err := m.PartitionPlacementStore()
 	require.NoError(t, err)
@@ -153,13 +153,11 @@ func TestNewReadersWithIndependentGroupOptions(t *testing.T) {
 
 func newReadersManager(t *testing.T) *messaging.NatsManager {
 	t.Helper()
-	m, _ := newMeteredReadersManager(t)
+	m, _ := newReadersManagerWithRegistry(t)
 	return m
 }
 
-// newMeteredReadersManager is newReadersManager that also hands back the metrics registry,
-// for a test that reads what the manager exported.
-func newMeteredReadersManager(t *testing.T) (*messaging.NatsManager, *prometheus.Registry) {
+func newReadersManagerWithRegistry(t *testing.T) (*messaging.NatsManager, *prometheus.Registry) {
 	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true, StoreDir: dctest.JetStreamStoreDir(t), JetStreamMaxStore: dctest.JetStreamMaxStore})
 	require.NoError(t, err)

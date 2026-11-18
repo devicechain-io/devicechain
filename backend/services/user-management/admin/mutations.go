@@ -244,31 +244,25 @@ func (s *Service) SetMembershipRoles(ctx context.Context, email, tenant string, 
 
 // SetMembershipEnabled enables or disables a membership (a disabled membership
 // cannot be selected for a tenant token).
+//
+// Neither direction is open on a membership a live connection manages for this tenant
+// (MANAGED_BY_IDP): every SSO sign-in recomputes it, enabled exactly when the person's groups
+// map to a role here, so the provider decides whether it is active. An operator's disable
+// would be undone at the next sign-in, and an operator's enable would either be undone or
+// contradict the provider until then, granting a tenant the provider has withheld.
 func (s *Service) SetMembershipEnabled(ctx context.Context, email, tenant string, enabled bool) (*iam.Identity, error) {
 	id, mem, err := s.loadMembership(ctx, email, tenant)
 	if err != nil {
 		return nil, err
 	}
-	if !enabled {
-		if err := s.checkMembershipEditable(ctx, mem); err != nil {
-			return nil, err
-		}
+	if err := s.checkMembershipEditable(ctx, mem); err != nil {
+		return nil, err
 	}
+	// Past the check, a managed membership is orphaned: its connection is gone or no longer
+	// serves the tenant, so nothing would ever recompute it, and enabling it would turn the
+	// provider's grant into a permanent manual one. Disabling it stays open.
 	if enabled && mem.ManagedBy != nil {
-		if _, err := s.iam.IdpConnectionByID(ctx, *mem.ManagedBy); errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrMembershipOrphaned
-		} else if err != nil {
-			return nil, err
-		}
-		// A connection that no longer serves the tenant never recomputes the membership
-		// either, so enabling it would be the same permanent grant.
-		served, err := s.iam.ConnectionTenants(ctx, *mem.ManagedBy)
-		if err != nil {
-			return nil, err
-		}
-		if !slices.Contains(served, mem.TenantId) {
-			return nil, ErrMembershipOrphaned
-		}
+		return nil, ErrMembershipOrphaned
 	}
 	if err := s.iam.SetMembershipEnabled(ctx, mem, enabled); err != nil {
 		return nil, err

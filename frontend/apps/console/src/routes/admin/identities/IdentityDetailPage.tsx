@@ -319,9 +319,6 @@ function MembershipRow({
     }
   };
 
-  // Enabling is not refused for a managed membership, so only the other edits are withheld.
-  const disabling = membership.enabled;
-
   return (
     <div className="rounded-md border border-border bg-background px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -349,8 +346,8 @@ function MembershipRow({
         <Button
           variant="ghost"
           size="sm"
-          disabled={managed && disabling}
-          title={managed && disabling ? t('managedByIdpShort') : undefined}
+          disabled={managed}
+          title={managed ? t('managedByIdpShort') : undefined}
           onClick={() =>
             run(
               () => setMembershipEnabled(email, membership.tenant, !membership.enabled),
