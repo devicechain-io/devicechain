@@ -15,7 +15,7 @@ import (
 
 func TestOperatorManagedMembershipEdits(t *testing.T) {
 	for _, state := range []string{"served", "unmanaged", "connection-gone", "tenant-unserved"} {
-		for _, operation := range []string{"disable", "remove", "roles"} {
+		for _, operation := range []string{"disable", "enable", "remove", "roles"} {
 			t.Run(state+"/"+operation, func(t *testing.T) {
 				s, db := newPurgeTestServiceDB(t)
 				ctx := context.Background()
@@ -43,11 +43,17 @@ func TestOperatorManagedMembershipEdits(t *testing.T) {
 						require.NoError(t, sys.Delete(conn).Error)
 					}
 				}
+				if operation == "enable" {
+					// The provider withheld the tenant: its last sync left the membership disabled.
+					require.NoError(t, sys.Model(mem).Update("enabled", false).Error)
+				}
 				before, err := s.iam.MembershipByIdentityTenant(ctx, id.ID, "acme")
 				require.NoError(t, err)
 				switch operation {
 				case "disable":
 					_, err = s.SetMembershipEnabled(ctx, id.Email, "acme", false)
+				case "enable":
+					_, err = s.SetMembershipEnabled(ctx, id.Email, "acme", true)
 				case "remove":
 					_, err = s.RemoveMembership(ctx, id.Email, "acme")
 				case "roles":
@@ -66,6 +72,15 @@ func TestOperatorManagedMembershipEdits(t *testing.T) {
 					require.Equal(t, before, after, "a refused mutation must leave the row and roles unchanged")
 					return
 				}
+				if operation == "enable" && state != "unmanaged" {
+					// An orphaned membership is never re-enabled (it would become a permanent
+					// manual grant); that refusal predates MANAGED_BY_IDP and is unchanged.
+					require.ErrorIs(t, err, ErrMembershipOrphaned)
+					after, loadErr := s.iam.MembershipByIdentityTenant(ctx, id.ID, "acme")
+					require.NoError(t, loadErr)
+					require.False(t, after.Enabled)
+					return
+				}
 				require.NoError(t, err)
 				after, err := s.iam.MembershipByIdentityTenant(ctx, id.ID, "acme")
 				if operation == "remove" {
@@ -73,9 +88,12 @@ func TestOperatorManagedMembershipEdits(t *testing.T) {
 					return
 				}
 				require.NoError(t, err)
-				if operation == "disable" {
+				switch operation {
+				case "disable":
 					require.False(t, after.Enabled)
-				} else {
+				case "enable":
+					require.True(t, after.Enabled)
+				default:
 					require.Empty(t, after.TenantRoles)
 				}
 			})
