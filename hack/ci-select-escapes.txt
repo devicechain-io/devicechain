@@ -76,6 +76,7 @@ backend/core/test/authendpoints_repo_test.go
 backend/core/test/bearerparse_repo_test.go
 backend/core/test/frontend/state_test.go
 backend/core/test/globallogger_repo_test.go
+backend/core/test/storagegrowth_repo_test.go
 backend/core/webhooksig/keys.go
 backend/edge/dc-edge-agent/agent/dashboard_test.go
 backend/edge/dc-edge-agent/agent/gateway_test.go

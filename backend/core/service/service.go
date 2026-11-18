@@ -107,6 +107,9 @@ import (
 
 // RdbSpec is what a service supplies to get a relational database manager.
 type RdbSpec struct {
+	// AppendOnly lists models whose tables only grow; the audit journal is always added.
+	AppendOnly []any
+
 	// Migrations is the service's own migration chain.
 	Migrations []*gormigrate.Migration
 
@@ -304,6 +307,14 @@ func FromManagers(ms *core.Microservice, m Managers) *Service {
 // On a Service built by FromManagers there is no Spec, so this returns nil at once: the
 // managers were initialized by whoever built them.
 func (s *Service) Initialize(ctx context.Context) error {
+	return s.initialize(ctx, func(ctx context.Context, manager *rdb.RdbManager) error {
+		return manager.Initialize(ctx)
+	})
+}
+
+// initialize accepts the database initializer so tests can exercise registration and
+// hook ordering without a live Postgres; production uses the manager's Initialize.
+func (s *Service) initialize(ctx context.Context, initializeRdb func(context.Context, *rdb.RdbManager) error) error {
 	if s.spec == nil {
 		return nil
 	}
@@ -317,9 +328,10 @@ func (s *Service) Initialize(ctx context.Context) error {
 	if s.spec.Rdb != nil {
 		s.Rdb = rdb.NewRdbManager(s.Microservice, core.NewNoOpLifecycleCallbacks(),
 			s.spec.Rdb.Migrations, s.spec.Rdb.Instance, s.spec.Rdb.Config)
-		if err := s.Rdb.Initialize(ctx); err != nil {
+		if err := initializeRdb(ctx, s.Rdb); err != nil {
 			return fmt.Errorf("initializing the relational database manager: %w", err)
 		}
+		rdb.RegisterStorageGrowth(s.Microservice, s.Rdb.Database, s.spec.Rdb.AppendOnly...)
 	}
 
 	if s.spec.AfterRdb != nil {
