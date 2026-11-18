@@ -7558,17 +7558,18 @@ type Mutation {
     ): Boolean!
 }
 
+"""Why an alarm ended, when it was cleared for a lifecycle reason."""
+enum AlarmClearReason {
+    """The alarm's originator was deleted, so the alarm was cleared with it."""
+    ORIGINATOR_DELETED
+}
+
 # A single alarm state-change, pushed live to a subscriber (ADR-041 / ADR-037). It
 # is the transition envelope re-emitted by the alarm integrator and the operator API — not
 # the stored Alarm row — so it carries the transition kind (eventType) and, for a
 # severity move, the prior severity, alongside a snapshot of the alarm after the
 # change. Address the alarm by token to re-query it; the originator is the uniform
 # (type, id) reference, with originatorToken resolved on demand for a device.
-"""Why an alarm ended, when it was cleared for a lifecycle reason."""
-enum AlarmClearReason {
-    ORIGINATOR_DELETED
-}
-
 type AlarmEvent {
     """The lifecycle reason for clearing the alarm; absent for ordinary clears."""
     clearReason: AlarmClearReason
