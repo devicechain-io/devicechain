@@ -762,27 +762,10 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### Before you upgrade to v1.7.0 {#v170-before-upgrade}
 
+
 - **`dcctl install`, `dcctl bootstrap` and `dcctl preflight` check the OpenTofu or Terraform version.** The preflight now refuses a binary older than the `required_version` that dcctl's bundled OpenTofu configuration declares (currently `>= 1.10`), a prerelease, or one whose version it cannot read. Before, it checked only that the binary was present, so an install on OpenTofu 1.9 failed at `tofu init` after it had already updated the operator. OpenTofu is still preferred when both are installed, and it is the binary checked. Install a stable OpenTofu or Terraform 1.10 or later before you run the v1.7.0 `dcctl install`. `--skip-preflight` still skips the check.
 
 #### What is new in v1.7.0 {#v170-whats-new}
-
-#### Alarms of a deleted device end, and stop escalating {#v170-deleted-device-alarms}
-
-- When a device or other entity is deleted, each of its active alarms now ends with a `CLEARED` event carrying the new `clearReason: ORIGINATOR_DELETED` (also a new nullable `clearReason` field on the `alarmStream` subscription's `AlarmEvent`). Escalation stops, and policies with `notifyOnClear` say the alarm ended because its device was deleted.
-- `notification-management` also checks with `device-management`, using the instance's service credentials, before re-paging, and ends open notifications for alarms that no longer exist, including ones left by deletes before the upgrade. If the check fails it pages anyway; failures are counted by `escalation_lookup_errors_total`. See [Alarms of a deleted device](../guides/notification-channels.md#deleted-originator).
-- While old and new pods overlap during the rolling upgrade, a `v1.6` `notification-management` pod treats such a clear as an ordinary one, and a delete handled by a `v1.6` `device-management` pod emits no clear; the check before each re-page stops their escalation, and the periodic check ends those notifications once they are an hour old.
-
-#### A deleted device's undelivered commands are cancelled {#v170-deleted-device-commands}
-
-- When a device is deleted, `command-delivery` cancels the commands it still held for it (queued, held or parked) and refuses to send any command created before the delete, including one already handed to a transport and not yet confirmed. A device later created with the same token does not receive them; commands created for it after the delete are sent as usual.
-- On first start after the upgrade, `command-delivery` also reads the deletions still retained on the message broker, so commands left behind by devices deleted in the last few days are cancelled the same way.
-- While old and new pods overlap during the rolling upgrade, a `v1.6` pod can still send such a command until it is replaced.
-
-#### A deleted device's live state is removed {#v170-deleted-device-state}
-
-- When a device is deleted, `device-state` removes its live state, latest readings, latest position and dropped-reading records. A device later created with the same token starts with none of them, so members of its new owner do not see the old device's last position or readings.
-- `device-state` now also asks `device-management` every 10 minutes which devices still exist, using the instance's service credentials, and removes live state left behind by devices deleted earlier, including before the upgrade. It never removes anything when that lookup fails. Without the service secret or the `device-management` and `user-management` endpoints configured, the check is skipped and a warning is logged at startup.
-- A reading the platform accepted before the delete but processed after it can still re-create the deleted device's live state for a short time. Each reading now carries which device produced it, so the live state is reset by the first reading of a device created at the same token, the periodic check removes it if no device holds the token, and a reading of the deleted device is never applied to its successor. Readings from pods still on `v1.6` during the rolling upgrade carry no such identity and are applied as before.
 
 #### Deletions are announced reliably {#v170-deletion-announcements}
 

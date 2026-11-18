@@ -518,27 +518,10 @@ dcctl bootstrap local devicechain
 
 #### 升级到 v1.7.0 前 {#v170-before-upgrade}
 
+
 - **`dcctl install`、`dcctl bootstrap` 和 `dcctl preflight` 会检查 OpenTofu 或 Terraform 的版本。** 预检现在会拒绝低于 dcctl 内置 OpenTofu 配置所声明的 `required_version`（目前为 `>= 1.10`）的二进制文件、预发布版本，以及无法读取版本的二进制文件。此前预检只检查二进制文件是否存在，因此使用 OpenTofu 1.9 的安装会在已经更新 Operator 之后才在 `tofu init` 处失败。两者都已安装时仍优先使用 OpenTofu，检查的也是它。运行 v1.7.0 的 `dcctl install` 之前，请安装 1.10 或更高的稳定版 OpenTofu 或 Terraform。`--skip-preflight` 仍会跳过此检查。
 
 #### v1.7.0 新增内容 {#v170-whats-new}
-
-#### 已删除设备的告警会结束并停止升级 {#v170-deleted-device-alarms}
-
-- 删除设备或其他实体时，其每个活动告警现在都会以携带新的 `clearReason: ORIGINATOR_DELETED` 的 `CLEARED` 事件结束（`alarmStream` 订阅的 `AlarmEvent` 上也新增了可为空的 `clearReason` 字段）。升级随即停止，启用了 `notifyOnClear` 的策略会说明告警因其设备被删除而结束。
-- `notification-management` 在再次发送通知前还会使用实例的服务凭据向 `device-management` 查询，并结束已不存在的告警的未结束通知，包括升级前的删除操作遗留的通知。如果查询失败，仍会发送通知；失败次数计入 `escalation_lookup_errors_total`。请参阅[已删除设备的告警](../guides/notification-channels.md#deleted-originator)。
-- 在滚动升级期间新旧 Pod 并存时，`v1.6` 的 `notification-management` Pod 会将此类清除视为普通清除，由 `v1.6` 的 `device-management` Pod 处理的删除不会发出清除事件；每次再次通知前的检查会停止其升级，定期检查会在这些通知满一小时后将其结束。
-
-#### 已删除设备的未送达命令会被取消 {#v170-deleted-device-commands}
-
-- 删除设备时，`command-delivery` 会取消仍为该设备保留的命令（排队、保持或暂存状态），并拒绝发送删除前创建的任何命令，包括已交给传输通道但尚未确认的命令。之后以相同令牌创建的设备不会收到这些命令；删除后为新设备创建的命令照常发送。
-- 升级后首次启动时，`command-delivery` 还会读取消息代理仍保留的删除记录，因此最近几天内删除的设备遗留的命令也会以同样方式取消。
-- 在滚动升级期间新旧 Pod 并存时，`v1.6` Pod 在被替换前仍可能发送此类命令。
-
-#### 已删除设备的实时状态会被清除 {#v170-deleted-device-state}
-
-- 删除设备时，`device-state` 会清除其实时状态、最新读数、最新位置和被丢弃读数的记录。之后以相同令牌创建的设备不会继承这些数据，因此其新所有者的成员看不到旧设备的最后位置或读数。
-- `device-state` 现在还会每 10 分钟使用实例的服务凭据向 `device-management` 查询哪些设备仍然存在，并清除此前（包括升级之前）删除的设备遗留的实时状态。查询失败时不会清除任何数据。如果未配置服务密钥或 `device-management` 与 `user-management` 端点，则跳过该检查，并在启动时记录警告。
-- 平台在删除前接受但在删除后才处理的读数，仍可能短暂地重新生成已删除设备的实时状态。现在每条读数都会标明由哪台设备产生，因此以相同令牌创建的设备的第一条读数会重置实时状态；如果没有设备持有该令牌，定期检查会将其清除；已删除设备的读数绝不会应用到其继任设备。滚动升级期间仍在 `v1.6` 上的 Pod 产生的读数不带此标识，仍按原方式应用。
 
 #### 删除通知可靠送达 {#v170-deletion-announcements}
 

@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -265,9 +264,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// counts refused deliveries) and the NATS manager that consume them. This callback
 			// runs once, in the initialize phase, which is what makes it the safe place.
 			buildMetrics()
+			peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
 			Notifier = processor.NewPolicyNotifier(Api, secretStore, Configuration.DeliveryAttempts,
 				Configuration.DeliveryTimeout(),
-				governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "notification-management", safetyGates),
+				governance.NewTenantLifecycleGateFor(peers, safetyGates),
 				egressGuard, NotifyMetrics)
 			// The scheduler's release path writes state after a page; hold that write through a
 			// store outage rather than dropping it.
@@ -276,11 +276,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// delivery path: a ledger write can never delay or block a page.
 			AttemptLedger = processor.NewAttemptLedger(Api, NotifyMetrics.LedgerWrites())
 			Notifier.Ledger = AttemptLedger
-			if infra.ServiceAuth.Secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
-				log.Warn().Msg("Alarm backstop is disabled: service secret or device-management/user-management endpoint is not configured; existing orphan alarms may keep escalating")
+			if seam, err := peers.Seam(infra.DeviceManagement.Endpoint(), auth.AlarmRead); err != nil {
+				log.Warn().Err(err).Msg("Alarm backstop is disabled: service secret or device-management/user-management endpoint is not configured; existing orphan alarms may keep escalating")
 			} else {
-				client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "notification-management", []string{string(auth.AlarmRead)})
-				Notifier.AlarmLookup = processor.NewAlarmLookup(client, fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port))
+				Notifier.AlarmLookup = processor.NewAlarmLookup(seam.Client, seam.URL)
 			}
 
 			// Retention sweep: prune cleared per-alarm state older than the retention window so
