@@ -521,6 +521,7 @@ mutations = [
     ("replica-min", "PeriodicTaskStalled", "max by (job, task)", "min by (job, task)"),
     ("inverted-staleness", "PeriodicTaskStalled", "> 3 *", "< 3 *"),
     ("never-succeeded", "PeriodicTaskStalled", "!=", "=="),
+    ("success-interval-ignored", "PeriodicTaskStalled", "_pass_interval_seconds|devicechain_[a-z0-9]+_[a-z0-9_]+_expected_success_interval_seconds", "_pass_interval_seconds"),
     ("unwanted", "ProcessorLoopDropping", 'result="dropped"', 'result="unwanted"'),
     ("device-state", "ProcessorLoopDropping", '__name__!="devicechain_devicestate_state_messages_total",', ""),
     ("reset-blind", "ProcessorLoopDropping", "increase(", "delta("),

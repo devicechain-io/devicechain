@@ -42,13 +42,14 @@ import (
 type PeriodicTask struct {
 	lifecycle LifecycleManager
 
-	name      string
-	interval  time.Duration
-	run       func(context.Context) error
-	immediate bool
-	jitter    float64
-	detached  bool
-	metrics   *PeriodicTaskMetrics
+	name            string
+	interval        time.Duration
+	run             func(context.Context) error
+	immediate       bool
+	jitter          float64
+	detached        bool
+	successInterval time.Duration
+	metrics         *PeriodicTaskMetrics
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -154,6 +155,13 @@ type PeriodicTaskMetrics struct {
 	lastSuccess prometheus.Gauge
 	interval    prometheus.Gauge
 
+	// successInterval is registered only by a task that declares one (WithSuccessInterval), so
+	// the series is ABSENT for every other task rather than NaN: a NaN beside a real
+	// pass-interval series would make the alert's max() over both depend on NaN ordering.
+	successInterval prometheus.Gauge
+	registerer      prometheus.Registerer
+	sub, name       string
+
 	// failLog rate-limits the failure log line so a sustained outage logs once, not once a pass.
 	failLog failStreak
 }
@@ -226,6 +234,7 @@ func (ms *Microservice) NewPeriodicTaskMetrics(name string) *PeriodicTaskMetrics
 	sub, name := ms.requireMetricName("NewPeriodicTaskMetrics", name)
 	auto := promauto.With(ms.MetricsRegisterer())
 	m := &PeriodicTaskMetrics{
+		registerer: ms.MetricsRegisterer(), sub: sub, name: name,
 		passes: auto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: METRICS_NAMESPACE, Subsystem: sub,
 			Name: name + "_passes_total",
@@ -277,6 +286,31 @@ func (m *PeriodicTaskMetrics) SetInterval(d time.Duration) {
 		return
 	}
 	m.interval.Set(d.Seconds())
+}
+
+// declareSuccessInterval registers the expected-success-interval gauge and leaves it NaN
+// until the task starts. Idempotent.
+func (m *PeriodicTaskMetrics) declareSuccessInterval() {
+	if m.successInterval != nil {
+		return
+	}
+	g := prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: METRICS_NAMESPACE, Subsystem: m.sub,
+		Name: m.name + "_expected_success_interval_seconds",
+		Help: "Declared gap between successful passes of the " + m.name + " task in seconds, for a task that " +
+			"polls more often than it completes; NaN until started.",
+	})
+	g.Set(math.NaN())
+	m.registerer.MustRegister(g)
+	m.successInterval = g
+}
+
+// setSuccessInterval publishes the declared success cadence. Nil-safe.
+func (m *PeriodicTaskMetrics) setSuccessInterval(d time.Duration) {
+	if m == nil || m.successInterval == nil {
+		return
+	}
+	m.successInterval.Set(d.Seconds())
 }
 
 // record files one pass. Nil-safe.
@@ -333,6 +367,20 @@ func WithDetachedContext() PeriodicTaskOption {
 	return func(t *PeriodicTask) { t.detached = true }
 }
 
+// WithSuccessInterval declares how long a HEALTHY task goes between successful passes, for a
+// task that polls more often than it completes: its intervening passes return ErrPassSkipped,
+// which does not move the last-success gauge, so the polling interval understates the gap an
+// operator should expect between successes. The generic PeriodicTaskStalled alert measures
+// staleness against the larger of this and the polling interval. It exports
+// <name>_expected_success_interval_seconds; a task that does not call this exports no such
+// series. It panics on a non-positive d.
+func WithSuccessInterval(d time.Duration) PeriodicTaskOption {
+	if d <= 0 {
+		panic(fmt.Sprintf("core: success interval must be positive, got %s", d))
+	}
+	return func(t *PeriodicTask) { t.successInterval = d }
+}
+
 // NewPeriodicTask builds a task that calls run every interval. name is used for the lifecycle
 // component name and in log lines; the metric names come from PeriodicTaskMetrics.
 // It panics if interval is non-positive or metrics is nil.
@@ -356,6 +404,9 @@ func NewPeriodicTask(area, name string, interval time.Duration, run func(context
 	for _, opt := range opts {
 		opt(t)
 	}
+	if t.successInterval > 0 {
+		t.metrics.declareSuccessInterval()
+	}
 	t.lifecycle = NewLifecycleManager(fmt.Sprintf("%s-%s", area, name), t, callbacks)
 	return t
 }
@@ -375,6 +426,7 @@ func (t *PeriodicTask) Start(ctx context.Context) error { return t.lifecycle.Sta
 
 func (t *PeriodicTask) ExecuteStart(context.Context) error {
 	t.metrics.SetInterval(t.interval)
+	t.metrics.setSuccessInterval(t.successInterval)
 	t.wg.Add(1)
 	go t.loop()
 	return nil

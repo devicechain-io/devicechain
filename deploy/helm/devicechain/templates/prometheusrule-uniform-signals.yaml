@@ -4,6 +4,9 @@ Task success is aggregated across replicas: a replica that never wins a distribu
 lock must not alert while another replica is completing the work. NaN means no
 success yet; only a declared interval and its own old replica make that actionable.
 A task that is configured off must not declare an interval.
+A task that polls faster than it completes (its idle passes are skipped, which does not count as
+success) also declares an expected success interval; the allowance is built from the larger of
+that and the polling interval, so a healthy long cooldown is not read as a stall.
 Increase reads raw counters before aggregation. Device-state has its own discard warning.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
@@ -27,16 +30,16 @@ spec:
                 {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_last_success_timestamp_seconds",namespace="{{ $ns }}"},
                 "task", "$1", "__name__", "[^_]+_[^_]+_(.+)_last_success_timestamp_seconds"))
               > 3 * max by (job, task) (label_replace(
-                {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_pass_interval_seconds",namespace="{{ $ns }}"},
-                "task", "$1", "__name__", "[^_]+_[^_]+_(.+)_pass_interval_seconds")) + 300
+                {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_pass_interval_seconds|devicechain_[a-z0-9]+_[a-z0-9_]+_expected_success_interval_seconds",namespace="{{ $ns }}"},
+                "task", "$1", "__name__", "[^_]+_[^_]+_(.+)_(?:pass|expected_success)_interval_seconds")) + 300
             )
             or
             (
               (
                 max by (job, task) (
                   (3 * max by (job, instance, task) (label_replace(
-                  {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_pass_interval_seconds",namespace="{{ $ns }}"},
-                  "task", "$1", "__name__", "[^_]+_[^_]+_(.+)_pass_interval_seconds")) + 300)
+                  {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_pass_interval_seconds|devicechain_[a-z0-9]+_[a-z0-9_]+_expected_success_interval_seconds",namespace="{{ $ns }}"},
+                  "task", "$1", "__name__", "[^_]+_[^_]+_(.+)_(?:pass|expected_success)_interval_seconds")) + 300)
                   < on (job, instance) group_left ()
                   (time() - process_start_time_seconds{namespace="{{ $ns }}"})
                 )
@@ -59,7 +62,7 @@ spec:
           annotations:
             runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#periodictaskstalled"
             summary: "A maintenance task is not completing successful passes"
-            description: "No replica of this job and task has succeeded within three declared pass intervals plus five minutes, or the task has never succeeded and a replica declaring its interval has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task."
+            description: "No replica of this job and task has succeeded within three declared pass intervals plus five minutes (a task that completes less often than it polls declares its expected success interval, and that longer interval is used), or the task has never succeeded and a replica declaring its interval has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task."
         - alert: ProcessorLoopDropping
           expr: |
             sum by (job) (increase(

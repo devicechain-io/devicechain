@@ -104,7 +104,7 @@ tests:
             exp_annotations: &id001
               runbook_url: https://docs.devicechain.io/deployment/alert-runbook#periodictaskstalled
               summary: A maintenance task is not completing successful passes
-              description: No replica of this job and task has succeeded within three declared pass intervals plus five minutes, or the task has never succeeded and a replica declaring its interval has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task.
+              description: No replica of this job and task has succeeded within three declared pass intervals plus five minutes (a task that completes less often than it polls declares its expected success interval, and that longer interval is used), or the task has never succeeded and a replica declaring its interval has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task.
   - name: three declared intervals rather than a fixed timeout
     interval: 1m
     input_series:
@@ -197,6 +197,56 @@ tests:
               devicechain_instance: devicechain
               job: maintenance
               task: sweep
+            exp_annotations: *id001
+  # A task that polls every 5m but completes hourly (idle polls are skipped and do not count
+  # as success) declares its expected success interval; the allowance is 3 x 3900s + 300s.
+  - name: healthy hourly cooldown does not stall
+    interval: 1m
+    input_series:
+      - series: devicechain_eventmanagement_rollup_tail_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
+        values: 0x59 3600x60 7200x60 10800x60
+      - series: devicechain_eventmanagement_rollup_tail_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
+        values: 300x240
+      - series: devicechain_eventmanagement_rollup_tail_expected_success_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
+        values: 3900x240
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
+        values: -3600x240
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+      - eval_time: 100m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+      - eval_time: 160m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+  - name: hourly cooldown task that really stalls still fires
+    interval: 1m
+    input_series:
+      - series: devicechain_eventmanagement_rollup_tail_last_success_timestamp_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
+        values: '0x240'
+      - series: devicechain_eventmanagement_rollup_tail_pass_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
+        values: 300x240
+      - series: devicechain_eventmanagement_rollup_tail_expected_success_interval_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
+        values: 3900x240
+      - series: process_start_time_seconds{namespace="dci-devicechain",job="maintenance",instance="a"}
+        values: -3600x240
+    alert_rule_test:
+      - eval_time: 200m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+      - eval_time: 205m
+        alertname: PeriodicTaskStalled
+        exp_alerts: []
+      - eval_time: 211m
+        alertname: PeriodicTaskStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: maintenance
+              task: rollup_tail
             exp_annotations: *id001
   - name: unwanted increments are not give ups
     interval: 1m
