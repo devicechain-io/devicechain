@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	_ "embed"
+	"errors"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
@@ -31,6 +32,9 @@ const ContextDeviceAuthModeKey = gqlcore.ContextKey("device-auth-mode")
 
 type SchemaResolver struct{}
 
+// ErrNoNatsManager reports a missing or invalid subscription dependency in the context.
+var ErrNoNatsManager = errors.New("no NATS manager in context")
+
 // Get rdb manager from context.
 func (s *SchemaResolver) GetRdbManager(ctx context.Context) *rdb.RdbManager {
 	return ctx.Value(gqlcore.ContextRdbKey).(*rdb.RdbManager)
@@ -50,6 +54,10 @@ func (s *SchemaResolver) GetCachedApi(ctx context.Context) *model.CachedApi {
 
 // Get nats manager from context. Backs the live subscription resolvers
 // (SubscribeLive); injected as a provider in main.go once the manager is connected.
-func (s *SchemaResolver) GetNats(ctx context.Context) *messaging.NatsManager {
-	return ctx.Value(gqlcore.ContextNatsKey).(*messaging.NatsManager)
+func (s *SchemaResolver) GetNats(ctx context.Context) (*messaging.NatsManager, error) {
+	manager, ok := ctx.Value(gqlcore.ContextNatsKey).(*messaging.NatsManager)
+	if !ok || manager == nil {
+		return nil, ErrNoNatsManager
+	}
+	return manager, nil
 }
