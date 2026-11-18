@@ -6,10 +6,13 @@ package model
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"slices"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Who owns a device, as the live view knows it (ADR-081). A member limited to some
@@ -118,20 +121,35 @@ func applyOwners(row *DeviceState, o Owners) {
 // after this change, which already carries what this fact says.
 //
 // ONE row is written, and every latest reading and position of the device moves with it:
-// they hold no stamp of their own (deviceOwners). The statement is one conditional UPDATE of
-// one row in a transaction of its own, so it takes one lock and cannot deadlock with the
-// batch writers, which take device rows in token order.
-func (api *Api) ApplyDeviceOwnership(ctx context.Context, deviceToken string, anchors []string, changedAt time.Time) (bool, error) {
-	at := storedTime(changedAt).Add(ownershipSettle)
-	res := api.RDB.DB(ctx).Model(&DeviceState{}).
-		Where("device_token = ?", deviceToken).
-		Where("scope_anchors_at IS NULL OR scope_anchors_at < ?", at).
-		Updates(map[string]any{
-			"scope_anchors":    ownerSet(anchors),
-			"scope_anchors_at": sql.NullTime{Time: at, Valid: true},
-		})
-	if res.Error != nil {
-		return false, res.Error
-	}
-	return res.RowsAffected > 0, nil
+// they hold no stamp of their own (deviceOwners). The transaction locks the parent before
+// comparing incarnations. A newer fact deletes the old projection and its children;
+// the new device's first event will create its own row.
+func (api *Api) ApplyDeviceOwnership(ctx context.Context, deviceToken string, anchors []string, changedAt time.Time, incarnation uint64) (bool, error) {
+	var applied bool
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		var row DeviceState
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("device_token = ?", deviceToken).First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if incarnation != 0 && row.Incarnation.Valid {
+			if incarnation < uint64(row.Incarnation.Int64) {
+				return nil
+			}
+			if incarnation > uint64(row.Incarnation.Int64) {
+				applied, err = deleteLiveProjection(tx, deviceToken, true, time.Time{})
+				return err
+			}
+		}
+		at := storedTime(changedAt).Add(ownershipSettle)
+		res := tx.Model(&DeviceState{}).Where("device_token = ?", deviceToken).
+			Where("scope_anchors_at IS NULL OR scope_anchors_at < ?", at).
+			Updates(map[string]any{"scope_anchors": ownerSet(anchors), "scope_anchors_at": sql.NullTime{Time: at, Valid: true}})
+		applied = res.RowsAffected > 0
+		return res.Error
+	})
+	return applied && err == nil, err
 }

@@ -75,13 +75,20 @@ func TestAnUncancelledPassIsClassifiedByItsError(t *testing.T) {
 	}
 }
 
-// newTaskMetrics builds the three signals on a registry the test can read back.
+// newTaskMetrics builds the four signals on a registry the test can read back.
 func newTaskMetrics(t *testing.T, name string) (*PeriodicTaskMetrics, *prometheus.Registry) {
 	t.Helper()
 	reg := prometheus.NewRegistry()
 	ms := &Microservice{FunctionalArea: "test-area"}
 	ms.UseMetricsRegistry(reg)
 	return ms.NewPeriodicTaskMetrics(name), reg
+}
+
+// testTaskMetrics gives each task its own service registry.
+func testTaskMetrics(t *testing.T) *PeriodicTaskMetrics {
+	t.Helper()
+	m, _ := newTaskMetrics(t, "sweep")
+	return m
 }
 
 // histogramCount returns how many observations a histogram has taken. testutil.ToFloat64
@@ -146,7 +153,7 @@ func TestOnlyAPassThatDidWorkMovesTheLastSuccessGauge(t *testing.T) {
 }
 
 // TestNilMetricsRecordNothingAndDoNotPanic covers the nil-safety ProcessorMetrics also has:
-// a task built without metrics must behave identically, so a unit test can build one.
+// direct metrics users may still use a nil receiver.
 func TestNilMetricsRecordNothingAndDoNotPanic(t *testing.T) {
 	var m *PeriodicTaskMetrics
 	assert.NotPanics(t, func() { m.record(PassComplete, time.Second, time.Now()) })
@@ -182,7 +189,7 @@ func TestJitterStaysInsideItsBandAndVaries(t *testing.T) {
 func TestTheDefaultIsJittered(t *testing.T) {
 	task := NewPeriodicTask("test-area", "sweep", time.Minute, func(context.Context) error {
 		return nil
-	}, NewNoOpLifecycleCallbacks())
+	}, NewNoOpLifecycleCallbacks(), testTaskMetrics(t))
 	assert.Equal(t, defaultPassJitter, task.jitter,
 		"a task built without options must be jittered; replicas that tick in lockstep are the "+
 			"reason the default is not 'exact'")
@@ -207,7 +214,7 @@ func TestWithoutJitterIsExact(t *testing.T) {
 // newTestTask builds a started task over run, and returns a stop function.
 func newTestTask(t *testing.T, run func(context.Context) error, opts ...PeriodicTaskOption) *PeriodicTask {
 	t.Helper()
-	task := NewPeriodicTask("test-area", "sweep", 20*time.Millisecond, run, NewNoOpLifecycleCallbacks(), opts...)
+	task := NewPeriodicTask("test-area", "sweep", 20*time.Millisecond, run, NewNoOpLifecycleCallbacks(), testTaskMetrics(t), opts...)
 	require.NoError(t, task.Initialize(context.Background()))
 	require.NoError(t, task.Start(context.Background()))
 	t.Cleanup(func() { _ = task.Stop(context.Background()) })
@@ -222,7 +229,7 @@ func TestTheImmediateFirstPassRunsBeforeTheInterval(t *testing.T) {
 	task := NewPeriodicTask("test-area", "sweep", time.Hour, func(context.Context) error {
 		passes.Add(1)
 		return nil
-	}, NewNoOpLifecycleCallbacks(), WithImmediateFirstPass(), WithoutJitter())
+	}, NewNoOpLifecycleCallbacks(), testTaskMetrics(t), WithImmediateFirstPass(), WithoutJitter())
 	require.NoError(t, task.Initialize(context.Background()))
 	require.NoError(t, task.Start(context.Background()))
 	defer func() { _ = task.Stop(context.Background()) }()
@@ -238,7 +245,7 @@ func TestWithoutTheOptionNoPassRunsAtStart(t *testing.T) {
 	task := NewPeriodicTask("test-area", "sweep", time.Hour, func(context.Context) error {
 		passes.Add(1)
 		return nil
-	}, NewNoOpLifecycleCallbacks(), WithoutJitter())
+	}, NewNoOpLifecycleCallbacks(), testTaskMetrics(t), WithoutJitter())
 	require.NoError(t, task.Initialize(context.Background()))
 	require.NoError(t, task.Start(context.Background()))
 	defer func() { _ = task.Stop(context.Background()) }()
@@ -260,7 +267,7 @@ func TestStopWaitsForAPassInFlight(t *testing.T) {
 		<-release
 		finished.Store(true)
 		return nil
-	}, NewNoOpLifecycleCallbacks(), WithoutJitter())
+	}, NewNoOpLifecycleCallbacks(), testTaskMetrics(t), WithoutJitter())
 	require.NoError(t, task.Initialize(context.Background()))
 	require.NoError(t, task.Start(context.Background()))
 
@@ -311,7 +318,7 @@ func TestADetachedTaskSurvivesTheInitializeContext(t *testing.T) {
 				default:
 				}
 				return nil
-			}, NewNoOpLifecycleCallbacks(), tc.opts...)
+			}, NewNoOpLifecycleCallbacks(), testTaskMetrics(t), tc.opts...)
 
 			initCtx, cancelInit := context.WithCancel(context.Background())
 			defer cancelInit()
@@ -406,7 +413,7 @@ func TestTheLoopFilesTheOutcomeItActuallySaw(t *testing.T) {
 			// The shape that makes this worth pinning: the pass reports an error, and
 			// it is the context's own. Classified by the error alone it is a failure.
 			return ctx.Err()
-		}, NewNoOpLifecycleCallbacks(), WithImmediateFirstPass(), WithoutJitter(), WithPassMetrics(m))
+		}, NewNoOpLifecycleCallbacks(), m, WithImmediateFirstPass(), WithoutJitter())
 		require.NoError(t, task.Initialize(context.Background()))
 		require.NoError(t, task.Start(context.Background()))
 		<-started
@@ -434,7 +441,7 @@ func TestTheLoopFilesTheOutcomeItActuallySaw(t *testing.T) {
 				close(done)
 			}
 			return ErrPassSkipped
-		}, NewNoOpLifecycleCallbacks(), WithImmediateFirstPass(), WithoutJitter(), WithPassMetrics(m))
+		}, NewNoOpLifecycleCallbacks(), m, WithImmediateFirstPass(), WithoutJitter())
 		require.NoError(t, task.Initialize(context.Background()))
 		require.NoError(t, task.Start(context.Background()))
 		<-done
@@ -463,7 +470,7 @@ func TestTheLoopFilesTheOutcomeItActuallySaw(t *testing.T) {
 				close(done)
 			}
 			return nil
-		}, NewNoOpLifecycleCallbacks(), WithImmediateFirstPass(), WithoutJitter(), WithPassMetrics(m))
+		}, NewNoOpLifecycleCallbacks(), m, WithImmediateFirstPass(), WithoutJitter())
 		require.NoError(t, task.Initialize(context.Background()))
 		require.NoError(t, task.Start(context.Background()))
 		<-done
@@ -485,12 +492,12 @@ func TestANonPositiveIntervalIsRefused(t *testing.T) {
 	for _, interval := range []time.Duration{0, -time.Second} {
 		assert.Panicsf(t, func() {
 			NewPeriodicTask("test-area", "sweep", interval, func(context.Context) error { return nil },
-				NewNoOpLifecycleCallbacks())
+				NewNoOpLifecycleCallbacks(), testTaskMetrics(t))
 		}, "an interval of %s must be refused at construction, not become a hot loop", interval)
 	}
 	assert.NotPanics(t, func() {
 		NewPeriodicTask("test-area", "sweep", time.Nanosecond, func(context.Context) error { return nil },
-			NewNoOpLifecycleCallbacks())
+			NewNoOpLifecycleCallbacks(), testTaskMetrics(t))
 	}, "the guard is on non-positive, not on small")
 }
 
@@ -684,4 +691,43 @@ func TestPeriodicTaskPassCounterExistsBeforeAnyPass(t *testing.T) {
 		}
 	}
 	t.Fatal("_passes_total is not exported before the first pass")
+}
+
+// Construction and initialization must not advertise a task that never starts.
+func TestPassIntervalIsDeclaredOnlyAtStart(t *testing.T) {
+	m, reg := newTaskMetrics(t, "declared")
+	const interval = 1500 * time.Millisecond
+	task := NewPeriodicTask("test-area", "declared", interval,
+		func(context.Context) error { return nil }, NewNoOpLifecycleCallbacks(), m)
+	read := func() float64 {
+		t.Helper()
+		families, err := reg.Gather()
+		require.NoError(t, err)
+		for _, family := range families {
+			if family.GetName() == "devicechain_testarea_declared_pass_interval_seconds" {
+				require.Len(t, family.Metric, 1)
+				assert.Empty(t, family.Metric[0].Label)
+				return family.Metric[0].GetGauge().GetValue()
+			}
+		}
+		t.Fatal("declared interval gauge is not registered")
+		return 0
+	}
+	require.True(t, math.IsNaN(read()), "constructed but never started")
+	require.NoError(t, task.Initialize(context.Background()))
+	require.True(t, math.IsNaN(read()), "initialized but never started")
+	require.NoError(t, task.Start(context.Background()))
+	t.Cleanup(func() { require.NoError(t, task.Stop(context.Background())) })
+	assert.Equal(t, 1.5, read())
+	copy := m.WithOwnFailureLog()
+	copy.SetInterval(2250 * time.Millisecond)
+	assert.Equal(t, 2.25, read(), "failure-log copies share the interval gauge")
+	assert.NotPanics(t, func() { (*PeriodicTaskMetrics)(nil).SetInterval(time.Second) })
+}
+
+func TestNilPeriodicTaskMetricsAreRefused(t *testing.T) {
+	assert.PanicsWithValue(t, "core: periodic task \"sweep\" needs pass metrics", func() {
+		NewPeriodicTask("test-area", "sweep", time.Minute, func(context.Context) error { return nil },
+			NewNoOpLifecycleCallbacks(), nil)
+	})
 }
