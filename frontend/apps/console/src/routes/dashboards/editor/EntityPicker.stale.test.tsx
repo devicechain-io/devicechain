@@ -33,7 +33,7 @@ beforeEach(() => {
   listAreas.mockReset();
 });
 
-const page = (token: string, name: string) => ({ results: [{ token, name }] });
+const page = (token: string, name: string) => ({ results: [{ token, name }], pagination: { totalRecords: 1 } });
 
 function deferred<T>() {
   let resolve!: (v: T) => void;

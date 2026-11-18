@@ -5,8 +5,8 @@ package main
 
 import (
 	"context"
-	"github.com/devicechain-io/dc-microservice/svcclient"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/egress"
@@ -18,11 +18,13 @@ import (
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-notification-management/config"
 	"github.com/devicechain-io/dc-notification-management/graphql"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/devicechain-io/dc-notification-management/processor"
 	"github.com/devicechain-io/dc-notification-management/schema"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -210,6 +212,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Svc = service.New(Microservice, service.Spec{
 		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
+			AppendOnly: nil, // Audit journal only.
 			// The per-tenant channels, policies, and per-alarm notification state are
 			// served from the relational store.
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
@@ -272,6 +275,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// delivery path: a ledger write can never delay or block a page.
 			AttemptLedger = processor.NewAttemptLedger(Api, NotifyMetrics.LedgerWrites())
 			Notifier.Ledger = AttemptLedger
+			if seam, err := peers.Seam(infra.DeviceManagement.Endpoint(), auth.AlarmRead); err != nil {
+				log.Warn().Err(err).Msg("Alarm backstop is disabled: service secret or device-management/user-management endpoint is not configured; existing orphan alarms may keep escalating")
+			} else {
+				Notifier.AlarmLookup = processor.NewAlarmLookup(seam.Client, seam.URL)
+			}
 
 			// Retention sweep: prune cleared per-alarm state older than the retention window so
 			// the notification state stays bounded (ADR-017 N.C). A negative interval disables
@@ -281,6 +289,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 					Configuration.StateRetention(), Configuration.AttemptRetention(),
 					Configuration.RetentionSweepInterval(),
 					core.NewNoOpLifecycleCallbacks())
+				RetentionSweeper.Notifier = Notifier
 				if err := RetentionSweeper.Initialize(ctx); err != nil {
 					return err
 				}

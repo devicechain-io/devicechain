@@ -36,7 +36,7 @@ The Things Stack v3 发送方类型直接读取 The Things Stack 自己的消息
 | `battery` | Integer | `mV` |
 | `door` | Boolean | |
 
-在控制台中，按照[设备类型与配置文件](../user-guide/device-types-and-profiles.md)创建配置文件和指标，再创建一个使用该配置文件的设备类型，然后**发布**配置文件。使用 GraphQL：
+在控制台中，按照[设备类型与配置文件](../user-guide/device-types-and-profiles.md)创建配置文件和指标，再创建一个使用该配置文件的设备类型，然后**发布**配置文件。使用 GraphQL 时需分两次请求发送，因为一个 mutation 最多只能选择[五个根字段](../reference/graphql-api.md#request-limits)，多出一个就会导致整个请求被拒绝：
 
 ```graphql
 mutation {
@@ -45,6 +45,11 @@ mutation {
   humidity: createMetricDefinition(request: { token: "room-sensor-humidity", deviceProfileToken: "room-sensor", metricKey: "humidity", name: "Humidity", dataType: "DOUBLE", unit: "%" }) { metricKey }
   battery: createMetricDefinition(request: { token: "room-sensor-battery", deviceProfileToken: "room-sensor", metricKey: "battery", name: "Battery", dataType: "INT", unit: "mV" }) { metricKey }
   door: createMetricDefinition(request: { token: "room-sensor-door", deviceProfileToken: "room-sensor", metricKey: "door", name: "Door", dataType: "BOOLEAN" }) { metricKey }
+}
+```
+
+```graphql
+mutation {
   createDeviceType(request: { token: "room-sensor", name: "Room sensor", profileToken: "room-sensor" }) { token }
 }
 ```

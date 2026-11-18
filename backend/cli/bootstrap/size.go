@@ -52,6 +52,11 @@ const (
 	SizePerf20k = "perf-20k"
 )
 
+// storedEventBytes is the canonical GKE sizing figure for one stored event and its
+// measurement row, including indexes, before compression and excluding WAL.
+// Preset volumes are fixed quantities, not computed here; see the event-store sizing docs.
+const storedEventBytes = 756
+
 // sizeNames is every name `--size` accepts, in the order help prints them.
 var sizeNames = []string{SizeBase, SizeCompact, SizePerf12k, SizePerf16k, SizePerf20k}
 
@@ -117,8 +122,8 @@ type sizePreset struct {
 //   - event-processing 1Gi: resident 547 MiB at 12,000 events a second x 1.5, rounded up.
 //   - NATS 8Gi: the working set was 2.5 GiB at 12,000 in round 31 (a margin of 2.5 at 8Gi).
 //   - JetStream volume: the runway rule at 12,000 (see size_test.go); round 31 used 7.9 GiB at 20,000.
-//   - event store volume 160Gi: 756 bytes per stored event (indexes included, uncompressed) is
-//     32.7 GB an hour at 12,000 a second, so it holds about three and a half hours of saturated
+//   - event store volume 160Gi: storedEventBytes per stored event is
+//     32.66 GB an hour at 12,000 a second, so it holds about three and a half hours of saturated
 //     ingest after the log allowance. It is a burst volume, not retention.
 //   - max_wal_size 20480 MiB: 1.9 x 900 s x 10.8 MB/s (round 30 at 12,000); round 31 saw no
 //     requested checkpoint at 12,000.
@@ -139,7 +144,7 @@ type sizePreset struct {
 //     which needs at least 34Gi. Round 31 ran 12,000 here and used 7.9 GiB at 20,000.
 //   - max_wal_size 40960 MiB: 1.9 x 900 s x 23.8 MB/s (round 31 at 20,000), so 20,000 also
 //     checkpoints on the clock; relational 8192 MiB: 1.9 x 300 s x 11.2 MB/s is 6.4 GB at 20,000.
-//   - event store volume 260Gi (the volume round 30 ran): 756 bytes an event is 43.6 GB an hour at
+//   - event store volume 260Gi (the volume round 30 ran): storedEventBytes an event is 43.5 GB an hour at
 //     16,000 a second, about four hours of saturated ingest after the log allowance and working room.
 //
 // What is NOT here yet, because it needs a measurement: the relational storage, CNPG resources,
