@@ -459,8 +459,7 @@ func NewMfaSourceFailureSweeper(ms *core.Microservice, store *iam.Store, interva
 	callbacks core.LifecycleCallbacks) *MfaSourceFailureSweeper {
 	s := &MfaSourceFailureSweeper{store: store}
 	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "mfa-source-failure-sweep", interval,
-		s.RunOnce, callbacks, core.WithDetachedContext(),
-		core.WithPassMetrics(ms.NewPeriodicTaskMetrics("mfa_source_failure_sweep")))
+		s.RunOnce, callbacks, ms.NewPeriodicTaskMetrics("mfa_source_failure_sweep"), core.WithDetachedContext())
 	return s
 }
 

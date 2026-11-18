@@ -15,11 +15,14 @@ import (
 	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // fakeDevices maps tenant/device to a profile token.
 type fakeDevices struct {
-	profiles map[string]string
+	profiles     map[string]string
+	incarnations map[string]uint64
+	createdAt    map[string]time.Time
 	// disabled is the set of tenant/device keys an operator has disabled.
 	disabled map[string]bool
 	err      error
@@ -33,7 +36,11 @@ func (f *fakeDevices) DeviceOf(_ context.Context, tenant, device string) (Device
 		return DeviceFacts{}, false, f.err
 	}
 	p, ok := f.profiles[tenant+"/"+device]
-	return DeviceFacts{Profile: p, Disabled: f.disabled[tenant+"/"+device]}, ok, nil
+	id := f.incarnations[tenant+"/"+device]
+	if id == 0 {
+		id = 1
+	}
+	return DeviceFacts{Incarnation: id, CreatedAt: f.createdAt[tenant+"/"+device], Profile: p, Disabled: f.disabled[tenant+"/"+device]}, ok, nil
 }
 
 type published struct {
@@ -122,7 +129,9 @@ func (e *updateEnv) availableArtifact(t *testing.T, tenant, token, version strin
 	require.NoError(t, err)
 	ref, err := e.store.Put(ctx, blobKey(tenant, token), bytes.NewReader(content), blobPutOpts(int64(len(content))))
 	require.NoError(t, err)
-	require.NoError(t, e.api.CompleteUpload(ctx, a, ref))
+	stamp, err := e.api.ClaimUpload(ctx, a)
+	require.NoError(t, err)
+	require.NoError(t, e.api.CompleteUpload(ctx, a, stamp, ref))
 	a, err = e.api.ArtifactByToken(ctx, token)
 	require.NoError(t, err)
 	require.Equal(t, StateAvailable, a.State)
@@ -368,6 +377,33 @@ func TestAReportCannotReachAnotherDevicesOrTenantsAttempt(t *testing.T) {
 	// An inventory only ever reconciles the reporting device's own attempt.
 	inv := ota.Report{V: 1, Kind: ota.KindInventory, Component: "firmware", BootID: "b", Running: &ota.Running{Version: "1.0.0"}}
 	e.mustApply(t, "acme", "dev-2", inv, VerdictUnknownAssignment)
+}
+
+func TestDeadlineSweepCountsFailedWritesAndKeepsTheLastError(t *testing.T) {
+	e := newUpdateEnv(t)
+	e.availableArtifact(t, "acme", "fw-1", "1.0.0", []byte("firmware one"))
+	for _, device := range []string{"dev-1", "dev-2"} {
+		_, err := e.api.AssignArtifact(tenantCtx("acme"), device, "fw-1")
+		require.NoError(t, err)
+	}
+	e.advance(2 * time.Hour)
+	lastErr := errors.New("last deadline write failed")
+	writes := 0
+	require.NoError(t, e.api.RDB.Database.Callback().Update().Before("gorm:update").Register("test:deadline-write", func(tx *gorm.DB) {
+		writes++
+		if writes == 1 {
+			tx.AddError(errors.New("first deadline write failed"))
+		} else {
+			tx.AddError(lastErr)
+		}
+	}))
+	res, err := e.api.SweepDeadlines(context.Background(), 1)
+	require.NoError(t, err)
+	require.Equal(t, 2, writes, "failed writes must not stop the keyset walk")
+	require.Equal(t, 2, res.Examined)
+	require.Equal(t, 2, res.Failed)
+	require.ErrorIs(t, res.LastErr, lastErr)
+	require.Zero(t, res.TimedOut+res.Unknown)
 }
 
 func TestDeadlinesTimeOutBeforeInstallAndLeaveUnknownAfter(t *testing.T) {

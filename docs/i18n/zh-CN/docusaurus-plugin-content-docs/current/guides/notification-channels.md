@@ -26,7 +26,7 @@ title: 配置通知渠道
 
 **更新**时，`secret` 字段行为如下：
 
-- **省略**则保留现有密钥，不必再次发送。
+- **省略**则保留现有密钥，更改类型或凭据目标时必须重新发送。
 - 发送非空值会替换。
 - 发送 `null` 或空字符串会清除。
 - 配置声明 `bearer` 或 `header` 认证的 webhook 渠道，清除密钥会被拒绝。若希望端点匿名，请在同一请求将 `auth` 改为 `none`。
@@ -213,6 +213,8 @@ mutation {
 
 升级可安全运行多个副本：每个升级层级发送前先认领，因此只有一个副本投递。每个告警有**一个共享升级时钟和层级**。多个升级策略匹配时，最短窗口决定频率，每个次数上限都针对共享层级。
 
+升级通知的等待时间从平台发送通知时开始计算，不受设备事件时间戳的影响。
+
 ```graphql
 mutation {
   createNotificationPolicy(request: {
@@ -233,6 +235,12 @@ mutation {
 更新请求的 `rules` 会**替换**现有规则集合。省略则保留，发送 `null` 或 `[]` 会清空。与渠道 `secret` 相同，逐字段绑定变量会将未提供的 `rules` 发送为 `null`，清空集合，因此应将整个请求作为一个变量发送。指定未知渠道令牌会让整个写入失败。
 
 两人同时编辑同一策略可能相互覆盖：双方修改的字段只保留最后保存值，而 `rules` 替换整体集合，第二次保存会丢弃第一次所有规则。要防止，请将读取时的 `updatedAt`（或上次更新返回的值）作为 `expectedUpdatedAt` 发送。此后策略已改变时，更新拒绝，提示“notification policy was modified by another writer; reload and try again”，不写入任何内容。重新加载、重新应用更改，再次发送。
+
+#### 已删除设备的告警 {#deleted-originator}
+
+删除设备（或产生告警的其他实体）时，其仍处于活动状态的每个告警都会以一个携带 `clearReason: ORIGINATOR_DELETED` 的 `CLEARED` 事件结束。该告警的升级随即停止；启用了 `notifyOnClear` 的策略会通知曾为其发送通知的渠道：该告警因其设备被删除而结束。Webhook 负载和 PagerDuty 详情中也会携带相同的 `clearReason`。
+
+在再次发送告警通知之前，调度器还会向 `device-management` 查询该告警是否仍然存在。已不存在的告警，或 `device-management` 报告为已清除的告警，会停止升级。**如果该查询失败**（例如 `device-management` 不可用），**仍会发送通知**：在故障期间漏发真实的通知，比为设备刚被删除的告警多发一次通知更糟。每次查询失败都会计入 `escalation_lookup_errors_total` 指标。定期检查还会结束超过一小时、其告警已不存在的未结束通知。如果未配置服务密钥或 `device-management` 与 `user-management` 端点，这些检查将关闭，启动时记录警告，升级行为与以前相同。
 
 ### 静默时段 {#quiet-hours}
 
@@ -368,3 +376,5 @@ query {
 5. **查看投递记录。** `notificationAttempts(criteria: {pageNumber: 1, pageSize: 20, alarmToken: "..."})` 列出该告警的每次尝试及其结果。`FAILED` 或 `REFUSED` 记录带有 `errorCode` 和服务提供方的 `errorMessage`；参见[投递记录](#delivery-ledger)。
 
 确认或解除告警会停止后续升级。状态行在通知历史旁记录 `acknowledgedAt`/`clearedAt`。如果告警解除后其条件再次出现，平台会重新打开同一个告警，其状态行也会为新周期重新开始：在该周期被确认或解除之前，升级会再次进行。
+
+如果渠道持有已存储凭据，更改渠道类型、webhook URL 或认证方式、SMTP 主机/端口/安全模式或 PagerDuty 区域时，必须在同一请求中发送 `secret`。省略时将返回 `SECRET_RESUPPLY_REQUIRED`，且不会写入任何更改。请重新提供凭据，或使用 `secret: null` 删除凭据。名称、自定义请求头和链接基础 URL 的编辑会保留凭据。

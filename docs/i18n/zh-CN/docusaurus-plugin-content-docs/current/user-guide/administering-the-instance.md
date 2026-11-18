@@ -133,7 +133,7 @@ import GuideShot from '@site/src/components/GuideShot';
 身份页面顶部有 **Disable** 和 **Delete**。被禁用的身份无法登录，其会话在下次刷新时结束。删除会移除该身份及其所有成员关系。
 
 - **Access**（访问）设置身份的 **System roles**（之后选择 **Save** 保存），并通过 **Set password**（设置密码）替换其密码。
-- **Memberships**（成员关系）列出它所属的租户，每个都带有状态和租户角色。更改角色后选择 **Save roles**（保存角色），或对该成员关系执行 **Disable** 或 **Remove**（移除）。禁用成员关系只会让此人无法进入那一个租户。要添加成员关系，请在 **Add to tenant**（添加到租户）下选择租户和角色，然后选择 **Add membership**（添加成员关系）。
+- **Memberships**（成员关系）列出它所属的租户，每个都带有状态和租户角色。更改角色后选择 **Save roles**（保存角色），或对该成员关系执行 **Disable** 或 **Remove**（移除）。禁用成员关系只会让此人无法进入那一个租户。要添加成员关系，请在 **Add to tenant**（添加到租户）下选择租户和角色，然后选择 **Add membership**（添加成员关系）。由[身份提供商](#identity-providers)连接管理的成员关系，在该连接仍存在且仍服务该租户期间，无法在此更改：**Save roles**、**Disable** 和 **Remove** 会被拒绝，返回 `MANAGED_BY_IDP`，因为此人下次通过该提供商登录时会撤销这一更改。要撤销此人的访问权限，请禁用该身份、将此人从提供商的组中移除，或让该连接不再服务该租户。一旦连接被删除或不再服务该租户，该成员关系即可像其他成员关系一样编辑。
 
 <GuideShot id="admin-identity-detail" alt="Maria Chen（maria.chen@acme-properties.example）的页面，状态为 Enabled，带有 Disable 和 Delete 按钮。Access 面板包含带 Save 的 System roles 选择器，以及带 Set 的 Set password 字段。Memberships 面板显示 sim-acme，Enabled，角色为 Facilities viewer，以及 Save roles、Disable 和 Remove 按钮。下方是 Add to tenant 和 Roles 选择器以及“Add membership”按钮。" />
 
@@ -231,3 +231,5 @@ AI 提供商界面需要可选的 AI 服务。这些截图中的实例没有运�
 - [租户删除](/deployment/tenant-deletion)：删除会擦除什么、保留什么，以及需要多长时间。
 - [单点登录](/concepts/single-sign-on)和[配置单点登录](/guides/configuring-sso)。
 - [系统设置](/concepts/system-settings)：实例范围的默认值。
+
+如果提供方持有已存储 API 密钥，更改 `kind` 或实际生效的 `endpoint` 时，必须在同一 `updateAiProvider` 请求中发送 `secret`；省略时将返回 `SECRET_RESUPPLY_REQUIRED`。请重新提供密钥，或使用 `secret: null` 删除密钥。名称、模型和启用状态的编辑，以及显式发送该类型的默认端点，都会保留密钥。

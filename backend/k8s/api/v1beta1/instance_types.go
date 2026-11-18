@@ -167,7 +167,12 @@ const FinalizerInstance = "core.devicechain.io/instance"
 // +kubebuilder:validation:XValidation:rule="!(has(self.restoredAt) && !(has(self.restored) && self.restored))",message="restoredAt is set on an instance that says it was not restored"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.objectStore) || has(self.objectStore)",message="objectStore cannot be removed: the logos and artifacts on it would be stranded, and the volume deleted with the declaration that named it"
 // +kubebuilder:validation:XValidation:rule="!has(self.mqttExposure) || self.mqttExposure == 'none' || (has(self.mqttHost) && size(self.mqttHost) > 0)",message="mqttHost is required when mqttExposure is gateway or loadbalancer: devices dial it and the broker's certificate must carry it"
+// +kubebuilder:validation:XValidation:rule="!has(self.shardGroups) || !has(self.ha) || !self.ha",message="shardGroups requires R1 streams and cannot be combined with ha"
 type InstanceSpec struct {
+	// ShardGroups is absent by default; opt in after all pods have rolled.
+	// +optional
+	ShardGroups *ShardGroupsSpec `json:"shardGroups,omitempty"`
+
 	// Provider is the infrastructure provider that resolved this instance's
 	// cluster. Immutable: an instance cannot move between providers in place.
 	//

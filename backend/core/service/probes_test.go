@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -21,14 +22,15 @@ import (
 // package binds the chart's port and races whatever else holds it.
 func ephemeralProbes(t *testing.T) {
 	t.Helper()
-	prev := ProbesPort
+	prev, prevOps := ProbesPort, OpsProbesPort
 	ProbesPort = 0
-	t.Cleanup(func() { ProbesPort = prev })
+	OpsProbesPort = 0
+	t.Cleanup(func() { ProbesPort, OpsProbesPort = prev, prevOps })
 }
 
 // routeFor reports the pattern the microservice's mux would route path to, or "" if none.
 func routeFor(ms *core.Microservice, path string) string {
-	_, pattern := ms.Mux().Handler(httptest.NewRequest(http.MethodGet, path, nil))
+	_, pattern := ms.OpsMux().Handler(httptest.NewRequest(http.MethodGet, path, nil))
 	return pattern
 }
 
@@ -55,7 +57,7 @@ func TestASpecWithNoGraphQLStillServesTheProbes(t *testing.T) {
 	require.NoError(t, svc.Initialize(ctx))
 	require.NoError(t, svc.Start(ctx))
 	t.Cleanup(func() { _ = svc.Stop(ctx) })
-	addr := svc.probes.server.Addr()
+	addr := svc.OpsAddr()
 	require.NotEmpty(t, addr, "the probe server was built but never bound")
 
 	require.Equal(t, http.StatusOK, get(t, addr, "/healthz"))
@@ -79,8 +81,9 @@ func TestASpecWithNoGraphQLStillServesTheProbes(t *testing.T) {
 // Every test that changes ProbesPort restores it, so the value seen here is the default.
 func TestTheProbeServerDefaultsToTheChartsPort(t *testing.T) {
 	require.EqualValues(t, core.HttpPort, ProbesPort)
-	require.EqualValues(t, 8080, core.HttpPort,
-		"the chart's container port is 8080; moving it here without the chart strands every probe")
+	require.EqualValues(t, core.OpsPort, OpsProbesPort)
+	require.EqualValues(t, 8083, core.OpsPort,
+		"the chart's container port is 8083; moving it here without the chart strands every probe")
 }
 
 // TestAServiceWithGraphQLDoesNotAlsoBuildTheProbeServer pins that the two probe surfaces
@@ -142,12 +145,15 @@ func TestARetriedStartAfterAFailedBindServes(t *testing.T) {
 	err = svc.Start(ctx)
 	require.Error(t, err, "binding a port already in use must refuse the start")
 	require.ErrorContains(t, err, "the probe server", "the error does not say what failed to start")
+	require.NotEmpty(t, svc.OpsAddr(), "ops must have bound before the public listener failed")
+	_, err = http.Get("http://" + svc.OpsAddr() + "/healthz")
+	require.Error(t, err, "the ops listener survived a failed public bind")
 
 	ProbesPort = 0
 	require.NotPanics(t, func() { require.NoError(t, svc.Start(ctx)) },
 		"a retried start re-registered a route")
 	t.Cleanup(func() { _ = svc.Stop(ctx) })
-	require.Equal(t, http.StatusOK, get(t, svc.probes.server.Addr(), "/healthz"),
+	require.Equal(t, http.StatusOK, get(t, svc.OpsAddr(), "/healthz"),
 		"the retried start did not serve")
 }
 
@@ -162,7 +168,7 @@ var registerLeftBehind = sync.OnceFunc(func() {
 	})
 })
 
-// TestTheProbeServerServesTheMicroservicesOwnMuxAndNothingElse is the negative control for
+// TestAServiceWithoutGraphQLServesPublicRoutesAndSeparateOps is the negative control for
 // the mux switchover, carried here from the services that used to build this server
 // themselves.
 //
@@ -171,7 +177,7 @@ var registerLeftBehind = sync.OnceFunc(func() {
 // nobody serves. So a route on the default mux must 404 here — and, as the counterweight,
 // a route on the microservice's own mux must be served, because "serves nothing from the
 // default mux" is also true of a server that serves nothing at all.
-func TestTheProbeServerServesTheMicroservicesOwnMuxAndNothingElse(t *testing.T) {
+func TestAServiceWithoutGraphQLServesPublicRoutesAndSeparateOps(t *testing.T) {
 	registerLeftBehind()
 	ephemeralProbes(t)
 	ms := testMicroservice(t)
@@ -188,5 +194,90 @@ func TestTheProbeServerServesTheMicroservicesOwnMuxAndNothingElse(t *testing.T) 
 		"a route on http.DefaultServeMux is being served")
 	require.Equal(t, http.StatusOK, get(t, svc.HttpAddr(), "/own-route"),
 		"a route the service registered on its own mux before Initialize is not served")
-	require.Equal(t, http.StatusOK, get(t, svc.HttpAddr(), "/healthz"))
+	for _, path := range []string{"/metrics", "/healthz", "/readyz"} {
+		require.Equal(t, http.StatusNotFound, get(t, svc.HttpAddr(), path),
+			"an operational endpoint is exposed on the public listener: %s", path)
+	}
+	require.NotEqual(t, svc.HttpAddr(), svc.OpsAddr())
+	require.Equal(t, http.StatusNotFound, get(t, svc.OpsAddr(), "/own-route"))
+	require.Equal(t, http.StatusOK, get(t, svc.OpsAddr(), "/metrics"))
+	require.Equal(t, http.StatusOK, get(t, svc.OpsAddr(), "/healthz"))
+	require.Equal(t, http.StatusServiceUnavailable, get(t, svc.OpsAddr(), "/readyz"))
+}
+
+func TestOverridingThePublicProbePortAlsoMakesOpsEphemeral(t *testing.T) {
+	prev := ProbesPort
+	ProbesPort = 0
+	t.Cleanup(func() { ProbesPort = prev })
+	require.EqualValues(t, core.OpsPort, OpsProbesPort)
+	svc := New(testMicroservice(t), Spec{})
+	ctx := context.Background()
+	require.NoError(t, svc.Initialize(ctx))
+	require.NoError(t, svc.Start(ctx))
+	t.Cleanup(func() { _ = svc.Stop(ctx) })
+	_, port, err := net.SplitHostPort(svc.OpsAddr())
+	require.NoError(t, err)
+	require.NotEqual(t, "8083", port)
+	require.Equal(t, http.StatusOK, get(t, svc.OpsAddr(), "/healthz"))
+}
+
+func TestAnOpsBindFailureDoesNotStartThePublicProbeListener(t *testing.T) {
+	ephemeralProbes(t)
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = taken.Close() })
+	OpsProbesPort = int32(taken.Addr().(*net.TCPAddr).Port)
+	svc := New(testMicroservice(t), Spec{})
+	ctx := context.Background()
+	require.NoError(t, svc.Initialize(ctx))
+	require.Error(t, svc.Start(ctx))
+	require.Empty(t, svc.HttpAddr(), "public listener started before the ops bind succeeded")
+}
+
+// Ops must keep answering while a public handler delays the graceful shutdown.
+func TestTheOpsListenerStaysUpWhilePublicRequestsDrain(t *testing.T) {
+	ephemeralProbes(t)
+	ms := testMicroservice(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
+	ms.Mux().HandleFunc("/slow", func(w http.ResponseWriter, _ *http.Request) {
+		close(entered)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	})
+	svc := New(ms, Spec{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, svc.Initialize(ctx))
+	require.NoError(t, svc.Start(ctx))
+	t.Cleanup(func() { unblock(); _ = svc.Stop(ctx) })
+	requestDone := make(chan error, 1)
+	go func() {
+		resp, err := http.Get("http://" + svc.HttpAddr() + "/slow")
+		if resp != nil {
+			resp.Body.Close()
+		}
+		requestDone <- err
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("public handler was never reached")
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- svc.Stop(ctx) }()
+	require.Eventually(t, func() bool {
+		conn, err := net.DialTimeout("tcp", svc.HttpAddr(), 100*time.Millisecond)
+		if conn != nil {
+			conn.Close()
+		}
+		return err != nil
+	}, time.Second, 10*time.Millisecond, "public listener did not close before draining")
+	require.Equal(t, http.StatusOK, get(t, svc.OpsAddr(), "/healthz"))
+	unblock()
+	require.NoError(t, <-requestDone)
+	require.NoError(t, <-stopped)
+	_, err := http.Get("http://" + svc.OpsAddr() + "/healthz")
+	require.Error(t, err, "ops listener survived the completed stop")
 }

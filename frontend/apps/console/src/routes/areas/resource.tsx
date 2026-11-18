@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { listAll } from '@/lib/api/list-all';
 import { RegistryInstanceForm, tokenColumn, nameColumn, createdColumn, type RegistryResource } from '@/components/registry';
 import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
@@ -45,7 +46,7 @@ export const areaResource: RegistryResource<Area> = {
       i18nKey="area"
       entityType="area"
       defaultTypeToken={a?.areaType?.token}
-      loadTypes={() => listAreaTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
+      loadTypes={() => listAll(page => listAreaTypes({ ...page })).then((r) => r.results)}
       create={(req) =>
         createArea({
           token: req.token,

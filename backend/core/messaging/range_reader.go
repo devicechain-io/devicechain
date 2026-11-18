@@ -72,13 +72,18 @@ func (nmgr *NatsManager) NewRangeReader(suffix string, from, to uint64) (ReplayR
 	if err := nmgr.requireReader(suffix, streams.ReadEphemeral); err != nil {
 		return nil, err
 	}
+	return nmgr.newRangeReader(suffix, suffix, from, to)
+}
+
+// newRangeReader authorizes no names: callers validate the base before selecting a physical stream.
+func (nmgr *NatsManager) newRangeReader(base, suffix string, from, to uint64) (ReplayReader, error) {
 	if from == 0 || from > to {
 		return nil, fmt.Errorf("invalid range [%d, %d]: need 1 <= from <= to", from, to)
 	}
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	span := to - from + 1
 	wide := span > rangeDirectMax
-	if wide && streams.ShapeOf(suffix) == streams.ShapeAdvisory {
+	if wide && streams.ShapeOf(base) == streams.ShapeAdvisory {
 		return nil, fmt.Errorf("range read of %q: an advisory capture stream has no single subject to read through", suffix)
 	}
 

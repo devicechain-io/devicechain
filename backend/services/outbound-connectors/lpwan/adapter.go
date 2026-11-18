@@ -16,15 +16,18 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/payloadencode"
 	"github.com/devicechain-io/dc-microservice/transport"
 
 	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
+	"github.com/devicechain-io/dc-outbound-connectors/internal/tenantflight"
 )
 
 // Result labels for lpwan_downlinks_total. A fixed enum: never a per-tenant or per-device value.
 const (
+	ResultThrottled = "throttled" // waited for a tenant's in-flight capacity
 	// ResultQueued: success carries UNANSWERED because the transport has no answer from the
 	// device, so it records no delivery evidence.
 	ResultQueued          = "queued"
@@ -50,6 +53,7 @@ const (
 
 // Results is every result label, so a metric can create its children at 0.
 var Results = []string{
+	ResultThrottled,
 	ResultQueued, ResultQueuedConfirmed, ResultPendingFailed, ResultRefusedParams, ResultRefusedExpired, ResultRefusedNoRoute, ResultRefusedNoLink,
 	ResultRefusedNoDevEUI, ResultRefusedConfirm, ResultRefusedRate, ResultUnsent, ResultUnanswered,
 	ResultNotServed, ResultPoison, ResultTenantGone, ResultClaimLost, ResultClaimFailed,
@@ -160,6 +164,7 @@ type Adapter struct {
 	sender    Enqueuer
 	metrics   Metrics
 	opts      Options
+	inFlight  *tenantflight.Limit
 
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -196,7 +201,7 @@ func New(reader messaging.MessageReader, responses cmddownlink.ResponseWriter, c
 		opts.ResponseBackoff = 200 * time.Millisecond
 	}
 	return &Adapter{reader: reader, responses: responses, claimer: claimer, links: links, devices: devices,
-		sender: sender, metrics: metrics, opts: opts, ctx: context.Background()}
+		sender: sender, metrics: metrics, opts: opts, inFlight: tenantflight.New(opts.Workers), ctx: context.Background()}
 }
 
 func (a *Adapter) count(result string) {
@@ -317,6 +322,18 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 			j.expires = t
 		}
 	}
+	// Renew AckWait while waiting before any lookups or claim. Contention must
+	// never spend deliveries until an unsent command silently times out.
+	if !a.inFlight.TryAcquire(tenant) {
+		a.count(ResultThrottled)
+		if err := a.inFlight.Wait(ctx, tenant, msg.InProgress); err != nil {
+			if messaging.FinalDelivery(msg) {
+				a.refuse(msg, j, ResultUnsent, ReasonFailed, "could not wait for downlink capacity: "+err.Error())
+			}
+			return
+		}
+	}
+	defer a.inFlight.Release(tenant)
 
 	integration, ok := integrationOf(j.source)
 	if !ok {
@@ -379,6 +396,10 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 		a.lookupFailed(ctx, j, "link", err)
 		return
 	}
+	if target.NetworkServer == connectorspec.NetworkServerWebhook && params.Confirmed && !target.Webhook.CarriesCorrelation() {
+		a.refuse(msg, j, ResultRefusedConfirm, ReasonUnsupported, "a confirmed downlink needs {{correlationId}} in the link's templates so the acknowledgement can be matched")
+		return
+	}
 	// The name the network server addresses the device by: read from the device, never the command.
 	var ident, pendEUI, deviceRef string
 	if target.NetworkServer == connectorspec.NetworkServerTTSV3 {
@@ -403,6 +424,9 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 			return
 		}
 		ident, pendEUI = eui, eui
+		if target.NetworkServer == connectorspec.NetworkServerWebhook {
+			deviceRef = integrationcodec.GenericDeviceRef
+		}
 	}
 	if a.opts.Rate != nil && !a.opts.Rate.Allow(tenant) {
 		a.refuse(msg, j, ResultRefusedRate, ReasonRateLimited, "the tenant is over its outbound call ceiling; retry shortly")

@@ -89,14 +89,9 @@ const (
 	//     worth being a fresh-bring-up-only change to a running platform. (AckWait's
 	//     own comment says the same thing in more detail.)
 	//
-	//  2. 🔴 THE DEAD-LETTER ARMS READ THIS CONSTANT DIRECTLY, AND NOTHING WOULD CATCH
-	//     THEM READING A STALE ONE. Consumers across most of the service estate each
-	//     decide "this is the last attempt, write the dead letter now" with
-	//     `msg.NumDelivered >= messaging.MaxDeliver`, and then ack. No count or list of
-	//     them is written here on purpose — one was, it was wrong within the same PR
-	//     that added it (it said eight services and omitted device-management), and a
-	//     tally frozen in prose only ever drifts. Ask the tree:
-	//     `grep -rn 'messaging.MaxDeliver' --include='*.go' backend`. If a consumer's
+	//  2. Terminal-delivery decisions share this cap through Dispose and FinalDelivery.
+	//     The caller ledgers and raw-comparison guard in core/test enforce that shared
+	//     spelling. If a consumer's
 	//     actual MaxDeliver came from a tier while its arm kept comparing against this
 	//     package constant, the two would disagree — and the failure is silent in both
 	//     directions. Too low a constant dead-letters and acks a message the broker
@@ -127,6 +122,9 @@ const (
 	// an older build created, and so freshly-created and upgraded-in-place consumers
 	// do not silently diverge (an unset value would default to 1000 on the server).
 	readerMaxAckPending = 65536
+
+	// ReaderMaxAckPending is the maximum number of unacknowledged messages per reader consumer.
+	ReaderMaxAckPending = readerMaxAckPending
 
 	// rebindBackoffMin/Max bound the self-heal retry when a reader's durable consumer
 	// goes away (e.g. deleted by an older pod's Unsubscribe during a rolling update).
@@ -164,6 +162,8 @@ func (a natsAck) InProgress() error { return a.nm.InProgress() }
 // microservice. It mirrors the former KafkaManager's lifecycle shape so the
 // service mains change minimally.
 type NatsManager struct {
+	liveHubs sync.Map // key string -> lazy *LiveHub[T]; see SharedLiveHub
+
 	Microservice *core.Microservice
 
 	// admin makes this manager the BROKER ADMINISTRATOR's: the one holder of the right to
@@ -1301,6 +1301,9 @@ type natsWriter struct {
 // context.
 func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedWrite(suffix); err != nil {
+		return nil, err
+	}
 	if err := nmgr.requireWriter(suffix); err != nil {
 		return nil, err
 	}
@@ -1737,11 +1740,10 @@ type natsReader struct {
 	// unaffected.
 	unbound bool
 
-	// downstream is the stream this reader's area forwards what it reads into, when that
-	// stream applies backpressure (streams.Stream.Forwards); "" otherwise. While its gate is
-	// closed the reader parks before fetching. Set by NewReader from the declaration, never
-	// by the caller, so a forwarding hop cannot be built without it.
-	downstream string
+	// downstreams are the streams this reader can forward into. The reader parks before
+	// fetching while any gate refuses. An ungrouped reader covers every selected group;
+	// a grouped reader covers only its own group.
+	downstreams []string
 
 	// slots is what ReaderWithCapacity asked for; 0 means a plain reader. capacity is the
 	// pool NewReader builds from it (nil for a plain reader, which is how every capacity
@@ -2321,6 +2323,9 @@ func (r *natsReader) recreateUnfiltered(fromSubject string, fromList []string) e
 // and every advisory it took would be one no recorder lettered.
 func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (MessageReader, error) {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedRead(suffix); err != nil {
+		return nil, err
+	}
 	if streams.ShapeOf(suffix) == streams.ShapeAdvisory {
 		return nil, fmt.Errorf("messaging: %q is read only by the max-delivery recorder (RecordMaxDeliveries), "+
 			"not through NewReader", suffix)
@@ -2330,9 +2335,6 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 		suffix:  suffix,
 		durable: ReaderDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix),
 		gate:    nmgr.Microservice.Readiness,
-		// A hop that forwards into a stream applying backpressure parks while that stream
-		// refuses, rather than fetching messages it could only fail to publish.
-		downstream: streams.ForwardsInto(suffix, nmgr.Microservice.FunctionalArea),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -2344,9 +2346,7 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	if _, err := nmgr.ensureStream(suffix); err != nil {
 		return nil, err
 	}
-	if r.shardGroup != nil && nmgr.streamSharding().selects(r.downstream) {
-		r.downstream = GroupSuffix(r.downstream, *r.shardGroup)
-	}
+	r.downstreams = nmgr.readerDownstreams(streams.ForwardsInto(suffix, nmgr.Microservice.FunctionalArea), r.shardGroup)
 	r.stream = StreamName(nmgr.Microservice.InstanceId, selectedSuffix)
 	r.durable = ReaderDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, selectedSuffix)
 	// The device-events capture stream stores two subjects (a device's own telemetry and a
@@ -2427,8 +2427,8 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	if err := nmgr.requireConsumer(suffix, declaredDurable); err != nil {
 		return nil, err
 	}
-	if r.downstream != "" {
-		nmgr.registerBackpressure(r.downstream)
+	for _, downstream := range r.downstreams {
+		nmgr.registerBackpressure(downstream)
 	}
 	r.configureFetch()
 	if r.slots > 0 {
@@ -2636,22 +2636,20 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 				}
 				continue
 			}
-			// Park while the stream this reader forwards into is refusing (backpressure.go).
+			// Park while any stream this reader can forward into refuses (backpressure.go).
 			// BEFORE the fetch, and before a capacity slot is taken, because a fetched
 			// message has already spent one of its MaxDeliver deliveries: fetching it only
 			// to fail its onward publish would leave it unacked to spend another, and one
 			// that spends them all is given up on as poison. Parked here, the backlog waits
 			// in this stream, undelivered, and a parked reader holds no slot.
-			if r.downstream != "" {
-				if bp := r.nmgr.Backpressure(r.downstream); bp != nil {
-					r.noteBackpressureAnswer(bp)
-					select {
-					case <-ctx.Done():
-						return Message{}, io.EOF
-					case <-time.After(termGatePoll):
-					}
-					continue
+			if bp := r.downstreamRefusal(); bp != nil {
+				r.noteBackpressureAnswer(bp)
+				select {
+				case <-ctx.Done():
+					return Message{}, io.EOF
+				case <-time.After(termGatePoll):
 				}
+				continue
 			}
 			batch := r.batchSize()
 			var fetchedAt time.Time
@@ -2934,6 +2932,9 @@ func (r *natsReader) dropPending() {
 // drops messages (bounded buffer) rather than stalling the pipeline.
 func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffix string) (<-chan Message, error) {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedRead(suffix); err != nil {
+		return nil, err
+	}
 	if err := nmgr.requireReader(suffix, streams.ReadLive); err != nil {
 		return nil, err
 	}

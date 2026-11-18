@@ -330,7 +330,7 @@ var All = []Bucket{
 		MaxBytes: 4 << 20,
 		TTL:      24 * time.Hour, // user-management rewrites it every few minutes; this only bounds a table nobody keeps alive
 		Writers:  []string{"user-management"},
-		Readers:  []string{"user-management", "event-sources", "device-management", "event-management"},
+		Readers:  []string{"user-management", "event-sources", "device-management", "event-management", "event-processing", "device-state", "sparkplug-ingest", "lwm2m-ingest"},
 
 		BackupClass:   durability.BackupRebuildable,
 		Durability:    durability.Rebuildable,

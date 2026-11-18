@@ -74,7 +74,10 @@ Click **New facet**. The drawer asks for:
 <GuideShot id="facets-new" alt="The New facet drawer with the fields Member family set to Device, Attribute key with the placeholder climate, Value type set to STRING, Values with the placeholder arid, temperate, tropical, and Label, followed by a Save facet button." />
 
 Click **Save facet**. There is no separate edit screen: to change a facet's type, values or label,
-declare it again with the same member family and key, and the new declaration replaces the old one.
+declare it again with the same member family and key, and the new declaration replaces the old one. A
+change of **type** is the exception: it is refused while shared attributes still hold values of
+the old type for that member family and key, so clear those values, or migrate them to the new
+type, first. Changing only the values or the label is not affected.
 
 **Delete** removes only the declaration. The values stored on entities are left alone, and any saved
 dynamic group that uses the facet keeps working.
@@ -140,6 +143,8 @@ The platform checks the selector again when you save, and refuses one it cannot 
 Once saved, the group appears under **Saved dynamic groups** for that family, with its token, name and
 selector. Click **Members** to see who belongs to it right now; the list is worked out from the
 selector each time you open it.
+
+A negated selector such as `!("retired" in attr)` includes entities with no attributes from the moment they are created, including enrollment when the group is in use by a detection rule or as an access scope.
 
 ## Related
 

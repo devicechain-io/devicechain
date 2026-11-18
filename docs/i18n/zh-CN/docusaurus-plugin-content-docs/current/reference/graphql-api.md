@@ -36,6 +36,16 @@ curl -s https://docs.devicechain.io/schema/device-management.graphql
 
 ## 端点 {#endpoints}
 
+控制台和仪表盘查看器在已认证的 HTTP 请求收到 401 时，会强制刷新一次租户令牌，
+并重放一次相同操作。如果服务器拒绝刷新或再次收到 401，则结束该会话。
+如果刷新暂时失败（没有响应、5xx 或 429），请求会以该错误失败，会话保持不变，因此服务中断不会让任何人退出登录。
+身份令牌无法刷新；收到 401 时会结束身份会话。
+
+外部 `@devicechain/client` 宿主通过 `setUnauthorizedHandler({ refresh, onEnd })` 启用此行为。
+在 `refresh` 中，租户平面使用 `session.forceRefresh(token)`，身份平面返回 null。
+在 `onEnd(error, token, identity)` 中，只结束仍持有该令牌的会话。
+匿名登录和刷新调用不会触发恢复。未设置处理器时，SDK 仍会立即抛出状态为 401 的 `GraphQLRequestError`。
+
 Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀，
 让请求到达服务自身的 `/graphql`。因此以下每个端点都是 `https://<your-host>/api/<area>/graphql`：
 
@@ -65,6 +75,9 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 
 - 读取设备凭据需要 `device:write`，不是 `device:read`。
 - `latestLocation` 需要 `location:read`，其他同属 `device-state` 的接口需要 `state:read`。
+- 由检测地理围栏包含关系的规则触发的告警，只有同时拥有 `location:read` 的调用方才能读取：其触发和清除时间就是设备进入和离开围栏的时间。
+  没有该权限时，告警查询、告警计数、`alarmDispositions` 和 `alarmStream` 都会略去该告警，`acknowledgeAlarm`、`clearAlarm`
+  和 `setAlarmDisposition` 的响应与未知令牌相同。同一规则的检测结果也按相同条件从 `detectionStream` 中略去。
 - 固定资产的安装位置（`Device.installedPosition`、`Asset.installedPosition`）需要 `location:installed:read`，
   而 `location:read` 包含该权限。这是安装数据，绝不会回退到设备上报的位置。
   调用者若两项权限都没有，读取任何设备和资产时都会得到 `positionWithheld: true`，无论它是否有位置；
@@ -118,6 +131,8 @@ query {
   }
 }
 ```
+
+`EventSearchCriteria.includeTotal` 为可选字段：省略或设为 true 时，保留精确的 `totalRecords` 计数。大型历史记录可设为 false 以跳过计数，此时 `totalRecords` 为 null。五个事件列表查询（`events`、`locationEvents`、`measurementEvents`、`alertEvents`、`stateChangeEvents`）均返回 `SearchResultsPagination.hasMore`；请求此字段即可判断是否应读取下一页。默认设置下，它等于 `pageEnd < totalRecords`。不计算总数时，`pageStart` 和 `pageEnd` 描述返回的行；空页面的 `pageEnd = pageStart - 1`，且 `hasMore: false`。请等所有 event-management Pod 均运行 v1.7 后再发送 `includeTotal` 或选择 `hasMore`；较早版本的 Pod 会拒绝两者。
 
 - 所有实体都以 token 命名，包括锚点内部。
 - 两个时间边界都包含端点，按 `occurredTime` 筛选：即设备报告的时刻，而非平台存储的时刻。
@@ -391,7 +406,7 @@ renameNotificationChannel(token: String!, newToken: String!): NotificationChanne
 特别之处是 `definition`：字段可空是为了能够*省略*，允许只改名而不重发完整文档；
 明确的 `null` 会被拒绝，因为无定义的仪表盘无效。保留可选 `expectedUpdatedAt` 前置条件。
 完全不指定字段的更新不写入任何内容，连 `updatedAt` 也不写；
-但其过时的前置条件仍会被拒绝为过时写入，不带 `extensions.code`。
+但其过时的前置条件仍会被拒绝为过时写入，`extensions.code` 为 `STALE_WRITE`。
 
 **user-management。**每个 `update*` 同样接受专用请求：
 
@@ -575,7 +590,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 - 用已有 token 创建命令不会拒绝，而是返回原命令。参见[发送命令](../guides/sending-commands.md#issue-it)。
 - 删除仍被其他记录引用的记录会携带 `REFERENCE_VIOLATION`。参见[引用或值被拒绝](#reference-and-invalid-values)。
 
-`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码仅适用于连接器更新。`CONFLICT` 仍表示唯一值冲突；其他操作的错误不变。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
+如果更新的前置条件（例如 `expectedUpdatedAt`）与记录不再一致（即在你读取之后有人修改了它），该更新会被拒绝，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。所有服务都以这种方式响应过时写入：连接器、仪表盘、AI 提供方、通知策略、客户类型、实体组、角色和告警均是如此。不会写入任何内容，消息与引入该代码之前相同：`<记录> was modified by another writer; reload and try again`，例如 `dashboard was modified by another writer; reload and try again`。`CONFLICT` 仍表示唯一值冲突，从不用于过时写入。请根据代码而非消息文本分类；`@devicechain/client` 中的 `isStaleWrite(err)` 会这样做，并在较旧的服务器上回退为匹配消息。控制台在所有带前置条件的保存中都会识别该代码。
 
 ### 引用或值被拒绝 {#reference-and-invalid-values}
 
@@ -667,6 +682,8 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 | 设备类型、设备配置文件及其版本、指标和命令定义、客户类型 | 全部可见，因为这些是配置。只能读取，不能修改。 |
 
 成员看不到的记录，其响应与不存在的记录完全相同：要么不出现在列表中，要么操作返回 `NOT_FOUND`。针对不属于这些客户的设备发起的 `measurementStream` 订阅会被接受，但不会推送任何内容。其他所有操作都返回 `FORBIDDEN`，且 `extensions.reason` 为 `SCOPE_UNSUPPORTED`。
+
+`measurementStream(deviceTokens: [String!], name: String)` 可在一次订阅中接受最多 1000 个设备令牌，重复令牌会被忽略。列表不能为空，也不能与 `deviceToken` 同时使用。省略这两个设备参数可接收所有设备的读数。每条读数仍应用相同的访问范围和名称过滤条件。
 
 设备不属于任何客户期间记录的事件，访问权限受限的成员看不到。在此版本之前产生的告警同样看不到：告警从此版本开始才记录其所属客户。设备在此版本之前的实时状态，要等设备再次上报或更换所有者后才可见。告警保留其产生时的所属客户，因此客户出售设备后，仍能看到其拥有该设备期间产生的告警，包括仍处于活动状态的告警。
 
@@ -977,3 +994,5 @@ DeviceChain 提供的每个客户端每次请求只发送一次登录，所以�
    此大小适用于每个状态桶，因此确认 JetStream 卷有足够空间容纳增加的容量。
 
 Schema 稳定后，将根据它们生成详细的逐类型参考页面。
+
+`SECRET_RESUPPLY_REQUIRED` 表示更新会改变已存储凭据的目标或发送方式。使用 `updateConnector`、`updateNotificationChannel` 或 `updateAiProvider` 时，请在同一请求中重新发送 `secret`，或使用 `secret: null` 删除凭据。若连接器回滚的目标不同，请改用 `updateConnector` 并提供目标配置和凭据。

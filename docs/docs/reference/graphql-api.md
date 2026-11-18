@@ -39,6 +39,17 @@ curl -s https://docs.devicechain.io/schema/device-management.graphql
 
 ## Endpoints {#endpoints}
 
+The console and dashboard viewer recover from an authenticated HTTP 401 with one forced
+tenant-token refresh and one replay of the same operation. A refused refresh or a second 401
+ends that session. A refresh that fails transiently (no response, a 5xx or a 429) fails the
+request with that error and keeps the session, so an outage never signs anyone out. Identity tokens cannot be refreshed; a 401 ends the identity session.
+
+External `@devicechain/client` hosts opt in with `setUnauthorizedHandler({ refresh, onEnd })`.
+Use `session.forceRefresh(token)` in `refresh` for the tenant lane and return null for the
+identity lane. In `onEnd(error, token, identity)`, end only the session still owning that token.
+Anonymous login and refresh calls never trigger recovery. Without the handler, the SDK still
+throws `GraphQLRequestError` with status 401 immediately.
+
 The ingress routes `/api/<area>/graphql` to each functional-area service and strips the prefix, so
 the request reaches that service's own `/graphql`. Every endpoint below is therefore
 `https://<your-host>/api/<area>/graphql`:
@@ -71,6 +82,11 @@ authorities do not line up with intuition:
 
 - Reading device credentials requires `device:write`, not `device:read`.
 - `latestLocation` requires `location:read`, while its `device-state` siblings require `state:read`.
+- An alarm raised by a rule that tests geofence containment is read only by a caller that also holds
+  `location:read`: its raise and clear times are the device entering and leaving the fence. Without it, the
+  alarm queries, the alarm counts, `alarmDispositions` and `alarmStream` leave the alarm out, and
+  `acknowledgeAlarm`, `clearAlarm` and `setAlarmDisposition` answer as for an unknown token. The same rule's
+  detections are left out of `detectionStream` on the same terms.
 - A fixed asset's installed position (`Device.installedPosition`, `Asset.installedPosition`) requires
   `location:installed:read`, which `location:read` includes. It is installation data and never falls back to
   a position the device reported. A caller without either authority reads `positionWithheld: true` on every
@@ -168,6 +184,8 @@ query {
   }
 }
 ```
+
+`EventSearchCriteria.includeTotal` is optional: omitted or true preserves the exact `totalRecords` count. Set it to false for large histories to skip the count; `totalRecords` is then null. All five event list queries (`events`, `locationEvents`, `measurementEvents`, `alertEvents`, `stateChangeEvents`) return `SearchResultsPagination.hasMore`; request it to decide whether to read another page. With the default, it equals `pageEnd < totalRecords`. Without a total, `pageStart` and `pageEnd` describe returned rows; an empty page has `pageEnd = pageStart - 1` and `hasMore: false`. Send `includeTotal` or select `hasMore` only after every event-management pod runs v1.7; an older pod rejects both.
 
 - Entities are named by token throughout, including inside the anchor.
 - Both time bounds are inclusive, and they filter on `occurredTime`: the instant the device
@@ -496,8 +514,8 @@ all. Its one wrinkle is `definition`: the field is nullable so it can be *omitte
 rename a dashboard without resending its whole document, but an explicit `null` on it is
 refused, because a dashboard with no definition is not a thing. It keeps its optional
 `expectedUpdatedAt` precondition. An update that names no field at all writes nothing (not even
-`updatedAt`), while a stale precondition on it is still refused as a stale write (with no
-`extensions.code`).
+`updatedAt`), while a stale precondition on it is still refused as a stale write, with
+`extensions.code` set to `STALE_WRITE`.
 
 **user-management.** Every `update*` takes a dedicated request too:
 
@@ -707,7 +725,7 @@ Some refusals look similar and do not carry `CONFLICT`:
 - Deleting a record that other records still refer to carries `REFERENCE_VIOLATION`. See
   [A reference or a value that is refused](#reference-and-invalid-values).
 
-`updateConnector` refuses a stale `expectedUpdatedAt` with `errors[*].extensions.code` set to `STALE_WRITE`. Nothing is written; the message remains "connector was modified by another writer; reload and try again". This code applies only to connector updates. `CONFLICT` continues to mean a uniqueness collision; errors from other operations are unchanged. Classify by code rather than message text. The console keeps unsaved edits and shows a localized hint to copy them before reloading, then reapply them and retry saving.
+An update whose precondition, such as `expectedUpdatedAt`, no longer matches the record because someone changed it after you read it is refused with `errors[*].extensions.code` set to `STALE_WRITE`. Every service answers a stale write this way: connectors, dashboards, AI providers, notification policies, customer types, entity groups, roles and alarms alike. Nothing is written, and the message is the same as before the code existed: `<record> was modified by another writer; reload and try again`, such as `dashboard was modified by another writer; reload and try again`. `CONFLICT` continues to mean a uniqueness collision and is never used for a stale write. Classify by code rather than message text; `isStaleWrite(err)` in `@devicechain/client` does that, and falls back to the message for an older server. The console recognizes the code wherever it saves with a precondition.
 
 ### A reference or a value that is refused {#reference-and-invalid-values}
 
@@ -817,6 +835,8 @@ A record the member cannot see is answered exactly as one that does not exist: i
 list, or the operation answers `NOT_FOUND`. A `measurementStream` subscription for a device outside
 the member's customers is accepted and delivers nothing. Every other operation answers `FORBIDDEN`
 with `extensions.reason` set to `SCOPE_UNSUPPORTED`.
+
+`measurementStream(deviceTokens: [String!], name: String)` accepts up to 1000 device tokens on one subscription; duplicates are ignored. The list must not be empty and cannot be combined with `deviceToken`. Omit both device arguments to stream all devices. The same access-scope and name filters apply to every reading.
 
 An event recorded while the device belonged to no customer is not visible to a member with
 limited access. Neither is an alarm raised before this release: alarms record their customers only
@@ -1194,3 +1214,5 @@ When the alert fires, someone is most likely trying many addresses:
    size applies to every state bucket, so make sure the JetStream volume has room for the increase.
 
 Detailed, per-type reference pages will be generated from the schemas as they stabilize.
+
+`SECRET_RESUPPLY_REQUIRED` means an update would send a stored credential to a different destination or present it differently. On `updateConnector`, `updateNotificationChannel` or `updateAiProvider`, supply `secret` again in the same request, or clear it with `secret: null`. For a connector rollback with a different binding, use `updateConnector` with the target configuration and its credential instead.

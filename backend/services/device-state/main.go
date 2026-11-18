@@ -11,19 +11,24 @@ import (
 	"github.com/devicechain-io/dc-device-state/graphql"
 	"github.com/devicechain-io/dc-device-state/model"
 	"github.com/devicechain-io/dc-device-state/processor"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/shardgroups"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog/log"
 )
 
 var (
-	Microservice  *core.Microservice
-	Configuration *config.DeviceStateConfiguration
+	stopStreamSharding context.CancelFunc
+	Microservice       *core.Microservice
+	Configuration      *config.DeviceStateConfiguration
 
 	// Svc owns the three managers below and the order of all four of their lifecycle
 	// phases. They stay named here because the rest of this service refers to them
@@ -36,15 +41,16 @@ var (
 
 	Api *model.Api
 
-	ResolvedEventsReader messaging.MessageReader
-	InboundEventsWriter  messaging.MessageWriter
-	StateProcessor       *processor.StateProcessor
+	InboundEventsWriter messaging.MessageWriter
+	StateProcessors     stateProcessorGroup
 
 	// OwnershipProcessor restamps a device's live view with its owners from
 	// device-management's ownership-changed facts (ADR-081), so a device that is sold and
 	// then says nothing still leaves its old owner's view.
 	OwnershipReader    messaging.MessageReader
 	OwnershipProcessor *processor.OwnershipProcessor
+	DeletionProcessor  *processor.DeletionProcessor
+	OrphanTask         *core.PeriodicTask
 
 	// StateMetrics is built ONCE, in the initialize phase, and shared by every
 	// StateProcessor the NATS manager's oncreate callback builds. See buildMetrics.
@@ -120,20 +126,25 @@ func wireDroppedEvictions(api *model.Api) {
 // everything the NATS callback builds belongs to the connection, and a second registration
 // of the same collector panics. It is a function of its own so a test can check the
 // configuration reaches the processor, which nothing else exercises.
-func newStateProcessor(reader messaging.MessageReader) *processor.StateProcessor {
+func newStateProcessor(reader messaging.MessageReader, opts ...processor.StateProcessorOption) *processor.StateProcessor {
+	opts = append(opts, processor.WithProjection(Configuration.Projection))
 	return processor.NewStateProcessor(Microservice, reader, core.NewNoOpLifecycleCallbacks(), Api,
-		StateMetrics, InactivitySweepMetrics, processor.WithProjection(Configuration.Projection))
+		StateMetrics, InactivitySweepMetrics, opts...)
 }
 
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
-	// Create reader for resolved events (wildcard across tenants). This is a
-	// second, independent consumer fanning out alongside event-management.
-	revents, err := nmgr.NewReader(streams.ResolvedEvents)
+	stop, err := shardgroups.Enable(nmgr)
 	if err != nil {
 		return err
 	}
-	ResolvedEventsReader = revents
+	stopStreamSharding = stop
+	// Read every resolved-events group (wildcard across tenants), independently
+	// of event-management. Without sharding this keeps the legacy reader and durable.
+	revents, err := shardgroups.NewReaders(nmgr, streams.ResolvedEvents)
+	if err != nil {
+		return err
+	}
 
 	// The service's ONE producer, and this is the only place it can be built: the
 	// operator demotion mutation (ADR-067) publishes onto the shared inbound-events
@@ -151,11 +162,20 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	InboundEventsWriter = inbound
 	Api.SetDemotionEmitter(model.NewDemotionEmitter(InboundEventsWriter, time.Now))
 
-	// Add and initialize device state processor.
-	StateProcessor = newStateProcessor(ResolvedEventsReader)
-	err = StateProcessor.Initialize(context.Background())
-	if err != nil {
-		return err
+	// A tenant belongs to one group, preserving per-device ordering. All
+	// processors share the process-scoped collectors built by buildMetrics.
+	StateProcessors = make([]*processor.StateProcessor, 0, len(revents))
+	for group, reader := range revents {
+		var opts []processor.StateProcessorOption
+		// The inactivity sweep spans all tenants, so only group 0 runs it.
+		if group > 0 {
+			opts = append(opts, processor.WithoutInactivityMonitor())
+		}
+		sp := newStateProcessor(reader, opts...)
+		if err := sp.Initialize(context.Background()); err != nil {
+			return err
+		}
+		StateProcessors = append(StateProcessors, sp)
 	}
 
 	// The device ownership-changed facts: a second, much quieter stream, consumed on its own
@@ -167,7 +187,25 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	OwnershipReader = owners
 	OwnershipProcessor = newOwnershipProcessor(OwnershipReader)
-	return OwnershipProcessor.Initialize(context.Background())
+	if err := OwnershipProcessor.Initialize(context.Background()); err != nil {
+		return err
+	}
+	// The entity-deleted facts: ONE consumer for the whole service, however many
+	// resolved-events groups there are. The facts are not sharded — shard placement
+	// covers only inbound-events and resolved-events, and the instance config refuses any
+	// other suffix — so there is one stream to read, not one per group. And a group owns a
+	// device's EVENTS, not its STATE: every StateProcessor writes through the one Api into
+	// the one store and keeps no per-device state of its own, so purging a device through
+	// that Api purges it whichever group projected it. deletion_wiring_test.go pins both:
+	// a device projected by group 1 is purged, and the config premise is checked so that
+	// sharding these facts one day fails a test instead of reading only group 0's subject.
+	deletions, err := nmgr.NewReader(streams.EntityDeleted)
+	if err != nil {
+		return err
+	}
+	DeletionProcessor = processor.NewDeletionProcessor(Microservice, deletions, Api, core.NewNoOpLifecycleCallbacks())
+	DeletionProcessor.Hold = storehold.New(Microservice, "device-deletion", storehold.RDBProbe(RdbManager))
+	return DeletionProcessor.Initialize(context.Background())
 }
 
 // newOwnershipProcessor assembles the ownership consumer from this service's globals, with the
@@ -203,6 +241,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// in AfterRdb that has to happen between two of the constructions.
 	Svc = service.New(Microservice, service.Spec{
 		Rdb: &service.RdbSpec{
+			AppendOnly: nil, // Audit journal only.
 			Migrations: model.Migrations,
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Config:     Configuration.RdbConfiguration,
@@ -237,7 +276,34 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	}
 	// Published for the rest of the service, which names these managers directly.
 	NatsManager, GraphQLManager = Svc.Nats, Svc.GraphQL
+	if err := initializeOrphanSweep(ctx); err != nil {
+		return err
+	}
 	return nil
+}
+
+// initializeOrphanSweep builds process-owned metrics once, independently of NATS reconnects.
+func initializeOrphanSweep(ctx context.Context) error {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	OrphanTask = nil
+	if infra.ServiceAuth.Secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 ||
+		infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("Orphan sweep disabled: service secret or endpoints are not configured; degraded mode relies on deletion facts alone")
+		return nil
+	}
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+	client := peers.Client(auth.DeviceRead, auth.TenantRead)
+	source := &processor.DeviceLookup{Client: client,
+		DMURL:     infra.DeviceManagement.Endpoint().GraphQLURL(),
+		UMURL:     infra.UserManagement.Endpoint().GraphQLURL(),
+		ListScope: Microservice.InstanceId}
+	sweep := &processor.OrphanSweep{Api: Api, Source: source,
+		Deleted: Microservice.NewCounter("orphan_sweep_deleted_total", "Device state rows removed by the orphan sweep."),
+		Stamped: Microservice.NewCounter("orphan_sweep_stamped_total", "Device state rows stamped with their incarnation by the orphan sweep.")}
+	OrphanTask = core.NewPeriodicTask(Microservice.FunctionalArea, "orphan-sweep", processor.OrphanSweepInterval,
+		sweep.Run, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("orphan_sweep"),
+		core.WithImmediateFirstPass())
+	return OrphanTask.Initialize(ctx)
 }
 
 // Called after microservice has been started.
@@ -248,21 +314,38 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
-	// Start device state processor. It is built by the NATS manager's oncreate callback,
+	// Start every device state processor. It is built by the NATS manager's oncreate callback,
 	// so it does not exist until the line above has run.
-	err := StateProcessor.Start(ctx)
-	if err != nil {
+	if err := StateProcessors.Start(ctx); err != nil {
 		return err
 	}
-	return OwnershipProcessor.Start(ctx)
+	if err := OwnershipProcessor.Start(ctx); err != nil {
+		return err
+	}
+	if err := DeletionProcessor.Start(ctx); err != nil {
+		return err
+	}
+	if OrphanTask != nil {
+		return OrphanTask.Start(ctx)
+	}
+	return nil
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
-	// Stop both consumers before the managers: each reads from the broker and writes to the
+	if OrphanTask != nil {
+		if err := OrphanTask.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	if DeletionProcessor != nil {
+		if err := DeletionProcessor.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	// Stop all consumers before the managers: each reads from the broker and writes to the
 	// database.
-	err := StateProcessor.Stop(ctx)
-	if err != nil {
+	if err := StateProcessors.Stop(ctx); err != nil {
 		return err
 	}
 	if err := OwnershipProcessor.Stop(ctx); err != nil {
@@ -279,14 +362,33 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	//
 	// core/service stops them in exactly that order, for every service. Pinned next door
 	// in graphql_shutdown_order_test.go, which drives this function.
-	return Svc.Stop(ctx)
+	//
+	// The shard-placement watch stops AFTER Svc.Stop, not before it: cancelling it makes
+	// the placement router refuse every publish, and Svc.Stop drains GraphQL first, so a
+	// presence-demotion mutation still in flight would fail with ErrUnplacedTenant
+	// although the broker connection is up. Cancelling a watch whose connection has
+	// already drained is harmless.
+	err := Svc.Stop(ctx)
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
+	return err
 }
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
-	// Terminate both consumers.
-	err := StateProcessor.Terminate(ctx)
-	if err != nil {
+	if OrphanTask != nil {
+		if err := OrphanTask.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if DeletionProcessor != nil {
+		if err := DeletionProcessor.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	// Terminate all consumers.
+	if err := StateProcessors.Terminate(ctx); err != nil {
 		return err
 	}
 	if err := OwnershipProcessor.Terminate(ctx); err != nil {
@@ -299,5 +401,8 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the
 	// pair that actually closes handles.
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
 	return Svc.Terminate(ctx)
 }

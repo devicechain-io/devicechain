@@ -26,7 +26,7 @@ Un canal divide su configuración en dos:
 
 En una **actualización**, el campo `secret` se comporta así:
 
-- **Omítelo** para dejar el secreto existente sin cambios. Nunca necesitas reenviarlo.
+- **Omítelo** para dejar el secreto existente sin cambios. Debes reenviarlo al cambiar el tipo o destino de la credencial.
 - Envía un valor no nulo para reemplazarlo.
 - Envía `null` o una cadena vacía para borrarlo.
 - En un canal webhook cuya configuración declara `bearer` o `header`, borrar el secreto se rechaza. Cambia `auth` a `none` en la misma solicitud si quieres que el endpoint sea anónimo.
@@ -216,6 +216,8 @@ Dos ajustes más moldean la entrega:
 
 El escalado es seguro de ejecutar en varias réplicas: cada nivel de escalado se reclama antes de enviarse, así que exactamente una réplica lo entrega. Cada alarma tiene **un único reloj y nivel de escalado compartidos**. Si coinciden varias políticas con escalado, la ventana más corta fija la cadencia y cada tope cuenta contra el nivel compartido.
 
+El plazo de escalado comienza cuando la plataforma envía la notificación, independientemente de la marca de tiempo del evento del dispositivo.
+
 ```graphql
 mutation {
   createNotificationPolicy(request: {
@@ -236,6 +238,12 @@ mutation {
 En una actualización, las `rules` de la solicitud **reemplazan** el conjunto de reglas existente de la política. Omite `rules` para dejar intactas las reglas almacenadas; enviar `null` o `[]` deja la política sin reglas. Igual que con el `secret` de un canal, un cliente que enlaza una variable por campo envía unas `rules` no suministradas como `null` y vacía el conjunto de reglas, así que envía la solicitud completa como una sola variable. Nombrar un token de canal desconocido hace fallar toda la escritura.
 
 Dos personas que editan la misma política pueden pisarse: un campo que cambian ambas conserva solo el último guardado y, como una lista `rules` reemplaza el conjunto entero, el segundo guardado descarta todas las reglas que escribió el primero. Para evitarlo, pasa `expectedUpdatedAt` con el `updatedAt` de la política tal como la leíste (o tal como lo devolvió tu actualización anterior). Si la política ha cambiado desde entonces, la actualización se rechaza con «notification policy was modified by another writer; reload and try again» y no se escribe nada. Vuelve a cargarla, aplica tu cambio de nuevo y envíala otra vez.
+
+#### Alarmas de un dispositivo eliminado {#deleted-originator}
+
+Al eliminar un dispositivo (u otra entidad sobre la que se generó una alarma), cada una de sus alarmas que seguía activa termina con un evento `CLEARED` que lleva `clearReason: ORIGINATOR_DELETED`. Su escalado se detiene, y una política con `notifyOnClear` avisa a los canales que la notificaron de que la alarma terminó porque se eliminó su dispositivo. Las cargas de los webhooks y los detalles de PagerDuty llevan el mismo `clearReason`.
+
+Antes de volver a notificar una alarma, el planificador también pregunta a `device-management` si la alarma sigue existiendo. Una alarma que ya no existe, o que `device-management` indica como despejada, deja de escalar. **Si esa comprobación falla** (por ejemplo, porque `device-management` no está disponible), **la notificación se envía igualmente**: perder una notificación real durante una caída es peor que una notificación de más para una alarma cuyo dispositivo se acaba de eliminar. Cada comprobación fallida se cuenta en la métrica `escalation_lookup_errors_total`. Una comprobación periódica también termina las notificaciones abiertas de más de una hora cuya alarma ya no existe. Si el secreto de servicio o los endpoints de `device-management` y `user-management` no están configurados, estas comprobaciones están desactivadas, se registra una advertencia al arrancar y el escalado funciona como antes.
 
 ### Horas de silencio {#quiet-hours}
 
@@ -371,3 +379,5 @@ Dos propiedades a tener en cuenta:
 5. **Lee el registro de entregas.** `notificationAttempts(criteria: {pageNumber: 1, pageSize: 20, alarmToken: "..."})` lista cada intento de la alarma con su resultado. Un registro `FAILED` o `REFUSED` lleva `errorCode` y el `errorMessage` del proveedor; consulta [Registro de entregas](#delivery-ledger).
 
 Reconocer o despejar la alarma detiene el escalado adicional. El registro de estado guarda `acknowledgedAt`/`clearedAt` junto con el historial de notificaciones. Si la alarma se despeja y su condición vuelve a darse, la plataforma reabre la misma alarma y su registro de estado empieza de nuevo para el nuevo ciclo: el escalado vuelve a funcionar hasta que ese ciclo se reconozca o se despeje.
+
+Cambiar el tipo de canal, la URL o autenticación del webhook, el host/puerto/seguridad SMTP o la región de PagerDuty requiere `secret` en la misma solicitud si hay una credencial almacenada. Omitirlo devuelve `SECRET_RESUPPLY_REQUIRED` sin escribir nada: vuelve a enviar la credencial o bórrala con `secret: null`. Los cambios de nombre, cabeceras personalizadas y URL base de enlaces conservan la credencial.

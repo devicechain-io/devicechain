@@ -36,10 +36,7 @@ import {
   rollbackConnector,
 } from '@/lib/api/connectors';
 
-function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleString();
-}
+import { formatDateTime } from '@/lib/format';
 
 export function ConnectorVersionsPanel({
   token,
@@ -209,7 +206,7 @@ export function ConnectorVersionsPanel({
                   )}
                 </DataTableCell>
                 <DataTableCell>{v.label || <span className="text-muted-foreground">—</span>}</DataTableCell>
-                <DataTableCell className="whitespace-nowrap text-muted-foreground">{fmtTime(v.publishedAt)}</DataTableCell>
+                <DataTableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(v.publishedAt)}</DataTableCell>
                 <DataTableCell className="text-muted-foreground" data-shot-pii>{v.publishedBy || '—'}</DataTableCell>
                 {canWrite && (
                   <DataTableCell className="text-right">

@@ -1,0 +1,421 @@
+{
+  "canvas": {
+    "breakpoints": {
+      "base": 0
+    },
+    "grid": {
+      "columns": 12,
+      "gutter": 8,
+      "minCellSize": 56,
+      "padding": 0
+    },
+    "sizing": "fill"
+  },
+  "schemaVersion": 3,
+  "slots": {
+    "charger": {
+      "defaultBinding": {
+        "deviceToken": "hp-charger-basin-2",
+        "kind": "device"
+      },
+      "label": "Basin charger 2",
+      "type": "device"
+    },
+    "district": {
+      "defaultBinding": {
+        "anchor": {
+          "relationship": "assigned",
+          "targetToken": "hp-public-realm",
+          "targetType": "customer"
+        },
+        "kind": "anchor"
+      },
+      "label": "District",
+      "type": "anchor"
+    },
+    "ferryMeter": {
+      "defaultBinding": {
+        "deviceToken": "hp-meter-ferry-terminal",
+        "kind": "device"
+      },
+      "label": "Ferry Terminal meter",
+      "type": "device"
+    },
+    "gauge": {
+      "defaultBinding": {
+        "deviceToken": "hp-gauge-east-1",
+        "kind": "device"
+      },
+      "label": "Gauge",
+      "scope": {
+        "parent": "quay",
+        "strategy": "manual"
+      },
+      "type": "device"
+    },
+    "pump": {
+      "defaultBinding": {
+        "deviceToken": "hp-pump-east",
+        "kind": "device"
+      },
+      "label": "East Quay pump",
+      "type": "device"
+    },
+    "quay": {
+      "candidates": {
+        "areaType": "hp-quay"
+      },
+      "defaultBinding": {
+        "anchor": {
+          "relationship": "assigned",
+          "targetToken": "hp-east-quay",
+          "targetType": "area"
+        },
+        "kind": "anchor"
+      },
+      "label": "Quay",
+      "type": "anchor"
+    }
+  },
+  "timeRange": {
+    "defaultSeconds": 3600
+  },
+  "title": "Harborpulse",
+  "widgets": [
+    {
+      "id": "hp-quay-select",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 4,
+          "mode": "grid",
+          "row": 0,
+          "rows": 1
+        }
+      },
+      "options": {
+        "selectionTarget": "quay",
+        "title": "Quay"
+      },
+      "type": "entity-selector"
+    },
+    {
+      "id": "hp-gauge-select",
+      "layout": {
+        "base": {
+          "col": 4,
+          "cols": 4,
+          "mode": "grid",
+          "row": 0,
+          "rows": 1
+        }
+      },
+      "options": {
+        "selectionTarget": "gauge",
+        "title": "Gauge"
+      },
+      "type": "entity-selector"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "quay"
+      },
+      "id": "hp-alarm-severity",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 3,
+          "mode": "grid",
+          "row": 1,
+          "rows": 3
+        }
+      },
+      "options": {
+        "state": "ACTIVE",
+        "title": "Active alarms by severity"
+      },
+      "type": "alarm-severity"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "quay"
+      },
+      "id": "hp-online",
+      "layout": {
+        "base": {
+          "col": 3,
+          "cols": 3,
+          "mode": "grid",
+          "row": 1,
+          "rows": 3
+        }
+      },
+      "options": {
+        "title": "Devices online"
+      },
+      "type": "online-doughnut"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "kw"
+        ],
+        "slot": "ferryMeter"
+      },
+      "id": "hp-ferry-kw",
+      "layout": {
+        "base": {
+          "col": 6,
+          "cols": 3,
+          "mode": "grid",
+          "row": 1,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "kw",
+        "precision": 0,
+        "sparkline": true,
+        "stat": "last",
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 0
+          },
+          {
+            "level": "minor",
+            "value": 150
+          }
+        ],
+        "title": "Ferry Terminal demand",
+        "unit": "kW"
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "water_level_m"
+        ],
+        "slot": "gauge"
+      },
+      "id": "hp-gauge-level",
+      "layout": {
+        "base": {
+          "col": 9,
+          "cols": 3,
+          "mode": "grid",
+          "row": 1,
+          "rows": 3
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "max": 3,
+        "measurement": "water_level_m",
+        "min": 0,
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 0
+          },
+          {
+            "level": "minor",
+            "value": 1.4
+          },
+          {
+            "level": "major",
+            "value": 1.8
+          },
+          {
+            "level": "critical",
+            "value": 2.2
+          }
+        ],
+        "title": "Water level",
+        "unit": "m"
+      },
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "water_level_m"
+        ],
+        "slot": "quay"
+      },
+      "id": "hp-quay-levels",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 7,
+          "mode": "grid",
+          "row": 4,
+          "rows": 4
+        }
+      },
+      "options": {
+        "groupBy": "device",
+        "markAlarms": true,
+        "max": 3,
+        "maxSeries": 6,
+        "measurement": "water_level_m",
+        "min": 0,
+        "thresholds": [
+          {
+            "level": "minor",
+            "value": 1.4
+          },
+          {
+            "level": "major",
+            "value": 1.8
+          },
+          {
+            "level": "critical",
+            "value": 2.2
+          }
+        ],
+        "title": "Water levels on the quay",
+        "unit": "m"
+      },
+      "type": "timeseries-chart"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "location": {
+          "series": "latest"
+        },
+        "measurements": [],
+        "slot": "district"
+      },
+      "id": "hp-truck-map",
+      "layout": {
+        "base": {
+          "col": 7,
+          "cols": 5,
+          "mode": "grid",
+          "row": 4,
+          "rows": 4
+        }
+      },
+      "options": {
+        "title": "Response truck"
+      },
+      "type": "map"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "wet_well_m"
+        ],
+        "slot": "pump"
+      },
+      "id": "hp-pump-well",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 6,
+          "mode": "grid",
+          "row": 8,
+          "rows": 4
+        }
+      },
+      "options": {
+        "markAlarms": true,
+        "markCommands": true,
+        "max": 4,
+        "min": 0,
+        "thresholds": [
+          {
+            "level": "major",
+            "value": 2.5
+          }
+        ],
+        "title": "East Quay wet well",
+        "unit": "m"
+      },
+      "type": "timeseries-chart"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "connector_temp_c"
+        ],
+        "slot": "charger"
+      },
+      "id": "hp-charger-connector",
+      "layout": {
+        "base": {
+          "col": 6,
+          "cols": 6,
+          "mode": "grid",
+          "row": 8,
+          "rows": 4
+        }
+      },
+      "options": {
+        "markAlarms": true,
+        "markCommands": true,
+        "max": 100,
+        "min": 0,
+        "thresholds": [
+          {
+            "level": "major",
+            "value": 70
+          }
+        ],
+        "title": "Basin charger 2 connector",
+        "unit": "°C"
+      },
+      "type": "timeseries-chart"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "quay"
+      },
+      "id": "hp-alarms",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 12,
+          "mode": "grid",
+          "row": 12,
+          "rows": 4
+        }
+      },
+      "options": {
+        "deviceTypes": [
+          {
+            "token": "hp-tide-gauge"
+          },
+          {
+            "token": "hp-pump-controller"
+          },
+          {
+            "token": "hp-ev-charger"
+          }
+        ],
+        "flashOnChange": true,
+        "groupBy": "deviceType",
+        "maxRows": 25,
+        "precision": 1,
+        "selectionTarget": "gauge",
+        "state": "ACTIVE",
+        "title": "Alarms on the quay"
+      },
+      "type": "alarm-table"
+    }
+  ]
+}

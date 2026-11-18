@@ -82,9 +82,9 @@ type stubBatchValidator struct {
 }
 
 func (s stubBatchValidator) ValidateEnqueueBatch(_ context.Context, deviceTokens []string,
-	_ string, _ []byte) ([]model.BatchDeviceRefusal, error) {
+	_ string, _ []byte) ([]model.BatchDeviceRefusal, map[string]uint64, error) {
 	if s.err != nil {
-		return nil, s.err
+		return nil, nil, s.err
 	}
 	refusals := make([]model.BatchDeviceRefusal, 0)
 	for _, token := range deviceTokens {
@@ -94,7 +94,7 @@ func (s stubBatchValidator) ValidateEnqueueBatch(_ context.Context, deviceTokens
 			})
 		}
 	}
-	return refusals, nil
+	return refusals, nil, nil
 }
 
 // stubGroupResolver answers a group walk in one page.

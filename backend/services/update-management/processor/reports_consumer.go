@@ -54,6 +54,20 @@ const (
 	// treated as throttled until entries expire, which costs a device one retry at its next
 	// reconnect and never costs the platform an unbounded map.
 	maxSyncGate = 100_000
+	// DownloadRequestEvery and DownloadRequestBurst bound the download.requests from one device
+	// that this service answers: a burst of five, then one a second. A grant costs a read and a
+	// publish onto the device's desired channel, on the consumer every tenant's reports share, so a
+	// device asking in a loop must not make that the platform's load. It is a budget with a burst,
+	// not a cooldown like the sync gate's, because a device asks again at once in normal operation
+	// and may never ask a third time: a client that restarts mid-download, or is cancelled and
+	// handed a new assignment, asks within milliseconds of its last request (the simulator's
+	// updater client does, and asks once per attempt), and a refusal would leave it waiting for a
+	// grant that never comes. Five covers the reference device's own back-to-back asks (accept,
+	// then a re-ask after each of a few fast download failures); one a second is still a hard bound
+	// on a loop. A refused request is acked and counted as throttled. The table has the same bound
+	// as the sync gate's and is its own, so a sync never holds off a download request or the reverse.
+	DownloadRequestEvery = time.Second
+	DownloadRequestBurst = 5
 )
 
 // UpdateReportsMetrics is every Prometheus instrument the update-management device-reports
@@ -186,6 +200,8 @@ type ReportsConsumer struct {
 	// from the same assignment, and a sync is a read. Nil holds nothing.
 	Hold *storehold.Holder
 	gate syncGate
+	// downloadGate is the per-device budget on download.requests (DownloadRequestEvery/Burst).
+	downloadGate requestGate
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -205,6 +221,8 @@ func NewReportsConsumer(ms *core.Microservice, reader messaging.MessageReader, c
 		UpdateReportsMetrics: metrics,
 		dead:                 dead,
 		gate:                 syncGate{last: map[string]time.Time{}, cooldown: SyncCooldown, now: time.Now},
+		downloadGate: requestGate{buckets: map[string]requestBucket{}, every: DownloadRequestEvery,
+			burst: DownloadRequestBurst, now: time.Now},
 	}
 	name := fmt.Sprintf("%s-%s", ms.FunctionalArea, "device-reports-proc")
 	rc.lifecycle = core.NewLifecycleManager(name, rc, callbacks)
@@ -287,9 +305,16 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 				Msg("Update report not applied.")
 		}
 	case rep.DownloadRequest != nil:
+		if !rc.downloadGate.allow(tenant + "/" + token) {
+			rc.rejected.WithLabelValues(rejectedThrottled).Inc()
+			msg.Ack()
+			done(core.ResultInvalid)
+			return
+		}
 		if err := rc.held(msgctx, msg, func(c context.Context) error {
 			return rc.grant(c, token, rep.DownloadRequest.AssignmentID)
 		}); err != nil {
+			rc.downloadGate.forget(tenant + "/" + token)
 			if rc.settleDisabled(err, msg, token, rep.Kind, done) {
 				return
 			}
@@ -491,4 +516,65 @@ func (g *syncGate) forget(key string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	delete(g.last, key)
+}
+
+// requestGate is a per-device token bucket: burst requests at once, then one per every. Like
+// syncGate it is process-local and bounded: past maxSyncGate devices, entries back at a full
+// bucket (idle for burst*every) are reclaimed, and while none is, devices not already in the
+// table are refused rather than the table growing.
+type requestGate struct {
+	mu      sync.Mutex
+	buckets map[string]requestBucket
+	every   time.Duration
+	burst   int
+	now     func() time.Time
+}
+
+type requestBucket struct {
+	tokens float64
+	at     time.Time
+}
+
+// level is b's token count at now.
+func (g *requestGate) level(b requestBucket, now time.Time) float64 {
+	return min(float64(g.burst), b.tokens+float64(now.Sub(b.at))/float64(g.every))
+}
+
+func (g *requestGate) allow(key string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := g.now()
+	b, ok := g.buckets[key]
+	if ok {
+		b = requestBucket{tokens: g.level(b, now), at: now}
+	} else {
+		if len(g.buckets) >= maxSyncGate {
+			for k, e := range g.buckets {
+				if g.level(e, now) >= float64(g.burst) {
+					delete(g.buckets, k)
+				}
+			}
+			if len(g.buckets) >= maxSyncGate {
+				return false
+			}
+		}
+		b = requestBucket{tokens: float64(g.burst), at: now}
+	}
+	if b.tokens < 1 {
+		g.buckets[key] = b
+		return false
+	}
+	b.tokens--
+	g.buckets[key] = b
+	return true
+}
+
+// forget returns the token an answer that failed, and will be retried, took.
+func (g *requestGate) forget(key string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if b, ok := g.buckets[key]; ok {
+		b.tokens = min(float64(g.burst), b.tokens+1)
+		g.buckets[key] = b
+	}
 }

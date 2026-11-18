@@ -159,6 +159,7 @@ function wire(opts: WireOptions = {}) {
     if (doc.includes('query DeviceGroupTargets')) {
       return Promise.resolve({
         entityGroups: {
+          pagination: { totalRecords: 2 },
           results: [
             { token: 'north-hvac', name: 'North HVAC', membershipMode: 'dynamic', activeVersion: 3 },
             { token: 'lobby', name: 'Lobby', membershipMode: 'static', activeVersion: null },

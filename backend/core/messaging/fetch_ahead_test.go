@@ -535,7 +535,7 @@ func TestFetchAheadStartsNothingWhileTheDownstreamRefuses(t *testing.T) {
 	run := func(t *testing.T, refuseAfterFirst bool) int64 {
 		nmgr := aheadManager(t, 8, 0)
 		r := newAheadReader(t, nmgr)
-		r.downstream = streams.InboundEvents // a stream that applies backpressure
+		r.downstreams = []string{streams.InboundEvents} // a stream that applies backpressure
 		g := nmgr.backpressure()
 		base := time.Now()
 		gs := &gateState{suffix: streams.InboundEvents, stream: StreamName("test", streams.InboundEvents), sampledAt: base}
