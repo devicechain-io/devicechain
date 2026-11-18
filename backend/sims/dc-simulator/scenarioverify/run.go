@@ -246,6 +246,13 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 				return noVerdict{err}
 			}
 		}
+		if len(obs.S3.GapBefore) == 0 && now.After(obs.at(14.75)) && now.Before(obs.at(15.5)) {
+			gap, err := reader.Readings(ctx, sim.HarborpulseBasinPump, obs.at(sim.HarborpulseGapFrom), obs.at(sim.HarborpulseGapTo))
+			if err != nil {
+				return noVerdict{err}
+			}
+			obs.S3.GapBefore = gap
+		}
 		rep.Polls++
 		select {
 		case <-ctx.Done():
@@ -288,6 +295,26 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 	if final.Scenario == nil {
 		return noVerdictf("the sim's final /status has no scenario clock")
 	}
+	obs.S3.Changes = final.Scenario.ThresholdChanges
+	for _, b := range final.Scenario.CalculatedBackfills {
+		if b.Day == day {
+			j, err := reader.CalculatedJob(ctx, b.Token)
+			if err != nil {
+				return noVerdict{err}
+			}
+			obs.S3.Jobs = append(obs.S3.Jobs, j)
+		}
+	}
+	gap, err := reader.Readings(ctx, sim.HarborpulseBasinPump, obs.at(sim.HarborpulseGapFrom), obs.at(sim.HarborpulseGapTo))
+	if err != nil {
+		return noVerdict{err}
+	}
+	obs.Readings[sim.HarborpulseBasinPump] = append(obs.Readings[sim.HarborpulseBasinPump], gap...)
+	cmds, err := reader.Commands(ctx, sim.HarborpulseSamplingGauge)
+	if err != nil {
+		return noVerdict{err}
+	}
+	obs.Commands = append(obs.Commands, cmds...)
 	for _, b := range final.Scenario.Backfill {
 		if b.Day != day {
 			continue

@@ -759,3 +759,22 @@ func natsValuesOf(vals map[string]interface{}) map[string]interface{} {
 	m, _ := cur.(map[string]interface{})
 	return m
 }
+
+// Read the heredoc itself so this check cannot drift from what the rig passes to dcctl.
+func TestHarborpulseRigValuesOverlay(t *testing.T) {
+	raw, err := os.ReadFile("../../../hack/harborpulse-rig.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body, ok := strings.Cut(strings.ReplaceAll(string(raw), "\r\n", "\n"), "<<'VALUES'\n")
+	if !ok {
+		t.Fatal("missing rig values heredoc")
+	}
+	body, _, ok = strings.Cut(body, "\nVALUES\n")
+	if !ok {
+		t.Fatal("unterminated rig values heredoc")
+	}
+	if _, err := LoadValuesOverlay([]string{writeOverlayFile(t, "harborpulse.yaml", body+"\n")}); err != nil {
+		t.Fatalf("rig values overlay refused: %v", err)
+	}
+}

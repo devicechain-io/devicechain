@@ -128,6 +128,7 @@ READERS = [
         "backend/core/rdb/postgres.go",
         "backend/broker/dc-nats-server/main.go",
         "backend/broker/dc-nats-server/go.mod",
+        "hack/harborpulse-rig.sh",  # valuesoverlay_test.go: the rig's --values heredoc
     ], NONTEST, "bootstrap/*_test.go"),
     ("backend/cli", "attr", ["backend/services/device-management/graphql/**"], [], "attr/documents_test.go:38"),
     ("backend/cli", "product", [SDL], [], "product/documents_test.go:32"),

@@ -28,6 +28,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/devicechain-io/dc-simulator/lorawan"
 )
 
 // MaxRecords bounds each record list; the oldest are dropped past it.
@@ -63,18 +65,20 @@ type Mail struct {
 
 // Received is everything the sink holds, as GET /received serves it.
 type Received struct {
-	Webhooks []Webhook `json:"webhooks"`
-	Messages []Message `json:"messages"`
-	Mail     []Mail    `json:"mail"`
+	Webhooks   []Webhook        `json:"webhooks"`
+	Messages   []Message        `json:"messages"`
+	Mail       []Mail           `json:"mail"`
+	QueueItems []QueuedDownlink `json:"queueItems"`
 	// Dropped counts records evicted past MaxRecords, so a verifier knows the record is partial.
 	Dropped int `json:"dropped"`
 }
 
 // Sink records deliveries.
 type Sink struct {
-	mu  sync.Mutex
-	rec Received
-	now func() time.Time
+	mu     sync.Mutex
+	rec    Received
+	now    func() time.Time
+	queues map[string]*lorawan.Downlink
 }
 
 // New returns an empty sink.
@@ -94,16 +98,21 @@ func (s *Sink) Snapshot() Received {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return Received{
-		Webhooks: append([]Webhook{}, s.rec.Webhooks...),
-		Messages: append([]Message{}, s.rec.Messages...),
-		Mail:     append([]Mail{}, s.rec.Mail...),
-		Dropped:  s.rec.Dropped,
+		Webhooks:   append([]Webhook{}, s.rec.Webhooks...),
+		Messages:   append([]Message{}, s.rec.Messages...),
+		Mail:       append([]Mail{}, s.rec.Mail...),
+		QueueItems: append([]QueuedDownlink{}, s.rec.QueueItems...),
+		Dropped:    s.rec.Dropped,
 	}
 }
 
 // ServeHTTP records a POST anywhere but /received and /healthz, serves the record on GET /received,
 // and answers 200 on GET /healthz.
 func (s *Sink) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/chirpstack/") {
+		s.chirpstack(w, r)
+		return
+	}
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/received":
 		w.Header().Set("Content-Type", "application/json")

@@ -46,6 +46,7 @@ type CommandSpec struct {
 	CommandKey      string
 	Name            string
 	ParameterSchema string
+	Encoder         string
 }
 
 // DetectionRuleSpec is one DETECT rule authored on a profile (ADR-051/057).
@@ -507,6 +508,7 @@ type SimManifest struct {
 	// Integrations are the inbound integrations a network server posts this scenario's
 	// LoRaWAN devices' uplinks through.
 	Integrations []IntegrationSpec
+	Attributes   []AttributeSpec
 }
 
 // placeholderPattern matches "{n}" or "{n:0Wd}" (W one or more digits). The
