@@ -154,6 +154,12 @@ var (
 	// upgrade. Such an alarm is withheld from a caller without location:read until classified.
 	AlarmPositionClassifier *core.PeriodicTask
 
+	// CreateEnrollMarkerHeal gives a group version registered by an earlier release the
+	// create-enrollment marker it lacks, and the members it missed for want of it
+	// (model/api_group_enroll_marker.go), so an entity created after the upgrade joins a group
+	// registered before it.
+	CreateEnrollMarkerHeal *core.PeriodicTask
+
 	// DecodeAccountant is the payload decoders' accounting: the per-(tenant, device type) record
 	// budget a failing decoder is held to, the health tallies and the failure samples. It is the
 	// resolver pool's DecodeObserver; DecodeAccounting flushes it once a minute.
@@ -203,7 +209,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -832,6 +838,28 @@ func initAlarmPositionClassifier() error {
 	return AlarmPositionClassifier.Initialize(context.Background())
 }
 
+// createEnrollMarkerHealInterval is how often registered group versions are checked for the
+// create-enrollment marker: the longest a group version registered by a replica of the previous
+// release during a rolling upgrade goes on missing new entities.
+const createEnrollMarkerHealInterval = time.Minute
+
+// initCreateEnrollMarkerHeal builds the create-enrollment marker heal. Every replica runs it: a
+// rebuild runs under the family lock and re-reads the registration first, so two passes at once
+// rebuild a version once. A pass with nothing to heal reads the facet refs and judges each version
+// once per process. It runs a first pass at start, so what an earlier release registered is
+// healed as soon as this release runs.
+func initCreateEnrollMarkerHeal() error {
+	healer := model.NewCreateEnrollMarkerHealer(Api)
+	CreateEnrollMarkerHeal = core.NewPeriodicTask(Microservice.FunctionalArea, "create-enroll-marker-heal", createEnrollMarkerHealInterval,
+		func(ctx context.Context) error {
+			_, err := healer.Pass(ctx)
+			return err
+		},
+		core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("create_enroll_marker_heal"),
+		core.WithImmediateFirstPass())
+	return CreateEnrollMarkerHeal.Initialize(context.Background())
+}
+
 // decodeAccountingInterval is how often the decoders' health tallies and failure samples are
 // written. A tally is held in memory between passes, so this is also the most a crash can lose of
 // the counts (never of the failed-events records, which are written before the source is acked).
@@ -1052,9 +1080,6 @@ func wireRulesCeilingResolver(peers *svcclient.Peers) {
 var safetyGates *governance.SafetyGates
 
 func afterMicroserviceInitialized(ctx context.Context) error {
-	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
-	// registration panics, and the gates below are decided in callbacks that can run again.
-	safetyGates = governance.NewSafetyGates(Microservice)
 	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
 	// Parse configuration.
 	err := parseConfiguration()
@@ -1082,6 +1107,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// the broker manager exists — which is why almost everything below is in AfterNats
 	// rather than AfterRdb.
 	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Migrations: schema.Migrations,
@@ -1138,6 +1164,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				return err
 			}
 			if err = initAlarmPositionClassifier(); err != nil {
+				return err
+			}
+			if err = initCreateEnrollMarkerHeal(); err != nil {
 				return err
 			}
 			if err = initDecodeAccounting(); err != nil {
@@ -1208,6 +1237,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			},
 		},
 	})
+	safetyGates = Svc.SafetyGates()
 	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}
@@ -1270,6 +1300,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 	if err = AlarmPositionClassifier.Start(ctx); err != nil {
+		return err
+	}
+	if err = CreateEnrollMarkerHeal.Start(ctx); err != nil {
 		return err
 	}
 
@@ -1380,6 +1413,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := AlarmPositionClassifier.Stop(ctx); err != nil {
 		return err
 	}
+	if err := CreateEnrollMarkerHeal.Stop(ctx); err != nil {
+		return err
+	}
 
 	// Stop inbound events processor.
 	err := InboundEventsProcessor.Stop(ctx)
@@ -1444,6 +1480,9 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		return err
 	}
 	if err := AlarmPositionClassifier.Terminate(ctx); err != nil {
+		return err
+	}
+	if err := CreateEnrollMarkerHeal.Terminate(ctx); err != nil {
 		return err
 	}
 	if DecodeAccounting != nil {
