@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -90,25 +91,39 @@ var maxHistoryVerificationTokens = 10000
 
 // verifiedHistory retries once after invalidating refused cache entries. tokens
 // must cover the full filtered set feeding the count, even for an empty page.
-func verifiedHistory[T any](ctx context.Context, api *Api, query func() (T, error), tokens func(T) ([]string, error)) (T, error) {
+func verifiedHistory[T any](ctx context.Context, api *Api, query func(*gorm.DB) (T, error), tokens func(*gorm.DB, T) ([]string, error)) (T, error) {
 	var zero T
 	if !requiresPositionVerification(ctx) {
-		return query()
+		return query(api.RDB.DB(ctx))
 	}
 	if api.PositionOracle == nil {
 		return zero, fmt.Errorf("notification history classification cannot be verified: %w", auth.ErrForbidden)
 	}
 	for pass := 0; pass < 2; pass++ {
-		result, err := query()
+		var result T
+		var allTokens []string
+		base := api.RDB.DB(ctx)
+		var options []*sql.TxOptions
+		if base.Dialector.Name() == "postgres" {
+			options = append(options, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+		}
+		// COUNT, page rows and verification tokens must describe one candidate
+		// snapshot, including tokens counted but absent from an out-of-range page.
+		// Each retry starts a fresh snapshot after the cache repair below.
+		err := base.Transaction(func(tx *gorm.DB) error {
+			var err error
+			result, err = query(tx)
+			if err != nil {
+				return err
+			}
+			allTokens, err = tokens(tx, result)
+			return err
+		}, options...)
 		if err != nil {
 			return zero, err
 		}
 		seen := map[string]bool{}
 		distinct := []string{}
-		allTokens, err := tokens(result)
-		if err != nil {
-			return zero, err
-		}
 		for _, token := range allTokens {
 			if !seen[token] {
 				seen[token] = true
@@ -137,6 +152,7 @@ func verifiedHistory[T any](ctx context.Context, api *Api, query func() (T, erro
 		if pass == 1 {
 			return zero, fmt.Errorf("notification history classification cannot be verified after cache downgrade: %w", auth.ErrForbidden)
 		}
+		// The read transaction has closed; repair on the manager's write handle.
 		// Remove caller scope claims for this internal cache repair, retaining the
 		// tenant context so RDB's tenant callback still bounds every update.
 		for _, token := range refused {
