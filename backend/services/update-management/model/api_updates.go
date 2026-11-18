@@ -1213,6 +1213,8 @@ type SweepResult struct {
 	Examined int
 	TimedOut int
 	Unknown  int
+	Failed   int
+	LastErr  error
 }
 
 // maxSweepPages bounds how many pages one pass walks looking for work. A pass that finds nothing to
@@ -1280,6 +1282,8 @@ func (api *Api) SweepDeadlines(ctx context.Context, limit int) (SweepResult, err
 			}
 			out, err := api.tickOne(core.WithTenant(ctx, d.TenantId), d.ID)
 			if err != nil {
+				res.Failed++
+				res.LastErr = err
 				log.Warn().Err(err).Str("attempt", d.Token).Msg("An update attempt deadline could not be applied; it is retried at the next pass.")
 				continue
 			}
