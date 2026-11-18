@@ -108,7 +108,27 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *G
 	// refused before any of it is held in memory. The deadlines go outside it, in
 	// Routes, so that caller still cannot stall the connection.
 
-	return protected, ProtectedResourceMetadataHandler(resourceID, issuer, opts...)
+	return endpointCORS(protected), ProtectedResourceMetadataHandler(resourceID, issuer, opts...)
+}
+
+// endpointCORS runs before bearer authentication, but under Routes' deadlines.
+// Browser preflights carry no bearer token and must not read a body or consume
+// caller limits. All other requests retain the complete authentication chain.
+// Bearer headers are the only credentials supported; cookies are never enabled.
+func endpointCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id, WWW-Authenticate")
+		if r.Method == http.MethodOptions && r.Header.Get("Origin") != "" && r.Header.Get("Access-Control-Request-Method") != "" {
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID")
+			// Cache preflight permission for ten minutes, without new configuration.
+			w.Header().Set("Access-Control-Max-Age", "600")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireReadOnly keeps the admission floor independent of discovery's optional
