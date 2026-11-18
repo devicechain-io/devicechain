@@ -58,6 +58,7 @@ backend/core/config/edge_timeout_lockstep_test.go
 backend/core/config/nats_shard_docs_test.go
 backend/core/core/functionalareas.go
 backend/core/core/functionalareas_test.go
+backend/core/core/hardening_docs_test.go
 backend/core/graphql/schemaplane/schemaplane_test.go
 backend/core/httptransport/nodefault_test.go
 backend/core/messaging/database_free_test.go

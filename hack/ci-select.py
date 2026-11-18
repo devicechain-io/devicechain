@@ -151,6 +151,9 @@ READERS = [
         "deploy/opentofu/modules/nats/main.tf",
     ], [], "messaging/rebalanceable_streams_test.go:32, dedup_window_test.go:443"),
     ("backend/core", "semantic", ["NOTICE"], [], "semantic/semantic_test.go:487"),
+    # core/core: the production-hardening page (hardening_docs_test.go:19); functionalareas*.go
+    # name ".." only in a comment about os.ReadDir.
+    ("backend/core", "core", ["docs/docs/deployment/production-hardening.md"], [], "core/hardening_docs_test.go:19"),
     # functionalarea: the services list, release.yml's ko modules and their RUNBOOK.md, the operator,
     # the chart helpers and Chart.yaml, the local image build, the nats module, the broker image.
     ("backend/k8s", "functionalarea", [
@@ -252,7 +255,6 @@ IN_MODULE = {
     ("backend/tools/redlines", "."): "temp fixtures only",
     ("examples/ota-device", "internal/testutil"): "runtime.Caller root is its own module",
     ("backend/core", "test/frontend"): "build-tagged `frontend`, so the go job never compiles it; the frontend job runs the same vitest suites",
-    ("backend/core", "core"): "\"..\" appears only in a comment about os.ReadDir",
     ("backend/core", "replication"): "\"..\" appears only in a comment",
     ("backend/core", "webhooksig"): "\"..\" is a refused path segment",
     ("backend/k8s", "api/v1beta1"): "reads ../../config/crd inside backend/k8s",
