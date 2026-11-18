@@ -1959,6 +1959,14 @@ type BulkAcknowledgeAlarmsResult {
     refusals: [AlarmAckRefusal!]!
 }
 
+"""An alarm's existence and lifecycle state for service-plane reconciliation."""
+type AlarmLifecycle {
+    """The alarm's unique token."""
+    token: String!
+    """The alarm's lifecycle state: ACTIVE or CLEARED."""
+    state: String!
+}
+
 # A raised alarm (ADR-041) — the operational alarm object. Raised when a DETECT rule's
 # condition fires (ADR-057, via the contributor-set integrator), keyed by (originator,
 # alarmKey): there is at most one live alarm per key, so re-crossings dedup into the
@@ -6204,6 +6212,15 @@ type Query {
     alarmsById(ids: [ID!]!): [Alarm!]!
     # Find raised alarms by unique token.
     alarmsByToken(tokens: [String!]!): [Alarm!]!
+    """
+    Service plane. Returns existence and lifecycle state only, including alarms derived from
+    position and alarms whose position classification is pending. Omits unknown tokens.
+    Requires a service token with alarm:read; tenant access tokens are refused.
+    """
+    alarmLifecycles(
+        """The alarm tokens to reconcile, bounded by the batch lookup limit."""
+        tokens: [String!]!
+    ): [AlarmLifecycle!]!
     # List raised alarms that meet criteria.
     alarms(criteria: AlarmSearchCriteria!): AlarmSearchResults!
     """
