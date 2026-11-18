@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,6 +28,13 @@ func graphQLPeer(t *testing.T, field, data string, asked *[]string) (string, uin
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == auth.ServiceTokenPath {
+			var request auth.ServiceTokenRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil ||
+				!slices.Equal(request.Authorities, []string{string(auth.TenantRead), string(auth.DeviceRead)}) {
+				t.Errorf("fact-reconcile mint authorities = %v, decode error = %v", request.Authorities, err)
+				http.Error(w, "wrong authorities", http.StatusForbidden)
+				return
+			}
 			_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{Token: "svc", ExpiresAt: 1 << 40})
 			return
 		}
@@ -64,7 +73,7 @@ func TestTheFactReconcileSeamAsksEachServiceItsOwnQuestion(t *testing.T) {
 	infra.UserManagement = mscfg.UserManagementConfiguration{Hostname: umHost, Port: umPort, InternalPort: umPort}
 	infra.DeviceManagement = mscfg.DeviceManagementConfiguration{Hostname: dmHost, Port: dmPort}
 
-	seam := buildFactReconcileSeam()
+	seam := buildFactReconcileSeam(svcclient.NewPeers(*infra, Microservice.FunctionalArea))
 	require.NotNil(t, seam)
 	tenants, err := seam.Tenants(context.Background())
 	require.NoError(t, err)
@@ -79,11 +88,11 @@ func TestTheFactReconcileSeamAsksEachServiceItsOwnQuestion(t *testing.T) {
 	// And with either coordinate or the secret missing, the reconcile is OFF — nil, never a
 	// client that fails on every sweep.
 	infra.UserManagement.Port = 0
-	require.Nil(t, buildFactReconcileSeam())
+	require.Nil(t, buildFactReconcileSeam(svcclient.NewPeers(*infra, Microservice.FunctionalArea)))
 	infra.UserManagement.Port = umPort
 	infra.DeviceManagement.Hostname = ""
-	require.Nil(t, buildFactReconcileSeam())
+	require.Nil(t, buildFactReconcileSeam(svcclient.NewPeers(*infra, Microservice.FunctionalArea)))
 	infra.DeviceManagement.Hostname = dmHost
 	infra.ServiceAuth.Secret = ""
-	require.Nil(t, buildFactReconcileSeam())
+	require.Nil(t, buildFactReconcileSeam(svcclient.NewPeers(*infra, Microservice.FunctionalArea)))
 }

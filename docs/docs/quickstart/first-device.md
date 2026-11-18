@@ -113,6 +113,19 @@ about 4 CPU, and a pod that does not fit stays `Pending` until the install times
 with room to spare, leave it out to get monitoring and backups. The choice belongs to the cluster
 and cannot be changed while an instance runs on it. See [`--compact`](../deployment/bootstrap.md#--compact).
 
+:::tip Keep database backups on a laptop
+If the laptop has room for a 20Gi backup store, install with `--no-tls=false` to keep cert-manager,
+and with it database backups, on a compact cluster:
+
+```bash
+dcctl install local --compact --no-tls=false
+```
+
+The bootstrap command stays the same: its `--no-tls` serves only this instance over plain HTTP.
+Root-key escrow does not depend on this choice. The recipe above already keeps it, unless you
+pass `--no-escrow` or `--dev`.
+:::
+
 :::note In a script or CI job
 `dcctl bootstrap` asks for a passphrase to seal the root-key escrow artifact. With no terminal to
 ask at it stops with `no escrow passphrase and no terminal to ask at`. Supply one without a

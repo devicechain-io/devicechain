@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // This file is the DB-facing half of the ADR-057 alarm-object integrator (the pure reduction lives in
@@ -175,6 +176,8 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 	if requiresPosition != nil {
 		verdict := *requiresPosition
 		created.PositionDerived = &verdict
+		decidedAt := created.ContributorVersion
+		created.PositionClassifiedVersion = &decidedAt
 	}
 	if anyActive {
 		created.State = string(AlarmStateActive)
@@ -226,13 +229,24 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 	// no edge ever unmarks it (Alarm.PositionDerived). An edge with no verdict (an older producer)
 	// may add a contributor that tests a fence, so an alarm not already marked becomes
 	// unclassified in the same write, and is classified after it.
+	//
+	// A classification is stamped with the contributor version it was decided at
+	// (Alarm.PositionClassifiedVersion). A false verdict on the edge keeps a false that was
+	// current for the set this fold read current for the set it writes: the stamp moves with the
+	// version only if it equalled the version read. A stamp that was already behind (a replica
+	// older than the column folded in between) stays behind, and the database withholds the
+	// alarm until the classifier decides it again (trigger alarm_position_stale).
 	alreadyMarked := existing.PositionDerived != nil && *existing.PositionDerived
 	reclassify := requiresPosition == nil && !alreadyMarked
 	switch {
 	case requiresPosition != nil && *requiresPosition:
 		updates["position_derived"] = true
+		updates["position_classified_version"] = prevVersion + 1
 	case reclassify:
 		updates["position_derived"] = nil
+	case requiresPosition != nil && !alreadyMarked:
+		updates["position_classified_version"] = gorm.Expr(
+			"CASE WHEN position_classified_version = ? THEN ? ELSE position_classified_version END", prevVersion, prevVersion+1)
 	}
 	// A value rides only on an edge that HAS one (a raise carrying a reading). When the edge carries
 	// none (every resolve, and a silence-driven raise), keep the row's existing last value rather than
