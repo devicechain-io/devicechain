@@ -290,7 +290,8 @@ func initializeOrphanSweep(ctx context.Context) error {
 		log.Warn().Msg("Orphan sweep disabled: service secret or endpoints are not configured; degraded mode relies on deletion facts alone")
 		return nil
 	}
-	client := svcclient.NewPeers(infra, Microservice.FunctionalArea).Client(auth.DeviceRead, auth.TenantRead)
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+	client := peers.Client(auth.DeviceRead, auth.TenantRead)
 	source := &processor.DeviceLookup{Client: client,
 		DMURL:     infra.DeviceManagement.Endpoint().GraphQLURL(),
 		UMURL:     infra.UserManagement.Endpoint().GraphQLURL(),
@@ -299,8 +300,8 @@ func initializeOrphanSweep(ctx context.Context) error {
 		Deleted: Microservice.NewCounter("orphan_sweep_deleted_total", "Device state rows removed by the orphan sweep."),
 		Stamped: Microservice.NewCounter("orphan_sweep_stamped_total", "Device state rows stamped with their incarnation by the orphan sweep.")}
 	OrphanTask = core.NewPeriodicTask(Microservice.FunctionalArea, "orphan-sweep", processor.OrphanSweepInterval,
-		sweep.Run, core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(),
-		core.WithPassMetrics(Microservice.NewPeriodicTaskMetrics("orphan_sweep")))
+		sweep.Run, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("orphan_sweep"),
+		core.WithImmediateFirstPass())
 	return OrphanTask.Initialize(ctx)
 }
 
