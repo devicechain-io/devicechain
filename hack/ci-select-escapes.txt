@@ -112,6 +112,7 @@ backend/services/event-sources/processor/contract_test.go
 backend/services/event-sources/processor/http_integration_test.go
 backend/services/event-sources/processor/integration_marks_test.go
 backend/services/mcp/server/documents_test.go
+backend/services/outbound-connectors/connectorspec/downlinktemplate.go
 backend/services/outbound-connectors/lpwan/chirpstack_test.go
 backend/services/outbound-connectors/lpwan/tts_test.go
 backend/services/sparkplug-ingest/downlink/reasons_test.go
