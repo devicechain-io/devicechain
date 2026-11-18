@@ -34,6 +34,13 @@ const (
 	// afterRestart: a re-publish can also wait for the producing (or recording) pod to come
 	// back, because no other replica takes its input over.
 	afterRestart
+	// firstWindowOnly: the producer stamps a stable id so a retry INSIDE the broker's default window
+	// is recognised, and accepts that a re-publish after a longer outage is stored again (the
+	// stream's consumers read state that is held in the database, so a repeat is a repeated
+	// notification at worst). Sizing the window to the worst case would add to every instance's
+	// JetStream reservation for a row that is retried only after a crash between the broker's
+	// acknowledgement and the row's delete.
+	firstWindowOnly
 )
 
 // restartAllowance is the restart a restart-sized window has to outlast: a bad one, an
@@ -107,6 +114,11 @@ func TestEveryDuplicateWindowCoversItsRepublishInterval(t *testing.T) {
 		// REACT, on each delivery of the derived event.
 		streams.ConnectorDispatch: onRedelivery,
 		streams.RaiseAlarm:        onRedelivery,
+		// device-management's agent-effect relay, once per outbox row under the row's stable id.
+		streams.AlarmEvents: firstWindowOnly,
+		// user-management stamps EventID once per publish attempt; a repeated operator action gets a
+		// new id, and applying a kill twice is harmless (it only ever closes the fence).
+		streams.AgentActuationKills: firstWindowOnly,
 		// device-management's failure record, on each redelivery of its source.
 		streams.FailedEvents: onRedelivery,
 		// The in-handler arm and the max-delivery recorder write the same give-up; the
@@ -129,7 +141,6 @@ func TestEveryDuplicateWindowCoversItsRepublishInterval(t *testing.T) {
 		streams.DeviceOwnership:         noID,
 		streams.GeoFenceSetManifest:     noID,
 		streams.EntityDeleted:           noID,
-		streams.AlarmEvents:             noID,
 		streams.FailedDecode:            noID,
 		streams.MaxDeliveries:           noID,
 	}

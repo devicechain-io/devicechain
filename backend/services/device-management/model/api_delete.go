@@ -11,10 +11,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/entityevent"
 	"github.com/devicechain-io/dc-microservice/messaging"
 
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -82,6 +80,43 @@ func (api *Api) hardDeleteByToken(ctx context.Context, model interface{}, token 
 	return result.RowsAffected > 0, nil
 }
 
+// hardDeleteKeyedByToken keeps each removed row's key and label in the journal.
+func hardDeleteKeyedByToken[T any](ctx context.Context, api *Api, token string) (bool, error) {
+	deleted := false
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		var rows []T
+		if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("token = ?", token).Find(&rows).Error; err != nil {
+			return err
+		}
+		for i := range rows {
+			result := tx.Unscoped().Where("token = ?", token).Delete(&rows[i])
+			if result.Error != nil {
+				return result.Error
+			}
+			deleted = deleted || result.RowsAffected > 0
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return deleted, nil
+}
+
+// deleteProfileChildrenByKey preserves one attributable journal row per child.
+func deleteProfileChildrenByKey[T any](tx *gorm.DB, profileID uint) error {
+	var rows []T
+	if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("device_profile_id = ?", profileID).Find(&rows).Error; err != nil {
+		return err
+	}
+	for i := range rows {
+		if err := tx.Unscoped().Where("device_profile_id = ?", profileID).Delete(&rows[i]).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // countReferencing counts rows of refModel whose column equals id. The count is
 // Unscoped so it includes soft-deleted children — matching what a database
 // foreign key constraint sees — but remains tenant-scoped via the query callback.
@@ -113,6 +148,12 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 	}
 	var trackingSources ownershipQueued
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// The deletion fact names the entity's own tenant (entityTenantOnTx), read before the
+		// row is gone.
+		tenant, err := entityTenantOnTx(tx, model, id)
+		if err != nil {
+			return err
+		}
 		// Before the delete removes the relationship edges, capture the devices that
 		// track this entity as a target — their cached tracked-relationship set turns
 		// stale once the edge is gone (ADR-044 F2), and each may have lost an owner, so
@@ -156,25 +197,16 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 		if err := tx.Unscoped().Where("token = ?", token).Delete(model).Error; err != nil {
 			return err
 		}
+		// Commit the deletion fact with the delete; ownership queueing must stay last.
+		if err := queueEntityDeletedOnTx(tx, api, tenant, etype, id, token); err != nil {
+			return err
+		}
 		trackingSources, err = queueOwnershipOnTx(tx, sources)
 		return err
 	})
 	if err != nil {
 		return false, err
 	}
-	// Announce the deletion so cross-service reference holders can reconcile
-	// (ADR-044). Emitted after the transaction commits — never for a rolled-back
-	// delete — and best-effort: the delete is the source of truth, and a missed event is
-	// repaired by the holders' own sweeps against this service (ADR-044 decision 3) —
-	// event-management's anchor reconciliation sweep, and event-processing's reconcile of
-	// its device roster and threshold attributes — so a publish failure is logged, not
-	// surfaced.
-	api.emitEntityDeleted(ctx, &entityevent.EntityDeletedEvent{
-		EntityType:  etype,
-		EntityId:    id,
-		EntityToken: token,
-		DeletedTime: time.Now().UTC(),
-	})
 	// Drop the hot-path caches this delete invalidated so ingest stops resolving the
 	// removed entity and re-creating its anchors within the cache TTL (ADR-044 F2).
 	api.evictEntityDelete(ctx, etype, id, token, trackingSources)
@@ -256,7 +288,10 @@ func (api *Api) DeleteDeviceType(ctx context.Context, token string) (bool, error
 	return deleted, inUseOn(err, fmt.Sprintf("device type %q is still referenced", token))
 }
 
-// DeleteDeviceProfile deletes a device profile (ADR-045). Refused while any device
+// DeleteDeviceProfile deletes an unprotected device profile (ADR-045). Consumed
+// reviews and break-glass history survive; inactive policies, proposals and
+// unconsumed reviews are removed. Protected profiles must lose protection first.
+// Refused while any device
 // type references it — a shared capability contract must not vanish out from under
 // the types that adopt it (fail closed). Its owned metric (ADR-016), command
 // (ADR-043), and detection-rule (ADR-051) definitions are cascade-removed — the cascade
@@ -270,45 +305,76 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 		return false, nil
 	}
 	dp := matches[0]
-	n, err := api.countReferencing(ctx, &DeviceType{}, "profile_id", dp.ID)
-	if err != nil {
-		return false, err
-	}
-	if n > 0 {
-		return false, fmt.Errorf("%w: %d device type(s) reference device profile %q", ErrEntityInUse, n, token)
-	}
 	var evictions []membershipEviction
 	var changed bool
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		locked, err := lockProfile(tx, dp.ID)
+		if err != nil {
+			return err
+		}
+		dp = locked
+		if !api.skipReviewGuardForOldPodTest {
+			if err = applyMaturedPolicyChange(tx, dp.ID, reviewNow()); err != nil {
+				return err
+			}
+			view, err := reviewPolicyView(tx, dp.ID, reviewNow())
+			if err != nil {
+				return err
+			}
+			if view.Effective.Required {
+				return reviewRefusal("PROFILE_PROTECTED", "a protected device profile cannot be deleted; remove its protection first")
+			}
+			if err = tx.Where("device_profile_id = ?", dp.ID).Delete(&AutomationReviewPolicyChange{}).Error; err != nil {
+				return err
+			}
+			if err = tx.Where("device_profile_id = ?", dp.ID).Delete(&AutomationReviewPolicy{}).Error; err != nil {
+				return err
+			}
+		}
+
+		var references int64
+		if err = tx.Model(&DeviceType{}).Where("profile_id = ?", dp.ID).Count(&references).Error; err != nil {
+			return err
+		}
+		if references > 0 {
+			return fmt.Errorf("%w: %d device type(s) reference device profile %q", ErrEntityInUse, references, token)
+		}
+
 		// Drop this profile's live scope references and GC any group@v whose last live
 		// reference this profile held (ADR-062 S4): a desired-empty re-sync deregisters the
 		// read-model for those group@versions, in the same transaction as the delete so no
 		// orphan enrollment (or stale AnyScopedGroups gate) survives the profile.
-		var err error
 		evictions, changed, err = api.syncProfileScopeRefsAndEnroll(ctx, tx, dp.ID, nil)
 		if err != nil {
 			return err
 		}
-		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&MetricDefinition{}).Error; err != nil {
+		if err := deleteProfileChildrenByKey[MetricDefinition](tx, dp.ID); err != nil {
 			return err
 		}
-		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&CommandDefinition{}).Error; err != nil {
+		if err := deleteProfileChildrenByKey[CommandDefinition](tx, dp.ID); err != nil {
 			return err
 		}
-		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&DetectionRule{}).Error; err != nil {
+		if err := deleteProfileChildrenByKey[DetectionRule](tx, dp.ID); err != nil {
 			return err
 		}
 		// The profile's published version history (ADR-045 slice c) goes with it.
 		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&DeviceProfileVersion{}).Error; err != nil {
 			return err
 		}
+		reviews := tx.Where("device_profile_id = ?", dp.ID)
+		if !api.skipReviewGuardForOldPodTest {
+			reviews = reviews.Where("state <> ?", ReviewStateConsumed)
+		}
+		if err := reviews.Delete(&AutomationReview{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("device_profile_id = ?", dp.ID).Delete(&DeviceProfileActivation{}).Error; err != nil {
 			return err
 		}
-		return tx.Unscoped().Where("token = ?", token).Delete(&DeviceProfile{}).Error
+		return tx.Unscoped().Delete(dp).Error
 	})
 	if err != nil {
-		return false, err
+		return false, mapAutomationReviewGuard(err)
 	}
 	api.fireScopingEvictions(ctx, evictions, changed)
 	return true, nil
@@ -662,12 +728,12 @@ func (api *Api) RemoveEntityRelationship(ctx context.Context, token string) (boo
 
 // DeleteMetricDefinition deletes a single metric definition by token (ADR-016).
 func (api *Api) DeleteMetricDefinition(ctx context.Context, token string) (bool, error) {
-	return api.hardDeleteByToken(ctx, &MetricDefinition{}, token)
+	return hardDeleteKeyedByToken[MetricDefinition](ctx, api, token)
 }
 
 // DeleteCommandDefinition deletes a single command definition by token (ADR-043).
 func (api *Api) DeleteCommandDefinition(ctx context.Context, token string) (bool, error) {
-	return api.hardDeleteByToken(ctx, &CommandDefinition{}, token)
+	return hardDeleteKeyedByToken[CommandDefinition](ctx, api, token)
 }
 
 // DeleteDetectionRule deletes a single detection rule by token (ADR-051 slice 4b). Deleting a
@@ -676,7 +742,7 @@ func (api *Api) DeleteCommandDefinition(ctx context.Context, token string) (bool
 // draft simply drops out of the next snapshot. The published-reference row (if this rule was
 // live) is GC'd when its profile's active version is re-synced, or on profile delete.
 func (api *Api) DeleteDetectionRule(ctx context.Context, token string) (bool, error) {
-	return api.hardDeleteByToken(ctx, &DetectionRule{}, token)
+	return hardDeleteKeyedByToken[DetectionRule](ctx, api, token)
 }
 
 // DeleteProvisioningProfile deletes a single provisioning profile by token (ADR-012), and

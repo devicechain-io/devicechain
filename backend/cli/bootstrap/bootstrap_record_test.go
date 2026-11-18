@@ -397,6 +397,7 @@ func TestTheBootstrapsFinishClearsTheRecordOnlyWhenItMay(t *testing.T) {
 		dyn := declaring(t, marked())
 		st := aBootstrapOf("prod")
 		st.Claim = lostClaim(t)
+		st.DeclarationWritten = true
 		var err error
 		captureStdout(t, func() { err = finishBootstrapPhase(t.Context(), st, errors.New("helm"), connectTo(dyn)) })
 		if err != nil {

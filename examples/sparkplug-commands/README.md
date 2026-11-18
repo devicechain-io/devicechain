@@ -39,11 +39,12 @@ set. That is the whole interoperability contract, and the part to copy into a re
 
 ## Requirements
 
-`docker` (with `compose`), `kind`, `kubectl`, `jq`, `curl`, `dcctl` (with `tofu` on the path, which
+`bash`, `docker` (with `compose`), `kind`, `kubectl`, `jq`, `curl`, `openssl`, `dcctl` (with `tofu` on the path, which
 `dcctl upgrade` needs), and a DeviceChain release that accepts dotted command keys. **Releases up to v0.26.0 refuse the key `sparkplug.write`** when a
 profile declares it (`invalid command key ... must be letters, digits, hyphens and underscores`), so
 `provision.sh` stops at its first command there. Use a release that contains the change that allows
-`namespace.name` keys, or bootstrap from this source tree (`dcctl bootstrap --dev`).
+`namespace.name` keys, or bootstrap from this source tree
+(`dcctl bootstrap local spb --dev --enable-area sparkplug-ingest`).
 
 Run every script from this directory. They talk to `http://localhost` (the ingress of a default
 `dcctl install local`); set `DC_URL` if yours is elsewhere, and `KUBECONFIG` or `KUBE_CONTEXT` to pick

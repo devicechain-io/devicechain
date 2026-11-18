@@ -227,7 +227,7 @@ func TestTheStartPhaseBringsUpTheBrokerAndTheProbes(t *testing.T) {
 
 	require.False(t, NatsManager.Conn() == nil || NatsManager.Conn().IsClosed(),
 		"the start phase did not start the broker")
-	resp, err := http.Get("http://" + Svc.HttpAddr() + "/readyz")
+	resp, err := http.Get("http://" + Svc.OpsAddr() + "/readyz")
 	require.NoError(t, err, "the start phase did not bring up the probe surface")
 	resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode,

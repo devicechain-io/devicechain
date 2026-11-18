@@ -20,6 +20,12 @@ dcctl bootstrap local my-instance
 `dcctl install local` 和 `dcctl bootstrap local` 已实现，并在本地 kind Kubernetes 上端到端验证。不存在 kind 集群时，install 会创建，除非指定 `--yes` 否则先确认。`gcp` 提供商是计划中的后续工作。
 :::
 
+## GKE 上的 broker 存储
+
+当 GKE 的 SSD StorageClass 可用时，`dcctl bootstrap` 创建的新 GKE broker 使用 `premium-rwo`（`pd-ssd`）。JetStream 的同步磁盘写入使磁盘延迟尤为重要，使用 `--ha` 的三个副本时更是如此；SSD 可避免依赖小容量 balanced 磁盘的最低 IOPS。其他云和 kind 继续使用集群默认存储类。OpenTofu 实例输入 `nats_jetstream_storage_class`（模块输入 `jetstream_storage_class`）默认为 `""`，此时省略 `config.jetstream.fileStore.pvc.storageClassName`。如需其他存储类，请在首次 apply 前设置。
+
+现有 PVC 的存储类及 StatefulSet 的卷声明模板不可变。升级时，以及 bootstrap 发现现有 broker 或 JetStream 卷声明时，`dcctl` 不设置此输入。模块通过 `lifecycle.ignore_changes` 保留首次选择（包括未设置的情况），后续默认值不会改变它。现有 GKE broker 保留当前磁盘；本次变更不会将数据迁移到 SSD。
+
 ## 安装集群 {#install}
 
 `dcctl install <provider>` 准备承载实例的集群，安装所有实例共享的前置组件。
@@ -158,6 +164,12 @@ and nothing has been changed: ... Destroy an instance, or raise the budget by re
 关系型数据库已从 StatefulSet 改为 CloudNativePG 集群，无法原地升级。对更早创建的实例，初始化会**拒绝**执行，并说明如何导出数据或有意丢弃数据。详见[旧数据库例外](#legacy-db-removal)。
 :::
 
+### 关系型存储 WAL 调优 {#relational-store-wal}
+
+`dcctl install --relational-store-max-wal-mib 4096` 将共享关系型存储的 `max_wal_size` 软检查点目标设为 4096 MiB。省略此标志会保留已记录的选择；首次安装且未选择时，沿用根配置的 PostgreSQL 默认值（1 GiB）。传入 `--relational-store-max-wal-mib=0` 会记录恢复默认值的选择。正数必须至少为 64 MiB。选择在应用前记录，因此应用失败后不带标志重试仍会保留该选择，包括显式恢复默认值。
+
+这是软检查点目标，并非 `pg_wal` 的硬上限：检查点或归档落后时 WAL 可以超过它。集群根配置仍会拒绝超过关系型存储容量四分之一的目标。性能规格推荐 WAL 值，但不会自动应用。此更改只需重新加载，集群中存在实例时也允许更改。
+
 ### 旧数据库例外 {#legacy-db-removal}
 
 Operator 无法接管 StatefulSet 的数据目录，因此不支持原地升级。拒绝执行可防止旧数据库被删除后，一个空数据库接管相同主机名，导致实例看似健康却没有数据。
@@ -183,7 +195,7 @@ Operator 无法接管 StatefulSet 的数据目录，因此不支持原地升级�
 
 #### Ingress 与自带控制器 {#ingress-controller}
 
-集群安装会部署一个 Ingress 控制器，每个实例的路由由 Chart 提供。边缘不承担任何安全控制：服务令牌签发端点和签名密钥集由 `user-management` 在一个没有任何 Ingress 路由指向的内部端口上提供，因此无论使用哪种控制器，公开端口对它们都返回 404。签发端点由共享的服务密钥保护，该密钥以恒定时间比较。Chart 的路由不带任何配置 snippet。仍在运行 `ingress-nginx` 的集群上，它在本版本中仍接受 snippet，因为尚未升级的实例依赖它们。
+集群安装会部署一个 Ingress 控制器，每个实例的路由由 Chart 提供。边缘不承担任何安全控制：服务令牌签发端点和签名密钥集由 `user-management` 在一个没有任何 Ingress 路由指向的内部端口上提供，因此无论使用哪种控制器，公开端口对它们都返回 404。签发端点由共享的服务密钥保护，该密钥以恒定时间比较。Chart 的路由不带任何配置 snippet。在保留 `ingress-nginx` 的集群上，`dcctl install` 会关闭配置片段，并恢复控制器默认的注解风险级别。只要该控制器类的任何 Ingress 带有 `*-snippet` 注解，它就会先拒绝继续，并列出每一项：请使用 `dcctl upgrade` 升级所属实例，或移除该注解，然后重新运行 `dcctl install`。参见 [v1.6.0 升级说明](./releases-and-upgrades.md#v160-nginx-snippets-off)。
 
 如果你自带控制器，请路由 Chart 的五个 Ingress。实现了 Gateway API 的控制器也可以改为提供 Chart 渲染出的 Gateway 和 HTTPRoute（`ingress.controller: gateway`；Chart 的 README 列出了这类控制器必须做到的事）：
 
@@ -300,7 +312,7 @@ kind 不强制卷大小限制，可使用宿主机可用磁盘。
 - **Kubernetes 1.29 或更新版本**及指向它的 kube-context。最低版本来自 CloudNativePG chart，更早版本拒绝安装。`dcctl preflight` 提前检查，避免写入根密钥托管文件后才在初始化中失败。`local` 提供方使用 kind 集群，由 `dcctl install local` 创建（`--cluster <name>`，默认 `devicechain`）。传 `--kube-context <name>` 可使用已有 kind、minikube、k3d 或 docker-desktop 集群。
 - **默认 StorageClass 上的持久卷磁盘。** 非本地集群（非 kind、minikube、k3d、docker-desktop、rancher-desktop）使用默认设置，没有 `--compact`、`--no-cnpg`、`--no-monitoring`、`--backup-credentials-file` 时，`dcctl install --ha` 为集群申请 204 GiB，包括三个关系型数据库卷、160 GiB [备份存储](#backup-store-size)和 Prometheus。每实例再申请 144 GiB，用于三个事件存储卷及三个代理卷；单实例集群合计 348 GiB。无 `--ha` 时集群 188 GiB，每实例 48 GiB。每个额外持续摄取实例还需增加约 160 GiB 备份容量，详见[备份存储容量](#backup-store-size)。云环境先核对磁盘配额。新的 Google Cloud 项目每区域 SSD 默认 500 GB 配额，每 GiB 卷按一 GB 计，两种 GKE 磁盘类均计入。单实例卷容量低于配额；[GKE 指南](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#before-you-start)使用标准启动盘，计入不同配额，因此默认高可用单实例也适用。平衡型或 SSD 启动盘则计入 SSD 配额。指南说明多实例需申请的配额。本地集群监控不使用持久卷，kind 不强制容量。
 - **满足请求的 CPU 和内存。** 非 `--compact` 时，处理每个事件的五个服务合计请求约 4 CPU；`--ha` 下 `event-management` 两个 Pod，合计约 5 CPU。每个 NATS 服务器请求 500m CPU 和 768Mi 内存，高可用下有三个，另需其他服务、数据库和集群组件资源。无法容纳的 Pod 保持 `Pending`，安装等待至超时。各项见[服务容量配置](#service-sizing)；笔记本等资源有限集群使用 [`--compact`](#--compact)。
-- **OpenTofu 1.9 或更新版本**（`tofu`，也支持 `terraform` 1.9 或更新）位于 `PATH`。`dcctl` 使用它部署基础设施，安装见 [opentofu.org](https://opentofu.org)。`dcctl preflight local` 提前检查工具及环境，但不检查其版本；旧版本加载配置时失败。
+- **OpenTofu 1.10 或更新版本**（`tofu`，也支持 `terraform` 1.10 或更新）位于 `PATH`。`dcctl` 使用它部署基础设施，安装见 [opentofu.org](https://opentofu.org)。`dcctl preflight local` 提前检查工具及环境，但不检查其版本；旧版本加载配置时失败。
 - **`kubectl`** 位于 `PATH`；`local` 提供方还需 **`docker`** 和 **`kind`**。缺少本次运行所需的工具会使预检失败。只有本地 kind 集群或 `--build` 才需要 Docker：使用已发布镜像安装到 `--kube-context` 指定的集群时，既不检查也不使用它。需要时，其守护进程必须可访问：Linux 上为 Docker Engine，macOS 和 Windows 上为 Docker Desktop。
 - **空闲的主机端口 80、443 和 1883**（本地 kind 集群使用）。集群会将它们发布出来，分别用于控制台、HTTPS 和 MQTT。`dcctl preflight local` 会在端口被占用时失败并指出占用它的容器，而不是让集群创建时才因 Docker 的绑定错误而失败。
 - **在 Linux 上，需要调高 inotify 限制。** 对于本地 kind 集群，`dcctl preflight local` 要求 `fs.inotify.max_user_instances` 至少为 256，而原装 Ubuntu 24.04 默认只有 128，因此它会在此处失败并打印要运行的命令。第一行调高该限制（第二行 `max_user_watches` 仅是警告），`/etc/sysctl.d` 使其在重启后依然有效：
@@ -335,7 +347,7 @@ dcctl bootstrap local my-instance --build
 |------|---------|
 | `--cluster <name>` | `local` 提供方：创建实例的 kind 集群，默认 `devicechain`。必须已[安装](#install)，初始化不创建集群。 |
 | `--kube-context <name>` | 通过此 kube-context 选择已安装集群。 |
-| `--size <size>` | 实例的规格预设：`base`（默认）、`perf-12k` 或 `perf-16k`（已实测的高吞吐形态）。记录在实例上，每次升级都会重新应用。`--values` 覆盖文件和你自行声明的 OpenTofu 变量优先于它。见[选择规格](./sizing.md)。 |
+| `--size <size>` | 实例的规格预设：`base`（默认）、`perf-12k`、`perf-16k` 或 `perf-20k`。`perf-20k` 是吞吐量目标，确认延迟尚未验证。记录在实例上，每次升级都会重新应用。`--values` 覆盖文件和自行声明的 OpenTofu 变量优先。见[选择规格](./sizing.md)。 |
 | `--profile <profile>` | 功能领域配置档：默认 `default` 标准系统；`full` 包含全部，增加 AI 推理、出站连接器、MCP、Sparkplug B 和 LwM2M 摄取，空中（OTA）更新管理已包含在 `default` 中；还可选 `telemetry` 或 `ingest-only`。 |
 | `--enable-area <area>` | 在配置档之外额外部署一个功能领域，例如 `--enable-area outbound-connectors`。可重复使用。要为已在运行的实例添加，见[稍后添加功能领域](#enable-area)。 |
 | `--build` | 将源码镜像构建至本地仓库，开发路径需源码、Docker、ko。 |
@@ -478,6 +490,7 @@ chart 会给对象存储的卷加上 `helm.sh/resource-policy: keep`，因此之
 | `--restore-rdb-from <archive>` | 灾难恢复：从备份桶内归档路径恢复共享关系型存储（未恢复过时为 `dc-rdb`），不初始化空库。仅**创建**时生效，已有存储时不移动数据，是重建而非修复操作。需备份插件，`--no-cnpg` 或 `--compact --no-tls` 时拒绝。见[恢复实例](./disaster-recovery.md#recover)。 |
 | `--restore-rdb-at <timestamp>` | 在指定时间停止恢复，而非重放全部归档。用于错误迁移或误删除等被系统正常执行的数据破坏，必须选破坏之前的时间。需 `--restore-rdb-from` 和带显式偏移的 RFC 3339 时间（`2026-07-27T13:59:00Z`），否则 PostgreSQL 按恢复服务器时区解释，停止时间不同。 |
 | `--max-connections <n>` | 关系型数据库连接预算，首次默认 `700`，重跑未指定时保留当前值。见[连接预算](#connection-budget)。运行实例存在时只能提高，不可降低。 |
+| `--relational-store-max-wal-mib <n>` | 关系型存储 `max_wal_size` 软检查点目标，单位 MiB。省略则保留已记录的选择（首次安装：默认 1 GiB）；`0` 记录恢复默认值；正数至少为 `64`。应用前记录，失败后不带标志重试仍保留。根配置限制为存储容量的四分之一。性能规格不会自动设置。参见[关系型 WAL 调优](#relational-store-wal)。 |
 | `--allow-legacy-db-removal` | [初始化过程](#what-it-does)所述一次性例外的关系型数据库部分。 |
 | `--dry-run` | 打印行为，不改变内容、不创建集群。因此需读取集群的检查，尤其 `--ha` 节点容量检查，无法读取时报告未检查，不阻止演练。但可读集群若无法承载高可用，试运行也失败。可访问时，同样拒绝缺少集群本地状态的机器重安装、在运行实例下改变设置、不可用快照类，并使用相同错误消息；不可访问时说明未检查。 |
 | `--yes` | 创建 kind 集群前不询问。 |
@@ -906,7 +919,7 @@ aws s3 rm --recursive s3://devicechain-tsdb/<path>/ --endpoint-url http://127.0.
 
 销毁不删除集群或 `dcctl install` 的前置组件，下一次初始化无需先安装。删除再以同名初始化是重建实例的方法。但早于 `dcctl install` 的实例还需重建集群，见[版本与升级](./releases-and-upgrades.md#pre-declaration-recreate)。
 
-kind 集群已由 `kind delete cluster` 删除时，没有可卸载对象，销毁会说明并只清理本地状态，包括实例目录及 `dcctl install` 创建、kind 删除后留下的 `~/.devicechain/clusters/<cluster-uid>/` 集群目录，见[安装集群](#install)。会打印：
+kind 集群已由 `kind delete cluster` 删除时，只有实例拥有集群记录且记录中的上下文不再响应，销毁才会清理本地状态。猜测绝不会作为集群已不存在的依据。没有记录时会执行正常卸载，无法连接集群则失败；请传入 `--kube-context`，或者确认集群确实已不存在后手动删除实例目录。清理范围，包括实例目录及 `dcctl install` 创建、kind 删除后留下的 `~/.devicechain/clusters/<cluster-uid>/` 集群目录，见[安装集群](#install)。会打印：
 
 ```text
 removing the gone cluster's local state (~/.devicechain/clusters/<cluster-uid>)

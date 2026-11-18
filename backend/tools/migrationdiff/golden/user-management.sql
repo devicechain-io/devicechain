@@ -382,7 +382,8 @@ CREATE TABLE "user-management".iam_agent_policies (
  suspended_by character varying(256),
  tenant_actuation_off boolean DEFAULT false NOT NULL,
  actuation_off_at timestamp with time zone,
- actuation_off_by character varying(256)
+ actuation_off_by character varying(256),
+ actuation_generation bigint DEFAULT 0 NOT NULL
 );
 CREATE TABLE "user-management".iam_agent_policy_versions (
  id bigint NOT NULL,

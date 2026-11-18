@@ -1,0 +1,5 @@
+functionalAreas:
+  outbound-connectors:
+    config:
+      lpwanDownlink:
+        enabled: true

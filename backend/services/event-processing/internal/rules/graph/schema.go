@@ -184,6 +184,17 @@ type CanvasDefinition struct {
 	Edges         []Edge `json:"edges"`
 }
 
+// ConditionCount returns the number of detection rules Compile lowers: one per condition node.
+func (d CanvasDefinition) ConditionCount() int {
+	count := 0
+	for _, n := range d.Nodes {
+		if n.Type.isCondition() {
+			count++
+		}
+	}
+	return count
+}
+
 // Node is one canvas node: a stable id, its type, its opaque per-type config (decoded
 // against the type's config struct with unknown-field rejection during lowering), and
 // authoring-only layout coordinates.

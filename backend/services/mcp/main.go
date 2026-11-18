@@ -85,7 +85,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// This service's whole HTTP surface, registered in the INITIALIZE phase. See
 	// registerHttpRoutes for why it is here and not where the server starts.
 	registerHttpRoutes(Configuration.ResourceUrl, Configuration.IssuerUrl, validator,
-		server.NewGraphQLClient(), Configuration.Limits())
+		server.NewGraphQLClient(), Configuration.Limits(), server.WithActuation(Configuration.AgentActuation.Enabled))
 	return initializeService(ctx)
 }
 
@@ -97,15 +97,14 @@ func initializeService(ctx context.Context) error {
 }
 
 // registerHttpRoutes mounts this service's MCP routes on the microservice's OWN mux
-// rather than on http.DefaultServeMux. The mux ends up carrying six patterns, in two
-// groups:
+// rather than on http.DefaultServeMux. The HTTP surface has two groups:
 //
 //   - server.Routes, called here, contributes the MCP endpoint at "/" and the two RFC 9728
 //     protected-resource metadata locations — the exact path and its subtree form.
 //     Which paths those are is a routing decision that belongs to the server package,
 //     which has tests for it.
-//   - core/service contributes /healthz, /readyz and /metrics, as it does for every
-//     service; initializeService is where that happens.
+//   - core/service contributes /healthz, /readyz and /metrics on OpsMux(), as it does
+//     for every service; initializeService is where that happens.
 //
 // 🔴 THAT ROUTE SET IS A PROTOCOL CONTRACT, NOT A CONVENIENCE. A client discovers this
 // server by spec: it POSTs the resource identifier, reads the WWW-Authenticate
@@ -133,8 +132,8 @@ func initializeService(ctx context.Context) error {
 // exists to prevent. The uncovered remainder is one line — that the initializer calls
 // this — because the initializer needs configuration and a JWKS endpoint.
 func registerHttpRoutes(resourceURL, issuerURL string, validator func() *coreauth.Validator,
-	gql *server.GraphQLClient, limits server.Limits) {
-	server.Routes(Microservice.Mux(), resourceURL, issuerURL, validator, gql, limits)
+	gql *server.GraphQLClient, limits server.Limits, opts ...server.Option) {
+	server.Routes(Microservice.Mux(), resourceURL, issuerURL, validator, gql, limits, opts...)
 }
 
 // afterMicroserviceStarted starts the HTTP server, which core/service builds fresh on each

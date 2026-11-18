@@ -5,11 +5,19 @@ title: 发送命令
 
 # 发送命令 {#sending-a-command}
 
+开始前，请注册目标设备；如需声明的命令词汇表，请关联并发布声明该命令的配置文件。要完成生命周期，还需连接能接收命令并报告结果的设备客户端；单独发送 HTTP 遥测 POST 无法完成这些操作。[快速入门后续步骤](../quickstart/first-device.md#next-an-alarm-and-a-command)介绍了准备过程。
+
 本指南介绍双向命令派发中运维人员的一侧：发出命令、区分接受与拒绝，并跟踪结果。设备一侧的接收与结果报告见[连接设备](./connecting-a-device.md#responding-to-a-command)。两侧共同推进的生命周期见[命令](../concepts/commands.md)。
 
 使用租户访问令牌，在 `command-delivery` 端点 `https://<your-host>/api/command-delivery/graphql` 发出、读取和取消命令。发出和取消需要 `command:write`，读取历史需要 `command:read`。
 
 下面第一步是唯一例外。查询设备接受什么是 `device-management` 查询，使用不同端点 `https://<your-host>/api/device-management/graphql` 和权限 `device:read`。
+
+## 自动化动作的权限
+
+编写或发布自动化动作需要具备执行该动作的权限。创建或更新包含 `sendCommand` 动作的规则，以及发布或回滚到启用规则中包含该动作的配置文件版本，除了 `device:write` 之外，还需要 `command:write`。`httpCall` 和 `publish` 动作需要 `connector:write`。仅具备 `device:write` 的角色仍可编写和发布只触发告警的规则。
+
+每次创建或更新都会检查合并后的完整规则所需的动作权限，即使规则被禁用也不例外。发布和回滚会检查所选配置文件版本中的所有启用规则，即使仅修改了指标。发布者必须具备动作权限；自动化审核的批准者无需具备这些权限。采用动作已获授权的配置文件不需要这些额外权限。
 
 ## 查询设备接受什么 {#find-out-what-the-device-accepts}
 
@@ -41,8 +49,7 @@ mutation {
     token: "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
     deviceToken: "sensor-001",
     name: "reboot",          # the commandKey, not the display name
-    payload: "{\"delaySeconds\":5}",
-    expiresAt: "2026-08-15T00:00:00Z"
+    payload: "{\"delaySeconds\":5}"
   }) {
     command { token status queuedTime }
     rejection { code reason }
@@ -80,6 +87,7 @@ mutation {
 | `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` | 载荷或元数据字符串超过 64 KiB。 | 否 |
 | `COMMAND_NAME_TOO_LONG` | 命令名称超过 128 字节。 | 否 |
 | `EXPIRES_AT_INVALID` | `expiresAt` 不是 RFC3339 时间戳。 | 否 |
+| `DELIVERY_OPTION_INVALID` / `DELIVERY_OPTION_NOT_APPLICABLE` | `deliveryMode` 或 `maxAttempts` 不是平台认识的值，或设备未使用[通过 HTTP 拉取命令的通道](../concepts/commands.md#http-command-pull)；这两个选项仅适用于该通道。 | 否 |
 | `TOKEN_IN_USE` | 令牌由不属于你的命令占用，实际通常是平台为批次创建的命令。 | 否，请换令牌 |
 | `COMMAND_REJECTED` | 收到没有分类的拒绝。 | 否 |
 
@@ -124,7 +132,7 @@ query {
 
 空 `statuses` 列表会被忽略，而不是匹配零条。
 
-各终态含义见[命令](../concepts/commands.md#command-lifecycle)。要记住的区别是：`EXPIRED` 表示未到达设备，`TIMEOUT` 表示已发出。连续 `EXPIRED` 指向派发，连续 `TIMEOUT` 指向设备。
+各终态含义见[命令](../concepts/commands.md#command-lifecycle)。`EXPIRED` 表示命令在交付前过期；`TIMEOUT` 表示命令在 `SENT` 状态过期，已派发但未获答复。是否收到和执行仍未知（`outcome: UNKNOWN`）：设备可能在在线检查与发布之间断开。连续出现 `TIMEOUT` 时，请同时排查交付和设备响应处理。
 
 ## 取消命令 {#cancel-one}
 

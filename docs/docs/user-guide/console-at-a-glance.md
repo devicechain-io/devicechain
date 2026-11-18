@@ -15,9 +15,11 @@ It is for anyone new to the console. Read it once, and the later chapters will m
 
 ## The home page
 
-After you sign in, you land on the home page. It welcomes you by name and shows two counts:
-how many **Devices** and how many **Device Types** your tenant has. Select either count to open
-that list.
+After you sign in, you land on the home page. It welcomes you by name and shows how many
+**Devices** and **Device Types** your tenant has. Select either count to open that list.
+With `state:read`, it also shows **Devices online** and **Devices offline**; devices that have
+never reported count in neither. With `alarm:read`, **Active alarms by severity** shows a count
+per severity; select one to open the alarm list filtered to that severity and the active state.
 
 <GuideShot id="console-home" alt="The console home page. The sidebar is on the left. The header reads Home, with the tenant chip 'acme (sim)' at the top right. The page is titled 'Welcome, Dana Okafor' and shows two cards: 13 Devices and 1 Device Types." />
 
@@ -37,12 +39,14 @@ pages. Select a section's heading to open or close it, and select a page inside 
 | Entry | What it holds |
 | --- | --- |
 | **Home** | The home page. |
-| **Monitor** | **Dashboards** built by your team, **Alarms** raised by your rules, and **Notification Policies**: who is told about alarms, and the quiet hours that hold their pages. |
+| **Monitor** | **Approvals** (preview) for reviewing agent proposals, **Dashboards** built by your team, **Alarms** raised by your rules, **Ingest failures** for refused events, **Notification Policies** for alarm routing and quiet hours, and **Notification Channels** for delivery destinations. |
 | **Devices** | **Devices**, **Device Types**, **Device Profiles** (which hold the profile's rules, metrics and commands), **Device Groups**, **Command Batches**, **Maintenance Windows** and **Updates** (**Artifacts**, **Rollouts** and **Signers** for over-the-air updates). |
 | **Connect** | How devices and other systems reach the tenant: **Provisioning Profiles**, **Trust Anchors**, **Integrations** and **Connectors** (outbound connections to other systems). |
 | **Organization** | **Assets**, **Customers** and **Areas** (including **Geofences**); **Facets**, the keys you use to describe and filter entities; and **Browse**, a query builder for finding entities by their facets. |
 | **Access** | **Members**, **Service Accounts**, **Roles**, **Sign-in Security** and **Audit**, the tenant's record of who changed what. |
 | **Settings** | **Branding**, **Map** and **Language**. |
+
+The [Approvals inbox (preview)](../concepts/mcp.md#approvals-inbox) needs an unscoped tenant membership and either `agent:admin` or current approver standing (an approver role, `alarm:write` and an active second factor). Agent actions must also be enabled by the operator before you can use it.
 
 You see only the entries your role allows. If your role cannot read alarms, for example,
 **Alarms** is not in your sidebar. **Updates** appears only when your installation runs the update service. The **Access**

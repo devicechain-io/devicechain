@@ -1,9 +1,10 @@
 apiVersion: v2
 name: devicechain
 description: >-
-  Cloud-native, self-hosted IoT platform — device management, MQTT/Sparkplug/LwM2M
-  ingest, TimescaleDB telemetry, a CEL rule engine with alarms, dashboards, and a
-  web console. Deploys one Deployment + Service per enabled functional area.
+  Open-source, self-hosted IoT platform, ready for AI agents — device management,
+  MQTT/Sparkplug/LwM2M and LoRaWAN ingest, TimescaleDB telemetry, a CEL rule engine
+  with alarms and commands, OTA updates, dashboards, and an optional MCP server for AI
+  assistants. Deploys one Deployment + Service per enabled functional area.
 type: application
 version: 0.1.0
 appVersion: "0.0.1"
@@ -22,12 +23,18 @@ keywords:
   - telemetry
   - timescaledb
   - self-hosted
+  - lorawan
+  - mcp
+  - ota
 maintainers:
   - name: The DeviceChain Authors
     url: https://github.com/devicechain-io/devicechain
 # Artifact Hub reads these when the chart is ingested from
 # oci://ghcr.io/devicechain-io/charts. They are the listing's metadata, so
 # they are written for a reader who has never seen this repository.
+# artifacthub.io/prerelease is deliberately not set here: the release workflow
+# stamps it from the tag (hack/stamp-chart-prerelease.sh), "true" for an -rc
+# version, "false" otherwise.
 #
 # 🔴 Deliberately NOT set: `artifacthub.io/images`. It would have to name an
 # image TAG, and annotations are not templated — `helm package --app-version`

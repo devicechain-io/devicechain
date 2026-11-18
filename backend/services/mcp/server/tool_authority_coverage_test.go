@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"testing"
 
 	coreauth "github.com/devicechain-io/dc-microservice/auth"
@@ -52,6 +53,10 @@ var toolAuthorities = map[string][]coreauth.Authority{
 	"get_alarm":   {coreauth.AlarmRead},
 	// command-delivery/graphql/queries.go — Commands
 	"list_commands": {coreauth.CommandRead},
+	// device-management/graphql: agent proposal resolvers.
+	"propose_alarm_action": {coreauth.AlarmPropose},
+	"get_proposal":         {coreauth.AlarmPropose},
+	"list_my_proposals":    {coreauth.AlarmPropose},
 }
 
 // registeredToolNames asks the server THIS SERVICE SERVES what it exposes, over a real
@@ -60,7 +65,15 @@ var toolAuthorities = map[string][]coreauth.Authority{
 // listing a server the test built for itself, which is what this used to do.
 func registeredToolNames(t *testing.T) []string {
 	t.Helper()
-	names, _ := listServedTools(t)
+	cs, _ := proposalSession(t, "http://unused.invalid", true, coreauth.ScopeReadOnly+" "+coreauth.ScopeActAlarms)
+	res, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{}
+	for _, tool := range res.Tools {
+		names = append(names, tool.Name)
+	}
 	return names
 }
 
@@ -70,8 +83,11 @@ func registeredToolNames(t *testing.T) []string {
 func scopeReachableAuthorities(t *testing.T) map[string]string {
 	t.Helper()
 	reachable := map[string]string{}
-	for _, scope := range coreauth.SupportedScopes {
+	for _, scope := range coreauth.SupportedScopesFor(true) {
 		allow, ok := coreauth.ScopeAllowance(scope)
+		if coreauth.IsActScope(scope) {
+			allow, ok = coreauth.ActScopeCeiling(scope)
+		}
 		if !ok {
 			t.Fatalf("supported scope %q has no allowance defined", scope)
 		}

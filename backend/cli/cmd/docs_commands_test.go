@@ -6,6 +6,10 @@ package cmd
 // The docs-command gate: every `dcctl` invocation in a shell block of the published
 // docs must name a command that exists, with flags that command accepts and the number
 // of arguments it takes, and every `hack/` path in one must exist in the tree.
+// Local recursive patterns in go build/go vet must start inside a Go module.
+// Literal local Helm installs must render successfully, entirely offline.
+// Literal GraphQL curl documents are validated against each endpoint schema plane.
+// Literal psql SELECT columns are checked against the frozen analytics projection.
 //
 // WHY A TEST IN THIS PACKAGE. The source of truth for dcctl is the cobra tree, and this
 // is the one place that can ask it directly: rootCmd.Find resolves the command path the
@@ -28,12 +32,21 @@ package cmd
 // `kubectl port-forward deploy/device-management` names a Deployment, not ./deploy.
 //
 // 🔴 SCOPE, said up front so a green run is not read as more than it is: it proves a
-// command NAME, its FLAG names and its ARITY. It does not prove a flag's value parses,
+// dcctl command NAME, its FLAG names and its ARITY, and literal Go module locations.
+// Local Helm installs are rendered offline with supplied values and reported stand-ins
+// for whole environment references and image.tag placeholders.
+// SQL covers one analytics view and a small unqualified expression subset; other
+// syntax and release-history pages are visibly skipped. It never executes SQL.
+// It does not otherwise prove a flag's value parses,
 // that the command succeeds, or that the sentence beside it is true. Every other tool
-// (kubectl, helm, curl, ...) is counted, not checked, and the count is printed, so the
+// (kubectl, non-GraphQL curl, ...) is counted, not checked, and the count is printed, so the
 // uncovered surface is visible rather than implied:
 //
 //	cd backend/cli && go test ./cmd -run TestPublishedDocsCommandsExist -v -count=1
+//
+// Go module locations use literal cd state within each fence, starting at the repo
+// root, and local go.work/go.mod metadata. Dynamic directories and loops are listed
+// as skipped. This is not a shell interpreter or a build/flag/package-existence check.
 //
 // 🔴 A SCANNER FAILS BY REPORTING CLEAN, so the real-tree run refuses to pass if it
 // found fewer invocations per locale than a floor, and the negative controls below plant
@@ -295,6 +308,13 @@ func extractSubstitutions(s string) (string, []string) {
 // removed, split at `&&`, `||`, `;`, `|`, `&`, `(` and `)`, with redirections and their
 // targets dropped.
 func splitSegments(s string) [][]string {
+	return shellSegments(s, false)
+}
+
+// shellSegments can retain subshell boundaries for working-directory tracking.
+// markDynamic annotates double-quoted shell expansions for the GraphQL body check;
+// callers checking other tools retain the original words.
+func shellSegments(s string, groups bool, markDynamic ...bool) [][]string {
 	var segs [][]string
 	var cur []string
 	var word strings.Builder
@@ -335,6 +355,11 @@ func splitSegments(s string) [][]string {
 			for i++; i < len(s) && s[i] != '"'; i++ {
 				if s[i] == '\\' && i+1 < len(s) {
 					i++
+					word.WriteByte(s[i])
+					continue
+				}
+				if len(markDynamic) > 0 && markDynamic[0] && s[i] == '$' {
+					word.WriteString(substPlaceholder)
 				}
 				word.WriteByte(s[i])
 			}
@@ -350,6 +375,9 @@ func splitSegments(s string) [][]string {
 				continue
 			}
 			endSeg()
+			if groups && (c == '(' || c == ')') {
+				segs = append(segs, []string{string(c)})
+			}
 			if (c == '&' || c == '|') && i+1 < len(s) && s[i+1] == c {
 				i++
 			}
@@ -547,11 +575,206 @@ type docsFinding struct {
 	msg   string
 }
 
+// docsGoLayout reads only local metadata. Workspace use entries are module roots;
+// go.mod files also recognize modules outside the workspace (for example fixtures).
+// No published command, go list, or toolchain download is needed.
+type docsGoLayout struct {
+	repo  string
+	roots map[string]bool
+}
+
+func readDocsGoLayout(repo string) (*docsGoLayout, error) {
+	b, err := os.ReadFile(filepath.Join(repo, "go.work"))
+	if err != nil {
+		return nil, err
+	}
+	l := &docsGoLayout{repo: repo, roots: map[string]bool{}}
+	inUse := false
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(strings.SplitN(line, "//", 2)[0])
+		if line == "use (" {
+			inUse = true
+			continue
+		}
+		if line == ")" {
+			inUse = false
+			continue
+		}
+		if strings.HasPrefix(line, "use ") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "use "))
+		} else if !inUse {
+			continue
+		}
+		if words := splitSegments(line); len(words) == 1 && len(words[0]) == 1 && literalDocsPath(words[0][0]) {
+			l.roots[path.Clean(words[0][0])] = true
+		}
+	}
+	return l, nil
+}
+
+func literalDocsPath(p string) bool {
+	return p != "" && p != "-" && !path.IsAbs(p) &&
+		!strings.ContainsAny(p, "$`~*?[]{}<>:\\") && !strings.Contains(p, substPlaceholder)
+}
+
+func (l *docsGoLayout) directory(p string) bool {
+	if p == ".." || strings.HasPrefix(p, "../") {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(l.repo, filepath.FromSlash(p)))
+	return err == nil && info.IsDir()
+}
+
+func (l *docsGoLayout) inModule(p string) bool {
+	for {
+		if l.roots[p] {
+			return true
+		}
+		if info, err := os.Stat(filepath.Join(l.repo, filepath.FromSlash(p), "go.mod")); err == nil && !info.IsDir() {
+			return true
+		}
+		if p == "." {
+			return false
+		}
+		p = path.Dir(p)
+	}
+}
+
+// An empty directory is unresolved, not the repository root. Each fence starts at
+// the repository root; cd - and subshells preserve the shell's literal directory state.
+type docsWorkingDir struct{ dir, previous string }
+
+func (s *docsScan) scanGoCommands(text, where string, wd *docsWorkingDir, stack *[]docsWorkingDir, loops *int) {
+	for _, seg := range shellSegments(text, true) {
+		switch seg[0] {
+		case "(":
+			*stack = append(*stack, *wd)
+			continue
+		case ")":
+			if n := len(*stack); n > 0 {
+				*wd = (*stack)[n-1]
+				*stack = (*stack)[:n-1]
+			}
+			continue
+		case "for", "select", "while", "until":
+			*loops++
+			wd.dir = ""
+		case "done":
+			if *loops > 0 {
+				*loops--
+			}
+			continue
+		}
+		words := commandWords(seg)
+		if len(words) == 0 {
+			continue
+		}
+		if words[0] == "cd" {
+			next := ""
+			args := words[1:]
+			if len(args) > 0 && args[0] == "--" {
+				args = args[1:]
+			}
+			if *loops == 0 && len(args) == 1 {
+				if args[0] == "-" {
+					next = wd.previous
+				} else if wd.dir != "" && literalDocsPath(args[0]) {
+					candidate := path.Join(wd.dir, args[0])
+					layout := s.goLayout
+					if layout == nil {
+						layout = &docsGoLayout{repo: s.helmRepo}
+					}
+					if layout.directory(candidate) {
+						next = candidate
+					}
+				}
+			}
+			wd.previous, wd.dir = wd.dir, next
+			continue
+		}
+		if docsHelmInstall(words) {
+			s.scanHelmInstall(words, where, wd.dir, *loops)
+			continue
+		}
+		if s.goLayout == nil || !docsGoRecursiveCommand(words) {
+			continue
+		}
+		invocation := strings.Join(words, " ")
+		reason := ""
+		if *loops > 0 {
+			reason = "dynamic loop"
+		} else if wd.dir == "" {
+			reason = "unresolved working directory"
+		}
+		for _, arg := range words[2:] {
+			if arg == "-C" || strings.HasPrefix(arg, "-C=") {
+				// go -C changes the directory the patterns resolve from; not modelled.
+				reason = "go -C"
+			}
+		}
+		unresolvedWD := reason != ""
+		var invalid []string
+		for _, arg := range words[2:] {
+			if !strings.HasPrefix(arg, "./") && !strings.HasPrefix(arg, "../") || !strings.HasSuffix(arg, "/...") {
+				continue
+			}
+			if !literalDocsPath(arg) {
+				reason = "dynamic package pattern"
+				continue
+			}
+			if unresolvedWD {
+				continue
+			}
+			target := path.Join(wd.dir, strings.TrimSuffix(arg, "/..."))
+			if !s.goLayout.directory(target) {
+				reason = "unresolved pattern directory"
+			} else if !s.goLayout.inModule(target) {
+				invalid = append(invalid, arg)
+			}
+		}
+		if len(invalid) > 0 {
+			s.findings = append(s.findings, docsFinding{where, invocation,
+				fmt.Sprintf("local recursive pattern(s) %s from %s start outside a Go module; run from a module directory or name a module-rooted pattern", strings.Join(invalid, ", "), wd.dir)})
+		}
+		if reason != "" {
+			s.goSkipped = append(s.goSkipped, where+": "+invocation+" ("+reason+")")
+		} else {
+			s.goChecked++
+		}
+	}
+}
+
+func docsGoRecursiveCommand(words []string) bool {
+	if len(words) < 3 || words[0] != "go" || (words[1] != "build" && words[1] != "vet") {
+		return false
+	}
+	for _, arg := range words[2:] {
+		if (strings.HasPrefix(arg, "./") || strings.HasPrefix(arg, "../")) && strings.HasSuffix(arg, "/...") {
+			return true
+		}
+	}
+	return false
+}
+
 type docsScan struct {
-	findings     []docsFinding
-	dcctlChecked int
-	dcctlSkipped []string // where: text, for templates
-	hackChecked  int
+	findings       []docsFinding
+	dcctlChecked   int
+	dcctlSkipped   []string // where: text, for templates
+	hackChecked    int
+	goChecked      int
+	goSkipped      []string
+	goLayout       *docsGoLayout
+	helmRepo       string
+	helmChecked    int
+	helmSkipped    []string
+	helmStandIns   []string
+	sqlChecked     int
+	sqlSkipped     []string
+	sqlRepo        string
+	graphqlChecked int
+	graphqlSkipped []string
+	graphqlRepo    string
+	graphqlSchemas map[string]docsGraphQLSchema
 
 	uncovered map[string]int // first word -> count
 }
@@ -560,6 +783,9 @@ type docsScan struct {
 // repo-relative path exists.
 func scanDocsText(root *cobra.Command, file, text string, exists func(string) bool, s *docsScan) {
 	for _, b := range shellBlocks(file, text) {
+		wd := docsWorkingDir{dir: "."}
+		var stack []docsWorkingDir
+		loops := 0
 		for _, ln := range logicalLines(b) {
 			where := fmt.Sprintf("%s:%d", file, ln.line)
 
@@ -572,13 +798,33 @@ func scanDocsText(root *cobra.Command, file, text string, exists func(string) bo
 			}
 
 			outer, inner := extractSubstitutions(stripComment(ln.text))
+			// Extraction separates substitutions from their position in the line.
+			// Their execution directory may follow an earlier cd on that line, so
+			// leave it unresolved rather than guess. They cannot change outer state.
+			for _, sub := range inner {
+				subWD, subLoops := wd, loops
+				subWD.dir = ""
+				var subStack []docsWorkingDir
+				s.scanGoCommands(sub, where, &subWD, &subStack, &subLoops)
+			}
+			s.scanGoCommands(outer, where, &wd, &stack, &loops)
 			for _, cmdline := range append([]string{outer}, inner...) {
-				for _, seg := range splitSegments(cmdline) {
+				for segmentIndex, seg := range splitSegments(cmdline) {
 					words := commandWords(seg)
 					if len(words) == 0 {
 						continue
 					}
 					if !isDcctl(words[0]) {
+						if words[0] == "psql" {
+							s.scanPsql(words, where)
+							continue
+						}
+						if words[0] == "curl" && s.scanCurlGraphQL(commandWords(shellSegments(cmdline, false, true)[segmentIndex]), where) {
+							continue
+						}
+						if docsHelmInstall(words) || s.goLayout != nil && docsGoRecursiveCommand(words) {
+							continue // counted by the Helm or module-location check
+						}
 						if !hackPathRe.MatchString(words[0]) { // a hack/ script is checked above
 							s.uncovered[words[0]]++
 						}
@@ -603,7 +849,7 @@ func scanDocsText(root *cobra.Command, file, text string, exists func(string) bo
 }
 
 func newDocsScan() *docsScan {
-	return &docsScan{uncovered: map[string]int{}}
+	return &docsScan{uncovered: map[string]int{}, helmRepo: repoRoot, sqlRepo: repoRoot, graphqlRepo: repoRoot}
 }
 
 // docsTrees returns docs/docs and every locale's current tree under repo, relative to it.
@@ -631,6 +877,10 @@ func docsTrees(repo string) ([]string, error) {
 // It returns every problem (a finding, a missing translation tree, a tree below its
 // floor) and the report of what was and was not checked.
 func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []string, err error) {
+	layout, err := readDocsGoLayout(repo)
+	if err != nil {
+		return nil, nil, err
+	}
 	exists := func(rel string) bool {
 		_, err := os.Stat(filepath.Join(repo, filepath.FromSlash(rel)))
 		return err == nil
@@ -655,6 +905,10 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 	total := newDocsScan()
 	for _, tree := range trees {
 		s := newDocsScan()
+		s.goLayout = layout
+		s.helmRepo = repo
+		s.sqlRepo = repo
+		s.graphqlRepo = repo
 		err := filepath.WalkDir(filepath.Join(repo, tree), func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -693,10 +947,26 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 		}
 		report = append(report, fmt.Sprintf("%s: %d dcctl invocations checked, %d skipped as templates, %d hack/ paths checked",
 			tree, s.dcctlChecked, len(s.dcctlSkipped), s.hackChecked))
+		report = append(report, fmt.Sprintf("%s: %d Go module-location commands checked, %d skipped", tree, s.goChecked, len(s.goSkipped)))
 		total.findings = append(total.findings, s.findings...)
 		total.dcctlChecked += s.dcctlChecked
 		total.dcctlSkipped = append(total.dcctlSkipped, s.dcctlSkipped...)
 		total.hackChecked += s.hackChecked
+		report = append(report, fmt.Sprintf("%s: %d Helm installs checked, %d skipped", tree, s.helmChecked, len(s.helmSkipped)))
+		total.helmChecked += s.helmChecked
+		total.helmStandIns = append(total.helmStandIns, s.helmStandIns...)
+		total.helmSkipped = append(total.helmSkipped, s.helmSkipped...)
+		total.goChecked += s.goChecked
+		total.goSkipped = append(total.goSkipped, s.goSkipped...)
+		if floors[filepath.FromSlash(tree)] && s.graphqlChecked < minGraphQLChecksPerTree {
+			problems = append(problems, fmt.Sprintf("%s: found only %d GraphQL curl documents (floor %d); the extractor is losing blocks", tree, s.graphqlChecked, minGraphQLChecksPerTree))
+		}
+		report = append(report, fmt.Sprintf("%s: %d GraphQL curl documents checked, %d skipped", tree, s.graphqlChecked, len(s.graphqlSkipped)))
+		total.graphqlChecked += s.graphqlChecked
+		total.graphqlSkipped = append(total.graphqlSkipped, s.graphqlSkipped...)
+		report = append(report, fmt.Sprintf("%s: %d SQL SELECTs checked, %d skipped", tree, s.sqlChecked, len(s.sqlSkipped)))
+		total.sqlChecked += s.sqlChecked
+		total.sqlSkipped = append(total.sqlSkipped, s.sqlSkipped...)
 		for k, v := range s.uncovered {
 			total.uncovered[k] += v
 		}
@@ -708,6 +978,23 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 	for _, s := range total.dcctlSkipped {
 		report = append(report, "skipped (template): "+s)
 	}
+	for _, skipped := range total.graphqlSkipped {
+		report = append(report, "skipped (GraphQL curl): "+skipped)
+	}
+	report = append(report, fmt.Sprintf("GraphQL curl: %d checked, %d skipped", total.graphqlChecked, len(total.graphqlSkipped)))
+	for _, skipped := range total.sqlSkipped {
+		report = append(report, "skipped (SQL SELECT): "+skipped)
+	}
+	report = append(report, fmt.Sprintf("SQL SELECT: %d checked, %d skipped", total.sqlChecked, len(total.sqlSkipped)))
+	for _, s := range total.goSkipped {
+		report = append(report, "skipped (Go module location): "+s)
+	}
+	report = append(report, fmt.Sprintf("Go module location: %d checked, %d skipped", total.goChecked, len(total.goSkipped)))
+	report = append(report, total.helmStandIns...)
+	for _, skipped := range total.helmSkipped {
+		report = append(report, "skipped (Helm render): "+skipped)
+	}
+	report = append(report, fmt.Sprintf("Helm render: %d checked, %d skipped", total.helmChecked, len(total.helmSkipped)))
 	type kv struct {
 		k string
 		v int
@@ -753,6 +1040,9 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 	rootCmd.InitDefaultHelpCmd()
 	rootCmd.InitDefaultCompletionCmd()
 	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "go.work"), []byte("go 1.27.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	locales := []string{
 		filepath.Join("docs", "docs"),
 		filepath.Join("docs", "i18n", "es", "docusaurus-plugin-content-docs", "current"),
@@ -764,8 +1054,18 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "hack", "real.sh"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	schemaDir := filepath.Join(repo, "backend", "services", "fixture", "graphql")
+	if err := os.MkdirAll(schemaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(schemaDir, "schema.graphql"), []byte("type Query { good: String }"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	var page strings.Builder
 	page.WriteString("```bash\n")
+	for i := 0; i < minGraphQLChecksPerTree; i++ {
+		page.WriteString("curl /api/fixture/graphql -d '{\"query\":\"{good}\"}'\n")
+	}
 	for i := 0; i < minDcctlInvocationsPerTree; i++ {
 		page.WriteString("dcctl bootstrap local prod --yes\n")
 	}
@@ -790,6 +1090,18 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 		t.Fatalf("a clean tree failed: %v", problems)
 	}
 
+	graphqlBad := filepath.Join(repo, locales[1], "graphql-bad.md")
+	if err := os.WriteFile(graphqlBad, []byte("```bash\ncurl /api/fixture/graphql -d '{\"query\":\"{goood}\"}'\n```\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	problems, _, _ = checkPublishedDocs(rootCmd, repo)
+	if len(problems) != 1 || !strings.Contains(problems[0], "graphql-bad.md:2") || !strings.Contains(problems[0], `Cannot query field "goood"`) {
+		t.Fatalf("GraphQL whole-gate mutant: %v", problems)
+	}
+	if err := os.Remove(graphqlBad); err != nil {
+		t.Fatal(err)
+	}
+
 	// A bogus command in the Spanish tree only.
 	es := filepath.Join(repo, locales[1], "bad.md")
 	if err := os.WriteFile(es, []byte("```bash\ndcctl frobnicate --nope\n```\n"), 0o644); err != nil {
@@ -803,14 +1115,39 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The README goes through the same module-location verdict and skip reporting.
+	readme := filepath.Join(repo, "README.md")
+	if err := os.WriteFile(readme, []byte("```bash\ngo build ./...\ncd \"$module\"\ngo vet ./...\nhelm install dc external/chart\npsql -f query.sql\n```\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	problems, report, err := checkPublishedDocs(rootCmd, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "README.md:2") || !strings.Contains(problems[0], "outside a Go module") {
+		t.Errorf("a root Go pattern was not the one problem reported: %v", problems)
+	}
+	if got := strings.Join(report, "\n"); !strings.Contains(got, "Go module location: 1 checked, 1 skipped") || !strings.Contains(got, "README.md:4: go vet ./... (unresolved working directory)") {
+		t.Errorf("Go counts and skipped location missing from report:\n%s", got)
+	}
+	if got := strings.Join(report, "\n"); !strings.Contains(got, "Helm render: 0 checked, 1 skipped") || !strings.Contains(got, "skipped (Helm render): README.md:5:") {
+		t.Errorf("Helm counts and skipped location missing from report:\n%s", got)
+	}
+	if got := strings.Join(report, "\n"); !strings.Contains(got, "SQL SELECT: 0 checked, 1 skipped") || !strings.Contains(got, "skipped (SQL SELECT): README.md:6:") || strings.Contains(got, "psql=1") {
+		t.Errorf("SQL counts and skipped location missing from report:\n%s", got)
+	}
+	if err := os.Remove(readme); err != nil {
+		t.Fatal(err)
+	}
+
 	// A tree whose blocks the extractor cannot see trips the floor instead of passing.
 	zh := filepath.Join(repo, locales[2], "page.md")
 	if err := os.WriteFile(zh, []byte(strings.Replace(page.String(), "```bash", "```", 1)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	problems, _, _ = checkPublishedDocs(rootCmd, repo)
-	if len(problems) != 2 || !strings.Contains(strings.Join(problems, "\n"), "zh-CN/docusaurus-plugin-content-docs/current: found only 0 dcctl") {
-		t.Errorf("an unreadable tree did not trip both floors: %v", problems)
+	if len(problems) != 3 || !strings.Contains(strings.Join(problems, "\n"), "zh-CN/docusaurus-plugin-content-docs/current: found only 0 dcctl") || !strings.Contains(strings.Join(problems, "\n"), "found only 0 GraphQL curl documents") {
+		t.Errorf("an unreadable tree did not trip all three floors: %v", problems)
 	}
 
 	// A missing translation tree.
@@ -843,6 +1180,85 @@ func findingTexts(s *docsScan) string {
 		out = append(out, f.where+" `"+f.text+"`: "+f.msg)
 	}
 	return strings.Join(out, "\n")
+}
+
+func TestDocsGateGoModuleLocations(t *testing.T) {
+	repo := t.TempDir()
+	// One workspace root and a separate on-disk module exercise both sources.
+	for name, content := range map[string]string{
+		"go.work":                     "go 1.27.0\nuse (\n  ./backend/core // workspace module\n)\nuse \"./backend/cli\"\n",
+		"backend/core/go.mod":         "module fixture/core\n",
+		"backend/cli/go.mod":          "module fixture/cli\n",
+		"examples/standalone/go.mod":  "module fixture/standalone\n",
+		"backend/core/sub/package.go": "package sub\n",
+	} {
+		p := filepath.Join(repo, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	layout, err := readDocsGoLayout(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !layout.roots["backend/core"] || !layout.roots["backend/cli"] {
+		t.Fatalf("workspace use entries lost: %v", layout.roots)
+	}
+	cases := []struct {
+		name, shell                string
+		checked, skipped, findings int
+		want                       string
+	}{
+		{"repo root", "go build ./...", 1, 0, 1, "from . start outside a Go module"},
+		{"backend prefix", "go vet ./backend/...", 1, 0, 1, "./backend/..."},
+		{"module patterns", "go build ./backend/core/... ./backend/cli/...", 1, 0, 0, ""},
+		{"mixed patterns", "go vet ./backend/core/... ./backend/...", 1, 0, 1, "./backend/..."},
+		{"unresolved does not hide invalid", "go vet ./missing/... ./backend/...", 0, 1, 1, "./backend/..."},
+		{"literal cd", "cd backend/core\ngo build ./...\ngo vet ./sub/...", 2, 0, 0, ""},
+		{"quoted cd and env", "cd -- 'backend/core' && GOWORK=off go vet ./...", 1, 0, 0, ""},
+		{"relative cd", "cd backend/core; cd ../cli; go build ./...", 1, 0, 0, ""},
+		{"module subdirectory", "cd backend/core/sub\ngo build ../...", 1, 0, 0, ""},
+		{"standalone module", "cd examples/standalone && go vet ./...", 1, 0, 0, ""},
+		{"leave module", "cd backend/core; cd ..; go vet ./...", 1, 0, 1, "from backend start outside"},
+		{"go -C is skipped, not judged", "go build -C backend/core ./...", 0, 1, 0, ""},
+		{"cd dash", "cd backend/core; cd ../cli; cd -; go vet ./...", 1, 0, 0, ""},
+		{"cd dash root", "cd backend/core; cd -; go build ./...", 1, 0, 1, "from . start outside"},
+		{"subshell", "(cd backend/core && go build ./...); go vet ./...", 2, 0, 1, "from . start outside"},
+		{"substitution isolated", "x=$(cd backend/core && go build ./...); go vet ./...", 1, 1, 1, "unresolved working directory"},
+		{"substitution after cd", "cd backend/core && x=$(go build ./...)", 0, 1, 0, "unresolved working directory"},
+		{"block reset", "cd backend/core\ngo build ./...\n```\n```bash\ngo vet ./...", 2, 0, 1, "from . start outside"},
+		{"missing cd", "cd missing\ngo build ./...", 0, 1, 0, "unresolved working directory"},
+		{"variable cd", "cd \"$module\" && go vet ./...", 0, 1, 0, "unresolved working directory"},
+		{"substitution cd", "cd \"$(pwd)\"; go build ./...", 0, 1, 0, "unresolved working directory"},
+		{"home cd", "cd; go vet ./...", 0, 1, 0, "unresolved working directory"},
+		{"absolute cd", "cd /tmp; go build ./...", 0, 1, 0, "unresolved working directory"},
+		{"escape repo", "cd ..; go vet ./...", 0, 1, 0, "unresolved working directory"},
+		{"missing target", "go build ./missing/...", 0, 1, 0, "unresolved pattern directory"},
+		{"dynamic pattern", "go vet ./backend/$module/...", 0, 1, 0, "dynamic package pattern"},
+		{"loop", "for m in $(go list -m); do\n(cd \"$m\" && go build ./... && go vet ./...)\ndone", 0, 2, 0, "dynamic loop"},
+		{"literal loop is beyond scope", "for m in backend/core; do cd backend/core; go vet ./...; done", 0, 1, 0, "dynamic loop"},
+		{"not recursive build or vet", "go test ./...\ngo build ./cmd/tool\ngo vet all\ngo build example.com/pkg/...", 0, 0, 0, ""},
+		{"comment and heredoc", "# go build ./...\ncat <<EOF\ngo vet ./...\nEOF", 0, 0, 0, ""},
+		{"continuation", "cd backend/core && go build \\\n ./...", 1, 0, 0, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newDocsScan()
+			s.goLayout = layout
+			scanDocsText(rootCmd, "fixture.md", "```bash\n"+c.shell+"\n```\n", func(string) bool { return true }, s)
+			if s.goChecked != c.checked || len(s.goSkipped) != c.skipped || len(s.findings) != c.findings {
+				t.Fatalf("checked/skipped/findings = %d/%d/%d, want %d/%d/%d; findings: %s; skipped: %v",
+					s.goChecked, len(s.goSkipped), len(s.findings), c.checked, c.skipped, c.findings, findingTexts(s), s.goSkipped)
+			}
+			got := findingTexts(s) + strings.Join(s.goSkipped, "\n")
+			if c.want != "" && (!strings.Contains(got, c.want) || !strings.Contains(got, "fixture.md:")) {
+				t.Errorf("want location and %q, got %s", c.want, got)
+			}
+		})
+	}
 }
 
 // TestDocsGateNamesABogusCommand is the negative control: each planted defect must be
@@ -960,4 +1376,13 @@ func TestDocsGateDoesNotTouchRealFlags(t *testing.T) {
 			t.Errorf("--%s was written by the gate: %q -> %q", f.Name, before[f.Name], f.Value.String())
 		}
 	})
+}
+
+// This regression uses only the pre-existing scanner entry point and fields so
+// it also compiles on main, where Helm is merely counted as uncovered.
+func TestDocsHelmMissingRootKey(t *testing.T) {
+	s := scanOne(t, "```bash\nhelm install dc deploy/helm/devicechain --set instance.id=devicechain\n```\n")
+	if len(s.findings) != 1 || !strings.Contains(findingTexts(s), "instance.config.infrastructure.secrets.rootKey is required") || !strings.Contains(findingTexts(s), "page.md:2") {
+		t.Fatalf("missing root key must produce one located render finding; got %s; uncovered: %v", findingTexts(s), s.uncovered)
+	}
 }

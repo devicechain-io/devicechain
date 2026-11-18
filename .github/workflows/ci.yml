@@ -13,17 +13,53 @@ name: ci
 
 on:
   pull_request:
+    # The default three, plus ready_for_review: a DRAFT pull request does not run the heavy jobs
+    # (go, integration, image-smoke, migrations) and its ci-complete fails, so marking it ready
+    # has to start the run that does. See the `draft` output of discover.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+  # Run the full suite on a chosen commit. Pushes to main share ONE queue (see
+  # concurrency below), so a main commit merged in a burst may never get a push run
+  # of its own. When a specific commit needs its own green run -- a release tag, or
+  # bisecting a main break across a burst -- dispatch it:
+  #   gh workflow run ci.yml --ref vX.Y.Z-rc.N        # a tag
+  #   git push origin <sha>:refs/heads/ci/<name>      # any other commit, then
+  #   gh workflow run ci.yml --ref ci/<name>
+  # A dispatch always selects every job (hack/ci-select.py), like a push.
+  workflow_dispatch:
 
 # Least privilege: validation jobs only need to read the repo.
 permissions:
   contents: read
 
-# Keep each pushed commit in its own group so later main pushes cannot replace it.
-# This fits the existing concurrency block; superseded PR runs still cancel.
+# Who waits for whom, by event:
+#
+#   pull_request   grouped by the PR's ref, and a new push to the PR CANCELS the run
+#                  in progress: a superseded head is not evidence about anything.
+#   push to main   ONE group for the branch, never cancelled. GitHub keeps at most one
+#                  running and one PENDING run per group, and a newer pending run
+#                  replaces the older pending one. So the run in progress always
+#                  finishes, and the newest main commit always gets a run -- but a
+#                  PENDING run is skipped (cancelled before it starts) when a newer
+#                  push replaces it, so that commit gets no run of its own.
+#   push elsewhere grouped by commit SHA (no such trigger today; kept so adding one
+#                  for a release branch or tag cannot silently collapse its runs).
+#   dispatch       a group of its own (run_id): a chosen commit is never queued
+#                  behind, or replaced by, the main queue.
+#
+# Why main is a queue and not one run per commit: each main run is the FULL suite
+# (~460 job-minutes; ci-select.py selects everything off a pull_request), and a merge
+# burst of 32 PRs once queued 28 of them, starving every open PR of runners. Every PR
+# must already be green to merge, and each main run tests the whole tree up to its
+# commit, so a skipped commit is covered by the next main run; a break found there is
+# bisected with the workflow_dispatch above.
+#
+# (Before this, push runs were grouped per SHA. Earlier still they were grouped by ref
+# with cancel-in-progress on, so each merge cancelled the RUNNING main run and main
+# could go hours without a completed run. Neither failure is possible here.)
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  group: ci-${{ github.workflow }}-${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && github.ref || github.event_name == 'push' && github.sha || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -35,7 +71,21 @@ jobs:
     outputs:
       services: ${{ steps.svc.outputs.services }}
       modules: ${{ steps.mod.outputs.modules }}
-      smoke: ${{ steps.smoke.outputs.smoke }}
+      # The FULL integration plan, which every leg re-checks against fresh discovery (DC_IT_PLAN).
+      integration_all: ${{ steps.integ.outputs.integration }}
+      # What this run executes, from hack/ci-select.py: a subset on a pull request, all of it otherwise.
+      integration: ${{ steps.select.outputs.integration }}
+      go_legs: ${{ steps.select.outputs.go_legs }}
+      frontend: ${{ steps.select.outputs.frontend }}
+      # Whether the two `migrations` jobs run: true unless no changed file reaches a package
+      # hack/migration-diff.sh compiles (or its operand image). Always true off a pull request.
+      migrations: ${{ steps.select.outputs.migrations }}
+      # The image-smoke legs this run executes: the images whose module runs whole (or one of
+      # their image inputs changed), from hack/ci-select.py; every image off a pull request.
+      smoke: ${{ steps.select.outputs.smoke }}
+      # "true" only for a DRAFT pull request, which plans none of the heavy jobs and whose
+      # ci-complete therefore fails. "false" everywhere else; ci-complete refuses any other value.
+      draft: ${{ steps.select.outputs.draft }}
     steps:
       # 🔴 fetch-depth: 0 — the upgrade-rig self-test below reads the TAG HISTORY.
       # It checks that the rig would refuse to deploy the working tree's chart around
@@ -108,6 +158,17 @@ jobs:
       # that runs on every PR; the guard itself has nothing to check until there is a tag.
       - name: release-highlights guard self-test
         run: hack/check-release-highlights.sh --self-test
+
+      # The release job's changelog base runs only on a tag, and a wrong base publishes a
+      # changelog that starts a minor too early (v1.5.0's started at v1.3.0). The self-test is
+      # the part that runs on every PR, before a release needs the base.
+      - name: changelog base self-test
+        run: hack/changelog-base.sh --self-test
+
+      # The chart stamp runs only on a tag; a broken flag mislabels a release in Artifact Hub.
+      # The self-test is the part that runs on every PR, before a release needs the stamp.
+      - name: chart prerelease stamp self-test
+        run: hack/stamp-chart-prerelease.sh --self-test
 
       # Same reasoning as the guard above, and the same blast radius: this builds the
       # header of the GitHub Release body, runs ONLY on a tag, and a break in it fails
@@ -237,26 +298,31 @@ jobs:
           echo "modules=$modules" >> "$GITHUB_OUTPUT"
           echo "Modules ($got): $modules"
 
-      # The race detector exits 0 when it finds nothing, which makes "no data
-      # races" and "never instrumented" the same result. Dropping -race from the
-      # command, a toolchain built without cgo or a missing C compiler each turn
-      # the race step into a second, slower copy of `go test` that reports
-      # success forever. This builds a module with a known race, runs it through
-      # the race step's own entry point on this runner's toolchain and requires a
-      # DATA RACE report — plus a
-      # race-free control, since a checker that fails on everything proves
-      # nothing either. It runs here, before the matrix fans out.
-      - name: race detector self-test
-        run: hack/go-race.sh --self-test
+      # The guard before the gate, the way the other hack/ checks do it. A `-run` filter that
+      # matches nothing exits 0 with "no tests to run", which is indistinguishable from a pass
+      # in every summary — and that is not hypothetical: the first draft of the runner covered
+      # 8 of the 13 tagged tests and reported success. This proves the runner can tell an empty
+      # run from a real one, and that the leg plan below refuses a stale or uncovering grouping,
+      # BEFORE any integration leg's green result is used as evidence of anything.
+      - name: integration runner self-test
+        run: hack/integration-tests.sh --self-test
 
-      # Which modules the detector covers, said once, as a table. The race step
-      # rides the whole per-module `go` matrix and runs on every module except the
-      # exempt list in hack/go-race.sh, and a step
-      # that decides not to run renders as the same green tick as one that ran —
-      # so a reader cannot recover the covered set from the matrix. This is where
-      # that set is legible.
-      - name: race detector coverage
-        run: hack/go-race.sh --list
+      # 🔴 Derived from go.work + the tag grep: a module that gains an integration test
+      # joins the small leg automatically. A stale HEAVY entry fails here, as do zero legs:
+      # a matrix over zero entries runs zero jobs green. Every leg independently re-derives
+      # the set with the package loader and refuses a differing plan through DC_IT_PLAN.
+      - name: Discover integration legs
+        id: integ
+        run: |
+          set -euo pipefail
+          plan="$(hack/integration-tests.sh --matrix)"
+          if [ "$(jq 'length' <<<"$plan")" -le 0 ]; then
+            echo "::error::integration discovery produced zero legs"
+            exit 1
+          fi
+          echo "integration=$plan" >> "$GITHUB_OUTPUT"
+          printf 'LEG\tMODULES\n'
+          jq -r '.[] | [.name, .modules] | @tsv' <<<"$plan"
 
       - name: Build image-smoke module list
         id: smoke
@@ -289,59 +355,162 @@ jobs:
               echo "backend/broker/dc-nats-server"
             } | jq -R . | jq -s -c .
           )"
+          # The FULL list: hack/ci-select.py plans from it, and plans all of it off a pull request.
           echo "smoke=$smoke" >> "$GITHUB_OUTPUT"
-          echo "Smoke modules: $smoke"
+          echo "Image modules: $smoke"
+
+      # The selection's own guards, before its answer is used. The self-test proves the rails can
+      # trip (a reverse dependency, go.work/.github/hack, an unknown path outside every module, an
+      # empty diff); `check` proves the reader and split tables still describe the tree, and that
+      # no module's Go code reaches outside the module from a package the reader table does not
+      # name; go-leg's self-test proves a split package's shards partition its tests.
+      - name: leg selection self-tests and tables
+        run: |
+          python3 hack/ci-select.py --self-test
+          python3 hack/ci-select.py check
+          hack/go-leg.sh --self-test
+
+      # The rule that lets the required dependency-review check pass without running the review
+      # on a diff that touches no manifest. That workflow reads it from the base commit, so it is
+      # proved here, on the pull request that changes it, before it is ever relied on.
+      - name: dependency-review scope self-test
+        run: python3 hack/dependency-review-scope.py --self-test
+
+      # 🔴 AFFECTED-MODULE SELECTION, PULL REQUESTS ONLY. A pull request runs the Go legs of the
+      # modules its diff (against the merge base) changes, every module that requires one of them
+      # through go.mod, transitively, and the test packages that READ a changed file from outside
+      # their module (hack/ci-select.py's READERS table). Push, merge_group, schedule and dispatch
+      # run everything; so does a change to go.work, go.work.sum, any go.mod or go.sum (the workspace
+      # resolves one version of each dependency for every module), .github/ or hack/, a file outside
+      # every module the tables do not account for, an empty diff, and any failure of the selection
+      # itself. The log below names every module skipped and why. `modules` above is still the
+      # count-cross-checked FULL list; this selects from it.
+      #
+      # If this step fails outright (as opposed to falling back to everything), discover fails and
+      # ci-complete fails with it: an unknown selection is never read as an empty one.
+      - name: Select affected legs
+        id: select
+        env:
+          DISCOVERED_MODULES: ${{ steps.mod.outputs.modules }}
+          INTEGRATION_PLAN: ${{ steps.integ.outputs.integration }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          SMOKE_MODULES: ${{ steps.smoke.outputs.smoke }}
+        run: |
+          set -euo pipefail
+          sel="$(python3 hack/ci-select.py plan)"
+          go_legs="$(jq -c '.go' <<<"$sel")"
+          integ="$(jq -c '.integration' <<<"$sel")"
+          frontend="$(jq -r '.frontend' <<<"$sel")"
+          case "$frontend" in true|false) ;; *) echo "::error::frontend verdict is '$frontend'"; exit 1 ;; esac
+          migrations="$(jq -r '.migrations' <<<"$sel")"
+          case "$migrations" in true|false) ;; *) echo "::error::migrations verdict is '$migrations'"; exit 1 ;; esac
+          smoke="$(jq -c '.smoke' <<<"$sel")"
+          jq -e 'type == "array"' <<<"$smoke" >/dev/null || { echo "::error::smoke plan is '$smoke'"; exit 1; }
+          draft="$(jq -r '.draft' <<<"$sel")"
+          case "$draft" in true|false) ;; *) echo "::error::draft verdict is '$draft'"; exit 1 ;; esac
+          # A run that is not a pull request must plan every module; the script asserts the same.
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] && { [ "$(jq -r '.full' <<<"$sel")" != true ] || [ "$migrations" != true ] || [ "$draft" != false ] || [ "$smoke" != "$SMOKE_MODULES" ] \
+             || ! jq -e 'all(.go[]; .race_scope == "all")' <<<"$sel" >/dev/null; }; then
+            echo "::error::a $GITHUB_EVENT_NAME run selected a subset"
+            exit 1
+          fi
+          {
+            echo "go_legs=$go_legs"
+            echo "integration=$integ"
+            echo "frontend=$frontend"
+            echo "migrations=$migrations"
+            echo "smoke=$smoke"
+            echo "draft=$draft"
+          } >> "$GITHUB_OUTPUT"
+
+      # The race detector exits 0 when it finds nothing, which makes "no data
+      # races" and "never instrumented" the same result. Dropping -race from the
+      # command, a toolchain built without cgo or a missing C compiler each turn
+      # the race step into a second, slower copy of `go test` that reports
+      # success forever. This builds a module with a known race, runs it through
+      # the race step's own entry point on this runner's toolchain and requires a
+      # DATA RACE report — plus a
+      # race-free control, since a checker that fails on everything proves
+      # nothing either. It runs here, before the matrix fans out.
+      - name: race detector self-test
+        run: hack/go-race.sh --self-test
+
+      # Which modules the detector covers, said once, as a table. The race step
+      # rides the whole per-module `go` matrix and runs on every module except the
+      # exempt list in hack/go-race.sh, and a step
+      # that decides not to run renders as the same green tick as one that ran —
+      # so a reader cannot recover the covered set from the matrix. This is where
+      # that set is legible.
+      - name: race detector coverage
+        run: hack/go-race.sh --list
 
   # ---------------------------------------------------------------------------
   # Per-module Go validation: fmt, build, vet, test.
   # go.work makes the module the working directory for each matrix entry.
   # ---------------------------------------------------------------------------
+  #
+  # 🔴 ONE ENTRY PER LEG, NOT PER MODULE. hack/ci-select.py plans the legs: a module runs as one
+  # leg, or (SPLITS) as shards of its slowest packages plus one catch-all leg that runs the rest
+  # and carries the module's static checks (`entry.static`: gofmt, build, vet, tidy, the workspace
+  # sum, govulncheck), so those run once per module. A leg selected only because its tests read a
+  # changed file runs just those packages, with no static checks: its module's code did not change.
+  # Skipped when the plan has no Go legs (a pull request touching nothing Go reads); ci-complete
+  # accepts that skip only when discover succeeded and planned zero legs.
   go:
+    name: go (${{ matrix.entry.module }}${{ matrix.entry.leg != '' && format(' / {0}', matrix.entry.leg) || '' }})
     needs: discover
+    if: needs.discover.outputs.go_legs != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        module: ${{ fromJson(needs.discover.outputs.modules) }}
+        entry: ${{ fromJson(needs.discover.outputs.go_legs) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The bootstrap snapshot-currency test reads the release tags.
+          fetch-tags: true
 
+      # 🔴 THE GO BUILD CACHE IS RESTORED HERE AND SAVED BY ONE LEG PER GROUP, ON main ONLY.
+      #
+      # setup-go's own cache (`cache: true`) restores AND saves, on every event: each pull request
+      # wrote entries no other pull request can read, every leg of a split module raced for one
+      # write-once key (17 of 20 legs lost that race on one measured run), and 39 per-module keys
+      # holding the module cache too needed ~16.6 GB against the repository's 10 GB. The cache
+      # sat 1.6x over its limit, evicting continuously, and only 27% of restores hit.
+      #
+      # So, explicitly:
+      #   - the key is the leg's CACHE GROUP (hack/ci-select.py CACHE_GROUPS, ~4 GB in all): modules
+      #     sharing a dependency stack share one entry, because the build cache is content-addressed
+      #     and a service reuses every package it compiles the same way device-management did;
+      #   - the key hashes every go.mod/go.sum and the workspace files, because a workspace builds
+      #     ONE version of each dependency for all modules; restore-keys still restores the newest
+      #     entry of the group after a bump, which is stale only for what the bump moved;
+      #   - only the BUILD cache (GOCACHE). The module cache was about 40% of each entry and buys
+      #     seconds: the `go mod download` step below averaged 0.1 min a leg at a 73% miss rate;
+      #   - pull requests restore only. The one leg with `cache_save` (its group saver's static
+      #     leg) saves, at the end of the job, on a push to main and only after success.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        id: setup-go
         with:
           go-version-file: go.work
-          cache: true
-          # Per-module cache key, NOT the shared "**/go.sum". Every matrix entry
-          # hashing all go.sum files computed the SAME key, and a GitHub cache key is
-          # write-once — so the first job to finish its post-step saved the cache and
-          # every other entry skipped saving. The slowest module is the LEAST likely to
-          # win that race — when this was found, outbound-connectors, then carrying an
-          # embedded stream engine's dependency tree — so its build cache was almost never
-          # persisted and it recompiled cold on nearly every run. A per-module key gives
-          # each entry its own cache to restore from.
-          #
-          # 🔴 go.mod IS LISTED ALONGSIDE go.sum BECAUSE NOT EVERY WORKSPACE MODULE
-          # HAS A go.sum. `deploy` requires nothing at all — a three-line go.mod and no
-          # go.sum, because there are no hashes to record — so with go.sum alone the
-          # pattern set resolves to zero files.
-          #
-          # 🔴 AND WHAT THAT COSTS IS A WARNING AND AN UNCACHED BUILD, NOT A RED MATRIX
-          # ENTRY. The stronger claim ("a hard error") was written here first and is
-          # wrong, which is worth recording because it was wrong in the direction that
-          # would have made this line look urgent for the wrong reason. setup-go's
-          # cache-restore does throw when hashFiles comes back empty (`Some specified
-          # paths were not resolved, unable to cache dependencies.`), but at the pinned
-          # v7 commit its entrypoint WRAPS that call in try/catch and downgrades it to
-          # `core.warning`, and the post/save step returns early on an empty key. So
-          # `deploy` would have gone yellow and recompiled cold on every run, silently,
-          # while the job still reported success.
-          #
-          # That silent-and-slow failure is the one this fixes. Every module has a
-          # go.mod by definition, so listing it makes the set always resolve; the two
-          # are hashed together so the key stays per-module, and go.mod moving is
-          # precisely when dependencies changed anyway.
-          cache-dependency-path: |
-            ${{ matrix.module }}/go.mod
-            ${{ matrix.module }}/go.sum
+          cache: false
+
+      # The path below is written out because actions/cache cannot ask go. If the toolchain or
+      # the runner ever moved GOCACHE, the cache would silently restore into a directory go never
+      # reads, so this fails instead.
+      - name: GOCACHE is where the cache steps put it
+        run: test "$(go env GOCACHE)" = "$HOME/.cache/go-build" || { echo "::error::GOCACHE is $(go env GOCACHE), not ~/.cache/go-build; update the cache steps"; exit 1; }
+
+      - name: Restore the Go build cache
+        id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/go-build
+          key: go-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-[${{ matrix.entry.cache_group }}]-${{ hashFiles('go.work', 'go.work.sum', '**/go.mod', '**/go.sum') }}
+          restore-keys: go-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-[${{ matrix.entry.cache_group }}]-
 
       # Prefetch the module graph with a bounded retry, then a different-infrastructure
       # fallback, so one dropped stream from the module proxy does not fail this job
@@ -353,15 +522,26 @@ jobs:
         env:
           # The windows vet step below loads files the linux listing skips (x/sys/windows
           # and friends), so prefetch that package set too or the vet step downloads it bare.
-          DC_GOMOD_EXTRA_GOOS: ${{ matrix.module == 'backend/cli' && 'windows' || '' }}
+          DC_GOMOD_EXTRA_GOOS: ${{ matrix.entry.module == 'backend/cli' && 'windows' || '' }}
           # The tidy step at the end resolves the module ALONE and loads the tests of its
           # dependencies, every OS and every tag: a different, larger set than the build's,
           # and the step where both observed proxy stream resets landed. Prefetch it too.
-          DC_GOMOD_TIDY: "1"
-        run: hack/go-mod-download.sh "${{ matrix.module }}"
+          DC_GOMOD_TIDY: ${{ matrix.entry.static && '1' || '' }}
+        run: hack/go-mod-download.sh "${{ matrix.entry.module }}"
+
+      # Which packages (and, for a shard, which tests) this leg runs; the test and race steps both
+      # read the result. hack/go-leg.sh derives a catch-all as `go list ./...` minus the split
+      # packages and proves the arithmetic, and deals a shard round-robin over `go test -list`.
+      - name: Resolve this leg's packages
+        env:
+          LEG_PKGS: ${{ matrix.entry.pkgs }}
+          LEG_EXCLUDE: ${{ matrix.entry.exclude }}
+          LEG_SHARD: ${{ matrix.entry.shard }}
+        run: hack/go-leg.sh "${{ matrix.entry.module }}" "$RUNNER_TEMP/leg-args"
 
       - name: gofmt
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         run: |
           # gofmt -l prints files that need formatting; any output is a failure.
           out="$(gofmt -l .)"
@@ -372,11 +552,13 @@ jobs:
           fi
 
       - name: go build
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         run: go build ./...
 
       - name: go vet
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         run: go vet ./...
 
       # 🔴 THE OPERATOR'S CRD CARRIES CEL RULES, AND CEL IS ENFORCED BY AN API
@@ -409,21 +591,21 @@ jobs:
       # than passing silently (setup-envtest also re-verifies the archive checksum on use).
       - name: Read the envtest version
         id: envtest-version
-        if: matrix.module == 'backend/k8s' || matrix.module == 'backend/cli'
+        if: matrix.entry.module == 'backend/k8s' || matrix.entry.module == 'backend/cli'
         working-directory: backend/k8s
         run: |
           version="$(sed -n 's/^ENVTEST_K8S_VERSION[[:space:]]*=[[:space:]]*//p' Makefile | tr -d '[:space:]')"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache the envtest assets
-        if: matrix.module == 'backend/k8s' || matrix.module == 'backend/cli'
+        if: matrix.entry.module == 'backend/k8s' || matrix.entry.module == 'backend/cli'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/dc-envtest
           key: envtest-${{ runner.os }}-${{ runner.arch }}-${{ steps.envtest-version.outputs.version }}
 
       - name: envtest binaries
-        if: matrix.module == 'backend/k8s' || matrix.module == 'backend/cli'
+        if: matrix.entry.module == 'backend/k8s' || matrix.entry.module == 'backend/cli'
         working-directory: backend/k8s
         run: |
           set -euo pipefail
@@ -459,8 +641,8 @@ jobs:
       # gate that cannot fail: the artifact looks authoritative precisely because
       # nothing is comparing it to its source.
       - name: generated manifests are up to date
-        if: matrix.module == 'backend/k8s'
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.module == 'backend/k8s' && matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         run: |
           set -euo pipefail
           make manifests generate
@@ -504,7 +686,8 @@ jobs:
       # CLAUDE.md runs too, so the gate a maintainer runs before pushing and
       # the gate that runs here cannot drift apart.
       - name: workspace sum is complete
-        run: hack/check-go-work-sum.sh --module "${{ matrix.module }}"
+        if: matrix.entry.static
+        run: hack/check-go-work-sum.sh --module "${{ matrix.entry.module }}"
 
       # Build-tagged tests are invisible to every step above: `go build`, `go vet` and
       # `go test` all skip a file whose tags are not set, so a tagged suite compiles
@@ -517,7 +700,8 @@ jobs:
       # against the code they test. That is the cheap half of the guarantee, and it is
       # the half that actually decays. Running them is a separate, deliberate job.
       - name: go vet (build-tagged suites)
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         run: go vet -tags "integration interop" ./...
 
       # dcctl ships for Windows, and its tests must at least COMPILE there: a test-only
@@ -532,8 +716,8 @@ jobs:
       # test package imports envtest and so does not build on Windows either, two
       # platform-neutral tests in it included.
       - name: go vet (windows)
-        if: matrix.module == 'backend/cli'
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.module == 'backend/cli' && matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         env:
           GOOS: windows
         run: go vet -tags "integration interop" ./...
@@ -575,10 +759,11 @@ jobs:
       # deploy to the matrix genuinely buys is build, vet and test coverage. Do not
       # read this step's green on that module as scanning coverage that was gained.
       - name: govulncheck (reachable vulnerabilities)
-        run: hack/govulncheck.sh "${{ matrix.module }}"
+        if: matrix.entry.static
+        run: hack/govulncheck.sh "${{ matrix.entry.module }}"
 
       - name: go test
-        working-directory: ${{ matrix.module }}
+        working-directory: ${{ matrix.entry.module }}
         # Every package, the operator's controllers included. That package holds
         # the CEL suite the `envtest binaries` step installs an API server for, and
         # it used to be dropped here as "a scaffold that asserts nothing" — so the
@@ -606,7 +791,10 @@ jobs:
         # others) that already take about 8 minutes locally. Under the default, a
         # slower runner would fail it as a panic in whichever test was running, which
         # reads as that test hanging rather than the package being long.
-        run: go test -count=1 -timeout 20m ./...
+        run: |
+          set -euo pipefail
+          mapfile -t args < "$RUNNER_TEMP/leg-args"
+          go test -count=1 -timeout 20m "${args[@]}"
 
       # The payload decoder's timing gates, alone: the perf gate (decode against Cut A's
       # flatten, paired in one process) and the ns-per-declared-cost checks. They are timing
@@ -615,8 +803,8 @@ jobs:
       # going (-p 1, after the suite). DECODE_PERF_GATE=1 is what turns it on; without it the
       # tests skip, and this step is the only place they run.
       - name: payload decoder perf gate
-        if: matrix.module == 'backend/core'
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.module == 'backend/core' && matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         env:
           DECODE_PERF_GATE: "1"
         run: go test -count=1 -p 1 -run '^(TestPerfGate|TestPerfGateGoesRed|TestNativeCostsMatchMeasuredTime|TestFixedCostNativesDoNotScaleWithTheFrame|TestNativeCostChecksFlagUnderDeclaration|TestCostTrackerOverhead)' -v ./payloaddecode/
@@ -630,8 +818,8 @@ jobs:
       # the count of skipped templates and of the shell commands no rule covers (kubectl,
       # curl, helm, ...) is on the page of every run, not implied by a green tick.
       - name: docs commands exist (coverage report)
-        if: matrix.module == 'backend/cli'
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.module == 'backend/cli' && (matrix.entry.static || contains(matrix.entry.pkgs, './cmd/'))
+        working-directory: ${{ matrix.entry.module }}
         run: go test -count=1 -run '^TestPublishedDocsCommandsExist$' -v ./cmd/
 
       # event-processing's broker suites a second time, with fetch-ahead ON. A hand-built
@@ -642,8 +830,8 @@ jobs:
       # integration suites run once with each setting. Only the processor package builds
       # a detect broker; the rest of the module does not read the switch.
       - name: go test (event-processing, fetch-ahead on)
-        if: matrix.module == 'backend/services/event-processing'
-        working-directory: ${{ matrix.module }}
+        if: matrix.entry.module == 'backend/services/event-processing' && matrix.entry.static
+        working-directory: ${{ matrix.entry.module }}
         env:
           DC_TEST_FETCH_AHEAD: "1"
         run: go test -count=1 -timeout 20m ./processor/
@@ -670,18 +858,56 @@ jobs:
       # `hack/go-race.sh --self-test`, which requires a DATA RACE report from a
       # program with a known race. Without that, a green step here would be
       # equally consistent with the instrumentation being off.
+      #
+      # 🔴 ON A PULL REQUEST THE SCOPE IS NARROWED (the maintainer's call, accepted with its
+      # tradeoff). hack/ci-select.py plans each leg's `race_scope`: `all` (every event but a pull
+      # request, and any doubt), `changed` (only `race_pkgs`: the leg's packages holding a changed
+      # file, plus the packages directly importing one) or `none`. They print PARTIAL and SKIPPED
+      # rather than COVERED, and the check below refuses either on any other event: a race the
+      # narrowed scope does not reach surfaces on main's full run, which must therefore stay full.
+      # The plain `go test` step above is NOT narrowed; it still runs every package of the leg.
       - name: race detector
         env:
-          MODULE: ${{ matrix.module }}
+          MODULE: ${{ matrix.entry.module }}
+          DC_RACE_SCOPE: ${{ matrix.entry.race_scope }}
+          RACE_PKGS: ${{ matrix.entry.race_pkgs }}
         run: |
           set -euo pipefail
-          hack/go-race.sh "$MODULE" 2>&1 | tee /tmp/go-race.log
+          case "$DC_RACE_SCOPE" in
+            all) mapfile -t args < "$RUNNER_TEMP/leg-args" ;;
+            changed)
+              # The plan reads packages from the source, tags and all, so a package whose every
+              # file a build constraint excludes on this runner (an integration-only or
+              # frontend-only directory) can be named, and `go test` refuses one outright. Those
+              # are dropped. Any OTHER failure to resolve a package is doubt, and doubt races the
+              # whole leg.
+              read -r -a want <<<"$RACE_PKGS"
+              if js="$(cd "$MODULE" && go list -e -json "${want[@]}")" \
+                 && [ "$(jq -s '[.[] | select(.Error and (.Error.Err | test("build constraints exclude all Go files") | not))] | length' <<<"$js")" = 0 ]; then
+                mapfile -t args < <(jq -rs '.[] | select(.Error | not) | .ImportPath' <<<"$js")
+                [ "${#args[@]}" -gt 0 ] || DC_RACE_SCOPE=none
+              else
+                echo "::warning::could not resolve the race packages ($RACE_PKGS); racing the whole leg"
+                DC_RACE_SCOPE=all
+                mapfile -t args < "$RUNNER_TEMP/leg-args"
+              fi
+              export DC_RACE_SCOPE
+              ;;
+            none) args=() ;;
+            *) echo "::error::race_scope is '$DC_RACE_SCOPE', not all, changed or none"; exit 1 ;;
+          esac
+          hack/go-race.sh "$MODULE" "${args[@]}" 2>&1 | tee /tmp/go-race.log
           # Fixed strings, not a pattern: the module path is data, and a regex
           # here would only be one metacharacter away from matching the wrong
           # module or nothing at all.
-          if ! grep -qF "race: COVERED $MODULE " /tmp/go-race.log \
-             && ! grep -qF "race: NOT COVERED $MODULE " /tmp/go-race.log; then
-            echo "::error::the race step reached the end without recording a verdict for $MODULE. Its green tick would mean nothing, so it fails instead."
+          if grep -qF "race: COVERED $MODULE " /tmp/go-race.log \
+             || grep -qF "race: NOT COVERED $MODULE " /tmp/go-race.log; then
+            :
+          elif [ "$GITHUB_EVENT_NAME" = pull_request ] \
+             && { grep -qF "race: PARTIAL $MODULE " /tmp/go-race.log || grep -qF "race: SKIPPED $MODULE " /tmp/go-race.log; }; then
+            :
+          else
+            echo "::error::the race step reached the end without recording a verdict this $GITHUB_EVENT_NAME run may accept for $MODULE. Its green tick would mean nothing, so it fails instead."
             exit 1
           fi
 
@@ -711,8 +937,18 @@ jobs:
       # evict older warm entries), not avoided. A proxy outage fails this step as a
       # refusal (exit 2), never as "tidy".
       - name: go.mod and go.sum are tidy
-        if: ${{ !cancelled() }}
-        run: hack/check-go-mod-tidy.sh --module "${{ matrix.module }}"
+        if: ${{ !cancelled() && matrix.entry.static }}
+        run: hack/check-go-mod-tidy.sh --module "${{ matrix.entry.module }}"
+
+      # The one writer of this leg's cache group (see the restore step): its saver module's static
+      # leg, on a push to main, after every step above succeeded, and only when the exact key was
+      # not already there (a key is write-once). A pull request never reaches this step.
+      - name: Save the Go build cache
+        if: success() && matrix.entry.cache_save && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/go-build
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   # NOTE: a golangci-lint job is intentionally omitted for now — no golangci-lint
   # release yet supports Go 1.26 (it refuses: "the Go language version used to
@@ -854,6 +1090,12 @@ jobs:
 
       - name: no bcrypt compare outside the credential primitive
         run: hack/check-credential-compare.sh
+
+      - name: Mojibake guard self-test
+        run: hack/check-mojibake.sh --self-test
+
+      - name: No mojibake in tracked text files
+        run: hack/check-mojibake.sh
 
       # Two red lines on what an AI agent can be made to do, enforced as parsed, tree-wide
       # properties. Declarative-only: no tenant code runtime (a script interpreter or a
@@ -1061,7 +1303,18 @@ jobs:
   # did change, in which case re-snapshot the goldens IN THE SAME PR
   # (hack/migration-diff.sh snapshot) so the diff shows a human what moved.
   # ---------------------------------------------------------------------------
+  #
+  # 🔴 SKIPPED ON A PULL REQUEST THAT CANNOT REACH THEM, and only then. Both migrations jobs run
+  # hack/migration-diff.sh verify, which compiles three Go roots (migrationdiff, core ./rdb/...,
+  # cli ./bootstrap) and builds the operand image. discover's `migrations` output is false only
+  # when no changed file reaches a package those roots compile, nor deploy/images/timescaledb
+  # (hack/ci-select.py MIGRATION_ROOTS). Anything that runs everything — push, a go.mod, hack/,
+  # .github/, an unknown path, a selection error — runs them. ci-complete accepts the skip only
+  # when discover succeeded and said false. The first step below re-derives the package set with
+  # `go list` and fails if the selection's own graph has stopped covering it.
   migrations:
+    needs: discover
+    if: needs.discover.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1080,6 +1333,13 @@ jobs:
       # graph the way the build does and fails if it modifies go.mod, go.sum or go.work.sum.
       - name: go mod download
         run: hack/go-mod-download.sh --workspace
+
+      # The skip rule above is only as good as the import graph it reads, which hack/ci-select.py
+      # parses from source so discover can decide without a toolchain download. This asks the go
+      # command which workspace packages the roots really compile, and fails if any is missing
+      # from the graph: a missed edge would otherwise skip these jobs for a change that reaches them.
+      - name: the selection watches every package these jobs compile
+        run: python3 hack/ci-select.py migration-deps
 
       # Proves the duplicate-index check can fail, BEFORE its green run is used as
       # evidence of anything. Plants a duplicate in a copy of the goldens and
@@ -1161,6 +1421,8 @@ jobs:
   # ---------------------------------------------------------------------------
   migrations-timescaledb-next:
     name: migrations (TimescaleDB next)
+    needs: discover
+    if: needs.discover.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1201,20 +1463,43 @@ jobs:
   # because sqlite cannot answer the questions they ask: row locking under real concurrency,
   # chunks, columnar compression, a real catalog, a real second database.
   #
+  # The critical path was one 51-minute job. Now each heavy module has its own leg and all
+  # small modules share one leg, so the slowest leg sets the integration critical path.
   # The container, the module discovery and the per-module verdicts all live in the script, so
   # a maintainer runs exactly what CI runs — and a module that GAINS an integration test is
   # covered the day it does, with no list here to fall out of step with go.work.
   integration:
-    name: integration
+    name: integration (${{ matrix.leg.name }})
+    needs: discover
+    # The selected legs (all of them off a pull request). Skipped when none are selected, which
+    # ci-complete accepts only alongside a successful discover that planned zero.
+    if: needs.discover.outputs.integration != '[]'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: ${{ fromJson(needs.discover.outputs.integration) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # Restore-only: the go job's entry for the cache group of this leg's first module (see the
+      # restore step there). Nothing here saves, so no integration leg competes for that key or
+      # writes an entry of its own; the integration build differs from the go job's only by a tag.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        id: setup-go
         with:
           go-version-file: go.work
-          cache: true
-          cache-dependency-path: "**/go.sum"
+          cache: false
+
+      - name: GOCACHE is where the cache step puts it
+        run: test "$(go env GOCACHE)" = "$HOME/.cache/go-build" || { echo "::error::GOCACHE is $(go env GOCACHE), not ~/.cache/go-build; update the cache steps"; exit 1; }
+
+      - name: Restore the Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/go-build
+          key: go-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-[${{ matrix.leg.cache_group }}]-${{ hashFiles('go.work', 'go.work.sum', '**/go.mod', '**/go.sum') }}
+          restore-keys: go-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-[${{ matrix.leg.cache_group }}]-
 
       # Prefetch the module graph with a bounded retry, then a different-infrastructure
       # fallback, so one dropped stream from the module proxy does not fail this job
@@ -1225,16 +1510,11 @@ jobs:
       - name: go mod download
         run: hack/go-mod-download.sh --workspace
 
-      # The guard before the gate, the way the other hack/ checks do it. A `-run` filter that
-      # matches nothing exits 0 with "no tests to run", which is indistinguishable from a pass
-      # in every summary — and that is not hypothetical: the first draft of the runner covered
-      # 8 of the 13 tagged tests and reported success. This proves the runner can tell an empty
-      # run from a real one BEFORE its green result is used as evidence of anything.
-      - name: integration runner self-test
-        run: hack/integration-tests.sh --self-test
-
       - name: integration tests against a real PostgreSQL
-        run: hack/integration-tests.sh
+        env:
+          DC_IT_PLAN: ${{ needs.discover.outputs.integration_all }}
+          LEG_MODULES: ${{ matrix.leg.modules }}
+        run: hack/integration-tests.sh --modules "$LEG_MODULES"
 
   license:
     runs-on: ubuntu-latest
@@ -1273,6 +1553,7 @@ jobs:
           -ignore '**/*.csproj' -ignore '**/*.sln' -ignore '**/*.props'
           -ignore '**/bin/**' -ignore '**/obj/**'
           -ignore '**/migrationdiff/golden/*.sql'
+          -ignore '**/migrationdiff/testdata/prev-release/**/*.sql'
           -ignore 'demos/**/*.meta' -ignore 'demos/**/*.asset' -ignore 'demos/**/*.unity'
           -ignore 'demos/**/*.prefab' -ignore 'demos/**/*.mat' -ignore 'demos/**/*.inputactions'
           -ignore 'demos/**/ProjectSettings/**' -ignore 'demos/**/Packages/packages-lock.json'
@@ -1359,6 +1640,15 @@ jobs:
       # two real defects (an unquoted $(...) here and an unquoted ${REGISTRY} in
       # release.yml). Run it locally as:
       #   actionlint -shellcheck=/path/to/shellcheck
+      # The runner image stopped shipping shellcheck (2026-11-14), so install it from the
+      # image's signed apt repository rather than depend on what the image happens to carry.
+      - name: Install shellcheck
+        run: |
+          command -v shellcheck >/dev/null || {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq shellcheck
+          }
+          shellcheck --version
       - name: actionlint
         run: |
           GOWORK=off hack/go-mod-download.sh --retry -- go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
@@ -1567,6 +1857,22 @@ jobs:
       - name: Translated docs match English file-for-file
         run: hack/check-docs-locale-parity.sh
 
+      # Release-notes FRAGMENTS: a PR adds docs/release-notes/unreleased/<slug>.md instead of
+      # editing the release-notes page, so merges stop conflicting every other open PR. The
+      # release-notes PR folds them in with hack/assemble-release-notes.py. Golden tests and one
+      # test per refusal first, then the negative control (--check must exit 1 on each planted
+      # bad fragment), then every fragment in the tree: all three locales present, a known
+      # section, front matter that parses, no ADR reference, matching structure per locale.
+      - name: Release-notes assembler tests
+        working-directory: hack
+        run: python3 -m unittest -v test_assemble_release_notes
+
+      - name: Release-notes fragment check self-test
+        run: python3 hack/assemble-release-notes.py --self-test
+
+      - name: Release-notes fragments are well-formed
+        run: python3 hack/assemble-release-notes.py --check
+
       # An alert is a page at 3 a.m. and the docs are its runbook. The chart's
       # PrometheusRule templates and the docs were edited independently, and a
       # quarter of the shipped alerts had no docs mention at all. Prove the check can
@@ -1705,7 +2011,12 @@ jobs:
   # ---------------------------------------------------------------------------
   # Frontend: codegen drift check, typecheck, unit tests, build.
   # ---------------------------------------------------------------------------
+  # Skipped on a pull request whose diff the frontend reads none of (hack/ci-select.py
+  # FRONTEND_INPUTS: frontend/**, every GraphQL schema the codegen reads, event-processing's rule
+  # sources the console's lockstep tests import, deploy/helm, hack/), and only then.
   frontend:
+    needs: discover
+    if: needs.discover.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -1790,20 +2101,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # i18n gate (ADR-066): eslint's `no-literal-string` rule fails on any
-      # hard-coded user-facing string, keeping each app fully externalized into its
-      # react-i18next catalogs. BOTH front-end apps define a `lint` script now —
-      # apps/console and apps/dashboard (the /dash viewer) — and each carries its own
-      # flat config, because the two have different JSX vocabularies.
-      #
-      # 🔴 `--if-present` IS THE HOLE THIS STEP ONCE HAD, and it is worth naming
-      # because nothing in the log would ever have shown it. /dash had no i18n at all
-      # — no catalogs, no dependency, no lint script — and a workspace with no script
-      # is SKIPPED silently, which reads in the log exactly like a workspace that
-      # passed. So a step named "i18n gate" reported success while checking one of the
-      # two apps. A new app is in the same position the day it is created: adding the
-      # script is what enrols it, and nothing here will say that it has not.
-      - name: Lint (i18n no-literal-string gate)
+      # App and host-composition configs check JSX literal strings with their
+      # configured exclusions. TypeScript libraries run bounded correctness lint;
+      # brand runs its token verifier. This does not gate all widget prose on i18n.
+      # workspace-lint.test.ts (in the Test step) discovers the root's workspaces
+      # and fails if --if-present would silently skip a missing lint script.
+      - name: Lint (app JSX strings, library correctness, brand verification)
         run: npm run lint
 
       - name: Test
@@ -2760,35 +3063,11 @@ jobs:
           # only the last step hung and every earlier one passed.
           tofu_wrapper: false
 
-          # 🔴 PINNED, AND PINNED TO THE SAME VERSION AS loadtest-gate.yml. Unpinned,
-          # this job installed whatever OpenTofu was newest while the gate that
-          # bootstraps real clusters ran 1.9.1 — so the two disagreed about the
-          # LANGUAGE, and the cheaper job was the one running the more forgiving
-          # semantics. That skew already cost a release: OpenTofu added boolean
-          # short-circuiting in 1.10 (opentofu/opentofu#3501), so
-          #
-          #   length(x) > 0 && length(x[0].y) > 0
-          #
-          # is fine on >=1.10 and an "Invalid index" APPLY FAILURE on <=1.9.x. The
-          # `variable validation blocks` step below asserts the very output that
-          # contained that expression, at both HA postures, and reported ok — on a
-          # tree where every non-HA bootstrap died. The check was right, the
-          # interpreter was not the one users get.
-          #
-          # 🔑 SO PIN THE OLDER SEMANTICS DELIBERATELY, not the newest release.
-          # versions.tf declares `required_version = ">= 1.9"` (the instance root;
-          # the cluster root still says ">= 1.6") and dcctl's findTofu
-          # takes the first of `tofu`/`terraform` on PATH with no version check, so
-          # an eager-evaluation interpreter is squarely inside what this tree claims
-          # to support. Testing >=1.10 here would make the whole class invisible to
-          # CI while leaving it live for anyone on the floor.
-          #
-          # Two ways to change this, both fine, both deliberate: raise the pin AND
-          # `required_version` together (>= 1.10 buys short-circuiting as a language
-          # guarantee), or lower the pin toward the real floor (the instance root's
-          # floor is now this pin itself). Do not raise this one
-          # alone — that is how the skew came back.
-          tofu_version: 1.9.1
+          # D2-6: move every CI pin and all required_version floors together.
+          # OpenTofu <1.10 evaluates both sides of &&, including invalid indexes.
+          # Keep init -upgrade: a lock file from an older init keeps old providers.
+          # Latest stable 1.10.x: https://github.com/opentofu/opentofu/releases/tag/v1.10.10
+          tofu_version: 1.10.10
 
       # Provider plugins come from GitHub release assets via the registry redirect, which
       # has had outages (504). Cache the plugin directory (keyed on every .tf, since the
@@ -2964,29 +3243,31 @@ jobs:
   # ---------------------------------------------------------------------------
   image-smoke:
     needs: discover
+    # 🔴 SELECTED LIKE THE GO LEGS. hack/ci-select.py plans an image when its module runs whole on
+    # this diff (changed, or requiring a changed module), or an input of its build changed
+    # (SMOKE_INPUTS: .ko.yaml, and what the k8s and user-management legs' extra steps read). A
+    # dependency-version, workflow or hack/ change, an unknown file, an empty diff and any
+    # selection failure plan every image, as does every run that is not a pull request. Skipped
+    # when none is planned, which ci-complete accepts only alongside a successful discover that
+    # planned zero.
+    if: needs.discover.outputs.smoke != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # Discovered services (mapped to backend/services/<name>) plus the
-        # operator at backend/k8s -- assembled by the discover job.
+        # The planned images among the discovered services (backend/services/<name>), the
+        # operator, the edge agent, the broker admin and the broker, assembled by discover.
         module: ${{ fromJson(needs.discover.outputs.smoke) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # No Go cache here. ko builds with its own flags (static, trimmed), so none of the go job's
+      # compiled packages are reusable, and the entries these legs used to save were 19 more keys
+      # (~5.7 GB) in a cache already over its limit, for a measured 0.7 min a hit at a 25% hit rate.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.work
-          cache: true
-          # Per-module cache key, NOT the shared "**/go.sum". Every matrix entry
-          # hashing all go.sum files computed the SAME key, and a GitHub cache key is
-          # write-once — so the first job to finish its post-step saved the cache and
-          # every other entry skipped saving. The slowest module is the LEAST likely to
-          # win that race — when this was found, outbound-connectors, then carrying an
-          # embedded stream engine's dependency tree — so its build cache was almost never
-          # persisted and it recompiled cold on nearly every run. A per-module key gives
-          # each entry its own cache to restore from.
-          cache-dependency-path: ${{ matrix.module }}/go.sum
+          cache: false
 
       # Prefetch the module graph with a bounded retry, then a different-infrastructure
       # fallback, so one dropped stream from the module proxy does not fail this job
@@ -3431,8 +3712,23 @@ jobs:
       - video-capture
     steps:
       # ANY result other than success fails the gate, including `skipped` and
-      # `cancelled`. No job in this workflow is conditional, so a skip here means
-      # an upstream failed or the run was cancelled — both of which must block.
+      # `cancelled` — with exactly five exceptions, each tied to discover's own
+      # answer: `go` may be skipped when discover SUCCEEDED and planned zero Go legs,
+      # `integration` when it succeeded and planned zero integration legs,
+      # `image-smoke` when it succeeded and planned zero images, `frontend` when it
+      # succeeded and said the diff reaches nothing the frontend reads, and the two
+      # `migrations` jobs when it succeeded and said `migrations` is false. A skip for
+      # any other reason (an upstream failed, the run was cancelled, discover failed
+      # and so produced no plan) still blocks: the exception reads the plan, never the
+      # absence of one.
+      #
+      # 🔴 AND A DRAFT RUN FAILS, whatever else passed. A draft plans none of the heavy
+      # jobs, so every skip above is "planned" — and a green gate on that head would
+      # still be a green `ci-complete` on the commit when the pull request is marked
+      # ready, until the ready_for_review run replaces it. So the gate passes only when
+      # discover said, explicitly, `draft=false`; "true", a missing value or anything
+      # else fails it. GitHub refuses to merge a draft in any case; this keeps its run
+      # from ever counting as the check.
       # The results arrive through the environment rather than interpolated into
       # the script, so nothing from the workflow context is ever executed as shell.
       - name: every job succeeded
@@ -3446,8 +3742,39 @@ jobs:
             exit 1
           fi
           column -t /tmp/results || cat /tmp/results
-          if grep -qv '^success' /tmp/results; then
+          # skip_ok <job> prints the reason a skipped <job> is intended, or nothing.
+          skip_ok() {
+            jq -r --arg job "$1" '
+              .discover as $d
+              | if $d.result != "success" then empty
+                elif $job == "go" and $d.outputs.go_legs == "[]" then "discover planned no Go legs"
+                elif $job == "integration" and $d.outputs.integration == "[]" then "discover planned no integration legs"
+                elif $job == "image-smoke" and $d.outputs.smoke == "[]" then "discover planned no image-smoke legs"
+                elif $job == "frontend" and $d.outputs.frontend == "false" then "the diff reaches nothing the frontend reads"
+                elif ($job == "migrations" or $job == "migrations-timescaledb-next") and $d.outputs.migrations == "false" then "the diff reaches nothing migration-diff.sh compiles"
+                else empty end' <<<"$NEEDS"
+          }
+          bad=0
+          while IFS=$'\t' read -r result job; do
+            [ "$result" = success ] && continue
+            if [ "$result" = skipped ] && why="$(skip_ok "$job")" && [ -n "$why" ]; then
+              echo "  $job skipped on purpose: $why"
+              continue
+            fi
+            echo "::error::$job: $result"
+            bad=1
+          done < /tmp/results
+          if [ "$bad" -ne 0 ]; then
             echo "::error::one or more required jobs did not succeed (see the table above)"
             exit 1
           fi
-          echo "all $(wc -l < /tmp/results) jobs succeeded"
+          draft="$(jq -r '.discover.outputs.draft // "(missing)"' <<<"$NEEDS")"
+          if [ "$draft" != false ]; then
+            if [ "$draft" = true ]; then
+              echo "::error::this is a DRAFT pull request: the go, integration, image-smoke and migrations jobs did not run. Mark it ready for review to run them."
+            else
+              echo "::error::discover's draft verdict is '$draft', not true or false; this gate cannot tell whether the heavy jobs were meant to run"
+            fi
+            exit 1
+          fi
+          echo "all $(wc -l < /tmp/results) jobs succeeded or were skipped by the plan"

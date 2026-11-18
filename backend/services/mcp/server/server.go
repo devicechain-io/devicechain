@@ -6,6 +6,8 @@ package server
 import (
 	"net/http"
 	"net/url"
+	"slices"
+	"strings"
 	"time"
 
 	coreauth "github.com/devicechain-io/dc-microservice/auth"
@@ -23,7 +25,7 @@ const (
 // sessionTimeout bounds idle MCP sessions. The SDK never reaps sessions when this
 // is zero, so an authenticated client that repeatedly re-initializes (exactly what
 // long-lived LLM agents do) would grow the in-memory session map without bound and
-// OOM the pod. Reaping idle sessions caps that.
+// OOM the pod. Reaping idle sessions frees slots in the live-session cap.
 const sessionTimeout = 30 * time.Minute
 
 // maxRequestBodyBytes is the body ceiling on the MCP endpoint, given both to the SDK
@@ -71,35 +73,64 @@ func bounds(maxBodyBytes int64, stream bool) core.RequestBounds {
 // Routes' business, not the caller's — the paths are load-bearing (they have to match
 // what the ingress delivers and what the 401 challenge advertises), and leaving them to
 // each caller is how the endpoint came to be served at a path nothing published.
-func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *GraphQLClient, limits Limits) (mcpHandler, metadataHandler http.Handler) {
-	// The catalog of risk declarations is not needed here: it is published on each tool's
-	// own listing at registration, so nothing at runtime consults it, and it is dropped
-	// rather than stashed on a field nobody reads. The ratchet gets its copy by calling
-	// newServer itself, and gets the tool NAMES from the handler built below.
-	mcpServer, _ := newServer(gql)
+func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *GraphQLClient, limits Limits, opts ...Option) (mcpHandler, metadataHandler http.Handler) {
+	// newServer owns registration, per-caller scope filtering and auditing.
+	mcpServer, _ := newServer(gql, opts...)
 
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return mcpServer },
 		&mcp.StreamableHTTPOptions{SessionTimeout: sessionTimeout, MaxRequestBodyBytes: maxRequestBodyBytes},
 	)
+	caps := sessionCaps{total: maxSessions, caller: maxCallerSessions}
+	o := options{}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.sessionCaps != nil {
+		caps = *o.sessionCaps
+	}
+	sessionLimited := limitSessions(streamable, mcpServer, caps)
 
 	// The RS middleware verifies the bearer (signature + audience, via the verifier)
-	// AND enforces the read-only scope, and on failure emits the RFC 9728
+	// and on failure emits the RFC 9728
 	// WWW-Authenticate challenge pointing at the protected-resource metadata.
+	// Leave Scopes unset: the SDK also advertises that list in challenges, which
+	// would pin client discovery to read-only. Enforce admission separately below.
 	protected := sdkauth.RequireBearerToken(
 		NewTokenVerifier(validator, resourceID),
 		&sdkauth.RequireBearerTokenOptions{
 			ResourceMetadataURL: metadataURL(resourceID),
-			Scopes:              []string{coreauth.ScopeReadOnly},
 		},
-	)(core.BufferBody(limitMessages(streamable, limits), maxRequestBodyBytes))
+	)(requireReadOnly(bufferRequestBody(limitMessages(sessionLimited, limits)), resourceID))
 	// limitMessages sits inside the buffering because it reads the body, and inside the
 	// bearer check because it keys on the verified subject.
 	// The body is buffered INSIDE the bearer check, so a caller with no valid token is
 	// refused before any of it is held in memory. The deadlines go outside it, in
 	// Routes, so that caller still cannot stall the connection.
 
-	return protected, ProtectedResourceMetadataHandler(resourceID, issuer)
+	return protected, ProtectedResourceMetadataHandler(resourceID, issuer, opts...)
+}
+
+// requireReadOnly keeps the admission floor independent of discovery's optional
+// scopes. Challenges omit scope so clients use metadata's full scopes_supported.
+func requireReadOnly(next http.Handler, resourceID string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		info := sdkauth.TokenInfoFromContext(r.Context())
+		if info == nil || !slices.Contains(info.Scopes, coreauth.ScopeReadOnly) {
+			w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope", resource_metadata="`+quotedStringValue(metadataURL(resourceID))+`"`)
+			http.Error(w, "insufficient scope", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// quotedStringValue escapes s for use inside an HTTP quoted-string (RFC 9110 §5.6.4):
+// a backslash or double quote is sent as a quoted-pair, so a resource identifier that
+// carries either cannot end the parameter early and inject another.
+func quotedStringValue(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, `"`, `\"`)
 }
 
 // newServer builds the MCP server this process serves, together with the catalog of the
@@ -113,9 +144,17 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *G
 // test green. Construction lives here now, New only wires HTTP in front of it, and the
 // ratchet lists what New's own handler offers a real session — so the gap has to be
 // visible from the outside to exist at all.
-func newServer(gql *GraphQLClient) (*mcp.Server, *Catalog) {
+func newServer(gql *GraphQLClient, opts ...Option) (*mcp.Server, *Catalog) {
 	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
-	c := registerTools(s, NewTools(gql))
+	t := NewTools(gql)
+	c := registerTools(s, t)
+	o := options{}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	registerProposals(s, c, t, o.actuation)
+	s.AddReceivingMiddleware(filterActionScopes(c))
+	s.AddReceivingMiddleware(limitToolExecution)
 	// Every tools/call this server answers writes one audit record (audit.go). It is a
 	// middleware on the served server rather than a wrapper inside register, so a call
 	// that never reaches a handler — an unknown tool, arguments that fail validation — is
@@ -267,11 +306,11 @@ func metadataURL(resourceID string) string {
 // RFC 8707 audience binding needs them to be: the identifier tokens are minted for is
 // the identifier a client POSTs to.
 //
-// The probe and metrics handlers main.go adds are more specific patterns, so
-// ServeMux still routes them ahead of this catch-all.
+// Probe and metrics handlers are served separately on the operations mux;
+// this catch-all belongs only to the public listener.
 func Routes(mux *http.ServeMux, resourceID, issuer string, validator func() *coreauth.Validator,
-	gql *GraphQLClient, limits Limits) {
-	mcpHandler, metadataHandler := New(resourceID, issuer, validator, gql, limits)
+	gql *GraphQLClient, limits Limits, opts ...Option) {
+	mcpHandler, metadataHandler := New(resourceID, issuer, validator, gql, limits, opts...)
 
 	// Every handler here runs with a body-delivery deadline and an execution deadline;
 	// without them only the server's header timeout applies, and a client that stalls

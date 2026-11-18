@@ -28,7 +28,7 @@ import {
   type WidgetSelect,
 } from '@devicechain/widget-sdk';
 
-import { alarmStrings } from '../alarm-strings';
+import { alarmStrings, type AlarmStrings } from '../alarm-strings';
 import { AlarmTypeTabsStrip, panelDomId, tabDomId } from './alarm-type-tabs';
 import { severityColor, severityLabel } from './severity';
 
@@ -112,13 +112,15 @@ function pinnedTypes(widget: WidgetProps<AlarmStreamState>['widget']): string[] 
   });
 }
 
-function statusLabel(alarm: AlarmRow): string {
-  if (alarm.state === 'CLEARED') return 'Cleared';
-  return alarm.acknowledged ? 'Acknowledged' : 'Active';
+function statusLabel(alarm: AlarmRow, strings: AlarmStrings['rows']): string {
+  if (alarm.state === 'CLEARED') return strings.cleared;
+  return alarm.acknowledged ? strings.acknowledged : strings.active;
 }
 
 export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamState>) {
   const { alarms, total, loading } = data;
+  const strings = alarmStrings();
+  const rowStrings = strings.rows;
   // Actions render only when the runtime supplies a seam AND the viewer may write.
   const canAct = actions?.can('alarm:write') ?? false;
   const [sizeRef, size] = useElementSize<HTMLDivElement>();
@@ -169,10 +171,11 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
         ) : null}
         <div
           ref={sizeRef}
+          tabIndex={0}
           style={{ flex: 1, minHeight: 0, overflow: 'auto' }}
           {...(stripShown
             ? { role: 'tabpanel', id: panelDomId(idBase), 'aria-labelledby': tabDomId(idBase, dropped ? null : selectedType) }
-            : {})}
+            : { role: 'region', 'aria-label': rowStrings.scrollLabel })}
         >
           <table
             style={{
@@ -187,35 +190,35 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
               <tr>
                 <th style={{ ...headCell, width: 4, padding: 0 }} aria-hidden="true" />
                 <th scope="col" style={headCell}>
-                  Severity
+                  {rowStrings.severity}
                 </th>
                 {narrow ? null : (
                   <th scope="col" style={headCell}>
-                    Status
+                    {rowStrings.status}
                   </th>
                 )}
                 <th scope="col" style={headCell}>
-                  Originator
+                  {rowStrings.originator}
                 </th>
                 {typeColumn ? (
                   <th scope="col" style={headCell}>
-                    {alarmStrings().deviceType}
+                    {strings.deviceType}
                   </th>
                 ) : null}
                 <th scope="col" style={headCell}>
-                  Alarm
+                  {rowStrings.alarm}
                 </th>
                 <th scope="col" style={{ ...headCell, textAlign: 'right' }}>
-                  Value
+                  {rowStrings.value}
                 </th>
                 {narrow ? null : (
                   <th scope="col" style={headCell}>
-                    Raised
+                    {rowStrings.raised}
                   </th>
                 )}
                 {canAct ? (
                   <th scope="col" style={{ ...headCell, textAlign: 'right' }}>
-                    Actions
+                    {rowStrings.actions}
                   </th>
                 ) : null}
               </tr>
@@ -224,7 +227,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
               {alarms.length === 0 ? (
                 <tr>
                   <td colSpan={columns} style={{ ...cell, textAlign: 'center', color: css('muted-foreground') }}>
-                    {loading ? 'Loading…' : 'No alarms'}
+                    {loading ? rowStrings.loading : rowStrings.empty}
                   </td>
                 </tr>
               ) : (
@@ -239,12 +242,12 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                             aria-hidden="true"
                             style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }}
                           />
-                          {severityLabel(alarm.severity)}
+                          {strings.severity[alarm.severity] ?? severityLabel(alarm.severity)}
                         </span>
                       </td>
-                      {narrow ? null : <td style={{ ...cell, color: css('muted-foreground') }}>{statusLabel(alarm)}</td>}
+                      {narrow ? null : <td style={{ ...cell, color: css('muted-foreground') }}>{statusLabel(alarm, rowStrings)}</td>}
                       <td style={text}>
-                        <OriginatorCell alarm={alarm} drillTo={drillTo} />
+                        <OriginatorCell alarm={alarm} drillTo={drillTo} strings={rowStrings} />
                       </td>
                       {typeColumn ? (
                         <td style={{ ...cell, color: css('muted-foreground') }}>
@@ -270,7 +273,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                       {canAct ? (
                         <td style={{ ...cell, textAlign: 'right' }}>
                           {/* actions is defined whenever canAct is true. */}
-                          <AlarmRowActions alarm={alarm} actions={actions as WidgetActions} />
+                          <AlarmRowActions alarm={alarm} actions={actions as WidgetActions} strings={rowStrings} />
                         </td>
                       ) : null}
                     </tr>
@@ -289,7 +292,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
               borderTop: `1px solid ${css('border')}`,
             }}
           >
-            Showing {alarms.length} of {total}
+            {rowStrings.shown(alarms.length, total)}
           </div>
         ) : null}
       </div>
@@ -305,9 +308,11 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
 function OriginatorCell({
   alarm,
   drillTo,
+  strings,
 }: {
   alarm: AlarmRow;
   drillTo: { select: WidgetSelect; slot: string } | undefined;
+  strings: AlarmStrings['rows'];
 }) {
   if (drillTo && alarm.originatorType === 'device' && alarm.originatorToken) {
     const token = alarm.originatorToken;
@@ -315,7 +320,7 @@ function OriginatorCell({
       <button
         type="button"
         onClick={() => drillTo.select({ slot: drillTo.slot, binding: { kind: 'device', deviceToken: token } })}
-        title={`Show ${token} in the linked widgets`}
+        title={strings.drill(token)}
         style={{
           padding: 0,
           border: 'none',
@@ -349,7 +354,11 @@ const actionButton: CSSProperties = {
 // an ACTIVE alarm is actionable (a cleared — or any future non-active — state shows
 // "—"); an acknowledged one still shows Clear. After a successful mutation the hub
 // reconciles the table, so the row updates itself.
-function AlarmRowActions({ alarm, actions }: { alarm: AlarmRow; actions: WidgetActions }) {
+function AlarmRowActions({ alarm, actions, strings }: {
+  alarm: AlarmRow;
+  actions: WidgetActions;
+  strings: AlarmStrings['rows'];
+}) {
   const severity = useSeverityColors();
   const [pending, setPending] = useState<'ack' | 'clear' | null>(null);
   const [failed, setFailed] = useState(false);
@@ -379,8 +388,8 @@ function AlarmRowActions({ alarm, actions }: { alarm: AlarmRow; actions: WidgetA
       {failed ? (
         <span
           role="img"
-          aria-label="Action failed — retry"
-          title="Action failed — retry"
+          aria-label={strings.failed}
+          title={strings.failed}
           style={{ color: severityColor(severity, 'CRITICAL'), fontSize: fontVar('sm') }}
         >
           ⚠
@@ -392,10 +401,10 @@ function AlarmRowActions({ alarm, actions }: { alarm: AlarmRow; actions: WidgetA
           style={{ ...actionButton, opacity: pending ? 0.6 : 1 }}
           disabled={pending !== null}
           aria-busy={pending === 'ack'}
-          aria-label={`Acknowledge alarm ${alarm.alarmKey}`}
+          aria-label={strings.acknowledgeAlarm(alarm.alarmKey)}
           onClick={() => run('ack', () => actions.acknowledgeAlarm(alarm.token))}
         >
-          {pending === 'ack' ? '…' : 'Ack'}
+          {pending === 'ack' ? '…' : strings.acknowledge}
         </button>
       ) : null}
       <button
@@ -403,10 +412,10 @@ function AlarmRowActions({ alarm, actions }: { alarm: AlarmRow; actions: WidgetA
         style={{ ...actionButton, opacity: pending ? 0.6 : 1 }}
         disabled={pending !== null}
         aria-busy={pending === 'clear'}
-        aria-label={`Clear alarm ${alarm.alarmKey}`}
+        aria-label={strings.clearAlarm(alarm.alarmKey)}
         onClick={() => run('clear', () => actions.clearAlarm(alarm.token))}
       >
-        {pending === 'clear' ? '…' : 'Clear'}
+        {pending === 'clear' ? '…' : strings.clear}
       </button>
     </span>
   );

@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,7 +18,15 @@ import (
 	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 )
+
+var ackLogSink *dctest.LogSink
+
+func TestMain(m *testing.M) {
+	ackLogSink = dctest.InstallLogSink()
+	os.Exit(m.Run())
+}
 
 // ---- an in-memory PendingStore ----
 
@@ -340,6 +350,7 @@ func TestASweepDoesNotClaimADeletedTenantsRows(t *testing.T) {
 // A delete that fails is not a settled row: counting it as tenant_gone hides a store that cannot
 // delete, while the row stays and fills the batch every pass. It is store_failed.
 func TestASweepCountsAFailedGoneDeleteAsStoreFailed(t *testing.T) {
+	logs := ackLogSink.Capture(t)
 	r := newAckRig(t)
 	r.seed(t, func(p *Pending) { p.DeadlineAt = r.now.Add(-time.Minute) })
 	r.gone["acme"] = true
@@ -348,6 +359,18 @@ func TestASweepCountsAFailedGoneDeleteAsStoreFailed(t *testing.T) {
 	require.Equal(t, 1, r.m.get(AckStoreFailed))
 	require.Zero(t, r.m.get(AckTenantGone), "a delete that failed was counted as settled")
 	require.Equal(t, 1, r.pend.size(), "the row is still there")
+	require.Contains(t, logs.String(), "Could not delete a deleted tenant's pending LoRaWAN downlink")
+	require.Contains(t, logs.String(), `"tenant":"acme"`)
+	require.Contains(t, logs.String(), `"error":"store unavailable"`)
+	// A failed delete remains eligible for the next pass, then settles only once
+	// the store recovers. No response should be sent for the deleted tenant.
+	r.pend.delErr = nil
+	r.f.Sweep(context.Background())
+	require.Equal(t, 1, r.m.get(AckStoreFailed))
+	require.Equal(t, 1, r.m.get(AckTenantGone))
+	require.Zero(t, r.pend.size())
+	require.Empty(t, r.resp.envs)
+	require.Equal(t, 1, strings.Count(logs.String(), "Could not delete a deleted tenant's pending LoRaWAN downlink"))
 }
 
 // ---- never matched by guess ----

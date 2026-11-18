@@ -28,11 +28,8 @@
 // safety property is atomic consume-and-execute in the area that owns the effect: a central
 // service would need the area to execute FOR it, under a service token.
 //
-// 🔴 NO EFFECT IS EXECUTED BY THIS RELEASE. The ledger records proposals and approvals; the final
-// approval of a proposal is refused with ErrExecutionNotAvailable rather than recorded, because
-// recording it would claim an approval was consumed that nothing acted on. And there is no
-// automatic path: an AUTO verdict is read as a refusal (red line: no auto path without holdouts and
-// invariants).
+// Approved ACK/CLEAR proposals execute on final human approval in one transaction.
+// There is no automatic path: an AUTO verdict is read as a refusal.
 package actiongate
 
 import (
@@ -102,8 +99,10 @@ func CanTransition(from, to State) bool {
 // platform-authored; it never carries text a tenant, a device or an agent wrote.
 type Error struct {
 	Code string
-	msg  string
-	err  error
+	// Retryable reports whether the refusal can clear when a dependency recovers.
+	Retryable bool
+	msg       string
+	err       error
 }
 
 func (e *Error) Error() string { return e.msg }
@@ -112,8 +111,10 @@ func (e *Error) Error() string { return e.msg }
 // refusals).
 func (e *Error) Unwrap() error { return e.err }
 
-// Extensions is the GraphQL error extensions: the code.
-func (e *Error) Extensions() map[string]any { return map[string]any{"code": e.Code} }
+// Extensions carries the stable code and retryability to GraphQL clients.
+func (e *Error) Extensions() map[string]any {
+	return map[string]any{"code": e.Code, "retryable": e.Retryable}
+}
 
 func gateErr(code string, wrap error, format string, a ...any) *Error {
 	return &Error{Code: code, msg: fmt.Sprintf(format, a...), err: wrap}
@@ -134,6 +135,8 @@ const (
 	CodeSelfApproval          = "SELF_APPROVAL_REFUSED"
 	CodeExecutionNotAvailable = "EXECUTION_NOT_AVAILABLE"
 	CodePolicyUnavailable     = "POLICY_UNAVAILABLE"
+	CodeFenceClosed           = "FENCE_CLOSED"
+	CodeFenceUnavailable      = "FENCE_UNAVAILABLE"
 	CodeRequestConflict       = "CONFLICT"
 	CodeConcurrentApproval    = "CONCURRENT_APPROVAL"
 )
@@ -149,10 +152,8 @@ func Refusal(code, msg string, forbidden bool) *Error {
 	return &Error{Code: code, msg: msg, err: wrap}
 }
 
-// ErrExecutionNotAvailable refuses the approval that would complete a proposal: this release
-// records proposals and approvals but executes nothing. It is returned rather than recording the
-// approval, so no proposal is ever marked as having had an approval consumed that nothing acted
-// on, and the proposal stays PROPOSED until it expires or is rejected.
+// ErrExecutionNotAvailable is retained for error-code compatibility.
+// Deprecated: approved ACK/CLEAR proposals execute on final human approval.
 var ErrExecutionNotAvailable = gateErr(CodeExecutionNotAvailable, nil,
 	"this approval would complete the proposal, and executing approved agent actions is not available in this release; the proposal stays pending until it expires or is rejected")
 
@@ -166,3 +167,13 @@ func IsCode(err error, code string) bool {
 	var ge *Error
 	return errors.As(err, &ge) && ge.Code == code
 }
+
+// ErrFenceClosed refuses a decision at or before the local kill generation.
+var ErrFenceClosed = Refusal(CodeFenceClosed, "the local agent actuation fence is closed", false)
+
+// ErrFenceUnavailable refuses execution until the local fence can be read.
+var ErrFenceUnavailable = func() *Error {
+	e := Refusal(CodeFenceUnavailable, "the local agent actuation fence could not be read", false)
+	e.Retryable = true
+	return e
+}()

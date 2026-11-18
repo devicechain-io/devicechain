@@ -589,4 +589,10 @@ func TestOcspAllowedCountsAFirstConnectOnce(t *testing.T) {
 	r.grants(x509ResultJitCreated, r.clientID("SN-ONCE"), dev)
 	assert.Equal(t, before+1, testutil.ToFloat64(om.Allowed.WithLabelValues("timeout")),
 		"a first connect (registration + grant) is one connect")
+	assert.Equal(t, 2, sc.called(), "both registration and grant must still consult OCSP")
+
+	r.grants(x509ResultOK, r.clientID("SN-ONCE"), dev)
+	assert.Equal(t, before+2, testutil.ToFloat64(om.Allowed.WithLabelValues("timeout")),
+		"a reconnect adds exactly one more connect")
+	assert.Equal(t, 3, sc.called(), "a pinned reconnect consults OCSP once")
 }

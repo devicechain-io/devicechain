@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dcctl/dcdir"
 )
@@ -45,15 +46,18 @@ type Endpoints struct {
 // ignores the dcctl-only name/controlAddr. Keep the shared fields' json tags in
 // lockstep with dc-simulator/sim/handshake.go.
 type Record struct {
-	Name        string    `json:"name"`
-	Tenant      string    `json:"tenant"`
-	SimEmail    string    `json:"simEmail"`
-	SimPassword string    `json:"simPassword"`
-	Endpoints   Endpoints `json:"endpoints"`
-	ManifestId  string    `json:"manifestId"`
-	Seed        int64     `json:"seed"`
-	InstanceId  string    `json:"instanceId"`
-	ControlAddr string    `json:"controlAddr"`
+	Episode     string          `json:"episode,omitempty"`
+	StartedAt   *time.Time      `json:"startedAt,omitempty"`
+	Windows     []EpisodeWindow `json:"windows,omitempty"`
+	Name        string          `json:"name"`
+	Tenant      string          `json:"tenant"`
+	SimEmail    string          `json:"simEmail"`
+	SimPassword string          `json:"simPassword"`
+	Endpoints   Endpoints       `json:"endpoints"`
+	ManifestId  string          `json:"manifestId"`
+	Seed        int64           `json:"seed"`
+	InstanceId  string          `json:"instanceId"`
+	ControlAddr string          `json:"controlAddr"`
 	// MqttTLSInsecure skips verification of the MQTT gateway's server certificate.
 	// A local bring-up terminates TLS with a self-signed cert, so a sim's command far
 	// end cannot connect there without it; a deployment reachable at its cert's SAN
@@ -87,7 +91,7 @@ type Record struct {
 // lists that must agree, so dc-simulator's TestDcctlKnowsEveryRegisteredScenario
 // reads this file and fails when they diverge — a comment asking the next person
 // to remember would not have survived the third scenario, and did not.
-var KnownManifestIds = []string{"devicepulse", "buildingpulse", "widgetlab", "sitepulse", "fleetpulse", "towerpulse"}
+var KnownManifestIds = []string{"devicepulse", "buildingpulse", "widgetlab", "sitepulse", "fleetpulse", "towerpulse", "harborpulse"}
 
 // ValidateManifestId rejects a --manifest value dc-simulator's registry
 // doesn't know.
@@ -226,6 +230,43 @@ func Exists(name string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// List reads all saved sim records. A missing state directory is an empty list;
+// unreadable directories or records are errors, so callers cannot overlook a sim.
+func List() ([]*Record, error) {
+	dir, err := stateDir()
+	if err != nil {
+		return nil, err
+	}
+	// Stat first: on Windows, reading a FILE as a directory reports "path not found",
+	// which would otherwise pass for an absent directory and select a taken port.
+	info, err := os.Stat(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list sim records: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("list sim records: %s is not a directory", dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("list sim records: %w", err)
+	}
+	var records []*Record
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		r, err := Load(strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, r)
+	}
+	return records, nil
 }
 
 // Delete removes a sim's record (idempotent — a missing record is not an error).

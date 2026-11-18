@@ -157,7 +157,7 @@ chart 随附两条告警，仅在启用指标告警时触发：
 
 ### 审计日志记录什么 {#audit}
 
-登录服务会记录：密码正确且需要代码时的 `mfa_challenged`；代码经检查被拒绝时的 `mfa_failed`；触发全局锁定的那次尝试的 `mfa_locked`；以及 `mfa_enrolled`、`mfa_disabled`、`mfa_reset`（含操作者）、`mfa_recovery_code_used`、`mfa_recovery_codes_regenerated`、`mfa_enforcement_bypassed` 和 `tenant_mfa_required_changed`。被锁定拒绝的尝试只计数、不写入，因此持有密码的人无法驱动日志写入。任何记录都不会包含代码、密钥或质询。
+登录服务会记录：密码正确且需要代码时的 `mfa_challenged`；代码经检查被拒绝时的 `mfa_failed`；触发全局锁定的那次尝试的 `mfa_locked`；以及 `mfa_enrolled`、`mfa_disabled`、`mfa_reset`（含操作者）、`mfa_recovery_code_used`、`mfa_recovery_codes_regenerated`、`mfa_enforcement_bypassed` 和 `tenant_mfa_required_changed`。会话内加强验证（预览）成功时记录 `step_up`，并与登录共享失败和锁定事件；此操作需要调用者自己的访问令牌和刷新令牌，而不再次验证密码。被锁定拒绝的尝试只计数、不写入，因此持有密码的人无法驱动日志写入。任何记录都不会包含代码、密钥或质询。
 
 **`login` 记录的含义变了。** 它现在在登录**完成**时写入，而不是在密码被接受时写入，并说明方式：`pwd`、`pwd+otp` 或 `pwd+recovery`。对设有第二因素的账号，密码这一步对应 `mfa_challenged` 记录，只有代码被接受后才会出现 `login` 记录。
 

@@ -24,11 +24,11 @@ these scripts are ordinary API calls.
 
 ## Requirements
 
-`bash` (Git Bash on Windows), `curl`, `jq`, `openssl`, `docker` and `kubectl`, and a running instance:
+`bash` (Git Bash on Windows), `curl`, `jq`, `openssl`, `docker`, `kind`, `kubectl` and `dcctl`, and a running instance:
 
 ```bash
 dcctl install local --compact
-dcctl bootstrap local tour --host localhost --no-tls --no-escrow
+dcctl bootstrap local devicechain --host localhost --no-tls --no-escrow
 ```
 
 The simulated devices are containers on the `kind` Docker network, which reach the broker's MQTT node
@@ -55,12 +55,15 @@ Every script is safe to run again.
 
 ## Where your instance is
 
-Environment variables override the site file; each has a default that matches the commands above.
+`DC_URL`, `INSTANCE`, `KUBE_CONTEXT`, `MQTT_HOST` and `MQTT_PORT` environment variables override
+the site file; their defaults match the commands above.
+
+If your instance is named `tour`, run `export INSTANCE=tour` before running the scripts.
 
 | Variable | Default | |
 | --- | --- | --- |
 | `DC_URL` | `http://localhost` | the console's address |
-| `INSTANCE` | `tour` | the dcctl instance (namespace `dci-<instance>`) |
+| `INSTANCE` | `devicechain` | the dcctl instance (namespace `dci-<instance>`) |
 | `MQTT_HOST` | `devicechain-control-plane` | the kind node's container name, `<cluster>-control-plane` |
 | `MQTT_PORT` | `31883` | the broker's node port |
 | `KUBE_CONTEXT` | the current context | which cluster `kubectl` talks to |

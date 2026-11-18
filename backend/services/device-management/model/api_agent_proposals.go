@@ -22,15 +22,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// AGENT PROPOSALS for alarms (agentic actions, S3): an AI agent asks for an alarm to be
-// acknowledged or cleared, the tenant's policy decides, and people approve from their own
-// sessions.
-//
-// 🔴 NOTHING HERE ACKNOWLEDGES OR CLEARS AN ALARM. The ledger records the proposal, its decision
-// and its approvals; the approval that would complete a proposal is refused with
-// actiongate.ErrExecutionNotAvailable, and the proposal stays pending until it expires or is
-// rejected. An agent's token holds alarm:propose, never alarm:write, so acknowledgeAlarm and
-// clearAlarm refuse it directly, whatever path it arrives by.
+// Alarm proposals are executed on final human approval after a fresh policy decision.
+// Agent tokens can propose, but never directly acknowledge or clear alarms.
 
 // LedgerScope separates this area's proposal counters from another area's (actiongate.LockCounters).
 const LedgerScope = "device-management"
@@ -129,9 +122,9 @@ func normalizeAlarmProposal(req AlarmProposalRequest) (actiongate.Kind, []string
 		return "", nil, fmt.Errorf("a proposal names 1 to %d alarms", MaxProposalAlarms)
 	}
 	var tokens []string
-	for _, t := range req.AlarmTokens {
-		if t == "" || len(t) > 128 {
-			return "", nil, errors.New("an alarm token must be 1 to 128 characters")
+	for i, t := range req.AlarmTokens {
+		if err := core.ValidateToken(t); err != nil {
+			return "", nil, fmt.Errorf("alarmTokens[%d]: %w", i, err)
 		}
 		if !slices.Contains(tokens, t) {
 			tokens = append(tokens, t)
@@ -207,7 +200,12 @@ func (api *Api) buildAlarmProposal(ctx context.Context, kind actiongate.Kind, ac
 // A dry run decides and validates but stores nothing. A request whose requestId this client and
 // principal have used before returns that proposal when it asks for the same thing, and is a
 // CONFLICT when it asks for something else.
-func (api *Api) ProposeAlarmAction(ctx context.Context, proposer actiongate.Proposer, req AlarmProposalRequest) (*ProposalOutcome, error) {
+func (api *Api) ProposeAlarmAction(ctx context.Context, proposer actiongate.Proposer, req AlarmProposalRequest) (result *ProposalOutcome, resultErr error) {
+	defer func() {
+		if !req.DryRun {
+			api.AgentMetrics.proposal(req.Action.kind(), result, resultErr)
+		}
+	}()
 	kind, tokens, err := normalizeAlarmProposal(req)
 	if err != nil {
 		return nil, err
@@ -226,6 +224,11 @@ func (api *Api) ProposeAlarmAction(ctx context.Context, proposer actiongate.Prop
 	if api.AgentDecider == nil {
 		return nil, errAgentDecider
 	}
+	// Tenant policy gates proposals; the local kill fence guards execution only.
+	// This decision has no actuation generation, and a closed fence may await re-enable
+	// by the next execution, so checking the row here would prevent that recovery.
+	// Proposals change no alarms: a fenced approval leaves them pending for a later
+	// approval with a newer generation, or until they expire.
 	dec, err := api.AgentDecider.Actuation(ctx, actiongate.ActuationRequest{Kind: kind, Impact: ProposalImpactNormal, TargetCount: len(tokens)})
 	if err != nil {
 		if errors.Is(err, auth.ErrForbidden) {
@@ -524,25 +527,20 @@ var (
 //
 //  1. the proposal must still be PROPOSED, inside its expiry, and its stored digest must equal the
 //     one the approver was shown;
-//  2. collect the distinct previous approvers and the current approver;
+//  2. collect previous approvers with their stored sign-ins and the caller with their current sign-in;
 //  3. user-management is asked, under the APPROVER'S own token and with no cache, whether the
 //     proposal may still go ahead (agentExecutionDecision): the original client, the proposer's
 //     standing and every counted approver's standing, under the current policy. A refusal ends
 //     the proposal as REFUSED with the reasons;
-//  4. an already-approved, still-valid approver with a fresh approval is answered unchanged;
+//  4. an already-approved, still-valid approver with a fresh approval from the SAME sign-in is answered unchanged;
 //     otherwise their stale entry is replaced after the normal checks. The approver must be a
 //     valid approver, with a second factor fresh by the policy's measure, and may be the proposer
 //     only when the policy allows self-confirmation of a
 //     single-approval, normal-impact proposal;
-//  5. the approvals that still stand are tallied. If this approval would complete the proposal,
-//     it is refused with actiongate.ErrExecutionNotAvailable and nothing is recorded: executing is
-//     not in this release. Otherwise it is recorded as a compare-and-set on the row's revision,
-//     with the current policy's required count.
-//
-// The revision compare-and-set fences concurrent LEDGER writes only; authorization changes in
-// user-management are fenced by completion-time re-validation of every approver (and, when
-// execution ships, by the decision asked immediately before execution).
-func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Approver, token, digest string) (*AgentProposal, error) {
+//  5. the final approval executes atomically with the decision asked again as the last act
+//     before commit; earlier approvals are recorded with a compare-and-set on the row's revision.
+func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Approver, token, digest string) (result *AgentProposal, resultErr error) {
+	defer func() { api.AgentMetrics.approval(result, resultErr) }()
 	for attempt := 0; ; attempt++ {
 		now := time.Now().UTC()
 		p, err := api.pendingProposal(ctx, token, now)
@@ -555,6 +553,15 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 		approvals, err := actiongate.ParseApprovals(p.Approvals)
 		if err != nil {
 			return nil, err
+		}
+		sessions := []actiongate.ApproverSession{}
+		for _, s := range actiongate.ApproverSessions(approvals) {
+			if s.Principal != approver.Principal {
+				sessions = append(sessions, s)
+			}
+		}
+		if approver.Sid != "" {
+			sessions = append(sessions, actiongate.ApproverSession{Principal: approver.Principal, Sid: approver.Sid})
 		}
 		principals := actiongate.Principals(approvals)
 		if !slices.Contains(principals, approver.Principal) {
@@ -570,7 +577,7 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 		dec, err := api.AgentDecider.Execution(ctx, actiongate.ExecutionRequest{
 			ProposalToken: p.Token, Kind: actiongate.Kind(p.Kind), Impact: p.Impact, TargetCount: p.TargetCount,
 			ProposerPrincipal: p.ProposerSub, ProposerClient: p.ProposerClient, ProposerSid: sid,
-			Approvers: principals,
+			Approvers: principals, ApproverSessions: sessions,
 		})
 		// The decision is a remote call, so the window and step-up are judged when the approval
 		// is written, not when the request arrived.
@@ -595,7 +602,7 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 			return nil, errNotAnApprover
 		}
 		for _, a := range approvals {
-			if a.Sub == approver.Principal && auth.StepUpFreshAt(a.Amr, a.MfaTime, dec.StepUp, now) {
+			if a.Sub == approver.Principal && auth.SameSession(auth.SessionID(a.Sid), auth.SessionID(approver.Sid)) && auth.StepUpFreshAt(a.Amr, a.MfaTime, dec.StepUp, now) {
 				// Nothing to write; answer what is stored NOW, not the row read before the remote
 				// decision, which a concurrent decision may have moved on.
 				return api.AgentProposalByToken(ctx, p.Token, nil)
@@ -613,9 +620,16 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 				next = append(next, a)
 			}
 		}
-		next = append(next, actiongate.Approval{Sub: approver.Principal, Amr: approver.Amr, MfaTime: approver.MfaTime, At: now})
+		next = append(next, actiongate.Approval{Sub: approver.Principal, Sid: approver.Sid, Amr: approver.Amr, MfaTime: approver.MfaTime, At: now})
 		if actiongate.Tally(next, dec.ValidApprovers, p.ProposerSub, dec.RequiredApprovals, dec.AllowSelfConfirm, dec.StepUp, now) >= dec.RequiredApprovals {
-			return nil, actiongate.ErrExecutionNotAvailable
+			result, execErr := api.executeAlarmProposal(ctx, approver, p, next, dec.RequiredApprovals, attempt == 0)
+			if errors.Is(execErr, actiongate.ErrNotPending) {
+				if attempt == 0 {
+					continue
+				}
+				return nil, errConcurrentApproval
+			}
+			return result, execErr
 		}
 		err = actiongate.RecordApproval(api.RDB.DB(ctx), &AgentProposal{}, p.Token, p.Revision, next, dec.RequiredApprovals, now)
 		if errors.Is(err, actiongate.ErrNotPending) && attempt == 0 {
@@ -674,5 +688,9 @@ func (api *Api) endProposal(ctx context.Context, token string, to actiongate.Sta
 // only move a PROPOSED row whose expiry has passed to EXPIRED. It reads nothing back, writes no
 // tenant's data but that one state, and can only STOP a proposal, never start or approve one.
 func (api *Api) ExpireAgentProposals(ctx context.Context) (int64, error) {
-	return actiongate.ExpireDue(core.WithSystemContext(ctx), api.RDB.Database, &AgentProposal{}, time.Now().UTC())
+	n, err := actiongate.ExpireDue(core.WithSystemContext(ctx), api.RDB.Database, &AgentProposal{}, time.Now().UTC())
+	if err == nil && api.AgentMetrics != nil {
+		api.AgentMetrics.expired.Add(float64(n))
+	}
+	return n, err
 }

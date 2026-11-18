@@ -34,6 +34,10 @@ Click **New notification policy**. The form asks for:
 - **Escalate after (seconds)** and **Max escalations**: how long an unacknowledged alarm waits
   before it is notified again, and how many times. See
   [Throttling and escalation](/guides/notification-channels#throttling-and-escalation).
+- **Notify on clear**: off by default. Tick it and save to announce clears to destinations that
+  successfully paged that alarm cycle. It does not announce older clears from before you enabled it.
+  Clears during quiet hours are dropped, and a policy that never paged sends no clear. See
+  [Notify when an alarm clears](../guides/notification-channels.md#notify-on-clear) for retries and limits.
 - **Quiet hours**, described below.
 
 The console does not edit **routing rules**. A policy you create here starts with none, and a policy
@@ -73,6 +77,8 @@ schedule. The quiet hours stay stored and in force, and saving other changes lea
 Quiet hours are not [maintenance windows](/guides/maintenance-windows). A maintenance window belongs
 to a device type and holds disruptive commands; quiet hours belong to a notification policy and hold
 its pages.
+
+The scheduler serves up to four tenants concurrently in rotating order. Releases and escalations stop starting new alarms after a tenant has spent twice the whole-dispatch budget (80 seconds by default) while another tenant is waiting for a worker, leaving the remainder due next tick; a tenant nobody is waiting behind keeps going. Already-started alarms keep their full dispatch budget, and clear announcements run in the same tenant job under a separate budget. A slow channel therefore cannot hold every tenant behind its entire backlog. Within one tenant job, a channel that exhausts its timeout attempts is skipped for the remaining deliveries; healthy channels still receive mixed-channel alarms. Escalations routed only to skipped channels keep their tier and are probed again next tick. The first failed probe can still consume a tier. Slice exhaustion is reported by `devicechain_notificationmanagement_tenant_slice_exhausted_total`, without a tenant label; the log identifies the tenant.
 
 ## Related
 

@@ -10,11 +10,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/maintwindow"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/schedule"
 	"gorm.io/datatypes"
@@ -65,6 +68,9 @@ const (
 	// Planning resolves the group, so it is the expensive step; inside the window a pass only
 	// fires what is due.
 	campaignReplanMargin = time.Hour
+	// campaignMembershipFreshness amortizes group resolution while solar devices trickle
+	// due across 15-second passes, without letting an hours-later step reuse the first check.
+	campaignMembershipFreshness = time.Minute
 
 	// campaignClaimPage bounds the elements one pass claims for one campaign, and so the
 	// size of the biggest batch a pass creates.
@@ -86,9 +92,40 @@ const (
 	campaignPruneCycles = 500
 )
 
+// Planning limits are internal defaults: no new configuration keys during rolling upgrades.
+const (
+	campaignPlanRows      = MaxCampaignTargets * MaxCampaignSteps
+	campaignPlanCycles    = 128
+	campaignTenantWorkers = 4
+	// campaignPassTimeout is a HANG BACKSTOP for one tenant's pass, not a fairness slice:
+	// fairness is the worker pool plus the admission budgets below. It must comfortably
+	// outlast the largest indivisible unit of work, a full cycle's insert of
+	// campaignPlanRows elements, or that cycle would be rolled back on every pass and
+	// never planned.
+	campaignPassTimeout = 5 * time.Minute
+)
+
+// campaignPlanBudget is an ADMISSION bound: no new cycle starts planning after it, but
+// one already started runs to completion (and the first always starts, so a tenant
+// whose single cycle outlasts the budget still progresses). Only the calls out to group
+// and site resolution are cut by it, as a context deadline.
+var campaignPlanBudget = 2 * time.Second
+var errCampaignPlanBudget = errors.New("campaign planning budget exhausted")
+
+// errCampaignResolutionTimeout is a group or site resolution that outlasted the planning
+// budget. The campaign is not marked failed (the dependency may only be slow), but the
+// pass reports it, so a resolver that never answers is not a silent stall.
+var errCampaignResolutionTimeout = errors.New("campaign planning: target resolution timed out")
+
+type campaignPlanState struct {
+	rows, cycles int
+	targets      map[string]*batchTargets
+	sites        map[string]map[string]Site
+}
+
 // campaignTenantBudget bounds the time one pass spends firing one tenant's campaigns. A pass
 // that runs over leaves the rest to the next pass, which starts with the oldest work, so one
-// tenant's large fleet delays every other tenant by at most this. A variable so a test can
+// tenant's large fleet yields to the rest of its queue. A variable so a test can
 // exhaust it.
 var campaignTenantBudget = 5 * time.Second
 
@@ -137,7 +174,8 @@ func DecodeTrigger(doc []byte) (*schedule.Trigger, error) {
 	if err := dec.Decode(&spec); err != nil {
 		return nil, fmt.Errorf("%w: %v", schedule.ErrInvalid, err)
 	}
-	if dec.More() {
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
 		return nil, fmt.Errorf("%w: trailing data after the trigger document", schedule.ErrInvalid)
 	}
 	return schedule.New(spec)
@@ -476,12 +514,34 @@ func (api *Api) TickCampaigns(ctx context.Context, now time.Time, pass string) e
 		Distinct().Pluck("tenant_id", &withClaims).Error; err != nil {
 		return fmt.Errorf("listing tenants with open campaign claims: %w", err)
 	}
+	tenants := dedupeStrings(append(withCampaigns, withClaims...))
+	// Each worker has a deadline per tenant, including dependencies and database work.
+	// A slow tenant cannot occupy the entire pool; queued tenants each get their own turn.
+	jobs := make(chan string)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 	var errs []error
-	for _, tenant := range dedupeStrings(append(withCampaigns, withClaims...)) {
-		if err := api.tickTenant(core.WithTenant(ctx, tenant), now, pass); err != nil {
-			errs = append(errs, fmt.Errorf("tenant %s: %w", tenant, err))
-		}
+	for i := 0; i < campaignTenantWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for tenant := range jobs {
+				tenantCtx, cancel := context.WithTimeout(core.WithTenant(ctx, tenant), campaignPassTimeout)
+				err := api.tickTenant(tenantCtx, now, pass)
+				cancel()
+				if err != nil {
+					mu.Lock()
+					errs = append(errs, fmt.Errorf("tenant %s: %w", tenant, err))
+					mu.Unlock()
+				}
+			}
+		}()
 	}
+	for _, tenant := range tenants {
+		jobs <- tenant
+	}
+	close(jobs)
+	wg.Wait()
 	return errors.Join(errs...)
 }
 
@@ -513,16 +573,37 @@ func (api *Api) tickTenant(ctx context.Context, now time.Time, pass string) erro
 	}
 	var errs []error
 
-	// Plan, only where the planned window runs low.
+	// Planning has its own admission budget so firing keeps its turn even when group
+	// resolution or a large insert consumes the planning allowance.
+	planDeadline := time.Now().Add(campaignPlanBudget)
+	state := &campaignPlanState{targets: map[string]*batchTargets{}, sites: map[string]map[string]Site{}}
+	var planning []*Campaign
 	for _, c := range campaigns {
-		if !c.Enabled {
-			continue
+		if c.Enabled && (!c.PlannedThrough.Valid || c.PlannedThrough.Time.Before(now.Add(CampaignPlanAhead-campaignReplanMargin))) {
+			planning = append(planning, c)
 		}
-		if c.PlannedThrough.Valid && !c.PlannedThrough.Time.Before(now.Add(CampaignPlanAhead-campaignReplanMargin)) {
-			continue
+	}
+	for attempt := 0; len(planning) > 0 && ctx.Err() == nil; attempt++ {
+		if attempt > 0 && !time.Now().Before(planDeadline) {
+			break // the first cycle always starts, so planning always progresses
 		}
-		if err := api.planOrRecord(ctx, c, now); err != nil {
+		// Least planned first; a successful cycle moves behind nearer work next turn.
+		sort.SliceStable(planning, func(i, j int) bool {
+			return planning[i].PlannedThrough.Time.Before(planning[j].PlannedThrough.Time)
+		})
+		c := planning[0]
+		if err := api.planOrRecord(ctx, c, now, state); err != nil {
+			if errors.Is(err, errCampaignResolutionTimeout) {
+				errs = append(errs, fmt.Errorf("campaign %s: %w", c.Token, err))
+				break // deferred, reported, never recorded as the campaign's failure
+			}
+			if errors.Is(err, errCampaignPlanBudget) || ctx.Err() != nil {
+				break // deferred work, never a completed planning window
+			}
 			errs = append(errs, fmt.Errorf("campaign %s: %w", c.Token, err))
+			planning = planning[1:]
+		} else if !c.PlannedThrough.Time.Before(now.Add(CampaignPlanAhead)) {
+			planning = planning[1:]
 		}
 	}
 
@@ -589,7 +670,7 @@ func (api *Api) tickTenant(ctx context.Context, now time.Time, pass string) erro
 }
 
 // planOrRecord plans one campaign and records the outcome on it.
-func (api *Api) planOrRecord(ctx context.Context, c *Campaign, now time.Time) error {
+func (api *Api) planOrRecord(ctx context.Context, c *Campaign, now time.Time, state *campaignPlanState) error {
 	trigger, err := DecodeTrigger(c.Trigger)
 	if err != nil {
 		return api.recordCampaignError(ctx, c, fmt.Errorf("stored trigger no longer validates: %w", err))
@@ -598,7 +679,10 @@ func (api *Api) planOrRecord(ctx context.Context, c *Campaign, now time.Time) er
 	if err != nil || len(steps) == 0 {
 		return api.recordCampaignError(ctx, c, fmt.Errorf("stored steps are unreadable"))
 	}
-	if err := api.planCampaign(ctx, c, trigger, steps, now); err != nil {
+	if err := api.planCampaign(ctx, c, trigger, steps, now, state); err != nil {
+		if errors.Is(err, errCampaignPlanBudget) || errors.Is(err, errCampaignResolutionTimeout) || ctx.Err() != nil {
+			return err
+		}
 		return api.recordCampaignError(ctx, c, err)
 	}
 	if c.LastError.Valid {
@@ -619,7 +703,7 @@ func (api *Api) recordCampaignError(ctx context.Context, c *Campaign, cause erro
 }
 
 func (api *Api) planCampaign(ctx context.Context, c *Campaign, trigger *schedule.Trigger,
-	steps []CampaignStep, now time.Time) error {
+	steps []CampaignStep, now time.Time, state *campaignPlanState) error {
 	horizon := now.Add(CampaignPlanAhead)
 	var from time.Time
 	switch {
@@ -646,19 +730,40 @@ func (api *Api) planCampaign(ctx context.Context, c *Campaign, trigger *schedule
 	if err != nil {
 		return err
 	}
-	for _, cy := range cycles {
-		if err := api.materializeCycle(ctx, c, trigger, steps, cy); err != nil {
+	through := horizon
+	if len(cycles) > 0 {
+		if state.cycles >= campaignPlanCycles {
+			return errCampaignPlanBudget
+		}
+		if err := api.materializeCycle(ctx, c, trigger, steps, cycles[0], state); err != nil {
 			return err
 		}
+		state.cycles++
+		if len(cycles) > 1 {
+			through = campaignCycleStart(trigger, cycles[1])
+		}
 	}
-	// Forward only: a replica that planned the same window a moment later changes nothing.
-	return api.RDB.DB(ctx).Model(c).
-		Where("id = ? AND (planned_through IS NULL OR planned_through < ?)", c.ID, horizon).
-		Update("planned_through", horizon).Error
+	// Persist only the completed prefix. Replaying after a crash is idempotent.
+	if err := api.RDB.DB(ctx).Model(c).
+		Where("id = ? AND (planned_through IS NULL OR planned_through < ?)", c.ID, through).
+		Update("planned_through", through).Error; err != nil {
+		return err
+	}
+	c.PlannedThrough = sql.NullTime{Time: through, Valid: true}
+	return nil
+}
+
+// campaignCycleStart is the inclusive boundary used by schedule.Cycles.
+func campaignCycleStart(trigger *schedule.Trigger, cy schedule.Cycle) time.Time {
+	if !cy.At.IsZero() {
+		return cy.At
+	}
+	day, _ := time.Parse("2006-01-02", cy.Day)
+	return maintwindow.ResolveLocal(trigger.Zone(), day.Year(), day.Month(), day.Day(), 0, 0)
 }
 
 func (api *Api) materializeCycle(ctx context.Context, c *Campaign, trigger *schedule.Trigger,
-	steps []CampaignStep, cy schedule.Cycle) error {
+	steps []CampaignStep, cy schedule.Cycle, state *campaignPlanState) error {
 	var already int64
 	if err := api.RDB.DB(ctx).Model(&CampaignCycle{}).
 		Where("campaign_id = ? AND cycle_key = ?", c.ID, cy.Key).Count(&already).Error; err != nil {
@@ -671,18 +776,45 @@ func (api *Api) materializeCycle(ctx context.Context, c *Campaign, trigger *sche
 		return errors.New("cannot plan: group resolution is unavailable")
 	}
 	group := c.GroupToken
-	targets, err := api.resolveGroupTargetsUpTo(ctx, &CommandBatchCreateRequest{GroupToken: &group}, MaxCampaignTargets)
-	if err != nil {
-		return err
+	targets := state.targets[group]
+	var err error
+	if targets == nil {
+		rctx, cancel := context.WithTimeout(ctx, campaignPlanBudget)
+		targets, err = api.resolveGroupTargetsUpTo(rctx, &CommandBatchCreateRequest{GroupToken: &group}, MaxCampaignTargets)
+		timedOut := rctx.Err() != nil && ctx.Err() == nil
+		cancel()
+		if err != nil {
+			if timedOut {
+				return fmt.Errorf("%w: group %s: %v", errCampaignResolutionTimeout, group, err)
+			}
+			return err
+		}
+		state.targets[group] = targets
 	}
-	var sites map[string]Site
-	if trigger.PerDevice() {
+	rows := len(targets.deviceTokens) * len(steps)
+	if state.rows+rows > campaignPlanRows {
+		return errCampaignPlanBudget
+	}
+	state.rows += rows
+	sites := state.sites[group]
+	if trigger.PerDevice() && sites == nil {
 		if api.SiteResolver == nil {
 			return errors.New("cannot plan a solar trigger: device locations are unavailable")
 		}
-		if sites, err = api.SiteResolver.DeviceSites(ctx, targets.deviceTokens); err != nil {
+		rctx, cancel := context.WithTimeout(ctx, campaignPlanBudget)
+		sites, err = api.SiteResolver.DeviceSites(rctx, targets.deviceTokens)
+		timedOut := rctx.Err() != nil && ctx.Err() == nil
+		cancel()
+		if err != nil {
+			if timedOut {
+				return fmt.Errorf("%w: device sites: %v", errCampaignResolutionTimeout, err)
+			}
 			return unavailableOr(err, "cannot plan a solar trigger: device locations are unavailable")
 		}
+		state.sites[group] = sites
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	now := api.campaignClock()
@@ -1086,11 +1218,13 @@ func (api *Api) supersedeOlderFirings(ctx context.Context, c *Campaign, now time
 		Updates(map[string]any{"status": string(ElementSkipped), "reason": SkipSuperseded, "updated_at": now}).Error
 }
 
-// recheckDueMembership resolves the group again for every cycle that has just started to fall
-// due, and skips, as NOT_IN_GROUP, the pending elements of devices that have left it since the
-// cycle was planned (up to CampaignPlanAhead earlier). A cycle is checked once, when its first
-// element falls due. It returns the cycles it could NOT check: those are not sent this pass,
-// because commanding a device that may have left the group is the failure the check exists for.
+// recheckDueMembership checks cycles before their first due element and again when a due
+// PENDING element's due time exceeds the last check by campaignMembershipFreshness. Later
+// steps and per-device solar instants therefore refresh membership without resolving on every
+// 15-second pass. One resolution serves all such cycles this pass; pending elements of devices
+// that left since planning are skipped as NOT_IN_GROUP, and each check advances its timestamp.
+// It returns the cycles it could NOT check: those are not sent this pass, because commanding
+// a device that may have left the group is the failure the check exists for.
 //
 // A device that JOINED the group after planning is not added to a cycle already planned; it is
 // in the next cycle planned. That is a documented limitation.
@@ -1105,10 +1239,28 @@ func (api *Api) recheckDueMembership(ctx context.Context, c *Campaign, now time.
 	if len(cycleIDs) == 0 {
 		return nil, nil
 	}
-	var unchecked []uint
-	if err := db.Model(&CampaignCycle{}).Where("id IN ? AND membership_checked_at IS NULL", cycleIDs).
-		Order("id ASC").Pluck("id", &unchecked).Error; err != nil {
+	var cycles []CampaignCycle
+	if err := db.Select("id", "membership_checked_at").Where("id IN ?", cycleIDs).
+		Order("id ASC").Find(&cycles).Error; err != nil {
 		return cycleIDs, err
+	}
+	var unchecked []uint
+	for _, cycle := range cycles {
+		if cycle.MembershipCheckedAt.Valid {
+			// Compare due times, not pass times: a backlog already covered by a check
+			// must not resolve the group repeatedly while waiting for a claim-page slot.
+			var due []uint
+			if err := db.Model(&CampaignElement{}).
+				Where("cycle_id = ? AND status = ? AND due_at <= ? AND due_at > ?",
+					cycle.ID, string(ElementPending), now, cycle.MembershipCheckedAt.Time.Add(campaignMembershipFreshness)).
+				Limit(1).Pluck("id", &due).Error; err != nil {
+				return cycleIDs, err
+			}
+			if len(due) == 0 {
+				continue
+			}
+		}
+		unchecked = append(unchecked, cycle.ID)
 	}
 	if len(unchecked) == 0 {
 		return nil, nil
@@ -1155,7 +1307,8 @@ func (api *Api) recheckDueMembership(ctx context.Context, c *Campaign, now time.
 				break
 			}
 		}
-		if err := db.Model(&CampaignCycle{ID: cycleID}).Where("id = ? AND membership_checked_at IS NULL", cycleID).
+		if err := db.Model(&CampaignCycle{ID: cycleID}).
+			Where("id = ? AND (membership_checked_at IS NULL OR membership_checked_at < ?)", cycleID, checkedAt).
 			Update("membership_checked_at", checkedAt).Error; err != nil {
 			return unchecked, err
 		}

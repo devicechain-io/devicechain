@@ -83,6 +83,11 @@ type pendingEvent struct {
 // duration still covers the wait for the collector token and the linger, not just what
 // happens after admission.
 func (ep *EventPersistenceWorker) admit(ctx context.Context, msg messaging.Message, done func(string)) (pendingEvent, bool) {
+	msg, ctx, span := msg.Process(ctx, "resolved-events.store")
+	if span != nil {
+		finish := done
+		done = func(result string) { defer span.End(); finish(result) }
+	}
 	log.Debug().Int("worker", ep.WorkerId).Str("correlation", msg.CorrelationID()).
 		Msg("Event persistence handled by worker")
 

@@ -33,7 +33,7 @@ import { DashboardHub, resolveWidgetDatasource } from '@devicechain/dashboards';
 
 const hub = new DashboardHub({
   resolver,                 // how a selector becomes device tokens
-  authorities: user.scopes, // what this viewer may do; drives hub.can(...)
+  authorities: user.authorities, // what this viewer may do; drives hub.can(...)
 });
 
 // The hub holds no slot bindings: resolve a widget's `slot` selector through them
@@ -54,13 +54,13 @@ Ten widgets pointed at the same device open **one** upstream subscription, not
 ten. Each widget declares the measurement names it cares about (none means all),
 and the hub fans a single stream out to the subscribers that asked for each name.
 
-Each channel has its own method, and each subscription returns its disposer:
+Each subscription returns a disposer. Bucket reads return a promise:
 
 | method | what it carries |
 | --- | --- |
 | `subscribeWidget` | measurement samples for a datasource selector |
 | `subscribeMembers` | a fleet widget's members, then each member's samples tagged with its device |
-| `bucketMeasurements` | the time buckets (count, minimum, maximum, sum) a stat widget folds into one figure |
+| `bucketMeasurements(datasource, window)` | a `Promise<MeasurementBucket[]>` of count, minimum, maximum and sum; not a subscription |
 | `subscribeAlarms` | live alarm rows, plus `acknowledgeAlarm` / `clearAlarm` |
 | `subscribeCommands` | command rows and their delivery status, plus `sendCommand` |
 | `subscribeLocations` | position series for map widgets |
@@ -73,6 +73,29 @@ the widgets that need them saying so instead of showing a number.
 
 `disposeAll()` tears down every open channel — a host calls it when the board
 closes, which is what keeps a poll and a socket from outliving the page.
+
+`authorities` is an optional `string[]` (use `decodeToken(token)?.authorities` from
+`@devicechain/client`). Missing authorities grant no actions; `'*'` grants all.
+`can(authority)` checks that list. `subscribeWidget(datasource, sink)` receives
+individual `MeasurementSample` values. Alarm and command subscriptions take
+`{ datasource?, pageSize, ...filters }` and emit whole snapshots through `sink.next`;
+location subscriptions take `{ datasource? }` and emit either `kind: 'positions'`
+or `kind: 'forbidden'`. An absent alarm datasource means tenant-wide scope; an
+`unbound` selector means no devices.
+
+`sendCommand(deviceToken, commandKey, payload?)` returns a `Promise<CommandDispatch>`:
+`{ status: 'sent', token }` or `{ status: 'rejected', code, reason }`.
+The payload is JSON text. A server refusal resolves to `rejected`; a transport
+failure rejects the promise. `acknowledgeAlarm(token)` and `clearAlarm(token)`
+return `Promise<void>`.
+
+`subscribePresence(datasource, sink)` supplies device connectivity. Custom
+`WidgetDataSource` implementations may omit presence, member feeds, bucket reads,
+seed reads and declared-metric lookups; widgets feature-detect these capabilities.
+`declaredMetrics(deviceType)` and `declaredMetricsForDevice(deviceToken)` return
+measurement names or null when unknown; null must not mean that a metric is absent.
+Use `historyWindowFor(spanSeconds, endMs)` to construct the `HistoryWindow` used
+by `bucketMeasurements` and `fetchWidgetHistory(widget, window, options?)`.
 
 ## The definition contract
 
@@ -154,6 +177,23 @@ handed straight to the hub is an error.
 `SyntheticDataSource` implements the same interface as the hub and generates
 plausible measurements, so a board can be previewed, screenshotted or
 demonstrated with no instance behind it.
+
+## Recorded playback and editor state
+
+`parseBoardRecording(input)` validates a recording or throws `RecordingFormatError`.
+Use `createRecordedClock(recording)` and `new RecordedDataSource(recording, clock)`
+to replay it through `WidgetDataSource`; `createRecordedResolver(recording)` and
+`createRecordedLister(recording)` supply recorded entity lookup. Drive the clock
+with `play()`, `pause()`, `seek(timeMs)` and `setRate(rate)` (`PLAYBACK_RATES` lists
+supported rates). On teardown, call `source.disposeAll()` and `clock.pause()`.
+A renderer using this source should set `seedHistory={false}` so it does not query
+live history. Unsupported recorded channels report `NotInRecordingError`.
+
+For an editor, `createEditHistory`, `commitEdit`, `undoEdit` and `redoEdit` manage
+immutable definition history. `copyWidget` / `serializeWidgetClipboard` and
+`parseWidgetClipboard` / `pasteWidgets` provide the portable clipboard format;
+`duplicateWidget` copies within a board. Keep the installed widget catalog with
+parsing and validation so extension widgets retain their identity.
 
 ## Command status
 

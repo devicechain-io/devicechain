@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
 // TestStartsUnderItsDeclaredCatalog starts this service's real broker wiring with
@@ -40,12 +41,12 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	broker := permtest.Start(t, instance)
 
 	prevMs, prevCfg, prevNats, prevRdb, prevApi, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Api, Svc
-	prevProc, prevWriteback, prevRoster := CommandDeliveryProcessor, DeadLetterWriteback, RosterConsumer
+	prevProc, prevWriteback, prevRoster, prevDeletion := CommandDeliveryProcessor, DeadLetterWriteback, RosterConsumer, DeletionConsumer
 	prevResponses, prevCommands := CommandResponsesReader, DeviceCommandsWriter
 	prevDelivery, prevWritebackMetrics, prevDL := DeliveryMetrics, WritebackMetrics, DeadLetters
 	t.Cleanup(func() {
 		Microservice, Configuration, NatsManager, RdbManager, Api, Svc = prevMs, prevCfg, prevNats, prevRdb, prevApi, prevSvc
-		CommandDeliveryProcessor, DeadLetterWriteback, RosterConsumer = prevProc, prevWriteback, prevRoster
+		CommandDeliveryProcessor, DeadLetterWriteback, RosterConsumer, DeletionConsumer = prevProc, prevWriteback, prevRoster, prevDeletion
 		CommandResponsesReader, DeviceCommandsWriter = prevResponses, prevCommands
 		DeliveryMetrics, WritebackMetrics, DeadLetters = prevDelivery, prevWritebackMetrics, prevDL
 	})
@@ -70,6 +71,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, Svc.Initialize(ctx), "initialize under the catalog")
+	dctest.UseFreeTCPPort(t, &service.ProbesPort)
 	NatsManager = Svc.Nats
 	t.Cleanup(func() {
 		_ = Svc.Stop(ctx)
@@ -82,5 +84,6 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NotNil(t, CommandResponsesReader)
 	require.NotNil(t, DeviceCommandsWriter)
 	require.NotNil(t, RosterConsumer)
+	require.NotNil(t, DeletionConsumer)
 	broker.RequireNoViolations(t)
 }

@@ -43,6 +43,11 @@ import (
 // between claiming and sending loses the clear rather than repeating it.
 func (n *PolicyNotifier) announceClear(ctx context.Context, clear *dmmodel.AlarmStateChangeEvent, fresh, cutoff bool) error {
 	_, err := n.announceClearReporting(ctx, clear, fresh, cutoff)
+	// A partial delivery is final for the consumer: retrying would repeat the clear
+	// on the channel that received it. The scheduler still needs the partial outcome.
+	if errors.Is(err, core.ErrPassPartial) {
+		return nil
+	}
 	return err
 }
 
@@ -138,6 +143,9 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 		return announced > 0 && parent.Err() == nil && errors.Is(err, context.DeadlineExceeded)
 	}
 	partial := func() error {
+		if lastErr != nil && !errors.Is(lastErr, core.ErrPassPartial) {
+			return lastErr
+		}
 		log.Info().Int("announced", announced).Msg("Pending clears: pass budget spent with a backlog left; continuing next tick")
 		return fmt.Errorf("pending clears: budget spent after announcing %d with rows left (last: %v): %w",
 			announced, lastErr, core.ErrPassPartial)
@@ -160,16 +168,19 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 		}
 		applyStateSource(clear, st)
 		delivered, err := n.announceClearReporting(ctx, clear, true, true)
+		if delivered {
+			announced++
+		}
 		if err != nil {
 			if spent(ctx.Err()) {
 				return partial()
 			}
 			log.Warn().Err(err).Str("alarm", st.AlarmToken).Msg("Announcing a pending clear failed; will retry next tick")
-			lastErr = err
+			// Keep a hard failure from being hidden by a later partial delivery.
+			if lastErr == nil || !errors.Is(err, core.ErrPassPartial) {
+				lastErr = err
+			}
 			continue
-		}
-		if delivered {
-			announced++
 		}
 	}
 	return lastErr
@@ -236,6 +247,10 @@ func (n *PolicyNotifier) announceClearIn(ctx context.Context, tenant string, cle
 
 	tally := n.deliverAll(ctx, deliveries, renderNotification(clear), clear.AlarmToken, model.AttemptTriggerAlarm)
 	if tally.delivered > 0 {
+		if tally.retryable() > 0 {
+			return true, fmt.Errorf("%d of %d clear deliveries failed for alarm %q: %w",
+				tally.retryable(), len(deliveries), clear.AlarmToken, core.ErrPassPartial)
+		}
 		return true, nil
 	}
 	if tally.retryable() == 0 {

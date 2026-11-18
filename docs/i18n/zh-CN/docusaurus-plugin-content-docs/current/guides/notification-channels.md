@@ -26,7 +26,7 @@ title: 配置通知渠道
 
 **更新**时，`secret` 字段行为如下：
 
-- **省略**则保留现有密钥，不必再次发送。
+- **省略**则保留现有密钥，更改类型或凭据目标时必须重新发送。
 - 发送非空值会替换。
 - 发送 `null` 或空字符串会清除。
 - 配置声明 `bearer` 或 `header` 认证的 webhook 渠道，清除密钥会被拒绝。若希望端点匿名，请在同一请求将 `auth` 改为 `none`。
@@ -82,6 +82,8 @@ mutation {
 ```
 
 Slack 入站 webhook 使用 `"auth":"none"`，省略 `secret`。下面的原生 [Slack 渠道](#create-a-slack-channel)会为你排版消息，是更好的选择。
+
+通用 webhook 的 `text` 是纯文本摘要，使用设备令牌或来源信息，而不包含设备名称；Slack 用户应使用原生 [Slack 通道](#create-a-slack-channel)。
 
 Webhook 通道的 JSON 正文包含告警的 `eventType`（`RAISED`、`ESCALATED`、`DEESCALATED`、`CLEARED`、`ACKNOWLEDGED`，定时重新通知则为 `RENOTIFIED`）、`alarmToken`、`alarmKey`、`severity`、`state`、来源的 `originatorType` 与 `originatorId`（已知时），以及各个时间。当告警所属设备已知时，还会包含 `deviceToken`、`deviceName` 和 `deviceTypeToken`；某个键的值未知时（例如设备没有名称）会省略该键，绝不会发送空值。定时重新通知（`RENOTIFIED`）和调度器拾取的延迟 `CLEARED` 通知也会在已知时包含这些设备和来源字段。升级前已发送过通知的告警，其后续此类通知会省略这些字段。
 
@@ -195,6 +197,7 @@ mutation {
 - 每个周期只发送一次，且在清除被记录之后发送，因此其后不会再有“仍未解决”的升级通知。若没有任何通道接收，会重试；一旦有通道接收，就不会重复发送。若清除在其告警的通知被记录之前就被处理，则会在该通知之后立即发送；若当时发送失败，通知调度器会在之后最长 30 分钟内的各轮中再次拾取并发送。
 - **不**受节流限制，不计入通知次数，也不会启动升级。
 - 在策略的静默时段内发生的清除会被**丢弃**而不是暂存：数小时后才发出的“已清除”只会播报过时的消息。
+- 启用此选项不会通报历史清除：清除必须发生在启用之后。如果在认领清除事件后、发送前崩溃，该通报可能丢失；这并非恰好一次投递保证。
 - `notifyOnClear` 不能用 `null` 清除；请传 `true` 或 `false`。
 
 ### 设备类型作用域 {#device-type-scoping}
@@ -209,6 +212,8 @@ mutation {
 - **`escalateAfterSeconds`** 和 **`maxEscalations`**：设为大于零时，上次通知后持续**未确认且未解除**达到该时长，会重新通知，直到次数上限。`maxEscalations` 未设置或为 `0`，使用服务级默认上限 5。`escalateAfterSeconds` 为 `null`/`0` 禁用该策略升级。
 
 升级可安全运行多个副本：每个升级层级发送前先认领，因此只有一个副本投递。每个告警有**一个共享升级时钟和层级**。多个升级策略匹配时，最短窗口决定频率，每个次数上限都针对共享层级。
+
+升级通知的等待时间从平台发送通知时开始计算，不受设备事件时间戳的影响。
 
 ```graphql
 mutation {
@@ -365,3 +370,5 @@ query {
 5. **查看投递记录。** `notificationAttempts(criteria: {pageNumber: 1, pageSize: 20, alarmToken: "..."})` 列出该告警的每次尝试及其结果。`FAILED` 或 `REFUSED` 记录带有 `errorCode` 和服务提供方的 `errorMessage`；参见[投递记录](#delivery-ledger)。
 
 确认或解除告警会停止后续升级。状态行在通知历史旁记录 `acknowledgedAt`/`clearedAt`。如果告警解除后其条件再次出现，平台会重新打开同一个告警，其状态行也会为新周期重新开始：在该周期被确认或解除之前，升级会再次进行。
+
+如果渠道持有已存储凭据，更改渠道类型、webhook URL 或认证方式、SMTP 主机/端口/安全模式或 PagerDuty 区域时，必须在同一请求中发送 `secret`。省略时将返回 `SECRET_RESUPPLY_REQUIRED`，且不会写入任何更改。请重新提供凭据，或使用 `secret: null` 删除凭据。名称、自定义请求头和链接基础 URL 的编辑会保留凭据。

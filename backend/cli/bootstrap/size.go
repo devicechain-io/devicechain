@@ -9,9 +9,10 @@ import (
 	"strings"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// The size axis: `--size base|compact|perf-12k|perf-16k`.
+// The size axis: `--size base|compact|perf-12k|perf-16k|perf-20k`.
 //
 // A size is a PRESET, not a dial, by the same rules compact.go states: it composes levers that
 // already exist, never changes which services run (that stays on the profile axis), and never
@@ -19,19 +20,21 @@ import (
 // replicas while the preset sizes each copy.
 //
 //   - base is the default and renders exactly what dcctl rendered before this axis existed.
+//
 //   - compact is the --compact preset (compact.go), reachable as `--size compact` as well; the flag
 //     stays as a permanent alias. Its sizing is still compactSizing, so its tests are unchanged.
+//
 //   - perf-12k is the measured high-throughput shape: one cluster, no --ha, sustained 12,000
 //     events a second with event envelopes on (GKE rounds 29, 30 and 31).
+//
 //   - perf-16k is the same shape sized for 16,000 events a second (GKE round 31): a larger broker,
 //     a larger write-ahead log allowance and a larger event-processing pod. 20,000 events a second
 //     was stored exactly on that shape in round 31 but over the latency target, so it is a
 //     throughput-only ceiling and is documented as one.
 //
-// 🔴 THE NAME IS THE CLAIM. A size is named for the rate it holds INSIDE the latency target, which
-// is why there is no perf-20k: round 31 stored 20,000 a second without loss at a PUBACK p99 of
-// 245 ms, and a name that said 20k would promise a latency it did not deliver. A size for a rate
-// above that waits for a round that passes it.
+//   - perf-20k is the throughput target derived from round 31: more broker CPU on the same
+//     unsharded shape. It does not promise the 50 ms PUBACK latency target; the measured 20k
+//     run stored every event but had a 245 ms PUBACK p99. These values are not yet run as written.
 //
 // Precedence, lowest to highest, each layer deep-merged over the one before:
 //
@@ -46,10 +49,11 @@ const (
 	SizeCompact = "compact"
 	SizePerf12k = "perf-12k"
 	SizePerf16k = "perf-16k"
+	SizePerf20k = "perf-20k"
 )
 
 // sizeNames is every name `--size` accepts, in the order help prints them.
-var sizeNames = []string{SizeBase, SizeCompact, SizePerf12k, SizePerf16k}
+var sizeNames = []string{SizeBase, SizeCompact, SizePerf12k, SizePerf16k, SizePerf20k}
 
 // SizeNames is the accepted --size values, for the command layer's help and errors.
 func SizeNames() []string { return append([]string(nil), sizeNames...) }
@@ -179,6 +183,34 @@ var sizePresets = map[string]sizePreset{
 		RelationalMaxWALMiB: 8192,
 		EnvelopesMeasured:   true,
 	},
+	// GKE round 31: product/gke-perf-report-r31-2026-11.md, sections 1-3, in the
+	// devicechain-strategy repo. At 20k the single broker used 5.2 cores (peak 5.5):
+	// reserve 6 CPU, 6Gi memory and a 10Gi limit; no sharding or replica increase.
+	// Keep perf-12k's service shape and request rule (measured cores per pod x
+	// 1.2-1.5, rounded up to 50m): ES .75 x 1.2, DM .50 x 1.2, DS .29 x 1.3,
+	// EM .41 x 1.5, EP .72 x 1.3. EP arm C needs 2 CPU / 1536Mi at 20k.
+	// WAL 40960 MiB and 260Gi event storage follow section 2; relational WAL is
+	// published for install only. 40Gi JetStream holds the 20k runway even with
+	// fail-closed acknowledgements enabled. This is throughput sizing, not a latency claim.
+	SizePerf20k: {
+		Name: SizePerf20k,
+		Areas: map[string]areaSize{
+			"event-sources":     {Replicas: 3, CPULimit: "3", MemLimit: "256Mi", CPURequest: "900m"},
+			"device-management": {Replicas: 2, CPULimit: "3", CPURequest: "600m"},
+			"device-state":      {Replicas: 2, CPULimit: "3", MemLimit: "512Mi", CPURequest: "400m"},
+			"event-management":  {CPULimit: "4", MemLimit: "1Gi", CPURequest: "650m"},
+			"event-processing":  {CPULimit: "2", MemLimit: "1536Mi", CPURequest: "950m"},
+		},
+		StreamDesignRate:    20000,
+		NatsCPURequest:      "6",
+		NatsMemoryRequest:   "6Gi",
+		NatsMemoryLimit:     "10Gi",
+		JetStreamStorage:    "40Gi",
+		TimescaleStorage:    "260Gi",
+		TimescaleMaxWALMiB:  40960,
+		RelationalMaxWALMiB: 8192,
+		EnvelopesMeasured:   true,
+	},
 }
 
 // ValidateSize judges a --size value. "" is base.
@@ -218,6 +250,87 @@ func sizeFor(st *State) *sizePreset {
 		return nil
 	}
 	return &p
+}
+
+type brokerRequest struct {
+	Preset           string
+	CPU, Memory      *resource.Quantity
+	CPUText, MemText string
+}
+
+// brokerRequestFor checks only requests still supplied by the built-in preset.
+func brokerRequestFor(st *State, stated func(name string) bool) (req *brokerRequest, unchecked string, err error) {
+	return sizeFor(st).brokerRequestFor(st, stated)
+}
+
+// brokerRequestFor parses a preset's requests without changing the built-in table.
+func (p *sizePreset) brokerRequestFor(st *State, stated func(name string) bool) (req *brokerRequest, unchecked string, err error) {
+	if p == nil {
+		return nil, "", nil
+	}
+	values := map[string]string{}
+	for _, v := range p.tofuVarsFor(st, stated) {
+		values[v.Name] = v.Value
+	}
+	var missing []string
+	for _, name := range []string{"nats_cpu_request", "nats_memory_request"} {
+		if _, ok := values[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		unchecked = "the operator states " + strings.Join(missing, " / ")
+	}
+	if len(missing) == 2 {
+		return nil, unchecked, nil
+	}
+	req = &brokerRequest{Preset: p.Name, CPUText: values["nats_cpu_request"], MemText: values["nats_memory_request"]}
+	if _, ok := values["nats_cpu_request"]; ok {
+		cpu, err := resource.ParseQuantity(req.CPUText)
+		if err != nil {
+			return nil, unchecked, fmt.Errorf("parsing %s nats_cpu_request: %w", p.Name, err)
+		}
+		req.CPU = &cpu
+	}
+	if _, ok := values["nats_memory_request"]; ok {
+		memory, err := resource.ParseQuantity(req.MemText)
+		if err != nil {
+			return nil, unchecked, fmt.Errorf("parsing %s nats_memory_request: %w", p.Name, err)
+		}
+		req.Memory = &memory
+	}
+	return req, unchecked, nil
+}
+
+// smallerBrokerPreset finds the largest preset strictly below both selected requests.
+func smallerBrokerPreset(selected string) *sizePreset {
+	p, ok := sizePresets[selected]
+	if !ok {
+		return nil
+	}
+	cpu, cpuErr := resource.ParseQuantity(p.NatsCPURequest)
+	memory, memErr := resource.ParseQuantity(p.NatsMemoryRequest)
+	if cpuErr != nil || memErr != nil {
+		return nil
+	}
+	var best *sizePreset
+	var bestCPU, bestMemory resource.Quantity
+	for _, name := range sizeNames {
+		candidate, ok := sizePresets[name]
+		if !ok {
+			continue
+		}
+		candidateCPU, cpuErr := resource.ParseQuantity(candidate.NatsCPURequest)
+		candidateMemory, memErr := resource.ParseQuantity(candidate.NatsMemoryRequest)
+		if cpuErr != nil || memErr != nil || candidateCPU.Cmp(cpu) >= 0 || candidateMemory.Cmp(memory) >= 0 {
+			continue
+		}
+		if best == nil || candidateCPU.Cmp(bestCPU) > 0 || (candidateCPU.Cmp(bestCPU) == 0 && candidateMemory.Cmp(bestMemory) > 0) {
+			best = &candidate
+			bestCPU, bestMemory = candidateCPU, candidateMemory
+		}
+	}
+	return best
 }
 
 // helmValues is the preset's chart values, to sit BELOW what dcctl computes. Nil for base.

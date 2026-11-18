@@ -59,7 +59,7 @@ func TestIngestRateLimitDefaulting(t *testing.T) {
 	// NewLwm2mConfiguration (which runs ApplyDefaults) is positive too.
 	assert.Positive(t, NewLwm2mConfiguration().IngestRateLimit.ReadingsPerSecond)
 
-	// An explicit ceiling is preserved; a non-positive one floors to the default.
+	// An explicit ceiling is preserved; a negative one is left for Validate to refuse.
 	explicit := &Lwm2mConfiguration{IngestRateLimit: IngestRateLimit{ReadingsPerSecond: 5, Burst: 10}}
 	explicit.ApplyDefaults()
 	assert.Equal(t, float64(5), explicit.IngestRateLimit.ReadingsPerSecond)
@@ -67,8 +67,9 @@ func TestIngestRateLimitDefaulting(t *testing.T) {
 
 	bad := &Lwm2mConfiguration{IngestRateLimit: IngestRateLimit{ReadingsPerSecond: -1, Burst: -1}}
 	bad.ApplyDefaults()
-	assert.Equal(t, float64(DefaultIngestReadingsPerSecond), bad.IngestRateLimit.ReadingsPerSecond)
-	assert.Equal(t, DefaultIngestBurst, bad.IngestRateLimit.Burst)
+	assert.Equal(t, float64(-1), bad.IngestRateLimit.ReadingsPerSecond)
+	assert.Equal(t, -1, bad.IngestRateLimit.Burst)
+	require.ErrorContains(t, bad.Validate(), "ingestRateLimit.readingsPerSecond")
 }
 
 func TestApplyDefaultsDoesNotOverrideSetValues(t *testing.T) {
@@ -166,6 +167,34 @@ func TestValidateAcceptsAutoRegisterWithDeviceType(t *testing.T) {
 	c.Security.Identities[0].AutoRegister = true
 	c.Security.Identities[0].DeviceTypeToken = "sensor"
 	require.NoError(t, loaded(c))
+}
+
+func TestDeviceTypeTokenMustMatchTheTokenGrammar(t *testing.T) {
+	cases := []struct {
+		name            string
+		autoRegister    bool
+		deviceTypeToken string
+		wantError       bool
+	}{
+		{"invalid type with autoRegister", true, "bad/type", true},
+		{"invalid type without autoRegister", false, "bad type", true},
+		{"valid type with autoRegister", true, "sensor-v2", false},
+		{"empty type without autoRegister", false, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validConfig()
+			c.Security.Identities[0].AutoRegister = tc.autoRegister
+			c.Security.Identities[0].DeviceTypeToken = tc.deviceTypeToken
+			err := loaded(c)
+			if tc.wantError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "deviceTypeToken")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 // Bindings maps each identity to its resolved tenancy binding — what a registration

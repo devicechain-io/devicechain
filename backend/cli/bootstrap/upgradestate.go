@@ -314,7 +314,8 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	// registry could have its controller moved to a published image and its services
 	// left on the local one — two halves of what is defined as ONE version across the
 	// images, the chart, the operator and this CLI.
-	st.ImageRegistry, st.ImageVersion = inst.Spec.ImageRegistry, inst.Spec.ImageVersion
+	declaredRegistry, declaredVersion := inst.Spec.ImageRegistry, inst.Spec.ImageVersion
+	st.ImageRegistry, st.ImageVersion = declaredRegistry, declaredVersion
 	// 🔴 AN AREA CHANGE STAYS ON THE DECLARED IMAGES, AND THAT IS NOT LEFT TO THE CALLER.
 	// The release refusal in applyAreaChange compares this dcctl with the version the run
 	// is about to deploy; an image source supplied beside the areas would make that the
@@ -347,8 +348,7 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	// A dcctl is not pointed at a release that is not its own: that plans its chart around images it
 	// was not built for. See refuseForeignRelease.
 	if len(opts.EnableAreas) == 0 && opts.ImageVersion != "" {
-		if err := refuseForeignRelease(st.ImageVersion, DefaultImageVersion, st.ImageRegistry,
-			fmt.Sprintf("dcctl upgrade %s %s --version %s", inst.Spec.Provider, opts.Instance, st.ImageVersion)); err != nil {
+		if err := refuseForeignRelease(st.ImageVersion, DefaultImageVersion, st.ImageRegistry); err != nil {
 			return err
 		}
 	}
@@ -359,8 +359,13 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	if len(opts.EnableAreas) == 0 && opts.ImageVersion == "" {
 		if err := judgeForeignRelease(
 			fmt.Sprintf("the version instance %q is declared at (%s)", opts.Instance, st.ImageVersion),
-			st.ImageVersion, DefaultImageVersion, st.ImageRegistry,
-			fmt.Sprintf("dcctl upgrade %s %s", inst.Spec.Provider, opts.Instance), true); err != nil {
+			st.ImageVersion, DefaultImageVersion, st.ImageRegistry, true); err != nil {
+			return err
+		}
+	}
+
+	if len(opts.EnableAreas) == 0 {
+		if err := refuseADowngrade(opts.Instance, declaredRegistry, declaredVersion, st.ImageRegistry, st.ImageVersion); err != nil {
 			return err
 		}
 	}
@@ -423,6 +428,11 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	// stays on the platform default. A flag overrides it, and is marked for recording below
 	// (recordUpgradedVersion) so the NEXT flagless upgrade keeps it. Judged against the area set
 	// the instance will have, here, while nothing has been written.
+	st.MqttDeviceUplinksGiven = opts.MqttDeviceUplinks != nil
+	if opts.MqttDeviceUplinks != nil {
+		st.MqttDeviceUplinksChange = !sameBoolPtr(st.MqttDeviceUplinks, opts.MqttDeviceUplinks)
+		st.MqttDeviceUplinks = copyBoolPtr(opts.MqttDeviceUplinks)
+	}
 	if opts.MqttFailClosed != nil {
 		if err := ValidateMqttFailClosed(opts.MqttFailClosed, st.Profile, st.EnableAreas); err != nil {
 			return err

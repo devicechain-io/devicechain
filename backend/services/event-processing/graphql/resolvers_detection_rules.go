@@ -5,11 +5,22 @@ package graphql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/limit"
 )
+
+// MaxRulesPerValidation is the most rules one validateDetectionRules call compiles;
+// more is refused with LIMIT_EXCEEDED before any rule is decoded or compiled. It is a
+// fixed, generous bound, far above any real profile, deliberately not the per-tenant
+// rule budget, which only warns today: capping the gate at it would refuse profiles
+// that already publish. Device-management refuses a publish above the same number
+// itself (model.MaxEnabledDetectionRulesPerPublish) so an author sees the bound instead
+// of "validation unavailable". The two numbers must move together; TestRuleCountBoundAgreesWithThePublishBound in event-processing pins them.
+const MaxRulesPerValidation = 1000
 
 // detectionRuleInput is one rule submitted to the validation gate: its authoring token
 // (for error anchoring) and the opaque rules.Rule JSON to compile.
@@ -29,12 +40,16 @@ type detectionRuleInput struct {
 // It gates on device:read — the least-privilege authority for a read-only check over the
 // device/profile aggregate that rules belong to (the caller mints a service token carrying
 // only it). The compile is pure: no state is read or written, so a hostile caller can gain
-// nothing beyond a CEL-compilation oracle, which the cost gate and auth already bound.
+// nothing beyond a CEL-compilation oracle, which the cost gate and auth already bound;
+// the rule count is bounded by MaxRulesPerValidation.
 func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args struct {
 	Rules []detectionRuleInput
 }) (*DetectionRuleValidationResultResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
 		return nil, err
+	}
+	if len(args.Rules) > MaxRulesPerValidation {
+		return nil, limit.Exceeded("detection rules in one validation", len(args.Rules), MaxRulesPerValidation)
 	}
 
 	// Platform-default compile limits, shared verbatim with the runtime fact-consumer
@@ -59,8 +74,10 @@ func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args struct
 		// taxonomy); this gate owns the kind check.
 		if in.GroupScoped &&
 			(rule.Type == rules.TypeAbsence || rule.Type == rules.TypeCorrelation) {
-			errs = append(errs, newValidationErrorMsg(i, in.Token,
-				fmt.Sprintf("a group scope is not supported on a rule of type %q (only event-driven, device-keyed kinds can be group-scoped)", rule.Type)))
+			rejection := newValidationErrorMsg(i, in.Token,
+				fmt.Sprintf("a group scope is not supported on a rule of type %q (only event-driven, device-keyed kinds can be group-scoped)", rule.Type))
+			rejection.field = "groupScoped"
+			errs = append(errs, rejection)
 			continue
 		}
 		// The stored blob carries no runtime id (that is composed at fact-emit time), so
@@ -85,7 +102,12 @@ func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args struct
 
 // newValidationError builds a rejection resolver anchored to the offending rule.
 func newValidationError(index int, token string, err error) *DetectionRuleValidationErrorResolver {
-	return newValidationErrorMsg(index, token, err.Error())
+	r := newValidationErrorMsg(index, token, err.Error())
+	var validation *rules.ValidationError
+	if errors.As(err, &validation) {
+		r.field = validation.Field
+	}
+	return r
 }
 
 // newValidationErrorMsg builds a rejection resolver from a ready message (a rejection that is
@@ -143,6 +165,16 @@ type DetectionRuleValidationErrorResolver struct {
 	index   int32
 	token   string
 	message string
+	field   string
+}
+
+// Field resolves the authored definition's field, or groupScoped for a scope
+// rejection. Errors without a reliable field anchor apply to the whole rule.
+func (r *DetectionRuleValidationErrorResolver) Field() *string {
+	if r.field == "" {
+		return nil
+	}
+	return &r.field
 }
 
 // Index resolves the zero-based position of the offending definition in the input list.

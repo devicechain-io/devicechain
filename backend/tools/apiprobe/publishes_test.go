@@ -210,3 +210,57 @@ func TestTheProbeSignatureVerifiesAgainstTheRegisteredKey(t *testing.T) {
 	require.True(t, ed25519.Verify(pub.(ed25519.PublicKey), sum[:], sig))
 	require.Equal(t, probeArtifactDigest(), "sha256:"+hex.EncodeToString(sum[:]))
 }
+
+// Protection must be the final write: later activation changes would need a review
+// or a break-glass session the password-only probe cannot supply.
+func TestAutomationProtectionIsLastAndLeavesTheLooseningPending(t *testing.T) {
+	e, ok := seededEntityNamed("automation-review-policy")
+	require.True(t, ok)
+	require.Equal(t, e.Name, afterPublish[len(afterPublish)-1].Name)
+	all := allEntities()
+	require.Equal(t, e.Name, all[len(all)-1].Name)
+	require.Nil(t, e.Record)
+	require.Equal(t, []string{"AutomationReviewPolicy.revision"}, e.Requires)
+	require.NotNil(t, e.After)
+	require.NotNil(t, e.Settled)
+	require.NotNil(t, e.TokenFrom)
+	st := newState("apiprobe")
+	require.Equal(t, st.tok("device-profile"), e.TokenFrom(st))
+	require.Equal(t, map[string]any{
+		"profileToken": st.tok("device-profile"),
+		"settings":     map[string]any{"required": true},
+	}, e.Vars(st))
+	require.Equal(t, map[string]any{
+		"profileToken": st.tok("device-profile"),
+		"settings":     map[string]any{"required": false},
+	}, probeAutomationPolicyLooseningVars(st))
+	// Name distinguishes the policy's receipt row even though its address is shared.
+	profile, ok := entityNamed("device-profile")
+	require.True(t, ok)
+	require.NotEqual(t, profile.Name, e.Name)
+	require.Contains(t, e.readDoc(), "automationReviewPolicy(profileToken:$token)")
+	require.Contains(t, e.createDoc(), "policy{"+e.Fields+"}")
+
+	require.NoError(t, e.Settled(map[string]any{
+		"effective":     map[string]any{"required": true},
+		"pendingChange": map[string]any{"state": "PENDING"},
+	}))
+	for _, f := range []map[string]any{
+		{},
+		{"effective": map[string]any{"required": true}},
+		{"effective": map[string]any{"required": false}, "pendingChange": map[string]any{"state": "PENDING"}},
+		{"effective": map[string]any{"required": true}, "pendingChange": map[string]any{"state": "APPLIED"}},
+	} {
+		require.Error(t, e.Settled(f))
+	}
+}
+
+// seededEntityNamed finds a row in every seed phase; entityNamed sees only the creates.
+func seededEntityNamed(name string) (entity, bool) {
+	for _, e := range allEntities() {
+		if e.Name == name {
+			return e, true
+		}
+	}
+	return entity{}, false
+}

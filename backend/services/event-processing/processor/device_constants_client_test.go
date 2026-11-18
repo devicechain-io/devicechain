@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -98,7 +99,7 @@ func TestTheConstantsClientFailsWholeNeverPartial(t *testing.T) {
 	assert.Nil(t, got)
 
 	skew := &deviceConstantsClient{exec: func(context.Context, factService, string, string, map[string]any, any) error {
-		return errors.New(`Cannot query field "deviceConstantsPage" on type "Query"`)
+		return &svcclient.GraphQLError{Messages: []string{`Cannot query field "deviceConstantsPage" on type "Query".`}}
 	}}
 	_, _, err = skew.DeviceConstants(context.Background(), "acme", "meter", []string{"k"}, 1000)
 	require.Error(t, err)

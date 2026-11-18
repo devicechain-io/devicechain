@@ -10,10 +10,21 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/limit"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
+
+// checkEventTypeFilter bounds raw entries, including duplicates, before any COUNT,
+// distinct-name lookup or aggregation can expand the list into SQL.
+func checkEventTypeFilter(eventTypes []eventtype.EventType) error {
+	if len(eventTypes) > rdb.MaxLookupKeys {
+		return limit.Exceeded("eventTypes", len(eventTypes), rdb.MaxLookupKeys)
+	}
+	return nil
+}
 
 // commonEventFilters applies the device, event-type and occurred-time-range
 // filters that are shared by every event read. The anchor filter is applied
@@ -139,29 +150,39 @@ func (api *Api) eventAnchorFilter(ctx context.Context, criteria EventSearchCrite
 // the whole place rather than the caller's share (measured: an events page of 297k owned
 // events on a 5,000-device area took 7.9 s). The bound is a context deadline, which pgx
 // turns into a server-side cancel, so the query stops and the caller gets a clean error
-// instead of a held connection. It is a variable only so a test can shrink it.
+// instead of a held connection.
 var scopedAnchorReadTimeout = 15 * time.Second
 
-// boundScopedAnchorRead applies scopedAnchorReadTimeout to a scoped caller's read that
-// names an anchor. Unscoped reads, and reads with no anchor, are returned unchanged.
-func boundScopedAnchorRead(ctx context.Context, anchorType *string) (context.Context, context.CancelFunc) {
+// eventReadTimeout bounds every other event list read. Holding a pooled connection
+// for minutes is a fault, not a contract; the exact COUNT on every page is the usual
+// cause. The context deadline lets pgx cancel the statement in flight. Both bounds
+// are variables only so tests can shrink them.
+var eventReadTimeout = 60 * time.Second
+
+var errEventReadTimeout = errors.New("event read bound expired")
+
+// boundEventRead bounds every list and bucketed measurement read, keeping the
+// tighter bound for scoped callers naming an anchor. An earlier caller deadline wins.
+func boundEventRead(ctx context.Context, anchorType *string) (context.Context, context.CancelFunc, time.Duration) {
+	bound := eventReadTimeout
 	if anchorType != nil {
 		if _, scoped := auth.ScopeFromContext(ctx); scoped {
-			return context.WithTimeout(ctx, scopedAnchorReadTimeout)
+			bound = scopedAnchorReadTimeout
 		}
 	}
-	return ctx, func() {}
+	ctx, cancel := context.WithTimeoutCause(ctx, bound, errEventReadTimeout)
+	return ctx, cancel, bound
 }
 
-// scopedReadError turns the deadline boundScopedAnchorRead set into an error that says what
-// happened. Any other error, including a caller's own cancellation, passes through.
-func scopedReadError(ctx context.Context, err error) error {
+// boundedReadError explains an expired read bound. Other errors, including a
+// caller's own cancellation or earlier deadline, pass through unchanged.
+func boundedReadError(ctx context.Context, err error, bound time.Duration) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("the read did not finish within %s; narrow the time range: %w",
-			scopedAnchorReadTimeout, context.DeadlineExceeded)
+	if errors.Is(context.Cause(ctx), errEventReadTimeout) {
+		return fmt.Errorf("the read did not finish within %s; narrow the time range or filter on a device: %w",
+			bound, context.DeadlineExceeded)
 	}
 	return err
 }
@@ -203,10 +224,13 @@ func (api *Api) AnchorsForEvent(ctx context.Context, eventId []byte,
 // event_anchors set table (the base event no longer carries a single anchor), on the base
 // event's full key (anchorEventKeySubquery).
 func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*EventSearchResults, error) {
+	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
+		return nil, err
+	}
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
-	ctx, cancel := boundScopedAnchorRead(ctx, criteria.AnchorType)
+	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
 	results := make([]Event, 0)
 	db, pag := api.RDB.ListOf(ctx, &Event{}, func(result *gorm.DB) *gorm.DB {
@@ -215,17 +239,20 @@ func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*Even
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
-		return nil, scopedReadError(ctx, db.Error)
+		return nil, boundedReadError(ctx, db.Error, bound)
 	}
 	return &EventSearchResults{Results: results, Pagination: pag}, nil
 }
 
 // Search for location events that meet criteria.
 func (api *Api) LocationEvents(ctx context.Context, criteria EventSearchCriteria) (*LocationEventSearchResults, error) {
+	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
+		return nil, err
+	}
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
-	ctx, cancel := boundScopedAnchorRead(ctx, criteria.AnchorType)
+	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
 	results := make([]LocationEvent, 0)
 	db, pag := api.RDB.ListOf(ctx, &LocationEvent{}, func(result *gorm.DB) *gorm.DB {
@@ -234,17 +261,20 @@ func (api *Api) LocationEvents(ctx context.Context, criteria EventSearchCriteria
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
-		return nil, scopedReadError(ctx, db.Error)
+		return nil, boundedReadError(ctx, db.Error, bound)
 	}
 	return &LocationEventSearchResults{Results: results, Pagination: pag}, nil
 }
 
 // Search for measurement events that meet criteria.
 func (api *Api) MeasurementEvents(ctx context.Context, criteria EventSearchCriteria) (*MeasurementEventSearchResults, error) {
+	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
+		return nil, err
+	}
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
-	ctx, cancel := boundScopedAnchorRead(ctx, criteria.AnchorType)
+	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
 	results := make([]MeasurementEvent, 0)
 	db, pag := api.RDB.ListOf(ctx, &MeasurementEvent{}, func(result *gorm.DB) *gorm.DB {
@@ -253,7 +283,7 @@ func (api *Api) MeasurementEvents(ctx context.Context, criteria EventSearchCrite
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
-		return nil, scopedReadError(ctx, db.Error)
+		return nil, boundedReadError(ctx, db.Error, bound)
 	}
 	return &MeasurementEventSearchResults{Results: results, Pagination: pag}, nil
 }
@@ -386,10 +416,13 @@ func boundBucketedRows(buckets, names int64) error {
 // The read is bounded before it runs: at most MaxMeasurementBuckets buckets, and at
 // most MaxMeasurementRows rows (buckets x measurement names).
 func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
+	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
+		return nil, err
+	}
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
-	ctx, cancel := boundScopedAnchorRead(ctx, criteria.AnchorType)
+	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
 	criteria, buckets, err := boundBucketedRange(criteria, time.Now())
 	if err != nil {
@@ -402,17 +435,19 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 		// the count stops there instead of reading every name in range.
 		enough := MaxMeasurementRows/rowBuckets(buckets) + 1
 		if names, err = api.distinctMeasurementNames(ctx, criteria, rollup, enough); err != nil {
-			return nil, scopedReadError(ctx, err)
+			return nil, boundedReadError(ctx, err, bound)
 		}
 	}
 	if err := boundBucketedRows(buckets, names); err != nil {
 		return nil, err
 	}
+	var out []MeasurementBucket
 	if rollup {
-		return api.bucketedMeasurementsFromRollup(ctx, criteria)
+		out, err = api.bucketedMeasurementsFromRollup(ctx, criteria)
+	} else {
+		out, err = api.bucketedMeasurementsFromRaw(ctx, criteria)
 	}
-	out, err := api.bucketedMeasurementsFromRaw(ctx, criteria)
-	return out, scopedReadError(ctx, err)
+	return out, boundedReadError(ctx, err, bound)
 }
 
 // distinctMeasurementNames counts the measurement names a read with no name filter will
@@ -512,6 +547,15 @@ func (api *Api) bucketedMeasurementsFromRollup(ctx context.Context, criteria Mea
 // aggregation reads, tenant-scoped through the MeasurementRollup model like the raw path.
 func (api *Api) rollupMeasurementScope(ctx context.Context, criteria MeasurementAggregationCriteria) *gorm.DB {
 	db := api.RDB.DB(ctx).Model(&MeasurementRollup{})
+	// Retention jobs drop whole chunks, and materialization chunks are 10x raw
+	// chunks. Without this floor expired buckets remain readable for up to that long.
+	if api.RollupRetentionDays > 0 {
+		now := time.Now
+		if api.now != nil {
+			now = api.now
+		}
+		db = db.Where("bucket >= ?", now().Add(-time.Duration(api.RollupRetentionDays)*24*time.Hour))
+	}
 	if criteria.DeviceToken != nil {
 		db = db.Where("device_token = ?", *criteria.DeviceToken)
 	}
@@ -537,10 +581,13 @@ func (api *Api) rollupMeasurementScope(ctx context.Context, criteria Measurement
 
 // Search for alert events that meet criteria.
 func (api *Api) AlertEvents(ctx context.Context, criteria EventSearchCriteria) (*AlertEventSearchResults, error) {
+	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
+		return nil, err
+	}
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
-	ctx, cancel := boundScopedAnchorRead(ctx, criteria.AnchorType)
+	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
 	results := make([]AlertEvent, 0)
 	db, pag := api.RDB.ListOf(ctx, &AlertEvent{}, func(result *gorm.DB) *gorm.DB {
@@ -549,17 +596,20 @@ func (api *Api) AlertEvents(ctx context.Context, criteria EventSearchCriteria) (
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
-		return nil, scopedReadError(ctx, db.Error)
+		return nil, boundedReadError(ctx, db.Error, bound)
 	}
 	return &AlertEventSearchResults{Results: results, Pagination: pag}, nil
 }
 
 // Search for state change (presence transition) events that meet criteria, newest first.
 func (api *Api) StateChangeEvents(ctx context.Context, criteria EventSearchCriteria) (*StateChangeEventSearchResults, error) {
+	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
+		return nil, err
+	}
 	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
 		return nil, err
 	}
-	ctx, cancel := boundScopedAnchorRead(ctx, criteria.AnchorType)
+	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
 	results := make([]StateChangeEvent, 0)
 	db, pag := api.RDB.ListOf(ctx, &StateChangeEvent{}, func(result *gorm.DB) *gorm.DB {
@@ -568,7 +618,7 @@ func (api *Api) StateChangeEvents(ctx context.Context, criteria EventSearchCrite
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
-		return nil, scopedReadError(ctx, db.Error)
+		return nil, boundedReadError(ctx, db.Error, bound)
 	}
 	return &StateChangeEventSearchResults{Results: results, Pagination: pag}, nil
 }

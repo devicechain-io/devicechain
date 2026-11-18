@@ -113,9 +113,9 @@ everything running on them.
 ## Before you start
 
 You need `gcloud`, `kubectl`, `tofu` (or `terraform`) and `dcctl` on your `PATH`,
-and a Google Cloud project with billing linked. You need OpenTofu or Terraform 1.9
-or newer. This configuration accepts 1.8, but `dcctl bootstrap`, which you run
-after it, needs 1.9, and `dcctl` does not check the version before it starts.
+and a Google Cloud project with billing linked. You need OpenTofu or Terraform 1.10
+or newer. This configuration accepts 1.10, but `dcctl bootstrap`, which you run
+after it, needs 1.10, and `dcctl` does not check the version before it starts.
 
 1. Sign in. The first command is for `gcloud` itself, and the second gives
    OpenTofu credentials:
@@ -309,6 +309,14 @@ pools built with the defaults.
 
 ### Put the databases on SSD
 
+New brokers created by `dcctl bootstrap` select `premium-rwo` (`pd-ssd`) automatically,
+without changing the cluster default. JetStream's synchronous writes benefit from low disk
+latency, especially with three HA replicas. Existing brokers and PVCs keep their original
+class: upgrades leave the new input unset, and the NATS module remembers its first choice
+with `lifecycle.ignore_changes`. This does not migrate existing disks. For a direct OpenTofu
+install, set `nats_jetstream_storage_class = "premium-rwo"` before the first apply; leave it
+unset when adopting an existing broker.
+
 GKE's default StorageClass, `standard-rwo`, is a balanced persistent disk. Postgres
 and NATS commit every write to disk before they acknowledge it, so how fast the
 disk syncs sets how fast the platform can go. Make the SSD class the default
@@ -413,7 +421,7 @@ The ingress controller gets a Google Cloud load balancer with a public IP. Wait 
 the address, then build an instance whose host name points at it:
 
 ```bash
-kubectl --context "$CTX" get svc -A | grep ingress-nginx-controller   # EXTERNAL-IP
+kubectl --context "$CTX" -n traefik get svc   # EXTERNAL-IP
 IP=<external-ip>
 
 dcctl bootstrap local my-instance --kube-context "$CTX" --host "$IP.nip.io"
@@ -503,8 +511,11 @@ ingress load balancer. Deleting those namespaces releases them:
 
 ```bash
 dcctl destroy local my-instance --kube-context "$CTX"
-kubectl --context "$CTX" delete namespace ingress-nginx dc-system monitoring
+kubectl --context "$CTX" delete namespace traefik dc-system monitoring
 ```
+
+If this cluster still runs the legacy ingress-nginx controller, delete its `ingress-nginx`
+namespace too, so its load balancer is released before you destroy the cluster.
 
 `kubectl delete namespace` returns once the namespaces are gone. If you installed with
 `--backup-snapshot-class`, deleting the provider's copy of each database snapshot can

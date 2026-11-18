@@ -1,0 +1,143 @@
+---
+title: Sparkplug-B 接入
+---
+
+# Sparkplug-B 接入 {#sparkplug-b-ingestion}
+
+许多工业和楼宇自动化设备群已经通过自行运维的 MQTT 消息代理，以 [Eclipse Sparkplug B](https://sparkplug.eclipse.org/) 格式发布遥测数据。DeviceChain 可以直接从这些网络接入数据，无需设备做任何改动。它作为**主机应用（Host Application）**加入 Sparkplug 环境，将边缘流量转换成与其他传输产生的相同事件。
+
+对于普通 MQTT，DeviceChain *本身就是*消息代理。Sparkplug 接入则相反：DeviceChain 作为客户端**向你的消息代理建立出站连接**，订阅配置的 Sparkplug 分组，并遵循 Sparkplug 会话协议。
+
+## 提供的功能 {#what-it-does}
+
+- **声明自身为主机应用。** DeviceChain 发布 Sparkplug `STATE` 消息，让边缘节点知道消费者已在线。它遵循上线/离线握手，因此始终知道哪些节点和设备处于在线状态。
+
+- **跟踪 Sparkplug 会话。** Sparkplug 是有状态协议。边缘节点先发送 **BIRTH** 消息，定义指标及紧凑别名，随后发送引用这些定义的 **DATA** 消息流，离线时发送 **DEATH**。DeviceChain 运行完整会话状态机，跟踪每个节点的别名和消息序列，并检测序列缺口或遗漏的上线消息。需要重新同步时，它要求节点重新声明（*rebirth*），因此丢失消息不会静默破坏解码结果。
+
+- **将边缘身份映射到设备。** 每个 Sparkplug `{group}/{node}`（或节点下设备的 `{group}/{node}/{device}`）成为 DeviceChain 设备的 [`externalId`](./domain-model.md)。如果为来源启用自动注册，首次发现时会自动创建设备。否则，未知身份会被丢弃并计数，让你控制哪些对象进入注册表。租户删除后、数据回收期间，其流量也会被丢弃，并单独计数。因此，观察丢弃计数的运维人员可以区分“未在注册表中”和“租户已删除”。
+
+- **产生明确的在线状态。** 节点或设备 BIRTH 立即、明确地将对应设备标记为在线，DEATH 则标记为离线。因此 Sparkplug 与 [LwM2M](./lwm2m.md) 一样，是[主动声明在线状态](./device-presence.md)的传输：Sparkplug 设备的在线状态由协议明确确定，而不是根据超时推断。参见[离线处理](#death-handling)，了解 DeviceChain 会应用哪些离线消息。
+
+- **进入相同流水线。** 解码后的测量与在线状态变更进入普通的解码 → 解析 → 持久化流水线。所有下游功能——历史记录、实时状态、仪表板和检测引擎——都像处理其他遥测数据一样处理 Sparkplug 数据。包含超过 256 个指标值的消息会拆分成多个连续事件，每个最多 256 个值；单条消息最多 16,384 个指标，超过则不存储其任何读数。每个值保留自己的时间戳；重新投递消息会产生相同事件，而不是重复记录。
+
+### 离线处理 {#death-handling}
+
+DeviceChain 有意严格限制哪些离线消息会生效：
+
+- **上线序列必须匹配。** 节点的 BIRTH 声明了上线序列号时（Sparkplug 规范要求这样做），只有携带匹配序列号的 DEATH 才会被接受。早期连接遗留的过期或重复遗嘱会被忽略，不会终止已经被更新 BIRTH 重建的会话。
+- **没有上线序列，就无法关联。** BIRTH 没有声明上线序列号的节点无法关联，其离线消息会原样接受。
+- **未上线的设备。** 从未上线的设备收到设备 DEATH 时，不会产生任何事件，因为没有需要结束的在线状态。
+- **节点离线会级联。** *节点*离线会将节点及其所有已知子设备标记为离线，因为 Sparkplug 中节点离线意味着其设备也随之离线。
+
+## 租户与配置 {#tenancy-and-configuration}
+
+每个 Sparkplug **来源**配置给一个租户，保存消息代理 URL、凭据（通过投射密钥提供，绝不放在明文配置中）和订阅分组。来源以文件形式通过 `--sparkplug-source` 交给 `dcctl`，示例见[运行边缘服务](../deployment/edge-services.md#sparkplug-sources)。
+
+来源收到的每条消息都归属于*该来源的租户*。租户由消息进入的消息代理决定，绝不从 Sparkplug 主题读取，因此一个租户的边缘网络不会被误认为另一个租户的网络。
+
+### 先于设备类型出生的节点 {#birth-recovery}
+
+节点在其 BIRTH 首次到达时，以来源指定的 `deviceTypeToken` 注册。如果该设备类型尚不存在（在租户尚未配置时就连接来源的常见顺序错误），或 device-management 不可达的时间超过短暂重试，BIRTH 会被丢弃并计数。已经出生的节点不会自行再次宣告，因此会一直保持未知。
+
+因此平台会记住哪些 id 未能注册，并**请求节点重新 BIRTH**（`NCMD` `Node Control/Rebirth`）：失败后 10 秒第一次，之后间隔翻倍，最长每分钟一次，直到失败的那些 id 解析成功；同级设备注册成功并不会结束它。只有两种原因会被重试：设备类型不存在，以及 device-management 不可达。device-management 以其他原因明确拒绝的情形只记录一次，不用 rebirth 重试，因为第二次 BIRTH 还会遇到同样的拒绝。请求五次后，节点降为每小时一次；每个五秒周期最多请求五个节点；刚被清除又很快再次失败的节点会沿用原来的间隔，而不是重新开始。如果节点仍处于最初的几次请求阶段，创建设备类型后它会在一分钟内出现，无需重启任何组件；节点一旦降为每小时一次，则在下一次请求时出现。不会从内存重放任何内容：作为回应的 BIRTH 与其他 BIRTH 一样被接入，因此节点不会被重复注册。某节点的第一次失败以 error 级别记录并带原因，每次请求以 warning 级别记录，只要有节点在等待，`devicechain_sparkplugingest_birth_recovery_pending` 就保持大于零（参见[指标](../deployment/edge-services.md#sparkplug-ingestion-metrics)）。离线的节点会被忘记，其下一次 BIRTH 是一次全新的尝试。
+
+## 高可用性 {#high-availability}
+
+同一时间，只有**一个** Sparkplug 服务副本连接给定消息代理。Sparkplug 主机持有每个节点的别名、序列和会话状态，因此两个连接实例会分别看到部分流量，并发布冲突的 `STATE`。单一所有权是正确性要求，而非调优选项。平台通过带隔离保护的所有权租约执行该要求，部署也拒绝渲染多个副本。
+
+租约使替换安全且自动。提供服务的 Pod 消失时——崩溃、驱逐、节点丢失或滚动更新——替代 Pod 只有取得租约后才能开始服务，因此不会出现两个主机同时连接消息代理的窗口。取得租约后，新领导者会：
+
+1. 重建会话，要求节点重新声明。
+2. 协调设备在线状态，避免遗漏切换期间的断开，也避免设备错误地保持在线显示。
+
+恢复是自动的，但不是即时的。它需要替代 Pod 完成调度和启动的时间，再加上最长 30 秒的租约隔离窗口。没有保持第二条连接的热备，因为这正是单一所有权所要防止的情况。
+
+:::note 状态
+Sparkplug-B 接入作为可选服务提供。它接入测量数据，并驱动明确的[设备在线状态](./device-presence.md)。根据配置 URL，它通过 TLS 或明文连接消息代理。第二种原生标准边缘协议 [LwM2M](./lwm2m.md) 也已提供。连接私有消息代理所需的自定义 CA / 双向 TLS 仍在计划中。
+:::
+
+## 命令 {#commands}
+
+DeviceChain 可以通过它与你的代理已有的同一个 Host Application 会话，向 Sparkplug 节点或设备**下发**命令。该功能**需要主动启用，默认关闭**：在某个来源启用之前，发给 Sparkplug 设备的命令会像以前一样立即以不可投递失败。启用是来源自身的设置，参见 [Sparkplug 命令](../deployment/edge-services.md#sparkplug-commands)。
+
+它们是普通[命令](./commands.md)：在设备配置文件上声明，可从设备页面、批量操作或自动化规则发送，受同样的权限、维护窗口和审计记录约束。控制台的**添加 Sparkplug 标准命令**按钮会在配置文件上声明下面三个命令。
+
+| 命令键 | 发送内容 | 允许的条件 |
+| --- | --- | --- |
+| `sparkplug.write`，载荷 `{"metric": 名称, "value": v}` | 向设备发送 `DCMD`，或向节点发送 `NCMD`，设置一个指标 | 该指标在来源的可写列表中，且节点在其 birth 中声明了它 |
+| `sparkplug.rebirth` | 向节点发送 `NCMD`，要求它重新发布 birth 及所有当前值 | 启用命令后始终允许 |
+| `sparkplug.reboot` | 发送设置 `Node Control/Reboot` 的 `NCMD` | 命令声明为 `DISRUPTIVE` 或 `DESTRUCTIVE`，来源设置了 `allowReboot`，节点在 birth 中声明了该指标，节点在线，且在重启窗口内尚未重启过 |
+
+命令发往节点还是设备取决于目标：节点下的设备收到 `DCMD`，节点收到 `NCMD`。birth 为指标指定了别名时按 Sparkplug 的要求只用别名寻址，否则按名称。值会按节点声明的数据类型编码，类型不符的值在发送任何内容之前就被拒绝，原因中包含指标、数据类型和你给出的值。不支持数组、数据集和其他结构化数据类型。命令只发布一次，QoS 0，不保留。
+
+如果设备尚未在该会话上 birth（节点离线，或平台刚重启、birth 尚未到达），命令会被**暂存**，并在 birth 到达时发送。重启是例外：只发送给在线的节点，否则被拒绝。
+
+### 结果的含义 {#command-outcomes}
+
+**Sparkplug 没有命令确认机制。**节点收到 `DCMD` 后不会应答。因此平台发布命令后，会等待节点在之后的数据或 birth 消息中**上报**所请求的值，结果会告诉你发生了下面哪种情况：
+
+| 状态 | 含义 |
+| --- | --- |
+| `SENT` | 已发布，等待节点上报该值。最长持续到确认窗口结束 |
+| `SUCCESSFUL`，已上报 | 命令发布之后，节点上报了该指标为所请求的值。结果记录指标、值、上报时间及所在消息 |
+| `SUCCESSFUL`，本已是该值 | 节点此前已上报该值，且在窗口内没有上报任何不同的值。平台并未看到节点因这条命令而动作 |
+| `TIMEOUT` | 窗口内（默认 2 分钟）没有任何确认。**这不是失败**：节点可能忽略或拒绝了命令，代理可能丢弃了它，或节点已执行但尚未上报 |
+| `FAILED`，未投递 | 在发送任何内容之前被拒绝：该来源未启用命令、值无效、指标不被允许、命令已过期，或下文的断路器。存储的响应带有说明具体原因的[原因代码](#command-refusals) |
+
+由此得出两点注意。*已确认*的意思是指标**达到了**该值，而不是这次请求导致了它：Sparkplug 不认证发布者，所以任何能在你的代理上向该节点主题发布的人都可以让指标读出任意值，证据的可信度取决于代理的发布 ACL。另外，只在变化时上报的指标，即使命令生效了也可能停在 `TIMEOUT`。早于命令的上报和标记为历史的上报从不算作确认。
+
+对同一设备同一指标的更新写入，会结束仍在等待的旧写入，结果为 `TIMEOUT`，原因为 *superseded*。rebirth 由节点的下一次 birth 确认，重启由携带新 birth 序号的 birth 确认，使用各自更长的窗口。
+
+### 命令为何被拒绝 {#command-refusals}
+
+在发送任何内容之前被拒绝的命令以 `FAILED`（未投递）结束，存储的响应为 `{"reason": "<代码>"}`。错误文本用文字表达同一件事；脚本和控制台应依据代码，因为措辞可能改变，而代码是固定集合。控制台为每个代码显示一句说明。
+
+| 代码 | 含义 |
+| --- | --- |
+| `commands_not_enabled` | 租户或设备所在来源未启用命令 |
+| `broker_refused` | 断路器已打开：代理拒绝了之前的一次发布 |
+| `expired` | 命令自身的有效期在发送前已过 |
+| `invalid_parameters` | 参数不是该命令所接受的形式（写入需要指标名和标量值；rebirth 与 reboot 不带参数） |
+| `unknown_command` | 不是 `sparkplug.write`、`sparkplug.rebirth` 或 `sparkplug.reboot` |
+| `metric_protocol_control` | 该指标是协议控制指标（`bdSeq`、`Node Control/...`、`Device Control/...`） |
+| `metric_not_writable` | 该指标不在来源的 `writableMetrics` 列表中 |
+| `metric_not_declared` | 节点的 BIRTH 没有声明该指标 |
+| `datatype_unsupported` | 该指标的数据类型是命令不支持携带的类型 |
+| `value_not_accepted` | 该值无法写成节点声明的数据类型，或超出其范围 |
+| `datatype_changed` | 命令等待期间节点重新 BIRTH，该指标的数据类型已变 |
+| `node_rebirthing` | 记录命令期间节点持续重新 BIRTH |
+| `node_offline` | reboot 只发给派发时在线的节点 |
+| `reboot_impact` | reboot 命令在配置文件中未声明为破坏性或具有中断性 |
+| `reboot_not_allowed` | 来源上的 `allowReboot` 为关闭 |
+| `reboot_not_a_node` | reboot 的目标是设备，而不是边缘节点 |
+| `reboot_not_declared` | 节点没有在 BIRTH 中声明 `Node Control/Reboot` |
+| `reboot_not_boolean` | 节点以非 Boolean 的数据类型声明了 `Node Control/Reboot` |
+| `reboot_unverified` | 尚无法读取近期重启记录，因此无法应用每个窗口一次重启的规则 |
+| `reboot_rate_limited` | 该节点已在重启窗口内重启过 |
+| `no_dispatch` | 无法跟踪该投递，因此命令既未挂起也未发送 |
+| `publish_failed` | 向你的代理发布失败 |
+
+### 主主机与次主机 {#primary-and-secondary-host}
+
+Sparkplug 建议只有节点的**主主机**向它发送命令。来源用 `hostRole` 声明自己的角色，它没有默认值，因为这是关于你的现场的事实：
+
+- **`primary`**：你的节点把该来源的 host id 作为其主主机。*本已是该值*这一结果可用。
+- **`secondary`**：主主机是另一台。命令仍会发送，但节点或代理 ACL 可能忽略或阻止它们，主主机也可能把值写回去。*本已是该值*被关闭，因为保持该值的可能是另一台主机；控制台会对由次主机确认的命令显示警告。
+
+### 代理拒绝发布时 {#command-breaker}
+
+拒绝发布的代理可能断开整个会话，这会使来源离线、所有节点 rebirth，并且每条排队的命令都会重复一次。因此每个来源都有一个**断路器**：如果会话在命令发布后 5 秒内丢失，断路器打开，该命令以未确认结束，原因说明代理很可能拒绝了它；之后发往该来源的命令会立即以未投递失败，持续 5 分钟，每次重新打开翻倍，最长 1 小时。遥测不受影响。暂停结束后放行一条命令作为试探，如果它发布后没有断连，断路器关闭。常见原因是凭据无权在命令主题上发布，参见[代理 ACL](../deployment/edge-services.md#sparkplug-commands-acl)。
+
+## 更新边缘节点 {#updating-an-edge-node}
+
+Sparkplug B 没有定义固件更新，因此 DeviceChain 的[空中（OTA）更新](./over-the-air-updates.md)不会通过该服务送达设备，DeviceChain 也不会在 Sparkplug 之上另行发明固件约定。需要通过 DeviceChain 更新的边缘节点，同时以普通 MQTT 设备的身份连接 DeviceChain，使用自己的[凭据](../guides/device-credentials.md)，并走正常的更新通道。[构建可更新的设备](../guides/building-an-updatable-device.md)演示了这一设备端。
+
+## 运维 {#running-it}
+
+由于消息代理连接由单个副本持有，在生产环境依赖 Sparkplug 接入前，应了解几个运维特性：切换的代价、设备为什么可能一直显示在线，以及丢弃计数器说明什么。[运行边缘服务](../deployment/edge-services.md)介绍了这些内容。
+
+:::tip 动手试试
+
+**约 30 分钟，跑通你的第一台设备.** 在本地安装 DeviceChain，连接一台模拟设备，并查看它的遥测数据如何到达。 [开始快速入门 →](../quickstart/first-device.md)
+
+:::

@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
@@ -30,7 +31,7 @@ const limitsSchema = `
 	schema { query: Query mutation: Mutation subscription: Subscription }
 	type Query { hello: String! }
 	type Mutation { doIt: String! }
-	type Subscription { ticks: Int! }
+	type Subscription { ticks: Int! held: Int! finished: Int! }
 `
 
 // limitsResolver counts every resolver call and every live tick stream.
@@ -42,6 +43,8 @@ type limitsResolver struct {
 	queries   atomic.Int64
 	mutations atomic.Int64
 	live      atomic.Int64
+	entries   atomic.Int64
+	entered   chan int64
 }
 
 func (r *limitsResolver) Hello() string {
@@ -79,11 +82,29 @@ func (r *limitsResolver) Ticks(ctx context.Context) <-chan int32 {
 	return ch
 }
 
+// Held stays silent until cancelled, so capacity tests never race tick frames.
+func (r *limitsResolver) Held(ctx context.Context) <-chan int32 {
+	ch := make(chan int32)
+	r.entered <- r.entries.Add(1)
+	go func() {
+		<-ctx.Done()
+		close(ch)
+	}()
+	return ch
+}
+
+// Finished ends naturally without waiting for client cancellation.
+func (r *limitsResolver) Finished() <-chan int32 {
+	ch := make(chan int32)
+	close(ch)
+	return ch
+}
+
 // serveLimits runs a subscription handler over limitsSchema and returns it, its
 // resolver and a ws:// URL for it.
 func serveLimits(t *testing.T, gate *core.ReadinessGate) (*SubscriptionHandler, *limitsResolver, string) {
 	t.Helper()
-	res := &limitsResolver{}
+	res := &limitsResolver{entered: make(chan int64, MaxSubscriptionsPerConnection+1)}
 	h := NewSubscriptionHandler(MustParseSchema(limitsSchema, res), map[ContextKey]interface{}{}, gate)
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
@@ -465,4 +486,153 @@ func TestNoWebSocketWithoutASubscriptionRoot(t *testing.T) {
 	require.ErrorIs(t, err, websocket.ErrBadHandshake)
 	require.NotNil(t, resp)
 	assert.Equal(t, 400, resp.StatusCode)
+}
+
+// waitCapacityEntry observes resolver execution, rather than inferring it from a frame.
+func waitCapacityEntry(t *testing.T, res *limitsResolver, want int64) {
+	t.Helper()
+	select {
+	case got := <-res.entered:
+		require.Equal(t, want, got)
+	case <-time.After(5 * time.Second):
+		t.Fatal("subscription resolver did not start")
+	}
+}
+
+func waitCapacityPump(t *testing.T, exited <-chan string, want string) {
+	t.Helper()
+	select {
+	case got := <-exited:
+		require.Equal(t, want, got)
+	case <-time.After(5 * time.Second):
+		t.Fatal("subscription pump did not exit")
+	}
+}
+
+// waitCapacityPumps checks teardown even when the pumps exit in a different order.
+func waitCapacityPumps(t *testing.T, exited <-chan string, ids []string) {
+	t.Helper()
+	pending := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		pending[id] = true
+	}
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for len(pending) > 0 {
+		select {
+		case id := <-exited:
+			require.True(t, pending[id], "unexpected pump exit for %q", id)
+			delete(pending, id)
+		case <-timer.C:
+			t.Fatalf("subscription pumps did not exit: %v", pending)
+		}
+	}
+}
+
+func TestSubscriptionCapacityDefaultAndReplacement(t *testing.T) {
+	h, res, url := serveLimits(t, nil)
+	require.Equal(t, 1000, h.operationLimit())
+	exited := make(chan string, MaxSubscriptionsPerConnection+1)
+	h.pumpExited = func(id string) { exited <- id }
+	conn := dialInit(t, url, nil)
+
+	for i := 1; i <= MaxSubscriptionsPerConnection; i++ {
+		writeMsg(t, conn, subscribeMsg(fmt.Sprint(i), "subscription { held }", nil))
+		waitCapacityEntry(t, res, int64(i))
+	}
+	// 1000 sequential handshakes precede this read; dialInit's absolute deadline may be spent.
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	writeMsg(t, conn, subscribeMsg(fmt.Sprint(MaxSubscriptionsPerConnection+1), "subscription { held }", nil))
+	got := readMsg(t, conn)
+	require.Equal(t, msgError, got.Type)
+	require.Equal(t, fmt.Sprint(MaxSubscriptionsPerConnection+1), got.ID)
+	var errs []struct {
+		Message    string            `json:"message"`
+		Extensions map[string]string `json:"extensions"`
+	}
+	require.NoError(t, json.Unmarshal(got.Payload, &errs))
+	require.Len(t, errs, 1)
+	assert.Contains(t, errs[0].Message, "subscriptions per connection")
+	assert.Equal(t, "limit exceeded for subscriptions per connection: 1001 requested, at most 1000 allowed", errs[0].Message)
+	assert.Equal(t, "LIMIT_EXCEEDED", errs[0].Extensions["code"])
+	require.Equal(t, int64(MaxSubscriptionsPerConnection), res.entries.Load())
+
+	// The first operation is still active and can be completed on this socket.
+	writeMsg(t, conn, wsMessage{ID: "1", Type: msgComplete})
+	waitCapacityPump(t, exited, "1")
+	// Reuse the rejected ID: it must never have been registered.
+	writeMsg(t, conn, subscribeMsg(fmt.Sprint(MaxSubscriptionsPerConnection+1), "subscription { held }", nil))
+	waitCapacityEntry(t, res, MaxSubscriptionsPerConnection+1)
+	writeMsg(t, conn, wsMessage{Type: msgPing})
+	require.Equal(t, msgPong, readMsg(t, conn).Type)
+
+	require.NoError(t, conn.Close())
+	ids := make([]string, 0, MaxSubscriptionsPerConnection)
+	for i := 2; i <= MaxSubscriptionsPerConnection+1; i++ {
+		ids = append(ids, fmt.Sprint(i))
+	}
+	waitCapacityPumps(t, exited, ids)
+}
+
+func TestSubscriptionCapacityCompletedAndInvalidSlots(t *testing.T) {
+	h, res, url := serveLimits(t, nil)
+	h.maxOps = 2
+	exited := make(chan string, 4)
+	h.pumpExited = func(id string) { exited <- id }
+	conn := dialInit(t, url, nil)
+	writeMsg(t, conn, subscribeMsg("held", "subscription { held }", nil))
+	waitCapacityEntry(t, res, 1)
+
+	writeMsg(t, conn, subscribeMsg("finished", "subscription { finished }", nil))
+	got := readMsg(t, conn)
+	require.Equal(t, msgComplete, got.Type)
+	require.Equal(t, "finished", got.ID)
+	waitCapacityPump(t, exited, "finished")
+
+	// This passes the operation-type gate but fails schema validation in Subscribe.
+	writeMsg(t, conn, subscribeMsg("invalid", "subscription { unknownField }", nil))
+	got = readMsg(t, conn)
+	require.Equal(t, "invalid", got.ID)
+	require.Equal(t, msgNext, got.Type)
+	var response struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	require.NoError(t, json.Unmarshal(got.Payload, &response))
+	require.NotEmpty(t, response.Errors)
+	assert.Contains(t, response.Errors[0].Message, "unknownField")
+	got = readMsg(t, conn)
+	require.Equal(t, msgComplete, got.Type)
+	require.Equal(t, "invalid", got.ID)
+	waitCapacityPump(t, exited, "invalid")
+
+	writeMsg(t, conn, subscribeMsg("replacement", "subscription { held }", nil))
+	waitCapacityEntry(t, res, 2)
+	writeMsg(t, conn, wsMessage{Type: msgPing})
+	require.Equal(t, msgPong, readMsg(t, conn).Type)
+
+	require.NoError(t, conn.Close())
+	waitCapacityPumps(t, exited, []string{"held", "replacement"})
+}
+
+func TestSubscriptionCapacityDuplicateIDClosesConnection(t *testing.T) {
+	h, res, url := serveLimits(t, nil)
+	h.maxOps = 2
+	exited := make(chan string, 2)
+	h.pumpExited = func(id string) { exited <- id }
+	conn := dialInit(t, url, nil)
+	for i := 1; i <= 2; i++ {
+		writeMsg(t, conn, subscribeMsg(fmt.Sprint(i), "subscription { held }", nil))
+		waitCapacityEntry(t, res, int64(i))
+	}
+	writeMsg(t, conn, subscribeMsg("1", "subscription { held }", nil))
+	var got wsMessage
+	err := conn.ReadJSON(&got)
+	var closeErr *websocket.CloseError
+	require.ErrorAs(t, err, &closeErr, "got frame %s for %q", got.Type, got.ID)
+	assert.Equal(t, closeSubscriberExists, closeErr.Code)
+	assert.Equal(t, int64(2), res.entries.Load())
+	// Both original pumps unwind on the protocol close; no new pump was started.
+	waitCapacityPumps(t, exited, []string{"1", "2"})
 }

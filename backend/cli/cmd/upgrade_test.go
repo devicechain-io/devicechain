@@ -64,7 +64,7 @@ func TestAllowEnvelopeDowngradeIsOffByDefaultAndReachesTheUpgrade(t *testing.T) 
 	}
 	upgradeAllowEnvelopeDowngrade = true
 	t.Cleanup(func() { upgradeAllowEnvelopeDowngrade = false })
-	if !upgradeOptions("i", nil, nil).AllowEnvelopeDowngrade {
+	if !upgradeOptions("i", nil, nil, nil).AllowEnvelopeDowngrade {
 		t.Error("the flag does not reach UpgradeOptions.AllowEnvelopeDowngrade")
 	}
 }
@@ -121,14 +121,14 @@ func TestUpgradeAcceptsYesLikeInstallAndBootstrap(t *testing.T) {
 			t.Errorf("dcctl %s --yes = %+v; want a boolean -y flag defaulting to false", name, f)
 		}
 	}
-	if upgradeOptions("i", nil, nil).AssumeYes {
+	if upgradeOptions("i", nil, nil, nil).AssumeYes {
 		t.Error("AssumeYes is on without the flag")
 	}
 	t.Cleanup(func() { upgradeAssumeYes = false })
 	if err := upgradeCmd.Flags().Parse([]string{"--yes"}); err != nil {
 		t.Fatalf("--yes was rejected: %v", err)
 	}
-	if !upgradeOptions("i", nil, nil).AssumeYes {
+	if !upgradeOptions("i", nil, nil, nil).AssumeYes {
 		t.Error("--yes does not reach Options.AssumeYes")
 	}
 }

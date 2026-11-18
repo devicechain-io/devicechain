@@ -35,6 +35,8 @@ Un dispositivo puede tener varias relaciones rastreadas, por ejemplo un cliente 
 
 ## Atributos y eventos {#attributes-vs-events}
 
+Cada clave de atributo conserva un único valor actual por entidad y ámbito; volver a escribirla sustituye ese valor.
+
 DeviceChain separa el estado actual del historial:
 
 - Los **eventos** son el registro de series temporales de solo anexado (append-only) de todo lo que informa un dispositivo: mediciones, ubicaciones, alertas, invocaciones y respuestas de comandos, y cambios de estado. Residen en hypertables de TimescaleDB.

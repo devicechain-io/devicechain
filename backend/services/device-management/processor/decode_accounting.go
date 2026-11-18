@@ -37,10 +37,12 @@ import (
 // 🔴 WHAT IS DURABLE AND WHAT IS NOT. A recorded failure is a failed-events record written before
 // the source is acked, and that is the exact count. The tallies and samples are not: a tally lives
 // in memory until the next flush (about a minute), so a crash loses up to that much of the COUNTS,
-// and a sample is best-effort. A suppressed failure only happens once 20 records for its device type
-// are already out, so a broken decoder is never invisible; only its exact tally can be short. After
-// a crash (or a failed-events outage) a redelivered source can be counted twice, so counts are "at
-// least". The resolver tells the accountant once per delivery, not once per store-hold re-run.
+// and a sample is best-effort. A suppressed failure happens once 20 failures for its device type
+// have been ADMITTED in the window. Normally their records are out, but a failed-events outage may
+// leave admitted records unwritten: a redelivery can end suppressed with no record, still counted
+// in the suppressed tally. After a crash (or a failed-events outage) a redelivered source can be
+// counted twice, so counts are "at least". The resolver tells the accountant once per delivery,
+// not once per store-hold re-run.
 //
 // 🔴 THE FLUSH IS IDEMPOTENT. Each row is this replica's CUMULATIVE tally for the window and is
 // written with SET, so a write whose commit succeeded but whose reply was lost, written again on
@@ -171,29 +173,18 @@ func boundText(s string, n int) string {
 // budget is spent: the one verdict the resolver acts on.
 func (a *DecodeAccountant) ObserveDecode(o DecodeObservation) bool {
 	record := true
-	// 🔴 A REDELIVERED FAILURE IS ALWAYS RECORDED, BUT IT STILL CHARGES THE BUDGET, and it is tallied.
+	// 🔴 A REDELIVERED FAILURE IS HELD TO THE BUDGET LIKE A FIRST ONE.
 	//
-	// The record is published before the source is acked, so a redelivery means that publish did not
-	// complete (or the process died first, possibly before the first delivery reached a decode at
-	// all). Denying it could suppress a failure whose first record never landed, so it is recorded.
-	// But a free pass would be a hole: a failed-events outage makes every failure a redelivery, and a
-	// redelivery that cost nothing would be unbudgeted. So it takes a token when there is one and goes
-	// ahead when there is not. Redeliveries can only follow a first delivery that was recorded (a
-	// suppressed one is acked), or one that crashed, so they are bounded by the first deliveries'
-	// budget times the redelivery cap, and while they run they drain the bucket so that NEW failures
-	// are suppressed rather than added on top.
-	//
-	// It is tallied as failed like any other recorded failure: where the first delivery never reached
-	// a decode the redelivery is the only count there will be, and where it did the uplink is counted
-	// twice, which is the documented "at least" behaviour of the counts.
+	// A redelivery does not prove the failure was ever admitted: a first delivery that fails before
+	// the decode (a transient lookup error, a store hold released at shutdown) is redelivered with
+	// no token ever taken. Exempting redeliveries would let a restart with a backlog of a failing
+	// tenant's uplinks record every one of them, which is the flood the budget exists to stop. The
+	// cost is that a failure whose first record never landed may be suppressed once the bucket is
+	// spent; it is tallied as suppressed, which is what the budget means.
 	if o.Outcome == DecodeFailed {
-		if o.Redelivered {
-			a.budget.Charge(o.Tenant, o.DeviceTypeId)
-		} else {
-			record = a.budget.AllowRecord(o.Tenant, o.DeviceTypeId)
-			if !record && a.metrics != nil {
-				a.metrics.suppressed.Inc()
-			}
+		record = a.budget.AllowRecord(o.Tenant, o.DeviceTypeId)
+		if !record && a.metrics != nil {
+			a.metrics.suppressed.Inc()
 		}
 	}
 	profile, version, ok := splitProfileVersion(o.ProfileVersionToken)

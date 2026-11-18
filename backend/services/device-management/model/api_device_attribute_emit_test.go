@@ -36,10 +36,13 @@ func newAttrEmitTestApi(t *testing.T) (*Api, *captureAttr, context.Context) {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
+	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{},
 		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{},
 		&EntityAttribute{}, &EntityGroupMembership{}, &EntityGroupFacetRef{}, &DetectionRuleScopeRef{}); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatal(err)
 	}
 	api := NewApi(&rdb.RdbManager{Database: db})
 	ctx := core.WithTenant(context.Background(), "acme")

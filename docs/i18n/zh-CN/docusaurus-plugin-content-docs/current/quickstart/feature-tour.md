@@ -4,7 +4,9 @@ title: 功能导览
 
 # 功能导览 {#feature-tour}
 
-[你的第一个设备](./first-device.md)止步于第一条读数。本导览继续往下走。完成后，一个站点会从头到尾运行起来：一个设备类型及其配置文件、两个上报读数的设备、一个仪表板、一条会触发告警并下发命令的规则、设备对该命令的应答，以及一位登录后只能看到自己设备的**客户用户**。
+[你的第一台设备](./first-device.md)介绍了一台设备的读数、告警和命令。本脚本导览将构建完整站点。
+
+完成后，一个站点会从头到尾运行起来：一个设备类型及其配置文件、两个上报读数的设备、一个仪表板、一条会触发告警并下发命令的规则、设备对该命令的应答，以及一位登录后只能看到自己设备的**客户用户**。
 
 然后，你把同一份导览再运行一遍，作为第二个租户、面向另一个客户，只需修改一个参数文件。不需要复制或分叉任何东西。
 
@@ -23,18 +25,18 @@ title: 功能导览
   cd devicechain/examples/feature-tour
   ```
 
-有三个设置用来说明你的实例在哪里。每个都有默认值，与普通的 `dcctl install local` 之后执行 `dcctl bootstrap local tour --host localhost --no-tls` 相符，也都可以用环境变量覆盖：
+有三个设置用来说明你的实例在哪里。每个都有默认值，与普通的 `dcctl install local` 之后执行 `dcctl bootstrap local devicechain --host localhost --no-tls` 相符，也都可以用环境变量覆盖：
 
 | 变量 | 默认值 | 何时需要设置 |
 | --- | --- | --- |
 | `DC_URL` | `http://localhost` | 控制台在其他主机或端口上提供服务。 |
-| `INSTANCE` | `tour` | 你的 `dcctl` 实例使用了别的名称。它决定命名空间 `dci-<instance>`，脚本从中读取代理的证书颁发机构和超级用户的密码。 |
+| `INSTANCE` | `devicechain` | 你的 `dcctl` 实例使用了别的名称。它决定命名空间 `dci-<instance>`，脚本从中读取代理的证书颁发机构和超级用户的密码。 |
 | `MQTT_HOST` | `devicechain-control-plane` | 你的 kind 集群不叫 `devicechain`。它是集群节点的容器名称，即 `<cluster>-control-plane`。 |
 
 如果你的 `kubectl` 有多个上下文，还需设置 `KUBE_CONTEXT`。
 
 ```bash
-export DC_URL=http://localhost INSTANCE=devicechain MQTT_HOST=devicechain-control-plane
+export DC_URL=http://localhost MQTT_HOST=devicechain-control-plane
 ```
 
 模拟设备是 `kind` Docker 网络上的容器，因此它们通过节点名称访问代理的 MQTT 节点端口。在不是 kind 的集群上，请在任何能访问代理的机器上运行 [`device/coldroom.sh`](https://github.com/devicechain-io/devicechain/blob/main/examples/feature-tour/device/coldroom.sh)，或者让你自己的客户端连接到代理。参见[连接设备](../guides/connecting-a-device.md)。
@@ -120,13 +122,13 @@ curl -s http://localhost/api/device-state/graphql -H "Authorization: Bearer $DC_
 
 打开 `DC_URL/dashboards/tour-a-ops`。两块看板除了按钮之外没有任何不同，这正是由同一份定义生成它们的意义。
 
-## 7. 规则触发告警 {#7-the-rule-raises-an-alarm}
+## 7. 在控制台验证告警 {#7-the-rule-raises-an-alarm}
 
 等待大约半分钟。当某个冷库越过阈值，规则就会触发：**Monitor → Alarms** 中出现一条告警（看板的告警表和计数中也会出现），当读数回落时它会**自动清除**。清除不需要任何人编写：规则是边沿触发的，告警持续的时间与其条件成立的时间相同。告警列表为每个设备上的每个告警键保留一行，显示其最近一次触发。
 
 冷库降温之后会再次升温，所以这个循环会重复：每次越限产生一条告警和一条命令。参见[告警](/user-guide/alarms)和[事件处理](../concepts/event-processing.md)。
 
-## 8. 命令及其结果 {#8-command-outcome}
+## 8. 验证命令及其结果 {#8-command-outcome}
 
 同一次触发还发送了命令 `boost-cooling`。设备在它的命令主题上收到命令，开始降温，并携带命令自己的令牌和这次投递的 nonce 进行**应答**。正是这个应答使命令从 `SENT` 变为 `SUCCESSFUL`。一个服从命令却从不应答的设备，会让命令停留在 `SENT`，直到超时。
 
@@ -162,7 +164,7 @@ query {
 
 以 `ops@acme.example` 登录（密码在 `.state/tour-a/customer-password` 中）。该用户会看到：
 
-- 只有 **Dashboards**、**Alarms** 和 **Devices** 的侧边栏，没有其他内容；
+- 只有 **Home**、**Dashboards**、**Alarms** 和 **Devices** 的侧边栏，没有其他内容；
 - 一个设备，`coldroom-a1`；
 - 一个仪表板 `tour-a-customer`，带有实时读数和他们自己冷库的告警；
 - 看不到 `coldroom-a2`，看不到它的读数和告警，也看不到运维人员的看板。
@@ -177,9 +179,11 @@ PASS  createCommand boost-cooling was accepted (QUEUED), not rejected
 PASS  your own command reached SUCCESSFUL (the device answered; last status: SUCCESSFUL)
 PASS  the operator sees both devices (2)
 PASS  the operator sees alarms on both devices (2 devices with alarms)
+PASS  the operator sees both dashboards (2)
 PASS  the customer sees exactly coldroom-a1 (saw: coldroom-a1)
 PASS  the customer sees alarms for coldroom-a1 only (saw: coldroom-a1)
 PASS  the customer reads no state of coldroom-a2 (0 measurements)
+PASS  the customer reads coldroom-a1's latest readings (2)
 PASS  the customer lists only the board shared with them (saw: tour-a-customer)
 PASS  the operator's board is invisible to the customer
 PASS  the read-only customer user cannot send a command (refused: FORBIDDEN)

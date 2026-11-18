@@ -265,7 +265,7 @@ func TestRecorderFilterFollowsReaders(t *testing.T) {
 		DurableName("test", area, streams.RaiseAlarm))}, info.Config.FilterSubjects)
 	require.NoError(t, first.Stop(context.Background()))
 
-	second, _ := recorderRig(t, srv, area, recordNothing, streams.RaiseAlarm, streams.AlarmEvents)
+	second, _ := recorderRig(t, srv, area, recordNothing, streams.RaiseAlarm, streams.AlarmEvents, streams.LpwanDownlinkEvents)
 	info, err = second.js.ConsumerInfo(captureStream, durable)
 	require.NoError(t, err)
 	want := []string{
@@ -374,17 +374,19 @@ func TestAMalformedAdvisoryIsCountedAndNotRecorded(t *testing.T) {
 	require.Empty(t, rec.all())
 }
 
-// StreamSubjects gives the capture one subject per other declared stream, and nothing that
+// StreamSubjects gives the capture one subject per captured declared stream, and nothing that
 // could match another instance's streams; StreamSubject refuses it outright.
-func TestTheCaptureListsEveryOtherStreamOfItsInstance(t *testing.T) {
+func TestTheCaptureListsEveryCapturedStreamOfItsInstance(t *testing.T) {
 	subjects := StreamSubjects("inst", streams.MaxDeliveries)
-	require.Len(t, subjects, len(streams.All)-1)
+	var expected []string
 	for _, s := range streams.All {
-		if s.Suffix == streams.MaxDeliveries {
+		if !streams.MaxDeliveriesCaptured(s.Suffix) {
+			require.NotContains(t, subjects, AdvisorySubject(StreamName("inst", s.Suffix), "*"))
 			continue
 		}
-		require.Contains(t, subjects, "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES."+StreamName("inst", s.Suffix)+".*")
+		expected = append(expected, AdvisorySubject(StreamName("inst", s.Suffix), "*"))
 	}
+	require.Equal(t, expected, subjects)
 	for _, s := range subjects {
 		require.True(t, strings.HasPrefix(s, "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.inst_"), s)
 	}
@@ -468,4 +470,16 @@ func TestStopJoinsTheRecorder(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("the recorder goroutine was still running after Stop returned")
 	}
+}
+
+// An uncaptured reader alone needs neither a recorder builder nor an advisory durable.
+func TestUncapturedReaderDoesNotStartRecorder(t *testing.T) {
+	nmgr := &NatsManager{readers: []*natsReader{{suffix: streams.LpwanDownlinkEvents}}}
+	require.NoError(t, nmgr.startRecorder(context.Background()))
+	require.Nil(t, nmgr.recorderCancel)
+	nmgr.recordBuild = func(*NatsManager) (MaxDeliveryFunc, error) {
+		t.Fatal("uncaptured reader invoked the recorder builder")
+		return nil, nil
+	}
+	require.NoError(t, nmgr.startRecorder(context.Background()))
 }

@@ -8,7 +8,7 @@ title: 连接设备
 设备通过 **MQTT** 或 **HTTP** 向 DeviceChain 发送事件。MQTT 由 NATS 内置的 MQTT 服务器直接在 1883 端口提供，无需独立消息代理。两种传输都进入同一条解码 → 解析 → 持久化流水线，因此 JSON 事件正文完全相同。
 
 :::note 状态
-MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](../concepts/lwm2m.md)，使用带 DTLS 的 CoAP/UDP 连接；既有设备群可使用 [Sparkplug B](../concepts/sparkplug.md)。WebSocket 传输及完整的自助配置/认领流程仍在规划中。
+MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](../concepts/lwm2m.md)，使用带 DTLS 的 CoAP/UDP 连接；既有设备群可使用 [Sparkplug B](../concepts/sparkplug.md)。[设备自助注册](./device-self-registration.md)已可用，也可以通过 [device-management GraphQL API](../reference/graphql-api.md) 的 `initiateDeviceClaim` 和 `claimDevice` 变更操作认领设备。WebSocket 传输仍在规划中。
 :::
 
 通过 LoRaWAN 网络服务器（ChirpStack、The Things Stack）或其他系统的 webhook 上报的设备不会自行连接，参见[入站集成](./inbound-integrations.md)。
@@ -59,6 +59,8 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 - `eventType`：`Measurement`、`Location` 或 `Alert`（也支持 `NewRelationship`）。
 - `credentialType` / `credentialId`：设备**通过 HTTP** 提供的凭据。`MQTT_BASIC` 还需要 `credentialSecret`。只有实例的设备认证模式设为 `disabled` 或 `optional` 时才可省略。默认值是 `required`，因此 HTTP 事件需要携带凭据。**通过 MQTT 时，这三个字段都不要带**：设备连接时消息代理已完成认证，平台 MQTT 消息代理上携带其中任何一个的事件都会被拒绝（参见[设备协议参考](../reference/device-protocol.md#rejections-at-the-door)）。
 - `payload`：结构取决于 `eventType`。`Measurement`、`Location` 和 `Alert` 是 `{ "entries": [ … ] }`；`NewRelationship` 是直接位于 `payload` 下的三个字段。见下文。
+
+`NewRelationship` 可以创建非跟踪关系，包括 `member`。跟踪类型（如 `assigned`）和内置 `contains` 会在第一次投递时以原因 `Invalid` 被拒绝。请使用认领码或 `createEntityRelationship` mutation 分配设备。
 
 每个字段的类型及是否必填（包括可选的 `altId` 和 `relationship`）见[设备协议参考](../reference/device-protocol.md#device-event)，其中还提供可用于校验固件输出的 JSON Schema。
 
@@ -344,6 +346,17 @@ mosquitto_sub \
   -t "devicechain/acme/device-commands/sensor-001"
 ```
 
+以上是 `MQTT_BASIC` 的形式：用户名加密码。`ACCESS_TOKEN` 凭据**没有密码**。令牌就是用户名的后半部分，并且完全省略 `-P`。代理会把带有密码的连接当作 `MQTT_BASIC` 处理，因此随访问令牌发送任何密码（即使只是占位符）都会被拒绝：
+
+```bash
+mosquitto_sub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001:sub' \
+  -u 'acme:<accessToken>' \
+  -t "devicechain/acme/device-commands/sensor-001"
+```
+
 每条消息都是 JSON 封装：
 
 ```json
@@ -374,6 +387,18 @@ mosquitto_pub \
   -h <mqtt-host> -p 1883 \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
+  -t "devicechain/acme/command-responses/sensor-001" \
+  -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
+```
+
+使用 `ACCESS_TOKEN` 凭据时，按照与订阅相同的方式连接，不带 `-P`：
+
+```bash
+mosquitto_pub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001' \
+  -u 'acme:<accessToken>' \
   -t "devicechain/acme/command-responses/sensor-001" \
   -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
 ```

@@ -8,7 +8,7 @@ title: Decodificadores de payload
 Un **decodificador de payload** convierte lo que envió un dispositivo o un servidor de red en mediciones. Lo escribes una vez, en un [perfil de dispositivo](../user-guide/device-types-and-profiles.md), como una lista corta de reglas: lee dos bytes en el desplazamiento 1 como un número con signo, divídelo entre diez y guárdalo como `temperature`. Lee una trama binaria, un cuerpo JSON o el objeto que un servidor de red ya decodificó, y produce las mismas mediciones que cualquier otro origen, con las unidades y la validación de las métricas que declaraste.
 
 :::note La decodificación en vivo está en la v1.2
-Un decodificador que publicas se ejecuta sobre los uplinks en vivo de una [integración de entrada](./inbound-integrations.md): cuando el dispositivo del que trata un uplink tiene un tipo de dispositivo cuya versión de perfil lleva un decodificador, el uplink se decodifica con él en lugar de guardarse como lo decodificó el servidor de red. Un decodificador recién publicado puede tardar hasta un minuto en aplicarse. Un tipo de dispositivo sin decodificador se guarda como antes. Cómo desplegar la actualización se describe en [Versiones y actualizaciones](../deployment/releases-and-upgrades.md#v120-payload-decoders).
+Un decodificador que publicas se ejecuta sobre los uplinks en vivo de una [integración de entrada](./inbound-integrations.md): cuando el dispositivo del que trata un uplink tiene un tipo de dispositivo cuya versión de perfil lleva un decodificador, el uplink se decodifica con él en lugar de guardarse como lo decodificó el servidor de red. Un decodificador recién publicado puede tardar hasta un minuto en aplicarse. Un tipo de dispositivo sin decodificador se guarda como antes. Cómo desplegar la actualización se describe en [Versiones y actualizaciones](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-payload-decoders).
 
 El mismo decodificador también lee una carga útil que un dispositivo envía por su propia conexión, por HTTP (desde la v1.3) o por MQTT (desde la v1.4), cuando el operador lo ha activado. Consulta [La conexión propia de un dispositivo](#device-connection).
 :::
@@ -271,7 +271,7 @@ Ambas vías están desactivadas hasta que el operador las activa, y los dos ajus
 | HTTP | `httpIngest.deviceUplinks` del área `event-sources` | La ruta no existe: `404`. |
 | MQTT | `infrastructure.nats.mqttDeviceUplinks` | El broker rechaza la publicación en el tema. Un dispositivo recibe la concesión la próxima vez que se conecta. |
 
-Activa cualquiera de ellas solo cuando todas las réplicas de `event-sources` y de `device-management` ejecuten una versión que la conozca, y hazlo en una actualización propia, una vez instalada esa versión. Con `dcctl`, define la de MQTT en una superposición `--values`: `instance.config.infrastructure.nats.mqttDeviceUplinks: true`. Desactivarla solo surte efecto cuando un dispositivo se reconecta o caduca su token de sesión: un dispositivo ya conectado conserva su concesión hasta entonces. La [Referencia del protocolo de dispositivos](../reference/device-protocol.md#raw-payload) tiene los detalles. La consola muestra los comandos siguientes esté o no activado el ajuste, porque no puede verlo: un dispositivo que recibe `404` o al que el broker rechaza está esperando al operador.
+Activa cualquiera de ellas solo cuando todas las réplicas de `event-sources` y de `device-management` ejecuten una versión que la conozca, y hazlo en una actualización propia, una vez instalada esa versión. Con `dcctl`, pasa `--mqtt-device-uplinks` a `dcctl upgrade` (o a `dcctl bootstrap`); `--mqtt-device-uplinks=false` lo desactiva. La elección se registra en la instancia y las actualizaciones posteriores la conservan. La clave `instance.config.infrastructure.nats.mqttDeviceUplinks` de la superposición `--values` sigue funcionando; una elección registrada con la bandera tiene prioridad sobre la clave de la superposición; cámbiala con la bandera. Se rechaza un valor de superposición que entre en conflicto. Desactivarla solo surte efecto cuando un dispositivo se reconecta o caduca su token de sesión: un dispositivo ya conectado conserva su concesión hasta entonces. La [Referencia del protocolo de dispositivos](../reference/device-protocol.md#raw-payload) tiene los detalles. La consola muestra los comandos siguientes esté o no activado el ajuste, porque no puede verlo: un dispositivo que recibe `404` o al que el broker rechaza está esperando al operador.
 
 ### 3. Envía una carga útil {#device-connection-send}
 
@@ -315,8 +315,10 @@ HTTP responde al dispositivo. Toda respuesta que depende del dispositivo se da s
 | `404` | La ruta no está activada. |
 | `413` | El cuerpo supera el límite de lo que lee el decodificador (4 KiB de trama, 64 KiB de JSON) o 1 MiB. |
 | `422` | El tipo del dispositivo no tiene decodificador. La carga útil nunca se lee como un evento. |
+| `429` | Las solicitudes desde esta dirección de origen superan el límite. `Retry-After` indica cuándo reintentar. |
 | `429` | El inquilino supera su límite de ingesta, por mensajes o por lecturas. `Retry-After` indica cuándo reintentar. |
 | `500` | La plataforma no pudo construir el mensaje. El dispositivo no debe reintentar. |
+| `503` | Mientras se intenta adivinar la credencial de este dispositivo, todas sus cargas útiles HTTP, incluidas las que presentan la credencial correcta, reciben `503` con `Retry-After` hasta que termina la pausa (como máximo 60 segundos cada vez). Las contraseñas incorrectas por HTTP ahora cuentan para la misma pausa por credencial que MQTT, por lo que un ataque por HTTP también puede retrasar las reconexiones MQTT de esa credencial, igual que ya podía hacerlo un ataque por MQTT. |
 | `503` | La consulta del decodificador no está disponible, la ingesta aplica contrapresión, o el flujo posterior no pudo aceptar la carga útil. `Retry-After` se envía en los dos primeros casos e indica cuándo reintentar. |
 
 MQTT no puede responder a un dispositivo, así que la plataforma registra lo ocurrido. La [Referencia del protocolo de dispositivos](../reference/device-protocol.md#raw-payload) tiene la tabla completa; en resumen:
@@ -326,7 +328,7 @@ MQTT no puede responder a un dispositivo, así que la plataforma registra lo ocu
 - **Un inquilino por encima de su límite** se descarta: por HTTP se le responde `429`; por MQTT el mensaje se confirma y se descarta, y se cuenta en `total_msg_rate_limited` o `total_msg_reading_limited`.
 - **Una decisión que la plataforma aún no puede tomar** (no se puede consultar a device-management, o hay contrapresión) se reintenta: HTTP responde `503`, y un mensaje MQTT espera y se vuelve a ofrecer.
 
-Un operador vigila `device_uplink_requests_total` (HTTP) y `device_uplink_messages_total` (MQTT), cada una por `result` (`accepted`, `bad_request`, `unauthorized`, `too_large`, `no_decoder`, `rate_limited`, `plan_unavailable`, `backpressure`, `publish_failed`, `internal_error`), y `device_uplink_charged_readings_total` para las lecturas cargadas.
+Un operador vigila `device_uplink_requests_total` (HTTP) y `device_uplink_messages_total` (MQTT), cada una por `result` (`accepted`, `bad_request`, `unauthorized`, `too_large`, `no_decoder`, `rate_limited`, `source_limited`, `held`, `plan_unavailable`, `backpressure`, `publish_failed`, `internal_error`), y `device_uplink_charged_readings_total` para las lecturas cargadas.
 
 Una carga útil cuenta contra los límites de ingesta del inquilino una vez como mensaje y luego como lecturas, al menos las [lecturas máximas](#max-readings) del decodificador, igual que para una integración.
 
@@ -501,4 +503,4 @@ El comportamiento de una función no cambia nunca una vez publicada. Una correcc
 - [Referencia del protocolo de dispositivos](../reference/device-protocol.md#raw-payload): el tema y la ruta de carga útil propia, y qué ocurre con cada mensaje.
 - [Tipos y perfiles de dispositivo](../user-guide/device-types-and-profiles.md): métricas, borradores y publicación.
 - [Matriz de capacidades por transporte](../reference/transport-matrix.md#inbound-integrations): qué admite cada vía de entrada.
-- [Versiones y actualizaciones](../deployment/releases-and-upgrades.md#v120-payload-decoders): qué cambió en esta versión.
+- [Versiones y actualizaciones](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-payload-decoders): qué cambió en esta versión.

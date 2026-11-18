@@ -337,7 +337,7 @@ func TestAnEditThatReadADeviceDisabledDoesNotQueueAKickForOneEnabledBeforeTheSav
 	db := api.RDB.Database
 	armed := true
 	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("test:racing-enable", func(d *gorm.DB) {
-		row, ok := d.Statement.Dest.(*Device)
+		row, ok := d.Statement.Model.(*Device)
 		if !armed || !ok || row.Token != "dev" {
 			return
 		}

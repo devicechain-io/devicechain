@@ -81,6 +81,8 @@ EXEMPTIONS=(
 
   "backend/tools/drdrill.classify@subtle.ConstantTimeCompare=test instrument: the restore drill checks a decrypted plaintext against the one it seeded itself"
 
+  "backend/sims/dc-simulator/lorawan.Downlink.ServeHTTP@subtle.ConstantTimeCompare=test instrument: the simulator's fake network-server queue checks the API key its own operator set in DC_SIM_LORAWAN_API_KEY for one run on a developer machine; it guards no account and no platform principal, so there is nothing to back off"
+
   "backend/edge/dc-edge-agent/agent.Agent.sealed@subtle.ConstantTimeCompare=not a guessable credential check: the seal is a random per-box token, minted into the agent's own store directory, that tells a message the agent published from one a local MQTT client wrote to the same subject. It is not an account password, there is no principal to back off, and a wrong seal is refused and counted, never admitted"
 )
 

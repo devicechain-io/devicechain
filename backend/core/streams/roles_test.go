@@ -142,12 +142,11 @@ func TestOnlyWritingAndConsumingMakeAnAdmin(t *testing.T) {
 	}
 }
 
-// The recorder areas are exactly the areas with a consuming reader on a stream that is not the
-// advisory capture. The derived writers and readers of the two sink streams follow from it.
+// The recorder areas are exactly the areas with a consuming reader on a captured stream. The derived writers and readers of the two sink streams follow from it.
 func TestRecorderAreasAreTheConsumingAreas(t *testing.T) {
 	want := map[string]bool{}
 	for _, s := range All {
-		if s.Shape == ShapeAdvisory {
+		if !MaxDeliveriesCaptured(s.Suffix) {
 			continue
 		}
 		for _, r := range s.Readers {

@@ -28,9 +28,10 @@ func publisher(ctx context.Context) string {
 // PublishDeviceProfile freezes the profile's current draft into a new immutable
 // version and makes it the version devices resolve (ADR-045 versioning).
 func (r *SchemaResolver) PublishDeviceProfile(ctx context.Context, args struct {
-	Token       string
-	Label       *string
-	Description *string
+	Token                 string
+	Label                 *string
+	Description           *string
+	AutomationReviewToken *string
 }) (*DeviceProfileVersionResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
@@ -39,7 +40,7 @@ func (r *SchemaResolver) PublishDeviceProfile(ctx context.Context, args struct {
 	// Route through the cached decorator so publishing evicts the shared ingest
 	// cache (a publish changes what devices resolve); reads use the plain api.
 	api := r.GetCachedApi(ctx)
-	version, err := api.PublishDeviceProfile(ctx, args.Token, args.Label, args.Description, publisher(ctx))
+	version, err := api.PublishDeviceProfileReviewed(ctx, args.Token, args.Label, args.Description, publisher(ctx), args.AutomationReviewToken)
 	if err != nil {
 		return nil, err
 	}
@@ -49,8 +50,9 @@ func (r *SchemaResolver) PublishDeviceProfile(ctx context.Context, args struct {
 // RollbackDeviceProfile re-points the profile's active published version at an
 // existing version — a non-destructive rollback; the draft is untouched.
 func (r *SchemaResolver) RollbackDeviceProfile(ctx context.Context, args struct {
-	Token   string
-	Version int32
+	Token            string
+	Version          int32
+	BreakGlassReason *string
 }) (*DeviceProfileResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
@@ -59,7 +61,7 @@ func (r *SchemaResolver) RollbackDeviceProfile(ctx context.Context, args struct 
 	// Route through the cached decorator so the rollback evicts the shared ingest
 	// cache (the active version pointer moved); reads use the plain api.
 	api := r.GetCachedApi(ctx)
-	updated, err := api.RollbackDeviceProfile(ctx, args.Token, args.Version)
+	updated, err := api.RollbackDeviceProfileWithReason(ctx, args.Token, args.Version, args.BreakGlassReason)
 	if err != nil {
 		return nil, err
 	}

@@ -81,7 +81,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: func(context.Context) error { return nil },
+			Postprocess: governance.StopRefreshes,
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,

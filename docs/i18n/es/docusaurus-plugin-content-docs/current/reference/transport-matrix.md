@@ -39,6 +39,10 @@ plataforma no lo es: al superar el límite de ingesta del inquilino, HTTP respon
 mientras que la vía del bróker descarta el mensaje después de que el dispositivo ya haya recibido su
 PUBACK, y al publicador no le llega nada.
 
+La consulta HTTP de comandos y el canal descendente LoRaWAN se declaran `◐` con
+`basis: "prose"` en la especificación: sus posibilidades y límites se describen abajo,
+pero la ejecución de conformidad registrada no los midió.
+
 Las direcciones se nombran desde el punto de vista de la plataforma:
 
 - **Lectura**: la plataforma pide un valor a un dispositivo y obtiene la respuesta en ese intercambio.
@@ -58,11 +62,11 @@ Cómo llegan los dispositivos a la plataforma, y cómo llega la plataforma de vu
 | Transporte | Lectura | Escritura | Suscripción |
 | --- | :---: | :---: | :---: |
 | [MQTT](../guides/connecting-a-device.md#mqtt) (bróker de la plataforma) | ○ | ◐ | ◐ |
-| [HTTP](../guides/connecting-a-device.md#http) | ○ | ○ | ● |
+| [HTTP](../guides/connecting-a-device.md#http) | ○ | ◐ | ● |
 | MQTT (bróker externo) | ○ | ○ | ◐ |
 | [Sparkplug B](../concepts/sparkplug.md) | ○ | ◐ | ◐ |
 | [LwM2M](../concepts/lwm2m.md) | ◐ | ◐ | ◐ |
-| [Integraciones de entrada](../guides/inbound-integrations.md) (servidor de red LoRaWAN, webhook) | ○ | ○ | ◐ |
+| [Integraciones de entrada](../guides/inbound-integrations.md) (servidor de red LoRaWAN, webhook) | ○ | ◐ | ◐ |
 
 ### MQTT — el bróker de la plataforma {#mqtt--the-platform-broker}
 
@@ -117,9 +121,9 @@ operador lo ha activado; consulta [Conectar dispositivos desde fuera del clúste
   la publicación, y uno cuyo líder está cambiando no la confirma, así que el dispositivo no recibe
   PUBACK y la vuelve a enviar. Las publicaciones QoS 0 mantienen el comportamiento anterior, y un
   mensaje por encima del techo del inquilino se sigue descartando después de su PUBACK. `dcctl bootstrap` y
-  `dcctl upgrade` lo activan con `--mqtt-fail-closed`. Consulte
+  `dcctl upgrade` lo activan con `--mqtt-fail-closed`. Consulta
   [calidad de servicio](../guides/connecting-a-device.md#quality-of-service) y
-  [MQTT a prueba de fallos](../deployment/observability.md#mqtt-fail-closed). Está desactivado por defecto en 1.0, porque con él activado el techo es más bajo y la sobrecarga aún no genera contrapresión; el techo medido y las cotas de pérdida con él desactivado están en [calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
+  [MQTT a prueba de fallos](../deployment/observability.md#mqtt-fail-closed). Está desactivado por defecto en 1.0, y con él activado el techo es más bajo. Un almacén lleno rechaza publicaciones, y la presión sobre el almacén frena las nuevas conexiones de dispositivos al alcanzar el 80 % de ocupación hasta que baja del 60 %. Esto no elimina el límite independiente de memoria del bróker ni el riesgo de quedarse sin memoria; el techo medido y las cotas de pérdida con él desactivado están en [calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
 - **Escritura ◐**: los comandos se entregan, pero la entrega es **solo en vivo y sin
   confirmación**. Una publicación alcanza a un dispositivo que esté conectado y suscrito en ese
   instante. El bróker no la retiene para uno que no lo esté, y nada informa a la plataforma de si
@@ -136,7 +140,7 @@ operador lo ha activado; consulta [Conectar dispositivos desde fuera del clúste
 
 ### HTTP
 
-Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo sentido.
+Un endpoint `POST` para el mismo cuerpo de evento JSON, más consulta opcional de comandos.
 
 - **Suscripción ●**: `POST /{instanceId}/{tenant}/events` devuelve:
   - `202` una vez almacenado el evento en el stream de entrada de la plataforma, con una cabecera de recibo `X-DC-Event-Id`;
@@ -160,22 +164,18 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
   [calidad de servicio](../guides/connecting-a-device.md#quality-of-service)). Un `429` también significa que el evento no se aceptó; lleva una
   cabecera `Retry-After`, así que espera y reintenta. `202`, `400`, `401` y `404` son terminales
   para esa petición.
-- **Escritura ○ / Lectura ○**: **no hay ningún canal descendente en absoluto.** Un dispositivo que
-  llega a la plataforma solo por HTTP no puede recibir comandos. Más que una carencia a la espera
-  de arreglo, es la forma de la integración: da también una conexión MQTT a un dispositivo que deba
-  recibir comandos.
+- **Escritura ◐ / Lectura ○**: los comandos están disponibles mediante
+  [consulta HTTP de comandos](../concepts/commands.md#http-command-pull). En el tipo de dispositivo, establece
+  `commandChannel` en `HTTP_PULL`; el dispositivo consulta los comandos,
+  confirma su recepción y envía su respuesta por HTTP. Los comandos esperan la consulta y
+  siguen sujetos a su caducidad. Este canal no lleva configuración ni asignaciones de
+  actualizaciones gestionadas; tampoco existe una lectura iniciada por la plataforma.
 
-  Un comando emitido a un dispositivo solo HTTP **no se rechaza: caduca**. La plataforma no acuña
-  ningún nombre de transporte para un dispositivo que llegó por HTTP (el origen registrado del
-  dispositivo es el id que el operador dio a la fuente de eventos), así que la compuerta que
-  reconoce un transporte no entregable no puede reconocer este. El comando se acepta, se publica
-  donde ningún dispositivo está suscrito para recibirlo, se marca `SENT` y acaba en `TIMEOUT`.
-  Sparkplug (cuando sus comandos no están habilitados) y las
-  [integraciones entrantes](../guides/inbound-integrations.md#commands) son las únicas filas de esta página en las que un `○` en esta columna produce un `FAILED`
-  inmediato.
-- El listener de ingesta termina HTTP en claro y no tiene autenticación de transporte propia; las
-  credenciales del dispositivo viajan en el cuerpo del evento. Donde necesites TLS, lo aporta lo
-  que pongas por delante del servicio.
+  `PUBLISH` sigue siendo el canal predeterminado. Con él, los comandos se publican en lugar de
+  esperar una consulta HTTP; un dispositivo solo HTTP sin suscriptor no los recibe y caducan.
+- El listener de ingesta termina HTTP en claro y no tiene autenticación de transporte propia;
+  las credenciales del evento viajan en su cuerpo y la consulta de comandos usa un token de acceso
+  bearer. Donde necesites TLS, lo aporta lo que pongas por delante del servicio.
 
 ### Autorregistro {#self-registration}
 
@@ -228,7 +228,7 @@ La plataforma también puede actuar como cliente en un bróker que ya operes, pa
   el bróker vuelva a conceder la suscripción.
 
   **Un solo pod lee cada fuente, con un identificador de cliente propio.** La plataforma se
-  conecta a tu bróker como `devicechain:<instancia>:<fuente>:<pod>`, así que dos instancias, dos
+  conecta a tu bróker como `devicechain:<instance>:<source>:<pod>`, así que dos instancias, dos
   fuentes o dos pods de `event-sources` nunca comparten una sesión. Un bróker mantiene una sesión
   por identificador de cliente y corta la conexión más antigua cuando llega una segunda, y el
   identificador único compartido que usaban las versiones anteriores perdía mensajes por esa vía.
@@ -369,14 +369,19 @@ Para dispositivos con recursos limitados sobre CoAP/UDP con DTLS.
 | Write | ◐ | Un único recurso escalar, solo reemplazo |
 | Execute | ● | Con o sin argumentos. Un Execute sin procesar del recurso Factory Reset del objeto Device (`/3/0/5`) se rechaza con `COMMAND_DESTRUCTIVE_REFUSED`; está prevista una operación con nombre y confirmación |
 | Reboot (`lwm2m.reboot`) | ● | Un comando con nombre que ejecuta (Execute) el recurso Reboot del objeto Device; no recibe parámetros |
-| Lectura de información del dispositivo (`lwm2m.readDeviceInfo`) | ◐ | Un comando con nombre que lee el fabricante, el modelo, el número de serie, la versión de firmware y el nivel de batería del objeto Device, y lista los recursos que el dispositivo no tenía. Solo se decodifican respuestas text/plain: un dispositivo que responde en TLV a la lectura de un único recurso, como hace Eclipse Leshan por defecto, ve todos sus recursos listados como ausentes y el comando falla |
-| Recolección de información del dispositivo | ◐ | Al registrarse se leen una vez los mismos recursos y se guardan como atributos de cliente; como máximo una vez por hora por dispositivo, y nunca retrasa el registro ni la telemetría. Solo se decodifican respuestas text/plain, así que no se guarda nada de un dispositivo que responde en TLV |
+| Lectura de información del dispositivo (`lwm2m.readDeviceInfo`) | ◐ | Un comando con nombre que lee el fabricante, el modelo, el número de serie, la versión de firmware y el nivel de batería del objeto Device, y lista los recursos que el dispositivo no tenía. Se decodifican respuestas text/plain y LwM2M TLV |
+| Recolección de información del dispositivo | ◐ | Al registrarse se leen una vez los mismos recursos y se guardan como atributos de cliente; como máximo una vez por hora por dispositivo, y nunca retrasa el registro ni la telemetría. Se decodifican respuestas text/plain y LwM2M TLV |
 | Observe | ◐ | Solo SenML-JSON; solo recursos numéricos; lista de objetos fija; 32 por registro |
 | Discover | ○ | No implementado |
 | Create | ○ | No implementado |
 | Delete | ○ | No implementado |
 | Write-Attributes | ○ | No implementado: las bandas de notificación no se pueden fijar desde la plataforma |
 | Bootstrap | ○ | No implementado; un servidor Bootstrap está planeado |
+
+Las dos celdas de información del dispositivo conservan `◐`: la ejecución de conformidad
+registrada midió la implementación anterior, limitada a text/plain, y sus limitaciones con TLV.
+La implementación actual también decodifica TLV, pero no se ha medido en una nueva ejecución;
+los resultados y las comprobaciones de límites no se han cambiado. Observe sigue sin decodificar TLV.
 
 La autenticación de dispositivo es por dispositivo, en el handshake DTLS, con claves precompartidas.
 Las credenciales X.509 y de clave pública en bruto están planeadas.
@@ -391,26 +396,31 @@ del inquilino. El dispositivo nunca se conecta a DeviceChain.
   mediciones normales. Lo que impide que sea `●`: un mensaje que llega mientras el inquilino supera su
   asignación de ingesta se responde con `202` y se descarta, porque un rechazo lo perdería de todos modos
   y algunos servidores de red suspenden un webhook al que se rechaza. Por tanto, no se avisa al remitente.
-  Un uplink sin nada decodificado se confirma y no guarda nada, y se cuenta. `IntegrationShedAccepted` e
+  Sin un decodificador de perfil aplicable, un uplink sin nada decodificado se confirma y no guarda nada, y se cuenta. `IntegrationShedAccepted` e
   `IntegrationUndecodedHigh` informan de ambos casos. Un [decodificador de payload](../guides/payload-decoders.md)
   escrito en el perfil de dispositivo puede decodificar en su lugar la trama cruda en la plataforma;
   decodifica uplinks en vivo a partir de la v1.2.
-- **Escritura ○ / Lectura ○**: no hay downlink. Un comando emitido a un dispositivo que informó por última
-  vez a través de una integración **se acepta y luego falla** en el siguiente barrido de entrega con
-  `COMMAND_TRANSPORT_UNSUPPORTED`, en lugar de esperar hasta caducar. El fallo es definitivo. Un
-  dispositivo que nunca ha informado no tiene transporte registrado, así que sus comandos se despachan,
-  y caducan, hasta que informa por primera vez. Como el transporte registrado es el último por el que informó el dispositivo, un dispositivo que
-  también envía por MQTT vuelve a recibir comandos en cuanto lo ha hecho.
+- **Escritura ◐ / Lectura ○**: el [canal descendente LoRaWAN](../guides/inbound-integrations.md#lorawan-downlink)
+  opcional encola comandos en ChirpStack v4 o The Things Stack v3. Un envío no confirmado
+  informa de la aceptación en la cola; uno confirmado espera la confirmación del dispositivo.
+  No se admite el canal descendente para remitentes genéricos. Con el adaptador deshabilitado,
+  un comando a un dispositivo que informó por última vez mediante una integración se acepta
+  y falla en el siguiente barrido con `COMMAND_TRANSPORT_UNSUPPORTED`; el fallo es definitivo.
+  Con el adaptador habilitado, este rechaza como no enviado un comando para una integración sin
+  enlace utilizable al servidor de red. Un dispositivo que nunca informó no tiene transporte
+  registrado: sus comandos se envían y caducan hasta que informe por primera vez. Se registra
+  el último transporte usado; un dispositivo que también publica por MQTT puede volver a
+  recibir comandos después de informar por MQTT.
 
 ## Conectores de salida
 
 A dónde envía datos la plataforma cuando dispara una regla. Un conector es un sumidero de un solo
 sentido sin direcciones de dispositivo, así que **Lectura** y **Suscripción** son `—` y no
-`Ninguno`.
+`None`.
 
 | Conector | Lectura | Escritura | Suscripción | Notas |
 | --- | :---: | :---: | :---: | --- |
-| Webhook `httpCall` | — | ● | — | Solo `POST`; se rechaza cualquier otro método |
+| Webhook `httpCall` | — | ● | — | Solo `POST`; se rechaza cualquier método distinto de `POST` |
 | `publish` → MQTT | — | ● | — | QoS 0/1/2; usuario + secreto; URL `tcp`, `mqtt`, `ssl`, `tls`, `mqtts`, `ws`, `wss`; **sin ajustes de TLS** (consulta más abajo) |
 | `publish` → Kafka | — | ● | — | TLS; SASL `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512` |
 | `publish` → AWS SNS | — | ● | — | Solo credenciales estáticas por inquilino |
@@ -441,6 +451,8 @@ acabando en la cola de mensajes muertos como no soportado si un `publish` lo apu
 pero no ejecutable, nunca descartado en silencio. Cuando se publique, se autenticará con una credencial
 guardada en el conector, como hacen los conectores de AWS, nunca con la identidad del pod.
 :::
+
+`updateConnector` rechaza un `expectedUpdatedAt` obsoleto con `errors[*].extensions.code` igual a `STALE_WRITE`. No se escribe nada; el mensaje sigue siendo "connector was modified by another writer; reload and try again". Este código solo se aplica a las actualizaciones de conectores. `CONFLICT` sigue indicando una colisión de unicidad; los errores de otras operaciones no cambian. Clasifica por código, no por el texto del mensaje. La consola conserva los cambios sin guardar y muestra una indicación localizada para copiarlos antes de volver a cargar, aplicarlos de nuevo y reintentar guardar.
 
 Aparte de los conectores, los [canales de notificación](../guides/notification-channels.md) llegan a
 personas y no a sistemas, por SMTP y webhook.

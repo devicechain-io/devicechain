@@ -219,6 +219,13 @@ func TestTheSingletonStepRunsBeforeAnythingIsWritten(t *testing.T) {
 			"refusal would leave a declared instance that was never built: %v",
 			check, declare, names)
 	}
+	// The rebuild refusal unwinds the local record on the same reasoning, so it has to
+	// sit ahead of the declaration too.
+	if rebuild := at("Refuse a rebuild"); rebuild > declare {
+		t.Errorf("the rebuild refusal is at %d and the declaration is written at %d, so "+
+			"restoring the local record after it would hide a declared instance: %v",
+			rebuild, declare, names)
+	}
 }
 
 // The namespace fence is only a fence if openInstanceRoot runs it — which needs a tofu

@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
 	"time"
@@ -15,6 +16,18 @@ import (
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// MaxSigningKeyDays is the largest day count main.go's time.Duration(days) * 24 *
+// time.Hour conversion can hold. Above it the product overflows and wraps, which
+// for the max age reads as rotation disabled or an arbitrary age.
+const MaxSigningKeyDays = int(math.MaxInt64 / int64(24*time.Hour))
+
+// MaxDurationSeconds is the largest whole number of seconds a time.Duration can hold;
+// a larger value overflows when converted.
+const MaxDurationSeconds = int(math.MaxInt64 / int64(time.Second))
+
+// MaxDurationDays is the largest whole number of days a time.Duration can hold.
+const MaxDurationDays = int(math.MaxInt64 / int64(24*time.Hour))
 
 // AuthConfiguration controls JWT issuance, signing-key rotation, and the
 // one-time bootstrap admin.
@@ -35,11 +48,17 @@ type AuthConfiguration struct {
 	AccessTokenTtlSeconds  int
 	RefreshTokenTtlSeconds int
 
-	// SigningKeyMaxAgeDays triggers an age-based signing-key rotation at startup
+	// SigningKeyMaxAgeDays triggers age-based signing-key rotation while running,
+	// after a 15-minute startup grace
 	// when the active key is older than this. 0 disables age-based rotation
-	// (rotation can still be invoked explicitly). SigningKeyRetentionDays is how
-	// long a rotated-out key is kept (its public half stays in the JWKS) so
-	// tokens it signed keep verifying; it must exceed the refresh-token lifetime.
+	// (rotation can still be invoked explicitly). A negative value, or one above
+	// MaxSigningKeyDays, is refused at load. SigningKeyRetentionDays is how long a
+	// rotated-out key is kept (its public half stays in the JWKS) so tokens it signed
+	// keep verifying. 0 takes the default of 8 days; a negative value, or one above
+	// MaxSigningKeyDays, is refused at load. When SigningKeyMaxAgeDays is above 0,
+	// SigningKeyRetentionDays must cover the refresh-token lifetime; it is refused at
+	// load rather than left to Manager.RotateSigningKey, which would lengthen it
+	// silently to the lifetime plus a day.
 	SigningKeyMaxAgeDays    int
 	SigningKeyRetentionDays int
 
@@ -355,8 +374,36 @@ func (c *UserManagementConfiguration) Validate() error {
 	if c.Auth.AccessTokenTtlSeconds <= 0 {
 		return fmt.Errorf("auth.accessTokenTtlSeconds must be positive (got %d)", c.Auth.AccessTokenTtlSeconds)
 	}
+	if c.Auth.AccessTokenTtlSeconds > MaxDurationSeconds {
+		return fmt.Errorf("auth.accessTokenTtlSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.Auth.AccessTokenTtlSeconds)
+	}
 	if c.Auth.RefreshTokenTtlSeconds <= 0 {
 		return fmt.Errorf("auth.refreshTokenTtlSeconds must be positive (got %d)", c.Auth.RefreshTokenTtlSeconds)
+	}
+	if c.Auth.RefreshTokenTtlSeconds > MaxDurationSeconds {
+		return fmt.Errorf("auth.refreshTokenTtlSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.Auth.RefreshTokenTtlSeconds)
+	}
+	// A negative max age, or one that overflows main.go's Duration conversion, can
+	// reach MaybeRotateOnAge as a non-positive age, which it reads as disabled.
+	// Refusing these values at load is the fail-closed answer.
+	if c.Auth.SigningKeyMaxAgeDays < 0 || c.Auth.SigningKeyMaxAgeDays > MaxSigningKeyDays {
+		return fmt.Errorf("auth.signingKeyMaxAgeDays must be between 0 and %d (got %d): 0 turns age-based signing-key rotation off; a negative or larger value would turn it off silently", MaxSigningKeyDays, c.Auth.SigningKeyMaxAgeDays)
+	}
+	if c.Auth.SigningKeyRetentionDays < 0 || c.Auth.SigningKeyRetentionDays > MaxSigningKeyDays {
+		return fmt.Errorf("auth.signingKeyRetentionDays must be between 0 and %d (got %d): 0 takes the default of 8 days", MaxSigningKeyDays, c.Auth.SigningKeyRetentionDays)
+	}
+	if c.Auth.SigningKeyMaxAgeDays > 0 && int64(c.Auth.SigningKeyRetentionDays)*86400 < int64(c.Auth.RefreshTokenTtlSeconds) {
+		return fmt.Errorf("auth.signingKeyRetentionDays (%d days) must cover auth.refreshTokenTtlSeconds (%d) while auth.signingKeyMaxAgeDays turns rotation on: a rotated-out key has to stay published for as long as a refresh token it signed can be used, and a shorter retention would be lengthened silently at rotation", c.Auth.SigningKeyRetentionDays, c.Auth.RefreshTokenTtlSeconds)
+	}
+	// Bound the raw seconds before the settle-floor check converts them to durations.
+	if c.TenantPurge.IntervalSeconds > MaxDurationSeconds {
+		return fmt.Errorf("tenantPurge.intervalSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.TenantPurge.IntervalSeconds)
+	}
+	if c.TenantPurge.SettleSeconds > MaxDurationSeconds {
+		return fmt.Errorf("tenantPurge.settleSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.TenantPurge.SettleSeconds)
+	}
+	if c.TenantPurge.TokenHoldSeconds > MaxDurationSeconds {
+		return fmt.Errorf("tenantPurge.tokenHoldSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.TenantPurge.TokenHoldSeconds)
 	}
 	// A negative interval disables the coordinator, which is a supported lever. A
 	// negative SETTLE is not the same kind of knob: it would mean "complete the purge
@@ -367,6 +414,13 @@ func (c *UserManagementConfiguration) Validate() error {
 		return fmt.Errorf("tenantPurge.tokenHoldSeconds must not be negative (got %d): it is what "+
 			"keeps a token reserved until no pre-deletion device session can still write under it",
 			c.TenantPurge.TokenHoldSeconds)
+	}
+	// Bound the raw values before the retention sweep converts them to durations.
+	if c.DeadLetters.RetentionDays > MaxDurationDays {
+		return fmt.Errorf("deadLetters.retentionDays must be at most %d days, the longest a duration can hold (got %d)", MaxDurationDays, c.DeadLetters.RetentionDays)
+	}
+	if c.DeadLetters.SweepSeconds > MaxDurationSeconds {
+		return fmt.Errorf("deadLetters.sweepSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.DeadLetters.SweepSeconds)
 	}
 	// 🔴 A RETENTION AT OR BELOW THE STREAM'S BUYS NOTHING. The stream ages out in seven
 	// days; the store exists to outlive it. Accepting a shorter retention would leave an

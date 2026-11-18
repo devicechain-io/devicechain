@@ -119,7 +119,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: func(context.Context) error { return nil },
+			Postprocess: governance.StopRefreshes,
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -153,6 +153,7 @@ func parseConfiguration() error {
 // rest is wired. Initialize is where the process's own singletons are made, which is
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
+	graphql.InitLiveSubscriptionMetrics(Microservice)
 	DetectMetrics = processor.NewDetectMetrics(Microservice)
 	ReactMetrics = processor.NewReactMetrics(Microservice)
 	EgressUnresolved = governance.NewUnresolvedAdmissions(Microservice, governance.Outbound)

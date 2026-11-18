@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/shardgroups"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
@@ -26,8 +27,9 @@ import (
 )
 
 var (
-	Microservice  *core.Microservice
-	Configuration *config.EventManagementConfiguration
+	stopStreamSharding context.CancelFunc
+	Microservice       *core.Microservice
+	Configuration      *config.EventManagementConfiguration
 
 	// Svc owns the three managers below and the order of all four of their lifecycle
 	// phases. They stay named here because the rest of this service refers to them
@@ -40,14 +42,18 @@ var (
 
 	Api *model.Api
 
-	ResolvedEventsReader      messaging.MessageReader
-	EventPersistenceProcessor *processor.EventPersistenceProcessor
-	FailedEventsWriter        messaging.MessageWriter
+	ResolvedEventsReader messaging.MessageReader
+	// Lifecycle components let the start/stop guard track the per-group collection
+	// through the same interface used by other service component collections.
+	AdditionalPersistenceProcessors []core.LifecycleComponent
+	EventPersistenceProcessor       *processor.EventPersistenceProcessor
+	FailedEventsWriter              messaging.MessageWriter
 
 	// PersistMetrics is built ONCE, in the initialize phase, and shared by every
 	// EventPersistenceProcessor the NATS manager's oncreate callback builds. See
 	// buildMetrics.
-	PersistMetrics *processor.PersistMetrics
+	PersistMetrics   *processor.PersistMetrics
+	AnalyticsMetrics *model.AnalyticsMetrics
 
 	// FailedEventsReader and FailedEventsIndexer are the failed-events index: the durable reader
 	// of the stream this service also writes to, and the consumer that stores one row per
@@ -107,7 +113,8 @@ func parseConfiguration() error {
 	return nil
 }
 
-// buildMetrics creates this service's Prometheus instruments exactly once.
+// buildMetrics creates this service's Prometheus instruments exactly once, before
+// startup reconciliation uses them.
 //
 // 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE PROCESSOR IS BUILT.
 // The processor is built in createNatsComponents, which the NATS manager invokes on
@@ -116,6 +123,8 @@ func parseConfiguration() error {
 // registry panics. Initialize is where the process's own singletons are made, which is
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
+	graphql.InitLiveSubscriptionMetrics(Microservice)
+	AnalyticsMetrics = model.NewAnalyticsMetrics(Microservice)
 	PersistMetrics = processor.NewPersistMetrics(Microservice)
 	BackfillMetrics = backfill.NewMetrics(Microservice)
 	FailedEventMetrics = processor.NewFailedEventMetrics(Microservice)
@@ -146,12 +155,17 @@ func newFailedEventsIndexer(reader messaging.MessageReader) *processor.FailedEve
 
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
-	// Create reader for resolved events (wildcard across tenants).
-	revents, err := nmgr.NewReader(streams.ResolvedEvents)
+	stop, err := shardgroups.Enable(nmgr)
 	if err != nil {
 		return err
 	}
-	ResolvedEventsReader = revents
+	stopStreamSharding = stop
+	// Create reader for resolved events (wildcard across tenants).
+	readers, err := shardgroups.NewReaders(nmgr, streams.ResolvedEvents)
+	if err != nil {
+		return err
+	}
+	ResolvedEventsReader = readers[0]
 
 	// Add and initialize failed events writer.
 	fevents, err := nmgr.NewWriter(streams.FailedEvents)
@@ -165,6 +179,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	err = EventPersistenceProcessor.Initialize(context.Background())
 	if err != nil {
 		return err
+	}
+
+	AdditionalPersistenceProcessors = nil
+	for _, reader := range readers[1:] {
+		p := newEventPersistenceProcessor(reader, FailedEventsWriter)
+		if err := p.Initialize(context.Background()); err != nil {
+			return err
+		}
+		AdditionalPersistenceProcessors = append(AdditionalPersistenceProcessors, p)
 	}
 
 	// Reader + reconciler for entity-deletion events (ADR-044): drops event_anchors
@@ -396,7 +419,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if lc.FailedEventRetentionDays != nil { // normally set by ApplyDefaults; guard against a nil deref
 				failedEventRetentionDays = *lc.FailedEventRetentionDays
 			}
-			if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager, model.DataLifecyclePolicy{
+			policy := model.DataLifecyclePolicy{
 				ChunkIntervalHours:       lc.ChunkIntervalHours,
 				CompressAfterDays:        compressAfterDays,
 				RetentionDays:            lc.RetentionDays,
@@ -405,9 +428,14 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				// the uniform window. Collapsing it to an int here would lose the distinction
 				// between "unset" and an explicit 0 (retention off for location only).
 				LocationRetentionDays: lc.LocationRetentionDays,
-			}); err != nil {
+			}
+			Api.RollupRetentionDays = policy.RollupRetentionDays()
+			if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager, policy); err != nil {
 				return err
 			}
+
+			// Build process instruments before reconciliation and the NATS manager use them.
+			buildMetrics()
 
 			// Converge the read-only SQL/BI surface — its tenant-filtered views and the
 			// privileges over them. It runs here rather than only in a migration for two
@@ -419,13 +447,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// model/analytics.go. A returned error means the boundary could not be put back,
 			// which is not a state to serve from — and returning it here means the GraphQL
 			// server is never built, let alone started.
-			if err := model.ReconcileAnalyticsSurface(ctx, RdbManager); err != nil {
+			if err := model.ReconcileAnalyticsSurface(ctx, RdbManager, AnalyticsMetrics); err != nil {
 				return err
 			}
-
-			// Build every Prometheus instrument this service exports, before the NATS manager
-			// that consumes them.
-			buildMetrics()
 
 			// Build the reconciliation sweep (ADR-044 decision 3), the backstop for
 			// entity-deletion events missed by the primary consumer. It needs the Api and
@@ -483,6 +507,12 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	err := EventPersistenceProcessor.Start(ctx)
 	if err != nil {
 		return err
+	}
+
+	for _, p := range AdditionalPersistenceProcessors {
+		if err := p.Start(ctx); err != nil {
+			return err
+		}
 	}
 
 	// Start entity-anchor reconciler.
@@ -566,6 +596,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
+	for _, p := range AdditionalPersistenceProcessors {
+		if err := p.Stop(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Stop event persistence processor.
 	if err := EventPersistenceProcessor.Stop(ctx); err != nil {
 		return err
@@ -592,7 +628,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	//
 	// core/service stops them in exactly that order, for every service. Pinned next door in
 	// graphql_shutdown_order_test.go, which drives this function.
-	return Svc.Stop(ctx)
+	err := Svc.Stop(ctx)
+	// Keep placement available to publishes until the service's managers finish stopping.
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
+	return err
 }
 
 // Called before microservice has been terminated.
@@ -603,5 +644,10 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
 	// that actually closes handles.
-	return Svc.Terminate(ctx)
+	err := Svc.Terminate(ctx)
+	// Release the placement watch only after the service's managers terminate.
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
+	return err
 }

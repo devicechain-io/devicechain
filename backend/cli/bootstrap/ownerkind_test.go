@@ -563,7 +563,7 @@ func TestMarkingAnInstallCarriesNothingAndRespectsANewerRecord(t *testing.T) {
 	if err := writeInstalled(context.Background(), c, aCompleteInstall(), installClock); err != nil {
 		t.Fatal(err)
 	}
-	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.1", installClock); err != nil {
+	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.1", installClock, nil); err != nil {
 		t.Fatal(err)
 	}
 	rec := storedInstallRecord(t, c)
@@ -582,7 +582,7 @@ func TestMarkingAnInstallCarriesNothingAndRespectsANewerRecord(t *testing.T) {
 	if _, err := c.CoreV1().ConfigMaps("dc-system").Update(context.Background(), cm, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.1", installClock); err == nil {
+	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.1", installClock, nil); err == nil {
 		t.Error("a newer dcctl's install record was rewritten as this build's schema")
 	}
 }
@@ -627,7 +627,7 @@ func TestMarkingAnInstallKeepsTheLastCompletedOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, version := range []string{"v0.17.1", "v0.17.2"} {
-		if err := markInstallApplying(context.Background(), c, testClusterUID, version, installClock); err != nil {
+		if err := markInstallApplying(context.Background(), c, testClusterUID, version, installClock, nil); err != nil {
 			t.Fatal(err)
 		}
 		rec := storedInstallRecord(t, c)
@@ -664,7 +664,7 @@ func TestMarkingOverAnOlderSchemaCarriesNothing(t *testing.T) {
 	old.Schema, old.Phase = installRecordSchema-1, installPhaseInstalled
 	replaceStoredInstallRecord(t, c, old)
 
-	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.1", installClock); err != nil {
+	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.1", installClock, nil); err != nil {
 		t.Fatalf("an older dcctl's record could not be marked: %v", err)
 	}
 	if rec := storedInstallRecord(t, c); rec.LastInstalled != nil || rec.Schema != installRecordSchema {

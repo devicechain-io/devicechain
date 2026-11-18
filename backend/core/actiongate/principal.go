@@ -77,6 +77,7 @@ func AuthorizeProposer(ctx context.Context, proposal auth.Authority) (Proposer, 
 
 // Approver is who approved, as recorded on the proposal.
 type Approver struct {
+	Sid       string
 	Principal string
 	Amr       []string
 	// MfaTime is when the approver's sign-in last verified a second factor; nil when unknown.
@@ -120,7 +121,7 @@ func AuthorizeApprover(ctx context.Context, write auth.Authority) (Approver, err
 	if claims.Username == "" {
 		return Approver{}, auth.ErrForbidden
 	}
-	a := Approver{Principal: claims.Username, Amr: append([]string{}, claims.Amr...), Claims: claims}
+	a := Approver{Sid: string(claims.SessionID), Principal: claims.Username, Amr: append([]string{}, claims.Amr...), Claims: claims}
 	if claims.MfaTime != nil {
 		t := claims.MfaTime.Time.UTC()
 		a.MfaTime = &t

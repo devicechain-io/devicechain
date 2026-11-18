@@ -51,6 +51,24 @@ export async function listFacetKeys(memberType?: string): Promise<FacetKey[]> {
   return data.facetKeys.results;
 }
 
+// Bound the scan to 50,000 declarations; an incomplete scan is a failed check,
+// never evidence that the key is new.
+export async function findFacetKey(memberType: string, key: string): Promise<FacetKey | null> {
+  const pageSize = 500;
+  const maxPages = 100;
+  for (let pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
+    const data = await gql('device-management', FACET_KEYS, {
+      criteria: { pageNumber, pageSize, memberType },
+    });
+    const { results, pagination } = data.facetKeys;
+    const found = results.find((facet) => facet.key === key);
+    if (found) return found;
+    if (pagination.totalRecords === null) throw new Error('Facet key lookup has no total count');
+    if (pageNumber * pageSize >= pagination.totalRecords) return null;
+  }
+  throw new Error('Facet key lookup exceeded the page limit');
+}
+
 const SET_FACET_KEY = graphql(`
   mutation SetFacetKey($request: FacetKeySetRequest!) {
     setFacetKey(request: $request) {

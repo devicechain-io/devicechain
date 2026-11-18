@@ -93,7 +93,8 @@ func (r *InstallRecord) lastCompleted() *CompletedInstall {
 
 // InstallSettings is what the cluster prerequisites were APPLIED WITH — the half of an
 // instance's shape the cluster decides, which a bootstrap must follow rather than
-// restate.
+// restate. The optional relational WAL choice is also saved while applying so a
+// failed apply can be retried without losing the choice.
 type InstallSettings struct {
 	HA              bool `json:"ha"`
 	Compact         bool `json:"compact"`
@@ -109,6 +110,9 @@ type InstallSettings struct {
 	// DatabasePlacement is the nodes every database on the cluster is confined to; zero
 	// when the scheduler chooses. Schema 5.
 	DatabasePlacement DatabasePlacement `json:"databasePlacement"`
+	// RelationalStoreMaxWALMiB is additive within schema 5. Nil preserves legacy
+	// behavior; an explicit zero records a reset to the root stock default.
+	RelationalStoreMaxWALMiB *int `json:"relationalStoreMaxWalMiB,omitempty"`
 }
 
 // InstallOutputs is what the cluster prerequisites BUILT, read back from the cluster
@@ -135,22 +139,23 @@ type InstallOutputs struct {
 // of the flags.
 func installSettingsFor(st *State) InstallSettings {
 	return InstallSettings{
-		HA:                  st.HA,
-		Compact:             st.Compact,
-		Monitoring:          monitoringEnabled(st),
-		CNPG:                !st.NoCNPG,
-		CertManager:         certManagerEnabled(st),
-		DatabaseBackups:     databaseBackupsEnabled(st),
-		BackupsExternal:     databaseBackupsEnabled(st) && backupsAreExternal(st),
-		BackupSnapshotClass: backupSnapshotClass(st),
-		DatabasePlacement:   databasePlacement(st),
+		HA:                       st.HA,
+		Compact:                  st.Compact,
+		Monitoring:               monitoringEnabled(st),
+		CNPG:                     !st.NoCNPG,
+		CertManager:              certManagerEnabled(st),
+		DatabaseBackups:          databaseBackupsEnabled(st),
+		BackupsExternal:          databaseBackupsEnabled(st) && backupsAreExternal(st),
+		BackupSnapshotClass:      backupSnapshotClass(st),
+		DatabasePlacement:        databasePlacement(st),
+		RelationalStoreMaxWALMiB: st.RelationalStoreMaxWALMiB,
 	}
 }
 
 // markInstallApplying records that the cluster prerequisites are being applied, before
 // anything is.
 func markInstallApplying(ctx context.Context, typed kubernetes.Interface, clusterUID, dcctlVersion string,
-	now func() time.Time) error {
+	now func() time.Time, relationalWAL *int) error {
 	prev, err := getInstallRecordMap(ctx, typed)
 	if err != nil {
 		return err
@@ -172,14 +177,15 @@ func markInstallApplying(ctx context.Context, typed kubernetes.Interface, cluste
 			}
 		}
 	}
-	// Settings and outputs are left EMPTY. They describe a COMPLETED apply, and showing
-	// the last one's beside this run's version would tell anyone reading it mid-apply
-	// that those are what is being applied. The last completed install is kept apart,
-	// under its own name, for the next re-run to decide from.
+	// Only the WAL choice is set before apply, so a flagless retry retains even a
+	// reset. Other settings and outputs describe a COMPLETED apply: showing the
+	// last one's beside this run's version would misrepresent what is being applied.
+	// Keep the last completed install separately for the next re-run to decide from.
 	return putInstallRecord(ctx, typed, InstallRecord{
 		Schema: installRecordSchema, Phase: installPhaseApplying,
 		ClusterUID: clusterUID, DcctlVersion: dcctlVersion, UpdatedAt: now().UTC(),
 		LastInstalled: last,
+		Settings:      InstallSettings{RelationalStoreMaxWALMiB: relationalWAL},
 	})
 }
 

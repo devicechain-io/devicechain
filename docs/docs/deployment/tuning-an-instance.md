@@ -39,6 +39,40 @@ dcctl upgrade local my-instance --values tuning.yaml
 dcctl upgrade local my-instance --version <new-version>
 ```
 
+## Ingest metering {#ingest-metering}
+
+To reduce shedding of a tenant's compliant traffic after a short platform stall, opt in to
+lag-credited metering. The default remains `legacy`; `lagCredit` has not yet been through a
+production-scale round. Put this top-level Helm value in your tuning overlay, alongside your
+other settings:
+
+```yaml title="tuning.yaml"
+eventSources:
+  ingestMetering: lagCredit
+```
+
+Apply it with `dcctl upgrade <provider> <instance> --values tuning.yaml`, or supply the same
+value to Helm. Enable it after upgrading event-sources to v1.4; older releases refuse this mode.
+The chart sets `EVENT_SOURCES_INGEST_METERING` on event-sources pods. This is not a key under
+`instance.config` or `functionalAreas.event-sources.config`. Unknown modes are refused. To
+return to the previous metering, change the value to `legacy` and apply the overlay again.
+Later dcctl upgrades retain the recorded overlay.
+
+The gate measures reader lag separately for the platform broker's capture and store streams.
+Fresh gateway traffic, external MQTT and broker presence share an allowance at the pod's clock;
+HTTP and inbound integrations keep their existing separate limiters. Message and decoded-reading
+ceilings still apply, as do contention shedding and [per-replica limits](../concepts/governance.md#per-replica).
+This does not change MQTT acknowledgement guarantees: a message shed after acknowledgement is lost.
+
+Credit covers at most the time the tenant's burst allows (`burst / rate`), capped at five seconds.
+It does not cover an arbitrarily long outage or permit a sustained rate above the ceiling.
+Broker clock correction is capped at two seconds. A pod starting inside a stall before learning
+the broker's clock offset can still under-credit traffic when the broker clock is ahead; keep
+node clocks synchronized. Watch reader lag, append skew and shed causes in
+[Ingest monitoring](./observability.md#external-mqtt-owner), and use the
+[IngestShedBeyondLagCredit](./alert-runbook.md#ingestshedbeyondlagcredit) and
+[IngestAppendSkewLarge](./alert-runbook.md#ingestappendskewlarge) runbooks.
+
 ## How the overlay combines with what dcctl sets {#precedence}
 
 Three layers, each over the one before:
@@ -62,7 +96,7 @@ An overlay may set only the values below. Anything else is refused.
 | --- | --- |
 | `replicas`, `rollingUpdate`, `terminationGracePeriodSeconds`, `nodeLossTolerationSeconds`, `shutdownDrainSeconds`, `podDisruptionBudget`, `startupProbe`, `livenessProbe` | Scale and rollout for every area |
 | `resources`, `useMeasuredRequests`, `goMemLimitPercent`, `gogc`, `goMemLimit` | CPU and memory, and Go's memory behaviour, for every area |
-| `functionalAreas.<area>.replicas`, `.strategy`, `.resources`, `.measuredRequests`, `.goMemLimitPercent`, `.memoryLimitFloor`, `.gogc`, `.goMemLimit`, `.avoidEventStorePrimary`, `.eventPathSpread` | The same, for one area |
+| `functionalAreas.<area>.replicas`, `.strategy`, `.resources`, `.measuredRequests`, `.goMemLimitPercent`, `.memoryLimitFloor`, `.memoryLimitFloorWithEnvelopes`, `.gogc`, `.goMemLimit`, `.avoidEventStorePrimary`, `.eventPathSpread` | The same, for one area |
 | `functionalAreas.<area>.config` | That area's own configuration. An unknown key stops the service at startup |
 | `functionalAreas.<area>.profiler.enabled`, `.blockRate`, `.mutexFraction` | The diagnostic profiling listener, off by default (see [Observability](./observability.md)). Its `address` is not tunable |
 | `frontend.replicas`, `frontend.resources` | The console's pods |
@@ -70,8 +104,11 @@ An overlay may set only the values below. Anything else is refused.
 | `ingress.className`, `ingress.annotations`, `ingress.uploadMaxBodySize`, `ingress.gateway.className`, `ingress.gateway.annotations`, `networkPolicy.additionalAllowedCidrs`, `serviceAccount.annotations` | How the ingress is fronted and who may reach the pods |
 | `mqttExposure.loadBalancer` | The cloud settings of the MQTT load balancer, such as an internal balancer and allowed source ranges |
 | `instance.config.infrastructure.nats.streamDesignRate`, `.streamRunwayMinutes`, `.streamMaxBytes`, `.streamMaxBytesCold`, `.streamMaxMsgs` | The outage runway the event streams are sized for, and their byte and message ceilings. The reservation is checked against the broker's volume before anything is written |
+| `instance.config.infrastructure.nats.mqttDeviceUplinks` | Opt-in raw-payload MQTT uplinks. A choice recorded with `--mqtt-device-uplinks` takes precedence; a fresh conflicting overlay is refused. Change the recorded choice with the flag |
+| `instance.config.infrastructure.tracing` | Distributed tracing (OpenTelemetry), off by default; see [Observability](./observability.md). Enable it in an upgrade of its own after the release rollout completes: pods from an earlier release refuse this key |
 | `instance.config.infrastructure.messaging.envelopes.resolved`, `.inbound`, `.inboundLingerMillis` | Whether events are written as envelopes, off by default |
 | `instance.config.infrastructure.tokenAudience.enforcement`, `.unscopedClientCredentials`, `.externalResources` | Token audiences are always enforced. Leave enforcement unset or set it to `enforce`; `v1.4` refuses `observe`. The separate `unscopedClientCredentials: observe` setting remains supported. `externalResources` lists resource servers outside the platform. The chart derives and owns the other two keys. |
+| `eventSources.ingestMetering` | Opt-in lag-credited ingest metering; see [Ingest metering](#ingest-metering). Default `legacy` |
 | `brokerAdmin.allowCeilingShrink` | Lets one upgrade lower a stream ceiling below what the stream holds. Set it for that upgrade and remove it after |
 
 `functionalAreas.event-management.replicas` is not tunable even though the rest of that area is:
@@ -132,6 +169,10 @@ purpose. Three figures decide it.
 - **Retention.** `lifecycle.retentionDays` is 0 by default, which keeps data forever. An
   instance meant to run indefinitely should set it, and then the volume only has to hold the
   window plus the uncompressed week.
+  The per-minute measurement aggregates behind charts age out with it, one chunk interval
+  later (rounded up to a day).
+
+Event list reads stop after 60 seconds (15 seconds for a scoped caller naming an anchor); for large histories, narrow the time range or filter on a device to avoid timing out on the exact count performed for every page.
 
 As a rule, the uncompressed window needs readings per second × (1 + calculated metrics) × bytes per row × 86,400 seconds × days, with a quarter of the volume left free for the write-ahead log,
 maintenance and growth. At the measured 600 bytes and 10,000 readings per second that is about 520 GB a day, so the default

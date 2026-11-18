@@ -116,6 +116,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, afterMicroserviceInitialized(ctx),
 		"initialize under the catalog (the broker manager connects)")
+	dctest.UseFreeTCPPort(t, &Svc.GraphQL.Port)
 	t.Cleanup(func() { _ = beforeMicroserviceStopped(context.Background()) })
 	require.NotNil(t, NatsManager)
 

@@ -1,0 +1,97 @@
+---
+sidebar_position: 4.5
+title: 版本与升级策略
+---
+
+# 版本与升级策略 {#versioning-and-upgrade-policy}
+
+从 **v1.0.0** 起，DeviceChain 的版本遵循[语义化版本](https://semver.org)。本页说明版本号各部分的含义、承诺涵盖哪些接口、如何从一个发布升级到下一个、功能在移除前会被弃用多久，以及如何公布破坏性变更。
+
+v1.0.0 之前，本页内容均不适用。v1.0.0 之前的发布可能改变什么，参见[1.0 之前的稳定性](./releases-and-upgrades.md#pre-10-stability)。
+
+## 版本号的含义 {#version-numbers}
+
+一次发布就是一个版本标签，`vMAJOR.MINOR.PATCH`。服务镜像、Helm chart、Operator 和 `dcctl` 都以同一版本号发布，因此一次部署只有一个一致的版本号。参见[版本模型](./releases-and-upgrades.md#versioning-model)。
+
+| 部分 | 可以包含 | 不会包含 |
+| --- | --- | --- |
+| **补丁**（`1.4.1`） | 缺陷修复、安全修复和性能改进。 | 对受保障接口的变更，或任何移除。 |
+| **次版本**（`1.5.0`） | 新功能、新字段和新操作、新的可选设置、新的数据库迁移，以及弃用。 | 移除下文受保障的任何内容，或改变现有调用的含义。 |
+| **主版本**（`2.0.0`） | 移除和含义变更，包括此前由次版本弃用的内容。 | 除其发布说明和升级章节所述之外，主版本之间不作任何承诺。 |
+
+## 承诺涵盖的范围 {#compatibility-surfaces}
+
+平台各部分的承诺强度并不相同。有些接口是设备、你的代码和脚本所依赖的，只会在主版本中变化。另一些是调优和运维界面，只要发布说明写明，就可以在次版本中变化。
+
+### 受保障：只在主版本中做不兼容变更 {#covered-interfaces}
+
+| 接口 | 涵盖内容 |
+| --- | --- |
+| **设备协议** | 设备收发的 MQTT 和 HTTP 载荷、主题与 subject 布局，以及凭据类型。适用于 `1.x` 的设备，对之后每个 `1.y` 仍然适用。 |
+| **GraphQL API** | 所提供 Schema 中的每个字段、参数、类型和操作。次版本只向 Schema 添加内容；不会移除或重命名任何内容、改变类型、把可选参数改为必填，也不会改变现有字段的返回内容。 |
+| **npm 包** | `@devicechain/client`、`@devicechain/dashboards`、`@devicechain/widgets`、`@devicechain/widget-sdk` 和 `@devicechain/brand` 的公开导出。控件 SDK 还有自己的 `sdkApiVersion`，决定已保存的控件是否仍能渲染；参见[控件版本与兼容性](../guides/widget-versions-and-compatibility.md)。 |
+| **C# SDK** | NuGet 包 `DeviceChain.Sdk` 的公开 API，Unity 包基于它构建。 |
+| **`dcctl`** | 其命令、子命令和标志。次版本不会移除标志，也不会改变标志的含义。 |
+
+次版本可以添加的内容适用两条规则，请把客户端写成能容忍它们：
+
+- GraphQL 响应中会出现**新字段和新类型**。忽略你不认识的。
+- 枚举中可能出现**新值**。把未知值视为“我还不处理的情形”，而不是错误。
+
+### 不受保障：在发布说明中描述 {#best-effort-interfaces}
+
+这些可以在次版本中变化。变化时，发布说明以及该版本在[发布与升级](./releases-and-upgrades.md)中的章节会写明，并说明你需要做什么：
+
+- Helm chart 的值和实例配置文档
+- 指标名称和告警名称
+- MCP 工具目录（工具名称、输入和结果结构）
+
+### 预览：在有限时间内可能在次版本中变更 {#preview-interfaces}
+
+新增的对外接口可以先在**预览**层级中度过第一个次版本，之后才纳入上述承诺。处于预览层级的接口会在你阅读它的地方说明这一点：
+在其参考或指南页面中，对于该接口中的每个 GraphQL 操作、字段、参数、类型和枚举值，则写在各自的描述里。接口处于预览期间，可能在次版本中发生不兼容的变更；发生时，该版本在
+[发布与升级](./releases-and-upgrades.md)中的小节会说明变更内容和应对办法。接口最多在预览层级停留两个次版本；到第二个次版本结束时，
+它会被提升并与其他接口一样受到承诺保护。对预览接口的不兼容变更并不豁免于项目的兼容性检查：它要像其他任何变更一样，在那里声明为有意的破坏性变更，
+因此预览变更不会在无人察觉的情况下发布。预览层级的文件格式带有版本号，例如 `v1alpha1`，不认识该版本的工具会拒绝该文件，而不是去猜测。
+
+目前预览层级包含三类接口。一是规则测试：event-processing API 的 `evaluateRules` 操作、场景文件和测试文件的格式，以及读取它们的 `dcctl test` 命令（参见[测试你的规则](../guides/testing-your-rules.md)）。二是产品即代码：`dcctl product export`、`plan` 和 `apply` 命令及其包格式（参见[产品即代码](../guides/product-as-code.md)）。三是代理操作：`act:*` OAuth 作用域及其派生的提议权限；代理策略操作（`agentPolicy`、`agentPolicyVersions`、`saveAgentPolicyDraft`、`publishAgentPolicy`、`rollbackAgentPolicy`、`setAgentActuation`）及其文档（格式 `v1alpha1`）；`agentActuationDecision` 和 `agentExecutionDecision` 查询；运维人员的按租户控制（`tenantAgentActuation`、`setTenantAgentActuationSuspended`）；代理服务账户的创建（`ServiceAccountCreateRequest.agent`）和 `ServiceAccount.roles` 中描述的代理令牌权限；以及代理提议操作（`proposeAlarmAction`、`approveAgentProposal`、`rejectAgentProposal`、`agentProposals`、`agentProposal`）（参见[代理操作](../concepts/mcp.md#agent-actions)）。GraphQL 预览接口包括其专用的输入和结果类型、字段、参数及枚举值。`ServiceAccount.agent` 字段不属于预览：从引入它的版本起即受兼容性承诺保护。普通服务账户的角色仍受保障。目前尚未提供 MCP 操作工具；MCP 读取工具仍属于上述不受保障的工具目录。
+
+## 支持的升级路径 {#upgrade-paths}
+
+- **同一次版本内**（`1.4.0` 到 `1.4.3`）以及**升级到下一个次版本**（`1.4.x` 到 `1.5.0`）是支持的路径。按[滚动升级](./releases-and-upgrades.md#rolling-upgrades)所述，先运行 `dcctl install`，再运行 `dcctl upgrade`。
+- **跳过次版本**不是经过测试的路径。要从 `1.4.x` 升级到 `1.7.0`，请先依次升级到 `1.5.x` 和 `1.6.x`。某个发布的升级章节会说明它是否要求先升级到特定发布，就像目前[事件线路格式](./releases-and-upgrades.md#event-wire-format)一节那样。
+- **数据库迁移始终可以升级。** 从 v1.0.0 起，不会为了采用新发布而重建实例。Schema 变更是追加到该功能区迁移链末尾的迁移，绝不修改已有迁移，并且每个迁移在失败后都可以重新运行。v1.0.0 之前，有些发布完全无法升级进入；这一情况随 v1.0.0 结束。
+- **升级用真实数据检查。** 每个发布的升级都会这样演练：在较早发布上写入一个实例的数据，升级它，再读回每一行。发布流程会从上一个稳定发布运行这项检查。检查未通过时发布会中止：不会为它发布 GitHub 发布、`dcctl` 二进制文件或 SDK 包。它的容器镜像和 chart 可能已在镜像仓库中，但它们不构成一个发布。
+- **不支持降级。** 新发布可能以较早发布无法读取的方式迁移数据库。如果升级出错，请向前升级到修复后的发布，或按[灾难恢复](./disaster-recovery.md)流程从备份恢复。不要用 `helm rollback` 回退。
+
+运行升级之前，请先阅读目标发布的升级章节。其中列出升级会检查什么、会拒绝什么，以及你必须先做什么。
+
+## 弃用 {#deprecation}
+
+上文受保障的内容在主版本中被移除之前，先由某个次版本将其弃用。
+
+- **弃用期至少持续两个次版本**，之后才会移除，并且移除只发生在主版本中。在 `1.5.0` 中弃用的内容，不会早于 `2.0.0` 移除，也不会在 `1.7.0` 发布之前移除。
+- **被弃用的 GraphQL 字段或参数**用 `@deprecated` 指令标记，并给出指明其替代项的原因。该原因可在 Schema、内省和 [GraphQL API 参考](../reference/graphql-api.md)中看到。
+- **被弃用的标志、包导出或设置**会在弃用它的发布的发布说明中注明为已弃用，并给出替代项。
+- **被弃用的内容**在整个弃用期内继续按原样工作。
+
+安全问题是唯一的例外。无法以兼容方式做出的修复会在准备好后立即发布，并在发布说明的开头给出迁移到替代项的步骤。
+
+## 支持期 {#support-window}
+
+| 发布 | 获得的修复 |
+| --- | --- |
+| **最新次版本** | 缺陷修复，以及所有严重级别的安全修复 |
+| **前一个次版本** | 高危和严重级别的安全修复，持续到下一个次版本发布后 90 天 |
+| 更早的发布 | 无。请升级到受支持的发布 |
+
+修复以各受支持次版本的补丁版本发布。请保持在最新次版本的一个次版本之内；升级到下一个次版本是受支持的路径，所以保持最新每次最多只需一步。[安全政策](https://github.com/devicechain-io/devicechain/blob/main/SECURITY.md)中写明了同样的支持期，以及如何报告漏洞和修复的目标时限。
+
+## 如何公布破坏性变更 {#announcing-breaking-changes}
+
+- **发布说明。** 每个发布在 GitHub 发布页面的说明顶部都有手写的要点。弃用、升级前必须执行的步骤或被拒绝的升级，会先在那里写明，然后才是变更列表。
+- **升级章节。** 每个发布在[发布与升级](./releases-and-upgrades.md)中都有一节，写明步骤、所做检查以及你必须修改的内容。
+- **Schema。** 被弃用的 GraphQL 字段在所提供的 Schema 中标记，因此读取 Schema 的工具会先于人阅读说明发现它。
+- **候选发布。** 候选发布（`vX.Y.Z-rc.N`）是可在正式发布前试用升级的构建。它从不移动 `:latest` 镜像标签。
+
+由于变更在发布说明中公布，请阅读你所安装的每个发布的说明，包括补丁发布。

@@ -398,7 +398,7 @@ func TestATenantPurgeDoesNotCloseTheGate(t *testing.T) {
 				t.Fatalf("precondition: the gate refuses before the purge: %v", err)
 			}
 
-			res, err := PurgeTenant(context.Background(), es.nmgr.nc, "test", "gone")
+			res, err := PurgeTenant(context.Background(), es.nmgr.nc, "test", "gone", nil)
 			if err != nil {
 				t.Fatalf("purge: %v", err)
 			}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/agentpolicy"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/golang-jwt/jwt/v5"
@@ -50,7 +51,12 @@ type agentEnv struct {
 
 func newAgentEnv(t *testing.T, authorities ...string) *agentEnv {
 	t.Helper()
-	base := newRefreshEnv(t, agentClient, auth.ScopeReadOnly, auth.ScopeActAlarms, auth.ScopeActCommands)
+	return newAgentEnvOn(t, nil, authorities...)
+}
+
+func newAgentEnvOn(t *testing.T, rdbm *rdb.RdbManager, authorities ...string) *agentEnv {
+	t.Helper()
+	base := newRefreshEnvOn(t, rdbm, agentClient, auth.ScopeReadOnly, auth.ScopeActAlarms, auth.ScopeActCommands)
 	base.m.SetAgentActuation(true)
 	codes := &codesKVStub{}
 	base.m.codesKV = codes

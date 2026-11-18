@@ -61,7 +61,7 @@ func TestBootstrapCarriesMqttFailClosedFromArgvToTheState(t *testing.T) {
 				t.Fatal(err)
 			}
 			flag := mqttFailClosedFlag(bootstrapCmd.Flags().Changed, bootstrapMqttFailClosed)
-			opts := bootstrapOptions("prod", nil, flag)
+			opts := bootstrapOptions("prod", nil, flag, nil)
 			wantTri(t, "bootstrap options", opts.MqttFailClosed, tc.want)
 			store := &dcv1beta1.ObjectStoreSpec{Backend: "filesystem"}
 			st := bootstrapStateFor(opts, bootstrap.ClusterBinding{}, "uid", "local", nil, nil, nil, store, true, bootstrap.EscrowPlan{})
@@ -82,7 +82,7 @@ func TestUpgradeCarriesMqttFailClosedFromArgvToTheOptions(t *testing.T) {
 				t.Fatal(err)
 			}
 			flag := mqttFailClosedFlag(upgradeCmd.Flags().Changed, upgradeMqttFailClosed)
-			opts := upgradeOptions("prod", flag, nil)
+			opts := upgradeOptions("prod", flag, nil, nil)
 			wantTri(t, "upgrade options", opts.MqttFailClosed, tc.want)
 		})
 	}

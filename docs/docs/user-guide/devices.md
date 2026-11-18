@@ -173,7 +173,8 @@ Select a device in the list to open its page. The header shows the device's name
 
 The page is organized in tabs. You may not see all of them: **Credentials**, **Send data** and
 **Replacement** need permission to change devices, and **Updates** appears only when your installation runs the
-update service and you are allowed to see updates.
+update service and you are allowed to see updates. **Alarms** needs `alarm:read`. Members limited
+to part of the tenant do not see **Assignment**, **Gateway**, **Facets** or **Configuration**.
 
 ### Basic
 
@@ -197,6 +198,13 @@ Choose a **Target type** (**Customer**, **Area** or **Asset**), pick the **Targe
 device already reported keep the assignments they were recorded with.
 
 See [Managing device assignments](/guides/managing-assignments).
+
+### Gateway
+
+**Gateway** shows the gateway this device is behind and the devices behind this device.
+With permission to change devices, enter a **Gateway device token** and choose **Assign gateway**,
+or **Move** to change an existing gateway. **Clear gateway** removes the relationship; the old
+gateway's next publish for this device is refused. A gateway cannot itself be behind another gateway.
 
 ### Facets {#facets}
 
@@ -244,6 +252,12 @@ shown.
 
 Each row shows when the event occurred, its type (such as **Measurement**) and the source it
 arrived through. For a longer history, use a dashboard.
+
+### Alarms
+
+**Alarms** lists alarms raised on this device, 10 per page, refreshing every 30 seconds.
+With `alarm:write`, you can acknowledge an active, unacknowledged alarm here. The link above
+the table opens the tenant alarm list for the other alarm actions.
 
 ### Commands {#commands}
 

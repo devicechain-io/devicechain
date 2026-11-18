@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"helm.sh/helm/v3/pkg/action"
@@ -55,6 +56,25 @@ func TestParseLwm2mIdentities(t *testing.T) {
 		}
 	})
 
+	t.Run("a deviceTypeToken within the grammar parses", func(t *testing.T) {
+		p := writeIdentitiesFile(t, `[{"identity":"h","psk":"`+b64PSK(16)+`","tenant":"acme","externalId":"e","deviceTypeToken":"sensor-v2","autoRegister":true}]`)
+		got, err := ParseLwm2mIdentities(p)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 || got[0].DeviceTypeToken != "sensor-v2" || !got[0].AutoRegister {
+			t.Fatalf("parsed wrong: %+v", got)
+		}
+	})
+
+	t.Run("invalid device type error names deviceTypeToken", func(t *testing.T) {
+		p := writeIdentitiesFile(t, `[{"identity":"h","psk":"`+b64PSK(16)+`","tenant":"acme","externalId":"e","autoRegister":true,"deviceTypeToken":"bad/type"}]`)
+		_, err := ParseLwm2mIdentities(p)
+		if err == nil || !strings.Contains(err.Error(), "deviceTypeToken") {
+			t.Fatalf("expected an error containing deviceTypeToken, got %v", err)
+		}
+	})
+
 	// Each rejection, one subtest, so a regression names the exact guard that broke.
 	reject := map[string]string{
 		"short psk":               `[{"identity":"h","psk":"` + base64.StdEncoding.EncodeToString(make([]byte, 8)) + `","tenant":"acme","externalId":"e"}]`,
@@ -67,6 +87,10 @@ func TestParseLwm2mIdentities(t *testing.T) {
 		"unknown field":           `[{"identity":"h","psk":"` + b64PSK(16) + `","tenant":"acme","externalId":"e","bogus":1}]`,
 		"empty array":             `[]`,
 		"not an array of objects": `{"identity":"h"}`,
+
+		"deviceType outside the token grammar":                `[{"identity":"h","psk":"` + b64PSK(16) + `","tenant":"acme","externalId":"e","autoRegister":true,"deviceTypeToken":"bad/type"}]`,
+		"deviceType outside the grammar without autoRegister": `[{"identity":"h","psk":"` + b64PSK(16) + `","tenant":"acme","externalId":"e","deviceTypeToken":"bad type"}]`,
+
 		// Whitespace-only fields: non-empty to a naive == "" check, but the service
 		// TrimSpace-validates, so these would sail past and crash-loop the pod.
 		"whitespace identity":              `[{"identity":" ","psk":"` + b64PSK(16) + `","tenant":"acme","externalId":"e"}]`,

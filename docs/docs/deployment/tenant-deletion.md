@@ -5,9 +5,19 @@ title: Tenant Deletion
 
 # Tenant Deletion
 
-Deleting a tenant is a lifecycle, not a single action. The delete cuts access immediately. The
+Deleting a tenant is a lifecycle, not a single action. The delete immediately disables the tenant
+and marks it as deleting, preventing ordinary users from obtaining new tenant access tokens. The
 tenant's data is reclaimed afterwards, in the background, and the tenant's token does not become
 available for reuse until that finishes.
+
+Removing the required memberships blocks those users' tenant sign-in and refresh-token exchanges;
+it does not end their instance-wide sign-in sessions. Already-issued human access tokens (JWTs)
+can remain valid until they expire, for up to the configured `auth.accessTokenTtlSeconds` from
+issuance: **900 seconds (15 minutes) by default**. Even explicit session revocation does not
+invalidate those JWTs. Superuser break-glass access remains available during deletion.
+
+Deletion also publishes a kill event to stop automated actions through their tenant checks. This
+does not revoke human JWTs or kick devices' existing broker sessions; see [During a deletion](#during).
 
 This page covers what happens between those two moments: what to expect, what can hold a deletion
 open, and what the platform deliberately keeps.
@@ -16,7 +26,7 @@ open, and what the platform deliberately keeps.
 
 | | |
 |---|---|
-| **Immediately** | Sign-in is revoked. The tenant is disabled and marked as deleting, and the moment of the cut is recorded. New device connections, new ingest and new command dispatch are refused within about a minute. |
+| **Immediately** | The tenant is disabled and marked as deleting, and the deletion time is recorded. Ordinary tenant sign-in and refresh-token exchanges are blocked; already-issued human JWTs can remain valid until expiry (15 minutes from issuance by default). A kill event is published for automated actions. New device connections, new ingest and new command dispatch are refused within about a minute. |
 | **Within a minute or two** | A background coordinator begins reclaiming the tenant's data from every storage system that holds it, and keeps going until each one reports that it holds nothing. |
 | **Once every storage system has stayed clean for the settle window** (five minutes by default) | The deletion is recorded as [erased](#erased-signal): the platform stands behind the statement that the tenant's data is gone. The token is still held. |
 | **After at least 12 hours** | The tenant's record is removed and its token becomes available again. |
@@ -25,8 +35,9 @@ The delete itself is idempotent. Deleting a tenant that does not exist, or one t
 being deleted, succeeds and changes nothing, so you can re-run a teardown script that half failed.
 
 :::note Memberships must be removed first
-A tenant that still has user memberships is refused, because removing those is what actually
-revokes people's access to it. Remove the memberships, then delete the tenant.
+A tenant that still has user memberships is refused. Remove the memberships, then delete the
+tenant. Removing a membership blocks new tenant sign-in and token refresh for that member, but
+does not invalidate an already-issued access token.
 :::
 
 ## Why the token is held for 12 hours {#token-hold}

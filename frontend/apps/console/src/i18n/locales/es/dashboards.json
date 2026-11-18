@@ -1,4 +1,5 @@
 {
+  "canvasBreakpoint": "Punto de quiebre",
   "title": "Paneles",
   "description": "Paneles en vivo para este inquilino",
   "newDashboard": "Nuevo panel",
@@ -242,7 +243,7 @@
   "widgetLabelThresholdLevel": "Severidad",
   "widgetLabelThresholdLabel": "Etiqueta",
   "widgetPlaceholderThresholdLevel": "Elige una severidad",
-  "widgetSeverityNormal": "Normal",
+  "widgetSeverityNormal": "Sin incidencias",
   "widgetSeverityWarning": "Advertencia",
   "widgetSeverityMinor": "Menor",
   "widgetSeverityMajor": "Mayor",

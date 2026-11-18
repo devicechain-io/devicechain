@@ -43,7 +43,8 @@ type DeviceProfileVersion struct {
 
 	// The identity that published this version (claims username, falling back to
 	// email).
-	PublishedBy string `gorm:"size:256"`
+	PublishedBy           string  `gorm:"size:256"`
+	AutomationReviewToken *string `gorm:"size:64"`
 }
 
 // ProfileSnapshot is the serialized capability set frozen into a

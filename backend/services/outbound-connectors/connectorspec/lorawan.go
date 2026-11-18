@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/devicechain-io/dc-microservice/credbinding"
 )
 
 // ttsIDShape is The Things Stack's identifier grammar for applications and end devices.
@@ -139,3 +141,24 @@ func withLoRaWANDownlinkSecret(t Target, secret string) (Target, error) {
 	d.APIKey = secret
 	return d, nil
 }
+
+// Integration selects local device membership; applicationId selects a path on the
+// same network server. Neither changes who receives the API token.
+// A webhook link's method, content type and body template shape the request but not its
+// destination or where the token rides; its URL template, extra headers and auth header/prefix
+// do, so they stay binding.
+func lorawanBinding(raw []byte) credbinding.Binding {
+	var c lorawanConfig
+	if json.Unmarshal(raw, &c) != nil {
+		return credbinding.Opaque(LoRaWANDownlinkType, raw)
+	}
+	t, err := parseLoRaWANDownlink(raw)
+	if err != nil {
+		return credbinding.Opaque(LoRaWANDownlinkType, raw)
+	}
+	c.BaseURL = t.(LoRaWANDownlinkTarget).BaseURL.String()
+	return credbinding.Fields(credbinding.New(LoRaWANDownlinkType), &c, lorawanFields)
+}
+
+var lorawanFields = map[string]bool{"networkServer": false, "baseUrl": false, "integration": true, "applicationId": true,
+	"urlTemplate": false, "method": true, "contentType": true, "bodyTemplate": true, "headers": false, "authHeader": false, "authPrefix": false}

@@ -170,8 +170,12 @@ func TestWebhookLinksWhenItHasAConsoleURL(t *testing.T) {
 	if got["alarmUrl"] != "https://console.example/alarms" || got["deviceUrl"] != "https://console.example/devices/boiler-7" {
 		t.Fatalf("links = %v / %v", got["alarmUrl"], got["deviceUrl"])
 	}
-	// Existing keys are untouched.
-	if got["text"] != msg.Subject || got["deviceName"] != "Boiler 7" || got["alarmToken"] != "alarm-1" {
+	// Existing keys are untouched; the plain text names the device by token, never by its
+	// (device-authored) name, which stays in deviceName only.
+	if got["text"] != msg.Payload["text"] || got["deviceName"] != "Boiler 7" || got["alarmToken"] != "alarm-1" {
+		t.Fatalf("existing keys changed: %v", got)
+	}
+	if text, _ := got["text"].(string); strings.Contains(text, "Boiler 7") {
 		t.Fatalf("existing keys changed: %v", got)
 	}
 }
@@ -209,6 +213,7 @@ func TestANewerEventUpdatesSourceAfterEscalation(t *testing.T) {
 		t.Fatalf("states = %v, %v", states, err)
 	}
 	escAt := n.clock()
+	n.now = func() time.Time { return escAt }
 	if err := n.Escalate(ctx, states[0], enabledPolicies(t, api, ctx), escAt, 5); err != nil {
 		t.Fatal(err)
 	}

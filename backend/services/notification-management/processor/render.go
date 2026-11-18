@@ -16,20 +16,20 @@ import (
 // RenderedNotification is the channel-independent rendering of one alarm transition
 // that the dispatcher hands to a channel adapter (ADR-017). An adapter takes the
 // representation that fits its transport: SMTP uses Subject + TextBody; a webhook
-// (Slack included) serializes Payload as JSON. Rendering once, here, keeps the
+// serializes Payload as JSON. Rendering once, here, keeps the
 // per-alarm formatting in a single tested place rather than duplicated per adapter.
 //
 // v1 uses a built-in default rendering — there is no per-channel custom template yet
 // (deferred to a later slice, so there is no template-injection surface to secure
-// now). Payload always carries a human "text" summary so a Slack incoming webhook
-// renders something legible without any Slack-specific formatting.
+// now). Payload carries a plain "text" summary without device names; native Slack
+// delivery handles device names with transport-specific escaping.
 type RenderedNotification struct {
 	// Subject is the one-line summary (email subject / short header).
 	Subject string
 	// TextBody is the multi-line plaintext body (email).
 	TextBody string
-	// Payload is the structured JSON body for a webhook. "text" mirrors Subject for
-	// Slack compatibility; the remaining keys are the alarm's structured fields.
+	// Payload is the structured JSON body for a webhook. "text" uses the device token
+	// or originator instead of the device name; structured fields keep raw values.
 	Payload map[string]any
 	// Alarm is the same transition as typed facts, for the native adapters (Slack, Teams,
 	// PagerDuty) that build a vendor-shaped message and must not re-parse Payload. It is
@@ -80,6 +80,13 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 		shown = oneLine(event.DeviceToken)
 	}
 	subject := fmt.Sprintf("[%s] Alarm %s: %s on %s", event.Severity, verb, event.AlarmKey, shown)
+	// Generic destinations may interpret markup. Keep device-authored names only in
+	// structured fields, independently of the subject and native adapter facts.
+	webhookSource := sourceLabel(event.OriginatorType, event.OriginatorId, "", event.DeviceToken)
+	if webhookSource == "" {
+		webhookSource = "an unnamed source"
+	}
+	webhookText := fmt.Sprintf("[%s] Alarm %s: %s on %s", event.Severity, verb, event.AlarmKey, webhookSource)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Alarm %s %s on %s.\n\n", event.AlarmKey, verb, shown)
@@ -108,7 +115,7 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 	writeField(&b, "Occurred", formatTime(event.OccurredTime))
 
 	payload := map[string]any{
-		"text":         subject,
+		"text":         webhookText,
 		"eventType":    event.EventType.String(),
 		"alarmToken":   event.AlarmToken,
 		"alarmKey":     event.AlarmKey,
@@ -196,13 +203,16 @@ func sourceLabel(originatorType string, originatorID uint, deviceName, deviceTok
 // have), so it carries the durable identity + progress fields — enough for a human to
 // recognize the still-open alarm and act. level is the escalation number this delivery
 // represents (1 = first re-notification). Payload mirrors the event rendering's shape
-// (a "text" summary plus structured keys) so a Slack/webhook endpoint renders it the
-// same way.
+// (a plain "text" summary without device names, plus raw structured keys).
 func renderEscalation(state *model.NotificationState, level int) *RenderedNotification {
 	src := state.Source()
 	shown := sourceLabel(src.OriginatorType, src.OriginatorId, src.DeviceName, src.DeviceToken)
 	subject := fmt.Sprintf("[%s] Alarm still unresolved (escalation %d): %s",
 		state.Severity, level, state.AlarmKey)
+	webhookText := subject
+	if source := sourceLabel(src.OriginatorType, src.OriginatorId, "", src.DeviceToken); source != "" {
+		webhookText += " on " + source
+	}
 	if shown != "" {
 		subject += " on " + shown
 	}
@@ -234,7 +244,7 @@ func renderEscalation(state *model.NotificationState, level int) *RenderedNotifi
 		// alarm. The alarm event stream's ESCALATED means the alarm's SEVERITY worsened
 		// (renderNotification emits that), so a webhook keying on eventType must be able
 		// to tell a reminder from a real severity change.
-		"text":         subject,
+		"text":         webhookText,
 		"eventType":    "RENOTIFIED",
 		"alarmToken":   state.AlarmToken,
 		"alarmKey":     state.AlarmKey,

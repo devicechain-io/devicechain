@@ -78,6 +78,7 @@
   "secretRequired": "{{secretLabel}} es obligatorio para los conectores {{connectorLabel}}.",
   "secretSaslPassword": "Contraseña de SASL",
   "secretSaslPasswordDesc": "Obligatoria cuando SASL está habilitado; la contraseña del usuario de SASL.",
+  "staleWrite": "Este conector cambió desde que lo cargaste. Copia los cambios sin guardar, vuelve a cargar el conector, aplica tus cambios de nuevo y reintenta guardar.",
   "tabConfiguration": "Configuración",
   "tabVersions": "Versiones",
   "title": "Conectores",

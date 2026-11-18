@@ -7,10 +7,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"errors"
 
 	"github.com/devicechain-io/dc-microservice/eventenvelope"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/tracing"
 	"github.com/rs/zerolog/log"
 )
 
@@ -100,7 +100,7 @@ func (h *HTTPEnvelopes) flush(b messaging.FormedBatch) {
 	}
 	answer := func(err error) {
 		for _, p := range pend {
-			if errors.Is(err, messaging.ErrStreamBackpressure) {
+			if messaging.IsRefusal(err) {
 				h.refused(p.source)
 			}
 			p.done <- err
@@ -130,6 +130,13 @@ func (h *HTTPEnvelopes) flush(b messaging.FormedBatch) {
 		DedupID: messaging.EnvelopeDedupID(httpDedupKind, b.Tenant, randomSource(), 0),
 		Headers: map[string]string{eventenvelope.HeaderName: eventenvelope.HeaderValue},
 	}
+	if tracing.Enabled() {
+		members := make([]messaging.TraceMember, len(pend))
+		for i, p := range pend {
+			members[i] = messaging.TraceMember{Index: uint32(i), Context: p.ctx}
+		}
+		msg = msg.WithTraceMembers(members)
+	}
 	if cid := pend[0].msg.CorrelationID(); cid != "" {
 		msg = msg.WithCorrelationID(cid)
 	}
@@ -139,7 +146,7 @@ func (h *HTTPEnvelopes) flush(b messaging.FormedBatch) {
 // single publishes one request's event alone and counts its refusal.
 func (h *HTTPEnvelopes) single(p *httpPending) error {
 	err := h.publish(p.ctx, p.source, p.msg)
-	if errors.Is(err, messaging.ErrStreamBackpressure) {
+	if messaging.IsRefusal(err) {
 		h.refused(p.source)
 	}
 	return err

@@ -762,6 +762,8 @@ export declare class DashboardHub implements WidgetDataSource, WidgetActions {
     private readonly alarmReconcilers;
     private readonly commandReconcilers;
     private readonly streams;
+    private readonly groups;
+    private multiDeviceUnsupported;
     private readonly alarmDisposers;
     private readonly commandDisposers;
     private readonly locationDisposers;
@@ -810,6 +812,9 @@ export declare class DashboardHub implements WidgetDataSource, WidgetActions {
     private availabilityToken;
     private resolveDevices;
     private resolveBinding;
+    private attachDevices;
+    private fallbackGroup;
+    private openGroup;
     private attach;
     private ensureStream;
     private fanout;
@@ -945,6 +950,7 @@ export interface EditHistory<T, L> {
 ```ts
 export interface EditOptions {
     nearest?: boolean;
+    breakpoint?: string;
 }
 ```
 
@@ -2538,6 +2544,10 @@ export type UnresolvedWidgetCode = 'unregistered' | 'unversioned' | 'invalid-met
 export interface UnresolvedWidgetReason {
     code: UnresolvedWidgetCode;
     message: string;
+    versions?: {
+        authored: number;
+        installed: number;
+    };
 }
 ```
 
@@ -3447,12 +3457,14 @@ export declare function pinnedAxes(mode: WidgetResizeMode | undefined): readonly
 
 ```ts
 export declare function placeOnGrid(def: DashboardDefinition, id: string): DashboardDefinition;
+export declare function placeOnGrid(def: DashboardDefinition, id: string, breakpoint?: string): DashboardDefinition;
 ```
 
 ## `.:placeRelative`
 
 ```ts
 export declare function placeRelative(def: DashboardDefinition, id: string, hostId: string, anchor: PlacementAnchor): DashboardDefinition;
+export declare function placeRelative(def: DashboardDefinition, id: string, hostId: string, anchor: PlacementAnchor, breakpoint?: string): DashboardDefinition;
 ```
 
 ## `.:presetIdOf`
@@ -3676,6 +3688,7 @@ export declare function setCanvasSizing(def: DashboardDefinition, sizing: Canvas
 
 ```ts
 export declare function setRelativeAnchor(def: DashboardDefinition, id: string, anchor: PlacementAnchor): DashboardDefinition;
+export declare function setRelativeAnchor(def: DashboardDefinition, id: string, anchor: PlacementAnchor, breakpoint?: string): DashboardDefinition;
 ```
 
 ## `.:setRelativeOffset`
@@ -3687,6 +3700,14 @@ export declare function setRelativeOffset(def: DashboardDefinition, id: string, 
 }, options?: {
     fine?: boolean;
     bounds?: RelativeBounds;
+}): DashboardDefinition;
+export declare function setRelativeOffset(def: DashboardDefinition, id: string, offset: {
+    x: number;
+    y: number;
+}, options?: {
+    fine?: boolean;
+    bounds?: RelativeBounds;
+    breakpoint?: string;
 }): DashboardDefinition;
 ```
 

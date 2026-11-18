@@ -1,0 +1,665 @@
+---
+sidebar_position: 6
+title: Disaster Recovery
+---
+
+# Disaster Recovery
+
+To restore a DeviceChain instance you need two things: a backup of its databases, and the
+instance's **secret-store root key**. Almost every backup procedure captures the first and
+silently omits the second. This page covers what the root key is, how to keep a recoverable copy of
+it, and how to rebuild an instance from both.
+
+## Two backups, not one {#two-tiers}
+
+An instance's data sits on two separate database servers. Back them up and restore them as two
+separate operations, not one:
+
+| | **Core data** (PostgreSQL) | **Event data** (TimescaleDB) |
+|---|---|---|
+| What | Tenants, identities, devices, profiles, detection rules, dashboards, connectors, last-known state — **and every stored secret** | Measurements, event history, rollups |
+| Size | Megabytes; it grows with your fleet's *configuration* | The volume tier; it grows with time |
+| Losing it | The instance cannot be rebuilt | History is gone; the instance still runs |
+| Needs the root key | **Yes** | No |
+
+This split is not a policy imposed on one database; it is how the platform already stores things:
+
+- `event-management` owns the event store — its schema, its hypertables, its retention policies —
+  and is the only service that writes telemetry there.
+- Every other service keeps its own data on the relational server.
+- The one other service that reaches TimescaleDB at all is `user-management`. It uses a guest
+  connection that creates no schema and runs no migrations, and only to delete a purged tenant's
+  rows.
+
+No write spans both stores, so there is nothing to keep transactionally consistent between them.
+
+One thing matters when the two halves carry different recovery points. The tenant's row on the
+relational side drives that deletion, and is removed once the deletion is done. So if you restore
+event data to a point *before* a tenant was purged, next to core data restored to a point *after*
+its row was released, you bring back telemetry that nothing will erase again.
+
+Plan around two consequences:
+
+- **Different schedules.** Both stores are archived the same way: a base backup plus a continuous
+  stream of write-ahead log. But they do not want the same base-backup cadence or the same
+  retention. Core data is small and changes when someone changes something. Event data is bulk,
+  append-mostly, and already under a retention policy
+  ([data lifecycle](../concepts/architecture.md)). Keeping base backups of chunks the lifecycle
+  reconciler is about to drop is paying twice to store the same rows. They do not get the same
+  retention either: by default core data can be recovered to any point in the last 30 days and
+  event data to any point in the last 7 (see [Recovery windows](./bootstrap.md#backup-retention)).
+  A point-in-time target, whether `--restore-rdb-at` or `--restore-tsdb-at`, must fall inside that
+  store's window; anything older is no longer in the archive. So a restore of both stores to one
+  point must fall inside the shorter window. Core data restored further back than that sits beside
+  event data at a later point, which is the mismatch described above in the other direction: a
+  tenant created since the core-data target still has telemetry, but no tenant row to drive its
+  deletion.
+- **Different recovery targets.** Restoring core data alone gives you a *working* instance: devices
+  reconnect, detection rules run, commands dispatch, secrets decrypt. Restoring event data
+  backfills history into it. An instance missing its event data is degraded (empty history
+  widgets), not down, so the two halves can carry genuinely different recovery-time targets.
+
+The root key gates the core-data half only. Event data holds no ciphertext, so a TimescaleDB
+restore needs nothing from this page. Everything below is about core data.
+
+## Why the root key needs its own procedure {#root-key}
+
+Every secret DeviceChain stores is encrypted at rest under a per-secret data key. That includes the
+key that signs every sign-in token, outbound-connector credentials, SMTP passwords and AI provider
+keys. Each data key is in turn wrapped by one instance-wide **root key** (the key-encryption key,
+or KEK; see [Architecture](../concepts/architecture.md)). Every instance stores the token-signing key, whatever
+its profile, so every instance depends on its root key: without it, no one can sign in.
+
+The root key lives in the instance's Kubernetes Secret, which means it lives in **etcd**, and no
+database backup contains etcd. A PostgreSQL backup archives PostgreSQL; a TimescaleDB backup covers
+TimescaleDB. Neither contains a single byte of the key.
+
+This produces a failure that passes the drill most people actually run:
+
+- **Restore the databases in place**, into the same cluster, and everything works, because etcd
+  still holds the key. This rehearsal gives false confidence.
+- **Restore to a fresh cluster** — the actual disaster — and the encrypted rows rehydrate
+  perfectly and the restore reports success, but every one of those secrets is permanently
+  unreadable. The new cluster minted a *different* root key, and the old one is not derivable from
+  anything you still have.
+
+This used to surface only later, as an unexplained decryption error long after the backup that
+could have helped had rotated away. Two checks now catch it, at different moments and on different
+evidence:
+
+- **Before anything is built**, `dcctl bootstrap` asks the relational store what it already holds
+  for the instance. A database that is there without this cluster having built it can only have
+  outlived the cluster that did, so the bootstrap stops rather than minting a key over it. This
+  check prevents the mistake.
+- **At startup**, a service that stores secrets checks its root key against its own stored rows and
+  refuses to serve if the key does not open them. This check catches a wrong key rather than a
+  missing one — a recovery pointed at the wrong artifact — which no reading of the store can see.
+
+The startup check takes down the whole API, not just the integrations. `user-management` stores the
+token-signing key, so it is one of the services that refuses to start. Every other service waits
+for `user-management`'s signing keys before it reports ready, so none of them serve either, and no
+one can sign in.
+
+Both checks make the mistake loud and immediate instead of slow and scattered. Neither recovers
+anything. If the key is gone, it is gone.
+
+:::danger There is no recovery from a lost root key
+The key is 256 bits of randomness and the wrapped data keys are not brute-forceable. If the key is
+gone, the secrets are gone; a support ticket cannot recover them. That includes the token-signing
+key, so an instance whose root key is lost or wrong **does not start**: `user-management` refuses,
+and nothing else becomes ready without it. This is the one piece of DeviceChain state with no
+second chance, which is why the escrow below is on by default.
+:::
+
+## The escrow artifact
+
+`dcctl bootstrap` writes an **encrypted escrow artifact**: a small text file containing the root
+key, sealed under a passphrase you choose.
+
+```
+~/.devicechain/escrow/<instance>-rootkey.escrow
+```
+
+The file is self-describing. Someone who has never seen one can open it years later and learn what
+it is, what it protects, what happens if it is lost, and the exact command to recover with, without
+needing this page.
+
+Two properties matter:
+
+- **It is not stored with the instance.** It deliberately does *not* live in
+  `~/.devicechain/instances/<instance>/`, because [`dcctl destroy`](#after-destroy) removes that
+  directory. `dcctl` refuses an `--escrow-file` path inside it.
+- **It carries a key fingerprint in the clear.** That lets you answer "is this escrow still the
+  right one?" *without* the passphrase. See [verifying](#verify).
+
+### Choosing a passphrase
+
+Bootstrap takes the passphrase from the first of these it finds:
+
+| Source | Use it for |
+|--------|-----------|
+| `--escrow-passphrase-file <path>` | Automation with a secret manager; a trailing newline is stripped. |
+| `DCCTL_ESCROW_PASSPHRASE` | CI and scripted installs. Set-but-empty is an error, not a fallback. |
+| Interactive prompt | A person at a terminal. Asked twice, to catch a typo now rather than during a recovery. |
+
+If none is available and there is no terminal to ask at, bootstrap fails. That is deliberate: the
+alternative is quietly producing an instance whose secrets die with its cluster.
+
+:::warning Store the file and the passphrase separately, and off the cluster
+Both in the same place is one compromise away from being no protection at all. Both on the cluster
+is one disaster away from being no backup at all.
+:::
+
+### Opting out
+
+For a genuinely disposable instance — a CI run, a demo, a local experiment — pass `--no-escrow`.
+`--dev` implies it.
+
+```bash
+dcctl bootstrap local scratch --dev            # no escrow, disposable by construction
+dcctl bootstrap local scratch --yes --no-escrow
+```
+
+The bootstrap summary then says so in red. Do not use it for anything whose secrets you would miss.
+
+## Recovering an instance {#recover}
+
+Recovery **builds** a new cluster and a new instance on it. There is deliberately no "restore into
+the running instance" step: restoring underneath services that have already created their own
+schemas means dropping tables they hold open and racing their migrations. Recover by rebuilding.
+
+:::note On a cluster that takes volume-snapshot base backups
+With [`--backup-snapshot-class`](./bootstrap.md#snapshot-base-backups), both steps below still
+recover from the backup store, never from a snapshot: from the newest weekly base backup and the
+log archived since. So each can replay up to a week of log, and takes longer than it would with
+daily base backups. The snapshots belong to the cluster being replaced, and a rebuild has no step
+that reads them. They stay at your cloud provider after the old cluster is gone, and nothing on
+the new cluster prunes them. They hold the databases' contents, including data a tenant deletion
+removed: once the recovered instance is verified, delete them from your provider's snapshot list
+(for Google Kubernetes Engine, see
+[Tearing it down](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#tearing-it-down)).
+:::
+
+You recover the two databases with two commands, in this order, because the two stores belong to
+different things:
+
+- The relational database is installed once per cluster and holds **every** instance's data, so
+  `dcctl install` recovers it.
+- The event store belongs to one instance, so `dcctl bootstrap` recovers that one.
+
+Before you start, settle the instance name: a recovery has to use the name the instance had. See
+[Recover under the instance's own name](#recover-under-the-instances-own-name).
+
+**1. Recover the shared relational database** as you prepare the cluster.
+
+```bash
+dcctl install local --restore-rdb-from dc-rdb
+```
+
+`--restore-rdb-from` names the folder inside the backup bucket. For a store that has never been
+restored it is `dc-rdb`, since the archive is written under the cluster's own name.
+
+Add `--restore-rdb-at`, an RFC 3339 timestamp strictly before the damage, for the other kind of
+disaster: the data was destroyed correctly, by a bad migration or a mistaken delete, and you want
+the state just before it.
+
+Pass the same `--backup-credentials-file` the original install used, so the new cluster reads the
+archive the old one wrote.
+
+The flag only takes effect when the relational store is *created*. Aimed at a cluster that already
+has one, it moves no data at all rather than half-working, and `dcctl` says so before it applies
+anything. Recover by installing into a cluster whose relational store is not there.
+
+`dcctl` chooses where the recovered store archives *afterwards*, and there is no flag for it. A
+recovered database that kept archiving to the path it read would stop on its own safety check and
+hang on the way up. `dcctl` gives it a path of its own and keeps that path across every later run.
+
+:::warning The rows come back; the keys do not
+A database backup contains no root keys. Every secret in the recovered store is still sealed by the
+key of the instance that wrote it, and that key lived only in the cluster you just lost. Rebuild
+each instance with `--restore-root-key` in step 2.
+:::
+
+**2. Rebuild the instance with its root key**, and with its event data.
+
+```bash
+dcctl bootstrap local my-instance \
+  --restore-root-key ~/backups/my-instance-rootkey.escrow \
+  --restore-tsdb-from dc-tsdb-my-instance-1a2b3c4d
+```
+
+The instance's secret-store root key is seeded from the escrow artifact instead of being minted.
+The instance keeps the key its secrets were encrypted with, so the rows recovered in step 1 can be
+decrypted. You are asked for the artifact's passphrase, or you can supply it with
+`--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`.
+
+The broker's credentials are not in the escrow and do not need to be. The rebuilt instance mints
+new ones, including the keys of the device authentication callout and the login for the broker's
+identity account and every area's own broker login, and gives them to the broker
+and the services in the same run. None of the old logins is carried over, and a rebuilt instance has no
+shared broker login: every area signs in with the login minted for it, and the destroyed instance's logins open nothing. Devices do not hold any of them: they sign in with their own
+credentials, which come back with the database.
+
+`dcctl bootstrap` refuses to do it any other way; this is the first of the two checks described
+[above](#root-key). Before it writes anything, it asks the recovered store what it already holds
+under that instance's name, and a run with no `--restore-root-key` stops, naming the flag.
+
+That refusal is the last line of defence, not the first. It can only speak for an instance whose
+escrow artifact still exists. An instance bootstrapped with `--no-escrow` has no second copy of its
+key anywhere, and nothing can open those rows again.
+
+`--restore-tsdb-from` is optional and independent. The event store keeps its own timeline on
+purpose: rewinding telemetry to yesterday does not mean the control plane should be rewound with
+it, and step 3 does not depend on it. It takes `--restore-tsdb-at` for a point in time, the same
+way. Every instance's event store archives under a path of its own, so read the path off the
+archive rather than guessing. `dc-tsdb` alone is the relational-style name and will not be there.
+
+:::warning Recovering an instance in a cluster that is still running
+To recover one instance's event store inside the cluster it runs in — for example to a moment
+before a mistaken delete — destroy the instance with `dcctl destroy --keep-backups`, then
+bootstrap it again with `--restore-tsdb-from` (and `--restore-tsdb-at`), **without
+`--restore-root-key`**.
+
+This rebuilds the instance with an empty control plane. The destroy also drops the instance's
+database on the shared relational store, so its tenants, devices, users and stored secrets are
+deleted and are not restored; only its event history comes back. To bring both back, recover the
+whole cluster as described above.
+
+Because that database is gone, there is nothing for an escrowed key to open, so bootstrap refuses
+`--restore-root-key` here and the rebuilt instance mints a new root key. Move the instance's old
+escrow artifact aside first, since bootstrap will not overwrite one (see
+[`--restore-root-key`](./bootstrap.md#useful-flags)), and keep it: it is still the only key to the
+relational backups taken before the destroy (see [After `dcctl destroy`](#after-destroy)).
+
+When the instance's backups are in the cluster's own object store, a destroy without
+`--keep-backups` deletes the very archive the restore reads.
+:::
+
+A restore is one of the few things allowed to run against an instance that already exists.
+Recovery is exactly the situation in which a run gets interrupted and has to be retried. A sharper
+guard makes that safe: it permits the retry only when the escrow artifact carries the key the
+instance is already running on.
+
+**3. Confirm the root key is the escrowed one** with `dcctl secrets escrow verify` (see
+[Verifying your escrow](#verify)).
+
+Being able to sign in at all is the first sign that the key is right: `user-management` does not
+start until the root key opens its sealed token-signing key. Reading a secret-backed object back —
+an outbound connector, a notification channel — is the stronger check. It is available once step 1
+has recovered the store that object lives in. A restore that returns rows is not proof; a value
+that decrypts is.
+
+**4. If you restored event data, check the machinery, not the row count.** A recovered event store
+can hold every row and still have quietly stopped being a time-series database. The tables are
+there and the queries return; what is missing is the background work. That store answers queries
+perfectly for as long as it takes the disk to fill.
+
+Open a shell on the event store's primary. Under the CloudNativePG operator, `psql` needs no
+password there. The
+command uses two names built from the instance id, and they are not the same string: the namespace
+is `dci-` plus the instance id, while the database is the instance id on its own, with no prefix.
+
+```bash
+kubectl -n dci-<instance-id> exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d <instance-id>
+```
+
+Then ask it two questions. First, are the event tables still hypertables?
+
+```sql
+SELECT hypertable_schema, hypertable_name FROM timescaledb_information.hypertables;
+```
+
+Your event tables live in the `event-management` schema and should all be listed. A table that
+came back as an ordinary table is the failure this catches. It is invisible in a schema dump, where
+a plain table and a hypertable look identical. (Don't look for `measurement_rollups`. It is a
+continuous aggregate, and the hypertable backing it is internal, so its absence from this list is
+normal.)
+
+Second, and this is the one that matters: is the job scheduler actually running _on this cluster_?
+Run this, wait a minute or two, and run it again:
+
+```sql
+SELECT job_id, proc_name, total_runs, last_run_status
+  FROM timescaledb_information.job_stats ORDER BY job_id;
+```
+
+**`total_runs` must move.** That is the whole check. `total_runs` is a counter, so watching it
+advance observes work happening on the cluster in front of you.
+
+:::danger Do not judge this by `next_start` or by a scheduled flag
+A recovered store whose scheduler never started still shows every job as scheduled, with a
+perfectly plausible future `next_start`, and stays that way forever. It looks healthy **because
+the data restored, not because anything will ever run.**
+:::
+
+`next_start` is the obvious field to reach for, and it cannot tell you anything here. The table
+behind it is an ordinary table, so a physical restore brings it back holding the *old* cluster's
+values.
+
+### Check that each database finished recovering {#check-recovery-finished}
+
+`dcctl install` and `dcctl bootstrap` wait for each database to be healthy with every instance
+joined, and end with an error if one is not within 15 minutes. A large archive can take longer than
+that to replay, so a restore may need more than one run. A recovery that cannot reach its archive
+sits waiting rather than failing. A healthy database does not say the rows came back, so check the
+database itself before you believe a restore:
+
+```bash
+kubectl get clusters.postgresql.cnpg.io --all-namespaces
+```
+
+The relational database (`dc-rdb`) is in `dc-system`; the event store (`dc-tsdb`) is in the
+instance's own namespace.
+
+You are looking for `Cluster in healthy state`. A cluster stuck in `Setting up primary` has not
+recovered. Most often the archive is unreachable, or `--restore-rdb-from` / `--restore-tsdb-from`
+names a path that does not exist in the bucket.
+
+### Recover under the instance's own name {#recover-under-the-instances-own-name}
+
+A recovery has to use the name the instance had. The relational database is named after the
+instance, so the restore in step 1 brings it back under the *old* name, owned by that instance's own
+login.
+
+A bootstrap run with `--restore-root-key` under a *different* name looks into the store and finds
+no database of its own there. On a cluster that holds no half-built instance of that name either,
+it stops before writing anything:
+
+```text
+--restore-root-key recovers the key that opens instance "<new-name>"'s stored secrets, and
+there is nothing here for it to open: the relational store holds no database for "<new-name>" ...
+```
+
+It refuses because the alternative is an *empty* instance sealed under a recovered key, which looks
+like a successful recovery from the outside and holds none of the data you came back for. The
+yellow `note: ... was escrowed for instance "<old-name>"` printed earlier in the same run is the
+warning, not the refusal.
+
+To get past it, run step 2 again under the original name: the one `dcctl secrets escrow show`
+prints as `Instance:` for the artifact, and the one the recovered database carries.
+
+:::warning Settle the name before you start
+The refusal comes *after* the relational restore has already run, so settle the name before you
+start, not during the incident.
+:::
+
+The artifact does record the name it was written for, and that name is authenticated: it cannot be
+edited without invalidating the file. Renaming an instance is a migration, not a restore, and the
+platform does not do it today.
+
+## Verify your escrow before you need it {#verify}
+
+An escrow that no longer matches the running key is indistinguishable from a good one until the day
+you use it. Check it on an ordinary Tuesday:
+
+```bash
+dcctl secrets escrow verify ~/backups/my-instance-rootkey.escrow --instance my-instance
+```
+
+This compares the artifact's fingerprint against the key the instance is **actually running**. It
+needs no passphrase and exits non-zero on a mismatch, so it composes into a cron job or a CI gate.
+A mismatch means the instance has no usable escrow, most often because it was re-bootstrapped after
+the file was written.
+
+To see what an artifact is without opening it:
+
+```bash
+dcctl secrets escrow show ~/backups/my-instance-rootkey.escrow
+```
+
+:::warning What `verify` does not prove
+It proves the artifact names the right key. It does not prove the artifact still *opens*; that
+needs the passphrase. Rehearse a real recovery periodically: a fingerprint check is a smoke alarm,
+not a fire drill.
+:::
+
+## Credentials during bootstrap and upgrade {#credentials-and-the-two-commands-that-touch-them}
+
+Two commands touch an instance's credentials. `dcctl bootstrap` creates them; `dcctl upgrade` keeps
+them.
+
+`dcctl bootstrap` **mints** every credential an instance has, because none of them exists yet. That
+is why it refuses to run against an instance that is already live: there is no ordering in which
+handing a running instance new credentials is safe.
+
+- Rewriting the root key makes every stored secret permanently unreadable.
+- Rewriting the broker credentials is recoverable but disruptive. The broker and the services are
+  updated by different mechanisms on different schedules, so fresh credentials open a window in
+  which one side rejects the other, and pods that start inside it fail to reach the broker at all.
+
+`dcctl upgrade` is the command that acts on a live instance, and it **mints nothing**. It reads back
+and keeps every one of these:
+
+- the secret-store root key;
+- the broker's authority and logins (the callout issuer seed, every area's login and the system password);
+- the database passwords (the shared owner, the provisioner, the instance's own login and the event
+  store's owner);
+- the cross-service auth secret;
+- where monitoring and in-cluster backups are enabled, the Grafana admin password and the
+  object-store credentials.
+
+A version change cannot become a credential change. The one thing it can create is a credential that
+did not exist: the first upgrade of an instance built before the device authentication callout was
+encrypted mints that callout's encryption key, stores it with the issuer seed in the instance's
+callout Secret, and never replaces it afterwards. The same goes for the login of the broker's identity
+account, which holds the sign-in state: it is minted once, stored in a Secret only `user-management`
+mounts, and kept from then on. The per-service broker logins are the same: an instance built before
+each service had its own login gets them minted once on its first upgrade, and keeps them from then
+on. Sign-in state is not restored from a backup, so everyone signs in again
+after a rebuild.
+
+### Finishing a bootstrap that failed partway {#resuming-a-bootstrap}
+
+The refusal is keyed on two things: the instance's **configuration document**, which is written
+near the end of the run, and a record on the instance's declaration that its first bootstrap has
+not finished, which only a run that ends successfully removes. An instance with no document, or
+with the record, is half-built rather than live, and running the same bootstrap again is the
+supported way to finish it. It reuses the root key, the broker credentials and the database
+passwords the earlier run left in the cluster, and the report shows the superuser's generated
+password, which the failed run never reached. Instances whose first bootstrap was started by an
+earlier release carry no record. See [What bootstrap does](./bootstrap.md#what-it-does).
+
+The broker is why that window has to stay open. It is configured several steps before the instance
+itself is. A bootstrap that fails in between leaves a running broker that no later run could
+recognise from the cluster alone: it holds only a public key and two password hashes, and none of
+those can be turned back into the credentials the services need.
+
+So `dcctl` also records the broker's credentials on the machine you run it from, under
+`~/.devicechain/instances/<instance>/`, before it configures the broker with them. A later run
+reuses them from there when there is no instance yet to ask. The file is readable only by you, and
+`dcctl destroy` removes it with the rest of the instance's local state.
+
+### The escrow is reconciled on every upgrade {#escrow-reconcile}
+
+Checking an escrow needs no passphrase. The artifact records a fingerprint of the key it protects,
+so matching it against the key the instance is running opens nothing. That is why `dcctl upgrade`
+does it every time, without asking you for anything:
+
+| Escrow artifact | What the upgrade does |
+|---|---|
+| Matches the running key | Confirms it and leaves it untouched. |
+| Does **not** match | Warns loudly, and names it for what it most likely is: an escrow belonging to an earlier instance of the same name. Restoring from it would recover a cluster that cannot read its own secrets. |
+| Missing | Writes one, if you passed `--escrow-passphrase-file` (or set `DCCTL_ESCROW_PASSPHRASE`). This is how an instance first created with `--no-escrow` gains an escrow later. With no passphrase available it warns instead, and does not prompt: an upgrade runs unattended, and by this point it has already moved the instance. |
+
+None of those outcomes fails the upgrade. An escrow problem is about a future disaster, while the
+upgrade in front of it is about the running instance. And an operator who cannot upgrade will work
+around the check rather than fix it.
+
+## Replacing the root key {#replace-root-key}
+
+The root key cannot be rotated in place in this version. There is no command that swaps in a new key
+and re-seals what the old one protected. To replace the root key, you recreate the instance, and a
+recreated instance starts with an empty control plane.
+
+Four kinds of stored data depend on the key:
+
+- **Every secret the instance stores.** Each is sealed under the root key: outbound-connector
+  credentials, the SMTP passwords and webhook secrets of notification channels, AI provider keys
+  and single sign-on client secrets.
+- **The token-signing key.** `user-management` seals it under the root key too, so without the key
+  no one can sign in.
+- **Device MQTT password digests.** The key that digests device MQTT passwords is derived from the
+  root key. A digest is one-way, so it cannot be re-made under a new key without the password.
+- **Device access token digests.** An access token is stored only as a digest made under a key
+  derived from the root key. Like a password digest, it cannot be re-made under a new key without
+  the token, so each token device needs its token set again, or registered again with the same one.
+
+### What a recreate loses {#replace-root-key-losses}
+
+`dcctl destroy` drops the instance's database on the shared relational store, and everything kept
+there goes with it: tenants, users and roles, device types and profiles, devices and their
+credentials, detection rules, dashboards, outbound connectors, notification channels, alarms and
+last-known state. None of it can be carried across a key change. A relational backup does not
+help: its secrets are sealed under the old key, and restoring it brings the old key back, which is
+the opposite of replacing it. No command exports an instance's configuration as a whole.
+Dashboards can be exported from the console and imported into the new instance, and devices can be
+imported from a CSV file ([Importing devices](../guides/importing-devices.md)). Everything else
+is created again.
+
+Event history can be carried across. The event store holds no ciphertext, so its backups do not
+need the root key. Destroy with `--keep-backups` and bootstrap with `--restore-tsdb-from`, as in
+[Recovering an instance](#recover). History is stored against tenant and device tokens, so it lines
+up with the tenants and devices you create again under the same tokens. Telemetry of a tenant you
+do not create again stays in the event store with no tenant row to drive its deletion. Without
+`--keep-backups`, destroy deletes event-store backups kept in the cluster's own object store.
+
+### Recreating the instance {#replace-root-key-steps}
+
+If you think the root key may have been exposed:
+
+1. Export what you can: dashboard definitions, and a record of the configuration you will create
+   again.
+2. Move the old escrow artifact aside. Bootstrap will not overwrite one. Keep it: it is the only key
+   to the relational backups taken before the destroy.
+3. Run [`dcctl destroy <provider> <instance> --keep-backups`](./bootstrap.md#destroy), then
+   [`dcctl bootstrap <provider> <instance>`](./bootstrap.md), adding `--restore-tsdb-from` to bring
+   back event history. Do not pass `--restore-root-key`: after a destroy, bootstrap refuses it. The
+   new instance mints a root key of its own and writes a new escrow artifact.
+4. Create your tenants, users, profiles, rules, connectors and channels again, and register your
+   devices again, with an MQTT password for each one that uses one. A device can keep its old
+   password if you supply the same one, but anyone holding the old root key and a copy of the old
+   database can test guesses against its digest offline. A long random password survives that; a
+   short one does not, so give such devices new passwords.
+5. Rotate the credentials the old instance stored, at the system that issued them: SMTP passwords
+   and webhook secrets, the broker and cloud credentials used by outbound connectors, AI provider
+   keys and single sign-on client secrets. Anyone holding the old root key and a copy of the old
+   database could read them, so enter new ones in the new instance. Firmware signing keys are not
+   on this list: the instance holds only their public halves.
+
+Anyone who holds an escrow artifact and its passphrase holds that instance's root key, so store the
+two apart.
+
+In-place rotation is planned for after the first stable release.
+
+## What else is stored outside the databases {#other-state}
+
+Besides the two databases, an instance keeps data in three places: message streams, key-value
+buckets, and the object store. A restore owes each item one of three things, and the table below
+gives the answer for every stream and bucket the platform creates:
+
+- **must-back-up.** It holds the only copy of something the platform has already acknowledged. The
+  databases do not reflect it, so a restore that leaves it out loses it for good.
+- **rebuildable.** The platform recomputes or republishes it from the databases, or the device or
+  person it belongs to sends it again. It starts empty after a restore, and that is correct.
+- **transient.** It is in flight or short-lived: a session, a lock, a pipeline buffer. What a restore
+  loses is bounded by how long the item lives or how far the pipeline lags.
+
+Only three items are must-back-up: the raw capture stream, the dead-letter stream of undeliverable
+outbound connector deliveries, and the object store. Everything else comes back by itself.
+
+<!-- durability:start -->
+| Item | Kind | Class | What a restore owes it |
+|---|---|---|---|
+| `inbound-events` | stream | transient | events accepted and not yet resolved; a pipeline buffer, so the most a restore loses is the lag |
+| `integration-uplinks` | stream | transient | raw decoder input already accepted from an integration and not yet decoded; an in-flight buffer |
+| `resolved-events` | stream | transient | events resolved and not yet stored; the event store is the landing, so only the in-flight lag is lost |
+| `derived-events` | stream | transient | events derived by detection and not yet consumed; an in-flight buffer |
+| `device-attribute` | stream | rebuildable | attribute changes are projected from the device store, which is restored from the database |
+| `device-commands` | stream | rebuildable | commands are re-dispatched from the command-delivery store by its sweep |
+| `device-desired` | stream | rebuildable | the current desired state is held in the database and sent to a device again on its next sync |
+| `device-reports` | stream | rebuildable | a device sends its reports again, and its state is held in the database |
+| `device-events-capture` | stream | must-back-up | raw device telemetry already acknowledged to the device and not yet forwarded; the database holds no copy of it. No backup tool ships in this release. Telemetry acknowledged and not yet forwarded when the cluster is lost is the recovery gap, so keep the capture backlog drained. |
+| `command-responses` | stream | transient | a device answer not yet consumed; the command it answers is settled from its stored state as unanswered |
+| `connector-dispatch` | stream | transient | outbound deliveries not yet attempted; in flight, at least once |
+| `lpwan-downlink-events` | stream | transient | a network-server report not yet matched to its command; a lost report is settled by the pending record's deadline as unanswered |
+| `detection-rules-published` | stream | rebuildable | a rule publish is re-derived from the stored profile version |
+| `device-roster` | stream | rebuildable | roster changes are projected from the device store |
+| `geofence-set-manifest` | stream | rebuildable | a fence edit is re-derived from the stored fence set |
+| `entity-deleted` | stream | transient | a deletion fan-out in flight; a deletion announced just before the restore point may not have reached every consumer |
+| `device-ownership` | stream | rebuildable | ownership changes are projected from the stored relationships |
+| `alarm-events` | stream | rebuildable | alarm state is held in the database and notification re-derives from it |
+| `raise-alarm` | stream | transient | an in-flight request from detection, which evaluates again on the next event |
+| `failed-decode` | stream | transient | a diagnostic record of an event that could not be decoded |
+| `failed-events` | stream | transient | records not yet stored by their consumer; the event store keeps each one once it is consumed |
+| `connector-dispatch.dead` | stream | must-back-up | the only record of an outbound delivery that could not be made, kept for the operator to inspect. No backup tool ships in this release. The records cannot be recovered once the stream is lost. |
+| `dead-letters` | stream | transient | letters not yet stored by their consumer; the database keeps each one once it is consumed |
+| `max-deliveries` | stream | transient | broker advisories for deliveries that ran out; empty in steady state |
+| `dc_refresh_tokens` | bucket | transient | a live session token; people sign in again |
+| `dc_oauth_codes` | bucket | transient | an authorization code that lives sixty seconds |
+| `dc_sso_state` | bucket | transient | an in-flight single sign-on attempt that lives ten minutes |
+| `dc_sso_codes` | bucket | transient | a completed single sign-on awaiting redemption for sixty seconds |
+| `dc_mfa_challenges` | bucket | transient | a second-factor challenge that lives five minutes |
+| `dc_credential_attempts` | bucket | transient | sign-in backoff counters that expire after ten minutes |
+| `dc_device_credential_attempts` | bucket | transient | device connect backoff counters that expire after ten minutes |
+| `dc_locks` | bucket | transient | held locks that expire after thirty seconds |
+| `dc_sparkplug_commands_awaiting` | bucket | transient | commands in flight inside a confirm window of at most two hours |
+| `dc_partition_placement` | bucket | rebuildable | a mirror of the placement table in the user-management database, rewritten every few minutes |
+| `dc_leases` | bucket | transient | partition leases that expire after thirty seconds; a restore must also be treated as a fence invalidation, because the epoch is the bucket revision and a rebuilt bucket restarts it |
+| `device-by-token` | bucket | rebuildable | a cache of the device store |
+| `relationships-by-source` | bucket | rebuildable | a cache of the relationship store |
+| `memberships-by-entity` | bucket | rebuildable | a cache of the group membership store |
+| `profile-resolution-by-type` | bucket | rebuildable | a cache of the published profile versions |
+| `scoped-groups-exist` | bucket | rebuildable | a cache of the group store |
+| `$MQTT_msgs` | gateway stream | transient | a second copy of every QoS 1 and 2 message, held only until the platform stream has it |
+| `$MQTT_out` | gateway stream | transient | outgoing QoS 2 release records, in flight |
+| `$MQTT_qos2in` | gateway stream | transient | inbound QoS 2 handshake state, in flight |
+| `$MQTT_sess` | gateway stream | rebuildable | persistent MQTT sessions and their subscriptions; a device that subscribes on every connect recovers by itself, one that relies on the broker having remembered its subscriptions must be made to subscribe again |
+| `$MQTT_rmsgs` | gateway stream | rebuildable | retained messages; the platform publishes none itself, so each one is whatever a device or an integration retained and must publish again |
+| `object-store` | object store | must-back-up | update artifact content and tenant branding images; the database holds only each object's size and digest. Snapshot the volume, or turn on versioning and replication for the bucket, and take that copy after the database base backup it belongs with. |
+<!-- durability:end -->
+
+This table is generated from the platform's own declarations, so it lists what the running services
+create. A stream or bucket cannot be added without a class.
+
+### The object store {#object-store-backup}
+
+The object store holds update artifact content and tenant branding images. The database holds only
+each object's size and digest, so a database restore on its own brings back a catalogue whose
+contents may be missing.
+
+- **A volume (the default).** Snapshot the volume with your cluster's volume snapshots, or with the
+  backup policy your storage class provides (the chart's `blobStorage.persistence.annotations`
+  carries one onto the claim).
+- **An S3-compatible bucket.** The bucket is yours, so the platform does not copy it. Turn on
+  versioning and replication, or use your provider's backup service.
+- **Take the copy after the database base backup it belongs with.** Objects are written once, so a
+  copy that is newer than the database holds a few objects the database does not know about, which
+  does no harm. A copy that is older than the database leaves artifacts the database lists as
+  available with no content behind them. A device that is sent one cannot download it. Retire the
+  artifact and declare it again with the same file; assign again any update that used the retired one.
+
+### Partition leases and single-writer areas {#restore-fence}
+
+The lease bucket `dc_leases` holds the claim each single-writer owner (detection, the Sparkplug and
+LwM2M ingest areas, an external MQTT source) has on its partition. It is not backed up, and a
+restore starts it empty. Its epoch counter is the bucket's own revision, so it starts over too. Stop
+those areas before you restore the databases and start them after, so that no owner of the old
+claim is still running when the new one is granted.
+
+## After `dcctl destroy` {#after-destroy}
+
+`dcctl destroy` removes the instance — its Helm release, its NATS broker and event store, its
+database and database login, its namespace — and its local state. It does **not** remove the escrow
+artifact, which lives outside that directory by design. Destroy names the artifact on its way out.
+
+Destroy never deletes the cluster, nor the prerequisites `dcctl install` put on it: the relational
+database the other instances use, and the backup object store itself, stay where they are. What
+destroy does remove from that object store is the destroyed instance's own event-store backups,
+when they are in the cluster's own store. Backups in an object store you supplied are never
+deleted, and `--keep-backups` keeps the in-cluster ones too; see
+[What happens to the instance's backups](./bootstrap.md#destroy-backups). On a cluster that takes
+[volume-snapshot base backups](./bootstrap.md#snapshot-base-backups), the instance's snapshots go
+with its namespace either way.
+
+Keep the escrow artifact for as long as you keep any backup of that instance's databases. It is the
+only thing that can still read them. Delete it when those backups are gone, and not before.

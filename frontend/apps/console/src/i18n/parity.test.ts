@@ -45,7 +45,9 @@ describe('locale parity', () => {
   });
 
   it.each(NAMESPACES)('namespace %s has identical keys in every locale', (ns) => {
-    const bundles = locales.map((code) => {
+    // Scoped locales must carry every key in each namespace they ship; other screens use English.
+    const translatedLocales = SUPPORTED_LOCALES.filter((l) => !l.namespaces || l.namespaces.includes(ns));
+    const bundles = translatedLocales.map(({ code }) => {
       const b = bundle(code, ns);
       expect(b, `${code}/${ns}.json is missing entirely`).toBeDefined();
       return { code, keys: new Set(Object.keys(b as object)) };
@@ -119,6 +121,7 @@ describe('the shipped registries carry every namespace', () => {
     trustAnchors: () => import('@/routes/trust-anchors/catalog'),
     adminNav: () => import('@/routes/admin/catalog'),
     aiProviders: () => import('@/routes/admin/ai-providers/catalog'),
+    automationReview: () => import('@/i18n/lazy/automationReview'),
     commandBatches: () => import('@/i18n/lazy/commandBatches'),
     dashboards: () => import('@/i18n/lazy/dashboards'),
     deviceProfiles: () => import('@/i18n/lazy/deviceProfiles'),

@@ -123,3 +123,15 @@ func TestBudgetRefusalIsTheSameForKnownAndUnknownAccounts(t *testing.T) {
 	errs := byAlias(t, known)
 	assert.Equal(t, credential.CodeTooManyCredentialChecks, errs["a3"].Extensions["code"], "and the case did exhaust the budget")
 }
+
+// Step-up needs an Authorization access token, unlike verifyMfa. Even refused
+// aliases share the schema's one-verification budget before any session lookup.
+func TestStepUpRequiresAccessAndSharesCredentialBudget(t *testing.T) {
+	f := newLoginFixture(t, generousFree)
+	_, resp := f.post(t, `mutation { a:stepUp(refreshToken:"r",code:"123456"){accessToken} b:stepUp(refreshToken:"r",code:"123456"){accessToken} }`)
+	errs := byAlias(t, resp)
+	require.Len(t, errs, 2)
+	assert.Contains(t, errs["a"].Message, "forbidden")
+	assert.Equal(t, credential.CodeTooManyCredentialChecks, errs["b"].Extensions["code"])
+	assert.Zero(t, f.compares.Load())
+}

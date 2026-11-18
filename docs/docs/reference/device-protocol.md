@@ -60,7 +60,7 @@ The platform broker is the MQTT server built into NATS. An MQTT topic and the NA
 
 A device with no credential yet reaches the platform over HTTPS to [register itself](#self-registration), at `POST /api/device-management/provisioning/{tenant}/register`. That is a separate endpoint from event ingest, served by `device-management`.
 
-Over **HTTP**, a device can send events only (and, where the operator has enabled it, a [raw payload](#raw-payload)). `POST` the same [event body](#device-event) to `/{instanceId}/{tenant}/events` on the `event-sources` service (port 8081). There is no HTTP downlink: an HTTP-only device cannot receive commands, configuration or update assignments.
+Over **HTTP**, a device can send events (and, where the operator has enabled it, a [raw payload](#raw-payload)). `POST` the same [event body](#device-event) to `/{instanceId}/{tenant}/events` on the `event-sources` service (port 8081). To receive commands, set the device type's `commandChannel` to `HTTP_PULL`; the device then polls for commands and sends acknowledgements and responses on the same listener. See [HTTP command pull](../concepts/commands.md#http-command-pull) for the endpoints and authentication. Configuration and managed update assignments still use the MQTT desired/reports channels; HTTP command pull does not carry them.
 
 ### The gateway namespace {#gateway-namespace}
 
@@ -158,7 +158,13 @@ Every location field is a JSON **string**, including the numeric ones. Each must
 
 #### NewRelationship {#new-relationship-payload}
 
+When the relationship is created, its event is kept in event history as an envelope with its anchors.
+
+**Marking a relationship type tracked is refused while devices created relationships of it.** `updateEntityRelationshipType` refuses to make a type tracked while relationships of that type that devices created themselves exist, because they would become ownership at that moment; the refusal names them. Delete them, then mark the type tracked.
+
 Creates one relationship from the sending device to another entity in the same tenant. This payload has no `entries` array, and its three keys are read by their exact names, so their case matters. A missing key is not refused when the message is decoded: it reads as an empty string, and the event then fails at resolution like the cases below.
+
+A device cannot create ownership or containment relationships: a `NewRelationship` naming a tracked type (including `assigned` and any tenant-defined type marked tracked) or the built-in `contains` is refused and recorded on `failed-events` with reason `Invalid` on its first delivery, without retries. Assign devices with a claim code or the `createEntityRelationship` mutation. Untracked types, including `member`, work as before.
 
 | Field | Type | Required | Meaning | Example |
 | --- | --- | --- | --- | --- |
@@ -182,7 +188,7 @@ Publish the bytes, with no envelope, to the device's own raw-payload topic:
 | QoS | 0 or 1, as for [events](#topics). |
 
 - **The topic is the opt-in.** A message on the `events` topic is never read by a profile decoder, and nothing is chosen by what a body looks like. A device uses its decoder by publishing here.
-- **The operator grants the topic.** It is off unless `infrastructure.nats.mqttDeviceUplinks` is set. While it is off the broker refuses a publish to this topic, as it does any topic the device is not authorized for. With `dcctl`, set it in a `--values` overlay (`instance.config.infrastructure.nats.mqttDeviceUplinks: true`); later upgrades carry it forward. A device is granted the topic when it next connects, so turning the setting on reaches a fleet as its devices reconnect, and **turning it off again** takes effect the same way: a device that is already connected keeps its grant until it reconnects or its session token expires.
+- **The operator grants the topic.** It is off unless `infrastructure.nats.mqttDeviceUplinks` is set. While it is off the broker refuses a publish to this topic, as it does any topic the device is not authorized for. With `dcctl`, pass `--mqtt-device-uplinks` to `dcctl upgrade` (or `dcctl bootstrap`); `--mqtt-device-uplinks=false` turns it off. The choice is recorded on the instance and kept by later upgrades. The `--values` overlay key `instance.config.infrastructure.nats.mqttDeviceUplinks` still works; a choice recorded with the flag takes precedence over the overlay key; change it with the flag. A conflicting overlay value is refused. A device is granted the topic when it next connects, so turning the setting on reaches a fleet as its devices reconnect, and **turning it off again** takes effect the same way: a device that is already connected keeps its grant until it reconnects or its session token expires.
 - **The topic is the identity.** As for events, the device authenticates when it connects and may publish only to the topic carrying **its own** token, so a device can never have a payload decoded as another device. Send no credential: the payload is not an envelope and has nowhere to put one. The device's [authentication mode](../guides/device-credentials.md) applies as it does to events.
 - **What the decoder reads.** If the decoder reads a frame, the bytes are its input. If it reads JSON and the payload begins with `{`, the payload is also parsed as a JSON object (at most 32 levels deep) and the decoder reads that; a payload that begins like an object and is not one is carried as a frame, and a decoder that needs the JSON then records `missing_input`.
 - **Limits.** A payload counts against the tenant's ingest ceilings like an event: once as a message, and then, for the readings the decoder can produce, as readings (at least the decoder's maximum readings, more for a costly decoder, never more than 256).
@@ -203,6 +209,13 @@ Enable `mqttDeviceUplinks` only once every `event-sources` and `device-managemen
 :::
 
 **Over HTTP**, the same capability is `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink` on the `event-sources` service. The device presents its own credential in headers (`Authorization: Bearer <token>`, or `X-DeviceChain-Credential-Type`, `-Id` and `-Secret`), because a binary body has nowhere to carry one, and the route answers `401` without one. It exists only when the operator sets `httpIngest.deviceUplinks` on `event-sources`; otherwise it is `404`.
+
+| HTTP | Response |
+| --- | --- |
+| `429` | Requests from this source address exceed the allowance. `Retry-After` says when to retry. |
+| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). |
+
+**Wrong device passwords count once, whichever way they arrive.** A wrong password presented on the HTTP device-uplink route now counts toward the same per-credential hold as a wrong MQTT password, across all replicas, so guesses can no longer be split between the two to get twice the attempts. While a credential is held, an HTTP uplink with it is answered `503` with `Retry-After` and an MQTT connect with it is refused, as before.
 
 ## Command delivery {#command-delivery}
 
@@ -393,11 +406,11 @@ An accepted event (`202`, or captured by the broker) is then resolved by `device
 | --- | --- |
 | `Unauthenticated` | No credential while device authentication is `required`; a credential that does not authenticate; or a body `device` that is not the credential's device. |
 | `DeviceNotFound` | No credential was used, and the `device` token is not registered in the tenant. |
-| `Invalid` | The event is older than 366 days, or could not be interpreted for its type. |
+| `Invalid` | The event is older than 366 days, or could not be interpreted for its type; a NewRelationship naming a tracked or containment relationship type (recorded on its first delivery, not retried) |
 | `ApiCallFailed` | A lookup or write the resolution needed failed, including a [`NewRelationship`](#new-relationship-payload) the platform could not create. |
 | `NotGatewayChild` | A gateway published for a device that is not assigned to it, or that does not exist, or the gateway is disabled. Not retried: it is recorded on the first delivery. |
 
-A refused event is retried until its fifth delivery, so a device registered or a database restored in the meantime still gets its event stored. The exception is an event too old to store, which is recorded on its first delivery, since no retry can change its age.
+A refused event is retried until its fifth delivery, so a device registered or a database restored in the meantime still gets its event stored. Events too old to store, gateway refusals and device-authored ownership or containment relationships are recorded on their first delivery without retries.
 
 ### Command responses {#rejections-command-responses}
 

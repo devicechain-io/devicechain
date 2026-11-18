@@ -1,0 +1,156 @@
+ALTER SEQUENCE "device-state".audit_events_id_seq OWNED BY "device-state".audit_events.id;
+ALTER SEQUENCE "device-state".device_states_id_seq OWNED BY "device-state".device_states.id;
+ALTER SEQUENCE "device-state".dropped_measurements_id_seq OWNED BY "device-state".dropped_measurements.id;
+ALTER SEQUENCE "device-state".latest_locations_id_seq OWNED BY "device-state".latest_locations.id;
+ALTER SEQUENCE "device-state".latest_measurements_id_seq OWNED BY "device-state".latest_measurements.id;
+ALTER TABLE ONLY "device-state".audit_events
+ ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-state".audit_events ALTER COLUMN id SET DEFAULT nextval('"device-state".audit_events_id_seq'::regclass);
+ALTER TABLE ONLY "device-state".device_state_migrations
+ ADD CONSTRAINT device_state_migrations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-state".device_states
+ ADD CONSTRAINT device_states_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-state".device_states ALTER COLUMN id SET DEFAULT nextval('"device-state".device_states_id_seq'::regclass);
+ALTER TABLE ONLY "device-state".dropped_measurements
+ ADD CONSTRAINT dropped_measurements_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-state".dropped_measurements ALTER COLUMN id SET DEFAULT nextval('"device-state".dropped_measurements_id_seq'::regclass);
+ALTER TABLE ONLY "device-state".latest_locations
+ ADD CONSTRAINT latest_locations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-state".latest_locations ALTER COLUMN id SET DEFAULT nextval('"device-state".latest_locations_id_seq'::regclass);
+ALTER TABLE ONLY "device-state".latest_measurements
+ ADD CONSTRAINT latest_measurements_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-state".latest_measurements ALTER COLUMN id SET DEFAULT nextval('"device-state".latest_measurements_id_seq'::regclass);
+ALTER TABLE ONLY "device-state".purged_tenants
+ ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
+CREATE INDEX "idx_device-state_device_states_deleted_at" ON "device-state".device_states USING btree (deleted_at);
+CREATE INDEX "idx_device-state_latest_locations_deleted_at" ON "device-state".latest_locations USING btree (deleted_at);
+CREATE INDEX "idx_device-state_latest_locations_tenant_id" ON "device-state".latest_locations USING btree (tenant_id);
+CREATE INDEX "idx_device-state_latest_measurements_deleted_at" ON "device-state".latest_measurements USING btree (deleted_at);
+CREATE INDEX "idx_device-state_latest_measurements_tenant_id" ON "device-state".latest_measurements USING btree (tenant_id);
+CREATE INDEX idx_audit_tenant_time ON "device-state".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE SCHEMA "device-state";
+CREATE SEQUENCE "device-state".audit_events_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-state".device_states_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-state".dropped_measurements_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-state".latest_locations_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-state".latest_measurements_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE TABLE "device-state".audit_events (
+ id bigint NOT NULL,
+ occurred_time timestamp with time zone NOT NULL,
+ tenant_id text,
+ category text NOT NULL,
+ actor text,
+ table_name text,
+ operation text NOT NULL,
+ entity_pk text,
+ entity_label text,
+ rows_affected bigint,
+ client_id text,
+ session_id text,
+ on_behalf_of text,
+ proposal text
+);
+CREATE TABLE "device-state".device_state_migrations (
+ id character varying(255) NOT NULL
+);
+CREATE TABLE "device-state".device_states (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ deleted_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ device_token character varying(128) NOT NULL,
+ active boolean DEFAULT false NOT NULL,
+ last_connect_time timestamp with time zone,
+ last_disconnect_time timestamp with time zone,
+ last_activity_time timestamp with time zone,
+ inactivity_alarm_time timestamp with time zone,
+ inactivity_timeout bigint DEFAULT 600 NOT NULL,
+ presence_source character varying(16) DEFAULT 'INFERRED'::character varying NOT NULL,
+ session_id bigint DEFAULT 0 NOT NULL,
+ presence_time timestamp with time zone,
+ external_id text,
+ source text,
+ scope_anchors text[],
+ scope_anchors_at timestamp with time zone
+)
+WITH (fillfactor='75', autovacuum_vacuum_scale_factor='0', autovacuum_vacuum_threshold='10000', autovacuum_vacuum_cost_limit='2000', autovacuum_analyze_scale_factor='0.02', autovacuum_analyze_threshold='10000');
+CREATE TABLE "device-state".dropped_measurements (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ device_token character varying(128) NOT NULL,
+ name character varying(128) NOT NULL,
+ reason character varying(32) NOT NULL,
+ last_value character varying(64) NOT NULL,
+ count bigint DEFAULT 0 NOT NULL,
+ first_time timestamp with time zone NOT NULL,
+ last_time timestamp with time zone NOT NULL
+);
+CREATE TABLE "device-state".latest_locations (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ deleted_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ device_token character varying(128) NOT NULL,
+ latitude numeric(10,8),
+ longitude numeric(11,8),
+ elevation numeric(12,4),
+ accuracy numeric(12,4),
+ speed numeric(12,4),
+ heading numeric(7,4),
+ occurred_time timestamp with time zone NOT NULL
+)
+WITH (fillfactor='75', autovacuum_vacuum_scale_factor='0', autovacuum_vacuum_threshold='10000', autovacuum_vacuum_cost_limit='2000', autovacuum_analyze_scale_factor='0.02', autovacuum_analyze_threshold='10000');
+CREATE TABLE "device-state".latest_measurements (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ deleted_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ device_token character varying(128) NOT NULL,
+ name character varying(128) NOT NULL,
+ value numeric(20,8),
+ classifier bigint,
+ occurred_time timestamp with time zone NOT NULL,
+ unit text,
+ data_type character varying(32)
+)
+WITH (fillfactor='75', autovacuum_vacuum_scale_factor='0', autovacuum_vacuum_threshold='10000', autovacuum_vacuum_cost_limit='2000', autovacuum_analyze_scale_factor='0.02', autovacuum_analyze_threshold='10000');
+CREATE TABLE "device-state".purged_tenants (
+ token character varying(128) NOT NULL,
+ epoch timestamp with time zone NOT NULL,
+ planted_at timestamp with time zone NOT NULL,
+ completed_at timestamp with time zone
+);
+CREATE UNIQUE INDEX idx_device_state_tenant_token ON "device-state".device_states USING btree (tenant_id, device_token);
+CREATE UNIQUE INDEX idx_dropped_measurement_tenant_device_name_reason ON "device-state".dropped_measurements USING btree (tenant_id, device_token, name, reason);
+CREATE UNIQUE INDEX idx_latest_location_tenant_device ON "device-state".latest_locations USING btree (tenant_id, device_token);
+CREATE UNIQUE INDEX idx_latest_measurement_tenant_device_name ON "device-state".latest_measurements USING btree (tenant_id, device_token, name);

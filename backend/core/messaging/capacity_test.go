@@ -185,14 +185,16 @@ func TestSlotReclaimedAtAckDeadlineWhileAcquireBlocks(t *testing.T) {
 
 	first, err := readWithin(t, r, 5*time.Second)
 	require.NoError(t, err)
+	deadline := first.AckDeadline()
+	require.False(t, deadline.IsZero(), "a capacity reader's message must carry an AckDeadline")
 
-	start := time.Now()
+	// The AckWait starts at fetch, so anchor the bounds to its deadline instead of when this read begins.
 	next, err := r.ReadMessage(testCtx)
-	elapsed := time.Since(start)
+	returned := time.Now()
 	require.NoError(t, err, "the blocked read never got the reclaimed slot")
 	require.NotZero(t, next.StreamSeq)
-	require.GreaterOrEqual(t, elapsed, 700*time.Millisecond, "the read did not wait for the AckWait")
-	require.Less(t, elapsed, 5*time.Second, "the slot was not reclaimed at its AckWait")
+	require.False(t, returned.Before(deadline), "the blocked read returned at %v, before the first message's AckWait ran out at %v: the slot was handed back early", returned, deadline)
+	require.Less(t, returned.Sub(deadline), 4*time.Second, "the slot was not reclaimed at its AckWait")
 	require.Equal(t, 1.0, heldPastAckWait(nmgr, r, stageWorker), "held past AckWait, stage=worker")
 	require.Equal(t, 0.0, heldPastAckWait(nmgr, r, stageBuffer), "held past AckWait, stage=buffer")
 

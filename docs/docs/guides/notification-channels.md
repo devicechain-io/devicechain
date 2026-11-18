@@ -26,12 +26,14 @@ A channel splits its settings in two:
 
 On an **update**, the `secret` field behaves as follows:
 
-- **Omit** it to leave the existing secret unchanged. You never need to re-send it.
+- **Omit** it to leave the existing secret unchanged. You need to re-send it when changing the type or credential destination.
 - Send a non-null value to replace it.
 - Send `null` or an empty string to clear it.
 - On a webhook channel whose config declares `bearer` or `header` auth, clearing the secret is refused. Switch `auth` to `none` in the same request if you mean the endpoint to be anonymous.
 
 If your client binds one variable per field, an unsupplied variable arrives as an explicit `null` and **clears the secret**. On a webhook channel that declares `bearer` or `header` auth, that same `null` makes the whole update fail instead, even one that only meant to rename the channel. Send the whole request as a single variable and leave the `secret` key out.
+
+Changing a channel's type, SMTP host/port/security, or PagerDuty region while a secret is stored also requires `secret` in the same request. Supply it again, or clear it with `null`; omission returns `SECRET_RESUPPLY_REQUIRED` before anything is written.
 
 ### Create an SMTP channel
 
@@ -67,6 +69,10 @@ A webhook channel POSTs the rendered notification to a URL. Create it the same w
 
 `authHeader` and `authScheme` are read only with `header`. With `none` or `bearer`, leave them out: a channel that sets them is refused rather than having them silently ignored.
 
+Changing a webhook's whole `url`, `auth`, `authHeader` or `authScheme` while a secret is stored requires
+`secret` in the same update; omission returns `SECRET_RESUPPLY_REQUIRED`. Custom `headers` and
+`linkBaseUrl` edits keep the credential.
+
 A channel whose `auth` and `secret` disagree is refused when you save it, not when an alarm fires. That covers a missing `auth`, `bearer` or `header` with no secret, and `none` with a secret. To make a `bearer` channel anonymous, send `auth` `none` and `secret: null` in the same update. An update that only renames, describes or disables a channel is not checked, so you can always switch a misconfigured channel off; enabling one is checked.
 
 A channel that reaches delivery in that state anyway, for example one saved before `auth` existed, is not sent. The delivery is refused on its first attempt and not retried, and the notification service logs the tenant, the channel's token and the reason. The refusal is counted on `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`, which you can alert on. The same counter carries `reason="egress"` for a webhook or SMTP channel whose destination is on an address outbound traffic may not reach, such as a private, loopback or cloud-metadata address. It also carries `reason="no_adapter"`, counted when a channel of a type this build has no delivery adapter for is skipped, so nobody is notified through it. The `credential` and `egress` refusals are terminal: the delivery is not retried.
@@ -85,6 +91,8 @@ mutation {
 ```
 
 For a Slack incoming webhook, use `"auth":"none"` and leave `secret` out. The native [Slack channel](#create-a-slack-channel) below formats the message for you, and is the better choice.
+
+The generic webhook `text` is a plain summary that uses the device token or originator instead of the device name; Slack users should use the native [Slack channel](#create-a-slack-channel).
 
 A webhook channel's JSON body carries the alarm's `eventType` (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, or `RENOTIFIED` for a timed re-notification), `alarmToken`, `alarmKey`, `severity`, `state`, the originator's `originatorType` and `originatorId` when known, and the times. When the alarm's device is known it also carries `deviceToken`, `deviceName` and `deviceTypeToken`; a key is left out when its value is unknown (for example a device with no name), never sent empty. Timed re-notifications (`RENOTIFIED`) and late `CLEARED` notifications picked up by the scheduler also include these device and originator fields when known. Alarms that were notified before upgrading omit these fields from those later notifications.
 
@@ -198,6 +206,7 @@ A clear is informational, so it is handled differently from a page:
 - It is sent once per cycle, after the clear has been recorded, so no "still unresolved" escalation follows it. If no channel takes it, it is retried; once any channel has taken it, it is not repeated. A clear that is processed before its alarm's page has been recorded is sent right after that page, and one that could not be sent then is picked up by the notification scheduler's next passes for up to 30 minutes.
 - It is **not** throttled, does not count as a notification, and does not start escalation.
 - A clear that happens during a policy's quiet hours is **dropped**, not held: a "cleared" released hours later would report old news.
+- Enabling the option does not announce historical clears: the clear must be after the option was enabled. A crash after claiming a clear but before sending can lose that announcement; it is not an exactly-once delivery guarantee.
 - `notifyOnClear` cannot be cleared with `null`; send `true` or `false`.
 
 ### Device-type scoping {#device-type-scoping}
@@ -212,6 +221,8 @@ Two more settings shape delivery:
 - **`escalateAfterSeconds`** and **`maxEscalations`**: when set (> 0), an alarm that stays **unacknowledged and uncleared** for that long after its last notification is re-notified, up to the cap. If `maxEscalations` is unset or `0`, a service-wide default cap of 5 applies. A `null`/`0` `escalateAfterSeconds` disables escalation for the policy.
 
 Escalation is safe to run on several replicas: each escalation tier is claimed before it is sent, so exactly one replica delivers it. Each alarm has **one shared escalation clock and tier**. If several escalating policies match, the shortest window sets the cadence, and every cap counts against the shared tier.
+
+The escalation window starts when the platform sends the page, independently of the device event timestamp.
 
 ```graphql
 mutation {

@@ -60,7 +60,7 @@ El broker de la plataforma es el servidor MQTT integrado en NATS. Un topic MQTT 
 
 Un dispositivo que todavía no tiene credencial llega a la plataforma por HTTPS para [registrarse por sí mismo](#self-registration), en `POST /api/device-management/provisioning/{tenant}/register`. Es un endpoint distinto de la ingesta de eventos, servido por `device-management`.
 
-Por **HTTP**, un dispositivo solo puede enviar eventos (y, donde el operador lo ha activado, una [carga útil propia](#raw-payload)). Haz `POST` del mismo [cuerpo de evento](#device-event) a `/{instanceId}/{tenant}/events` en el servicio `event-sources` (puerto 8081). No hay canal de bajada por HTTP: un dispositivo que solo usa HTTP no puede recibir comandos, configuración ni asignaciones de actualización.
+Por **HTTP**, un dispositivo puede enviar eventos (y, donde el operador lo ha activado, una [carga útil propia](#raw-payload)). Haz `POST` del mismo [cuerpo de evento](#device-event) a `/{instanceId}/{tenant}/events` en el servicio `event-sources` (puerto 8081). Para recibir comandos, establece el `commandChannel` del tipo de dispositivo en `HTTP_PULL`; el dispositivo consulta entonces los comandos y envía confirmaciones y respuestas al mismo listener. Consulta [Consulta de comandos por HTTP](../concepts/commands.md#http-command-pull) para ver los endpoints y la autenticación. La configuración y las asignaciones de actualización gestionadas siguen usando los canales desired/reports de MQTT; la consulta de comandos por HTTP no las transporta.
 
 ### El espacio de nombres de pasarela {#gateway-namespace}
 
@@ -158,7 +158,13 @@ Cada campo de ubicación es un **string** JSON, incluidos los numéricos. Cada u
 
 #### NewRelationship {#new-relationship-payload}
 
+Cuando se crea la relación, su evento se conserva en el historial de eventos como un sobre con sus anclajes.
+
+**Se rechaza marcar un tipo de relación como rastreado mientras existan relaciones de ese tipo creadas por dispositivos.** `updateEntityRelationshipType` rechaza marcar el tipo como rastreado mientras existan relaciones de ese tipo creadas por los propios dispositivos, porque pasarían a otorgar propiedad en ese momento; el rechazo las identifica. Elimínelas y después marque el tipo como rastreado.
+
 Crea una relación desde el dispositivo emisor hacia otra entidad del mismo tenant. Este payload no tiene array `entries`, y sus tres claves se leen por su nombre exacto, así que las mayúsculas importan. Una clave ausente no se rechaza al decodificar el mensaje: se lee como un string vacío, y el evento falla después en la resolución, como en los casos siguientes.
+
+Un dispositivo no puede crear relaciones de propiedad ni de contención: un `NewRelationship` que nombre un tipo con seguimiento (incluido `assigned` y cualquier tipo del tenant marcado con seguimiento) o el tipo integrado `contains` se rechaza y se registra en `failed-events` con motivo `Invalid` en su primera entrega, sin reintentos. Asigna los dispositivos con un código de reclamación o la mutación `createEntityRelationship`. Los tipos sin seguimiento, incluido `member`, funcionan como antes.
 
 | Campo | Tipo | Obligatorio | Significado | Ejemplo |
 | --- | --- | --- | --- | --- |
@@ -182,7 +188,7 @@ Publica los bytes, sin envoltorio, en el topic de carga útil propia del disposi
 | QoS | 0 o 1, como en los [eventos](#topics). |
 
 - **El topic es la activación.** Un mensaje en el topic `events` nunca lo lee un decodificador de perfil, y nada se elige por el aspecto de un cuerpo. Un dispositivo usa su decodificador publicando aquí.
-- **El operador concede el topic.** Está desactivado salvo que se establezca `infrastructure.nats.mqttDeviceUplinks`. Mientras lo está, el broker rechaza una publicación en este topic, igual que en cualquier topic para el que el dispositivo no está autorizado. Con `dcctl`, establécelo en una superposición `--values` (`instance.config.infrastructure.nats.mqttDeviceUplinks: true`); las actualizaciones posteriores lo conservan. Un dispositivo recibe la concesión la próxima vez que se conecta, así que activar el ajuste llega a una flota a medida que sus dispositivos se reconectan, y **desactivarlo** surte efecto del mismo modo: un dispositivo ya conectado conserva su concesión hasta que se reconecta o caduca el token de su sesión.
+- **El operador concede el topic.** Está desactivado salvo que se establezca `infrastructure.nats.mqttDeviceUplinks`. Mientras lo está, el broker rechaza una publicación en este topic, igual que en cualquier topic para el que el dispositivo no está autorizado. Con `dcctl`, pasa `--mqtt-device-uplinks` a `dcctl upgrade` (o a `dcctl bootstrap`); `--mqtt-device-uplinks=false` lo desactiva. La elección se registra en la instancia y las actualizaciones posteriores la conservan. La clave `instance.config.infrastructure.nats.mqttDeviceUplinks` de la superposición `--values` sigue funcionando; una elección registrada con la bandera tiene prioridad sobre la clave de la superposición; cámbiala con la bandera. Se rechaza un valor de superposición que entre en conflicto. Un dispositivo recibe la concesión la próxima vez que se conecta, así que activar el ajuste llega a una flota a medida que sus dispositivos se reconectan, y **desactivarlo** surte efecto del mismo modo: un dispositivo ya conectado conserva su concesión hasta que se reconecta o caduca el token de su sesión.
 - **El topic es la identidad.** Como en los eventos, el dispositivo se autentica al conectarse y solo puede publicar en el topic que lleva **su propio** token, de modo que nunca se puede hacer decodificar una carga útil como la de otro dispositivo. No envíes ninguna credencial: la carga útil no es un envoltorio y no tiene dónde llevarla. El [modo de autenticación](../guides/device-credentials.md) de dispositivos se aplica igual que a los eventos.
 - **Qué lee el decodificador.** Si el decodificador lee una trama, los bytes son su entrada. Si lee JSON y la carga útil empieza por `{`, además se analiza como objeto JSON (de hasta 32 niveles de profundidad) y el decodificador lee ese objeto; una carga útil que empieza como un objeto y no lo es se transporta como trama, y un decodificador que necesita el JSON registra entonces `missing_input`.
 - **Límites.** Una carga útil cuenta contra los límites de ingesta del inquilino como un evento: una vez como mensaje y, después, por las lecturas que el decodificador puede producir, como lecturas (al menos las lecturas máximas del decodificador, más para un decodificador costoso, nunca más de 256).
@@ -203,6 +209,13 @@ Activa `mqttDeviceUplinks` solo cuando todas las réplicas de `event-sources` y 
 :::
 
 **Por HTTP**, la misma capacidad es `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink` en el servicio `event-sources`. El dispositivo presenta su propia credencial en cabeceras (`Authorization: Bearer <token>`, o `X-DeviceChain-Credential-Type`, `-Id` y `-Secret`), porque un cuerpo binario no tiene dónde llevarla, y la ruta responde `401` sin ella. Existe solo cuando el operador establece `httpIngest.deviceUplinks` en `event-sources`; si no, responde `404`.
+
+| HTTP | Respuesta |
+| --- | --- |
+| `429` | Las solicitudes desde esta dirección de origen superan el límite. `Retry-After` indica cuándo reintentar. |
+| `503` | Mientras se intenta adivinar la credencial de este dispositivo, todas sus cargas útiles HTTP, incluidas las que presentan la credencial correcta, reciben `503` con `Retry-After` hasta que termina la pausa (como máximo 60 segundos cada vez). |
+
+**Las contraseñas incorrectas de dispositivo cuentan una sola vez, lleguen por donde lleguen.** Una contraseña incorrecta presentada en la ruta HTTP de cargas útiles del dispositivo ahora cuenta para la misma pausa por credencial que una contraseña MQTT incorrecta, en todas las réplicas, por lo que ya no se pueden repartir los intentos entre ambas vías para duplicarlos. Mientras una credencial está en pausa, una carga útil HTTP que la usa recibe `503` con `Retry-After` y una conexión MQTT que la usa se rechaza, como antes.
 
 ## Entrega de comando {#command-delivery}
 
@@ -359,7 +372,7 @@ El jitter importa: una flota que se enciende a la vez y reintenta al unísono vu
 
 ## Rechazos y errores {#rejections}
 
-Lo que le ocurre a un mensaje que la plataforma no acepta depende de dónde se rechaza y del transporte. HTTP responde a la petición, así que el dispositivo se entera de un rechazo en la entrada. MQTT confirma una publicación (`PUBACK`) en cuanto el broker la ha capturado, **antes** de decodificarla, así que a un dispositivo MQTT nunca se le avisa: todo rechazo posterior al broker solo es visible para un operador. Con el ajuste por defecto, una publicación QoS 1 confirmada mientras el stream de captura cambia de líder también se puede perder, tanto mientras cambia de líder como, con carga sostenida, cuando la ingesta se queda atrás y el stream se llena; vea [Calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
+Lo que le ocurre a un mensaje que la plataforma no acepta depende de dónde se rechaza y del transporte. HTTP responde a la petición, así que el dispositivo se entera de un rechazo en la entrada. MQTT confirma una publicación (`PUBACK`) en cuanto el broker la ha capturado, **antes** de decodificarla, así que a un dispositivo MQTT nunca se le avisa: todo rechazo posterior al broker solo es visible para un operador. Con el ajuste por defecto, una publicación QoS 1 confirmada mientras el stream de captura cambia de líder también se puede perder, tanto mientras cambia de líder como, con carga sostenida, cuando la ingesta se queda atrás y el stream se llena; ve [Calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
 
 ### En la entrada {#rejections-at-the-door}
 
@@ -393,11 +406,11 @@ Un evento aceptado (`202`, o capturado por el broker) lo resuelve después `devi
 | --- | --- |
 | `Unauthenticated` | Ninguna credencial mientras la autenticación de dispositivos es `required`; una credencial que no autentica; o un `device` en el cuerpo que no es el dispositivo de la credencial. |
 | `DeviceNotFound` | No se usó ninguna credencial y el token `device` no está registrado en el tenant. |
-| `Invalid` | El evento tiene más de 366 días, o no se pudo interpretar para su tipo. |
+| `Invalid` | El evento tiene más de 366 días, o no se pudo interpretar para su tipo; un NewRelationship que nombre un tipo de relación con seguimiento o de contención (se registra en su primera entrega, sin reintentos) |
 | `ApiCallFailed` | Falló una consulta o escritura que la resolución necesitaba, incluido un [`NewRelationship`](#new-relationship-payload) que la plataforma no pudo crear. |
 | `NotGatewayChild` | Una pasarela publicó por un dispositivo que no tiene asignado, que no existe, o la pasarela está deshabilitada. No se reintenta: se registra en la primera entrega. |
 
-Un evento rechazado se reintenta hasta su quinta entrega, de modo que si entretanto se registra el dispositivo o se recupera la base de datos, el evento se almacena igualmente. La excepción es un evento demasiado antiguo para almacenarse, que se registra en su primera entrega, ya que ningún reintento puede cambiar su antigüedad.
+Un evento rechazado se reintenta hasta su quinta entrega, de modo que si entretanto se registra el dispositivo o se recupera la base de datos, el evento se almacena igualmente. Los eventos demasiado antiguos, los rechazos de pasarela y las relaciones de propiedad o contención creadas por dispositivos se registran en su primera entrega, sin reintentos.
 
 ### Respuestas a comandos {#rejections-command-responses}
 

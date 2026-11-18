@@ -221,13 +221,14 @@ func (es *GatewayJetStreamSource) publishGroup(ce *captureEngine, b messaging.Fo
 			order = append(order, p.pos.key)
 		}
 		groups[p.pos.key] = append(groups[p.pos.key], messaging.RoundMember{
-			Index:       p.pos.index,
-			Bytes:       p.msg.Value,
-			Key:         p.msg.Key,
-			Correlation: p.msg.CorrelationID(),
-			Redelivered: p.pos.redelivered,
-			Settle:      p.done,
-			Beat:        p.pos.beat,
+			TraceContext: p.ctx,
+			Index:        p.pos.index,
+			Bytes:        p.msg.Value,
+			Key:          p.msg.Key,
+			Correlation:  p.msg.CorrelationID(),
+			Redelivered:  p.pos.redelivered,
+			Settle:       p.done,
+			Beat:         p.pos.beat,
 		})
 	}
 	for _, k := range order {

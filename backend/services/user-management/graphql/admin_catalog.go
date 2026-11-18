@@ -237,6 +237,9 @@ func (r *AdminResolver) CreateRole(ctx context.Context, args struct {
 	if err := checkList("authorities", args.Request.Authorities); err != nil {
 		return nil, err
 	}
+	if err := r.getAdminService(ctx).CheckAdminAuthorities(ctx, args.Request.Authorities); err != nil {
+		return nil, err
+	}
 	role, err := r.getAdminService(ctx).CreateRole(ctx, admin.RoleInput{
 		Scope:       args.Request.Scope,
 		Token:       args.Request.Token,
@@ -254,9 +257,10 @@ func (r *AdminResolver) CreateRole(ctx context.Context, args struct {
 // request carries neither, so addressing a second role through the payload is
 // unrepresentable.
 func (r *AdminResolver) UpdateRole(ctx context.Context, args struct {
-	Scope   string
-	Token   string
-	Request admin.RoleUpdateRequest
+	Scope             string
+	Token             string
+	Request           admin.RoleUpdateRequest
+	ExpectedUpdatedAt *string
 }) (*AdminRoleResolver, error) {
 	if err := auth.Authorize(ctx, auth.RoleWrite); err != nil {
 		return nil, err
@@ -264,7 +268,10 @@ func (r *AdminResolver) UpdateRole(ctx context.Context, args struct {
 	if err := checkList("authorities", args.Request.Authorities.Value); err != nil {
 		return nil, err
 	}
-	role, err := r.getAdminService(ctx).UpdateRole(ctx, args.Scope, args.Token, &args.Request)
+	if err := r.getAdminService(ctx).CheckAdminRole(ctx, args.Scope, args.Token, &args.Request); err != nil {
+		return nil, err
+	}
+	role, err := r.getAdminService(ctx).UpdateRole(ctx, args.Scope, args.Token, &args.Request, args.ExpectedUpdatedAt)
 	return wrapRole(role, err)
 }
 
@@ -275,6 +282,9 @@ func (r *AdminResolver) DeleteRole(ctx context.Context, args struct {
 	Token string
 }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.RoleWrite); err != nil {
+		return false, err
+	}
+	if err := r.getAdminService(ctx).CheckAdminRole(ctx, args.Scope, args.Token, nil); err != nil {
 		return false, err
 	}
 	return r.getAdminService(ctx).DeleteRole(ctx, args.Scope, args.Token)

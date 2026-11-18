@@ -57,8 +57,8 @@ func TestAClientSetAccessTokenIsEchoedOnceAndRotatesAlone(t *testing.T) {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{},
-		&model.DeviceProfileVersion{}, &model.DeviceProfileActivation{}, &model.DeviceCredential{}); err != nil {
+	if err := db.AutoMigrate(&model.EntityGroupFacetRef{}, &model.Device{}, &model.DeviceType{}, &model.DeviceProfile{},
+		&model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{}, &model.DeviceProfileActivation{}, &model.DeviceCredential{}); err != nil {
 		t.Fatal(err)
 	}
 	api := model.NewApi(&rdb.RdbManager{Database: db})

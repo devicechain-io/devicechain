@@ -397,7 +397,12 @@ func (f *pgFixture) holdAfterCredentialSave(token string) (reached <-chan struct
 	var once, releaseOnce sync.Once
 	name := fmt.Sprintf("test:hold-credential-save-%s-%d", token, time.Now().UnixNano())
 	require.NoError(f.t, f.mgr.Database.Callback().Update().After("gorm:update").Register(name, func(db *gorm.DB) {
-		c, ok := db.Statement.Dest.(*DeviceCredential)
+		// The credential update writes named columns (Model(&row).Updates(map)), so the row is the
+		// statement's Model and its Dest is the map; a whole-row Save carries the row as Dest.
+		c, ok := db.Statement.Model.(*DeviceCredential)
+		if !ok {
+			c, ok = db.Statement.Dest.(*DeviceCredential)
+		}
 		if !ok || db.Error != nil || c.TenantId != f.tenant || c.Token != token {
 			return
 		}

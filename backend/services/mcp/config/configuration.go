@@ -10,9 +10,16 @@ import (
 	coreconfig "github.com/devicechain-io/dc-microservice/config"
 )
 
-// McpConfiguration configures the MCP server (ADR-047): an OAuth 2.1 Resource
-// Server that fronts the per-area GraphQL over the Model Context Protocol.
+// AgentActuationConfiguration is the instance switch for Preview proposal tools.
+// The zero value keeps proposal tools absent from the server.
+type AgentActuationConfiguration struct {
+	Enabled bool
+}
+
+// McpConfiguration configures the MCP OAuth Resource Server.
 type McpConfiguration struct {
+	AgentActuation AgentActuationConfiguration
+
 	// ResourceUrl is this Resource Server's public identifier (RFC 8707 / RFC 9728):
 	// the audience OAuth access tokens must be bound to, and the `resource` field of
 	// the protected-resource metadata. A token whose `aud` does not include this

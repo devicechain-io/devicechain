@@ -37,7 +37,7 @@ type CommandDispositionWriter interface {
 // and a cancel does not accept SENT.
 //
 // 🔑 IT IS NOT "FOREVER", AND SAYING SO WOULD BE THE FIRST THING A READER CHECKED. Expiry
-// does eventually reach the row: ApplyDefaults floors DefaultCommandTTLSeconds positive,
+// does eventually reach the row: DefaultCommandTTLSeconds is positive once ApplyDefaults and Validate pass,
 // and both enqueue paths stamp it when a caller supplies none, so a production command
 // always has a horizon and a stuck one lapses at it. What that leaves is worse than a
 // stall rather than better. Until the TTL elapses — the platform default is measured in

@@ -132,7 +132,7 @@ func TestSnapshotLockReadProjectsOnlyTheComparedColumns(t *testing.T) {
 			return s.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: 101, Watermark: wm, Payload: []byte("next")})
 		}},
 		{"Reset", func(ctx context.Context, s *SnapshotStore) error {
-			return s.Reset(ctx, "singleton", 100)
+			return s.Reset(ctx, "singleton", 100, wm)
 		}},
 	}
 	for _, tc := range cases {

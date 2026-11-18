@@ -9,11 +9,12 @@
 //                   the sessions itself.
 
 import { act, cleanup, render } from '@testing-library/react';
-import { GraphQLRequestError, resolveAuthToken } from '@devicechain/client';
+import { gql, GraphQLRequestError, resolveAuthToken, type TypedDocument } from '@devicechain/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   verifyMfa: vi.fn(),
+  stepUp: vi.fn(),
   selectTenant: vi.fn(),
   logout: vi.fn(),
   refresh: vi.fn(),
@@ -21,6 +22,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@/lib/api/user-management', () => ({
   login: vi.fn(),
+  stepUp: (...a: unknown[]) => h.stepUp(...a),
   verifyMfa: (...a: unknown[]) => h.verifyMfa(...a),
   selectTenant: (...a: unknown[]) => h.selectTenant(...a),
   refresh: (...a: unknown[]) => h.refresh(...a),
@@ -56,7 +58,55 @@ beforeEach(() => {
   Object.values(h).forEach((m) => m.mockReset());
   window.localStorage.clear();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+describe('HTTP 401 session recovery', () => {
+  const query = 'query { test }' as unknown as TypedDocument<{ test: boolean }, Record<string, never>>;
+
+  beforeEach(() => {
+    window.localStorage.setItem('dc-auth', JSON.stringify({ accessToken: ACCESS, refreshToken: REFRESH }));
+    window.localStorage.setItem('dc-identity', JSON.stringify({ identityToken: OLD_ID, superuser: false, memberships: [] }));
+  });
+
+  it('refreshes an unexpired tenant token once and replays without signing out', async () => {
+    const next = { accessToken: jwt({ tenant: 'acme', exp: future, jti: 'fresh' }), refreshToken: REFRESH };
+    h.refresh.mockResolvedValue(next);
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { test: true } })));
+    vi.stubGlobal('fetch', fetcher);
+    mount();
+    await act(async () => { expect(await gql('device-management', query)).toEqual({ test: true }); });
+    expect(h.refresh).toHaveBeenCalledExactlyOnceWith(REFRESH);
+    expect(auth.isAuthenticated).toBe(true);
+    expect(stored('dc-auth')).toEqual(next);
+  });
+
+  it('clears the tenant session with the expired reason after the replay is refused', async () => {
+    h.refresh.mockResolvedValue({ accessToken: ACCESS, refreshToken: REFRESH });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+    mount();
+    await act(async () => { await expect(gql('device-management', query)).rejects.toMatchObject({ status: 401 }); });
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(auth.isAuthenticated).toBe(false);
+    expect(stored('dc-auth')).toBeNull();
+    expect(consumeSessionExpired()).toBe('expired');
+    expect(auth.isIdentityAuthenticated).toBe(true);
+  });
+
+  it('ends a rejected identity session without attempting a tenant refresh', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+    mount();
+    await act(async () => { await expect(gql('user-management/admin', query)).rejects.toMatchObject({ status: 401 }); });
+    expect(h.refresh).not.toHaveBeenCalled();
+    expect(auth.isIdentityAuthenticated).toBe(false);
+    expect(consumeSessionExpired()).toBe('expired');
+    expect(auth.isAuthenticated).toBe(true);
+  });
+});
 
 describe('verifyMfa', () => {
   it('starts the identity session the way a password sign-in does', async () => {
@@ -176,6 +226,55 @@ describe('a session that can no longer be refreshed', () => {
   });
 
   it.each([
+    ['a different tenant', jwt({ tenant: 'other', username: 'alice', exp: future }), false],
+    ['a different username', jwt({ tenant: 'acme', username: 'bob', exp: future }), false],
+    ['an undecodable access token', 'invalid', false],
+    ['an undecodable own access token', freshAccess, true],
+  ])('does not adopt a pair another tab stored for %s', async (_label, accessToken, invalidOwn) => {
+    window.localStorage.setItem('dc-auth', JSON.stringify({
+      accessToken: invalidOwn ? 'invalid' : jwt({ tenant: 'acme', username: 'alice', exp: past }),
+      refreshToken: staleRefresh,
+    }));
+    const otherPair = JSON.stringify({ accessToken, refreshToken: freshRefresh });
+    h.refresh.mockImplementation(async () => {
+      window.localStorage.setItem('dc-auth', otherPair);
+      throw coded('UNAUTHENTICATED');
+    });
+    mount();
+    await act(async () => {
+      await resolveAuthToken().catch(() => null);
+    });
+    expect(h.refresh).toHaveBeenCalledOnce();
+    expect(auth.isAuthenticated).toBe(false);
+    expect(auth.claims).toBeNull();
+    expect(window.localStorage.getItem('dc-auth')).toBe(otherPair);
+    expect(window.sessionStorage.getItem('dc-session-expired')).toBe('1');
+  });
+
+  it('adopts a refreshed pair for the same named user and tenant', async () => {
+    window.localStorage.setItem('dc-auth', JSON.stringify({
+      accessToken: jwt({ tenant: 'acme', username: 'alice', exp: past }),
+      refreshToken: staleRefresh,
+    }));
+    const pair = {
+      accessToken: jwt({ tenant: 'acme', username: 'alice', exp: future }),
+      refreshToken: freshRefresh,
+    };
+    h.refresh.mockImplementation(async () => {
+      window.localStorage.setItem('dc-auth', JSON.stringify(pair));
+      throw coded('UNAUTHENTICATED');
+    });
+    mount();
+    await act(async () => {
+      await resolveAuthToken().catch(() => null);
+    });
+    expect(auth.isAuthenticated).toBe(true);
+    expect(auth.claims).toMatchObject({ tenant: 'acme', username: 'alice' });
+    expect(stored('dc-auth')).toEqual(pair);
+    expect(window.sessionStorage.getItem('dc-session-expired')).toBeNull();
+  });
+
+  it.each([
     ['MFA_REQUIRED', 'mfaRequired'],
     ['MFA_ENROLLMENT_REQUIRED', 'mfaEnrollmentRequired'],
     ['SSO_REQUIRED', 'ssoRequired'],
@@ -187,5 +286,32 @@ describe('a session that can no longer be refreshed', () => {
       await resolveAuthToken().catch(() => null);
     });
     expect(consumeSessionExpired()).toBe(reason);
+  });
+});
+
+describe('in-session stepUp', () => {
+  beforeEach(() => {
+    window.localStorage.setItem('dc-auth', JSON.stringify({ accessToken: ACCESS, refreshToken: REFRESH }));
+    window.localStorage.setItem('dc-identity', JSON.stringify({ identityToken: OLD_ID, superuser: false, memberships: [] }));
+  });
+  it('uses the stored refresh token and persists both new tokens without signing out', async () => {
+    const pair = { accessToken: jwt({ tenant: 'acme', exp: future, mfa_time: future - 3600 }),
+      refreshToken: jwt({ tenant: 'acme', exp: future, jti: 'rotated' }) };
+    h.stepUp.mockResolvedValue(pair);
+    mount();
+    await act(async () => { await auth.stepUp('123456'); });
+    expect(h.stepUp).toHaveBeenCalledExactlyOnceWith(REFRESH, '123456');
+    expect(stored('dc-auth')).toEqual(pair);
+    expect(stored('dc-identity').identityToken).toBe(OLD_ID);
+    expect(await resolveAuthToken()).toBe(pair.accessToken);
+    expect(h.logout).not.toHaveBeenCalled();
+  });
+  it('leaves the session in place when the code is refused', async () => {
+    h.stepUp.mockRejectedValue(new Error('invalid code'));
+    mount();
+    await act(async () => { await expect(auth.stepUp('123456')).rejects.toThrow('invalid code'); });
+    expect(stored('dc-auth')).toEqual({ accessToken: ACCESS, refreshToken: REFRESH });
+    expect(auth.isAuthenticated).toBe(true);
+    expect(h.logout).not.toHaveBeenCalled();
   });
 });

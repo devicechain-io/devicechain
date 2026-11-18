@@ -262,9 +262,9 @@ func TestRecordApprovalIsCompareAndSet(t *testing.T) {
 	ctx := tenantCtx("acme")
 	now := time.Now()
 	seed(t, db, ctx, "p1", now.Add(time.Hour))
-	first := []Approval{{Sub: "boss", At: now}}
+	first := []Approval{{Sid: "live", Sub: "boss", At: now}}
 	require.NoError(t, RecordApproval(db.WithContext(ctx), &proposal{}, "p1", 0, first, 2, now))
-	require.ErrorIs(t, RecordApproval(db.WithContext(ctx), &proposal{}, "p1", 0, []Approval{{Sub: "other", At: now}}, 2, now), ErrNotPending)
+	require.ErrorIs(t, RecordApproval(db.WithContext(ctx), &proposal{}, "p1", 0, []Approval{{Sid: "live", Sub: "other", At: now}}, 2, now), ErrNotPending)
 	var got proposal
 	require.NoError(t, db.WithContext(ctx).Where("token = ?", "p1").First(&got).Error)
 	approvals, err := ParseApprovals(got.Approvals)
@@ -280,12 +280,12 @@ func TestRecordApprovalIsCompareAndSet(t *testing.T) {
 // Every counted approval is re-validated; the proposer never counts toward two approvals.
 func TestTallyRevalidatesEveryApprover(t *testing.T) {
 	now := time.Now()
-	approvals := []Approval{{Sub: "a", At: now, Amr: auth.AmrPasswordOTP(), MfaTime: &now}, {Sub: "b", At: now, Amr: auth.AmrPasswordOTP(), MfaTime: &now}, {Sub: "a", At: now, Amr: auth.AmrPasswordOTP(), MfaTime: &now}, {Sub: "ana", At: now, Amr: auth.AmrPasswordOTP(), MfaTime: &now}}
+	approvals := []Approval{{Sid: "live", Sub: "a", At: now, Amr: auth.AmrPasswordOTP(), MfaTime: &now}, {Sid: "live", Sub: "b", At: now, Amr: auth.AmrPasswordOTP(), MfaTime: &now}, {Sid: "live", Sub: "a", At: now, Amr: auth.AmrPasswordOTP(), MfaTime: &now}, {Sid: "live", Sub: "ana", At: now, Amr: auth.AmrPasswordOTP(), MfaTime: &now}}
 	require.Equal(t, 2, Tally(approvals, []string{"a", "b"}, "ana", 2, true, auth.StepUp{MaxAge: time.Minute}, now))
 	require.Equal(t, 1, Tally(approvals, []string{"b"}, "ana", 2, true, auth.StepUp{MaxAge: time.Minute}, now), "a revoked first approver no longer counts")
 	require.Equal(t, 2, Tally(approvals, []string{"b", "ana", "a"}, "ana", 2, true, auth.StepUp{MaxAge: time.Minute}, now), "the proposer never counts toward two")
-	require.Equal(t, 1, Tally([]Approval{{Sub: "ana", Amr: auth.AmrPasswordOTP(), MfaTime: &now}}, []string{"ana"}, "ana", 1, true, auth.StepUp{MaxAge: time.Minute}, now), "self-confirm of a single approval")
-	require.Equal(t, 0, Tally([]Approval{{Sub: "ana", Amr: auth.AmrPasswordOTP(), MfaTime: &now}}, []string{"ana"}, "ana", 1, false, auth.StepUp{MaxAge: time.Minute}, now), "self-confirm forbidden by policy")
+	require.Equal(t, 1, Tally([]Approval{{Sid: "live", Sub: "ana", Amr: auth.AmrPasswordOTP(), MfaTime: &now}}, []string{"ana"}, "ana", 1, true, auth.StepUp{MaxAge: time.Minute}, now), "self-confirm of a single approval")
+	require.Equal(t, 0, Tally([]Approval{{Sid: "live", Sub: "ana", Amr: auth.AmrPasswordOTP(), MfaTime: &now}}, []string{"ana"}, "ana", 1, false, auth.StepUp{MaxAge: time.Minute}, now), "self-confirm forbidden by policy")
 }
 
 // The policy can narrow the platform rate and never widen it; each limit is checked.
@@ -367,11 +367,11 @@ func TestTallyChecksCurrentFreshness(t *testing.T) {
 	old := now.Add(-20 * time.Minute)
 	su := auth.StepUp{MaxAge: 15 * time.Minute}
 	approvals := []Approval{
-		{Sub: "a", Amr: auth.AmrPasswordOTP(), MfaTime: &old},
-		{Sub: "b", Amr: auth.AmrPasswordRecovery(), MfaTime: &now},
+		{Sid: "live", Sub: "a", Amr: auth.AmrPasswordOTP(), MfaTime: &old},
+		{Sid: "live", Sub: "b", Amr: auth.AmrPasswordRecovery(), MfaTime: &now},
 	}
 	require.Zero(t, Tally(approvals, []string{"a", "b"}, "proposer", 2, false, su, now))
-	approvals = append(approvals, Approval{Sub: "a", Amr: auth.AmrPasswordOTP(), MfaTime: &now})
+	approvals = append(approvals, Approval{Sid: "live", Sub: "a", Amr: auth.AmrPasswordOTP(), MfaTime: &now})
 	approvals = append(approvals, approvals[2])
 	require.Equal(t, 1, Tally(approvals, []string{"a", "b"}, "proposer", 2, false, su, now))
 	su.AcceptRecoveryCodes = true
@@ -395,4 +395,12 @@ func TestCallerDeciderRefusesRedirect(t *testing.T) {
 	_, err = d.Execution(ctx, ExecutionRequest{Kind: KindAlarmClear})
 	require.ErrorContains(t, err, "HTTP 307")
 	require.Zero(t, hits.Load())
+}
+
+func TestFenceRefusals(t *testing.T) {
+	require.True(t, IsCode(ErrFenceClosed, CodeFenceClosed))
+	require.False(t, ErrFenceClosed.Retryable)
+	require.True(t, IsCode(ErrFenceUnavailable, CodeFenceUnavailable))
+	require.True(t, ErrFenceUnavailable.Retryable)
+	require.Equal(t, true, ErrFenceUnavailable.Extensions()["retryable"])
 }

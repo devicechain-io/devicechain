@@ -132,6 +132,9 @@ type Tap struct {
 	deferMu  sync.Mutex
 	deferred map[*time.Timer]struct{}
 	stopped  bool
+	emitting sync.WaitGroup
+	stopCtx  context.Context
+	stopEmit context.CancelFunc
 }
 
 // RefusalCloseReason is the reason the broker gives, on a DISCONNECT advisory, for a connection
@@ -191,11 +194,14 @@ func (t *Tap) WithAsyncEmitter(e AsyncEmitter) *Tap {
 // NewTap binds a tap for one instance, emitting under source. gate may be nil only in
 // tests; the service always supplies the shared one.
 func NewTap(instanceId, source string, emitter Emitter, gate Gate, metrics Metrics) *Tap {
+	stopCtx, stopEmit := context.WithCancel(context.Background())
 	return &Tap{
 		Publisher:  NewPublisher(source, emitter, gate, metrics),
 		instanceId: instanceId,
 		debounce:   RefusalCloseDebounce,
 		deferred:   map[*time.Timer]struct{}{},
+		stopCtx:    stopCtx,
+		stopEmit:   stopEmit,
 	}
 }
 
@@ -253,8 +259,8 @@ func (t *Tap) Subscribe(nc *nats.Conn) (func(), error) {
 	}
 	log.Info().Str("instance", t.instanceId).Str("queueGroup", group).Str("source", t.source).
 		Msg("Broker-asserted MQTT presence is live: reading connection advisories from the system account.")
-	// The stop also drops the disconnects still held back, before the caller closes the writer
-	// they would be emitted through.
+	// The stop drops disconnects still held back and joins an in-flight held emit before the
+	// caller closes the writer they would be emitted through.
 	return func() { unsubscribeAll(subs); t.StopDeferred() }, nil
 }
 
@@ -334,29 +340,38 @@ func (t *Tap) deferDeath(transition Transition) bool {
 		t.deferMu.Lock()
 		_, held := t.deferred[timer]
 		delete(t.deferred, timer)
+		if held {
+			// Admission shares deferMu with stopping: once StopDeferred clears the map,
+			// no callback can find a held timer, so no Add can follow its Wait.
+			t.emitting.Add(1)
+		}
 		t.deferMu.Unlock()
 		if !held {
 			return // dropped by StopDeferred, and counted there
 		}
-		t.emitHeld(context.Background(), transition)
+		defer t.emitting.Done()
+		t.emitHeld(t.stopCtx, transition)
 	})
 	t.deferred[timer] = struct{}{}
 	incr(t.metrics.Deferred)
 	return true
 }
 
-// StopDeferred drops the disconnects still held back and holds no more. A pod that is stopping
-// loses them, as it loses the transitions its writer had not had acknowledged, and the
+// StopDeferred drops the disconnects still held back and holds no more. It returns only after
+// a held disconnect whose hold had already ended has finished its in-flight emit, which is
+// cancelled through its context. A stopping pod still loses disconnects held back; the
 // reconciler recovers them. Safe to call more than once.
 func (t *Tap) StopDeferred() {
 	t.deferMu.Lock()
-	defer t.deferMu.Unlock()
 	t.stopped = true
 	for timer := range t.deferred {
 		timer.Stop()
 		incr(t.metrics.DeferredDropped)
 	}
 	clear(t.deferred)
+	t.stopEmit()
+	t.deferMu.Unlock()
+	t.emitting.Wait()
 }
 
 // DeferredDeaths is how many disconnects are held back right now.

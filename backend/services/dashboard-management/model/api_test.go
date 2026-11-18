@@ -88,26 +88,32 @@ func TestDashboardCrud(t *testing.T) {
 	assert.False(t, ok)
 }
 
-// TestTokenReusableAfterDelete guards the hard-delete (Unscoped) fix: deleting a
-// dashboard must free its token so the same token can be created again. Under a
-// soft-delete — the original bug — the deleted row would remain and keep the token
-// occupying the unique index, so this re-create would fail with a duplicate-key
-// error. A revert to soft-delete therefore turns this test red.
+// TestTokenReusableAfterDelete guards hard deletion and token reuse independently.
+// The partial unique index excludes soft-deleted rows, so token reuse alone cannot
+// detect a revert to soft deletion: the original row must also be physically absent.
 func TestTokenReusableAfterDelete(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
 	def := `{"schemaVersion":1,"widgets":[]}`
 
-	_, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "reuse", Definition: def})
+	created, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "reuse", Definition: def})
 	require.NoError(t, err)
+	originalID := created.ID
 
 	ok, err := api.DeleteDashboard(ctx, "reuse")
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	// The token must be free again — no lingering soft-deleted row on the unique index.
+	// Unscoped includes soft-deleted rows while DB(ctx) retains tenant scoping.
+	// Check the original ID before creating a replacement with the same token.
+	var count int64
+	require.NoError(t, api.RDB.DB(ctx).Unscoped().Model(&Dashboard{}).
+		Where("id = ?", originalID).Count(&count).Error)
+	assert.Equal(t, int64(0), count, "original dashboard must be physically deleted")
+
+	// The token must also be reusable; the partial index permits this even after a soft delete.
 	_, err = api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "reuse", Definition: def})
-	require.NoError(t, err, "token should be reusable after delete (hard delete frees the unique index)")
+	require.NoError(t, err, "token should be reusable after delete")
 }
 
 // TestInvalidDefinitionRejected confirms a non-JSON definition is refused on both

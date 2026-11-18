@@ -282,6 +282,30 @@ func TestEveryTransportsAnswerRecordsEvidence(t *testing.T) {
 	}
 }
 
+func TestSuccessWithoutADeviceAnswerRecordsNoDeliveryEvidence(t *testing.T) {
+	for _, reach := range []Reach{ReachUnanswered, ReachUnsent, ReachAnswered} {
+		t.Run(string(reach), func(t *testing.T) {
+			api := newTestApi(t)
+			ctx := core.WithTenant(context.Background(), "A")
+			_, nonce := sentWithNonce(t, api, ctx, "queued")
+			if _, err := api.MarkResponse(ctx, "queued", "d", nonce, true, reach, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			row := commandRow(t, api, ctx, "queued")
+			if row.Status != CommandSuccessful.String() || !row.Outcome.Valid || row.Outcome.String != OutcomeSucceeded.String() {
+				t.Fatalf("status %s outcome %v; want SUCCESSFUL/SUCCEEDED", row.Status, row.Outcome)
+			}
+			if reach == ReachAnswered {
+				if !row.DeliveredTime.Valid || !row.DeliveryEvidence.Valid || row.DeliveryEvidence.String != EvidenceDeviceResponse {
+					t.Fatalf("device answer: delivered %v evidence %v", row.DeliveredTime, row.DeliveryEvidence)
+				}
+			} else if row.DeliveredTime.Valid || row.DeliveryEvidence.Valid {
+				t.Fatalf("transport success stamped evidence: delivered %v evidence %v", row.DeliveredTime, row.DeliveryEvidence)
+			}
+		})
+	}
+}
+
 // TestAFailureThatNeverReachedTheDeviceIsNotEvidence: ReachUnsent and ReachUnanswered stamp nothing.
 func TestAFailureThatNeverReachedTheDeviceIsNotEvidence(t *testing.T) {
 	for _, reach := range []Reach{ReachUnsent, ReachUnanswered} {

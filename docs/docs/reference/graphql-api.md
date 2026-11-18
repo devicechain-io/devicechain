@@ -39,6 +39,17 @@ curl -s https://docs.devicechain.io/schema/device-management.graphql
 
 ## Endpoints {#endpoints}
 
+The console and dashboard viewer recover from an authenticated HTTP 401 with one forced
+tenant-token refresh and one replay of the same operation. A refused refresh or a second 401
+ends that session. A refresh that fails transiently (no response, a 5xx or a 429) fails the
+request with that error and keeps the session, so an outage never signs anyone out. Identity tokens cannot be refreshed; a 401 ends the identity session.
+
+External `@devicechain/client` hosts opt in with `setUnauthorizedHandler({ refresh, onEnd })`.
+Use `session.forceRefresh(token)` in `refresh` for the tenant lane and return null for the
+identity lane. In `onEnd(error, token, identity)`, end only the session still owning that token.
+Anonymous login and refresh calls never trigger recovery. Without the handler, the SDK still
+throws `GraphQLRequestError` with status 401 immediately.
+
 The ingress routes `/api/<area>/graphql` to each functional-area service and strips the prefix, so
 the request reaches that service's own `/graphql`. Every endpoint below is therefore
 `https://<your-host>/api/<area>/graphql`:
@@ -71,6 +82,11 @@ authorities do not line up with intuition:
 
 - Reading device credentials requires `device:write`, not `device:read`.
 - `latestLocation` requires `location:read`, while its `device-state` siblings require `state:read`.
+- An alarm raised by a rule that tests geofence containment is read only by a caller that also holds
+  `location:read`: its raise and clear times are the device entering and leaving the fence. Without it, the
+  alarm queries, the alarm counts, `alarmDispositions` and `alarmStream` leave the alarm out, and
+  `acknowledgeAlarm`, `clearAlarm` and `setAlarmDisposition` answer as for an unknown token. The same rule's
+  detections are left out of `detectionStream` on the same terms.
 - A fixed asset's installed position (`Device.installedPosition`, `Asset.installedPosition`) requires
   `location:installed:read`, which `location:read` includes. It is installation data and never falls back to
   a position the device reported. A caller without either authority reads `positionWithheld: true` on every
@@ -707,6 +723,8 @@ Some refusals look similar and do not carry `CONFLICT`:
 - Deleting a record that other records still refer to carries `REFERENCE_VIOLATION`. See
   [A reference or a value that is refused](#reference-and-invalid-values).
 
+`updateConnector` refuses a stale `expectedUpdatedAt` with `errors[*].extensions.code` set to `STALE_WRITE`. Nothing is written; the message remains "connector was modified by another writer; reload and try again". This code applies only to connector updates. `CONFLICT` continues to mean a uniqueness collision; errors from other operations are unchanged. Classify by code rather than message text. The console keeps unsaved edits and shows a localized hint to copy them before reloading, then reapply them and retry saving.
+
 ### A reference or a value that is refused {#reference-and-invalid-values}
 
 Two other refusals are answered the same way, each with its own code.
@@ -816,6 +834,8 @@ list, or the operation answers `NOT_FOUND`. A `measurementStream` subscription f
 the member's customers is accepted and delivers nothing. Every other operation answers `FORBIDDEN`
 with `extensions.reason` set to `SCOPE_UNSUPPORTED`.
 
+`measurementStream(deviceTokens: [String!], name: String)` accepts up to 1000 device tokens on one subscription; duplicates are ignored. The list must not be empty and cannot be combined with `deviceToken`. Omit both device arguments to stream all devices. The same access-scope and name filters apply to every reading.
+
 An event recorded while the device belonged to no customer is not visible to a member with
 limited access. Neither is an alarm raised before this release: alarms record their customers only
 from this release on. A device's live state from before this release becomes visible when the
@@ -914,6 +934,22 @@ mutation Verify($challenge: String!, $code: String!) {
 
 `verifyMfa` returns what `login` returns, and the client carries on with `selectTenant` as before. `code` is the six-digit app code or a recovery code (`ABCD-EFGH-JKMN-PQRS`, in any case, with or without the hyphens). A challenge lasts five minutes, takes five attempts and signs in once.
 
+**In-session step-up (Preview: may change in a minor release).** When an agent approval or policy loosening returns `STEP_UP_REQUIRED`, send your own tenant access token in `Authorization: Bearer ...` and your console refresh token with a fresh authenticator code:
+
+```graphql
+mutation StepUp($refreshToken: String!, $code: String!) {
+  stepUp(refreshToken: $refreshToken, code: $code) {
+    accessToken
+    refreshToken
+    expiresAt
+  }
+}
+```
+
+`stepUp` returns the same `AuthToken` pair as `refresh`. Store both replacement tokens, then retry the action. It keeps the session id and epoch and advances `mfa_time`; an ordinary refresh does not renew factor freshness. The refresh token must belong to the same username and tenant as the access token. Agent-origin, service, identity and refresh tokens cannot authorize this operation, and OAuth refresh tokens cannot name the session. Ended sessions and rotated session epochs are refused.
+
+Only TOTP codes are accepted: recovery codes are refused **without being evaluated or consumed**. Wrong, replayed and locked codes all return `invalid code` and share sign-in's factor lockout; a wrong code leaves the refresh token usable. One verification is allowed per request. Single sign-on sessions return `STEP_UP_SSO`; accounts without a factor return `MFA_NOT_ENROLLED`. The console's approval dialog verifies without signing out and tells you to retry; sign-in again is offered only when the mutation is unavailable, including older servers, network/store outages, single sign-on and missing enrollment.
+
 The operations are on the user-management endpoint. `mfaStatus`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` and `disableTotp` take the identity token as an argument (not in an `Authorization` header), not a tenant token. `verifyMfa` takes no token. The tenant-plane `setTenantMfaRequired` takes the tenant access token and needs `member:write` and an unscoped caller. `resetIdentityMfa` and the admin API's `setTenantMfaRequired` are on the admin API and need `user:write`:
 
 | Operation | What it does |
@@ -996,23 +1032,29 @@ counted.
 
 ### Size bounds on lists, inputs and aggregations {#size-bounds}
 
-Separately from the request-shape limits above, some reads and inputs have a size bound. A request
-over one is refused with `extensions.code` set to `LIMIT_EXCEEDED`. Nothing is truncated and nothing
-is partly applied, so narrow the request and send it again. Sizes are counted in bytes, not
+Separately from the request-shape limits above, some reads and inputs have a size bound. Except
+for version-history paging and the error codes noted below, exceeding a bound is refused with
+`extensions.code` set to `LIMIT_EXCEEDED`; narrow the request and send it again. Version-history
+reads default to 1,000 results and clamp larger limits to 1,000. Sizes are counted in bytes, not
 characters.
 
 | Bound | Limit | Applies to |
 | --- | --- | --- |
+| Audit actor filter | 256 B | `actor` in `AuditEventSearchCriteria` (tenant plane) and `AdminAuditEventSearchCriteria` (admin plane). |
+| Dashboard name search text | 256 B | `DashboardSearchCriteria.name` on `dashboards`, measured in UTF-8 bytes before any trimming. |
 | Attribute key | 128 B | `setEntityAttribute` `attrKey`. |
 | Attribute value | 64 KiB | `setEntityAttribute` `value`, whatever its declared type. |
 | Rule definition | 256 KiB | `definition` of a detection rule, on create and update. |
 | Rule authoring graph | 256 KiB | `authoringGraph` of a detection rule, on create and update. |
-| Version history | 1,000 per call | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: newest first. Narrow with `limit` (at least 1) and page with `offset` (not negative); a value outside that range is refused with `INVALID_VALUE`. |
+| Rules per validation | 1,000 | `validateDetectionRules` `rules`. Publishing a device profile with more than 1,000 enabled detection rules is refused the same way. |
+| Version history | 1,000 per call | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: newest first. An omitted `limit` defaults to 1,000; a larger value is clamped to 1,000. Page with `offset` (default 0). A `limit` below 1 or a negative `offset` is refused with `INVALID_VALUE`. |
 | Buckets per aggregation | 10,000 | `bucketedMeasurements`: the range divided by `intervalSeconds`, rounded up. |
 | Rows per aggregation | 50,000 | `bucketedMeasurements`: the buckets multiplied by the measurement names returned. With a `name` filter that is one name; without one it is every distinct measurement name that matches the read's filters. |
 | Keys per lookup | 1,000 | A list of tokens, external ids or alarm tokens passed to a `…ByToken`, `…ByExternalId` or similar batch query (device states, latest locations, commands, command batches, notification channels, policies and states). |
 | JSON input size | 64 KiB | Each metadata, properties, configuration, payload or recipients value sent as JSON. Command payloads and metadata are refused with `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` (see [Sending commands](../guides/sending-commands.md)). |
+| Calculated-metric backfill statuses | 5 entries | `calculatedMetricBackfills` `statuses`, counting duplicates. Longer lists are refused before any query; accepted lists are de-duplicated. |
 | Recipients per notification rule | 100 | The `recipients` list of a notification policy rule. |
+| Rules per notification policy | 100 | One supplied `rules` list when creating or updating a policy. Updates that omit `rules` preserve the stored rule set. |
 | OAuth client redirect URIs | 16 entries, 2,048 B each | `redirectUris` on `createOauthClient` and `updateOauthClient`. |
 | OAuth client scopes | 16 entries, 64 B each | `scopes` on `createOauthClient` and `updateOauthClient`. |
 | Tenant tiers | 100 tiers, 128 B per token | The tier catalog (`createTenantTier` refuses a 101st tier) and `orderedTokens` on `reorderTenantTiers`, which must name every tier. |
@@ -1170,3 +1212,5 @@ When the alert fires, someone is most likely trying many addresses:
    size applies to every state bucket, so make sure the JetStream volume has room for the increase.
 
 Detailed, per-type reference pages will be generated from the schemas as they stabilize.
+
+`SECRET_RESUPPLY_REQUIRED` means an update would send a stored credential to a different destination or present it differently. On `updateConnector`, `updateNotificationChannel` or `updateAiProvider`, supply `secret` again in the same request, or clear it with `secret: null`. For a connector rollback with a different binding, use `updateConnector` with the target configuration and its credential instead.

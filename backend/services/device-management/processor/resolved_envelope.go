@@ -197,10 +197,11 @@ func (e *envelopeEngine) publishBatch(ctx context.Context, batch []resolvedItem)
 		}
 		coord := item.coord
 		groups[k] = append(groups[k], messaging.RoundMember{
-			Index:       idx,
-			Bytes:       bytes,
-			Key:         []byte(item.event.SourceDeviceToken),
-			Correlation: item.correlation,
+			TraceContext: coord.src.TraceContext(),
+			Index:        idx,
+			Bytes:        bytes,
+			Key:          []byte(item.event.SourceDeviceToken),
+			Correlation:  item.correlation,
 			// A copy split out of an envelope has a delivery count of its own, which says nothing
 			// about the member's earlier life in the envelope it came from (its event may already
 			// be stored under the envelope's id), so it walks from round 0 like a redelivery.

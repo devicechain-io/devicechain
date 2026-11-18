@@ -6,6 +6,7 @@ package iam
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/secrets"
@@ -99,6 +100,9 @@ func (s *Store) ResetMfa(ctx context.Context, store secrets.SecretStore, id *Ide
 // RecordAuth writes an authentication audit row (best-effort callers ignore the error). The
 // label names what the event concerns; it is never a credential.
 func (s *Store) RecordAuth(ctx context.Context, operation, actor, tenant, label string) error {
+	if InSnapshot(ctx) {
+		return fmt.Errorf("RecordAuth: %w", ErrOutsideSnapshot)
+	}
 	return s.db.RecordAuthEventLabeled(ctx, operation, actor, tenant, label)
 }
 

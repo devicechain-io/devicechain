@@ -7,12 +7,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 
+	assets "github.com/devicechain-io/dc-deploy"
+	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/fatih/color"
 	"github.com/hashicorp/terraform-exec/tfexec"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -207,9 +212,17 @@ func (h haTopology) summary() string {
 // when nothing will be applied. The COUNTING result is still fatal on a dry run:
 // if the cluster answers and cannot host the topology, that is the finding.
 func checkHaNodeCapacity(ctx context.Context, st *State) error {
-	ha := haFor(st.HA)
+	ha := brokerTopology(st)
 	if !ha.Replicated() {
 		return nil
+	}
+	// Preset brokers must each fit one eligible node's allocatable resources.
+	req, unchecked, err := brokerRequestFor(st, func(name string) bool { return operatorStatesVar(st, name) })
+	if err != nil {
+		return err
+	}
+	if unchecked != "" {
+		fmt.Println(color.YellowString("  broker requests stated by the operator were not checked against node capacity: %s", unchecked))
 	}
 	unreachable := func(err error) error {
 		if st.DryRun {
@@ -230,7 +243,17 @@ func checkHaNodeCapacity(ctx context.Context, st *State) error {
 	// passes an undersized cluster on a dry run, and it SURVIVED the package's
 	// whole test suite when a reviewer tried it — because the only way to reach
 	// this line was against a real cluster. Hence listNodes.
-	return schedulableShortfall(ha, nodes)
+	return schedulableShortfall(ha, nodes, req)
+}
+
+// operatorStatesVar uses the same instance root and precedence check as the apply.
+var operatorStatesVar = func(st *State, name string) bool {
+	instanceDir, err := dcdir.Instance(st.Instance)
+	if err != nil {
+		// An empty directory cannot supply files; TF_VAR statements still count.
+		return statedByOperator("", name)
+	}
+	return statedByOperator(filepath.Join(instanceDir, "infra", assets.InstanceRootDir), name)
 }
 
 // listNodes reads the cluster's nodes, for this guard and for the database placement
@@ -255,11 +278,13 @@ var listNodes = func(ctx context.Context, kubeContext string) ([]corev1.Node, er
 // schedulableShortfall is the counting rule, split from the cluster access above
 // so it can be asserted on without a cluster — the arithmetic is where the guard
 // can be wrong, and it is the half that would otherwise go untested.
-func schedulableShortfall(ha haTopology, nodes []corev1.Node) error {
+func schedulableShortfall(ha haTopology, nodes []corev1.Node, req *brokerRequest) error {
 	if !ha.Replicated() {
 		return nil
 	}
 	schedulable := 0
+	eligible := 0
+	var largestCPU, largestMemory resource.Quantity
 	for _, n := range nodes {
 		if n.Spec.Unschedulable {
 			continue
@@ -269,10 +294,66 @@ func schedulableShortfall(ha haTopology, nodes []corev1.Node) error {
 		}) {
 			continue
 		}
+		eligible++
+		if req != nil {
+			cpu := n.Status.Allocatable[corev1.ResourceCPU]
+			memory := n.Status.Allocatable[corev1.ResourceMemory]
+			if cpu.Cmp(largestCPU) > 0 {
+				largestCPU = cpu.DeepCopy()
+			}
+			if memory.Cmp(largestMemory) > 0 {
+				largestMemory = memory.DeepCopy()
+			}
+			if (req.CPU != nil && cpu.Cmp(*req.CPU) < 0) || (req.Memory != nil && memory.Cmp(*req.Memory) < 0) {
+				continue
+			}
+		}
 		schedulable++
 	}
 	if schedulable >= ha.ServerReplicas {
 		return nil
+	}
+	if req != nil && schedulable < eligible {
+		var requests, maxima, resources, variables, envVariables []string
+		if req.CPU != nil {
+			requests = append(requests, req.CPUText+" CPU")
+			maxima = append(maxima, "the largest allocatable CPU on any eligible node is "+largestCPU.String()+" CPU")
+			resources = append(resources, "CPU")
+			variables = append(variables, "nats_cpu_request")
+			envVariables = append(envVariables, "TF_VAR_nats_cpu_request")
+		}
+		if req.Memory != nil {
+			requests = append(requests, req.MemText+" memory")
+			maxima = append(maxima, "the largest allocatable memory is "+largestMemory.String())
+			resources = append(resources, "memory")
+			variables = append(variables, "nats_memory_request")
+			envVariables = append(envVariables, "TF_VAR_nats_memory_request")
+		}
+		maximaText := strings.Join(maxima, ", and ")
+		if len(maxima) > 1 {
+			maximaText += " (these maxima may be on different nodes)"
+		}
+		remediation := "use a smaller --size (base asks for less)"
+		if smaller := smallerBrokerPreset(req.Preset); smaller != nil {
+			var smallerRequests []string
+			if req.CPU != nil {
+				smallerRequests = append(smallerRequests, smaller.NatsCPURequest+" CPU")
+			}
+			if req.Memory != nil {
+				smallerRequests = append(smallerRequests, smaller.NatsMemoryRequest)
+			}
+			remediation = fmt.Sprintf("use a smaller --size (%s asks %s per broker; base asks for less)", smaller.Name, strings.Join(smallerRequests, " / "))
+		}
+		return fmt.Errorf(
+			"--ha with size %s places %d NATS servers one per node, each requesting %s; "+
+				"%d of %d otherwise-eligible node(s) can hold one broker. For the checked resources, %s. "+
+				"This is an allocatable check, not a free-capacity check or scheduler simulation. "+
+				"To fix this, state the environment variables %s (these work on a first bootstrap), "+
+				"or state %s in the instance root's terraform.tfvars (only read once the instance root exists, on a re-run); "+
+				"a stated request is not checked here. Or %s, or use larger nodes with at least that much allocatable %s",
+			req.Preset, ha.ServerReplicas, strings.Join(requests, " and "), schedulable, eligible,
+			maximaText, strings.Join(envVariables, " / "), strings.Join(variables, " / "),
+			remediation, strings.Join(resources, " and "))
 	}
 	return fmt.Errorf(
 		"--ha places %d NATS servers one per node, and this cluster has %d node(s) that can "+
@@ -383,7 +464,10 @@ type outputReader interface {
 // grows a real plan step; not worth making dry-run require tofu state today.
 func checkHaNotTornDown(ctx context.Context, st *State, tf outputReader) error {
 	applied, known := appliedServerCount(ctx, tf)
-	return haTeardownRefusal(haFor(st.HA), applied, known)
+	if _, err := shardGroupsFromValues(authoringValues(st)); err != nil {
+		return err
+	}
+	return haTeardownRefusal(brokerTopology(st), applied, known)
 }
 
 // appliedServerCount reads the provisioned NATS server count out of the current
@@ -440,3 +524,38 @@ const natsClusterReplicasKey = "natsClusterReplicas"
 // flags — which is precisely the ability to make the two halves disagree that
 // this exists to remove.
 func HaSummary(enabled bool) string { return haFor(enabled).summary() }
+
+// brokerTopologyVars are the OpenTofu variables every dcctl apply states itself, from
+// brokerTopology: the HA toggle and the NATS server count. They are passed as -var on every
+// run, which OpenTofu ranks above TF_VAR_* and any tfvars file, so a value the operator states
+// for either is overridden. That is deliberate: the server count and the per-stream replica
+// count come from one value (see haTopology), and honouring a server count stated on its own
+// would build exactly the three-servers-one-copy cluster that value exists to prevent.
+var brokerTopologyVars = []string{"ha", "nats_cluster_replicas"}
+
+// overriddenTopologyVars names the broker topology variables the operator states in the
+// instance root at rootdir (or in TF_VAR_*), every one of which this apply overrides.
+func overriddenTopologyVars(rootdir string) []string {
+	var out []string
+	for _, name := range brokerTopologyVars {
+		if statedByOperator(rootdir, name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// sayOverriddenTopologyVars says so, rather than overriding the operator in silence: r33a's
+// harness exported TF_VAR_nats_cluster_replicas=3 and got one server without being told.
+func sayOverriddenTopologyVars(st *State, rootdir string) {
+	names := overriddenTopologyVars(rootdir)
+	if len(names) == 0 {
+		return
+	}
+	topology := brokerTopology(st)
+	fmt.Printf("  %s %s stated for this instance, and dcctl sets %s itself (ha=%t, nats_cluster_replicas=%d, "+
+		"from --ha and shard groups), so the stated value is not used. The broker's server count and its "+
+		"stream replica count are kept together; see the sizing guide's \"Which value wins\".\n",
+		color.YellowString("note:"), strings.Join(names, " and "), map[bool]string{true: "them", false: "it"}[len(names) > 1],
+		st.HA, topology.ServerReplicas)
+}

@@ -66,7 +66,7 @@ func TestTheAlertFlagsReachTheOptionsOfBothVerbs(t *testing.T) {
 		t.Fatal(err)
 	}
 	upgradeAlertRequest = req
-	up := upgradeOptions("prod", nil, nil)
+	up := upgradeOptions("prod", nil, nil, nil)
 
 	for verb, got := range map[string]bootstrap.AlertRoutingRequest{"install": in.AlertRouting, "upgrade": up.AlertRouting} {
 		if got.Webhook != "https://hooks.example.test/x" || got.WatchdogWebhook != "https://hc.example.test/y" ||
@@ -83,7 +83,7 @@ func TestAlertFlagsDefaultToNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if in.AlertRouting.Given() || upgradeOptions("prod", nil, nil).AlertRouting.Given() {
+	if in.AlertRouting.Given() || upgradeOptions("prod", nil, nil, nil).AlertRouting.Given() {
 		t.Error("with no flag, a run must not touch the routing")
 	}
 }

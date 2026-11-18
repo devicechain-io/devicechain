@@ -17,13 +17,13 @@ import (
 // front of it, per replica:
 //
 //   - the RECORD budget, per (tenant, device type): a token bucket of 20, refilled 10 a minute. A
-//     failure inside it is a failed-events record; a failure past it is counted as suppressed and
+//     failure inside it is admitted for recording; a failure past it is counted as suppressed and
 //     its source is acked without a record;
 //   - the SAMPLE budget, per (tenant, profile): one stored failing uplink every 10 seconds.
 //
-// Neither is ever a silent drop. The first 20 failures of a window are always recorded, so a broken
-// decoder is visible before anything is suppressed, and every suppressed uplink is in the health
-// tally.
+// The first 20 failures of a window are always ADMITTED for recording. Normally their records are
+// out before suppression; during a failed-events outage they may not land, and a redelivery can end
+// suppressed with no record. Every suppressed uplink is still counted in the health tally.
 const (
 	// DecodeRecordBurst is the record bucket's capacity.
 	DecodeRecordBurst = 20
@@ -146,28 +146,4 @@ func (b *decodeBudget) sweep(now time.Time) {
 			}
 		}
 	}
-}
-
-// Charge takes a token from the (tenant, device type) bucket if it has one, and never refuses: it is
-// the cost of a failure that is recorded regardless (a redelivery). A key with no bucket and no room
-// for one is simply not charged, which is the same bound AllowRecord applies.
-func (b *decodeBudget) Charge(tenant string, deviceType uint) {
-	now := b.now()
-	k := recordKey{tenant, deviceType}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	bk, ok := b.records[k]
-	if !ok {
-		b.sweep(now) // as AllowRecord does: reclaim what has recovered before judging the bound
-		if len(b.records) >= maxBudgetKeys || b.recordsBy[tenant] >= maxBudgetKeysPerTenant {
-			return
-		}
-		bk = &bucket{tokens: DecodeRecordBurst, at: now}
-		b.records[k] = bk
-		b.recordsBy[tenant]++
-	} else if el := now.Sub(bk.at); el > 0 {
-		bk.tokens = min(DecodeRecordBurst, bk.tokens+el.Minutes()*DecodeRecordRefillPerMinute)
-		bk.at = now
-	}
-	bk.tokens = max(0, bk.tokens-1)
 }

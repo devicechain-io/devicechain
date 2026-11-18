@@ -11,10 +11,12 @@ module "nats" {
   server_image_repository  = var.nats_server_image_repository
   server_image_tag         = var.nats_server_image_tag
   server_image_digest      = var.nats_server_image_digest
+  jetstream_storage_class  = var.nats_jetstream_storage_class
   jetstream_storage        = var.nats_jetstream_storage
   jetstream_max_file_store = var.nats_jetstream_max_file_store
   ha                       = var.ha
   cluster_replicas         = var.nats_cluster_replicas
+  shard_groups             = var.nats_shard_groups
   enable_prom_exporter     = var.nats_prom_exporter
   enable_tls               = var.nats_enable_tls
   ca_cert_pem              = var.nats_ca_cert_pem

@@ -272,12 +272,12 @@ lowered per tenant.
 
 #### Retrying a ceiling refusal {#retrying-a-ceiling-refusal}
 
-`HELD_CEILING_EXCEEDED` is the **only temporary coded refusal** the enqueue path produces. (If a service the
-enqueue depends on is unreachable, the enqueue fails with an uncoded `validation is unavailable` error,
-which can succeed on a retry once the service is back.) Every other coded
-rejection describes a request that will be exactly as wrong on the next attempt; this one clears on
-its own as the backlog goes out. It is the one code worth retrying, and the rest are worth
-surfacing to a person. See
+`HELD_CEILING_EXCEEDED` is the **only temporary coded rejection** the enqueue path produces.
+It clears on its own as the backlog goes out. A dependency outage instead fails the enqueue
+with a GraphQL error whose `extensions.code` is `UNAVAILABLE`; no command was created and
+you can retry the request unchanged once the dependency is back. Other dependency failures
+remain uncoded. Every other coded rejection describes a request that will be exactly as wrong
+on the next attempt and should be surfaced to a person. See
 [Sending a command](../guides/sending-commands.md#when-an-enqueue-is-refused).
 
 ### Devices that fetch their commands over HTTP {#http-command-pull}
@@ -296,7 +296,9 @@ The body of the `200` and of a response are published as [command-pull.schema.js
 
 Each command a pull hands out is claimed by that pull, so two requests, two replicas or a retry never receive the same command. A held request asks the platform for the device's commands every couple of seconds, so a command issued while a device is polling reaches it within a few seconds.
 
-**Turning it on during an upgrade.** Upgrade device-management first, and set a device type's `commandChannel` to `HTTP_PULL` only once every replica of every service has been upgraded. A command-delivery replica from before this channel publishes a pull device's commands to a subject nobody reads, and they time out. A replica that is already upgraded while device-management is not yet cannot tell which devices pull, so it holds the commands of every device it asks about and releases them once device-management answers; ordinary devices are delayed for that time, never sent to the wrong place.
+**Turning it on during an upgrade.** Upgrade device-management first, and set a device type's `commandChannel` to `HTTP_PULL` only once every replica of every service has been upgraded. A command-delivery replica from before this channel publishes a pull device's commands to a subject nobody reads, and they time out. If the command channel cannot be resolved, affected commands stay `QUEUED` without being published or moved to `HELD`. They are reconsidered on the first delivery sweep after recovery (30 seconds by default); decided cached or partial answers still apply. Existing `HELD` commands stay held while their channel is undecided.
+
+When a command's channel cannot be resolved, it stays `QUEUED` for the next delivery sweep; an existing `HELD` command stays held. The reconciler continues through releasable pages within half its interval, stopping at the first page with no releases.
 
 **Acknowledging.** A command whose acknowledgement does not arrive within 60 seconds is handed out again by the next pull, with a higher `attempt`, until its `maxAttempts` are spent (3 unless the command sets another, up to 10). After that it fails with outcome [`NOT_DELIVERED`](#outcome) and no delivery time. This rests on the device acknowledging before it acts: an unacknowledged command is one the device has not been seen to act on, so sending it again is safe. A device that acts first and acknowledges afterwards can be handed a command twice and should not rely on the acknowledgement for that.
 
@@ -308,11 +310,14 @@ A command carries `deliveredTime` and `deliveryEvidence` once the platform has e
 
 ### Who reports the outcome {#who-reports-the-outcome}
 
-Only the device can report success. `SUCCESSFUL` and a device-reported `FAILED` are the two
-outcomes only the device can produce. (The exception is a Sparkplug write, whose success the
-platform infers from the node's reported state, which can mean the value was already there; see
-[Sparkplug B](./sparkplug.md).) Every other terminal state is one the platform writes on its
-own:
+A command is normally settled by the device: it reports `SUCCESSFUL` or a device-reported
+`FAILED`. The exceptions are a Sparkplug write, whose success the platform infers from the node's
+reported state, which can mean the value was already there (see [Sparkplug B](./sparkplug.md)),
+and a channel that has no device answer to wait for, such as an
+[unconfirmed LoRaWAN downlink](../guides/inbound-integrations.md#lorawan-downlink). An unconfirmed
+downlink is marked `SUCCESSFUL` once the network server queues it, without evidence that the device
+received it. A confirmed downlink is settled from the device's acknowledgement. Every other terminal
+state is one the platform writes on its own:
 
 - `TIMEOUT`, `EXPIRED` or `CANCELLED`;
 - `FAILED` because the transport cannot carry the command at all;
@@ -447,8 +452,9 @@ lost. The counter `devicechain_commanddelivery_command_delivery_window_restamps_
 because the window was edited or deleted, closed again before the device returned, or because their
 device type moved to another window or lost its window.
 
-- Deleting a window is refused while any device type uses it. If a window is gone anyway, waiting
-  commands are released and dispatch normally.
+- Deleting a window is refused while any device type uses it. A deleted window admits no
+  commands: only a positive answer that the device type has no window releases them. Disabled
+  devices and unresolved types stay gated, retaining the deleted window token until resolution.
 - If a device is offline through a whole opening, its undelivered command cannot be claimed once
   the window closes, and the same pass moves it to the next opening. If command delivery cannot
   reach the window's owner, waiting commands stay waiting; none is released.

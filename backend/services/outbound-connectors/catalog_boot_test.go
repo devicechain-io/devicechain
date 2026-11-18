@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/service"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -93,6 +94,7 @@ func startUnderCatalog(t *testing.T, rawConfig string, configure func(*core.Micr
 
 	ctx := context.Background()
 	require.NoError(t, Svc.Initialize(ctx), "initializing under the catalog")
+	dctest.UseFreeTCPPort(t, &service.ProbesPort)
 	NatsManager = Svc.Nats
 	t.Cleanup(func() {
 		if err := beforeMicroserviceStopped(context.Background()); err != nil {

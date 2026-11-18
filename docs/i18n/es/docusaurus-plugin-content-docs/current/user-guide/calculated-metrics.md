@@ -55,7 +55,7 @@ dándole al nivel de tu inquilino un límite mayor que cero. Consulta
 ## Crear una métrica calculada
 
 Abre un perfil de dispositivo y elige la pestaña **Métricas** (consulta
-[Métricas](device-types-and-profiles.md#métricas)). Elige **Nueva métrica**.
+[Métricas](device-types-and-profiles.md#metrics)). Elige **Nueva métrica**.
 
 1. Establece **Tipo** en **Calculada**. La elección es definitiva, por lo que queda bloqueada al
    editar una métrica.
@@ -471,7 +471,8 @@ se oculta.
 ## Activar las métricas calculadas {#turning-calculated-metrics-on}
 
 El operador de la instancia define por **nivel** cuántas métricas calculadas puede publicar un
-perfil, como **Métricas calculadas por perfil** en **Admin → Niveles**. El valor por defecto de la
+perfil, como **Métricas calculadas por perfil** en **Consola de administración → Inquilinos → Niveles**,
+en la pestaña **Ajustes** del nivel. El valor por defecto de la
 plataforma es `0`, lo que significa que las métricas calculadas están desactivadas: puedes escribir
 fórmulas y probarlas, pero publicar un perfil que tenga una se rechaza con:
 

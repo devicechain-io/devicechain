@@ -16,7 +16,7 @@ import (
 // The RS middleware in server.New must gate every MCP request: no token → 401 with
 // an RFC 9728 challenge; a token bound to the wrong audience → 401; a token bound to
 // this resource but WITHOUT the read-only scope → 403. This pins the whole auth
-// wiring (verifier + audience + scope option) so none of it can be silently removed.
+// wiring (verifier + audience + admission scope) so none can be silently removed.
 func TestServerNew_AuthMiddlewareGatesRequests(t *testing.T) {
 	iss, validator := mustIssuerValidator(t)
 	mcpHandler, _ := New(testResource, "https://as.example.com", validator, NewGraphQLClient(), DefaultLimits())
@@ -57,7 +57,7 @@ func TestServerNew_AuthMiddlewareGatesRequests(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// Correct audience but a non-read-only scope → 403 (the Scopes option enforced).
+	// Correct audience but a non-read-only scope → 403 (admission floor enforced).
 	badScope, _ := iss.IssueOAuthAccess("acme", "a@b.c", nil, []string{"device:read"},
 		"some-other-scope", []string{testResource}, false, "mcp", "j-scope")
 	resp = post("Bearer " + badScope.Token)
@@ -65,6 +65,13 @@ func TestServerNew_AuthMiddlewareGatesRequests(t *testing.T) {
 		t.Errorf("wrong scope: status = %d, want 403", resp.StatusCode)
 	}
 	resp.Body.Close()
+	actOnly, _ := iss.IssueOAuthAccess("acme", "a@b.c", nil, []string{"alarm:propose"}, coreauth.ScopeActAlarms, []string{testResource}, false, "mcp", "j-act-only")
+	resp = post("Bearer " + actOnly.Token)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("act without read-only: status=%d want 403", resp.StatusCode)
+	}
+	resp.Body.Close()
+
 }
 
 // callerToken fails closed when the request carries no verified token info.

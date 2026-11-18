@@ -7,6 +7,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/limit"
+
 	"gorm.io/gorm"
 )
 
@@ -53,6 +55,11 @@ type AuditEventSearchResults struct {
 // postgres.go), so this one read helper serves any service that wants to expose
 // its journal — the service need only add a GraphQL surface over it.
 func (rdb *RdbManager) AuditEvents(ctx context.Context, criteria AuditEventSearchCriteria) (*AuditEventSearchResults, error) {
+	// Bound the scan input before any SQL or LIKE-pattern construction.
+	if criteria.Actor != nil && len(*criteria.Actor) > 256 {
+		return nil, limit.Exceeded("actor bytes", len(*criteria.Actor), 256)
+	}
+
 	results := make([]AuditEvent, 0)
 	db, pag := rdb.ListOf(ctx, &AuditEvent{}, func(result *gorm.DB) *gorm.DB {
 		if criteria.StartTime != nil {

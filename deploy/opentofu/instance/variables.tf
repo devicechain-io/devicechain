@@ -141,7 +141,7 @@ variable "nats_chart_version" {
 # repository from the image registry the instance runs from and the tag from its
 # DeviceChain release, as for every service image.
 variable "nats_server_image_repository" {
-  description = "Repository of the broker image, without a tag or digest (see modules/nats server_image_repository). The upstream rollback is \"nats\" with tag \"2.15.2-alpine\"; it disables certificate device authentication."
+  description = "Repository of the broker image, without a tag or digest (see modules/nats server_image_repository). The upstream rollback is \"nats\" with tag \"2.15.3-alpine\"; it disables certificate device authentication."
   type        = string
   default     = "ghcr.io/devicechain-io/dc-nats-server"
 
@@ -171,6 +171,12 @@ variable "nats_server_image_digest" {
     condition     = var.nats_server_image_digest == "" || can(regex("^sha256:[0-9a-f]{64}$", var.nats_server_image_digest))
     error_message = "nats_server_image_digest must be empty or sha256: followed by 64 lowercase hex digits."
   }
+}
+
+variable "nats_jetstream_storage_class" {
+  description = "StorageClass for new broker JetStream volumes. Empty uses the cluster default. dcctl selects premium-rwo for new GKE brokers only; upgrades leave this unset. The module remembers its first choice and ignores later changes because PVC storage classes are immutable. Leave unset when adopting an existing broker."
+  type        = string
+  default     = ""
 }
 
 variable "nats_jetstream_storage" {
@@ -1011,4 +1017,10 @@ variable "backup_secret_access_key_key" {
   description = "Key within backup_credentials_secret holding the secret access key. Read from the cluster root's output of the same name; never guessed from the destination."
   type        = string
   default     = "MINIO_ROOT_PASSWORD"
+}
+
+variable "nats_shard_groups" {
+  description = "Opt-in shard group count; zero leaves the broker configuration unchanged."
+  type        = number
+  default     = 0
 }

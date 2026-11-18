@@ -8,7 +8,7 @@ title: Payload Decoders
 A **payload decoder** turns what a device or a network server sent into measurements. You write it once, on a [device profile](../user-guide/device-types-and-profiles.md), as a short list of rules: read two bytes at offset 1 as a signed number, divide by ten, store it as `temperature`. It reads a binary frame, a JSON body or the object a network server already decoded, and it produces the same measurements as any other source, with the units and validation of the metrics you declared.
 
 :::note Live decoding is in v1.2
-A decoder you publish runs on the live uplinks of an [inbound integration](./inbound-integrations.md): when the device an uplink is about has a device type whose profile version carries a decoder, the uplink is decoded with it instead of being stored as the network server decoded it. A newly published decoder can take up to about a minute to be picked up. A device type with no decoder is stored as before. Rolling the upgrade out is described in [Releases and upgrades](../deployment/releases-and-upgrades.md#v120-payload-decoders).
+A decoder you publish runs on the live uplinks of an [inbound integration](./inbound-integrations.md): when the device an uplink is about has a device type whose profile version carries a decoder, the uplink is decoded with it instead of being stored as the network server decoded it. A newly published decoder can take up to about a minute to be picked up. A device type with no decoder is stored as before. Rolling the upgrade out is described in [Releases and upgrades](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-payload-decoders).
 
 The same decoder also reads a payload a device sends on its own connection, over HTTP (from v1.3) or MQTT (from v1.4), when the operator has turned that on. See [A device's own connection](#device-connection).
 :::
@@ -32,6 +32,8 @@ A decoder belongs to a device profile and travels with it:
 - An uplink is decoded with the decoder of the version its device resolves through.
 
 The decoder is a document of expressions in a small, loop-free language (CEL). It has one **input** kind it reads, optional **shared values**, and one or more **sections**; each section has **rows**, and each row says which metric it writes and how to compute the value. The language has no clock, no randomness and no side effects, so the same input always gives the same readings.
+
+DeviceChain does not execute JavaScript, Python or other user-supplied scripts as payload decoders. A ChirpStack JavaScript codec runs in ChirpStack; DeviceChain receives its decoded object through the [inbound integration](./inbound-integrations.md#chirpstack). For an existing script, rewrite supported byte reads and JSON mappings as CEL decoder rows. Keep logic outside this language in the network server's codec or in an external bridge that forwards [device events](../reference/device-protocol.md).
 
 A decoder can have at most 8 sections, 16 shared values and 20 saved vectors, and the whole document is at most 32 KiB. The [function reference](../reference/decoder-functions.md#decoder-functions-limits) lists the limits.
 
@@ -271,7 +273,7 @@ Both wires are off until the operator turns them on, and the two settings are in
 | HTTP | `httpIngest.deviceUplinks` of the `event-sources` area | The route does not exist: `404`. |
 | MQTT | `infrastructure.nats.mqttDeviceUplinks` | The broker refuses a publish to the topic. A device receives the grant when it next connects. |
 
-Turn either on only after every `event-sources` and `device-management` replica runs a release that knows it, and do it in an upgrade of its own, after that release is in place. With `dcctl`, set the MQTT one in a `--values` overlay: `instance.config.infrastructure.nats.mqttDeviceUplinks: true`. Turning it off again takes effect only when a device reconnects or its session token expires: a device that is already connected keeps its grant until then. The [Device Protocol Reference](../reference/device-protocol.md#raw-payload) has the details. The console shows the commands below whether or not the setting is on, because it cannot see the setting: a device that gets `404` or is refused by the broker is waiting on the operator.
+Turn either on only after every `event-sources` and `device-management` replica runs a release that knows it, and do it in an upgrade of its own, after that release is in place. With `dcctl`, pass `--mqtt-device-uplinks` to `dcctl upgrade` (or `dcctl bootstrap`); `--mqtt-device-uplinks=false` turns it off. The choice is recorded on the instance and kept by later upgrades. The `--values` overlay key `instance.config.infrastructure.nats.mqttDeviceUplinks` still works; a choice recorded with the flag takes precedence over the overlay key; change it with the flag. A conflicting overlay value is refused. Turning it off again takes effect only when a device reconnects or its session token expires: a device that is already connected keeps its grant until then. The [Device Protocol Reference](../reference/device-protocol.md#raw-payload) has the details. The console shows the commands below whether or not the setting is on, because it cannot see the setting: a device that gets `404` or is refused by the broker is waiting on the operator.
 
 ### 3. Send a payload {#device-connection-send}
 
@@ -315,8 +317,10 @@ HTTP answers the device. Every answer that depends on the device is given only a
 | `404` | The route is not turned on. |
 | `413` | The body is over the cap for what the decoder reads (4 KiB of frame, 64 KiB of JSON) or over 1 MiB. |
 | `422` | The device's type has no decoder. The payload is never read as an event. |
+| `429` | Requests from this source address exceed the allowance. `Retry-After` says when to retry. |
 | `429` | The tenant is over its ingest ceiling, by messages or by readings. `Retry-After` says when to retry. |
 | `500` | The platform could not build the message. Not retryable by the device. |
+| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). Wrong passwords over HTTP now count toward the same per-credential hold as MQTT, so an attack over HTTP can also delay that credential's MQTT reconnects, just as an attack over MQTT already could. |
 | `503` | The decoder lookup is unavailable, ingest is applying backpressure, or the downstream stream could not take the payload. `Retry-After` is set for the first two and says when to retry. |
 
 MQTT cannot answer a device, so the platform records what happened instead. The [Device Protocol Reference](../reference/device-protocol.md#raw-payload) has the full table; in short:
@@ -326,7 +330,7 @@ MQTT cannot answer a device, so the platform records what happened instead. The 
 - **A tenant over its ceiling** is shed: over HTTP the device is told `429`; over MQTT the message is acknowledged and dropped, and counted in `total_msg_rate_limited` or `total_msg_reading_limited`.
 - **A decision the platform cannot make yet** (device-management cannot be asked, or backpressure) is retried: HTTP answers `503`, and an MQTT message waits and is offered again.
 
-An operator watches `device_uplink_requests_total` (HTTP) and `device_uplink_messages_total` (MQTT), each by `result` (`accepted`, `bad_request`, `unauthorized`, `too_large`, `no_decoder`, `rate_limited`, `plan_unavailable`, `backpressure`, `publish_failed`, `internal_error`), and `device_uplink_charged_readings_total` for the readings charged.
+An operator watches `device_uplink_requests_total` (HTTP) and `device_uplink_messages_total` (MQTT), each by `result` (`accepted`, `bad_request`, `unauthorized`, `too_large`, `no_decoder`, `rate_limited`, `source_limited`, `held`, `plan_unavailable`, `backpressure`, `publish_failed`, `internal_error`), and `device_uplink_charged_readings_total` for the readings charged.
 
 A payload counts against the tenant's ingest ceilings once as a message and then as readings, at least the decoder's [maximum readings](#max-readings), as for an integration.
 
@@ -501,4 +505,4 @@ A function's behaviour never changes once it has shipped. A fix arrives under a 
 - [Device Protocol Reference](../reference/device-protocol.md#raw-payload): the raw-payload topic and route, and what happens to each message.
 - [Device types and profiles](../user-guide/device-types-and-profiles.md): metrics, drafts and publishing.
 - [Transport capability matrix](../reference/transport-matrix.md#inbound-integrations): what each way in supports.
-- [Releases and upgrades](../deployment/releases-and-upgrades.md#v120-payload-decoders): what changed in this release.
+- [Releases and upgrades](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-payload-decoders): what changed in this release.

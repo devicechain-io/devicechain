@@ -77,7 +77,7 @@ func brokerImageVars(st *State) []string {
 // every flip, although the image is the same.
 func brokerImageDigest(st *State) string {
 	if DefaultBrokerImageDigest == "" || st.BuildImages ||
-		st.ImageRegistry != DefaultImageRegistry || st.ImageVersion != DefaultImageVersion {
+		!isPublishedRegistry(st.ImageRegistry) || st.ImageVersion != DefaultImageVersion {
 		return ""
 	}
 	return DefaultBrokerImageDigest

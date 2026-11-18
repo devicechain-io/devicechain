@@ -210,3 +210,125 @@ func TestValidateRefusesWhatCannotRun(t *testing.T) {
 	c := cfg(TTS)
 	require.NoError(t, c.Validate())
 }
+
+// Catches losing the cancellation error during an uplink interval in either listener mode.
+func TestRunCanceledDuringInterval(t *testing.T) {
+	for _, listening := range []bool{false, true} {
+		name := "uplink-only"
+		if listening {
+			name = "listener"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			posted := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.WriteHeader(http.StatusAccepted)
+				close(posted)
+			}))
+			defer srv.Close()
+			c := cfg(ChirpStack)
+			c.URL, c.Interval = srv.URL, time.Hour
+			if listening {
+				d, err := NewDownlink("api-key", "ack", c.DevEUIs, io.Discard)
+				require.NoError(t, err)
+				c.Downlink = d
+			}
+			type result struct {
+				sum Summary
+				err error
+			}
+			done := make(chan result, 1)
+			go func() {
+				sum, err := Run(ctx, c)
+				done <- result{sum, err}
+			}()
+			select {
+			case <-posted:
+			case <-time.After(2 * time.Second):
+				t.Fatal("uplink did not start")
+			}
+			// Allow the completed POST to return before interrupting the hour-long interval.
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+			select {
+			case got := <-done:
+				require.ErrorIs(t, got.err, context.Canceled)
+				require.Equal(t, 1, got.sum.Sent)
+				require.Equal(t, map[string]int{"202": 1}, got.sum.Statuses)
+				require.Zero(t, got.sum.Errors)
+			case <-time.After(2 * time.Second):
+				t.Fatal("run ignored cancellation during the interval")
+			}
+		})
+	}
+}
+
+// Catches suppressing canceled uplink-only POST errors or counting them with a listener.
+func TestRunCanceledDuringFinalPost(t *testing.T) {
+	for _, mode := range []string{"uplink-only", "listener", "continuous-listener"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			started, stopped := make(chan struct{}), make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				close(started)
+				<-r.Context().Done()
+				close(stopped)
+			}))
+			defer srv.Close()
+			defer cancel()
+			c := cfg(ChirpStack)
+			c.URL, c.Uplinks = srv.URL, 1
+			if mode != "uplink-only" {
+				d, err := NewDownlink("api-key", "ack", c.DevEUIs, io.Discard)
+				require.NoError(t, err)
+				c.Downlink = d
+				if mode == "continuous-listener" {
+					c.Uplinks = 0
+				}
+			}
+			type result struct {
+				sum Summary
+				err error
+			}
+			done := make(chan result, 1)
+			go func() {
+				sum, err := Run(ctx, c)
+				done <- result{sum, err}
+			}()
+			select {
+			case <-started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("final POST did not start")
+			}
+			cancel()
+			select {
+			case got := <-done:
+				require.ErrorIs(t, got.err, context.Canceled)
+				require.Equal(t, 1, got.sum.Sent)
+				if c.Downlink == nil {
+					require.Equal(t, 1, got.sum.Errors)
+					require.NotEmpty(t, got.sum.FirstError)
+				} else {
+					require.Zero(t, got.sum.Errors)
+					require.Empty(t, got.sum.FirstError)
+					c.Downlink.mu.Lock()
+					closed := c.Downlink.closed
+					c.Downlink.mu.Unlock()
+					require.True(t, closed, "cancellation must close even a continuous queue")
+					require.Equal(t, 0, *got.sum.Queued)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("run ignored cancellation of the final POST")
+			}
+			select {
+			case <-stopped:
+			case <-time.After(2 * time.Second):
+				t.Fatal("integration request was not canceled")
+			}
+		})
+	}
+}

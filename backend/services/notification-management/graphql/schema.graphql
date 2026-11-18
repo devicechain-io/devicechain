@@ -197,12 +197,18 @@ input NotificationChannelUpdateRequest {
     name: String
     """New description, or null to clear it."""
     description: String
-    """New channel type (smtp, webhook, slack, teams or pagerduty). Omit it to keep the stored type; an explicit null is refused."""
+    """New channel type (smtp, webhook, slack, teams or pagerduty). Omit it to keep the stored type; an explicit null is refused.
+    Changing the type or credential destination while a credential is stored requires secret
+    in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
+    """
     channelType: String
     """
     New connection settings as a JSON object serialized to a string, in the format
     described on NotificationChannelCreateRequest.config, or null to clear them. For a
     webhook channel the result must still be valid, including its auth setting.
+
+    Changing the type or credential destination while a credential is stored requires secret
+    in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
     """
     config: String
     """
@@ -210,6 +216,9 @@ input NotificationChannelUpdateRequest {
     replace it, or send null or an empty string to delete it. A webhook channel whose auth
     is bearer or header cannot be left without a secret, and one whose auth is none cannot
     have one.
+
+    Changing the type or credential destination while a credential is stored requires secret
+    in the same request: supply it again or clear it with null (SECRET_RESUPPLY_REQUIRED).
     """
     secret: String
     """Whether the channel is active. Omit it to keep the stored value; an explicit null is refused."""
@@ -795,7 +804,7 @@ type Mutation {
     # expectedUpdatedAt is an optional optimistic-concurrency precondition: pass the
     # updatedAt you last read, or the one an update returned, and the update is refused
     # with nothing written if the policy has changed since ("notification policy was
-    # modified by another writer; reload and try again"; this is not the CONFLICT code).
+    # modified by another writer; reload and try again"; code STALE_WRITE, not CONFLICT).
     # Omit it and the last write wins.
     updateNotificationPolicy(
         """Token of the policy to update."""
@@ -805,7 +814,7 @@ type Mutation {
         """
         The updatedAt value you last read, as an RFC 3339 timestamp. If the policy has
         changed since, nothing is written and the call fails with "notification policy was
-        modified by another writer; reload and try again" (no error code). Omit it to
+        modified by another writer; reload and try again" (extensions.code STALE_WRITE). Omit it to
         overwrite unconditionally.
         """
         expectedUpdatedAt: String

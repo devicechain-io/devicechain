@@ -37,7 +37,8 @@ import (
 // on "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.<stream>.<durable>". The advisory is sent
 // on the NEXT PULL of that durable after the final delivery's ack window expires — not from
 // a timer — and only if something is subscribed to the subject then. So a work-queue stream
-// (streams.MaxDeliveries) captures every such subject, and each area runs one recorder: a
+// (streams.MaxDeliveries) captures subjects selected by streams.MaxDeliveriesCaptured,
+// and each area with a captured durable runs one recorder: a
 // durable on that stream whose filter is exactly its own durables' advisory subjects, which
 // makes the areas' filters disjoint. The recorder fetches the original by stream sequence
 // and hands both to the area's MaxDeliveryFunc, which writes the letter (core/deadletter).
@@ -47,6 +48,9 @@ import (
 // the recorder see (the arm overran its window, then wrote) is stored once.
 //
 // # What it does not letter
+//
+// Streams with a MaxDeliveriesUncaptured reason have no captured advisories or recorder
+// filters. Their declaration explains how an exhausted delivery is settled instead.
 //
 // A durable that its stream's declaration names REPLAY-COVERED for this area
 // (streams.Stream.ReplayCovered) loses nothing when its deliveries run out: the area re-reads
@@ -175,9 +179,16 @@ type maxDeliveryAdvisory struct {
 }
 
 // startRecorder starts this manager's recorder over the readers oncreate built. A manager
-// with no readers starts none: it has no durable whose deliveries can run out.
+// with no captured readers starts none: its streams settle exhausted deliveries otherwise.
 func (nmgr *NatsManager) startRecorder(ctx context.Context) error {
-	if len(nmgr.readers) == 0 {
+	hasCapturedReader := false
+	for _, r := range nmgr.readers {
+		if streams.MaxDeliveriesCaptured(r.suffix) {
+			hasCapturedReader = true
+			break
+		}
+	}
+	if !hasCapturedReader {
 		return nil
 	}
 	if nmgr.recordBuild == nil {
@@ -205,10 +216,9 @@ func (nmgr *NatsManager) startRecorder(ctx context.Context) error {
 	covered := map[string]bool{}
 	filters := []string{}
 	for _, r := range nmgr.readers {
-		// The recorder's own stream is the one reader it skips: it would record its own
-		// advisories. Retention is not the test, because the device intake capture is also
-		// a work queue and its give-ups are lettered like any other.
-		if r.suffix == streams.MaxDeliveries {
+		// Skip the recorder itself and streams explicitly excluded from advisory capture.
+		// Retention is not the test: the device intake work queue is captured too.
+		if !streams.MaxDeliveriesCaptured(r.suffix) {
 			continue
 		}
 		suffixOf[r.stream] = r.suffix

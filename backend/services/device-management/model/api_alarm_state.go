@@ -333,30 +333,39 @@ func (api *Api) AcknowledgeAlarm(ctx context.Context, token string, by *string) 
 //
 // Idempotent: an already-acknowledged alarm is a no-op with no event, exactly as before.
 func (api *Api) applyAcknowledgement(ctx context.Context, alarm *Alarm, by *string) error {
+	ev, err := ackAlarmTx(ctx, api.RDB.DB(ctx), alarm, by)
+	if err == nil && ev != nil {
+		api.emitAlarmEvent(ctx, ev)
+	}
+	return err
+}
+
+// ackAlarmTx applies the shared acknowledgement transition without publishing.
+func ackAlarmTx(ctx context.Context, db *gorm.DB, alarm *Alarm, by *string) (*AlarmStateChangeEvent, error) {
 	if alarm.Acknowledged {
-		return nil
+		return nil, nil
 	}
 	ackTime := sql.NullTime{Time: time.Now().UTC(), Valid: true}
 	ackBy := rdb.NullStrOf(by)
 	// Predicate on the unacked state so two concurrent acks don't both emit an
 	// ACKNOWLEDGED event (and the loser doesn't overwrite the winner's identity);
 	// gate the struct update + emit on a row actually changing.
-	res := api.RDB.DB(ctx).Model(alarm).Where("acknowledged = ?", false).
+	res := db.Model(alarm).Where("acknowledged = ?", false).
 		Updates(map[string]interface{}{
 			"acknowledged":      true,
 			"acknowledged_time": ackTime,
 			"acknowledged_by":   ackBy,
 		})
 	if res.Error != nil {
-		return res.Error
+		return nil, res.Error
 	}
 	if res.RowsAffected > 0 {
 		alarm.Acknowledged = true
 		alarm.AcknowledgedTime = ackTime
 		alarm.AcknowledgedBy = ackBy
-		api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(alarm, AlarmEventAcknowledged, "", ackTime.Time))
+		return newAlarmStateChangeEvent(alarm, AlarmEventAcknowledged, "", ackTime.Time), nil
 	}
-	return nil
+	return nil, nil
 }
 
 // MaxBulkAcknowledgeAlarms bounds how many alarms one acknowledge request may name.
@@ -494,11 +503,23 @@ func (api *Api) ClearAlarm(ctx context.Context, token string) (*Alarm, error) {
 		return nil, gorm.ErrRecordNotFound
 	}
 	alarm := matches[0]
+	ev, err := clearAlarmTx(ctx, api.RDB.DB(ctx), alarm)
+	if err != nil {
+		return nil, err
+	}
+	if ev != nil {
+		api.emitAlarmEvent(ctx, ev)
+	}
+	return alarm, nil
+}
+
+// clearAlarmTx applies the shared clear transition without publishing.
+func clearAlarmTx(ctx context.Context, db *gorm.DB, alarm *Alarm) (*AlarmStateChangeEvent, error) {
 	if alarm.State != string(AlarmStateCleared) {
 		clearedTime := sql.NullTime{Time: time.Now().UTC(), Valid: true}
 		// Predicate on not-already-cleared so a concurrent clear (the integrator) and
 		// this manual clear don't both emit CLEARED; gate the emit on RowsAffected.
-		res := api.RDB.DB(ctx).Model(alarm).Where("state <> ?", string(AlarmStateCleared)).
+		res := db.Model(alarm).Where("state <> ?", string(AlarmStateCleared)).
 			Updates(map[string]interface{}{
 				"state":        string(AlarmStateCleared),
 				"cleared_time": clearedTime,
@@ -509,8 +530,8 @@ func (api *Api) ClearAlarm(ctx context.Context, token string) (*Alarm, error) {
 		if res.RowsAffected > 0 {
 			alarm.State = string(AlarmStateCleared)
 			alarm.ClearedTime = clearedTime
-			api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(alarm, AlarmEventCleared, "", clearedTime.Time))
+			return newAlarmStateChangeEvent(alarm, AlarmEventCleared, "", clearedTime.Time), nil
 		}
 	}
-	return alarm, nil
+	return nil, nil
 }

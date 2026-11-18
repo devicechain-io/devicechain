@@ -190,17 +190,27 @@ func TestARejectedTransitionDoesNotPromoteToAsserted(t *testing.T) {
 		t.Fatalf("precondition: expected an inferred row holding (session, time), got %+v", demoted)
 	}
 
-	// A stale echo from the released session: lower-or-equal session, older stamp. The
-	// guard refuses it, so it must leave no trace at all.
-	after, err := api.MergeDeviceState(ctx, "sp-echo", t0.Add(3*time.Minute), disc(100, t0.Add(time.Minute)), DeviceIdentity{})
-	if err != nil {
-		t.Fatalf("stale echo merge: %v", err)
-	}
-	if after.PresenceSource != PresenceSourceInferred {
-		t.Fatalf("a REFUSED transition promoted the row back to asserted: %+v", after)
-	}
-	if !after.PresenceTime.Time.Equal(t0.Add(2 * time.Minute)) {
-		t.Fatalf("a refused transition moved the ordering stamp: %+v", after)
+	// Both echoes predate the demotion, so ordering rejects them. The CONNECTED
+	// stamp is newer than LastActivityTime (t0), so freshness alone would advance it.
+	for name, pt := range map[string]*PresenceTransition{
+		"disconnected": disc(100, t0.Add(time.Minute)),
+		"connected":    conn(100, t0.Add(time.Minute)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			after, err := api.MergeDeviceState(ctx, "sp-echo", t0.Add(3*time.Minute), pt, DeviceIdentity{})
+			if err != nil {
+				t.Fatalf("stale echo merge: %v", err)
+			}
+			if after.PresenceSource != PresenceSourceInferred {
+				t.Fatalf("a REFUSED transition promoted the row back to asserted: %+v", after)
+			}
+			if !after.PresenceTime.Time.Equal(t0.Add(2 * time.Minute)) {
+				t.Fatalf("a refused transition moved the ordering stamp: %+v", after)
+			}
+			if !after.LastActivityTime.Valid || !after.LastActivityTime.Time.Equal(t0) {
+				t.Fatalf("a refused transition moved the activity stamp: %+v", after)
+			}
+		})
 	}
 }
 

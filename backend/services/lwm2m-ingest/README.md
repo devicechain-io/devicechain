@@ -197,8 +197,9 @@ device reads online. The lever today is the lifetime the devices request.
   `readingsPerSecond` (default 1000) is the tenant's budget in readings (decoded
   samples), charged after decode as on every other transport, and `burst` (default 2000)
   the instantaneous allowance; the same numbers are the pre-decode stage-1 rate, counted
-  in Notify messages. Non-positive
-  values take the platform default, never *unlimited* and never *zero*.
+  in Notify messages. Unset or zero
+  values take the platform default, never *unlimited* and never *zero*; a negative value
+  is refused at startup.
 - **`maxLifetimeSeconds`** — the ceiling every registration lifetime is clamped down to,
   and *identically* the lifetime a failover-reconstruction shadow timer is armed for.
   Equal by construction so a shadow expiry is only ever late-true, never a false
@@ -270,5 +271,7 @@ Four scenarios: `lifecycle_and_tenancy` (Register/Update/Deregister with a **hos
 emitter, a recording ingester), never the client's self-report, so a client that lies or
 no-ops cannot manufacture a pass.
 
-🔴 **Commands are not covered by this harness.** The manual Leshan procedure in
-[COMMANDS.md](COMMANDS.md#interop) is the only downlink coverage there is.
+🔴 **Commands are not covered by this harness.** For downlink coverage, use the manual Leshan
+procedure in [COMMANDS.md](COMMANDS.md#interop) or the live
+[transport conformance rig](../../../hack/conformance/README.md), which checks read, write,
+execute and the named commands.

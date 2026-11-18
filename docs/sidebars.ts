@@ -86,6 +86,7 @@ const sidebars: SidebarsConfig = {
           collapsed: false,
           items: [
             'concepts/event-processing',
+            'concepts/automation-change-review',
             'concepts/geofencing',
             'concepts/ai-authoring',
             'concepts/outbound-connectors',
@@ -189,6 +190,8 @@ const sidebars: SidebarsConfig = {
             'guides/importing-devices',
             'guides/migrating-from-another-platform',
             'guides/inbound-integrations',
+            'guides/chirpstack-uplinks',
+            'guides/the-things-stack-uplinks',
             'guides/payload-decoders',
             'guides/lorawan-uplink-to-alarm',
             'guides/why-isnt-my-data-showing-up',
@@ -216,6 +219,7 @@ const sidebars: SidebarsConfig = {
             'guides/notification-channels',
             'guides/signed-webhooks',
             'guides/testing-your-rules',
+            'guides/reviewing-a-rule-change',
           ],
         },
         {
@@ -296,6 +300,7 @@ const sidebars: SidebarsConfig = {
           collapsed: false,
           items: [
             'deployment/observability',
+            'deployment/troubleshooting',
             'deployment/alert-runbook',
             'deployment/grafana-boards',
             'deployment/metrics-reference',

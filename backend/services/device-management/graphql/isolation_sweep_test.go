@@ -40,6 +40,19 @@ func TestIsolationSweep(t *testing.T) {
 		}
 	}
 	t.Logf("swept %d operations as acme's member: %v", len(out), counts)
+	// Review evidence and protection have no scope rule. These reads refuse before looking
+	// up the requested profile or token and preserve the explicit actiongate code.
+	for _, op := range []string{"query automationReview", "query automationReviews", "query automationReviewPolicy", "query automationReviewBreakGlass"} {
+		if o, ok := isolationsweep.OutcomeOf(out, op); !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "SCOPED_GRANT_NOT_SUPPORTED" {
+			t.Errorf("%s: %+v (reached=%v), want SCOPED_GRANT_NOT_SUPPORTED", op, o, ok)
+		}
+	}
+	// Policy writes must refuse scoped grants before the model sees a profile or token.
+	for _, op := range []string{"mutation setAutomationReviewPolicy", "mutation approveAutomationReviewPolicyChange", "mutation cancelAutomationReviewPolicyChange"} {
+		if o, ok := isolationsweep.OutcomeOf(out, op); !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "FORBIDDEN" {
+			t.Errorf("%s: %+v (reached=%v), want FORBIDDEN", op, o, ok)
+		}
+	}
 	for _, o := range out {
 		if !o.Data && (len(o.Codes) == 0 || o.Codes[0] == "-") {
 			t.Logf("  answered with no code: %s %v", o.Operation, o.Codes)

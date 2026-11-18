@@ -9,7 +9,7 @@ import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
  * are combined with AND.
  */
 export type AdminAuditEventSearchCriteria = {
-  /** Only entries whose actor contains this text. The match ignores case. */
+  /** Only entries whose actor contains this text. The match ignores case. At most 256 bytes; longer input is refused with LIMIT_EXCEEDED. */
   actor?: string | null | undefined;
   /** Only entries of this category, `auth` or `mutation`. Exact match. */
   category?: string | null | undefined;

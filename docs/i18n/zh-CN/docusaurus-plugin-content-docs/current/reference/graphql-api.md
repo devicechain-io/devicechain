@@ -36,6 +36,16 @@ curl -s https://docs.devicechain.io/schema/device-management.graphql
 
 ## 端点 {#endpoints}
 
+控制台和仪表盘查看器在已认证的 HTTP 请求收到 401 时，会强制刷新一次租户令牌，
+并重放一次相同操作。如果服务器拒绝刷新或再次收到 401，则结束该会话。
+如果刷新暂时失败（没有响应、5xx 或 429），请求会以该错误失败，会话保持不变，因此服务中断不会让任何人退出登录。
+身份令牌无法刷新；收到 401 时会结束身份会话。
+
+外部 `@devicechain/client` 宿主通过 `setUnauthorizedHandler({ refresh, onEnd })` 启用此行为。
+在 `refresh` 中，租户平面使用 `session.forceRefresh(token)`，身份平面返回 null。
+在 `onEnd(error, token, identity)` 中，只结束仍持有该令牌的会话。
+匿名登录和刷新调用不会触发恢复。未设置处理器时，SDK 仍会立即抛出状态为 401 的 `GraphQLRequestError`。
+
 Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀，
 让请求到达服务自身的 `/graphql`。因此以下每个端点都是 `https://<your-host>/api/<area>/graphql`：
 
@@ -65,6 +75,14 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 
 - 读取设备凭据需要 `device:write`，不是 `device:read`。
 - `latestLocation` 需要 `location:read`，其他同属 `device-state` 的接口需要 `state:read`。
+- 由检测地理围栏包含关系的规则触发的告警，只有同时拥有 `location:read` 的调用方才能读取：其触发和清除时间就是设备进入和离开围栏的时间。
+  没有该权限时，告警查询、告警计数、`alarmDispositions` 和 `alarmStream` 都会略去该告警，`acknowledgeAlarm`、`clearAlarm`
+  和 `setAlarmDisposition` 的响应与未知令牌相同。同一规则的检测结果也按相同条件从 `detectionStream` 中略去。
+- 固定资产的安装位置（`Device.installedPosition`、`Asset.installedPosition`）需要 `location:installed:read`，
+  而 `location:read` 包含该权限。这是安装数据，绝不会回退到设备上报的位置。
+  调用者若两项权限都没有，读取任何设备和资产时都会得到 `positionWithheld: true`，无论它是否有位置；
+  该标志仅针对安装位置。设置和清除安装位置（`setInstalledPosition`、`clearInstalledPosition`）需要
+  `device:write`，且仅能访问租户部分数据的成员不能写入安装位置。
 - `demoteAssertedPresence` 需要 `state:demote`，不同于前两者。
   默认没有角色直接声明它；只有持有 `*` 超级权限的角色，例如预置的 `tenant-admin`，无需明确授权就能使用。
   它是事件流水线之外唯一写入实时状态投影的接口，一次调用会影响整个事件源的设备。
@@ -570,6 +588,8 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 - 用已有 token 创建命令不会拒绝，而是返回原命令。参见[发送命令](../guides/sending-commands.md#issue-it)。
 - 删除仍被其他记录引用的记录会携带 `REFERENCE_VIOLATION`。参见[引用或值被拒绝](#reference-and-invalid-values)。
 
+`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码仅适用于连接器更新。`CONFLICT` 仍表示唯一值冲突；其他操作的错误不变。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
+
 ### 引用或值被拒绝 {#reference-and-invalid-values}
 
 另外两种拒绝也使用相同响应方式，各有自己的代码。
@@ -661,6 +681,8 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 
 成员看不到的记录，其响应与不存在的记录完全相同：要么不出现在列表中，要么操作返回 `NOT_FOUND`。针对不属于这些客户的设备发起的 `measurementStream` 订阅会被接受，但不会推送任何内容。其他所有操作都返回 `FORBIDDEN`，且 `extensions.reason` 为 `SCOPE_UNSUPPORTED`。
 
+`measurementStream(deviceTokens: [String!], name: String)` 可在一次订阅中接受最多 1000 个设备令牌，重复令牌会被忽略。列表不能为空，也不能与 `deviceToken` 同时使用。省略这两个设备参数可接收所有设备的读数。每条读数仍应用相同的访问范围和名称过滤条件。
+
 设备不属于任何客户期间记录的事件，访问权限受限的成员看不到。在此版本之前产生的告警同样看不到：告警从此版本开始才记录其所属客户。设备在此版本之前的实时状态，要等设备再次上报或更换所有者后才可见。告警保留其产生时的所属客户，因此客户出售设备后，仍能看到其拥有该设备期间产生的告警，包括仍处于活动状态的告警。
 
 由于这些记录通过令牌指向客户，已删除客户的令牌会被停用：租户中的其他客户都不能再使用它，否则新客户的成员会把已删除客户的告警、命令、更新分配、共享仪表板和事件历史当作自己的。用已停用的令牌调用 `createCustomer` 会返回 `INVALID_VALUE`，消息会说明该令牌已停用。请换一个令牌。只有删除整个租户时，令牌才会被释放。如果该令牌上的客户仍然存在，则与以前一样返回 `CONFLICT`。
@@ -694,6 +716,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 
 ## 使用双重身份验证登录 {#two-factor-sign-in}
 
+
 设有[双重身份验证](../guides/two-factor-authentication.md)的账号无法从 `login` 获得令牌。密码正确时，`login` 以错误码 `MFA_CHALLENGE` 失败，并在 `extensions` 中携带一个质询；在客户端把代码发给 `verifyMfa` 之前不会签发任何东西。**只处理 `login` 成功情形的客户端，对这些账号现在会失败**，得到一个错误，而不会拿到不该拿到的令牌。
 
 ```json
@@ -722,6 +745,21 @@ mutation Verify($challenge: String!, $code: String!) {
 ```
 
 `verifyMfa` 返回与 `login` 相同的内容，客户端像以前一样继续调用 `selectTenant`。`code` 是六位应用代码或恢复码（`ABCD-EFGH-JKMN-PQRS`，大小写均可，带不带连字符均可）。质询有效期五分钟，允许五次尝试，只能完成一次登录。
+
+**会话内加强验证（预览：可能在次要版本中更改）。** 代理批准或放宽策略返回 `STEP_UP_REQUIRED` 时，在 `Authorization: Bearer ...` 中发送自己的租户访问令牌，并提供控制台自己的刷新令牌及新的身份验证器验证码：
+
+```graphql
+mutation StepUp($refreshToken: String!, $code: String!) {
+  stepUp(refreshToken: $refreshToken, code: $code) {
+    accessToken
+    refreshToken
+    expiresAt
+  }
+}
+```
+
+返回与 `refresh` 相同的 `AuthToken` 令牌对。保存两个替换令牌后重试操作，无需退出登录。会话标识符和纪元保持不变，`mfa_time` 更新；普通刷新不会更新因素验证时间。两个令牌必须属于同一用户名和租户。代理、服务、身份和刷新令牌不能授权此操作；OAuth 刷新令牌、已结束的会话和已轮换的纪元也会被拒绝。
+
 
 这些操作位于 user-management 端点。`mfaStatus`、`beginTotpEnrollment`、`confirmTotpEnrollment`、`regenerateRecoveryCodes` 和 `disableTotp` 以参数形式接收身份令牌（不放在 `Authorization` 头中），而不是租户令牌。`verifyMfa` 不接收令牌。租户平面的 `setTenantMfaRequired` 使用租户访问令牌，需要 `member:write`，且调用者不能带有范围限制。`resetIdentityMfa` 和管理 API 的 `setTenantMfaRequired` 位于管理 API，需要 `user:write`：
 
@@ -800,8 +838,9 @@ mutation Verify($challenge: String!, $code: String!) {
 
 ### 列表、输入和聚合的大小限制 {#size-bounds}
 
-除上述请求形态限制外，部分读取和输入还有大小限制。超出限制的请求会被拒绝，`extensions.code`
-为 `LIMIT_EXCEEDED`。不会截断，也不会部分应用，请缩小请求后重新发送。大小按字节而非字符计算。
+除上述请求形态限制外，部分读取和输入还有大小限制。除版本历史分页及下表注明的错误码外，
+超出限制的请求会被拒绝，`extensions.code` 为 `LIMIT_EXCEEDED`；请缩小请求后重新发送。
+版本历史默认最多返回 1,000 条，较大的限制值会被收窄为 1,000。大小按字节而非字符计算。
 
 | 限制 | 数值 | 适用于 |
 | --- | --- | --- |
@@ -809,12 +848,14 @@ mutation Verify($challenge: String!, $code: String!) {
 | 属性值 | 64 KiB | `setEntityAttribute` 的 `value`，无论声明的类型是什么。 |
 | 规则定义 | 256 KiB | 检测规则的 `definition`，创建和更新时均适用。 |
 | 规则编排图 | 256 KiB | 检测规则的 `authoringGraph`，创建和更新时均适用。 |
-| 版本历史 | 每次调用 1,000 条 | `deviceProfileVersions`、`entityGroupVersions`、`assetTypeVersions`：最新的在前。用 `limit`（至少为 1）缩小范围，用 `offset`（不为负）翻页；超出此范围的值会被拒绝，`extensions.code` 为 `INVALID_VALUE`。 |
+| 每次验证的规则数 | 1,000 | `validateDetectionRules` 的 `rules`。发布包含超过 1,000 条已启用检测规则的设备配置文件时，也会以相同方式拒绝。 |
+| 版本历史 | 每次调用 1,000 条 | `deviceProfileVersions`、`entityGroupVersions`、`assetTypeVersions`：最新的在前。省略 `limit` 时默认为 1,000；较大的值会被收窄为 1,000。用 `offset`（默认 0）翻页。`limit` 小于 1 或 `offset` 为负时会被拒绝，错误码为 `INVALID_VALUE`。 |
 | 每次聚合的时间桶数 | 10,000 | `bucketedMeasurements`：时间范围除以 `intervalSeconds`，向上取整。 |
 | 每次聚合的行数 | 50,000 | `bucketedMeasurements`：时间桶数乘以返回的测量名称数。指定 `name` 过滤时为一个名称；未指定时为符合该读取过滤条件的所有不同测量名称。 |
 | 每次查找的键数 | 1,000 | 传给 `…ByToken`、`…ByExternalId` 等批量查询的令牌、外部 ID 或告警令牌列表（设备状态、最新位置、命令、命令批次、通知渠道、策略和状态）。 |
 | JSON 输入大小 | 64 KiB | 以 JSON 形式发送的每个元数据、属性、配置、载荷或收件人值。命令的载荷和元数据会以 `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` 拒绝（参见[发送命令](../guides/sending-commands.md)）。 |
 | 每条通知规则的收件人数 | 100 | 通知策略规则的 `recipients` 列表。 |
+| 每个通知策略的规则数 | 100 | 创建或更新策略时提供的一个 `rules` 列表。未提供 `rules` 的更新会保留已存储的规则集。 |
 | OAuth 客户端重定向 URI | 16 项，每项 2,048 B | `createOauthClient` 和 `updateOauthClient` 的 `redirectUris`。 |
 | OAuth 客户端作用域 | 16 项，每项 64 B | `createOauthClient` 和 `updateOauthClient` 的 `scopes`。 |
 | 租户层级 | 100 个层级，每个令牌 128 B | 层级目录（`createTenantTier` 拒绝第 101 个层级）以及 `reorderTenantTiers` 的 `orderedTokens`，后者必须列出所有层级。 |
@@ -951,3 +992,5 @@ DeviceChain 提供的每个客户端每次请求只发送一次登录，所以�
    此大小适用于每个状态桶，因此确认 JetStream 卷有足够空间容纳增加的容量。
 
 Schema 稳定后，将根据它们生成详细的逐类型参考页面。
+
+`SECRET_RESUPPLY_REQUIRED` 表示更新会改变已存储凭据的目标或发送方式。使用 `updateConnector`、`updateNotificationChannel` 或 `updateAiProvider` 时，请在同一请求中重新发送 `secret`，或使用 `secret: null` 删除凭据。若连接器回滚的目标不同，请改用 `updateConnector` 并提供目标配置和凭据。

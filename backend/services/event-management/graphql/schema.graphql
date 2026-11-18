@@ -611,7 +611,7 @@ API does not name: either none was given, or a newer part of the platform wrote 
 reasonCode carries its number. A reason is never reported as a different one.
 """
 enum FailedEventReason {
-    """The message could not be read at all."""
+    """The message could not be read, or a value in it was refused."""
     INVALID
     """A platform service the event needed could not be reached, or storing the event failed."""
     API_CALL_FAILED
@@ -877,7 +877,7 @@ type Query {
     calculatedMetricBackfills(
         """Only the jobs of this profile."""
         profileToken: String
-        """Only jobs in one of these statuses."""
+        """Only jobs in one of these statuses. At most 5 entries, counting duplicates; longer lists are refused with LIMIT_EXCEEDED. Accepted lists are de-duplicated."""
         statuses: [CalculatedMetricBackfillStatus!]
         """Page size, 1 to 100; defaults to 25."""
         first: Int
@@ -975,6 +975,11 @@ type Subscription {
     measurementStream(
         """Only measurements from this device. Omit for all devices."""
         deviceToken: String
+        """
+        Stream readings from any of these devices on one subscription, instead of one subscription per device.
+        At most 1000 tokens; duplicates are ignored and a malformed token is refused. Cannot be combined with deviceToken. An empty list is refused.
+        """
+        deviceTokens: [String!]
         """Only measurements with this name. Omit for all names."""
         name: String
     ): MeasurementEvent!

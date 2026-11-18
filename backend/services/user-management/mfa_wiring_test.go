@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/devicechain-io/dc-microservice/actiongate"
 	"github.com/devicechain-io/dc-microservice/config"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -83,7 +84,7 @@ func TestTheAdminServiceBuiltLikeMainReachesTheSealedSeed(t *testing.T) {
 	id := w.enrolled(t, "pat@example.com", "pw")
 	saKey, err := credential.DeriveServiceAccountSecretKey(make([]byte, 32))
 	require.NoError(t, err)
-	svc := newAdminService(w.store, 0, 0, nil, saKey, w.secrets)
+	svc := newAdminService(w.store, 0, 0, nil, saKey, w.secrets, nil)
 
 	f, err := w.store.MfaFactorFor(context.Background(), id.ID)
 	require.NoError(t, err)
@@ -97,7 +98,7 @@ func TestTheAdminServiceBuiltLikeMainReachesTheSealedSeed(t *testing.T) {
 	// The control: the same Service without the store refuses, and deletes nothing.
 	w2 := newMfaWiring(t)
 	w2.enrolled(t, "lee@example.com", "pw")
-	bare := newAdminService(w2.store, 0, 0, nil, saKey, nil)
+	bare := newAdminService(w2.store, 0, 0, nil, saKey, nil, nil)
 	_, err = bare.DeleteIdentity(context.Background(), "lee@example.com")
 	require.ErrorIs(t, err, iam.ErrMfaNeedsSecretStore)
 }
@@ -223,4 +224,45 @@ func TestTheMfaCountersAreExportedAtZeroFromStartup(t *testing.T) {
 	require.Equal(t, 1, got["devicechain_usermanagement_mfa_challenges_total"])
 	require.Equal(t, 1, got["devicechain_usermanagement_mfa_identity_locks_total"],
 		"the required MfaIdentityLocked alert depends on this series existing at 0")
+}
+
+type tenantWiringKillPublisher struct {
+	events []actiongate.KillEvent
+}
+
+func (p *tenantWiringKillPublisher) PublishKill(_ context.Context, event actiongate.KillEvent) error {
+	p.events = append(p.events, event)
+	return nil
+}
+
+// Main's constructor must install the notifier: a served disable reaches the manager's publisher.
+func TestTheAdminServiceBuiltLikeMainNotifiesTenantActuation(t *testing.T) {
+	w := newMfaWiring(t)
+	require.NoError(t, w.db.Database.AutoMigrate(&iam.TenantTier{}, &iam.Tenant{}, &iam.AgentPolicy{}))
+	ctx := context.Background()
+	tier := &iam.TenantTier{Token: "silver"}
+	require.NoError(t, w.store.CreateTenantTier(ctx, tier))
+	require.NoError(t, w.store.CreateTenant(ctx, &iam.Tenant{
+		Token: "acme", TierID: tier.ID, Enabled: true, PurgeState: iam.PurgeActive,
+	}))
+	manager := identity.NewManager(nil, w.db, nil, w.secrets, 0, 0, "", identity.BootstrapConfig{}, nil)
+	publisher := &tenantWiringKillPublisher{}
+	manager.SetKillPublisher(publisher)
+	svc := newAdminService(w.store, 0, 0, nil, nil, w.secrets, manager)
+	svc.SetAgentActuation(true)
+	_, err := svc.SetTenantEnabled(ctx, "acme", false)
+	require.NoError(t, err, "the service main builds must have a non-nil notifier")
+	require.Len(t, publisher.events, 1)
+	require.Equal(t, "acme", publisher.events[0].Tenant)
+	require.Equal(t, actiongate.KillCauseOperatorSuspended, publisher.events[0].Cause)
+	head, err := w.store.AgentPolicyHead(ctx, "acme")
+	require.NoError(t, err)
+	require.Equal(t, head.ActuationGeneration, publisher.events[0].ActuationGeneration)
+	killed := head.ActuationGeneration
+	_, err = svc.SetTenantEnabled(ctx, "acme", true)
+	require.NoError(t, err)
+	require.Len(t, publisher.events, 1)
+	head, err = w.store.AgentPolicyHead(ctx, "acme")
+	require.NoError(t, err)
+	require.Greater(t, head.ActuationGeneration, killed)
 }

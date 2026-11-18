@@ -12,7 +12,7 @@ Examples use the local kind install (tenant `acme`, instance `devicechain`). Rep
 | Transport | Direction | Authenticates with | Go to |
 | --- | --- | --- | --- |
 | [MQTT](#mqtt) | telemetry in, commands out | credential id and secret, per connection | [Connecting a device](../guides/connecting-a-device.md#mqtt) |
-| [HTTP](#http) | telemetry in | credential in the request body | [Connecting a device](../guides/connecting-a-device.md#http) |
+| [HTTP](#http) | telemetry in, opt-in command pull | body credential for events; bearer access token for command pull | [Connecting a device](../guides/connecting-a-device.md#http) |
 | [LwM2M](#lwm2m) | telemetry in, writes out | DTLS pre-shared key | [LwM2M](../concepts/lwm2m.md) |
 | [Sparkplug B](#sparkplug) | telemetry in, commands out | the source's broker credential | [Sparkplug B](../concepts/sparkplug.md) |
 | [X.509 certificate](#x509) | as MQTT | client certificate | [Certificate devices](../guides/device-x509.md) |
@@ -47,7 +47,7 @@ curl -i -X POST http://localhost:8081/devicechain/acme/events \
   -d '{"device":"sensor-001","eventType":"Measurement","credentialType":"ACCESS_TOKEN","credentialId":"<token>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
-HTTP is upstream-only: an HTTP device cannot receive commands. Port 8081 has no transport authentication, so keep it behind network controls.
+For [HTTP command pull](../concepts/commands.md#http-command-pull), set the device type's `commandChannel` to `HTTP_PULL`. The device polls for commands, acknowledges receipt and submits responses using `Authorization: Bearer <access-token>` with its own device access token. The default `PUBLISH` channel is not pollable. HTTP command pull does not carry configuration or managed update assignments. Keep port 8081 behind network controls.
 
 ## LwM2M {#lwm2m}
 

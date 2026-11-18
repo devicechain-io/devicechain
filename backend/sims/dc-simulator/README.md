@@ -28,7 +28,7 @@ identity and drives the same tenant-facing surfaces a real integration would.
    population default to the scenario's own demo sizing (~5s) and are
    overridable — see [Driving load](#driving-load).
 5. **Receives** commands, for a scenario whose manifest declares a **command far
-   end** (widgetlab, towerpulse and fleetpulse; sitepulse declares one too, `external`, and attaches no receiver). Telemetry over HTTP ingress is one-way, so a scenario whose
+   end** (widgetlab, towerpulse, harborpulse and fleetpulse; sitepulse declares one too, `external`, and attaches no receiver). Telemetry over HTTP ingress is one-way, so a scenario whose
    dashboard offers a command-button otherwise enqueues real commands nothing
    answers: they reach `SENT` and expire days later, with every layer reporting
    success. Such a scenario subscribes every device to its own command topic on
@@ -50,7 +50,7 @@ go run . --handshake /path/to/handshake.json [--port 8090]
 ### Driving load
 
 The built-in scenarios are sized as **demos** — devicepulse is 1 device,
-buildingpulse is 12, widgetlab is 7, fleetpulse is 6, towerpulse is 31 and sitepulse is 19 (18 machines and one
+buildingpulse is 12, widgetlab is 7, fleetpulse is 6, towerpulse is 31, harborpulse is 33 and sitepulse is 19 (18 machines and one
 plant; its devices publish their own telemetry, so the sim itself emits nothing), all at a 5s cadence, which is
 the right default for watching the presentation page and far too small to measure what
 an instance costs. Three flags override that; each also reads an env var, and each
@@ -66,7 +66,7 @@ defaults to the scenario's own sizing:
 devices chosen in source for their behaviour is a composed fixture, not a scale vehicle:
 resizing it would leave its boards pointing at devices the run never provisions, so it
 refuses the flag at startup rather than provisioning a topology its own boards do not
-match. widgetlab and towerpulse are. devicepulse, buildingpulse and fleetpulse take any size
+match. widgetlab, towerpulse and harborpulse are. devicepulse, buildingpulse and fleetpulse take any size
 (buildingpulse's board binds named devices too, but it is rebuilt from the resized
 population). sitepulse takes any machine count: `--devices n` gives each of its three
 machine kinds `n` devices and leaves its single crusher plant at one. Its board
@@ -567,6 +567,39 @@ A presenter can drop a chiller out of turn (`DropChiller` on the Sim); a restart
 The silent chiller keeps its MQTT session in this process, so the online doughnut does not drop
 here: a presence drop is the Unity device plane's business.
 
+### Harborpulse (a waterfront district)
+
+`harborpulse` drives more of the platform at once than any other scenario. One utility tenant
+runs a fictional harbour district of three quays (North Quay, East Quay, the Basin): 9 tide
+gauges, 3 stormwater pump controllers, 12 street lights, 6 EV chargers, 2 building meters (each
+owned by a customer, one of whom gets a login limited to their building) and a flood-response
+truck, 33 named devices. It plays one **compressed day** on a loop, 24 sim hours in 24 minutes,
+starting at 06:00:
+
+| Sim time | What happens | What the platform does |
+| --- | --- | --- |
+| 08:30-09:45 | The Ferry Terminal's demand passes its cap | `hp-peak-demand` (1-minute sliding average) raises MINOR |
+| 11:00-12:00 | One East Quay lamp's driver reports intermittent faults | `hp-lamp-flicker` (repeating, 3 in a minute) raises MINOR |
+| 14:00-15:30 | A Basin charger's connector overheats | `hp-connector-hot` (sliding average) raises MAJOR and sends `derate {max_kw: 11}`; the charger obeys and cools |
+| 17:00-18:30 | Storm surge: every gauge rises fast | `hp-surge-rising` (rate of change) raises WARNING |
+| 17:00-21:00 | The king tide and the surge | three thresholds share the alarm key `flood-level`: each gauge's ONE alarm escalates MINOR to MAJOR, and to CRITICAL on East Quay only, then eases |
+| 18:30-20:30 | Three East Quay gauges above 2.1 m together | `hp-quay-flooding` (area correlation) fires for East Quay. It raises nothing: the platform forbids actions on a correlation rule |
+| 17:00-21:00 | Wet wells fill | `hp-wet-well-high` raises MAJOR and sends `start-pump {duty_pct: 100}`; the well drains and the alarm clears, more than once |
+| 19:00-20:30 | The East Quay pump air-locks: it runs and moves nothing | `hp-pump-air-lock` (held 30 s, over two metrics in CEL) raises CRITICAL |
+| 17:00-22:30 | The truck drives from the depot to the flood plain and back | location events against two geofences |
+| 19:45-21:15 | The East Quay feeder fails | its lamps and chargers go silent: `hp-light-silent` / `hp-charger-offline` (absence) raise MAJOR for exactly those; the chargers buffer their readings and send them, with their original timestamps, when power returns |
+
+Every reading is a function of the seed, the sim time and the device, except what a command
+changes: a wet well, a charger's cap, a lamp's dim level. A command is answered only after the
+device has applied it, so an unobeyed command shows in the telemetry (the well reaches the pump's
+own float switch at 3.2 m; the charger stays hot). Midnight resets derates and dimming so the next
+day's beats repeat. `harborpulse_test.go` replays the day against each rule's own published
+threshold, window, hold, count and timeout, with the commands obeyed and, as a control, ignored.
+
+The day's assertions against a running instance, and the features the scenario does not drive
+yet (outbound connectors, notifications, campaigns, LoRaWAN gauges, OTA, MQTT devices), are
+planned follow-ups.
+
 ### The command far end
 
 A device that only POSTs telemetry cannot receive anything, so a scenario with a
@@ -582,7 +615,7 @@ on its manifest, which has three settings:
 | `internal` | this process, per device | yes | allowed |
 | `external` | a presentation client in another process — a Unity player that IS the device | no | allowed |
 
-widgetlab, towerpulse and fleetpulse are `internal`; sitepulse is `external`; devicepulse and buildingpulse are `none`. Both far-end modes
+widgetlab, towerpulse, harborpulse and fleetpulse are `internal`; sitepulse is `external`; devicepulse and buildingpulse are `none`. Both far-end modes
 must still declare a command vocabulary on a profile: for `external` that vocabulary
 is the whole contract with the other process, since it is what that client subscribes
 for and what the board's widget enqueues against.
@@ -745,6 +778,82 @@ humidity in percent, the battery voltage in tenths of a volt, and the door as th
 byte. The printed decoder declares one saved vector; set it on a profile that declares `temperature`,
 `humidity` and `battery.voltage` as doubles and `door` as a boolean (the same metrics default mode
 stores), publish, and the stored values are the ones default mode would have stored.
+
+### Downlinks and the acknowledgement feed (`--lorawan-downlink-listen`)
+
+In `--lorawan-ns chirpstack` mode, `--lorawan-downlink-listen :8085` also plays
+ChirpStack v4's REST queue. The equivalent env var is
+`DC_SIM_LORAWAN_DOWNLINK_LISTEN`. Set the queue's API key in
+`DC_SIM_LORAWAN_API_KEY`; it has no command-line flag. Configure the platform's
+outbound connector with this base URL and API key. The listener starts before
+the first uplink and shuts down when the run ends. TTS mode refuses this listener.
+
+The endpoint is `POST /api/devices/{devEui}/queue`; a base URL path prefix is
+also accepted. It takes ChirpStack's envelope:
+
+```json
+{"queueItem":{"devEui":"70B3D57ED0050004","fPort":12,"confirmed":true,"data":"ANcD","expiresAt":"2030-01-01T00:00:00Z"}}
+```
+
+It answers `200 {"id":"<uuid>"}`. `expiresAt` is optional and logged; the
+simulator does not expire queued items. Empty data is allowed. Requests are
+limited to 64 KiB. Missing or wrong bearer keys get HTTP 401 with gRPC code 16;
+devices outside `--deveui` get 404 with code 5; malformed bodies, mismatched
+DevEUIs, ports outside 1..223 or invalid standard padded base64 get 400 with
+code 3. Other paths get 404 with code 5; other methods get 405. Refusals carry
+JSON `{"code":N,"message":"..."}` and never queue an item.
+Once the run has stopped taking downlinks, the queue refuses with HTTP 409 (gRPC code 9).
+
+Confirmed items follow class A timing. Before each device uplink POST, the
+simulator snapshots that device's pending items. After that POST, it sends a
+`?event=txack` report followed by `?event=ack` for each item in the snapshot.
+An item queued during an uplink POST waits for the next uplink. Both reports
+carry the queue response's ID and the same per-device `fCntDown`, starting at 0
+and increasing for each reported item. Reports use the integration bearer token
+and honor `--integration-host`, just like uplinks.
+
+`--lorawan-ack ack|nack|none` (or `DC_SIM_LORAWAN_ACK`, default `ack`) controls
+these reports. `ack` reports `acknowledged:true`; `nack` sends txack then an ack
+with `acknowledged:false`, as when ChirpStack gives up waiting. `none` accepts
+items but never reports them, to exercise the platform's deadline path.
+Unconfirmed items are accepted and logged but never reported in any mode.
+An explicit `--lorawan-ack` requires the listener.
+
+After `--uplinks` rounds, the run stays up until every pending confirmed item
+has been answered in ack or nack mode. It sends additional real uplinks at
+`--emit-interval`, keeping their counters increasing; a zero interval uses 1s
+while waiting. `--uplinks 0` is allowed with the listener and keeps uplinking
+until interrupted. With a listener, SIGINT or SIGTERM prints the summary and exits 0;
+an uplink-only run keeps its previous behaviour, returning the cancellation error.
+Transport errors still make the run fail.
+
+The listener writes JSON lines to stdout, followed by the usual run summary (a real run against an
+instance whose rule sent one confirmed command; a refusal is logged as
+`{"event":"downlink_refused","reason":"invalid bearer key","status":401}`):
+
+```json
+{"ack":"ack","addr":"127.0.0.1:8085","event":"downlink_listening"}
+{"event":"downlink_queued","devEui":"70B3D57ED0050004","id":"3ffed47b-dfa3-4d57-a4a9-4ce59dc03d31","fPort":12,"hex":"00d703","confirmed":true,"expiresAt":"2026-11-11T17:30:19Z"}
+{"devEui":"70B3D57ED0050004","event":"downlink_reported","id":"3ffed47b-dfa3-4d57-a4a9-4ce59dc03d31","report":"txack","status":202}
+{"acknowledged":true,"devEui":"70B3D57ED0050004","event":"downlink_reported","id":"3ffed47b-dfa3-4d57-a4a9-4ce59dc03d31","report":"ack","status":202}
+{"ns":"chirpstack","sent":12,"resent":0,"statuses":{"202":12},"errors":0,"queued":1,"reported":{"ack":{"202":1},"txack":{"202":1}},"runId":"1794418086190782000"}
+```
+
+Queued lines include `expiresAt` when supplied. Refusals never log the presented
+key. The summary adds `"queued":1` and
+`"reported":{"txack":{"202":1},"ack":{"202":1}}` when a listener is used.
+Report transport failures use status `"0"` in `reported`, increment `errors`,
+and set `firstError`, as uplink failures do. `statuses` continues to count only
+uplink responses. Without a listener the summary has no new fields.
+
+For example, with `DC_SIM_INTEGRATION_TOKEN` and `DC_SIM_LORAWAN_API_KEY` set:
+
+```sh
+dc-simulator --lorawan-ns chirpstack \
+  --integration-url https://host/api/integrations/acme/lora \
+  --deveui 70B3D57ED0050004 --lorawan-downlink-listen :8085 \
+  --lorawan-ack ack --uplinks 0 --emit-interval 1s
+```
 
 ### X.509 (mTLS) device mode (`--x509`)
 
@@ -977,6 +1086,9 @@ a snapshot taken at page load would not.
   only when its job is done (`towerpulse_model.go`), and the boards (`towerpulse_dashboard.go`, and the annex owner's `towerpulse_annex_dashboard.go`).
   `sim/windowrule.go` builds its windowed and absence rules, and `sim/customeruser.go`
   provisions a member limited to one customer.
+- `sim/harborpulse*.go` — the waterfront scenario: the manifest and rules (`harborpulse.go`) and
+  the compressed day, its planted faults and the command effects (`harborpulse_model.go`).
+  `sim/rulekinds.go` builds its duration, rate-of-change, repeating and correlation rules.
 - `sim/lifecycle.go` — the `CREATED -> BOOTSTRAPPED -> RUNNING <-> STOPPED`
   FSM and the control HTTP API.
 - `sim/presentation.go` — serves the static page + its `/config.json`.

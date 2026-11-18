@@ -125,20 +125,6 @@ func TestTheBudgetFiguresAreThePublishedOnes(t *testing.T) {
 	require.Equal(t, 7*24*time.Hour, model.DecoderHealthRetention)
 }
 
-// Charging reclaims what has recovered before it judges the bound, as AllowRecord does.
-func TestChargingReclaimsExpiredKeysBeforeJudgingTheBound(t *testing.T) {
-	c := newFakeClock()
-	b := newDecodeBudget(c.now)
-	for i := 0; i < maxBudgetKeysPerTenant; i++ {
-		require.True(t, b.AllowRecord("acme", uint(i)))
-	}
-	c.add(10 * time.Minute) // every bucket is full again
-	for i := 0; i < DecodeRecordBurst; i++ {
-		b.Charge("acme", 99999) // a NEW device type
-	}
-	require.False(t, b.AllowRecord("acme", 99999), "the charges drained the new key's bucket")
-}
-
 func TestATenantWithNoKeysLeftIsForgotten(t *testing.T) {
 	c := newFakeClock()
 	b := newDecodeBudget(c.now)

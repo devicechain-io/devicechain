@@ -31,6 +31,7 @@ import {
 } from '@devicechain/widget-sdk';
 
 import { commandStatusColor, commandStatusLabel } from './command-status';
+import { commandStrings } from '../command-strings';
 import {
   buildPayload,
   defaultValues,
@@ -41,6 +42,7 @@ import {
 } from './command-params';
 
 export function CommandButton({ widget, data, actions }: WidgetProps<CommandStreamState>) {
+  const strings = commandStrings();
   const commandName = optString(widget.options, 'commandName');
   const commandLabel = optString(widget.options, 'commandLabel') ?? commandName;
   const parameterSchema = optString(widget.options, 'parameterSchema') ?? null;
@@ -110,7 +112,7 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
     try {
       promise = actions.sendCommand(deviceToken, commandName, payload);
     } catch {
-      setSendError(SEND_FAILED);
+      setSendError(strings.sendFailed);
       setPending(false);
       return;
     }
@@ -130,7 +132,7 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
         setSentToken(dispatch.token);
       })
       .catch(() => {
-        if (gen === sendGen.current) setSendError(SEND_FAILED);
+        if (gen === sendGen.current) setSendError(strings.sendFailed);
       })
       .finally(() => {
         if (gen === sendGen.current) setPending(false);
@@ -143,14 +145,14 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
           form down rather than cutting off the send button or the line explaining why it is off. */}
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 10, overflowY: 'auto' }}>
         {!commandName ? (
-          <div style={{ ...hint, margin: 'auto' }}>No command configured.</div>
+          <div style={{ ...hint, margin: 'auto' }}>{strings.noCommand}</div>
         ) : denied ? (
           // A viewer without command:write is not offered the control at all: a form and a
           // Send button that can never work read as a broken board. The reason stands in its
           // place, and the delivery history (read-only) stays.
           <>
             <div role="note" style={{ ...hint, flexShrink: 0 }}>
-              {NO_PERMISSION}
+              {strings.noPermission}
             </div>
             <CommandHistory commands={data.commands} sentToken={sentToken} loading={data.loading} error={data.error} />
           </>
@@ -173,7 +175,7 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
                   // A structured (OBJECT) parameter isn't form-editable. A REQUIRED one
                   // blocks sending (validateParams flags it); flag that in the note.
                   <div key={param.name} style={{ ...hint, color: param.required ? commandStatusColor('FAILED') : css('muted-foreground') }}>
-                    {param.name}: {param.required ? 'required ' : ''}structured parameter — not supported here.
+                    {param.name}: {strings.structuredHint(!!param.required)}
                   </div>
                 ),
               )}
@@ -185,15 +187,15 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
                 aria-busy={pending}
                 onClick={send}
               >
-                {pending ? 'Sending…' : `Send ${commandLabel}`}
+                {pending ? strings.sending : strings.send(commandLabel ?? '')}
               </button>
 
               {!canWrite ? (
-                <div style={hint}>{NO_PERMISSION}</div>
+                <div style={hint}>{strings.noPermission}</div>
               ) : !hasSeam ? (
-                <div style={hint}>Commands aren’t available in this view.</div>
+                <div style={hint}>{strings.noSeam}</div>
               ) : !deviceToken ? (
-                <div style={hint}>No device is selected for this command.</div>
+                <div style={hint}>{strings.noDevice}</div>
               ) : null}
               {sendError ? (
                 <div role="alert" style={{ ...hint, color: commandStatusColor('FAILED') }}>
@@ -320,6 +322,7 @@ function CommandHistory({
   // blip never tears down the still-usable send form. Last-good rows stay on screen when
   // present; only an empty-and-errored history shows the notice.
   const empty = commands.length === 0;
+  const strings = commandStrings();
   const timeZone = useWidgetTimeZone();
   return (
     <div
@@ -333,7 +336,7 @@ function CommandHistory({
     >
       {empty ? (
         <div style={{ ...hint, textAlign: 'center', color: error ? commandStatusColor('FAILED') : css('muted-foreground') }}>
-          {error ? 'Couldn’t load command history.' : loading ? 'Loading…' : 'No commands issued yet.'}
+          {error ? strings.historyFailed : loading ? strings.loading : strings.empty}
         </div>
       ) : (
         <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -387,13 +390,6 @@ function StatusBadge({ status }: { status: string }) {
 // ── styles / helpers ─────────────────────────────────────────────────────
 
 const hint: CSSProperties = { fontSize: fontVar('xs'), color: css('muted-foreground') };
-
-// What a viewer is told when the platform could not decide the enqueue. It is fixed
-// prose on purpose: the thrown error's text describes in-cluster machinery, and a
-// dashboard is the surface most likely to be embedded outside the tenant's own console.
-const NO_PERMISSION = 'You don’t have permission to issue commands.';
-
-const SEND_FAILED = 'Couldn’t issue the command. Try again.';
 
 const inputStyle: CSSProperties = {
   width: '100%',

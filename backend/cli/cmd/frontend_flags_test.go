@@ -23,7 +23,7 @@ func TestTheFrontEndFlagsReachTheOptions(t *testing.T) {
 	if err := upgradeCmd.Flags().Set("drop-legacy-ingress", "true"); err != nil {
 		t.Fatal(err)
 	}
-	up := upgradeOptions("prod", nil, nil)
+	up := upgradeOptions("prod", nil, nil, nil)
 	if up.IngressController != "nginx" || !up.DropLegacyIngress {
 		t.Errorf("upgrade options = %q drop=%v", up.IngressController, up.DropLegacyIngress)
 	}
@@ -39,7 +39,7 @@ func TestTheFrontEndFlagsReachTheOptions(t *testing.T) {
 	}
 	// And off by default, in all three.
 	upgradeIngressController, upgradeDropLegacyIngress, installRemoveLegacy = "", false, false
-	if up := upgradeOptions("prod", nil, nil); up.IngressController != "" || up.DropLegacyIngress {
+	if up := upgradeOptions("prod", nil, nil, nil); up.IngressController != "" || up.DropLegacyIngress {
 		t.Errorf("the front-end flags default to %q/%v", up.IngressController, up.DropLegacyIngress)
 	}
 	if in, _ := installOptions(nil, bootstrap.RestorePlan{}, bootstrap.ImageSource{}); in.RemoveLegacyIngress {

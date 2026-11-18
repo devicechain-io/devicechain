@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/datatypes"
@@ -392,7 +393,7 @@ func TestUpdatingTheProfileNeverWritesTheDecoderColumn(t *testing.T) {
 			updates = append(updates, tx.Statement.SQL.String())
 		}
 	}))
-	_, err := f.api.UpdateDeviceProfile(f.ctx, "meter", &DeviceProfileUpdateRequest{})
+	_, err := f.api.UpdateDeviceProfile(f.ctx, "meter", &DeviceProfileUpdateRequest{Name: dcgraphql.OptionalStringOf("Renamed")})
 	require.NoError(t, err)
 	require.NotEmpty(t, updates, "the update statement was not observed")
 	for _, sql := range updates {

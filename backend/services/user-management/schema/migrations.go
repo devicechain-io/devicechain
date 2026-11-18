@@ -144,5 +144,6 @@ var (
 		// tenant with no published policy has agent actuation off.
 		NewAgentPolicyMigration(),
 		NewAgentActuationOffMigration(),
+		NewAgentActuationGenerationMigration(),
 	}
 )

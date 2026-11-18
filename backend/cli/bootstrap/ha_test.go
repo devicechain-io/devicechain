@@ -333,7 +333,7 @@ func TestHaNodeCapacityGuard(t *testing.T) {
 		{"single node without ha", false, nodes(1, 0, 0), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := schedulableShortfall(haFor(tc.ha), tc.nodes)
+			got := schedulableShortfall(haFor(tc.ha), tc.nodes, nil)
 			if tc.wantError && got == nil {
 				t.Fatal("the guard accepted a cluster that cannot place the servers one " +
 					"per node: the surplus sits Pending until the helm wait times out")

@@ -24,17 +24,18 @@ type AgentPolicy struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
-	TenantId           string  `gorm:"not null;size:128;uniqueIndex:idx_iam_agent_policies_tenant"`
-	Draft              *string `gorm:"type:jsonb"`
-	DraftUpdatedAt     *time.Time
-	DraftUpdatedBy     *string `gorm:"size:256"`
-	PublishedVersion   int     `gorm:"not null;default:0"`
-	TenantActuationOff bool    `gorm:"not null;default:false"`
-	ActuationOffAt     *time.Time
-	ActuationOffBy     *string `gorm:"size:256"`
-	OperatorSuspended  bool    `gorm:"not null;default:false"`
-	SuspendedAt        *time.Time
-	SuspendedBy        *string `gorm:"size:256"`
+	TenantId            string  `gorm:"not null;size:128;uniqueIndex:idx_iam_agent_policies_tenant"`
+	Draft               *string `gorm:"type:jsonb"`
+	DraftUpdatedAt      *time.Time
+	DraftUpdatedBy      *string `gorm:"size:256"`
+	ActuationGeneration int     `gorm:"not null;default:0"`
+	PublishedVersion    int     `gorm:"not null;default:0"`
+	TenantActuationOff  bool    `gorm:"not null;default:false"`
+	ActuationOffAt      *time.Time
+	ActuationOffBy      *string `gorm:"size:256"`
+	OperatorSuspended   bool    `gorm:"not null;default:false"`
+	SuspendedAt         *time.Time
+	SuspendedBy         *string `gorm:"size:256"`
 }
 
 func (AgentPolicy) TableName() string { return "iam_agent_policies" }
@@ -220,6 +221,7 @@ func (s *Store) SetAgentPolicySuspended(ctx context.Context, tenant string, susp
 		if err != nil {
 			return err
 		}
+		head.ActuationGeneration++
 		head.OperatorSuspended = suspended
 		if suspended {
 			now := time.Now().UTC()

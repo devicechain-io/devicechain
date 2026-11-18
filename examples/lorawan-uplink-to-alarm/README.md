@@ -142,6 +142,26 @@ every uplink:
 | Alarm clears without being authored | yes, at the first reading at or below 25 |
 | Decode failure (the frame on port 9, which no section accepts) | answered `202`; recorded as `DECODE_FAILED` (`no_section`) under `dcctl events failed`, nothing stored |
 
+## A command back down (optional)
+
+Three more files take the walkthrough one step further, to the
+[guide's step 12](https://docs.devicechain.io/guides/lorawan-uplink-to-alarm#12-send-a-command-back-down):
+the rule also sends the sensor a confirmed `set-setpoint` command, which goes back as a LoRaWAN
+downlink and succeeds when the device acknowledges it.
+
+| File | What it is |
+| --- | --- |
+| `lorawan-downlink.yaml` | The values overlay that switches the LoRaWAN downlink on: `dcctl bootstrap ... --enable-area outbound-connectors --values lorawan-downlink.yaml --dev-allow-egress <host address>`. |
+| `encoder.json` | The `set-setpoint` command's encoder: `setpoint` as a signed 16-bit number in tenths, `mode` in three bits, on port 12, confirmed. |
+| `rule-with-command.json` | The rule with a `sendCommand` action beside the alarm, the command waiting two minutes for the device. |
+
+The simulator plays ChirpStack's queue endpoint with `--lorawan-downlink-listen 127.0.0.1:8085`
+(the API key in `DC_SIM_LORAWAN_API_KEY`), and after the device's next uplink posts the `txack` and
+`ack` reports. `--lorawan-ack nack` and `--lorawan-ack none` play a device that did not answer.
+Verified on a kind cluster built from this branch: the command went from `SENT` to `SUCCESSFUL`
+with `ack`, settled `TIMEOUT` (outcome unknown) at its deadline with `none`, and settled `TIMEOUT`
+(`NOT_ACKNOWLEDGED`) with `nack`.
+
 ## Things worth knowing
 
 1. **A published decoder takes up to a minute to be picked up** by `event-sources`. An uplink sent

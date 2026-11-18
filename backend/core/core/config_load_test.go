@@ -93,10 +93,27 @@ func TestLoadConfiguration_MalformedJSON(t *testing.T) {
 
 // Trailing data after the document is rejected.
 func TestLoadConfiguration_TrailingData(t *testing.T) {
-	cfg := &sampleConfig{}
-	err := LoadConfiguration([]byte(`{"Mode":"optional"} {"Mode":"required"}`), cfg)
+	for _, tc := range []struct {
+		name     string
+		document string
+	}{
+		{"closing bracket", `{}]`},
+		{"closing brace", `{} }`},
+		{"letter", `{}x`},
+		{"second object", `{} {}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := LoadConfiguration([]byte(tc.document), &plainConfig{})
 
-	assert.Error(t, err)
+			assert.ErrorContains(t, err, "trailing data after configuration document")
+		})
+	}
+}
+
+func TestLoadConfiguration_TrailingWhitespaceAccepted(t *testing.T) {
+	err := LoadConfiguration([]byte("{} \t\r\n\n"), &plainConfig{})
+
+	assert.NoError(t, err)
 }
 
 // A target implementing neither interface still decodes strictly.

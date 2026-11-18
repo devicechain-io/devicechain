@@ -14,7 +14,8 @@ import (
 var sizeUsage = "size preset for this instance: " + strings.Join(bootstrap.SizeNames(), ", ") +
 	". base (the default) is the standard sizing; perf-12k and perf-16k are the measured high-throughput shapes " +
 	"(one cluster without --ha, 12,000 and 16,000 events a second with event envelopes on) and need a " +
-	"multi-node cluster; compact is the cluster's own setting (dcctl install --size compact), " +
+	"multi-node cluster; perf-20k targets 20,000 events a second on the same shape with more broker CPU " +
+	"(throughput sizing, latency unvalidated); compact is the cluster's own setting (dcctl install --size compact), " +
 	"accepted here only on a compact cluster. Recorded on the instance and re-applied by every upgrade. " +
 	"A --values overlay, and an OpenTofu variable you state yourself, win over the preset"
 

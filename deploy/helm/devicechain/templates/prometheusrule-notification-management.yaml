@@ -1,0 +1,26 @@
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: notification-management
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.notification-management
+      rules:
+        # A 5m lookback with for: 10m excludes an isolated burst.
+        - alert: NotificationClearPickupFailing
+          expr: sum(rate(devicechain_notificationmanagement_escalation_scheduler_passes_total{namespace="{{ $ns }}", outcome="failed"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#notificationclearpickupfailing"
+            summary: "Notification escalation and clear pickup passes are failing"
+            description: "For 10 minutes, the notification scheduler has reported hard failures while re-paging alarms or delivering pending clear notifications. Clear notifications may be delayed even though escalation already stopped. Check notification-management logs for announcing pending clears failed, channel reachability and credentials, and database errors. Partial passes that deliver clears and leave a backlog for the next tick do not trigger this alert."
+{{- end }}

@@ -508,8 +508,8 @@ func TestAChallengeOutlivesNeitherItsFactorNorItsIdentity(t *testing.T) {
 // The set of data-plane codes is closed. A test pins it so a new code is a decision.
 func TestTheMfaErrorCodeSetIsClosed(t *testing.T) {
 	require.Equal(t, []string{"MFA_CHALLENGE", "MFA_REQUIRED", "MFA_ENROLLMENT_REQUIRED",
-		"MFA_CHALLENGE_EXPIRED", "MFA_ALREADY_ENROLLED", "MFA_NOT_ENROLLED"}, MfaCodes())
-	for _, err := range []error{ErrMfaRequired, ErrMfaEnrollmentRequired, ErrMfaChallengeExpired, ErrMfaAlreadyEnrolled, ErrMfaNotEnabled} {
+		"MFA_CHALLENGE_EXPIRED", "MFA_ALREADY_ENROLLED", "MFA_NOT_ENROLLED", "STEP_UP_SSO"}, MfaCodes())
+	for _, err := range []error{ErrMfaRequired, ErrMfaEnrollmentRequired, ErrMfaChallengeExpired, ErrMfaAlreadyEnrolled, ErrMfaNotEnabled, ErrStepUpSso} {
 		var coded *MfaError
 		require.True(t, errors.As(err, &coded))
 		require.Contains(t, MfaCodes(), coded.Code())

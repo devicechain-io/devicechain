@@ -68,7 +68,7 @@ func semanticTestApi(t *testing.T) (*Api, context.Context) {
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	require.NoError(t, db.AutoMigrate(&SemanticContext{}, &DeviceType{}, &AssetType{}, &AssetTypeVersion{},
 		&Asset{}, &AreaType{}, &CustomerType{}, &EntityRelationshipType{}, &DeviceProfile{},
-		&DeviceProfileVersion{}, &DeviceProfileActivation{}, &MetricDefinition{}, &CommandDefinition{},
+		&DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{}, &MetricDefinition{}, &CommandDefinition{},
 		&DetectionRule{}, &DetectionRuleScopeRef{}, &MaintenanceWindow{}))
 	return NewApi(&rdb.RdbManager{Database: db}), core.WithTenant(context.Background(), "acme")
 }
@@ -207,7 +207,7 @@ func TestEveryTypeFamilyBinds(t *testing.T) {
 	_, err = api.UpdateAreaType(ctx, "floor", &AreaTypeUpdateRequest{
 		SemanticTypes: dcgraphql.OptionalStringList{Set: true, Value: []string{"brick:Nope"}}})
 	requireRefusal(t, err, semantic.ErrUnknownTerm, "brick:Nope")
-	_, err = api.UpdateCustomerType(ctx, "org", &CustomerTypeUpdateRequest{
+	_, err = api.UpdateCustomerType(ctx, "org", nil, &CustomerTypeUpdateRequest{
 		SemanticTypes: dcgraphql.OptionalStringList{Set: true, Value: []string{"brick:Nope"}}})
 	requireRefusal(t, err, semantic.ErrUnknownTerm, "brick:Nope")
 	_, err = api.UpdateAssetType(ctx, "meter", &AssetTypeUpdateRequest{

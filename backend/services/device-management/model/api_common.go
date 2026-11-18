@@ -5,17 +5,48 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/entity"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // This file holds the uniform entity-relationship API (ADR-013). One set of
 // methods over the single EntityRelationship edge table replaces the per-family
 // relationship CRUD that previously duplicated this logic four times.
+
+// ErrDeviceAuthoredOwnership identifies a terminal refusal of device-authored graph ownership.
+var ErrDeviceAuthoredOwnership = errors.New("a device may not create an ownership (tracked) or containment relationship; assign devices with a claim code or the createEntityRelationship mutation")
+
+func refuseDeviceAuthoredRelationshipType(token string, tracked bool) error {
+	if tracked || token == ContainmentRelationshipType {
+		return fmt.Errorf("%w: relationship type %q", ErrDeviceAuthoredOwnership, token)
+	}
+	return nil
+}
+
+// RefuseDeviceAuthoredRelationshipType checks before an idempotency read or any write.
+// Reserved types need no provisioning; unknown tenant types retain normal not-found handling.
+func RefuseDeviceAuthoredRelationshipType(ctx context.Context, api interface {
+	EntityRelationshipTypesByToken(context.Context, []string) ([]*EntityRelationshipType, error)
+}, token string) error {
+	// The STORED type decides, reserved tokens included: an administrator can mark any type
+	// tracked, "member" among them, and a token-only answer would let a device keep asserting
+	// a type that has since become ownership. A reserved type not provisioned yet in the tenant
+	// is decided by the flag it would be created with.
+	types, err := api.EntityRelationshipTypesByToken(ctx, []string{token})
+	if err != nil {
+		return err
+	}
+	if len(types) > 0 {
+		return refuseDeviceAuthoredRelationshipType(token, types[0].Tracked)
+	}
+	return refuseDeviceAuthoredRelationshipType(token, token == AssignmentRelationshipType)
+}
 
 // CreateEntityRelationshipType creates a new relationship type.
 func (api *Api) CreateEntityRelationshipType(ctx context.Context,
@@ -49,6 +80,8 @@ func (api *Api) CreateEntityRelationshipType(ctx context.Context,
 // UpdateEntityRelationshipType applies a PARTIAL update to a relationship type: a
 // field the caller did not name keeps its stored value, an explicit null clears a
 // nullable one, and `tracked` — which has no nullable reading — refuses a null.
+// Only named columns are written; omitted fields remain untouched even when
+// another writer changes them after the read.
 func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	request *EntityRelationshipTypeUpdateRequest) (*EntityRelationshipType, error) {
 	matches, err := api.EntityRelationshipTypesByToken(ctx, []string{token})
@@ -65,62 +98,103 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
-	if tracked && !updated.Tracked {
-		if err := api.checkTrackedFlipCeiling(ctx, updated.ID); err != nil {
-			return nil, err
-		}
+
+	assignments := map[string]any{}
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(updated.Name)
 	}
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(updated.Description)
+	}
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err
 	}
-	updated.Metadata = metadataJSON
-	updated.SemanticPredicate, updated.SemanticInverse, err = api.bindPredicateOnUpdate(ctx,
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
+	predicate, inverse, err := api.bindPredicateOnUpdate(ctx,
 		request.SemanticPredicate, request.SemanticInverse, updated.SemanticPredicate, updated.SemanticInverse)
 	if err != nil {
 		return nil, err
 	}
 	flipped := tracked != updated.Tracked
-	updated.Tracked = tracked
-	if flipped {
-		// Flipping `tracked` makes every edge of the type ownership, or stops it being
-		// ownership (ADR-081): every device with an edge of the type is owed its new anchors,
-		// so the devices are read and their facts queued in the flip's own transaction, and
-		// the funnel then evicts their cached sets.
-		var queued ownershipQueued
-		err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-			if err := tx.Save(updated).Error; err != nil {
+	if request.Tracked.Set {
+		assignments["tracked"] = tracked
+	}
+	if request.SemanticPredicate.Set || request.SemanticInverse.Set {
+		assignments["semantic_predicate"] = predicate
+		assignments["semantic_inverse"] = inverse
+	}
+	if len(assignments) == 0 {
+		return updated, nil
+	}
+	write := func(tx *gorm.DB) error {
+		res := rdb.AdvancingFrom(tx, updated.UpdatedAt).Model(updated).Omit(clause.Associations).
+			Where("id = ?", updated.ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}
+	var queued ownershipQueued
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if request.Tracked.Set {
+			// Re-read the flag under UPDATE: a concurrent writer may have flipped it
+			// since the outer read. Device creates hold SHARE until their edge commits.
+			var current EntityRelationshipType
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", updated.ID).First(&current).Error; err != nil {
 				return err
 			}
+			flipped = tracked != current.Tracked
+			if tracked && !current.Tracked {
+				if err := refuseTrackingDeviceAuthoredEdges(tx, &current); err != nil {
+					return err
+				}
+				if err := checkTrackedFlipCeiling(tx, current.ID); err != nil {
+					return err
+				}
+			}
+		}
+		if err := write(tx); err != nil {
+			return err
+		}
+		if flipped {
+			// Queue new ownership facts in the flip's transaction, before eviction.
 			sources, err := sourceDevicesOnTx(tx, "relationship_type_id = ?", updated.ID)
 			if err != nil {
 				return err
 			}
 			queued, err = queueOwnershipOnTx(tx, sources)
 			return err
-		})
-		if err != nil {
-			return nil, err
 		}
-		api.evictRelationshipSources(ctx, queued)
-		return updated, nil
-	}
-	if err := api.RDB.DB(ctx).Save(updated).Error; err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	// The cached edges carry the type's own fields, so every device with an edge of this
-	// type has a stale set. Not bounded by a device list the caller named, so it is read
-	// from the edges.
-	sources := api.relationshipSourceDevices(ctx, "relationship_type_id = ?", updated.ID)
-	if api.CacheEvictor != nil && len(sources) > 0 {
-		// A rename or a description edit changes the cached edges' copy of the type and
-		// nobody's ownership, so it evicts without publishing a fact per device — on the
-		// built-in "assigned" type that would be one fact per assigned device in the tenant.
-		api.CacheEvictor.EvictRelationshipSources(ctx, sources)
+	if flipped {
+		api.evictRelationshipSources(ctx, queued)
+	} else {
+		// Cached edges carry the type's fields. A rename evicts those copies but
+		// changes nobody's ownership, so it needs no fact per source device.
+		sources := api.relationshipSourceDevices(ctx, "relationship_type_id = ?", updated.ID)
+		if api.CacheEvictor != nil && len(sources) > 0 {
+			api.CacheEvictor.EvictRelationshipSources(ctx, sources)
+		}
 	}
-	return updated, nil
+
+	matches, err = api.EntityRelationshipTypesById(ctx, []uint{updated.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // EntityRelationshipTypesById looks up relationship types by id.
@@ -154,6 +228,17 @@ func (api *Api) EntityRelationshipTypes(ctx context.Context,
 // which validates both the type and the entity's existence (ADR-013).
 func (api *Api) CreateEntityRelationship(ctx context.Context,
 	request *EntityRelationshipCreateRequest) (*EntityRelationship, error) {
+	if request.DeviceAuthored {
+		types, err := api.EntityRelationshipTypesByToken(ctx, []string{request.RelationshipType})
+		if err != nil {
+			return nil, err
+		}
+		if len(types) == 0 {
+			if err := refuseDeviceAuthoredRelationshipType(request.RelationshipType, request.RelationshipType == AssignmentRelationshipType); err != nil {
+				return nil, err
+			}
+		}
+	}
 	sourceId, err := api.ResolveEntityToken(ctx, request.SourceType, request.Source)
 	if err != nil {
 		return nil, fmt.Errorf("source: %w", err)
@@ -182,14 +267,10 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 	if len(rtmatches) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
-
-	// The asset hierarchy's structural contract (ADR-072) is enforced HERE as well
-	// as in SetAssetParent, because this generic mutation can create a "contains"
-	// edge directly. An invariant checked only in the convenience door is an
-	// invariant with a public bypass. No-op for every other relationship type.
-	if err := api.admitContainmentEdge(api.RDB.DB(ctx), request.RelationshipType,
-		request.SourceType, sourceId, request.TargetType, targetId); err != nil {
-		return nil, err
+	if request.DeviceAuthored {
+		if err := refuseDeviceAuthoredRelationshipType(request.RelationshipType, rtmatches[0].Tracked); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := api.checkTrackedCeiling(ctx, api.RDB.DB(ctx), rtmatches[0], request.SourceType, sourceId, 1); err != nil {
@@ -210,6 +291,22 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 		TargetToken:        request.Target,
 		RelationshipTypeId: rtmatches[0].ID,
 	}
+	if request.RelationshipType == ContainmentRelationshipType {
+		// Admission acquires the tenant's transaction-scoped hierarchy lock. The
+		// insert must use that transaction too, so a rival checks committed state.
+		err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := api.admitContainmentEdge(tx, request.RelationshipType,
+				request.SourceType, sourceId, request.TargetType, targetId); err != nil {
+				return err
+			}
+			return tx.Create(created).Error
+		})
+		if err != nil {
+			return nil, err
+		}
+		created.RelationshipType = *rtmatches[0]
+		return created, nil
+	}
 	if created.SourceType != string(entity.TypeDevice) {
 		if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
 			return nil, err
@@ -221,6 +318,17 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 	// device's queued ownership fact commit together.
 	var queued ownershipQueued
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if request.DeviceAuthored {
+			var current EntityRelationshipType
+			// SHARE conflicts with the flip's UPDATE lock until this edge commits.
+			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ?", rtmatches[0].ID).First(&current).Error; err != nil {
+				return err
+			}
+			if err := refuseDeviceAuthoredRelationshipType(current.Token, current.Tracked); err != nil {
+				return err
+			}
+			rtmatches[0] = &current
+		}
 		if err := tx.Create(created).Error; err != nil {
 			return err
 		}

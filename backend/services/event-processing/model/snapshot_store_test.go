@@ -197,7 +197,7 @@ func TestResetRefusesToClearACheckpointThatHasMovedOn(t *testing.T) {
 		t.Fatalf("successor save: %v", err)
 	}
 
-	err := store.Reset(ctx, "singleton", 40)
+	err := store.Reset(ctx, "singleton", 40, wm)
 	if !errors.Is(err, ErrResetRaced) {
 		t.Fatalf("Reset against a row that has moved returned %v, want ErrResetRaced", err)
 	}
@@ -225,16 +225,51 @@ func TestResetRefusesToClearACheckpointThatHasMovedOn(t *testing.T) {
 func TestResetClearsTheCheckpointItRead(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
-	wm := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	wm := time.Date(2026, 9, 4, 12, 0, 0, 123456000, time.UTC)
 
 	if err := store.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: 40, Watermark: wm, Payload: []byte("mine")}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := store.Reset(ctx, "singleton", 40); err != nil {
+	observed, ok, err := store.Load(ctx, "singleton")
+	if err != nil || !ok {
+		t.Fatalf("load observation: ok=%v err=%v", ok, err)
+	}
+	// Equal instants in different zones still match the database timestamp.
+	if err := store.Reset(ctx, "singleton", observed.StreamSeq, observed.Watermark.In(time.FixedZone("offset", 3600))); err != nil {
 		t.Fatalf("Reset against the row it read: %v", err)
 	}
 	if _, ok, err := store.Load(ctx, "singleton"); err != nil || ok {
 		t.Fatalf("the stale row survived its own reset: ok=%v err=%v", ok, err)
+	}
+}
+
+// An idle checkpoint can advance only the watermark. Reset must preserve that newer
+// floor even though the sequence still matches the caller's original observation.
+func TestResetRefusesWatermarkAdvanceAtEqualSeq(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	wm := time.Date(2026, 9, 25, 12, 0, 0, 123456000, time.UTC)
+	if err := store.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: 40, Watermark: wm, Payload: []byte("mine")}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	observed, ok, err := store.Load(ctx, "singleton")
+	if err != nil || !ok {
+		t.Fatalf("load observation: ok=%v err=%v", ok, err)
+	}
+	ahead := observed.Watermark.Add(time.Microsecond)
+	payload := []byte("successor idle checkpoint")
+	if err := store.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: observed.StreamSeq, Watermark: ahead, Payload: payload}); err != nil {
+		t.Fatalf("advance watermark: %v", err)
+	}
+	if err := store.Reset(ctx, "singleton", observed.StreamSeq, observed.Watermark); !errors.Is(err, ErrResetRaced) {
+		t.Errorf("Reset returned %v, want ErrResetRaced", err)
+	}
+	got, ok, err := store.Load(ctx, "singleton")
+	if err != nil || !ok {
+		t.Fatalf("successor checkpoint missing: ok=%v err=%v", ok, err)
+	}
+	if got.StreamSeq != observed.StreamSeq || !got.Watermark.Equal(ahead) || !bytes.Equal(got.Payload, payload) {
+		t.Fatalf("reset mutated successor checkpoint: seq=%d wm=%v payload=%q", got.StreamSeq, got.Watermark, got.Payload)
 	}
 }
 
@@ -243,7 +278,7 @@ func TestResetClearsTheCheckpointItRead(t *testing.T) {
 // a completed recovery into a term-build failure.
 func TestResetOfAnAbsentCheckpointIsANoOp(t *testing.T) {
 	store := newTestStore(t)
-	if err := store.Reset(context.Background(), "singleton", 0); err != nil {
+	if err := store.Reset(context.Background(), "singleton", 0, time.Time{}); err != nil {
 		t.Fatalf("Reset with no row present: %v", err)
 	}
 }
@@ -279,10 +314,10 @@ func TestSnapshotGuardsCompareEachPartitionOnlyAgainstItsOwnRow(t *testing.T) {
 	}
 
 	// Reset's compare-and-swap reads its own partition too: B's sequence is not A's.
-	if err := store.Reset(ctx, "a", 50); !errors.Is(err, ErrResetRaced) {
+	if err := store.Reset(ctx, "a", 50, wm); !errors.Is(err, ErrResetRaced) {
 		t.Fatalf("Reset(a, 50) returned %v, want ErrResetRaced: 50 is b's sequence, not a's", err)
 	}
-	if err := store.Reset(ctx, "b", 50); err != nil {
+	if err := store.Reset(ctx, "b", 50, wm); err != nil {
 		t.Fatalf("Reset(b, 50) against the row it read: %v", err)
 	}
 

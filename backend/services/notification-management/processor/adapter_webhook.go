@@ -20,9 +20,9 @@ import (
 )
 
 // webhookAdapter delivers a notification by POSTing its rendered JSON payload to an
-// HTTP endpoint (ADR-017). A Slack incoming-webhook URL is one such endpoint — the
-// payload carries a "text" field, which is what Slack renders — so Slack rides this
-// adapter rather than a vendor SDK. The channel's Config holds the URL/method/headers and
+// HTTP endpoint (ADR-017). The payload carries a plain "text" summary and raw structured
+// fields. Slack destinations should use the native Slack adapter for escaped formatting.
+// The channel's Config holds the URL/method/headers and
 // states `auth` (none | bearer | header); the channel's Secret must agree with it, and
 // httpsink.Send refuses a channel whose secret does not (terminally — see deliverWithRetry).
 // Delivery tolerates invalid stored console links through model.ParseWebhookConfigForDelivery. The outbound

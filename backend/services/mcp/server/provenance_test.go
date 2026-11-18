@@ -32,7 +32,7 @@ import (
 // freeTextNames are JSON member names that, on a top-level string, mean the field is probably
 // text somebody chose. Tagging one platform or id is rejected.
 var freeTextNames = map[string]bool{
-	"name": true, "description": true, "externalId": true, "error": true, "message": true,
+	"rationale": true, "name": true, "description": true, "externalId": true, "error": true, "message": true,
 	"unit": true, "label": true, "title": true, "comment": true, "note": true, "reason": true,
 	"text": true, "parameterSchema": true, "acknowledgedBy": true, "alarmKey": true,
 	"metricKey": true, "commandKey": true, "value": true,
@@ -179,16 +179,24 @@ func sourceMismatches(v reflect.Value, path string) []string {
 				ft = ft.Elem()
 			}
 			if ft == markedType {
-				m := fv
-				if m.Kind() == reflect.Pointer {
-					if m.IsNil() {
-						continue
+				var check func(reflect.Value)
+				check = func(m reflect.Value) {
+					switch m.Kind() {
+					case reflect.Pointer:
+						if !m.IsNil() {
+							check(m.Elem())
+						}
+					case reflect.Slice, reflect.Array:
+						for j := 0; j < m.Len(); j++ {
+							check(m.Index(j))
+						}
+					default:
+						if got, want := m.FieldByName("Source").String(), f.Tag.Get("prov"); got != want {
+							out = append(out, path+"."+f.Name+": marked as "+got+", field is "+want)
+						}
 					}
-					m = m.Elem()
 				}
-				if got, want := m.FieldByName("Source").String(), f.Tag.Get("prov"); got != want {
-					out = append(out, path+"."+f.Name+": marked as "+got+", field is "+want)
-				}
+				check(fv)
 				continue
 			}
 			out = append(out, sourceMismatches(fv, path+"."+f.Name)...)
@@ -199,7 +207,7 @@ func sourceMismatches(v reflect.Value, path string) []string {
 
 func catalogOf(t *testing.T) *Catalog {
 	t.Helper()
-	_, c := newServer(testClient("http://unused.invalid"))
+	_, c := newServer(testClient("http://unused.invalid"), WithActuation(true))
 	return c
 }
 
@@ -320,7 +328,7 @@ func TestEveryToolDescriptionStatesTheUntrustedContract(t *testing.T) {
 
 // register is idempotent about the sentence: a description that already says it is not told twice.
 func TestRegisterDoesNotRepeatTheNotice(t *testing.T) {
-	s, c := newServer(testClient("http://unused.invalid"))
+	s, c := newServer(testClient("http://unused.invalid"), WithActuation(true))
 	_ = s
 	register(mcp.NewServer(&mcp.Implementation{Name: "x", Version: "0"}, nil), c,
 		&mcp.Tool{Name: "already_says_it", Description: "Reads a thing. " + untrustedNotice},
@@ -511,6 +519,12 @@ func TestASourceMismatchIsReported(t *testing.T) {
 	if len(sourceMismatches(reflect.ValueOf(&out), "out")) == 0 {
 		t.Fatal("a Marked with the wrong source was not reported")
 	}
+	proposal := Proposal{Untrusted: &ProposalUntrusted{
+		OtherTargets: []*Marked{{Value: "free text", Source: SourceOperator}},
+	}}
+	if len(sourceMismatches(reflect.ValueOf(proposal), "proposal")) == 0 {
+		t.Fatal("a Marked list element with the wrong source was not reported")
+	}
 }
 
 // ---- registerAction ----
@@ -528,52 +542,27 @@ func panicMessage(f func()) (msg string) {
 	return ""
 }
 
-// TestRegisterActionPanicsWhenFlagOff: with the instance flag off, the only door an action tool
-// may use refuses, before anything is added to the server or the catalog.
-func TestRegisterActionPanicsWhenFlagOff(t *testing.T) {
-	s := mcp.NewServer(&mcp.Implementation{Name: "x", Version: "0"}, nil)
-	c := NewCatalog()
-	h := func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, struct{}, error) {
-		return nil, struct{}{}, nil
-	}
-	msg := panicMessage(func() {
-		registerAction(s, c, &mcp.Tool{Name: "acknowledge_alarm", Description: "x"},
-			ActionRisk{Impact: ImpactNormal, Reversible: true, Discloses: "acks an alarm"}, h)
-	})
-	if !strings.Contains(msg, errActuationDisabled) {
-		t.Fatalf("registerAction with the flag off panicked with %q, want the actuation-disabled refusal", msg)
-	}
-	if len(c.Names()) != 0 {
-		t.Errorf("the refusal came AFTER a side effect: catalog holds %v", c.Names())
-	}
-}
-
-// Even with the flag flipped, no action is built in this release, and that fails loudly with its
-// own message rather than returning as though the tool were registered.
-func TestRegisterActionFailsLoudlyEvenWhenTheFlagIsOn(t *testing.T) {
-	saved := actuationEnabled
-	actuationEnabled = true
-	t.Cleanup(func() { actuationEnabled = saved })
-	s := mcp.NewServer(&mcp.Implementation{Name: "x", Version: "0"}, nil)
-	c := NewCatalog()
-	msg := panicMessage(func() {
-		registerAction(s, c, &mcp.Tool{Name: "acknowledge_alarm"}, ActionRisk{},
-			func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, struct{}, error) {
-				return nil, struct{}{}, nil
-			})
-	})
-	if !strings.Contains(msg, errActionsNotBuilt) {
-		t.Fatalf("panicked with %q, want the not-built refusal", msg)
-	}
-	if len(c.Names()) != 0 {
-		t.Errorf("a side effect preceded the refusal: %v", c.Names())
+func TestRegisterActionContract(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		s := mcp.NewServer(&mcp.Implementation{Name: "x", Version: "0"}, nil)
+		c := NewCatalog()
+		h := func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, struct{}, error) {
+			return nil, struct{}{}, nil
+		}
+		registerAction(s, c, &mcp.Tool{Name: "proposal"}, nil, ActionRisk{Impact: ImpactNormal, Discloses: "stores a proposal"}, enabled, h)
+		if got := len(c.Names()); (got == 1) != enabled {
+			t.Fatalf("enabled=%v, catalog=%v", enabled, c.Names())
+		}
+		if msg := panicMessage(func() { registerAction(s, c, &mcp.Tool{Name: "invalid"}, nil, ActionRisk{}, enabled, h) }); msg == "" {
+			t.Fatal("invalid risk did not panic")
+		}
 	}
 }
 
 // No tool in the catalog is anything but a read: every one declares a READ exposure and the
 // served listing says so. (The write-side guard is registerAction above; this is the catalog.)
-func TestNoServedToolIsAnAction(t *testing.T) {
-	c := catalogOf(t)
+func TestDefaultCatalogContainsOnlyReads(t *testing.T) {
+	_, c := newServer(NewGraphQLClient())
 	for _, name := range c.Names() {
 		d, _ := c.Declared(name)
 		if d.Annotations == nil || !d.Annotations.ReadOnlyHint {

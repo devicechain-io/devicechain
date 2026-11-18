@@ -116,6 +116,28 @@ describe('with grouping off', () => {
 });
 
 describe('the tab strip', () => {
+  it.each([
+    ['en', null, 'All'],
+    ['es', null, 'Todas'],
+    ['en', 'sensor', 'Sensor'],
+    ['es', 'sensor', 'Sensor'],
+  ] as const)('makes the read-only %s panel for %s focusable with its tab name', (locale, selected, name) => {
+    document.documentElement.lang = locale;
+    render(<AlarmTable widget={widget()} data={stateWith(TABS, {}, selected)} />);
+    // A type tab's accessible name also includes its active-alarm badge.
+    const accessibleName = new RegExp(`^${name}(?: |$)`);
+    const panel = screen.getByRole('tabpanel', { name: accessibleName });
+    const selectedTab = screen.getByRole('tab', { name: accessibleName, selected: true });
+    expect(document.getElementById(panel.getAttribute('aria-labelledby')!)).toBe(selectedTab);
+    expect(selectedTab.getAttribute('aria-controls')).toBe(panel.id);
+    expect(panel).toBe(screen.getByRole('table').parentElement);
+    expect(panel.style.overflow).toBe('auto');
+    expect(within(panel).queryByRole('button')).toBeNull();
+    expect(panel.tabIndex).toBe(0);
+    panel.focus();
+    expect(document.activeElement).toBe(panel);
+  });
+
   it('shows All first, then a tab per device type labelled by NAME', () => {
     render(<AlarmTable widget={widget()} data={stateWith(TABS)} />);
     const tabs = within(screen.getByRole('tablist')).getAllByRole('tab');

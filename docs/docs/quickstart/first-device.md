@@ -18,18 +18,26 @@ Budget about half an hour, most of it waiting for the bootstrap.
 
 :::note What this page assumes
 You need `dcctl` plus four tools on your `PATH`: `docker`, `kubectl`,
-`terraform` also works). You do not need a cluster in advance. The details are under
-`terraform` also works). You do not need a cluster in advance. The details are under
-[Prerequisites](#prerequisites) below.
+[`kind`](https://kind.sigs.k8s.io/) and [OpenTofu](https://opentofu.org/) **1.10 or later** (the
+`tofu` binary; `terraform` 1.10 or later also works). You do not need a cluster in advance. The
+details are under [Prerequisites](#prerequisites) below. The commands after the download step are
+written for a bash shell; on Windows, run them in Git Bash or WSL.
 :::
 
 ## Prerequisites {#prerequisites}
 
 `dcctl install` and `dcctl bootstrap` each run a preflight first, and **stop** if one of the four
 tools is missing. A gap costs you the first ten seconds rather than ten minutes.
+
+- **OpenTofu 1.10 or later.** The preflight checks that `tofu` (or `terraform`) is there, but not
+  its version, and an older one fails part-way through `dcctl install`, when it loads the
+  infrastructure configuration. `tofu version` prints yours.
+- **Room for the cluster.** The preflight warns when Docker has fewer than 4 CPUs or less than
+  8 GiB of memory, and needs 40 GiB of free disk for images and database volumes. On Docker
+  Desktop, set these under **Settings → Resources**. Step 1 installs with `--compact`, which
+  lowers what every pod asks for so that the instance fits a laptop.
 - You do not need the `helm` command. `dcctl` carries the chart inside itself and installs it
   through Helm's Go library, and the preflight does not check for the binary.
-  Go library rather than the command, but the preflight checks for the binary regardless.
 - `ko` and `cloud-provider-kind` are only warnings. You need `ko` solely to build images from
   source (`--build`).
 - No cluster is needed in advance. `dcctl install local` looks for a kind cluster named
@@ -64,7 +72,7 @@ the flags in step 1 produce.
 as `dcctl_<version>_<os>_<arch>`: a `.tar.gz` for Linux and macOS, a `.zip` for Windows, with
 `<os>` one of `linux`, `darwin` or `windows` and `<arch>` one of `amd64` or `arm64`. The release's
 `checksums.txt` lists the SHA-256 digest of each. `<version>` is the release without its leading
-`v` (`0.27.0` for the release tagged `v0.27.0`).
+`v` (`1.6.0` for the release tagged `v1.6.0`).
 
 On Linux or macOS:
 
@@ -95,9 +103,15 @@ the release's signatures as well, see [Verifying releases](../deployment/verifyi
 Prepare the cluster once, then create the instance on it:
 
 ```bash
-dcctl install local
+dcctl install local --compact
 dcctl bootstrap local devicechain --host localhost --no-tls
 ```
+
+`--compact` sizes the cluster for a laptop: lower resource requests, no monitoring stack, and no
+cert-manager, so no database backups. Without it, the services that handle events alone request
+about 4 CPU, and a pod that does not fit stays `Pending` until the install times out. On a machine
+with room to spare, leave it out to get monitoring and backups. The choice belongs to the cluster
+and cannot be changed while an instance runs on it. See [`--compact`](../deployment/bootstrap.md#--compact).
 
 :::note In a script or CI job
 `dcctl bootstrap` asks for a passphrase to seal the root-key escrow artifact. With no terminal to
@@ -122,7 +136,8 @@ to connect to it.
 
 `dcctl install` creates the kind cluster and installs what every instance on it shares: the
 DeviceChain operator and its custom resource definitions, the relational database, the
-CloudNativePG operator, cert-manager, monitoring and ingress. You run it once per cluster, and
+CloudNativePG operator and ingress, plus cert-manager and monitoring when it runs without
+`--compact`. You run it once per cluster, and
 `dcctl bootstrap` refuses on a cluster where it has not completed. See
 [Install the cluster](../deployment/bootstrap.md#install).
 
@@ -185,9 +200,9 @@ step.
 
 To see the tenant in the console, sign out of the superuser and sign in as
 `demo@sim.devicechain.local` with that password. This is the identity that opens the tenant
-console. If you would rather not use `dcctl sim create`, create the identity with the
-`createIdentity` mutation on the instance admin API and then grant it the tenant-admin role in the
-tenant with `addMembership`.
+console. If you would rather not use `dcctl sim create`, create the tenant with the
+`createTenant` mutation on the instance admin API, the identity with `createIdentity`, and then
+grant it the tenant-admin role in the tenant with `addMembership`.
 
 :::tip Borrowed from the simulator
 `dcctl sim create` is the first half of the [simulator](#where-to-go-next) workflow. It is used
@@ -314,9 +329,7 @@ The path is `/{instanceId}/{tenant}/events`. `devicechain` is the instance from 
 `sim-demo` is the tenant from step 2. A `404` here means the **instance id** is wrong, because the
 route exists only under this instance's own id.
 
-A wrong **tenant** does not return `404`. Any well-formed tenant name is accepted with `202`,
-whether or not a tenant of that name exists. The event is dropped further downstream, and nothing
-in the response says so. If a `202` produces no data, check the tenant name before anything else.
+A wrong **tenant** does not return `404`. On a normally wired instance, an authoritative unknown-tenant result or a rejected credential returns `401` with `{"error":"unauthorized"}` before publication. These checks fail open when their validation dependencies cannot determine the answer, so `202` confirms queueing, not successful tenant and credential validation or completed processing.
 
 Send a few more readings with different values, so there is a line to look at rather than a
 point:
@@ -364,7 +377,8 @@ You now have a device end to end: registered, credentialed, reporting and querya
 | `404` from the ingest `POST` | The **instance id** in the path is wrong. It is `devicechain` unless you changed it. A wrong tenant does not produce this. |
 | Connection refused on `:8081` | The port-forward in step 5 is not running. |
 | `400` from the ingest `POST` | A bare number instead of a string, readings not wrapped in `entries`, or a tenant segment that is not a valid token. |
-| `202`, but nothing appears | Either the **tenant** does not exist (a well-formed name is accepted whether or not it names anything), or the credential did not match. `credentialId` in the body must be exactly the one you created in step 4. |
+| Ingest `POST` returns `401` | The tenant is authoritatively unknown or the credential was rejected. Check the tenant and the credential from step 4; both cases return the same unauthorized body. |
+| `202`, but nothing appears | Queueing succeeded; processing is asynchronous. Check processing diagnostics and the tenant and credential from step 4. Validation checks fail open when their dependencies cannot determine the answer. |
 | `429` from the ingest `POST` | The tenant is over its ingest ceiling: you are sending more readings per second than its tier allows. The event was not accepted. The response carries a `Retry-After` header, so back off and send it again. |
 | `503` with a `Retry-After` header from the ingest `POST` | The platform is refusing new events for every tenant ([backpressure](../deployment/observability.md#ingest-backpressure)). The event was **not** stored. Wait the number of seconds in `Retry-After` (10) and send it again. `curl -i` prints the response headers. |
 | `503` without a `Retry-After` header from the ingest `POST` | The event could not be handed to the stream, and it **may** have been stored anyway. Send it again, but a resend stores a second copy unless the event carries an `altId` and an `occurredTime` (see [quality of service](../guides/connecting-a-device.md#quality-of-service)). |
@@ -372,6 +386,58 @@ You now have a device end to end: registered, credentialed, reporting and querya
 
 `202`, `400` and `404` are terminal for that request: do not send it again unchanged. Retry a `429`
 and either kind of `503`, as described above.
+
+## Next: an alarm and a command {#next-an-alarm-and-a-command}
+
+Keep using `sensor-001` in `sim-demo`, signed in as `demo@sim.devicechain.local`. The device
+created in step 4 has no profile: it stores readings, but has no detection rules or declared
+commands. Refresh `DC_TOKEN` with step 3 if it has expired.
+
+### Raise your first alarm {#first-alarm}
+
+1. Under **Devices → Device Profiles**, create a profile with token `temp-probe-profile`, name
+   **Temperature probe profile** and category **sensor**. In **Metrics**, add a metric with token
+   and key `temperature`, data type **Double** and unit `Cel`.
+2. Under **Devices → Device Types**, open `temp-probe`. On **Profile**, attach
+   `temp-probe-profile`. See [Device types and profiles](../user-guide/device-types-and-profiles.md).
+3. On the profile's **Detection Rules** tab, choose **New detection rule → Form**. Set token
+   `temperature-high`, name **Temperature high**, type **Threshold**, severity **Warning** and
+   **Enabled**. Set the condition to `temperature > 25` and add a **Raise alarm** action with alarm
+   key `temperature-high`. Save the rule, then **Publish** from **Versions**. A saved draft does
+   not run. See [Detection rules](../user-guide/detection-rules.md).
+4. Repeat the HTTP request in step 6 with `"temperature":"30.0"`; the port-forward from step 5
+   must still be running. Under **Monitor → Alarms**,
+   find the active alarm for `sensor-001`. Send `"temperature":"21.5"` to clear it. Send these new
+   readings after publication; old readings are not replayed automatically.
+
+### Send your first command {#first-command}
+
+1. On the same profile's **Commands** tab, add a command with token and command key `identify`,
+   name **Identify**, impact **Normal** and no parameter schema. **Publish** the profile again.
+2. The HTTP `curl` in step 6 cannot receive commands. Before sending one, follow
+   [Receiving commands](../guides/connecting-a-device.md#receiving-commands) to start an MQTT
+   subscriber (install the Mosquitto clients and use the instance CA as described in that guide).
+   Use host `localhost`, client id `devicechain:sim-demo:sensor-001:sub`, username
+   `sim-demo:$DC_CRED_ID` (expand the shell variable), no password (an `ACCESS_TOKEN`
+   credential connects with the username alone; a connect that also sends a password is checked
+   as an `MQTT_BASIC` credential and refused), and topic `devicechain/sim-demo/device-commands/sensor-001`. Keep it connected. For local `localhost` connections, follow the guide's TLS hostname instructions as well.
+3. Issue this harmless test command on the tenant API:
+
+```bash
+curl -s -X POST http://localhost/api/command-delivery/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"mutation { createCommand(request: {token: \"first-identify\", deviceToken: \"sensor-001\", name: \"identify\", payload: \"{}\"}) { command { token status } rejection { code reason } } }"}'
+```
+
+4. Check `rejection`: it must be null and `command` must be present. Read the delivery envelope
+   in the subscriber. Follow [Responding to a command](../guides/connecting-a-device.md#responding-to-a-command)
+   to publish `success: true` on `devicechain/sim-demo/command-responses/sensor-001`, using the
+   same MQTT credentials, a different client-id suffix, and the envelope's actual `token` and
+   `dispatchNonce`. This acknowledges the test; no physical device acts.
+5. On `sensor-001`'s **Commands** tab, check that `first-identify` reaches **SUCCESSFUL**.
+   Without a response it remains **SENT** until timeout; without a receiving connection it may
+   remain **HELD**. [Sending a command](../guides/sending-commands.md) explains refusals, polling
+   and cancellation. To run the test again as a new command, choose a new command token.
 
 ## Where to go next {#where-to-go-next}
 
@@ -395,6 +461,15 @@ and either kind of `503`, as described above.
 
   Then control it with `dcctl sim status demo`, `dcctl sim stop demo` and `dcctl sim start demo`.
   The simulator reaches the same ingest endpoint, so it needs the port-forward from step 5 too.
+
+  The `demo` sim runs the default scenario, which sends readings but declares no detection rules,
+  so it raises no alarms. For a scenario that does, create a second sim with
+  `dcctl sim create building --manifest buildingpulse` and run it with `dcctl sim run building`:
+  twelve thermostats whose temperature rises above and falls back below 30, raising and clearing
+  `bp-over-temp` alarms under **Monitor → Alarms** in the tenant `sim-building`. Sign in as
+  `building@sim.devicechain.local`, with the `simPassword` from `~/.devicechain/sims/building.json`,
+  to see them. Interrupt the first `dcctl sim run` (Ctrl+C) before you start the second, since both
+  serve the same control port.
 
 - **[Feature tour](./feature-tour.md)**: carry on from here to a dashboard, a rule that raises an
   alarm and sends a command, the device's answer, and a customer user who sees only their own

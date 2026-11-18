@@ -225,7 +225,7 @@ func customerTypeFamily() putest.Family[*Api] {
 		},
 		NewRequest: func() any { return new(CustomerTypeUpdateRequest) },
 		Update: func(api *Api, ctx context.Context, token string, req any) error {
-			_, err := api.UpdateCustomerType(ctx, token, req.(*CustomerTypeUpdateRequest))
+			_, err := api.UpdateCustomerType(ctx, token, nil, req.(*CustomerTypeUpdateRequest))
 			return err
 		},
 		Fields: append(brandedFields(
@@ -482,7 +482,7 @@ func deviceFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:  "device",
 		Token: "d-1",
-		Migrate: []any{&Device{}, &DeviceAlias{}, &IntegrationUnregisteredDevice{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
+		Migrate: []any{&Device{}, &DeviceAlias{}, &IntegrationUnregisteredDevice{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &DeviceProfileActivation{},
 			&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{seededTypeToken, otherTypeToken} {
@@ -580,7 +580,7 @@ func deviceTypeFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:  "deviceType",
 		Token: "dt-1",
-		Migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
+		Migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &DeviceProfileActivation{},
 			&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{},
 			&MaintenanceWindow{}, &SemanticContext{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
@@ -1483,7 +1483,7 @@ func entityRelationshipTypeFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "entityRelationshipType",
 		Token:   "ert-1",
-		Migrate: []any{&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}, &SemanticContext{}},
+		Migrate: []any{&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &SemanticContext{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			seedSemanticContext(t, api, ctx)
 			if _, err := api.CreateEntityRelationshipType(ctx, &EntityRelationshipTypeCreateRequest{

@@ -152,13 +152,16 @@ func (s *Service) CreateRole(ctx context.Context, in RoleInput) (*iam.Role, erro
 // the role and says nothing about authorities must still leave a valid role behind.
 // Validating first, then mutating, then writing is what makes an unknown authority
 // refuse the whole update rather than half-apply it.
-func (s *Service) UpdateRole(ctx context.Context, scope, token string, request *RoleUpdateRequest) (*iam.Role, error) {
+func (s *Service) UpdateRole(ctx context.Context, scope, token string, request *RoleUpdateRequest, expectedUpdatedAt *string) (*iam.Role, error) {
 	rs, err := parseScope(scope)
 	if err != nil {
 		return nil, err
 	}
 	r, err := s.loadRole(ctx, rs, token)
 	if err != nil {
+		return nil, err
+	}
+	if err := rdb.RefuseIfMoved(r.UpdatedAt, expectedUpdatedAt, iam.ErrRoleConflict); err != nil {
 		return nil, err
 	}
 	authorities := request.Authorities.ApplyTo(r.Authorities)
@@ -168,7 +171,12 @@ func (s *Service) UpdateRole(ctx context.Context, scope, token string, request *
 	r.Name = request.Name.ApplyToNullString(r.Name)
 	r.Description = request.Description.ApplyToNullString(r.Description)
 	r.Authorities = authorities
-	if err := s.iam.UpdateRole(ctx, r); err != nil {
+	if expectedUpdatedAt != nil {
+		err = s.iam.SaveRoleIfUnmoved(ctx, r)
+	} else {
+		err = s.iam.UpdateRole(ctx, r)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return s.iam.CatalogueRoleByScopeToken(ctx, rs, token)
@@ -660,14 +668,43 @@ func ParseConfigJSON(s *string) (map[string]any, error) {
 	return cfg, nil
 }
 
-// SetTenantEnabled enables or disables a tenant.
+// SetTenantEnabled enables or disables a tenant and bumps its generation atomically.
+// Every call bumps, even with an unchanged value. During a rolling upgrade, an old
+// pod's re-enable after a new pod's disable does not bump and leaves the fence closed
+// (fail closed); repeating the re-enable through a new pod remedies this.
+// A tenant whose purge has begun is refused with ErrTenantDeleted: toggling it would
+// bump the actuation generation and could create a policy-head row in a tenant being
+// erased. The store re-checks under the tenant row lock, so a purge that begins
+// between the load and the write is refused too.
 func (s *Service) SetTenantEnabled(ctx context.Context, token string, enabled bool) (*iam.Tenant, error) {
 	t, err := s.loadTenant(ctx, token)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.iam.SetTenantEnabled(ctx, t, enabled); err != nil {
+	if t.PurgeState.Deleted() {
+		return nil, ErrTenantDeleted
+	}
+	// Refuse unwired notification BEFORE the write, so a misconfigured service changes nothing.
+	if err := s.requireTenantActuation(); err != nil {
 		return nil, err
+	}
+	gen, err := s.iam.SetTenantEnabledAndBumpGeneration(ctx, t, enabled)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrTenantNotFound
+	}
+	if errors.Is(err, iam.ErrTenantPurging) {
+		return nil, ErrTenantDeleted
+	}
+	if err != nil {
+		return nil, err
+	}
+	// The kill carries the disabling transaction's generation, so a later re-enable
+	// reopens the fence with its strictly greater generation regardless of publish order.
+	// Both writes stay committed on notification failure; repeating a disable resends.
+	if !enabled && s.tenantActuation != nil {
+		if err := s.tenantActuation.TenantDisabled(ctx, token, gen); err != nil {
+			return nil, err
+		}
 	}
 	return s.iam.TenantByToken(ctx, token)
 }
@@ -696,6 +733,9 @@ func (s *Service) DeleteTenant(ctx context.Context, token string) (bool, error) 
 		return false, err
 	}
 	if t.PurgeState.Deleted() {
+		if t.PurgeState == iam.PurgePurging {
+			return false, s.notifyTenantPurgeBegan(ctx, token)
+		}
 		return false, nil
 	}
 	n, err := s.iam.CountMembershipsInTenant(ctx, token)
@@ -705,10 +745,28 @@ func (s *Service) DeleteTenant(ctx context.Context, token string) (bool, error) 
 	if n > 0 {
 		return false, ErrTenantHasMemberships
 	}
+	if err := s.requireTenantActuation(); err != nil {
+		return false, err
+	}
 	if err := s.iam.BeginTenantPurge(ctx, t, time.Now().UTC()); err != nil {
 		return false, err
 	}
+	// Purge is committed even if notification fails. The purging retry path above
+	// resends the kill; GraphQL surfaces the error so the operator can repeat it.
+	if err := s.notifyTenantPurgeBegan(ctx, token); err != nil {
+		return false, err
+	}
 	return true, nil
+}
+
+func (s *Service) notifyTenantPurgeBegan(ctx context.Context, token string) error {
+	if err := s.requireTenantActuation(); err != nil {
+		return err
+	}
+	if s.tenantActuation != nil {
+		return s.tenantActuation.TenantPurgeBegan(ctx, token)
+	}
+	return nil
 }
 
 // TierInput is the data to create a tenant tier (ADR-065). Config is the settings

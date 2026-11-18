@@ -45,6 +45,7 @@ names the missing key.`,
 }
 
 func init() {
+	registerEpisodeFlag(simCreateCmd.Flags())
 	simCreateCmd.Flags().Int64("seed", 1, "deterministic generation seed for the sim's populations")
 	simCreateCmd.Flags().String("host-header", "", hostHeaderFlagHelp)
 	simCreateCmd.Flags().String("ingress", "", "device-plane HTTP ingress base URL (default http(s)://<server>:8081)")
@@ -109,12 +110,23 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	adminEmail, _ := cmd.Flags().GetString("admin-email")
 	tls, _ := cmd.Flags().GetBool("tls")
 	controlAddr, _ := cmd.Flags().GetString("control-addr")
+	if !cmd.Flags().Changed("control-addr") {
+		var err error
+		controlAddr, err = sim.NextControlAddr(name)
+		if err != nil {
+			return err
+		}
+	}
 	ingress, _ := cmd.Flags().GetString("ingress")
 	mqttBroker, _ := cmd.Flags().GetString(flagMqttBroker)
 	mqttInsecure := resolveMqttInsecure(cmd.Flags(), tls)
 	seed, _ := cmd.Flags().GetInt64("seed")
 	manifestId, _ := cmd.Flags().GetString("manifest")
 	if err := sim.ValidateManifestId(manifestId); err != nil {
+		return err
+	}
+	episode, err := resolveEpisode(cmd.Flags(), manifestId)
+	if err != nil {
 		return err
 	}
 	tier, _ := cmd.Flags().GetString("tier")
@@ -219,6 +231,7 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	rec := &sim.Record{
+		Episode:     episode,
 		Name:        name,
 		Tenant:      tenant,
 		SimEmail:    email,
@@ -239,6 +252,7 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	path, _ := sim.RecordPath(name)
 
 	fmt.Printf("✅ sim %q created — tenant %q, scoped identity %q\n\n", name, tenant, email)
+	fmt.Printf("Control address: %s\n\n", controlAddr)
 	if hostHeader != "" {
 		fmt.Printf("ℹ️  the sim reaches %s presenting %q as the Host and TLS server name the Gateway routes on.\n\n",
 			server, hostHeader)

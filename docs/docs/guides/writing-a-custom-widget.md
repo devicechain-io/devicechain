@@ -340,7 +340,10 @@ The setting is off by default and changes nothing for a host that does not call 
 ## Interactions and the trust model
 
 `interactions` lists the host callbacks the widget uses: `alarmActions` (acknowledge and clear, alarm
-channel only), `commandSend` (control channel only), `selection` and `candidates`. The host supplies
+channel only), `commandSend` (control channel only), `selection` and `candidates`. Read selection and candidates with `useWidgetSelect()` and `useWidgetCandidates()`;
+these hooks may return undefined. The `actions` prop supplies alarm and command writes;
+`sendCommand` is optional and returns a `CommandDispatch` (`sent` or `rejected`), so
+feature-detect it and inspect the returned status. The host supplies
 only the callbacks you declared, further limited to what the host supports and what the viewer is
 allowed to do. A widget with no callback behaves as read-only. The server stays authoritative: an
 action the viewer may not take is refused by the server, and the refusal reaches your component.

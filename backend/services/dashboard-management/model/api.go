@@ -8,10 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -24,9 +26,54 @@ import (
 // keeps a single tenant from exhausting shared storage with an oversized document.
 const maxDefinitionBytes = 1 << 20
 
+// maxDashboardVersions bounds immutable history per dashboard. Capacity is a row
+// count, independent of the monotonic version numbers (history may be sparse).
+const maxDashboardVersions = 1000
+
+// maxDashboardsPerTenant bounds the live dashboards stored for one tenant.
+const maxDashboardsPerTenant = 10000
+
+// ErrDashboardLimit refuses only creation; existing dashboards remain usable.
+var ErrDashboardLimit = &dashboardLimitError{}
+
+type dashboardLimitError struct{}
+
+func (*dashboardLimitError) Error() string {
+	return fmt.Sprintf("tenant has reached the limit of %d dashboards; delete an unused dashboard to create another; existing dashboards remain fully usable", maxDashboardsPerTenant)
+}
+
+func (*dashboardLimitError) Extensions() map[string]any {
+	return map[string]any{"code": "DASHBOARD_LIMIT"}
+}
+
+// ErrVersionLimit is returned only when publishing would exceed the history cap.
+// Existing history and the draft remain available at and above the cap.
+var ErrVersionLimit = &versionLimitError{}
+
+type versionLimitError struct{}
+
+func (*versionLimitError) Error() string {
+	return fmt.Sprintf("dashboard has reached the limit of %d published versions; publish a new dashboard to continue; existing history and draft remain available", maxDashboardVersions)
+}
+
+func (*versionLimitError) Extensions() map[string]any {
+	return map[string]any{"code": "DASHBOARD_VERSION_LIMIT"}
+}
+
 // ErrInvalidDefinition is returned when a create/update carries a Definition that
-// is not a well-formed JSON object. The document is otherwise stored opaquely.
+// is not a well-formed JSON object or has an invalid device selector.
 var ErrInvalidDefinition = errors.New("dashboard definition must be a JSON object")
+
+// selectorError is an invalid device selector. It matches ErrInvalidDefinition with
+// errors.Is, but carries its own text: the document IS a JSON object, so the
+// sentinel's wording would contradict the actual problem.
+type selectorError struct{ widget, detail string }
+
+func (e *selectorError) Error() string {
+	return fmt.Sprintf("invalid dashboard definition: widget %q datasource: %s", e.widget, e.detail)
+}
+
+func (e *selectorError) Is(target error) bool { return target == ErrInvalidDefinition }
 
 // ErrDefinitionTooLarge is returned when a Definition exceeds maxDefinitionBytes.
 var ErrDefinitionTooLarge = errors.New("dashboard definition exceeds the maximum size")
@@ -56,6 +103,8 @@ func (*TenantDeletedError) Extensions() map[string]any {
 
 type Api struct {
 	RDB *rdb.RdbManager
+	// dashboardLimit is a test seam; zero uses the fixed production cap.
+	dashboardLimit int64
 	// TenantDeleted reports whether a tenant has been through the delete door. When set,
 	// every write that creates or changes a dashboard (create, update, publish, rollback)
 	// is refused for such a tenant, so a still-valid access token cannot re-land rows
@@ -89,8 +138,9 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 // helper (which drops invalid input silently) a bad definition is rejected — a
 // dashboard with a corrupt document is a client bug, not a value to swallow. The
 // object requirement rejects well-formed-but-nonsense scalars ("42", true, an
-// array) that would only fail later at render time. The backend still treats the
-// document's *contents* opaquely; the @devicechain/dashboards types own the shape.
+// array) that would only fail later at render time. Explicit device selectors must
+// have a string deviceToken and an array of string measurements. Other contents
+// remain opaque; the @devicechain/dashboards types own the document shape.
 func definitionJSON(raw string) (datatypes.JSON, error) {
 	b := []byte(raw)
 	// Length-check before parsing so an oversized payload can't cost a full scan.
@@ -102,6 +152,44 @@ func definitionJSON(raw string) (datatypes.JSON, error) {
 	}
 	if trimmed := bytes.TrimSpace(b); len(trimmed) == 0 || trimmed[0] != '{' {
 		return nil, ErrInvalidDefinition
+	}
+	// Exact-key lookup: a struct decode would also match "Widgets", which the runtime does not.
+	var definition map[string]json.RawMessage
+	if err := json.Unmarshal(b, &definition); err != nil {
+		return datatypes.JSON(b), nil
+	}
+	// A non-array widgets field is outside this narrow selector check.
+	var widgets []json.RawMessage
+	_ = json.Unmarshal(definition["widgets"], &widgets)
+	for _, rawWidget := range widgets {
+		var widget map[string]json.RawMessage
+		if err := json.Unmarshal(rawWidget, &widget); err != nil || widget == nil {
+			continue
+		}
+		var datasource map[string]json.RawMessage
+		if err := json.Unmarshal(widget["datasource"], &datasource); err != nil || datasource == nil {
+			continue
+		}
+		var kind string
+		if err := json.Unmarshal(datasource["kind"], &kind); err != nil || kind != "device" {
+			continue
+		}
+		var id string
+		_ = json.Unmarshal(widget["id"], &id)
+		var deviceToken *string
+		if err := json.Unmarshal(datasource["deviceToken"], &deviceToken); err != nil || deviceToken == nil {
+			return nil, &selectorError{widget: id, detail: "deviceToken must be a string"}
+		}
+		var measurements []json.RawMessage
+		if err := json.Unmarshal(datasource["measurements"], &measurements); err != nil || measurements == nil {
+			return nil, &selectorError{widget: id, detail: "measurements must be an array of strings"}
+		}
+		for _, rawMeasurement := range measurements {
+			var measurement *string
+			if err := json.Unmarshal(rawMeasurement, &measurement); err != nil || measurement == nil {
+				return nil, &selectorError{widget: id, detail: "measurements must be an array of strings"}
+			}
+		}
 	}
 	return datatypes.JSON(b), nil
 }
@@ -124,11 +212,54 @@ func (api *Api) CreateDashboard(ctx context.Context, request *DashboardCreateReq
 		},
 		Definition: def,
 	}
-	result := api.RDB.DB(ctx).Create(created)
-	if result.Error != nil {
-		return nil, result.Error
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockTenantForDashboardCreate(ctx, tx); err != nil {
+			return err
+		}
+		// Keep the tenant lock through count and insert so only one creator can
+		// consume the final slot. Tenant scoping and soft-delete filters apply.
+		var count int64
+		if err := tx.Model(&Dashboard{}).Count(&count).Error; err != nil {
+			return err
+		}
+		if count >= api.dashboardCreateLimit() {
+			// A duplicate token keeps its normal conflict outcome at capacity: let the
+			// insert hit the unique constraint instead of masking it with the limit.
+			var same int64
+			if err := tx.Model(&Dashboard{}).Where("token = ?", request.Token).Count(&same).Error; err != nil {
+				return err
+			}
+			if same == 0 {
+				return ErrDashboardLimit
+			}
+		}
+		return tx.Create(created).Error
+	})
+	if err != nil {
+		return nil, err
 	}
 	return created, nil
+}
+
+func (api *Api) dashboardCreateLimit() int64 {
+	if api.dashboardLimit != 0 {
+		return api.dashboardLimit
+	}
+	return maxDashboardsPerTenant
+}
+
+// lockTenantForDashboardCreate serializes admission per tenant until commit.
+// It is a no-op on SQLite (and other non-Postgres dialects); SQLite unit tests
+// do not exercise the concurrency guarantee. That requires PostgreSQL.
+func lockTenantForDashboardCreate(ctx context.Context, tx *gorm.DB) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return fmt.Errorf("cannot lock for dashboard creation: %w", core.ErrNoTenant)
+	}
+	return tx.Exec("SELECT pg_advisory_xact_lock(?)", rdb.AdvisoryLockKey("dashboard-create:"+tenant)).Error
 }
 
 // UpdateDashboard applies a PARTIAL update to the dashboard (the mutable draft) with the
@@ -312,6 +443,17 @@ func (api *Api) PublishDashboard(ctx context.Context, token string, label *strin
 		// own view. Checked against the locked row, so no writer can slip in after it.
 		if err := rdb.RefuseIfMoved(locked.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
 			return err
+		}
+
+		// Hold the parent lock across the capacity check and insert so concurrent
+		// publishes cannot both consume the final slot. Refusal writes nothing.
+		var count int64
+		if err := tx.Model(&DashboardVersion{}).
+			Where("dashboard_id = ?", locked.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count >= maxDashboardVersions {
+			return ErrVersionLimit
 		}
 
 		var maxVersion int32
@@ -570,8 +712,23 @@ func (api *Api) DashboardsByToken(ctx context.Context, tokens []string) ([]*Dash
 	return found, nil
 }
 
+// MaxNameContainsBytes generously allows 256 UTF-8 bytes of substring search text while
+// bounding escaping and LIKE pattern construction. Measure the original input so
+// whitespace padding cannot evade the work bound.
+const MaxNameContainsBytes = 256
+
+func validateNameContains(text *string) error {
+	if text != nil && len(*text) > MaxNameContainsBytes {
+		return limit.Exceeded("name bytes", len(*text), MaxNameContainsBytes)
+	}
+	return nil
+}
+
 // Dashboards searches dashboards by criteria (name substring + pagination).
 func (api *Api) Dashboards(ctx context.Context, criteria DashboardSearchCriteria) (*DashboardSearchResults, error) {
+	if err := validateNameContains(criteria.Name); err != nil {
+		return nil, err
+	}
 	results := make([]Dashboard, 0)
 	db, pag := api.RDB.ListOf(ctx, &Dashboard{}, func(result *gorm.DB) *gorm.DB {
 		if criteria.Name != nil {
@@ -603,13 +760,10 @@ func (api *Api) Dashboards(ctx context.Context, criteria DashboardSearchCriteria
 // whether a row was deleted (false when no dashboard has that token). The
 // tenant-scope callback confines the delete to the caller's tenant.
 //
-// The delete is Unscoped (a real DELETE, not a soft-delete). A dashboard has no
-// trash/restore semantics, and — critically — the token unique index does not
-// exclude soft-deleted rows, so a soft-delete would lock the token forever and a
-// later create of the same token would fail with a duplicate-key error. Hard
-// delete frees the token immediately. (The platform-wide fix — a per-tenant
-// partial unique index that ignores soft-deleted rows — is tracked separately in
-// the "entity addressing & token policy" ADR.)
+// The delete is Unscoped (a real DELETE, not a soft-delete) because a dashboard
+// has no trash/restore semantics. The per-tenant partial unique index excludes
+// soft-deleted rows, so token reuse works with either kind of deletion; hard
+// deletion also removes the stored dashboard and its version history.
 func (api *Api) DeleteDashboard(ctx context.Context, token string) (bool, error) {
 	// Resolve the dashboard first (tenant-scoped) so we can drop its version history
 	// too — DashboardVersion.DashboardID is a plain column with no FK cascade, so a
@@ -624,9 +778,9 @@ func (api *Api) DeleteDashboard(ctx context.Context, token string) (bool, error)
 	dashboardID := matches[0].ID
 
 	// Delete the versions and the dashboard atomically so a delete can't half-succeed
-	// and orphan rows. Hard deletes (Unscoped): a dashboard has no trash/restore, and
-	// the token unique index counts soft-deleted rows (see the rationale above); the
-	// tenant-scope callback still confines both statements to the caller's tenant.
+	// and orphan rows. Hard deletes (Unscoped) remove the stored rows because a
+	// dashboard has no trash/restore; the tenant-scope callback still confines both
+	// statements to the caller's tenant.
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Unscoped().Where("dashboard_id = ?", dashboardID).Delete(&DashboardVersion{}).Error; err != nil {
 			return err

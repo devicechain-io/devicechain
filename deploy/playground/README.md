@@ -68,7 +68,7 @@ its token has been free for at least a day.
   project the performance rounds run in: the budget alert only means something if nothing
   else bills there.
 - A billing account ID, and an address that should receive the budget alert.
-- `tofu` 1.8 or newer, `gcloud`, `kubectl`, `docker`, `gh`, `go`.
+- `tofu` 1.10 or newer, `gcloud`, `kubectl`, `docker`, `gh`, `go`.
 - A registry you can push to (the driver image is not published).
 - A remote, encrypted, access-controlled OpenTofu state backend. **This root's state holds
   the instance superuser password**; do not leave it in a local file.

@@ -46,9 +46,8 @@ func (inlinePublisher) Settle(context.Context) error { return nil }
 // PublishHooks are what an AsyncEventPublisher reports through. Both are required, and both
 // are called from the writer's goroutine, so they must be quick.
 type PublishHooks struct {
-	// Backpressured counts one event refused because the ingest pipeline was applying
-	// backpressure at the moment of the publish (the gate can close between a source's
-	// admit check and the publish).
+	// Backpressured counts one event refused by backpressure or unavailable placement
+	// at publish time (either can change after the source's admit check).
 	Backpressured func(source string)
 	// Failed counts one event that was NOT stored because its publish failed: the stream
 	// did not acknowledge it, or the writer was closed under it. There is no retry on this
@@ -146,6 +145,10 @@ func (p *AsyncEventPublisher) Publish(source, tenant string, event *model.Unreso
 		done(nil)
 		return
 	}
+	if event != nil && event.TraceContext != nil {
+		msg = msg.WithTraceContext(event.TraceContext)
+		ctx = msg.Context(ctx)
+	}
 	w := p.current()
 	if w == nil {
 		p.fail(source, tenant, errNoWriter)
@@ -154,7 +157,7 @@ func (p *AsyncEventPublisher) Publish(source, tenant string, event *model.Unreso
 	}
 	w.Submit(ctx, []messaging.Message{msg}, func(err error) {
 		if err != nil {
-			if errors.Is(err, messaging.ErrStreamBackpressure) {
+			if messaging.IsRefusal(err) {
 				p.hooks.Backpressured(source)
 			} else {
 				p.fail(source, tenant, err)

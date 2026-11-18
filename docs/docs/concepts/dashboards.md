@@ -106,10 +106,12 @@ Opening a dashboard requires `dashboard:read`, which every enabled tenant member
 A widget does not embed a query. It embeds a typed **selector** that the runtime resolves:
 
 - **`device`** — a single device by token.
-- **`anchor`** — telemetry scoped to an organizational entity (a customer, area, or asset), named by a tracked relationship. The runtime expands it client-side to the devices currently related to that entity and streams each member's raw samples: one stream per device, for up to 500 members. Only the fleet table, a bar chart set to one bar per device and a time-series chart set to one line per device read an anchor, because they keep each device's readings apart. Every other telemetry widget shows one device, and bound to an anchor it says so instead of mixing its devices' readings under one measurement name. Aggregating the anchor's events into a single series server-side is reserved. A selector's `aggregation` field is stored and round-tripped, but not yet read.
+- **`anchor`** — telemetry scoped to an organizational entity (a customer, area, or asset), named by a tracked relationship. The runtime expands it client-side to the devices currently related to that entity and streams each member's raw samples: one subscription per group of up to 1000 tokens (the resolver currently reads up to 500 members). Devices already streamed elsewhere share their existing stream. If an older server refuses the multi-device argument during an upgrade, the runtime automatically uses per-device subscriptions for the rest of that dashboard session. Only the fleet table, a bar chart set to one bar per device and a time-series chart set to one line per device read an anchor, because they keep each device's readings apart. Every other telemetry widget shows one device, and bound to an anchor it says so instead of mixing its devices' readings under one measurement name. Aggregating the anchor's events into a single series server-side is reserved. A selector's `aggregation` field is stored and round-tripped, but not yet read.
 - **`slot`** — a named placeholder the host resolves at mount time from its binding manifest (see [Embedding](#embedding-definitions-slots-and-binding-manifests) below). This is what the console writes today: it rewrites concrete `device` and `anchor` selectors into slots when it loads a dashboard, so an authored dashboard is a reusable template by default.
 
 Two further kinds, `devices` and `relatedTraversal`, are reserved so a stored definition stays forward-compatible. The runtime rejects them until they are implemented.
+
+Saving a draft is refused with an invalid-definition error when a widget's datasource says `kind: device` but `deviceToken` is not a string or `measurements` is not an array of strings. Empty values from an unfinished draft (an empty token and an empty measurements array) are accepted; other kinds are not checked, and the token is not checked for existence.
 
 Selectors are resolved through the client SDK against the GraphQL API. That makes resolution:
 
@@ -120,7 +122,7 @@ How live values arrive depends on the channel:
 
 | Channel | How values arrive |
 |---|---|
-| telemetry | a GraphQL subscription, multiplexed so that a crowded dashboard opens one stream per device rather than one per widget |
+| telemetry | GraphQL subscriptions shared across widgets: one per device for device bindings, with anchor members batched into groups of up to 1000 tokens and automatic per-device fallback on older servers |
 | alarm | re-reads a query, triggered by a live alarm stream and backstopped by a 30-second poll |
 | control | poll-only, because command-delivery exposes no subscription |
 

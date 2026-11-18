@@ -168,12 +168,20 @@ func newDmWorld(t *testing.T) *dmWorld {
 	}
 	singleConnection(t, db)
 	if err := db.AutoMigrate(&dmmodel.Device{}, &dmmodel.DeviceType{}, &dmmodel.DeviceProfile{},
-		&dmmodel.DeviceProfileVersion{}, &dmmodel.DeviceProfileActivation{}, &dmmodel.MetricDefinition{}, &dmmodel.CommandDefinition{},
+		&dmmodel.DeviceProfileVersion{}, &dmmodel.AutomationReviewPolicy{}, &dmmodel.AutomationReviewPolicyChange{}, &dmmodel.AutomationReviewBreakGlass{}, &dmmodel.DeviceProfileActivation{}, &dmmodel.MetricDefinition{}, &dmmodel.CommandDefinition{},
 		&dmmodel.DetectionRule{}, &dmmodel.DetectionRuleScopeRef{}, &dmmodel.EntityAttribute{},
 		&dmmodel.EntityGroupMembership{}, &dmmodel.EntityGroupFacetRef{}, &dmmodel.EntityRelationship{},
 		&dmmodel.EntityRelationshipType{}, &dmmodel.Alarm{}, &dmmodel.DeviceCredential{}, &dmmodel.DeviceReplacement{}, &dmmodel.DeviceAlias{},
-		&dmmodel.DeviceConfigurationRevision{}, &dmmodel.DeviceConfigurationState{}); err != nil {
+		&dmmodel.DeviceConfigurationRevision{}, &dmmodel.DeviceConfigurationState{},
+		// A device delete queues its deletion fact in the same transaction (the outbox).
+		&dmmodel.PendingEntityDeletion{}); err != nil {
 		t.Fatalf("migrate device-management: %v", err)
+	}
+	// The one-live-row-per-key index the appended migration builds; attribute writes
+	// upsert against it, so AutoMigrate of the live model alone cannot serve them.
+	if err := rdb.CreatePartialUniqueIndex(db, &dmmodel.EntityAttribute{}, "uix_entity_attributes_key",
+		"tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatalf("attribute key index: %v", err)
 	}
 	w := &dmWorld{t: t, api: dmmodel.NewApi(&rdb.RdbManager{Database: db}),
 		ctx:   dccore.WithTenant(context.Background(), "acme"),

@@ -4,7 +4,9 @@
 package config
 
 import (
+	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -152,4 +154,50 @@ func TestValidateRejectsBadBrokerURL(t *testing.T) {
 		cfg := &SparkplugConfiguration{Sources: []SparkplugSource{{Tenant: "t", HostId: "h", Broker: SourceBroker{URL: raw}}}}
 		require.Error(t, cfg.Validate(), "url %q must be rejected", raw)
 	}
+}
+
+// TestPresenceRefusesDurationOverflow includes a positive wrap that used to pass
+// validation and silently replace the configured probe interval.
+func TestPresenceRefusesDurationOverflow(t *testing.T) {
+	positiveWrapSeconds := 18446747674
+	wrapped := time.Duration(positiveWrapSeconds) * time.Second
+	require.Positive(t, wrapped, "the regression case must wrap to a positive duration")
+	require.Less(t, wrapped, 2*time.Hour, "the regression case must wrap below two hours")
+
+	for _, tc := range []struct {
+		name     string
+		presence Presence
+		key      string
+	}{
+		{"interval just above maximum", Presence{ProbeSeconds: 9223372037}, "presence.probeSeconds"},
+		{"interval positive wrap", Presence{ProbeSeconds: positiveWrapSeconds}, "presence.probeSeconds"},
+		{"interval max int", Presence{ProbeSeconds: math.MaxInt}, "presence.probeSeconds"},
+		{"window just above maximum", Presence{ProbeWindowSeconds: 9223372037}, "presence.probeWindowSeconds"},
+		{"window max int", Presence{ProbeWindowSeconds: math.MaxInt}, "presence.probeWindowSeconds"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &SparkplugConfiguration{Presence: tc.presence}
+			c.ApplyDefaults()
+			err := c.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.key)
+			assert.Contains(t, err.Error(), "longest a duration")
+		})
+	}
+}
+
+func TestPresenceAcceptsLargestDurationSeconds(t *testing.T) {
+	c := &SparkplugConfiguration{Presence: Presence{ProbeSeconds: 9223372036}}
+	c.ApplyDefaults()
+	require.NoError(t, c.Validate())
+	assert.Equal(t, 9223372036*time.Second, c.Presence.ProbeInterval())
+	assert.Equal(t, DefaultPresenceProbeWindowSeconds*time.Second, c.Presence.ProbeWindow())
+}
+
+// The largest window the interval allows also loads and converts exactly.
+func TestPresenceAcceptsLargestDurationWindow(t *testing.T) {
+	c := &SparkplugConfiguration{Presence: Presence{ProbeSeconds: 9223372036, ProbeWindowSeconds: 9223372035}}
+	c.ApplyDefaults()
+	require.NoError(t, c.Validate())
+	assert.Equal(t, 9223372035*time.Second, c.Presence.ProbeWindow())
 }

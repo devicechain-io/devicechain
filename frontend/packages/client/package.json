@@ -5,6 +5,7 @@
   "keywords": [
     "devicechain",
     "iot",
+    "iot-platform",
     "graphql",
     "sdk",
     "typescript"
@@ -32,6 +33,7 @@
   "files": [
     "dist",
     "README.md",
+    "AGENTS.md",
     "LICENSE"
   ],
   "publishConfig": {
@@ -40,6 +42,7 @@
   "scripts": {
     "build": "node ../../scripts/build-package.mjs",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint --config ../../eslint.library.config.js --no-inline-config \"**/*.{ts,tsx}\"",
     "test": "vitest run"
   },
   "dependencies": {

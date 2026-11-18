@@ -5,7 +5,7 @@ title: 从 LoRaWAN 上行到告警
 
 # 从 LoRaWAN 上行到告警 {#lorawan-uplink-to-alarm}
 
-读完本页，一条二进制 LoRaWAN 上行会穿过网络服务器的集成，被你编写并发布的解码器转换成读数，触发一条检测规则，并产生一条会自行恢复的告警。你不需要网关，也不需要传感器：模拟器扮演网络服务器，发出的请求与真实的 ChirpStack 或 The Things Stack 发出的相同。这里的命令就是你在真实硬件上会用的命令，[最后一节](#real-network-server)说明有哪些不同。
+读完本页，一条二进制 LoRaWAN 上行会穿过网络服务器的集成，被你编写并发布的解码器转换成读数，触发一条检测规则，并产生一条会自行恢复的告警。在最后一步中，规则还会向传感器发送一条命令，该命令会等待设备确认。你不需要网关，也不需要传感器：模拟器扮演网络服务器，发出的请求与真实的 ChirpStack 或 The Things Stack 发出的相同。这里的命令就是你在真实硬件上会用的命令，[最后一节](#real-network-server)说明有哪些不同。
 
 预计需要四十五分钟左右，大部分时间花在安装上。
 
@@ -447,12 +447,207 @@ gql notification-management "$DC_TOKEN" 'query($t:[String!]!){notificationStates
 
 如果什么都没收到，先看这份记录：没有记录，说明告警没有到达策略（检查严重级别）；有记录但接收端没有动静，说明投递被拒绝（检查 URL 是否为公网地址）。限流、对无人确认的告警升级以及静默时段，参见[配置通知渠道](./notification-channels.md#policies)。
 
+## 12. 下发命令 {#12-send-a-command-back-down}
+
+到目前为止，规则只产生告警。规则也可以向设备发送**命令**。对于 LoRaWAN 传感器，命令沿着上行来时的路径返回。DeviceChain 把一条下行放入网络服务器的队列，网络服务器在设备的下一条上行之后发送它，然后报告设备是否确认了它。这里，模拟器也扮演 ChirpStack 的这一侧。它提供 ChirpStack 的队列端点，并在设备的下一条上行之后向集成发送确认。
+
+```text
+ dc-simulator                         DeviceChain
+┌──────────────────────┐   uplink     ┌──────────────────────────────────────────────────────┐
+│ plays ChirpStack     │─────────────▶│ integration ──▶ decoder ──▶ rule  temperature > 25   │
+│                      │              │                                │ sendCommand         │
+│ queue endpoint       │◀─────────────│ lorawan_downlink connector ◀───┘ set-setpoint        │
+│                      │   downlink   │                                                      │
+│ next uplink, then    │─────────────▶│ integration ──▶ the command is SUCCESSFUL            │
+│ txack and ack        │              │                                                      │
+└──────────────────────┘              └──────────────────────────────────────────────────────┘
+```
+
+:::note 这一步需要什么
+实例必须运行 v1.4 或更高版本，该版本添加了确认下行和命令编码器。这里使用的模拟器选项比该版本更新。请检查 `dc-simulator --help` 是否列出了 `--lorawan-downlink-listen`。
+:::
+
+**启用下行。** 你在[需要什么](#requirements)中安装的实例有三项功能未开启，这三项都在初始化实例时设置：
+
+- **出站连接器**，即调用网络服务器的服务。默认配置不运行它，因此要用 `--enable-area outbound-connectors` 添加。
+- **LoRaWAN 下行**本身，这是该服务的一项设置，通过值文件提供。
+- 针对你自己机器的**开发用出站访问许可**。平台不会调用私有地址，而模拟器的队列端点位于你的笔记本上。`--dev-allow-egress` 会放行你指定的地址，且仅适用于 kind 这样的本地集群。
+
+把设置保存为 `lorawan-downlink.yaml`：
+
+```yaml
+functionalAreas:
+  outbound-connectors:
+    config:
+      lpwanDownlink:
+        enabled: true
+```
+
+Pod 通过 `host.docker.internal` 访问你的机器，这是 Docker Desktop 提供的名称。向集群节点查询这个名称对应的地址：
+
+```bash
+docker exec devicechain-control-plane getent hosts host.docker.internal
+```
+
+```text
+192.168.65.254  host.docker.internal
+```
+
+然后带上这三项设置初始化实例，替换[需要什么](#requirements)中的初始化命令。先加上 `--dry-run` 运行一次。这不会改变任何内容，汇总中会打印 `Profile: default (+ outbound-connectors)`：
+
+```bash
+dcctl bootstrap local devicechain --host localhost --no-tls --no-escrow \
+  --enable-area outbound-connectors --values lorawan-downlink.yaml \
+  --dev-allow-egress 192.168.65.254
+```
+
+如果是新实例，之后请重复第 1 到第 6 步。已经运行的实例通过 `dcctl enable-area` 启用该功能区，另外两项则通过 `dcctl upgrade` 加上相同的 `--values` 和 `--dev-allow-egress` 设置。参见 [dcctl 参考](../reference/dcctl.md#dcctl-enable-area)。
+
+**声明命令。** 配置文件上的命令定义为命令命名，列出它的参数，并说明如何把参数变成字节。这里使用[编码器示例](./inbound-integrations.md#lorawan-command-encoder)中的恒温器，添加了 `"confirmed": true`，让网络服务器要求设备确认该帧。把它保存为 `encoder.json`：
+
+```json
+{
+  "fPort": 12,
+  "confirmed": true,
+  "fields": [
+    {"param": "setpoint", "type": "i16be", "scale": 0.1},
+    {"bits": {"type": "u8", "fields": [
+      {"param": "mode", "shift": 0, "width": 3}
+    ]}}
+  ]
+}
+```
+
+```bash
+gql device-management "$DC_TOKEN" 'mutation($r:CommandDefinitionCreateRequest!){createCommandDefinition(request:$r){token commandKey}}' \
+  "$(jq -nc --rawfile e encoder.json '{r:{token:"room-sensor-set-setpoint",deviceProfileToken:"room-sensor",commandKey:"set-setpoint",name:"Set setpoint",parameterSchema:([{name:"setpoint",dataType:"DOUBLE"},{name:"mode",dataType:"INT"}]|tojson),encoder:$e}}')"
+```
+
+```text
+{"data":{"createCommandDefinition":{"token":"room-sensor-set-setpoint","commandKey":"set-setpoint"}}}
+```
+
+编码器把载荷 `{"setpoint":21.5,"mode":3}` 转换为端口 12 上的三个字节 `00d703`。
+
+**从规则发送命令。** 在规则的告警动作之后添加一个 `sendCommand` 动作。把整条规则保存为 `rule-with-command.json`：
+
+```json
+{
+  "name": "Room too warm",
+  "description": "Above 25 degrees: raise a warning alarm and set the room's thermostat to 21.5 degrees. The alarm clears by itself when the reading drops back to 25 or below.",
+  "type": "threshold",
+  "severity": "warning",
+  "when": { "metric": "temperature", "op": "gt", "threshold": 25 },
+  "actions": [
+    { "type": "raiseAlarm", "raiseAlarm": { "alarmKey": "room-too-warm" } },
+    {
+      "type": "sendCommand",
+      "sendCommand": { "command": "set-setpoint", "payload": "{\"setpoint\":21.5,\"mode\":3}", "expiresAfter": "2m" }
+    }
+  ]
+}
+```
+
+`expiresAfter` 是命令等待设备回答的时长。这里特意设成两分钟这个短期限，让你能在后面观察它到期。替换规则的定义，然后重新发布配置文件。只有发布之后，命令和新规则才会作用于实时上行：
+
+```bash
+gql device-management "$DC_TOKEN" 'mutation($t:String!,$r:DetectionRuleUpdateRequest!){updateDetectionRule(token:$t,request:$r){token}}' \
+  "$(jq -nc --rawfile d rule-with-command.json '{t:"room-too-warm",r:{definition:$d}}')"
+
+gql device-management "$DC_TOKEN" 'mutation{publishDeviceProfile(token:"room-sensor",label:"thermostat command"){version}}'
+```
+
+```text
+{"data":{"updateDetectionRule":{"token":"room-too-warm"}}}
+{"data":{"publishDeviceProfile":{"version":2}}}
+```
+
+**把集成关联到它的网络服务器。** 类型为 `lorawan_downlink` 的连接器为 `chirpstack` 集成保存两项内容：网络服务器接收下行的地址，以及该服务器接受的 API 密钥。对于 ChirpStack，你需要在 ChirpStack 中创建密钥。模拟器接受你选择的任意字符串，因此生成一个并保存在变量中：
+
+```bash
+export DC_SIM_LORAWAN_API_KEY=$(openssl rand -hex 24)
+
+gql outbound-connectors "$DC_TOKEN" 'mutation($r:ConnectorCreateRequest!){createConnector(request:$r){token type}}' \
+  "$(jq -nc --arg k "$DC_SIM_LORAWAN_API_KEY" '{r:{token:"chirpstack-downlink",name:"ChirpStack downlink",type:"lorawan_downlink",config:({networkServer:"chirpstack_v4",baseUrl:"http://host.docker.internal:8085",integration:"chirpstack"}|tojson),secret:$k}}')"
+
+gql outbound-connectors "$DC_TOKEN" 'mutation{publishConnector(token:"chirpstack-downlink"){version}}'
+```
+
+```text
+{"data":{"createConnector":{"token":"chirpstack-downlink","type":"lorawan_downlink"}}}
+{"data":{"publishConnector":{"version":1}}}
+```
+
+`integration` 是[第 6 步](#6-the-integration)中集成的令牌。密钥是连接器的机密值，以加密形式存储，且不会再次显示。平台只有在连接器发布之后才会使用它。
+
+**运行提供队列端点的模拟器。** `--lorawan-downlink-listen` 在你的机器上提供 ChirpStack 的 `POST /api/devices/{devEui}/queue`。它只接受 `DC_SIM_LORAWAN_API_KEY` 中的密钥，其他密钥一律以 `401` 拒绝。再次发送[第 7 步](#7-send-uplinks)的十二条上行：
+
+```bash
+DC_SIM_INTEGRATION_TOKEN="$INTEGRATION_TOKEN" dc-simulator \
+  --lorawan-ns chirpstack --lorawan-binary \
+  --integration-url "$DC_URL/api/integrations/sim-lora/chirpstack" \
+  --deveui 70B3D57ED0050004 --uplinks 12 --emit-interval 2s \
+  --lorawan-downlink-listen 127.0.0.1:8085
+```
+
+```json
+{"ack":"ack","addr":"127.0.0.1:8085","event":"downlink_listening"}
+{"event":"downlink_queued","devEui":"70B3D57ED0050004","id":"3ffed47b-dfa3-4d57-a4a9-4ce59dc03d31","fPort":12,"hex":"00d703","confirmed":true,"expiresAt":"2026-11-11T17:30:19Z"}
+{"devEui":"70B3D57ED0050004","event":"downlink_reported","id":"3ffed47b-dfa3-4d57-a4a9-4ce59dc03d31","report":"txack","status":202}
+{"acknowledged":true,"devEui":"70B3D57ED0050004","event":"downlink_reported","id":"3ffed47b-dfa3-4d57-a4a9-4ce59dc03d31","report":"ack","status":202}
+{"ns":"chirpstack","sent":12,"resent":0,"statuses":{"202":12},"errors":0,"queued":1,"reported":{"ack":{"202":1},"txack":{"202":1}},"runId":"1794418086190782000"}
+```
+
+从上往下看。第七条上行超过了 25 度，因此规则产生告警并发送了 `set-setpoint`。平台把下行放入队列，其中包含端口 12、字节 `00d703`、确认标志以及命令的到期时间，模拟器则像 ChirpStack 一样返回一个队列项 ID。A 类设备只有在刚发送完数据之后才能接收下行，所以模拟器会保留该项，直到设备的**下一条**上行。然后它会发送 ChirpStack 发送的内容：一个 `txack`，表示网关已发送该帧；一个 `ack`，表示设备已确认该帧。两者都包含队列项 ID，平台对两者都返回了 `202`。如果命令在十二条上行中的最后一条之后才入队，模拟器会继续发送上行，直到它已报告每个确认下行队列项的结果。
+
+现在从平台一侧查看命令：
+
+```bash
+gql command-delivery "$DC_TOKEN" 'query($c:CommandSearchCriteria!){commands(criteria:$c){results{name payload status outcome sentTime respondedTime responsePayload deliveryEvidence}}}' \
+  '{"c":{"pageNumber":1,"pageSize":5,"deviceToken":"room-4"}}' | jq '.data.commands.results'
+```
+
+```json
+[
+  {
+    "name": "set-setpoint",
+    "payload": "{\"mode\": 3, \"setpoint\": 21.5}",
+    "status": "SUCCESSFUL",
+    "outcome": "SUCCEEDED",
+    "sentTime": "2026-11-11T17:28:19.101967Z",
+    "respondedTime": "2026-11-11T17:28:20.555029Z",
+    "responsePayload": "{\"stage\": \"acknowledged\", \"fCntDown\": 0, \"queueItemId\": \"3ffed47b-dfa3-4d57-a4a9-4ce59dc03d31\"}",
+    "deliveryEvidence": "DEVICE_RESPONSE"
+  }
+]
+```
+
+ChirpStack 把命令放入队列时，命令变为**已发送**。它一直保持已发送状态，直到下一条上行之后、一秒半后收到确认，才变为**成功**，结果中带有队列项 ID。对于确认下行，成功表示设备确认了该帧，而不是网络服务器把它放入了队列。
+
+**设备不回答时。** `--lorawan-ack` 选择模拟器报告什么。`ack` 是默认值。`nack` 扮演一个放弃等待确认的网络服务器，`none` 则扮演一个完全不报告的网络服务器。带上 `--lorawan-ack none` 运行同样的十二条上行，模拟器就不会回报任何内容：
+
+```json
+{"ack":"none","addr":"127.0.0.1:8085","event":"downlink_listening"}
+{"event":"downlink_queued","devEui":"70B3D57ED0050004","id":"b4051ecf-8c68-4b56-ac55-28207f50ed6e","fPort":12,"hex":"00d703","confirmed":true,"expiresAt":"2026-11-11T17:30:53Z"}
+{"ns":"chirpstack","sent":12,"resent":0,"statuses":{"202":12},"errors":0,"queued":1,"reported":{"ack":{},"txack":{}},"runId":"1794418119846090500"}
+```
+
+运行同一个查询，使用 `pageSize:1`、字段 `name status outcome sentTime expiresAt respondedTime`，以及 `jq -c '.data.commands.results[]'`：运行结束后立即查一次，两分钟到期后再查一次。命令在截止时间之前一直保持**已发送**。然后它最终变为**超时**，结果未知，因为没有任何信息表明设备是否收到了它：
+
+```text
+{"name":"set-setpoint","status":"SENT","outcome":null,"sentTime":"2026-11-11T17:28:53.106961Z","expiresAt":"2026-11-11T17:30:53Z","respondedTime":null}
+{"name":"set-setpoint","status":"TIMEOUT","outcome":"UNKNOWN","sentTime":"2026-11-11T17:28:53.106961Z","expiresAt":"2026-11-11T17:30:53Z","respondedTime":null}
+```
+
+使用 `--lorawan-ack nack` 时，命令在报告到达后立即变为**超时**，结果为 `{"reason": "NOT_ACKNOWLEDGED"}`。[确认下行](./inbound-integrations.md#lorawan-confirmed)列出了各类报告对命令的含义。
+
 ## 真实的网络服务器 {#real-network-server}
 
 用 ChirpStack 或 The Things Stack 替换模拟器，DeviceChain 一侧保持你搭建的样子。变化发生在网络服务器上：
 
 - **ChirpStack v4。** 在应用上添加 **HTTP** 集成，载荷编码选 **JSON**，事件端点为 `https://<host>/api/integrations/<tenant>/chirpstack`，请求头为 `Authorization: Bearer <token>`。设备配置文件不需要编解码器：发布了解码器之后，上行由它来解码，网络服务器解码出的内容不会被存储。
 - **The Things Stack v3。** 在应用上添加 **Custom webhook**，格式选 **JSON**，基础 URL 为 `https://<host>/api/integrations/<tenant>/tts`，请求头为 `Authorization: Bearer <token>`，上行消息路径为 `/uplink-message`。出于同样的原因，应用也不需要载荷格式化器。
+- **向 ChirpStack 发送下行。** 把 `lorawan_downlink` 连接器的 `baseUrl` 指向 ChirpStack 的 REST API（其 `chirpstack-rest-api` 组件），并为它提供一个允许下行入队的 ChirpStack API 密钥。在 HTTP 集成上启用 `ack` 事件，如果还想记录传输，则启用 `txack`：确认只能通过你注册的集成到达 DeviceChain。网络服务器有公网地址时，去掉 `--dev-allow-egress`；私有地址由运维人员放行，参见[出站连接器](../concepts/outbound-connectors.md#destinations)。
 - **设备。** 在 DeviceChain 中为每台设备设置 `lorawan.deveui` 别名，值为它的 DevEUI；如果集成按 `DEVICE_ID` 识别设备，则设置 `tts.device-id` 别名，值为它的设备 ID。没有任何设备携带的 DevEUI 会列在集成的 **Unregistered devices seen** 下，你可以从这个列表创建设备。
 - **公共证书。** 托管的网络服务器不会信任自签名证书，所以实例需要有来自公共 CA 的证书，网络服务器才能向它发送数据。你自己运行的网络服务器可以配置为信任你的 CA。
 
@@ -460,7 +655,7 @@ gql notification-management "$DC_TOKEN" 'query($t:[String!]!){notificationStates
 
 ## 清理 {#clean-up}
 
-规则、设备和集成都属于租户 `sim-lora`。要删除该租户及其身份：
+规则、命令、设备、集成和连接器都属于租户 `sim-lora`。要删除该租户及其身份：
 
 ```bash
 dcctl sim destroy lora

@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -82,11 +83,12 @@ type responseEnvelope struct {
 	Payload      *json.RawMessage `json:"payload,omitempty"`
 	Error        *string          `json:"error,omitempty"`
 
-	// Reach says how far a FAILED command got, as the reporting transport saw it: empty when the
+	// Reach says how far a command got, as the reporting transport saw it: empty when the
 	// device answered (every native device, which never sends it), UNANSWERED when the exchange
 	// was run and nothing came back, UNSENT when the transport refused it before the wire. It is
-	// read only when Success is false, and it must stay byte-identical with the LwM2M adapter's
-	// envelope. A device can only mis-class its OWN command with it, never another's.
+	// also read on success to withhold delivery evidence without a device answer, and must
+	// stay byte-identical with the LwM2M adapter's envelope. A device can only mis-class its
+	// OWN command with it, never another's.
 	Reach model.Reach `json:"reach,omitempty"`
 
 	// DispatchNonce is the value the device echoes from the delivery envelope it acted on,
@@ -117,6 +119,31 @@ func normalizeReach(r model.Reach) model.Reach {
 	return model.ReachUnanswered
 }
 
+// responseReach maps the previous release's LPWAN adapter's successful queued response to
+// UNANSWERED for rolling upgrades. The subject identifies the device, so this only ever
+// withholds evidence on the responder's own command: a device sending this payload can only
+// under-claim, never forge delivery evidence.
+//
+// Remove in v1.6: the v1.5.0 outbound-connectors adapter sends reach UNANSWERED on a queued
+// unconfirmed downlink itself, so once v1.5 is the previous minor (upgrades go one minor at a
+// time) no pod still sends the reach-less shape this maps. Delete this and its legacy test
+// cases, and call normalizeReach directly.
+func responseReach(response responseEnvelope) model.Reach {
+	if response.Success && response.Reach == "" && response.Payload != nil {
+		payload := []byte(*response.Payload)
+		var text string
+		if json.Unmarshal(payload, &text) == nil {
+			payload = []byte(text)
+		}
+		var queued map[string]string
+		if json.Unmarshal(payload, &queued) == nil && len(queued) == 2 &&
+			queued["stage"] == "queued" && queued["queueItemId"] != "" {
+			return model.ReachUnanswered
+		}
+	}
+	return normalizeReach(response.Reach)
+}
+
 // CommandDeliveryProcessor owns the command delivery lifecycle: it delivers
 // queued commands to devices, consumes device responses, and runs a background
 // expiry + redelivery sweep (ADR-012 #4).
@@ -135,6 +162,9 @@ type CommandDeliveryProcessor struct {
 	CommandResponsesReader   messaging.MessageReader
 	DeviceCommandsWriter     messaging.MessageWriter
 	Api                      model.CommandDeliveryApi
+
+	// Nil uses the API's advisory lock; tests can run the pass on SQLite.
+	reconcileLock func(context.Context, func() error) (bool, error)
 
 	// Hold keeps a command RESPONSE unacked, outside its delivery budget, while the relational
 	// store cannot take writes (core/storehold). A response is the device's only copy of what it
@@ -588,12 +618,19 @@ func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, b
 	// Impacts are resolved for the whole batch before the first claim; see resolveImpacts.
 	cproc.resolveImpacts(tenantCtx, batch, states)
 	for _, cmd := range batch.commands {
+		// Every path finishes a started claim without cancellation; stop here
+		// before the next claim so shutdown does not drain the remaining batch.
+		if ctx.Err() != nil {
+			return
+		}
 		// 🔴 A MISSING KEY READS AS State{Known:false}, WHICH Decide ANSWERS Dispatch.
 		// That is the fail-open, and it carries three separate cases on one line: a
 		// device the projection has never seen, a device whose chunk of the read failed,
 		// and an instance with no gate wired at all. All three must deliver.
 		state := states[cmd.DeviceToken]
 		switch presence.Decide(state, cproc.capabilities()) {
+		case presence.Defer:
+			incr(cproc.DispatchDeferred, 1)
 		case presence.Hold:
 			cproc.holdCommand(tenantCtx, cmd)
 		case presence.Undeliverable:
@@ -650,8 +687,18 @@ func (cproc *CommandDeliveryProcessor) presenceStates(ctx context.Context, devic
 	states, err := cproc.Presence.StatesFor(ctx, devices)
 	if err != nil {
 		incr(cproc.PresenceReadErrors, 1)
+		var ungated, deferred int
+		for _, device := range devices {
+			s := states[device]
+			if s.PullUnknown {
+				deferred++
+			} else if !s.Known && !s.PullChannel {
+				ungated++
+			}
+		}
 		log.Warn().Err(err).Int("asked", len(devices)).Int("answered", len(states)).
-			Msg("Could not read presence for some of this tenant's devices; those commands dispatch ungated.")
+			Int("presenceUnknown", ungated).Int("channelUndecided", deferred).
+			Msg("Devices with no presence answer dispatch ungated; devices whose command channel is undecided stay queued.")
 	}
 	return states
 }
@@ -756,9 +803,16 @@ func (cproc *CommandDeliveryProcessor) tenantDeleted(tenant string) bool {
 // the API's, not this function's — see releaseFailedClaim and model.ReleaseClaim.
 func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *model.Command,
 	path dispatchPath, route routing) error {
-	// Publish to the command's tenant subject and mark it SENT under the same
-	// tenant context.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Cancellation is observed only before the claim starts. An autocommit UPDATE
+	// can commit even when cancellation makes the driver report an error, so the
+	// claim itself and every subsequent publish/release step must finish on every
+	// dispatch path, including the sweep. The batch loop stops further claims.
+	// Retain tenant values and the writer's own publish bound during shutdown.
 	tenantCtx := core.WithTenant(ctx, cmd.TenantId)
+	tenantCtx = context.WithoutCancel(tenantCtx)
 	// Published to the TARGET DEVICE's subject, not the tenant's. Before this, every
 	// command went to one tenant-wide subject that every device in the tenant was
 	// granted to subscribe to, so isolation between devices rested entirely on each
@@ -766,9 +820,8 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 	// did not filter — or a compromised one — read every command in the tenant,
 	// payloads included. The subject now carries the device, and the broker grant is
 	// narrowed to match, so the isolation is enforced rather than requested.
-	// Claim first. A lost claim means another dispatcher got there — benign, and now
-	// COUNTED rather than silent: while nothing wrote HELD this could not happen at all,
-	// so a standing rate here is the signal that two dispatch paths are overlapping.
+	// Claim first. A refusal can mean another dispatcher got there, expiry, or a gate
+	// closing since the read. None may publish; the existing counters record refusals.
 	nonce, claimed, err := cproc.Api.MarkSent(tenantCtx, cmd.ID)
 	if err != nil {
 		return err
@@ -782,7 +835,7 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 		}
 		incrLabel(cproc.ClaimsLost, string(path))
 		log.Debug().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
-			Msg("Another dispatcher claimed this command first; not publishing it again.")
+			Msg("Command is no longer claimable; not publishing it.")
 		return nil
 	}
 
@@ -837,7 +890,7 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 }
 
 // refusedForDisabled reports whether a refused claim was refused because the command's device is
-// now disabled, rather than lost to another dispatcher. MarkSent folds the disabled record into
+// now disabled, rather than expired or lost to another dispatcher. MarkSent folds the disabled record into
 // its own predicate and cannot say which predicate refused, so the record is asked afterwards.
 //
 // It is a classification for the log and the counters only, never a decision: nothing is
@@ -845,6 +898,10 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 // refusal as the lost claim it was always reported as. The read runs only on a refused claim,
 // so a healthy sweep pays nothing for it.
 func (cproc *CommandDeliveryProcessor) refusedForDisabled(ctx context.Context, cmd *model.Command) bool {
+	// An expired command belongs to the expiry sweep even if its device is disabled too.
+	if cmd.ExpiresAt.Valid && cmd.ExpiresAt.Time.Before(time.Now()) {
+		return false
+	}
 	reader := cproc.gateReader()
 	if reader == nil {
 		return false
@@ -959,7 +1016,7 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 	// redelivery has always done.
 	if err := cproc.Hold.RunCtx(ctx, tenantCtx, []messaging.Message{msg}, func(c context.Context) error {
 		_, e := cproc.Api.MarkResponse(c, response.CommandToken, responder,
-			response.DispatchNonce, response.Success, normalizeReach(response.Reach), responsePayloadText(response.Payload), response.Error)
+			response.DispatchNonce, response.Success, responseReach(response), responsePayloadText(response.Payload), response.Error)
 		return e
 	}); err != nil {
 		// A device answering for a command it does not own is refused, and the refusal is
@@ -1196,17 +1253,7 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) error {
 		}
 		return delivered
 	})
-	// 🔴 `ran` IS READ BEFORE `err`, BECAUSE TryAdvisoryLock RETURNS `true, fn()` — so a
-	// non-nil error means the LOCK failed only when the body never ran. Labelling every
-	// error as a lock-acquisition failure was harmless while the body always returned nil,
-	// and became wrong the moment the body started reporting its own failures.
-	if !ran {
-		if err != nil {
-			return fmt.Errorf("acquiring the command sweep lock: %w", err)
-		}
-		return core.ErrPassSkipped
-	}
-	if err != nil {
+	if err := rdb.SingletonResult(ran, err, "command-delivery-sweep"); err != nil {
 		return err
 	}
 	if expiryErr != nil {
@@ -1351,7 +1398,7 @@ func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 	// ExecuteStop. Nudges enqueued before this point are already in the buffer and are
 	// picked up now; nudges enqueued after ExecuteStop are dropped, which costs a sweep
 	// tick of latency and nothing else.
-	cproc.nudger.Start()
+	cproc.nudger.Start(ctx)
 
 	// The two reconcile nets, each on its own slower ticker. Extracted from here for the
 	// same reason the sweep ticker was: inline, neither the cadence nor the shutdown
@@ -1394,10 +1441,10 @@ func (cproc *CommandDeliveryProcessor) Stop(ctx context.Context) error {
 // also why no deadline is taken from ExecuteStop's own context: it is context.Background(),
 // so a bounded wait on it could never fire — a guard that cannot fire is worse than none.
 //
-// ⚠️ THAT BOUND COVERS cproc.periodic AND NOT nudger.Stop(). A nudge worker drains under
-// context.Background() by deliberate choice — see dispatchNudger.run — so its wait is
-// bounded by the work itself finishing, not by any cancellation. Both waits are here, and
-// only one of them is answerable to the root context.
+// Both waits are answerable to the root context. Stop also cancels the nudge's child
+// context before joining, even when the root has not yet been cancelled. A nudge that
+// already claimed a command finishes its publish/release as before; cancellation must
+// not turn a claimed actuation into an uncertain resend (see deliverCommand).
 func (cproc *CommandDeliveryProcessor) ExecuteStop(context.Context) error {
 	cproc.nudger.Stop()
 	close(cproc.quit)

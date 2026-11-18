@@ -236,13 +236,18 @@ export function createDeviceResolver(): DeviceResolver {
       });
     },
 
-    // The device type's token, from the same names read the roster uses. A failed read rejects (the
-    // caller treats that as unknown) and is not cached.
+    // The device type's token, from the same names read the roster uses. Cache only a positive
+    // result so a missing device or unassigned type can recover on a later lookup. Concurrent
+    // reads share the in-flight promise; a failed read rejects and is not cached.
     deviceType(deviceToken: string): Promise<string | null> {
       let pending = typeCache.get(deviceToken);
       if (!pending) {
         pending = gql('device-management', DEVICE_NAMES, { tokens: [deviceToken] })
-          .then((r: DeviceNamesResult) => r.devicesByToken.find((d) => d.token === deviceToken)?.deviceType?.token ?? null)
+          .then((r: DeviceNamesResult) => {
+            const deviceType = r.devicesByToken.find((d) => d.token === deviceToken)?.deviceType?.token ?? null;
+            if (deviceType === null) typeCache.delete(deviceToken);
+            return deviceType;
+          })
           .catch((err) => {
             typeCache.delete(deviceToken);
             throw err;

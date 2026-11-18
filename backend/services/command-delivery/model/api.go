@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -148,10 +149,11 @@ func payloadBytes(payload *string) []byte {
 //
 // It also returns the device's scope anchors (ADR-081), the stamp the command is written
 // with: nil when the device does not exist, empty when nothing owns it. They are returned
-// beside a rejection as well, because CreateCommand decides a scoped member's right to
+// alongside the device incarnation (zero when unknown). Anchors are returned beside
+// a rejection as well, because CreateCommand decides a scoped member's right to
 // the device before it relays anything the gate said about it.
 type CommandEnqueueValidator interface {
-	ValidateEnqueue(ctx context.Context, deviceToken string, commandKey string, payload []byte) (anchors []string, err error)
+	ValidateEnqueue(ctx context.Context, deviceToken string, commandKey string, payload []byte) (anchors []string, incarnation uint64, err error)
 }
 
 // HeldCommandCeilingResolver reads a tenant's RESOLVED ceiling on withheld (HELD)
@@ -239,7 +241,7 @@ type Api struct {
 	// HELD) becomes EXPIRED, one that went out unanswered becomes TIMEOUT — see
 	// expiredTerminalFor. Zero disables stamping — the pre-config
 	// behavior, used by tests that construct the Api directly; production always sets
-	// it from CommandDeliveryConfiguration (floored positive in ApplyDefaults).
+	// it from CommandDeliveryConfiguration (positive once ApplyDefaults and Validate pass).
 	DefaultCommandTTL time.Duration
 	// MaxDispatchFailures is how many failed dispatches one command may accumulate before
 	// ReleaseClaim drives it to FAILED instead of returning it to the queue.
@@ -446,9 +448,11 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	// some earlier command was stamped.
 	scope, _ := auth.ScopeFromContext(ctx)
 	var anchors []string
+	var incarnation uint64
 	if api.EnqueueValidator != nil {
-		owned, err := api.EnqueueValidator.ValidateEnqueue(ctx, request.DeviceToken, request.Name, payloadBytes(request.Payload))
+		owned, id, err := api.EnqueueValidator.ValidateEnqueue(ctx, request.DeviceToken, request.Name, payloadBytes(request.Payload))
 		anchors = owned
+		incarnation = id
 		var verdict *EnqueueRejected
 		isVerdict := errors.As(err, &verdict)
 		if (err == nil || isVerdict) && !inScope(scope, owned) {
@@ -517,12 +521,13 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: metadataJSON,
 		},
-		DeviceToken: request.DeviceToken,
-		Name:        request.Name,
-		Payload:     payloadJSON,
-		Status:      CommandQueued.String(),
-		QueuedTime:  time.Now(),
-		ExpiresAt:   expiresAt,
+		DeviceToken:       request.DeviceToken,
+		DeviceIncarnation: nullableIncarnation(incarnation),
+		Name:              request.Name,
+		Payload:           payloadJSON,
+		Status:            CommandQueued.String(),
+		QueuedTime:        time.Now(),
+		ExpiresAt:         expiresAt,
 		// The stamp is the gate's answer as given: nil (no gate, or a device the answer did
 		// not name) stays NULL, and an owner-less device is stamped empty — both invisible to
 		// every scoped member, and told apart by whoever reads the row.
@@ -1188,14 +1193,19 @@ func drainableStatusStrings() []string {
 // nonce, and the caller must not publish.
 func (api *Api) MarkSent(ctx context.Context, id uint) (string, bool, error) {
 	nonce := newDispatchNonce()
-	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
+	// Expiry and the dispatch window share one claim instant; the sweep settles refusals.
+	now := time.Now()
+	liveSQL, liveArgs := liveWhere(now)
+	heldSQL, heldArgs := dispatchableNowWhere(now)
 	res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: id}}).
 		Where("id = ? AND status IN ?", id, claimableStatusStrings()).
+		Where(liveSQL, liveArgs...).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
+		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Where(heldSQL, heldArgs...).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
-			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
+			"sent_time":      sql.NullTime{Time: now, Valid: true},
 			"dispatch_nonce": sql.NullString{String: nonce, Valid: true},
 		})
 	if res.Error != nil {
@@ -1785,6 +1795,7 @@ func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit
 		Where(liveSQL, liveArgs...).
 		Where(heldSQL, heldArgs...).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
+		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Order("id ASC").
 		Limit(limit).
 		Find(&found)
@@ -1846,14 +1857,18 @@ func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit
 // it back would leave that transport unable to settle anything it delivered.
 func (api *Api) MarkSentByToken(ctx context.Context, token string) (string, bool, error) {
 	nonce := newDispatchNonce()
-	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
+	now := time.Now()
+	liveSQL, liveArgs := liveWhere(now)
+	heldSQL, heldArgs := dispatchableNowWhere(now)
 	res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("token = ? AND status IN ?", token, claimableStatusStrings()).
+		Where(liveSQL, liveArgs...).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
+		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Where(heldSQL, heldArgs...).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
-			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
+			"sent_time":      sql.NullTime{Time: now, Valid: true},
 			"dispatch_nonce": sql.NullString{String: nonce, Valid: true},
 		})
 	if res.Error != nil {
@@ -1987,6 +2002,10 @@ func (api *Api) rotateDispatch(ctx context.Context, where string, args []any) (s
 		Where("status = ?", CommandSent.String()).
 		Where(heldSQL, heldArgs...).
 		Where("(batch_id IS NULL OR batch_id NOT IN (?))", api.cancelledBatchIds(ctx)).
+		// A dispatch claimed before its device was deleted is still SENT, so the deletion's
+		// cancel does not reach it; the confirmation is the last point before the transport
+		// acts, and a device re-created at the token must not receive it.
+		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Updates(map[string]any{
 			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
 			"dispatch_nonce": sql.NullString{String: next, Valid: true},
@@ -2109,10 +2128,10 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken, responder, dispa
 	}
 	// 🔴 AN ANSWER IS EVIDENCE OF DELIVERY ON EVERY TRANSPORT, and it is recorded here once, for all
 	// of them: a device that answered had the command. COALESCE keeps the first piece of evidence,
-	// so an acknowledgement that came earlier is never replaced by the answer. A failure the
-	// reporting transport says never reached the device (ReachUnsent) or got no answer
-	// (ReachUnanswered) is not evidence of anything and stamps nothing.
-	if success || reach == ReachAnswered {
+	// so an acknowledgement that came earlier is never replaced by the answer. Success alone
+	// is not evidence: a transport reporting ReachUnanswered or ReachUnsent stamps nothing,
+	// even when it reports success. A device's own failure answer still proves delivery.
+	if reach == ReachAnswered {
 		updates["delivered_time"] = gorm.Expr("COALESCE(delivered_time, ?)", time.Now())
 		updates["delivery_evidence"] = gorm.Expr("COALESCE(delivery_evidence, ?)", EvidenceDeviceResponse)
 	}
@@ -2451,6 +2470,15 @@ func (api *Api) CommandsByToken(ctx context.Context, tokens []string) ([]*Comman
 
 // Commands searches for commands matching the given criteria.
 func (api *Api) Commands(ctx context.Context, criteria CommandSearchCriteria) (*CommandSearchResults, error) {
+	// Each list generously allows rdb.MaxLookupKeys (1,000) raw entries, far more
+	// than the enum vocabulary needs. Count duplicates too: this bounds SQL IN
+	// expansion and request work, not distinct values. Refuse before ListOf's COUNT.
+	if criteria.Statuses != nil && len(*criteria.Statuses) > rdb.MaxLookupKeys {
+		return nil, limit.Exceeded("statuses", len(*criteria.Statuses), rdb.MaxLookupKeys)
+	}
+	if criteria.Outcomes != nil && len(*criteria.Outcomes) > rdb.MaxLookupKeys {
+		return nil, limit.Exceeded("outcomes", len(*criteria.Outcomes), rdb.MaxLookupKeys)
+	}
 	start, err := commandRangeBound("startTime", criteria.StartTime)
 	if err != nil {
 		return nil, err
@@ -2615,8 +2643,11 @@ func (api *Api) TryReconcileLock(ctx context.Context, fn func() error) (bool, er
 func (api *Api) PendingCommands(ctx context.Context) ([]*Command, error) {
 	found := make([]*Command, 0)
 	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
+	// A command a device deletion covers is never offered: its claim would be refused on every
+	// pass, and it would sit in this read until its time to live ran out.
 	result := api.RDB.DB(ctx).Where("status IN ?", sweepableStatusStrings()).
 		Where(heldSQL, heldArgs...).
+		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Order("id ASC").Find(&found)
 	if result.Error != nil {
 		return nil, result.Error

@@ -79,3 +79,15 @@ func TestDefaultsAreApplied(t *testing.T) {
 		t.Errorf("unexpected defaults: %+v", cfg)
 	}
 }
+
+func TestAgentActuationDefaultsOff(t *testing.T) {
+	cfg := NewMcpConfiguration()
+	if cfg.AgentActuation.Enabled {
+		t.Fatal("agent actuation defaults on")
+	}
+	cfg.AgentActuation.Enabled = true
+	cfg.ApplyDefaults()
+	if !cfg.AgentActuation.Enabled {
+		t.Fatal("defaults reset an explicit enabled flag")
+	}
+}

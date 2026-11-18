@@ -20,6 +20,12 @@ Todo lo que describe esta página se aplica una vez desplegada el área. Para a�
 **Planificado:** más destinos de `publish` (RabbitMQ, Azure, NATS, Redis, Slack, Splunk) bajo el mismo modelo. Este repositorio es la fuente de verdad de lo que se construye actualmente.
 :::
 
+## Autoridades para acciones automatizadas
+
+Crear o publicar una acción automatizada requiere la autoridad para ejecutarla. Crear o actualizar una regla con una acción `sendCommand`, y publicar o volver a una versión de perfil cuyas reglas habilitadas incluyan una, requiere `command:write` además de `device:write`. Las acciones `httpCall` y `publish` requieren `connector:write`. Un rol que solo tenga `device:write` puede seguir creando y publicando reglas que únicamente generen alarmas.
+
+La autoridad se comprueba sobre la regla efectiva en cada creación o actualización, incluso si está deshabilitada. La publicación y la reversión comprueban todas las reglas habilitadas de la versión seleccionada, incluso si solo cambió una métrica. Quien publica debe tener las autoridades de las acciones; quien aprueba la revisión de automatización no las necesita. Adoptar un perfil cuyas acciones ya fueron autorizadas no requiere estas autoridades adicionales.
+
 ## Las dos acciones de salida
 
 Ambas son [acciones](./event-processing.md#automated-actions) que creas en el **lienzo de automatización** o en el **generador de formularios**, junto a *levantar alarma* y *enviar comando*. Cada una puede estar **protegida (guarded)** por una condición sobre el disparo.
@@ -30,7 +36,7 @@ El selector de acciones del generador de formularios ofrece las cuatro acciones.
 
 `httpCall` envía una solicitud HTTP directamente a un endpoint que tú especificas. El cuerpo de la solicitud se moldea con una **expresión CEL** sobre el disparo, de modo que envías exactamente los campos que el receptor espera. La URL, el método, los encabezados y la plantilla del cuerpo viven en la propia acción, así que un webhook puntual no necesita ninguna configuración aparte.
 
-La autenticación es opcional y usa un **manejador de secreto**. El token se guarda en el **almacén de secretos** y se presenta en el momento del envío como un encabezado `Authorization: Bearer <token>`. El nombre del encabezado y el esquema no son configurables, así que por esta vía no puedes autenticarte ante un receptor que espera un encabezado de clave de API personalizado. Si la acción nombra un manejador pero no hay ningún secreto guardado con él, la llamada nunca se envía sin su credencial: se registra una vez en la cola de mensajes no entregados con el resultado `invalid` y no se reintenta. Nada la vuelve a reproducir, así que la llamada de ese disparo no se hace; corrige el manejador de secreto de la acción para que los disparos posteriores se autentiquen.
+La autenticación es opcional y usa un **manejador de secreto**. El token se guarda en el **almacén de secretos** y se presenta en el momento del envío como un encabezado `Authorization: Bearer <token>`. El nombre del encabezado y el esquema no son configurables, así que por esta vía no puedes autenticarte ante un receptor que espera un encabezado de clave de API personalizado. Si la acción nombra un manejador pero no hay ningún secreto guardado con él, la llamada nunca se envía sin su credencial: se registra una vez en la cola de mensajes no entregados con el resultado `invalid` y no se reintenta. Nada la vuelve a reproducir, así que la llamada de ese disparo no se hace; corrige el manejador de secreto de la acción para que los disparos posteriores se autentiquen. Se rechazan los manejadores del espacio de nombres `connector/`; un `httpCall` nunca envía la credencial de un conector.
 
 Un `httpCall` también puede **firmarse**, para que el receptor verifique que la solicitud viene de DeviceChain y no fue alterada. Nombra un secreto de firma en el `signingSecretRef` de la acción y la llamada lleva los encabezados `webhook-id`, `webhook-timestamp` y `webhook-signature` de la especificación Standard Webhooks. Está desactivado salvo que lo definas. Consulta [Firma de Webhooks de Salida](../guides/signed-webhooks.md).
 
@@ -49,6 +55,8 @@ Para brokers de mensajes y colas en la nube, el destino es un **conector** reuti
 Una única acción `publish` genérica cubre todos los tipos de broker y de cola; el **tipo del conector** selecciona el transporte. Los tipos admitidos hoy son `mqtt`, `kafka`, `aws_sns` y `aws_sqs`.
 
 `gcp_pubsub` es un tipo reconocido sin cliente de entrega en esta versión, así que crear, actualizar a ese tipo o publicar un conector de ese tipo se rechaza con el código de error `UNSUPPORTED`. La consola no ofrece ese tipo. Un conector de ese tipo guardado por una versión anterior sigue enviándose a la cola de mensajes no entregados (dead letter) como no soportado si un `publish` lo apunta, nunca se descarta en silencio.
+
+`updateConnector` rechaza un `expectedUpdatedAt` obsoleto con `errors[*].extensions.code` igual a `STALE_WRITE`. No se escribe nada; el mensaje sigue siendo "connector was modified by another writer; reload and try again". Este código solo se aplica a las actualizaciones de conectores. `CONFLICT` sigue indicando una colisión de unicidad; los errores de otras operaciones no cambian. Clasifica por código, no por el texto del mensaje. La consola conserva los cambios sin guardar y muestra una indicación localizada para copiarlos antes de volver a cargar, aplicarlos de nuevo y reintentar guardar.
 
 ## Los conectores son recursos versionados
 
@@ -110,3 +118,5 @@ El servicio outbound-connectors se ejecuta en su **propio proceso**, separado de
 - **[Procesamiento de Eventos y Alarmas](./event-processing.md)**: donde se crean las reglas y sus acciones.
 - **[Arquitectura](./architecture.md)**: dónde se ubica outbound-connectors entre los servicios.
 - Las credenciales se guardan en el **almacén de secretos** cifrado descrito en [Manejo de secretos](./architecture.md#secret-handling).
+
+Cambiar el tipo o destino de una credencial almacenada requiere `secret` en la misma solicitud; omitirlo devuelve `SECRET_RESUPPLY_REQUIRED`. Vuelve a enviar la credencial o bórrala con `secret: null`. Con `dcctl product apply`, establece el identificador de credencial del manifiesto antes de cambiar su destino. Los cambios de tema, QoS e identidad conservan la credencial.

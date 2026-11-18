@@ -9,6 +9,7 @@
 // limited (honest, not an error) — its devices are still classified and shown,
 // but carry no typed capabilities.
 
+import { useBreakGlass } from '@/routes/automation-reviews/use-break-glass';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -51,6 +52,7 @@ export function ProfilePanel({
   const [boardOpen, setBoardOpen] = useState(false);
   const { toast } = useToast();
   const confirm = useConfirm();
+  const breakGlass = useBreakGlass();
   // The picker (and its adopting-type counts) reloads after each change so a
   // freshly created profile appears and shared counts stay accurate.
   const [version, reloadProfiles] = useReload();
@@ -99,12 +101,14 @@ export function ProfilePanel({
   // undefined means "not mentioned" and would leave the profile attached, which is
   // the opposite of what the button says.
   const setProfile = (profileToken: string | null) =>
-    updateDeviceType(entity.token, { profileToken });
+    breakGlass.run(reason => reason === undefined
+      ? updateDeviceType(entity.token, { profileToken })
+      : updateDeviceType(entity.token, { profileToken }, reason));
 
   const doAttach = async (token: string) => {
     setBusy('attach');
     try {
-      await setProfile(token);
+      if (!await setProfile(token)) return;
       toast(t('devices:typeProfileAttached', { token }));
       const picked = profiles.find((p) => p.token === token);
       setOverride({
@@ -132,7 +136,7 @@ export function ProfilePanel({
       return;
     setBusy('detach');
     try {
-      await setProfile(null);
+      if (!await setProfile(null)) return;
       toast(t('devices:typeProfileDetached'));
       setOverride({ profile: null });
       closePicker();
@@ -152,7 +156,7 @@ export function ProfilePanel({
         token: `${entity.token}-profile`,
         name: entity.name ? `${entity.name} Profile` : undefined,
       });
-      await setProfile(created.token);
+      if (!await setProfile(created.token)) return;
       toast(t('devices:typeProfileCreatedAttached', { token: created.token }));
       setOverride({
         profile: { token: created.token, name: created.name ?? null, category: created.category ?? null },
@@ -169,6 +173,7 @@ export function ProfilePanel({
 
   return (
     <div className="max-w-2xl space-y-4">
+      {breakGlass.element}
       <p className="max-w-prose text-sm text-muted-foreground">{t('devices:typeProfileIntro')}</p>
 
       {attached && !picking ? (

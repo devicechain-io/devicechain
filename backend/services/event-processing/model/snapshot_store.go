@@ -130,10 +130,10 @@ func (s *SnapshotStore) Save(ctx context.Context, snap *DetectSnapshot) error {
 // truncated stream), where the stale row must be cleared rather than preserved by the
 // monotonic guard.
 //
-// observedSeq is the StreamSeq of the row the caller restored from — the state its whole
-// decision was made against. If the row now carries a different sequence, a later owner
-// has committed since, the caller's premise is gone, and the delete is refused with
-// ErrResetRaced rather than applied.
+// observedSeq and observedWatermark are the values loaded from the row the caller restored
+// from — the state its whole decision was made against. If either value now differs, a
+// later owner has committed since, the caller's premise is gone, and the delete is refused
+// with ErrResetRaced rather than applied.
 //
 // 🔴 WITHOUT THE COMPARE THIS IS THE ONE UNGUARDED WRITE IN THE STORE, and a warm standby
 // (ADR-070) is what makes it reachable. Save refuses a backward move on both axes it
@@ -145,21 +145,20 @@ func (s *SnapshotStore) Save(ctx context.Context, snap *DetectSnapshot) error {
 // and what goes with the row is not just bytes: it is the monotonic FLOOR every other
 // split-brain guard in this file compares against.
 //
-// 🔴 IT COMPARES THE OBSERVED SEQUENCE RATHER THAN AN OWNERSHIP EPOCH, and that is a
-// measured choice, not a shortcut around a schema change. An epoch column would only help
+// 🔴 IT COMPARES THE OBSERVED SEQUENCE AND WATERMARK RATHER THAN AN OWNERSHIP EPOCH.
+// That is a measured choice, not a shortcut around a schema change. An epoch column would only help
 // if a term STAMPED it before doing anything else — and a term has not earned a checkpoint
 // at that point, so stamping one would be writing a claim it cannot yet support. Against
 // the successor that has not checkpointed yet, an epoch column refuses exactly the same
-// deletes this does and no more; against the one that HAS, both refuse. What the sequence
-// buys over the epoch is that it needs no new column and no migration, and it is the value
-// the caller genuinely read.
+// deletes this does and no more; against the one that HAS advanced either axis, both refuse.
+// The observed values need no new column and no migration, and are what the caller genuinely read.
 //
 // The residual is honest and small: a successor that has taken over and NOT yet committed
 // anything leaves the row exactly as the loser saw it, so the loser's delete still lands.
 // The successor holds that state in memory and re-Creates the row on its next checkpoint;
 // what is briefly lost is the monotonic floor, not the state. Closing that too would mean
 // a write at term start, which is the trade described above.
-func (s *SnapshotStore) Reset(ctx context.Context, partitionId string, observedSeq int64) error {
+func (s *SnapshotStore) Reset(ctx context.Context, partitionId string, observedSeq int64, observedWatermark time.Time) error {
 	return s.rdb.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		existing, err := lockSnapshotFloor(tx, partitionId)
 		switch {
@@ -170,9 +169,10 @@ func (s *SnapshotStore) Reset(ctx context.Context, partitionId string, observedS
 		case err != nil:
 			return err
 		}
-		if existing.StreamSeq != observedSeq {
+		if existing.StreamSeq != observedSeq || !existing.Watermark.Equal(observedWatermark) {
 			log.Warn().Str("partition", partitionId).
 				Int64("observedSeq", observedSeq).Int64("currentSeq", existing.StreamSeq).
+				Time("observedWatermark", observedWatermark).Time("currentWatermark", existing.Watermark).
 				Msg("Refusing to reset a DETECT checkpoint that has moved since it was read; another owner has committed to this partition.")
 			return ErrResetRaced
 		}

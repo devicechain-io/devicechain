@@ -202,10 +202,11 @@ current deployment relies on before you commit to a date.
   chain that does enrichment, branching and external calls in one graph usually becomes several
   rules plus a calculated metric, and anything more complex belongs in a service you call by
   webhook. Read [event processing](../concepts/event-processing.md) before you plan the port.
-- **Device payload decoders you write yourself.** The platform stores values that a network server
-  decodes, and can map a generic JSON body; it does not run a decoder script you supply. If your
-  devices send an opaque binary payload, decode it before it reaches DeviceChain, in the network
-  server's codec or in a bridge. See [inbound integrations](./inbound-integrations.md).
+- **Device payload decoder scripts.** The platform does not run arbitrary decoder scripts you
+  supply. Migrate supported binary layouts and JSON mappings into declarative
+  [profile payload decoders](./payload-decoders.md). Layouts that need logic outside that
+  decoder language can still be decoded in the network server's codec or in a bridge. See
+  [inbound integrations](./inbound-integrations.md).
 - **Text readings as history.** Numeric and boolean readings are stored as time series. A text
   reading is not, so a string-valued signal is held as state, such as an attribute, and not charted
   as history.

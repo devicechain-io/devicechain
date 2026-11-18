@@ -23,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
 // TestStartsUnderItsDeclaredCatalog starts this service's real broker wiring with Deployed
@@ -97,6 +98,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, Svc.Initialize(ctx), "initialize under the catalog")
+	dctest.UseFreeTCPPort(t, &service.ProbesPort)
 	NatsManager = Svc.Nats
 	t.Cleanup(func() {
 		_ = beforeMicroserviceStopped(ctx)

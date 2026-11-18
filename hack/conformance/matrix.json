@@ -67,7 +67,7 @@
           {"symbol": "◐", "evidence": ["mqtt-qos0-publish", "mqtt-qos1-publish"]}]},
         {"key": "http", "cells": [
           {"symbol": "○", "basis": "prose"},
-          {"symbol": "○", "basis": "prose"},
+          {"symbol": "◐", "basis": "prose"},
           {"symbol": "●", "evidence": ["http-202", "http-429", "http-503-retry-after"]}]},
         {"key": "mqtt-external", "cells": [
           {"symbol": "○", "basis": "prose"},
@@ -83,7 +83,7 @@
           {"symbol": "◐", "evidence": ["lwm2m-register", "lwm2m-observe"], "limits": ["lwm2m-tlv-only-no-telemetry"]}]},
         {"key": "inbound-integrations", "cells": [
           {"symbol": "○", "basis": "prose"},
-          {"symbol": "○", "basis": "prose"},
+          {"symbol": "◐", "basis": "prose"},
           {"symbol": "◐", "basis": "prose"}]}
       ]
     },

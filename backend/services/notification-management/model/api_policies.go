@@ -40,6 +40,9 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	if err := validatePolicyRuleCount(request.Rules); err != nil {
+		return nil, err
+	}
 
 	var created *NotificationPolicy
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
@@ -123,6 +126,13 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 // gorm leaves behind is not: PostgreSQL keeps microseconds of the nanoseconds it was sent.
 func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 	request *NotificationPolicyUpdateRequest, expectedUpdatedAt *string) (*NotificationPolicy, error) {
+	requestedRules, replaceRules := request.Rules.Requested()
+	// Refuse oversized replacements before even preloading the stored channels.
+	if replaceRules {
+		if err := validatePolicyRuleCount(requestedRules); err != nil {
+			return nil, err
+		}
+	}
 	matches, err := api.NotificationPoliciesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -178,8 +188,6 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 		}
 	}
 	quietChanged := quietEdited || request.Enabled.Set
-
-	requestedRules, replaceRules := request.Rules.Requested()
 
 	// The rule checks that need nothing but the request, run before the precondition so a
 	// malformed request is refused as malformed whoever else is writing — reporting it as
@@ -324,6 +332,9 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 // second path: an absent rule set builds nothing rather than building it somewhere else.
 func (api *Api) buildRules(tx *gorm.DB, policyId uint,
 	requests []*NotificationRuleCreateRequest) ([]*NotificationRule, error) {
+	if err := validatePolicyRuleCount(requests); err != nil {
+		return nil, err
+	}
 	rules := make([]*NotificationRule, 0, len(requests))
 	for _, rr := range requests {
 		if err := validateSeverity(rr.Severity); err != nil {

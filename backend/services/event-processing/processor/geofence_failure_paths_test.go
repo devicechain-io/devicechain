@@ -495,7 +495,7 @@ func TestAPeerThatDoesNotServeTheManifestDoorsIsReportedAsVersionSkew(t *testing
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := scriptedClient(t, func(_ int, query string, _ map[string]any) (string, error) {
 				if strings.Contains(query, tc.missing) {
-					return "", fmt.Errorf(`graphql: Cannot query field %q on type "Query"`, tc.missing)
+					return "", &svcclient.GraphQLError{Messages: []string{fmt.Sprintf(`Cannot query field %q on type "Query".`, tc.missing)}}
 				}
 				return manifestData(t, "currentGeoFenceSetManifest", 4,
 					dmmodel.GeoFenceManifestEntry{Token: "yard", Hash: docHash(yard)}), nil
@@ -552,7 +552,7 @@ func TestVersionSkewIsCountedOnEveryDoor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := scriptedClient(t, func(_ int, query string, _ map[string]any) (string, error) {
 				if strings.Contains(query, tc.missing) {
-					return "", fmt.Errorf(`graphql: Cannot query field %q on type "Query"`, tc.missing)
+					return "", &svcclient.GraphQLError{Messages: []string{fmt.Sprintf(`Cannot query field %q on type "Query".`, tc.missing)}}
 				}
 				name := "currentGeoFenceSetManifest"
 				if strings.Contains(query, "geoFenceSetManifest(") {
@@ -586,7 +586,7 @@ func TestVersionSkewIsCountedOnEveryDoor(t *testing.T) {
 // mean the skew counter reported on nothing in particular.
 func TestAnUnrelatedValidationErrorIsNotReportedAsVersionSkew(t *testing.T) {
 	c, _ := scriptedClient(t, func(int, string, map[string]any) (string, error) {
-		return "", errors.New(`graphql: Cannot query field "widgets" on type "Query"`)
+		return "", &svcclient.GraphQLError{Messages: []string{`Cannot query field "widgets" on type "Query".`}}
 	})
 
 	_, err := c.CurrentFenceSet(context.Background(), "acme")

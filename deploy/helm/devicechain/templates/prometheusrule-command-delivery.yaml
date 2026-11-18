@@ -5,9 +5,10 @@ metrics.enabled + metrics.alerts (same operator assumption as the ServiceMonitor
 Every expression is scoped to THIS instance's namespace, so one rule object alerts
 only on its own instance.
 
-WHY ONLY THREE ALERTS, when the service exports ten counters.
+WHY THE ORIGINAL THREE ALERTS, when command-delivery exports ten counters.
 
-The dashboard (dashboards/command-delivery.json) covers all ten. A counter earns an
+The dashboard (dashboards/command-delivery.json) covers all ten and the optional LoRaWAN
+adapter. The LoRaWAN rules below also cover acknowledgement anomalies and tracking failures. A counter earns an
 ALERT only when a human has to act on it and nothing else would tell them. Holds
 placed/released, claim losses, batch refusals by code and cancel dispositions all fail
 that test — they are either expected operation, or they are already visible to the
@@ -174,4 +175,37 @@ spec:
               tenant, read the recorded command batches: one that fanned out partially records a
               per-device HELD_CEILING_EXCEEDED refusal, and a batch refused whole records nothing
               at all, so a tenant seen here may have left no batch behind.
+        # A 5m lookback with for: 10m excludes an isolated burst.
+        - alert: LpwanAckReportsAnomalous
+          expr: sum(rate(devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="{{ $ns }}", result=~"mismatch|unmatched"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#lpwanackreportsanomalous"
+            summary: "Confirmed LoRaWAN downlink reports do not match pending commands"
+            description: "For 10 minutes, network-server acknowledgements have named no pending downlink or disagreed with its correlation fields. Commands may reach their deadline despite a device acknowledgement. Check the Command Delivery dashboard, integration device mapping and network-server queue item identifiers; inspect outbound-connectors logs before resending a command."
+        # A 5m lookback with for: 10m excludes an isolated burst.
+        - alert: LpwanAckSettlementFailing
+          expr: sum(rate(devicechain_outboundconnectors_lpwan_ack_reports_total{namespace="{{ $ns }}", result=~"store_failed|response_failed|poison"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#lpwanacksettlementfailing"
+            summary: "Confirmed LoRaWAN downlink reports cannot settle commands"
+            description: "For 10 minutes, confirmed-downlink reports have failed in the store or response path, or could not be read. A device may have acknowledged while its command remains pending. Check outbound-connectors logs, database writes and the broker response stream; inspect pending commands before retrying them."
+        # A 5m lookback with for: 10m excludes an isolated burst.
+        - alert: LpwanDownlinkTrackingFailing
+          expr: sum(rate(devicechain_outboundconnectors_lpwan_downlinks_total{namespace="{{ $ns }}", result=~"pending_failed|claim_failed|lookup_failed|response_failed"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#lpwandownlinktrackingfailing"
+            summary: "LoRaWAN commands cannot be tracked or answered reliably"
+            description: "For 10 minutes, the LoRaWAN adapter has failed to claim, look up, track or answer commands. pending_failed means the network server accepted a confirmed downlink but its pending acknowledgement could not be stored. The device may still receive it. Check outbound-connectors database and broker health and logs; reconcile the network-server queue before resending."
 {{- end }}

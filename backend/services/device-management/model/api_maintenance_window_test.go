@@ -29,7 +29,7 @@ func newWindowTestApi(t *testing.T) *Api {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
+	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{},
 		&CommandDefinition{}, &MetricDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{},
 		&MaintenanceWindow{}); err != nil {
 		t.Fatalf("migrate: %v", err)

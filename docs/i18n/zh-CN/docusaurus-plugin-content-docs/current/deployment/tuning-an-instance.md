@@ -35,6 +35,35 @@ dcctl upgrade local my-instance --values tuning.yaml
 dcctl upgrade local my-instance --version <new-version>
 ```
 
+## Ingest metering {#ingest-metering}
+
+要减少平台短暂停顿后对租户合规流量的丢弃，可以选择启用带延迟补偿额度的计量方式。
+默认值仍为 `legacy`；`lagCredit` 尚未经过生产规模的验证。将以下顶层 Helm 值与其他设置
+一起放入调优覆盖层：
+
+```yaml title="tuning.yaml"
+eventSources:
+  ingestMetering: lagCredit
+```
+
+使用 `dcctl upgrade <provider> <instance> --values tuning.yaml` 应用它，或向 Helm 提供
+相同的值。请在将 event-sources 升级到 v1.4 后启用；旧版本会拒绝此模式。chart 会在
+event-sources Pod 上设置 `EVENT_SOURCES_INGEST_METERING`。这不是 `instance.config` 或
+`functionalAreas.event-sources.config` 下的键。未知模式会被拒绝。要恢复以前的计量方式，
+将值改为 `legacy` 并再次应用覆盖层。之后的 dcctl 升级会保留已记录的覆盖层。
+
+准入控制分别测量平台消息代理的捕获流和存储流的读取延迟。新到的网关流量、外部 MQTT
+和代理在线状态消息共享按 Pod 时钟计算的额度；HTTP 和入站集成保留现有的独立限流器。
+消息数和解码后读数的上限仍然适用，争用导致的丢弃和[每副本限制](../concepts/governance.md#per-replica)
+也仍然适用。这不会改变 MQTT 确认保证：确认后被丢弃的消息会丢失。
+
+补偿额度最多覆盖租户突发额度所允许的时间（`burst / rate`），上限为五秒。它不能覆盖任意
+长的中断，也不允许持续超过上限的速率。代理时钟修正的上限为两秒。若 Pod 在停顿期间启动，
+且尚未获知代理时钟偏移，当代理时钟超前时，它仍可能给予不足的补偿额度；请保持节点时钟
+同步。在[摄取监控](./observability.md#external-mqtt-owner)中观察读取延迟、追加时间偏差和
+丢弃原因，并使用 [IngestShedBeyondLagCredit](./alert-runbook.md#ingestshedbeyondlagcredit)
+和 [IngestAppendSkewLarge](./alert-runbook.md#ingestappendskewlarge) 处置手册。
+
 ## 覆盖层如何与 dcctl 设置的值组合 {#precedence}
 
 共三层，后一层覆盖前一层：
@@ -55,7 +84,7 @@ dcctl upgrade local my-instance --version <new-version>
 | --- | --- |
 | `replicas`、`rollingUpdate`、`terminationGracePeriodSeconds`、`nodeLossTolerationSeconds`、`shutdownDrainSeconds`、`podDisruptionBudget`、`startupProbe`、`livenessProbe` | 所有区域的规模与滚动更新 |
 | `resources`、`useMeasuredRequests`、`goMemLimitPercent`、`gogc`、`goMemLimit` | 所有区域的 CPU、内存以及 Go 的内存行为 |
-| `functionalAreas.<area>.replicas`、`.strategy`、`.resources`、`.measuredRequests`、`.goMemLimitPercent`、`.memoryLimitFloor`、`.gogc`、`.goMemLimit`、`.avoidEventStorePrimary`、`.eventPathSpread` | 同上，但只针对一个区域 |
+| `functionalAreas.<area>.replicas`、`.strategy`、`.resources`、`.measuredRequests`、`.goMemLimitPercent`、`.memoryLimitFloor`、`.memoryLimitFloorWithEnvelopes`、`.gogc`、`.goMemLimit`、`.avoidEventStorePrimary`、`.eventPathSpread` | 同上，但只针对一个区域 |
 | `functionalAreas.<area>.config` | 该区域自身的配置。未知的键会使服务在启动时停止 |
 | `functionalAreas.<area>.profiler.enabled`、`.blockRate`、`.mutexFraction` | 诊断用的性能分析监听器，默认关闭（见 [可观测性](./observability.md)）。其 `address` 不可调整 |
 | `frontend.replicas`、`frontend.resources` | 控制台的 Pod |
@@ -63,8 +92,11 @@ dcctl upgrade local my-instance --version <new-version>
 | `ingress.className`、`ingress.annotations`、`ingress.uploadMaxBodySize`、`ingress.gateway.className`、`ingress.gateway.annotations`、`networkPolicy.additionalAllowedCidrs`、`serviceAccount.annotations` | 入口如何对外提供，以及谁可以访问 Pod |
 | `mqttExposure.loadBalancer` | MQTT 负载均衡器的云相关设置，例如内部负载均衡器和允许的来源范围 |
 | `instance.config.infrastructure.nats.streamDesignRate`、`.streamRunwayMinutes`、`.streamMaxBytes`、`.streamMaxBytesCold`、`.streamMaxMsgs` | 事件流按其预留的中断缓冲时间，以及字节和消息数上限。写入任何内容之前，会用代理的卷检查预留量 |
+| `instance.config.infrastructure.nats.mqttDeviceUplinks` | 可选的 MQTT 原始载荷上行。通过 `--mqtt-device-uplinks` 记录的选择优先；新的覆盖层若与之冲突会被拒绝。请用该标志更改已记录的选择 |
+| `instance.config.infrastructure.tracing` | 分布式追踪（OpenTelemetry），默认关闭；参见[可观测性](./observability.md)。请在版本滚动发布完成后，通过一次独立升级启用：早期版本的 Pod 会拒绝此键 |
 | `instance.config.infrastructure.messaging.envelopes.resolved`、`.inbound`、`.inboundLingerMillis` | 事件是否以信封形式写入，默认关闭 |
 | `instance.config.infrastructure.tokenAudience.enforcement`、`.unscopedClientCredentials`、`.externalResources` | 令牌受众始终强制执行。enforcement 应未设置或为 `enforce`；`v1.4` 拒绝 `observe`。不同的设置 `unscopedClientCredentials: observe` 仍受支持。`externalResources` 列出平台外的资源服务器，另外两个键由 chart 派生和控制。 |
+| `eventSources.ingestMetering` | 可选的带延迟补偿额度的摄取计量；参见 [Ingest metering](#ingest-metering)。默认值为 `legacy` |
 | `brokerAdmin.allowCeilingShrink` | 允许一次升级把某个流的上限降到其现有内容以下。仅在该次升级时设置，之后移除 |
 
 `functionalAreas.event-management.replicas` 虽然属于可调优区域，但它本身不可调：它由 `--ha` 设置，事件存储的连接预留量正是按它来确定的。
@@ -101,6 +133,9 @@ dcctl upgrade local my-instance --version <new-version>
   每次读数都会多存一行。每个公式每次读数多存一行，所以带有 N 个计算指标的配置文件每次读数存储 (1 + N) 行，所以 N 个公式最多把体积放大到 1 + N 倍。档位上限 `calculatedMetricsPerProfile` 默认是 0（关闭），最大 32；它只是上限，成本取决于实际使用。
 - **保留期。** `lifecycle.retentionDays` 默认是 0，即永久保留数据。打算长期运行的实例应当设置它，
   这样卷只需容纳保留窗口加上未压缩的一周。
+  图表使用的每分钟测量聚合也会随之过期，但会多保留一个分块间隔（向上取整到天）。
+
+事件列表读取在 60 秒后停止（作用域受限的调用者指定锚点时为 15 秒）；对于大量历史数据，请缩小时间范围或按设备筛选，以免每页的精确计数耗尽时限。
 
 经验公式：未压缩窗口需要 每秒读数 × (1 + 计算指标数) × 每行字节数 × 86,400 秒 × 天数，并为预写日志、维护和增长
 留出四分之一的卷空间。按实测的 600 字节、每秒 10,000 条读数计，约为每天 520 GB，所以默认的七天未压缩数据约为 3.6 TB。

@@ -263,9 +263,11 @@ func Parse(raw []byte) (*Encoder, error) {
 				if f.Offset != nil {
 					offset = math.Abs(*f.Offset)
 				}
+				// Use the full bit width for both signed and unsigned fields. Keep
+				// float64 spacing within the raw-step tolerance used by Encode.
 				m := math.Max(offset, scale*math.Exp2(float64(8*t.size)))
 				if math.Nextafter(m, math.Inf(1))-m > scale*rawIntegerTolerance {
-					return nil, fmt.Errorf("scale and offset leave too little float64 precision: raise scale or lower offset")
+					return nil, refuse(*f.Param, "scale and offset leave too little float64 precision: raise scale or lower offset")
 				}
 			}
 			if err := add(*f.Param, k); err != nil {

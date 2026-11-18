@@ -58,7 +58,7 @@ Schema 表达不了的内容：
 
 尚无凭据的设备通过 HTTPS 向 `POST /api/device-management/provisioning/{tenant}/register` [自行注册](#self-registration)。这是与事件接入分开的端点，由 `device-management` 提供。
 
-通过 **HTTP**，设备只能发送事件（运维人员启用后，还可以发送[设备自身的载荷](#raw-payload)）。将同样的[事件正文](#device-event)以 `POST` 发送到 `event-sources` 服务（端口 8081）的 `/{instanceId}/{tenant}/events`。HTTP 没有下行通道：只使用 HTTP 的设备无法接收命令、配置或更新分配。
+通过 **HTTP**，设备可以发送事件（运维人员启用后，还可以发送[设备自身的载荷](#raw-payload)）。将同样的[事件正文](#device-event)以 `POST` 发送到 `event-sources` 服务（端口 8081）的 `/{instanceId}/{tenant}/events`。要接收命令，请将设备类型的 `commandChannel` 设为 `HTTP_PULL`；设备随后轮询命令，并向同一监听端口发送确认和响应。端点和认证方式参见 [HTTP 命令拉取](../concepts/commands.md#http-command-pull)。配置和托管更新分配仍使用 MQTT 的 desired/reports 通道；HTTP 命令拉取不承载这些内容。
 
 ### 网关命名空间 {#gateway-namespace}
 
@@ -156,7 +156,13 @@ Schema 表达不了的内容：
 
 #### NewRelationship {#new-relationship-payload}
 
+关系创建成功后，其事件会以包含锚点的信封形式保留在事件历史记录中。
+
+**如果存在设备自行创建的关系，则拒绝将该关系类型标记为 tracked。** `updateEntityRelationshipType` 会拒绝将类型标记为 tracked，直到该类型中设备自行创建的关系被删除，因为这些关系会在标记时成为所有权关系；拒绝消息会列出它们。请先删除这些关系，再将类型标记为 tracked。
+
 从发送事件的设备到同一租户中另一实体创建一条关系。此载荷没有 `entries` 数组，且三个键按确切名称读取，因此大小写有影响。缺失的键在解码消息时不会被拒绝：它按空字符串读取，随后事件会像下文所述情形一样在解析时失败。
+
+设备不能创建所有权或包含关系：如果 `NewRelationship` 指定了跟踪类型（包括 `assigned` 和任何租户定义的跟踪类型）或内置 `contains`，则在第一次投递时拒绝该事件，并以原因 `Invalid` 记录到 `failed-events`，不会重试。请使用认领码或 `createEntityRelationship` mutation 分配设备。非跟踪类型（包括 `member`）仍按原有方式工作。
 
 | 字段 | 类型 | 必填 | 含义 | 示例 |
 | --- | --- | --- | --- | --- |
@@ -180,7 +186,7 @@ Schema 表达不了的内容：
 | QoS | 0 或 1，与[事件](#topics)相同。 |
 
 - **主题就是启用开关。** `events` 主题上的消息绝不会被配置文件解码器读取，也不会根据正文的样子来选择。设备通过向这里发布来使用它的解码器。
-- **由运维人员授予该主题。** 除非设置了 `infrastructure.nats.mqttDeviceUplinks`，否则它处于关闭状态。关闭时，代理会拒绝向该主题的发布，就像拒绝设备无权使用的任何主题一样。使用 `dcctl` 时，在 `--values` 覆盖文件中设置（`instance.config.infrastructure.nats.mqttDeviceUplinks: true`），后续升级会沿用该设置。设备在下次连接时才获得授权，因此开启该设置会随着设备重连逐步覆盖整个设备群；**关闭它**也是同样的方式生效：已经连接的设备会保留其授权，直到重新连接或其会话令牌过期。
+- **由运维人员授予该主题。** 除非设置了 `infrastructure.nats.mqttDeviceUplinks`，否则它处于关闭状态。关闭时，代理会拒绝向该主题的发布，就像拒绝设备无权使用的任何主题一样。使用 `dcctl` 时，将 `--mqtt-device-uplinks` 传给 `dcctl upgrade`（或 `dcctl bootstrap`）；`--mqtt-device-uplinks=false` 会将其关闭。该选择会记录在实例上，后续升级会沿用。`--values` 覆盖文件中的 `instance.config.infrastructure.nats.mqttDeviceUplinks` 键仍然有效；通过标志记录的选择优先于覆盖文件中的键；请使用该标志更改此选择。与之冲突的覆盖值会被拒绝。设备在下次连接时才获得授权，因此开启该设置会随着设备重连逐步覆盖整个设备群；**关闭它**也是同样的方式生效：已经连接的设备会保留其授权，直到重新连接或其会话令牌过期。
 - **主题就是身份。** 与事件一样，设备在连接时完成认证，并且只能向带有**自己**令牌的主题发布，因此设备永远无法让一个载荷被当作另一台设备的载荷来解码。不要发送凭据：载荷不是信封，没有地方放凭据。设备的[认证模式](../guides/device-credentials.md)与对事件的作用方式相同。
 - **解码器读取什么。** 如果解码器读取帧，字节就是它的输入。如果它读取 JSON，且载荷以 `{` 开头，载荷还会被解析为 JSON 对象（最多 32 层嵌套），解码器读取的就是这个对象；以对象开头但并非对象的载荷会作为帧传递，需要 JSON 的解码器随后会记录 `missing_input`。
 - **限制。** 载荷与事件一样计入租户的摄取上限：先按一条消息计，再按解码器可能产生的读数计（至少为解码器的最大读数，开销大的解码器更多，但不超过 256）。
@@ -201,6 +207,13 @@ MQTT 无法回应设备，因此平台无法处理的载荷会记录下来供运
 :::
 
 **通过 HTTP**，同样的能力是 `event-sources` 服务上的 `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink`。设备在请求头中出示自己的凭据（`Authorization: Bearer <token>`，或 `X-DeviceChain-Credential-Type`、`-Id`、`-Secret`），因为二进制正文无处携带凭据；没有凭据时该路由返回 `401`。只有运维人员在 `event-sources` 上设置了 `httpIngest.deviceUplinks` 时它才存在，否则返回 `404`。
+
+| HTTP | 响应 |
+| --- | --- |
+| `429` | 来自此来源地址的请求超出限额。`Retry-After` 指示何时重试。 |
+| `503` | 在此设备的凭据遭到猜测期间，该设备的每条 HTTP 上行请求（包括使用正确凭据的请求）都会收到 `503` 和 `Retry-After`，直到暂停结束（每次最长 60 秒）。 |
+
+**设备密码猜测统一计数，无论通过哪种途径到达。** 在 HTTP 设备上行路由上出示的错误密码，现在与错误的 MQTT 密码计入同一个按凭据实施的暂停，所有副本共享计数，因此无法再将猜测分散到两种途径以获得双倍尝试次数。凭据暂停期间，使用它的 HTTP 上行请求会收到 `503` 和 `Retry-After`，使用它的 MQTT 连接则会被拒绝，与之前一样。
 
 ## 命令下发 {#command-delivery}
 
@@ -391,11 +404,11 @@ POST /api/device-management/provisioning/{tenant}/register
 | --- | --- |
 | `Unauthenticated` | 设备认证为 `required` 时没有凭据；凭据认证失败；或正文中的 `device` 不是该凭据所属的设备。 |
 | `DeviceNotFound` | 未使用凭据，且 `device` 令牌未在租户中注册。 |
-| `Invalid` | 事件早于 366 天以上，或无法按其类型解释。 |
+| `Invalid` | 事件早于 366 天以上，或无法按其类型解释；指定跟踪或包含关系类型的 NewRelationship（第一次投递时即记录，不会重试） |
 | `ApiCallFailed` | 解析所需的某次查询或写入失败，包括平台无法创建的 [`NewRelationship`](#new-relationship-payload)。 |
 | `NotGatewayChild` | 网关为未分配给它的设备或不存在的设备发布了事件，或网关已停用。不会重试：在第一次投递时即记录。 |
 
-被拒绝的事件会一直重试到第五次投递，因此如果设备在此期间完成注册，或数据库已恢复，事件仍会被存储。例外是过旧而无法存储的事件，它在第一次投递时就被记录，因为任何重试都无法改变它的时间。
+被拒绝的事件会一直重试到第五次投递，因此如果设备在此期间完成注册，或数据库已恢复，事件仍会被存储。过旧而无法存储的事件、网关拒绝以及设备发起的所有权或包含关系会在第一次投递时即记录，不会重试。
 
 ### 命令响应 {#rejections-command-responses}
 

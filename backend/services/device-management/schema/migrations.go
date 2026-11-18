@@ -69,5 +69,11 @@ var (
 		NewSemanticBindingsSchema(),
 		NewAgentProposalsSchema(),
 		NewCommandEncoderSchema(),
+		NewAgentSafetySchema(),
+		NewAutomationReviewsSchema(),
+		NewAutomationReviewEnforcementSchema(),
+		NewEntityAttributeUniqueKeySchema(),
+		NewPendingEntityDeletionsSchema(),
+		NewAlarmPositionDerivedSchema(),
 	}
 )

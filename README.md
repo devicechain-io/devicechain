@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-**DeviceChain is an Apache 2.0 IoT platform you run on Kubernetes.** Devices connect over MQTT, HTTP, Sparkplug B or LwM2M, or through a LoRaWAN network server. Rules raise alarms and send commands back, and dashboards, over-the-air updates and multi-tenant access are built in. There is no device cap and no enterprise edition.
+**DeviceChain is an Apache 2.0 IoT platform you run on Kubernetes, ready for AI agents.** Devices connect over MQTT, HTTP, Sparkplug B or LwM2M, or through a LoRaWAN network server. Rules raise alarms and send commands back, and dashboards, over-the-air updates and multi-tenant access are built in. An optional [MCP server](https://docs.devicechain.io/concepts/mcp) lets Claude, Cursor or VS Code read devices, telemetry, alarms and commands with the signed-in user's own token, and an assistant's proposals to acknowledge or clear alarms wait for a person to approve them (Preview). There is no device cap and no enterprise edition.
 
 <p align="center">
   <a href="https://devicechain.io/#see-it-run"><img src="branding/media/sitepulse-loop.webp" width="720" alt="A haul truck in a 3D quarry: its telemetry arrives over MQTT, a low-fuel rule fires, a refuel command is sent, the truck heads for the fuel bay while other trucks keep to their own lanes of the two-way haul road, it refuels, and the command completes."></a>
@@ -57,27 +57,39 @@ More on the [DeviceChain YouTube channel](https://www.youtube.com/@devicechain-i
 
 ### Try it locally
 
-You need Docker, `kubectl`, `helm`, `kind` and OpenTofu on your `PATH`, plus `dcctl` from the
-[releases page](https://github.com/devicechain-io/devicechain/releases). Most of the time is the
+You need Docker, `kubectl`, `kind` and OpenTofu 1.10 or later on your `PATH`, plus `dcctl` and
+`dc-simulator` from the [releases page](https://github.com/devicechain-io/devicechain/releases).
+Give Docker at least 4 CPUs, 8 GB of memory and 40 GB of free disk. Most of the time is the
 bootstrap; the [quickstart](https://docs.devicechain.io/quickstart/first-device) budgets about half
-an hour end to end.
+an hour end to end. The commands are for a bash shell (on Windows, Git Bash or WSL).
 
 ```bash
-dcctl install local                                        # a kind cluster and what instances share
+dcctl install local --compact                              # a kind cluster sized for a laptop
 dcctl bootstrap local devicechain --host localhost --no-tls # an instance, served at http://localhost/
-dcctl sim create demo                                      # a tenant and a sign-in for it
+dcctl sim create building --manifest buildingpulse         # a tenant and a sign-in for it
 ```
 
-Open http://localhost/ and sign in as `demo@sim.devicechain.local`, the identity `sim create`
-made for the tenant `sim-demo`. Its password is the `simPassword` field in
-`~/.devicechain/sims/demo.json`. (The bootstrap also prints a password for
-`superuser@devicechain.local`, which administers the instance and sees no tenant data.)
+The simulator sends its readings to the device ingest port, which a local install does not
+publish. Forward it in a second terminal and leave it running, then start the simulator:
+
+```bash
+kubectl -n dci-devicechain port-forward svc/event-sources 8081:8081   # second terminal
+dcctl sim run building --simulator ./dc-simulator                     # Ctrl+C stops it
+```
+
+It provisions twelve thermostats across three buildings, with a rule that raises an alarm when a
+temperature goes above 30, and then sends readings every five seconds. Open http://localhost/ and
+sign in as `building@sim.devicechain.local`, the identity `sim create` made for the tenant
+`sim-building`. Its password is the `simPassword` field in `~/.devicechain/sims/building.json`.
+Under **Monitor → Alarms**, `bp-over-temp` alarms raise and clear as the temperatures rise and
+fall. (The bootstrap also prints a password for `superuser@devicechain.local`, which administers
+the instance and sees no tenant data.)
 [Your first device](https://docs.devicechain.io/quickstart/first-device) continues from here: it
 creates a device, sends a reading with `curl` and shows it in the console.
 
 [Docs](https://docs.devicechain.io) · [Examples](examples/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Discussions](https://github.com/devicechain-io/devicechain/discussions) · [Releases](https://github.com/devicechain-io/devicechain/releases)
 
-DeviceChain 1.0 is released; see [Status](#status) for what that promises.
+The current release is **v1.6.0**; **v1.7** is in progress. See [Status](#status) for the compatibility promises.
 
 DeviceChain™ takes in telemetry from device fleets, keeps a record of each device and the assets,
 areas and customers it belongs to, detects conditions in the data as it arrives, and sends
@@ -96,7 +108,8 @@ Devices send data over these transports:
   your existing Sparkplug broker as a Host Application
 - [OMA LwM2M](https://docs.devicechain.io/concepts/lwm2m) over CoAP/UDP with DTLS
 
-The transports differ in what they support. HTTP is ingest only, Sparkplug commands (`NCMD` and
+The transports differ in what they support. HTTP devices can opt into command polling with the
+`HTTP_PULL` command channel on their device type (available since v1.4). Sparkplug commands (`NCMD` and
 `DCMD`) are opt-in and off by default, and LwM2M telemetry is decoded from SenML-JSON only. Sparkplug and LwM2M are not in
 the default install; add them at bootstrap with `--enable-area sparkplug-ingest` or
 `--enable-area lwm2m-ingest`. The
@@ -227,7 +240,6 @@ carries the Helm chart, the operator manifests and the OpenTofu configuration in
 binary is all you need from this repository. It drives these tools, which must be on your `PATH`:
 
 - `kubectl`
-- `helm`
 - OpenTofu (`tofu`) or `terraform`
 - `docker`, only when `dcctl` runs the cluster itself (the `local` provider, which runs kind on
   Docker) or builds images from source (`--build`). Installing into an existing cluster with
@@ -246,7 +258,7 @@ created inside an instance.
 ```bash
 # Prepare the cluster. This creates a kind cluster named "devicechain" if there is none, and
 # installs the DeviceChain operator, a shared PostgreSQL server and its backup store, the
-# CloudNativePG operator, cert-manager, Prometheus and Grafana, and ingress-nginx.
+# CloudNativePG operator, cert-manager, Prometheus and Grafana, and Traefik with Gateway API.
 dcctl install local
 
 # Create an instance served at http://localhost/.

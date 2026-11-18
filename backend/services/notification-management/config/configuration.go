@@ -5,10 +5,15 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
 )
+
+// MaxDurationSeconds is the largest whole number of seconds a time.Duration can hold;
+// a larger value overflows when converted.
+const MaxDurationSeconds = int(math.MaxInt64 / int64(time.Second))
 
 // NotificationManagementConfiguration is the typed config for the notification
 // service (ADR-017): the alarm→human last mile. The durable consumer over the
@@ -126,16 +131,32 @@ func (c *NotificationManagementConfiguration) ApplyDefaults() {
 // stall shutdown; fewer than one attempt would never deliver).
 func (c *NotificationManagementConfiguration) Validate() error {
 	if c.DeliverySeconds < 0 {
-		return fmt.Errorf("DeliverySeconds must not be negative, got %d", c.DeliverySeconds)
+		return fmt.Errorf("deliverySeconds must not be negative, got %d", c.DeliverySeconds)
+	}
+	if c.DeliverySeconds > MaxDurationSeconds {
+		return fmt.Errorf("deliverySeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.DeliverySeconds)
 	}
 	if c.DeliveryAttempts < 1 {
 		return fmt.Errorf("DeliveryAttempts must be at least 1, got %d", c.DeliveryAttempts)
 	}
 	if c.StateRetentionSeconds < 0 {
-		return fmt.Errorf("StateRetentionSeconds must not be negative, got %d", c.StateRetentionSeconds)
+		return fmt.Errorf("stateRetentionSeconds must not be negative, got %d", c.StateRetentionSeconds)
+	}
+	if c.StateRetentionSeconds > MaxDurationSeconds {
+		return fmt.Errorf("stateRetentionSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.StateRetentionSeconds)
 	}
 	if c.AttemptRetentionSeconds < 0 {
-		return fmt.Errorf("AttemptRetentionSeconds must not be negative, got %d", c.AttemptRetentionSeconds)
+		return fmt.Errorf("attemptRetentionSeconds must not be negative, got %d", c.AttemptRetentionSeconds)
+	}
+	if c.AttemptRetentionSeconds > MaxDurationSeconds {
+		return fmt.Errorf("attemptRetentionSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.AttemptRetentionSeconds)
+	}
+	// Negative sweep settings disable the sweeps, so only bound them above.
+	if c.RetentionSweepSeconds > MaxDurationSeconds {
+		return fmt.Errorf("retentionSweepSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.RetentionSweepSeconds)
+	}
+	if c.EscalationSweepSeconds > MaxDurationSeconds {
+		return fmt.Errorf("escalationSweepSeconds must be at most %d seconds, the longest a duration can hold (got %d)", MaxDurationSeconds, c.EscalationSweepSeconds)
 	}
 	if c.DefaultMaxEscalations < 1 {
 		return fmt.Errorf("DefaultMaxEscalations must be at least 1, got %d", c.DefaultMaxEscalations)

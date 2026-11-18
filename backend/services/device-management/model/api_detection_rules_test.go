@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -311,5 +312,74 @@ func TestValidateDetectionRuleToken(t *testing.T) {
 		if err := validateDetectionRuleToken(bad); err == nil {
 			t.Errorf("invalid token %q accepted", bad)
 		}
+	}
+}
+
+// event-processing's gate refuses more than 1,000 rules per call; publish checks the same
+// bound first so the author sees LIMIT_EXCEEDED naming it, not "validation is unavailable".
+func TestValidateSnapshotDetectionRules_RefusesMoreEnabledRulesThanTheGateCompiles(t *testing.T) {
+	rules := make([]*DetectionRule, 0, MaxEnabledDetectionRulesPerPublish+6)
+	for i := 0; i < MaxEnabledDetectionRulesPerPublish+1; i++ {
+		rules = append(rules, enabledRule(fmt.Sprintf("r%d", i)))
+	}
+	for i := 0; i < 5; i++ {
+		disabled := enabledRule(fmt.Sprintf("off%d", i))
+		disabled.Enabled = false
+		rules = append(rules, disabled)
+	}
+	fake := &fakeRuleValidator{}
+	api := &Api{DetectionRuleValidator: fake}
+
+	// On main the validator was called with 1,001 rules; a real event-processing
+	// then refuses, which the gate reports as "validation is unavailable".
+	err := api.validateSnapshotDetectionRules(context.Background(), snapshotOf(rules...))
+	le, ok := limit.As(err)
+	if !ok {
+		t.Fatalf("expected a limit refusal, got: %v", err)
+	}
+	if le.Got != MaxEnabledDetectionRulesPerPublish+1 || le.Max != MaxEnabledDetectionRulesPerPublish {
+		t.Fatalf("unexpected limit refusal: %+v", le)
+	}
+	if fake.called {
+		t.Fatalf("validator called for an oversized enabled-rule set")
+	}
+}
+
+// The publish bound holds even where no validator is wired (service secret unset): the
+// documented limit is the profile's, not a property of event-processing being reachable.
+func TestValidateSnapshotDetectionRules_BoundHoldsWithoutAValidator(t *testing.T) {
+	rules := make([]*DetectionRule, 0, MaxEnabledDetectionRulesPerPublish+1)
+	for i := 0; i < MaxEnabledDetectionRulesPerPublish+1; i++ {
+		rules = append(rules, enabledRule(fmt.Sprintf("r%d", i)))
+	}
+	api := &Api{}
+	if _, ok := limit.As(api.validateSnapshotDetectionRules(context.Background(), snapshotOf(rules...))); !ok {
+		t.Fatal("expected a limit refusal with no validator wired")
+	}
+	if err := api.validateSnapshotDetectionRules(context.Background(), snapshotOf(rules[:MaxEnabledDetectionRulesPerPublish]...)); err != nil {
+		t.Fatalf("at the bound with no validator wired the gate must still skip, got: %v", err)
+	}
+}
+
+// Exactly the bound still reaches the gate, and disabled rules do not count toward it.
+func TestValidateSnapshotDetectionRules_AtTheBoundStillCallsTheGate(t *testing.T) {
+	rules := make([]*DetectionRule, 0, MaxEnabledDetectionRulesPerPublish+5)
+	for i := 0; i < MaxEnabledDetectionRulesPerPublish; i++ {
+		rules = append(rules, enabledRule(fmt.Sprintf("r%d", i)))
+	}
+	for i := 0; i < 5; i++ {
+		disabled := enabledRule(fmt.Sprintf("off%d", i))
+		disabled.Enabled = false
+		rules = append(rules, disabled)
+	}
+	fake := &fakeRuleValidator{}
+	api := &Api{DetectionRuleValidator: fake}
+
+	if err := api.validateSnapshotDetectionRules(context.Background(), snapshotOf(rules...)); err != nil {
+		t.Fatalf("unexpected error at the bound: %v", err)
+	}
+	if !fake.called || len(fake.seen) != MaxEnabledDetectionRulesPerPublish {
+		t.Fatalf("expected exactly %d enabled rules at the gate: called=%v count=%d",
+			MaxEnabledDetectionRulesPerPublish, fake.called, len(fake.seen))
 	}
 }

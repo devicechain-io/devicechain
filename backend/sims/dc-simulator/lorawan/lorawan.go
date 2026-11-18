@@ -40,6 +40,8 @@ const TTSPath = "uplink-message"
 
 // Config is one run.
 type Config struct {
+	// Downlink enables the ChirpStack v4 queue and report feed; nil preserves uplink-only mode.
+	Downlink *Downlink
 	// NS is ChirpStack or TTS.
 	NS string
 	// URL is the integration's base URL, https://<host>/api/integrations/<tenant>/<integration>,
@@ -53,7 +55,7 @@ type Config struct {
 	HostHeader string
 	// DevEUIs are the devices that uplink, 16 hex digits each.
 	DevEUIs []string
-	// Uplinks is how many uplinks each device sends.
+	// Uplinks is how many uplinks each device sends; zero with Downlink runs until interrupted.
 	Uplinks int
 	// Interval is the pause between rounds of uplinks; zero sends them back to back.
 	Interval time.Duration
@@ -82,6 +84,11 @@ type Summary struct {
 	Resent   int            `json:"resent"`
 	Statuses map[string]int `json:"statuses"`
 	Errors   int            `json:"errors"`
+	// Queued is how many downlinks the queue accepted, present (even when zero) only when a
+	// listener was used. Reported counts the platform's HTTP statuses for the reports, by report
+	// kind; "0" means no HTTP response (a transport failure).
+	Queued   *int                      `json:"queued,omitempty"`
+	Reported map[string]map[string]int `json:"reported,omitempty"`
 	// FirstError is the first transport failure, so a run that could not reach the platform says why.
 	FirstError string `json:"firstError,omitempty"`
 	RunID      string `json:"runId"`
@@ -119,7 +126,10 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%q is not a DevEUI: 16 hexadecimal digits", e)
 		}
 	}
-	if c.Uplinks < 1 {
+	if c.Downlink != nil && c.NS != ChirpStack {
+		return fmt.Errorf("--lorawan-downlink-listen requires --lorawan-ns chirpstack (ChirpStack v4 only)")
+	}
+	if c.Uplinks < 0 || (c.Uplinks == 0 && c.Downlink == nil) {
 		return fmt.Errorf("--uplinks must be at least 1")
 	}
 	return nil
@@ -139,7 +149,16 @@ func validDevEUI(s string) bool {
 
 // Run posts every uplink and returns what the platform answered. A transport failure is counted
 // in Errors and does not stop the run.
-func Run(ctx context.Context, c Config) (Summary, error) {
+func Run(ctx context.Context, c Config) (sum Summary, runErr error) {
+	if c.Downlink != nil {
+		defer func() {
+			c.Downlink.mu.Lock()
+			defer c.Downlink.mu.Unlock()
+			c.Downlink.closed = true
+			n := c.Downlink.queued
+			sum.Queued = &n
+		}()
+	}
 	if err := c.Validate(); err != nil {
 		return Summary{}, err
 	}
@@ -155,12 +174,21 @@ func Run(ctx context.Context, c Config) (Summary, error) {
 	if runID == "" {
 		runID = fmt.Sprintf("%d", now().UnixNano())
 	}
-	sum := Summary{NS: c.NS, Statuses: map[string]int{}, RunID: runID}
-	post := func(r Request) {
+	sum = Summary{NS: c.NS, Statuses: map[string]int{}, RunID: runID}
+	if c.Downlink != nil {
+		sum.Reported = map[string]map[string]int{"txack": {}, "ack": {}}
+	}
+	post := func(r Request) int {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.URL, bytes.NewReader(r.Body))
 		if err != nil {
+			if c.Downlink != nil && ctx.Err() != nil {
+				return 0
+			}
 			sum.Errors++
-			return
+			if sum.FirstError == "" {
+				sum.FirstError = err.Error()
+			}
+			return 0
 		}
 		if c.HostHeader != "" {
 			req.Host = c.HostHeader
@@ -169,17 +197,20 @@ func Run(ctx context.Context, c Config) (Summary, error) {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 		resp, err := client.Do(req)
 		if err != nil {
+			if c.Downlink != nil && ctx.Err() != nil {
+				return 0
+			}
 			sum.Errors++
 			if sum.FirstError == "" {
 				sum.FirstError = err.Error()
 			}
-			return
+			return 0
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
-		sum.Statuses[fmt.Sprint(resp.StatusCode)]++
+		return resp.StatusCode
 	}
-	for n := 0; n < c.Uplinks; n++ {
+	for n := 0; ; n++ {
 		at := now()
 		for _, eui := range c.DevEUIs {
 			if err := ctx.Err(); err != nil {
@@ -189,22 +220,39 @@ func Run(ctx context.Context, c Config) (Summary, error) {
 			if err != nil {
 				return sum, err
 			}
-			post(r)
+			items := c.Downlink.snapshot(eui)
+			if status := post(r); status != 0 {
+				sum.Statuses[fmt.Sprint(status)]++
+			}
 			sum.Sent++
 			if c.Resend {
-				post(r)
+				if status := post(r); status != 0 {
+					sum.Statuses[fmt.Sprint(status)]++
+				}
 				sum.Resent++
 			}
+			for _, item := range items {
+				c.Downlink.reports(c, item, now(), post, &sum)
+			}
 		}
-		if c.Interval > 0 && n < c.Uplinks-1 {
+		if err := ctx.Err(); err != nil {
+			return sum, err
+		}
+		if c.Uplinks > 0 && n >= c.Uplinks-1 && c.Downlink.closeIfDrained() {
+			return sum, nil
+		}
+		interval := c.Interval
+		if interval == 0 && (c.Uplinks == 0 || n >= c.Uplinks-1) {
+			interval = time.Second
+		}
+		if interval > 0 {
 			select {
 			case <-ctx.Done():
 				return sum, ctx.Err()
-			case <-time.After(c.Interval):
+			case <-time.After(interval):
 			}
 		}
 	}
-	return sum, nil
 }
 
 // Build makes the n-th uplink of one device, as the network server would post it. It is a pure

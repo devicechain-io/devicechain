@@ -35,8 +35,7 @@ spec:
         # Metrics disabled for now (the deprecated kube-rbac-proxy sidecar was
         # removed; re-enable via controller-runtime's built-in metrics authn/z).
         - "--metrics-bind-address=0"
-        # NOTE: main.go does not yet wire leader election; add --leader-elect once
-        # it does (needed before the operator runs with replicas > 1).
+        - "--leader-elect"
         # Placeholder image name `controller`; `make deploy IMG=…` (kustomize
         # edit set image controller=…) rewrites it to the real published tag.
         image: controller:latest

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -38,6 +38,28 @@ func beginPurge(t *testing.T, s *Store, token string) (*Tenant, time.Time) {
 	reloaded, err := s.TenantByToken(ctx, token)
 	require.NoError(t, err)
 	return reloaded, epoch
+}
+
+func TestSetTenantEnabledAndBumpGenerationRefusesAPurgingTenant(t *testing.T) {
+	s := newPurgeTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.sys(ctx).AutoMigrate(&AgentPolicy{}))
+	tenant := &Tenant{Token: "acme", Enabled: true}
+	require.NoError(t, s.CreateTenant(ctx, tenant))
+	stale := *tenant
+	require.NoError(t, s.BeginTenantPurge(ctx, tenant, time.Now().UTC()))
+
+	for _, enabled := range []bool{true, false} {
+		_, err := s.SetTenantEnabledAndBumpGeneration(ctx, &stale, enabled)
+		require.ErrorIs(t, err, ErrTenantPurging)
+		after, err := s.TenantByToken(ctx, tenant.Token)
+		require.NoError(t, err)
+		require.False(t, after.Enabled)
+		var heads int64
+		require.NoError(t, s.sys(ctx).Model(&AgentPolicy{}).
+			Where("tenant_id = ?", tenant.Token).Count(&heads).Error)
+		require.Zero(t, heads)
+	}
 }
 
 // TestCompleteTenantPurgeReleasesTheTokenForReuse is the whole point of ADR-077 slice 2

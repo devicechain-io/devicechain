@@ -13,8 +13,8 @@ import (
 )
 
 // The second factor's data-plane surface. Every mutation here takes the IDENTITY token as an
-// argument, like login's neighbours, and re-checks the password in the identity layer; none
-// reads the Authorization header.
+// argument, like login's neighbours, except StepUp, which binds the Authorization header
+// to the console refresh token.
 
 // VerifyMfa completes a sign-in that login held for its second factor. The source address keys
 // the per-source limiter and lock; the credential budget (one verification per request) is
@@ -191,4 +191,17 @@ func (r *AdminResolver) ResetIdentityMfa(ctx context.Context, args struct {
 		return nil, err
 	}
 	return &AdminIdentityResolver{M: *id}, nil
+}
+
+// StepUp renews the caller's own tenant session after one authenticator verification.
+func (r *SchemaResolver) StepUp(ctx context.Context, args struct {
+	RefreshToken string
+	Code         string
+}) (*AuthTokenResolver, error) {
+	claims, _ := auth.ClaimsFromContext(ctx)
+	pair, err := r.getIdentityManager(ctx).StepUp(ctx, claims, args.RefreshToken, args.Code, gqlcore.SourceAddr(ctx))
+	if err != nil {
+		return nil, err
+	}
+	return &AuthTokenResolver{pair: pair}, nil
 }

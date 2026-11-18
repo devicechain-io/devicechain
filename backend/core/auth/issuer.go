@@ -126,7 +126,7 @@ type tokenSpec struct {
 	// only on refresh and identity tokens; see Claims.SessionEpoch.
 	sessionEpoch SessionEpoch
 	// sessionID is the sign-in session's id (the "sid" claim). Set on refresh and identity
-	// tokens, and on OAuth access tokens through WithSessionID; see Claims.SessionID.
+	// tokens, and on OAuth and console tenant access tokens through WithSessionID; see Claims.SessionID.
 	sessionID SessionID
 	// scopeAnchors is a scoped membership's scope (the "scp" claim, ADR-081). Set only
 	// by the two scoped access mints, from a Scope that was validated when it was built.

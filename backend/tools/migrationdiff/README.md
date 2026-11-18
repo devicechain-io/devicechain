@@ -3,8 +3,8 @@
 Runs every service's `gormigrate` chain through the **real** `core/rdb` path against a
 throwaway TimescaleDB and captures a canonical schema snapshot per functional area.
 
-It exists to underwrite the **GA migration-squash**: the plan to collapse each
-service's incremental migration chain into a single frozen baseline before `v1.0.0`.
+It underwrote the **GA migration-squash**, completed before `v1.0.0`: each
+service's incremental migration chain was collapsed into a frozen baseline.
 The risk in a squash is that the baseline silently produces a *different* schema than
 the chain it replaces (a dropped index, a different physical column order, a
 table that was created-then-dropped by the chain but simply never exists in the
@@ -47,16 +47,18 @@ multiset rather than a set fixes *how many*.
 ## Usage
 
 ```bash
-# Capture golden schemas from the current incremental chains (do this now, pre-squash):
+# Capture golden schemas after an intentional schema change (append a migration):
 hack/migration-diff.sh snapshot
 
-# Assert the chains still reproduce the goldens (CI guard; and the squash proof):
+# Assert the chains still reproduce the goldens (CI guard):
 hack/migration-diff.sh verify
 ```
 
-`hack/migration-diff.sh` stands up a throwaway `timescale/timescaledb` container
-(matching `deploy/opentofu`'s pinned image), runs the tool, and tears the container
-down. Requires Docker + Go.
+`hack/migration-diff.sh` stands up a throwaway, digest-pinned community
+`timescale/timescaledb` container on PostgreSQL 16, runs the tool, and tears it down.
+The deployed event store uses the repository's PostgreSQL 17 operand image;
+`MDIFF_LAUNCH=operand` checks that image against the same goldens, as CI does.
+Requires Docker + Go.
 
 Direct invocation (if you manage the container yourself):
 
@@ -79,9 +81,12 @@ The four modes answer four different questions about one migration chain:
 `coverage` and `replay` refuse `-only`: a run that skipped areas reports them clean, which
 reads exactly like a run that checked them.
 
-## The squash workflow
+## The completed squash workflow
 
-1. **Now** (chains still incremental): `hack/migration-diff.sh snapshot` and commit
+The pre-GA procedure below is retained to explain the equivalence proof. Current schema
+changes append migrations; do not repeat the squash or edit a released baseline.
+
+1. **Before the squash** (chains still incremental): `hack/migration-diff.sh snapshot` and commit
    `golden/*.sql`. These are the equivalence oracle. `verify` runs in CI to catch any
    schema change that lands without refreshing its golden.
 2. **At the GA squash** (per service): replace the chain in the service's migration
@@ -101,7 +106,7 @@ reads exactly like a run that checked them.
   `snapshot` and `verify` must use the same image. The script pins it; override with
   `MDIFF_IMAGE` when the deployed Timescale version is bumped, and re-snapshot.
 - **event-management** is the hard case — the only Timescale user (hypertables + a
-  continuous aggregate). The other nine areas are plain Postgres and their probe output is
+  continuous aggregate). The other ten areas are plain Postgres and their probe output is
   empty.
 - Goldens capture **schema only** (no data); the `<area>_migrations` bookkeeping table is
   identical across chain and baseline, so it is left in.
@@ -122,7 +127,7 @@ reads exactly like a run that checked them.
 - 🔴 **A LOST SEED IS INVISIBLE HERE, and that is the sharp edge of a flatten.**
   `pg_dump --schema-only` captures no rows, so a baseline that creates every table
   correctly and forgets the data a migration inserted passes with `ok`. Measured:
-  stubbing out `seedTenantTiers` in user-management's baseline left all ten areas green
+  stubbing out `seedTenantTiers` in user-management's baseline left all ten areas at the time green
   and the exit code 0 — while a tenant cannot be created at all without a tier row,
   because the FK is required. The only gate that catches it is `dcctl bootstrap` failing
   in the kind e2e, which is slow and names the symptom rather than the cause.

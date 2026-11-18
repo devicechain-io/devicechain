@@ -98,7 +98,7 @@ func TestAFailedReinstallIsNotReadAsInstalled(t *testing.T) {
 	if err := writeInstalled(context.Background(), c, aCompleteInstall(), installClock); err != nil {
 		t.Fatal(err)
 	}
-	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.1", installClock); err != nil {
+	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.1", installClock, nil); err != nil {
 		t.Fatal(err)
 	}
 	// ...and the apply fails here, so nothing writes "installed" again.
@@ -116,7 +116,7 @@ func TestAFailedReinstallIsNotReadAsInstalled(t *testing.T) {
 // about the first one poisoning the record.
 func TestAnInstallThatFinishesIsUsableAfterBeingMarked(t *testing.T) {
 	c := fake.NewSimpleClientset()
-	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.0", installClock); err != nil {
+	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.0", installClock, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeInstalled(context.Background(), c, aCompleteInstall(), installClock); err != nil {

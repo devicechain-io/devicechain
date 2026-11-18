@@ -69,6 +69,7 @@ const maxValuesOverlayBytes = 128 * 1024
 // listener's ADDRESS are all dcctl's or the declaration's. None of them is a tuning knob: they are
 // credentials, wiring, exposure or a way to weaken the pod's isolation.
 var tunableValues = []string{
+	"instance.config.infrastructure.tracing",
 	// Scale and rollout.
 	"replicas",
 	"rollingUpdate",
@@ -94,6 +95,7 @@ var tunableValues = []string{
 	// setting the volume cannot hold is refused by name rather than crash-looping a service.
 	// The ones dcctl itself presets (the compact profile's ceilings and the design rate) are in
 	// presetDefaults, which is what lets an overlay replace them.
+	"instance.config.infrastructure.nats.shardGroups",
 	"instance.config.infrastructure.nats.streamDesignRate",
 	"instance.config.infrastructure.nats.streamRunwayMinutes",
 	"instance.config.infrastructure.nats.streamMaxBytes",
@@ -103,7 +105,9 @@ var tunableValues = []string{
 	// its device type's profile to read. Off by default. It is an opt-in, not wiring: it adds one
 	// topic, confined to the device's own token, to the grant device-management mints, and the
 	// capture stream's subject list follows it at the next upgrade's broker step. Carried forward
-	// by every later upgrade like the rest of the overlay.
+	// by every later upgrade like the rest of the overlay. --mqtt-device-uplinks records
+	// the choice on the instance; change it with the flag. A fresh conflicting overlay
+	// value is refused by checkDeviceUplinksOverlay.
 	"instance.config.infrastructure.nats.mqttDeviceUplinks",
 	// Whether device-management writes resolved events as envelopes. A capacity dial, off by
 	// default; dcctl records when it is turned on and what the streams held when it is turned
@@ -356,13 +360,34 @@ func refuseOverlayKey(path []string) string {
 	return "this is not an operator-tunable value: dcctl or the chart owns it (images, credentials, endpoints, exposure, the area set, security contexts)"
 }
 
+// refuseMisplacedDeviceUplinks explains the choice at a key outside its tunable path.
+func refuseMisplacedDeviceUplinks(overlay map[string]interface{}, path []string) string {
+	fullPath := splitPath("instance.config.infrastructure.nats.mqttDeviceUplinks")
+	if len(path) < 2 || !strings.EqualFold(path[len(path)-2], "nats") ||
+		!strings.EqualFold(path[len(path)-1], "mqttDeviceUplinks") ||
+		(len(path) == len(fullPath) && pathsOverlap(path, fullPath)) {
+		return ""
+	}
+	value, _ := lookupPath(overlay, path)
+	remedy := "to set it, run with --mqtt-device-uplinks=true or --mqtt-device-uplinks=false"
+	if choice, ok := value.(bool); ok {
+		remedy = fmt.Sprintf("to make it %t, run with --mqtt-device-uplinks=%t", choice, choice)
+	}
+	return fmt.Sprintf("this key is not where the device-uplinks choice is set (requested value: %v). dcctl records that choice on the instance: %s "+
+		"(an overlay can set it only at instance.config.infrastructure.nats.mqttDeviceUplinks, and a choice recorded with the flag takes precedence over the overlay)", value, remedy)
+}
+
 // refuseOverlayKeys checks every leaf of an overlay and reports ALL the ones it refuses,
 // each by its dotted key, in one error -- an operator fixing a file should not have to
 // discover its problems one run at a time.
 func refuseOverlayKeys(overlay map[string]interface{}, source string) error {
 	var lines []string
 	for _, leaf := range overlayLeaves(overlay) {
-		if why := refuseOverlayKey(leaf); why != "" {
+		why := refuseMisplacedDeviceUplinks(overlay, leaf)
+		if why == "" {
+			why = refuseOverlayKey(leaf)
+		}
+		if why != "" {
 			lines = append(lines, fmt.Sprintf("  %s: %s", strings.Join(leaf, "."), why))
 		}
 	}
@@ -417,6 +442,9 @@ func refuseCarriedObserveValues(values map[string]interface{}, source, command s
 // then values.schema.json over the chart's own defaults with the overlay on top. It reads
 // nothing from a cluster, so it runs before anything exists to change.
 func ValidateValuesOverlay(overlay map[string]interface{}) error {
+	if _, err := shardGroupsFromValues(overlay); err != nil {
+		return err
+	}
 	if err := refuseObserveValues(overlay, "the values overlay"); err != nil {
 		return err
 	}
@@ -514,7 +542,19 @@ func deepCopyValues(m map[string]interface{}) map[string]interface{} {
 // then refuses, or the reverse.
 func authoringValues(st *State) map[string]interface{} {
 	vals := helmValues(st)
+	if st.ShardGroups != nil && !st.ValuesOverlayIntent {
+		b, _ := json.Marshal(st.ShardGroups)
+		var raw interface{}
+		_ = json.Unmarshal(b, &raw)
+		mergeOverlay(vals, shardGroupsValues(raw))
+	}
 	if overlay := effectiveOverlay(st); len(overlay) > 0 {
+		// Keep the recorded choice without changing the stored tuning overlay; fresh
+		// conflicts are refused earlier by checkDeviceUplinksOverlay.
+		if st.MqttDeviceUplinks != nil {
+			overlay = deepCopyValues(overlay)
+			deletePath(overlay, splitPath("instance.config.infrastructure.nats.mqttDeviceUplinks"))
+		}
 		mergeOverlay(vals, overlay)
 	}
 	return vals

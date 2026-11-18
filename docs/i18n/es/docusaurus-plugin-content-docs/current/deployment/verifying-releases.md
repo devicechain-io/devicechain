@@ -5,9 +5,9 @@ title: Verificar las versiones
 
 # Verificar las versiones {#verifying-releases}
 
-Cada imagen de contenedor y el chart de Helm que publica una versión de DeviceChain está **firmado**. Cada uno lleva una declaración firmada sobre cómo se construyó (procedencia de la compilación), y cada imagen lleva además una lista firmada de lo que contiene (un SBOM). Puede comprobarlo todo antes de ejecutar nada, sin ninguna clave que obtener; comprobar la procedencia requiere iniciar sesión en GitHub.
+Cada imagen de contenedor y el chart de Helm que publica una versión de DeviceChain está **firmado**. Cada uno lleva una declaración firmada sobre cómo se construyó (procedencia de la compilación), y cada imagen lleva además una lista firmada de lo que contiene (un SBOM). Puedes comprobarlo todo antes de ejecutar nada, sin ninguna clave que obtener; comprobar la procedencia requiere iniciar sesión en GitHub.
 
-| Qué | Dónde está | Qué le dice |
+| Qué | Dónde está | Qué te dice |
 | --- | --- | --- |
 | **Firma** | Junto a la imagen o el chart en el registro | La publicó el flujo de trabajo de versiones de DeviceChain, para esa etiqueta exacta. |
 | **SBOM** (SPDX) | Junto a cada imagen, como atestación firmada | Los paquetes que contiene la imagen. |
@@ -16,7 +16,7 @@ Cada imagen de contenedor y el chart de Helm que publica una versión de DeviceC
 La firma es **sin clave**: no hay ninguna clave de larga duración que pueda filtrarse o rotarse. Cada firma queda ligada a la identidad de la ejecución del flujo de trabajo que la produjo, se registra en un registro de transparencia público y se verifica contra esa identidad. Una firma de cualquier otro flujo de trabajo, repositorio o rama no se verifica como una versión.
 
 :::note Qué versiones
-La firma empieza con la `v0.25.0`. Las versiones anteriores a la `v0.25.0` no llevan firma, y verificar una falla con «no signatures found». Esa es la respuesta correcta, no un fallo de su configuración.
+La firma empieza con la `v0.25.0`. Las versiones anteriores a la `v0.25.0` no llevan firma, y verificar una falla con «no signatures found». Esa es la respuesta correcta, no un fallo de tu configuración.
 :::
 
 ## Qué está firmado {#what}
@@ -29,7 +29,7 @@ La firma empieza con la `v0.25.0`. Las versiones anteriores a la `v0.25.0` no ll
 - la imagen de la consola web: `ghcr.io/devicechain-io/frontend`
 - el chart de Helm: `oci://ghcr.io/devicechain-io/charts/devicechain`
 
-Las imágenes llevan la etiqueta de la versión (`v0.25.0`). El chart lleva la versión **sin** la `v` (`0.25.0`). Los archivos de `dcctl` y del agente de borde adjuntos a la versión de GitHub tienen su propia procedencia; consulte [Versiones y actualizaciones](./releases-and-upgrades.md).
+Las imágenes llevan la etiqueta de la versión (`v0.25.0`). El chart lleva la versión **sin** la `v` (`0.25.0`). Los archivos de `dcctl` y del agente de borde adjuntos a la versión de GitHub tienen su propia procedencia; consulta [Versiones y actualizaciones](./releases-and-upgrades.md).
 
 ## Verificarlo todo de una vez {#script}
 
@@ -41,10 +41,10 @@ chmod +x verify-release-signatures.sh
 ./verify-release-signatures.sh v0.25.0
 ```
 
-Obtenga el script de la **misma etiqueta** que está verificando. Termina con un código distinto de cero si falla cualquier comprobación de firma, SBOM o procedencia, e indica cuál.
+Obtén el script de la **misma etiqueta** que estás verificando. Termina con un código distinto de cero si falla cualquier comprobación de firma, SBOM o procedencia, e indica cuál.
 
 :::note En Windows
-Git Bash reescribe los argumentos que parecen rutas antes de iniciar un programa de Windows como `cosign.exe` o `gh.exe`, lo que estropea la identidad que exige la comprobación. El script desactiva esa conversión para los comandos que ejecuta. Si ejecuta `cosign` o `gh` a mano desde Git Bash, desactívela usted antes:
+Git Bash reescribe los argumentos que parecen rutas antes de iniciar un programa de Windows como `cosign.exe` o `gh.exe`, lo que estropea la identidad que exige la comprobación. El script desactiva esa conversión para los comandos que ejecuta. Si ejecutas `cosign` o `gh` a mano desde Git Bash, desactívala tú antes:
 
 ```bash
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
@@ -92,15 +92,15 @@ cosign verify ghcr.io/devicechain-io/charts/devicechain:0.25.0 \
 
 ## Fije por digest {#digest}
 
-Una etiqueta es un puntero, y un registro puede moverla. `cosign verify` imprime el digest que verificó; despliegue **ese** (`imagen@sha256:...`) y lo que ejecuta es lo que comprobó. Si replica las imágenes en su propio registro, copie con ellas las firmas (`cosign copy`), o verifique antes de replicar y registre los digests.
+Una etiqueta es un puntero, y un registro puede moverla. `cosign verify` imprime el digest que verificó; despliega **ese** (`imagen@sha256:...`) y lo que ejecutas es lo que comprobaste. Si replicas las imágenes en tu propio registro, copia con ellas las firmas (`cosign copy`), o verifica antes de replicar y registra los digests.
 
-Para rechazar imágenes sin firmar en la admisión en lugar de a mano, exija la misma identidad y el mismo emisor con una política de admisión como el [policy controller de Sigstore](https://docs.sigstore.dev/policy-controller/overview/).
+Para rechazar imágenes sin firmar en la admisión en lugar de a mano, exige la misma identidad y el mismo emisor con una política de admisión como el [policy controller de Sigstore](https://docs.sigstore.dev/policy-controller/overview/).
 
 ## Qué le dice esto y qué no {#limits}
 
-- **Origen, no idoneidad.** Una firma dice que el flujo de trabajo de versiones de DeviceChain produjo el artefacto. No dice que el código esté libre de defectos; para eso están las puertas de la versión y sus propias pruebas.
+- **Origen, no idoneidad.** Una firma dice que el flujo de trabajo de versiones de DeviceChain produjo el artefacto. No dice que el código esté libre de defectos; para eso están las puertas de la versión y tus propias pruebas.
 - **El SBOM se genera a partir de la variante `amd64` de la imagen.** La variante `arm64` se construye con el mismo código y las mismas dependencias, pero la atestación cubre el índice multiarquitectura completo y se produjo desde una sola plataforma.
-- **La procedencia nombra al constructor, no el contenido.** Le permite confirmar el commit y el flujo de trabajo; no sustituye leer el SBOM.
-- **La verificación confía en la infraestructura pública de Sigstore** (la autoridad certificadora y el registro de transparencia) y en los tokens de identidad de GitHub. Si no puede alcanzarlos desde donde verifica, verifique donde pueda y lleve los digests consigo.
+- **La procedencia nombra al constructor, no el contenido.** Te permite confirmar el commit y el flujo de trabajo; no sustituye leer el SBOM.
+- **La verificación confía en la infraestructura pública de Sigstore** (la autoridad certificadora y el registro de transparencia) y en los tokens de identidad de GitHub. Si no puedes alcanzarlos desde donde verificas, verifica donde puedas y lleva los digests contigo.
 
-Para informar de un problema con una firma, o de una vulnerabilidad en cualquier cosa verificada aquí, consulte la [política de seguridad](https://github.com/devicechain-io/devicechain/security/policy).
+Para informar de un problema con una firma, o de una vulnerabilidad en cualquier cosa verificada aquí, consulta la [política de seguridad](https://github.com/devicechain-io/devicechain/security/policy).

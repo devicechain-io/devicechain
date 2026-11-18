@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
@@ -84,7 +85,12 @@ type refreshEnv struct {
 
 func newRefreshEnv(t *testing.T, clientID string, scopes ...string) *refreshEnv {
 	t.Helper()
-	base := newMintTestEnv(t)
+	return newRefreshEnvOn(t, nil, clientID, scopes...)
+}
+
+func newRefreshEnvOn(t *testing.T, rdbm *rdb.RdbManager, clientID string, scopes ...string) *refreshEnv {
+	t.Helper()
+	base := newMintTestEnvOn(t, rdbm)
 	kv := &refreshKVStub{}
 	base.m.refreshKV = kv
 	require.NoError(t, base.store.CreateOAuthClient(context.Background(), &iam.OAuthClient{

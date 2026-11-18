@@ -316,6 +316,9 @@ type PurgeSearchResults struct {
 // type: Pagination can no longer express a full scan at all, and a read that genuinely needs
 // every row calls rdb.ListAllOf by name.
 func (s *Store) PurgeRecords(ctx context.Context, criteria PurgeSearchCriteria) (*PurgeSearchResults, error) {
+	if InSnapshot(ctx) {
+		return nil, fmt.Errorf("PurgeRecords: %w", ErrOutsideSnapshot)
+	}
 	results := make([]TenantPurge, 0)
 	db, pag := s.db.ListOf(core.WithSystemContext(ctx), &TenantPurge{}, func(q *gorm.DB) *gorm.DB {
 		if criteria.Completed != nil {

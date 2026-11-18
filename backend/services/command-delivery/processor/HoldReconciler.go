@@ -9,15 +9,16 @@ import (
 
 	"github.com/devicechain-io/dc-command-delivery/model"
 	"github.com/devicechain-io/dc-command-delivery/presence"
+	"github.com/devicechain-io/dc-command-delivery/verify"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 )
 
-// reconcilePageSize bounds one reconcile pass's read of the withheld set.
+// reconcilePageSize bounds one page of the withheld set.
 //
-// The walk resumes from a cursor, so this bounds the work per pass rather than the
-// set that is ever examined: a backlog larger than a page is covered across
-// consecutive passes instead of being ignored.
+// The walk resumes from a cursor. A pass continues only while it releases commands,
+// until the cursor wraps or half the reconcile interval is spent.
 const reconcilePageSize = 500
 
 // reconcileHolds releases withheld commands whose devices have come back.
@@ -39,22 +40,41 @@ const reconcilePageSize = 500
 // earlier?", where the answer is usually no and asking cheaply matters more than asking
 // quickly.
 func (cproc *CommandDeliveryProcessor) reconcileHolds(ctx context.Context) error {
-	ran, err := cproc.Api.TryReconcileLock(ctx, func() error {
-		return cproc.reconcileOnePage(ctx)
-	})
-	// `ran` before `err`: TryAdvisoryLock returns `true, fn()`, so a non-nil error is the
-	// lock's only when the body never ran. See sweepLocked.
-	if !ran {
-		if err != nil {
-			return fmt.Errorf("acquiring the hold-reconcile lock: %w", err)
-		}
-		return core.ErrPassSkipped
+	lock := cproc.reconcileLock
+	if lock == nil {
+		lock = cproc.Api.TryReconcileLock
 	}
-	return err
+	ran, err := lock(ctx, func() error {
+		budgetCtx, cancel := context.WithTimeout(ctx, cproc.holdReconcileInterval()/2)
+		defer cancel()
+		cproc.retireCoveredCommands(budgetCtx)
+		for {
+			if budgetCtx.Err() != nil {
+				return ctx.Err()
+			}
+			released, err := cproc.reconcilePage(budgetCtx)
+			if err != nil {
+				if budgetCtx.Err() != nil && ctx.Err() == nil {
+					return nil
+				}
+				return err
+			}
+			if released == 0 || cproc.reconcileCursor == 0 {
+				return nil
+			}
+		}
+	})
+	return rdb.SingletonResult(ran, err, "command-delivery-hold-reconcile")
 }
 
 // reconcileOnePage walks one bounded page of held commands and releases what it can.
 func (cproc *CommandDeliveryProcessor) reconcileOnePage(ctx context.Context) error {
+	_, err := cproc.reconcilePage(ctx)
+	return err
+}
+
+// reconcilePage reports successful releases so a stuck page never triggers a full scan.
+func (cproc *CommandDeliveryProcessor) reconcilePage(ctx context.Context) (int, error) {
 	// 🔴 NOTHING TO RECONCILE AGAINST MEANS RECONCILE NOTHING. With no presence reader
 	// there is no basis on which to undo a hold, and releasing on that basis would throw
 	// an absent fleet's whole accumulated backlog back into the dispatch path, where it
@@ -83,20 +103,25 @@ func (cproc *CommandDeliveryProcessor) reconcileOnePage(ctx context.Context) err
 	}
 	held, err := cproc.readHeldPage(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if len(held) == 0 {
-		return nil
+		return 0, nil
 	}
+	released := 0
 	for _, batch := range groupByTenant(held, cproc.tenantDeleted) {
-		cproc.reconcileTenantBatch(ctx, batch)
+		released += cproc.reconcileTenantBatch(ctx, batch)
 	}
-	return nil
+	return released, nil
 }
 
 // reconcileTenantBatch releases one tenant's holds whose devices are no longer absent.
-func (cproc *CommandDeliveryProcessor) reconcileTenantBatch(ctx context.Context, batch tenantBatch) {
+func (cproc *CommandDeliveryProcessor) reconcileTenantBatch(ctx context.Context, batch tenantBatch) int {
 	tenantCtx := core.WithTenant(ctx, batch.tenant)
+	identities, ok := cproc.heldDeviceIdentities(tenantCtx, batch)
+	if !ok {
+		return 0
+	}
 	states, err := cproc.Presence.StatesFor(tenantCtx, distinctDevices(batch.commands))
 	if err != nil {
 		// Fail closed, per reconcileOnePage: keep holding the devices this read could
@@ -114,9 +139,16 @@ func (cproc *CommandDeliveryProcessor) reconcileTenantBatch(ctx context.Context,
 	// cannot be read is skipped whole, since releasing is the direction that dispatches.
 	disabled, known := cproc.disabledAmong(tenantCtx, batch.tenant, distinctDevices(batch.commands))
 	if !known {
-		return
+		return 0
 	}
+	released := 0
 	for _, cmd := range batch.commands {
+		if ctx.Err() != nil {
+			return released
+		}
+		if !cproc.keepHeldDevice(tenantCtx, cmd, identities) {
+			continue
+		}
 		if disabled[cmd.DeviceToken] {
 			continue
 		}
@@ -137,34 +169,39 @@ func (cproc *CommandDeliveryProcessor) reconcileTenantBatch(ctx context.Context,
 			continue
 		}
 		// 🔑 THE ONLY QUESTION ASKED HERE IS "IS THIS DEVICE STILL ABSENT?". Anything
-		// that is not a Hold releases — including Undeliverable, which is not a mistake:
+		// with a Dispatch or Undeliverable verdict releases; Defer stays held. In particular,
 		// a row held before its device's transport was known to carry no commands gets
 		// returned to QUEUED, and the sweep then fails it properly on the next tick with
 		// a reason recorded. One place decides what happens to a dispatchable command.
-		if presence.Decide(states[cmd.DeviceToken], cproc.capabilities()) == presence.Hold {
+		verdict := presence.Decide(states[cmd.DeviceToken], cproc.capabilities())
+		if verdict != presence.Dispatch && verdict != presence.Undeliverable {
 			continue
 		}
-		cproc.releaseHold(tenantCtx, cmd)
+		if cproc.releaseHold(tenantCtx, cmd) {
+			released++
+		}
 	}
+	return released
 }
 
 // releaseHold returns one command to QUEUED.
-func (cproc *CommandDeliveryProcessor) releaseHold(ctx context.Context, cmd *model.Command) {
+func (cproc *CommandDeliveryProcessor) releaseHold(ctx context.Context, cmd *model.Command) bool {
 	released, err := cproc.Api.ReleaseHold(ctx, cmd.ID)
 	if err != nil {
 		log.Error().Err(err).Uint("command", cmd.ID).Str("device", cmd.DeviceToken).
 			Msg("unable to release a withheld command whose device has returned")
-		return
+		return false
 	}
 	if !released {
 		// The row left HELD between the page read and this write — answered, cancelled,
 		// expired, or claimed by another release path. The conditional update doing its
 		// job, not a failure.
-		return
+		return false
 	}
 	incr(cproc.HoldsReleased, 1)
 	log.Debug().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
 		Msg("Released a withheld command; its device is reachable again.")
+	return true
 }
 
 // releaseEnabledHolds is the hold reconciler's pass when there is no presence gate to ask: it
@@ -185,18 +222,23 @@ func (cproc *CommandDeliveryProcessor) releaseHold(ctx context.Context, cmd *mod
 //
 // With no disabled-device record to read it has nothing to reconcile against and skips, as the
 // pass always did.
-func (cproc *CommandDeliveryProcessor) releaseEnabledHolds(ctx context.Context) error {
+func (cproc *CommandDeliveryProcessor) releaseEnabledHolds(ctx context.Context) (int, error) {
 	reader := cproc.gateReader()
 	if reader == nil {
-		return core.ErrPassSkipped
+		return 0, core.ErrPassSkipped
 	}
 	held, err := cproc.readHeldPage(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	released := 0
 	for _, batch := range groupByTenant(held, cproc.tenantDeleted) {
 		tenantCtx := core.WithTenant(ctx, batch.tenant)
 		if !cproc.gateReady(tenantCtx, batch.tenant) {
+			continue
+		}
+		identities, ok := cproc.heldDeviceIdentities(tenantCtx, batch)
+		if !ok {
 			continue
 		}
 		enabled, err := reader.EnabledAmong(tenantCtx, distinctDevices(batch.commands))
@@ -207,12 +249,20 @@ func (cproc *CommandDeliveryProcessor) releaseEnabledHolds(ctx context.Context) 
 			continue
 		}
 		for _, cmd := range batch.commands {
+			if ctx.Err() != nil {
+				return released, ctx.Err()
+			}
+			if !cproc.keepHeldDevice(tenantCtx, cmd, identities) {
+				continue
+			}
 			if enabled[cmd.DeviceToken] {
-				cproc.releaseHold(tenantCtx, cmd)
+				if cproc.releaseHold(tenantCtx, cmd) {
+					released++
+				}
 			}
 		}
 	}
-	return nil
+	return released, nil
 }
 
 // readHeldPage reads the next bounded page of the withheld set, across tenants, and advances the
@@ -233,4 +283,100 @@ func (cproc *CommandDeliveryProcessor) readHeldPage(ctx context.Context) ([]*mod
 	}
 	cproc.reconcileCursor = next
 	return held, nil
+}
+
+const coveredRetirementLimit = 500
+
+type coveredCommandRetirer interface {
+	DeletedGateTenants(context.Context) ([]string, error)
+	RetireCoveredCommands(context.Context, int) (int64, error)
+}
+
+var _ coveredCommandRetirer = (*model.Api)(nil)
+
+type heldCommandCanceller interface {
+	CancelHeldCommand(context.Context, uint) (bool, error)
+}
+
+var _ heldCommandCanceller = (*model.Api)(nil)
+
+// retireCoveredCommands bypasses tenant scoping only to list tenant identities.
+// Every command update runs with the tenant scope restored.
+func (cproc *CommandDeliveryProcessor) retireCoveredCommands(ctx context.Context) {
+	retirer, ok := cproc.Api.(coveredCommandRetirer)
+	if !ok {
+		return
+	}
+	tenants, err := retirer.DeletedGateTenants(core.WithSystemContext(ctx))
+	if err != nil {
+		log.Warn().Err(err).Msg("Unable to list tenants with deletion gates.")
+		return
+	}
+	for _, tenant := range tenants {
+		if ctx.Err() != nil {
+			return
+		}
+		n, err := retirer.RetireCoveredCommands(core.WithTenant(ctx, tenant), coveredRetirementLimit)
+		if err != nil {
+			log.Warn().Err(err).Str("tenant", tenant).Msg("Unable to retire commands covered by deletion.")
+			continue
+		}
+		if n > 0 {
+			log.Info().Str("tenant", tenant).Int64("cancelled", n).Msg("Retired commands covered by deletion.")
+		}
+	}
+}
+
+func (cproc *CommandDeliveryProcessor) heldDeviceIdentities(ctx context.Context, batch tenantBatch) (map[string]verify.DeviceIdentity, bool) {
+	return cproc.deviceIdentities(ctx, batch.tenant, distinctDevices(batch.commands))
+}
+
+func (cproc *CommandDeliveryProcessor) deviceIdentities(ctx context.Context, tenant string, tokens []string) (map[string]verify.DeviceIdentity, bool) {
+	// Degraded mode without device-management retains the existing presence-only behaviour.
+	if cproc.DisabledSource == nil {
+		return nil, true
+	}
+	ids, err := cproc.DisabledSource.DeviceIncarnations(ctx, tenant, tokens)
+	if err != nil {
+		incr(cproc.DisabledGateErrors, 1)
+		log.Warn().Err(err).Str("tenant", tenant).Msg("Unable to verify held devices; the batch stays held.")
+		return nil, false
+	}
+	// A configured source returning nil successfully means an empty roster, not degraded mode.
+	if ids == nil {
+		ids = make(map[string]verify.DeviceIdentity)
+	}
+	return ids, true
+}
+
+func (cproc *CommandDeliveryProcessor) keepHeldDevice(ctx context.Context, cmd *model.Command, ids map[string]verify.DeviceIdentity) bool {
+	if ids == nil {
+		return true
+	}
+	identity, exists := ids[cmd.DeviceToken]
+	if exists {
+		if cmd.DeviceIncarnation.Valid {
+			if uint64(cmd.DeviceIncarnation.Int64) == identity.ID {
+				return true
+			}
+		} else if !cmd.CreatedAt.Before(identity.CreatedAt) {
+			// This compares command-delivery's clock with device-management's clock.
+			// Skew can only cancel a legitimate legacy command created within the skew
+			// of its device's creation, which is the safe direction.
+			return true
+		}
+	}
+	canceller, ok := cproc.Api.(heldCommandCanceller)
+	if !ok {
+		log.Warn().Msg("Unable to cancel a stale held command; keeping it held.")
+		return false
+	}
+	cancelled, err := canceller.CancelHeldCommand(ctx, cmd.ID)
+	if err != nil {
+		log.Warn().Err(err).Uint("command", cmd.ID).Msg("Unable to cancel a stale held command.")
+	} else if cancelled {
+		incr(cproc.HoldsCancelled, 1)
+		log.Info().Uint("command", cmd.ID).Msg("Cancelled a held command whose device identity no longer exists.")
+	}
+	return false
 }

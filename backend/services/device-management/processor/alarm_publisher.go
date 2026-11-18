@@ -183,3 +183,13 @@ func (w *AlarmEventWriter) deadLetter(ctx context.Context, event *model.AlarmSta
 	}
 	w.deadLettered.Inc()
 }
+
+// PublishAlarmEventDedup is the outbox path: the relay owns retries and retains
+// the same ID until the broker acknowledges and the row is removed.
+func (w *AlarmEventWriter) PublishAlarmEventDedup(ctx context.Context, event *model.AlarmStateChangeEvent, dedupID string) error {
+	bytes, err := w.marshal(event)
+	if err != nil {
+		return err
+	}
+	return w.writer.WriteMessages(ctx, messaging.Message{Value: bytes, DedupID: dedupID})
+}

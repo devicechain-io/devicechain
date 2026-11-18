@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/devicechain-io/dc-microservice/blob"
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/tenantpurge"
@@ -51,11 +52,11 @@ const (
 // still converge — a pass that evicts anything restarts the settle window — but it would
 // spend a pass doing it.
 func DefaultStores(db *rdb.RdbManager, tsdb *rdb.Guest, broker messaging.Connection,
-	instanceId string, objects blob.Store, tenants tenantReader) []Store {
+	instanceId string, objects blob.Store, tenants tenantReader, shardGroups *config.NatsShardGroupsConfiguration) []Store {
 	return []Store{
 		NewRelational(StoreRelational, db, StillPurging),
 		NewTelemetry(tsdb),
-		NewBroker(broker, instanceId),
+		NewBroker(broker, instanceId, shardGroups),
 		NewKeyValue(broker, instanceId),
 		NewDetect(broker, db, instanceId),
 		NewObject(objects, tenants),

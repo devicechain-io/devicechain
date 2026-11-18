@@ -55,7 +55,7 @@ hack/conformance-rig.sh all      # up + run: about half an hour, most of it buil
 hack/conformance-rig.sh down
 ```
 
-It needs `kind`, `kubectl`, `helm`, `docker`, `jq`, `openssl`, `curl`, `ko`, `tofu` or `terraform`, and Go. The
+It needs `kind`, `kubectl`, `docker`, `jq`, `openssl`, `curl`, `ko`, `tofu` or `terraform`, and Go. The
 instance is built from the checked-out commit, and `run` refuses to start on an instance built from another.
 Run it on a **clean, committed tree**: the results name the commit they describe, and a file made on a dirty
 tree is refused by the renderer.

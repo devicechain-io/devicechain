@@ -46,6 +46,17 @@ wants charts drawn on its first frame awaits `loadChartEngine()` before renderin
 draws a chart can set `MyWidget.preload = loadChartEngine` on its component, and then
 `preloadWidgets` from `@devicechain/widgets` fetches the engine for any board that contains it.
 
+The other public subpaths are:
+
+- `@devicechain/widget-sdk/empty-state`: `WidgetEmptyState`, `widgetEmptyStrings`,
+  `WIDGET_EMPTY_STRINGS` and their types. Render `<WidgetEmptyState kind="no-data" />`
+  inside a frame; kinds are `unbound`, `not-reported`, `no-data`, `forbidden`, `error`.
+  Optional `measurement`, `hint`, `detail` and `locale` customize the explanation.
+- `@devicechain/widget-sdk/strict-csp`: `configureStrictCsp`, `strictCspEnabled` and
+  `plainTooltipText`. These are also root exports. Call `configureStrictCsp(true)`
+  before mounting under a strict style policy; use `plainTooltipText(text)` to
+  escape braces for canvas tooltips.
+
 ## Declare a widget
 
 ```tsx
@@ -97,6 +108,28 @@ for the built-in widgets.
 
 Trusted widget code runs with the host page's privileges. The declarations in a descriptor
 shape the API; they are not a security boundary.
+
+## Component and host contract
+
+A `WidgetProps<D>` component receives `widget`, channel-specific `data` and optional
+`actions`. `useWidgetSelect()` and `useWidgetCandidates()` read optional host
+interaction callbacks; handle undefined in a host without those services.
+`useWidgetTimeRange()` and `useWidgetTimeZone()` read the board's range and zone.
+Use `pickSample(latest, name)` for a single measurement (pass undefined for the
+first one), and `optString(options, key)`, `optNumber(options, key)` or
+`optBoolean(options, key)` for defensive option reads.
+
+`useDashboardHub(resolver, authorities)` creates and disposes a live hub; pass
+undefined for authorities in a read-only host. Standalone widgets can bind channel
+state with `useMeasurementStream`, `useAlarmStream`, `useCommandStream` and
+`useLocationStream`; a component registered with `defineWidget` already receives
+its data from the host. `WidgetFrame` supplies body-size context for
+`useWidgetScale()`; `useElementSize<T>(step?)` returns `[ref, { width, height }]`.
+
+The registry exposes `catalog` for `parseDashboardDefinition(raw, { catalog })`;
+pass that same registry to the renderer. An optional `implementation.editor`
+receives `WidgetEditorProps`: `options`, `setOptions(patch)`, `descriptor` and
+`services` (`slots`, optional device token and optional `commandChoices`).
 
 ## Offering a download from the frame
 

@@ -5,16 +5,79 @@ package processor
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"gorm.io/datatypes"
 )
+
+func TestWebhookTextExcludesDeviceName(t *testing.T) {
+	const name = "<!channel> <https://attacker.example|Open console>"
+	for _, token := range []string{"boiler-7", ""} {
+		for _, transition := range []string{"RAISED", "RENOTIFIED", "CLEARED"} {
+			t.Run(transition+"/"+token, func(t *testing.T) {
+				e := namedEvent()
+				e.DeviceName, e.DeviceToken = name, token
+				state := &model.NotificationState{
+					AlarmToken: e.AlarmToken, AlarmKey: e.AlarmKey, Severity: e.Severity,
+					OriginatorType: sql.NullString{String: "device", Valid: true},
+					OriginatorId:   sql.NullInt64{Int64: 42, Valid: true},
+					DeviceName:     sql.NullString{String: name, Valid: true},
+					DeviceToken:    sql.NullString{String: token, Valid: token != ""},
+				}
+				msg := renderNotification(e)
+				switch transition {
+				case "RENOTIFIED":
+					msg = renderEscalation(state, 1)
+				case "CLEARED":
+					// A scheduler clear recovers its source from the persisted state.
+					e.DeviceName, e.DeviceToken = "", ""
+					e.EventType, e.State = dmmodel.AlarmEventCleared, "CLEARED"
+					applyStateSource(e, state)
+					msg = renderNotification(e)
+				}
+				var got map[string]any
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+						t.Errorf("decode: %v", err)
+					}
+					w.WriteHeader(http.StatusOK)
+				}))
+				defer srv.Close()
+				adapter := &webhookAdapter{client: srv.Client()}
+				channel := channelWith("hook", model.ChannelTypeWebhook, `{"url":"`+srv.URL+`","auth":"none"}`)
+				if err := adapter.Deliver(context.Background(), channel, "", nil, msg); err != nil {
+					t.Fatal(err)
+				}
+				text, ok := got["text"].(string)
+				if !ok || strings.ContainsAny(text, "<>") || strings.Contains(text, name) {
+					t.Fatalf("webhook text contains device-name markup: %q", text)
+				}
+				wantSource := token
+				if wantSource == "" {
+					wantSource = "device 42"
+				}
+				if !strings.Contains(text, " on "+wantSource) || got["eventType"] != transition {
+					t.Fatalf("unexpected summary or transition: %v", got)
+				}
+				if got["deviceName"] != name {
+					t.Fatalf("raw deviceName lost: %v", got["deviceName"])
+				}
+				if msg.Payload["deviceName"] != name || msg.Alarm.DeviceName != name || !strings.Contains(msg.Subject, name) {
+					t.Fatal("shared rendering lost the device name")
+				}
+			})
+		}
+	}
+}
 
 // channelWith builds an in-memory channel with the given type/config. The delivery
 // secret is no longer a channel field (ADR-059) — it is passed to Deliver directly.

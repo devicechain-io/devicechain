@@ -18,10 +18,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	corev1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/devicechain-io/dc-k8s/controllers"
+	"github.com/devicechain-io/dc-k8s/internal/manageropts"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -38,10 +38,9 @@ func init() {
 }
 
 func main() {
-	var metricsAddr string
-	var probeAddr string
-	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
-	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	managerOptions := manageropts.BindManagerFlags(flag.CommandLine)
+	managerOptions.Scheme = scheme
+	managerOptions.Cache = controllers.CacheOptions()
 	opts := zap.Options{
 		Development: true,
 	}
@@ -50,14 +49,7 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		Cache:                  controllers.CacheOptions(),
-		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         false,
-		LeaderElectionID:       "27be0819.devicechain.io",
-	})
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), *managerOptions)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)

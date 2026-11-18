@@ -129,7 +129,7 @@ ChirpStack 通过应用上的 **HTTP 集成**发送上行。
    | Event endpoint URL(s) | `https://<host>/api/integrations/{tenant}/{integration}`。ChirpStack 会自行追加 `?event=up`。 |
    | Headers | 名称 `Authorization`，值 `Bearer <bearer-token>`。 |
 
-3. **在 ChirpStack 设备配置文件上设置编解码器**（JavaScript 载荷编解码器）。平台存储的是网络服务器解码出的值，不会自己解码原始帧。没有编解码器时，ChirpStack 发送原始帧而没有解码对象，该上行会被[计为未解码](#undecoded)，而不会被存储。或者，给设备类型配置一个[载荷解码器](./payload-decoders.md)，由 DeviceChain 读取原始帧。
+3. **在 ChirpStack 设备配置文件上设置编解码器**（JavaScript 载荷编解码器）。没有配置文件解码器时，平台存储网络服务器解码出的值。如果网络服务器编解码器和配置文件解码器均不适用，该上行会被[计为未解码](#undecoded)，而不会被存储。或者，给设备类型配置一个[载荷解码器](./payload-decoders.md)，由 DeviceChain 读取原始帧。
 4. 在 DeviceChain 中添加设备，并把它的 DevEUI 设为 `lorawan.deveui` 别名。
 
 上行会被存储为读数。ChirpStack 还会把 `ack` 和 `txack` 事件发送到同一个 URL：启用了 [LoRaWAN 下行](#lorawan-downlink)的安装会读取它们来结束[确认下行](#lorawan-confirmed)；未启用时它们与其他事件（join、status）一样返回 `204` 并被不加读取地忽略，无论正文内容如何。上行的 `deduplicationId` 必须是 UUID（ChirpStack 一直如此发送）；其他值会被以 `400` 拒绝。消息时间是 ChirpStack 报告的 `time`；该字段缺失时，则是平台收到消息的时间。
@@ -183,7 +183,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 通用二进制 {#generic-binary}
 
-通用二进制集成接受原始字节正文，标识符放在请求头或查询参数中（`idFrom` 为 `header:` 或 `query:`；二进制正文没有可指向的字段）。如果设备类型上没有[载荷解码器](./payload-decoders.md)，平台就无法读取这些字节，因此每条这类上行都会被接受并[计为未解码](#undecoded)，其前 512 字节作为样本保存在集成上。用它来了解发送方发来了什么。设备类型上有解码器时，这些字节会被解码为读数。
+通用二进制集成接受原始字节正文，标识符放在请求头或查询参数中（`idFrom` 为 `header:` 或 `query:`；二进制正文没有可指向的字段）。如果设备类型上没有[载荷解码器](./payload-decoders.md)，平台就无法读取这些字节，因此每条这类上行都会被接受并[计为未解码](#undecoded)，其前 512 字节作为样本保存在集成上。在尚无解码器时，用它来了解发送方发来了什么。设备类型上有解码器时，这些字节会被解码为读数。
 
 ## 存储的内容 {#what-is-stored}
 
@@ -200,7 +200,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ### 没有可存储内容的上行 {#undecoded}
 
-不带解码对象、或其中没有任何数值或布尔值的上行会被确认，但不存储任何内容。集成会把它计为**未解码**，并在其页面显示计数、最近一条的到达时间，以及十六进制的原始帧样本。常见原因是网络服务器中的设备配置文件没有编解码器。当大部分流量都是这种情况时，`IntegrationUndecodedHigh` 告警会通知运营人员；参见[可观测性](../deployment/observability.md)。
+没有适用的[配置文件载荷解码器](./payload-decoders.md)时，不带解码对象、或其中没有任何数值或布尔值的上行会被确认，但不存储任何内容。集成会把它计为**未解码**，并在其页面显示计数、最近一条的到达时间，以及十六进制的原始帧样本。常见原因是网络服务器中的设备配置文件没有编解码器。有适用的配置文件解码器时，它可以转而解码原始帧；解码失败不会存储任何内容，并报告为 `DECODE_FAILED`，而不会计为网络服务器载荷未解码。参见[解码器拒绝原因](./payload-decoders.md#refusal-reasons)。当大部分流量都是这种情况时，`IntegrationUndecodedHigh` 告警会通知运营人员；参见[可观测性](../deployment/observability.md)。
 
 ## 重复与重试 {#duplicates}
 
@@ -231,7 +231,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 | 应答 | 含义 |
 | --- | --- |
 | `202` | 已接受。包括未注册设备的消息（会被跳过），以及因租户超出接入额度而被[丢弃](#limits)的消息。 |
-| `204` | 不是上行的消息类型（join、status、确认）。已确认并忽略。 |
+| `204` | 被忽略的消息类型，例如 join 或 status，或下行适配器禁用时的下行报告。启用适配器后，受支持的下行报告会被处理并收到 `202` 应答；参见[确认下行](#lorawan-confirmed)。 |
 | `400` | 正文不是集成的发送方类型所期望的格式：JSON 无效、标识符缺失或格式错误、`deduplicationId` 不是 UUID、时间早于 366 天前、超过 100 个条目，或超过 256 条读数。请求中的任何内容都不会被存储。 |
 | `401` | 令牌缺失、错误，或属于另一个集成。令牌错误和集成不存在有意让人无法区分。 |
 | `403` | 集成已关闭。这不计为登录失败。 |
@@ -301,7 +301,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 **3. 发送。** 设备必须带有 `lorawan.deveui` [别名](#aliases)：DevEUI 取自设备，绝不取自命令。命令经由设备**最近一次上报所用**的集成发出。
 
-**结果的含义。** 对未确认的下行，`SUCCEEDED` 表示网络服务器已**排入**该下行（结果带有 `{"stage":"queued","queueItemId":...}`）。这并不表示设备已收到：A 类设备只在下一次上行之后才会收听下行，而未确认的下行不会得到应答。对[确认下行](#lorawan-confirmed)，`SUCCEEDED` 表示设备已应答。其他结果：
+**结果的含义。** 对未确认的下行，`SUCCEEDED` 表示网络服务器已**排入**该下行（结果带有 `{"stage":"queued","queueItemId":...}`）。这并不表示设备已收到：A 类设备只在下一次上行之后才会收听下行，而未确认的下行不会得到应答。此类命令不记录投递证据（`deliveredTime` 和 `deliveryEvidence` 保持为 null）；确认下行的应答会记录 `DEVICE_RESPONSE`。对[确认下行](#lorawan-confirmed)，`SUCCEEDED` 表示设备已应答。其他结果：
 
 | 发生了什么 | 结果 |
 | --- | --- |
@@ -450,12 +450,13 @@ webhook 不接受 `applicationId`。原生服务器类型不接受 webhook 专�
 ### 从带类型的参数编码命令 {#lorawan-command-encoder}
 
 命令定义可以包含可选的 `encoder` JSON 字符串。发布设备配置文件后生效。
+ChirpStack v4、The Things Stack v3 和 webhook 链接使用相同的编码器。
 命令使用派发时生效的编码器；重新发布适用于发布后派发的命令，包括已排队的命令。
 每次派发都会重新读取已发布的定义，不会跨发布缓存编码器。
 如果定义查询失败或返回不完整的响应，平台会重试：命令保持待处理状态，不会发送任何内容。
 只有确定的定义问题（编码器无效、命令定义重复，或命令不在受约束的已发布命令词汇表中）
 才会将命令拒绝为**未发送**。
-ChirpStack v4、The Things Stack v3 和 webhook 链接使用相同的编码器。以下文档按顺序拼接常量、
+例如，以下文档按顺序拼接常量、
 缩放后的数值、布尔值和打包位字段：
 
 ```json
@@ -503,6 +504,7 @@ scale 默认为 1，其绝对值必须在 `1e-9` 到 `1e9` 之间；offset 默�
 raw 的类型范围在舍入前检查，边界允许 `1e-6` 的浮点误差容差。
 scale 为 1 且 offset 为 0 时输入必须为精确整数；其他变换允许 `1e-6` 的整数误差。
 输入绝对值不得超过 `1e15`，输入和 raw 的绝对值都必须小于 `2^53`。
+不会静默舍入或截断任何值：scale 为 1 时，`215.4` 会被拒绝。
 NaN、无穷大、超出范围、JSON 类型错误或缺少编码器参数，都会在发起网络调用前将命令拒绝为
 **未发送**。参数模式中的默认值仅用于编辑提示，不会自动填入。
 
@@ -551,6 +553,7 @@ NaN、无穷大、超出范围、JSON 类型错误或缺少编码器参数，都
 ## 相关内容 {#related}
 
 - [从 LoRaWAN 上行到告警](./lorawan-uplink-to-alarm.md)：从二进制上行出发，经过集成和解码器，直到检测规则和告警的完整演练。
+- [将 ChirpStack 上行发送到 DeviceChain](./chirpstack-uplinks.md)和[将 The Things Network / The Things Stack 上行发送到 DeviceChain](./the-things-stack-uplinks.md)：逐步配置每种网络服务器，使用其编解码器或载荷解码器。
 - [载荷解码器](./payload-decoders.md)：把原始帧或网络服务器解码出的对象转换成测量。
 - [设备](../user-guide/devices.md)：设备表单及其 **Aliases** 字段。
 - [连接设备](./connecting-a-device.md)：设备自行使用的 MQTT 和 HTTP 路径。

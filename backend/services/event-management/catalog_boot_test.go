@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -71,6 +72,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	Svc = service.New(Microservice, service.Spec{Nats: &service.NatsSpec{OnCreate: createNatsComponents}})
 	ctx := context.Background()
 	require.NoError(t, Svc.Initialize(ctx), "initialize under the catalog (main.go createNatsComponents: resolved-events reader, failed-events writer, entity-deleted reader)")
+	dctest.UseFreeTCPPort(t, &service.ProbesPort)
 	NatsManager = Svc.Nats
 	t.Cleanup(func() {
 		// A refused start leaves no processors to stop; do not let a nil deref mask the refusal.

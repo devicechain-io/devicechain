@@ -178,16 +178,18 @@ func isArchiveSkew(err error) bool {
 // the named fields — the peer is running a build that does not serve it. It is the one reading of
 // that answer; isArchiveSkew and the fact reconcile's client each name their own fields.
 func peerLacksQuery(err error, fields ...string) bool {
-	if err == nil {
+	var gqlErr *svcclient.GraphQLError
+	if !errors.As(err, &gqlErr) || gqlErr == nil {
 		return false
 	}
-	text := err.Error()
-	if !strings.Contains(text, "Cannot query field") && !strings.Contains(text, "no such field") {
-		return false
-	}
-	for _, field := range fields {
-		if strings.Contains(text, field) {
-			return true
+	// graphql-go's FieldsOnCorrectTypeRule names the refused field in quotes, before
+	// the type and any suggestions. Inspect each message separately: a suggestion,
+	// another error's text, or a transport error must not establish version skew.
+	for _, message := range gqlErr.Messages {
+		for _, field := range fields {
+			if strings.HasPrefix(message, fmt.Sprintf("Cannot query field %q on type ", field)) {
+				return true
+			}
 		}
 	}
 	return false

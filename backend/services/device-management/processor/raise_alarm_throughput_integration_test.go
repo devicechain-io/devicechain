@@ -116,6 +116,11 @@ func (p *delayPublisher) PublishAlarmEvent(context.Context, *model.AlarmStateCha
 	}
 }
 
+func (p *delayPublisher) PublishAlarmEventDedup(ctx context.Context, event *model.AlarmStateChangeEvent, _ string) error {
+	p.PublishAlarmEvent(ctx, event)
+	return nil
+}
+
 type raiseRig struct {
 	api     *model.Api
 	pub     *delayPublisher

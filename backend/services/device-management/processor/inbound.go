@@ -263,7 +263,8 @@ type ResolveMetrics struct {
 
 	// deviceDisabled counts events refused because their device is disabled. ONE counter
 	// for the pool, for the same reason.
-	deviceDisabled prometheus.Counter
+	deviceDisabled      prometheus.Counter
+	relationshipRefused prometheus.Counter
 
 	// integrationAliasMismatch counts inbound integration events refused because their device no
 	// longer holds the alias they were resolved from.
@@ -318,6 +319,8 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 		eventTimeTooOld: ms.NewCounter(
 			"resolve_event_time_too_old_total",
 			"Events refused because a reported time is more than 366 days before the platform received it; each is dead-lettered with reason Invalid"),
+		relationshipRefused: ms.NewCounter("resolve_relationship_refused_total",
+			"Device-authored ownership or containment relationships refused on first delivery and dead-lettered with reason Invalid"),
 		deviceDisabled: ms.NewCounter(
 			"resolve_device_disabled_total",
 			"Events refused because their device is disabled; each is discarded, not dead-lettered"),
@@ -527,13 +530,15 @@ func NewInboundEventsProcessor(ms *core.Microservice, inbound []messaging.Messag
 //
 // A record that does not reach the stream leaves its source unacked, so the source is
 // redelivered and resolved again — or, at its last delivery, recorded by the platform's
-// max-delivery recorder from the source stream. Either way the failure is recorded
-// somewhere. Acking at hand-off, as this loop once did, lost it whenever the publish failed.
+// max-delivery recorder from the source stream. A redelivered decoder failure is held to its
+// device type's record budget: once spent, it is acked as suppressed, counted in the decoder
+// health tally without a record (see decode_accounting.go ObserveDecode). Acking at hand-off,
+// as this loop once did, lost the failure whenever the publish failed.
 //
-// The one exception is a record that cannot be encoded: it is not published, its source is
+// A record that cannot be encoded is also not published: its source is
 // acked, and the loss is counted on dead_letter_lost_total (see loseRecord).
 //
-// A record that was stored but whose PubAck was lost is published again when its source is
+// A record that was stored but whose PubAck was lost may be published again when its source is
 // redelivered; the dedup id (sourceDedupID) keeps that second copy out of the stream.
 func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) bool {
 	item, more := <-iproc.failed
@@ -755,6 +760,7 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 // in order with everything published.
 func (iproc *InboundEventsProcessor) publishResolvedLegacy(ctx context.Context, item resolvedItem, bytes []byte, marshalErr error) {
 	coord := item.coord
+	ctx = coord.src.Context(ctx)
 	settle := func(err error) { iproc.settleResolved(coord, err) }
 	if marshalErr != nil {
 		log.Error().Err(marshalErr).Msg("unable to marshal resolved event to protobuf")
@@ -1007,6 +1013,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		resolver.tenantDeleted = iproc.tenantDeleted
 		resolver.splitOut = iproc.splitOut
 		resolver.deviceDisabled = iproc.metrics.deviceDisabled
+		resolver.relationshipRefused = iproc.metrics.relationshipRefused
 		resolver.integrationAliasMismatch = iproc.metrics.integrationAliasMismatch
 		resolver.gateway = gateway
 		resolver.hold = iproc.hold

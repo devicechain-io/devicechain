@@ -15,6 +15,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventenvelope"
+	"github.com/devicechain-io/dc-microservice/tracing"
 	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
 )
@@ -145,6 +146,7 @@ type roundKey struct {
 
 // RoundMember is one event ready to publish.
 type RoundMember struct {
+	TraceContext context.Context
 	// Index is the member's place in its bucket (RoundKeyOf).
 	Index uint32
 	// Bytes is the event, as its marshaller wrote it.
@@ -404,10 +406,11 @@ func (e *RoundEngine) buildRound(k RoundKey, round uint32, ms []RoundMember) (Me
 	id := EnvelopeDedupID(kind, k.Tenant, k.Source(), round)
 	if len(ms) == 1 {
 		m := Message{
-			Key:     ms[0].Key,
-			Value:   ms[0].Bytes,
-			DedupID: id,
-			Headers: map[string]string{HeaderMemberIndex: strconv.FormatUint(uint64(ms[0].Index), 36)},
+			traceContext: ms[0].TraceContext,
+			Key:          ms[0].Key,
+			Value:        ms[0].Bytes,
+			DedupID:      id,
+			Headers:      map[string]string{HeaderMemberIndex: strconv.FormatUint(uint64(ms[0].Index), 36)},
 		}
 		if ms[0].Correlation != "" {
 			m = m.WithCorrelationID(ms[0].Correlation)
@@ -425,9 +428,17 @@ func (e *RoundEngine) buildRound(k RoundKey, round uint32, ms []RoundMember) (Me
 		return Message{}, err
 	}
 	m := Message{
-		Value:   body,
-		DedupID: id,
-		Headers: map[string]string{eventenvelope.HeaderName: eventenvelope.HeaderValue},
+		traceContext: ms[0].TraceContext,
+		Value:        body,
+		DedupID:      id,
+		Headers:      map[string]string{eventenvelope.HeaderName: eventenvelope.HeaderValue},
+	}
+	if tracing.Enabled() {
+		members := make([]TraceMember, len(ms))
+		for i, member := range ms {
+			members[i] = TraceMember{Index: member.Index, Context: member.TraceContext}
+		}
+		m = m.WithTraceMembers(members)
 	}
 	if ms[0].Correlation != "" {
 		m = m.WithCorrelationID(ms[0].Correlation)

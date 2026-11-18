@@ -33,7 +33,8 @@ are available to your own tooling.
 
 ## Requirements
 
-`docker` (with `compose`), `kind`, `kubectl`, `helm`, `jq`, `curl` and `dcctl`. No other tools. The
+`docker` (with `compose`), `kind`, `kubectl`, `jq`, `curl`, `openssl`, OpenTofu (or Terraform)
+and `dcctl`. The
 scripts are bash and run from Git Bash on Windows as well as on Linux and macOS.
 
 ## Run it

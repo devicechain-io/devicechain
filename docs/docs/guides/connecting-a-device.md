@@ -8,7 +8,7 @@ title: Connecting a Device
 Devices send events to DeviceChain over **MQTT** or **HTTP**. MQTT is served directly by NATS' built-in MQTT server on port 1883, with no separate broker. Both transports feed the same decode → resolve → persist pipeline, so the JSON event body is identical between them.
 
 :::note Status
-MQTT and HTTP ingestion are available. Constrained devices can instead connect over CoAP/UDP with DTLS via [LwM2M ingestion](../concepts/lwm2m.md), and brownfield fleets over [Sparkplug B](../concepts/sparkplug.md). A WebSocket transport and the full self-service provisioning/claiming flow are still planned.
+MQTT and HTTP ingestion are available. Constrained devices can instead connect over CoAP/UDP with DTLS via [LwM2M ingestion](../concepts/lwm2m.md), and brownfield fleets over [Sparkplug B](../concepts/sparkplug.md). [Device self-registration](./device-self-registration.md) is available, as is possession claiming through the `initiateDeviceClaim` and `claimDevice` mutations in the [device-management GraphQL API](../reference/graphql-api.md). A WebSocket transport is still planned.
 :::
 
 A device that reports through a LoRaWAN network server (ChirpStack, The Things Stack) or another system's webhook does not connect itself; see [Inbound Integrations](./inbound-integrations.md).
@@ -59,6 +59,8 @@ Every inbound event, over any transport, is a JSON object. The example below is 
 - `eventType` — `Measurement`, `Location`, or `Alert` (also `NewRelationship`).
 - `credentialType` / `credentialId` — the credential the device presents **over HTTP**. `MQTT_BASIC` additionally carries `credentialSecret`. Omit these only when the instance's device-auth mode is set to `disabled` or `optional`. The default is `required`, so an HTTP event is expected to carry a credential. **Over MQTT, leave all three out**: the broker has already authenticated the device when it connected, and an event on the platform's MQTT broker that carries any of them is refused (see the [Device Protocol Reference](../reference/device-protocol.md#rejections-at-the-door)).
 - `payload` — its shape depends on `eventType`. `Measurement`, `Location` and `Alert` are `{ "entries": [ … ] }`; `NewRelationship` is three fields directly under `payload`. See below.
+
+`NewRelationship` can create untracked relationships, including `member`. Tracked types such as `assigned`, and the built-in `contains`, are refused on the first delivery with reason `Invalid`. Assign devices with a claim code or the `createEntityRelationship` mutation.
 
 Every field, with its type and whether it is required, including the optional `altId` and `relationship`, is in the [Device Protocol Reference](../reference/device-protocol.md#device-event), together with JSON Schemas you can validate firmware output against.
 
@@ -357,6 +359,17 @@ mosquitto_sub \
   -t "devicechain/acme/device-commands/sensor-001"
 ```
 
+That is the `MQTT_BASIC` shape: a username and a password. An `ACCESS_TOKEN` credential has **no password**. The token is the second half of the username, and `-P` is left out entirely. The broker reads a connect that carries a password as `MQTT_BASIC`, so an access token sent with any password, even a placeholder, is refused:
+
+```bash
+mosquitto_sub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001:sub' \
+  -u 'acme:<accessToken>' \
+  -t "devicechain/acme/device-commands/sensor-001"
+```
+
 Each message is a JSON envelope:
 
 ```json
@@ -387,6 +400,18 @@ mosquitto_pub \
   -h <mqtt-host> -p 1883 \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
+  -t "devicechain/acme/command-responses/sensor-001" \
+  -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
+```
+
+With an `ACCESS_TOKEN` credential, connect the same way as for the subscription, without `-P`:
+
+```bash
+mosquitto_pub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001' \
+  -u 'acme:<accessToken>' \
   -t "devicechain/acme/command-responses/sensor-001" \
   -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
 ```

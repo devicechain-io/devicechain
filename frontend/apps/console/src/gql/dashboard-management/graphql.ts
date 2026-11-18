@@ -21,6 +21,8 @@ export type DashboardSearchCriteria = {
   /**
    * Return only dashboards whose name contains this text. The match is a case-sensitive
    * literal substring match: % and _ in the text are ordinary characters, not wildcards.
+   * At most 256 UTF-8 bytes, measured before any trimming; longer input is refused
+   * with LIMIT_EXCEEDED.
    */
   name?: string | null | undefined;
   /** Page to return, starting at 1. */

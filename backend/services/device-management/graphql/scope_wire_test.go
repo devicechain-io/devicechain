@@ -64,13 +64,17 @@ func newScopeFixture(t *testing.T) scopeFixture {
 // registered.
 func seedScopeFixture(t *testing.T, db *gorm.DB, extra ...any) scopeFixture {
 	t.Helper()
-	if err := db.AutoMigrate(append([]any{&model.DeviceType{}, &model.Device{}, &model.DeviceAlias{}, &model.DeviceProfile{},
+	if err := db.AutoMigrate(append([]any{&model.EntityGroupFacetRef{}, &model.DeviceType{}, &model.Device{}, &model.DeviceAlias{}, &model.DeviceProfile{},
 		&model.CustomerType{}, &model.Customer{}, &model.IssuedCustomerToken{}, &model.Area{}, &model.EntityRelationshipType{},
-		&model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.DeviceClaim{}, &model.DeviceProfileVersion{}, &model.DeviceProfileActivation{},
+		&model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.DeviceClaim{}, &model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{}, &model.DeviceProfileActivation{},
 		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.Alarm{}, &model.EntityAttribute{},
 		&model.AreaType{}, &model.Asset{}, &model.AssetType{}}, extra...)...); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := rdb.CreatePartialUniqueIndex(db, &model.EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatal(err)
+	}
+
 	f := scopeFixture{db: db, api: model.NewApi(&rdb.RdbManager{Database: db})}
 	ctx := f.operator()
 	if _, err := f.api.CreateDeviceType(ctx, &model.DeviceTypeCreateRequest{Token: "pump"}); err != nil {

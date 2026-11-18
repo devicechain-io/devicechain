@@ -30,6 +30,12 @@ cluster for you if none exists, and asks first unless you pass `--yes`. The `gcp
 a planned follow-up.
 :::
 
+## Broker storage on GKE
+
+New GKE brokers created by `dcctl bootstrap` use `premium-rwo` (`pd-ssd`) when the GKE SSD StorageClass is available. JetStream's synchronous disk writes make storage latency important, especially with three replicas under `--ha`; SSD avoids relying on the balanced disk's small-volume IOPS floor. Other clouds and kind keep the cluster default. The OpenTofu instance input `nats_jetstream_storage_class` (module input `jetstream_storage_class`) defaults to `""`, which omits `config.jetstream.fileStore.pvc.storageClassName`. Set it before the first apply to choose another class.
+
+Storage classes on existing PVCs and StatefulSet claim templates are immutable. `dcctl` leaves this input unset on upgrade and when bootstrap finds an existing broker or JetStream claim. The module records its first choice with `lifecycle.ignore_changes`, including an unset choice, so later defaults cannot change it. Existing GKE brokers keep their current disks; this change does not migrate data to SSD.
+
 ## Install the cluster {#install}
 
 `dcctl install <provider>` prepares a cluster to hold DeviceChain instances. It installs the
@@ -178,8 +184,9 @@ docker rm -f kind-registry   # the local image registry, if you used --build
 ```
 
 kind knows nothing about `~/.devicechain/clusters/`, so deleting the cluster this way leaves
-its directory behind. The next `dcctl destroy` of an instance that was on that cluster finds
-the cluster gone and removes the directory along with the instance's own local state — see
+its directory behind. The next `dcctl destroy` of an instance recorded on that cluster removes
+the directory along with the instance's own local state only if the recorded context no longer
+answers — see
 [Removing an instance](#destroy). Or remove it by hand, once its `cluster.json` has confirmed
 which cluster it belonged to.
 
@@ -278,6 +285,20 @@ tells you how to dump the data or discard it deliberately. See
 [the legacy database exception](#legacy-db-removal).
 :::
 
+### Relational store WAL tuning {#relational-store-wal}
+
+`dcctl install --relational-store-max-wal-mib 4096` sets the shared relational store's
+`max_wal_size` soft checkpoint target to 4096 MiB. Omit the flag to keep the recorded
+choice; on a first install with no choice, the root keeps its stock PostgreSQL default
+(1 GiB). Pass `--relational-store-max-wal-mib=0` to record a reset to that default.
+Positive values must be at least 64 MiB. The choice is recorded before apply, so a
+flagless retry after a failed apply retains it, including an explicit reset.
+
+This is a soft checkpoint target, not a limit on `pg_wal`: WAL can grow beyond it
+when checkpoints or archiving fall behind. The cluster root still refuses a target
+larger than a quarter of the relational store's storage. Performance sizes recommend
+WAL values but never apply them automatically. Changes are reload-only and are allowed while instances exist on the cluster.
+
 ### The legacy database exception {#legacy-db-removal}
 
 A StatefulSet's data directory cannot be adopted by the operator, which is why there is no
@@ -329,8 +350,7 @@ The cluster install sets up one ingress controller and every instance gets its r
 at the edge is a security control: the service-token mint and the signing-key set are served by
 `user-management` on an internal port that no ingress route targets, so the public port answers 404
 for them behind any controller. The mint is protected by the shared service secret, compared in constant time.
-The chart's routes carry no configuration snippet. `ingress-nginx`, on a cluster that still runs it, still accepts
-snippets in this release, because instances not yet upgraded rely on them.
+The chart's routes carry no configuration snippet. On a cluster that retains `ingress-nginx`, `dcctl install` disables snippets and restores the controller's default annotations risk level. It first refuses while any Ingress of that controller's class carries a `*-snippet` annotation, naming each one: upgrade its owning instance with `dcctl upgrade`, or remove the annotation, then re-run `dcctl install`. See [the v1.6.0 upgrade notes](./releases-and-upgrades.md#v160-nginx-snippets-off).
 
 If you bring your own controller, route the chart's five ingresses. A controller that implements the Gateway API can serve the Gateway and HTTPRoutes the chart renders instead (`ingress.controller: gateway`; the chart's README lists what such a controller must do):
 
@@ -685,7 +705,7 @@ The alerts for snapshots are described under
   own components. A pod that does not fit stays `Pending`, and the install waits out its timeout.
   See [Service sizing](#service-sizing) for each figure. On a cluster that cannot spare them, such
   as a laptop, use [`--compact`](#--compact).
-- **OpenTofu 1.9 or later** (the `tofu` binary; `terraform` 1.9 or later also works) on your
+- **OpenTofu 1.10 or later** (the `tofu` binary; `terraform` 1.10 or later also works) on your
   `PATH`. `dcctl` drives it to provision infrastructure. Install it from
   [opentofu.org](https://opentofu.org). Run `dcctl preflight local` to check that it is there,
   and the rest of your environment, up front. The preflight does not check its version; an older
@@ -738,7 +758,7 @@ chart and operator are identical.
 |------|---------|
 | `--cluster <name>` | `local` provider: the kind cluster to create the instance on (default `devicechain`). It must already have been [installed](#install); bootstrap never creates a cluster. |
 | `--kube-context <name>` | Target an installed cluster through this kube-context instead. |
-| `--size <size>` | The instance's size preset: `base` (the default), `perf-12k` or `perf-16k`, the measured high-throughput shapes. Recorded on the instance and applied again by every upgrade. A `--values` overlay and an OpenTofu variable you state yourself win over it. See [Choosing a size](./sizing.md). |
+| `--size <size>` | The instance's size preset: `base` (the default), `perf-12k`, `perf-16k` or `perf-20k`. `perf-20k` targets throughput; acknowledgement latency is unvalidated. Recorded on the instance and applied again by every upgrade. A `--values` overlay and an OpenTofu variable you state yourself win over it. See [Choosing a size](./sizing.md). |
 | `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, MCP, Sparkplug B ingest and LwM2M ingest; over-the-air update management is part of `default`), `telemetry`, or `ingest-only`. |
 | `--enable-area <area>` | Deploy a functional area on top of the profile, such as `--enable-area outbound-connectors`. Repeatable. To add one to an instance that is already running, see [Adding a functional area later](#enable-area). |
 | `--build` | Build images from source into a local registry (developer path; needs the source tree + Docker + ko). |
@@ -915,6 +935,7 @@ bootstrapped on it follows them. None of them is a `dcctl bootstrap` flag.
 | `--restore-rdb-from <archive>` | Disaster recovery: recover the shared relational store from this archive path inside the backup bucket (`dc-rdb` for a store that has never been restored) instead of initialising an empty one. It takes effect only when the store is **created** — against a cluster whose store already exists it moves no data — so it is a rebuild lever, not a repair. Needs the backup plugin, so it is refused on a cluster installed with `--no-cnpg` or `--compact --no-tls`. See [Recovering an instance](./disaster-recovery.md#recover). |
 | `--restore-rdb-at <timestamp>` | Stop that recovery at a point in time instead of replaying the whole archive — for data destroyed *correctly*, by a bad migration or a mistaken delete; pick a moment strictly before the damage. Needs `--restore-rdb-from`, and an RFC 3339 timestamp with an explicit offset (`2026-07-27T13:59:00Z`): without one PostgreSQL reads it in the recovering server's own timezone and stops at a different moment than you named. |
 | `--max-connections <n>` | The relational database's connection budget (default `700` on a first install; a re-run without it keeps the current budget) — see [the connection budget](#connection-budget). May be raised, but not lowered, while instances run. |
+| `--relational-store-max-wal-mib <n>` | Shared relational store `max_wal_size` soft checkpoint target in MiB. Omitted keeps the recorded choice (first install: stock 1 GiB); `0` records a reset; positive values must be at least `64`. Recorded before apply and retained on a flagless retry. The root limits it to a quarter of storage. Never set automatically by performance sizes. See [relational WAL tuning](#relational-store-wal). |
 | `--allow-legacy-db-removal` | The relational-database half of the one-time exception described under [What bootstrap does](#what-it-does). |
 | `--dry-run` | Print what each step would do without changing anything. A dry run creates no cluster, so checks that need to read one — the `--ha` node-capacity check in particular — report what they could not see rather than failing the rehearsal. What such a check *does* see is still fatal: a cluster that answers and cannot host `--ha` fails a dry run too. On a cluster that answers, a dry run also makes the refusals a re-install makes — an install from a machine without the cluster's state, changed settings under running instances, an unusable `--backup-snapshot-class` — and fails with the same message the install would. On a cluster it cannot reach, it says those were not checked. |
 | `--yes` | Do not ask before creating a kind cluster. |
@@ -1968,8 +1989,11 @@ bootstrapping it again under the same name is how you recreate an instance. An i
 by an older release, before `dcctl install` existed, is the exception: its cluster has to be
 recreated too — see [Releases & Upgrades](./releases-and-upgrades.md#pre-declaration-recreate).
 
-If the kind cluster itself is already gone — deleted with `kind delete cluster` — destroy has
-nothing to uninstall and says so, clearing local state only. That is the instance's directory,
+If the kind cluster itself is already gone — deleted with `kind delete cluster` — destroy
+clears local state only when the instance has a record of its cluster and the recorded
+context no longer answers. A guess is never evidence that the cluster is gone. Without a
+record, the normal uninstall runs and fails if the cluster cannot be reached; pass
+`--kube-context`, or remove the instance's directory by hand if its cluster is really gone. That is the instance's directory,
 and the cluster's own directory under `~/.devicechain/clusters/<cluster-uid>/`, which
 `dcctl install` created and `kind delete cluster` left behind (see
 [Install the cluster](#install)). As it does, it prints:

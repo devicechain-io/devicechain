@@ -118,22 +118,14 @@ func tpEval(t *testing.T, spec DetectionRuleSpec, samples []tpSample, until floa
 		if err != nil {
 			t.Fatalf("rule %s: window %q: %v", spec.Token, d.Window, err)
 		}
-		type point struct{ t, v float64 }
-		var win []point
+		var win SlidingAverage
 		for _, s := range samples {
 			v, ok := s.m[d.Metric]
 			if !ok || !gate(s.m) {
 				continue
 			}
-			win = append(win, point{s.t, v})
-			for len(win) > 0 && win[0].t <= s.t-window.Seconds() {
-				win = win[1:]
-			}
-			sum := 0.0
-			for _, p := range win {
-				sum += p.v
-			}
-			set(s.t, tpCompare(d.Op, sum/float64(len(win)), d.Threshold))
+			avg := win.Add(s.t, v, window.Seconds())
+			set(s.t, tpCompare(d.Op, avg, d.Threshold))
 		}
 	case "absence":
 		timeout, err := time.ParseDuration(d.Timeout)

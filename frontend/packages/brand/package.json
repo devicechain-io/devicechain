@@ -41,6 +41,7 @@
     "generate": "node tools/generate.mjs",
     "check:generated": "node tools/generate.mjs --check",
     "verify": "node tools/verify.mjs",
+    "lint": "npm run verify",
     "build": "node tools/generate.mjs --check"
   },
   "publishConfig": {

@@ -56,6 +56,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/shardgroups"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
@@ -101,9 +102,10 @@ const reconcileQueryTimeout = 30 * time.Second
 var reconstructReadRetryInterval = reconcileQueryTimeout
 
 var (
-	Microservice  *core.Microservice
-	Configuration *config.Lwm2mConfiguration
-	NatsManager   *messaging.NatsManager
+	stopStreamSharding context.CancelFunc
+	Microservice       *core.Microservice
+	Configuration      *config.Lwm2mConfiguration
+	NatsManager        *messaging.NatsManager
 
 	// Credentials is the resolved PSK identity->key map, built once at Init (a missing/mis-
 	// projected Secret must crash startup, not degrade a term build).
@@ -175,7 +177,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: func(context.Context) error { return nil },
+			Postprocess: governance.StopRefreshes,
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  func(context.Context) error { return nil },
@@ -254,30 +256,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	NatsManager = Svc.Nats
 
 	if NatsManager != nil {
-		// Build the writer synchronously here (right after Initialize sets the JetStream context),
-		// not in the oncreate callback which does not run until Start — the same ordering the
-		// Sparkplug adapter relies on. It is reused by every leadership term.
-		writer, err := NatsManager.NewWriter(streams.InboundEvents)
-		if err != nil {
+		if err := createNatsComponents(NatsManager); err != nil {
 			return err
 		}
-		Writer = writer
-		// The downlink command path (ADR-075 L4a): a durable consumer of device-commands and a
-		// writer for command-responses, both built once and shared across leadership terms. The
-		// reader MUST use DeliverNew — a brand-new durable created at a fresh install would otherwise
-		// replay the stream's up-to-7-day retained backlog and dispatch already-TIMEOUT commands as
-		// live actuations (B1). Only the leader's Dispatcher pulls from it; a standby binds it (a
-		// harmless idempotent AddConsumer) but never reads.
-		commandReader, err := newCommandReader(NatsManager)
-		if err != nil {
-			return err
-		}
-		CommandReader = commandReader
-		responseWriter, err := NatsManager.NewWriter(streams.CommandResponses)
-		if err != nil {
-			return err
-		}
-		ResponseWriter = responseWriter
 		log.Info().Str("deviceManagement", ingestURL).Str("deviceState", deviceStateURL).
 			Msg("LwM2M ingest will resolve + emit presence via device-management and floor its epoch via device-state (ADR-044/067), and dispatch commands over device-commands→CoAP→command-responses (ADR-075 L4a).")
 	} else {
@@ -291,6 +272,40 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			Msg("Built an inert (no-credential) LwM2M CoAP/DTLS transport; it serves the health probe only and takes no leadership lease.")
 	}
 
+	return nil
+}
+
+// createNatsComponents wires routing before any handle shared by leadership terms.
+func createNatsComponents(nmgr *messaging.NatsManager) error {
+	stop, err := shardgroups.Enable(nmgr)
+	if err != nil {
+		return err
+	}
+	stopStreamSharding = stop
+	// Build the writer synchronously here (right after Initialize sets the JetStream context),
+	// not in the oncreate callback which does not run until Start — the same ordering the
+	// Sparkplug adapter relies on. It is reused by every leadership term.
+	writer, err := nmgr.NewWriter(streams.InboundEvents)
+	if err != nil {
+		return err
+	}
+	Writer = writer
+	// The downlink command path (ADR-075 L4a): a durable consumer of device-commands and a
+	// writer for command-responses, both built once and shared across leadership terms. The
+	// reader MUST use DeliverNew — a brand-new durable created at a fresh install would otherwise
+	// replay the stream's up-to-7-day retained backlog and dispatch already-TIMEOUT commands as
+	// live actuations (B1). Only the leader's Dispatcher pulls from it; a standby binds it (a
+	// harmless idempotent AddConsumer) but never reads.
+	commandReader, err := newCommandReader(nmgr)
+	if err != nil {
+		return err
+	}
+	CommandReader = commandReader
+	responseWriter, err := nmgr.NewWriter(streams.CommandResponses)
+	if err != nil {
+		return err
+	}
+	ResponseWriter = responseWriter
 	return nil
 }
 
@@ -614,7 +629,9 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 		TenantDeleted: tenantGate,
 	})
 	// Bound to this term: a fresh term builds a fresh registry and starts its own sweep.
-	go reg.RunTenantSweep(leaderCtx, registry.DefaultTenantSweepInterval)
+	if !reg.StartTenantSweep(leaderCtx, registry.DefaultTenantSweepInterval) {
+		log.Warn().Msg("Could not start LwM2M tenant sweep: registry already stopped.")
+	}
 	handlers := registry.NewHandlers(reg, bindings, registryMetrics, obsManager, connTable, decode.DefaultObjectAllowlist, limiter, leaderCtx)
 
 	// The L4b wake-drain fetcher reads a waking device's backlogged commands from command-delivery so
@@ -1182,7 +1199,7 @@ func serveAsLeader(ctx context.Context, lease leaseTerm) bool {
 	setLeader(false)
 	stopServing()    // on a term that served: records intent, THEN Stops the socket, so the ensuing Serve return is graceful. On one that did not: the bare Stop that closes the bound socket
 	reg.Stop()       // terminal: refuse further work + stop this term's lifetime timers (no presence emitted — a handover is not a device disconnect)
-	reg.Wait()       // join the term's reconstruction goroutines (orphan DISCONNECTs, the in-term retry): all bound by the cancelled leaderCtx, so this does not wait out an emit budget
+	reg.Wait()       // join the term's tenant sweep callbacks and reconstruction goroutines before releasing the lease; the cancelled leaderCtx aborts presence retries
 	<-dispatcherDone // wait for the dispatcher's reader + workers to unwind (in-flight command ops abort on the cancelled leaderCtx and are left unacked to redeliver to the next leader)
 	evict()
 
@@ -1408,11 +1425,17 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// once it was left out: Terminate is only legal from Stopped, so the terminate that
 	// followed was refused, the connection was never drained, and every orderly shutdown
 	// logged that it had closed unasked (#924, fixed by #933).
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
 	return Svc.Stop(ctx)
 }
 
 // afterMicroserviceTerminated releases the broker's resources.
 func afterMicroserviceTerminated(ctx context.Context) error {
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
 	return Svc.Terminate(ctx)
 }
 

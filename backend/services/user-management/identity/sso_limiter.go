@@ -63,5 +63,5 @@ func newBeginLimiter(opts ...sourcelimit.Option) beginLimiter {
 // refuses; the per-source bucket is charged first so a sender already over its own
 // allowance does not also drain the global one.
 func (l beginLimiter) allow(source string) bool {
-	return l.perSource.Allow(source) && l.global.Allow("")
+	return l.perSource.Allow(sourcelimit.SourceKey(source)) && l.global.Allow("")
 }

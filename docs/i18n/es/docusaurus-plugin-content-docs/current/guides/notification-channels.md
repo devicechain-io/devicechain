@@ -26,7 +26,7 @@ Un canal divide su configuración en dos:
 
 En una **actualización**, el campo `secret` se comporta así:
 
-- **Omítelo** para dejar el secreto existente sin cambios. Nunca necesitas reenviarlo.
+- **Omítelo** para dejar el secreto existente sin cambios. Debes reenviarlo al cambiar el tipo o destino de la credencial.
 - Envía un valor no nulo para reemplazarlo.
 - Envía `null` o una cadena vacía para borrarlo.
 - En un canal webhook cuya configuración declara `bearer` o `header`, borrar el secreto se rechaza. Cambia `auth` a `none` en la misma solicitud si quieres que el endpoint sea anónimo.
@@ -85,6 +85,8 @@ mutation {
 ```
 
 Para un webhook entrante de Slack, usa `"auth":"none"` y omite `secret`. El [canal de Slack](#create-a-slack-channel) nativo de abajo da formato al mensaje por ti y es la mejor opción.
+
+El campo `text` del webhook genérico es un resumen de texto plano que usa el token del dispositivo o el originador en lugar del nombre del dispositivo; los usuarios de Slack deben usar el [canal nativo de Slack](#create-a-slack-channel).
 
 El cuerpo JSON de un canal webhook incluye el `eventType` de la alarma (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, o `RENOTIFIED` para una renotificación temporizada), `alarmToken`, `alarmKey`, `severity`, `state`, el `originatorType` y el `originatorId` del originador cuando se conocen, y las horas. Cuando se conoce el dispositivo de la alarma, incluye además `deviceToken`, `deviceName` y `deviceTypeToken`; una clave se omite cuando su valor se desconoce (por ejemplo, un dispositivo sin nombre) y nunca se envía vacía. Las renotificaciones temporizadas (`RENOTIFIED`) y las notificaciones `CLEARED` tardías que recoge el planificador también incluyen estos campos del dispositivo y del originador cuando se conocen. Las alarmas notificadas antes de actualizar omiten estos campos en esas notificaciones posteriores.
 
@@ -198,6 +200,7 @@ Una resolución es informativa, así que se trata de forma distinta a un aviso:
 - Se envía una vez por ciclo, después de registrar la resolución, así que ninguna escalada de "sigue sin resolverse" la sigue. Si ningún canal la acepta, se reintenta; cuando algún canal la ha aceptado, no se repite. Una resolución que se procesa antes de que se haya registrado el aviso de su alarma se envía justo después de ese aviso, y una que no pudo enviarse entonces la recoge el planificador de notificaciones en sus siguientes pasadas durante hasta 30 minutos.
 - **No** se limita por frecuencia, no cuenta como notificación y no inicia la escalada.
 - Una resolución que ocurre durante las horas de silencio de una política se **descarta**, no se retiene: un "resuelta" liberado horas después comunicaría una noticia vieja.
+- Activar la opción no anuncia resoluciones históricas: la resolución debe ser posterior a su activación. Una caída después de reclamar una resolución pero antes de enviarla puede perder ese aviso; no se garantiza la entrega exactamente una vez.
 - `notifyOnClear` no se puede borrar con `null`; envía `true` o `false`.
 
 ### Acotamiento por tipo de dispositivo {#device-type-scoping}
@@ -212,6 +215,8 @@ Dos ajustes más moldean la entrega:
 - **`escalateAfterSeconds`** y **`maxEscalations`**: cuando están configurados (> 0), una alarma que permanece **no reconocida y sin despejar** durante ese tiempo desde su última notificación se vuelve a notificar, hasta el tope. Si `maxEscalations` no está configurado o vale `0`, se aplica un tope predeterminado de 5 para todo el servicio. Un `escalateAfterSeconds` con valor `null`/`0` deshabilita el escalado para la política.
 
 El escalado es seguro de ejecutar en varias réplicas: cada nivel de escalado se reclama antes de enviarse, así que exactamente una réplica lo entrega. Cada alarma tiene **un único reloj y nivel de escalado compartidos**. Si coinciden varias políticas con escalado, la ventana más corta fija la cadencia y cada tope cuenta contra el nivel compartido.
+
+El plazo de escalado comienza cuando la plataforma envía la notificación, independientemente de la marca de tiempo del evento del dispositivo.
 
 ```graphql
 mutation {
@@ -368,3 +373,5 @@ Dos propiedades a tener en cuenta:
 5. **Lee el registro de entregas.** `notificationAttempts(criteria: {pageNumber: 1, pageSize: 20, alarmToken: "..."})` lista cada intento de la alarma con su resultado. Un registro `FAILED` o `REFUSED` lleva `errorCode` y el `errorMessage` del proveedor; consulta [Registro de entregas](#delivery-ledger).
 
 Reconocer o despejar la alarma detiene el escalado adicional. El registro de estado guarda `acknowledgedAt`/`clearedAt` junto con el historial de notificaciones. Si la alarma se despeja y su condición vuelve a darse, la plataforma reabre la misma alarma y su registro de estado empieza de nuevo para el nuevo ciclo: el escalado vuelve a funcionar hasta que ese ciclo se reconozca o se despeje.
+
+Cambiar el tipo de canal, la URL o autenticación del webhook, el host/puerto/seguridad SMTP o la región de PagerDuty requiere `secret` en la misma solicitud si hay una credencial almacenada. Omitirlo devuelve `SECRET_RESUPPLY_REQUIRED` sin escribir nada: vuelve a enviar la credencial o bórrala con `secret: null`. Los cambios de nombre, cabeceras personalizadas y URL base de enlaces conservan la credencial.

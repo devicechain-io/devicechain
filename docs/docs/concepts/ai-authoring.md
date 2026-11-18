@@ -89,4 +89,6 @@ When an operator tests a provider's connectivity from the admin console, the cal
 
 - [Event Processing & Alarms](./event-processing.md) — the compiler and the engine the AI drafts against.
 - [Tenant Tiers & Packaging](./tenant-tiers.md) — how AI model entitlement is packaged.
-- [AI Access (MCP)](./mcp.md) — the separate, read-only surface for AI agents operating the platform.
+- [AI Access (MCP)](./mcp.md) — the separate surface for AI agents to read the platform and, when the mcp area's `agentActuation.enabled` is on, use [Preview proposal tools](./mcp.md#agent-proposals). People approve in the console; MCP executes nothing.
+
+Changing a provider's `kind` or effective `endpoint` while it holds an API key requires `secret` in the same `updateAiProvider` request; omission returns `SECRET_RESUPPLY_REQUIRED`. Supply the key again, or clear it with `secret: null`. Name, model and enabled edits keep the key, as does explicitly sending the kind's default endpoint.

@@ -16,6 +16,7 @@ package config
 // zero/unset value here is treated as "use the default" at the point of use in
 // the rdb package (see rdb.initializePostgres), not as a literal 0 (which the
 // database/sql pool would interpret as unlimited/closed).
+// Negative connection counts are rejected by the rdb package at startup.
 //
 // MaxIdleConnections defaults to MaxOpenConnections: a pool keeps every connection it
 // has opened, up to its size, open between uses. Set it lower only to hold fewer

@@ -1,16 +1,6 @@
 <!--
 Copyright The DeviceChain Authors
 SPDX-License-Identifier: Apache-2.0
-
-🔴 THIS FILE IS PUBLISHED. It is the body of the DeviceChain.Sdk listing on
-nuget.org, so it is written for a reader who has never seen this repository and
-cannot follow a reference into it. No ADR citations, no internal shorthand, no
-links to private planning docs. `hack/check-docs-adr-refs.sh` enforces the ADR
-half of that, because a csproj's PackageReadmeFile is registry-rendered prose
-exactly as its <Description> is.
-
-The repository-facing README, which is free to cite ADRs, is ../../README.md.
-The two are deliberately separate files for that reason — do not merge them.
 -->
 
 # DeviceChain .NET SDK
@@ -18,7 +8,7 @@ The two are deliberately separate files for that reason — do not merge them.
 The public C# client SDK for [DeviceChain](https://devicechain.io), an open source
 IoT platform. It wraps the platform's documented wire seams so a .NET host — or a
 Unity digital twin — can authenticate, query, subscribe to live telemetry, and emit
-device-plane telemetry and commands.
+device-plane telemetry, and receive and answer device commands.
 
 The SDK is an **untrusted external client**. It speaks the same public surface any
 third-party application does, and never the platform's administrative one.
@@ -32,6 +22,14 @@ dotnet add package DeviceChain.Sdk
 ## Quick start
 
 ```csharp
+using System;
+using System.Threading;
+using DeviceChain.Sdk;
+using DeviceChain.Sdk.Json;
+using System.Collections.Generic;
+using DeviceChain.Sdk.Ingest;
+
+var ct = CancellationToken.None; // use your host's lifetime token
 await using var client = new DeviceChainClient(new Uri("https://devicechain.example.com"));
 
 await client.LoginAsync("me@example.com", "…");
@@ -42,12 +40,12 @@ await client.SelectTenantAsync("acme");
 var data = await client.Gql.SendAsync(
     Area.DeviceManagement,
     "query{devices(criteria:{pageNumber:1,pageSize:10}){results{token name}}}",
-    EmptyVariables.Value, MyJson.Default.EmptyVariables, MyJson.Default.DevicesData);
+    EmptyVariables.Value, MyJson.Default.EmptyVariables, MyJson.Default.JsonElement);
 
 // Subscribe to live telemetry over graphql-transport-ws:
 await foreach (var evt in client.Subscriptions(Area.EventManagement).SubscribeAsync(
     "subscription{measurementStream{deviceToken name value unit}}",
-    EmptyVariables.Value, MyJson.Default.EmptyVariables, MyJson.Default.MeasurementStreamData, ct))
+    EmptyVariables.Value, MyJson.Default.EmptyVariables, MyJson.Default.JsonElement, ct))
 {
     // …drive a chart, or a Unity twin transform
 }
@@ -58,8 +56,24 @@ var publisher = client.DevicePublisher(
     ingressOrigin: new Uri("https://ingress.devicechain.example.com"),
     instanceId: "dc", tenant: "acme");
 
-await publisher.EmitMeasurementsAsync("car-42", credentialId,
+await publisher.EmitMeasurementsAsync("car-42", "your-device-access-token",
     new Dictionary<string, double> { ["speed"] = 55.0 });
+```
+
+`MyJson` below is application code, not an SDK type. Add this source-generated
+context to your .NET project (for Unity, compile it into an assembly with the
+System.Text.Json source generator before importing it). The result is a `JsonElement`
+containing the GraphQL `data` object; replace it with your own result DTO and its
+`JsonTypeInfo` when you want typed properties. `SdkJson` is internal to the SDK.
+
+```csharp
+using DeviceChain.Sdk.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+[JsonSerializable(typeof(EmptyVariables))]
+[JsonSerializable(typeof(JsonElement))]
+public partial class MyJson : JsonSerializerContext { }
 ```
 
 ## What's in it
@@ -99,3 +113,6 @@ The MQTT dependency is pinned to the MQTTnet 4.x line on purpose: MQTTnet 5 drop
 - Source and issues — https://github.com/devicechain-io/devicechain
 
 Licensed under the Apache License 2.0.
+
+See the [C# and Unity API guide](https://docs.devicechain.io/reference/csharp-sdk) for authentication, command pulling,
+MQTT session setup, transport ownership and teardown.

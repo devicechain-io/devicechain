@@ -84,6 +84,13 @@ func newTaskMetrics(t *testing.T, name string) (*PeriodicTaskMetrics, *prometheu
 	return ms.NewPeriodicTaskMetrics(name), reg
 }
 
+// testTaskMetrics gives each task its own service registry.
+func testTaskMetrics(t *testing.T) *PeriodicTaskMetrics {
+	t.Helper()
+	m, _ := newTaskMetrics(t, "sweep")
+	return m
+}
+
 // histogramCount returns how many observations a histogram has taken. testutil.ToFloat64
 // refuses a histogram and CollectAndCount counts metric FAMILIES — it answers 1 for a
 // histogram with no observations at all, so an assertion built on it cannot see the
@@ -146,7 +153,7 @@ func TestOnlyAPassThatDidWorkMovesTheLastSuccessGauge(t *testing.T) {
 }
 
 // TestNilMetricsRecordNothingAndDoNotPanic covers the nil-safety ProcessorMetrics also has:
-// a task built without metrics must behave identically, so a unit test can build one.
+// direct metrics users may still use a nil receiver.
 func TestNilMetricsRecordNothingAndDoNotPanic(t *testing.T) {
 	var m *PeriodicTaskMetrics
 	assert.NotPanics(t, func() { m.record(PassComplete, time.Second, time.Now()) })
@@ -182,7 +189,7 @@ func TestJitterStaysInsideItsBandAndVaries(t *testing.T) {
 func TestTheDefaultIsJittered(t *testing.T) {
 	task := NewPeriodicTask("test-area", "sweep", time.Minute, func(context.Context) error {
 		return nil
-	}, NewNoOpLifecycleCallbacks())
+	}, NewNoOpLifecycleCallbacks(), testTaskMetrics(t))
 	assert.Equal(t, defaultPassJitter, task.jitter,
 		"a task built without options must be jittered; replicas that tick in lockstep are the "+
 			"reason the default is not 'exact'")
@@ -207,7 +214,7 @@ func TestWithoutJitterIsExact(t *testing.T) {
 // newTestTask builds a started task over run, and returns a stop function.
 func newTestTask(t *testing.T, run func(context.Context) error, opts ...PeriodicTaskOption) *PeriodicTask {
 	t.Helper()
-	task := NewPeriodicTask("test-area", "sweep", 20*time.Millisecond, run, NewNoOpLifecycleCallbacks(), opts...)
+	task := NewPeriodicTask("test-area", "sweep", 20*time.Millisecond, run, NewNoOpLifecycleCallbacks(), testTaskMetrics(t), opts...)
 	require.NoError(t, task.Initialize(context.Background()))
 	require.NoError(t, task.Start(context.Background()))
 	t.Cleanup(func() { _ = task.Stop(context.Background()) })
@@ -222,7 +229,7 @@ func TestTheImmediateFirstPassRunsBeforeTheInterval(t *testing.T) {
 	task := NewPeriodicTask("test-area", "sweep", time.Hour, func(context.Context) error {
 		passes.Add(1)
 		return nil
-	}, NewNoOpLifecycleCallbacks(), WithImmediateFirstPass(), WithoutJitter())
+	}, NewNoOpLifecycleCallbacks(), testTaskMetrics(t), WithImmediateFirstPass(), WithoutJitter())
 	require.NoError(t, task.Initialize(context.Background()))
 	require.NoError(t, task.Start(context.Background()))
 	defer func() { _ = task.Stop(context.Background()) }()
@@ -238,7 +245,7 @@ func TestWithoutTheOptionNoPassRunsAtStart(t *testing.T) {
 	task := NewPeriodicTask("test-area", "sweep", time.Hour, func(context.Context) error {
 		passes.Add(1)
 		return nil
-	}, NewNoOpLifecycleCallbacks(), WithoutJitter())
+	}, NewNoOpLifecycleCallbacks(), testTaskMetrics(t), WithoutJitter())
 	require.NoError(t, task.Initialize(context.Background()))
 	require.NoError(t, task.Start(context.Background()))
 	defer func() { _ = task.Stop(context.Background()) }()
@@ -251,18 +258,25 @@ func TestWithoutTheOptionNoPassRunsAtStart(t *testing.T) {
 // still writing when Stop returned would be writing after the database it uses was told to
 // close.
 func TestStopWaitsForAPassInFlight(t *testing.T) {
+	entered := make(chan struct{})
+	var once sync.Once
 	release := make(chan struct{})
 	var finished atomic.Bool
 	task := NewPeriodicTask("test-area", "sweep", time.Millisecond, func(context.Context) error {
+		once.Do(func() { close(entered) })
 		<-release
 		finished.Store(true)
 		return nil
-	}, NewNoOpLifecycleCallbacks(), WithoutJitter())
+	}, NewNoOpLifecycleCallbacks(), testTaskMetrics(t), WithoutJitter())
 	require.NoError(t, task.Initialize(context.Background()))
 	require.NoError(t, task.Start(context.Background()))
 
-	// Wait until the pass is definitely in flight, then stop while it is.
-	time.Sleep(50 * time.Millisecond)
+	// Stop only after the callback confirms a pass is in flight.
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pass did not start")
+	}
 	stopped := make(chan error, 1)
 	go func() { stopped <- task.Stop(context.Background()) }()
 
@@ -296,27 +310,56 @@ func TestADetachedTaskSurvivesTheInitializeContext(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var passes atomic.Int64
+			passed := make(chan struct{}, 1)
 			task := NewPeriodicTask("test-area", "sweep", 10*time.Millisecond, func(context.Context) error {
 				passes.Add(1)
+				select {
+				case passed <- struct{}{}:
+				default:
+				}
 				return nil
-			}, NewNoOpLifecycleCallbacks(), tc.opts...)
+			}, NewNoOpLifecycleCallbacks(), testTaskMetrics(t), tc.opts...)
 
 			initCtx, cancelInit := context.WithCancel(context.Background())
+			defer cancelInit()
 			require.NoError(t, task.Initialize(initCtx))
 			require.NoError(t, task.Start(context.Background()))
 			defer func() { _ = task.Stop(context.Background()) }()
 
-			require.Eventually(t, func() bool { return passes.Load() >= 1 }, 2*time.Second, 5*time.Millisecond)
+			waitForPassAfter := func(before int64) {
+				t.Helper()
+				timer := time.NewTimer(5 * time.Second)
+				defer timer.Stop()
+				for passes.Load() <= before {
+					select {
+					case <-passed:
+					case <-timer.C:
+						t.Fatalf("no pass after count %d: %s", before, tc.descriptions)
+					}
+				}
+			}
+			waitForPassAfter(0)
 			cancelInit()
-			time.Sleep(60 * time.Millisecond)
-			before := passes.Load()
-			time.Sleep(120 * time.Millisecond)
-			after := passes.Load()
 
 			if tc.wantCancel {
-				assert.Equal(t, before, after, tc.descriptions)
+				// Join without calling Stop: cancellation of Initialize must end the loop.
+				stopped := make(chan struct{})
+				go func() {
+					task.wg.Wait()
+					close(stopped)
+				}()
+				select {
+				case <-stopped:
+				case <-time.After(5 * time.Second):
+					t.Fatal(tc.descriptions)
+				}
+				before := passes.Load()
+				require.NoError(t, task.Stop(context.Background()))
+				assert.Equal(t, before, passes.Load(), tc.descriptions)
 			} else {
-				assert.Greater(t, after, before, tc.descriptions)
+				before := passes.Load()
+				waitForPassAfter(before)
+				assert.Greater(t, passes.Load(), before, tc.descriptions)
 			}
 		})
 	}
@@ -370,7 +413,7 @@ func TestTheLoopFilesTheOutcomeItActuallySaw(t *testing.T) {
 			// The shape that makes this worth pinning: the pass reports an error, and
 			// it is the context's own. Classified by the error alone it is a failure.
 			return ctx.Err()
-		}, NewNoOpLifecycleCallbacks(), WithImmediateFirstPass(), WithoutJitter(), WithPassMetrics(m))
+		}, NewNoOpLifecycleCallbacks(), m, WithImmediateFirstPass(), WithoutJitter())
 		require.NoError(t, task.Initialize(context.Background()))
 		require.NoError(t, task.Start(context.Background()))
 		<-started
@@ -398,7 +441,7 @@ func TestTheLoopFilesTheOutcomeItActuallySaw(t *testing.T) {
 				close(done)
 			}
 			return ErrPassSkipped
-		}, NewNoOpLifecycleCallbacks(), WithImmediateFirstPass(), WithoutJitter(), WithPassMetrics(m))
+		}, NewNoOpLifecycleCallbacks(), m, WithImmediateFirstPass(), WithoutJitter())
 		require.NoError(t, task.Initialize(context.Background()))
 		require.NoError(t, task.Start(context.Background()))
 		<-done
@@ -427,7 +470,7 @@ func TestTheLoopFilesTheOutcomeItActuallySaw(t *testing.T) {
 				close(done)
 			}
 			return nil
-		}, NewNoOpLifecycleCallbacks(), WithImmediateFirstPass(), WithoutJitter(), WithPassMetrics(m))
+		}, NewNoOpLifecycleCallbacks(), m, WithImmediateFirstPass(), WithoutJitter())
 		require.NoError(t, task.Initialize(context.Background()))
 		require.NoError(t, task.Start(context.Background()))
 		<-done
@@ -449,12 +492,12 @@ func TestANonPositiveIntervalIsRefused(t *testing.T) {
 	for _, interval := range []time.Duration{0, -time.Second} {
 		assert.Panicsf(t, func() {
 			NewPeriodicTask("test-area", "sweep", interval, func(context.Context) error { return nil },
-				NewNoOpLifecycleCallbacks())
+				NewNoOpLifecycleCallbacks(), testTaskMetrics(t))
 		}, "an interval of %s must be refused at construction, not become a hot loop", interval)
 	}
 	assert.NotPanics(t, func() {
 		NewPeriodicTask("test-area", "sweep", time.Nanosecond, func(context.Context) error { return nil },
-			NewNoOpLifecycleCallbacks())
+			NewNoOpLifecycleCallbacks(), testTaskMetrics(t))
 	}, "the guard is on non-positive, not on small")
 }
 
@@ -648,4 +691,11 @@ func TestPeriodicTaskPassCounterExistsBeforeAnyPass(t *testing.T) {
 		}
 	}
 	t.Fatal("_passes_total is not exported before the first pass")
+}
+
+func TestNilPeriodicTaskMetricsAreRefused(t *testing.T) {
+	assert.PanicsWithValue(t, "core: periodic task \"sweep\" needs pass metrics", func() {
+		NewPeriodicTask("test-area", "sweep", time.Minute, func(context.Context) error { return nil },
+			NewNoOpLifecycleCallbacks(), nil)
+	})
 }

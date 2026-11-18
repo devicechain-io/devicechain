@@ -136,6 +136,32 @@ func TestAnAcceptedEnvelopeYieldsTheInnerObject(t *testing.T) {
 	}
 }
 
+// The parameterized policy write returns an envelope, while its read returns the
+// bare policy. Recording the envelope would make every upgrade look like data loss.
+func TestAutomationPolicyEnvelopeRecordsOnlyThePolicy(t *testing.T) {
+	e, ok := seededEntityNamed("automation-review-policy")
+	if !ok {
+		t.Fatal("missing automation-review-policy entity")
+	}
+	policy := `{"profileToken":"apiprobe-device-profile","revision":1,"effective":{"required":true},"pendingChange":null}`
+	got, err := createdObjects(e, raw(`{"applied":true,"policy":`+policy+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || string(got[0]) != policy {
+		t.Fatalf("recorded %s, want only the policy", got)
+	}
+	found, err := readObject(e, map[string]json.RawMessage{e.Read: raw(policy)}, "apiprobe-device-profile", got[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(found) != policy {
+		t.Fatalf("read %s, want %s", found, policy)
+	}
+	_, err = createdObjects(e, raw(`{"applied":false,"policy":null}`))
+	assertCode(t, err, exitRefused)
+}
+
 func TestAnEnvelopeMissingItsKeyIsAShapeProblem(t *testing.T) {
 	e := entity{Name: "command", Wrap: "command", Reject: "rejection{code reason}"}
 	_, err := createdObjects(e, raw(`{"rejection":null}`))

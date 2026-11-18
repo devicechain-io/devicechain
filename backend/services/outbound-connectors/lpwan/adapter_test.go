@@ -230,7 +230,7 @@ func TestQueuedDownlinkIsAnsweredSuccessWithTheClaimNonce(t *testing.T) {
 	require.True(t, e.Success)
 	require.Equal(t, "cmd-1", e.CommandToken)
 	require.Equal(t, "claimed-nonce", e.DispatchNonce, "the response quotes the nonce the claim returned, never the envelope's")
-	require.Empty(t, e.Reach)
+	require.Equal(t, cmddownlink.ReachUnanswered, e.Reach)
 	require.JSONEq(t, `{"stage":"queued","queueItemId":"q-1"}`, *e.Payload)
 	require.Equal(t, 1, r.m.get(ResultQueued))
 }

@@ -340,9 +340,9 @@ func applyEvent(found *DeviceState, occurredAt time.Time, pt *PresenceTransition
 				}
 			}
 		}
-		// A CONNECTED is also activity; a DISCONNECTED is the opposite of activity,
+		// An accepted CONNECTED is also activity; a DISCONNECTED is the opposite of activity,
 		// so it must not advance LastActivityTime.
-		if pt.Claim == presence.ClaimConnected && (!found.LastActivityTime.Valid || pt.OccurredAt.After(found.LastActivityTime.Time)) {
+		if d.Ordered && pt.Claim == presence.ClaimConnected && (!found.LastActivityTime.Valid || pt.OccurredAt.After(found.LastActivityTime.Time)) {
 			found.LastActivityTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
 		}
 		return

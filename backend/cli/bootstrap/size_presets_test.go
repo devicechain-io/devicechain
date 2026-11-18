@@ -67,6 +67,25 @@ var presetRenders = map[string]presetRender{
 		relationalWALMiB: 8192,
 		designRate:       16000,
 	},
+	"perf-20k": {
+		areas: map[string][4]string{
+			"event-sources":     {"3", "3", "256Mi", "900m"},
+			"device-management": {"2", "3", "", "600m"},
+			"device-state":      {"2", "3", "512Mi", "400m"},
+			"event-management":  {"", "4", "1Gi", "650m"},
+			"event-processing":  {"", "2", "1536Mi", "950m"},
+		},
+		vars: map[string]string{
+			"nats_cpu_request":           "6",
+			"nats_memory_request":        "6Gi",
+			"nats_memory_limit":          "10Gi",
+			"nats_jetstream_storage":     "40Gi",
+			"timescale_storage":          "260Gi",
+			"timescale_max_wal_size_mib": "40960",
+		},
+		relationalWALMiB: 8192,
+		designRate:       20000,
+	},
 }
 
 func perfStateNamed(name string, ha bool) *State {

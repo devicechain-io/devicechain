@@ -311,7 +311,7 @@ terminó, y el reintento se selecciona por ese resultado y no leyendo el texto d
 | `UNKNOWN` | El comando puede haber llegado al dispositivo y haber actuado: se envió y nunca se respondió (`TIMEOUT`), o el dispositivo respondió y la plataforma perdió la respuesta. | Puede actuar dos veces. Solo con reconocimiento explícito. |
 
 Un comando que no ha terminado no tiene resultado. El `status` por sí solo no lo da, porque `FAILED`
-abarca nunca entregado, rechazado y desconocido. Busque por resultado:
+abarca nunca entregado, rechazado y desconocido. Busca por resultado:
 
 ```graphql
 query {
@@ -352,7 +352,7 @@ mutation {
   (el original, cualquier reintento suyo y cualquier reintento de estos), de modo que un dispositivo
   nunca recibe el comando dos veces por haber dos reintentos abiertos a la vez.
 - **`UNKNOWN` exige `includeUnknown: true`.** Sin él, esos dispositivos se rechazan con
-  `RETRY_UNKNOWN_NOT_ACKNOWLEDGED`. Actívelo solo tras confirmar que actuar dos veces es inocuo.
+  `RETRY_UNKNOWN_NOT_ACKNOWLEDGED`. Actívalo solo tras confirmar que actuar dos veces es inocuo.
 - **Los dispositivos que el original rechazó** solo se pueden reintentar cuando el registro del lote
   conserva ese rechazo. El registro guarda como máximo 100 dispositivos rechazados por código
   (`refusalCounts` es exacto), así que un dispositivo de un conjunto mayor se rechaza con

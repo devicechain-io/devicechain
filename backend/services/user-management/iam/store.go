@@ -5,11 +5,13 @@ package iam
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
@@ -29,6 +31,10 @@ var ErrTierReorderMismatch = errors.New("reorder token list does not match the c
 // fail-closed tenant guard (ADR-015) — the same lane the SigningKey uses.
 type Store struct {
 	db *rdb.RdbManager
+
+	// NatsShardGroups bounds placement assignments when stream sharding is configured.
+	// Set from the mounted instance document before using the store.
+	NatsShardGroups *config.NatsShardGroupsConfiguration
 }
 
 // NewStore wraps an RdbManager.
@@ -36,6 +42,9 @@ func NewStore(db *rdb.RdbManager) *Store { return &Store{db: db} }
 
 // sys returns a gorm handle scoped to the instance-global system context.
 func (s *Store) sys(ctx context.Context) *gorm.DB {
+	if tx, ok := ctx.Value(snapshotKey{}).(*gorm.DB); ok {
+		return tx.WithContext(core.WithSystemContext(ctx))
+	}
 	return s.db.DB(core.WithSystemContext(ctx))
 }
 
@@ -46,6 +55,9 @@ func (s *Store) sys(ctx context.Context) *gorm.DB {
 // surface tenant-less auth events and every tenant's administrative changes. The
 // query itself is the core-owned RdbManager.AuditEvents helper.
 func (s *Store) AuditEvents(ctx context.Context, criteria rdb.AuditEventSearchCriteria) (*rdb.AuditEventSearchResults, error) {
+	if InSnapshot(ctx) {
+		return nil, fmt.Errorf("AuditEvents: %w", ErrOutsideSnapshot)
+	}
 	return s.db.AuditEvents(core.WithSystemContext(ctx), criteria)
 }
 
@@ -144,6 +156,17 @@ func (s *Store) CreateIdentity(ctx context.Context, id *Identity) error {
 	return s.sys(ctx).Create(id).Error
 }
 
+// UnknownCatalogueRoleError identifies an unknown catalogue token without changing
+// the validation message returned to existing callers.
+type UnknownCatalogueRoleError struct {
+	Scope RoleScope
+	Token string
+}
+
+func (e *UnknownCatalogueRoleError) Error() string {
+	return fmt.Sprintf("no %s role with token %q", e.Scope, e.Token)
+}
+
 // CatalogueRolesByScopeTokens resolves a set of role tokens within a single scope of the
 // operator's CATALOGUE, erroring if any token is unknown — so an assignment that names a
 // non-existent (or wrong-scope) role fails closed rather than silently granting nothing.
@@ -176,7 +199,7 @@ func (s *Store) CatalogueRolesByScopeTokens(ctx context.Context, scope RoleScope
 		}
 		for _, t := range uniq {
 			if _, ok := found[t]; !ok {
-				return nil, fmt.Errorf("no %s role with token %q", scope, t)
+				return nil, &UnknownCatalogueRoleError{Scope: scope, Token: t}
 			}
 		}
 	}
@@ -393,7 +416,22 @@ func (s *Store) CreateRole(ctx context.Context, r *Role) error {
 // UpdateRole persists the mutable fields of an already-loaded role (name,
 // description, authorities). Save writes by primary key.
 func (s *Store) UpdateRole(ctx context.Context, r *Role) error {
-	return s.sys(ctx).Save(r).Error
+	return rdb.AdvancingFrom(s.sys(ctx), r.UpdatedAt).Save(r).Error
+}
+
+// ErrRoleConflict tells an editor to reload a role that changed since it was read.
+var ErrRoleConflict = rdb.NewStaleWriteError("role")
+
+// SaveRoleIfUnmoved atomically persists an already validated role only while its
+// loaded version still matches. Keep the loaded record for audit identity.
+func (s *Store) SaveRoleIfUnmoved(ctx context.Context, r *Role) error {
+	authorities, err := json.Marshal(r.Authorities)
+	if err != nil {
+		return err
+	}
+	return rdb.UpdateIfUnmoved(s.sys(ctx), r, r.UpdatedAt, map[string]any{
+		"name": r.Name, "description": r.Description, "authorities": string(authorities),
+	}, ErrRoleConflict)
 }
 
 // DeleteRole clears the role's assignment join rows (from the identity system-role,
@@ -473,7 +511,57 @@ func (s *Store) UpdateTenantFields(ctx context.Context, t *Tenant, fields map[st
 
 // SetTenantEnabled flips a tenant's enabled flag in place.
 func (s *Store) SetTenantEnabled(ctx context.Context, t *Tenant, enabled bool) error {
-	return s.sys(ctx).Model(t).Update("enabled", enabled).Error
+	return setTenantEnabled(s.sys(ctx), t, enabled)
+}
+
+func setTenantEnabled(tx *gorm.DB, t *Tenant, enabled bool) error {
+	return tx.Model(t).Update("enabled", enabled).Error
+}
+
+// ErrTenantPurging is returned when a tenant's purge has begun.
+var ErrTenantPurging = errors.New("tenant is being deleted")
+
+// SetTenantEnabledAndBumpGeneration writes the enabled flag and advances the fence in
+// one transaction, even for an unchanged value. Separate transactions could disable,
+// re-enable and bump, then bump the disable: its late kill would close the fence at
+// the enabled tenant's newest generation indefinitely.
+// The head is locked FIRST to serialize lifecycle changes for this tenant before
+// either write. A kill must carry this transaction's generation, so a later re-enable
+// has a strictly greater generation and reopens the fence regardless of publish order.
+// The tenant row is then locked and a tenant whose purge has begun is refused with
+// ErrTenantPurging; the refusal rolls back the whole transaction, a head row it
+// created included. Head before tenant is the order older pods take during a rolling
+// upgrade too, so the two cannot deadlock.
+func (s *Store) SetTenantEnabledAndBumpGeneration(ctx context.Context, t *Tenant, enabled bool) (int, error) {
+	var generation int
+	err := s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		head, err := lockAgentPolicyHead(tx, t.Token)
+		if err != nil {
+			return err
+		}
+		var tenant Tenant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("token = ?", t.Token).First(&tenant).Error; err != nil {
+			return err
+		}
+		// A completed purge releases the token; it may now name a different tenant.
+		if tenant.ID != t.ID {
+			return ErrTenantPurging
+		}
+		if tenant.PurgeState.Deleted() {
+			return ErrTenantPurging
+		}
+		if err := setTenantEnabled(tx, t, enabled); err != nil {
+			return err
+		}
+		head.ActuationGeneration++
+		if err := tx.Save(head).Error; err != nil {
+			return err
+		}
+		generation = head.ActuationGeneration
+		return nil
+	})
+	return generation, err
 }
 
 // BeginTenantPurge cuts a tenant's access and starts its ADR-077 purge: disabled, in

@@ -647,7 +647,7 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		// 5. The shared backpressure gate comes after the tenant's own, as on every transport.
-		if err := es.admit(es.Id); err != nil {
+		if err := es.admit(tenant, es.Id); err != nil {
 			m.request(typ, ResultBackpressure)
 			writeBackpressured(w)
 			return
@@ -666,7 +666,7 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 			o.event.SealedIntegrationToken = sealed
 			o.event.IntegrationIdentifier = o.identifier
 			if err := rt.Publish(es.Id, tenant, o.event, o.payload, integrationDedupID(tenant, o.event.Device, *o.event.AltId)); err != nil {
-				if errors.Is(err, messaging.ErrStreamBackpressure) {
+				if messaging.IsRefusal(err) {
 					m.request(typ, ResultBackpressure)
 					writeBackpressured(w)
 					return

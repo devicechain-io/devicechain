@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"net"
@@ -25,9 +26,11 @@ var errNoConfigFile = errors.New("can only reload config when a file is provided
 // broker is the running server plus what this binary adds to it: the reload that keeps the device
 // TLS setting, and the probe and metrics that watch it.
 type broker struct {
-	s          *server.Server
-	configFile string
-	metrics    *brokerMetrics
+	s           *server.Server
+	configFile  string
+	metrics     *brokerMetrics
+	metricsSrv  *http.Server
+	metricsDone chan struct{}
 
 	// mu serializes reloads and probes, so a probe never reads the TLS config of a reload that
 	// is half applied.
@@ -48,8 +51,15 @@ type broker struct {
 	// hotSwaps counts reloads served by the hot path; tests read it.
 	hotSwaps atomic.Uint64
 
-	// ldm records that lame duck mode was requested. Upstream's SIGTERM handler reads the
-	// server's own (unexported) flag; see signals_unix.go for why this one is equivalent.
+	// started closes when Run returns: startup has finished (or the server stopped during it).
+	// stopped releases deferred reloads if the server shuts down before then.
+	started     chan struct{}
+	stopped     chan struct{}
+	startedOnce sync.Once
+
+	// ldm records a lame duck request accepted (the client listener was up), set before its
+	// goroutine runs. Upstream's SIGTERM handler reads the server's own unexported flag; see
+	// signals_unix.go for why this one is equivalent.
 	ldm atomic.Bool
 }
 
@@ -69,12 +79,20 @@ func prepareOptions(opts *server.Options) *hotTLS {
 // them, or nil, in which case every reload is the full one.
 func newBroker(s *server.Server, opts *server.Options, m *brokerMetrics, hot *hotTLS) *broker {
 	b := &broker{s: s, configFile: opts.ConfigFile, metrics: m, mqttTLS: opts.MQTT.TLSConfig,
-		hot: hot, digest: opts.ConfigDigest(), live: opts}
+		hot: hot, digest: opts.ConfigDigest(), live: opts,
+		started: make(chan struct{}), stopped: make(chan struct{})}
 	// Zero when unknown, which keeps the hot path off: it is allowed only when the load time is
 	// known and unmoved.
 	b.lastLoad, _ = b.configLoadTime()
+	go func() {
+		s.WaitForShutdown()
+		close(b.stopped)
+	}()
 	return b
 }
+
+// markStarted is called after Run returns, including by embedded-server tests.
+func (b *broker) markStarted() { b.startedOnce.Do(func() { close(b.started) }) }
 
 // configLoadTime is when the server last loaded its configuration (start, or any reload by anyone).
 func (b *broker) configLoadTime() (time.Time, bool) {
@@ -188,11 +206,29 @@ func (b *broker) serveMetrics(ln net.Listener) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", b.metrics)
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	b.metricsSrv = srv
+	b.metricsDone = make(chan struct{})
 	go func() {
+		defer close(b.metricsDone)
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			b.s.Errorf("Broker metrics endpoint stopped: %v", err)
 		}
 	}()
+}
+
+// stopMetrics shuts down the endpoint and joins Serve within the caller's deadline.
+// Like serveMetrics, it is called by the broker lifecycle after startup; repeated stops are safe.
+func (b *broker) stopMetrics(ctx context.Context) error {
+	if b.metricsSrv == nil {
+		return nil
+	}
+	err := b.metricsSrv.Shutdown(ctx)
+	select {
+	case <-b.metricsDone:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // watch checks the listener once the server is ready for connections (which on a broker

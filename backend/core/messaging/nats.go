@@ -128,6 +128,9 @@ const (
 	// do not silently diverge (an unset value would default to 1000 on the server).
 	readerMaxAckPending = 65536
 
+	// ReaderMaxAckPending is the maximum number of unacknowledged messages per reader consumer.
+	ReaderMaxAckPending = readerMaxAckPending
+
 	// rebindBackoffMin/Max bound the self-heal retry when a reader's durable consumer
 	// goes away (e.g. deleted by an older pod's Unsubscribe during a rolling update).
 	// The reader re-binds with capped exponential backoff so a persistent failure does
@@ -164,6 +167,8 @@ func (a natsAck) InProgress() error { return a.nm.InProgress() }
 // microservice. It mirrors the former KafkaManager's lifecycle shape so the
 // service mains change minimally.
 type NatsManager struct {
+	liveHubs sync.Map // key string -> lazy *LiveHub[T]; see SharedLiveHub
+
 	Microservice *core.Microservice
 
 	// admin makes this manager the BROKER ADMINISTRATOR's: the one holder of the right to
@@ -206,10 +211,15 @@ type NatsManager struct {
 	// get replication metrics only (streamMetrics.sample explains why). sinkStreams is
 	// the subset of streamNames declared as sinks (isSinkStream), recorded when the
 	// stream is ensured because that is where its suffix is known; nil until the first.
-	streamMu    sync.Mutex
-	streamNames []string
-	sinkStreams map[string]bool
-	bucketNames []string
+	// routingFrozen prevents sharding configuration changes after the first handle.
+	// Like shards, it is guarded by streamMu.
+	routingFrozen   bool
+	shards          *streamShards // guarded by streamMu
+	routingSnapshot atomic.Pointer[streamRouting]
+	streamMu        sync.Mutex
+	streamNames     []string
+	sinkStreams     map[string]bool
+	bucketNames     []string
 	// identityBucketNames is the KV buckets opened in the identity account, sampled through
 	// that account's own JetStream context. Guarded by streamMu.
 	identityBucketNames []string
@@ -311,6 +321,10 @@ type NatsManager struct {
 	// OnReconnect.
 	reconnectMu sync.Mutex
 	onReconnect []func()
+
+	// caches own delayed evictions that must run while the connection is still live.
+	cacheMu sync.Mutex
+	caches  []*Cache
 
 	// ackWaitOverride is the test seam behind SetAckWaitForTesting. Zero in production,
 	// where ackWait() answers the AckWait constant. Read it through ackWait(), never
@@ -874,6 +888,24 @@ func (nmgr *NatsManager) opContext() context.Context {
 // tenant's subjects for the suffix, so a single stream backs both the scoped
 // producers and the shared wildcard consumer.
 func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
+	nmgr.freezeStreamRouting()
+	name, err := nmgr.ensureSingleStream(suffix)
+	if err != nil {
+		return "", err
+	}
+	sharding := nmgr.streamSharding()
+	if sharding.selects(suffix) {
+		for g := 1; g < sharding.cfg.Count; g++ {
+			if _, err := nmgr.ensureSingleStream(GroupSuffix(suffix, g)); err != nil {
+				return "", err
+			}
+		}
+	}
+	return name, nil
+}
+
+func (nmgr *NatsManager) ensureSingleStream(suffix string) (string, error) {
+	base := nmgr.declaredSuffix(suffix)
 	// Refuse a suffix core/streams does not declare. This is the guard that makes
 	// the disk budget trustworthy: JetStream reserves each stream's MaxBytes UP
 	// FRONT, so a stream nobody declared reserves real disk that the budget never
@@ -883,21 +915,21 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	// Failing here is deliberately loud and early. The alternative is what used to
 	// happen: the stream is created, works fine in a dev cluster, and the shortfall
 	// only appears as a crashloop on an install whose PV was sized from the budget.
-	if !streams.IsDeclared(suffix) {
+	if !streams.IsDeclared(base) {
 		return "", fmt.Errorf("stream suffix %q is not declared in core/streams: "+
 			"add it to streams.All (with its disk tier) so the reservation budget accounts for it", suffix)
 	}
-	if err := nmgr.requireAdmin(suffix); err != nil {
+	if err := nmgr.requireAdmin(base); err != nil {
 		return "", err
 	}
 	if !nmgr.mayReconcile() {
 		return nmgr.verifyStream(suffix)
 	}
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
-	bounds := nmgr.streamBounds(suffix)
+	bounds := nmgr.streamBounds(base)
 	subjects := nmgr.streamSubjects(suffix)
-	retention := retentionPolicy(streams.RetentionFor(suffix))
-	dupWindow := time.Duration(streams.DuplicateWindowSecondsFor(suffix)) * time.Second
+	retention := retentionPolicy(streams.RetentionFor(base))
+	dupWindow := time.Duration(streams.DuplicateWindowSecondsFor(base)) * time.Second
 	// Retry on connection/server errors so a few seconds of NATS lag on a cluster
 	// restart degrades into a retry rather than a crash-loop (A6). A stream that
 	// does not yet exist (ErrStreamNotFound) is the normal first-run case and is
@@ -942,7 +974,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			// work queue it deletes the message — so a stream carrying the wrong one is
 			// refused loudly here rather than run on with semantics nobody declared. Pre-GA
 			// the remedy is a recreate.
-			if info.Config.Retention != retention && streams.RecreatesOnRetentionChange(suffix) &&
+			if info.Config.Retention != retention && streams.RecreatesOnRetentionChange(base) &&
 				info.Config.Retention == nats.LimitsPolicy && retention == nats.WorkQueuePolicy {
 				// The ONE declared migration (core/streams RecreateOnRetentionChange): the stream
 				// keeps running as it is, so its reader can drain it, and MigratePendingRetention
@@ -961,10 +993,11 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 				return nil
 			}
 			cfg := info.Config
-			if msg := shrinkRefusal(suffix, name, info.Config, bounds, info.State); msg != "" && !nmgr.allowCeilingShrink {
+			if msg := shrinkRefusal(base, name, info.Config, bounds, info.State); msg != "" && !nmgr.allowCeilingShrink {
 				refused = errors.New(msg)
 				return nil
 			}
+			placementChanged := applyGroupPlacement(&cfg, nmgr.groupPlacement(suffix))
 			boundsChanged := applyStreamBounds(&cfg, bounds)
 			subjectsChanged := applyStreamSubjects(&cfg, subjects)
 			dupChanged := applyStreamDuplicateWindow(&cfg, dupWindow)
@@ -974,7 +1007,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			// into another stream's namespace; none of ours has sources, a transform or a
 			// republish, so any found is put back, and a mirror (which JetStream cannot undo in
 			// place) is refused.
-			directChanged := applyStreamAllowDirect(&cfg, suffix)
+			directChanged := applyStreamAllowDirect(&cfg, base)
 			crossChanged, isMirror := applyStreamNoCrossing(&cfg)
 			if isMirror {
 				refused = fmt.Errorf("stream %s is a mirror, which no declared stream is and JetStream cannot "+
@@ -987,7 +1020,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 						"store on the device-events capture stream reaches no device, so discard-new loses the " +
 						"newest events with nothing counting them")
 			}
-			if boundsChanged || subjectsChanged || dupChanged || discardChanged || crossChanged || directChanged {
+			if placementChanged || boundsChanged || subjectsChanged || dupChanged || discardChanged || crossChanged || directChanged {
 				if _, err := nmgr.js.UpdateStream(&cfg, nats.Context(ctx)); err != nil {
 					return err
 				}
@@ -1030,26 +1063,15 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			// same hazard by re-reading StreamInfo (kv.go); here the fresh config is
 			// already in hand.
 			nmgr.reconcileStreamReplicas(name, cfg)
-			if !(boundsChanged || subjectsChanged || dupChanged || discardChanged || crossChanged || directChanged) {
+			if !(placementChanged || boundsChanged || subjectsChanged || dupChanged || discardChanged || crossChanged || directChanged) {
 				nmgr.noteReconciled("stream", name, "unchanged")
 			}
 			return nil
 		} else if !errors.Is(err, nats.ErrStreamNotFound) {
 			return err
 		}
-		cfg := &nats.StreamConfig{
-			Name:        name,
-			Subjects:    subjects,
-			Storage:     nats.FileStorage,
-			Retention:   retention,
-			Discard:     nats.DiscardOld,
-			MaxAge:      streamMaxAge,
-			Replicas:    nmgr.effectiveStreamReplicas(),
-			AllowDirect: streams.AllowDirectFor(suffix),
-		}
-		applyStreamBounds(cfg, bounds)
-		applyStreamDuplicateWindow(cfg, dupWindow)
-		if streams.RecreatesOnRetentionChange(suffix) {
+		cfg := nmgr.newStreamConfig(suffix)
+		if streams.RecreatesOnRetentionChange(base) {
 			// A stream that may have had a predecessor (see retention_migration.go) never
 			// starts at 1: its sequence is the basis of a dedup id.
 			cfg.FirstSeq = captureFirstSeq()
@@ -1069,7 +1091,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	nmgr.trackStream(name, suffix)
+	nmgr.trackStream(name, base)
 	return name, nil
 }
 
@@ -1283,6 +1305,7 @@ type natsWriter struct {
 // subject ("{instance}.{tenant}.{suffix}") per message from the tenant in
 // context.
 func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
+	nmgr.freezeStreamRouting()
 	if err := nmgr.requireWriter(suffix); err != nil {
 		return nil, err
 	}
@@ -1290,13 +1313,13 @@ func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
 		return nil, err
 	}
 	w := &natsWriter{nmgr: nmgr, suffix: suffix}
-	nmgr.metrics.initPublish(suffix, publishModeSync)
+	nmgr.initRoutedPublish(suffix, publishModeSync)
 	// A writer to a stream that applies backpressure is refused while a gating reader is far
 	// behind (backpressure.go); registering measures the stream once now, so the writer is
 	// not born refusing. Its refused counter exists at 0 from here, for the reason
 	// initDurable gives.
 	if streams.AppliesBackpressure(suffix) {
-		w.gate = nmgr.registerBackpressure(suffix)
+		w.gate = nmgr.registerWriterBackpressure(suffix)
 		nmgr.metrics.initRefused(StreamName(nmgr.Microservice.InstanceId, suffix))
 	}
 	nmgr.writers = append(nmgr.writers, w)
@@ -1384,6 +1407,11 @@ func (nmgr *NatsManager) tenantSubject(ctx context.Context, suffix string, devic
 	if err := core.ValidateToken(tenant); err != nil {
 		return "", fmt.Errorf("messaging: refusing to publish to a subject for an invalid tenant: %w", err)
 	}
+	var err error
+	suffix, err = nmgr.tenantSuffix(tenant, suffix)
+	if err != nil {
+		return "", err
+	}
 	if deviceToken != "" {
 		return DeviceScopedSubject(nmgr.Microservice.InstanceId, tenant, suffix, deviceToken), nil
 	}
@@ -1431,12 +1459,12 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 	// After the tenant check, so a publish with no tenant still fails as the tenant error it
 	// is, not as a retryable refusal. The whole call is refused or none of it is: a batch the
 	// gate cut in half would leave the caller unable to say which part landed.
-	if err := w.nmgr.Backpressure(w.suffix); err != nil && !bypassesBackpressure(msgs) {
-		w.nmgr.countRefused(StreamName(w.nmgr.Microservice.InstanceId, w.suffix), len(msgs))
+	if err := w.nmgr.publishBackpressure(ctx, w.suffix); err != nil && !bypassesBackpressure(msgs) {
+		w.nmgr.countRoutedRefused(ctx, w.suffix, len(msgs))
 		return err
 	}
 	for i := range msgs {
-		nm := natsMsg(subject, msgs[i])
+		nm, spans := startPublishMessage(ctx, subject, w.suffix, msgs[i])
 		// A fresh ceiling for each message: a batch is not one publish, and the
 		// ceiling bounds how long ONE unanswered request is waited on.
 		pctx, callerBound, cancel := publishContext(ctx)
@@ -1452,17 +1480,18 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 			// bucket.
 			start := time.Now()
 			err = w.publishOne(pctx, nm)
-			w.nmgr.metrics.observePublish(w.suffix, publishModeSync, time.Since(start))
+			w.nmgr.metrics.observePublish(w.nmgr.publishMetricSuffix(subject, w.suffix), publishModeSync, time.Since(start))
 			if err == nil {
 				// Subject, headers and data, as sent (wireSize: nats.Msg.Size, counted
 				// rather than encoded): the headers natsMsg always sets can be most of a
 				// small event's record, and counting the data alone would measure a
 				// byte-bound stream of small events far less often than
 				// backpressureKickShare says.
-				w.gate.notePublished(wireSize(nm))
+				w.nmgr.noteRoutedPublish(ctx, w.suffix, wireSize(nm))
 			}
 		}
 		cancel()
+		finishPublish(spans, err)
 		if err != nil && !callerBound && errors.Is(err, context.DeadlineExceeded) {
 			// Our ceiling fired, not the caller's deadline, which has not passed:
 			// report it as the broker timeout it has always been.
@@ -1591,11 +1620,12 @@ func (w *natsWriter) HandleResponse(err error) {
 // for a suffix. The shared microservice consumes all tenants' messages here and
 // derives the per-message tenant from the delivered subject.
 type natsReader struct {
-	nmgr    *NatsManager
-	suffix  string
-	stream  string
-	subject string
-	durable string
+	shardGroup *int
+	nmgr       *NatsManager
+	suffix     string
+	stream     string
+	subject    string
+	durable    string
 	// filters, when set, replaces subject as the durable's filter with an exact LIST of
 	// subjects (FilterSubjects), and subject is then empty. Only the max-delivery recorder
 	// has one: its filter is the advisory subject of each of its area's own durables, which
@@ -1712,11 +1742,10 @@ type natsReader struct {
 	// unaffected.
 	unbound bool
 
-	// downstream is the stream this reader's area forwards what it reads into, when that
-	// stream applies backpressure (streams.Stream.Forwards); "" otherwise. While its gate is
-	// closed the reader parks before fetching. Set by NewReader from the declaration, never
-	// by the caller, so a forwarding hop cannot be built without it.
-	downstream string
+	// downstreams are the streams this reader can forward into. The reader parks before
+	// fetching while any gate refuses. An ungrouped reader covers every selected group;
+	// a grouped reader covers only its own group.
+	downstreams []string
 
 	// slots is what ReaderWithCapacity asked for; 0 means a plain reader. capacity is the
 	// pool NewReader builds from it (nil for a plain reader, which is how every capacity
@@ -2295,24 +2324,33 @@ func (r *natsReader) recreateUnfiltered(fromSubject string, fromList []string) e
 // reader with the whole-stream filter would overlap it, which a work-queue stream forbids —
 // and every advisory it took would be one no recorder lettered.
 func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (MessageReader, error) {
+	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedRead(suffix); err != nil {
+		return nil, err
+	}
 	if streams.ShapeOf(suffix) == streams.ShapeAdvisory {
 		return nil, fmt.Errorf("messaging: %q is read only by the max-delivery recorder (RecordMaxDeliveries), "+
 			"not through NewReader", suffix)
 	}
-	stream, err := nmgr.ensureStream(suffix)
-	if err != nil {
-		return nil, err
-	}
 	r := &natsReader{
 		nmgr:    nmgr,
 		suffix:  suffix,
-		stream:  stream,
 		durable: ReaderDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix),
 		gate:    nmgr.Microservice.Readiness,
-		// A hop that forwards into a stream applying backpressure parks while that stream
-		// refuses, rather than fetching messages it could only fail to publish.
-		downstream: streams.ForwardsInto(suffix, nmgr.Microservice.FunctionalArea),
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	selectedSuffix, err := nmgr.readerSuffix(suffix, r.shardGroup)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := nmgr.ensureStream(suffix); err != nil {
+		return nil, err
+	}
+	r.downstreams = nmgr.readerDownstreams(streams.ForwardsInto(suffix, nmgr.Microservice.FunctionalArea), r.shardGroup)
+	r.stream = StreamName(nmgr.Microservice.InstanceId, selectedSuffix)
+	r.durable = ReaderDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, selectedSuffix)
 	// The device-events capture stream stores two subjects (a device's own telemetry and a
 	// gateway's for its children), which no single pattern expresses. Its durable carries NO
 	// filter on the broker, and the reader hands out those two subjects only (forwards).
@@ -2359,10 +2397,7 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 		r.forwards, r.alsoForwards = subjects[0], subjects[1:]
 		r.legacyDurable = DurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
 	} else {
-		r.subject = StreamSubject(nmgr.Microservice.InstanceId, suffix)
-	}
-	for _, opt := range opts {
-		opt(r)
+		r.subject = StreamSubject(nmgr.Microservice.InstanceId, selectedSuffix)
 	}
 	if err := r.validateAckFloor(); err != nil {
 		return nil, err
@@ -2376,7 +2411,7 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	}
 	mode := streams.ReadDurable
 	if r.ackFloor() {
-		r.durable = AckFloorDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
+		r.durable = AckFloorDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, selectedSuffix)
 		mode = streams.ReadAckFloor
 	}
 	// The stream is already ensured above, which the area's administration of it allowed; what
@@ -2384,11 +2419,18 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	if err := nmgr.requireReader(suffix, mode); err != nil {
 		return nil, err
 	}
-	if err := nmgr.requireConsumer(suffix, r.durable); err != nil {
+	declaredDurable := r.durable
+	if selectedSuffix != suffix {
+		declaredDurable = ReaderDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
+		if r.ackFloor() {
+			declaredDurable = AckFloorDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
+		}
+	}
+	if err := nmgr.requireConsumer(suffix, declaredDurable); err != nil {
 		return nil, err
 	}
-	if r.downstream != "" {
-		nmgr.registerBackpressure(r.downstream)
+	for _, downstream := range r.downstreams {
+		nmgr.registerBackpressure(downstream)
 	}
 	r.configureFetch()
 	if r.slots > 0 {
@@ -2596,22 +2638,20 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 				}
 				continue
 			}
-			// Park while the stream this reader forwards into is refusing (backpressure.go).
+			// Park while any stream this reader can forward into refuses (backpressure.go).
 			// BEFORE the fetch, and before a capacity slot is taken, because a fetched
 			// message has already spent one of its MaxDeliver deliveries: fetching it only
 			// to fail its onward publish would leave it unacked to spend another, and one
 			// that spends them all is given up on as poison. Parked here, the backlog waits
 			// in this stream, undelivered, and a parked reader holds no slot.
-			if r.downstream != "" {
-				if bp := r.nmgr.Backpressure(r.downstream); bp != nil {
-					r.noteBackpressureAnswer(bp)
-					select {
-					case <-ctx.Done():
-						return Message{}, io.EOF
-					case <-time.After(termGatePoll):
-					}
-					continue
+			if bp := r.downstreamRefusal(); bp != nil {
+				r.noteBackpressureAnswer(bp)
+				select {
+				case <-ctx.Done():
+					return Message{}, io.EOF
+				case <-time.After(termGatePoll):
 				}
+				continue
 			}
 			batch := r.batchSize()
 			var fetchedAt time.Time
@@ -2893,6 +2933,10 @@ func (r *natsReader) dropPending() {
 // is cancelled (the client unsubscribed or the socket closed). A slow reader
 // drops messages (bounded buffer) rather than stalling the pipeline.
 func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffix string) (<-chan Message, error) {
+	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedRead(suffix); err != nil {
+		return nil, err
+	}
 	if err := nmgr.requireReader(suffix, streams.ReadLive); err != nil {
 		return nil, err
 	}
@@ -2908,7 +2952,15 @@ func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffi
 	// publishes there, so a live subscription would sit silent forever with no error
 	// — the same silent class the per-device addressing exists to remove. Listen
 	// across that tenant's devices instead.
-	subject := ScopedSubject(nmgr.Microservice.InstanceId, tenant, suffix)
+	//
+	// A sharded suffix publishes a tenant's messages on its group's subject, so the live
+	// feed listens there too. An unplaced tenant is refused rather than handed a feed on
+	// group 0's subject that would sit silent.
+	liveSuffix, placeErr := nmgr.tenantSuffix(tenant, suffix)
+	if placeErr != nil {
+		return nil, placeErr
+	}
+	subject := ScopedSubject(nmgr.Microservice.InstanceId, tenant, liveSuffix)
 	if IsPerDeviceSuffix(suffix) {
 		subject += ".*"
 	}
@@ -3546,6 +3598,9 @@ func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
 			}
 		}
 	}
+	// Follow-up deletes need the live connection, so flush before draining it; ctx
+	// bounds the deletes and the join of any follow-up already running.
+	nmgr.flushCacheFollowUps(ctx)
 	if nmgr.nc != nil {
 		nmgr.drainAndWait(ctx)
 	}

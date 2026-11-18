@@ -169,9 +169,14 @@ func TestDisablingAnAnchorQueuesAndClearsKicksOnPostgres(t *testing.T) {
 	// anchor's origin, so it survives for the background pass.
 	require.Len(t, rows, 1)
 	assert.Equal(t, uint(1), rows[0].Origin)
-	res, err := f.api.DrainSessionKicks(f.ctx, SessionKickDrainPageSize)
+	// The background pass visits all tenants; count only this fixture's tenant.
+	tenants, err := f.api.tenantsOwingKicks(f.ctx, func(db *gorm.DB) *gorm.DB {
+		return db.Where("tenant_id = ?", f.tenant)
+	})
 	require.NoError(t, err)
-	assert.Equal(t, 1, res.Tenants)
+	assert.Len(t, tenants, 1)
+	_, err = f.api.DrainSessionKicks(f.ctx, SessionKickDrainPageSize)
+	require.NoError(t, err)
 	assert.Empty(t, f.pendingKicks())
 }
 

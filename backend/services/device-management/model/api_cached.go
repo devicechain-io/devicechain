@@ -516,7 +516,14 @@ func (capi *CachedApi) cachedRelationships(ctx context.Context, key string,
 // entry must be dropped. Bounded further by the cache TTL if eviction fails.
 func (capi *CachedApi) UpdateDeviceType(ctx context.Context, token string,
 	request *DeviceTypeUpdateRequest) (*DeviceType, error) {
-	updated, err := capi.Api.UpdateDeviceType(ctx, token, request)
+	return capi.UpdateDeviceTypeWithBreakGlass(ctx, token, request, nil)
+}
+
+// UpdateDeviceTypeWithBreakGlass forwards with the break-glass reason and evicts exactly as
+// UpdateDeviceType does.
+func (capi *CachedApi) UpdateDeviceTypeWithBreakGlass(ctx context.Context, token string,
+	request *DeviceTypeUpdateRequest, breakGlassReason *string) (*DeviceType, error) {
+	updated, err := capi.Api.UpdateDeviceTypeWithBreakGlass(ctx, token, request, breakGlassReason)
 	if err != nil {
 		return nil, err
 	}
@@ -781,4 +788,23 @@ func (capi *CachedApi) evictProfileResolution(ctx context.Context, profileId uin
 	for _, typeId := range typeIds {
 		capi.dropProfileResolution(ctx, tenant, typeId)
 	}
+}
+
+func (capi *CachedApi) PublishDeviceProfileReviewed(ctx context.Context, token string, label, description *string, publishedBy string, automationReviewToken *string) (*DeviceProfileVersion, error) {
+	version, err := capi.Api.PublishDeviceProfileReviewed(ctx, token, label, description, publishedBy, automationReviewToken)
+	if err != nil {
+		return nil, err
+	}
+	capi.evictProfileResolution(ctx, version.DeviceProfileId)
+	return version, nil
+}
+func (capi *CachedApi) RollbackDeviceProfileWithReason(ctx context.Context, token string, version int32, reason *string) (*DeviceProfile, error) {
+	profile, err := capi.Api.RollbackDeviceProfileWithReason(ctx, token, version, reason)
+	if err != nil {
+		return nil, err
+	}
+	if profile != nil {
+		capi.evictProfileResolution(ctx, profile.ID)
+	}
+	return profile, nil
 }

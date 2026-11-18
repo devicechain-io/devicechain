@@ -58,8 +58,9 @@ docker compose up -d
 
 - `pki.sh` made a CA (`pki/ca.crt`) and a device certificate (`pki/device.crt`, common name
   `SN-000123`) with `openssl`: ECDSA P-256, client authentication only, not a CA, valid 90 days.
-  The 90 days are deliberate: the platform has no revocation list, so a short life is how an
-  unwanted certificate goes away by itself. The private keys never leave `pki/`.
+  The 90 days bound the certificate's lifetime. The platform also supports manual certificate
+  revocation and uploaded CA revocation lists; optional OCSP checking is off by default.
+  The private keys never leave `pki/`.
 - `provision.sh` created the tenant `x509-demo`, a profile `thermostat` that declares the command
   `reboot`, a device type, the **trust anchor** (`createDeviceTrustAnchor`: the tenant now believes
   certificates this CA signs), the device `thermostat-1` whose external id is the certificate's

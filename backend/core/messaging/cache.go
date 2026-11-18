@@ -133,6 +133,12 @@ type Cache struct {
 	fuMu          sync.Mutex
 	fuPending     map[string]struct{}
 	fuTimer       *time.Timer
+	fuClosed      bool
+	fuRunning     sync.WaitGroup
+	// fuCtx is what a timer-driven follow-up deletes under. flushFollowUps cancels it when
+	// the stop deadline passes, so a follow-up already running cannot outlive the drain.
+	fuCtx    context.Context
+	fuCancel context.CancelFunc
 
 	mu        sync.Mutex
 	openUntil time.Time // zero while the cache is answering (the breaker is closed)
@@ -191,6 +197,7 @@ func newCache(name string, store cacheStore, m *streamMetrics, bucketTTL time.Du
 
 		followUpDelay: evictFollowUpDelay,
 	}
+	c.fuCtx, c.fuCancel = context.WithCancel(context.Background())
 	c.obs.init()
 	c.local = newLocalCache(o, c.obs)
 	if c.local != nil {
@@ -235,7 +242,23 @@ func (nmgr *NatsManager) NewCache(name string, ttl time.Duration, opts ...CacheO
 		}
 		nmgr.OnReconnect(c.flushLocal)
 	}
+	nmgr.registerCache(c)
 	return c, nil
+}
+
+func (nmgr *NatsManager) registerCache(c *Cache) {
+	nmgr.cacheMu.Lock()
+	nmgr.caches = append(nmgr.caches, c)
+	nmgr.cacheMu.Unlock()
+}
+
+func (nmgr *NatsManager) flushCacheFollowUps(ctx context.Context) {
+	nmgr.cacheMu.Lock()
+	caches := append([]*Cache(nil), nmgr.caches...)
+	nmgr.cacheMu.Unlock()
+	for _, c := range caches {
+		c.flushFollowUps(ctx)
+	}
 }
 
 // subscribeEvictions wires b as this cache's cross-replica eviction channel: Delete
@@ -333,6 +356,9 @@ func (c *Cache) scheduleFollowUp(keys ...string) {
 	}
 	c.fuMu.Lock()
 	defer c.fuMu.Unlock()
+	if c.fuClosed {
+		return
+	}
 	if c.fuPending == nil {
 		c.fuPending = map[string]struct{}{}
 	}
@@ -347,8 +373,53 @@ func (c *Cache) scheduleFollowUp(keys ...string) {
 	}
 }
 
+// flushFollowUps claims pending keys before the connection drains. Stop can lose to
+// an already-started callback, but fuMu gives the pending batch to exactly one of
+// them: a callback that has not claimed it yet finds it empty. A callback that
+// already claimed it is joined below, within the caller's shutdown budget.
+func (c *Cache) flushFollowUps(ctx context.Context) {
+	c.fuMu.Lock()
+	c.fuClosed = true
+	if c.fuTimer != nil {
+		c.fuTimer.Stop()
+		c.fuTimer = nil
+	}
+	keys := make([]string, 0, len(c.fuPending))
+	for k := range c.fuPending {
+		keys = append(keys, k)
+	}
+	c.fuPending = nil
+	c.fuMu.Unlock()
+	stop := context.AfterFunc(ctx, c.fuCancel)
+	defer stop()
+	c.deleteKeys(ctx, keys, false)
+	joined := make(chan struct{})
+	go func() {
+		c.fuRunning.Wait()
+		close(joined)
+	}()
+	select {
+	case <-joined:
+	case <-ctx.Done():
+		// The deadline cancelled fuCtx, so a running follow-up's deletes are returning; give
+		// it one delete timeout to unwind rather than draining underneath it.
+		c.fuCancel()
+		select {
+		case <-joined:
+		case <-time.After(c.delete):
+		}
+	}
+}
+
 func (c *Cache) runFollowUp() {
 	c.fuMu.Lock()
+	if c.fuClosed {
+		c.fuMu.Unlock()
+		return
+	}
+	// Add under fuMu so closing follow-ups also closes admission to the join.
+	c.fuRunning.Add(1)
+	defer c.fuRunning.Done()
 	keys := make([]string, 0, len(c.fuPending))
 	for k := range c.fuPending {
 		keys = append(keys, k)
@@ -356,7 +427,7 @@ func (c *Cache) runFollowUp() {
 	c.fuPending = nil
 	c.fuTimer = nil
 	c.fuMu.Unlock()
-	c.deleteKeys(context.Background(), keys, false)
+	c.deleteKeys(c.fuCtx, keys, false)
 }
 
 // DeleteMany evicts many entries as Delete evicts one, with up to deleteManyWorkers bucket
@@ -381,7 +452,13 @@ func (c *Cache) deleteKeys(ctx context.Context, keys []string, followUp bool) er
 		go func() {
 			defer wg.Done()
 			for k := range work {
-				opctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.delete)
+				// Ordinary evictions survive caller cancellation; shutdown follow-ups
+				// must instead finish within the stop context's remaining budget.
+				parent := ctx
+				if followUp {
+					parent = context.WithoutCancel(ctx)
+				}
+				opctx, cancel := context.WithTimeout(parent, c.delete)
 				start := time.Now()
 				err := c.kv.Delete(opctx, kvKey(k))
 				cancel()

@@ -167,10 +167,21 @@ func (a *Authenticator) Check(ctx context.Context, tenant, integration, bearer s
 	if e, ok := a.lookup(key, now); ok && now.Sub(e.at) < a.cfg.Fresh {
 		return Checked{Descriptor: e.desc}, nil
 	}
-	v, err, _ := a.sf.Do(key, func() (any, error) {
-		// The leader's request may be cancelled while others wait on its answer.
-		return a.refresh(context.WithoutCancel(ctx), key, tenant, integration, bearer)
+	resCh := a.sf.DoChan(key, func() (any, error) {
+		// The flight outlives a caller that stopped waiting, so it carries its own deadline.
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), flightTimeout)
+		defer cancel()
+		return a.refresh(fctx, key, tenant, integration, bearer)
 	})
+	var v any
+	var err error
+	// A waiter whose request is gone stops waiting while the flight carries on.
+	select {
+	case r := <-resCh:
+		v, err = r.Val, r.Err
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
 	if err != nil {
 		return Checked{}, err
 	}

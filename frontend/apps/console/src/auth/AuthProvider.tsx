@@ -18,6 +18,7 @@ import {
   completeSso as apiCompleteSso,
   selectTenant as apiSelectTenant,
   refresh as apiRefresh,
+  stepUp as apiStepUp,
   logout as apiLogout,
   getIdentityMemberships as apiIdentityMemberships,
   type IdentityAuth,
@@ -25,6 +26,7 @@ import {
 import {
   setAuthTokenGetter,
   setIdentityTokenGetter,
+  setUnauthorizedHandler,
   createSessionTokens,
   decodeToken,
   isExpired,
@@ -80,6 +82,8 @@ interface AuthContextValue {
    * does, so everything after (selectTenant, refresh, logout) is the same.
    */
   verifyMfa: (challenge: string, code: string) => Promise<IdentityAuth>;
+  /** Preview: verify an authenticator code and rotate the tenant session in place. */
+  stepUp: (code: string) => Promise<void>;
   /**
    * Replace the identity session with a fresh sign-in the server handed back (turning two-factor
    * authentication on ends every session the account had, and answers the caller's
@@ -290,13 +294,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 🔴 Only forget the pair that is actually being expired. Another tab shares this storage:
     // when it has since replaced the pair (it just turned two-factor on, which ends every
     // other session and swaps in a fresh one), this tab's failed refresh of the OLD pair must
-    // not delete the new one. The newer pair is adopted instead, in memory, and is judged on
-    // its own at its next refresh.
+    // not delete the new one. The newer pair is adopted instead, in memory, only when both
+    // access tokens decode to the same tenant and username, and is judged on its own at its
+    // next refresh. A different or undecodable identity ends only this tab's session.
     const stored = readStored();
     const mine = tokensRef.current;
     if (stored && mine && stored.refreshToken !== mine.refreshToken) {
-      tokensRef.current = stored;
-      setTokens(stored);
+      const storedClaims = decodeToken(stored.accessToken);
+      const mineClaims = decodeToken(mine.accessToken);
+      if (
+        storedClaims && mineClaims &&
+        storedClaims.tenant === mineClaims.tenant &&
+        storedClaims.username === mineClaims.username
+      ) {
+        tokensRef.current = stored;
+        setTokens(stored);
+        return;
+      }
+      flagSessionExpired(reason);
+      tokensRef.current = null;
+      setTokens(null);
       return;
     }
     flagSessionExpired(reason);
@@ -327,6 +344,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }),
     [applyTokens, expireTenant],
   );
+
+  const stepUp = useCallback(async (code: string) => {
+    // Finish any ordinary refresh before taking the refresh-token snapshot.
+    if (!(await session.getAccessToken())) throw new Error('session unavailable');
+    const held = tokensRef.current;
+    if (!held) throw new Error('session unavailable');
+    const pair = await apiStepUp(held.refreshToken, code);
+    // A sign-out or tenant switch while the dialog was waiting must win.
+    if (tokensRef.current !== held) throw new Error('session changed');
+    session.reset();
+    applyTokens({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
+  }, [session, applyTokens]);
 
   const logout = useCallback(async () => {
     // Both tokens name the same sign-in when they came from one login; send each that is
@@ -361,8 +390,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Hands the GraphQL client a usable access token, refreshing first if the
   // current one is near expiry. If the refresh token itself has lapsed (long
-  // inactivity) or the refresh call fails, the tenant session is expired cleanly
-  // and the caller gets null (the route guard then redirects to login). The
+  // inactivity) or the server refuses the refresh, the tenant session is expired
+  // cleanly and the caller gets null (the route guard then redirects to login). A
+  // refresh that could not reach the server keeps the session: the caller gets the
+  // still-valid token, or once it has expired the request fails with that outage. The
   // refresh lifecycle (skew, one shared in-flight refresh, dropping a result for a
   // replaced session) is @devicechain/client's createSessionTokens; this only
   // supplies where the pair lives and what happens when the session ends.
@@ -385,12 +416,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setAuthTokenGetter(getToken);
     setIdentityTokenGetter(getIdentityToken);
+    setUnauthorizedHandler({
+      refresh: (token, identity) => identity ? Promise.resolve(null) : session.forceRefresh(token),
+      onEnd: (_err, token, identity) => {
+        if (identity) {
+          if (identityRef.current?.identityToken === token) expireIdentity();
+        } else if (tokensRef.current?.accessToken === token) {
+          expireTenant();
+        }
+      },
+    });
     setIsLoading(false);
     return () => {
       setAuthTokenGetter(null);
       setIdentityTokenGetter(null);
+      setUnauthorizedHandler(null);
     };
-  }, [getToken, getIdentityToken]);
+  }, [getToken, getIdentityToken, session, expireIdentity, expireTenant]);
 
   // Step 1: authenticate the identity and start the identity session (used by the
   // admin console). A tenant session is not started until a tenant is selected.
@@ -531,6 +573,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       verifyMfa,
+      stepUp,
       adoptIdentity,
       forgetSessions,
       completeSso,
@@ -551,6 +594,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       verifyMfa,
+      stepUp,
       adoptIdentity,
       forgetSessions,
       completeSso,

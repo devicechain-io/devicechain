@@ -40,6 +40,7 @@ var (
 	// ShareReconciler removes the dashboard shares that name a deleted customer. It is built
 	// in the broker manager's start (createNatsComponents), so it is nil until then.
 	ShareReconciler *processor.ShareReconciler
+	ShareSweep      *core.PeriodicTask
 )
 
 func main() {
@@ -54,7 +55,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: func(context.Context) error { return nil },
+			Postprocess: governance.StopRefreshes,
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -127,6 +128,14 @@ func afterRdb(ctx context.Context, m *service.Managers) error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	Api.TenantDeleted = governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "dashboard-management", governance.NewSafetyGates(Microservice))
 	wireShareChecker(infra.ServiceAuth.Secret, infra)
+	if Api.ShareTargets != nil {
+		ShareSweep = processor.NewShareSweep(Microservice, Api)
+		if err := ShareSweep.Initialize(ctx); err != nil {
+			return err
+		}
+	} else {
+		log.Warn().Msg("Dashboard share sweep not started: device-management lookup is not configured")
+	}
 
 	// Report the size of this schema's append-only history tables (ADR-023): a dashboard version history only
 	// grows, and so does the audit journal the collector adds for every schema. Nothing
@@ -164,7 +173,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
+	writer, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return err
+	}
 	ShareReconciler = processor.NewShareReconciler(Microservice, reader, Api, core.NewNoOpLifecycleCallbacks())
+	ShareReconciler.Dead = Svc.DeadLetters.NewSink(writer)
 	return ShareReconciler.Initialize(context.Background())
 }
 
@@ -173,11 +187,21 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := Svc.Start(ctx); err != nil {
 		return err
 	}
+	if ShareSweep != nil {
+		if err := ShareSweep.Start(ctx); err != nil {
+			return err
+		}
+	}
 	return ShareReconciler.Start(ctx)
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	if ShareSweep != nil {
+		if err := ShareSweep.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	// The reconciler reads from the broker and writes to the database, so it stops before
 	// either does.
 	if ShareReconciler != nil {
@@ -190,5 +214,10 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if ShareSweep != nil {
+		if err := ShareSweep.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	return Svc.Terminate(ctx)
 }

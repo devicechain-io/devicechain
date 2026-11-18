@@ -1,6 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { hasAuthority } from '@devicechain/client';
+import { useAuth } from '@/auth/AuthProvider';
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -23,11 +25,11 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { DataTable, DataTableBody, DataTableCell, DataTableHead, DataTableHeaderCell, DataTableRow } from '@/components/ui/data-table';
-import { ApprovalsGate, StepUpPrompt } from './shared';
+import { ApprovalsGate, ProposalResult, StepUpPrompt } from './shared';
 
 const STATES: AgentProposalState[] = ['PROPOSED', 'EXECUTED', 'REJECTED', 'EXPIRED', 'REFUSED', 'CANCELLED', 'KILLED'];
 const pageSize = 25;
-const COLUMNS = ['proposer', 'kind', 'targets', 'expires', 'approvals', 'rationale'];
+const COLUMNS = ['proposer', 'kind', 'targets', 'expires', 'approvals', 'state', 'result', 'rationale'];
 const relativeExpiry = (value: string, language: string) =>
   new Intl.RelativeTimeFormat(language, { numeric: 'auto' }).format(Math.round((Date.parse(value) - Date.now()) / 60000), 'minute');
 
@@ -73,6 +75,8 @@ function KillSwitch({ onChanged }: { onChanged: () => void }) {
   </SectionPanel>;
 }
 function Inbox() {
+  const { claims } = useAuth();
+  const isAdmin = hasAuthority(claims, 'agent:admin');
   const { t, i18n } = useTranslation('approvals');
   const [state, setState] = useState<AgentProposalState>('PROPOSED');
   const [pageNumber, setPageNumber] = useState(1);
@@ -82,7 +86,7 @@ function Inbox() {
   const { current: data, loading, error } = useQuery(() => listAgentProposals({ pageNumber, pageSize, state }), [pageNumber, state, version]);
   return <PageShell title={t('title')} titleAdornment={<Badge variant="secondary">{t('preview')}</Badge>}>
     <div className="space-y-4">
-      <KillSwitch onChanged={reload} />
+      {isAdmin && <KillSwitch onChanged={reload} />}
       <Combobox value={state} allowClear={false} aria-label={t('state')} options={STATES.map(value => ({ value, label: t(value) }))}
         onChange={value => { setState(value as AgentProposalState); setPageNumber(1); }} />
       {loading ? <LoadingState description={t('loading')} /> : error ? <ErrorState description={error} />
@@ -97,7 +101,11 @@ function Inbox() {
             <DataTableCell>{t(p.kind)}</DataTableCell>
             <DataTableCell>{p.targetCount} <Badge variant="outline">{p.impact}</Badge></DataTableCell>
             <DataTableCell><div>{relativeExpiry(p.expiresAt, i18n.language)}</div>{formatTime(p.expiresAt)}</DataTableCell>
-            <DataTableCell>{t('approvalCount', { done: p.approvals.length, required: p.requiredApprovals })}</DataTableCell>
+            <DataTableCell>{t('approvalCount', { done: p.approvals.length, required: p.requiredApprovals })}
+              <ul>{p.approvals.map(a => <li key={a.principal}>{t('recordedApproval', { principal: a.principal, when: formatTime(a.approvedAt) })}</li>)}</ul>
+            </DataTableCell>
+            <DataTableCell>{t(p.state)}{p.decidedBy && <div>{t('decisionBy', { principal: p.decidedBy })}</div>}</DataTableCell>
+            <DataTableCell><ProposalResult proposal={p} /></DataTableCell>
             <DataTableCell><p className="max-w-xs truncate">{p.rationale}</p></DataTableCell>
           </DataTableRow>)}</DataTableBody></DataTable>
           <Pagination pageNumber={pageNumber} pageSize={pageSize} pagination={data.pagination} onPageChange={setPageNumber} />

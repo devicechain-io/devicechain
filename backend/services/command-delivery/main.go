@@ -55,6 +55,9 @@ var (
 	// device-roster facts, so commands queued for a disabled device are held, not sent.
 	RosterConsumer *processor.RosterConsumer
 
+	// DeletionConsumer cancels commands covered by device-deletion facts.
+	DeletionConsumer *processor.DeletionConsumer
+
 	// The Prometheus instruments the two components above export. Both are built ONCE,
 	// in the initialize phase, and shared by every component the NATS manager's oncreate
 	// callback builds. See buildMetrics.
@@ -79,7 +82,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: func(context.Context) error { return nil },
+			Postprocess: governance.StopRefreshes,
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -246,7 +249,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	RosterConsumer = processor.NewRosterConsumer(Microservice, rosterReader, core.NewNoOpLifecycleCallbacks(),
 		Api, CommandDeliveryProcessor, deadLetters)
 	RosterConsumer.Hold = newStoreHold("device-roster")
-	return RosterConsumer.Initialize(context.Background())
+	if err := RosterConsumer.Initialize(context.Background()); err != nil {
+		return err
+	}
+	// Replay retained facts: every cancellation is bounded by the deletion time.
+	deletionReader, err := nmgr.NewReader(streams.EntityDeleted)
+	if err != nil {
+		return err
+	}
+	DeletionConsumer = processor.NewDeletionConsumer(Microservice, deletionReader, core.NewNoOpLifecycleCallbacks(), Api, deadLetters)
+	DeletionConsumer.Hold = newStoreHold("entity-deleted")
+	return DeletionConsumer.Initialize(context.Background())
 }
 
 // newStoreHold builds the Holder that keeps a consumer's messages unacked, outside their
@@ -591,6 +604,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := RosterConsumer.Start(ctx); err != nil {
 		return err
 	}
+	if err := DeletionConsumer.Start(ctx); err != nil {
+		return err
+	}
 	// Last: a pass creates batches, which hand commands to the processor started above.
 	return CampaignScheduler.Start(ctx)
 }
@@ -603,8 +619,13 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 			return err
 		}
 	}
-	// The roster consumer first: it can resume a device, which dispatches through the
-	// processor stopped below.
+	// Stop the deletion consumer before its database and broker dependencies.
+	if DeletionConsumer != nil {
+		if err := DeletionConsumer.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	// The roster consumer can resume a device through the processor stopped below.
 	if RosterConsumer != nil {
 		if err := RosterConsumer.Stop(ctx); err != nil {
 			return err
@@ -640,6 +661,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 func beforeMicroserviceTerminated(ctx context.Context) error {
 	if CampaignScheduler != nil {
 		if err := CampaignScheduler.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if DeletionConsumer != nil {
+		if err := DeletionConsumer.Terminate(ctx); err != nil {
 			return err
 		}
 	}

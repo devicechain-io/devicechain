@@ -161,11 +161,12 @@ type SeedOAuthClient struct {
 // Manager owns native auth for the instance. Build it with NewManager, then
 // call Initialize once the database and NATS KV are available.
 type Manager struct {
-	ms        *core.Microservice
-	db        *rdb.RdbManager
-	iam       *iam.Store
-	locker    *messaging.DistributedLock
-	accessTTL time.Duration
+	killPublisher KillPublisher
+	ms            *core.Microservice
+	db            *rdb.RdbManager
+	iam           *iam.Store
+	locker        *messaging.DistributedLock
+	accessTTL     time.Duration
 	// secrets holds the private half of the active JWT signing key, sealed under the
 	// instance root key. The signing_keys table holds public halves only.
 	secrets secrets.SecretStore
@@ -233,6 +234,13 @@ type Manager struct {
 	issuer     *auth.Issuer
 	validator  *auth.Validator
 	publicKeys []*rsa.PublicKey
+	activeKid  string
+	// followMu serializes follows and local rotations, including their publication.
+	followMu          sync.Mutex
+	lastFollowAttempt time.Time
+	lastMissingKid    string
+	startedAt         time.Time
+	followFailures    interface{ Inc() }
 }
 
 // TokenPair is the result of a successful login or refresh.
@@ -252,7 +260,7 @@ type TokenPair struct {
 // credentials is the credential checker every secret comparison goes through; a nil
 // one makes Login and client authentication fail rather than compare unthrottled.
 func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.DistributedLock, store secrets.SecretStore, accessTTL, refreshTTL time.Duration, issuerUrl string, bootstrap BootstrapConfig, credentials *credential.Checker) *Manager {
-	m := &Manager{ms: ms, db: db, iam: iam.NewStore(db), locker: locker, secrets: store, accessTTL: accessTTL, refreshTTL: refreshTTL, issuerUrl: issuerUrl, bootstrap: bootstrap, credentials: credentials}
+	m := &Manager{startedAt: time.Now(), ms: ms, db: db, iam: iam.NewStore(db), locker: locker, secrets: store, accessTTL: accessTTL, refreshTTL: refreshTTL, issuerUrl: issuerUrl, bootstrap: bootstrap, credentials: credentials}
 	m.initLimiters()
 	return m
 }
@@ -357,11 +365,12 @@ func (m *Manager) applyKeys(set *signingKeySet) {
 	defer m.mu.Unlock()
 	m.issuer = auth.NewIssuer(set.active, m.issuerName, m.accessTTL, m.refreshTTL)
 	if m.validator == nil {
-		m.validator = auth.NewValidatorFromKeys(keyMap)
+		m.validator = auth.NewRefreshingValidator(keyMap, m.refreshSigningKeys, signingKeyFollowMinInterval)
 	} else {
 		m.validator.SetKeys(keyMap)
 	}
 	m.publicKeys = set.publicKeys
+	m.activeKid = auth.Thumbprint(&set.active.PublicKey)
 }
 
 // RotateSigningKey rotates the instance signing key: the previous active key is
@@ -369,6 +378,8 @@ func (m *Manager) applyKeys(set *signingKeySet) {
 // is pruned. New tokens are signed by the new key immediately; tokens signed by
 // the retained key keep verifying until they expire.
 func (m *Manager) RotateSigningKey(ctx context.Context, retention time.Duration) error {
+	m.followMu.Lock()
+	defer m.followMu.Unlock()
 	// A retired key must outlive every token it signed, so never prune sooner
 	// than the refresh-token lifetime regardless of how retention was configured.
 	if retention <= m.refreshTTL {
@@ -382,22 +393,28 @@ func (m *Manager) RotateSigningKey(ctx context.Context, retention time.Duration)
 	return nil
 }
 
-// MaybeRotateOnAge rotates the signing key if the active key is older than
-// maxAge. maxAge <= 0 disables age-based rotation. Called at startup so a
-// long-lived instance does not sign with one key forever (ADR-008 follow-up).
+// MaybeRotateOnAge checks the age under the distributed lock and adopts the
+// current set even when another replica already rotated it.
 func (m *Manager) MaybeRotateOnAge(ctx context.Context, maxAge, retention time.Duration) error {
 	if maxAge <= 0 {
 		return nil
 	}
-	age, err := m.activeKeyAge(ctx)
+	m.followMu.Lock()
+	defer m.followMu.Unlock()
+	if retention <= m.refreshTTL {
+		retention = m.refreshTTL + 24*time.Hour
+	}
+	var set *signingKeySet
+	err := m.locker.WithLock(ctx, m.ms.FunctionalArea, func(ctx context.Context) error {
+		var err error
+		set, _, err = m.rotateIfOlderThanLocked(ctx, maxAge, retention)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	if age < maxAge {
-		return nil
-	}
-	log.Info().Dur("age", age).Msg("Active signing key exceeded max age; rotating.")
-	return m.RotateSigningKey(ctx, retention)
+	m.applyKeys(set)
+	return nil
 }
 
 // Validator returns the access-token validator built from the local public keys
@@ -408,7 +425,8 @@ func (m *Manager) Validator() *auth.Validator { return m.validator }
 
 // JWKS returns the JWK Set of every retained public key, served so other services
 // can select the right key by kid across a rotation.
-func (m *Manager) JWKS() ([]byte, error) {
+func (m *Manager) JWKS(ctx context.Context) ([]byte, error) {
+	_, _ = m.followSigningKeys(ctx) // Failures are logged by follow; serve the last known keys.
 	m.mu.RLock()
 	publics := m.publicKeys
 	m.mu.RUnlock()
@@ -1074,11 +1092,20 @@ var errTenantAccessDenied = errors.New("tenant access denied")
 // scoped. A stored scope that does not parse is a DENIAL, never the whole tenant: a
 // membership whose bound cannot be read must not be minted unbounded.
 func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, amr *signIn, err error) {
+	rec, err := m.loadSession(sid, id.Email)
+	if err != nil {
+		return nil, nil, auth.Scope{}, nil, err
+	}
+	return m.resolveTenantGrantRecord(ctx, rec, id, tenant, mem, su)
+}
+
+// resolveTenantGrantRecord reuses the sign-in read before a decision's snapshot.
+func (m *Manager) resolveTenantGrantRecord(ctx context.Context, rec *sessionRecord, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, amr *signIn, err error) {
 	// The sign-in's own terms come first: a session that may not enter this tenant gets no
 	// grant from the identity's memberships, superuser or not (admitTenant says which
 	// sessions a superuser's break-glass still applies to). It also hands back the sign-in's
 	// amr, which the caller mints into every token.
-	amr, err = m.admitTenant(ctx, sid, id, tenant, su)
+	amr, err = m.admitTenantRecord(ctx, rec, id, tenant, su)
 	if err != nil {
 		return nil, nil, auth.Scope{}, nil, err
 	}
@@ -1225,9 +1252,9 @@ func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoc
 	var access auth.IssuedToken
 	var err error
 	if scope.IsScoped() && !sudo {
-		access, err = issuer.IssueScopedTenantAccess(tenant, email, roles, authorities, scope, uuid.NewString(), amr.options()...)
+		access, err = issuer.IssueScopedTenantAccess(tenant, email, roles, authorities, scope, uuid.NewString(), append(amr.options(), auth.WithSessionID(sid))...)
 	} else {
-		access, err = issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString(), amr.options()...)
+		access, err = issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString(), append(amr.options(), auth.WithSessionID(sid))...)
 	}
 	if err != nil {
 		return nil, err

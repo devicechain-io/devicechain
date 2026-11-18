@@ -16,6 +16,12 @@ y las cambia con `member:write`; **Roles** lista los roles con `role:read` y los
 `role:write`. El rol integrado de administrador del inquilino tiene los cuatro. Sin un permiso, su
 página no aparece en tu barra lateral.
 
+## Autoridades para acciones automatizadas
+
+Crear o publicar una acción automatizada requiere la autoridad para ejecutarla. Crear o actualizar una regla con una acción `sendCommand`, y publicar o volver a una versión de perfil cuyas reglas habilitadas incluyan una, requiere `command:write` además de `device:write`. Las acciones `httpCall` y `publish` requieren `connector:write`. Un rol que solo tenga `device:write` puede seguir creando y publicando reglas que únicamente generen alarmas.
+
+La autoridad se comprueba sobre la regla efectiva en cada creación o actualización, incluso si está deshabilitada. La publicación y la reversión comprueban todas las reglas habilitadas de la versión seleccionada, incluso si solo cambió una métrica. Quien publica debe tener las autoridades de las acciones; quien aprueba la revisión de automatización no las necesita. Adoptar un perfil cuyas acciones ya fueron autorizadas no requiere estas autoridades adicionales.
+
 ## Miembros {#members}
 
 **Miembros** lista a todas las personas que pertenecen al inquilino, ordenadas por dirección de
@@ -57,6 +63,8 @@ El enlace se muestra **una sola vez**. El servidor no guarda ninguna copia que p
 mostrarte, así que si el enlace se pierde, vuelve a emitir la invitación (más abajo), lo que deja sin
 efecto el enlace anterior. Un enlace es válido durante 7 días. Hasta que la persona acepta, su
 membresía sigue deshabilitada y se marca como **Invitado**.
+
+El diálogo permanece abierto al pulsar Escape o hacer clic fuera de él. Copia el valor y elige **Done** para cerrarlo. Esto también se aplica al rotar un secreto o volver a emitir una invitación.
 
 La respuesta es la misma tanto si la persona ya tiene una cuenta de DeviceChain como si no, así que
 invitar a alguien no te revela si tiene una.

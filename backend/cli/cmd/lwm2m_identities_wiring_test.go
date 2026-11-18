@@ -23,7 +23,7 @@ func TestLwm2mIdentitiesReachTheBootstrapAndUpgradeOptions(t *testing.T) {
 
 	bootstrapLwm2mIdentityList = someIdentities
 	t.Cleanup(func() { bootstrapLwm2mIdentityList = nil })
-	opts := bootstrapOptions("prod", nil, nil)
+	opts := bootstrapOptions("prod", nil, nil, nil)
 	if len(opts.Lwm2mIdentities) != 1 {
 		t.Fatalf("bootstrap options lost the identities: %v", opts.Lwm2mIdentities)
 	}
@@ -34,21 +34,21 @@ func TestLwm2mIdentitiesReachTheBootstrapAndUpgradeOptions(t *testing.T) {
 
 	upgradeLwm2mIdentityList = someIdentities
 	t.Cleanup(func() { upgradeLwm2mIdentityList = nil })
-	if up := upgradeOptions("prod", nil, nil); len(up.Lwm2mIdentities) != 1 {
+	if up := upgradeOptions("prod", nil, nil, nil); len(up.Lwm2mIdentities) != 1 {
 		t.Fatalf("upgrade options lost the identities: %v", up.Lwm2mIdentities)
 	}
 	upgradeLwm2mIdentityList = nil
-	if up := upgradeOptions("prod", nil, nil); up.Lwm2mIdentities != nil || up.WithdrawLwm2mIdentities {
+	if up := upgradeOptions("prod", nil, nil, nil); up.Lwm2mIdentities != nil || up.WithdrawLwm2mIdentities {
 		t.Fatalf("an upgrade given no file carries identities: %v", up.Lwm2mIdentities)
 	}
 
 	bootstrapWithdrawLwm2m, upgradeWithdrawLwm2m = true, true
 	t.Cleanup(func() { bootstrapWithdrawLwm2m, upgradeWithdrawLwm2m = false, false })
-	if !upgradeOptions("prod", nil, nil).WithdrawLwm2mIdentities {
+	if !upgradeOptions("prod", nil, nil, nil).WithdrawLwm2mIdentities {
 		t.Fatal("upgrade options lost the withdrawal")
 	}
 	bootstrapLwm2mIdentityList = nil
-	bopts := bootstrapOptions("prod", nil, nil)
+	bopts := bootstrapOptions("prod", nil, nil, nil)
 	if !bopts.WithdrawLwm2mIdentities {
 		t.Fatal("bootstrap options lost the withdrawal")
 	}

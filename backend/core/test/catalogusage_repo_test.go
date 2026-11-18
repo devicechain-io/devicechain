@@ -28,6 +28,8 @@ var dynamicCatalogUses = map[string][]string{
 	"event-processing/processor/applied_guard.go#NewReplayReader":          {streams.ResolvedEvents},
 	"event-processing/processor/live_gap.go#NewRangeReader":                {streams.ResolvedEvents},
 	"event-processing/internal/preview/preview.go#NewReplayReaderFromTime": {streams.ResolvedEvents},
+	// The automation change review reads the same stream; the comparison resolver passes it.
+	"event-processing/internal/review/run.go#NewReplayReaderFromTime": {streams.ResolvedEvents},
 }
 
 // catalogAliases name the constants that stand for a bucket in another package.
