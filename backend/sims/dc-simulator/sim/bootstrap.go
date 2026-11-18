@@ -80,6 +80,10 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 			"reporting success. Re-create the sim with a current dcctl", manifest.Name, rules)
 	}
 
+	if err := requireEndpoints(manifest, rt.Endpoints); err != nil {
+		return err
+	}
+
 	for _, ct := range manifest.CustomerTypes {
 		if err := ensureCustomerType(ctx, rt, ct); err != nil {
 			return fmt.Errorf("provision customer type %q: %w", ct.Token, err)
@@ -116,6 +120,19 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 		}
 	}
 
+	// A rule's httpCall signs with a handle and its publish names a connector, and neither is
+	// checked when the profile publishes, so both exist before the rules that use them.
+	for _, h := range manifest.WebhookSigningHandles {
+		if err := ensureWebhookSigningHandle(ctx, rt, h); err != nil {
+			return fmt.Errorf("provision webhook signing handle %q: %w", h, err)
+		}
+	}
+	for _, c := range manifest.Connectors {
+		if err := ensureConnector(ctx, rt, c); err != nil {
+			return fmt.Errorf("provision connector %q: %w", c.Token, err)
+		}
+	}
+
 	for _, p := range manifest.Profiles {
 		if err := ensureProfile(ctx, rt, p); err != nil {
 			return fmt.Errorf("provision profile %q: %w", p.Token, err)
@@ -125,6 +142,19 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 		if err := ensureDeviceType(ctx, rt, dt); err != nil {
 			return fmt.Errorf("provision device type %q: %w", dt.Token, err)
 		}
+	}
+
+	// An integration is scoped to device types, so it follows them; a device's alias is resolved
+	// through it only once both exist.
+	for _, in := range manifest.Integrations {
+		token, err := ensureIntegration(ctx, rt, in)
+		if err != nil {
+			return fmt.Errorf("provision integration %q: %w", in.Token, err)
+		}
+		if rt.IntegrationTokens == nil {
+			rt.IntegrationTokens = map[string]string{}
+		}
+		rt.IntegrationTokens[in.Token] = token
 	}
 
 	devices := manifest.Expand(manifest.Seed)
@@ -142,6 +172,17 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 	for _, ds := range manifest.Dashboards {
 		if err := ensureDashboard(ctx, rt, ds); err != nil {
 			return fmt.Errorf("provision dashboard %q: %w", ds.Token, err)
+		}
+	}
+
+	for _, c := range manifest.NotificationChannels {
+		if err := ensureNotificationChannel(ctx, rt, c); err != nil {
+			return fmt.Errorf("provision notification channel %q: %w", c.Token, err)
+		}
+	}
+	for _, p := range manifest.NotificationPolicies {
+		if err := ensureNotificationPolicy(ctx, rt, p); err != nil {
+			return fmt.Errorf("provision notification policy %q: %w", p.Token, err)
 		}
 	}
 
@@ -237,6 +278,11 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 	}
 	for _, r := range p.DetectionRules {
 		if err := ensureDetectionRule(ctx, rt, p.Token, r, profile); err != nil {
+			return err
+		}
+	}
+	if p.Decoder != "" {
+		if err := setProfileDecoder(ctx, rt, p.Token, p.Decoder); err != nil {
 			return err
 		}
 	}
@@ -351,6 +397,10 @@ func profileContentMarker(p ProfileSpec) string {
 	}
 	for _, r := range p.DetectionRules {
 		fmt.Fprintf(h, "rule\x00%s\x00%s\x00%s\x00%t\n", r.Token, r.Name, r.Definition, r.Enabled)
+	}
+	// Only a profile with a decoder adds a line, so every earlier profile keeps its marker.
+	if p.Decoder != "" {
+		fmt.Fprintf(h, "decoder\x00%s\n", p.Decoder)
 	}
 	return markerPrefix + hex.EncodeToString(h.Sum(nil))[:16]
 }
@@ -720,7 +770,7 @@ func ensureDeviceType(ctx context.Context, rt *Runtime, dt DeviceTypeSpec) error
 
 // --- device + credential ---------------------------------------------------------
 
-const queryDevicesByToken = `query($tokens:[String!]!){devicesByToken(tokens:$tokens){token metadata}}`
+const queryDevicesByToken = `query($tokens:[String!]!){devicesByToken(tokens:$tokens){token metadata aliases{scheme value}}}`
 
 const mutationUpdateDevice = `mutation($token:String!,$request:DeviceUpdateRequest!){` +
 	`updateDevice(token:$token,request:$request){token}}`
@@ -740,8 +790,9 @@ const credentialTypeAccessToken = "ACCESS_TOKEN"
 func ensureDevice(ctx context.Context, rt *Runtime, d DeviceInstance) error {
 	var existingDevice struct {
 		DevicesByToken []struct {
-			Token    string  `json:"token"`
-			Metadata *string `json:"metadata"`
+			Token    string      `json:"token"`
+			Metadata *string     `json:"metadata"`
+			Aliases  []AliasSpec `json:"aliases"`
 		} `json:"devicesByToken"`
 	}
 	if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, queryDevicesByToken,
@@ -756,6 +807,9 @@ func ensureDevice(ctx context.Context, rt *Runtime, d DeviceInstance) error {
 		}
 		if d.Metadata != "" {
 			req["metadata"] = d.Metadata
+		}
+		if len(d.Aliases) > 0 {
+			req["aliases"] = aliasInputs(d.Aliases)
 		}
 		var created struct {
 			CreateDevice struct {
@@ -787,6 +841,20 @@ func ensureDevice(ctx context.Context, rt *Runtime, d DeviceInstance) error {
 			}
 			log.Info().Str("token", d.Token).Msg("updated device metadata")
 		}
+	}
+	if len(existingDevice.DevicesByToken) > 0 && len(d.Aliases) > 0 && !sameAliases(existingDevice.DevicesByToken[0].Aliases, d.Aliases) {
+		// An alias is what a network server's uplink resolves to this device by; one that drifted
+		// would leave every uplink counted as an unknown device while provisioning stays green.
+		var updated struct {
+			UpdateDevice struct {
+				Token string `json:"token"`
+			} `json:"updateDevice"`
+		}
+		if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationUpdateDevice,
+			map[string]any{"token": d.Token, "request": map[string]any{"aliases": aliasInputs(d.Aliases)}}, &updated); err != nil {
+			return fmt.Errorf("updateDevice aliases: %w", err)
+		}
+		log.Info().Str("token", d.Token).Msg("updated device aliases")
 	}
 
 	var existingCred struct {

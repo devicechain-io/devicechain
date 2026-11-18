@@ -64,6 +64,7 @@ type day struct {
 	corr     Preview
 	control  Preview
 	backfill []Backfill
+	s3       S3
 	// gaps are spans, by alarm token, in which the alarm is cleared and then reactivated under the
 	// same token, as the platform does.
 	gaps map[string][][2]float64
@@ -115,6 +116,7 @@ func cleanDay() *day {
 		{At: at(20.5), Series: sim.HarborpulseEastQuay, Signal: "resolved"},
 	}}
 	d.control = Preview{OK: true}
+	d.cleanS3()
 	return d
 }
 
@@ -150,7 +152,7 @@ func backfillOf(device string) Backfill {
 
 func (d *day) observe() Observations {
 	o := Observations{Clock: testClock, Day: 0, Commands: d.commands, Readings: d.readings,
-		Correlation: d.corr, CorrelationControl: d.control, Backfill: d.backfill}
+		Correlation: d.corr, CorrelationControl: d.control, Backfill: d.backfill, S3: d.s3}
 	for t := at(WatchFrom); !t.After(at(WatchTo).Add(20 * time.Second)); t = t.Add(2 * time.Second) {
 		o.Polls = append(o.Polls, t)
 		for _, l := range d.alarms {
@@ -250,7 +252,9 @@ func TestEachControlTurnsExactlyItsInvariantRed(t *testing.T) {
 				for _, p := range []string{"hp-pump-north", sim.HarborpulseBasinPump} {
 					d.readings[p] = nil
 					for t := at(16); t.Before(at(22)); t = t.Add(5 * time.Second) {
-						d.readings[p] = append(d.readings[p], Reading{Name: sim.HarborpulseWetWellKey, At: t, Value: 3.25})
+						// The platform still calculates the fill from the level it is sent.
+						d.readings[p] = append(d.readings[p], Reading{Name: sim.HarborpulseWetWellKey, At: t, Value: 3.25},
+							Reading{Name: sim.HarborpulseWellFillKey, At: t, Value: 3.25 / sim.HarborpulseWellDepthM * 100})
 					}
 				}
 			},
@@ -389,8 +393,9 @@ func TestEveryNamedDefectIsOneTheSimulatorKnows(t *testing.T) {
 		known[d] = true
 	}
 	for inv, ctl := range Controls {
-		if inv == InvCorrelationFires || inv == InvCorrelationControl {
-			continue
+		if inv == InvCorrelationFires || inv == InvCorrelationControl || inv == InvWebhookControl ||
+			inv == InvNotifyEscalates || inv == InvNotifyAckControl {
+			continue // their controls are run by the verifier itself, in the same day
 		}
 		for _, c := range strings.Split(ctl, ",") {
 			if !known[c] {
