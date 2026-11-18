@@ -134,6 +134,9 @@ type Observations struct {
 	// S3 is what was read for the deliveries, notifications, geofence, calculated metric and
 	// LoRaWAN beats.
 	S3 S3 `json:"-"`
+	// S4 is what was read for the fleet operations: groups, campaigns, the maintenance window,
+	// the asset hierarchy and the relationship graph.
+	S4 S4 `json:"-"`
 }
 
 // The watch: from before the first judged beat to after the last one clears, sim hours.

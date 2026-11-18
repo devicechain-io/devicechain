@@ -347,6 +347,9 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 		}
 		obs.Backfill = append(obs.Backfill, bf)
 	}
+	if err := readS4(ctx, reader, &obs, final.Scenario.Jobs); err != nil {
+		return noVerdict{err}
+	}
 	rep.Invariants = Evaluate(obs)
 	return nil
 }
@@ -499,5 +502,117 @@ func readS3(ctx context.Context, cfg Config, r *Reader, obs *Observations, to ti
 		}
 		obs.S3.Sink = &rec
 	}
+	return nil
+}
+
+// readS4 reads what the S4 invariants judge, after the watch: every group's resolution, the SOLAR
+// campaigns and the day's jobs with their cycles, elements and commands, the lamps' positions and
+// the dim they reported around the night dim, and the asset hierarchy and feeder graph.
+func readS4(ctx context.Context, r *Reader, obs *Observations, ledger []sim.ScenarioJob) error {
+	s := S4{Groups: map[string][]string{}, Campaigns: map[string]*Campaign{}, Cycles: map[string][]Cycle{},
+		Elements: map[string][]Element{}, BatchCommands: map[string][]HeldCommand{},
+		Ancestors: map[string][]string{}, Assigned: map[string][]string{}, Fed: map[string][]string{}}
+	for g := range sim.HarborpulseGroupMembers() {
+		members, err := r.GroupTargets(ctx, g)
+		if err != nil {
+			return err
+		}
+		s.Groups[g] = members
+	}
+	for _, j := range ledger {
+		if j.Day == obs.Day {
+			s.Jobs = append(s.Jobs, j)
+		}
+	}
+	campaigns := []string{sim.HarborpulseDuskCampaign, sim.HarborpulseDawnCampaign}
+	for _, j := range s.Jobs {
+		campaigns = append(campaigns, j.Campaign)
+	}
+	for _, token := range campaigns {
+		c, err := r.CampaignByToken(ctx, token)
+		if err != nil {
+			return err
+		}
+		if c == nil {
+			continue
+		}
+		s.Campaigns[token] = c
+		cycles, err := r.Cycles(ctx, token)
+		if err != nil {
+			return err
+		}
+		s.Cycles[token] = cycles
+		for _, cy := range cycles {
+			// A SOLAR campaign's elements are read for the day it was created only: the wave is
+			// judged there, and the holiday by the cycles alone.
+			if cy.Day != "" && cy.Day != townDay(c.CreatedAt) {
+				continue
+			}
+			elements, err := r.Elements(ctx, token, cy.Key)
+			if err != nil {
+				return err
+			}
+			s.Elements[elementsKey(token, cy.Key)] = elements
+			for _, e := range elements {
+				if e.BatchToken == "" || cy.Day != "" {
+					continue
+				}
+				if _, read := s.BatchCommands[e.BatchToken]; read {
+					continue
+				}
+				cmds, err := r.BatchCommands(ctx, e.BatchToken)
+				if err != nil {
+					return err
+				}
+				s.BatchCommands[e.BatchToken] = cmds
+			}
+		}
+	}
+	lamps := sim.HarborpulseGroupMembers()[sim.HarborpulseAllLightsGroup]
+	positions, err := r.Positions(ctx, lamps)
+	if err != nil {
+		return err
+	}
+	s.Positions = positions
+	for _, j := range s.Jobs {
+		if j.Name != sim.HarborpulseJobNightDim {
+			continue
+		}
+		fire, err := time.Parse(time.RFC3339, j.FireAt)
+		if err != nil {
+			return fmt.Errorf("night dim fireAt %q: %w", j.FireAt, err)
+		}
+		for _, lamp := range lamps {
+			readings, err := r.Readings(ctx, lamp, fire, fire.Add(dimWithin))
+			if err != nil {
+				return err
+			}
+			obs.Readings[lamp] = append(obs.Readings[lamp], readings...)
+		}
+	}
+	assets := []string{}
+	for _, m := range sim.HarborpulseMeters() {
+		building, _, _ := sim.HarborpulseBuildingOf(m)
+		assets = append(assets, building)
+	}
+	quays := []string{sim.HarborpulseNorthQuay, sim.HarborpulseEastQuay, sim.HarborpulseBasin}
+	for _, q := range quays {
+		assets = append(assets, sim.HarborpulseStation(q))
+	}
+	for _, a := range assets {
+		if s.Ancestors[a], err = r.Ancestors(ctx, a); err != nil {
+			return err
+		}
+		if s.Assigned[a], err = r.AssignedTo(ctx, a); err != nil {
+			return err
+		}
+	}
+	for _, q := range quays {
+		feeder := sim.HarborpulseFeeder(q)
+		if s.Fed[feeder], err = r.Related(ctx, feeder, sim.HarborpulseFeedsType); err != nil {
+			return err
+		}
+	}
+	obs.S4 = s
 	return nil
 }

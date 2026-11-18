@@ -73,7 +73,9 @@ type ScenarioClock struct {
 	// Defects are the planted defects this run carries; omitted when it carries none.
 	Defects []string `json:"defects,omitempty"`
 	// Backfill is what each store-and-forward device buffered in each outage so far.
-	Backfill            []ScenarioBackfill       `json:"backfill,omitempty"`
+	Backfill []ScenarioBackfill `json:"backfill,omitempty"`
+	// Jobs are the campaigns and maintenance-window openings the sim scheduled for each day.
+	Jobs                []ScenarioJob            `json:"jobs,omitempty"`
 	ThresholdChanges    []ThresholdChange        `json:"thresholdChanges,omitempty"`
 	CalculatedBackfills []CalculatedBackfillBeat `json:"calculatedBackfills,omitempty"`
 }

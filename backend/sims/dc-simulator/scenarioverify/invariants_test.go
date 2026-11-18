@@ -65,6 +65,7 @@ type day struct {
 	control  Preview
 	backfill []Backfill
 	s3       S3
+	s4       S4
 	// gaps are spans, by alarm token, in which the alarm is cleared and then reactivated under the
 	// same token, as the platform does.
 	gaps map[string][][2]float64
@@ -117,6 +118,7 @@ func cleanDay() *day {
 	}}
 	d.control = Preview{OK: true}
 	d.cleanS3()
+	d.cleanS4()
 	return d
 }
 
@@ -152,7 +154,7 @@ func backfillOf(device string) Backfill {
 
 func (d *day) observe() Observations {
 	o := Observations{Clock: testClock, Day: 0, Commands: d.commands, Readings: d.readings,
-		Correlation: d.corr, CorrelationControl: d.control, Backfill: d.backfill, S3: d.s3}
+		Correlation: d.corr, CorrelationControl: d.control, Backfill: d.backfill, S3: d.s3, S4: d.s4}
 	for t := at(WatchFrom); !t.After(at(WatchTo).Add(20 * time.Second)); t = t.Add(2 * time.Second) {
 		o.Polls = append(o.Polls, t)
 		for _, l := range d.alarms {

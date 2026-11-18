@@ -239,6 +239,10 @@ type Runtime struct {
 	// is the only copy; a scenario playing the network server presents it. Never logged.
 	IntegrationTokens map[string]string
 
+	// GroupVersions are the active published versions of the manifest's dynamic groups, by group
+	// token, as Provision left them: the version a group-scoped rule is pinned to.
+	GroupVersions map[string]int
+
 	// Devices is the manifest's Expand()'d device set, filled in by
 	// bootstrap.go's Provision once every device+credential exists. Tick reads
 	// it; nothing else mutates it after Bootstrap returns.

@@ -36,8 +36,8 @@ const (
 	HarborpulseGapTo                     = 14.5
 )
 
-// AttributeSpec is a device's numeric SHARED attribute. Provision converges its natural key.
-type AttributeSpec struct {
+// NumericAttributeSpec is a device's numeric SHARED attribute. Provision converges its natural key.
+type NumericAttributeSpec struct {
 	Device, Key string
 	Value       float64
 }
@@ -78,11 +78,11 @@ func HarborpulseOldThreshold(device string) float64 {
 		return 1.1
 	}
 }
-func harborAttributes() []AttributeSpec {
-	var out []AttributeSpec
+func harborAttributes() []NumericAttributeSpec {
+	var out []NumericAttributeSpec
 	for _, d := range HarborpulseFleet() {
 		if d.DeviceType == HarborpulsePumpType {
-			out = append(out, AttributeSpec{d.Token, HarborpulseWellAlarmAttr, HarborpulseOldThreshold(d.Token)})
+			out = append(out, NumericAttributeSpec{d.Token, HarborpulseWellAlarmAttr, HarborpulseOldThreshold(d.Token)})
 		}
 	}
 	return out
@@ -91,7 +91,7 @@ func harborAttributes() []AttributeSpec {
 const queryScenarioAttributes = `query($c:EntityAttributeSearchCriteria!){entityAttributes(criteria:$c){results{attrKey value valueType} pagination{totalRecords}}}`
 const mutationScenarioAttribute = `mutation($request:EntityAttributeSetRequest!){setEntityAttribute(request:$request){attrKey value}}`
 
-func ensureAttribute(ctx context.Context, rt *Runtime, a AttributeSpec) error {
+func ensureAttribute(ctx context.Context, rt *Runtime, a NumericAttributeSpec) error {
 	var got struct {
 		EntityAttributes struct {
 			Results []struct{ Value, ValueType string }
@@ -231,7 +231,7 @@ func (s *harborpulse) s3bBeats(ctx context.Context, rt *Runtime, elapsed time.Du
 	}
 	return run("threshold-change", HarborpulseAttributeChangeHour, func() error {
 		if !s.defects.attributeNotUpdated {
-			if err := ensureAttribute(ctx, rt, AttributeSpec{HarborpulseAttributePump, HarborpulseWellAlarmAttr, HarborpulseNewThreshold}); err != nil {
+			if err := ensureAttribute(ctx, rt, NumericAttributeSpec{HarborpulseAttributePump, HarborpulseWellAlarmAttr, HarborpulseNewThreshold}); err != nil {
 				return err
 			}
 		}

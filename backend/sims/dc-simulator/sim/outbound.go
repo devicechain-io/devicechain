@@ -162,7 +162,7 @@ func (m SimManifest) validateOutbound(typeTokens map[string]bool) error {
 		devices[d.Token] = true
 	}
 	attributes := map[string]bool{}
-	for _, a := range m.Attributes {
+	for _, a := range m.NumericAttributes {
 		key := a.Device + "/" + a.Key
 		if !devices[a.Device] || attributes[key] {
 			return fmt.Errorf("attribute %s has unknown device or duplicate natural key", key)

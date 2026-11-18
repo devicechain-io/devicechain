@@ -73,13 +73,29 @@ func verifierDocuments() []struct {
 		{"queryFailedEvents", "event-management", queryFailedEvents, map[string]any{
 			"c": map[string]any{"pageNumber": 1, "pageSize": failedPageSize, "reason": failedReasonDecode, "deviceToken": "hp-legacy-gauge-basin"},
 		}},
+		{"queryGroupTargets", "device-management", queryGroupTargets, map[string]any{"group": "hp-all-lights", "after": "12", "limit": groupPageSize}},
+		{"queryCampaign", "command-delivery", queryCampaign, map[string]any{"token": "hp-lights-dusk"}},
+		{"queryCampaignCycles", "command-delivery", queryCampaignCycles, map[string]any{"token": "hp-lights-dusk", "limit": cyclePageSize}},
+		{"queryCampaignElements", "command-delivery", queryCampaignElements, map[string]any{
+			"token": "hp-lights-dusk", "cycle": "d2026-11-17", "after": "5", "limit": elementPageSize}},
+		{"queryBatchCommands", "command-delivery", queryBatchCommands, map[string]any{
+			"c": map[string]any{"pageNumber": 1, "pageSize": commandPageSize, "batchToken": "b1"},
+		}},
+		{"queryPositions", "device-management", queryPositions, map[string]any{"tokens": []string{"hp-light-east-1"}}},
+		{"queryAssetAncestors", "device-management", queryAssetAncestors, map[string]any{"token": "hp-bldg-quayside-lofts"}},
+		{"queryAnchorDevices", "device-management", queryAnchorDevices, map[string]any{
+			"c": map[string]any{"pageNumber": 1, "pageSize": anchorPageSize, "targetType": "asset", "target": "hp-station-basin", "relationshipType": "assigned"},
+		}},
+		{"queryRelationships", "device-management", queryRelationships, map[string]any{
+			"c": map[string]any{"pageNumber": 1, "pageSize": relationPageSize, "sourceType": "asset", "source": "hp-feeder-east", "relationshipType": "hp-feeds"},
+		}},
 	}
 }
 
 func TestEveryVerifierDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 	docs := verifierDocuments()
-	if len(docs) != 11 {
-		t.Fatalf("%d documents listed; the verifier sends 11 — a new one must be listed here", len(docs))
+	if len(docs) != 20 {
+		t.Fatalf("%d documents listed; the verifier sends 20 — a new one must be listed here", len(docs))
 	}
 	for _, d := range docs {
 		if errs := servedSchema(t, d.area).ValidateWithVariables(d.doc, d.vars); len(errs) > 0 {

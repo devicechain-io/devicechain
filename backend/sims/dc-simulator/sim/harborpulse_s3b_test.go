@@ -264,8 +264,8 @@ func TestHarborpulseAttributeRuleAndWaterModel(t *testing.T) {
 	if when["thresholdAttr"] != HarborpulseWellAlarmAttr || when["threshold"] != nil {
 		t.Fatalf("authored comparison %+v", when)
 	}
-	if len(m.Attributes) != 3 {
-		t.Fatalf("attributes %+v", m.Attributes)
+	if len(m.NumericAttributes) != 3 {
+		t.Fatalf("attributes %+v", m.NumericAttributes)
 	}
 	before, after := 0, 0
 	for _, sample := range simulateHarborDay(t, true) {
