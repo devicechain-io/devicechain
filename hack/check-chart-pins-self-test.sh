@@ -104,7 +104,17 @@ reject 'literal module argument' 'An explicit argument BEATS'
 
 fixture
 sed -i 's/default = "1.2.3"/default = ""/' "$tree/modules/test/main.tf"
-sed -i '/variable "chart_version" {/a\  description = <<-EOT\n  default = "1.2.3"\n  EOT' "$tree/modules/test/main.tf"
+# The planted HCL heredoc is written through a quoted shell heredoc and spliced
+# in with sed's r command: spelled inline in a sed script, its opener would read
+# as a shell heredoc to hack/lib/early-close-pipes.awk, which does not parse
+# quoting and fails closed on an opener it never sees close.
+cat >"$tree/heredoc-pin.snippet" <<'HCL'
+  description = <<-EOT
+  default = "1.2.3"
+  EOT
+HCL
+sed -i "/variable \"chart_version\" {/r $tree/heredoc-pin.snippet" "$tree/modules/test/main.tf"
+rm -f "$tree/heredoc-pin.snippet"
 reject 'pin planted in heredoc' 'has no exact pinned default'
 
 fixture
