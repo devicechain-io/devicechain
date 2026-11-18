@@ -337,13 +337,16 @@ func HarborpulseHolidayAfter(t time.Time) string {
 // harborpulseSolarCampaigns are the street lights following the sun.
 func (s *harborpulse) harborpulseSolarCampaigns(now time.Time) []CampaignSpec {
 	var holidays []string
+	var holidayAtCreation func() string
 	if !s.defects.holidayDropped {
 		holidays = []string{harborpulseHoliday(now)}
+		holidayAtCreation = func() string { return harborpulseHoliday(s.now()) }
 	}
 	return []CampaignSpec{
 		{Token: HarborpulseDuskCampaign, Name: "Street lights to full at dusk", GroupToken: HarborpulseAllLightsGroup,
-			Trigger: CampaignTrigger{Kind: campaignKindSolar, Zone: HarborpulseTownZone, Event: solarEventSunset, Holidays: holidays},
-			Steps:   []CampaignStepSpec{{Command: HarborpulseSetDimKey, Payload: map[string]any{HarborpulseLevelParam: harborDuskLevel}}},
+			holidayAtCreation: holidayAtCreation,
+			Trigger:           CampaignTrigger{Kind: campaignKindSolar, Zone: HarborpulseTownZone, Event: solarEventSunset, Holidays: holidays},
+			Steps:             []CampaignStepSpec{{Command: HarborpulseSetDimKey, Payload: map[string]any{HarborpulseLevelParam: harborDuskLevel}}},
 			// A lamp that missed its dusk by more than five minutes waits for tomorrow's.
 			MaxLatenessSeconds: 300, ExpiresInSeconds: 3600},
 		{Token: HarborpulseDawnCampaign, Name: "Street lights trimmed at dawn", GroupToken: HarborpulseAllLightsGroup,

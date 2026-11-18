@@ -94,6 +94,8 @@ type CampaignSpec struct {
 	// MaxLatenessSeconds and ExpiresInSeconds are 0 for the platform's defaults.
 	MaxLatenessSeconds int
 	ExpiresInSeconds   int
+	// holidayAtCreation refreshes a relative holiday only when creating the campaign.
+	holidayAtCreation func() string
 }
 
 // CampaignTrigger is a campaign trigger, in the shape the platform stores it (core/schedule's
@@ -898,13 +900,23 @@ func ensureCampaign(ctx context.Context, rt *Runtime, c CampaignSpec) error {
 		return fmt.Errorf("campaign: %w", err)
 	}
 	if existing.Campaign != nil {
-		if existing.Campaign.matches(c) {
+		declared := c
+		if c.holidayAtCreation != nil {
+			var trigger CampaignTrigger
+			if err := json.Unmarshal([]byte(existing.Campaign.Trigger), &trigger); err == nil && len(trigger.Holidays) == 1 {
+				declared.Trigger.Holidays = trigger.Holidays
+			}
+		}
+		if existing.Campaign.matches(declared) {
 			return nil
 		}
 		if err := deleteCampaign(ctx, rt, c.Token); err != nil {
 			return err
 		}
 		log.Info().Str("token", c.Token).Msg("replacing a campaign that changed")
+	}
+	if c.holidayAtCreation != nil {
+		c.Trigger.Holidays = []string{c.holidayAtCreation()}
 	}
 	return createCampaign(ctx, rt, c)
 }

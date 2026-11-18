@@ -205,6 +205,13 @@ func TestEachS4ControlTurnsExactlyItsInvariantRed(t *testing.T) {
 	}
 }
 
+func TestNightDimRejectsDuplicateElements(t *testing.T) {
+	evaluateOneRed(t, InvNightDim, "hp-light-east-1: 2 elements, want one", func(d *day) {
+		key := elementsKey(testNightDim, "t-dim")
+		d.s4.Elements[key] = append(d.s4.Elements[key], d.s4.Elements[key][0])
+	})
+}
+
 // The wave check reads the platform's positions, not the layout's: a lamp planned for a position
 // the platform does not hold is red even when the instant matches the layout.
 func TestSolarWaveJudgesAgainstThePlatformsPositions(t *testing.T) {

@@ -210,14 +210,21 @@ func nightDim(o Observations) error {
 	east := sim.HarborpulseGroupMembers()[sim.HarborpulseEastLightsGroup]
 	var devices []string
 	var problems []string
+	counts := map[string]int{}
 	for _, e := range elements {
 		devices = append(devices, e.Device)
+		counts[e.Device]++
 		if e.Status != "DISPATCHED" || e.CommandOutcome != "SUCCEEDED" {
 			problems = append(problems, fmt.Sprintf("%s: %s/%s %s", e.Device, e.Status, e.CommandOutcome, e.Reason))
 		}
 	}
 	if diff := sameStrings(devices, east); diff != "" {
 		return fmt.Errorf("the night dim's elements: %s", diff)
+	}
+	for _, device := range east {
+		if counts[device] != 1 {
+			problems = append(problems, fmt.Sprintf("%s: %d elements, want one", device, counts[device]))
+		}
 	}
 	targeted := setOf(devices)
 	for _, lamp := range fleetOf(sim.HarborpulseLightType, "") {

@@ -4,7 +4,10 @@
 package sim
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"sort"
 	"strings"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/schedule"
 	"github.com/devicechain-io/dc-microservice/solar"
+	"github.com/devicechain-io/dc-microservice/userclient"
 )
 
 func harborWith(t *testing.T, defects ...string) *harborpulse {
@@ -414,5 +418,89 @@ func TestTheScopeAndImpactAreInTheProfileMarker(t *testing.T) {
 	gauge := harborpulseGaugeProfile(false, false)
 	if profileContentMarker(gauge) != profileContentMarkerScoped(gauge, map[string]int{"x": 9}) {
 		t.Fatal("a profile with no scoped rule depends on group versions")
+	}
+}
+
+// Provisioning may cross the town's midnight after the manifest was built.
+func TestHarborpulseHolidayUsesCampaignCreationClock(t *testing.T) {
+	zone, err := time.LoadLocation(HarborpulseTownZone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// In summer the town's midnight differs from UTC's.
+	now := time.Date(2026, 7, 16, 23, 59, 59, 0, zone)
+	s := harborWith(t)
+	s.now = func() time.Time { return now }
+	manifest := s.Manifest()
+	var stored *storedCampaign
+	creates, deletes := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		data := map[string]any{}
+		switch {
+		case strings.Contains(req.Query, "login("), strings.Contains(req.Query, "selectTenant("):
+			data, _ = (&fakeProfileServer{}).dispatch(req.Query, req.Variables)
+		case strings.Contains(req.Query, "refresh("):
+			data["refresh"] = map[string]any{"accessToken": "access", "refreshToken": "refresh"}
+		case strings.Contains(req.Query, "createCampaign("):
+			creates++
+			raw, _ := json.Marshal(req.Variables["request"])
+			stored = &storedCampaign{}
+			if err := json.Unmarshal(raw, stored); err != nil {
+				t.Error(err)
+			}
+			data["createCampaign"] = map[string]any{"campaign": map[string]any{"token": stored.Token}}
+		case strings.Contains(req.Query, "deleteCampaign("):
+			deletes++
+			stored = nil
+			data["deleteCampaign"] = true
+		case strings.Contains(req.Query, "campaign("):
+			data["campaign"] = stored
+		default:
+			t.Errorf("unexpected query: %s", req.Query)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer srv.Close()
+	rt := &Runtime{Endpoints: Endpoints{CommandMgmtGraphQL: srv.URL},
+		Session: userclient.NewTenantSession(srv.Client(), srv.URL, "sim@example.invalid", "pw", "acme")}
+	now = now.Add(2 * time.Second)
+	if err := ensureCampaign(context.Background(), rt, manifest.Campaigns[0]); err != nil {
+		t.Fatal(err)
+	}
+	var trigger CampaignTrigger
+	if err := json.Unmarshal([]byte(stored.Trigger), &trigger); err != nil {
+		t.Fatal(err)
+	}
+	if len(trigger.Holidays) != 1 || trigger.Holidays[0] != "2026-07-18" {
+		t.Fatalf("created dusk holidays %v, want the day after creation (2026-07-18)", trigger.Holidays)
+	}
+	original := stored.Trigger
+	now = now.Add(24 * time.Hour)
+	if err := ensureCampaign(context.Background(), rt, s.Manifest().Campaigns[0]); err != nil {
+		t.Fatal(err)
+	}
+	if creates != 1 || deletes != 0 || stored.Trigger != original {
+		t.Fatalf("converge rewrote the holiday: creates=%d deletes=%d trigger=%s", creates, deletes, stored.Trigger)
+	}
+	broken := harborWith(t, HarborpulseDefectHolidayDropped)
+	broken.now = s.now
+	if err := ensureCampaign(context.Background(), rt, broken.Manifest().Campaigns[0]); err != nil {
+		t.Fatal(err)
+	}
+	var dropped CampaignTrigger
+	if err := json.Unmarshal([]byte(stored.Trigger), &dropped); err != nil {
+		t.Fatal(err)
+	}
+	if len(dropped.Holidays) != 0 || creates != 2 || deletes != 1 {
+		t.Fatalf("holiday-dropped did not replace just the holiday: creates=%d deletes=%d trigger=%s", creates, deletes, stored.Trigger)
 	}
 }
