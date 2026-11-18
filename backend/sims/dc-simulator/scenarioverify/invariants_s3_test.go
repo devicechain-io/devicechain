@@ -272,6 +272,85 @@ func TestWithoutASinkTheSinkInvariantsAreNotJudged(t *testing.T) {
 	}
 }
 
+// A clear during the visit must fail even when the alarm was raised and eventually cleared.
+func TestTruckFenceRejectsPrematureClear(t *testing.T) {
+	evaluateOneRed(t, InvTruckFence, "hp-truck-1: truck-in-flood-plain seen "+sim.AlarmStateClearedWire+" at "+at(17.8).Add(maxPollGap).Format(time.RFC3339), func(d *day) {
+		for i, l := range d.alarms {
+			if l.key == sim.HarborpulseTruckFenceAlarmKey {
+				d.alarms[i].clear = 17.9
+			}
+		}
+	})
+	// Unknown states and temporary clears cannot stand in for ACTIVE either.
+	for _, state := range []string{sim.AlarmStateClearedWire, "UNKNOWN"} {
+		o := cleanDay().observe()
+		for i, a := range o.Alarms {
+			if a.Key == sim.HarborpulseTruckFenceAlarmKey && a.At.Equal(at(19)) {
+				o.Alarms[i].State = state
+			}
+		}
+		if err := truckFence(o); err == nil || !strings.Contains(err.Error(), at(19).Format(time.RFC3339)) {
+			t.Fatalf("state %s during the visit: %v", state, err)
+		}
+	}
+}
+
+// Enough stored levels cannot excuse an ignored frame on a decoder with no ignore section.
+func TestLoraDecodedRejectsIgnoredUplinks(t *testing.T) {
+	evaluateOneRed(t, InvLoraDecoded, "1 ignored", func(d *day) {
+		h := d.s3.Health[sim.HarborpulseLoraGaugeProfile]
+		h.Ignored = 1
+		d.s3.Health[sim.HarborpulseLoraGaugeProfile] = h
+	})
+}
+
+// Escalation must wait for the SENT page on its own token, even if attempts arrive unsorted.
+func TestNotifyEscalatesRequiresPolicyIntervalOnSameToken(t *testing.T) {
+	const g = "hp-gauge-basin-1"
+	tok := "a-" + g
+	page := at(18)
+	for _, delay := range []time.Duration{-time.Second, 0, sim.HarborpulseEscalateAfter - 3*time.Second} {
+		t.Run(delay.String(), func(t *testing.T) {
+			escalation := page.Add(delay)
+			evaluateOneRed(t, InvNotifyEscalates, "ESCALATION at "+escalation.Format(time.RFC3339)+" is too early after ALARM at "+page.Format(time.RFC3339), func(d *day) {
+				d.s3.Attempts[tok][1].At = escalation
+			})
+		})
+	}
+	d := cleanDay()
+	other := tok + "-other"
+	// Judge notification timing directly: two tokens also violate flood-escalates, whose
+	// separate control requires an alarm to escalate in place.
+	d.alarms = append(d.alarms, lifecycle{other, g, sim.HarborpulseFloodAlarmKey, []step{{18, major}}, 21.3})
+	d.s3.Attempts[other] = []Attempt{d.s3.Attempts[tok][0]}
+	d.s3.Attempts[other][0].AlarmToken = other
+	d.s3.Attempts[tok] = d.s3.Attempts[tok][1:]
+	if err := gaugePagedAndEscalated(d.observe(), g); err == nil || !strings.Contains(err.Error(), "has no SENT ALARM in the watched window") {
+		t.Fatalf("escalation on a token without a page: %v", err)
+	}
+	// The skew boundary is allowed, and the earliest page wins regardless of list order.
+	d = cleanDay()
+	a := d.s3.Attempts[tok]
+	a[1].At = page.Add(sim.HarborpulseEscalateAfter - 2*time.Second)
+	later := a[0]
+	later.At = page.Add(10 * time.Second)
+	d.s3.Attempts[tok] = []Attempt{later, a[1], a[0]}
+	if err := gaugePagedAndEscalated(d.observe(), g); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A spare calculated reading must not be skipped just because enough other readings pair.
+func TestWellFillRejectsUnmatchedCalculatedReading(t *testing.T) {
+	p := sim.HarborpulseAirLockPump
+	when := at(18).Add(2 * time.Second)
+	evaluateOneRed(t, InvWellFill, p+": 2 calculated well fill readings without a wet well reading at the same instant (for example "+when.Format(time.RFC3339), func(d *day) {
+		for _, at := range []time.Time{when, when.Add(time.Second)} {
+			d.readings[p] = append(d.readings[p], Reading{Name: sim.HarborpulseWellFillKey, At: at, Value: 37.5})
+		}
+	})
+}
+
 // foldedLegacyDay is a clean day whose legacy gauge wrote its ten records of the hour before the
 // watch: through the watch the platform only folds its failures into the newest one's suppressed
 // count, which grows from atWatch to atEnd.
