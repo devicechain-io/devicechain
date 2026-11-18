@@ -137,6 +137,9 @@ export default function App() {
         // token is valid. A refusal (revoked or invalid refresh token, SSO required) still ends
         // the session at once.
         skewSeconds: 120,
+        // Once the access token has expired, a request made during an outage fails with the
+        // outage instead of going out without a token, and a websocket reconnect retries it.
+        transientRefreshErrors: 'throw',
         onEnd: (err) => {
           console.warn('/dash: the session ended and could not be refreshed', err);
           pairRef.current = null;

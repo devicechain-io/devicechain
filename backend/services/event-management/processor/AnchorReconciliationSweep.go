@@ -45,7 +45,7 @@ func NewAnchorReconciliationSweep(ms *core.Microservice, api emmodel.EventManage
 	client *svcclient.Client, dmURL string, interval time.Duration, callbacks core.LifecycleCallbacks) *AnchorReconciliationSweep {
 	s := &AnchorReconciliationSweep{Microservice: ms, Api: api, client: client, dmURL: dmURL}
 	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "anchor-sweep", interval,
-		s.runOnce, callbacks, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("anchor_sweep")))
+		s.runOnce, callbacks, ms.NewPeriodicTaskMetrics("anchor_sweep"))
 	return s
 }
 

@@ -28,4 +28,5 @@ var Migrations = []*gormigrate.Migration{
 	// A provider with no endpoint override stores NULL, not ''. The column always allowed
 	// it; the model now spells it, and this converts the rows already written. DML only.
 	NewProviderEndpointNullMigration(),
+	NewInferenceBucketsMigration(),
 }

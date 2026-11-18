@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/config"
@@ -32,6 +31,7 @@ import (
 var (
 	Microservice  *core.Microservice
 	Configuration *config.CommandDeliveryConfiguration
+	servicePeers  *svcclient.Peers
 
 	// Svc owns the three managers below and the order of all four of their lifecycle
 	// phases. They stay named here because the rest of this service refers to them
@@ -82,7 +82,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -164,8 +164,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
-		tenantLifecycleGate(infra, safetyGates),
-		withPullChannels(presenceReader(infra, safetyGates)), deadLetters, DeliveryMetrics)
+		tenantLifecycleGate(servicePeers, safetyGates),
+		withPullChannels(presenceReader(infra, servicePeers, safetyGates)), deadLetters, DeliveryMetrics)
 	// 🔴 SET HERE, WHERE THE PROCESSOR EXISTS, AND NOT BESIDE THE Api.* ASSIGNMENTS IN
 	// afterMicroserviceInitialized -- WHICH IS WHERE THEY BELONG BY APPEARANCE AND WHERE
 	// THEY WOULD NIL-PANIC. This function is the NatsManager's construction callback, and
@@ -177,7 +177,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// "unset" zero the field treats as "use the platform default".
 	CommandDeliveryProcessor.Hold = newStoreHold("command-responses")
 	CommandDeliveryProcessor.SweepInterval = time.Duration(Configuration.SweepIntervalSeconds) * time.Second
-	CommandDeliveryProcessor.DisabledSource = disabledSource(infra)
+	CommandDeliveryProcessor.DisabledSource = disabledSource(infra, servicePeers)
 	// The re-stamp pass reads windows from the same owner enqueue asked. Set here for the
 	// reason the line above is: the processor does not exist until this callback runs.
 	CommandDeliveryProcessor.WindowOpenings = Api.WindowOpenings
@@ -276,7 +276,7 @@ func newStoreHold(consumer string) *storehold.Holder {
 // receiving its queued commands until its next roster change. It is not a stall, because the
 // alternative -- holding every command for an authority that cannot be asked -- would turn a
 // configuration gap into a platform-wide outage.
-func disabledSource(infra mscfg.InfrastructureConfiguration) processor.DisabledSource {
+func disabledSource(infra mscfg.InfrastructureConfiguration, peers *svcclient.Peers) processor.DisabledSource {
 	if infra.ServiceAuth.Secret == "" {
 		log.Warn().Msg("Service secret not configured -- the disabled-device record is NOT synced from device-management; commands queued for a device disabled before this service started will still be sent.")
 		return nil
@@ -286,10 +286,9 @@ func disabledSource(infra mscfg.InfrastructureConfiguration) processor.DisabledS
 		log.Warn().Msg("device-management or user-management endpoint not configured -- the disabled-device record is NOT synced; commands queued for a device disabled before this service started will still be sent.")
 		return nil
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery",
-		[]string{string(auth.DeviceRead), string(auth.TenantRead)})
-	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
-	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	seam, _ := peers.Seam(infra.DeviceManagement.Endpoint(), auth.DeviceRead, auth.TenantRead)
+	client, dmURL := seam.Client, seam.URL
+	umURL, _ := peers.URL(infra.UserManagement.Endpoint())
 	log.Info().Str("deviceManagement", dmURL).
 		Msg("Disabled-device sync enabled; commands queued for a disabled device are held until it is enabled.")
 	return verify.NewDisabledSource(client, dmURL, umURL, Microservice.InstanceId)
@@ -324,7 +323,7 @@ func withPullChannels(reader presence.Reader) presence.Reader {
 // deviceState block. Each logs at WARN with what is lost, because a gate that is off is
 // invisible in every other way — commands flow, nothing is held, and the silent losses it
 // exists to prevent resume without a single error.
-func presenceReader(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) presence.Reader {
+func presenceReader(infra mscfg.InfrastructureConfiguration, peers *svcclient.Peers, gates *governance.SafetyGates) presence.Reader {
 	if infra.ServiceAuth.Secret == "" {
 		log.Warn().Msg("Service secret not configured — the presence gate is OFF; commands to devices known to be offline will be published and silently dropped by the broker.")
 		gates.Set(governance.GatePresence, false)
@@ -335,9 +334,8 @@ func presenceReader(infra mscfg.InfrastructureConfiguration, gates *governance.S
 		gates.Set(governance.GatePresence, false)
 		return nil
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery",
-		[]string{string(auth.StateRead)})
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port)
+	client := peers.Client(auth.StateRead)
+	url, _ := peers.URL(infra.DeviceState.Endpoint())
 	log.Info().Str("deviceState", url).
 		Msg("Presence gate enabled; commands to devices a transport reports as absent will be withheld rather than published.")
 	gates.Set(governance.GatePresence, true)
@@ -346,8 +344,8 @@ func presenceReader(infra mscfg.InfrastructureConfiguration, gates *governance.S
 
 // tenantLifecycleGate is the deleted-tenant gate the dispatch path refuses work through: nil when
 // user-management is unconfigured, with the tenant_lifecycle safety gate recorded either way.
-func tenantLifecycleGate(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) func(string) bool {
-	return governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery", gates)
+func tenantLifecycleGate(peers *svcclient.Peers, gates *governance.SafetyGates) func(string) bool {
+	return governance.NewTenantLifecycleGateFor(peers, gates)
 }
 
 // wireDeviceManagementGates installs the three collaborators command-delivery reaches
@@ -370,8 +368,7 @@ func tenantLifecycleGate(infra mscfg.InfrastructureConfiguration, gates *governa
 //
 // Group resolution has no degraded mode at all: with no resolver, a group-targeted batch
 // is refused outright rather than quietly becoming an empty one.
-func wireDeviceManagementGates() {
-	infra := Microservice.InstanceConfiguration.Infrastructure
+func wireDeviceManagementGates(infra mscfg.InfrastructureConfiguration, peers *svcclient.Peers) {
 	if infra.ServiceAuth.Secret == "" {
 		log.Warn().Msg("Service secret not configured — command-delivery will NOT validate commands before enqueue (device existence and payload schema unchecked), including fleet-wide batches, and will NOT hold disruptive commands for maintenance windows; group-targeted batches will be refused.")
 		return
@@ -383,8 +380,8 @@ func wireDeviceManagementGates() {
 		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) — command-delivery will NOT validate commands before enqueue (device existence and payload schema unchecked), including fleet-wide batches, and will NOT hold disruptive commands for maintenance windows; group-targeted batches will be refused.")
 		return
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery", []string{string(auth.DeviceRead)})
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	client := peers.Client(auth.DeviceRead)
+	url, _ := peers.URL(infra.DeviceManagement.Endpoint())
 	Api.EnqueueValidator = verify.NewEnqueueValidator(client, url)
 	Api.DeviceAnchors = verify.NewDeviceAnchorLookup(client, url)
 	Api.BatchValidator = verify.NewBatchValidator(client, url)
@@ -394,9 +391,13 @@ func wireDeviceManagementGates() {
 	// user-management replica of the previous release refuses to mint a token naming it. Sharing
 	// the client would turn that refusal, during a rolling upgrade, into failed command
 	// validation; on its own client it fails only solar planning, which says so and retries.
-	siteClient := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery",
-		[]string{string(auth.DeviceRead), string(auth.LocationInstalledRead)})
-	Api.SiteResolver = verify.NewSiteResolver(siteClient, url)
+	// Keep the original ability to build these clients before the mint endpoint is configured.
+	// Peers.Seam would additionally require user-management to be ready.
+	site := svcclient.Seam{
+		Client: peers.Client(auth.DeviceRead, auth.LocationInstalledRead),
+		URL:    url,
+	}
+	Api.SiteResolver = verify.NewSiteResolver(site.Client, site.URL)
 	// The maintenance-window gate shares the validator's coordinates and its fate: with no
 	// device-management endpoint there is nobody to ask, and the branch above has already
 	// returned and said so.
@@ -426,8 +427,7 @@ func wireDeviceManagementGates() {
 // reason: a config document predating this feature carries no usable
 // user-management block, and building http://:0/graphql would make every enqueue
 // pay a doomed round trip. Degrade loudly rather than trap.
-func wireHeldCeilingResolver() {
-	infra := Microservice.InstanceConfiguration.Infrastructure
+func wireHeldCeilingResolver(infra mscfg.InfrastructureConfiguration, peers *svcclient.Peers) {
 	if infra.ServiceAuth.Secret == "" {
 		log.Warn().Int("ceiling", Configuration.HeldCommandCeiling).
 			Msg("Service secret not configured — per-tenant held-command ceilings are disabled; metering every tenant at the instance default.")
@@ -438,9 +438,8 @@ func wireHeldCeilingResolver() {
 			Msg("user-management endpoint not configured (infrastructure.userManagement) — per-tenant held-command ceilings are disabled; metering every tenant at the instance default.")
 		return
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery",
-		[]string{string(auth.TenantRead)})
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	seam, _ := peers.UserManagement(auth.TenantRead)
+	client, url := seam.Client, seam.URL
 	Api.HeldCeilingResolver = governance.NewHeldCommandCeilingResolver(client, url, Configuration.HeldCommandCeiling)
 	log.Info().Str("userManagement", url).Int("default", Configuration.HeldCommandCeiling).
 		Msg("Per-tenant held-command ceilings enabled (override, else tier, else the instance default).")
@@ -452,9 +451,9 @@ func wireHeldCeilingResolver() {
 var safetyGates *governance.SafetyGates
 
 func afterMicroserviceInitialized(ctx context.Context) error {
-	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
-	// registration panics, and the gates below are decided in callbacks that can run again.
-	safetyGates = governance.NewSafetyGates(Microservice)
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+	servicePeers = peers
 	// Parse configuration.
 	err := parseConfiguration()
 	if err != nil {
@@ -481,7 +480,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// see nats_start_wiring_test.go, which pins the dependency that makes it load-bearing.
 	// core/service is where the order now lives.
 	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
+			AppendOnly: nil, // Audit journal only.
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Migrations: model.Migrations,
 			Config:     Configuration.RdbConfiguration,
@@ -530,7 +531,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// It is the fallback, not the whole answer: wireHeldCeilingResolver below adds the
 			// per-tenant cascade on top of it.
 			Api.DefaultHeldCommandCeiling = Configuration.HeldCommandCeiling
-			wireHeldCeilingResolver()
+			wireHeldCeilingResolver(infra, peers)
 
 			// The share of whatever ceiling is in force that only a platform service token may
 			// draw on, so one fleet write cannot consume the whole ceiling and leave every
@@ -552,7 +553,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// refusing to start would take the whole service down over an optional
 			// collaborator). Group targeting is the exception and fails closed: a group that
 			// cannot be resolved must not silently become an empty fleet write.
-			wireDeviceManagementGates()
+			wireDeviceManagementGates(infra, peers)
 			// The campaign scheduler needs only the Api, so it is built here rather than in
 			// the NATS callback: it reaches the database and device-management, never the broker.
 			CampaignScheduler = processor.NewCampaignScheduler(Microservice, Api, core.NewNoOpLifecycleCallbacks())
@@ -570,6 +571,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			},
 		},
 	})
+	safetyGates = Svc.SafetyGates()
 	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}

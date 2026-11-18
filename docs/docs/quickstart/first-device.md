@@ -29,9 +29,9 @@ written for a bash shell; on Windows, run them in Git Bash or WSL.
 `dcctl install` and `dcctl bootstrap` each run a preflight first, and **stop** if one of the four
 tools is missing. A gap costs you the first ten seconds rather than ten minutes.
 
-- **OpenTofu 1.10 or later.** The preflight checks that `tofu` (or `terraform`) is there, but not
-  its version, and an older one fails part-way through `dcctl install`, when it loads the
-  infrastructure configuration. `tofu version` prints yours.
+- **OpenTofu 1.10 or later.** The preflight checks that `tofu` (or `terraform`) is there and
+  refuses a version older than 1.10, so an old binary stops the run before anything is created.
+  `tofu version` prints yours.
 - **Room for the cluster.** The preflight warns when Docker has fewer than 4 CPUs or less than
   8 GiB of memory, and needs 40 GiB of free disk for images and database volumes. On Docker
   Desktop, set these under **Settings → Resources**. Step 1 installs with `--compact`, which
@@ -112,6 +112,19 @@ cert-manager, so no database backups. Without it, the services that handle event
 about 4 CPU, and a pod that does not fit stays `Pending` until the install times out. On a machine
 with room to spare, leave it out to get monitoring and backups. The choice belongs to the cluster
 and cannot be changed while an instance runs on it. See [`--compact`](../deployment/bootstrap.md#--compact).
+
+:::tip Keep database backups on a laptop
+If the laptop has room for a 20Gi backup store, install with `--no-tls=false` to keep cert-manager,
+and with it database backups, on a compact cluster:
+
+```bash
+dcctl install local --compact --no-tls=false
+```
+
+The bootstrap command stays the same: its `--no-tls` serves only this instance over plain HTTP.
+Root-key escrow does not depend on this choice. The recipe above already keeps it, unless you
+pass `--no-escrow` or `--dev`.
+:::
 
 :::note In a script or CI job
 `dcctl bootstrap` asks for a passphrase to seal the root-key escrow artifact. With no terminal to
@@ -468,8 +481,7 @@ curl -s -X POST http://localhost/api/command-delivery/graphql \
   twelve thermostats whose temperature rises above and falls back below 30, raising and clearing
   `bp-over-temp` alarms under **Monitor → Alarms** in the tenant `sim-building`. Sign in as
   `building@sim.devicechain.local`, with the `simPassword` from `~/.devicechain/sims/building.json`,
-  to see them. Interrupt the first `dcctl sim run` (Ctrl+C) before you start the second, since both
-  serve the same control port.
+  to see them.
 
 - **[Feature tour](./feature-tour.md)**: carry on from here to a dashboard, a rule that raises an
   alarm and sends a command, the device's answer, and a customer user who sees only their own

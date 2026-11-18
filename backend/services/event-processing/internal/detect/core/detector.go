@@ -15,9 +15,6 @@ import "time"
 type Detector interface {
 	UpsertRule(r Rule)
 	RemoveRule(id string)
-	// CarryRaised moves latches and their newest cursors to successor rule ids.
-	CarryRaised(successor map[string]string, skip func(SeriesKey) bool) int
-	IsRaised(key SeriesKey) bool
 	RemoveMatching(match func(ruleID string) bool) int
 	Descope(ruleID, series string, at time.Time) bool
 	DropSeries(series string, stale func(ruleID string, raisedAt time.Time, raised bool) bool) int
@@ -31,7 +28,6 @@ type Detector interface {
 	SetExpected(key SeriesKey, since time.Time)
 	RemoveExpected(key SeriesKey)
 	ClearRaised(key SeriesKey)
-	ClearRaisedIfNotAfter(key SeriesKey, at time.Time)
 	Drain() []Detection
 	DrainLateSamples() uint64
 	Watermark() time.Time

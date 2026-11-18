@@ -97,8 +97,8 @@ const ANSWERS: Record<string, unknown> = {
   MetricDefinitions: {
     metricDefinitions: {
       results: [
-        { metricKey: 'temperature', dataType: 'DOUBLE', calculated: false },
-        { metricKey: 'battery', dataType: 'DOUBLE', calculated: false },
+        { token: 'temperature', metricKey: 'temperature', dataType: 'DOUBLE', calculated: false },
+        { token: 'battery', metricKey: 'battery', dataType: 'DOUBLE', calculated: false },
       ],
       pagination: { pageStart: 0, pageEnd: 0, totalRecords: 2 },
     },

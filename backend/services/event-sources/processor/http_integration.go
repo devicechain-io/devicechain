@@ -443,7 +443,7 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 		switch {
 		case result.Untracked:
 			m.downlinkReport(DownlinkReportUntracked)
-		case rt.PublishDownlink == nil && isDownlinkEvent(desc.Type, r, messageType):
+		case rt.PublishDownlink == nil && desc.Type != integrationcodec.GenericJSON && desc.Type != integrationcodec.GenericBinary && isDownlinkEvent(desc.Type, r, messageType):
 			m.downlinkReport(DownlinkReportNotRouted)
 		}
 		m.request(typ, ResultIgnoredType)
@@ -691,6 +691,8 @@ func isDownlinkEvent(t integrationcodec.Type, r *http.Request, messageType strin
 	case integrationcodec.ChirpStackV4:
 		ev := r.URL.Query().Get("event")
 		return ev == integrationcodec.DownlinkAck || ev == integrationcodec.DownlinkTxAck
+	case integrationcodec.GenericJSON:
+		return integrationcodec.IsGenericAckPath(messageType)
 	case integrationcodec.TTSV3:
 		seg := strings.NewReplacer("-", "", "_", "", "/", "").Replace(strings.ToLower(messageType))
 		return strings.HasPrefix(seg, "downlink")

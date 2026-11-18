@@ -104,9 +104,10 @@ type disabledEntry struct {
 // disabledCache remembers existence, incarnation, creation time and quarantine per tenant/device.
 // Successful answers are kept for DisabledCacheTTL; a failed lookup is never kept.
 type disabledCache struct {
-	mu         sync.Mutex
-	m          map[string]disabledEntry
-	generation map[string]uint64
+	mu sync.Mutex
+	m  map[string]disabledEntry
+	// A cache-wide epoch bounds invalidation bookkeeping even for unseen devices.
+	epoch uint64
 }
 
 func (c *disabledCache) get(key string, now time.Time) (facts DeviceFacts, found, ok bool, generation uint64) {
@@ -114,16 +115,16 @@ func (c *disabledCache) get(key string, now time.Time) (facts DeviceFacts, found
 	defer c.mu.Unlock()
 	e, hit := c.m[key]
 	if !hit || now.Sub(e.at) >= DisabledCacheTTL || now.Before(e.at) {
-		return DeviceFacts{}, false, false, c.generation[key]
+		return DeviceFacts{}, false, false, c.epoch
 	}
-	return e.facts, e.found, true, c.generation[key]
+	return e.facts, e.found, true, c.epoch
 }
 
 func (c *disabledCache) put(key string, facts DeviceFacts, found bool, now time.Time, generation uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// A lookup begun before a forget must not repopulate the forgotten answer.
-	if c.generation[key] != generation {
+	// Any forget fences earlier lookups, conservatively including other keys.
+	if c.epoch != generation {
 		return
 	}
 	if c.m == nil {
@@ -145,10 +146,7 @@ func (c *disabledCache) put(key string, facts DeviceFacts, found bool, now time.
 func (c *disabledCache) forget(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.generation == nil {
-		c.generation = map[string]uint64{}
-	}
-	c.generation[key]++
+	c.epoch++
 	delete(c.m, key)
 }
 
@@ -1215,6 +1213,8 @@ type SweepResult struct {
 	Examined int
 	TimedOut int
 	Unknown  int
+	Failed   int
+	LastErr  error
 }
 
 // maxSweepPages bounds how many pages one pass walks looking for work. A pass that finds nothing to
@@ -1282,6 +1282,8 @@ func (api *Api) SweepDeadlines(ctx context.Context, limit int) (SweepResult, err
 			}
 			out, err := api.tickOne(core.WithTenant(ctx, d.TenantId), d.ID)
 			if err != nil {
+				res.Failed++
+				res.LastErr = err
 				log.Warn().Err(err).Str("attempt", d.Token).Msg("An update attempt deadline could not be applied; it is retried at the next pass.")
 				continue
 			}

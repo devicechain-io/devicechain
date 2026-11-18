@@ -28,11 +28,14 @@ func TestResolvedEventsProcessorsCoverEveryGroupAndKeepLegacyDurable(t *testing.
 			savedMs, savedCfg, savedApi := Microservice, Configuration, Api
 			savedMetrics, savedSweep, savedDropped := StateMetrics, InactivitySweepMetrics, DroppedEvicted
 			savedProcs, savedOwners := StateProcessors, OwnershipProcessor
+			savedDeletion, savedOrphan := DeletionProcessor, OrphanTask
+			OrphanTask = nil
 			savedWriter, savedOwnerReader, savedStop := InboundEventsWriter, OwnershipReader, stopStreamSharding
 			t.Cleanup(func() {
 				Microservice, Configuration, Api = savedMs, savedCfg, savedApi
 				StateMetrics, InactivitySweepMetrics, DroppedEvicted = savedMetrics, savedSweep, savedDropped
 				StateProcessors, OwnershipProcessor = savedProcs, savedOwners
+				DeletionProcessor, OrphanTask = savedDeletion, savedOrphan
 				InboundEventsWriter, OwnershipReader, stopStreamSharding = savedWriter, savedOwnerReader, savedStop
 			})
 			Microservice = &core.Microservice{InstanceId: "state-groups", FunctionalArea: "device-state", Readiness: core.NewReadinessGate()}
@@ -69,7 +72,7 @@ func TestResolvedEventsProcessorsCoverEveryGroupAndKeepLegacyDurable(t *testing.
 				}, nil
 			})
 			require.NoError(t, mgr.Initialize(ctx))
-			StateProcessors, OwnershipProcessor, stopStreamSharding = nil, nil, nil
+			StateProcessors, OwnershipProcessor, DeletionProcessor, stopStreamSharding = nil, nil, nil, nil
 			t.Cleanup(func() {
 				for _, sp := range StateProcessors {
 					require.NoError(t, sp.Stop(ctx))

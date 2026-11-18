@@ -278,9 +278,10 @@ spec:
               store that stays stopped for longer than the broker can hold loses data (see
               EventStoreRefusingWrites). Act now, with a day in hand: grow the volume
               (spec.storage.size on the Cluster; the volume expands online where the storage class
-              allows it), shorten the data retention, or check that compression is acting (an
-              uncompressed row is about 600 bytes). Size it against stored rows, which calculated
-              metrics multiply by (1 + the formulas that apply to the profile).
+              allows it), shorten the data retention, or check that compression is acting. Size
+              base event data at 756 bytes per stored event
+              (https://docs.devicechain.io/deployment/tuning-an-instance#event-store-sizing); add
+              calculated metrics' extra measurement rows and WAL space separately.
         # A database volume at 95% full, held two minutes. The static backstop under the two
         # rate-based rules: it needs no history, so it also catches a volume that jumped (a
         # bulk import, a restore, an index build) and a Prometheus that was restarted and has

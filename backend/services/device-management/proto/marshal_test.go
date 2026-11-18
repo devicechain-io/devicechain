@@ -266,3 +266,27 @@ func TestAlarmEventDeviceNamesRoundTrip(t *testing.T) {
 	assert.Empty(t, got.DeviceName)
 	assert.Empty(t, got.DeviceTypeToken)
 }
+
+func TestAlarmClearReasonRoundTripAndWireAbsence(t *testing.T) {
+	for _, reason := range []string{"", model.AlarmClearReasonOriginatorDeleted} {
+		event := &model.AlarmStateChangeEvent{ClearReason: reason, RaisedTime: time.Now().UTC(), OccurredTime: time.Now().UTC()}
+		encoded, err := MarshalAlarmStateChangeEvent(event)
+		require.NoError(t, err)
+		decoded, err := UnmarshalAlarmStateChangeEvent(encoded)
+		require.NoError(t, err)
+		require.Equal(t, reason, decoded.ClearReason)
+		present := false
+		for len(encoded) > 0 {
+			num, typ, n := protowire.ConsumeTag(encoded)
+			require.Positive(t, n)
+			encoded = encoded[n:]
+			n = protowire.ConsumeFieldValue(num, typ, encoded)
+			require.Positive(t, n)
+			if num == 20 {
+				present = true
+			}
+			encoded = encoded[n:]
+		}
+		require.Equal(t, reason != "", present)
+	}
+}

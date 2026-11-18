@@ -58,6 +58,8 @@ var sanctionedSystemContexts = map[string][]string{
 	// The campaign tick and the campaign pruner each list the tenants that have campaigns (or
 	// open claims), then do each tenant's work under core.WithTenant.
 	"backend/services/command-delivery/model/api_campaign.go": {"Api.TickCampaigns", "Api.PruneCampaignHistory"},
+	// The share sweep lists only tenant IDs, then repairs each tenant under WithTenant.
+	"backend/services/dashboard-management/processor/share_sweep.go": {"ShareSweep.sweep"},
 	// The retirement pass lists gate tenants across the instance, then scopes each bounded cancel.
 	"backend/services/command-delivery/processor/HoldReconciler.go":     {"CommandDeliveryProcessor.readHeldPage", "CommandDeliveryProcessor.retireCoveredCommands"},
 	"backend/services/command-delivery/processor/StrandedReconciler.go": {"CommandDeliveryProcessor.reconcileStrandedPage"},
@@ -65,6 +67,10 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/ownership_outbox.go":      {"Api.DrainOwnershipFacts"},
 	// The entity-deletion drain lists the tenants that have queued deletion facts (no row is read), then publishes and deletes each tenant's rows under core.WithTenant.
 	"backend/services/device-management/model/deletion_outbox.go": {"Api.DrainEntityDeletions"},
+	// The create-enrollment marker healer reads only (tenant, group, version) keys of registered group versions across tenants (no row content), then judges and rebuilds each one under that row's own core.WithTenant.
+	"backend/services/device-management/model/api_group_enroll_marker.go": {"CreateEnrollMarkerHealer.Pass"},
+	// The startup enrollment reconcile lists the tenants that have groups, facet refs or rule pins (no row is read), then repairs each tenant's groups under core.WithTenant.
+	"backend/services/device-management/model/api_group_enroll_reconcile.go": {"Api.reconcileMembershipEnrollment"},
 	// The attribute-repair drain lists the tenants that have queued repairs (no row is read), then repairs each tenant's rows under core.WithTenant.
 	"backend/services/device-management/model/api_attribute_repairs.go": {"Api.DrainAttributeRepairs"},
 	// The agent-effect relay lists the tenants that have queued effects, then drains each tenant's rows under core.WithTenant.

@@ -147,11 +147,12 @@ const (
 const defaultPassJitter = 0.10
 
 // PeriodicTaskMetrics are the operator signals for a maintenance pass. Nil-safe, like
-// ProcessorMetrics: a task built without a Microservice records nothing and behaves the same.
+// ProcessorMetrics, for callers that record passes directly. PeriodicTask requires metrics.
 type PeriodicTaskMetrics struct {
 	passes      *prometheus.CounterVec
 	duration    prometheus.Histogram
 	lastSuccess prometheus.Gauge
+	interval    prometheus.Gauge
 
 	// failLog rate-limits the failure log line so a sustained outage logs once, not once a pass.
 	failLog failStreak
@@ -205,7 +206,7 @@ func (f *failStreak) recovered() (was bool, suppressed int) {
 	return was, suppressed
 }
 
-// WithOwnFailureLog returns metrics that file onto the same three series as m but keep their
+// WithOwnFailureLog returns metrics that file onto the same four signals as m but keep their
 // own failure-log streak. Nil-safe: nil gives nil.
 //
 // 🔴 THE STREAK BELONGS TO THE VALUE, NOT TO THE SERIES, so one value shared by several
@@ -217,10 +218,10 @@ func (m *PeriodicTaskMetrics) WithOwnFailureLog() *PeriodicTaskMetrics {
 	if m == nil {
 		return nil
 	}
-	return &PeriodicTaskMetrics{passes: m.passes, duration: m.duration, lastSuccess: m.lastSuccess}
+	return &PeriodicTaskMetrics{passes: m.passes, duration: m.duration, lastSuccess: m.lastSuccess, interval: m.interval}
 }
 
-// NewPeriodicTaskMetrics builds the three signals under this service's namespace.
+// NewPeriodicTaskMetrics builds the four signals under this service's namespace.
 func (ms *Microservice) NewPeriodicTaskMetrics(name string) *PeriodicTaskMetrics {
 	sub, name := ms.requireMetricName("NewPeriodicTaskMetrics", name)
 	auto := promauto.With(ms.MetricsRegisterer())
@@ -239,6 +240,11 @@ func (ms *Microservice) NewPeriodicTaskMetrics(name string) *PeriodicTaskMetrics
 			// "how long does this take" with "more than ten seconds" forever.
 			Buckets: []float64{.1, .5, 1, 5, 15, 60, 300, 900, 3600},
 		}),
+		interval: auto.NewGauge(prometheus.GaugeOpts{
+			Namespace: METRICS_NAMESPACE, Subsystem: sub,
+			Name: name + "_pass_interval_seconds",
+			Help: "Declared gap between passes of the " + name + " task in seconds; NaN until started.",
+		}),
 		lastSuccess: auto.NewGauge(prometheus.GaugeOpts{
 			Namespace: METRICS_NAMESPACE, Subsystem: sub,
 			Name: name + "_last_success_timestamp_seconds",
@@ -254,6 +260,7 @@ func (ms *Microservice) NewPeriodicTaskMetrics(name string) *PeriodicTaskMetrics
 	// give operators. NaN propagates through the subtraction and compares false, so the rule
 	// stays silent until there is something true to say.
 	m.lastSuccess.Set(math.NaN())
+	m.interval.Set(math.NaN())
 	// 🔑 PRE-CREATED AT ZERO: a CounterVec exports no series until a child exists, so without
 	// this _passes_total is absent from the registry (and from a scrape) until the first pass
 	// lands. rate() over an absent series is empty rather than zero, and a wiring test that asks
@@ -262,6 +269,14 @@ func (ms *Microservice) NewPeriodicTaskMetrics(name string) *PeriodicTaskMetrics
 		m.passes.WithLabelValues(outcome)
 	}
 	return m
+}
+
+// SetInterval declares the gap between passes. NaN until called. Nil-safe.
+func (m *PeriodicTaskMetrics) SetInterval(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.interval.Set(d.Seconds())
 }
 
 // record files one pass. Nil-safe.
@@ -318,15 +333,11 @@ func WithDetachedContext() PeriodicTaskOption {
 	return func(t *PeriodicTask) { t.detached = true }
 }
 
-// WithPassMetrics attaches the operator signals. Omitted, the task records nothing.
-func WithPassMetrics(m *PeriodicTaskMetrics) PeriodicTaskOption {
-	return func(t *PeriodicTask) { t.metrics = m }
-}
-
 // NewPeriodicTask builds a task that calls run every interval. name is used for the lifecycle
 // component name and in log lines; the metric names come from PeriodicTaskMetrics.
+// It panics if interval is non-positive or metrics is nil.
 func NewPeriodicTask(area, name string, interval time.Duration, run func(context.Context) error,
-	callbacks LifecycleCallbacks, opts ...PeriodicTaskOption) *PeriodicTask {
+	callbacks LifecycleCallbacks, metrics *PeriodicTaskMetrics, opts ...PeriodicTaskOption) *PeriodicTask {
 	// 🔴 A NON-POSITIVE INTERVAL PANICS, AND THAT IS A PROPERTY BEING PRESERVED RATHER THAN
 	// ADDED. Every adopter built time.NewTicker(interval), which panics on a non-positive
 	// duration — a loud refusal at start. This type schedules with a Timer instead, and
@@ -338,7 +349,10 @@ func NewPeriodicTask(area, name string, interval time.Duration, run func(context
 		panic(fmt.Sprintf("core: periodic task %q needs a positive interval, got %s — to disable "+
 			"a task, do not construct it", name, interval))
 	}
-	t := &PeriodicTask{name: name, interval: interval, run: run, jitter: defaultPassJitter}
+	if metrics == nil {
+		panic(fmt.Sprintf("core: periodic task %q needs pass metrics", name))
+	}
+	t := &PeriodicTask{name: name, interval: interval, run: run, jitter: defaultPassJitter, metrics: metrics}
 	for _, opt := range opts {
 		opt(t)
 	}
@@ -360,6 +374,7 @@ func (t *PeriodicTask) ExecuteInitialize(ctx context.Context) error {
 func (t *PeriodicTask) Start(ctx context.Context) error { return t.lifecycle.Start(ctx) }
 
 func (t *PeriodicTask) ExecuteStart(context.Context) error {
+	t.metrics.SetInterval(t.interval)
 	t.wg.Add(1)
 	go t.loop()
 	return nil
@@ -422,7 +437,7 @@ func (t *PeriodicTask) once() {
 
 // RecordPass classifies one pass and files it — the counter, the duration, the last-success
 // stamp, and the log line that matches the outcome. Nil-safe: a nil *PeriodicTaskMetrics still
-// logs, because the log line is not a metric and a task built without metrics is still running.
+// logs, because the log line is not a metric and direct callers may have no metrics.
 //
 // 🔴 IT IS EXPORTED FOR THE LOOPS THAT CANNOT ADOPT PeriodicTask, AND THAT IS THE WHOLE
 // REASON IT IS A METHOD RATHER THAN THREE CALLS. Eight of the thirteen maintenance loops in

@@ -31,8 +31,8 @@ paso de descarga están escritos para una shell bash; en Windows, ejecútalos en
 segundos y no diez minutos.
 
 - **OpenTofu 1.10 o posterior.** La comprobación previa verifica que `tofu` (o `terraform`) está
-  instalado, pero no su versión, y una versión anterior falla a mitad de `dcctl install`, al cargar
-  la configuración de infraestructura. `tofu version` muestra la tuya.
+  instalado y rechaza una versión anterior a la 1.10, así que un binario antiguo detiene la
+  ejecución antes de que se cree nada. `tofu version` muestra la tuya.
 - **Espacio para el clúster.** La comprobación previa avisa cuando Docker tiene menos de 4 CPU o
   menos de 8 GiB de memoria, y necesita 40 GiB de disco libre para las imágenes y los volúmenes de
   base de datos. En Docker Desktop, ajústalo en **Settings → Resources**. El paso 1 instala con
@@ -113,6 +113,20 @@ solo los servicios que procesan eventos piden unas 4 CPU, y un pod que no cabe s
 hasta que la instalación agota su tiempo. En una máquina con recursos de sobra, omítelo para tener
 monitorización y copias de seguridad. La elección es del clúster y no puede cambiarse mientras se
 ejecute una instancia en él. Consulta [`--compact`](../deployment/bootstrap.md#--compact).
+
+:::tip Conservar las copias de seguridad en un portátil
+Si el portátil tiene sitio para un almacén de copias de seguridad de 20Gi, instala con
+`--no-tls=false` para conservar cert-manager, y con él las copias de seguridad de la base de datos,
+en un clúster compacto:
+
+```bash
+dcctl install local --compact --no-tls=false
+```
+
+El comando de bootstrap no cambia: su `--no-tls` sirve solo esta instancia por HTTP sin cifrar.
+La custodia de la clave raíz no depende de esta elección. La receta de arriba ya la conserva, salvo
+que pases `--no-escrow` o `--dev`.
+:::
 
 :::note En un script o un trabajo de CI
 `dcctl bootstrap` pide una frase de contraseña para sellar el artefacto de custodia de la clave raíz. Sin un terminal donde preguntarla se detiene con `no escrow passphrase and no terminal to ask at`. Facilítala sin interacción, con un archivo o con una variable de entorno:
@@ -462,8 +476,7 @@ curl -s -X POST http://localhost/api/command-delivery/graphql \
   `dcctl sim run building`: doce termostatos cuya temperatura sube por encima de 30 y vuelve a bajar,
   lo que genera y resuelve alarmas `bp-over-temp` en **Monitor → Alarms** del inquilino
   `sim-building`. Inicia sesión como `building@sim.devicechain.local`, con el `simPassword` de
-  `~/.devicechain/sims/building.json`, para verlas. Interrumpe el primer `dcctl sim run` (Ctrl+C)
-  antes de iniciar el segundo, porque ambos usan el mismo puerto de control.
+  `~/.devicechain/sims/building.json`, para verlas.
 
 - **[Recorrido por las funciones](./feature-tour.md)**: sigue desde aquí hasta un panel, una regla
   que genera una alarma y envía un comando, la respuesta del dispositivo y un usuario cliente que

@@ -8,6 +8,7 @@
 // keeps the one irreversible-looking step (freezing the group and dispatching the first
 // devices) behind a button the operator presses while looking at what it will do.
 
+import { listAll } from '@/lib/api/list-all';
 import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isValidToken } from '@devicechain/client';
@@ -24,7 +25,6 @@ import '@/i18n/lazy/updates';
 
 // The service's bounds, restated so a value it would refuse is refused before the round trip.
 export const MAX_IN_FLIGHT = 1000;
-const optionPageSize = 200;
 
 function parseCount(raw: string): number | null {
   if (!/^\d+$/.test(raw.trim())) return null;
@@ -46,22 +46,22 @@ export function NewRolloutForm({ onCreated }: { onCreated: (token: string) => vo
   const inFlight = useRef(false);
 
   const artifacts = useQuery(
-    () => listArtifacts({ pageNumber: 1, pageSize: optionPageSize, state: 'AVAILABLE' }).then((r) => r.results),
+    () => listAll(page => listArtifacts({ ...page, state: 'AVAILABLE' })).then((r) => r.results),
     [],
   );
   const groups = useQuery(() => listDeviceGroupTargets(), []);
 
   const artifactOptions: ComboboxOption[] = useMemo(
     () =>
-      (artifacts.data ?? []).map((a) => ({
+      (artifacts.current ?? []).map((a) => ({
         value: a.token,
         label: `${a.name} ${a.version} (${a.component})`,
       })),
-    [artifacts.data],
+    [artifacts.current],
   );
   const groupOptions: ComboboxOption[] = useMemo(
-    () => (groups.data ?? []).map((g) => ({ value: g.token, label: g.name ? `${g.name} (${g.token})` : g.token })),
-    [groups.data],
+    () => (groups.current ?? []).map((g) => ({ value: g.token, label: g.name ? `${g.name} (${g.token})` : g.token })),
+    [groups.current],
   );
 
   const cap = parseCount(maxInFlight);
@@ -69,7 +69,7 @@ export function NewRolloutForm({ onCreated }: { onCreated: (token: string) => vo
   const thresholdValue = threshold.trim() === '' ? undefined : parseCount(threshold);
   const thresholdOk = thresholdValue === undefined || (thresholdValue != null && thresholdValue >= 1);
   const tokenOk = isValidToken(token);
-  const ready = tokenOk && !!artifactToken && !!groupToken && capOk && thresholdOk;
+  const ready = !!artifacts.current && !!groups.current && tokenOk && !!artifactToken && !!groupToken && capOk && thresholdOk;
 
   const submit = async () => {
     if (!ready || inFlight.current) return;
@@ -112,7 +112,7 @@ export function NewRolloutForm({ onCreated }: { onCreated: (token: string) => vo
           placeholder={t('rolloutArtifactPlaceholder')}
           ariaLabel={t('rolloutFieldArtifact')}
         />
-        {artifacts.error && !artifacts.data && <p className="mt-1 text-sm text-destructive">{artifacts.error}</p>}
+        {artifacts.error && <p className="mt-1 text-sm text-destructive">{artifacts.error}</p>}
       </FormField>
       <FormField label={t('rolloutFieldGroup')} htmlFor="rollout-group" description={t('rolloutFieldGroupHelp')}>
         <Combobox
@@ -123,7 +123,7 @@ export function NewRolloutForm({ onCreated }: { onCreated: (token: string) => vo
           placeholder={t('rolloutGroupPlaceholder')}
           ariaLabel={t('rolloutFieldGroup')}
         />
-        {groups.error && !groups.data && <p className="mt-1 text-sm text-destructive">{groups.error}</p>}
+        {groups.error && <p role="alert" className="mt-1 text-sm text-destructive">{groups.error}</p>}
       </FormField>
       <FormField label={t('rolloutFieldMaxInFlight')} htmlFor="rollout-cap" description={t('rolloutFieldMaxInFlightHelp')}>
         <Input id="rollout-cap" inputMode="numeric" value={maxInFlight} onChange={(e) => setMaxInFlight(e.target.value)} />
