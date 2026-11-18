@@ -39,11 +39,14 @@ func TestAnOwnershipFactOnTheBrokerRestampsTheLiveView(t *testing.T) {
 	savedMs, savedCfg, savedApi := Microservice, Configuration, Api
 	savedState, savedSweep := StateMetrics, InactivitySweepMetrics
 	savedProc, savedOwners, savedNats, savedSvc := StateProcessors, OwnershipProcessor, NatsManager, Svc
+	savedDeletion, savedOrphan := DeletionProcessor, OrphanTask
+	OrphanTask = nil
 	savedWriter := InboundEventsWriter
 	t.Cleanup(func() {
 		Microservice, Configuration, Api = savedMs, savedCfg, savedApi
 		StateMetrics, InactivitySweepMetrics = savedState, savedSweep
 		StateProcessors, OwnershipProcessor, NatsManager, Svc = savedProc, savedOwners, savedNats, savedSvc
+		DeletionProcessor, OrphanTask = savedDeletion, savedOrphan
 		InboundEventsWriter = savedWriter
 	})
 

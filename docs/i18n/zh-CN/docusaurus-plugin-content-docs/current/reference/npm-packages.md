@@ -58,6 +58,10 @@ npm 7 及更高版本会自动安装这些依赖，因此只需运行上面的�
 [仪表板 README](https://github.com/devicechain-io/devicechain/tree/main/frontend/packages/dashboards)。
 [.NET 和 Unity API 指南](./csharp-sdk.md)单独介绍这些平台。
 
+`@devicechain/client` 的 `isStaleWrite(err)` 通过 `extensions.code: STALE_WRITE`
+识别乐观并发控制拒绝；对于旧版服务器，回退到匹配短语 `modified by another writer`。
+保留尚未保存的草稿，并提示用户重新加载后再重试。这种拒绝与唯一性冲突 `CONFLICT` 不同。
+
 ## 版本和 dist-tag {#versions-and-dist-tags}
 
 五个包随平台发布一起发布，使用同一个版本号。组件的 `0.14.0` 版本对应 SDK 的 `0.14.0` 版本，

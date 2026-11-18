@@ -86,6 +86,10 @@ func (o *applyOptions) Apply(ctx context.Context, data []byte) error {
 }
 
 func Decode(data []byte) ([]unstructured.Unstructured, error) {
+	return decode(data, ConvertSingleObjectToUnstructured)
+}
+
+func decode(data []byte, convert func(runtime.Object) (unstructured.Unstructured, error)) ([]unstructured.Unstructured, error) {
 	var err error
 	var unstructList []unstructured.Unstructured
 	i := 1
@@ -100,22 +104,20 @@ func Decode(data []byte) ([]unstructured.Unstructured, error) {
 
 		obj, gvk, err := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme).Decode(reqObj.Raw, nil, nil)
 		if err != nil {
-			_ = fmt.Errorf("serialize the section:[%d] content error, %v", i, err)
-			break
+			return unstructList, fmt.Errorf("serialize the section:[%d] content error, %w", i, err)
 		}
 		klog.V(5).Infof("The section:[%d] GroupVersionKind: %#v  object: %#v", i, gvk, obj)
 
-		unstruct, err := ConvertSingleObjectToUnstructured(obj)
+		unstruct, err := convert(obj)
 		if err != nil {
-			_ = fmt.Errorf("serialize the section:[%d] content error, %v", i, err)
-			break
+			return unstructList, fmt.Errorf("convert the section:[%d] content error, %w", i, err)
 		}
 		unstructList = append(unstructList, unstruct)
 		i++
 	}
 
 	if err != io.EOF {
-		return unstructList, fmt.Errorf("parsing the section:[%d] content error, %v", i, err)
+		return unstructList, fmt.Errorf("parsing the section:[%d] content error, %w", i, err)
 	}
 
 	return unstructList, nil

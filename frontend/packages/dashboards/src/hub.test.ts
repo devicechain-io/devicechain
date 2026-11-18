@@ -109,7 +109,7 @@ describe('DashboardHub', () => {
     expect(hub.openStreamCount).toBe(0);
   });
 
-  it('expands an anchor selector to one stream per member device', async () => {
+  it('expands an anchor selector to one shared member operation', async () => {
     const hub = new DashboardHub({ resolver: newResolver() });
     const sink = { next: vi.fn() };
 
@@ -124,9 +124,8 @@ describe('DashboardHub', () => {
     await flush();
 
     expect(hub.openStreamCount).toBe(2); // members 'therm-004' and 'therm-005'
-    h.streams
-      .find((s) => s.deviceToken === 'therm-005')!
-      .sink.next({ measurementStream: sampleFor('therm-005', 'temperature', 30) });
+    expect(h.streams).toHaveLength(1);
+    h.streams[0].sink.next({ measurementStream: sampleFor('therm-005', 'temperature', 30) });
     expect(sink.next).toHaveBeenCalledWith(expect.objectContaining({ deviceToken: 'therm-005', value: 30 }));
   });
 
