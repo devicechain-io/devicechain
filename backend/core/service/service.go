@@ -91,6 +91,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
@@ -98,6 +99,7 @@ import (
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
+	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -174,6 +176,12 @@ type GraphQLSpec struct {
 // Spec describes the managers a service wants and the one place it needs to do its own
 // wiring in the middle of building them.
 type Spec struct {
+	// GovernanceRefreshes declares that this service wires governance resolvers (including
+	// those hidden inside gates). StopRefreshes joins their process-global refreshes; the
+	// service calls it as its Stopper.Postprocess. Leave false for services without those resolvers. The group is
+	// process-global and terminal; tests stopping real Specs must use a child process.
+	GovernanceRefreshes bool
+
 	// Rdb, Nats and GraphQL are each optional: a nil one means the service does not have
 	// that manager, and nothing is built, driven or reported for it.
 	Rdb     *RdbSpec
@@ -239,6 +247,9 @@ type Service struct {
 	// otherwise. It is not in Managers because nothing outside this package drives it.
 	probes *probeServer
 
+	safetyGatesOnce sync.Once
+	safetyGates     *governance.SafetyGates
+
 	// spec is nil for a Service built by FromManagers. It is a pointer so that case is
 	// distinguishable from a Spec that asked for nothing: the zero Spec still gets a probe
 	// surface, and a FromManagers Service gets nothing it did not hand over.
@@ -258,6 +269,16 @@ func New(ms *core.Microservice, spec Spec) *Service {
 	return svc
 }
 
+// SafetyGates returns the service's shared safety-gate metrics, registering only once.
+// A nil service or a fixture without a Microservice runs unmeasured.
+func (s *Service) SafetyGates() *governance.SafetyGates {
+	if s == nil || s.Microservice == nil {
+		return nil
+	}
+	s.safetyGatesOnce.Do(func() { s.safetyGates = governance.NewSafetyGates(s.Microservice) })
+	return s.safetyGates
+}
+
 // FromManagers wraps managers somebody else built, so they can be driven through the same
 // one sequence without this package having constructed them.
 //
@@ -270,8 +291,8 @@ func New(ms *core.Microservice, spec Spec) *Service {
 // A Service built this way has nothing to construct, so Initialize on it does nothing and
 // succeeds — and that includes the probe surface, which a Spec-built Service always gets:
 // the managers handed over may already have registered their routes, and a second
-// RegisterProbes on the same mux panics. Start, Stop and Terminate behave exactly as they
-// do for a Spec-built one.
+// RegisterProbes on the same mux panics. Manager lifecycle order is the same as for a
+// Spec-built service, but Stop never closes process-global governance refreshes.
 func FromManagers(ms *core.Microservice, m Managers) *Service {
 	return &Service{Microservice: ms, Managers: m}
 }
@@ -381,6 +402,18 @@ func (s *Service) Stop(ctx context.Context) error {
 	return s.reverse(ctx, "stopping", func(c core.LifecycleComponent) func(context.Context) error {
 		return c.Stop
 	})
+}
+
+// StopRefreshes joins the process-global governance refreshes when the Spec declares it
+// owns them; otherwise (no Spec, a FromManagers service, or a nil service) it does nothing.
+// A service calls it as its Stopper.Postprocess, AFTER the microservice's own stop: that is
+// where each service stopped its refreshes before this moved into core, and keeping the
+// position keeps a refresh-stop timeout from skipping the microservice's stop work.
+func (s *Service) StopRefreshes(ctx context.Context) error {
+	if s == nil || s.spec == nil || !s.spec.GovernanceRefreshes {
+		return nil
+	}
+	return governance.StopRefreshes(ctx)
 }
 
 // Terminate terminates the managers in the reverse order.

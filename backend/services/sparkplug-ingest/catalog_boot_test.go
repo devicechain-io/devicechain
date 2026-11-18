@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/service"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
 // TestStartsUnderItsDeclaredCatalog runs the service's REAL initialize and start callbacks
@@ -30,6 +31,10 @@ import (
 // (afterMicroserviceStarted -> startLeadership -> runLeadership -> Acquire, which opens the
 // lease bucket). The source's broker is unreachable, which degrades that source only.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
+	// The real Spec owns terminal, process-global governance refresh shutdown.
+	if dctest.RunInSubprocess(t) {
+		return
+	}
 	instance := fmt.Sprintf("sparkplug-ingest-catalog-%d", identitySeq.Add(1))
 	// The broker holds the area's login to exactly the permissions natsauth generates for it, so
 	// this is also the area's permission test: the real wiring runs against it and the broker's

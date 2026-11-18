@@ -777,6 +777,7 @@ func (r *Registry) StartTenantSweep(ctx context.Context, every time.Duration) bo
 // RunTenantSweep calls SweepDeletedTenants every interval until ctx ends or the registry is
 // stopped. The service runs it for each leadership term, beside the registry it sweeps.
 func (r *Registry) RunTenantSweep(ctx context.Context, every time.Duration) {
+	r.metrics.TenantSweep.SetInterval(every)
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {

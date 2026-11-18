@@ -17,6 +17,7 @@ import (
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -76,7 +77,7 @@ func TestBuildEgressLimiterCountsUnresolvedAdmissions(t *testing.T) {
 	unresolved := governance.NewUnresolvedAdmissions(ms, governance.Outbound)
 
 	limiter := buildEgressLimiter(&config.EventProcessingConfiguration{OutboundCallsPerSecond: 1, OutboundBurst: 1000},
-		infra, unresolved)
+		svcclient.NewPeers(infra, ms.FunctionalArea), unresolved)
 
 	const series = "devicechain_eventprocessing_governance_unresolved_admissions_total"
 	require.Equal(t, float64(0), unreachableAdmissions(t, reg, series, "outbound"),

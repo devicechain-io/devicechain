@@ -21,6 +21,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
 // These tests drive the REACT reader main actually builds — wireReactDispatcher and
@@ -94,7 +95,7 @@ func (f *reactFixture) newManager(t *testing.T) *messaging.NatsManager {
 func (f *reactFixture) wire(t *testing.T, nmgr *messaging.NatsManager, gate *processor.TermGate) *processor.ReactDispatcher {
 	t.Helper()
 	DetectTermGate = gate
-	require.NoError(t, wireReactDispatcher(nmgr))
+	require.NoError(t, wireReactDispatcher(nmgr, svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)))
 	require.NotNil(t, ReactDispatcher)
 	return ReactDispatcher
 }
