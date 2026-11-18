@@ -279,7 +279,11 @@ func (r *SchemaResolver) AlarmStream(ctx context.Context, args alarmStreamArgs) 
 	if filter.originatorId != nil {
 		keys = []string{alarmOriginatorKey(*args.OriginatorType, *filter.originatorId)}
 	}
-	live, err := alarmHub(r.GetNats(ctx)).Subscribe(ctx, tenant, keys)
+	nmgr, err := r.GetNats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	live, err := alarmHub(nmgr).Subscribe(ctx, tenant, keys)
 	if err != nil {
 		return nil, err
 	}
