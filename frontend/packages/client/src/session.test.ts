@@ -3,7 +3,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
-import { createSessionTokens, type TokenPair } from './session';
+import {
+  createSessionTokens,
+  type ManagedSessionTokens,
+  type SessionTokens,
+  type SessionTokensOptions,
+  type TokenPair,
+} from './session';
 import { GraphQLRequestError } from './transport';
 
 const NOW = Date.UTC(2026, 9, 14, 12, 0, 0);
@@ -19,9 +25,14 @@ function pair(accessIn: number, refreshIn = 3600): TokenPair {
 }
 
 // A host that keeps the pair in a variable, like both real hosts keep it in a ref.
-function host(initial: TokenPair | null, refresh: (rt: string) => Promise<TokenPair>) {
+function host(
+  initial: TokenPair | null,
+  refresh: (rt: string) => Promise<TokenPair>,
+  extra: Pick<SessionTokensOptions, 'transientRefreshErrors'> = {},
+) {
   const state = { pair: initial, ended: [] as unknown[] };
   const tokens = createSessionTokens({
+    ...extra,
     read: () => state.pair,
     apply: (next) => {
       state.pair = next;
@@ -261,14 +272,42 @@ describe('transient vs definitive refresh failures', () => {
     expect(state.pair).toBe(held);
   });
 
+  // 🔴 The v1.6 contract of a published export: getAccessToken RESOLVES null here, never
+  // rejects. A caller written against v1.6 checks for null; a rejection would reach it as an
+  // unhandled one. What changed since v1.6 is only that the session is no longer ended.
   it.each([
     ['no response', offline()],
     ['a 503', httpError(503)],
     ['a 429', httpError(429)],
-  ])('%s once the access token has expired fails the caller but keeps the session', async (_, err) => {
+  ])('%s once the access token has expired resolves null by default, and keeps the session', async (_, err) => {
     const next = pair(900);
     const refresh = vi.fn().mockRejectedValueOnce(err).mockResolvedValueOnce(next);
     const { state, tokens } = host(pair(-1), refresh);
+    const held = state.pair!;
+    await expect(tokens.getAccessToken()).resolves.toBeNull();
+    expect(state.ended).toEqual([]);
+    expect(state.pair).toBe(held);
+    // The refresh token is still good, so the next call refreshes with it.
+    expect(await tokens.getAccessToken()).toBe(next.accessToken);
+    expect(state.ended).toEqual([]);
+  });
+
+  it("an explicit 'null' is the default", async () => {
+    const { state, tokens } = host(pair(-1), vi.fn().mockRejectedValue(offline()), { transientRefreshErrors: 'null' });
+    await expect(tokens.getAccessToken()).resolves.toBeNull();
+    expect(state.ended).toEqual([]);
+  });
+
+  // The negative control for the default: the opt-in really does reject, from the same session
+  // state, so the null above is the mode's doing and not an accident of the fixture.
+  it.each([
+    ['no response', offline()],
+    ['a 503', httpError(503)],
+    ['a 429', httpError(429)],
+  ])("%s once the access token has expired, under 'throw', fails the caller but keeps the session", async (_, err) => {
+    const next = pair(900);
+    const refresh = vi.fn().mockRejectedValueOnce(err).mockResolvedValueOnce(next);
+    const { state, tokens } = host(pair(-1), refresh, { transientRefreshErrors: 'throw' });
     const held = state.pair!;
     // The caller cannot be given a valid token, so it gets the outage it hit, not a null that
     // would send its request unauthenticated.
@@ -280,17 +319,71 @@ describe('transient vs definitive refresh failures', () => {
     expect(state.ended).toEqual([]);
   });
 
-  it('a session failing only transiently ends when its refresh token lapses, and not before', async () => {
+  it.each([
+    ['by default', {}, 'null'],
+    ["under 'throw'", { transientRefreshErrors: 'throw' as const }, 'throw'],
+  ])('a session failing only transiently ends when its refresh token lapses, and not before (%s)', async (_, extra, mode) => {
     const refresh = vi.fn().mockRejectedValue(offline());
-    const { state, tokens } = host(pair(-1, 60), refresh);
-    await expect(tokens.getAccessToken()).rejects.toBeInstanceOf(GraphQLRequestError);
+    const { state, tokens } = host(pair(-1, 60), refresh, extra);
+    const failsTransiently = async () => {
+      if (mode === 'throw') await expect(tokens.getAccessToken()).rejects.toBeInstanceOf(GraphQLRequestError);
+      else await expect(tokens.getAccessToken()).resolves.toBeNull();
+    };
+    await failsTransiently();
     await vi.advanceTimersByTimeAsync(59_000);
-    await expect(tokens.getAccessToken()).rejects.toBeInstanceOf(GraphQLRequestError);
+    await failsTransiently();
     expect(state.ended).toEqual([]);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(await tokens.getAccessToken()).toBeNull();
     expect(state.ended).toEqual([undefined]);
     expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  // A refused refresh is the same in both modes: v1.6's null, and the session ends.
+  it.each([
+    ['by default', {}],
+    ["under 'throw'", { transientRefreshErrors: 'throw' as const }],
+  ])('a refused refresh of an expired token resolves null and ends the session (%s)', async (_, extra) => {
+    const err = refused('UNAUTHENTICATED');
+    const { state, tokens } = host(pair(-1), vi.fn().mockRejectedValue(err), extra);
+    await expect(tokens.getAccessToken()).resolves.toBeNull();
+    expect(state.ended).toEqual([err]);
+  });
+
+  // forceRefresh is new since v1.6 and rejects on a transient failure in both modes: a null from
+  // it tells setUnauthorizedHandler the session ended.
+  it('forceRefresh rejects on a transient failure even by default, and keeps the session', async () => {
+    const err = offline();
+    const { state, tokens } = host(pair(600), vi.fn().mockRejectedValue(err));
+    const held = state.pair!;
+    await expect(tokens.forceRefresh(held.accessToken)).rejects.toBe(err);
+    expect(state.ended).toEqual([]);
+    expect(state.pair).toBe(held);
+  });
+
+  // Type-level, held by typecheck: a SessionTokens a host built to the v1.6 shape (no
+  // forceRefresh) still type-checks, and what createSessionTokens returns has forceRefresh
+  // without `?.`, as a ManagedSessionTokens that is also a SessionTokens.
+  it('keeps the v1.6 SessionTokens shape constructible, and createSessionTokens managed', () => {
+    const v16: SessionTokens = { getAccessToken: async () => null, reset: () => {}, startAutoRefresh: () => () => {} };
+    expect(v16.forceRefresh).toBeUndefined();
+    const { tokens } = host(null, vi.fn());
+    const managed: ManagedSessionTokens = tokens;
+    const plain: SessionTokens = managed;
+    expect(typeof managed.forceRefresh).toBe('function');
+    expect(plain.forceRefresh).toBe(managed.forceRefresh);
+  });
+
+  it('refuses an unknown transientRefreshErrors mode instead of defaulting it', () => {
+    expect(() =>
+      createSessionTokens({
+        read: () => null,
+        apply: () => {},
+        refresh: vi.fn(),
+        onEnd: () => {},
+        transientRefreshErrors: 'reject' as never,
+      }),
+    ).toThrow(TypeError);
   });
 
   it.each([

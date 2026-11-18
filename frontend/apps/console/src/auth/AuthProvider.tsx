@@ -329,6 +329,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const pair = await apiRefresh(refreshToken);
           return { accessToken: pair.accessToken, refreshToken: pair.refreshToken };
         },
+        // An expired access token whose refresh failed transiently fails the request with the
+        // outage rather than sending it without a token; the 401 handler and the subscription
+        // reconnect both read that error as transient and keep the session.
+        transientRefreshErrors: 'throw',
         onEnd: (err) => {
           const code = err !== undefined ? serverErrorCode(err) : undefined;
           expireTenant(
