@@ -204,10 +204,10 @@ older than the device that now holds its token.
   old device is never applied to the new one.
 - Before re-sending a notification for an alarm, the platform checks that the alarm still exists.
   If that check fails, the notification is sent anyway, so an outage cannot silence a real alarm.
-  See [Alarms of a deleted device](/guides/notification-channels#deleted-originator).
+  See [Alarms of a deleted device](../guides/notification-channels.md#deleted-originator).
 - During an upgrade, while old and new service versions run side by side, a delete handled by an
   old version follows the old behaviour until that version is replaced. See
-  [Releases and upgrades](/deployment/releases-and-upgrades#v170-upgrade).
+  [Releases and upgrades](../deployment/releases-and-upgrades.md#v170-upgrade).
 
 ## The device page
 

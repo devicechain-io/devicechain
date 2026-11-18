@@ -223,11 +223,11 @@ si es anterior al dispositivo que ahora tiene su token.
 - Antes de volver a enviar una notificación de una alarma, la plataforma comprueba que la alarma
   sigue existiendo. Si esa comprobación falla, la notificación se envía igualmente, para que una
   caída no silencie una alarma real. Consulta
-  [Alarmas de un dispositivo eliminado](/guides/notification-channels#deleted-originator).
+  [Alarmas de un dispositivo eliminado](../guides/notification-channels.md#deleted-originator).
 - Durante una actualización, mientras conviven versiones antiguas y nuevas de los servicios, una
   eliminación que atiende una versión antigua sigue el comportamiento anterior hasta que esa
   versión se sustituye. Consulta
-  [Versiones y actualizaciones](/deployment/releases-and-upgrades#v170-upgrade).
+  [Versiones y actualizaciones](../deployment/releases-and-upgrades.md#v170-upgrade).
 
 ## La página del dispositivo
 

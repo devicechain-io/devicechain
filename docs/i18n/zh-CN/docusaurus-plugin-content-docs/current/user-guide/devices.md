@@ -126,8 +126,8 @@ DeviceChain 如何判断设备是否在线，参见[设备在线状态](/concept
 ### 限制 {#deleting-a-device-limits}
 
 - 平台在删除前接受但在删除后才处理的读数，可能会短暂恢复旧设备的实时状态。如果没有设备持有该令牌，定期检查会将其清除。如果已用该令牌创建了新设备，新设备的第一条读数会将其替换，旧设备的读数绝不会应用到新设备上。
-- 在再次发送告警通知之前，平台会检查该告警是否仍然存在。如果检查失败，仍会发送通知，以免故障导致真实告警被静默。请参阅[已删除设备的告警](/guides/notification-channels#deleted-originator)。
-- 在升级期间，新旧版本的服务并存时，由旧版本处理的删除操作仍按旧行为执行，直到该版本被替换。请参阅[发布与升级](/deployment/releases-and-upgrades#v170-upgrade)。
+- 在再次发送告警通知之前，平台会检查该告警是否仍然存在。如果检查失败，仍会发送通知，以免故障导致真实告警被静默。请参阅[已删除设备的告警](../guides/notification-channels.md#deleted-originator)。
+- 在升级期间，新旧版本的服务并存时，由旧版本处理的删除操作仍按旧行为执行，直到该版本被替换。请参阅[发布与升级](../deployment/releases-and-upgrades.md#v170-upgrade)。
 
 ## 设备页面 {#the-device-page}
 
