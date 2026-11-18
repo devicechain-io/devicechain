@@ -401,7 +401,7 @@ func (c *Client) putOnWire(ctx context.Context, target CommandTarget, ref *Metri
 	if rebirth {
 		prevPending = c.sessions.MarkCommandedRebirth(target.Group, target.Node)
 	}
-	if err := c.publishCommand(target, payload); err != nil {
+	if err := c.publishCommand(target, payload, c.breaker.Published); err != nil {
 		if errors.Is(err, errCommandNotConnected) {
 			if rebirth {
 				c.sessions.RestoreRebirthPending(target.Group, target.Node, prevPending)
@@ -411,10 +411,8 @@ func (c *Client) putOnWire(ctx context.Context, target CommandTarget, ref *Metri
 		}
 		// Anything else leaves the outcome unknown: the bytes may have reached the broker. It
 		// counts as a publish for the breaker's watch, and a half-open probe slot stays taken.
-		c.breaker.Published()
 		return wire, &PublishIndeterminateError{Err: err}
 	}
-	c.breaker.Published()
 	return wire, nil
 }
 

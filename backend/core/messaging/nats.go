@@ -2954,7 +2954,15 @@ func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffi
 	// A sharded suffix publishes a tenant's messages on its group's subject, so the live
 	// feed listens there too. An unplaced tenant is refused rather than handed a feed on
 	// group 0's subject that would sit silent.
-	liveSuffix, placeErr := nmgr.tenantSuffix(tenant, suffix)
+	//
+	// A shared live hub resolves the placement once per Subscribe and pins it on ctx,
+	// so the feed listens on exactly the group the hub compared against (see
+	// pinnedLiveSuffix); without a pin the placement is resolved here.
+	liveSuffix, pinned := pinnedLiveSuffix(ctx, tenant, suffix)
+	var placeErr error
+	if !pinned {
+		liveSuffix, placeErr = nmgr.tenantSuffix(tenant, suffix)
+	}
 	if placeErr != nil {
 		return nil, placeErr
 	}

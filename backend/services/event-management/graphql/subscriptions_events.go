@@ -113,7 +113,11 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 	if args.DeviceToken != nil {
 		keys = []string{*args.DeviceToken}
 	}
-	live, err := measurementHub(r.GetNats(ctx)).Subscribe(ctx, tenant, keys)
+	nmgr, err := r.GetNats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	live, err := measurementHub(nmgr).Subscribe(ctx, tenant, keys)
 	if err != nil {
 		return nil, err
 	}

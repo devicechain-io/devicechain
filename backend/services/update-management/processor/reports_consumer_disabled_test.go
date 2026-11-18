@@ -41,7 +41,7 @@ func TestADisabledDevicesUpdateReportsAreCountedAndSettled(t *testing.T) {
 		"a disabled device's download request was counted as a grant error")
 	require.Empty(t, api.published, "a disabled device was given a grant")
 	require.Zero(t, api.answers, "a disabled device was answered a sync")
-	require.EqualValues(t, n, handled(t, reg, core.ResultDropped))
+	require.EqualValues(t, n, handled(t, reg, core.ResultUnwanted))
 	require.Zero(t, handled(t, reg, core.ResultRetry))
 	require.Zero(t, handled(t, reg, core.ResultFailed))
 }

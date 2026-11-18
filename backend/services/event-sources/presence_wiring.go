@@ -487,7 +487,10 @@ func launchDemoteLoop(ctx context.Context, rt *presenceRuntime, runner presence.
 		// Closes rt.stopped so stopBrokerPresence's five-second wait does not fire on every
 		// disabled instance — the runtime is shaped the same whether the tap ran or not.
 		defer close(rt.stopped)
-		presence.RunDemoteLoop(ctx, runner, interval, delay, time.Now, PresenceDemoteTaskMetrics)
+		// A recheck-only runner has no configured drain to complete. Keep recording
+		// its skips, but leave the drain interval undeclared.
+		r, ok := runner.(*recheckBroker)
+		presence.RunDemoteLoop(ctx, runner, interval, delay, time.Now, PresenceDemoteTaskMetrics, !ok || r.drain != nil)
 	}()
 }
 
