@@ -85,6 +85,13 @@ export type EventSearchCriteria = {
    * type filter.
    */
   eventTypes?: Array<number> | null | undefined;
+  /**
+   * Omitted or true: totalRecords is the exact count of matching events (the default).
+   * False: no count is run, totalRecords is null, pageStart/pageEnd describe the rows
+   * returned, and hasMore says whether another page follows. Use false for large histories.
+   * An empty count-free page has pageEnd = pageStart - 1 and hasMore false.
+   */
+  includeTotal?: boolean | null | undefined;
   /** Page to return, starting at 1; values below 1 are treated as 1. */
   pageNumber: number;
   /** Results per page. Values below 1 become 100; values above 1000 are capped at 1000. */
