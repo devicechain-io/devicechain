@@ -27,7 +27,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -88,7 +87,10 @@ var (
 	// disable or enable is felt at once and an enable re-offers its assignment.
 	RosterReader   messaging.MessageReader
 	RosterConsumer *processor.RosterConsumer
-	Sweeper        *processor.DeadlineSweeper
+
+	DeletionReader   messaging.MessageReader
+	DeletionConsumer *processor.DeletionConsumer
+	Sweeper          *processor.DeadlineSweeper
 
 	// RolloutStats and Rollouts are the group-rollout driver and its instruments.
 	RolloutStats *processor.RolloutMetrics
@@ -112,7 +114,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -145,6 +147,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Microservice.StartInstanceAuthGate(ctx)
 
 	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
 			Migrations: schema.Migrations,
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
@@ -293,18 +296,17 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 	}
 
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	api.TenantDeleted = governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret,
-		"update-management", governance.NewSafetyGates(Microservice))
+	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
+	api.TenantDeleted = governance.NewTenantLifecycleGateFor(peers, Svc.SafetyGates())
+	url, peerErr := peers.URL(infra.DeviceManagement.Endpoint())
 
 	switch {
-	case infra.ServiceAuth.Secret == "":
+	case peerErr == (svcclient.MissingError{Key: "infrastructure.serviceAuth.secret"}):
 		log.Warn().Msg("Service secret not configured - createArtifact, assignArtifact and startUpdateRollout will be REFUSED, and every device-facing update message (reports, syncs, download requests, downloads) will be REFUSED and retried: profiles, devices and groups cannot be looked up in device-management.")
-	case infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0:
+	case peerErr != nil:
 		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) - createArtifact, assignArtifact and startUpdateRollout will be REFUSED, and every device-facing update message (reports, syncs, download requests, downloads) will be REFUSED and retried: profiles, devices and groups cannot be looked up.")
 	default:
-		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "update-management",
-			[]string{string(auth.DeviceRead)})
-		url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+		client := peers.Client(auth.DeviceRead)
 		checker := profilecheck.New(client, url)
 		api.Profiles = checker
 		api.Devices = checker
@@ -374,7 +376,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	RosterReader = rosterReader
 	RosterConsumer = processor.NewRosterConsumer(Microservice, rosterReader, core.NewNoOpLifecycleCallbacks(), Api, dead)
 	RosterConsumer.Hold = newStoreHold("device-roster")
-	return RosterConsumer.Initialize(context.Background())
+	if err := RosterConsumer.Initialize(context.Background()); err != nil {
+		return err
+	}
+	deletionReader, err := nmgr.NewReader(streams.EntityDeleted)
+	if err != nil {
+		return err
+	}
+	DeletionReader = deletionReader
+	DeletionConsumer = processor.NewDeletionConsumer(Microservice, deletionReader, core.NewNoOpLifecycleCallbacks(), Api, dead)
+	DeletionConsumer.Hold = newStoreHold("entity-deleted")
+	return DeletionConsumer.Initialize(context.Background())
 }
 
 // newDeadLetterSink builds this service sink over the platform dead-letter stream, stamped by
@@ -411,6 +423,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := RosterConsumer.Start(ctx); err != nil {
 		return err
 	}
+	if err := DeletionConsumer.Start(ctx); err != nil {
+		return err
+	}
 	if err := startSweeper(); err != nil {
 		return err
 	}
@@ -430,6 +445,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 			return err
 		}
 	}
+	if DeletionConsumer != nil {
+		if err := DeletionConsumer.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	if RosterConsumer != nil {
 		if err := RosterConsumer.Stop(ctx); err != nil {
 			return err
@@ -445,6 +465,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated, in the same order as the stop.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if DeletionConsumer != nil {
+		if err := DeletionConsumer.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	if RosterConsumer != nil {
 		if err := RosterConsumer.Terminate(ctx); err != nil {
 			return err

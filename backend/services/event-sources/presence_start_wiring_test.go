@@ -10,6 +10,7 @@ import (
 
 	esconfig "github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,7 +55,7 @@ func startPresence(t *testing.T, b *authBroker) (*core.Microservice, *presenceRu
 	GatewaySourceId = "mqtt1"
 	brokerPresence = nil
 
-	startBrokerPresence(context.Background())
+	startBrokerPresence(context.Background(), svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources"))
 	rt := brokerPresence
 	require.NotNil(t, rt, "the tap must be running against a broker that accepts the credential")
 	require.NotNil(t, rt.conn)

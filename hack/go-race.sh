@@ -509,6 +509,70 @@ PREMISE
   fi
   echo "  ok: passed through"
 
+  echo "==> Self-test: a pull request's narrowed scope says so, and nothing else may narrow"
+  set +e
+  out="$(DC_RACE_SCOPE=changed GITHUB_EVENT_NAME=pull_request probe_padded "" stub_race do_module clean ./a/ ./b/ 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ] || [[ "$out" != *"race: PARTIAL clean -- "* ]] || [[ "$out" == *"race: COVERED"* ]] || [[ "$out" != *"race_test stubbed: ./a/ ./b/"* ]]; then
+    echo "  FAIL: a changed-scope leg did not race exactly its packages under a PARTIAL verdict (exit $rc):" >&2
+    echo "$out" | sed -n '1,5p' | cut -c1-200 >&2
+    return 1
+  fi
+  echo "  ok: PARTIAL, and only the packages given"
+  set +e
+  out="$(DC_RACE_SCOPE=none GITHUB_EVENT_NAME=pull_request probe_padded "" stub_race do_module clean ./a/ 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ] || [[ "$out" != *"race: SKIPPED clean -- "* ]] || [[ "$out" == *"race_test stubbed"* ]]; then
+    echo "  FAIL: a none-scope leg did not skip under a SKIPPED verdict (exit $rc):" >&2
+    echo "$out" | sed -n '1,5p' | cut -c1-200 >&2
+    return 1
+  fi
+  echo "  ok: SKIPPED, nothing run"
+  local ev sc
+  for ev in push schedule workflow_dispatch merge_group; do
+    for sc in changed none; do
+      set +e
+      out="$(DC_RACE_SCOPE=$sc GITHUB_EVENT_NAME=$ev probe_padded "" stub_race do_module clean ./a/ 2>&1)"
+      rc=$?
+      set -e
+      if [ "$rc" -eq 0 ] || [[ "$out" == *"race_test stubbed"* ]] || [[ "$out" == *"race: "* ]]; then
+        echo "  FAIL: DC_RACE_SCOPE=$sc was accepted on a $ev run (exit $rc):" >&2
+        echo "$out" | sed -n '1,5p' | cut -c1-200 >&2
+        return 1
+      fi
+    done
+    set +e
+    out="$(GITHUB_EVENT_NAME=$ev probe_padded "" stub_race do_module clean 2>&1)"
+    rc=$?
+    set -e
+    if [ "$rc" -ne 0 ] || [[ "$out" != *"race: COVERED clean -- "* ]] || [[ "$out" != *"race_test stubbed: ./..."* ]]; then
+      echo "  FAIL: a $ev run with no scope did not race the whole leg (exit $rc)" >&2
+      return 1
+    fi
+  done
+  echo "  ok: push, schedule, dispatch and merge_group refuse a narrowed scope and race in full without one"
+  for sc in bogus ""; do
+    set +e
+    out="$(DC_RACE_SCOPE=$sc GITHUB_EVENT_NAME=pull_request probe_padded "" stub_race do_module clean 2>&1)"
+    rc=$?
+    set -e
+    if [ -n "$sc" ] && { [ "$rc" -eq 0 ] || [[ "$out" == *"race_test stubbed"* ]]; }; then
+      echo "  FAIL: DC_RACE_SCOPE='$sc' was accepted (exit $rc)" >&2
+      return 1
+    fi
+  done
+  set +e
+  out="$(DC_RACE_SCOPE=changed GITHUB_EVENT_NAME=pull_request probe_padded "" stub_race do_module clean 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ] || [[ "$out" == *"race_test stubbed"* ]]; then
+    echo "  FAIL: a changed scope with no packages was accepted (exit $rc)" >&2
+    return 1
+  fi
+  echo "  ok: an unknown scope, and a changed scope with no packages, are refused"
+
   echo "==> Self-test: an exempt module stays exempt however early the reader stops"
   out="$(probe "$pad_set" verdict_for skipped)"
   if [ "$out" != EXEMPT ]; then
@@ -653,11 +717,50 @@ do_module() {
     return 0
   fi
 
+  # 🔴 DC_RACE_SCOPE: ON A PULL REQUEST ONLY, the race step may cover less than its leg.
+  # hack/ci-select.py plans, per leg, `all` (the leg's own packages: the default, and the only
+  # value any other event may use), `changed` (the packages given, which are the leg's packages
+  # holding a changed Go file or directly importing one) or `none` (no such package in this leg).
+  # Each says so in its own verdict word, so a partial or skipped race can never read as COVERED:
+  #
+  #   race: PARTIAL <module> -- go test -race ... <packages> (...)
+  #   race: SKIPPED <module> -- pull request: ...
+  #
+  # A narrowed scope on any event but a pull request is refused: main's full race is the net
+  # that catches what a pull request's narrowed one did not reach, so it must never narrow.
+  local scope="${DC_RACE_SCOPE:-all}"
+  case "$scope" in
+    all) ;;
+    changed | none)
+      if [ "${GITHUB_EVENT_NAME:-pull_request}" != pull_request ]; then
+        echo "::error::DC_RACE_SCOPE=$scope on a ${GITHUB_EVENT_NAME} run; only a pull request may narrow the race step" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      echo "::error::DC_RACE_SCOPE is '$scope', not all, changed or none" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$scope" = none ]; then
+    echo "race: SKIPPED $module -- pull request: no package of this leg contains, or directly imports, a changed Go file (hack/ci-select.py); main runs it in full"
+    return 0
+  fi
+  if [ "$scope" = changed ] && [ "$#" -eq 0 ]; then
+    # An empty list would fall back to ./... above: right in effect, wrong in its label.
+    echo "::error::DC_RACE_SCOPE=changed with no packages; refusing to guess the scope" >&2
+    exit 1
+  fi
+
   # A shard's -run regex can name hundreds of tests; the verdict line says how many packages and
   # whether a filter applies, and the leg's own log line (hack/go-leg.sh) says which tests.
   local shown="${targets[*]}"
   if [ "${#shown}" -gt 300 ]; then shown="${shown:0:300}... (${#targets[@]} args)"; fi
-  echo "race: COVERED $module -- ${RACE_TEST[*]} $shown"
+  if [ "$scope" = changed ]; then
+    echo "race: PARTIAL $module -- ${RACE_TEST[*]} $shown (pull request: the packages holding a changed Go file and their direct importers; main runs the rest)"
+  else
+    echo "race: COVERED $module -- ${RACE_TEST[*]} $shown"
+  fi
   # shellcheck disable=SC2031 # the self-test's subshell override is meant not to leak here
   cd "$ROOT/$module"
   race_test "${targets[@]}"

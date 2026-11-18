@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-sparkplug-ingest/config"
 	"github.com/devicechain-io/dc-sparkplug-ingest/downlink"
 	"github.com/devicechain-io/dc-sparkplug-ingest/host"
@@ -179,6 +180,7 @@ func TestBuildDispatcherAssemblesTheCommandPath(t *testing.T) {
 	infra.CommandDelivery = mscfg.CommandDeliveryConfiguration{Hostname: "command-delivery", Port: 8080}
 	infra.UserManagement = mscfg.UserManagementConfiguration{Hostname: "user-management", Port: 8080}
 
+	peers := svcclient.NewPeers(*infra, Microservice.FunctionalArea)
 	prevR, prevG, prevReader, prevResp := commandRegistrar, tenantGate, CommandReader, ResponseWriter
 	t.Cleanup(func() {
 		commandRegistrar, tenantGate, CommandReader, ResponseWriter = prevR, prevG, prevReader, prevResp
@@ -192,18 +194,18 @@ func TestBuildDispatcherAssemblesTheCommandPath(t *testing.T) {
 
 	// Without the ingest path's registrar and tenant gate there is nothing to learn tokens from.
 	commandRegistrar, tenantGate = nil, nil
-	_, err := buildDispatcher([]*host.Client{client}, downlink.Metrics{})
+	_, err := buildDispatcher([]*host.Client{client}, downlink.Metrics{}, peers)
 	require.Error(t, err, "a dispatcher was built with no registrar to identify devices with")
 
 	commandRegistrar = host.NewRegistrar(nil, "http://device-management:8080/graphql", nil)
 	tenantGate = func(string) bool { return false }
-	d, err := buildDispatcher([]*host.Client{client}, downlink.Metrics{})
+	d, err := buildDispatcher([]*host.Client{client}, downlink.Metrics{}, peers)
 	require.NoError(t, err)
 	require.NotNil(t, d)
 	assert.NotNil(t, CommandReader, "the device-commands reader was not built")
 	assert.NotNil(t, ResponseWriter, "the command-responses writer was not built")
 
 	infra.CommandDelivery = mscfg.CommandDeliveryConfiguration{}
-	_, err = buildDispatcher([]*host.Client{client}, downlink.Metrics{})
+	_, err = buildDispatcher([]*host.Client{client}, downlink.Metrics{}, peers)
 	require.Error(t, err, "a dispatcher was built with no command-delivery to claim against")
 }
