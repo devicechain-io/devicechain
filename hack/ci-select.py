@@ -292,6 +292,7 @@ IN_MODULE = {
     ("backend/services/event-processing", "internal/rules"): "\"../../etc/passwd\" and ../replayinput are fixtures/in-module",
     ("backend/services/user-management", "identity"): "\"../\" is a refused-redirect fixture",
     ("backend/sims/dc-simulator", "cmd/nightshift-capture"): "a generator run by hand, never by a test",
+    ("backend/sims/dc-simulator", "scenariosink"): "\"..\" is SMTP dot-stuffing in a DATA line; it reads no files",
     ("backend/tools/docsgql", "cmd/*"): "command defaults (--head ../../..), run by hand or by api-compat, not by tests",
     ("backend/tools/vocabgen", "."): "hack/vocab/sources.lock (hack/** runs everything)",
     ("backend/core", "secrets"): "hack/dr-rig.sh (hack/** runs everything)",
