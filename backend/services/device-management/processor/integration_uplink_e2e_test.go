@@ -21,6 +21,7 @@ import (
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,6 +44,7 @@ type e2eRig struct {
 	uplk  messaging.MessageWriter
 	esm   *messaging.NatsManager
 	iproc *InboundEventsProcessor
+	reg   *prometheus.Registry
 }
 
 func newE2ERig(t *testing.T, opts ...InboundOption) *e2eRig {
@@ -70,6 +72,8 @@ func newE2ERig(t *testing.T, opts ...InboundOption) *e2eRig {
 	// device-management's, with its readers and writers built where the service builds them: in
 	// the manager's create callback, so the manager starts them.
 	ms := &core.Microservice{InstanceId: e2eInstance, FunctionalArea: "device-management"}
+	reg := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(reg)
 	ms.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
 	var (
 		uplinkReader, inboundReader messaging.MessageReader
@@ -111,7 +115,7 @@ func newE2ERig(t *testing.T, opts ...InboundOption) *e2eRig {
 
 	js, err := dm.Conn().JetStream()
 	require.NoError(t, err)
-	return &e2eRig{integrationRig: rig, dm: dm, js: js, uplk: w, esm: esm, iproc: iproc}
+	return &e2eRig{integrationRig: rig, dm: dm, js: js, uplk: w, esm: esm, iproc: iproc, reg: reg}
 }
 
 func (r *integrationRig) publishDecoderForE2E() { r.publishDecoder(tempDecoder) }
@@ -233,6 +237,7 @@ func TestABrokenDecoderCannotFloodFailedEvents(t *testing.T) {
 	require.True(t, found, "%+v", store.writes)
 	require.EqualValues(t, DecodeRecordBurst, r.Failed)
 	require.EqualValues(t, offered-DecodeRecordBurst, r.Suppressed)
+	require.Eventually(t, func() bool { return loopResults(t, e.reg, "resolve", core.ResultUnwanted) == offered-DecodeRecordBurst }, 10*time.Second, 10*time.Millisecond)
 	require.EqualValues(t, offered, r.Decoded+r.Ignored+r.Failed+r.Suppressed)
 }
 

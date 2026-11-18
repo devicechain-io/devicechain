@@ -52,6 +52,18 @@ func TestSimCreateSelectsControlAddress(t *testing.T) {
 	}
 }
 
+func TestSimCreateReleasesControlClaimOnFailure(t *testing.T) {
+	isolatedHome(t)
+	// Selection happens before manifest validation, so this fails with a claim held.
+	err := runSimCreate(freshSimCommand(t, simCreateCmd, "--manifest", "unknown-manifest"), []string{"failed"})
+	if err == nil || !strings.Contains(err.Error(), "unknown manifest") {
+		t.Fatalf("expected manifest validation failure, got %v", err)
+	}
+	if got, _, err := sim.NextControlAddr("next"); err != nil || got != "http://localhost:8090" {
+		t.Fatalf("failed create leaked its claim: %q, %v", got, err)
+	}
+}
+
 func TestSimCreateControlAddressExhaustionAndRecreate(t *testing.T) {
 	isolatedHome(t)
 	stubRecordedHost(t, "", nil)

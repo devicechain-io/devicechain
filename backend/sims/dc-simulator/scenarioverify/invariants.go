@@ -64,6 +64,13 @@ func Evaluate(o Observations) []Invariant {
 		{InvOutageBlastRadius, outageBlastRadius},
 		{InvBackfillStored, backfillStored},
 	}
+	for _, c := range s3Checks() {
+		if o.S3.Sink == nil && sliceHas(SinkInvariants, c.name) {
+			continue // not judged without a sink: see Omitted
+		}
+		checks = append(checks, c)
+	}
+	checks = append(checks, s4Checks()...)
 	out := make([]Invariant, 0, len(checks))
 	for _, c := range checks {
 		inv := Invariant{Name: c.name, Passed: true, Control: Controls[c.name]}

@@ -73,6 +73,7 @@ type GeoFenceCapRefusalCounter interface {
 }
 
 type Api struct {
+	suppressionCache suppressionCache
 	// DeviceCredentialChecker shares password backoff between HTTP uplinks and MQTT connects.
 	DeviceCredentialChecker *credential.Checker
 
@@ -634,6 +635,7 @@ type DeviceManagementApi interface {
 	// contributor-set integrator (ADR-057); the API here is read + the operator transitions.
 	AlarmsById(ctx context.Context, ids []uint) ([]*Alarm, error)
 	AlarmsByToken(ctx context.Context, tokens []string) ([]*Alarm, error)
+	AlarmLifecycles(ctx context.Context, tokens []string) ([]AlarmLifecycle, error)
 	Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*AlarmSearchResults, error)
 	AlarmCountsByDeviceType(ctx context.Context, criteria AlarmCountCriteria) ([]AlarmDeviceTypeCount, error)
 	AlarmCountsBySeverity(ctx context.Context, criteria AlarmCountCriteria, deviceType *string) ([]AlarmSeverityCount, error)

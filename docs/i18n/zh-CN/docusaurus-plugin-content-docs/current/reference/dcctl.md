@@ -1940,11 +1940,12 @@ The sim actor authenticates as that identity and never touches the admin surface
 Idempotent: re-running create against an existing sim reconciles it (and keeps the
 stored password in sync with the identity).
 
-A scenario that needs more than the default tier allows gets its own. towerpulse
-publishes calculated metrics, which are off in every platform tier, so create ensures
-a tier named tp-showcase (calculated metrics on, ingest sized for the scenario) before
-creating the tenant. It is created if absent and only RAISED if present, never lowered,
-and sim destroy leaves it in place because it is shared by every towerpulse sim. Pass
+A scenario that needs more than the default tier allows gets its own. towerpulse and
+harborpulse publish calculated metrics, which are off in every platform tier, so create
+ensures a tier of the scenario's own (tp-showcase: calculated metrics on, ingest sized
+for the scenario; hp-showcase: calculated metrics on) before creating the tenant. It is
+created if absent and only RAISED if present, never lowered, and sim destroy leaves it
+in place because it is shared by every sim of that scenario. Pass
 --tier to use an existing tier instead; that tier is then never created or changed.
 dcctl bootstrap seeds only the platform tiers, so a load run that needs a bigger one
 (--tier rc-100k, say) adds --tier-config with the limits it must hold and create makes
@@ -2087,6 +2088,7 @@ dcctl sim run <name> [flags]
 ### Options
 
 ```
+      --day-length duration      harborpulse only: wall time one compressed sim day takes, e.g. 48m (0 keeps the scenario's own 24m day)
       --emit-interval duration   override the telemetry cadence, e.g. 3s (0 keeps the scenario's own)
   -h, --help                     help for run
       --play-devices             sitepulse only: play the device plane in the simulator instead of a Unity player

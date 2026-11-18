@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -28,11 +29,12 @@ The sim actor authenticates as that identity and never touches the admin surface
 Idempotent: re-running create against an existing sim reconciles it (and keeps the
 stored password in sync with the identity).
 
-A scenario that needs more than the default tier allows gets its own. towerpulse
-publishes calculated metrics, which are off in every platform tier, so create ensures
-a tier named tp-showcase (calculated metrics on, ingest sized for the scenario) before
-creating the tenant. It is created if absent and only RAISED if present, never lowered,
-and sim destroy leaves it in place because it is shared by every towerpulse sim. Pass
+A scenario that needs more than the default tier allows gets its own. towerpulse and
+harborpulse publish calculated metrics, which are off in every platform tier, so create
+ensures a tier of the scenario's own (tp-showcase: calculated metrics on, ingest sized
+for the scenario; hp-showcase: calculated metrics on) before creating the tenant. It is
+created if absent and only RAISED if present, never lowered, and sim destroy leaves it
+in place because it is shared by every sim of that scenario. Pass
 --tier to use an existing tier instead; that tier is then never created or changed.
 dcctl bootstrap seeds only the platform tiers, so a load run that needs a bigger one
 (--tier rc-100k, say) adds --tier-config with the limits it must hold and create makes
@@ -99,7 +101,7 @@ func resolveMqttInsecure(fs *pflag.FlagSet, tls bool) bool {
 	return !tls
 }
 
-func runSimCreate(cmd *cobra.Command, args []string) error {
+func runSimCreate(cmd *cobra.Command, args []string) (retErr error) {
 	name := args[0]
 	if err := sim.ValidateName(name); err != nil {
 		return err
@@ -112,10 +114,14 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	controlAddr, _ := cmd.Flags().GetString("control-addr")
 	if !cmd.Flags().Changed("control-addr") {
 		var err error
-		controlAddr, err = sim.NextControlAddr(name)
+		var releaseControlAddr func() error
+		controlAddr, releaseControlAddr, err = sim.NextControlAddr(name)
 		if err != nil {
 			return err
 		}
+		defer func() {
+			retErr = errors.Join(retErr, releaseControlAddr())
+		}()
 	}
 	ingress, _ := cmd.Flags().GetString("ingress")
 	mqttBroker, _ := cmd.Flags().GetString(flagMqttBroker)

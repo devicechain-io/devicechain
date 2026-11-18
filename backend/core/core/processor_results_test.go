@@ -18,7 +18,7 @@ func TestEveryProcessorResultIsExportedAtZero(t *testing.T) {
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
 	pm := ms.NewProcessorMetrics("state")
 
-	want := []string{"ok", "invalid", "failed", "dropped", "retry", "erased"}
+	want := []string{"ok", "invalid", "failed", "dropped", "retry", "erased", "unwanted"}
 	if got := testutil.CollectAndCount(pm.processed); got != len(want) {
 		t.Fatalf("a fresh loop exports %d result series, want %d (%v)", got, len(want), want)
 	}

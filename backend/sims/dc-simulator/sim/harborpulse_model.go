@@ -51,6 +51,9 @@ const (
 	harborCharger
 	harborMeter
 	harborTruck
+	// harborLoraGauge is a tide gauge behind the LoRaWAN network server: it posts no HTTP
+	// reading, only uplinks through the integration.
+	harborLoraGauge
 )
 
 // harborDevice is one named device of the district.
@@ -61,6 +64,8 @@ type harborDevice struct {
 	// customer is "" for the public realm (the manifest's first customer).
 	customer string
 	index    int
+	// devEUI is a LoRaWAN gauge's DevEUI, "" for every other device.
+	devEUI string
 }
 
 // The planted faults, by device.
@@ -73,6 +78,7 @@ const (
 	harborLoftsMeter     = "hp-meter-quayside-lofts"
 	harborFerryMeter     = "hp-meter-ferry-terminal"
 	harborResponseTruck  = "hp-truck-1"
+	harborLegacyGauge    = "hp-legacy-gauge-basin"
 	harborOutageQuay     = HarborpulseEastQuay
 	harborEastQuayOffset = 0.3
 )
@@ -115,6 +121,18 @@ func harborLayout() []harborDevice {
 		harborDevice{token: harborResponseTruck, externalId: "PAW-TRUCK-1", deviceType: HarborpulseTruckType,
 			kind: harborTruck, quay: HarborpulseBasin, index: 1},
 	)
+	// The LoRaWAN gauges, last so that every earlier device keeps its place: one per quay on the
+	// current decoder, and one legacy gauge on the Basin.
+	for i, q := range harborQuays {
+		out = append(out, harborDevice{
+			token: "hp-lora-gauge-" + q.name, externalId: "PAW-LORA-" + upper(q.name), deviceType: HarborpulseLoraGaugeType,
+			kind: harborLoraGauge, quay: q.token, index: i + 1, devEUI: fmt.Sprintf("70B3D57ED0A1%04X", i+1),
+		})
+	}
+	out = append(out, harborDevice{
+		token: harborLegacyGauge, externalId: "PAW-LEGACY-BASIN", deviceType: HarborpulseLegacyGaugeType,
+		kind: harborLoraGauge, quay: HarborpulseBasin, index: 1, devEUI: "70B3D57ED0A1000F",
+	})
 	return out
 }
 
@@ -130,9 +148,13 @@ func upper(s string) string {
 
 // ---- The site: two fences and the truck's route (illustrative coordinates) -------------------
 
+// 🔴 PORT ALDER IS FICTIONAL, AND SO IS WHERE IT STANDS. Every harborpulse coordinate lies in open
+// Atlantic water south-west of Ireland, where no settlement is, so a map that draws the scenario
+// never puts the fictional town on a real one. (The first coordinates sat on a real harbour town.)
+// Keep any new coordinate within a few kilometres of these.
 const (
-	harborDepotLat, harborDepotLon = 50.1500, -5.0700
-	harborPlainLat, harborPlainLon = 50.1520, -5.0600
+	harborDepotLat, harborDepotLon = 49.8000, -12.2100
+	harborPlainLat, harborPlainLon = 49.8020, -12.2000
 )
 
 func harborBox(lat, lon, dLat, dLon float64) [][2]float64 {
@@ -331,10 +353,14 @@ type harborModel struct {
 	pumps     map[string]*harborPumpState
 	cap       map[string]float64
 	dim       map[string]float64
+	flushes   map[string]int
 	kwh       map[string]float64
 	// lastMeter is when each meter last read, for its energy integral.
 	lastMeter map[string]time.Duration
 	buffers   map[string][]harborBuffered
+	// uplinks counts each LoRaWAN gauge's uplinks: its frame counter, which also alternates the
+	// frame layout it sends.
+	uplinks map[string]int
 	// bufferCap is how many readings a charger's buffer holds (harborBufferCapFor).
 	bufferCap int
 	// tier and dipUntil are the flood-clear-between-tiers defect's state, per gauge: the highest
@@ -360,8 +386,8 @@ func newHarborModel(seed int64) *harborModel {
 func newHarborModelWith(seed int64, dayLength time.Duration, defects harborDefects) *harborModel {
 	m := &harborModel{
 		seed: seed, dayLength: dayLength, defects: defects, devices: map[string]harborDevice{}, pumps: map[string]*harborPumpState{},
-		cap: map[string]float64{}, dim: map[string]float64{}, kwh: map[string]float64{}, lastMeter: map[string]time.Duration{},
-		buffers: map[string][]harborBuffered{}, ledger: map[harborLedgerKey]*ScenarioBackfill{},
+		cap: map[string]float64{}, dim: map[string]float64{}, flushes: map[string]int{}, kwh: map[string]float64{}, lastMeter: map[string]time.Duration{},
+		buffers: map[string][]harborBuffered{}, ledger: map[harborLedgerKey]*ScenarioBackfill{}, uplinks: map[string]int{},
 		bufferCap: harborBufferCapFor(dayLength, DefaultEmitInterval),
 		tier:      map[string]int{}, dipUntil: map[string]time.Duration{},
 	}
@@ -507,10 +533,18 @@ func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time)
 		m.lastMeter[token] = elapsed
 		return map[string]float64{HarborpulseMeterKwKey: round3(kw), HarborpulseMeterKwhKey: round3(m.kwh[token])}
 	case harborTruck:
-		fix := harborTruckFix(h)
+		fix := m.truckFix(h)
 		return map[string]float64{HarborpulseSpeedKey: *fix.Speed}
 	}
 	return nil
+}
+
+// truckFix is the truck's position at sim hour h; the truck-stays-home defect keeps it at the depot.
+func (m *harborModel) truckFix(h float64) Fix {
+	if m.defects.truckStaysHome {
+		return harborTruckFix(0)
+	}
+	return harborTruckFix(h)
 }
 
 // fix is the device's position this tick; only the truck reports one.
@@ -518,7 +552,7 @@ func (m *harborModel) fix(token string, elapsed time.Duration) (Fix, bool) {
 	if d, ok := m.devices[token]; !ok || d.kind != harborTruck {
 		return Fix{}, false
 	}
-	return harborTruckFix(harborHourOf(elapsed, m.dayLength)), true
+	return m.truckFix(harborHourOf(elapsed, m.dayLength)), true
 }
 
 // takeBackfill hands over every buffer whose feeder is back, oldest reading first.
@@ -587,6 +621,11 @@ func (m *harborModel) command(token, key string, payload json.RawMessage) bool {
 			return false
 		}
 		m.cap[token] = kw
+		return true
+	case d.kind == harborPump && key == HarborpulseFlushKey:
+		// A back-flush: the controller runs it and reports done. It moves no water the model
+		// tracks, so the beat is WHEN it ran, which the maintenance window decides.
+		m.flushes[token]++
 		return true
 	case d.kind == harborLight && key == HarborpulseSetDimKey:
 		level, ok := harborParam(payload, HarborpulseLevelParam, 0, 100)

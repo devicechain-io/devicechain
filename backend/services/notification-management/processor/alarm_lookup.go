@@ -21,6 +21,8 @@ type AlarmLookup interface {
 	LookupAlarms(context.Context, []string) (map[string]string, error)
 }
 
+const alarmLifecyclesDocument = `query($tokens: [String!]!) { alarmLifecycles(tokens: $tokens) { token state } }`
+
 type alarmLookup struct {
 	client *svcclient.Client
 	url    string
@@ -36,22 +38,22 @@ func (s *alarmLookup) LookupAlarms(ctx context.Context, tokens []string) (map[st
 		return nil, core.ErrNoTenant
 	}
 	var out struct {
-		AlarmsByToken *[]struct {
+		AlarmLifecycles *[]struct {
 			Token string
 			State string
-		} `json:"alarmsByToken"`
+		} `json:"alarmLifecycles"`
 	}
 	err := s.client.Query(ctx, s.url, tenant,
-		`query($tokens: [String!]!) { alarmsByToken(tokens: $tokens) { token state } }`,
+		alarmLifecyclesDocument,
 		map[string]any{"tokens": tokens}, &out)
 	if err != nil {
 		return nil, err
 	}
-	if out.AlarmsByToken == nil {
+	if out.AlarmLifecycles == nil {
 		return nil, fmt.Errorf("device-management returned no alarm lookup result")
 	}
-	found := make(map[string]string, len(*out.AlarmsByToken))
-	for _, a := range *out.AlarmsByToken {
+	found := make(map[string]string, len(*out.AlarmLifecycles))
+	for _, a := range *out.AlarmLifecycles {
 		if a.Token == "" || (a.State != "ACTIVE" && a.State != "CLEARED") {
 			return nil, fmt.Errorf("invalid alarm lookup result")
 		}

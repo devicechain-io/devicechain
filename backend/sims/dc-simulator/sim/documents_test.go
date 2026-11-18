@@ -4,6 +4,7 @@
 package sim
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -195,5 +196,79 @@ func TestTheGeoFenceDocumentsValidateAgainstTheServedSchema(t *testing.T) {
 				t.Fatalf("%s exceeds the served root-field ceiling: %v", c.name, err)
 			}
 		})
+	}
+}
+
+// The documents the outbound, notification and integration steps send, with the variables they
+// really send, against the tenant plane of the area that serves each. A request map is built the
+// way the call site builds it, so the KEY SET is what is validated.
+func TestTheOutboundAndIntegrationDocumentsValidateAgainstTheServedSchemas(t *testing.T) {
+	m := NewHarborpulse(1, Load{}).Manifest()
+	c, ch, pol, in := m.Connectors[0], m.NotificationChannels[0], m.NotificationPolicies[0], m.Integrations[0]
+	policy := map[string]any{"name": pol.Name, "enabled": true, "escalateAfterSeconds": pol.EscalateAfterSeconds,
+		"maxEscalations": pol.MaxEscalations, "rules": notificationRules(pol, "t1")}
+	created := map[string]any{"token": pol.Token}
+	for k, v := range policy {
+		created[k] = v
+	}
+	cases := []struct {
+		name, area, doc string
+		vars            map[string]any
+	}{
+		{"webhookSigningSecret", "outbound-connectors", queryWebhookSigningSecret, map[string]any{"handle": HarborpulseSigningHandle}},
+		{"generateWebhookSigningSecret", "outbound-connectors", mutationGenerateWebhookSigningSecret, map[string]any{"handle": HarborpulseSigningHandle}},
+		{"connector", "outbound-connectors", queryConnector, map[string]any{"token": c.Token}},
+		{"connectorVersions", "outbound-connectors", queryConnectorVersions, map[string]any{"token": c.Token}},
+		{"createConnector", "outbound-connectors", mutationCreateConnector, map[string]any{"request": map[string]any{
+			"token": c.Token, "name": c.Name, "type": c.Type, "config": c.Config}}},
+		{"updateConnector", "outbound-connectors", mutationUpdateConnector, map[string]any{"token": c.Token, "request": map[string]any{
+			"name": c.Name, "type": c.Type, "config": c.Config}}},
+		{"publishConnector", "outbound-connectors", mutationPublishConnector, map[string]any{"token": c.Token, "label": "sim-x"}},
+		{"notificationChannelsByToken", "notification-management", queryNotificationChannelsByToken, map[string]any{"tokens": []string{ch.Token}}},
+		{"createNotificationChannel", "notification-management", mutationCreateNotificationChannel, map[string]any{"request": map[string]any{
+			"token": ch.Token, "name": ch.Name, "channelType": ch.ChannelType, "config": ch.Config, "enabled": true}}},
+		{"updateNotificationChannel", "notification-management", mutationUpdateNotificationChannel, map[string]any{"token": ch.Token, "request": map[string]any{
+			"name": ch.Name, "channelType": ch.ChannelType, "config": ch.Config, "enabled": true}}},
+		{"notificationPoliciesByToken", "notification-management", queryNotificationPoliciesByToken, map[string]any{"tokens": []string{pol.Token}}},
+		{"createNotificationPolicy", "notification-management", mutationCreateNotificationPolicy, map[string]any{"request": created}},
+		{"updateNotificationPolicy", "notification-management", mutationUpdateNotificationPolicy, map[string]any{"token": pol.Token, "request": policy}},
+		{"integration", "device-management", queryIntegration, map[string]any{"token": in.Token}},
+		{"createIntegration", "device-management", mutationCreateIntegration, map[string]any{"request": map[string]any{
+			"token": in.Token, "name": in.Name, "type": in.Type, "enabled": true, "deviceTypeTokens": in.DeviceTypeTokens}}},
+		{"updateIntegration", "device-management", mutationUpdateIntegration, map[string]any{"token": in.Token, "request": map[string]any{
+			"name": in.Name, "enabled": true, "deviceTypeTokens": in.DeviceTypeTokens}}},
+		{"rotateIntegrationToken", "device-management", mutationRotateIntegrationToken, map[string]any{"token": in.Token}},
+		{"setDeviceProfileDecoder", "device-management", mutationSetDeviceProfileDecoder, map[string]any{"profileToken": HarborpulseLoraGaugeProfile, "document": HarborpulseLoraDecoder}},
+		{"devicesByToken", "device-management", queryDevicesByToken, map[string]any{"tokens": []string{"d"}}},
+		{"createDevice", "device-management", mutationCreateDevice, map[string]any{"request": map[string]any{
+			"token": "d", "externalId": "e", "deviceTypeToken": HarborpulseLoraGaugeType, "metadata": "{}",
+			"aliases": aliasInputs([]AliasSpec{{Scheme: AliasSchemeDevEUI, Value: "70B3D57ED0A10001"}})}}},
+		{"updateDevice aliases", "device-management", mutationUpdateDevice, map[string]any{"token": "d", "request": map[string]any{
+			"aliases": aliasInputs([]AliasSpec{{Scheme: AliasSchemeDevEUI, Value: "70B3D57ED0A10001"}})}}},
+	}
+	schemas := map[string]*graphql.Schema{}
+	for _, c := range cases {
+		s, ok := schemas[c.area]
+		if !ok {
+			s = servedSchema(t, c.area)
+			schemas[c.area] = s
+		}
+		// Through JSON, as the variables travel: the validator reads []any, not []map.
+		raw, err := json.Marshal(c.vars)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var vars map[string]any
+		if err := json.Unmarshal(raw, &vars); err != nil {
+			t.Fatal(err)
+		}
+		if errs := s.ValidateWithVariables(c.doc, vars); len(errs) > 0 {
+			t.Errorf("%s does not validate against %s's tenant schema: %v", c.name, c.area, errs)
+		}
+	}
+	// The control: an input key the schema does not define is refused, or the above proves nothing.
+	if errs := schemas["outbound-connectors"].ValidateWithVariables(mutationCreateConnector, map[string]any{"request": map[string]any{
+		"token": c.Token, "type": c.Type, "config": c.Config, "topic": "x"}}); len(errs) == 0 {
+		t.Fatal("an unknown connector request key validated")
 	}
 }

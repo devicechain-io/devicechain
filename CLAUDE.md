@@ -108,9 +108,11 @@ hack/                         license headers, dev scripts, and the seven VALIDA
                               not stalling ordinary events, each with a planted defect; run it
                               whenever the decoder pipeline, its streams or the device grant change)
                               and `harborpulse-rig.sh` (one compressed harborpulse sim day judged by
-                              cmd/scenario-verify, beside six planted defects that must each turn their
-                              own invariant red; run it whenever the scenario, its rules or the verifier
-                              change).
+                              cmd/scenario-verify, beside twenty-one planted defects that must each turn their
+                              own invariant red (groups, campaigns and the maintenance window among
+                              them); its signed webhook, MQTT bulletins and mail go to an
+                              in-cluster cmd/scenario-sink the instance's egress allowance admits; run it
+                              whenever the scenario, its rules or the verifier change).
                               All are manual, all need a real cluster, and all carry a NEGATIVE
                               CONTROL: a check is worth nothing until it has been shown to fail
 _legacy/                      archived pre-migration SiteWhere code — NOT in the workspace, not built; do not edit

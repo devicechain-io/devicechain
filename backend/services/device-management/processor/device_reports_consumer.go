@@ -293,7 +293,7 @@ func (rc *DeviceReportsConsumer) refused(ctx context.Context, msg messaging.Mess
 		// Discarded, as update-management and event resolution discard a disabled device's traffic.
 		log.Debug().Str("device", token).Msg("Discarding a configuration report from a disabled device.")
 		msg.Ack()
-		done(core.ResultDropped)
+		done(core.ResultUnwanted)
 		return
 	default:
 		log.Debug().Str("device", token).Str("reason", refusal.Reason).Msg("Device configuration report refused.")
@@ -311,24 +311,33 @@ func (rc *DeviceReportsConsumer) refused(ctx context.Context, msg messaging.Mess
 // lettered nowhere.
 func (rc *DeviceReportsConsumer) retryOrDrop(ctx context.Context, msg messaging.Message, token string,
 	done func(string), err error, what string) {
-	switch messaging.Dispose(msg, err) {
+	settleErr := err
+	if len(msg.Value) > maxDeadLetterReportPayloadByte {
+		settleErr = fmt.Errorf("%w (payload truncated to %d of %d bytes)", err, maxDeadLetterReportPayloadByte, len(msg.Value))
+	}
+	lossCtx := log.With().Str("device", token).Logger().WithContext(ctx)
+	d, lettered := rc.dead.Settle(lossCtx, msg, settleErr, deadletter.Exhausted{
+		Lost:      "LOST device report: it could be neither applied nor dead-lettered.",
+		Summary:   "a device report could not be applied after every delivery attempt",
+		Reference: token, MaxPayload: maxDeadLetterReportPayloadByte,
+	})
+	switch d {
 	case messaging.TenantErased:
 		log.Info().Str("what", what).Str("device", token).
 			Msg("Dropping a device report for a deleted tenant; this area's data has been erased.")
-		msg.Ack()
-		done(core.ResultErased)
+		done(deadletter.Result(d))
 		return
 	case messaging.Exhausted:
 		log.Error().Err(err).Str("what", what).Str("device", token).Int("attempts", msg.NumDelivered).
 			Msg("Device report failed past the redelivery cap; dead-lettering.")
-		rc.deadLetterReason(ctx, msg, token, deadletter.ReasonExhausted,
-			"a device report could not be applied after every delivery attempt", err)
-		msg.Ack()
-		done(core.ResultFailed)
+		if lettered {
+			rc.deadLettered.Inc()
+		}
+		done(deadletter.Result(d))
 		return
 	}
 	log.Warn().Err(err).Str("what", what).Str("device", token).Msg("Device report failed; will retry on redelivery.")
-	done(core.ResultRetry)
+	done(deadletter.Result(d))
 }
 
 func (rc *DeviceReportsConsumer) deadLetter(ctx context.Context, msg messaging.Message, token, summary string, cause error) {

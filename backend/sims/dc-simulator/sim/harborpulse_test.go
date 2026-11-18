@@ -184,8 +184,9 @@ func TestHarborpulseManifestShape(t *testing.T) {
 		t.Fatal("a device-count override was accepted; the planted faults name devices a resize cannot keep")
 	}
 	devices := m.Expand(1)
-	if len(devices) != 33 {
-		t.Fatalf("%d devices, want 33", len(devices))
+	// 33 on the HTTP ingress, and four LoRaWAN gauges behind the network server.
+	if len(devices) != 37 {
+		t.Fatalf("%d devices, want 37", len(devices))
 	}
 	quays := map[string]bool{HarborpulseNorthQuay: true, HarborpulseEastQuay: true, HarborpulseBasin: true}
 	owners := map[string]string{harborLoftsMeter: HarborpulseLoftsToken, harborFerryMeter: HarborpulseFerryToken}
@@ -233,6 +234,13 @@ func TestHarborpulseCELReadsOnlyDeclaredMetrics(t *testing.T) {
 			}
 			_ = json.Unmarshal([]byte(r.Definition), &doc)
 			reads := regexp.MustCompile(`m\["([^"]+)"\]`).FindAllStringSubmatch(doc.When.CEL, -1)
+			if r.ReadsNoMetric {
+				// A position rule: it must read no measurement at all, or the gate refuses it.
+				if len(reads) > 0 || !strings.Contains(doc.When.CEL, "geo.inFence(") {
+					t.Errorf("rule %s says it reads no metric; its condition is %q", r.Token, doc.When.CEL)
+				}
+				continue
+			}
 			if doc.When.CEL != "" && len(reads) < 2 {
 				t.Fatalf("rule %s: parsed %d metrics out of %q; the check has rotted", r.Token, len(reads), doc.When.CEL)
 			}
@@ -446,6 +454,9 @@ func TestHarborpulseOutageSilencesExactlyEastQuayLightsAndChargers(t *testing.T)
 	silent := map[string]bool{}
 	for _, s := range day {
 		for _, d := range harborLayout() {
+			if d.kind == harborLoraGauge {
+				continue // it sends uplinks through the integration, never a reading to the ingress
+			}
 			if _, ok := s.values[d.token]; ok {
 				last[d.token] = s.at
 			} else if s.at-last[d.token] > timeout {

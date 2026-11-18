@@ -1251,6 +1251,24 @@ A client is sending tokens that enforce mode would refuse
 
 **含义与处理方式.** For at least an hour, ‹job› has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). This compatibility alert can only fire on a v1.2/v1.3 instance running observe; v1.4 refuses that configuration and always enforces token audiences. Those older instances count these requests as would_reject. Enforce mode refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls before upgrading to v1.4. See the v1.3 upgrade notes: https://github.com/devicechain-io/devicechain/blob/v1.3.0/docs/docs/deployment/releases-and-upgrades.md#v130-token-audience
 
+## `devicechain.uniform-signals`
+
+### PeriodicTaskStalled {#periodictaskstalled}
+
+**严重程度:** `warning` · **规则组:** `devicechain.uniform-signals`
+
+A maintenance task is not completing successful passes
+
+**含义与处理方式.** No replica of this job and task has succeeded within three declared pass intervals plus five minutes, or the task has never succeeded and a replica declaring its interval has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task.
+
+### ProcessorLoopDropping {#processorloopdropping}
+
+**严重程度:** `warning` · **规则组:** `devicechain.uniform-signals`
+
+A job has processor loops giving up on messages
+
+**含义与处理方式.** In the last 15 minutes, processor loops in this job gave up on messages after their delivery attempts were exhausted. To find the loop, query \{__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_messages_total", result="dropped"\} restricted to this job. Check the service logs for the failed operation, then its database, broker and downstream dependencies. Policy-refused traffic counted as unwanted does not trigger this alert. Device-state discards are covered separately by DeviceStateDroppingEvents.
+
 ## `devicechain.update-management`
 
 ### UpdateAttemptsGoingUnknown {#updateattemptsgoingunknown}
