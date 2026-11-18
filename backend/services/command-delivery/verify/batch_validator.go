@@ -53,10 +53,16 @@ const validateCommandEnqueueBatch = `query($deviceTokens: [String!]!, $commandKe
 // response — and the correct reading of one is that we did not get a verdict, not that
 // the verdict was yes.
 func (v *BatchValidator) ValidateEnqueueBatch(ctx context.Context, deviceTokens []string,
-	commandKey string, payload []byte) ([]model.BatchDeviceRefusal, error) {
+	commandKey string, payload []byte) ([]model.BatchDeviceRefusal, map[string]uint64, error) {
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("verify: no tenant in context")
+		return nil, nil, fmt.Errorf("verify: no tenant in context")
+	}
+	incarnations, err := readEnqueueIdentities(deviceTokens, func(document string, vars map[string]any, out any) error {
+		return v.client.Query(ctx, v.url, tenant, document, vars, out)
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 	var out struct {
 		ValidateCommandEnqueueBatch *[]struct {
@@ -78,10 +84,10 @@ func (v *BatchValidator) ValidateEnqueueBatch(ctx context.Context, deviceTokens 
 		vars["payload"] = nil
 	}
 	if err := v.client.Query(ctx, v.url, tenant, validateCommandEnqueueBatch, vars, &out); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if out.ValidateCommandEnqueueBatch == nil {
-		return nil, fmt.Errorf("verify: device-management returned no batch enqueue verdict")
+		return nil, nil, fmt.Errorf("verify: device-management returned no batch enqueue verdict")
 	}
 
 	refusals := make([]model.BatchDeviceRefusal, 0, len(*out.ValidateCommandEnqueueBatch))
@@ -96,5 +102,5 @@ func (v *BatchValidator) ValidateEnqueueBatch(ctx context.Context, deviceTokens 
 			Reason:      refusal.Reason,
 		})
 	}
-	return refusals, nil
+	return refusals, incarnations, nil
 }

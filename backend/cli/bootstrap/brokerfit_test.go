@@ -40,6 +40,8 @@ func TestBrokerFitCapacity(t *testing.T) {
 	}{
 		{"cpu shortfall", State{HA: true, Size: SizePerf16k}, three("4", "16Gi"), "", []string{"perf-16k", "6 CPU", "6Gi memory", "0 of 3", "4 CPU", "16Gi", "allocatable check", "perf-12k asks 4 CPU / 4Gi"}},
 		{"cpu shortfall on dry run", State{HA: true, Size: SizePerf16k, DryRun: true}, three("4", "16Gi"), "", []string{"perf-16k", "6 CPU"}},
+		{"perf 20k shortfall", State{HA: true, Size: SizePerf20k}, three("4", "16Gi"), "", []string{"perf-20k", "6 CPU", "6Gi memory", "0 of 3"}},
+		{"perf 20k fits", State{HA: true, Size: SizePerf20k}, three("8", "16Gi"), "", nil},
 		{"fits", State{HA: true, Size: SizePerf16k}, three("8", "16Gi"), "", nil},
 		{"memory shortfall", State{HA: true, Size: SizePerf16k}, three("8", "4Gi"), "", []string{"perf-16k", "0 of 3", "6Gi memory"}},
 		{"split resources", State{HA: true, Size: SizePerf16k}, []corev1.Node{brokerFitNode("8", "2Gi"), brokerFitNode("2", "16Gi"), brokerFitNode("2", "2Gi")}, "", []string{"0 of 3", "8 CPU", "16Gi"}},

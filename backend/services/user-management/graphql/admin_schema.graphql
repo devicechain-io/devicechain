@@ -1864,6 +1864,7 @@ type Mutation {
     Creates an identity with the given system roles and returns it. Fails if the email is
     already in use (error code CONFLICT), if the password is empty, or if a system role does
     not exist. Requires user:write.
+    The caller may assign only system roles whose authorities it currently holds.
     """
     # Create a global identity with the given system roles.
     createIdentity(
@@ -1875,6 +1876,7 @@ type Mutation {
     Disabling also ends every session the identity has, so re-enabling does not revive them;
     tokens already issued stop working when they expire (15 minutes by default). Fails if the
     identity does not exist. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     # Enable or disable an identity (disabled identities cannot authenticate).
     # Disabling also ends every refresh session the identity holds, so re-enabling
@@ -1890,6 +1892,7 @@ type Mutation {
     Replaces the identity's system roles with exactly those given and returns the identity.
     An empty list removes them all. Fails if the identity does not exist or a role does not
     exist with system scope. Requires user:write.
+    The caller must hold every authority granted by both the current and requested system roles.
     """
     # Replace an identity's system-role assignments (role tokens, system scope).
     setSystemRoles(
@@ -1903,6 +1906,7 @@ type Mutation {
     the identity has, so it must sign in again; tokens already issued stop working when they
     expire (15 minutes by default). Fails if the password is empty or the identity does not
     exist. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     # Replace an identity's password (hashed server-side). Also ends every refresh
     # session the identity holds; identity and access tokens already issued run out
@@ -1917,6 +1921,7 @@ type Mutation {
     Deletes an identity together with its memberships. Returns true if one was deleted and
     false if there was no such identity. Its sessions end with it, and an identity later
     created with the same email does not inherit them. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     # Delete an identity and its memberships; returns whether one was removed. Its
     # refresh sessions end with it, and an identity created again under the same
@@ -1950,6 +1955,7 @@ type Mutation {
     is being deleted, if a role is not assignable in the tenant, if the scope has more than
     16 anchors (LIMIT_EXCEEDED) or names a group (INVALID_VALUE), or if the identity is
     already a member of the tenant (error code CONFLICT). Requires user:write.
+    Delegated callers must hold every authority granted by the assigned tenant roles (ESCALATION).
     """
     # Bind an identity to an existing tenant with the given tenant roles and scope.
     addMembership(
@@ -1972,6 +1978,7 @@ type Mutation {
     its old scope until it expires, and its sessions in other tenants are not affected. Fails if the identity has no membership in
     the tenant, or for more than 16 anchors (LIMIT_EXCEEDED).
     Requires user:write.
+    Delegated callers must hold every authority granted by the membership's current tenant roles (ESCALATION).
     """
     setMembershipScope(
         """Email of the identity."""
@@ -1987,6 +1994,7 @@ type Mutation {
     not assignable in the tenant. Adding or taking away authorities takes effect at the
     identity's next token refresh (within 15 minutes; 5 for customer-scoped access): an access
     token already issued keeps its old authorities until it expires. Requires user:write.
+    Delegated callers must hold every authority granted by both the current and assigned tenant roles (ESCALATION).
     """
     # Replace a membership's tenant-role assignments (role tokens, tenant scope).
     setMembershipRoles(
@@ -2003,6 +2011,7 @@ type Mutation {
     identity's next token refresh (within 15 minutes; 5 for customer-scoped access), which is
     refused for this tenant, while an access token already issued keeps working until it
     expires. Its sessions in other tenants are not affected. Fails if the identity has no membership in the tenant. Requires user:write.
+    Delegated callers must hold every authority granted by the membership's current tenant roles (ESCALATION).
     """
     # Enable or disable a membership (a disabled membership cannot be selected).
     setMembershipEnabled(
@@ -2017,6 +2026,7 @@ type Mutation {
     Removes an identity's membership in a tenant and returns the identity. This takes effect
     as disabling the membership does, at the identity's next token refresh. Fails if the identity has no membership in
     the tenant. Requires user:write.
+    Delegated callers must hold every authority granted by the membership's current tenant roles (ESCALATION).
     """
     # Remove an identity's membership in a tenant.
     removeMembership(
@@ -2030,6 +2040,7 @@ type Mutation {
     Creates a role and returns it. Fails if the scope is not `system` or `tenant`, if an
     authority is unknown or belongs to the other scope, or if the token is already used in
     that scope (error code CONFLICT). Requires role:write.
+    The caller must hold every authority the new role grants.
     """
     # Create a role granting a set of authorities (requires role:write).
     createRole(
@@ -2039,6 +2050,7 @@ type Mutation {
     """
     Applies a partial update to a role and returns it. Fails if the role does not exist or
     the resulting authorities are not valid for its scope. Requires role:write.
+    The caller must hold every authority granted by both the current and resulting role.
     """
     # Apply a partial update to a role by scope + token: an omitted field is left
     # alone, a null clears it, a value sets it (requires role:write).
@@ -2049,11 +2061,14 @@ type Mutation {
         token: String!
         """The changes to apply."""
         request: AdminRoleUpdateRequest!
+        """Optional updatedAt from the role being edited. A stale version refuses the save; omit for an unconditional update."""
+        expectedUpdatedAt: String
     ): AdminRole!
     """
     Deletes a role and removes it from everything it was assigned to. Returns true if it was
     deleted and false if there was no such role. The `superuser` system role cannot be
     deleted, so the instance cannot be locked out of this API. Requires role:write.
+    The caller must hold every authority the current role grants.
     """
     # Delete a role by scope + token; returns whether one was removed. The
     # superuser system role is protected (requires role:write).
@@ -2263,6 +2278,7 @@ type Mutation {
     connection serving a tenant that requires single sign-on is refused with the error code
     SSO_ENFORCED_TENANT_STRANDED (its `tenants` extension names them): turn the requirement off
     with setTenantSsoEnforced first. Requires user:write.
+    Changing a tenant connection's groupsClaim requires holding every authority its default roles and group mappings grant.
     """
     updateIdpConnection(
         """Token of the connection."""
@@ -2324,6 +2340,7 @@ type Mutation {
     can enter those tenants and no others. Fails for an instance connection or an unknown tenant,
     and refuses to drop a tenant that requires single sign-on when this is the last enabled
     connection serving it, with the error code SSO_ENFORCED_TENANT_STRANDED. Requires user:write.
+    Requires holding every authority the connection's default roles and group mappings grant.
     """
     setIdpConnectionTenants(
         """Token of the connection."""
@@ -2373,6 +2390,7 @@ type Mutation {
     as this identity. This is how an instance connection reaches an identity. A tenant connection
     refuses an identity that holds a system role. Fails if the identity or connection does not
     exist, or either side is already linked. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     linkIdentity(
         """Email of the identity."""
@@ -2385,6 +2403,7 @@ type Mutation {
     """
     Removes an identity's link on a connection; its sign-ins through that connection end at their
     next exchange. Returns true if a link was removed. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     unlinkIdentity(
         """Email of the identity."""
@@ -2397,6 +2416,7 @@ type Mutation {
     request's email NOW. If that identity already holds memberships in the connection's tenants
     that no connection manages, say what becomes of them: `convert` makes the connection manage
     them, `keep_manual` leaves them. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     approveSsoLinkRequest(
         """Identifier of the request."""
@@ -2411,6 +2431,7 @@ type Mutation {
     disables it. Only memberships the connection manages are touched, never manual ones. Roles
     are tenant roles only: a system role is refused. A role with full authority in the tenant
     needs acknowledgeFullAuthority. Takes effect at each person's next sign-in. Requires user:write.
+    Delegated callers must hold every authority granted by the mapped tenant roles and by the mappings being replaced (ESCALATION).
     """
     setIdpRoleMappings(
         """Token of the connection."""
@@ -2427,6 +2448,7 @@ type Mutation {
     identity has) and the tenant roles everyone who signs in through it holds, and returns the
     connection. An instance connection takes neither. A role with full authority needs
     acknowledgeFullAuthority. Requires user:write.
+    Delegated callers must hold every authority granted by the default tenant roles and by the defaults being replaced (ESCALATION).
     """
     setIdpJit(
         """Token of the connection."""
@@ -2486,6 +2508,7 @@ type Mutation {
     issued stop working when they expire, 15 minutes by default (on the admin API too). The password
     is unchanged and the person can sign in again at once. Returns how many sign-ins it ended.
     Fails if the identity does not exist. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     revokeSessions(
         """Email of the identity."""
@@ -2497,6 +2520,7 @@ type Mutation {
     refused unless the identity is linked to an enabled connection it can sign in through (an
     instance connection for an identity holding a system role), so it is never left with no way
     in. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
     """
     clearPassword(
         """Email of the identity."""

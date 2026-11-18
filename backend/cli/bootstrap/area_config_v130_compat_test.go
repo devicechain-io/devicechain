@@ -3,13 +3,13 @@
 
 package bootstrap
 
-// testdata/area_config_keys_v1.5.0.json freezes the per-area decoding schema at
-// v1.5.0: {"areas":{"<area>":{"retired":{path:reason},"tree":NODE}}}, using
+// testdata/area_config_keys_v1.6.0.json freezes the per-area decoding schema at
+// v1.6.0: {"areas":{"<area>":{"retired":{path:reason},"tree":NODE}}}, using
 // the same NODE shape as the instance snapshot. The per-area documents are the
 // dct-<instance>-config ConfigMap entries, each decoded strictly by its area's
 // typed config. An old pod must START against the new release's rendered config.
 //
-// REGENERATION RECIPE: git worktree add <temp-dir> v1.5.0 (or the new snapshot
+// REGENERATION RECIPE: git worktree add <temp-dir> v1.6.0 (or the new snapshot
 // tag). In that worktree, add a throwaway main package importing every
 // backend/services/*/config package. Reflect over each area's root
 // New<X>Configuration() type following encoding/json decoding rules: use the json
@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -37,14 +38,14 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-const areaConfigSnapshotTag = "v1.5.0"
+const areaConfigSnapshotTag = "v1.6.0"
 
-// instanceConfigSnapshotTag names the tag of instance_config_keys_v1.5.0.json.
-const instanceConfigSnapshotTag = "v1.5.0"
+// instanceConfigSnapshotTag names the tag of instance_config_keys_v1.6.0.json.
+const instanceConfigSnapshotTag = "v1.6.0"
 
 func loadV130AreaConfigSnapshot(t *testing.T) map[string]v130ConfigSnapshot {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/area_config_keys_v1.5.0.json")
+	raw, err := os.ReadFile("testdata/area_config_keys_v1.6.0.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ func loadV130AreaConfigSnapshot(t *testing.T) map[string]v130ConfigSnapshot {
 		t.Fatal(err)
 	}
 	if len(snapshot.Areas) == 0 {
-		t.Fatal("v1.5.0 area config snapshot has no areas")
+		t.Fatal("v1.6.0 area config snapshot has no areas")
 	}
 	return snapshot.Areas
 }
@@ -113,7 +114,7 @@ func TestAreaConfigDocumentsDecodeOnV130(t *testing.T) {
 		for name, raw := range renderAreaConfigDocuments(t, ch, vals) {
 			area, ok := snapshot[name]
 			if !ok {
-				t.Logf("skipping post-v1.5.0 area %q: no v1.5.0 pod exists for it", name)
+				t.Logf("skipping post-v1.6.0 area %q: no v1.6.0 pod exists for it", name)
 				continue
 			}
 			seen[name] = true
@@ -130,7 +131,7 @@ func TestAreaConfigDocumentsDecodeOnV130(t *testing.T) {
 				nonEmpty++
 			}
 			if paths := unknownV130ConfigPaths(doc, area.Tree, area.Retired, ""); len(paths) != 0 {
-				t.Errorf("area %q has unknown v1.5.0 configuration keys: %s; a v1.5.0 pod of that area decodes the document strictly and refuses an unknown key, so a key added after v1.5.0 must be left out of the document while at its default", name, strings.Join(paths, ", "))
+				t.Errorf("area %q has unknown v1.6.0 configuration keys: %s; a v1.6.0 pod of that area decodes the document strictly and refuses an unknown key, so a key added after v1.6.0 must be left out of the document while at its default", name, strings.Join(paths, ", "))
 			}
 		}
 	}
@@ -214,14 +215,24 @@ func parseFinalReleaseTag(tag string) ([3]int, bool) {
 
 func latestFinalReleaseTag(t *testing.T) string {
 	t.Helper()
-	cmd := exec.Command("git", "tag", "--list", "v*")
+	// A read-only tag probe of this checkout. Container copies can have another
+	// owner; trust only these exact paths, without changing persistent Git config.
+	moduleDir, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Dir(filepath.Dir(moduleDir))
+	cmd := exec.Command("git", "-c", "safe.directory="+repoDir, "-c", "safe.directory="+moduleDir, "tag", "--list", "v*")
 	cmd.Dir = "."
-	raw, err := cmd.Output()
+	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		if _, lookupErr := exec.LookPath("git"); lookupErr != nil {
+			if os.Getenv("DC_REQUIRE_TAGS") != "" {
+				t.Fatal("DC_REQUIRE_TAGS: git is missing; CI fetches tags; a skip here only happens in a tagless checkout")
+			}
 			t.Skip("git is missing; CI fetches tags; a skip here only happens in a tagless checkout")
 		}
-		t.Fatalf("listing release tags: %v", err)
+		t.Fatalf("listing release tags: %v\n%s", err, raw)
 	}
 	latest := ""
 	var highest [3]int
@@ -232,6 +243,9 @@ func latestFinalReleaseTag(t *testing.T) string {
 		}
 	}
 	if latest == "" {
+		if os.Getenv("DC_REQUIRE_TAGS") != "" {
+			t.Fatal("DC_REQUIRE_TAGS: no final vMAJOR.MINOR.PATCH tag is present; CI fetches tags; a skip here only happens in a tagless checkout")
+		}
 		t.Skip("no final vMAJOR.MINOR.PATCH tag is present; CI fetches tags; a skip here only happens in a tagless checkout")
 	}
 	return latest
@@ -265,9 +279,9 @@ func TestSnapshotStale(t *testing.T) {
 	}{
 		{"v1.3.0", "v1.3.0", false},
 		{"v1.3.0", "v1.3.5", false},
-		{"v1.3.0", "v1.5.0", true},
+		{"v1.3.0", "v1.6.0", true},
 		{"v1.3.0", "v2.0.0", true},
-		{"v1.5.0", "v1.3.0", false},
+		{"v1.6.0", "v1.3.0", false},
 	} {
 		t.Run(tc.snapshot+" vs "+tc.latest, func(t *testing.T) {
 			if got := snapshotStale(tc.snapshot, tc.latest); got != tc.want {

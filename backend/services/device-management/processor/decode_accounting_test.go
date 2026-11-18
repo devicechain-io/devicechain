@@ -285,9 +285,10 @@ func TestHealthRowsAreTrimmedPastRetentionOncePerHour(t *testing.T) {
 	require.Equal(t, 1, st.trims, "once an hour")
 }
 
-// A redelivered failure is always recorded, is tallied as failed (the first delivery may never have
-// reached a decode), and still charges the budget so a failed-events outage cannot make failures free.
-func TestARedeliveredFailureIsRecordedTalliedAndChargesTheBudget(t *testing.T) {
+// A redelivered failure is budgeted exactly like a first one: a first delivery can be redelivered
+// without ever having been admitted (it failed before the decode, or its hold was released at
+// shutdown), so a redelivery is no proof a record was ever budgeted.
+func TestARedeliveredFailureIsHeldToTheBudgetAndTallied(t *testing.T) {
 	c := newFakeClock()
 	st := &fakeStore{}
 	a := newDecodeAccountant(st, "pod-a", nil, c.now)
@@ -298,23 +299,26 @@ func TestARedeliveredFailureIsRecordedTalliedAndChargesTheBudget(t *testing.T) {
 
 	again := failure("acme", 7, "meter@1")
 	again.Redelivered = true
-	require.True(t, a.ObserveDecode(again), "its redelivery is recorded even so")
+	require.False(t, a.ObserveDecode(again), "a redelivery that was never admitted does not bypass the empty bucket")
 	require.NoError(t, a.Flush(context.Background()))
 	r, _ := st.last("acme", "meter", 1)
-	require.EqualValues(t, DecodeRecordBurst+1, r.Failed, "the redelivery is tallied as failed")
-	require.EqualValues(t, 1, r.Suppressed)
+	require.EqualValues(t, DecodeRecordBurst, r.Failed)
+	require.EqualValues(t, 2, r.Suppressed, "both are tallied as suppressed")
 }
 
-func TestRedeliveriesDrainTheBudgetSoNewFailuresAreSuppressedNotAddedOnTop(t *testing.T) {
+// A restart with a backlog in flight: every message comes back redelivered, none ever admitted.
+func TestARedeliveredBacklogCannotFloodPastTheBudget(t *testing.T) {
 	c := newFakeClock()
 	a := newDecodeAccountant(&fakeStore{}, "pod-a", nil, c.now)
 	redo := failure("acme", 7, "meter@1")
 	redo.Redelivered = true
+	recorded := 0
 	for i := 0; i < 3*DecodeRecordBurst; i++ {
-		require.True(t, a.ObserveDecode(redo), "a redelivery is never denied")
+		if a.ObserveDecode(redo) {
+			recorded++
+		}
 	}
-	require.False(t, a.ObserveDecode(failure("acme", 7, "meter@1")),
-		"but the redeliveries spent the bucket, so a first delivery is now suppressed")
+	require.Equal(t, DecodeRecordBurst, recorded)
 }
 
 func TestTheStoredErrorIsBoundedOnARuneBoundary(t *testing.T) {

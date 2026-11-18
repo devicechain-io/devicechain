@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { listAll } from '@/lib/api/list-all';
 import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Check, Copy, MoreHorizontal, Plus } from 'lucide-react';
@@ -36,6 +37,7 @@ import {
   DataTableHeaderCell,
   DataTableRow,
 } from '@/components/ui/data-table';
+import { RevealOnceDialog } from '@/components/RevealOnceDialog';
 import { FormDrawer } from '@/components/registry';
 import { useAuth } from '@/auth/AuthProvider';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -61,7 +63,6 @@ import { MAX_SCOPE_ENTRIES } from '@/routes/members/MemberAccessSheet';
 import { memberErrorMessage } from '@/routes/members/memberErrors';
 
 const PAGE_SIZE = 50;
-const CUSTOMER_PAGE = { pageNumber: 1, pageSize: 1000 };
 /** The server's bounds on a rotation's overlap (hours) and a secret's lifetime (days). */
 export const MAX_OVERLAP_HOURS = 168;
 export const DEFAULT_OVERLAP_HOURS = 24;
@@ -153,9 +154,7 @@ export default function ServiceAccountsPage() {
         </FormDrawer>
       )}
       {sheet?.kind === 'issued' && (
-        <FormDrawer shot="service-account-secret" open onOpenChange={(o) => !o && close()} title={t('saIssuedTitle')}>
-          <SecretIssued credentials={sheet.credentials} onDone={close} />
-        </FormDrawer>
+        <SecretIssued credentials={sheet.credentials} onDone={close} />
       )}
       <div className="space-y-6">
         {loading && !data ? (
@@ -365,8 +364,8 @@ export function AccountForm({
   const [busy, setBusy] = useState(false);
 
   const { data: roleList } = useQuery(listTenantRoles, []);
-  const { data: customerPage } = useQuery(() => listCustomers(CUSTOMER_PAGE), []);
-  const { data: accessGroups } = useQuery(listAccessScopeGroups, []);
+  const { current: customerPage, error: customersError } = useQuery(() => listAll(page => listCustomers(page)), []);
+  const { current: accessGroups, error: groupsError } = useQuery(listAccessScopeGroups, []);
   const roleOptions = useMemo<ComboboxOption[]>(
     () =>
       (roleList ?? []).map((r) => ({
@@ -422,6 +421,8 @@ export function AccountForm({
 
   return (
     <div className="space-y-4">
+      {customersError && <p role="alert" className="text-sm text-destructive">{customersError}</p>}
+      {groupsError && <p role="alert" className="text-sm text-destructive">{groupsError}</p>}
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
       {!account && (
         <>
@@ -533,7 +534,7 @@ function RotateForm({ account, onIssued }: { account: ServiceAccount; onIssued: 
 export function SecretIssued({ credentials, onDone }: { credentials: ServiceAccountCredentials; onDone: () => void }) {
   const { t } = useTranslation('members');
   return (
-    <div className="space-y-4" data-shot="service-account-secret">
+    <RevealOnceDialog title={t('saIssuedTitle')} shot="service-account-secret" onDone={onDone} doneLabel={t('done')}>
       <FormField label={t('saClientIdLabel')} htmlFor={CLIENT_ID_INPUT_ID}>
         <div className="flex items-center gap-2">
           <Input id={CLIENT_ID_INPUT_ID} readOnly value={credentials.clientId} className="font-mono text-xs" />
@@ -561,8 +562,7 @@ export function SecretIssued({ credentials, onDone }: { credentials: ServiceAcco
         <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
         <span>{t('saSecretShownOnce')}</span>
       </p>
-      <Button onClick={onDone}>{t('done')}</Button>
-    </div>
+    </RevealOnceDialog>
   );
 }
 

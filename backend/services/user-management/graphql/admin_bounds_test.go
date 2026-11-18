@@ -19,7 +19,7 @@ import (
 // must happen before the service is touched, so a call that got past its bound would
 // dereference nil and fail the test loudly.
 func boundsCtx() context.Context {
-	ctx := adminCtx(string(auth.UserWrite), string(auth.RoleWrite))
+	ctx := auth.WithClaims(context.Background(), &auth.Claims{TokenType: auth.TokenTypeIdentity, Username: "caller@example.com", Authorities: []string{string(auth.UserWrite), string(auth.RoleWrite)}})
 	return context.WithValue(ctx, ContextAdminKey, (*admin.Service)(nil))
 }
 
@@ -97,9 +97,10 @@ func TestAdminListsOverTheBoundAreRefused(t *testing.T) {
 	update.Authorities.Set = true
 	update.Authorities.Value = over
 	_, err = r.UpdateRole(boundsCtx(), struct {
-		Scope   string
-		Token   string
-		Request admin.RoleUpdateRequest
+		Scope             string
+		Token             string
+		Request           admin.RoleUpdateRequest
+		ExpectedUpdatedAt *string
 	}{Scope: "tenant", Token: "r", Request: update})
 	requireLimit(t, err)
 }
@@ -175,9 +176,10 @@ func TestAdminListsAtTheBoundAreAccepted(t *testing.T) {
 			update.Authorities.Set = true
 			update.Authorities.Value = at
 			_, err := r.UpdateRole(boundsCtx(), struct {
-				Scope   string
-				Token   string
-				Request admin.RoleUpdateRequest
+				Scope             string
+				Token             string
+				Request           admin.RoleUpdateRequest
+				ExpectedUpdatedAt *string
 			}{Scope: "tenant", Token: "r", Request: update})
 			return err
 		},
@@ -230,9 +232,10 @@ func TestEveryAdminBoundRunsAfterAuthorization(t *testing.T) {
 	update.Authorities.Set = true
 	update.Authorities.Value = over
 	_, errs["updateRole"] = r.UpdateRole(ctx, struct {
-		Scope   string
-		Token   string
-		Request admin.RoleUpdateRequest
+		Scope             string
+		Token             string
+		Request           admin.RoleUpdateRequest
+		ExpectedUpdatedAt *string
 	}{Scope: "tenant", Token: "r", Request: update})
 
 	for name, err := range errs {

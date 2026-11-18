@@ -292,11 +292,15 @@ The device uses three requests on the HTTP ingest listener, each with `Authoriza
 | `POST .../commands/{command}/ack` | The command reached the device. Send it **before** acting on the command. | `204`. |
 | `POST .../commands/{command}/response` | What the device did: `{"success": true, "payload": ..., "error": "..."}`. | `204`. |
 
-The body of the `200` and of a response are published as [command-pull.schema.json](pathname:///schema/device/command-pull.schema.json) and [command-pull-response.schema.json](pathname:///schema/device/command-pull-response.schema.json). `401` means the token was not accepted, `403` that it belongs to another device or the device's type has not opted in, `404` that the command is not this device's, `409` that the command is not waiting for that request, and `429` that the tenant already has as many requests being held open as it may (retry after the `Retry-After`) or the source address is making too many requests. `503` means retry.
+The body of the `200` and of a response are published as [command-pull.schema.json](pathname:///schema/device/command-pull.schema.json) and [command-pull-response.schema.json](pathname:///schema/device/command-pull-response.schema.json). `401` means the token was not accepted, `403` that it belongs to another device or the device's type has not opted in, `404` that the command is not this device's, `409` that the command is not waiting for that request, and `429` that the tenant or the device already has as many requests being held open as it may (retry after the `Retry-After`, 5 seconds) or the source address is making too many requests. `503` means retry.
+
+A device may hold at most two waiting polls on each replica: its own, plus one for a reconnect whose earlier connection the server has not yet seen close. A third waiting poll from the same device is refused with `429` and `Retry-After: 5` even when its tenant has room, so keep one poll open at a time. A request with `wait=0` is never held open, so neither the device's limit nor the tenant's counts it.
 
 Each command a pull hands out is claimed by that pull, so two requests, two replicas or a retry never receive the same command. A held request asks the platform for the device's commands every couple of seconds, so a command issued while a device is polling reaches it within a few seconds.
 
-**Turning it on during an upgrade.** Upgrade device-management first, and set a device type's `commandChannel` to `HTTP_PULL` only once every replica of every service has been upgraded. A command-delivery replica from before this channel publishes a pull device's commands to a subject nobody reads, and they time out. A replica that is already upgraded while device-management is not yet cannot tell which devices pull, so it holds the commands of every device it asks about and releases them once device-management answers; ordinary devices are delayed for that time, never sent to the wrong place.
+**Turning it on during an upgrade.** Upgrade device-management first, and set a device type's `commandChannel` to `HTTP_PULL` only once every replica of every service has been upgraded. A command-delivery replica from before this channel publishes a pull device's commands to a subject nobody reads, and they time out. If the command channel cannot be resolved, affected commands stay `QUEUED` without being published or moved to `HELD`. They are reconsidered on the first delivery sweep after recovery (30 seconds by default); decided cached or partial answers still apply. Existing `HELD` commands stay held while their channel is undecided.
+
+When a command's channel cannot be resolved, it stays `QUEUED` for the next delivery sweep; an existing `HELD` command stays held. The reconciler continues through releasable pages within half its interval, stopping at the first page with no releases.
 
 **Acknowledging.** A command whose acknowledgement does not arrive within 60 seconds is handed out again by the next pull, with a higher `attempt`, until its `maxAttempts` are spent (3 unless the command sets another, up to 10). After that it fails with outcome [`NOT_DELIVERED`](#outcome) and no delivery time. This rests on the device acknowledging before it acts: an unacknowledged command is one the device has not been seen to act on, so sending it again is safe. A device that acts first and acknowledges afterwards can be handed a command twice and should not rely on the acknowledgement for that.
 
@@ -450,8 +454,9 @@ lost. The counter `devicechain_commanddelivery_command_delivery_window_restamps_
 because the window was edited or deleted, closed again before the device returned, or because their
 device type moved to another window or lost its window.
 
-- Deleting a window is refused while any device type uses it. If a window is gone anyway, waiting
-  commands are released and dispatch normally.
+- Deleting a window is refused while any device type uses it. A deleted window admits no
+  commands: only a positive answer that the device type has no window releases them. Disabled
+  devices and unresolved types stay gated, retaining the deleted window token until resolution.
 - If a device is offline through a whole opening, its undelivered command cannot be claimed once
   the window closes, and the same pass moves it to the next opening. If command delivery cannot
   reach the window's owner, waiting commands stay waiting; none is released.

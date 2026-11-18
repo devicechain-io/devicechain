@@ -5,12 +5,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
-// ProbesPort is the port a Service with no GraphQL plane serves its probes on.
+// ProbesPort is the public HTTP port of a Service with no GraphQL plane.
 //
 // 🔴 IT IS A VARIABLE ONLY SO A TEST CAN ASK FOR AN EPHEMERAL PORT, and a test that
 // changes it must restore it. The services that take this path are exercised end to end
@@ -21,9 +22,14 @@ import (
 // produce; a package variable initialized where it is declared has no such failure mode.
 var ProbesPort int32 = core.HttpPort
 
+// OpsProbesPort is the ops HTTP port of a Service with no GraphQL plane. Tests may
+// set it to zero for an ephemeral port and must restore it afterwards. When only
+// ProbesPort is overridden, the default ops port also becomes ephemeral so existing
+// real-service test helpers keep both listeners off the fixed production ports.
+var OpsProbesPort int32 = core.OpsPort
+
 // probeServer is the HTTP surface of a Service that has no GraphQL plane: /healthz,
-// /readyz and /metrics, plus any route the service registered on Microservice.Mux()
-// before Initialize.
+// /readyz and /metrics on Microservice.OpsMux(), and public routes on Microservice.Mux().
 //
 // Every DeviceChain pod needs these. The chart points its liveness, readiness and startup
 // probes at them by name and its ServiceMonitor scrapes /metrics, so a Service is never
@@ -41,8 +47,9 @@ var ProbesPort int32 = core.HttpPort
 // their servers last before they joined this package, though the reason recorded for it
 // was a different one, and wrong: it conflated the HTTP stop with the leadership unwind.
 type probeServer struct {
-	ms     *core.Microservice
-	server *core.HttpServer
+	ms        *core.Microservice
+	server    *core.HttpServer
+	opsServer *core.HttpServer
 
 	lifecycle core.LifecycleManager
 }
@@ -65,23 +72,39 @@ func (p *probeServer) ExecuteInitialize(context.Context) error {
 
 func (p *probeServer) Start(ctx context.Context) error { return p.lifecycle.Start(ctx) }
 
-// ExecuteStart binds a fresh server. An http.Server cannot be restarted — Shutdown
+// ExecuteStart binds fresh servers, ops first and public second. An http.Server cannot be restarted — Shutdown
 // latches it — so a retried start needs a new one, and the bind error is returned so a
 // port collision refuses startup instead of leaving a pod with no probes.
-func (p *probeServer) ExecuteStart(context.Context) error {
+func (p *probeServer) ExecuteStart(ctx context.Context) error {
+	opsPort := OpsProbesPort
+	if ProbesPort != core.HttpPort && opsPort == core.OpsPort {
+		opsPort = 0
+	}
+	p.opsServer = core.NewHttpServerForHandler(opsPort, p.ms.OpsMux())
+	if err := p.opsServer.Start(); err != nil {
+		return err
+	}
 	p.server = p.ms.NewHttpServer(ProbesPort)
-	return p.server.Start()
+	if err := p.server.Start(); err != nil {
+		return errors.Join(err, p.opsServer.Shutdown(ctx))
+	}
+	return nil
 }
 
 func (p *probeServer) Stop(ctx context.Context) error { return p.lifecycle.Stop(ctx) }
 
-// ExecuteStop lets in-flight requests finish until ctx expires. The server is nil only
-// if Stop is driven by hand without a Start, which gets a no-op rather than a panic.
+// ExecuteStop drains public requests before stopping ops, so probes answer through
+// the whole unwind. Both shutdowns are attempted even when the context expires.
+// Servers are nil before Start, which gets a no-op rather than a panic.
 func (p *probeServer) ExecuteStop(ctx context.Context) error {
-	if p.server == nil {
-		return nil
+	var publicErr, opsErr error
+	if p.server != nil {
+		publicErr = p.server.Shutdown(ctx)
 	}
-	return p.server.Shutdown(ctx)
+	if p.opsServer != nil {
+		opsErr = p.opsServer.Shutdown(ctx)
+	}
+	return errors.Join(publicErr, opsErr)
 }
 
 func (p *probeServer) Terminate(ctx context.Context) error { return p.lifecycle.Terminate(ctx) }

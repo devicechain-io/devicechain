@@ -1,9 +1,11 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { listAll } from '@/lib/api/list-all';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle } from 'lucide-react';
+import { RevealOnceDialog } from '@/components/RevealOnceDialog';
 import { FormDrawer } from '@/components/registry';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -55,10 +57,6 @@ export function invitationLink(code: string): string {
 
 type ScopeMode = 'all' | 'limited';
 
-// The customers a member can be limited to, offered in one list. A tenant with more than
-// the page shows can still type the token; the server refuses one that names nothing.
-const CUSTOMER_PAGE = { pageNumber: 1, pageSize: 1000 };
-
 /** The most entries one member's scope may name, customers and groups together (the server's limit). */
 export const MAX_SCOPE_ENTRIES = 16;
 
@@ -80,6 +78,19 @@ export function MemberAccessSheet({
 }) {
   const { t } = useTranslation('members');
   const editing = mode.kind === 'edit' ? mode.member : null;
+  const [issued, setIssued] = useState<{ email: string; code: string } | null>(null);
+  if (issued) {
+    return (
+      <InvitationIssued
+        email={issued.email}
+        code={issued.code}
+        onDone={() => {
+          setIssued(null);
+          onDone(t('invitedToast', { email: issued.email }));
+        }}
+      />
+    );
+  }
   const title = editing ? t('editAccessTitle', { email: editing.email }) : t('inviteTitle');
   return (
     <FormDrawer
@@ -89,15 +100,17 @@ export function MemberAccessSheet({
       title={title}
       description={editing ? t('editAccessDescription') : t('inviteDescription')}
     >
-      {/* Rendered inside the sheet, which unmounts it when closed: every opening starts
-          from the member's stored access, and a shown invitation link does not survive
-          closing the sheet. */}
-      <MemberAccessForm mode={mode} onDone={onDone} />
+      {/* The form unmounts on close or issuance; the reveal owns the one-time link. */}
+      <MemberAccessForm mode={mode} onDone={onDone} onIssued={setIssued} />
     </FormDrawer>
   );
 }
 
-function MemberAccessForm({ mode, onDone }: { mode: MemberAccessMode; onDone: (message: string) => void }) {
+function MemberAccessForm({ mode, onDone, onIssued }: {
+  mode: MemberAccessMode;
+  onDone: (message: string) => void;
+  onIssued: (value: { email: string; code: string }) => void;
+}) {
   const { t } = useTranslation('members');
   const editing = mode.kind === 'edit' ? mode.member : null;
   const initialRoles = useMemo(() => (editing ? editing.roles.map((r) => r.token) : []), [editing]);
@@ -124,15 +137,12 @@ function MemberAccessForm({ mode, onDone }: { mode: MemberAccessMode; onDone: (m
   const [groups, setGroups] = useState<string[]>(initialGroups);
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // The one-time code, once an invitation has been issued. Held only in this component's
-  // state: never stored, never logged, gone when the sheet closes.
-  const [issued, setIssued] = useState<{ email: string; code: string } | null>(null);
 
   const { data: roleList } = useQuery(listTenantRoles, []);
-  const { data: customerPage } = useQuery(() => listCustomers(CUSTOMER_PAGE), []);
+  const { current: customerPage, error: customersError } = useQuery(() => listAll(page => listCustomers(page)), []);
   // Only the groups that are access scopes are offered: a member limited to any other group
   // would see nothing. The field's description says where a missing one is enabled.
-  const { data: accessGroups } = useQuery(listAccessScopeGroups, []);
+  const { current: accessGroups, error: groupsError } = useQuery(listAccessScopeGroups, []);
 
   const roleOptions = useMemo<ComboboxOption[]>(
     () =>
@@ -169,7 +179,7 @@ function MemberAccessForm({ mode, onDone }: { mode: MemberAccessMode; onDone: (m
     try {
       if (!editing) {
         const res = await inviteMember({ email: email.trim(), roleTokens: roles, scope });
-        setIssued({ email: email.trim(), code: res.invitationCode });
+        onIssued({ email: email.trim(), code: res.invitationCode });
         return;
       }
       const sameRoles = sameSet(roles, initialRoles);
@@ -189,10 +199,6 @@ function MemberAccessForm({ mode, onDone }: { mode: MemberAccessMode; onDone: (m
     }
   };
 
-  if (issued) {
-    return <InvitationIssued email={issued.email} code={issued.code} onDone={() => onDone(t('invitedToast', { email: issued.email }))} />;
-  }
-
   const scopeOptions = [
     { value: 'all' as const, label: t('scopeWholeTenant') },
     { value: 'limited' as const, label: t('scopeLimited') },
@@ -200,6 +206,8 @@ function MemberAccessForm({ mode, onDone }: { mode: MemberAccessMode; onDone: (m
 
   return (
     <div className="space-y-4">
+      {customersError && <p role="alert" className="text-sm text-destructive">{customersError}</p>}
+      {groupsError && <p role="alert" className="text-sm text-destructive">{groupsError}</p>}
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
       {!editing && (
         <FormField label={t('emailLabel')} htmlFor="m-email">
@@ -288,8 +296,7 @@ export function InvitationIssued({ email, code, onDone }: { email: string; code:
   const { t } = useTranslation('members');
   const link = invitationLink(code);
   return (
-    <div className="space-y-4" data-shot="invitation-link">
-      <p className="text-sm text-foreground">{t('invitationIssued', { email })}</p>
+    <RevealOnceDialog title={t('invitationIssued', { email })} shot="invitation-link" onDone={onDone} doneLabel={t('done')}>
       <FormField label={t('invitationLinkLabel')} htmlFor="m-link">
         <div className="flex items-center gap-2">
           <Input id="m-link" readOnly value={link} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
@@ -300,7 +307,6 @@ export function InvitationIssued({ email, code, onDone }: { email: string; code:
         <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
         <span>{t('invitationShownOnce')}</span>
       </p>
-      <Button onClick={onDone}>{t('done')}</Button>
-    </div>
+    </RevealOnceDialog>
   );
 }

@@ -416,6 +416,9 @@ func (suite *EventResolverTestSuite) TestNewRelationshipStampsTrackedAnchorMembe
 		}}, nil)
 	// The assignment being created: device -> gateway.
 	suite.API.Mock.On("EntityRelationshipsByToken").Return([]*dmodel.EntityRelationship{}, nil)
+	// "connected-to" is an untracked tenant type, which a device may still assert.
+	suite.API.Mock.On("EntityRelationshipTypesByToken").Return(
+		[]*dmodel.EntityRelationshipType{{Tracked: false}}, nil)
 	suite.API.Mock.On("CreateEntityRelationship").Return(
 		&dmodel.EntityRelationship{TargetType: "gateway", TargetToken: "gw-1", TargetId: 42}, nil)
 	// device 500 is in beta-fleet@1; the already-tracked area 900 is in arid-areas@2. The NEW
@@ -471,6 +474,9 @@ func (suite *EventResolverTestSuite) TestNewRelationshipCarriesEveryAnchorTheDev
 			trackedRel(7, "customer", "acme"),
 		}}, nil)
 	suite.API.Mock.On("EntityRelationshipsByToken").Return([]*dmodel.EntityRelationship{}, nil)
+	// "connected-to" is an untracked tenant type, which a device may still assert.
+	suite.API.Mock.On("EntityRelationshipTypesByToken").Return(
+		[]*dmodel.EntityRelationshipType{{Tracked: false}}, nil)
 	suite.API.Mock.On("CreateEntityRelationship").Return(
 		&dmodel.EntityRelationship{Model: gorm.Model{ID: 9}, TargetType: "gateway", TargetToken: "gw-1", TargetId: 42}, nil)
 	suite.API.MembershipsFn = func(entityType string, entityId uint) []dmodel.GroupMembership {
@@ -496,10 +502,9 @@ func (suite *EventResolverTestSuite) TestNewRelationshipCarriesEveryAnchorTheDev
 	assert.Equal(suite.T(), uint(0), reason)
 	if assert.Len(suite.T(), results, 1) {
 		assert.ElementsMatch(suite.T(), []resolvedevent.ResolvedAnchor{
-			{AnchorType: "customer", AnchorToken: "acme", RelationshipId: 7},
+			{AnchorType: "customer", AnchorToken: "acme", RelationshipId: 7, EntityId: 107},
 			{AnchorType: "group", AnchorToken: "north"},
-			{AnchorType: "gateway", AnchorToken: "gw-1", RelationshipId: 9},
-		}, results[0].Resolved.Anchors)
+		}, results[0].Resolved.Anchors, "an untracked relationship's target is not an anchor")
 	}
 }
 
@@ -534,6 +539,7 @@ func (suite *EventResolverTestSuite) TestMeasurementValidationPasses() {
 	assert.Equal(suite.T(), uint(0), reason)
 	assert.Len(suite.T(), results, 1)
 	assert.Empty(suite.T(), results[0].Resolved.Anchors)
+	assert.Equal(suite.T(), uint64(1), results[0].Resolved.DeviceIncarnation)
 }
 
 // A declared metric binds its definition id as the classifier and denormalizes the
@@ -684,6 +690,7 @@ func trackedRel(id uint, targetType string, targetToken string) dmodel.EntityRel
 		SourceType:  "device",
 		SourceId:    1,
 		TargetType:  targetType,
+		TargetId:    id + 100,
 		TargetToken: targetToken,
 	}
 }
@@ -701,6 +708,7 @@ func (suite *EventResolverTestSuite) TestUnassignedResolvesAnchorless() {
 	assert.Equal(suite.T(), uint(0), reason)
 	assert.Len(suite.T(), results, 1)
 	assert.Empty(suite.T(), results[0].Resolved.Anchors)
+	assert.Equal(suite.T(), uint64(1), results[0].Resolved.DeviceIncarnation)
 }
 
 // A single assignment anchors the one resolved event on that relationship's target.
@@ -716,7 +724,7 @@ func (suite *EventResolverTestSuite) TestSingleAssignmentAnchored() {
 	assert.NoError(suite.T(), err)
 	assert.Len(suite.T(), results, 1)
 	assert.Equal(suite.T(), []resolvedevent.ResolvedAnchor{
-		{AnchorType: "customer", AnchorToken: "cust-3", RelationshipId: 7},
+		{AnchorType: "customer", AnchorToken: "cust-3", RelationshipId: 7, EntityId: 107},
 	}, results[0].Resolved.Anchors)
 }
 
@@ -736,9 +744,9 @@ func (suite *EventResolverTestSuite) TestMultipleAssignmentsAllAnchored() {
 	assert.NoError(suite.T(), err)
 	assert.Len(suite.T(), results, 1)
 	assert.ElementsMatch(suite.T(), []resolvedevent.ResolvedAnchor{
-		{AnchorType: "area", AnchorToken: "area-9", RelationshipId: 5},
-		{AnchorType: "customer", AnchorToken: "cust-3", RelationshipId: 2},
-		{AnchorType: "asset", AnchorToken: "asset-1", RelationshipId: 8},
+		{AnchorType: "area", AnchorToken: "area-9", RelationshipId: 5, EntityId: 105},
+		{AnchorType: "customer", AnchorToken: "cust-3", RelationshipId: 2, EntityId: 102},
+		{AnchorType: "asset", AnchorToken: "asset-1", RelationshipId: 8, EntityId: 108},
 	}, results[0].Resolved.Anchors)
 }
 

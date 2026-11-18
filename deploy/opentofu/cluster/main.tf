@@ -249,6 +249,9 @@ module "object_store" {
   # object store and are supplied rather than minted.
   storage       = var.backup_object_store_storage
   storage_class = var.backup_object_store_storage_class
+  # Decided by the caller from inputs, never by listing the cluster's classes:
+  # the class's count must be known when a fresh cluster is planned.
+  standard_disk_class = var.backup_object_store_gke_standard_disk
 
   depends_on = [module.namespace]
 }
@@ -334,9 +337,7 @@ resource "terraform_data" "backup_removal_guard" {
 
 # 🔴 A PLAN-TIME REFUSAL, not an apply-time one, and not a variable validation.
 #
-# The condition spans two variables, and cross-variable references in a
-# `validation` block need a newer core than this root's `required_version = ">=
-# 1.6"` allows. A precondition on a terraform_data is the portable form and is
+# The condition spans two variables. A precondition on a terraform_data keeps
 # the shape this root already uses for the legacy-StatefulSet cutover guard.
 #
 # What it refuses is the configuration that CANNOT work and does not say so: an

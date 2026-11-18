@@ -39,6 +39,8 @@ import (
 // knowing when the number moves. Methods are qualified by receiver, because two types
 // in one file routinely carry methods of the same name.
 var sanctionedSystemContexts = map[string][]string{
+	// Lists only tenant IDs across the model; work remains scoped to each tenant.
+	"backend/core/rdb/tenant_sweep.go":           {"RdbManager.TenantsWith"},
 	"backend/core/rdb/audit.go":                  {"RdbManager.RecordAuthEventLabeled"},
 	"backend/core/rdb/rdb.go":                    {"RdbManager.ExecuteInitialize"},
 	"backend/core/secrets/selftest.go":           {"SelfTest"},
@@ -55,11 +57,22 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/update-management/model/api_rollouts.go": {"Api.AdvanceRollouts"},
 	// The campaign tick and the campaign pruner each list the tenants that have campaigns (or
 	// open claims), then do each tenant's work under core.WithTenant.
-	"backend/services/command-delivery/model/api_campaign.go":           {"Api.TickCampaigns", "Api.PruneCampaignHistory"},
-	"backend/services/command-delivery/processor/HoldReconciler.go":     {"CommandDeliveryProcessor.readHeldPage"},
+	"backend/services/command-delivery/model/api_campaign.go": {"Api.TickCampaigns", "Api.PruneCampaignHistory"},
+	// The share sweep lists only tenant IDs, then repairs each tenant under WithTenant.
+	"backend/services/dashboard-management/processor/share_sweep.go": {"ShareSweep.sweep"},
+	// The retirement pass lists gate tenants across the instance, then scopes each bounded cancel.
+	"backend/services/command-delivery/processor/HoldReconciler.go":     {"CommandDeliveryProcessor.readHeldPage", "CommandDeliveryProcessor.retireCoveredCommands"},
 	"backend/services/command-delivery/processor/StrandedReconciler.go": {"CommandDeliveryProcessor.reconcileStrandedPage"},
 	"backend/services/command-delivery/processor/WindowRestamp.go":      {"CommandDeliveryProcessor.restampWindows"},
 	"backend/services/device-management/model/ownership_outbox.go":      {"Api.DrainOwnershipFacts"},
+	// The entity-deletion drain lists the tenants that have queued deletion facts (no row is read), then publishes and deletes each tenant's rows under core.WithTenant.
+	"backend/services/device-management/model/deletion_outbox.go": {"Api.DrainEntityDeletions"},
+	// The create-enrollment marker healer reads only (tenant, group, version) keys of registered group versions across tenants (no row content), then judges and rebuilds each one under that row's own core.WithTenant.
+	"backend/services/device-management/model/api_group_enroll_marker.go": {"CreateEnrollMarkerHealer.Pass"},
+	// The startup enrollment reconcile lists the tenants that have groups, facet refs or rule pins (no row is read), then repairs each tenant's groups under core.WithTenant.
+	"backend/services/device-management/model/api_group_enroll_reconcile.go": {"Api.reconcileMembershipEnrollment"},
+	// The attribute-repair drain lists the tenants that have queued repairs (no row is read), then repairs each tenant's rows under core.WithTenant.
+	"backend/services/device-management/model/api_attribute_repairs.go": {"Api.DrainAttributeRepairs"},
 	// The agent-effect relay lists the tenants that have queued effects, then drains each tenant's rows under core.WithTenant.
 	"backend/services/device-management/model/agent_effect_outbox.go":        {"Api.DrainAgentEffects"},
 	"backend/services/device-management/model/api_profile_decoder_health.go": {"Api.TrimDecoderHealth"},
@@ -81,14 +94,13 @@ var sanctionedSystemContexts = map[string][]string{
 		"CountForeignClaimSecretDigests", "CountForeignProvisionSecretDigests",
 		"DigestPlaintextClaimSecrets", "DigestPlaintextProvisionSecrets",
 	},
-	"backend/services/device-state/processor/StateProcessor.go":                {"StateProcessor.runInactivityMonitor"},
-	"backend/services/event-management/model/analytics.go":                     {"ReconcileAnalyticsSurface"},
-	"backend/services/event-management/model/lifecycle.go":                     {"ApplyDataLifecyclePolicies"},
-	"backend/services/event-management/processor/AnchorReconciliationSweep.go": {"AnchorReconciliationSweep.runOnce"},
+	"backend/services/device-state/processor/StateProcessor.go": {"StateProcessor.runInactivityMonitor"},
+	"backend/services/event-management/model/analytics.go":      {"ReconcileAnalyticsSurface"},
+	"backend/services/event-management/model/lifecycle.go":      {"ApplyDataLifecyclePolicies"},
 	"backend/services/event-management/model/usage.go": {"Api.PruneUsageWorkingTables", "Api.RollupUsageHours",
 		"Api.RollupUsagePass"},
 	"backend/services/event-management/processor/backfill/worker.go": {"Worker.pass"},
-	"backend/services/event-management/processor/backfill/tail.go":   {"TailSweeper.sweep"},
+	"backend/services/event-management/processor/backfill/tail.go":   {"TailSweeper.sweep", "TailSweeper.refreshWithLock"},
 	// The DETECT engine is a per-Instance singleton. At startup it holds no tenant and
 	// must rebuild its rule set, dead-man arming and dynamic-threshold view from every
 	// tenant's rows, so each of these four reads the whole projection. They are the only
@@ -98,17 +110,17 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/event-processing/model/device_attribute_store.go":          {"DeviceAttributeStore.LoadAll"},
 	"backend/services/event-processing/model/device_roster_store.go":             {"DeviceRosterStore.LoadAll", "DeviceRosterStore.LoadAllLifecycle"},
 	"backend/services/event-processing/model/profile_active_store.go":            {"ProfileActiveStore.LoadAll"},
-	"backend/services/notification-management/processor/RetentionSweeper.go":     {"RetentionSweeper.runOnce"},
 	"backend/services/notification-management/processor/escalation_scheduler.go": {"EscalationScheduler.runOnce"},
 	"backend/services/user-management/deadletters/context.go":                    {"systemCtx"},
 	"backend/services/user-management/iam/purge.go":                              {"Store.PurgeRecords"},
 	"backend/services/user-management/iam/store.go":                              {"Store.AuditEvents", "Store.sys"},
 	"backend/services/user-management/identity/keys.go": {
-		"Manager.activeKeyAge", "Manager.loadSigningKeysLocked", "Manager.rotateSigningKeyLocked",
+		"Manager.rotateIfOlderThanLocked", "Manager.loadSigningKeysLocked", "Manager.rotateSigningKeyLocked",
 	},
-	"backend/services/user-management/purge/coordinator.go": {"Coordinator.observeLedger", "Coordinator.purgeTenant", "Coordinator.pass"},
-	"backend/services/user-management/purge/relational.go":  {"Relational.handle"},
-	"backend/services/user-management/settings/store.go":    {"Store.sys"},
+	"backend/services/user-management/identity/keys_follow.go": {"Manager.followSigningKeys"},
+	"backend/services/user-management/purge/coordinator.go":    {"Coordinator.observeLedger", "Coordinator.purgeTenant", "Coordinator.pass"},
+	"backend/services/user-management/purge/relational.go":     {"Relational.handle"},
+	"backend/services/user-management/settings/store.go":       {"Store.sys"},
 }
 
 // Every bypass of tenant isolation in the workspace is declared.

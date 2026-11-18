@@ -72,5 +72,10 @@ var (
 		NewAgentSafetySchema(),
 		NewAutomationReviewsSchema(),
 		NewAutomationReviewEnforcementSchema(),
+		NewEntityAttributeUniqueKeySchema(),
+		NewPendingEntityDeletionsSchema(),
+		NewAlarmPositionDerivedSchema(),
+		NewAlarmPositionStampSchema(),
+		NewDeletionAlarmCascadeSchema(),
 	}
 )

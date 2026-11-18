@@ -60,6 +60,8 @@ Todo evento entrante, sobre cualquier transporte, es un objeto JSON. El ejemplo 
 - `credentialType` / `credentialId` — la credencial que presenta el dispositivo **por HTTP**. `MQTT_BASIC` además lleva `credentialSecret`. Omítelos solo cuando el modo de autenticación de dispositivo de la instancia esté configurado como `disabled` u `optional`. El valor predeterminado es `required`, así que se espera que un evento HTTP lleve una credencial. **Por MQTT, omite los tres**: el broker ya autenticó al dispositivo al conectarse, y un evento en el broker MQTT de la plataforma que lleve cualquiera de ellos se rechaza (consulta la [Referencia del protocolo de dispositivos](../reference/device-protocol.md#rejections-at-the-door)).
 - `payload` — su forma depende de `eventType`. `Measurement`, `Location` y `Alert` son `{ "entries": [ … ] }`; `NewRelationship` son tres campos directamente bajo `payload`. Consulta a continuación.
 
+`NewRelationship` puede crear relaciones sin seguimiento, incluido `member`. Los tipos con seguimiento como `assigned` y el tipo integrado `contains` se rechazan en la primera entrega con motivo `Invalid`. Asigna los dispositivos con un código de reclamación o la mutación `createEntityRelationship`.
+
 Cada campo, con su tipo y si es obligatorio, incluidos los opcionales `altId` y `relationship`, está en la [Referencia del protocolo de dispositivo](../reference/device-protocol.md#device-event), junto con esquemas JSON con los que puedes validar lo que emite el firmware.
 
 ### Formas del payload {#payload-shapes}
@@ -353,6 +355,17 @@ mosquitto_sub \
   -t "devicechain/acme/device-commands/sensor-001"
 ```
 
+Esa es la forma de `MQTT_BASIC`: un usuario y una contraseña. Una credencial `ACCESS_TOKEN` **no tiene contraseña**. El token es la segunda mitad del usuario, y `-P` se omite por completo. El broker interpreta como `MQTT_BASIC` una conexión que lleva contraseña, así que un token de acceso enviado con cualquier contraseña, aunque sea un marcador de posición, se rechaza:
+
+```bash
+mosquitto_sub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001:sub' \
+  -u 'acme:<accessToken>' \
+  -t "devicechain/acme/device-commands/sensor-001"
+```
+
 Cada mensaje es un sobre (envelope) JSON:
 
 ```json
@@ -383,6 +396,18 @@ mosquitto_pub \
   -h <mqtt-host> -p 1883 \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
+  -t "devicechain/acme/command-responses/sensor-001" \
+  -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
+```
+
+Con una credencial `ACCESS_TOKEN`, conéctate igual que para la suscripción, sin `-P`:
+
+```bash
+mosquitto_pub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001' \
+  -u 'acme:<accessToken>' \
   -t "devicechain/acme/command-responses/sensor-001" \
   -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
 ```
@@ -517,6 +542,8 @@ La plataforma responde en `device-desired` con una URL que funciona, sin ninguna
 ```
 
 Descárgala con un `GET` HTTP. El endpoint responde a peticiones `Range`, así que una descarga interrumpida se reanuda desde los bytes que ya tienes; cuando la concesión caduca, envía de nuevo el mismo `download.request` para obtener otra. Si la asignación ya no es la vigente, la respuesta es un `update.cancel` en lugar de una concesión.
+
+Las peticiones de descarga tienen un presupuesto por dispositivo: la plataforma responde a cinco de golpe y después a una por segundo. Una petición que supera ese presupuesto se descarta sin ninguna respuesta, ni una concesión ni un `update.cancel`, y no se avisa al dispositivo. Por eso nunca esperes una respuesta indefinidamente: si no ha llegado ninguna tras una espera acotada, por ejemplo diez segundos, envía de nuevo el mismo `download.request`.
 
 Informa de cada etapa en `device-reports` con `update.progress`:
 

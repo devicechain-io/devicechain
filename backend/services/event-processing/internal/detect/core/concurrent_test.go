@@ -227,7 +227,7 @@ func TestConcurrentLateSamplesAreNotLost(t *testing.T) {
 	total += c.DrainLateSamples()
 	want = plain.DrainLateSamples()
 	if want == 0 {
-		t.Skip("the generator made no late samples on this seed")
+		t.Fatal("the generator made no late samples on this seed")
 	}
 	if total != want {
 		t.Fatalf("late samples: concurrent %d, plain %d", total, want)

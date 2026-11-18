@@ -166,6 +166,23 @@ variable "server_image_digest" {
   }
 }
 
+variable "jetstream_storage_class" {
+  description = "StorageClass for new JetStream volumes. Empty omits storageClassName and uses the cluster default. Remembered on first apply: later changes are ignored because PVC storage classes and StatefulSet claim templates are immutable. When adopting an existing broker, leave unset to preserve its original template."
+  type        = string
+  default     = ""
+}
+
+# Persist the creation-time choice without freezing the rest of the Helm values.
+# Existing installations adopt the empty default; dcctl never supplies a new GKE
+# default on upgrade or over an existing broker/PVC. See tests/storage_class.tftest.hcl.
+resource "terraform_data" "jetstream_storage_class" {
+  input = var.jetstream_storage_class
+
+  lifecycle {
+    ignore_changes = [input]
+  }
+}
+
 variable "jetstream_storage" {
   description = <<-EOT
     Size of the JetStream PV.
@@ -1051,10 +1068,12 @@ locals {
       jetstream = {
         enabled = true
         fileStore = {
-          pvc = {
+          pvc = merge({
             enabled = true
             size    = var.jetstream_storage
-          }
+            }, terraform_data.jetstream_storage_class.input == "" ? {} : {
+            storageClassName = terraform_data.jetstream_storage_class.input
+          })
           # max_file_store — the server-level HARD AGGREGATE JetStream disk ceiling
           # (ADR-023): the total file store across every account/stream/KV/MQTT
           # session cannot exceed this, so a flood is bounded even before the
@@ -1372,7 +1391,8 @@ locals {
   auth_part = { for k, v in local.auth_merge_content : k => v if var.enable_auth }
   # Absent unless set, so an instance that never asked renders the broker config it always did.
   limits_merge = { for k, v in { max_connections = var.max_connections } : k => v if v > 0 }
-  config_merge = merge(local.auth_part, local.profiling_merge, local.limits_merge)
+  shard_merge  = { for k, v in { server_tags = ["<< $SERVER_NAME >>"] } : k => v if var.shard_groups > 0 }
+  config_merge = merge(local.auth_part, local.profiling_merge, local.limits_merge, local.shard_merge)
   chart_values_encoded = length(local.config_merge) > 0 ? yamlencode(merge(local.chart_values, {
     config = merge(local.chart_values.config, { merge = local.config_merge })
   })) : yamlencode(local.chart_values)
@@ -1543,6 +1563,10 @@ resource "helm_release" "nats" {
   values = [local.chart_values_encoded]
 
   lifecycle {
+    precondition {
+      condition     = var.shard_groups <= local.cluster_replicas
+      error_message = "shard_groups needs at least one distinct NATS server per group; increase cluster_replicas."
+    }
     # The broker image must name a version. An empty tag would render "repository:"
     # (which Kubernetes reads as :latest), installing whatever that pointed at today.
     precondition {
@@ -1749,4 +1773,14 @@ output "cluster_replicas" {
 output "tls_enabled" {
   description = "Whether the broker terminates TLS (drives the matching client-side flag in the instance config)."
   value       = var.enable_tls
+}
+
+# Opt-in only: the upstream chart expands SERVER_NAME independently in every pod.
+variable "shard_groups" {
+  type    = number
+  default = 0
+  validation {
+    condition     = var.shard_groups == 0 || (var.shard_groups >= 2 && var.shard_groups <= 5 && floor(var.shard_groups) == var.shard_groups)
+    error_message = "shard_groups must be 0 (off), or an integer from 2 to 5."
+  }
 }

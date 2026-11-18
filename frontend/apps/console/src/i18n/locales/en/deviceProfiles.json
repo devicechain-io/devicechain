@@ -1,4 +1,13 @@
 {
+  "celPresetSource": "Scalar source",
+  "celPresetEvent": "Event metric (feeds a condition)",
+  "celPresetDetection": "Triggering reading (feeds a branch)",
+  "celPresetSummary": "Build an expression",
+  "celPresetKind": "Operation",
+  "celPresetFilter": "Filter: compare a reading",
+  "celPresetExists": "Exists: check for a reading",
+  "celPresetApply": "Use expression",
+
   "canvasAddLabel": "Add:",
   "canvasChecking": "Checking…",
   "canvasCompiles": "Compiles",

@@ -98,7 +98,7 @@ func TestPurgeTenantReachesEveryDeclaredStreamShape(t *testing.T) {
 			suffix)
 	}
 
-	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, int64(len(seeded)), res.Messages,
@@ -128,7 +128,7 @@ func TestPurgeTenantLeavesTheAdvisoryCaptureAlone(t *testing.T) {
 	_, err = js.Publish(advisory, []byte(`{"type":"io.nats.jetstream.advisory.v1.max_deliver"}`))
 	require.NoError(t, err)
 
-	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim, nil)
 	require.NoError(t, err)
 	assert.NotContains(t, res.PerStream, name)
 	assert.Equal(t, uint64(1), streamMsgs(t, js, name), "the purge touched the advisory capture")
@@ -141,11 +141,11 @@ func TestPurgeTenantIsIdempotent(t *testing.T) {
 	suffix := streams.Suffixes()[0]
 	seedStream(t, js, suffix, purgeVictim)
 
-	first, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	first, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim, nil)
 	require.NoError(t, err)
 	require.NotZero(t, first.Messages)
 
-	second, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	second, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim, nil)
 	require.NoError(t, err, "a repeat pass is the normal case, not an error")
 	assert.Zero(t, second.Messages)
 	assert.Empty(t, second.PerStream)
@@ -160,7 +160,7 @@ func TestPurgeTenantIsIdempotent(t *testing.T) {
 func TestPurgingAnAbsentStreamIsNotAnError(t *testing.T) {
 	nc, _ := purgeRig(t)
 
-	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim, nil)
 
 	require.NoError(t, err, "no stream exists at all; there is nothing to fail on")
 	assert.Zero(t, res.Messages)
@@ -185,10 +185,10 @@ func TestAHostileTenantTokenIsRefusedBeforeAnythingIsPurged(t *testing.T) {
 	// this asserts they are also stopped at the point of use, because "unreachable" is a
 	// claim about every write path that has ever existed.
 	for _, hostile := range []string{"", "   ", ">", "*", "acme.>", "acme.*", "acme evil"} {
-		_, err := PurgeTenant(context.Background(), nc, purgeInstance, hostile)
+		_, err := PurgeTenant(context.Background(), nc, purgeInstance, hostile, nil)
 		require.Errorf(t, err, "%q must never reach a purge filter", hostile)
 	}
-	_, err := PurgeTenant(context.Background(), nc, "", purgeVictim)
+	_, err := PurgeTenant(context.Background(), nc, "", purgeVictim, nil)
 	require.Error(t, err, "every subject is rooted at the instance id; without one nothing matches")
 
 	assert.Equal(t, uint64(2), streamMsgs(t, js, name),
@@ -197,7 +197,7 @@ func TestAHostileTenantTokenIsRefusedBeforeAnythingIsPurged(t *testing.T) {
 
 	// And the control: a well-formed token is not caught by the same guard, or the guard
 	// would be refusing every purge and this test would pass over a store that never works.
-	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim, nil)
 	require.NoError(t, err)
 	assert.NotZero(t, res.Messages, "a legitimate token must still purge")
 }
@@ -230,7 +230,7 @@ func TestAnUnattributableSessionDoesNotBlockThePurge(t *testing.T) {
 	_, err = js.Publish(mqttSessSubjectPrefix+"abcd1234", rec)
 	require.NoError(t, err)
 
-	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim, nil)
 	require.NoError(t, err)
 	require.NotZero(t, res.Messages, "the purge must have done something, or this proves nothing")
 	assert.EqualValues(t, 1, res.Gateway.UnownedSessions,
@@ -274,7 +274,7 @@ func TestTheMqttGatewayStreamsArePurgedByTheirWrappedSubject(t *testing.T) {
 			m.stream)
 	}
 
-	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim, nil)
 	require.NoError(t, err)
 
 	for _, m := range mqttTenantStreams {
@@ -310,7 +310,7 @@ func TestADisconnectedBrokerFailsThePassRatherThanHangingIt(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+		_, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim, nil)
 		done <- err
 	}()
 
@@ -337,7 +337,7 @@ func TestPurgeTenantErasesTheGatewayShapeInTheCaptureStream(t *testing.T) {
 	}
 	require.Equal(t, uint64(4), streamMsgs(t, js, name), "the seed must hold both shapes of both tenants")
 
-	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(2), streamMsgs(t, js, name), "only the bystander's two messages may remain")
 	assert.Equal(t, int64(2), res.PerStream[name], "the victim's device-shaped AND gateway-shaped messages are counted")

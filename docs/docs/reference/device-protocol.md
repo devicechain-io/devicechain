@@ -158,7 +158,13 @@ Every location field is a JSON **string**, including the numeric ones. Each must
 
 #### NewRelationship {#new-relationship-payload}
 
+When the relationship is created, its event is kept in event history as an envelope with its anchors.
+
+**Marking a relationship type tracked is refused while devices created relationships of it.** `updateEntityRelationshipType` refuses to make a type tracked while relationships of that type that devices created themselves exist, because they would become ownership at that moment; the refusal names them. Delete them, then mark the type tracked.
+
 Creates one relationship from the sending device to another entity in the same tenant. This payload has no `entries` array, and its three keys are read by their exact names, so their case matters. A missing key is not refused when the message is decoded: it reads as an empty string, and the event then fails at resolution like the cases below.
+
+A device cannot create ownership or containment relationships: a `NewRelationship` naming a tracked type (including `assigned` and any tenant-defined type marked tracked) or the built-in `contains` is refused and recorded on `failed-events` with reason `Invalid` on its first delivery, without retries. Assign devices with a claim code or the `createEntityRelationship` mutation. Untracked types, including `member`, work as before.
 
 | Field | Type | Required | Meaning | Example |
 | --- | --- | --- | --- | --- |
@@ -203,6 +209,13 @@ Enable `mqttDeviceUplinks` only once every `event-sources` and `device-managemen
 :::
 
 **Over HTTP**, the same capability is `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink` on the `event-sources` service. The device presents its own credential in headers (`Authorization: Bearer <token>`, or `X-DeviceChain-Credential-Type`, `-Id` and `-Secret`), because a binary body has nowhere to carry one, and the route answers `401` without one. It exists only when the operator sets `httpIngest.deviceUplinks` on `event-sources`; otherwise it is `404`.
+
+| HTTP | Response |
+| --- | --- |
+| `429` | Requests from this source address exceed the allowance. `Retry-After` says when to retry. |
+| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). |
+
+**Wrong device passwords count once, whichever way they arrive.** A wrong password presented on the HTTP device-uplink route now counts toward the same per-credential hold as a wrong MQTT password, across all replicas, so guesses can no longer be split between the two to get twice the attempts. While a credential is held, an HTTP uplink with it is answered `503` with `Retry-After` and an MQTT connect with it is refused, as before.
 
 ## Command delivery {#command-delivery}
 
@@ -393,11 +406,11 @@ An accepted event (`202`, or captured by the broker) is then resolved by `device
 | --- | --- |
 | `Unauthenticated` | No credential while device authentication is `required`; a credential that does not authenticate; or a body `device` that is not the credential's device. |
 | `DeviceNotFound` | No credential was used, and the `device` token is not registered in the tenant. |
-| `Invalid` | The event is older than 366 days, or could not be interpreted for its type. |
+| `Invalid` | The event is older than 366 days, or could not be interpreted for its type; a NewRelationship naming a tracked or containment relationship type (recorded on its first delivery, not retried) |
 | `ApiCallFailed` | A lookup or write the resolution needed failed, including a [`NewRelationship`](#new-relationship-payload) the platform could not create. |
 | `NotGatewayChild` | A gateway published for a device that is not assigned to it, or that does not exist, or the gateway is disabled. Not retried: it is recorded on the first delivery. |
 
-A refused event is retried until its fifth delivery, so a device registered or a database restored in the meantime still gets its event stored. The exception is an event too old to store, which is recorded on its first delivery, since no retry can change its age.
+A refused event is retried until its fifth delivery, so a device registered or a database restored in the meantime still gets its event stored. Events too old to store, gateway refusals and device-authored ownership or containment relationships are recorded on their first delivery without retries.
 
 ### Command responses {#rejections-command-responses}
 

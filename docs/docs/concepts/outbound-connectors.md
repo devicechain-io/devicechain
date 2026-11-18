@@ -20,6 +20,12 @@ Everything on this page applies once the area is deployed. To add it, bring the 
 **Planned:** more `publish` targets (RabbitMQ, Azure, NATS, Redis, Slack, Splunk) behind the same model. This repository is the source of truth for what currently builds.
 :::
 
+## Automated action authorities
+
+Authoring or publishing an automated action now requires the authority to perform it. Creating or updating a rule with a `sendCommand` action, and publishing or rolling back to a profile version whose enabled rules include one, requires `command:write` in addition to `device:write`. `httpCall` and `publish` actions require `connector:write`. A role that holds `device:write` alone can still author and publish rules that only raise alarms.
+
+Action authority is checked on the effective rule on every create or update, even for disabled rules. Publishing and rolling back check all enabled rules in the selected profile version, even when only a metric changed. The publisher must hold the action authorities; an automation-review approver does not need them. Adopting a profile whose actions were already authorized does not require these additional authorities.
+
 ## The two outbound actions
 
 Both are [actions](./event-processing.md#automated-actions) you author on the **automation canvas** or in the **form builder**, alongside *raise alarm* and *send command*. Each can be **guarded** by a condition on the firing.
@@ -30,7 +36,7 @@ The form builder's action picker offers all four actions. A webhook action there
 
 `httpCall` sends an HTTP request directly to an endpoint you specify. You shape the request body with a **CEL expression** over the firing, so you send exactly the fields the receiver expects. The URL, method, headers and body template all live on the action itself, so a one-off webhook needs no separate setup.
 
-Authentication is optional and uses a **secret handle**. The token is stored in the **secret store** and presented at send time as an `Authorization: Bearer <token>` header. The header name and scheme are not configurable, so you cannot authenticate to a receiver that expects a custom API-key header this way. If the action names a handle but no secret is stored under it, the call is never sent without its credential: it is dead-lettered once with the outcome `invalid` and not retried. Nothing replays it, so that firing's call is not made; correct the action's secret handle so later firings authenticate.
+Authentication is optional and uses a **secret handle**. Handles in the `connector/` namespace are refused; an `httpCall` never sends a connector's credential. The token is stored in the **secret store** and presented at send time as an `Authorization: Bearer <token>` header. The header name and scheme are not configurable, so you cannot authenticate to a receiver that expects a custom API-key header this way. If the action names a handle but no secret is stored under it, the call is never sent without its credential: it is dead-lettered once with the outcome `invalid` and not retried. Nothing replays it, so that firing's call is not made; correct the action's secret handle so later firings authenticate.
 
 An `httpCall` can also be **signed**, so the receiver can verify the request came from DeviceChain and was not altered. Name a signing secret in the action's `signingSecretRef` and the call carries the `webhook-id`, `webhook-timestamp` and `webhook-signature` headers of the Standard Webhooks specification. It is off unless you set it. See [Signing Outbound Webhooks](../guides/signed-webhooks.md).
 
@@ -50,7 +56,7 @@ One generic `publish` action covers every broker and queue type; the **connector
 
 `gcp_pubsub` is a recognized type with no delivery client in this release, so creating, updating to or publishing a connector of that type is refused with the error code `UNSUPPORTED`. The console does not offer the type. A connector of that type stored by an earlier release is still dead-lettered as unsupported if a `publish` targets it, never silently dropped.
 
-`updateConnector` refuses a stale `expectedUpdatedAt` with `errors[*].extensions.code` set to `STALE_WRITE`. Nothing is written; the message remains "connector was modified by another writer; reload and try again". This code applies only to connector updates. `CONFLICT` continues to mean a uniqueness collision; errors from other operations are unchanged. Classify by code rather than message text. The console keeps unsaved edits and shows a localized hint to copy them before reloading, then reapply them and retry saving.
+`updateConnector` refuses a stale `expectedUpdatedAt` with `errors[*].extensions.code` set to `STALE_WRITE`. Nothing is written; the message remains "connector was modified by another writer; reload and try again". The code is not specific to connectors: every stale write in every service carries it, dashboards included. `CONFLICT` continues to mean a uniqueness collision. Classify by code rather than message text. The console keeps unsaved edits and shows a localized hint to copy them before reloading, then reapply them and retry saving.
 
 ## Connectors are versioned resources
 
@@ -58,7 +64,7 @@ A connector is a **tenant-scoped resource** with the same lifecycle as a [device
 
 - a **type** (`mqtt`, `kafka`, `aws_sns`, `aws_sqs`)
 - the **destination config** for that type: broker addresses, topic, queue or ARN, and options such as QoS or TLS
-- an optional **credential**, referenced by handle. The value is written into the secret store and **never returned in cleartext**, exactly like a notification channel's secret.
+- an optional **credential**, referenced by handle. The value is written into the secret store and **never returned in cleartext**, exactly like a notification channel's secret. Changing the type or credential destination requires `secret` in the same request when a credential is stored; omission returns `SECRET_RESUPPLY_REQUIRED`. Re-supply the credential, or use `secret: null` to remove it. With `dcctl product apply`, set the manifest's credential handle before changing its destination. Topic, QoS and identity-only edits keep the credential.
 
 Because connectors are tenant-level, one tenant never sees or sends through another tenant's connectors.
 

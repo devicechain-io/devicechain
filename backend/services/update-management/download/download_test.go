@@ -99,7 +99,7 @@ type fakeDevices struct {
 
 func (f *fakeDevices) DeviceOf(_ context.Context, tenant, device string) (model.DeviceFacts, bool, error) {
 	p, ok := f.profiles[tenant+"/"+device]
-	return model.DeviceFacts{Profile: p, Disabled: f.disabled[tenant+"/"+device]}, ok, nil
+	return model.DeviceFacts{Incarnation: 1, Profile: p, Disabled: f.disabled[tenant+"/"+device]}, ok, nil
 }
 
 type nullDesired struct{}
@@ -165,7 +165,9 @@ func (e *env) artifact(t *testing.T, tenant, token string, content []byte) *mode
 	ref, err := e.store.Put(ctx, blob.Key{Tenant: tenant, Purpose: model.BlobPurpose, ID: token + "-object"},
 		bytes.NewReader(content), blob.PutOptions{MaxSize: int64(len(content))})
 	require.NoError(t, err)
-	require.NoError(t, e.api.CompleteUpload(ctx, a, ref))
+	stamp, err := e.api.ClaimUpload(ctx, a)
+	require.NoError(t, err)
+	require.NoError(t, e.api.CompleteUpload(ctx, a, stamp, ref))
 	a, err = e.api.ArtifactByToken(ctx, token)
 	require.NoError(t, err)
 	return a

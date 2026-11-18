@@ -56,6 +56,10 @@ type NotificationState struct {
 	EscalationLevel int
 	LastEscalatedAt sql.NullTime
 
+	// EscalationBaseAt is the notifier-clock time of the last page in this cycle.
+	// NULL on legacy rows and rows written by old pods during a rolling upgrade.
+	EscalationBaseAt sql.NullTime `gorm:"column:escalation_base_at"`
+
 	// CycleRaisedAt is the RaisedTime of the alarm cycle this row's per-cycle fields
 	// belong to: the two terminal stamps, the escalation tier, FirstNotifiedAt and
 	// NotifyCount. An event from a LATER cycle resets them before it applies (see

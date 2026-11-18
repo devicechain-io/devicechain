@@ -51,8 +51,15 @@ type broker struct {
 	// hotSwaps counts reloads served by the hot path; tests read it.
 	hotSwaps atomic.Uint64
 
-	// ldm records that lame duck mode was requested. Upstream's SIGTERM handler reads the
-	// server's own (unexported) flag; see signals_unix.go for why this one is equivalent.
+	// started closes when Run returns: startup has finished (or the server stopped during it).
+	// stopped releases deferred reloads if the server shuts down before then.
+	started     chan struct{}
+	stopped     chan struct{}
+	startedOnce sync.Once
+
+	// ldm records a lame duck request accepted (the client listener was up), set before its
+	// goroutine runs. Upstream's SIGTERM handler reads the server's own unexported flag; see
+	// signals_unix.go for why this one is equivalent.
 	ldm atomic.Bool
 }
 
@@ -72,12 +79,20 @@ func prepareOptions(opts *server.Options) *hotTLS {
 // them, or nil, in which case every reload is the full one.
 func newBroker(s *server.Server, opts *server.Options, m *brokerMetrics, hot *hotTLS) *broker {
 	b := &broker{s: s, configFile: opts.ConfigFile, metrics: m, mqttTLS: opts.MQTT.TLSConfig,
-		hot: hot, digest: opts.ConfigDigest(), live: opts}
+		hot: hot, digest: opts.ConfigDigest(), live: opts,
+		started: make(chan struct{}), stopped: make(chan struct{})}
 	// Zero when unknown, which keeps the hot path off: it is allowed only when the load time is
 	// known and unmoved.
 	b.lastLoad, _ = b.configLoadTime()
+	go func() {
+		s.WaitForShutdown()
+		close(b.stopped)
+	}()
 	return b
 }
+
+// markStarted is called after Run returns, including by embedded-server tests.
+func (b *broker) markStarted() { b.startedOnce.Do(func() { close(b.started) }) }
 
 // configLoadTime is when the server last loaded its configuration (start, or any reload by anyone).
 func (b *broker) configLoadTime() (time.Time, bool) {

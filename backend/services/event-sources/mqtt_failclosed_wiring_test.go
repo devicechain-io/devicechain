@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -54,8 +55,9 @@ func fcWiringBrokerWith(t *testing.T, on, gateway bool) (nats.JetStreamContext, 
 
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true,
-		StoreDir: dctest.JetStreamStoreDir(t),
-		MQTT:     natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1},
+		StoreDir:          dctest.JetStreamStoreDir(t),
+		JetStreamMaxStore: dctest.JetStreamMaxStore,
+		MQTT:              natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1},
 	})
 	require.NoError(t, err)
 	go srv.Start()
@@ -89,7 +91,7 @@ func fcWiringBrokerWith(t *testing.T, on, gateway bool) (nats.JetStreamContext, 
 	if gateway {
 		initializeMetrics()
 		buildTestRateLimiters(t)
-		require.NoError(t, buildEventSources())
+		require.NoError(t, buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")))
 		require.NotNil(t, StoreSource, "the gateway source's store twin was not built")
 	} else if on {
 		// The declaration tests never read the store; a bare source satisfies the start's

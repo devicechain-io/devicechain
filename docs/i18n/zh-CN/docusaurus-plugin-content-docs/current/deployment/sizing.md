@@ -15,8 +15,15 @@ title: 选择规格
 | `compact` | 资源很少的笔记本。这是集群级设置，在安装时选择；`--compact` 与之等价且会保留。 | 见 [`--compact`](./bootstrap.md#--compact)。 |
 | `perf-12k` | 一个不带 `--ha` 的集群，平台节点池约 40 个 vCPU，在开启事件信封的情况下持续每秒 12,000 个事件。 | 已实测：在 GKE 上稳定处理每秒 12,000 个事件（确认延迟 p99 低于 4 毫秒），所有事件均有对账。少数取值根据该次运行修正，尚未按此取值实际运行；见下文。 |
 | `perf-16k` | 同一形态，用于持续每秒 16,000 个事件：更大的 Broker、预写日志额度和 event-processing Pod。每秒 20,000 个事件是仅就吞吐而言的上限，不是目标。 | 由同一次 GKE 运行推导：该次运行精确处理了每秒 16,000 个事件；这里的规格以 50 毫秒确认延迟为目标，而该次运行仅略微未达标（`perf-12k` 规格下为 63 毫秒）。尚未按此取值实际运行；见下文。 |
+| `perf-20k` | 在不分片且不带 `--ha` 的单个集群上，为每秒 20,000 个事件配置资源，开启事件信封。 | 根据 GKE 递增负载测试推导，尚未按这些取值实测，确认延迟尚未验证。 |
 
-规格以它在延迟目标之内能够稳定处理的速率命名。名字就是承诺，因此规格绝不会以“目标”的形式发布。这就是没有 `perf-20k` 的原因：实测的形态精确存储了每秒 20,000 个事件，没有丢失也没有重复，但确认延迟的第 99 百分位为 245 毫秒，所以 20,000 只作为 `perf-16k` 的吞吐上限记录在文档中，而不是一个规格。
+`perf-20k` 是吞吐量资源配置目标。实测每秒 20,000 个事件全部精确入库，无丢失或重复，但确认延迟 p99 为 245 毫秒，超过 50 毫秒目标。此预设在同一不分片形态上增加 Broker CPU，不承诺达到该延迟目标。
+
+## GKE 上的 broker 存储
+
+当 GKE 的 SSD StorageClass 可用时，`dcctl bootstrap` 创建的新 GKE broker 使用 `premium-rwo`（`pd-ssd`）。JetStream 的同步磁盘写入使磁盘延迟尤为重要，使用 `--ha` 的三个副本时更是如此；SSD 可避免依赖小容量 balanced 磁盘的最低 IOPS。其他云和 kind 继续使用集群默认存储类。OpenTofu 实例输入 `nats_jetstream_storage_class`（模块输入 `jetstream_storage_class`）默认为 `""`，此时省略 `config.jetstream.fileStore.pvc.storageClassName`。如需其他存储类，请在首次 apply 前设置。
+
+现有 PVC 的存储类及 StatefulSet 的卷声明模板不可变。升级时，以及 bootstrap 发现现有 broker 或 JetStream 卷声明时，`dcctl` 不设置此输入。模块通过 `lifecycle.ignore_changes` 保留首次选择（包括未设置的情况），后续默认值不会改变它。现有 GKE broker 保留当前磁盘；本次变更不会将数据迁移到 SSD。
 
 ## 如何选择 {#choosing}
 
@@ -70,7 +77,7 @@ JetStream 卷的大小按设计速率的预留量能装下来确定；升级绝�
 
 ### 事件库卷能撑多久 {#event-store-volume}
 
-在事件库中，一个已存储的事件约占 756 字节，包含索引、未压缩（事件表 345 字节，测量值表 454 字节）。在饱和的每秒 12,000 个事件下，这相当于每小时 32.7 GB，因此 `160Gi` 的卷在扣除日志额度和工作余量之后，大约能容纳三个半小时的持续写入。`perf-16k` 设置 `260Gi`，在每秒 16,000 个事件（每小时 43.6 GB）下大约能撑四个小时。这些是突发和基准测试用的卷，不是留存用的卷。早于 `lifecycle.compressAfterDays`（默认 7）的数据块会被压缩，因此持续使用时请设置数据生命周期并据此确定卷的大小：见[事件库的容量规划](./tuning-an-instance.md#event-store-sizing)。当卷即将写满时，`DatabaseVolumeFillsWithinDay` 告警会触发。
+使用[每个已存储事件 756 字节](./tuning-an-instance.md#event-store-sizing)。满负荷每秒 12,000 个事件时为每小时 32.66 GB，因此扣除日志预留和工作余量后，`160Gi` 卷可容纳约三个半小时的持续摄取。`perf-16k` 设置 `260Gi`，每秒 16,000 个事件时约可容纳四小时（每小时 43.5 GB）。这些是突发和基准测试卷，并非保留期容量。早于 `lifecycle.compressAfterDays`（默认 7 天）的分块会压缩；持续运行时请设置数据生命周期并据此规划容量，见[事件存储容量规划](./tuning-an-instance.md#event-store-sizing)。卷预计将写满时会触发 `DatabaseVolumeFillsWithinDay` 告警。
 
 ## `perf-16k` 设置了什么 {#perf-16k}
 
@@ -113,6 +120,37 @@ Broker、卷以及预写日志的额度：
 
 在 `perf-12k` 的形态上，每秒 20,000 个事件被精确存储（1,320 万个事件，没有缺失也没有重复），没有丢失任何连接，确认延迟 p99 为 245 毫秒。这是吞吐上限：确认延迟超出目标，限制因素是单个 Broker 服务器（使用 5.2 个核，峰值 5.5）。`perf-16k` 的规格可以承载它，但这不是对延迟的承诺。
 
+## `perf-20k` 设置了什么 {#perf-20k}
+
+`perf-20k` 是吞吐量资源配置目标。实测每秒 20,000 个事件全部精确入库，无丢失或重复，但确认延迟 p99 为 245 毫秒，超过 50 毫秒目标。此预设在同一不分片形态上增加 Broker CPU，不承诺达到该延迟目标。
+
+保留 `perf-12k` 的服务副本数和 CPU 上限。请求遵循同一规则：设计速率下每个 Pod 的实测 CPU 乘以 1.2–1.5，再向上取整到 50m。Event-processing 使用 1536Mi，因为该配置在 20k 时保持了正常的检测延迟。
+
+<!-- size-table:perf-20k:areas -->
+| 服务 | 副本数 | CPU 上限 | 内存上限 | CPU 请求 |
+| --- | --- | --- | --- | --- |
+| `device-management` | `2` | `3` | - | `600m` |
+| `device-state` | `2` | `3` | `512Mi` | `400m` |
+| `event-management` | - | `4` | `1Gi` | `650m` |
+| `event-processing` | - | `2` | `1536Mi` | `950m` |
+| `event-sources` | `3` | `3` | `256Mi` | `900m` |
+<!-- /size-table:perf-20k:areas -->
+
+<!-- size-table:perf-20k:infra -->
+| 设置 | 值 |
+| --- | --- |
+| `streamDesignRate` | `20000` |
+| `nats_cpu_request` | `6` |
+| `nats_memory_request` | `6Gi` |
+| `nats_memory_limit` | `10Gi` |
+| `nats_jetstream_storage` | `40Gi` |
+| `timescale_storage` | `260Gi` |
+| `timescale_max_wal_size_mib` | `40960` |
+| `postgres_max_wal_size_mib` | `8192` |
+<!-- /size-table:perf-20k:infra -->
+
+在 20k 时单个 Broker 使用 5.2 核（峰值 5.5）和 4.4Gi 工作内存：请求 6 CPU 和 6Gi，内存上限为 10Gi。40Gi JetStream 卷可容纳 15 分钟缓冲预留，即使开启故障关闭确认。260Gi 事件存储和 40960 MiB WAL 额度依据实测结果选择；这是突发存储容量，不是保留期承诺。关系数据库的 8192 MiB WAL 需在安装时单独设置：`dcctl install --relational-store-max-wal-mib 8192`，同时设置 `TF_VAR_postgres_storage=32Gi`。这些取值尚未按原样实测。
+
 ### `perf` 规格不设置什么 {#perf-12k-not}
 
 - **事件信封。** 这些数据是在开启信封时测得的，信封约可降低五分之一的 CPU。它是单独的开关，所以当 `perf` 规格在关闭信封的情况下运行时，`dcctl bootstrap` 会提示你。
@@ -126,12 +164,30 @@ Broker、卷以及预写日志的额度：
 
 1. Chart 的默认值和 OpenTofu 变量的默认值；
 2. 规格；
-3. `dcctl` 自己算出的内容：HA 的副本数、信封开关、运行的服务、实例已有的卷；
+3. `dcctl` 自己算出的内容：HA 的副本数、信封开关、运行的服务；
 4. 你的 `--values` 覆盖文件；
 5. 你在 `TF_VAR_*`、`terraform.tfvars` 或 `*.auto.tfvars` 文件中声明的 OpenTofu 变量。
 
-你声明的内容优先。当你已自行声明某个 OpenTofu 变量时，`dcctl` 根本不会传递规格的同名变量，否则 OpenTofu 会采用规格的值而非你的值。`dcctl bootstrap` 打印的那一行会写明所应用的规格。
+现有卷是此顺序的例外。如果已知卷的实际大小，`dcctl` 会将其作为 `nats_jetstream_storage` 和 `timescale_storage` 传入，即使你通过环境变量或 tfvars 文件提供了不同的值。这两个变量仅在卷尚不存在的初次创建时，才由你的值优先于规格预设。对于其他规格预设的 OpenTofu 变量，`dcctl` 会省略你已声明的变量，使你的值优先。`dcctl bootstrap` 打印的那一行会写明所应用的规格。
+
+代理的拓扑是另一个例外。`dcctl` 总是自己传入 `ha` 和 `nats_cluster_replicas`，因此你为其中任何一个声明的值都会被覆盖。服务器数量和每个流的副本数由 `--ha` 一起设定（不带它时为一台服务器、一个副本，带它时为三台、三个）。分片组会把服务器数量提高到至少三台，并且每组至少一台。这样可以避免集群中所有流都只有一个副本、却在为不保存任何副本的服务器付费。使用 `dcctl` 无法构建一个多服务器、单副本流且没有分片组的代理。当你声明了其中任何一个变量时，`dcctl bootstrap` 和 `dcctl upgrade` 会打印一条说明，指出该值已被覆盖。
 
 ## 更改运行中实例的规格 {#changing}
 
 实例保留其 bootstrap 时的规格。把现有实例换到另一个规格不属于本版本；在此之前，请把想要的设置写进覆盖文件，它优先于任何规格。无论哪种规格，`dcctl` 都无法扩容 JetStream 卷，操作步骤见[事件流能等待多久才扛过一次中断](./observability.md#outage-runway)。
+
+## GKE 备份存储 {#gke-backup-storage}
+
+在 GKE 上，新建的集群内备份卷使用专用 CSI StorageClass
+`dc-object-store-standard`，磁盘类型为 `pd-standard`，回收策略为 `Retain`。
+批量备份不需要 SSD。GKE 内置的 `standard-rwo` 使用 `pd-balanced`，仍然消耗
+SSD 配额。JetStream 和数据库的存储类保持不变。无法挂载 `pd-standard` 磁盘的机器系列（例如 C3、C4 和 N4）
+需要将 `backup_object_store_storage_class` 设为其节点支持的存储类。`perf-20k` 的备份卷沿用集群默认值
+`160Gi`；该预设将 JetStream 设为 `40Gi`，事件存储设为 `260Gi`。
+
+可通过集群 OpenTofu 变量 `backup_object_store_storage_class` 为**新卷**指定其他
+存储类。其他提供商继续使用集群默认存储类。`dcctl install` 根据集群 StorageClass 中的
+GKE 持久磁盘 CSI 驱动识别 GKE，并设置 `backup_object_store_gke_standard_disk`；如果自行
+应用集群根配置，请在 GKE 上设置该变量。显式指定的存储类优先。重新运行 `dcctl install` 或升级时，已有 PVC 保留原有容量和存储类，
+即使修改此变量也不会改变。这不会自动迁移已有 SSD 备份；迁移需要单独规划数据搬迁。
+如果原存储类支持扩容，可用 `kubectl patch` 扩大已有卷。

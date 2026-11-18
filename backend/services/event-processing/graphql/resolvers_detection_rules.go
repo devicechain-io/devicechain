@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
@@ -73,8 +74,10 @@ func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args struct
 		// taxonomy); this gate owns the kind check.
 		if in.GroupScoped &&
 			(rule.Type == rules.TypeAbsence || rule.Type == rules.TypeCorrelation) {
-			errs = append(errs, newValidationErrorMsg(i, in.Token,
-				fmt.Sprintf("a group scope is not supported on a rule of type %q (only event-driven, device-keyed kinds can be group-scoped)", rule.Type)))
+			rejection := newValidationErrorMsg(i, in.Token,
+				fmt.Sprintf("a group scope is not supported on a rule of type %q (only event-driven, device-keyed kinds can be group-scoped)", rule.Type))
+			rejection.field = "groupScoped"
+			errs = append(errs, rejection)
 			continue
 		}
 		// The stored blob carries no runtime id (that is composed at fact-emit time), so
@@ -99,7 +102,12 @@ func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args struct
 
 // newValidationError builds a rejection resolver anchored to the offending rule.
 func newValidationError(index int, token string, err error) *DetectionRuleValidationErrorResolver {
-	return newValidationErrorMsg(index, token, err.Error())
+	r := newValidationErrorMsg(index, token, err.Error())
+	var validation *rules.ValidationError
+	if errors.As(err, &validation) {
+		r.field = validation.Field
+	}
+	return r
 }
 
 // newValidationErrorMsg builds a rejection resolver from a ready message (a rejection that is
@@ -157,6 +165,16 @@ type DetectionRuleValidationErrorResolver struct {
 	index   int32
 	token   string
 	message string
+	field   string
+}
+
+// Field resolves the authored definition's field, or groupScoped for a scope
+// rejection. Errors without a reliable field anchor apply to the whole rule.
+func (r *DetectionRuleValidationErrorResolver) Field() *string {
+	if r.field == "" {
+		return nil
+	}
+	return &r.field
 }
 
 // Index resolves the zero-based position of the offending definition in the input list.

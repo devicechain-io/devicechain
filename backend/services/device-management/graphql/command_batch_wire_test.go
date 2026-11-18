@@ -40,10 +40,14 @@ func newBatchWireCtx(t *testing.T) context.Context {
 		&model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{}, &model.DeviceProfileActivation{}, &model.CommandDefinition{}, &model.MetricDefinition{},
 		&model.DetectionRule{}, &model.EntityAttribute{}, &model.EntityGroup{}, &model.IssuedGroupToken{},
 		&model.EntityGroupVersion{}, &model.EntityGroupMembership{}, &model.EntityGroupFacetRef{},
-		&model.DetectionRuleScopeRef{}, &model.EntityRelationship{}, &model.PendingOwnershipFact{},
+		&model.DetectionRuleScopeRef{}, &model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{},
 		&model.EntityRelationshipType{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := rdb.CreatePartialUniqueIndex(db, &model.EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatal(err)
+	}
+
 	ctx := core.WithTenant(context.Background(), "acme")
 	ctx = withAuthorities(ctx, auth.DeviceRead)
 	return context.WithValue(ctx, gqlcore.ContextApiKey, model.NewApi(&rdb.RdbManager{Database: db}))

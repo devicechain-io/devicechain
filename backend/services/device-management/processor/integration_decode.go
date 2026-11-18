@@ -41,8 +41,9 @@ import (
 // 🔴 A DECODE IS A PURE FUNCTION OF THE UPLINK AND THE PUBLISHED DECODER, so a failure is terminal
 // on the first delivery (ErrDecodeFailed, see Process): the redelivery would answer the same, and
 // retrying a broken decoder five times only multiplies its load and delays the tenant's feedback.
-// It is never a silent drop: the failure is a failed-events record with the sub-reason leading its
-// text, written before the source is acked.
+// A failure admitted by the record budget is published with the sub-reason leading its text before
+// the source is acked. During a failed-events outage its record may not land; a redelivery past the
+// budget is acked without a record, still counted as suppressed (see DecodeAccountant.ObserveDecode).
 //
 // 🔴 THE OUTPUT IS VALIDATED INSIDE THE DECODE (payloaddecode, against the version's own metrics),
 // not left to validateMeasurements below it: an out-of-range or unstorable value is a
@@ -104,8 +105,8 @@ type DecodeObservation struct {
 	Section string
 	// Cost is the cost the decode spent.
 	Cost uint64
-	// Redelivered is set when this message was delivered before. A failed decode is recorded before its
-	// source is acked, so a redelivery means the earlier record may not have reached the stream.
+	// Redelivered is set when this message was delivered before. It is informational: a redelivered
+	// failure is held to the record budget exactly like a first one.
 	Redelivered bool
 	// Error is the tenant-facing text of a failed outcome (`decode_failed: <reason>: ...`).
 	Error string

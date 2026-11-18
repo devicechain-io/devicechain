@@ -1,11 +1,13 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { listAll } from '@/lib/api/list-all';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, Layers, Search, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
+import { formatDate } from '@/lib/format';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listDevices, type DeviceSearchResults } from '@/lib/api/device-management';
 import { isoTime, type CsvColumn } from '@/lib/csv';
@@ -159,8 +161,8 @@ export default function DevicesPage() {
       }),
     [pageNumber, version, nameContains, deviceType, provisioningProfile, expectedProvisioningProfile],
   );
-  const { data: profileList } = useQuery(
-    () => (scoped ? Promise.resolve(null) : listProvisioningProfiles({ pageNumber: 1, pageSize: 1000 })),
+  const { current: profileList, error: profilesError } = useQuery(
+    () => (scoped ? Promise.resolve(null) : listAll(page => listProvisioningProfiles({ ...page }))),
     [scoped],
   );
   const profileOptions: ComboboxOption[] = (profileList?.results ?? []).map((p) => ({
@@ -305,7 +307,8 @@ export default function DevicesPage() {
             placeholder={t('filterAnyType')}
           />
         </div>
-        {!scoped && profileOptions.length > 0 && (
+          {!scoped && profilesError && <p role="alert" className="text-sm text-destructive">{profilesError}</p>}
+          {!scoped && profileOptions.length > 0 && (
           <>
           <div className="w-64">
             <label htmlFor="dev-filter-registered" className="mb-1 block text-xs font-medium text-muted-foreground">
@@ -401,7 +404,7 @@ export default function DevicesPage() {
                     </DataTableCell>
                   )}
                   <DataTableCell className="text-muted-foreground">
-                    {device.createdAt ? new Date(device.createdAt).toLocaleDateString() : '—'}
+                    {formatDate(device.createdAt)}
                   </DataTableCell>
                 </DataTableRow>
               ))}

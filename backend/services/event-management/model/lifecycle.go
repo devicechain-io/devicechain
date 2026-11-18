@@ -16,6 +16,9 @@ import (
 // lifecycleSchema is the Postgres schema all event hypertables live in.
 const lifecycleSchema = "event-management"
 
+// RollupAggregate is retained separately from the raw hypertables.
+const RollupAggregate = "measurement_rollups"
+
 // LifecycleHypertables are the event-management hypertables governed by the
 // TimescaleDB data-lifecycle policies (ADR-026): the base events table, the three
 // payload hypertables, and event_anchors. All are partitioned on occurred_time and
@@ -53,7 +56,7 @@ const lifecycleLockName = "event-management-lifecycle"
 
 // qualifiedHypertable renders the schema-qualified, double-quoted identifier for a
 // hypertable (e.g. "event-management"."events"). The table always comes from the
-// LifecycleHypertables allowlist, never from user input.
+// LifecycleHypertables allowlist or RollupAggregate, never from user input.
 func qualifiedHypertable(table string) string {
 	return fmt.Sprintf("%q.%q", lifecycleSchema, table)
 }
@@ -343,6 +346,28 @@ type DataLifecyclePolicy struct {
 	FailedEventRetentionDays int
 }
 
+// RollupRetentionDays is the measurement aggregate window, or 0 when disabled.
+// The margin is one raw chunk interval rounded up to whole days (minimum one).
+// Raw chunks drop only when their whole range is older than RetentionDays, so raw
+// data can be up to RetentionDays + one chunk old. This margin guarantees the
+// aggregate is never dropped before the raw chunks it summarises, so a rollup-served
+// read never shows less than a raw-served read at the window edge.
+// LocationRetentionDays and FailedEventRetentionDays do not apply: the aggregate
+// is built from measurement_events only.
+func (p DataLifecyclePolicy) RollupRetentionDays() int {
+	if p.RetentionDays <= 0 {
+		return 0
+	}
+	margin := 1
+	if p.ChunkIntervalHours > 0 {
+		margin = p.ChunkIntervalHours / 24
+		if p.ChunkIntervalHours%24 != 0 {
+			margin++
+		}
+	}
+	return p.RetentionDays + margin
+}
+
 // retentionDaysFor resolves the retention window for one hypertable: the location
 // override when the table is location_events AND an override is set, the uniform
 // window otherwise. Kept as a pure method so both directions — override applied,
@@ -371,8 +396,8 @@ func (p DataLifecyclePolicy) retentionDaysFor(table string) int {
 // Policy application is best-effort with loud logging: a single failing statement
 // is logged at ERROR and reconciliation continues to the next hypertable, so a
 // transient TimescaleDB hiccup degrades the lifecycle guarantees rather than taking
-// down ingest. Callers should treat a returned error as "could not even attempt"
-// (e.g. the advisory lock could not be acquired), not "a policy failed".
+// down ingest. A failed retention-policy removal when disabling retention returns
+// an error, refusing startup while a lingering job could still delete data.
 func ApplyDataLifecyclePolicies(ctx context.Context, mgr *rdb.RdbManager,
 	policy DataLifecyclePolicy) error {
 	compressionEnabled := policy.CompressAfterDays > 0
@@ -388,12 +413,16 @@ func ApplyDataLifecyclePolicies(ctx context.Context, mgr *rdb.RdbManager,
 				return err
 			}
 		}
+		if err := applyRollupRetention(db, policy); err != nil {
+			return err
+		}
 		event := log.Info().
 			Int("chunkIntervalHours", policy.ChunkIntervalHours).
 			Bool("compressionEnabled", compressionEnabled).
 			Int("compressAfterDays", policy.CompressAfterDays).
 			Bool("retentionEnabled", policy.RetentionDays > 0).
 			Int("retentionDays", policy.RetentionDays).
+			Int("rollupRetentionDays", policy.RollupRetentionDays()).
 			Int("hypertables", len(LifecycleHypertables))
 		// Logged only when an override is in force, so the absence of the field means
 		// "location ages out with everything else" rather than "unknown".
@@ -461,6 +490,28 @@ func applyOne(db *gorm.DB, table string, policy DataLifecyclePolicy) error {
 	if err := db.Exec(removeRetentionPolicyStmt(table)).Error; err != nil {
 		return fmt.Errorf("remove retention policy on %q while retention is disabled "+
 			"(a previously-added policy may still be dropping data): %w", table, err)
+	}
+	return nil
+}
+
+// applyRollupRetention reconciles retention alone: chunk sizing and compression
+// settings for raw hypertables must never be applied to the continuous aggregate.
+func applyRollupRetention(db *gorm.DB, policy DataLifecyclePolicy) error {
+	days := policy.RollupRetentionDays()
+	if days > 0 {
+		exec := func(step, stmt string, args ...interface{}) {
+			if err := db.Exec(stmt, args...).Error; err != nil {
+				log.Error().Err(err).Str("hypertable", RollupAggregate).Str("step", step).
+					Msg("Failed to apply data-lifecycle policy statement; continuing.")
+			}
+		}
+		exec("retention-policy-remove", removeRetentionPolicyStmt(RollupAggregate))
+		exec("retention-policy-add", addRetentionPolicyStmt(RollupAggregate), days)
+		return nil
+	}
+	if err := db.Exec(removeRetentionPolicyStmt(RollupAggregate)).Error; err != nil {
+		return fmt.Errorf("remove retention policy on %q while retention is disabled "+
+			"(a previously-added policy may still be dropping data): %w", RollupAggregate, err)
 	}
 	return nil
 }

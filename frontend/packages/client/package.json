@@ -5,6 +5,7 @@
   "keywords": [
     "devicechain",
     "iot",
+    "iot-platform",
     "graphql",
     "sdk",
     "typescript"
@@ -32,6 +33,7 @@
   "files": [
     "dist",
     "README.md",
+    "AGENTS.md",
     "LICENSE"
   ],
   "publishConfig": {

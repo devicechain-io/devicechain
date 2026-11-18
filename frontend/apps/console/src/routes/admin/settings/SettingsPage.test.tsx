@@ -91,6 +91,20 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('token masks editor', () => {
+  it('keeps the selected settings tab mounted while a save refetches', async () => {
+    await renderWith([setting('first.raw', '{}'), setting('second.raw', '{}')]);
+    selectTab('second.raw');
+    fireEvent.change(rawJson(), { target: { value: '{"updated":true}' } });
+    let finish!: (rows: Row[]) => void;
+    listSettingsMock.mockReturnValueOnce(new Promise<Row[]>((resolve) => { finish = resolve; }));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(listSettingsMock).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('tab', { name: 'second.raw' }).getAttribute('aria-selected')).toBe('true');
+    finish([setting('first.raw', '{}'), setting('second.raw', '{"updated":true}')]);
+    await waitFor(() => expect(rawJson().value).toContain('updated'));
+    expect(screen.getByRole('tab', { name: 'second.raw' }).getAttribute('aria-selected')).toBe('true');
+  });
+
   it('renders a row per stored mask, with the sample each one would mint', async () => {
     await renderWith([setting(MASKS, '{"default":"{slug}","device":"device-{numeric-3}"}')]);
 
@@ -296,6 +310,7 @@ describe('the tab bar', () => {
       'Branding',
       'Map',
       'some.future.key',
+      'Functional areas',
     ]);
   });
 });

@@ -29,18 +29,20 @@ func (a *factAck) Ack() error { a.acked++; return nil }
 
 // recordingApplier records what the consumer asked of the projection, under which context.
 type recordingApplier struct {
-	calls   int
-	tenant  string
-	scoped  bool
-	claims  bool
-	device  string
-	anchors []string
-	changed time.Time
-	err     error
+	calls       int
+	tenant      string
+	scoped      bool
+	claims      bool
+	device      string
+	anchors     []string
+	incarnation uint64
+	changed     time.Time
+	err         error
 }
 
-func (r *recordingApplier) ApplyDeviceOwnership(ctx context.Context, device string, anchors []string, changed time.Time) (bool, error) {
+func (r *recordingApplier) ApplyDeviceOwnership(ctx context.Context, device string, anchors []string, changed time.Time, incarnation uint64) (bool, error) {
 	r.calls++
+	r.incarnation = incarnation
 	r.tenant, _ = core.TenantFromContext(ctx)
 	_, r.scoped = auth.ScopeFromContext(ctx)
 	_, r.claims = auth.ClaimsFromContext(ctx)
@@ -50,7 +52,7 @@ func (r *recordingApplier) ApplyDeviceOwnership(ctx context.Context, device stri
 
 func factMessage(t *testing.T, subject string, delivered int, ack *factAck) messaging.Message {
 	t.Helper()
-	b, err := dmproto.MarshalDeviceOwnershipChangedEvent(&dmmodel.DeviceOwnershipChangedEvent{DeviceToken: "pump-1",
+	b, err := dmproto.MarshalDeviceOwnershipChangedEvent(&dmmodel.DeviceOwnershipChangedEvent{DeviceToken: "pump-1", DeviceIncarnation: 23,
 		Anchors: []string{"customer:globex", "area:north"}, ChangedTime: time.Date(2026, 10, 16, 9, 1, 0, 0, time.UTC)})
 	require.NoError(t, err)
 	return messaging.NewConsumedMessage(subject, b, delivered, nil, ack)
@@ -67,6 +69,7 @@ func TestAnOwnershipFactIsAppliedAsTheProjectionsOwnWrite(t *testing.T) {
 	require.False(t, api.scoped, "the consumer's write must not be bounded by anybody's scope")
 	require.False(t, api.claims, "the consumer's write must carry no caller")
 	require.Equal(t, "pump-1", api.device)
+	require.Equal(t, uint64(23), api.incarnation)
 	require.Equal(t, []string{"customer:globex", "area:north"}, api.anchors)
 	require.True(t, api.changed.Equal(time.Date(2026, 10, 16, 9, 1, 0, 0, time.UTC)))
 	require.Equal(t, 1, ack.acked)
@@ -136,7 +139,7 @@ type outageApplier struct {
 	calls    atomic.Int32
 }
 
-func (o *outageApplier) ApplyDeviceOwnership(context.Context, string, []string, time.Time) (bool, error) {
+func (o *outageApplier) ApplyDeviceOwnership(context.Context, string, []string, time.Time, uint64) (bool, error) {
 	if o.calls.Add(1) <= o.failures {
 		return false, o.err
 	}

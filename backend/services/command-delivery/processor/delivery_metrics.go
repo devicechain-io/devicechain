@@ -106,6 +106,8 @@ type DeliveryMetrics struct {
 	// difference from a working gate is that the silent losses it exists to prevent are
 	// happening again. Without this counter, the gate can be dead for months and the
 	// only symptom is the absence of a symptom.
+	// DispatchDeferred counts commands left queued while their channel is undecided.
+	DispatchDeferred    prometheus.Counter
 	HoldsPlaced         prometheus.Counter
 	UndeliverableFailed prometheus.Counter
 	PresenceReadErrors  prometheus.Counter
@@ -143,6 +145,9 @@ type DeliveryMetrics struct {
 	// fleet's duty cycle, and holds placed with nothing released is the signature of a
 	// gate that has become a one-way door.
 	HoldsReleased prometheus.Counter
+
+	// HoldsCancelled counts HELD rows cancelled after their device identity disappeared or changed.
+	HoldsCancelled prometheus.Counter
 
 	// WindowRestamps counts commands whose maintenance-window hold was moved to the window's
 	// current schedule: the window was edited, deleted, or closed again while the command's
@@ -304,6 +309,8 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 				"times as the configured bound allows, so it stopped retrying. Each row records "+
 				"FAILED with the platform named as the cause, rather than retrying until its TTL "+
 				"and then recording TIMEOUT against a device it never reached"),
+		DispatchDeferred: ms.NewCounter("command_delivery_dispatch_deferred_total",
+			"Commands left queued because their command channel could not be resolved"),
 		HoldsPlaced: ms.NewCounter("command_delivery_holds_placed_total",
 			"Commands withheld from dispatch because the device is authoritatively absent"),
 		UndeliverableFailed: ms.NewCounter("command_delivery_undeliverable_total",
@@ -327,6 +334,8 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 				"never synced anywhere are not dispatched to while it is 0"),
 		DisabledGatePending: ms.NewGauge("command_delivery_disabled_gate_pending_tenants",
 			"Tenants whose disabled-device record this process has not yet read; their commands wait"),
+		HoldsCancelled: ms.NewCounter("command_delivery_holds_cancelled_total",
+			"Held commands cancelled because their device no longer exists or its incarnation changed."),
 		HoldsReleased: ms.NewCounter("command_delivery_holds_released_total",
 			"Withheld commands returned to the dispatch queue because their device came back"),
 		WindowRestamps: ms.NewCounter("command_delivery_window_restamps_total",

@@ -33,6 +33,8 @@ A decoder belongs to a device profile and travels with it:
 
 The decoder is a document of expressions in a small, loop-free language (CEL). It has one **input** kind it reads, optional **shared values**, and one or more **sections**; each section has **rows**, and each row says which metric it writes and how to compute the value. The language has no clock, no randomness and no side effects, so the same input always gives the same readings.
 
+DeviceChain does not execute JavaScript, Python or other user-supplied scripts as payload decoders. A ChirpStack JavaScript codec runs in ChirpStack; DeviceChain receives its decoded object through the [inbound integration](./inbound-integrations.md#chirpstack). For an existing script, rewrite supported byte reads and JSON mappings as CEL decoder rows. Keep logic outside this language in the network server's codec or in an external bridge that forwards [device events](../reference/device-protocol.md).
+
 A decoder can have at most 8 sections, 16 shared values and 20 saved vectors, and the whole document is at most 32 KiB. The [function reference](../reference/decoder-functions.md#decoder-functions-limits) lists the limits.
 
 ## Inputs {#inputs}
@@ -315,8 +317,10 @@ HTTP answers the device. Every answer that depends on the device is given only a
 | `404` | The route is not turned on. |
 | `413` | The body is over the cap for what the decoder reads (4 KiB of frame, 64 KiB of JSON) or over 1 MiB. |
 | `422` | The device's type has no decoder. The payload is never read as an event. |
+| `429` | Requests from this source address exceed the allowance. `Retry-After` says when to retry. |
 | `429` | The tenant is over its ingest ceiling, by messages or by readings. `Retry-After` says when to retry. |
 | `500` | The platform could not build the message. Not retryable by the device. |
+| `503` | While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time). Wrong passwords over HTTP now count toward the same per-credential hold as MQTT, so an attack over HTTP can also delay that credential's MQTT reconnects, just as an attack over MQTT already could. |
 | `503` | The decoder lookup is unavailable, ingest is applying backpressure, or the downstream stream could not take the payload. `Retry-After` is set for the first two and says when to retry. |
 
 MQTT cannot answer a device, so the platform records what happened instead. The [Device Protocol Reference](../reference/device-protocol.md#raw-payload) has the full table; in short:
@@ -326,7 +330,7 @@ MQTT cannot answer a device, so the platform records what happened instead. The 
 - **A tenant over its ceiling** is shed: over HTTP the device is told `429`; over MQTT the message is acknowledged and dropped, and counted in `total_msg_rate_limited` or `total_msg_reading_limited`.
 - **A decision the platform cannot make yet** (device-management cannot be asked, or backpressure) is retried: HTTP answers `503`, and an MQTT message waits and is offered again.
 
-An operator watches `device_uplink_requests_total` (HTTP) and `device_uplink_messages_total` (MQTT), each by `result` (`accepted`, `bad_request`, `unauthorized`, `too_large`, `no_decoder`, `rate_limited`, `plan_unavailable`, `backpressure`, `publish_failed`, `internal_error`), and `device_uplink_charged_readings_total` for the readings charged.
+An operator watches `device_uplink_requests_total` (HTTP) and `device_uplink_messages_total` (MQTT), each by `result` (`accepted`, `bad_request`, `unauthorized`, `too_large`, `no_decoder`, `rate_limited`, `source_limited`, `held`, `plan_unavailable`, `backpressure`, `publish_failed`, `internal_error`), and `device_uplink_charged_readings_total` for the readings charged.
 
 A payload counts against the tenant's ingest ceilings once as a message and then as readings, at least the decoder's [maximum readings](#max-readings), as for an integration.
 

@@ -23,8 +23,11 @@ import (
 
 // NATS configuration parameters
 type NatsConfiguration struct {
-	Hostname string
-	Port     uint32
+	// ShardGroups is disabled when absent; enabling routing requires an explicit
+	// NatsManager.EnableStreamSharding call with a placement router.
+	ShardGroups *NatsShardGroupsConfiguration `json:"shardGroups,omitempty"`
+	Hostname    string
+	Port        uint32
 	// StreamReplicas is the JetStream replica count for created streams AND for
 	// every KV bucket (core/messaging kv.go reads this same value — there is no
 	// separate KV lever). 1 for single-node dev; 3 for the ADR-020 HA topology.
@@ -514,9 +517,8 @@ func (c NatsConfiguration) TLSConfig(serverName string) (*tls.Config, error) {
 	}, nil
 }
 
-// Prometheus metrics configuration. Metrics are served on the GraphQL HTTP port
-// (8080) at /metrics via the shared mux; there is no separate metrics listener,
-// so the former HttpPort field was dead config and has been removed (E14).
+// Prometheus metrics configuration. Metrics are served on the operations port
+// (8083) at /metrics. The port is fixed by core.OpsPort, not instance config.
 // Enabled is informational — scrape discovery is gated by the Helm chart's
 // metrics.enabled value (the ServiceMonitor), not by the running service.
 type MetricsConfiguration struct {
@@ -1526,9 +1528,8 @@ func (c *NatsConfiguration) tierMaxBytesFor(suffix string) int64 {
 // reported rather than refused. Each is a PATH from the document root: this document is
 // nested, unlike the per-service ones, and a bare key name would match nothing here.
 //
-// infrastructure.metrics.httpPort was a second HTTP listener for Prometheus. There is no
-// second listener: /metrics rides on the GraphQL port through the shared mux, so the
-// field was dead config and was removed. The chart shipped it as a DEFAULT under
+// infrastructure.metrics.httpPort was a configurable Prometheus listener. The
+// field was dead config and was removed; operations now use a fixed port. The chart shipped it as a DEFAULT under
 // instance.config, which means every operator who copied values.yaml has it, and an
 // operator running a pre-created instance Secret (instance.existingSecret) has it in a
 // document this chart cannot edit. Refusing it would stop every pod in the instance on
@@ -1539,10 +1540,10 @@ func (c *NatsConfiguration) tierMaxBytesFor(suffix string) int64 {
 // set it instead.
 func (c *InstanceConfiguration) RetiredConfigKeys() map[string]string {
 	return map[string]string{
-		"infrastructure.metrics.httpPort": "Metrics are served on the GraphQL/HTTP port (8080) at /metrics " +
-			"through the shared mux; there is no separate metrics listener and this port was never bound. " +
+		"infrastructure.metrics.httpPort": "Metrics are served on the operations port (8083) at /metrics " +
+			"on a separate mux; this configuration key does not control the listener. " +
 			"Delete the key. Scrape discovery is controlled by the chart's metrics.enabled value, which " +
-			"renders the ServiceMonitor against the graphql port.",
+			"renders the ServiceMonitor against the ops port.",
 	}
 }
 
@@ -1698,6 +1699,9 @@ func (c *InstanceConfiguration) Validate() error {
 		if _, err := c.Infrastructure.Secrets.DecodedRootKey(); err != nil {
 			return err
 		}
+	}
+	if err := c.Infrastructure.Nats.ShardGroups.Validate(); err != nil {
+		return err
 	}
 	if err := c.Infrastructure.Nats.validateTierOrdering(); err != nil {
 		return err

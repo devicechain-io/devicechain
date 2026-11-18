@@ -30,7 +30,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/proto"
 	"github.com/devicechain-io/dc-microservice/storehold"
-	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -86,7 +85,8 @@ type EventResolver struct {
 	// deviceDisabled counts events refused because their device is disabled. ONE counter
 	// for the pool (initializeEventResolvers sets it), label-free; nil in tests that do not
 	// look at it.
-	deviceDisabled prometheus.Counter
+	deviceDisabled      prometheus.Counter
+	relationshipRefused prometheus.Counter
 	// integrationAliasMismatch counts integration events refused because their device no longer
 	// holds the alias they were resolved from. Pool-wide, label-free; nil in tests that do not
 	// look at it.
@@ -221,6 +221,7 @@ func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []re
 		Source:              event.Source,
 		AltId:               event.AltId,
 		SourceDeviceToken:   device.Token,
+		DeviceIncarnation:   uint64(device.ID),
 		ExternalId:          externalId,
 		DeviceTypeToken:     scope.DeviceTypeToken,
 		ProfileVersionToken: scope.ProfileVersionToken,
@@ -297,7 +298,7 @@ func (rez *EventResolver) unionMemberships(ctx context.Context, api model.Device
 		}
 		for _, m := range ms {
 			if i == 0 && m.AccessScope && t.Type == string(entity.TypeDevice) {
-				access = append(access, resolvedevent.ResolvedAnchor{AnchorType: auth.AnchorKindGroup, AnchorToken: m.GroupToken})
+				access = append(access, resolvedevent.ResolvedAnchor{AnchorType: auth.AnchorKindGroup, AnchorToken: m.GroupToken, EntityId: m.GroupId})
 			}
 			k := mkey{m.GroupToken, m.SelectorVersion}
 			if _, dup := seen[k]; dup {
@@ -329,9 +330,6 @@ func (rez *EventResolver) resolveProfile(ctx context.Context, api model.DeviceMa
 	return res, 0, nil
 }
 
-// relationshipTokenNamespace namespaces the derived tokens of relationships created from events.
-var relationshipTokenNamespace = uuid.MustParse("6f1c3a52-8d0e-5b7a-9c41-2e5d7a9b1c30")
-
 // Create a new relationship based on an inbound event. The source is the
 // originating device; the target is a uniform (type, token) reference (ADR-013).
 func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, device *model.Device,
@@ -341,15 +339,22 @@ func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, devic
 	// caller exactly like a failed write. A random token then created the relationship a second
 	// time on the re-run. Derived from the tenant and the relationship's identity, the re-run
 	// finds the first one by token and uses it.
+	if err := model.RefuseDeviceAuthoredRelationshipType(ctx, rez.Api, relcreate.RelationshipType); err != nil {
+		reason := uint(resolvedevent.FailureReason_ApiCallFailed)
+		if errors.Is(err, model.ErrDeviceAuthoredOwnership) {
+			reason = uint(resolvedevent.FailureReason_Invalid)
+		}
+		return nil, reason, err
+	}
 	tenant, _ := core.TenantFromContext(ctx)
-	token := uuid.NewSHA1(relationshipTokenNamespace, []byte(strings.Join([]string{
-		tenant, string(entity.TypeDevice), device.Token, relcreate.TargetType, relcreate.Target, relcreate.RelationshipType}, "\x00"))).String()
+	token := model.DeviceAuthoredRelationshipToken(tenant, device.Token, relcreate.TargetType, relcreate.Target, relcreate.RelationshipType)
 	if found, ferr := rez.Api.EntityRelationshipsByToken(ctx, []string{token}); ferr != nil {
 		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), ferr
 	} else if len(found) > 0 && found[0] != nil {
 		return found[0], 0, nil
 	}
 	create := &model.EntityRelationshipCreateRequest{
+		DeviceAuthored:   true,
 		Token:            token,
 		SourceType:       string(entity.TypeDevice),
 		Source:           device.Token,
@@ -359,6 +364,9 @@ func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, devic
 		Metadata:         nil,
 	}
 	created, err := rez.Api.CreateEntityRelationship(ctx, create)
+	if errors.Is(err, model.ErrDeviceAuthoredOwnership) {
+		return nil, uint(resolvedevent.FailureReason_Invalid), err
+	}
 	if err != nil {
 		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), err
 	}
@@ -422,12 +430,22 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	// relationship, addressed by target token. Stamping only the new one left this event —
 	// in the history, and in the live view until the ownership fact arrived — visible to
 	// the new target alone, and denied to the device's other owners (ADR-081).
+	//
+	// 🔴 ONLY A TRACKED RELATIONSHIP IS AN ANCHOR. A device may assert only untracked types
+	// (CreateNewEntityRelationship refuses tracked ones), and an untracked relationship is not
+	// on the device's next telemetry event, so stamping its target here made this one event an
+	// ownership claim: `connected-to -> customer:bravo` put the event in bravo's scope. The
+	// guard is kept on the created type's flag rather than removed, so it stays right if a
+	// tracked relationship ever reaches this path by another door; a type that was not loaded
+	// reads as untracked and stamps nothing.
 	anchors := existing
-	newAnchor := resolvedevent.ResolvedAnchor{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID}
-	if !slices.ContainsFunc(anchors, func(a resolvedevent.ResolvedAnchor) bool {
-		return a.AnchorType == newAnchor.AnchorType && a.AnchorToken == newAnchor.AnchorToken
-	}) {
-		anchors = append(anchors, newAnchor)
+	if created.RelationshipType.Tracked {
+		newAnchor := resolvedevent.ResolvedAnchor{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID, EntityId: created.TargetId}
+		if !slices.ContainsFunc(anchors, func(a resolvedevent.ResolvedAnchor) bool {
+			return a.AnchorType == newAnchor.AnchorType && a.AnchorToken == newAnchor.AnchorToken
+		}) {
+			anchors = append(anchors, newAnchor)
+		}
 	}
 	scope := res.Scope()
 	resolved := rez.MergeToResolveEvent(device, anchors, memberships, event, payload, &scope)
@@ -1110,6 +1128,7 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, api model.DeviceMan
 			AnchorType:     r.TargetType,
 			AnchorToken:    r.TargetToken,
 			RelationshipId: r.ID,
+			EntityId:       r.TargetId,
 		})
 		targets = append(targets, model.MembershipTarget{Type: r.TargetType, Id: r.TargetId})
 	}
@@ -1585,10 +1604,18 @@ func (rez *EventResolver) Process(ctx context.Context) {
 					// A failed decode past its device type's record budget: counted as suppressed by the
 					// accountant and settled here WITHOUT a failed-events record, so a broken decoder at
 					// a large tenant cannot flood the platform-wide stream. It is terminal on the first
-					// delivery like any failed decode, and never silent: the first records of the
-					// window are already out and the tally says how many were not written.
+					// delivery like any failed decode: the first failures of the window were admitted.
+					// Normally their records are out; a failed-events outage may leave them unwritten,
+					// so a redelivery can end suppressed with no record, still counted in the tally.
 					_ = unresolved.Ack()
 					done(core.ResultDropped)
+				} else if errors.Is(err, model.ErrDeviceAuthoredOwnership) {
+					if rez.relationshipRefused != nil {
+						rez.relationshipRefused.Inc()
+					}
+					log.Warn().Str("tenant", tenant).Str("correlation", correlation).Err(err).Msg("Refusing a device-authored ownership or containment relationship.")
+					rez.Failed(unresolved, tenant, reason, *event, err)
+					done(core.ResultFailed)
 				} else if errors.Is(err, ErrNotGatewayChild) {
 					// A gateway named a device that is not its own. Terminal on the FIRST
 					// delivery (redelivery cannot change an assignment's answer, and a device

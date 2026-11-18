@@ -4,7 +4,7 @@
 #
 # Does any published npm package still export everything it exported at the last release?
 #
-#   hack/check-npm-api.sh                  # drift check + compare with the nearest stable tag
+#   hack/check-npm-api.sh                  # drift check + compare with the baseline release
 #   hack/check-npm-api.sh v0.24.0          # baseline: the tag given
 #   hack/check-npm-api.sh --update         # rewrite frontend/api/*.api.md from the built packages
 #   hack/check-npm-api.sh --self-test      # prove both checks can fail, through this script
@@ -30,7 +30,7 @@
 # This complements hack/widget-package-proof.sh and `npm run verify:packages`, which prove the
 # packed artifact RESOLVES and LOADS; neither notices that an export disappeared.
 #
-# THE BASELINE is the nearest STABLE tag REACHABLE from HEAD (hack/api-baseline.sh), and no tag is
+# THE BASELINE is hack/api-baseline.sh's (the last release on HEAD's line, by semver), and no tag is
 # a failure, never a skip. Declarations (frontend/api/breaks.txt) expire when the baseline moves
 # and fail when stale, like every other surface.
 #

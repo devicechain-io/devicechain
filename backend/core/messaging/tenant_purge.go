@@ -12,6 +12,7 @@ import (
 
 	nats "github.com/nats-io/nats.go"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -86,8 +87,25 @@ var mqttTenantStreams = []struct{ stream, prefix string }{
 // instance that has never used MQTT has no gateway streams, and an area that has never
 // started has no stream of its own. "Not there" and "there and empty" are the same fact
 // for an erasure.
-func PurgeTenant(ctx context.Context, nc *nats.Conn, instanceId, tenant string) (TenantPurgeResult, error) {
+//
+// Callers must pass the instance shard-group configuration (nil when disabled),
+// or use NatsManager.PurgeTenant,
+// which supplies its installed configuration automatically. Every configured group
+// is swept, even if the tenant has since moved to another group.
+func PurgeTenant(ctx context.Context, nc *nats.Conn, instanceId, tenant string, shardGroups *config.NatsShardGroupsConfiguration) (TenantPurgeResult, error) {
 	res := TenantPurgeResult{PerStream: map[string]int64{}}
+	suffixes := streams.Suffixes()
+	if shardGroups != nil {
+		cfg := shardGroups
+		if err := cfg.Validate(); err != nil {
+			return res, err
+		}
+		for _, base := range cfg.Suffixes {
+			for g := 1; g < cfg.Count; g++ {
+				suffixes = append(suffixes, GroupSuffix(base, g))
+			}
+		}
+	}
 	// 🔴 THE TOKEN IS VALIDATED HERE EVEN THOUGH IT CANNOT REACH STORAGE INVALID.
 	// ADR-042's grammar callback rejects a NATS metacharacter at create/update, so this
 	// should be unreachable — but "should be unreachable" is a claim about every write path
@@ -128,10 +146,9 @@ func PurgeTenant(ctx context.Context, nc *nats.Conn, instanceId, tenant string) 
 	ctx, cancel := context.WithTimeout(ctx, PurgeTimeout)
 	defer cancel()
 
-	// streams.Suffixes() is the complete declared set and needs no supplementing: a
-	// dead-letter stream is its own declared entry (streams.All carries it, built with
-	// DeadLetter), so deriving one here would purge it twice.
-	for _, suffix := range streams.Suffixes() {
+	// The declared suffixes already include dead-letter streams; supplement them only
+	// with the configured group streams.
+	for _, suffix := range suffixes {
 		// The advisory capture holds the BROKER'S notices, whose subjects carry no tenant:
 		// there is no tenant filter to purge it by, and nothing on it belongs to a tenant.
 		// What a notice points at is purged from its own stream in this same loop.
@@ -290,3 +307,12 @@ const PurgeTimeout = 20 * time.Second
 //     TestTheSettleDefaultOutlastsTheBrokersRetainedCache;
 //   - coordinator: TestRowsAppearingLateRestartTheSettleWindow.
 const RetainedCacheWindow = 2 * time.Minute
+
+// PurgeTenant erases all configured groups, regardless of the tenant's current placement.
+func (nmgr *NatsManager) PurgeTenant(ctx context.Context, tenant string) (TenantPurgeResult, error) {
+	var cfg *config.NatsShardGroupsConfiguration
+	if s := nmgr.streamSharding(); s != nil {
+		cfg = &s.cfg
+	}
+	return PurgeTenant(ctx, nmgr.nc, nmgr.Microservice.InstanceId, tenant, cfg)
+}

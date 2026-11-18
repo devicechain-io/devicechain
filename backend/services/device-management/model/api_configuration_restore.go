@@ -196,21 +196,12 @@ func (api *Api) applyConfigurationDocument(ctx context.Context, deviceToken stri
 					existing[0].Value.Valid && existing[0].Value.String == text {
 					continue
 				}
-				if len(existing) == 1 {
-					row := existing[0]
-					row.ValueType = decl.ValueType
-					row.Value = rdb.NullStrOf(&text)
-					row.LastUpdated = now
-					if err := tx.Save(&row).Error; err != nil {
-						return err
-					}
-				} else {
-					row := &EntityAttribute{EntityType: deviceType, EntityId: deviceId, Scope: shared,
-						AttrKey: key, ValueType: decl.ValueType, Value: rdb.NullStrOf(&text), LastUpdated: now}
-					if err := tx.Create(row).Error; err != nil {
-						return err
-					}
+				row := &EntityAttribute{EntityType: deviceType, EntityId: deviceId, Scope: shared,
+					AttrKey: key, ValueType: decl.ValueType, Value: rdb.NullStrOf(&text), LastUpdated: now}
+				if err := upsertAttributeOnTx(tx, row); err != nil {
+					return err
 				}
+
 				value := text
 				writes = append(writes, configurationWrite{request: &EntityAttributeSetRequest{
 					EntityType: deviceType, Entity: deviceToken, Scope: shared, AttrKey: key,

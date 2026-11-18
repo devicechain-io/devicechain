@@ -165,6 +165,50 @@ receive commands.
 The full list of what disabling does, including configuration and alarms, is in
 [Disabling a device](/guides/device-credentials#disabling-a-device).
 
+## What deleting a device does {#deleting-a-device}
+
+Deleting a device cannot be undone. The device, its credentials, aliases, attributes, group
+memberships and relationships are removed at once, and its token becomes free: you can create a
+new device with the same token. The new device starts with none of the old device's records:
+
+- **Live state, latest readings and position** are removed. Members of the new device's owner do
+  not see the old device's last position or readings.
+- **Commands** the platform still held for the old device (queued, held or parked) are cancelled.
+  A command created for the old device is never sent to the new one, including one already handed
+  to a transport and not yet confirmed. Commands you send to the new device go out as usual.
+- **Update assignments** that were pending for the old device are ended, and their rollout targets
+  show as cancelled. The new device is not offered them and cannot download their artifacts.
+- **Alarms** raised on the old device are deleted, and its detection rules forget their state, so
+  the new device's first matching reading raises a new alarm. Each alarm that was still active
+  ends with a clear that says the device was deleted, so its notifications stop escalating.
+- **Event history** is kept. Events the platform received from the old device stay stored, but they
+  are no longer listed under the customer, area or asset the device belonged to. Events the new
+  device sends are listed as usual, even if the device reports them with a time before the delete.
+
+The services learn of a delete through the message broker. If the broker is unavailable, the
+delete still succeeds and the other services catch up when it is back. Until then, the old
+device's records can still be visible.
+
+Records left behind by deletes made before this version are handled too. A periodic check removes
+the live state of devices that no longer exist, and an update assignment made for an earlier
+device at the same token is not offered to the device that holds it now. Commands are cancelled
+for deletes the message broker still retains when the upgraded service first starts, which covers
+the last few days. A command waiting from an older delete is cancelled instead of sent when it is
+older than the device that now holds its token.
+
+### Limits {#deleting-a-device-limits}
+
+- A reading the platform accepted before the delete, but processed after it, can briefly bring
+  back the old device's live state. If no device holds the token, the periodic check removes it.
+  If a new device was created at the token, its first reading replaces it, and a reading of the
+  old device is never applied to the new one.
+- Before re-sending a notification for an alarm, the platform checks that the alarm still exists.
+  If that check fails, the notification is sent anyway, so an outage cannot silence a real alarm.
+  See [Alarms of a deleted device](../guides/notification-channels.md#deleted-originator).
+- During an upgrade, while old and new service versions run side by side, a delete handled by an
+  old version follows the old behaviour until that version is replaced. See
+  [Releases and upgrades](../deployment/releases-and-upgrades.md#v170-upgrade).
+
 ## The device page
 
 Select a device in the list to open its page. The header shows the device's name, its token

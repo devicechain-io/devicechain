@@ -173,6 +173,12 @@ variable "nats_server_image_digest" {
   }
 }
 
+variable "nats_jetstream_storage_class" {
+  description = "StorageClass for new broker JetStream volumes. Empty uses the cluster default. dcctl selects premium-rwo for new GKE brokers only; upgrades leave this unset. The module remembers its first choice and ignores later changes because PVC storage classes are immutable. Leave unset when adopting an existing broker."
+  type        = string
+  default     = ""
+}
+
 variable "nats_jetstream_storage" {
   description = <<-EOT
     PersistentVolume size for NATS JetStream file storage. The default must fit the
@@ -1011,4 +1017,10 @@ variable "backup_secret_access_key_key" {
   description = "Key within backup_credentials_secret holding the secret access key. Read from the cluster root's output of the same name; never guessed from the destination."
   type        = string
   default     = "MINIO_ROOT_PASSWORD"
+}
+
+variable "nats_shard_groups" {
+  description = "Opt-in shard group count; zero leaves the broker configuration unchanged."
+  type        = number
+  default     = 0
 }

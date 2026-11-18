@@ -4,7 +4,8 @@ title: Feature Tour
 
 # Feature Tour {#feature-tour}
 
-[Your first device](./first-device.md) stops at the first reading. This tour keeps going. By the end
+[Your first device](./first-device.md) introduces readings, an alarm and a command on one device.
+This scripted tour builds a complete site. By the end
 of it one site is running from end to end: a device type and its profile, two devices reporting
 readings, a dashboard, a rule that raises an alarm and sends a command, the device's answer to that
 command, and a **customer user** who signs in and sees only their own device.
@@ -34,19 +35,19 @@ Budget about 45 minutes once an instance is up.
   ```
 
 Three settings say where your instance is. Each has a default that matches a plain
-`dcctl install local` followed by `dcctl bootstrap local tour --host localhost --no-tls`, and each can
+`dcctl install local` followed by `dcctl bootstrap local devicechain --host localhost --no-tls`, and each can
 be overridden from the environment:
 
 | Variable | Default | Set it when |
 | --- | --- | --- |
 | `DC_URL` | `http://localhost` | The console is served on another host or port. |
-| `INSTANCE` | `tour` | Your `dcctl` instance has another name. It names the namespace `dci-<instance>`, which the scripts read the broker's certificate authority and the superuser's password from. |
+| `INSTANCE` | `devicechain` | Your `dcctl` instance has another name. It names the namespace `dci-<instance>`, which the scripts read the broker's certificate authority and the superuser's password from. |
 | `MQTT_HOST` | `devicechain-control-plane` | Your kind cluster is not named `devicechain`. It is the cluster node's container name, `<cluster>-control-plane`. |
 
 If your `kubectl` has more than one context, also set `KUBE_CONTEXT`.
 
 ```bash
-export DC_URL=http://localhost INSTANCE=devicechain MQTT_HOST=devicechain-control-plane
+export DC_URL=http://localhost MQTT_HOST=devicechain-control-plane
 ```
 
 The simulated devices are containers on the `kind` Docker network, so they reach the broker's MQTT
@@ -180,7 +181,7 @@ and creates it with `createDashboard`, publishes it with `publishDashboard`, and
 Open `DC_URL/dashboards/tour-a-ops`. The two boards differ in nothing but the button, which is the
 point of generating them from one definition.
 
-## 7. The rule raises an alarm {#7-the-rule-raises-an-alarm}
+## 7. Verify the alarm in the console {#7-the-rule-raises-an-alarm}
 
 Wait about half a minute. When a room passes the line, the rule fires: an alarm appears under
 **Monitor → Alarms** (and on the board's alarm table and count), and it **clears by itself** when the
@@ -191,7 +192,7 @@ latest raise.
 The room warms again after it has cooled, so the cycle repeats: one alarm and one command for each
 excursion. See [Alarms](/user-guide/alarms) and [Event processing](../concepts/event-processing.md).
 
-## 8. The command and its outcome {#8-command-outcome}
+## 8. Verify the command and its outcome {#8-command-outcome}
 
 The same firing sent the command `boost-cooling`. The device received it on its command topic,
 cooled, and **answered**, with the command's own token and the delivery's nonce. The answer is what
@@ -237,7 +238,7 @@ can run unattended.
 
 Sign in as `ops@acme.example` (the password is in `.state/tour-a/customer-password`). The user sees:
 
-- a sidebar of **Dashboards**, **Alarms** and **Devices**, and nothing else;
+- a sidebar of **Home**, **Dashboards**, **Alarms** and **Devices**, and nothing else;
 - one device, `coldroom-a1`;
 - one dashboard, `tour-a-customer`, with live readings and the alarm for their own room;
 - no sign of `coldroom-a2`, its readings, its alarms or the operator's board.
@@ -254,9 +255,11 @@ PASS  createCommand boost-cooling was accepted (QUEUED), not rejected
 PASS  your own command reached SUCCESSFUL (the device answered; last status: SUCCESSFUL)
 PASS  the operator sees both devices (2)
 PASS  the operator sees alarms on both devices (2 devices with alarms)
+PASS  the operator sees both dashboards (2)
 PASS  the customer sees exactly coldroom-a1 (saw: coldroom-a1)
 PASS  the customer sees alarms for coldroom-a1 only (saw: coldroom-a1)
 PASS  the customer reads no state of coldroom-a2 (0 measurements)
+PASS  the customer reads coldroom-a1's latest readings (2)
 PASS  the customer lists only the board shared with them (saw: tour-a-customer)
 PASS  the operator's board is invisible to the customer
 PASS  the read-only customer user cannot send a command (refused: FORBIDDEN)

@@ -156,7 +156,13 @@ Schema 表达不了的内容：
 
 #### NewRelationship {#new-relationship-payload}
 
+关系创建成功后，其事件会以包含锚点的信封形式保留在事件历史记录中。
+
+**如果存在设备自行创建的关系，则拒绝将该关系类型标记为 tracked。** `updateEntityRelationshipType` 会拒绝将类型标记为 tracked，直到该类型中设备自行创建的关系被删除，因为这些关系会在标记时成为所有权关系；拒绝消息会列出它们。请先删除这些关系，再将类型标记为 tracked。
+
 从发送事件的设备到同一租户中另一实体创建一条关系。此载荷没有 `entries` 数组，且三个键按确切名称读取，因此大小写有影响。缺失的键在解码消息时不会被拒绝：它按空字符串读取，随后事件会像下文所述情形一样在解析时失败。
+
+设备不能创建所有权或包含关系：如果 `NewRelationship` 指定了跟踪类型（包括 `assigned` 和任何租户定义的跟踪类型）或内置 `contains`，则在第一次投递时拒绝该事件，并以原因 `Invalid` 记录到 `failed-events`，不会重试。请使用认领码或 `createEntityRelationship` mutation 分配设备。非跟踪类型（包括 `member`）仍按原有方式工作。
 
 | 字段 | 类型 | 必填 | 含义 | 示例 |
 | --- | --- | --- | --- | --- |
@@ -201,6 +207,13 @@ MQTT 无法回应设备，因此平台无法处理的载荷会记录下来供运
 :::
 
 **通过 HTTP**，同样的能力是 `event-sources` 服务上的 `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink`。设备在请求头中出示自己的凭据（`Authorization: Bearer <token>`，或 `X-DeviceChain-Credential-Type`、`-Id`、`-Secret`），因为二进制正文无处携带凭据；没有凭据时该路由返回 `401`。只有运维人员在 `event-sources` 上设置了 `httpIngest.deviceUplinks` 时它才存在，否则返回 `404`。
+
+| HTTP | 响应 |
+| --- | --- |
+| `429` | 来自此来源地址的请求超出限额。`Retry-After` 指示何时重试。 |
+| `503` | 在此设备的凭据遭到猜测期间，该设备的每条 HTTP 上行请求（包括使用正确凭据的请求）都会收到 `503` 和 `Retry-After`，直到暂停结束（每次最长 60 秒）。 |
+
+**设备密码猜测统一计数，无论通过哪种途径到达。** 在 HTTP 设备上行路由上出示的错误密码，现在与错误的 MQTT 密码计入同一个按凭据实施的暂停，所有副本共享计数，因此无法再将猜测分散到两种途径以获得双倍尝试次数。凭据暂停期间，使用它的 HTTP 上行请求会收到 `503` 和 `Retry-After`，使用它的 MQTT 连接则会被拒绝，与之前一样。
 
 ## 命令下发 {#command-delivery}
 
@@ -391,11 +404,11 @@ POST /api/device-management/provisioning/{tenant}/register
 | --- | --- |
 | `Unauthenticated` | 设备认证为 `required` 时没有凭据；凭据认证失败；或正文中的 `device` 不是该凭据所属的设备。 |
 | `DeviceNotFound` | 未使用凭据，且 `device` 令牌未在租户中注册。 |
-| `Invalid` | 事件早于 366 天以上，或无法按其类型解释。 |
+| `Invalid` | 事件早于 366 天以上，或无法按其类型解释；指定跟踪或包含关系类型的 NewRelationship（第一次投递时即记录，不会重试） |
 | `ApiCallFailed` | 解析所需的某次查询或写入失败，包括平台无法创建的 [`NewRelationship`](#new-relationship-payload)。 |
 | `NotGatewayChild` | 网关为未分配给它的设备或不存在的设备发布了事件，或网关已停用。不会重试：在第一次投递时即记录。 |
 
-被拒绝的事件会一直重试到第五次投递，因此如果设备在此期间完成注册，或数据库已恢复，事件仍会被存储。例外是过旧而无法存储的事件，它在第一次投递时就被记录，因为任何重试都无法改变它的时间。
+被拒绝的事件会一直重试到第五次投递，因此如果设备在此期间完成注册，或数据库已恢复，事件仍会被存储。过旧而无法存储的事件、网关拒绝以及设备发起的所有权或包含关系会在第一次投递时即记录，不会重试。
 
 ### 命令响应 {#rejections-command-responses}
 

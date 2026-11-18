@@ -10,7 +10,7 @@
 # The kubernetes provider pin in deploy/opentofu/{cluster,instance}/versions.tf.
 # 🔴 RUN IT WHENEVER THAT PIN MOVES. Nothing else can see what it checks: the defect
 # lives in a provider binary talking to a real API server, and it shows only under
-# a CLI that stores resource identity (Terraform >= 1.12). CI runs OpenTofu 1.9,
+# a CLI that stores resource identity (Terraform >= 1.12). CI runs OpenTofu 1.10.10,
 # which cannot show it at all.
 #
 # THE DEFECT

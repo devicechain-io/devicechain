@@ -151,13 +151,14 @@ type streamExpectation struct {
 }
 
 func (nmgr *NatsManager) expectedStream(suffix string) streamExpectation {
+	base := nmgr.declaredSuffix(suffix)
 	return streamExpectation{
 		subjects:        nmgr.streamSubjects(suffix),
-		subjectsMayGrow: streams.ShapeOf(suffix) == streams.ShapeAdvisory,
+		subjectsMayGrow: streams.ShapeOf(base) == streams.ShapeAdvisory,
 		advisoryPrefix:  maxDeliveriesAdvisoryPrefix + "." + StreamName(nmgr.Microservice.InstanceId, ""),
-		retention:       retentionPolicy(streams.RetentionFor(suffix)),
-		duplicates:      time.Duration(streams.DuplicateWindowSecondsFor(suffix)) * time.Second,
-		allowDirect:     streams.AllowDirectFor(suffix),
+		retention:       retentionPolicy(streams.RetentionFor(base)),
+		duplicates:      time.Duration(streams.DuplicateWindowSecondsFor(base)) * time.Second,
+		allowDirect:     streams.AllowDirectFor(base),
 	}
 }
 
@@ -252,7 +253,7 @@ func (nmgr *NatsManager) verifyStream(suffix string) (string, error) {
 	if drift != nil {
 		return "", drift
 	}
-	nmgr.trackStream(name, suffix)
+	nmgr.trackStream(name, nmgr.declaredSuffix(suffix))
 	return name, nil
 }
 
@@ -317,6 +318,13 @@ func (nmgr *NatsManager) ReconcileBroker(ctx context.Context, areas []string) (*
 	for _, a := range areas {
 		if !streams.IsPlatformArea(a) {
 			return report, fmt.Errorf("messaging: %q is not a platform functional area (known: %v)", a, streams.PlatformAreas)
+		}
+	}
+	if cfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups; cfg != nil && nmgr.streamSharding() == nil {
+		// Administration needs the group definitions, never tenant placement or a
+		// publisher. A missing placement mirror must not prevent creating streams.
+		if err := nmgr.EnableStreamSharding(brokerAdminRouter{}, cfg); err != nil {
+			return report, err
 		}
 	}
 	nmgr.reconciled = func(kind, name, action string) {
@@ -384,8 +392,26 @@ func (nmgr *NatsManager) ReconcileBroker(ctx context.Context, areas []string) (*
 }
 
 // streamSubjects is the subject list this instance declares for a stream: the one every earlier
-// build declared, plus the raw-payload subject on the capture stream when the operator has opted in.
+// build declared, plus opted-in raw payloads and enabled shard-group advisories.
 func (nmgr *NatsManager) streamSubjects(suffix string) []string {
-	return StreamSubjectsWith(nmgr.Microservice.InstanceId, suffix,
+	out := StreamSubjectsWith(nmgr.Microservice.InstanceId, suffix,
 		nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.MqttDeviceUplinks)
+	s := nmgr.streamSharding()
+	if streams.ShapeOf(suffix) == streams.ShapeAdvisory && s != nil {
+		for _, base := range s.cfg.Suffixes {
+			if !streams.MaxDeliveriesCaptured(base) {
+				continue
+			}
+			for g := 1; g < s.cfg.Count; g++ {
+				out = append(out, AdvisorySubject(StreamName(nmgr.Microservice.InstanceId, GroupSuffix(base, g)), "*"))
+			}
+		}
+	}
+	return out
 }
+
+// The administrator never publishes tenant data.
+type brokerAdminRouter struct{}
+
+func (brokerAdminRouter) ShardGroup(string) (int, error) { return 0, ErrUnplacedTenant }
+func (brokerAdminRouter) Ready() error                   { return nil }

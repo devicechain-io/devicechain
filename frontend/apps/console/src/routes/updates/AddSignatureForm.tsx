@@ -15,6 +15,7 @@
 // The service remains the authority: whatever it refuses (SIGNATURE_INVALID, SIGNER_REVOKED,
 // ...) is shown exactly as it said it, never paraphrased into something friendlier.
 
+import { listAll } from '@/lib/api/list-all';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PenLine } from 'lucide-react';
@@ -47,7 +48,7 @@ export function AddSignatureForm({
 }) {
   const { t } = useTranslation('updates');
   const { toast } = useToast();
-  const signers = useQuery(() => listArtifactSigners({ pageNumber: 1, pageSize: 1000 }), [reloadKey]);
+  const signers = useQuery(() => listAll(page => listArtifactSigners({ ...page })), [reloadKey]);
   const [keyId, setKeyId] = useState('');
   const [signature, setSignature] = useState('');
   const [busy, setBusy] = useState(false);
@@ -56,12 +57,12 @@ export function AddSignatureForm({
   const wanted = keyId.trim().toLowerCase();
   const sig = signature.replace(/\s+/g, '');
   const sigValid = sig.length > 0 && BASE64.test(sig);
-  const list = signers.data?.results ?? null;
+  const list = signers.current?.results ?? null;
   const match = wanted && list ? list.find((s) => s.keyId.toLowerCase() === wanted) : undefined;
 
   // Why the form cannot be submitted, as the sentence shown under the key ID field.
   let keyProblem: string | null = null;
-  if (signers.error && !list) keyProblem = t('signersUnreadable', { error: signers.error });
+  if (signers.error) keyProblem = t('signersUnreadable', { error: signers.error });
   else if (wanted && list && !match) {
     const truncated = (signers.data?.pagination.totalRecords ?? 0) > list.length;
     keyProblem = truncated ? t('signerNotFoundTruncated') : t('signerNotFound');

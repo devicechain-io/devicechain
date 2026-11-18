@@ -28,7 +28,12 @@ import (
 // the reasons all three are load-bearing — is putest.NewSQLiteDB's.
 func newPartialUpdateApi(t *testing.T, tables ...any) *Api {
 	t.Helper()
-	api := NewApi(&rdb.RdbManager{Database: putest.NewSQLiteDB(t, tables...)})
+	api := NewApi(&rdb.RdbManager{Database: putest.NewSQLiteDB(t, append(tables, &EntityGroupFacetRef{})...)})
+	if api.RDB.Database.Migrator().HasTable(&EntityAttribute{}) {
+		if err := rdb.CreatePartialUniqueIndex(api.RDB.Database, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	api.DeviceSecretKey = testSecretKey
 	api.EnrollmentKeys = testEnrollmentKeys
 	return api

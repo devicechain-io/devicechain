@@ -68,8 +68,11 @@ func newFacetAuthoringTestApi(t *testing.T) (*Api, context.Context) {
 		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &EntityAttribute{},
 		&FacetKey{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{},
 		&EntityGroupFacetRef{}, &DetectionRuleScopeRef{},
-		&EntityRelationship{}, &PendingOwnershipFact{}, &EntityRelationshipType{}); err != nil {
+		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &EntityRelationshipType{}); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
+		t.Fatal(err)
 	}
 	api := NewApi(&rdb.RdbManager{Database: db})
 	ctx := core.WithTenant(context.Background(), "acme")
@@ -285,33 +288,39 @@ func TestBooleanFacetValueMatchesOnlyUnderItsOwnType(t *testing.T) {
 		"the refused write left the previous value standing")
 }
 
-// 🔴 A FACET'S DECLARED TYPE CAN BE CHANGED, AND THE VALUES ALREADY AUTHORED DO NOT MOVE
-// WITH IT. SetFacetKey upserts on (memberType, key), so re-declaring `climate` as STRING
-// after values were authored under JSON leaves every one of those rows stranded: still
-// stored, still readable, still shown in the panel — and no longer matched by the axis
-// they belong to. The registry is a lens over the attribute store, never a constraint on
-// it, so nothing rewrites them and nothing warns.
-//
-// 🔑 THIS CASE WAS ADDED BECAUSE A MUTANT SURVIVED. Deleting the `ea.value_type = 'STRING'`
-// gate from the string-equality lowering left every test in this file green — the suite
-// had no entity carrying the same key and the same text under a DIFFERENT non-numeric
-// type, so there was nothing for the gate to exclude. That is a missing input class, not
-// a missing assertion, and re-declaring a facet's type is how a real tenant produces it.
-func TestRedeclaringAFacetTypeStrandsTheValuesAlreadyAuthored(t *testing.T) {
+// A type change must not strand values already authored. Historical declarations
+// can still disagree with stored values after an upgrade, so retain the selector's
+// independent type-pin regression: JSON text must never match a STRING comparison.
+func TestFacetTypeChangeRefusedAndLegacyValuesRemainTypePinned(t *testing.T) {
 	api, ctx := newFacetAuthoringTestApi(t)
 	newDevice(t, api, ctx, "d-legacy")
 	newDevice(t, api, ctx, "d-current")
 
 	// Authored while the axis was declared JSON.
-	declareFacet(t, api, ctx, "climate", string(AttributeValueJson))
+	declared := declareFacet(t, api, ctx, "climate", string(AttributeValueJson))
 	authorValue(t, api, ctx, "d-legacy", consoleFacetScope, "climate",
 		string(AttributeValueJson), "arid")
 
-	// The tenant re-declares the axis as STRING; the upsert rewrites the DECLARATION only.
-	redeclared := declareFacet(t, api, ctx, "climate", string(AttributeValueString))
-	assert.Equal(t, string(AttributeValueString), redeclared.ValueType)
+	// The registry now refuses this change and preserves the old declaration.
+	redeclared, err := api.SetFacetKey(ctx, &FacetKeySetRequest{
+		MemberType: "device", Key: "climate", ValueType: "STRING",
+	})
+	assert.Nil(t, redeclared)
+	assert.Error(t, err)
+	var stored FacetKey
+	if err := api.RDB.DB(ctx).First(&stored, declared.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, "JSON", stored.ValueType)
+
+	// Seed a declaration changed by an older release directly. Its existing values
+	// must still be type-pinned by the selector, even though new changes are guarded.
+	if err := api.RDB.DB(ctx).Model(&FacetKey{}).Where("id = ?", declared.ID).
+		Update("value_type", "STRING").Error; err != nil {
+		t.Fatal(err)
+	}
 	authorValue(t, api, ctx, "d-current", consoleFacetScope, "climate",
-		redeclared.ValueType, "arid")
+		string(AttributeValueString), "arid")
 
 	assert.Equal(t, []string{"d-current"}, browseMatches(t, api, ctx, authoredSelector),
 		"the row authored under the OLD declared type is stranded, not silently migrated")

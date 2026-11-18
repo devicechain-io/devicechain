@@ -60,6 +60,8 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 - `credentialType` / `credentialId`：设备**通过 HTTP** 提供的凭据。`MQTT_BASIC` 还需要 `credentialSecret`。只有实例的设备认证模式设为 `disabled` 或 `optional` 时才可省略。默认值是 `required`，因此 HTTP 事件需要携带凭据。**通过 MQTT 时，这三个字段都不要带**：设备连接时消息代理已完成认证，平台 MQTT 消息代理上携带其中任何一个的事件都会被拒绝（参见[设备协议参考](../reference/device-protocol.md#rejections-at-the-door)）。
 - `payload`：结构取决于 `eventType`。`Measurement`、`Location` 和 `Alert` 是 `{ "entries": [ … ] }`；`NewRelationship` 是直接位于 `payload` 下的三个字段。见下文。
 
+`NewRelationship` 可以创建非跟踪关系，包括 `member`。跟踪类型（如 `assigned`）和内置 `contains` 会在第一次投递时以原因 `Invalid` 被拒绝。请使用认领码或 `createEntityRelationship` mutation 分配设备。
+
 每个字段的类型及是否必填（包括可选的 `altId` 和 `relationship`）见[设备协议参考](../reference/device-protocol.md#device-event)，其中还提供可用于校验固件输出的 JSON Schema。
 
 ### 载荷结构 {#payload-shapes}
@@ -344,6 +346,17 @@ mosquitto_sub \
   -t "devicechain/acme/device-commands/sensor-001"
 ```
 
+以上是 `MQTT_BASIC` 的形式：用户名加密码。`ACCESS_TOKEN` 凭据**没有密码**。令牌就是用户名的后半部分，并且完全省略 `-P`。代理会把带有密码的连接当作 `MQTT_BASIC` 处理，因此随访问令牌发送任何密码（即使只是占位符）都会被拒绝：
+
+```bash
+mosquitto_sub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001:sub' \
+  -u 'acme:<accessToken>' \
+  -t "devicechain/acme/device-commands/sensor-001"
+```
+
 每条消息都是 JSON 封装：
 
 ```json
@@ -374,6 +387,18 @@ mosquitto_pub \
   -h <mqtt-host> -p 1883 \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
+  -t "devicechain/acme/command-responses/sensor-001" \
+  -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
+```
+
+使用 `ACCESS_TOKEN` 凭据时，按照与订阅相同的方式连接，不带 `-P`：
+
+```bash
+mosquitto_pub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001' \
+  -u 'acme:<accessToken>' \
   -t "devicechain/acme/command-responses/sensor-001" \
   -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
 ```
@@ -508,6 +533,8 @@ openssl pkeyutl -sign -rawin -inkey k.pem -in digest | base64 | tr -d '\n'
 ```
 
 使用 HTTP `GET` 下载。该端点支持 `Range` 请求，因此中断的下载可以从已持有的字节处续传；授权过期后，再次发送相同的 `download.request` 即可获得新的授权。如果该分配已不是当前分配，平台回复的是 `update.cancel` 而不是授权。
+
+下载请求按设备设有额度：平台一次最多应答五个，之后每秒应答一个。超出额度的请求会被直接丢弃，不会有任何回复，既没有授权也没有 `update.cancel`，设备也不会收到通知。因此不要无限期等待回复：如果在有限的等待时间（例如十秒）后仍未收到回复，就再次发送相同的 `download.request`。
 
 在 `device-reports` 上用 `update.progress` 报告每个阶段：
 

@@ -427,9 +427,16 @@ func directToMessage(m *nats.Msg) (Message, error) {
 // It reads by sequence (see the top of this file): it creates no consumer, acknowledges nothing and
 // leaves nothing behind, and a read that dies leaves no orphan to be reaped.
 func (nmgr *NatsManager) NewReplayReader(suffix string, startSeq uint64) (ReplayReader, uint64, error) {
+	if err := nmgr.refuseShardedRead(suffix, "sequence replay"); err != nil {
+		return nil, 0, err
+	}
 	if err := nmgr.requireReader(suffix, streams.ReadEphemeral); err != nil {
 		return nil, 0, err
 	}
+	return nmgr.newReplayReader(suffix, startSeq)
+}
+
+func (nmgr *NatsManager) newReplayReader(suffix string, startSeq uint64) (ReplayReader, uint64, error) {
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	info, err := nmgr.js.StreamInfo(name)
 	if err != nil {
@@ -467,9 +474,16 @@ func (nmgr *NatsManager) NewReplayReader(suffix string, startSeq uint64) (Replay
 // not its logical occurred time, so the caller must still filter delivered events to its
 // occurred-time window; this only bounds the scan's lower edge.
 func (nmgr *NatsManager) NewReplayReaderFromTime(suffix string, startTime time.Time) (ReplayReader, time.Time, error) {
+	if err := nmgr.refuseShardedRead(suffix, "time replay"); err != nil {
+		return nil, time.Time{}, err
+	}
 	if err := nmgr.requireReader(suffix, streams.ReadEphemeral); err != nil {
 		return nil, time.Time{}, err
 	}
+	return nmgr.newReplayReaderFromTime(suffix, startTime)
+}
+
+func (nmgr *NatsManager) newReplayReaderFromTime(suffix string, startTime time.Time) (ReplayReader, time.Time, error) {
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	info, err := nmgr.js.StreamInfo(name)
 	if err != nil {

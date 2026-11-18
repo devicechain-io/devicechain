@@ -20,6 +20,12 @@ title: 出站连接器
 **计划中：**更多 `publish` 目标（RabbitMQ、Azure、NATS、Redis、Slack、Splunk），采用同一模型。本仓库是判断当前哪些功能能够构建的权威依据。
 :::
 
+## 自动化动作的权限
+
+编写或发布自动化动作需要具备执行该动作的权限。创建或更新包含 `sendCommand` 动作的规则，以及发布或回滚到启用规则中包含该动作的配置文件版本，除了 `device:write` 之外，还需要 `command:write`。`httpCall` 和 `publish` 动作需要 `connector:write`。仅具备 `device:write` 的角色仍可编写和发布只触发告警的规则。
+
+每次创建或更新都会检查合并后的完整规则所需的动作权限，即使规则被禁用也不例外。发布和回滚会检查所选配置文件版本中的所有启用规则，即使仅修改了指标。发布者必须具备动作权限；自动化审核的批准者无需具备这些权限。采用动作已获授权的配置文件不需要这些额外权限。
+
 ## 两种出站动作 {#the-two-outbound-actions}
 
 两者都是可在**自动化画布**或**表单构建器**中编写的[动作](./event-processing.md#automated-actions)，与*触发告警*和*发送命令*并列。每个动作都可以根据触发结果的条件设置**守卫条件**。
@@ -30,7 +36,7 @@ title: 出站连接器
 
 `httpCall` 直接向指定端点发送 HTTP 请求。你通过针对触发结果的 **CEL 表达式**组织请求体，只发送接收方需要的字段。URL、方法、标头和请求体模板都保存在动作上，因此单次 webhook 无需单独设置。
 
-认证可选，使用**密钥句柄**。令牌保存在**密钥存储**中，发送时作为 `Authorization: Bearer <token>` 标头提供。标头名称和认证方案不可配置，因此这种方式不能用于要求自定义 API 密钥标头的接收方。如果动作指定的句柄下没有密钥，调用绝不会在缺少凭据的情况下发出：它会以 `invalid` 结果写入一次死信，不再重试。没有机制重放它，因此该次触发的调用不会执行；请修正动作的密钥句柄，让后续触发正常认证。
+认证可选，使用**密钥句柄**。令牌保存在**密钥存储**中，发送时作为 `Authorization: Bearer <token>` 标头提供。标头名称和认证方案不可配置，因此这种方式不能用于要求自定义 API 密钥标头的接收方。如果动作指定的句柄下没有密钥，调用绝不会在缺少凭据的情况下发出：它会以 `invalid` 结果写入一次死信，不再重试。没有机制重放它，因此该次触发的调用不会执行；请修正动作的密钥句柄，让后续触发正常认证。 `connector/` 命名空间中的句柄会被拒绝；`httpCall` 绝不会发送连接器的凭据。
 
 `httpCall` 也可以**签名**，让接收方验证请求确实来自 DeviceChain 且未被篡改。在动作的 `signingSecretRef` 中指定签名密钥，调用就会携带 Standard Webhooks 规范的 `webhook-id`、`webhook-timestamp` 和 `webhook-signature` 请求头。除非你设置，否则默认关闭。参见[为出站 Webhook 签名](../guides/signed-webhooks.md)。
 
@@ -50,7 +56,7 @@ webhook 投递通过以下方式加固：
 
 `gcp_pubsub` 是可识别的类型，但本版本没有投递客户端，因此创建、更新为该类型或发布该类型的连接器都会被拒绝，错误代码为 `UNSUPPORTED`。控制台不提供该类型。早期版本已存储的该类型连接器，如果有 `publish` 指向它，仍会因不受支持而进入死信，不会被无声丢弃。
 
-`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码仅适用于连接器更新。`CONFLICT` 仍表示唯一值冲突；其他操作的错误不变。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
+`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码并非连接器专用：所有服务中的每一次过时写入都会携带它，仪表盘也包括在内。`CONFLICT` 仍表示唯一值冲突。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
 
 ## 连接器是支持版本管理的资源 {#connectors-are-versioned-resources}
 
@@ -112,3 +118,5 @@ outbound-connectors 服务在**独立进程**中运行，与 event-processing �
 - **[事件处理与告警](./event-processing.md)**：规则和动作的编写位置。
 - **[架构](./architecture.md)**：outbound-connectors 在服务体系中的位置。
 - 凭据保存在[密钥处理](./architecture.md#secret-handling)介绍的加密**密钥存储**中。
+
+如果连接器持有已存储凭据，更改类型或凭据目标时必须在同一请求中发送 `secret`；省略时将返回 `SECRET_RESUPPLY_REQUIRED`。请重新提供凭据，或使用 `secret: null` 删除凭据。使用 `dcctl product apply` 更改目标前，请设置清单中的凭据句柄。主题、QoS 和身份字段的编辑会保留凭据。

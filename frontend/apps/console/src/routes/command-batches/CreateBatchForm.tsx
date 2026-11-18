@@ -22,9 +22,11 @@
 // disagree with it come back as per-device refusals on the batch record. The screen says
 // so rather than implying the whole fleet was checked.
 
+import { listAll } from '@/lib/api/list-all';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Send } from 'lucide-react';
+import { GraphQLRequestError } from '@devicechain/client';
 import type { CommandParameter } from '@devicechain/dashboards';
 import {
   parseParameterSchema,
@@ -71,7 +73,6 @@ import '@/i18n/lazy/commandBatches';
 // cannot tell is missing — which is also why the device picker is PAIRED with a paste
 // box below rather than relied on alone: the service's ceiling is far past any page size
 // worth loading, and only pasted text can express a target set that large.
-const optionPageSize = 1000;
 
 type TargetKind = 'devices' | 'group';
 
@@ -126,9 +127,8 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
   // 🔴 A FAILURE CARRIES WHAT IS KNOWN ABOUT THE FLEET, NOT JUST A MESSAGE — because the
   // two ways this can fail differ in exactly the fact the operator needs before they
   // press the button again:
-  //   'undecided'  — the call threw. The service guarantees an undecided batch creates
-  //                  nothing, so the token is unspent and a retry is safe.
-  //   'unreadable' — the call succeeded with NEITHER arm populated. That says nothing
+  //   'undecided'  — the server returned GraphQL errors: nothing was created.
+  //   'unreadable' — transport failure or NEITHER arm populated. That says nothing
   //                  about what happened server-side: a batch may exist and may already
   //                  be actuating hardware. Offering the same "just try again" here
   //                  would invite a second fleet write on top of a first one nobody can
@@ -137,15 +137,17 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
     null,
   );
   const [rejection, setRejection] = useState<CommandBatchRejection | null>(null);
-  // Synchronous double-submit guard. `busy` disables the button, but state lands on the
-  // next render and a token must never be spent twice — see submit().
+  // Synchronous double-submit guard: busy disables the button on the next render.
   const inFlight = useRef(false);
+  // An unknown outcome may already have committed. Replay the same request and token
+  // until the service decides; a changed request represents a new intent.
+  const pendingAttempt = useRef<{ body: string; token: string } | null>(null);
 
-  const { data: devices } = useQuery(
-    () => listDevices({ pageNumber: 1, pageSize: optionPageSize }).then((r) => r.results),
+  const { current: devices, error: devicesError } = useQuery(
+    () => listAll(page => listDevices({ ...page })).then((r) => r.results),
     [],
   );
-  const { data: groups } = useQuery(() => listDeviceGroupTargets(), []);
+  const { current: groups, error: groupsError } = useQuery(() => listDeviceGroupTargets(), []);
 
   const deviceOptions: ComboboxOption[] = (devices ?? []).map((d) => ({
     value: d.token,
@@ -282,10 +284,7 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
       body = rawPayload.trim() || undefined;
     }
 
-    const request: CommandBatchCreateRequest = {
-      // 🔴 A FRESH TOKEN PER ATTEMPT, minted here rather than held in state. It is the
-      // idempotency key for the whole fan-out; reusing one replays the original batch.
-      token: crypto.randomUUID(),
+    const requestBody = {
       name: commandKey,
       payload: body,
       allowPartial,
@@ -300,6 +299,14 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
             groupVersion: versioned && groupVersion ? Number(groupVersion) : undefined,
           }),
     };
+    const fingerprint = JSON.stringify(requestBody);
+    if (pendingAttempt.current?.body !== fingerprint) {
+      pendingAttempt.current = { body: fingerprint, token: crypto.randomUUID() };
+    }
+    const request: CommandBatchCreateRequest = {
+      ...requestBody,
+      token: pendingAttempt.current.token,
+    };
 
     inFlight.current = true;
     setBusy(true);
@@ -313,27 +320,29 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
       // typed, to be corrected and re-fired. (Re-firing mints a new token, so the
       // corrected request is a new batch rather than a replay of the refused one.)
       if (result.rejection) {
+        pendingAttempt.current = null;
         setRejection(result.rejection);
         return;
       }
       // 🔴 `CreateCommandBatchResult` IS TWO NULLABLE FIELDS, NOT A UNION, so "neither"
       // is a shape the type permits and one this has to answer for. It is NOT a success:
       // reporting a batch that may not exist would leave a fleet actuation nobody can
-      // audit. It is also NOT the same as the throw below — a call that answered says
+      // audit. Like a transport failure, it leaves the outcome unknown: a response says
       // nothing about whether it created anything first, so this must not tell the
       // operator a retry is free.
       if (!result.batch) {
         setFailure({ message: t('unreadableAnswer'), kind: 'unreadable' });
         return;
       }
+      pendingAttempt.current = null;
       onFired(result.batch);
     } catch (err) {
-      // The server's own message, unlike the single-command path's fixed string. The
-      // difference is what can arrive here: a batch targeting a GROUP additionally
-      // requires device:read, so an authorization refusal is a realistic throw and names
-      // only an authority the operator can ask for. The reassurance beside it is the
-      // service's own guarantee — an undecided batch creates nothing.
-      setFailure({ message: errMessage(err), kind: 'undecided' });
+      // Only a successful HTTP response carrying GraphQL errors is a server verdict.
+      // Network/gateway failures and malformed responses can hide a committed batch.
+      const decided = err instanceof GraphQLRequestError &&
+        err.status >= 200 && err.status < 300 && (err.errors?.length ?? 0) > 0;
+      if (decided) pendingAttempt.current = null;
+      setFailure({ message: errMessage(err), kind: decided ? 'undecided' : 'unreadable' });
     } finally {
       inFlight.current = false;
       setBusy(false);
@@ -409,6 +418,7 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
           <FormField label={t('groupLabel')} description={t('groupHint')}>
             <Combobox
               options={groupOptions}
+              disabled={!groups}
               value={groupToken}
               onChange={setGroupToken}
               placeholder={t('groupPlaceholder')}
@@ -537,6 +547,8 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
         {allowPartial === null && <HintText size="md" className="mt-1">{t('partialUnsetHint')}</HintText>}
       </div>
 
+      {groupsError && <p role="alert" className="text-sm text-destructive">{groupsError}</p>}
+      {devicesError && <p role="alert" className="text-sm text-destructive">{devicesError}</p>}
       {formError && <p className="text-sm text-destructive">{formError}</p>}
 
       {rejection && <RejectionPanel rejection={rejection} />}

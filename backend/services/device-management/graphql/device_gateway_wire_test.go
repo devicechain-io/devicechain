@@ -26,7 +26,7 @@ func gatewayWireCtx(t *testing.T) context.Context {
 	// separate goroutines, and each connection to a plain ":memory:" database is its own empty one.
 	db := sqlitetest.OpenMemory(t, &gorm.Config{})
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&model.DeviceType{}, &model.Device{}, &model.DeviceCredential{}))
+	require.NoError(t, db.AutoMigrate(&model.EntityGroupFacetRef{}, &model.DeviceType{}, &model.Device{}, &model.DeviceCredential{}))
 	ctx := core.WithTenant(context.Background(), "acme")
 	ctx = context.WithValue(ctx, gqlcore.ContextApiKey, keyedApi(db))
 	api := ctx.Value(gqlcore.ContextApiKey).(*model.Api)

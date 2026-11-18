@@ -11,6 +11,8 @@ import (
 // Outcome label values for connector_dispatch_total. This is a fixed, small enum — the bounded
 // cardinality the ADR-023 G.3 lesson requires: never a per-tenant or per-connector value.
 const (
+	// outcomeThrottled counts deliveries that had to wait for a tenant slot.
+	outcomeThrottled = "throttled"
 	// outcomeSent — the outbound send succeeded (a 2xx for httpCall).
 	outcomeSent = "sent"
 	// outcomeRetry — a transient failure (send error/non-2xx, or a secret-resolve error that may be
@@ -78,6 +80,7 @@ const actionUnknown = "unknown"
 // double-registration.
 type DispatchMetrics struct {
 	dispatched *prometheus.CounterVec
+	unlettered *prometheus.CounterVec
 	// clockFallback counts the dispatches the egress limiter metered on a fallback clock because
 	// they carried no usable trigger time (core.NewRateClockFallbacks).
 	clockFallback func(core.MeteringClock)
@@ -97,10 +100,19 @@ func NewDispatchMetrics(ms *core.Microservice) *DispatchMetrics {
 		return nil
 	}
 	return &DispatchMetrics{
+		unlettered: ms.NewCounterVec("connector_dispatch_unlettered_total",
+			"Rate-shed and terminal connector dispatches counted without individual dead letters, by action and outcome.",
+			[]string{"action", "outcome"}),
 		dispatched: ms.NewCounterVec("connector_dispatch_total",
 			"Outbound connector dispatch requests processed, by action and terminal outcome (bounded enums).",
 			[]string{"action", "outcome"}),
 		clockFallback: core.NewRateClockFallbacks(ms),
+	}
+}
+
+func (m *DispatchMetrics) recordUnlettered(action, outcome string) {
+	if m != nil && m.unlettered != nil {
+		m.unlettered.WithLabelValues(action, outcome).Inc()
 	}
 }
 

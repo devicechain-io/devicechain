@@ -101,7 +101,7 @@ Una superposición solo puede fijar los valores siguientes. Todo lo demás se re
 | --- | --- |
 | `replicas`, `rollingUpdate`, `terminationGracePeriodSeconds`, `nodeLossTolerationSeconds`, `shutdownDrainSeconds`, `podDisruptionBudget`, `startupProbe`, `livenessProbe` | Escala y despliegue de todas las áreas |
 | `resources`, `useMeasuredRequests`, `goMemLimitPercent`, `gogc`, `goMemLimit` | CPU y memoria, y el comportamiento de memoria de Go, de todas las áreas |
-| `functionalAreas.<area>.replicas`, `.strategy`, `.resources`, `.measuredRequests`, `.goMemLimitPercent`, `.memoryLimitFloor`, `.gogc`, `.goMemLimit`, `.avoidEventStorePrimary`, `.eventPathSpread` | Lo mismo, para un área |
+| `functionalAreas.<area>.replicas`, `.strategy`, `.resources`, `.measuredRequests`, `.goMemLimitPercent`, `.memoryLimitFloor`, `.memoryLimitFloorWithEnvelopes`, `.gogc`, `.goMemLimit`, `.avoidEventStorePrimary`, `.eventPathSpread` | Lo mismo, para un área |
 | `functionalAreas.<area>.config` | La configuración propia de esa área. Una clave desconocida detiene el servicio al arrancar |
 | `functionalAreas.<area>.profiler.enabled`, `.blockRate`, `.mutexFraction` | El listener de profiling de diagnóstico, desactivado por defecto (véase [Observabilidad](./observability.md)). Su `address` no es ajustable |
 | `frontend.replicas`, `frontend.resources` | Los pods de la consola |
@@ -109,6 +109,7 @@ Una superposición solo puede fijar los valores siguientes. Todo lo demás se re
 | `ingress.className`, `ingress.annotations`, `ingress.uploadMaxBodySize`, `ingress.gateway.className`, `ingress.gateway.annotations`, `networkPolicy.additionalAllowedCidrs`, `serviceAccount.annotations` | Cómo se publica el ingress y quién puede llegar a los pods |
 | `mqttExposure.loadBalancer` | Los ajustes de nube del balanceador de carga de MQTT, como un balanceador interno y los rangos de origen permitidos |
 | `instance.config.infrastructure.nats.streamDesignRate`, `.streamRunwayMinutes`, `.streamMaxBytes`, `.streamMaxBytesCold`, `.streamMaxMsgs` | El margen de interrupción para el que se dimensionan los streams de eventos y sus techos de bytes y mensajes. La reserva se comprueba con el volumen del broker antes de escribir nada |
+| `instance.config.infrastructure.nats.mqttDeviceUplinks` | Uplinks MQTT de payload sin procesar, opcionales. La elección registrada con `--mqtt-device-uplinks` prevalece; se rechaza una nueva superposición que entre en conflicto. Cambia la elección registrada con el flag |
 | `instance.config.infrastructure.tracing` | Trazas distribuidas (OpenTelemetry), desactivadas por defecto; consulta [Observabilidad](./observability.md). Actívalas en una actualización independiente tras completar el despliegue de la versión: los pods de una versión anterior rechazan esta clave |
 | `instance.config.infrastructure.messaging.envelopes.resolved`, `.inbound`, `.inboundLingerMillis` | Si los eventos se escriben como envelopes, desactivado por defecto |
 | `instance.config.infrastructure.tokenAudience.enforcement`, `.unscopedClientCredentials`, `.externalResources` | Las audiencias siempre se aplican. Deja enforcement sin definir o usa `enforce`; `v1.4` rechaza `observe`. La opción distinta `unscopedClientCredentials: observe` sigue admitida. `externalResources` enumera servidores externos. El chart deriva y controla las otras dos claves. |
@@ -158,30 +159,35 @@ cambiar nada.
 
 ## Dimensionar el almacén de eventos {#event-store-sizing}
 
-El almacén de eventos es el único volumen cuyo crecimiento lo marca el tráfico, así que es el que
-hay que dimensionar a propósito. Tres cifras lo deciden.
+El almacén de eventos crece con el tráfico; dimensiona su volumen según estas cantidades.
 
-- **Bytes por fila almacenada.** Una fila de medición cuesta unos 600 bytes en disco, índices
-  incluidos, antes de comprimir: un volumen de 32Gi contenía unos 51 millones de filas cuando se
-  llenó en una prueba a 10 000 lecturas por segundo. Una medición anterior dio cerca de 1 KB con el
-  registro de escritura anticipada; dimensiona con la cifra mayor hasta que hayas medido la tuya; la fórmula siguiente toma el tamaño de fila como variable.
-  El almacén de eventos comprime los fragmentos anteriores a `lifecycle.compressAfterDays` (7 por
-  defecto) en la configuración de `event-management`, sin pérdida, pero no hace nada con la semana
-  más reciente: dimensiona el volumen para al menos esa cantidad de datos sin comprimir. La cifra
-  de 600 bytes es la no comprimida, y la razón de compresión depende de tus datos, así que mídela
-  antes de contar con ella. Contando todas las tablas en las que se escribe un evento (eventos y
-  mediciones, con índices), una medición posterior en GKE dio 756 bytes por evento almacenado, sin
-  comprimir.
-- **Filas por lectura.** Cada [métrica calculada](../user-guide/calculated-metrics.md) que se aplica
-  a un perfil almacena una fila más por lectura. Cada fórmula añade una fila por lectura, así que un perfil con N métricas calculadas almacena
-  (1 + N) filas por lectura, de modo que N fórmulas multiplican el volumen hasta por 1 + N. El techo del nivel `calculatedMetricsPerProfile` es 0 (desactivado) por defecto y como máximo 32; es un techo, y el coste depende del uso.
-- **Retención.** `lifecycle.retentionDays` es 0 por defecto, es decir, conserva los datos para
-  siempre. Una instancia pensada para funcionar indefinidamente debería fijarlo; entonces el volumen
-  solo tiene que contener la ventana más la semana sin comprimir.
+- **Bytes por evento almacenado.** Usa **756 bytes por evento almacenado** como cifra canónica:
+  las tablas `events` y `measurements` juntas, índices incluidos, antes de comprimir, medido
+  en Google Kubernetes Engine (GKE). Cubre un evento con su fila de medición. La ronda 31 de GKE
+  midió 756 B y la ronda 32, 755 B; usa 756 B para planificar. No incluye el registro de escritura
+  anticipada (WAL), que necesita espacio adicional en el mismo volumen.
+  El almacén comprime sin pérdida los fragmentos anteriores a `lifecycle.compressAfterDays`
+  (7 por defecto) en la configuración de `event-management`. Dimensiona la ventana reciente sin
+  compresión y mide la razón de compresión antes de contar con ahorros en los datos antiguos.
+- **Filas de medición adicionales.** Cada [métrica calculada](../user-guide/calculated-metrics.md)
+  que se aplica a un perfil añade una fila de medición por lectura, no otro evento completo.
+  Mide los bytes incrementales por fila de medición para tus datos y añade ese coste por separado;
+  la cifra de 756 B no determina ese incremento. El techo del nivel `calculatedMetricsPerProfile`
+  es 0 (desactivado) por defecto y como máximo 32; el coste real depende de las fórmulas usadas.
+- **Retención.** `lifecycle.retentionDays` es 0 por defecto y conserva los datos para siempre.
+  Fija una ventana de retención para un funcionamiento indefinido y cuenta por separado el
+  historial comprimido y la ventana sin comprimir dentro de ese período.
+  Los agregados de mediciones por minuto que sustentan los gráficos caducan también, un
+  intervalo de chunk después (redondeado hacia arriba a días completos).
 
-Como regla, la ventana sin comprimir necesita lecturas por segundo × (1 + métricas calculadas) × bytes por fila × 86 400 segundos × días, dejando libre una cuarta parte del volumen para el registro de
-escritura anticipada, el mantenimiento y el crecimiento. A los 600 bytes medidos y 10 000 lecturas por segundo son unos 520 GB al día, así que los siete días sin comprimir por defecto son unos 3,6 TB. Añade lo que
-necesiten el historial comprimido y la ventana de retención.
+Los datos base sin comprimir necesitan eventos por segundo × 756 B × 86 400 segundos × días.
+A 10 000 eventos/s: 10 000 × 756 × 86 400 = 653 184 000 000 B, unos **653 GB/día**;
+siete días son 4 572 288 000 000 B, unos **4,57 TB** (unidades decimales).
+Añade las filas de medición adicionales de las métricas calculadas y el historial comprimido.
+Deja libre una cuarta parte del volumen para el WAL, el mantenimiento y el crecimiento; aumenta
+ese margen si la asignación de WAL configurada requiere más espacio.
+
+Las lecturas de listas de eventos se detienen a los 60 segundos (15 segundos para un usuario con ámbito limitado que especifica un ancla); en historiales grandes, acota el intervalo de tiempo o filtra por dispositivo para evitar que el recuento exacto de cada página agote ese plazo.
 
 Tres alertas vigilan el volumen, en el orden en que conviene enterarse: `DatabaseVolumeFillsWithinDay`
 (va camino de llenarse en 24 horas), `DatabaseVolumeFillingFast` (en una hora) y

@@ -29,6 +29,7 @@ title: 指标参考
 | `command_delivery_claims_lost_total{path}` | 因另一个分发器先领取了指令而放弃的分发，按失败的分发路径区分。“sweep”是周期扫描，“nudge”是指令入队时发出的分发；两者争夺同一行属预期且安全（领取是比较并设置），因此应读取某一路径上有速率而另一路径没有，而不是总数。 |
 | `command_delivery_claims_stranded_total` | 因发布失败、释放也失败而停留在 SENT 的指令。在 LwM2M 上，滞留调和器会重新装载这些指令；在 MQTT 上它们仍会作为 TIMEOUT 过期，错误地归咎于设备。 |
 | `command_delivery_dispatches_exhausted_total` | 因平台向其设备发布的次数达到配置上限而失败的指令，平台因此停止重试。每一行记录为 FAILED 并指明平台为原因，而不是一直重试到 TTL，再针对一个它从未到达的设备记录 TIMEOUT。 |
+| `command_delivery_dispatch_deferred_total` | 因无法确定命令通道而继续排队的命令；每次延后投递尝试均计数。 |
 | `command_delivery_holds_placed_total` | 因设备确定缺席而被扣留、不予分发的指令。 |
 | `command_delivery_holds_released_total` | 因设备回来而被放回分发队列的扣留指令。 |
 | `command_delivery_nudges_applied_total` | 恰好找到一条排队指令并使其通过投递门的分发触发。不是发布次数：在线状态门仍可能扣留该指令或使其失败，与扫描周期上的情况完全相同。 |
@@ -74,6 +75,7 @@ title: 指标参考
 | `provisioning_requests_total{result}` | 按结果统计的设备自注册请求：`created`、`adopted`、`replayed`、`auth_failed`（配置密钥或密文被拒绝的所有情形，有意合并计数）、`invalid`、`read_timeout`、`rate_limited_source`、`rate_limited_tenant`、`busy`、`not_registered`、`not_earmarked`、`disabled`、`type_mismatch`、`token_collision`、`already_provisioned`、`limit_exceeded`、`unavailable`、`misconfigured`、`unsupported_type` 和 `error`。每个结果从启动起就存在。没有租户标签，因为请求在通过认证之前没有可信的租户。 |
 | `raise_alarm_dead_lettered_total` | 在应用它们的所有尝试都失败后写入死信流的触发告警边，使本应被触发或清除的告警可以被看到，而不是只写进日志。 |
 | `resolve_device_disabled_total` | 因设备已[停用](../guides/device-credentials.md#disabling-a-device)而被拒绝的事件。这些事件被丢弃，不进入死信。 |
+| `resolve_relationship_refused_total` | 设备发起的跟踪或包含关系在第一次投递时被拒绝的次数。每个事件都携带载荷和原因 `Invalid` 记录到 `failed-events`，不会重试。不带租户或设备标签；Warn 日志会记录租户和关联标识。 |
 | `resolve_event_time_bounded_total` | 因报告的事件时间领先服务器时钟超过配置的容差而被拒绝、并被替换为容差允许的最晚时间的情况。 |
 | `resolve_measurement_dropped_total{reason}` | 解析时被丢弃、而同一事件的其余部分已被存储的测量条目：`undeclared_non_numeric`（配置文件未声明的键携带文本值或布尔字面量）、`undeclared_unstorable`（未声明的键携带 `NaN`、无穷大或超出范围的数值）和 `declared_not_storable`（已声明的键，其数据类型不是时间序列指标）。设备会收到正常的确认，也不会进入死信队列，因此这是设备载荷正在丢失数据的信号。该指标不带租户、设备或指标标签；日志行（每个设备和指标一条）会指明它们，控制台中的设备页面也会列出。在配置文件中声明该指标即可存储。 |
 | `resolve_not_gateway_child_total` | 因[网关](./edge-services.md#gateway-identity)为未分配给它的设备或不存在的设备发布事件，或网关已停用而被拒绝的事件数。每个事件连同载荷记录到 `failed-events` 流（原因 `NotGatewayChild`），不会重试，并通过网关的通知主题告知网关。该指标不带租户或网关标签；日志行（每个网关和设备每分钟最多一条）会指明它们。增长通常意味着某台设备从未分配给其网关，或被分配给了另一个网关。 |

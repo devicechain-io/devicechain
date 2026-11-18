@@ -5,11 +5,13 @@ package iam
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
@@ -29,6 +31,10 @@ var ErrTierReorderMismatch = errors.New("reorder token list does not match the c
 // fail-closed tenant guard (ADR-015) — the same lane the SigningKey uses.
 type Store struct {
 	db *rdb.RdbManager
+
+	// NatsShardGroups bounds placement assignments when stream sharding is configured.
+	// Set from the mounted instance document before using the store.
+	NatsShardGroups *config.NatsShardGroupsConfiguration
 }
 
 // NewStore wraps an RdbManager.
@@ -150,6 +156,17 @@ func (s *Store) CreateIdentity(ctx context.Context, id *Identity) error {
 	return s.sys(ctx).Create(id).Error
 }
 
+// UnknownCatalogueRoleError identifies an unknown catalogue token without changing
+// the validation message returned to existing callers.
+type UnknownCatalogueRoleError struct {
+	Scope RoleScope
+	Token string
+}
+
+func (e *UnknownCatalogueRoleError) Error() string {
+	return fmt.Sprintf("no %s role with token %q", e.Scope, e.Token)
+}
+
 // CatalogueRolesByScopeTokens resolves a set of role tokens within a single scope of the
 // operator's CATALOGUE, erroring if any token is unknown — so an assignment that names a
 // non-existent (or wrong-scope) role fails closed rather than silently granting nothing.
@@ -182,7 +199,7 @@ func (s *Store) CatalogueRolesByScopeTokens(ctx context.Context, scope RoleScope
 		}
 		for _, t := range uniq {
 			if _, ok := found[t]; !ok {
-				return nil, fmt.Errorf("no %s role with token %q", scope, t)
+				return nil, &UnknownCatalogueRoleError{Scope: scope, Token: t}
 			}
 		}
 	}
@@ -399,7 +416,22 @@ func (s *Store) CreateRole(ctx context.Context, r *Role) error {
 // UpdateRole persists the mutable fields of an already-loaded role (name,
 // description, authorities). Save writes by primary key.
 func (s *Store) UpdateRole(ctx context.Context, r *Role) error {
-	return s.sys(ctx).Save(r).Error
+	return rdb.AdvancingFrom(s.sys(ctx), r.UpdatedAt).Save(r).Error
+}
+
+// ErrRoleConflict tells an editor to reload a role that changed since it was read.
+var ErrRoleConflict = rdb.NewStaleWriteError("role")
+
+// SaveRoleIfUnmoved atomically persists an already validated role only while its
+// loaded version still matches. Keep the loaded record for audit identity.
+func (s *Store) SaveRoleIfUnmoved(ctx context.Context, r *Role) error {
+	authorities, err := json.Marshal(r.Authorities)
+	if err != nil {
+		return err
+	}
+	return rdb.UpdateIfUnmoved(s.sys(ctx), r, r.UpdatedAt, map[string]any{
+		"name": r.Name, "description": r.Description, "authorities": string(authorities),
+	}, ErrRoleConflict)
 }
 
 // DeleteRole clears the role's assignment join rows (from the identity system-role,

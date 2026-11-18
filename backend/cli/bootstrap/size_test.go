@@ -41,21 +41,18 @@ func qty(t *testing.T, s string) *resource.Quantity {
 }
 
 func TestValidateSize(t *testing.T) {
-	for _, ok := range []string{"", "base", "compact", "perf-12k"} {
+	for _, ok := range []string{"", "base", "compact", "perf-12k", "perf-16k", "perf-20k"} {
 		if err := ValidateSize(ok); err != nil {
 			t.Errorf("%q refused: %v", ok, err)
 		}
 	}
-	// perf-20k is the named TARGET, not a shipped size: the name is the claim.
-	for _, bad := range []string{"perf-20k", "PERF-12K", "large", "perf"} {
+	for _, bad := range []string{"perf-24k", "PERF-12K", "large", "perf"} {
 		if err := ValidateSize(bad); err == nil {
-			t.Errorf("%q accepted: a size ships only once a round measured it clean", bad)
+			t.Errorf("%q accepted: unknown sizes must fail closed", bad)
 		}
 	}
-	for _, n := range SizeNames() {
-		if n == "perf-20k" {
-			t.Error("perf-20k is listed as a size")
-		}
+	if got := strings.Join(SizeNames(), ","); got != "base,compact,perf-12k,perf-16k,perf-20k" {
+		t.Errorf("size names %q", got)
 	}
 }
 
@@ -71,6 +68,8 @@ func TestCheckSizeAgainstCluster(t *testing.T) {
 		{"nothing", false, "", "", ""},
 		{"base", false, "base", "", ""},
 		{"perf", false, "perf-12k", "perf-12k", ""},
+		{"perf 20k", false, "perf-20k", "perf-20k", ""},
+		{"perf 20k on compact", true, "perf-20k", "", "compact"},
 		{"compact cluster, nothing", true, "", "", ""},
 		{"compact cluster, compact", true, "compact", "", ""},
 		{"compact cluster, base", true, "base", "", ""},

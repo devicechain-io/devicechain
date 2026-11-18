@@ -58,8 +58,10 @@ var (
 	MfaSweeper *identity.MfaSourceFailureSweeper
 
 	// PlacementMirror keeps the KV copy of the placement table (core/partition) equal to the
-	// database's. Nothing routes by either yet.
+	// database's. The table drives DB routing and configured NATS shard-group stream routing.
 	PlacementMirror *core.PeriodicTask
+
+	SigningKeyFollow *core.PeriodicTask
 
 	// DeadLetterStore is the ADR-024 record of work a consumer accepted and gave up on,
 	// with the consumer that fills it and the sweep that bounds it.
@@ -153,6 +155,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err := RdbManager.Initialize(ctx); err != nil {
 		return err
 	}
+	rdb.RegisterStorageGrowth(Microservice, RdbManager.Database)
 
 	// The instance secret store (ADR-059), which holds the private half of the active
 	// JWT signing key. It is built HERE, after RdbManager.Initialize, because building
@@ -333,12 +336,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	configureMfa(IdentityManager, mfaKV, newMfaMetrics(Microservice),
 		mfaIssuerSource(func() *settings.Service { return SettingsService }, Configuration.Auth.IssuerUrl))
 
-	// Age-based signing-key rotation (ADR-008 follow-up): rotate at startup if the
-	// active key is older than the configured max age, retaining the prior key for
-	// the configured window so the tokens it signed keep verifying.
+	// Follow peers' signing keys while running. Age-based rotation starts after a
+	// 15-minute grace so older replicas can finish a rolling upgrade first.
 	keyMaxAge := time.Duration(Configuration.Auth.SigningKeyMaxAgeDays) * 24 * time.Hour
 	keyRetention := time.Duration(Configuration.Auth.SigningKeyRetentionDays) * 24 * time.Hour
-	if err := IdentityManager.MaybeRotateOnAge(ctx, keyMaxAge, keyRetention); err != nil {
+	SigningKeyFollow = IdentityManager.NewSigningKeyFollowTask(keyMaxAge, keyRetention)
+	if err := SigningKeyFollow.Initialize(ctx); err != nil {
 		return err
 	}
 
@@ -374,7 +377,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// call its catalogue and directory methods, the tenant plane's call its delegated
 	// tenant-administration methods (ADR-081), which take the tenant from the caller's own
 	// token. One instance, so the two planes cannot be wired to different stores.
-	AdminService = newAdminService(iam.NewStore(RdbManager), Configuration.TenantPurgeSettle(),
+	AdminService = newAdminService(newIAMStore(), Configuration.TenantPurgeSettle(),
 		Configuration.TenantPurgeTokenHold(), DeadLetterStore, serviceAccountKey, secretStore, IdentityManager)
 	AdminService.SetAgentActuation(Configuration.AgentActuation.Enabled)
 
@@ -430,9 +433,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			return err
 		}
 
-		PurgeCoordinator = purge.NewCoordinator(Microservice, iam.NewStore(RdbManager), RdbManager,
+		PurgeCoordinator = purge.NewCoordinator(Microservice, newIAMStore(), RdbManager,
 			purge.DefaultStores(RdbManager, TsdbGuest, NatsManager, Microservice.InstanceId,
-				BlobStore, iam.NewStore(RdbManager)), interval, Configuration.TenantPurgeSettle(),
+				BlobStore, newIAMStore(), Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups), interval, Configuration.TenantPurgeSettle(),
 			Configuration.TenantPurgeTokenHold(), core.NewNoOpLifecycleCallbacks())
 		if err := PurgeCoordinator.Initialize(ctx); err != nil {
 			return err
@@ -444,7 +447,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// The second factor's idle per-source failure rows are pruned on a schedule: they are
 	// otherwise removed only when a sign-in succeeds, so an attacked factor that is then left
 	// alone would keep them forever.
-	MfaSweeper = identity.NewMfaSourceFailureSweeper(Microservice, iam.NewStore(RdbManager), mfaSweepInterval,
+	MfaSweeper = identity.NewMfaSourceFailureSweeper(Microservice, newIAMStore(), mfaSweepInterval,
 		core.NewNoOpLifecycleCallbacks())
 	if err := MfaSweeper.Initialize(ctx); err != nil {
 		return err
@@ -474,8 +477,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 // placementMirrorInterval is how often the placement mirror is rewritten. It is a constant, not
 // configuration: it only has to be well inside the mirror bucket's lifetime (a day), so an
-// unchanged mirror never lapses, and nothing reads the mirror yet.
+// unchanged mirror never lapses for sharded stream routing.
 const placementMirrorInterval = 5 * time.Minute
+
+// newIAMStore applies the mounted stream-routing limit to placement writers.
+func newIAMStore() *iam.Store {
+	store := iam.NewStore(RdbManager)
+	store.NatsShardGroups = Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
+	return store
+}
 
 // initPlacement records the instance's placement (the vpartition count P, one shard group, no
 // pins) on first start, verifies it on every later one, and mirrors it into the broker.
@@ -483,26 +493,28 @@ const placementMirrorInterval = 5 * time.Minute
 // 🔴 A CHANGED P STOPS THE SERVICE AT START (the periodic pass reports it, loudly, without exiting; see
 // placement.IsFatal). P is fixed for the instance's life (core/partition), and a
 // database or a mirror that records a different one is a restore gone wrong or a hand edit; carrying on would
-// leave every later slice routing on a lane that does not match where the data is. Everything
-// else here (the broker away, the bucket full) is retried by the mirror's own pass and changes
-// no behaviour today, since nothing reads the mirror and S = 1.
+// route tenants to a lane that does not match where their data is. Other mirror failures
+// are retried by periodic passes while the identity provider stays up. Sharded stream routing
+// holds or refuses work while the mirror is unusable.
 func initPlacement(ctx context.Context) error {
-	store := iam.NewStore(RdbManager)
+	store := newIAMStore()
+	groups := Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
 	if _, err := store.EnsurePlacement(ctx, partition.DefaultP); err != nil {
 		switch {
 		case errors.Is(err, partition.ErrPChanged):
 			return fmt.Errorf("recording the instance placement: %w", err)
 		case errors.Is(err, iam.ErrPlacementInvalid):
 			// Only a changed P is fatal. A table that does not validate is an operator's repair,
-			// nothing routes by it yet, and the mirror's passes fail (and alert) until it is fixed.
+			// and the mirror's passes fail (and alert) until it is fixed. Sharded stream routing
+			// needs a usable mirror to resume work.
 			log.Error().Err(err).Msg("The stored placement table is not usable; the placement mirror will fail " +
-				"until it is repaired. Nothing routes by it yet, so the service starts.")
+				"until it is repaired. The identity provider starts; sharded stream routing needs a usable mirror.")
 		default:
 			return fmt.Errorf("recording the instance placement: %w", err)
 		}
 	}
 	// The bucket is opened on first use and retried, never eagerly: a broker that cannot open it
-	// must not stop a service that nothing yet routes through the mirror of.
+	// must not stop the identity provider. Sharded stream routing needs a usable mirror.
 	bucket := placement.NewLazyBucket(func() (partition.Bucket, error) {
 		placementKV, err := NatsManager.PartitionPlacementStore()
 		if err != nil {
@@ -510,14 +522,14 @@ func initPlacement(ctx context.Context) error {
 		}
 		return partition.FromKeyValue(placementKV), nil
 	})
-	if err := placement.Sync(ctx, store, bucket); err != nil {
+	if err := placement.Sync(ctx, store, bucket, groups); err != nil {
 		if placement.IsFatal(err) {
 			return fmt.Errorf("mirroring the instance placement: %w", err)
 		}
 		log.Warn().Err(err).Msg("Could not mirror the placement table at start; the periodic pass will retry. " +
-			"Nothing routes by it yet, so nothing is affected.")
+			"Sharded stream routing holds or refuses work while the mirror is unusable.")
 	}
-	PlacementMirror = placement.NewMirrorTask(Microservice, store, bucket, placementMirrorInterval,
+	PlacementMirror = placement.NewMirrorTask(Microservice, store, bucket, groups, placementMirrorInterval,
 		core.NewNoOpLifecycleCallbacks())
 	return PlacementMirror.Initialize(ctx)
 }
@@ -623,7 +635,7 @@ func registerSettingsHandler() {
 // the public mirror the OAuth metadata advertises.
 func registerKeyHandlers() {
 	internalAuthMux().Handle(auth.JWKSPath, identity.BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		jwks, err := IdentityManager.JWKS()
+		jwks, err := IdentityManager.JWKS(r.Context())
 		if err != nil {
 			http.Error(w, "failed to build JWKS", http.StatusInternalServerError)
 			return
@@ -715,7 +727,7 @@ func registerOAuthHandlers() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		jwks, err := IdentityManager.JWKS()
+		jwks, err := IdentityManager.JWKS(r.Context())
 		if err != nil {
 			http.Error(w, "failed to build JWKS", http.StatusInternalServerError)
 			return
@@ -793,6 +805,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 			return err
 		}
 	}
+	if SigningKeyFollow != nil {
+		if err := SigningKeyFollow.Start(ctx); err != nil {
+			return err
+		}
+	}
 	if PlacementMirror != nil {
 		if err := PlacementMirror.Start(ctx); err != nil {
 			return err
@@ -826,6 +843,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	}
 	if MfaSweeper != nil {
 		if err := MfaSweeper.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	if SigningKeyFollow != nil {
+		if err := SigningKeyFollow.Stop(ctx); err != nil {
 			return err
 		}
 	}
@@ -864,6 +886,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 	if MfaSweeper != nil {
 		if err := MfaSweeper.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if SigningKeyFollow != nil {
+		if err := SigningKeyFollow.Terminate(ctx); err != nil {
 			return err
 		}
 	}
