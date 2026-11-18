@@ -80,6 +80,16 @@ dcctl bootstrap local devicechain --host localhost --no-tls
 
 `--compact` 按笔记本电脑的规模配置集群：更低的资源请求、不安装监控栈、不安装 cert-manager，因此也没有数据库备份。不加该参数时，仅处理事件的服务就请求约 4 个 CPU，放不下的 Pod 会一直处于 `Pending`，直到安装超时。在资源充足的机器上，可以去掉它以获得监控和备份。这一选择属于集群，集群上有实例运行时无法更改。参见 [`--compact`](../deployment/bootstrap.md#--compact)。
 
+:::tip 在笔记本上保留备份
+如果笔记本有空间容纳 20Gi 的备份存储，安装时加上 `--no-tls=false`，即可在紧凑集群上保留 cert-manager，从而保留数据库备份：
+
+```bash
+dcctl install local --compact --no-tls=false
+```
+
+bootstrap 命令保持不变：它的 `--no-tls` 只让该实例通过普通 HTTP 提供服务。根密钥托管不受这一选择影响；只要不传 `--no-escrow` 或 `--dev`，上面的步骤已经保留了它。
+:::
+
 :::note 在脚本或 CI 任务中
 `dcctl bootstrap` 会要求输入口令，用来封存根密钥托管（escrow）制品。没有终端可供询问时，它会报错 `no escrow passphrase and no terminal to ask at` 并停止。可以不经交互提供口令，用文件或环境变量均可：
 
