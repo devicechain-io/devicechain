@@ -24,10 +24,6 @@ You define detection rules on a **[device profile](./domain-model.md)**, the ver
 
 A rule states a **condition** over the profile's telemetry, declares its **severity**, and lists the **actions** to run when it fires.
 
-### What a publish does to devices already in alarm {#publish-keeps-alarms}
-
-Publishing a profile carries an already-raised **threshold rule** into the new version when its rule token and condition type continue, even if you edit its predicate, actions or severity. The existing absence-rule handoff also preserves alarms for silent devices. For these rules, publishing does not re-send commands, webhook calls or connector publishes while a device stays in breach; changes to actions or severity apply from its next rising edge. A recovery clears the carried alarm, and a later breach fires the new version's actions. Other rule kinds, including repeating and correlation rules, may still repeat their actions on a publish while a device stays in breach. A new rule token or a different condition type starts independently. A crash before the next checkpoint can repeat actions; delivery remains at least once. A recovery seen only in an in-flight reading stamped with the old version clears at the device's next reading.
-
 ## Scoping a rule to a group
 
 By default a rule applies to **every device** that resolves to its profile. You can instead **scope a rule to a [dynamic group](./domain-model.md#facets-and-dynamic-groups)**, so it fires only for the devices that are currently members. For example, you can run a stricter heat rule only on *devices in arid areas*. Scoping is optional and set per rule. Absence and area-correlation rules cannot be scoped, and publishing a scoped one is refused.

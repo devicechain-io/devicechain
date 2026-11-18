@@ -60,7 +60,8 @@ func (nmgr *NatsManager) AdmitPublish(tenant, suffix string) error {
 // ErrShardRoutingNotEnabled refuses read and write handles on instance-sharded streams without routing.
 var ErrShardRoutingNotEnabled = errors.New("messaging: shard-group routing is not enabled")
 
-// ShardGroupRouter holds an adoptable placement. An error never means group zero.
+// ShardGroupRouter is satisfied by partition.Router; it holds an adoptable placement. An
+// error never means group zero.
 type ShardGroupRouter interface {
 	ShardGroup(tenant string) (int, error)
 	// Ready returns nil when routing has an adoptable placement.

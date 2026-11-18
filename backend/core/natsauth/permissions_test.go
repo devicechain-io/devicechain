@@ -272,6 +272,21 @@ func TestOnlyDeclaredWritersCanWriteABucket(t *testing.T) {
 	}
 }
 
+func TestEventProcessingHasReadOnlyPlacementGrants(t *testing.T) {
+	p, err := AreaPermissions(permInstance, "event-processing")
+	require.NoError(t, err)
+	b, ok := kv.Lookup(kv.BucketPartitionPlacement)
+	require.True(t, ok)
+	names := messaging.KvBucketNames(permInstance, b, "event-processing")
+	require.Len(t, names, 1)
+	stream := messaging.KvStreamName(names[0])
+	require.True(t, p.publishes("$JS.API.STREAM.MSG.GET."+stream))
+	require.True(t, p.publishes("$JS.API.CONSUMER.CREATE."+stream+".watch"))
+	require.False(t, p.publishes("$KV."+names[0]+".key"))
+	require.False(t, p.publishes("$JS.API.STREAM.PURGE."+stream))
+	require.False(t, p.publishes("$JS.API.STREAM.DELETE."+stream))
+}
+
 // 🔑 R3: a durable consumer is named exactly, so one area cannot rewrite, steal from or ack
 // another's. The one wildcard-named grant is the ephemeral reader's, on its own stream, and it
 // is the residue the stream-administration step removes.
