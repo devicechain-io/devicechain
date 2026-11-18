@@ -101,3 +101,16 @@ func (CustomerType) ScopedBy() rdb.ScopeRule            { return rdb.Catalogue()
 func (AreaType) ScopedBy() rdb.ScopeRule                { return rdb.Catalogue() }
 func (AssetType) ScopedBy() rdb.ScopeRule               { return rdb.Catalogue() }
 func (SemanticContext) ScopedBy() rdb.ScopeRule         { return rdb.Catalogue() }
+
+// ScopedBy: the stamp is the intersection of every target's anchors, so visibility
+// means the WHOLE window lies in scope. AnchorColumn updates cannot rewrite that
+// column: scoped callers end and recreate a window to change targets, and the
+// authorizer refuses such edits with ErrForbidden before storage does.
+func (AlarmSuppressionWindow) ScopedBy() rdb.ScopeRule {
+	return rdb.AnchorColumn("scope_anchors", rdb.AllowScopedCreate, rdb.AllowScopedUpdate)
+}
+
+// ScopedBy: cycle history carries the alarm cycle's immutable, read-only stamp.
+func (AlarmCycleSuppression) ScopedBy() rdb.ScopeRule {
+	return rdb.AnchorColumn("scope_anchors")
+}
