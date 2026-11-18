@@ -51,6 +51,10 @@ const SITEPULSE = 'sp-dashboard';
 // has a pathology of its own, so they need nothing more than that.
 const TOWERPULSE = 'tp-dashboard';
 const TOWERPULSE_ANNEX = 'tp-annex-dashboard';
+// Harborpulse's operator board and the Quayside Lofts owner's. Like towerpulse's, both are covered
+// by the generic per-board block and have no pathology of their own.
+const HARBORPULSE = 'hp-dashboard';
+const HARBORPULSE_LOFTS = 'hp-lofts-dashboard';
 
 // Every fixture on disk. The per-board block below walks THIS list rather than a
 // hand-written one, so a board added by any scenario is covered by every generic
@@ -120,7 +124,7 @@ describe('the sim dashboard fixtures', () => {
   // side's manifest/disk equality and by the named tests below failing to read a file
   // that moved.
   it('are exactly the boards this file knows about', () => {
-    expect(fixtureTokens()).toEqual([BUILDINGPULSE, GALLERY, SITEPULSE, STRESS, TOWERPULSE, TOWERPULSE_ANNEX].sort());
+    expect(fixtureTokens()).toEqual([BUILDINGPULSE, GALLERY, HARBORPULSE, HARBORPULSE_LOFTS, SITEPULSE, STRESS, TOWERPULSE, TOWERPULSE_ANNEX].sort());
   });
 
   it('parse without throwing', () => {

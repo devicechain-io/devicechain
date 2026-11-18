@@ -16,6 +16,7 @@
 //      exists in UPLOADING; this form offers a retry of the upload and a link to the artifact
 //      rather than a second declaration, which would collide on its token.
 
+import { listAll } from '@/lib/api/list-all';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Upload } from 'lucide-react';
@@ -60,7 +61,7 @@ interface Picked {
 export function NewArtifactForm({ onOpen }: { onOpen: (token: string) => void }) {
   const { t } = useTranslation('updates');
   const info = useQuery(getUpdateManagementInfo, []);
-  const profiles = useQuery(() => listDeviceProfiles({ pageNumber: 1, pageSize: 1000 }), []);
+  const profiles = useQuery(() => listAll(page => listDeviceProfiles({ ...page })), []);
 
   const [picked, setPicked] = useState<Picked | null>(null);
   const [hashing, setHashing] = useState(false);
@@ -158,7 +159,7 @@ export function NewArtifactForm({ onOpen }: { onOpen: (token: string) => void })
     }
   };
 
-  const profileOptions = (profiles.data?.results ?? []).map((p) => ({ value: p.token, label: p.name ? `${p.name} (${p.token})` : p.token }));
+  const profileOptions = (profiles.current?.results ?? []).map((p) => ({ value: p.token, label: p.name ? `${p.name} (${p.token})` : p.token }));
   const locked = declared != null;
 
   return (
@@ -236,6 +237,7 @@ export function NewArtifactForm({ onOpen }: { onOpen: (token: string) => void })
         <Textarea id="artifact-notes" value={notes} onChange={(e) => setNotes(e.target.value)} disabled={locked} rows={3} />
       </FormField>
 
+      {profiles.error && <p role="alert" className="text-sm text-destructive">{profiles.error}</p>}
       {declareError && <ErrorBanner message={declareError} onDismiss={() => setDeclareError(null)} />}
       <UploadPanel state={upload} expected={expected} />
 

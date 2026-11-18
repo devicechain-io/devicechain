@@ -305,6 +305,13 @@ BEGIN
  IF TG_OP = 'INSERT' THEN
  IF current_setting('transaction_isolation') <> 'read committed' THEN
  RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: changing device profiles, their versions or bindings requires READ COMMITTED isolation';
+CREATE FUNCTION "device-management".alarm_position_stale() RETURNS trigger
+ LANGUAGE plpgsql
+ AS $$
+BEGIN
+ IF NEW.position_derived IS FALSE
+ AND NEW.position_classified_version IS DISTINCT FROM NEW.contributor_version THEN
+ NEW.position_derived := NULL;
 CREATE FUNCTION "device-management".automation_review_guard() RETURNS trigger
  LANGUAGE plpgsql
  AS $$
@@ -911,7 +918,8 @@ CREATE TABLE "device-management".alarms (
  contributors jsonb,
  contributor_version bigint DEFAULT 0 NOT NULL,
  scope_anchors text[],
- position_derived boolean
+ position_derived boolean,
+ position_classified_version bigint
 );
 CREATE TABLE "device-management".area_types (
  id bigint NOT NULL,
@@ -1669,7 +1677,8 @@ CREATE TABLE "device-management".pending_entity_deletions (
  entity_type character varying(64) NOT NULL,
  entity_id bigint NOT NULL,
  entity_token character varying(255) NOT NULL,
- deleted_time timestamp with time zone NOT NULL
+ deleted_time timestamp with time zone NOT NULL,
+ cascade jsonb
 );
 CREATE TABLE "device-management".pending_ownership_facts (
  tenant_id character varying(128) NOT NULL,
@@ -1775,6 +1784,7 @@ CREATE TABLE "device-management".semantic_contexts (
  custom_prefixes jsonb NOT NULL,
  pack_versions jsonb NOT NULL
 );
+CREATE TRIGGER alarm_position_stale BEFORE UPDATE OF contributor_version ON "device-management".alarms FOR EACH ROW EXECUTE FUNCTION "device-management".alarm_position_stale();
 CREATE TRIGGER automation_review_guard_device_update BEFORE UPDATE OF device_type_id ON "device-management".devices FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
 CREATE TRIGGER automation_review_guard_profile_delete BEFORE DELETE ON "device-management".device_profiles FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
 CREATE TRIGGER automation_review_guard_profile_update BEFORE UPDATE ON "device-management".device_profiles FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
@@ -1842,6 +1852,9 @@ CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_token ON "device-management
 CREATE UNIQUE INDEX uix_semantic_contexts_tenant ON "device-management".semantic_contexts USING btree (tenant_id) WHERE (deleted_at IS NULL);
 END
 $$;
+END
+$$;
+END IF;
 END IF;
 END IF;
 END IF;
@@ -1932,6 +1945,7 @@ IF p IS NOT NULL THEN
 PERFORM 1 FROM "device-management".device_profiles WHERE id = NEW.device_profile_id FOR NO KEY UPDATE;
 PERFORM 1 FROM "device-management".device_profiles WHERE id = p FOR SHARE;
 PERFORM 1 FROM "device-management".device_profiles WHERE id IN (OLD.device_profile_id, NEW.device_profile_id) FOR SHARE;
+RETURN NEW;
 RETURN NEW;
 RETURN NEW;
 RETURN NEW;

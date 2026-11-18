@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { listAll } from '@/lib/api/list-all';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -30,11 +31,6 @@ import {
   clearAssetParent,
 } from '@/lib/api/assets';
 
-// How many candidate parents the picker offers. The same bound every other entity
-// picker in the console uses; a tenant past it authors the hierarchy from the other
-// end (open the intended parent and place this asset from its children list).
-const CANDIDATE_PAGE = { pageNumber: 1, pageSize: 200 };
-
 // AssetHierarchyPanel is the asset side of the parent/child tree: where this asset
 // sits (a breadcrumb up to the root), what sits directly under it, and the controls
 // to move it.
@@ -63,7 +59,7 @@ export function AssetHierarchyPanel({ assetToken }: { assetToken: string }) {
   // Every asset is a candidate parent except this one. The server refuses a cycle,
   // so the list is not pruned to non-descendants — pruning it here would mean
   // re-deriving the tree in the browser to hide options the server already guards.
-  const candidatesQuery = useQuery(() => listAssets(CANDIDATE_PAGE), [version]);
+  const candidatesQuery = useQuery(() => listAll(page => listAssets(page)), [version]);
 
   const place = async () => {
     if (!parentToken) {
@@ -101,7 +97,7 @@ export function AssetHierarchyPanel({ assetToken }: { assetToken: string }) {
   const ancestors = ancestorsQuery.data ?? [];
   const breadcrumb = [...ancestors].reverse();
   const children = childrenQuery.data?.results ?? [];
-  const candidates = (candidatesQuery.data?.results ?? []).filter((a) => a.token !== assetToken);
+  const candidates = (candidatesQuery.current?.results ?? []).filter((a) => a.token !== assetToken);
 
   return (
     <div className="space-y-6">
@@ -133,16 +129,18 @@ export function AssetHierarchyPanel({ assetToken }: { assetToken: string }) {
       {/* Move it. Placing under a parent REPLACES whatever parent it had, so there
           is one control for "place" and one for "detach", not three. */}
       <div className="space-y-4 rounded-lg border border-border bg-muted/40 p-4">
+        {candidatesQuery.error && <ErrorState description={candidatesQuery.error} />}
         <FormField label={t('assetParentLabel')} description={t('assetParentHint')}>
           <Combobox
             options={candidates.map((a) => ({ value: a.token, label: a.name || a.token }))}
+            disabled={!candidatesQuery.current}
             value={parentToken}
             onChange={setParentToken}
             placeholder={t('assetParentPlaceholder')}
           />
         </FormField>
         <div className="flex gap-2">
-          <Button onClick={place} loading={submitting} disabled={submitting}>
+          <Button onClick={place} loading={submitting} disabled={submitting || !candidatesQuery.current}>
             <CornerLeftUp size={14} /> {t('assetSetParentAction')}
           </Button>
           <Button variant="outline" onClick={detach} disabled={submitting}>

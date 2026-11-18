@@ -101,8 +101,14 @@ func (rdb *RdbManager) countAndOrder(ctx context.Context, mdl Sortable,
 		return result, 0
 	}
 
+	return rdb.orderedDataQuery(base, mdl, filters), count
+}
+
+// orderedDataQuery shares filters and ordering across counted and count-free reads.
+func (rdb *RdbManager) orderedDataQuery(base *gorm.DB, mdl Sortable,
+	filters func(db *gorm.DB) *gorm.DB) *gorm.DB {
 	// Execute data query.
-	result = base.Model(mdl)
+	result := base.Model(mdl)
 	if filters != nil {
 		result = filters(result)
 	}
@@ -117,10 +123,10 @@ func (rdb *RdbManager) countAndOrder(ctx context.Context, mdl Sortable,
 	// sanctioned per-query override. Ordering these two the other way round would
 	// silently demote every caller's order to a tiebreak behind the default.
 	//
-	// Both entry points order, and an unbounded read needs it every bit as much as a
+	// All list entry points order, and an unbounded read needs it every bit as much as a
 	// paged one: it has consumers that care which row they see first, and one of them
 	// picks a provisioning credential off the front of the set.
-	return result.Order(mdl.DefaultOrder()), count
+	return result.Order(mdl.DefaultOrder())
 }
 
 // Query for one PAGE of models based on filter and pagination criteria.
@@ -158,6 +164,39 @@ func (rdb *RdbManager) ListOf(ctx context.Context, mdl Sortable, filters func(db
 		TotalRecords: clampTotal(total),
 	}
 	return result, srpag
+}
+
+// PageWindow describes a page read without a total.
+type PageWindow struct {
+	PageStart, PageEnd int32
+	HasMore            bool
+	size               int
+}
+
+// ListPageOf reads one extra row to detect a following page, without running COUNT.
+// Call TrimPage after executing the returned query.
+func (rdb *RdbManager) ListPageOf(ctx context.Context, mdl Sortable, filters func(db *gorm.DB) *gorm.DB, pag Pagination) (*gorm.DB, PageWindow) {
+	if pag.PageNumber < 1 {
+		pag.PageNumber = 1
+	}
+	size := int(pag.EffectivePageSize())
+	start := (int64(pag.PageNumber)-1)*int64(size) + 1
+	return rdb.orderedDataQuery(rdb.DB(ctx), mdl, filters).Scopes(func(db *gorm.DB) *gorm.DB {
+		return Paginate(pag)(db).Limit(size + 1)
+	}), PageWindow{PageStart: clampTotal(start), size: size}
+}
+
+// TrimPage removes the lookahead row and describes the returned rows.
+// An empty page has PageEnd = PageStart - 1 and HasMore false. ListOf instead
+// reports the exact total as PageEnd past the end; that value cannot be known
+// without a count. PageStart remains the requested 1-based position in both APIs.
+func TrimPage[T any](rows []T, w PageWindow) ([]T, PageWindow) {
+	w.HasMore = len(rows) > w.size
+	if w.HasMore {
+		rows = rows[:w.size]
+	}
+	w.PageEnd = clampTotal(int64(w.PageStart) + int64(len(rows)) - 1)
+	return rows, w
 }
 
 // ListAllOf queries EVERY row matching the filters, with no LIMIT.

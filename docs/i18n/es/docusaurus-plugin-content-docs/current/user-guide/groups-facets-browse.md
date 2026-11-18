@@ -78,7 +78,10 @@ Haz clic en **Nueva faceta**. El panel pide:
 
 Haz clic en **Guardar faceta**. No hay una pantalla de edición aparte: para cambiar el tipo, los
 valores o la etiqueta de una faceta, vuelve a declararla con la misma familia y la misma clave, y la
-nueva declaración sustituye a la anterior.
+nueva declaración sustituye a la anterior. El cambio de **tipo** es la excepción: se rechaza mientras
+haya atributos compartidos que aún guarden valores del tipo anterior para esa familia y esa clave,
+así que antes borra esos valores o mígralos al nuevo tipo. Cambiar solo los valores o la etiqueta
+no se ve afectado.
 
 **Eliminar** solo quita la declaración. Los valores guardados en las entidades no se tocan, y
 cualquier grupo dinámico guardado que use la faceta sigue funcionando.

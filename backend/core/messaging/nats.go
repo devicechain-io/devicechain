@@ -89,14 +89,9 @@ const (
 	//     worth being a fresh-bring-up-only change to a running platform. (AckWait's
 	//     own comment says the same thing in more detail.)
 	//
-	//  2. 🔴 THE DEAD-LETTER ARMS READ THIS CONSTANT DIRECTLY, AND NOTHING WOULD CATCH
-	//     THEM READING A STALE ONE. Consumers across most of the service estate each
-	//     decide "this is the last attempt, write the dead letter now" with
-	//     `msg.NumDelivered >= messaging.MaxDeliver`, and then ack. No count or list of
-	//     them is written here on purpose — one was, it was wrong within the same PR
-	//     that added it (it said eight services and omitted device-management), and a
-	//     tally frozen in prose only ever drifts. Ask the tree:
-	//     `grep -rn 'messaging.MaxDeliver' --include='*.go' backend`. If a consumer's
+	//  2. Terminal-delivery decisions share this cap through Dispose and FinalDelivery.
+	//     The caller ledgers and raw-comparison guard in core/test enforce that shared
+	//     spelling. If a consumer's
 	//     actual MaxDeliver came from a tier while its arm kept comparing against this
 	//     package constant, the two would disagree — and the failure is silent in both
 	//     directions. Too low a constant dead-letters and acks a message the broker
@@ -1306,6 +1301,9 @@ type natsWriter struct {
 // context.
 func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedWrite(suffix); err != nil {
+		return nil, err
+	}
 	if err := nmgr.requireWriter(suffix); err != nil {
 		return nil, err
 	}

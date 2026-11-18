@@ -24,6 +24,7 @@
 // expired (see shouldRetry).
 
 import type { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+import type { GraphQLFormattedError } from 'graphql';
 import { createClient, type Client } from 'graphql-ws';
 
 import { isTransientRefreshError } from './session';
@@ -98,9 +99,10 @@ function clientFor(area: Area): AreaClient {
       // 4409, 4429) are fatal inside graphql-ws whatever this answers, so an expired or
       // refused token still reaches subscribe() below and the session flow, never a loop.
       //
-      // 🔴 And a token that could not be had FOR NOW. The session's getAccessToken throws when
-      // the held access token has expired and the refresh failed transiently (no response, a
-      // 5xx, a 429): nothing was refused and the session is kept. connectionParams lets that
+      // 🔴 And a token that could not be had FOR NOW. The session's getAccessToken, under
+      // transientRefreshErrors: 'throw', throws when the held access token has expired and the
+      // refresh failed transiently (no response, a 5xx, a 429): nothing was refused and the
+      // session is kept. connectionParams lets that
       // throw reach graphql-ws, which reports it here first and then closes the socket with
       // 4005; answering false made every subscription on the area error out over an outage of
       // the identity service, and nothing reopened them. It is retried like a dropped socket,
@@ -142,6 +144,11 @@ function isUnauthorizedClose(err: unknown): boolean {
 
 export interface SubscriptionSink<T> {
   next: (data: T) => void;
+  /**
+   * GraphQL errors carried by a result (for example a validation refusal sent as an
+   * error-only result before `complete`). Called before `next` when a result carries both.
+   */
+  errors?: (errors: ReadonlyArray<GraphQLFormattedError>) => void;
   error?: (err: unknown) => void;
   complete?: () => void;
   // Connection-level signals for the shared per-area socket, distinct from the
@@ -159,8 +166,8 @@ export interface SubscriptionSink<T> {
 // subscribe binds a typed subscription document to a sink and returns an
 // unsubscribe function. The document is the same code-generated typed document
 // the query path uses, so the result type is inferred; it must be a subscription,
-// since the server refuses anything else on this socket. Errors from the operation
-// (or the socket) surface via sink.error; normal termination via sink.complete. A
+// since the server refuses anything else on this socket. Result errors surface via
+// sink.errors; operation/socket failures via sink.error; normal termination via sink.complete. A
 // 4401 close of an acknowledged socket — the server ending an expired session — is
 // not surfaced: the operation is re-issued once on a new socket with a fresh token.
 export function subscribe<TResult, TVariables>(
@@ -201,6 +208,7 @@ export function subscribe<TResult, TVariables>(
     const previous = current;
     current = client.subscribe<TResult>(payload, {
       next: (result) => {
+        if (result.errors?.length) sink.errors?.(result.errors);
         if (result.data != null) sink.next(result.data);
       },
       error: (err) => {

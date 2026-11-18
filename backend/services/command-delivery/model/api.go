@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -149,10 +150,11 @@ func payloadBytes(payload *string) []byte {
 //
 // It also returns the device's scope anchors (ADR-081), the stamp the command is written
 // with: nil when the device does not exist, empty when nothing owns it. They are returned
-// beside a rejection as well, because CreateCommand decides a scoped member's right to
+// alongside the device incarnation (zero when unknown). Anchors are returned beside
+// a rejection as well, because CreateCommand decides a scoped member's right to
 // the device before it relays anything the gate said about it.
 type CommandEnqueueValidator interface {
-	ValidateEnqueue(ctx context.Context, deviceToken string, commandKey string, payload []byte) (anchors []string, err error)
+	ValidateEnqueue(ctx context.Context, deviceToken string, commandKey string, payload []byte) (anchors []string, incarnation uint64, err error)
 }
 
 // HeldCommandCeilingResolver reads a tenant's RESOLVED ceiling on withheld (HELD)
@@ -217,6 +219,11 @@ type Api struct {
 	// campaignNow is the clock the campaign scheduler stamps with (a campaign's creation and
 	// enable instants, a claim's time). Nil is time.Now; a test sets it to drive time.
 	campaignNow func() time.Time
+	// campaignLog, when set, receives the campaign scheduler's error log in place of the
+	// global logger. Nil is the global logger as it stands at each call; a test sets it to
+	// observe that log, because writing the global zerolog logger races goroutines the
+	// test does not own.
+	campaignLog *zerolog.Logger
 	// HeldCeilingResolver, when set, supplies the per-tenant held-command ceiling.
 	// Nil (the wiring not yet configured, or a unit test) falls back to
 	// DefaultHeldCommandCeiling below — never to "unbounded".
@@ -447,9 +454,11 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	// some earlier command was stamped.
 	scope, _ := auth.ScopeFromContext(ctx)
 	var anchors []string
+	var incarnation uint64
 	if api.EnqueueValidator != nil {
-		owned, err := api.EnqueueValidator.ValidateEnqueue(ctx, request.DeviceToken, request.Name, payloadBytes(request.Payload))
+		owned, id, err := api.EnqueueValidator.ValidateEnqueue(ctx, request.DeviceToken, request.Name, payloadBytes(request.Payload))
 		anchors = owned
+		incarnation = id
 		var verdict *EnqueueRejected
 		isVerdict := errors.As(err, &verdict)
 		if (err == nil || isVerdict) && !inScope(scope, owned) {
@@ -518,12 +527,13 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: metadataJSON,
 		},
-		DeviceToken: request.DeviceToken,
-		Name:        request.Name,
-		Payload:     payloadJSON,
-		Status:      CommandQueued.String(),
-		QueuedTime:  time.Now(),
-		ExpiresAt:   expiresAt,
+		DeviceToken:       request.DeviceToken,
+		DeviceIncarnation: nullableIncarnation(incarnation),
+		Name:              request.Name,
+		Payload:           payloadJSON,
+		Status:            CommandQueued.String(),
+		QueuedTime:        time.Now(),
+		ExpiresAt:         expiresAt,
 		// The stamp is the gate's answer as given: nil (no gate, or a device the answer did
 		// not name) stays NULL, and an owner-less device is stamped empty — both invisible to
 		// every scoped member, and told apart by whoever reads the row.

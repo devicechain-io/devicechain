@@ -58,13 +58,15 @@ func newGroupScopeFixture(t *testing.T) scopeFixture {
 // — acme-pump, reached through the group alone — or the sweep proves nothing.
 func TestIsolationSweepForAGroupMember(t *testing.T) {
 	f := newGroupScopeFixture(t)
+	f.seedSweep(t, "globex-pump")
 	out := isolationsweep.Run(t, isolationsweep.Config{
-		Schema:   gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{}),
-		Scoped:   f.sweepMember("group:north"),
-		Unscoped: f.operator(),
-		Probe:    "globex-pump",
-		Hidden:   []string{"globex"},
-		Literals: map[string]string{"originatorType": `"device"`, "state": `"ACTIVE"`, "severity": `"WARNING"`},
+		Schema:        gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{}),
+		Scoped:        f.sweepMember("group:north"),
+		Unscoped:      f.operator(),
+		Probe:         "globex-pump",
+		Hidden:        []string{"globex"},
+		NothingSeeded: sweepCatalogueExceptions(),
+		Literals:      map[string]string{"ids": `"50"`, "areaTypeToken": `"floor"`, "assetTypeToken": `"machine"`, "customerTypeToken": `"retail"`, "originatorType": `"device"`, "state": `"ACTIVE"`, "severity": `"WARNING"`},
 	})
 	t.Logf("swept %d operations as group:north's member", len(out))
 	for _, op := range []string{"query devices", "query areas", "query areasById", "query areasByToken",

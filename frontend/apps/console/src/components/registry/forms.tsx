@@ -244,7 +244,7 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const { data: types } = useQuery(() => (searchTypes || !loadTypes ? Promise.resolve([]) : loadTypes()), []);
+  const { current: types, error: typesError } = useQuery(() => (searchTypes || !loadTypes ? Promise.resolve([]) : loadTypes()), []);
   const options: ComboboxOption[] = (types ?? []).map((ty) => ({
     value: ty.token,
     label: ty.name || ty.token,
@@ -286,8 +286,9 @@ export function RegistryInstanceForm<T extends NamedEntity>({
         <FormField
           label={e('TypeLabel')}
           htmlFor="r-type"
-          description={noTypes ? e('TypeEmpty') : undefined}
+          description={!typesError && noTypes ? e('TypeEmpty') : undefined}
         >
+          {typesError && <p role="alert" className="text-sm text-destructive">{typesError}</p>}
           {searchTypes ? (
             <AsyncCombobox
               id="r-type"
@@ -305,7 +306,7 @@ export function RegistryInstanceForm<T extends NamedEntity>({
               onChange={setTypeToken}
               options={options}
               placeholder={e('TypeSelect')}
-              disabled={noTypes || readOnly}
+              disabled={noTypes || readOnly || !!typesError}
             />
           )}
         </FormField>
