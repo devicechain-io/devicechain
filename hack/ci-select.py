@@ -297,6 +297,7 @@ IN_MODULE = {
     ("backend/services/command-delivery", "processor"): "reads ../contract inside its own module",
     ("backend/services/event-processing", "internal/review"): "reads ../replayinput inside its own module",
     ("backend/services/device-management", "graphql"): "\"../x\" is a refused-key fixture",
+    ("backend/services/outbound-connectors", "connectorspec"): "\"..\" is a refused template path segment",
     ("deploy", "."):"\"../modules/<x>\" appears only in comments; the embed is in-module",
 }
 
