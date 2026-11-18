@@ -73,27 +73,12 @@ func (d *day) cleanS4() {
 		Queued: flushAt.Add(4 * time.Second), Sent: opens.Add(3 * time.Second), Responded: opens.Add(4 * time.Second),
 		Window: sim.HarborpulsePumpWindow, BatchToken: testFlushBat}}
 
-	// The night dim, for East Quay's lights only, and the level they then reported.
+	// The night dim targets East Quay; delivery is filled from the observed group below.
 	dimAt := at(sim.HarborpulseNightDimHour)
 	s.Jobs = append(s.Jobs, sim.ScenarioJob{Day: 0, Name: sim.HarborpulseJobNightDim, Campaign: testNightDim,
 		Group: sim.HarborpulseEastLightsGroup, FireAt: dimAt.Format(time.RFC3339)})
 	s.Campaigns[testNightDim] = &Campaign{Token: testNightDim, GroupToken: sim.HarborpulseEastLightsGroup, CreatedAt: at(6)}
-	s.Cycles[testNightDim] = []Cycle{{Key: "t-dim", At: dimAt, Resolved: 4}}
-	var dim []Element
-	for _, lamp := range s.Groups[sim.HarborpulseEastLightsGroup] {
-		dim = append(dim, Element{Device: lamp, DueAt: dimAt, Status: "DISPATCHED", BatchToken: "b-dim",
-			CommandStatus: "SUCCESSFUL", CommandOutcome: "SUCCEEDED"})
-	}
-	s.Elements[elementsKey(testNightDim, "t-dim")] = dim
-	east := setOf(s.Groups[sim.HarborpulseEastLightsGroup])
 	for _, lamp := range s.Groups[sim.HarborpulseAllLightsGroup] {
-		for t := dimAt.Add(time.Second); t.Before(dimAt.Add(dimWithin)); t = t.Add(5 * time.Second) {
-			v := 100.0
-			if east[lamp] && t.After(dimAt.Add(20*time.Second)) {
-				v = sim.HarborpulseNightDimPct
-			}
-			d.readings[lamp] = append(d.readings[lamp], Reading{Name: sim.HarborpulseDimKey, At: t, Value: v})
-		}
 		p, _ := sim.HarborpulseLampPosition(lamp)
 		s.Positions[lamp] = p
 	}
@@ -125,6 +110,43 @@ func (d *day) cleanS4() {
 		s.Fed[sim.HarborpulseFeeder(q)] = sim.HarborpulseFedBy(q)
 	}
 	d.s4 = s
+	d.nightDimDelivery(sim.HarborpulseEastLightsGroup)
+}
+
+// nightDimDelivery models the CALENDAR planner resolving its target group, dispatching one
+// command per member, and the model retaining each lamp's level until another command arrives.
+func (d *day) nightDimDelivery(group string) {
+	dimAt := at(sim.HarborpulseNightDimHour)
+	members := d.s4.Groups[group]
+	d.s4.Cycles[testNightDim] = []Cycle{{Key: "t-dim", At: dimAt, Resolved: len(members)}}
+	var elements []Element
+	var commands []HeldCommand
+	for _, lamp := range members {
+		elements = append(elements, Element{Device: lamp, DueAt: dimAt, Status: "DISPATCHED", BatchToken: "b-dim",
+			CommandStatus: "SUCCESSFUL", CommandOutcome: "SUCCEEDED"})
+		commands = append(commands, HeldCommand{Device: lamp, Name: sim.HarborpulseSetDimKey, Status: "SUCCESSFUL",
+			Queued: dimAt.Add(4 * time.Second), Sent: dimAt.Add(19 * time.Second), Responded: dimAt.Add(20 * time.Second), BatchToken: "b-dim"})
+	}
+	d.s4.Elements[elementsKey(testNightDim, "t-dim")] = elements
+	d.s4.BatchCommands["b-dim"] = commands
+	for _, lamp := range d.s4.Groups[sim.HarborpulseAllLightsGroup] {
+		var kept []Reading
+		for _, r := range d.readings[lamp] {
+			if (r.Name != sim.HarborpulseDimKey && r.Name != sim.HarborpulseLampPowerKey) || !inWindow(r.At, dimAt, dimAt.Add(dimWithin)) {
+				kept = append(kept, r)
+			}
+		}
+		for tick := dimAt.Add(time.Second); tick.Before(dimAt.Add(dimWithin)); tick = tick.Add(5 * time.Second) {
+			v := 100.0
+			if sliceHas(members, lamp) && tick.After(dimAt.Add(20*time.Second)) {
+				v = sim.HarborpulseNightDimPct
+			}
+			// The lamps are on at night: harborModel reports 80 W scaled by dim.
+			kept = append(kept, Reading{Name: sim.HarborpulseDimKey, At: tick, Value: v},
+				Reading{Name: sim.HarborpulseLampPowerKey, At: tick, Value: 80 * v / 100})
+		}
+		d.readings[lamp] = kept
+	}
 }
 
 func without(xs []string, x string) []string {
@@ -150,6 +172,7 @@ func TestEachS4ControlTurnsExactlyItsInvariantRed(t *testing.T) {
 					d.s4.Groups[g] = m
 				}
 				d.s4.Groups[sim.HarborpulseEastLightsGroup] = without(d.s4.Groups[sim.HarborpulseEastLightsGroup], "hp-light-east-2")
+				d.nightDimDelivery(sim.HarborpulseEastLightsGroup)
 			}},
 		{"the watch published without its scope", sim.HarborpulseDefectUnscopedWatch, InvGroupScopedRule, "hp-pump-north",
 			func(d *day) {
@@ -158,14 +181,9 @@ func TestEachS4ControlTurnsExactlyItsInvariantRed(t *testing.T) {
 			}},
 		{"the night dim aimed at every light", sim.HarborpulseDefectNightDimAllLights, InvNightDim, sim.HarborpulseAllLightsGroup,
 			func(d *day) {
-				dimAt := at(sim.HarborpulseNightDimHour)
+				d.s4.Jobs[1].Group = sim.HarborpulseAllLightsGroup
 				d.s4.Campaigns[testNightDim].GroupToken = sim.HarborpulseAllLightsGroup
-				var all []Element
-				for _, lamp := range sim.HarborpulseGroupMembers()[sim.HarborpulseAllLightsGroup] {
-					all = append(all, Element{Device: lamp, DueAt: dimAt, Status: "DISPATCHED", CommandOutcome: "SUCCEEDED"})
-					d.readings[lamp] = append(d.readings[lamp], Reading{Name: sim.HarborpulseDimKey, At: dimAt.Add(30 * time.Second), Value: 40})
-				}
-				d.s4.Elements[elementsKey(testNightDim, "t-dim")] = all
+				d.nightDimDelivery(sim.HarborpulseAllLightsGroup)
 			}},
 		{"a lamp with no installed position", sim.HarborpulseDefectLampUnsited, InvSolarWave, "NO_SITE",
 			func(d *day) {
@@ -202,6 +220,113 @@ func TestEachS4ControlTurnsExactlyItsInvariantRed(t *testing.T) {
 				t.Fatalf("Controls[%s] = %q, this test plants %q", c.want, Controls[c.want], c.defect)
 			}
 			evaluateOneRed(t, c.want, c.because, c.mutate)
+			if c.defect == sim.HarborpulseDefectEastLampMislabelled || c.defect == sim.HarborpulseDefectNightDimAllLights {
+				d := cleanDay()
+				c.mutate(d)
+				want := sim.HarborpulseGroupMembers()[sim.HarborpulseAllLightsGroup]
+				if c.defect == sim.HarborpulseDefectEastLampMislabelled {
+					want = without(sim.HarborpulseGroupMembers()[sim.HarborpulseEastLightsGroup], "hp-light-east-2")
+				}
+				assertNightDimDelivery(t, d, want)
+			}
+		})
+	}
+}
+
+func assertNightDimDelivery(t *testing.T, d *day, want []string) {
+	t.Helper()
+	if got := d.s4.Cycles[testNightDim][0].Resolved; got != len(want) {
+		t.Fatalf("night dim resolved %d devices, want %d", got, len(want))
+	}
+	var elements, commands []string
+	for _, e := range d.s4.Elements[elementsKey(testNightDim, "t-dim")] {
+		elements = append(elements, e.Device)
+		if e.Status != "DISPATCHED" || e.CommandStatus != "SUCCESSFUL" || e.CommandOutcome != "SUCCEEDED" || e.BatchToken != "b-dim" {
+			t.Fatalf("incomplete delivered element: %+v", e)
+		}
+	}
+	for _, c := range d.s4.BatchCommands["b-dim"] {
+		commands = append(commands, c.Device)
+	}
+	if len(elements) != len(want) || sameStrings(elements, want) != "" || len(commands) != len(want) || sameStrings(commands, want) != "" {
+		t.Fatalf("night dim elements %v and commands %v, want %v", elements, commands, want)
+	}
+	for _, lamp := range sim.HarborpulseGroupMembers()[sim.HarborpulseAllLightsGroup] {
+		wantLevel := 100.0
+		if sliceHas(want, lamp) {
+			wantLevel = sim.HarborpulseNightDimPct
+		}
+		rs := readingsOf(Observations{Readings: d.readings}, lamp, sim.HarborpulseDimKey, at(sim.HarborpulseNightDimHour).Add(21*time.Second), at(sim.HarborpulseNightDimHour).Add(dimWithin))
+		if len(rs) == 0 {
+			t.Fatalf("%s has no dim readings", lamp)
+		}
+		for _, r := range readingsOf(Observations{Readings: d.readings}, lamp, sim.HarborpulseLampPowerKey,
+			at(sim.HarborpulseNightDimHour).Add(21*time.Second), at(sim.HarborpulseNightDimHour).Add(dimWithin)) {
+			if r.Value != 80*wantLevel/100 {
+				t.Fatalf("%s reported %v W, want %v W", lamp, r.Value, 80*wantLevel/100)
+			}
+		}
+		for _, r := range rs {
+			if r.Value != wantLevel {
+				t.Fatalf("%s reported %v after delivery, want %v", lamp, r.Value, wantLevel)
+			}
+		}
+	}
+}
+
+func TestNightDimRequiresObservedDelivery(t *testing.T) {
+	t.Run("member without element", func(t *testing.T) {
+		evaluateOneRed(t, InvNightDim, "missing: hp-light-east-1", func(d *day) {
+			key := elementsKey(testNightDim, "t-dim")
+			d.s4.Elements[key] = d.s4.Elements[key][1:]
+		})
+	})
+	t.Run("member never dimmed", func(t *testing.T) {
+		evaluateOneRed(t, InvNightDim, "hp-light-east-1 never reported", func(d *day) {
+			for i := range d.readings["hp-light-east-1"] {
+				d.readings["hp-light-east-1"][i].Value = 100
+			}
+		})
+	})
+	t.Run("observed member beyond layout never dimmed", func(t *testing.T) {
+		mutate := func(d *day) {
+			d.s4.Groups[sim.HarborpulseEastLightsGroup] = append(d.s4.Groups[sim.HarborpulseEastLightsGroup], "another-lamp")
+			key := elementsKey(testNightDim, "t-dim")
+			d.s4.Elements[key] = append(d.s4.Elements[key], Element{Device: "another-lamp", Status: "DISPATCHED", CommandOutcome: "SUCCEEDED"})
+		}
+		evaluateOneRedOf(t, []string{InvGroupsResolve, InvNightDim}, mutate)
+		d := cleanDay()
+		mutate(d)
+		if err := nightDim(d.observe()); err == nil || !strings.Contains(err.Error(), "another-lamp never reported") {
+			t.Fatalf("must judge every observed member's delivery: %v", err)
+		}
+	})
+
+	t.Run("outside member dimmed", func(t *testing.T) {
+		evaluateOneRed(t, InvNightDim, "hp-light-north-1 is outside the group", func(d *day) {
+			d.readings["hp-light-north-1"] = append(d.readings["hp-light-north-1"], Reading{Name: sim.HarborpulseDimKey,
+				At: at(sim.HarborpulseNightDimHour).Add(30 * time.Second), Value: sim.HarborpulseNightDimPct})
+		})
+	})
+	for _, missing := range []bool{false, true} {
+		name := "empty membership"
+		if missing {
+			name = "missing membership"
+		}
+		t.Run(name, func(t *testing.T) {
+			mutate := func(d *day) {
+				d.s4.Groups[sim.HarborpulseEastLightsGroup] = nil
+				d.nightDimDelivery(sim.HarborpulseEastLightsGroup)
+				if missing {
+					delete(d.s4.Groups, sim.HarborpulseEastLightsGroup)
+				}
+			}
+			evaluateOneRedOf(t, []string{InvGroupsResolve, InvNightDim}, mutate)
+			d := cleanDay()
+			mutate(d)
+			if err := nightDim(d.observe()); err == nil || !strings.Contains(err.Error(), "cannot judge") {
+				t.Fatalf("missing membership must say cannot judge: %v", err)
+			}
 		})
 	}
 }
