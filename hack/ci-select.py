@@ -138,7 +138,11 @@ READERS = [
         "backend/**/*.go",
         "docs/**/disaster-recovery.md",
     ], NONTEST, "backupset/backupset_test.go:120,248"),
-    ("backend/core", "graphql/schemaplane", [SDL], [], "graphql/schemaplane/schemaplane_test.go:19"),
+    ("backend/core", "graphql/schemaplane", [
+        SDL,
+        "frontend/packages/dashboards/src/**",
+        "frontend/apps/dashboard/src/**",
+    ], [], "graphql/schemaplane/schemaplane_test.go:19, frontend_documents_test.go:85"),
     ("backend/core", "rdb/partialupdatetest", ["backend/services/*/model/*.go"], NONTEST, "rdb/partialupdatetest/savescan_test.go:133"),
     ("backend/core", "config", [
         "deploy/opentofu/modules/traefik/main.tf",
