@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -106,7 +107,7 @@ func TestHttpIngestAnswers503InsteadOfEvictingUnreadEvents(t *testing.T) {
 	Configuration.ApplyDefaults()
 	GatewaySource = nil
 	buildTestRateLimiters(t)
-	require.NoError(t, buildEventSources())
+	require.NoError(t, buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")))
 
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
 	NatsManager.RecordMaxDeliveries(func(*messaging.NatsManager) (messaging.MaxDeliveryFunc, error) {

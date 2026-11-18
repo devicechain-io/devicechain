@@ -10,6 +10,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/processor"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,7 +41,7 @@ func buildAsPod(t *testing.T, pod string) []core.LifecycleComponent {
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
 	Configuration = externalSourcesConfig()
 	buildTestRateLimiters(t)
-	require.NoError(t, buildEventSources())
+	require.NoError(t, buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")))
 	require.Len(t, EventSources, 2)
 	return EventSources
 }
