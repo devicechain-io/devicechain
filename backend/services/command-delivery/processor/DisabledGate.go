@@ -207,16 +207,18 @@ func (cproc *CommandDeliveryProcessor) ResumeDevice(ctx context.Context, tenant,
 		if !ok {
 			return fmt.Errorf("the Api cannot read held commands for identity verification")
 		}
-		ids, ok := cproc.deviceIdentities(tenantCtx, tenant, []string{deviceToken})
-		if !ok {
-			return nil
-		}
 		// Release only rows verified by the same identity check as the reconciler.
 		// A bulk release could include an unverified row inserted during this walk.
 		for cursor := uint(0); ; {
 			commands, readErr := heldReader.HeldCommandsForDevice(tenantCtx, deviceToken, cursor, reconcilePageSize)
 			if readErr != nil {
 				return readErr
+			}
+			// Read identities after each page so a newly held incarnation is never
+			// judged against an identity cached before that page was read.
+			ids, ok := cproc.deviceIdentities(tenantCtx, tenant, []string{deviceToken})
+			if !ok {
+				return nil
 			}
 			for _, cmd := range commands {
 				if ctx.Err() != nil {
