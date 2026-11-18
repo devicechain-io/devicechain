@@ -147,12 +147,23 @@ func TestSizeDocs(t *testing.T) {
 					if !strings.Contains(text, "{#event-store-sizing}") {
 						t.Error("missing canonical sizing anchor")
 					}
-				} else if !strings.Contains(text, "./tuning-an-instance.md#event-store-sizing") {
+				} else if !strings.Contains(text, canonicalSizingLink(page)) {
 					t.Error("missing link to canonical sizing statement")
 				}
 			})
 		}
 	}
+}
+
+// canonicalSizingLink is how a page reaches the canonical sizing statement. The alert
+// runbook is generated from the alerts' own descriptions (hack/alert-runbook.py), which
+// are also what a notification carries, so its link is the published URL: a relative
+// path would not resolve from an email or a chat message.
+func canonicalSizingLink(page string) string {
+	if page == "alert-runbook.md" {
+		return "https://docs.devicechain.io/deployment/tuning-an-instance#event-store-sizing"
+	}
+	return "./tuning-an-instance.md#event-store-sizing"
 }
 
 func TestSizeDocsNegativeControls(t *testing.T) {

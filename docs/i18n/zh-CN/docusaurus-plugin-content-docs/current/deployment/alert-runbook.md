@@ -281,7 +281,7 @@ A database volume is over 75% full
 
 An event-store volume will be full within a day at its current rate
 
-**含义与处理方式。** 按过去两小时的填充速度，‹persistentvolumeclaim› 将在 24 小时内耗尽空间。卷写满后 PostgreSQL 停止，平台无法继续存储事件。期间消息代理暂存事件，达到积压上限后拒绝新摄取；若停止时间超过代理可保留的时间，便会丢失数据（见 EventStoreRefusingWrites）。请立即扩卷（Cluster 上的 spec.storage.size；存储类允许时可在线扩展）、缩短保留期或检查压缩是否生效。基础事件数据按[每个已存储事件 756 字节](./tuning-an-instance.md#event-store-sizing)规划；计算指标增加的测量行和 WAL 空间应单独计入。
+**含义与处理方式.** ‹persistentvolumeclaim› is on course to run out of space within 24 hours at the rate it has filled over the last two. When it fills, PostgreSQL stops and the platform can no longer store events. Events are held in the message broker meanwhile and new ingest is refused once the broker's backlog limit is reached, but a store that stays stopped for longer than the broker can hold loses data (see EventStoreRefusingWrites). Act now, with a day in hand: grow the volume (spec.storage.size on the Cluster; the volume expands online where the storage class allows it), shorten the data retention, or check that compression is acting. Size base event data at 756 bytes per stored event (https://docs.devicechain.io/deployment/tuning-an-instance#event-store-sizing); add calculated metrics' extra measurement rows and WAL space separately.
 
 ## `devicechain.dead-letter`
 
