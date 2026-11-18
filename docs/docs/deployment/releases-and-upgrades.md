@@ -754,39 +754,111 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 ## Recent releases {#recent-releases}
 
-The release in development (`v1.6`) and the three most recent minor releases (`v1.5`, `v1.4` and `v1.3`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
+The release in development (`v1.7`) and the three most recent minor releases (`v1.6`, `v1.5` and `v1.4`) are documented in full, newest first. The detailed `v0.27.0` through `v0.24.0` notes are also retained below.
 
-### v1.6.0 — a CA rotation no longer disconnects devices {#v160-upgrade}
+### v1.7.0 — in development {#v170-upgrade}
 
-- **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 time buckets are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 64 per process before reading or parsing. Message admission reserves up to 4 slots per batch; valid configured batches (16 entries by default) execute tools in waves within that cap. Every entry still counts toward the caller's rate limit; excess requests receive HTTP 429 with Retry-After. Tools are cancelled and execution slots released when their HTTP request ends. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.
+`v1.7.0` is an in-place upgrade from `v1.6.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
 
-`v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). These notes are for the release in development and grow until it ships.
+#### Before you upgrade to v1.7.0 {#v170-before-upgrade}
 
-#### Security: a device can no longer assign itself to a customer, area or asset {#v160-device-relationship-refused}
 
-- A `NewRelationship` event naming a tracked relationship type (the built-in `assigned`, or any type marked tracked) or the built-in `contains` is refused and recorded on the `failed-events` stream with reason `Invalid` on its first delivery, without retries. This changes what an accepted device event does; the [versioning policy](./versioning-policy.md) allows this for a security fix.
-- Assign devices with a claim code or the `createEntityRelationship` mutation.
-- Relationships devices created earlier are not removed. Review the tracked relationships of your devices.
-- Untracked types, including `member`, are still created, unless your tenant marked that type tracked. The `NewRelationship` event itself no longer carries the new target as an anchor: an untracked relationship is not ownership, so the event is scoped by the device's existing anchors, as its next telemetry event is.
-- During the rolling upgrade, pods still on v1.5 create the edge until they are replaced.
+- **`dcctl install`, `dcctl bootstrap` and `dcctl preflight` check the OpenTofu or Terraform version.** The preflight now refuses a binary older than the `required_version` that dcctl's bundled OpenTofu configuration declares (currently `>= 1.10`), a prerelease, or one whose version it cannot read. Before, it checked only that the binary was present, so an install on OpenTofu 1.9 failed at `tofu init` after it had already updated the operator. OpenTofu is still preferred when both are installed, and it is the binary checked. Install a stable OpenTofu or Terraform 1.10 or later before you run the v1.7.0 `dcctl install`. `--skip-preflight` still skips the check.
 
-#### Solar campaigns need installed-position access {#v160-solar-campaign-position}
+#### What is new in v1.7.0 {#v170-whats-new}
 
-Creating a `SOLAR` campaign, reading its elements (`campaignElements`) or cycles (`campaignCycles`), and retrying its failures (`retryCampaignFailed`) now also requires `location:installed:read` (or `location:read`). A solar schedule's per-device times reveal each device's installed position; even cycle counts can reveal position-derived results for a group with one device. `CRON` and `CALENDAR` campaigns are unchanged. Add this authority to any role that manages solar campaigns.
+#### Deletions are announced reliably {#v170-deletion-announcements}
 
-#### Before you upgrade {#v160-before-upgrade}
+- Deleting a device, customer, area, asset or group now records the announcement to the other services in the same database transaction as the delete, and `device-management` keeps publishing it until the message broker accepts it. Before, an announcement lost to a broker outage or a restart at the wrong moment was never sent, so dashboard shares, event anchors and detection state of the deleted entity could stay behind.
+- The announcement carries the time of the delete, however late it is published.
+- While old and new pods overlap during the rolling upgrade, deletes handled by a `v1.6` pod are announced the old way.
+- No configuration change is needed.
 
-- **Entity attributes are unique per key.** The upgrade collapses duplicate live rows from concurrent first writes, keeping the lowest row ID, and queues group membership and configuration repairs. The index build briefly blocks attribute writes. While old and new replicas overlap, an old replica that loses a concurrent first write may refuse it; retry the write. No configuration change is needed.
+### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
 
-Review hand-edited instance configuration before rolling pods. These refusals are new since `v1.5.0`; invalid service settings stop startup and can leave pods crash-looping. Service keys below live under `functionalAreas.<area>.config`.
+`v1.6.0` is an in-place upgrade from `v1.5.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the v1.6.0 `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. One appended migration in `device-management` makes live entity attribute keys unique and queues repairs. See [Schema changes in v1.6.0 and going back](#v160-going-back). Coming from `v1.4.x` or earlier, upgrade through each intervening minor first, including `v1.5.x`, following each release's notes with that release's own `dcctl` and `--version`: skipping a minor is not a tested path (see [Supported upgrade paths](./versioning-policy.md#upgrade-paths)). For `v1.5.0`, those are the [`v1.5.0` notes](#v150-upgrade).
 
-- **Campaign planning yields between tenants.** Each tenant plans at most 1,000,000 campaign elements and 128 cycles per pass, and starts no new cycle after a 2-second planning budget; a cycle already started always finishes, and progress is saved after each cycle so the remaining cycles resume next pass. Group and device-location lookups for planning time out after 2 seconds and are reported as a pass error without marking the campaign failed. Up to four tenants run concurrently. Large plans may fill their 36-hour window over multiple passes. These limits need no new configuration or migration and take effect as command-delivery pods roll forward.
+```bash
+dcctl install local --version v1.6.0
+dcctl upgrade local devicechain --version v1.6.0 --dry-run
+dcctl upgrade local devicechain --version v1.6.0
+```
+
+The [versioning and upgrade policy](./versioning-policy.md) applies. This release adds covered interfaces, removes none, and deprecates legacy npm exports, which keep working ([details](#v160-npm-deprecations)). The device relationship refusal and stricter authority checks are security fixes permitted by the policy. Agent actions, rule evaluation and the new backup and restore-planning commands are [Preview](./versioning-policy.md#preview-interfaces). Helm values and instance configuration are outside the covered compatibility surface; keep shard groups absent until the rollout completes.
+
+What is new:
+
+- [Before you upgrade to v1.6.0](#v160-before-upgrade)
+- [New values and commands](#v160-values-commands)
+- [A full broker reload keeps the devices the auth callout admitted](#v160-broker-reload)
+- [Live detections of geofence rules need location access](#v160-detection-stream-location)
+- [Solar campaigns need installed-position access](#v160-solar-campaign-position)
+- [Automated action authorities](#v160-action-authorities)
+- [The tier's rule limit applies when a profile is published](#v160-rule-ceiling)
+- [Draft authors after definition deletes](#v160-review-deleters)
+- [Delegated administrators cannot grant or act above what they hold](#v160-no-escalation)
+- [Security: a device can no longer assign itself to a customer, area or asset](#v160-device-relationship-refused)
+- [A new relationship's event is stored](#v160-new-relationship-event)
+- [The HTTP device-uplink route limits guessing](#v160-device-uplink-guessing)
+- [Stricter checks on HTTP credentials](#v160-http-credentials)
+- [Re-pointing a stored credential requires supplying it again](#v160-credential-resupply)
+- [Signing-key rotation reaches every replica](#v160-signing-key-follow)
+- [ingress-nginx no longer accepts configuration snippets](#v160-nginx-snippets-off)
+- [Metrics and health endpoints moved to the ops port](#v160-ops-port)
+- [`dcctl destroy` refuses a path as an instance and no longer trusts a guessed cluster](#v160-destroy-instance-name)
+- [MCP memory limits](#v160-mcp-memory)
+- [MCP discovery advertises the scopes the server enforces](#v160-mcp-discovery)
+- [API validation and administration](#v160-api-checks)
+- [Command holds](#v160-command-holds)
+- [Campaign planning yields between tenants](#v160-campaign-planning)
+- [Downloads, sends and notifications are shared between tenants](#v160-tenant-fairness)
+- [Escalation timing](#v160-escalation-clock)
+- [Bounded Sparkplug tracking](#v160-sparkplug-limits)
+- [Entity attributes are unique per key](#v160-entity-attributes)
+- [Optional NATS shard groups](#v160-nats-shard-groups)
+- [Stream and object backups (Preview)](#v160-backup)
+- [Console and dashboard authoring](#v160-console-dashboards)
+- [A console tab no longer continues under another tab's sign-in](#v160-console-tab-session)
+- [Authoring tools and SDKs](#v160-authoring-tools)
+- [Legacy npm exports are deprecated](#v160-npm-deprecations)
+- [A redelivered decoder failure uses the record budget](#v160-decoder-redelivery-budget)
+- [Invalid ingest failures name the device](#v160-invalid-failures-name-the-device)
+- [Metrics and an alert for agent actions (Preview)](#v160-agent-metrics)
+- [Other changes in v1.6.0](#v160-other-changes)
+- [Schema changes in v1.6.0 and going back](#v160-going-back)
+
+#### Before you upgrade to v1.6.0 {#v160-before-upgrade}
+
+What needs action, in the order to do it:
+
+- **Upgrade note: tooling.** Install OpenTofu 1.10 or later (or Terraform 1.10 or later) on the machine running `dcctl`; preflight checks presence, not version. Use the v1.6.0 tool, install with the cluster's settings, then upgrade each instance. There is no downgrade.
+- **Upgrade note: the broker restarts.** The upgrade replaces the broker image, so every broker pod restarts. With `--mqtt-fail-closed` off (the default), a QoS 1 message the broker acknowledges while a stream changes leader can be lost. Turn it on before you upgrade (`dcctl upgrade --mqtt-fail-closed`) if devices must not lose acknowledged messages ([fail-closed MQTT](./observability.md#mqtt-fail-closed)).
+- **Upgrade note: `dcctl install` preflight.** On a cluster that kept its `ingress-nginx` controller, install refuses while any Ingress of that class carries a `*-snippet` annotation. Upgrade the owning instance or remove the annotation first ([details](#v160-nginx-snippets-off)).
+
+**Correct configuration before restarting.** Review hand-edited instance configuration; invalid service settings stop startup. Service keys below live under `functionalAreas.<area>.config`.
+
 - **Signing-key retention must cover refresh tokens when rotation is on.** In `user-management`, when `auth.signingKeyMaxAgeDays > 0`, `auth.signingKeyRetentionDays × 86400` must be at least `auth.refreshTokenTtlSeconds` after defaults are applied; equality is allowed. Previously rotation silently lengthened a shorter retention. `0` retention takes 8 days, and the default refresh TTL is 604800 seconds (7 days). Increase retention or reduce the refresh TTL before upgrading. With rotation off, this comparison does not apply. The chart does not compare these fields, and `dcctl` already refuses overlays of this auth block.
 - **Token TTL overflow is refused.** `user-management` now rejects `auth.accessTokenTtlSeconds` or `auth.refreshTokenTtlSeconds` above **9223372036 seconds**, before conversion to a duration. `0` still takes the defaults (900 and 604800 seconds respectively); negative TTLs were already invalid. The Helm schema also enforces the upper bound.
 - **Tenant-purge overflow is refused.** In `user-management`, `tenantPurge.intervalSeconds`, `tenantPurge.settleSeconds` and `tenantPurge.tokenHoldSeconds` cannot exceed **9223372036 seconds**. Existing rules still apply: a negative interval disables the coordinator; negative settle/hold values are refused, and the settle and token-hold safety floors remain.
 - **Dead-letter overflow is refused.** In `user-management`, `deadLetters.retentionDays` cannot exceed **106751 days**, and `deadLetters.sweepSeconds` cannot exceed **9223372036 seconds**. Existing default, disable and minimum-retention rules remain.
 - **Sparkplug presence-probe overflow is refused.** In `sparkplug-ingest`, `presence.probeSeconds` and `presence.probeWindowSeconds` cannot exceed **9223372036 seconds**. `0` still takes 1800 and 10 seconds respectively. Existing floors remain: a written interval is at least 60 seconds; a written window is at least 5 seconds and strictly below the interval.
-- **Keep `infrastructure.nats.shardGroups` absent throughout the v1.5 → v1.6 roll.** A `v1.5` pod rejects this new key as unknown if it loads the new configuration mid-roll. Finish upgrading all pods before opting in. When present, `count` must be 2–16; suffixes must be unique and limited to `inbound-events` and `resolved-events`; `placementTags` keys must be group numbers 1 through `count - 1`, with nonblank tag strings. Invalid blocks are refused.
+
+**Review permissions and callers before rolling.**
+
+- **Upgrade note:** Give geofence `detectionStream` consumers `location:read`; the read-only OAuth scope alone does not include it. Give roles managing `SOLAR` campaigns `location:installed:read` or `location:read`.
+- **Upgrade note:** Automation authors need `command:write` for `sendCommand` and `connector:write` for `httpCall` or `publish`, in addition to `device:write`, including publish and rollback. Review delegated administrator roles: operations above their current authorities now return `ESCALATION`; use a superuser for those operations.
+- **Upgrade note:** Replace device-authored tracked or `contains` `NewRelationship` assignments with claim codes or `createEntityRelationship`. Review existing tracked relationships; the upgrade does not remove them. Old pods still accept the events during the roll.
+- **Upgrade note:** Narrow MCP queries that exceed 256 KiB responses or 1,000 time buckets and handle HTTP 429 with `Retry-After`. Keep draft `evaluateRules` graphs at or below 256 detection rules; oversized graphs are refused before compilation. Renew expired automation reviews before publishing.
+- **Upgrade note: credentials and senders.** Clients that change the type or destination of a connector, notification channel or AI provider holding a stored credential must send `secret` in the same request ([details](#v160-credential-resupply)). A rule whose `httpCall` names a `connector/` secret handle is refused at publish, and dead-lettered if it is already published ([details](#v160-http-credentials)). HTTP uplink senders must back off on `429` and `503` with `Retry-After` ([details](#v160-device-uplink-guessing)).
+
+**During and after the rollout.**
+
+- **Keep `infrastructure.nats.shardGroups` absent throughout the v1.5 → v1.6 roll.** A `v1.5` pod rejects this new key as unknown if it loads the new configuration mid-roll. Finish upgrading all pods before opting in. When present, `count` must be 2–16; suffixes must be unique and limited to `inbound-events` and `resolved-events`; `placementTags` keys must be group numbers in `0..count-1`, including the existing group zero, with nonblank tag strings. `dcctl` derives a `dc-nats-<group>` placement tag for every group, including `dc-nats-0`. Invalid blocks are refused. What `dcctl` accepts is narrower: see [Optional NATS shard groups](#v160-nats-shard-groups).
+
+- **Entity attributes are unique per key.** The upgrade collapses duplicate live rows from concurrent first writes, keeping the lowest row ID, and queues group membership and configuration repairs. The index build briefly blocks attribute writes. While old and new replicas overlap, an old replica contending on a concurrent first write may refuse it; retry the write. No configuration change is needed.
+
+- **Upgrade note:** Add `AgentExecutionsFailing` to alert routing, and mirror `nats:2.15.3-alpine` if you keep the upstream-broker fallback ready. Freeze writers before using the new backup commands.
+- **Upgrade note: scrape port.** If your own Prometheus configuration scrapes pods, change the target port from 8080 to 8083; the chart's ServiceMonitors and probes follow automatically ([details](#v160-ops-port)).
 
 #### New values and commands {#v160-values-commands}
 
@@ -794,14 +866,9 @@ Review hand-edited instance configuration before rolling pods. These refusals ar
 |---|---|
 | `--size perf-20k` | New throughput sizing preset: broker request 6 CPUs / 6Gi, memory limit 10Gi, JetStream 40Gi and event storage 260Gi. It does not promise the 50 ms PUBACK latency target; the preset has not yet been measured as written. |
 | GKE `nats_jetstream_storage_class` | New brokers default to `premium-rwo` (`pd-ssd`) when that GKE class exists; a GKE `premium-rwo` class with a different disk type is refused. Explicit overrides win. Existing brokers/PVCs and upgrades keep their storage class; this does not migrate disks. |
-| `infrastructure.nats.shardGroups` | Opt-in tenant routing for the two ingest streams; absent preserves existing routing. Group streams multiply reservations by `count`, so budget capacity before enabling it. Enable only after the roll completes. |
+| GKE `backup_object_store_storage_class` | New backup PVCs use a dedicated `pd-standard` class; GKE's `standard-rwo` uses `pd-balanced` and still consumes SSD quota. Override it with this variable. Existing PVCs keep their size and class on upgrades; no automatic migration occurs. Other providers are unchanged. |
+| `infrastructure.nats.shardGroups` | Opt-in tenant routing for the two ingest streams; absent preserves existing routing. Group streams multiply reservations by `count`, so budget capacity before enabling it. Enable only after the roll completes; see [Optional NATS shard groups](#v160-nats-shard-groups). |
 | `dcctl backup`, `dcctl backup inspect --verify`, `dcctl restore --plan` | **Preview** commands for local stream/object backup sets, byte verification and read-only restore planning. There is no restore apply command or coordinated database checkpoint. See [Exporting streams and object content](./disaster-recovery.md#export-streams-objects). |
-
-#### Automated action authorities {#v160-action-authorities}
-
-Authoring or publishing an automated action now requires the authority to perform it. Creating or updating a rule with a `sendCommand` action, and publishing or rolling back to a profile version whose enabled rules include one, requires `command:write` in addition to `device:write`. `httpCall` and `publish` actions require `connector:write`. A role that holds `device:write` alone can still author and publish rules that only raise alarms. Rules already published keep running; they are checked at the next publish or rollback. Review the roles that author automation before upgrading. Older `device-management` replicas do not enforce this until they are replaced.
-
-**Command holds.** Deleted maintenance windows no longer release waiting commands unconditionally. Commands whose device type now has no window are released within about a minute; disabled devices or unresolved types stay gated until resolved and then follow their type. If a device's command channel cannot be resolved, its commands stay `QUEUED`, never published, until the first delivery sweep after recovery (30 seconds by default), instead of entering `HELD`. The hold reconciler continues while releasing commands, up to half its interval, and stops at a page with no releases. New counter: `command_delivery_dispatch_deferred_total`. Nothing needs doing. Older pods retain their previous behavior until the rolling upgrade completes.
 
 #### A full broker reload keeps the devices the auth callout admitted {#v160-broker-reload}
 
@@ -815,27 +882,27 @@ When a reload changes the server's own authentication settings (its configured u
 - **The upstream image for going back to the upstream broker is now `nats:2.15.3-alpine`**: set `server_image_repository = "nats"` and `server_image_tag = "2.15.3-alpine"`, as described in [Device certificates](./device-certificates.md). Add the new tag to the images you mirror if you keep that rollback ready.
 - **A broker pod that is stopped while it is still starting now stops promptly.** The broker keeps upstream `nats-server` `v2.15.3`'s signal handling: a reload requested while JetStream is still recovering runs once startup completes, and a SIGTERM, or the lame duck request the pod's preStop hook sends, is handled in the meantime instead of waiting behind it. A lame duck request that arrives before the broker is accepting clients is ignored, so the SIGTERM that follows stops the pod. `nats-server -t --test_reload <file>` reports whether a configuration file can be reloaded without a restart (exit code 3 when it cannot).
 
-#### A redelivered decoder failure uses the record budget {#v160-decoder-redelivery-budget}
+#### Live detections of geofence rules need location access {#v160-detection-stream-location}
 
-A payload decoder failure that is redelivered (for example after a restart with a backlog of a failing device type's uplinks) now uses the per-device-type failure-record budget like any other failure. Once the budget is spent it is counted as suppressed and not written to the failed-events stream, even if its first delivery never produced a record. Previously a redelivered failure was always recorded, so a restart could record every uplink of a backlog.
+The `detectionStream` subscription no longer delivers detections of rules that test geofence containment to a caller without `location:read`, matching rule preview. Other detections are unchanged. A dashboard or agent that watches geofence rules needs a role or token that includes location access. A token minted through the read-only OAuth scope does not include `location:read`.
 
-- **Nothing needs doing.**
+#### Solar campaigns need installed-position access {#v160-solar-campaign-position}
 
-#### Metrics and an alert for agent actions (Preview) {#v160-agent-metrics}
+Creating a `SOLAR` campaign, reading its elements (`campaignElements`) or cycles (`campaignCycles`), and retrying its failures (`retryCampaignFailed`) now also requires `location:installed:read` (or `location:read`). A solar schedule's per-device times reveal each device's installed position; even cycle counts can reveal position-derived results for a group with one device. `CRON` and `CALENDAR` campaigns are unchanged. Add this authority to any role that manages solar campaigns.
 
-`device-management` now reports agent actions: proposals by kind and outcome, approvals by outcome, executions by kind and result with their duration, and proposals that expired. The Platform board gains an **Agent actions (preview)** row, and a new warning alert, `AgentExecutionsFailing`, fires when final approvals keep failing to complete. Refusals do not raise it: a dependency change, a policy refusal, a closed kill fence or an approver refusal is counted under its own result. The metrics are listed in the [metrics reference](./metrics-reference.md), and the alert has an [alert runbook](./alert-runbook.md#agentexecutionsfailing) entry. Like agent actions, they are Preview: names and labels may still change in a minor release.
+#### Automated action authorities {#v160-action-authorities}
 
-#### A console tab no longer continues under another tab's sign-in {#v160-console-tab-session}
+Authoring or publishing an automated action now requires the authority to perform it. Creating or updating a rule with a `sendCommand` action, and publishing or rolling back to a profile version whose enabled rules include one, requires `command:write` in addition to `device:write`. `httpCall` and `publish` actions require `connector:write`. A role that holds `device:write` alone can still author and publish rules that only raise alarms. Rules already published keep running; they are checked at the next publish or rollback. Review the roles that author automation before upgrading. Older `device-management` replicas do not enforce this until they are replaced.
 
-A console tab whose session ended no longer continues under a session another tab opened for a different tenant or user; it returns to sign-in.
+#### The tier's rule limit applies when a profile is published {#v160-rule-ceiling}
 
-- **Nothing needs doing.**
+- **Opt-in rule ceiling:** device-profile publish and rollback enforce `rulesPerTenant` only when the tenant tier explicitly sets it. Absent/null values and older user-management schemas preserve existing behavior; unchanged or reduced rule counts never read user-management. Other lookup failures fail closed only for rule increases.
 
-#### Invalid ingest failures name the device {#v160-invalid-failures-name-the-device}
+#### Draft authors after definition deletes {#v160-review-deleters}
 
-Ingest failures with reason `INVALID` that device-management recorded for a readable event (a value that fails its metric's definition, an event older than 366 days, a decoder refusal) now name the device and the event type, and are bounded per device like every other reason. Before this release they were listed with no device and shared one bound of ten records an hour for the whole tenant. Records indexed before the upgrade are not rewritten.
+Change review normally excludes people who only deleted rules, metrics or commands on other profiles from draft authors. Deletes not attributed to a row, from before the upgrade or a not-yet-upgraded pod during a rolling upgrade, are handled conservatively: if a definition disappeared from the reviewed profile without an attributed delete explaining it, everyone who made an unattributed delete since that definition's last attributed change counts as an author. Reviews already run keep the author list they recorded; run a new review if an approver was excluded. Deleting a profile now writes one audit entry per definition it removes.
 
-- **Nothing needs doing.** There is no backfill. The existing limits now apply: ten records per device and reason per hour, capped at 1,000 itemized records per tenant and reason per hour. A fleet-wide invalid payload can reach that cap.
+- **Nothing needs doing.** Run a new review if an approver was excluded by an unrelated deletion.
 
 #### Delegated administrators cannot grant or act above what they hold {#v160-no-escalation}
 
@@ -846,9 +913,243 @@ The operator admin API now limits an identity whose system role is not superuser
 - **Tenant API:** a tenant administrator can change a tenant role only if they hold every authority it grants, and can remove authorities from it only if they hold everything its members hold.
 - **What to check:** a delegated system role that needs to administer superusers or define roles beyond its own authorities now gets `ESCALATION`; make those changes as a superuser.
 
+#### Security: a device can no longer assign itself to a customer, area or asset {#v160-device-relationship-refused}
+
+- A `NewRelationship` event naming a tracked relationship type (the built-in `assigned`, or any type marked tracked) or the built-in `contains` is refused and recorded on the `failed-events` stream with reason `Invalid` on its first delivery, without retries. This changes what an accepted device event does; the [versioning policy](./versioning-policy.md) allows this for a security fix.
+- Assign devices with a claim code or the `createEntityRelationship` mutation.
+- Relationships devices created earlier are not removed. Review the tracked relationships of your devices.
+- Untracked types, including `member`, are still created, unless your tenant marked that type tracked. The `NewRelationship` event itself no longer carries the new target as an anchor: an untracked relationship is not ownership, so the event is scoped by the device's existing anchors, as its next telemetry event is.
+- During the rolling upgrade, pods still on v1.5 create the edge until they are replaced.
+- New counter `resolve_relationship_refused_total` counts these refusals without tenant or device labels; the warning log names the tenant and correlation.
+
+#### A new relationship's event is stored {#v160-new-relationship-event}
+
+A `NewRelationship` event a device sends is now stored and listed by `events` (event type `0`) with its anchors. Before this release it was retried, then recorded as an ingest failure with reason `API_CALL_FAILED`, although the relationship had been created. An event of a type the event store does not hold is now refused on its first delivery with reason `INVALID` instead of being retried. Events sent before the upgrade are not restored.
+
+- **Nothing needs doing.**
+
+#### The HTTP device-uplink route limits guessing {#v160-device-uplink-guessing}
+
+The opt-in HTTP device-uplink route (`httpIngest.deviceUplinks`) now limits requests per source address (`429` with `Retry-After`). After repeated credential failures for a device, it stops answering authentication guesses (`503` with `Retry-After`) instead of repeating `401`. While this device's credential is being guessed, every HTTP uplink for the device, including one with the correct credential, receives `503` with `Retry-After` until the hold ends (at most 60 seconds at a time).
+
+- **Devices on the broker's MQTT connection are unaffected.**
+- **Back off on `503`**, even when presenting a wrong credential: wait at least `Retry-After` before retrying.
+
+#### Stricter checks on HTTP credentials {#v160-http-credentials}
+
+An `httpCall` action can no longer name a connector's credential. A secret handle in the `connector/` namespace is refused when a rule is published, and a published rule that uses one is dead-lettered with outcome `invalid` instead of sending the connector's credential. Older `outbound-connectors` replicas do not enforce this until they are replaced.
+
+#### Re-pointing a stored credential requires supplying it again {#v160-credential-resupply}
+
+**Re-pointing a stored credential.** `updateConnector`, `rollbackConnector`, `updateNotificationChannel` and `updateAiProvider` refuse with `SECRET_RESUPPLY_REQUIRED` when a request changes the type or the destination of a connector, notification channel or AI provider that holds a stored credential and does not send `secret` in the same request. Send the credential again, or `secret: null` to remove it. Edits that do not move the destination (name, topic, QoS, custom headers, link base URL, model, enabled) are unaffected, and existing connectors, channels and providers keep delivering. To roll a connector back to a version with a different destination, re-point it with `updateConnector` and its credential instead. With `dcctl product apply`, set the connector's credential handle when a manifest changes its destination. Older replicas do not enforce this until they are replaced.
+
+#### Signing-key rotation reaches every replica {#v160-signing-key-follow}
+
+With `auth.signingKeyMaxAgeDays` set, user-management now rotates an over-age signing key while it runs: about 15 minutes after a replica starts, and whenever the key crosses the age afterwards, not only at startup. Every replica adopts the new key within 30 seconds, and validates and serves it straight away when it sees a token or a key request that needs it. Earlier releases applied a rotation only in the replica that made it, so with more than one replica some sign-ins failed until the others restarted.
+
+- **Nothing needs doing.** Nothing changes when the setting is 0.
+
+#### ingress-nginx no longer accepts configuration snippets {#v160-nginx-snippets-off}
+
+`dcctl install` turns configuration snippets off on a cluster's retained `ingress-nginx` controller and returns its annotations risk level to the controller default. Before applying, install refuses while any Ingress of that controller's class carries a `*-snippet` annotation, naming each Ingress and annotation. Upgrade the instance that owns it with `dcctl upgrade`, or remove the annotation, then re-run `dcctl install`.
+
+No chart since `v0.25.2` sets a snippet. Fresh clusters, which run Traefik only, are unaffected. This change reaches a cluster at its next `dcctl install`.
+
+#### Metrics and health endpoints moved to the ops port {#v160-ops-port}
+
+Service metrics and health endpoints moved off the API port. `/metrics`, `/healthz` and `/readyz` are served on port 8083 (`ops`) of each area's pods and Service and are no longer reachable through `/api/<area>/...`. The chart's ServiceMonitors and probes follow automatically. If you scrape pods with your own Prometheus configuration, change the target port from 8080 to 8083. During the rollout, pods not yet replaced are not scraped.
+
+#### `dcctl destroy` refuses a path as an instance and no longer trusts a guessed cluster {#v160-destroy-instance-name}
+
+`dcctl destroy` refuses an instance argument that is not a plain name (`.`, `..`, or anything containing a path separator). Earlier releases resolved it as a directory under `~/.devicechain/instances` and removed what it resolved to.
+
+- **Local state needs evidence.** `dcctl destroy` clears local state for a missing cluster only when the instance has a record of its cluster and that cluster's recorded context no longer answers. An instance with no record goes through the normal uninstall, which fails if the cluster cannot be reached; pass `--kube-context`, or remove the instance's directory by hand if its cluster is really gone.
+
+#### MCP memory limits {#v160-mcp-memory}
+
+- **MCP memory limits:** downstream GraphQL responses over 256 KiB and aggregates over 1,000 time buckets are refused whole; narrow the time range, select one metric, or widen the interval. POSTs and requests carrying bodies are capped at 4 in flight per caller and 64 per process before reading or parsing. Message admission reserves up to 4 slots per batch; valid configured batches (16 entries by default) execute tools in waves within that cap. Every entry still counts toward the caller's rate limit; excess requests receive HTTP 429 with Retry-After. Tools are cancelled and execution slots released when their HTTP request ends. Body-read reservations are released before tool execution; the 1 MiB request ceiling remains. No configuration change is needed.
+
+#### MCP discovery advertises the scopes the server enforces {#v160-mcp-discovery}
+
+MCP discovery now offers `read-only` and `location`, plus `act:*` when `agentActuation.enabled` is true on MCP. Challenges let clients use this metadata instead of pinning `read-only`. Admission still requires only `read-only`; action tools retain their scope and permission checks. No configuration change is required; existing tokens remain valid. Reauthorize clients to grant newly discovered scopes, and enable actuation on the authorization server too when using proposals.
+
+#### API validation and administration {#v160-api-checks}
+
+- `evaluateRules` (Preview) refuses draft graphs above 256 detection rules with `LIMIT_EXCEEDED` before compiling any rule. Rule validation now preserves each diagnostic's field path so clients can point to the offending field.
+- `existingEntityRefs` rejects unknown entity types or more than 1,000 lookup keys of one type, including duplicates, before running any lookup; previously the same refusal could follow earlier lookups.
+- Admin `updateRole` accepts optional `expectedUpdatedAt`; a stale save is refused so the caller can reload. Omitting it retains unconditional updates.
+- `setTenantEnabled` refuses a tenant whose purge has begun and rechecks its identity under lock, so a concurrent purge or reused token cannot toggle another tenant.
+- Agent execution decisions (Preview) bound proposer and approver principals to 256 characters and supplied session IDs to canonical 36-character UUIDs before session reads; cancellation stops further reads. Service-account proposers may omit the session ID.
+- Expired approved automation reviews read and filter as `EXPIRED`, including at the exact expiry time; publish returns `REVIEW_EXPIRED`, and rejection returns `REVIEW_NOT_PENDING`. Expiry is computed from stored expiry and current policy without a background ledger update.
+
+#### Command holds {#v160-command-holds}
+
+Deleted maintenance windows no longer release waiting commands unconditionally. Commands whose device type now has no window are released within about a minute; disabled devices or unresolved types stay gated until resolved and then follow their type. If a device's command channel cannot be resolved, its commands stay `QUEUED`, never published, until the first delivery sweep after recovery (30 seconds by default), instead of entering `HELD`. The hold reconciler continues while releasing commands, up to half its interval, and stops at a page with no releases. New counter: `command_delivery_dispatch_deferred_total`. Nothing needs doing. Older pods retain their previous behavior until the rolling upgrade completes.
+
+#### Campaign planning yields between tenants {#v160-campaign-planning}
+
+- **Campaign planning yields between tenants.** Each tenant plans at most 1,000,000 campaign elements and 128 cycles per pass, and starts no new cycle after a 2-second planning budget; a cycle already started always finishes, and progress is saved after each cycle so the remaining cycles resume next pass. Group and device-location lookups for planning time out after 2 seconds and are reported as a pass error without marking the campaign failed. Up to four tenants run concurrently. Large plans may fill their 36-hour window over multiple passes. These limits need no new configuration or migration and take effect as command-delivery pods roll forward.
+
+#### Downloads, sends and notifications are shared between tenants {#v160-tenant-fairness}
+
+- **OTA downloads:** OTA downloads now allow one in-flight stream per (tenant, device, assignment) on each replica. While another tenant holds a slot, a tenant at or above half of `updates.maxConcurrentDownloads` (rounded down, minimum one; eight with the default of 16) cannot start another stream. A lone tenant may use all slots. Excess requests receive the existing 503 busy response with `Retry-After: 5`; retry after that delay. No configuration change is required.
+- **Connector sends and LoRaWAN downlinks:** Outbound connector dispatches and LoRaWAN downlinks now limit each tenant to half of each replica's send pool (rounded down, minimum one), derived from `maxConcurrentSends`. Excess messages wait for broker redelivery without occupying send workers. A pool of one still serializes tenants; use at least two workers for isolation. No new configuration is needed; the limit takes effect as each pod upgrades.
+- **Notification scheduling is bounded per tenant.** Four workers serve tenants in rotating order. Each tenant stops starting releases and escalations after twice the whole-dispatch budget (80 seconds at the defaults) while another tenant is waiting for a worker; a tenant nobody is waiting behind keeps going; an alarm already started keeps its full budget, and remaining alarms stay due for the next tick. Clear announcements run within each tenant job under their own budget. Channels that exhaust their timeout attempts are skipped for the rest of that tenant job; an escalation routed only to those channels keeps its tier and is retried next tick. The first probe can still spend a tier. No configuration change is needed, and existing configuration works throughout rolling upgrades.
+
+#### Escalation timing {#v160-escalation-clock}
+
+The escalation window is now counted from when the page was sent. An alarm raised from a late-arriving reading no longer escalates on the next scheduler pass, and a device clock ahead of the platform no longer delays escalation.
+
+- **Nothing needs doing.** The upgrade adds a nullable timestamp automatically; existing open alarms retain their previous timing until their next page.
+
+#### Bounded Sparkplug tracking {#v160-sparkplug-limits}
+
+**Upgrade note:** Each Sparkplug source now tracks at most 50,000 node sessions, including at most 1,024 nodes that have not sent NBIRTH. New identities past a limit are dropped without ingestion or a rebirth request; existing nodes can still rebirth, and online sessions are never evicted. Idle placeholders expire after 10 minutes, offline sessions after 24 hours; at capacity, births reclaim the oldest offline sessions. The liveness history holds at most 50,000 identities, prunes old entries on pressure, and refuses further new entries while full (while it is full, a probe does not declare an unrecorded identity silent). Group, node and device topic levels longer than 256 characters are refused, matching the existing device-registration ceiling. Capacity refusals are counted by `devicechain_sparkplugingest_session_refused_total` with `reason` values `placeholder_cap`, `session_cap` or `seen_cap`. Capacity and queue-full warnings are each limited to one per source per 10 minutes; per-message logs move to debug. No configuration change is needed for rolling upgrades.
+
+#### Entity attributes are unique per key {#v160-entity-attributes}
+
+- **Entity attributes are unique per key.** The upgrade collapses duplicate live rows from concurrent first writes, keeping the lowest row ID, and queues group membership and configuration repairs. The index build briefly blocks attribute writes. While old and new replicas overlap, an old replica contending on a concurrent first write may refuse it; retry the write. No configuration change is needed.
+
+#### Optional NATS shard groups {#v160-nats-shard-groups}
+
+NATS shard groups remain off by default. A new instance can opt in through `--values`
+at `instance.config.infrastructure.nats.shardGroups` when it is installed. The setting
+supports 2-5 groups with R1 streams on a cluster of at least three broker servers, and
+refuses `--ha`. Placement tags use the corresponding `dc-nats` pod names; explicit tags
+must match those names. The default profiles support sharding `inbound-events`;
+`resolved-events` is refused while device-state or event-processing is deployed because
+those consumers still read only group zero. Each selected stream reserves its full byte
+ceiling in every group, and `dcctl` checks that reservation before it creates or changes
+any infrastructure, so grow the JetStream volume first if the check refuses it.
+
+`dcctl upgrade` refuses to enable shard groups on an existing instance whose broker is a
+single server, because turning a standalone JetStream server that holds data into a
+cluster is not supported. It also refuses an upgrade whose `--values` (or
+`--reset-values`) would drop a recorded `shardGroups` block, lower its `count`, or remove a stream from its
+`suffixes`, since the groups may hold data: carry the block forward in every replacement
+values file.
+
+#### Stream and object backups (Preview) {#v160-backup}
+
+`dcctl backup <instance> --destination <dir>` exports checkpoint-preserved streams with consumers and object content into a new local backup set. Freeze writers first; this does not coordinate database cutoffs or maintenance mode. It works on every profile, recording streams absent because their area is not deployed. Each stream, KV bucket and object store declares its backup class.
+
+`dcctl backup inspect <dir> --verify` verifies the manifest and each listed file's size and SHA-256 offline; it does not prove complete inventory or checkpoint consistency. `dcctl restore <instance> --from <dir> --plan` verifies bytes, identity and coverage before reading target streams and objects, and refuses a plan that could overwrite newer content. Freeze target writers while planning. `--force-foreign` permits a foreign identity but bypasses neither coverage nor newer-content checks. No restore is applied. For filesystem blobs, supply `--blob-directory` with a read-only mounted or exported PVC root. See [Exporting streams and object content](./disaster-recovery.md#export-streams-objects).
+
+#### Console and dashboard authoring {#v160-console-dashboards}
+
+- Dashboard authors can select a breakpoint and move, resize or place widgets for it; base edits still flow to layouts that inherit them. Existing layouts remain valid.
+- The rule editor adds Filter, Exists and Math forms for supported expressions; custom expressions remain available.
+- **Admin → Settings → Functional areas** shows deployed areas and instructions to enable other areas.
+- One-time secret and invitation dialogs require **Done** to close; Escape and outside clicks leave the value visible. Detail pages ignore stale responses after navigation.
+- Batch fire reuses its idempotency token on retries, and the device command panel ignores duplicate submits. Command-control widgets clear pending state when the device changes; alarm triage coalesces refreshes during event storms.
+- A dashboard retries a device-type lookup after an earlier miss. Scoped chart palettes refresh when the host theme changes. GraphQL documents use direct imports to reduce the console bundle.
+- The remaining text of the shared dashboard widgets is translated into Spanish and Simplified Chinese.
+
+#### A console tab no longer continues under another tab's sign-in {#v160-console-tab-session}
+
+A console tab whose session ended no longer continues under a session another tab opened for a different tenant or user; it returns to sign-in.
+
+- **Nothing needs doing.**
+
+#### Authoring tools and SDKs {#v160-authoring-tools}
+
+- From `frontend`, `npm run create-widget -- acme/tank-level ../my-widget` creates a typed custom-widget package with SDK peers and refuses an existing destination. If peer versions are `0.0.0-dev`, set released versions before installing.
+- Rule and connector authoring JSON Schemas can be emitted with `go run ./cmd/rule-schema` from `backend/services/event-processing` and `go run ./cmd/connector-schema mqtt` from `backend/services/outbound-connectors`.
+- Published client and widget SDK packages now include their agent guidance.
+
+#### Legacy npm exports are deprecated {#v160-npm-deprecations}
+
+The following exports are deprecated in `v1.6.0` and keep working unchanged. Update imports or calls to the replacements below. No export is removed. Removal requires a major release after at least two minor releases of deprecation; with deprecation starting in 1.6, no removal is eligible before a major after 1.7. `BuiltinOptionIssue` names the existing built-in issue shape (`widgetType`); the general `@devicechain/dashboards.OptionIssue` (`widgetId`) remains supported.
+
+- `@devicechain/widgets` / `pickSample` is deprecated; use `@devicechain/widget-sdk.pickSample`.
+- `@devicechain/widgets` / `optBoolean` is deprecated; use `@devicechain/widget-sdk.optBoolean`.
+- `@devicechain/widgets` / `WidgetProps` is deprecated; use `@devicechain/widget-sdk.WidgetProps`.
+- `@devicechain/widgets` / `WidgetComponent` is deprecated; use `@devicechain/widget-sdk.WidgetComponent`.
+- `@devicechain/widgets` / `WidgetFrame` is deprecated; use `@devicechain/widget-sdk.WidgetFrame`.
+- `@devicechain/widgets` / `WidgetSubjectProvider` is deprecated; use `@devicechain/widget-sdk.WidgetSubjectProvider`.
+- `@devicechain/widgets` / `WidgetSelectProvider` is deprecated; use `@devicechain/widget-sdk.WidgetSelectProvider`.
+- `@devicechain/widgets` / `useWidgetSelect` is deprecated; use `@devicechain/widget-sdk.useWidgetSelect`.
+- `@devicechain/widgets` / `WidgetTimeZoneProvider` is deprecated; use `@devicechain/widget-sdk.WidgetTimeZoneProvider`.
+- `@devicechain/widgets` / `useWidgetTimeZone` is deprecated; use `@devicechain/widget-sdk.useWidgetTimeZone`.
+- `@devicechain/widgets` / `WidgetThemeRootProvider` is deprecated; use `@devicechain/widget-sdk.WidgetThemeRootProvider`.
+- `@devicechain/widgets` / `useWidgetThemeRoot` is deprecated; use `@devicechain/widget-sdk.useWidgetThemeRoot`.
+- `@devicechain/widgets` / `WidgetCandidatesProvider` is deprecated; use `@devicechain/widget-sdk.WidgetCandidatesProvider`.
+- `@devicechain/widgets` / `useWidgetCandidates` is deprecated; use `@devicechain/widget-sdk.useWidgetCandidates`.
+- `@devicechain/widgets` / `useFlashOnChange` is deprecated; use `@devicechain/widget-sdk.useFlashOnChange`.
+- `@devicechain/widgets` / `flashTextStyle` is deprecated; use `@devicechain/widget-sdk.flashTextStyle`.
+- `@devicechain/widgets` / `flashBackgroundStyle` is deprecated; use `@devicechain/widget-sdk.flashBackgroundStyle`.
+- `@devicechain/widgets` / `FlashValue` is deprecated; use `@devicechain/widget-sdk.FlashValue`.
+- `@devicechain/widgets` / `fitValueFont` is deprecated; use `@devicechain/widget-sdk.fitValueFont`.
+- `@devicechain/widgets` / `useMeasurementStream` is deprecated; use `@devicechain/widget-sdk.useMeasurementStream`.
+- `@devicechain/widgets` / `useAlarmStream` is deprecated; use `@devicechain/widget-sdk.useAlarmStream`.
+- `@devicechain/widgets` / `useCommandStream` is deprecated; use `@devicechain/widget-sdk.useCommandStream`.
+- `@devicechain/widgets` / `useLocationStream` is deprecated; use `@devicechain/widget-sdk.useLocationStream`.
+- `@devicechain/widgets` / `useDatasourceAvailability` is deprecated; use `@devicechain/widget-sdk.useDatasourceAvailability`.
+- `@devicechain/widgets` / `useDashboardHub` is deprecated; use `@devicechain/widget-sdk.useDashboardHub`.
+- `@devicechain/widgets` / `useHubConnectionState` is deprecated; use `@devicechain/widget-sdk.useHubConnectionState`.
+- `@devicechain/widgets` / `HubConnectionBadge` is deprecated; use `@devicechain/widget-sdk.HubConnectionBadge`.
+- `@devicechain/widgets` / `useResolvedBindings` is deprecated; use `@devicechain/widget-sdk.useResolvedBindings`.
+- `@devicechain/widgets` / `useViewerBindings` is deprecated; use `@devicechain/widget-sdk.useViewerBindings`.
+- `@devicechain/widgets` / `useSlotCandidates` is deprecated; use `@devicechain/widget-sdk.useSlotCandidates`.
+- `@devicechain/widgets` / `useCandidates` is deprecated; use `@devicechain/widget-sdk.useCandidates`.
+- `@devicechain/widgets` / `css` is deprecated; use `@devicechain/widget-sdk.css`.
+- `@devicechain/widgets` / `FlashDirection` is deprecated; use `@devicechain/widget-sdk.FlashDirection`.
+- `@devicechain/widgets` / `WidgetFrameProps` is deprecated; use `@devicechain/widget-sdk.WidgetFrameProps`.
+- `@devicechain/widgets` / `WidgetSelect` is deprecated; use `@devicechain/widget-sdk.WidgetSelect`.
+- `@devicechain/widgets` / `WidgetCandidates` is deprecated; use `@devicechain/widget-sdk.WidgetCandidates`.
+- `@devicechain/widgets` / `MeasurementStreamState` is deprecated; use `@devicechain/widget-sdk.MeasurementStreamState`.
+- `@devicechain/widgets` / `AlarmStreamState` is deprecated; use `@devicechain/widget-sdk.AlarmStreamState`.
+- `@devicechain/widgets` / `CommandStreamState` is deprecated; use `@devicechain/widget-sdk.CommandStreamState`.
+- `@devicechain/widgets` / `LocationStreamState` is deprecated; use `@devicechain/widget-sdk.LocationStreamState`.
+- `@devicechain/widgets` / `CandidatesState` is deprecated; use `@devicechain/widget-sdk.CandidatesState`.
+- `@devicechain/widgets` / `DatasourceAvailability` is deprecated; use `@devicechain/widget-sdk.DatasourceAvailability`.
+- `@devicechain/widgets` / `HubConnectionBadgeProps` is deprecated; use `@devicechain/widget-sdk.HubConnectionBadgeProps`.
+- `@devicechain/widgets` / `ThemeVar` is deprecated; use `@devicechain/widget-sdk.ThemeVar`.
+- `@devicechain/widgets` / `EChart` is deprecated; use `@devicechain/widget-sdk/echarts.EChart`.
+- `@devicechain/widgets` / `buildLineOption` is deprecated; use `@devicechain/widget-sdk/echarts.buildLineOption`.
+- `@devicechain/widgets` / `buildGaugeOption` is deprecated; use `@devicechain/widget-sdk/echarts.buildGaugeOption`.
+- `@devicechain/widgets` / `resolveChartTheme` is deprecated; use `@devicechain/widget-sdk/echarts.resolveChartTheme`.
+- `@devicechain/widgets` / `useChartTheme` is deprecated; use `@devicechain/widget-sdk/echarts.useChartTheme`.
+- `@devicechain/widgets` / `EChartOption` is deprecated; use `@devicechain/widget-sdk/echarts.EChartOption`.
+- `@devicechain/widgets` / `LineChartOptions` is deprecated; use `@devicechain/widget-sdk/echarts.LineChartOptions`.
+- `@devicechain/widgets` / `GaugeChartOptions` is deprecated; use `@devicechain/widget-sdk/echarts.GaugeChartOptions`.
+- `@devicechain/widgets` / `ChartTheme` is deprecated; use `@devicechain/widget-sdk/echarts.ChartTheme`.
+- `@devicechain/widgets` / `WIDGET_CHANNEL` is deprecated; use `builtinWidgetDescriptors[id].channel`.
+- `@devicechain/widgets` / `WIDGET_BINDS_DATASOURCE` is deprecated; use `builtinWidgetDescriptors[id].datasource.mode !== 'none'`.
+- `@devicechain/widgets` / `isTerminalStatus` is deprecated; use `@devicechain/dashboards.isTerminalCommandStatus`.
+- `@devicechain/widgets` / `OptionIssue` is deprecated; use `@devicechain/widgets.BuiltinOptionIssue`.
+
+#### A redelivered decoder failure uses the record budget {#v160-decoder-redelivery-budget}
+
+A payload decoder failure that is redelivered (for example after a restart with a backlog of a failing device type's uplinks) now uses the per-device-type failure-record budget like any other failure. Once the budget is spent it is counted as suppressed and not written to the failed-events stream, even if its first delivery never produced a record. Previously a redelivered failure was always recorded, so a restart could record every uplink of a backlog.
+
+- **Nothing needs doing.**
+
+#### Invalid ingest failures name the device {#v160-invalid-failures-name-the-device}
+
+Ingest failures with reason `INVALID` that device-management recorded for a readable event (a value that fails its metric's definition, an event older than 366 days, a decoder refusal) now name the device and the event type, and are bounded per device like every other reason. Before this release they were listed with no device and shared one bound of ten records an hour for the whole tenant. Records indexed before the upgrade are not rewritten.
+
+- **Nothing needs doing.** There is no backfill. The existing limits now apply: ten records per device and reason per hour, capped at 1,000 itemized records per tenant and reason per hour. A fleet-wide invalid payload can reach that cap.
+
+#### Metrics and an alert for agent actions (Preview) {#v160-agent-metrics}
+
+`device-management` now reports agent actions: proposals by kind and outcome, approvals by outcome, executions by kind and result with their duration, and proposals that expired. The Platform board gains an **Agent actions (preview)** row, and a new warning alert, `AgentExecutionsFailing`, fires when final approvals keep failing to complete. Refusals do not raise it: a dependency change, a policy refusal, a closed kill fence or an approver refusal is counted under its own result. The metrics are listed in the [metrics reference](./metrics-reference.md), and the alert has an [alert runbook](./alert-runbook.md#agentexecutionsfailing) entry. Like agent actions, they are Preview: names and labels may still change in a minor release.
+
+#### Other changes in v1.6.0 {#v160-other-changes}
+
+- A bootstrap refused before its first write leaves the recorded phase unchanged; MQTT uplink overlay refusals name the conflicting choice.
+- OpenTelemetry diagnostics and errors use the services' structured JSON logs. The broker closes and joins its metrics endpoint at shutdown.
+- The PostgreSQL client dependency moves to `pgx` 5.12.0 with security fixes for `GHSA-j38q-h3ph-jjpq` and `GHSA-95fj-3fxw-g62g`. No configuration change is needed.
+
+#### Schema changes in v1.6.0 and going back {#v160-going-back}
+
+One appended `device-management` migration adds an entity-attribute repair queue and a unique index for live attribute keys. It keeps the lowest row ID among duplicates and queues group-membership and configuration repairs; see [Entity attributes](#v160-entity-attributes). Each entity and scope has one current attribute value per key after repair. No other area appends a schema migration in this release.
+
+There is no downgrade. Retry a failed upgrade with the v1.6.0 tool, roll forward to a corrected release, or restore from a suitable backup. The Preview stream/object commands do not replace database backups or apply a restore.
+
 ### v1.5.0 — reviewed automation changes and sign-in-bound agent approvals {#v150-upgrade}
 
-`v1.5.0` is an in-place upgrade from `v1.4.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Four appended migrations run on upgrade: three in `device-management` and one in `user-management`. They add the agent kill fence and effect outbox, automation reviews and review enforcement, and the actuation generation column. See [Schema changes and going back](#v150-going-back). Coming from `v1.3.0` or earlier, read the [`v1.4.0` notes](#v140-upgrade) first.
+`v1.5.0` is an in-place upgrade from `v1.4.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Four appended migrations run on upgrade: three in `device-management` and one in `user-management`. They add the agent kill fence and effect outbox, automation reviews and review enforcement, and the actuation generation column. See [Schema changes and going back](#v150-going-back). Coming from `v1.3.x` or earlier, upgrade through each intervening minor first, including `v1.4.x`, following each release's notes with that release's own `dcctl` and `--version`: skipping a minor is not a tested path (see [Supported upgrade paths](./versioning-policy.md#upgrade-paths)). For `v1.4.0`, those are the [`v1.4.0` notes](#v140-upgrade).
 
 ```bash
 dcctl install local --version v1.5.0
@@ -994,7 +1295,7 @@ Exactly four migrations are additive and appended. New tables start empty; exist
 
 ### v1.4.0 — confirmed LoRaWAN downlinks, a device's own payload over MQTT, and notifications that name the device {#v140-upgrade}
 
-`v1.4.0` is an in-place upgrade from `v1.3.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described [for v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the settings the cluster was installed with, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Ten appended migrations run on upgrade (two in `device-management`, four in `notification-management`, two in `outbound-connectors` and two in `user-management`); they add tables and columns. The notify-on-clear timestamp migration also sets `notify_on_clear_since = updated_at` where `notify_on_clear` is true and `notify_on_clear_since IS NULL`. See [Schema changes and going back](#v140-going-back). Coming from `v1.2.0` or earlier, read the [`v1.3.0` notes](#v130-upgrade) first and follow them with `--version v1.4.0`.
+`v1.4.0` is an in-place upgrade from `v1.3.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described [for v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the settings the cluster was installed with, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Ten appended migrations run on upgrade (two in `device-management`, four in `notification-management`, two in `outbound-connectors` and two in `user-management`); they add tables and columns. The notify-on-clear timestamp migration also sets `notify_on_clear_since = updated_at` where `notify_on_clear` is true and `notify_on_clear_since IS NULL`. See [Schema changes and going back](#v140-going-back). Coming from `v1.2.x` or earlier, upgrade through each intervening minor first, including `v1.3.x`, following each release's notes with that release's own `dcctl` and `--version`: skipping a minor is not a tested path (see [Supported upgrade paths](./versioning-policy.md#upgrade-paths)). For `v1.3.0`, those are the [`v1.3.0` notes](https://github.com/devicechain-io/devicechain/blob/v1.3.0/docs/docs/deployment/releases-and-upgrades.md#v130-upgrade).
 
 ```bash
 dcctl install local --version v1.4.0
@@ -1165,320 +1466,6 @@ The following migrations are additive and appended. New columns are nullable or 
 - **The relational `max_wal_size` is not written by `dcctl bootstrap --size`.** Set it at install and repeat it on every install; a run without it restores PostgreSQL's default.
 - **Proposals for anything other than alarm ACK/CLEAR do not execute,** even if approved; MCP tools execute no actions.
 - **The kill switch does not reverse an executed action.** It takes effect at the next decision; an action already past that decision may complete.
-
-### v1.3.0 — commands reach HTTP and LoRaWAN devices, and deliveries leave evidence {#v130-upgrade}
-
-`v1.3.0` is an in-place upgrade from `v1.2.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described [for v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). Give `dcctl install` the settings the cluster was installed with, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Ten appended migrations run on upgrade (five in `device-management`, two in `command-delivery`, two in `event-management` and one in `notification-management`), and every area's audit journal gains four nullable columns; they add tables, nullable columns and indexes, and change no existing row. See [Schema changes and going back](#v130-going-back). Run `dcctl install` before the instance upgrade, as above: it also moves the Alertmanager onto the routing configuration that `dcctl` writes (see [Alerts reach a person](#v130-alert-routing)). **Token audiences are now enforced by default:** read [Token audiences are enforced by default](#v130-token-audience) before you upgrade, above all if you write the instance configuration yourself. Coming from `v1.1.0`, read the [`v1.2.0` notes](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-upgrade) first and follow them with `--version v1.3.0`.
-
-```bash
-dcctl install local --version v1.3.0
-dcctl upgrade local devicechain --version v1.3.0 --dry-run
-dcctl upgrade local devicechain --version v1.3.0
-```
-
-The [versioning and upgrade policy](./versioning-policy.md) applies. This release adds to the covered interfaces (new GraphQL queries, mutations, fields and enum values, new HTTP device routes, new `dcctl` flags and commands, a new C# SDK type) and removes none. Three things about the policy itself are new in this release:
-
-- **A preview tier.** A new served surface can spend its first minor releases in [preview](./versioning-policy.md#preview-interfaces), where it may still change in a minor release; the release notes then say what changed and what to do. In this release the preview surfaces are the rule tests (the `evaluateRules` operation of the event-processing API, the scenario and test file formats, and `dcctl test`) and `dcctl product export`, `plan` and `apply` with their bundle format (`product.devicechain.io/v1alpha1`). Build on them, and expect a change to be announced here.
-- **The MCP tool catalog is not covered.** Tool names, inputs and result shapes can change in a minor release, and this one changes them: see [MCP tool results carry their provenance](#v130-mcp-provenance).
-- **Helm values.** The values this release adds or changes are not covered by the compatibility policy, and this section is where a minor release says so. Every new value is off, or keeps the behaviour of `v1.2.0`, by default.
-
-What is new:
-
-- **Token audiences are enforced by default,** as the `v1.2.0` notes announced. An API refuses a token bound to a resource it does not serve with `401`, and the authorization server refuses a request for a resource the instance does not serve with `invalid_target`. Tokens bound to nothing, which includes every sign-in and every service token, are not affected, and neither are MCP tokens. See [Token audiences are enforced by default](#v130-token-audience).
-- **Commands reach devices that hold no connection.** A device that only speaks HTTP fetches its commands with a long poll, acknowledges receipt and answers. A device behind a ChirpStack v4 network server gets its command as a LoRaWAN downlink. Every command now records how its delivery was observed, on every transport. See [Commands over HTTP, and delivery evidence](#v130-http-command-pull) and [LoRaWAN downlink](#v130-lorawan-downlink).
-- **Alerts reach a person.** `dcctl install` and `dcctl upgrade` route the platform's own alerts to a webhook, an email address or a configuration of your own, a dead-man receiver tells you when alerting itself goes quiet, every alert links to a runbook entry, and an instance that routes its alerts nowhere says so. See [Alerts reach a person](#v130-alert-routing).
-- **Outbound webhooks can be signed,** per the open Standard Webhooks specification, for the `httpCall` rule action and for webhook notification channels. See [Signed outbound webhooks](#v130-signed-webhooks).
-- **The HTTP event endpoint tells a device the truth sooner.** An unknown tenant or a credential that will not authenticate is answered `401` at once, a refused document's `400` names the offending field, and an accepted event carries a receipt. See [The HTTP event endpoint answers 401](#v130-http-events-401).
-- **A device can post its own payload for its profile's decoder,** on a new opt-in route. See [A device's own payload, decoded](#v130-device-uplinks).
-- **Certificate connects can be checked with OCSP,** per trust anchor, off by default. See [OCSP for certificate connects](#v130-ocsp).
-- **A tenant's product can be kept as files** with `dcctl product export`, `plan` and `apply` (preview). See [Product as code](#v130-product-as-code).
-- **Detection rules can be unit-tested** with `dcctl test` and the `evaluateRules` query (preview). See [Rule tests](#v130-rule-tests).
-- **Each tenant's daily event usage is recorded** and readable by the operator. See [Event usage per tenant](#v130-usage-metering).
-- **Campaigns send commands on a schedule:** cron, calendar dates, holidays, and sunrise or sunset at each device's own installed position. See [Campaigns](#v130-campaigns) and [Installed position](#v130-installed-position).
-- **Notification deliveries are recorded,** one row per attempt, with each channel's health. See [The notification delivery ledger](#v130-delivery-ledger).
-- **Alarm triage in the console:** alarms link to their device and show units, several can be acknowledged at once, a device has an Alarms tab, and the home page counts alarms and devices online. Operators can also label what an alarm turned out to be. See [The console searches devices and triages alarms](#v130-console) and [Alarm dispositions](#v130-alarm-dispositions).
-- **Vocabulary terms on the native model:** device, asset, area and customer types, relationship types and metrics can carry terms from Brick, SAREF, Smart Data Models and NGSI-LD. See [Semantic bindings](#v130-semantic-bindings).
-- **MCP tool results mark device- and user-written text as data,** under an `untrusted` member with its source. See [MCP tool results carry their provenance](#v130-mcp-provenance).
-
-#### Before you upgrade {#v130-before-you-upgrade}
-
-What needs action, in the order to do it:
-
-- **Check for tokens bound to the wrong resource, and decide whether to opt out of enforcement for this minor.** Token audiences are now enforced by default. On the `v1.2.0` instance, `{__name__=~"devicechain_[a-z0-9]+_token_audience_checks_total", verdict="would_reject"}` and `devicechain_usermanagement_oauth_resource_checks_total{verdict="would_reject"}` should read zero; if they do, the new default changes nothing for your clients. If you supply the instance configuration yourself (`instance.existingSecret`) and run the MCP area, add the `tokenAudience` block to the document first, or AI agents lose MCP access. See [Token audiences are enforced by default](#v130-token-audience).
-- **If you routed alerts by editing the Alertmanager's own Secret by hand, move that configuration to `dcctl install --alert-config <file>` first.** From this release the Alertmanager reads the Secret `dc-alertmanager-config` that `dcctl` writes, so a hand-edited configuration stops being read when you run `dcctl install`. A cluster installed by an earlier release also needs one `dcctl install` before `dcctl upgrade` accepts the `--alert-*` flags. See [Alerts reach a person](#v130-alert-routing).
-- **Know that `POST /{instanceId}/{tenant}/events` now answers `401` for an unknown tenant or a credential that will not authenticate.** These requests used to be answered `202` and were then refused later, so their events were never stored. A device that sees `401` needs its tenant name or credential fixed; a device whose events are stored sees no change. During the rolling upgrade, old pods still answer `202` for these requests. See [The HTTP event endpoint answers 401](#v130-http-events-401).
-- **Switch a trust anchor's OCSP mode on only after the rolling upgrade has completed.** Until every `device-management` replica runs this release, older replicas do not check OCSP, so a certificate one replica refuses could still be admitted by another. See [OCSP for certificate connects](#v130-ocsp).
-- **Turn on the other new opt-in features only after the rollout completes, too.** Each is off by default and has the same reason: a pod of `v1.2.0` that is still running does not know it.
-  - Set a device type's `commandChannel` to `HTTP_PULL` only after every replica of every service is upgraded; an older `command-delivery` publishes such a device's commands where nobody reads them, and they time out.
-  - Turn on `httpIngest.deviceUplinks` only after every `device-management` replica is upgraded; an older one refuses the uplink after it was answered `202`.
-  - Turn on webhook signing (`signingSecretRef` on an `httpCall` action, `"signing": true` on a webhook channel) only after every `outbound-connectors` and `notification-management` replica is upgraded; an older one delivers unsigned.
-  - Create campaigns with sunrise or sunset triggers after the rollout: a `user-management` replica of `v1.2.0` refuses to mint the token that reads installed positions, so solar planning reports an error and retries until it is gone.
-- **Move any `httpCall` Bearer credential handle that starts with `webhook-signing/`.** That namespace is now reserved for signing secrets, and a rule naming such a handle is refused when it is published. See [Signed outbound webhooks](#v130-signed-webhooks).
-- **Update MCP clients that read free text from a tool result.** A device's name, description and external id, a metric's name and unit, an alarm's key and a command's name and error now sit under `untrusted`, as `{ "value": ..., "source": ... }`. The MCP tool catalog is not a covered interface, so this ships in a minor release. See [MCP tool results carry their provenance](#v130-mcp-provenance).
-- **Expect `devicechain_eventprocessing_detect_late_samples_total` to read higher.** Late readings that a closed tumbling window or a closed session drops are now counted, as every other rule kind's already were; until now those drops were silent. Detection results do not change. Re-baseline a dashboard or alert you tuned against the old rate. See [Rule tests](#v130-rule-tests).
-- **Publish profiles and asset types that carry semantic bindings after the rollout.** During the rolling window an older pod that serves the publish writes a snapshot without the bindings. The draft keeps them, and the next publish from an upgraded pod freezes them. See [Semantic bindings](#v130-semantic-bindings).
-- **Expect the `event-management` migration to take longer on a large event store.** It builds an index on the events table one chunk at a time. See [Event usage per tenant](#v130-usage-metering).
-- **Add the new alerts and metrics to your routing and dashboards.** `devicechain_usermanagement_service_token_checks_total` is new ([details](#v130-service-token-ceiling)), as are the OCSP series on certificate connects and `devicechain_notificationmanagement_ledger_writes_total`.
-- **Nothing needs doing for anything else in this release.** Every other change is additive or off by default. `infrastructure.tokenAudience.enforcement: observe` is accepted in this release only, as an opt-out, and `v1.4` refuses it. The `v1.2.0` deprecation of a `client_credentials` request that names a `resource` without a `scope` still stands.
-
-New authorities:
-
-- **`usage:read`** is a system-tier authority. It reads each tenant's event usage on the event-management admin API. The built-in `superuser` role holds `*` and so has it; grant it to another system role to let that role read usage. No tenant role can hold it.
-- **`location:installed:read`** is a tenant-tier authority. It reads a device's or an asset's installed position and nothing else. `location:read` implies it, so a role that already holds `location:read` (and `tenant-admin`, which holds `*`) needs no change. It is not in the viewer baseline: a role that should see installed positions but not live device locations is granted `location:installed:read` alone.
-
-New Helm values, each off or unchanged by default:
-
-| Value | Default | What it does |
-| --- | --- | --- |
-| `functionalAreas.device-management.config.callout.ocsp.enabled` | `false` | The instance switch for OCSP. With it off no responder is asked; see [OCSP](#v130-ocsp) for the other `ocsp.*` keys. |
-| `functionalAreas.device-management.config.callout.ocsp.allowRequireCurrent` | `false` | Lets an anchor use `REQUIRE_CURRENT`. |
-| `functionalAreas.event-sources.config.httpIngest.deviceUplinks` | `false` | Serves `POST /{instanceId}/{tenant}/devices/{token}/uplink`. |
-| `functionalAreas.event-sources.config.httpIngest.maxCommandPollsPerTenant` | `256` | Held HTTP command polls per tenant per replica; one more is answered `429`. Not listed in the chart's `values.yaml`; set it if you need another cap. |
-| `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled` | `false` | Sends commands to LoRaWAN devices through their network server. Not listed in the chart's `values.yaml`; set it to turn the feature on. |
-
-#### Token audiences are enforced by default {#v130-token-audience}
-
-The `v1.2.0` notes announced this: what [Tokens are checked against their resource](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-token-audience) counted as `would_reject` is now refused. An unset `infrastructure.tokenAudience.enforcement` means `enforce`, for both checks:
-
-- **An API refuses a token bound to a resource it does not serve,** with `401`, the same answer as for an invalid token. An area's API accepts a token bound to nothing, to that area, or to a registered MCP server.
-- **The authorization server refuses a request for a resource this instance does not serve:** `invalid_target` at the authorization endpoint and in the `client_credentials` grant, and `invalid_grant` for a refresh or an authorization code bound to a resource that is no longer served. A refresh token refused that way is spent, so the client must authorize again.
-
-Tokens bound to nothing are not affected. That includes every sign-in from the console, the dashboard app, the C# SDK and `dcctl`, and every service token. MCP tokens are bound to the MCP server, which the chart registers, so they are not affected either. Under `enforce` the refusals are counted on the same series with `verdict="rejected"`, and the two `info` alerts, `TokenAudienceWouldReject` and `OAuthResourceWouldReject`, can fire only on an instance that set `observe`.
-
-What a refusal looks like: a service account that asks for a token bound to one area, and uses it on another, is refused there.
-
-```bash
-TOKEN=$(curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
-  -d grant_type=client_credentials -d scope=read-only \
-  --data-urlencode "resource=https://dc.example.com/api/device-management" \
-  https://dc.example.com/api/user-management/oauth/token | jq -r .access_token)
-
-# Accepted: the token is bound to device-management.
-curl -s -o /dev/null -w '%{http_code}\n' https://dc.example.com/api/device-management/graphql \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"query":"{ __typename }"}'
-
-# 401 under enforce: event-management does not accept a token bound to device-management.
-curl -s -o /dev/null -w '%{http_code}\n' https://dc.example.com/api/event-management/graphql \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"query":"{ __typename }"}'
-```
-
-An integration that calls more than one area should leave out the `resource`: an unbound token is accepted by every area. See [Binding a token to a resource](../user-guide/service-accounts.md#binding-a-token-to-a-resource).
-
-**Before you upgrade,** check the `v1.2.0` instance for traffic that enforcement would refuse:
-
-- The API counter is one series per area, and its name carries the area without hyphens: `devicechain_devicemanagement_token_audience_checks_total`, `devicechain_eventmanagement_token_audience_checks_total`, and so on. Select them all with `{__name__=~"devicechain_[a-z0-9]+_token_audience_checks_total", verdict="would_reject"}`. The authorization server's counter is `devicechain_usermanagement_oauth_resource_checks_total{verdict="would_reject"}`. Both should read zero, and the two alerts should be quiet.
-- If either moves, the rate-limited warnings name the client: `Token audience is not accepted by this plane` in the area's log, and `OAuth resource is not one this instance serves` in the `user-management` log. Change the `resource` that client sends: leave it out, or use one the instance serves.
-
-**To opt out for this minor,** set `enforcement: observe` before you upgrade, so that no pod enforces during the roll. In Helm values or a `dcctl` [values overlay](./tuning-an-instance.md#tunable) the key is `instance.config.infrastructure.tokenAudience.enforcement`. `v1.4` refuses `observe`: a service stops at startup, and the chart's values schema rejects it. Without the opt-out, old and new pods overlap during the roll, so for a few minutes a token bound to the wrong resource can be accepted by a `v1.2.0` replica and refused by a `v1.3.0` one.
-
-:::warning Plain Helm with `instance.existingSecret` loses MCP access unless the document lists it
-The chart does not write the `tokenAudience` block into a configuration you supply yourself. Under `enforce`, the `mcp` area checks at startup that its `resourceUrl` is listed in `infrastructure.tokenAudience.mcpResources`, and **refuses to start** if it is not, so AI agents lose MCP access. `dcctl upgrade` refuses such a document before anything rolls, but a plain `helm upgrade` cannot look inside your Secret. Before you upgrade, add the block to the document, with your origin and the MCP server's `resourceUrl` exactly as the `mcp` area is configured, with a lowercase scheme and host:
-
-```json
-"infrastructure": {
-  "tokenAudience": {
-    "areaBaseUrl": "https://iot.example.com/api",
-    "mcpResources": ["https://iot.example.com/api/mcp"]
-  }
-}
-```
-
-Or set `"enforcement": "observe"` in the same block. Either way, **set `instance.existingSecretChecksum` to the sha256 of the new `instance` document**, or no pod is rolled and every pod keeps reading the old one.
-:::
-
-- **If you set `functionalAreas.mcp.config.resourceUrl` by hand** with an uppercase letter in its scheme or host, or to an area's own identifier such as `<origin>/api/device-management`, `helm upgrade` now fails and says why. Lowercase it or move it, or set `observe`; under `observe` the chart leaves such a value out of the list, as `v1.2.0` did.
-- **Going back to `v1.2.0`** needs nothing for this: `v1.2.0` reads the same block and defaults to `observe`.
-
-#### Alerts reach a person {#v130-alert-routing}
-
-Every alert rule the chart ships now carries a `runbook_url` that opens its entry in the new [Alert Runbook](./alert-runbook.md). Nothing else about a rule changes: names, expressions, `for` durations and labels are as they were.
-
-`dcctl install` and `dcctl upgrade` take `--alert-webhook`, `--alert-email` (with `--alert-smtp-host`, `--alert-smtp-from`, `--alert-smtp-user` and `--alert-smtp-password-file`), `--alert-config`, `--alert-watchdog-webhook` and `--clear-alert-routing`. The Alertmanager now reads its configuration from the Secret `dc-alertmanager-config` in the `monitoring` namespace, which `dcctl install` writes before it applies the monitoring stack. A re-run of `dcctl install` with no `--alert-*` flag keeps the routing that is there, and a first install with none writes a configuration with no receiver, which is the behaviour of earlier releases. Naming any `--alert-*` flag restates all of the routing. With `--alert-watchdog-webhook`, the always-firing `Watchdog` alert goes to that receiver every minute, so its silence tells you alerting has stopped.
-
-An instance reports whether anything is listening in its new `AlertsRouted` condition, and `dcctl instances list` shows `ALERTS NOT ROUTED` for one that routes nowhere. The condition never makes the instance unready.
-
-Re-run `dcctl install` once on a cluster installed by an earlier release before using the flags with `dcctl upgrade`; `dcctl upgrade` refuses otherwise, because the older Alertmanager reads no Secret of ours. `--alert-config` is checked by `dcctl` for the mistakes that would leave alerts unrouted, but it is not Alertmanager's own parser: run `amtool check-config` on the file first. See [Routing alerts to a person](./observability.md#alert-routing).
-
-#### Commands over HTTP, and delivery evidence {#v130-http-command-pull}
-
-A device that only speaks HTTP, such as a battery sensor that wakes, reports and sleeps, can now receive commands. Set its device type's `commandChannel` to `HTTP_PULL`, and its commands wait for the device to ask:
-
-- `GET /{instanceId}/{tenant}/devices/{device}/commands?wait=0..30` holds the request for up to `wait` seconds (25 by default) until a command is due;
-- `POST .../commands/{command}/ack` acknowledges receipt, before the device acts;
-- `POST .../commands/{command}/response` answers.
-
-The device presents its access token on every request. A device type with no channel set, or with `PUBLISH`, is delivered to exactly as before. A command for a pull device can be `deliveryMode: ONEWAY` (completed by its acknowledgement) and can set `maxAttempts`; for any other device those options are refused with `DELIVERY_OPTION_NOT_APPLICABLE`. Each `event-sources` replica holds at most `httpIngest.maxCommandPollsPerTenant` polls for one tenant (256 by default) and answers `429` past it. The C# SDK has a new `HttpCommandPuller`.
-
-Every command now records its delivery evidence: `deliveredTime` and `deliveryEvidence` (`DEVICE_ACK` for a pull device's acknowledgement, `DEVICE_RESPONSE` for an answer on any transport). No new command status is added. See [Devices that fetch their commands over HTTP](../concepts/commands.md#http-command-pull).
-
-- **Turn it on after the rollout.** Upgrade `device-management` first, and set `HTTP_PULL` only once every replica of every service runs this release. A `command-delivery` replica that is already upgraded while `device-management` is not yet holds the commands of every device it asks about, and releases them once `device-management` answers, so ordinary devices are delayed for the overlap, never sent to the wrong place.
-- **The new route is not exposed through the chart's ingress,** the same as `/events`.
-
-#### LoRaWAN downlink {#v130-lorawan-downlink}
-
-A command to a device that reports through an inbound integration can now be sent to the device as a LoRaWAN downlink, queued on its ChirpStack v4 network server. This first release takes raw `hex` or `base64` payloads and sends unconfirmed downlinks; `confirmed: true` is refused, never downgraded. The link is a published connector of the new type `lorawan_downlink`, and its ChirpStack API key is the connector's sealed secret. Success means the network server queued the downlink, not that the device received it.
-
-It is off unless `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled` is `true`; the chart then makes `command-delivery` dispatch these commands, and refuses a hand-set copy of that flag. The `connectorTypes` query lists one more value. The first time it is turned on, a command dispatched in the seconds before the adapter starts times out. See [LoRaWAN downlink](../guides/inbound-integrations.md#lorawan-downlink).
-
-#### Signed outbound webhooks {#v130-signed-webhooks}
-
-The `httpCall` rule action and the webhook notification channel can sign what they send, per the open Standard Webhooks specification. A signed delivery carries `webhook-id`, `webhook-timestamp` and `webhook-signature`; the body is unchanged, and an unsigned delivery is exactly what it was. A signing secret is generated by the platform, shown once and never readable again, and can be rotated with an overlap during which deliveries carry both signatures. A delivery that should be signed and cannot be is refused, never sent unsigned. See [Signing outbound webhooks](../guides/signed-webhooks.md).
-
-- **Enable signing after the rollout.** An older `outbound-connectors` or `notification-management` replica ignores `signingSecretRef` and `signing`, and delivers unsigned.
-- **`webhook-signing/` is reserved.** A rule whose Bearer credential handle sits under it is refused at publish; move the handle first.
-- **A new secret takes up to a minute to reach every `httpCall` delivery,** because the connectors service caches secrets.
-
-#### The HTTP event endpoint answers 401 {#v130-http-events-401}
-
-`POST /{instanceId}/{tenant}/events` used to answer `202 Accepted` for requests that could never be stored: a tenant name with a typo in it, or a credential that would not authenticate. They were refused later, and the device had been told its data was safe. They are now refused at the door:
-
-- **`401`** for an unknown tenant and for a credential that will not authenticate (unknown, expired, a wrong secret, another device's, or missing where the instance requires one). Every cause gets the same status, headers and body, `{"error":"unauthorized"}`, so the endpoint does not reveal which tenants or devices exist. Operators tell the causes apart on `total_http_ingest_refused{source,reason}` and in a sampled log line.
-- **`400` stays `400`** for a malformed payload. A body that is valid JSON but refused now carries a JSON body whose `errors` name each offending value with a JSON Pointer; `message` is the sentence the plain-text body always carried. A body that is not JSON keeps its plain-text `400`.
-- **`X-DC-Event-Id`** on a `202`, and on a refused document's `400`, is a receipt for the request.
-
-The check fails open: if the services it asks are slow or unreachable, the request is accepted as before and judged later. A credential that fails five times in a row is not asked about again for a while (1 second, doubling to 60), so the `401` cannot be used to guess secrets. The cached answer is not an authority: `device-management` still authenticates every event, so a credential that was just disabled is accepted at the door for at most 30 seconds and then refused as before. The refusals made at the door are counted and logged, but they are not failed-event records.
-
-#### A device's own payload, decoded {#v130-device-uplinks}
-
-A device that sends a binary or vendor JSON payload of its own, rather than the DeviceChain event document, can post it to `POST /{instanceId}/{tenant}/devices/{token}/uplink`, and the payload decoder on its device type's profile reads it. The device presents its own credential in the `X-DeviceChain-Credential-*` headers, and it is proven before anything else: a caller without it gets one `401`, whether or not the device exists or has a decoder. The decode, its budget, its health and its samples are the ones the inbound integration route uses. A device type with no decoder is answered `422`.
-
-The route is off unless `functionalAreas.event-sources.config.httpIngest.deviceUplinks` is `true`. Turn it on only after every `device-management` replica runs this release: an older replica refuses such an uplink and records it as a failed event after the device was answered `202`.
-
-#### OCSP for certificate connects {#v130-ocsp}
-
-A trust anchor can now ask the certificate authority's OCSP responder whether a certificate is still good, as a second revocation source beside the [revocation lists](../concepts/device-certificates.md#revocation) you upload. It is off everywhere by default: the instance switch `functionalAreas.device-management.config.callout.ocsp.enabled` is `false`, and every anchor's new `ocspMode` is `OFF`.
-
-- **`ENFORCE_KNOWN`** refuses a certificate the responder says is revoked and admits one whose status it cannot learn.
-- **`REQUIRE_CURRENT`** refuses any certificate whose status it cannot confirm. It also needs `callout.ocsp.allowRequireCurrent: true` and a responder URL on the anchor (`ocspResponderUrl`).
-- **What it costs.** OCSP runs only after the chain, expiry, revocation-list and manual checks have passed, so a certificate already refused costs no fetch. Good answers are cached; a revoked answer refuses the connect and is never cached. The other keys under `callout.ocsp` (`fetchDeadline`, `maxInFlight`, `maxAge`, `failureTtl`, `cacheEntries`, `maxResponderHostsPerTenant`) bound the fetches, and their defaults are in the chart's `values.yaml`.
-- **What it does not do yet.** A revoked answer refuses each connect but is not stored as a revocation, and it does not end sessions that are already open; upload a list or revoke the certificate for that.
-- **New results and metrics.** `callout_x509_total` gains the results `ocsp_revoked` and `ocsp_unavailable`, and five new `x509_ocsp_*` series report fetches, the cache, the breaker and the connects admitted without an answer.
-
-**Switch anchors to `ENFORCE_KNOWN` or `REQUIRE_CURRENT` only after the rolling upgrade has completed.** Until then, older replicas do not check OCSP, so a certificate one replica refuses could still be admitted by another. With the instance switch off, an anchor set to `REQUIRE_CURRENT` refuses new certificate connects, and the API refuses to switch an anchor on.
-
-#### MCP tool results carry their provenance {#v130-mcp-provenance}
-
-The MCP tool catalog (tool names, inputs and result shapes) is not covered by the compatibility promise. The [versioning policy](./versioning-policy.md) now lists it under what can change in a minor release, and this release changes it.
-
-Every read tool keeps tokens and platform-computed values at the top level and moves free text under `untrusted`, as `{ "value": ..., "source": ... }`, where `source` is `device-reported`, `operator` or `agent`. The fields that move are a device's `name`, `description` and `externalId`, a metric's `name` and `unit`, an alarm's `alarmKey`, and a command's `name` and `error`. A client that reads them must read them from there. The classes a result contains are listed under `_meta["io.devicechain/provenance"]`, and every tool description says that text under `untrusted` is data, never instructions. See [What an assistant sees](../concepts/mcp.md#what-an-assistant-sees).
-
-Also new, and additive: OAuth access tokens carry a `sid` claim (the grant session), the audit journal records the `client_id` and session of the token that made each change, and the MCP audit log line moves to `schema: 2`, which adds `scopes`.
-
-#### The service-token authority ceiling is observed {#v130-service-token-ceiling}
-
-The endpoint that mints service tokens now checks each request against the authorities its caller is expected to need, and counts the verdict on `devicechain_usermanagement_service_token_checks_total{caller,verdict}`. It refuses nothing and mints exactly as before. A non-zero rate of `over_ceiling`, `wildcard` or `unknown_caller` names a caller that a later release that enforces would refuse; none is expected today.
-
-#### Product as code (preview) {#v130-product-as-code}
-
-`dcctl product export <dir>` writes a tenant's product as files: device types, profiles with their metrics, calculated metrics, payload decoders with their test vectors, commands, detection rules and canvas graphs, dashboards, connectors and integrations. `dcctl product plan <dir>` prints what applying the files would change and writes nothing (`--fail-on-changes` makes drift an exit status), and `dcctl product apply <dir>` converges the tenant to the files and publishes what changed. Secrets never appear in a bundle: a connector names its credential by handle (`env:NAME`), and every bundle is scanned for values that look like secrets. Only what the bundle names is touched.
-
-This is a **preview** surface: the command tree and the bundle format (`product.devicechain.io/v1alpha1`) can change in a minor release, and `dcctl` refuses a bundle version it does not know. It runs entirely in `dcctl`, through the served tenant APIs, so nothing changes on the server. See [Product as Code](../guides/product-as-code.md).
-
-#### Rule tests (preview) {#v130-rule-tests}
-
-`dcctl test <dir|file>` runs deterministic unit tests for detection rules. A `scenario.yaml` describes devices and their readings (constant, a bounded random walk, a step schedule, or a CSV or NDJSON file) with faults (gaps, duplicates, reordering, offline windows) and a seed, and `*.test.yaml` files state what must happen: an alarm raised or cleared within a time, never raised, a command or webhook requested, and so on. `dcctl test` prints a report, can write JUnit XML (`--junit`), and exits `0` when every expectation held, `1` when one failed, and `2` when something could not be judged. A run that cannot answer is never green.
-
-It drives a new query, `evaluateRules` (event-processing tenant API, `device:read`), which runs a profile's published rules, or a draft, over the events in the request, in event time with live's lateness, and returns the edges, the actions they would request and why any result is partial. It executes nothing and touches no stream. The file formats (`devicechain.io/ruletest/v1alpha1`), the query and the command are in the **preview** tier.
-
-- **`devicechain_eventprocessing_detect_late_samples_total` reads higher.** Late readings dropped by a closed tumbling window or a closed session are now counted, as every other rule kind's were. Detections do not change; a dashboard or alert you tuned against the old rate needs re-baselining.
-
-#### Event usage per tenant {#v130-usage-metering}
-
-`event-management` keeps a daily record of what each tenant used: the events it ingested, and the devices that sent them (distinct, peak in an hour, and the hourly average). An operator reads it with the `tenantEventUsage(tenant, from, to)` query on the new instance-scoped `/admin/graphql` endpoint of `event-management`, which needs an identity token holding `usage:read`. The record reports usage and enforces nothing.
-
-- **Events are counted on the day they were received,** not the day they are dated, so a late or backfilled reading never revises a finished day, and a redelivered duplicate is counted once.
-- **An hour is final 10 minutes after it closes,** and a final hour is never rewritten. A day reads `complete` once all 24 of its hours are final. As a result, **an event stored more than 10 minutes after the end of the hour in which it was received is not counted.**
-- **The record starts on the UTC day the upgraded service first runs.** Earlier days read as not complete. Events received after the upgrade but dated inside chunks that were already compressed at that time are not counted.
-- **The upgrade builds an index on the events table** one chunk at a time, so it does not hold writes to the whole table, but on a large store the `event-management` migration takes longer than usual.
-
-#### Campaigns {#v130-campaigns}
-
-A campaign sends a series of commands, with a delay between steps, to the devices of an entity group on a schedule: a cron expression in a named time zone, calendar dates and times, or sunrise or sunset plus an offset, computed for each device from its [installed position](#v130-installed-position). Holidays suppress a firing; they never move it. Daylight-saving changes follow one rule: a time inside a spring-forward gap fires at the jump, and a repeated hour fires once. Each firing is tracked per device (pending, dispatched, refused or skipped, with a reason), and `retryCampaignFailed` sends the cycle's command again to the devices whose command did not succeed. Commands go through the usual batch path, so maintenance windows still apply. Every replica runs the scheduler, and the database decides which one sends each command, so nothing is sent twice.
-
-- **A campaign cannot be edited.** Delete and recreate it; a recreated campaign sends nothing that fell due before it was created.
-- **Targets are groups.** Use a dynamic group to select an area's devices.
-- **Solar triggers need the rollout to finish.** Until no `user-management` replica of `v1.2.0` is left, planning a sunrise or sunset firing reports an error and retries.
-
-#### Installed position {#v130-installed-position}
-
-A device or an asset that does not move, such as a streetlight, a parking space or a cabinet, can now have an installed position: `setInstalledPosition` and `clearInstalledPosition` (`device:write`), the optional `installedLatitude`, `installedLongitude`, `installedElevation` and `installedAccuracy` columns of a fleet import, and the `installedPosition` field on `Device` and `Asset`. Reading it needs the new `location:installed:read`, which `location:read` implies. It never falls back to a position the device reported. `positionWithheld` on every device and asset tells a caller that it may not see the position, without revealing whether one exists. An area can name its boundary fence (`boundaryFenceToken`); a fence an area names cannot be deleted.
-
-#### The notification delivery ledger {#v130-delivery-ledger}
-
-Each attempt to send an alarm's notification through a channel now writes one row: what triggered it, the policy, the channel, the recipients, the outcome (`SENT`, `FAILED`, `REFUSED` or `NOT_ATTEMPTED`), the attempt number, the latency and a classified error code. Read it with `notificationAttempts` (`notification:read`); `NotificationChannel.deliveryHealth` gives each channel's last success, last failure and consecutive failures. Delivery URLs, which can themselves be credentials, are never stored. Rows are kept for 7 days by default.
-
-The ledger never delays a page: rows are written in the background from a bounded queue, and a full queue drops the row and counts it on `devicechain_notificationmanagement_ledger_writes_total{outcome}`. So a row proves an attempt happened; a missing row proves nothing.
-
-#### Alarm dispositions {#v130-alarm-dispositions}
-
-`setAlarmDisposition` labels the current cycle of an alarm as `TRUE_POSITIVE`, `FALSE_POSITIVE` or `EXPECTED`, with an optional note (`alarm:write`). A label belongs to one cycle: when the alarm is raised again, the new cycle starts unlabelled and earlier cycles keep theirs. `Alarm.disposition` reads the current cycle's label, and `alarmDispositions` lists every labelled cycle. Labelling changes nothing else about the alarm. A customer-limited member reads the labels of cycles it could see and cannot write one.
-
-#### Semantic bindings {#v130-semantic-bindings}
-
-A tenant can attach terms from a vocabulary to the model it already has: `semanticTypes` on device, asset, area and customer types, `semanticPredicate` and `semanticInverse` on relationship types, and `semanticProperty` and `semanticPointClass` on metrics. The vocabularies shipped are Brick 1.4.4, SAREF 4.1.1 with SAREF4CITY and SAREF4BLDG, the Smart Data Models for street lighting, parking and environment, and the NGSI-LD core terms. A tenant enables the ones it uses, and may add prefixes of its own, with `setSemanticContext` (`device:write`). Every term is checked for existence and kind, stored as a full IRI, and refused with `INVALID_ARGUMENT` naming the term; a context change that would leave a stored binding unexplained is refused with `SEMANTIC_CONTEXT_IN_USE`. `thingModel(includeSemanticTypes: true)` adds each metric's semantic property and point class to its property's `@type`; by default its output is unchanged.
-
-- **During the rolling window,** an older pod that publishes a profile or an asset type writes a snapshot without the bindings. The draft keeps them, and the next publish from an upgraded pod freezes them.
-
-#### The console searches devices and triages alarms {#v130-console}
-
-The device search and the device-type search take one new optional argument each, `nameContains`: a case-insensitive substring match on the name or the token, where `%` and `_` match themselves and blank text matches everything. A client that does not send it sees the same results as before. In the console, the devices list has a name search and a device-type filter, both kept in the page address, and the type pickers on the device, bulk-create, import and provisioning-profile forms search the server as you type instead of reading the first 1,000 types.
-
-The alarm list links each alarm to its device, prints values with the unit the device's profile declares, acknowledges several selected alarms in one request, and keeps its filters in the page address. A device has an Alarms tab, and the home page counts active alarms by severity and devices online and offline. These are console changes only.
-
-#### A device clock that runs ahead no longer moves other tenants' detection {#v130-detect-watermark}
-
-Detection keeps one logical clock for the whole instance, and it used to follow the newest event time it had seen. The platform accepts event times up to five minutes ahead of the server clock, so one device with a fast clock could carry that shared clock ahead of real time. Every tenant's absence timers then fired early, and windowed readings from devices with correct clocks were dropped as late. From this release a message moves the shared clock no further than the time the broker stored it, plus the configured lateness. The event keeps its own time, so its readings are still windowed and ordered at the instants the device reported, and the replay preview applies the same bound.
-
-- **Detection results change only in the case that was wrong.** A device whose clock is within the lateness of the broker's (5 seconds by default) behaves as before. For a device running further ahead, other devices' absence alarms now fire at their true deadline, and a fast device's own timers wait for real time to reach them.
-- **Snapshots carry a frontier version.** A detection snapshot written by this release records it, and restoring an earlier snapshot still works. In the first moments after the upgrade the restored clock can still be as far ahead as it was; it corrects itself as real time catches up, and the service logs a warning when it restores such a snapshot. During a rolling upgrade, a pod of the previous release that takes over writes snapshots without the version and ignores it when reading, so nothing needs doing.
-- **This does not cover the opposite case.** A device that uploads old readings (store and forward) can still have them dropped as late by windowed rules, because the shared clock has moved on. Per-device clocks are not part of this release.
-
-#### Edge agents {#v130-edge}
-
-Nothing here needs action; both are off by default and change nothing until an agent is configured for them.
-
-- **An agent can keep an event until the platform has accepted it.** With `uplink.retireOn: accept`, the agent deletes a buffered event only when the platform reports that it was durably accepted, and offers it again if the platform shed it over the tenant's ingest ceiling. The default, `puback`, behaves as before. Upgrade the platform before you switch an agent to `accept`: an agent in that mode cannot connect to an older platform, and the connect error names `uplink.retireOn`. When its spool nears its budget, an agent can also shed buffered events by priority class (`local.priority.*`). See [Retiring events on the platform's acceptance](./edge-services.md#retire-on-accept).
-- **The agent side of command downlink to devices behind it** ships with `commands.enabled` off. The platform does not yet route gateway commands, so it has no effect in this release.
-
-#### Documentation, sample hosts and agent notes {#v130-docs-hosts}
-
-The .NET and Unity SDK documentation and the `DeviceChainClient.Origin` doc comment used `demo.devicechain.io` as their example host, which does not resolve; they now use `devicechain.example.com`. The SDK has no default host, so no behaviour changes. A new [Device APIs at a glance](../reference/device-apis.md) page gives one command for each way a device reaches the platform, and the `@devicechain/client` and `@devicechain/widget-sdk` packages and the .NET SDK each carry an `AGENTS.md` for coding agents. A new [Security process](./security-process.md) page describes how vulnerabilities are handled (the acknowledge-and-triage target is now 24 hours) and what each release publishes.
-
-#### Other changes in this release {#v130-other-changes}
-
-Nothing here needs action.
-
-- **LwM2M: device information from devices that answer in TLV.** `lwm2m.readDeviceInfo` and the device-information harvest at registration read only plain-text answers, so a client that answers a single-resource read in LwM2M TLV, as Eclipse Leshan does, had nothing recorded. TLV answers are now decoded.
-- **The [transport matrix](../reference/transport-matrix.md) is generated from a conformance run** in which third-party clients (Eclipse Paho, curl, Eclipse Leshan and Eclipse Tahu) drove a real instance, and every cell is judged by what the platform stored.
-- **`dcctl install` no longer requires the `helm` command.** The chart is installed through Helm's library inside `dcctl`; `tofu` (or `terraform`) is still required.
-- **`dcctl bootstrap --values` no longer fails on a fresh instance** with "changed while the values overlay was being recorded". A status write by the operator moved the instance's version under it; `dcctl` now retries when only the status moved, and still refuses when anything else changed. The same applies to recording the front end and the event-envelope switch.
-
-#### Schema changes and going back {#v130-going-back}
-
-The following migrations are appended. Every new column is nullable and every new table starts empty, so a service from `v1.2.0` that runs against the new schema writes rows it can still store.
-
-- **OCSP on trust anchors** (`device-management`, migration `20261113100000`). Two nullable columns on `device_trust_anchors`: `ocsp_mode` and `ocsp_responder_url`. An empty mode reads as `OFF`.
-- **HTTP command channel** (`device-management`, migration `20261114120000`). One nullable column, `command_channel` on `device_types`. Empty reads as `PUBLISH`.
-- **Delivery evidence** (`command-delivery`, migration `20261114120100`). Five nullable columns on `commands`: `delivered_time`, `delivery_evidence`, `delivery_mode`, `max_attempts` and `delivery_attempts`.
-- **Audit journal identity** (every area). The audit journal table `audit_events`, which each area keeps beside its own tables, gains four nullable columns: `client_id`, `session_id`, `on_behalf_of` and `proposal`. They are added at start-up, as the table itself always has been, rather than by a numbered migration.
-- **Event usage** (`event-management`, migrations `20261107000000` and `20261108000000`). Five new tables, `tenant_usage_daily`, `tenant_usage_hourly`, `tenant_usage_devices`, `tenant_usage_ledger` and `tenant_usage_state`, and a BRIN index on `events.processed_time`, built one chunk at a time.
-- **Notification delivery ledger** (`notification-management`, migration `20261108000100`). One new table, `notification_attempts`, with three indexes.
-- **Installed position** (`device-management`, migration `20261112120000`). Six nullable columns on `devices` and on `assets` (`installed_lat`, `installed_lon`, `installed_elev`, `installed_accuracy`, `installed_source` and `installed_updated_at`), one on `areas` (`boundary_fence_token`) and a partial index on it.
-- **Alarm dispositions** (`device-management`, migration `20261114090000`). One new table, `alarm_dispositions`, whose rows are removed with their alarm.
-- **Campaigns** (`command-delivery`, migration `20261116120000`). Three new tables, `campaigns`, `campaign_cycles` and `campaign_elements`, with their indexes.
-- **Semantic bindings** (`device-management`, migration `20261120120000`). Nullable columns for the bindings on the type, relationship-type and metric tables, and one new table, `semantic_contexts`.
-
-**Nothing in a database needs undoing to go back to `v1.2.0`:** the new tables, columns and indexes stay in place and the `v1.2.0` services ignore them. Before going back, set every trust anchor's OCSP mode back to `OFF` and every device type's `commandChannel` back to `PUBLISH`, and turn off `httpIngest.deviceUplinks`, `lpwanDownlink.enabled` and webhook signing, since `v1.2.0` does not know them. Roll forward when you can: a failed upgrade is fixed by running `dcctl upgrade` again.
-
-#### Known issues {#v130-known-issues}
-
-- **Fail-closed MQTT acknowledgement is off by default,** as in `v1.2.0`. The [MQTT transport](../reference/transport-matrix.md#mqtt--the-platform-broker) page states the measured limits with it off and on.
-- **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not. **Fixed in `v1.6.0`:** see [A full broker reload keeps the devices the auth callout admitted](#v160-broker-reload).
-- **`eventSources.ingestMetering: lagCredit` is still not available,** and is refused at startup; see [Ingest metering](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-ingest-metering). It arrives, opt-in, in [`v1.4.0`](#v140-ingest-metering).
-- **OCSP does not yet store what it learns or end open sessions,** as described under [OCSP for certificate connects](#v130-ocsp).
-- **An event stored more than 10 minutes after the end of the hour in which it was received is not counted in the tenant's usage record,** and neither is an event received after the upgrade but dated inside a chunk that was already compressed. See [Event usage per tenant](#v130-usage-metering).
 
 ### v0.27.0 — devices sign in by certificate, and Sparkplug commands work {#v0270-upgrade}
 
@@ -1785,9 +1772,7 @@ internal port. See [Endpoints that never leave the cluster](../concepts/security
 
 - **The chart no longer sets an nginx configuration snippet.**
 - **The ingress controller `dcctl install` sets up is unchanged in this release** and still accepts
-  snippets, because instances not yet upgraded rely on them. A later release turns snippets off, behind a
-  `dcctl install` check that refuses while any Ingress of the controller's class still carries a
-  `*-snippet` annotation.
+  snippets, because instances not yet upgraded rely on them. [v1.6.0 turns snippets off](#v160-nginx-snippets-off), behind a `dcctl install` preflight.
 - **External token verifiers are unaffected:** they use the `jwks_uri` in the authorization-server
   metadata, `/oauth/jwks`, which stays public.
 
@@ -2909,6 +2894,7 @@ When a new minor release ships, the oldest detailed release moves into this tabl
 
 | Version | Summary | Action needed | Details |
 | --- | --- | --- | --- |
+| v1.3.0 | commands reach HTTP and LoRaWAN devices, and deliveries leave evidence | Yes | [Full notes](https://github.com/devicechain-io/devicechain/blob/v1.3.0/docs/docs/deployment/releases-and-upgrades.md#v130-upgrade) |
 | <a id="v120-upgrade"></a>v1.2.0 | payload decoders a tenant writes, and revocation that ends sessions | Yes | [Full notes](https://github.com/devicechain-io/devicechain/blob/v1.2.0/docs/docs/deployment/releases-and-upgrades.md#v120-upgrade) |
 | <a id="v110-upgrade"></a>v1.1.0 | ingest costs less per event, and devices outside the cluster connect over MQTT | Yes | [Full notes](https://github.com/devicechain-io/devicechain/blob/v1.1.0/docs/docs/deployment/releases-and-upgrades.md#v110-upgrade) |
 | <a id="v100-upgrade"></a>v1.0.0 | the first stable release: a database outage holds events, and Traefik is the default front end | Yes | [Full notes](https://github.com/devicechain-io/devicechain/blob/v1.0.0/docs/docs/deployment/releases-and-upgrades.md#v100-upgrade) |

@@ -169,6 +169,10 @@ purpose. Three figures decide it.
 - **Retention.** `lifecycle.retentionDays` is 0 by default, which keeps data forever. An
   instance meant to run indefinitely should set it, and then the volume only has to hold the
   window plus the uncompressed week.
+  The per-minute measurement aggregates behind charts age out with it, one chunk interval
+  later (rounded up to a day).
+
+Event list reads stop after 60 seconds (15 seconds for a scoped caller naming an anchor); for large histories, narrow the time range or filter on a device to avoid timing out on the exact count performed for every page.
 
 As a rule, the uncompressed window needs readings per second × (1 + calculated metrics) × bytes per row × 86,400 seconds × days, with a quarter of the volume left free for the write-ahead log,
 maintenance and growth. At the measured 600 bytes and 10,000 readings per second that is about 520 GB a day, so the default

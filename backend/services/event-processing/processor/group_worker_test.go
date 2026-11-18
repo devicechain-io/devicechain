@@ -23,6 +23,9 @@ import (
 
 type groupTestRouter struct{}
 
+// Ready reports a placement is always adoptable: this router places every tenant statically.
+func (groupTestRouter) Ready() error { return nil }
+
 func (groupTestRouter) ShardGroup(tenant string) (int, error) {
 	if tenant == "other" {
 		return 1, nil

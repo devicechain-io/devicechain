@@ -11,12 +11,12 @@ import { SectionPanel } from '@/components/ui/section-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { TypeCapsule } from '@/components/TypeCapsule';
 import { Button } from '@/components/ui/button';
-import { LoadingState } from '@/components/ui/loading-state';
+import { QueryBoundary } from '@/components/ui/query-boundary';
 import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
-import { errMessage, useReload } from '@/routes/common';
+import { errMessage } from '@/routes/common';
 import type { RegistryResource } from '@/components/registry/types';
 import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
@@ -26,11 +26,9 @@ import { hasAuthority } from '@devicechain/client';
 // (e.g. device state + events). Delete surfaces the backend message (including a
 // referential-integrity refusal) and only navigates away on success.
 export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource<T> }) {
-  // Keyed by the route token: useQuery keeps the previous entity's data while a new key loads,
-  // and every tab below (forms, facet values, memberships, properties) acts on the entity it
-  // is handed. A different entity must remount them, not re-seed them from the last one.
+  // A different entity must remount draft-owning forms and tabs.
   const { token } = useParams<{ token: string }>();
-  return <ResourceDetail key={token} resource={resource} />;
+  return <ResourceDetail key={JSON.stringify([resource.basePath, token])} resource={resource} />;
 }
 
 function ResourceDetail<T>({ resource }: { resource: RegistryResource<T> }) {
@@ -39,40 +37,30 @@ function ResourceDetail<T>({ resource }: { resource: RegistryResource<T> }) {
   // Resolve one of this family's noun-bearing strings by its fixed suffix.
   const e = (suffix: string, opts?: Record<string, unknown>) =>
     t(`entities:${resource.i18nKey}${suffix}`, opts);
-  const { token: rawToken } = useParams<{ token: string }>();
-  const token = decodeURIComponent(rawToken ?? '');
+  // The router hands the param over already decoded. Decoding it again turned a token
+  // holding a '%' into a different token, or threw on one such as "a%zz".
+  const token = useParams<{ token: string }>().token ?? '';
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
 
-  const [version, reload] = useReload();
-  const { data: item, loading, error } = useQuery(
+  const query = useQuery(
     () => resource.load(token),
-    [version, resource.basePath, token],
+    [resource.basePath, token],
+    [resource.basePath, token],
   );
+  const { data: item, refetch: reload } = query;
 
   // Only take over the whole page on the FIRST load / hard error. useQuery keeps the
   // prior data and flips loading during a background refetch (e.g. a tab calling
   // reload after publish); blanking the page then would unmount the tab bar and
   // bounce the user back to "Basic". While data is present, refetches update in place.
-  if (loading && !item) {
-    return (
-      <PageShell title={token} banner={resource.banner}>
-        <LoadingState description={t('common:loading')} />
-      </PageShell>
-    );
-  }
-  if (error && !item) {
-    return (
-      <PageShell title={token} banner={resource.banner}>
-        <ErrorState description={error} />
-      </PageShell>
-    );
-  }
   if (!item) {
     return (
       <PageShell title={token} banner={resource.banner}>
-        <ErrorState description={e('NotFound', { token })} />
+        <QueryBoundary query={query}>
+          <ErrorState description={e('NotFound', { token })} onRetry={reload} />
+        </QueryBoundary>
       </PageShell>
     );
   }
@@ -150,6 +138,7 @@ function ResourceDetail<T>({ resource }: { resource: RegistryResource<T> }) {
       {/* The form always lives under a "Basic" tab; any labelled extras (a group's
           Members, a profile's Metrics/Commands/Alarm Rules/Versions) become tabs
           beside it. */}
+      <QueryBoundary query={query}>
       <Tabs defaultValue="basic">
         <TabsList>
           <TabsTrigger value="basic">{t('common:basicTab')}</TabsTrigger>
@@ -166,6 +155,7 @@ function ResourceDetail<T>({ resource }: { resource: RegistryResource<T> }) {
           </TabsContent>
         ))}
       </Tabs>
+      </QueryBoundary>
     </PageShell>
   );
 }

@@ -5,12 +5,21 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
+	"slices"
 	"strconv"
+	"strings"
+
+	assets "github.com/devicechain-io/dc-deploy"
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dcctl/dcdir"
 	tfjson "github.com/hashicorp/terraform-json"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -91,14 +100,60 @@ func liveMaxFileStore(state *tfjson.State) string {
 	return v
 }
 
-// jetStreamReservation is the sum the services will ask the broker to hold, by the same
-// reading TestRenderedReservationFitsTheJetStreamStore uses.
+// jetStreamReservation is the most the services can ask ONE broker server to hold, by the
+// same reading TestRenderedReservationFitsTheJetStreamStore uses. It is judged against one
+// server's ceiling because that is what each server has: every server gets its own volume of
+// the stated size, and a stream's reservation lands on the servers that hold its replicas.
+//
+// Every unsharded stream, the MQTT store and the KV buckets are counted whole: a stream never
+// puts two replicas on one server, and an untagged stream may be placed on any server, so all of
+// them can land on the same one (r33a saw exactly that).
+//
+// 🔴 A SHARDED STREAM IS COUNTED ONCE PER GROUP THAT CAN SHARE A SERVER, NOT ONCE PER GROUP. Each
+// group is a separate R1 stream, and a group pinned to its own server reserves nothing on the
+// others. Summing every group's copy against one server's volume refused a three-group install on
+// the very volume each of its three servers had. See shardCopiesPerServer for when a group counts
+// as pinned; anything else is counted as if it could join the busiest server.
 func jetStreamReservation(n *config.NatsConfiguration) int64 {
 	var reserved int64
 	for _, s := range streams.Suffixes() {
-		reserved += n.StreamMaxBytesFor(s)
+		copies := 1
+		if n.ShardGroups != nil && slices.Contains(n.ShardGroups.Suffixes, s) {
+			copies = shardCopiesPerServer(n.ShardGroups)
+		}
+		reserved += int64(copies) * n.StreamMaxBytesFor(s)
 	}
 	return reserved + n.MqttStoreReservation() + n.KvReservation()
+}
+
+// natsServerTagRe is the one placement tag that selects exactly one broker server: the
+// server's own name, which modules/nats gives every server as a tag when shard groups are on
+// (server_tags = [$SERVER_NAME]) and which the chart writes into placementTags for each group.
+var natsServerTagRe = regexp.MustCompile(`^` + regexp.QuoteMeta(natsStatefulSetName) + `-[0-9]+$`)
+
+// shardCopiesPerServer is how many groups of one sharded stream a single server can end up
+// holding. A group is PINNED when its placement is exactly one server-name tag, and two groups
+// pinned to different names are on different servers. A group with any other placement (no
+// tags, several, or a tag that is not a server name, which can match more than one server) is
+// counted on every server, because nothing stops JetStream from putting it beside the others.
+// With no pinned group at all this is Count, the old reading: the check only relaxes where the
+// placement proves the copies are apart.
+func shardCopiesPerServer(g *config.NatsShardGroupsConfiguration) int {
+	pinned := map[string]int{}
+	unpinned := 0
+	for group := 0; group < g.Count; group++ {
+		tags := g.PlacementTags[group]
+		if len(tags) == 1 && natsServerTagRe.MatchString(tags[0]) {
+			pinned[tags[0]]++
+			continue
+		}
+		unpinned++
+	}
+	busiest := 0
+	for _, c := range pinned {
+		busiest = max(busiest, c)
+	}
+	return unpinned + busiest
 }
 
 // requiredVolumeGi is the smallest whole-GiB JetStream volume whose derived max_file_store
@@ -112,13 +167,16 @@ func requiredVolumeGi(reserved int64) int64 {
 // derived is true when the ceiling is 90% of a volume (so the volume that would hold the
 // reservation can be named), false when an operator set max_file_store by hand.
 func checkJetStreamReservation(n *config.NatsConfiguration, ceiling int64, source string, derived bool) error {
+	if err := n.ShardGroups.Validate(); err != nil {
+		return err
+	}
 	reserved := jetStreamReservation(n)
 	if reserved <= ceiling {
 		return nil
 	}
 	grow := "Grow the instance's JetStream volume (see the upgrade guide), or lower the stream ceilings."
 	if derived {
-		grow = fmt.Sprintf("Grow the instance's JetStream volume to at least %dGi, which is what holds this "+
+		grow = fmt.Sprintf("Grow the instance's JetStream volume to at least %dGi per broker server, which is what holds this "+
 			"reservation at 90%% of the volume (see the upgrade guide), or lower the stream ceilings.",
 			requiredVolumeGi(reserved))
 	}
@@ -135,6 +193,10 @@ func checkJetStreamReservation(n *config.NatsConfiguration, ceiling int64, sourc
 	if n.MqttFailClosed {
 		remedy += " `--mqtt-fail-closed=false` is the way back: it is the setting that raises the " +
 			"reservation by giving the MQTT message store the hot stream ceiling."
+	}
+	if n.ShardGroups != nil {
+		remedy = "With shard groups this is one server's share: every unsharded stream, and each sharded " +
+			"stream's groups that can be placed on the same server. " + remedy
 	}
 	return fmt.Errorf("the services would reserve %d MiB of JetStream storage up front, and this instance's "+
 		"broker holds at most %d MiB (%s). Event-sources would fail to declare its streams and every retry "+
@@ -204,4 +266,121 @@ func precheckJetStreamReservation(ctx context.Context, st *State) error {
 		return err
 	}
 	return checkJetStreamReservation(&doc.Infrastructure.Nats, ceiling, source, maxStore == "")
+}
+
+// operatorStatedValue reads the value an operator states for an instance-root variable, from
+// the same places statedByOperator looks, in OpenTofu's own order of precedence: TF_VAR_<name>
+// first, then terraform.tfvars, terraform.tfvars.json, and the *.auto.tfvars files in lexical
+// order, each later one overriding the earlier. stated reports whether any of them declares the
+// variable; readable whether the winning declaration is a plain string this can read without
+// evaluating anything. A test replaces it.
+var operatorStatedValue = func(st *State, name string) (value string, stated, readable bool) {
+	instanceDir, err := dcdir.Instance(st.Instance)
+	if err != nil {
+		return statedValueIn("", name)
+	}
+	return statedValueIn(filepath.Join(instanceDir, "infra", assets.InstanceRootDir), name)
+}
+
+// statedValueIn is operatorStatedValue for one instance root directory.
+func statedValueIn(rootdir, name string) (value string, stated, readable bool) {
+	for _, e := range os.Environ() {
+		if v, ok := strings.CutPrefix(e, "TF_VAR_"+name+"="); ok && v != "" {
+			value, stated, readable = v, true, true
+		}
+	}
+	entries, err := os.ReadDir(rootdir)
+	if err != nil {
+		return value, stated, readable
+	}
+	var fixed, auto []string
+	for _, e := range entries {
+		n := e.Name()
+		lower := n
+		if runtime.GOOS == "windows" {
+			lower = strings.ToLower(n)
+		}
+		switch {
+		case e.IsDir():
+		case lower == "terraform.tfvars" || lower == "terraform.tfvars.json":
+			fixed = append(fixed, n)
+		case strings.HasSuffix(n, ".auto.tfvars") || strings.HasSuffix(n, ".auto.tfvars.json"):
+			auto = append(auto, n)
+		}
+	}
+	// terraform.tfvars before its .json form, then the auto files by name, as tofu loads them.
+	slices.SortFunc(fixed, func(a, b string) int { return len(a) - len(b) })
+	slices.Sort(auto)
+	decl := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(name) + `\s*=(.*)$`)
+	literal := regexp.MustCompile(`^\s*"([^"\$%]*)"\s*(?:(?:#|//).*)?$`)
+	// Match strings (including escapes) and line comments first so their /* markers
+	// stay literal. Each block comment ends at the first */, not the last in the file.
+	tokens := regexp.MustCompile(`(?s)"(?:\\.|[^"\\])*"|#[^\n]*|//[^\n]*|/\*.*?\*/`)
+	for _, n := range append(fixed, auto...) {
+		b, err := os.ReadFile(filepath.Join(rootdir, n))
+		if err != nil {
+			continue
+		}
+		if strings.HasSuffix(n, ".json") {
+			var m map[string]json.RawMessage
+			if json.Unmarshal(b, &m) != nil {
+				continue
+			}
+			raw, ok := m[name]
+			if !ok {
+				continue
+			}
+			var s string
+			value, stated, readable = "", true, json.Unmarshal(raw, &s) == nil
+			if readable {
+				value = s
+			}
+			continue
+		}
+		uncommented := tokens.ReplaceAllStringFunc(string(b), func(token string) string {
+			if !strings.HasPrefix(token, "/*") {
+				return token
+			}
+			// Keep line boundaries and separate tokens on either side of a comment.
+			return strings.Map(func(r rune) rune {
+				if r == '\n' {
+					return r
+				}
+				return ' '
+			}, token)
+		})
+		for _, d := range decl.FindAllStringSubmatch(uncommented, -1) {
+			value, stated, readable = "", true, false
+			if m := literal.FindStringSubmatch(d[1]); m != nil {
+				value, readable = m[1], true
+			}
+		}
+	}
+	return value, stated, readable
+}
+
+// plannedJetStreamVolume is the JetStream volume each broker server will have after this run's
+// infrastructure apply, so the reservation can be judged before anything is created. A live
+// volume is kept by every apply (volumeSize). Compact passes its own size as a -var, which wins
+// over anything the operator states. Otherwise a size the operator states wins over the preset
+// and the root default, because the apply leaves the preset's assignment out (tofuVarsFor) and
+// the root default is only a default.
+//
+// unread is non-empty when the operator states the size in a form this cannot read without
+// evaluating it (an expression, a reference): the size is then unknown before the apply, and
+// the check that runs after it, against the volume the broker really got, is the one to rely on.
+func plannedJetStreamVolume(st *State) (size, unread string) {
+	if st.LiveVolumes.JetStream != "" {
+		return st.LiveVolumes.JetStream, ""
+	}
+	if st.Compact {
+		return compact.JetStreamStorage, ""
+	}
+	if v, stated, readable := operatorStatedValue(st, "nats_jetstream_storage"); stated {
+		if !readable {
+			return "", "the operator states nats_jetstream_storage in a form dcctl does not evaluate"
+		}
+		return v, ""
+	}
+	return jetStreamStorageFor(st), ""
 }

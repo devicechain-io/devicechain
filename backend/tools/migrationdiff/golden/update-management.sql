@@ -208,7 +208,8 @@ CREATE TABLE "update-management".update_assignments (
  actor character varying(256),
  superseded_at timestamp with time zone,
  signature_id bigint,
- scope_anchors text[]
+ scope_anchors text[],
+ device_incarnation bigint
 );
 CREATE TABLE "update-management".update_attempts (
  id bigint NOT NULL,

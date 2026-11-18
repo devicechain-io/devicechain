@@ -381,17 +381,11 @@ const sessionKickDrainLockName = "device-management-session-kick-drain"
 func (api *Api) DrainSessionKicksLocked(ctx context.Context) error {
 	api.observeSessionKicks(ctx)
 	var res SessionKickDrainResult
-	ran, err := api.RDB.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey(sessionKickDrainLockName), func() error {
+	err := api.RDB.SingletonPass(ctx, sessionKickDrainLockName, func() error {
 		var err error
 		res, err = api.DrainSessionKicks(ctx, SessionKickDrainPageSize)
 		return err
 	})
-	if !ran {
-		if err != nil {
-			return fmt.Errorf("acquiring the session-kick-drain lock: %w", err)
-		}
-		return core.ErrPassSkipped
-	}
 	if res.Tenants > 0 && err == nil {
 		log.Debug().Int("tenants", res.Tenants).Msg("Retried pending session kicks")
 	}

@@ -21,6 +21,31 @@ import (
 
 const permInstance = "inst1"
 
+func TestInboundAdaptersHaveReadOnlyPlacementGrants(t *testing.T) {
+	for _, area := range []string{"device-state", "sparkplug-ingest", "lwm2m-ingest"} {
+		t.Run(area, func(t *testing.T) {
+			p, err := AreaPermissions(permInstance, area)
+			require.NoError(t, err)
+			bucket := permInstance + "_" + kv.BucketPartitionPlacement
+			stream := messaging.KvStreamName(bucket)
+			for _, api := range []string{
+				"STREAM.INFO." + stream,
+				"STREAM.MSG.GET." + stream,
+				"DIRECT.GET." + stream,
+				"CONSUMER.CREATE." + stream + ".watch",
+				"CONSUMER.INFO." + stream + ".watch",
+				"CONSUMER.DELETE." + stream + ".watch",
+			} {
+				require.True(t, p.publishes("$JS.API."+api), api)
+			}
+			require.False(t, p.publishes("$KV."+bucket+".table"))
+			for _, verb := range []string{"CREATE", "UPDATE", "DELETE", "PURGE"} {
+				require.False(t, p.publishes("$JS.API.STREAM."+verb+"."+stream), verb)
+			}
+		})
+	}
+}
+
 // subjectMatches is NATS subject matching for a literal subject against a permission pattern:
 // tokens equal, "*" for one token, ">" for the rest.
 func subjectMatches(pattern, subject string) bool {

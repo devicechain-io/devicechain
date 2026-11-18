@@ -327,3 +327,23 @@ func TestGraphQLServerStopsBeforeTheNatsConnection(t *testing.T) {
 		"beforeMicroserviceStopped did not reach the RdbManager, so it returned early and the "+
 			"order recorded above is not the order a real shutdown produces")
 }
+
+func TestPlacementWatchStopsAfterServiceManagers(t *testing.T) {
+	probe, rdbName := startShutdownFixture(t)
+	previous := stopStreamSharding
+	t.Cleanup(func() { stopStreamSharding = previous })
+	var called, graphqlStopped, natsStopped bool
+	stopStreamSharding = func() {
+		called = true
+		graphqlStopped = probe.graphqlStoppedAt != 0
+		natsStopped = probe.natsConnClosed
+	}
+
+	err := beforeMicroserviceStopped(context.Background())
+
+	require.True(t, called, "the placement watch must be cancelled even when Svc.Stop returns an error")
+	require.True(t, graphqlStopped, "the placement watch was cancelled before GraphQL drained")
+	require.True(t, natsStopped, "the placement watch was cancelled before NATS stopped")
+	probe.assertGraphQLStoppedFirst(t)
+	require.ErrorContains(t, err, rdbName, "the Svc.Stop error must be preserved")
+}
