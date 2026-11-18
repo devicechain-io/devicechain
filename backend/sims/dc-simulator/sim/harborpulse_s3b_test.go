@@ -30,7 +30,7 @@ func TestHarborpulseS3bBeatsAndDefects(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			s.started = time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+			s.started = time.Date(2026, 11, 18, 12, 0, 0, 123456789, time.UTC)
 			attrs := map[string]string{}
 			writes, commands, jobs := 0, 0, 0
 			var job map[string]any
@@ -125,13 +125,21 @@ func TestHarborpulseS3bBeatsAndDefects(t *testing.T) {
 				t.Fatalf("beats: commands %d jobs %d metadata %v", commands, jobs, metadata)
 			}
 			from, _ := time.Parse(time.RFC3339Nano, job["from"].(string))
-			wantFrom := s.started.Add(elapsed(HarborpulseGapFrom))
+			wantFrom := s.started.Add(elapsed(HarborpulseGapFrom)).Truncate(time.Microsecond)
 			if (defect == HarborpulseDefectBackfillWrongWindow) == from.Equal(wantFrom) {
 				t.Fatalf("job range %v, gap starts %s", job, wantFrom)
+			}
+			to, _ := time.Parse(time.RFC3339Nano, job["to"].(string))
+			if from.Nanosecond()%1000 != 0 || to.Nanosecond()%1000 != 0 {
+				t.Fatalf("submitted bounds have sub-microsecond precision: %v", job)
 			}
 			status := s.ScenarioClock(s.started.Add(elapsed(19)))
 			if len(status.ThresholdChanges) != 1 || len(status.CalculatedBackfills) != 1 {
 				t.Fatalf("missing beats %+v", status)
+			}
+			beat := status.CalculatedBackfills[0]
+			if !beat.From.Equal(wantFrom) || beat.To.Nanosecond()%1000 != 0 {
+				t.Fatalf("status bounds have wrong precision: %+v", beat)
 			}
 		})
 	}
@@ -354,5 +362,90 @@ func TestHarborpulseDownlinkWaitsForNextUplink(t *testing.T) {
 	tick(20 * time.Second)
 	if up != 3 {
 		t.Fatal("gauge did not uplink at the new interval")
+	}
+}
+
+func TestHarborpulseDownlinkRetriesAfterFailure(t *testing.T) {
+	for _, failure := range []string{"uplink", "txack", "ack"} {
+		t.Run(failure, func(t *testing.T) {
+			ups, txacks, acks, attempts := 0, 0, 0, 0
+			polled := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.Contains(r.URL.Path, "/pending/") {
+					if strings.HasSuffix(r.URL.Path, HarborpulseSamplingDevEUI) && !polled {
+						polled = true
+						item := lorawan.PendingDownlink{ID: "retry-item", DevEUI: HarborpulseSamplingDevEUI, FPort: 12, Data: "AA8="}
+						// A duplicate in the fetched batch must not generate duplicate reports.
+						_ = json.NewEncoder(w).Encode([]lorawan.PendingDownlink{item, item})
+					} else {
+						_, _ = w.Write([]byte(`[]`))
+					}
+					return
+				}
+				var body struct {
+					DeviceInfo struct {
+						DevEUI string `json:"devEui"`
+					} `json:"deviceInfo"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if body.DeviceInfo.DevEUI != HarborpulseSamplingDevEUI {
+					w.WriteHeader(202)
+					return
+				}
+				kind := r.URL.Query().Get("event")
+				if kind == "up" {
+					ups++
+				}
+				target := failure
+				if target == "uplink" {
+					target = "up"
+				}
+				if kind == target {
+					attempts++
+					if attempts == 1 {
+						w.WriteHeader(503)
+						return
+					}
+				}
+				switch kind {
+				case "txack":
+					txacks++
+				case "ack":
+					acks++
+				}
+				if kind != "up" && failure == "uplink" && ups < 2 {
+					t.Error("reported before accepted uplink")
+				}
+				w.WriteHeader(202)
+			}))
+			defer server.Close()
+			t.Setenv("DC_SIM_HARBORPULSE_SINK_URL", server.URL)
+			s := NewHarborpulse(1, Load{}).(*harborpulse)
+			s.started = time.Now().UTC()
+			rt := &Runtime{Tenant: "acme", HTTPClient: server.Client(), Endpoints: Endpoints{Integrations: server.URL + "/ingest"}, IntegrationTokens: map[string]string{HarborpulseIntegration: "token"}}
+			model := s.ensureModel()
+			for i := 0; i < 3; i++ {
+				elapsed := time.Duration(i) * 20 * time.Second
+				err := s.sendLoraUplinks(context.Background(), rt, model, elapsed, s.started.Add(elapsed))
+				if (i == 0) != (err != nil) {
+					t.Fatalf("tick %d: %v", i, err)
+				}
+				if i == 0 && acks != 0 {
+					t.Fatal("failed tick acknowledged item")
+				}
+				if i == 1 && (txacks != 1 || acks != 1) {
+					t.Fatalf("retry: txacks=%d acks=%d", txacks, acks)
+				}
+			}
+			wantAttempts := 2
+			if failure == "uplink" {
+				wantAttempts = 3
+			}
+			if txacks != 1 || acks != 1 || attempts != wantAttempts {
+				t.Fatalf("txacks=%d acks=%d attempts=%d", txacks, acks, attempts)
+			}
+		})
 	}
 }

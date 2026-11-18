@@ -163,7 +163,7 @@ type CalculatedJob struct {
 }
 
 func backfillCompletes(o Observations) error {
-	from, to := o.at(sim.HarborpulseGapFrom), o.at(sim.HarborpulseGapTo)
+	from, to := o.at(sim.HarborpulseGapFrom).Truncate(time.Microsecond), o.at(sim.HarborpulseGapTo).Truncate(time.Microsecond)
 	before := 0
 	for _, r := range o.S3.GapBefore {
 		if inWindow(r.At, from, to.Add(-time.Microsecond)) {

@@ -204,3 +204,13 @@ func (d *day) attributeAlarms(updated bool) {
 		}
 	}
 }
+
+func TestBackfillCompletesWithMicrosecondJobBounds(t *testing.T) {
+	o := cleanDay().observe()
+	o.Clock.StartedAt = o.Clock.StartedAt.Add(789 * time.Nanosecond)
+	o.S3.Jobs[0].From = o.at(sim.HarborpulseGapFrom).Truncate(time.Microsecond)
+	o.S3.Jobs[0].To = o.at(sim.HarborpulseGapTo).Truncate(time.Microsecond)
+	if err := backfillCompletes(o); err != nil {
+		t.Fatal(err)
+	}
+}

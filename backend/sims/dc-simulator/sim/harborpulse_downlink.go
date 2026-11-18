@@ -55,7 +55,13 @@ func (s *harborpulse) answerGaugeQueue(ctx context.Context, rt *Runtime, items [
 			s.s3b.interval = HarborpulseSamplingSeconds * time.Second
 			s.mu.Unlock()
 		}
-		for _, report := range lorawan.ReportRequests(endpoint, item, accepted, at) {
+		for i, report := range lorawan.ReportRequests(endpoint, item, accepted, at) {
+			s.mu.Lock()
+			reported := s.s3b.reported[item.ID]
+			s.mu.Unlock()
+			if i < reported {
+				continue
+			}
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost, report.URL, bytes.NewReader(report.Body))
 			if err != nil {
 				return err
@@ -71,12 +77,19 @@ func (s *harborpulse) answerGaugeQueue(ctx context.Context, rt *Runtime, items [
 			if resp.StatusCode != http.StatusAccepted {
 				return fmt.Errorf("downlink report: HTTP %d", resp.StatusCode)
 			}
+			s.mu.Lock()
+			if s.s3b.reported == nil {
+				s.s3b.reported = map[string]int{}
+			}
+			s.s3b.reported[item.ID] = i + 1
+			s.mu.Unlock()
 		}
 		s.mu.Lock()
 		if s.s3b.seen == nil {
 			s.s3b.seen = map[string]bool{}
 		}
 		s.s3b.seen[item.ID] = true
+		delete(s.s3b.reported, item.ID)
 		s.mu.Unlock()
 	}
 	return nil

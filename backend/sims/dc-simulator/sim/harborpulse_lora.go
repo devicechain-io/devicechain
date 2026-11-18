@@ -212,6 +212,21 @@ func (s *harborpulse) sendLoraUplinks(ctx context.Context, rt *Runtime, model *h
 			errs = append(errs, pollErr)
 			continue
 		}
+		s.mu.Lock()
+		if s.s3b.pending == nil {
+			s.s3b.pending = map[string][]lorawan.PendingDownlink{}
+		}
+		for _, item := range pending {
+			duplicate := s.s3b.seen[item.ID]
+			for _, queued := range s.s3b.pending[u.devEUI] {
+				duplicate = duplicate || queued.ID == item.ID
+			}
+			if !duplicate {
+				s.s3b.pending[u.devEUI] = append(s.s3b.pending[u.devEUI], item)
+			}
+		}
+		pending = append([]lorawan.PendingDownlink(nil), s.s3b.pending[u.devEUI]...)
+		s.mu.Unlock()
 		req, err := lorawan.BuildFrame(cfg, runID, u.devEUI, u.n, at, HarborpulseLoraFPort, u.frame)
 		if err != nil {
 			errs = append(errs, err)
@@ -241,6 +256,15 @@ func (s *harborpulse) sendLoraUplinks(ctx context.Context, rt *Runtime, model *h
 		if err := s.answerGaugeQueue(ctx, rt, pending, elapsed, at); err != nil {
 			errs = append(errs, err)
 		}
+		s.mu.Lock()
+		var unanswered []lorawan.PendingDownlink
+		for _, item := range s.s3b.pending[u.devEUI] {
+			if !s.s3b.seen[item.ID] {
+				unanswered = append(unanswered, item)
+			}
+		}
+		s.s3b.pending[u.devEUI] = unanswered
+		s.mu.Unlock()
 		if u.devEUI == HarborpulseSamplingDevEUI {
 			s.mu.Lock()
 			s.s3b.nextUplink = elapsed + s.s3b.interval

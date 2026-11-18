@@ -95,7 +95,7 @@
 # `run` deploys the sink there too (it needs ko and the cluster's localhost:5000 registry), but it
 # cannot admit the sink's address to that instance's egress: the instance must run
 # outbound-connectors with lpwanDownlink.enabled, event-management with calculatedBackfill.enabled
-# and a sufficient TSDB pool, and allow the sink's ClusterIP (`dcctl upgrade --dev-allow-egress <ip>` on a
+# and a TSDB pool holding persistence.writers + 1 + 4 connections, and allow the sink's ClusterIP (`dcctl upgrade --dev-allow-egress <ip>` on a
 # local cluster), or every delivery is refused and the sink invariants are red.
 #
 # OFFLINE CONTROLS (`controls`, and run first by `run`): the verifier's own unit controls (a clean
@@ -416,6 +416,8 @@ EOF
   note "sink at $ip; the instance admits it with --dev-allow-egress"
   # The chart derives command-delivery routing and event-sources' acknowledgement feed
   # from the outbound adapter switch. Never hand-set those derived flags.
+  # The default profile and --compact keep the service pool at 20 and writers at 10:
+  # 10 writers + 1 backfill worker + 4 spare connections fit without a pool overlay.
   cat >"$state_dir/harborpulse-values.yaml" <<'VALUES'
 functionalAreas:
   outbound-connectors:
@@ -426,8 +428,6 @@ functionalAreas:
     config:
       calculatedBackfill:
         enabled: true
-      tsdbConfiguration:
-        maxOpenConnections: 16
 VALUES
   say "bootstrapping $instance with LPWAN downlink and calculated backfill"
   "$dcctl" bootstrap local "$instance" --yes --no-escrow --cluster "$cluster" --host localhost --no-tls \

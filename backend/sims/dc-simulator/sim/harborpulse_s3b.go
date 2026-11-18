@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/devicechain-io/dc-simulator/lorawan"
 )
 
 const (
@@ -60,6 +62,8 @@ type harborS3bState struct {
 	Jobs       []CalculatedBackfillBeat
 	done       map[string]bool
 	seen       map[string]bool
+	pending    map[string][]lorawan.PendingDownlink
+	reported   map[string]int
 	interval   time.Duration
 	nextUplink time.Duration
 }
@@ -186,7 +190,7 @@ func (s *harborpulse) s3bBeats(ctx context.Context, rt *Runtime, elapsed time.Du
 		at := func(h float64) time.Time {
 			return s.startedAt().Add(time.Duration((float64(day)*24 + h - harborpulseStartHour) / 24 * float64(s.dayLength)))
 		}
-		from, to := at(HarborpulseGapFrom), at(HarborpulseGapTo)
+		from, to := at(HarborpulseGapFrom).Truncate(time.Microsecond), at(HarborpulseGapTo).Truncate(time.Microsecond)
 		windowFrom, windowTo := from, to
 		if s.defects.backfillWrongWindow {
 			windowFrom = from.Add(-2 * time.Minute)
