@@ -959,6 +959,8 @@ func archiveGeoFenceGeometries(tx *gorm.DB, documents map[string][]byte) error {
 // UNEQUAL and mints — the safe direction. The unsafe direction cannot be reached:
 // element-wise equality of two ordered lists implies the sets are equal.
 func sameGeoFenceRefs(a, b []storedGeoFenceRef) bool {
+	// Identity is part of equality. A legacy snapshot with no IDs must mint once
+	// to capture them rather than treating reusable tokens as proof of identity.
 	return slices.Equal(a, b)
 }
 
@@ -1015,7 +1017,7 @@ func hydrateGeoFenceSetSnapshot(tx *gorm.DB, stored *storedGeoFenceSetSnapshot) 
 				"geofence set version %d names geometry %s for fence %q, which is not in the archive",
 				stored.Version, ref.Hash, ref.Token)
 		}
-		hydrated.Fences = append(hydrated.Fences, GeoFenceSnapshotRef{Token: ref.Token, Geometry: document})
+		hydrated.Fences = append(hydrated.Fences, GeoFenceSnapshotRef{FenceID: ref.FenceID, Token: ref.Token, Geometry: document})
 	}
 	return hydrated, nil
 }
@@ -1037,7 +1039,7 @@ func (api *Api) deviceTypeIdsForTenant(ctx context.Context) ([]uint, error) {
 // in every test that only checks the number went up.
 //
 // 🔴 IT RETURNS (nil, nil) WHEN THE FENCE SET DID NOT CHANGE, and every caller must evict
-// and publish only when it hands back a version. A mutation leaving the (token, geometry)
+// and publish only when it hands back a version. A mutation leaving the (identity, token, geometry)
 // reference list exactly what the current version already froze — renaming a fence,
 // editing its description or its metadata — mints nothing, because a version exists to
 // make a STAMP resolve to the right shapes and such an edit changes no shape any stamp
@@ -1126,7 +1128,7 @@ func (api *Api) mintGeoFenceSetVersion(tx *gorm.DB, now time.Time,
 		// unbounded.
 		document := []byte(fences[i].Geometry)
 		hash := GeoFenceGeometryHash(document)
-		refs = append(refs, storedGeoFenceRef{Token: fences[i].Token, Hash: hash})
+		refs = append(refs, storedGeoFenceRef{FenceID: fmt.Sprint(fences[i].ID), Token: fences[i].Token, Hash: hash})
 		documents[hash] = document
 	}
 	// oldSum is what the CURRENT version's distinct geometry summed to. knowOldSum is false

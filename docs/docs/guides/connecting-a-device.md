@@ -547,6 +547,8 @@ The platform answers on `device-desired` with a URL that works, with no other cr
 
 Download it with an HTTP `GET`. The endpoint answers `Range` requests, so an interrupted download resumes from the bytes you hold; when the grant expires, send the same `download.request` again for a new one. If the assignment is no longer current, the answer is an `update.cancel` instead of a grant.
 
+Download requests are budgeted per device: the platform answers five at once, then one a second. A request over that budget is dropped without any answer, neither a grant nor an `update.cancel`, and the device is not told. So never wait for an answer indefinitely: if none has arrived after a bounded wait, such as ten seconds, send the same `download.request` again.
+
 Report each stage on `device-reports` with `update.progress`:
 
 ```json

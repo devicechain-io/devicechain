@@ -55,6 +55,11 @@
 #
 # Requires: kind, kubectl, docker, jq, `tofu` OR `terraform` on PATH, and a Go
 # toolchain (the script builds dcctl itself).
+#
+# Beside another kind cluster that already publishes 8080/8443/11883 (the everyday
+# `devicechain` one does), move the HA cluster's host ports, e.g.
+#   DC_HA_RIG_HTTP_PORT=28080 DC_HA_RIG_HTTPS_PORT=28443 DC_HA_RIG_MQTT_PORT=21884 hack/ha-rig.sh all
+# The control cluster publishes no host ports and needs nothing.
 # Four kind nodes plus the platform is a real load on a developer box; run
 # `down` afterwards.
 
@@ -73,6 +78,12 @@ control_cluster="devicechain-ha-control"
 # also keep the rig clear of any `default` instance already on this machine.
 instance="${DC_INSTANCE:-harig}"
 control_instance="${DC_CONTROL_INSTANCE:-hactl}"
+# Host ports the HA cluster publishes (ingress HTTP, ingress HTTPS, MQTT NodePort). The
+# defaults are the checked-in topology's; set them to run beside a cluster that already
+# holds those ports. See ha_cluster_config.
+ha_http_port="${DC_HA_RIG_HTTP_PORT:-8080}"
+ha_https_port="${DC_HA_RIG_HTTPS_PORT:-8443}"
+ha_mqtt_port="${DC_HA_RIG_MQTT_PORT:-11883}"
 # GOEXE is ".exe" on Windows and empty elsewhere, matching backend/cli/Makefile.
 dcctl="$repo_root/backend/cli/build/dcctl$(go env GOEXE)"
 
@@ -105,6 +116,9 @@ fail() { printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 # warn says something went wrong WITHOUT exiting — for the few steps (see cmd_down)
 # where stopping would strand more than carrying on does.
 warn() { printf '\n\033[1;33mWARN: %s\033[0m\n' "$*" >&2; }
+# note is a progress line inside a case. cmd_streamloss calls it; it was never defined
+# here, so the case died at its first line with "note: command not found" (exit 127).
+note() { printf '\033[0;37m    %s\033[0m\n' "$*"; }
 
 need() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not on PATH"
@@ -214,6 +228,46 @@ EOF
     fail "could not write the LwM2M identities file at $lease_identities_file"
 }
 
+# ha_cluster_config writes the HA cluster's kind config with the host ports this run
+# publishes, and prints its path. The checked-in topology binds 8080/8443/11883, which a
+# developer's everyday kind cluster usually holds already, and kind then fails to create
+# this one. DC_HA_RIG_HTTP_PORT / DC_HA_RIG_HTTPS_PORT / DC_HA_RIG_MQTT_PORT move them;
+# unset, they are today's ports. dcctl reads the published port back from the node
+# container, so a moved port changes nothing the rig checks.
+#
+# Each default must appear exactly once as a hostPort in the source, or this refuses:
+# a substitution that matched nothing would publish the old port and fail later as a
+# kind port clash that names neither the variable nor this function.
+#
+# 🔴 ONE sed pass, each line rewritten at most once (`t` ends the script for a line a
+# substitution changed). Three passes in a row CASCADE: DC_HA_RIG_HTTP_PORT=8443 makes
+# the HTTP line 8443, and the HTTPS pass then rewrites it again.
+#
+# 🔴 Every file operation carries its own `|| fail`. This runs inside a command
+# substitution, where bash does not apply errexit to the commands within, so a failed
+# cp or sed would otherwise fall through to the printf and hand back a broken config.
+ha_cluster_config() {
+  local src="$repo_root/deploy/local/kind-cluster-ha.yaml" out="$rig_tmp/kind-cluster-ha.yaml"
+  local pair from to n
+  local -a script=()
+  for pair in "8080:$ha_http_port" "8443:$ha_https_port" "11883:$ha_mqtt_port"; do
+    from="${pair%%:*}" to="${pair#*:}"
+    [[ "$to" =~ ^[0-9]+$ ]] && ((to >= 1 && to <= 65535)) ||
+      fail "host port '$to' (replacing $from) is not a port number"
+    n="$(grep -cE "^[[:space:]]*hostPort: $from([[:space:]]|$)" "$src")" || [[ "$n" == 0 ]] ||
+      fail "could not read $src"
+    [[ "$n" == 1 ]] ||
+      fail "$src publishes hostPort $from $n time(s), not once, so it cannot be moved to $to"
+    script+=(-e "s/^([[:space:]]*hostPort: )$from([[:space:]]|\$)/\1$to\2/" -e t)
+  done
+  sed -E "${script[@]}" "$src" >"$out" || fail "could not write the HA cluster config to $out"
+  for to in "$ha_http_port" "$ha_https_port" "$ha_mqtt_port"; do
+    grep -qE "^[[:space:]]*hostPort: $to([[:space:]]|$)" "$out" ||
+      fail "the HA cluster config at $out does not publish host port $to"
+  done
+  printf '%s' "$out"
+}
+
 # create_cluster is idempotent: an existing cluster of the same name is reused
 # rather than recreated, because a full bring-up is long enough that losing one
 # to a re-run is its own deterrent to running the rig at all.
@@ -291,7 +345,9 @@ you meant to move the existing instance onto a new build."
 cmd_up() {
   need kind; need kubectl; need docker; need openssl
   build_dcctl
-  create_cluster "$ha_cluster" "$repo_root/deploy/local/kind-cluster-ha.yaml"
+  local ha_config
+  ha_config="$(ha_cluster_config)"
+  create_cluster "$ha_cluster" "$ha_config"
 
   # There is deliberately NO schedulable-node pre-check here. dcctl's own
   # checkHaNodeCapacity already counts them — excluding cordoned and
@@ -331,12 +387,22 @@ cmd_up() {
 cmd_verify() {
   build_dcctl
   say "CHECK A — asserting the HA claim from live broker state"
-  # --probe-mqtt because no device has ever connected to this broker, so the
-  # $MQTT_* streams do not exist yet and their replica factor — the one
-  # nats-server chooses rather than the platform — has not been observable. The
-  # probe opens one connection so it is.
+  # NO --probe-mqtt. The $MQTT_* streams exist without it: event-sources connects
+  # to the broker's MQTT listener on its own login as soon as it starts, and that
+  # first connect makes nats-server create all four at the replica factor it
+  # resolves then (the broker logs "Creating MQTT streams/consumers with replicas
+  # 3"). The check REQUIRES them by name (A4), so an instance where nothing ever
+  # connected still turns this red rather than passing vacuously. The control
+  # below shows A4 red at one replica without a probe as well.
+  #
+  # 🔴 The rig used to pass --probe-mqtt, and from v1.1.0 until the probe was
+  # moved onto an MQTT-capable login that broke CHECK A outright: the probe
+  # presented the broker administrator's login, which dcctl renders as
+  # NATS-protocol only, and the broker refused it. It also made the negative
+  # control hold for the wrong reason (a refused login, before any replication
+  # assertion ran). A rig that leans on an optional lever inherits its breakage.
   "$dcctl" ha verify --instance "$instance" \
-    --kube-context "kind-$ha_cluster" --probe-mqtt \
+    --kube-context "kind-$ha_cluster" \
     || fail "the instance does not hold the replication it declares (see the findings above)"
   say "CHECK A PASSED"
 
@@ -519,7 +585,7 @@ service that recreates its stream from one that verifies it, so the result above
   kubectl --context "$ctx" -n "$ns" rollout status deploy/event-sources --timeout=600s ||
     fail "event-sources did not become ready after the stream was restored"
   note "the reader is ready again ✓"
-  "$dcctl" ha verify --instance "$instance" --kube-context "$ctx" --probe-mqtt ||
+  "$dcctl" ha verify --instance "$instance" --kube-context "$ctx" ||
     fail "the restored stream does not hold the replication the instance declares"
   say "STREAM LOSS CASE PASSED — reported by name, not recreated, restored by dcctl broker reconcile"
 }
@@ -582,7 +648,7 @@ cmd_control() {
   # negative control that held — and removes the one explanation that would
   # otherwise weaken the result, that the check simply ran too early.
   "$dcctl" ha verify --instance "$control_instance" \
-    --kube-context "kind-$control_cluster" --probe-mqtt \
+    --kube-context "kind-$control_cluster" \
     --replicas 3 --expect-fail \
     || fail "THE NEGATIVE CONTROL DID NOT HOLD, or could not run — READ THE OUTPUT ABOVE,
 because those are different results and this exit status cannot tell them apart.

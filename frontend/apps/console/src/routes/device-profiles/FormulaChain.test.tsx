@@ -48,11 +48,11 @@ function install() {
       return Promise.resolve({
         metricDefinitions: {
           results: [
-            { metricKey: 'voltage', dataType: 'DOUBLE', calculated: false, expression: null },
-            { metricKey: 'current', dataType: 'DOUBLE', calculated: false, expression: null },
-            { metricKey: 'kva', dataType: 'DOUBLE', calculated: true, expression: 'voltage * current / 1000' },
+            { token: 'voltage', metricKey: 'voltage', dataType: 'DOUBLE', calculated: false, expression: null },
+            { token: 'current', metricKey: 'current', dataType: 'DOUBLE', calculated: false, expression: null },
+            { token: 'kva', metricKey: 'kva', dataType: 'DOUBLE', calculated: true, expression: 'voltage * current / 1000' },
           ],
-          pagination: {},
+          pagination: { totalRecords: 3 },
         },
       });
     }

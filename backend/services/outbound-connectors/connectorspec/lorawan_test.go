@@ -92,3 +92,8 @@ func TestValidateTTSv3Link(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "my-app", tg.(LoRaWANDownlinkTarget).ApplicationID)
 }
+
+func TestUnknownNetworkServerListsWebhook(t *testing.T) {
+	err := ValidateConfig(LoRaWANDownlinkType, []byte(`{"networkServer":"unknown"}`))
+	require.EqualError(t, err, `lorawan_downlink config: networkServer "unknown" is not one of chirpstack_v4, tts_v3, webhook`)
+}

@@ -4,7 +4,7 @@
 #
 # Does the dcctl command tree still accept everything it accepted at the last release?
 #
-#   hack/check-cli-compat.sh            # baseline: nearest stable tag reachable from HEAD
+#   hack/check-cli-compat.sh            # baseline: hack/api-baseline.sh's rule
 #   hack/check-cli-compat.sh v0.24.0    # baseline: the tag given
 #   hack/check-cli-compat.sh --self-test # prove the check can fail, through this script
 #

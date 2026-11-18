@@ -17,7 +17,7 @@ estÃ¡n implementados y validados de extremo a extremo: un resumen de la instanci
 descritos en [Paneles de Grafana](./grafana-boards.md), con reglas de alerta incluidas.
 :::
 
-Las métricas (`/metrics`) y las sondas de salud (`/healthz`, `/readyz`) usan el puerto 8083 (`ops`) de los pods y del Service de cada área. Las rutas públicas `/api/<area>/...` apuntan únicamente al puerto de la API (`graphql`, 8080) y no permiten acceder a estos endpoints operativos. Si utilizas tu propio controlador de entrada, dirige la API a `graphql`, nunca a `ops`.
+Las mÃ©tricas (`/metrics`) y las sondas de salud (`/healthz`, `/readyz`) usan el puerto 8083 (`ops`) de los pods y del Service de cada Ã¡rea. Las rutas pÃºblicas `/api/<area>/...` apuntan Ãºnicamente al puerto de la API (`graphql`, 8080) y no permiten acceder a estos endpoints operativos. Si utilizas tu propio controlador de entrada, dirige la API a `graphql`, nunca a `ops`.
 
 ## Trazado distribuido (OpenTelemetry)
 

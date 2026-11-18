@@ -89,13 +89,14 @@ func (s *DeadlineSweeper) Stop(ctx context.Context) error {
 	return err
 }
 
-// runOnce is the scheduled pass. It returns the error Pass only logs, so the pass outcome is
-// classified (and logged, rate-limited, by the periodic task) instead of counted as complete.
+// runOnce is the scheduled pass. List failures fail the pass; individual transition failures
+// make it partial or failed through core.PassResult instead of being counted as complete.
 func (s *DeadlineSweeper) runOnce(ctx context.Context) error {
-	if _, err := s.sweep(ctx); err != nil {
+	res, err := s.sweep(ctx)
+	if err != nil {
 		return fmt.Errorf("the update deadline sweep failed: %w", err)
 	}
-	return nil
+	return core.PassResult(res.Examined, res.Failed, res.LastErr)
 }
 
 // Pass runs one sweep and records what it did. Exported so a test (and an operator tool) can drive
