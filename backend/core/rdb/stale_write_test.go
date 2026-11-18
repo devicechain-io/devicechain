@@ -61,8 +61,7 @@ func readWidget(t *testing.T, db *gorm.DB, id uint) staleWidget {
 
 var staleWidgets = rdb.NewStaleWriteError("widget")
 
-// The console recognises the refusal by its wording alone (it carries no code), so the
-// sentence is pinned byte for byte.
+// Older consoles recognise the refusal by its wording, pinned byte for byte.
 func TestStaleWriteErrorIsTheSentenceTheConsoleMatches(t *testing.T) {
 	assert.Equal(t, "dashboard was modified by another writer; reload and try again",
 		rdb.NewStaleWriteError("dashboard").Error())
@@ -75,8 +74,9 @@ func TestStaleWriteErrorIsTheSentenceTheConsoleMatches(t *testing.T) {
 func TestStaleWriteErrorIsNotAUniquenessConflict(t *testing.T) {
 	var err error = staleWidgets
 	assert.False(t, conflict.Is(err), "a stale write must not classify as a conflict")
-	_, coded := err.(interface{ Extensions() map[string]interface{} })
-	assert.False(t, coded, "a stale write must carry no extensions.code")
+	ext, coded := err.(interface{ Extensions() map[string]any })
+	require.True(t, coded, "a stale write must carry a machine-readable code")
+	assert.Equal(t, map[string]any{"code": "STALE_WRITE"}, ext.Extensions())
 }
 
 // The precondition a caller sends is the string core/graphql.FormatTime served. The

@@ -52,6 +52,9 @@ type DeviceState struct {
 	// `ON CONFLICT (tenant_id, device_token)` has no arbiter and is refused.
 	TenantId    string `gorm:"uniqueIndex:idx_device_state_tenant_token,priority:1;index;not null;size:128"`
 	DeviceToken string `gorm:"uniqueIndex:idx_device_state_tenant_token,priority:2"`
+	// Incarnation is the device-management row id, learned at creation from the event.
+	// Pre-existing NULL rows are stamped only by the orphan sweep.
+	Incarnation sql.NullInt64 `gorm:"type:bigint"`
 	// ExternalId denormalizes the device's external id (ADR-049) from the resolved
 	// event so the projection is queryable by transport-native identity (ADR-067 SP4b
 	// failover reconciliation enumerates asserted-active devices by their Sparkplug

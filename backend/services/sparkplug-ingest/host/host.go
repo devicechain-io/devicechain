@@ -939,7 +939,9 @@ func (c *Client) goWhileLive(sessionCtx context.Context, wg *sync.WaitGroup, fn 
 // aborts without emitting if the session ends mid-window, like the connect probe.
 func (c *Client) presenceProbeLoop(ctx context.Context) {
 	round := &probeRound{slots: probeSlots(c.probeInterval, c.probeWindow)}
-	ticker := time.NewTicker(c.probeInterval / time.Duration(round.slots))
+	interval := c.probeInterval / time.Duration(round.slots)
+	c.metrics.PresenceProbePass.SetInterval(interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -1239,7 +1241,7 @@ func (c *Client) ingestSamples(externalId string, samples []Sample) {
 			// (IngestFailures, and the writer's refused counter) and the gate logs its own
 			// close and open, so a warning per dropped message would only bury those.
 			ev := log.Warn()
-			if errors.Is(err, messaging.ErrStreamBackpressure) {
+			if messaging.IsRefusal(err) {
 				ev = log.Debug()
 			}
 			ev.Err(err).Str("tenant", c.tenant).Str("externalId", externalId).Int("samples", len(samples)).
@@ -1363,10 +1365,10 @@ func (c *Client) published(it *publishItem, err error) {
 		it.pub.Delivered()
 		return
 	}
-	// Not retried: the stream is refusing new events (backpressure), which lasts far longer
-	// than this budget. Presence is admitted past the gate (BypassBackpressure), so what
-	// reaches here is samples.
-	if errors.Is(err, messaging.ErrStreamBackpressure) {
+	// Not retried within this short budget: backpressure and unavailable placement
+	// need external state to recover. Presence bypasses backpressure but still needs
+	// valid placement.
+	if messaging.IsRefusal(err) {
 		c.drop(it, "ingest backpressure", err)
 		return
 	}

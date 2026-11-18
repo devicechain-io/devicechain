@@ -178,11 +178,15 @@ func remainingLength(n int) []byte {
 
 // readConnack reads the broker's answer and turns a refusal into a sentence.
 //
-// The refusal codes matter here more than they usually would. On a broker with
-// authentication enabled (ADR-025) device connects go through the auth callout,
-// so an unauthenticated probe is refused — and the useful thing to say is not
-// "connection refused" but that the probe cannot pull this lever on this broker
-// and a real device has to.
+// The refusal codes matter here more than they usually would. The probe presents
+// a platform login (mqttProbeLogin), so a refusal means the broker does not accept
+// THAT login over MQTT — and the useful thing to say is not "connection refused"
+// but which login it was, that the check never got as far as the streams, and
+// that a real device's connect pulls the same lever.
+//
+// It used to blame the auth callout, which was the wrong diagnosis for the one
+// refusal every dcctl-built instance gave from v1.1.0 to v1.7: a static login
+// held to NATS-protocol connections. The callout never sees a static login.
 func readConnack(conn net.Conn) error {
 	head := make([]byte, 2)
 	if _, err := io.ReadFull(conn, head); err != nil {
@@ -202,11 +206,12 @@ func readConnack(conn net.Conn) error {
 	case 0:
 		return nil
 	case 4, 5:
-		return fmt.Errorf("the broker refused the MQTT probe (return code %d: bad "+
-			"credentials / not authorized). This broker has authentication enabled, so "+
-			"the $MQTT_* streams can only be created by a real device connect — the "+
-			"probe cannot pull that lever here. Connect a device, then re-run without "+
-			"--probe-mqtt", code)
+		return fmt.Errorf("the broker refused the MQTT probe's login (return code %d: bad "+
+			"credentials / not authorized), so no replication was checked. The probe "+
+			"presents the instance's MQTT-capable platform login; check that the broker "+
+			"accepts it over MQTT (its log names the user it refused). Alternatively "+
+			"connect a device, whose first connect creates the $MQTT_* streams, then "+
+			"re-run without --probe-mqtt", code)
 	default:
 		return fmt.Errorf("the broker refused the MQTT probe with return code %d", code)
 	}

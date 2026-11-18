@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
 // 🔴 WHAT THIS FILE EXISTS FOR: Api.Nudger is written during NatsManager.START, and the
@@ -68,11 +69,13 @@ func startNatsWiringFixture(t *testing.T) *messaging.NatsManager {
 
 	prevMs, prevCfg, prevNats, prevRdb, prevApi, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Api, Svc
 	prevProc, prevWriteback := CommandDeliveryProcessor, DeadLetterWriteback
+	prevRoster, prevDeletion := RosterConsumer, DeletionConsumer
 	prevResponses, prevCommands := CommandResponsesReader, DeviceCommandsWriter
 	prevDelivery, prevWritebackMetrics := DeliveryMetrics, WritebackMetrics
 	t.Cleanup(func() {
 		Microservice, Configuration, NatsManager, RdbManager, Api, Svc = prevMs, prevCfg, prevNats, prevRdb, prevApi, prevSvc
 		CommandDeliveryProcessor, DeadLetterWriteback = prevProc, prevWriteback
+		RosterConsumer, DeletionConsumer = prevRoster, prevDeletion
 		CommandResponsesReader, DeviceCommandsWriter = prevResponses, prevCommands
 		DeliveryMetrics, WritebackMetrics = prevDelivery, prevWritebackMetrics
 	})
@@ -86,6 +89,9 @@ func startNatsWiringFixture(t *testing.T) *messaging.NatsManager {
 		FunctionalArea: area,
 		Readiness:      core.NewReadinessGate(),
 	}
+	prevPeers := servicePeers
+	t.Cleanup(func() { servicePeers = prevPeers })
+	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
 	Microservice.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{
 		Hostname: host,
 		Port:     port,
