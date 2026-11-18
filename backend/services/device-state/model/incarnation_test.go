@@ -56,6 +56,54 @@ func TestSweepDeletesLateIncarnationRatherThanAdoptingIt(t *testing.T) {
 	}
 }
 
+func TestOrphanReconcileSkipsAnIncarnationResetAfterScan(t *testing.T) {
+	for _, liveID := range []int64{17, 0} {
+		t.Run(fmt.Sprint(liveID), func(t *testing.T) {
+			api := newSQLiteProjectionApi(t, "sweep-reset")
+			ctx := core.WithTenant(context.Background(), "a")
+			at := time.Now().UTC().Add(-time.Hour)
+			require.NoError(t, api.MergeProjectionBatch(ctx, []ProjectionUpdate{withIncarnation(deletionUpdate("a", "d", at), 17)}))
+			var scanned DeviceState
+			require.NoError(t, api.RDB.DB(ctx).First(&scanned).Error)
+			require.Equal(t, eventIncarnation(17), scanned.Incarnation)
+
+			require.NoError(t, api.MergeProjectionBatch(ctx, []ProjectionUpdate{withIncarnation(deletionUpdate("a", "d", at.Add(time.Minute)), 23)}))
+			var replacement DeviceState
+			require.NoError(t, api.RDB.DB(ctx).First(&replacement).Error)
+			require.Equal(t, scanned.ID, replacement.ID)
+			require.Equal(t, eventIncarnation(23), replacement.Incarnation)
+
+			deleted, stamped, err := api.ReconcileDeviceState(ctx, scanned, liveID, at)
+			require.NoError(t, err)
+			require.False(t, deleted)
+			require.False(t, stamped)
+			requireLiveCounts(t, api, "a", "d", 1)
+			var after DeviceState
+			require.NoError(t, api.RDB.DB(ctx).First(&after).Error)
+			require.Equal(t, replacement, after)
+		})
+	}
+}
+
+func TestOrphanReconcileSkipsAnOlderAuthorityAnswer(t *testing.T) {
+	api := newSQLiteProjectionApi(t, "sweep-older-answer")
+	ctx := core.WithTenant(context.Background(), "a")
+	at := time.Now().UTC().Add(-time.Hour)
+	require.NoError(t, api.MergeProjectionBatch(ctx, []ProjectionUpdate{withIncarnation(deletionUpdate("a", "d", at), 23)}))
+	var scanned DeviceState
+	require.NoError(t, api.RDB.DB(ctx).First(&scanned).Error)
+	require.Equal(t, eventIncarnation(23), scanned.Incarnation)
+
+	deleted, stamped, err := api.ReconcileDeviceState(ctx, scanned, 17, at)
+	require.NoError(t, err)
+	require.False(t, deleted)
+	require.False(t, stamped)
+	requireLiveCounts(t, api, "a", "d", 1)
+	var after DeviceState
+	require.NoError(t, api.RDB.DB(ctx).First(&after).Error)
+	require.Equal(t, scanned, after)
+}
+
 func TestProjectionIncarnationRules(t *testing.T) {
 	for _, path := range []string{"heartbeat", "locked", "per-event"} {
 		for _, tc := range []struct {
