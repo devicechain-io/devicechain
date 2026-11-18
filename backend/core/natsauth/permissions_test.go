@@ -272,19 +272,27 @@ func TestOnlyDeclaredWritersCanWriteABucket(t *testing.T) {
 	}
 }
 
-func TestEventProcessingHasReadOnlyPlacementGrants(t *testing.T) {
+// R7 S1 adds per-group replay sources but nothing in event-processing opens the placement
+// mirror yet, so the area is not its reader and its login holds no grant on it at all. The
+// slice that makes event-processing route declares the reader with that use, and turns this
+// into the read-only check: a grant here before then is a role nothing uses.
+func TestEventProcessingHasNoPlacementGrantsUntilItRoutes(t *testing.T) {
 	p, err := AreaPermissions(permInstance, "event-processing")
 	require.NoError(t, err)
 	b, ok := kv.Lookup(kv.BucketPartitionPlacement)
 	require.True(t, ok)
-	names := messaging.KvBucketNames(permInstance, b, "event-processing")
-	require.Len(t, names, 1)
-	stream := messaging.KvStreamName(names[0])
-	require.True(t, p.publishes("$JS.API.STREAM.MSG.GET."+stream))
-	require.True(t, p.publishes("$JS.API.CONSUMER.CREATE."+stream+".watch"))
-	require.False(t, p.publishes("$KV."+names[0]+".key"))
-	require.False(t, p.publishes("$JS.API.STREAM.PURGE."+stream))
-	require.False(t, p.publishes("$JS.API.STREAM.DELETE."+stream))
+	require.NotContains(t, b.Readers, "event-processing")
+	require.Empty(t, messaging.KvBucketNames(permInstance, b, "event-processing"))
+	bucket := messaging.PartitionPlacementBucketName(permInstance)
+	stream := messaging.KvStreamName(bucket)
+	require.False(t, p.publishes("$JS.API.STREAM.MSG.GET."+stream))
+	require.False(t, p.publishes("$JS.API.CONSUMER.CREATE."+stream+".watch"))
+	require.False(t, p.publishes("$KV."+bucket+".table"))
+	// The control: an area that does read the mirror holds exactly that grant on this
+	// stream name, so the refusals above are not the stream name failing to match.
+	reader, err := AreaPermissions(permInstance, "event-management")
+	require.NoError(t, err)
+	require.True(t, reader.publishes("$JS.API.STREAM.MSG.GET."+stream))
 }
 
 // 🔑 R3: a durable consumer is named exactly, so one area cannot rewrite, steal from or ack
