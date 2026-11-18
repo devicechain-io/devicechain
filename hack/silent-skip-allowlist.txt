@@ -17,6 +17,9 @@ github.com/devicechain-io/dc-microservice/messaging TestPerfStoreMemory # Opt-in
 github.com/devicechain-io/dc-microservice/payloaddecode TestPerfGate # DECODE_PERF_GATE runs in a dedicated CI step; also gated under -short/-race.
 github.com/devicechain-io/dc-microservice/payloaddecode TestPerfGateGoesRedWithSlowNative # DECODE_PERF_GATE runs in a dedicated CI step; also gated under -short/-race.
 github.com/devicechain-io/dc-microservice/payloaddecode TestCostTrackerOverhead # DECODE_PERF_GATE runs in a dedicated CI step; also gated under -short/-race.
+github.com/devicechain-io/dc-microservice/payloaddecode TestNativeCostsMatchMeasuredTime # DECODE_PERF_GATE runs in a dedicated CI step.
+github.com/devicechain-io/dc-microservice/payloaddecode TestFixedCostNativesDoNotScaleWithTheFrame # DECODE_PERF_GATE runs in a dedicated CI step.
+github.com/devicechain-io/dc-microservice/payloaddecode TestNativeCostChecksFlagUnderDeclaration # DECODE_PERF_GATE runs in a dedicated CI step.
 github.com/devicechain-io/dc-microservice/schedule TestRigSolarFleetAtItsOwnDusk # -short excludes the 50k-fixture rig.
 github.com/devicechain-io/dc-microservice/schedule TestRigSolarCatchesAPlantedUTCDayDefect # -short excludes the 50k-fixture rig.
 github.com/devicechain-io/dc-microservice/schedule TestRigEveryWallTimeEveryDayOfAYear # -short excludes the year-long zone rig.
