@@ -42,8 +42,7 @@ func NewSweeper(ms *core.Microservice, store *Store, retention, interval time.Du
 	callbacks core.LifecycleCallbacks) *Sweeper {
 	s := &Sweeper{Microservice: ms, store: store, retention: retention}
 	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "dead-letter-sweep", interval,
-		s.RunOnce, callbacks, core.WithDetachedContext(),
-		core.WithPassMetrics(ms.NewPeriodicTaskMetrics("dead_letter_sweep")))
+		s.RunOnce, callbacks, ms.NewPeriodicTaskMetrics("dead_letter_sweep"), core.WithDetachedContext())
 	return s
 }
 

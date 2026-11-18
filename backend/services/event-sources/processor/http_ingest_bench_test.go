@@ -111,7 +111,7 @@ func httpBenchSource(b *testing.B,
 		func(string, string, []byte, error) error { return nil },
 		NewRateGate(msgs(), msgs(), msgs(), msgs(), nil),
 		NewReadingGate(reads(), reads(), reads(), reads(), nil),
-		func(string) error { return nil }, nil)
+		func(string, string) error { return nil }, nil)
 	if err != nil {
 		b.Fatal(err)
 	}

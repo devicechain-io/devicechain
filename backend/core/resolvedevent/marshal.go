@@ -437,6 +437,7 @@ func resolvedFromWire(pbevent *PResolvedEvent, deviceTypeToken, profileVersionTo
 			AnchorType:     a.AnchorType,
 			AnchorToken:    a.AnchorToken,
 			RelationshipId: uint(a.RelationshipId),
+			EntityId:       uint(a.AnchorEntityId),
 		})
 	}
 	memberships := make([]GroupRef, 0, len(pbevent.ScopeMemberships))
@@ -451,6 +452,7 @@ func resolvedFromWire(pbevent *PResolvedEvent, deviceTypeToken, profileVersionTo
 		Source:               pbevent.Source,
 		AltId:                pbevent.AltId,
 		SourceDeviceToken:    pbevent.SourceDeviceToken,
+		DeviceIncarnation:    pbevent.DeviceIncarnation,
 		Anchors:              anchors,
 		DeviceTypeToken:      deviceTypeToken,
 		ProfileVersionToken:  profileVersionToken,

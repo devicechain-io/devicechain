@@ -223,7 +223,8 @@ func (c *Client) QueryOnBehalfOfScopedCaller(ctx context.Context, baseURL, tenan
 }
 
 // query is the call itself, with the scoped-caller decision already made by the caller.
-func (c *Client) query(ctx context.Context, baseURL, tenant, query string, variables map[string]any, out any) error {
+func (c *Client) query(ctx context.Context, baseURL, tenant, query string, variables map[string]any, out any) (err error) {
+	defer observeQuery(time.Now(), &err)
 	if strings.TrimSpace(tenant) == "" {
 		return fmt.Errorf("svcclient: tenant is required")
 	}
@@ -276,7 +277,8 @@ func (c *Client) query(ctx context.Context, baseURL, tenant, query string, varia
 		Errors []struct {
 			Message    string `json:"message"`
 			Extensions struct {
-				Code string `json:"code"`
+				Code              string `json:"code"`
+				RetryAfterSeconds int    `json:"retryAfterSeconds"`
 			} `json:"extensions"`
 		} `json:"errors"`
 	}
@@ -287,6 +289,7 @@ func (c *Client) query(ctx context.Context, baseURL, tenant, query string, varia
 		gqlErr := &GraphQLError{URL: baseURL, Messages: make([]string, 0, len(envelope.Errors))}
 		for _, e := range envelope.Errors {
 			gqlErr.Messages = append(gqlErr.Messages, e.Message)
+			gqlErr.RetryAfterSeconds = max(gqlErr.RetryAfterSeconds, e.Extensions.RetryAfterSeconds)
 			if e.Extensions.Code != "" {
 				gqlErr.Codes = append(gqlErr.Codes, e.Extensions.Code)
 			}
@@ -335,6 +338,8 @@ type GraphQLError struct {
 	URL      string
 	Messages []string
 	Codes    []string
+	// RetryAfterSeconds is the longest retry hint supplied by the peer, or zero if absent.
+	RetryAfterSeconds int
 }
 
 func (e *GraphQLError) Error() string {
@@ -361,6 +366,11 @@ func (c *Client) serviceToken(ctx context.Context) (string, error) {
 
 	ch := c.group.DoChan("mint", func() (any, error) {
 		minted, expiresAt, err := c.mint(context.Background())
+		result := "ok"
+		if err != nil {
+			result = "error"
+		}
+		serviceTokenMints.WithLabelValues(result).Inc()
 		if err != nil {
 			return "", err
 		}
@@ -383,6 +393,8 @@ func (c *Client) serviceToken(ctx context.Context) (string, error) {
 // mint exchanges the shared secret for a fresh service token at user-management's
 // mint endpoint. It returns the token and its expiry; the caller stores them.
 func (c *Client) mint(ctx context.Context) (string, time.Time, error) {
+	started := time.Now()
+	defer func() { mintDuration.Observe(time.Since(started).Seconds()) }()
 	body, err := json.Marshal(auth.ServiceTokenRequest{Subject: c.subject, Authorities: c.authorities})
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("svcclient: marshal mint request: %w", err)

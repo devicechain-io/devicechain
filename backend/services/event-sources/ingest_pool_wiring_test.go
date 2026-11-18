@@ -21,6 +21,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -116,7 +117,7 @@ func wireIngest(t *testing.T, um *fakeUM, rate float64, burst int) *ingestWiring
 		InboundEventsWriter, FailedDecodeWriter, inboundBackpressure = savedInbound, savedFailed, savedAdmission
 	})
 	// No broker here, so the pipeline is declared open: these tests are about the rate gate.
-	inboundBackpressure = func() error { return nil }
+	inboundBackpressure = func(string) error { return nil }
 
 	reg := prometheus.NewRegistry()
 	Microservice = &core.Microservice{InstanceId: "inst-1", FunctionalArea: "event-sources"}
@@ -141,8 +142,8 @@ func wireIngest(t *testing.T, um *fakeUM, rate float64, burst int) *ingestWiring
 		}},
 	}
 	Configuration.ApplyDefaults()
-	buildRateLimiter()
-	require.NoError(t, buildEventSources())
+	buildRateLimiter(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources"))
+	require.NoError(t, buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")))
 	source := EventSources[0].(*processor.HttpEventSource)
 	source.Port = 0
 	ctx := context.Background()
