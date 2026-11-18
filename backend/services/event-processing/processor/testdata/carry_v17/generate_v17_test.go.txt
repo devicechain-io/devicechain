@@ -1,0 +1,169 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package processor
+
+// Generates the v1.7 detection checkpoints that the v1.8 threshold-carry tests restore
+// (backend/services/event-processing/processor/testdata/carry_v17/). It runs only when
+// DC_CARRY_FIXTURE_DIR is set, against the release-1.7 tree, so every fixture is written
+// by the actual v1.7 engine and processor rather than by a v1.8 imitation of them.
+//
+//   git worktree add --detach <wt> origin/release-1.7
+//   cp <this file> <wt>/backend/services/event-processing/processor/
+//   cd <wt>/backend/services/event-processing
+//   DC_CARRY_FIXTURE_DIR=<abs>/testdata/carry_v17 go test ./processor -run TestGenerateCarryFixtures -count=1
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	rules "github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
+	"github.com/devicechain-io/dc-event-processing/model"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/stretchr/testify/require"
+)
+
+type carryFixture struct {
+	Producer  string          `json:"producer"`
+	Scenario  string          `json:"scenario"`
+	Shards    int             `json:"shards"`
+	StreamSeq int64           `json:"streamSeq"`
+	Watermark time.Time       `json:"watermark"`
+	Payload   json.RawMessage `json:"payload"`
+	Events    []string        `json:"events"`
+}
+
+func genRule(t *testing.T, version string) runtime.ScopedRule {
+	t.Helper()
+	threshold := 80.0
+	r := rules.Rule{ID: "acme/p1@" + version + "/r1", Name: "heat", Type: rules.TypeThreshold,
+		When: rules.Condition{Metric: "temperature", Op: rules.OpGt, Threshold: &threshold}}
+	cr, err := rules.Compile(r, rules.Limits{})
+	require.NoError(t, err)
+	return runtime.ScopedRule{Tenant: "acme", ProfileVersionToken: "p1@" + version, Compiled: cr}
+}
+
+func genProcessor(t *testing.T, k int, store *model.SnapshotStore, active string, scoped ...runtime.ScopedRule) (*ResolvedEventsProcessor, *derivedCapture) {
+	t.Helper()
+	w := &derivedCapture{}
+	rp := newTestProcessor(store, nil, 1000)
+	rp.cfg.Shards = k
+	rp.registry = runtime.NewRuleRegistry(scoped)
+	rp.publisher = runtime.NewPublisher(w, rp.registry, (*DetectMetrics)(nil))
+	rp.RosterStore = newProcRosterStore(t)
+	rp.ProfileActiveStore = newProcActiveStore(t)
+	require.NoError(t, rp.RosterStore.Upsert(context.Background(), &model.DeviceRoster{
+		Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase}))
+	require.NoError(t, rp.ProfileActiveStore.Upsert(context.Background(), &model.ProfileActive{
+		Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: active, PublishedAt: testBase}))
+	require.NoError(t, rp.restore(context.Background()))
+	t.Cleanup(rp.closeDetector)
+	require.NoError(t, rp.startDeadmanGate(context.Background()))
+	return rp, w
+}
+
+func genActivate(t *testing.T, rp *ResolvedEventsProcessor, sr runtime.ScopedRule) {
+	t.Helper()
+	a := runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: sr.ProfileVersionToken, PublishedAt: testBase.Add(10 * time.Second)}
+	require.NoError(t, rp.ProfileActiveStore.Upsert(context.Background(), &model.ProfileActive{
+		Tenant: a.Tenant, ProfileToken: a.ProfileToken, ActiveVersionToken: a.ActiveVersionToken, PublishedAt: a.PublishedAt}))
+	rp.applyRuleUpdate(ruleUpdate{upserts: []runtime.ScopedRule{sr}, active: &a})
+}
+
+func genMessage(t *testing.T, seq uint64, version, value string) messaging.Message {
+	t.Helper()
+	at := testBase.Add(time.Duration(seq) * time.Second)
+	m := measuredMsgAt(t, seq, at, "acme", "dev1", "p1@"+version, "temperature", value, &fakeAck{})
+	m.AppendTime = at
+	return m
+}
+
+func genApply(t *testing.T, rp *ResolvedEventsProcessor, m messaging.Message) {
+	t.Helper()
+	require.True(t, rp.applyResolved(m))
+	rp.syncDetector()
+}
+
+func genDump(t *testing.T, dir, producer, scenario string, k int, rp *ResolvedEventsProcessor, w *derivedCapture) {
+	t.Helper()
+	snap, found, err := rp.Store.Load(context.Background(), "singleton")
+	require.NoError(t, err)
+	require.True(t, found)
+	f := carryFixture{Producer: producer, Scenario: scenario, Shards: k, StreamSeq: snap.StreamSeq,
+		Watermark: snap.Watermark.UTC(), Payload: json.RawMessage(snap.Payload)}
+	for _, e := range w.events {
+		f.Events = append(f.Events, fmt.Sprintf("%s %s", e.RuleID, e.Edge))
+	}
+	b, err := json.MarshalIndent(f, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf("%s-k%d.json", scenario, k)), append(b, '\n'), 0o644))
+}
+
+func genLoad(t *testing.T, path string, store *model.SnapshotStore) carryFixture {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var f carryFixture
+	require.NoError(t, json.Unmarshal(b, &f))
+	require.NoError(t, store.Save(context.Background(), &model.DetectSnapshot{
+		PartitionId: "singleton", StreamSeq: f.StreamSeq, Watermark: f.Watermark, Payload: []byte(f.Payload)}))
+	return f
+}
+
+func TestGenerateCarryFixtures(t *testing.T) {
+	dir := os.Getenv("DC_CARRY_FIXTURE_DIR")
+	if dir == "" {
+		t.Skip("DC_CARRY_FIXTURE_DIR not set")
+	}
+	ctx := context.Background()
+	for _, k := range []int{1, 4} {
+		// v1 raises and is checkpointed, v2 is published, and v2 then raises and
+		// recovers on its own before v1.7 checkpoints again: the v1 latch it leaves is
+		// historical, and v2 is clear.
+		t.Run(fmt.Sprintf("successor-recovered/%d", k), func(t *testing.T) {
+			rp, w := genProcessor(t, k, newTestStore(t), "p1@v1", genRule(t, "v1"))
+			genApply(t, rp, genMessage(t, 1, "v1", "90"))
+			require.True(t, rp.checkpoint(ctx))
+			genActivate(t, rp, genRule(t, "v2"))
+			genApply(t, rp, genMessage(t, 2, "v2", "90"))
+			genApply(t, rp, genMessage(t, 3, "v2", "20"))
+			require.True(t, rp.checkpoint(ctx))
+			require.Len(t, w.events, 3)
+			genDump(t, dir, "v1.7", "v17-successor-recovered", k, rp, w)
+		})
+		// v2 only ever reads healthy under v1.7: it emits nothing, and v1.7 never moves
+		// the v1 latch, so the checkpoint holds v1 raised and v2 clear.
+		t.Run(fmt.Sprintf("successor-healthy/%d", k), func(t *testing.T) {
+			rp, w := genProcessor(t, k, newTestStore(t), "p1@v1", genRule(t, "v1"))
+			genApply(t, rp, genMessage(t, 1, "v1", "90"))
+			require.True(t, rp.checkpoint(ctx))
+			genActivate(t, rp, genRule(t, "v2"))
+			genApply(t, rp, genMessage(t, 2, "v2", "20"))
+			require.True(t, rp.checkpoint(ctx))
+			require.Len(t, w.events, 1)
+			genDump(t, dir, "v1.7", "v17-successor-healthy", k, rp, w)
+		})
+		// v1.8 -> v1.7 -> v1.8: v1.7 restores a checkpoint v1.8 wrote before the
+		// handoff, takes the v2 publish, sees v2 raise and recover, and checkpoints.
+		t.Run(fmt.Sprintf("from-v18/%d", k), func(t *testing.T) {
+			store := newTestStore(t)
+			in := genLoad(t, filepath.Join(dir, "v18-pre-handoff-k1.json"), store)
+			require.Equal(t, "v1.8", in.Producer)
+			rp, w := genProcessor(t, k, store, "p1@v2", genRule(t, "v1"), genRule(t, "v2"))
+			rp.Replay = &fakeReplayOpener{head: uint64(in.StreamSeq)}
+			require.NoError(t, rp.replayToHead())
+			require.NoError(t, rp.reconcileDeadmanArming(ctx))
+			genApply(t, rp, genMessage(t, 2, "v2", "90"))
+			genApply(t, rp, genMessage(t, 3, "v2", "20"))
+			require.True(t, rp.checkpoint(ctx))
+			require.Len(t, w.events, 2)
+			genDump(t, dir, "v1.7", "v17-from-v18", k, rp, w)
+		})
+	}
+}

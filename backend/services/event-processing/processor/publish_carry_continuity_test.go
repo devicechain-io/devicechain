@@ -1,0 +1,284 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package processor
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	dc "github.com/devicechain-io/dc-event-processing/internal/detect/core"
+	rules "github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
+	"github.com/devicechain-io/dc-event-processing/model"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/stretchr/testify/require"
+)
+
+// A carried latch suppresses the successor's next rising edge, so it is only sound for
+// an episode that is provably continuous and unresolved. Every test here asserts the
+// failure that matters: a successor breach that must dispatch, does.
+
+func continuityRule(t *testing.T, version, token string, kind rules.RuleType) runtime.ScopedRule {
+	t.Helper()
+	threshold := 80.0
+	r := rules.Rule{ID: "acme/p1@" + version + "/" + token, Name: "heat", Type: kind}
+	if kind == rules.TypeAbsence {
+		r.Ttl = rules.Duration(time.Hour)
+	} else {
+		r.When = rules.Condition{Metric: "temperature", Op: rules.OpGt, Threshold: &threshold}
+	}
+	cr, err := rules.Compile(r, rules.Limits{})
+	require.NoError(t, err)
+	return runtime.ScopedRule{Tenant: "acme", ProfileVersionToken: "p1@" + version, Compiled: cr}
+}
+
+// continuityActivate publishes a version holding exactly the given rules (none: every
+// rule disabled, so the published fact carries no rule at all).
+func continuityActivate(t *testing.T, rp *ResolvedEventsProcessor, version string, at time.Duration, scoped ...runtime.ScopedRule) {
+	t.Helper()
+	a := runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@" + version, PublishedAt: testBase.Add(at)}
+	require.NoError(t, rp.ProfileActiveStore.Upsert(context.Background(), &model.ProfileActive{
+		Tenant: a.Tenant, ProfileToken: a.ProfileToken, ActiveVersionToken: a.ActiveVersionToken, PublishedAt: a.PublishedAt}))
+	rp.applyRuleUpdate(ruleUpdate{upserts: scoped, active: &a})
+}
+
+// continuityRestart rebuilds the processor and its transient armer from the persisted
+// row and the projections, replays msgs up to head, and reconciles.
+func continuityRestart(t *testing.T, previous *ResolvedEventsProcessor, k int, head uint64, scoped []runtime.ScopedRule, msgs ...messaging.Message) (*ResolvedEventsProcessor, *derivedCapture) {
+	t.Helper()
+	previous.closeDetector()
+	rp, w := handoffProcessor(t, k, scoped...)
+	rp.closeDetector()
+	rp.Store = previous.Store
+	rp.RosterStore = previous.RosterStore
+	rp.ProfileActiveStore = previous.ProfileActiveStore
+	require.NoError(t, rp.restore(context.Background()))
+	require.NoError(t, rp.startDeadmanGate(context.Background()))
+	rp.Replay = &fakeReplayOpener{msgs: msgs, head: head}
+	require.NoError(t, rp.replayToHead())
+	require.NoError(t, rp.reconcileDeadmanArming(context.Background()))
+	return rp, w
+}
+
+// requireSuccessorRaises applies a v-version breach at seq and requires it to publish a
+// fresh Raised under that version: the action the carry must never swallow.
+func requireSuccessorRaises(t *testing.T, rp *ResolvedEventsProcessor, w *derivedCapture, seq uint64, version, msg string) {
+	t.Helper()
+	before := len(w.events)
+	handoffApply(t, rp, handoffMessage(t, seq, version, "dev1", "90", ""))
+	require.True(t, rp.checkpoint(context.Background()))
+	require.Len(t, w.events, before+1, msg)
+	require.Equal(t, runtime.EdgeRaised, w.events[before].Edge, msg)
+	require.Equal(t, "acme/p1@"+version+"/r1", w.events[before].RuleID, msg)
+}
+
+// Finding 1 (live): v1's raise is still unpublished when v2 is published, so the carry
+// defers. v2 then reads HEALTHY. Being unlatched, it emits nothing, so no edge cancels
+// the deferral, and once v1's raise publishes its latch would be carried onto a
+// successor that has already been seen healthy.
+func TestPublishDeferredCarryCancelledByHealthySuccessor(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		t.Run(fmt.Sprint(k), func(t *testing.T) {
+			rp, w := handoffProcessor(t, k, handoffRule(t, "v1", rules.TypeThreshold, true))
+			handoffApply(t, rp, handoffMessage(t, 1, "v1", "dev1", "90", ""))
+			require.Len(t, rp.pendingDets, 1)
+			handoffActivate(t, rp, handoffRule(t, "v2", rules.TypeThreshold, true))
+			v2 := dc.SeriesKey{Rule: "acme/p1@v2/r1", Series: "dev1"}
+			require.False(t, rp.engine.IsRaised(v2), "pending v1 output defers the carry")
+			handoffApply(t, rp, handoffMessage(t, 2, "v2", "dev1", "20", ""))
+			require.True(t, rp.checkpoint(context.Background()))
+			require.Len(t, w.events, 1, "only v1's own raise is owed")
+			require.False(t, rp.engine.IsRaised(v2), "a successor already read healthy must stay unlatched")
+			requireSuccessorRaises(t, rp, w, 3, "v2", "the first v2 breach after a healthy v2 reading must dispatch")
+		})
+	}
+}
+
+// Finding 1 (replay): the live run carried at the handoff and v2's healthy reading
+// published a clear, then the process died before checkpointing. Replay from the
+// pre-handoff checkpoint holds only that healthy v2 reading, which, with v2 unlatched,
+// emits nothing for any fence to see.
+func TestReplayHealthySuccessorPreventsPostReplayCarry(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		t.Run(fmt.Sprint(k), func(t *testing.T) {
+			v1 := handoffRule(t, "v1", rules.TypeThreshold, false)
+			v2 := handoffRule(t, "v2", rules.TypeThreshold, false)
+			rp, w := handoffProcessor(t, k, v1)
+			handoffApply(t, rp, handoffMessage(t, 1, "v1", "dev1", "90", ""))
+			require.True(t, rp.checkpoint(context.Background()))
+			handoffActivate(t, rp, v2)
+			healthy := handoffMessage(t, 2, "v2", "dev1", "20", "")
+			handoffApply(t, rp, healthy)
+			rp.flushDetections(context.Background())
+			require.Len(t, w.events, 2, "the live run cleared the alarm through v2")
+			require.Equal(t, runtime.EdgeResolved, w.events[1].Edge)
+
+			rp, w = continuityRestart(t, rp, k, 2, []runtime.ScopedRule{v1, v2}, healthy)
+			requireSuccessorRaises(t, rp, w, 3, "v2", "a cleared alarm must raise again on the next v2 breach")
+		})
+	}
+}
+
+// Finding 3: the carry must not bridge a version in which the rule stopped existing as
+// a threshold. v1 raises; v2 removes r1, disables every rule, or re-kinds r1; v3 brings
+// a threshold r1 back under the original token. Its first breach is a new episode.
+func TestCarryDoesNotBridgeDiscontinuousIntermediateVersion(t *testing.T) {
+	intermediates := map[string]func(*testing.T) []runtime.ScopedRule{
+		"removed":  func(t *testing.T) []runtime.ScopedRule { return []runtime.ScopedRule{continuityRule(t, "v2", "r2", rules.TypeThreshold)} },
+		"disabled": func(*testing.T) []runtime.ScopedRule { return nil },
+		"absence":  func(t *testing.T) []runtime.ScopedRule { return []runtime.ScopedRule{continuityRule(t, "v2", "r1", rules.TypeAbsence)} },
+	}
+	for name, v2 := range intermediates {
+		for _, k := range []int{1, 4} {
+			for _, restart := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/shards=%d/restart=%v", name, k, restart), func(t *testing.T) {
+					v1 := continuityRule(t, "v1", "r1", rules.TypeThreshold)
+					v3 := continuityRule(t, "v3", "r1", rules.TypeThreshold)
+					rp, w := handoffProcessor(t, k, v1)
+					handoffApply(t, rp, handoffMessage(t, 1, "v1", "dev1", "90", ""))
+					require.True(t, rp.checkpoint(context.Background()))
+					require.Len(t, w.events, 1)
+					mid := v2(t)
+					continuityActivate(t, rp, "v2", 10*time.Second, mid...)
+					require.True(t, rp.checkpoint(context.Background()))
+					continuityActivate(t, rp, "v3", 20*time.Second, v3)
+					if restart {
+						// Crash before the v3 handoff is checkpointed: the post-replay
+						// reconcile sees every retained version at once.
+						all := append([]runtime.ScopedRule{v1, v3}, mid...)
+						rp, w = continuityRestart(t, rp, k, 1, all)
+					}
+					require.False(t, rp.engine.IsRaised(dc.SeriesKey{Rule: v3.Compiled.ID, Series: "dev1"}),
+						"v1's latch must not reach v3 across a %s v2", name)
+					requireSuccessorRaises(t, rp, w, 2, "v3", "the first v3 breach after a discontinuous v2 must dispatch")
+				})
+			}
+		}
+	}
+}
+
+// --- version-compatibility checkpoints ------------------------------------------------
+//
+// testdata/carry_v17 holds checkpoints written by the ACTUAL v1.7 code (origin/release-1.7)
+// and by this branch, produced by testdata/carry_v17/generate_v17_test.go.txt (see its
+// header) and TestGenerateV18CarryFixtures below. Decoding is not the claim: each test
+// restores the checkpoint, and requires the next successor breach to dispatch.
+
+type carryFixture struct {
+	Producer  string          `json:"producer"`
+	Scenario  string          `json:"scenario"`
+	Shards    int             `json:"shards"`
+	StreamSeq int64           `json:"streamSeq"`
+	Watermark time.Time       `json:"watermark"`
+	Payload   json.RawMessage `json:"payload"`
+	Events    []string        `json:"events"`
+}
+
+func loadCarryFixture(t *testing.T, name string) carryFixture {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "carry_v17", name))
+	require.NoError(t, err)
+	var f carryFixture
+	require.NoError(t, json.Unmarshal(b, &f))
+	return f
+}
+
+// restoreCarryFixture builds a v1.8 processor over a checkpoint row written by another
+// binary, with v1 and v2 registered and v2 active, and replays msgs to head.
+func restoreCarryFixture(t *testing.T, k int, f carryFixture, head uint64, msgs ...messaging.Message) (*ResolvedEventsProcessor, *derivedCapture) {
+	t.Helper()
+	ctx := context.Background()
+	rp, w := handoffProcessor(t, k,
+		handoffRule(t, "v1", rules.TypeThreshold, false),
+		handoffRule(t, "v2", rules.TypeThreshold, false))
+	rp.closeDetector()
+	require.NoError(t, rp.Store.Save(ctx, &model.DetectSnapshot{
+		PartitionId: "singleton", StreamSeq: f.StreamSeq, Watermark: f.Watermark, Payload: []byte(f.Payload)}))
+	require.NoError(t, rp.ProfileActiveStore.Upsert(ctx, &model.ProfileActive{
+		Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: testBase.Add(10 * time.Second)}))
+	require.NoError(t, rp.restore(ctx))
+	require.NoError(t, rp.startDeadmanGate(ctx))
+	rp.Replay = &fakeReplayOpener{msgs: msgs, head: head}
+	require.NoError(t, rp.replayToHead())
+	require.NoError(t, rp.reconcileDeadmanArming(ctx))
+	return rp, w
+}
+
+// Finding 2: a v1.7 lease holder took the v2 publish, saw v2 raise and recover (or only
+// ever read healthy), and checkpointed with v1's historical latch still raised. v1.8
+// takes the lease at the stream head: a zero-message replay leaves no fence, and the
+// restored v1 latch must not be read as an unfinished handoff.
+func TestV17CheckpointRestoresWithoutCarry(t *testing.T) {
+	for _, scenario := range []string{"v17-successor-recovered", "v17-successor-healthy", "v17-from-v18"} {
+		for _, writer := range []int{1, 4} {
+			for _, k := range []int{1, 4} {
+				t.Run(fmt.Sprintf("%s/written-k%d/read-k%d", scenario, writer, k), func(t *testing.T) {
+					f := loadCarryFixture(t, fmt.Sprintf("%s-k%d.json", scenario, writer))
+					require.Equal(t, "v1.7", f.Producer)
+					var snap struct {
+						Raised []struct{ Rule, Series string } `json:"raised"`
+					}
+					require.NoError(t, json.Unmarshal(f.Payload, &snap))
+					require.Equal(t, []struct{ Rule, Series string }{{"acme/p1@v1/r1", "dev1"}}, snap.Raised,
+						"fixture premise: v1.7 left v1's historical latch raised and v2 clear")
+					rp, w := restoreCarryFixture(t, k, f, uint64(f.StreamSeq))
+					require.Empty(t, w.events, "zero-message replay")
+					require.False(t, rp.engine.IsRaised(dc.SeriesKey{Rule: "acme/p1@v2/r1", Series: "dev1"}))
+					requireSuccessorRaises(t, rp, w, uint64(f.StreamSeq)+1, "v2", "the next v2 breach after a v1.7 checkpoint must dispatch")
+				})
+			}
+		}
+	}
+}
+
+// The v1.8 side of v1.8 -> v1.7 -> v1.8: v1.7 (in TestV17CheckpointRestoresWithoutCarry,
+// scenario v17-from-v18) restored this branch's pre-handoff checkpoint. Here the same
+// pre-handoff checkpoint restores in v1.8 itself, with a non-empty replay holding a
+// recovered successor episode, and with a zero-message replay.
+func TestV18PreHandoffCheckpointReplay(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		t.Run(fmt.Sprintf("recovered-in-replay/%d", k), func(t *testing.T) {
+			f := loadCarryFixture(t, "v18-pre-handoff-k1.json")
+			require.Equal(t, "v1.8", f.Producer)
+			rp, w := restoreCarryFixture(t, k, f, 3,
+				handoffMessage(t, 2, "v2", "dev1", "90", ""),
+				handoffMessage(t, 3, "v2", "dev1", "20", ""))
+			require.Len(t, w.events, 2)
+			requireSuccessorRaises(t, rp, w, 4, "v2", "a successor that recovered in replay must raise again")
+		})
+		t.Run(fmt.Sprintf("healthy-in-replay/%d", k), func(t *testing.T) {
+			f := loadCarryFixture(t, "v18-pre-handoff-k1.json")
+			rp, w := restoreCarryFixture(t, k, f, 2, handoffMessage(t, 2, "v2", "dev1", "20", ""))
+			requireSuccessorRaises(t, rp, w, 3, "v2", "a successor read healthy in replay must raise on its next breach")
+		})
+	}
+}
+
+// TestGenerateV18CarryFixtures writes this branch's pre-handoff checkpoint, which the
+// v1.7 generator then restores. It runs only when DC_CARRY_FIXTURE_DIR is set.
+func TestGenerateV18CarryFixtures(t *testing.T) {
+	dir := os.Getenv("DC_CARRY_FIXTURE_DIR")
+	if dir == "" {
+		t.Skip("DC_CARRY_FIXTURE_DIR not set")
+	}
+	rp, w := handoffProcessor(t, 1, handoffRule(t, "v1", rules.TypeThreshold, false))
+	handoffApply(t, rp, handoffMessage(t, 1, "v1", "dev1", "90", ""))
+	require.True(t, rp.checkpoint(context.Background()))
+	snap, found, err := rp.Store.Load(context.Background(), "singleton")
+	require.NoError(t, err)
+	require.True(t, found)
+	f := carryFixture{Producer: "v1.8", Scenario: "v18-pre-handoff", Shards: 1, StreamSeq: snap.StreamSeq,
+		Watermark: snap.Watermark.UTC(), Payload: json.RawMessage(snap.Payload)}
+	for _, e := range w.events {
+		f.Events = append(f.Events, fmt.Sprintf("%s %s", e.RuleID, e.Edge))
+	}
+	b, err := json.MarshalIndent(f, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "v18-pre-handoff-k1.json"), append(b, '\n'), 0o644))
+}
