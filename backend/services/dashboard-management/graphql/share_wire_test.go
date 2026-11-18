@@ -88,7 +88,8 @@ func (f *shareFixture) member(anchors ...string) context.Context {
 func (f *shareFixture) dashboard(t *testing.T, tenant, token string, publish bool, customers ...string) {
 	t.Helper()
 	ctx := f.author(tenant)
-	_, err := f.api.CreateDashboard(ctx, &model.DashboardCreateRequest{Token: token, Definition: `{"schemaVersion":1}`})
+	// The sweep's optional name filter uses the dashboard token too.
+	_, err := f.api.CreateDashboard(ctx, &model.DashboardCreateRequest{Token: token, Name: &token, Definition: `{"schemaVersion":1}`})
 	require.NoError(t, err)
 	if publish {
 		_, _, err = f.api.PublishDashboard(ctx, token, nil, nil, "author", nil)

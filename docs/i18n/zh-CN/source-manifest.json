@@ -79,8 +79,8 @@
       "translationSha256": "3197df09513f734a289b126c52cfd9f8479df4423033178ed9609808dc8b993a"
     },
     "concepts/security-model.md": {
-      "sourceSha256": "7b1171a9fc5c4753cfeac584c93c8b78b9c66f37d6093bc1fc6a61cbc236c8b2",
-      "translationSha256": "e524bd262a1aa7a873cf144663accdd30e10b14a8979c2cf8750d9996c44ffbe"
+      "sourceSha256": "eb0b1c8ca6bf603f3fb68677b80e272f970718ba2954675cf6c2a6f9a6ce3484",
+      "translationSha256": "556defec31091e8e8c11ee625d72e46088aee789d0663ea55e4206e8c0e7b7e2"
     },
     "concepts/single-sign-on.md": {
       "sourceSha256": "9979f642b5846262c252585b0e00da2c96703cc6313a4fa38813f14b96d504b4",
@@ -151,8 +151,12 @@
       "translationSha256": "508efa80d4246bcaf71172f0f52007a592f162c53252a14887e62807033dfdac"
     },
     "deployment/observability.md": {
-      "sourceSha256": "8b116d710bacc7cf223488d5d45b7ce14ddfba21936e574594d8f17197b882d9",
-      "translationSha256": "fdd10fd159539de6da4d8cb7595572cbdbed212ffc50280e10d4b91322fe9a9f"
+      "sourceSha256": "ec89dc7ebcf9d604a0aec8048cda6797c30e4a83d8c1aacd74457247b9e6cd53",
+      "translationSha256": "2451c424b1ebebd883e615caa620067822232df8c6b87f1813fefabb4dd4c892"
+    },
+    "deployment/production-hardening.md": {
+      "sourceSha256": "92aa71a4fd5675ec58c5fa8e006af7453912e811aa9e6d62dc6c483dcd6ed21d",
+      "translationSha256": "c2ebac5a3d040c44fce7b5c14149902e063532a04d70967c9d461145a14abb03"
     },
     "deployment/releases-and-upgrades.md": {
       "sourceSha256": "15404acbff3a7df9ff7da04b4a051f4a435ffd974dd7613c33caf74aa6e8f8d8",
@@ -231,8 +235,8 @@
       "translationSha256": "afbdf063e48401967ddcc23a2a7011327efdb3f0c3edc257aac7a117b97e130d"
     },
     "guides/inbound-integrations.md": {
-      "sourceSha256": "44a912685a57302859180d6b161b22834962bb0197ab2546ae310ff9f15f90bc",
-      "translationSha256": "4d5cc6a5d779733aaedabedc35f84e820482494d651d537421e224f9ddf15166"
+      "sourceSha256": "990321204c83cf4ea3acda711117d41d1d4076f3f78b878cc08d0ff37df6d58f",
+      "translationSha256": "1909cfd942727fb9fe523e627172c2ee49c282ec41f036a0f54d3bb6ae349ca6"
     },
     "guides/local-development.md": {
       "sourceSha256": "4dd334e1d7524eaedf541eb6234b1255a63fa4908789e38ce57b448089b49e7e",

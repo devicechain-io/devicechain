@@ -145,6 +145,15 @@ type GeoFenceSnapshotEntryResolver struct {
 // Token is the stable per-tenant token a rule names this fence by.
 func (r *GeoFenceSnapshotEntryResolver) Token() string { return r.M.Token }
 
+// FenceId is unknown for legacy snapshots, even if the token exists today.
+func (r *GeoFenceSnapshotEntryResolver) FenceId() *gql.ID {
+	if r.M.FenceID == "" {
+		return nil
+	}
+	id := gql.ID(r.M.FenceID)
+	return &id
+}
+
 // Geometry is the frozen geometry envelope as its raw JSON text — the document as it stood
 // at this version, NOT the fence's current geometry. That distinction is the entire reason
 // the snapshot exists: re-reading the live fence would answer about the fences that are

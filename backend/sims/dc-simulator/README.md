@@ -596,9 +596,43 @@ own float switch at 3.2 m; the charger stays hot). Midnight resets derates and d
 day's beats repeat. `harborpulse_test.go` replays the day against each rule's own published
 threshold, window, hold, count and timeout, with the commands obeyed and, as a control, ignored.
 
-The day's assertions against a running instance, and the features the scenario does not drive
-yet (outbound connectors, notifications, campaigns, LoRaWAN gauges, OTA, MQTT devices), are
-planned follow-ups.
+It publishes two boards: `hp-dashboard`, the operator's (a quay picker, alarms by severity and
+devices online on that quay, every gauge of the quay against the three flood tiers, the response
+truck on a map, the East Quay pump's wet well and the Basin charger's connector with their alarms
+and commands drawn on, and the alarm table), and `hp-lofts-dashboard`, shared with the Quayside
+Lofts customer only: its meter and its alarms, read-only.
+
+**The scenario clock.** `GET /status` carries a `scenario` block for harborpulse (and nothing new
+for any other scenario): the sim day, hour and `HH:MM`, the beats in progress, the day's length and
+the wall time of the first tick, the planted defects, and the store-and-forward ledger (what each
+charger buffered in each outage). `--day-length` (default 24m, the least it accepts) stretches the
+day; the rules' windows are wall time, so a shorter day would make a beat shorter than the rule
+that detects it.
+
+**Verifying a day (`scenario-verify`).** `cmd/scenario-verify` watches the next whole sim day of a
+running harborpulse sim and judges what the platform did, read back over the tenant GraphQL APIs as
+the sim's own identity:
+
+    go run ./cmd/scenario-verify --handshake ~/.devicechain/sims/<name>.json --sim http://127.0.0.1:8090 --report day.json
+
+| Invariant | Holds when | Planted defect that must turn it red |
+| --- | --- | --- |
+| `flood-escalates` | each gauge keeps ONE flood alarm, raised at MINOR, escalating in place (CRITICAL on East Quay only, MAJOR elsewhere) and clearing | `--scenario-defect flood-split-key` (the critical tier under a key of its own) |
+| `pump-commanded` | a `start-pump` reaches SUCCESSFUL, the pump then runs and its well falls, and the well never reaches the pump's own float | `--no-command-far-end` |
+| `derate-obeyed` | a `derate` reaches SUCCESSFUL, the charger reports its cap at 11 kW, its connector reads below the rule's level before the long session ends (so the derate cooled it, not the session ending), and `connector-hot` clears | `--scenario-defect refuse-derate` |
+| `air-lock-only-east` | `pump-air-lock` for the East Quay pump only, inside its window | `--scenario-defect air-lock-basin` |
+| `correlation-fires` | `previewRule` of `hp-quay-flooding` over the storm fires for East Quay only | the verifier previews the same rule with a count no quay reaches, in the same day (`correlation-control-is-red`) |
+| `outage-blast-radius` | `light-silent` / `charger-offline` for exactly the East Quay lamps and chargers, inside the outage, all cleared after it | `--scenario-defect silence-north-lamp` |
+| `backfill-stored` | every reading a charger buffered is stored at the time it was taken | `--scenario-defect drop-backfill` (every fifth buffered reading lost) |
+
+It exits 0 when every invariant holds, 1 when one fails and 2 with no verdict (the sim unreachable,
+its day not started or restarted mid-watch, a gap in the alarm polls a flood tier could hide in, or
+a failed read). `hack/harborpulse-rig.sh` runs the clean day and every planted defect side by side
+on a cluster of its own and fails if the clean day is not green or a control does not turn its own
+invariant red. The defects exist only for that: never run a demonstration with one.
+
+The features the scenario does not drive yet (outbound connectors, notifications, campaigns,
+LoRaWAN gauges, OTA, MQTT devices) are planned follow-ups.
 
 ### The command far end
 
@@ -1087,8 +1121,12 @@ a snapshot taken at page load would not.
   `sim/windowrule.go` builds its windowed and absence rules, and `sim/customeruser.go`
   provisions a member limited to one customer.
 - `sim/harborpulse*.go` — the waterfront scenario: the manifest and rules (`harborpulse.go`) and
-  the compressed day, its planted faults and the command effects (`harborpulse_model.go`).
-  `sim/rulekinds.go` builds its duration, rate-of-change, repeating and correlation rules.
+  the compressed day, its planted faults and the command effects (`harborpulse_model.go`), and
+  its boards (`harborpulse_dashboard.go`). `sim/rulekinds.go` builds its duration,
+  rate-of-change, repeating and correlation rules; `sim/scenario.go` is the scenario clock and
+  options a scenario with a day takes.
+- `scenarioverify/` and `cmd/scenario-verify` — the harborpulse oracle: the watch, the read-back
+  and the invariants, each unit-tested against the defect that must turn it red.
 - `sim/lifecycle.go` — the `CREATED -> BOOTSTRAPPED -> RUNNING <-> STOPPED`
   FSM and the control HTTP API.
 - `sim/presentation.go` — serves the static page + its `/config.json`.

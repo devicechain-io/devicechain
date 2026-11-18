@@ -152,6 +152,9 @@ READERS = [
         "deploy/opentofu/modules/nats/main.tf",
     ], [], "messaging/rebalanceable_streams_test.go:32, dedup_window_test.go:443"),
     ("backend/core", "semantic", ["NOTICE"], [], "semantic/semantic_test.go:487"),
+    # core/core: the production-hardening page (hardening_docs_test.go:19); functionalareas*.go
+    # name ".." only in a comment about os.ReadDir.
+    ("backend/core", "core", ["docs/docs/deployment/production-hardening.md"], [], "core/hardening_docs_test.go:19"),
     # functionalarea: the services list, release.yml's ko modules and their RUNBOOK.md, the operator,
     # the chart helpers and Chart.yaml, the local image build, the nats module, the broker image.
     ("backend/k8s", "functionalarea", [
@@ -229,6 +232,14 @@ READERS = [
         "backend/services/event-processing/internal/review/testdata/**",
         "demos/**",
     ], [], "sim/*_test.go"),
+    # scenarioverify/documents_test.go:21 reads the served SDL of the four areas the verifier queries
+    # (documents_test.go:47-59: device-management, command-delivery, event-management, event-processing).
+    ("backend/sims/dc-simulator", "scenarioverify", [
+        "backend/services/device-management/graphql/**",
+        "backend/services/command-delivery/graphql/**",
+        "backend/services/event-management/graphql/**",
+        "backend/services/event-processing/graphql/**",
+    ], [], "scenarioverify/documents_test.go:21"),
     ("backend/sims/dc-simulator", "updater", ["backend/core/ota/testdata/**"], [], "updater/*_test.go"),
     ("backend/tools/apiprobe", ".", [SDL], [], "baseline_test.go, readsweep_test.go, documents_test.go"),
     ("backend/tools/docsgql", ".", ["docs/**", SDL], [], "docsgql_test.go:241"),
@@ -280,13 +291,13 @@ IN_MODULE = {
     ("backend/tools/redlines", "."): "temp fixtures only",
     ("examples/ota-device", "internal/testutil"): "runtime.Caller root is its own module",
     ("backend/core", "test/frontend"): "build-tagged `frontend`, so the go job never compiles it; the frontend job runs the same vitest suites",
-    ("backend/core", "core"): "\"..\" appears only in a comment about os.ReadDir",
     ("backend/core", "replication"): "\"..\" appears only in a comment",
     ("backend/core", "webhooksig"): "\"..\" is a refused path segment",
     ("backend/k8s", "api/v1beta1"): "reads ../../config/crd inside backend/k8s",
     ("backend/services/command-delivery", "processor"): "reads ../contract inside its own module",
     ("backend/services/event-processing", "internal/review"): "reads ../replayinput inside its own module",
     ("backend/services/device-management", "graphql"): "\"../x\" is a refused-key fixture",
+    ("backend/services/outbound-connectors", "connectorspec"): "\"..\" is a refused template path segment",
     ("deploy", "."):"\"../modules/<x>\" appears only in comments; the embed is in-module",
 }
 

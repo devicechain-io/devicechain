@@ -11,7 +11,7 @@ DeviceChain 内置可观测性：每个服务都提供 **Prometheus 指标**和�
 监控栈（由 `dcctl install` 部署 kube-prometheus-stack）及其 Grafana 仪表盘已经实现并经过端到端验证：一个实例总览和七个阶段仪表盘，详见 [Grafana 仪表盘](./grafana-boards.md)，并附带告警规则。
 :::
 
-每个功能区域的 Pod 和 Service 在端口 8083（`ops`）提供指标（`/metrics`）和健康探针（`/healthz`、`/readyz`）。公开的 `/api/<area>/...` 路由仅指向 API 端口（`graphql`，8080），无法访问这些运维端点。使用自己的入口控制器时，应将 API 路由到 `graphql`，切勿路由到 `ops`。
+每个功能区域的 Pod 和 Service 在端口 8083（`ops`）提供指标（`/metrics`）和健康探针（`/healthz`、`/readyz`）。公开的 `/api/<area>/...` 路由仅指向 API 端口（`graphql`，8080），无法访问这些运维端点。使用自己的入口控制器时，应将 API 路由到 `graphql`，切勿路由到 `ops`。[生产环境加固](./production-hardening.md#public-port)列出了每个端口提供的内容，以及如何从外部检查公共边缘。
 
 ## 分布式追踪（OpenTelemetry）
 

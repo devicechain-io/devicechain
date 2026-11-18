@@ -58,6 +58,7 @@ backend/core/config/edge_timeout_lockstep_test.go
 backend/core/config/nats_shard_docs_test.go
 backend/core/core/functionalareas.go
 backend/core/core/functionalareas_test.go
+backend/core/core/hardening_docs_test.go
 backend/core/graphql/schemaplane/schemaplane_test.go
 backend/core/httptransport/nodefault_test.go
 backend/core/messaging/database_free_test.go
@@ -120,6 +121,7 @@ backend/services/event-sources/processor/http_integration_test.go
 backend/services/event-sources/processor/integration_marks_test.go
 backend/services/lwm2m-ingest/downlink/documents_test.go
 backend/services/mcp/server/documents_test.go
+backend/services/outbound-connectors/connectorspec/downlinktemplate.go
 backend/services/outbound-connectors/lpwan/chirpstack_test.go
 backend/services/outbound-connectors/lpwan/documents_test.go
 backend/services/outbound-connectors/lpwan/tts_test.go
@@ -132,6 +134,7 @@ backend/services/user-management/identity/sso_signout_test.go
 backend/sims/dc-simulator/cmd/nightshift-capture/main.go
 backend/sims/dc-simulator/loadtest/authored_rules_fixture_test.go
 backend/sims/dc-simulator/loadtest/documents_test.go
+backend/sims/dc-simulator/scenarioverify/documents_test.go
 backend/sims/dc-simulator/sim/command_widget_types_test.go
 backend/sims/dc-simulator/sim/customeruser_ownership_test.go
 backend/sims/dc-simulator/sim/dash_sample_test.go

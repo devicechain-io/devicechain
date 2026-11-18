@@ -288,6 +288,7 @@ const sidebars: SidebarsConfig = {
           collapsed: false,
           items: [
             'deployment/bootstrap',
+            'deployment/production-hardening',
             'deployment/kubernetes-operator',
             'deployment/cluster-lock',
             'deployment/ingress-cutover',
