@@ -362,7 +362,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -1913,9 +1913,6 @@ func ingestTenantGates(peers *svcclient.Peers, gates *governance.SafetyGates) (g
 }
 
 func afterMicroserviceInitialized(ctx context.Context) error {
-	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
-	// registration panics, and the gates below are decided in callbacks that can run again.
-	safetyGates = governance.NewSafetyGates(Microservice)
 	// Parse configuration.
 	err := parseConfiguration()
 	if err != nil {
@@ -1937,6 +1934,30 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
+	// core/service builds the broker manager and the GraphQL manager and owns the order of
+	// all four lifecycle phases. It also installs the max-delivery recorder on the broker
+	// manager, so a capture delivery that runs out with no outcome is lettered like any
+	// other; the manager refuses to start its reader without it.
+	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
+		Nats:                &service.NatsSpec{OnCreate: createNatsComponents},
+		AfterNats: func(ctx context.Context, m *service.Managers) error {
+			NatsManager = m.Nats
+
+			// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
+			// validator in the background and gate the data plane on readiness rather
+			// than exiting when user-management is briefly unreachable (amends ADR-008).
+			Microservice.StartInstanceAuthGate(ctx)
+			return nil
+		},
+		GraphQL: &service.GraphQLSpec{
+			Schema:    graphql.SchemaContent,
+			Resolver:  func() interface{} { return &graphql.SchemaResolver{} },
+			Providers: func() map[gqlcore.ContextKey]interface{} { return map[gqlcore.ContextKey]interface{}{} },
+		},
+	})
+	safetyGates = Svc.SafetyGates()
+
 	// Build the per-tenant ingest rate limiter before the sources that use it.
 	buildRateLimiter(servicePeers)
 
@@ -1955,27 +1976,6 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		MqttFailClosedMetrics = messaging.NewMqttFailClosedMetrics(Microservice, Microservice.InstanceId)
 	}
 
-	// core/service builds the broker manager and the GraphQL manager and owns the order of
-	// all four lifecycle phases. It also installs the max-delivery recorder on the broker
-	// manager, so a capture delivery that runs out with no outcome is lettered like any
-	// other; the manager refuses to start its reader without it.
-	Svc = service.New(Microservice, service.Spec{
-		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
-		AfterNats: func(ctx context.Context, m *service.Managers) error {
-			NatsManager = m.Nats
-
-			// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
-			// validator in the background and gate the data plane on readiness rather
-			// than exiting when user-management is briefly unreachable (amends ADR-008).
-			Microservice.StartInstanceAuthGate(ctx)
-			return nil
-		},
-		GraphQL: &service.GraphQLSpec{
-			Schema:    graphql.SchemaContent,
-			Resolver:  func() interface{} { return &graphql.SchemaResolver{} },
-			Providers: func() map[gqlcore.ContextKey]interface{} { return map[gqlcore.ContextKey]interface{}{} },
-		},
-	})
 	if err = Svc.Initialize(ctx); err != nil {
 		return err
 	}
