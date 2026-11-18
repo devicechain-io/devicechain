@@ -39,6 +39,10 @@ import (
 // presence tap's writer, and mqttFailClosed (the MQTT message store, its three durable
 // readers, the command-responses and device-reports forwarding writers).
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
+	// The real Spec owns terminal, process-global governance refresh shutdown.
+	if dctest.RunInSubprocess(t) {
+		return
+	}
 	savedMs, savedCfg, savedSources, savedSvc, savedNats := Microservice, Configuration, EventSources, Svc, NatsManager
 	savedTransit, savedGates := SecretTransit, safetyGates
 	savedGateway, savedGatewayId, savedStoreSource := GatewaySource, GatewaySourceId, StoreSource

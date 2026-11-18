@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/service"
@@ -87,7 +86,7 @@ func startUnderCatalog(t *testing.T, rawConfig string, configure func(*core.Micr
 	Microservice.MicroserviceConfigurationRaw = []byte(rawConfig)
 	require.NoError(t, parseConfiguration())
 
-	safetyGates = governance.NewSafetyGates(Microservice)
+	safetyGates = service.FromManagers(Microservice, service.Managers{}).SafetyGates()
 	// As afterMicroserviceInitialized: core/service builds the broker side, buildMetrics hands
 	// the producer on, the limiter is the unconfigured (platform default) one.
 	peers := svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)

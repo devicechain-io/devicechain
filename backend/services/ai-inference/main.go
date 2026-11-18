@@ -50,7 +50,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -151,6 +151,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	var metrics *graphql.Metrics
 
 	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
 		// The rdb manager runs the secret-store + provider migrations under the startup
 		// advisory lock. It is initialized before the secret store, which reads from the
 		// same database.

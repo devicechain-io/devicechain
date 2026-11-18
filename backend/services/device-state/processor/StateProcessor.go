@@ -991,7 +991,9 @@ func (sp *StateProcessor) ExecuteStart(ctx context.Context) error {
 // Extracted from ExecuteStart so both the cadence and the shutdown behaviour are
 // reachable: inline, the only way to put a sweep in flight was to wait out a real tick.
 func (sp *StateProcessor) runInactivityMonitor(ctx context.Context) {
-	ticker := time.NewTicker(sp.inactivityRecheckInterval())
+	interval := sp.inactivityRecheckInterval()
+	sp.sweepMetrics.SetInterval(interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {

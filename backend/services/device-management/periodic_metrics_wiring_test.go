@@ -14,10 +14,10 @@ import (
 
 // Build the real tasks without starting them: every outcome must exist before any pass runs.
 func TestPeriodicPassMetricsWiring(t *testing.T) {
-	prevMS, prevReaper, prevClassifier := Microservice, AgentProposalReaper, AlarmPositionClassifier
+	prevMS, prevReaper, prevClassifier, prevMarkerHeal := Microservice, AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal
 	prevAccounting, prevAccountant := DecodeAccounting, DecodeAccountant
 	t.Cleanup(func() {
-		Microservice, AgentProposalReaper, AlarmPositionClassifier = prevMS, prevReaper, prevClassifier
+		Microservice, AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal = prevMS, prevReaper, prevClassifier, prevMarkerHeal
 		DecodeAccounting, DecodeAccountant = prevAccounting, prevAccountant
 	})
 	Microservice = &core.Microservice{FunctionalArea: "device-management"}
@@ -25,8 +25,9 @@ func TestPeriodicPassMetricsWiring(t *testing.T) {
 	Microservice.UseMetricsRegistry(reg)
 	require.NoError(t, initAgentProposalReaper())
 	require.NoError(t, initAlarmPositionClassifier())
+	require.NoError(t, initCreateEnrollMarkerHeal())
 	require.NoError(t, initDecodeAccounting())
-	tasks := []string{"agent_proposal_reaper", "alarm_position_classifier", "decode_accounting"}
+	tasks := []string{"agent_proposal_reaper", "alarm_position_classifier", "create_enroll_marker_heal", "decode_accounting"}
 	subsystem := "devicemanagement"
 
 	families, err := reg.Gather()
