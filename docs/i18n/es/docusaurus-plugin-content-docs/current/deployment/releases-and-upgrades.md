@@ -807,21 +807,10 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 
 #### Antes de actualizar a v1.7.0 {#v170-before-upgrade}
 
+
 - **`dcctl install`, `dcctl bootstrap` y `dcctl preflight` comprueban la versión de OpenTofu o Terraform.** La comprobación previa ahora rechaza un binario anterior al `required_version` que declara la configuración de OpenTofu incluida en dcctl (actualmente `>= 1.10`), una versión preliminar o un binario cuya versión no puede leer. Antes solo comprobaba que el binario existiera, por lo que una instalación con OpenTofu 1.9 fallaba en `tofu init` cuando ya había actualizado el operador. Si ambos están instalados, se sigue prefiriendo OpenTofu, y es el binario que se comprueba. Instala OpenTofu o Terraform estable 1.10 o posterior antes de ejecutar el `dcctl install` de v1.7.0. `--skip-preflight` sigue omitiendo la comprobación.
 
 #### Novedades de v1.7.0 {#v170-whats-new}
-
-#### Se cancelan los comandos pendientes de un dispositivo eliminado {#v170-deleted-device-commands}
-
-- Al eliminar un dispositivo, `command-delivery` cancela los comandos que aún tenía para él (en cola, retenidos o aparcados) y se niega a enviar cualquier comando creado antes de la eliminación, incluido uno ya entregado a un transporte y aún no confirmado. Un dispositivo creado después con el mismo token no los recibe; los comandos creados para él tras la eliminación se envían con normalidad.
-- En el primer arranque tras la actualización, `command-delivery` también lee las eliminaciones que el broker de mensajes aún conserva, de modo que los comandos que dejaron los dispositivos eliminados en los últimos días se cancelan de la misma forma.
-- Mientras conviven pods antiguos y nuevos durante la actualización gradual, un pod `v1.6` aún puede enviar uno de esos comandos hasta que se sustituye.
-
-#### Se elimina el estado en vivo de un dispositivo eliminado {#v170-deleted-device-state}
-
-- Al eliminar un dispositivo, `device-state` elimina su estado en vivo, sus últimas lecturas, su última posición y sus registros de lecturas descartadas. Un dispositivo creado después con el mismo token no hereda nada de eso, de modo que los miembros de su nuevo propietario no ven la última posición ni las lecturas del dispositivo anterior.
-- `device-state` también pregunta ahora a `device-management` cada 10 minutos qué dispositivos siguen existiendo, con las credenciales de servicio de la instancia, y elimina el estado en vivo que dejaron dispositivos eliminados antes, incluso antes de la actualización. Nunca elimina nada si esa consulta falla. Si el secreto de servicio o los endpoints de `device-management` y `user-management` no están configurados, la comprobación se omite y se registra una advertencia al arrancar.
-- Una lectura que la plataforma aceptó antes de la eliminación pero procesó después aún puede recrear brevemente el estado en vivo del dispositivo eliminado. Cada lectura indica ahora qué dispositivo la produjo, de modo que la primera lectura de un dispositivo creado con el mismo token restablece el estado en vivo, la comprobación periódica lo elimina si ningún dispositivo tiene el token, y una lectura del dispositivo eliminado nunca se aplica a su sucesor. Las lecturas de pods que siguen en `v1.6` durante la actualización gradual no llevan esa identidad y se aplican como antes.
 
 #### Las eliminaciones se avisan de forma fiable {#v170-deletion-announcements}
 
@@ -829,7 +818,6 @@ La versión en desarrollo (`v1.7`) y las tres versiones menores más recientes (
 - El aviso lleva la hora de la eliminación, por tarde que se publique.
 - Mientras conviven pods antiguos y nuevos durante la actualización gradual, las eliminaciones que atiende un pod `v1.6` se avisan de la forma anterior.
 - No requiere cambios de configuración.
-- **Un `dcctl bootstrap` rechazado deja el registro local de la instancia tal como estaba.** Cuando bootstrap se niega a ejecutarse sobre una instancia que ya está en marcha, `~/.devicechain/instances/<instance>/instance.json` se restaura byte a byte, incluido su `createdAt`. Antes, la ejecución rechazada lo reescribía con su propia hora de creación y su versión de dcctl.
 
 ### v1.6.0 — permisos más estrictos y dispositivos conectados durante recargas del broker {#v160-upgrade}
 

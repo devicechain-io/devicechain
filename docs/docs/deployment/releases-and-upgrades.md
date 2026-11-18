@@ -762,21 +762,10 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 
 #### Before you upgrade to v1.7.0 {#v170-before-upgrade}
 
+
 - **`dcctl install`, `dcctl bootstrap` and `dcctl preflight` check the OpenTofu or Terraform version.** The preflight now refuses a binary older than the `required_version` that dcctl's bundled OpenTofu configuration declares (currently `>= 1.10`), a prerelease, or one whose version it cannot read. Before, it checked only that the binary was present, so an install on OpenTofu 1.9 failed at `tofu init` after it had already updated the operator. OpenTofu is still preferred when both are installed, and it is the binary checked. Install a stable OpenTofu or Terraform 1.10 or later before you run the v1.7.0 `dcctl install`. `--skip-preflight` still skips the check.
 
 #### What is new in v1.7.0 {#v170-whats-new}
-
-#### A deleted device's undelivered commands are cancelled {#v170-deleted-device-commands}
-
-- When a device is deleted, `command-delivery` cancels the commands it still held for it (queued, held or parked) and refuses to send any command created before the delete, including one already handed to a transport and not yet confirmed. A device later created with the same token does not receive them; commands created for it after the delete are sent as usual.
-- On first start after the upgrade, `command-delivery` also reads the deletions still retained on the message broker, so commands left behind by devices deleted in the last few days are cancelled the same way.
-- While old and new pods overlap during the rolling upgrade, a `v1.6` pod can still send such a command until it is replaced.
-
-#### A deleted device's live state is removed {#v170-deleted-device-state}
-
-- When a device is deleted, `device-state` removes its live state, latest readings, latest position and dropped-reading records. A device later created with the same token starts with none of them, so members of its new owner do not see the old device's last position or readings.
-- `device-state` now also asks `device-management` every 10 minutes which devices still exist, using the instance's service credentials, and removes live state left behind by devices deleted earlier, including before the upgrade. It never removes anything when that lookup fails. Without the service secret or the `device-management` and `user-management` endpoints configured, the check is skipped and a warning is logged at startup.
-- A reading the platform accepted before the delete but processed after it can still re-create the deleted device's live state for a short time. Each reading now carries which device produced it, so the live state is reset by the first reading of a device created at the same token, the periodic check removes it if no device holds the token, and a reading of the deleted device is never applied to its successor. Readings from pods still on `v1.6` during the rolling upgrade carry no such identity and are applied as before.
 
 #### Deletions are announced reliably {#v170-deletion-announcements}
 
@@ -784,7 +773,6 @@ The release in development (`v1.7`) and the three most recent minor releases (`v
 - The announcement carries the time of the delete, however late it is published.
 - While old and new pods overlap during the rolling upgrade, deletes handled by a `v1.6` pod are announced the old way.
 - No configuration change is needed.
-- **A refused `dcctl bootstrap` leaves the local instance record as it found it.** When bootstrap refuses to run over an instance that is already running, `~/.devicechain/instances/<instance>/instance.json` is restored byte for byte, including its `createdAt`. Before, the refused run rewrote it with its own creation time and dcctl version.
 
 ### v1.6.0 — tighter authority checks and devices connected through broker reloads {#v160-upgrade}
 
