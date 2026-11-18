@@ -151,33 +151,35 @@ a combination the chart refuses stops the run with nothing changed.
 
 ## Sizing the event store {#event-store-sizing}
 
-The event store is the one volume whose growth is set by traffic, so it is the one to size on
-purpose. Three figures decide it.
+The event store is the one volume whose growth is set by traffic, so size it for these quantities.
 
-- **Bytes per stored row.** A measurement row costs about 600 bytes on disk, indexes included,
-  before compression: a 32Gi volume held about 51 million rows when it filled in a benchmark at
-  10,000 readings per second. An earlier measurement put the figure near 1 KB with the
-  write-ahead log; size with the larger figure until you have measured your own; the formula below takes the row size as a variable. The event store
-  compresses chunks older than `lifecycle.compressAfterDays` (7 by default) in
-  `event-management`'s config, losslessly, but it does nothing for the newest week: size the
-  volume for at least that much uncompressed data. The 600-byte figure is the uncompressed one,
-  and the compression ratio depends on your data, so measure it before counting on it.
-  Counting every table an event is written to (events and measurements, indexes included), a
-  later GKE measurement read 756 bytes per stored event, uncompressed.
-- **Rows per reading.** Every [calculated metric](../user-guide/calculated-metrics.md) that
-  applies to a profile stores one more row per reading. Each formula adds one row per reading, so a profile with N calculated metrics stores (1 + N) rows per reading, so N formulas multiply the volume by up to 1 + N. The tier ceiling `calculatedMetricsPerProfile` is 0 (off) by default and at most 32; it is a ceiling, and the cost depends on use.
-- **Retention.** `lifecycle.retentionDays` is 0 by default, which keeps data forever. An
-  instance meant to run indefinitely should set it, and then the volume only has to hold the
-  window plus the uncompressed week.
+- **Bytes per stored event.** Use **756 bytes per stored event** as the canonical sizing figure:
+  the `events` and `measurements` tables together, indexes included, before compression, measured
+  on Google Kubernetes Engine (GKE). It covers one event with its measurement row. GKE round 31
+  measured 756 B and round 32 measured 755 B; use 756 B for planning. This excludes the
+  write-ahead log (WAL), which needs separate space on the same volume.
+  The event store compresses chunks older than `lifecycle.compressAfterDays` (7 by default) in
+  `event-management`'s config, losslessly. Size the newest window as uncompressed data and measure
+  your compression ratio before counting on savings for older data.
+- **Extra measurement rows.** Each [calculated metric](../user-guide/calculated-metrics.md) that
+  applies to a profile adds one measurement row per reading, not another whole event. Measure the
+  incremental bytes per measurement row for your data and add that cost separately; the 756 B
+  figure does not establish that increment. The tier ceiling `calculatedMetricsPerProfile` is
+  0 (off) by default and at most 32; actual cost depends on the formulas used.
+- **Retention.** `lifecycle.retentionDays` is 0 by default, which keeps data forever. Set a
+  retention window for indefinite operation and account separately for compressed history and
+  the uncompressed window within that retention period.
   The per-minute measurement aggregates behind charts age out with it, one chunk interval
   later (rounded up to a day).
 
-Event list reads stop after 60 seconds (15 seconds for a scoped caller naming an anchor); for large histories, narrow the time range or filter on a device to avoid timing out on the exact count performed for every page.
+The uncompressed base data needs events per second × 756 B × 86,400 seconds × days.
+At 10,000 events/s: 10,000 × 756 × 86,400 = 653,184,000,000 B, or about **653 GB/day**;
+seven days is 4,572,288,000,000 B, or about **4.57 TB** (decimal units).
+Add the extra measurement rows from calculated metrics and any compressed history. Leave a
+quarter of the volume free for WAL, maintenance and growth; increase that allowance if your
+configured WAL budget requires more space.
 
-As a rule, the uncompressed window needs readings per second × (1 + calculated metrics) × bytes per row × 86,400 seconds × days, with a quarter of the volume left free for the write-ahead log,
-maintenance and growth. At the measured 600 bytes and 10,000 readings per second that is about 520 GB a day, so the default
-seven uncompressed days is about 3.6 TB. Add what the compressed history and the retention window
-need.
+Event list reads stop after 60 seconds (15 seconds for a scoped caller naming an anchor); for large histories, narrow the time range or filter on a device to avoid timing out on the exact count performed for every page.
 
 Three alerts watch the volume, in the order you want to hear them: `DatabaseVolumeFillsWithinDay`
 (on course to fill within 24 hours), `DatabaseVolumeFillingFast` (within the hour) and

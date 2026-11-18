@@ -123,7 +123,7 @@ func (l *LazyBucket) Update(key string, value []byte, revision uint64) error {
 // database records is not the P the mirror records. Other failures are retried by periodic passes.
 //
 // Only startup acts on this by stopping the service. Periodic failures are logged and counted
-// for the placement_mirror alert while the identity provider stays up. Sharded stream routing
+// as failed placement_mirror passes (no chart rule alerts on them) while the identity provider stays up. Sharded stream routing
 // holds or refuses work when the mirror is unusable; operators must repair the disagreement.
 func IsFatal(err error) bool { return errors.Is(err, partition.ErrPChanged) }
 

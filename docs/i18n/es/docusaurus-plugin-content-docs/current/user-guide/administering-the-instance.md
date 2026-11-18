@@ -229,6 +229,13 @@ membresías.
   inquilino. Cambia los roles y elige **Guardar roles**, o **Deshabilitar** o **Quitar** la membresía.
   Una membresía deshabilitada impide a la persona entrar en ese inquilino concreto. Para añadir una,
   elige un inquilino y unos roles en **Añadir a inquilino** y pulsa **Añadir membresía**.
+  Una membresía que gestiona una conexión de [proveedor de identidad](#identity-providers) no se puede
+  cambiar aquí mientras esa conexión exista y siga atendiendo al inquilino: **Guardar roles**,
+  **Deshabilitar** y **Quitar** se rechazan con `MANAGED_BY_IDP`, porque el siguiente inicio de sesión
+  de la persona a través del proveedor desharía el cambio. Para revocar el acceso de esa persona,
+  deshabilita la identidad, quítala de los grupos del proveedor o haz que la conexión deje de atender
+  al inquilino. Cuando la conexión se elimina o deja de atender al inquilino, la membresía se puede
+  editar como cualquier otra.
 
 <GuideShot id="admin-identity-detail" alt="La página de Maria Chen, maria.chen@acme-properties.example, habilitada, con botones Deshabilitar y Eliminar. El panel Acceso tiene un selector de roles de sistema con Guardar y un campo para establecer la contraseña. El panel Membresías muestra sim-acme, habilitada, con el rol Facilities viewer y los botones Guardar roles, Deshabilitar y Quitar. Debajo, los selectores para añadir a un inquilino con roles y el botón Añadir membresía." />
 
@@ -257,7 +264,7 @@ consulta [Miembros, roles y usuarios de cliente](/user-guide/members-roles-and-c
 Los nombres y descripciones de los roles son datos que escribió quien los creó, así que aparecen tal
 como se escribieron.
 
-## Proveedores de identidad
+## Proveedores de identidad {#identity-providers}
 
 **Identidades → Proveedores de identidad** conecta proveedores OpenID Connect externos, como Google
 Workspace o Microsoft Entra ID, con los que las personas inician sesión. La lista muestra el nombre,

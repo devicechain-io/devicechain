@@ -482,6 +482,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Svc = service.New(Microservice, service.Spec{
 		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
+			AppendOnly: nil, // Audit journal only.
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Migrations: model.Migrations,
 			Config:     Configuration.RdbConfiguration,

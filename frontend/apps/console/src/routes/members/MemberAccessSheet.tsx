@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { listAll } from '@/lib/api/list-all';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle } from 'lucide-react';
@@ -55,10 +56,6 @@ export function invitationLink(code: string): string {
 }
 
 type ScopeMode = 'all' | 'limited';
-
-// The customers a member can be limited to, offered in one list. A tenant with more than
-// the page shows can still type the token; the server refuses one that names nothing.
-const CUSTOMER_PAGE = { pageNumber: 1, pageSize: 1000 };
 
 /** The most entries one member's scope may name, customers and groups together (the server's limit). */
 export const MAX_SCOPE_ENTRIES = 16;
@@ -142,10 +139,10 @@ function MemberAccessForm({ mode, onDone, onIssued }: {
   const [busy, setBusy] = useState(false);
 
   const { data: roleList } = useQuery(listTenantRoles, []);
-  const { data: customerPage } = useQuery(() => listCustomers(CUSTOMER_PAGE), []);
+  const { current: customerPage, error: customersError } = useQuery(() => listAll(page => listCustomers(page)), []);
   // Only the groups that are access scopes are offered: a member limited to any other group
   // would see nothing. The field's description says where a missing one is enabled.
-  const { data: accessGroups } = useQuery(listAccessScopeGroups, []);
+  const { current: accessGroups, error: groupsError } = useQuery(listAccessScopeGroups, []);
 
   const roleOptions = useMemo<ComboboxOption[]>(
     () =>
@@ -209,6 +206,8 @@ function MemberAccessForm({ mode, onDone, onIssued }: {
 
   return (
     <div className="space-y-4">
+      {customersError && <p role="alert" className="text-sm text-destructive">{customersError}</p>}
+      {groupsError && <p role="alert" className="text-sm text-destructive">{groupsError}</p>}
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
       {!editing && (
         <FormField label={t('emailLabel')} htmlFor="m-email">

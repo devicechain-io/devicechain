@@ -44,6 +44,9 @@ type Window struct {
 	Start time.Time `json:"start"`
 	End   time.Time `json:"end"`
 }
+
+// Bounds identifies positions in the physical replay stream suffix. A saved base
+// bound remains a base bound after sharding; it cannot be reused for another group.
 type Bounds struct {
 	Role     Role   `json:"role"`
 	Stream   string `json:"stream"`

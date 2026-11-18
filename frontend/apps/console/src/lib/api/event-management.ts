@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Typed GraphQL operations against the event-management service.
-import { gql } from '@devicechain/client';
+import { gql, GraphQLRequestError } from '@devicechain/client';
 import { graphql } from '@/gql/event-management';
 import type {
   EventsQuery,
@@ -18,6 +18,28 @@ import type {
 export type DeviceEvent = EventsQuery['events']['results'][number];
 export type PresenceTransition = StateChangeEventsQuery['stateChangeEvents']['results'][number];
 
+// An older pod rejects both the new input and selection. Once encountered, keep
+// both event lists on the compatible documents for the rest of this session.
+let useLegacyEventLists = false;
+
+// Exactly the two validation refusals an older server gives for the new fields: an unknown
+// input field and an unknown selection. Any other error that merely names them is not one.
+const LEGACY_REFUSALS = [
+  /Field "includeTotal" is not defined by type "EventSearchCriteria"/,
+  /Cannot query field "hasMore" on type "SearchResultsPagination"/,
+];
+
+function isLegacyEventListError(error: unknown): boolean {
+  return error instanceof GraphQLRequestError &&
+    !!error.errors?.some(({ message }) => LEGACY_REFUSALS.some((refusal) => refusal.test(message)));
+}
+
+type EventListOptions = {
+  deviceToken: string;
+  pageNumber: number;
+  pageSize: number;
+};
+
 const EVENTS = graphql(`
   query Events($criteria: EventSearchCriteria!) {
     events(criteria: $criteria) {
@@ -29,27 +51,30 @@ const EVENTS = graphql(`
         source
       }
       pagination {
+        hasMore
         totalRecords
       }
     }
   }
 `);
 
-export async function listEvents(opts: {
-  deviceToken: string;
-  pageNumber: number;
-  pageSize: number;
-}): Promise<EventsQuery['events']> {
-  return (
-    await gql('event-management', EVENTS, {
-      criteria: {
-        pageNumber: opts.pageNumber,
-        pageSize: opts.pageSize,
-        deviceToken: opts.deviceToken,
-      },
-    })
-  ).events;
-}
+const EVENTS_LEGACY = graphql(`
+  query EventsLegacy($criteria: EventSearchCriteria!) {
+    events(criteria: $criteria) {
+      results {
+        id
+        deviceToken
+        eventType
+        occurredTime
+        source
+      }
+      pagination {
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
 
 const STATE_CHANGE_EVENTS = graphql(`
   query StateChangeEvents($criteria: EventSearchCriteria!) {
@@ -62,28 +87,74 @@ const STATE_CHANGE_EVENTS = graphql(`
         sessionId
       }
       pagination {
+        hasMore
         totalRecords
       }
     }
   }
 `);
 
-// listPresenceTransitions returns a device's presence history (connected, disconnected,
-// released to inferred presence), newest first. Requires event:read.
-export async function listPresenceTransitions(opts: {
-  deviceToken: string;
-  pageNumber: number;
-  pageSize: number;
-}): Promise<StateChangeEventsQuery['stateChangeEvents']> {
-  return (
-    await gql('event-management', STATE_CHANGE_EVENTS, {
-      criteria: {
-        pageNumber: opts.pageNumber,
-        pageSize: opts.pageSize,
-        deviceToken: opts.deviceToken,
-      },
-    })
-  ).stateChangeEvents;
+const STATE_CHANGE_EVENTS_LEGACY = graphql(`
+  query StateChangeEventsLegacy($criteria: EventSearchCriteria!) {
+    stateChangeEvents(criteria: $criteria) {
+      results {
+        deviceToken
+        occurredTime
+        state
+        reason
+        sessionId
+      }
+      pagination {
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
+
+export async function listEvents(opts: EventListOptions): Promise<EventsQuery['events']> {
+  if (!useLegacyEventLists) {
+    try {
+      return (await gql('event-management', EVENTS, {
+        criteria: { ...opts, includeTotal: false },
+      })).events;
+    } catch (error) {
+      if (!isLegacyEventListError(error)) throw error;
+      useLegacyEventLists = true;
+    }
+  }
+  const page = (await gql('event-management', EVENTS_LEGACY, { criteria: opts })).events;
+  const { pageEnd, totalRecords } = page.pagination;
+  return {
+    ...page,
+    pagination: {
+      ...page.pagination,
+      hasMore: pageEnd != null && totalRecords != null && pageEnd < totalRecords,
+    },
+  };
+}
+
+// A device's presence history, newest first. Requires event:read.
+export async function listPresenceTransitions(opts: EventListOptions): Promise<StateChangeEventsQuery['stateChangeEvents']> {
+  if (!useLegacyEventLists) {
+    try {
+      return (await gql('event-management', STATE_CHANGE_EVENTS, {
+        criteria: { ...opts, includeTotal: false },
+      })).stateChangeEvents;
+    } catch (error) {
+      if (!isLegacyEventListError(error)) throw error;
+      useLegacyEventLists = true;
+    }
+  }
+  const page = (await gql('event-management', STATE_CHANGE_EVENTS_LEGACY, { criteria: opts })).stateChangeEvents;
+  const { pageEnd, totalRecords } = page.pagination;
+  return {
+    ...page,
+    pagination: {
+      ...page.pagination,
+      hasMore: pageEnd != null && totalRecords != null && pageEnd < totalRecords,
+    },
+  };
 }
 
 // ── Draft-formula history preview ─────────────────────────────────────────

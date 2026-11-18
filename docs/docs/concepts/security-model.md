@@ -12,6 +12,11 @@ To report a vulnerability, follow the process in the
 
 ## Trust boundaries at a glance {#boundaries}
 
+Metrics and health probes answer without authentication, so they are served on a separate
+operations port that no public route reaches; the public port serves GraphQL, whose operations
+enforce their own authentication and permissions. [Production hardening](../deployment/production-hardening.md)
+lists what each port serves and how to check the public edge before opening the instance to the internet.
+
 | Boundary | What separates the two sides | Enforced by |
 | --- | --- | --- |
 | Tenant from tenant | Every tenant-owned row and every message subject carries the tenant | A database scope on every query, and per-tenant subjects at the broker |

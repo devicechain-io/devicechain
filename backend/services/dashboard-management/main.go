@@ -21,7 +21,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
@@ -91,6 +90,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Svc = service.New(Microservice, service.Spec{
 		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
+			AppendOnly: []any{&model.DashboardVersion{}},
 			Migrations: model.Migrations,
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Config:     Configuration.RdbConfiguration,
@@ -137,14 +137,6 @@ func afterRdb(ctx context.Context, m *service.Managers) error {
 	} else {
 		log.Warn().Msg("Dashboard share sweep not started: device-management lookup is not configured")
 	}
-
-	// Report the size of this schema's append-only history tables (ADR-023): a dashboard version history only
-	// grows, and so does the audit journal the collector adds for every schema. Nothing
-	// prunes either, so the storage floor rises with use and nothing else says how fast.
-	// Registered directly rather than through Microservice.NewGauge because a failed read
-	// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
-	prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
-		&model.DashboardVersion{}))
 
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
 	// validator in the background and gate the data plane on readiness rather
