@@ -208,9 +208,12 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 
 	prevMs, prevGql, prevNats, prevRdb := Microservice, GraphQLManager, NatsManager, RdbManager
 	prevProc, prevWriter, prevSvc, prevOwners := StateProcessors, InboundEventsWriter, Svc, OwnershipProcessor
+	prevDeletion, prevOrphan := DeletionProcessor, OrphanTask
+	DeletionProcessor, OrphanTask = nil, nil
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, RdbManager = prevMs, prevGql, prevNats, prevRdb
 		StateProcessors, InboundEventsWriter, Svc, OwnershipProcessor = prevProc, prevWriter, prevSvc, prevOwners
+		DeletionProcessor, OrphanTask = prevDeletion, prevOrphan
 	})
 
 	area := fmt.Sprintf("device-state-shutdown-%d", time.Now().UnixNano())

@@ -10,6 +10,17 @@ import (
 	"testing"
 )
 
+// Synthetic forwarders exercise literal subjects without restoring removed production APIs.
+func fixtureMintForwarders() map[string]mintForwarder {
+	forwarders := map[string]mintForwarder{}
+	for name, forwarder := range serviceMintForwarders {
+		forwarders[name] = forwarder
+	}
+	forwarders["governance.FixtureGate"] = mintForwarder{2, []string{"tenant:read"}}
+	forwarders["governance.FixtureGates"] = mintForwarder{2, []string{"tenant:read"}}
+	return forwarders
+}
+
 func writeMintFixture(t *testing.T, root, name, source string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(name))
@@ -38,7 +49,7 @@ import (
 var _ = service.NatsSpec{}
 func overLiteral() { s.New(nil, "", "fixture", []string{string(a.DeviceRead)}) }
 func dynamicSubject(subject string) { s.New(nil, "", subject, []string{a.TenantRead}) }
-func overForwarder() { g.NewTenantLifecycleGate(nil, "", "forwarded", nil) }
+func overForwarder() { g.FixtureGate(nil, "", "forwarded", nil) }
 func dynamicAuthorities(grants []string) { s.New(nil, "", "fixture", grants) }
 func valid() { s.New(nil, "", "fixture", []string{string(a.TenantRead)}) }
 `)
@@ -47,7 +58,7 @@ func valid() { s.New(nil, "", "fixture", []string{string(a.TenantRead)}) }
 	// Invalid syntax demonstrates these files are never parsed.
 	writeMintFixture(t, root, "backend/services/fixture/ignored_test.go", "not Go")
 	writeMintFixture(t, root, "backend/services/fixture/testdata/ignored.go", "not Go")
-	sites, err := serviceMintSitesUnder(root, serviceMintForwarders)
+	sites, err := serviceMintSitesUnder(root, fixtureMintForwarders())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,13 +89,13 @@ import a "github.com/devicechain-io/dc-microservice/auth"
 func valid() { s.New(nil, "", "fixture", []string{string(a.TenantRead)}) }`)
 	writeMintFixture(t, root, "backend/services/missing/main.go", `package missing
 import g "github.com/devicechain-io/dc-microservice/governance"
-func valid() { g.NewTenantLifecycleGates(nil, "", "missing", nil) }`)
+func valid() { g.FixtureGates(nil, "", "missing", nil) }`)
 	writeMintFixture(t, root, "backend/core/governance/lifecycle_resolver.go", `package governance
 import s "github.com/devicechain-io/dc-microservice/svcclient"
 import a "github.com/devicechain-io/dc-microservice/auth"
-func NewTenantLifecycleGate(cfg any, secret, subject string, gates any) { NewTenantLifecycleGates(cfg, secret, subject, gates) }
-func NewTenantLifecycleGates(cfg any, secret, subject string, gates any) { s.New(cfg, secret, subject, []string{string(a.TenantRead)}) }`)
-	sites, err = serviceMintSitesUnder(root, serviceMintForwarders)
+func FixtureGate(cfg any, secret, subject string, gates any) { FixtureGates(cfg, secret, subject, gates) }
+func FixtureGates(cfg any, secret, subject string, gates any) { s.New(cfg, secret, subject, []string{string(a.TenantRead)}) }`)
+	sites, err = serviceMintSitesUnder(root, fixtureMintForwarders())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,12 +106,12 @@ func NewTenantLifecycleGates(cfg any, secret, subject string, gates any) { s.New
 	writeMintFixture(t, root, "backend/core/governance/lifecycle_resolver.go", `package governance
 import s "github.com/devicechain-io/dc-microservice/svcclient"
 import a "github.com/devicechain-io/dc-microservice/auth"
-func NewTenantLifecycleGates(cfg any, secret, subject string, gates any) { s.New(cfg, secret, subject, []string{string(a.DeviceRead)}) }`)
-	sites, err = serviceMintSitesUnder(root, serviceMintForwarders)
+func FixtureGates(cfg any, secret, subject string, gates any) { s.New(cfg, secret, subject, []string{string(a.DeviceRead)}) }`)
+	sites, err = serviceMintSitesUnder(root, fixtureMintForwarders())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if problems := strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}, "missing": {"tenant:read"}}), "\n"); !strings.Contains(problems, "NewTenantLifecycleGates: non-literal subject") {
+	if problems := strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}, "missing": {"tenant:read"}}), "\n"); !strings.Contains(problems, "FixtureGates: non-literal subject") {
 		t.Fatalf("damaged forwarder grant was not reported: %s", problems)
 	}
 }
@@ -109,9 +120,10 @@ func writeDeadletterMintFixture(t *testing.T, root string) {
 	t.Helper()
 	writeMintFixture(t, root, "backend/core/deadletter/recorder.go", `package deadletter
 import g "github.com/devicechain-io/dc-microservice/governance"
-var tenantLifecycleGate = g.NewTenantLifecycleGate`)
+var tenantLifecycleGate = g.NewTenantLifecycleGateFor`)
 	writeMintFixture(t, root, "backend/core/deadletter/deadletter.go", `package deadletter
-func gate() { tenantLifecycleGate(nil, "", p.ms.FunctionalArea, nil) }`)
+import s "github.com/devicechain-io/dc-microservice/svcclient"
+func gate() { peers := s.NewPeers(infra, p.ms.FunctionalArea); tenantLifecycleGate(peers, nil) }`)
 }
 
 // These trees deliberately contain function-value mints and forbidden imports.
@@ -125,18 +137,18 @@ func escaped() { mint := s.New; mint(nil, "", "fixture", nil) }`, "main.go:escap
 		{"client argument", `import s "github.com/devicechain-io/dc-microservice/svcclient"
 func escaped() { consume(s.New) }`, "main.go:escaped: constructor reference"},
 		{"gate alias", `import g "github.com/devicechain-io/dc-microservice/governance"
-func escaped() { mint := g.NewTenantLifecycleGate; mint(nil, "", "fixture", nil) }`, "main.go:escaped: constructor reference"},
+func escaped() { mint := g.FixtureGate; mint(nil, "", "fixture", nil) }`, "main.go:escaped: constructor reference"},
 		{"gates argument", `import g "github.com/devicechain-io/dc-microservice/governance"
-func escaped() { consume(g.NewTenantLifecycleGates) }`, "main.go:escaped: constructor reference"},
+func escaped() { consume(g.FixtureGates) }`, "main.go:escaped: constructor reference"},
 		{"client dot import", `import . "github.com/devicechain-io/dc-microservice/svcclient"
 func escaped() { New(nil, "", "fixture", nil) }`, "dot-import of svcclient"},
 		{"governance dot import", `import . "github.com/devicechain-io/dc-microservice/governance"
-func escaped() { NewTenantLifecycleGate(nil, "", "fixture", nil) }`, "dot-import of governance"},
+func escaped() { FixtureGate(nil, "", "fixture", nil) }`, "dot-import of governance"},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			root := newAreaMintFixture(t)
 			writeMintFixture(t, root, "backend/services/fixture/main.go", "package fixture\n"+fixture.source)
-			sites, err := serviceMintSitesUnder(root, serviceMintForwarders)
+			sites, err := serviceMintSitesUnder(root, fixtureMintForwarders())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -165,7 +177,7 @@ var _ = service.NatsSpec{}`)
 
 func assertAreaMintFixturePasses(t *testing.T, root string) {
 	t.Helper()
-	sites, err := serviceMintSitesUnder(root, serviceMintForwarders)
+	sites, err := serviceMintSitesUnder(root, fixtureMintForwarders())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +194,7 @@ func TestServiceMintDeadletterNegativeControls(t *testing.T) {
 func badGate() { tenantLifecycleGate(nil, "", "unknown", nil) }`, "other.go:badGate: tenantLifecycleGate subject must end in .FunctionalArea"},
 		{"wrong constructor", "recorder.go", `package deadletter
 import g "github.com/devicechain-io/dc-microservice/governance"
-var tenantLifecycleGate = g.NewTenantLifecycleGates`, "tenantLifecycleGate must be initialized to governance.NewTenantLifecycleGate"},
+var tenantLifecycleGate = g.FixtureGates`, "tenantLifecycleGate must be initialized to governance.NewTenantLifecycleGateFor"},
 		{"missing alias", "recorder.go", "package deadletter", "requires exactly one constructor alias"},
 		{"missing call", "deadletter.go", "package deadletter", "at least one FunctionalArea call"},
 		{"missing subject", "other.go", `package deadletter
@@ -193,7 +205,7 @@ func badGate() { tenantLifecycleGate(nil, "") }`, "other.go:badGate: tenantLifec
 			assertAreaMintFixturePasses(t, root)
 			path := "backend/core/deadletter/" + fixture.file
 			writeMintFixture(t, root, path, fixture.source)
-			sites, err := serviceMintSitesUnder(root, serviceMintForwarders)
+			sites, err := serviceMintSitesUnder(root, fixtureMintForwarders())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -214,7 +226,7 @@ func badGate() { tenantLifecycleGate(nil, "") }`, "other.go:badGate: tenantLifec
 }
 
 func TestServiceMintDamagedTableNegativeControls(t *testing.T) {
-	sites, err := serviceMintSitesUnder(workspaceRoot(t), serviceMintForwarders)
+	sites, err := serviceMintSitesUnder(workspaceRoot(t), fixtureMintForwarders())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,5 +243,106 @@ func TestServiceMintDamagedTableNegativeControls(t *testing.T) {
 				t.Fatalf("%s grant was not detected: %s", damage, problems)
 			}
 		})
+	}
+}
+
+// Planted peer-wiring defects must be attributed to the service directory and named.
+func TestServiceMintPeersNegativeControls(t *testing.T) {
+	root := newAreaMintFixture(t)
+	writeMintFixture(t, root, "backend/core/auth/authority.go", `package auth
+type Authority string
+const (TenantRead Authority = "tenant:read"; DeviceRead Authority = "device:read")`)
+	source := `package fixture
+import s "github.com/devicechain-io/dc-microservice/svcclient"
+import a "github.com/devicechain-io/dc-microservice/auth"
+import g "github.com/devicechain-io/dc-microservice/governance"
+func peerCalls() {
+ peers := s.NewPeers(infra, ms.FunctionalArea)
+ peers.Client(a.DeviceRead)
+ peers.Seam(target, a.DeviceRead)
+ peers.UserManagement(a.DeviceRead)
+ tuned := peers.With(option)
+ tuned.Client(a.DeviceRead)
+ copied := peers
+ copied.Client(a.DeviceRead)
+ peers.With(option).UserManagement(a.DeviceRead)
+ g.NewTenantLifecycleGateFor(peers, nil)
+ g.NewTenantLifecycleGatesFor(peers, nil)
+}
+`
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", source)
+	sites, err := serviceMintSitesUnder(root, fixtureMintForwarders())
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, site := range sites {
+		if strings.HasSuffix(site.File, "/peers.go") {
+			count++
+			if site.Caller != "fixture" || site.Unresolved != "" {
+				t.Fatalf("bad attribution: %+v", site)
+			}
+		}
+	}
+	if count != 8 {
+		t.Fatalf("got %d peer sites, want 8", count)
+	}
+	problems := strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+	if strings.Count(problems, "requests device:read outside ceiling") != 6 {
+		t.Fatalf("excess peer grants escaped: %s", problems)
+	}
+	source = strings.ReplaceAll(source, "a.DeviceRead", "a.TenantRead")
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", source)
+	assertAreaMintFixturePasses(t, root)
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", strings.ReplaceAll(source, "ms.FunctionalArea", `"fixture"`))
+	sites, err = serviceMintSitesUnder(root, fixtureMintForwarders())
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems = strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+	if !strings.Contains(problems, "NewPeers subject must end in .FunctionalArea") {
+		t.Fatalf("literal area escaped: %s", problems)
+	}
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", strings.Replace(source, "peers.Client(a.TenantRead)", "alias := peers.Client; _ = alias", 1))
+	sites, err = serviceMintSitesUnder(root, fixtureMintForwarders())
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems = strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+	if !strings.Contains(problems, "constructor reference is not a direct call") {
+		t.Fatalf("method alias escaped: %s", problems)
+	}
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", strings.Replace(source, "peers := s.NewPeers", "factory := s.NewPeers; peers := factory", 1))
+	sites, err = serviceMintSitesUnder(root, fixtureMintForwarders())
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems = strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+	if !strings.Contains(problems, "constructor reference is not a direct call: svcclient.NewPeers") {
+		t.Fatalf("factory alias escaped: %s", problems)
+	}
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", source+`
+func nested() { consume(s.NewPeers(infra, "fixture")) }
+`)
+	sites, err = serviceMintSitesUnder(root, fixtureMintForwarders())
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems = strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+	if !strings.Contains(problems, "peers.go:nested: NewPeers subject must end in .FunctionalArea") {
+		t.Fatalf("nested constructor subject escaped: %s", problems)
+	}
+	writeMintFixture(t, root, "backend/services/fixture/peers.go", source)
+	writeMintFixture(t, root, "backend/core/governance/lifecycle_resolver.go", `package governance
+import s "github.com/devicechain-io/dc-microservice/svcclient"
+import a "github.com/devicechain-io/dc-microservice/auth"
+func NewTenantLifecycleGatesFor(p *s.Peers, gates any) { p.UserManagement(a.DeviceRead) }`)
+	sites, err = serviceMintSitesUnder(root, fixtureMintForwarders())
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems = strings.Join(checkMintSites(sites, map[string][]string{"fixture": {"tenant:read"}}), "\n")
+	if !strings.Contains(problems, "NewTenantLifecycleGatesFor: non-literal subject") {
+		t.Fatalf("changed forwarder grant escaped: %s", problems)
 	}
 }

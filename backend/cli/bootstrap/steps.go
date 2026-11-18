@@ -822,10 +822,24 @@ func stepInfraApply(ctx context.Context, st *State) error {
 		return err
 	}
 	if cfg != nil {
+		// The volume the apply will provision, the operator's stated size included: judging
+		// the preset's instead refused an operator who had already grown it, with advice to
+		// grow it. A size dcctl cannot read is left to the check after the apply.
 		planned := *st
-		planned.LiveVolumes.JetStream = jetStreamStorageFor(st)
-		if err := precheckJetStreamReservation(ctx, &planned); err != nil {
-			return err
+		volume, unread := plannedJetStreamVolume(st)
+		if unread == "" {
+			planned.LiveVolumes.JetStream = volume
+			if planned.LiveMaxFileStore == "" {
+				if v, stated, readable := operatorStatedValue(st, "nats_jetstream_max_file_store"); stated && readable && v != "" {
+					planned.LiveMaxFileStore = v
+				}
+			}
+			if err := precheckJetStreamReservation(ctx, &planned); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("  %s JetStream reservation not checked before the infrastructure apply (%s); it is "+
+				"checked against the provisioned volume before the chart is installed\n", color.YellowString("note:"), unread)
 		}
 	}
 	if err := checkHaNodeCapacity(ctx, st); err != nil {

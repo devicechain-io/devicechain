@@ -194,10 +194,6 @@ export async function renameConnector(
   return data.renameConnector;
 }
 
-// Legacy prose marker retained for callers. Connector updates now also carry
-// extensions.code STALE_WRITE; classify their failures by that code instead.
-export const CONFLICT_MARKER = 'modified by another writer';
-
 // ── Versioning (ADR-039) ──────────────────────────────────────────────────
 
 const CONNECTOR_VERSIONS = graphql(`

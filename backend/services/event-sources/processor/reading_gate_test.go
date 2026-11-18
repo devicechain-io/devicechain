@@ -206,7 +206,7 @@ func TestAnUncountedPayloadIsChargedTheMaximum(t *testing.T) {
 func TestHttpTenantOverItsCeilingIs429EvenWhileThePipelineRefuses(t *testing.T) {
 	gate, _ := newTestReadingGate(1e-9, 256)
 	asked := 0
-	admit := func(s string) error { asked++; return refuseAll(s) }
+	admit := func(tenant, source string) error { asked++; return refuseAll(tenant, source) }
 	es, dec, _ := newTestHttpSourceGated(t, nil, gate, admit, config.HttpIngest{}, nil)
 
 	post := func() *httptest.ResponseRecorder {
@@ -345,7 +345,7 @@ func TestDecodeWorkerPassesSendTimeRedeliveryAndOrigin(t *testing.T) {
 func TestExternalMqttChecksTheTenantCeilingBeforeThePipeline(t *testing.T) {
 	es, received := newTestMqttSource(t, func(string, string, time.Time, bool, Origin) bool { return false })
 	asked := 0
-	es.admit = func(string) error { asked++; return nil }
+	es.admit = func(string, string) error { asked++; return nil }
 
 	es.onMessage(nil, &fakeMqttMessage{topic: "inst-1/acme/events", payload: []byte(`{"device":"d1"}`)})
 

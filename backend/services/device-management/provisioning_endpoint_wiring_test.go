@@ -28,6 +28,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
 // 🔴 NOTHING ELSE EXERCISES main.go's WIRING, so this does. It assembles the globals the way
@@ -51,8 +52,10 @@ var provisioningTenantsSeed *core.TenantRateLimiter
 
 func wireProvisioning(t *testing.T, mutate func(*config.DeviceManagementConfiguration), withKeys bool, infra ...func(*core.Microservice)) *provWiring {
 	t.Helper()
+	prevPeers := servicePeers
 	prevMs, prevCfg, prevApi, prevMetrics, prevGates, prevTenants := Microservice, Configuration, Api, ProvisioningMetrics, safetyGates, ProvisioningTenants
 	t.Cleanup(func() {
+		servicePeers = prevPeers
 		Microservice, Configuration, Api, ProvisioningMetrics, safetyGates, ProvisioningTenants = prevMs, prevCfg, prevApi, prevMetrics, prevGates, prevTenants
 	})
 	// The shared limiter is built on first use, so a test that wires with its own configuration
@@ -67,6 +70,7 @@ func wireProvisioning(t *testing.T, mutate func(*config.DeviceManagementConfigur
 	for _, f := range infra {
 		f(Microservice)
 	}
+	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
 	safetyGates = governance.NewSafetyGates(Microservice)
 	Configuration = config.NewDeviceManagementConfiguration()
 	if mutate != nil {
@@ -239,7 +243,7 @@ func TestTheTenantLifecycleGateReachesTheEndpoint(t *testing.T) {
 // configured it is the platform default, which is a limit and not "unlimited".
 func TestThePerTenantCeilingIsTheProvisioningDimension(t *testing.T) {
 	wireProvisioning(t, nil, true)
-	l := buildProvisioningTenantLimiter(Microservice.InstanceConfiguration.Infrastructure)
+	l := buildProvisioningTenantLimiter(servicePeers)
 	def := governance.DefaultProvisioningLimits()
 	allowed := 0
 	for i := 0; i < def.Burst+50; i++ {
@@ -258,14 +262,17 @@ func TestAnEmptyTrustedProxyListIsWarnedAbout(t *testing.T) {
 	// it logged. Each call is a subtest because the shared sink captures one test at a time.
 	wire := func(t *testing.T, proxies []string) (string, error) {
 		logs := logSink.Capture(t)
+		prevPeers := servicePeers
 		prevMs, prevCfg, prevApi, prevMetrics, prevGates, prevTenants := Microservice, Configuration, Api, ProvisioningMetrics, safetyGates, ProvisioningTenants
 		t.Cleanup(func() {
+			servicePeers = prevPeers
 			Microservice, Configuration, Api, ProvisioningMetrics, safetyGates, ProvisioningTenants = prevMs, prevCfg, prevApi, prevMetrics, prevGates, prevTenants
 		})
 		ProvisioningTenants = nil
 		Microservice = &core.Microservice{InstanceId: "inst1", FunctionalArea: "device-management"}
 		Microservice.UseMetricsRegistry(prometheus.NewRegistry())
 		Microservice.InstanceConfiguration.Infrastructure.Http.TrustedProxies = proxies
+		servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
 		safetyGates = governance.NewSafetyGates(Microservice)
 		Configuration = config.NewDeviceManagementConfiguration()
 		Api = model.NewApi(&rdb.RdbManager{})

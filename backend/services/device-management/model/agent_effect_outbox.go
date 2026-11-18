@@ -159,13 +159,11 @@ func (api *Api) drainTenantAgentEffects(ctx context.Context, pageSize int) (publ
 	return
 }
 
+const agentEffectsDrainLockName = "device-management-agent-effects-drain"
+
 func (api *Api) DrainAgentEffectsLocked(ctx context.Context) error {
-	ran, err := api.RDB.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey("device-management-agent-effects-drain"), func() error {
+	return api.RDB.SingletonPass(ctx, agentEffectsDrainLockName, func() error {
 		_, err := api.DrainAgentEffects(ctx, AgentEffectsDrainPageSize)
 		return err
 	})
-	if !ran && err == nil {
-		return core.ErrPassSkipped
-	}
-	return err
 }

@@ -18,8 +18,10 @@ var docsRoot = filepath.Join("..", "..", "..", "docs")
 
 const regenerate = "regenerate with: cd backend/cli && go run . docs --out ../../docs"
 
-// Keep the evaluator on one published-image recipe across all living locales.
-// Compact must not silently trade away backups or root-key escrow.
+// Keep the evaluator on one published-image laptop recipe across all living locales:
+// `dcctl install local --compact`, then a plain-HTTP bootstrap on localhost. The recipe
+// keeps root-key escrow (no --dev, no --no-escrow); keeping backups as well is an
+// optional variant the page offers beside it, never the main path.
 func TestLaptopRecipeInPublishedDocs(t *testing.T) {
 	for _, tree := range []string{
 		"docs",
@@ -36,9 +38,10 @@ func TestLaptopRecipeInPublishedDocs(t *testing.T) {
 				return normalize(data)
 			}
 			quickstart := read("quickstart/first-device.md")
-			recipe := "dcctl install local --compact --no-tls=false\ndcctl bootstrap local devicechain --host localhost --no-tls\n"
+			recipe := "```bash\ndcctl install local --compact\ndcctl bootstrap local devicechain --host localhost --no-tls\n```\n"
 			if !strings.Contains(quickstart, recipe) {
-				t.Error("laptop recipe must use compact published images while retaining cert-manager, backups and escrow")
+				t.Error("the laptop recipe must be `dcctl install local --compact` then " +
+					"`dcctl bootstrap local devicechain --host localhost --no-tls`, on published images")
 			}
 			for _, required := range []string{"4", "8 GiB", "Git Bash", "WSL", "Pending", "../deployment/bootstrap.md#--compact"} {
 				if !strings.Contains(quickstart, required) {
