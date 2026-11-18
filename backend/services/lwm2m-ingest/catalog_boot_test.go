@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/service"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
 // TestStartsUnderItsDeclaredCatalog runs the service's REAL initialize and start callbacks
@@ -34,6 +35,10 @@ import (
 // the lease bucket). Waiting for the transport to be serving also covers the leader-only
 // dispatcher's run over the command reader.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
+	// The real Spec owns terminal, process-global governance refresh shutdown.
+	if dctest.RunInSubprocess(t) {
+		return
+	}
 	identity := uniqueIdentity("lwm2m-ingest-catalog")
 	// The broker holds the area's login to exactly the permissions natsauth generates for it, so
 	// this is also the area's permission test: the real wiring runs against it and the broker's

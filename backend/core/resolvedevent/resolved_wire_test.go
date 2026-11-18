@@ -109,6 +109,7 @@ func referenceMarshalResolvedEvent(event *ResolvedEvent, format eventtime.WireFo
 			AnchorType:     a.AnchorType,
 			AnchorToken:    a.AnchorToken,
 			RelationshipId: uint64(a.RelationshipId),
+			AnchorEntityId: uint64(a.EntityId),
 		})
 	}
 	memberships := make([]*PScopeMembership, 0, len(event.ScopeMemberships))
@@ -127,6 +128,7 @@ func referenceMarshalResolvedEvent(event *ResolvedEvent, format eventtime.WireFo
 		Source:               event.Source,
 		AltId:                event.AltId,
 		SourceDeviceToken:    event.SourceDeviceToken,
+		DeviceIncarnation:    event.DeviceIncarnation,
 		Anchors:              anchors,
 		DeviceTypeToken:      referenceOptionalString(event.DeviceTypeToken),
 		ProfileVersionToken:  referenceOptionalString(event.ProfileVersionToken),
