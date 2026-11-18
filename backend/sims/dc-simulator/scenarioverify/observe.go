@@ -63,12 +63,15 @@ func (c Clock) TargetDay(now time.Time, from float64) int {
 
 // AlarmSample is one alarm as one poll of the alarm list saw it.
 type AlarmSample struct {
-	At       time.Time `json:"at"`
-	Token    string    `json:"token"`
-	Device   string    `json:"device"`
-	Key      string    `json:"key"`
-	Severity string    `json:"severity"`
-	State    string    `json:"state"`
+	At     time.Time `json:"at"`
+	Token  string    `json:"token"`
+	Device string    `json:"device"`
+	// Originator is the alarm's "<originatorType> <originatorId>", the source a duty mail
+	// names when device-management could not resolve the device's name or token.
+	Originator string `json:"originator,omitempty"`
+	Key        string `json:"key"`
+	Severity   string `json:"severity"`
+	State      string `json:"state"`
 }
 
 // Command is one stored command.
