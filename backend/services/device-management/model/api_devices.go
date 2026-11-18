@@ -415,6 +415,7 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 	// gateway's row lock, the lock AssignDeviceGateway and DeleteDevice take: checked outside it,
 	// a gateway put behind another gateway, or deleted, in between would leave the new device two
 	// levels deep or naming a gateway that is gone.
+	var change membershipChange
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		// An earmark is checked and its profile locked BEFORE the device is inserted (see
 		// lockEarmarkProfiles for why the order matters).
@@ -440,7 +441,14 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 		}
 		// The aliases land with the device or not at all: an alias another device holds fails
 		// the whole create (CONFLICT) rather than leaving a device a sender cannot find.
-		return insertAliasesOnTx(tx, created.ID, aliases)
+		if err := insertAliasesOnTx(tx, created.ID, aliases); err != nil {
+			return err
+		}
+		change, err = api.enrollNewEntitiesOnTx(ctx, tx, "device", []uint{created.ID})
+		if err != nil {
+			return err
+		}
+		return queueAccessChangeOnTx(tx, "device", created.ID, change)
 	})
 	if err != nil {
 		return nil, err
@@ -453,6 +461,7 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 	// by event-processing's reconcile against this service (at its leadership-term start and
 	// every five minutes).
 	api.emitDeviceRosterForDevice(ctx, created, false)
+	api.afterMembershipRecompute(ctx, "device", created.ID, change)
 	return created, nil
 }
 
@@ -516,6 +525,8 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 	}
 
 	created := make([]*Device, 0, len(requests))
+	var change membershipChange
+	ids := make([]uint, 0, len(requests))
 	now := time.Now()
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		// The profiles the batch earmarks for are locked once, before any device is inserted.
@@ -571,8 +582,16 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 			}
 			device.DeviceType = dt
 			created = append(created, device)
+			ids = append(ids, device.ID)
 		}
-		return nil
+		change, err = api.enrollNewEntitiesOnTx(ctx, tx, "device", ids)
+		if err != nil {
+			return err
+		}
+		if change.access {
+			_, err = queueOwnershipOnTx(tx, ids)
+		}
+		return err
 	})
 	if err != nil {
 		return nil, err
@@ -581,6 +600,9 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 	// Post-commit, best-effort roster emit (see the doc comment). The entries are read
 	// back in chunks, so a 1000-device batch is a couple of joined reads after the
 	// transaction rather than a lookup per device.
+	if change.touched {
+		api.evictMemberships(ctx, "device", ids)
+	}
 	api.emitDeviceRosterBatch(ctx, created)
 	return created, nil
 }

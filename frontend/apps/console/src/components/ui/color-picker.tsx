@@ -24,6 +24,7 @@
 import { useState } from 'react';
 import { HexColorInput, HexColorPicker } from 'react-colorful';
 import { cn } from '@/lib/utils';
+import { useFormFieldId } from './form-field-context';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 // A 6-digit hex colour. The picker only ever emits this form; the guard is for the
@@ -66,6 +67,7 @@ export function ColorPicker({
   empty = false,
   emptyLabel,
 }: ColorPickerProps) {
+  const triggerId = useFormFieldId(id);
   const [open, setOpen] = useState(false);
   const shown = isHexColor(value) ? value : fallback;
 
@@ -73,7 +75,7 @@ export function ColorPicker({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
-          id={id}
+          id={triggerId}
           type="button"
           disabled={disabled}
           aria-label={ariaLabel}
