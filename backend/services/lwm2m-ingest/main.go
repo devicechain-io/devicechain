@@ -177,7 +177,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  func(context.Context) error { return nil },
@@ -211,9 +211,6 @@ func parseConfiguration() error {
 var safetyGates *governance.SafetyGates
 
 func afterMicroserviceInitialized(ctx context.Context) error {
-	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
-	// registration panics, and the gates below are decided in callbacks that can run again.
-	safetyGates = governance.NewSafetyGates(Microservice)
 	if err := parseConfiguration(); err != nil {
 		return err
 	}
@@ -236,7 +233,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// presence. Stand up its long-lived collaborators only when there are credentials so an inert
 	// (no-identity) deployment does not demand the durable-emit + device-management coordinates it
 	// will never use.
-	spec := service.Spec{}
+	spec := service.Spec{GovernanceRefreshes: true}
 	if len(Configuration.Security.Identities) > 0 {
 		infra := Microservice.InstanceConfiguration.Infrastructure
 		if ingestURL, deviceStateURL, commandDeliveryURL, err = serviceEndpoints(infra); err != nil {
@@ -248,11 +245,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// The broker when there are credentials, and in every deployment — an inert one included —
 	// the HTTP surface the chart probes.
 	Svc = service.New(Microservice, spec)
+	safetyGates = Svc.SafetyGates()
 	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}
-	// ⚠️ No test drives this initializer — it needs config, credentials and a broker — so
-	// the tests install NatsManager themselves. The line below is what they stand in for.
+	// The catalog boot test drives this initializer against an embedded broker;
+	// other lifecycle fixtures install NatsManager directly.
 	NatsManager = Svc.Nats
 
 	if NatsManager != nil {

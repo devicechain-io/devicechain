@@ -545,8 +545,6 @@ type ResolvedEventsProcessor struct {
 	// fetched but the loop has not yet received is not missed by the backlog check.
 	lastLiveRead time.Time
 	dirty        bool
-	// replaying spans replay-to-head, including its final output checkpoint.
-	replaying bool
 	// restoredSeq and restoredWatermark are the checkpoint ROW's values this term restored
 	// from (zero when there was none). They are the compare half of Store.Reset's compare-and-swap:
 	// the only destructive write in a term build is conditioned on the row still being the one this
@@ -1285,9 +1283,7 @@ func (rp *ResolvedEventsProcessor) reconcileDeadmanArming(ctx context.Context) e
 	if err != nil {
 		return fmt.Errorf("load active-version projection for dead-man reconcile: %w", err)
 	}
-	// A failed final replay checkpoint can leave unpublished edges in the buffer.
-	rp.syncDetector()
-	rp.armer.Reconcile(toRosterEntries(rosters), toActiveEntries(actives), rp.pendingOutputKeys())
+	rp.armer.Reconcile(toRosterEntries(rosters), toActiveEntries(actives))
 	log.Info().Int("rostered", len(rosters)).Int("profiles", len(actives)).
 		Msg("Reconciled DETECT dead-man arming from the roster + active-version projections.")
 	return nil
@@ -1609,8 +1605,6 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 // resets the engine to empty rather than replaying against sequences the stream no
 // longer holds.
 func (rp *ResolvedEventsProcessor) replayToHead() error {
-	rp.replaying = true
-	defer func() { rp.replaying = false }()
 	// The duplicate guard first: it reads the stream before LastSeq, and the replay reader below
 	// is the last one opened (a snapshot ahead of the stream head primes nothing; the reset below
 	// replaces the guard with the engine).
@@ -1642,11 +1636,6 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		observedWatermark := rp.restoredWatermark
 		rp.closeDetector()
 		rp.engine = rp.newDetector()
-		if rp.armer != nil {
-			// Threshold edge cleanup now mutates the engine through the armer.
-			// Keep it on the replacement even before post-replay reconcile.
-			rp.armer.BindEngine(rp.engine)
-		}
 		rp.dirty = false
 		rp.committedSeq = 0
 		// Clear the stale row (the deliberate backward move Save's monotonic guard
@@ -1709,6 +1698,7 @@ func (rp *ResolvedEventsProcessor) run() {
 	// Always cancel and join the pump on the way out (including a panic unwind).
 	defer func() { rp.pcancel(); <-pumpDone }()
 
+	rp.metrics.setTickInterval(rp.cfg.TickInterval)
 	ticker := time.NewTicker(rp.cfg.TickInterval)
 	defer ticker.Stop()
 
@@ -2290,9 +2280,6 @@ func (rp *ResolvedEventsProcessor) drainDetections(triggeredAt time.Time, replay
 	}
 	dets := rp.engine.Drain()
 	for _, d := range dets {
-		if rp.armer != nil {
-			rp.armer.ThresholdEmitted(d)
-		}
 		rp.detOrd++
 		rp.pendingDets = append(rp.pendingDets, pendingDetection{
 			Detection: d, triggeredAt: triggeredAt, ord: rp.detOrd,
@@ -2556,11 +2543,7 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 	// dead-men across the fleet, and arm every rostered device of the profile. Nil active (malformed
 	// token / scaffold) or nil armer skips it.
 	if rp.armer != nil && upd.active != nil {
-		if rp.armer.ApplyActiveVersion(*upd.active, rp.pendingOutputKeys()) > 0 {
-			// The normal checkpoint persists this move. A crash before it can duplicate
-			// an action: accepted at-least-once delivery, without forcing a checkpoint.
-			rp.dirty = true
-		}
+		rp.armer.ApplyActiveVersion(*upd.active)
 	}
 }
 
@@ -3004,7 +2987,6 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	pubCtx, pubCancel := context.WithTimeout(ctx, rp.checkpointTimeout())
 	published := rp.publishPending(pubCtx)
 	pubCancel()
-	rp.carrySettledThresholds()
 	if !published {
 		return false
 	}
@@ -3180,8 +3162,6 @@ func (rp *ResolvedEventsProcessor) flushDetections(ctx context.Context) {
 	ok := rp.publishPending(pubCtx)
 	// What the pass did not retire (all of it on a failure) goes back among the rest, in arrival order.
 	rp.pendingDets = mergeByOrd(rp.pendingDets, keep)
-	// Include held, non-early output before retrying any deferred handoff.
-	rp.carrySettledThresholds()
 	if !ok {
 		rp.flushFailedAt = rp.clock.Now()
 	}
@@ -3419,52 +3399,26 @@ func rollUpToTenants(byRule map[string]int) (map[string]int, int) {
 	return byTenant, total
 }
 
-// pendingOutputKeys captures unpublished edges of either direction. An acknowledged
-// entry retained behind a failed predecessor has already reached downstream.
-func (rp *ResolvedEventsProcessor) pendingOutputKeys() func(detectcore.SeriesKey) bool {
-	keys := make(map[detectcore.SeriesKey]bool, len(rp.pendingDets))
-	for _, d := range rp.pendingDets {
-		if d.state != outputAcked {
-			keys[detectcore.SeriesKey{Rule: d.RuleID, Series: d.Series}] = true
-		}
-	}
-	return func(key detectcore.SeriesKey) bool { return keys[key] }
-}
-
-// carrySettledThresholds completes handoffs that waited for output publication.
-func (rp *ResolvedEventsProcessor) carrySettledThresholds() {
-	if rp.armer == nil || rp.replaying {
-		return
-	}
-	// An early publish can finish while shards still owe newer edges. Include
-	// those edges before deciding which latches are safe to move.
-	rp.syncDetector()
-	if rp.armer.CarryReadyThresholds(rp.pendingOutputKeys()) > 0 {
-		rp.dirty = true
-	}
-}
-
 // dropSupersededDetections is the publish-time version/membership gate for FRONTIER-triggered
 // detections — the kinds that fire off the shared event-time watermark (a timer or a window/pane close)
 // rather than only on an arriving event, so the fan-out's per-version event scoping does NOT silence a
 // superseded version's retained rule. It runs at the single publish choke point (every event-driven,
 // idle-advance, and replay fire flows through publishPending), evaluated against the loop-owned roster +
-// active views so a membership/version change since arming is honored. The gates are:
+// active views so a membership/version change since arming is honored. Two gates:
 //   - ABSENCE (always frontier-triggered, membership-gated): a RAISE is dropped whenever it is not
 //     AbsenceLive — the device left the rule's scope (deleted / disabled / re-typed / version superseded).
 //     Fail-safe toward a missed absence: AbsenceLive treats an unknown device/rule as NOT live. A RESOLVED
 //     is NOT gated on liveness (it is the clear the departure itself emits for an already-published
 //     raise); it is dropped only when its own raise was dropped in the same pass, or when the rule is
 //     carried forward under the same stable identity by the device's new active version (a republish
-//     handoff, which must not flap the alarm — CarriedForward).
+//     handoff, which must not flap the alarm — AbsenceCarriedForward).
 //   - DURATION / SESSION / AGGREGATE (frontier-triggered, ADR-057 D6): dropped only on a CONFIRMED
 //     version supersession (VersionSuperseded) — otherwise a superseded pane-close/timer would contribute
 //     a false edge to the alarm object under the stable contributor id (a stale unsatisfied pane-close
 //     resolving the ACTIVE version's raise at the same epoch-aligned timestamp = a fail-open false clear).
 //     Fails the OTHER way (keep on uncertainty) so a real alarm is never dropped for an incomplete projection.
 //
-// Live Threshold Raised edges are dropped only for a currently raised successor; their
-// Resolved edges pass unless their own Raised was dropped earlier in this pass. The scaffold path (no armer / no read-models) passes untouched. A drop is
+// Event-driven kinds and the scaffold path (no armer / no read-models) pass through untouched. A drop is
 // TERMINAL (like the tenant backstop), so it never wedges the loop; a dropped Raised clears the engine's
 // two-edge latch so a later legitimate fire is not suppressed.
 func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
@@ -3472,7 +3426,7 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 		return
 	}
 	kept := rp.pendingDets[:0]
-	var droppedRaise map[detectcore.SeriesKey]struct{} // absence/threshold raises dropped in THIS pass
+	var droppedRaise map[detectcore.SeriesKey]struct{} // absence raises dropped in THIS pass
 	for _, d := range rp.pendingDets {
 		if d.state == outputAcked {
 			// Already positively acknowledged and waiting only for the items before it to settle.
@@ -3484,10 +3438,6 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 		key := detectcore.SeriesKey{Rule: d.RuleID, Series: d.Series}
 		var drop bool
 		switch {
-		case d.Kind == detectcore.Threshold && d.Edge == detectcore.EdgeResolved:
-			// This old episode never reached the shared alarm contributor. Historical
-			// clears whose raises were not dropped in this pass remain owed.
-			_, drop = droppedRaise[key]
 		case d.Kind == detectcore.Absence:
 			// Absence is always frontier-triggered AND membership-gated: drop a RAISE on ANY
 			// non-liveness (deleted / disabled / re-typed / version superseded), fail-safe toward a
@@ -3515,12 +3465,6 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 			// contributor id — a fail-open false clear. Drop ONLY on a CONFIRMED version mismatch, so a
 			// real alarm is never dropped for a momentarily-incomplete projection.
 			drop = rp.armer.VersionSuperseded(key)
-		case d.Kind == detectcore.Threshold && d.Edge == detectcore.EdgeRaised && !rp.replaying:
-			// A late threshold raise is redundant only while the paired successor
-			// is currently raised. Replay raises must pass idempotently so their
-			// latches survive for the post-replay carry. On uncertainty, publish.
-			next, paired := rp.armer.CarriedSuccessor(key)
-			drop = paired && rp.armer.VersionSuperseded(key) && rp.armer.CarriedForward(key) && rp.engine.IsRaised(next)
 		}
 		if !drop {
 			kept = append(kept, d)
@@ -3531,7 +3475,7 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 		// Resolved drop needs no clear (resolve already cleared the latch on emit).
 		if d.Edge == detectcore.EdgeRaised {
 			rp.engine.ClearRaised(key)
-			if d.Kind == detectcore.Absence || d.Kind == detectcore.Threshold {
+			if d.Kind == detectcore.Absence {
 				if droppedRaise == nil {
 					droppedRaise = map[detectcore.SeriesKey]struct{}{}
 				}
@@ -3540,10 +3484,8 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 		}
 		if d.Kind == detectcore.Absence {
 			rp.metrics.recordStaleAbsenceDropped()
-		} else if frontierTriggeredKind(d.Kind) {
-			rp.metrics.recordSupersededFrontierDropped()
 		} else {
-			rp.metrics.recordSupersededRaisedDropped()
+			rp.metrics.recordSupersededFrontierDropped()
 		}
 	}
 	rp.pendingDets = kept
@@ -3558,7 +3500,7 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 // if no later reading settles it (detectcore holdLateResolve). These are the kinds whose superseded firings
 // starvation does NOT silence, so they need the publish-time version gate (D6). The purely
 // event-driven kinds (Threshold/Repeating/Correlation) are already version-scoped by the
-// fan-out; only late Threshold raises with a raised successor are gated separately. Absence is handled separately (stricter
+// fan-out and pass through as legitimate late contributions. Absence is handled separately (stricter
 // AbsenceLive membership gate).
 func frontierTriggeredKind(k detectcore.RuleKind) bool {
 	switch k {

@@ -727,6 +727,7 @@ func newPresenceLoopMetrics(ms *core.Microservice) presenceLoopMetrics {
 // on the same series every other maintenance pass uses.
 func runReconcileLoop(ctx context.Context, r reconcileRunner, interval time.Duration,
 	metrics *core.PeriodicTaskMetrics) {
+	metrics.SetInterval(interval)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -749,6 +750,7 @@ func runReconcileLoop(ctx context.Context, r reconcileRunner, interval time.Dura
 // runCanaryLoop proves the advisory subscription is still being read.
 func runCanaryLoop(ctx context.Context, c prober, interval time.Duration,
 	metrics *core.PeriodicTaskMetrics) {
+	metrics.SetInterval(interval)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 

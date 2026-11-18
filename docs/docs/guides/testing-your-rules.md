@@ -11,8 +11,6 @@ A detection rule that nobody has tested is a guess about what your devices will 
 The scenario and test file formats carry the version `devicechain.io/ruletest/v1alpha1` and may change incompatibly in a minor release, with the change in that release's upgrade notes, until they are promoted. A file with a version the installed `dcctl` does not read is refused, and so is a key it does not know: a misspelled expectation that was ignored would pass.
 :::
 
-Before publishing, check [what a publish does to devices already in alarm](../concepts/event-processing.md#publish-keeps-alarms): threshold rules and the existing absence handoff preserve raised state, so test a recovery followed by a fresh breach to exercise changed actions. Other rule kinds may repeat their actions on a publish while a device stays in breach.
-
 ## What a test checks {#what-a-test-checks}
 
 Two files make a test.
