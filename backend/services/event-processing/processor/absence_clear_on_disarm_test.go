@@ -41,7 +41,7 @@ func raisedAbsenceProc(t *testing.T) (*ResolvedEventsProcessor, *edgeWriter) {
 	rp, eng := armedProcessor(t, id)
 	w := &edgeWriter{}
 	rp.publisher = runtime.NewPublisher(w, rp.registry, (*DetectMetrics)(nil))
-	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase}, nil)
+	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase})
 	rp.armer.ApplyDeviceMembership(runtime.RosterEntry{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase}, true)
 
 	eng.Advance(testBase.Add(11 * time.Second)) // past the 10s dead-man deadline: the absence raises
@@ -99,7 +99,7 @@ func TestAbsenceRaiseAndClearInOneBatchBothDropped(t *testing.T) {
 	rp, eng := armedProcessor(t, id)
 	w := &edgeWriter{}
 	rp.publisher = runtime.NewPublisher(w, rp.registry, (*DetectMetrics)(nil))
-	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase}, nil)
+	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase})
 	rp.armer.ApplyDeviceMembership(runtime.RosterEntry{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase}, true)
 
 	eng.Advance(testBase.Add(11 * time.Second))
@@ -148,7 +148,7 @@ func twoVersionProc(t *testing.T, ruleV2 string) (*ResolvedEventsProcessor, *edg
 	rp.armer = runtime.NewDeadmanArmer(reg, eng)
 	w := &edgeWriter{}
 	rp.publisher = runtime.NewPublisher(w, reg, (*DetectMetrics)(nil))
-	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase}, nil)
+	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase})
 	rp.armer.ApplyDeviceMembership(runtime.RosterEntry{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase}, true)
 	eng.Advance(testBase.Add(11 * time.Second))
 	rp.drainDetections(testBase.Add(11*time.Second), true)
@@ -165,7 +165,7 @@ func twoVersionProc(t *testing.T, ruleV2 string) (*ResolvedEventsProcessor, *edg
 // acknowledgement); the handoff is dropped.
 func TestSupersessionOfAStillSilentDevicePublishesNoClear(t *testing.T) {
 	rp, w := twoVersionProc(t, "r1")
-	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: testBase.Add(20 * time.Second)}, nil)
+	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: testBase.Add(20 * time.Second)})
 	rp.drainDetections(testBase.Add(21*time.Second), true)
 	if !rp.publishPending(context.Background()) {
 		t.Fatal("publish failed")
@@ -179,7 +179,7 @@ func TestSupersessionOfAStillSilentDevicePublishesNoClear(t *testing.T) {
 // continues the alarm, so the clear must reach the feed.
 func TestRepublishThatRemovesTheRuleStillClears(t *testing.T) {
 	rp, w := twoVersionProc(t, "other")
-	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: testBase.Add(20 * time.Second)}, nil)
+	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: testBase.Add(20 * time.Second)})
 	rp.drainDetections(testBase.Add(21*time.Second), true)
 	if !rp.publishPending(context.Background()) {
 		t.Fatal("publish failed")
