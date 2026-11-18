@@ -31,8 +31,8 @@ paso de descarga están escritos para una shell bash; en Windows, ejecútalos en
 segundos y no diez minutos.
 
 - **OpenTofu 1.10 o posterior.** La comprobación previa verifica que `tofu` (o `terraform`) está
-  instalado, pero no su versión, y una versión anterior falla a mitad de `dcctl install`, al cargar
-  la configuración de infraestructura. `tofu version` muestra la tuya.
+  instalado y rechaza una versión anterior a la 1.10, así que un binario antiguo detiene la
+  ejecución antes de que se cree nada. `tofu version` muestra la tuya.
 - **Espacio para el clúster.** La comprobación previa avisa cuando Docker tiene menos de 4 CPU o
   menos de 8 GiB de memoria, y necesita 40 GiB de disco libre para las imágenes y los volúmenes de
   base de datos. En Docker Desktop, ajústalo en **Settings → Resources**. El paso 1 instala con
@@ -476,8 +476,7 @@ curl -s -X POST http://localhost/api/command-delivery/graphql \
   `dcctl sim run building`: doce termostatos cuya temperatura sube por encima de 30 y vuelve a bajar,
   lo que genera y resuelve alarmas `bp-over-temp` en **Monitor → Alarms** del inquilino
   `sim-building`. Inicia sesión como `building@sim.devicechain.local`, con el `simPassword` de
-  `~/.devicechain/sims/building.json`, para verlas. Interrumpe el primer `dcctl sim run` (Ctrl+C)
-  antes de iniciar el segundo, porque ambos usan el mismo puerto de control.
+  `~/.devicechain/sims/building.json`, para verlas.
 
 - **[Recorrido por las funciones](./feature-tour.md)**: sigue desde aquí hasta un panel, una regla
   que genera una alarma y envía un comando, la respuesta del dispositivo y un usuario cliente que
