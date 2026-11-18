@@ -14,6 +14,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/devicechain-io/dc-microservice/webhooksig"
+	"github.com/devicechain-io/dc-simulator/scenariosink"
 	"github.com/devicechain-io/dc-simulator/sim"
 )
 
@@ -35,6 +37,9 @@ type Report struct {
 	Polls      int         `json:"polls"`
 	FailedPoll int         `json:"failedPolls"`
 	Invariants []Invariant `json:"invariants"`
+	// Omitted names the invariants this run could not judge because it was given no sink (--sink):
+	// the deliveries out of the tenant arrive there and nowhere else a verifier can read.
+	Omitted []string `json:"omitted,omitempty"`
 	// NoVerdict is set when the day could not be judged; Invariants is then empty.
 	NoVerdict string `json:"noVerdict,omitempty"`
 }
@@ -72,7 +77,10 @@ func (r *Report) Human() string {
 		if !inv.Passed {
 			mark = "FAIL"
 		}
-		fmt.Fprintf(&b, "  %s %-26s %s\n", mark, inv.Name, inv.Detail)
+		fmt.Fprintf(&b, "  %s %-32s %s\n", mark, inv.Name, inv.Detail)
+	}
+	if len(r.Omitted) > 0 {
+		fmt.Fprintf(&b, "  NOT JUDGED (no --sink): %s\n", strings.Join(r.Omitted, ", "))
 	}
 	switch r.ExitCode() {
 	case ExitPass:
@@ -100,6 +108,11 @@ type Config struct {
 	StartTimeout time.Duration
 	// Day, when >= 0, is the sim day to judge; otherwise the first whose watch has not begun.
 	Day int
+	// SinkURL is the in-cluster sink's record (scenario-sink's HTTP address, through a
+	// port-forward). Empty leaves the sink invariants unjudged and names them in Report.Omitted.
+	SinkURL string
+	// SinkHTTP reaches the sink.
+	SinkHTTP *http.Client
 }
 
 func (c Config) withDefaults() Config {
@@ -117,6 +130,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.StatusHTTP == nil {
 		c.StatusHTTP = &http.Client{Timeout: 10 * time.Second}
+	}
+	if c.SinkHTTP == nil {
+		c.SinkHTTP = &http.Client{Timeout: 30 * time.Second}
 	}
 	return c
 }
@@ -175,10 +191,28 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 	if time.Now().After(from.Add(maxPollGap)) {
 		return noVerdictf("sim day %d's watch began at %s, before this run could start it", day, from.Format(time.RFC3339))
 	}
+	// The one setup write: this verifier's own signing secret for the flood webhook (see
+	// Reader.RotateSigningSecret), and a second, valid one the platform never had, for the control.
+	obs.S3 = S3{Tenant: cfg.Handshake.Tenant, Seed: cfg.Handshake.Seed, Attempts: map[string][]Attempt{},
+		Health: map[string]DecoderHealth{}, DecodeFailures: map[string][]DecodeFailure{}}
+	if obs.S3.SigningSecret, err = reader.RotateSigningSecret(ctx, sim.HarborpulseSigningHandle); err != nil {
+		return noVerdict{err}
+	}
+	if obs.S3.WrongSecret, err = webhooksig.GenerateSecret(); err != nil {
+		return noVerdict{err}
+	}
+	if cfg.SinkURL == "" {
+		rep.Omitted = append([]string(nil), SinkInvariants...)
+	}
 	log.Info().Int("day", day).Time("from", from).Time("to", to).Strs("defects", rep.Defects).
 		Msg("waiting for the watch to begin")
 	if err := sleepUntil(ctx, from); err != nil {
 		return err
+	}
+	// The legacy gauge's decode failures as the watch begins: after its first ten in an hour the
+	// platform folds the rest into an older record's count, which only a before-and-after shows.
+	if obs.S3.LegacyFailuresAtWatch, err = reader.DecodeFailures(ctx, sim.HarborpulseLegacyGauge); err != nil {
+		return noVerdict{err}
 	}
 
 	// The watch: the alarm list every Poll, the clock every few polls (a restarted sim has a new
@@ -208,6 +242,16 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 		} else {
 			obs.Alarms = append(obs.Alarms, alarms...)
 			obs.Polls = append(obs.Polls, now)
+			if err := ackControl(ctx, reader, &obs, now); err != nil {
+				return noVerdict{err}
+			}
+		}
+		if len(obs.S3.GapBefore) == 0 && now.After(obs.at(14.75)) && now.Before(obs.at(15.5)) {
+			gap, err := reader.Readings(ctx, sim.HarborpulseBasinPump, obs.at(sim.HarborpulseGapFrom), obs.at(sim.HarborpulseGapTo))
+			if err != nil {
+				return noVerdict{err}
+			}
+			obs.S3.GapBefore = gap
 		}
 		rep.Polls++
 		select {
@@ -229,6 +273,9 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 	if err := readDevice(ctx, reader, &obs, sim.HarborpulseHotCharger, obs.at(WatchFrom), obs.at(derateTo).Add(responseWithin)); err != nil {
 		return noVerdict{err}
 	}
+	if err := readS3(ctx, cfg, reader, &obs, to); err != nil {
+		return noVerdict{err}
+	}
 	gaugeDef, err := manifestRuleDefinition(sim.HarborpulseGaugeProfile, sim.HarborpulseQuayFloodingRule)
 	if err != nil {
 		return noVerdict{err}
@@ -248,6 +295,26 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 	if final.Scenario == nil {
 		return noVerdictf("the sim's final /status has no scenario clock")
 	}
+	obs.S3.Changes = final.Scenario.ThresholdChanges
+	for _, b := range final.Scenario.CalculatedBackfills {
+		if b.Day == day {
+			j, err := reader.CalculatedJob(ctx, b.Token)
+			if err != nil {
+				return noVerdict{err}
+			}
+			obs.S3.Jobs = append(obs.S3.Jobs, j)
+		}
+	}
+	gap, err := reader.Readings(ctx, sim.HarborpulseBasinPump, obs.at(sim.HarborpulseGapFrom), obs.at(sim.HarborpulseGapTo))
+	if err != nil {
+		return noVerdict{err}
+	}
+	obs.Readings[sim.HarborpulseBasinPump] = append(obs.Readings[sim.HarborpulseBasinPump], gap...)
+	cmds, err := reader.Commands(ctx, sim.HarborpulseSamplingGauge)
+	if err != nil {
+		return noVerdict{err}
+	}
+	obs.Commands = append(obs.Commands, cmds...)
 	for _, b := range final.Scenario.Backfill {
 		if b.Day != day {
 			continue
@@ -354,4 +421,83 @@ func sleepUntil(ctx context.Context, t time.Time) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// ackControl acknowledges AckGauge's flood alarm once it has sat at MAJOR for ackAfter: the
+// in-run control of notify-escalates. It acts once.
+func ackControl(ctx context.Context, r *Reader, obs *Observations, now time.Time) error {
+	if obs.S3.Ack.Token != "" {
+		return nil
+	}
+	var first *AlarmSample
+	for i := range obs.Alarms {
+		a := &obs.Alarms[i]
+		if a.Device == AckGauge && a.Key == sim.HarborpulseFloodAlarmKey && a.State == sim.AlarmStateActiveWire &&
+			a.Severity == sim.AlarmSeverityMajorWire && !a.At.Before(obs.at(stormFrom)) {
+			first = a
+			break
+		}
+	}
+	if first == nil || now.Sub(first.At) < ackAfter {
+		return nil
+	}
+	if err := r.Acknowledge(ctx, first.Token); err != nil {
+		return err
+	}
+	obs.S3.Ack = Ack{Device: AckGauge, Token: first.Token, At: now}
+	log.Info().Str("alarm", first.Token).Msg("acknowledged the control gauge's flood alarm")
+	return nil
+}
+
+// readS3 reads what the S3 invariants judge, after the watch.
+func readS3(ctx context.Context, cfg Config, r *Reader, obs *Observations, to time.Time) error {
+	for _, g := range append(sim.HarborpulseLoraGauges(), sim.HarborpulseLegacyGauge) {
+		readings, err := r.Readings(ctx, g, obs.at(WatchFrom), to)
+		if err != nil {
+			return err
+		}
+		obs.Readings[g] = append(obs.Readings[g], readings...)
+		fails, err := r.DecodeFailures(ctx, g)
+		if err != nil {
+			return err
+		}
+		obs.S3.DecodeFailures[g] = fails
+	}
+	minutes := int(time.Since(obs.at(WatchFrom)).Minutes()) + 2
+	for _, p := range []string{sim.HarborpulseLoraGaugeProfile, sim.HarborpulseLegacyGaugeProfile} {
+		h, err := r.DecoderHealth(ctx, p, minutes)
+		if err != nil {
+			return err
+		}
+		obs.S3.Health[p] = h
+	}
+	for _, g := range fleetOf(sim.HarborpulseGaugeType, "") {
+		for _, t := range floodTokens(*obs, g) {
+			attempts, err := r.Attempts(ctx, t)
+			if err != nil {
+				return err
+			}
+			obs.S3.Attempts[t] = attempts
+		}
+	}
+	if obs.S3.Ack.Token != "" {
+		if _, read := obs.S3.Attempts[obs.S3.Ack.Token]; !read {
+			attempts, err := r.Attempts(ctx, obs.S3.Ack.Token)
+			if err != nil {
+				return err
+			}
+			obs.S3.Attempts[obs.S3.Ack.Token] = attempts
+		}
+	}
+	if cfg.SinkURL != "" {
+		rec, err := scenariosink.Fetch(cfg.SinkHTTP, cfg.SinkURL)
+		if err != nil {
+			return err
+		}
+		if rec.Dropped > 0 {
+			return fmt.Errorf("the sink dropped %d records past its bound, so what it holds is partial", rec.Dropped)
+		}
+		obs.S3.Sink = &rec
+	}
+	return nil
 }

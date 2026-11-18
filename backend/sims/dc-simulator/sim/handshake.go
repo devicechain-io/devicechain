@@ -90,6 +90,17 @@ type Endpoints struct {
 	// in front of the operator, while an unreachable external one is a scene quietly
 	// receiving nothing while this side stays green.
 	MqttBroker string `json:"mqttBroker"`
+	// OutboundConnectorsGraphQL is outbound-connectors' tenant GraphQL endpoint: the connectors
+	// and webhook signing handles a scenario's REACT rules deliver through. Optional in the
+	// handshake like the endpoints above; Provision requires it only of a scenario declaring one.
+	OutboundConnectorsGraphQL string `json:"outboundConnectorsGraphQL,omitempty"`
+	// NotificationMgmtGraphQL is notification-management's tenant GraphQL endpoint: the channels
+	// and policies that page people about a scenario's alarms. Optional like the one above.
+	NotificationMgmtGraphQL string `json:"notificationMgmtGraphQL,omitempty"`
+	// Integrations is the base an inbound integration's sender posts to, without the tenant and
+	// the integration token: a network server posts "{Integrations}/{tenant}/{integration}".
+	// Optional like the two above.
+	Integrations string `json:"integrations,omitempty"`
 }
 
 // Handshake is the local sim record dcctl (Lane B) writes and dc-simulator (Lane

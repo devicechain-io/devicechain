@@ -20,7 +20,7 @@ import (
 const (
 	queryAlarms = `query ScenarioAlarms($c: AlarmSearchCriteria!) {
   alarms(criteria: $c) {
-    results { token originatorToken alarmKey severity state }
+    results { token originatorType originatorId originatorToken alarmKey severity state }
     pagination { totalRecords }
   }
 }`
@@ -106,6 +106,8 @@ func (r *Reader) Alarms(ctx context.Context, at time.Time) ([]AlarmSample, error
 			Alarms struct {
 				Results []struct {
 					Token           string  `json:"token"`
+					OriginatorType  string  `json:"originatorType"`
+					OriginatorId    string  `json:"originatorId"`
 					OriginatorToken *string `json:"originatorToken"`
 					AlarmKey        string  `json:"alarmKey"`
 					Severity        string  `json:"severity"`
@@ -128,7 +130,8 @@ func (r *Reader) Alarms(ctx context.Context, at time.Time) ([]AlarmSample, error
 			if a.OriginatorToken != nil {
 				device = *a.OriginatorToken
 			}
-			out = append(out, AlarmSample{At: at, Token: a.Token, Device: device, Key: a.AlarmKey, Severity: a.Severity, State: a.State})
+			out = append(out, AlarmSample{At: at, Token: a.Token, Device: device, Originator: a.OriginatorType + " " + a.OriginatorId,
+				Key: a.AlarmKey, Severity: a.Severity, State: a.State})
 		}
 		if len(out) >= *resp.Alarms.Pagination.TotalRecords || len(resp.Alarms.Results) < alarmPageSize {
 			return out, nil

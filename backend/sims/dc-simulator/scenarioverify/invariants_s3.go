@@ -1,0 +1,654 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package scenarioverify
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"mime"
+	"net/http"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/devicechain-io/dc-microservice/webhooksig"
+	"github.com/devicechain-io/dc-simulator/scenariosink"
+	"github.com/devicechain-io/dc-simulator/sim"
+)
+
+// The S3 invariants: deliveries out of the tenant (a signed webhook, an MQTT bulletin), the duty
+// officer's notifications and their escalation, the truck's geofence, the pumps' calculated well
+// fill, and the LoRaWAN gauges' decoding.
+const (
+	InvWebhookSigned         = "webhook-signed"
+	InvWebhookControl        = "webhook-signature-control-is-red"
+	InvMQTTBulletin          = "mqtt-bulletin"
+	InvNotifyEscalates       = "notify-escalates"
+	InvNotifyAckControl      = "notify-ack-control-is-red"
+	InvTruckFence            = "truck-fence"
+	InvWellFill              = "well-fill-calculated"
+	InvLoraDecoded           = "lora-decoded"
+	InvDecoderFailureVisible = "decoder-failure-visible"
+)
+
+// SinkInvariants need the in-cluster sink: without one (--sink) they are not judged, and the
+// report names them as omitted rather than passing them.
+var SinkInvariants = []string{InvDownlinkAcknowledged, InvWebhookSigned, InvWebhookControl, InvMQTTBulletin, InvNotifyEscalates, InvNotifyAckControl}
+
+// AckGauge is the gauge whose flood alarm the verifier acknowledges once it has been paged at MAJOR,
+// before its escalation is due: the in-run control of notify-escalates.
+const AckGauge = "hp-gauge-north-2"
+
+// ackAfter is how long the verifier lets AckGauge's alarm sit at MAJOR before acknowledging it:
+// long enough for the page to go out, well inside the escalation window.
+const ackAfter = 10 * time.Second
+
+// webhookTolerance is how far a delivery's signed timestamp may sit from when the sink received it.
+const webhookTolerance = 5 * time.Minute
+
+// Ack is the verifier's acknowledgement of AckGauge's flood alarm.
+type Ack struct {
+	Device string    `json:"device"`
+	Token  string    `json:"token"`
+	At     time.Time `json:"at"`
+}
+
+// S3 is what the verifier read for the S3 beats.
+type S3 struct {
+	Tenant string
+	Seed   int64
+	// Sink is the in-cluster sink's record; nil when the run had no sink.
+	Sink *scenariosink.Received
+	// SigningSecret is the flood webhook's secret, which the verifier rotated in at the start of the
+	// day; WrongSecret is a valid secret the platform never had (the control).
+	SigningSecret, WrongSecret string
+	Attempts                   map[string][]Attempt
+	Ack                        Ack
+	Changes                    []sim.ThresholdChange
+	Jobs                       []CalculatedJob
+	GapBefore                  []Reading
+	Health                     map[string]DecoderHealth
+	DecodeFailures             map[string][]DecodeFailure
+	// LegacyFailuresAtWatch is the legacy gauge's DECODE_FAILED records as they stood when the watch
+	// began, so the judge can tell the failures folded into an older record during the watch.
+	LegacyFailuresAtWatch []DecodeFailure
+}
+
+func init() {
+	Controls[InvWebhookSigned] = sim.HarborpulseDefectUnsignedWebhook
+	Controls[InvWebhookControl] = "none: it IS the control of " + InvWebhookSigned + " (a secret the platform never had)"
+	Controls[InvMQTTBulletin] = sim.HarborpulseDefectMQTTUnreachable
+	Controls[InvNotifyEscalates] = "the verifier acknowledges " + AckGauge + " before its escalation (" + InvNotifyAckControl + ")"
+	Controls[InvNotifyAckControl] = "none: it IS the control of " + InvNotifyEscalates
+	Controls[InvTruckFence] = sim.HarborpulseDefectTruckStaysHome
+	Controls[InvWellFill] = sim.HarborpulseDefectWrongWellDepth
+	Controls[InvLoraDecoded] = sim.HarborpulseDefectLoraWrongScale
+	Controls[InvDecoderFailureVisible] = sim.HarborpulseDefectLegacyDecoderFixed
+}
+
+// s3Checks are the S3 invariants in report order.
+func s3Checks() []struct {
+	name string
+	fn   func(Observations) error
+} {
+	return []struct {
+		name string
+		fn   func(Observations) error
+	}{
+		{InvAttributeThresholdMoves, attributeThresholdMoves},
+		{InvDownlinkAcknowledged, downlinkAcknowledged},
+		{InvBackfillCompletes, backfillCompletes},
+		{InvWebhookSigned, func(o Observations) error { return webhookSigned(o, o.S3.SigningSecret) }},
+		{InvWebhookControl, webhookControlIsRed},
+		{InvMQTTBulletin, mqttBulletin},
+		{InvNotifyEscalates, notifyEscalates},
+		{InvNotifyAckControl, notifyAckControlIsRed},
+		{InvTruckFence, truckFence},
+		{InvWellFill, wellFill},
+		{InvLoraDecoded, loraDecoded},
+		{InvDecoderFailureVisible, decoderFailureVisible},
+	}
+}
+
+func inWindow(t, from, to time.Time) bool { return !t.Before(from) && !t.After(to) }
+
+// deliveredDevice is the device a delivery body names.
+func deliveredDevice(body string) string {
+	var b struct {
+		Device string `json:"device"`
+	}
+	_ = json.Unmarshal([]byte(body), &b)
+	return b.Device
+}
+
+// floodWebhooks are the deliveries the sink received on the flood webhook's path through the storm.
+func floodWebhooks(o Observations) []scenariosink.Webhook {
+	var out []scenariosink.Webhook
+	for _, w := range o.S3.Sink.Webhooks {
+		if w.Path == sim.HarborpulseWebhookPath && inWindow(w.At, o.at(stormFrom), o.end()) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func verifyWebhook(w scenariosink.Webhook, secret string) error {
+	h := http.Header{}
+	for k, v := range w.Headers {
+		for _, x := range v {
+			h.Add(k, x)
+		}
+	}
+	return webhooksig.Verify(h, []byte(w.Body), w.At, webhookTolerance, secret)
+}
+
+// webhookSigned: the flood webhook reached the sink for every East Quay gauge, and only for them,
+// with a body whose signature verifies under this tenant's secret. Deliveries other sims' tenants
+// sent to the same sink verify under none of this one's keys and are not counted, so the secret is
+// both the authentication and the attribution.
+func webhookSigned(o Observations, secret string) error {
+	if secret == "" {
+		return fmt.Errorf("no signing secret to verify with")
+	}
+	arrived := floodWebhooks(o)
+	verified := map[string]time.Time{}
+	unsigned := 0
+	for _, w := range arrived {
+		if len(w.Headers["Webhook-Signature"]) == 0 {
+			unsigned++
+			continue
+		}
+		if verifyWebhook(w, secret) == nil {
+			if d := deliveredDevice(w.Body); d != "" {
+				if _, ok := verified[d]; !ok {
+					verified[d] = w.At
+				}
+			}
+		}
+	}
+	if diff := sameSet(verified, fleetOf(sim.HarborpulseGaugeType, sim.HarborpulseOutageQuay)); diff != "" {
+		return fmt.Errorf("signed flood webhook %s (%d deliveries arrived through the storm, %d unsigned)",
+			strings.ReplaceAll(diff, "raised", "verified"), len(arrived), unsigned)
+	}
+	return nil
+}
+
+// webhookControlIsRed: the same deliveries checked against a secret the platform never had must not
+// verify, or webhook-signed could not tell a signature from a header.
+func webhookControlIsRed(o Observations) error {
+	if len(floodWebhooks(o)) == 0 {
+		return fmt.Errorf("no flood webhook reached the sink, so the control shows nothing")
+	}
+	if o.S3.WrongSecret == "" || o.S3.WrongSecret == o.S3.SigningSecret {
+		return fmt.Errorf("the control has no secret of its own")
+	}
+	for _, w := range floodWebhooks(o) {
+		if verifyWebhook(w, o.S3.WrongSecret) == nil {
+			return fmt.Errorf("a delivery verified under a secret the platform never had")
+		}
+	}
+	if webhookSigned(o, o.S3.WrongSecret) == nil {
+		return fmt.Errorf("%s was judged green under a secret the platform never had: it cannot fail", InvWebhookSigned)
+	}
+	return nil
+}
+
+// mqttBulletin: a flood bulletin reached the sink's broker, on this tenant's topic, for every gauge
+// that passed the major level (all nine), and for nothing else.
+func mqttBulletin(o Observations) error {
+	topic := sim.HarborpulseBulletinTopic(o.S3.Tenant)
+	seen := map[string]time.Time{}
+	n := 0
+	for _, m := range o.S3.Sink.Messages {
+		if m.Topic != topic || !inWindow(m.At, o.at(stormFrom), o.end()) {
+			continue
+		}
+		n++
+		if d := deliveredDevice(m.Payload); d != "" {
+			if _, ok := seen[d]; !ok {
+				seen[d] = m.At
+			}
+		}
+	}
+	if diff := sameSet(seen, fleetOf(sim.HarborpulseGaugeType, "")); diff != "" {
+		return fmt.Errorf("flood bulletin on %s %s (%d bulletins received)", topic, strings.ReplaceAll(diff, "raised", "published"), n)
+	}
+	return nil
+}
+
+// floodTokens are the flood alarm tokens of gauge g seen through the storm.
+func floodTokens(o Observations, g string) []string {
+	set := map[string]time.Time{}
+	for _, a := range samples(o, o.at(stormFrom), o.end(), func(a AlarmSample) bool {
+		return a.Device == g && strings.HasPrefix(a.Key, sim.HarborpulseFloodAlarmKey)
+	}) {
+		set[a.Token] = a.At
+	}
+	return sortedKeys(set)
+}
+
+// watchedAttempts are the notification attempts on alarm token t made in the watched storm. An
+// alarm the platform reactivates keeps its token from one sim day to the next, and the attempt list
+// is the token's whole history: another day's pages say nothing about this one.
+func watchedAttempts(o Observations, t string) []Attempt {
+	var out []Attempt
+	for _, a := range o.S3.Attempts[t] {
+		if inWindow(a.At, o.at(stormFrom), o.end()) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// sentByTrigger counts gauge g's SENT attempts in the watched storm, by trigger, with every
+// attempt's trigger/status for a report.
+func sentByTrigger(o Observations, g string) (map[string]int, []string) {
+	sent := map[string]int{}
+	var statuses []string
+	for _, t := range floodTokens(o, g) {
+		for _, a := range watchedAttempts(o, t) {
+			statuses = append(statuses, a.Trigger+"/"+a.Status+a.ErrorCode)
+			if a.Status == "SENT" {
+				sent[a.Trigger]++
+			}
+		}
+	}
+	return sent, statuses
+}
+
+// gaugePagedAndEscalated reports why gauge g's flood alarm was not paged and then re-paged.
+func gaugePagedAndEscalated(o Observations, g string) error {
+	if len(floodTokens(o, g)) == 0 {
+		return fmt.Errorf("%s: no flood alarm", g)
+	}
+	sent, statuses := sentByTrigger(o, g)
+	switch {
+	case sent["ALARM"] == 0:
+		return fmt.Errorf("%s: never paged (attempts: %s)", g, strings.Join(statuses, ", "))
+	case sent["ESCALATION"] == 0:
+		return fmt.Errorf("%s: paged but never escalated (attempts: %s)", g, strings.Join(statuses, ", "))
+	}
+	// A page on another token cannot start this alarm's escalation clock. Allow two seconds
+	// of clock skew, but require a full policy interval after its earliest SENT page.
+	var timing []string
+	for _, t := range floodTokens(o, g) {
+		var first time.Time
+		for _, a := range watchedAttempts(o, t) {
+			if a.Status == "SENT" && a.Trigger == "ALARM" && (first.IsZero() || a.At.Before(first)) {
+				first = a.At
+			}
+		}
+		for _, a := range watchedAttempts(o, t) {
+			if a.Status != "SENT" || a.Trigger != "ESCALATION" {
+				continue
+			}
+			if !first.IsZero() && !a.At.Before(first.Add(sim.HarborpulseEscalateAfter-2*time.Second)) {
+				return nil
+			}
+			if first.IsZero() {
+				timing = append(timing, fmt.Sprintf("token %s: ESCALATION at %s has no SENT ALARM in the watched window", t, a.At.Format(time.RFC3339)))
+			} else {
+				timing = append(timing, fmt.Sprintf("token %s: ESCALATION at %s is too early after ALARM at %s", t, a.At.Format(time.RFC3339), first.Format(time.RFC3339)))
+			}
+		}
+	}
+	return fmt.Errorf("%s: no escalation waited for the policy interval (%s)", g, strings.Join(timing, "; "))
+}
+
+// The duty mail, as notification-management renders it: a page names the alarm on its first line
+// ("Alarm <key> <verb> on <device>." for an ALARM, "Alarm <key> is still unacknowledged ..." for an
+// ESCALATION) and, best-effort, the device in a "Device token:" field. Neither rendering carries
+// an alarm token or link. Both subjects end "<key> on <source>", where the source is the device's
+// name or token when device-management resolved it and otherwise the alarm's originator as
+// "<originatorType> <originatorId>" -- which is what a mail without a "Device token:" field names.
+var (
+	mailEscalationLine = regexp.MustCompile(`(?m)^Alarm (\S+) is still unacknowledged`)
+	mailAlarmLine      = regexp.MustCompile(`(?m)^Alarm (\S+) \S+ on `)
+	mailDeviceField    = regexp.MustCompile(`(?m)^Device token:[ \t]+(\S+)[ \t]*\r?$`)
+	mailSubjectHeader  = regexp.MustCompile(`(?m)^Subject: (.*?)\r?$`)
+	mailSubjectSource  = regexp.MustCompile(`^\[[^\]]*\] Alarm [^:]*: (\S+) on (.+)$`)
+)
+
+// dutyMail classifies one mail's DATA: the device it names, the alarm key, and the trigger it is a
+// page for (ALARM or ESCALATION). Without a device field it still returns the alarm and trigger,
+// but ok is false until the caller can attribute that alarm from observations.
+func dutyMail(data string) (device, key, trigger string, ok bool) {
+	m := mailDeviceField.FindStringSubmatch(data)
+	if m != nil {
+		device = m[1]
+	}
+	if e := mailEscalationLine.FindStringSubmatch(data); e != nil {
+		return device, e[1], "ESCALATION", device != ""
+	}
+	if a := mailAlarmLine.FindStringSubmatch(data); a != nil {
+		return device, a[1], "ALARM", device != ""
+	}
+	return "", "", "", false
+}
+
+// mailSource is the alarm key and source a duty mail's subject names, or "" for either it lacks.
+func mailSource(data string) (key, source string) {
+	h := mailSubjectHeader.FindStringSubmatch(data)
+	if h == nil {
+		return "", ""
+	}
+	subject, err := new(mime.WordDecoder).DecodeHeader(h[1])
+	if err != nil {
+		return "", ""
+	}
+	m := mailSubjectSource.FindStringSubmatch(subject)
+	if m == nil {
+		return "", ""
+	}
+	return m[1], m[2]
+}
+
+// mailAlarmDevice attributes a mail with no "Device token:" field by the originator its subject
+// names: the gauge whose flood alarm, with exactly the mail's key, was observed through the storm
+// with that originator. It answers only when exactly one gauge matches -- AckGauge included, so
+// the acknowledged gauge's mail never stands in for another gauge's -- and "" otherwise.
+func mailAlarmDevice(o Observations, data, key string) string {
+	subjectKey, source := mailSource(data)
+	if source == "" || subjectKey != key || !strings.HasPrefix(key, sim.HarborpulseFloodAlarmKey) {
+		return ""
+	}
+	gauges := fleetOf(sim.HarborpulseGaugeType, "")
+	device := ""
+	for _, a := range samples(o, o.at(stormFrom), o.end(), func(a AlarmSample) bool {
+		return a.Originator == source && a.Key == key && sliceHas(gauges, a.Device)
+	}) {
+		if device != "" && device != a.Device {
+			return ""
+		}
+		device = a.Device
+	}
+	return device
+}
+
+// floodMail counts the mail the sink received for recipient through the watched storm that names a
+// flood alarm, by device and trigger, and how much it could not attribute.
+func floodMail(o Observations, recipient string) (map[string]map[string]int, int) {
+	got := map[string]map[string]int{}
+	unattributed := 0
+	for _, m := range o.S3.Sink.Mail {
+		if !inWindow(m.At, o.at(stormFrom), o.end()) || !sliceHas(m.To, recipient) {
+			continue
+		}
+		device, key, trigger, ok := dutyMail(m.Data)
+		if !ok && mailDeviceField.FindStringSubmatch(m.Data) == nil {
+			device = mailAlarmDevice(o, m.Data, key)
+			ok = device != ""
+		}
+		if !ok {
+			unattributed++
+			continue
+		}
+		if !strings.HasPrefix(key, sim.HarborpulseFloodAlarmKey) {
+			continue
+		}
+		if got[device] == nil {
+			got[device] = map[string]int{}
+		}
+		got[device][trigger]++
+	}
+	return got, unattributed
+}
+
+// notifyEscalates: every gauge's flood alarm paged the duty officer when it reached MAJOR and paged
+// again when nobody acknowledged it within the policy's escalation window, and each of those pages
+// reached the sink as a mail naming that gauge's flood alarm and that trigger: mail about another
+// gauge, another alarm or the other trigger stands in for none of them. The one gauge the verifier
+// acknowledged is the control and is judged there instead.
+func notifyEscalates(o Observations) error {
+	var problems []string
+	var judged []string
+	for _, g := range fleetOf(sim.HarborpulseGaugeType, "") {
+		if g == AckGauge {
+			continue
+		}
+		judged = append(judged, g)
+		if err := gaugePagedAndEscalated(o, g); err != nil {
+			problems = append(problems, err.Error())
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%s", strings.Join(problems, "; "))
+	}
+	recipient := sim.HarborpulseDutyRecipient(o.S3.Tenant)
+	mail, unattributed := floodMail(o, recipient)
+	for _, g := range judged {
+		sent, _ := sentByTrigger(o, g)
+		for _, trigger := range []string{"ALARM", "ESCALATION"} {
+			if got := mail[g][trigger]; got < sent[trigger] {
+				problems = append(problems, fmt.Sprintf("%s: the platform recorded %d %s pages SENT for its flood alarm but the sink received %d such mails for %s naming it",
+					g, sent[trigger], trigger, got, recipient))
+			}
+		}
+	}
+	if len(problems) > 0 {
+		if unattributed > 0 {
+			problems = append(problems, fmt.Sprintf("%d mails to %s named no device and alarm and were not counted", unattributed, recipient))
+		}
+		return fmt.Errorf("%s", strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+// notifyAckControlIsRed: the gauge the verifier acknowledged was paged and then NOT escalated, so the
+// check notify-escalates applies to every other gauge is red for it.
+func notifyAckControlIsRed(o Observations) error {
+	if o.S3.Ack.Token == "" {
+		return fmt.Errorf("the verifier never acknowledged %s's flood alarm, so the control shows nothing", AckGauge)
+	}
+	sent := false
+	for _, a := range watchedAttempts(o, o.S3.Ack.Token) {
+		if a.Trigger == "ESCALATION" {
+			return fmt.Errorf("%s was escalated at %s although it was acknowledged at %s", AckGauge, a.At.Format(time.RFC3339), o.S3.Ack.At.Format(time.RFC3339))
+		}
+		sent = sent || (a.Trigger == "ALARM" && a.Status == "SENT")
+	}
+	if !sent {
+		return fmt.Errorf("%s was never paged, so its missing escalation shows nothing", AckGauge)
+	}
+	if gaugePagedAndEscalated(o, AckGauge) == nil {
+		return fmt.Errorf("the acknowledged gauge was judged green: %s cannot fail", InvNotifyEscalates)
+	}
+	return nil
+}
+
+// truckFence: the truck-in-flood-plain alarm is raised for the truck alone, once it enters the
+// flood plain, and clears after it leaves.
+func truckFence(o Observations) error {
+	truck := fleetOf(sim.HarborpulseTruckType, "")
+	seen := activeDevices(o, sim.HarborpulseTruckFenceAlarmKey, o.at(WatchFrom), o.end())
+	if diff := sameSet(seen, truck); diff != "" {
+		return fmt.Errorf("truck-in-flood-plain %s", diff)
+	}
+	enters, leaves := o.at(sim.HarborpulseTruckInPlainFrom), o.at(sim.HarborpulseTruckInPlainTo)
+	first := seen[truck[0]]
+	if first.Before(enters.Add(-maxPollGap)) || first.After(o.at(sim.HarborpulseTruckInPlainFrom+0.5)) {
+		return fmt.Errorf("truck-in-flood-plain first active at %s; the truck enters the plain at %s", first.Format(time.RFC3339), enters.Format(time.RFC3339))
+	}
+	var tokens []string
+	for _, a := range samples(o, o.at(WatchFrom), o.end(), func(a AlarmSample) bool { return a.Key == sim.HarborpulseTruckFenceAlarmKey }) {
+		// Poll skew at either transition must not hide a clear while the truck stays inside.
+		if a.State != sim.AlarmStateActiveWire && inWindow(a.At, first.Add(maxPollGap), leaves.Add(-maxPollGap)) {
+			return fmt.Errorf("%s: truck-in-flood-plain seen %s at %s; first active at %s, the truck leaves the plain at %s", a.Device, a.State, a.At.Format(time.RFC3339), first.Format(time.RFC3339), leaves.Format(time.RFC3339))
+		}
+		if a.State == sim.AlarmStateActiveWire && a.At.After(o.at(sim.HarborpulseTruckInPlainTo+0.75)) {
+			return fmt.Errorf("truck-in-flood-plain still active at %s; the truck left the plain at %s", a.At.Format(time.RFC3339), leaves.Format(time.RFC3339))
+		}
+		if !sliceHas(tokens, a.Token) {
+			tokens = append(tokens, a.Token)
+		}
+	}
+	for _, t := range tokens {
+		if st := lastState(o, t); st != sim.AlarmStateClearedWire {
+			return fmt.Errorf("truck-in-flood-plain last seen %s, not cleared after the truck left", st)
+		}
+	}
+	return nil
+}
+
+func sliceHas(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+// minPaired is the fewest calculated readings a pump must have stored through the storm.
+const minPaired = 10
+
+// wellFill: every pump's calculated well fill is stored beside its wet well reading, and equals the
+// level over the well's depth, as a percentage.
+func wellFill(o Observations) error {
+	var problems []string
+	for _, p := range fleetOf(sim.HarborpulsePumpType, "") {
+		from, to := o.at(stormFrom), o.at(pumpTo)
+		wet := map[int64]float64{}
+		for _, r := range readingsOf(o, p, sim.HarborpulseWetWellKey, from, to) {
+			wet[r.At.UnixMicro()] = r.Value
+		}
+		paired, wrong, unmatched := 0, 0, 0
+		var unpairedAt time.Time
+		var example string
+		for _, r := range readingsOf(o, p, sim.HarborpulseWellFillKey, from, to) {
+			w, ok := wet[r.At.UnixMicro()]
+			if !ok {
+				unmatched++
+				if unpairedAt.IsZero() {
+					unpairedAt = r.At
+				}
+				continue
+			}
+			paired++
+			if want := w / sim.HarborpulseWellDepthM * 100; math.Abs(r.Value-want) > 0.01 {
+				wrong++
+				if example == "" {
+					example = fmt.Sprintf("%.3f m stored %.3f %%, want %.3f %%", w, r.Value, want)
+				}
+			}
+		}
+		// A calculated value without its input cannot establish that the calculation was right.
+		if unmatched > 0 {
+			problems = append(problems, fmt.Sprintf("%s: %d calculated well fill readings without a wet well reading at the same instant (for example %s)", p, unmatched, unpairedAt.Format(time.RFC3339)))
+		}
+		switch {
+		case paired < minPaired:
+			problems = append(problems, fmt.Sprintf("%s: %d calculated well fill readings beside a wet well reading through the storm, want at least %d", p, paired, minPaired))
+		case wrong > 0:
+			problems = append(problems, fmt.Sprintf("%s: %d of %d well fill readings are not level over a %.1f m well (%s)", p, wrong, paired, sim.HarborpulseWellDepthM, example))
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%s", strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+// minUplinks is the fewest decoded levels a LoRaWAN gauge must have stored through the watch.
+const minUplinks = 20
+
+// loraTolerance is how far a decoded level may sit from the model's: the frame carries centimetres,
+// and the stored time may be coarser than the instant the level was sampled at.
+const loraTolerance = 0.011
+
+// loraDecoded: each LoRaWAN gauge on the current decoder had its uplinks decoded and stored, every
+// stored level is the one the gauge encoded, and its profile's decoder failed or ignored nothing.
+// HarborpulseLoraDecoder has no ignore section: an ignored uplink is a gauge frame that stored nothing.
+func loraDecoded(o Observations) error {
+	var problems []string
+	for _, g := range sim.HarborpulseLoraGauges() {
+		rs := readingsOf(o, g, sim.HarborpulseWaterLevelKey, o.at(WatchFrom), o.end())
+		wrong := 0
+		var example string
+		for _, r := range rs {
+			// The gauge sampled at its tick's instant, which the stored time carries to the
+			// microsecond: a second boundary a microsecond away picks the neighbouring sample.
+			elapsed := r.At.Sub(o.Clock.StartedAt)
+			want, _ := sim.HarborpulseLoraLevelAt(o.S3.Seed, g, elapsed, o.Clock.DayLength)
+			prev, _ := sim.HarborpulseLoraLevelAt(o.S3.Seed, g, elapsed-time.Millisecond, o.Clock.DayLength)
+			if math.Abs(r.Value-want) > loraTolerance && math.Abs(r.Value-prev) > loraTolerance {
+				wrong++
+				if example == "" {
+					example = fmt.Sprintf("%s stored %.3f m, the gauge sent %.2f m", r.At.Format(time.RFC3339), r.Value, want)
+				}
+			}
+		}
+		switch {
+		case len(rs) < minUplinks:
+			problems = append(problems, fmt.Sprintf("%s: %d decoded levels stored through the watch, want at least %d", g, len(rs), minUplinks))
+		case wrong > 0:
+			problems = append(problems, fmt.Sprintf("%s: %d of %d decoded levels are not what the gauge sent (%s)", g, wrong, len(rs), example))
+		}
+		if n := len(o.S3.DecodeFailures[g]); n > 0 {
+			problems = append(problems, fmt.Sprintf("%s: %d uplinks failed to decode (%s)", g, n, o.S3.DecodeFailures[g][0].Error))
+		}
+	}
+	h := o.S3.Health[sim.HarborpulseLoraGaugeProfile]
+	if h.Decoded < 1 || h.Failed > 0 || h.Ignored > 0 {
+		problems = append(problems, fmt.Sprintf("the current decoder's health: %.0f decoded, %.0f failed, %.0f ignored (%s)", h.Decoded, h.Failed, h.Ignored, h.LastError))
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%s", strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+// minSuppressedGrowth is the least growth in a folded record's suppressed count that shows
+// failures inside the watch (decoderFailureVisible).
+const minSuppressedGrowth = 2
+
+// decoderFailureVisible: the legacy gauge's layout-2 uplinks are recorded as DECODE_FAILED, with
+// the evaluation error that caused them, and the decoder health shows them, while its layout-1
+// uplinks still decode and are stored.
+func decoderFailureVisible(o Observations) error {
+	g := sim.HarborpulseLegacyGauge
+	var problems []string
+	h := o.S3.Health[sim.HarborpulseLegacyGaugeProfile]
+	if h.Failed < 1 || h.Decoded < 1 {
+		problems = append(problems, fmt.Sprintf("the legacy decoder's health: %.0f decoded, %.0f failed; want both", h.Decoded, h.Failed))
+	}
+	// The watch's failures are on record either as records written in it or, once the hourly bound
+	// has been reached (ten records a device, then folded), as growth in an older record's
+	// suppressed count since the watch began. A record that existed at the start and did not grow
+	// shows nothing about this day, and neither does growth of ONE: the indexer flushes its folds
+	// about once a second, so a failure from just before the watch can land in the count after the
+	// baseline was read. Growth of minSuppressedGrowth needs a failure inside the watch.
+	before := map[string]int{}
+	for _, f := range o.S3.LegacyFailuresAtWatch {
+		before[f.ID] = f.Suppressed
+	}
+	var fails []DecodeFailure
+	for _, f := range o.S3.DecodeFailures[g] {
+		if inWindow(f.At, o.at(WatchFrom), o.end()) {
+			fails = append(fails, f)
+		} else if was, ok := before[f.ID]; ok && f.Suppressed-was >= minSuppressedGrowth {
+			fails = append(fails, f)
+		}
+	}
+	sort.Slice(fails, func(i, j int) bool { return fails[i].At.Before(fails[j].At) })
+	if len(fails) == 0 {
+		problems = append(problems, fmt.Sprintf("%s: no DECODE_FAILED record through the watch, and no earlier record's suppressed count grew in it by %d or more",
+			g, minSuppressedGrowth))
+	}
+	for _, f := range fails {
+		if !strings.Contains(f.Error, "eval_error") {
+			problems = append(problems, fmt.Sprintf("%s: a DECODE_FAILED record names %q, not the evaluation error", g, f.Error))
+			break
+		}
+	}
+	if len(readingsOf(o, g, sim.HarborpulseWaterLevelKey, o.at(WatchFrom), o.end())) == 0 {
+		problems = append(problems, g+": not one layout-1 uplink was decoded and stored")
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%s", strings.Join(problems, "; "))
+	}
+	return nil
+}

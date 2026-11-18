@@ -18,6 +18,29 @@
 //	correlation-control-is-red  the same preview with a count no quay reaches is judged red
 //	outage-blast-radius         light-silent / charger-offline for exactly the East Quay devices
 //	backfill-stored             every buffered charger reading stored at the time it was taken
+//	truck-fence                 truck-in-flood-plain raised for the truck while it is in the
+//	                            flood plain fence, and cleared once it leaves
+//	well-fill-calculated        each pump's calculated well fill is its level over its well's depth
+//	lora-decoded                each LoRaWAN gauge's uplinks decoded to exactly the level it sent,
+//	                            with its decoder failing nothing
+//	decoder-failure-visible     the legacy gauge's undecodable uplinks recorded as DECODE_FAILED
+//	                            (an evaluation error) and counted in its decoder's health
+//
+// and, with --sink (the in-cluster scenario-sink the rig runs; without it they are reported as
+// not judged):
+//
+//	webhook-signed              the flood webhook delivered for exactly the East Quay gauges,
+//	                            signed with this tenant's secret
+//	webhook-signature-control-is-red  the same deliveries under a secret the platform never had
+//	                            are judged red
+//	mqtt-bulletin               a flood bulletin on the tenant's MQTT topic for every gauge
+//	notify-escalates            each gauge's flood alarm paged the duty officer and, unacknowledged,
+//	                            paged again; the mail reached the sink
+//	notify-ack-control-is-red   the gauge the verifier acknowledged was paged and NOT escalated
+//
+// It makes two writes of its own: it rotates the flood webhook's signing secret to one it holds
+// (the platform shows a secret once, to whoever minted it), and it acknowledges one gauge's flood
+// alarm as the escalation's control.
 //
 // Exit status: 0 every invariant holds, 1 an invariant failed, 2 no verdict (the sim was not
 // reachable, its day never started or restarted mid-watch, the polls left a gap, or a read failed).
@@ -52,6 +75,8 @@ func main() {
 	startTimeout := flag.Duration("start-timeout", 5*time.Minute, "how long to wait for the scenario's day to start")
 	day := flag.Int("day", -1, "the sim day to judge (-1: the first whose watch has not begun)")
 	reportPath := flag.String("report", "", "write the JSON report to this path (the human one goes to stderr)")
+	sinkURL := flag.String("sink", "", "the scenario sink's HTTP address (scenario-sink, usually through a port-forward); "+
+		"without it the deliveries out of the tenant are not judged")
 	flag.Parse()
 
 	if *handshakePath == "" {
@@ -75,7 +100,7 @@ func main() {
 
 	report, err := scenarioverify.Run(ctx, scenarioverify.Config{
 		Handshake: hs, SimURL: *simURL, HTTP: httpc, StatusHTTP: simHTTP,
-		Poll: *poll, Settle: *settle, StartTimeout: *startTimeout, Day: *day,
+		Poll: *poll, Settle: *settle, StartTimeout: *startTimeout, Day: *day, SinkURL: *sinkURL,
 	})
 	if err != nil {
 		if code, ok := stop.ExitCode(); ok {

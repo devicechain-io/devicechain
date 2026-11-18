@@ -21,15 +21,16 @@ import (
 // Downlink is one run's ChirpStack v4 queue and serialized event log.
 // Construct it with NewDownlink before starting the HTTP listener or Run.
 type Downlink struct {
-	mu       sync.Mutex
-	key      string
-	ack      string
-	writer   io.Writer
-	devices  map[string]bool
-	pending  map[string][]queueItem
-	counters map[string]uint32
-	queued   int
-	closed   bool
+	mu        sync.Mutex
+	key       string
+	ack       string
+	writer    io.Writer
+	devices   map[string]bool
+	pending   map[string][]queueItem
+	counters  map[string]uint32
+	queued    int
+	closed    bool
+	maxQueued int
 }
 
 type queueItem struct {
@@ -135,6 +136,11 @@ func (d *Downlink) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if d.closed {
 		d.mu.Unlock()
 		refuse(http.StatusConflict, 9, "the simulated network server has stopped taking downlinks")
+		return
+	}
+	if d.maxQueued > 0 && d.queued >= d.maxQueued {
+		d.mu.Unlock()
+		refuse(http.StatusConflict, 9, "queue capacity reached")
 		return
 	}
 	d.queued++

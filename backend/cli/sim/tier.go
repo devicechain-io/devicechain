@@ -46,8 +46,21 @@ var TowerpulseShowcaseTier = TierSpec{
 
 // manifestTiers maps a manifest id to the tier it needs. A manifest absent here is packaged at
 // DefaultTenantTier.
+// HarborpulseShowcaseTier is the tier dcctl sim create packages a harborpulse sim at: each pump's
+// well fill is a calculated metric, so the pump profile needs one. Ingest stays at the platform
+// default, which the 37 devices are well under.
+var HarborpulseShowcaseTier = TierSpec{
+	Token:       "hp-showcase",
+	Name:        "Harborpulse showcase",
+	Description: "Created by dcctl sim create for the harborpulse scenario: calculated metrics on.",
+	Config: map[string]int{
+		"calculatedMetricsPerProfile": 1,
+	},
+}
+
 var manifestTiers = map[string]TierSpec{
-	"towerpulse": TowerpulseShowcaseTier,
+	"towerpulse":  TowerpulseShowcaseTier,
+	"harborpulse": HarborpulseShowcaseTier,
 }
 
 // CustomTier builds the TierSpec for an operator-named tier from a JSON object of integer

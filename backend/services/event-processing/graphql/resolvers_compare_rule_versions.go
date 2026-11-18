@@ -132,7 +132,11 @@ func (r *SchemaResolver) CompareRuleVersions(ctx context.Context, args struct{ I
 	}
 	var source replayinput.Opener = r.Replay
 	if source == nil {
-		source = r.GetNats(ctx)
+		manager, err := r.GetNats(ctx)
+		if err != nil {
+			return nil, err
+		}
+		source = manager
 	}
 	p.Source = source
 	budget := previewBudget(ctx)

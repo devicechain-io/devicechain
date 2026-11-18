@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -47,5 +48,38 @@ func TestSimRunRefusesWhatCannotWork(t *testing.T) {
 	}
 	if _, err := simRunArgs(simRunOptions{handshake: "h.json", controlAddr: "http://localhost"}); err == nil {
 		t.Error("a control address with no port was accepted; 'sim status' could not reach the process")
+	}
+}
+
+func TestSimRunArgsDayLength(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		dayLength time.Duration
+		want      []string
+		wantErr   bool
+	}{
+		{"48m", 48 * time.Minute, []string{"--handshake", "h.json", "--port", "8090", "--day-length", "48m0s"}, false},
+		{"zero", 0, []string{"--handshake", "h.json", "--port", "8090"}, false},
+		{"negative", -time.Minute, nil, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := simRunArgs(simRunOptions{
+				handshake:   "h.json",
+				controlAddr: "http://localhost:8090",
+				dayLength:   tt.dayLength,
+			})
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "--day-length") {
+					t.Fatalf("expected an error naming --day-length, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("simRunArgs = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

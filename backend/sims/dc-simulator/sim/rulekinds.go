@@ -6,6 +6,7 @@ package sim
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -206,5 +207,106 @@ func (r CorrelationSignalRule) DefinitionJSON() string {
 
 // Spec is the manifest form.
 func (r CorrelationSignalRule) Spec() DetectionRuleSpec {
+	return DetectionRuleSpec{Token: r.Token, Name: r.Name, Definition: r.DefinitionJSON(), Metric: r.Metric, Enabled: r.Enabled}
+}
+
+// FenceAlarmRule raises an alarm while a device's reported position is inside a geofence, and
+// clears it when a later position is outside: a threshold rule whose condition is the platform's
+// one containment function, `geo.inFence("<fence token>")`.
+//
+// It reads NO measurement, and must not: a position arrives on a location event, which carries
+// none, and a measurement on a measurement event, which carries no position, so a condition
+// reading both could never be true and the publish gate refuses it. Its Spec therefore declares
+// ReadsNoMetric rather than a Metric.
+type FenceAlarmRule struct {
+	Token    string
+	Name     string
+	Fence    string
+	Severity string
+	AlarmKey string
+	Enabled  bool
+}
+
+// DefinitionJSON is the rules.Rule document.
+func (r FenceAlarmRule) DefinitionJSON() string {
+	if r.Fence == "" || strings.ContainsAny(r.Fence, `"\`) {
+		panic(fmt.Sprintf("sim: fence rule %q names fence %q, which cannot be written into its condition", r.Token, r.Fence))
+	}
+	return marshalRule(r.Token, map[string]any{
+		"name":     r.Name,
+		"type":     "threshold",
+		"severity": r.Severity,
+		"when":     map[string]any{"cel": `geo.inFence("` + r.Fence + `")`},
+		"actions":  ruleActions(r.Token, r.AlarmKey, "", "", nil),
+	})
+}
+
+// Spec is the manifest form: a rule that reads no metric, and says so.
+func (r FenceAlarmRule) Spec() DetectionRuleSpec {
+	return DetectionRuleSpec{Token: r.Token, Name: r.Name, Definition: r.DefinitionJSON(), Enabled: r.Enabled, ReadsNoMetric: true}
+}
+
+// DeliveryRule is a threshold rule whose only action delivers OUT of the tenant: a signed webhook
+// (httpCall) or a publish through an outbound connector. It raises no alarm. Both are one-shot
+// effects, dispatched on the rising edge only, like sendCommand.
+//
+// The body is a CEL template over the detection naming its series (the device token), so the
+// receiver can tell which device fired: without one the platform sends an empty body.
+type DeliveryRule struct {
+	Token     string
+	Name      string
+	Metric    string
+	Op        ThresholdOp
+	Threshold float64
+	// Exactly one of the two destinations.
+	Webhook *WebhookDelivery
+	Publish *PublishDelivery
+	Enabled bool
+}
+
+// WebhookDelivery is an httpCall action. SigningHandle, when set, signs every delivery with the
+// tenant's secret under that handle (Standard Webhooks headers).
+type WebhookDelivery struct {
+	URL           string
+	SigningHandle string
+}
+
+// PublishDelivery is a publish action through the connector with this token.
+type PublishDelivery struct {
+	Connector string
+}
+
+// DeliveryBodyTemplate is the body every DeliveryRule sends: {"device": <series>}. It names only the
+// device because the gate prices a template's worst case and refuses one over its ceiling, and
+// the value too was over it.
+const DeliveryBodyTemplate = `'{"device":"' + series + '"}'`
+
+// DefinitionJSON is the rules.Rule document.
+func (r DeliveryRule) DefinitionJSON() string {
+	var action map[string]any
+	switch {
+	case r.Webhook != nil && r.Publish == nil:
+		call := map[string]any{"url": r.Webhook.URL, "bodyTemplate": DeliveryBodyTemplate}
+		if r.Webhook.SigningHandle != "" {
+			call["signingSecretRef"] = r.Webhook.SigningHandle
+		}
+		action = map[string]any{"type": actionTypeHTTPCall, actionTypeHTTPCall: call}
+	case r.Publish != nil && r.Webhook == nil:
+		action = map[string]any{"type": actionTypePublish, actionTypePublish: map[string]any{
+			"connectorRef": r.Publish.Connector, "payloadTemplate": DeliveryBodyTemplate,
+		}}
+	default:
+		panic(fmt.Sprintf("sim: delivery rule %q needs exactly one of a webhook and a publish", r.Token))
+	}
+	return marshalRule(r.Token, map[string]any{
+		"name":    r.Name,
+		"type":    "threshold",
+		"when":    structuredLeaf(r.Token, r.Metric, r.Op, r.Threshold),
+		"actions": []any{action},
+	})
+}
+
+// Spec is the manifest form.
+func (r DeliveryRule) Spec() DetectionRuleSpec {
 	return DetectionRuleSpec{Token: r.Token, Name: r.Name, Definition: r.DefinitionJSON(), Metric: r.Metric, Enabled: r.Enabled}
 }
