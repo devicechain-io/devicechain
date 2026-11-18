@@ -78,7 +78,7 @@ RELEASE_TAG_RE='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.
 #     v1.6.0's branch point is the 1.5 freeze, which v1.5.x contains, so a fix there is compared
 #     with v1.5.x and not with a minor that added things.
 npm_baseline() {
-  local repo="${1:-.}" tags here r t fp cands="" best
+  local repo="${1:-.}" tags here r t fp cands="" best sorted
   git -C "$repo" rev-parse --verify --quiet HEAD >/dev/null || { echo "::error::$repo has no HEAD" >&2; return 1; }
   tags="$(git -C "$repo" tag --list 'v*')" || { echo "::error::could not list the tags of $repo" >&2; return 1; }
   tags="$(printf '%s\n' "$tags" | tr -d '\r' | grep -E "$STABLE_TAG_RE" || true)"
@@ -90,7 +90,9 @@ npm_baseline() {
   if [ -n "$here" ]; then
     # Its X.Y.Z, so a candidate's base is the release below the one it is a candidate for.
     here="${here%%-*}"
-    best="$(printf '%s\n' "$tags" "$here" | sort -V -u | awk -v h="$here" '$0 == h { print prev; exit } { prev = $0 }')"
+    # sort reads to the end; awk stops at HEAD's release, so it reads the captured list, not a pipe.
+    sorted="$(printf '%s\n' "$tags" "$here" | sort -V -u)"
+    best="$(awk -v h="$here" '$0 == h { print prev; exit } { prev = $0 }' <<<"$sorted")"
     [ -n "$best" ] || { echo "::error::$here is the first stable release; there is no earlier one to compare with." >&2; return 1; }
     echo "$best"
     return 0
@@ -117,7 +119,7 @@ npm_baseline() {
 
 # The baseline rule against planted histories, each with its required answer. Needs only git.
 baseline_self_test() {
-  local tmp g got
+  local tmp got
   tmp="$(mktemp -d)"
   # shellcheck disable=SC2064
   trap "rm -rf '$tmp'; trap - RETURN" RETURN
