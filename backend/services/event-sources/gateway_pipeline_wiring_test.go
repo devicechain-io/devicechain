@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
@@ -110,7 +111,7 @@ func TestCreateNatsComponentsHandsTheGatewayItsWriter(t *testing.T) {
 	Configuration.ApplyDefaults()
 	GatewaySource = nil
 	buildTestRateLimiters(t)
-	require.NoError(t, buildEventSources())
+	require.NoError(t, buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")))
 	require.NotNil(t, GatewaySource, "a source pointed at the platform broker must be the gateway source")
 
 	nmgr := messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)

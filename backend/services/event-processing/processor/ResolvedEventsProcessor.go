@@ -228,6 +228,9 @@ type Config struct {
 // durable's pending + ack-pending backlog is zero), not read-loop silence, so a restored timer
 // never fires ahead of an unconsumed backlog during an outage, re-bind, or rolling-update overlap.
 type ResolvedEventsProcessor struct {
+	worker               *workerIdentity
+	groupWorkers         []*ResolvedEventsProcessor
+	supervised           bool
 	Microservice         *core.Microservice
 	ResolvedEventsReader messaging.MessageReader
 	Replay               ReplayOpener
@@ -332,8 +335,8 @@ type ResolvedEventsProcessor struct {
 	FenceSets runtime.CurrentFenceSetSource
 
 	// VersionedFenceSets is the VERSION-ADDRESSED half of the same archive seam, used by the fact
-	// consumer to resolve a POINTER fact — one whose fence set was too large to ride in a single
-	// broker message, so the fact carries the version and nothing else.
+	// consumer to resolve a POINTER fact and by startup to hydrate recent historical versions.
+	// A pointer fact carries only the version when its set is too large for one broker message.
 	//
 	// It is a second field rather than a second use of FenceSets because the two answer different
 	// questions and only one of them is right here: "what is the current set" would install a
@@ -342,8 +345,8 @@ type ResolvedEventsProcessor struct {
 	// the split is enforced by the compiler and not by a comment.
 	//
 	// 🔴 IT IS NEVER CONSULTED ON THE LOOP either — the read happens on the fact consumer's own
-	// goroutine, which is already where the fence compile happens. Nil means a pointer fact cannot
-	// be resolved, which is reported loudly and counted rather than installed as an empty set.
+	// goroutine or during startup before the loop begins. Nil leaves pointer facts and historical
+	// backfill unresolved rather than installing an empty set.
 	VersionedFenceSets runtime.FenceSetSource
 
 	// FenceManifests assembles a fence set from a manifest that ARRIVED — the fence-set fact's
@@ -408,9 +411,9 @@ type ResolvedEventsProcessor struct {
 	// It is fed from BOTH directions, and it needs both. The live feed is the geofence-set fact
 	// stream (FenceSetReader → applyFenceSet): a fence edit mints a version and announces its
 	// frozen set, so the loop's next event evaluates against it with no read at all. The startup
-	// feed is the reconcile (FenceSets → reconcileFenceView), which re-seeds the tenants' current
-	// sets from device-management's archive — because a live cache survives no restart and a fact
-	// stream carries only changes from now on, so the feed alone would leave a restarted engine
+	// feed is the reconcile (FenceSets / VersionedFenceSets → reconcileFenceView), which re-seeds
+	// current and recent retained versions from the archive — because a live cache survives no
+	// restart and a fact stream carries only changes from now on, so the feed alone would leave a restarted engine
 	// blind until somebody happened to edit a fence.
 	//
 	// Neither feed can be complete, and the view does not pretend otherwise: an event may name a
@@ -849,6 +852,9 @@ func (rp *ResolvedEventsProcessor) Start(ctx context.Context) error {
 // the partition IF it holds it. detect_is_leader and detect_live are the signals that
 // say which replica is doing the work, and the chart's alerts read them across pods.
 func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
+	if rp.supervised {
+		return fmt.Errorf("group workers are started only by the singleton supervisor")
+	}
 	// A lease with no gate would take the partition and then consume ungoverned —
 	// the fail-open shape this whole change exists to remove, arrived at by a wiring
 	// slip rather than a design one. Refuse to start instead: leadershipEnabled() is
@@ -870,7 +876,7 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	// milliseconds, and a log line claiming otherwise would send an operator looking for a
 	// leader that is right here. acquireWithBackoff logs the actual standby state, once,
 	// when the partition turns out to be held.
-	log.Info().Str("partition", rp.cfg.PartitionId).
+	log.Info().Str("partition", rp.partitionID()).
 		Msg("DETECT leadership supervisor started; this replica is Ready and leads as soon as it holds the partition.")
 	rp.supWG.Add(1)
 	go func() {
@@ -988,8 +994,8 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	//
 	// Unlike the attribute view, seeding this one is NOT a determinism compromise: the view is keyed
 	// on the VERSION the event carries, so a replayed event resolves the fences that were live when
-	// it happened or nothing at all — never today's fences under yesterday's stamp. What the current-
-	// version seed cannot do is resolve a SUPERSEDED version; that is a miss, reported as such.
+	// it happened or nothing at all — never today's fences under yesterday's stamp. The current-
+	// version seed also hydrates the recent retained versions; older versions remain counted misses.
 	if err := rp.startFenceView(ctx); err != nil {
 		return err
 	}
@@ -1001,7 +1007,7 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 		// higher checkpoint: fail startup rather than launch a pod whose DETECT loop is halted
 		// but whose health endpoints read green (a silently-dead singleton). The leader keeps
 		// consuming; this pod backs off and retries into a clean single-writer replay.
-		return fmt.Errorf("event-processing: DETECT checkpoint is stale at startup for partition %q (another writer owns it); not starting", rp.cfg.PartitionId)
+		return fmt.Errorf("event-processing: DETECT checkpoint is stale at startup for partition %q (another writer owns it); not starting", rp.partitionID())
 	}
 	rp.lastCheckpoint = rp.clock.Now()
 	// Seed the idle-advance clock at startup so the first guard interval of live consumption
@@ -1450,12 +1456,11 @@ func (rp *ResolvedEventsProcessor) startFenceView(ctx context.Context) error {
 // unbounded stretch after a rollout. That is the gap this closes, and it is the reason a live feed
 // alone was never sufficient.
 //
-// WHY THE CURRENT VERSION IS THE RIGHT THING TO SEED: an event resolved from now on is stamped
-// with the version that is current NOW, so seeding the current set makes the live path whole
-// immediately. It does NOT make replay whole — a replayed event stamped with a superseded version
-// is a miss until a fact or a preview resolves it — and that residual is deliberate: it is
-// reported as a loud counted error rather than papered over with "no fences", and the off-loop
-// callers that can afford to block resolve it through FenceSetSource instead.
+// The current version anchors a bounded backfill of the preceding versions, matching the live
+// view's retention bound. Versions are minted consecutively by device-management. This restores
+// recent history before replay without waiting for another fact or a preview. It does not warm
+// the entire archive: older or unavailable versions remain counted misses, never today's geometry
+// under a historical stamp. All reads happen during startup, before the single-writer loop.
 //
 // It runs TWICE at startup, before and after replay, for the same reason reconcileAttributeView
 // does: the pre-replay seed makes replayed containment evaluable, and the post-replay one picks up
@@ -1484,11 +1489,37 @@ func (rp *ResolvedEventsProcessor) reconcileFenceView(ctx context.Context) error
 			continue
 		}
 		rp.fenceView.Put(tenant, set)
+		rp.hydrateRetainedFenceSets(ctx, tenant, set.Version())
 		seeded++
 	}
 	log.Info().Int("tenants", len(tenants)).Int("seeded", seeded).
 		Msg("Reconciled the DETECT geofence projection from device-management's frozen fence sets.")
 	return nil
+}
+
+// hydrateRetainedFenceSets warms only the recent retention window. A failed read leaves that
+// version unknown but must not prevent independent versions from being hydrated. Repeat startup
+// reconciliation skips held versions, and cancellation stops further archive calls.
+func (rp *ResolvedEventsProcessor) hydrateRetainedFenceSets(ctx context.Context, tenant string, current int32) {
+	if rp.VersionedFenceSets == nil {
+		return
+	}
+	for offset := int32(1); offset < int32(runtime.MaxRetainedFenceSetVersions) && offset < current; offset++ {
+		if ctx.Err() != nil {
+			return
+		}
+		version := current - offset
+		if rp.fenceView.For(tenant, version) != nil {
+			continue
+		}
+		set, err := rp.VersionedFenceSets.FenceSetAt(ctx, tenant, version)
+		if err != nil || set == nil || set.Version() != version {
+			log.Error().Err(err).Str("tenant", tenant).Int32("version", version).
+				Msg("Unable to hydrate a retained DETECT fence-set version; containment remains unresolvable.")
+			continue
+		}
+		rp.fenceView.Put(tenant, set)
+	}
 }
 
 // applyFenceSet installs one tenant's FROZEN fence set in the loop-owned projection, on the
@@ -1536,9 +1567,9 @@ func (rp *ResolvedEventsProcessor) restoreDetector(payload []byte) (detectcore.D
 func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 	rp.closeDetector() // the previous term's engine, if it had shard goroutines
 	start := rp.clock.Now()
-	snap, ok, err := rp.Store.Load(ctx, rp.cfg.PartitionId)
+	snap, ok, err := rp.Store.Load(ctx, rp.partitionID())
 	if err != nil {
-		return fmt.Errorf("load snapshot for partition %q: %w", rp.cfg.PartitionId, err)
+		return fmt.Errorf("load snapshot for partition %q: %w", rp.partitionID(), err)
 	}
 	if !ok {
 		rp.engine = rp.newDetector()
@@ -1546,12 +1577,12 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 		rp.restoredWatermark = time.Time{}
 		rp.committedSeq = 0
 		rp.metrics.recordRestore(0, 0)
-		log.Info().Str("partition", rp.cfg.PartitionId).Msg("No prior DETECT snapshot; starting from empty engine.")
+		log.Info().Str("partition", rp.partitionID()).Msg("No prior DETECT snapshot; starting from empty engine.")
 		return nil
 	}
 	engine, err := rp.restoreDetector(snap.Payload)
 	if err != nil {
-		return fmt.Errorf("restore engine from snapshot for partition %q: %w", rp.cfg.PartitionId, err)
+		return fmt.Errorf("restore engine from snapshot for partition %q: %w", rp.partitionID(), err)
 	}
 	rp.engine = engine
 	// Take both axes from the ROW rather than the restored engine: the compare-and-swap
@@ -1560,13 +1591,13 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 	rp.restoredWatermark = snap.Watermark
 	rp.committedSeq = uint64(snap.StreamSeq)
 	rp.metrics.recordRestore(rp.clock.Now().Sub(start).Seconds(), uint64(snap.StreamSeq))
-	log.Info().Str("partition", rp.cfg.PartitionId).Uint64("lastSeq", engine.LastSeq()).
+	log.Info().Str("partition", rp.partitionID()).Uint64("lastSeq", engine.LastSeq()).
 		Time("watermark", engine.Watermark()).Msg("Restored DETECT engine from snapshot.")
 	if v := engine.RestoredFrontier(); v < detectcore.FrontierVersion {
 		// Written before the frontier was clamped to broker append time: a device clock that ran ahead may have
 		// carried it up to the resolver's future-skew bound past real time. It only moves forward, so it
 		// corrects itself once real time catches up; say so rather than leave an early absence unexplained.
-		log.Warn().Str("partition", rp.cfg.PartitionId).Int("frontierVersion", v).Int("current", detectcore.FrontierVersion).
+		log.Warn().Str("partition", rp.partitionID()).Int("frontierVersion", v).Int("current", detectcore.FrontierVersion).
 			Msg("Restored a DETECT snapshot whose watermark predates the append-time clamp; it may run ahead of real time until time catches up.")
 	}
 	return nil
@@ -1587,7 +1618,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		return err
 	}
 	startSeq := rp.engine.LastSeq() + 1
-	reader, head, err := rp.Replay.NewReplayReader(rp.cfg.Suffix, startSeq)
+	reader, head, err := rp.openReplay(startSeq)
 	if err != nil {
 		return fmt.Errorf("open replay reader from seq %d: %w", startSeq, err)
 	}
@@ -1605,7 +1636,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		if rp.leadershipEnabled() && !rp.heldNow() {
 			return fmt.Errorf("refusing to reset the DETECT snapshot for partition %q: this "+
 				"replica lost the partition during its term build, and the successor is "+
-				"leading from that checkpoint", rp.cfg.PartitionId)
+				"leading from that checkpoint", rp.partitionID())
 		}
 		observed := rp.restoredSeq
 		observedWatermark := rp.restoredWatermark
@@ -1619,8 +1650,8 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		// the engine — the store refuses the delete if the row has moved since (see Reset), which
 		// is what stops a replica that lost its term mid-build from clearing the checkpoint
 		// its successor is already committing to.
-		if err := rp.Store.Reset(rp.pctx(), rp.cfg.PartitionId, observed, observedWatermark); err != nil {
-			return fmt.Errorf("reset stale snapshot for partition %q: %w", rp.cfg.PartitionId, err)
+		if err := rp.Store.Reset(rp.pctx(), rp.partitionID(), observed, observedWatermark); err != nil {
+			return fmt.Errorf("reset stale snapshot for partition %q: %w", rp.partitionID(), err)
 		}
 		// The durable was created at the stale row's sequence plus one, past everything the new
 		// stream holds, so it would deliver nothing until the stream's head caught up with it
@@ -1673,6 +1704,7 @@ func (rp *ResolvedEventsProcessor) run() {
 	// Always cancel and join the pump on the way out (including a panic unwind).
 	defer func() { rp.pcancel(); <-pumpDone }()
 
+	rp.metrics.setTickInterval(rp.cfg.TickInterval)
 	ticker := time.NewTicker(rp.cfg.TickInterval)
 	defer ticker.Stop()
 
@@ -2445,13 +2477,13 @@ func (rp *ResolvedEventsProcessor) detectStaleOwner(ctx context.Context) bool {
 	// The same deadline discipline as the checkpoint: this read runs on the loop, and an
 	// unanswered one must come back as the "transient blip" below rather than hold the loop.
 	readCtx, cancel := context.WithTimeout(ctx, rp.checkpointTimeout())
-	seq, ok, err := rp.Store.LoadCommittedSeq(readCtx, rp.cfg.PartitionId)
+	seq, ok, err := rp.Store.LoadCommittedSeq(readCtx, rp.partitionID())
 	cancel()
 	if err != nil || !ok {
 		return false
 	}
 	if uint64(seq) > rp.engine.LastSeq() {
-		log.Error().Str("partition", rp.cfg.PartitionId).Int64("committedSeq", seq).
+		log.Error().Str("partition", rp.partitionID()).Int64("committedSeq", seq).
 			Uint64("appliedSeq", rp.engine.LastSeq()).
 			Msg("Idle-advance fenced: another writer owns a higher checkpoint (split brain); halting this writer.")
 		rp.haltStaleWriter()
@@ -2949,7 +2981,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	// therefore the loss path's publish guard, not a graceful-shutdown nicety — which
 	// is also why endTerm flushes BEFORE releasing the lease rather than after.
 	if rp.leadershipEnabled() && !rp.heldNow() {
-		log.Warn().Str("partition", rp.cfg.PartitionId).
+		log.Warn().Str("partition", rp.partitionID()).
 			Msg("DETECT refused a checkpoint because this replica no longer holds the partition; the messages stay unacked and redeliver to the leader")
 		return false
 	}
@@ -2984,7 +3016,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 		}
 		wm := rp.engine.Watermark()
 		snap := &model.DetectSnapshot{
-			PartitionId: rp.cfg.PartitionId,
+			PartitionId: rp.partitionID(),
 			StreamSeq:   int64(rp.engine.LastSeq()),
 			Watermark:   wm,
 			Payload:     payload,
@@ -3002,7 +3034,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 				// one cycle). Our unacked messages redeliver to the leader on the shared durable,
 				// so detection continues there; the durable single-writer guarantee is Slice-6's
 				// singleton deploy, of which this is the runtime safety net.
-				log.Error().Err(err).Str("partition", rp.cfg.PartitionId).
+				log.Error().Err(err).Str("partition", rp.partitionID()).
 					Msg("DETECT checkpoint refused as stale (split-brain); halting this writer.")
 				rp.haltStaleWriter()
 				return false
@@ -3189,7 +3221,7 @@ func (rp *ResolvedEventsProcessor) ackThroughCommitted() {
 		return
 	}
 	if rp.leadershipEnabled() && !rp.heldNow() {
-		log.Warn().Str("partition", rp.cfg.PartitionId).Uint64("committedSeq", rp.committedSeq).
+		log.Warn().Str("partition", rp.partitionID()).Uint64("committedSeq", rp.committedSeq).
 			Msg("DETECT lost the partition between committing its snapshot and acknowledging; the messages stay " +
 				"unacked and redeliver to the leader, which drops them as already applied")
 		return
@@ -3246,7 +3278,7 @@ func (rp *ResolvedEventsProcessor) haltStaleWriter() {
 		rp.supCancel()
 	}
 	err := fmt.Errorf("event-processing: the DETECT checkpoint for partition %q was refused as stale — "+
-		"another writer owns a higher checkpoint, so this replica can never commit again", rp.cfg.PartitionId)
+		"another writer owns a higher checkpoint, so this replica can never commit again", rp.partitionID())
 	// Called from the single-writer loop, which FailNow's teardown (ExecuteStop) joins; safe
 	// because FailNow returns at once and tears down on its own goroutine. A nil Microservice
 	// is FailNow's to report.

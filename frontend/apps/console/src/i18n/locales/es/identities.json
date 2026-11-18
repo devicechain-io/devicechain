@@ -65,5 +65,5 @@
   "mfaNewPasswordLabel": "Contraseña nueva",
   "mfaResetWithPassword": "Restablecer y fijar contraseña",
   "managedByIdpShort": "Gestionada por el proveedor de identidad",
-  "managedByIdpNotice": "El proveedor de identidad gestiona esta membresía, y el siguiente inicio de sesión de la persona a través de él desharía un cambio hecho aquí, así que aquí no se pueden cambiar sus roles ni deshabilitarla o quitarla. Para cambiarla, cambia los grupos de la persona en el proveedor de identidad. Para revocar el acceso, deshabilita la identidad, quita a la persona de los grupos del proveedor o haz que la conexión del proveedor deje de atender a este inquilino."
+  "managedByIdpNotice": "El proveedor de identidad gestiona esta membresía, y el siguiente inicio de sesión de la persona a través de él desharía un cambio hecho aquí, así que aquí no se pueden cambiar sus roles ni habilitarla, deshabilitarla o quitarla. Para cambiarla, cambia los grupos de la persona en el proveedor de identidad: una persona que no está en ningún grupo que este asigne a un rol aquí queda deshabilitada en su siguiente inicio de sesión, y vuelve a habilitarse cuando lo está. Para revocar el acceso, deshabilita la identidad, quita a la persona de los grupos del proveedor o haz que la conexión del proveedor deje de atender a este inquilino."
 }

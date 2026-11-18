@@ -201,6 +201,14 @@ READERS = [
         "backend/services/event-processing/internal/review/testdata/**",
         "demos/**",
     ], [], "sim/*_test.go"),
+    # scenarioverify/documents_test.go:21 reads the served SDL of the four areas the verifier queries
+    # (documents_test.go:47-59: device-management, command-delivery, event-management, event-processing).
+    ("backend/sims/dc-simulator", "scenarioverify", [
+        "backend/services/device-management/graphql/**",
+        "backend/services/command-delivery/graphql/**",
+        "backend/services/event-management/graphql/**",
+        "backend/services/event-processing/graphql/**",
+    ], [], "scenarioverify/documents_test.go:21"),
     ("backend/sims/dc-simulator", "updater", ["backend/core/ota/testdata/**"], [], "updater/*_test.go"),
     ("backend/tools/apiprobe", ".", [SDL], [], "baseline_test.go, readsweep_test.go, documents_test.go"),
     ("backend/tools/docsgql", ".", ["docs/**", SDL], [], "docsgql_test.go:241"),
@@ -512,6 +520,12 @@ class Selection:
         self.frontend_why = ""
         self.migrations = True
         self.migrations_why = "runs: everything runs"
+        self.draft = False
+        # The race step's scope on a pull request: {module: set of package dirs to race}, a module
+        # missing from it racing nothing; None races every leg in full. See race_select.
+        self.race = None
+        self.race_full = {}        # module -> why its legs race in full anyway (doubt)
+        self.race_why = "full: everything runs"
 
     def everything(self, why):
         self.full = True
@@ -568,6 +582,91 @@ MIGRATION_ROOTS = [
 # go.mod/go.sum already run everything, so they need no row here.
 MIGRATION_INPUTS = ["deploy/images/timescaledb/**"]
 
+# ---------------------------------------------------------------------------------------------
+# The `image-smoke` legs: one ko build per image module, so what can change one.
+# ---------------------------------------------------------------------------------------------
+# An image is built from its module's Go code and from the workspace modules it requires, so a leg
+# runs when its module is in the whole-module set `select` computes (changed, or requiring a
+# changed module, transitively); a full selection runs every leg. Dependency versions (go.work,
+# go.work.sum, any go.mod/go.sum), the workflow and hack/ (ko-build.sh, the broker smoke scripts)
+# already run everything. ko reads nothing else from a module's own tree that `go build` would not
+# (embeds cannot leave the module), so the only other inputs are these, read by a leg's steps:
+#   - .ko.yaml: the pinned base of EVERY image (hack/ko-build.sh points ko at it);
+#   - backend/k8s runs hack/check-ko-base-used.sh, which scans .github/, hack/, deploy/ and
+#     backend/cli for a ko call that bypasses the wrapper (non-test files);
+#   - backend/services/user-management execs the binary named in backend/cli/bootstrap/breakglass.go.
+# (module, [globs], [excluded globs]); module "*" is every leg.
+SMOKE_INPUTS = [
+    ("*", [".ko.yaml"], []),
+    ("backend/k8s", ["deploy/**", "backend/cli/**"], ["**/*_test.go"]),
+    ("backend/services/user-management", ["backend/cli/bootstrap/breakglass.go"], []),
+]
+
+
+def smoke_select(s, files, smoke_all):
+    """(legs, {module: why}). Every leg on a full selection; otherwise a leg whose module runs whole,
+    or that a SMOKE_INPUTS row names for a changed file."""
+    if s.full:
+        return list(smoke_all), {m: "everything runs" for m in smoke_all}
+    why = {}
+    for m in smoke_all:
+        if m in s.modules:
+            why[m] = s.via.get(m, "its module runs")
+            continue
+        for module, globs, excl in SMOKE_INPUTS:
+            if module not in ("*", m):
+                continue
+            hit = next((f for f in files if match(f, globs) and not match(f, excl)), None)
+            if hit:
+                why[m] = "%s is an input of its image build" % hit
+                break
+    return [m for m in smoke_all if m in why], why
+
+
+# ---------------------------------------------------------------------------------------------
+# Go build-cache groups: which actions/cache entry a leg restores, and which ONE leg saves it.
+# ---------------------------------------------------------------------------------------------
+# The repository cache is 10 GB, shared by every workflow. One entry per module (39 of them, a
+# measured 16.6 GB of main-saved entries with the module cache included) cannot fit, and an
+# over-full cache evicts continuously, which is how the hit rate fell to 27%. Modules that share
+# a dependency stack share one entry instead: the build cache is content-addressed, so a service
+# restoring the entry device-management saved reuses every compiled package they have in common
+# (core and the whole third-party stack) and compiles only what is its own. Each group is SAVED
+# by exactly one leg, the static leg of its saver, and only on a push to main (ci.yml), so no
+# two legs race for a write-once key and no pull request writes an entry another cannot read.
+# (group, saver module, [module globs]); the first group whose glob matches a module is its group.
+#
+# The groups of their own are the modules whose dependency stacks nothing else shares (helm and
+# client-go, controller-runtime, kafka and the AWS SDK, the simulator's, the tools' and the edge
+# agent's), so restoring the core or services entry would leave most of their build cold. Budget,
+# from the entries main saved on run 44046620451 (module cache included) scaled by the ~58% that
+# is build cache (device-state's module cache measured ~290 MB of its 683 MB entry): cli ~0.8 GB,
+# k8s ~0.6, services ~0.4, outbound-connectors ~0.4, drdrill ~0.35, core ~0.3, simulator ~0.3,
+# migrationdiff ~0.3, apiprobe ~0.25, edge agent ~0.2, ota-device ~0.15: about 4 GB, so the new
+# generation a dependency bump creates fits beside the old one until LRU evicts it.
+# Split shards get no key of their own: a shard is race-bound, and a hit measured ~0 minutes there.
+CACHE_GROUPS = [
+    ("cli", "backend/cli", ["backend/cli"]),
+    ("k8s", "backend/k8s", ["backend/k8s"]),
+    ("outbound-connectors", "backend/services/outbound-connectors", ["backend/services/outbound-connectors"]),
+    ("services", "backend/services/device-management", ["backend/services/*"]),
+    ("dc-simulator", "backend/sims/dc-simulator", ["backend/sims/dc-simulator"]),
+    ("migrationdiff", "backend/tools/migrationdiff", ["backend/tools/migrationdiff"]),
+    ("drdrill", "backend/tools/drdrill", ["backend/tools/drdrill"]),
+    ("apiprobe", "backend/tools/apiprobe", ["backend/tools/apiprobe"]),
+    ("dc-edge-agent", "backend/edge/dc-edge-agent", ["backend/edge/dc-edge-agent"]),
+    ("ota-device", "examples/ota-device", ["examples/ota-device"]),
+    ("core", "backend/core", ["*", "*/*", "*/*/*", "*/*/*/*"]),
+]
+
+
+def cache_group(module):
+    for name, saver, globs in CACHE_GROUPS:
+        if match(module, globs):
+            return name, saver
+    raise RuntimeError("no cache group for %s" % module)
+
+
 FRONTEND_INERT = ["backend/**","deploy/**", "docs/**", "examples/**", "sdks/**", "demos/**", "_legacy/**", "*.md", "LICENSE", "NOTICE"]
 
 
@@ -605,6 +704,114 @@ def migrations_verdict(s, files, graph):
             return
     s.migrations = False
     s.migrations_why = "skipped: no changed file reaches the %d packages migration-diff.sh compiles, or its operand image" % len(closure)
+
+
+# ---------------------------------------------------------------------------------------------
+# The race step on a pull request: which packages it covers
+# ---------------------------------------------------------------------------------------------
+# The race detector was 59% of every Go leg's minutes, and on pull requests only 21% of those
+# minutes were in a module with a changed Go file at all: a change to core raced every module that
+# requires it, whole, on every pull request. On a pull request the race step therefore covers
+# only the packages that hold a changed file and the packages that DIRECTLY import one of them
+# (through their code or their tests), across modules. The plain `go test` step is untouched: it
+# still runs every package of every selected leg. Every other event races everything, and the
+# main run is the net for a race this narrower scope does not reach.
+#
+# 🔴 WHY ONE LEVEL OF IMPORTERS AND NOT THE CLOSURE. Replayed over 80 merged pull requests (70
+# of them narrowable) with the measured per-leg race minutes, direct importers cut the race minutes
+# by at least 30% (partial legs at full cost; ~42% scaling them by the share of packages raced),
+# and the full reverse-import closure by at least 23% (~32%): the closure of a core package reaches
+# most of the workspace. A race lives in code that runs
+# concurrently, and the tests most likely to drive a changed package's code concurrently are its
+# own and those of the packages written against its API, its direct importers. A race reachable
+# only through a deeper chain surfaces on main's full run instead: that is the tradeoff the
+# maintainer accepted, for this step only. Widening to the closure is a change to race_select's
+# importer loop alone.
+#
+# A package whose tests READ a changed file through a READERS row races too, wherever it sits.
+#
+# FAIL SAFE, per module: a changed non-Go file (an embed, a fixture, a golden file, a Go file
+# under testdata/) races its module in full, because any package of the module can read it
+# through a relative path no graph records; so does a Go file in a directory that is no package
+# of this tree (a package was deleted or moved). A full selection, no package graph, or any
+# exception in here races everything.
+_IGNORED_DIR = re.compile(r"(^|/)(testdata|vendor|node_modules)(/|$)|(^|/)[._][^/]*(/|$)")
+
+
+def race_select(ws, s, files, graph):
+    """Sets s.race ({module: set of package dirs}, or None for everything) and s.race_full."""
+    s.race, s.race_full = None, {}
+    if s.full:
+        s.race_why = "full: everything runs"
+        return
+    if graph is None:
+        s.race_why = "full: no package graph to decide from"
+        return
+    try:
+        changed = set()
+        readers = set()
+        for f in files:
+            # A package whose tests READ the file (a READERS row) races, whether or not its module
+            # runs whole and whatever leg (a shard included) carries it: no import edge shows it.
+            for module, pkg, globs, excl, _ in READERS:
+                if match(f, globs) and not match(f, excl):
+                    readers.add(module if norm_pkg(pkg) == "." else module + "/" + norm_pkg(pkg))
+            owner = ws.owner(f)
+            if not owner:
+                continue
+            d = os.path.dirname(f)
+            if not f.endswith(".go") or _IGNORED_DIR.search("" if d == owner else os.path.relpath(d, owner).replace("\\", "/") + "/"):
+                # A non-Go file (or a Go file go ignores, under testdata/ and the like): an embed,
+                # a fixture or a golden file can be read by ANY package of its module, through a
+                # relative path no graph records (dc-edge-agent's agent tests read ../dashboards).
+                s.race_full.setdefault(owner, "%s is not Go source, and no graph says which tests read it" % f)
+                continue
+            if d not in graph.pkgs:
+                s.race_full.setdefault(owner, "%s is in no package of this tree (a deleted or moved package?)" % f)
+                continue
+            changed.add(d)
+        importers = set()
+        for p, (imps, timps) in graph.pkgs.items():
+            if changed & (imps | timps):
+                importers.add(p)
+        race = {}
+        for p in changed | importers | readers:
+            m = ws.owner(p)
+            if m:
+                race.setdefault(m, set()).add(p)
+        s.race = race
+        s.race_changed = changed
+        s.race_why = "changed: %d changed package(s), %d direct importer(s), %d reader package(s), in %d module(s); %d module(s) in full" % (
+            len(changed), len(importers - changed), len(readers - changed - importers), len(race), len(s.race_full))
+    except Exception as e:  # noqa: BLE001 - doubt races everything
+        s.race, s.race_full = None, {}
+        s.race_why = "full: the race selection failed (%s: %s)" % (type(e).__name__, e)
+
+
+def apply_race(s, go):
+    """Annotate each go leg with race_scope (all | changed | none) and race_pkgs."""
+    for leg in go:
+        leg["race_scope"], leg["race_pkgs"] = "all", ""
+        if s.race is None or s.full:
+            continue
+        m = leg["module"]
+        if m in s.race_full or leg["leg"] == "readers":
+            # Doubt, or a reader leg: its packages were selected because a file their tests read
+            # changed, which no import edge describes. Its packages are few; race them all.
+            continue
+        mine = s.race.get(m, set())
+        rel = {"." if p == m else os.path.relpath(p, m).replace("\\", "/") for p in mine}
+        if leg["shard"]:
+            # A shard runs one split package (its share of the tests): all of it, or none.
+            if leg["pkgs"] not in {pkg_arg(r) for r in rel}:
+                leg["race_scope"] = "none"
+            continue
+        split = {norm_pkg(p) for p in SPLITS.get(m, {})}
+        want = sorted(r for r in rel if r not in split)
+        if not want:
+            leg["race_scope"] = "none"
+        else:
+            leg["race_scope"], leg["race_pkgs"] = "changed", " ".join(pkg_arg(r) for r in want)
 
 
 def select(ws, changed_files, graph=None):
@@ -647,6 +854,7 @@ def select(ws, changed_files, graph=None):
         if m in whole:
             del s.readers[m]
     migrations_verdict(s, files, graph)
+    race_select(ws, s, files, graph)
     return s
 
 
@@ -836,6 +1044,16 @@ def changed_files(base, head):
 # ---------------------------------------------------------------------------------------------
 def legs_for(module, pkgs=None):
     """pkgs None = the whole module (static checks + every package); otherwise just those packages."""
+    out = _legs_for(module, pkgs)
+    group, saver = cache_group(module)
+    for leg in out:
+        leg["cache_group"] = group
+        # The one leg that may save its group's entry (ci.yml saves only on a push to main).
+        leg["cache_save"] = bool(leg["static"] and module == saver)
+    return out
+
+
+def _legs_for(module, pkgs=None):
     splits = {norm_pkg(k): v for k, v in SPLITS.get(module, {}).items()}
     out = []
     if pkgs is None:
@@ -871,13 +1089,19 @@ def has_integration(module, pkg):
     return False
 
 
-def plan(ws, s, integration_plan):
+def plan(ws, s, integration_plan, smoke_all=(), files=()):
+    """(go legs, integration legs, smoke legs). A draft pull request plans none of the three: they
+    run when it is marked ready for review, and ci-complete fails a draft run (see ci.yml)."""
+    if s.draft:
+        s.smoke_why = {}
+        return [], [], []
     go = []
     for m in ws.dirs:
         if m in s.modules:
             go.extend(legs_for(m))
         elif m in s.readers:
             go.extend(legs_for(m, list(s.readers[m])))
+    apply_race(s, go)
     integ_modules = set(s.modules)
     for m, pkgs in s.readers.items():
         if any(has_integration(m, p) for p in pkgs):
@@ -891,12 +1115,17 @@ def plan(ws, s, integration_plan):
         if mods != leg["modules"].split():
             leg["modules"] = " ".join(mods)
             leg["cache"] = "\n".join("%s/go.mod\n%s/go.sum" % (x, x) for x in mods)
+        leg["cache_group"] = cache_group(mods[0])[0]
         integ.append(leg)
-    return go, integ
+    smoke, s.smoke_why = smoke_select(s, files, smoke_all)
+    return go, integ, smoke
 
 
-def report(ws, s, go, integ, integration_plan, out=sys.stderr):
+def report(ws, s, go, integ, integration_plan, smoke=(), smoke_all=(), out=sys.stderr):
     p = lambda *a: print(*a, file=out)
+    if s.draft:
+        p("DRAFT: the pull request is a draft, so the go, integration, image-smoke and migrations jobs")
+        p("  are not planned. They run when it is marked ready for review; until then ci-complete fails.")
     if s.full:
         p("SELECTION: everything runs")
         for r in s.reasons:
@@ -913,11 +1142,19 @@ def report(ws, s, go, integ, integration_plan, out=sys.stderr):
                 p("  SKIPPED  %-45s no changed file is in it, in a module it requires, or read by its tests" % m)
     p("go legs: %d" % len(go))
     for g in go:
-        p("  %-45s %-24s static=%s %s%s" % (g["module"], g["leg"] or "-", str(g["static"]).lower(), g["pkgs"] or "./...", (" minus " + g["exclude"]) if g["exclude"] else ""))
+        p("  %-45s %-24s static=%s %s%s  race=%s%s" % (g["module"], g["leg"] or "-", str(g["static"]).lower(), g["pkgs"] or "./...", (" minus " + g["exclude"]) if g["exclude"] else "",
+                                                      g.get("race_scope", "all"), (" " + g["race_pkgs"]) if g.get("race_pkgs") else ""))
+    p("race: " + s.race_why)
+    for m, why in sorted(s.race_full.items()):
+        p("  full     %-45s %s" % (m, why))
     kept = {l["name"] for l in integ}
     p("integration legs: %d of %d" % (len(integ), len(integration_plan)))
     for l in integration_plan:
         p("  %s %-20s %s" % ("run " if l["name"] in kept else "SKIP", l["name"], l["modules"]))
+    p("image-smoke legs: %d of %d" % (len(smoke), len(smoke_all)))
+    why = getattr(s, "smoke_why", {})
+    for m in smoke_all:
+        p("  %s %-45s %s" % ("run " if m in smoke else "SKIP", m, why.get(m, "its module does not run and no image input changed")))
     p("frontend: " + s.frontend_why)
     p("migrations: " + s.migrations_why)
 
@@ -951,15 +1188,38 @@ def cmd_plan():
         except Exception as e:  # noqa: BLE001 - any failure to select means run everything
             print("::warning::affected-module selection failed (%s: %s); running everything" % (type(e).__name__, e), file=sys.stderr)
             s = full_selection(ws, "the selection itself failed: %s" % e)
-    go, integ = plan(ws, s, integration_plan)
-    if s.full and len({g["module"] for g in go}) != len(ws.dirs):
+            files = []
+        # 🔴 A draft skips the heavy jobs, and only an explicit "true" makes one: anything else
+        # (missing, empty, malformed) runs them. ci-complete FAILS a draft run, so its green can
+        # never stand in for the heavy jobs once the pull request is marked ready.
+        if os.environ.get("PR_DRAFT", "") == "true":
+            mark_draft(s)
+    # The full image list, cross-checked against the tree in discover. Every leg off a pull request.
+    smoke_all = json.loads(os.environ["SMOKE_MODULES"])
+    if not smoke_all:
+        raise RuntimeError("SMOKE_MODULES is empty: no image module to plan from")
+    go, integ, smoke = plan(ws, s, integration_plan, smoke_all, files if event == "pull_request" else [])
+    if s.full and not s.draft and len({g["module"] for g in go}) != len(ws.dirs):
         raise RuntimeError("a full run planned %d modules of %d" % (len({g["module"] for g in go}), len(ws.dirs)))
-    if s.full and len(integ) != len(integration_plan):
+    if s.full and not s.draft and len(integ) != len(integration_plan):
         raise RuntimeError("a full run planned %d integration legs of %d" % (len(integ), len(integration_plan)))
-    report(ws, s, go, integ, integration_plan)
-    if s.full and not s.migrations:
+    if s.full and not s.draft and smoke != smoke_all:
+        raise RuntimeError("a full run planned %d image-smoke legs of %d" % (len(smoke), len(smoke_all)))
+    if (s.full or event != "pull_request") and any(g["race_scope"] != "all" for g in go):
+        raise RuntimeError("a %s run narrowed the race step" % ("full" if s.full else event))
+    if event != "pull_request" and s.draft:
+        raise RuntimeError("a %s run was planned as a draft" % event)
+    report(ws, s, go, integ, integration_plan, smoke, smoke_all)
+    if s.full and not s.draft and not s.migrations:
         raise RuntimeError("a full run skipped the migrations jobs")
-    print(json.dumps({"go": go, "integration": integ, "frontend": s.frontend, "migrations": s.migrations, "full": s.full}, separators=(",", ":")))
+    print(json.dumps({"go": go, "integration": integ, "smoke": smoke, "frontend": s.frontend, "migrations": s.migrations,
+                      "full": s.full, "draft": s.draft}, separators=(",", ":")))
+
+
+def mark_draft(s):
+    """A draft pull request: plan none of the heavy jobs (go, integration, image-smoke, migrations)."""
+    s.draft = True
+    s.migrations, s.migrations_why = False, "skipped: the pull request is a draft (runs when it is marked ready)"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -985,6 +1245,22 @@ def cmd_check():
                 errs.append("SPLITS %s %s: no such package" % (module, pkg))
             if not (1 <= n <= 8):
                 errs.append("SPLITS %s %s: shard count %d out of range" % (module, pkg, n))
+
+    # Every module has a cache group, and every group's saver is a workspace module in that group:
+    # a saver that left the workspace would leave its group never saved, silently.
+    for module in ws.dirs:
+        try:
+            cache_group(module)
+        except RuntimeError as e:
+            errs.append(str(e))
+    for name, saver, _ in CACHE_GROUPS:
+        if saver not in ws.dirs:
+            errs.append("CACHE_GROUPS %s: saver %s is not a workspace module" % (name, saver))
+        elif cache_group(saver)[0] != name:
+            errs.append("CACHE_GROUPS %s: saver %s belongs to group %s" % (name, saver, cache_group(saver)[0]))
+    for module, _, _ in SMOKE_INPUTS:
+        if module != "*" and module not in ws.dirs:
+            errs.append("SMOKE_INPUTS names %s, which go.work does not declare" % module)
 
     def allowed(module, pkg):
         if (module, pkg) in declared:
@@ -1071,11 +1347,15 @@ def cmd_replay(shas):
     ws = load_workspace()
     graph = PackageGraph(ws)
     integration_plan = json.loads(subprocess.check_output(["bash", os.path.join(ROOT, "hack", "integration-tests.sh"), "--matrix"], cwd=ROOT, text=True))
+    # The image list as discover builds it: every service with a main.go, plus the four fixed images.
+    smoke_all = sorted("backend/services/" + d for d in os.listdir(os.path.join(ROOT, "backend", "services"))
+                       if os.path.exists(os.path.join(ROOT, "backend", "services", d, "main.go")))
+    smoke_all += ["backend/k8s", "backend/edge/dc-edge-agent", "backend/admin/dc-broker-admin", "backend/broker/dc-nats-server"]
     for sha in shas:
         title = subprocess.check_output(["git", "log", "-1", "--format=%h %s", sha], cwd=ROOT, text=True).strip()
         files = changed_files(sha + "^", sha)
         s = select(ws, files, graph)
-        go, integ = plan(ws, s, integration_plan)
+        go, integ, smoke = plan(ws, s, integration_plan, smoke_all, files)
         cq, cqp, _ = codeql_select(ws, files, graph)
         print("=" * 100)
         print(title)
@@ -1087,6 +1367,9 @@ def cmd_replay(shas):
             print("  reader packages: %s" % (", ".join("%s:%s" % (m.split("/")[-1], ",".join(sorted(p))) for m, p in sorted(s.readers.items())) or "-"))
         print("  go legs: %d   integration legs: %d of %d (%s)   frontend: %s" % (
             len(go), len(integ), len(integration_plan), " ".join(l["name"] for l in integ) or "-", "run" if s.frontend else "skip"))
+        scopes = [g["race_scope"] for g in go]
+        print("  race: %s; legs all=%d changed=%d none=%d" % (s.race_why, scopes.count("all"), scopes.count("changed"), scopes.count("none")))
+        print("  image-smoke legs: %d of %d (%s)" % (len(smoke), len(smoke_all), " ".join(m.split("/")[-1] for m in smoke) or "-"))
         print("  migrations: %s   codeql: %s" % (
             "run" if s.migrations else "skip",
             ("all %d modules" % len(cq)) if cqp is None and len(cq) == len(ws.dirs) else ("%d packages in %d modules (%s)" % (
@@ -1233,6 +1516,80 @@ def self_test():
                        "...across modules, up to the main that links it: %s" % cqp("backend/core/rdb/sub/sub.go"))
                 expect(cqp("backend/services/svc-a/x.go") == {"backend/services/svc-a": ["."]}, "a package nothing imports builds alone")
                 expect(codeql_select(ws, ["backend/core/gone/x.go"], g)[1] is None, "a Go file in no package (deleted?) analyzes everything")
+                # THE RACE SCOPE on a pull request: changed packages plus their DIRECT importers,
+                # plus the packages whose tests read a changed file. One reader row, on a SPLIT
+                # package of a module that also runs whole, is all the race cases below see.
+                saved_readers = READERS
+                READERS = [("backend/core", "messaging", ["docs/nats.md"], [], "t"),
+                           ("backend/core", "leaf", ["docs/l*"], ["docs/lx.md"], "t")]
+                def race(*fs):
+                    sel = select(ws, list(fs), g)
+                    return None if sel.race is None else {m: sorted(v) for m, v in sel.race.items()}, sel.race_full
+                expect(race("backend/core/leaf/l.go") == ({"backend/core": ["backend/core/leaf", "backend/core/sqlnull"]}, {}),
+                       "a changed package races with its direct importer, not the importer's importers: %s" % (race("backend/core/leaf/l.go"),))
+                expect(race("backend/core/testonly/t.go")[0] == {"backend/core": ["backend/core/rdb", "backend/core/testonly"]},
+                       "an importer through its TESTS counts: %s" % (race("backend/core/testonly/t.go"),))
+                expect(race("backend/core/rdb/sub/sub.go")[0] == {"backend/core": ["backend/core/rdb/sub"], "backend/tools/tool": ["backend/tools/tool"]},
+                       "importers are followed across modules: %s" % (race("backend/core/rdb/sub/sub.go"),))
+                expect("backend/core" in race("backend/core/rdb/testdata/fixture.sql")[1],
+                       "a fixture races its module in full: any package may read it by a relative path")
+                expect(race("backend/core/rdb/testdata/gen.go")[1].get("backend/core", "").endswith("is not Go source, and no graph says which tests read it"),
+                       "so does a Go file go ignores (testdata), as an input rather than a deleted package")
+                expect(race("docs/ly.md")[0] == {"backend/core": ["backend/core/leaf"]} and race("docs/lx.md") == ({}, {}),
+                       "a reader row's exclusions hold for the race scope too")
+                expect("backend/core" in race("backend/core/rdb/schema.graphql")[1], "so does a non-Go file inside a package (an embed)")
+                expect(race("docs/nats.md") == ({"backend/core": ["backend/core/messaging"]}, {}),
+                       "a file a package's tests READ races that package: %s" % (race("docs/nats.md"),))
+                expect(race("docs/nats.md", "backend/core/leaf/l.go")[0] == {"backend/core": ["backend/core/leaf", "backend/core/messaging", "backend/core/sqlnull"]},
+                       "...also when its module runs whole for another change")
+                expect(race("backend/core/deep/d_test.go")[0] == {"backend/core": ["backend/core/deep", "backend/core/sqlnull"]},
+                       "a changed test file races its package and the packages whose tests import it")
+                expect(race("docs/x.md", "frontend/a.ts") == ({}, {}), "a change outside every module that no package reads races nothing")
+                expect(race("backend/core/gone/x.go")[1].get("backend/core", "").startswith("backend/core/gone/x.go is in no package"),
+                       "a Go file in no package (deleted?) races its module in full: %s" % (race("backend/core/gone/x.go")[1],))
+                expect("backend/core" in race("backend/core/NOTES.txt")[1], "a module-level non-Go file races its module in full")
+                expect(race("hack/x.sh") == (None, {}), "a full selection races everything")
+                expect(select(ws, ["backend/core/leaf/l.go"]).race is None, "no package graph races everything")
+                # Each layer refuses a narrowed full run on its own, not only through the other.
+                full = full_selection(ws, "push")
+                race_select(ws, full, ["backend/core/leaf/l.go"], g)
+                expect(full.race is None, "race_select on a full selection races everything, whatever changed")
+                full.race = {}
+                expect(all(x["race_scope"] == "all" for x in plan(ws, full, [])[0]), "apply_race never narrows a full selection")
+                broken = select(ws, ["backend/core/leaf/l.go"], g)
+                race_select(ws, broken, ["backend/core/leaf/l.go"], object())  # a graph that raises
+                expect(broken.race is None and broken.race_why.startswith("full: the race selection failed"),
+                       "a race selection that raises races everything: %s" % broken.race_why)
+                SPLITS = {"backend/core": {"messaging": 3}}
+                sc = {(x["module"], x["leg"]): x["race_scope"] for x in plan(ws, select(ws, ["docs/nats.md", "backend/core/leaf/l.go"], g), [])[0]}
+                expect([sc[("backend/core", "messaging %d/3" % i)] for i in (1, 2, 3)] == ["all"] * 3,
+                       "the shards of a split READER package race when a file it reads changes: %s" % sc)
+                def scopes(*fs):
+                    go_, _, _ = plan(ws, select(ws, list(fs), g), [])
+                    return {(x["module"], x["leg"]): (x["race_scope"], x["race_pkgs"]) for x in go_}
+                sc = scopes("backend/core/messaging/m.go")
+                expect([sc[("backend/core", "messaging %d/3" % i)][0] for i in (1, 2, 3)] == ["all"] * 3 and sc[("backend/core", "rest")] == ("none", ""),
+                       "a changed split package races every shard of it and not the catch-all: %s" % sc)
+                expect(sc[("backend/services/svc-a", "")] == ("none", "") and sc[("backend/cli", "")] == ("none", ""),
+                       "a module selected only for REQUIRING a changed one races nothing: %s" % sc)
+                sc = scopes("backend/core/leaf/l.go")
+                expect([sc[("backend/core", "messaging %d/3" % i)][0] for i in (1, 2, 3)] == ["none"] * 3
+                       and sc[("backend/core", "rest")] == ("changed", "./leaf/ ./sqlnull/"),
+                       "the catch-all races exactly the changed packages and their importers, minus the split ones: %s" % sc)
+                sc = scopes("backend/services/svc-a/x.go")
+                expect(sc[("backend/services/svc-a", "")] == ("changed", ".") and sc[("backend/services/svc-b", "")] == ("none", ""),
+                       "a module-root package races as '.', and its dependant module, importing nothing of it, races nothing: %s" % sc)
+                sc = scopes("backend/core/gone/x.go", "backend/services/svc-a/x.go")
+                expect(all(v == ("all", "") for (m, _), v in sc.items() if m == "backend/core") and sc[("backend/services/svc-a", "")] == ("changed", "."),
+                       "doubt is per module: core races in full, svc-a only what changed: %s" % sc)
+                READERS = saved_readers
+                sc = scopes("docs/docs/x.md")
+                expect(sc.get(("backend/cli", "readers")) == ("all", ""), "a readers leg races its packages in full: %s" % sc)
+                sc = {k: v for k, v in scopes("hack/x.sh").items()}
+                expect(sc and all(v == ("all", "") for v in sc.values()), "a full selection races every leg in full")
+                s_full = full_selection(ws, "push")
+                expect(all(x["race_scope"] == "all" for x in plan(ws, s_full, [])[0]), "a non-pull-request plan races every leg in full")
+                SPLITS = {"backend/core": {"messaging": 3}}
                 # A deleted package that a root still imports: unknown, so they run.
                 with open(os.path.join(tmp, "backend/core/leaf/l2.go"), "w", encoding="utf-8") as fh:
                     fh.write('package leaf\n\nimport "example.com/core/gone"\n')
@@ -1271,21 +1628,77 @@ def self_test():
         integ_plan = [{"name": "core", "modules": "backend/core", "cache": ""},
                       {"name": "small", "modules": "backend/services/svc-a backend/tools/tool", "cache": ""}]
         s = select(ws, ["backend/services/svc-b/x.go"])
-        go, integ = plan(ws, s, integ_plan)
+        go, integ, _ = plan(ws, s, integ_plan)
         expect([g["module"] for g in go] == ["backend/core", "backend/services/svc-b"] and go[0]["pkgs"] == "./test/" and not go[0]["static"],
                "svc-b alone runs svc-b whole and core's repo-walking test package: %s" % [(g["module"], g["pkgs"]) for g in go])
         expect(integ == [], "and no integration leg (neither is integration-selected): %s" % integ)
         s = select(ws, ["backend/services/svc-a/x.go"])
-        go, integ = plan(ws, s, integ_plan)
+        go, integ, _ = plan(ws, s, integ_plan)
         expect([l["modules"] for l in integ] == ["backend/services/svc-a"], "the small leg narrows to the selected module: %s" % integ)
         s = full_selection(ws, "test")
-        go, integ = plan(ws, s, integ_plan)
+        go, integ, _ = plan(ws, s, integ_plan)
         core = [g for g in go if g["module"] == "backend/core"]
         expect([g["leg"] for g in core] == ["messaging 1/3", "messaging 2/3", "messaging 3/3", "rest"]
                and core[-1]["static"] and core[-1]["exclude"] == "./messaging/" and not any(g["static"] for g in core[:-1]),
                "a split module runs N shards plus one static catch-all excluding the split package")
         expect(sum(1 for g in go if g["static"]) == len(ws.dirs), "a full run has exactly one static leg per module")
-        expect(integ == integ_plan, "a full run keeps every integration leg")
+        expect([(l["name"], l["modules"]) for l in integ] == [(l["name"], l["modules"]) for l in integ_plan],
+               "a full run keeps every integration leg")
+
+        print("==> image-smoke")
+        smoke_all = ["backend/services/svc-a", "backend/services/svc-b", "backend/services/user-management", "backend/k8s"]
+        sm = lambda *fs: plan(ws, select(ws, list(fs)), integ_plan, smoke_all, list(fs))[2]
+        expect(sm("backend/core/x.go") == ["backend/services/svc-a", "backend/services/svc-b"],
+               "a core change smokes every image that requires core, transitively: %s" % sm("backend/core/x.go"))
+        expect(sm("backend/services/svc-b/x.go") == ["backend/services/svc-b"], "a service change smokes that image alone")
+        expect(sm("docs/docs/x.md", "README.md", "frontend/a.ts") == [], "a docs/frontend change smokes nothing")
+        expect(sm("backend/tools/tool/x.go") == [], "a module no image requires smokes nothing")
+        expect(sm("backend/cli/bootstrap/breakglass.go") == ["backend/services/user-management", "backend/k8s"],
+               "breakglass.go smokes user-management (its exec path) and k8s (the ko-wrapper scan): %s" % sm("backend/cli/bootstrap/breakglass.go"))
+        expect(sm("backend/cli/bootstrap/x_test.go") == [], "a cli TEST file is no image input")
+        expect(sm("deploy/helm/x.yaml") == ["backend/k8s"], "a deploy/ change smokes k8s (the ko-wrapper scan reads deploy/)")
+        for f in ["hack/ko-build.sh", ".github/workflows/ci.yml", "backend/services/svc-a/go.mod", "go.work", ".ko.yaml"]:
+            expect(sm(f) == smoke_all, "%s smokes every image" % f)
+        s = select(ws, ["backend/core/x.go"])
+        expect(smoke_select(s, ["mystery.txt"], smoke_all)[0] == ["backend/services/svc-a", "backend/services/svc-b"], "smoke_select reads the module set")
+        s.full = True
+        expect(smoke_select(s, [], smoke_all)[0] == smoke_all, "a full selection smokes every image")
+        expect(smoke_select(select(ws, ["x/.ko.yaml"]), ["x/.ko.yaml"], smoke_all)[0] == smoke_all,
+               "an unknown file runs everything, so every image")
+
+        print("==> draft")
+        s = select(ws, ["backend/core/x.go"])
+        mark_draft(s)
+        go, integ, sk = plan(ws, s, integ_plan, smoke_all, ["backend/core/x.go"])
+        expect(go == [] and integ == [] and sk == [] and not s.migrations and s.draft and s.frontend is False,
+               "a draft plans no go, integration, smoke or migrations job: %s %s %s %s" % (len(go), len(integ), len(sk), s.migrations))
+        s = full_selection(ws, "test")
+        mark_draft(s)
+        expect(plan(ws, s, integ_plan, smoke_all, [])[0] == [], "a draft with a full selection still plans no heavy job")
+        expect(not select(ws, ["backend/core/x.go"]).draft and not full_selection(ws, "t").draft, "nothing else is a draft")
+
+        print("==> cache groups")
+        global CACHE_GROUPS
+        saved_groups = CACHE_GROUPS
+        CACHE_GROUPS = [("cli", "backend/cli", ["backend/cli"]), ("services", "backend/services/svc-a", ["backend/services/*"]),
+                        ("core", "backend/core", ["*", "*/*", "*/*/*"])]
+        try:
+            go, integ, _ = plan(ws, full_selection(ws, "t"), integ_plan)
+            savers = sorted((g["cache_group"], g["module"], g["static"]) for g in go if g["cache_save"])
+            expect(savers == [("cli", "backend/cli", True), ("core", "backend/core", True), ("services", "backend/services/svc-a", True)],
+                   "a full plan saves each group from exactly one leg, its saver's static leg: %s" % savers)
+            expect({g["module"]: g["cache_group"] for g in go}["backend/tools/tool"] == "core" and
+                   {g["module"]: g["cache_group"] for g in go}["backend/services/svc-b"] == "services", "a module takes the first group that matches it")
+            expect(not any(g["cache_save"] for g in go if g["module"] == "backend/core" and not g["static"]), "a split shard never saves")
+            expect([l["cache_group"] for l in integ] == ["core", "services"], "an integration leg restores its first module's group")
+            CACHE_GROUPS = [("cli", "backend/cli", ["backend/cli"])]
+            try:
+                legs_for("backend/core")
+                expect(False, "a module in no cache group raises")
+            except RuntimeError:
+                expect(True, "a module in no cache group raises")
+        finally:
+            CACHE_GROUPS = saved_groups
         go = legs_for("backend/core", ["messaging", "test"])
         expect([g["leg"] for g in go] == ["messaging 1/3", "messaging 2/3", "messaging 3/3", "readers"] and go[-1]["pkgs"] == "./test/",
                "a reader-selected split package is still sharded")

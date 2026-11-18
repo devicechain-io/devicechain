@@ -48,6 +48,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/payloadredact"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -541,7 +542,8 @@ func (p *Producer) TenantDeleted(tenant string) bool {
 		infra := p.ms.InstanceConfiguration.Infrastructure
 		// nil gates: the owning service reports the gate's state on its own gauge, and this
 		// is the same configuration read a second time.
-		p.gate = tenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, p.ms.FunctionalArea, nil)
+		peers := svcclient.NewPeers(infra, p.ms.FunctionalArea)
+		p.gate = tenantLifecycleGate(peers, nil)
 	})
 	return p.gate != nil && p.gate(tenant)
 }

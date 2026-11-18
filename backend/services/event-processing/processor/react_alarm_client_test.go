@@ -50,3 +50,25 @@ func TestAlarmClientPublishesUnderTheRequestToken(t *testing.T) {
 		t.Fatalf("published under tenant %q, want acme", w.tenant)
 	}
 }
+
+// The rule's position dependency reaches device-management on the wire, which is what marks the
+// alarm and withholds it from a caller without location:read; a request without it says so too.
+func TestAlarmClientCarriesThePositionDependency(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		w := &captureConnectorWriter{}
+		if err := NewAlarmClient(w).Dispatch(context.Background(), react.AlarmRequest{
+			Tenant: "acme", Token: "tok-1", DeviceToken: "device-1", AlarmKey: "left-yard",
+			RuleID: "p/r1", Edge: runtime.EdgeResolved, OccurredTime: time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC),
+			RequiresPosition: want,
+		}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		got, err := dmmodel.UnmarshalRaiseAlarmRequest(w.payload)
+		if err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if got.RequiresPosition == nil || *got.RequiresPosition != want {
+			t.Fatalf("requiresPosition on the wire = %v, want %v (always sent, never absent)", got.RequiresPosition, want)
+		}
+	}
+}

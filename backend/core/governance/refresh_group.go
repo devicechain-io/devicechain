@@ -68,8 +68,7 @@ func (g *refreshGroup) close(ctx context.Context) error {
 var processRefreshes = newRefreshGroup()
 
 // StopRefreshes refuses new refreshes across the process, cancels those in flight
-// and waits for them to return, bounded by ctx. Services use this LifecycleCallback
-// as Stopper.Postprocess, after their own stop and the shared ExecuteStop, so no
+// and waits for them to return, bounded by ctx. Service.Stop invokes this after service components and managers stop, so no
 // callers are still resolving. This is terminal: resolvers continue serving cached
 // or default values but never fetch again, including resolvers hidden inside gates.
 func StopRefreshes(ctx context.Context) error { return processRefreshes.close(ctx) }
