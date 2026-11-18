@@ -187,6 +187,44 @@ func TestHarborpulseDayJobsFireInsideTheirSimDay(t *testing.T) {
 	}
 }
 
+func TestHarborpulseFlushExpiryCoversWindowAndDelivery(t *testing.T) {
+	started := time.Date(2026, 11, 17, 23, 0, 17, 0, time.UTC)
+	for _, dayLength := range []time.Duration{HarborpulseMinDayLength, 12 * time.Hour, 13 * time.Hour, HarborpulseMaxDayLength} {
+		t.Run(dayLength.String(), func(t *testing.T) {
+			s := NewHarborpulse(1, Load{}).(*harborpulse)
+			if err := s.ConfigureScenario(ScenarioOptions{DayLength: dayLength}); err != nil {
+				t.Fatal(err)
+			}
+			for d := 0; d < 3; d++ {
+				jobs, campaigns, _ := s.dayJobs(started, d)
+				flush := jobs[0]
+				if flush.Name != HarborpulseJobFlush || campaigns[0].Token != flush.Campaign {
+					t.Fatal("flush job and campaign do not match")
+				}
+				fire, err := time.Parse(time.RFC3339, flush.FireAt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				closes, err := time.Parse(time.RFC3339, flush.WindowCloses)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ttl := time.Duration(campaigns[0].ExpiresInSeconds) * time.Second
+				expires := fire.Add(ttl)
+				if expires.Before(closes) {
+					t.Errorf("day %d: flush expires at %s before window closes at %s", d, expires, closes)
+				}
+				if expires.Before(closes.Add(30 * time.Minute)) {
+					t.Errorf("day %d: flush expiry %s must include 30 minutes for delivery after window closes at %s", d, expires, closes)
+				}
+				if ttl < 30*time.Minute {
+					t.Errorf("day %d: flush expiry duration %s is below the 30-minute floor", d, ttl)
+				}
+			}
+		})
+	}
+}
+
 // The SOLAR triggers are valid to the platform's trigger code, the holiday is tomorrow in the
 // town, and the lamps' planned instants run east to west, each a whole second or more apart.
 func TestHarborpulseSolarCampaignsMakeAWave(t *testing.T) {

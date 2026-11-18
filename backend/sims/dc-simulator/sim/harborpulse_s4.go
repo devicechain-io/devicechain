@@ -67,7 +67,7 @@ const (
 	HarborpulseFlushKey     = "flush-well"
 	harborWindowZone        = "Etc/UTC"
 	harborWindowMinutes     = 2
-	harborFlushExpiresIn    = 30 * 60
+	harborFlushMargin       = 30 * time.Minute
 	harborNightDimLevel     = 40
 	harborDuskLevel         = 100
 	harborDawnLevel         = 50
@@ -429,7 +429,8 @@ func (s *harborpulse) dayJobs(started time.Time, d int) (jobs []ScenarioJob, cam
 	}
 	flush := CampaignSpec{Token: fmt.Sprintf("%s%d-d%d", HarborpulseFlushPrefix, run, d), Name: fmt.Sprintf("Basin wet well flush, sim day %d", d),
 		GroupToken: HarborpulseBasinPumpsGroup, Trigger: calendarAt(flushAt),
-		Steps: []CampaignStepSpec{{Command: HarborpulseFlushKey}}, ExpiresInSeconds: harborFlushExpiresIn}
+		// Cover the whole planned hold and slot, plus a fixed delivery margin (also the expiry floor).
+		Steps: []CampaignStepSpec{{Command: HarborpulseFlushKey}}, ExpiresInSeconds: int((closes.Sub(flushAt) + harborFlushMargin) / time.Second)}
 	dim := CampaignSpec{Token: fmt.Sprintf("%s%d-d%d", HarborpulseNightDimPrefix, run, d), Name: fmt.Sprintf("East Quay night dim, sim day %d", d),
 		GroupToken: dimGroup, Trigger: calendarAt(dimAt),
 		Steps: []CampaignStepSpec{{Command: HarborpulseSetDimKey, Payload: map[string]any{HarborpulseLevelParam: harborNightDimLevel}}}}
