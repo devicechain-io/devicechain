@@ -20,6 +20,17 @@ import (
 // raised alarms by their alarm tokens. Returns an empty slice when none exist
 // (the dispatcher has not yet notified about the alarm).
 func (api *Api) NotificationStatesByAlarmToken(ctx context.Context, alarmTokens []string) ([]*NotificationState, error) {
+	return verifiedHistory(ctx, api, func() ([]*NotificationState, error) { return api.notificationStatesByAlarmToken(ctx, alarmTokens) },
+		func(result []*NotificationState) ([]string, error) {
+			tokens := []string{}
+			for _, row := range result {
+				tokens = append(tokens, row.AlarmToken)
+			}
+			return tokens, nil
+		})
+}
+
+func (api *Api) notificationStatesByAlarmToken(ctx context.Context, alarmTokens []string) ([]*NotificationState, error) {
 	found := make([]*NotificationState, 0)
 	if err := rdb.FindByKeys(notificationHistoryRead(api.RDB.DB(ctx), false), &found, "alarm_token", alarmTokens); err != nil {
 		return nil, err
@@ -30,10 +41,8 @@ func (api *Api) NotificationStatesByAlarmToken(ctx context.Context, alarmTokens 
 // NotificationStates searches per-alarm notification state by criteria. This is
 // the operator-facing "who was paged, and has it been acknowledged/escalated"
 // surface the escalation scheduler (N.D) and the console read.
-func (api *Api) NotificationStates(ctx context.Context,
-	criteria NotificationStateSearchCriteria) (*NotificationStateSearchResults, error) {
-	results := make([]NotificationState, 0)
-	db, pag := api.RDB.ListOf(ctx, &NotificationState{}, func(result *gorm.DB) *gorm.DB {
+func (api *Api) NotificationStates(ctx context.Context, criteria NotificationStateSearchCriteria) (*NotificationStateSearchResults, error) {
+	filter := func(result *gorm.DB) *gorm.DB {
 		result = notificationHistoryRead(result, false)
 		if criteria.AlarmKey != nil {
 			result = result.Where("alarm_key = ?", *criteria.AlarmKey)
@@ -42,12 +51,25 @@ func (api *Api) NotificationStates(ctx context.Context,
 			result = result.Where("severity = ?", *criteria.Severity)
 		}
 		return result
-	}, criteria.Pagination)
-	db.Find(&results)
-	if db.Error != nil {
-		return nil, db.Error
 	}
-	return &NotificationStateSearchResults{Results: results, Pagination: pag}, nil
+	return verifiedHistory(ctx, api, func() (*NotificationStateSearchResults, error) {
+		results := make([]NotificationState, 0)
+		db, pag := api.RDB.ListOf(ctx, &NotificationState{}, filter, criteria.Pagination)
+		if err := db.Find(&results).Error; err != nil {
+			return nil, err
+		}
+		return &NotificationStateSearchResults{Results: results, Pagination: pag}, nil
+	}, func(result *NotificationStateSearchResults) ([]string, error) {
+		var tokens []string
+		err := filter(api.RDB.DB(ctx).Model(&NotificationState{})).
+			Distinct("alarm_token").Limit(maxHistoryVerificationTokens+1).Pluck("alarm_token", &tokens).Error
+		// Another reader may downgrade the cache between the page and distinct
+		// queries. Verify the loaded page too so those rows cannot escape review.
+		for _, row := range result.Results {
+			tokens = append(tokens, row.AlarmToken)
+		}
+		return tokens, err
+	})
 }
 
 // RecordNotification upserts the per-alarm notification state after the dispatcher

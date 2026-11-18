@@ -39,6 +39,9 @@ var ErrConflict = rdb.NewStaleWriteError("notification policy")
 type Api struct {
 	RDB     *rdb.RdbManager
 	Secrets secrets.SecretStore
+	// PositionOracle verifies the cache before serving history without location:read.
+	// Nil makes those reads fail closed.
+	PositionOracle PositionOracle
 }
 
 // NewApi wraps an rdb manager and the channel-secret store as the notification

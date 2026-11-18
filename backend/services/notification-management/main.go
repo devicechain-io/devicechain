@@ -281,6 +281,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				Notifier.AlarmLookup = processor.NewAlarmLookup(seam.Client, seam.URL)
 			}
 
+			if oracle, err := processor.NewPositionOracle(peers, infra.DeviceManagement.Endpoint()); err != nil {
+				log.Warn().Err(err).Msg("Notification history classification cannot be verified: service secret or device-management/user-management endpoint is not configured; reads without location:read will fail closed")
+			} else {
+				Api.PositionOracle = oracle
+			}
+
 			// Retention sweep: prune cleared per-alarm state older than the retention window so
 			// the notification state stays bounded (ADR-017 N.C). A negative interval disables
 			// it (the table then grows unbounded — operator opt-out only).

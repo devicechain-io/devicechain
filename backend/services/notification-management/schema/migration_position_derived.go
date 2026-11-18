@@ -10,7 +10,8 @@ import (
 
 // NewPositionDerivedSchema adds the alarm's position verdict to notification_states: true when
 // a geofence contributed to the alarm, false when none did, NULL when not known. History reads
-// by a caller without location:read withhold true and NULL rows.
+// by a caller without location:read use this cache as a pre-filter, withholding true
+// and NULL rows; cached false is verified against device-management at read time.
 //
 // An APPENDED migration; the DDL is literal, which is the snapshot, as in NewStateSourceSchema.
 // The column is NULLABLE with no default and there is no backfill: NULL is the true state of a

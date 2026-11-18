@@ -20,8 +20,7 @@ func (api *Api) RecordNotificationAttempt(ctx context.Context, attempt *Notifica
 }
 
 // NotificationAttempts searches the caller tenant's delivery ledger, newest first.
-func (api *Api) NotificationAttempts(ctx context.Context,
-	criteria NotificationAttemptSearchCriteria) (*NotificationAttemptSearchResults, error) {
+func (api *Api) NotificationAttempts(ctx context.Context, criteria NotificationAttemptSearchCriteria) (*NotificationAttemptSearchResults, error) {
 	since, err := parseAttemptTime("since", criteria.Since)
 	if err != nil {
 		return nil, err
@@ -30,8 +29,7 @@ func (api *Api) NotificationAttempts(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	results := make([]NotificationAttempt, 0)
-	db, pag := api.RDB.ListOf(ctx, &NotificationAttempt{}, func(result *gorm.DB) *gorm.DB {
+	filter := func(result *gorm.DB) *gorm.DB {
 		result = notificationHistoryRead(result, true)
 		if criteria.AlarmToken != nil {
 			result = result.Where("alarm_token = ?", *criteria.AlarmToken)
@@ -49,12 +47,25 @@ func (api *Api) NotificationAttempts(ctx context.Context,
 			result = result.Where("created_at < ?", *until)
 		}
 		return result
-	}, criteria.Pagination)
-	db.Find(&results)
-	if db.Error != nil {
-		return nil, db.Error
 	}
-	return &NotificationAttemptSearchResults{Results: results, Pagination: pag}, nil
+	return verifiedHistory(ctx, api, func() (*NotificationAttemptSearchResults, error) {
+		results := make([]NotificationAttempt, 0)
+		db, pag := api.RDB.ListOf(ctx, &NotificationAttempt{}, filter, criteria.Pagination)
+		if err := db.Find(&results).Error; err != nil {
+			return nil, err
+		}
+		return &NotificationAttemptSearchResults{Results: results, Pagination: pag}, nil
+	}, func(result *NotificationAttemptSearchResults) ([]string, error) {
+		var tokens []string
+		err := filter(api.RDB.DB(ctx).Model(&NotificationAttempt{})).
+			Distinct("alarm_token").Limit(maxHistoryVerificationTokens+1).Pluck("alarm_token", &tokens).Error
+		// Another reader may downgrade the cache between the page and distinct
+		// queries. Verify the loaded page too so those rows cannot escape review.
+		for _, row := range result.Results {
+			tokens = append(tokens, row.AlarmToken)
+		}
+		return tokens, err
+	})
 }
 
 // parseAttemptTime reads an optional RFC 3339 bound, refusing one that does not parse

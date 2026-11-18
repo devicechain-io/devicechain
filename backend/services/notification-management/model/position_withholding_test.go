@@ -4,6 +4,7 @@
 package model
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ func TestPositionCheckRecognizesScopedLocationGrant(t *testing.T) {
 // mutation harness tests the package owning the mutated implementation file.
 func TestNotificationHistoryReadPredicates(t *testing.T) {
 	api := newTestApi(t)
+	api.PositionOracle = positionOracleFunc(func(context.Context, []string) (map[string]bool, error) { return map[string]bool{"plain": true}, nil })
 	ctx := tenantCtx("A")
 	yes, no := true, false
 	for token, flag := range map[string]*bool{"geo": &yes, "plain": &no, "unknown": nil} {

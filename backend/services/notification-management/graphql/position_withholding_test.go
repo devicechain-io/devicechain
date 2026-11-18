@@ -4,6 +4,7 @@
 package graphql
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -16,9 +17,10 @@ import (
 func TestNotificationHistoryWithholdsPosition(t *testing.T) {
 	ctx := newWireCtx(t)
 	api := apiOf(t, ctx)
+	api.PositionOracle = wirePositionOracle{}
 	db := api.RDB.DB(ctx)
 	require.NoError(t, db.AutoMigrate(&model.NotificationAttempt{}))
-	for token, flag := range map[string]string{"geo": "true", "plain": "false", "legacy": "null"} {
+	for token, flag := range map[string]string{"geo": "true", "plain": "false", "legacy": "null", "silent-geo": "false"} {
 		row := &model.NotificationState{AlarmToken: token, AlarmKey: "k"}
 		require.NoError(t, json.Unmarshal([]byte(`{"PositionDerived":`+flag+`}`), row))
 		require.NoError(t, db.Create(row).Error)
@@ -29,7 +31,7 @@ func TestNotificationHistoryWithholdsPosition(t *testing.T) {
 	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
 	query := `{
 	 notificationStates(criteria: {pageNumber: 1, pageSize: 10}) { results { alarmToken } }
-	 notificationStatesByAlarmToken(alarmTokens: ["geo", "plain", "legacy"]) { alarmToken }
+	 notificationStatesByAlarmToken(alarmTokens: ["geo", "plain", "legacy", "silent-geo"]) { alarmToken }
 	 notificationAttempts(criteria: {pageNumber: 1, pageSize: 10}) { results { alarmToken } }
 	}`
 	for _, location := range []bool{false, true} {
@@ -48,7 +50,7 @@ func TestNotificationHistoryWithholdsPosition(t *testing.T) {
 		require.NoError(t, json.Unmarshal(res.Data, &data))
 		wantStates, wantAttempts := 1, 1
 		if location {
-			wantStates, wantAttempts = 3, 4
+			wantStates, wantAttempts = 4, 5
 		}
 		require.Len(t, data.NotificationStates.Results, wantStates, "location=%v: %s", location, res.Data)
 		require.Len(t, data.NotificationStatesByAlarmToken, wantStates)
@@ -59,4 +61,10 @@ func TestNotificationHistoryWithholdsPosition(t *testing.T) {
 			require.Equal(t, "plain", data.NotificationAttempts.Results[0].AlarmToken)
 		}
 	}
+}
+
+type wirePositionOracle struct{}
+
+func (wirePositionOracle) VisibleWithoutLocation(context.Context, []string) (map[string]bool, error) {
+	return map[string]bool{"plain": true}, nil
 }

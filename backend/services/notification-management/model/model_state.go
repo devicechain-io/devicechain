@@ -41,7 +41,8 @@ type NotificationState struct {
 	AlarmToken string `gorm:"not null;size:128"`
 	AlarmKey   string `gorm:"not null;size:256"`
 	Severity   string `gorm:"size:16"`
-	// PositionDerived is the alarm's classification. True is sticky across cycles;
+	// PositionDerived caches the alarm's classification as a read pre-filter.
+	// Device-management verifies cached false at read time. True is sticky across cycles;
 	// nil is unknown (including old producers/rows) and is withheld like true.
 	PositionDerived *bool
 
