@@ -9,6 +9,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,10 +18,13 @@ import (
 // is the SAME limiter the self-registration endpoint charges, that the bound is the configured
 // one, and that the per-source bucket exists only when the operator turned it on.
 func TestCalloutRegistrationIsAssembledFromTheServicesOwnParts(t *testing.T) {
+	prevPeers := servicePeers
+	t.Cleanup(func() { servicePeers = prevPeers })
 	prevMs, prevCfg, prevTenants := Microservice, Configuration, ProvisioningTenants
 	t.Cleanup(func() { Microservice, Configuration, ProvisioningTenants = prevMs, prevCfg, prevTenants })
 	Microservice = &core.Microservice{InstanceId: "jitwiring", FunctionalArea: "device-management"}
 	infra := Microservice.InstanceConfiguration.Infrastructure
+	servicePeers = svcclient.NewPeers(infra, Microservice.FunctionalArea)
 	cfg := config.NewDeviceManagementConfiguration()
 	api := &model.Api{}
 

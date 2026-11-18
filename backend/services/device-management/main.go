@@ -39,7 +39,9 @@ import (
 var (
 	stopStreamSharding context.CancelFunc
 	Microservice       *core.Microservice
-	Configuration      *config.DeviceManagementConfiguration
+	// servicePeers is built once on initialization; each wiring site creates its own client.
+	servicePeers  *svcclient.Peers
+	Configuration *config.DeviceManagementConfiguration
 
 	// Svc owns the three managers below and the order of all four of their lifecycle
 	// phases. They stay named here because the rest of this service refers to them
@@ -483,7 +485,7 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	// OWN TOKEN (never a service token). Without its address every proposal and approval is
 	// refused with POLICY_UNAVAILABLE: nothing is decided without the policy.
 	if um := nmgr.Microservice.InstanceConfiguration.Infrastructure.UserManagement; um.Hostname != "" && um.Port != 0 {
-		api.AgentDecider = actiongate.NewCallerDecider(fmt.Sprintf("http://%s:%d/graphql", um.Hostname, um.Port))
+		api.AgentDecider = actiongate.NewCallerDecider(um.Endpoint().GraphQLURL())
 	}
 	cached := model.NewCachedApi(api, caches)
 	// The write paths evict the hot-path caches through this seam (ADR-044 F2). The GraphQL
@@ -927,11 +929,11 @@ func newRaiseAlarmConsumer(reader messaging.MessageReader, dead *deadletter.Sink
 // event-processing (ADR-051 slice 4b). It logs the enabled/disabled mode at startup so a
 // misconfigured deploy (empty secret, or a config predating this feature) is visible
 // rather than silently skipping validation — mirroring command-delivery's device check.
-func wireDetectionRuleValidator(api *model.Api, infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) {
+func wireDetectionRuleValidator(api *model.Api, peers *svcclient.Peers, target mscfg.ServiceEndpoint, gates *governance.SafetyGates) {
 	// Assigned only when non-nil: a nil *Validator stored in the interface field is NOT a nil
 	// interface, so profile publish would call a method on a nil receiver instead of skipping
 	// validation.
-	if v := detectionRuleValidator(infra, gates); v != nil {
+	if v := detectionRuleValidator(peers, target, gates); v != nil {
 		api.DetectionRuleValidator = v
 	}
 }
@@ -940,19 +942,19 @@ func wireDetectionRuleValidator(api *model.Api, infra mscfg.InfrastructureConfig
 // (the gate is OFF) when the service secret or event-processing's coordinate is absent. It records
 // the decision on the rule_validation safety gate either way. A separate function, taking the
 // configuration and the gates, so the decision is testable without a started service.
-func detectionRuleValidator(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) *ruleverify.Validator {
-	if infra.ServiceAuth.Secret == "" {
+func detectionRuleValidator(peers *svcclient.Peers, target mscfg.ServiceEndpoint, gates *governance.SafetyGates) *ruleverify.Validator {
+	url, err := peers.URL(target)
+	if err == (svcclient.MissingError{Key: "infrastructure.serviceAuth.secret"}) {
 		log.Warn().Msg("Service secret not configured — device profile publish will NOT validate detection rules against event-processing (ADR-051 slice 4b disabled).")
 		gates.Set(governance.GateRuleValidation, false)
 		return nil
 	}
-	if infra.EventProcessing.Hostname == "" || infra.EventProcessing.Port == 0 {
+	if err != nil {
 		log.Warn().Msg("event-processing endpoint not configured (infrastructure.eventProcessing) — device profile publish will NOT validate detection rules (ADR-051 slice 4b disabled).")
 		gates.Set(governance.GateRuleValidation, false)
 		return nil
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", []string{string(auth.DeviceRead)})
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.EventProcessing.Hostname, infra.EventProcessing.Port)
+	client := peers.Client(auth.DeviceRead)
 	gates.Set(governance.GateRuleValidation, true)
 	log.Info().Str("eventProcessing", url).Msg("Device profile publish will validate detection rules against event-processing (ADR-051 slice 4b).")
 	return ruleverify.NewValidator(client, url)
@@ -960,8 +962,8 @@ func detectionRuleValidator(infra mscfg.InfrastructureConfiguration, gates *gove
 
 // calloutTenantGate is the deleted-tenant gate the device auth callout refuses connects through:
 // nil when user-management is unconfigured, with the tenant_lifecycle safety gate recorded.
-func calloutTenantGate(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) func(string) bool {
-	return governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", gates)
+func calloutTenantGate(peers *svcclient.Peers, gates *governance.SafetyGates) func(string) bool {
+	return governance.NewTenantLifecycleGateFor(peers, gates)
 }
 
 // wireGeoFenceCapsResolver injects the PER-TENANT geofence caps onto the shared Api: an
@@ -985,26 +987,23 @@ func calloutTenantGate(infra mscfg.InfrastructureConfiguration, gates *governanc
 // with device:read because it talks to EVENT-PROCESSING; this one reads user-management's
 // tenantGovernance, which is the same door command-delivery reads its held-command ceiling
 // through and gates on the same scope.
-func wireGeoFenceCapsResolver() {
+func wireGeoFenceCapsResolver(peers *svcclient.Peers) {
 	caps := governance.DefaultGeoFenceCaps()
-	infra := Microservice.InstanceConfiguration.Infrastructure
-	if infra.ServiceAuth.Secret == "" {
+	seam, err := peers.UserManagement(auth.TenantRead)
+	if err == (svcclient.MissingError{Key: "infrastructure.serviceAuth.secret"}) {
 		log.Warn().Int("geoFencePositionCeiling", caps.PositionCeiling).
 			Int("geoFenceCeiling", caps.FenceCeiling).Int("geoFencePositionBudget", caps.PositionBudget).
 			Msg("Service secret not configured — per-tenant geofence caps are disabled; metering every tenant at the platform defaults.")
 		return
 	}
-	if infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+	if err != nil {
 		log.Warn().Int("geoFencePositionCeiling", caps.PositionCeiling).
 			Int("geoFenceCeiling", caps.FenceCeiling).Int("geoFencePositionBudget", caps.PositionBudget).
 			Msg("user-management endpoint not configured (infrastructure.userManagement) — per-tenant geofence caps are disabled; metering every tenant at the platform defaults.")
 		return
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",
-		[]string{string(auth.TenantRead)})
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-	Api.GeoFenceCapsResolver = governance.NewGeoFenceCapsResolver(client, url)
-	log.Info().Str("userManagement", url).
+	Api.GeoFenceCapsResolver = governance.NewGeoFenceCapsResolver(seam.Client, seam.URL)
+	log.Info().Str("userManagement", seam.URL).
 		Msg("Per-tenant geofence caps enabled (override, else tier, else the platform default).")
 }
 
@@ -1013,47 +1012,38 @@ func wireGeoFenceCapsResolver() {
 // zero. Left nil — every tenant at zero, so no profile publishes a calculated metric — when
 // the service secret or the user-management coordinate is unset, for the reasons
 // wireGeoFenceCapsResolver gives. It reads tenantGovernance, so tenant:read.
-func wireCalculatedMetricsCeilingResolver() {
-	infra := Microservice.InstanceConfiguration.Infrastructure
-	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+func wireCalculatedMetricsCeilingResolver(peers *svcclient.Peers) {
+	seam, err := peers.UserManagement(auth.TenantRead)
+	if err != nil {
 		log.Warn().Int("calculatedMetricsPerProfile", governance.DefaultCalculatedMetricsPerProfile).
 			Msg("Service secret or user-management endpoint not configured — the calculated-metrics ceiling is the platform default for every tenant.")
 		return
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",
-		[]string{string(auth.TenantRead)})
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-	Api.CalculatedMetricsCeiling = governance.NewCalculatedMetricsCeilingResolver(client, url)
+	Api.CalculatedMetricsCeiling = governance.NewCalculatedMetricsCeilingResolver(seam.Client, seam.URL)
 }
 
 // wireIntegrationsCeilingResolver injects the per-tenant integrations ceiling: the tenant's
 // tier setting, else the platform default. Left nil — every tenant at the platform default —
 // when the service secret or the user-management coordinate is unset, for the reasons
 // wireGeoFenceCapsResolver gives. It reads tenantGovernance, so tenant:read.
-func wireIntegrationsCeilingResolver() {
-	infra := Microservice.InstanceConfiguration.Infrastructure
-	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+func wireIntegrationsCeilingResolver(peers *svcclient.Peers) {
+	seam, err := peers.UserManagement(auth.TenantRead)
+	if err != nil {
 		log.Warn().Int("integrationsPerTenant", governance.DefaultIntegrationsPerTenant).
 			Msg("Service secret or user-management endpoint not configured — the integrations ceiling is the platform default for every tenant.")
 		return
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",
-		[]string{string(auth.TenantRead)})
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-	Api.IntegrationsCeiling = governance.NewIntegrationsCeilingResolver(client, url)
+	Api.IntegrationsCeiling = governance.NewIntegrationsCeilingResolver(seam.Client, seam.URL)
 }
 
-func wireRulesCeilingResolver() {
-	infra := Microservice.InstanceConfiguration.Infrastructure
-	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+func wireRulesCeilingResolver(peers *svcclient.Peers) {
+	seam, err := peers.UserManagement(auth.TenantRead)
+	if err != nil {
 		log.Warn().
 			Msg("Service secret or user-management endpoint not configured — no tier rule ceiling is enforced (only an explicit tier rulesPerTenant enforces one).")
 		return
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",
-		[]string{string(auth.TenantRead)})
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-	Api.RulesCeiling = governance.NewRulesCeilingResolver(client, url)
+	Api.RulesCeiling = governance.NewRulesCeilingResolver(seam.Client, seam.URL)
 }
 
 // Called after microservice has been initialized.
@@ -1065,6 +1055,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
 	// registration panics, and the gates below are decided in callbacks that can run again.
 	safetyGates = governance.NewSafetyGates(Microservice)
+	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
 	// Parse configuration.
 	err := parseConfiguration()
 	if err != nil {
@@ -1169,17 +1160,17 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 			// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
 			// its draft rules against event-processing and fails closed on an uncompilable one.
-			wireDetectionRuleValidator(Api, Microservice.InstanceConfiguration.Infrastructure, safetyGates)
-			wireRuleComparer(Api, Microservice.InstanceConfiguration.Infrastructure)
-			wirePrincipalStanding(Api, Microservice.InstanceConfiguration.Infrastructure)
+			wireDetectionRuleValidator(Api, servicePeers, Microservice.InstanceConfiguration.Infrastructure.EventProcessing.Endpoint(), safetyGates)
+			wireRuleComparer(Api, servicePeers, Microservice.InstanceConfiguration.Infrastructure.EventProcessing.Endpoint())
+			wirePrincipalStanding(Api, servicePeers)
 
 			// Wire the per-tenant geofence caps and the counter that reports their refusals. The
 			// counter is set unconditionally, unlike the resolver: with no resolver the platform
 			// defaults are still enforced, so refusals still happen and still need reporting.
-			wireGeoFenceCapsResolver()
-			wireCalculatedMetricsCeilingResolver()
-			wireIntegrationsCeilingResolver()
-			wireRulesCeilingResolver()
+			wireGeoFenceCapsResolver(servicePeers)
+			wireCalculatedMetricsCeilingResolver(servicePeers)
+			wireIntegrationsCeilingResolver(servicePeers)
+			wireRulesCeilingResolver(servicePeers)
 			if err = wireProvisioningEndpoint(); err != nil {
 				return err
 			}
@@ -1304,7 +1295,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		// reclaimed. Nil when user-management is unconfigured — the gate is off, matching
 		// the resolver's own fail-open, since the erasure guarantee is the per-area fence.
 		infra := Microservice.InstanceConfiguration.Infrastructure
-		gate := calloutTenantGate(infra, safetyGates)
+		gate := calloutTenantGate(servicePeers, safetyGates)
 		// The erasure-fence read: refuses a mint for a tenant whose data this area is
 		// erasing, from this service's own schema, with no remote dependency.
 		fenced := func(ctx context.Context, tenant string) error {
@@ -1505,27 +1496,25 @@ func resolvedEnvelopesOn() bool {
 
 // wireRuleComparer owns a separate long-query client: comparisons may consume two
 // 45-second windows, without changing the validation client's ordinary timeout.
-func wireRuleComparer(api *model.Api, infra mscfg.InfrastructureConfiguration) {
+func wireRuleComparer(api *model.Api, peers *svcclient.Peers, target mscfg.ServiceEndpoint) {
 	api.RuleComparer = nil
-	if infra.ServiceAuth.Secret == "" || infra.EventProcessing.Hostname == "" || infra.EventProcessing.Port == 0 {
+	url, err := peers.URL(target)
+	if err != nil {
 		log.Warn().Msg("Automation comparison disabled: service secret or event-processing endpoint is not configured.")
 		return
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",
-		[]string{string(auth.DeviceRead)}, svcclient.WithQueryTimeout(110*time.Second))
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.EventProcessing.Hostname, infra.EventProcessing.Port)
+	client := peers.With(svcclient.WithQueryTimeout(110 * time.Second)).Client(auth.DeviceRead)
 	api.RuleComparer = automationreview.NewClient(client, url)
 	log.Info().Str("eventProcessing", url).Msg("Automation comparison enabled.")
 }
 
-func wirePrincipalStanding(api *model.Api, infra mscfg.InfrastructureConfiguration) {
+func wirePrincipalStanding(api *model.Api, peers *svcclient.Peers) {
 	api.PrincipalStanding = nil
-	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+	seam, err := peers.With(svcclient.WithQueryTimeout(2 * time.Second)).UserManagement(auth.TenantRead)
+	if err != nil {
 		log.Warn().Msg("Automation approver standing unavailable: service secret or user-management endpoint is not configured; protected publishes will be refused.")
 		return
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", []string{string(auth.TenantRead)}, svcclient.WithQueryTimeout(2*time.Second))
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-	api.PrincipalStanding = automationreview.NewStandingClient(client, url)
+	api.PrincipalStanding = automationreview.NewStandingClient(seam.Client, seam.URL)
 	log.Info().Msg("Automation approver standing enabled.")
 }
