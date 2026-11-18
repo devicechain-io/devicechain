@@ -325,7 +325,7 @@ func TestTheLoopWaitsOutTheStartDelayThenRunsImmediately(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go RunDemoteLoop(ctx, r, time.Hour, 60*time.Millisecond, time.Now, nil)
+	go RunDemoteLoop(ctx, r, time.Hour, 60*time.Millisecond, time.Now, nil, true)
 
 	// Before the delay elapses, nothing has run.
 	time.Sleep(20 * time.Millisecond)
@@ -349,7 +349,7 @@ func TestTheLoopKeepsGoingAfterAFailedPass(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go RunDemoteLoop(ctx, r, 15*time.Millisecond, 0, time.Now, nil)
+	go RunDemoteLoop(ctx, r, 15*time.Millisecond, 0, time.Now, nil, true)
 
 	for i := 0; i < 3; i++ {
 		select {
@@ -366,7 +366,7 @@ func TestTheLoopHonoursCancellationDuringTheStartDelay(t *testing.T) {
 	r := &countingRunner{fired: make(chan struct{}, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { RunDemoteLoop(ctx, r, time.Hour, time.Hour, time.Now, nil); close(done) }()
+	go func() { RunDemoteLoop(ctx, r, time.Hour, time.Hour, time.Now, nil, true); close(done) }()
 
 	cancel()
 	select {

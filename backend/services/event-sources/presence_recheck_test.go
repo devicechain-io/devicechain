@@ -164,7 +164,7 @@ func TestTheRecheckRunsBeforeTheFirstPass(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		presence.RunDemoteLoop(ctx, r, time.Hour, time.Millisecond, time.Now, nil)
+		presence.RunDemoteLoop(ctx, r, time.Hour, time.Millisecond, time.Now, nil, true)
 	}()
 
 	select {

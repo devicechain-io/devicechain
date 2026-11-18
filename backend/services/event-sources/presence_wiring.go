@@ -489,10 +489,8 @@ func launchDemoteLoop(ctx context.Context, rt *presenceRuntime, runner presence.
 		defer close(rt.stopped)
 		// A recheck-only runner has no configured drain to complete. Keep recording
 		// its skips, but leave the drain interval undeclared.
-		if r, ok := runner.(*recheckBroker); !ok || r.drain != nil {
-			PresenceDemoteTaskMetrics.SetInterval(interval)
-		}
-		presence.RunDemoteLoop(ctx, runner, interval, delay, time.Now, PresenceDemoteTaskMetrics)
+		r, ok := runner.(*recheckBroker)
+		presence.RunDemoteLoop(ctx, runner, interval, delay, time.Now, PresenceDemoteTaskMetrics, !ok || r.drain != nil)
 	}()
 }
 
