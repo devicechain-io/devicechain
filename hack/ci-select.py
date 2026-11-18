@@ -176,6 +176,9 @@ READERS = [
         "backend/sims/dc-simulator/sim/fleetpulse_speed_limit_schema.json",
     ], [], "model/authored_sim_*_test.go"),
     ("backend/services/device-management", "processor", ["frontend/testdata/connect-snippets/**"], [], "processor/connect_snippet_golden_test.go:32"),
+    # graphql: the console picker documents (console_picker_documents_test.go:27); its other
+    # escaping file only names "../x" as a refused-key fixture.
+    ("backend/services/device-management", "graphql", ["frontend/apps/console/src/lib/api/**"], [], "graphql/console_picker_documents_test.go:27"),
     ("backend/services/event-management", "model", ["docs/**/releases-and-upgrades.md"], [], "model/upgrade_notes_bounds_test.go:34"),
     ("backend/services/event-management", "processor/backfill", ["backend/services/device-management/graphql/**"], [], "processor/backfill/*_test.go"),
     ("backend/services/event-processing", "graphql", ["backend/testdata/authored-rules/**"], [], "graphql/authored_sim_rules_test.go:39"),
@@ -258,7 +261,6 @@ IN_MODULE = {
     ("backend/k8s", "api/v1beta1"): "reads ../../config/crd inside backend/k8s",
     ("backend/services/command-delivery", "processor"): "reads ../contract inside its own module",
     ("backend/services/event-processing", "internal/review"): "reads ../replayinput inside its own module",
-    ("backend/services/device-management", "graphql"): "\"../x\" is a refused-key fixture",
     ("backend/services/outbound-connectors", "lpwan"): "\"../etc/passwd\" and \"../x\" are refused-id fixtures",
     ("deploy", "."):"\"../modules/<x>\" appears only in comments; the embed is in-module",
 }

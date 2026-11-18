@@ -90,6 +90,7 @@ backend/services/command-delivery/dashboard_series_test.go
 backend/services/command-delivery/model/authored_sim_command_wire_test.go
 backend/services/command-delivery/processor/contract_test.go
 backend/services/device-management/config/chart_floor_test.go
+backend/services/device-management/graphql/console_picker_documents_test.go
 backend/services/device-management/graphql/profile_configuration_declaration_test.go
 backend/services/device-management/model/authored_sim_alarm_wire_test.go
 backend/services/device-management/model/authored_sim_fleetpulse_command_test.go
