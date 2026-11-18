@@ -264,8 +264,11 @@ func TestLoopPhasesPartitionTheLoopsTimeExactly(t *testing.T) {
 			t.Errorf("phase %s was never credited across %d messages, their checkpoints and the idle ticks", loopPhaseNames[p], messages)
 		}
 	}
-	if n := testutil.ToFloat64(g.metrics.checkpointsTotal); n < 5 {
-		t.Fatalf("expected the periodic checkpoints and the exit one to commit; got %v", n)
+	// At least one count- or tick-triggered checkpoint and the exit one. Not one per 50 messages:
+	// count-triggered checkpoints are spaced by the snapshot's own cost (checkpointMinSpacing), and
+	// this feed delivers 210 messages in far less time than four snapshots take on a real clock.
+	if n := testutil.ToFloat64(g.metrics.checkpointsTotal); n < 2 {
+		t.Fatalf("expected a periodic checkpoint and the exit one to commit; got %v", n)
 	}
 	equal(t, "checkpoint durations observed", histogramCount(t, g.metrics.checkpointDuration), uint64(testutil.ToFloat64(g.metrics.checkpointsTotal)))
 }

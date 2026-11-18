@@ -400,6 +400,9 @@ func (p *publishPass) apply(o publishOutcome) {
 	}
 	p.status[o.ord] = itemAcked
 	d.state = outputAcked
+	if p.rp.armer != nil {
+		p.rp.armer.ThresholdPublished(d.Detection, p.rp.replaying)
+	}
 	// A known positive is kept only so its fire is recorded in order once the items before it
 	// settle, and that needs the identity, not the bytes. Releasing them here is what keeps the
 	// byte budget a bound on everything held: an acknowledged-but-unretired payload holds nothing.

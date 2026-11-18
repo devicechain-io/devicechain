@@ -31,12 +31,15 @@ func TestServiceHooksStartAndStopEveryResolvedEventsProcessor(t *testing.T) {
 	savedMs, savedCfg, savedApi, savedSvc := Microservice, Configuration, Api, Svc
 	savedMetrics, savedSweep, savedDropped := StateMetrics, InactivitySweepMetrics, DroppedEvicted
 	savedProcs, savedOwners := StateProcessors, OwnershipProcessor
+	savedDeletion, savedOrphan := DeletionProcessor, OrphanTask
+	OrphanTask = nil
 	savedWriter, savedOwnerReader, savedStop := InboundEventsWriter, OwnershipReader, stopStreamSharding
 	savedRdb := RdbManager
 	t.Cleanup(func() {
 		Microservice, Configuration, Api, Svc = savedMs, savedCfg, savedApi, savedSvc
 		StateMetrics, InactivitySweepMetrics, DroppedEvicted = savedMetrics, savedSweep, savedDropped
 		StateProcessors, OwnershipProcessor = savedProcs, savedOwners
+		DeletionProcessor, OrphanTask = savedDeletion, savedOrphan
 		InboundEventsWriter, OwnershipReader, stopStreamSharding = savedWriter, savedOwnerReader, savedStop
 		RdbManager = savedRdb
 	})
@@ -76,7 +79,7 @@ func TestServiceHooksStartAndStopEveryResolvedEventsProcessor(t *testing.T) {
 		}, nil
 	})
 	require.NoError(t, mgr.Initialize(ctx))
-	StateProcessors, OwnershipProcessor, stopStreamSharding = nil, nil, nil
+	StateProcessors, OwnershipProcessor, DeletionProcessor, stopStreamSharding = nil, nil, nil, nil
 	// Only the broker needs lifecycle management here: SQLite is already open,
 	// and exercising these hooks does not need an HTTP server or live Postgres.
 	Svc = service.FromManagers(Microservice, service.Managers{Nats: mgr})
@@ -90,6 +93,10 @@ func TestServiceHooksStartAndStopEveryResolvedEventsProcessor(t *testing.T) {
 		if OwnershipProcessor != nil {
 			_ = OwnershipProcessor.Stop(ctx)
 			_ = OwnershipProcessor.Terminate(ctx)
+		}
+		if DeletionProcessor != nil {
+			_ = DeletionProcessor.Stop(ctx)
+			_ = DeletionProcessor.Terminate(ctx)
 		}
 		if stopStreamSharding != nil {
 			stopStreamSharding()

@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // This file is the DB-facing half of the ADR-057 alarm-object integrator (the pure reduction lives in
@@ -59,8 +60,15 @@ import (
 // still-breaching alarm is transient by design (pure reference counting: the condition still holds). A
 // RESOLVE edge can therefore emit a RAISED reactivation; whether operator clear should instead tombstone
 // the set is a slice-6 product call.
+//
+// requiresPosition is RaiseAlarmRequest.RequiresPosition. true: the contributing rule tests
+// geofence containment, so the alarm is marked position-derived (Alarm.PositionDerived) by the
+// same write that folds the edge, and stays so. false: it does not; a new alarm is classified
+// false, an existing one keeps its verdict. nil: the producer predates the field, so the verdict is
+// unknown; the alarm is unclassified (unless already marked) by the same write and then classified
+// here (position_classify.go).
 func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
-	alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time) error {
+	alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time, requiresPosition *bool) error {
 	if alarmKey == "" || ruleID == "" {
 		return fmt.Errorf("alarm-edge requires a non-empty alarm key and rule id")
 	}
@@ -82,7 +90,7 @@ func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
 	const maxCASAttempts = 5
 	var err error
 	for attempt := 0; attempt < maxCASAttempts; attempt++ {
-		if err = api.applyContributorEdgeOnce(ctx, deviceId, alarmKey, metricKey, ruleID, raised, severity, value, occurredTime); !errors.Is(err, errAlarmContributorConflict) {
+		if err = api.applyContributorEdgeOnce(ctx, deviceId, alarmKey, metricKey, ruleID, raised, severity, value, occurredTime, requiresPosition); !errors.Is(err, errAlarmContributorConflict) {
 			return err // success (nil), an idempotent no-op (nil), or a non-conflict error
 		}
 	}
@@ -93,7 +101,7 @@ func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
 // errAlarmContributorConflict when its optimistic CAS loses to a concurrent write, which the caller
 // retries. Split out so the CAS retry re-reads the row (and its fresh version) each attempt.
 func (api *Api) applyContributorEdgeOnce(ctx context.Context, deviceId uint,
-	alarmKey, metricKey, ruleID string, raised bool, severity string, value *float64, occurredTime time.Time) error {
+	alarmKey, metricKey, ruleID string, raised bool, severity string, value *float64, occurredTime time.Time, requiresPosition *bool) error {
 	existing, err := api.alarmByOriginatorKey(ctx, string(entity.TypeDevice), deviceId, alarmKey)
 	if err != nil {
 		return err
@@ -129,9 +137,9 @@ func (api *Api) applyContributorEdgeOnce(ctx context.Context, deviceId uint,
 
 	if existing == nil {
 		return api.createAlarmFromContributors(ctx, deviceId, alarmKey, metricKey,
-			newSeverity, anyActive, lastValue, encoded, occurredTime)
+			newSeverity, anyActive, lastValue, encoded, occurredTime, requiresPosition)
 	}
-	return api.updateAlarmFromContributors(ctx, existing, newSeverity, anyActive, lastValue, encoded, occurredTime)
+	return api.updateAlarmFromContributors(ctx, existing, newSeverity, anyActive, lastValue, encoded, occurredTime, requiresPosition)
 }
 
 // createAlarmFromContributors persists a brand-new alarm row for a device that had none. The common
@@ -142,7 +150,7 @@ func (api *Api) applyContributorEdgeOnce(ctx context.Context, deviceId uint,
 // alarm never became visibly active.
 func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 	alarmKey, metricKey, severity string, anyActive bool, lastValue sql.NullFloat64,
-	contributors []byte, occurredTime time.Time) error {
+	contributors []byte, occurredTime time.Time, requiresPosition *bool) error {
 	// The scope stamp (ADR-081): the device's owners NOW, at the alarm's first raise. Read
 	// before the row exists so a failed read leaves no unstamped alarm behind — the edge
 	// stays unacked and the redelivery stamps it. An unstamped alarm would be invisible to
@@ -164,6 +172,13 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 		Contributors:       contributors,
 		ContributorVersion: 1,
 	}
+	// A verdict on the edge is the alarm's verdict; no verdict leaves it NULL, classified below.
+	if requiresPosition != nil {
+		verdict := *requiresPosition
+		created.PositionDerived = &verdict
+		decidedAt := created.ContributorVersion
+		created.PositionClassifiedVersion = &decidedAt
+	}
 	if anyActive {
 		created.State = string(AlarmStateActive)
 	} else {
@@ -175,6 +190,9 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 	// self-heals; it is the fold-into-an-existing-row race that needs the version CAS below.
 	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
 		return err
+	}
+	if requiresPosition == nil {
+		api.classifyAlarm(ctx, created.ID)
 	}
 	if anyActive {
 		api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(created, AlarmEventRaised, "", occurredTime))
@@ -198,7 +216,7 @@ var errAlarmContributorConflict = errors.New("alarm-edge: concurrent contributor
 // (CLEARED→ACTIVE, resets ack), escalate/de-escalate or value-update (ACTIVE→ACTIVE), clear
 // (ACTIVE→CLEARED), and a tombstone-only contributor update that leaves the row CLEARED.
 func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm,
-	severity string, anyActive bool, lastValue sql.NullFloat64, contributors []byte, occurredTime time.Time) error {
+	severity string, anyActive bool, lastValue sql.NullFloat64, contributors []byte, occurredTime time.Time, requiresPosition *bool) error {
 	prevState := existing.State
 	prevSeverity := existing.Severity
 	prevVersion := existing.ContributorVersion
@@ -206,6 +224,29 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 	updates := map[string]interface{}{
 		"contributors":        contributors,
 		"contributor_version": prevVersion + 1,
+	}
+	// Sticky: a geofence contributor marks the alarm in the same CAS write that folds its edge, and
+	// no edge ever unmarks it (Alarm.PositionDerived). An edge with no verdict (an older producer)
+	// may add a contributor that tests a fence, so an alarm not already marked becomes
+	// unclassified in the same write, and is classified after it.
+	//
+	// A classification is stamped with the contributor version it was decided at
+	// (Alarm.PositionClassifiedVersion). A false verdict on the edge keeps a false that was
+	// current for the set this fold read current for the set it writes: the stamp moves with the
+	// version only if it equalled the version read. A stamp that was already behind (a replica
+	// older than the column folded in between) stays behind, and the database withholds the
+	// alarm until the classifier decides it again (trigger alarm_position_stale).
+	alreadyMarked := existing.PositionDerived != nil && *existing.PositionDerived
+	reclassify := requiresPosition == nil && !alreadyMarked
+	switch {
+	case requiresPosition != nil && *requiresPosition:
+		updates["position_derived"] = true
+		updates["position_classified_version"] = prevVersion + 1
+	case reclassify:
+		updates["position_derived"] = nil
+	case requiresPosition != nil && !alreadyMarked:
+		updates["position_classified_version"] = gorm.Expr(
+			"CASE WHEN position_classified_version = ? THEN ? ELSE position_classified_version END", prevVersion, prevVersion+1)
 	}
 	// A value rides only on an edge that HAS one (a raise carrying a reading). When the edge carries
 	// none (every resolve, and a silence-driven raise), keep the row's existing last value rather than
@@ -287,6 +328,14 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 		// The CAS lost: a concurrent fold or operator transition changed (state, contributor_version)
 		// since the read. Retry — do NOT drop the edge (the accumulator would lose it forever).
 		return errAlarmContributorConflict
+	}
+	switch {
+	case requiresPosition != nil && *requiresPosition:
+		marked := true
+		existing.PositionDerived = &marked
+	case reclassify:
+		existing.PositionDerived = nil
+		api.classifyAlarm(ctx, existing.ID)
 	}
 	if mutate != nil {
 		mutate()

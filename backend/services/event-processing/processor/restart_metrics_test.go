@@ -68,6 +68,7 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 	// "registered" from "not registered".
 	want := []string{
 		"devicechain_eventprocessing_detect_checkpoints_total",
+		"devicechain_eventprocessing_detect_checkpoint_min_spacing_seconds",
 		"devicechain_eventprocessing_react_events_orphaned_total",
 		// The dead-letter producer's loss counter, which the DeadLetterWriteLost alert
 		// selects by name.
