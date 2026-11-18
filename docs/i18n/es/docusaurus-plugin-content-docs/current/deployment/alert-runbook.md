@@ -1003,7 +1003,7 @@ The device capture reader dropped messages that no device published
 
 A service has no usable shard placement table and is holding ingest forwarding
 
-**Qué significa y qué hacer.** Pod ‹pod› of ‹job› has had no usable shard placement table for two minutes: the table in its KV mirror is missing, cannot be adopted, or names a shard group at or above nats.shardGroups.count. Ingest forwarding into the sharded streams is held; these messages are not dead-lettered. Check user-management's placement mirror and its placement_mirror pass alert, and the affected service's logs. Restore a compatible placement table or raise nats.shardGroups.count to include every group the table names so forwarding can resume.
+**Qué significa y qué hacer.** Pod ‹pod› of ‹job› has had no usable shard placement table for two minutes: the table in its KV mirror is missing, cannot be adopted, or names a shard group at or above nats.shardGroups.count. Ingest forwarding into the sharded streams is held; these messages are not dead-lettered. Check user-management's placement mirror: increase(devicechain_usermanagement_placement_mirror_passes_total\{outcome="failed"\}[10m]) &gt; 0 means its passes are failing, and its log says why. Check the affected service's logs too. Restore a compatible placement table or raise nats.shardGroups.count to include every group the table names so forwarding can resume.
 
 ### JetStreamStreamNearFull {#jetstreamstreamnearfull}
 
