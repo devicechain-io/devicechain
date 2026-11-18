@@ -483,7 +483,7 @@ function PresenceTimelinePanel({ deviceToken }: { deviceToken: string }) {
           })}
         </DataTableBody>
       </DataTable>
-      {(data?.pagination.totalRecords ?? 0) > PRESENCE_TIMELINE_PAGE && (
+      {data?.pagination.hasMore && (
         <p className="text-xs text-muted-foreground">{t('showingRecentTransitions')}</p>
       )}
     </div>
@@ -547,8 +547,6 @@ function DeviceEventsPanel({ deviceToken }: { deviceToken: string }) {
     return <EmptyState description={t('noEvents')} />;
   }
 
-  const totalRecords = data?.pagination.totalRecords ?? 0;
-
   return (
     <div className="space-y-3">
       <DataTable>
@@ -571,7 +569,7 @@ function DeviceEventsPanel({ deviceToken }: { deviceToken: string }) {
           ))}
         </DataTableBody>
       </DataTable>
-      {totalRecords > 10 && (
+      {data?.pagination.hasMore && (
         <p className="text-xs text-muted-foreground">{t('showingRecentEvents')}</p>
       )}
     </div>

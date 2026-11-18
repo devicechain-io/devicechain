@@ -265,9 +265,12 @@ MinIO 采用 AGPL-3.0 许可证。社区 MinIO 于 2026 年 4 月归档，不再
 
 #### 备份存储容量 {#backup-store-size}
 
-默认存储为 160 GiB，按默认事件存储大小配置，使持续摄取时事件存储卷先填满。实例空闲时归档日志几乎不占空间；持续摄取时日志随写入率增长。Google Kubernetes Engine 测量中，两数据库合计每个摄取事件最多约 1.9 KB，而存储数据约为每事件 1 KB。（本页之前给出的归档约 1 KB 低估了实际值。）160 GiB 可容纳满 32 GiB 事件存储的归档，加上每个数据库一份完整基础备份，仍有超过三分之一空闲。这样备份告警保持安静，由事件存储告警指出容量根因。
+默认备份存储为 160 GiB。持续摄取时，归档预写日志随写入率增长。早期 GKE 测量中，
+两数据库合计每个摄取事件最多约产生 1.9 KB 的归档 WAL；这是归档容量预留，
+与事件存储中的[每个已存储事件 756 字节](./tuning-an-instance.md#event-store-sizing)不同。
+请为两数据库的归档 WAL 和完整基础备份预留空间，并实测用量，检查事件存储卷是否会先于备份存储填满。
 
-此计算适用于约一天内填满事件存储的单个实例。以下情况不适用：
+以下情况下，备份存储可能先填满：
 
 - **多个实例持续摄取。** 备份存储属于集群，每个实例都增加归档。每个此类实例约需额外 160 GiB，或通过 `--backup-credentials-file` 使用自行管理的对象存储，这也是推荐生产配置。
 - **事件存储填满需要超过约一天。** 存储保留每个数据库[恢复窗口](#backup-retention)中每天的一份完整基础备份，以及此后的日志。默认窗口下为关系型数据库 32 份压缩副本、事件存储 9 份压缩副本，并需与日志共同放入 160 GiB。关系型数据库通常仅为兆字节规模，因此实践中事件存储压缩后须远小于约 17 GiB。
@@ -276,7 +279,7 @@ MinIO 采用 AGPL-3.0 许可证。社区 MinIO 于 2026 年 4 月归档，不再
 
 此时[备份归档停止](./observability.md#backup-archiving)中的告警提供预警：占用 85% 时触发 `BackupDestinationAlmostFull`，快速增长触发 `BackupDestinationFillingFast`，归档停止后触发 `PostgresWALArchivingFailing`。基础备份一次性写入，因此超过 85% 的存储可能被下次夜间备份填满，应在首个告警时处理。存储满后，集群所有实例停止归档，各数据库在自身卷上保留未发送日志，直到卷也填满、数据库停止。
 
-每个数据库以 zstd 压缩归档日志。上述 1.9 KB、每秒 100 和 35 个事件来自本版本为事件日志启用压缩、时间优先键和 zstd 归档之前，当时归档使用 gzip，因此估计偏大。本版本基准中，事件存储归档约为每个已存储事件 0.47 KB。关系型数据库占比未重新测量。同一日志上，zstd 输出比 gzip 小 2% 至 16%，不会使归档变大。空闲数据库提前关闭的段约 16 KiB，仍使用 gzip 的数据库约 32 KiB。
+每个数据库以 zstd 压缩归档日志。上述 1.9 KB、每秒 100 和 35 个事件来自本版本为事件日志启用压缩、时间优先键和 zstd 归档之前，当时归档使用 gzip，因此估计偏大。本版本基准中，事件存储归档 WAL 约为每个已存储事件 0.47 KB。关系型数据库占比未重新测量。同一日志上，zstd 输出比 gzip 小 2% 至 16%，不会使归档变大。空闲数据库提前关闭的段约 16 KiB，仍使用 gzip 的数据库约 32 KiB。
 
 容量在 `dcctl install` 首次创建存储时确定。重跑安装（包括升级第一步）和直接 `tofu apply` 都保留当前容量。如果 StorageClass 支持卷扩容，可执行：
 
@@ -307,7 +310,7 @@ kind 不强制卷大小限制，可使用宿主机可用磁盘。
 - **Kubernetes 1.29 或更新版本**及指向它的 kube-context。最低版本来自 CloudNativePG chart，更早版本拒绝安装。`dcctl preflight` 提前检查，避免写入根密钥托管文件后才在初始化中失败。`local` 提供方使用 kind 集群，由 `dcctl install local` 创建（`--cluster <name>`，默认 `devicechain`）。传 `--kube-context <name>` 可使用已有 kind、minikube、k3d 或 docker-desktop 集群。
 - **默认 StorageClass 上的持久卷磁盘。** 非本地集群（非 kind、minikube、k3d、docker-desktop、rancher-desktop）使用默认设置，没有 `--compact`、`--no-cnpg`、`--no-monitoring`、`--backup-credentials-file` 时，`dcctl install --ha` 为集群申请 204 GiB，包括三个关系型数据库卷、160 GiB [备份存储](#backup-store-size)和 Prometheus。每实例再申请 144 GiB，用于三个事件存储卷及三个代理卷；单实例集群合计 348 GiB。无 `--ha` 时集群 188 GiB，每实例 48 GiB。每个额外持续摄取实例还需增加约 160 GiB 备份容量，详见[备份存储容量](#backup-store-size)。云环境先核对磁盘配额。新的 Google Cloud 项目每区域 SSD 默认 500 GB 配额，每 GiB 卷按一 GB 计，两种 GKE 磁盘类均计入。单实例卷容量低于配额；[GKE 指南](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#before-you-start)使用标准启动盘，计入不同配额，因此默认高可用单实例也适用。平衡型或 SSD 启动盘则计入 SSD 配额。指南说明多实例需申请的配额。本地集群监控不使用持久卷，kind 不强制容量。
 - **满足请求的 CPU 和内存。** 非 `--compact` 时，处理每个事件的五个服务合计请求约 4 CPU；`--ha` 下 `event-management` 两个 Pod，合计约 5 CPU。每个 NATS 服务器请求 500m CPU 和 768Mi 内存，高可用下有三个，另需其他服务、数据库和集群组件资源。无法容纳的 Pod 保持 `Pending`，安装等待至超时。各项见[服务容量配置](#service-sizing)；笔记本等资源有限集群使用 [`--compact`](#--compact)。
-- **OpenTofu 1.10 或更新版本**（`tofu`，也支持 `terraform` 1.10 或更新）位于 `PATH`。`dcctl` 使用它部署基础设施，安装见 [opentofu.org](https://opentofu.org)。`dcctl preflight local` 提前检查工具及环境，但不检查其版本；旧版本加载配置时失败。
+- **OpenTofu 1.10 或更新版本**（`tofu`，也支持 `terraform` 1.10 或更新）位于 `PATH`。`dcctl` 使用它部署基础设施，安装见 [opentofu.org](https://opentofu.org)。`dcctl preflight local` 提前检查工具及环境，并拒绝早于 1.10 的版本，因此旧的二进制文件会在创建任何资源之前就让运行停止。
 - **`kubectl`** 位于 `PATH`；`local` 提供方还需 **`docker`** 和 **`kind`**。缺少本次运行所需的工具会使预检失败。只有本地 kind 集群或 `--build` 才需要 Docker：使用已发布镜像安装到 `--kube-context` 指定的集群时，既不检查也不使用它。需要时，其守护进程必须可访问：Linux 上为 Docker Engine，macOS 和 Windows 上为 Docker Desktop。
 - **空闲的主机端口 80、443 和 1883**（本地 kind 集群使用）。集群会将它们发布出来，分别用于控制台、HTTPS 和 MQTT。`dcctl preflight local` 会在端口被占用时失败并指出占用它的容器，而不是让集群创建时才因 Docker 的绑定错误而失败。
 - **在 Linux 上，需要调高 inotify 限制。** 对于本地 kind 集群，`dcctl preflight local` 要求 `fs.inotify.max_user_instances` 至少为 256，而原装 Ubuntu 24.04 默认只有 128，因此它会在此处失败并打印要运行的命令。第一行调高该限制（第二行 `max_user_watches` 仅是警告），`/etc/sysctl.d` 使其在重启后依然有效：
@@ -790,11 +793,14 @@ v0.18.0 调优行使用：`device-management` 两副本，`resolution.workers: 3
 
 #### 事件存储卷 {#event-store-volume}
 
-每个事件存储实例有 32Gi 卷，高可用下三个；紧凑模式每个 4Gi。每个存储读数约占 1.05 KB，备份跟得上时数据库预写日志另占约 1.1 GB，因此 32Gi 可容纳约 2,700 万事件，相当于单租户持续默认上限约七小时。
+每个事件存储实例有 32Gi 卷，`--ha` 下有三个（`--compact` 下每个 4Gi）。
+按[每个已存储事件 756 字节](./tuning-an-instance.md#event-store-sizing)，并在备份跟得上时
+为卷上的 WAL 预留约 1.1 GB，32Gi 在扣除工作余量之前可容纳约 4,400 万个事件，
+相当于单租户默认上限每秒 1,000 个事件下约 12 小时。
 
-在之后的基准中，一行测量数据在磁盘上约占 600 字节（含索引、未压缩）（5100 万行写满 31 GB），所以上面的数字是偏保守的。如何根据您的流量规划卷大小（含计算指标和保留期）以及如何在线扩卷，见[事件库容量规划](./tuning-an-instance.md#event-store-sizing)。
+请根据流量、计算指标增加的测量行、保留期和 WAL 余量规划卷容量，见[事件存储容量规划](./tuning-an-instance.md#event-store-sizing)。
 
-事件存储压缩日志中的页映像（`wal_compression = lz4`）。每次检查点后首次修改页面会将整页写入日志，此存储中多数为索引页。在 v0.18.0 之后的开发构建对比中，集群结构与[实测吞吐量](#measured-throughput)相同，但调优不同；提供每秒 5,200 个事件时，压缩使每存储事件日志从约 3.0 KB 降至 1.7 KB，日志容量迫使的检查点比例相近地从每百万事件 5.8 次降至 3.2 次。不改变卷可容纳事件数：备份跟得上时日志仍约 1.1 GB，因此上述容量保持成立。[备份存储容量](#backup-store-size)在此压缩、时间优先键及 zstd 归档之前测量，所以估计偏大：发布基准中事件存储归档约每事件 0.47 KB，而容量计算假设两个数据库合计 1.9 KB；关系型占比未重新测量。关系型数据库不压缩其日志。
+事件存储压缩日志中的页映像（`wal_compression = lz4`）。每次检查点后首次修改页面会将整页写入日志，此存储中多数为索引页。在 v0.18.0 之后的开发构建对比中，集群结构与[实测吞吐量](#measured-throughput)相同，但调优不同；提供每秒 5,200 个事件时，压缩使每存储事件日志从约 3.0 KB 降至 1.7 KB，日志容量迫使的检查点比例相近地从每百万事件 5.8 次降至 3.2 次。不改变卷可容纳事件数：备份跟得上时日志仍约 1.1 GB，因此上述容量保持成立。[备份存储容量](#backup-store-size)在此压缩、时间优先键及 zstd 归档之前测量，所以估计偏大：发布基准中事件存储归档 WAL 约每事件 0.47 KB，而容量计算假设两个数据库合计 1.9 KB；关系型占比未重新测量。关系型数据库不压缩其日志。
 
 单实例、[默认备份存储](#backup-store-size)下，持续摄取会先填满此卷，`DatabaseVolumeFillingFast` 提前预警。多个实例、备份存储较小或事件卷扩大时，备份存储可能先满，停止归档后未发送日志堆积在此卷，直到卷也满、数据库停止；[告警](./observability.md#backup-archiving)在两者之前预警。用于长期运行的实例可通过事件管理 `lifecycle` 中的 `retentionDays` 限制存储数据，但不限制归档。
 
