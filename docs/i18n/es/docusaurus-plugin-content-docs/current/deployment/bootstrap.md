@@ -172,12 +172,9 @@ curl --cacert instance-ca.pem https://<host>/
 
 La autoridad dura diez años. Renovar el certificado del host la conserva, y el chart fija su clave privada (`rotationPolicy: Never`), de modo que incluso una autoridad reemitida sigue verificando lo que firmó la anterior. Solo eliminar el Secret propio de la autoridad (`devicechain-tls-ca`) crea una nueva, y los clientes deben obtener `ca.crt` de nuevo. Una instancia actualizada desde un chart anterior conserva su certificado autofirmado previo hasta que se renueve; elimina el Secret `devicechain-tls` para que se reemita de inmediato desde la autoridad. Una instancia que ya pasó al Gateway sirve `devicechain-tls-gateway` para siempre, con un certificado hoja nuevo de la misma autoridad, así que obtén `ca.crt` de ese Secret.
 
-Los flags se enumeran en [Flags de instalación](#install-flags). En un portátil:
-
-```bash
-dcctl install local --dev
-dcctl bootstrap local devicechain --dev
-```
+Los flags se enumeran en [Flags de instalación](#install-flags). En un portátil, sigue la
+[receta de inicio rápido](../quickstart/first-device.md#1-bring-up-an-instance), incluidos los
+[requisitos de CPU, memoria y shell de Windows](../quickstart/first-device.md#prerequisites).
 
 `dcctl bootstrap` se niega en un clúster donde `dcctl install` no ha terminado, y la negativa
 nombra el comando de instalación que hay que ejecutar. `dcctl upgrade` se niega en el mismo

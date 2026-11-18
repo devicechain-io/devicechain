@@ -154,6 +154,7 @@ func (s *shedLetterer) letter(ctx context.Context, msg messaging.Message, ev run
 
 // run summarises the over-budget sheds every shedSummaryWindow until ctx is done.
 func (s *shedLetterer) run(ctx context.Context) {
+	s.metrics.setShedSummaryInterval(s.window)
 	t := time.NewTicker(s.window)
 	defer t.Stop()
 	for {

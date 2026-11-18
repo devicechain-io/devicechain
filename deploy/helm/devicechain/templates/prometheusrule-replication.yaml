@@ -44,11 +44,11 @@ spec:
         - alert: JetStreamNotReplicatedAsConfigured
           expr: |
             max by (stream, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_desired", namespace="{{ $ns }}"}
             )
             >
             min by (stream, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_actual", namespace="{{ $ns }}"}
             )
           for: 15m
           labels:
@@ -83,11 +83,11 @@ spec:
         - alert: JetStreamReplicaPeersDegraded
           expr: |
             min by (stream, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_peers_online", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_peers_online", namespace="{{ $ns }}"}
             )
             <
             max by (stream, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_actual", namespace="{{ $ns }}"}
             )
           # 20m is kept. A restarting NATS pod is offline for its whole restart, and a
           # freshly lifted replica can be unlisted until it joins; neither is a loss.
@@ -116,11 +116,11 @@ spec:
         - alert: JetStreamReplicaPeersLagging
           expr: |
             max by (stream, job, namespace) (
-              max_over_time({__name__=~"devicechain_.+_jetstream_peers_current", namespace="{{ $ns }}"}[15m])
+              max_over_time({__name__=~"devicechain_[a-z0-9]+_jetstream_peers_current", namespace="{{ $ns }}"}[15m])
             )
             <
             max by (stream, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_actual", namespace="{{ $ns }}"}
             )
           for: 15m
           labels:
@@ -155,11 +155,11 @@ spec:
         - alert: JetStreamLeaseBucketNotReplicated
           expr: |
             min by (stream, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}", stream=~"KV_.*dc_leases"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_actual", namespace="{{ $ns }}", stream=~"KV_.*dc_leases"}
             ) < 3
             and on()
             max (
-              {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_desired", namespace="{{ $ns }}"}
             ) > 1
           for: 15m
           labels:
@@ -203,16 +203,16 @@ spec:
           expr: |
             (
               max (
-                {__name__=~"devicechain_.+_jetstream_broker_clustered", namespace="{{ $ns }}"}
+                {__name__=~"devicechain_[a-z0-9]+_jetstream_broker_clustered", namespace="{{ $ns }}"}
               ) == 1
               and on()
               max (
-                {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}"}
+                {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_desired", namespace="{{ $ns }}"}
               ) == 1
             )
             unless on()
             count (
-              {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}", stream=~".+-g[1-9][0-9]*"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_desired", namespace="{{ $ns }}", stream=~".+-g[1-9][0-9]*"}
             ) > 0
           for: 15m
           labels:
@@ -276,16 +276,16 @@ spec:
           expr: |
             (
               group by (stream, pod, job, namespace) (
-                last_over_time({__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}[6h])
+                last_over_time({__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_actual", namespace="{{ $ns }}"}[6h])
               )
               unless on (stream, pod, job, namespace)
               group by (stream, pod, job, namespace) (
-                {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
+                {__name__=~"devicechain_[a-z0-9]+_jetstream_replicas_actual", namespace="{{ $ns }}"}
               )
             )
             and on (pod, job, namespace)
             group by (pod, job, namespace) (
-              {__name__=~"devicechain_.+_jetstream_broker_clustered", namespace="{{ $ns }}"}
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_broker_clustered", namespace="{{ $ns }}"}
             )
           # 15m absorbs a missed pass or a NATS pod roll: a stream that is readable again
           # on the next 30s pass has its series back long before this fires.
