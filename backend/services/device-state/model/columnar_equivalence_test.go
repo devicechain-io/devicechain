@@ -147,10 +147,10 @@ func columnarWritesEqualTheGormWrites(t *testing.T, legacy, current *Api) {
 				t.Fatalf("seed: %v", err)
 			}
 		}
-		if _, err := api.ApplyDeviceOwnership(ctx, "a-active", []string{"customer:acme", `customer:"q,{x}"`}, t0); err != nil {
+		if _, err := api.ApplyDeviceOwnership(ctx, "a-active", []string{"customer:acme", `customer:"q,{x}"`}, t0, 0); err != nil {
 			t.Fatalf("seed ownership: %v", err)
 		}
-		if _, err := api.ApplyDeviceOwnership(ctx, "g-identified", []string{"customer:g"}, t0); err != nil {
+		if _, err := api.ApplyDeviceOwnership(ctx, "g-identified", []string{"customer:g"}, t0, 0); err != nil {
 			t.Fatalf("seed ownership: %v", err)
 		}
 	}

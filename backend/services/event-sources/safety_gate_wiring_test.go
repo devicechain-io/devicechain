@@ -12,6 +12,7 @@ import (
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,14 +59,14 @@ func TestIngestTenantGateRecordsItsDecision(t *testing.T) {
 	infra := fullInfra()
 	infra.UserManagement.Hostname = ""
 	gates, read := gateReading(t, "event-sources")
-	g, _ := ingestTenantGates(infra, gates)
+	g, _ := ingestTenantGates(svcclient.NewPeers(infra, "event-sources"), gates)
 	assert.Nil(t, g)
 	v, ok := read(governance.GateTenantLifecycle)
 	assert.True(t, ok, "an OFF gate must be a present series")
 	assert.Equal(t, 0.0, v)
 
 	gates, read = gateReading(t, "event-sources")
-	g, _ = ingestTenantGates(fullInfra(), gates)
+	g, _ = ingestTenantGates(svcclient.NewPeers(fullInfra(), "event-sources"), gates)
 	assert.NotNil(t, g)
 	v, ok = read(governance.GateTenantLifecycle)
 	assert.True(t, ok)
@@ -138,14 +139,14 @@ func TestEveryGateDecisionIsCalledWithTheServiceGates(t *testing.T) {
 // reads gone, so an evicted round is not stepped past on a guess.
 func TestIngestTenantGatesGiveTheWalksAFailClosedReading(t *testing.T) {
 	infra := fullInfra() // user-management at a host nothing answers
-	gate, strict := ingestTenantGates(infra, nil)
+	gate, strict := ingestTenantGates(svcclient.NewPeers(infra, "event-sources"), nil)
 	require.NotNil(t, gate)
 	require.NotNil(t, strict)
 	assert.False(t, gate("cold-tenant"), "premise: the admission gate fails open on a cold tenant")
 	assert.True(t, strict("cold-tenant"), "the walk's reading must fail closed on a cold tenant")
 
 	infra.UserManagement.Hostname = ""
-	gate, strict = ingestTenantGates(infra, nil)
+	gate, strict = ingestTenantGates(svcclient.NewPeers(infra, "event-sources"), nil)
 	assert.Nil(t, gate)
 	assert.Nil(t, strict, "no lifecycle authority: nothing to ask")
 }

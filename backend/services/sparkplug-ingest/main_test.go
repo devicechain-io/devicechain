@@ -53,7 +53,7 @@ func TestLoadConfigurationParsesRenderedChartDocument(t *testing.T) {
 // an emitter that nil-panics the receive goroutine on the first message. The nil
 // check precedes any Microservice access, so this needs no lifecycle setup.
 func TestBuildIngesterRejectsNilWriter(t *testing.T) {
-	_, _, err := buildIngester(nil)
+	_, _, err := buildIngester(nil, nil)
 	require.Error(t, err, "a nil inbound-events writer must fail closed")
 }
 
