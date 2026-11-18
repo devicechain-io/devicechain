@@ -97,13 +97,13 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	prevMs, prevGql, prevNats, prevSvc := Microservice, GraphQLManager, NatsManager, Svc
 	prevIep, prevRac, prevCallout, prevDrc := InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer
 	prevDrain, prevKickDrain, prevReaper := OwnershipDrain, SessionKickDrain, AgentProposalReaper
-	prevDeletion, prevClassifier := EntityDeletionDrain, AlarmPositionClassifier
+	prevDeletion, prevClassifier, prevMarkerHeal := EntityDeletionDrain, AlarmPositionClassifier, CreateEnrollMarkerHeal
 	prevEffects, prevKills := AgentEffectsDrain, AgentKillConsumer
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, Svc = prevMs, prevGql, prevNats, prevSvc
 		InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer = prevIep, prevRac, prevCallout, prevDrc
 		OwnershipDrain, SessionKickDrain, AgentProposalReaper = prevDrain, prevKickDrain, prevReaper
-		EntityDeletionDrain, AlarmPositionClassifier = prevDeletion, prevClassifier
+		EntityDeletionDrain, AlarmPositionClassifier, CreateEnrollMarkerHeal = prevDeletion, prevClassifier, prevMarkerHeal
 		AgentEffectsDrain, AgentKillConsumer = prevEffects, prevKills
 	})
 
@@ -176,6 +176,9 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	AlarmPositionClassifier = core.NewPeriodicTask(area, "alarm-position-classifier", time.Hour,
 		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("alarm_position_classifier"))
 	require.NoError(t, AlarmPositionClassifier.Initialize(context.Background()))
+	CreateEnrollMarkerHeal = core.NewPeriodicTask(area, "create-enroll-marker-heal", time.Hour,
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("create_enroll_marker_heal"))
+	require.NoError(t, CreateEnrollMarkerHeal.Initialize(context.Background()))
 	// And the decode accounting, which the stopper stops and then flushes. A fresh one: an earlier test of
 	// the package may have left the global stopped.
 	prevAccountant, prevAccounting := DecodeAccountant, DecodeAccounting
