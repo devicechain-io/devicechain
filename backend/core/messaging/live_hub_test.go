@@ -393,3 +393,236 @@ func TestLiveHubOpenOwnership(t *testing.T) {
 	hubClosed(t, b.ch)
 	hubCancelled(t, upctx)
 }
+
+// pinnedOpen records each open under the binding the hub pinned on its context,
+// refusing an open that carries no pin for the tenant it was asked to open.
+func (f *hubFake) pinnedOpen(ctx context.Context, tenant string) (<-chan Message, error) {
+	pin, ok := ctx.Value(livePinKey{}).(livePin)
+	if !ok || pin.tenant != tenant {
+		return nil, fmt.Errorf("open for %q carries no pin", tenant)
+	}
+	return f.open(ctx, pin.live)
+}
+
+func TestSharedLiveHubPlacementMove(t *testing.T) {
+	m, _ := metricsManager(t, startEmbeddedServer(t))
+	var group atomic.Int32
+	require.NoError(t, m.EnableStreamSharding(shardRouterFunc(func(string) (int, error) {
+		return int(group.Load()), nil
+	}), n1Config(streams.ResolvedEvents)))
+	h := SharedLiveHub(m, streams.ResolvedEvents, func() *LiveHub[string] {
+		return NewLiveHub("test", func(ctx context.Context, tenant string) (<-chan Message, error) {
+			return m.SubscribeLive(ctx, tenant, streams.ResolvedEvents)
+		}, hubDecode, 3)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a, err := h.Subscribe(ctx, "tenant-a", nil)
+	require.NoError(t, err)
+	before, err := m.tenantSuffix("tenant-a", streams.ResolvedEvents)
+	require.NoError(t, err)
+	group.Store(1)
+	after, err := m.tenantSuffix("tenant-a", streams.ResolvedEvents)
+	require.NoError(t, err)
+	require.NotEqual(t, before, after, "a live manager must observe placement changes")
+	b, err := h.Subscribe(ctx, "tenant-a", nil)
+	require.NoError(t, err)
+	require.NoError(t, m.nc.Publish(ScopedSubject("test", "tenant-a", after), []byte("group-b")))
+	require.Equal(t, []string{"tenant-a:group-b"}, hubReceive(t, b))
+	// Existing subscribers retain their original feed until they leave.
+	require.NoError(t, m.nc.Publish(ScopedSubject("test", "tenant-a", before), []byte("group-a")))
+	require.Equal(t, []string{"tenant-a:group-a"}, hubReceive(t, a))
+	group.Store(-1)
+	_, directErr := m.SubscribeLive(ctx, "tenant-a", streams.ResolvedEvents)
+	_, sharedErr := h.Subscribe(ctx, "tenant-a", nil)
+	require.ErrorIs(t, directErr, ErrUnplacedTenant)
+	require.ErrorIs(t, sharedErr, ErrUnplacedTenant)
+}
+
+// SubscribeLive listens on the group a hub pinned, not on a placement that
+// moved after the hub compared it; a pin for another tenant is ignored.
+func TestSubscribeLiveHonoursPin(t *testing.T) {
+	m, _ := metricsManager(t, startEmbeddedServer(t))
+	require.NoError(t, m.EnableStreamSharding(shardRouterFunc(func(string) (int, error) {
+		return 0, nil
+	}), n1Config(streams.ResolvedEvents)))
+	group1 := GroupSuffix(streams.ResolvedEvents, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pin := func(tenant string) context.Context {
+		return context.WithValue(ctx, livePinKey{}, livePin{tenant: tenant, suffix: streams.ResolvedEvents, live: group1})
+	}
+	pinned, err := m.SubscribeLive(pin("tenant-a"), "tenant-a", streams.ResolvedEvents)
+	require.NoError(t, err)
+	other, err := m.SubscribeLive(pin("tenant-b"), "tenant-a", streams.ResolvedEvents)
+	require.NoError(t, err)
+	require.NoError(t, m.nc.Publish(ScopedSubject("test", "tenant-a", group1), []byte("pinned")))
+	require.NoError(t, m.nc.Publish(ScopedSubject("test", "tenant-a", GroupSuffix(streams.ResolvedEvents, 0)), []byte("resolved")))
+	require.Equal(t, "pinned", string(hubReceive(t, pinned).Value))
+	require.Equal(t, "resolved", string(hubReceive(t, other).Value))
+}
+
+func TestLiveHubConcurrentBindingOpenLimit(t *testing.T) {
+	var f hubFake
+	var group atomic.Int32
+	started, release := make(chan struct{}), make(chan struct{})
+	h := NewLiveHub("test", func(ctx context.Context, tenant string) (<-chan Message, error) {
+		if pin, _ := ctx.Value(livePinKey{}).(livePin); pin.live == "0" {
+			close(started)
+			<-release
+		}
+		return f.pinnedOpen(ctx, tenant)
+	}, hubDecode, 1)
+	h.binding = func(string) (string, error) { return fmt.Sprint(group.Load()), nil }
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { _, err := h.Subscribe(ctx, "one", nil); result <- err }()
+	<-started
+	group.Store(1)
+	b, err := h.Subscribe(ctx, "one", nil)
+	// Always release the blocked opener, including on an assertion failure.
+	close(release)
+	require.NoError(t, err)
+	var le *limit.Error
+	require.ErrorAs(t, hubReceive(t, result), &le)
+	require.Equal(t, 2, le.Got)
+	require.Equal(t, 1, le.Max)
+	hubCancelled(t, f.feed("0").ctx)
+	f.feed("1").ch <- Message{Value: []byte("winner")}
+	require.Equal(t, []string{"one:winner"}, hubReceive(t, b))
+}
+
+// The hub keeps the opener build supplied (the services' test seams replace it)
+// and hands it the tenant, with the resolved group pinned on the context.
+func TestSharedLiveHubBindingOpens(t *testing.T) {
+	for _, move := range []bool{false, true} {
+		t.Run(fmt.Sprint("move=", move), func(t *testing.T) {
+			m := &NatsManager{Microservice: &core.Microservice{InstanceId: "test"}}
+			var group atomic.Int32
+			require.NoError(t, m.EnableStreamSharding(shardRouterFunc(func(string) (int, error) {
+				return int(group.Load()), nil
+			}), n1Config(streams.ResolvedEvents)))
+			var f hubFake
+			h := SharedLiveHub(m, streams.ResolvedEvents, func() *LiveHub[string] {
+				return NewLiveHub("test", f.pinnedOpen, hubDecode, 3)
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			a, err := h.Subscribe(ctx, "tenant-a", nil)
+			require.NoError(t, err)
+			if move {
+				group.Store(1)
+			}
+			b, err := h.Subscribe(ctx, "tenant-a", nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, f.count(GroupSuffix(streams.ResolvedEvents, 0)))
+			if move {
+				require.Equal(t, 1, f.count(GroupSuffix(streams.ResolvedEvents, 1)), "placement move must open a second binding")
+			} else {
+				require.Zero(t, f.count(GroupSuffix(streams.ResolvedEvents, 1)))
+			}
+			f.feed(GroupSuffix(streams.ResolvedEvents, int(group.Load()))).ch <- Message{Value: []byte("current")}
+			require.Equal(t, []string{"tenant-a:current"}, hubReceive(t, b))
+			if !move {
+				require.Equal(t, []string{"tenant-a:current"}, hubReceive(t, a))
+			}
+		})
+	}
+}
+
+func TestLiveHubBindingLimitAndRefusal(t *testing.T) {
+	var f hubFake
+	h := NewLiveHub("test", f.pinnedOpen, hubDecode, 2)
+	binding := "A"
+	var resolveErr error
+	h.binding = func(string) (string, error) { return binding, resolveErr }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	old, stop := context.WithCancel(ctx)
+	a, err := h.Subscribe(old, "one", nil)
+	require.NoError(t, err)
+	binding = "B"
+	b, err := h.Subscribe(ctx, "one", nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, f.count("A"))
+	require.Equal(t, 1, f.count("B"))
+	f.feed("B").ch <- Message{Value: []byte("new group")}
+	require.Equal(t, []string{"one:new group"}, hubReceive(t, b))
+	resolveErr = ErrUnplacedTenant
+	_, err = h.Subscribe(ctx, "one", nil)
+	require.ErrorIs(t, err, ErrUnplacedTenant)
+	resolveErr = nil
+	binding = "C"
+	_, err = h.Subscribe(ctx, "one", nil)
+	var le *limit.Error
+	require.ErrorAs(t, err, &le)
+	require.Equal(t, 3, le.Got)
+	require.Equal(t, 2, le.Max)
+	require.Zero(t, f.count("C"), "rebinding must not bypass the tenant-wide ceiling")
+	stop()
+	hubClosed(t, a)
+	hubCancelled(t, f.feed("A").ctx)
+	binding = "B"
+	c, err := h.Subscribe(ctx, "one", nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, f.count("B"), "old feed teardown must not remove the current feed")
+	f.feed("B").ch <- Message{Value: []byte("shared")}
+	require.Equal(t, []string{"one:shared"}, hubReceive(t, b))
+	require.Equal(t, []string{"one:shared"}, hubReceive(t, c))
+	close(f.feed("B").ch)
+	hubClosed(t, b)
+	hubClosed(t, c)
+}
+
+func TestLiveHubPinsBindingWithoutHoldingLocks(t *testing.T) {
+	var f hubFake
+	h := NewLiveHub("test", f.pinnedOpen, hubDecode, 2)
+	binding := "A"
+	h.binding = func(string) (string, error) { return binding, nil }
+	h.open = func(ctx context.Context, tenant string) (<-chan Message, error) {
+		require.True(t, h.mu.TryLock(), "directory lock held across open")
+		lt := h.tenants["one"]
+		h.mu.Unlock()
+		require.True(t, lt.mu.TryLock(), "tenant lock held across open")
+		lt.mu.Unlock()
+		// Placement can change while the broker confirms the resolved subject.
+		binding = "B"
+		return f.pinnedOpen(ctx, tenant)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a, err := h.Subscribe(ctx, "one", nil)
+	require.NoError(t, err)
+	b, err := h.Subscribe(ctx, "one", nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, f.count("A"))
+	require.Equal(t, 1, f.count("B"))
+	f.feed("A").ch <- Message{Value: []byte("A")}
+	f.feed("B").ch <- Message{Value: []byte("B")}
+	require.Equal(t, []string{"one:A"}, hubReceive(t, a))
+	require.Equal(t, []string{"one:B"}, hubReceive(t, b))
+}
+
+// With shard groups off, on a bare manager as the services' tests use, the
+// binding never changes: one open, the build's opener called with the tenant.
+func TestSharedLiveHubDisabledSharesBinding(t *testing.T) {
+	m := &NatsManager{}
+	var f hubFake
+	h := SharedLiveHub(m, streams.ResolvedEvents, func() *LiveHub[string] {
+		return NewLiveHub("test", f.open, hubDecode, 2)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a, err := h.Subscribe(ctx, "one", nil)
+	require.NoError(t, err)
+	b, err := h.Subscribe(ctx, "one", nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, f.count("one"))
+	live, pinned := pinnedLiveSuffix(f.feed("one").ctx, "one", streams.ResolvedEvents)
+	require.True(t, pinned)
+	require.Equal(t, streams.ResolvedEvents, live)
+	f.feed("one").ch <- Message{Value: []byte("unchanged")}
+	require.Equal(t, []string{"one:unchanged"}, hubReceive(t, a))
+	require.Equal(t, []string{"one:unchanged"}, hubReceive(t, b))
+}
