@@ -67,6 +67,8 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/ownership_outbox.go":      {"Api.DrainOwnershipFacts"},
 	// The entity-deletion drain lists the tenants that have queued deletion facts (no row is read), then publishes and deletes each tenant's rows under core.WithTenant.
 	"backend/services/device-management/model/deletion_outbox.go": {"Api.DrainEntityDeletions"},
+	// The startup enrollment reconcile lists the tenants that have groups, facet refs or rule pins (no row is read), then repairs each tenant's groups under core.WithTenant.
+	"backend/services/device-management/model/api_group_enroll_reconcile.go": {"Api.reconcileMembershipEnrollment"},
 	// The attribute-repair drain lists the tenants that have queued repairs (no row is read), then repairs each tenant's rows under core.WithTenant.
 	"backend/services/device-management/model/api_attribute_repairs.go": {"Api.DrainAttributeRepairs"},
 	// The agent-effect relay lists the tenants that have queued effects, then drains each tenant's rows under core.WithTenant.
