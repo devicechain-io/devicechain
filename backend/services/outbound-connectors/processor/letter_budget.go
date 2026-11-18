@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 )
@@ -40,6 +41,20 @@ type dispatchLetterBudget struct {
 	summary     *deadletter.Sink
 	now         func() time.Time
 	window      time.Duration
+	// log, when set, receives the budgeted terminal Error log instead of the global
+	// logger. Tests set it to observe that log without writing the global zerolog
+	// logger, which races goroutines they do not own.
+	log *zerolog.Logger
+}
+
+// logger returns the logger the budgeted terminal log is written to: the injected one
+// when set, else the global logger as it stands at the call (so a logger configured
+// after construction is still honoured).
+func (s *dispatchLetterBudget) logger() *zerolog.Logger {
+	if s.log != nil {
+		return s.log
+	}
+	return &log.Logger
 }
 
 func newDispatchLetterBudget(producer *deadletter.Producer, writer deadletter.Writer) *dispatchLetterBudget {
@@ -94,7 +109,7 @@ func (c *DispatchConsumer) budgetedDeadLetter(ctx context.Context, msg messaging
 		return
 	}
 	if cause != nil {
-		log.Error().Err(cause).Str("rule", rule).Str("tenant", tenant).
+		c.letters.logger().Error().Err(cause).Str("rule", rule).Str("tenant", tenant).
 			Msg("Connector dispatch is terminally undeliverable; dead-lettering.")
 	}
 	c.deadLetter(ctx, msg, rule, action, outcome)

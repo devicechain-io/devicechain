@@ -17,15 +17,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 func TestDispatchShedLetterBudget(t *testing.T) {
-	logger := log.Logger
-	log.Logger = zerolog.Nop()
-	t.Cleanup(func() { log.Logger = logger })
 	dead, index := &fakeWriter{}, &fakeWriter{}
 	c := newIndexingConsumer(dead, index)
+	quiet := zerolog.Nop()
+	c.letters.log = &quiet
 	now := time.Now().UTC()
 	c.letters.now = func() time.Time { return now }
 	c.rate = core.NewTenantRateLimiter(core.StaticCeiling(1, 0))
@@ -100,11 +98,10 @@ func assertDispatchSummary(t *testing.T, index *fakeWriter, offset int, detail s
 
 func TestTerminalLetterBudgetAndPeriodicSummary(t *testing.T) {
 	var logs bytes.Buffer
-	logger := log.Logger
-	log.Logger = zerolog.New(&logs)
-	t.Cleanup(func() { log.Logger = logger })
 	dead, index := &fakeWriter{}, &fakeWriter{}
 	c := newIndexingConsumer(dead, index)
+	captured := zerolog.New(&logs)
+	c.letters.log = &captured
 	now := time.Now().UTC()
 	c.letters.now = func() time.Time { return now }
 	c.metrics = NewDispatchMetrics(&core.Microservice{FunctionalArea: "outbound-connectors"})
