@@ -8,12 +8,14 @@ package processor
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
+
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/entityevent"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
-	"sync"
-	"time"
 )
 
 // ShareRemover is the slice of the Api this consumer writes through.
@@ -29,14 +31,14 @@ type ShareRemover interface {
 //
 // It is a durable, at-least-once consumer and cleanup is idempotent: deleting shares that
 // are already gone is a no-op, so a redelivery, or the first-enablement replay of the
-// retained stream, is harmless. The removal is bounded to shares made no later than the
-// deletion, so a replay cannot remove a share made since for a new customer with a reused
-// token. One inline read loop, as event-management's anchor reconciler: the work is one
-// cheap statement.
+// retained stream, is harmless. Removal is bounded to shares made no later than the
+// deletion. Customer and group tokens are retired when deleted.
+// One inline read loop, as event-management's anchor reconciler: the work is one cheap statement.
 type ShareReconciler struct {
 	Microservice *core.Microservice
 	Reader       messaging.MessageReader
 	Shares       ShareRemover
+	Dead         *deadletter.Sink
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -102,7 +104,7 @@ func (r *ShareReconciler) ExecuteTerminate(context.Context) error { return nil }
 // handle reconciles one entity-deletion event: it stamps the tenant carried on the subject,
 // removes the shares that named the entity, and acks. Poison (no tenant, an unparseable
 // payload) is acked to drop it; a database error is left unacked for AckWait-paced
-// redelivery until the delivery ceiling, then dropped. An entity that no share can name — a
+// redelivery until the delivery ceiling, then dead-lettered. An entity that no share can name — a
 // device, an asset — is acked having removed nothing.
 func (r *ShareReconciler) handle(ctx context.Context, msg messaging.Message) {
 	tctx, tenant, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
@@ -122,6 +124,20 @@ func (r *ShareReconciler) handle(ctx context.Context, msg messaging.Message) {
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Err(err).Str("entity", event.EntityToken).Int("delivered", msg.NumDelivered).
 				Msg("Giving up on entity-deleted event after max delivery attempts")
+			payload := msg.Value
+			if len(payload) > 64*1024 {
+				payload = payload[:64*1024]
+			}
+			if derr := r.Dead.WriteFor(tctx, msg, deadletter.Envelope{
+				Reason:     deadletter.ReasonExhausted,
+				Summary:    "dashboard share cleanup exhausted delivery attempts",
+				Detail:     err.Error(),
+				Reference:  event.EntityToken,
+				OccurredAt: time.Now().UTC(),
+				Payload:    payload,
+			}); derr != nil {
+				log.Error().Err(derr).Msg("LOST entity-deleted fact: cleanup and dead-letter write both failed")
+			}
 			_ = msg.Ack()
 			return
 		}

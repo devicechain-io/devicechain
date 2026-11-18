@@ -97,7 +97,8 @@ CREATE TABLE "device-state".device_states (
  external_id text,
  source text,
  scope_anchors text[],
- scope_anchors_at timestamp with time zone
+ scope_anchors_at timestamp with time zone,
+ incarnation bigint
 )
 WITH (fillfactor='75', autovacuum_vacuum_scale_factor='0', autovacuum_vacuum_threshold='10000', autovacuum_vacuum_cost_limit='2000', autovacuum_analyze_scale_factor='0.02', autovacuum_analyze_threshold='10000');
 CREATE TABLE "device-state".dropped_measurements (

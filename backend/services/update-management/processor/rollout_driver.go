@@ -110,21 +110,22 @@ type RolloutDriver struct {
 	makeTask func() *core.PeriodicTask
 }
 
-// NewRolloutDriver builds the driver. interval must be positive. passMetrics (nil for none) are
+// NewRolloutDriver builds the driver. interval must be positive. passMetrics are required and
 // registered once by the caller on the initialize path: the driver is built on every start.
 func NewRolloutDriver(api *model.Api, interval time.Duration, passMetrics *core.PeriodicTaskMetrics) *RolloutDriver {
 	if interval <= 0 {
 		panic("processor.NewRolloutDriver: interval must be positive")
 	}
-	d := &RolloutDriver{api: api}
-	var opts []core.PeriodicTaskOption
-	if passMetrics != nil {
-		opts = append(opts, core.WithPassMetrics(passMetrics))
+	// Refused here rather than at the first Start: the task is built per start, and a nil here
+	// would otherwise surface only when the service starts, not when it is wired.
+	if passMetrics == nil {
+		panic("processor.NewRolloutDriver: pass metrics are required")
 	}
+	d := &RolloutDriver{api: api}
 	// A fresh lifecycle per start preserves the wrapper's ability to restart after Stop.
 	d.makeTask = func() *core.PeriodicTask {
 		return core.NewPeriodicTask("update-management", "rollout-driver", interval,
-			d.runOnce, core.NewNoOpLifecycleCallbacks(), opts...)
+			d.runOnce, core.NewNoOpLifecycleCallbacks(), passMetrics)
 	}
 	return d
 }

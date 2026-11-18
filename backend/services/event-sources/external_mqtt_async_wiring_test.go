@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -109,7 +110,7 @@ func startExternalWiringWith(t *testing.T, window *int, streamMaxMsgs int64,
 	require.NoError(t, Configuration.Validate())
 	GatewaySource, ExternalPublishers = nil, nil
 	buildTestRateLimiters(t)
-	require.NoError(t, buildEventSources())
+	require.NoError(t, buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")))
 	require.Len(t, ExternalPublishers, 1, "main built an external source with no publisher of its own")
 
 	NatsManager = messaging.NewNatsManager(Microservice, natsCallbacks, createNatsComponents)
