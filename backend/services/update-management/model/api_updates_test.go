@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // fakeDevices maps tenant/device to a profile token.
@@ -376,6 +377,33 @@ func TestAReportCannotReachAnotherDevicesOrTenantsAttempt(t *testing.T) {
 	// An inventory only ever reconciles the reporting device's own attempt.
 	inv := ota.Report{V: 1, Kind: ota.KindInventory, Component: "firmware", BootID: "b", Running: &ota.Running{Version: "1.0.0"}}
 	e.mustApply(t, "acme", "dev-2", inv, VerdictUnknownAssignment)
+}
+
+func TestDeadlineSweepCountsFailedWritesAndKeepsTheLastError(t *testing.T) {
+	e := newUpdateEnv(t)
+	e.availableArtifact(t, "acme", "fw-1", "1.0.0", []byte("firmware one"))
+	for _, device := range []string{"dev-1", "dev-2"} {
+		_, err := e.api.AssignArtifact(tenantCtx("acme"), device, "fw-1")
+		require.NoError(t, err)
+	}
+	e.advance(2 * time.Hour)
+	lastErr := errors.New("last deadline write failed")
+	writes := 0
+	require.NoError(t, e.api.RDB.Database.Callback().Update().Before("gorm:update").Register("test:deadline-write", func(tx *gorm.DB) {
+		writes++
+		if writes == 1 {
+			tx.AddError(errors.New("first deadline write failed"))
+		} else {
+			tx.AddError(lastErr)
+		}
+	}))
+	res, err := e.api.SweepDeadlines(context.Background(), 1)
+	require.NoError(t, err)
+	require.Equal(t, 2, writes, "failed writes must not stop the keyset walk")
+	require.Equal(t, 2, res.Examined)
+	require.Equal(t, 2, res.Failed)
+	require.ErrorIs(t, res.LastErr, lastErr)
+	require.Zero(t, res.TimedOut+res.Unknown)
 }
 
 func TestDeadlinesTimeOutBeforeInstallAndLeaveUnknownAfter(t *testing.T) {

@@ -358,7 +358,7 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 		if res.RowsAffected == 0 {
 			return nil, gorm.ErrRecordNotFound
 		}
-		return api.reloadWithSecret(ctx, token, current.ID, secret)
+		return api.reloadWithSecret(ctx, current.ID, secret)
 	}
 
 	// Optimistic concurrency: a clean early-out, then an ATOMIC guarded write so a
@@ -372,10 +372,8 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 	if err := rdb.UpdateIfUnmoved(api.sys(ctx), current, current.UpdatedAt, fields, ErrConflict); err != nil {
 		return nil, err
 	}
-	// Reload by the token ARGUMENT, which is the only thing that ever named this row.
-	// The payload used to carry one, and reloading by IT is how a blank payload token
-	// made the caller's own success response read a row it could no longer name.
-	return api.reloadWithSecret(ctx, token, current.ID, secret)
+	// Reload the row we wrote even if its token has since been renamed or reused.
+	return api.reloadWithSecret(ctx, current.ID, secret)
 }
 
 // RenameAIProvider changes a provider's token, and changes nothing else.
@@ -522,22 +520,19 @@ func updatedSecret(field dcgraphql.OptionalString) *string {
 }
 
 // reloadWithSecret applies the write-only secret (keyed by the provider's immutable
-// id, so a rename never orphans it) and returns the freshly-reloaded provider (for the
-// bumped updated_at).
-func (api *Api) reloadWithSecret(ctx context.Context, token string, id uint, secret *string) (*AIProvider, error) {
+// id, so a rename never orphans it) and reloads that same id in the system scope
+// for the bumped updated_at, even if its token has been renamed or reused.
+func (api *Api) reloadWithSecret(ctx context.Context, id uint, secret *string) (*AIProvider, error) {
 	if secret != nil {
 		if err := api.applyProviderSecret(ctx, id, secret); err != nil {
 			return nil, err
 		}
 	}
-	reloaded, err := api.AIProvidersByToken(ctx, []string{token})
-	if err != nil {
+	var reloaded AIProvider
+	if err := api.sys(ctx).First(&reloaded, id).Error; err != nil {
 		return nil, err
 	}
-	if len(reloaded) == 0 {
-		return nil, gorm.ErrRecordNotFound
-	}
-	return reloaded[0], nil
+	return &reloaded, nil
 }
 
 // applyProviderSecret writes the provider's API key to the store to match the

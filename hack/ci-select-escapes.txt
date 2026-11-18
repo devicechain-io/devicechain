@@ -72,6 +72,7 @@ backend/core/ruletest/scenario_test.go
 backend/core/secrets/selftest_rig_message_test.go
 backend/core/semantic/semantic_test.go
 backend/core/test/authendpoints_repo_test.go
+backend/core/test/bearerparse_repo_test.go
 backend/core/test/frontend/state_test.go
 backend/core/test/globallogger_repo_test.go
 backend/core/webhooksig/keys.go
