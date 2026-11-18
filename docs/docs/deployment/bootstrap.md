@@ -705,8 +705,8 @@ The alerts for snapshots are described under
 - **OpenTofu 1.10 or later** (the `tofu` binary; `terraform` 1.10 or later also works) on your
   `PATH`. `dcctl` drives it to provision infrastructure. Install it from
   [opentofu.org](https://opentofu.org). Run `dcctl preflight local` to check that it is there,
-  and the rest of your environment, up front. The preflight does not check its version; an older
-  one fails when it loads the infrastructure configuration.
+  and the rest of your environment, up front. The preflight also refuses a version older than
+  1.10, so an old binary stops the run before anything is created.
 - **`kubectl`** on your `PATH`, and **`docker`** and **`kind`** for the `local`
   provider. The preflight check fails if any the run needs is missing. Docker is needed only for a
   local kind cluster or for `--build`: an install into a cluster you name with `--kube-context`,

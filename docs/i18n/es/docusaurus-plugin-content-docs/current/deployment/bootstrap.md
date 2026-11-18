@@ -757,8 +757,8 @@ Las alertas de las instantáneas se describen en
 - **OpenTofu 1.10 o posterior** (el binario `tofu`; `terraform` 1.10 o posterior también
   funciona) en tu `PATH`. `dcctl` lo ejecuta para aprovisionar infraestructura. Instálalo desde
   [opentofu.org](https://opentofu.org). Ejecuta `dcctl preflight local` para comprobar que está
-  y el resto de tu entorno de antemano. La comprobación previa no mira su versión; una anterior
-  falla al cargar la configuración de la infraestructura.
+  y el resto de tu entorno de antemano. La comprobación previa también rechaza una versión anterior
+  a la 1.10, así que un binario antiguo detiene la ejecución antes de que se cree nada.
 - **`kubectl`** en tu `PATH`, y **`docker`** y **`kind`** para el proveedor `local`. La
   comprobación previa falla si falta alguno de los que necesita la ejecución. Docker solo hace
   falta para un clúster local de kind o para `--build`: una instalación en un clúster que nombras
