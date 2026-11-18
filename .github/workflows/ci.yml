@@ -159,6 +159,12 @@ jobs:
       - name: release-highlights guard self-test
         run: hack/check-release-highlights.sh --self-test
 
+      # The release job's changelog base runs only on a tag, and a wrong base publishes a
+      # changelog that starts a minor too early (v1.5.0's started at v1.3.0). The self-test is
+      # the part that runs on every PR, before a release needs the base.
+      - name: changelog base self-test
+        run: hack/changelog-base.sh --self-test
+
       # The chart stamp runs only on a tag; a broken flag mislabels a release in Artifact Hub.
       # The self-test is the part that runs on every PR, before a release needs the stamp.
       - name: chart prerelease stamp self-test
@@ -405,7 +411,8 @@ jobs:
           draft="$(jq -r '.draft' <<<"$sel")"
           case "$draft" in true|false) ;; *) echo "::error::draft verdict is '$draft'"; exit 1 ;; esac
           # A run that is not a pull request must plan every module; the script asserts the same.
-          if [ "$GITHUB_EVENT_NAME" != pull_request ] && { [ "$(jq -r '.full' <<<"$sel")" != true ] || [ "$migrations" != true ] || [ "$draft" != false ] || [ "$smoke" != "$SMOKE_MODULES" ]; }; then
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] && { [ "$(jq -r '.full' <<<"$sel")" != true ] || [ "$migrations" != true ] || [ "$draft" != false ] || [ "$smoke" != "$SMOKE_MODULES" ] \
+             || ! jq -e 'all(.go[]; .race_scope == "all")' <<<"$sel" >/dev/null; }; then
             echo "::error::a $GITHUB_EVENT_NAME run selected a subset"
             exit 1
           fi
@@ -851,19 +858,56 @@ jobs:
       # `hack/go-race.sh --self-test`, which requires a DATA RACE report from a
       # program with a known race. Without that, a green step here would be
       # equally consistent with the instrumentation being off.
+      #
+      # 🔴 ON A PULL REQUEST THE SCOPE IS NARROWED (the maintainer's call, accepted with its
+      # tradeoff). hack/ci-select.py plans each leg's `race_scope`: `all` (every event but a pull
+      # request, and any doubt), `changed` (only `race_pkgs`: the leg's packages holding a changed
+      # file, plus the packages directly importing one) or `none`. They print PARTIAL and SKIPPED
+      # rather than COVERED, and the check below refuses either on any other event: a race the
+      # narrowed scope does not reach surfaces on main's full run, which must therefore stay full.
+      # The plain `go test` step above is NOT narrowed; it still runs every package of the leg.
       - name: race detector
         env:
           MODULE: ${{ matrix.entry.module }}
+          DC_RACE_SCOPE: ${{ matrix.entry.race_scope }}
+          RACE_PKGS: ${{ matrix.entry.race_pkgs }}
         run: |
           set -euo pipefail
-          mapfile -t args < "$RUNNER_TEMP/leg-args"
+          case "$DC_RACE_SCOPE" in
+            all) mapfile -t args < "$RUNNER_TEMP/leg-args" ;;
+            changed)
+              # The plan reads packages from the source, tags and all, so a package whose every
+              # file a build constraint excludes on this runner (an integration-only or
+              # frontend-only directory) can be named, and `go test` refuses one outright. Those
+              # are dropped. Any OTHER failure to resolve a package is doubt, and doubt races the
+              # whole leg.
+              read -r -a want <<<"$RACE_PKGS"
+              if js="$(cd "$MODULE" && go list -e -json "${want[@]}")" \
+                 && [ "$(jq -s '[.[] | select(.Error and (.Error.Err | test("build constraints exclude all Go files") | not))] | length' <<<"$js")" = 0 ]; then
+                mapfile -t args < <(jq -rs '.[] | select(.Error | not) | .ImportPath' <<<"$js")
+                [ "${#args[@]}" -gt 0 ] || DC_RACE_SCOPE=none
+              else
+                echo "::warning::could not resolve the race packages ($RACE_PKGS); racing the whole leg"
+                DC_RACE_SCOPE=all
+                mapfile -t args < "$RUNNER_TEMP/leg-args"
+              fi
+              export DC_RACE_SCOPE
+              ;;
+            none) args=() ;;
+            *) echo "::error::race_scope is '$DC_RACE_SCOPE', not all, changed or none"; exit 1 ;;
+          esac
           hack/go-race.sh "$MODULE" "${args[@]}" 2>&1 | tee /tmp/go-race.log
           # Fixed strings, not a pattern: the module path is data, and a regex
           # here would only be one metacharacter away from matching the wrong
           # module or nothing at all.
-          if ! grep -qF "race: COVERED $MODULE " /tmp/go-race.log \
-             && ! grep -qF "race: NOT COVERED $MODULE " /tmp/go-race.log; then
-            echo "::error::the race step reached the end without recording a verdict for $MODULE. Its green tick would mean nothing, so it fails instead."
+          if grep -qF "race: COVERED $MODULE " /tmp/go-race.log \
+             || grep -qF "race: NOT COVERED $MODULE " /tmp/go-race.log; then
+            :
+          elif [ "$GITHUB_EVENT_NAME" = pull_request ] \
+             && { grep -qF "race: PARTIAL $MODULE " /tmp/go-race.log || grep -qF "race: SKIPPED $MODULE " /tmp/go-race.log; }; then
+            :
+          else
+            echo "::error::the race step reached the end without recording a verdict this $GITHUB_EVENT_NAME run may accept for $MODULE. Its green tick would mean nothing, so it fails instead."
             exit 1
           fi
 

@@ -7478,7 +7478,12 @@ type Mutation {
     # Create a new customer type.
     createCustomerType(request: CustomerTypeCreateRequest): CustomerType!
     # Update an existing customer type.
-    updateCustomerType(token: String!, request: CustomerTypeUpdateRequest!): CustomerType!
+    updateCustomerType(
+        token: String!
+        request: CustomerTypeUpdateRequest!
+        """Apply only if updatedAt still equals this value; reload after a stale-write error. Omit for last-write-wins."""
+        expectedUpdatedAt: String
+    ): CustomerType!
     # Delete a customer type. Refused while any customer references it.
     deleteCustomerType(token: String!): Boolean!
     """

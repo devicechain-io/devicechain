@@ -693,7 +693,11 @@ func TestAnotherDeviceOrTenantCannotDownloadSomeoneElsesAssignment(t *testing.T)
 }
 
 func newSweeperForTest() *processor.DeadlineSweeper {
-	return processor.NewDeadlineSweeper(Api, time.Minute, &ReportsMetrics, nil)
+	// Pass metrics on a private registry: a sweep cannot be built without them, and each call
+	// builds a fresh set.
+	ms := &core.Microservice{FunctionalArea: "update-management"}
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	return processor.NewDeadlineSweeper(Api, time.Minute, &ReportsMetrics, ms.NewPeriodicTaskMetrics("deadline_sweep"))
 }
 
 func (f *e2e) assignmentOf(tenant, token string) *model.UpdateAssignmentView {

@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -1252,17 +1253,7 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) error {
 		}
 		return delivered
 	})
-	// 🔴 `ran` IS READ BEFORE `err`, BECAUSE TryAdvisoryLock RETURNS `true, fn()` — so a
-	// non-nil error means the LOCK failed only when the body never ran. Labelling every
-	// error as a lock-acquisition failure was harmless while the body always returned nil,
-	// and became wrong the moment the body started reporting its own failures.
-	if !ran {
-		if err != nil {
-			return fmt.Errorf("acquiring the command sweep lock: %w", err)
-		}
-		return core.ErrPassSkipped
-	}
-	if err != nil {
+	if err := rdb.SingletonResult(ran, err, "command-delivery-sweep"); err != nil {
 		return err
 	}
 	if expiryErr != nil {
@@ -1285,7 +1276,9 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) error {
 // while the ticker was built from the package default would have scored exactly the same,
 // which is the shape where a helper is certified and its one caller is not.
 func (cproc *CommandDeliveryProcessor) runSweepTicker(ctx context.Context) {
-	ticker := time.NewTicker(cproc.sweepInterval())
+	interval := cproc.sweepInterval()
+	cproc.DeliveryMetrics.CommandSweep.SetInterval(interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -1305,7 +1298,9 @@ func (cproc *CommandDeliveryProcessor) runSweepTicker(ctx context.Context) {
 // latency, and a walk of the accumulated withheld set has no business running at that
 // rate. Its own ticker also means a slow reconcile pass cannot delay a delivery pass.
 func (cproc *CommandDeliveryProcessor) runHoldReconcileTicker(ctx context.Context) {
-	ticker := time.NewTicker(cproc.holdReconcileInterval())
+	interval := cproc.holdReconcileInterval()
+	cproc.DeliveryMetrics.HoldReconcile.SetInterval(interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -1325,7 +1320,9 @@ func (cproc *CommandDeliveryProcessor) runHoldReconcileTicker(ctx context.Contex
 // row is not eligible here until it has been abandoned for StrandedSentGrace, so this
 // pass has nothing to gain from running at either of the other two cadences.
 func (cproc *CommandDeliveryProcessor) runStrandedReconcileTicker(ctx context.Context) {
-	ticker := time.NewTicker(cproc.strandedReconcileInterval())
+	interval := cproc.strandedReconcileInterval()
+	cproc.DeliveryMetrics.StrandedReconcile.SetInterval(interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
