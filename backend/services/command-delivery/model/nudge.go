@@ -88,6 +88,7 @@ func (api *Api) QueuedCommandsForDevice(ctx context.Context, deviceToken string,
 		Where("device_token = ?", deviceToken).
 		Where("status IN ?", sweepableStatusStrings()).
 		Where(heldSQL, heldArgs...).
+		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Order("id ASC").
 		Limit(limit).
 		Find(&found)

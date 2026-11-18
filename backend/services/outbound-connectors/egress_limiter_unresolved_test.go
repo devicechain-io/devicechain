@@ -16,6 +16,7 @@ import (
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-outbound-connectors/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -27,6 +28,14 @@ func failingUserManagement(t *testing.T) mscfg.InfrastructureConfiguration {
 	t.Helper()
 	um := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == auth.ServiceTokenPath {
+			var mint auth.ServiceTokenRequest
+			if err := json.NewDecoder(r.Body).Decode(&mint); err != nil {
+				t.Errorf("decode service mint: %v", err)
+				return
+			}
+			if mint.Subject != "outbound-connectors" || len(mint.Authorities) != 1 || mint.Authorities[0] != string(auth.TenantRead) {
+				t.Errorf("egress mint = %+v, want outbound-connectors with tenant:read alone", mint)
+			}
 			_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{Token: "svc", ExpiresAt: 1 << 40})
 			return
 		}
@@ -76,7 +85,7 @@ func TestBuildEgressLimiterCountsUnresolvedAdmissions(t *testing.T) {
 	unresolved := governance.NewUnresolvedAdmissions(ms, governance.Outbound)
 
 	limiter := buildEgressLimiter(&config.OutboundConnectorsConfiguration{OutboundCallsPerSecond: 1, OutboundBurst: 1000},
-		infra, unresolved)
+		svcclient.NewPeers(infra, ms.FunctionalArea), unresolved)
 
 	const series = "devicechain_outboundconnectors_governance_unresolved_admissions_total"
 	require.Equal(t, float64(0), unreachableAdmissions(t, reg, series, "outbound"),

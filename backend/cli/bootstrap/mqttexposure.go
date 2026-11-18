@@ -383,11 +383,17 @@ func checkMQTTExposureFlags(mode, host string, hostMayBeRecorded bool) error {
 	return err
 }
 
+// mqttPlatformPrincipal is the one area whose per-area broker login may speak MQTT. It is named
+// once because two things must agree on it: the grant (mqttCapableUsers renders it into the
+// broker's allowed_connection_types) and dcctl's MQTT probe (mqttProbeLogin presents it). A probe
+// that presented any other per-area login would be refused by every broker dcctl builds.
+const mqttPlatformPrincipal = string(functionalarea.EventSources)
+
 // mqttCapableUsers are the static broker logins allowed to speak MQTT: event-sources' (the MQTT
 // event source and the presence canary connect with it), and the transitional shared login while
 // the instance still has one. Every other static login is NATS-protocol only.
 func mqttCapableUsers(st *State) []string {
-	users := []string{natsauth.LoginUser(string(functionalarea.EventSources))}
+	users := []string{natsauth.LoginUser(mqttPlatformPrincipal)}
 	if sharedLoginRetainedFor(st) {
 		users = append(users, natsauth.ServiceUser)
 	}

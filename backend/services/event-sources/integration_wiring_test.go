@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/eventlimit"
 	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -115,7 +116,7 @@ func buildHttpSourceFor(t *testing.T, infra mscfg.InfrastructureConfiguration) (
 		}},
 	}
 	buildTestRateLimiters(t)
-	require.NoError(t, buildEventSources())
+	require.NoError(t, buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")))
 	source := EventSources[0].(*processor.HttpEventSource)
 	source.Port = 0
 	ctx := context.Background()
@@ -163,7 +164,7 @@ func TestWithoutDeviceManagementTheRouteAnswers503(t *testing.T) {
 // The seal the route is given opens for this integration and this tenant, and for no other.
 func TestTheSealTheRouteIsGivenIsBoundToTheTenantAndTheIntegration(t *testing.T) {
 	_, _ = buildHttpSourceFor(t, integrationInfra())
-	route := buildIntegrationRoute()
+	route := buildIntegrationRoute(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources"))
 	require.NotNil(t, route)
 	sealed, err := route.Seal("acme", "cs", "bearer-token")
 	require.NoError(t, err)
@@ -214,9 +215,9 @@ func TestEveryHttpSourcesRecorderIsRun(t *testing.T) {
 	}
 	Configuration = &config.EventSourcesConfiguration{EventSources: []config.EventSource{http("http1", "8081"), http("http2", "8082")}}
 	buildTestRateLimiters(t)
-	require.NoError(t, buildEventSources())
+	require.NoError(t, buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")))
 	require.Len(t, integrationUndecoded, 2)
-	require.NoError(t, buildEventSources())
+	require.NoError(t, buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")))
 	require.Len(t, integrationUndecoded, 2, "a second build does not stack on the first")
 }
 
@@ -240,7 +241,7 @@ func TestTheServiceGatesMeterIntegrationTrafficApart(t *testing.T) {
 			Decoder: config.EventDecoder{Type: processor.DECODER_TYPE_JSON}}},
 	}
 	buildTestRateLimiters(t)
-	require.NoError(t, buildEventSources())
+	require.NoError(t, buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")))
 
 	spend := func(admit func() bool) {
 		t.Helper()

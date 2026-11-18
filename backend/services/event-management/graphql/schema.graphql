@@ -984,6 +984,11 @@ type Subscription {
     measurementStream(
         """Only measurements from this device. Omit for all devices."""
         deviceToken: String
+        """
+        Stream readings from any of these devices on one subscription, instead of one subscription per device.
+        At most 1000 tokens; duplicates are ignored and a malformed token is refused. Cannot be combined with deviceToken. An empty list is refused.
+        """
+        deviceTokens: [String!]
         """Only measurements with this name. Omit for all names."""
         name: String
     ): MeasurementEvent!

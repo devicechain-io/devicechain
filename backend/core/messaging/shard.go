@@ -21,7 +21,43 @@ import (
 // ErrUnplacedTenant refuses a publish whose tenant placement cannot be established.
 var ErrUnplacedTenant = errors.New("messaging: tenant has no valid shard-group placement")
 
-// ErrShardRoutingNotEnabled refuses reads of instance-sharded streams without routing.
+// IsRefusal reports whether err is (or wraps) ErrStreamBackpressure or
+// ErrUnplacedTenant: certainly not stored, not about the message, retry later.
+func IsRefusal(err error) bool {
+	return errors.Is(err, ErrStreamBackpressure) || errors.Is(err, ErrUnplacedTenant)
+}
+
+// AdmitPublish checks whether the tenant's stream can accept a publish.
+// Without a tenant, a selected suffix accepts if any group accepts and routing is ready.
+func (nmgr *NatsManager) AdmitPublish(tenant, suffix string) error {
+	s := nmgr.streamSharding()
+	if !s.selects(suffix) {
+		return nmgr.Backpressure(suffix)
+	}
+	if tenant != "" {
+		routed, err := nmgr.tenantSuffix(tenant, suffix)
+		if err != nil {
+			return err
+		}
+		return nmgr.Backpressure(routed)
+	}
+	if err := nmgr.routingRefusal(suffix); err != nil {
+		return err
+	}
+	var first error
+	for g := 0; g < s.cfg.Count; g++ {
+		err := nmgr.Backpressure(GroupSuffix(suffix, g))
+		if err == nil {
+			return nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+// ErrShardRoutingNotEnabled refuses read and write handles on instance-sharded streams without routing.
 var ErrShardRoutingNotEnabled = errors.New("messaging: shard-group routing is not enabled")
 
 // ShardGroupRouter holds an adoptable placement. An error never means group zero.
@@ -210,12 +246,21 @@ func (nmgr *NatsManager) freezeStreamRouting() {
 // refuseUnroutedRead prevents a reader on an unrouted manager from silently binding
 // only group 0 and losing every other group's tenants.
 func (nmgr *NatsManager) refuseUnroutedRead(suffix string) error {
+	return nmgr.refuseUnroutedHandle(suffix, "reading")
+}
+
+// refuseUnroutedWrite prevents publishing every tenant to group 0 without routing.
+func (nmgr *NatsManager) refuseUnroutedWrite(suffix string) error {
+	return nmgr.refuseUnroutedHandle(suffix, "writing")
+}
+
+func (nmgr *NatsManager) refuseUnroutedHandle(suffix, kind string) error {
 	if nmgr.Microservice == nil {
 		return nil
 	}
 	cfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
 	if cfg != nil && cfg.Count >= 2 && slices.Contains(cfg.Suffixes, suffix) && nmgr.streamSharding() == nil {
-		return fmt.Errorf("%w: service must enable shard-group routing (call shardgroups.Enable) before reading suffix %q", ErrShardRoutingNotEnabled, suffix)
+		return fmt.Errorf("%w: service must enable shard-group routing (call shardgroups.Enable) before %s suffix %q", ErrShardRoutingNotEnabled, kind, suffix)
 	}
 	return nil
 }

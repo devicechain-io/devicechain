@@ -8,12 +8,11 @@ import { Plus } from 'lucide-react';
 import { useQuery } from '@/lib/hooks/use-query';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
-import { LoadingState } from '@/components/ui/loading-state';
-import { ErrorState } from '@/components/ui/error-state';
+import { QueryBoundary } from '@/components/ui/query-boundary';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Pagination } from '@/components/ui/pagination';
 import { useToast } from '@/components/ui/toast';
-import { rowLinkProps, useReload } from '@/routes/common';
+import { rowLinkProps } from '@/routes/common';
 import { FormDrawer } from '@/components/registry/FormDrawer';
 import {
   DataTable,
@@ -38,11 +37,12 @@ export function ResourceListPage<T>({ resource }: { resource: RegistryResource<T
   const { toast } = useToast();
   const [pageNumber, setPageNumber] = useState(1);
   const [creating, setCreating] = useState(false);
-  const [version, reload] = useReload();
-  const { data, loading, error } = useQuery(
+  const query = useQuery(
     () => resource.list({ pageNumber, pageSize }),
-    [pageNumber, version, resource.basePath],
+    [pageNumber, resource.basePath],
+    [resource.basePath, pageNumber],
   );
+  const { data, refetch: reload } = query;
 
   const results = data?.results ?? [];
 
@@ -64,13 +64,10 @@ export function ResourceListPage<T>({ resource }: { resource: RegistryResource<T
           reload();
         })}
       </FormDrawer>
-      {loading ? (
-        <LoadingState description={t('common:loading')} />
-      ) : error ? (
-        <ErrorState description={error} />
-      ) : results.length === 0 ? (
+      <QueryBoundary query={query}>
+      {results.length === 0 ? (
         <EmptyState description={e('ListEmpty')} />
-      ) : (
+      ) : data && (
         <>
           <DataTable>
             <DataTableHead>
@@ -98,12 +95,13 @@ export function ResourceListPage<T>({ resource }: { resource: RegistryResource<T
           <Pagination
             pageNumber={pageNumber}
             pageSize={pageSize}
-            pagination={data!.pagination}
+            pagination={data.pagination}
             onPageChange={setPageNumber}
             className="mt-4"
           />
         </>
       )}
+      </QueryBoundary>
     </PageShell>
   );
 }
