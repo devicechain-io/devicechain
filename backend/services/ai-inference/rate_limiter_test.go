@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,19 +15,17 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
 func limiterDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
-	require.NoError(t, err)
+	db := sqlitetest.OpenMemory(t, &gorm.Config{})
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = sqlDB.Close() })
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	db = db.WithContext(core.WithSystemContext(context.Background()))
 	for _, migration := range schema.Migrations {
