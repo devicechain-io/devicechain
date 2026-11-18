@@ -24,7 +24,7 @@
 // stray character silently dropped its whole field. `toJson` now runs only to
 // save and to compare.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -117,16 +117,36 @@ export default function SettingsPage() {
       return next;
     });
 
+  // What a save or reset just stored, by key, held until the list re-read that
+  // the write triggered has answered.
+  //
+  // 🔴 The panels stay mounted while that re-read runs, and `settings` is the
+  // sticky DISPLAY value: until it lands it still holds the value from BEFORE the
+  // write. Clearing a draft re-seeds from it, so for that window the panel showed
+  // the old value again — and an edit made then was built on the old value, so the
+  // next save quietly reverted the first. The mutation answers with the stored
+  // setting; that is the baseline until the list catches up.
+  //
+  // `query.current` is defined only once the LATEST re-read has answered, and that
+  // re-read began after every write recorded here, so from then on the list is at
+  // least as new. A failed re-read leaves `current` undefined and the write's own
+  // answer keeps winning, which is the newer of the two.
+  const [fresh, setFresh] = useState<Record<string, Setting>>({});
+  const caughtUp = query.current !== undefined;
+  useEffect(() => {
+    if (caughtUp) setFresh((f) => (Object.keys(f).length === 0 ? f : {}));
+  }, [caughtUp]);
+
   const panels = useMemo(
     () =>
-      (settings ?? []).map((setting) => ({
-        setting,
+      (settings ?? []).map((listed) => ({
+        setting: (!caughtUp && fresh[listed.key]) || listed,
         // A key the server knows and this build has no editor for still gets a
         // tab — raw, but present. Hiding it would make a configured setting
         // invisible to the operator who configured it.
-        section: SECTIONS[setting.key] ?? RAW_JSON_SECTION,
+        section: SECTIONS[listed.key] ?? RAW_JSON_SECTION,
       })),
-    [settings],
+    [settings, fresh, caughtUp],
   );
 
   return (
@@ -158,7 +178,10 @@ export default function SettingsPage() {
               setting={setting}
               draft={drafts[setting.key] ?? seedDraft(setting, section)}
               onDraftChange={(value) => setDraft(setting.key, { ...(drafts[setting.key] ?? seedDraft(setting, section)), value })}
-              onSettled={() => {
+              onSettled={(stored) => {
+                // Seed the baseline from the write's answer BEFORE the draft goes,
+                // in the same render, so there is no frame seeded from the old value.
+                setFresh((f) => ({ ...f, [setting.key]: stored }));
                 clearDraft(setting.key);
                 reload();
               }}
@@ -180,7 +203,8 @@ function SettingPanel({
   setting: Setting;
   draft: Draft;
   onDraftChange: (value: unknown) => void;
-  onSettled: () => void;
+  /** Called with the setting as the server stored it. */
+  onSettled: (stored: Setting) => void;
 }) {
   const { t } = useTranslation('adminSettings');
   const { toast } = useToast();
@@ -201,10 +225,10 @@ function SettingPanel({
     setFormError(null);
     setBusy(true);
     try {
-      await setSetting(setting.key, compact(json));
+      const stored = await setSetting(setting.key, compact(json));
       forgetCachedSettings();
       toast(t('settingSavedToast', { key: setting.key }));
-      onSettled();
+      onSettled(stored);
     } catch (err) {
       setFormError(errMessage(err));
     } finally {
@@ -224,10 +248,10 @@ function SettingPanel({
     setFormError(null);
     setBusy(true);
     try {
-      await clearSetting(setting.key);
+      const stored = await clearSetting(setting.key);
       forgetCachedSettings();
       toast(t('settingResetToast', { key: setting.key }));
-      onSettled();
+      onSettled(stored);
     } catch (err) {
       setFormError(errMessage(err));
     } finally {

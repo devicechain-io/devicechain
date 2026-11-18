@@ -34,7 +34,7 @@ describe('the zh-CN catalogs', () => {
     }
   });
 
-  it.each(['devices', 'identities'])('%s keeps every placeholder and markup tag, and is translated', (ns) => {
+  it.each(['adminSettings', 'devices', 'identities'])('%s keeps every placeholder and markup tag, and is translated', (ns) => {
     const tokens = (s: string) => s.match(/{{[^}]+}}|<\/?\w+\/?>/g)?.sort() ?? [];
     const en = bundle('en', ns)!;
     const translated = bundle('zh-CN', ns)!;
@@ -48,7 +48,7 @@ describe('the zh-CN catalogs', () => {
     expect(chinese / Object.keys(en).length).toBeGreaterThan(0.9);
   });
 
-  it('renders the device and identity screens in Chinese through the real loader', async () => {
+  it('renders the device, identity and system-settings screens in Chinese through the real loader', async () => {
     await i18nReady;
     await i18n.changeLanguage('zh-CN');
     expect(i18n.resolvedLanguage).toBe('zh-CN');
@@ -56,6 +56,8 @@ describe('the zh-CN catalogs', () => {
     expect(i18n.t('identities:notFound', { email: 'a@example.com' })).toBe('未找到身份“a@example.com”。');
     expect(i18n.t('devices:title')).toBe(bundle('zh-CN', 'devices')!.title);
     expect(i18n.t('devices:title')).not.toBe(bundle('en', 'devices')!.title);
+    expect(i18n.t('adminSettings:title')).toBe('系统设置');
+    expect(i18n.t('adminSettings:settingSavedToast', { key: 'locale.default' })).toBe('设置“locale.default”已保存');
     expect(i18n.t('common:back')).toBe('Back'); // a namespace zh-CN does not ship stays English
   });
 });
