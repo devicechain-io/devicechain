@@ -3219,6 +3219,10 @@ jobs:
         run: hack/check-chart-pins.sh
         working-directory: .
 
+      - name: chart version pins self-test
+        run: bash hack/check-chart-pins.sh --self-test
+        working-directory: .
+
       # The broker image is built on one nats-server library version, and the nats chart,
       # every module's requirement and the documented upstream rollback image must name the
       # same one. Dependabot moves the go.mod lines and nothing else, so the bump that
